@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.invoker/
+*.db
+.env*
+.DS_Store
+coverage/
+.claude/worktrees/

@@ -1,0 +1,39 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Edge styling for TaskDAG ──────────────────────────────── */
+
+/* Smooth transitions on edge paths */
+.react-flow__edge-path {
+  transition: stroke 0.2s ease, stroke-width 0.2s ease;
+}
+
+/* Animated running edges: dashed flow animation */
+.react-flow__edge.animated .react-flow__edge-path {
+  stroke-dasharray: 8 4;
+  animation: edge-flow 0.8s linear infinite;
+}
+
+@keyframes edge-flow {
+  to {
+    stroke-dashoffset: -12;
+  }
+}
+
+/* Hover cursor on edge group */
+.bundled-edge-group {
+  cursor: pointer;
+}
+
+/* Edge labels fade in */
+.bundled-edge-group text {
+  pointer-events: none;
+  user-select: none;
+}
+
+/* ── ReactFlow Controls — force black icons on light buttons ── */
+.react-flow__controls-button {
+  --xy-controls-button-color: #000;
+  --xy-controls-button-color-hover: #000;
+}

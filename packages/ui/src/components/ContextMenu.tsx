@@ -1,0 +1,67 @@
+/**
+ * ContextMenu — Right-click context menu for task nodes in the DAG.
+ *
+ * Positioned absolutely at the click coordinates.
+ * Closes on click-outside or Escape.
+ */
+
+import { useEffect, useRef } from 'react';
+import type { TaskState } from '../types.js';
+
+interface ContextMenuProps {
+  x: number;
+  y: number;
+  task: TaskState;
+  onRestart: (taskId: string) => void;
+  onOpenTerminal: (taskId: string) => void;
+  onClose: () => void;
+}
+
+export function ContextMenu({ x, y, task, onRestart, onOpenTerminal, onClose }: ContextMenuProps) {
+  const menuRef = useRef<HTMLDivElement>(null);
+  const canRestart = task.status !== 'running';
+
+  useEffect(() => {
+    const handleClick = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        onClose();
+      }
+    };
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+
+    document.addEventListener('mousedown', handleClick);
+    document.addEventListener('keydown', handleKey);
+    return () => {
+      document.removeEventListener('mousedown', handleClick);
+      document.removeEventListener('keydown', handleKey);
+    };
+  }, [onClose]);
+
+  return (
+    <div
+      ref={menuRef}
+      className="fixed z-50 bg-gray-800 border border-gray-600 rounded-lg shadow-xl py-1 min-w-[160px]"
+      style={{ left: x, top: y }}
+    >
+      <button
+        className={`w-full text-left px-3 py-1.5 text-sm ${
+          canRestart
+            ? 'text-gray-100 hover:bg-gray-700'
+            : 'text-gray-500 cursor-not-allowed'
+        }`}
+        onClick={() => { if (canRestart) onRestart(task.id); }}
+        disabled={!canRestart}
+      >
+        Restart Task
+      </button>
+      <button
+        className="w-full text-left px-3 py-1.5 text-sm text-gray-100 hover:bg-gray-700"
+        onClick={() => onOpenTerminal(task.id)}
+      >
+        Open Terminal
+      </button>
+    </div>
+  );
+}

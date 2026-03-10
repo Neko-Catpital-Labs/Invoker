@@ -1,0 +1,37 @@
+{
+  "name": "@invoker/app",
+  "productName": "Invoker",
+  "desktopName": "invoker.desktop",
+  "version": "0.1.0",
+  "private": true,
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "tsup",
+    "test": "../../scripts/electron-vitest run",
+    "start": "unset ELECTRON_RUN_AS_NODE && electron dist/main.js",
+    "dev": "tsup src/main.ts src/preload.ts --format cjs --outDir dist --external electron --watch & unset ELECTRON_RUN_AS_NODE && electron dist/main.js",
+    "test:e2e": "xvfb-run --auto-servernum playwright test"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.78.0",
+    "@invoker/core": "workspace:*",
+    "@invoker/executors": "workspace:*",
+    "@invoker/persistence": "workspace:*",
+    "@invoker/protocol": "workspace:*",
+    "@invoker/surfaces": "workspace:*",
+    "@invoker/transport": "workspace:*",
+    "@slack/bolt": "^4.6.0",
+    "better-sqlite3": "^12.0.0",
+    "dockerode": "^4.0.0",
+    "dotenv": "^16.0.0",
+    "yaml": "^2.7.0"
+  },
+  "devDependencies": {
+    "@electron/rebuild": "^4.0.3",
+    "@playwright/test": "^1.58.2",
+    "electron": "^35.0.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}

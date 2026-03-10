@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Run vitest under Electron's bundled Node.js (ELECTRON_RUN_AS_NODE=1).
+#
+# This ensures native addons (better-sqlite3) compiled for Electron's ABI
+# are loaded correctly, eliminating NODE_MODULE_VERSION mismatches.
+#
+# Usage (from a package directory):
+#   ../../scripts/electron-vitest run
+#   ../../scripts/electron-vitest run --reporter=verbose
+set -e
+
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ELECTRON="$REPO_ROOT/packages/app/node_modules/.bin/electron"
+
+if [ ! -x "$ELECTRON" ]; then
+  echo "Error: Electron binary not found at $ELECTRON" >&2
+  echo "Run: pnpm install" >&2
+  exit 1
+fi
+
+# node_modules/.bin/vitest is a bash wrapper; Electron needs the actual JS entry.
+VITEST_BIN=$(node -e "process.stdout.write(require.resolve('vitest/vitest.mjs'))")
+
+ELECTRON_RUN_AS_NODE=1 exec "$ELECTRON" "$VITEST_BIN" "$@"

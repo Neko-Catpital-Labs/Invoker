@@ -1,0 +1,304 @@
+/**
+ * TaskExecutor — Shared task execution logic for CLI and Electron.
+ *
+ * Extracted from CLI Runner to eliminate duplication between
+ * the CLI runner and Electron app execution paths.
+ */
+
+import { execSync, spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { homedir } from 'node:os';
+import { createRequire } from 'node:module';
+import type { Orchestrator, TaskState, ExperimentVariant } from '@invoker/core';
+import type { SQLiteAdapter } from '@invoker/persistence';
+import type { WorkRequest, WorkResponse, ActionType } from '@invoker/protocol';
+import type { Familiar, FamiliarHandle } from './familiar.js';
+import type { FamiliarRegistry } from './registry.js';
+import { DockerFamiliar } from './docker-familiar.js';
+import { WorktreeFamiliar } from './worktree-familiar.js';
+
+// ── Callbacks ─────────────────────────────────────────────
+
+export interface TaskExecutorCallbacks {
+  onOutput?: (taskId: string, data: string) => void;
+  onSpawned?: (taskId: string, handle: FamiliarHandle, familiar: Familiar) => void;
+  onComplete?: (taskId: string, response: WorkResponse) => void;
+}
+
+// ── Config ────────────────────────────────────────────────
+
+export interface TaskExecutorConfig {
+  orchestrator: Orchestrator;
+  persistence: SQLiteAdapter;
+  familiarRegistry: FamiliarRegistry;
+  /** Repo root / working directory for git commands and task execution. */
+  cwd: string;
+  /** Max worktrees per repo for WorktreeFamiliar. Default: 3. */
+  maxWorktreesPerRepo?: number;
+  callbacks?: TaskExecutorCallbacks;
+}
+
+// ── TaskExecutor ──────────────────────────────────────────
+
+export class TaskExecutor {
+  private orchestrator: Orchestrator;
+  private persistence: SQLiteAdapter;
+  private familiarRegistry: FamiliarRegistry;
+  private cwd: string;
+  private maxWorktreesPerRepo: number;
+  private callbacks: TaskExecutorCallbacks;
+  private abiChecked = false;
+
+  constructor(config: TaskExecutorConfig) {
+    this.orchestrator = config.orchestrator;
+    this.persistence = config.persistence;
+    this.familiarRegistry = config.familiarRegistry;
+    this.cwd = config.cwd;
+    this.maxWorktreesPerRepo = config.maxWorktreesPerRepo ?? 3;
+    this.callbacks = config.callbacks ?? {};
+  }
+
+  /**
+   * Execute multiple tasks concurrently.
+   */
+  async executeTasks(tasks: TaskState[]): Promise<void> {
+    if (!this.abiChecked) {
+      this.abiChecked = true;
+      this.checkNativeModuleAbi();
+    }
+    await Promise.all(tasks.map((task) => this.executeTask(task)));
+  }
+
+  /**
+   * One-time check: warn if better-sqlite3 was compiled for a different ABI
+   * than the system Node that task subprocesses will use.
+   */
+  private checkNativeModuleAbi(): void {
+    try {
+      const req = createRequire(resolve(this.cwd, 'packages', 'persistence', 'dummy.js'));
+      const pkgPath = req.resolve('better-sqlite3/package.json');
+      const binaryPath = resolve(dirname(pkgPath), 'build', 'Release', 'better_sqlite3.node');
+      if (!existsSync(binaryPath)) return;
+
+      const nm = execSync(`nm -D "${binaryPath}" 2>/dev/null || true`, { encoding: 'utf8' });
+      const match = nm.match(/node_register_module_v(\d+)/);
+      if (!match) return;
+
+      const binaryAbi = parseInt(match[1], 10);
+      const runtimeAbi = parseInt(process.versions.modules, 10);
+      if (binaryAbi === runtimeAbi) return;
+
+      console.warn(
+        `[TaskExecutor] better-sqlite3 ABI mismatch: binary=${binaryAbi}, ` +
+        `runtime=${runtimeAbi}. Task commands that use 'npx vitest run' will crash. ` +
+        `Use 'pnpm test' (electron-vitest) in plan tasks instead.`,
+      );
+    } catch {
+      // Non-fatal — skip check if anything goes wrong
+    }
+  }
+
+  /**
+   * Execute a single task through the familiar pipeline.
+   *
+   * 1. Pivot tasks with variants → synthesize spawn_experiments response
+   * 2. Build upstream context from completed dependencies
+   * 3. Build WorkRequest with workspacePath
+   * 4. Start familiar → persist claudeSessionId + workspacePath immediately
+   * 5. Wire output/completion callbacks
+   * 6. On completion → feed response to orchestrator → auto-execute newly ready tasks
+   */
+  async executeTask(task: TaskState): Promise<void> {
+    // Pivot tasks with experimentVariants: synthesize a spawn_experiments
+    // response instead of running through the familiar.
+    if (task.pivot && task.experimentVariants && task.experimentVariants.length > 0) {
+      const response: WorkResponse = {
+        requestId: `req-${task.id}`,
+        actionId: task.id,
+        status: 'spawn_experiments',
+        outputs: {},
+        dagMutation: {
+          spawnExperiments: {
+            description: task.description,
+            variants: task.experimentVariants.map((v: ExperimentVariant) => ({
+              id: v.id,
+              description: v.description,
+              prompt: v.prompt,
+              command: v.command,
+            })),
+          },
+        },
+      };
+      const newlyStarted = this.orchestrator.handleWorkerResponse(response) ?? [];
+      if (newlyStarted.length > 0) {
+        this.executeTasks(newlyStarted);
+      }
+      return;
+    }
+
+    // Gather upstream context from completed dependencies
+    const upstreamContext = await this.buildUpstreamContext(task);
+
+    const request: WorkRequest = {
+      requestId: randomUUID(),
+      actionId: task.id,
+      actionType: this.determineActionType(task),
+      inputs: {
+        command: task.command,
+        prompt: task.prompt,
+        workspacePath: this.cwd,
+        repoUrl: task.repoUrl,
+        featureBranch: task.featureBranch,
+        upstreamContext: upstreamContext.length > 0 ? upstreamContext : undefined,
+      },
+      callbackUrl: '',
+      timestamps: {
+        createdAt: new Date().toISOString(),
+      },
+    };
+
+    const familiar = this.selectFamiliar(task);
+    const handle = await familiar.start(request);
+    console.log(`[trace] TaskExecutor: task=${task.id} familiar=${familiar.type} sessionId=${handle.claudeSessionId ?? 'none'} workspace=${handle.workspacePath ?? 'default'}`);
+
+    // Persist execution metadata immediately at task start — all fields explicit
+    {
+      const changes: Record<string, unknown> = {
+        familiarType: familiar.type,
+        workspacePath: handle.workspacePath ?? this.cwd,
+        claudeSessionId: handle.claudeSessionId ?? null,
+        containerId: handle.containerId ?? null,
+        branch: handle.branch ?? null,
+      };
+      this.persistence.updateTask(task.id, changes);
+      console.log(`[trace] TaskExecutor: persisted metadata for task=${task.id}`);
+    }
+
+    // Notify consumer about the spawned handle
+    this.callbacks.onSpawned?.(task.id, handle, familiar);
+
+    // Wire output
+    familiar.onOutput(handle, (data) => {
+      this.callbacks.onOutput?.(task.id, data);
+    });
+
+    // Wait for completion and feed response to orchestrator
+    return new Promise<void>((resolvePromise) => {
+      familiar.onComplete(handle, (response: WorkResponse) => {
+        this.callbacks.onComplete?.(task.id, response);
+
+        const newlyStarted = this.orchestrator.handleWorkerResponse(response) ?? [];
+
+        // Execute any newly started tasks returned by the orchestrator
+        if (newlyStarted.length > 0) {
+          this.executeTasks(newlyStarted);
+        }
+
+        resolvePromise();
+      });
+    });
+  }
+
+  /**
+   * Select the familiar to use for a given task.
+   * Uses task.familiarType to look up in the registry; falls back to default.
+   */
+  selectFamiliar(task: TaskState): Familiar {
+    // Infer 'worktree' when task has repoUrl but no explicit familiarType
+    const effectiveType = task.familiarType
+      ?? (task.repoUrl ? 'worktree' : undefined);
+
+    if (effectiveType) {
+      const registered = this.familiarRegistry.get(effectiveType);
+      if (registered) {
+        console.log(`[trace] TaskExecutor.selectFamiliar: task=${task.id} effectiveType=${effectiveType} → ${registered.type}`);
+        return registered;
+      }
+
+      // Lazy registration for Docker
+      if (effectiveType === 'docker') {
+        const docker = new DockerFamiliar({ workspaceDir: this.cwd });
+        this.familiarRegistry.register('docker', docker);
+        console.log(`[trace] TaskExecutor.selectFamiliar: task=${task.id} effectiveType=docker → docker (lazy registered)`);
+        return docker;
+      }
+
+      // Lazy registration for Worktree
+      if (effectiveType === 'worktree') {
+        const invokerHome = resolve(homedir(), '.invoker');
+        const worktree = new WorktreeFamiliar({
+          repoDir: this.cwd,
+          worktreeBaseDir: resolve(invokerHome, 'worktrees'),
+          cacheDir: resolve(invokerHome, 'repos'),
+          maxWorktrees: this.maxWorktreesPerRepo,
+        });
+        this.familiarRegistry.register('worktree', worktree);
+        console.log(`[trace] TaskExecutor.selectFamiliar: task=${task.id} effectiveType=worktree → worktree (lazy registered)`);
+        return worktree;
+      }
+    }
+
+    const defaultFamiliar = this.familiarRegistry.getDefault();
+    console.log(`[trace] TaskExecutor.selectFamiliar: task=${task.id} effectiveType=${effectiveType ?? 'none'} → ${defaultFamiliar.type} (default)`);
+    return defaultFamiliar;
+  }
+
+  /**
+   * Determine the correct ActionType for a task based on its fields.
+   * Priority: isReconciliation > command > prompt > default 'command'.
+   */
+  determineActionType(task: TaskState): ActionType {
+    if (task.isReconciliation) return 'reconciliation';
+    if (task.command) return 'command';
+    if (task.prompt) return 'claude';
+    return 'command';
+  }
+
+  // ── Private Helpers ──────────────────────────────────────
+
+  private async buildUpstreamContext(
+    task: TaskState,
+  ): Promise<Array<{taskId: string; description: string; summary?: string; commitHash?: string; commitMessage?: string}>> {
+    const context: Array<{taskId: string; description: string; summary?: string; commitHash?: string; commitMessage?: string}> = [];
+
+    for (const depId of task.dependencies) {
+      const dep = this.orchestrator.getTask(depId);
+      if (dep && dep.status === 'completed') {
+        let commitMessage: string | undefined;
+        if (dep.commit) {
+          try {
+            commitMessage = await this.gitLogMessage(dep.commit);
+          } catch {
+            // Not in a git repo or commit not found
+          }
+        }
+        context.push({
+          taskId: dep.id,
+          description: dep.description,
+          summary: dep.summary,
+          commitHash: dep.commit,
+          commitMessage,
+        });
+      }
+    }
+
+    return context;
+  }
+
+  private gitLogMessage(commitHash: string): Promise<string> {
+    return new Promise((resolvePromise, reject) => {
+      const child = spawn('git', ['log', '-1', '--format=%B', commitHash], {
+        cwd: this.cwd,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      let stdout = '';
+      child.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
+      child.on('close', (code) => {
+        if (code === 0) resolvePromise(stdout.trim());
+        else reject(new Error(`git log failed (code ${code})`));
+      });
+    });
+  }
+}
