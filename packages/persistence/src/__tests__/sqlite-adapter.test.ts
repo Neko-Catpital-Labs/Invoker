@@ -71,6 +71,35 @@ describe('SQLiteAdapter', () => {
     });
   });
 
+  describe('updateWorkflow', () => {
+    it('updates workflow status', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.updateWorkflow('wf-1', { status: 'completed' });
+
+      const loaded = adapter.loadWorkflow('wf-1');
+      expect(loaded!.status).toBe('completed');
+    });
+
+    it('updates workflow updatedAt', () => {
+      adapter.saveWorkflow(testWorkflow);
+      const newTime = '2099-01-01T00:00:00.000Z';
+      adapter.updateWorkflow('wf-1', { status: 'failed', updatedAt: newTime });
+
+      const loaded = adapter.loadWorkflow('wf-1');
+      expect(loaded!.status).toBe('failed');
+      expect(loaded!.updatedAt).toBe(newTime);
+    });
+
+    it('auto-sets updatedAt when not provided', () => {
+      adapter.saveWorkflow(testWorkflow);
+      const before = new Date().toISOString();
+      adapter.updateWorkflow('wf-1', { status: 'completed' });
+
+      const loaded = adapter.loadWorkflow('wf-1');
+      expect(loaded!.updatedAt >= before).toBe(true);
+    });
+  });
+
   describe('logEvent + getEvents', () => {
     it('logs and retrieves events', () => {
       adapter.saveWorkflow(testWorkflow);

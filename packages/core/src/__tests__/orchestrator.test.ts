@@ -9,9 +9,17 @@ import type { WorkResponse } from '@invoker/protocol';
 class InMemoryPersistence implements OrchestratorPersistence {
   workflows = new Map<string, { id: string; name: string; status: string }>();
   tasks = new Map<string, { workflowId: string; task: TaskState }>();
+  events: Array<{ taskId: string; eventType: string; payload?: unknown }> = [];
 
   saveWorkflow(workflow: { id: string; name: string; status: string }): void {
     this.workflows.set(workflow.id, workflow);
+  }
+
+  updateWorkflow(workflowId: string, changes: { status?: string; updatedAt?: string }): void {
+    const wf = this.workflows.get(workflowId);
+    if (wf && changes.status) {
+      wf.status = changes.status;
+    }
   }
 
   saveTask(workflowId: string, task: TaskState): void {
@@ -23,6 +31,10 @@ class InMemoryPersistence implements OrchestratorPersistence {
     if (entry) {
       entry.task = { ...entry.task, ...changes } as TaskState;
     }
+  }
+
+  logEvent(taskId: string, eventType: string, payload?: unknown): void {
+    this.events.push({ taskId, eventType, payload });
   }
 }
 
@@ -1095,6 +1107,192 @@ describe('Orchestrator', () => {
       expect(status.failed).toBe(0);
       expect(status.running).toBe(0);
       expect(status.pending).toBe(0);
+    });
+  });
+
+  // ── Workflow Completion ────────────────────────────────
+
+  describe('checkWorkflowCompletion', () => {
+    it('marks workflow completed when all tasks succeed', () => {
+      orchestrator.loadPlan({
+        name: 'completion-test',
+        tasks: [
+          { id: 't1', description: 'Task 1' },
+          { id: 't2', description: 'Task 2', dependencies: ['t1'] },
+        ],
+      });
+      orchestrator.startExecution();
+
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 't1', status: 'completed', outputs: { exitCode: 0 } }),
+      );
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 't2', status: 'completed', outputs: { exitCode: 0 } }),
+      );
+
+      const wf = Array.from(persistence.workflows.values())[0];
+      expect(wf.status).toBe('completed');
+    });
+
+    it('marks workflow failed when any task fails', () => {
+      orchestrator.loadPlan({
+        name: 'fail-completion-test',
+        tasks: [
+          { id: 't1', description: 'Task 1' },
+          { id: 't2', description: 'Task 2', dependencies: ['t1'] },
+        ],
+      });
+      orchestrator.startExecution();
+
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 't1', status: 'failed', outputs: { exitCode: 1, error: 'boom' } }),
+      );
+
+      const wf = Array.from(persistence.workflows.values())[0];
+      expect(wf.status).toBe('failed');
+    });
+
+    it('does not mark workflow complete while tasks are running', () => {
+      orchestrator.loadPlan({
+        name: 'still-running-test',
+        tasks: [
+          { id: 't1', description: 'Task 1' },
+          { id: 't2', description: 'Task 2' },
+        ],
+      });
+      orchestrator.startExecution();
+
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 't1', status: 'completed', outputs: { exitCode: 0 } }),
+      );
+
+      const wf = Array.from(persistence.workflows.values())[0];
+      expect(wf.status).toBe('running');
+    });
+
+    it('does not mark workflow complete while tasks need user input', () => {
+      orchestrator.loadPlan({
+        name: 'needs-input-test',
+        tasks: [{ id: 't1', description: 'Task 1' }],
+      });
+      orchestrator.startExecution();
+
+      orchestrator.handleWorkerResponse(
+        makeResponse({
+          actionId: 't1',
+          status: 'needs_input',
+          outputs: { summary: 'What path?' },
+        }),
+      );
+
+      const wf = Array.from(persistence.workflows.values())[0];
+      expect(wf.status).toBe('running');
+    });
+
+    it('logs workflow.completed event', () => {
+      orchestrator.loadPlan({
+        name: 'event-test',
+        tasks: [{ id: 't1', description: 'Task 1' }],
+      });
+      orchestrator.startExecution();
+
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 't1', status: 'completed', outputs: { exitCode: 0 } }),
+      );
+
+      const wfEvents = persistence.events.filter((e) => e.eventType === 'workflow.completed');
+      expect(wfEvents).toHaveLength(1);
+      expect(wfEvents[0].taskId).toBe('__workflow__');
+    });
+  });
+
+  // ── Event Logging ─────────────────────────────────────
+
+  describe('event logging', () => {
+    it('logs task.running when task starts', () => {
+      orchestrator.loadPlan({
+        name: 'event-start-test',
+        tasks: [{ id: 't1', description: 'Task 1' }],
+      });
+      persistence.events = [];
+      orchestrator.startExecution();
+
+      const startEvents = persistence.events.filter((e) => e.eventType === 'task.running');
+      expect(startEvents).toHaveLength(1);
+      expect(startEvents[0].taskId).toBe('t1');
+    });
+
+    it('logs task.completed when task completes', () => {
+      orchestrator.loadPlan({
+        name: 'event-complete-test',
+        tasks: [{ id: 't1', description: 'Task 1' }],
+      });
+      orchestrator.startExecution();
+      persistence.events = [];
+
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 't1', status: 'completed', outputs: { exitCode: 0 } }),
+      );
+
+      const completeEvents = persistence.events.filter((e) => e.eventType === 'task.completed');
+      expect(completeEvents).toHaveLength(1);
+      expect(completeEvents[0].taskId).toBe('t1');
+    });
+
+    it('logs task.failed when task fails', () => {
+      orchestrator.loadPlan({
+        name: 'event-fail-test',
+        tasks: [{ id: 't1', description: 'Task 1' }],
+      });
+      orchestrator.startExecution();
+      persistence.events = [];
+
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 't1', status: 'failed', outputs: { exitCode: 1, error: 'err' } }),
+      );
+
+      const failEvents = persistence.events.filter((e) => e.eventType === 'task.failed');
+      expect(failEvents).toHaveLength(1);
+      expect(failEvents[0].taskId).toBe('t1');
+    });
+  });
+
+  // ── Hydration Timestamp Clearing ──────────────────────
+
+  describe('hydrateFromDb timestamp clearing', () => {
+    it('clears startedAt and completedAt when resetting running tasks', () => {
+      const hydratePersistence = new InMemoryPersistence();
+      const startedAt = new Date('2024-01-01T00:00:00Z');
+      const taskData: TaskState = {
+        id: 't1',
+        description: 'Was running',
+        status: 'running',
+        dependencies: [],
+        createdAt: new Date(),
+        startedAt,
+      };
+      // Pre-populate mock storage so updateTask can find the entry
+      hydratePersistence.tasks.set('t1', { workflowId: 'wf-test', task: { ...taskData } });
+      hydratePersistence.loadTasks = () => [taskData];
+
+      const hydrateOrchestrator = new Orchestrator({
+        persistence: hydratePersistence,
+        messageBus: bus,
+        maxConcurrency: 3,
+      });
+
+      hydrateOrchestrator.hydrateFromDb('wf-test');
+
+      const task = hydrateOrchestrator.getTask('t1')!;
+      expect(task.status).toBe('pending');
+      expect(task.startedAt).toBeUndefined();
+      expect(task.completedAt).toBeUndefined();
+
+      // Verify DB was also updated
+      const persisted = hydratePersistence.tasks.get('t1')?.task;
+      expect(persisted?.status).toBe('pending');
+      expect(persisted?.startedAt).toBeUndefined();
+      expect(persisted?.completedAt).toBeUndefined();
     });
   });
 

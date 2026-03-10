@@ -38,8 +38,10 @@ export interface OrchestratorPersistence {
     createdAt: string;
     updatedAt: string;
   }): void;
+  updateWorkflow?(workflowId: string, changes: { status?: string; updatedAt?: string }): void;
   saveTask(workflowId: string, task: TaskState): void;
   updateTask(taskId: string, changes: Partial<TaskState>): void;
+  logEvent?(taskId: string, eventType: string, payload?: unknown): void;
   loadWorkflows?(): Array<{
     id: string;
     name: string;
@@ -222,12 +224,16 @@ export class Orchestrator {
           const task = this.stateMachine.getTask(delta.taskId);
           if (task) {
             this.persistence.updateTask(delta.taskId, delta.changes);
+            if (delta.changes.status) {
+              this.persistence.logEvent?.(delta.taskId, `task.${delta.changes.status}`, delta.changes);
+            }
             this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
           }
         } else if (delta.type === 'created') {
           if (this.workflowId) {
             this.persistence.saveTask(this.workflowId, delta.task);
           }
+          this.persistence.logEvent?.(delta.task.id, 'task.created');
           this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
         }
       }
@@ -239,7 +245,9 @@ export class Orchestrator {
     }
 
     // Auto-start newly ready tasks and drain any previously queued tasks
-    return this.autoStartReadyTasks(result.readyTasks ?? []);
+    const started = this.autoStartReadyTasks(result.readyTasks ?? []);
+    this.checkWorkflowCompletion();
+    return started;
   }
 
   /**
@@ -267,6 +275,7 @@ export class Orchestrator {
 
     const readyTaskIds = this.extractReadyTaskIds(result.sideEffects);
     this.autoStartReadyTasks(readyTaskIds);
+    this.checkWorkflowCompletion();
   }
 
   /**
@@ -297,6 +306,7 @@ export class Orchestrator {
         }
       }
     }
+    this.checkWorkflowCompletion();
   }
 
   /**
@@ -311,7 +321,9 @@ export class Orchestrator {
     this.persistAndPublish(result.task, result.delta);
 
     const readyTaskIds = this.extractReadyTaskIds(result.sideEffects);
-    return this.autoStartReadyTasks(readyTaskIds);
+    const started = this.autoStartReadyTasks(readyTaskIds);
+    this.checkWorkflowCompletion();
+    return started;
   }
 
   /**
@@ -450,10 +462,20 @@ export class Orchestrator {
 
     // Reset previously-running tasks to pending so they can be re-executed.
     // A task that was "running" when the process died is not actually running.
+    // Clear timestamps so the DB doesn't show stale started_at with status=pending.
     for (const task of tasks) {
       if (task.status === 'running') {
-        this.stateMachine.restoreTask({ ...task, status: 'pending' });
-        this.persistence.updateTask(task.id, { status: 'pending' });
+        this.stateMachine.restoreTask({
+          ...task,
+          status: 'pending',
+          startedAt: undefined,
+          completedAt: undefined,
+        });
+        this.persistence.updateTask(task.id, {
+          status: 'pending',
+          startedAt: undefined,
+          completedAt: undefined,
+        });
       }
     }
   }
@@ -565,11 +587,48 @@ export class Orchestrator {
     };
   }
 
+  private checkWorkflowCompletion(): void {
+    if (!this.workflowId || !this.persistence.updateWorkflow) return;
+
+    const tasks = this.stateMachine.getAllTasks();
+    if (tasks.length === 0) return;
+
+    const settled = tasks.every(
+      (t) =>
+        t.status === 'completed' ||
+        t.status === 'failed' ||
+        t.status === 'needs_input' ||
+        t.status === 'awaiting_approval' ||
+        t.status === 'blocked' ||
+        t.status === 'stale',
+    );
+    if (!settled) return;
+
+    const hasPendingInput = tasks.some(
+      (t) => t.status === 'needs_input' || t.status === 'awaiting_approval',
+    );
+    if (hasPendingInput) return;
+
+    const allSucceeded = tasks.every(
+      (t) => t.status === 'completed' || t.status === 'stale',
+    );
+    const status = allSucceeded ? 'completed' : 'failed';
+    this.persistence.updateWorkflow(this.workflowId, {
+      status,
+      updatedAt: new Date().toISOString(),
+    });
+    this.persistence.logEvent?.('__workflow__', `workflow.${status}`);
+  }
+
   private persistAndPublish(task: TaskState, delta: TaskDelta): void {
     if (delta.type === 'updated') {
       this.persistence.updateTask(task.id, delta.changes);
+      if (delta.changes.status) {
+        this.persistence.logEvent?.(task.id, `task.${delta.changes.status}`, delta.changes);
+      }
     } else if (delta.type === 'created' && this.workflowId) {
       this.persistence.saveTask(this.workflowId, task);
+      this.persistence.logEvent?.(task.id, 'task.created');
     }
     this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
   }

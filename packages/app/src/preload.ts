@@ -40,6 +40,7 @@ const api: InvokerAPI = {
     return () => ipcRenderer.removeListener('invoker:activity-log', handler);
   },
   getActivityLogs: () => ipcRenderer.invoke('invoker:get-activity-logs'),
+  getEvents: (taskId: string) => ipcRenderer.invoke('invoker:get-events', taskId),
 
   // External terminal launcher
   openTerminal: (taskId: string) =>

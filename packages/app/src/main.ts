@@ -814,6 +814,10 @@ function setupGuiMode(): void {
 
     ipcMain.handle('invoker:clear', async () => {
       console.log(`[ipc] clear — stopping all tasks and resetting DAG`);
+      // Capture current workflow before destroying state
+      const workflows = persistence.listWorkflows();
+      const currentWorkflowId = workflows.length > 0 ? workflows[0].id : null;
+
       await Promise.all(familiarRegistry.getAll().map(f => f.destroyAll()));
       const allTasks = orchestrator.getAllTasks();
       for (const task of allTasks) {
@@ -826,6 +830,15 @@ function setupGuiMode(): void {
           });
         }
       }
+
+      // Mark the workflow as failed in the DB so it doesn't stay "running" forever
+      if (currentWorkflowId) {
+        persistence.updateWorkflow(currentWorkflowId, {
+          status: 'failed',
+          updatedAt: new Date().toISOString(),
+        });
+      }
+
       orchestrator = new Orchestrator({ persistence, messageBus });
       rebuildTaskExecutor();
       taskHandles.clear();
@@ -863,6 +876,7 @@ function setupGuiMode(): void {
     });
 
     ipcMain.handle('invoker:get-tasks', () => orchestrator.getAllTasks());
+    ipcMain.handle('invoker:get-events', (_event, taskId: string) => persistence.getEvents(taskId));
     ipcMain.handle('invoker:get-status', () => orchestrator.getWorkflowStatus());
 
     ipcMain.handle('invoker:get-all-completed-tasks', () => {

@@ -148,6 +148,20 @@ export class SQLiteAdapter implements PersistenceAdapter {
     );
   }
 
+  updateWorkflow(workflowId: string, changes: Partial<Pick<Workflow, 'status' | 'updatedAt'>>): void {
+    const setClauses: string[] = [];
+    const values: unknown[] = [];
+    if (changes.status !== undefined) {
+      setClauses.push('status = ?');
+      values.push(changes.status);
+    }
+    setClauses.push('updated_at = ?');
+    values.push(changes.updatedAt ?? new Date().toISOString());
+    if (setClauses.length === 0) return;
+    values.push(workflowId);
+    this.db.prepare(`UPDATE workflows SET ${setClauses.join(', ')} WHERE id = ?`).run(...values);
+  }
+
   loadWorkflow(workflowId: string): Workflow | undefined {
     const row = this.db.prepare('SELECT * FROM workflows WHERE id = ?').get(workflowId) as any;
     if (!row) return undefined;
