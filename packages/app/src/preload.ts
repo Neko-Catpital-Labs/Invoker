@@ -45,7 +45,8 @@ const api: InvokerAPI = {
   openTerminal: (taskId: string) =>
     ipcRenderer.invoke('invoker:open-terminal', taskId),
 
-  // Workflow history
+  // Workflow management
+  resumeWorkflow: () => ipcRenderer.invoke('invoker:resume-workflow'),
   listWorkflows: () => ipcRenderer.invoke('invoker:list-workflows'),
   loadWorkflow: (workflowId: string) =>
     ipcRenderer.invoke('invoker:load-workflow', workflowId),

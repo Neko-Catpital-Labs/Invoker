@@ -42,8 +42,16 @@ export function App() {
   const [onFinish, setOnFinish] = useState<'none' | 'merge' | 'pull_request'>('merge');
   const [viewMode, setViewMode] = useState<'dag' | 'history'>('dag');
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; task: TaskState } | null>(null);
+  const [canResume, setCanResume] = useState(false);
 
   const selectedTask = selectedTaskId ? tasks.get(selectedTaskId) ?? null : null;
+
+  // ── Check for resumable workflows on mount ─────────────────
+  useEffect(() => {
+    window.invoker?.listWorkflows().then((workflows) => {
+      setCanResume(workflows.length > 0);
+    }).catch(() => {});
+  }, []);
 
   // ── Collapsible terminal ───────────────────────────────────
   const [terminalExpanded, setTerminalExpanded] = useState(false);
@@ -130,6 +138,23 @@ export function App() {
       setHasStarted(true);
     } catch (err) {
       console.error('Failed to start:', err);
+    }
+  }, [invoker]);
+
+  const handleResume = useCallback(async () => {
+    if (!invoker) return;
+    try {
+      const result = await invoker.resumeWorkflow();
+      if (!result) {
+        console.warn('No workflow to resume');
+        return;
+      }
+      setPlanName(result.workflow.name ?? 'Resumed Workflow');
+      setHasLoadedPlan(true);
+      setHasStarted(true);
+      setCanResume(false);
+    } catch (err) {
+      console.error('Failed to resume workflow:', err);
     }
   }, [invoker]);
 
@@ -246,9 +271,11 @@ export function App() {
         hasLoadedPlan={hasLoadedPlan}
         hasStarted={hasStarted}
         allSettled={allSettled}
+        canResume={canResume}
         onLoadFile={handleLoadPlan}
         onStart={handleStart}
         onStop={handleStop}
+        onResume={handleResume}
         onClear={handleClear}
         onDeleteDB={handleDeleteDB}
         onRefresh={refreshTasks}
