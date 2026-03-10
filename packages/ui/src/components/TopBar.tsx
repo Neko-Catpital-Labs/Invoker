@@ -23,8 +23,8 @@ interface TopBarProps {
   onClear: () => void;
   onDeleteDB: () => void;
   onRefresh: () => void;
-  viewMode: 'dag' | 'history';
-  onToggleView: () => void;
+  viewMode: 'dag' | 'history' | 'timeline';
+  onToggleView: (mode: 'dag' | 'history' | 'timeline') => void;
 }
 
 export function TopBar({
@@ -88,16 +88,21 @@ export function TopBar({
         </span>
       )}
 
-      <button
-        onClick={onToggleView}
-        className={`px-3 py-1.5 rounded text-xs font-medium transition-colors ${
-          viewMode === 'history'
-            ? 'bg-indigo-600 text-white'
-            : 'bg-gray-600 hover:bg-gray-500 text-white'
-        }`}
-      >
-        {viewMode === 'history' ? 'Back to DAG' : 'History'}
-      </button>
+      <div className="flex rounded overflow-hidden border border-gray-600">
+        {(['dag', 'timeline', 'history'] as const).map((mode) => (
+          <button
+            key={mode}
+            onClick={() => onToggleView(mode)}
+            className={`px-3 py-1 text-xs font-medium transition-colors ${
+              viewMode === mode
+                ? 'bg-indigo-600 text-white'
+                : 'bg-gray-700 hover:bg-gray-600 text-gray-300'
+            }`}
+          >
+            {mode === 'dag' ? 'DAG' : mode === 'timeline' ? 'Timeline' : 'History'}
+          </button>
+        ))}
+      </div>
 
       {/* Spacer */}
       <div className="flex-1" />

@@ -20,6 +20,7 @@ import { Terminal } from './components/Terminal.js';
 import { StatusBar } from './components/StatusBar.js';
 import { TopBar } from './components/TopBar.js';
 import { HistoryView } from './components/HistoryView.js';
+import { TimelineView } from './components/TimelineView.js';
 import { ApprovalModal } from './components/ApprovalModal.js';
 import { InputModal } from './components/InputModal.js';
 import { ExperimentModal } from './components/ExperimentModal.js';
@@ -40,7 +41,7 @@ export function App() {
   const [hasStarted, setHasStarted] = useState(false);
   const [planName, setPlanName] = useState<string | null>(null);
   const [onFinish, setOnFinish] = useState<'none' | 'merge' | 'pull_request'>('merge');
-  const [viewMode, setViewMode] = useState<'dag' | 'history'>('dag');
+  const [viewMode, setViewMode] = useState<'dag' | 'history' | 'timeline'>('dag');
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; task: TaskState } | null>(null);
   const [canResume, setCanResume] = useState(false);
 
@@ -280,7 +281,7 @@ export function App() {
         onDeleteDB={handleDeleteDB}
         onRefresh={refreshTasks}
         viewMode={viewMode}
-        onToggleView={() => setViewMode(v => v === 'dag' ? 'history' : 'dag')}
+        onToggleView={setViewMode}
       />
 
       {/* Main content */}
@@ -290,6 +291,10 @@ export function App() {
           {viewMode === 'history' ? (
             <div className="h-full">
               <HistoryView onTaskClick={handleTaskClick} selectedTaskId={selectedTaskId} />
+            </div>
+          ) : viewMode === 'timeline' ? (
+            <div className="h-full">
+              <TimelineView tasks={tasks} onTaskClick={handleTaskClick} selectedTaskId={selectedTaskId} />
             </div>
           ) : tasks.size === 0 ? (
             <div className="h-full flex items-center justify-center text-gray-500 text-sm">
