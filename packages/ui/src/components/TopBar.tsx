@@ -15,9 +15,11 @@ interface TopBarProps {
   hasLoadedPlan: boolean;
   hasStarted: boolean;
   allSettled: boolean;
+  canResume: boolean;
   onLoadFile: (planText: string) => void;
   onStart: () => void;
   onStop: () => void;
+  onResume: () => void;
   onClear: () => void;
   onDeleteDB: () => void;
   onRefresh: () => void;
@@ -30,9 +32,11 @@ export function TopBar({
   hasLoadedPlan,
   hasStarted,
   allSettled,
+  canResume,
   onLoadFile,
   onStart,
   onStop,
+  onResume,
   onClear,
   onDeleteDB,
   onRefresh,
@@ -99,6 +103,15 @@ export function TopBar({
       <div className="flex-1" />
 
       {/* Right: Action buttons */}
+      {canResume && !hasLoadedPlan && (
+        <button
+          onClick={onResume}
+          className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded text-xs font-medium transition-colors"
+        >
+          Resume
+        </button>
+      )}
+
       {showStart && (
         <button
           onClick={onStart}

@@ -774,6 +774,27 @@ function setupGuiMode(): void {
       return started;
     });
 
+    ipcMain.handle('invoker:resume-workflow', async () => {
+      const workflows = persistence.listWorkflows();
+      if (workflows.length === 0) {
+        console.log(`[ipc] resume-workflow: no workflows found`);
+        return null;
+      }
+      const latest = workflows[0];
+      console.log(`[ipc] resume-workflow: resuming "${latest.name}" (${latest.id})`);
+      const started = orchestrator.resumeWorkflow(latest.id);
+      const tasks = orchestrator.getAllTasks();
+      for (const task of tasks) {
+        lastKnownTaskStates.set(task.id, JSON.stringify(task));
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('invoker:task-delta', { type: 'created', task });
+        }
+      }
+      console.log(`[ipc] resume-workflow: ${tasks.length} tasks loaded, ${started.length} started`);
+      await taskExecutor.executeTasks(started);
+      return { workflow: latest, taskCount: tasks.length, startedCount: started.length };
+    });
+
     ipcMain.handle('invoker:stop', async () => {
       console.log(`[ipc] stop — destroying all familiars`);
       await Promise.all(familiarRegistry.getAll().map(f => f.destroyAll()));

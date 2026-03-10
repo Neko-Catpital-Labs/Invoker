@@ -144,7 +144,8 @@ export interface InvokerAPI {
   // External terminal launcher
   openTerminal: (taskId: string) => Promise<{ opened: boolean; reason?: string }>;
 
-  // Workflow history
+  // Workflow management
+  resumeWorkflow: () => Promise<{ workflow: { id: string; name: string; status: string }; taskCount: number; startedCount: number } | null>;
   listWorkflows: () => Promise<Array<{ id: string; name: string; status: string; createdAt: string; updatedAt: string }>>;
   loadWorkflow: (workflowId: string) => Promise<{ workflow: unknown; tasks: unknown[] }>;
   onWorkflowsChanged: (cb: (workflows: unknown[]) => void) => () => void;
