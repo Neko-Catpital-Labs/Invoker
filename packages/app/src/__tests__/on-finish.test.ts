@@ -5,28 +5,52 @@
  * Integration test: orchestrator completes all tasks → shouldRunOnFinish returns true
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-
-// Mock better-sqlite3 to avoid native module version mismatch
-vi.mock('better-sqlite3', () => {
-  const mockDb = {
-    pragma: vi.fn(),
-    prepare: vi.fn(() => ({
-      run: vi.fn(),
-      get: vi.fn(),
-      all: vi.fn(() => []),
-    })),
-    exec: vi.fn(),
-    close: vi.fn(),
-  };
-  return { default: vi.fn(() => mockDb) };
-});
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 import { shouldRunOnFinish } from '../workflow-finish.js';
-import { Orchestrator, type PlanDefinition } from '@invoker/core';
-import { SQLiteAdapter } from '@invoker/persistence';
-import { LocalBus } from '@invoker/transport';
+import {
+  Orchestrator,
+  type PlanDefinition,
+  type TaskState,
+  type OrchestratorPersistence,
+  type OrchestratorMessageBus,
+} from '@invoker/core';
 import type { WorkResponse } from '@invoker/protocol';
+
+// ── Lightweight in-memory mocks ─────────────────────────────
+
+class InMemoryPersistence implements OrchestratorPersistence {
+  workflows = new Map<string, { id: string; name: string; status: string }>();
+  tasks = new Map<string, { workflowId: string; task: TaskState }>();
+
+  saveWorkflow(workflow: { id: string; name: string; status: string }): void {
+    this.workflows.set(workflow.id, workflow);
+  }
+  updateWorkflow(workflowId: string, changes: { status?: string }): void {
+    const wf = this.workflows.get(workflowId);
+    if (wf && changes.status) wf.status = changes.status;
+  }
+  saveTask(workflowId: string, task: TaskState): void {
+    this.tasks.set(task.id, { workflowId, task });
+  }
+  updateTask(taskId: string, changes: Partial<TaskState>): void {
+    const entry = this.tasks.get(taskId);
+    if (entry) entry.task = { ...entry.task, ...changes } as TaskState;
+  }
+  loadTasks(workflowId: string): TaskState[] {
+    return Array.from(this.tasks.values())
+      .filter((e) => e.workflowId === workflowId)
+      .map((e) => e.task);
+  }
+  logEvent(): void {}
+}
+
+class InMemoryBus implements OrchestratorMessageBus {
+  publish(): void {}
+  subscribe(): () => void {
+    return () => {};
+  }
+}
 
 // ── Helpers ─────────────────────────────────────────────────
 
@@ -96,18 +120,11 @@ describe('shouldRunOnFinish', () => {
 
 describe('onFinish integration', () => {
   let orchestrator: Orchestrator;
-  let persistence: SQLiteAdapter;
-  let bus: LocalBus;
 
   beforeEach(() => {
-    persistence = new SQLiteAdapter(':memory:');
-    bus = new LocalBus();
+    const persistence = new InMemoryPersistence();
+    const bus = new InMemoryBus();
     orchestrator = new Orchestrator({ persistence, messageBus: bus });
-  });
-
-  afterEach(() => {
-    bus.disconnect();
-    persistence.close();
   });
 
   it('shouldRunOnFinish returns true after all tasks complete', () => {

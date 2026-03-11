@@ -10,26 +10,50 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { randomUUID } from 'node:crypto';
 
-// Mock better-sqlite3 to avoid native module version mismatch
-vi.mock('better-sqlite3', () => {
-  const mockDb = {
-    pragma: vi.fn(),
-    prepare: vi.fn(() => ({
-      run: vi.fn(),
-      get: vi.fn(),
-      all: vi.fn(() => []),
-    })),
-    exec: vi.fn(),
-    close: vi.fn(),
-  };
-  return { default: vi.fn(() => mockDb) };
-});
-
-import { Orchestrator, type PlanDefinition, type TaskState } from '@invoker/core';
-import { SQLiteAdapter } from '@invoker/persistence';
-import { LocalBus, Channels } from '@invoker/transport';
+import {
+  Orchestrator,
+  type PlanDefinition,
+  type TaskState,
+  type OrchestratorPersistence,
+  type OrchestratorMessageBus,
+} from '@invoker/core';
 import { LocalFamiliar, type FamiliarHandle, type TerminalSpec } from '@invoker/executors';
 import type { WorkResponse, WorkRequest } from '@invoker/protocol';
+
+// ── Lightweight in-memory mocks ─────────────────────────────
+
+class InMemoryPersistence implements OrchestratorPersistence {
+  workflows = new Map<string, { id: string; name: string; status: string }>();
+  tasks = new Map<string, { workflowId: string; task: TaskState }>();
+
+  saveWorkflow(workflow: { id: string; name: string; status: string }): void {
+    this.workflows.set(workflow.id, workflow);
+  }
+  updateWorkflow(workflowId: string, changes: { status?: string }): void {
+    const wf = this.workflows.get(workflowId);
+    if (wf && changes.status) wf.status = changes.status;
+  }
+  saveTask(workflowId: string, task: TaskState): void {
+    this.tasks.set(task.id, { workflowId, task });
+  }
+  updateTask(taskId: string, changes: Partial<TaskState>): void {
+    const entry = this.tasks.get(taskId);
+    if (entry) entry.task = { ...entry.task, ...changes } as TaskState;
+  }
+  loadTasks(workflowId: string): TaskState[] {
+    return Array.from(this.tasks.values())
+      .filter((e) => e.workflowId === workflowId)
+      .map((e) => e.task);
+  }
+  logEvent(): void {}
+}
+
+class InMemoryBus implements OrchestratorMessageBus {
+  publish(): void {}
+  subscribe(): () => void {
+    return () => {};
+  }
+}
 
 // ── Mock child_process.spawn ──────────────────────────────────
 
@@ -116,13 +140,11 @@ function executeTaskViaFamiliar(
 
 describe('open-terminal integration', () => {
   let orchestrator: Orchestrator;
-  let persistence: SQLiteAdapter;
-  let bus: LocalBus;
   let familiar: LocalFamiliar;
 
   beforeEach(() => {
-    persistence = new SQLiteAdapter(':memory:');
-    bus = new LocalBus();
+    const persistence = new InMemoryPersistence();
+    const bus = new InMemoryBus();
     familiar = new LocalFamiliar();
     orchestrator = new Orchestrator({ persistence, messageBus: bus });
     taskHandles.clear();
@@ -131,8 +153,6 @@ describe('open-terminal integration', () => {
 
   afterEach(async () => {
     await familiar.destroyAll();
-    bus.disconnect();
-    persistence.close();
   });
 
   it('runs tasks, gets terminal spec, and spawns external terminal', async () => {
