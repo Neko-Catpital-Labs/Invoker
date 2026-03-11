@@ -460,40 +460,20 @@ export class Orchestrator {
   }
 
   /**
-   * Restore tasks from persistence into the state machine without
-   * auto-starting execution. Resets stale "running" tasks to pending.
-   * Use this on GUI startup where the user should click Start.
+   * Load tasks from persistence into the state machine, mirroring DB state
+   * exactly. Non-destructive: does not mutate task status or write back to DB.
+   * Safe to call at any time (startup, db-poll, view switch).
    */
-  hydrateFromDb(workflowId: string): void {
+  syncFromDb(workflowId: string): void {
     if (!this.persistence.loadTasks) {
       throw new Error('Persistence adapter does not support loading tasks');
     }
 
     this.workflowId = workflowId;
+    this.stateMachine.clear();
     const tasks = this.persistence.loadTasks(workflowId);
-
-    // Restore each task into the state machine
     for (const task of tasks) {
       this.stateMachine.restoreTask(task);
-    }
-
-    // Reset previously-running tasks to pending so they can be re-executed.
-    // A task that was "running" when the process died is not actually running.
-    // Clear timestamps so the DB doesn't show stale started_at with status=pending.
-    for (const task of tasks) {
-      if (task.status === 'running') {
-        this.stateMachine.restoreTask({
-          ...task,
-          status: 'pending',
-          startedAt: undefined,
-          completedAt: undefined,
-        });
-        this.persistence.updateTask(task.id, {
-          status: 'pending',
-          startedAt: undefined,
-          completedAt: undefined,
-        });
-      }
     }
   }
 
@@ -503,7 +483,7 @@ export class Orchestrator {
    * Throws if persistence adapter does not support loadTasks.
    */
   resumeWorkflow(workflowId: string): TaskState[] {
-    this.hydrateFromDb(workflowId);
+    this.syncFromDb(workflowId);
     return this.startExecution();
   }
 

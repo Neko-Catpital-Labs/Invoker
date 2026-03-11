@@ -623,9 +623,9 @@ describe('Orchestrator', () => {
     });
   });
 
-  // ── hydrateFromDb ───────────────────────────────────────
+  // ── syncFromDb ─────────────────────────────────────────
 
-  describe('hydrateFromDb', () => {
+  describe('syncFromDb', () => {
     it('restores tasks without auto-starting', () => {
       const hydratePersistence = new InMemoryPersistence();
       const storedTasks: TaskState[] = [
@@ -654,7 +654,7 @@ describe('Orchestrator', () => {
         maxConcurrency: 3,
       });
 
-      hydrateOrchestrator.hydrateFromDb('wf-hydrate');
+      hydrateOrchestrator.syncFromDb('wf-hydrate');
 
       expect(hydrateOrchestrator.getAllTasks()).toHaveLength(2);
       expect(hydrateOrchestrator.getTask('t1')!.status).toBe('completed');
@@ -662,16 +662,17 @@ describe('Orchestrator', () => {
       expect(hydrateOrchestrator.getTask('t2')!.status).toBe('pending');
     });
 
-    it('resets stale running tasks to pending', () => {
+    it('preserves running task status from DB', () => {
       const hydratePersistence = new InMemoryPersistence();
+      const startedAt = new Date();
       const storedTasks: TaskState[] = [
         {
           id: 't1',
-          description: 'Was running when process died',
+          description: 'Currently running task',
           status: 'running',
           dependencies: [],
           createdAt: new Date(),
-          startedAt: new Date(),
+          startedAt,
         },
       ];
       hydratePersistence.loadTasks = (_workflowId: string) => storedTasks;
@@ -682,12 +683,42 @@ describe('Orchestrator', () => {
         maxConcurrency: 3,
       });
 
-      hydrateOrchestrator.hydrateFromDb('wf-hydrate');
+      hydrateOrchestrator.syncFromDb('wf-hydrate');
 
-      expect(hydrateOrchestrator.getTask('t1')!.status).toBe('pending');
+      const task = hydrateOrchestrator.getTask('t1')!;
+      expect(task.status).toBe('running');
+      expect(task.startedAt).toBe(startedAt);
     });
 
-    it('restartTask works after hydration', () => {
+    it('restartTask recovers a stuck running task after syncFromDb', () => {
+      const hydratePersistence = new InMemoryPersistence();
+      const storedTasks: TaskState[] = [
+        {
+          id: 't1',
+          description: 'Stuck running task from a crash',
+          status: 'running',
+          dependencies: [],
+          createdAt: new Date(),
+          startedAt: new Date(),
+        },
+      ];
+      hydratePersistence.loadTasks = (_workflowId: string) => storedTasks;
+
+      const hydrateBus = new InMemoryBus();
+      const hydrateOrchestrator = new Orchestrator({
+        persistence: hydratePersistence,
+        messageBus: hydrateBus,
+        maxConcurrency: 3,
+      });
+
+      hydrateOrchestrator.syncFromDb('wf-hydrate');
+      const started = hydrateOrchestrator.restartTask('t1');
+
+      expect(started).toHaveLength(1);
+      expect(started[0].status).toBe('running');
+    });
+
+    it('restartTask works on failed tasks after syncFromDb', () => {
       const hydratePersistence = new InMemoryPersistence();
       const storedTasks: TaskState[] = [
         {
@@ -711,7 +742,7 @@ describe('Orchestrator', () => {
         maxConcurrency: 3,
       });
 
-      hydrateOrchestrator.hydrateFromDb('wf-hydrate');
+      hydrateOrchestrator.syncFromDb('wf-hydrate');
       const started = hydrateOrchestrator.restartTask('t1');
 
       // Task should be restarted (no deps, so auto-started to running)
@@ -721,7 +752,7 @@ describe('Orchestrator', () => {
       expect(deltas.length).toBeGreaterThan(0);
     });
 
-    it('re-hydrating with a different workflow replaces state machine contents', () => {
+    it('re-syncing with a different workflow replaces state machine contents', () => {
       const hydratePersistence = new InMemoryPersistence();
       const workflowATasks: TaskState[] = [
         {
@@ -750,14 +781,14 @@ describe('Orchestrator', () => {
         maxConcurrency: 3,
       });
 
-      // Hydrate with workflow A
+      // Sync with workflow A
       hydratePersistence.loadTasks = () => workflowATasks;
-      hydrateOrchestrator.hydrateFromDb('wf-a');
+      hydrateOrchestrator.syncFromDb('wf-a');
       expect(hydrateOrchestrator.getTask('a1')!.status).toBe('completed');
 
-      // Re-hydrate with workflow B (simulates DB poll detecting external workflow)
+      // Re-sync with workflow B (simulates DB poll detecting external workflow)
       hydratePersistence.loadTasks = () => workflowBTasks;
-      hydrateOrchestrator.hydrateFromDb('wf-b');
+      hydrateOrchestrator.syncFromDb('wf-b');
 
       // restartTask should work on the new workflow's tasks
       const started = hydrateOrchestrator.restartTask('b1');
@@ -766,7 +797,7 @@ describe('Orchestrator', () => {
       expect(hydrateOrchestrator.getTask('b1')).toBeDefined();
     });
 
-    it('approve works after hydration', () => {
+    it('approve works after syncFromDb', () => {
       const hydratePersistence = new InMemoryPersistence();
       const storedTasks: TaskState[] = [
         {
@@ -785,14 +816,14 @@ describe('Orchestrator', () => {
         maxConcurrency: 3,
       });
 
-      hydrateOrchestrator.hydrateFromDb('wf-hydrate');
+      hydrateOrchestrator.syncFromDb('wf-hydrate');
       hydrateOrchestrator.approve('t1');
 
       expect(hydrateOrchestrator.getTask('t1')!.status).toBe('completed');
     });
 
     it('throws when persistence does not support loadTasks', () => {
-      expect(() => orchestrator.hydrateFromDb('wf-1')).toThrow(
+      expect(() => orchestrator.syncFromDb('wf-1')).toThrow(
         'Persistence adapter does not support loading tasks',
       );
     });
@@ -890,7 +921,7 @@ describe('Orchestrator', () => {
       expect(resumeOrchestrator.getTask('t3')!.status).toBe('running');
     });
 
-    it('resets previously-running tasks to pending before starting', () => {
+    it('preserves running tasks and only starts pending ones', () => {
       const resumePersistence = new InMemoryPersistence();
       const storedTasks: TaskState[] = [
         {
@@ -912,10 +943,10 @@ describe('Orchestrator', () => {
 
       const started = resumeOrchestrator.resumeWorkflow('wf-resume');
 
-      // The task should have been reset to pending then started
-      expect(started).toHaveLength(1);
-      expect(started[0].id).toBe('t1');
-      expect(started[0].status).toBe('running');
+      // The task stays running (startExecution only picks up pending tasks).
+      // User can manually restart stuck tasks via restartTask.
+      expect(started).toHaveLength(0);
+      expect(resumeOrchestrator.getTask('t1')!.status).toBe('running');
     });
 
     it('throws when persistence does not support loadTasks', () => {
@@ -1257,44 +1288,7 @@ describe('Orchestrator', () => {
     });
   });
 
-  // ── Hydration Timestamp Clearing ──────────────────────
-
-  describe('hydrateFromDb timestamp clearing', () => {
-    it('clears startedAt and completedAt when resetting running tasks', () => {
-      const hydratePersistence = new InMemoryPersistence();
-      const startedAt = new Date('2024-01-01T00:00:00Z');
-      const taskData: TaskState = {
-        id: 't1',
-        description: 'Was running',
-        status: 'running',
-        dependencies: [],
-        createdAt: new Date(),
-        startedAt,
-      };
-      // Pre-populate mock storage so updateTask can find the entry
-      hydratePersistence.tasks.set('t1', { workflowId: 'wf-test', task: { ...taskData } });
-      hydratePersistence.loadTasks = () => [taskData];
-
-      const hydrateOrchestrator = new Orchestrator({
-        persistence: hydratePersistence,
-        messageBus: bus,
-        maxConcurrency: 3,
-      });
-
-      hydrateOrchestrator.hydrateFromDb('wf-test');
-
-      const task = hydrateOrchestrator.getTask('t1')!;
-      expect(task.status).toBe('pending');
-      expect(task.startedAt).toBeUndefined();
-      expect(task.completedAt).toBeUndefined();
-
-      // Verify DB was also updated
-      const persisted = hydratePersistence.tasks.get('t1')?.task;
-      expect(persisted?.status).toBe('pending');
-      expect(persisted?.startedAt).toBeUndefined();
-      expect(persisted?.completedAt).toBeUndefined();
-    });
-  });
+  // (Hydration Timestamp Clearing tests removed — syncFromDb no longer resets running tasks)
 
   // ── editTaskCommand ────────────────────────────────────
 

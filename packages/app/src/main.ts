@@ -81,11 +81,11 @@ function initServices(): void {
   familiarRegistry.register('local', new LocalFamiliar());
   orchestrator = new Orchestrator({ persistence, messageBus });
 
-  // Hydrate state machine from most recent workflow so mutations work after restart
+  // Sync state machine from most recent workflow so mutations work after restart
   const workflows = persistence.listWorkflows();
   if (workflows.length > 0) {
-    orchestrator.hydrateFromDb(workflows[0].id);
-    console.log(`[init] Hydrated orchestrator from workflow "${workflows[0].id}" (${workflows[0].name})`);
+    orchestrator.syncFromDb(workflows[0].id);
+    console.log(`[init] Synced orchestrator from workflow "${workflows[0].id}" (${workflows[0].name})`);
   }
 }
 
@@ -162,6 +162,9 @@ async function wireSlackBot(deps: SlackBotDeps): Promise<any> {
       }
       case 'start_plan': {
         deps.logFn('trace', 'info', `slackBot: loading plan "${command.plan.name}" (${command.plan.tasks.length} tasks)`);
+        // Stop any running tasks from a previous workflow before loading a new plan.
+        // loadPlan() calls stateMachine.clear(), which would orphan running child processes.
+        await Promise.all(familiarRegistry.getAll().map(f => f.destroyAll()));
         deps.onStartPlan?.();
         deps.onPlanLoaded?.(command.plan);
         orchestrator.loadPlan(command.plan);
@@ -777,11 +780,24 @@ function setupGuiMode(): void {
       console.log(`[slack] Not started: ${err instanceof Error ? err.message : String(err)}`);
     });
 
-    // Forward deltas to renderer
+    // Forward deltas to renderer and keep snapshot cache in sync so
+    // the db-poll doesn't re-emit deltas the messageBus already delivered.
     messageBus.subscribe(Channels.TASK_DELTA, (delta: unknown) => {
       console.log(`[delta→ui]`, JSON.stringify(delta));
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('invoker:task-delta', delta);
+      }
+      const d = delta as TaskDelta;
+      if (d.type === 'created') {
+        lastKnownTaskStates.set(d.task.id, JSON.stringify(d.task));
+      } else if (d.type === 'updated') {
+        const existing = lastKnownTaskStates.get(d.taskId);
+        if (existing) {
+          const task = { ...JSON.parse(existing), ...d.changes };
+          lastKnownTaskStates.set(d.taskId, JSON.stringify(task));
+        }
+      } else if (d.type === 'removed') {
+        lastKnownTaskStates.delete(d.taskId);
       }
     });
 
@@ -894,8 +910,8 @@ function setupGuiMode(): void {
 
     ipcMain.handle('invoker:load-workflow', (_event, workflowId: string) => {
       console.log(`[ipc] load-workflow: "${workflowId}"`);
-      // Hydrate orchestrator so mutations (restart, approve, etc.) work on this workflow
-      orchestrator.hydrateFromDb(workflowId);
+      // Sync orchestrator so mutations (restart, approve, etc.) work on this workflow
+      orchestrator.syncFromDb(workflowId);
       const tasks = persistence.loadTasks(workflowId);
       const workflow = persistence.loadWorkflow(workflowId);
       console.log(`[ipc] load-workflow: found ${tasks.length} tasks for "${workflow?.name ?? workflowId}"`);
@@ -972,10 +988,10 @@ function setupGuiMode(): void {
           lastKnownWorkflowCount = workflows.length;
           mainWindow.webContents.send('invoker:workflows-changed', workflows);
 
-          // Re-hydrate orchestrator so mutations (restart, approve, etc.) work on the new workflow
+          // Sync orchestrator so mutations (restart, approve, etc.) work on the new workflow
           const latestWf = workflows[0];
-          orchestrator.hydrateFromDb(latestWf.id);
-          console.log(`[db-poll] Re-hydrated orchestrator for workflow "${latestWf.id}"`);
+          orchestrator.syncFromDb(latestWf.id);
+          console.log(`[db-poll] Synced orchestrator for workflow "${latestWf.id}"`);
           lastKnownTaskStates.clear();
         }
 

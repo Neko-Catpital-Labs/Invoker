@@ -307,15 +307,14 @@ export class TaskStateMachine {
   // ── Restart ────────────────────────────────────────────
 
   /**
-   * Reset a non-running task back to pending.
+   * Reset a task back to pending.
    * Clears execution artifacts and unblocks transitive dependents.
+   * Allows restarting "running" tasks so users can recover stuck tasks
+   * after a crash (the child process is gone but status was never updated).
    */
   restartTask(taskId: string): TransitionResult | { error: string } {
     const task = this.graph.getNode(taskId);
     if (!task) return { error: `Task ${taskId} not found` };
-    if (task.status === 'running') {
-      return { error: `Cannot restart task ${taskId}: it is currently running` };
-    }
 
     const result = this.transition(task, 'pending', {
       startedAt: undefined,
