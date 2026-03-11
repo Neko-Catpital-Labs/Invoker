@@ -224,6 +224,29 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
     // Clean up stale worktree references (e.g. from a previous crashed run)
     await this.execGit(['worktree', 'prune'], this.repoDir);
 
+    // Force-remove any existing worktree that holds this branch
+    // (prune only removes references whose directories were deleted;
+    //  this handles the case where the old directory still exists on disk)
+    try {
+      const porcelain = await this.execGit(['worktree', 'list', '--porcelain'], this.repoDir);
+      const branchRef = `branch refs/heads/${branch}`;
+      const lines = porcelain.split('\n');
+      for (let i = 0; i < lines.length; i++) {
+        if (lines[i] === branchRef) {
+          for (let j = i - 1; j >= 0; j--) {
+            if (lines[j].startsWith('worktree ')) {
+              const oldPath = lines[j].slice('worktree '.length);
+              await this.execGit(['worktree', 'remove', '--force', oldPath], this.repoDir);
+              break;
+            }
+          }
+          break;
+        }
+      }
+    } catch {
+      // Best-effort: if listing or removal fails, proceed and let the add step report the error
+    }
+
     // -- Create the worktree with a new branch --
     try {
       await this.execGit(
