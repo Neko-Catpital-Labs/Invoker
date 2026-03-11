@@ -1,5 +1,6 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { WorkRequest, WorkResponse } from '@invoker/protocol';
+import type { PersistedTaskMeta } from '../familiar.js';
 import { LocalFamiliar } from '../local-familiar.js';
 
 function makeRequest(overrides: Partial<WorkRequest> = {}): WorkRequest {
@@ -575,5 +576,80 @@ describe('LocalFamiliar', () => {
 
       await heartbeatFamiliar.destroyAll();
     }, 10_000);
+  });
+
+  describe('getRestoredTerminalSpec', () => {
+    const baseMeta: PersistedTaskMeta = {
+      taskId: 'task-1',
+      familiarType: 'local',
+    };
+
+    it('returns cwd spec when workspace exists', () => {
+      const fs = require('node:fs');
+      const orig = fs.existsSync;
+      fs.existsSync = () => true;
+      try {
+        const spec = familiar.getRestoredTerminalSpec({
+          ...baseMeta,
+          workspacePath: '/tmp/test-workspace',
+        });
+        expect(spec).toEqual({ cwd: '/tmp/test-workspace' });
+      } finally {
+        fs.existsSync = orig;
+      }
+    });
+
+    it('returns claude --resume spec with cwd when session exists', () => {
+      const fs = require('node:fs');
+      const orig = fs.existsSync;
+      fs.existsSync = () => true;
+      try {
+        const spec = familiar.getRestoredTerminalSpec({
+          ...baseMeta,
+          workspacePath: '/tmp/test-workspace',
+          claudeSessionId: 'session-abc',
+        });
+        expect(spec).toEqual({
+          command: 'claude',
+          args: ['--resume', 'session-abc', '--dangerously-skip-permissions'],
+          cwd: '/tmp/test-workspace',
+        });
+      } finally {
+        fs.existsSync = orig;
+      }
+    });
+
+    it('throws when workspace path does not exist', () => {
+      const fs = require('node:fs');
+      const orig = fs.existsSync;
+      fs.existsSync = () => false;
+      try {
+        expect(() =>
+          familiar.getRestoredTerminalSpec({
+            ...baseMeta,
+            workspacePath: '/tmp/deleted-workspace',
+          }),
+        ).toThrow(/no longer exists/);
+      } finally {
+        fs.existsSync = orig;
+      }
+    });
+
+    it('returns spec with undefined cwd when no workspace path provided', () => {
+      const spec = familiar.getRestoredTerminalSpec(baseMeta);
+      expect(spec).toEqual({ cwd: undefined });
+    });
+
+    it('returns claude --resume spec without cwd when no workspace path', () => {
+      const spec = familiar.getRestoredTerminalSpec({
+        ...baseMeta,
+        claudeSessionId: 'session-xyz',
+      });
+      expect(spec).toEqual({
+        command: 'claude',
+        args: ['--resume', 'session-xyz', '--dangerously-skip-permissions'],
+        cwd: undefined,
+      });
+    });
   });
 });

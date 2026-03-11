@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import type { WorkRequest, WorkResponse } from '@invoker/protocol';
-import type { FamiliarHandle, TerminalSpec } from './familiar.js';
+import type { FamiliarHandle, PersistedTaskMeta, TerminalSpec } from './familiar.js';
 import { BaseFamiliar, type BaseEntry } from './base-familiar.js';
 
 const SIGKILL_TIMEOUT_MS = 5_000;
@@ -293,6 +294,20 @@ export class LocalFamiliar extends BaseFamiliar<ProcessEntry> {
       return { command: 'claude', args: ['--resume', entry.claudeSessionId] };
     }
     return { cwd: entry.request.inputs.workspacePath ?? process.cwd() };
+  }
+
+  getRestoredTerminalSpec(meta: PersistedTaskMeta): TerminalSpec {
+    if (meta.workspacePath && !existsSync(meta.workspacePath)) {
+      throw new Error(`Workspace path ${meta.workspacePath} no longer exists for task ${meta.taskId}`);
+    }
+    if (meta.claudeSessionId) {
+      return {
+        command: 'claude',
+        args: ['--resume', meta.claudeSessionId, '--dangerously-skip-permissions'],
+        cwd: meta.workspacePath,
+      };
+    }
+    return { cwd: meta.workspacePath };
   }
 
   async destroyAll(): Promise<void> {
