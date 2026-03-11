@@ -1117,7 +1117,7 @@ describe('Orchestrator', () => {
       expect(wf.status).toBe('running');
     });
 
-    it('logs workflow.completed event', () => {
+    it('updates workflow status to completed (no bogus __workflow__ event)', () => {
       orchestrator.loadPlan({
         name: 'event-test',
         tasks: [{ id: 't1', description: 'Task 1' }],
@@ -1128,9 +1128,11 @@ describe('Orchestrator', () => {
         makeResponse({ actionId: 't1', status: 'completed', outputs: { exitCode: 0 } }),
       );
 
+      const wf = Array.from(persistence.workflows.values())[0];
+      expect(wf.status).toBe('completed');
+
       const wfEvents = persistence.events.filter((e) => e.eventType === 'workflow.completed');
-      expect(wfEvents).toHaveLength(1);
-      expect(wfEvents[0].taskId).toBe('__workflow__');
+      expect(wfEvents).toHaveLength(0);
     });
   });
 

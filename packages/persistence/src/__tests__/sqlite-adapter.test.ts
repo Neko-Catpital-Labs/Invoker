@@ -674,4 +674,44 @@ describe('SQLiteAdapter', () => {
       expect(workflows[0].onFinish).toBe('merge');
     });
   });
+
+  describe('logEvent FK constraint', () => {
+    it('logEvent with a real task_id succeeds', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t1'));
+
+      expect(() => adapter.logEvent('t1', 'task.running')).not.toThrow();
+    });
+
+    it('logEvent with __workflow__ (non-existent task) throws FK error', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t1'));
+
+      expect(() => adapter.logEvent('__workflow__', 'workflow.completed')).toThrow(/FOREIGN KEY/);
+    });
+  });
+
+  describe('orchestrator + SQLiteAdapter integration: checkWorkflowCompletion FK bug', () => {
+    it('handleWorkerResponse does NOT throw FK error when workflow completes (FIX VERIFIED)', async () => {
+      const { Orchestrator } = await import('@invoker/core');
+
+      const bus = { publish() {} };
+      const orchestrator = new Orchestrator({ persistence: adapter, messageBus: bus });
+
+      orchestrator.loadPlan({
+        name: 'FK Repro',
+        tasks: [{ id: 'fk-t1', description: 'Will fail', command: 'false' }],
+      });
+      orchestrator.startExecution();
+
+      expect(() => {
+        orchestrator.handleWorkerResponse({
+          requestId: 'req-1',
+          actionId: 'fk-t1',
+          status: 'failed',
+          outputs: { exitCode: 1, error: 'boom' },
+        });
+      }).not.toThrow();
+    });
+  });
 });
