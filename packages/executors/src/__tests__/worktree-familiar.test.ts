@@ -323,13 +323,15 @@ describe('WorktreeFamiliar', () => {
   });
 
   it('handles git worktree creation failure gracefully', async () => {
-    // Prune succeeds but worktree add fails on both attempts
     mockedSpawn.mockImplementation((cmd: string, args?: readonly string[], _options?: any) => {
       const gitProc = createMockProcess();
       if (cmd === 'git') {
         const argsArr = args as string[];
         Promise.resolve().then(() => {
           if (argsArr?.includes('prune')) {
+            gitProc.emit('close', 0, null);
+          } else if (argsArr?.includes('rev-parse')) {
+            gitProc.stdout!.emit('data', Buffer.from('abc123\n'));
             gitProc.emit('close', 0, null);
           } else {
             gitProc.stderr!.emit('data', Buffer.from('fatal: not a git repository\n'));
