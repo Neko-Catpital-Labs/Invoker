@@ -1,8 +1,9 @@
 import { spawn, type ChildProcess } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { homedir } from 'node:os';
 import type { WorkRequest, WorkResponse } from '@invoker/protocol';
-import type { FamiliarHandle, TerminalSpec } from './familiar.js';
+import type { FamiliarHandle, PersistedTaskMeta, TerminalSpec } from './familiar.js';
 import { BaseFamiliar, type BaseEntry } from './base-familiar.js';
 import { RepoPool } from './repo-pool.js';
 
@@ -418,6 +419,22 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
       return { command: 'claude', args: ['--resume', entry.claudeSessionId], cwd: entry.worktreeDir };
     }
     return { cwd: entry.worktreeDir };
+  }
+
+  getRestoredTerminalSpec(meta: PersistedTaskMeta): TerminalSpec {
+    if (meta.workspacePath && !existsSync(meta.workspacePath)) {
+      throw new Error(
+        `Worktree ${meta.workspacePath} no longer exists for task ${meta.taskId}. It may have been cleaned up.`,
+      );
+    }
+    if (meta.claudeSessionId) {
+      return {
+        command: 'claude',
+        args: ['--resume', meta.claudeSessionId, '--dangerously-skip-permissions'],
+        cwd: meta.workspacePath,
+      };
+    }
+    return { cwd: meta.workspacePath };
   }
 
   async destroyAll(): Promise<void> {
