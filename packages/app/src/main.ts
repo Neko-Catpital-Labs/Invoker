@@ -274,6 +274,9 @@ async function runHeadless(args: string[]): Promise<void> {
     case 'restart':
       await headlessRestart(args[1]);
       break;
+    case 'rebase-and-retry':
+      await headlessRebaseAndRetry(args[1]);
+      break;
     case 'edit':
       await headlessEdit(args[1], args.slice(2).join(' '));
       break;
@@ -526,6 +529,53 @@ async function headlessRestart(taskId: string): Promise<void> {
 
   await taskExecutor.executeTasks(runnable);
   await waitForCompletion();
+}
+
+async function headlessRebaseAndRetry(mergeTaskId: string): Promise<void> {
+  if (!mergeTaskId) throw new Error('Missing arguments. Usage: --headless rebase-and-retry <mergeTaskId>');
+  const workflowId = restoreWorkflowForTask(mergeTaskId);
+
+  const task = orchestrator.getTask(mergeTaskId);
+  if (!task) throw new Error(`Task ${mergeTaskId} not found`);
+  if (!task.isMergeNode) throw new Error(`Task ${mergeTaskId} is not a merge gate`);
+
+  const workflow = persistence.loadWorkflow(workflowId);
+  const te = new TaskExecutor({
+    orchestrator,
+    persistence,
+    familiarRegistry,
+    cwd: repoRoot,
+    callbacks: {
+      onOutput: (tid, data) => {
+        process.stdout.write(`\x1b[2m[${tid}]\x1b[0m ${data}`);
+      },
+    },
+  });
+
+  const baseBranch = workflow?.baseBranch ?? await te.detectDefaultBranch();
+  const result = await te.rebaseTaskBranches(workflowId, baseBranch);
+
+  console.log(`Rebase result: ${result.success ? 'clean' : 'conflicts'}`);
+  if (result.rebasedBranches.length > 0) {
+    console.log(`  Rebased: ${result.rebasedBranches.join(', ')}`);
+  }
+  if (result.errors.length > 0) {
+    console.log(`  Errors: ${result.errors.join('; ')}`);
+  }
+
+  let runnable: ReturnType<typeof orchestrator.restartTask>;
+  if (result.success) {
+    runnable = orchestrator.restartTask(mergeTaskId).filter(t => t.status === 'running');
+    console.log(`Clean rebase — restarting merge gate only (${runnable.length} task(s))`);
+  } else {
+    runnable = orchestrator.restartWorkflow(workflowId).filter(t => t.status === 'running');
+    console.log(`Conflicting rebase — resetting entire DAG (${runnable.length} task(s))`);
+  }
+
+  if (runnable.length > 0) {
+    await te.executeTasks(runnable);
+    await waitForCompletion(workflowId);
+  }
 }
 
 async function headlessEdit(taskId: string, newCommand: string): Promise<void> {
@@ -1004,7 +1054,14 @@ function setupGuiMode(): void {
         const result = await taskExecutor.rebaseTaskBranches(task.workflowId, baseBranch);
 
         if (result.success) {
+          // Clean rebase: restart merge gate only
           const started = orchestrator.restartTask(mergeTaskId);
+          const runnable = started.filter(t => t.status === 'running');
+          await taskExecutor.executeTasks(runnable);
+        } else {
+          // Conflicting rebase: reset entire DAG and re-execute from scratch
+          console.log(`[ipc] rebase-and-retry: rebase had conflicts, resetting entire workflow ${task.workflowId}`);
+          const started = orchestrator.restartWorkflow(task.workflowId);
           const runnable = started.filter(t => t.status === 'running');
           await taskExecutor.executeTasks(runnable);
         }
