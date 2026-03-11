@@ -98,6 +98,7 @@ export interface GraphMutationNodeDef {
   requiresManualApproval?: boolean;
   autoFix?: boolean;
   maxFixAttempts?: number;
+  isMergeNode?: boolean;
 }
 
 export interface GraphMutation {
@@ -219,6 +220,14 @@ export class Orchestrator {
     });
 
     const deltas: TaskDelta[] = [];
+    const taskIds = new Set(plan.tasks.map((t) => t.id));
+    const dependedOn = new Set<string>();
+    for (const taskDef of plan.tasks) {
+      for (const dep of taskDef.dependencies ?? []) {
+        dependedOn.add(dep);
+      }
+    }
+
     for (const taskDef of plan.tasks) {
       const task = createTaskState(
         taskDef.id,
@@ -243,6 +252,20 @@ export class Orchestrator {
       const delta: TaskDelta = { type: 'created', task };
       deltas.push(delta);
     }
+
+    // Create terminal merge node depending on all leaf tasks
+    const leafIds = plan.tasks
+      .filter((t) => !dependedOn.has(t.id))
+      .map((t) => t.id);
+    const mergeNodeId = `__merge__${workflowId}`;
+    const mergeTask = createTaskState(
+      mergeNodeId,
+      `Merge gate for ${plan.name}`,
+      leafIds,
+      { workflowId, isMergeNode: true },
+    );
+    this.createAndSync(mergeTask);
+    deltas.push({ type: 'created', task: mergeTask });
 
     for (const delta of deltas) {
       this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
@@ -517,55 +540,82 @@ export class Orchestrator {
 
     const replacementIds = new Set(replacementTasks.map((t) => t.id));
 
-    // Resolve dependencies: root tasks inherit the broken task's upstream deps
-    const resolvedNodes: GraphMutationNodeDef[] = replacementTasks.map((rt) => {
+    // 1. Stale the broken task and all downstream (except merge node)
+    const allTasks = this.stateMachine.getAllTasks();
+    const taskMap = new Map(allTasks.map((t) => [t.id, t]));
+    const descendantIds = getTransitiveDependents(
+      taskId,
+      taskMap,
+      (t) => !!t.isMergeNode,
+    );
+    for (const id of descendantIds) {
+      const staleChanges: Partial<TaskState> = { status: 'stale' };
+      this.writeAndSync(id, staleChanges);
+      this.persistence.logEvent?.(id, 'task.stale', staleChanges);
+      this.messageBus.publish(TASK_DELTA_CHANNEL, {
+        type: 'updated', taskId: id, changes: staleChanges,
+      });
+    }
+    // Stale the broken task itself
+    const sourceChanges: Partial<TaskState> = { status: 'stale' };
+    this.writeAndSync(taskId, sourceChanges);
+    this.persistence.logEvent?.(taskId, 'task.stale', sourceChanges);
+    this.messageBus.publish(TASK_DELTA_CHANNEL, {
+      type: 'updated', taskId, changes: sourceChanges,
+    });
+
+    // 2. Create replacement tasks
+    for (const rt of replacementTasks) {
       const hasInternalDeps =
         rt.dependencies?.length && rt.dependencies.some((d) => replacementIds.has(d));
-      return {
-        id: rt.id,
-        description: rt.description,
-        dependencies: hasInternalDeps ? rt.dependencies! : [...task.dependencies],
+      const newTask = createTaskState(rt.id, rt.description, hasInternalDeps ? rt.dependencies! : [...task.dependencies], {
         workflowId: task.workflowId,
         command: rt.command,
         prompt: rt.prompt,
         familiarType: rt.familiarType ?? task.familiarType,
         autoFix: rt.autoFix,
         maxFixAttempts: rt.maxFixAttempts,
-      };
-    });
+      });
+      this.createAndSync(newTask);
+      this.messageBus.publish(TASK_DELTA_CHANNEL, { type: 'created', task: newTask });
+    }
 
-    // Find leaf tasks: not depended on by any other replacement task
-    const leafIds = resolvedNodes
+    // 3. Update merge node deps: remove stale'd deps, add replacement leaves
+    const leafIds = replacementTasks
       .filter((rt) => !replacementTasks.some((other) => other.dependencies?.includes(rt.id)))
       .map((rt) => rt.id);
 
-    // Determine output node: single leaf or auto-created merge
-    let outputNodeId: string;
-    if (leafIds.length === 1) {
-      outputNodeId = leafIds[0];
-    } else {
-      const mergeId = `${taskId}-merge`;
-      resolvedNodes.push({
-        id: mergeId,
-        description: `Merge for replaced ${taskId}`,
-        dependencies: leafIds,
-        workflowId: task.workflowId,
-      });
-      outputNodeId = mergeId;
+    if (task.workflowId) {
+      const mergeNode = this.getMergeNode(task.workflowId);
+      if (mergeNode) {
+        const staleIds = new Set([...descendantIds, taskId]);
+        const newDeps = [
+          ...mergeNode.dependencies.filter((d) => !staleIds.has(d)),
+          ...leafIds,
+        ];
+        const mergeChanges: Partial<TaskState> = {
+          dependencies: newDeps,
+          status: 'pending',
+          blockedBy: undefined,
+        };
+        this.writeAndSync(mergeNode.id, mergeChanges);
+        this.messageBus.publish(TASK_DELTA_CHANNEL, {
+          type: 'updated',
+          taskId: mergeNode.id,
+          changes: mergeChanges,
+        });
+      }
     }
-
-    this.applyGraphMutation({
-      sourceNodeId: taskId,
-      sourceDisposition: 'stale',
-      newNodes: resolvedNodes,
-      outputNodeId,
-    });
 
     this.scheduler.completeJob(taskId);
 
     // Auto-start ready replacement root tasks
-    const rootIds = resolvedNodes
-      .filter((rt) => rt.dependencies.every((d) => !replacementIds.has(d)))
+    const rootIds = replacementTasks
+      .filter((rt) => {
+        const hasInternalDeps =
+          rt.dependencies?.length && rt.dependencies.some((d) => replacementIds.has(d));
+        return !hasInternalDeps;
+      })
       .map((rt) => rt.id);
     return this.autoStartReadyTasks(rootIds);
   }
@@ -581,8 +631,17 @@ export class Orchestrator {
     const allTasks = this.stateMachine.getAllTasks();
     const taskMap = new Map(allTasks.map((t) => [t.id, t]));
 
-    const descendantIds = getTransitiveDependents(dirtyTaskId, taskMap);
-    if (descendantIds.length === 0) return [];
+    // Skip merge nodes: they are terminal and should not be forked
+    const descendantIds = getTransitiveDependents(
+      dirtyTaskId,
+      taskMap,
+      (t) => !!t.isMergeNode,
+    );
+    if (descendantIds.length === 0) {
+      // No non-merge descendants; just update merge node deps if needed
+      this.updateMergeNodeDeps(dirtyTaskId, depOverrides);
+      return [];
+    }
 
     const deltas: TaskDelta[] = [];
 
@@ -634,7 +693,50 @@ export class Orchestrator {
       deltas.push(delta);
     }
 
+    // Update merge node deps: replace stale'd leaves with their clones
+    const dirtyTask = taskMap.get(dirtyTaskId);
+    if (dirtyTask?.workflowId) {
+      const mergeNode = this.getMergeNode(dirtyTask.workflowId);
+      if (mergeNode) {
+        const newDeps = mergeNode.dependencies.map((dep) =>
+          idMap.get(dep) ?? depOverrides?.get(dep) ?? dep,
+        );
+        this.writeAndSync(mergeNode.id, { dependencies: newDeps });
+        const delta: TaskDelta = {
+          type: 'updated',
+          taskId: mergeNode.id,
+          changes: { dependencies: newDeps },
+        };
+        this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
+        deltas.push(delta);
+      }
+    }
+
     return deltas;
+  }
+
+  /**
+   * Update the merge node's dependencies when forkDirtySubtree has no
+   * non-merge descendants (the dirty task is a direct dep of the merge node).
+   */
+  private updateMergeNodeDeps(dirtyTaskId: string, depOverrides?: Map<string, string>): void {
+    const dirtyTask = this.stateMachine.getTask(dirtyTaskId);
+    if (!dirtyTask?.workflowId) return;
+    const mergeNode = this.getMergeNode(dirtyTask.workflowId);
+    if (!mergeNode) return;
+
+    const override = depOverrides?.get(dirtyTaskId);
+    if (!override) return;
+
+    const newDeps = mergeNode.dependencies.map((dep) =>
+      dep === dirtyTaskId ? override : dep,
+    );
+    this.writeAndSync(mergeNode.id, { dependencies: newDeps });
+    this.messageBus.publish(TASK_DELTA_CHANNEL, {
+      type: 'updated',
+      taskId: mergeNode.id,
+      changes: { dependencies: newDeps },
+    });
   }
 
   /**
@@ -691,6 +793,15 @@ export class Orchestrator {
 
   getReadyTasks(): TaskState[] {
     return this.stateMachine.getReadyTasks();
+  }
+
+  /**
+   * Find the terminal merge node for a given workflow.
+   */
+  getMergeNode(workflowId: string): TaskState | undefined {
+    return this.stateMachine.getAllTasks().find(
+      (t) => t.workflowId === workflowId && t.isMergeNode,
+    );
   }
 
   getWorkflowStatus(workflowId?: string): {
@@ -902,6 +1013,7 @@ export class Orchestrator {
         requiresManualApproval: nodeDef.requiresManualApproval,
         autoFix: nodeDef.autoFix,
         maxFixAttempts: nodeDef.maxFixAttempts,
+        isMergeNode: nodeDef.isMergeNode,
       });
       this.createAndSync(task);
       const delta: TaskDelta = { type: 'created', task };

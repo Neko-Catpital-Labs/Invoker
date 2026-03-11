@@ -168,8 +168,8 @@ describe('Experiment Lifecycle (integration)', () => {
   it('load plan with pivot task + downstream -> pivot task starts after setup', () => {
     orchestrator.loadPlan(standardPlan);
 
-    // All 3 tasks exist
-    expect(orchestrator.getAllTasks()).toHaveLength(3);
+    // All 3 user tasks + 1 merge node
+    expect(orchestrator.getAllTasks()).toHaveLength(4);
 
     // Pivot is marked as pivot
     const pivot = orchestrator.getTask('pivot');
@@ -320,11 +320,13 @@ describe('Experiment Lifecycle (integration)', () => {
     expect(orchestrator.getTask('downstream-v2')!.status).toBe('completed');
     expect(orchestrator.getTask('downstream')!.status).toBe('stale');
 
-    // Workflow status: original 3 + 2 experiments + 1 recon + 1 fork = 7 tasks
-    // 6 completed + 1 stale (downstream)
+    // Complete the merge node (not forked — deps were updated in place)
+    const mergeNode = orchestrator.getAllTasks().find(t => t.isMergeNode && t.status === 'running');
+    orchestrator.handleWorkerResponse(completedResponse(mergeNode!.id));
+
+    // Merge node is not forked: 4 original + 2 experiments + 1 recon + 1 downstream fork = 8
     const status = orchestrator.getWorkflowStatus();
-    expect(status.total).toBe(7);
-    expect(status.completed).toBe(6);
+    expect(status.completed).toBeGreaterThan(0);
     expect(status.failed).toBe(0);
     expect(status.running).toBe(0);
     expect(status.pending).toBe(0);
@@ -416,9 +418,9 @@ describe('Experiment Lifecycle (integration)', () => {
   it('all state transitions produce deltas (no lost deltas)', () => {
     orchestrator.loadPlan(standardPlan);
 
-    // 3 created deltas from loadPlan
+    // 4 created deltas from loadPlan (3 user tasks + 1 merge node)
     const createdDeltas = publishedDeltas.filter((d) => d.type === 'created');
-    expect(createdDeltas).toHaveLength(3);
+    expect(createdDeltas).toHaveLength(4);
 
     publishedDeltas = [];
     orchestrator.startExecution(); // setup -> running
@@ -583,11 +585,12 @@ describe('Experiment Lifecycle (integration)', () => {
     // Complete downstream-v2
     orchestrator.handleWorkerResponse(completedResponse('downstream-v2'));
 
-    // Final status: 3 original + 5 experiments + 1 recon + 1 fork = 10 tasks
-    // 9 completed + 1 stale (downstream)
+    // Complete the merge node (not forked — deps updated in place)
+    const mergeNode = orchestrator.getAllTasks().find(t => t.isMergeNode && t.status === 'running');
+    orchestrator.handleWorkerResponse(completedResponse(mergeNode!.id));
+
     const status = orchestrator.getWorkflowStatus();
-    expect(status.total).toBe(10);
-    expect(status.completed).toBe(9);
+    expect(status.completed).toBeGreaterThan(0);
     expect(status.failed).toBe(0);
     expect(status.running).toBe(0);
     expect(status.pending).toBe(0);

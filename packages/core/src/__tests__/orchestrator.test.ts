@@ -126,7 +126,7 @@ describe('Orchestrator', () => {
       orchestrator.loadPlan(plan);
 
       const tasks = orchestrator.getAllTasks();
-      expect(tasks).toHaveLength(3);
+      expect(tasks).toHaveLength(4);
 
       const t1 = orchestrator.getTask('t1');
       expect(t1).toBeDefined();
@@ -202,9 +202,27 @@ describe('Orchestrator', () => {
         ],
       });
 
-      expect(publishedDeltas).toHaveLength(2);
+      expect(publishedDeltas).toHaveLength(3);
       expect(publishedDeltas[0].type).toBe('created');
       expect(publishedDeltas[1].type).toBe('created');
+      expect(publishedDeltas[2].type).toBe('created');
+    });
+
+    it('creates a terminal merge node depending on leaf tasks', () => {
+      orchestrator.loadPlan({
+        name: 'merge-node-test',
+        tasks: [
+          { id: 'a', description: 'Root' },
+          { id: 'b', description: 'Middle', dependencies: ['a'] },
+          { id: 'c', description: 'Leaf 1', dependencies: ['b'] },
+          { id: 'd', description: 'Leaf 2', dependencies: ['b'] },
+        ],
+      });
+
+      const mergeNode = orchestrator.getAllTasks().find((t) => t.isMergeNode);
+      expect(mergeNode).toBeDefined();
+      expect(mergeNode!.dependencies.sort()).toEqual(['c', 'd']);
+      expect(mergeNode!.status).toBe('pending');
     });
 
     it('persists every task to DB', () => {
@@ -216,7 +234,7 @@ describe('Orchestrator', () => {
         ],
       });
 
-      expect(persistence.tasks.size).toBe(2);
+      expect(persistence.tasks.size).toBe(3);
       expect(persistence.tasks.has('t1')).toBe(true);
       expect(persistence.tasks.has('t2')).toBe(true);
     });
@@ -244,7 +262,7 @@ describe('Orchestrator', () => {
 
       const allTasks = orchestrator.getAllTasks();
       const pendingTasks = allTasks.filter((t) => t.status === 'pending');
-      expect(pendingTasks).toHaveLength(1);
+      expect(pendingTasks).toHaveLength(2);
     });
 
     it('does not start blocked tasks', () => {
@@ -1032,9 +1050,15 @@ describe('Orchestrator', () => {
       );
       expect(orchestrator.getTask('t3')!.status).toBe('completed');
 
+      const mergeNode = orchestrator.getAllTasks().find((t) => t.isMergeNode);
+      expect(mergeNode!.status).toBe('running');
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: mergeNode!.id, status: 'completed', outputs: { exitCode: 0 } }),
+      );
+
       const status = orchestrator.getWorkflowStatus();
-      expect(status.total).toBe(3);
-      expect(status.completed).toBe(3);
+      expect(status.total).toBe(4);
+      expect(status.completed).toBe(4);
     });
   });
 
@@ -1056,6 +1080,11 @@ describe('Orchestrator', () => {
       );
       orchestrator.handleWorkerResponse(
         makeResponse({ actionId: 't2', status: 'completed', outputs: { exitCode: 0 } }),
+      );
+
+      const mergeNode = orchestrator.getAllTasks().find((t) => t.isMergeNode);
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: mergeNode!.id, status: 'completed', outputs: { exitCode: 0 } }),
       );
 
       const wf = Array.from(persistence.workflows.values())[0];
@@ -1126,6 +1155,11 @@ describe('Orchestrator', () => {
 
       orchestrator.handleWorkerResponse(
         makeResponse({ actionId: 't1', status: 'completed', outputs: { exitCode: 0 } }),
+      );
+
+      const mergeNode = orchestrator.getAllTasks().find((t) => t.isMergeNode);
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: mergeNode!.id, status: 'completed', outputs: { exitCode: 0 } }),
       );
 
       const wf = Array.from(persistence.workflows.values())[0];
@@ -1367,7 +1401,7 @@ describe('Orchestrator', () => {
 
       const running = orchestrator.getAllTasks().filter((t) => t.status === 'running');
       expect(running).toHaveLength(3);
-      expect(orchestrator.getAllTasks().filter((t) => t.status === 'pending')).toHaveLength(2);
+      expect(orchestrator.getAllTasks().filter((t) => t.status === 'pending')).toHaveLength(3);
 
       const firstRunning = running[0];
       const newlyStarted = orchestrator.handleWorkerResponse(
@@ -1376,7 +1410,7 @@ describe('Orchestrator', () => {
 
       expect(newlyStarted).toHaveLength(1);
       expect(orchestrator.getAllTasks().filter((t) => t.status === 'running')).toHaveLength(3);
-      expect(orchestrator.getAllTasks().filter((t) => t.status === 'pending')).toHaveLength(1);
+      expect(orchestrator.getAllTasks().filter((t) => t.status === 'pending')).toHaveLength(2);
     });
   });
 
@@ -1476,8 +1510,9 @@ describe('Orchestrator', () => {
       orchestrator.loadPlan(planB);
 
       const allTasks = orchestrator.getAllTasks();
-      expect(allTasks).toHaveLength(2);
-      expect(allTasks.map((t) => t.id).sort()).toEqual(['a1', 'b1']);
+      expect(allTasks).toHaveLength(4);
+      const userTasks = allTasks.filter((t) => !t.isMergeNode);
+      expect(userTasks.map((t) => t.id).sort()).toEqual(['a1', 'b1']);
     });
 
     it('loadPlan does NOT clear other workflows tasks', () => {
@@ -1485,13 +1520,13 @@ describe('Orchestrator', () => {
         name: 'First',
         tasks: [{ id: 'f1', description: 'First', command: 'echo 1' }],
       });
-      expect(orchestrator.getAllTasks()).toHaveLength(1);
+      expect(orchestrator.getAllTasks()).toHaveLength(2);
 
       orchestrator.loadPlan({
         name: 'Second',
         tasks: [{ id: 's1', description: 'Second', command: 'echo 2' }],
       });
-      expect(orchestrator.getAllTasks()).toHaveLength(2);
+      expect(orchestrator.getAllTasks()).toHaveLength(4);
       expect(orchestrator.getTask('f1')).toBeDefined();
       expect(orchestrator.getTask('s1')).toBeDefined();
     });
@@ -1513,12 +1548,12 @@ describe('Orchestrator', () => {
       expect(wfIds).toHaveLength(2);
 
       const statusA = orchestrator.getWorkflowStatus(wfIds[0]);
-      expect(statusA.total).toBe(2);
-      expect(statusA.pending).toBe(2);
+      expect(statusA.total).toBe(3);
+      expect(statusA.pending).toBe(3);
 
       const statusB = orchestrator.getWorkflowStatus(wfIds[1]);
-      expect(statusB.total).toBe(1);
-      expect(statusB.pending).toBe(1);
+      expect(statusB.total).toBe(2);
+      expect(statusB.pending).toBe(2);
     });
 
     it('getWorkflowStatus() without wfId returns aggregate across all workflows', () => {
@@ -1532,7 +1567,7 @@ describe('Orchestrator', () => {
       });
 
       const status = orchestrator.getWorkflowStatus();
-      expect(status.total).toBe(2);
+      expect(status.total).toBe(4);
     });
 
     it('syncAllFromDb reloads tasks from all workflows', () => {
@@ -1552,7 +1587,7 @@ describe('Orchestrator', () => {
       orchestrator.syncAllFromDb();
       expect(orchestrator.getTask('a1')!.status).toBe('completed');
       expect(orchestrator.getTask('b1')!.status).toBe('pending');
-      expect(orchestrator.getAllTasks()).toHaveLength(2);
+      expect(orchestrator.getAllTasks()).toHaveLength(4);
     });
 
     it('tasks have correct workflowId after loadPlan', () => {
@@ -1608,8 +1643,8 @@ describe('Orchestrator', () => {
       const statusB = orchestrator.getWorkflowStatus(wfB);
 
       expect(statusA.completed).toBe(1);
-      expect(statusA.running).toBe(0);
-      expect(statusB.pending).toBe(0); // b1 was auto-started
+      expect(statusA.running).toBe(1);
+      expect(statusB.pending).toBe(1);
       expect(statusB.running).toBe(1);
     });
 

@@ -32,7 +32,7 @@ export class ActionGraph {
       if (node.status !== 'pending') return false;
       return node.dependencies.every((depId) => {
         const dep = this.nodes.get(depId);
-        return dep?.status === 'completed';
+        return dep?.status === 'completed' || dep?.status === 'stale';
       });
     });
   }

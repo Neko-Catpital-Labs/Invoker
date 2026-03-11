@@ -95,6 +95,9 @@ export interface TaskState {
   // Auto-fix support
   readonly autoFix?: boolean;
   readonly maxFixAttempts?: number;
+
+  // Terminal merge node marker
+  readonly isMergeNode?: boolean;
 }
 
 export interface ExperimentVariant {
@@ -160,6 +163,7 @@ export interface TaskCreateOptions {
   familiarType?: string;
   autoFix?: boolean;
   maxFixAttempts?: number;
+  isMergeNode?: boolean;
   summary?: string;
   problem?: string;
   approach?: string;

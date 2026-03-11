@@ -111,6 +111,30 @@ describe('ActionGraph', () => {
 
       expect(graph.getReadyNodes()).toEqual([]);
     });
+
+    it('treats stale dep as satisfied', () => {
+      graph.restoreNode(makeTask('a', [], 'stale'));
+      graph.restoreNode(makeTask('b', ['a'], 'pending'));
+
+      const ready = graph.getReadyNodes();
+      expect(ready.map((n) => n.id)).toEqual(['b']);
+    });
+
+    it('treats mix of completed and stale deps as satisfied', () => {
+      graph.restoreNode(makeTask('a', [], 'completed'));
+      graph.restoreNode(makeTask('b', [], 'stale'));
+      graph.restoreNode(makeTask('c', ['a', 'b'], 'pending'));
+
+      const ready = graph.getReadyNodes();
+      expect(ready.map((n) => n.id)).toEqual(['c']);
+    });
+
+    it('does NOT treat failed dep as satisfied', () => {
+      graph.restoreNode(makeTask('a', [], 'failed'));
+      graph.restoreNode(makeTask('b', ['a'], 'pending'));
+
+      expect(graph.getReadyNodes()).toEqual([]);
+    });
   });
 
   // ── restoreNode ─────────────────────────────────────────────
