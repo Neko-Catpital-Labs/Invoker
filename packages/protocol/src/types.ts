@@ -24,6 +24,8 @@ export interface WorkRequestInputs {
   featureBranch?: string;
   /** Summaries from completed upstream dependencies, providing context for this task. */
   upstreamContext?: Array<{taskId: string; description: string; summary?: string; commitHash?: string; commitMessage?: string}>;
+  /** Branch names from completed upstream dependencies to merge into the worktree. */
+  upstreamBranches?: string[];
 }
 
 export interface WorkRequest {

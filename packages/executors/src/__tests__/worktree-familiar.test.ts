@@ -381,6 +381,118 @@ describe('WorktreeFamiliar', () => {
     expect(spec).toBeNull();
   });
 
+  // ── Upstream branch merging ────────────────────────────────────
+
+  describe('upstream branch merging', () => {
+    it('merges upstream branches into the worktree after creation', async () => {
+      const { taskProcess } = setupSpawnMock();
+
+      const request = makeRequest({
+        inputs: {
+          command: 'echo hello',
+          upstreamBranches: ['experiment/dep-1', 'experiment/dep-2'],
+        },
+      });
+      await familiar.start(request);
+
+      const gitCalls = mockedSpawn.mock.calls.filter(
+        (call) => call[0] === 'git',
+      );
+      const mergeCalls = gitCalls.filter(
+        (call) => (call[1] as string[])?.[0] === 'merge',
+      );
+
+      expect(mergeCalls).toHaveLength(2);
+      expect((mergeCalls[0][1] as string[])).toEqual(['merge', '--no-edit', 'experiment/dep-1']);
+      expect((mergeCalls[1][1] as string[])).toEqual(['merge', '--no-edit', 'experiment/dep-2']);
+
+      // Merge should run in the worktree directory, not the main repo
+      const mergeOptions = mergeCalls.map((call) => call[2] as { cwd: string });
+      for (const opt of mergeOptions) {
+        expect(opt.cwd).toMatch(/^\/fake\/worktrees\//);
+      }
+
+      taskProcess.emit('close', 0, null);
+    });
+
+    it('skips merging when upstreamBranches is empty', async () => {
+      const { taskProcess } = setupSpawnMock();
+
+      const request = makeRequest({
+        inputs: { command: 'echo hello', upstreamBranches: [] },
+      });
+      await familiar.start(request);
+
+      const gitCalls = mockedSpawn.mock.calls.filter(
+        (call) => call[0] === 'git',
+      );
+      const mergeCalls = gitCalls.filter(
+        (call) => (call[1] as string[])?.[0] === 'merge',
+      );
+
+      expect(mergeCalls).toHaveLength(0);
+
+      taskProcess.emit('close', 0, null);
+    });
+
+    it('skips merging when upstreamBranches is undefined', async () => {
+      const { taskProcess } = setupSpawnMock();
+
+      const request = makeRequest({ inputs: { command: 'echo hello' } });
+      await familiar.start(request);
+
+      const gitCalls = mockedSpawn.mock.calls.filter(
+        (call) => call[0] === 'git',
+      );
+      const mergeCalls = gitCalls.filter(
+        (call) => (call[1] as string[])?.[0] === 'merge',
+      );
+
+      expect(mergeCalls).toHaveLength(0);
+
+      taskProcess.emit('close', 0, null);
+    });
+
+    it('fails the task start when merge conflicts occur', async () => {
+      // Override spawn to make merge commands fail
+      const taskProcess = createMockProcess();
+      let taskReturned = false;
+
+      mockedSpawn.mockImplementation((cmd: string, args?: readonly string[], _options?: any) => {
+        if (cmd === 'git') {
+          const gitProc = createMockProcess();
+          Promise.resolve().then(() => {
+            const argsArr = args as string[];
+            if (argsArr?.[0] === 'merge') {
+              gitProc.stderr!.emit('data', Buffer.from('CONFLICT (content): Merge conflict\n'));
+              gitProc.emit('close', 1, null);
+            } else {
+              if (argsArr?.includes('rev-parse')) {
+                gitProc.stdout!.emit('data', Buffer.from('abc123\n'));
+              }
+              gitProc.emit('close', 0, null);
+            }
+          });
+          return gitProc as any;
+        }
+        if (!taskReturned) {
+          taskReturned = true;
+          return taskProcess as any;
+        }
+        return createMockProcess() as any;
+      });
+
+      const request = makeRequest({
+        inputs: {
+          command: 'echo hello',
+          upstreamBranches: ['experiment/conflicting'],
+        },
+      });
+
+      await expect(familiar.start(request)).rejects.toThrow();
+    });
+  });
+
   // ── Claude CLI tests ──────────────────────────────────────────
 
   describe('claude action type', () => {

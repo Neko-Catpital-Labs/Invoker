@@ -124,6 +124,13 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
     if (this.pool && request.inputs.repoUrl) {
       const acquired = await this.pool.acquireWorktree(request.inputs.repoUrl, branch);
 
+      // Merge upstream dependency branches into the pool worktree
+      if (request.inputs.upstreamBranches?.length) {
+        for (const upBranch of request.inputs.upstreamBranches) {
+          await this.execGit(['merge', '--no-edit', upBranch], acquired.worktreePath);
+        }
+      }
+
       // Determine what to run (same logic as below)
       let cmd: string;
       let args: string[];
@@ -228,6 +235,13 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
         throw new Error(
           `Failed to create worktree: ${retryErr}. Original: ${err}`,
         );
+      }
+    }
+
+    // -- Merge upstream dependency branches into the worktree --
+    if (request.inputs.upstreamBranches?.length) {
+      for (const upBranch of request.inputs.upstreamBranches) {
+        await this.execGit(['merge', '--no-edit', upBranch], worktreeDir);
       }
     }
 

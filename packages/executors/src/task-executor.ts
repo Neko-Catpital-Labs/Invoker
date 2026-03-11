@@ -140,6 +140,7 @@ export class TaskExecutor {
 
     // Gather upstream context from completed dependencies
     const upstreamContext = await this.buildUpstreamContext(task);
+    const upstreamBranches = this.collectUpstreamBranches(task);
 
     const request: WorkRequest = {
       requestId: randomUUID(),
@@ -152,6 +153,7 @@ export class TaskExecutor {
         repoUrl: task.repoUrl,
         featureBranch: task.featureBranch,
         upstreamContext: upstreamContext.length > 0 ? upstreamContext : undefined,
+        upstreamBranches: upstreamBranches.length > 0 ? upstreamBranches : undefined,
       },
       callbackUrl: '',
       timestamps: {
@@ -257,6 +259,17 @@ export class TaskExecutor {
   }
 
   // ── Private Helpers ──────────────────────────────────────
+
+  collectUpstreamBranches(task: TaskState): string[] {
+    const branches: string[] = [];
+    for (const depId of task.dependencies) {
+      const dep = this.orchestrator.getTask(depId);
+      if (dep && dep.status === 'completed' && dep.branch) {
+        branches.push(dep.branch);
+      }
+    }
+    return branches;
+  }
 
   private async buildUpstreamContext(
     task: TaskState,
