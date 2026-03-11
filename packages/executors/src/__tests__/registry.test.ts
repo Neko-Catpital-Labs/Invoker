@@ -1,19 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { FamiliarRegistry } from '../registry.js';
+import { LocalFamiliar } from '../local-familiar.js';
 import type { Familiar } from '../familiar.js';
-
-function stubFamiliar(type: string): Familiar {
-  return {
-    type,
-    start: async () => ({ executionId: '', taskId: '' }),
-    kill: async () => {},
-    sendInput: () => {},
-    onOutput: () => () => {},
-    onComplete: () => () => {},
-    getTerminalSpec: () => null,
-    destroyAll: async () => {},
-  };
-}
 
 describe('FamiliarRegistry', () => {
   let registry: FamiliarRegistry;
@@ -23,23 +11,19 @@ describe('FamiliarRegistry', () => {
   });
 
   it('register + get returns familiar', () => {
-    const familiar = stubFamiliar('worktree');
-    registry.register('worktree', familiar);
+    const familiar = new LocalFamiliar();
+    registry.register('local', familiar);
 
-    const result = registry.get('worktree');
+    const result = registry.get('local');
     expect(result).toBe(familiar);
   });
 
-  it('getDefault returns worktree familiar', () => {
-    const familiar = stubFamiliar('worktree');
-    registry.register('worktree', familiar);
+  it('getDefault returns local familiar', () => {
+    const familiar = new LocalFamiliar();
+    registry.register('local', familiar);
 
     const result = registry.getDefault();
     expect(result).toBe(familiar);
-  });
-
-  it('getDefault throws when worktree not registered', () => {
-    expect(() => registry.getDefault()).toThrow(/worktree/);
   });
 
   it('get returns undefined for unknown type', () => {
@@ -48,15 +32,24 @@ describe('FamiliarRegistry', () => {
   });
 
   it('getAll returns all registered familiars', () => {
-    const worktree = stubFamiliar('worktree');
-    const docker = stubFamiliar('docker');
+    const local = new LocalFamiliar();
+    const docker: Familiar = {
+      type: 'docker',
+      start: async () => ({ executionId: '', taskId: '' }),
+      kill: async () => {},
+      sendInput: () => {},
+      onOutput: () => () => {},
+      onComplete: () => () => {},
+      getTerminalSpec: () => null,
+      destroyAll: async () => {},
+    };
 
-    registry.register('worktree', worktree);
+    registry.register('local', local);
     registry.register('docker', docker);
 
     const all = registry.getAll();
     expect(all).toHaveLength(2);
-    expect(all).toContain(worktree);
+    expect(all).toContain(local);
     expect(all).toContain(docker);
   });
 

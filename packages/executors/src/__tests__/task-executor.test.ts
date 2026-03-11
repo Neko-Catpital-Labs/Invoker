@@ -21,7 +21,7 @@ function createExecutorWithTasks(tasks: Map<string, TaskState>): TaskExecutor {
   return new TaskExecutor({
     orchestrator: orchestrator as any,
     persistence: {} as any,
-    familiarRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+    familiarRegistry: { getDefault: () => ({ type: 'local' }), get: () => null, getAll: () => [] } as any,
     cwd: '/tmp',
   });
 }
@@ -124,7 +124,7 @@ describe('TaskExecutor', () => {
         handleWorkerResponse,
       };
       const throwingFamiliar = {
-        type: 'worktree',
+        type: 'local',
         start: async () => { throw new Error('worktree creation failed'); },
         onOutput: () => () => {},
         onComplete: () => () => {},

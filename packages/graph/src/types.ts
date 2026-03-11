@@ -80,7 +80,7 @@ export interface TaskState {
   readonly repoUrl?: string;
   readonly featureBranch?: string;
 
-  // Familiar selection (e.g. 'worktree', 'docker')
+  // Familiar selection (e.g. 'local', 'worktree', 'docker')
   readonly familiarType?: string;
 
   // Claude session ID for resuming terminal sessions
