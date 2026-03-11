@@ -23,47 +23,23 @@ describe('ActionGraph', () => {
     graph = new ActionGraph();
   });
 
-  // ── createNode ──────────────────────────────────────────────
+  // ── API surface guardrail ──────────────────────────────────
 
-  describe('createNode', () => {
-    it('returns the node and a created delta', () => {
-      const { node, delta } = graph.createNode('t1', 'Build app', []);
-
-      expect(node.id).toBe('t1');
-      expect(node.description).toBe('Build app');
-      expect(node.status).toBe('pending');
-      expect(node.dependencies).toEqual([]);
-      expect(delta).toEqual({ type: 'created', task: node });
+  describe('API surface (read-only + sync)', () => {
+    it('exposes only read methods and restoreNode/clear', () => {
+      expect(typeof graph.getNode).toBe('function');
+      expect(typeof graph.getAllNodes).toBe('function');
+      expect(typeof graph.getNodeCount).toBe('function');
+      expect(typeof graph.getReadyNodes).toBe('function');
+      expect(typeof graph.restoreNode).toBe('function');
+      expect(typeof graph.clear).toBe('function');
     });
 
-    it('sets status to blocked when a dependency has failed', () => {
-      graph.createNode('dep1', 'Dep', []);
-      // Simulate dep1 failing
-      graph.setNode('dep1', { ...graph.getNode('dep1')!, status: 'failed' });
-
-      const { node } = graph.createNode('t2', 'Downstream', ['dep1']);
-
-      expect(node.status).toBe('blocked');
-      expect(node.blockedBy).toBe('dep1');
-    });
-
-    it('stays pending when dependencies have not failed', () => {
-      graph.createNode('dep1', 'Dep', []);
-
-      const { node } = graph.createNode('t2', 'Downstream', ['dep1']);
-
-      expect(node.status).toBe('pending');
-      expect(node.blockedBy).toBeUndefined();
-    });
-
-    it('passes options through to the task state', () => {
-      const { node } = graph.createNode('t1', 'Task', [], {
-        command: 'npm test',
-        prompt: 'Run tests',
-      });
-
-      expect(node.command).toBe('npm test');
-      expect(node.prompt).toBe('Run tests');
+    it('does not expose write methods', () => {
+      expect((graph as any).setNode).toBeUndefined();
+      expect((graph as any).createNode).toBeUndefined();
+      expect((graph as any).rewriteDependency).toBeUndefined();
+      expect((graph as any).removeNode).toBeUndefined();
     });
   });
 
@@ -74,8 +50,8 @@ describe('ActionGraph', () => {
       expect(graph.getNode('nonexistent')).toBeUndefined();
     });
 
-    it('returns the node after creation', () => {
-      graph.createNode('t1', 'Task', []);
+    it('returns the node after restoreNode', () => {
+      graph.restoreNode(makeTask('t1'));
       const node = graph.getNode('t1');
 
       expect(node).toBeDefined();
@@ -87,9 +63,9 @@ describe('ActionGraph', () => {
 
   describe('getAllNodes', () => {
     it('returns all nodes in the graph', () => {
-      graph.createNode('a', 'A', []);
-      graph.createNode('b', 'B', []);
-      graph.createNode('c', 'C', ['a']);
+      graph.restoreNode(makeTask('a'));
+      graph.restoreNode(makeTask('b'));
+      graph.restoreNode(makeTask('c', ['a']));
 
       const all = graph.getAllNodes();
       const ids = all.map((n) => n.id).sort();
@@ -106,14 +82,10 @@ describe('ActionGraph', () => {
 
   describe('getReadyNodes', () => {
     it('returns only pending nodes with all deps completed', () => {
-      graph.createNode('a', 'A', []);
-      graph.setNode('a', { ...graph.getNode('a')!, status: 'completed' });
-
-      graph.createNode('b', 'B', ['a']);
-      graph.createNode('c', 'C', ['a']);
-      graph.setNode('c', { ...graph.getNode('c')!, status: 'running' });
-
-      graph.createNode('d', 'D', ['b']);
+      graph.restoreNode(makeTask('a', [], 'completed'));
+      graph.restoreNode(makeTask('b', ['a'], 'pending'));
+      graph.restoreNode(makeTask('c', ['a'], 'running'));
+      graph.restoreNode(makeTask('d', ['b'], 'pending'));
 
       const ready = graph.getReadyNodes();
       const ids = ready.map((n) => n.id);
@@ -125,8 +97,8 @@ describe('ActionGraph', () => {
     });
 
     it('returns nodes with no dependencies if pending', () => {
-      graph.createNode('a', 'A', []);
-      graph.createNode('b', 'B', []);
+      graph.restoreNode(makeTask('a'));
+      graph.restoreNode(makeTask('b'));
 
       const ready = graph.getReadyNodes();
       const ids = ready.map((n) => n.id).sort();
@@ -135,8 +107,7 @@ describe('ActionGraph', () => {
     });
 
     it('returns empty when no nodes are ready', () => {
-      graph.createNode('a', 'A', []);
-      graph.setNode('a', { ...graph.getNode('a')!, status: 'running' });
+      graph.restoreNode(makeTask('a', [], 'running'));
 
       expect(graph.getReadyNodes()).toEqual([]);
     });
@@ -154,7 +125,7 @@ describe('ActionGraph', () => {
     });
 
     it('overwrites an existing node with the same ID', () => {
-      graph.createNode('t1', 'Original', []);
+      graph.restoreNode(makeTask('t1', [], 'pending'));
       const replacement = makeTask('t1', [], 'completed');
       graph.restoreNode(replacement);
 
@@ -162,72 +133,13 @@ describe('ActionGraph', () => {
     });
   });
 
-  // ── rewriteDependency ───────────────────────────────────────
-
-  describe('rewriteDependency', () => {
-    it('updates deps and returns deltas', () => {
-      graph.createNode('old', 'Old task', []);
-      graph.createNode('new', 'New task', []);
-      graph.createNode('child', 'Child', ['old']);
-
-      const deltas = graph.rewriteDependency('old', 'new');
-
-      expect(deltas).toHaveLength(1);
-      expect(deltas[0]).toEqual({
-        type: 'updated',
-        taskId: 'child',
-        changes: { dependencies: ['new'] },
-      });
-      expect(graph.getNode('child')!.dependencies).toEqual(['new']);
-    });
-
-    it('skips experiment children of the old dep', () => {
-      graph.createNode('parent', 'Parent', []);
-      graph.createNode('new-parent', 'New parent', []);
-      graph.createNode('exp-child', 'Experiment', ['parent'], {
-        parentTask: 'parent',
-      });
-
-      const deltas = graph.rewriteDependency('parent', 'new-parent');
-
-      // exp-child should not be rewritten because parentTask === oldDepId
-      expect(deltas).toHaveLength(0);
-      expect(graph.getNode('exp-child')!.dependencies).toEqual(['parent']);
-    });
-
-    it('returns empty when no nodes depend on oldDepId', () => {
-      graph.createNode('a', 'A', []);
-      graph.createNode('b', 'B', []);
-
-      const deltas = graph.rewriteDependency('a', 'b');
-
-      expect(deltas).toEqual([]);
-    });
-  });
-
-  // ── removeNode ──────────────────────────────────────────────
-
-  describe('removeNode', () => {
-    it('deletes a node and returns true', () => {
-      graph.createNode('t1', 'Task', []);
-
-      expect(graph.removeNode('t1')).toBe(true);
-      expect(graph.getNode('t1')).toBeUndefined();
-      expect(graph.getNodeCount()).toBe(0);
-    });
-
-    it('returns false for a nonexistent node', () => {
-      expect(graph.removeNode('missing')).toBe(false);
-    });
-  });
-
   // ── clear ───────────────────────────────────────────────────
 
   describe('clear', () => {
     it('empties the graph', () => {
-      graph.createNode('a', 'A', []);
-      graph.createNode('b', 'B', []);
-      graph.createNode('c', 'C', ['a']);
+      graph.restoreNode(makeTask('a'));
+      graph.restoreNode(makeTask('b'));
+      graph.restoreNode(makeTask('c', ['a']));
 
       graph.clear();
 

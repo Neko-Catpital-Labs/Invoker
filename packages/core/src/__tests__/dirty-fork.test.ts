@@ -1,5 +1,4 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { TaskStateMachine } from '../state-machine.js';
 import { nextVersion } from '../dag.js';
 import { Orchestrator } from '../orchestrator.js';
 import type { OrchestratorPersistence, OrchestratorMessageBus } from '../orchestrator.js';
@@ -17,28 +16,17 @@ class InMemoryPersistence implements OrchestratorPersistence {
     const entry = this.tasks.get(taskId);
     if (entry) entry.task = { ...entry.task, ...changes } as TaskState;
   }
+  loadTasks(workflowId: string): TaskState[] {
+    return Array.from(this.tasks.values())
+      .filter((e) => e.workflowId === workflowId)
+      .map((e) => e.task);
+  }
 }
 
 class InMemoryBus implements OrchestratorMessageBus {
   published: Array<{ channel: string; message: unknown }> = [];
   publish<T>(channel: string, message: T): void {
     this.published.push({ channel, message });
-  }
-}
-
-// ── Helper: complete a task through the state machine ─────────
-
-function completeTask(orch: Orchestrator, taskId: string): void {
-  const started = orch.startExecution();
-  // If not auto-started, try manual start via response
-  const task = orch.getTask(taskId);
-  if (task?.status === 'running') {
-    orch.handleWorkerResponse({
-      requestId: `req-${taskId}`,
-      actionId: taskId,
-      status: 'completed',
-      outputs: { exitCode: 0 },
-    });
   }
 }
 
@@ -59,51 +47,6 @@ describe('nextVersion', () => {
 
   it('handles dashed IDs correctly', () => {
     expect(nextVersion('task-with-dashes')).toBe('task-with-dashes-v2');
-  });
-});
-
-// ── markStale ────────────────────────────────────────────────
-
-describe('markStale', () => {
-  let sm: TaskStateMachine;
-
-  beforeEach(() => {
-    sm = new TaskStateMachine();
-  });
-
-  it('marks completed task as stale', () => {
-    sm.createTask('t1', 'Task 1', []);
-    sm.startTask('t1');
-    sm.completeTask('t1');
-    const result = sm.markStale('t1');
-    expect('error' in result).toBe(false);
-    if (!('error' in result)) {
-      expect(result.task.status).toBe('stale');
-    }
-  });
-
-  it('marks failed task as stale', () => {
-    sm.createTask('t1', 'Task 1', []);
-    sm.startTask('t1');
-    sm.failTask('t1', 1);
-    const result = sm.markStale('t1');
-    expect('error' in result).toBe(false);
-    if (!('error' in result)) {
-      expect(result.task.status).toBe('stale');
-    }
-  });
-
-  it('rejects marking running task as stale', () => {
-    sm.createTask('t1', 'Task 1', []);
-    sm.startTask('t1');
-    const result = sm.markStale('t1');
-    expect('error' in result).toBe(true);
-  });
-
-  it('rejects marking pending task as stale', () => {
-    sm.createTask('t1', 'Task 1', []);
-    const result = sm.markStale('t1');
-    expect('error' in result).toBe(true);
   });
 });
 
@@ -135,7 +78,6 @@ describe('forkDirtySubtree', () => {
       })),
     });
 
-    // Complete tasks in dependency order
     const completed = new Set<string>();
     const remaining = [...plan];
     while (remaining.length > 0) {
@@ -168,13 +110,11 @@ describe('forkDirtySubtree', () => {
       { id: 'C', deps: ['B'] },
     ]);
 
-    const deltas = orchestrator.forkDirtySubtree('A');
+    orchestrator.forkDirtySubtree('A');
 
-    // B and C should be stale
     expect(orchestrator.getTask('B')?.status).toBe('stale');
     expect(orchestrator.getTask('C')?.status).toBe('stale');
 
-    // B-v2 and C-v2 should exist as pending
     const bv2 = orchestrator.getTask('B-v2');
     const cv2 = orchestrator.getTask('C-v2');
     expect(bv2).toBeDefined();
@@ -182,7 +122,6 @@ describe('forkDirtySubtree', () => {
     expect(bv2!.status).toBe('pending');
     expect(cv2!.status).toBe('pending');
 
-    // B-v2 depends on A (dirty parent), C-v2 depends on B-v2
     expect(bv2!.dependencies).toEqual(['A']);
     expect(cv2!.dependencies).toEqual(['B-v2']);
   });
@@ -198,7 +137,6 @@ describe('forkDirtySubtree', () => {
 
     expect(orchestrator.getTask('B')?.status).toBe('stale');
     expect(orchestrator.getTask('C')?.status).toBe('stale');
-
     expect(orchestrator.getTask('B-v2')!.dependencies).toEqual(['A']);
     expect(orchestrator.getTask('C-v2')!.dependencies).toEqual(['A']);
   });
@@ -225,15 +163,12 @@ describe('forkDirtySubtree', () => {
 
     orchestrator.forkDirtySubtree('B');
 
-    // A is untouched
     expect(orchestrator.getTask('A')?.status).toBe('completed');
-    // C is stale, C-v2 depends on B (the dirty task)
     expect(orchestrator.getTask('C')?.status).toBe('stale');
     expect(orchestrator.getTask('C-v2')!.dependencies).toEqual(['B']);
   });
 
   it('already versioned: A→B-v2, dirty A → creates B-v3', () => {
-    // Manually set up: A completed, B-v2 completed depending on A
     orchestrator.loadPlan({
       name: 'test',
       tasks: [
@@ -242,7 +177,6 @@ describe('forkDirtySubtree', () => {
       ],
     });
 
-    // Complete both
     orchestrator.startExecution();
     orchestrator.handleWorkerResponse({
       requestId: 'req-A', actionId: 'A', status: 'completed', outputs: { exitCode: 0 },

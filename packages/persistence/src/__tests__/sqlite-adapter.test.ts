@@ -243,12 +243,37 @@ describe('SQLiteAdapter', () => {
       expect(loaded[0].claudeSessionId).toBe('sess-xyz');
     });
 
-    it('returns "pending" when claudeSessionId is not set', () => {
+    it('returns undefined when claudeSessionId is not set', () => {
       adapter.saveWorkflow(testWorkflow);
       adapter.saveTask('wf-1', makeTask('t1'));
 
       const loaded = adapter.loadTasks('wf-1');
-      expect(loaded[0].claudeSessionId).toBe('pending');
+      expect(loaded[0].claudeSessionId).toBeUndefined();
+    });
+  });
+
+  describe('saveTask null defaults', () => {
+    it('stores SQL NULL (not string literals) for missing optional fields', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t1'));
+
+      const loaded = adapter.loadTasks('wf-1');
+      const task = loaded[0];
+
+      // These fields should be undefined (mapped from SQL NULL),
+      // NOT the string literals 'pending' or 'none'
+      expect(task.familiarType).toBeUndefined();
+      expect(task.claudeSessionId).toBeUndefined();
+      expect(task.workspacePath).toBeUndefined();
+      expect(task.containerId).toBeUndefined();
+    });
+
+    it('does not store string "pending" as default for familiarType', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t1'));
+
+      const loaded = adapter.loadTasks('wf-1');
+      expect(loaded[0].familiarType).not.toBe('pending');
     });
   });
 
@@ -260,11 +285,11 @@ describe('SQLiteAdapter', () => {
       expect(adapter.getClaudeSessionId('t1')).toBe('sess-lookup');
     });
 
-    it('returns "pending" when no session ID set', () => {
+    it('returns null when no session ID set', () => {
       adapter.saveWorkflow(testWorkflow);
       adapter.saveTask('wf-1', makeTask('t1'));
 
-      expect(adapter.getClaudeSessionId('t1')).toBe('pending');
+      expect(adapter.getClaudeSessionId('t1')).toBeNull();
     });
 
     it('returns null for non-existent task', () => {

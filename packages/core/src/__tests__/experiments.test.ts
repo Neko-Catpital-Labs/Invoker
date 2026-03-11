@@ -1,109 +1,110 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { ExperimentManager } from '../experiments.js';
-import { TaskStateMachine } from '../state-machine.js';
 
 describe('ExperimentManager', () => {
-  let sm: TaskStateMachine;
   let em: ExperimentManager;
 
   beforeEach(() => {
-    sm = new TaskStateMachine();
     em = new ExperimentManager();
   });
 
-  describe('createExperimentGroup', () => {
-    it('spawns N experiments + 1 reconciliation task', () => {
-      sm.createTask('pivot', 'Pivot task', []);
-      sm.startTask('pivot');
-      sm.completeTask('pivot');
-
+  describe('planExperimentGroup', () => {
+    it('plans N experiment tasks + 1 reconciliation task', () => {
       const variants = [
         { id: 'pivot-exp-a', description: 'Variant A', prompt: 'Try A' },
         { id: 'pivot-exp-b', description: 'Variant B', prompt: 'Try B' },
       ];
 
-      const result = em.createExperimentGroup('pivot', variants, sm);
+      const plan = em.planExperimentGroup('pivot', variants);
 
-      expect(result.experiments).toHaveLength(2);
-      expect(result.reconciliationTask).toBeDefined();
-      expect(result.reconciliationTask.isReconciliation).toBe(true);
-      expect(result.reconciliationTask.id).toBe('pivot-reconciliation');
+      expect(plan.experimentTasks).toHaveLength(2);
+      expect(plan.reconciliationTask).toBeDefined();
+      expect(plan.reconciliationTask.isReconciliation).toBe(true);
+      expect(plan.reconciliationTask.id).toBe('pivot-reconciliation');
     });
 
-    it('experiments depend on parent task', () => {
-      sm.createTask('pivot', 'Pivot', []);
-      sm.startTask('pivot');
-      sm.completeTask('pivot');
-
-      const result = em.createExperimentGroup(
+    it('experiment tasks depend on parent task', () => {
+      const plan = em.planExperimentGroup(
         'pivot',
-        [{ id: 'exp-1', description: 'E1' }],
-        sm,
+        [{ id: 'exp-1', description: 'E1', prompt: 'p' }],
       );
 
-      expect(result.experiments[0].dependencies).toEqual(['pivot']);
-      expect(result.experiments[0].parentTask).toBe('pivot');
+      expect(plan.experimentTasks[0].dependencies).toEqual(['pivot']);
+      expect(plan.experimentTasks[0].parentTask).toBe('pivot');
     });
 
     it('reconciliation depends on all experiments', () => {
-      sm.createTask('pivot', 'Pivot', []);
-      sm.startTask('pivot');
-      sm.completeTask('pivot');
-
       const variants = [
         { id: 'exp-x', description: 'X' },
         { id: 'exp-y', description: 'Y' },
       ];
 
-      const result = em.createExperimentGroup('pivot', variants, sm);
+      const plan = em.planExperimentGroup('pivot', variants);
 
-      expect(result.reconciliationTask.dependencies).toEqual(['exp-x', 'exp-y']);
+      expect(plan.reconciliationTask.dependencies).toEqual(['exp-x', 'exp-y']);
     });
 
-    it('rewires downstream tasks to depend on reconciliation instead of pivot', () => {
-      sm.createTask('pivot', 'Pivot', []);
-      sm.createTask('downstream', 'Down', ['pivot']);
-
-      const result = em.createExperimentGroup(
+    it('produces a dependency rewrite from parent to reconciliation', () => {
+      const plan = em.planExperimentGroup(
         'pivot',
         [{ id: 'exp-1', description: 'E1' }],
-        sm,
       );
 
-      // Downstream should now depend on reconciliation, not pivot
-      const downstream = sm.getTask('downstream');
-      expect(downstream?.dependencies).toEqual([result.reconciliationTask.id]);
+      expect(plan.rewrites).toEqual([
+        { fromDep: 'pivot', toDep: 'pivot-reconciliation' },
+      ]);
+    });
+
+    it('inherits repoUrl and familiarType from parent', () => {
+      const plan = em.planExperimentGroup(
+        'pivot',
+        [{ id: 'exp-1', description: 'E1' }],
+        'https://github.com/test/repo',
+        'worktree',
+      );
+
+      expect(plan.experimentTasks[0].repoUrl).toBe('https://github.com/test/repo');
+      expect(plan.experimentTasks[0].familiarType).toBe('worktree');
     });
 
     it('carries forward previous results', () => {
-      sm.createTask('pivot', 'Pivot', []);
-
       const previousResults = [
         { id: 'old-exp', status: 'completed' as const, exitCode: 0, summary: 'Old' },
       ];
 
-      const result = em.createExperimentGroup(
+      const plan = em.planExperimentGroup(
         'pivot',
         [{ id: 'new-exp', description: 'New' }],
-        sm,
+        undefined,
+        undefined,
         previousResults,
       );
 
-      expect(result.group.experimentIds).toContain('old-exp');
-      expect(result.group.experimentIds).toContain('new-exp');
-      expect(result.group.completedExperiments.has('old-exp')).toBe(true);
+      expect(plan.group.experimentIds).toContain('old-exp');
+      expect(plan.group.experimentIds).toContain('new-exp');
+      expect(plan.group.completedExperiments.has('old-exp')).toBe(true);
+    });
+
+    it('does not mutate any state machine or graph', () => {
+      const plan = em.planExperimentGroup(
+        'pivot',
+        [{ id: 'exp-1', description: 'E1' }],
+      );
+
+      // Plan produces data structures, not state mutations
+      expect(plan.experimentTasks[0].id).toBe('exp-1');
+      expect(plan.reconciliationTask.id).toBe('pivot-reconciliation');
+      expect(plan.rewrites).toHaveLength(1);
     });
   });
 
   describe('onExperimentCompleted', () => {
     it('tracks partial progress', () => {
-      sm.createTask('pivot', 'Pivot', []);
-
       const variants = [
         { id: 'exp-a', description: 'A' },
         { id: 'exp-b', description: 'B' },
       ];
-      em.createExperimentGroup('pivot', variants, sm);
+      em.planExperimentGroup('pivot', variants);
 
       const first = em.onExperimentCompleted('exp-a', {
         id: 'exp-a',
@@ -117,13 +118,11 @@ describe('ExperimentManager', () => {
     });
 
     it('triggers reconciliation when all experiments are done', () => {
-      sm.createTask('pivot', 'Pivot', []);
-
       const variants = [
         { id: 'exp-a', description: 'A' },
         { id: 'exp-b', description: 'B' },
       ];
-      em.createExperimentGroup('pivot', variants, sm);
+      em.planExperimentGroup('pivot', variants);
 
       em.onExperimentCompleted('exp-a', { id: 'exp-a', status: 'completed', exitCode: 0 });
       const second = em.onExperimentCompleted('exp-b', { id: 'exp-b', status: 'failed', exitCode: 1 });

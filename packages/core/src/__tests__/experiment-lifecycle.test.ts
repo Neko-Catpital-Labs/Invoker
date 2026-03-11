@@ -31,6 +31,12 @@ class InMemoryPersistence implements OrchestratorPersistence {
       entry.task = { ...entry.task, ...changes } as TaskState;
     }
   }
+
+  loadTasks(workflowId: string): TaskState[] {
+    return Array.from(this.tasks.values())
+      .filter((e) => e.workflowId === workflowId)
+      .map((e) => e.task);
+  }
 }
 
 // ── In-Memory MessageBus Mock ───────────────────────────────

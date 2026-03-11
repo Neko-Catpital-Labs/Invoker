@@ -5,13 +5,11 @@
  * a reconciliation task is created to collect results,
  * and downstream tasks are rewired to depend on reconciliation.
  *
- * No EventEmitter, no I/O. Returns structured results.
+ * No graph writes, no I/O. Returns structured plans that the
+ * Orchestrator executes via DB writes.
  */
 
-import { TaskStateMachine, CreateResult } from './state-machine.js';
 import type {
-  TaskState,
-  TaskDelta,
   ExperimentResultEntry,
 } from './task-types.js';
 
@@ -31,10 +29,29 @@ export interface ExperimentVariantInput {
   command?: string;
 }
 
-export interface CreateExperimentGroupResult {
-  experiments: TaskState[];
-  reconciliationTask: TaskState;
-  deltas: TaskDelta[];
+export interface PlannedTask {
+  id: string;
+  description: string;
+  dependencies: string[];
+  parentTask?: string;
+  experimentPrompt?: string;
+  prompt?: string;
+  command?: string;
+  repoUrl?: string;
+  familiarType?: string;
+  isReconciliation?: boolean;
+  requiresManualApproval?: boolean;
+}
+
+export interface DependencyRewrite {
+  fromDep: string;
+  toDep: string;
+}
+
+export interface ExperimentGroupPlan {
+  experimentTasks: PlannedTask[];
+  reconciliationTask: PlannedTask;
+  rewrites: DependencyRewrite[];
   group: ExperimentGroup;
 }
 
@@ -50,68 +67,56 @@ export class ExperimentManager {
   private groups: Map<string, ExperimentGroup> = new Map();
 
   /**
-   * Create an experiment group from a pivot task.
+   * Plan an experiment group from a pivot task.
    *
-   * 1. Creates N experiment tasks (depend on parentTaskId)
-   * 2. Creates 1 reconciliation task (depends on all experiments)
-   * 3. Rewires downstream tasks: depend on reconciliation instead of pivot
+   * Returns task definitions and dependency rewrites — does NOT
+   * write to any graph or DB. The Orchestrator is responsible for
+   * persisting these via createAndSync / writeAndSync.
+   *
+   * @param parentTaskId     ID of the completed pivot task
+   * @param variants         Experiment variant definitions
+   * @param parentRepoUrl    repoUrl inherited from the parent task (optional)
+   * @param parentFamiliarType familiarType inherited from the parent task (optional)
+   * @param previousResults  Results from earlier experiment rounds (optional)
    */
-  createExperimentGroup(
+  planExperimentGroup(
     parentTaskId: string,
     variants: ExperimentVariantInput[],
-    stateMachine: TaskStateMachine,
+    parentRepoUrl?: string,
+    parentFamiliarType?: string,
     previousResults?: ExperimentResultEntry[],
-  ): CreateExperimentGroupResult {
-    const deltas: TaskDelta[] = [];
+  ): ExperimentGroupPlan {
     const experimentIds = variants.map((v) => v.id);
 
-    // Unique reconciliation ID
     const suffix = previousResults ? `-${Date.now()}` : '';
     const reconciliationTaskId = `${parentTaskId}-reconciliation${suffix}`;
 
-    // Inherit repoUrl and familiarType from the parent task
-    const parentTask = stateMachine.getTask(parentTaskId);
-    const inheritedRepoUrl = parentTask?.repoUrl;
-    const inheritedFamiliarType = parentTask?.familiarType;
+    const experimentTasks: PlannedTask[] = variants.map((v) => ({
+      id: v.id,
+      description: v.description,
+      dependencies: [parentTaskId],
+      parentTask: parentTaskId,
+      experimentPrompt: v.prompt,
+      prompt: v.prompt,
+      command: v.command,
+      repoUrl: parentRepoUrl,
+      familiarType: parentFamiliarType,
+    }));
 
-    // Create experiment tasks
-    const experiments: TaskState[] = [];
-    for (const variant of variants) {
-      const { task, delta } = stateMachine.createTask(
-        variant.id,
-        variant.description,
-        [parentTaskId],
-        {
-          parentTask: parentTaskId,
-          experimentPrompt: variant.prompt,
-          prompt: variant.prompt,
-          command: variant.command,
-          repoUrl: inheritedRepoUrl,
-          familiarType: inheritedFamiliarType,
-        },
-      );
-      experiments.push(task);
-      deltas.push(delta);
-    }
+    const reconciliationTask: PlannedTask = {
+      id: reconciliationTaskId,
+      description: `Review and select winning experiment for ${parentTaskId}`,
+      dependencies: experimentIds,
+      parentTask: parentTaskId,
+      isReconciliation: true,
+      requiresManualApproval: true,
+    };
 
-    // Create reconciliation task (depends on new experiments)
-    const { task: reconTask, delta: reconDelta } = stateMachine.createTask(
-      reconciliationTaskId,
-      `Review and select winning experiment for ${parentTaskId}`,
-      experimentIds,
-      {
-        parentTask: parentTaskId,
-        isReconciliation: true,
-        requiresManualApproval: true,
-      },
-    );
-    deltas.push(reconDelta);
+    const rewrites: DependencyRewrite[] = [{
+      fromDep: parentTaskId,
+      toDep: reconciliationTaskId,
+    }];
 
-    // Rewire downstream tasks: replace parentTaskId with reconciliationTaskId
-    const rewriteDeltas = stateMachine.rewriteDependency(parentTaskId, reconciliationTaskId);
-    deltas.push(...rewriteDeltas);
-
-    // Track group
     const allExperimentIds = [
       ...(previousResults?.map((r) => r.id) ?? []),
       ...experimentIds,
@@ -124,7 +129,6 @@ export class ExperimentManager {
       completedExperiments: new Map(),
     };
 
-    // Pre-populate with previous results
     if (previousResults) {
       for (const r of previousResults) {
         group.completedExperiments.set(r.id, r);
@@ -134,9 +138,9 @@ export class ExperimentManager {
     this.groups.set(reconciliationTaskId, group);
 
     return {
-      experiments,
-      reconciliationTask: reconTask,
-      deltas,
+      experimentTasks,
+      reconciliationTask,
+      rewrites,
       group,
     };
   }
@@ -163,26 +167,17 @@ export class ExperimentManager {
       };
     }
 
-    return null; // Not part of any experiment group
+    return null;
   }
 
-  /**
-   * Get an experiment group by reconciliation task ID.
-   */
   getGroup(reconciliationTaskId: string): ExperimentGroup | undefined {
     return this.groups.get(reconciliationTaskId);
   }
 
-  /**
-   * Get all experiment groups.
-   */
   getAllGroups(): ExperimentGroup[] {
     return Array.from(this.groups.values());
   }
 
-  /**
-   * Clear all groups.
-   */
   clear(): void {
     this.groups.clear();
   }

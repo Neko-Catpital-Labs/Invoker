@@ -1,5 +1,22 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { TaskStateMachine } from '../state-machine.js';
+import type { TaskState } from '../task-types.js';
+
+function makeTask(
+  id: string,
+  deps: string[] = [],
+  status: TaskState['status'] = 'pending',
+  extra: Partial<TaskState> = {},
+): TaskState {
+  return {
+    id,
+    description: `Task ${id}`,
+    status,
+    dependencies: deps,
+    createdAt: new Date(),
+    ...extra,
+  };
+}
 
 describe('TaskStateMachine', () => {
   let sm: TaskStateMachine;
@@ -8,399 +25,208 @@ describe('TaskStateMachine', () => {
     sm = new TaskStateMachine();
   });
 
-  // ── createTask ────────────────────────────────────────
+  // ── API surface guardrail ──────────────────────────────
 
-  describe('createTask', () => {
-    it('creates a pending task with correct defaults', () => {
-      const { task, delta } = sm.createTask('t1', 'Test task', []);
-      expect(task.id).toBe('t1');
-      expect(task.description).toBe('Test task');
-      expect(task.status).toBe('pending');
-      expect(task.dependencies).toEqual([]);
-      expect(task.createdAt).toBeInstanceOf(Date);
-      expect(delta.type).toBe('created');
+  describe('API surface (read-only)', () => {
+    it('exposes read queries and sync methods', () => {
+      expect(typeof sm.getTask).toBe('function');
+      expect(typeof sm.getAllTasks).toBe('function');
+      expect(typeof sm.getReadyTasks).toBe('function');
+      expect(typeof sm.getTaskCount).toBe('function');
+      expect(typeof sm.findNewlyReadyTasks).toBe('function');
+      expect(typeof sm.computeTasksToBlock).toBe('function');
+      expect(typeof sm.computeTasksToUnblock).toBe('function');
+      expect(typeof sm.restoreTask).toBe('function');
+      expect(typeof sm.clear).toBe('function');
     });
 
-    it('creates a blocked task when a dependency already failed', () => {
-      sm.createTask('dep1', 'Dep', []);
-      const startResult = sm.startTask('dep1');
-      expect('task' in startResult).toBe(true);
-      sm.failTask('dep1', 1, 'oops');
-
-      const { task } = sm.createTask('t2', 'Depends on failed', ['dep1']);
-      expect(task.status).toBe('blocked');
-      expect(task.blockedBy).toBe('dep1');
-    });
-  });
-
-  // ── startTask ─────────────────────────────────────────
-
-  describe('startTask', () => {
-    it('transitions pending -> running and returns delta', () => {
-      sm.createTask('t1', 'Task', []);
-      const result = sm.startTask('t1');
-
-      expect('task' in result).toBe(true);
-      if ('task' in result) {
-        expect(result.task.status).toBe('running');
-        expect(result.task.startedAt).toBeInstanceOf(Date);
-        expect(result.transition.from).toBe('pending');
-        expect(result.transition.to).toBe('running');
-        expect(result.delta.type).toBe('updated');
-      }
-    });
-
-    it('returns error for non-pending task', () => {
-      sm.createTask('t1', 'Task', []);
-      sm.startTask('t1'); // now running
-      const result = sm.startTask('t1');
-      expect('error' in result).toBe(true);
+    it('does not expose mutation methods', () => {
+      expect((sm as any).startTask).toBeUndefined();
+      expect((sm as any).completeTask).toBeUndefined();
+      expect((sm as any).failTask).toBeUndefined();
+      expect((sm as any).createTask).toBeUndefined();
+      expect((sm as any).updateTaskFields).toBeUndefined();
+      expect((sm as any).restartTask).toBeUndefined();
+      expect((sm as any).markStale).toBeUndefined();
+      expect((sm as any).approveTask).toBeUndefined();
+      expect((sm as any).rejectTask).toBeUndefined();
+      expect((sm as any).pauseForInput).toBeUndefined();
+      expect((sm as any).resumeWithInput).toBeUndefined();
+      expect((sm as any).requestApproval).toBeUndefined();
+      expect((sm as any).triggerReconciliation).toBeUndefined();
+      expect((sm as any).completeReconciliation).toBeUndefined();
+      expect((sm as any).removeTask).toBeUndefined();
+      expect((sm as any).rewriteDependency).toBeUndefined();
     });
   });
 
-  // ── completeTask ──────────────────────────────────────
+  // ── restoreTask + getTask ──────────────────────────────
 
-  describe('completeTask', () => {
-    it('transitions running -> completed and returns newly ready dependents', () => {
-      sm.createTask('t1', 'First', []);
-      sm.createTask('t2', 'Second', ['t1']);
-      sm.startTask('t1');
-
-      const result = sm.completeTask('t1', 0);
-      expect('task' in result).toBe(true);
-      if ('task' in result) {
-        expect(result.task.status).toBe('completed');
-        expect(result.task.exitCode).toBe(0);
-        expect(result.task.completedAt).toBeInstanceOf(Date);
-
-        const readyEffect = result.sideEffects.find((e) => e.type === 'tasks_ready');
-        expect(readyEffect).toBeDefined();
-        if (readyEffect?.type === 'tasks_ready') {
-          expect(readyEffect.taskIds).toContain('t2');
-        }
-      }
+  describe('restoreTask + getTask', () => {
+    it('inserts and retrieves a task', () => {
+      sm.restoreTask(makeTask('t1'));
+      const task = sm.getTask('t1');
+      expect(task).toBeDefined();
+      expect(task!.id).toBe('t1');
     });
 
-    it('stores claudeSessionId when provided', () => {
-      sm.createTask('t1', 'Claude task', []);
-      sm.startTask('t1');
-
-      const result = sm.completeTask('t1', 0, undefined, undefined, 'sess-123');
-      expect('task' in result).toBe(true);
-      if ('task' in result) {
-        expect(result.task.claudeSessionId).toBe('sess-123');
-      }
-
-      expect(sm.getTask('t1')?.claudeSessionId).toBe('sess-123');
+    it('returns undefined for missing task', () => {
+      expect(sm.getTask('missing')).toBeUndefined();
     });
   });
 
-  // ── failTask ──────────────────────────────────────────
+  // ── getAllTasks ─────────────────────────────────────────
 
-  describe('failTask', () => {
-    it('transitions running -> failed and cascades to block transitive dependents', () => {
-      sm.createTask('t1', 'First', []);
-      sm.createTask('t2', 'Second', ['t1']);
-      sm.createTask('t3', 'Third', ['t2']);
-      sm.startTask('t1');
-
-      const result = sm.failTask('t1', 1, 'boom');
-      expect('task' in result).toBe(true);
-      if ('task' in result) {
-        expect(result.task.status).toBe('failed');
-        expect(result.task.error).toBe('boom');
-
-        const blockedEffect = result.sideEffects.find((e) => e.type === 'tasks_blocked');
-        expect(blockedEffect).toBeDefined();
-        if (blockedEffect?.type === 'tasks_blocked') {
-          expect(blockedEffect.taskIds).toContain('t2');
-          expect(blockedEffect.taskIds).toContain('t3');
-          expect(blockedEffect.blockedBy).toBe('t1');
-        }
-      }
+  describe('getAllTasks', () => {
+    it('returns all restored tasks', () => {
+      sm.restoreTask(makeTask('a'));
+      sm.restoreTask(makeTask('b'));
+      sm.restoreTask(makeTask('c'));
+      expect(sm.getAllTasks()).toHaveLength(3);
     });
 
-    it('blocks transitive dependents: A fails -> B blocked -> C blocked', () => {
-      sm.createTask('a', 'A', []);
-      sm.createTask('b', 'B', ['a']);
-      sm.createTask('c', 'C', ['b']);
-      sm.startTask('a');
-
-      const result = sm.failTask('a', 1);
-      expect('task' in result).toBe(true);
-      if ('task' in result) {
-        expect(sm.getTask('b')?.status).toBe('blocked');
-        expect(sm.getTask('b')?.blockedBy).toBe('a');
-        expect(sm.getTask('c')?.status).toBe('blocked');
-        expect(sm.getTask('c')?.blockedBy).toBe('a');
-      }
+    it('returns empty for fresh state machine', () => {
+      expect(sm.getAllTasks()).toEqual([]);
     });
   });
 
-  // ── pauseForInput / resumeWithInput ───────────────────
-
-  describe('pauseForInput', () => {
-    it('transitions running -> needs_input with prompt', () => {
-      sm.createTask('t1', 'Task', []);
-      sm.startTask('t1');
-
-      const result = sm.pauseForInput('t1', 'Enter your name');
-      expect('task' in result).toBe(true);
-      if ('task' in result) {
-        expect(result.task.status).toBe('needs_input');
-        expect(result.task.inputPrompt).toBe('Enter your name');
-      }
-    });
-  });
-
-  describe('resumeWithInput', () => {
-    it('transitions needs_input -> running', () => {
-      sm.createTask('t1', 'Task', []);
-      sm.startTask('t1');
-      sm.pauseForInput('t1', 'Waiting...');
-
-      const result = sm.resumeWithInput('t1');
-      expect('task' in result).toBe(true);
-      if ('task' in result) {
-        expect(result.task.status).toBe('running');
-        expect(result.task.inputPrompt).toBeUndefined();
-      }
-    });
-  });
-
-  // ── requestApproval / approveTask / rejectTask ────────
-
-  describe('requestApproval', () => {
-    it('transitions running -> awaiting_approval', () => {
-      sm.createTask('t1', 'Task', []);
-      sm.startTask('t1');
-
-      const result = sm.requestApproval('t1');
-      expect('task' in result).toBe(true);
-      if ('task' in result) {
-        expect(result.task.status).toBe('awaiting_approval');
-      }
-    });
-  });
-
-  describe('approveTask', () => {
-    it('transitions awaiting_approval -> completed and unblocks dependents', () => {
-      sm.createTask('t1', 'Task', []);
-      sm.createTask('t2', 'Depends', ['t1']);
-      sm.startTask('t1');
-      sm.requestApproval('t1');
-
-      const result = sm.approveTask('t1');
-      expect('task' in result).toBe(true);
-      if ('task' in result) {
-        expect(result.task.status).toBe('completed');
-        const readyEffect = result.sideEffects.find((e) => e.type === 'tasks_ready');
-        expect(readyEffect).toBeDefined();
-        if (readyEffect?.type === 'tasks_ready') {
-          expect(readyEffect.taskIds).toContain('t2');
-        }
-      }
-    });
-  });
-
-  describe('rejectTask', () => {
-    it('transitions awaiting_approval -> failed and blocks dependents', () => {
-      sm.createTask('t1', 'Task', []);
-      sm.createTask('t2', 'Depends', ['t1']);
-      sm.startTask('t1');
-      sm.requestApproval('t1');
-
-      const result = sm.rejectTask('t1', 'Not good enough');
-      expect('task' in result).toBe(true);
-      if ('task' in result) {
-        expect(result.task.status).toBe('failed');
-        expect(result.task.error).toBe('Not good enough');
-
-        const blockedEffect = result.sideEffects.find((e) => e.type === 'tasks_blocked');
-        expect(blockedEffect).toBeDefined();
-        if (blockedEffect?.type === 'tasks_blocked') {
-          expect(blockedEffect.taskIds).toContain('t2');
-        }
-      }
-    });
-  });
-
-  // ── Reconciliation ────────────────────────────────────
-
-  describe('triggerReconciliation', () => {
-    it('sets experimentResults and transitions to needs_input', () => {
-      sm.createTask('recon', 'Reconciliation', [], { isReconciliation: true });
-      sm.startTask('recon');
-      // triggerReconciliation works on pending reconciliation tasks — simulate by going back
-      // Actually: reconciliation tasks can be in 'pending' initially, let's recreate
-      sm.clear();
-      sm.createTask('recon', 'Reconciliation', [], { isReconciliation: true });
-
-      const results = [
-        { id: 'exp1', status: 'completed' as const, summary: 'Good', exitCode: 0 },
-        { id: 'exp2', status: 'failed' as const, exitCode: 1 },
-      ];
-
-      const result = sm.triggerReconciliation('recon', results);
-      expect('task' in result).toBe(true);
-      if ('task' in result) {
-        expect(result.task.status).toBe('needs_input');
-        expect(result.task.experimentResults).toEqual(results);
-      }
-    });
-  });
-
-  describe('completeReconciliation', () => {
-    it('transitions needs_input -> completed with selectedExperiment', () => {
-      sm.createTask('recon', 'Reconciliation', [], { isReconciliation: true });
-      sm.createTask('downstream', 'Next', ['recon']);
-
-      const results = [{ id: 'exp1', status: 'completed' as const, exitCode: 0 }];
-      sm.triggerReconciliation('recon', results);
-
-      const result = sm.completeReconciliation('recon', 'exp1');
-      expect('task' in result).toBe(true);
-      if ('task' in result) {
-        expect(result.task.status).toBe('completed');
-        expect(result.task.selectedExperiment).toBe('exp1');
-
-        const readyEffect = result.sideEffects.find((e) => e.type === 'tasks_ready');
-        expect(readyEffect).toBeDefined();
-      }
-    });
-  });
-
-  // ── rewriteDependency ─────────────────────────────────
-
-  describe('rewriteDependency', () => {
-    it('updates downstream tasks, skips experiment children', () => {
-      sm.createTask('pivot', 'Pivot', []);
-      sm.createTask('downstream', 'Down', ['pivot']);
-      sm.createTask('exp-child', 'Experiment', ['pivot'], { parentTask: 'pivot' });
-
-      const deltas = sm.rewriteDependency('pivot', 'recon-1');
-
-      // downstream should be rewritten
-      expect(sm.getTask('downstream')?.dependencies).toEqual(['recon-1']);
-      // experiment child should NOT be rewritten
-      expect(sm.getTask('exp-child')?.dependencies).toEqual(['pivot']);
-
-      expect(deltas).toHaveLength(1);
-      expect(deltas[0].taskId).toBe('downstream');
-    });
-  });
-
-  // ── getReadyTasks ─────────────────────────────────────
+  // ── getReadyTasks ──────────────────────────────────────
 
   describe('getReadyTasks', () => {
-    it('returns only pending tasks with all deps completed', () => {
-      sm.createTask('t1', 'First', []);
-      sm.createTask('t2', 'Second', ['t1']);
-      sm.createTask('t3', 'Third', []);
+    it('returns pending tasks with all deps completed', () => {
+      sm.restoreTask(makeTask('a', [], 'completed'));
+      sm.restoreTask(makeTask('b', ['a'], 'pending'));
+      sm.restoreTask(makeTask('c', ['a'], 'running'));
 
-      // Initially: t1 and t3 are ready (no deps), t2 is not (dep pending)
-      let ready = sm.getReadyTasks();
-      expect(ready.map((t) => t.id).sort()).toEqual(['t1', 't3']);
+      const ready = sm.getReadyTasks();
+      expect(ready.map(t => t.id)).toEqual(['b']);
+    });
 
-      // Complete t1 -> t2 becomes ready
-      sm.startTask('t1');
-      sm.completeTask('t1');
-      ready = sm.getReadyTasks();
-      expect(ready.map((t) => t.id).sort()).toEqual(['t2', 't3']);
+    it('returns tasks with no dependencies', () => {
+      sm.restoreTask(makeTask('x', [], 'pending'));
+      sm.restoreTask(makeTask('y', [], 'pending'));
+
+      const ready = sm.getReadyTasks();
+      expect(ready).toHaveLength(2);
+    });
+
+    it('does not return tasks with incomplete deps', () => {
+      sm.restoreTask(makeTask('a', [], 'running'));
+      sm.restoreTask(makeTask('b', ['a'], 'pending'));
+
+      expect(sm.getReadyTasks()).toEqual([]);
     });
   });
 
-  // ── updateTaskFields ───────────────────────────────────
+  // ── findNewlyReadyTasks ────────────────────────────────
 
-  describe('updateTaskFields', () => {
-    it('updates command on a pending task', () => {
-      sm.createTask('t1', 'Task', [], { command: 'ls -la' });
-      const result = sm.updateTaskFields('t1', { command: 'ls -la /tmp' });
+  describe('findNewlyReadyTasks', () => {
+    it('returns dependents of completed task whose all deps are completed', () => {
+      sm.restoreTask(makeTask('a', [], 'completed'));
+      sm.restoreTask(makeTask('b', [], 'completed'));
+      sm.restoreTask(makeTask('c', ['a', 'b'], 'pending'));
 
-      expect('task' in result).toBe(true);
-      if ('task' in result) {
-        expect(result.task.command).toBe('ls -la /tmp');
-        expect(result.task.status).toBe('pending');
-        expect(result.delta.type).toBe('updated');
-        if (result.delta.type === 'updated') {
-          expect(result.delta.changes).toEqual({ command: 'ls -la /tmp' });
-        }
-      }
+      const ready = sm.findNewlyReadyTasks('b');
+      expect(ready).toEqual(['c']);
     });
 
-    it('updates command on a failed task', () => {
-      sm.createTask('t1', 'Task', [], { command: 'bad-cmd' });
-      sm.startTask('t1');
-      sm.failTask('t1', 1, 'not found');
-      const result = sm.updateTaskFields('t1', { command: 'good-cmd' });
+    it('does not return tasks with still-pending deps', () => {
+      sm.restoreTask(makeTask('a', [], 'completed'));
+      sm.restoreTask(makeTask('b', [], 'running'));
+      sm.restoreTask(makeTask('c', ['a', 'b'], 'pending'));
 
-      expect('task' in result).toBe(true);
-      if ('task' in result) {
-        expect(result.task.command).toBe('good-cmd');
-        expect(result.task.status).toBe('failed');
-      }
+      const ready = sm.findNewlyReadyTasks('a');
+      expect(ready).toEqual([]);
     });
 
-    it('returns error when task is running', () => {
-      sm.createTask('t1', 'Task', [], { command: 'sleep 10' });
-      sm.startTask('t1');
-      const result = sm.updateTaskFields('t1', { command: 'echo hi' });
-
-      expect('error' in result).toBe(true);
+    it('returns empty when no dependents exist', () => {
+      sm.restoreTask(makeTask('solo', [], 'completed'));
+      expect(sm.findNewlyReadyTasks('solo')).toEqual([]);
     });
 
-    it('returns error for non-existent task', () => {
-      const result = sm.updateTaskFields('nope', { command: 'echo hi' });
-      expect('error' in result).toBe(true);
-    });
+    it('skips non-pending tasks', () => {
+      sm.restoreTask(makeTask('a', [], 'completed'));
+      sm.restoreTask(makeTask('b', ['a'], 'running'));
 
-    it('persists the update in the graph', () => {
-      sm.createTask('t1', 'Task', [], { command: 'old' });
-      sm.updateTaskFields('t1', { command: 'new' });
-      expect(sm.getTask('t1')?.command).toBe('new');
-    });
-
-    it('updates familiarType on a pending task', () => {
-      sm.createTask('t1', 'Task', [], { command: 'ls', familiarType: 'local' });
-      const result = sm.updateTaskFields('t1', { familiarType: 'worktree' });
-
-      expect('task' in result).toBe(true);
-      if ('task' in result) {
-        expect(result.task.familiarType).toBe('worktree');
-        expect(result.task.status).toBe('pending');
-        expect(result.delta.type).toBe('updated');
-        if (result.delta.type === 'updated') {
-          expect(result.delta.changes).toEqual({ familiarType: 'worktree' });
-        }
-      }
-    });
-
-    it('updates familiarType on a failed task', () => {
-      sm.createTask('t1', 'Task', [], { command: 'bad-cmd', familiarType: 'local' });
-      sm.startTask('t1');
-      sm.failTask('t1', 1, 'not found');
-      const result = sm.updateTaskFields('t1', { familiarType: 'worktree' });
-
-      expect('task' in result).toBe(true);
-      if ('task' in result) {
-        expect(result.task.familiarType).toBe('worktree');
-        expect(result.task.status).toBe('failed');
-      }
+      expect(sm.findNewlyReadyTasks('a')).toEqual([]);
     });
   });
 
-  // ── Immutability ──────────────────────────────────────
+  // ── computeTasksToBlock ────────────────────────────────
 
-  describe('immutability', () => {
-    it('transitions produce a new object, original is not mutated', () => {
-      sm.createTask('t1', 'Task', []);
-      const before = sm.getTask('t1')!;
-      sm.startTask('t1');
-      const after = sm.getTask('t1')!;
+  describe('computeTasksToBlock', () => {
+    it('returns direct dependents of failed task', () => {
+      sm.restoreTask(makeTask('failed', [], 'failed'));
+      sm.restoreTask(makeTask('child', ['failed'], 'pending'));
 
-      expect(before.status).toBe('pending');
-      expect(after.status).toBe('running');
-      expect(before).not.toBe(after);
+      const blocked = sm.computeTasksToBlock('failed');
+      expect(blocked).toEqual(['child']);
+    });
+
+    it('returns transitive dependents via BFS', () => {
+      sm.restoreTask(makeTask('root', [], 'failed'));
+      sm.restoreTask(makeTask('mid', ['root'], 'pending'));
+      sm.restoreTask(makeTask('leaf', ['mid'], 'pending'));
+
+      const blocked = sm.computeTasksToBlock('root');
+      expect(blocked).toContain('mid');
+      expect(blocked).toContain('leaf');
+      expect(blocked).toHaveLength(2);
+    });
+
+    it('skips running and completed tasks', () => {
+      sm.restoreTask(makeTask('failed', [], 'failed'));
+      sm.restoreTask(makeTask('running', ['failed'], 'running'));
+      sm.restoreTask(makeTask('done', ['failed'], 'completed'));
+      sm.restoreTask(makeTask('pending', ['failed'], 'pending'));
+
+      const blocked = sm.computeTasksToBlock('failed');
+      expect(blocked).toEqual(['pending']);
+    });
+
+    it('returns empty when no dependents', () => {
+      sm.restoreTask(makeTask('isolated', [], 'failed'));
+      expect(sm.computeTasksToBlock('isolated')).toEqual([]);
+    });
+  });
+
+  // ── computeTasksToUnblock ──────────────────────────────
+
+  describe('computeTasksToUnblock', () => {
+    it('returns tasks blocked by the given task', () => {
+      sm.restoreTask(makeTask('t1', [], 'pending'));
+      sm.restoreTask(makeTask('t2', ['t1'], 'blocked', { blockedBy: 't1' }));
+      sm.restoreTask(makeTask('t3', ['t1'], 'blocked', { blockedBy: 't1' }));
+
+      const unblocked = sm.computeTasksToUnblock('t1');
+      expect(unblocked.sort()).toEqual(['t2', 't3']);
+    });
+
+    it('does not return tasks blocked by a different task', () => {
+      sm.restoreTask(makeTask('a', [], 'failed'));
+      sm.restoreTask(makeTask('b', [], 'failed'));
+      sm.restoreTask(makeTask('c', ['a'], 'blocked', { blockedBy: 'a' }));
+      sm.restoreTask(makeTask('d', ['b'], 'blocked', { blockedBy: 'b' }));
+
+      expect(sm.computeTasksToUnblock('a')).toEqual(['c']);
+      expect(sm.computeTasksToUnblock('b')).toEqual(['d']);
+    });
+
+    it('returns empty when nothing is blocked', () => {
+      sm.restoreTask(makeTask('t1', [], 'completed'));
+      expect(sm.computeTasksToUnblock('t1')).toEqual([]);
+    });
+  });
+
+  // ── clear ──────────────────────────────────────────────
+
+  describe('clear', () => {
+    it('removes all tasks', () => {
+      sm.restoreTask(makeTask('a'));
+      sm.restoreTask(makeTask('b'));
+      sm.clear();
+      expect(sm.getAllTasks()).toEqual([]);
+      expect(sm.getTaskCount()).toBe(0);
     });
   });
 });

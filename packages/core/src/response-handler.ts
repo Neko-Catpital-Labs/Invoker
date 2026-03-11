@@ -1,211 +1,126 @@
 /**
- * ResponseHandler — Routes WorkResponse messages to state machine transitions.
+ * ResponseHandler — Pure parser/validator for WorkResponse messages.
  *
- * Pure logic: takes a StateMachine and ExperimentManager via DI,
- * returns structured results instead of emitting events.
+ * No state machine access, no graph mutations. Parses the incoming
+ * WorkResponse and returns a structured ParsedResponse that tells
+ * the Orchestrator what writes to make.
  */
 
 import type { WorkResponse } from '@invoker/protocol';
 import { validateWorkResponse } from '@invoker/protocol';
-import type { TaskStateMachine } from './state-machine.js';
-import type { ExperimentManager } from './experiments.js';
-import type { TaskDelta, SideEffect } from './task-types.js';
 
-// ── Types ───────────────────────────────────────────────────
+// ── Parsed Response Types ───────────────────────────────────
 
-export interface HandleResponseResult {
-  success: boolean;
-  error?: string;
-  readyTasks?: string[];
-  blockedTasks?: string[];
-  deltas?: TaskDelta[];
+export interface ParsedVariantDef {
+  id: string;
+  description: string;
+  prompt?: string;
+  command?: string;
 }
 
-export interface ResponseHandlerDeps {
-  stateMachine: TaskStateMachine;
-  experimentManager: ExperimentManager;
-}
+export type ParsedResponse =
+  | {
+      type: 'completed';
+      taskId: string;
+      exitCode: number;
+      summary?: string;
+      commitHash?: string;
+      claudeSessionId?: string;
+    }
+  | {
+      type: 'failed';
+      taskId: string;
+      exitCode: number;
+      error?: string;
+    }
+  | {
+      type: 'needs_input';
+      taskId: string;
+      prompt: string;
+    }
+  | {
+      type: 'spawn_experiments';
+      taskId: string;
+      variants: ParsedVariantDef[];
+    }
+  | {
+      type: 'select_experiment';
+      taskId: string;
+      experimentId: string;
+    };
 
 // ── Handler ─────────────────────────────────────────────────
 
 export class ResponseHandler {
-  private stateMachine: TaskStateMachine;
-  private experimentManager: ExperimentManager;
-
-  constructor(deps: ResponseHandlerDeps) {
-    this.stateMachine = deps.stateMachine;
-    this.experimentManager = deps.experimentManager;
-  }
-
   /**
-   * Handle a WorkResponse from an executor.
-   * Routes to the correct handler based on response status.
+   * Parse and validate a WorkResponse into a structured result.
+   * Returns the parsed data or an error. Does NOT mutate any state.
    */
-  handleResponse(response: WorkResponse): HandleResponseResult {
+  parseResponse(response: WorkResponse): ParsedResponse | { error: string } {
     const validation = validateWorkResponse(response);
     if (!validation.valid) {
-      return { success: false, error: validation.error };
+      return { error: validation.error! };
     }
 
     const { actionId, status, outputs, dagMutation } = response;
 
     switch (status) {
       case 'completed':
-        return this.handleCompleted(actionId, outputs);
+        return {
+          type: 'completed',
+          taskId: actionId,
+          exitCode: outputs.exitCode ?? 0,
+          summary: outputs.summary,
+          commitHash: outputs.commitHash,
+          claudeSessionId: outputs.claudeSessionId,
+        };
 
       case 'failed':
-        return this.handleFailed(actionId, outputs);
+        return {
+          type: 'failed',
+          taskId: actionId,
+          exitCode: outputs.exitCode ?? 1,
+          error: outputs.error,
+        };
 
       case 'needs_input':
-        return this.handleNeedsInput(actionId, outputs);
+        return {
+          type: 'needs_input',
+          taskId: actionId,
+          prompt: outputs.summary ?? 'Task requires input',
+        };
 
-      case 'spawn_experiments':
+      case 'spawn_experiments': {
         if (!dagMutation?.spawnExperiments) {
-          return { success: false, error: 'spawn_experiments requires dagMutation.spawnExperiments' };
+          return { error: 'spawn_experiments requires dagMutation.spawnExperiments' };
         }
-        return this.handleSpawnExperiments(actionId, dagMutation.spawnExperiments);
+        const variants: ParsedVariantDef[] =
+          dagMutation.spawnExperiments.variants.map((v) => ({
+            id: `${actionId}-exp-${v.id}`,
+            description: v.description ?? `Experiment: ${v.id}`,
+            prompt: v.prompt,
+            command: v.command,
+          }));
+        return {
+          type: 'spawn_experiments',
+          taskId: actionId,
+          variants,
+        };
+      }
 
-      case 'select_experiment':
+      case 'select_experiment': {
         if (!dagMutation?.selectExperiment) {
-          return { success: false, error: 'select_experiment requires dagMutation.selectExperiment' };
+          return { error: 'select_experiment requires dagMutation.selectExperiment' };
         }
-        return this.handleSelectExperiment(actionId, dagMutation.selectExperiment.experimentId);
+        return {
+          type: 'select_experiment',
+          taskId: actionId,
+          experimentId: dagMutation.selectExperiment.experimentId,
+        };
+      }
 
       default:
-        return { success: false, error: `Unknown response status: ${status}` };
+        return { error: `Unknown response status: ${status}` };
     }
-  }
-
-  private handleCompleted(
-    actionId: string,
-    outputs: WorkResponse['outputs'],
-  ): HandleResponseResult {
-    const result = this.stateMachine.completeTask(actionId, outputs.exitCode ?? 0, outputs.summary, outputs.commitHash, outputs.claudeSessionId);
-    if ('error' in result) {
-      return { success: false, error: result.error };
-    }
-
-    const readyTasks = this.extractReadyTasks(result.sideEffects);
-    return {
-      success: true,
-      readyTasks,
-      deltas: [result.delta],
-    };
-  }
-
-  private handleFailed(
-    actionId: string,
-    outputs: WorkResponse['outputs'],
-  ): HandleResponseResult {
-    const result = this.stateMachine.failTask(actionId, outputs.exitCode ?? 1, outputs.error);
-    if ('error' in result) {
-      return { success: false, error: result.error };
-    }
-
-    const blockedTasks = this.extractBlockedTasks(result.sideEffects);
-    return {
-      success: true,
-      blockedTasks,
-      deltas: [result.delta],
-    };
-  }
-
-  private handleNeedsInput(
-    actionId: string,
-    outputs: WorkResponse['outputs'],
-  ): HandleResponseResult {
-    const prompt = outputs.summary ?? 'Task requires input';
-    const result = this.stateMachine.pauseForInput(actionId, prompt);
-    if ('error' in result) {
-      return { success: false, error: result.error };
-    }
-
-    return {
-      success: true,
-      deltas: [result.delta],
-    };
-  }
-
-  private handleSpawnExperiments(
-    actionId: string,
-    spawnRequest: NonNullable<WorkResponse['dagMutation']>['spawnExperiments'],
-  ): HandleResponseResult {
-    if (!spawnRequest) {
-      return { success: false, error: 'No spawn request' };
-    }
-
-    const task = this.stateMachine.getTask(actionId);
-    if (!task) {
-      return { success: false, error: `Task ${actionId} not found` };
-    }
-
-    const variants = spawnRequest.variants.map((v) => ({
-      id: `${actionId}-exp-${v.id}`,
-      description: v.description ?? `Experiment: ${v.id}`,
-      prompt: v.prompt,
-      command: v.command,
-    }));
-
-    const groupResult = this.experimentManager.createExperimentGroup(
-      actionId,
-      variants,
-      this.stateMachine,
-      task.isReconciliation ? (task.experimentResults as any[]) : undefined,
-    );
-
-    // Complete the parent task if it's still running
-    if (task.status === 'running') {
-      const completeResult = this.stateMachine.completeTask(actionId, 0);
-      if (!('error' in completeResult)) {
-        groupResult.deltas.unshift(completeResult.delta);
-      }
-    }
-
-    return {
-      success: true,
-      readyTasks: groupResult.experiments
-        .filter((e) => e.status === 'pending')
-        .map((e) => e.id),
-      deltas: groupResult.deltas,
-    };
-  }
-
-  private handleSelectExperiment(
-    actionId: string,
-    experimentId: string,
-  ): HandleResponseResult {
-    const result = this.stateMachine.completeReconciliation(actionId, experimentId);
-    if ('error' in result) {
-      return { success: false, error: result.error };
-    }
-
-    const readyTasks = this.extractReadyTasks(result.sideEffects);
-    return {
-      success: true,
-      readyTasks,
-      deltas: [result.delta],
-    };
-  }
-
-  // ── Helpers ─────────────────────────────────────────────
-
-  private extractReadyTasks(effects: readonly SideEffect[]): string[] {
-    const ready: string[] = [];
-    for (const e of effects) {
-      if (e.type === 'tasks_ready') {
-        ready.push(...e.taskIds);
-      }
-    }
-    return ready;
-  }
-
-  private extractBlockedTasks(effects: readonly SideEffect[]): string[] {
-    const blocked: string[] = [];
-    for (const e of effects) {
-      if (e.type === 'tasks_blocked') {
-        blocked.push(...e.taskIds);
-      }
-    }
-    return blocked;
   }
 }

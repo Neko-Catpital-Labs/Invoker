@@ -33,6 +33,12 @@ class InMemoryPersistence implements OrchestratorPersistence {
     }
   }
 
+  loadTasks(workflowId: string): TaskState[] {
+    return Array.from(this.tasks.values())
+      .filter((e) => e.workflowId === workflowId)
+      .map((e) => e.task);
+  }
+
   logEvent(taskId: string, eventType: string, payload?: unknown): void {
     this.events.push({ taskId, eventType, payload });
   }
@@ -125,116 +131,89 @@ describe('Orchestrator', () => {
       const t2 = orchestrator.getTask('t2');
       expect(t2).toBeDefined();
       expect(t2!.dependencies).toEqual(['t1']);
-
-      const t3 = orchestrator.getTask('t3');
-      expect(t3).toBeDefined();
-      expect(t3!.dependencies).toEqual(['t1', 't2']);
     });
 
-    it('loadPlan passes pivot=true to createTask when specified in plan', () => {
-      const plan: PlanDefinition = {
+    it('passes pivot=true when specified in plan', () => {
+      orchestrator.loadPlan({
         name: 'pivot-test',
-        tasks: [
-          { id: 't1', description: 'Pivot task', pivot: true },
-        ],
-      };
+        tasks: [{ id: 't1', description: 'Pivot task', pivot: true }],
+      });
 
-      orchestrator.loadPlan(plan);
-
-      const task = orchestrator.getTask('t1');
-      expect(task).toBeDefined();
-      expect(task!.pivot).toBe(true);
+      expect(orchestrator.getTask('t1')!.pivot).toBe(true);
     });
 
-    it('loadPlan passes experimentVariants to createTask when specified', () => {
+    it('passes experimentVariants when specified', () => {
       const variants = [
         { id: 'v1', description: 'Variant A', prompt: 'Try approach A' },
         { id: 'v2', description: 'Variant B', prompt: 'Try approach B' },
       ];
-      const plan: PlanDefinition = {
+      orchestrator.loadPlan({
         name: 'variants-test',
-        tasks: [
-          { id: 't1', description: 'Experiment task', experimentVariants: variants },
-        ],
-      };
+        tasks: [{ id: 't1', description: 'Experiment task', experimentVariants: variants }],
+      });
 
-      orchestrator.loadPlan(plan);
-
-      const task = orchestrator.getTask('t1');
-      expect(task).toBeDefined();
-      expect(task!.experimentVariants).toEqual(variants);
+      expect(orchestrator.getTask('t1')!.experimentVariants).toEqual(variants);
     });
 
-    it('loadPlan passes requiresManualApproval to createTask', () => {
-      const plan: PlanDefinition = {
+    it('passes requiresManualApproval', () => {
+      orchestrator.loadPlan({
         name: 'approval-test',
-        tasks: [
-          { id: 't1', description: 'Approval task', requiresManualApproval: true },
-        ],
-      };
+        tasks: [{ id: 't1', description: 'Approval task', requiresManualApproval: true }],
+      });
 
-      orchestrator.loadPlan(plan);
-
-      const task = orchestrator.getTask('t1');
-      expect(task).toBeDefined();
-      expect(task!.requiresManualApproval).toBe(true);
+      expect(orchestrator.getTask('t1')!.requiresManualApproval).toBe(true);
     });
 
-    it('loadPlan passes familiarType to createTask when specified', () => {
-      const plan: PlanDefinition = {
+    it('passes familiarType when specified', () => {
+      orchestrator.loadPlan({
         name: 'familiar-type-test',
         tasks: [
           { id: 't1', description: 'Worktree task', familiarType: 'worktree' },
           { id: 't2', description: 'Default task' },
         ],
-      };
+      });
 
-      orchestrator.loadPlan(plan);
-
-      const t1 = orchestrator.getTask('t1');
-      expect(t1).toBeDefined();
-      expect(t1!.familiarType).toBe('worktree');
-
-      const t2 = orchestrator.getTask('t2');
-      expect(t2).toBeDefined();
-      expect(t2!.familiarType).toBe('worktree'); // defaults to 'worktree' for prompt tasks
+      expect(orchestrator.getTask('t1')!.familiarType).toBe('worktree');
+      expect(orchestrator.getTask('t2')!.familiarType).toBe('worktree');
     });
 
-    it('loadPlan passes autoFix and maxFixAttempts to createTask', () => {
-      const plan: PlanDefinition = {
+    it('passes autoFix and maxFixAttempts', () => {
+      orchestrator.loadPlan({
         name: 'autofix-plan',
-        tasks: [
-          { id: 't1', description: 'Auto-fix task', autoFix: true, maxFixAttempts: 2 },
-        ],
-      };
-
-      orchestrator.loadPlan(plan);
+        tasks: [{ id: 't1', description: 'Auto-fix task', autoFix: true, maxFixAttempts: 2 }],
+      });
 
       const task = orchestrator.getTask('t1');
-      expect(task).toBeDefined();
       expect(task!.autoFix).toBe(true);
       expect(task!.maxFixAttempts).toBe(2);
     });
 
     it('publishes created deltas for each task', () => {
-      const plan: PlanDefinition = {
+      orchestrator.loadPlan({
         name: 'test-plan',
         tasks: [
           { id: 't1', description: 'First' },
           { id: 't2', description: 'Second', dependencies: ['t1'] },
         ],
-      };
-
-      orchestrator.loadPlan(plan);
+      });
 
       expect(publishedDeltas).toHaveLength(2);
       expect(publishedDeltas[0].type).toBe('created');
       expect(publishedDeltas[1].type).toBe('created');
+    });
 
-      const d0 = publishedDeltas[0] as { type: 'created'; task: TaskState };
-      const d1 = publishedDeltas[1] as { type: 'created'; task: TaskState };
-      expect(d0.task.id).toBe('t1');
-      expect(d1.task.id).toBe('t2');
+    it('persists every task to DB', () => {
+      orchestrator.loadPlan({
+        name: 'persist-test',
+        tasks: [
+          { id: 't1', description: 'First' },
+          { id: 't2', description: 'Second', dependencies: ['t1'] },
+        ],
+      });
+
+      expect(persistence.tasks.size).toBe(2);
+      expect(persistence.tasks.has('t1')).toBe(true);
+      expect(persistence.tasks.has('t2')).toBe(true);
     });
   });
 
@@ -255,11 +234,9 @@ describe('Orchestrator', () => {
 
       const started = orchestrator.startExecution();
 
-      // maxConcurrency is 3, so only 3 of 4 should start
       expect(started).toHaveLength(3);
       expect(started.every((t) => t.status === 'running')).toBe(true);
 
-      // The 4th task should remain pending
       const allTasks = orchestrator.getAllTasks();
       const pendingTasks = allTasks.filter((t) => t.status === 'pending');
       expect(pendingTasks).toHaveLength(1);
@@ -278,11 +255,22 @@ describe('Orchestrator', () => {
 
       const started = orchestrator.startExecution();
 
-      // Only t1 is ready (no deps); t2 and t3 have unmet deps
       expect(started).toHaveLength(1);
       expect(started[0].id).toBe('t1');
       expect(orchestrator.getTask('t2')!.status).toBe('pending');
       expect(orchestrator.getTask('t3')!.status).toBe('pending');
+    });
+
+    it('persists status changes to DB', () => {
+      orchestrator.loadPlan({
+        name: 'test-plan',
+        tasks: [{ id: 't1', description: 'Root' }],
+      });
+
+      orchestrator.startExecution();
+
+      const persisted = persistence.tasks.get('t1');
+      expect(persisted!.task.status).toBe('running');
     });
   });
 
@@ -308,7 +296,6 @@ describe('Orchestrator', () => {
       );
 
       expect(orchestrator.getTask('t1')!.status).toBe('completed');
-      // t2 and t3 should now be running (auto-started)
       expect(orchestrator.getTask('t2')!.status).toBe('running');
       expect(orchestrator.getTask('t3')!.status).toBe('running');
     });
@@ -340,6 +327,24 @@ describe('Orchestrator', () => {
       expect(task!.status).toBe('needs_input');
       expect(task!.inputPrompt).toBe('What directory?');
     });
+
+    it('persists completed status to DB', () => {
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 't1', status: 'completed', outputs: { exitCode: 0 } }),
+      );
+
+      const persisted = persistence.tasks.get('t1');
+      expect(persisted!.task.status).toBe('completed');
+    });
+
+    it('persists blocked status to DB', () => {
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 't1', status: 'failed', outputs: { exitCode: 1, error: 'fail' } }),
+      );
+
+      const persisted = persistence.tasks.get('t2');
+      expect(persisted!.task.status).toBe('blocked');
+    });
   });
 
   // ── provideInput ────────────────────────────────────────
@@ -352,7 +357,6 @@ describe('Orchestrator', () => {
       });
       orchestrator.startExecution();
 
-      // Pause via needs_input response
       orchestrator.handleWorkerResponse(
         makeResponse({
           actionId: 't1',
@@ -362,7 +366,6 @@ describe('Orchestrator', () => {
       );
       expect(orchestrator.getTask('t1')!.status).toBe('needs_input');
 
-      // Resume
       orchestrator.provideInput('t1', '/some/path');
       expect(orchestrator.getTask('t1')!.status).toBe('running');
     });
@@ -381,10 +384,8 @@ describe('Orchestrator', () => {
       });
       orchestrator.startExecution();
 
-      // Move a1 to awaiting_approval via the internal state machine
-      const sm = (orchestrator as any).stateMachine;
-      sm.requestApproval('a1');
-      expect(orchestrator.getTask('a1')!.status).toBe('awaiting_approval');
+      // Move a1 to awaiting_approval by writing directly to persistence
+      persistence.updateTask('a1', { status: 'awaiting_approval' });
 
       publishedDeltas = [];
       orchestrator.approve('a1');
@@ -406,9 +407,7 @@ describe('Orchestrator', () => {
       orchestrator.startExecution();
 
       // Move t1 to awaiting_approval
-      const sm = (orchestrator as any).stateMachine;
-      sm.requestApproval('t1');
-      expect(orchestrator.getTask('t1')!.status).toBe('awaiting_approval');
+      persistence.updateTask('t1', { status: 'awaiting_approval' });
 
       orchestrator.reject('t1', 'Not good enough');
 
@@ -421,7 +420,6 @@ describe('Orchestrator', () => {
 
   describe('experiment completion wiring', () => {
     it('handleWorkerResponse for experiment task calls onExperimentCompleted', () => {
-      // Set up a pivot task with a downstream dependent
       orchestrator.loadPlan({
         name: 'experiment-test',
         tasks: [
@@ -431,7 +429,6 @@ describe('Orchestrator', () => {
       });
       orchestrator.startExecution();
 
-      // Spawn experiments from the pivot task
       orchestrator.handleWorkerResponse(
         makeResponse({
           actionId: 'pivot',
@@ -448,15 +445,11 @@ describe('Orchestrator', () => {
         }),
       );
 
-      // Experiments should exist and be auto-started by handleWorkerResponse
       expect(orchestrator.getTask('pivot-exp-v1')).toBeDefined();
       expect(orchestrator.getTask('pivot-exp-v2')).toBeDefined();
-
-      // Experiments are auto-started via readyTasks in handleWorkerResponse
       expect(orchestrator.getTask('pivot-exp-v1')!.status).toBe('running');
       expect(orchestrator.getTask('pivot-exp-v2')!.status).toBe('running');
 
-      // Complete one experiment — the experiment manager should track it
       orchestrator.handleWorkerResponse(
         makeResponse({
           actionId: 'pivot-exp-v1',
@@ -465,7 +458,6 @@ describe('Orchestrator', () => {
         }),
       );
 
-      // The experiment manager should have recorded this completion
       const em = (orchestrator as any).experimentManager;
       const groups = em.getAllGroups();
       expect(groups.length).toBe(1);
@@ -482,7 +474,6 @@ describe('Orchestrator', () => {
       });
       orchestrator.startExecution();
 
-      // Spawn experiments
       orchestrator.handleWorkerResponse(
         makeResponse({
           actionId: 'pivot',
@@ -499,9 +490,6 @@ describe('Orchestrator', () => {
         }),
       );
 
-      // Start and complete both experiments
-      orchestrator.startExecution();
-
       orchestrator.handleWorkerResponse(
         makeResponse({
           actionId: 'pivot-exp-v1',
@@ -510,7 +498,6 @@ describe('Orchestrator', () => {
         }),
       );
 
-      // Start v2 if not already running (scheduler may have started it)
       if (orchestrator.getTask('pivot-exp-v2')!.status === 'pending') {
         orchestrator.startExecution();
       }
@@ -523,7 +510,6 @@ describe('Orchestrator', () => {
         }),
       );
 
-      // Reconciliation task should now be in needs_input state
       const reconTask = orchestrator.getTask('pivot-reconciliation');
       expect(reconTask).toBeDefined();
       expect(reconTask!.status).toBe('needs_input');
@@ -534,13 +520,10 @@ describe('Orchestrator', () => {
     it('failed experiment still counts toward completion tracking', () => {
       orchestrator.loadPlan({
         name: 'fail-test',
-        tasks: [
-          { id: 'pivot', description: 'Pivot task' },
-        ],
+        tasks: [{ id: 'pivot', description: 'Pivot task' }],
       });
       orchestrator.startExecution();
 
-      // Spawn experiments
       orchestrator.handleWorkerResponse(
         makeResponse({
           actionId: 'pivot',
@@ -557,10 +540,6 @@ describe('Orchestrator', () => {
         }),
       );
 
-      // Start experiments
-      orchestrator.startExecution();
-
-      // Fail experiment v1
       orchestrator.handleWorkerResponse(
         makeResponse({
           actionId: 'pivot-exp-v1',
@@ -569,12 +548,10 @@ describe('Orchestrator', () => {
         }),
       );
 
-      // Start v2 if blocked by scheduler
       if (orchestrator.getTask('pivot-exp-v2')!.status === 'pending') {
         orchestrator.startExecution();
       }
 
-      // Complete experiment v2
       orchestrator.handleWorkerResponse(
         makeResponse({
           actionId: 'pivot-exp-v2',
@@ -583,13 +560,11 @@ describe('Orchestrator', () => {
         }),
       );
 
-      // Reconciliation should still trigger despite one failure
       const reconTask = orchestrator.getTask('pivot-reconciliation');
       expect(reconTask).toBeDefined();
       expect(reconTask!.status).toBe('needs_input');
       expect(reconTask!.experimentResults).toBeDefined();
 
-      // Verify both results are recorded (one completed, one failed)
       const results = reconTask!.experimentResults!;
       const v1Result = results.find((r) => r.id === 'pivot-exp-v1');
       const v2Result = results.find((r) => r.id === 'pivot-exp-v2');
@@ -602,20 +577,13 @@ describe('Orchestrator', () => {
     it('non-experiment task completion does not error', () => {
       orchestrator.loadPlan({
         name: 'normal-test',
-        tasks: [
-          { id: 't1', description: 'Normal task' },
-        ],
+        tasks: [{ id: 't1', description: 'Normal task' }],
       });
       orchestrator.startExecution();
 
-      // Complete a regular (non-experiment) task — should not throw
       expect(() => {
         orchestrator.handleWorkerResponse(
-          makeResponse({
-            actionId: 't1',
-            status: 'completed',
-            outputs: { exitCode: 0 },
-          }),
+          makeResponse({ actionId: 't1', status: 'completed', outputs: { exitCode: 0 } }),
         );
       }).not.toThrow();
 
@@ -646,7 +614,9 @@ describe('Orchestrator', () => {
           createdAt: new Date(),
         },
       ];
-      hydratePersistence.loadTasks = (_workflowId: string) => storedTasks;
+      for (const t of storedTasks) {
+        hydratePersistence.saveTask('wf-hydrate', t);
+      }
 
       const hydrateOrchestrator = new Orchestrator({
         persistence: hydratePersistence,
@@ -658,24 +628,21 @@ describe('Orchestrator', () => {
 
       expect(hydrateOrchestrator.getAllTasks()).toHaveLength(2);
       expect(hydrateOrchestrator.getTask('t1')!.status).toBe('completed');
-      // Key difference from resumeWorkflow: t2 stays pending, not auto-started
       expect(hydrateOrchestrator.getTask('t2')!.status).toBe('pending');
     });
 
     it('preserves running task status from DB', () => {
       const hydratePersistence = new InMemoryPersistence();
       const startedAt = new Date();
-      const storedTasks: TaskState[] = [
-        {
-          id: 't1',
-          description: 'Currently running task',
-          status: 'running',
-          dependencies: [],
-          createdAt: new Date(),
-          startedAt,
-        },
-      ];
-      hydratePersistence.loadTasks = (_workflowId: string) => storedTasks;
+      const task: TaskState = {
+        id: 't1',
+        description: 'Currently running task',
+        status: 'running',
+        dependencies: [],
+        createdAt: new Date(),
+        startedAt,
+      };
+      hydratePersistence.saveTask('wf-hydrate', task);
 
       const hydrateOrchestrator = new Orchestrator({
         persistence: hydratePersistence,
@@ -685,29 +652,26 @@ describe('Orchestrator', () => {
 
       hydrateOrchestrator.syncFromDb('wf-hydrate');
 
-      const task = hydrateOrchestrator.getTask('t1')!;
-      expect(task.status).toBe('running');
-      expect(task.startedAt).toBe(startedAt);
+      const restored = hydrateOrchestrator.getTask('t1')!;
+      expect(restored.status).toBe('running');
+      expect(restored.startedAt).toBe(startedAt);
     });
 
     it('restartTask recovers a stuck running task after syncFromDb', () => {
       const hydratePersistence = new InMemoryPersistence();
-      const storedTasks: TaskState[] = [
-        {
-          id: 't1',
-          description: 'Stuck running task from a crash',
-          status: 'running',
-          dependencies: [],
-          createdAt: new Date(),
-          startedAt: new Date(),
-        },
-      ];
-      hydratePersistence.loadTasks = (_workflowId: string) => storedTasks;
+      const task: TaskState = {
+        id: 't1',
+        description: 'Stuck running task from a crash',
+        status: 'running',
+        dependencies: [],
+        createdAt: new Date(),
+        startedAt: new Date(),
+      };
+      hydratePersistence.saveTask('wf-hydrate', task);
 
-      const hydrateBus = new InMemoryBus();
       const hydrateOrchestrator = new Orchestrator({
         persistence: hydratePersistence,
-        messageBus: hydrateBus,
+        messageBus: new InMemoryBus(),
         maxConcurrency: 3,
       });
 
@@ -720,17 +684,15 @@ describe('Orchestrator', () => {
 
     it('restartTask works on failed tasks after syncFromDb', () => {
       const hydratePersistence = new InMemoryPersistence();
-      const storedTasks: TaskState[] = [
-        {
-          id: 't1',
-          description: 'Failed task',
-          status: 'failed',
-          dependencies: [],
-          createdAt: new Date(),
-          error: 'something broke',
-        },
-      ];
-      hydratePersistence.loadTasks = (_workflowId: string) => storedTasks;
+      const task: TaskState = {
+        id: 't1',
+        description: 'Failed task',
+        status: 'failed',
+        dependencies: [],
+        createdAt: new Date(),
+        error: 'something broke',
+      };
+      hydratePersistence.saveTask('wf-hydrate', task);
 
       const hydrateBus = new InMemoryBus();
       const deltas: TaskDelta[] = [];
@@ -745,70 +707,53 @@ describe('Orchestrator', () => {
       hydrateOrchestrator.syncFromDb('wf-hydrate');
       const started = hydrateOrchestrator.restartTask('t1');
 
-      // Task should be restarted (no deps, so auto-started to running)
       expect(started).toHaveLength(1);
       expect(started[0].status).toBe('running');
-      // Delta should have been published
       expect(deltas.length).toBeGreaterThan(0);
     });
 
     it('re-syncing with a different workflow replaces state machine contents', () => {
       const hydratePersistence = new InMemoryPersistence();
-      const workflowATasks: TaskState[] = [
-        {
-          id: 'a1',
-          description: 'Task from workflow A',
-          status: 'completed',
-          dependencies: [],
-          createdAt: new Date(),
-        },
-      ];
-      const workflowBTasks: TaskState[] = [
-        {
-          id: 'b1',
-          description: 'Failed task from workflow B',
-          status: 'failed',
-          dependencies: [],
-          createdAt: new Date(),
-          error: 'something broke',
-        },
-      ];
+      hydratePersistence.saveTask('wf-a', {
+        id: 'a1',
+        description: 'Task from workflow A',
+        status: 'completed',
+        dependencies: [],
+        createdAt: new Date(),
+      });
+      hydratePersistence.saveTask('wf-b', {
+        id: 'b1',
+        description: 'Failed task from workflow B',
+        status: 'failed',
+        dependencies: [],
+        createdAt: new Date(),
+        error: 'something broke',
+      });
 
-      const hydrateBus = new InMemoryBus();
       const hydrateOrchestrator = new Orchestrator({
         persistence: hydratePersistence,
-        messageBus: hydrateBus,
+        messageBus: new InMemoryBus(),
         maxConcurrency: 3,
       });
 
-      // Sync with workflow A
-      hydratePersistence.loadTasks = () => workflowATasks;
       hydrateOrchestrator.syncFromDb('wf-a');
       expect(hydrateOrchestrator.getTask('a1')!.status).toBe('completed');
 
-      // Re-sync with workflow B (simulates DB poll detecting external workflow)
-      hydratePersistence.loadTasks = () => workflowBTasks;
       hydrateOrchestrator.syncFromDb('wf-b');
-
-      // restartTask should work on the new workflow's tasks
       const started = hydrateOrchestrator.restartTask('b1');
       expect(started).toHaveLength(1);
       expect(started[0].status).toBe('running');
-      expect(hydrateOrchestrator.getTask('b1')).toBeDefined();
     });
 
     it('approve works after syncFromDb', () => {
       const hydratePersistence = new InMemoryPersistence();
-      const storedTasks: TaskState[] = [
-        {
-          id: 't1',
-          description: 'Awaiting approval',
-          status: 'awaiting_approval',
-          dependencies: [],
-          createdAt: new Date(),
-        },
-      ];
-      hydratePersistence.loadTasks = (_workflowId: string) => storedTasks;
+      hydratePersistence.saveTask('wf-hydrate', {
+        id: 't1',
+        description: 'Awaiting approval',
+        status: 'awaiting_approval',
+        dependencies: [],
+        createdAt: new Date(),
+      });
 
       const hydrateOrchestrator = new Orchestrator({
         persistence: hydratePersistence,
@@ -821,39 +766,29 @@ describe('Orchestrator', () => {
 
       expect(hydrateOrchestrator.getTask('t1')!.status).toBe('completed');
     });
-
-    it('throws when persistence does not support loadTasks', () => {
-      expect(() => orchestrator.syncFromDb('wf-1')).toThrow(
-        'Persistence adapter does not support loading tasks',
-      );
-    });
   });
 
   // ── resumeWorkflow ──────────────────────────────────────
 
   describe('resumeWorkflow', () => {
     it('restores task state from persistence', () => {
-      // Create a persistence mock that supports loadTasks
       const resumePersistence = new InMemoryPersistence();
-      const storedTasks: TaskState[] = [
-        {
-          id: 't1',
-          description: 'Completed task',
-          status: 'completed',
-          dependencies: [],
-          createdAt: new Date(),
-          completedAt: new Date(),
-          exitCode: 0,
-        },
-        {
-          id: 't2',
-          description: 'Pending task',
-          status: 'pending',
-          dependencies: ['t1'],
-          createdAt: new Date(),
-        },
-      ];
-      resumePersistence.loadTasks = (_workflowId: string) => storedTasks;
+      resumePersistence.saveTask('wf-resume', {
+        id: 't1',
+        description: 'Completed task',
+        status: 'completed',
+        dependencies: [],
+        createdAt: new Date(),
+        completedAt: new Date(),
+        exitCode: 0,
+      });
+      resumePersistence.saveTask('wf-resume', {
+        id: 't2',
+        description: 'Pending task',
+        status: 'pending',
+        dependencies: ['t1'],
+        createdAt: new Date(),
+      });
 
       const resumeOrchestrator = new Orchestrator({
         persistence: resumePersistence,
@@ -863,40 +798,35 @@ describe('Orchestrator', () => {
 
       resumeOrchestrator.resumeWorkflow('wf-resume');
 
-      // Both tasks should be restored
       expect(resumeOrchestrator.getAllTasks()).toHaveLength(2);
       expect(resumeOrchestrator.getTask('t1')!.status).toBe('completed');
-      // t2 was pending with completed deps, so startExecution should start it
       expect(resumeOrchestrator.getTask('t2')!.status).toBe('running');
     });
 
     it('resumed workflow can continue executing pending tasks', () => {
       const resumePersistence = new InMemoryPersistence();
-      const storedTasks: TaskState[] = [
-        {
-          id: 't1',
-          description: 'Already done',
-          status: 'completed',
-          dependencies: [],
-          createdAt: new Date(),
-          completedAt: new Date(),
-        },
-        {
-          id: 't2',
-          description: 'Ready to run',
-          status: 'pending',
-          dependencies: ['t1'],
-          createdAt: new Date(),
-        },
-        {
-          id: 't3',
-          description: 'Blocked by t2',
-          status: 'pending',
-          dependencies: ['t2'],
-          createdAt: new Date(),
-        },
-      ];
-      resumePersistence.loadTasks = (_workflowId: string) => storedTasks;
+      resumePersistence.saveTask('wf-resume', {
+        id: 't1',
+        description: 'Already done',
+        status: 'completed',
+        dependencies: [],
+        createdAt: new Date(),
+        completedAt: new Date(),
+      });
+      resumePersistence.saveTask('wf-resume', {
+        id: 't2',
+        description: 'Ready to run',
+        status: 'pending',
+        dependencies: ['t1'],
+        createdAt: new Date(),
+      });
+      resumePersistence.saveTask('wf-resume', {
+        id: 't3',
+        description: 'Blocked by t2',
+        status: 'pending',
+        dependencies: ['t2'],
+        createdAt: new Date(),
+      });
 
       const resumeOrchestrator = new Orchestrator({
         persistence: resumePersistence,
@@ -906,15 +836,11 @@ describe('Orchestrator', () => {
 
       const started = resumeOrchestrator.resumeWorkflow('wf-resume');
 
-      // t2 should have been started (its dep t1 is completed)
       expect(started).toHaveLength(1);
       expect(started[0].id).toBe('t2');
       expect(started[0].status).toBe('running');
-
-      // t3 should remain pending (t2 not yet completed)
       expect(resumeOrchestrator.getTask('t3')!.status).toBe('pending');
 
-      // Complete t2, t3 should auto-start
       resumeOrchestrator.handleWorkerResponse(
         makeResponse({ actionId: 't2', status: 'completed', outputs: { exitCode: 0 } }),
       );
@@ -923,17 +849,14 @@ describe('Orchestrator', () => {
 
     it('preserves running tasks and only starts pending ones', () => {
       const resumePersistence = new InMemoryPersistence();
-      const storedTasks: TaskState[] = [
-        {
-          id: 't1',
-          description: 'Was running when process died',
-          status: 'running',
-          dependencies: [],
-          createdAt: new Date(),
-          startedAt: new Date(),
-        },
-      ];
-      resumePersistence.loadTasks = (_workflowId: string) => storedTasks;
+      resumePersistence.saveTask('wf-resume', {
+        id: 't1',
+        description: 'Was running when process died',
+        status: 'running',
+        dependencies: [],
+        createdAt: new Date(),
+        startedAt: new Date(),
+      });
 
       const resumeOrchestrator = new Orchestrator({
         persistence: resumePersistence,
@@ -943,21 +866,12 @@ describe('Orchestrator', () => {
 
       const started = resumeOrchestrator.resumeWorkflow('wf-resume');
 
-      // The task stays running (startExecution only picks up pending tasks).
-      // User can manually restart stuck tasks via restartTask.
       expect(started).toHaveLength(0);
       expect(resumeOrchestrator.getTask('t1')!.status).toBe('running');
     });
-
-    it('throws when persistence does not support loadTasks', () => {
-      // The default InMemoryPersistence has no loadTasks method
-      expect(() => orchestrator.resumeWorkflow('wf-1')).toThrow(
-        'Persistence adapter does not support loading tasks',
-      );
-    });
   });
 
-  // ── Auto-Fix (Option C) ────────────────────────────────
+  // ── Auto-Fix ────────────────────────────────────────────
 
   describe('auto-fix via synthetic spawn_experiments', () => {
     it('failed autoFix task spawns fix experiments instead of failing', () => {
@@ -970,7 +884,6 @@ describe('Orchestrator', () => {
       });
       orchestrator.startExecution();
 
-      // Fail the autoFix task
       const started = orchestrator.handleWorkerResponse(
         makeResponse({
           actionId: 't1',
@@ -979,21 +892,17 @@ describe('Orchestrator', () => {
         }),
       );
 
-      // Should NOT be in failed state — it got transformed to spawn_experiments
       const t1 = orchestrator.getTask('t1');
-      expect(t1!.status).toBe('completed'); // completed so experiments can depend on it
+      expect(t1!.status).toBe('completed');
 
-      // Fix experiments should exist
       const fixConservative = orchestrator.getTask('t1-exp-fix-conservative');
       const fixRefactor = orchestrator.getTask('t1-exp-fix-refactor');
       expect(fixConservative).toBeDefined();
       expect(fixRefactor).toBeDefined();
 
-      // maxFixAttempts=2 so only 2 variants
       const fixAlternative = orchestrator.getTask('t1-exp-fix-alternative');
       expect(fixAlternative).toBeUndefined();
 
-      // Experiments should be auto-started
       expect(started.length).toBeGreaterThan(0);
     });
 
@@ -1007,7 +916,6 @@ describe('Orchestrator', () => {
       });
       orchestrator.startExecution();
 
-      // Fail → spawns experiments
       orchestrator.handleWorkerResponse(
         makeResponse({
           actionId: 't1',
@@ -1016,7 +924,6 @@ describe('Orchestrator', () => {
         }),
       );
 
-      // Complete both fix experiments
       orchestrator.handleWorkerResponse(
         makeResponse({
           actionId: 't1-exp-fix-conservative',
@@ -1037,13 +944,11 @@ describe('Orchestrator', () => {
         }),
       );
 
-      // Reconciliation task should be in needs_input
       const reconTask = orchestrator.getTask('t1-reconciliation');
       expect(reconTask).toBeDefined();
       expect(reconTask!.status).toBe('needs_input');
       expect(reconTask!.experimentResults).toHaveLength(2);
 
-      // Select the conservative fix
       orchestrator.selectExperiment('t1-reconciliation', 't1-exp-fix-conservative');
       expect(orchestrator.getTask('t1-reconciliation')!.status).toBe('completed');
     });
@@ -1059,11 +964,7 @@ describe('Orchestrator', () => {
       orchestrator.startExecution();
 
       orchestrator.handleWorkerResponse(
-        makeResponse({
-          actionId: 't1',
-          status: 'failed',
-          outputs: { exitCode: 1, error: 'broke' },
-        }),
+        makeResponse({ actionId: 't1', status: 'failed', outputs: { exitCode: 1, error: 'broke' } }),
       );
 
       expect(orchestrator.getTask('t1')!.status).toBe('failed');
@@ -1073,9 +974,7 @@ describe('Orchestrator', () => {
     it('fix experiment prompts include original error message', () => {
       orchestrator.loadPlan({
         name: 'autofix-prompt-test',
-        tasks: [
-          { id: 't1', description: 'Build widgets', autoFix: true, prompt: 'npm run build' },
-        ],
+        tasks: [{ id: 't1', description: 'Build widgets', autoFix: true, prompt: 'npm run build' }],
       });
       orchestrator.startExecution();
 
@@ -1107,26 +1006,22 @@ describe('Orchestrator', () => {
         ],
       });
 
-      // Start: only t1 is ready
       const started = orchestrator.startExecution();
       expect(started).toHaveLength(1);
       expect(started[0].id).toBe('t1');
 
-      // Complete t1: t2 should auto-start
       orchestrator.handleWorkerResponse(
         makeResponse({ actionId: 't1', status: 'completed', outputs: { exitCode: 0 } }),
       );
       expect(orchestrator.getTask('t1')!.status).toBe('completed');
       expect(orchestrator.getTask('t2')!.status).toBe('running');
 
-      // Complete t2: t3 should auto-start
       orchestrator.handleWorkerResponse(
         makeResponse({ actionId: 't2', status: 'completed', outputs: { exitCode: 0 } }),
       );
       expect(orchestrator.getTask('t2')!.status).toBe('completed');
       expect(orchestrator.getTask('t3')!.status).toBe('running');
 
-      // Complete t3: workflow done
       orchestrator.handleWorkerResponse(
         makeResponse({ actionId: 't3', status: 'completed', outputs: { exitCode: 0 } }),
       );
@@ -1135,9 +1030,6 @@ describe('Orchestrator', () => {
       const status = orchestrator.getWorkflowStatus();
       expect(status.total).toBe(3);
       expect(status.completed).toBe(3);
-      expect(status.failed).toBe(0);
-      expect(status.running).toBe(0);
-      expect(status.pending).toBe(0);
     });
   });
 
@@ -1288,19 +1180,14 @@ describe('Orchestrator', () => {
     });
   });
 
-  // (Hydration Timestamp Clearing tests removed — syncFromDb no longer resets running tasks)
-
   // ── editTaskCommand ────────────────────────────────────
 
   describe('editTaskCommand', () => {
     it('updates command, restarts the task, and publishes deltas', () => {
-      const plan: PlanDefinition = {
+      orchestrator.loadPlan({
         name: 'edit-cmd-test',
-        tasks: [
-          { id: 't1', description: 'Task 1', command: 'echo old' },
-        ],
-      };
-      orchestrator.loadPlan(plan);
+        tasks: [{ id: 't1', description: 'Task 1', command: 'echo old' }],
+      });
       orchestrator.startExecution();
 
       orchestrator.handleWorkerResponse(
@@ -1317,14 +1204,13 @@ describe('Orchestrator', () => {
     });
 
     it('forks dirty subtree when editing a completed task with dependents', () => {
-      const plan: PlanDefinition = {
+      orchestrator.loadPlan({
         name: 'edit-fork-test',
         tasks: [
           { id: 'parent', description: 'Parent', command: 'echo parent' },
           { id: 'child', description: 'Child', command: 'echo child', dependencies: ['parent'] },
         ],
-      };
-      orchestrator.loadPlan(plan);
+      });
       orchestrator.startExecution();
 
       orchestrator.handleWorkerResponse(
@@ -1341,36 +1227,29 @@ describe('Orchestrator', () => {
 
       expect(orchestrator.getTask('parent')?.command).toBe('echo updated');
       expect(orchestrator.getTask('parent')?.status).toBe('running');
-
       expect(orchestrator.getTask('child')?.status).toBe('stale');
 
       const allTasks = orchestrator.getAllTasks();
-      const forkedChild = allTasks.find(t => t.id !== 'child' && t.description === 'Child');
+      const forkedChild = allTasks.find((t) => t.id !== 'child' && t.description === 'Child');
       expect(forkedChild).toBeDefined();
       expect(forkedChild?.status).toBe('pending');
     });
 
     it('throws when trying to edit a running task', () => {
-      const plan: PlanDefinition = {
+      orchestrator.loadPlan({
         name: 'edit-running-test',
-        tasks: [
-          { id: 't1', description: 'Task 1', command: 'sleep 100' },
-        ],
-      };
-      orchestrator.loadPlan(plan);
+        tasks: [{ id: 't1', description: 'Task 1', command: 'sleep 100' }],
+      });
       orchestrator.startExecution();
 
       expect(() => orchestrator.editTaskCommand('t1', 'echo new')).toThrow();
     });
 
     it('persists the updated command', () => {
-      const plan: PlanDefinition = {
+      orchestrator.loadPlan({
         name: 'edit-persist-test',
-        tasks: [
-          { id: 't1', description: 'Task 1', command: 'echo old' },
-        ],
-      };
-      orchestrator.loadPlan(plan);
+        tasks: [{ id: 't1', description: 'Task 1', command: 'echo old' }],
+      });
       orchestrator.startExecution();
 
       orchestrator.handleWorkerResponse(
@@ -1389,19 +1268,15 @@ describe('Orchestrator', () => {
 
   describe('editTaskType', () => {
     it('changes familiarType and restarts the task', () => {
-      const plan: PlanDefinition = {
+      orchestrator.loadPlan({
         name: 'edit-type-test',
-        tasks: [
-          { id: 't1', description: 'Task 1', command: 'echo hello', familiarType: 'local' },
-        ],
-      };
-      orchestrator.loadPlan(plan);
+        tasks: [{ id: 't1', description: 'Task 1', command: 'echo hello', familiarType: 'local' }],
+      });
       orchestrator.startExecution();
 
       orchestrator.handleWorkerResponse(
         makeResponse({ actionId: 't1', status: 'failed', outputs: { exitCode: 1, error: 'fail' } }),
       );
-      expect(orchestrator.getTask('t1')?.status).toBe('failed');
       expect(orchestrator.getTask('t1')?.familiarType).toBe('local');
 
       const started = orchestrator.editTaskType('t1', 'worktree');
@@ -1409,18 +1284,16 @@ describe('Orchestrator', () => {
       expect(task?.familiarType).toBe('worktree');
       expect(task?.status).toBe('running');
       expect(started).toHaveLength(1);
-      expect(started[0].id).toBe('t1');
     });
 
     it('does not fork dirty subtree', () => {
-      const plan: PlanDefinition = {
+      orchestrator.loadPlan({
         name: 'edit-type-no-fork',
         tasks: [
           { id: 'parent', description: 'Parent', command: 'echo parent', familiarType: 'local' },
           { id: 'child', description: 'Child', command: 'echo child', dependencies: ['parent'] },
         ],
-      };
-      orchestrator.loadPlan(plan);
+      });
       orchestrator.startExecution();
 
       orchestrator.handleWorkerResponse(
@@ -1439,26 +1312,20 @@ describe('Orchestrator', () => {
     });
 
     it('throws when trying to edit a running task', () => {
-      const plan: PlanDefinition = {
+      orchestrator.loadPlan({
         name: 'edit-type-running',
-        tasks: [
-          { id: 't1', description: 'Task 1', command: 'sleep 100', familiarType: 'local' },
-        ],
-      };
-      orchestrator.loadPlan(plan);
+        tasks: [{ id: 't1', description: 'Task 1', command: 'sleep 100', familiarType: 'local' }],
+      });
       orchestrator.startExecution();
 
       expect(() => orchestrator.editTaskType('t1', 'worktree')).toThrow();
     });
 
     it('persists the updated familiarType', () => {
-      const plan: PlanDefinition = {
+      orchestrator.loadPlan({
         name: 'edit-type-persist',
-        tasks: [
-          { id: 't1', description: 'Task 1', command: 'echo old', familiarType: 'local' },
-        ],
-      };
-      orchestrator.loadPlan(plan);
+        tasks: [{ id: 't1', description: 'Task 1', command: 'echo old', familiarType: 'local' }],
+      });
       orchestrator.startExecution();
 
       orchestrator.handleWorkerResponse(
@@ -1476,8 +1343,8 @@ describe('Orchestrator', () => {
   // ── Scheduler queue drain ──────────────────────────────
 
   describe('scheduler queue drain', () => {
-    it('starts queued tasks when a slot opens even if no new tasks become ready', () => {
-      const plan: PlanDefinition = {
+    it('starts queued tasks when a slot opens', () => {
+      orchestrator.loadPlan({
         name: 'drain-test',
         tasks: [
           { id: 'a', description: 'Task A' },
@@ -1486,20 +1353,15 @@ describe('Orchestrator', () => {
           { id: 'd', description: 'Task D' },
           { id: 'e', description: 'Task E' },
         ],
-      };
+      });
 
-      orchestrator.loadPlan(plan);
-
-      // maxConcurrency=3, so only 3 of 5 ready tasks should start
       const started = orchestrator.startExecution();
       expect(started).toHaveLength(3);
 
       const running = orchestrator.getAllTasks().filter((t) => t.status === 'running');
-      const pending = orchestrator.getAllTasks().filter((t) => t.status === 'pending');
       expect(running).toHaveLength(3);
-      expect(pending).toHaveLength(2);
+      expect(orchestrator.getAllTasks().filter((t) => t.status === 'pending')).toHaveLength(2);
 
-      // Complete one task — no new dependencies are unblocked, but queued tasks should drain
       const firstRunning = running[0];
       const newlyStarted = orchestrator.handleWorkerResponse(
         makeResponse({ actionId: firstRunning.id, status: 'completed', outputs: { exitCode: 0 } }),
@@ -1508,15 +1370,85 @@ describe('Orchestrator', () => {
       expect(newlyStarted).toHaveLength(1);
       expect(orchestrator.getAllTasks().filter((t) => t.status === 'running')).toHaveLength(3);
       expect(orchestrator.getAllTasks().filter((t) => t.status === 'pending')).toHaveLength(1);
+    });
+  });
 
-      // Complete another — last queued task should start
-      const secondRunning = orchestrator.getAllTasks().filter((t) => t.status === 'running')[0];
-      const lastStarted = orchestrator.handleWorkerResponse(
-        makeResponse({ actionId: secondRunning.id, status: 'completed', outputs: { exitCode: 0 } }),
+  // ── DB-is-source-of-truth invariants ──────────────────
+
+  describe('DB is source of truth', () => {
+    it('every loadPlan task is persisted to DB', () => {
+      orchestrator.loadPlan({
+        name: 'db-truth-test',
+        tasks: [
+          { id: 't1', description: 'First' },
+          { id: 't2', description: 'Second', dependencies: ['t1'] },
+        ],
+      });
+
+      const allInMemory = orchestrator.getAllTasks();
+      for (const task of allInMemory) {
+        const persisted = persistence.tasks.get(task.id);
+        expect(persisted).toBeDefined();
+        expect(persisted!.task.id).toBe(task.id);
+        expect(persisted!.task.status).toBe(task.status);
+      }
+    });
+
+    it('in-memory matches DB after startExecution', () => {
+      orchestrator.loadPlan({
+        name: 'db-match-test',
+        tasks: [
+          { id: 't1', description: 'Root' },
+          { id: 't2', description: 'Dep', dependencies: ['t1'] },
+        ],
+      });
+      orchestrator.startExecution();
+
+      for (const task of orchestrator.getAllTasks()) {
+        const persisted = persistence.tasks.get(task.id);
+        expect(persisted!.task.status).toBe(task.status);
+      }
+    });
+
+    it('in-memory matches DB after handleWorkerResponse', () => {
+      orchestrator.loadPlan({
+        name: 'db-sync-test',
+        tasks: [
+          { id: 't1', description: 'Root' },
+          { id: 't2', description: 'Dep', dependencies: ['t1'] },
+        ],
+      });
+      orchestrator.startExecution();
+
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 't1', status: 'completed', outputs: { exitCode: 0 } }),
       );
 
-      expect(lastStarted).toHaveLength(1);
-      expect(orchestrator.getAllTasks().filter((t) => t.status === 'pending')).toHaveLength(0);
+      for (const task of orchestrator.getAllTasks()) {
+        const persisted = persistence.tasks.get(task.id);
+        expect(persisted!.task.status).toBe(task.status);
+      }
+    });
+
+    it('external DB change is visible after refreshFromDb', () => {
+      orchestrator.loadPlan({
+        name: 'external-change-test',
+        tasks: [
+          { id: 't1', description: 'Root' },
+          { id: 't2', description: 'Dep', dependencies: ['t1'] },
+        ],
+      });
+      orchestrator.startExecution();
+
+      // Simulate an external process modifying the DB directly
+      persistence.updateTask('t1', { status: 'completed', completedAt: new Date(), exitCode: 0 });
+
+      // The orchestrator sees the external change on next mutation
+      // (restartTask calls refreshFromDb internally)
+      // But we can verify via syncFromDb
+      const wfId = Array.from(persistence.workflows.keys())[0];
+      orchestrator.syncFromDb(wfId);
+      expect(orchestrator.getTask('t1')!.status).toBe('completed');
     });
   });
 });

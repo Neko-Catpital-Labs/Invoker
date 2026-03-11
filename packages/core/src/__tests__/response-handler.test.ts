@@ -1,18 +1,12 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { ResponseHandler } from '../response-handler.js';
-import { TaskStateMachine } from '../state-machine.js';
-import { ExperimentManager } from '../experiments.js';
 import type { WorkResponse } from '@invoker/protocol';
 
-describe('ResponseHandler', () => {
-  let sm: TaskStateMachine;
-  let em: ExperimentManager;
+describe('ResponseHandler (pure parser)', () => {
   let handler: ResponseHandler;
 
   beforeEach(() => {
-    sm = new TaskStateMachine();
-    em = new ExperimentManager();
-    handler = new ResponseHandler({ stateMachine: sm, experimentManager: em });
+    handler = new ResponseHandler();
   });
 
   function makeResponse(overrides: Partial<WorkResponse>): WorkResponse {
@@ -25,55 +19,83 @@ describe('ResponseHandler', () => {
     };
   }
 
-  describe('completed', () => {
-    it('marks task complete and returns ready tasks', () => {
-      sm.createTask('t1', 'First', []);
-      sm.createTask('t2', 'Second', ['t1']);
-      sm.startTask('t1');
+  // ── completed ──────────────────────────────────────────
 
-      const result = handler.handleResponse(makeResponse({ status: 'completed' }));
-      expect(result.success).toBe(true);
-      expect(result.readyTasks).toContain('t2');
-      expect(sm.getTask('t1')?.status).toBe('completed');
+  describe('completed', () => {
+    it('parses a completed response', () => {
+      const result = handler.parseResponse(makeResponse({ status: 'completed' }));
+      expect('type' in result && result.type === 'completed').toBe(true);
+      if (!('type' in result)) return;
+      expect(result.type).toBe('completed');
+      expect(result.taskId).toBe('t1');
+      expect(result.exitCode).toBe(0);
+    });
+
+    it('includes summary, commitHash, claudeSessionId when present', () => {
+      const result = handler.parseResponse(
+        makeResponse({
+          status: 'completed',
+          outputs: { exitCode: 0, summary: 'done', commitHash: 'abc', claudeSessionId: 'sess-1' },
+        }),
+      );
+      expect('type' in result).toBe(true);
+      if (!('type' in result)) return;
+      expect(result).toEqual({
+        type: 'completed',
+        taskId: 't1',
+        exitCode: 0,
+        summary: 'done',
+        commitHash: 'abc',
+        claudeSessionId: 'sess-1',
+      });
     });
   });
+
+  // ── failed ─────────────────────────────────────────────
 
   describe('failed', () => {
-    it('marks task failed and returns blocked tasks', () => {
-      sm.createTask('t1', 'First', []);
-      sm.createTask('t2', 'Second', ['t1']);
-      sm.startTask('t1');
-
-      const result = handler.handleResponse(
+    it('parses a failed response', () => {
+      const result = handler.parseResponse(
         makeResponse({ status: 'failed', outputs: { exitCode: 1, error: 'boom' } }),
       );
-      expect(result.success).toBe(true);
-      expect(result.blockedTasks).toContain('t2');
-      expect(sm.getTask('t1')?.status).toBe('failed');
+      expect('type' in result).toBe(true);
+      if (!('type' in result)) return;
+      expect(result.type).toBe('failed');
+      expect(result.taskId).toBe('t1');
+      expect(result.exitCode).toBe(1);
+      expect(result.error).toBe('boom');
     });
   });
+
+  // ── needs_input ────────────────────────────────────────
 
   describe('needs_input', () => {
-    it('pauses task with prompt', () => {
-      sm.createTask('t1', 'Task', []);
-      sm.startTask('t1');
-
-      const result = handler.handleResponse(
+    it('parses a needs_input response', () => {
+      const result = handler.parseResponse(
         makeResponse({ status: 'needs_input', outputs: { summary: 'What now?' } }),
       );
-      expect(result.success).toBe(true);
-      expect(sm.getTask('t1')?.status).toBe('needs_input');
-      expect(sm.getTask('t1')?.inputPrompt).toBe('What now?');
+      expect('type' in result).toBe(true);
+      if (!('type' in result)) return;
+      expect(result.type).toBe('needs_input');
+      expect(result.taskId).toBe('t1');
+      expect(result.prompt).toBe('What now?');
+    });
+
+    it('uses default prompt when summary is missing', () => {
+      const result = handler.parseResponse(
+        makeResponse({ status: 'needs_input', outputs: {} }),
+      );
+      expect('type' in result).toBe(true);
+      if (!('type' in result)) return;
+      expect(result.prompt).toBe('Task requires input');
     });
   });
+
+  // ── spawn_experiments ──────────────────────────────────
 
   describe('spawn_experiments', () => {
-    it('creates experiment group and rewrites dependencies', () => {
-      sm.createTask('t1', 'Pivot', []);
-      sm.createTask('downstream', 'Down', ['t1']);
-      sm.startTask('t1');
-
-      const result = handler.handleResponse(
+    it('parses variants with prefixed IDs', () => {
+      const result = handler.parseResponse(
         makeResponse({
           status: 'spawn_experiments',
           dagMutation: {
@@ -87,168 +109,70 @@ describe('ResponseHandler', () => {
           },
         }),
       );
-
-      expect(result.success).toBe(true);
-      expect(result.readyTasks).toBeDefined();
-
-      // Experiments should exist
-      expect(sm.getTask('t1-exp-v1')).toBeDefined();
-      expect(sm.getTask('t1-exp-v2')).toBeDefined();
-
-      // Reconciliation should exist
-      expect(sm.getTask('t1-reconciliation')).toBeDefined();
-      expect(sm.getTask('t1-reconciliation')?.isReconciliation).toBe(true);
-
-      // Downstream should depend on reconciliation
-      expect(sm.getTask('downstream')?.dependencies).toContain('t1-reconciliation');
+      expect('type' in result).toBe(true);
+      if (!('type' in result)) return;
+      expect(result.type).toBe('spawn_experiments');
+      expect(result.taskId).toBe('t1');
+      expect(result.variants).toHaveLength(2);
+      expect(result.variants[0].id).toBe('t1-exp-v1');
+      expect(result.variants[1].id).toBe('t1-exp-v2');
     });
 
-    it('spawn_experiments response includes parent task completion delta', () => {
-      sm.createTask('t1', 'Pivot', []);
-      sm.startTask('t1');
-
-      const result = handler.handleResponse(
-        makeResponse({
-          status: 'spawn_experiments',
-          dagMutation: {
-            spawnExperiments: {
-              description: 'Try variants',
-              variants: [
-                { id: 'v1', prompt: 'A' },
-              ],
-            },
-          },
-        }),
+    it('returns error when dagMutation.spawnExperiments is missing', () => {
+      const result = handler.parseResponse(
+        makeResponse({ status: 'spawn_experiments' }),
       );
-
-      expect(result.success).toBe(true);
-      expect(result.deltas).toBeDefined();
-
-      // The first delta should be the parent task completion (updated type)
-      const parentDelta = result.deltas!.find(
-        (d) => d.type === 'updated' && d.taskId === 't1',
-      );
-      expect(parentDelta).toBeDefined();
-      expect(parentDelta!.type).toBe('updated');
-      if (parentDelta!.type === 'updated') {
-        expect(parentDelta!.changes.status).toBe('completed');
-      }
-
-      // Parent task should now be completed in the state machine
-      expect(sm.getTask('t1')?.status).toBe('completed');
-    });
-
-    it('spawn_experiments deltas are ordered: parent completion first, then experiment creations', () => {
-      sm.createTask('t1', 'Pivot', []);
-      sm.startTask('t1');
-
-      const result = handler.handleResponse(
-        makeResponse({
-          status: 'spawn_experiments',
-          dagMutation: {
-            spawnExperiments: {
-              description: 'Try variants',
-              variants: [
-                { id: 'v1', prompt: 'A' },
-                { id: 'v2', prompt: 'B' },
-              ],
-            },
-          },
-        }),
-      );
-
-      expect(result.success).toBe(true);
-      const deltas = result.deltas!;
-
-      // First delta: parent task completion (updated)
-      expect(deltas[0].type).toBe('updated');
-      if (deltas[0].type === 'updated') {
-        expect(deltas[0].taskId).toBe('t1');
-        expect(deltas[0].changes.status).toBe('completed');
-      }
-
-      // Remaining deltas: experiment creations and reconciliation
-      const createdDeltas = deltas.filter((d) => d.type === 'created');
-      expect(createdDeltas.length).toBeGreaterThanOrEqual(2); // at least 2 experiments + recon
+      expect('error' in result).toBe(true);
     });
   });
 
+  // ── select_experiment ──────────────────────────────────
+
   describe('select_experiment', () => {
-    it('completes reconciliation with selected experiment', () => {
-      sm.createTask('pivot', 'Pivot', []);
-      sm.createTask('recon', 'Reconciliation', [], { isReconciliation: true });
-      sm.createTask('downstream', 'Down', ['recon']);
-
-      // Set up reconciliation state
-      sm.triggerReconciliation('recon', [
-        { id: 'exp1', status: 'completed', exitCode: 0 },
-      ]);
-
-      const result = handler.handleResponse(
+    it('parses selected experiment ID', () => {
+      const result = handler.parseResponse(
         makeResponse({
           actionId: 'recon',
           status: 'select_experiment',
           dagMutation: { selectExperiment: { experimentId: 'exp1' } },
         }),
       );
-
-      expect(result.success).toBe(true);
-      expect(sm.getTask('recon')?.status).toBe('completed');
-      expect(sm.getTask('recon')?.selectedExperiment).toBe('exp1');
-      expect(result.readyTasks).toContain('downstream');
+      expect('type' in result).toBe(true);
+      if (!('type' in result)) return;
+      expect(result.type).toBe('select_experiment');
+      expect(result.taskId).toBe('recon');
+      expect(result.experimentId).toBe('exp1');
     });
-  });
 
-  describe('commitHash flow-through', () => {
-    it('stores commitHash on the task when response includes outputs.commitHash', () => {
-      sm.createTask('t1', 'Task with commit', []);
-      sm.startTask('t1');
-
-      const result = handler.handleResponse(
-        makeResponse({
-          actionId: 't1',
-          status: 'completed',
-          outputs: { exitCode: 0, commitHash: 'abc123' },
-        }),
+    it('returns error when dagMutation.selectExperiment is missing', () => {
+      const result = handler.parseResponse(
+        makeResponse({ status: 'select_experiment' }),
       );
-
-      expect(result.success).toBe(true);
-      expect(sm.getTask('t1')?.status).toBe('completed');
-      expect(sm.getTask('t1')?.commit).toBe('abc123');
+      expect('error' in result).toBe(true);
     });
   });
 
-  describe('claudeSessionId flow-through', () => {
-    it('stores claudeSessionId on the task when response includes it', () => {
-      sm.createTask('t1', 'Claude task', []);
-      sm.startTask('t1');
-
-      const result = handler.handleResponse(
-        makeResponse({
-          actionId: 't1',
-          status: 'completed',
-          outputs: { exitCode: 0, claudeSessionId: 'sess-456' },
-        }),
-      );
-
-      expect(result.success).toBe(true);
-      expect(sm.getTask('t1')?.claudeSessionId).toBe('sess-456');
-    });
-  });
+  // ── validation ─────────────────────────────────────────
 
   describe('validation', () => {
     it('rejects invalid response format', () => {
-      const result = handler.handleResponse({} as any);
-      expect(result.success).toBe(false);
-      expect(result.error).toBeDefined();
+      const result = handler.parseResponse({} as any);
+      expect('error' in result).toBe(true);
+    });
+  });
+
+  // ── no state mutation ──────────────────────────────────
+
+  describe('purity', () => {
+    it('does not require any constructor dependencies', () => {
+      const h = new ResponseHandler();
+      expect(h).toBeDefined();
     });
 
-    it('handles unknown actionId gracefully', () => {
-      const result = handler.handleResponse(
-        makeResponse({ actionId: 'nonexistent', status: 'completed' }),
-      );
-      expect(result.success).toBe(false);
-      expect(result.error).toContain('nonexistent');
+    it('returns data without side effects', () => {
+      const r1 = handler.parseResponse(makeResponse({ status: 'completed' }));
+      const r2 = handler.parseResponse(makeResponse({ status: 'completed' }));
+      expect(r1).toEqual(r2);
     });
   });
 });
