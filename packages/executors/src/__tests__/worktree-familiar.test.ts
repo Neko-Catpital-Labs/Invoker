@@ -658,9 +658,20 @@ describe('WorktreeFamiliar', () => {
   });
 
   describe('stale worktree on restart', () => {
-    it('fails when branch is still locked after prune (e.g. worktree dir on disk)', async () => {
-      // Even after prune, if the old worktree dir still exists on disk,
-      // git refuses to create a new worktree with the same branch.
+    const porcelainWithConflict = [
+      'worktree /repo',
+      'HEAD aaa111',
+      'branch refs/heads/main',
+      '',
+      'worktree /old/worktree',
+      'HEAD bbb222',
+      'branch refs/heads/experiment/action-1',
+      '',
+    ].join('\n');
+
+    it('force-removes conflicting worktree found via worktree list', async () => {
+      let removedPath: string | null = null;
+
       mockedSpawn.mockImplementation((cmd: string, args?: readonly string[]) => {
         const proc = createMockProcess();
         const argsArr = args as string[];
@@ -668,6 +679,44 @@ describe('WorktreeFamiliar', () => {
         Promise.resolve().then(() => {
           if (cmd === 'git' && argsArr?.includes('prune')) {
             proc.emit('close', 0, null);
+          } else if (cmd === 'git' && argsArr?.[0] === 'worktree' && argsArr?.[1] === 'list') {
+            proc.stdout!.emit('data', Buffer.from(porcelainWithConflict));
+            proc.emit('close', 0, null);
+          } else if (cmd === 'git' && argsArr?.[0] === 'worktree' && argsArr?.[1] === 'remove') {
+            removedPath = argsArr[3]; // ['worktree', 'remove', '--force', '<path>']
+            proc.emit('close', 0, null);
+          } else if (cmd === 'git' && argsArr?.includes('rev-parse')) {
+            proc.stdout!.emit('data', Buffer.from('abc123def456\n'));
+            proc.emit('close', 0, null);
+          } else {
+            proc.emit('close', 0, null);
+          }
+        });
+
+        return proc as any;
+      });
+
+      const request = makeRequest();
+      const handle = await familiar.start(request);
+      expect(handle).toBeDefined();
+      expect(removedPath).toBe('/old/worktree');
+    });
+
+    it('still fails if force-remove and worktree add both fail', async () => {
+      mockedSpawn.mockImplementation((cmd: string, args?: readonly string[]) => {
+        const proc = createMockProcess();
+        const argsArr = args as string[];
+
+        Promise.resolve().then(() => {
+          if (cmd === 'git' && argsArr?.includes('prune')) {
+            proc.emit('close', 0, null);
+          } else if (cmd === 'git' && argsArr?.[0] === 'worktree' && argsArr?.[1] === 'list') {
+            // List returns the conflict but remove will also fail
+            proc.stdout!.emit('data', Buffer.from(porcelainWithConflict));
+            proc.emit('close', 0, null);
+          } else if (cmd === 'git' && argsArr?.[0] === 'worktree' && argsArr?.[1] === 'remove') {
+            proc.stderr!.emit('data', Buffer.from('fatal: cannot remove locked worktree\n'));
+            proc.emit('close', 128, null);
           } else if (cmd === 'git' && argsArr?.includes('worktree') && argsArr?.includes('add')) {
             proc.stderr!.emit('data', Buffer.from(
               "fatal: 'experiment/action-1' is already used by worktree at '/old/worktree'\n",
@@ -685,8 +734,14 @@ describe('WorktreeFamiliar', () => {
       await expect(familiar.start(request)).rejects.toThrow(/Failed to create worktree/);
     });
 
-    it('succeeds after git worktree prune cleans stale references', async () => {
-      let pruned = false;
+    it('no force-remove needed when no conflicting worktree exists', async () => {
+      const emptyPorcelain = [
+        'worktree /repo',
+        'HEAD aaa111',
+        'branch refs/heads/main',
+        '',
+      ].join('\n');
+      let removeWasCalled = false;
 
       mockedSpawn.mockImplementation((cmd: string, args?: readonly string[]) => {
         const proc = createMockProcess();
@@ -694,16 +749,13 @@ describe('WorktreeFamiliar', () => {
 
         Promise.resolve().then(() => {
           if (cmd === 'git' && argsArr?.includes('prune')) {
-            pruned = true;
             proc.emit('close', 0, null);
-          } else if (cmd === 'git' && argsArr?.includes('worktree') && argsArr?.includes('add')) {
-            if (argsArr?.includes('-b') && !pruned) {
-              // First attempt without prune would fail
-              proc.stderr!.emit('data', Buffer.from("fatal: branch already exists\n"));
-              proc.emit('close', 128, null);
-            } else {
-              proc.emit('close', 0, null);
-            }
+          } else if (cmd === 'git' && argsArr?.[0] === 'worktree' && argsArr?.[1] === 'list') {
+            proc.stdout!.emit('data', Buffer.from(emptyPorcelain));
+            proc.emit('close', 0, null);
+          } else if (cmd === 'git' && argsArr?.[0] === 'worktree' && argsArr?.[1] === 'remove') {
+            removeWasCalled = true;
+            proc.emit('close', 0, null);
           } else if (cmd === 'git' && argsArr?.includes('rev-parse')) {
             proc.stdout!.emit('data', Buffer.from('abc123def456\n'));
             proc.emit('close', 0, null);
@@ -718,7 +770,7 @@ describe('WorktreeFamiliar', () => {
       const request = makeRequest();
       const handle = await familiar.start(request);
       expect(handle).toBeDefined();
-      expect(pruned).toBe(true);
+      expect(removeWasCalled).toBe(false);
     });
   });
 });
