@@ -260,6 +260,19 @@ export function App() {
     [invoker],
   );
 
+  // ── Edit task executor type ───────────────────────────────
+  const handleEditType = useCallback(
+    async (taskId: string, familiarType: string) => {
+      if (!invoker) return;
+      try {
+        await invoker.editTaskType(taskId, familiarType);
+      } catch (err) {
+        console.error('Failed to edit task type:', err);
+      }
+    },
+    [invoker],
+  );
+
   // ── Modal triggers ────────────────────────────────────────
   const openInputModal = useCallback((task: TaskState) => {
     setModal({ type: 'input', task });
@@ -336,6 +349,7 @@ export function App() {
               }}
               onSelectExperiment={openExperimentModal}
               onEditCommand={handleEditCommand}
+              onEditType={handleEditType}
             />
           </div>
 

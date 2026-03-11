@@ -359,6 +359,34 @@ describe('TaskStateMachine', () => {
       sm.updateTaskFields('t1', { command: 'new' });
       expect(sm.getTask('t1')?.command).toBe('new');
     });
+
+    it('updates familiarType on a pending task', () => {
+      sm.createTask('t1', 'Task', [], { command: 'ls', familiarType: 'local' });
+      const result = sm.updateTaskFields('t1', { familiarType: 'worktree' });
+
+      expect('task' in result).toBe(true);
+      if ('task' in result) {
+        expect(result.task.familiarType).toBe('worktree');
+        expect(result.task.status).toBe('pending');
+        expect(result.delta.type).toBe('updated');
+        if (result.delta.type === 'updated') {
+          expect(result.delta.changes).toEqual({ familiarType: 'worktree' });
+        }
+      }
+    });
+
+    it('updates familiarType on a failed task', () => {
+      sm.createTask('t1', 'Task', [], { command: 'bad-cmd', familiarType: 'local' });
+      sm.startTask('t1');
+      sm.failTask('t1', 1, 'not found');
+      const result = sm.updateTaskFields('t1', { familiarType: 'worktree' });
+
+      expect('task' in result).toBe(true);
+      if ('task' in result) {
+        expect(result.task.familiarType).toBe('worktree');
+        expect(result.task.status).toBe('failed');
+      }
+    });
   });
 
   // ── Immutability ──────────────────────────────────────

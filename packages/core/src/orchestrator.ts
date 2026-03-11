@@ -388,6 +388,18 @@ export class Orchestrator {
   }
 
   /**
+   * Change a task's executor type (familiarType) and restart it.
+   * Unlike editTaskCommand, this does NOT fork the dirty subtree — changing
+   * the executor doesn't invalidate downstream results.
+   */
+  editTaskType(taskId: string, familiarType: string): TaskState[] {
+    const result = this.stateMachine.updateTaskFields(taskId, { familiarType });
+    if ('error' in result) throw new Error(result.error);
+    this.persistAndPublish(result.task, result.delta);
+    return this.restartTask(taskId);
+  }
+
+  /**
    * Fork the subtree downstream of a dirty task.
    *
    * 1. Mark all transitive descendants as 'stale'

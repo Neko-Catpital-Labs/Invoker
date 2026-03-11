@@ -1385,6 +1385,94 @@ describe('Orchestrator', () => {
     });
   });
 
+  // ── editTaskType ───────────────────────────────────────
+
+  describe('editTaskType', () => {
+    it('changes familiarType and restarts the task', () => {
+      const plan: PlanDefinition = {
+        name: 'edit-type-test',
+        tasks: [
+          { id: 't1', description: 'Task 1', command: 'echo hello', familiarType: 'local' },
+        ],
+      };
+      orchestrator.loadPlan(plan);
+      orchestrator.startExecution();
+
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 't1', status: 'failed', outputs: { exitCode: 1, error: 'fail' } }),
+      );
+      expect(orchestrator.getTask('t1')?.status).toBe('failed');
+      expect(orchestrator.getTask('t1')?.familiarType).toBe('local');
+
+      const started = orchestrator.editTaskType('t1', 'worktree');
+      const task = orchestrator.getTask('t1');
+      expect(task?.familiarType).toBe('worktree');
+      expect(task?.status).toBe('running');
+      expect(started).toHaveLength(1);
+      expect(started[0].id).toBe('t1');
+    });
+
+    it('does not fork dirty subtree', () => {
+      const plan: PlanDefinition = {
+        name: 'edit-type-no-fork',
+        tasks: [
+          { id: 'parent', description: 'Parent', command: 'echo parent', familiarType: 'local' },
+          { id: 'child', description: 'Child', command: 'echo child', dependencies: ['parent'] },
+        ],
+      };
+      orchestrator.loadPlan(plan);
+      orchestrator.startExecution();
+
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 'parent', status: 'completed', outputs: { exitCode: 0 } }),
+      );
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 'child', status: 'completed', outputs: { exitCode: 0 } }),
+      );
+
+      const taskCountBefore = orchestrator.getAllTasks().length;
+      orchestrator.editTaskType('parent', 'worktree');
+      const taskCountAfter = orchestrator.getAllTasks().length;
+
+      expect(taskCountAfter).toBe(taskCountBefore);
+      expect(orchestrator.getTask('child')?.status).toBe('completed');
+    });
+
+    it('throws when trying to edit a running task', () => {
+      const plan: PlanDefinition = {
+        name: 'edit-type-running',
+        tasks: [
+          { id: 't1', description: 'Task 1', command: 'sleep 100', familiarType: 'local' },
+        ],
+      };
+      orchestrator.loadPlan(plan);
+      orchestrator.startExecution();
+
+      expect(() => orchestrator.editTaskType('t1', 'worktree')).toThrow();
+    });
+
+    it('persists the updated familiarType', () => {
+      const plan: PlanDefinition = {
+        name: 'edit-type-persist',
+        tasks: [
+          { id: 't1', description: 'Task 1', command: 'echo old', familiarType: 'local' },
+        ],
+      };
+      orchestrator.loadPlan(plan);
+      orchestrator.startExecution();
+
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 't1', status: 'failed', outputs: { exitCode: 1, error: 'oops' } }),
+      );
+
+      orchestrator.editTaskType('t1', 'worktree');
+
+      const persisted = persistence.tasks.get('t1');
+      expect(persisted).toBeDefined();
+      expect(persisted?.task.familiarType).toBe('worktree');
+    });
+  });
+
   // ── Scheduler queue drain ──────────────────────────────
 
   describe('scheduler queue drain', () => {

@@ -258,6 +258,9 @@ async function runHeadless(args: string[]): Promise<void> {
     case 'edit':
       await headlessEdit(args[1], args.slice(2).join(' '));
       break;
+    case 'edit-type':
+      await headlessEditType(args[1], args[2]);
+      break;
     case 'audit':
       await headlessAudit(args[1]);
       break;
@@ -474,6 +477,29 @@ async function headlessEdit(taskId: string, newCommand: string): Promise<void> {
 
   const started = orchestrator.editTaskCommand(taskId, newCommand);
   console.log(`Edited task "${taskId}" command → "${newCommand}"`);
+
+  const taskExecutor = new TaskExecutor({
+    orchestrator,
+    persistence,
+    familiarRegistry,
+    cwd: repoRoot,
+    callbacks: {
+      onOutput: (tid, data) => {
+        process.stdout.write(`\x1b[2m[${tid}]\x1b[0m ${data}`);
+      },
+    },
+  });
+
+  await taskExecutor.executeTasks(started);
+  await waitForCompletion();
+}
+
+async function headlessEditType(taskId: string, familiarType: string): Promise<void> {
+  if (!taskId || !familiarType) throw new Error('Missing arguments. Usage: --headless edit-type <taskId> <familiarType>');
+  const workflowId = restoreWorkflowForTask(taskId);
+
+  const started = orchestrator.editTaskType(taskId, familiarType);
+  console.log(`Edited task "${taskId}" familiarType → "${familiarType}"`);
 
   const taskExecutor = new TaskExecutor({
     orchestrator,
@@ -970,6 +996,18 @@ function setupGuiMode(): void {
         await taskExecutor.executeTasks(runnable);
       } catch (err) {
         console.error(`[ipc] edit-task-command failed: ${err}`);
+        throw err;
+      }
+    });
+
+    ipcMain.handle('invoker:edit-task-type', async (_event, taskId: string, familiarType: string) => {
+      console.log(`[ipc] edit-task-type: "${taskId}" → "${familiarType}"`);
+      try {
+        const started = orchestrator.editTaskType(taskId, familiarType);
+        const runnable = started.filter(t => t.status === 'running');
+        await taskExecutor.executeTasks(runnable);
+      } catch (err) {
+        console.error(`[ipc] edit-task-type failed: ${err}`);
         throw err;
       }
     });

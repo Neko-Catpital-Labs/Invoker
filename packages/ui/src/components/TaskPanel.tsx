@@ -19,6 +19,7 @@ interface TaskPanelProps {
   onReject: (task: TaskState) => void;
   onSelectExperiment: (task: TaskState) => void;
   onEditCommand?: (taskId: string, newCommand: string) => void;
+  onEditType?: (taskId: string, familiarType: string) => void;
 }
 
 function formatDate(date?: Date | string): string {
@@ -34,6 +35,7 @@ export function TaskPanel({
   onReject,
   onSelectExperiment,
   onEditCommand,
+  onEditType,
 }: TaskPanelProps) {
   const [isEditingCommand, setIsEditingCommand] = useState(false);
   const [editCommandValue, setEditCommandValue] = useState('');
@@ -90,6 +92,24 @@ export function TaskPanel({
           {task.status.toUpperCase().replace('_', ' ')}
         </span>
       </div>
+
+      {/* Executor type selector */}
+      {onEditType && (
+        <div className="flex items-center justify-between">
+          <span className="text-sm text-gray-400">Executor</span>
+          <select
+            value={task.familiarType ?? 'local'}
+            onChange={(e) => onEditType(task.id, e.target.value)}
+            disabled={task.status === 'running'}
+            className="bg-gray-700 text-gray-200 text-xs rounded px-2 py-1 border border-gray-600 focus:outline-none focus:border-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+            data-testid="executor-type-select"
+          >
+            <option value="local">Local</option>
+            <option value="worktree">Worktree</option>
+            <option value="docker">Docker</option>
+          </select>
+        </div>
+      )}
 
       {/* Task type + content */}
       {(task.prompt || task.command) && (

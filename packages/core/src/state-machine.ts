@@ -285,7 +285,7 @@ export class TaskStateMachine {
    */
   updateTaskFields(
     taskId: string,
-    changes: Partial<Pick<TaskState, 'command' | 'prompt'>>,
+    changes: Partial<Pick<TaskState, 'command' | 'prompt' | 'familiarType'>>,
   ): TransitionResult | { error: string } {
     const task = this.graph.getNode(taskId);
     if (!task) return { error: `Task ${taskId} not found` };
