@@ -1151,6 +1151,9 @@ function setupGuiMode(): void {
       const familiarType = persistence.getFamiliarType(taskId);
       const sessionId = persistence.getClaudeSessionId(taskId);
       const containerId = persistence.getContainerId(taskId);
+      // #region agent log
+      fetch('http://127.0.0.1:7658/ingest/762b7479-8057-4c6f-a805-85ee7d433bf5',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'561162'},body:JSON.stringify({sessionId:'561162',location:'main.ts:open-terminal',message:'open-terminal DB values',data:{taskId,taskStatus,familiarType,sessionId,containerId},timestamp:Date.now(),hypothesisId:'H1-H3'})}).catch(()=>{});
+      // #endregion
       let spec: { cwd?: string; command?: string; args?: string[] } | null = null;
 
       if (familiarType === 'docker' && containerId) {
@@ -1164,7 +1167,16 @@ function setupGuiMode(): void {
       }
 
       const wsPath = persistence.getWorkspacePath(taskId);
-      const cwd = spec?.cwd ?? wsPath ?? repoRoot;
+      // #region agent log
+      const { existsSync } = require('node:fs');
+      const wsPathExists = wsPath ? existsSync(wsPath) : false;
+      fetch('http://127.0.0.1:7658/ingest/762b7479-8057-4c6f-a805-85ee7d433bf5',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'561162'},body:JSON.stringify({sessionId:'561162',location:'main.ts:open-terminal-exists-check',message:'wsPath existence check',data:{taskId,wsPath,wsPathExists},timestamp:Date.now(),hypothesisId:'H2-fix'})}).catch(()=>{});
+      // #endregion
+      const effectiveWsPath = (wsPath && wsPathExists) ? wsPath : null;
+      const cwd = spec?.cwd ?? effectiveWsPath ?? repoRoot;
+      // #region agent log
+      fetch('http://127.0.0.1:7658/ingest/762b7479-8057-4c6f-a805-85ee7d433bf5',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'561162'},body:JSON.stringify({sessionId:'561162',location:'main.ts:open-terminal-cwd',message:'open-terminal resolved cwd',data:{taskId,wsPath,cwd,repoRoot,specCwd:spec?.cwd??null},timestamp:Date.now(),hypothesisId:'H1-H2-H4'})}).catch(()=>{});
+      // #endregion
       console.log(`[ipc] open-terminal: task="${taskId}" cwd="${cwd}" spec=${JSON.stringify(spec)}`);
 
       // Helper: after terminal closes, check if worktree was modified and fork if dirty

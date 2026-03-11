@@ -229,6 +229,7 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
     //  this handles the case where the old directory still exists on disk)
     try {
       const porcelain = await this.execGit(['worktree', 'list', '--porcelain'], this.repoDir);
+      console.log(`[WorktreeFamiliar] worktree list found ${porcelain.split('worktree ').length - 1} entries for branch=${branch}`);
       const branchRef = `branch refs/heads/${branch}`;
       const lines = porcelain.split('\n');
       for (let i = 0; i < lines.length; i++) {
@@ -236,15 +237,17 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
           for (let j = i - 1; j >= 0; j--) {
             if (lines[j].startsWith('worktree ')) {
               const oldPath = lines[j].slice('worktree '.length);
+              console.log(`[WorktreeFamiliar] Force-removing stale worktree: ${oldPath} (branch=${branch})`);
               await this.execGit(['worktree', 'remove', '--force', oldPath], this.repoDir);
+              console.log(`[WorktreeFamiliar] Successfully removed stale worktree: ${oldPath}`);
               break;
             }
           }
           break;
         }
       }
-    } catch {
-      // Best-effort: if listing or removal fails, proceed and let the add step report the error
+    } catch (err) {
+      console.warn(`[WorktreeFamiliar] Force-remove failed (will attempt add anyway):`, err);
     }
 
     // -- Create the worktree with a new branch --

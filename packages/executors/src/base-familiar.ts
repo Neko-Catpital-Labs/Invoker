@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { spawn, type ChildProcess } from 'node:child_process';
 import type { WorkRequest, WorkResponse } from '@invoker/protocol';
-import type { Familiar, FamiliarHandle, TerminalSpec, Unsubscribe } from './familiar.js';
+import type { Familiar, FamiliarHandle, PersistedTaskMeta, TerminalSpec, Unsubscribe } from './familiar.js';
 
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
 
@@ -273,5 +273,6 @@ export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar
   abstract kill(handle: FamiliarHandle): Promise<void>;
   abstract sendInput(handle: FamiliarHandle, input: string): void;
   abstract getTerminalSpec(handle: FamiliarHandle): TerminalSpec | null;
+  abstract getRestoredTerminalSpec(meta: PersistedTaskMeta): TerminalSpec;
   abstract destroyAll(): Promise<void>;
 }

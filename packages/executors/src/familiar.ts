@@ -20,6 +20,14 @@ export interface TerminalSpec {
   args?: string[];
 }
 
+export interface PersistedTaskMeta {
+  taskId: string;
+  familiarType: string;
+  claudeSessionId?: string;
+  containerId?: string;
+  workspacePath?: string;
+}
+
 export interface Familiar {
   readonly type: string;
   start(request: WorkRequest): Promise<FamiliarHandle>;
@@ -28,5 +36,10 @@ export interface Familiar {
   onOutput(handle: FamiliarHandle, cb: (data: string) => void): Unsubscribe;
   onComplete(handle: FamiliarHandle, cb: (response: WorkResponse) => void): Unsubscribe;
   getTerminalSpec(handle: FamiliarHandle): TerminalSpec | null;
+  /**
+   * Reconstruct a TerminalSpec from persisted DB metadata (no in-memory handle required).
+   * Throws if the workspace path no longer exists on disk.
+   */
+  getRestoredTerminalSpec(meta: PersistedTaskMeta): TerminalSpec;
   destroyAll(): Promise<void>;
 }
