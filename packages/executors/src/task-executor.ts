@@ -478,6 +478,46 @@ export class TaskExecutor {
     return context;
   }
 
+  /**
+   * Rebase all completed task branches in a workflow onto baseBranch.
+   * Returns { success, rebasedBranches, errors }.
+   */
+  async rebaseTaskBranches(
+    workflowId: string,
+    baseBranch: string,
+  ): Promise<{ success: boolean; rebasedBranches: string[]; errors: string[] }> {
+    const originalBranch = await this.execGit(['branch', '--show-current']);
+    const allTasks = this.orchestrator.getAllTasks();
+    const taskBranches = allTasks
+      .filter((t) => t.workflowId === workflowId && t.status === 'completed' && t.branch && !t.isMergeNode)
+      .map((t) => t.branch!);
+
+    const rebasedBranches: string[] = [];
+    const errors: string[] = [];
+
+    for (const branch of taskBranches) {
+      try {
+        await this.execGit(['checkout', branch]);
+        await this.execGit(['rebase', baseBranch]);
+        rebasedBranches.push(branch);
+        console.log(`[rebase] Successfully rebased ${branch} onto ${baseBranch}`);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        errors.push(`${branch}: ${msg}`);
+        console.error(`[rebase] Failed to rebase ${branch}: ${msg}`);
+        try { await this.execGit(['rebase', '--abort']); } catch { /* no rebase in progress */ }
+      }
+    }
+
+    try { await this.execGit(['checkout', originalBranch]); } catch { /* best effort */ }
+
+    return {
+      success: errors.length === 0,
+      rebasedBranches,
+      errors,
+    };
+  }
+
   private gitLogMessage(commitHash: string): Promise<string> {
     return new Promise((resolvePromise, reject) => {
       const child = spawn('git', ['log', '-1', '--format=%B', commitHash], {

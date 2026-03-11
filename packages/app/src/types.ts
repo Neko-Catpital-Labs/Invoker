@@ -83,6 +83,13 @@ export interface InvokerAPI {
   deleteAllWorkflows: () => Promise<void>;
   getAllCompletedTasks: () => Promise<Array<TaskState & { workflowName: string }>>;
   cleanupWorktrees: () => Promise<{ removed: string[]; errors: string[] }>;
+
+  // Rebase & Retry for merge gates
+  rebaseAndRetry: (mergeTaskId: string) => Promise<{
+    success: boolean;
+    rebasedBranches: string[];
+    errors: string[];
+  }>;
 }
 
 // ── Augment global Window ────────────────────────────────────

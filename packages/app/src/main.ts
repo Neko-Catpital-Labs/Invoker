@@ -987,6 +987,35 @@ function setupGuiMode(): void {
       }
     });
 
+    ipcMain.handle('invoker:rebase-and-retry', async (_event, mergeTaskId: string) => {
+      console.log(`[ipc] rebase-and-retry: "${mergeTaskId}"`);
+      try {
+        const task = orchestrator.getTask(mergeTaskId);
+        if (!task) throw new Error(`Task ${mergeTaskId} not found`);
+        if (!task.isMergeNode) throw new Error(`Task ${mergeTaskId} is not a merge gate`);
+
+        const workflow = task.workflowId
+          ? persistence.loadWorkflow(task.workflowId)
+          : undefined;
+        const baseBranch = workflow?.baseBranch ?? await taskExecutor.detectDefaultBranch();
+
+        if (!task.workflowId) throw new Error('Merge task has no associated workflow');
+
+        const result = await taskExecutor.rebaseTaskBranches(task.workflowId, baseBranch);
+
+        if (result.success) {
+          const started = orchestrator.restartTask(mergeTaskId);
+          const runnable = started.filter(t => t.status === 'running');
+          await taskExecutor.executeTasks(runnable);
+        }
+
+        return result;
+      } catch (err) {
+        console.error(`[ipc] rebase-and-retry failed: ${err}`);
+        throw err;
+      }
+    });
+
     ipcMain.handle('invoker:edit-task-command', async (_event, taskId: string, newCommand: string) => {
       console.log(`[ipc] edit-task-command: "${taskId}" → "${newCommand}"`);
       try {

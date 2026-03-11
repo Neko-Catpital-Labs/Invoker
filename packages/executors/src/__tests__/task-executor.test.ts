@@ -371,4 +371,141 @@ describe('TaskExecutor', () => {
       );
     });
   });
+
+  describe('rebaseTaskBranches', () => {
+    it('rebases all completed task branches onto baseBranch', async () => {
+      const allTasks = [
+        makeTask({ id: 't1', workflowId: 'wf-1', status: 'completed', branch: 'experiment/t1' }),
+        makeTask({ id: 't2', workflowId: 'wf-1', status: 'completed', branch: 'experiment/t2' }),
+        makeTask({ id: 't3', workflowId: 'wf-1', status: 'pending', branch: 'experiment/t3' }),
+        makeTask({ id: '__merge__wf-1', workflowId: 'wf-1', status: 'failed', isMergeNode: true }),
+      ];
+      const orchestrator = {
+        getTask: (id: string) => allTasks.find(t => t.id === id),
+        getAllTasks: () => allTasks,
+      };
+      const executor = new TaskExecutor({
+        orchestrator: orchestrator as any,
+        persistence: {} as any,
+        familiarRegistry: { getDefault: () => ({ type: 'local' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+      });
+
+      const gitCalls: string[][] = [];
+      (executor as any).execGit = async (args: string[]) => {
+        gitCalls.push(args);
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        return '';
+      };
+
+      const result = await executor.rebaseTaskBranches('wf-1', 'master');
+
+      expect(result.success).toBe(true);
+      expect(result.rebasedBranches).toEqual(['experiment/t1', 'experiment/t2']);
+      expect(result.errors).toEqual([]);
+
+      const rebaseCalls = gitCalls.filter(c => c[0] === 'rebase');
+      expect(rebaseCalls).toHaveLength(2);
+      expect(rebaseCalls[0]).toEqual(['rebase', 'master']);
+      expect(rebaseCalls[1]).toEqual(['rebase', 'master']);
+    });
+
+    it('reports errors for branches that fail to rebase', async () => {
+      const allTasks = [
+        makeTask({ id: 't1', workflowId: 'wf-1', status: 'completed', branch: 'experiment/t1' }),
+        makeTask({ id: 't2', workflowId: 'wf-1', status: 'completed', branch: 'experiment/t2' }),
+      ];
+      const orchestrator = {
+        getTask: (id: string) => allTasks.find(t => t.id === id),
+        getAllTasks: () => allTasks,
+      };
+      const executor = new TaskExecutor({
+        orchestrator: orchestrator as any,
+        persistence: {} as any,
+        familiarRegistry: { getDefault: () => ({ type: 'local' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+      });
+
+      const gitCalls: string[][] = [];
+      (executor as any).execGit = async (args: string[]) => {
+        gitCalls.push(args);
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        if (args[0] === 'rebase' && gitCalls.filter(c => c[0] === 'checkout' && c[1] === 'experiment/t2').length > 0) {
+          throw new Error('CONFLICT in file.txt');
+        }
+        return '';
+      };
+
+      const result = await executor.rebaseTaskBranches('wf-1', 'master');
+
+      expect(result.success).toBe(false);
+      expect(result.rebasedBranches).toEqual(['experiment/t1']);
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0]).toContain('experiment/t2');
+      expect(result.errors[0]).toContain('CONFLICT');
+
+      const abortCalls = gitCalls.filter(c => c[0] === 'rebase' && c[1] === '--abort');
+      expect(abortCalls).toHaveLength(1);
+    });
+
+    it('restores original branch after rebase', async () => {
+      const allTasks = [
+        makeTask({ id: 't1', workflowId: 'wf-1', status: 'completed', branch: 'experiment/t1' }),
+      ];
+      const orchestrator = {
+        getTask: (id: string) => allTasks.find(t => t.id === id),
+        getAllTasks: () => allTasks,
+      };
+      const executor = new TaskExecutor({
+        orchestrator: orchestrator as any,
+        persistence: {} as any,
+        familiarRegistry: { getDefault: () => ({ type: 'local' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+      });
+
+      const gitCalls: string[][] = [];
+      (executor as any).execGit = async (args: string[]) => {
+        gitCalls.push(args);
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'my-feature';
+        return '';
+      };
+
+      await executor.rebaseTaskBranches('wf-1', 'master');
+
+      const lastCheckout = gitCalls.filter(c => c[0] === 'checkout').pop();
+      expect(lastCheckout).toEqual(['checkout', 'my-feature']);
+    });
+
+    it('skips merge nodes and non-completed tasks', async () => {
+      const allTasks = [
+        makeTask({ id: 't1', workflowId: 'wf-1', status: 'completed', branch: 'experiment/t1' }),
+        makeTask({ id: 't2', workflowId: 'wf-1', status: 'failed', branch: 'experiment/t2' }),
+        makeTask({ id: '__merge__wf-1', workflowId: 'wf-1', status: 'failed', isMergeNode: true, branch: 'plan/feature' }),
+      ];
+      const orchestrator = {
+        getTask: (id: string) => allTasks.find(t => t.id === id),
+        getAllTasks: () => allTasks,
+      };
+      const executor = new TaskExecutor({
+        orchestrator: orchestrator as any,
+        persistence: {} as any,
+        familiarRegistry: { getDefault: () => ({ type: 'local' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+      });
+
+      const gitCalls: string[][] = [];
+      (executor as any).execGit = async (args: string[]) => {
+        gitCalls.push(args);
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        return '';
+      };
+
+      const result = await executor.rebaseTaskBranches('wf-1', 'master');
+
+      expect(result.rebasedBranches).toEqual(['experiment/t1']);
+      const checkoutCalls = gitCalls.filter(c => c[0] === 'checkout' && c[1] !== 'master');
+      expect(checkoutCalls).toHaveLength(1);
+      expect(checkoutCalls[0][1]).toBe('experiment/t1');
+    });
+  });
 });
