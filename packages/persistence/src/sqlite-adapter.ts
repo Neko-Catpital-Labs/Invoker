@@ -139,6 +139,9 @@ export class SQLiteAdapter implements PersistenceAdapter {
       'ALTER TABLE tasks ADD COLUMN workspace_path TEXT',
       'ALTER TABLE tasks ADD COLUMN familiar_type TEXT',
       'ALTER TABLE tasks ADD COLUMN container_id TEXT',
+      'ALTER TABLE workflows ADD COLUMN on_finish TEXT',
+      'ALTER TABLE workflows ADD COLUMN base_branch TEXT',
+      'ALTER TABLE workflows ADD COLUMN feature_branch TEXT',
     ];
     for (const sql of migrations) {
       try { this.db.exec(sql); } catch { /* Column already exists */ }
@@ -149,11 +152,12 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
   saveWorkflow(workflow: Workflow): void {
     this.db.prepare(`
-      INSERT OR REPLACE INTO workflows (id, name, status, plan_file, repo_url, branch, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT OR REPLACE INTO workflows (id, name, status, plan_file, repo_url, branch, on_finish, base_branch, feature_branch, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       workflow.id, workflow.name, workflow.status,
       workflow.planFile ?? null, workflow.repoUrl ?? null, workflow.branch ?? null,
+      workflow.onFinish ?? null, workflow.baseBranch ?? null, workflow.featureBranch ?? null,
       workflow.createdAt, workflow.updatedAt,
     );
   }
@@ -175,29 +179,14 @@ export class SQLiteAdapter implements PersistenceAdapter {
   loadWorkflow(workflowId: string): Workflow | undefined {
     const row = this.db.prepare('SELECT * FROM workflows WHERE id = ?').get(workflowId) as any;
     if (!row) return undefined;
-    return {
-      id: row.id,
-      name: row.name,
-      status: row.status,
-      planFile: row.plan_file ?? undefined,
-      repoUrl: row.repo_url ?? undefined,
-      branch: row.branch ?? undefined,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-    };
+    return this.rowToWorkflow(row);
   }
 
-  listWorkflows(): Array<{ id: string; name: string; status: string; createdAt: string; updatedAt: string }> {
+  listWorkflows(): Workflow[] {
     const rows = this.db.prepare(
-      'SELECT id, name, status, created_at, updated_at FROM workflows ORDER BY created_at DESC',
+      'SELECT * FROM workflows ORDER BY created_at DESC',
     ).all() as any[];
-    return rows.map((row) => ({
-      id: row.id,
-      name: row.name,
-      status: row.status,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-    }));
+    return rows.map((row: any) => this.rowToWorkflow(row));
   }
 
   // ── Tasks ─────────────────────────────────────────────
@@ -569,9 +558,26 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
   // ── Helpers ───────────────────────────────────────────
 
+  private rowToWorkflow(row: any): Workflow {
+    return {
+      id: row.id,
+      name: row.name,
+      status: row.status,
+      planFile: row.plan_file ?? undefined,
+      repoUrl: row.repo_url ?? undefined,
+      branch: row.branch ?? undefined,
+      onFinish: row.on_finish ?? undefined,
+      baseBranch: row.base_branch ?? undefined,
+      featureBranch: row.feature_branch ?? undefined,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  }
+
   private rowToTask(row: any): TaskState {
     return {
       id: row.id,
+      workflowId: row.workflow_id ?? undefined,
       description: row.description,
       status: row.status,
       blockedBy: row.blocked_by ?? undefined,

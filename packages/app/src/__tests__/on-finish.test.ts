@@ -20,11 +20,12 @@ import type { WorkResponse } from '@invoker/protocol';
 // ── Lightweight in-memory mocks ─────────────────────────────
 
 class InMemoryPersistence implements OrchestratorPersistence {
-  workflows = new Map<string, { id: string; name: string; status: string }>();
+  workflows = new Map<string, { id: string; name: string; status: string; createdAt: string; updatedAt: string }>();
   tasks = new Map<string, { workflowId: string; task: TaskState }>();
 
   saveWorkflow(workflow: { id: string; name: string; status: string }): void {
-    this.workflows.set(workflow.id, workflow);
+    const now = new Date().toISOString();
+    this.workflows.set(workflow.id, { ...workflow, createdAt: (workflow as any).createdAt ?? now, updatedAt: (workflow as any).updatedAt ?? now });
   }
   updateWorkflow(workflowId: string, changes: { status?: string }): void {
     const wf = this.workflows.get(workflowId);
@@ -36,6 +37,9 @@ class InMemoryPersistence implements OrchestratorPersistence {
   updateTask(taskId: string, changes: Partial<TaskState>): void {
     const entry = this.tasks.get(taskId);
     if (entry) entry.task = { ...entry.task, ...changes } as TaskState;
+  }
+  loadWorkflows(): Array<{ id: string; name: string; status: string; createdAt: string; updatedAt: string }> {
+    return Array.from(this.workflows.values());
   }
   loadTasks(workflowId: string): TaskState[] {
     return Array.from(this.tasks.values())
@@ -211,5 +215,45 @@ describe('onFinish integration', () => {
 
     // Slack path: currentPlan is null → onFinish NEVER triggers (THE BUG)
     expect(shouldRunOnFinish(status, null)).toBe(false);
+  });
+
+  it('per-workflow merge gate: only triggers for completed workflow', () => {
+    const planA: PlanDefinition = {
+      name: 'Workflow A',
+      onFinish: 'merge',
+      baseBranch: 'main',
+      featureBranch: 'feat/a',
+      tasks: [{ id: 'a1', description: 'A Task', command: 'echo a' }],
+    };
+    const planB: PlanDefinition = {
+      name: 'Workflow B',
+      onFinish: 'pull_request',
+      baseBranch: 'main',
+      featureBranch: 'feat/b',
+      tasks: [{ id: 'b1', description: 'B Task', command: 'echo b' }],
+    };
+
+    orchestrator.loadPlan(planA);
+    orchestrator.loadPlan(planB);
+    orchestrator.startExecution();
+
+    // Complete only a1
+    orchestrator.handleWorkerResponse(
+      makeResponse({ actionId: 'a1', status: 'completed', outputs: { exitCode: 0 } }),
+    );
+
+    const [wfA, wfB] = orchestrator.getWorkflowIds();
+    const statusA = orchestrator.getWorkflowStatus(wfA);
+    const statusB = orchestrator.getWorkflowStatus(wfB);
+
+    expect(shouldRunOnFinish(statusA, planA)).toBe(true);
+    expect(shouldRunOnFinish(statusB, planB)).toBe(false); // b1 still running
+  });
+
+  it('MergeConfig works with shouldRunOnFinish (no PlanDefinition needed)', () => {
+    const config = { onFinish: 'merge' as const, baseBranch: 'main', featureBranch: 'feat/x', name: 'Test' };
+    expect(shouldRunOnFinish(allCompleted, config)).toBe(true);
+    expect(shouldRunOnFinish(allCompleted, { onFinish: 'none' })).toBe(false);
+    expect(shouldRunOnFinish(allCompleted, {})).toBe(false);
   });
 });

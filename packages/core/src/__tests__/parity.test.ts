@@ -25,16 +25,21 @@ import type { WorkResponse } from '@invoker/protocol';
 // ── In-Memory Test Doubles ──────────────────────────────────
 
 class InMemoryPersistence implements OrchestratorPersistence {
-  workflows = new Map<string, { id: string; name: string; status: string }>();
+  workflows = new Map<string, { id: string; name: string; status: string; createdAt: string; updatedAt: string }>();
   tasks = new Map<string, { workflowId: string; task: TaskState }>();
 
   saveWorkflow(workflow: { id: string; name: string; status: string }): void {
-    this.workflows.set(workflow.id, workflow);
+    const now = new Date().toISOString();
+    this.workflows.set(workflow.id, { ...workflow, createdAt: (workflow as any).createdAt ?? now, updatedAt: (workflow as any).updatedAt ?? now });
   }
 
   updateWorkflow(workflowId: string, changes: { status?: string }): void {
     const wf = this.workflows.get(workflowId);
     if (wf && changes.status) wf.status = changes.status;
+  }
+
+  loadWorkflows(): Array<{ id: string; name: string; status: string; createdAt: string; updatedAt: string }> {
+    return Array.from(this.workflows.values());
   }
 
   saveTask(workflowId: string, task: TaskState): void {

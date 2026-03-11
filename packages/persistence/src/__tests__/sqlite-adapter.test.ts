@@ -590,4 +590,88 @@ describe('SQLiteAdapter', () => {
       expect(results).toHaveLength(0);
     });
   });
+
+  describe('workflowId on tasks', () => {
+    it('loadTasks returns workflowId on each task', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t1'));
+      adapter.saveTask('wf-1', makeTask('t2'));
+
+      const tasks = adapter.loadTasks('wf-1');
+      expect(tasks).toHaveLength(2);
+      expect(tasks[0].workflowId).toBe('wf-1');
+      expect(tasks[1].workflowId).toBe('wf-1');
+    });
+
+    it('tasks from different workflows have correct workflowId', () => {
+      adapter.saveWorkflow({ ...testWorkflow, id: 'wf-a', name: 'Workflow A' });
+      adapter.saveWorkflow({ ...testWorkflow, id: 'wf-b', name: 'Workflow B' });
+      adapter.saveTask('wf-a', makeTask('t1'));
+      adapter.saveTask('wf-b', makeTask('t2'));
+
+      const tasksA = adapter.loadTasks('wf-a');
+      const tasksB = adapter.loadTasks('wf-b');
+      expect(tasksA[0].workflowId).toBe('wf-a');
+      expect(tasksB[0].workflowId).toBe('wf-b');
+    });
+  });
+
+  describe('workflow merge config', () => {
+    it('saveWorkflow persists onFinish, baseBranch, featureBranch', () => {
+      const wf: Workflow = {
+        ...testWorkflow,
+        onFinish: 'merge',
+        baseBranch: 'main',
+        featureBranch: 'feat/test',
+      };
+      adapter.saveWorkflow(wf);
+
+      const loaded = adapter.loadWorkflow('wf-1');
+      expect(loaded).toBeDefined();
+      expect(loaded!.onFinish).toBe('merge');
+      expect(loaded!.baseBranch).toBe('main');
+      expect(loaded!.featureBranch).toBe('feat/test');
+    });
+
+    it('listWorkflows returns merge config fields', () => {
+      adapter.saveWorkflow({
+        ...testWorkflow,
+        onFinish: 'pull_request',
+        baseBranch: 'develop',
+        featureBranch: 'feat/pr',
+      });
+
+      const workflows = adapter.listWorkflows();
+      expect(workflows).toHaveLength(1);
+      expect(workflows[0].onFinish).toBe('pull_request');
+      expect(workflows[0].baseBranch).toBe('develop');
+      expect(workflows[0].featureBranch).toBe('feat/pr');
+    });
+
+    it('merge config fields are undefined when not set', () => {
+      adapter.saveWorkflow(testWorkflow);
+
+      const loaded = adapter.loadWorkflow('wf-1');
+      expect(loaded!.onFinish).toBeUndefined();
+      expect(loaded!.baseBranch).toBeUndefined();
+      expect(loaded!.featureBranch).toBeUndefined();
+    });
+
+    it('listWorkflows returns full Workflow objects', () => {
+      adapter.saveWorkflow({
+        ...testWorkflow,
+        planFile: 'plan.yaml',
+        repoUrl: 'https://github.com/test',
+        onFinish: 'merge',
+      });
+
+      const workflows = adapter.listWorkflows();
+      expect(workflows[0].id).toBe('wf-1');
+      expect(workflows[0].name).toBe('Test Workflow');
+      expect(workflows[0].status).toBe('running');
+      expect(workflows[0].planFile).toBe('plan.yaml');
+      expect(workflows[0].repoUrl).toBe('https://github.com/test');
+      expect(workflows[0].onFinish).toBe('merge');
+    });
+  });
 });

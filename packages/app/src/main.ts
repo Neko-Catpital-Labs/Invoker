@@ -81,12 +81,13 @@ function initServices(): void {
   familiarRegistry.register('local', new LocalFamiliar());
   orchestrator = new Orchestrator({ persistence, messageBus });
 
-  // Sync state machine from most recent workflow so mutations work after restart
+  orchestrator.syncAllFromDb();
   const workflows = persistence.listWorkflows();
-  if (workflows.length > 0) {
-    orchestrator.syncFromDb(workflows[0].id);
-    console.log(`[init] Synced orchestrator from workflow "${workflows[0].id}" (${workflows[0].name})`);
+  for (const wf of workflows) {
+    const tasks = persistence.loadTasks(wf.id);
+    console.log(`[init] DB workflow "${wf.id}" (${wf.name}): ${tasks.length} tasks`);
   }
+  console.log(`[init] Orchestrator graph has ${orchestrator.getAllTasks().length} tasks across ${workflows.length} workflows`);
 }
 
 // ── Load @invoker/surfaces at runtime ────────────────────────
@@ -541,8 +542,6 @@ async function headlessSlack(): Promise<void> {
 
   initServices();
 
-  let headlessPlan: PlanDefinition | null = null;
-
   const taskExecutor = new TaskExecutor({
     orchestrator,
     persistence,
@@ -554,14 +553,20 @@ async function headlessSlack(): Promise<void> {
       },
       onComplete: (taskId) => {
         logFn('exec', 'info', `Task "${taskId}" completed`);
-        const status = orchestrator.getWorkflowStatus();
-        if (shouldRunOnFinish(status, headlessPlan)) {
-          logFn('onFinish', 'info', `All ${status.total} tasks completed — running ${headlessPlan!.onFinish}`);
-          executeOnFinish(headlessPlan!).catch((err) => {
-            logFn('onFinish', 'error', `Failed: ${err}`);
-          });
-        } else {
-          logFn('onFinish', 'info', `Not ready: plan=${headlessPlan?.name ?? 'null'}, running=${status.running}, pending=${status.pending}, failed=${status.failed}, total=${status.total}`);
+        const task = orchestrator.getTask(taskId);
+        const wfId = task?.workflowId;
+        if (wfId) {
+          const status = orchestrator.getWorkflowStatus(wfId);
+          const wf = persistence.loadWorkflow(wfId);
+          const config = wf ? { onFinish: wf.onFinish, baseBranch: wf.baseBranch, featureBranch: wf.featureBranch, name: wf.name } : null;
+          if (shouldRunOnFinish(status, config)) {
+            logFn('onFinish', 'info', `Workflow "${wfId}" — all ${status.total} tasks completed — running ${config!.onFinish}`);
+            executeOnFinish(config!).catch((err) => {
+              logFn('onFinish', 'error', `Failed: ${err}`);
+            });
+          } else {
+            logFn('onFinish', 'info', `Workflow "${wfId}" not ready: running=${status.running}, pending=${status.pending}, failed=${status.failed}, total=${status.total}`);
+          }
         }
       },
     },
@@ -570,7 +575,7 @@ async function headlessSlack(): Promise<void> {
   const slack = await wireSlackBot({
     executor: taskExecutor,
     logFn,
-    onPlanLoaded: (plan) => { headlessPlan = plan; },
+    onPlanLoaded: () => {},
   });
 
   logFn('slack', 'info', 'Slack bot is running (headless, using TaskExecutor). Press Ctrl+C to stop.');
@@ -671,11 +676,11 @@ async function consolidateTaskBranches(baseBranch: string, featureBranch: string
   console.log(`[onFinish] Consolidated ${taskBranches.length} task branches into ${featureBranch}`);
 }
 
-async function executeOnFinish(plan: PlanDefinition): Promise<void> {
-  const onFinish = plan.onFinish ?? 'none';
+async function executeOnFinish(config: import('./workflow-finish.js').MergeConfig): Promise<void> {
+  const onFinish = config.onFinish ?? 'none';
   if (onFinish === 'none') return;
-  const baseBranch = plan.baseBranch ?? 'main';
-  const featureBranch = plan.featureBranch;
+  const baseBranch = config.baseBranch ?? 'main';
+  const featureBranch = config.featureBranch;
   if (!featureBranch) return;
 
   console.log(`\n${BOLD}Running onFinish: ${onFinish}${RESET}`);
@@ -684,7 +689,7 @@ async function executeOnFinish(plan: PlanDefinition): Promise<void> {
   await consolidateTaskBranches(baseBranch, featureBranch);
 
   const auditTable = buildAuditTable();
-  const mergeMessage = `${plan.name}\n\n${auditTable}`;
+  const mergeMessage = `${config.name ?? 'Workflow'}\n\n${auditTable}`;
 
   if (onFinish === 'merge') {
     await execCommand('git', ['checkout', baseBranch]);
@@ -692,7 +697,7 @@ async function executeOnFinish(plan: PlanDefinition): Promise<void> {
     console.log(`Merged ${featureBranch} into ${baseBranch} (no-ff)`);
   } else if (onFinish === 'pull_request') {
     await execCommand('git', ['push', '-u', 'origin', featureBranch]);
-    await execCommand('gh', ['pr', 'create', '--base', baseBranch, '--head', featureBranch, '--title', plan.name, '--body', auditTable]);
+    await execCommand('gh', ['pr', 'create', '--base', baseBranch, '--head', featureBranch, '--title', config.name ?? 'Workflow', '--body', auditTable]);
     console.log(`Created pull request: ${featureBranch} → ${baseBranch}`);
   }
 }
@@ -705,7 +710,6 @@ function setupGuiMode(): void {
   let mainWindow: BrowserWindow | null = null;
   let taskExecutor: TaskExecutor;
   const taskHandles = new Map<string, { handle: FamiliarHandle; familiar: Familiar }>();
-  let currentPlan: PlanDefinition | null = null;
   let dbPollInterval: ReturnType<typeof setInterval> | null = null;
   let activityPollInterval: ReturnType<typeof setInterval> | null = null;
   const lastKnownTaskStates = new Map<string, string>();
@@ -744,14 +748,20 @@ function setupGuiMode(): void {
         onComplete: (taskId) => {
           console.log(`[exec] Task "${taskId}" completed`);
 
-          const status = orchestrator.getWorkflowStatus();
-          if (shouldRunOnFinish(status, currentPlan)) {
-            console.log(`[onFinish] All ${status.total} tasks completed — running ${currentPlan!.onFinish}`);
-            executeOnFinish(currentPlan!).catch((err) => {
-              console.error(`[onFinish] Failed:`, err);
-            });
-          } else {
-            console.log(`[onFinish] Not ready: plan=${currentPlan?.name ?? 'null'}, running=${status.running}, pending=${status.pending}, failed=${status.failed}, total=${status.total}`);
+          const task = orchestrator.getTask(taskId);
+          const wfId = task?.workflowId;
+          if (wfId) {
+            const status = orchestrator.getWorkflowStatus(wfId);
+            const wf = persistence.loadWorkflow(wfId);
+            const config = wf ? { onFinish: wf.onFinish, baseBranch: wf.baseBranch, featureBranch: wf.featureBranch, name: wf.name } : null;
+            if (shouldRunOnFinish(status, config)) {
+              console.log(`[onFinish] Workflow "${wfId}" — all ${status.total} tasks completed — running ${config!.onFinish}`);
+              executeOnFinish(config!).catch((err) => {
+                console.error(`[onFinish] Failed:`, err);
+              });
+            } else {
+              console.log(`[onFinish] Workflow "${wfId}" not ready: running=${status.running}, pending=${status.pending}, failed=${status.failed}, total=${status.total}`);
+            }
           }
         },
       },
@@ -836,7 +846,6 @@ function setupGuiMode(): void {
     // Register IPC handlers
     ipcMain.handle('invoker:load-plan', (_event, plan: PlanDefinition) => {
       console.log(`[ipc] load-plan: "${plan.name}" (${plan.tasks.length} tasks)`);
-      currentPlan = plan;
       taskHandles.clear();
       orchestrator.loadPlan(plan);
     });
@@ -855,9 +864,13 @@ function setupGuiMode(): void {
         console.log(`[ipc] resume-workflow: no workflows found`);
         return null;
       }
-      const latest = workflows[0];
-      console.log(`[ipc] resume-workflow: resuming "${latest.name}" (${latest.id})`);
-      const started = orchestrator.resumeWorkflow(latest.id);
+      orchestrator.syncAllFromDb();
+      const allStarted: any[] = [];
+      for (const wf of workflows) {
+        if (wf.status === 'completed' || wf.status === 'failed') continue;
+        const started = orchestrator.startExecution();
+        allStarted.push(...started);
+      }
       const tasks = orchestrator.getAllTasks();
       for (const task of tasks) {
         lastKnownTaskStates.set(task.id, JSON.stringify(task));
@@ -865,9 +878,9 @@ function setupGuiMode(): void {
           mainWindow.webContents.send('invoker:task-delta', { type: 'created', task });
         }
       }
-      console.log(`[ipc] resume-workflow: ${tasks.length} tasks loaded, ${started.length} started`);
-      await taskExecutor.executeTasks(started);
-      return { workflow: latest, taskCount: tasks.length, startedCount: started.length };
+      console.log(`[ipc] resume-workflow: ${tasks.length} tasks loaded across ${workflows.length} workflows, ${allStarted.length} started`);
+      await taskExecutor.executeTasks(allStarted);
+      return { workflow: workflows[0], taskCount: tasks.length, startedCount: allStarted.length };
     });
 
     ipcMain.handle('invoker:stop', async () => {
@@ -950,7 +963,11 @@ function setupGuiMode(): void {
       return { workflow, tasks };
     });
 
-    ipcMain.handle('invoker:get-tasks', () => orchestrator.getAllTasks());
+    ipcMain.handle('invoker:get-tasks', () => {
+      const tasks = orchestrator.getAllTasks();
+      console.log(`[ipc] get-tasks returning ${tasks.length} tasks`);
+      return tasks;
+    });
     ipcMain.handle('invoker:get-events', (_event, taskId: string) => persistence.getEvents(taskId));
     ipcMain.handle('invoker:get-status', () => orchestrator.getWorkflowStatus());
     ipcMain.handle('invoker:get-task-output', (_event, taskId: string) => persistence.getTaskOutput(taskId));
@@ -1017,7 +1034,6 @@ function setupGuiMode(): void {
       if (!mainWindow || mainWindow.isDestroyed()) return;
       try {
         const workflows = persistence.listWorkflows();
-        if (workflows.length === 0) return;
 
         if (workflows.length !== lastKnownWorkflowCount) {
           const msg = `Workflow count changed: ${lastKnownWorkflowCount} → ${workflows.length}`;
@@ -1026,30 +1042,29 @@ function setupGuiMode(): void {
           lastKnownWorkflowCount = workflows.length;
           mainWindow.webContents.send('invoker:workflows-changed', workflows);
 
-          // Sync orchestrator so mutations (restart, approve, etc.) work on the new workflow
-          const latestWf = workflows[0];
-          orchestrator.syncFromDb(latestWf.id);
-          console.log(`[db-poll] Synced orchestrator for workflow "${latestWf.id}"`);
+          orchestrator.syncAllFromDb();
+          console.log(`[db-poll] Synced orchestrator for all ${workflows.length} workflows`);
           lastKnownTaskStates.clear();
         }
 
-        const latestWorkflow = workflows[0];
-        const tasks = persistence.loadTasks(latestWorkflow.id);
-        for (const task of tasks) {
-          const snapshot = JSON.stringify(task);
-          const prev = lastKnownTaskStates.get(task.id);
-          if (!prev) {
-            const msg = `New task: ${task.id} (${task.status})`;
-            console.log(`[db-poll] ${msg}`);
-            try { persistence.writeActivityLog('db-poll', 'info', msg); } catch { /* db locked */ }
-            lastKnownTaskStates.set(task.id, snapshot);
-            mainWindow.webContents.send('invoker:task-delta', { type: 'created', task });
-          } else if (prev !== snapshot) {
-            const msg = `Task updated: ${task.id} (${task.status})`;
-            console.log(`[db-poll] ${msg}`);
-            try { persistence.writeActivityLog('db-poll', 'info', msg); } catch { /* db locked */ }
-            lastKnownTaskStates.set(task.id, snapshot);
-            mainWindow.webContents.send('invoker:task-delta', { type: 'created', task });
+        for (const wf of workflows) {
+          const tasks = persistence.loadTasks(wf.id);
+          for (const task of tasks) {
+            const snapshot = JSON.stringify(task);
+            const prev = lastKnownTaskStates.get(task.id);
+            if (!prev) {
+              const msg = `New task: ${task.id} (${task.status})`;
+              console.log(`[db-poll] ${msg}`);
+              try { persistence.writeActivityLog('db-poll', 'info', msg); } catch { /* db locked */ }
+              lastKnownTaskStates.set(task.id, snapshot);
+              mainWindow.webContents.send('invoker:task-delta', { type: 'created', task });
+            } else if (prev !== snapshot) {
+              const msg = `Task updated: ${task.id} (${task.status})`;
+              console.log(`[db-poll] ${msg}`);
+              try { persistence.writeActivityLog('db-poll', 'info', msg); } catch { /* db locked */ }
+              lastKnownTaskStates.set(task.id, snapshot);
+              mainWindow.webContents.send('invoker:task-delta', { type: 'created', task });
+            }
           }
         }
       } catch {
@@ -1204,7 +1219,7 @@ function setupGuiMode(): void {
       executor,
       logFn,
       onStartPlan: () => handles.clear(),
-      onPlanLoaded: (plan) => { currentPlan = plan; },
+      onPlanLoaded: () => {},
     });
 
     logFn('slack', 'info', 'Slack bot started (embedded in GUI)');

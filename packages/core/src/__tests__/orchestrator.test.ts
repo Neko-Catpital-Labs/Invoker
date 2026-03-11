@@ -7,12 +7,13 @@ import type { WorkResponse } from '@invoker/protocol';
 // ── In-Memory Persistence Mock ──────────────────────────────
 
 class InMemoryPersistence implements OrchestratorPersistence {
-  workflows = new Map<string, { id: string; name: string; status: string }>();
+  workflows = new Map<string, { id: string; name: string; status: string; createdAt: string; updatedAt: string }>();
   tasks = new Map<string, { workflowId: string; task: TaskState }>();
   events: Array<{ taskId: string; eventType: string; payload?: unknown }> = [];
 
   saveWorkflow(workflow: { id: string; name: string; status: string }): void {
-    this.workflows.set(workflow.id, workflow);
+    const now = new Date().toISOString();
+    this.workflows.set(workflow.id, { ...workflow, createdAt: (workflow as any).createdAt ?? now, updatedAt: (workflow as any).updatedAt ?? now });
   }
 
   updateWorkflow(workflowId: string, changes: { status?: string; updatedAt?: string }): void {
@@ -31,6 +32,10 @@ class InMemoryPersistence implements OrchestratorPersistence {
     if (entry) {
       entry.task = { ...entry.task, ...changes } as TaskState;
     }
+  }
+
+  loadWorkflows(): Array<{ id: string; name: string; status: string; createdAt: string; updatedAt: string }> {
+    return Array.from(this.workflows.values());
   }
 
   loadTasks(workflowId: string): TaskState[] {
@@ -1449,6 +1454,177 @@ describe('Orchestrator', () => {
       const wfId = Array.from(persistence.workflows.keys())[0];
       orchestrator.syncFromDb(wfId);
       expect(orchestrator.getTask('t1')!.status).toBe('completed');
+    });
+  });
+
+  // ── Multi-workflow tests ─────────────────────────────────────
+
+  describe('multi-workflow support', () => {
+    it('loadPlan twice -> getAllTasks returns tasks from both workflows', () => {
+      const planA: PlanDefinition = {
+        name: 'Plan A',
+        tasks: [{ id: 'a1', description: 'A task 1', command: 'echo a1' }],
+      };
+      const planB: PlanDefinition = {
+        name: 'Plan B',
+        tasks: [{ id: 'b1', description: 'B task 1', command: 'echo b1' }],
+      };
+
+      orchestrator.loadPlan(planA);
+      orchestrator.loadPlan(planB);
+
+      const allTasks = orchestrator.getAllTasks();
+      expect(allTasks).toHaveLength(2);
+      expect(allTasks.map((t) => t.id).sort()).toEqual(['a1', 'b1']);
+    });
+
+    it('loadPlan does NOT clear other workflows tasks', () => {
+      orchestrator.loadPlan({
+        name: 'First',
+        tasks: [{ id: 'f1', description: 'First', command: 'echo 1' }],
+      });
+      expect(orchestrator.getAllTasks()).toHaveLength(1);
+
+      orchestrator.loadPlan({
+        name: 'Second',
+        tasks: [{ id: 's1', description: 'Second', command: 'echo 2' }],
+      });
+      expect(orchestrator.getAllTasks()).toHaveLength(2);
+      expect(orchestrator.getTask('f1')).toBeDefined();
+      expect(orchestrator.getTask('s1')).toBeDefined();
+    });
+
+    it('getWorkflowStatus(wfId) returns counts scoped to that workflow', () => {
+      orchestrator.loadPlan({
+        name: 'Plan A',
+        tasks: [
+          { id: 'a1', description: 'A1', command: 'echo a1' },
+          { id: 'a2', description: 'A2', command: 'echo a2' },
+        ],
+      });
+      orchestrator.loadPlan({
+        name: 'Plan B',
+        tasks: [{ id: 'b1', description: 'B1', command: 'echo b1' }],
+      });
+
+      const wfIds = orchestrator.getWorkflowIds();
+      expect(wfIds).toHaveLength(2);
+
+      const statusA = orchestrator.getWorkflowStatus(wfIds[0]);
+      expect(statusA.total).toBe(2);
+      expect(statusA.pending).toBe(2);
+
+      const statusB = orchestrator.getWorkflowStatus(wfIds[1]);
+      expect(statusB.total).toBe(1);
+      expect(statusB.pending).toBe(1);
+    });
+
+    it('getWorkflowStatus() without wfId returns aggregate across all workflows', () => {
+      orchestrator.loadPlan({
+        name: 'A',
+        tasks: [{ id: 'a1', description: 'A1', command: 'echo a1' }],
+      });
+      orchestrator.loadPlan({
+        name: 'B',
+        tasks: [{ id: 'b1', description: 'B1', command: 'echo b1' }],
+      });
+
+      const status = orchestrator.getWorkflowStatus();
+      expect(status.total).toBe(2);
+    });
+
+    it('syncAllFromDb reloads tasks from all workflows', () => {
+      orchestrator.loadPlan({
+        name: 'Plan A',
+        tasks: [{ id: 'a1', description: 'A1', command: 'echo a1' }],
+      });
+      orchestrator.loadPlan({
+        name: 'Plan B',
+        tasks: [{ id: 'b1', description: 'B1', command: 'echo b1' }],
+      });
+
+      // Externally modify DB
+      persistence.updateTask('a1', { status: 'completed' } as any);
+
+      // syncAllFromDb picks up the external change
+      orchestrator.syncAllFromDb();
+      expect(orchestrator.getTask('a1')!.status).toBe('completed');
+      expect(orchestrator.getTask('b1')!.status).toBe('pending');
+      expect(orchestrator.getAllTasks()).toHaveLength(2);
+    });
+
+    it('tasks have correct workflowId after loadPlan', () => {
+      orchestrator.loadPlan({
+        name: 'Plan A',
+        tasks: [{ id: 'a1', description: 'A1', command: 'echo a1' }],
+      });
+      orchestrator.loadPlan({
+        name: 'Plan B',
+        tasks: [{ id: 'b1', description: 'B1', command: 'echo b1' }],
+      });
+
+      const a1 = orchestrator.getTask('a1')!;
+      const b1 = orchestrator.getTask('b1')!;
+      expect(a1.workflowId).toBeDefined();
+      expect(b1.workflowId).toBeDefined();
+      expect(a1.workflowId).not.toBe(b1.workflowId);
+    });
+
+    it('getWorkflowIds returns all active workflow IDs', () => {
+      expect(orchestrator.getWorkflowIds()).toHaveLength(0);
+
+      orchestrator.loadPlan({
+        name: 'A',
+        tasks: [{ id: 'a1', description: 'A1', command: 'echo a1' }],
+      });
+      expect(orchestrator.getWorkflowIds()).toHaveLength(1);
+
+      orchestrator.loadPlan({
+        name: 'B',
+        tasks: [{ id: 'b1', description: 'B1', command: 'echo b1' }],
+      });
+      expect(orchestrator.getWorkflowIds()).toHaveLength(2);
+    });
+
+    it('completing tasks in workflow A does not affect workflow B status', () => {
+      orchestrator.loadPlan({
+        name: 'A',
+        tasks: [{ id: 'a1', description: 'A1', command: 'echo a1' }],
+      });
+      orchestrator.loadPlan({
+        name: 'B',
+        tasks: [{ id: 'b1', description: 'B1', command: 'echo b1' }],
+      });
+
+      orchestrator.startExecution();
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 'a1', status: 'completed', outputs: { exitCode: 0 } }),
+      );
+
+      const [wfA, wfB] = orchestrator.getWorkflowIds();
+      const statusA = orchestrator.getWorkflowStatus(wfA);
+      const statusB = orchestrator.getWorkflowStatus(wfB);
+
+      expect(statusA.completed).toBe(1);
+      expect(statusA.running).toBe(0);
+      expect(statusB.pending).toBe(0); // b1 was auto-started
+      expect(statusB.running).toBe(1);
+    });
+
+    it('loadPlan persists onFinish/baseBranch/featureBranch on workflow', () => {
+      orchestrator.loadPlan({
+        name: 'Merge Plan',
+        onFinish: 'merge',
+        baseBranch: 'main',
+        featureBranch: 'feat/test',
+        tasks: [{ id: 't1', description: 'T1', command: 'echo 1' }],
+      });
+
+      const wfId = orchestrator.getWorkflowIds()[0];
+      const wf = persistence.workflows.get(wfId)!;
+      expect((wf as any).onFinish).toBe('merge');
+      expect((wf as any).baseBranch).toBe('main');
+      expect((wf as any).featureBranch).toBe('feat/test');
     });
   });
 });

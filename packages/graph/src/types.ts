@@ -25,6 +25,9 @@ export interface TaskState {
   readonly status: TaskStatus;
   readonly dependencies: readonly string[];
 
+  // Workflow membership
+  readonly workflowId?: string;
+
   // Blocking info
   readonly blockedBy?: string;
 
@@ -143,6 +146,7 @@ export interface TransitionResult {
 // ── Task Create Options ─────────────────────────────────────
 
 export interface TaskCreateOptions {
+  workflowId?: string;
   parentTask?: string;
   command?: string;
   prompt?: string;
