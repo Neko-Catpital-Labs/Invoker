@@ -422,18 +422,26 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
   }
 
   getRestoredTerminalSpec(meta: PersistedTaskMeta): TerminalSpec {
+    console.log(`[WorktreeFamiliar] getRestoredTerminalSpec task="${meta.taskId}" workspacePath="${meta.workspacePath ?? 'none'}" sessionId="${meta.claudeSessionId ?? 'none'}"`);
     if (meta.workspacePath && !existsSync(meta.workspacePath)) {
+      console.log(`[WorktreeFamiliar] getRestoredTerminalSpec task="${meta.taskId}" — worktree path does NOT exist: ${meta.workspacePath}`);
       throw new Error(
         `Worktree ${meta.workspacePath} no longer exists for task ${meta.taskId}. It may have been cleaned up.`,
       );
     }
+    if (meta.workspacePath) {
+      console.log(`[WorktreeFamiliar] getRestoredTerminalSpec task="${meta.taskId}" — worktree path exists: ${meta.workspacePath}`);
+    }
     if (meta.claudeSessionId) {
-      return {
+      const spec = {
         command: 'claude',
         args: ['--resume', meta.claudeSessionId, '--dangerously-skip-permissions'],
         cwd: meta.workspacePath,
       };
+      console.log(`[WorktreeFamiliar] getRestoredTerminalSpec task="${meta.taskId}" → claude --resume spec, cwd="${spec.cwd}"`);
+      return spec;
     }
+    console.log(`[WorktreeFamiliar] getRestoredTerminalSpec task="${meta.taskId}" → cwd-only spec, cwd="${meta.workspacePath}"`);
     return { cwd: meta.workspacePath };
   }
 

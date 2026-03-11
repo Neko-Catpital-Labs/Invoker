@@ -297,16 +297,24 @@ export class LocalFamiliar extends BaseFamiliar<ProcessEntry> {
   }
 
   getRestoredTerminalSpec(meta: PersistedTaskMeta): TerminalSpec {
+    console.log(`[LocalFamiliar] getRestoredTerminalSpec task="${meta.taskId}" workspacePath="${meta.workspacePath ?? 'none'}" sessionId="${meta.claudeSessionId ?? 'none'}"`);
     if (meta.workspacePath && !existsSync(meta.workspacePath)) {
+      console.log(`[LocalFamiliar] getRestoredTerminalSpec task="${meta.taskId}" — workspace path does NOT exist`);
       throw new Error(`Workspace path ${meta.workspacePath} no longer exists for task ${meta.taskId}`);
     }
+    if (meta.workspacePath) {
+      console.log(`[LocalFamiliar] getRestoredTerminalSpec task="${meta.taskId}" — workspace path exists`);
+    }
     if (meta.claudeSessionId) {
-      return {
+      const spec = {
         command: 'claude',
         args: ['--resume', meta.claudeSessionId, '--dangerously-skip-permissions'],
         cwd: meta.workspacePath,
       };
+      console.log(`[LocalFamiliar] getRestoredTerminalSpec task="${meta.taskId}" → claude --resume spec, cwd="${spec.cwd}"`);
+      return spec;
     }
+    console.log(`[LocalFamiliar] getRestoredTerminalSpec task="${meta.taskId}" → cwd-only spec, cwd="${meta.workspacePath}"`);
     return { cwd: meta.workspacePath };
   }
 

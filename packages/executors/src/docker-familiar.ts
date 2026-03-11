@@ -282,16 +282,20 @@ export class DockerFamiliar extends BaseFamiliar<ContainerEntry> {
   }
 
   getRestoredTerminalSpec(meta: PersistedTaskMeta): TerminalSpec {
+    console.log(`[DockerFamiliar] getRestoredTerminalSpec task="${meta.taskId}" containerId="${meta.containerId ?? 'none'}" sessionId="${meta.claudeSessionId ?? 'none'}"`);
     if (!meta.containerId) {
+      console.log(`[DockerFamiliar] getRestoredTerminalSpec task="${meta.taskId}" — no container ID`);
       throw new Error(`No container ID found for task ${meta.taskId}`);
     }
     const cid = meta.containerId;
     if (meta.claudeSessionId) {
+      console.log(`[DockerFamiliar] getRestoredTerminalSpec task="${meta.taskId}" → docker exec claude --resume`);
       return {
         command: 'bash',
         args: ['-c', `docker start ${cid} >/dev/null 2>&1; docker exec -it ${cid} claude --resume ${meta.claudeSessionId} --dangerously-skip-permissions`],
       };
     }
+    console.log(`[DockerFamiliar] getRestoredTerminalSpec task="${meta.taskId}" → docker exec /bin/bash`);
     return {
       command: 'bash',
       args: ['-c', `docker start ${cid} >/dev/null 2>&1; docker exec -it ${cid} /bin/bash`],

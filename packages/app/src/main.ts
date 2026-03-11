@@ -1145,9 +1145,11 @@ function setupGuiMode(): void {
 
     // ── External terminal launcher ──────────────────────────────
     ipcMain.handle('invoker:open-terminal', (_event, taskId: string): { opened: boolean; reason?: string } => {
+      console.log(`[open-terminal] invoked for task="${taskId}"`);
       const taskStatus = persistence.getTaskStatus(taskId);
+      console.log(`[open-terminal] task="${taskId}" status="${taskStatus}"`);
       if (taskStatus === 'running') {
-        console.log(`[ipc] open-terminal: BLOCKED task="${taskId}" — still running`);
+        console.log(`[open-terminal] BLOCKED task="${taskId}" — still running`);
         return { opened: false, reason: 'Task is still running. View output in the terminal panel below.' };
       }
 
@@ -1158,10 +1160,12 @@ function setupGuiMode(): void {
         containerId: persistence.getContainerId(taskId) ?? undefined,
         workspacePath: persistence.getWorkspacePath(taskId) ?? undefined,
       };
+      console.log(`[open-terminal] task="${taskId}" meta=${JSON.stringify(meta)}`);
 
       // Resolve the familiar, lazy-registering if needed
       let familiar = familiarRegistry.get(meta.familiarType);
       if (!familiar) {
+        console.log(`[open-terminal] task="${taskId}" familiar type="${meta.familiarType}" not registered, lazy-registering`);
         if (meta.familiarType === 'docker') {
           const docker = new DockerFamiliar({ workspaceDir: repoRoot });
           familiarRegistry.register('docker', docker);
@@ -1179,18 +1183,20 @@ function setupGuiMode(): void {
           familiar = familiarRegistry.getDefault();
         }
       }
+      console.log(`[open-terminal] task="${taskId}" resolved familiar type="${familiar.type}"`);
 
       let spec: { cwd?: string; command?: string; args?: string[] };
       try {
         spec = familiar.getRestoredTerminalSpec(meta);
+        console.log(`[open-terminal] task="${taskId}" getRestoredTerminalSpec returned: ${JSON.stringify(spec)}`);
       } catch (err) {
         const reason = err instanceof Error ? err.message : String(err);
-        console.log(`[ipc] open-terminal: FAILED task="${taskId}" — ${reason}`);
+        console.log(`[open-terminal] task="${taskId}" getRestoredTerminalSpec THREW: ${reason}`);
         return { opened: false, reason };
       }
 
       const cwd = spec.cwd ?? repoRoot;
-      console.log(`[ipc] open-terminal: task="${taskId}" cwd="${cwd}" spec=${JSON.stringify(spec)}`);
+      console.log(`[open-terminal] task="${taskId}" final cwd="${cwd}" spec=${JSON.stringify(spec)}`);
 
       const onTerminalClose = () => {
         if (!cwd || cwd === repoRoot) return;
@@ -1219,10 +1225,13 @@ function setupGuiMode(): void {
         cleanEnv.PATH = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin';
         if (!cleanEnv.TERM) cleanEnv.TERM = 'xterm-256color';
 
+        // x-terminal-emulator wrappers (e.g. gnome-terminal.wrapper) silently
+        // drop --working-directory. Use -e with an explicit cd instead.
         const termArgs = spec.command
           ? ['-e', 'bash', '-c', `cd '${cwd}' && ${[spec.command, ...(spec.args ?? [])].map(a => `'${a}'`).join(' ')}; echo ""; echo "Exit code: $?"; echo "Press Enter to close..."; read`]
-          : ['--working-directory', cwd];
+          : ['-e', 'bash', '-c', `cd '${cwd}' && exec bash`];
 
+        console.log(`[open-terminal] spawning x-terminal-emulator with args: ${JSON.stringify(termArgs)}`);
         const child = spawn('x-terminal-emulator', termArgs, {
           detached: true,
           stdio: 'ignore',
