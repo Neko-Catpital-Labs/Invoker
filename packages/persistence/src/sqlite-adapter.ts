@@ -308,6 +308,11 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return rows.map(this.rowToTask);
   }
 
+  getAllTaskIds(): string[] {
+    const rows = this.db.prepare('SELECT id FROM tasks').all() as Array<{ id: string }>;
+    return rows.map((r) => r.id);
+  }
+
   loadAllCompletedTasks(): Array<TaskState & { workflowName: string }> {
     const rows = this.db.prepare(`
       SELECT t.*, w.name AS workflow_name

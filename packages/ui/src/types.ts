@@ -154,6 +154,7 @@ export interface InvokerAPI {
   loadWorkflow: (workflowId: string) => Promise<{ workflow: unknown; tasks: unknown[] }>;
   onWorkflowsChanged: (cb: (workflows: unknown[]) => void) => () => void;
   deleteAllWorkflows: () => Promise<void>;
+  cleanupWorktrees: () => Promise<{ removed: string[]; errors: string[] }>;
 }
 
 // ── Augment global Window ───────────────────────────────────

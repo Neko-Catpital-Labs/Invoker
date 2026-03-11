@@ -675,6 +675,23 @@ describe('SQLiteAdapter', () => {
     });
   });
 
+  describe('getAllTaskIds', () => {
+    it('returns empty array when no tasks', () => {
+      expect(adapter.getAllTaskIds()).toEqual([]);
+    });
+
+    it('returns all task IDs across workflows', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveWorkflow({ ...testWorkflow, id: 'wf-2', name: 'Second' });
+      adapter.saveTask('wf-1', makeTask('t1'));
+      adapter.saveTask('wf-1', makeTask('t2'));
+      adapter.saveTask('wf-2', makeTask('t3'));
+
+      const ids = adapter.getAllTaskIds();
+      expect(ids.sort()).toEqual(['t1', 't2', 't3']);
+    });
+  });
+
   describe('logEvent FK constraint', () => {
     it('logEvent with a real task_id succeeds', () => {
       adapter.saveWorkflow(testWorkflow);
