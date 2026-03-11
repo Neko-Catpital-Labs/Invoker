@@ -221,6 +221,9 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
       return handle;
     }
 
+    // Clean up stale worktree references (e.g. from a previous crashed run)
+    await this.execGit(['worktree', 'prune'], this.repoDir);
+
     // -- Create the worktree with a new branch --
     try {
       await this.execGit(

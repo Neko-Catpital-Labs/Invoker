@@ -650,16 +650,17 @@ describe('WorktreeFamiliar', () => {
   });
 
   describe('stale worktree on restart', () => {
-    it('fails when branch is already used by another worktree (BUG REPRO)', async () => {
-      // Simulate: both `git worktree add -b` and `git worktree add` fail
-      // because the branch is locked by a stale worktree from a previous run.
+    it('fails when branch is still locked after prune (e.g. worktree dir on disk)', async () => {
+      // Even after prune, if the old worktree dir still exists on disk,
+      // git refuses to create a new worktree with the same branch.
       mockedSpawn.mockImplementation((cmd: string, args?: readonly string[]) => {
         const proc = createMockProcess();
         const argsArr = args as string[];
 
         Promise.resolve().then(() => {
-          if (cmd === 'git' && argsArr?.includes('worktree')) {
-            // Both worktree add attempts fail
+          if (cmd === 'git' && argsArr?.includes('prune')) {
+            proc.emit('close', 0, null);
+          } else if (cmd === 'git' && argsArr?.includes('worktree') && argsArr?.includes('add')) {
             proc.stderr!.emit('data', Buffer.from(
               "fatal: 'experiment/action-1' is already used by worktree at '/old/worktree'\n",
             ));
