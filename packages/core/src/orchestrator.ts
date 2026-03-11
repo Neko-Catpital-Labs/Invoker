@@ -45,7 +45,7 @@ export interface OrchestratorPersistence {
   saveTask(workflowId: string, task: TaskState): void;
   updateTask(taskId: string, changes: Partial<TaskState>): void;
   logEvent?(taskId: string, eventType: string, payload?: unknown): void;
-  loadWorkflows(): Array<{
+  listWorkflows(): Array<{
     id: string;
     name: string;
     status: string;
@@ -528,13 +528,13 @@ export class Orchestrator {
 
   /**
    * Load tasks from ALL workflows into the state machine.
-   * Iterates over loadWorkflows() -> loadTasks(wfId) for each.
+   * Iterates over listWorkflows() -> loadTasks(wfId) for each.
    * The workflow FK is the single source of truth.
    */
   syncAllFromDb(): void {
     this.stateMachine.clear();
     this.activeWorkflowIds.clear();
-    const workflows = this.persistence.loadWorkflows();
+    const workflows = this.persistence.listWorkflows();
     for (const wf of workflows) {
       this.activeWorkflowIds.add(wf.id);
       const tasks = this.persistence.loadTasks(wf.id);

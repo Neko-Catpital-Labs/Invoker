@@ -41,7 +41,7 @@ class InMemoryPersistence implements OrchestratorPersistence {
     const entry = this.tasks.get(taskId);
     if (entry) entry.task = { ...entry.task, ...changes } as TaskState;
   }
-  loadWorkflows(): Array<{ id: string; name: string; status: string; createdAt: string; updatedAt: string }> {
+  listWorkflows(): Array<{ id: string; name: string; status: string; createdAt: string; updatedAt: string }> {
     return Array.from(this.workflows.values());
   }
   loadTasks(workflowId: string): TaskState[] {
