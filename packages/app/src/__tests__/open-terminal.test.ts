@@ -17,8 +17,17 @@ import {
   type OrchestratorPersistence,
   type OrchestratorMessageBus,
 } from '@invoker/core';
-import { LocalFamiliar, type FamiliarHandle, type TerminalSpec } from '@invoker/executors';
+import {
+  LocalFamiliar, DockerFamiliar, WorktreeFamiliar,
+  type FamiliarHandle, type TerminalSpec, type PersistedTaskMeta,
+} from '@invoker/executors';
 import type { WorkResponse, WorkRequest } from '@invoker/protocol';
+
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  return { ...actual, existsSync: vi.fn(actual.existsSync) };
+});
+import { existsSync } from 'node:fs';
 
 // ── Lightweight in-memory mocks ─────────────────────────────
 
@@ -249,140 +258,124 @@ describe('open-terminal integration', () => {
   });
 });
 
-// ── DB-only terminal routing tests ────────────────────────────
-// Replicates the spec-building logic from main.ts open-terminal handler
-// to verify correct routing without Electron IPC.
+// ── Per-executor getRestoredTerminalSpec tests ────────────────
+// Verifies that each familiar type correctly builds a TerminalSpec
+// from persisted DB metadata via getRestoredTerminalSpec().
 
-interface MockPersistence {
-  getFamiliarType: (taskId: string) => string | null;
-  getClaudeSessionId: (taskId: string) => string | null;
-  getContainerId: (taskId: string) => string | null;
-  getWorkspacePath: (taskId: string) => string | null;
-}
-
-/** Mirrors the spec-building logic in main.ts invoker:open-terminal handler. */
-function buildTerminalSpec(
-  persistence: MockPersistence,
-  taskId: string,
-  defaultCwd: string,
-): { spec: TerminalSpec | null; cwd: string } {
-  const familiarType = persistence.getFamiliarType(taskId);
-  const sessionId = persistence.getClaudeSessionId(taskId);
-  const containerId = persistence.getContainerId(taskId);
-  let spec: TerminalSpec | null = null;
-
-  if (familiarType === 'docker' && containerId) {
-    const execCmd = sessionId
-      ? `docker start ${containerId} >/dev/null 2>&1; docker exec -it ${containerId} claude --resume ${sessionId}`
-      : `docker start ${containerId} >/dev/null 2>&1; docker exec -it ${containerId} /bin/bash`;
-    spec = { command: 'bash', args: ['-c', execCmd] };
-  } else if (sessionId) {
-    spec = { command: 'claude', args: ['--resume', sessionId] };
-  }
-
-  const wsPath = persistence.getWorkspacePath(taskId);
-  const cwd = spec?.cwd ?? wsPath ?? defaultCwd;
-  return { spec, cwd };
-}
-
-describe('DB-only terminal routing', () => {
-  const defaultCwd = '/home/user/repo';
-
-  it('builds claude --resume spec for worktree task with session ID', () => {
-    const persistence: MockPersistence = {
-      getFamiliarType: () => 'worktree',
-      getClaudeSessionId: () => 'abc-123-session',
-      getContainerId: () => null,
-      getWorkspacePath: () => '/home/user/.invoker/worktrees/wt-uuid',
-    };
-
-    const { spec, cwd } = buildTerminalSpec(persistence, 'task-1', defaultCwd);
-
-    expect(spec).toEqual({ command: 'claude', args: ['--resume', 'abc-123-session'] });
-    expect(cwd).toBe('/home/user/.invoker/worktrees/wt-uuid');
+describe('getRestoredTerminalSpec routing', () => {
+  afterEach(() => {
+    vi.mocked(existsSync).mockReset();
   });
 
-  it('opens plain terminal for command task without session', () => {
-    const persistence: MockPersistence = {
-      getFamiliarType: () => 'local',
-      getClaudeSessionId: () => null,
-      getContainerId: () => null,
-      getWorkspacePath: () => '/home/user/repo',
-    };
+  describe('LocalFamiliar', () => {
+    const local = new LocalFamiliar();
 
-    const { spec, cwd } = buildTerminalSpec(persistence, 'task-cmd', defaultCwd);
+    it('returns claude --resume spec with cwd for worktree-like task with session', () => {
+      vi.mocked(existsSync).mockReturnValue(true);
+      const meta: PersistedTaskMeta = {
+        taskId: 'task-1',
+        familiarType: 'local',
+        claudeSessionId: 'abc-123-session',
+        workspacePath: '/home/user/repo',
+      };
+      const spec = local.getRestoredTerminalSpec(meta);
+      expect(spec.command).toBe('claude');
+      expect(spec.args).toContain('--resume');
+      expect(spec.args).toContain('abc-123-session');
+      expect(spec.cwd).toBe('/home/user/repo');
+    });
 
-    expect(spec).toBeNull();
-    expect(cwd).toBe('/home/user/repo');
+    it('returns cwd-only spec for command task without session', () => {
+      vi.mocked(existsSync).mockReturnValue(true);
+      const meta: PersistedTaskMeta = {
+        taskId: 'task-cmd',
+        familiarType: 'local',
+        workspacePath: '/home/user/repo',
+      };
+      const spec = local.getRestoredTerminalSpec(meta);
+      expect(spec.command).toBeUndefined();
+      expect(spec.cwd).toBe('/home/user/repo');
+    });
+
+    it('returns spec with undefined cwd when workspace_path is not set', () => {
+      const meta: PersistedTaskMeta = {
+        taskId: 'task-unknown',
+        familiarType: 'local',
+      };
+      const spec = local.getRestoredTerminalSpec(meta);
+      expect(spec.cwd).toBeUndefined();
+    });
+
+    it('throws when workspace path no longer exists', () => {
+      vi.mocked(existsSync).mockReturnValue(false);
+      const meta: PersistedTaskMeta = {
+        taskId: 'task-missing',
+        familiarType: 'local',
+        workspacePath: '/tmp/gone',
+      };
+      expect(() => local.getRestoredTerminalSpec(meta)).toThrow(/no longer exists/);
+    });
   });
 
-  it('does not attempt resume when session ID is null', () => {
-    const persistence: MockPersistence = {
-      getFamiliarType: () => 'worktree',
-      getClaudeSessionId: () => null,
-      getContainerId: () => null,
-      getWorkspacePath: () => '/home/user/.invoker/worktrees/wt-uuid',
-    };
+  describe('WorktreeFamiliar', () => {
+    it('returns cwd spec for worktree with existing path', () => {
+      vi.mocked(existsSync).mockReturnValue(true);
+      const wt = new WorktreeFamiliar({ repoDir: '/tmp/repo', worktreeBaseDir: '/tmp/wt', cacheDir: '/tmp/cache' });
+      const meta: PersistedTaskMeta = {
+        taskId: 'task-wt',
+        familiarType: 'worktree',
+        workspacePath: '/home/user/.invoker/worktrees/wt-abc',
+      };
+      const spec = wt.getRestoredTerminalSpec(meta);
+      expect(spec.cwd).toBe('/home/user/.invoker/worktrees/wt-abc');
+    });
 
-    const { spec } = buildTerminalSpec(persistence, 'task-no-session', defaultCwd);
-
-    expect(spec).toBeNull();
+    it('throws when worktree path no longer exists', () => {
+      vi.mocked(existsSync).mockReturnValue(false);
+      const wt = new WorktreeFamiliar({ repoDir: '/tmp/repo', worktreeBaseDir: '/tmp/wt', cacheDir: '/tmp/cache' });
+      const meta: PersistedTaskMeta = {
+        taskId: 'task-wt-gone',
+        familiarType: 'worktree',
+        workspacePath: '/home/user/.invoker/worktrees/deleted-wt',
+      };
+      expect(() => wt.getRestoredTerminalSpec(meta)).toThrow(/no longer exists.*cleaned up/);
+    });
   });
 
-  it('uses workspace_path as cwd for worktree resume (not main repo)', () => {
-    const persistence: MockPersistence = {
-      getFamiliarType: () => 'worktree',
-      getClaudeSessionId: () => 'session-xyz',
-      getContainerId: () => null,
-      getWorkspacePath: () => '/home/user/.invoker/worktrees/wt-abc',
-    };
+  describe('DockerFamiliar', () => {
+    const docker = new DockerFamiliar({ workspaceDir: '/tmp' });
 
-    const { cwd } = buildTerminalSpec(persistence, 'task-wt', defaultCwd);
+    it('returns docker exec spec with session resume', () => {
+      const meta: PersistedTaskMeta = {
+        taskId: 'task-docker',
+        familiarType: 'docker',
+        claudeSessionId: 'docker-session-1',
+        containerId: 'container-abc',
+      };
+      const spec = docker.getRestoredTerminalSpec(meta);
+      expect(spec.command).toBe('bash');
+      expect(spec.args![1]).toContain('claude --resume docker-session-1');
+      expect(spec.args![1]).toContain('docker start container-abc');
+    });
 
-    // claude --resume spec has no cwd field, so workspace_path is used
-    expect(cwd).toBe('/home/user/.invoker/worktrees/wt-abc');
-  });
+    it('returns docker exec spec without session (bash fallback)', () => {
+      const meta: PersistedTaskMeta = {
+        taskId: 'task-docker-cmd',
+        familiarType: 'docker',
+        containerId: 'container-xyz',
+      };
+      const spec = docker.getRestoredTerminalSpec(meta);
+      expect(spec.command).toBe('bash');
+      expect(spec.args![1]).toContain('/bin/bash');
+      expect(spec.args![1]).not.toContain('claude --resume');
+    });
 
-  it('falls back to default cwd when workspace_path is null', () => {
-    const persistence: MockPersistence = {
-      getFamiliarType: () => 'local',
-      getClaudeSessionId: () => null,
-      getContainerId: () => null,
-      getWorkspacePath: () => null,
-    };
-
-    const { cwd } = buildTerminalSpec(persistence, 'task-unknown', defaultCwd);
-
-    expect(cwd).toBe(defaultCwd);
-  });
-
-  it('builds docker exec spec with session resume', () => {
-    const persistence: MockPersistence = {
-      getFamiliarType: () => 'docker',
-      getClaudeSessionId: () => 'docker-session-1',
-      getContainerId: () => 'container-abc',
-      getWorkspacePath: () => null,
-    };
-
-    const { spec } = buildTerminalSpec(persistence, 'task-docker', defaultCwd);
-
-    expect(spec?.command).toBe('bash');
-    expect(spec?.args?.[1]).toContain('claude --resume docker-session-1');
-    expect(spec?.args?.[1]).toContain('docker start container-abc');
-  });
-
-  it('builds docker exec spec without session (bash fallback)', () => {
-    const persistence: MockPersistence = {
-      getFamiliarType: () => 'docker',
-      getClaudeSessionId: () => null,
-      getContainerId: () => 'container-xyz',
-      getWorkspacePath: () => null,
-    };
-
-    const { spec } = buildTerminalSpec(persistence, 'task-docker-cmd', defaultCwd);
-
-    expect(spec?.command).toBe('bash');
-    expect(spec?.args?.[1]).toContain('/bin/bash');
-    expect(spec?.args?.[1]).not.toContain('claude --resume');
+    it('throws when no container ID provided', () => {
+      const meta: PersistedTaskMeta = {
+        taskId: 'task-no-cid',
+        familiarType: 'docker',
+      };
+      expect(() => docker.getRestoredTerminalSpec(meta)).toThrow(/No container ID/);
+    });
   });
 });

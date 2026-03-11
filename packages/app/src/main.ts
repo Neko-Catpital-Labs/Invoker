@@ -37,7 +37,11 @@ import { Orchestrator } from '@invoker/core';
 import type { PlanDefinition, TaskDelta } from '@invoker/core';
 import { SQLiteAdapter, ConversationRepository } from '@invoker/persistence';
 import { LocalBus, Channels } from '@invoker/transport';
-import { LocalFamiliar, FamiliarRegistry, TaskExecutor, type Familiar, type FamiliarHandle } from '@invoker/executors';
+import {
+  LocalFamiliar, FamiliarRegistry, TaskExecutor,
+  DockerFamiliar, WorktreeFamiliar,
+  type Familiar, type FamiliarHandle, type PersistedTaskMeta,
+} from '@invoker/executors';
 import type { TaskOutputData } from './types.js';
 import { shouldRunOnFinish } from './workflow-finish.js';
 import { cleanupOrphanWorktrees } from './worktree-cleanup.js';
@@ -1141,54 +1145,60 @@ function setupGuiMode(): void {
 
     // ── External terminal launcher ──────────────────────────────
     ipcMain.handle('invoker:open-terminal', (_event, taskId: string): { opened: boolean; reason?: string } => {
-      // Check task status — block if still running to prevent interference
       const taskStatus = persistence.getTaskStatus(taskId);
       if (taskStatus === 'running') {
         console.log(`[ipc] open-terminal: BLOCKED task="${taskId}" — still running`);
         return { opened: false, reason: 'Task is still running. View output in the terminal panel below.' };
       }
 
-      const familiarType = persistence.getFamiliarType(taskId);
-      const sessionId = persistence.getClaudeSessionId(taskId);
-      const containerId = persistence.getContainerId(taskId);
-      // #region agent log
-      fetch('http://127.0.0.1:7658/ingest/762b7479-8057-4c6f-a805-85ee7d433bf5',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'561162'},body:JSON.stringify({sessionId:'561162',location:'main.ts:open-terminal',message:'open-terminal DB values',data:{taskId,taskStatus,familiarType,sessionId,containerId},timestamp:Date.now(),hypothesisId:'H1-H3'})}).catch(()=>{});
-      // #endregion
-      let spec: { cwd?: string; command?: string; args?: string[] } | null = null;
+      const meta: PersistedTaskMeta = {
+        taskId,
+        familiarType: persistence.getFamiliarType(taskId) ?? 'local',
+        claudeSessionId: persistence.getClaudeSessionId(taskId) ?? undefined,
+        containerId: persistence.getContainerId(taskId) ?? undefined,
+        workspacePath: persistence.getWorkspacePath(taskId) ?? undefined,
+      };
 
-      if (familiarType === 'docker' && containerId) {
-        // Restart stopped container before exec'ing into it
-        const execCmd = sessionId
-          ? `docker start ${containerId} >/dev/null 2>&1; docker exec -it ${containerId} claude --resume ${sessionId} --dangerously-skip-permissions`
-          : `docker start ${containerId} >/dev/null 2>&1; docker exec -it ${containerId} /bin/bash`;
-        spec = { command: 'bash', args: ['-c', execCmd] };
-      } else if (sessionId) {
-        spec = { command: 'claude', args: ['--resume', sessionId, '--dangerously-skip-permissions'] };
+      // Resolve the familiar, lazy-registering if needed
+      let familiar = familiarRegistry.get(meta.familiarType);
+      if (!familiar) {
+        if (meta.familiarType === 'docker') {
+          const docker = new DockerFamiliar({ workspaceDir: repoRoot });
+          familiarRegistry.register('docker', docker);
+          familiar = docker;
+        } else if (meta.familiarType === 'worktree') {
+          const invokerHome = path.resolve(homedir(), '.invoker');
+          const worktree = new WorktreeFamiliar({
+            repoDir: repoRoot,
+            worktreeBaseDir: path.resolve(invokerHome, 'worktrees'),
+            cacheDir: path.resolve(invokerHome, 'repos'),
+          });
+          familiarRegistry.register('worktree', worktree);
+          familiar = worktree;
+        } else {
+          familiar = familiarRegistry.getDefault();
+        }
       }
 
-      const wsPath = persistence.getWorkspacePath(taskId);
-      // #region agent log
-      const { existsSync } = require('node:fs');
-      const wsPathExists = wsPath ? existsSync(wsPath) : false;
-      fetch('http://127.0.0.1:7658/ingest/762b7479-8057-4c6f-a805-85ee7d433bf5',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'561162'},body:JSON.stringify({sessionId:'561162',location:'main.ts:open-terminal-exists-check',message:'wsPath existence check',data:{taskId,wsPath,wsPathExists},timestamp:Date.now(),hypothesisId:'H2-fix'})}).catch(()=>{});
-      // #endregion
-      const effectiveWsPath = (wsPath && wsPathExists) ? wsPath : null;
-      const cwd = spec?.cwd ?? effectiveWsPath ?? repoRoot;
-      // #region agent log
-      fetch('http://127.0.0.1:7658/ingest/762b7479-8057-4c6f-a805-85ee7d433bf5',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'561162'},body:JSON.stringify({sessionId:'561162',location:'main.ts:open-terminal-cwd',message:'open-terminal resolved cwd',data:{taskId,wsPath,cwd,repoRoot,specCwd:spec?.cwd??null},timestamp:Date.now(),hypothesisId:'H1-H2-H4'})}).catch(()=>{});
-      // #endregion
+      let spec: { cwd?: string; command?: string; args?: string[] };
+      try {
+        spec = familiar.getRestoredTerminalSpec(meta);
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        console.log(`[ipc] open-terminal: FAILED task="${taskId}" — ${reason}`);
+        return { opened: false, reason };
+      }
+
+      const cwd = spec.cwd ?? repoRoot;
       console.log(`[ipc] open-terminal: task="${taskId}" cwd="${cwd}" spec=${JSON.stringify(spec)}`);
 
-      // Helper: after terminal closes, check if worktree was modified and fork if dirty
       const onTerminalClose = () => {
         if (!cwd || cwd === repoRoot) return;
         try {
           const { execSync } = require('node:child_process');
           execSync('git diff HEAD --quiet', { cwd, stdio: 'ignore' });
-          // Exit 0 = no changes
           console.log(`[dirty-detect] task="${taskId}" — no changes detected`);
         } catch {
-          // Exit non-zero = files changed
           console.log(`[dirty-detect] task="${taskId}" — changes detected, forking subtree`);
           try {
             orchestrator.forkDirtySubtree(taskId);
@@ -1209,7 +1219,7 @@ function setupGuiMode(): void {
         cleanEnv.PATH = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin';
         if (!cleanEnv.TERM) cleanEnv.TERM = 'xterm-256color';
 
-        const termArgs = spec?.command
+        const termArgs = spec.command
           ? ['-e', 'bash', '-c', `cd '${cwd}' && ${[spec.command, ...(spec.args ?? [])].map(a => `'${a}'`).join(' ')}; echo ""; echo "Exit code: $?"; echo "Press Enter to close..."; read`]
           : ['--working-directory', cwd];
 
@@ -1221,7 +1231,7 @@ function setupGuiMode(): void {
         child.on('close', onTerminalClose);
         child.unref();
       } else if (process.platform === 'darwin') {
-        if (spec?.command) {
+        if (spec.command) {
           const fullCmd = [spec.command, ...(spec.args ?? [])].join(' ');
           const child = spawn('osascript', [
             '-e', `tell application "Terminal" to do script "${fullCmd}"`,
