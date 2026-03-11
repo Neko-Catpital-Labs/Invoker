@@ -875,7 +875,6 @@ export class Orchestrator {
         status,
         updatedAt: new Date().toISOString(),
       });
-      this.persistence.logEvent?.('__workflow__', `workflow.${status}`);
     }
   }
 

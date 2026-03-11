@@ -648,4 +648,68 @@ describe('WorktreeFamiliar', () => {
       taskProcess.emit('close', 0, null);
     });
   });
+
+  describe('stale worktree on restart', () => {
+    it('fails when branch is already used by another worktree (BUG REPRO)', async () => {
+      // Simulate: both `git worktree add -b` and `git worktree add` fail
+      // because the branch is locked by a stale worktree from a previous run.
+      mockedSpawn.mockImplementation((cmd: string, args?: readonly string[]) => {
+        const proc = createMockProcess();
+        const argsArr = args as string[];
+
+        Promise.resolve().then(() => {
+          if (cmd === 'git' && argsArr?.includes('worktree')) {
+            // Both worktree add attempts fail
+            proc.stderr!.emit('data', Buffer.from(
+              "fatal: 'experiment/action-1' is already used by worktree at '/old/worktree'\n",
+            ));
+            proc.emit('close', 128, null);
+          } else {
+            proc.emit('close', 0, null);
+          }
+        });
+
+        return proc as any;
+      });
+
+      const request = makeRequest();
+      await expect(familiar.start(request)).rejects.toThrow(/Failed to create worktree/);
+    });
+
+    it('succeeds after git worktree prune cleans stale references', async () => {
+      let pruned = false;
+
+      mockedSpawn.mockImplementation((cmd: string, args?: readonly string[]) => {
+        const proc = createMockProcess();
+        const argsArr = args as string[];
+
+        Promise.resolve().then(() => {
+          if (cmd === 'git' && argsArr?.includes('prune')) {
+            pruned = true;
+            proc.emit('close', 0, null);
+          } else if (cmd === 'git' && argsArr?.includes('worktree') && argsArr?.includes('add')) {
+            if (argsArr?.includes('-b') && !pruned) {
+              // First attempt without prune would fail
+              proc.stderr!.emit('data', Buffer.from("fatal: branch already exists\n"));
+              proc.emit('close', 128, null);
+            } else {
+              proc.emit('close', 0, null);
+            }
+          } else if (cmd === 'git' && argsArr?.includes('rev-parse')) {
+            proc.stdout!.emit('data', Buffer.from('abc123def456\n'));
+            proc.emit('close', 0, null);
+          } else {
+            proc.emit('close', 0, null);
+          }
+        });
+
+        return proc as any;
+      });
+
+      const request = makeRequest();
+      const handle = await familiar.start(request);
+      expect(handle).toBeDefined();
+      expect(pruned).toBe(true);
+    });
+  });
 });
