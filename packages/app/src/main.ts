@@ -13,6 +13,7 @@
  *   electron dist/main.js --headless reject <taskId> [reason]
  *   electron dist/main.js --headless input <taskId> <text>
  *   electron dist/main.js --headless select <taskId> <expId>
+ *   electron dist/main.js --headless restart <taskId>
  *   electron dist/main.js --headless edit <taskId> <newCommand>
  *   electron dist/main.js --headless audit <taskId>
  *
@@ -267,6 +268,9 @@ async function runHeadless(args: string[]): Promise<void> {
     case 'select':
       await headlessSelect(args[1], args[2]);
       break;
+    case 'restart':
+      await headlessRestart(args[1]);
+      break;
     case 'edit':
       await headlessEdit(args[1], args.slice(2).join(' '));
       break;
@@ -309,6 +313,7 @@ ${BOLD}Usage:${RESET}
   electron dist/main.js --headless reject <id> [why]  Reject a task
   electron dist/main.js --headless input <id> <text>  Provide input to task
   electron dist/main.js --headless select <id> <exp>  Select winning experiment
+  electron dist/main.js --headless restart <id>       Restart a failed/stuck task
   electron dist/main.js --headless edit <id> <cmd>    Edit task command and re-run
   electron dist/main.js --headless audit <taskId>     Print event history
   electron dist/main.js --headless slack              Start Slack bot (long-running)
@@ -480,6 +485,32 @@ async function headlessSelect(taskId: string, experimentId: string): Promise<voi
 
   const started = orchestrator.resumeWorkflow(workflowId);
   await taskExecutor.executeTasks(started);
+  await waitForCompletion();
+}
+
+async function headlessRestart(taskId: string): Promise<void> {
+  if (!taskId) throw new Error('Missing arguments. Usage: --headless restart <taskId>');
+  restoreWorkflowForTask(taskId);
+
+  const started = orchestrator.restartTask(taskId);
+  const runnable = started.filter(t => t.status === 'running');
+  console.log(`Restarted task "${taskId}" — ${runnable.length} task(s) to execute`);
+
+  if (runnable.length === 0) return;
+
+  const taskExecutor = new TaskExecutor({
+    orchestrator,
+    persistence,
+    familiarRegistry,
+    cwd: repoRoot,
+    callbacks: {
+      onOutput: (tid, data) => {
+        process.stdout.write(`\x1b[2m[${tid}]\x1b[0m ${data}`);
+      },
+    },
+  });
+
+  await taskExecutor.executeTasks(runnable);
   await waitForCompletion();
 }
 
