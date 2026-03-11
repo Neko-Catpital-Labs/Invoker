@@ -26,6 +26,7 @@ import { ActionGraph } from '@invoker/graph';
 // ── Channel Constants ───────────────────────────────────────
 
 const TASK_DELTA_CHANNEL = 'task.delta';
+let workflowCounter = 0;
 
 // ── Adapter Interfaces ──────────────────────────────────────
 
@@ -36,12 +37,15 @@ export interface OrchestratorPersistence {
     status: 'running' | 'completed' | 'failed';
     createdAt: string;
     updatedAt: string;
+    onFinish?: string;
+    baseBranch?: string;
+    featureBranch?: string;
   }): void;
   updateWorkflow?(workflowId: string, changes: { status?: string; updatedAt?: string }): void;
   saveTask(workflowId: string, task: TaskState): void;
   updateTask(taskId: string, changes: Partial<TaskState>): void;
   logEvent?(taskId: string, eventType: string, payload?: unknown): void;
-  loadWorkflows?(): Array<{
+  loadWorkflows(): Array<{
     id: string;
     name: string;
     status: string;
@@ -96,7 +100,7 @@ export class Orchestrator {
   private readonly messageBus: OrchestratorMessageBus;
   private readonly maxConcurrency: number;
 
-  private workflowId: string | undefined;
+  private activeWorkflowIds = new Set<string>();
 
   constructor(config: OrchestratorConfig) {
     this.maxConcurrency = config.maxConcurrency ?? 3;
@@ -117,11 +121,13 @@ export class Orchestrator {
    * we see any external changes before proceeding.
    */
   private refreshFromDb(): void {
-    if (!this.workflowId) return;
+    if (this.activeWorkflowIds.size === 0) return;
     this.stateMachine.clear();
-    const tasks = this.persistence.loadTasks(this.workflowId);
-    for (const task of tasks) {
-      this.stateMachine.restoreTask(task);
+    for (const wfId of this.activeWorkflowIds) {
+      const tasks = this.persistence.loadTasks(wfId);
+      for (const task of tasks) {
+        this.stateMachine.restoreTask(task);
+      }
     }
   }
 
@@ -146,10 +152,11 @@ export class Orchestrator {
    * Returns the new task state.
    */
   private createAndSync(task: TaskState): TaskState {
-    if (!this.workflowId) {
-      throw new Error('createAndSync: no workflowId set');
+    const wfId = task.workflowId;
+    if (!wfId) {
+      throw new Error('createAndSync: task has no workflowId');
     }
-    this.persistence.saveTask(this.workflowId, task);
+    this.persistence.saveTask(wfId, task);
     this.stateMachine.restoreTask(task);
     return task;
   }
@@ -161,15 +168,16 @@ export class Orchestrator {
    * Persists workflow and tasks, publishes deltas via MessageBus.
    */
   loadPlan(plan: PlanDefinition): void {
-    this.stateMachine.clear();
-
-    const workflowId = `wf-${Date.now()}`;
-    this.workflowId = workflowId;
+    const workflowId = `wf-${Date.now()}-${++workflowCounter}`;
+    this.activeWorkflowIds.add(workflowId);
 
     this.persistence.saveWorkflow({
       id: workflowId,
       name: plan.name,
       status: 'running',
+      onFinish: plan.onFinish,
+      baseBranch: plan.baseBranch,
+      featureBranch: plan.featureBranch,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     });
@@ -181,6 +189,7 @@ export class Orchestrator {
         taskDef.description,
         taskDef.dependencies ?? [],
         {
+          workflowId,
           command: taskDef.command,
           prompt: taskDef.prompt,
           pivot: taskDef.pivot,
@@ -495,6 +504,7 @@ export class Orchestrator {
       const remappedDeps = original.dependencies.map((dep) => idMap.get(dep) ?? dep);
 
       const cloneTask = createTaskState(cloneId, original.description, remappedDeps as string[], {
+        workflowId: original.workflowId,
         command: original.command,
         prompt: original.prompt,
         pivot: original.pivot,
@@ -517,15 +527,35 @@ export class Orchestrator {
   }
 
   /**
-   * Load tasks from persistence into the state machine.
-   * Safe to call at any time (startup, db-poll, view switch).
+   * Load tasks from ALL workflows into the state machine.
+   * Iterates over loadWorkflows() -> loadTasks(wfId) for each.
+   * The workflow FK is the single source of truth.
+   */
+  syncAllFromDb(): void {
+    this.stateMachine.clear();
+    this.activeWorkflowIds.clear();
+    const workflows = this.persistence.loadWorkflows();
+    for (const wf of workflows) {
+      this.activeWorkflowIds.add(wf.id);
+      const tasks = this.persistence.loadTasks(wf.id);
+      for (const task of tasks) {
+        this.stateMachine.restoreTask(task);
+      }
+    }
+  }
+
+  /**
+   * Load tasks from a single workflow. Kept for backward compatibility
+   * (e.g. resuming a specific workflow).
    */
   syncFromDb(workflowId: string): void {
-    this.workflowId = workflowId;
+    this.activeWorkflowIds.add(workflowId);
     this.stateMachine.clear();
-    const tasks = this.persistence.loadTasks(workflowId);
-    for (const task of tasks) {
-      this.stateMachine.restoreTask(task);
+    for (const wfId of this.activeWorkflowIds) {
+      const tasks = this.persistence.loadTasks(wfId);
+      for (const task of tasks) {
+        this.stateMachine.restoreTask(task);
+      }
     }
   }
 
@@ -552,14 +582,17 @@ export class Orchestrator {
     return this.stateMachine.getReadyTasks();
   }
 
-  getWorkflowStatus(): {
+  getWorkflowStatus(workflowId?: string): {
     total: number;
     completed: number;
     failed: number;
     running: number;
     pending: number;
   } {
-    const tasks = this.stateMachine.getAllTasks();
+    let tasks = this.stateMachine.getAllTasks();
+    if (workflowId) {
+      tasks = tasks.filter((t) => t.workflowId === workflowId);
+    }
     return {
       total: tasks.length,
       completed: tasks.filter((t) => t.status === 'completed').length,
@@ -567,6 +600,10 @@ export class Orchestrator {
       running: tasks.filter((t) => t.status === 'running').length,
       pending: tasks.filter((t) => t.status === 'pending').length,
     };
+  }
+
+  getWorkflowIds(): string[] {
+    return Array.from(this.activeWorkflowIds);
   }
 
   // ── Private: Response Handling ─────────────────────────────
@@ -665,6 +702,7 @@ export class Orchestrator {
     // Create experiment tasks
     for (const planned of plan.experimentTasks) {
       const task = createTaskState(planned.id, planned.description, planned.dependencies, {
+        workflowId: parentTask?.workflowId,
         parentTask: planned.parentTask,
         experimentPrompt: planned.experimentPrompt,
         prompt: planned.prompt,
@@ -685,6 +723,7 @@ export class Orchestrator {
       plan.reconciliationTask.description,
       plan.reconciliationTask.dependencies,
       {
+        workflowId: parentTask?.workflowId,
         parentTask: plan.reconciliationTask.parentTask,
         isReconciliation: plan.reconciliationTask.isReconciliation,
         requiresManualApproval: plan.reconciliationTask.requiresManualApproval,
@@ -806,36 +845,38 @@ export class Orchestrator {
   }
 
   private checkWorkflowCompletion(): void {
-    if (!this.workflowId || !this.persistence.updateWorkflow) return;
+    if (!this.persistence.updateWorkflow) return;
 
-    const tasks = this.stateMachine.getAllTasks();
-    if (tasks.length === 0) return;
+    for (const wfId of this.activeWorkflowIds) {
+      const tasks = this.stateMachine.getAllTasks().filter((t) => t.workflowId === wfId);
+      if (tasks.length === 0) continue;
 
-    const settled = tasks.every(
-      (t) =>
-        t.status === 'completed' ||
-        t.status === 'failed' ||
-        t.status === 'needs_input' ||
-        t.status === 'awaiting_approval' ||
-        t.status === 'blocked' ||
-        t.status === 'stale',
-    );
-    if (!settled) return;
+      const settled = tasks.every(
+        (t) =>
+          t.status === 'completed' ||
+          t.status === 'failed' ||
+          t.status === 'needs_input' ||
+          t.status === 'awaiting_approval' ||
+          t.status === 'blocked' ||
+          t.status === 'stale',
+      );
+      if (!settled) continue;
 
-    const hasPendingInput = tasks.some(
-      (t) => t.status === 'needs_input' || t.status === 'awaiting_approval',
-    );
-    if (hasPendingInput) return;
+      const hasPendingInput = tasks.some(
+        (t) => t.status === 'needs_input' || t.status === 'awaiting_approval',
+      );
+      if (hasPendingInput) continue;
 
-    const allSucceeded = tasks.every(
-      (t) => t.status === 'completed' || t.status === 'stale',
-    );
-    const status = allSucceeded ? 'completed' : 'failed';
-    this.persistence.updateWorkflow(this.workflowId, {
-      status,
-      updatedAt: new Date().toISOString(),
-    });
-    this.persistence.logEvent?.('__workflow__', `workflow.${status}`);
+      const allSucceeded = tasks.every(
+        (t) => t.status === 'completed' || t.status === 'stale',
+      );
+      const status = allSucceeded ? 'completed' : 'failed';
+      this.persistence.updateWorkflow(wfId, {
+        status,
+        updatedAt: new Date().toISOString(),
+      });
+      this.persistence.logEvent?.('__workflow__', `workflow.${status}`);
+    }
   }
 
   private autoStartReadyTasks(taskIds: string[]): TaskState[] {

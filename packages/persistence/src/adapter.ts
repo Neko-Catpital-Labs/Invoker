@@ -37,6 +37,9 @@ export interface Workflow {
   planFile?: string;
   repoUrl?: string;
   branch?: string;
+  onFinish?: 'none' | 'merge' | 'pull_request';
+  baseBranch?: string;
+  featureBranch?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -62,7 +65,7 @@ export interface PersistenceAdapter {
   saveWorkflow(workflow: Workflow): void;
   updateWorkflow(workflowId: string, changes: Partial<Pick<Workflow, 'status' | 'updatedAt'>>): void;
   loadWorkflow(workflowId: string): Workflow | undefined;
-  listWorkflows(): Array<{ id: string; name: string; status: string; createdAt: string; updatedAt: string }>;
+  listWorkflows(): Workflow[];
 
   // Tasks
   saveTask(workflowId: string, task: TaskState): void;

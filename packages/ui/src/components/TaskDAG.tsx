@@ -27,7 +27,7 @@ import { getEdgeStyle } from '../lib/colors.js';
 import { TaskNode } from './TaskNode.js';
 import { BundledEdge, type BundledEdgeData } from './BundledEdge.js';
 import { MergeGateNode } from './MergeGateNode.js';
-import { MERGE_GATE_ID, computeMergeGateStatus, findLeafTasks } from '../lib/merge-gate.js';
+import { mergeGateId, isMergeGateId, computeMergeGateStatus, findLeafTasks, groupTasksByWorkflow } from '../lib/merge-gate.js';
 
 interface TaskDAGProps {
   tasks: Map<string, TaskState>;
@@ -59,84 +59,97 @@ function TaskDAGInner({ tasks, onFinish, onTaskClick, onTaskDoubleClick, onTaskC
     const taskArray = [...tasks.values()];
     if (taskArray.length === 0) return { nodes: [], edges: [] };
 
-    // Determine if we should show the merge gate
-    const showMergeGate = onFinish !== 'none' && taskArray.length > 0;
+    const showMergeGate = onFinish !== 'none';
     const effectiveOnFinish = onFinish ?? 'merge';
+    const workflowGroups = groupTasksByWorkflow(taskArray);
 
-    // Find leaf tasks (tasks that no other task depends on)
-    const leaves = findLeafTasks(taskArray);
+    const allNodes: Node[] = [];
+    const allRawEdges: { source: string; target: string }[] = [];
+    const gateStatuses = new Map<string, ReturnType<typeof computeMergeGateStatus>>();
 
-    // Build layout input: real tasks + optional synthetic merge gate
-    const layoutTasks: TaskState[] = [...taskArray];
-    if (showMergeGate && leaves.length > 0) {
-      layoutTasks.push({
-        id: MERGE_GATE_ID,
-        description: effectiveOnFinish === 'pull_request' ? 'Create PR' : 'Merge to base',
-        status: computeMergeGateStatus(taskArray),
-        dependencies: leaves.map(t => t.id),
-        createdAt: new Date(),
-      });
-    }
+    let yOffset = 0;
+    const WORKFLOW_GAP = 100;
 
-    const positions = layoutNodes(layoutTasks);
+    for (const [wfId, wfTasks] of workflowGroups) {
+      const gateId = mergeGateId(wfId);
+      const leaves = findLeafTasks(wfTasks);
 
-    const newNodes: Node[] = taskArray.map((task) => {
-      const pos = positions.get(task.id) ?? { x: 0, y: 0 };
-      return {
-        id: task.id,
-        type: 'taskNode',
-        position: pos,
-        data: { task, label: task.description },
-      };
-    });
+      const layoutTasks: TaskState[] = [...wfTasks];
+      if (showMergeGate && leaves.length > 0) {
+        layoutTasks.push({
+          id: gateId,
+          description: effectiveOnFinish === 'pull_request' ? 'Create PR' : 'Merge to base',
+          status: computeMergeGateStatus(wfTasks),
+          dependencies: leaves.map(t => t.id),
+          createdAt: new Date(),
+        });
+      }
 
-    // Add merge gate node
-    if (showMergeGate && leaves.length > 0) {
-      const gatePos = positions.get(MERGE_GATE_ID) ?? { x: 0, y: 0 };
-      newNodes.push({
-        id: MERGE_GATE_ID,
-        type: 'mergeGateNode',
-        position: gatePos,
-        data: {
-          status: computeMergeGateStatus(taskArray),
-          label: 'All tasks must pass',
-          onFinish: effectiveOnFinish === 'pull_request' ? 'pull_request' : 'merge',
-        },
-      });
-    }
+      const positions = layoutNodes(layoutTasks);
 
-    // Collect raw edges, then compute per-handle offsets to fan out overlapping edges.
-    const rawEdges: { source: string; target: string }[] = [];
-    for (const task of taskArray) {
-      for (const depId of task.dependencies) {
-        if (tasks.has(depId)) {
-          rawEdges.push({ source: depId, target: task.id });
+      // Find bounding box to apply yOffset
+      let minY = Infinity;
+      let maxY = -Infinity;
+      for (const pos of positions.values()) {
+        if (pos.y < minY) minY = pos.y;
+        if (pos.y > maxY) maxY = pos.y;
+      }
+
+      for (const task of wfTasks) {
+        const pos = positions.get(task.id) ?? { x: 0, y: 0 };
+        allNodes.push({
+          id: task.id,
+          type: 'taskNode',
+          position: { x: pos.x, y: pos.y + yOffset },
+          data: { task, label: task.description },
+        });
+      }
+
+      if (showMergeGate && leaves.length > 0) {
+        const gatePos = positions.get(gateId) ?? { x: 0, y: 0 };
+        const gateStatus = computeMergeGateStatus(wfTasks);
+        gateStatuses.set(gateId, gateStatus);
+        allNodes.push({
+          id: gateId,
+          type: 'mergeGateNode',
+          position: { x: gatePos.x, y: gatePos.y + yOffset },
+          data: {
+            status: gateStatus,
+            label: 'All tasks must pass',
+            onFinish: effectiveOnFinish === 'pull_request' ? 'pull_request' : 'merge',
+          },
+        });
+
+        for (const leaf of leaves) {
+          allRawEdges.push({ source: leaf.id, target: gateId });
         }
       }
-    }
 
-    // Add edges from leaves to merge gate
-    if (showMergeGate && leaves.length > 0) {
-      for (const leaf of leaves) {
-        rawEdges.push({ source: leaf.id, target: MERGE_GATE_ID });
+      for (const task of wfTasks) {
+        for (const depId of task.dependencies) {
+          if (tasks.has(depId)) {
+            allRawEdges.push({ source: depId, target: task.id });
+          }
+        }
       }
+
+      const groupHeight = maxY === -Infinity ? 0 : maxY - minY + 80;
+      yOffset += groupHeight + WORKFLOW_GAP;
     }
 
-    // Count outgoing edges per source and incoming edges per target
+    // Build edges with offset calculations
     const sourceOutCount = new Map<string, number>();
     const targetInCount = new Map<string, number>();
-    for (const e of rawEdges) {
+    for (const e of allRawEdges) {
       sourceOutCount.set(e.source, (sourceOutCount.get(e.source) ?? 0) + 1);
       targetInCount.set(e.target, (targetInCount.get(e.target) ?? 0) + 1);
     }
 
-    // Track current index per handle to assign offsets
     const sourceOutIndex = new Map<string, number>();
     const targetInIndex = new Map<string, number>();
+    const EDGE_SPACING = 12;
 
-    const EDGE_SPACING = 12; // pixels between fanned edges
-
-    const newEdges: Edge<BundledEdgeData>[] = rawEdges.map((e) => {
+    const newEdges: Edge<BundledEdgeData>[] = allRawEdges.map((e) => {
       const srcTotal = sourceOutCount.get(e.source) ?? 1;
       const srcIdx = sourceOutIndex.get(e.source) ?? 0;
       sourceOutIndex.set(e.source, srcIdx + 1);
@@ -145,21 +158,17 @@ function TaskDAGInner({ tasks, onFinish, onTaskClick, onTaskDoubleClick, onTaskC
       const tgtIdx = targetInIndex.get(e.target) ?? 0;
       targetInIndex.set(e.target, tgtIdx + 1);
 
-      // Center the fan: offset = (index - (total-1)/2) * spacing
       const sourceOffset = srcTotal > 1 ? (srcIdx - (srcTotal - 1) / 2) * EDGE_SPACING : 0;
       const targetOffset = tgtTotal > 1 ? (tgtIdx - (tgtTotal - 1) / 2) * EDGE_SPACING : 0;
 
-      // Look up task state — merge gate is synthetic, not in the tasks map
-      const mergeGateStatus = computeMergeGateStatus(taskArray);
       const sourceTask = tasks.get(e.source);
       const targetTask = tasks.get(e.target);
-      const sourceStatus = sourceTask?.status ?? mergeGateStatus;
-      const targetStatus = targetTask?.status ?? mergeGateStatus;
+      const sourceStatus = sourceTask?.status ?? gateStatuses.get(e.source) ?? 'pending';
+      const targetStatus = targetTask?.status ?? gateStatuses.get(e.target) ?? 'pending';
       const edgeStyle = getEdgeStyle(sourceStatus, targetStatus);
 
-      // Build label for hover display
-      const srcLabel = (e.source === MERGE_GATE_ID ? 'Merge' : e.source);
-      const tgtLabel = (e.target === MERGE_GATE_ID ? 'Merge' : e.target);
+      const srcLabel = isMergeGateId(e.source) ? 'Merge' : e.source;
+      const tgtLabel = isMergeGateId(e.target) ? 'Merge' : e.target;
       const truncSrc = srcLabel.length > 12 ? srcLabel.slice(0, 12) + '..' : srcLabel;
       const truncTgt = tgtLabel.length > 12 ? tgtLabel.slice(0, 12) + '..' : tgtLabel;
       const label = `${truncSrc} → ${truncTgt}`;
@@ -193,7 +202,7 @@ function TaskDAGInner({ tasks, onFinish, onTaskClick, onTaskDoubleClick, onTaskC
       };
     });
 
-    return { nodes: newNodes, edges: newEdges };
+    return { nodes: allNodes, edges: newEdges };
   }, [tasks, onFinish]);
 
   // Merge task-derived nodes with React Flow's internal dimension/selection state.

@@ -39,6 +39,7 @@ export interface TaskState {
   readonly description: string;
   readonly status: TaskStatus;
   readonly dependencies: readonly string[];
+  readonly workflowId?: string;
   readonly blockedBy?: string;
   readonly inputPrompt?: string;
   readonly exitCode?: number;

@@ -23,11 +23,12 @@ import type { WorkResponse, WorkRequest } from '@invoker/protocol';
 // ── Lightweight in-memory mocks ─────────────────────────────
 
 class InMemoryPersistence implements OrchestratorPersistence {
-  workflows = new Map<string, { id: string; name: string; status: string }>();
+  workflows = new Map<string, { id: string; name: string; status: string; createdAt: string; updatedAt: string }>();
   tasks = new Map<string, { workflowId: string; task: TaskState }>();
 
   saveWorkflow(workflow: { id: string; name: string; status: string }): void {
-    this.workflows.set(workflow.id, workflow);
+    const now = new Date().toISOString();
+    this.workflows.set(workflow.id, { ...workflow, createdAt: (workflow as any).createdAt ?? now, updatedAt: (workflow as any).updatedAt ?? now });
   }
   updateWorkflow(workflowId: string, changes: { status?: string }): void {
     const wf = this.workflows.get(workflowId);
@@ -39,6 +40,9 @@ class InMemoryPersistence implements OrchestratorPersistence {
   updateTask(taskId: string, changes: Partial<TaskState>): void {
     const entry = this.tasks.get(taskId);
     if (entry) entry.task = { ...entry.task, ...changes } as TaskState;
+  }
+  loadWorkflows(): Array<{ id: string; name: string; status: string; createdAt: string; updatedAt: string }> {
+    return Array.from(this.workflows.values());
   }
   loadTasks(workflowId: string): TaskState[] {
     return Array.from(this.tasks.values())
