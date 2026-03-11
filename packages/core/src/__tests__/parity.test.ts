@@ -38,7 +38,7 @@ class InMemoryPersistence implements OrchestratorPersistence {
     if (wf && changes.status) wf.status = changes.status;
   }
 
-  loadWorkflows(): Array<{ id: string; name: string; status: string; createdAt: string; updatedAt: string }> {
+  listWorkflows(): Array<{ id: string; name: string; status: string; createdAt: string; updatedAt: string }> {
     return Array.from(this.workflows.values());
   }
 
