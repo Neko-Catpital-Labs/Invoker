@@ -298,7 +298,7 @@ export class TaskExecutor {
 
     if (onFinish !== 'none' && featureBranch) {
       try {
-        await this.consolidateAndMerge(onFinish, baseBranch, featureBranch, workflow?.name);
+        await this.consolidateAndMerge(onFinish, baseBranch, featureBranch, workflowId, workflow?.name);
         response = {
           requestId: `merge-${task.id}`,
           actionId: task.id,
@@ -336,6 +336,7 @@ export class TaskExecutor {
     onFinish: string,
     baseBranch: string,
     featureBranch: string,
+    workflowId?: string,
     workflowName?: string,
   ): Promise<void> {
     // Consolidate all completed task branches into featureBranch
@@ -347,9 +348,9 @@ export class TaskExecutor {
       console.log(`[merge] Checked out existing ${featureBranch}`);
     }
 
-    const tasks = this.orchestrator.getAllTasks();
-    const taskBranches = tasks
-      .filter((t) => t.status === 'completed' && t.branch && !t.isMergeNode)
+    const allTasks = this.orchestrator.getAllTasks();
+    const taskBranches = allTasks
+      .filter((t) => t.workflowId === workflowId && t.status === 'completed' && t.branch && !t.isMergeNode)
       .map((t) => t.branch!);
 
     for (const branch of taskBranches) {

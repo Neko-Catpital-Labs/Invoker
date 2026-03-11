@@ -366,14 +366,17 @@ async function headlessRun(planPath: string): Promise<void> {
     },
   });
 
+  const wfIdsBefore = new Set(orchestrator.getWorkflowIds());
   orchestrator.loadPlan(plan);
+  const currentWorkflowId = orchestrator.getWorkflowIds().find((id) => !wfIdsBefore.has(id));
+
   const started = orchestrator.startExecution();
   await taskExecutor.executeTasks(started);
 
-  // Wait for all tasks to settle
-  await waitForCompletion();
+  // Wait for all tasks in this workflow to settle
+  await waitForCompletion(currentWorkflowId);
 
-  const status = orchestrator.getWorkflowStatus();
+  const status = orchestrator.getWorkflowStatus(currentWorkflowId);
   console.log(`\n${formatWorkflowStatus(status)}`);
 
   // onFinish is now handled by the merge node in the TaskExecutor
@@ -629,20 +632,24 @@ function restoreWorkflowForTask(taskId: string): string {
   throw new Error(`Task "${taskId}" not found in any workflow`);
 }
 
-async function waitForCompletion(): Promise<void> {
+async function waitForCompletion(workflowId?: string): Promise<void> {
   const maxWaitMs = 300_000; // 5 minutes
   const pollIntervalMs = 100;
   const start = Date.now();
 
   while (Date.now() - start < maxWaitMs) {
-    const tasks = orchestrator.getAllTasks();
+    let tasks = orchestrator.getAllTasks();
+    if (workflowId) {
+      tasks = tasks.filter((t) => t.workflowId === workflowId);
+    }
     const allSettled = tasks.every(
       (t) =>
         t.status === 'completed' ||
         t.status === 'failed' ||
         t.status === 'needs_input' ||
         t.status === 'awaiting_approval' ||
-        t.status === 'blocked',
+        t.status === 'blocked' ||
+        t.status === 'stale',
     );
     if (allSettled) return;
     await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));

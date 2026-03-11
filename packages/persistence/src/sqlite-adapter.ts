@@ -68,6 +68,9 @@ export class SQLiteAdapter implements PersistenceAdapter {
         repo_url TEXT,
         feature_branch TEXT,
 
+        -- Merge node
+        is_merge_node INTEGER DEFAULT 0,
+
         -- Claude session
         claude_session_id TEXT,
         workspace_path TEXT,
@@ -139,6 +142,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       'ALTER TABLE tasks ADD COLUMN workspace_path TEXT',
       'ALTER TABLE tasks ADD COLUMN familiar_type TEXT',
       'ALTER TABLE tasks ADD COLUMN container_id TEXT',
+      'ALTER TABLE tasks ADD COLUMN is_merge_node INTEGER DEFAULT 0',
       'ALTER TABLE workflows ADD COLUMN on_finish TEXT',
       'ALTER TABLE workflows ADD COLUMN base_branch TEXT',
       'ALTER TABLE workflows ADD COLUMN feature_branch TEXT',
@@ -201,6 +205,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         pivot, experiment_variants, is_reconciliation, selected_experiment,
         experiment_results, requires_manual_approval,
         repo_url, feature_branch,
+        is_merge_node,
         familiar_type, claude_session_id, workspace_path, container_id,
         created_at, started_at, completed_at
       ) VALUES (
@@ -211,6 +216,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         ?, ?, ?, ?,
         ?, ?,
         ?, ?,
+        ?,
         ?, ?, ?, ?,
         ?, ?, ?
       )
@@ -230,6 +236,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       task.experimentResults ? JSON.stringify(task.experimentResults) : null,
       task.requiresManualApproval ? 1 : 0,
       task.repoUrl ?? null, task.featureBranch ?? null,
+      task.isMergeNode ? 1 : 0,
       task.familiarType ?? null,
       task.claudeSessionId ?? null,
       task.workspacePath ?? null,
@@ -608,6 +615,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       requiresManualApproval: row.requires_manual_approval === 1 ? true : undefined,
       repoUrl: row.repo_url ?? undefined,
       featureBranch: row.feature_branch ?? undefined,
+      isMergeNode: row.is_merge_node === 1 ? true : undefined,
       familiarType: row.familiar_type ?? undefined,
       claudeSessionId: row.claude_session_id ?? undefined,
       workspacePath: row.workspace_path ?? undefined,

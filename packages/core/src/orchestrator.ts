@@ -262,7 +262,7 @@ export class Orchestrator {
       mergeNodeId,
       `Merge gate for ${plan.name}`,
       leafIds,
-      { workflowId, isMergeNode: true },
+      { workflowId, isMergeNode: true, familiarType: 'merge' },
     );
     this.createAndSync(mergeTask);
     deltas.push({ type: 'created', task: mergeTask });
@@ -492,6 +492,7 @@ export class Orchestrator {
     this.refreshFromDb();
     const task = this.stateMachine.getTask(taskId);
     if (!task) throw new Error(`Task ${taskId} not found`);
+    if (task.isMergeNode) throw new Error(`Cannot edit merge node ${taskId}`);
     if (task.status === 'running') throw new Error(`Cannot edit running task ${taskId}`);
 
     const cmdChanges: Partial<TaskState> = { command: newCommand };
@@ -513,6 +514,7 @@ export class Orchestrator {
     this.refreshFromDb();
     const task = this.stateMachine.getTask(taskId);
     if (!task) throw new Error(`Task ${taskId} not found`);
+    if (task.isMergeNode) throw new Error(`Cannot change executor type of merge node ${taskId}`);
     if (task.status === 'running') throw new Error(`Cannot edit running task ${taskId}`);
 
     const typeChanges: Partial<TaskState> = { familiarType };
