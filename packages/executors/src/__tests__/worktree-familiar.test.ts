@@ -126,7 +126,10 @@ describe('WorktreeFamiliar', () => {
     expect(gitCalls.length).toBeGreaterThanOrEqual(1);
 
     const worktreeAddCall = gitCalls.find(
-      (call) => (call[1] as string[])?.includes('worktree'),
+      (call) => {
+        const a = call[1] as string[];
+        return a?.includes('worktree') && a?.includes('add');
+      },
     );
     expect(worktreeAddCall).toBeDefined();
 
@@ -274,13 +277,18 @@ describe('WorktreeFamiliar', () => {
   });
 
   it('handles git worktree creation failure gracefully', async () => {
-    // Make git worktree add fail on both attempts
-    mockedSpawn.mockImplementation((cmd: string, _args?: readonly string[], _options?: any) => {
+    // Prune succeeds but worktree add fails on both attempts
+    mockedSpawn.mockImplementation((cmd: string, args?: readonly string[], _options?: any) => {
+      const gitProc = createMockProcess();
       if (cmd === 'git') {
-        const gitProc = createMockProcess();
+        const argsArr = args as string[];
         Promise.resolve().then(() => {
-          gitProc.stderr!.emit('data', Buffer.from('fatal: not a git repository\n'));
-          gitProc.emit('close', 128, null);
+          if (argsArr?.includes('prune')) {
+            gitProc.emit('close', 0, null);
+          } else {
+            gitProc.stderr!.emit('data', Buffer.from('fatal: not a git repository\n'));
+            gitProc.emit('close', 128, null);
+          }
         });
         return gitProc as any;
       }
