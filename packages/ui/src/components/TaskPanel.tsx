@@ -8,6 +8,7 @@
  * - Action buttons based on status
  */
 
+import { useState, useEffect } from 'react';
 import type { TaskState } from '../types.js';
 import { getStatusColor } from '../lib/colors.js';
 
@@ -17,6 +18,7 @@ interface TaskPanelProps {
   onApprove: (task: TaskState) => void;
   onReject: (task: TaskState) => void;
   onSelectExperiment: (task: TaskState) => void;
+  onEditCommand?: (taskId: string, newCommand: string) => void;
 }
 
 function formatDate(date?: Date | string): string {
@@ -31,7 +33,16 @@ export function TaskPanel({
   onApprove,
   onReject,
   onSelectExperiment,
+  onEditCommand,
 }: TaskPanelProps) {
+  const [isEditingCommand, setIsEditingCommand] = useState(false);
+  const [editCommandValue, setEditCommandValue] = useState('');
+
+  useEffect(() => {
+    setIsEditingCommand(false);
+    setEditCommandValue(task?.command ?? '');
+  }, [task?.id]);
+
   if (!task) {
     return (
       <div className="h-full flex items-center justify-center text-gray-500 p-4">
@@ -39,6 +50,20 @@ export function TaskPanel({
       </div>
     );
   }
+
+  const canEditCommand = task.command !== undefined && task.status !== 'running' && onEditCommand;
+
+  const handleSaveCommand = () => {
+    if (onEditCommand && editCommandValue !== task.command) {
+      onEditCommand(task.id, editCommandValue);
+    }
+    setIsEditingCommand(false);
+  };
+
+  const handleCancelEdit = () => {
+    setEditCommandValue(task.command ?? '');
+    setIsEditingCommand(false);
+  };
 
   const colors = getStatusColor(task.status);
 
@@ -69,24 +94,67 @@ export function TaskPanel({
       {/* Task type + content */}
       {(task.prompt || task.command) && (
         <div>
-          <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
-            task.prompt
-              ? 'bg-blue-900/40 text-blue-300'
-              : 'bg-gray-700 text-gray-300'
-          }`}>
-            {task.prompt ? 'Claude Task' : 'Command'}
-          </span>
-          <div className={`mt-2 rounded p-3 text-xs select-text cursor-text ${
-            task.prompt
-              ? 'bg-blue-900/20 border border-blue-800'
-              : 'bg-gray-800 border border-gray-700'
-          }`}>
-            {task.prompt ? (
-              <p className="text-gray-300 whitespace-pre-wrap">{task.prompt}</p>
-            ) : (
-              <code className="text-green-300 font-mono whitespace-pre-wrap">{task.command}</code>
+          <div className="flex items-center justify-between">
+            <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
+              task.prompt
+                ? 'bg-blue-900/40 text-blue-300'
+                : 'bg-gray-700 text-gray-300'
+            }`}>
+              {task.prompt ? 'Claude Task' : 'Command'}
+            </span>
+            {canEditCommand && !isEditingCommand && (
+              <button
+                onClick={() => {
+                  setEditCommandValue(task.command ?? '');
+                  setIsEditingCommand(true);
+                }}
+                className="text-xs text-gray-400 hover:text-gray-200 transition-colors"
+                data-testid="edit-command-btn"
+              >
+                Edit
+              </button>
             )}
           </div>
+
+          {isEditingCommand && task.command !== undefined ? (
+            <div className="mt-2 space-y-2">
+              <textarea
+                value={editCommandValue}
+                onChange={(e) => setEditCommandValue(e.target.value)}
+                className="w-full rounded p-3 text-xs font-mono text-green-300 bg-gray-800 border border-blue-500 focus:outline-none focus:border-blue-400 resize-y"
+                rows={3}
+                data-testid="edit-command-input"
+              />
+              <div className="flex gap-2">
+                <button
+                  onClick={handleSaveCommand}
+                  className="flex-1 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded text-xs font-medium transition-colors"
+                  data-testid="save-command-btn"
+                >
+                  Save & Re-run
+                </button>
+                <button
+                  onClick={handleCancelEdit}
+                  className="flex-1 px-3 py-1.5 bg-gray-600 hover:bg-gray-500 text-white rounded text-xs font-medium transition-colors"
+                  data-testid="cancel-edit-btn"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className={`mt-2 rounded p-3 text-xs select-text cursor-text ${
+              task.prompt
+                ? 'bg-blue-900/20 border border-blue-800'
+                : 'bg-gray-800 border border-gray-700'
+            }`}>
+              {task.prompt ? (
+                <p className="text-gray-300 whitespace-pre-wrap">{task.prompt}</p>
+              ) : (
+                <code className="text-green-300 font-mono whitespace-pre-wrap">{task.command}</code>
+              )}
+            </div>
+          )}
         </div>
       )}
 

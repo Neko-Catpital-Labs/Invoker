@@ -136,6 +136,7 @@ export interface InvokerAPI {
   reject: (taskId: string, reason?: string) => Promise<void>;
   selectExperiment: (taskId: string, experimentId: string) => Promise<void>;
   restartTask: (taskId: string) => Promise<void>;
+  editTaskCommand: (taskId: string, newCommand: string) => Promise<void>;
   onTaskDelta: (cb: (delta: TaskDelta) => void) => () => void;
   onTaskOutput: (cb: (data: TaskOutputData) => void) => () => void;
   onActivityLog: (cb: (entries: ActivityLogEntry[]) => void) => () => void;

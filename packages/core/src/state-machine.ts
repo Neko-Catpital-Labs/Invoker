@@ -277,6 +277,33 @@ export class TaskStateMachine {
     return this.graph.rewriteDependency(oldDepId, newDepId);
   }
 
+  // ── Field Updates ──────────────────────────────────────
+
+  /**
+   * Update mutable execution fields (command, prompt) on a non-running task.
+   * Does not change status — just replaces the field values.
+   */
+  updateTaskFields(
+    taskId: string,
+    changes: Partial<Pick<TaskState, 'command' | 'prompt'>>,
+  ): TransitionResult | { error: string } {
+    const task = this.graph.getNode(taskId);
+    if (!task) return { error: `Task ${taskId} not found` };
+    if (task.status === 'running') {
+      return { error: `Cannot edit task ${taskId}: it is currently running` };
+    }
+
+    const updated: TaskState = { ...task, ...changes };
+    this.graph.setNode(task.id, updated);
+
+    return {
+      task: updated,
+      delta: { type: 'updated', taskId: task.id, changes },
+      transition: { from: task.status, to: task.status, taskId: task.id, timestamp: new Date() },
+      sideEffects: [],
+    };
+  }
+
   // ── Restart ────────────────────────────────────────────
 
   /**

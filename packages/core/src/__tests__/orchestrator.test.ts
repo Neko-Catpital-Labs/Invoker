@@ -1296,6 +1296,101 @@ describe('Orchestrator', () => {
     });
   });
 
+  // ── editTaskCommand ────────────────────────────────────
+
+  describe('editTaskCommand', () => {
+    it('updates command, restarts the task, and publishes deltas', () => {
+      const plan: PlanDefinition = {
+        name: 'edit-cmd-test',
+        tasks: [
+          { id: 't1', description: 'Task 1', command: 'echo old' },
+        ],
+      };
+      orchestrator.loadPlan(plan);
+      orchestrator.startExecution();
+
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 't1', status: 'failed', outputs: { exitCode: 1, error: 'fail' } }),
+      );
+      expect(orchestrator.getTask('t1')?.status).toBe('failed');
+
+      const started = orchestrator.editTaskCommand('t1', 'echo new');
+      const task = orchestrator.getTask('t1');
+      expect(task?.command).toBe('echo new');
+      expect(task?.status).toBe('running');
+      expect(started).toHaveLength(1);
+      expect(started[0].id).toBe('t1');
+    });
+
+    it('forks dirty subtree when editing a completed task with dependents', () => {
+      const plan: PlanDefinition = {
+        name: 'edit-fork-test',
+        tasks: [
+          { id: 'parent', description: 'Parent', command: 'echo parent' },
+          { id: 'child', description: 'Child', command: 'echo child', dependencies: ['parent'] },
+        ],
+      };
+      orchestrator.loadPlan(plan);
+      orchestrator.startExecution();
+
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 'parent', status: 'completed', outputs: { exitCode: 0 } }),
+      );
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 'child', status: 'completed', outputs: { exitCode: 0 } }),
+      );
+
+      expect(orchestrator.getTask('parent')?.status).toBe('completed');
+      expect(orchestrator.getTask('child')?.status).toBe('completed');
+
+      const started = orchestrator.editTaskCommand('parent', 'echo updated');
+
+      expect(orchestrator.getTask('parent')?.command).toBe('echo updated');
+      expect(orchestrator.getTask('parent')?.status).toBe('running');
+
+      expect(orchestrator.getTask('child')?.status).toBe('stale');
+
+      const allTasks = orchestrator.getAllTasks();
+      const forkedChild = allTasks.find(t => t.id !== 'child' && t.description === 'Child');
+      expect(forkedChild).toBeDefined();
+      expect(forkedChild?.status).toBe('pending');
+    });
+
+    it('throws when trying to edit a running task', () => {
+      const plan: PlanDefinition = {
+        name: 'edit-running-test',
+        tasks: [
+          { id: 't1', description: 'Task 1', command: 'sleep 100' },
+        ],
+      };
+      orchestrator.loadPlan(plan);
+      orchestrator.startExecution();
+
+      expect(() => orchestrator.editTaskCommand('t1', 'echo new')).toThrow();
+    });
+
+    it('persists the updated command', () => {
+      const plan: PlanDefinition = {
+        name: 'edit-persist-test',
+        tasks: [
+          { id: 't1', description: 'Task 1', command: 'echo old' },
+        ],
+      };
+      orchestrator.loadPlan(plan);
+      orchestrator.startExecution();
+
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 't1', status: 'failed', outputs: { exitCode: 1, error: 'oops' } }),
+      );
+
+      orchestrator.editTaskCommand('t1', 'echo fixed');
+
+      const persisted = persistence.tasks.get('t1');
+      expect(persisted).toBeDefined();
+      expect(persisted?.task.command).toBe('echo fixed');
+    });
+  });
+
   // ── Scheduler queue drain ──────────────────────────────
 
   describe('scheduler queue drain', () => {

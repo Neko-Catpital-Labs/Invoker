@@ -247,6 +247,19 @@ export function App() {
     [invoker],
   );
 
+  // ── Edit task command ──────────────────────────────────────
+  const handleEditCommand = useCallback(
+    async (taskId: string, newCommand: string) => {
+      if (!invoker) return;
+      try {
+        await invoker.editTaskCommand(taskId, newCommand);
+      } catch (err) {
+        console.error('Failed to edit task command:', err);
+      }
+    },
+    [invoker],
+  );
+
   // ── Modal triggers ────────────────────────────────────────
   const openInputModal = useCallback((task: TaskState) => {
     setModal({ type: 'input', task });
@@ -322,6 +335,7 @@ export function App() {
                 setModal({ type: 'approval', task });
               }}
               onSelectExperiment={openExperimentModal}
+              onEditCommand={handleEditCommand}
             />
           </div>
 

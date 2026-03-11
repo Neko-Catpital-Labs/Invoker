@@ -371,6 +371,23 @@ export class Orchestrator {
   }
 
   /**
+   * Edit a task's command, fork its downstream subtree, and restart it.
+   * Returns the tasks that were started (for caller to execute via familiar).
+   */
+  editTaskCommand(taskId: string, newCommand: string): TaskState[] {
+    const result = this.stateMachine.updateTaskFields(taskId, { command: newCommand });
+    if ('error' in result) {
+      throw new Error(result.error);
+    }
+
+    this.persistAndPublish(result.task, result.delta);
+
+    this.forkDirtySubtree(taskId);
+
+    return this.restartTask(taskId);
+  }
+
+  /**
    * Fork the subtree downstream of a dirty task.
    *
    * 1. Mark all transitive descendants as 'stale'

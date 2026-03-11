@@ -310,6 +310,57 @@ describe('TaskStateMachine', () => {
     });
   });
 
+  // ── updateTaskFields ───────────────────────────────────
+
+  describe('updateTaskFields', () => {
+    it('updates command on a pending task', () => {
+      sm.createTask('t1', 'Task', [], { command: 'ls -la' });
+      const result = sm.updateTaskFields('t1', { command: 'ls -la /tmp' });
+
+      expect('task' in result).toBe(true);
+      if ('task' in result) {
+        expect(result.task.command).toBe('ls -la /tmp');
+        expect(result.task.status).toBe('pending');
+        expect(result.delta.type).toBe('updated');
+        if (result.delta.type === 'updated') {
+          expect(result.delta.changes).toEqual({ command: 'ls -la /tmp' });
+        }
+      }
+    });
+
+    it('updates command on a failed task', () => {
+      sm.createTask('t1', 'Task', [], { command: 'bad-cmd' });
+      sm.startTask('t1');
+      sm.failTask('t1', 1, 'not found');
+      const result = sm.updateTaskFields('t1', { command: 'good-cmd' });
+
+      expect('task' in result).toBe(true);
+      if ('task' in result) {
+        expect(result.task.command).toBe('good-cmd');
+        expect(result.task.status).toBe('failed');
+      }
+    });
+
+    it('returns error when task is running', () => {
+      sm.createTask('t1', 'Task', [], { command: 'sleep 10' });
+      sm.startTask('t1');
+      const result = sm.updateTaskFields('t1', { command: 'echo hi' });
+
+      expect('error' in result).toBe(true);
+    });
+
+    it('returns error for non-existent task', () => {
+      const result = sm.updateTaskFields('nope', { command: 'echo hi' });
+      expect('error' in result).toBe(true);
+    });
+
+    it('persists the update in the graph', () => {
+      sm.createTask('t1', 'Task', [], { command: 'old' });
+      sm.updateTaskFields('t1', { command: 'new' });
+      expect(sm.getTask('t1')?.command).toBe('new');
+    });
+  });
+
   // ── Immutability ──────────────────────────────────────
 
   describe('immutability', () => {

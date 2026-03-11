@@ -13,6 +13,7 @@
  *   electron dist/main.js --headless reject <taskId> [reason]
  *   electron dist/main.js --headless input <taskId> <text>
  *   electron dist/main.js --headless select <taskId> <expId>
+ *   electron dist/main.js --headless edit <taskId> <newCommand>
  *   electron dist/main.js --headless audit <taskId>
  *
  * Using the same Electron binary for both modes eliminates ABI mismatches
@@ -251,6 +252,9 @@ async function runHeadless(args: string[]): Promise<void> {
     case 'select':
       await headlessSelect(args[1], args[2]);
       break;
+    case 'edit':
+      await headlessEdit(args[1], args.slice(2).join(' '));
+      break;
     case 'audit':
       await headlessAudit(args[1]);
       break;
@@ -287,6 +291,7 @@ ${BOLD}Usage:${RESET}
   electron dist/main.js --headless reject <id> [why]  Reject a task
   electron dist/main.js --headless input <id> <text>  Provide input to task
   electron dist/main.js --headless select <id> <exp>  Select winning experiment
+  electron dist/main.js --headless edit <id> <cmd>    Edit task command and re-run
   electron dist/main.js --headless audit <taskId>     Print event history
   electron dist/main.js --headless slack              Start Slack bot (long-running)
 `);
@@ -456,6 +461,29 @@ async function headlessSelect(taskId: string, experimentId: string): Promise<voi
   });
 
   const started = orchestrator.resumeWorkflow(workflowId);
+  await taskExecutor.executeTasks(started);
+  await waitForCompletion();
+}
+
+async function headlessEdit(taskId: string, newCommand: string): Promise<void> {
+  if (!taskId || !newCommand) throw new Error('Missing arguments. Usage: --headless edit <taskId> <newCommand>');
+  const workflowId = restoreWorkflowForTask(taskId);
+
+  const started = orchestrator.editTaskCommand(taskId, newCommand);
+  console.log(`Edited task "${taskId}" command → "${newCommand}"`);
+
+  const taskExecutor = new TaskExecutor({
+    orchestrator,
+    persistence,
+    familiarRegistry,
+    cwd: repoRoot,
+    callbacks: {
+      onOutput: (tid, data) => {
+        process.stdout.write(`\x1b[2m[${tid}]\x1b[0m ${data}`);
+      },
+    },
+  });
+
   await taskExecutor.executeTasks(started);
   await waitForCompletion();
 }
@@ -908,6 +936,18 @@ function setupGuiMode(): void {
         await taskExecutor.executeTasks(runnable);
       } catch (err) {
         console.error(`[ipc] restart-task failed: ${err}`);
+        throw err;
+      }
+    });
+
+    ipcMain.handle('invoker:edit-task-command', async (_event, taskId: string, newCommand: string) => {
+      console.log(`[ipc] edit-task-command: "${taskId}" → "${newCommand}"`);
+      try {
+        const started = orchestrator.editTaskCommand(taskId, newCommand);
+        const runnable = started.filter(t => t.status === 'running');
+        await taskExecutor.executeTasks(runnable);
+      } catch (err) {
+        console.error(`[ipc] edit-task-command failed: ${err}`);
         throw err;
       }
     });
