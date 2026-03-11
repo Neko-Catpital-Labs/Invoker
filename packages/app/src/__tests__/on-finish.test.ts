@@ -131,7 +131,7 @@ describe('onFinish integration', () => {
     orchestrator = new Orchestrator({ persistence, messageBus: bus });
   });
 
-  it('shouldRunOnFinish returns true after all tasks complete', () => {
+  it('shouldRunOnFinish returns true only after merge node completes', () => {
     const plan: PlanDefinition = {
       name: 'Finish Test',
       onFinish: 'merge',
@@ -151,16 +151,26 @@ describe('onFinish integration', () => {
       makeResponse({ actionId: 't1', status: 'completed', outputs: { exitCode: 0 } }),
     );
 
-    // After t1: t2 is now running, not settled yet
     let status = orchestrator.getWorkflowStatus();
     expect(shouldRunOnFinish(status, plan)).toBe(false);
 
-    // Complete t2
+    // Complete t2 — merge node auto-starts
     orchestrator.handleWorkerResponse(
       makeResponse({ actionId: 't2', status: 'completed', outputs: { exitCode: 0 } }),
     );
 
-    // Now all settled
+    // Merge node is running — not settled yet
+    const mergeNode = orchestrator.getAllTasks().find(t => t.isMergeNode);
+    expect(mergeNode).toBeDefined();
+    expect(mergeNode!.status).toBe('running');
+    status = orchestrator.getWorkflowStatus();
+    expect(shouldRunOnFinish(status, plan)).toBe(false);
+
+    // Complete merge node
+    orchestrator.handleWorkerResponse(
+      makeResponse({ actionId: mergeNode!.id, status: 'completed', outputs: { exitCode: 0 } }),
+    );
+
     status = orchestrator.getWorkflowStatus();
     expect(shouldRunOnFinish(status, plan)).toBe(true);
   });
@@ -180,17 +190,16 @@ describe('onFinish integration', () => {
     orchestrator.loadPlan(plan);
     orchestrator.startExecution();
 
-    // Complete t1
     orchestrator.handleWorkerResponse(
       makeResponse({ actionId: 't1', status: 'completed', outputs: { exitCode: 0 } }),
     );
-
-    // Fail t2
     orchestrator.handleWorkerResponse(
       makeResponse({ actionId: 't2', status: 'failed', outputs: { exitCode: 1, error: 'broke' } }),
     );
 
+    // Merge node is blocked because t2 failed
     const status = orchestrator.getWorkflowStatus();
+    expect(status.failed).toBeGreaterThan(0);
     expect(shouldRunOnFinish(status, plan)).toBe(false);
   });
 
@@ -208,12 +217,15 @@ describe('onFinish integration', () => {
     orchestrator.handleWorkerResponse(
       makeResponse({ actionId: 't1', status: 'completed', outputs: { exitCode: 0 } }),
     );
+
+    // Complete the merge node that was auto-started after t1
+    const mergeNode = orchestrator.getAllTasks().find(t => t.isMergeNode);
+    orchestrator.handleWorkerResponse(
+      makeResponse({ actionId: mergeNode!.id, status: 'completed', outputs: { exitCode: 0 } }),
+    );
+
     const status = orchestrator.getWorkflowStatus();
-
-    // GUI path: currentPlan is set → onFinish triggers
     expect(shouldRunOnFinish(status, plan)).toBe(true);
-
-    // Slack path: currentPlan is null → onFinish NEVER triggers (THE BUG)
     expect(shouldRunOnFinish(status, null)).toBe(false);
   });
 
@@ -237,9 +249,17 @@ describe('onFinish integration', () => {
     orchestrator.loadPlan(planB);
     orchestrator.startExecution();
 
-    // Complete only a1
+    // Complete a1 — its merge node auto-starts
     orchestrator.handleWorkerResponse(
       makeResponse({ actionId: 'a1', status: 'completed', outputs: { exitCode: 0 } }),
+    );
+
+    // Complete workflow A's merge node
+    const mergeA = orchestrator.getAllTasks().find(t =>
+      t.isMergeNode && t.workflowId === orchestrator.getWorkflowIds()[0] && t.status === 'running',
+    );
+    orchestrator.handleWorkerResponse(
+      makeResponse({ actionId: mergeA!.id, status: 'completed', outputs: { exitCode: 0 } }),
     );
 
     const [wfA, wfB] = orchestrator.getWorkflowIds();

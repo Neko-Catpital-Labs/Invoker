@@ -43,7 +43,6 @@ import {
   type Familiar, type FamiliarHandle, type PersistedTaskMeta,
 } from '@invoker/executors';
 import type { TaskOutputData } from './types.js';
-import { shouldRunOnFinish } from './workflow-finish.js';
 import { cleanupOrphanWorktrees } from './worktree-cleanup.js';
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
@@ -377,14 +376,7 @@ async function headlessRun(planPath: string): Promise<void> {
   const status = orchestrator.getWorkflowStatus();
   console.log(`\n${formatWorkflowStatus(status)}`);
 
-  // onFinish hook
-  if (status.failed === 0 && plan.onFinish && plan.onFinish !== 'none') {
-    await executeOnFinish(plan);
-  } else if (plan.featureBranch) {
-    const baseBranch = plan.baseBranch ?? 'main';
-    try { await execCommand('git', ['checkout', baseBranch]); } catch { /* best-effort */ }
-  }
-
+  // onFinish is now handled by the merge node in the TaskExecutor
   if (status.failed > 0) process.exitCode = 1;
 }
 
@@ -599,21 +591,6 @@ async function headlessSlack(): Promise<void> {
       },
       onComplete: (taskId) => {
         logFn('exec', 'info', `Task "${taskId}" completed`);
-        const task = orchestrator.getTask(taskId);
-        const wfId = task?.workflowId;
-        if (wfId) {
-          const status = orchestrator.getWorkflowStatus(wfId);
-          const wf = persistence.loadWorkflow(wfId);
-          const config = wf ? { onFinish: wf.onFinish, baseBranch: wf.baseBranch, featureBranch: wf.featureBranch, name: wf.name } : null;
-          if (shouldRunOnFinish(status, config)) {
-            logFn('onFinish', 'info', `Workflow "${wfId}" — all ${status.total} tasks completed — running ${config!.onFinish}`);
-            executeOnFinish(config!).catch((err) => {
-              logFn('onFinish', 'error', `Failed: ${err}`);
-            });
-          } else {
-            logFn('onFinish', 'info', `Workflow "${wfId}" not ready: running=${status.running}, pending=${status.pending}, failed=${status.failed}, total=${status.total}`);
-          }
-        }
       },
     },
   });
@@ -686,68 +663,6 @@ function execCommand(cmd: string, args: string[]): Promise<string> {
   });
 }
 
-function buildAuditTable(): string {
-  const tasks = orchestrator.getAllTasks();
-  const lines = ['## Task Audit Trail', ''];
-  lines.push('| Task | Status | Commit |');
-  lines.push('|------|--------|--------|');
-  for (const task of tasks) {
-    const hash = task.commit ? task.commit.slice(0, 8) : '-';
-    lines.push(`| ${task.id} | ${task.status} | ${hash} |`);
-  }
-  return lines.join('\n');
-}
-
-async function consolidateTaskBranches(baseBranch: string, featureBranch: string): Promise<void> {
-  // Create featureBranch from baseBranch if it doesn't exist
-  try {
-    await execCommand('git', ['checkout', '-b', featureBranch, baseBranch]);
-    console.log(`[onFinish] Created ${featureBranch} from ${baseBranch}`);
-  } catch {
-    await execCommand('git', ['checkout', featureBranch]);
-    console.log(`[onFinish] Checked out existing ${featureBranch}`);
-  }
-
-  // Merge all completed task branches into featureBranch
-  const tasks = orchestrator.getAllTasks();
-  const taskBranches = tasks
-    .filter(t => t.status === 'completed' && t.branch)
-    .map(t => t.branch!);
-
-  for (const branch of taskBranches) {
-    console.log(`[onFinish] Merging task branch: ${branch} → ${featureBranch}`);
-    await execCommand('git', ['merge', '--no-ff', '-m', `Merge ${branch}`, branch]);
-  }
-
-  console.log(`[onFinish] Consolidated ${taskBranches.length} task branches into ${featureBranch}`);
-}
-
-async function executeOnFinish(config: import('./workflow-finish.js').MergeConfig): Promise<void> {
-  const onFinish = config.onFinish ?? 'none';
-  if (onFinish === 'none') return;
-  const baseBranch = config.baseBranch ?? 'main';
-  const featureBranch = config.featureBranch;
-  if (!featureBranch) return;
-
-  console.log(`\n${BOLD}Running onFinish: ${onFinish}${RESET}`);
-
-  // Consolidate experiment branches into featureBranch
-  await consolidateTaskBranches(baseBranch, featureBranch);
-
-  const auditTable = buildAuditTable();
-  const mergeMessage = `${config.name ?? 'Workflow'}\n\n${auditTable}`;
-
-  if (onFinish === 'merge') {
-    await execCommand('git', ['checkout', baseBranch]);
-    await execCommand('git', ['merge', '--no-ff', '-m', mergeMessage, featureBranch]);
-    console.log(`Merged ${featureBranch} into ${baseBranch} (no-ff)`);
-  } else if (onFinish === 'pull_request') {
-    await execCommand('git', ['push', '-u', 'origin', featureBranch]);
-    await execCommand('gh', ['pr', 'create', '--base', baseBranch, '--head', featureBranch, '--title', config.name ?? 'Workflow', '--body', auditTable]);
-    console.log(`Created pull request: ${featureBranch} → ${baseBranch}`);
-  }
-}
-
 // ══════════════════════════════════════════════════════════════
 // GUI MODE
 // ══════════════════════════════════════════════════════════════
@@ -793,22 +708,6 @@ function setupGuiMode(): void {
         },
         onComplete: (taskId) => {
           console.log(`[exec] Task "${taskId}" completed`);
-
-          const task = orchestrator.getTask(taskId);
-          const wfId = task?.workflowId;
-          if (wfId) {
-            const status = orchestrator.getWorkflowStatus(wfId);
-            const wf = persistence.loadWorkflow(wfId);
-            const config = wf ? { onFinish: wf.onFinish, baseBranch: wf.baseBranch, featureBranch: wf.featureBranch, name: wf.name } : null;
-            if (shouldRunOnFinish(status, config)) {
-              console.log(`[onFinish] Workflow "${wfId}" — all ${status.total} tasks completed — running ${config!.onFinish}`);
-              executeOnFinish(config!).catch((err) => {
-                console.error(`[onFinish] Failed:`, err);
-              });
-            } else {
-              console.log(`[onFinish] Workflow "${wfId}" not ready: running=${status.running}, pending=${status.pending}, failed=${status.failed}, total=${status.total}`);
-            }
-          }
         },
       },
     });
