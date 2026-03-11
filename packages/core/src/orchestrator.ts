@@ -506,6 +506,8 @@ export class Orchestrator {
       blockedBy: undefined,
       summary: undefined,
       commit: undefined,
+      branch: undefined,
+      workspacePath: undefined,
     };
 
     for (const task of allTasks) {

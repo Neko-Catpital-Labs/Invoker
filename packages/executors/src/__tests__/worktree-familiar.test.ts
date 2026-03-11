@@ -18,7 +18,7 @@ vi.mock('node:fs', async (importOriginal) => {
 // Must import after mock setup
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { WorktreeFamiliar } from '../worktree-familiar.js';
+import { WorktreeFamiliar, computeBranchHash } from '../worktree-familiar.js';
 
 const mockedSpawn = vi.mocked(spawn);
 
@@ -101,6 +101,45 @@ function setupSpawnMock(): {
   return { gitProcesses, taskProcess };
 }
 
+describe('computeBranchHash', () => {
+  it('is deterministic: same inputs produce same hash', () => {
+    const a = computeBranchHash('t1', 'echo hi', undefined, ['c1'], 'HEAD1');
+    const b = computeBranchHash('t1', 'echo hi', undefined, ['c1'], 'HEAD1');
+    expect(a).toBe(b);
+    expect(a).toMatch(/^[0-9a-f]{8}$/);
+  });
+
+  it('is sensitive to command changes', () => {
+    const a = computeBranchHash('t1', 'echo hi', undefined, [], 'HEAD1');
+    const b = computeBranchHash('t1', 'echo bye', undefined, [], 'HEAD1');
+    expect(a).not.toBe(b);
+  });
+
+  it('is sensitive to prompt changes', () => {
+    const a = computeBranchHash('t1', undefined, 'prompt A', [], 'HEAD1');
+    const b = computeBranchHash('t1', undefined, 'prompt B', [], 'HEAD1');
+    expect(a).not.toBe(b);
+  });
+
+  it('is sensitive to baseHead changes', () => {
+    const a = computeBranchHash('t1', 'cmd', undefined, [], 'abc123');
+    const b = computeBranchHash('t1', 'cmd', undefined, [], 'def456');
+    expect(a).not.toBe(b);
+  });
+
+  it('is sensitive to upstream commit changes', () => {
+    const a = computeBranchHash('t1', 'cmd', undefined, ['c1'], 'HEAD1');
+    const b = computeBranchHash('t1', 'cmd', undefined, ['c2'], 'HEAD1');
+    expect(a).not.toBe(b);
+  });
+
+  it('is order-independent for upstream commits', () => {
+    const a = computeBranchHash('t1', 'cmd', undefined, ['c1', 'c2'], 'HEAD1');
+    const b = computeBranchHash('t1', 'cmd', undefined, ['c2', 'c1'], 'HEAD1');
+    expect(a).toBe(b);
+  });
+});
+
 describe('WorktreeFamiliar', () => {
   let familiar: WorktreeFamiliar;
 
@@ -143,7 +182,8 @@ describe('WorktreeFamiliar', () => {
     const worktreeArgs = worktreeAddCall![1] as string[];
     expect(worktreeArgs).toContain('add');
     expect(worktreeArgs).toContain('-b');
-    expect(worktreeArgs).toContain('experiment/action-1');
+    const branchArg = worktreeArgs.find(a => a.startsWith('experiment/'));
+    expect(branchArg).toMatch(/^experiment\/action-1-[0-9a-f]{8}$/);
 
     // Cleanup: emit close on task process to prevent hanging
     taskProcess.emit('close', 0, null);
@@ -190,8 +230,7 @@ describe('WorktreeFamiliar', () => {
     expect(response.requestId).toBe('req-1');
     expect(response.actionId).toBe('action-1');
     expect(response.outputs.exitCode).toBe(0);
-    // Summary should contain the branch and commit hash
-    expect(response.outputs.summary).toContain('experiment/action-1');
+    expect(response.outputs.summary).toMatch(/experiment\/action-1-[0-9a-f]{8}/);
     expect(response.outputs.summary).toContain('abc123def456');
   });
 
@@ -665,6 +704,7 @@ describe('WorktreeFamiliar', () => {
   });
 
   describe('stale worktree on restart', () => {
+    const expectedHash = computeBranchHash('action-1', 'echo hello', undefined, [], 'abc123def456');
     const porcelainWithConflict = [
       'worktree /repo',
       'HEAD aaa111',
@@ -672,7 +712,7 @@ describe('WorktreeFamiliar', () => {
       '',
       'worktree /old/worktree',
       'HEAD bbb222',
-      'branch refs/heads/experiment/action-1',
+      `branch refs/heads/experiment/action-1-${expectedHash}`,
       '',
     ].join('\n');
 
@@ -726,7 +766,7 @@ describe('WorktreeFamiliar', () => {
             proc.emit('close', 128, null);
           } else if (cmd === 'git' && argsArr?.includes('worktree') && argsArr?.includes('add')) {
             proc.stderr!.emit('data', Buffer.from(
-              "fatal: 'experiment/action-1' is already used by worktree at '/old/worktree'\n",
+              "fatal: branch is already used by worktree at '/old/worktree'\n",
             ));
             proc.emit('close', 128, null);
           } else {

@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { homedir } from 'node:os';
@@ -8,6 +9,27 @@ import { BaseFamiliar, type BaseEntry } from './base-familiar.js';
 import { RepoPool } from './repo-pool.js';
 
 const SIGKILL_TIMEOUT_MS = 5_000;
+
+/**
+ * Merkle-style hash for content-addressable branch naming.
+ * Inputs: task identity + command/prompt + upstream dependency commits + base branch HEAD.
+ * When any input changes (e.g. master moves forward), the hash changes and a fresh branch is created.
+ */
+export function computeBranchHash(
+  actionId: string,
+  command: string | undefined,
+  prompt: string | undefined,
+  upstreamCommits: string[],
+  baseHead: string,
+): string {
+  const h = createHash('sha256');
+  h.update(actionId);
+  h.update(command ?? '');
+  h.update(prompt ?? '');
+  for (const c of [...upstreamCommits].sort()) h.update(c);
+  h.update(baseHead);
+  return h.digest('hex').slice(0, 8);
+}
 
 /** Strip Electron-specific env vars so child processes use the system Node.js. */
 function cleanElectronEnv(): NodeJS.ProcessEnv {
@@ -88,7 +110,18 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
     const handle = this.createHandle(request);
     const executionId = handle.executionId;
 
-    const branch = `experiment/${request.actionId}`;
+    const baseHead = await this.execGit(['rev-parse', 'HEAD'], this.repoDir);
+    const upstreamCommits = (request.inputs.upstreamContext ?? [])
+      .map(c => c.commitHash)
+      .filter((h): h is string => !!h);
+    const hash = computeBranchHash(
+      request.actionId,
+      request.inputs.command,
+      request.inputs.prompt,
+      upstreamCommits,
+      baseHead,
+    );
+    const branch = `experiment/${request.actionId}-${hash}`;
     const worktreeDir = `${this.worktreeBaseDir}/${executionId}`;
 
     // -- Reconciliation: no process, immediate needs_input --

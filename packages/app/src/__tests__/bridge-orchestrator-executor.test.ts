@@ -103,13 +103,10 @@ describe('Flow 1: rebase-and-retry', () => {
   it('conflicting rebase: resets entire DAG, all tasks re-execute', async () => {
     const started = h.loadAndStart(PARALLEL_PLAN);
 
-    // Complete tasks with branch info so rebaseTaskBranches has branches to rebase
     h.completeTask('A');
     h.completeTask('B');
-    // Set branches on the task state (handleWorkerResponse doesn't set branch)
-    h.persistence.updateTask('A', { branch: 'experiment/task-a' } as any);
-    h.persistence.updateTask('B', { branch: 'experiment/task-b' } as any);
-    // Force the orchestrator to re-read from persistence
+    h.persistence.updateTask('A', { branch: 'experiment/task-a-abc12345' } as any);
+    h.persistence.updateTask('B', { branch: 'experiment/task-b-def67890' } as any);
     (h.orchestrator as any).refreshFromDb();
 
     h.completeTask('C');
@@ -452,5 +449,115 @@ describe('Flow 5: dagMutation via spawn_experiments', () => {
 
     // Reconciliation task should be completed
     expect(h.getTask(reconTask!.id)!.status).toBe('completed');
+  });
+});
+
+// ── Flow 6: Content-Addressable Branch Names ────────────────
+
+describe('Flow 6: content-addressable branch names', () => {
+  let h: TestHarness;
+
+  beforeEach(() => {
+    h = createTestHarness();
+  });
+
+  it('restartWorkflow clears branch and workspacePath fields', () => {
+    h.loadAndStart(PARALLEL_PLAN);
+
+    h.completeTask('A');
+    h.completeTask('B');
+    h.completeTask('C');
+
+    // Simulate branch + workspacePath being set (as WorktreeFamiliar would do)
+    h.persistence.updateTask('A', {
+      branch: 'experiment/A-abc12345',
+      workspacePath: '/tmp/worktrees/exec-A',
+    } as any);
+    h.persistence.updateTask('B', {
+      branch: 'experiment/B-def67890',
+      workspacePath: '/tmp/worktrees/exec-B',
+    } as any);
+    (h.orchestrator as any).refreshFromDb();
+
+    expect(h.getTask('A')!.branch).toBe('experiment/A-abc12345');
+    expect(h.getTask('B')!.branch).toBe('experiment/B-def67890');
+
+    const mergeId = h.getAllTasks().find(t => t.isMergeNode)!.id;
+    const mergeTask = h.getTask(mergeId)!;
+
+    h.orchestrator.restartWorkflow(mergeTask.workflowId!);
+
+    // branch and workspacePath should be cleared on all tasks
+    for (const t of h.getAllTasks().filter(t => !t.isMergeNode)) {
+      expect(t.branch).toBeUndefined();
+      expect(t.workspacePath).toBeUndefined();
+    }
+  });
+
+  it('restartWorkflow resets tasks so re-execution gets fresh branches', () => {
+    h.loadAndStart(LINEAR_PLAN);
+
+    h.completeTask('A');
+    h.persistence.updateTask('A', {
+      branch: 'experiment/A-oldHash1',
+      workspacePath: '/tmp/worktrees/exec-A-old',
+    } as any);
+    (h.orchestrator as any).refreshFromDb();
+
+    const mergeId = h.getAllTasks().find(t => t.isMergeNode)!.id;
+    const mergeTask = h.getTask(mergeId)!;
+
+    h.orchestrator.restartWorkflow(mergeTask.workflowId!);
+
+    // After restart, A should be running with no branch (WorktreeFamiliar will assign a new one)
+    const a = h.getTask('A')!;
+    expect(a.status === 'pending' || a.status === 'running').toBe(true);
+    expect(a.branch).toBeUndefined();
+    expect(a.workspacePath).toBeUndefined();
+  });
+
+  it('rebase-and-retry full flow: conflict resets DAG, clears stale branches', async () => {
+    h.loadAndStart(PARALLEL_PLAN);
+
+    h.completeTask('A');
+    h.completeTask('B');
+    h.persistence.updateTask('A', { branch: 'experiment/A-oldHash1' } as any);
+    h.persistence.updateTask('B', { branch: 'experiment/B-oldHash2' } as any);
+    (h.orchestrator as any).refreshFromDb();
+
+    h.completeTask('C');
+
+    const mergeId = h.getAllTasks().find(t => t.isMergeNode)!.id;
+    const mergeTask = h.getTask(mergeId)!;
+
+    // Merge fails
+    h.git.onMerge(new Error('CONFLICT'));
+    await h.executor.executeTasks([mergeTask]);
+    expect(h.getTask(mergeId)!.status).toBe('failed');
+
+    // Rebase fails (conflict)
+    h.git.on(
+      (args) => args[0] === 'rebase',
+      new Error('CONFLICT in file.txt'),
+    );
+    const result = await h.executor.rebaseTaskBranches(
+      mergeTask.workflowId!,
+      'master',
+    );
+    expect(result.success).toBe(false);
+
+    // Reset entire DAG
+    h.orchestrator.restartWorkflow(mergeTask.workflowId!);
+
+    // All tasks should have their branch cleared
+    for (const t of h.getAllTasks().filter(t => !t.isMergeNode)) {
+      expect(t.branch).toBeUndefined();
+      expect(t.workspacePath).toBeUndefined();
+    }
+
+    // Root tasks should be re-started and ready for WorktreeFamiliar
+    // to assign new content-addressable branches
+    expect(h.getTask('A')!.status === 'pending' || h.getTask('A')!.status === 'running').toBe(true);
+    expect(h.getTask('B')!.status === 'pending' || h.getTask('B')!.status === 'running').toBe(true);
   });
 });
