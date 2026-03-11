@@ -486,6 +486,40 @@ export class Orchestrator {
   }
 
   /**
+   * Reset ALL tasks in a workflow to pending and auto-start ready ones.
+   * Used when a rebase conflicts and the entire DAG needs to re-execute.
+   */
+  restartWorkflow(workflowId: string): TaskState[] {
+    this.refreshFromDb();
+
+    const allTasks = this.stateMachine.getAllTasks().filter(
+      (t) => t.workflowId === workflowId,
+    );
+    if (allTasks.length === 0) throw new Error(`No tasks found for workflow ${workflowId}`);
+
+    const resetChanges: Partial<TaskState> = {
+      status: 'pending',
+      startedAt: undefined,
+      completedAt: undefined,
+      error: undefined,
+      exitCode: undefined,
+      blockedBy: undefined,
+      summary: undefined,
+      commit: undefined,
+    };
+
+    for (const task of allTasks) {
+      this.writeAndSync(task.id, resetChanges);
+      const delta: TaskDelta = { type: 'updated', taskId: task.id, changes: resetChanges };
+      this.persistence.logEvent?.(task.id, 'task.pending', resetChanges);
+      this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
+      this.scheduler.completeJob(task.id);
+    }
+
+    return this.startExecution();
+  }
+
+  /**
    * Edit a task's command, fork its downstream subtree, and restart it.
    */
   editTaskCommand(taskId: string, newCommand: string): TaskState[] {

@@ -50,6 +50,9 @@ importers:
       '@electron/rebuild':
         specifier: ^4.0.3
         version: 4.0.3
+      '@invoker/test-utils':
+        specifier: workspace:*
+        version: link:../test-utils
       '@playwright/test':
         specifier: ^1.58.2
         version: 1.58.2
@@ -200,6 +203,25 @@ importers:
         version: 5.9.3
       vitest:
         specifier: ^3.0.0
+        version: 3.2.4(@types/node@25.3.3)(jiti@1.21.7)(jsdom@25.0.1)(yaml@2.8.2)
+
+  packages/test-utils:
+    dependencies:
+      '@invoker/core':
+        specifier: workspace:*
+        version: link:../core
+      '@invoker/executors':
+        specifier: workspace:*
+        version: link:../executors
+      '@invoker/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+    devDependencies:
+      typescript:
+        specifier: ^5.8.3
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.4
         version: 3.2.4(@types/node@25.3.3)(jiti@1.21.7)(jsdom@25.0.1)(yaml@2.8.2)
 
   packages/transport:
