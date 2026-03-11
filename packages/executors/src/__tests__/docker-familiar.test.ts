@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { writeFileSync } from 'node:fs';
 import type { WorkRequest, WorkResponse } from '@invoker/protocol';
+import type { PersistedTaskMeta } from '../familiar.js';
 
 // ---------------------------------------------------------------------------
 // Mock helpers
@@ -381,6 +382,42 @@ describe('DockerFamiliar', () => {
       expect(prompt).toContain('Upstream task: dep-1');
       expect(prompt).toContain('Commit: abc123');
       expect(prompt).toContain('do the thing');
+    });
+  });
+
+  describe('getRestoredTerminalSpec', () => {
+    const baseMeta: PersistedTaskMeta = {
+      taskId: 'task-docker-1',
+      familiarType: 'docker',
+      containerId: 'container-abc123',
+    };
+
+    it('returns docker exec bash spec when no session', () => {
+      const spec = familiar.getRestoredTerminalSpec(baseMeta);
+      expect(spec.command).toBe('bash');
+      expect(spec.args![1]).toContain('docker start container-abc123');
+      expect(spec.args![1]).toContain('/bin/bash');
+      expect(spec.args![1]).not.toContain('claude --resume');
+    });
+
+    it('returns docker exec claude --resume spec with session', () => {
+      const spec = familiar.getRestoredTerminalSpec({
+        ...baseMeta,
+        claudeSessionId: 'session-docker-1',
+      });
+      expect(spec.command).toBe('bash');
+      expect(spec.args![1]).toContain('docker start container-abc123');
+      expect(spec.args![1]).toContain('claude --resume session-docker-1');
+      expect(spec.args![1]).toContain('--dangerously-skip-permissions');
+    });
+
+    it('throws when no container ID provided', () => {
+      expect(() =>
+        familiar.getRestoredTerminalSpec({
+          taskId: 'task-no-container',
+          familiarType: 'docker',
+        }),
+      ).toThrow(/No container ID found/);
     });
   });
 });

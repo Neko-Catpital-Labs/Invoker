@@ -2,7 +2,7 @@ import { writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import type { WorkRequest, WorkResponse } from '@invoker/protocol';
-import type { FamiliarHandle, TerminalSpec } from './familiar.js';
+import type { FamiliarHandle, PersistedTaskMeta, TerminalSpec } from './familiar.js';
 import { BaseFamiliar, type BaseEntry } from './base-familiar.js';
 import { DockerPool } from './docker-pool.js';
 
@@ -275,6 +275,23 @@ export class DockerFamiliar extends BaseFamiliar<ContainerEntry> {
       };
     }
     console.log(`${TAG} getTerminalSpec() -> docker start + exec /bin/bash`);
+    return {
+      command: 'bash',
+      args: ['-c', `docker start ${cid} >/dev/null 2>&1; docker exec -it ${cid} /bin/bash`],
+    };
+  }
+
+  getRestoredTerminalSpec(meta: PersistedTaskMeta): TerminalSpec {
+    if (!meta.containerId) {
+      throw new Error(`No container ID found for task ${meta.taskId}`);
+    }
+    const cid = meta.containerId;
+    if (meta.claudeSessionId) {
+      return {
+        command: 'bash',
+        args: ['-c', `docker start ${cid} >/dev/null 2>&1; docker exec -it ${cid} claude --resume ${meta.claudeSessionId} --dangerously-skip-permissions`],
+      };
+    }
     return {
       command: 'bash',
       args: ['-c', `docker start ${cid} >/dev/null 2>&1; docker exec -it ${cid} /bin/bash`],
