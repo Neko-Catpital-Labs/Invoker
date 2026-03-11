@@ -44,16 +44,8 @@ export function App() {
   const [onFinish, setOnFinish] = useState<'none' | 'merge' | 'pull_request'>('merge');
   const [viewMode, setViewMode] = useState<'dag' | 'history' | 'timeline'>('dag');
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; task: TaskState } | null>(null);
-  const [canResume, setCanResume] = useState(false);
 
   const selectedTask = selectedTaskId ? tasks.get(selectedTaskId) ?? null : null;
-
-  // ── Check for resumable workflows on mount ─────────────────
-  useEffect(() => {
-    window.invoker?.listWorkflows().then((workflows) => {
-      setCanResume(workflows.length > 0);
-    }).catch(() => {});
-  }, []);
 
   // ── DAG interaction ───────────────────────────────────────
   const handleTaskClick = useCallback((task: TaskState) => {
@@ -145,22 +137,6 @@ export function App() {
     }
   }, [invoker]);
 
-  const handleResume = useCallback(async () => {
-    if (!invoker) return;
-    try {
-      const result = await invoker.resumeWorkflow();
-      if (!result) {
-        console.warn('No workflow to resume');
-        return;
-      }
-      setPlanName(result.workflow.name ?? 'Resumed Workflow');
-      setHasLoadedPlan(true);
-      setHasStarted(true);
-      setCanResume(false);
-    } catch (err) {
-      console.error('Failed to resume workflow:', err);
-    }
-  }, [invoker]);
 
   const handleStop = useCallback(async () => {
     if (!invoker) return;
@@ -318,11 +294,9 @@ export function App() {
         hasLoadedPlan={hasLoadedPlan}
         hasStarted={hasStarted}
         allSettled={allSettled}
-        canResume={canResume}
         onLoadFile={handleLoadPlan}
         onStart={handleStart}
         onStop={handleStop}
-        onResume={handleResume}
         onClear={handleClear}
         onDeleteDB={handleDeleteDB}
         onRefresh={refreshTasks}
