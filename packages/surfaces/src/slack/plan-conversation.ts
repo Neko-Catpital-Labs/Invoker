@@ -33,13 +33,16 @@ export interface PlanConversationConfig {
   threadTs?: string;
   /** Repository for persisting conversation state across restarts. */
   conversationRepo?: ConversationRepository;
+  /** Default branch name (e.g. "master"). Used when plan YAML omits baseBranch. */
+  defaultBranch?: string;
   /** Logging callback. Defaults to console.log/console.error. */
   log?: LogFn;
 }
 
 // ── System Prompt ───────────────────────────────────────────
 
-const SYSTEM_PROMPT = `You are an assistant for the Invoker orchestrator. You have two modes:
+function buildSystemPrompt(defaultBranch: string): string {
+  return `You are an assistant for the Invoker orchestrator. You have two modes:
 
 **Direct answer mode** — For simple, self-contained requests (counting lines of code, checking versions, running a quick command, answering questions about the codebase). Use the \`run_command\` tool to execute a shell command and report the result directly. Do NOT generate a YAML plan for these.
 
@@ -51,7 +54,7 @@ A plan has this structure:
 \`\`\`yaml
 name: "Plan Name"
 onFinish: merge         # "merge" (default), "none", or "pull_request"
-baseBranch: main        # base git branch
+baseBranch: ${defaultBranch}        # base git branch
 featureBranch: plan/my-feature  # auto-generated from plan name if omitted
 tasks:
   - id: task-1
@@ -80,6 +83,7 @@ Rules:
 8. Always include \`dependencies\` (even if empty array).
 9. After generating a plan, tell the user they can confirm execution by replying with "yes", "go", "execute", etc. NEVER mention "/invoker" in your response — there is NO /invoker start_plan or any /invoker command for plan execution. These commands do not exist. When the user confirms, you MUST call the \`submit_plan\` tool. Do NOT output bash commands, shell scripts, or tell the user to run anything manually. The ONLY way to start a plan is by calling the \`submit_plan\` tool. If the user wants changes, refine the plan first.
 10. NEVER generate bash commands or shell scripts to execute plans. You cannot run commands. The submit_plan tool is the ONLY way to start execution.`;
+}
 
 const TOOLS_ADDENDUM = `
 
@@ -201,6 +205,7 @@ export class PlanConversation {
   private maxToolIterations: number;
   private threadTs?: string;
   private conversationRepo?: ConversationRepository;
+  private defaultBranch?: string;
   private log: LogFn;
   private _initialized = false;
 
@@ -211,6 +216,7 @@ export class PlanConversation {
     this.maxToolIterations = config.maxToolIterations ?? 12;
     this.threadTs = config.threadTs;
     this.conversationRepo = config.conversationRepo;
+    this.defaultBranch = config.defaultBranch;
     this.log = config.log ?? ((src, lvl, msg) => {
       (lvl === 'error' ? console.error : console.log)(`[${src}] ${msg}`);
     });
@@ -267,9 +273,10 @@ export class PlanConversation {
     this.apiMessages.push({ role: 'user', content: userMessage });
 
     const hasFileTools = !!this.workingDir;
+    const basePrompt = buildSystemPrompt(this.defaultBranch ?? 'main');
     const systemPrompt = hasFileTools
-      ? SYSTEM_PROMPT + TOOLS_ADDENDUM
-      : SYSTEM_PROMPT;
+      ? basePrompt + TOOLS_ADDENDUM
+      : basePrompt;
     const tools = hasFileTools
       ? [...FILE_TOOLS, RUN_COMMAND_TOOL, SUBMIT_PLAN_TOOL]
       : [SUBMIT_PLAN_TOOL];
@@ -407,7 +414,7 @@ export class PlanConversation {
 
       if (!text) continue;
 
-      const plan = extractYamlPlan(text);
+      const plan = extractYamlPlan(text, this.defaultBranch);
       if (plan) return plan;
     }
     return null;
@@ -550,7 +557,7 @@ export function globToRegex(pattern: string): RegExp {
  * Extract and validate a YAML plan from a message containing ```yaml blocks.
  * Returns null if no valid plan is found.
  */
-export function extractYamlPlan(text: string): PlanDefinition | null {
+export function extractYamlPlan(text: string, defaultBranch?: string): PlanDefinition | null {
   const yamlMatch = text.match(/```yaml\n([\s\S]*?)```/);
   if (!yamlMatch) {
     if (text.length > 100) {
@@ -596,7 +603,7 @@ export function extractYamlPlan(text: string): PlanDefinition | null {
     return {
       name: plan.name,
       onFinish,
-      baseBranch: (plan.baseBranch as string) ?? 'main',
+      baseBranch: (plan.baseBranch as string) ?? defaultBranch ?? 'main',
       featureBranch,
       tasks: (plan.tasks as any[]).map((t) => ({
         id: t.id,

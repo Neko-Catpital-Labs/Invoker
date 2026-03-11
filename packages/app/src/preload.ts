@@ -68,6 +68,8 @@ const api: InvokerAPI = {
   cleanupWorktrees: () => ipcRenderer.invoke('invoker:cleanup-worktrees'),
   rebaseAndRetry: (mergeTaskId: string) =>
     ipcRenderer.invoke('invoker:rebase-and-retry', mergeTaskId),
+  setMergeBranch: (workflowId: string, baseBranch: string) =>
+    ipcRenderer.invoke('invoker:set-merge-branch', workflowId, baseBranch),
 };
 
 contextBridge.exposeInMainWorld('invoker', api);

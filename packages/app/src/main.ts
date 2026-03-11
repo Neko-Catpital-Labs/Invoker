@@ -44,6 +44,7 @@ import {
 } from '@invoker/executors';
 import type { TaskOutputData } from './types.js';
 import { cleanupOrphanWorktrees } from './worktree-cleanup.js';
+import { loadConfig, type InvokerConfig } from './config.js';
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 
@@ -74,6 +75,7 @@ let orchestrator: Orchestrator;
 
 // Repo root: 3 levels up from packages/app/dist/
 const repoRoot = path.resolve(__dirname, '..', '..', '..');
+const invokerConfig: InvokerConfig = loadConfig(repoRoot);
 
 function initServices(): void {
   messageBus = new LocalBus();
@@ -151,6 +153,7 @@ async function wireSlackBot(deps: SlackBotDeps): Promise<any> {
     anthropicApiKey: process.env.ANTHROPIC_API_KEY,
     workingDir: repoRoot,
     conversationRepo,
+    defaultBranch: invokerConfig.defaultBranch,
     log: deps.logFn,
   });
 
@@ -332,7 +335,7 @@ async function headlessRun(planPath: string): Promise<void> {
   const { parsePlanFile } = await import('./plan-parser.js');
   const { formatTaskStatus, formatWorkflowStatus } = await import('./formatter.js');
 
-  const plan = await parsePlanFile(planPath);
+  const plan = await parsePlanFile(planPath, repoRoot);
   console.log(`${BOLD}Loading plan: ${plan.name}${RESET}`);
   console.log(`Tasks: ${plan.tasks.length}\n`);
 
@@ -362,6 +365,7 @@ async function headlessRun(planPath: string): Promise<void> {
     persistence,
     familiarRegistry,
     cwd: repoRoot,
+    defaultBranch: invokerConfig.defaultBranch,
     callbacks: {
       onOutput: (taskId, data) => {
         process.stdout.write(`\x1b[2m[${taskId}]\x1b[0m ${data}`);
@@ -407,6 +411,7 @@ async function headlessResume(workflowId: string): Promise<void> {
     persistence,
     familiarRegistry,
     cwd: repoRoot,
+    defaultBranch: invokerConfig.defaultBranch,
     callbacks: {
       onOutput: (taskId, data) => {
         process.stdout.write(`\x1b[2m[${taskId}]\x1b[0m ${data}`);
@@ -493,6 +498,7 @@ async function headlessSelect(taskId: string, experimentId: string): Promise<voi
     persistence,
     familiarRegistry,
     cwd: repoRoot,
+    defaultBranch: invokerConfig.defaultBranch,
     callbacks: {
       onOutput: (tid, data) => {
         process.stdout.write(`\x1b[2m[${tid}]\x1b[0m ${data}`);
@@ -520,6 +526,7 @@ async function headlessRestart(taskId: string): Promise<void> {
     persistence,
     familiarRegistry,
     cwd: repoRoot,
+    defaultBranch: invokerConfig.defaultBranch,
     callbacks: {
       onOutput: (tid, data) => {
         process.stdout.write(`\x1b[2m[${tid}]\x1b[0m ${data}`);
@@ -545,6 +552,7 @@ async function headlessRebaseAndRetry(mergeTaskId: string): Promise<void> {
     persistence,
     familiarRegistry,
     cwd: repoRoot,
+    defaultBranch: invokerConfig.defaultBranch,
     callbacks: {
       onOutput: (tid, data) => {
         process.stdout.write(`\x1b[2m[${tid}]\x1b[0m ${data}`);
@@ -552,7 +560,7 @@ async function headlessRebaseAndRetry(mergeTaskId: string): Promise<void> {
     },
   });
 
-  const baseBranch = workflow?.baseBranch ?? await te.detectDefaultBranch();
+  const baseBranch = workflow?.baseBranch ?? invokerConfig.defaultBranch ?? await te.detectDefaultBranch();
   const result = await te.rebaseTaskBranches(workflowId, baseBranch);
 
   console.log(`Rebase result: ${result.success ? 'clean' : 'conflicts'}`);
@@ -590,6 +598,7 @@ async function headlessEdit(taskId: string, newCommand: string): Promise<void> {
     persistence,
     familiarRegistry,
     cwd: repoRoot,
+    defaultBranch: invokerConfig.defaultBranch,
     callbacks: {
       onOutput: (tid, data) => {
         process.stdout.write(`\x1b[2m[${tid}]\x1b[0m ${data}`);
@@ -613,6 +622,7 @@ async function headlessEditType(taskId: string, familiarType: string): Promise<v
     persistence,
     familiarRegistry,
     cwd: repoRoot,
+    defaultBranch: invokerConfig.defaultBranch,
     callbacks: {
       onOutput: (tid, data) => {
         process.stdout.write(`\x1b[2m[${tid}]\x1b[0m ${data}`);
@@ -653,6 +663,7 @@ async function headlessSlack(): Promise<void> {
     persistence,
     familiarRegistry,
     cwd: repoRoot,
+    defaultBranch: invokerConfig.defaultBranch,
     callbacks: {
       onOutput: (taskId, data) => {
         process.stdout.write(`\x1b[2m[${taskId}]\x1b[0m ${data}`);
@@ -763,6 +774,7 @@ function setupGuiMode(): void {
       persistence,
       familiarRegistry,
       cwd: repoRoot,
+      defaultBranch: invokerConfig.defaultBranch,
       callbacks: {
         onOutput: (taskId, data) => {
           console.log(`[output] ${taskId}: ${data.trimEnd()}`);
@@ -1047,7 +1059,7 @@ function setupGuiMode(): void {
         const workflow = task.workflowId
           ? persistence.loadWorkflow(task.workflowId)
           : undefined;
-        const baseBranch = workflow?.baseBranch ?? await taskExecutor.detectDefaultBranch();
+        const baseBranch = workflow?.baseBranch ?? invokerConfig.defaultBranch ?? await taskExecutor.detectDefaultBranch();
 
         if (!task.workflowId) throw new Error('Merge task has no associated workflow');
 
@@ -1069,6 +1081,24 @@ function setupGuiMode(): void {
         return result;
       } catch (err) {
         console.error(`[ipc] rebase-and-retry failed: ${err}`);
+        throw err;
+      }
+    });
+
+    ipcMain.handle('invoker:set-merge-branch', async (_event, workflowId: string, baseBranch: string) => {
+      console.log(`[ipc] set-merge-branch: workflow="${workflowId}" → "${baseBranch}"`);
+      try {
+        persistence.updateWorkflow(workflowId, { baseBranch });
+
+        const tasks = persistence.loadTasks(workflowId);
+        const mergeTask = tasks.find(t => t.isMergeNode);
+        if (mergeTask) {
+          const started = orchestrator.restartTask(mergeTask.id);
+          const runnable = started.filter(t => t.status === 'running');
+          await taskExecutor.executeTasks(runnable);
+        }
+      } catch (err) {
+        console.error(`[ipc] set-merge-branch failed: ${err}`);
         throw err;
       }
     });

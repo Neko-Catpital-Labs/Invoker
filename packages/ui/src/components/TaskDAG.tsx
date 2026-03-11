@@ -32,6 +32,8 @@ import { isMergeGateId, groupTasksByWorkflow } from '../lib/merge-gate.js';
 interface TaskDAGProps {
   tasks: Map<string, TaskState>;
   onFinish?: 'none' | 'merge' | 'pull_request';
+  baseBranch?: string;
+  onSetMergeBranch?: (workflowId: string, baseBranch: string) => Promise<void>;
   onTaskClick?: (task: TaskState) => void;
   onTaskDoubleClick?: (task: TaskState) => void;
   onTaskContextMenu?: (task: TaskState, event: React.MouseEvent) => void;
@@ -47,7 +49,7 @@ function buildEdgeLabel(source: TaskState, target: TaskState): string {
   return `${srcId} → ${tgtId}`;
 }
 
-function TaskDAGInner({ tasks, onFinish, onTaskClick, onTaskDoubleClick, onTaskContextMenu }: TaskDAGProps) {
+function TaskDAGInner({ tasks, onFinish, baseBranch, onSetMergeBranch, onTaskClick, onTaskDoubleClick, onTaskContextMenu }: TaskDAGProps) {
   const { fitView } = useReactFlow();
   const prevNodeCount = useRef(0);
 
@@ -85,6 +87,7 @@ function TaskDAGInner({ tasks, onFinish, onTaskClick, onTaskDoubleClick, onTaskC
         if (task.isMergeNode) {
           // Render real merge nodes with the MergeGateNode component
           gateStatuses.set(task.id, task.status);
+          const wfId = task.workflowId;
           allNodes.push({
             id: task.id,
             type: 'mergeGateNode',
@@ -93,6 +96,10 @@ function TaskDAGInner({ tasks, onFinish, onTaskClick, onTaskDoubleClick, onTaskC
               status: task.status,
               label: 'All tasks must pass',
               onFinish: effectiveOnFinish === 'pull_request' ? 'pull_request' : 'merge',
+              baseBranch,
+              onSetMergeBranch: wfId && onSetMergeBranch
+                ? (branch: string) => onSetMergeBranch(wfId, branch)
+                : undefined,
             },
           });
         } else {
@@ -185,7 +192,7 @@ function TaskDAGInner({ tasks, onFinish, onTaskClick, onTaskDoubleClick, onTaskC
     });
 
     return { nodes: allNodes, edges: newEdges };
-  }, [tasks, onFinish]);
+  }, [tasks, onFinish, baseBranch, onSetMergeBranch]);
 
   // Merge task-derived nodes with React Flow's internal dimension/selection state.
   // Without this, each task-delta re-render creates new node objects that discard

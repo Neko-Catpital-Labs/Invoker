@@ -8,6 +8,7 @@
 import { execSync } from 'node:child_process';
 import { parse as parseYaml } from 'yaml';
 import type { PlanDefinition } from '@invoker/core';
+import { loadConfig } from './config.js';
 
 export interface RawExperimentVariant {
   id?: string;
@@ -75,7 +76,7 @@ export class PlanParseError extends Error {
  * Parse a YAML string into a validated PlanDefinition.
  * Throws PlanParseError if validation fails.
  */
-export function parsePlan(yamlContent: string): PlanDefinition {
+export function parsePlan(yamlContent: string, repoDir?: string): PlanDefinition {
   const raw = parseYaml(yamlContent) as RawPlan;
 
   if (!raw || typeof raw !== 'object') {
@@ -153,7 +154,7 @@ export function parsePlan(yamlContent: string): PlanDefinition {
   return {
     name: raw.name,
     onFinish,
-    baseBranch: raw.baseBranch ?? detectDefaultBranch(),
+    baseBranch: raw.baseBranch ?? loadConfig(repoDir ?? process.cwd()).defaultBranch ?? detectDefaultBranch(),
     featureBranch: raw.featureBranch,
     tasks,
   };
@@ -162,8 +163,8 @@ export function parsePlan(yamlContent: string): PlanDefinition {
 /**
  * Parse a YAML plan file from disk.
  */
-export async function parsePlanFile(filePath: string): Promise<PlanDefinition> {
+export async function parsePlanFile(filePath: string, repoDir?: string): Promise<PlanDefinition> {
   const { readFile } = await import('node:fs/promises');
   const content = await readFile(filePath, 'utf-8');
-  return parsePlan(content);
+  return parsePlan(content, repoDir);
 }

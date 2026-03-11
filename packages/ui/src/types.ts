@@ -122,6 +122,7 @@ export interface PlanDefinition {
   name: string;
   tasks: PlanTask[];
   onFinish?: 'none' | 'merge' | 'pull_request';
+  baseBranch?: string;
 }
 
 // ── Task Replacement ────────────────────────────────────────
@@ -175,6 +176,7 @@ export interface InvokerAPI {
     rebasedBranches: string[];
     errors: string[];
   }>;
+  setMergeBranch: (workflowId: string, baseBranch: string) => Promise<void>;
 }
 
 // ── Augment global Window ───────────────────────────────────

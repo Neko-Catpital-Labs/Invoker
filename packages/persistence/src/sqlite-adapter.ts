@@ -166,12 +166,16 @@ export class SQLiteAdapter implements PersistenceAdapter {
     );
   }
 
-  updateWorkflow(workflowId: string, changes: Partial<Pick<Workflow, 'status' | 'updatedAt'>>): void {
+  updateWorkflow(workflowId: string, changes: Partial<Pick<Workflow, 'status' | 'updatedAt' | 'baseBranch'>>): void {
     const setClauses: string[] = [];
     const values: unknown[] = [];
     if (changes.status !== undefined) {
       setClauses.push('status = ?');
       values.push(changes.status);
+    }
+    if (changes.baseBranch !== undefined) {
+      setClauses.push('base_branch = ?');
+      values.push(changes.baseBranch);
     }
     setClauses.push('updated_at = ?');
     values.push(changes.updatedAt ?? new Date().toISOString());

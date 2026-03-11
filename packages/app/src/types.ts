@@ -90,6 +90,9 @@ export interface InvokerAPI {
     rebasedBranches: string[];
     errors: string[];
   }>;
+
+  // Change merge target branch for a workflow
+  setMergeBranch: (workflowId: string, baseBranch: string) => Promise<void>;
 }
 
 // ── Augment global Window ────────────────────────────────────
