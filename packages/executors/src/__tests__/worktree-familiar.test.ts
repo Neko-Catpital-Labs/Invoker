@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 import type { ChildProcess } from 'node:child_process';
 import type { WorkRequest, WorkResponse } from '@invoker/protocol';
+import type { PersistedTaskMeta } from '../familiar.js';
 import type { Writable, Readable } from 'node:stream';
 
 // Mock child_process before importing WorktreeFamiliar
@@ -9,8 +10,14 @@ vi.mock('node:child_process', () => ({
   spawn: vi.fn(),
 }));
 
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  return { ...actual, existsSync: vi.fn(actual.existsSync) };
+});
+
 // Must import after mock setup
 import { spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { WorktreeFamiliar } from '../worktree-familiar.js';
 
 const mockedSpawn = vi.mocked(spawn);
@@ -771,6 +778,55 @@ describe('WorktreeFamiliar', () => {
       const handle = await familiar.start(request);
       expect(handle).toBeDefined();
       expect(removeWasCalled).toBe(false);
+    });
+  });
+
+  describe('getRestoredTerminalSpec', () => {
+    const baseMeta: PersistedTaskMeta = {
+      taskId: 'task-wt-1',
+      familiarType: 'worktree',
+    };
+
+    afterEach(() => {
+      vi.mocked(existsSync).mockReset();
+    });
+
+    it('returns cwd spec when worktree exists', () => {
+      vi.mocked(existsSync).mockReturnValue(true);
+      const spec = familiar.getRestoredTerminalSpec({
+        ...baseMeta,
+        workspacePath: '/home/user/.invoker/worktrees/wt-abc',
+      });
+      expect(spec).toEqual({ cwd: '/home/user/.invoker/worktrees/wt-abc' });
+    });
+
+    it('returns claude --resume spec with cwd when session exists', () => {
+      vi.mocked(existsSync).mockReturnValue(true);
+      const spec = familiar.getRestoredTerminalSpec({
+        ...baseMeta,
+        workspacePath: '/home/user/.invoker/worktrees/wt-abc',
+        claudeSessionId: 'session-wt-1',
+      });
+      expect(spec).toEqual({
+        command: 'claude',
+        args: ['--resume', 'session-wt-1', '--dangerously-skip-permissions'],
+        cwd: '/home/user/.invoker/worktrees/wt-abc',
+      });
+    });
+
+    it('throws when worktree path no longer exists', () => {
+      vi.mocked(existsSync).mockReturnValue(false);
+      expect(() =>
+        familiar.getRestoredTerminalSpec({
+          ...baseMeta,
+          workspacePath: '/home/user/.invoker/worktrees/deleted-wt',
+        }),
+      ).toThrow(/no longer exists.*cleaned up/);
+    });
+
+    it('returns spec with undefined cwd when no workspace path', () => {
+      const spec = familiar.getRestoredTerminalSpec(baseMeta);
+      expect(spec).toEqual({ cwd: undefined });
     });
   });
 });
