@@ -38,7 +38,7 @@ import type { PlanDefinition, TaskDelta, TaskReplacementDef } from '@invoker/cor
 import { SQLiteAdapter, ConversationRepository } from '@invoker/persistence';
 import { LocalBus, Channels } from '@invoker/transport';
 import {
-  FamiliarRegistry, TaskExecutor,
+  LocalFamiliar, FamiliarRegistry, TaskExecutor,
   DockerFamiliar, WorktreeFamiliar,
   type Familiar, type FamiliarHandle, type PersistedTaskMeta,
 } from '@invoker/executors';
@@ -83,6 +83,7 @@ function initServices(): void {
   mkdirSync(dbDir, { recursive: true });
   persistence = new SQLiteAdapter(path.join(dbDir, 'invoker.db'));
   familiarRegistry = new FamiliarRegistry();
+  familiarRegistry.register('local', new LocalFamiliar());
   orchestrator = new Orchestrator({ persistence, messageBus });
 
   orchestrator.syncAllFromDb();
@@ -1103,7 +1104,7 @@ function setupGuiMode(): void {
 
       const meta: PersistedTaskMeta = {
         taskId,
-        familiarType: persistence.getFamiliarType(taskId) ?? 'worktree',
+        familiarType: persistence.getFamiliarType(taskId) ?? 'local',
         claudeSessionId: persistence.getClaudeSessionId(taskId) ?? undefined,
         containerId: persistence.getContainerId(taskId) ?? undefined,
         workspacePath: persistence.getWorkspacePath(taskId) ?? undefined,
