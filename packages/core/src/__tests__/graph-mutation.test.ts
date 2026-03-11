@@ -206,9 +206,9 @@ describe('applyGraphMutation', () => {
       outputNodeId: 'fix',
     });
 
-    // No fork deltas (B has no descendants)
+    // Merge node is skipped (not forked), only the new 'fix' node is created
     const forkDeltas = deltas.filter((d) => d.type === 'created');
-    expect(forkDeltas).toHaveLength(1); // only the new node, no forked clones
+    expect(forkDeltas).toHaveLength(1);
 
     expect(orchestrator.getTask('B')!.status).toBe('stale');
     expect(orchestrator.getTask('fix')).toBeDefined();

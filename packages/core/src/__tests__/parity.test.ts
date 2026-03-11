@@ -407,7 +407,7 @@ describe('Parity — Feature Coverage', () => {
 
     const started = limitOrch.startExecution();
     expect(started).toHaveLength(2);
-    expect(limitOrch.getAllTasks().filter((t) => t.status === 'pending')).toHaveLength(3);
+    expect(limitOrch.getAllTasks().filter((t) => t.status === 'pending')).toHaveLength(4);
   });
 });
 
@@ -461,8 +461,8 @@ describe('Parity — Architectural Superiority', () => {
       ],
     });
 
-    // After loadPlan: DB has the tasks
-    expect(persistence.tasks.size).toBe(2);
+    // After loadPlan: DB has the tasks (2 user tasks + 1 merge node)
+    expect(persistence.tasks.size).toBe(3);
 
     orchestrator.startExecution();
     // After startExecution: DB reflects running status
@@ -527,12 +527,18 @@ describe('Parity — Architectural Superiority', () => {
       makeResponse({ actionId: 't3', status: 'completed', outputs: { exitCode: 0 } }),
     );
 
+    // Complete the merge node (auto-started when t3 completed)
+    const mergeTask = orchestrator.getAllTasks().find(t => t.id.startsWith('__merge__'));
+    orchestrator.handleWorkerResponse(
+      makeResponse({ actionId: mergeTask!.id, status: 'completed', outputs: { exitCode: 0 } }),
+    );
+
     expect(persistence.workflows.size).toBe(1);
-    expect(persistence.tasks.size).toBe(3);
+    expect(persistence.tasks.size).toBe(4);
 
     const status = orchestrator.getWorkflowStatus();
-    expect(status.total).toBe(3);
-    expect(status.completed).toBe(3);
+    expect(status.total).toBe(4);
+    expect(status.completed).toBe(4);
   });
 
   // ── Test 16: 10,000 task topological sort performance ─────

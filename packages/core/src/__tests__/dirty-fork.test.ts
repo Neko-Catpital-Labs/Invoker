@@ -208,14 +208,15 @@ describe('forkDirtySubtree', () => {
     expect(orchestrator.getTask('B-v3')!.dependencies).toEqual(['A']);
   });
 
-  it('leaf task dirty: no descendants → no stale, no clones', () => {
+  it('leaf task dirty: merge node is skipped (not forked)', () => {
     loadAndCompleteChain([
       { id: 'A' },
       { id: 'B', deps: ['A'] },
     ]);
 
     const deltas = orchestrator.forkDirtySubtree('B');
-    expect(deltas).toEqual([]);
+    // Merge node is the only descendant but it's skipped
+    expect(deltas).toHaveLength(0);
     expect(orchestrator.getTask('A')?.status).toBe('completed');
     expect(orchestrator.getTask('B')?.status).toBe('completed');
   });

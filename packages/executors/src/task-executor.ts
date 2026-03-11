@@ -130,6 +130,12 @@ export class TaskExecutor {
   }
 
   private async executeTaskInner(task: TaskState): Promise<void> {
+    // Merge nodes: execute git consolidation/merge or auto-complete
+    if (task.isMergeNode) {
+      await this.executeMergeNode(task);
+      return;
+    }
+
     // Pivot tasks with experimentVariants: synthesize a spawn_experiments
     // response instead of running through the familiar.
     if (task.pivot && task.experimentVariants && task.experimentVariants.length > 0) {
@@ -275,6 +281,131 @@ export class TaskExecutor {
     if (task.command) return 'command';
     if (task.prompt) return 'claude';
     return 'command';
+  }
+
+  // ── Merge Node Execution ─────────────────────────────────
+
+  private async executeMergeNode(task: TaskState): Promise<void> {
+    const workflowId = task.workflowId;
+    const workflow = workflowId
+      ? this.persistence.loadWorkflow(workflowId)
+      : undefined;
+    const onFinish = workflow?.onFinish ?? 'none';
+    const baseBranch = workflow?.baseBranch ?? 'main';
+    const featureBranch = workflow?.featureBranch;
+
+    let response: WorkResponse;
+
+    if (onFinish !== 'none' && featureBranch) {
+      try {
+        await this.consolidateAndMerge(onFinish, baseBranch, featureBranch, workflow?.name);
+        response = {
+          requestId: `merge-${task.id}`,
+          actionId: task.id,
+          status: 'completed',
+          outputs: { exitCode: 0 },
+        };
+      } catch (err) {
+        response = {
+          requestId: `merge-${task.id}`,
+          actionId: task.id,
+          status: 'failed',
+          outputs: {
+            exitCode: 1,
+            error: `Merge failed: ${err instanceof Error ? err.message : String(err)}`,
+          },
+        };
+      }
+    } else {
+      response = {
+        requestId: `merge-${task.id}`,
+        actionId: task.id,
+        status: 'completed',
+        outputs: { exitCode: 0 },
+      };
+    }
+
+    this.callbacks.onComplete?.(task.id, response);
+    const newlyStarted = this.orchestrator.handleWorkerResponse(response) ?? [];
+    if (newlyStarted.length > 0) {
+      this.executeTasks(newlyStarted);
+    }
+  }
+
+  private async consolidateAndMerge(
+    onFinish: string,
+    baseBranch: string,
+    featureBranch: string,
+    workflowName?: string,
+  ): Promise<void> {
+    // Consolidate all completed task branches into featureBranch
+    try {
+      await this.execGit(['checkout', '-b', featureBranch, baseBranch]);
+      console.log(`[merge] Created ${featureBranch} from ${baseBranch}`);
+    } catch {
+      await this.execGit(['checkout', featureBranch]);
+      console.log(`[merge] Checked out existing ${featureBranch}`);
+    }
+
+    const tasks = this.orchestrator.getAllTasks();
+    const taskBranches = tasks
+      .filter((t) => t.status === 'completed' && t.branch && !t.isMergeNode)
+      .map((t) => t.branch!);
+
+    for (const branch of taskBranches) {
+      console.log(`[merge] Merging task branch: ${branch} → ${featureBranch}`);
+      await this.execGit(['merge', '--no-ff', '-m', `Merge ${branch}`, branch]);
+    }
+    console.log(`[merge] Consolidated ${taskBranches.length} task branches into ${featureBranch}`);
+
+    const mergeMessage = workflowName ?? 'Workflow';
+
+    if (onFinish === 'merge') {
+      await this.execGit(['checkout', baseBranch]);
+      await this.execGit(['merge', '--no-ff', '-m', mergeMessage, featureBranch]);
+      console.log(`[merge] Merged ${featureBranch} into ${baseBranch} (no-ff)`);
+    } else if (onFinish === 'pull_request') {
+      await this.execGit(['push', '-u', 'origin', featureBranch]);
+      await this.execPr(baseBranch, featureBranch, workflowName ?? 'Workflow');
+      console.log(`[merge] Created pull request: ${featureBranch} → ${baseBranch}`);
+    }
+  }
+
+  private execGit(args: string[]): Promise<string> {
+    return new Promise((resolvePromise, reject) => {
+      const child = spawn('git', args, {
+        cwd: this.cwd,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      let stdout = '';
+      let stderr = '';
+      child.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
+      child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
+      child.on('close', (code) => {
+        if (code === 0) resolvePromise(stdout.trim());
+        else reject(new Error(`git ${args.join(' ')} failed (code ${code}): ${stderr.trim()}`));
+      });
+    });
+  }
+
+  private execPr(baseBranch: string, featureBranch: string, title: string): Promise<string> {
+    return new Promise((resolvePromise, reject) => {
+      const child = spawn('gh', [
+        'pr', 'create', '--base', baseBranch,
+        '--head', featureBranch, '--title', title, '--body', '',
+      ], {
+        cwd: this.cwd,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      let stdout = '';
+      let stderr = '';
+      child.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
+      child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
+      child.on('close', (code) => {
+        if (code === 0) resolvePromise(stdout.trim());
+        else reject(new Error(`gh pr create failed (code ${code}): ${stderr.trim()}`));
+      });
+    });
   }
 
   // ── Private Helpers ──────────────────────────────────────

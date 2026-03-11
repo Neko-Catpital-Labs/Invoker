@@ -52,7 +52,7 @@ export class TaskStateMachine {
 
       const allDepsComplete = task.dependencies.every((depId) => {
         const dep = this.graph.getNode(depId);
-        return dep?.status === 'completed';
+        return dep?.status === 'completed' || dep?.status === 'stale';
       });
 
       if (allDepsComplete) {

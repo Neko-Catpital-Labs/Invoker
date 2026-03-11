@@ -77,6 +77,7 @@ export function topologicalSort(tasks: TaskState[]): TaskState[] {
 export function getTransitiveDependents(
   taskId: string,
   taskMap: ReadonlyMap<string, TaskState>,
+  skipPredicate?: (task: TaskState) => boolean,
 ): string[] {
   // Build reverse adjacency: for each task, which tasks depend on it?
   const reverseDeps = new Map<string, string[]>();
@@ -98,6 +99,8 @@ export function getTransitiveDependents(
   const directDependents = reverseDeps.get(taskId) ?? [];
   for (const dep of directDependents) {
     if (!visited.has(dep)) {
+      const task = taskMap.get(dep);
+      if (task && skipPredicate?.(task)) continue;
       visited.add(dep);
       queue.push(dep);
     }
@@ -108,6 +111,8 @@ export function getTransitiveDependents(
     const neighbors = reverseDeps.get(current) ?? [];
     for (const neighbor of neighbors) {
       if (!visited.has(neighbor)) {
+        const task = taskMap.get(neighbor);
+        if (task && skipPredicate?.(task)) continue;
         visited.add(neighbor);
         queue.push(neighbor);
       }
