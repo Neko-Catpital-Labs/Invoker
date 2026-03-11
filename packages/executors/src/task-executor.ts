@@ -291,7 +291,7 @@ export class TaskExecutor {
       ? this.persistence.loadWorkflow(workflowId)
       : undefined;
     const onFinish = workflow?.onFinish ?? 'none';
-    const baseBranch = workflow?.baseBranch ?? 'main';
+    const baseBranch = workflow?.baseBranch ?? await this.detectDefaultBranch();
     const featureBranch = workflow?.featureBranch;
 
     let response: WorkResponse;
@@ -387,6 +387,20 @@ export class TaskExecutor {
         else reject(new Error(`git ${args.join(' ')} failed (code ${code}): ${stderr.trim()}`));
       });
     });
+  }
+
+  async detectDefaultBranch(): Promise<string> {
+    try {
+      const ref = await this.execGit(['symbolic-ref', 'refs/remotes/origin/HEAD']);
+      return ref.replace('refs/remotes/origin/', '');
+    } catch {
+      try {
+        await this.execGit(['rev-parse', '--verify', 'main']);
+        return 'main';
+      } catch {
+        return 'master';
+      }
+    }
   }
 
   private execPr(baseBranch: string, featureBranch: string, title: string): Promise<string> {

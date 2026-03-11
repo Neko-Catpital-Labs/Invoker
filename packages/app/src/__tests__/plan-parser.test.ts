@@ -1,5 +1,11 @@
-import { describe, it, expect } from 'vitest';
-import { parsePlan, PlanParseError } from '../plan-parser.js';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { parsePlan, PlanParseError, detectDefaultBranch } from '../plan-parser.js';
+
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>();
+  return { ...actual, execSync: vi.fn(actual.execSync) };
+});
+import { execSync } from 'node:child_process';
 
 describe('parsePlan', () => {
   it('parses valid YAML plan', () => {
@@ -178,7 +184,15 @@ tasks:
       expect(plan.featureBranch).toBe('plan/simple-plan');
     });
 
-    it('defaults baseBranch to main when omitted', () => {
+    it('auto-detects baseBranch when omitted', () => {
+      const mockExecSync = vi.mocked(execSync);
+      mockExecSync.mockImplementation(((cmd: string) => {
+        if (typeof cmd === 'string' && cmd.includes('symbolic-ref')) {
+          return 'refs/remotes/origin/develop\n';
+        }
+        throw new Error('unexpected');
+      }) as any);
+
       const yaml = `
 name: No Base Branch
 onFinish: merge
@@ -188,7 +202,22 @@ tasks:
     description: Build the project
 `;
       const plan = parsePlan(yaml);
-      expect(plan.baseBranch).toBe('main');
+      expect(plan.baseBranch).toBe('develop');
+      mockExecSync.mockRestore();
+    });
+
+    it('explicit baseBranch overrides auto-detection', () => {
+      const yaml = `
+name: Explicit Base
+onFinish: merge
+baseBranch: release
+featureBranch: feat/x
+tasks:
+  - id: build
+    description: Build the project
+`;
+      const plan = parsePlan(yaml);
+      expect(plan.baseBranch).toBe('release');
     });
 
     it('rejects invalid onFinish value', () => {
@@ -214,5 +243,49 @@ tasks:
       expect(plan.onFinish).toBe('merge');
       expect(plan.featureBranch).toBe('plan/missing-feature-branch');
     });
+  });
+});
+
+describe('detectDefaultBranch', () => {
+  const mockExecSync = vi.mocked(execSync);
+
+  beforeEach(() => {
+    mockExecSync.mockReset();
+  });
+
+  it('returns branch from git symbolic-ref when available', () => {
+    mockExecSync.mockImplementation(((cmd: string) => {
+      if (typeof cmd === 'string' && cmd.includes('symbolic-ref')) {
+        return 'refs/remotes/origin/master\n';
+      }
+      throw new Error('unexpected');
+    }) as any);
+
+    expect(detectDefaultBranch()).toBe('master');
+  });
+
+  it('falls back to main when symbolic-ref fails but main exists', () => {
+    let callCount = 0;
+    mockExecSync.mockImplementation(((cmd: string) => {
+      callCount++;
+      if (typeof cmd === 'string' && cmd.includes('symbolic-ref')) {
+        throw new Error('not set');
+      }
+      if (typeof cmd === 'string' && cmd.includes('rev-parse') && cmd.includes('main')) {
+        return 'abc123\n';
+      }
+      throw new Error('unexpected');
+    }) as any);
+
+    expect(detectDefaultBranch()).toBe('main');
+    expect(callCount).toBe(2);
+  });
+
+  it('falls back to master when both symbolic-ref and main fail', () => {
+    mockExecSync.mockImplementation(() => {
+      throw new Error('not found');
+    });
+
+    expect(detectDefaultBranch()).toBe('master');
   });
 });

@@ -5,6 +5,7 @@
  * Uses the `yaml` npm package for parsing.
  */
 
+import { execSync } from 'node:child_process';
 import { parse as parseYaml } from 'yaml';
 import type { PlanDefinition } from '@invoker/core';
 
@@ -39,6 +40,28 @@ export interface RawPlan {
   repoUrl?: string;
   familiarType?: string;
   tasks?: RawPlanTask[];
+}
+
+/**
+ * Auto-detect the repo's default branch via git.
+ * Tries origin/HEAD first, then checks if 'main' exists locally, falls back to 'master'.
+ */
+export function detectDefaultBranch(cwd?: string): string {
+  try {
+    const ref = execSync('git symbolic-ref refs/remotes/origin/HEAD', {
+      cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    return ref.replace('refs/remotes/origin/', '');
+  } catch {
+    try {
+      execSync('git rev-parse --verify main', {
+        cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
+      });
+      return 'main';
+    } catch {
+      return 'master';
+    }
+  }
 }
 
 export class PlanParseError extends Error {
@@ -130,7 +153,7 @@ export function parsePlan(yamlContent: string): PlanDefinition {
   return {
     name: raw.name,
     onFinish,
-    baseBranch: raw.baseBranch ?? 'main',
+    baseBranch: raw.baseBranch ?? detectDefaultBranch(),
     featureBranch: raw.featureBranch,
     tasks,
   };

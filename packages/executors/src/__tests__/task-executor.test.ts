@@ -156,4 +156,49 @@ describe('TaskExecutor', () => {
       expect(onComplete).toHaveBeenCalled();
     });
   });
+
+  describe('detectDefaultBranch', () => {
+    it('returns branch from git symbolic-ref when available', async () => {
+      const executor = createExecutorWithTasks(new Map());
+
+      const origExecGit = (executor as any).execGit.bind(executor);
+      (executor as any).execGit = async (args: string[]) => {
+        if (args.includes('symbolic-ref')) {
+          return 'refs/remotes/origin/master';
+        }
+        return origExecGit(args);
+      };
+
+      const branch = await executor.detectDefaultBranch();
+      expect(branch).toBe('master');
+    });
+
+    it('falls back to main when symbolic-ref fails but main exists', async () => {
+      const executor = createExecutorWithTasks(new Map());
+
+      (executor as any).execGit = async (args: string[]) => {
+        if (args.includes('symbolic-ref')) {
+          throw new Error('not set');
+        }
+        if (args.includes('rev-parse') && args.includes('main')) {
+          return 'abc123';
+        }
+        throw new Error('unexpected');
+      };
+
+      const branch = await executor.detectDefaultBranch();
+      expect(branch).toBe('main');
+    });
+
+    it('falls back to master when both symbolic-ref and main fail', async () => {
+      const executor = createExecutorWithTasks(new Map());
+
+      (executor as any).execGit = async () => {
+        throw new Error('not found');
+      };
+
+      const branch = await executor.detectDefaultBranch();
+      expect(branch).toBe('master');
+    });
+  });
 });
