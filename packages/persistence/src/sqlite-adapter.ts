@@ -320,6 +320,13 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return rows.map((r) => r.id);
   }
 
+  getAllTaskBranches(): string[] {
+    const rows = this.db.prepare(
+      'SELECT DISTINCT branch FROM tasks WHERE branch IS NOT NULL',
+    ).all() as Array<{ branch: string }>;
+    return rows.map((r) => r.branch);
+  }
+
   loadAllCompletedTasks(): Array<TaskState & { workflowName: string }> {
     const rows = this.db.prepare(`
       SELECT t.*, w.name AS workflow_name

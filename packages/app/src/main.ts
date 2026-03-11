@@ -95,8 +95,8 @@ function initServices(): void {
   console.log(`[init] Orchestrator graph has ${orchestrator.getAllTasks().length} tasks across ${workflows.length} workflows`);
 
   // Clean up orphan worktrees that no longer correspond to any task in the DB
-  const knownTaskIds = new Set(persistence.getAllTaskIds());
-  const cleanup = cleanupOrphanWorktrees(repoRoot, knownTaskIds);
+  const knownBranches = new Set(persistence.getAllTaskBranches());
+  const cleanup = cleanupOrphanWorktrees(repoRoot, knownBranches);
   if (cleanup.removed.length > 0) {
     console.log(`[init] Cleaned up ${cleanup.removed.length} orphan worktrees: ${cleanup.removed.join(', ')}`);
   }
@@ -1168,8 +1168,8 @@ function setupGuiMode(): void {
     }, 2000);
 
     ipcMain.handle('invoker:cleanup-worktrees', () => {
-      const knownTaskIds = new Set(persistence.getAllTaskIds());
-      const result = cleanupOrphanWorktrees(repoRoot, knownTaskIds);
+      const knownBranches = new Set(persistence.getAllTaskBranches());
+      const result = cleanupOrphanWorktrees(repoRoot, knownBranches);
       console.log(`[ipc] cleanup-worktrees: removed ${result.removed.length}, errors ${result.errors.length}`);
       return result;
     });

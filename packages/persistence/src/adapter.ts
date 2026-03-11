@@ -72,6 +72,7 @@ export interface PersistenceAdapter {
   updateTask(taskId: string, changes: Partial<TaskState>): void;
   loadTasks(workflowId: string): TaskState[];
   getAllTaskIds(): string[];
+  getAllTaskBranches(): string[];
   deleteAllTasks(workflowId: string): void;
   deleteAllWorkflows(): void;
 

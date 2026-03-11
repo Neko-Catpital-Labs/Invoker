@@ -692,6 +692,42 @@ describe('SQLiteAdapter', () => {
     });
   });
 
+  describe('getAllTaskBranches', () => {
+    it('returns empty array when no tasks', () => {
+      expect(adapter.getAllTaskBranches()).toEqual([]);
+    });
+
+    it('returns distinct non-null branches across workflows', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveWorkflow({ ...testWorkflow, id: 'wf-2', name: 'Second' });
+      adapter.saveTask('wf-1', makeTask('t1'));
+      adapter.saveTask('wf-1', makeTask('t2'));
+      adapter.saveTask('wf-2', makeTask('t3'));
+
+      adapter.updateTask('t1', { branch: 'experiment/t1-abc12345' } as any);
+      adapter.updateTask('t2', { branch: 'experiment/t2-def67890' } as any);
+      // t3 has no branch set
+
+      const branches = adapter.getAllTaskBranches();
+      expect(branches.sort()).toEqual([
+        'experiment/t1-abc12345',
+        'experiment/t2-def67890',
+      ]);
+    });
+
+    it('deduplicates branches', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t1'));
+      adapter.saveTask('wf-1', makeTask('t2'));
+
+      adapter.updateTask('t1', { branch: 'experiment/shared-branch' } as any);
+      adapter.updateTask('t2', { branch: 'experiment/shared-branch' } as any);
+
+      const branches = adapter.getAllTaskBranches();
+      expect(branches).toEqual(['experiment/shared-branch']);
+    });
+  });
+
   describe('logEvent FK constraint', () => {
     it('logEvent with a real task_id succeeds', () => {
       adapter.saveWorkflow(testWorkflow);
