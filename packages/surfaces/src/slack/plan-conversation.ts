@@ -604,6 +604,7 @@ export function extractYamlPlan(text: string): PlanDefinition | null {
         command: t.command,
         prompt: t.prompt,
         dependencies: t.dependencies ?? [],
+        familiarType: t.familiarType ?? t.familiar_type,
         pivot: t.pivot,
         experimentVariants: t.experimentVariants,
         requiresManualApproval: t.requiresManualApproval,
