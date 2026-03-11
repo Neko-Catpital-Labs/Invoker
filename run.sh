@@ -8,6 +8,13 @@ cd "$REPO_ROOT"
 # Unset ELECTRON_RUN_AS_NODE so Electron loads its full API.
 unset ELECTRON_RUN_AS_NODE
 
+# Kill any stale Electron/tsup processes from previous runs so we
+# always start from a clean state.
+pkill -f "electron.*packages/app/dist/main.js" 2>/dev/null || true
+pkill -f "tsup.*packages/app" 2>/dev/null || true
+sleep 0.2
+
+# Clean build all packages (tsup.config has clean: true)
 pnpm --filter @invoker/core build
 pnpm --filter @invoker/persistence build
 pnpm --filter @invoker/executors build

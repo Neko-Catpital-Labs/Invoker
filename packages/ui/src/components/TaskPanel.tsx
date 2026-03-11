@@ -98,13 +98,12 @@ export function TaskPanel({
         <div className="flex items-center justify-between">
           <span className="text-sm text-gray-400">Executor</span>
           <select
-            value={task.familiarType ?? 'local'}
+            value={task.familiarType ?? 'worktree'}
             onChange={(e) => onEditType(task.id, e.target.value)}
             disabled={task.status === 'running'}
             className="bg-gray-700 text-gray-200 text-xs rounded px-2 py-1 border border-gray-600 focus:outline-none focus:border-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
             data-testid="executor-type-select"
           >
-            <option value="local">Local</option>
             <option value="worktree">Worktree</option>
             <option value="docker">Docker</option>
           </select>

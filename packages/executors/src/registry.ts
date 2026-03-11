@@ -12,11 +12,11 @@ export class FamiliarRegistry {
   }
 
   getDefault(): Familiar {
-    const local = this.familiars.get('local');
-    if (!local) {
-      throw new Error('No "local" familiar registered. Register one before calling getDefault().');
+    const worktree = this.familiars.get('worktree');
+    if (!worktree) {
+      throw new Error('No "worktree" familiar registered. Register one before calling getDefault().');
     }
-    return local;
+    return worktree;
   }
 
   getAll(): Familiar[] {

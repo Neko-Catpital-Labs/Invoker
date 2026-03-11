@@ -1311,18 +1311,18 @@ describe('Orchestrator', () => {
     it('changes familiarType and restarts the task', () => {
       orchestrator.loadPlan({
         name: 'edit-type-test',
-        tasks: [{ id: 't1', description: 'Task 1', command: 'echo hello', familiarType: 'local' }],
+        tasks: [{ id: 't1', description: 'Task 1', command: 'echo hello', familiarType: 'worktree' }],
       });
       orchestrator.startExecution();
 
       orchestrator.handleWorkerResponse(
         makeResponse({ actionId: 't1', status: 'failed', outputs: { exitCode: 1, error: 'fail' } }),
       );
-      expect(orchestrator.getTask('t1')?.familiarType).toBe('local');
+      expect(orchestrator.getTask('t1')?.familiarType).toBe('worktree');
 
-      const started = orchestrator.editTaskType('t1', 'worktree');
+      const started = orchestrator.editTaskType('t1', 'docker');
       const task = orchestrator.getTask('t1');
-      expect(task?.familiarType).toBe('worktree');
+      expect(task?.familiarType).toBe('docker');
       expect(task?.status).toBe('running');
       expect(started).toHaveLength(1);
     });
@@ -1331,7 +1331,7 @@ describe('Orchestrator', () => {
       orchestrator.loadPlan({
         name: 'edit-type-no-fork',
         tasks: [
-          { id: 'parent', description: 'Parent', command: 'echo parent', familiarType: 'local' },
+          { id: 'parent', description: 'Parent', command: 'echo parent', familiarType: 'worktree' },
           { id: 'child', description: 'Child', command: 'echo child', dependencies: ['parent'] },
         ],
       });
@@ -1345,7 +1345,7 @@ describe('Orchestrator', () => {
       );
 
       const taskCountBefore = orchestrator.getAllTasks().length;
-      orchestrator.editTaskType('parent', 'worktree');
+      orchestrator.editTaskType('parent', 'docker');
       const taskCountAfter = orchestrator.getAllTasks().length;
 
       expect(taskCountAfter).toBe(taskCountBefore);
@@ -1355,17 +1355,17 @@ describe('Orchestrator', () => {
     it('throws when trying to edit a running task', () => {
       orchestrator.loadPlan({
         name: 'edit-type-running',
-        tasks: [{ id: 't1', description: 'Task 1', command: 'sleep 100', familiarType: 'local' }],
+        tasks: [{ id: 't1', description: 'Task 1', command: 'sleep 100', familiarType: 'worktree' }],
       });
       orchestrator.startExecution();
 
-      expect(() => orchestrator.editTaskType('t1', 'worktree')).toThrow();
+      expect(() => orchestrator.editTaskType('t1', 'docker')).toThrow();
     });
 
     it('persists the updated familiarType', () => {
       orchestrator.loadPlan({
         name: 'edit-type-persist',
-        tasks: [{ id: 't1', description: 'Task 1', command: 'echo old', familiarType: 'local' }],
+        tasks: [{ id: 't1', description: 'Task 1', command: 'echo old', familiarType: 'worktree' }],
       });
       orchestrator.startExecution();
 
@@ -1373,11 +1373,11 @@ describe('Orchestrator', () => {
         makeResponse({ actionId: 't1', status: 'failed', outputs: { exitCode: 1, error: 'oops' } }),
       );
 
-      orchestrator.editTaskType('t1', 'worktree');
+      orchestrator.editTaskType('t1', 'docker');
 
       const persisted = persistence.tasks.get('t1');
       expect(persisted).toBeDefined();
-      expect(persisted?.task.familiarType).toBe('worktree');
+      expect(persisted?.task.familiarType).toBe('docker');
     });
   });
 

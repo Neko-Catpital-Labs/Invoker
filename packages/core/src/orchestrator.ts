@@ -242,7 +242,7 @@ export class Orchestrator {
           requiresManualApproval: taskDef.requiresManualApproval,
           repoUrl: taskDef.repoUrl,
           featureBranch: taskDef.featureBranch,
-          familiarType: taskDef.familiarType ?? (taskDef.command ? 'local' : 'worktree'),
+          familiarType: taskDef.familiarType ?? 'worktree',
           autoFix: taskDef.autoFix,
           maxFixAttempts: taskDef.maxFixAttempts,
         },

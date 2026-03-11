@@ -38,7 +38,7 @@ import type { PlanDefinition, TaskDelta, TaskReplacementDef } from '@invoker/cor
 import { SQLiteAdapter, ConversationRepository } from '@invoker/persistence';
 import { LocalBus, Channels } from '@invoker/transport';
 import {
-  LocalFamiliar, FamiliarRegistry, TaskExecutor,
+  FamiliarRegistry, TaskExecutor,
   DockerFamiliar, WorktreeFamiliar,
   type Familiar, type FamiliarHandle, type PersistedTaskMeta,
 } from '@invoker/executors';
@@ -83,7 +83,6 @@ function initServices(): void {
   mkdirSync(dbDir, { recursive: true });
   persistence = new SQLiteAdapter(path.join(dbDir, 'invoker.db'));
   familiarRegistry = new FamiliarRegistry();
-  familiarRegistry.register('local', new LocalFamiliar());
   orchestrator = new Orchestrator({ persistence, messageBus });
 
   orchestrator.syncAllFromDb();
@@ -411,7 +410,22 @@ async function headlessResume(workflowId: string): Promise<void> {
     },
   });
 
-  const started = orchestrator.resumeWorkflow(workflowId);
+  orchestrator.syncFromDb(workflowId);
+
+  // Reconcile tasks stuck in 'running' from a previous session
+  for (const task of orchestrator.getAllTasks()) {
+    if (task.status === 'running') {
+      console.log(`[headless] resetting orphaned running task "${task.id}" to pending`);
+      orchestrator.handleWorkerResponse({
+        requestId: `orphan-${task.id}`,
+        actionId: task.id,
+        status: 'failed',
+        outputs: { exitCode: 1, error: 'Interrupted by app restart' },
+      });
+    }
+  }
+
+  const started = orchestrator.startExecution();
   await taskExecutor.executeTasks(started);
   await waitForCompletion();
 
@@ -817,6 +831,21 @@ function setupGuiMode(): void {
         return null;
       }
       orchestrator.syncAllFromDb();
+
+      // Reconcile tasks stuck in 'running' from a previous session —
+      // the child processes and listeners are gone after restart.
+      for (const task of orchestrator.getAllTasks()) {
+        if (task.status === 'running') {
+          console.log(`[ipc] resume-workflow: resetting orphaned running task "${task.id}" to pending`);
+          orchestrator.handleWorkerResponse({
+            requestId: `orphan-${task.id}`,
+            actionId: task.id,
+            status: 'failed',
+            outputs: { exitCode: 1, error: 'Interrupted by app restart' },
+          });
+        }
+      }
+
       const allStarted: any[] = [];
       for (const wf of workflows) {
         if (wf.status === 'completed' || wf.status === 'failed') continue;
@@ -1074,7 +1103,7 @@ function setupGuiMode(): void {
 
       const meta: PersistedTaskMeta = {
         taskId,
-        familiarType: persistence.getFamiliarType(taskId) ?? 'local',
+        familiarType: persistence.getFamiliarType(taskId) ?? 'worktree',
         claudeSessionId: persistence.getClaudeSessionId(taskId) ?? undefined,
         containerId: persistence.getContainerId(taskId) ?? undefined,
         workspacePath: persistence.getWorkspacePath(taskId) ?? undefined,
@@ -1197,6 +1226,16 @@ function setupGuiMode(): void {
     if (dbPollInterval) clearInterval(dbPollInterval);
     if (activityPollInterval) clearInterval(activityPollInterval);
     await Promise.all(familiarRegistry.getAll().map(f => f.destroyAll()));
+    for (const task of orchestrator.getAllTasks()) {
+      if (task.status === 'running') {
+        orchestrator.handleWorkerResponse({
+          requestId: `quit-${task.id}`,
+          actionId: task.id,
+          status: 'failed',
+          outputs: { exitCode: 1, error: 'Application quit' },
+        });
+      }
+    }
     persistence.close();
     messageBus.disconnect();
   });
