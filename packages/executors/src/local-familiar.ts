@@ -18,6 +18,8 @@ export interface LocalFamiliarOptions {
   claudeCommand?: string;
   /** When true, fall back to echo stub if the Claude CLI is not found. Defaults to true. */
   claudeFallback?: boolean;
+  /** Heartbeat interval in ms for orphan detection. Defaults to 30000. */
+  heartbeatIntervalMs?: number;
 }
 
 /**
@@ -41,7 +43,7 @@ export class LocalFamiliar extends BaseFamiliar<ProcessEntry> {
   private claudeFallback: boolean;
 
   constructor(options: LocalFamiliarOptions = {}) {
-    super();
+    super(options.heartbeatIntervalMs);
     this.claudeCommand = options.claudeCommand ?? 'claude';
     this.claudeFallback = options.claudeFallback ?? true;
   }
@@ -158,12 +160,13 @@ export class LocalFamiliar extends BaseFamiliar<ProcessEntry> {
           });
           // Replace the process reference
           entry.process = fallbackChild;
-          this.wireChildEvents(fallbackChild, entry);
+          this.wireChildEvents(executionId, fallbackChild, entry);
         }
       });
     }
 
-    this.wireChildEvents(child, entry);
+    this.wireChildEvents(executionId, child, entry);
+    this.startHeartbeat(executionId, child);
 
     // Generic error handler: catch spawn errors that are NOT handled by
     // the ENOENT fallback above (e.g., EACCES, EPERM, or other failures).
@@ -193,19 +196,13 @@ export class LocalFamiliar extends BaseFamiliar<ProcessEntry> {
   }
 
   /** Wire stdout, stderr, and close events from a child process to a ProcessEntry. */
-  private wireChildEvents(child: ChildProcess, entry: ProcessEntry): void {
+  private wireChildEvents(executionId: string, child: ChildProcess, entry: ProcessEntry): void {
     child.stdout?.on('data', (chunk: Buffer) => {
-      const data = chunk.toString();
-      for (const cb of entry.outputListeners) {
-        cb(data);
-      }
+      this.emitOutput(executionId, chunk.toString());
     });
 
     child.stderr?.on('data', (chunk: Buffer) => {
-      const data = chunk.toString();
-      for (const cb of entry.outputListeners) {
-        cb(data);
-      }
+      this.emitOutput(executionId, chunk.toString());
     });
 
     child.on('close', async (code, signal) => {
@@ -214,20 +211,27 @@ export class LocalFamiliar extends BaseFamiliar<ProcessEntry> {
 
       entry.completed = true;
       const exitCode = code ?? (signal ? 1 : 0);
+      const signalInfo = signal ? ` signal=${signal}` : '';
+      this.emitOutput(executionId,
+        `[LocalFamiliar] Process exited: actionId=${entry.request.actionId} exitCode=${exitCode}${signalInfo}\n`);
 
-      // Auto-commit changes after successful Claude tasks
       let commitHash: string | undefined;
-      if (entry.request.actionType === 'claude' && exitCode === 0) {
-        const hash = await this.autoCommit(
-          entry.request.inputs.workspacePath ?? process.cwd(),
-          entry.request.actionId,
-          {
-            description: entry.request.inputs.command,
-            prompt: entry.request.inputs.prompt,
-            upstreamContext: entry.request.inputs.upstreamContext,
-          },
-        );
-        commitHash = hash ?? undefined;
+      try {
+        if (entry.request.actionType === 'claude' && exitCode === 0) {
+          const hash = await this.autoCommit(
+            entry.request.inputs.workspacePath ?? process.cwd(),
+            entry.request.actionId,
+            {
+              description: entry.request.inputs.command,
+              prompt: entry.request.inputs.prompt,
+              upstreamContext: entry.request.inputs.upstreamContext,
+            },
+          );
+          commitHash = hash ?? undefined;
+        }
+      } catch (err) {
+        this.emitOutput(executionId,
+          `[LocalFamiliar] autoCommit error: ${err}\n`);
       }
 
       const response: WorkResponse = {
@@ -240,9 +244,7 @@ export class LocalFamiliar extends BaseFamiliar<ProcessEntry> {
           claudeSessionId: entry.claudeSessionId,
         },
       };
-      for (const cb of entry.completeListeners) {
-        cb(response);
-      }
+      this.emitComplete(executionId, response);
     });
   }
 

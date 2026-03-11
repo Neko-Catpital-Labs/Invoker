@@ -89,6 +89,10 @@ export interface PersistenceAdapter {
   appendMessage(threadTs: string, role: 'user' | 'assistant', content: string): void;
   loadMessages(threadTs: string): ConversationMessage[];
 
+  // Task output (stdout/stderr persistence)
+  appendTaskOutput(taskId: string, data: string): void;
+  getTaskOutput(taskId: string): string;
+
   // Lifecycle
   close(): void;
 }

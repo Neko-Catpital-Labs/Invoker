@@ -55,6 +55,7 @@ export interface InvokerAPI {
   onActivityLog: (cb: (entries: ActivityLogEntry[]) => void) => () => void;
   getActivityLogs: () => Promise<ActivityLogEntry[]>;
   getEvents: (taskId: string) => Promise<Array<{ id: number; taskId: string; eventType: string; payload?: string; createdAt: string }>>;
+  getTaskOutput: (taskId: string) => Promise<string>;
 
   // External terminal launcher
   openTerminal: (taskId: string) => Promise<{ opened: boolean; reason?: string }>;

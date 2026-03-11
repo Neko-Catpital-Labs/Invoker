@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { TaskExecutor } from '../task-executor.js';
 import type { TaskState } from '@invoker/core';
 
@@ -113,6 +113,47 @@ describe('TaskExecutor', () => {
 
       const branches = executor.collectUpstreamBranches(task);
       expect(branches).toEqual([]);
+    });
+  });
+
+  describe('executeTask error handling', () => {
+    it('sends failed WorkResponse when familiar.start throws', async () => {
+      const handleWorkerResponse = vi.fn();
+      const orchestrator = {
+        getTask: () => undefined,
+        handleWorkerResponse,
+      };
+      const throwingFamiliar = {
+        type: 'local',
+        start: async () => { throw new Error('worktree creation failed'); },
+        onOutput: () => () => {},
+        onComplete: () => () => {},
+      };
+      const registry = {
+        getDefault: () => throwingFamiliar,
+        get: () => throwingFamiliar,
+        getAll: () => [throwingFamiliar],
+      };
+      const onComplete = vi.fn();
+
+      const executor = new TaskExecutor({
+        orchestrator: orchestrator as any,
+        persistence: { updateTask: vi.fn() } as any,
+        familiarRegistry: registry as any,
+        cwd: '/tmp',
+        callbacks: { onComplete },
+      });
+
+      const task = makeTask({ id: 'failing-start', status: 'running', command: 'echo hi' });
+      await executor.executeTask(task);
+
+      expect(handleWorkerResponse).toHaveBeenCalledWith(
+        expect.objectContaining({
+          actionId: 'failing-start',
+          status: 'failed',
+        }),
+      );
+      expect(onComplete).toHaveBeenCalled();
     });
   });
 });

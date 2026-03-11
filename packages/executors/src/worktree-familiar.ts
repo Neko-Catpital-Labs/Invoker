@@ -69,7 +69,7 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
   private pool: RepoPool | null = null;
 
   constructor(config: WorktreeFamiliarConfig) {
-    super();
+    super();  
     this.repoDir = config.repoDir;
     this.claudeCommand = config.claudeCommand ?? 'claude';
     this.worktreeBaseDir =
@@ -178,29 +178,31 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
       }
 
       child.stdout?.on('data', (chunk: Buffer) => {
-        const data = chunk.toString();
-        for (const cb of entry.outputListeners) cb(data);
+        this.emitOutput(executionId, chunk.toString());
       });
 
       child.stderr?.on('data', (chunk: Buffer) => {
-        const data = chunk.toString();
-        for (const cb of entry.outputListeners) cb(data);
+        this.emitOutput(executionId, chunk.toString());
       });
 
       child.on('close', async (code, signal) => {
         entry.completed = true;
         const exitCode = code ?? (signal ? 1 : 0);
-
-        // Auto-commit any changes before reading commit hash
-        await this.autoCommit(acquired.worktreePath, request.actionId, {
-          prompt: request.inputs.prompt,
-          upstreamContext: request.inputs.upstreamContext,
-        });
+        const signalInfo = signal ? ` signal=${signal}` : '';
+        this.emitOutput(executionId,
+          `[WorktreeFamiliar] Process exited: actionId=${request.actionId} exitCode=${exitCode}${signalInfo}\n`);
 
         let commitHash = 'unknown';
         try {
+          await this.autoCommit(acquired.worktreePath, request.actionId, {
+            prompt: request.inputs.prompt,
+            upstreamContext: request.inputs.upstreamContext,
+          });
           commitHash = await this.execGit(['rev-parse', 'HEAD'], acquired.worktreePath);
-        } catch { /* */ }
+        } catch (err) {
+          this.emitOutput(executionId,
+            `[WorktreeFamiliar] post-exit error: ${err}\n`);
+        }
 
         const response: WorkResponse = {
           requestId: request.requestId,
@@ -212,9 +214,10 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
             claudeSessionId: entry.claudeSessionId,
           },
         };
-        for (const cb of entry.completeListeners) cb(response);
+        this.emitComplete(executionId, response);
       });
 
+      this.startHeartbeat(executionId, child);
       return handle;
     }
 
@@ -297,34 +300,30 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
     }
 
     child.stdout?.on('data', (chunk: Buffer) => {
-      const data = chunk.toString();
-      for (const cb of entry.outputListeners) {
-        cb(data);
-      }
+      this.emitOutput(executionId, chunk.toString());
     });
 
     child.stderr?.on('data', (chunk: Buffer) => {
-      const data = chunk.toString();
-      for (const cb of entry.outputListeners) {
-        cb(data);
-      }
+      this.emitOutput(executionId, chunk.toString());
     });
 
     child.on('close', async (code, signal) => {
       entry.completed = true;
       const exitCode = code ?? (signal ? 1 : 0);
-
-      // Auto-commit any changes before reading commit hash
-      await this.autoCommit(worktreeDir, request.actionId, {
-        prompt: request.inputs.prompt,
-        upstreamContext: request.inputs.upstreamContext,
-      });
+      const signalInfo = signal ? ` signal=${signal}` : '';
+      this.emitOutput(executionId,
+        `[WorktreeFamiliar] Process exited: actionId=${request.actionId} exitCode=${exitCode}${signalInfo}\n`);
 
       let commitHash = 'unknown';
       try {
+        await this.autoCommit(worktreeDir, request.actionId, {
+          prompt: request.inputs.prompt,
+          upstreamContext: request.inputs.upstreamContext,
+        });
         commitHash = await this.execGit(['rev-parse', 'HEAD'], worktreeDir);
-      } catch {
-        // Worktree may already be removed
+      } catch (err) {
+        this.emitOutput(executionId,
+          `[WorktreeFamiliar] post-exit error: ${err}\n`);
       }
 
       const response: WorkResponse = {
@@ -337,11 +336,10 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
           claudeSessionId: entry.claudeSessionId,
         },
       };
-      for (const cb of entry.completeListeners) {
-        cb(response);
-      }
+      this.emitComplete(executionId, response);
     });
 
+    this.startHeartbeat(executionId, child);
     return handle;
   }
 
