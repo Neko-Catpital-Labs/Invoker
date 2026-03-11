@@ -11,7 +11,7 @@
 
 import { useState, useCallback, useMemo, useEffect } from 'react';
 import yaml from 'js-yaml';
-import type { TaskState, PlanDefinition } from './types.js';
+import type { TaskState, PlanDefinition, TaskReplacementDef } from './types.js';
 import { useTasks } from './hooks/useTasks.js';
 import { useInvoker } from './hooks/useInvoker.js';
 import { TaskDAG } from './components/TaskDAG.js';
@@ -25,12 +25,14 @@ import { ApprovalModal } from './components/ApprovalModal.js';
 import { InputModal } from './components/InputModal.js';
 import { ExperimentModal } from './components/ExperimentModal.js';
 import { ContextMenu } from './components/ContextMenu.js';
+import { ReplaceTaskModal } from './components/ReplaceTaskModal.js';
 
 type ModalState =
   | { type: 'none' }
   | { type: 'input'; task: TaskState }
   | { type: 'approval'; task: TaskState }
-  | { type: 'experiment'; task: TaskState };
+  | { type: 'experiment'; task: TaskState }
+  | { type: 'replace'; task: TaskState };
 
 export function App() {
   const { tasks, clearTasks, refreshTasks } = useTasks();
@@ -109,6 +111,20 @@ export function App() {
   const handleOpenTerminal = useCallback((taskId: string) => {
     setContextMenu(null);
     window.invoker?.openTerminal(taskId);
+  }, []);
+
+  const handleReplaceTask = useCallback((taskId: string) => {
+    setContextMenu(null);
+    const task = tasks.get(taskId);
+    if (task) setModal({ type: 'replace', task });
+  }, [tasks]);
+
+  const handleReplaceSubmit = useCallback(async (taskId: string, replacements: TaskReplacementDef[]) => {
+    try {
+      await window.invoker?.replaceTask(taskId, replacements);
+    } catch (err) {
+      console.error('Failed to replace task:', err);
+    }
   }, []);
 
   const closeContextMenu = useCallback(() => {
@@ -440,12 +456,21 @@ export function App() {
         />
       )}
 
+      {modal.type === 'replace' && (
+        <ReplaceTaskModal
+          task={modal.task}
+          onSubmit={handleReplaceSubmit}
+          onClose={closeModal}
+        />
+      )}
+
       {contextMenu && (
         <ContextMenu
           x={contextMenu.x}
           y={contextMenu.y}
           task={contextMenu.task}
           onRestart={handleRestartTask}
+          onReplace={handleReplaceTask}
           onOpenTerminal={handleOpenTerminal}
           onClose={closeContextMenu}
         />

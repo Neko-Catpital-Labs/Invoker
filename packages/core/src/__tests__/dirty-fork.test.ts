@@ -219,4 +219,68 @@ describe('forkDirtySubtree', () => {
     expect(orchestrator.getTask('A')?.status).toBe('completed');
     expect(orchestrator.getTask('B')?.status).toBe('completed');
   });
+
+  // ── depOverrides ────────────────────────────────────────────
+
+  it('depOverrides: linear A→B→C, override A→Z, B-v2 depends on Z', () => {
+    loadAndCompleteChain([
+      { id: 'A' },
+      { id: 'B', deps: ['A'] },
+      { id: 'C', deps: ['B'] },
+    ]);
+
+    orchestrator.forkDirtySubtree('A', new Map([['A', 'Z']]));
+
+    expect(orchestrator.getTask('B')?.status).toBe('stale');
+    expect(orchestrator.getTask('C')?.status).toBe('stale');
+
+    const bv2 = orchestrator.getTask('B-v2');
+    const cv2 = orchestrator.getTask('C-v2');
+    expect(bv2).toBeDefined();
+    expect(cv2).toBeDefined();
+
+    expect(bv2!.dependencies).toEqual(['Z']);
+    expect(cv2!.dependencies).toEqual(['B-v2']);
+  });
+
+  it('depOverrides: fan-out A→B, A→C, override A→Z, both clones depend on Z', () => {
+    loadAndCompleteChain([
+      { id: 'A' },
+      { id: 'B', deps: ['A'] },
+      { id: 'C', deps: ['A'] },
+    ]);
+
+    orchestrator.forkDirtySubtree('A', new Map([['A', 'Z']]));
+
+    expect(orchestrator.getTask('B-v2')!.dependencies).toEqual(['Z']);
+    expect(orchestrator.getTask('C-v2')!.dependencies).toEqual(['Z']);
+  });
+
+  it('depOverrides: diamond, override only changes root reference', () => {
+    loadAndCompleteChain([
+      { id: 'A' },
+      { id: 'B', deps: ['A'] },
+      { id: 'C', deps: ['A'] },
+      { id: 'D', deps: ['B', 'C'] },
+    ]);
+
+    orchestrator.forkDirtySubtree('A', new Map([['A', 'Z']]));
+
+    expect(orchestrator.getTask('B-v2')!.dependencies).toEqual(['Z']);
+    expect(orchestrator.getTask('C-v2')!.dependencies).toEqual(['Z']);
+    expect(orchestrator.getTask('D-v2')!.dependencies.sort()).toEqual(['B-v2', 'C-v2']);
+  });
+
+  it('depOverrides: empty map behaves like no overrides', () => {
+    loadAndCompleteChain([
+      { id: 'A' },
+      { id: 'B', deps: ['A'] },
+      { id: 'C', deps: ['B'] },
+    ]);
+
+    orchestrator.forkDirtySubtree('A', new Map());
+
+    expect(orchestrator.getTask('B-v2')!.dependencies).toEqual(['A']);
+    expect(orchestrator.getTask('C-v2')!.dependencies).toEqual(['B-v2']);
+  });
 });

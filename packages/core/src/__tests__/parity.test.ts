@@ -224,9 +224,11 @@ describe('Parity — Feature Coverage', () => {
       }),
     );
 
-    const downstream = orchestrator.getTask('downstream')!;
-    expect(downstream.dependencies).toContain('pivot-reconciliation');
-    expect(downstream.dependencies).not.toContain('pivot');
+    // Original downstream is stale, forked downstream-v2 depends on reconciliation
+    expect(orchestrator.getTask('downstream')!.status).toBe('stale');
+    const downstreamV2 = orchestrator.getTask('downstream-v2')!;
+    expect(downstreamV2.dependencies).toContain('pivot-reconciliation');
+    expect(downstreamV2.dependencies).not.toContain('pivot');
   });
 
   // ── Test 5: Reconciliation triggers ───────────────────────
@@ -306,7 +308,9 @@ describe('Parity — Feature Coverage', () => {
     orchestrator.selectExperiment('pivot-reconciliation', 'pivot-exp-v1');
 
     expect(orchestrator.getTask('pivot-reconciliation')!.status).toBe('completed');
-    expect(orchestrator.getTask('downstream')!.status).toBe('running');
+    // Original downstream is stale, forked downstream-v2 is running
+    expect(orchestrator.getTask('downstream')!.status).toBe('stale');
+    expect(orchestrator.getTask('downstream-v2')!.status).toBe('running');
   });
 
   // ── Test 7: Re-experimentation via ExperimentManager ──────

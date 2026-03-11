@@ -13,13 +13,15 @@ interface ContextMenuProps {
   y: number;
   task: TaskState;
   onRestart: (taskId: string) => void;
+  onReplace: (taskId: string) => void;
   onOpenTerminal: (taskId: string) => void;
   onClose: () => void;
 }
 
-export function ContextMenu({ x, y, task, onRestart, onOpenTerminal, onClose }: ContextMenuProps) {
+export function ContextMenu({ x, y, task, onRestart, onReplace, onOpenTerminal, onClose }: ContextMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
   const canRestart = task.status !== 'running';
+  const canReplace = task.status === 'failed' || task.status === 'blocked';
 
   useEffect(() => {
     const handleClick = (e: MouseEvent) => {
@@ -55,6 +57,17 @@ export function ContextMenu({ x, y, task, onRestart, onOpenTerminal, onClose }: 
         disabled={!canRestart}
       >
         Restart Task
+      </button>
+      <button
+        className={`w-full text-left px-3 py-1.5 text-sm ${
+          canReplace
+            ? 'text-gray-100 hover:bg-gray-700'
+            : 'text-gray-500 cursor-not-allowed'
+        }`}
+        onClick={() => { if (canReplace) onReplace(task.id); }}
+        disabled={!canReplace}
+      >
+        Replace with...
       </button>
       <button
         className="w-full text-left px-3 py-1.5 text-sm text-gray-100 hover:bg-gray-700"

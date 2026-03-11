@@ -28,6 +28,8 @@ const api: InvokerAPI = {
     ipcRenderer.invoke('invoker:edit-task-command', taskId, newCommand),
   editTaskType: (taskId, familiarType) =>
     ipcRenderer.invoke('invoker:edit-task-type', taskId, familiarType),
+  replaceTask: (taskId, replacementTasks) =>
+    ipcRenderer.invoke('invoker:replace-task', taskId, replacementTasks),
   onTaskDelta: (cb) => {
     const handler = (_event: Electron.IpcRendererEvent, delta: unknown) => cb(delta as any);
     ipcRenderer.on('invoker:task-delta', handler);

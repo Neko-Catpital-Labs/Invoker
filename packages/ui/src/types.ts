@@ -123,6 +123,19 @@ export interface PlanDefinition {
   onFinish?: 'none' | 'merge' | 'pull_request';
 }
 
+// ── Task Replacement ────────────────────────────────────────
+
+export interface TaskReplacementDef {
+  id: string;
+  description: string;
+  command?: string;
+  prompt?: string;
+  dependencies?: string[];
+  familiarType?: string;
+  autoFix?: boolean;
+  maxFixAttempts?: number;
+}
+
 // ── IPC Bridge API ──────────────────────────────────────────
 
 export interface InvokerAPI {
@@ -139,6 +152,7 @@ export interface InvokerAPI {
   restartTask: (taskId: string) => Promise<void>;
   editTaskCommand: (taskId: string, newCommand: string) => Promise<void>;
   editTaskType: (taskId: string, familiarType: string) => Promise<void>;
+  replaceTask: (taskId: string, replacementTasks: TaskReplacementDef[]) => Promise<TaskState[]>;
   onTaskDelta: (cb: (delta: TaskDelta) => void) => () => void;
   onTaskOutput: (cb: (data: TaskOutputData) => void) => () => void;
   onActivityLog: (cb: (entries: ActivityLogEntry[]) => void) => () => void;

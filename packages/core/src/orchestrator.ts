@@ -83,6 +83,42 @@ export interface PlanDefinition {
   }>;
 }
 
+export interface GraphMutationNodeDef {
+  id: string;
+  description: string;
+  dependencies: string[];
+  workflowId?: string;
+  parentTask?: string;
+  experimentPrompt?: string;
+  prompt?: string;
+  command?: string;
+  repoUrl?: string;
+  familiarType?: string;
+  isReconciliation?: boolean;
+  requiresManualApproval?: boolean;
+  autoFix?: boolean;
+  maxFixAttempts?: number;
+}
+
+export interface GraphMutation {
+  sourceNodeId: string;
+  sourceDisposition: 'complete' | 'stale';
+  sourceChanges?: Partial<TaskState>;
+  newNodes: GraphMutationNodeDef[];
+  outputNodeId: string;
+}
+
+export interface TaskReplacementDef {
+  id: string;
+  description: string;
+  command?: string;
+  prompt?: string;
+  dependencies?: string[];
+  familiarType?: string;
+  autoFix?: boolean;
+  maxFixAttempts?: number;
+}
+
 export interface OrchestratorConfig {
   persistence: OrchestratorPersistence;
   messageBus: OrchestratorMessageBus;
@@ -466,9 +502,82 @@ export class Orchestrator {
   }
 
   /**
-   * Fork the subtree downstream of a dirty task.
+   * Replace a broken/failed task with a new subgraph.
+   *
+   * Marks the broken task as stale, creates replacement tasks,
+   * forks downstream dependents to point at the replacement output,
+   * and auto-starts ready replacement tasks.
    */
-  forkDirtySubtree(dirtyTaskId: string): TaskDelta[] {
+  replaceTask(taskId: string, replacementTasks: TaskReplacementDef[]): TaskState[] {
+    this.refreshFromDb();
+    const task = this.stateMachine.getTask(taskId);
+    if (!task) throw new Error(`Task ${taskId} not found`);
+    if (task.status === 'running') throw new Error(`Cannot replace running task ${taskId}`);
+    if (replacementTasks.length === 0) throw new Error('Must provide at least one replacement task');
+
+    const replacementIds = new Set(replacementTasks.map((t) => t.id));
+
+    // Resolve dependencies: root tasks inherit the broken task's upstream deps
+    const resolvedNodes: GraphMutationNodeDef[] = replacementTasks.map((rt) => {
+      const hasInternalDeps =
+        rt.dependencies?.length && rt.dependencies.some((d) => replacementIds.has(d));
+      return {
+        id: rt.id,
+        description: rt.description,
+        dependencies: hasInternalDeps ? rt.dependencies! : [...task.dependencies],
+        workflowId: task.workflowId,
+        command: rt.command,
+        prompt: rt.prompt,
+        familiarType: rt.familiarType ?? task.familiarType,
+        autoFix: rt.autoFix,
+        maxFixAttempts: rt.maxFixAttempts,
+      };
+    });
+
+    // Find leaf tasks: not depended on by any other replacement task
+    const leafIds = resolvedNodes
+      .filter((rt) => !replacementTasks.some((other) => other.dependencies?.includes(rt.id)))
+      .map((rt) => rt.id);
+
+    // Determine output node: single leaf or auto-created merge
+    let outputNodeId: string;
+    if (leafIds.length === 1) {
+      outputNodeId = leafIds[0];
+    } else {
+      const mergeId = `${taskId}-merge`;
+      resolvedNodes.push({
+        id: mergeId,
+        description: `Merge for replaced ${taskId}`,
+        dependencies: leafIds,
+        workflowId: task.workflowId,
+      });
+      outputNodeId = mergeId;
+    }
+
+    this.applyGraphMutation({
+      sourceNodeId: taskId,
+      sourceDisposition: 'stale',
+      newNodes: resolvedNodes,
+      outputNodeId,
+    });
+
+    this.scheduler.completeJob(taskId);
+
+    // Auto-start ready replacement root tasks
+    const rootIds = resolvedNodes
+      .filter((rt) => rt.dependencies.every((d) => !replacementIds.has(d)))
+      .map((rt) => rt.id);
+    return this.autoStartReadyTasks(rootIds);
+  }
+
+  /**
+   * Fork the subtree downstream of a dirty task.
+   *
+   * @param depOverrides Optional map of dependency ID replacements applied
+   *   before the clone ID map. Use this to point forked clones at a
+   *   replacement node instead of the original dirty task.
+   */
+  forkDirtySubtree(dirtyTaskId: string, depOverrides?: Map<string, string>): TaskDelta[] {
     const allTasks = this.stateMachine.getAllTasks();
     const taskMap = new Map(allTasks.map((t) => [t.id, t]));
 
@@ -501,7 +610,9 @@ export class Orchestrator {
       if (!original) continue;
 
       const cloneId = idMap.get(originalId)!;
-      const remappedDeps = original.dependencies.map((dep) => idMap.get(dep) ?? dep);
+      const remappedDeps = original.dependencies.map((dep) =>
+        depOverrides?.get(dep) ?? idMap.get(dep) ?? dep,
+      );
 
       const cloneTask = createTaskState(cloneId, original.description, remappedDeps as string[], {
         workflowId: original.workflowId,
@@ -673,18 +784,10 @@ export class Orchestrator {
     taskId: string,
     parsed: Extract<ParsedResponse, { type: 'spawn_experiments' }>,
   ): TaskState[] {
-    // Complete the parent (pivot) task
-    const completionChanges: Partial<TaskState> = {
-      status: 'completed',
-      completedAt: new Date(),
-    };
-    this.writeAndSync(taskId, completionChanges);
-    const completionDelta: TaskDelta = { type: 'updated', taskId, changes: completionChanges };
-    this.persistence.logEvent?.(taskId, 'task.completed', completionChanges);
-    this.messageBus.publish(TASK_DELTA_CHANNEL, completionDelta);
+    // Capture parent task info before mutation modifies it
+    const parentTask = this.stateMachine.getTask(taskId);
 
     // Plan experiment group
-    const parentTask = this.stateMachine.getTask(taskId);
     const plan = this.experimentManager.planExperimentGroup(
       taskId,
       parsed.variants.map((v) => ({
@@ -697,48 +800,38 @@ export class Orchestrator {
       parentTask?.familiarType,
     );
 
-    const allDeltas: TaskDelta[] = [completionDelta];
-
-    // Create experiment tasks
-    for (const planned of plan.experimentTasks) {
-      const task = createTaskState(planned.id, planned.description, planned.dependencies, {
+    // Build new nodes: experiments + reconciliation
+    const newNodes: GraphMutationNodeDef[] = [
+      ...plan.experimentTasks.map((t) => ({
+        id: t.id,
+        description: t.description,
+        dependencies: t.dependencies,
         workflowId: parentTask?.workflowId,
-        parentTask: planned.parentTask,
-        experimentPrompt: planned.experimentPrompt,
-        prompt: planned.prompt,
-        command: planned.command,
-        repoUrl: planned.repoUrl,
-        familiarType: planned.familiarType,
-      });
-      this.createAndSync(task);
-      const delta: TaskDelta = { type: 'created', task };
-      this.persistence.logEvent?.(task.id, 'task.created');
-      this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
-      allDeltas.push(delta);
-    }
-
-    // Create reconciliation task
-    const reconTask = createTaskState(
-      plan.reconciliationTask.id,
-      plan.reconciliationTask.description,
-      plan.reconciliationTask.dependencies,
+        parentTask: t.parentTask,
+        experimentPrompt: t.experimentPrompt,
+        prompt: t.prompt,
+        command: t.command,
+        repoUrl: t.repoUrl,
+        familiarType: t.familiarType,
+      })),
       {
+        id: plan.reconciliationTask.id,
+        description: plan.reconciliationTask.description,
+        dependencies: plan.reconciliationTask.dependencies,
         workflowId: parentTask?.workflowId,
         parentTask: plan.reconciliationTask.parentTask,
         isReconciliation: plan.reconciliationTask.isReconciliation,
         requiresManualApproval: plan.reconciliationTask.requiresManualApproval,
       },
-    );
-    this.createAndSync(reconTask);
-    const reconDelta: TaskDelta = { type: 'created', task: reconTask };
-    this.persistence.logEvent?.(reconTask.id, 'task.created');
-    this.messageBus.publish(TASK_DELTA_CHANNEL, reconDelta);
-    allDeltas.push(reconDelta);
+    ];
 
-    // Apply dependency rewrites to existing tasks
-    for (const rewrite of plan.rewrites) {
-      this.applyDependencyRewrite(rewrite.fromDep, rewrite.toDep);
-    }
+    // Apply unified graph mutation: fork downstream, complete pivot, create nodes
+    this.applyGraphMutation({
+      sourceNodeId: taskId,
+      sourceDisposition: 'complete',
+      newNodes,
+      outputNodeId: plan.reconciliationTask.id,
+    });
 
     // Auto-start the experiment tasks (they depend on the now-completed pivot)
     const readyIds = plan.experimentTasks.map((t) => t.id);
@@ -753,6 +846,73 @@ export class Orchestrator {
     return this.selectExperiment(taskId, parsed.experimentId);
   }
 
+  // ── Private: Graph Mutation Primitive ─────────────────────
+
+  /**
+   * Shared primitive for structural graph mutations (experiments, replacement).
+   *
+   * Order matters:
+   *   1. Fork downstream FIRST (before creating new nodes, so new nodes
+   *      aren't included in the descendant set)
+   *   2. Apply source disposition (complete or stale)
+   *   3. Create all new nodes
+   */
+  private applyGraphMutation(mutation: GraphMutation): TaskDelta[] {
+    const allDeltas: TaskDelta[] = [];
+
+    // 1. Fork downstream with dep override: sourceNode → outputNode
+    const forkDeltas = this.forkDirtySubtree(
+      mutation.sourceNodeId,
+      new Map([[mutation.sourceNodeId, mutation.outputNodeId]]),
+    );
+    allDeltas.push(...forkDeltas);
+
+    // 2. Apply source disposition
+    const sourceChanges: Partial<TaskState> = {
+      ...(mutation.sourceDisposition === 'complete'
+        ? { status: 'completed' as const, completedAt: new Date() }
+        : { status: 'stale' as const }),
+      ...mutation.sourceChanges,
+    };
+    this.writeAndSync(mutation.sourceNodeId, sourceChanges);
+    const sourceDelta: TaskDelta = {
+      type: 'updated',
+      taskId: mutation.sourceNodeId,
+      changes: sourceChanges,
+    };
+    this.persistence.logEvent?.(
+      mutation.sourceNodeId,
+      mutation.sourceDisposition === 'complete' ? 'task.completed' : 'task.stale',
+      sourceChanges,
+    );
+    this.messageBus.publish(TASK_DELTA_CHANNEL, sourceDelta);
+    allDeltas.push(sourceDelta);
+
+    // 3. Create new nodes
+    for (const nodeDef of mutation.newNodes) {
+      const task = createTaskState(nodeDef.id, nodeDef.description, nodeDef.dependencies, {
+        workflowId: nodeDef.workflowId,
+        parentTask: nodeDef.parentTask,
+        experimentPrompt: nodeDef.experimentPrompt,
+        prompt: nodeDef.prompt,
+        command: nodeDef.command,
+        repoUrl: nodeDef.repoUrl,
+        familiarType: nodeDef.familiarType,
+        isReconciliation: nodeDef.isReconciliation,
+        requiresManualApproval: nodeDef.requiresManualApproval,
+        autoFix: nodeDef.autoFix,
+        maxFixAttempts: nodeDef.maxFixAttempts,
+      });
+      this.createAndSync(task);
+      const delta: TaskDelta = { type: 'created', task };
+      this.persistence.logEvent?.(task.id, 'task.created');
+      this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
+      allDeltas.push(delta);
+    }
+
+    return allDeltas;
+  }
+
   // ── Private: Helpers ──────────────────────────────────────
 
   private blockDependents(failedTaskId: string): void {
@@ -762,19 +922,6 @@ export class Orchestrator {
       this.writeAndSync(id, blockChanges);
       const delta: TaskDelta = { type: 'updated', taskId: id, changes: blockChanges };
       this.persistence.logEvent?.(id, 'task.blocked', blockChanges);
-      this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
-    }
-  }
-
-  private applyDependencyRewrite(fromDep: string, toDep: string): void {
-    for (const task of this.stateMachine.getAllTasks()) {
-      if (!task.dependencies.includes(fromDep)) continue;
-      if (task.id === toDep) continue; // don't rewrite the recon task itself
-
-      const newDeps = task.dependencies.map((d) => (d === fromDep ? toDep : d));
-      const changes: Partial<TaskState> = { dependencies: newDeps };
-      this.writeAndSync(task.id, changes);
-      const delta: TaskDelta = { type: 'updated', taskId: task.id, changes };
       this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
     }
   }

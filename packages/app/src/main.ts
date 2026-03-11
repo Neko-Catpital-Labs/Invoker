@@ -34,7 +34,7 @@ if (process.platform === 'linux') {
 }
 
 import { Orchestrator } from '@invoker/core';
-import type { PlanDefinition, TaskDelta } from '@invoker/core';
+import type { PlanDefinition, TaskDelta, TaskReplacementDef } from '@invoker/core';
 import { SQLiteAdapter, ConversationRepository } from '@invoker/persistence';
 import { LocalBus, Channels } from '@invoker/transport';
 import {
@@ -1071,6 +1071,19 @@ function setupGuiMode(): void {
         await taskExecutor.executeTasks(runnable);
       } catch (err) {
         console.error(`[ipc] edit-task-type failed: ${err}`);
+        throw err;
+      }
+    });
+
+    ipcMain.handle('invoker:replace-task', async (_event, taskId: string, replacementTasks: unknown[]) => {
+      console.log(`[ipc] replace-task: "${taskId}" with ${replacementTasks.length} replacement(s)`);
+      try {
+        const started = orchestrator.replaceTask(taskId, replacementTasks as TaskReplacementDef[]);
+        const runnable = started.filter((t: { status: string }) => t.status === 'running');
+        await taskExecutor.executeTasks(runnable);
+        return started;
+      } catch (err) {
+        console.error(`[ipc] replace-task failed: ${err}`);
         throw err;
       }
     });
