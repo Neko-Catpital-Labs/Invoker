@@ -27,12 +27,12 @@ export function parseWorktreeList(output: string): Array<{ path: string; branch?
 }
 
 /**
- * Removes git worktrees whose `experiment/<taskId>` branch doesn't match
- * any task in the DB. Also deletes the orphan branches and runs prune.
+ * Removes git worktrees whose branch is not in the set of known branches
+ * from the DB. Also deletes the orphan branches and runs prune.
  */
 export function cleanupOrphanWorktrees(
   repoDir: string,
-  knownTaskIds: Set<string>,
+  knownBranches: Set<string>,
 ): CleanupResult {
   const result: CleanupResult = { removed: [], errors: [] };
 
@@ -52,9 +52,7 @@ export function cleanupOrphanWorktrees(
 
   for (const entry of entries) {
     if (!entry.branch?.startsWith('experiment/')) continue;
-
-    const taskId = entry.branch.slice('experiment/'.length);
-    if (knownTaskIds.has(taskId)) continue;
+    if (knownBranches.has(entry.branch)) continue;
 
     // Orphan worktree — remove it
     try {
@@ -62,9 +60,9 @@ export function cleanupOrphanWorktrees(
         cwd: repoDir,
         stdio: 'ignore',
       });
-      result.removed.push(taskId);
+      result.removed.push(entry.branch);
     } catch {
-      result.errors.push(`Failed to remove worktree for ${taskId} at ${entry.path}`);
+      result.errors.push(`Failed to remove worktree for ${entry.branch} at ${entry.path}`);
     }
 
     // Delete the orphan branch

@@ -72,7 +72,7 @@ describe('cleanupOrphanWorktrees', () => {
     '',
   ].join('\n');
 
-  it('removes worktrees not in the known task set', () => {
+  it('removes worktrees whose branch is not in the known set', () => {
     mockedExecSync.mockImplementation((cmd: string) => {
       if (typeof cmd === 'string' && cmd.includes('worktree list')) {
         return porcelainOutput;
@@ -80,10 +80,10 @@ describe('cleanupOrphanWorktrees', () => {
       return '';
     });
 
-    const knownIds = new Set(['task-in-db']);
-    const result = cleanupOrphanWorktrees('/repo', knownIds);
+    const knownBranches = new Set(['experiment/task-in-db']);
+    const result = cleanupOrphanWorktrees('/repo', knownBranches);
 
-    expect(result.removed).toEqual(['orphan-task', 'another-orphan']);
+    expect(result.removed).toEqual(['experiment/orphan-task', 'experiment/another-orphan']);
     expect(result.errors).toEqual([]);
 
     const calls = mockedExecSync.mock.calls.map((c) => c[0]);
@@ -115,14 +115,18 @@ describe('cleanupOrphanWorktrees', () => {
     expect(result.removed).toEqual([]);
   });
 
-  it('does not remove worktrees for tasks that exist in DB', () => {
+  it('does not remove worktrees whose branches are in the known set', () => {
     mockedExecSync.mockImplementation((cmd: string) => {
       if (typeof cmd === 'string' && cmd.includes('worktree list')) return porcelainOutput;
       return '';
     });
 
-    const knownIds = new Set(['task-in-db', 'orphan-task', 'another-orphan']);
-    const result = cleanupOrphanWorktrees('/repo', knownIds);
+    const knownBranches = new Set([
+      'experiment/task-in-db',
+      'experiment/orphan-task',
+      'experiment/another-orphan',
+    ]);
+    const result = cleanupOrphanWorktrees('/repo', knownBranches);
 
     expect(result.removed).toEqual([]);
   });
@@ -134,12 +138,51 @@ describe('cleanupOrphanWorktrees', () => {
       return '';
     });
 
-    const result = cleanupOrphanWorktrees('/repo', new Set(['task-in-db']));
+    const result = cleanupOrphanWorktrees('/repo', new Set(['experiment/task-in-db']));
 
     expect(result.removed).toEqual([]);
     expect(result.errors).toHaveLength(2);
-    expect(result.errors[0]).toContain('orphan-task');
-    expect(result.errors[1]).toContain('another-orphan');
+    expect(result.errors[0]).toContain('experiment/orphan-task');
+    expect(result.errors[1]).toContain('experiment/another-orphan');
+  });
+
+  it('preserves worktrees with content-addressable hashed branch names', () => {
+    const hashedOutput = [
+      'worktree /repo',
+      'HEAD aaa',
+      'branch refs/heads/main',
+      '',
+      'worktree /wt/exec-1',
+      'HEAD bbb',
+      'branch refs/heads/experiment/task-a-f7e2a1b3',
+      '',
+      'worktree /wt/exec-2',
+      'HEAD ccc',
+      'branch refs/heads/experiment/task-b-9c4d8e12',
+      '',
+      'worktree /wt/exec-3',
+      'HEAD ddd',
+      'branch refs/heads/experiment/old-orphan-deadbeef',
+      '',
+    ].join('\n');
+
+    mockedExecSync.mockImplementation((cmd: string) => {
+      if (typeof cmd === 'string' && cmd.includes('worktree list')) return hashedOutput;
+      return '';
+    });
+
+    const knownBranches = new Set([
+      'experiment/task-a-f7e2a1b3',
+      'experiment/task-b-9c4d8e12',
+    ]);
+    const result = cleanupOrphanWorktrees('/repo', knownBranches);
+
+    expect(result.removed).toEqual(['experiment/old-orphan-deadbeef']);
+
+    const calls = mockedExecSync.mock.calls.map((c) => c[0]);
+    expect(calls).not.toContain(expect.stringContaining('exec-1'));
+    expect(calls).not.toContain(expect.stringContaining('exec-2'));
+    expect(calls).toContain('git worktree remove --force "/wt/exec-3"');
   });
 
   it('handles failure to list worktrees', () => {
