@@ -27,7 +27,7 @@ import { getEdgeStyle } from '../lib/colors.js';
 import { TaskNode } from './TaskNode.js';
 import { BundledEdge, type BundledEdgeData } from './BundledEdge.js';
 import { MergeGateNode } from './MergeGateNode.js';
-import { mergeGateId, isMergeGateId, computeMergeGateStatus, findLeafTasks, groupTasksByWorkflow } from '../lib/merge-gate.js';
+import { isMergeGateId, groupTasksByWorkflow } from '../lib/merge-gate.js';
 
 interface TaskDAGProps {
   tasks: Map<string, TaskState>;
@@ -59,7 +59,6 @@ function TaskDAGInner({ tasks, onFinish, onTaskClick, onTaskDoubleClick, onTaskC
     const taskArray = [...tasks.values()];
     if (taskArray.length === 0) return { nodes: [], edges: [] };
 
-    const showMergeGate = onFinish !== 'none';
     const effectiveOnFinish = onFinish ?? 'merge';
     const workflowGroups = groupTasksByWorkflow(taskArray);
 
@@ -70,22 +69,8 @@ function TaskDAGInner({ tasks, onFinish, onTaskClick, onTaskDoubleClick, onTaskC
     let yOffset = 0;
     const WORKFLOW_GAP = 100;
 
-    for (const [wfId, wfTasks] of workflowGroups) {
-      const gateId = mergeGateId(wfId);
-      const leaves = findLeafTasks(wfTasks);
-
-      const layoutTasks: TaskState[] = [...wfTasks];
-      if (showMergeGate && leaves.length > 0) {
-        layoutTasks.push({
-          id: gateId,
-          description: effectiveOnFinish === 'pull_request' ? 'Create PR' : 'Merge to base',
-          status: computeMergeGateStatus(wfTasks),
-          dependencies: leaves.map(t => t.id),
-          createdAt: new Date(),
-        });
-      }
-
-      const positions = layoutNodes(layoutTasks);
+    for (const [_wfId, wfTasks] of workflowGroups) {
+      const positions = layoutNodes(wfTasks);
 
       // Find bounding box to apply yOffset
       let minY = Infinity;
@@ -97,31 +82,26 @@ function TaskDAGInner({ tasks, onFinish, onTaskClick, onTaskDoubleClick, onTaskC
 
       for (const task of wfTasks) {
         const pos = positions.get(task.id) ?? { x: 0, y: 0 };
-        allNodes.push({
-          id: task.id,
-          type: 'taskNode',
-          position: { x: pos.x, y: pos.y + yOffset },
-          data: { task, label: task.description },
-        });
-      }
-
-      if (showMergeGate && leaves.length > 0) {
-        const gatePos = positions.get(gateId) ?? { x: 0, y: 0 };
-        const gateStatus = computeMergeGateStatus(wfTasks);
-        gateStatuses.set(gateId, gateStatus);
-        allNodes.push({
-          id: gateId,
-          type: 'mergeGateNode',
-          position: { x: gatePos.x, y: gatePos.y + yOffset },
-          data: {
-            status: gateStatus,
-            label: 'All tasks must pass',
-            onFinish: effectiveOnFinish === 'pull_request' ? 'pull_request' : 'merge',
-          },
-        });
-
-        for (const leaf of leaves) {
-          allRawEdges.push({ source: leaf.id, target: gateId });
+        if (task.isMergeNode) {
+          // Render real merge nodes with the MergeGateNode component
+          gateStatuses.set(task.id, task.status);
+          allNodes.push({
+            id: task.id,
+            type: 'mergeGateNode',
+            position: { x: pos.x, y: pos.y + yOffset },
+            data: {
+              status: task.status,
+              label: 'All tasks must pass',
+              onFinish: effectiveOnFinish === 'pull_request' ? 'pull_request' : 'merge',
+            },
+          });
+        } else {
+          allNodes.push({
+            id: task.id,
+            type: 'taskNode',
+            position: { x: pos.x, y: pos.y + yOffset },
+            data: { task, label: task.description },
+          });
         }
       }
 
@@ -167,8 +147,10 @@ function TaskDAGInner({ tasks, onFinish, onTaskClick, onTaskDoubleClick, onTaskC
       const targetStatus = targetTask?.status ?? gateStatuses.get(e.target) ?? 'pending';
       const edgeStyle = getEdgeStyle(sourceStatus, targetStatus);
 
-      const srcLabel = isMergeGateId(e.source) ? 'Merge' : e.source;
-      const tgtLabel = isMergeGateId(e.target) ? 'Merge' : e.target;
+      const srcIsMerge = tasks.get(e.source)?.isMergeNode || isMergeGateId(e.source);
+      const tgtIsMerge = tasks.get(e.target)?.isMergeNode || isMergeGateId(e.target);
+      const srcLabel = srcIsMerge ? 'Merge' : e.source;
+      const tgtLabel = tgtIsMerge ? 'Merge' : e.target;
       const truncSrc = srcLabel.length > 12 ? srcLabel.slice(0, 12) + '..' : srcLabel;
       const truncTgt = tgtLabel.length > 12 ? tgtLabel.slice(0, 12) + '..' : tgtLabel;
       const label = `${truncSrc} → ${truncTgt}`;

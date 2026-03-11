@@ -68,6 +68,7 @@ export interface TaskState {
   readonly experimentResults?: readonly ExperimentResultEntry[];
   readonly repoUrl?: string;
   readonly featureBranch?: string;
+  readonly isMergeNode?: boolean;
 }
 
 // ── Task Delta ──────────────────────────────────────────────
