@@ -1,6 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { WorkRequest, WorkResponse } from '@invoker/protocol';
 import type { PersistedTaskMeta } from '../familiar.js';
+
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  return { ...actual, existsSync: vi.fn(actual.existsSync) };
+});
+import { existsSync } from 'node:fs';
 import { LocalFamiliar } from '../local-familiar.js';
 
 function makeRequest(overrides: Partial<WorkRequest> = {}): WorkRequest {
@@ -584,55 +590,41 @@ describe('LocalFamiliar', () => {
       familiarType: 'local',
     };
 
+    afterEach(() => {
+      vi.mocked(existsSync).mockReset();
+    });
+
     it('returns cwd spec when workspace exists', () => {
-      const fs = require('node:fs');
-      const orig = fs.existsSync;
-      fs.existsSync = () => true;
-      try {
-        const spec = familiar.getRestoredTerminalSpec({
-          ...baseMeta,
-          workspacePath: '/tmp/test-workspace',
-        });
-        expect(spec).toEqual({ cwd: '/tmp/test-workspace' });
-      } finally {
-        fs.existsSync = orig;
-      }
+      vi.mocked(existsSync).mockReturnValue(true);
+      const spec = familiar.getRestoredTerminalSpec({
+        ...baseMeta,
+        workspacePath: '/tmp/test-workspace',
+      });
+      expect(spec).toEqual({ cwd: '/tmp/test-workspace' });
     });
 
     it('returns claude --resume spec with cwd when session exists', () => {
-      const fs = require('node:fs');
-      const orig = fs.existsSync;
-      fs.existsSync = () => true;
-      try {
-        const spec = familiar.getRestoredTerminalSpec({
-          ...baseMeta,
-          workspacePath: '/tmp/test-workspace',
-          claudeSessionId: 'session-abc',
-        });
-        expect(spec).toEqual({
-          command: 'claude',
-          args: ['--resume', 'session-abc', '--dangerously-skip-permissions'],
-          cwd: '/tmp/test-workspace',
-        });
-      } finally {
-        fs.existsSync = orig;
-      }
+      vi.mocked(existsSync).mockReturnValue(true);
+      const spec = familiar.getRestoredTerminalSpec({
+        ...baseMeta,
+        workspacePath: '/tmp/test-workspace',
+        claudeSessionId: 'session-abc',
+      });
+      expect(spec).toEqual({
+        command: 'claude',
+        args: ['--resume', 'session-abc', '--dangerously-skip-permissions'],
+        cwd: '/tmp/test-workspace',
+      });
     });
 
     it('throws when workspace path does not exist', () => {
-      const fs = require('node:fs');
-      const orig = fs.existsSync;
-      fs.existsSync = () => false;
-      try {
-        expect(() =>
-          familiar.getRestoredTerminalSpec({
-            ...baseMeta,
-            workspacePath: '/tmp/deleted-workspace',
-          }),
-        ).toThrow(/no longer exists/);
-      } finally {
-        fs.existsSync = orig;
-      }
+      vi.mocked(existsSync).mockReturnValue(false);
+      expect(() =>
+        familiar.getRestoredTerminalSpec({
+          ...baseMeta,
+          workspacePath: '/tmp/deleted-workspace',
+        }),
+      ).toThrow(/no longer exists/);
     });
 
     it('returns spec with undefined cwd when no workspace path provided', () => {
