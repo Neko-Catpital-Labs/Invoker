@@ -154,6 +154,7 @@ export interface SessionManagerConfig {
   sessionTtlMs?: number;
   evictionIntervalMs?: number;
   maxActiveSessions?: number;
+  defaultBranch?: string;
   log?: LogFn;
 }
 
@@ -180,6 +181,7 @@ export class SessionManager {
   private anthropicApiKey: string;
   private workingDir: string;
   private conversationRepo: ConversationRepository;
+  private defaultBranch?: string;
   private evictionTimer?: NodeJS.Timeout;
   private log: LogFn;
 
@@ -192,6 +194,7 @@ export class SessionManager {
     this.anthropicApiKey = config.anthropicApiKey;
     this.workingDir = config.workingDir;
     this.conversationRepo = config.conversationRepo;
+    this.defaultBranch = config.defaultBranch;
     this.log = config.log ?? defaultLog;
     this.sessionTtlMs = config.sessionTtlMs ?? 30 * 60 * 1000; // 30 minutes
     this.evictionIntervalMs = config.evictionIntervalMs ?? 5 * 60 * 1000; // 5 minutes
@@ -276,6 +279,7 @@ export class SessionManager {
         workingDir: this.workingDir,
         threadTs: id.threadTs,
         conversationRepo: this.conversationRepo,
+        defaultBranch: this.defaultBranch,
         log: this.log,
       });
       await conversation.init(); // Load state from database
@@ -299,6 +303,7 @@ export class SessionManager {
         workingDir: this.workingDir,
         threadTs: id.threadTs,
         conversationRepo: this.conversationRepo,
+        defaultBranch: this.defaultBranch,
         log: this.log,
       });
       // Don't call init() for new sessions — nothing to load

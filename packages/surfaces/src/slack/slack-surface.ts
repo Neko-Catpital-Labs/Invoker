@@ -33,6 +33,8 @@ export interface SlackSurfaceConfig {
   conversationRepo?: ConversationRepository;
   /** Slack user IDs allowed to run admin commands (e.g. conversations). Empty = no admin access. */
   adminUserIds?: string[];
+  /** Default branch name (e.g. "master"). Used when plan YAML omits baseBranch. */
+  defaultBranch?: string;
   /** Optional structured log callback for activity tracking. */
   log?: LogFn;
 }
@@ -59,6 +61,7 @@ export class SlackSurface implements Surface {
   private planConversations = new Map<string, PlanConversation>();
   private anthropicApiKey?: string;
   private workingDir?: string;
+  private defaultBranch?: string;
   private conversationRepo?: ConversationRepository;
   private sessionManager?: SessionManager;
   /** Bot user ID, resolved on start. */
@@ -84,6 +87,7 @@ export class SlackSurface implements Surface {
     this.channelId = config.channelId;
     this.anthropicApiKey = config.anthropicApiKey;
     this.workingDir = config.workingDir;
+    this.defaultBranch = config.defaultBranch;
     this.conversationRepo = config.conversationRepo;
     this.adminUserIds = new Set(config.adminUserIds ?? []);
     this.log = config.log ?? ((source, level, msg) => {
@@ -97,6 +101,7 @@ export class SlackSurface implements Surface {
         anthropicApiKey: config.anthropicApiKey,
         workingDir: config.workingDir ?? process.cwd(),
         conversationRepo: config.conversationRepo,
+        defaultBranch: config.defaultBranch,
         log: this.log,
       });
     }
@@ -513,6 +518,7 @@ export class SlackSurface implements Surface {
         workingDir: this.workingDir,
         threadTs,
         conversationRepo: this.conversationRepo,
+        defaultBranch: this.defaultBranch,
       });
       this.planConversations.set(threadTs, conversation);
     }
@@ -574,6 +580,7 @@ export class SlackSurface implements Surface {
             workingDir: this.workingDir,
             threadTs: entry.threadTs,
             conversationRepo: this.conversationRepo,
+            defaultBranch: this.defaultBranch,
           });
           await conversation.init();
           this.planConversations.set(entry.threadTs, conversation);

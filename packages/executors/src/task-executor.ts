@@ -37,6 +37,8 @@ export interface TaskExecutorConfig {
   cwd: string;
   /** Max worktrees per repo for WorktreeFamiliar. Default: 3. */
   maxWorktreesPerRepo?: number;
+  /** Default branch from config (e.g. "master"). Falls back to git heuristic if unset. */
+  defaultBranch?: string;
   callbacks?: TaskExecutorCallbacks;
 }
 
@@ -48,6 +50,7 @@ export class TaskExecutor {
   private familiarRegistry: FamiliarRegistry;
   private cwd: string;
   private maxWorktreesPerRepo: number;
+  private defaultBranch: string | undefined;
   private callbacks: TaskExecutorCallbacks;
   private abiChecked = false;
 
@@ -57,6 +60,7 @@ export class TaskExecutor {
     this.familiarRegistry = config.familiarRegistry;
     this.cwd = config.cwd;
     this.maxWorktreesPerRepo = config.maxWorktreesPerRepo ?? 3;
+    this.defaultBranch = config.defaultBranch;
     this.callbacks = config.callbacks ?? {};
   }
 
@@ -291,7 +295,7 @@ export class TaskExecutor {
       ? this.persistence.loadWorkflow(workflowId)
       : undefined;
     const onFinish = workflow?.onFinish ?? 'none';
-    const baseBranch = workflow?.baseBranch ?? await this.detectDefaultBranch();
+    const baseBranch = workflow?.baseBranch ?? this.defaultBranch ?? await this.detectDefaultBranch();
     const featureBranch = workflow?.featureBranch;
 
     let response: WorkResponse;

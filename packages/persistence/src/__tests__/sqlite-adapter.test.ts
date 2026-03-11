@@ -675,6 +675,39 @@ describe('SQLiteAdapter', () => {
     });
   });
 
+  describe('updateWorkflow with baseBranch', () => {
+    it('updates baseBranch on an existing workflow', () => {
+      adapter.saveWorkflow({ ...testWorkflow, baseBranch: 'main' });
+
+      adapter.updateWorkflow('wf-1', { baseBranch: 'master' });
+
+      const loaded = adapter.loadWorkflow('wf-1');
+      expect(loaded!.baseBranch).toBe('master');
+    });
+
+    it('sets baseBranch when it was previously undefined', () => {
+      adapter.saveWorkflow(testWorkflow);
+
+      const before = adapter.loadWorkflow('wf-1');
+      expect(before!.baseBranch).toBeUndefined();
+
+      adapter.updateWorkflow('wf-1', { baseBranch: 'develop' });
+
+      const after = adapter.loadWorkflow('wf-1');
+      expect(after!.baseBranch).toBe('develop');
+    });
+
+    it('updates baseBranch without affecting status', () => {
+      adapter.saveWorkflow(testWorkflow);
+
+      adapter.updateWorkflow('wf-1', { baseBranch: 'release' });
+
+      const loaded = adapter.loadWorkflow('wf-1');
+      expect(loaded!.status).toBe('running');
+      expect(loaded!.baseBranch).toBe('release');
+    });
+  });
+
   describe('getAllTaskIds', () => {
     it('returns empty array when no tasks', () => {
       expect(adapter.getAllTaskIds()).toEqual([]);

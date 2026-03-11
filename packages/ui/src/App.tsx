@@ -42,6 +42,7 @@ export function App() {
   const [hasStarted, setHasStarted] = useState(false);
   const [planName, setPlanName] = useState<string | null>(null);
   const [onFinish, setOnFinish] = useState<'none' | 'merge' | 'pull_request'>('merge');
+  const [baseBranch, setBaseBranch] = useState<string | undefined>();
   const [viewMode, setViewMode] = useState<'dag' | 'history' | 'timeline'>('dag');
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; task: TaskState } | null>(null);
 
@@ -120,6 +121,7 @@ export function App() {
         setHasLoadedPlan(true);
         setPlanName(plan.name ?? 'Untitled Plan');
         setOnFinish(plan.onFinish ?? 'merge');
+        setBaseBranch(plan.baseBranch);
       } catch (err) {
         console.error('Failed to load plan:', err);
       }
@@ -323,7 +325,7 @@ export function App() {
             </div>
           ) : (
             <div className="h-full">
-              <TaskDAG tasks={tasks} onFinish={onFinish} onTaskClick={handleTaskClick} onTaskDoubleClick={handleTaskDoubleClick} onTaskContextMenu={handleTaskContextMenu} />
+              <TaskDAG tasks={tasks} onFinish={onFinish} baseBranch={baseBranch} onSetMergeBranch={invoker?.setMergeBranch} onTaskClick={handleTaskClick} onTaskDoubleClick={handleTaskDoubleClick} onTaskContextMenu={handleTaskContextMenu} />
             </div>
           )}
         </div>

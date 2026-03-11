@@ -110,10 +110,22 @@ describe('extractYamlPlan', () => {
     expect(plan!.onFinish).toBe('merge');
   });
 
-  it('defaults baseBranch to main', () => {
+  it('defaults baseBranch to main when no defaultBranch provided', () => {
     const text = '```yaml\nname: "Defaults"\ntasks:\n  - id: t1\n    description: "test"\n    dependencies: []\n```';
     const plan = extractYamlPlan(text);
     expect(plan!.baseBranch).toBe('main');
+  });
+
+  it('uses defaultBranch parameter when baseBranch not in YAML', () => {
+    const text = '```yaml\nname: "Defaults"\ntasks:\n  - id: t1\n    description: "test"\n    dependencies: []\n```';
+    const plan = extractYamlPlan(text, 'master');
+    expect(plan!.baseBranch).toBe('master');
+  });
+
+  it('YAML baseBranch takes precedence over defaultBranch parameter', () => {
+    const text = '```yaml\nname: "Explicit"\nbaseBranch: develop\ntasks:\n  - id: t1\n    description: "test"\n    dependencies: []\n```';
+    const plan = extractYamlPlan(text, 'master');
+    expect(plan!.baseBranch).toBe('develop');
   });
 
   it('defaults dependencies to empty array', () => {
