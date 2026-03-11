@@ -170,6 +170,11 @@ export interface InvokerAPI {
   onWorkflowsChanged: (cb: (workflows: unknown[]) => void) => () => void;
   deleteAllWorkflows: () => Promise<void>;
   cleanupWorktrees: () => Promise<{ removed: string[]; errors: string[] }>;
+  rebaseAndRetry: (mergeTaskId: string) => Promise<{
+    success: boolean;
+    rebasedBranches: string[];
+    errors: string[];
+  }>;
 }
 
 // ── Augment global Window ───────────────────────────────────

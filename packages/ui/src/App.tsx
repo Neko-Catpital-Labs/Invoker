@@ -102,6 +102,18 @@ export function App() {
     }
   }, []);
 
+  const handleRebaseAndRetry = useCallback(async (taskId: string) => {
+    setContextMenu(null);
+    try {
+      const result = await window.invoker?.rebaseAndRetry(taskId);
+      if (result && !result.success) {
+        console.error('Rebase failed for some branches:', result.errors);
+      }
+    } catch (err) {
+      console.error('Rebase & Retry failed:', err);
+    }
+  }, []);
+
   const closeContextMenu = useCallback(() => {
     setContextMenu(null);
   }, []);
@@ -405,6 +417,7 @@ export function App() {
           onRestart={handleRestartTask}
           onReplace={handleReplaceTask}
           onOpenTerminal={handleOpenTerminal}
+          onRebaseAndRetry={handleRebaseAndRetry}
           onClose={closeContextMenu}
         />
       )}
