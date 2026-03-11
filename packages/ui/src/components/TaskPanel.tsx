@@ -195,11 +195,13 @@ export function TaskPanel({
         </div>
       )}
 
-      {/* Error */}
-      {task.error && (
+      {/* Error / Exit Code */}
+      {(task.error || (task.exitCode !== undefined && task.exitCode !== 0)) && (
         <div className="bg-red-900/30 border border-red-700 rounded p-3">
           <h3 className="text-sm font-medium text-red-400 mb-1">Error</h3>
-          <p className="text-xs text-red-300 whitespace-pre-wrap">{task.error}</p>
+          {task.error && (
+            <p className="text-xs text-red-300 whitespace-pre-wrap">{task.error}</p>
+          )}
           {task.exitCode !== undefined && (
             <p className="text-xs text-red-400 mt-1">Exit code: {task.exitCode}</p>
           )}

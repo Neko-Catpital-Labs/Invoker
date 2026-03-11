@@ -1,7 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import type { WorkRequest, WorkResponse } from '@invoker/protocol';
 import type { Familiar, FamiliarHandle, TerminalSpec, Unsubscribe } from './familiar.js';
+
+const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
 
 export interface BaseEntry {
   request: WorkRequest;
@@ -12,6 +14,8 @@ export interface BaseEntry {
   outputBuffer: string[];
   /** Stored completion response for replay when listeners register after completion. */
   completionResponse?: WorkResponse;
+  /** Heartbeat timer handle for orphan detection. */
+  heartbeatTimer?: ReturnType<typeof setInterval>;
 }
 
 export interface ClaudeSessionParams {
@@ -23,6 +27,11 @@ export interface ClaudeSessionParams {
 export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar {
   abstract readonly type: string;
   protected entries = new Map<string, TEntry>();
+  protected heartbeatIntervalMs: number;
+
+  constructor(heartbeatIntervalMs?: number) {
+    this.heartbeatIntervalMs = heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
+  }
 
   protected createHandle(request: WorkRequest): FamiliarHandle {
     return { executionId: randomUUID(), taskId: request.actionId };
@@ -48,11 +57,52 @@ export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar
   protected emitComplete(executionId: string, response: WorkResponse): void {
     const entry = this.entries.get(executionId);
     if (!entry) return;
+    if (entry.heartbeatTimer) {
+      clearInterval(entry.heartbeatTimer);
+      entry.heartbeatTimer = undefined;
+    }
     entry.completed = true;
     entry.completionResponse = response;
     for (const cb of entry.completeListeners) {
       cb(response);
     }
+  }
+
+  /**
+   * Start a periodic heartbeat that detects orphaned processes: the child
+   * has exited but the close handler failed to fire completion.
+   */
+  protected startHeartbeat(executionId: string, child: ChildProcess): void {
+    const entry = this.entries.get(executionId);
+    if (!entry) return;
+
+    entry.heartbeatTimer = setInterval(() => {
+      if (entry.completed) {
+        clearInterval(entry.heartbeatTimer);
+        entry.heartbeatTimer = undefined;
+        return;
+      }
+
+      if (child.exitCode !== null || child.killed) {
+        clearInterval(entry.heartbeatTimer);
+        entry.heartbeatTimer = undefined;
+
+        const exitCode = child.exitCode ?? 1;
+        this.emitOutput(executionId,
+          `[${this.type}] Heartbeat detected orphaned process: actionId=${entry.request.actionId} exitCode=${exitCode}\n`);
+
+        const response: WorkResponse = {
+          requestId: entry.request.requestId,
+          actionId: entry.request.actionId,
+          status: 'failed',
+          outputs: {
+            exitCode,
+            error: `Process exited but completion was not reported (heartbeat recovery)`,
+          },
+        };
+        this.emitComplete(executionId, response);
+      }
+    }, this.heartbeatIntervalMs);
   }
 
   onOutput(handle: FamiliarHandle, cb: (data: string) => void): Unsubscribe {

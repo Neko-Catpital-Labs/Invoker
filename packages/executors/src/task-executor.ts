@@ -111,6 +111,25 @@ export class TaskExecutor {
    * 6. On completion → feed response to orchestrator → auto-execute newly ready tasks
    */
   async executeTask(task: TaskState): Promise<void> {
+    try {
+      await this.executeTaskInner(task);
+    } catch (err) {
+      console.error(`[TaskExecutor] executeTask failed for task=${task.id}:`, err);
+      const response: WorkResponse = {
+        requestId: `err-${task.id}`,
+        actionId: task.id,
+        status: 'failed',
+        outputs: {
+          exitCode: 1,
+          error: `executeTask error: ${err instanceof Error ? err.message : String(err)}`,
+        },
+      };
+      this.callbacks.onComplete?.(task.id, response);
+      this.orchestrator.handleWorkerResponse(response);
+    }
+  }
+
+  private async executeTaskInner(task: TaskState): Promise<void> {
     // Pivot tasks with experimentVariants: synthesize a spawn_experiments
     // response instead of running through the familiar.
     if (task.pivot && task.experimentVariants && task.experimentVariants.length > 0) {

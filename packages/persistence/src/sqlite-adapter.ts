@@ -119,6 +119,16 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
       CREATE INDEX IF NOT EXISTS idx_conv_messages_thread
         ON conversation_messages(thread_ts, seq);
+
+      CREATE TABLE IF NOT EXISTS task_output (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        task_id TEXT NOT NULL,
+        data TEXT NOT NULL,
+        created_at TEXT DEFAULT (datetime('now'))
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_task_output_task
+        ON task_output(task_id);
     `);
   }
 
@@ -513,6 +523,21 @@ export class SQLiteAdapter implements PersistenceAdapter {
       content: row.content,
       createdAt: row.created_at,
     }));
+  }
+
+  // ── Task Output ─────────────────────────────────────
+
+  appendTaskOutput(taskId: string, data: string): void {
+    this.db.prepare(
+      'INSERT INTO task_output (task_id, data) VALUES (?, ?)',
+    ).run(taskId, data);
+  }
+
+  getTaskOutput(taskId: string): string {
+    const rows = this.db.prepare(
+      'SELECT data FROM task_output WHERE task_id = ? ORDER BY id ASC',
+    ).all(taskId) as Array<{ data: string }>;
+    return rows.map((r) => r.data).join('');
   }
 
   // ── Activity Log ─────────────────────────────────────

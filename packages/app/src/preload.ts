@@ -43,6 +43,7 @@ const api: InvokerAPI = {
   },
   getActivityLogs: () => ipcRenderer.invoke('invoker:get-activity-logs'),
   getEvents: (taskId: string) => ipcRenderer.invoke('invoker:get-events', taskId),
+  getTaskOutput: (taskId: string) => ipcRenderer.invoke('invoker:get-task-output', taskId),
 
   // External terminal launcher
   openTerminal: (taskId: string) =>

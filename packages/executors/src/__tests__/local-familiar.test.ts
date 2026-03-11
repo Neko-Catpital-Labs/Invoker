@@ -453,4 +453,127 @@ describe('LocalFamiliar', () => {
       await claudeFamiliar.destroyAll();
     });
   });
+
+  // ── Death log tests ────────────────────────────────────────────
+
+  describe('death log emission', () => {
+    it('emits death log to output stream on non-zero exit', async () => {
+      const request = makeRequest({ inputs: { command: 'exit 42' } });
+      const handle = await familiar.start(request);
+
+      const output: string[] = [];
+      familiar.onOutput(handle, (data) => output.push(data));
+
+      await new Promise<void>((resolve) => {
+        familiar.onComplete(handle, () => resolve());
+      });
+
+      const combined = output.join('');
+      expect(combined).toContain('[LocalFamiliar] Process exited');
+      expect(combined).toContain('exitCode=42');
+    });
+
+    it('emits death log with signal info when killed', async () => {
+      const request = makeRequest({ inputs: { command: 'sleep 60' } });
+      const handle = await familiar.start(request);
+
+      const output: string[] = [];
+      familiar.onOutput(handle, (data) => output.push(data));
+
+      const responsePromise = new Promise<WorkResponse>((resolve) => {
+        familiar.onComplete(handle, (res) => resolve(res));
+      });
+
+      await familiar.kill(handle);
+      await responsePromise;
+
+      const combined = output.join('');
+      expect(combined).toContain('[LocalFamiliar] Process exited');
+      expect(combined).toMatch(/signal=SIG(TERM|KILL)/);
+    });
+
+    it('emits death log on successful exit', async () => {
+      const request = makeRequest({ inputs: { command: 'echo hello' } });
+      const handle = await familiar.start(request);
+
+      const output: string[] = [];
+      familiar.onOutput(handle, (data) => output.push(data));
+
+      await new Promise<void>((resolve) => {
+        familiar.onComplete(handle, () => resolve());
+      });
+
+      const combined = output.join('');
+      expect(combined).toContain('[LocalFamiliar] Process exited');
+      expect(combined).toContain('exitCode=0');
+    });
+
+    it('completion fires even when autoCommit throws', async () => {
+      const claudeFamiliar = new LocalFamiliar({
+        claudeCommand: '/bin/echo',
+        claudeFallback: false,
+      });
+
+      // Mock autoCommit to throw
+      (claudeFamiliar as any).autoCommit = async () => {
+        throw new Error('Simulated autoCommit failure');
+      };
+
+      const request = makeRequest({
+        actionType: 'claude',
+        inputs: { prompt: 'test' },
+      });
+      const handle = await claudeFamiliar.start(request);
+
+      const output: string[] = [];
+      claudeFamiliar.onOutput(handle, (data) => output.push(data));
+
+      // This MUST resolve. If autoCommit throw is uncaught, this hangs forever.
+      const response = await Promise.race([
+        new Promise<WorkResponse>((resolve) => {
+          claudeFamiliar.onComplete(handle, (res) => resolve(res));
+        }),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('onComplete never fired — task hung')), 5000),
+        ),
+      ]);
+
+      expect(response.status).toBe('completed');
+      expect(response.outputs.exitCode).toBe(0);
+      expect(output.join('')).toContain('autoCommit');
+
+      await claudeFamiliar.destroyAll();
+    }, 10_000);
+  });
+
+  // ── Heartbeat tests ────────────────────────────────────────────
+
+  describe('heartbeat', () => {
+    it('forces completion when close handler fails silently', async () => {
+      const heartbeatFamiliar = new LocalFamiliar({ heartbeatIntervalMs: 200 });
+
+      const request = makeRequest({ inputs: { command: 'echo fast' } });
+      const handle = await heartbeatFamiliar.start(request);
+
+      // Sabotage: remove close listener so completion never fires normally
+      const entry = (heartbeatFamiliar as any).entries.get(handle.executionId);
+      const child = entry.process;
+      child.removeAllListeners('close');
+      entry.completed = false;
+
+      const response = await Promise.race([
+        new Promise<WorkResponse>((resolve) => {
+          heartbeatFamiliar.onComplete(handle, (res) => resolve(res));
+        }),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('heartbeat did not detect orphan')), 5000),
+        ),
+      ]);
+
+      expect(response.status).toBe('failed');
+      expect(response.outputs.error).toContain('heartbeat');
+
+      await heartbeatFamiliar.destroyAll();
+    }, 10_000);
+  });
 });

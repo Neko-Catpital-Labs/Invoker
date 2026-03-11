@@ -328,6 +328,61 @@ describe('SQLiteAdapter', () => {
     });
   });
 
+  // ── Task Output ──────────────────────────────────────
+
+  describe('task output', () => {
+    it('round-trips output chunks through append and get', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t1'));
+
+      adapter.appendTaskOutput('t1', 'line 1\n');
+      adapter.appendTaskOutput('t1', 'line 2\n');
+      adapter.appendTaskOutput('t1', '[LocalFamiliar] Process exited: exitCode=0\n');
+
+      const output = adapter.getTaskOutput('t1');
+      expect(output).toContain('line 1');
+      expect(output).toContain('line 2');
+      expect(output).toContain('[LocalFamiliar] Process exited');
+    });
+
+    it('returns empty string for task with no output', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t1'));
+
+      const output = adapter.getTaskOutput('t1');
+      expect(output).toBe('');
+    });
+
+    it('isolates output by task ID', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t1'));
+      adapter.saveTask('wf-1', makeTask('t2'));
+
+      adapter.appendTaskOutput('t1', 'task 1 output\n');
+      adapter.appendTaskOutput('t2', 'task 2 output\n');
+
+      expect(adapter.getTaskOutput('t1')).toContain('task 1');
+      expect(adapter.getTaskOutput('t1')).not.toContain('task 2');
+      expect(adapter.getTaskOutput('t2')).toContain('task 2');
+    });
+
+    it('preserves ordering of appended chunks', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t1'));
+
+      adapter.appendTaskOutput('t1', 'first\n');
+      adapter.appendTaskOutput('t1', 'second\n');
+      adapter.appendTaskOutput('t1', 'third\n');
+
+      const output = adapter.getTaskOutput('t1');
+      const firstIdx = output.indexOf('first');
+      const secondIdx = output.indexOf('second');
+      const thirdIdx = output.indexOf('third');
+      expect(firstIdx).toBeLessThan(secondIdx);
+      expect(secondIdx).toBeLessThan(thirdIdx);
+    });
+  });
+
   // ── Conversations ──────────────────────────────────────
 
   function makeConversation(threadTs: string, overrides: Partial<Conversation> = {}): Conversation {

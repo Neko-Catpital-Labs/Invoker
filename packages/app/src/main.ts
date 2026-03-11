@@ -702,6 +702,11 @@ function setupGuiMode(): void {
           console.log(`[output] ${taskId}: ${data.trimEnd()}`);
           const outputData: TaskOutputData = { taskId, data };
           messageBus.publish(Channels.TASK_OUTPUT, outputData);
+          try {
+            persistence.appendTaskOutput(taskId, data);
+          } catch (err) {
+            console.error(`[output] Failed to persist output for ${taskId}:`, err);
+          }
         },
         onSpawned: (taskId, handle, familiar) => {
           console.log(`[exec] Task "${taskId}" spawned (handle: ${handle.executionId})`);
@@ -906,6 +911,7 @@ function setupGuiMode(): void {
     ipcMain.handle('invoker:get-tasks', () => orchestrator.getAllTasks());
     ipcMain.handle('invoker:get-events', (_event, taskId: string) => persistence.getEvents(taskId));
     ipcMain.handle('invoker:get-status', () => orchestrator.getWorkflowStatus());
+    ipcMain.handle('invoker:get-task-output', (_event, taskId: string) => persistence.getTaskOutput(taskId));
 
     ipcMain.handle('invoker:get-all-completed-tasks', () => {
       return persistence.loadAllCompletedTasks();
