@@ -1,6 +1,7 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { TaskExecutor } from '../task-executor.js';
 import type { TaskState } from '@invoker/core';
+import { EventEmitter } from 'events';
 
 function makeTask(overrides: Partial<TaskState> = {}): TaskState {
   return {
@@ -199,6 +200,175 @@ describe('TaskExecutor', () => {
 
       const branch = await executor.detectDefaultBranch();
       expect(branch).toBe('master');
+    });
+  });
+
+  describe('execGit error format', () => {
+    it('includes stdout in error message when present', async () => {
+      const spawn = await import('child_process').then(m => m.spawn);
+      vi.mock('child_process', async (importOriginal) => {
+        const orig = await importOriginal<typeof import('child_process')>();
+        return { ...orig };
+      });
+
+      const executor = createExecutorWithTasks(new Map());
+
+      const fakeChild = new EventEmitter() as any;
+      const stdoutEmitter = new EventEmitter();
+      const stderrEmitter = new EventEmitter();
+      fakeChild.stdout = stdoutEmitter;
+      fakeChild.stderr = stderrEmitter;
+
+      const origExecGit = (executor as any).execGit.bind(executor);
+      (executor as any).execGit = (args: string[]) => {
+        return new Promise((_resolve, reject) => {
+          if (args[0] === 'merge') {
+            reject(new Error(
+              `git ${args.join(' ')} failed (code 1): Auto-merging file.txt\nCONFLICT (content): Merge conflict in file.txt`
+            ));
+          } else {
+            _resolve('ok');
+          }
+        });
+      };
+
+      try {
+        await (executor as any).execGit(['merge', '--no-ff', 'some-branch']);
+        expect.fail('should have thrown');
+      } catch (err: any) {
+        expect(err.message).toContain('CONFLICT');
+        expect(err.message).toContain('file.txt');
+      }
+    });
+  });
+
+  describe('consolidateAndMerge cleanup', () => {
+    it('aborts merge and restores branch on failure', async () => {
+      const allTasks = [
+        makeTask({ id: 't1', workflowId: 'wf-1', status: 'completed', branch: 'experiment/t1' }),
+      ];
+      const orchestrator = {
+        getTask: (id: string) => allTasks.find(t => t.id === id),
+        getAllTasks: () => allTasks,
+        handleWorkerResponse: vi.fn(() => []),
+      };
+      const persistence = {
+        loadWorkflow: () => ({
+          id: 'wf-1',
+          onFinish: 'merge',
+          baseBranch: 'master',
+          featureBranch: 'plan/feature',
+          name: 'Test Workflow',
+        }),
+        updateTask: vi.fn(),
+      };
+      const onComplete = vi.fn();
+      const executor = new TaskExecutor({
+        orchestrator: orchestrator as any,
+        persistence: persistence as any,
+        familiarRegistry: { getDefault: () => ({ type: 'local' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+        callbacks: { onComplete },
+      });
+
+      const gitCalls: string[][] = [];
+      (executor as any).execGit = async (args: string[]) => {
+        gitCalls.push(args);
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        if (args[0] === 'checkout' && args[1] === '-b') return '';
+        if (args[0] === 'merge' && args.includes('--no-ff')) {
+          throw new Error('git merge --no-ff failed (code 1): CONFLICT (content): file.txt');
+        }
+        return '';
+      };
+
+      const mergeTask = makeTask({
+        id: '__merge__wf-1',
+        status: 'running',
+        isMergeNode: true,
+        workflowId: 'wf-1',
+      });
+
+      await (executor as any).executeMergeNode(mergeTask);
+
+      const mergeAbortCall = gitCalls.find(c => c[0] === 'merge' && c[1] === '--abort');
+      expect(mergeAbortCall).toBeDefined();
+
+      const checkoutOriginal = gitCalls.filter(c => c[0] === 'checkout' && c[1] === 'master');
+      expect(checkoutOriginal.length).toBeGreaterThanOrEqual(1);
+
+      expect(onComplete).toHaveBeenCalledWith(
+        '__merge__wf-1',
+        expect.objectContaining({
+          status: 'failed',
+          outputs: expect.objectContaining({
+            error: expect.stringContaining('CONFLICT'),
+          }),
+        }),
+      );
+    });
+
+    it('recreates feature branch on retry after previous failed attempt', async () => {
+      const allTasks = [
+        makeTask({ id: 't1', workflowId: 'wf-1', status: 'completed', branch: 'experiment/t1' }),
+      ];
+      const orchestrator = {
+        getTask: (id: string) => allTasks.find(t => t.id === id),
+        getAllTasks: () => allTasks,
+        handleWorkerResponse: vi.fn(() => []),
+      };
+      const persistence = {
+        loadWorkflow: () => ({
+          id: 'wf-1',
+          onFinish: 'merge',
+          baseBranch: 'master',
+          featureBranch: 'plan/feature',
+          name: 'Test Workflow',
+        }),
+        updateTask: vi.fn(),
+      };
+      const executor = new TaskExecutor({
+        orchestrator: orchestrator as any,
+        persistence: persistence as any,
+        familiarRegistry: { getDefault: () => ({ type: 'local' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+        callbacks: { onComplete: vi.fn() },
+      });
+
+      const gitCalls: string[][] = [];
+      let checkoutNewBranchAttempt = 0;
+      (executor as any).execGit = async (args: string[]) => {
+        gitCalls.push(args);
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        if (args[0] === 'checkout' && args[1] === '-b') {
+          checkoutNewBranchAttempt++;
+          if (checkoutNewBranchAttempt === 1) {
+            throw new Error('branch already exists');
+          }
+          return '';
+        }
+        if (args[0] === 'branch' && args[1] === '-D') return '';
+        if (args[0] === 'checkout') return '';
+        if (args[0] === 'merge' && args.includes('--no-ff') && args.includes('experiment/t1')) return '';
+        if (args[0] === 'merge' && args.includes('--no-ff') && args.includes('plan/feature')) return '';
+        return '';
+      };
+
+      const mergeTask = makeTask({
+        id: '__merge__wf-1',
+        status: 'running',
+        isMergeNode: true,
+        workflowId: 'wf-1',
+      });
+
+      await (executor as any).executeMergeNode(mergeTask);
+
+      const deleteCall = gitCalls.find(c => c[0] === 'branch' && c[1] === '-D' && c[2] === 'plan/feature');
+      expect(deleteCall).toBeDefined();
+
+      expect(orchestrator.handleWorkerResponse).toHaveBeenCalledWith(
+        expect.objectContaining({ status: 'completed' }),
+      );
     });
   });
 });

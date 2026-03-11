@@ -339,36 +339,47 @@ export class TaskExecutor {
     workflowId?: string,
     workflowName?: string,
   ): Promise<void> {
-    // Consolidate all completed task branches into featureBranch
+    const originalBranch = await this.execGit(['branch', '--show-current']);
+
     try {
-      await this.execGit(['checkout', '-b', featureBranch, baseBranch]);
-      console.log(`[merge] Created ${featureBranch} from ${baseBranch}`);
-    } catch {
-      await this.execGit(['checkout', featureBranch]);
-      console.log(`[merge] Checked out existing ${featureBranch}`);
-    }
+      // Consolidate all completed task branches into featureBranch
+      try {
+        await this.execGit(['checkout', '-b', featureBranch, baseBranch]);
+        console.log(`[merge] Created ${featureBranch} from ${baseBranch}`);
+      } catch {
+        // Branch exists from a previous attempt — delete and recreate for a clean slate
+        await this.execGit(['checkout', baseBranch]);
+        await this.execGit(['branch', '-D', featureBranch]);
+        await this.execGit(['checkout', '-b', featureBranch, baseBranch]);
+        console.log(`[merge] Recreated ${featureBranch} from ${baseBranch}`);
+      }
 
-    const allTasks = this.orchestrator.getAllTasks();
-    const taskBranches = allTasks
-      .filter((t) => t.workflowId === workflowId && t.status === 'completed' && t.branch && !t.isMergeNode)
-      .map((t) => t.branch!);
+      const allTasks = this.orchestrator.getAllTasks();
+      const taskBranches = allTasks
+        .filter((t) => t.workflowId === workflowId && t.status === 'completed' && t.branch && !t.isMergeNode)
+        .map((t) => t.branch!);
 
-    for (const branch of taskBranches) {
-      console.log(`[merge] Merging task branch: ${branch} → ${featureBranch}`);
-      await this.execGit(['merge', '--no-ff', '-m', `Merge ${branch}`, branch]);
-    }
-    console.log(`[merge] Consolidated ${taskBranches.length} task branches into ${featureBranch}`);
+      for (const branch of taskBranches) {
+        console.log(`[merge] Merging task branch: ${branch} → ${featureBranch}`);
+        await this.execGit(['merge', '--no-ff', '-m', `Merge ${branch}`, branch]);
+      }
+      console.log(`[merge] Consolidated ${taskBranches.length} task branches into ${featureBranch}`);
 
-    const mergeMessage = workflowName ?? 'Workflow';
+      const mergeMessage = workflowName ?? 'Workflow';
 
-    if (onFinish === 'merge') {
-      await this.execGit(['checkout', baseBranch]);
-      await this.execGit(['merge', '--no-ff', '-m', mergeMessage, featureBranch]);
-      console.log(`[merge] Merged ${featureBranch} into ${baseBranch} (no-ff)`);
-    } else if (onFinish === 'pull_request') {
-      await this.execGit(['push', '-u', 'origin', featureBranch]);
-      await this.execPr(baseBranch, featureBranch, workflowName ?? 'Workflow');
-      console.log(`[merge] Created pull request: ${featureBranch} → ${baseBranch}`);
+      if (onFinish === 'merge') {
+        await this.execGit(['checkout', baseBranch]);
+        await this.execGit(['merge', '--no-ff', '-m', mergeMessage, featureBranch]);
+        console.log(`[merge] Merged ${featureBranch} into ${baseBranch} (no-ff)`);
+      } else if (onFinish === 'pull_request') {
+        await this.execGit(['push', '-u', 'origin', featureBranch]);
+        await this.execPr(baseBranch, featureBranch, workflowName ?? 'Workflow');
+        console.log(`[merge] Created pull request: ${featureBranch} → ${baseBranch}`);
+      }
+    } catch (err) {
+      try { await this.execGit(['merge', '--abort']); } catch { /* no merge in progress */ }
+      try { await this.execGit(['checkout', originalBranch]); } catch { /* best effort */ }
+      throw err;
     }
   }
 
@@ -384,7 +395,9 @@ export class TaskExecutor {
       child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
       child.on('close', (code) => {
         if (code === 0) resolvePromise(stdout.trim());
-        else reject(new Error(`git ${args.join(' ')} failed (code ${code}): ${stderr.trim()}`));
+        else reject(new Error(
+          `git ${args.join(' ')} failed (code ${code}): ${stderr.trim()}${stdout.trim() ? '\n' + stdout.trim() : ''}`
+        ));
       });
     });
   }
