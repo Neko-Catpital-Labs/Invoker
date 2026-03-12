@@ -155,18 +155,6 @@ export function TaskPanel({
             }`}>
               {task.prompt ? 'Claude Task' : 'Command'}
             </span>
-            {canEditCommand && !isEditingCommand && (
-              <button
-                onClick={() => {
-                  setEditCommandValue(task.command ?? '');
-                  setIsEditingCommand(true);
-                }}
-                className="text-xs text-gray-400 hover:text-gray-200 transition-colors"
-                data-testid="edit-command-btn"
-              >
-                Edit
-              </button>
-            )}
           </div>
 
           {isEditingCommand && task.command !== undefined ? (
@@ -196,11 +184,22 @@ export function TaskPanel({
               </div>
             </div>
           ) : (
-            <div className={`mt-2 rounded p-3 text-xs select-text cursor-text ${
-              task.prompt
-                ? 'bg-blue-900/20 border border-blue-800'
-                : 'bg-gray-800 border border-gray-700'
-            }`}>
+            <div
+              className={`mt-2 rounded p-3 text-xs select-text ${
+                task.prompt
+                  ? 'bg-blue-900/20 border border-blue-800 cursor-text'
+                  : canEditCommand
+                    ? 'bg-gray-800 border border-gray-700 cursor-pointer hover:border-gray-600 transition-colors'
+                    : 'bg-gray-800 border border-gray-700 cursor-text'
+              }`}
+              onDoubleClick={() => {
+                if (canEditCommand) {
+                  setEditCommandValue(task.command ?? '');
+                  setIsEditingCommand(true);
+                }
+              }}
+              data-testid="command-display"
+            >
               {task.prompt ? (
                 <p className="text-gray-300 whitespace-pre-wrap">{task.prompt}</p>
               ) : (
