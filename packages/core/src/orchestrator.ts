@@ -376,6 +376,28 @@ export class Orchestrator {
   }
 
   /**
+   * Transition a running task directly to awaiting_approval.
+   * Used by the merge gate in manual mode after successful consolidation.
+   * Does NOT trigger checkWorkflowCompletion (the workflow stays open).
+   */
+  setTaskAwaitingApproval(taskId: string): void {
+    this.refreshFromDb();
+    const task = this.stateMachine.getTask(taskId);
+    if (!task) return;
+
+    this.scheduler.completeJob(taskId);
+
+    const changes: Partial<TaskState> = {
+      status: 'awaiting_approval',
+      completedAt: new Date(),
+    };
+    this.writeAndSync(taskId, changes);
+    const delta: TaskDelta = { type: 'updated', taskId, changes };
+    this.persistence.logEvent?.(taskId, 'task.awaiting_approval', changes);
+    this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
+  }
+
+  /**
    * Approve a task awaiting approval. Completes it and unblocks dependents.
    */
   approve(taskId: string): void {

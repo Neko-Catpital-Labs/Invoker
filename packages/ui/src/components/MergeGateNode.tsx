@@ -48,6 +48,7 @@ export function MergeGateNode({ data }: MergeGateNodeProps) {
 
   const statusLabel =
     status === 'completed' ? 'READY' :
+    status === 'awaiting_approval' ? 'NEEDS APPROVAL' :
     status === 'failed' ? 'BLOCKED' :
     'WAITING';
 
@@ -104,7 +105,7 @@ export function MergeGateNode({ data }: MergeGateNodeProps) {
         <span className={`text-xs uppercase ${colors.text}`}>{statusLabel}</span>
       </div>
 
-      {mergeMode === 'manual' && status === 'completed' && (
+      {mergeMode === 'manual' && status === 'awaiting_approval' && (
         <button
           onClick={handleApproveMerge}
           data-testid="approve-merge-button"

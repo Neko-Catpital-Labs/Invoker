@@ -579,6 +579,7 @@ describe('TaskExecutor', () => {
         getTask: (id: string) => allTasks.find(t => t.id === id),
         getAllTasks: () => allTasks,
         handleWorkerResponse: vi.fn(() => []),
+        setTaskAwaitingApproval: vi.fn(),
       };
       const persistence = {
         loadWorkflow: () => ({
@@ -626,8 +627,11 @@ describe('TaskExecutor', () => {
       );
       expect(finalMerge).toBeUndefined();
 
-      // Should still report completed
-      expect(orchestrator.handleWorkerResponse).toHaveBeenCalledWith(
+      // Should call setTaskAwaitingApproval instead of handleWorkerResponse
+      expect(orchestrator.setTaskAwaitingApproval).toHaveBeenCalledWith('__merge__wf-1');
+      expect(orchestrator.handleWorkerResponse).not.toHaveBeenCalled();
+      expect(onComplete).toHaveBeenCalledWith(
+        '__merge__wf-1',
         expect.objectContaining({ status: 'completed' }),
       );
     });

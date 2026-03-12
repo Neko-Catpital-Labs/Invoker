@@ -325,6 +325,17 @@ export class TaskExecutor {
       const effectiveOnFinish = mergeMode === 'manual' ? 'none' : onFinish;
       try {
         await this.consolidateAndMerge(effectiveOnFinish, baseBranch, featureBranch, workflowId, workflow?.name);
+        if (mergeMode === 'manual') {
+          const manualResponse: WorkResponse = {
+            requestId: `merge-${task.id}`,
+            actionId: task.id,
+            status: 'completed',
+            outputs: { exitCode: 0 },
+          };
+          this.callbacks.onComplete?.(task.id, manualResponse);
+          this.orchestrator.setTaskAwaitingApproval(task.id);
+          return;
+        }
         response = {
           requestId: `merge-${task.id}`,
           actionId: task.id,

@@ -720,3 +720,193 @@ describe('diamond dependency merge', () => {
     expect(mergeCount).toBe(1);
   });
 });
+
+// ── Merge gate commit topology ─────────────────────────────────
+
+import { TaskExecutor, FamiliarRegistry } from '../index.js';
+import type { TaskState } from '@invoker/core';
+
+describe('merge gate commit topology (real git)', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = createTempRepo();
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  function makeTaskState(overrides: Partial<TaskState> & { id: string }): TaskState {
+    return {
+      description: overrides.id,
+      status: 'completed',
+      dependencies: [],
+      createdAt: new Date(),
+      ...overrides,
+    } as TaskState;
+  }
+
+  function createExecutor(
+    tasks: TaskState[],
+    workflow: Record<string, unknown>,
+  ): TaskExecutor {
+    const orchestrator = {
+      getTask: (id: string) => tasks.find(t => t.id === id),
+      getAllTasks: () => tasks,
+      handleWorkerResponse: () => [],
+      setTaskAwaitingApproval: () => {},
+    };
+    const persistence = {
+      loadWorkflow: () => workflow,
+      updateTask: () => {},
+    };
+    const registry = new FamiliarRegistry();
+    return new TaskExecutor({
+      orchestrator: orchestrator as any,
+      persistence: persistence as any,
+      familiarRegistry: registry,
+      cwd: tmpDir,
+    });
+  }
+
+  it('consolidate + approve produces correct merge topology on master', async () => {
+    const masterHead = execSync('git rev-parse HEAD', { cwd: tmpDir }).toString().trim();
+
+    // Create task-a branch with a unique file
+    execSync('git checkout -b experiment/task-a', { cwd: tmpDir });
+    writeFileSync(join(tmpDir, 'a.txt'), 'a-work');
+    execSync('git add -A && git commit -m "task-a work"', { cwd: tmpDir });
+    const hashA = execSync('git rev-parse HEAD', { cwd: tmpDir }).toString().trim();
+
+    // Create task-b branch from master with a unique file
+    execSync('git checkout master', { cwd: tmpDir });
+    execSync('git checkout -b experiment/task-b', { cwd: tmpDir });
+    writeFileSync(join(tmpDir, 'b.txt'), 'b-work');
+    execSync('git add -A && git commit -m "task-b work"', { cwd: tmpDir });
+    const hashB = execSync('git rev-parse HEAD', { cwd: tmpDir }).toString().trim();
+
+    // Go back to master for the executor
+    execSync('git checkout master', { cwd: tmpDir });
+
+    const tasks: TaskState[] = [
+      makeTaskState({ id: 'task-a', workflowId: 'wf-1', status: 'completed', branch: 'experiment/task-a' }),
+      makeTaskState({ id: 'task-b', workflowId: 'wf-1', status: 'completed', branch: 'experiment/task-b' }),
+      makeTaskState({ id: '__merge__wf-1', workflowId: 'wf-1', status: 'running', isMergeNode: true }),
+    ];
+
+    const workflow = {
+      id: 'wf-1',
+      onFinish: 'merge',
+      mergeMode: 'manual',
+      baseBranch: 'master',
+      featureBranch: 'feat/my-workflow',
+      name: 'My Workflow',
+    };
+
+    const executor = createExecutor(tasks, workflow);
+
+    // Phase 1: consolidation (manual mode — effectiveOnFinish='none')
+    const mergeTask = tasks.find(t => t.isMergeNode)!;
+    await (executor as any).executeMergeNode(mergeTask);
+
+    // Feature branch should exist and contain both task branches
+    const featureTip = execSync('git rev-parse feat/my-workflow', { cwd: tmpDir }).toString().trim();
+    expect(isAncestor(tmpDir, hashA, featureTip)).toBe(true);
+    expect(isAncestor(tmpDir, hashB, featureTip)).toBe(true);
+
+    // Master should NOT have moved (no final merge yet)
+    const masterAfterConsolidate = execSync('git rev-parse master', { cwd: tmpDir }).toString().trim();
+    expect(masterAfterConsolidate).toBe(masterHead);
+
+    // Feature branch should have 2 merge commits (one per task branch)
+    const featureMerges = execSync('git log --merges --oneline feat/my-workflow', { cwd: tmpDir })
+      .toString().trim().split('\n').filter(l => l);
+    expect(featureMerges.length).toBe(2);
+
+    // Phase 2: approve — final merge into master
+    await executor.approveMerge('wf-1');
+
+    // Master should now have the feature branch merged
+    const masterFinal = execSync('git rev-parse master', { cwd: tmpDir }).toString().trim();
+    expect(masterFinal).not.toBe(masterHead);
+
+    // All task commits reachable from master
+    expect(isAncestor(tmpDir, hashA, 'master')).toBe(true);
+    expect(isAncestor(tmpDir, hashB, 'master')).toBe(true);
+
+    // All files present on master
+    expect(existsSync(join(tmpDir, 'a.txt'))).toBe(true);
+    expect(existsSync(join(tmpDir, 'b.txt'))).toBe(true);
+    expect(existsSync(join(tmpDir, 'initial.txt'))).toBe(true);
+
+    // Exactly 1 merge commit on master (the no-ff merge of feat/my-workflow)
+    const masterMerges = execSync('git log --merges --oneline master', { cwd: tmpDir })
+      .toString().trim().split('\n').filter(l => l);
+    // 2 from feature branch consolidation + 1 from final merge = 3 total on master
+    // But only 1 is directly on master (the no-ff merge of the feature branch)
+    const masterOnlyMerges = execSync(
+      'git log --merges --first-parent --oneline master',
+      { cwd: tmpDir },
+    ).toString().trim().split('\n').filter(l => l);
+    expect(masterOnlyMerges.length).toBe(1);
+    expect(masterOnlyMerges[0]).toContain('My Workflow');
+  });
+
+  it('automatic mode produces same topology in a single step', async () => {
+    const masterHead = execSync('git rev-parse HEAD', { cwd: tmpDir }).toString().trim();
+
+    // Create task branches
+    execSync('git checkout -b experiment/task-a', { cwd: tmpDir });
+    writeFileSync(join(tmpDir, 'a.txt'), 'a-work');
+    execSync('git add -A && git commit -m "task-a work"', { cwd: tmpDir });
+    const hashA = execSync('git rev-parse HEAD', { cwd: tmpDir }).toString().trim();
+
+    execSync('git checkout master', { cwd: tmpDir });
+    execSync('git checkout -b experiment/task-b', { cwd: tmpDir });
+    writeFileSync(join(tmpDir, 'b.txt'), 'b-work');
+    execSync('git add -A && git commit -m "task-b work"', { cwd: tmpDir });
+    const hashB = execSync('git rev-parse HEAD', { cwd: tmpDir }).toString().trim();
+
+    execSync('git checkout master', { cwd: tmpDir });
+
+    const tasks: TaskState[] = [
+      makeTaskState({ id: 'task-a', workflowId: 'wf-1', status: 'completed', branch: 'experiment/task-a' }),
+      makeTaskState({ id: 'task-b', workflowId: 'wf-1', status: 'completed', branch: 'experiment/task-b' }),
+      makeTaskState({ id: '__merge__wf-1', workflowId: 'wf-1', status: 'running', isMergeNode: true }),
+    ];
+
+    const workflow = {
+      id: 'wf-1',
+      onFinish: 'merge',
+      mergeMode: 'automatic',
+      baseBranch: 'master',
+      featureBranch: 'feat/auto-workflow',
+      name: 'Auto Workflow',
+    };
+
+    const executor = createExecutor(tasks, workflow);
+    const mergeTask = tasks.find(t => t.isMergeNode)!;
+    await (executor as any).executeMergeNode(mergeTask);
+
+    // Master should have moved (full merge in one step)
+    const masterFinal = execSync('git rev-parse master', { cwd: tmpDir }).toString().trim();
+    expect(masterFinal).not.toBe(masterHead);
+
+    // All task commits reachable from master
+    expect(isAncestor(tmpDir, hashA, 'master')).toBe(true);
+    expect(isAncestor(tmpDir, hashB, 'master')).toBe(true);
+
+    // All files present
+    expect(existsSync(join(tmpDir, 'a.txt'))).toBe(true);
+    expect(existsSync(join(tmpDir, 'b.txt'))).toBe(true);
+
+    // 1 first-parent merge on master (the no-ff merge of the feature branch)
+    const masterOnlyMerges = execSync(
+      'git log --merges --first-parent --oneline master',
+      { cwd: tmpDir },
+    ).toString().trim().split('\n').filter(l => l);
+    expect(masterOnlyMerges.length).toBe(1);
+    expect(masterOnlyMerges[0]).toContain('Auto Workflow');
+  });
+});

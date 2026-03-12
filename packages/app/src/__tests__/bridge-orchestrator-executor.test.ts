@@ -940,7 +940,7 @@ describe('Flow 9: manual merge mode', () => {
     h = createTestHarness();
   });
 
-  it('merge node consolidates but does not merge into baseBranch in manual mode', async () => {
+  it('merge node enters awaiting_approval after consolidation in manual mode', async () => {
     h.loadAndStart(MANUAL_MERGE_PLAN);
 
     h.completeTask('A');
@@ -952,8 +952,8 @@ describe('Flow 9: manual merge mode', () => {
 
     await h.executor.executeTasks([mergeTask]);
 
-    // Merge node should complete (consolidation succeeded)
-    expect(h.getTask(mergeId)!.status).toBe('completed');
+    // Merge node should be awaiting_approval (not completed)
+    expect(h.getTask(mergeId)!.status).toBe('awaiting_approval');
 
     // Verify git calls: consolidation happened but final merge did not
     const consolidateBranch = h.git.calls.find(c =>
@@ -968,7 +968,7 @@ describe('Flow 9: manual merge mode', () => {
     expect(finalMerge).toBeUndefined();
   });
 
-  it('approveMerge performs the final merge after manual consolidation', async () => {
+  it('approve transitions merge node from awaiting_approval to completed', async () => {
     h.loadAndStart(MANUAL_MERGE_PLAN);
 
     h.completeTask('A');
@@ -978,14 +978,18 @@ describe('Flow 9: manual merge mode', () => {
     const mergeTask = h.getTask(mergeId)!;
 
     await h.executor.executeTasks([mergeTask]);
-    expect(h.getTask(mergeId)!.status).toBe('completed');
+    expect(h.getTask(mergeId)!.status).toBe('awaiting_approval');
 
     // Clear git history from consolidation phase
     h.git.reset();
 
-    // Approve the merge
+    // Approve the merge (git side)
     const wfId = mergeTask.workflowId!;
     await h.executor.approveMerge(wfId);
+
+    // Approve in orchestrator (state transition)
+    h.orchestrator.approve(mergeId);
+    expect(h.getTask(mergeId)!.status).toBe('completed');
 
     // Verify the final merge was performed
     const checkoutBase = h.git.calls.find(c => c[0] === 'checkout' && c[1] === 'master');

@@ -1183,7 +1183,10 @@ function setupGuiMode(): void {
     ipcMain.handle('invoker:approve-merge', async (_event, workflowId: string) => {
       console.log(`[ipc] approve-merge: "${workflowId}"`);
       try {
+        const mergeTask = orchestrator.getMergeNode(workflowId);
+        if (!mergeTask) throw new Error(`No merge node for workflow ${workflowId}`);
         await taskExecutor.approveMerge(workflowId);
+        orchestrator.approve(mergeTask.id);
       } catch (err) {
         console.error(`[ipc] approve-merge failed: ${err}`);
         throw err;

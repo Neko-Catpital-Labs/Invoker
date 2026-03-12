@@ -394,6 +394,48 @@ describe('Orchestrator', () => {
     });
   });
 
+  // ── setTaskAwaitingApproval ────────────────────────────
+
+  describe('setTaskAwaitingApproval', () => {
+    it('transitions running task to awaiting_approval', () => {
+      orchestrator.loadPlan({
+        name: 'awaiting-test',
+        tasks: [
+          { id: 'a1', description: 'Task' },
+        ],
+      });
+      orchestrator.startExecution();
+      expect(orchestrator.getTask('a1')!.status).toBe('running');
+
+      publishedDeltas = [];
+      orchestrator.setTaskAwaitingApproval('a1');
+
+      expect(orchestrator.getTask('a1')!.status).toBe('awaiting_approval');
+      expect(orchestrator.getTask('a1')!.completedAt).toBeDefined();
+
+      const delta = publishedDeltas.find(
+        (d) => d.type === 'updated' && d.taskId === 'a1',
+      );
+      expect(delta).toBeDefined();
+    });
+
+    it('does not trigger workflow completion', () => {
+      orchestrator.loadPlan({
+        name: 'no-complete-test',
+        tasks: [
+          { id: 'a1', description: 'Task' },
+        ],
+      });
+      orchestrator.startExecution();
+
+      orchestrator.setTaskAwaitingApproval('a1');
+
+      // Workflow should NOT be marked completed because a task is awaiting_approval
+      const workflows = persistence.listWorkflows();
+      expect(workflows[0].status).toBe('running');
+    });
+  });
+
   // ── approve / reject ───────────────────────────────────
 
   describe('approve', () => {
