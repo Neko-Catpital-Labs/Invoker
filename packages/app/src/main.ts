@@ -34,7 +34,7 @@ if (process.platform === 'linux') {
 }
 
 import { Orchestrator } from '@invoker/core';
-import type { PlanDefinition, TaskDelta, TaskReplacementDef } from '@invoker/core';
+import type { PlanDefinition, TaskDelta, TaskReplacementDef, TaskState } from '@invoker/core';
 import { SQLiteAdapter, ConversationRepository } from '@invoker/persistence';
 import { LocalBus, Channels } from '@invoker/transport';
 import {
@@ -435,21 +435,18 @@ async function headlessResume(workflowId: string): Promise<void> {
 
   orchestrator.syncFromDb(workflowId);
 
-  // Reconcile tasks stuck in 'running' from a previous session
+  // Relaunch tasks stuck in 'running' from a previous session
+  const orphanRestarted: TaskState[] = [];
   for (const task of orchestrator.getAllTasks()) {
     if (task.status === 'running') {
-      console.log(`[headless] resetting orphaned running task "${task.id}" to pending`);
-      orchestrator.handleWorkerResponse({
-        requestId: `orphan-${task.id}`,
-        actionId: task.id,
-        status: 'failed',
-        outputs: { exitCode: 1, error: 'Interrupted by app restart' },
-      });
+      console.log(`[headless] relaunching orphaned running task "${task.id}"`);
+      const restarted = orchestrator.restartTask(task.id);
+      orphanRestarted.push(...restarted.filter(t => t.status === 'running'));
     }
   }
 
   const started = orchestrator.startExecution();
-  await taskExecutor.executeTasks(started);
+  await taskExecutor.executeTasks([...orphanRestarted, ...started]);
   await waitForCompletion();
 
   await api.close().catch(() => {});
@@ -871,6 +868,21 @@ function setupGuiMode(): void {
 
     rebuildTaskExecutor();
 
+    // Relaunch tasks stuck in 'running' from a previous session —
+    // the child processes are gone after restart, so respawn them.
+    const orphanStarted: TaskState[] = [];
+    for (const task of orchestrator.getAllTasks()) {
+      if (task.status === 'running') {
+        console.log(`[init] relaunching orphaned running task "${task.id}"`);
+        const started = orchestrator.restartTask(task.id);
+        orphanStarted.push(...started.filter(t => t.status === 'running'));
+      }
+    }
+    if (orphanStarted.length > 0) {
+      console.log(`[init] relaunched ${orphanStarted.length} orphaned tasks: [${orphanStarted.map(t => t.id).join(', ')}]`);
+      taskExecutor.executeTasks(orphanStarted);
+    }
+
     apiServer = startApiServer({
       orchestrator,
       persistence,
@@ -937,21 +949,18 @@ function setupGuiMode(): void {
       }
       orchestrator.syncAllFromDb();
 
-      // Reconcile tasks stuck in 'running' from a previous session —
-      // the child processes and listeners are gone after restart.
+      // Relaunch tasks stuck in 'running' from a previous session —
+      // the child processes are gone after restart, so respawn them.
+      const orphanRestarted: TaskState[] = [];
       for (const task of orchestrator.getAllTasks()) {
         if (task.status === 'running') {
-          console.log(`[ipc] resume-workflow: resetting orphaned running task "${task.id}" to pending`);
-          orchestrator.handleWorkerResponse({
-            requestId: `orphan-${task.id}`,
-            actionId: task.id,
-            status: 'failed',
-            outputs: { exitCode: 1, error: 'Interrupted by app restart' },
-          });
+          console.log(`[ipc] resume-workflow: relaunching orphaned running task "${task.id}"`);
+          const restarted = orchestrator.restartTask(task.id);
+          orphanRestarted.push(...restarted.filter(t => t.status === 'running'));
         }
       }
 
-      const allStarted: any[] = [];
+      const allStarted: any[] = [...orphanRestarted];
       for (const wf of workflows) {
         if (wf.status === 'completed' || wf.status === 'failed') continue;
         const started = orchestrator.startExecution();

@@ -7,8 +7,8 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import { createTestHarness, type TestHarness } from '@invoker/test-utils';
-import type { PlanDefinition } from '@invoker/core';
+import { createTestHarness, type TestHarness, InMemoryBus } from '@invoker/test-utils';
+import { Orchestrator, type PlanDefinition, type TaskState } from '@invoker/core';
 
 // ── Shared Plans ────────────────────────────────────────────
 
@@ -633,9 +633,96 @@ describe('Flow 6: content-addressable branch names', () => {
   });
 });
 
-// ── Flow 7: Restart Workflow with Generation Salt ───────────
+// ── Flow 7: Orphan Task Relaunch on Restart ─────────────────
 
-describe('Flow 7: restart workflow with generation salt', () => {
+describe('Flow 7: orphan relaunch on restart', () => {
+  it('orphaned running tasks are relaunched after simulated restart', () => {
+    const h1 = createTestHarness();
+    h1.loadAndStart(LINEAR_PLAN);
+    expect(h1.getTask('A')!.status).toBe('running');
+
+    // Simulate app restart: new orchestrator from same persistence
+    const orchestrator2 = new Orchestrator({
+      persistence: h1.persistence,
+      messageBus: new InMemoryBus(),
+      maxConcurrency: 10,
+    });
+    orchestrator2.syncAllFromDb();
+
+    // t1 is still 'running' in the DB — orphaned
+    expect(orchestrator2.getTask('A')?.status).toBe('running');
+
+    // Reconcile: restartTask resets to pending, auto-starts (deps met)
+    const restarted: TaskState[] = [];
+    for (const task of orchestrator2.getAllTasks()) {
+      if (task.status === 'running') {
+        const started = orchestrator2.restartTask(task.id);
+        restarted.push(...started.filter(t => t.status === 'running'));
+      }
+    }
+
+    expect(restarted.length).toBe(1);
+    expect(restarted[0].id).toBe('A');
+    expect(orchestrator2.getTask('A')?.status).toBe('running');
+
+    // Complete A → B auto-starts
+    orchestrator2.handleWorkerResponse({
+      requestId: 'complete-A',
+      actionId: 'A',
+      status: 'completed',
+      outputs: { exitCode: 0 },
+    });
+    expect(orchestrator2.getTask('A')?.status).toBe('completed');
+    expect(orchestrator2.getTask('B')?.status).toBe('running');
+  });
+
+  it('multiple orphaned tasks in a chain are all relaunched correctly', () => {
+    const h1 = createTestHarness({ maxConcurrency: 10 });
+
+    // Use a plan where all tasks can run in parallel (no deps between A and B)
+    const plan: PlanDefinition = {
+      name: 'Multi-orphan Plan',
+      onFinish: 'none',
+      tasks: [
+        { id: 'X', description: 'Task X', command: 'echo x' },
+        { id: 'Y', description: 'Task Y', command: 'echo y' },
+        { id: 'Z', description: 'Task Z', command: 'echo z', dependencies: ['X', 'Y'] },
+      ],
+    };
+    h1.loadAndStart(plan);
+    expect(h1.getTask('X')!.status).toBe('running');
+    expect(h1.getTask('Y')!.status).toBe('running');
+    expect(h1.getTask('Z')!.status).toBe('pending');
+
+    // Simulate restart
+    const orchestrator2 = new Orchestrator({
+      persistence: h1.persistence,
+      messageBus: new InMemoryBus(),
+      maxConcurrency: 10,
+    });
+    orchestrator2.syncAllFromDb();
+
+    // Both X and Y are orphaned running
+    const restarted: TaskState[] = [];
+    for (const task of orchestrator2.getAllTasks()) {
+      if (task.status === 'running') {
+        const started = orchestrator2.restartTask(task.id);
+        restarted.push(...started.filter(t => t.status === 'running'));
+      }
+    }
+
+    // Both should be relaunched
+    const restartedIds = restarted.map((t: any) => t.id).sort();
+    expect(restartedIds).toEqual(['X', 'Y']);
+
+    // Z should still be pending
+    expect(orchestrator2.getTask('Z')?.status).toBe('pending');
+  });
+});
+
+// ── Flow 8: Restart Workflow with Generation Salt ───────────
+
+describe('Flow 8: restart workflow with generation salt', () => {
   let h: TestHarness;
 
   beforeEach(() => {
