@@ -320,7 +320,6 @@ describe('WorktreeFamiliar', () => {
     const taskProcesses: Array<ChildProcess & EventEmitter> = [];
 
     // Override spawn to return unique task processes
-    let callCount = 0;
     mockedSpawn.mockImplementation((cmd: string, args?: readonly string[], _options?: any) => {
       if (cmd === 'git') {
         const gitProc = createMockProcess();
@@ -332,6 +331,14 @@ describe('WorktreeFamiliar', () => {
           gitProc.emit('close', 0, null);
         });
         return gitProc as any;
+      }
+
+      // Auto-succeed pnpm install (worktree provisioning)
+      const argsArr = args as string[] | undefined;
+      if (cmd === '/bin/sh' && argsArr?.[1]?.includes('pnpm install')) {
+        const installProc = createMockProcess();
+        Promise.resolve().then(() => installProc.emit('close', 0, null));
+        return installProc as any;
       }
 
       const tp = createMockProcess();
@@ -619,7 +626,7 @@ describe('WorktreeFamiliar', () => {
 
       // Verify the command is the claude command, not /bin/sh echo
       const taskCall = mockedSpawn.mock.calls.find(
-        (call) => call[0] !== 'git',
+        ([cmd, args]) => cmd !== 'git' && !(cmd === '/bin/sh' && (args as string[])?.[1]?.includes('pnpm install')),
       );
       expect(taskCall).toBeDefined();
       expect(taskCall![0]).toBe('/bin/echo');
@@ -659,7 +666,7 @@ describe('WorktreeFamiliar', () => {
       await claudeFamiliar.start(request);
 
       const taskCall = mockedSpawn.mock.calls.find(
-        (call) => call[0] !== 'git',
+        ([cmd, args]) => cmd !== 'git' && !(cmd === '/bin/sh' && (args as string[])?.[1]?.includes('pnpm install')),
       );
       const args = taskCall![1] as string[];
       const promptArg = args[args.indexOf('-p') + 1];
