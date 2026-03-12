@@ -4,10 +4,10 @@ import type { TaskState } from '@invoker/core';
 
 // Reproduce the selectFamiliar logic from main.ts
 function selectFamiliar(registry: FamiliarRegistry, task: TaskState): Familiar {
-  if (task.familiarType) {
-    const registered = registry.get(task.familiarType);
+  if (task.config.familiarType) {
+    const registered = registry.get(task.config.familiarType);
     if (registered) return registered;
-    if (task.familiarType === 'docker') {
+    if (task.config.familiarType === 'docker') {
       const docker = new DockerFamiliar({ workspaceDir: '/tmp' });
       registry.register('docker', docker);
       return docker;
@@ -26,19 +26,19 @@ describe('Terminal routing via selectFamiliar', () => {
   });
 
   it('returns worktree familiar when no familiarType specified', () => {
-    const task = { familiarType: undefined } as TaskState;
+    const task = { config: { familiarType: undefined }, execution: {} } as TaskState;
     const familiar = selectFamiliar(registry, task);
     expect(familiar.type).toBe('worktree');
   });
 
   it('returns local familiar for familiarType "local"', () => {
-    const task = { familiarType: 'local' } as TaskState;
+    const task = { config: { familiarType: 'local' }, execution: {} } as TaskState;
     const familiar = selectFamiliar(registry, task);
     expect(familiar.type).toBe('local');
   });
 
   it('lazily creates and returns docker familiar for familiarType "docker"', () => {
-    const task = { familiarType: 'docker' } as TaskState;
+    const task = { config: { familiarType: 'docker' }, execution: {} } as TaskState;
     const familiar = selectFamiliar(registry, task);
     expect(familiar.type).toBe('docker');
     // Second call returns same instance
@@ -50,7 +50,7 @@ describe('Terminal routing via selectFamiliar', () => {
     const taskHandles = new Map<string, { handle: FamiliarHandle; familiar: Familiar }>();
 
     const worktreeFamiliar = registry.getDefault();
-    const dockerTask = { familiarType: 'docker' } as TaskState;
+    const dockerTask = { config: { familiarType: 'docker' }, execution: {} } as TaskState;
     const dockerFamiliar = selectFamiliar(registry, dockerTask);
 
     const worktreeHandle = { executionId: 'worktree-1', taskId: 'task-worktree' };

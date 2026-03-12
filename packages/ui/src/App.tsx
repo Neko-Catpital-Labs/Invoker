@@ -343,7 +343,7 @@ export function App() {
           <div className="flex-1 overflow-hidden bg-gray-800">
             <TaskPanel
               task={selectedTask}
-              baseBranch={selectedTask?.workflowId ? workflows.get(selectedTask.workflowId)?.baseBranch : undefined}
+              baseBranch={selectedTask?.config.workflowId ? workflows.get(selectedTask.config.workflowId)?.baseBranch : undefined}
               onProvideInput={openInputModal}
               onApprove={openApprovalModal}
               onReject={(task) => {

@@ -42,8 +42,8 @@ export function sortTasksForTimeline(tasks: TaskState[]): TaskState[] {
     const orderA = statusOrder[a.status] ?? 9;
     const orderB = statusOrder[b.status] ?? 9;
     if (orderA !== orderB) return orderA - orderB;
-    const timeA = a.startedAt ? new Date(a.startedAt).getTime() : Infinity;
-    const timeB = b.startedAt ? new Date(b.startedAt).getTime() : Infinity;
+    const timeA = a.execution.startedAt ? new Date(a.execution.startedAt).getTime() : Infinity;
+    const timeB = b.execution.startedAt ? new Date(b.execution.startedAt).getTime() : Infinity;
     return timeA - timeB;
   });
 }
@@ -60,7 +60,7 @@ export interface BarInfo {
  * Tasks without startedAt get zero width at the end.
  */
 export function computeBarWidths(tasks: TaskState[], now: number): BarInfo[] {
-  const started = tasks.filter((t) => t.startedAt);
+  const started = tasks.filter((t) => t.execution.startedAt);
   if (started.length === 0) {
     return tasks.map((t) => ({
       taskId: t.id,
@@ -70,21 +70,21 @@ export function computeBarWidths(tasks: TaskState[], now: number): BarInfo[] {
     }));
   }
 
-  const earliest = Math.min(...started.map((t) => new Date(t.startedAt!).getTime()));
+  const earliest = Math.min(...started.map((t) => new Date(t.execution.startedAt!).getTime()));
   const latest = Math.max(
     ...started.map((t) => {
-      const end = t.completedAt ? new Date(t.completedAt).getTime() : now;
+      const end = t.execution.completedAt ? new Date(t.execution.completedAt).getTime() : now;
       return end;
     }),
   );
   const span = latest - earliest || 1;
 
   return tasks.map((t) => {
-    if (!t.startedAt) {
+    if (!t.execution.startedAt) {
       return { taskId: t.id, offsetPercent: 0, widthPercent: 0, durationMs: 0 };
     }
-    const start = new Date(t.startedAt).getTime();
-    const end = t.completedAt ? new Date(t.completedAt).getTime() : now;
+    const start = new Date(t.execution.startedAt).getTime();
+    const end = t.execution.completedAt ? new Date(t.execution.completedAt).getTime() : now;
     const duration = end - start;
     return {
       taskId: t.id,
@@ -132,11 +132,11 @@ export function TimelineView({ tasks, onTaskClick, selectedTaskId }: TimelineVie
           const bar = barMap.get(task.id)!;
           const colors = getStatusInlineColors(task.status);
           const isSelected = selectedTaskId === task.id;
-          const elapsed = task.startedAt
+          const elapsed = task.execution.startedAt
             ? formatElapsed(
-                task.completedAt
-                  ? new Date(task.completedAt).getTime() - new Date(task.startedAt).getTime()
-                  : now - new Date(task.startedAt).getTime(),
+                task.execution.completedAt
+                  ? new Date(task.execution.completedAt).getTime() - new Date(task.execution.startedAt).getTime()
+                  : now - new Date(task.execution.startedAt).getTime(),
               )
             : null;
 

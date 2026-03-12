@@ -207,9 +207,9 @@ export class TaskExecutor {
         config: { familiarType: familiar.type },
         execution: {
           workspacePath: handle.workspacePath ?? this.cwd,
-          claudeSessionId: handle.claudeSessionId ?? null,
-          containerId: handle.containerId ?? null,
-          branch: handle.branch ?? null,
+          claudeSessionId: handle.claudeSessionId ?? undefined,
+          containerId: handle.containerId ?? undefined,
+          branch: handle.branch ?? undefined,
         },
       };
       this.persistence.updateTask(task.id, changes);

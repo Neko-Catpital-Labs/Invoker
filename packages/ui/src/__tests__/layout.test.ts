@@ -16,6 +16,8 @@ function makeTask(
     status: 'pending',
     dependencies: deps,
     createdAt: new Date('2025-01-01'),
+    config: {},
+    execution: {},
   };
 }
 

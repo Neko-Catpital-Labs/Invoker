@@ -70,7 +70,7 @@ describe('Flow 1: rebase-and-retry', () => {
     h.completeTask('C');
 
     // Merge gate should have auto-started
-    const mergeId = h.getAllTasks().find(t => t.isMergeNode)!.id;
+    const mergeId = h.getAllTasks().find(t => t.config.isMergeNode)!.id;
     const mergeTask = h.getTask(mergeId)!;
     expect(mergeTask.status).toBe('running');
 
@@ -82,7 +82,7 @@ describe('Flow 1: rebase-and-retry', () => {
 
     // Rebase succeeds (mock git rebase returns clean)
     const result = await h.executor.rebaseTaskBranches(
-      mergeTask.workflowId!,
+      mergeTask.config.workflowId!,
       'master',
     );
     expect(result.success).toBe(true);
@@ -108,13 +108,13 @@ describe('Flow 1: rebase-and-retry', () => {
 
     h.completeTask('A');
     h.completeTask('B');
-    h.persistence.updateTask('A', { branch: 'experiment/task-a-abc12345' } as any);
-    h.persistence.updateTask('B', { branch: 'experiment/task-b-def67890' } as any);
+    h.persistence.updateTask('A', { execution: { branch: 'experiment/task-a-abc12345' } });
+    h.persistence.updateTask('B', { execution: { branch: 'experiment/task-b-def67890' } });
     (h.orchestrator as any).refreshFromDb();
 
     h.completeTask('C');
 
-    const mergeId = h.getAllTasks().find(t => t.isMergeNode)!.id;
+    const mergeId = h.getAllTasks().find(t => t.config.isMergeNode)!.id;
     const mergeTask = h.getTask(mergeId)!;
 
     // Merge fails
@@ -128,17 +128,17 @@ describe('Flow 1: rebase-and-retry', () => {
       new Error('CONFLICT in file.txt'),
     );
     const result = await h.executor.rebaseTaskBranches(
-      mergeTask.workflowId!,
+      mergeTask.config.workflowId!,
       'master',
     );
     expect(result.success).toBe(false);
     expect(result.errors.length).toBeGreaterThan(0);
 
     // Reset entire DAG
-    const workflowStarted = h.orchestrator.restartWorkflow(mergeTask.workflowId!);
+    const workflowStarted = h.orchestrator.restartWorkflow(mergeTask.config.workflowId!);
 
     // All non-merge tasks should be pending or running (re-started)
-    const nonMergeTasks = h.getAllTasks().filter(t => !t.isMergeNode);
+    const nonMergeTasks = h.getAllTasks().filter(t => !t.config.isMergeNode);
     for (const t of nonMergeTasks) {
       expect(['pending', 'running']).toContain(t.status);
     }
@@ -154,7 +154,7 @@ describe('Flow 1: rebase-and-retry', () => {
     h.completeTask('B');
     h.completeTask('C');
 
-    const mergeId = h.getAllTasks().find(t => t.isMergeNode)!.id;
+    const mergeId = h.getAllTasks().find(t => t.config.isMergeNode)!.id;
     const mergeTask = h.getTask(mergeId)!;
 
     h.git.onMerge(new Error(
@@ -164,8 +164,8 @@ describe('Flow 1: rebase-and-retry', () => {
 
     const failed = h.getTask(mergeId)!;
     expect(failed.status).toBe('failed');
-    expect(failed.error).toContain('CONFLICT');
-    expect(failed.error).toContain('App.tsx');
+    expect(failed.execution.error).toContain('CONFLICT');
+    expect(failed.execution.error).toContain('App.tsx');
   });
 
   it('failed merge cleans up: abort + checkout original branch', async () => {
@@ -174,7 +174,7 @@ describe('Flow 1: rebase-and-retry', () => {
     h.completeTask('B');
     h.completeTask('C');
 
-    const mergeId = h.getAllTasks().find(t => t.isMergeNode)!.id;
+    const mergeId = h.getAllTasks().find(t => t.config.isMergeNode)!.id;
     const mergeTask = h.getTask(mergeId)!;
 
     h.git.onMerge(new Error('CONFLICT'));
@@ -205,7 +205,7 @@ describe('Flow 1b: rebase-and-retry from any node', () => {
     h.completeTask('B');
     h.completeTask('C');
 
-    const mergeId = h.getAllTasks().find(t => t.isMergeNode)!.id;
+    const mergeId = h.getAllTasks().find(t => t.config.isMergeNode)!.id;
     const mergeTask = h.getTask(mergeId)!;
 
     // Merge fails
@@ -216,14 +216,14 @@ describe('Flow 1b: rebase-and-retry from any node', () => {
     // Trigger rebase from leaf task A (not the merge gate)
     const leafTask = h.getTask('A')!;
     const result = await h.executor.rebaseTaskBranches(
-      leafTask.workflowId!,
+      leafTask.config.workflowId!,
       'master',
     );
     expect(result.success).toBe(true);
 
     // Find merge gate from workflow (same logic as the updated IPC handler)
     const foundMerge = h.getAllTasks().find(
-      t => t.workflowId === leafTask.workflowId && t.isMergeNode,
+      t => t.config.workflowId === leafTask.config.workflowId && t.config.isMergeNode,
     );
     expect(foundMerge).toBeDefined();
 
@@ -243,13 +243,13 @@ describe('Flow 1b: rebase-and-retry from any node', () => {
 
     h.completeTask('A');
     h.completeTask('B');
-    h.persistence.updateTask('A', { branch: 'experiment/task-a-abc12345' } as any);
-    h.persistence.updateTask('B', { branch: 'experiment/task-b-def67890' } as any);
+    h.persistence.updateTask('A', { execution: { branch: 'experiment/task-a-abc12345' } });
+    h.persistence.updateTask('B', { execution: { branch: 'experiment/task-b-def67890' } });
     (h.orchestrator as any).refreshFromDb();
 
     h.completeTask('C');
 
-    const mergeId = h.getAllTasks().find(t => t.isMergeNode)!.id;
+    const mergeId = h.getAllTasks().find(t => t.config.isMergeNode)!.id;
     const mergeTask = h.getTask(mergeId)!;
 
     // Merge fails
@@ -264,16 +264,16 @@ describe('Flow 1b: rebase-and-retry from any node', () => {
       new Error('CONFLICT in file.txt'),
     );
     const result = await h.executor.rebaseTaskBranches(
-      leafTask.workflowId!,
+      leafTask.config.workflowId!,
       'master',
     );
     expect(result.success).toBe(false);
 
     // Conflict: reset entire DAG
-    const workflowStarted = h.orchestrator.restartWorkflow(leafTask.workflowId!);
+    const workflowStarted = h.orchestrator.restartWorkflow(leafTask.config.workflowId!);
 
     // All non-merge tasks should be pending or running
-    const nonMergeTasks = h.getAllTasks().filter(t => !t.isMergeNode);
+    const nonMergeTasks = h.getAllTasks().filter(t => !t.config.isMergeNode);
     for (const t of nonMergeTasks) {
       expect(['pending', 'running']).toContain(t.status);
     }
@@ -400,7 +400,7 @@ describe('Flow 4: edit/fork mutations', () => {
     // A should be restarted
     const a = h.getTask('A')!;
     expect(a.status === 'pending' || a.status === 'running').toBe(true);
-    expect(a.command).toBe('echo new-a');
+    expect(a.config.command).toBe('echo new-a');
 
     // B should be stale, B-v2 should exist
     expect(h.getTask('B')!.status).toBe('stale');
@@ -424,7 +424,7 @@ describe('Flow 4: edit/fork mutations', () => {
 
     // A restarted
     const a = h.getTask('A')!;
-    expect(a.familiarType).toBe('worktree');
+    expect(a.config.familiarType).toBe('worktree');
     expect(a.status === 'pending' || a.status === 'running').toBe(true);
 
     // B should still be the original (not forked), no B-v2 created
@@ -561,8 +561,8 @@ describe('Flow 6b: set-merge-branch', () => {
 
   it('updateWorkflow stores baseBranch and it persists via loadWorkflow', () => {
     h.loadAndStart(PARALLEL_PLAN);
-    const mergeId = h.getAllTasks().find(t => t.isMergeNode)!.id;
-    const wfId = h.getTask(mergeId)!.workflowId!;
+    const mergeId = h.getAllTasks().find(t => t.config.isMergeNode)!.id;
+    const wfId = h.getTask(mergeId)!.config.workflowId!;
 
     h.persistence.updateWorkflow(wfId, { baseBranch: 'develop' });
     const wf = h.persistence.loadWorkflow(wfId);
@@ -584,8 +584,8 @@ describe('Flow 6b: set-merge-branch', () => {
     h.completeTask('B');
     h.completeTask('C');
 
-    const mergeId = h.getAllTasks().find(t => t.isMergeNode)!.id;
-    const wfId = h.getTask(mergeId)!.workflowId!;
+    const mergeId = h.getAllTasks().find(t => t.config.isMergeNode)!.id;
+    const wfId = h.getTask(mergeId)!.config.workflowId!;
 
     // Execute merge gate (succeeds initially)
     const mergeTask = h.getTask(mergeId)!;
@@ -639,27 +639,25 @@ describe('Flow 6: content-addressable branch names', () => {
 
     // Simulate branch + workspacePath being set (as WorktreeFamiliar would do)
     h.persistence.updateTask('A', {
-      branch: 'experiment/A-abc12345',
-      workspacePath: '/tmp/worktrees/exec-A',
-    } as any);
+      execution: { branch: 'experiment/A-abc12345', workspacePath: '/tmp/worktrees/exec-A' },
+    });
     h.persistence.updateTask('B', {
-      branch: 'experiment/B-def67890',
-      workspacePath: '/tmp/worktrees/exec-B',
-    } as any);
+      execution: { branch: 'experiment/B-def67890', workspacePath: '/tmp/worktrees/exec-B' },
+    });
     (h.orchestrator as any).refreshFromDb();
 
-    expect(h.getTask('A')!.branch).toBe('experiment/A-abc12345');
-    expect(h.getTask('B')!.branch).toBe('experiment/B-def67890');
+    expect(h.getTask('A')!.execution.branch).toBe('experiment/A-abc12345');
+    expect(h.getTask('B')!.execution.branch).toBe('experiment/B-def67890');
 
-    const mergeId = h.getAllTasks().find(t => t.isMergeNode)!.id;
+    const mergeId = h.getAllTasks().find(t => t.config.isMergeNode)!.id;
     const mergeTask = h.getTask(mergeId)!;
 
-    h.orchestrator.restartWorkflow(mergeTask.workflowId!);
+    h.orchestrator.restartWorkflow(mergeTask.config.workflowId!);
 
     // branch and workspacePath should be cleared on all tasks
-    for (const t of h.getAllTasks().filter(t => !t.isMergeNode)) {
-      expect(t.branch).toBeUndefined();
-      expect(t.workspacePath).toBeUndefined();
+    for (const t of h.getAllTasks().filter(t => !t.config.isMergeNode)) {
+      expect(t.execution?.branch).toBeUndefined();
+      expect(t.execution?.workspacePath).toBeUndefined();
     }
   });
 
@@ -668,21 +666,20 @@ describe('Flow 6: content-addressable branch names', () => {
 
     h.completeTask('A');
     h.persistence.updateTask('A', {
-      branch: 'experiment/A-oldHash1',
-      workspacePath: '/tmp/worktrees/exec-A-old',
-    } as any);
+      execution: { branch: 'experiment/A-oldHash1', workspacePath: '/tmp/worktrees/exec-A-old' },
+    });
     (h.orchestrator as any).refreshFromDb();
 
-    const mergeId = h.getAllTasks().find(t => t.isMergeNode)!.id;
+    const mergeId = h.getAllTasks().find(t => t.config.isMergeNode)!.id;
     const mergeTask = h.getTask(mergeId)!;
 
-    h.orchestrator.restartWorkflow(mergeTask.workflowId!);
+    h.orchestrator.restartWorkflow(mergeTask.config.workflowId!);
 
     // After restart, A should be running with no branch (WorktreeFamiliar will assign a new one)
     const a = h.getTask('A')!;
     expect(a.status === 'pending' || a.status === 'running').toBe(true);
-    expect(a.branch).toBeUndefined();
-    expect(a.workspacePath).toBeUndefined();
+    expect(a.execution?.branch).toBeUndefined();
+    expect(a.execution?.workspacePath).toBeUndefined();
   });
 
   it('rebase-and-retry full flow: conflict resets DAG, clears stale branches', async () => {
@@ -690,13 +687,13 @@ describe('Flow 6: content-addressable branch names', () => {
 
     h.completeTask('A');
     h.completeTask('B');
-    h.persistence.updateTask('A', { branch: 'experiment/A-oldHash1' } as any);
-    h.persistence.updateTask('B', { branch: 'experiment/B-oldHash2' } as any);
+    h.persistence.updateTask('A', { execution: { branch: 'experiment/A-oldHash1' } });
+    h.persistence.updateTask('B', { execution: { branch: 'experiment/B-oldHash2' } });
     (h.orchestrator as any).refreshFromDb();
 
     h.completeTask('C');
 
-    const mergeId = h.getAllTasks().find(t => t.isMergeNode)!.id;
+    const mergeId = h.getAllTasks().find(t => t.config.isMergeNode)!.id;
     const mergeTask = h.getTask(mergeId)!;
 
     // Merge fails
@@ -710,18 +707,18 @@ describe('Flow 6: content-addressable branch names', () => {
       new Error('CONFLICT in file.txt'),
     );
     const result = await h.executor.rebaseTaskBranches(
-      mergeTask.workflowId!,
+      mergeTask.config.workflowId!,
       'master',
     );
     expect(result.success).toBe(false);
 
     // Reset entire DAG
-    h.orchestrator.restartWorkflow(mergeTask.workflowId!);
+    h.orchestrator.restartWorkflow(mergeTask.config.workflowId!);
 
     // All tasks should have their branch cleared
-    for (const t of h.getAllTasks().filter(t => !t.isMergeNode)) {
-      expect(t.branch).toBeUndefined();
-      expect(t.workspacePath).toBeUndefined();
+    for (const t of h.getAllTasks().filter(t => !t.config.isMergeNode)) {
+      expect(t.execution?.branch).toBeUndefined();
+      expect(t.execution?.workspacePath).toBeUndefined();
     }
 
     // Root tasks should be re-started and ready for WorktreeFamiliar
@@ -836,13 +833,12 @@ describe('Flow 8: restart workflow with generation salt', () => {
 
     // Simulate branches being set
     h.persistence.updateTask('A', {
-      branch: 'experiment/A-gen0hash',
-      workspacePath: '/tmp/worktrees/exec-A',
-    } as any);
+      execution: { branch: 'experiment/A-gen0hash', workspacePath: '/tmp/worktrees/exec-A' },
+    });
     (h.orchestrator as any).refreshFromDb();
 
-    const mergeId = h.getAllTasks().find(t => t.isMergeNode)!.id;
-    const wfId = h.getTask(mergeId)!.workflowId!;
+    const mergeId = h.getAllTasks().find(t => t.config.isMergeNode)!.id;
+    const wfId = h.getTask(mergeId)!.config.workflowId!;
 
     // Generation starts at 0
     const wf0 = h.persistence.loadWorkflow(wfId);
@@ -856,9 +852,9 @@ describe('Flow 8: restart workflow with generation salt', () => {
     // Restart workflow clears all branches
     h.orchestrator.restartWorkflow(wfId);
 
-    for (const t of h.getAllTasks().filter(t => !t.isMergeNode)) {
-      expect(t.branch).toBeUndefined();
-      expect(t.workspacePath).toBeUndefined();
+    for (const t of h.getAllTasks().filter(t => !t.config.isMergeNode)) {
+      expect(t.execution?.branch).toBeUndefined();
+      expect(t.execution?.workspacePath).toBeUndefined();
     }
 
     // Root tasks re-started
@@ -875,25 +871,23 @@ describe('Flow 8: restart workflow with generation salt', () => {
 
     // Simulate branches being set
     h.persistence.updateTask('A', {
-      branch: 'experiment/A-oldHash',
-      workspacePath: '/tmp/worktrees/exec-A',
-    } as any);
+      execution: { branch: 'experiment/A-oldHash', workspacePath: '/tmp/worktrees/exec-A' },
+    });
     h.persistence.updateTask('B', {
-      branch: 'experiment/B-oldHash',
-      workspacePath: '/tmp/worktrees/exec-B',
-    } as any);
+      execution: { branch: 'experiment/B-oldHash', workspacePath: '/tmp/worktrees/exec-B' },
+    });
     (h.orchestrator as any).refreshFromDb();
 
-    const mergeId = h.getAllTasks().find(t => t.isMergeNode)!.id;
-    const wfId = h.getTask(mergeId)!.workflowId!;
+    const mergeId = h.getAllTasks().find(t => t.config.isMergeNode)!.id;
+    const wfId = h.getTask(mergeId)!.config.workflowId!;
 
     // Bump generation and restart
     h.persistence.updateWorkflow(wfId, { generation: 2 });
     h.orchestrator.restartWorkflow(wfId);
 
-    for (const t of h.getAllTasks().filter(t => !t.isMergeNode)) {
-      expect(t.branch).toBeUndefined();
-      expect(t.workspacePath).toBeUndefined();
+    for (const t of h.getAllTasks().filter(t => !t.config.isMergeNode)) {
+      expect(t.execution?.branch).toBeUndefined();
+      expect(t.execution?.workspacePath).toBeUndefined();
     }
 
     // Root tasks should be re-started
@@ -904,8 +898,8 @@ describe('Flow 8: restart workflow with generation salt', () => {
   it('generation persists through save/load cycle', () => {
     h.loadAndStart(LINEAR_PLAN);
 
-    const mergeId = h.getAllTasks().find(t => t.isMergeNode)!.id;
-    const wfId = h.getTask(mergeId)!.workflowId!;
+    const mergeId = h.getAllTasks().find(t => t.config.isMergeNode)!.id;
+    const wfId = h.getTask(mergeId)!.config.workflowId!;
 
     // Initially generation is 0
     const wf0 = h.persistence.loadWorkflow(wfId);
@@ -946,7 +940,7 @@ describe('Flow 9: manual merge mode', () => {
     h.completeTask('A');
     h.completeTask('B');
 
-    const mergeId = h.getAllTasks().find(t => t.isMergeNode)!.id;
+    const mergeId = h.getAllTasks().find(t => t.config.isMergeNode)!.id;
     const mergeTask = h.getTask(mergeId)!;
     expect(mergeTask.status).toBe('running');
 
@@ -974,7 +968,7 @@ describe('Flow 9: manual merge mode', () => {
     h.completeTask('A');
     h.completeTask('B');
 
-    const mergeId = h.getAllTasks().find(t => t.isMergeNode)!.id;
+    const mergeId = h.getAllTasks().find(t => t.config.isMergeNode)!.id;
     const mergeTask = h.getTask(mergeId)!;
 
     await h.executor.executeTasks([mergeTask]);
@@ -984,7 +978,7 @@ describe('Flow 9: manual merge mode', () => {
     h.git.reset();
 
     // Approve the merge (git side)
-    const wfId = mergeTask.workflowId!;
+    const wfId = mergeTask.config.workflowId!;
     await h.executor.approveMerge(wfId);
 
     // Approve in orchestrator (state transition)
@@ -1013,7 +1007,7 @@ describe('Flow 9: manual merge mode', () => {
     h.completeTask('A');
     h.completeTask('B');
 
-    const mergeId = h.getAllTasks().find(t => t.isMergeNode)!.id;
+    const mergeId = h.getAllTasks().find(t => t.config.isMergeNode)!.id;
     const mergeTask = h.getTask(mergeId)!;
 
     await h.executor.executeTasks([mergeTask]);
@@ -1078,9 +1072,8 @@ describe('Flow 10: multi-experiment selection', () => {
     for (const id of expIds) {
       h.completeTask(id);
       h.persistence.updateTask(id, {
-        branch: `experiment/${id}-hash`,
-        commit: `commit-${id}`,
-      } as any);
+        execution: { branch: `experiment/${id}-hash`, commit: `commit-${id}` },
+      });
     }
     (h.orchestrator as any).refreshFromDb();
 
@@ -1101,8 +1094,8 @@ describe('Flow 10: multi-experiment selection', () => {
     // Reconciliation completed
     const reconAfter = h.getTask(reconTask!.id)!;
     expect(reconAfter.status).toBe('completed');
-    expect(reconAfter.selectedExperiments).toEqual(selectedIds);
-    expect(reconAfter.branch).toBe('reconciliation/combined');
+    expect(reconAfter.execution.selectedExperiments).toEqual(selectedIds);
+    expect(reconAfter.execution.branch).toBe('reconciliation/combined');
 
     // Downstream should have been unblocked
     const downstreamV2 = h.getAllTasks().find(t => t.id.startsWith('B-v'));
@@ -1136,9 +1129,8 @@ describe('Flow 10: multi-experiment selection', () => {
     for (const id of expIds) {
       h.completeTask(id);
       h.persistence.updateTask(id, {
-        branch: `experiment/${id}-hash`,
-        commit: `commit-${id}`,
-      } as any);
+        execution: { branch: `experiment/${id}-hash`, commit: `commit-${id}` },
+      });
     }
     (h.orchestrator as any).refreshFromDb();
 

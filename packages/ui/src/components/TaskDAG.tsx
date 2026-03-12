@@ -85,7 +85,7 @@ function TaskDAGInner({ tasks, workflows, onTaskClick, onTaskDoubleClick, onTask
 
       for (const task of wfTasks) {
         const pos = positions.get(task.id) ?? { x: 0, y: 0 };
-        if (task.isMergeNode) {
+        if (task.config.isMergeNode) {
           gateStatuses.set(task.id, task.status);
           allNodes.push({
             id: task.id,
@@ -152,8 +152,8 @@ function TaskDAGInner({ tasks, workflows, onTaskClick, onTaskDoubleClick, onTask
       const targetStatus = targetTask?.status ?? gateStatuses.get(e.target) ?? 'pending';
       const edgeStyle = getEdgeStyle(sourceStatus, targetStatus);
 
-      const srcIsMerge = tasks.get(e.source)?.isMergeNode || isMergeGateId(e.source);
-      const tgtIsMerge = tasks.get(e.target)?.isMergeNode || isMergeGateId(e.target);
+      const srcIsMerge = tasks.get(e.source)?.config.isMergeNode || isMergeGateId(e.source);
+      const tgtIsMerge = tasks.get(e.target)?.config.isMergeNode || isMergeGateId(e.target);
       const srcLabel = srcIsMerge ? 'Merge' : e.source;
       const tgtLabel = tgtIsMerge ? 'Merge' : e.target;
       const truncSrc = srcLabel.length > 12 ? srcLabel.slice(0, 12) + '..' : srcLabel;

@@ -15,6 +15,7 @@ import {
   type OrchestratorPersistence,
   type OrchestratorMessageBus,
 } from '@invoker/core';
+import type { TaskStateChanges } from '@invoker/graph';
 import type { WorkResponse } from '@invoker/protocol';
 
 // ── Lightweight in-memory mocks ─────────────────────────────
@@ -34,7 +35,7 @@ class InMemoryPersistence implements OrchestratorPersistence {
   saveTask(workflowId: string, task: TaskState): void {
     this.tasks.set(task.id, { workflowId, task });
   }
-  updateTask(taskId: string, changes: Partial<TaskState>): void {
+  updateTask(taskId: string, changes: TaskStateChanges): void {
     const entry = this.tasks.get(taskId);
     if (entry) entry.task = { ...entry.task, ...changes } as TaskState;
   }
@@ -121,8 +122,8 @@ describe('orphan reconciliation on resume', () => {
     expect(restarted[0].id).toBe('t1');
     expect(orchestrator2.getTask('t1')?.status).toBe('running');
     // Error and previous state should be cleared
-    expect(orchestrator2.getTask('t1')?.error).toBeUndefined();
-    expect(orchestrator2.getTask('t1')?.exitCode).toBeUndefined();
+    expect(orchestrator2.getTask('t1')?.execution?.error).toBeUndefined();
+    expect(orchestrator2.getTask('t1')?.execution?.exitCode).toBeUndefined();
   });
 
   it('pending and completed tasks are not affected by reconciliation', () => {

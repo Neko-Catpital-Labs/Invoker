@@ -44,13 +44,13 @@ function HeartbeatTimingSection({ task, formatDate: fmtDate }: { task: TaskState
   const [, setTick] = useState(0);
 
   useEffect(() => {
-    if (task.status !== 'running' || !task.lastHeartbeatAt) return;
+    if (task.status !== 'running' || !task.execution.lastHeartbeatAt) return;
     const timer = setInterval(() => setTick(t => t + 1), 5_000);
     return () => clearInterval(timer);
-  }, [task.status, task.lastHeartbeatAt]);
+  }, [task.status, task.execution.lastHeartbeatAt]);
 
-  const heartbeatAge = task.lastHeartbeatAt
-    ? Date.now() - (task.lastHeartbeatAt instanceof Date ? task.lastHeartbeatAt : new Date(task.lastHeartbeatAt as unknown as string)).getTime()
+  const heartbeatAge = task.execution.lastHeartbeatAt
+    ? Date.now() - (task.execution.lastHeartbeatAt instanceof Date ? task.execution.lastHeartbeatAt : new Date(task.execution.lastHeartbeatAt as unknown as string)).getTime()
     : null;
   const isHeartbeatStale = heartbeatAge !== null && heartbeatAge > 60_000;
 
@@ -60,23 +60,23 @@ function HeartbeatTimingSection({ task, formatDate: fmtDate }: { task: TaskState
         <span className="text-gray-400">Created</span>
         <span className="text-gray-200">{fmtDate(task.createdAt)}</span>
       </div>
-      {task.startedAt && (
+      {task.execution.startedAt && (
         <div className="flex justify-between">
           <span className="text-gray-400">Started</span>
-          <span className="text-gray-200">{fmtDate(task.startedAt)}</span>
+          <span className="text-gray-200">{fmtDate(task.execution.startedAt)}</span>
         </div>
       )}
-      {task.completedAt && (
+      {task.execution.completedAt && (
         <div className="flex justify-between">
           <span className="text-gray-400">Completed</span>
-          <span className="text-gray-200">{fmtDate(task.completedAt)}</span>
+          <span className="text-gray-200">{fmtDate(task.execution.completedAt)}</span>
         </div>
       )}
-      {task.status === 'running' && task.lastHeartbeatAt && (
+      {task.status === 'running' && task.execution.lastHeartbeatAt && (
         <div className="flex justify-between">
           <span className="text-gray-400">Last heartbeat</span>
           <span className={isHeartbeatStale ? 'text-red-400 font-medium' : 'text-gray-200'}>
-            {formatElapsed(task.lastHeartbeatAt)}
+            {formatElapsed(task.execution.lastHeartbeatAt)}
           </span>
         </div>
       )}
@@ -101,7 +101,7 @@ export function TaskPanel({
 
   useEffect(() => {
     setIsEditingCommand(false);
-    setEditCommandValue(task?.command ?? '');
+    setEditCommandValue(task?.config.command ?? '');
     setBranchValue(baseBranch ?? '');
   }, [task?.id, baseBranch]);
 
@@ -113,17 +113,17 @@ export function TaskPanel({
     );
   }
 
-  const canEditCommand = task.command !== undefined && task.status !== 'running' && onEditCommand;
+  const canEditCommand = task.config.command !== undefined && task.status !== 'running' && onEditCommand;
 
   const handleSaveCommand = () => {
-    if (onEditCommand && editCommandValue !== task.command) {
+    if (onEditCommand && editCommandValue !== task.config.command) {
       onEditCommand(task.id, editCommandValue);
     }
     setIsEditingCommand(false);
   };
 
   const handleCancelEdit = () => {
-    setEditCommandValue(task.command ?? '');
+    setEditCommandValue(task.config.command ?? '');
     setIsEditingCommand(false);
   };
 
@@ -154,7 +154,7 @@ export function TaskPanel({
       </div>
 
       {/* Target branch (merge gates only) */}
-      {task.isMergeNode && onSetMergeBranch && task.workflowId && (
+      {task.config.isMergeNode && onSetMergeBranch && task.config.workflowId && (
         <div className="flex items-center justify-between">
           <span className="text-sm text-gray-400">Target Branch</span>
           <input
@@ -164,7 +164,7 @@ export function TaskPanel({
             onBlur={() => {
               const trimmed = branchValue.trim();
               if (trimmed && trimmed !== baseBranch) {
-                onSetMergeBranch(task.workflowId!, trimmed);
+                onSetMergeBranch(task.config.workflowId!, trimmed);
               }
             }}
             onKeyDown={(e) => {
@@ -185,7 +185,7 @@ export function TaskPanel({
         <div className="flex items-center justify-between">
           <span className="text-sm text-gray-400">Executor</span>
           <select
-            value={task.familiarType ?? 'local'}
+            value={task.config.familiarType ?? 'local'}
             onChange={(e) => onEditType(task.id, e.target.value)}
             disabled={task.status === 'running'}
             className="bg-gray-700 text-gray-200 text-xs rounded px-2 py-1 border border-gray-600 focus:outline-none focus:border-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
@@ -199,19 +199,19 @@ export function TaskPanel({
       )}
 
       {/* Task type + content */}
-      {(task.prompt || task.command) && (
+      {(task.config.prompt || task.config.command) && (
         <div>
           <div className="flex items-center justify-between">
             <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
-              task.prompt
+              task.config.prompt
                 ? 'bg-blue-900/40 text-blue-300'
                 : 'bg-gray-700 text-gray-300'
             }`}>
-              {task.prompt ? 'Claude Task' : 'Command'}
+              {task.config.prompt ? 'Claude Task' : 'Command'}
             </span>
           </div>
 
-          {isEditingCommand && task.command !== undefined ? (
+          {isEditingCommand && task.config.command !== undefined ? (
             <div className="mt-2 space-y-2">
               <textarea
                 value={editCommandValue}
@@ -240,7 +240,7 @@ export function TaskPanel({
           ) : (
             <div
               className={`mt-2 rounded p-3 text-xs select-text ${
-                task.prompt
+                task.config.prompt
                   ? 'bg-blue-900/20 border border-blue-800 cursor-text'
                   : canEditCommand
                     ? 'bg-gray-800 border border-gray-700 cursor-pointer hover:border-gray-600 transition-colors'
@@ -248,16 +248,16 @@ export function TaskPanel({
               }`}
               onDoubleClick={() => {
                 if (canEditCommand) {
-                  setEditCommandValue(task.command ?? '');
+                  setEditCommandValue(task.config.command ?? '');
                   setIsEditingCommand(true);
                 }
               }}
               data-testid="command-display"
             >
-              {task.prompt ? (
-                <p className="text-gray-300 whitespace-pre-wrap">{task.prompt}</p>
+              {task.config.prompt ? (
+                <p className="text-gray-300 whitespace-pre-wrap">{task.config.prompt}</p>
               ) : (
-                <code className="text-green-300 font-mono whitespace-pre-wrap">{task.command}</code>
+                <code className="text-green-300 font-mono whitespace-pre-wrap">{task.config.command}</code>
               )}
             </div>
           )}
@@ -285,48 +285,48 @@ export function TaskPanel({
       )}
 
       {/* Error / Exit Code */}
-      {(task.error || (task.exitCode !== undefined && task.exitCode !== 0)) && (
+      {(task.execution.error || (task.execution.exitCode !== undefined && task.execution.exitCode !== 0)) && (
         <div className="bg-red-900/30 border border-red-700 rounded p-3">
           <h3 className="text-sm font-medium text-red-400 mb-1">Error</h3>
-          {task.error && (
-            <p className="text-xs text-red-300 whitespace-pre-wrap">{task.error}</p>
+          {task.execution.error && (
+            <p className="text-xs text-red-300 whitespace-pre-wrap">{task.execution.error}</p>
           )}
-          {task.exitCode !== undefined && (
-            <p className="text-xs text-red-400 mt-1">Exit code: {task.exitCode}</p>
+          {task.execution.exitCode !== undefined && (
+            <p className="text-xs text-red-400 mt-1">Exit code: {task.execution.exitCode}</p>
           )}
         </div>
       )}
 
       {/* Input prompt */}
-      {task.inputPrompt && task.status === 'needs_input' && (
+      {task.execution.inputPrompt && task.status === 'needs_input' && (
         <div className="bg-amber-900/30 border border-amber-700 rounded p-3">
           <h3 className="text-sm font-medium text-amber-400 mb-1">Input Required</h3>
-          <p className="text-xs text-amber-300">{task.inputPrompt}</p>
+          <p className="text-xs text-amber-300">{task.execution.inputPrompt}</p>
         </div>
       )}
 
       {/* Blocked info */}
-      {task.blockedBy && (
+      {task.execution.blockedBy && (
         <div className="bg-gray-700/50 border border-gray-600 rounded p-3">
           <h3 className="text-sm font-medium text-gray-400 mb-1">Blocked By</h3>
-          <p className="text-xs text-gray-300">{task.blockedBy}</p>
+          <p className="text-xs text-gray-300">{task.execution.blockedBy}</p>
         </div>
       )}
 
       {/* Git info */}
-      {(task.branch || task.commit) && (
+      {(task.execution.branch || task.execution.commit) && (
         <div className="space-y-1 text-sm">
-          {task.branch && (
+          {task.execution.branch && (
             <div className="flex justify-between">
               <span className="text-gray-400">Branch</span>
-              <span className="text-gray-200 font-mono text-xs">{task.branch}</span>
+              <span className="text-gray-200 font-mono text-xs">{task.execution.branch}</span>
             </div>
           )}
-          {task.commit && (
+          {task.execution.commit && (
             <div className="flex justify-between">
               <span className="text-gray-400">Commit</span>
               <span className="text-gray-200 font-mono text-xs">
-                {task.commit.slice(0, 8)}
+                {task.execution.commit.slice(0, 8)}
               </span>
             </div>
           )}
@@ -334,19 +334,19 @@ export function TaskPanel({
       )}
 
       {/* Summary */}
-      {task.summary && (
+      {task.config.summary && (
         <div>
           <h3 className="text-sm font-medium text-gray-300 mb-1">Summary</h3>
-          <p className="text-xs text-gray-400 whitespace-pre-wrap">{task.summary}</p>
+          <p className="text-xs text-gray-400 whitespace-pre-wrap">{task.config.summary}</p>
         </div>
       )}
 
       {/* Experiment results */}
-      {task.experimentResults && task.experimentResults.length > 0 && (
+      {task.execution.experimentResults && task.execution.experimentResults.length > 0 && (
         <div>
           <h3 className="text-sm font-medium text-gray-300 mb-1">Experiment Results</h3>
           <div className="space-y-1">
-            {task.experimentResults.map((result) => (
+            {task.execution.experimentResults.map((result) => (
               <div
                 key={result.id}
                 className={`text-xs p-2 rounded ${
@@ -367,7 +367,7 @@ export function TaskPanel({
 
       {/* Action buttons */}
       <div className="space-y-2 pt-2">
-        {task.status === 'needs_input' && !task.isReconciliation && (
+        {task.status === 'needs_input' && !task.config.isReconciliation && (
           <button
             onClick={() => onProvideInput(task)}
             className="w-full px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white rounded text-sm font-medium transition-colors"
@@ -393,7 +393,7 @@ export function TaskPanel({
           </div>
         )}
 
-        {task.isReconciliation && task.status === 'needs_input' && (
+        {task.config.isReconciliation && task.status === 'needs_input' && (
           <button
             onClick={() => onSelectExperiment(task)}
             className="w-full px-4 py-2 bg-purple-600 hover:bg-purple-500 text-white rounded text-sm font-medium transition-colors"

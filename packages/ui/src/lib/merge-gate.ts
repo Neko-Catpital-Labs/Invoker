@@ -43,7 +43,7 @@ export function findLeafTasks(tasks: TaskState[]): TaskState[] {
 export function groupTasksByWorkflow(tasks: TaskState[]): Map<string, TaskState[]> {
   const groups = new Map<string, TaskState[]>();
   for (const task of tasks) {
-    const wfId = task.workflowId ?? 'unknown';
+    const wfId = task.config.workflowId ?? 'unknown';
     if (!groups.has(wfId)) groups.set(wfId, []);
     groups.get(wfId)!.push(task);
   }

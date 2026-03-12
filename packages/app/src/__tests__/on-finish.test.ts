@@ -15,6 +15,7 @@ import {
   type OrchestratorPersistence,
   type OrchestratorMessageBus,
 } from '@invoker/core';
+import type { TaskStateChanges } from '@invoker/graph';
 import type { WorkResponse } from '@invoker/protocol';
 
 // ── Lightweight in-memory mocks ─────────────────────────────
@@ -34,7 +35,7 @@ class InMemoryPersistence implements OrchestratorPersistence {
   saveTask(workflowId: string, task: TaskState): void {
     this.tasks.set(task.id, { workflowId, task });
   }
-  updateTask(taskId: string, changes: Partial<TaskState>): void {
+  updateTask(taskId: string, changes: TaskStateChanges): void {
     const entry = this.tasks.get(taskId);
     if (entry) entry.task = { ...entry.task, ...changes } as TaskState;
   }
@@ -160,7 +161,7 @@ describe('onFinish integration', () => {
     );
 
     // Merge node is running — not settled yet
-    const mergeNode = orchestrator.getAllTasks().find(t => t.isMergeNode);
+    const mergeNode = orchestrator.getAllTasks().find(t => t.config.isMergeNode);
     expect(mergeNode).toBeDefined();
     expect(mergeNode!.status).toBe('running');
     status = orchestrator.getWorkflowStatus();
@@ -219,7 +220,7 @@ describe('onFinish integration', () => {
     );
 
     // Complete the merge node that was auto-started after t1
-    const mergeNode = orchestrator.getAllTasks().find(t => t.isMergeNode);
+    const mergeNode = orchestrator.getAllTasks().find(t => t.config.isMergeNode);
     orchestrator.handleWorkerResponse(
       makeResponse({ actionId: mergeNode!.id, status: 'completed', outputs: { exitCode: 0 } }),
     );
@@ -256,7 +257,7 @@ describe('onFinish integration', () => {
 
     // Complete workflow A's merge node
     const mergeA = orchestrator.getAllTasks().find(t =>
-      t.isMergeNode && t.workflowId === orchestrator.getWorkflowIds()[0] && t.status === 'running',
+      t.config.isMergeNode && t.config.workflowId === orchestrator.getWorkflowIds()[0] && t.status === 'running',
     );
     orchestrator.handleWorkerResponse(
       makeResponse({ actionId: mergeA!.id, status: 'completed', outputs: { exitCode: 0 } }),

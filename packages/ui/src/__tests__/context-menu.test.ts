@@ -1,14 +1,17 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { TaskState } from '../types.js';
 
-function makeTask(overrides: Partial<TaskState> = {}): TaskState {
+function makeTask(overrides: Partial<TaskState> & { workflowId?: string; isMergeNode?: boolean } = {}): TaskState {
+  const { workflowId, isMergeNode, ...rest } = overrides;
   return {
     id: 'test',
     description: 'Test task',
     status: 'pending',
     dependencies: [],
     createdAt: new Date(),
-    ...overrides,
+    config: { workflowId, isMergeNode },
+    execution: {},
+    ...rest,
   } as TaskState;
 }
 
@@ -18,7 +21,7 @@ describe('ContextMenu visibility logic', () => {
       const task = makeTask({ id: 'regular-task', status: 'failed', workflowId: 'wf-1' });
       const onRebaseAndRetry = vi.fn();
 
-      const canRebaseAndRetry = !!task.workflowId && !!onRebaseAndRetry;
+      const canRebaseAndRetry = !!task.config.workflowId && !!onRebaseAndRetry;
       expect(canRebaseAndRetry).toBe(true);
     });
 
@@ -26,7 +29,7 @@ describe('ContextMenu visibility logic', () => {
       const task = makeTask({ id: '__merge__wf-1', status: 'failed', isMergeNode: true, workflowId: 'wf-1' });
       const onRebaseAndRetry = vi.fn();
 
-      const canRebaseAndRetry = !!task.workflowId && !!onRebaseAndRetry;
+      const canRebaseAndRetry = !!task.config.workflowId && !!onRebaseAndRetry;
       expect(canRebaseAndRetry).toBe(true);
     });
 
@@ -35,7 +38,7 @@ describe('ContextMenu visibility logic', () => {
 
       for (const status of ['pending', 'running', 'completed', 'failed'] as const) {
         const task = makeTask({ id: 'task-1', status, workflowId: 'wf-1' });
-        const canRebaseAndRetry = !!task.workflowId && !!onRebaseAndRetry;
+        const canRebaseAndRetry = !!task.config.workflowId && !!onRebaseAndRetry;
         expect(canRebaseAndRetry).toBe(true);
       }
     });
@@ -44,7 +47,7 @@ describe('ContextMenu visibility logic', () => {
       const task = makeTask({ id: 'orphan-task', status: 'failed' });
       const onRebaseAndRetry = vi.fn();
 
-      const canRebaseAndRetry = !!task.workflowId && !!onRebaseAndRetry;
+      const canRebaseAndRetry = !!task.config.workflowId && !!onRebaseAndRetry;
       expect(canRebaseAndRetry).toBe(false);
     });
 
@@ -52,7 +55,7 @@ describe('ContextMenu visibility logic', () => {
       const task = makeTask({ id: 'task-1', status: 'failed', workflowId: 'wf-1' });
       const onRebaseAndRetry = undefined;
 
-      const canRebaseAndRetry = !!task.workflowId && !!onRebaseAndRetry;
+      const canRebaseAndRetry = !!task.config.workflowId && !!onRebaseAndRetry;
       expect(canRebaseAndRetry).toBe(false);
     });
   });
@@ -96,7 +99,7 @@ describe('ContextMenu visibility logic', () => {
       const task = makeTask({ id: 'regular-task', workflowId: 'wf-1' });
       const onRestartWorkflow = vi.fn();
 
-      const canRestartWorkflow = !!task.workflowId && !!onRestartWorkflow;
+      const canRestartWorkflow = !!task.config.workflowId && !!onRestartWorkflow;
       expect(canRestartWorkflow).toBe(true);
     });
 
@@ -104,7 +107,7 @@ describe('ContextMenu visibility logic', () => {
       const task = makeTask({ id: '__merge__wf-1', isMergeNode: true, workflowId: 'wf-1' });
       const onRestartWorkflow = vi.fn();
 
-      const canRestartWorkflow = !!task.workflowId && !!onRestartWorkflow;
+      const canRestartWorkflow = !!task.config.workflowId && !!onRestartWorkflow;
       expect(canRestartWorkflow).toBe(true);
     });
 
@@ -112,7 +115,7 @@ describe('ContextMenu visibility logic', () => {
       const task = makeTask({ id: 'orphan-task' });
       const onRestartWorkflow = vi.fn();
 
-      const canRestartWorkflow = !!task.workflowId && !!onRestartWorkflow;
+      const canRestartWorkflow = !!task.config.workflowId && !!onRestartWorkflow;
       expect(canRestartWorkflow).toBe(false);
     });
 
@@ -120,7 +123,7 @@ describe('ContextMenu visibility logic', () => {
       const task = makeTask({ id: 'task-1', workflowId: 'wf-1' });
       const onRestartWorkflow = undefined;
 
-      const canRestartWorkflow = !!task.workflowId && !!onRestartWorkflow;
+      const canRestartWorkflow = !!task.config.workflowId && !!onRestartWorkflow;
       expect(canRestartWorkflow).toBe(false);
     });
 
@@ -129,7 +132,7 @@ describe('ContextMenu visibility logic', () => {
 
       for (const status of ['pending', 'running', 'completed', 'failed'] as const) {
         const task = makeTask({ id: 'task-1', status, workflowId: 'wf-1' });
-        const canRestartWorkflow = !!task.workflowId && !!onRestartWorkflow;
+        const canRestartWorkflow = !!task.config.workflowId && !!onRestartWorkflow;
         expect(canRestartWorkflow).toBe(true);
       }
     });

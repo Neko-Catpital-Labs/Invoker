@@ -52,11 +52,11 @@ export function ApprovalModal({
           <p className="text-sm text-gray-400">{task.description}</p>
         </div>
 
-        {task.summary && (
+        {task.config.summary && (
           <div className="mb-4 bg-gray-700/50 rounded p-3">
             <h3 className="text-sm font-medium text-gray-300 mb-1">Summary</h3>
             <p className="text-xs text-gray-400 whitespace-pre-wrap">
-              {task.summary}
+              {task.config.summary}
             </p>
           </div>
         )}

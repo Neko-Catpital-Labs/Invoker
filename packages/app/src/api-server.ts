@@ -64,13 +64,17 @@ function parseRoute(url: string): { path: string; query: Record<string, string> 
 
 function serializeTask(task: any): any {
   const obj: any = { ...task };
-  for (const key of ['createdAt', 'startedAt', 'completedAt', 'lastHeartbeatAt']) {
-    if (obj[key] instanceof Date) obj[key] = obj[key].toISOString();
+  if (obj.createdAt instanceof Date) obj.createdAt = obj.createdAt.toISOString();
+  if (obj.execution) {
+    obj.execution = { ...obj.execution };
+    for (const key of ['startedAt', 'completedAt', 'lastHeartbeatAt']) {
+      if (obj.execution[key] instanceof Date) obj.execution[key] = obj.execution[key].toISOString();
+    }
   }
-  if (task.lastHeartbeatAt) {
-    const hb = task.lastHeartbeatAt instanceof Date
-      ? task.lastHeartbeatAt
-      : new Date(task.lastHeartbeatAt);
+  if (task.execution?.lastHeartbeatAt) {
+    const hb = task.execution.lastHeartbeatAt instanceof Date
+      ? task.execution.lastHeartbeatAt
+      : new Date(task.execution.lastHeartbeatAt);
     obj.secondsSinceHeartbeat = Math.round((Date.now() - hb.getTime()) / 1000);
   }
   return obj;

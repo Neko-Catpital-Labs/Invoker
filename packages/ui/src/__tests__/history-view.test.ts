@@ -7,6 +7,8 @@ function makeFakeTask(id: string, workflowName: string) {
     description: `Task ${id}`,
     status: 'completed' as const,
     dependencies: [] as string[],
+    config: {},
+    execution: {},
     workflowName,
   };
 }
