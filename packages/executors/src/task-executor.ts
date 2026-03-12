@@ -181,6 +181,7 @@ export class TaskExecutor {
       actionId: task.id,
       actionType: this.determineActionType(task),
       inputs: {
+        description: task.description,
         command: task.command,
         prompt: task.prompt,
         workspacePath: this.cwd,

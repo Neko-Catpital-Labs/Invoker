@@ -14,6 +14,8 @@ export type ActionType = 'command' | 'claude' | 'reconciliation';
 
 export interface WorkRequestInputs {
   workspacePath?: string;
+  /** Human-readable task description for commit messages. */
+  description?: string;
   prompt?: string;
   command?: string;
   experimentBranches?: string[];

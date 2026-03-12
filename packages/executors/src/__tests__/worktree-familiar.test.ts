@@ -81,6 +81,11 @@ function setupSpawnMock(): {
         if (argsArr?.includes('rev-parse')) {
           gitProc.stdout!.emit('data', Buffer.from('abc123def456\n'));
         }
+        // merge-base --is-ancestor should fail (not ancestor) so merges proceed
+        if (argsArr?.[0] === 'merge-base' && argsArr?.[1] === '--is-ancestor') {
+          gitProc.emit('close', 1, null);
+          return;
+        }
         gitProc.emit('close', 0, null);
       });
 
@@ -517,8 +522,8 @@ describe('WorktreeFamiliar', () => {
       );
 
       expect(mergeCalls).toHaveLength(2);
-      expect((mergeCalls[0][1] as string[])).toEqual(['merge', '--no-edit', 'experiment/dep-1']);
-      expect((mergeCalls[1][1] as string[])).toEqual(['merge', '--no-edit', 'experiment/dep-2']);
+      expect((mergeCalls[0][1] as string[])).toEqual(['merge', '-m', 'Merge upstream experiment/dep-1', 'experiment/dep-1']);
+      expect((mergeCalls[1][1] as string[])).toEqual(['merge', '-m', 'Merge upstream experiment/dep-2', 'experiment/dep-2']);
 
       // Merge should run in the worktree directory, not the main repo
       const mergeOptions = mergeCalls.map((call) => call[2] as { cwd: string });
@@ -577,7 +582,12 @@ describe('WorktreeFamiliar', () => {
           const gitProc = createMockProcess();
           Promise.resolve().then(() => {
             const argsArr = args as string[];
-            if (argsArr?.[0] === 'merge') {
+            // merge-base --is-ancestor should fail (not ancestor) so merge is attempted
+            if (argsArr?.[0] === 'merge-base' && argsArr?.[1] === '--is-ancestor') {
+              gitProc.emit('close', 1, null);
+              return;
+            }
+            if (argsArr?.[0] === 'merge' && argsArr?.[1] !== '--abort') {
               gitProc.stderr!.emit('data', Buffer.from('CONFLICT (content): Merge conflict\n'));
               gitProc.emit('close', 1, null);
             } else {

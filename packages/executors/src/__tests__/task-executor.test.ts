@@ -115,6 +115,67 @@ describe('TaskExecutor', () => {
       const branches = executor.collectUpstreamBranches(task);
       expect(branches).toEqual([]);
     });
+
+    it('collects branch from reconciliation with propagated winner branch', () => {
+      const tasks = new Map<string, TaskState>();
+      tasks.set('recon', makeTask({
+        id: 'recon',
+        status: 'completed',
+        isReconciliation: true,
+        selectedExperiment: 'exp-v1',
+        branch: 'experiment/exp-v1-abc12345',  // propagated from winner
+      }));
+
+      const executor = createExecutorWithTasks(tasks);
+      const task = makeTask({
+        id: 'downstream',
+        dependencies: ['recon'],
+      });
+
+      const branches = executor.collectUpstreamBranches(task);
+      expect(branches).toEqual(['experiment/exp-v1-abc12345']);
+    });
+
+    it('diamond: collects branches from both deps in dependency order', () => {
+      const tasks = new Map<string, TaskState>();
+      tasks.set('dep-b', makeTask({
+        id: 'dep-b',
+        status: 'completed',
+        branch: 'experiment/dep-b',
+      }));
+      tasks.set('dep-c', makeTask({
+        id: 'dep-c',
+        status: 'completed',
+        branch: 'experiment/dep-c',
+      }));
+
+      const executor = createExecutorWithTasks(tasks);
+      const task = makeTask({
+        id: 'dep-d',
+        dependencies: ['dep-b', 'dep-c'],
+      });
+
+      const branches = executor.collectUpstreamBranches(task);
+      // Order matches dependency array order
+      expect(branches).toEqual(['experiment/dep-b', 'experiment/dep-c']);
+    });
+
+    it('fan-out: same parent branch collected by multiple children independently', () => {
+      const tasks = new Map<string, TaskState>();
+      tasks.set('parent', makeTask({
+        id: 'parent',
+        status: 'completed',
+        branch: 'experiment/parent',
+      }));
+
+      const executor = createExecutorWithTasks(tasks);
+
+      const childB = makeTask({ id: 'child-b', dependencies: ['parent'] });
+      const childC = makeTask({ id: 'child-c', dependencies: ['parent'] });
+
+      expect(executor.collectUpstreamBranches(childB)).toEqual(['experiment/parent']);
+      expect(executor.collectUpstreamBranches(childC)).toEqual(['experiment/parent']);
+    });
   });
 
   describe('executeTask error handling', () => {

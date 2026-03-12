@@ -163,11 +163,7 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
       const acquired = await this.pool.acquireWorktree(request.inputs.repoUrl, branch);
 
       // Merge upstream dependency branches into the pool worktree
-      if (request.inputs.upstreamBranches?.length) {
-        for (const upBranch of request.inputs.upstreamBranches) {
-          await this.execGit(['merge', '--no-edit', upBranch], acquired.worktreePath);
-        }
-      }
+      await this.mergeUpstreamBranches(request.inputs.upstreamBranches, acquired.worktreePath);
 
       // Install dependencies so tasks can build/test in the worktree
       await this.provisionWorktree(acquired.worktreePath);
@@ -237,6 +233,7 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
         let commitHash = 'unknown';
         try {
           await this.autoCommit(acquired.worktreePath, request.actionId, {
+            description: request.inputs.description,
             prompt: request.inputs.prompt,
             upstreamContext: request.inputs.upstreamContext,
           });
@@ -313,11 +310,7 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
     }
 
     // -- Merge upstream dependency branches into the worktree --
-    if (request.inputs.upstreamBranches?.length) {
-      for (const upBranch of request.inputs.upstreamBranches) {
-        await this.execGit(['merge', '--no-edit', upBranch], worktreeDir);
-      }
-    }
+    await this.mergeUpstreamBranches(request.inputs.upstreamBranches, worktreeDir);
 
     // -- Install dependencies so tasks can build/test in the worktree --
     await this.provisionWorktree(worktreeDir);
@@ -392,6 +385,7 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
       let commitHash = 'unknown';
       try {
         await this.autoCommit(worktreeDir, request.actionId, {
+          description: request.inputs.description,
           prompt: request.inputs.prompt,
           upstreamContext: request.inputs.upstreamContext,
         });
@@ -532,6 +526,45 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
   // ---------------------------------------------------------------------------
   // Internal helpers
   // ---------------------------------------------------------------------------
+
+  /**
+   * Merge upstream dependency branches into a worktree.
+   * Skips branches already in HEAD's ancestry. Aborts cleanly on conflict.
+   */
+  private async mergeUpstreamBranches(
+    upstreamBranches: string[] | undefined,
+    worktreeDir: string,
+  ): Promise<void> {
+    if (!upstreamBranches?.length) return;
+
+    for (const upBranch of upstreamBranches) {
+      // Skip if already an ancestor of HEAD (redundant merge)
+      try {
+        await this.execGit(['merge-base', '--is-ancestor', upBranch, 'HEAD'], worktreeDir);
+        console.log(`[WorktreeFamiliar] Skipping merge of ${upBranch} — already ancestor of HEAD`);
+        continue;
+      } catch {
+        // Not an ancestor — proceed with merge
+      }
+
+      try {
+        await this.execGit(
+          ['merge', '-m', `Merge upstream ${upBranch}`, upBranch],
+          worktreeDir,
+        );
+      } catch (err) {
+        // Abort the failed merge to leave worktree in a clean state
+        try {
+          await this.execGit(['merge', '--abort'], worktreeDir);
+        } catch {
+          // merge --abort can fail if there's nothing to abort
+        }
+        throw new Error(
+          `Failed to merge upstream branch ${upBranch}: ${err}`,
+        );
+      }
+    }
+  }
 
   private execGit(args: string[], cwd: string): Promise<string> {
     return new Promise((resolve, reject) => {

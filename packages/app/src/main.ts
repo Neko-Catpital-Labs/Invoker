@@ -595,7 +595,7 @@ async function headlessRebaseAndRetry(taskId: string): Promise<void> {
     runnable = orchestrator.restartTask(mergeTask.id).filter(t => t.status === 'running');
     console.log(`Clean rebase — restarting merge gate only (${runnable.length} task(s))`);
   } else {
-    runnable = orchestrator.restartWorkflow(workflowId).filter(t => t.status === 'running');
+    runnable = bumpGenerationAndRestart(workflowId).filter(t => t.status === 'running');
     console.log(`Conflicting rebase — resetting entire DAG (${runnable.length} task(s))`);
   }
 
@@ -603,6 +603,15 @@ async function headlessRebaseAndRetry(taskId: string): Promise<void> {
     await te.executeTasks(runnable);
     await waitForCompletion(workflowId);
   }
+}
+
+function bumpGenerationAndRestart(workflowId: string): TaskState[] {
+  const workflow = persistence.loadWorkflow(workflowId);
+  if (!workflow) throw new Error(`Workflow ${workflowId} not found`);
+  const nextGen = (workflow.generation ?? 0) + 1;
+  persistence.updateWorkflow(workflowId, { generation: nextGen });
+  console.log(`[workflow] bumped generation to ${nextGen} for ${workflowId}`);
+  return orchestrator.restartWorkflow(workflowId);
 }
 
 async function headlessEdit(taskId: string, newCommand: string): Promise<void> {
@@ -1107,14 +1116,7 @@ function setupGuiMode(): void {
     ipcMain.handle('invoker:restart-workflow', async (_event, workflowId: string) => {
       console.log(`[ipc] restart-workflow: "${workflowId}"`);
       try {
-        const workflow = persistence.loadWorkflow(workflowId);
-        if (!workflow) throw new Error(`Workflow ${workflowId} not found`);
-
-        const nextGen = (workflow.generation ?? 0) + 1;
-        persistence.updateWorkflow(workflowId, { generation: nextGen });
-        console.log(`[ipc] restart-workflow: bumped generation to ${nextGen}`);
-
-        const started = orchestrator.restartWorkflow(workflowId);
+        const started = bumpGenerationAndRestart(workflowId);
         const runnable = started.filter(t => t.status === 'running');
         await taskExecutor.executeTasks(runnable);
       } catch (err) {
@@ -1148,7 +1150,7 @@ function setupGuiMode(): void {
         } else {
           // Conflicting rebase or no merge gate: reset entire DAG
           console.log(`[ipc] rebase-and-retry: resetting entire workflow ${workflowId}`);
-          const started = orchestrator.restartWorkflow(workflowId);
+          const started = bumpGenerationAndRestart(workflowId);
           const runnable = started.filter(t => t.status === 'running');
           await taskExecutor.executeTasks(runnable);
         }

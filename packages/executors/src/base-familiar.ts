@@ -212,7 +212,7 @@ export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar
     meta?: {
       description?: string;
       prompt?: string;
-      upstreamContext?: Array<{taskId: string; description: string; summary?: string}>;
+      upstreamContext?: Array<{taskId: string; description: string; summary?: string; commitMessage?: string}>;
     },
   ): string {
     const headline = meta?.description
@@ -226,9 +226,11 @@ export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar
     }
 
     if (meta?.upstreamContext?.length) {
-      const entries = meta.upstreamContext.map(
-        ctx => `- ${ctx.taskId}: ${ctx.description}${ctx.summary ? ` → ${ctx.summary}` : ''}`,
-      );
+      const entries = meta.upstreamContext.map(ctx => {
+        // Prefer first line of commit message over raw summary (which is often "branch=... commit=...")
+        const detail = ctx.commitMessage?.split('\n')[0] ?? ctx.summary;
+        return `- ${ctx.taskId}: ${ctx.description}${detail ? ` → ${detail}` : ''}`;
+      });
       parts.push(`\n## Upstream Context\n${entries.join('\n')}`);
     }
 

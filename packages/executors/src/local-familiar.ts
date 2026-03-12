@@ -225,7 +225,7 @@ export class LocalFamiliar extends BaseFamiliar<ProcessEntry> {
             entry.request.inputs.workspacePath ?? process.cwd(),
             entry.request.actionId,
             {
-              description: entry.request.inputs.command,
+              description: entry.request.inputs.description ?? entry.request.inputs.command,
               prompt: entry.request.inputs.prompt,
               upstreamContext: entry.request.inputs.upstreamContext,
             },
