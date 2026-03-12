@@ -87,6 +87,14 @@ function setupSpawnMock(): {
       return gitProc as any;
     }
 
+    // Auto-succeed pnpm install (worktree provisioning)
+    const argsArr = args as string[] | undefined;
+    if (cmd === '/bin/sh' && argsArr?.[1]?.includes('pnpm install')) {
+      const installProc = createMockProcess();
+      Promise.resolve().then(() => installProc.emit('close', 0, null));
+      return installProc as any;
+    }
+
     // For non-git commands (task execution), return the task process
     if (!taskProcessReturned) {
       taskProcessReturned = true;
@@ -213,9 +221,9 @@ describe('WorktreeFamiliar', () => {
     const request = makeRequest({ inputs: { command: 'make test' } });
     await familiar.start(request);
 
-    // Find the non-git spawn call (the task process)
+    // Find the task spawn call (non-git, non-pnpm-install)
     const taskCall = mockedSpawn.mock.calls.find(
-      (call) => call[0] !== 'git',
+      ([cmd, args]) => cmd !== 'git' && !(cmd === '/bin/sh' && (args as string[])?.[1]?.includes('pnpm install')),
     );
     expect(taskCall).toBeDefined();
 
@@ -225,6 +233,30 @@ describe('WorktreeFamiliar', () => {
     expect(options.cwd).not.toBe('/fake/repo');
 
     // Cleanup
+    taskProcess.emit('close', 0, null);
+  });
+
+  it('runs pnpm install before spawning the task process', async () => {
+    const { taskProcess } = setupSpawnMock();
+
+    const request = makeRequest();
+    await familiar.start(request);
+
+    const pnpmCall = mockedSpawn.mock.calls.find(
+      ([cmd, args]) => cmd === '/bin/sh' && (args as string[])?.[1]?.includes('pnpm install'),
+    );
+    expect(pnpmCall).toBeDefined();
+    expect((pnpmCall![1] as string[])[1]).toContain('--frozen-lockfile');
+
+    const taskCall = mockedSpawn.mock.calls.find(
+      ([cmd, args]) => cmd === '/bin/sh' && (args as string[])?.[1] === 'echo hello',
+    );
+    expect(taskCall).toBeDefined();
+
+    const pnpmIdx = mockedSpawn.mock.calls.indexOf(pnpmCall!);
+    const taskIdx = mockedSpawn.mock.calls.indexOf(taskCall!);
+    expect(pnpmIdx).toBeLessThan(taskIdx);
+
     taskProcess.emit('close', 0, null);
   });
 

@@ -5,7 +5,7 @@
 for WINDOW_ID in $(xdotool search --name "Invoker" 2>/dev/null; xdotool search --name "electron" 2>/dev/null); do
   WIN_NAME=$(xdotool getwindowname "$WINDOW_ID" 2>/dev/null)
   # Skip Slack and terminal windows
-  if echo "$WIN_NAME" | grep -qiE "slack|terminal|@|Cursor|Studio|Browser"; then
+  if echo "$WIN_NAME" | grep -qiE "Chrome|slack|terminal|@|Cursor|Studio|Browser"; then
     continue
   fi
   echo "$WIN_NAME"

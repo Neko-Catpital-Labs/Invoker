@@ -169,6 +169,9 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
         }
       }
 
+      // Install dependencies so tasks can build/test in the worktree
+      await this.provisionWorktree(acquired.worktreePath);
+
       // Determine what to run (same logic as below)
       let cmd: string;
       let args: string[];
@@ -315,6 +318,9 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
         await this.execGit(['merge', '--no-edit', upBranch], worktreeDir);
       }
     }
+
+    // -- Install dependencies so tasks can build/test in the worktree --
+    await this.provisionWorktree(worktreeDir);
 
     // -- Determine what to run --
     let cmd: string;
@@ -544,6 +550,22 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
       child.on('close', (code) => {
         if (code === 0) resolve(stdout.trim());
         else reject(new Error(`git ${args.join(' ')} failed (code ${code}): ${stderr.trim()}`));
+      });
+    });
+  }
+
+  private provisionWorktree(dir: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const child = spawn('/bin/sh', ['-c', 'pnpm install --frozen-lockfile'], {
+        cwd: dir,
+        env: cleanElectronEnv(),
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      let stderr = '';
+      child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
+      child.on('close', (code) => {
+        if (code === 0) resolve();
+        else reject(new Error(`pnpm install failed in worktree ${dir} (exit ${code}): ${stderr.trim()}`));
       });
     });
   }

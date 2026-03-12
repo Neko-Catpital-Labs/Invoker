@@ -60,7 +60,7 @@ export class TaskExecutor {
     this.persistence = config.persistence;
     this.familiarRegistry = config.familiarRegistry;
     this.cwd = config.cwd;
-    this.maxWorktreesPerRepo = config.maxWorktreesPerRepo ?? 3;
+    this.maxWorktreesPerRepo = config.maxWorktreesPerRepo ?? 5;
     this.defaultBranch = config.defaultBranch;
     this.callbacks = config.callbacks ?? {};
   }

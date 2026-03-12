@@ -14,43 +14,45 @@ function makeTask(overrides: Partial<TaskState> = {}): TaskState {
 
 describe('ContextMenu visibility logic', () => {
   describe('Rebase & Retry visibility', () => {
-    it('is visible for failed merge nodes', () => {
-      const task = makeTask({ id: '__merge__wf-1', status: 'failed', isMergeNode: true });
+    it('is visible for any task with a workflowId when callback provided', () => {
+      const task = makeTask({ id: 'regular-task', status: 'failed', workflowId: 'wf-1' });
       const onRebaseAndRetry = vi.fn();
 
-      const canRebaseAndRetry = task.isMergeNode === true && task.status === 'failed' && !!onRebaseAndRetry;
+      const canRebaseAndRetry = !!task.workflowId && !!onRebaseAndRetry;
       expect(canRebaseAndRetry).toBe(true);
     });
 
-    it('is hidden for non-merge nodes even if failed', () => {
-      const task = makeTask({ id: 'regular-task', status: 'failed' });
+    it('is visible for merge nodes with a workflowId', () => {
+      const task = makeTask({ id: '__merge__wf-1', status: 'failed', isMergeNode: true, workflowId: 'wf-1' });
       const onRebaseAndRetry = vi.fn();
 
-      const canRebaseAndRetry = task.isMergeNode === true && task.status === 'failed' && !!onRebaseAndRetry;
-      expect(canRebaseAndRetry).toBe(false);
+      const canRebaseAndRetry = !!task.workflowId && !!onRebaseAndRetry;
+      expect(canRebaseAndRetry).toBe(true);
     });
 
-    it('is hidden for successful merge nodes', () => {
-      const task = makeTask({ id: '__merge__wf-1', status: 'completed', isMergeNode: true });
+    it('is visible regardless of task status', () => {
       const onRebaseAndRetry = vi.fn();
 
-      const canRebaseAndRetry = task.isMergeNode === true && task.status === 'failed' && !!onRebaseAndRetry;
-      expect(canRebaseAndRetry).toBe(false);
+      for (const status of ['pending', 'running', 'completed', 'failed'] as const) {
+        const task = makeTask({ id: 'task-1', status, workflowId: 'wf-1' });
+        const canRebaseAndRetry = !!task.workflowId && !!onRebaseAndRetry;
+        expect(canRebaseAndRetry).toBe(true);
+      }
     });
 
-    it('is hidden for running merge nodes', () => {
-      const task = makeTask({ id: '__merge__wf-1', status: 'running', isMergeNode: true });
+    it('is hidden for tasks without a workflowId', () => {
+      const task = makeTask({ id: 'orphan-task', status: 'failed' });
       const onRebaseAndRetry = vi.fn();
 
-      const canRebaseAndRetry = task.isMergeNode === true && task.status === 'failed' && !!onRebaseAndRetry;
+      const canRebaseAndRetry = !!task.workflowId && !!onRebaseAndRetry;
       expect(canRebaseAndRetry).toBe(false);
     });
 
     it('is hidden when onRebaseAndRetry callback is not provided', () => {
-      const task = makeTask({ id: '__merge__wf-1', status: 'failed', isMergeNode: true });
+      const task = makeTask({ id: 'task-1', status: 'failed', workflowId: 'wf-1' });
       const onRebaseAndRetry = undefined;
 
-      const canRebaseAndRetry = task.isMergeNode === true && task.status === 'failed' && !!onRebaseAndRetry;
+      const canRebaseAndRetry = !!task.workflowId && !!onRebaseAndRetry;
       expect(canRebaseAndRetry).toBe(false);
     });
   });
