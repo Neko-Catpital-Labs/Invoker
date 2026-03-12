@@ -15,6 +15,7 @@ import { Orchestrator, type PlanDefinition, type TaskState } from '@invoker/core
 const LINEAR_PLAN: PlanDefinition = {
   name: 'Linear Plan',
   onFinish: 'merge',
+  mergeMode: 'automatic',
   baseBranch: 'master',
   featureBranch: 'plan/linear',
   tasks: [
@@ -27,6 +28,7 @@ const LINEAR_PLAN: PlanDefinition = {
 const PARALLEL_PLAN: PlanDefinition = {
   name: 'Parallel Plan',
   onFinish: 'merge',
+  mergeMode: 'automatic',
   baseBranch: 'master',
   featureBranch: 'plan/parallel',
   tasks: [
@@ -39,6 +41,7 @@ const PARALLEL_PLAN: PlanDefinition = {
 const FANOUT_PLAN: PlanDefinition = {
   name: 'Fan-out Plan',
   onFinish: 'merge',
+  mergeMode: 'automatic',
   baseBranch: 'master',
   featureBranch: 'plan/fanout',
   tasks: [
