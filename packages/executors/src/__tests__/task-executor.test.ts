@@ -377,6 +377,7 @@ describe('TaskExecutor', () => {
         getTask: (id: string) => allTasks.find(t => t.id === id),
         getAllTasks: () => allTasks,
         handleWorkerResponse: vi.fn(() => []),
+        setTaskAwaitingApproval: vi.fn(),
       };
       const persistence = {
         loadWorkflow: () => ({
@@ -427,9 +428,8 @@ describe('TaskExecutor', () => {
       const deleteCall = gitCalls.find(c => c[0] === 'branch' && c[1] === '-D' && c[2] === 'plan/feature');
       expect(deleteCall).toBeDefined();
 
-      expect(orchestrator.handleWorkerResponse).toHaveBeenCalledWith(
-        expect.objectContaining({ status: 'completed' }),
-      );
+      // Default mergeMode is 'manual', so setTaskAwaitingApproval is called
+      expect(orchestrator.setTaskAwaitingApproval).toHaveBeenCalledWith('__merge__wf-1');
     });
   });
 
