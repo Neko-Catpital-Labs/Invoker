@@ -147,6 +147,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       'ALTER TABLE workflows ADD COLUMN base_branch TEXT',
       'ALTER TABLE workflows ADD COLUMN feature_branch TEXT',
       'ALTER TABLE workflows ADD COLUMN generation INTEGER DEFAULT 0',
+      'ALTER TABLE tasks ADD COLUMN last_heartbeat_at TEXT',
     ];
     for (const sql of migrations) {
       try { this.db.exec(sql); } catch { /* Column already exists */ }
@@ -217,7 +218,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         repo_url, feature_branch,
         is_merge_node,
         familiar_type, claude_session_id, workspace_path, container_id,
-        created_at, started_at, completed_at
+        created_at, started_at, completed_at, last_heartbeat_at
       ) VALUES (
         ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?,
@@ -228,7 +229,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         ?, ?,
         ?,
         ?, ?, ?, ?,
-        ?, ?, ?
+        ?, ?, ?, ?
       )
     `).run(
       task.id, workflowId, task.description, task.status,
@@ -254,6 +255,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       task.createdAt.toISOString(),
       task.startedAt?.toISOString() ?? null,
       task.completedAt?.toISOString() ?? null,
+      task.lastHeartbeatAt?.toISOString() ?? null,
     );
   }
 
@@ -285,6 +287,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       containerId: 'container_id',
       startedAt: 'started_at',
       completedAt: 'completed_at',
+      lastHeartbeatAt: 'last_heartbeat_at',
     };
 
     for (const [key, value] of Object.entries(changes)) {
@@ -641,6 +644,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       createdAt: new Date(row.created_at),
       startedAt: row.started_at ? new Date(row.started_at) : undefined,
       completedAt: row.completed_at ? new Date(row.completed_at) : undefined,
+      lastHeartbeatAt: row.last_heartbeat_at ? new Date(row.last_heartbeat_at) : undefined,
     };
   }
 }

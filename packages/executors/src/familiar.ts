@@ -35,6 +35,7 @@ export interface Familiar {
   sendInput(handle: FamiliarHandle, input: string): void;
   onOutput(handle: FamiliarHandle, cb: (data: string) => void): Unsubscribe;
   onComplete(handle: FamiliarHandle, cb: (response: WorkResponse) => void): Unsubscribe;
+  onHeartbeat(handle: FamiliarHandle, cb: (taskId: string) => void): Unsubscribe;
   getTerminalSpec(handle: FamiliarHandle): TerminalSpec | null;
   /**
    * Reconstruct a TerminalSpec from persisted DB metadata (no in-memory handle required).

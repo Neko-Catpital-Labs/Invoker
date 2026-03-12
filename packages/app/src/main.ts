@@ -45,6 +45,7 @@ import {
 import type { TaskOutputData } from './types.js';
 import { cleanupOrphanWorktrees } from './worktree-cleanup.js';
 import { loadConfig, type InvokerConfig } from './config.js';
+import { startApiServer, type ApiServer } from './api-server.js';
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 
@@ -246,6 +247,11 @@ if (isHeadless) {
 
 // ── Headless Implementation ──────────────────────────────────
 
+function headlessHeartbeat(taskId: string): void {
+  const now = new Date();
+  try { persistence.updateTask(taskId, { lastHeartbeatAt: now }); } catch { /* db locked */ }
+}
+
 async function runHeadless(args: string[]): Promise<void> {
   const command = args[0];
 
@@ -370,8 +376,11 @@ async function headlessRun(planPath: string): Promise<void> {
       onOutput: (taskId, data) => {
         process.stdout.write(`\x1b[2m[${taskId}]\x1b[0m ${data}`);
       },
+      onHeartbeat: headlessHeartbeat,
     },
   });
+
+  const api = startApiServer({ orchestrator, persistence, familiarRegistry, taskExecutor });
 
   const wfIdsBefore = new Set(orchestrator.getWorkflowIds());
   orchestrator.loadPlan(plan);
@@ -382,6 +391,8 @@ async function headlessRun(planPath: string): Promise<void> {
 
   // Wait for all tasks in this workflow to settle
   await waitForCompletion(currentWorkflowId);
+
+  await api.close().catch(() => {});
 
   const status = orchestrator.getWorkflowStatus(currentWorkflowId);
   console.log(`\n${formatWorkflowStatus(status)}`);
@@ -416,8 +427,11 @@ async function headlessResume(workflowId: string): Promise<void> {
       onOutput: (taskId, data) => {
         process.stdout.write(`\x1b[2m[${taskId}]\x1b[0m ${data}`);
       },
+      onHeartbeat: headlessHeartbeat,
     },
   });
+
+  const api = startApiServer({ orchestrator, persistence, familiarRegistry, taskExecutor });
 
   orchestrator.syncFromDb(workflowId);
 
@@ -437,6 +451,8 @@ async function headlessResume(workflowId: string): Promise<void> {
   const started = orchestrator.startExecution();
   await taskExecutor.executeTasks(started);
   await waitForCompletion();
+
+  await api.close().catch(() => {});
 
   const status = orchestrator.getWorkflowStatus();
   console.log(`\n${formatWorkflowStatus(status)}`);
@@ -503,6 +519,7 @@ async function headlessSelect(taskId: string, experimentId: string): Promise<voi
       onOutput: (tid, data) => {
         process.stdout.write(`\x1b[2m[${tid}]\x1b[0m ${data}`);
       },
+      onHeartbeat: headlessHeartbeat,
     },
   });
 
@@ -531,6 +548,7 @@ async function headlessRestart(taskId: string): Promise<void> {
       onOutput: (tid, data) => {
         process.stdout.write(`\x1b[2m[${tid}]\x1b[0m ${data}`);
       },
+      onHeartbeat: headlessHeartbeat,
     },
   });
 
@@ -557,6 +575,7 @@ async function headlessRebaseAndRetry(mergeTaskId: string): Promise<void> {
       onOutput: (tid, data) => {
         process.stdout.write(`\x1b[2m[${tid}]\x1b[0m ${data}`);
       },
+      onHeartbeat: headlessHeartbeat,
     },
   });
 
@@ -603,6 +622,7 @@ async function headlessEdit(taskId: string, newCommand: string): Promise<void> {
       onOutput: (tid, data) => {
         process.stdout.write(`\x1b[2m[${tid}]\x1b[0m ${data}`);
       },
+      onHeartbeat: headlessHeartbeat,
     },
   });
 
@@ -627,6 +647,7 @@ async function headlessEditType(taskId: string, familiarType: string): Promise<v
       onOutput: (tid, data) => {
         process.stdout.write(`\x1b[2m[${tid}]\x1b[0m ${data}`);
       },
+      onHeartbeat: headlessHeartbeat,
     },
   });
 
@@ -671,8 +692,11 @@ async function headlessSlack(): Promise<void> {
       onComplete: (taskId) => {
         logFn('exec', 'info', `Task "${taskId}" completed`);
       },
+      onHeartbeat: headlessHeartbeat,
     },
   });
+
+  const api = startApiServer({ orchestrator, persistence, familiarRegistry, taskExecutor });
 
   const slack = await wireSlackBot({
     executor: taskExecutor,
@@ -685,6 +709,7 @@ async function headlessSlack(): Promise<void> {
   // Stay alive until SIGINT/SIGTERM
   await new Promise<void>((resolve) => {
     const shutdown = async () => {
+      await api.close().catch(() => {});
       logFn('slack', 'info', 'Shutting down...');
       await slack.stop();
       resolve();
@@ -753,6 +778,7 @@ function execCommand(cmd: string, args: string[]): Promise<string> {
 function setupGuiMode(): void {
   let mainWindow: BrowserWindow | null = null;
   let taskExecutor: TaskExecutor;
+  let apiServer: ApiServer | null = null;
   const taskHandles = new Map<string, { handle: FamiliarHandle; familiar: Familiar }>();
   let dbPollInterval: ReturnType<typeof setInterval> | null = null;
   let activityPollInterval: ReturnType<typeof setInterval> | null = null;
@@ -792,6 +818,15 @@ function setupGuiMode(): void {
         },
         onComplete: (taskId) => {
           console.log(`[exec] Task "${taskId}" completed`);
+        },
+        onHeartbeat: (taskId) => {
+          const now = new Date();
+          try { persistence.updateTask(taskId, { lastHeartbeatAt: now }); } catch { /* db locked */ }
+          messageBus.publish(Channels.TASK_DELTA, {
+            type: 'updated' as const,
+            taskId,
+            changes: { lastHeartbeatAt: now },
+          });
         },
       },
     });
@@ -835,6 +870,13 @@ function setupGuiMode(): void {
     initServices();
 
     rebuildTaskExecutor();
+
+    apiServer = startApiServer({
+      orchestrator,
+      persistence,
+      familiarRegistry,
+      taskExecutor,
+    });
 
     const dbPath = path.join(homedir(), '.invoker', 'invoker.db');
     console.log(`[init] Database: ${dbPath}`);
@@ -1360,6 +1402,7 @@ function setupGuiMode(): void {
   });
 
   app.on('before-quit', async () => {
+    if (apiServer) await apiServer.close().catch(() => {});
     if (dbPollInterval) clearInterval(dbPollInterval);
     if (activityPollInterval) clearInterval(activityPollInterval);
     await Promise.all(familiarRegistry.getAll().map(f => f.destroyAll()));

@@ -25,6 +25,7 @@ export interface TaskExecutorCallbacks {
   onOutput?: (taskId: string, data: string) => void;
   onSpawned?: (taskId: string, handle: FamiliarHandle, familiar: Familiar) => void;
   onComplete?: (taskId: string, response: WorkResponse) => void;
+  onHeartbeat?: (taskId: string) => void;
 }
 
 // ── Config ────────────────────────────────────────────────
@@ -218,6 +219,11 @@ export class TaskExecutor {
     // Wire output
     familiar.onOutput(handle, (data) => {
       this.callbacks.onOutput?.(task.id, data);
+    });
+
+    // Wire heartbeat
+    familiar.onHeartbeat(handle, () => {
+      this.callbacks.onHeartbeat?.(task.id);
     });
 
     // Wait for completion and feed response to orchestrator

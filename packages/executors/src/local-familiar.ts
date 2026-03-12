@@ -61,6 +61,7 @@ export class LocalFamiliar extends BaseFamiliar<ProcessEntry> {
         outputListeners: new Set(),
       outputBuffer: [],
         completeListeners: new Set(),
+        heartbeatListeners: new Set(),
         completed: false,
         fallbackActive: false,
       };
@@ -135,6 +136,7 @@ export class LocalFamiliar extends BaseFamiliar<ProcessEntry> {
       outputListeners: new Set(),
       outputBuffer: [],
       completeListeners: new Set(),
+      heartbeatListeners: new Set(),
       completed: false,
       fallbackActive: false,
       claudeSessionId,

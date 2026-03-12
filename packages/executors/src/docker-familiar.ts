@@ -195,6 +195,7 @@ export class DockerFamiliar extends BaseFamiliar<ContainerEntry> {
       outputListeners: new Set(),
       outputBuffer: [],
       completeListeners: new Set(),
+      heartbeatListeners: new Set(),
       completed: false,
     };
 

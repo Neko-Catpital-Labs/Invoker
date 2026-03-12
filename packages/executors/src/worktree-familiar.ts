@@ -137,6 +137,7 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
         outputListeners: new Set(),
         outputBuffer: [],
         completeListeners: new Set(),
+        heartbeatListeners: new Set(),
         completed: false,
       };
       this.registerEntry(handle, entry);
@@ -202,6 +203,7 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
         outputListeners: new Set(),
         outputBuffer: [],
         completeListeners: new Set(),
+        heartbeatListeners: new Set(),
         completed: false,
         poolRelease: acquired.release,
         claudeSessionId,
@@ -354,6 +356,7 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
       outputListeners: new Set(),
       outputBuffer: [],
       completeListeners: new Set(),
+      heartbeatListeners: new Set(),
       completed: false,
       claudeSessionId,
     };
