@@ -449,6 +449,16 @@ export class Orchestrator {
     const task = this.stateMachine.getTask(taskId);
     if (!task) throw new Error(`Task ${taskId} not found`);
 
+    const prevStatus = task.status;
+    console.log(`[orchestrator] restartTask "${taskId}" (was ${prevStatus})`);
+
+    const completedDownstream = this.stateMachine.getAllTasks().filter(
+      t => t.status === 'completed' && t.dependencies.includes(taskId),
+    );
+    if (completedDownstream.length > 0 && prevStatus === 'completed') {
+      console.warn(`[orchestrator] restartTask "${taskId}": ${completedDownstream.length} downstream task(s) are completed and will NOT be invalidated: [${completedDownstream.map(t => t.id).join(', ')}]`);
+    }
+
     const resetChanges: Partial<TaskState> = {
       status: 'pending',
       startedAt: undefined,
@@ -466,7 +476,25 @@ export class Orchestrator {
 
     // Unblock dependents
     const unblockedIds = this.stateMachine.computeTasksToUnblock(taskId);
+    console.log(`[orchestrator] restartTask "${taskId}": unblocked ${unblockedIds.length} tasks: [${unblockedIds.join(', ')}]`);
+
+    const blockedByOther = this.stateMachine.getAllTasks().filter(
+      t => t.status === 'blocked' && t.dependencies.includes(taskId) && t.blockedBy !== taskId,
+    );
+    if (blockedByOther.length > 0) {
+      console.warn(`[orchestrator] restartTask "${taskId}": ${blockedByOther.length} task(s) depend on "${taskId}" but are blocked by a different task: ${blockedByOther.map(t => `"${t.id}" (blockedBy: ${t.blockedBy})`).join(', ')}`);
+    }
+
     for (const id of unblockedIds) {
+      const t = this.stateMachine.getTask(id);
+      const failedDeps = t?.dependencies.filter(depId => {
+        const dep = this.stateMachine.getTask(depId);
+        return dep?.status === 'failed';
+      }) ?? [];
+      if (failedDeps.length > 0) {
+        console.warn(`[orchestrator] restartTask: unblocking "${id}" but it still has failed deps: [${failedDeps.join(', ')}]`);
+      }
+
       const unblockChanges: Partial<TaskState> = { status: 'pending', blockedBy: undefined };
       this.writeAndSync(id, unblockChanges);
       const unblockDelta: TaskDelta = { type: 'updated', taskId: id, changes: unblockChanges };
@@ -478,6 +506,7 @@ export class Orchestrator {
 
     const readyTasks = this.stateMachine.getReadyTasks();
     const isReady = readyTasks.some((t) => t.id === taskId);
+    console.log(`[orchestrator] restartTask "${taskId}": ready=${isReady}`);
     if (isReady) {
       return this.autoStartReadyTasks([taskId]);
     }
@@ -888,6 +917,7 @@ export class Orchestrator {
     this.checkExperimentCompletion(taskId);
 
     const readyTaskIds = this.stateMachine.findNewlyReadyTasks(taskId);
+    console.log(`[orchestrator] handleCompleted "${taskId}": ${readyTaskIds.length} newly ready: [${readyTaskIds.join(', ')}]`);
     const started = this.autoStartReadyTasks(readyTaskIds);
     this.checkWorkflowCompletion();
     return started;
@@ -1068,6 +1098,11 @@ export class Orchestrator {
   private blockDependents(failedTaskId: string): void {
     const toBlock = this.stateMachine.computeTasksToBlock(failedTaskId);
     for (const id of toBlock) {
+      const existing = this.stateMachine.getTask(id);
+      if (existing?.blockedBy && existing.blockedBy !== failedTaskId) {
+        console.warn(`[orchestrator] blockDependents: "${id}" blockedBy overwritten from "${existing.blockedBy}" to "${failedTaskId}"`);
+      }
+
       const blockChanges: Partial<TaskState> = { status: 'blocked', blockedBy: failedTaskId };
       this.writeAndSync(id, blockChanges);
       const delta: TaskDelta = { type: 'updated', taskId: id, changes: blockChanges };

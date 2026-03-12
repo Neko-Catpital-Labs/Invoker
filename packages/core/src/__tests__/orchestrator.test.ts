@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { Orchestrator } from '../orchestrator.js';
 import type { PlanDefinition, OrchestratorPersistence, OrchestratorMessageBus } from '../orchestrator.js';
 import type { TaskState, TaskDelta } from '../task-types.js';
@@ -1662,6 +1662,254 @@ describe('Orchestrator', () => {
       expect((wf as any).onFinish).toBe('merge');
       expect((wf as any).baseBranch).toBe('main');
       expect((wf as any).featureBranch).toBe('feat/test');
+    });
+  });
+
+  // ── restart invalidation logging ────────────────────────
+
+  describe('restart invalidation logging', () => {
+    let warnSpy: ReturnType<typeof vi.spyOn>;
+    let logSpy: ReturnType<typeof vi.spyOn>;
+
+    beforeEach(() => {
+      warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+      warnSpy.mockRestore();
+      logSpy.mockRestore();
+    });
+
+    it('warns when blockedBy is overwritten by a second failure', () => {
+      orchestrator.loadPlan({
+        name: 'overwrite-test',
+        tasks: [
+          { id: 'A', description: 'Root A', command: 'echo A' },
+          { id: 'B', description: 'Root B', command: 'echo B' },
+          { id: 'C', description: 'Fan-in', command: 'echo C', dependencies: ['A', 'B'] },
+        ],
+      });
+      orchestrator.startExecution();
+
+      // Fail A — C gets blockedBy: A
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 'A', status: 'failed', outputs: { exitCode: 1, error: 'boom' } }),
+      );
+      expect(orchestrator.getTask('C')!.blockedBy).toBe('A');
+
+      // Fail B — C's blockedBy should be overwritten to B
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 'B', status: 'failed', outputs: { exitCode: 1, error: 'boom' } }),
+      );
+      expect(orchestrator.getTask('C')!.blockedBy).toBe('B');
+
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('blockDependents: "C" blockedBy overwritten from "A" to "B"'),
+      );
+    });
+
+    it('warns about completed downstream tasks that will not be invalidated on restart', () => {
+      orchestrator.loadPlan({
+        name: 'completed-downstream-test',
+        tasks: [
+          { id: 'A', description: 'Root', command: 'echo A' },
+          { id: 'B', description: 'Child', command: 'echo B', dependencies: ['A'] },
+        ],
+      });
+      orchestrator.startExecution();
+
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 'A', status: 'completed', outputs: { exitCode: 0 } }),
+      );
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 'B', status: 'completed', outputs: { exitCode: 0 } }),
+      );
+      expect(orchestrator.getTask('A')!.status).toBe('completed');
+      expect(orchestrator.getTask('B')!.status).toBe('completed');
+
+      warnSpy.mockClear();
+      orchestrator.restartTask('A');
+
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('restartTask "A"'),
+      );
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('will NOT be invalidated'),
+      );
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('B'),
+      );
+    });
+
+    it('warns when unblocking a task that still has other failed dependencies', () => {
+      orchestrator.loadPlan({
+        name: 'premature-unblock-test',
+        tasks: [
+          { id: 'A', description: 'Root A', command: 'echo A' },
+          { id: 'B', description: 'Root B', command: 'echo B' },
+          { id: 'C', description: 'Fan-in', command: 'echo C', dependencies: ['A', 'B'] },
+        ],
+      });
+      orchestrator.startExecution();
+
+      // Fail A, then B — C ends up with blockedBy: B
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 'A', status: 'failed', outputs: { exitCode: 1, error: 'boom' } }),
+      );
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 'B', status: 'failed', outputs: { exitCode: 1, error: 'boom' } }),
+      );
+
+      warnSpy.mockClear();
+      orchestrator.restartTask('B');
+
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('unblocking "C" but it still has failed deps: [A]'),
+      );
+    });
+
+    it('logs blockedBy mismatch when restarting a task whose dependents are blocked by another', () => {
+      orchestrator.loadPlan({
+        name: 'mismatch-test',
+        tasks: [
+          { id: 'A', description: 'Root A', command: 'echo A' },
+          { id: 'B', description: 'Root B', command: 'echo B' },
+          { id: 'C', description: 'Fan-in', command: 'echo C', dependencies: ['A', 'B'] },
+        ],
+      });
+      orchestrator.startExecution();
+
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 'A', status: 'failed', outputs: { exitCode: 1, error: 'boom' } }),
+      );
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 'B', status: 'failed', outputs: { exitCode: 1, error: 'boom' } }),
+      );
+
+      warnSpy.mockClear();
+      // Restart A — C is blocked by B, not A, so unblock won't find it
+      orchestrator.restartTask('A');
+
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('depend on "A" but are blocked by a different task'),
+      );
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('"C" (blockedBy: B)'),
+      );
+    });
+
+    it('handleCompleted logs newly ready downstream tasks', () => {
+      orchestrator.loadPlan({
+        name: 'ready-log-test',
+        tasks: [
+          { id: 'A', description: 'Root', command: 'echo A' },
+          { id: 'B', description: 'Child', command: 'echo B', dependencies: ['A'] },
+        ],
+      });
+      orchestrator.startExecution();
+
+      logSpy.mockClear();
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 'A', status: 'completed', outputs: { exitCode: 0 } }),
+      );
+
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.stringContaining('handleCompleted "A": 1 newly ready: [B]'),
+      );
+    });
+
+    // ── Integration: full fan-in multi-failure restart cycle ──
+
+    it('integration: three-root fan-in tracks all warnings through failure and restart cycle', () => {
+      orchestrator.loadPlan({
+        name: 'fan-in-integration',
+        tasks: [
+          { id: 'A', description: 'Root A', command: 'echo A' },
+          { id: 'B', description: 'Root B', command: 'echo B' },
+          { id: 'C', description: 'Root C', command: 'echo C' },
+          { id: 'D', description: 'Fan-in', command: 'echo D', dependencies: ['A', 'B', 'C'] },
+        ],
+      });
+      orchestrator.startExecution();
+
+      // Phase 1: All three roots fail, producing blockedBy overwrite warnings
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 'A', status: 'failed', outputs: { exitCode: 1, error: 'a' } }),
+      );
+      expect(orchestrator.getTask('D')!.blockedBy).toBe('A');
+
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 'B', status: 'failed', outputs: { exitCode: 1, error: 'b' } }),
+      );
+      expect(orchestrator.getTask('D')!.blockedBy).toBe('B');
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('blockedBy overwritten from "A" to "B"'),
+      );
+
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 'C', status: 'failed', outputs: { exitCode: 1, error: 'c' } }),
+      );
+      expect(orchestrator.getTask('D')!.blockedBy).toBe('C');
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('blockedBy overwritten from "B" to "C"'),
+      );
+
+      // Phase 2: Restart A — D is blocked by C, not A
+      warnSpy.mockClear();
+      logSpy.mockClear();
+      orchestrator.restartTask('A');
+
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.stringContaining('restartTask "A" (was failed)'),
+      );
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.stringContaining('restartTask "A": unblocked 0 tasks'),
+      );
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('depend on "A" but are blocked by a different task'),
+      );
+
+      // D still blocked
+      expect(orchestrator.getTask('D')!.status).toBe('blocked');
+
+      // Phase 3: Restart B — D still blocked by C
+      warnSpy.mockClear();
+      orchestrator.restartTask('B');
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('depend on "B" but are blocked by a different task'),
+      );
+      expect(orchestrator.getTask('D')!.status).toBe('blocked');
+
+      // Phase 4: Restart C — C matches blockedBy, D is unblocked
+      warnSpy.mockClear();
+      logSpy.mockClear();
+      orchestrator.restartTask('C');
+
+      const unblockLog = logSpy.mock.calls.find(
+        call => typeof call[0] === 'string' && call[0].includes('restartTask "C": unblocked'),
+      );
+      expect(unblockLog).toBeDefined();
+      expect(unblockLog![0]).toContain('D');
+      expect(orchestrator.getTask('D')!.status).toBe('pending');
+
+      // Phase 5: Complete A, B, C — D should become ready after the last one
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 'A', status: 'completed', outputs: { exitCode: 0 } }),
+      );
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 'B', status: 'completed', outputs: { exitCode: 0 } }),
+      );
+
+      logSpy.mockClear();
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 'C', status: 'completed', outputs: { exitCode: 0 } }),
+      );
+
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.stringContaining('handleCompleted "C": 1 newly ready: [D]'),
+      );
+      expect(orchestrator.getTask('D')!.status).toBe('running');
     });
   });
 });
