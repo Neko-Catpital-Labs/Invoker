@@ -90,27 +90,35 @@ describe('ContextMenu visibility logic', () => {
   });
 
   describe('Restart Workflow visibility', () => {
+    it('is visible for any node with a workflowId', () => {
+      const task = makeTask({ id: 'regular-task', workflowId: 'wf-1' });
+      const onRestartWorkflow = vi.fn();
+
+      const canRestartWorkflow = !!task.workflowId && !!onRestartWorkflow;
+      expect(canRestartWorkflow).toBe(true);
+    });
+
     it('is visible for merge nodes with a workflowId', () => {
       const task = makeTask({ id: '__merge__wf-1', isMergeNode: true, workflowId: 'wf-1' });
       const onRestartWorkflow = vi.fn();
 
-      const canRestartWorkflow = task.isMergeNode === true && !!task.workflowId && !!onRestartWorkflow;
+      const canRestartWorkflow = !!task.workflowId && !!onRestartWorkflow;
       expect(canRestartWorkflow).toBe(true);
     });
 
-    it('is hidden for non-merge nodes', () => {
-      const task = makeTask({ id: 'regular-task', workflowId: 'wf-1' });
+    it('is hidden when task has no workflowId', () => {
+      const task = makeTask({ id: 'orphan-task' });
       const onRestartWorkflow = vi.fn();
 
-      const canRestartWorkflow = task.isMergeNode === true && !!task.workflowId && !!onRestartWorkflow;
+      const canRestartWorkflow = !!task.workflowId && !!onRestartWorkflow;
       expect(canRestartWorkflow).toBe(false);
     });
 
     it('is hidden when onRestartWorkflow callback is not provided', () => {
-      const task = makeTask({ id: '__merge__wf-1', isMergeNode: true, workflowId: 'wf-1' });
+      const task = makeTask({ id: 'task-1', workflowId: 'wf-1' });
       const onRestartWorkflow = undefined;
 
-      const canRestartWorkflow = task.isMergeNode === true && !!task.workflowId && !!onRestartWorkflow;
+      const canRestartWorkflow = !!task.workflowId && !!onRestartWorkflow;
       expect(canRestartWorkflow).toBe(false);
     });
 
@@ -118,8 +126,8 @@ describe('ContextMenu visibility logic', () => {
       const onRestartWorkflow = vi.fn();
 
       for (const status of ['pending', 'running', 'completed', 'failed'] as const) {
-        const task = makeTask({ id: '__merge__wf-1', status, isMergeNode: true, workflowId: 'wf-1' });
-        const canRestartWorkflow = task.isMergeNode === true && !!task.workflowId && !!onRestartWorkflow;
+        const task = makeTask({ id: 'task-1', status, workflowId: 'wf-1' });
+        const canRestartWorkflow = !!task.workflowId && !!onRestartWorkflow;
         expect(canRestartWorkflow).toBe(true);
       }
     });

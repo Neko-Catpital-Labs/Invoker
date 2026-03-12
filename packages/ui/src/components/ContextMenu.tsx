@@ -25,7 +25,7 @@ export function ContextMenu({ x, y, task, onRestart, onReplace, onOpenTerminal, 
   const canRestart = task.status !== 'running';
   const canReplace = task.status === 'failed' || task.status === 'blocked';
   const canRebaseAndRetry = task.isMergeNode === true && task.status === 'failed' && !!onRebaseAndRetry;
-  const canRestartWorkflow = task.isMergeNode === true && !!task.workflowId && !!onRestartWorkflow;
+  const canRestartWorkflow = !!task.workflowId && !!onRestartWorkflow;
 
   useEffect(() => {
     const handleClick = (e: MouseEvent) => {
