@@ -47,7 +47,7 @@ export function MergeGateNode({ data }: MergeGateNodeProps) {
   );
 
   const statusLabel =
-    status === 'completed' ? 'READY' :
+    status === 'completed' ? 'COMPLETED' :
     status === 'awaiting_approval' ? 'NEEDS APPROVAL' :
     status === 'failed' ? 'BLOCKED' :
     'WAITING';
