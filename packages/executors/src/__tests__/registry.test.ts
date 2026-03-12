@@ -18,12 +18,37 @@ describe('FamiliarRegistry', () => {
     expect(result).toBe(familiar);
   });
 
-  it('getDefault returns local familiar', () => {
-    const familiar = new LocalFamiliar();
-    registry.register('local', familiar);
+  it('getDefault returns worktree familiar', () => {
+    const worktree: Familiar = {
+      type: 'worktree',
+      start: async () => ({ executionId: '', taskId: '' }),
+      kill: async () => {},
+      sendInput: () => {},
+      onOutput: () => () => {},
+      onComplete: () => () => {},
+      getTerminalSpec: () => null,
+      destroyAll: async () => {},
+    };
+    registry.register('worktree', worktree);
 
     const result = registry.getDefault();
-    expect(result).toBe(familiar);
+    expect(result).toBe(worktree);
+  });
+
+  it('getDefault throws when worktree familiar not registered', () => {
+    expect(() => registry.getDefault()).toThrow('No "worktree" familiar registered. Register one before calling getDefault().');
+  });
+
+  it('getMergeGateFamiliar returns local familiar', () => {
+    const local = new LocalFamiliar();
+    registry.register('local', local);
+
+    const result = registry.getMergeGateFamiliar();
+    expect(result).toBe(local);
+  });
+
+  it('getMergeGateFamiliar throws when local familiar not registered', () => {
+    expect(() => registry.getMergeGateFamiliar()).toThrow('No "local" familiar registered. Register one before calling getMergeGateFamiliar().');
   });
 
   it('get returns undefined for unknown type', () => {

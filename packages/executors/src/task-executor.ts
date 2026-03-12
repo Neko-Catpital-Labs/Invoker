@@ -246,6 +246,7 @@ export class TaskExecutor {
   /**
    * Select the familiar to use for a given task.
    * Uses task.familiarType to look up in the registry; falls back to default.
+   * Merge gate tasks use local familiar for direct repo access.
    */
   selectFamiliar(task: TaskState): Familiar {
     // Infer 'worktree' when task has repoUrl but no explicit familiarType
@@ -280,6 +281,13 @@ export class TaskExecutor {
         console.log(`[trace] TaskExecutor.selectFamiliar: task=${task.id} effectiveType=worktree → worktree (lazy registered)`);
         return worktree;
       }
+    }
+
+    // Merge gate tasks need local familiar for direct repo access
+    if (task.isMergeNode) {
+      const mergeGateFamiliar = this.familiarRegistry.getMergeGateFamiliar();
+      console.log(`[trace] TaskExecutor.selectFamiliar: task=${task.id} isMergeNode=true → ${mergeGateFamiliar.type} (merge gate)`);
+      return mergeGateFamiliar;
     }
 
     const defaultFamiliar = this.familiarRegistry.getDefault();

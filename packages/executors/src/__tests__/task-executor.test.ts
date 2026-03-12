@@ -22,7 +22,7 @@ function createExecutorWithTasks(tasks: Map<string, TaskState>): TaskExecutor {
   return new TaskExecutor({
     orchestrator: orchestrator as any,
     persistence: {} as any,
-    familiarRegistry: { getDefault: () => ({ type: 'local' }), get: () => null, getAll: () => [] } as any,
+    familiarRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
     cwd: '/tmp',
   });
 }
@@ -125,7 +125,7 @@ describe('TaskExecutor', () => {
         handleWorkerResponse,
       };
       const throwingFamiliar = {
-        type: 'local',
+        type: 'worktree',
         start: async () => { throw new Error('worktree creation failed'); },
         onOutput: () => () => {},
         onComplete: () => () => {},
@@ -266,7 +266,7 @@ describe('TaskExecutor', () => {
       const executor = new TaskExecutor({
         orchestrator: orchestrator as any,
         persistence: persistence as any,
-        familiarRegistry: { getDefault: () => ({ type: 'local' }), get: () => null, getAll: () => [] } as any,
+        familiarRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
         cwd: '/tmp',
         callbacks: { onComplete },
       });
@@ -330,7 +330,7 @@ describe('TaskExecutor', () => {
       const executor = new TaskExecutor({
         orchestrator: orchestrator as any,
         persistence: persistence as any,
-        familiarRegistry: { getDefault: () => ({ type: 'local' }), get: () => null, getAll: () => [] } as any,
+        familiarRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
         cwd: '/tmp',
         callbacks: { onComplete: vi.fn() },
       });
@@ -387,7 +387,7 @@ describe('TaskExecutor', () => {
       const executor = new TaskExecutor({
         orchestrator: orchestrator as any,
         persistence: {} as any,
-        familiarRegistry: { getDefault: () => ({ type: 'local' }), get: () => null, getAll: () => [] } as any,
+        familiarRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
         cwd: '/tmp',
       });
 
@@ -422,7 +422,7 @@ describe('TaskExecutor', () => {
       const executor = new TaskExecutor({
         orchestrator: orchestrator as any,
         persistence: {} as any,
-        familiarRegistry: { getDefault: () => ({ type: 'local' }), get: () => null, getAll: () => [] } as any,
+        familiarRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
         cwd: '/tmp',
       });
 
@@ -459,7 +459,7 @@ describe('TaskExecutor', () => {
       const executor = new TaskExecutor({
         orchestrator: orchestrator as any,
         persistence: {} as any,
-        familiarRegistry: { getDefault: () => ({ type: 'local' }), get: () => null, getAll: () => [] } as any,
+        familiarRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
         cwd: '/tmp',
       });
 
@@ -489,7 +489,7 @@ describe('TaskExecutor', () => {
       const executor = new TaskExecutor({
         orchestrator: orchestrator as any,
         persistence: {} as any,
-        familiarRegistry: { getDefault: () => ({ type: 'local' }), get: () => null, getAll: () => [] } as any,
+        familiarRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
         cwd: '/tmp',
       });
 

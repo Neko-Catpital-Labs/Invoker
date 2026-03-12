@@ -12,9 +12,17 @@ export class FamiliarRegistry {
   }
 
   getDefault(): Familiar {
+    const worktree = this.familiars.get('worktree');
+    if (!worktree) {
+      throw new Error('No "worktree" familiar registered. Register one before calling getDefault().');
+    }
+    return worktree;
+  }
+
+  getMergeGateFamiliar(): Familiar {
     const local = this.familiars.get('local');
     if (!local) {
-      throw new Error('No "local" familiar registered. Register one before calling getDefault().');
+      throw new Error('No "local" familiar registered. Register one before calling getMergeGateFamiliar().');
     }
     return local;
   }

@@ -1,4 +1,4 @@
-import { FamiliarRegistry, LocalFamiliar, DockerFamiliar } from '@invoker/executors';
+import { FamiliarRegistry, LocalFamiliar, WorktreeFamiliar, DockerFamiliar } from '@invoker/executors';
 import type { Familiar, FamiliarHandle } from '@invoker/executors';
 import type { TaskState } from '@invoker/core';
 
@@ -22,12 +22,13 @@ describe('Terminal routing via selectFamiliar', () => {
   beforeEach(() => {
     registry = new FamiliarRegistry();
     registry.register('local', new LocalFamiliar());
+    registry.register('worktree', new WorktreeFamiliar({ repoDir: '/tmp' }));
   });
 
-  it('returns local familiar when no familiarType specified', () => {
+  it('returns worktree familiar when no familiarType specified', () => {
     const task = { familiarType: undefined } as TaskState;
     const familiar = selectFamiliar(registry, task);
-    expect(familiar.type).toBe('local');
+    expect(familiar.type).toBe('worktree');
   });
 
   it('returns local familiar for familiarType "local"', () => {
@@ -48,17 +49,17 @@ describe('Terminal routing via selectFamiliar', () => {
   it('per-task handle map routes getTerminalSpec to correct familiar', () => {
     const taskHandles = new Map<string, { handle: FamiliarHandle; familiar: Familiar }>();
 
-    const localFamiliar = registry.getDefault();
+    const worktreeFamiliar = registry.getDefault();
     const dockerTask = { familiarType: 'docker' } as TaskState;
     const dockerFamiliar = selectFamiliar(registry, dockerTask);
 
-    const localHandle = { executionId: 'local-1', taskId: 'task-local' };
+    const worktreeHandle = { executionId: 'worktree-1', taskId: 'task-worktree' };
     const dockerHandle = { executionId: 'docker-1', taskId: 'task-docker' };
-    taskHandles.set('task-local', { handle: localHandle, familiar: localFamiliar });
+    taskHandles.set('task-worktree', { handle: worktreeHandle, familiar: worktreeFamiliar });
     taskHandles.set('task-docker', { handle: dockerHandle, familiar: dockerFamiliar });
 
-    const localEntry = taskHandles.get('task-local')!;
-    expect(localEntry.familiar.type).toBe('local');
+    const worktreeEntry = taskHandles.get('task-worktree')!;
+    expect(worktreeEntry.familiar.type).toBe('worktree');
 
     const dockerEntry = taskHandles.get('task-docker')!;
     expect(dockerEntry.familiar.type).toBe('docker');
