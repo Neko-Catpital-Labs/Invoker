@@ -17,10 +17,12 @@ This project uses `better-sqlite3`, a native C++ addon that must be compiled for
 
 ### How it works
 
-- `pnpm install` triggers `postinstall` which runs `rebuild:electron`, compiling `better-sqlite3` for ABI 133.
+- `pnpm install` triggers `postinstall` → `scripts/rebuild-for-electron.js`, which runs `scripts/check-native-modules.js` under Electron's Node (`ELECTRON_RUN_AS_NODE=1`) to compile `better-sqlite3` for ABI 133.
+- `onlyBuiltDependencies` in root `package.json` allows both `better-sqlite3` (native compile) and `electron` (binary download) to run their install scripts.
 - Packages that use `better-sqlite3` in tests (`persistence`, `surfaces`, `app`) run vitest through `scripts/electron-vitest`, which executes vitest under Electron's bundled Node.js.
 - Packages without native deps (`core`, `graph`, `protocol`, `transport`, `executors`, `ui`) use system Node normally.
 - All Electron entry points (`dev`, `run.sh`, `submit-plan.sh`, `test:e2e`) use ABI 133 natively.
+- Git worktrees created by `WorktreeFamiliar` run `pnpm install --frozen-lockfile && node scripts/rebuild-for-electron.js` to provision dependencies and ensure the correct ABI.
 
 ### Troubleshooting
 
@@ -31,6 +33,12 @@ pnpm run rebuild:electron
 ```
 
 Do **not** run `pnpm rebuild better-sqlite3` directly — that rebuilds for system Node (ABI 127) which will break Electron.
+
+To verify worktree provisioning works end-to-end:
+
+```bash
+bash scripts/test-worktree-provisioning.sh
+```
 
 ### Plan task commands
 
