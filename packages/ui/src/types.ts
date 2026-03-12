@@ -87,6 +87,7 @@ export interface WorkflowMeta {
   status: string;
   baseBranch?: string;
   onFinish?: string;
+  mergeMode?: string;
 }
 
 // ── Workflow Status ─────────────────────────────────────────
@@ -134,6 +135,7 @@ export interface PlanDefinition {
   tasks: PlanTask[];
   onFinish?: 'none' | 'merge' | 'pull_request';
   baseBranch?: string;
+  mergeMode?: 'manual' | 'automatic';
 }
 
 // ── Task Replacement ────────────────────────────────────────
@@ -189,6 +191,7 @@ export interface InvokerAPI {
     errors: string[];
   }>;
   setMergeBranch: (workflowId: string, baseBranch: string) => Promise<void>;
+  approveMerge: (workflowId: string) => Promise<void>;
 }
 
 // ── Augment global Window ───────────────────────────────────

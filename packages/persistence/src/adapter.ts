@@ -40,6 +40,7 @@ export interface Workflow {
   onFinish?: 'none' | 'merge' | 'pull_request';
   baseBranch?: string;
   featureBranch?: string;
+  mergeMode?: 'manual' | 'automatic';
   generation?: number;
   createdAt: string;
   updatedAt: string;
