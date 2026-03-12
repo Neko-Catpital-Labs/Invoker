@@ -71,7 +71,7 @@ export interface InvokerAPI {
   provideInput: (taskId: string, input: string) => Promise<void>;
   approve: (taskId: string) => Promise<void>;
   reject: (taskId: string, reason?: string) => Promise<void>;
-  selectExperiment: (taskId: string, experimentId: string) => Promise<void>;
+  selectExperiment: (taskId: string, experimentId: string | string[]) => Promise<void>;
   restartTask: (taskId: string) => Promise<void>;
   editTaskCommand: (taskId: string, newCommand: string) => Promise<void>;
   editTaskType: (taskId: string, familiarType: string) => Promise<void>;

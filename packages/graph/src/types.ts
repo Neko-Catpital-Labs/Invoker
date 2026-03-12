@@ -70,6 +70,7 @@ export interface TaskState {
   readonly pivot?: boolean;
   readonly experiments?: readonly string[];
   readonly selectedExperiment?: string;
+  readonly selectedExperiments?: readonly string[];
   readonly experimentPrompt?: string;
   readonly experimentVariants?: readonly ExperimentVariant[];
 

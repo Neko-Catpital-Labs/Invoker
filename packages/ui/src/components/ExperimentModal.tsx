@@ -10,7 +10,7 @@ import type { TaskState } from '../types.js';
 
 interface ExperimentModalProps {
   task: TaskState;
-  onSelect: (taskId: string, experimentId: string) => void;
+  onSelect: (taskId: string, experimentIds: string[]) => void;
   onClose: () => void;
 }
 
@@ -19,13 +19,22 @@ export function ExperimentModal({
   onSelect,
   onClose,
 }: ExperimentModalProps) {
-  const [selected, setSelected] = useState<string | null>(null);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
 
   const results = task.experimentResults ?? [];
 
+  const toggleExperiment = (id: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
   const handleConfirm = () => {
-    if (!selected) return;
-    onSelect(task.id, selected);
+    if (selected.size === 0) return;
+    onSelect(task.id, Array.from(selected));
     onClose();
   };
 
@@ -33,11 +42,11 @@ export function ExperimentModal({
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
       <div className="bg-gray-800 rounded-lg shadow-xl w-full max-w-lg p-6 border border-gray-700">
         <h2 className="text-lg font-semibold text-gray-100 mb-2">
-          Select Experiment
+          Select Experiments
         </h2>
 
         <p className="text-sm text-gray-400 mb-4">
-          Choose which experiment result to use for reconciliation.
+          Choose one or more experiment results to use for reconciliation.
         </p>
 
         {results.length === 0 ? (
@@ -49,16 +58,16 @@ export function ExperimentModal({
             {results.map((result) => (
               <button
                 key={result.id}
-                onClick={() => setSelected(result.id)}
+                onClick={() => toggleExperiment(result.id)}
                 className={`w-full text-left p-3 rounded border transition-colors ${
-                  selected === result.id
+                  selected.has(result.id)
                     ? 'border-purple-500 bg-purple-900/30'
                     : 'border-gray-600 bg-gray-700/50 hover:bg-gray-700'
                 }`}
               >
                 <div className="flex items-center justify-between mb-1">
                   <span className="text-sm font-medium text-gray-200">
-                    {result.id}
+                    {selected.has(result.id) ? '\u2611 ' : '\u2610 '}{result.id}
                   </span>
                   <span
                     className={`text-xs px-2 py-0.5 rounded ${
@@ -92,10 +101,10 @@ export function ExperimentModal({
           </button>
           <button
             onClick={handleConfirm}
-            disabled={!selected}
+            disabled={selected.size === 0}
             className="px-4 py-2 bg-purple-600 hover:bg-purple-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white rounded text-sm font-medium transition-colors"
           >
-            Confirm Selection
+            Confirm Selection ({selected.size})
           </button>
         </div>
       </div>

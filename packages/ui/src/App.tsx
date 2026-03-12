@@ -246,9 +246,9 @@ export function App() {
   );
 
   const handleSelectExperiment = useCallback(
-    async (taskId: string, experimentId: string) => {
+    async (taskId: string, experimentIds: string[]) => {
       if (!invoker) return;
-      await invoker.selectExperiment(taskId, experimentId);
+      await invoker.selectExperiment(taskId, experimentIds.length === 1 ? experimentIds[0] : experimentIds);
     },
     [invoker],
   );

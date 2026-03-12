@@ -1954,4 +1954,118 @@ describe('Orchestrator', () => {
       expect(orchestrator.getTask('D')!.status).toBe('running');
     });
   });
+
+  // ── selectExperiments (multi-select) ────────────────────
+
+  describe('selectExperiments', () => {
+    function setupReconciliation() {
+      orchestrator.loadPlan({
+        name: 'multi-select-test',
+        tasks: [
+          { id: 'pivot', description: 'Pivot task', pivot: true },
+          { id: 'downstream', description: 'After recon', dependencies: ['pivot'] },
+        ],
+      });
+      orchestrator.startExecution();
+
+      orchestrator.handleWorkerResponse({
+        requestId: 'spawn-pivot',
+        actionId: 'pivot',
+        status: 'spawn_experiments',
+        outputs: { exitCode: 0 },
+        dagMutation: {
+          spawnExperiments: {
+            description: 'Try approaches',
+            variants: [
+              { id: 'v1', description: 'V1', prompt: 'A' },
+              { id: 'v2', description: 'V2', prompt: 'B' },
+              { id: 'v3', description: 'V3', prompt: 'C' },
+            ],
+          },
+        },
+      });
+
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 'pivot-exp-v1', status: 'completed', outputs: { exitCode: 0 } }),
+      );
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 'pivot-exp-v2', status: 'completed', outputs: { exitCode: 0 } }),
+      );
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 'pivot-exp-v3', status: 'completed', outputs: { exitCode: 0 } }),
+      );
+
+      expect(orchestrator.getTask('pivot-reconciliation')!.status).toBe('needs_input');
+    }
+
+    it('multi-select completes reconciliation with all IDs', () => {
+      setupReconciliation();
+      publishedDeltas = [];
+
+      orchestrator.selectExperiments(
+        'pivot-reconciliation',
+        ['pivot-exp-v1', 'pivot-exp-v2'],
+        'reconciliation/pivot-reconciliation',
+        'abc123',
+      );
+
+      const recon = orchestrator.getTask('pivot-reconciliation')!;
+      expect(recon.status).toBe('completed');
+      expect(recon.selectedExperiment).toBe('pivot-exp-v1');
+      expect(recon.selectedExperiments).toEqual(['pivot-exp-v1', 'pivot-exp-v2']);
+      expect(recon.branch).toBe('reconciliation/pivot-reconciliation');
+      expect(recon.commit).toBe('abc123');
+    });
+
+    it('multi-select unblocks downstream tasks', () => {
+      setupReconciliation();
+
+      orchestrator.selectExperiments(
+        'pivot-reconciliation',
+        ['pivot-exp-v1', 'pivot-exp-v3'],
+        'reconciliation/pivot-reconciliation',
+        'def456',
+      );
+
+      const downstreamV2 = orchestrator.getTask('downstream-v2');
+      expect(downstreamV2).toBeDefined();
+      expect(downstreamV2!.status).toBe('running');
+    });
+
+    it('single-element array delegates to selectExperiment', () => {
+      setupReconciliation();
+
+      persistence.updateTask('pivot-exp-v1', {
+        branch: 'experiment/pivot-exp-v1-hash',
+        commit: 'singlecommit',
+      });
+
+      orchestrator.selectExperiments('pivot-reconciliation', ['pivot-exp-v1']);
+
+      const recon = orchestrator.getTask('pivot-reconciliation')!;
+      expect(recon.status).toBe('completed');
+      expect(recon.selectedExperiment).toBe('pivot-exp-v1');
+      expect(recon.branch).toBe('experiment/pivot-exp-v1-hash');
+      expect(recon.commit).toBe('singlecommit');
+      expect(recon.selectedExperiments).toBeUndefined();
+    });
+
+    it('publishes delta with selectedExperiments field', () => {
+      setupReconciliation();
+      publishedDeltas = [];
+
+      orchestrator.selectExperiments(
+        'pivot-reconciliation',
+        ['pivot-exp-v2', 'pivot-exp-v3'],
+        'recon-branch',
+        'recon-commit',
+      );
+
+      const reconDelta = publishedDeltas.find(
+        (d) => d.type === 'updated' && d.taskId === 'pivot-reconciliation',
+      );
+      expect(reconDelta).toBeDefined();
+      expect((reconDelta as any).changes.selectedExperiments).toEqual(['pivot-exp-v2', 'pivot-exp-v3']);
+    });
+  });
 });

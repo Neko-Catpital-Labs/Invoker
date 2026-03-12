@@ -469,6 +469,44 @@ export class Orchestrator {
   }
 
   /**
+   * Select multiple winning experiments for a reconciliation task.
+   * For a single experiment, delegates to selectExperiment.
+   * For multiple, uses the provided combined branch/commit from the merged result.
+   */
+  selectExperiments(
+    taskId: string,
+    experimentIds: string[],
+    combinedBranch?: string,
+    combinedCommit?: string,
+  ): TaskState[] {
+    if (experimentIds.length === 1) {
+      return this.selectExperiment(taskId, experimentIds[0]);
+    }
+
+    this.refreshFromDb();
+    const task = this.stateMachine.getTask(taskId);
+    if (!task || !task.isReconciliation) return [];
+
+    const changes: Partial<TaskState> = {
+      status: 'completed',
+      selectedExperiment: experimentIds[0],
+      selectedExperiments: experimentIds,
+      completedAt: new Date(),
+      branch: combinedBranch,
+      commit: combinedCommit,
+    };
+    this.writeAndSync(taskId, changes);
+    const delta: TaskDelta = { type: 'updated', taskId, changes };
+    this.persistence.logEvent?.(taskId, 'task.completed', changes);
+    this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
+
+    const readyTaskIds = this.stateMachine.findNewlyReadyTasks(taskId);
+    const started = this.autoStartReadyTasks(readyTaskIds);
+    this.checkWorkflowCompletion();
+    return started;
+  }
+
+  /**
    * Restart a non-running task: reset it to pending, unblock dependents,
    * and auto-start if its own dependencies are satisfied.
    */

@@ -674,6 +674,24 @@ describe('Experiment Lifecycle (integration)', () => {
       expect(recon.commit).toBeUndefined();
     });
 
+    it('multi-select propagates combined branch and commit', () => {
+      runToReconciliation();
+
+      orchestrator.selectExperiments(
+        'pivot-reconciliation',
+        ['pivot-exp-v1', 'pivot-exp-v2'],
+        'reconciliation/pivot-reconciliation',
+        'combined123',
+      );
+
+      const recon = orchestrator.getTask('pivot-reconciliation')!;
+      expect(recon.status).toBe('completed');
+      expect(recon.selectedExperiment).toBe('pivot-exp-v1');
+      expect(recon.selectedExperiments).toEqual(['pivot-exp-v1', 'pivot-exp-v2']);
+      expect(recon.branch).toBe('reconciliation/pivot-reconciliation');
+      expect(recon.commit).toBe('combined123');
+    });
+
     it('propagates branch/commit even when winner experiment failed', () => {
       orchestrator.loadPlan(standardPlan);
       orchestrator.startExecution();
@@ -702,5 +720,76 @@ describe('Experiment Lifecycle (integration)', () => {
       expect(recon.branch).toBe('experiment/pivot-exp-v1-failed');
       expect(recon.commit).toBe('failed123');
     });
+  });
+
+  // ── 11. Multi-select experiment lifecycle ────────────────
+
+  it('multi-select experiment lifecycle: 3 variants, select 2, downstream unblocks', () => {
+    const plan: PlanDefinition = {
+      name: 'multi-select-lifecycle',
+      tasks: [
+        { id: 'setup', description: 'Setup' },
+        { id: 'pivot', description: 'Pivot', dependencies: ['setup'], pivot: true },
+        { id: 'downstream', description: 'Downstream', dependencies: ['pivot'] },
+      ],
+    };
+
+    orchestrator.loadPlan(plan);
+    orchestrator.startExecution();
+    orchestrator.handleWorkerResponse(completedResponse('setup'));
+
+    // Spawn 3 variants
+    orchestrator.handleWorkerResponse(
+      spawnResponse('pivot', [
+        { id: 'v1', prompt: 'Approach A' },
+        { id: 'v2', prompt: 'Approach B' },
+        { id: 'v3', prompt: 'Approach C' },
+      ]),
+    );
+
+    // All 3 experiments running
+    expect(orchestrator.getTask('pivot-exp-v1')!.status).toBe('running');
+    expect(orchestrator.getTask('pivot-exp-v2')!.status).toBe('running');
+    expect(orchestrator.getTask('pivot-exp-v3')!.status).toBe('running');
+
+    // Complete all 3
+    orchestrator.handleWorkerResponse(completedResponse('pivot-exp-v1'));
+    orchestrator.handleWorkerResponse(completedResponse('pivot-exp-v2'));
+    orchestrator.handleWorkerResponse(completedResponse('pivot-exp-v3'));
+
+    // Reconciliation awaits input
+    const recon = orchestrator.getTask('pivot-reconciliation')!;
+    expect(recon.status).toBe('needs_input');
+    expect(recon.experimentResults).toHaveLength(3);
+
+    // Multi-select: pick v1 and v3
+    orchestrator.selectExperiments(
+      'pivot-reconciliation',
+      ['pivot-exp-v1', 'pivot-exp-v3'],
+      'reconciliation/pivot-reconciliation',
+      'merged-abc',
+    );
+
+    // Reconciliation completed with multi-select fields
+    const reconAfter = orchestrator.getTask('pivot-reconciliation')!;
+    expect(reconAfter.status).toBe('completed');
+    expect(reconAfter.selectedExperiment).toBe('pivot-exp-v1');
+    expect(reconAfter.selectedExperiments).toEqual(['pivot-exp-v1', 'pivot-exp-v3']);
+    expect(reconAfter.branch).toBe('reconciliation/pivot-reconciliation');
+    expect(reconAfter.commit).toBe('merged-abc');
+
+    // Downstream forked version is now running
+    expect(orchestrator.getTask('downstream')!.status).toBe('stale');
+    expect(orchestrator.getTask('downstream-v2')!.status).toBe('running');
+
+    // Complete downstream and merge node
+    orchestrator.handleWorkerResponse(completedResponse('downstream-v2'));
+    const mergeNode = orchestrator.getAllTasks().find(t => t.isMergeNode && t.status === 'running');
+    orchestrator.handleWorkerResponse(completedResponse(mergeNode!.id));
+
+    const status = orchestrator.getWorkflowStatus();
+    expect(status.failed).toBe(0);
+    expect(status.running).toBe(0);
+    expect(status.pending).toBe(0);
   });
 });

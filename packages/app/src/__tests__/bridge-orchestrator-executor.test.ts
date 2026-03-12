@@ -1026,3 +1026,136 @@ describe('Flow 9: manual merge mode', () => {
     expect(finalMerge).toBeDefined();
   });
 });
+
+// ── Flow 10: Multi-experiment selection ──────────────────
+
+describe('Flow 10: multi-experiment selection', () => {
+  let h: TestHarness;
+
+  const EXPERIMENT_PLAN: PlanDefinition = {
+    name: 'Experiment Plan',
+    onFinish: 'merge',
+    mergeMode: 'automatic',
+    baseBranch: 'master',
+    featureBranch: 'plan/experiment',
+    tasks: [
+      { id: 'A', description: 'Pivot task', command: 'echo pivot', pivot: true },
+      { id: 'B', description: 'Downstream', command: 'echo down', dependencies: ['A'] },
+    ],
+  };
+
+  beforeEach(() => {
+    h = createTestHarness();
+  });
+
+  it('multi-select experiment flow completes reconciliation and unblocks downstream', () => {
+    h.loadAndStart(EXPERIMENT_PLAN);
+
+    // A spawns experiments
+    h.orchestrator.handleWorkerResponse({
+      requestId: 'spawn-A',
+      actionId: 'A',
+      status: 'spawn_experiments' as const,
+      outputs: { exitCode: 0 },
+      dagMutation: {
+        spawnExperiments: {
+          description: 'Try approaches',
+          variants: [
+            { id: 'v1', description: 'V1', prompt: 'Try A' },
+            { id: 'v2', description: 'V2', prompt: 'Try B' },
+            { id: 'v3', description: 'V3', prompt: 'Try C' },
+          ],
+        },
+      },
+    });
+
+    // Complete all experiments with branches
+    const expIds = h.getAllTasks()
+      .filter(t => t.id.startsWith('A-exp-'))
+      .map(t => t.id);
+    expect(expIds).toHaveLength(3);
+
+    for (const id of expIds) {
+      h.completeTask(id);
+      h.persistence.updateTask(id, {
+        branch: `experiment/${id}-hash`,
+        commit: `commit-${id}`,
+      } as any);
+    }
+    (h.orchestrator as any).refreshFromDb();
+
+    // Reconciliation should be needs_input
+    const reconTask = h.getAllTasks().find(t => t.id.includes('reconciliation'));
+    expect(reconTask).toBeDefined();
+    expect(reconTask!.status).toBe('needs_input');
+
+    // Multi-select: pick v1 and v3
+    const selectedIds = [expIds[0], expIds[2]];
+    const started = h.orchestrator.selectExperiments(
+      reconTask!.id,
+      selectedIds,
+      'reconciliation/combined',
+      'combined-commit',
+    );
+
+    // Reconciliation completed
+    const reconAfter = h.getTask(reconTask!.id)!;
+    expect(reconAfter.status).toBe('completed');
+    expect(reconAfter.selectedExperiments).toEqual(selectedIds);
+    expect(reconAfter.branch).toBe('reconciliation/combined');
+
+    // Downstream should have been unblocked
+    const downstreamV2 = h.getAllTasks().find(t => t.id.startsWith('B-v'));
+    expect(downstreamV2).toBeDefined();
+    expect(downstreamV2!.status).toBe('running');
+  });
+
+  it('multi-select branch propagation: downstream sees combined reconciliation branch', () => {
+    h.loadAndStart(EXPERIMENT_PLAN);
+
+    h.orchestrator.handleWorkerResponse({
+      requestId: 'spawn-A',
+      actionId: 'A',
+      status: 'spawn_experiments' as const,
+      outputs: { exitCode: 0 },
+      dagMutation: {
+        spawnExperiments: {
+          description: 'Try',
+          variants: [
+            { id: 'v1', description: 'V1', prompt: 'A' },
+            { id: 'v2', description: 'V2', prompt: 'B' },
+          ],
+        },
+      },
+    });
+
+    const expIds = h.getAllTasks()
+      .filter(t => t.id.startsWith('A-exp-'))
+      .map(t => t.id);
+
+    for (const id of expIds) {
+      h.completeTask(id);
+      h.persistence.updateTask(id, {
+        branch: `experiment/${id}-hash`,
+        commit: `commit-${id}`,
+      } as any);
+    }
+    (h.orchestrator as any).refreshFromDb();
+
+    const reconTask = h.getAllTasks().find(t => t.id.includes('reconciliation'))!;
+
+    h.orchestrator.selectExperiments(
+      reconTask.id,
+      expIds,
+      'reconciliation/combined-branch',
+      'combined-hash',
+    );
+
+    // Downstream task's upstream branches should include the combined branch
+    const downstreamV2 = h.getAllTasks().find(t => t.id.startsWith('B-v'));
+    expect(downstreamV2).toBeDefined();
+
+    const branches = h.executor.collectUpstreamBranches(downstreamV2!);
+    expect(branches).toContain('reconciliation/combined-branch');
+  });
+});

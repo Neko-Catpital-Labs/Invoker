@@ -504,6 +504,60 @@ export class TaskExecutor {
     });
   }
 
+  // ── Experiment Branch Merging ────────────────────────────
+
+  /**
+   * Merge multiple selected experiment branches into a single reconciliation branch.
+   * Returns the combined branch name and HEAD commit hash.
+   */
+  async mergeExperimentBranches(
+    reconTaskId: string,
+    experimentIds: string[],
+  ): Promise<{ branch: string; commit: string }> {
+    if (experimentIds.length === 1) {
+      const task = this.orchestrator.getTask(experimentIds[0]);
+      if (!task?.branch) {
+        throw new Error(`Experiment ${experimentIds[0]} has no branch`);
+      }
+      return { branch: task.branch, commit: task.commit ?? '' };
+    }
+
+    const branchName = `reconciliation/${reconTaskId}`;
+    const reconTask = this.orchestrator.getTask(reconTaskId);
+    const parentId = reconTask?.parentTask;
+    const parentTask = parentId ? this.orchestrator.getTask(parentId) : undefined;
+    const baseBranch = parentTask?.branch
+      ?? this.defaultBranch
+      ?? await this.detectDefaultBranch();
+
+    const originalBranch = await this.execGit(['branch', '--show-current']);
+
+    try {
+      try {
+        await this.execGit(['checkout', '-b', branchName, baseBranch]);
+      } catch {
+        await this.execGit(['checkout', baseBranch]);
+        await this.execGit(['branch', '-D', branchName]);
+        await this.execGit(['checkout', '-b', branchName, baseBranch]);
+      }
+
+      for (const expId of experimentIds) {
+        const expTask = this.orchestrator.getTask(expId);
+        if (!expTask?.branch) {
+          throw new Error(`Experiment ${expId} has no branch`);
+        }
+        await this.execGit(['merge', '--no-ff', '-m', `Merge ${expTask.branch}`, expTask.branch]);
+      }
+
+      const commit = await this.execGit(['rev-parse', 'HEAD']);
+      return { branch: branchName, commit };
+    } catch (err) {
+      try { await this.execGit(['merge', '--abort']); } catch { /* no merge in progress */ }
+      try { await this.execGit(['checkout', originalBranch]); } catch { /* best effort */ }
+      throw err;
+    }
+  }
+
   // ── Private Helpers ──────────────────────────────────────
 
   collectUpstreamBranches(task: TaskState): string[] {

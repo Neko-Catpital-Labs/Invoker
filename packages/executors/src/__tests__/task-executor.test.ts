@@ -748,4 +748,141 @@ describe('TaskExecutor', () => {
       await expect(executor.approveMerge('wf-1')).rejects.toThrow('no merge configured');
     });
   });
+
+  // ── mergeExperimentBranches ─────────────────────────────
+
+  describe('mergeExperimentBranches', () => {
+    it('merges multiple experiment branches into a reconciliation branch', async () => {
+      const tasks = new Map<string, TaskState>();
+      tasks.set('pivot-exp-v1', makeTask({
+        id: 'pivot-exp-v1',
+        status: 'completed',
+        branch: 'experiment/pivot-exp-v1-hash1',
+        commit: 'commit1',
+      }));
+      tasks.set('pivot-exp-v2', makeTask({
+        id: 'pivot-exp-v2',
+        status: 'completed',
+        branch: 'experiment/pivot-exp-v2-hash2',
+        commit: 'commit2',
+      }));
+      tasks.set('pivot-reconciliation', makeTask({
+        id: 'pivot-reconciliation',
+        isReconciliation: true,
+        parentTask: 'pivot',
+      }));
+      tasks.set('pivot', makeTask({
+        id: 'pivot',
+        status: 'completed',
+        branch: 'experiment/pivot-base',
+      }));
+
+      const orchestrator = {
+        getTask: (id: string) => tasks.get(id),
+        getAllTasks: () => Array.from(tasks.values()),
+      };
+
+      const executor = new TaskExecutor({
+        orchestrator: orchestrator as any,
+        persistence: { loadWorkflow: () => null } as any,
+        familiarRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+        defaultBranch: 'master',
+      });
+
+      const gitCalls: string[][] = [];
+      (executor as any).execGit = async (args: string[]) => {
+        gitCalls.push(args);
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        if (args[0] === 'rev-parse' && args[1] === 'HEAD') return 'merged-commit-hash';
+        return '';
+      };
+
+      const result = await executor.mergeExperimentBranches('pivot-reconciliation', ['pivot-exp-v1', 'pivot-exp-v2']);
+
+      expect(result.branch).toBe('reconciliation/pivot-reconciliation');
+      expect(result.commit).toBe('merged-commit-hash');
+
+      // Verify git operations
+      expect(gitCalls).toContainEqual(['checkout', '-b', 'reconciliation/pivot-reconciliation', 'experiment/pivot-base']);
+      expect(gitCalls).toContainEqual(expect.arrayContaining(['merge', '--no-ff', '-m', expect.stringContaining('experiment/pivot-exp-v1-hash1')]));
+      expect(gitCalls).toContainEqual(expect.arrayContaining(['merge', '--no-ff', '-m', expect.stringContaining('experiment/pivot-exp-v2-hash2')]));
+    });
+
+    it('merge conflict aborts and throws', async () => {
+      const tasks = new Map<string, TaskState>();
+      tasks.set('pivot-exp-v1', makeTask({
+        id: 'pivot-exp-v1',
+        status: 'completed',
+        branch: 'experiment/pivot-exp-v1-hash1',
+      }));
+      tasks.set('pivot-exp-v2', makeTask({
+        id: 'pivot-exp-v2',
+        status: 'completed',
+        branch: 'experiment/pivot-exp-v2-hash2',
+      }));
+      tasks.set('pivot-reconciliation', makeTask({
+        id: 'pivot-reconciliation',
+        isReconciliation: true,
+        parentTask: 'pivot',
+      }));
+      tasks.set('pivot', makeTask({
+        id: 'pivot',
+        status: 'completed',
+        branch: 'experiment/pivot-base',
+      }));
+
+      const orchestrator = {
+        getTask: (id: string) => tasks.get(id),
+      };
+
+      const executor = new TaskExecutor({
+        orchestrator: orchestrator as any,
+        persistence: { loadWorkflow: () => null } as any,
+        familiarRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+        defaultBranch: 'master',
+      });
+
+      let mergeCount = 0;
+      (executor as any).execGit = async (args: string[]) => {
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        if (args[0] === 'merge') {
+          mergeCount++;
+          if (mergeCount === 2) throw new Error('CONFLICT (content)');
+        }
+        return '';
+      };
+
+      await expect(
+        executor.mergeExperimentBranches('pivot-reconciliation', ['pivot-exp-v1', 'pivot-exp-v2']),
+      ).rejects.toThrow('CONFLICT');
+    });
+
+    it('single experiment returns its branch directly', async () => {
+      const tasks = new Map<string, TaskState>();
+      tasks.set('pivot-exp-v1', makeTask({
+        id: 'pivot-exp-v1',
+        status: 'completed',
+        branch: 'experiment/pivot-exp-v1-hash1',
+        commit: 'single-commit',
+      }));
+
+      const orchestrator = {
+        getTask: (id: string) => tasks.get(id),
+      };
+
+      const executor = new TaskExecutor({
+        orchestrator: orchestrator as any,
+        persistence: { loadWorkflow: () => null } as any,
+        familiarRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+      });
+
+      const result = await executor.mergeExperimentBranches('pivot-reconciliation', ['pivot-exp-v1']);
+
+      expect(result.branch).toBe('experiment/pivot-exp-v1-hash1');
+      expect(result.commit).toBe('single-commit');
+    });
+  });
 });

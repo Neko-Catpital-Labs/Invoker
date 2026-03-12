@@ -1096,9 +1096,16 @@ function setupGuiMode(): void {
       orchestrator.reject(taskId, reason);
     });
 
-    ipcMain.handle('invoker:select-experiment', async (_event, taskId: string, experimentId: string) => {
-      const newlyStarted = orchestrator.selectExperiment(taskId, experimentId);
-      await taskExecutor.executeTasks(newlyStarted);
+    ipcMain.handle('invoker:select-experiment', async (_event, taskId: string, experimentId: string | string[]) => {
+      const ids = Array.isArray(experimentId) ? experimentId : [experimentId];
+      if (ids.length === 1) {
+        const newlyStarted = orchestrator.selectExperiment(taskId, ids[0]);
+        await taskExecutor.executeTasks(newlyStarted);
+      } else {
+        const { branch, commit } = await taskExecutor.mergeExperimentBranches(taskId, ids);
+        const newlyStarted = orchestrator.selectExperiments(taskId, ids, branch, commit);
+        await taskExecutor.executeTasks(newlyStarted);
+      }
     });
 
     ipcMain.handle('invoker:restart-task', async (_event, taskId: string) => {

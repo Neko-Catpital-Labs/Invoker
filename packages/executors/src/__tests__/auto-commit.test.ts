@@ -910,3 +910,132 @@ describe('merge gate commit topology (real git)', () => {
     expect(masterOnlyMerges[0]).toContain('Auto Workflow');
   });
 });
+
+// ── mergeExperimentBranches (real git) ──────────────────
+
+describe('mergeExperimentBranches (real git)', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = createTempRepo();
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  function makeTaskState(overrides: Partial<TaskState> & { id: string }): TaskState {
+    return {
+      description: overrides.id,
+      status: 'completed',
+      dependencies: [],
+      createdAt: new Date(),
+      ...overrides,
+    } as TaskState;
+  }
+
+  function createMergeExecutor(tasks: TaskState[]): TaskExecutor {
+    const orchestrator = {
+      getTask: (id: string) => tasks.find(t => t.id === id),
+      getAllTasks: () => tasks,
+    };
+    const persistence = {
+      loadWorkflow: () => null,
+      updateTask: () => {},
+    };
+    const registry = new FamiliarRegistry();
+    return new TaskExecutor({
+      orchestrator: orchestrator as any,
+      persistence: persistence as any,
+      familiarRegistry: registry,
+      cwd: tmpDir,
+      defaultBranch: 'master',
+    });
+  }
+
+  it('merges selected experiment branches into a combined branch with correct topology', async () => {
+    // Create 3 experiment branches from master, each with unique files
+    for (const name of ['exp-v1', 'exp-v2', 'exp-v3']) {
+      execSync(`git checkout -b experiment/${name} master`, { cwd: tmpDir });
+      writeFileSync(join(tmpDir, `${name}.txt`), `content from ${name}`);
+      execSync(`git add -A && git commit -m "Add ${name}"`, { cwd: tmpDir });
+    }
+    execSync('git checkout master', { cwd: tmpDir });
+
+    const hashV1 = execSync('git rev-parse experiment/exp-v1', { cwd: tmpDir }).toString().trim();
+    const hashV2 = execSync('git rev-parse experiment/exp-v2', { cwd: tmpDir }).toString().trim();
+    const hashV3 = execSync('git rev-parse experiment/exp-v3', { cwd: tmpDir }).toString().trim();
+
+    const tasks = [
+      makeTaskState({ id: 'pivot', status: 'completed', branch: 'master' }),
+      makeTaskState({ id: 'pivot-exp-v1', status: 'completed', branch: 'experiment/exp-v1', commit: hashV1 }),
+      makeTaskState({ id: 'pivot-exp-v2', status: 'completed', branch: 'experiment/exp-v2', commit: hashV2 }),
+      makeTaskState({ id: 'pivot-exp-v3', status: 'completed', branch: 'experiment/exp-v3', commit: hashV3 }),
+      makeTaskState({ id: 'pivot-reconciliation', isReconciliation: true, parentTask: 'pivot', status: 'needs_input' }),
+    ];
+
+    const executor = createMergeExecutor(tasks);
+
+    // Select v1 and v3 (skip v2)
+    const result = await executor.mergeExperimentBranches(
+      'pivot-reconciliation',
+      ['pivot-exp-v1', 'pivot-exp-v3'],
+    );
+
+    expect(result.branch).toBe('reconciliation/pivot-reconciliation');
+    expect(result.commit).toBeTruthy();
+
+    // Combined branch should have files from v1 and v3
+    execSync(`git checkout ${result.branch}`, { cwd: tmpDir });
+    expect(existsSync(join(tmpDir, 'exp-v1.txt'))).toBe(true);
+    expect(existsSync(join(tmpDir, 'exp-v3.txt'))).toBe(true);
+
+    // Combined branch should NOT have file from unselected v2
+    expect(existsSync(join(tmpDir, 'exp-v2.txt'))).toBe(false);
+
+    // Both selected experiment commits are ancestors
+    expect(isAncestor(tmpDir, hashV1, result.branch)).toBe(true);
+    expect(isAncestor(tmpDir, hashV3, result.branch)).toBe(true);
+
+    // Merge log shows 2 merge commits
+    const merges = execSync(
+      `git log --merges --oneline ${result.branch}`,
+      { cwd: tmpDir },
+    ).toString().trim().split('\n').filter(l => l);
+    expect(merges.length).toBe(2);
+  });
+
+  it('merge conflict fails cleanly and repo stays in clean state', async () => {
+    // Create 2 experiment branches that modify the same file differently
+    execSync('git checkout -b experiment/conflict-v1 master', { cwd: tmpDir });
+    writeFileSync(join(tmpDir, 'shared.txt'), 'version A');
+    execSync('git add -A && git commit -m "Add shared v1"', { cwd: tmpDir });
+
+    execSync('git checkout master', { cwd: tmpDir });
+    execSync('git checkout -b experiment/conflict-v2 master', { cwd: tmpDir });
+    writeFileSync(join(tmpDir, 'shared.txt'), 'version B');
+    execSync('git add -A && git commit -m "Add shared v2"', { cwd: tmpDir });
+
+    execSync('git checkout master', { cwd: tmpDir });
+
+    const tasks = [
+      makeTaskState({ id: 'pivot', status: 'completed', branch: 'master' }),
+      makeTaskState({ id: 'pivot-exp-cv1', status: 'completed', branch: 'experiment/conflict-v1' }),
+      makeTaskState({ id: 'pivot-exp-cv2', status: 'completed', branch: 'experiment/conflict-v2' }),
+      makeTaskState({ id: 'pivot-reconciliation', isReconciliation: true, parentTask: 'pivot', status: 'needs_input' }),
+    ];
+
+    const executor = createMergeExecutor(tasks);
+
+    await expect(
+      executor.mergeExperimentBranches('pivot-reconciliation', ['pivot-exp-cv1', 'pivot-exp-cv2']),
+    ).rejects.toThrow();
+
+    // Repo should be in a clean state (on master, no merge in progress)
+    const currentBranch = execSync('git branch --show-current', { cwd: tmpDir }).toString().trim();
+    expect(currentBranch).toBe('master');
+
+    const status = execSync('git status --porcelain', { cwd: tmpDir }).toString().trim();
+    expect(status).toBe('');
+  });
+});
