@@ -8,7 +8,7 @@
  * - Action buttons based on status
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect } from 'react';
 import type { TaskState } from '../types.js';
 import { getStatusColor } from '../lib/colors.js';
 
