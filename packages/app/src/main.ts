@@ -87,7 +87,7 @@ function initServices(): void {
   persistence = new SQLiteAdapter(path.join(dbDir, 'invoker.db'));
   familiarRegistry = new FamiliarRegistry();
   familiarRegistry.register('local', new LocalFamiliar());
-  orchestrator = new Orchestrator({ persistence, messageBus });
+  orchestrator = new Orchestrator({ persistence, messageBus, maxConcurrency: 1 });
 
   orchestrator.syncAllFromDb();
   const workflows = persistence.listWorkflows();
@@ -1034,7 +1034,7 @@ function setupGuiMode(): void {
         });
       }
 
-      orchestrator = new Orchestrator({ persistence, messageBus });
+      orchestrator = new Orchestrator({ persistence, messageBus, maxConcurrency: 1 });
       rebuildTaskExecutor();
       taskHandles.clear();
     });
@@ -1044,7 +1044,7 @@ function setupGuiMode(): void {
     ipcMain.handle('invoker:delete-all-workflows', () => {
       console.log('[ipc] delete-all-workflows');
       persistence.deleteAllWorkflows();
-      orchestrator = new Orchestrator({ persistence, messageBus });
+      orchestrator = new Orchestrator({ persistence, messageBus, maxConcurrency: 1 });
       rebuildTaskExecutor();
       taskHandles.clear();
       lastKnownTaskStates.clear();
