@@ -1,0 +1,127 @@
+#!/bin/bash
+# invoker-ctl — CLI for querying and controlling a running Invoker instance.
+#
+# Talks to the HTTP API server on localhost:4100 (or INVOKER_API_PORT).
+#
+# Usage:
+#   ./invoker-ctl health                    Check if Invoker is running
+#   ./invoker-ctl status                    Show workflow status summary
+#   ./invoker-ctl tasks [status]            List tasks (optionally filter by status)
+#   ./invoker-ctl heartbeat <taskId>        Check heartbeat for a specific task
+#   ./invoker-ctl cancel <taskId>           Cancel a running task
+#   ./invoker-ctl restart <taskId>          Restart a failed task
+#   ./invoker-ctl approve <taskId>          Approve a task awaiting approval
+#   ./invoker-ctl reject <taskId> [reason]  Reject a task
+
+set -euo pipefail
+
+PORT="${INVOKER_API_PORT:-4100}"
+BASE="http://127.0.0.1:$PORT"
+
+if ! command -v curl &>/dev/null; then
+  echo "Error: curl is required but not installed." >&2
+  exit 1
+fi
+
+fmt() {
+  if command -v jq &>/dev/null; then
+    jq "$@"
+  else
+    cat
+  fi
+}
+
+case "${1:-}" in
+  health)
+    curl -sf "$BASE/api/health" | fmt '.'
+    ;;
+
+  status)
+    curl -sf "$BASE/api/status" | fmt '.'
+    ;;
+
+  tasks)
+    if [ -n "${2:-}" ]; then
+      curl -sf "$BASE/api/tasks?status=$2" | fmt '.[] | {id, status, description, lastHeartbeatAt, secondsSinceHeartbeat}'
+    else
+      curl -sf "$BASE/api/tasks" | fmt '.[] | {id, status, description}'
+    fi
+    ;;
+
+  heartbeat)
+    if [ -z "${2:-}" ]; then
+      echo "Usage: invoker-ctl heartbeat <taskId>" >&2
+      exit 1
+    fi
+    curl -sf "$BASE/api/tasks/$2" | fmt '{id, status, startedAt, lastHeartbeatAt, secondsSinceHeartbeat}'
+    ;;
+
+  cancel)
+    if [ -z "${2:-}" ]; then
+      echo "Usage: invoker-ctl cancel <taskId>" >&2
+      exit 1
+    fi
+    curl -sf -X POST "$BASE/api/tasks/$2/cancel" | fmt '.'
+    ;;
+
+  restart)
+    if [ -z "${2:-}" ]; then
+      echo "Usage: invoker-ctl restart <taskId>" >&2
+      exit 1
+    fi
+    curl -sf -X POST "$BASE/api/tasks/$2/restart" | fmt '.'
+    ;;
+
+  approve)
+    if [ -z "${2:-}" ]; then
+      echo "Usage: invoker-ctl approve <taskId>" >&2
+      exit 1
+    fi
+    curl -sf -X POST "$BASE/api/tasks/$2/approve" | fmt '.'
+    ;;
+
+  reject)
+    if [ -z "${2:-}" ]; then
+      echo "Usage: invoker-ctl reject <taskId> [reason]" >&2
+      exit 1
+    fi
+    TASK_ID="$2"
+    REASON="${3:-}"
+    if [ -n "$REASON" ]; then
+      curl -sf -X POST -H 'Content-Type: application/json' \
+        -d "{\"reason\":\"$REASON\"}" \
+        "$BASE/api/tasks/$TASK_ID/reject" | fmt '.'
+    else
+      curl -sf -X POST "$BASE/api/tasks/$TASK_ID/reject" | fmt '.'
+    fi
+    ;;
+
+  --help|-h|"")
+    cat <<'EOF'
+invoker-ctl — CLI for querying and controlling a running Invoker instance.
+
+Usage:
+  invoker-ctl health                    Check if Invoker is running
+  invoker-ctl status                    Show workflow status summary
+  invoker-ctl tasks [status]            List tasks (optionally filter by status)
+  invoker-ctl heartbeat <taskId>        Check heartbeat for a specific task
+  invoker-ctl cancel <taskId>           Cancel a running task
+  invoker-ctl restart <taskId>          Restart a failed task
+  invoker-ctl approve <taskId>          Approve a task awaiting approval
+  invoker-ctl reject <taskId> [reason]  Reject a task
+
+Environment:
+  INVOKER_API_PORT    API port (default: 4100)
+
+Examples:
+  invoker-ctl tasks running             List all running tasks with heartbeat info
+  invoker-ctl heartbeat add-config      Check if add-config task is alive
+  invoker-ctl cancel add-config         Kill a stalled task
+EOF
+    ;;
+
+  *)
+    echo "Unknown command: $1. Run 'invoker-ctl --help' for usage." >&2
+    exit 1
+    ;;
+esac

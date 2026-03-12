@@ -47,6 +47,7 @@ export interface TaskState {
   readonly createdAt: Date;
   readonly startedAt?: Date;
   readonly completedAt?: Date;
+  readonly lastHeartbeatAt?: Date;
   readonly actionRequestId?: string;
   readonly summary?: string;
   readonly problem?: string;

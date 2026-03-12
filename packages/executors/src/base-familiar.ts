@@ -9,6 +9,7 @@ export interface BaseEntry {
   request: WorkRequest;
   outputListeners: Set<(data: string) => void>;
   completeListeners: Set<(response: WorkResponse) => void>;
+  heartbeatListeners: Set<(taskId: string) => void>;
   completed: boolean;
   /** Buffered output chunks for replay when new listeners are added. */
   outputBuffer: string[];
@@ -51,6 +52,14 @@ export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar
     entry.outputBuffer.push(data);
     for (const cb of entry.outputListeners) {
       cb(data);
+    }
+  }
+
+  protected emitHeartbeat(executionId: string): void {
+    const entry = this.entries.get(executionId);
+    if (!entry) return;
+    for (const cb of entry.heartbeatListeners) {
+      cb(entry.request.actionId);
     }
   }
 
@@ -101,6 +110,8 @@ export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar
           },
         };
         this.emitComplete(executionId, response);
+      } else {
+        this.emitHeartbeat(executionId);
       }
     }, this.heartbeatIntervalMs);
   }
@@ -125,6 +136,13 @@ export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar
     }
     entry.completeListeners.add(cb);
     return () => { entry.completeListeners.delete(cb); };
+  }
+
+  onHeartbeat(handle: FamiliarHandle, cb: (taskId: string) => void): Unsubscribe {
+    const entry = this.entries.get(handle.executionId);
+    if (!entry) return () => {};
+    entry.heartbeatListeners.add(cb);
+    return () => { entry.heartbeatListeners.delete(cb); };
   }
 
   /**

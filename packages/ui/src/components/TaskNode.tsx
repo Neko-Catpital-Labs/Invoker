@@ -4,15 +4,19 @@
  * Renders a task card with:
  * - Truncated ID
  * - Description
- * - Status indicator dot with color
+ * - Status indicator dot with color and heartbeat liveness
  * - Status label
  *
  * Used as a custom node type in @xyflow/react.
  */
 
+import { useState, useEffect } from 'react';
 import { Handle, Position } from '@xyflow/react';
 import type { TaskState } from '../types.js';
 import { getStatusColor } from '../lib/colors.js';
+
+const HEARTBEAT_WARN_MS = 60_000;
+const HEARTBEAT_STALE_MS = 90_000;
 
 interface TaskNodeData {
   task: TaskState;
@@ -24,9 +28,33 @@ interface TaskNodeProps {
   data: TaskNodeData;
 }
 
+function useHeartbeatAge(task: TaskState): number | null {
+  const [age, setAge] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (task.status !== 'running' || !task.lastHeartbeatAt) {
+      setAge(null);
+      return;
+    }
+    const compute = () => {
+      const hb = task.lastHeartbeatAt instanceof Date
+        ? task.lastHeartbeatAt
+        : new Date(task.lastHeartbeatAt as unknown as string);
+      setAge(Date.now() - hb.getTime());
+    };
+    compute();
+    const timer = setInterval(compute, 10_000);
+    return () => clearInterval(timer);
+  }, [task.status, task.lastHeartbeatAt]);
+
+  return age;
+}
+
 export function TaskNode({ data }: TaskNodeProps) {
   const { task } = data;
   const colors = getStatusColor(task.status);
+  const heartbeatAge = useHeartbeatAge(task);
+
   const isAnimated =
     task.status === 'running' ||
     task.status === 'needs_input' ||
@@ -40,6 +68,17 @@ export function TaskNode({ data }: TaskNodeProps) {
         : task.status.toUpperCase();
 
   const isStale = task.status === 'stale';
+
+  let dotClass = `${colors.dot} ${isAnimated ? 'animate-pulse' : ''}`;
+  if (task.status === 'running' && heartbeatAge !== null) {
+    if (heartbeatAge > HEARTBEAT_STALE_MS) {
+      dotClass = 'bg-red-600';
+    } else if (heartbeatAge > HEARTBEAT_WARN_MS) {
+      dotClass = 'bg-yellow-500 animate-pulse';
+    } else {
+      dotClass = 'bg-green-500 animate-pulse';
+    }
+  }
 
   return (
     <div className={`rounded-lg border-2 px-3 py-2 w-[260px] ${colors.bg} ${colors.border} ${isStale ? 'opacity-50' : ''}`}>
@@ -57,9 +96,7 @@ export function TaskNode({ data }: TaskNodeProps) {
       </div>
 
       <div className="flex items-center gap-1.5 mt-1">
-        <span
-          className={`w-2 h-2 rounded-full ${colors.dot} ${isAnimated ? 'animate-pulse' : ''}`}
-        />
+        <span className={`w-2 h-2 rounded-full ${dotClass}`} />
         <span className={`text-xs uppercase ${colors.text}`}>{statusLabel}</span>
       </div>
 

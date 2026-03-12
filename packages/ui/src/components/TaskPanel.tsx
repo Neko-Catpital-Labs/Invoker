@@ -8,9 +8,19 @@
  * - Action buttons based on status
  */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import type { TaskState } from '../types.js';
 import { getStatusColor } from '../lib/colors.js';
+
+function formatElapsed(dateVal: Date | string | undefined): string {
+  if (!dateVal) return '--';
+  const d = dateVal instanceof Date ? dateVal : new Date(dateVal);
+  const ms = Date.now() - d.getTime();
+  if (ms < 1_000) return '<1s ago';
+  if (ms < 60_000) return `${Math.floor(ms / 1_000)}s ago`;
+  if (ms < 3_600_000) return `${Math.floor(ms / 60_000)}m ago`;
+  return `${Math.floor(ms / 3_600_000)}h ago`;
+}
 
 interface TaskPanelProps {
   task: TaskState | null;
@@ -28,6 +38,50 @@ function formatDate(date?: Date | string): string {
   if (!date) return '--';
   const d = typeof date === 'string' ? new Date(date) : date;
   return d.toLocaleTimeString();
+}
+
+function HeartbeatTimingSection({ task, formatDate: fmtDate }: { task: TaskState; formatDate: (d?: Date | string) => string }) {
+  const [, setTick] = useState(0);
+
+  useEffect(() => {
+    if (task.status !== 'running' || !task.lastHeartbeatAt) return;
+    const timer = setInterval(() => setTick(t => t + 1), 5_000);
+    return () => clearInterval(timer);
+  }, [task.status, task.lastHeartbeatAt]);
+
+  const heartbeatAge = task.lastHeartbeatAt
+    ? Date.now() - (task.lastHeartbeatAt instanceof Date ? task.lastHeartbeatAt : new Date(task.lastHeartbeatAt as unknown as string)).getTime()
+    : null;
+  const isHeartbeatStale = heartbeatAge !== null && heartbeatAge > 60_000;
+
+  return (
+    <div className="space-y-1 text-sm">
+      <div className="flex justify-between">
+        <span className="text-gray-400">Created</span>
+        <span className="text-gray-200">{fmtDate(task.createdAt)}</span>
+      </div>
+      {task.startedAt && (
+        <div className="flex justify-between">
+          <span className="text-gray-400">Started</span>
+          <span className="text-gray-200">{fmtDate(task.startedAt)}</span>
+        </div>
+      )}
+      {task.completedAt && (
+        <div className="flex justify-between">
+          <span className="text-gray-400">Completed</span>
+          <span className="text-gray-200">{fmtDate(task.completedAt)}</span>
+        </div>
+      )}
+      {task.status === 'running' && task.lastHeartbeatAt && (
+        <div className="flex justify-between">
+          <span className="text-gray-400">Last heartbeat</span>
+          <span className={isHeartbeatStale ? 'text-red-400 font-medium' : 'text-gray-200'}>
+            {formatElapsed(task.lastHeartbeatAt)}
+          </span>
+        </div>
+      )}
+    </div>
+  );
 }
 
 export function TaskPanel({
@@ -211,24 +265,7 @@ export function TaskPanel({
       )}
 
       {/* Timing */}
-      <div className="space-y-1 text-sm">
-        <div className="flex justify-between">
-          <span className="text-gray-400">Created</span>
-          <span className="text-gray-200">{formatDate(task.createdAt)}</span>
-        </div>
-        {task.startedAt && (
-          <div className="flex justify-between">
-            <span className="text-gray-400">Started</span>
-            <span className="text-gray-200">{formatDate(task.startedAt)}</span>
-          </div>
-        )}
-        {task.completedAt && (
-          <div className="flex justify-between">
-            <span className="text-gray-400">Completed</span>
-            <span className="text-gray-200">{formatDate(task.completedAt)}</span>
-          </div>
-        )}
-      </div>
+      <HeartbeatTimingSection task={task} formatDate={formatDate} />
 
       {/* Dependencies */}
       {task.dependencies.length > 0 && (

@@ -42,6 +42,7 @@ export interface TaskState {
   readonly createdAt: Date;
   readonly startedAt?: Date;
   readonly completedAt?: Date;
+  readonly lastHeartbeatAt?: Date;
 
   // Worker protocol correlation
   readonly actionRequestId?: string;
