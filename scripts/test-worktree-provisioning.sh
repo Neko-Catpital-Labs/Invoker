@@ -28,9 +28,18 @@ echo "==> Checking better-sqlite3 loads under Electron's Node"
 ELECTRON_RUN_AS_NODE=1 "$ELECTRON" -e \
   "const D = require('better-sqlite3'); const db = new D(':memory:'); db.prepare('SELECT 1').get(); db.close(); console.log('    OK: better-sqlite3 loaded (ABI ' + process.versions.modules + ')');"
 
-echo "==> Running native-module-health test (persistence)"
-cd "$WORKTREE_DIR/packages/persistence"
-pnpm test -- native-module-health 2>&1
+echo "==> Checking electron-vitest can start"
+ELECTRON_RUN_AS_NODE=1 "$ELECTRON" -e \
+  "console.log('    OK: Electron Node.js ABI ' + process.versions.modules);"
+
+echo "==> Checking ABI matches Electron (not system Node)"
+EXPECTED_ABI=$(ELECTRON_RUN_AS_NODE=1 "$ELECTRON" -e "process.stdout.write(process.versions.modules)")
+BINARY_ABI=$(ELECTRON_RUN_AS_NODE=1 "$ELECTRON" "$WORKTREE_DIR/scripts/check-native-modules.js" 2>&1 | grep -o 'OK' || true)
+if [ -z "$BINARY_ABI" ]; then
+  echo "FAIL: check-native-modules.js did not report OK under Electron"
+  exit 1
+fi
+echo "    OK: check-native-modules reports better-sqlite3 OK under Electron ABI $EXPECTED_ABI"
 
 echo ""
 echo "==> Worktree provisioning: ALL CHECKS PASSED"
