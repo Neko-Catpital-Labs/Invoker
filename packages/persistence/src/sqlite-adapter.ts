@@ -8,6 +8,24 @@ import Database from 'better-sqlite3';
 import type { TaskState } from '@invoker/core';
 import type { PersistenceAdapter, Workflow, TaskEvent, ActivityLogEntry, Conversation, ConversationMessage } from './adapter.js';
 
+/**
+ * Rewrite `pnpm test packages/<pkg>/...` (incorrect root-level invocation)
+ * to `cd packages/<pkg> && pnpm test -- <relative-path>`.
+ */
+function rewritePnpmTestCommand(cmd: string): string {
+  const withFile = cmd.match(/^(pnpm test)\s+(?:--\s+)?packages\/([^/\s]+)\/(\S+)(.*)/);
+  if (withFile) {
+    const [, , pkg, rest, suffix] = withFile;
+    return `cd packages/${pkg} && pnpm test -- ${rest}${suffix}`;
+  }
+  const pkgOnly = cmd.match(/^(pnpm test)\s+(?:--\s+)?packages\/([^/\s]+)(.*)/);
+  if (pkgOnly) {
+    const [, , pkg, suffix] = pkgOnly;
+    return `cd packages/${pkg} && pnpm test${suffix}`;
+  }
+  return cmd;
+}
+
 export class SQLiteAdapter implements PersistenceAdapter {
   private db: Database.Database;
 
@@ -151,6 +169,30 @@ export class SQLiteAdapter implements PersistenceAdapter {
     ];
     for (const sql of migrations) {
       try { this.db.exec(sql); } catch { /* Column already exists */ }
+    }
+
+    this.migrateTestCommands();
+  }
+
+  /**
+   * Rewrite `pnpm test packages/<pkg>/...` (incorrect root-level invocation)
+   * to `cd packages/<pkg> && pnpm test -- <relative-path>`.
+   * Idempotent: already-rewritten commands won't match the LIKE pattern.
+   */
+  private migrateTestCommands(): void {
+    try {
+      const rows = this.db.prepare(
+        `SELECT id, command FROM tasks WHERE command LIKE 'pnpm test packages/%' OR command LIKE 'pnpm test -- packages/%'`,
+      ).all() as Array<{ id: string; command: string }>;
+
+      for (const row of rows) {
+        const fixed = rewritePnpmTestCommand(row.command);
+        if (fixed !== row.command) {
+          this.db.prepare('UPDATE tasks SET command = ? WHERE id = ?').run(fixed, row.id);
+        }
+      }
+    } catch {
+      // Table may not exist yet on first run
     }
   }
 

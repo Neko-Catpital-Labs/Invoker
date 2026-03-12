@@ -1,4 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { SQLiteAdapter } from '../sqlite-adapter.js';
 import type { Workflow, Conversation } from '../adapter.js';
 import type { TaskState } from '@invoker/core';
@@ -841,6 +844,41 @@ describe('SQLiteAdapter', () => {
           outputs: { exitCode: 1, error: 'boom' },
         });
       }).not.toThrow();
+    });
+  });
+
+  describe('migrateTestCommands', () => {
+    it('rewrites bad pnpm test commands when DB is re-opened', () => {
+      const tmpDir = mkdtempSync(join(tmpdir(), 'invoker-test-'));
+      const dbPath = join(tmpDir, 'migrate.db');
+
+      // First open: insert bad tasks
+      const db1 = new SQLiteAdapter(dbPath);
+      db1.saveWorkflow(testWorkflow);
+      db1.saveTask('wf-1', makeTask('t-bad1', {
+        command: 'pnpm test packages/protocol/src/__tests__/validation.test.ts',
+      }));
+      db1.saveTask('wf-1', makeTask('t-bad2', {
+        command: 'pnpm test -- packages/surfaces/src/__tests__/slack.test.ts',
+      }));
+      db1.saveTask('wf-1', makeTask('t-good', {
+        command: 'cd packages/protocol && pnpm test',
+      }));
+      db1.close();
+
+      // Second open: migration runs and fixes commands
+      const db2 = new SQLiteAdapter(dbPath);
+      const tasks = db2.loadTasks('wf-1');
+      const bad1 = tasks.find(t => t.id === 't-bad1')!;
+      const bad2 = tasks.find(t => t.id === 't-bad2')!;
+      const good = tasks.find(t => t.id === 't-good')!;
+
+      expect(bad1.command).toBe('cd packages/protocol && pnpm test -- src/__tests__/validation.test.ts');
+      expect(bad2.command).toBe('cd packages/surfaces && pnpm test -- src/__tests__/slack.test.ts');
+      expect(good.command).toBe('cd packages/protocol && pnpm test');
+      db2.close();
+
+      rmSync(tmpDir, { recursive: true, force: true });
     });
   });
 });
