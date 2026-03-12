@@ -20,6 +20,8 @@ function makeTask(
     status,
     dependencies: deps,
     createdAt: new Date(),
+    config: {},
+    execution: {},
   };
 }
 

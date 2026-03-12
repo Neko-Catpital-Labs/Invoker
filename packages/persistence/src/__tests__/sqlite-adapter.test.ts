@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { SQLiteAdapter } from '../sqlite-adapter.js';
 import type { Workflow, Conversation } from '../adapter.js';
-import type { TaskState } from '@invoker/core';
+import type { TaskState, TaskStateChanges } from '@invoker/core';
 
 describe('SQLiteAdapter', () => {
   let adapter: SQLiteAdapter;
@@ -32,6 +32,8 @@ describe('SQLiteAdapter', () => {
       status: 'pending',
       dependencies: [],
       createdAt: new Date(),
+      config: {},
+      execution: {},
       ...overrides,
     };
   }
@@ -39,13 +41,13 @@ describe('SQLiteAdapter', () => {
   describe('saveTask + loadTasks', () => {
     it('round-trips a task through save and load', () => {
       adapter.saveWorkflow(testWorkflow);
-      const task = makeTask('t1', { command: 'echo hello', dependencies: ['dep1'] });
+      const task = makeTask('t1', { dependencies: ['dep1'], config: { command: 'echo hello' } });
       adapter.saveTask('wf-1', task);
 
       const loaded = adapter.loadTasks('wf-1');
       expect(loaded).toHaveLength(1);
       expect(loaded[0].id).toBe('t1');
-      expect(loaded[0].command).toBe('echo hello');
+      expect(loaded[0].config.command).toBe('echo hello');
       expect(loaded[0].dependencies).toEqual(['dep1']);
       expect(loaded[0].status).toBe('pending');
     });
@@ -56,11 +58,11 @@ describe('SQLiteAdapter', () => {
       adapter.saveWorkflow(testWorkflow);
       adapter.saveTask('wf-1', makeTask('t1'));
 
-      adapter.updateTask('t1', { status: 'running', startedAt: new Date() });
+      adapter.updateTask('t1', { status: 'running', execution: { startedAt: new Date() } });
 
       const loaded = adapter.loadTasks('wf-1');
       expect(loaded[0].status).toBe('running');
-      expect(loaded[0].startedAt).toBeInstanceOf(Date);
+      expect(loaded[0].execution.startedAt).toBeInstanceOf(Date);
     });
   });
 
@@ -125,15 +127,19 @@ describe('SQLiteAdapter', () => {
 
       const task = makeTask('t1', {
         dependencies: ['a', 'b'],
-        experimentVariants: [{ id: 'v1', description: 'V1', prompt: 'Try 1' }],
-        experimentResults: [{ id: 'exp1', status: 'completed', exitCode: 0 }],
+        config: {
+          experimentVariants: [{ id: 'v1', description: 'V1', prompt: 'Try 1' }],
+        },
+        execution: {
+          experimentResults: [{ id: 'exp1', status: 'completed', exitCode: 0 }],
+        },
       });
       adapter.saveTask('wf-1', task);
 
       const loaded = adapter.loadTasks('wf-1');
       expect(loaded[0].dependencies).toEqual(['a', 'b']);
-      expect(loaded[0].experimentVariants).toEqual([{ id: 'v1', description: 'V1', prompt: 'Try 1' }]);
-      expect(loaded[0].experimentResults).toEqual([{ id: 'exp1', status: 'completed', exitCode: 0 }]);
+      expect(loaded[0].config.experimentVariants).toEqual([{ id: 'v1', description: 'V1', prompt: 'Try 1' }]);
+      expect(loaded[0].execution.experimentResults).toEqual([{ id: 'exp1', status: 'completed', exitCode: 0 }]);
     });
   });
 
@@ -194,8 +200,8 @@ describe('SQLiteAdapter', () => {
   describe('getSelectedExperiment', () => {
     it('returns selected experiment ID after update', () => {
       adapter.saveWorkflow(testWorkflow);
-      adapter.saveTask('wf-1', makeTask('recon-1', { isReconciliation: true }));
-      adapter.updateTask('recon-1', { selectedExperiment: 'exp-winner' });
+      adapter.saveTask('wf-1', makeTask('recon-1', { config: { isReconciliation: true } }));
+      adapter.updateTask('recon-1', { execution: { selectedExperiment: 'exp-winner' } });
 
       const result = adapter.getSelectedExperiment('recon-1');
       expect(result).toBe('exp-winner');
@@ -230,20 +236,20 @@ describe('SQLiteAdapter', () => {
   describe('claudeSessionId persistence', () => {
     it('round-trips claudeSessionId through save and load', () => {
       adapter.saveWorkflow(testWorkflow);
-      adapter.saveTask('wf-1', makeTask('t1', { claudeSessionId: 'sess-abc' }));
+      adapter.saveTask('wf-1', makeTask('t1', { execution: { claudeSessionId: 'sess-abc' } }));
 
       const loaded = adapter.loadTasks('wf-1');
-      expect(loaded[0].claudeSessionId).toBe('sess-abc');
+      expect(loaded[0].execution.claudeSessionId).toBe('sess-abc');
     });
 
     it('persists claudeSessionId via updateTask', () => {
       adapter.saveWorkflow(testWorkflow);
       adapter.saveTask('wf-1', makeTask('t1'));
 
-      adapter.updateTask('t1', { claudeSessionId: 'sess-xyz' });
+      adapter.updateTask('t1', { execution: { claudeSessionId: 'sess-xyz' } });
 
       const loaded = adapter.loadTasks('wf-1');
-      expect(loaded[0].claudeSessionId).toBe('sess-xyz');
+      expect(loaded[0].execution.claudeSessionId).toBe('sess-xyz');
     });
 
     it('returns undefined when claudeSessionId is not set', () => {
@@ -251,7 +257,7 @@ describe('SQLiteAdapter', () => {
       adapter.saveTask('wf-1', makeTask('t1'));
 
       const loaded = adapter.loadTasks('wf-1');
-      expect(loaded[0].claudeSessionId).toBeUndefined();
+      expect(loaded[0].execution.claudeSessionId).toBeUndefined();
     });
   });
 
@@ -263,12 +269,10 @@ describe('SQLiteAdapter', () => {
       const loaded = adapter.loadTasks('wf-1');
       const task = loaded[0];
 
-      // These fields should be undefined (mapped from SQL NULL),
-      // NOT the string literals 'pending' or 'none'
-      expect(task.familiarType).toBeUndefined();
-      expect(task.claudeSessionId).toBeUndefined();
-      expect(task.workspacePath).toBeUndefined();
-      expect(task.containerId).toBeUndefined();
+      expect(task.config.familiarType).toBeUndefined();
+      expect(task.execution.claudeSessionId).toBeUndefined();
+      expect(task.execution.workspacePath).toBeUndefined();
+      expect(task.execution.containerId).toBeUndefined();
     });
 
     it('does not store string "pending" as default for familiarType', () => {
@@ -276,14 +280,14 @@ describe('SQLiteAdapter', () => {
       adapter.saveTask('wf-1', makeTask('t1'));
 
       const loaded = adapter.loadTasks('wf-1');
-      expect(loaded[0].familiarType).not.toBe('pending');
+      expect(loaded[0].config.familiarType).not.toBe('pending');
     });
   });
 
   describe('getClaudeSessionId', () => {
     it('returns session ID for a task with one', () => {
       adapter.saveWorkflow(testWorkflow);
-      adapter.saveTask('wf-1', makeTask('t1', { claudeSessionId: 'sess-lookup' }));
+      adapter.saveTask('wf-1', makeTask('t1', { execution: { claudeSessionId: 'sess-lookup' } }));
 
       expect(adapter.getClaudeSessionId('t1')).toBe('sess-lookup');
     });
@@ -566,8 +570,8 @@ describe('SQLiteAdapter', () => {
       adapter.saveWorkflow({ id: 'wf-1', name: 'First Plan', status: 'completed', createdAt: '2024-01-01T00:00:00Z', updatedAt: '2024-01-01T00:00:00Z' });
       adapter.saveWorkflow({ id: 'wf-2', name: 'Second Plan', status: 'completed', createdAt: '2024-01-02T00:00:00Z', updatedAt: '2024-01-02T00:00:00Z' });
 
-      adapter.saveTask('wf-1', makeTask('t1', { status: 'completed', completedAt: new Date('2024-01-02') }));
-      adapter.saveTask('wf-2', makeTask('t2', { status: 'completed', completedAt: new Date('2024-01-03') }));
+      adapter.saveTask('wf-1', makeTask('t1', { status: 'completed', execution: { completedAt: new Date('2024-01-02') } }));
+      adapter.saveTask('wf-2', makeTask('t2', { status: 'completed', execution: { completedAt: new Date('2024-01-03') } }));
       adapter.saveTask('wf-1', makeTask('t3', { status: 'pending' }));
 
       const results = adapter.loadAllCompletedTasks();
@@ -602,8 +606,8 @@ describe('SQLiteAdapter', () => {
 
       const tasks = adapter.loadTasks('wf-1');
       expect(tasks).toHaveLength(2);
-      expect(tasks[0].workflowId).toBe('wf-1');
-      expect(tasks[1].workflowId).toBe('wf-1');
+      expect(tasks[0].config.workflowId).toBe('wf-1');
+      expect(tasks[1].config.workflowId).toBe('wf-1');
     });
 
     it('tasks from different workflows have correct workflowId', () => {
@@ -614,8 +618,8 @@ describe('SQLiteAdapter', () => {
 
       const tasksA = adapter.loadTasks('wf-a');
       const tasksB = adapter.loadTasks('wf-b');
-      expect(tasksA[0].workflowId).toBe('wf-a');
-      expect(tasksB[0].workflowId).toBe('wf-b');
+      expect(tasksA[0].config.workflowId).toBe('wf-a');
+      expect(tasksB[0].config.workflowId).toBe('wf-b');
     });
   });
 
@@ -783,9 +787,8 @@ describe('SQLiteAdapter', () => {
       adapter.saveTask('wf-1', makeTask('t2'));
       adapter.saveTask('wf-2', makeTask('t3'));
 
-      adapter.updateTask('t1', { branch: 'experiment/t1-abc12345' } as any);
-      adapter.updateTask('t2', { branch: 'experiment/t2-def67890' } as any);
-      // t3 has no branch set
+      adapter.updateTask('t1', { execution: { branch: 'experiment/t1-abc12345' } } as any);
+      adapter.updateTask('t2', { execution: { branch: 'experiment/t2-def67890' } } as any);
 
       const branches = adapter.getAllTaskBranches();
       expect(branches.sort()).toEqual([
@@ -799,8 +802,8 @@ describe('SQLiteAdapter', () => {
       adapter.saveTask('wf-1', makeTask('t1'));
       adapter.saveTask('wf-1', makeTask('t2'));
 
-      adapter.updateTask('t1', { branch: 'experiment/shared-branch' } as any);
-      adapter.updateTask('t2', { branch: 'experiment/shared-branch' } as any);
+      adapter.updateTask('t1', { execution: { branch: 'experiment/shared-branch' } } as any);
+      adapter.updateTask('t2', { execution: { branch: 'experiment/shared-branch' } } as any);
 
       const branches = adapter.getAllTaskBranches();
       expect(branches).toEqual(['experiment/shared-branch']);
@@ -852,30 +855,28 @@ describe('SQLiteAdapter', () => {
       const tmpDir = mkdtempSync(join(tmpdir(), 'invoker-test-'));
       const dbPath = join(tmpDir, 'migrate.db');
 
-      // First open: insert bad tasks
       const db1 = new SQLiteAdapter(dbPath);
       db1.saveWorkflow(testWorkflow);
       db1.saveTask('wf-1', makeTask('t-bad1', {
-        command: 'pnpm test packages/protocol/src/__tests__/validation.test.ts',
+        config: { command: 'pnpm test packages/protocol/src/__tests__/validation.test.ts' },
       }));
       db1.saveTask('wf-1', makeTask('t-bad2', {
-        command: 'pnpm test -- packages/surfaces/src/__tests__/slack.test.ts',
+        config: { command: 'pnpm test -- packages/surfaces/src/__tests__/slack.test.ts' },
       }));
       db1.saveTask('wf-1', makeTask('t-good', {
-        command: 'cd packages/protocol && pnpm test',
+        config: { command: 'cd packages/protocol && pnpm test' },
       }));
       db1.close();
 
-      // Second open: migration runs and fixes commands
       const db2 = new SQLiteAdapter(dbPath);
       const tasks = db2.loadTasks('wf-1');
       const bad1 = tasks.find(t => t.id === 't-bad1')!;
       const bad2 = tasks.find(t => t.id === 't-bad2')!;
       const good = tasks.find(t => t.id === 't-good')!;
 
-      expect(bad1.command).toBe('cd packages/protocol && pnpm test -- src/__tests__/validation.test.ts');
-      expect(bad2.command).toBe('cd packages/surfaces && pnpm test -- src/__tests__/slack.test.ts');
-      expect(good.command).toBe('cd packages/protocol && pnpm test');
+      expect(bad1.config.command).toBe('cd packages/protocol && pnpm test -- src/__tests__/validation.test.ts');
+      expect(bad2.config.command).toBe('cd packages/surfaces && pnpm test -- src/__tests__/slack.test.ts');
+      expect(good.config.command).toBe('cd packages/protocol && pnpm test');
       db2.close();
 
       rmSync(tmpDir, { recursive: true, force: true });

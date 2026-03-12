@@ -3,14 +3,23 @@ import { TaskExecutor } from '../task-executor.js';
 import type { TaskState } from '@invoker/core';
 import { EventEmitter } from 'events';
 
-function makeTask(overrides: Partial<TaskState> = {}): TaskState {
+function makeTask(overrides: {
+  id?: string;
+  description?: string;
+  status?: string;
+  dependencies?: string[];
+  createdAt?: Date;
+  config?: Partial<TaskState['config']>;
+  execution?: Partial<TaskState['execution']>;
+} = {}): TaskState {
   return {
-    id: 'test',
-    description: 'Test task',
-    status: 'pending',
-    dependencies: [],
-    createdAt: new Date(),
-    ...overrides,
+    id: overrides.id ?? 'test',
+    description: overrides.description ?? 'Test task',
+    status: overrides.status ?? 'pending',
+    dependencies: overrides.dependencies ?? [],
+    createdAt: overrides.createdAt ?? new Date(),
+    config: { ...overrides.config },
+    execution: { ...overrides.execution },
   } as TaskState;
 }
 
@@ -34,12 +43,12 @@ describe('TaskExecutor', () => {
       tasks.set('dep-1', makeTask({
         id: 'dep-1',
         status: 'completed',
-        branch: 'experiment/dep-1',
+        execution: { branch: 'experiment/dep-1' },
       }));
       tasks.set('dep-2', makeTask({
         id: 'dep-2',
         status: 'completed',
-        branch: 'experiment/dep-2',
+        execution: { branch: 'experiment/dep-2' },
       }));
 
       const executor = createExecutorWithTasks(tasks);
@@ -57,7 +66,7 @@ describe('TaskExecutor', () => {
       tasks.set('dep-with-branch', makeTask({
         id: 'dep-with-branch',
         status: 'completed',
-        branch: 'experiment/dep-with-branch',
+        execution: { branch: 'experiment/dep-with-branch' },
       }));
       tasks.set('dep-no-branch', makeTask({
         id: 'dep-no-branch',
@@ -79,12 +88,12 @@ describe('TaskExecutor', () => {
       tasks.set('dep-running', makeTask({
         id: 'dep-running',
         status: 'running',
-        branch: 'experiment/dep-running',
+        execution: { branch: 'experiment/dep-running' },
       }));
       tasks.set('dep-failed', makeTask({
         id: 'dep-failed',
         status: 'failed',
-        branch: 'experiment/dep-failed',
+        execution: { branch: 'experiment/dep-failed' },
       }));
 
       const executor = createExecutorWithTasks(tasks);
@@ -121,9 +130,11 @@ describe('TaskExecutor', () => {
       tasks.set('recon', makeTask({
         id: 'recon',
         status: 'completed',
-        isReconciliation: true,
-        selectedExperiment: 'exp-v1',
-        branch: 'experiment/exp-v1-abc12345',  // propagated from winner
+        config: { isReconciliation: true },
+        execution: {
+          selectedExperiment: 'exp-v1',
+          branch: 'experiment/exp-v1-abc12345',
+        },
       }));
 
       const executor = createExecutorWithTasks(tasks);
@@ -141,12 +152,12 @@ describe('TaskExecutor', () => {
       tasks.set('dep-b', makeTask({
         id: 'dep-b',
         status: 'completed',
-        branch: 'experiment/dep-b',
+        execution: { branch: 'experiment/dep-b' },
       }));
       tasks.set('dep-c', makeTask({
         id: 'dep-c',
         status: 'completed',
-        branch: 'experiment/dep-c',
+        execution: { branch: 'experiment/dep-c' },
       }));
 
       const executor = createExecutorWithTasks(tasks);
@@ -165,7 +176,7 @@ describe('TaskExecutor', () => {
       tasks.set('parent', makeTask({
         id: 'parent',
         status: 'completed',
-        branch: 'experiment/parent',
+        execution: { branch: 'experiment/parent' },
       }));
 
       const executor = createExecutorWithTasks(tasks);
@@ -206,7 +217,7 @@ describe('TaskExecutor', () => {
         callbacks: { onComplete },
       });
 
-      const task = makeTask({ id: 'failing-start', status: 'running', command: 'echo hi' });
+      const task = makeTask({ id: 'failing-start', status: 'running', config: { command: 'echo hi' } });
       await executor.executeTask(task);
 
       expect(handleWorkerResponse).toHaveBeenCalledWith(
@@ -306,7 +317,7 @@ describe('TaskExecutor', () => {
   describe('consolidateAndMerge cleanup', () => {
     it('aborts merge and restores branch on failure', async () => {
       const allTasks = [
-        makeTask({ id: 't1', workflowId: 'wf-1', status: 'completed', branch: 'experiment/t1' }),
+        makeTask({ id: 't1', config: { workflowId: 'wf-1' }, status: 'completed', execution: { branch: 'experiment/t1' } }),
       ];
       const orchestrator = {
         getTask: (id: string) => allTasks.find(t => t.id === id),
@@ -346,8 +357,7 @@ describe('TaskExecutor', () => {
       const mergeTask = makeTask({
         id: '__merge__wf-1',
         status: 'running',
-        isMergeNode: true,
-        workflowId: 'wf-1',
+        config: { isMergeNode: true, workflowId: 'wf-1' },
       });
 
       await (executor as any).executeMergeNode(mergeTask);
@@ -371,7 +381,7 @@ describe('TaskExecutor', () => {
 
     it('recreates feature branch on retry after previous failed attempt', async () => {
       const allTasks = [
-        makeTask({ id: 't1', workflowId: 'wf-1', status: 'completed', branch: 'experiment/t1' }),
+        makeTask({ id: 't1', config: { workflowId: 'wf-1' }, status: 'completed', execution: { branch: 'experiment/t1' } }),
       ];
       const orchestrator = {
         getTask: (id: string) => allTasks.find(t => t.id === id),
@@ -419,8 +429,7 @@ describe('TaskExecutor', () => {
       const mergeTask = makeTask({
         id: '__merge__wf-1',
         status: 'running',
-        isMergeNode: true,
-        workflowId: 'wf-1',
+        config: { isMergeNode: true, workflowId: 'wf-1' },
       });
 
       await (executor as any).executeMergeNode(mergeTask);
@@ -436,10 +445,10 @@ describe('TaskExecutor', () => {
   describe('rebaseTaskBranches', () => {
     it('rebases all completed task branches onto baseBranch', async () => {
       const allTasks = [
-        makeTask({ id: 't1', workflowId: 'wf-1', status: 'completed', branch: 'experiment/t1' }),
-        makeTask({ id: 't2', workflowId: 'wf-1', status: 'completed', branch: 'experiment/t2' }),
-        makeTask({ id: 't3', workflowId: 'wf-1', status: 'pending', branch: 'experiment/t3' }),
-        makeTask({ id: '__merge__wf-1', workflowId: 'wf-1', status: 'failed', isMergeNode: true }),
+        makeTask({ id: 't1', config: { workflowId: 'wf-1' }, status: 'completed', execution: { branch: 'experiment/t1' } }),
+        makeTask({ id: 't2', config: { workflowId: 'wf-1' }, status: 'completed', execution: { branch: 'experiment/t2' } }),
+        makeTask({ id: 't3', config: { workflowId: 'wf-1' }, status: 'pending', execution: { branch: 'experiment/t3' } }),
+        makeTask({ id: '__merge__wf-1', config: { workflowId: 'wf-1', isMergeNode: true }, status: 'failed' }),
       ];
       const orchestrator = {
         getTask: (id: string) => allTasks.find(t => t.id === id),
@@ -473,8 +482,8 @@ describe('TaskExecutor', () => {
 
     it('reports errors for branches that fail to rebase', async () => {
       const allTasks = [
-        makeTask({ id: 't1', workflowId: 'wf-1', status: 'completed', branch: 'experiment/t1' }),
-        makeTask({ id: 't2', workflowId: 'wf-1', status: 'completed', branch: 'experiment/t2' }),
+        makeTask({ id: 't1', config: { workflowId: 'wf-1' }, status: 'completed', execution: { branch: 'experiment/t1' } }),
+        makeTask({ id: 't2', config: { workflowId: 'wf-1' }, status: 'completed', execution: { branch: 'experiment/t2' } }),
       ];
       const orchestrator = {
         getTask: (id: string) => allTasks.find(t => t.id === id),
@@ -511,7 +520,7 @@ describe('TaskExecutor', () => {
 
     it('restores original branch after rebase', async () => {
       const allTasks = [
-        makeTask({ id: 't1', workflowId: 'wf-1', status: 'completed', branch: 'experiment/t1' }),
+        makeTask({ id: 't1', config: { workflowId: 'wf-1' }, status: 'completed', execution: { branch: 'experiment/t1' } }),
       ];
       const orchestrator = {
         getTask: (id: string) => allTasks.find(t => t.id === id),
@@ -539,9 +548,9 @@ describe('TaskExecutor', () => {
 
     it('skips merge nodes and non-completed tasks', async () => {
       const allTasks = [
-        makeTask({ id: 't1', workflowId: 'wf-1', status: 'completed', branch: 'experiment/t1' }),
-        makeTask({ id: 't2', workflowId: 'wf-1', status: 'failed', branch: 'experiment/t2' }),
-        makeTask({ id: '__merge__wf-1', workflowId: 'wf-1', status: 'failed', isMergeNode: true, branch: 'plan/feature' }),
+        makeTask({ id: 't1', config: { workflowId: 'wf-1' }, status: 'completed', execution: { branch: 'experiment/t1' } }),
+        makeTask({ id: 't2', config: { workflowId: 'wf-1' }, status: 'failed', execution: { branch: 'experiment/t2' } }),
+        makeTask({ id: '__merge__wf-1', config: { workflowId: 'wf-1', isMergeNode: true }, status: 'failed', execution: { branch: 'plan/feature' } }),
       ];
       const orchestrator = {
         getTask: (id: string) => allTasks.find(t => t.id === id),
@@ -573,7 +582,7 @@ describe('TaskExecutor', () => {
   describe('manual merge mode', () => {
     it('executeMergeNode skips final merge when mergeMode=manual', async () => {
       const allTasks = [
-        makeTask({ id: 't1', workflowId: 'wf-1', status: 'completed', branch: 'experiment/t1' }),
+        makeTask({ id: 't1', config: { workflowId: 'wf-1' }, status: 'completed', execution: { branch: 'experiment/t1' } }),
       ];
       const orchestrator = {
         getTask: (id: string) => allTasks.find(t => t.id === id),
@@ -611,8 +620,7 @@ describe('TaskExecutor', () => {
       const mergeTask = makeTask({
         id: '__merge__wf-1',
         status: 'running',
-        isMergeNode: true,
-        workflowId: 'wf-1',
+        config: { isMergeNode: true, workflowId: 'wf-1' },
       });
 
       await (executor as any).executeMergeNode(mergeTask);
@@ -638,7 +646,7 @@ describe('TaskExecutor', () => {
 
     it('executeMergeNode performs full merge when mergeMode=automatic', async () => {
       const allTasks = [
-        makeTask({ id: 't1', workflowId: 'wf-1', status: 'completed', branch: 'experiment/t1' }),
+        makeTask({ id: 't1', config: { workflowId: 'wf-1' }, status: 'completed', execution: { branch: 'experiment/t1' } }),
       ];
       const orchestrator = {
         getTask: (id: string) => allTasks.find(t => t.id === id),
@@ -674,8 +682,7 @@ describe('TaskExecutor', () => {
       const mergeTask = makeTask({
         id: '__merge__wf-1',
         status: 'running',
-        isMergeNode: true,
-        workflowId: 'wf-1',
+        config: { isMergeNode: true, workflowId: 'wf-1' },
       });
 
       await (executor as any).executeMergeNode(mergeTask);
@@ -757,24 +764,21 @@ describe('TaskExecutor', () => {
       tasks.set('pivot-exp-v1', makeTask({
         id: 'pivot-exp-v1',
         status: 'completed',
-        branch: 'experiment/pivot-exp-v1-hash1',
-        commit: 'commit1',
+        execution: { branch: 'experiment/pivot-exp-v1-hash1', commit: 'commit1' },
       }));
       tasks.set('pivot-exp-v2', makeTask({
         id: 'pivot-exp-v2',
         status: 'completed',
-        branch: 'experiment/pivot-exp-v2-hash2',
-        commit: 'commit2',
+        execution: { branch: 'experiment/pivot-exp-v2-hash2', commit: 'commit2' },
       }));
       tasks.set('pivot-reconciliation', makeTask({
         id: 'pivot-reconciliation',
-        isReconciliation: true,
-        parentTask: 'pivot',
+        config: { isReconciliation: true, parentTask: 'pivot' },
       }));
       tasks.set('pivot', makeTask({
         id: 'pivot',
         status: 'completed',
-        branch: 'experiment/pivot-base',
+        execution: { branch: 'experiment/pivot-base' },
       }));
 
       const orchestrator = {
@@ -814,22 +818,21 @@ describe('TaskExecutor', () => {
       tasks.set('pivot-exp-v1', makeTask({
         id: 'pivot-exp-v1',
         status: 'completed',
-        branch: 'experiment/pivot-exp-v1-hash1',
+        execution: { branch: 'experiment/pivot-exp-v1-hash1' },
       }));
       tasks.set('pivot-exp-v2', makeTask({
         id: 'pivot-exp-v2',
         status: 'completed',
-        branch: 'experiment/pivot-exp-v2-hash2',
+        execution: { branch: 'experiment/pivot-exp-v2-hash2' },
       }));
       tasks.set('pivot-reconciliation', makeTask({
         id: 'pivot-reconciliation',
-        isReconciliation: true,
-        parentTask: 'pivot',
+        config: { isReconciliation: true, parentTask: 'pivot' },
       }));
       tasks.set('pivot', makeTask({
         id: 'pivot',
         status: 'completed',
-        branch: 'experiment/pivot-base',
+        execution: { branch: 'experiment/pivot-base' },
       }));
 
       const orchestrator = {
@@ -864,8 +867,7 @@ describe('TaskExecutor', () => {
       tasks.set('pivot-exp-v1', makeTask({
         id: 'pivot-exp-v1',
         status: 'completed',
-        branch: 'experiment/pivot-exp-v1-hash1',
-        commit: 'single-commit',
+        execution: { branch: 'experiment/pivot-exp-v1-hash1', commit: 'single-commit' },
       }));
 
       const orchestrator = {

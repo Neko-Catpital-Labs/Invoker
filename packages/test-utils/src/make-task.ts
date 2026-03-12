@@ -10,6 +10,8 @@ export function makeTask(overrides: Partial<TaskState> = {}): TaskState {
     status: 'pending',
     dependencies: [],
     createdAt: new Date(),
+    config: {},
+    execution: {},
     ...overrides,
   } as TaskState;
 }

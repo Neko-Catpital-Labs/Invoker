@@ -17,7 +17,7 @@ import { ExperimentManager } from './experiments.js';
 import { ResponseHandler } from './response-handler.js';
 import type { ParsedResponse } from './response-handler.js';
 import { TaskScheduler } from './scheduler.js';
-import type { TaskState, TaskDelta, TaskCreateOptions } from './task-types.js';
+import type { TaskState, TaskDelta, TaskStateChanges, TaskCreateOptions } from './task-types.js';
 import { createTaskState } from './task-types.js';
 import type { WorkResponse } from '@invoker/protocol';
 import { getTransitiveDependents, nextVersion } from './dag.js';
@@ -44,7 +44,7 @@ export interface OrchestratorPersistence {
   }): void;
   updateWorkflow?(workflowId: string, changes: { status?: string; updatedAt?: string }): void;
   saveTask(workflowId: string, task: TaskState): void;
-  updateTask(taskId: string, changes: Partial<TaskState>): void;
+  updateTask(taskId: string, changes: TaskStateChanges): void;
   logEvent?(taskId: string, eventType: string, payload?: unknown): void;
   listWorkflows(): Array<{
     id: string;
@@ -106,7 +106,7 @@ export interface GraphMutationNodeDef {
 export interface GraphMutation {
   sourceNodeId: string;
   sourceDisposition: 'complete' | 'stale';
-  sourceChanges?: Partial<TaskState>;
+  sourceChanges?: TaskStateChanges;
   newNodes: GraphMutationNodeDef[];
   outputNodeId: string;
 }
@@ -174,14 +174,19 @@ export class Orchestrator {
    * Write field changes to the DB, then update the in-memory cache
    * to match. Returns the updated task state.
    */
-  private writeAndSync(taskId: string, changes: Partial<TaskState>): TaskState {
+  private writeAndSync(taskId: string, changes: TaskStateChanges): TaskState {
     this.persistence.updateTask(taskId, changes);
-
     const existing = this.stateMachine.getTask(taskId);
     if (!existing) {
       throw new Error(`writeAndSync: task ${taskId} not found in graph`);
     }
-    const updated: TaskState = { ...existing, ...changes } as TaskState;
+    const updated: TaskState = {
+      ...existing,
+      ...(changes.status !== undefined ? { status: changes.status } : {}),
+      ...(changes.dependencies !== undefined ? { dependencies: changes.dependencies } : {}),
+      config: { ...existing.config, ...changes.config },
+      execution: { ...existing.execution, ...changes.execution },
+    };
     this.stateMachine.restoreTask(updated);
     return updated;
   }
@@ -191,7 +196,7 @@ export class Orchestrator {
    * Returns the new task state.
    */
   private createAndSync(task: TaskState): TaskState {
-    const wfId = task.workflowId;
+    const wfId = task.config.workflowId;
     if (!wfId) {
       throw new Error('createAndSync: task has no workflowId');
     }
@@ -298,9 +303,9 @@ export class Orchestrator {
         continue;
       }
 
-      const changes: Partial<TaskState> = {
+      const changes: TaskStateChanges = {
         status: 'running',
-        startedAt: new Date(),
+        execution: { startedAt: new Date() },
       };
       const updated = this.writeAndSync(job.taskId, changes);
       started.push(updated);
@@ -325,7 +330,7 @@ export class Orchestrator {
     // Auto-fix interception
     if (response.status === 'failed') {
       const task = this.stateMachine.getTask(response.actionId);
-      if (task?.autoFix) {
+      if (task?.config.autoFix) {
         const syntheticResponse = this.buildAutoFixResponse(task, response.outputs);
         return this.handleWorkerResponse(syntheticResponse);
       }
@@ -368,7 +373,7 @@ export class Orchestrator {
     const task = this.stateMachine.getTask(taskId);
     if (!task || task.status !== 'needs_input') return;
 
-    const changes: Partial<TaskState> = { status: 'running', inputPrompt: undefined };
+    const changes: TaskStateChanges = { status: 'running', execution: { inputPrompt: undefined } };
     this.writeAndSync(taskId, changes);
     const delta: TaskDelta = { type: 'updated', taskId, changes };
     this.persistence.logEvent?.(taskId, 'task.running', changes);
@@ -387,9 +392,9 @@ export class Orchestrator {
 
     this.scheduler.completeJob(taskId);
 
-    const changes: Partial<TaskState> = {
+    const changes: TaskStateChanges = {
       status: 'awaiting_approval',
-      completedAt: new Date(),
+      execution: { completedAt: new Date() },
     };
     this.writeAndSync(taskId, changes);
     const delta: TaskDelta = { type: 'updated', taskId, changes };
@@ -405,9 +410,9 @@ export class Orchestrator {
     const task = this.stateMachine.getTask(taskId);
     if (!task || task.status !== 'awaiting_approval') return;
 
-    const changes: Partial<TaskState> = {
+    const changes: TaskStateChanges = {
       status: 'completed',
-      completedAt: new Date(),
+      execution: { completedAt: new Date() },
     };
     this.writeAndSync(taskId, changes);
     const delta: TaskDelta = { type: 'updated', taskId, changes };
@@ -427,10 +432,9 @@ export class Orchestrator {
     const task = this.stateMachine.getTask(taskId);
     if (!task || task.status !== 'awaiting_approval') return;
 
-    const changes: Partial<TaskState> = {
+    const changes: TaskStateChanges = {
       status: 'failed',
-      error: reason ?? 'Rejected',
-      completedAt: new Date(),
+      execution: { error: reason ?? 'Rejected', completedAt: new Date() },
     };
     this.writeAndSync(taskId, changes);
     const delta: TaskDelta = { type: 'updated', taskId, changes };
@@ -447,15 +451,17 @@ export class Orchestrator {
   selectExperiment(taskId: string, experimentId: string): TaskState[] {
     this.refreshFromDb();
     const task = this.stateMachine.getTask(taskId);
-    if (!task || !task.isReconciliation) return [];
+    if (!task || !task.config.isReconciliation) return [];
 
     const winner = this.stateMachine.getTask(experimentId);
-    const changes: Partial<TaskState> = {
+    const changes: TaskStateChanges = {
       status: 'completed',
-      selectedExperiment: experimentId,
-      completedAt: new Date(),
-      branch: winner?.branch,
-      commit: winner?.commit,
+      execution: {
+        selectedExperiment: experimentId,
+        completedAt: new Date(),
+        branch: winner?.execution.branch,
+        commit: winner?.execution.commit,
+      },
     };
     this.writeAndSync(taskId, changes);
     const delta: TaskDelta = { type: 'updated', taskId, changes };
@@ -485,15 +491,17 @@ export class Orchestrator {
 
     this.refreshFromDb();
     const task = this.stateMachine.getTask(taskId);
-    if (!task || !task.isReconciliation) return [];
+    if (!task || !task.config.isReconciliation) return [];
 
-    const changes: Partial<TaskState> = {
+    const changes: TaskStateChanges = {
       status: 'completed',
-      selectedExperiment: experimentIds[0],
-      selectedExperiments: experimentIds,
-      completedAt: new Date(),
-      branch: combinedBranch,
-      commit: combinedCommit,
+      execution: {
+        selectedExperiment: experimentIds[0],
+        selectedExperiments: experimentIds,
+        completedAt: new Date(),
+        branch: combinedBranch,
+        commit: combinedCommit,
+      },
     };
     this.writeAndSync(taskId, changes);
     const delta: TaskDelta = { type: 'updated', taskId, changes };
@@ -525,15 +533,17 @@ export class Orchestrator {
       console.warn(`[orchestrator] restartTask "${taskId}": ${completedDownstream.length} downstream task(s) are completed and will NOT be invalidated: [${completedDownstream.map(t => t.id).join(', ')}]`);
     }
 
-    const resetChanges: Partial<TaskState> = {
+    const resetChanges: TaskStateChanges = {
       status: 'pending',
-      startedAt: undefined,
-      completedAt: undefined,
-      error: undefined,
-      exitCode: undefined,
-      blockedBy: undefined,
-      summary: undefined,
-      commit: undefined,
+      config: { summary: undefined },
+      execution: {
+        startedAt: undefined,
+        completedAt: undefined,
+        error: undefined,
+        exitCode: undefined,
+        blockedBy: undefined,
+        commit: undefined,
+      },
     };
     this.writeAndSync(taskId, resetChanges);
     const resetDelta: TaskDelta = { type: 'updated', taskId, changes: resetChanges };
@@ -545,10 +555,10 @@ export class Orchestrator {
     console.log(`[orchestrator] restartTask "${taskId}": unblocked ${unblockedIds.length} tasks: [${unblockedIds.join(', ')}]`);
 
     const blockedByOther = this.stateMachine.getAllTasks().filter(
-      t => t.status === 'blocked' && t.dependencies.includes(taskId) && t.blockedBy !== taskId,
+      t => t.status === 'blocked' && t.dependencies.includes(taskId) && t.execution.blockedBy !== taskId,
     );
     if (blockedByOther.length > 0) {
-      console.warn(`[orchestrator] restartTask "${taskId}": ${blockedByOther.length} task(s) depend on "${taskId}" but are blocked by a different task: ${blockedByOther.map(t => `"${t.id}" (blockedBy: ${t.blockedBy})`).join(', ')}`);
+      console.warn(`[orchestrator] restartTask "${taskId}": ${blockedByOther.length} task(s) depend on "${taskId}" but are blocked by a different task: ${blockedByOther.map(t => `"${t.id}" (blockedBy: ${t.execution.blockedBy})`).join(', ')}`);
     }
 
     for (const id of unblockedIds) {
@@ -561,7 +571,7 @@ export class Orchestrator {
         console.warn(`[orchestrator] restartTask: unblocking "${id}" but it still has failed deps: [${failedDeps.join(', ')}]`);
       }
 
-      const unblockChanges: Partial<TaskState> = { status: 'pending', blockedBy: undefined };
+      const unblockChanges: TaskStateChanges = { status: 'pending', execution: { blockedBy: undefined } };
       this.writeAndSync(id, unblockChanges);
       const unblockDelta: TaskDelta = { type: 'updated', taskId: id, changes: unblockChanges };
       this.persistence.logEvent?.(id, 'task.pending', unblockChanges);
@@ -588,21 +598,23 @@ export class Orchestrator {
     this.refreshFromDb();
 
     const allTasks = this.stateMachine.getAllTasks().filter(
-      (t) => t.workflowId === workflowId,
+      (t) => t.config.workflowId === workflowId,
     );
     if (allTasks.length === 0) throw new Error(`No tasks found for workflow ${workflowId}`);
 
-    const resetChanges: Partial<TaskState> = {
+    const resetChanges: TaskStateChanges = {
       status: 'pending',
-      startedAt: undefined,
-      completedAt: undefined,
-      error: undefined,
-      exitCode: undefined,
-      blockedBy: undefined,
-      summary: undefined,
-      commit: undefined,
-      branch: undefined,
-      workspacePath: undefined,
+      config: { summary: undefined },
+      execution: {
+        startedAt: undefined,
+        completedAt: undefined,
+        error: undefined,
+        exitCode: undefined,
+        blockedBy: undefined,
+        commit: undefined,
+        branch: undefined,
+        workspacePath: undefined,
+      },
     };
 
     for (const task of allTasks) {
@@ -623,10 +635,10 @@ export class Orchestrator {
     this.refreshFromDb();
     const task = this.stateMachine.getTask(taskId);
     if (!task) throw new Error(`Task ${taskId} not found`);
-    if (task.isMergeNode) throw new Error(`Cannot edit merge node ${taskId}`);
+    if (task.config.isMergeNode) throw new Error(`Cannot edit merge node ${taskId}`);
     if (task.status === 'running') throw new Error(`Cannot edit running task ${taskId}`);
 
-    const cmdChanges: Partial<TaskState> = { command: newCommand };
+    const cmdChanges: TaskStateChanges = { config: { command: newCommand } };
     this.writeAndSync(taskId, cmdChanges);
     const cmdDelta: TaskDelta = { type: 'updated', taskId, changes: cmdChanges };
     this.persistence.logEvent?.(taskId, 'task.updated', cmdChanges);
@@ -645,10 +657,10 @@ export class Orchestrator {
     this.refreshFromDb();
     const task = this.stateMachine.getTask(taskId);
     if (!task) throw new Error(`Task ${taskId} not found`);
-    if (task.isMergeNode) throw new Error(`Cannot change executor type of merge node ${taskId}`);
+    if (task.config.isMergeNode) throw new Error(`Cannot change executor type of merge node ${taskId}`);
     if (task.status === 'running') throw new Error(`Cannot edit running task ${taskId}`);
 
-    const typeChanges: Partial<TaskState> = { familiarType };
+    const typeChanges: TaskStateChanges = { config: { familiarType } };
     this.writeAndSync(taskId, typeChanges);
     const typeDelta: TaskDelta = { type: 'updated', taskId, changes: typeChanges };
     this.persistence.logEvent?.(taskId, 'task.updated', typeChanges);
@@ -679,18 +691,17 @@ export class Orchestrator {
     const descendantIds = getTransitiveDependents(
       taskId,
       taskMap,
-      (t) => !!t.isMergeNode,
+      (t) => !!t.config.isMergeNode,
     );
     for (const id of descendantIds) {
-      const staleChanges: Partial<TaskState> = { status: 'stale' };
+      const staleChanges: TaskStateChanges = { status: 'stale' };
       this.writeAndSync(id, staleChanges);
       this.persistence.logEvent?.(id, 'task.stale', staleChanges);
       this.messageBus.publish(TASK_DELTA_CHANNEL, {
         type: 'updated', taskId: id, changes: staleChanges,
       });
     }
-    // Stale the broken task itself
-    const sourceChanges: Partial<TaskState> = { status: 'stale' };
+    const sourceChanges: TaskStateChanges = { status: 'stale' };
     this.writeAndSync(taskId, sourceChanges);
     this.persistence.logEvent?.(taskId, 'task.stale', sourceChanges);
     this.messageBus.publish(TASK_DELTA_CHANNEL, {
@@ -702,10 +713,10 @@ export class Orchestrator {
       const hasInternalDeps =
         rt.dependencies?.length && rt.dependencies.some((d) => replacementIds.has(d));
       const newTask = createTaskState(rt.id, rt.description, hasInternalDeps ? rt.dependencies! : [...task.dependencies], {
-        workflowId: task.workflowId,
+        workflowId: task.config.workflowId,
         command: rt.command,
         prompt: rt.prompt,
-        familiarType: rt.familiarType ?? task.familiarType,
+        familiarType: rt.familiarType ?? task.config.familiarType,
         autoFix: rt.autoFix,
         maxFixAttempts: rt.maxFixAttempts,
       });
@@ -718,18 +729,18 @@ export class Orchestrator {
       .filter((rt) => !replacementTasks.some((other) => other.dependencies?.includes(rt.id)))
       .map((rt) => rt.id);
 
-    if (task.workflowId) {
-      const mergeNode = this.getMergeNode(task.workflowId);
+    if (task.config.workflowId) {
+      const mergeNode = this.getMergeNode(task.config.workflowId);
       if (mergeNode) {
         const staleIds = new Set([...descendantIds, taskId]);
         const newDeps = [
           ...mergeNode.dependencies.filter((d) => !staleIds.has(d)),
           ...leafIds,
         ];
-        const mergeChanges: Partial<TaskState> = {
+        const mergeChanges: TaskStateChanges = {
           dependencies: newDeps,
           status: 'pending',
-          blockedBy: undefined,
+          execution: { blockedBy: undefined },
         };
         this.writeAndSync(mergeNode.id, mergeChanges);
         this.messageBus.publish(TASK_DELTA_CHANNEL, {
@@ -768,7 +779,7 @@ export class Orchestrator {
     const descendantIds = getTransitiveDependents(
       dirtyTaskId,
       taskMap,
-      (t) => !!t.isMergeNode,
+      (t) => !!t.config.isMergeNode,
     );
     if (descendantIds.length === 0) {
       // No non-merge descendants; just update merge node deps if needed
@@ -782,7 +793,7 @@ export class Orchestrator {
     for (const id of descendantIds) {
       const t = this.stateMachine.getTask(id);
       if (!t) continue;
-      const staleChanges: Partial<TaskState> = { status: 'stale' };
+      const staleChanges: TaskStateChanges = { status: 'stale' };
       this.writeAndSync(id, staleChanges);
       const delta: TaskDelta = { type: 'updated', taskId: id, changes: staleChanges };
       this.persistence.logEvent?.(id, 'task.stale', staleChanges);
@@ -806,18 +817,7 @@ export class Orchestrator {
         depOverrides?.get(dep) ?? idMap.get(dep) ?? dep,
       );
 
-      const cloneTask = createTaskState(cloneId, original.description, remappedDeps as string[], {
-        workflowId: original.workflowId,
-        command: original.command,
-        prompt: original.prompt,
-        pivot: original.pivot,
-        requiresManualApproval: original.requiresManualApproval,
-        repoUrl: original.repoUrl,
-        featureBranch: original.featureBranch,
-        familiarType: original.familiarType,
-        autoFix: original.autoFix,
-        maxFixAttempts: original.maxFixAttempts,
-      });
+      const cloneTask = createTaskState(cloneId, original.description, remappedDeps as string[], original.config);
 
       this.createAndSync(cloneTask);
       const delta: TaskDelta = { type: 'created', task: cloneTask };
@@ -828,8 +828,8 @@ export class Orchestrator {
 
     // Update merge node deps: replace stale'd leaves with their clones
     const dirtyTask = taskMap.get(dirtyTaskId);
-    if (dirtyTask?.workflowId) {
-      const mergeNode = this.getMergeNode(dirtyTask.workflowId);
+    if (dirtyTask?.config.workflowId) {
+      const mergeNode = this.getMergeNode(dirtyTask.config.workflowId);
       if (mergeNode) {
         const newDeps = mergeNode.dependencies.map((dep) =>
           idMap.get(dep) ?? depOverrides?.get(dep) ?? dep,
@@ -854,8 +854,8 @@ export class Orchestrator {
    */
   private updateMergeNodeDeps(dirtyTaskId: string, depOverrides?: Map<string, string>): void {
     const dirtyTask = this.stateMachine.getTask(dirtyTaskId);
-    if (!dirtyTask?.workflowId) return;
-    const mergeNode = this.getMergeNode(dirtyTask.workflowId);
+    if (!dirtyTask?.config.workflowId) return;
+    const mergeNode = this.getMergeNode(dirtyTask.config.workflowId);
     if (!mergeNode) return;
 
     const override = depOverrides?.get(dirtyTaskId);
@@ -933,7 +933,7 @@ export class Orchestrator {
    */
   getMergeNode(workflowId: string): TaskState | undefined {
     return this.stateMachine.getAllTasks().find(
-      (t) => t.workflowId === workflowId && t.isMergeNode,
+      (t) => t.config.workflowId === workflowId && t.config.isMergeNode,
     );
   }
 
@@ -946,7 +946,7 @@ export class Orchestrator {
   } {
     let tasks = this.stateMachine.getAllTasks();
     if (workflowId) {
-      tasks = tasks.filter((t) => t.workflowId === workflowId);
+      tasks = tasks.filter((t) => t.config.workflowId === workflowId);
     }
     return {
       total: tasks.length,
@@ -967,13 +967,15 @@ export class Orchestrator {
     taskId: string,
     parsed: Extract<ParsedResponse, { type: 'completed' }>,
   ): TaskState[] {
-    const changes: Partial<TaskState> = {
+    const changes: TaskStateChanges = {
       status: 'completed',
-      exitCode: parsed.exitCode,
-      summary: parsed.summary,
-      commit: parsed.commitHash,
-      claudeSessionId: parsed.claudeSessionId,
-      completedAt: new Date(),
+      config: { summary: parsed.summary },
+      execution: {
+        exitCode: parsed.exitCode,
+        commit: parsed.commitHash,
+        claudeSessionId: parsed.claudeSessionId,
+        completedAt: new Date(),
+      },
     };
     this.writeAndSync(taskId, changes);
     const delta: TaskDelta = { type: 'updated', taskId, changes };
@@ -993,11 +995,13 @@ export class Orchestrator {
     taskId: string,
     parsed: Extract<ParsedResponse, { type: 'failed' }>,
   ): TaskState[] {
-    const changes: Partial<TaskState> = {
+    const changes: TaskStateChanges = {
       status: 'failed',
-      exitCode: parsed.exitCode,
-      error: parsed.error,
-      completedAt: new Date(),
+      execution: {
+        exitCode: parsed.exitCode,
+        error: parsed.error,
+        completedAt: new Date(),
+      },
     };
     this.writeAndSync(taskId, changes);
     const delta: TaskDelta = { type: 'updated', taskId, changes };
@@ -1014,9 +1018,9 @@ export class Orchestrator {
     taskId: string,
     parsed: Extract<ParsedResponse, { type: 'needs_input' }>,
   ): TaskState[] {
-    const changes: Partial<TaskState> = {
+    const changes: TaskStateChanges = {
       status: 'needs_input',
-      inputPrompt: parsed.prompt,
+      execution: { inputPrompt: parsed.prompt },
     };
     this.writeAndSync(taskId, changes);
     const delta: TaskDelta = { type: 'updated', taskId, changes };
@@ -1041,8 +1045,8 @@ export class Orchestrator {
         prompt: v.prompt,
         command: v.command,
       })),
-      parentTask?.repoUrl,
-      parentTask?.familiarType,
+      parentTask?.config.repoUrl,
+      parentTask?.config.familiarType,
     );
 
     // Build new nodes: experiments + reconciliation
@@ -1051,7 +1055,7 @@ export class Orchestrator {
         id: t.id,
         description: t.description,
         dependencies: t.dependencies,
-        workflowId: parentTask?.workflowId,
+        workflowId: parentTask?.config.workflowId,
         parentTask: t.parentTask,
         experimentPrompt: t.experimentPrompt,
         prompt: t.prompt,
@@ -1063,7 +1067,7 @@ export class Orchestrator {
         id: plan.reconciliationTask.id,
         description: plan.reconciliationTask.description,
         dependencies: plan.reconciliationTask.dependencies,
-        workflowId: parentTask?.workflowId,
+        workflowId: parentTask?.config.workflowId,
         parentTask: plan.reconciliationTask.parentTask,
         isReconciliation: plan.reconciliationTask.isReconciliation,
         requiresManualApproval: plan.reconciliationTask.requiresManualApproval,
@@ -1113,11 +1117,14 @@ export class Orchestrator {
     allDeltas.push(...forkDeltas);
 
     // 2. Apply source disposition
-    const sourceChanges: Partial<TaskState> = {
-      ...(mutation.sourceDisposition === 'complete'
-        ? { status: 'completed' as const, completedAt: new Date() }
-        : { status: 'stale' as const }),
+    const baseChanges: TaskStateChanges = mutation.sourceDisposition === 'complete'
+      ? { status: 'completed' as const, execution: { completedAt: new Date() } }
+      : { status: 'stale' as const };
+    const sourceChanges: TaskStateChanges = {
+      ...baseChanges,
       ...mutation.sourceChanges,
+      config: { ...baseChanges.config, ...mutation.sourceChanges?.config },
+      execution: { ...baseChanges.execution, ...mutation.sourceChanges?.execution },
     };
     this.writeAndSync(mutation.sourceNodeId, sourceChanges);
     const sourceDelta: TaskDelta = {
@@ -1165,11 +1172,11 @@ export class Orchestrator {
     const toBlock = this.stateMachine.computeTasksToBlock(failedTaskId);
     for (const id of toBlock) {
       const existing = this.stateMachine.getTask(id);
-      if (existing?.blockedBy && existing.blockedBy !== failedTaskId) {
-        console.warn(`[orchestrator] blockDependents: "${id}" blockedBy overwritten from "${existing.blockedBy}" to "${failedTaskId}"`);
+      if (existing?.execution.blockedBy && existing.execution.blockedBy !== failedTaskId) {
+        console.warn(`[orchestrator] blockDependents: "${id}" blockedBy overwritten from "${existing.execution.blockedBy}" to "${failedTaskId}"`);
       }
 
-      const blockChanges: Partial<TaskState> = { status: 'blocked', blockedBy: failedTaskId };
+      const blockChanges: TaskStateChanges = { status: 'blocked', execution: { blockedBy: failedTaskId } };
       this.writeAndSync(id, blockChanges);
       const delta: TaskDelta = { type: 'updated', taskId: id, changes: blockChanges };
       this.persistence.logEvent?.(id, 'task.blocked', blockChanges);
@@ -1184,8 +1191,8 @@ export class Orchestrator {
     const result = this.experimentManager.onExperimentCompleted(taskId, {
       id: taskId,
       status: task.status === 'completed' ? 'completed' : 'failed',
-      summary: task.summary,
-      exitCode: task.exitCode,
+      summary: task.config.summary,
+      exitCode: task.execution.exitCode,
     });
 
     if (!result) return;
@@ -1194,9 +1201,9 @@ export class Orchestrator {
       const reconId = result.group.reconciliationTaskId;
       const reconTask = this.stateMachine.getTask(reconId);
       if (reconTask) {
-        const reconChanges: Partial<TaskState> = {
+        const reconChanges: TaskStateChanges = {
           status: 'needs_input',
-          experimentResults: Array.from(result.group.completedExperiments.values()),
+          execution: { experimentResults: Array.from(result.group.completedExperiments.values()) },
         };
         this.writeAndSync(reconId, reconChanges);
         const delta: TaskDelta = { type: 'updated', taskId: reconId, changes: reconChanges };
@@ -1207,24 +1214,24 @@ export class Orchestrator {
   }
 
   private buildAutoFixResponse(task: TaskState, outputs: WorkResponse['outputs']): WorkResponse {
-    const maxAttempts = task.maxFixAttempts ?? 3;
+    const maxAttempts = task.config.maxFixAttempts ?? 3;
     const errorMsg = outputs.error ?? `Task failed with exit code ${outputs.exitCode ?? 1}`;
 
     const variants = [
       {
         id: 'fix-conservative',
         description: 'Conservative fix: minimal change to fix the error',
-        prompt: `The following task failed. Apply the MINIMAL change needed to fix this specific error.\n\nOriginal task: ${task.description}\nOriginal prompt: ${task.prompt ?? task.command ?? 'N/A'}\nError: ${errorMsg}\n\nFix the error with the smallest possible change. Do not refactor or restructure.`,
+        prompt: `The following task failed. Apply the MINIMAL change needed to fix this specific error.\n\nOriginal task: ${task.description}\nOriginal prompt: ${task.config.prompt ?? task.config.command ?? 'N/A'}\nError: ${errorMsg}\n\nFix the error with the smallest possible change. Do not refactor or restructure.`,
       },
       {
         id: 'fix-refactor',
         description: 'Refactor fix: restructure to avoid the error',
-        prompt: `The following task failed. Restructure the approach to avoid this class of error entirely.\n\nOriginal task: ${task.description}\nOriginal prompt: ${task.prompt ?? task.command ?? 'N/A'}\nError: ${errorMsg}\n\nRefactor the code to fix the error and prevent similar issues.`,
+        prompt: `The following task failed. Restructure the approach to avoid this class of error entirely.\n\nOriginal task: ${task.description}\nOriginal prompt: ${task.config.prompt ?? task.config.command ?? 'N/A'}\nError: ${errorMsg}\n\nRefactor the code to fix the error and prevent similar issues.`,
       },
       {
         id: 'fix-alternative',
         description: 'Alternative fix: try a completely different approach',
-        prompt: `The following task failed. Try a COMPLETELY DIFFERENT implementation approach.\n\nOriginal task: ${task.description}\nOriginal prompt: ${task.prompt ?? task.command ?? 'N/A'}\nError: ${errorMsg}\n\nIgnore the previous approach and implement this from scratch using a different strategy.`,
+        prompt: `The following task failed. Try a COMPLETELY DIFFERENT implementation approach.\n\nOriginal task: ${task.description}\nOriginal prompt: ${task.config.prompt ?? task.config.command ?? 'N/A'}\nError: ${errorMsg}\n\nIgnore the previous approach and implement this from scratch using a different strategy.`,
       },
     ].slice(0, maxAttempts);
 
@@ -1246,7 +1253,7 @@ export class Orchestrator {
     if (!this.persistence.updateWorkflow) return;
 
     for (const wfId of this.activeWorkflowIds) {
-      const tasks = this.stateMachine.getAllTasks().filter((t) => t.workflowId === wfId);
+      const tasks = this.stateMachine.getAllTasks().filter((t) => t.config.workflowId === wfId);
       if (tasks.length === 0) continue;
 
       const settled = tasks.every(
@@ -1291,9 +1298,9 @@ export class Orchestrator {
         continue;
       }
 
-      const changes: Partial<TaskState> = {
+      const changes: TaskStateChanges = {
         status: 'running',
-        startedAt: new Date(),
+        execution: { startedAt: new Date() },
       };
       const updated = this.writeAndSync(job.taskId, changes);
       started.push(updated);

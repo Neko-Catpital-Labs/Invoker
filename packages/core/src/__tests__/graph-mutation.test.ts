@@ -9,7 +9,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { Orchestrator } from '../orchestrator.js';
 import type { OrchestratorPersistence, OrchestratorMessageBus, GraphMutation } from '../orchestrator.js';
-import type { TaskState, TaskDelta } from '../task-types.js';
+import type { TaskState, TaskDelta, TaskStateChanges } from '../task-types.js';
 
 // ── Mocks ────────────────────────────────────────────────────
 
@@ -35,9 +35,17 @@ class InMemoryPersistence implements OrchestratorPersistence {
     this.tasks.set(task.id, { workflowId, task });
   }
 
-  updateTask(taskId: string, changes: Partial<TaskState>): void {
+  updateTask(taskId: string, changes: TaskStateChanges): void {
     const entry = this.tasks.get(taskId);
-    if (entry) entry.task = { ...entry.task, ...changes } as TaskState;
+    if (entry) {
+      entry.task = {
+        ...entry.task,
+        ...(changes.status !== undefined ? { status: changes.status } : {}),
+        ...(changes.dependencies !== undefined ? { dependencies: changes.dependencies } : {}),
+        config: { ...entry.task.config, ...changes.config },
+        execution: { ...entry.task.execution, ...changes.execution },
+      } as TaskState;
+    }
   }
 
   loadTasks(workflowId: string): TaskState[] {
@@ -104,13 +112,13 @@ describe('applyGraphMutation', () => {
       sourceNodeId: 'B',
       sourceDisposition: 'complete',
       newNodes: [
-        { id: 'new-node', description: 'Replacement', dependencies: ['B'], workflowId: orchestrator.getTask('B')!.workflowId },
+        { id: 'new-node', description: 'Replacement', dependencies: ['B'], workflowId: orchestrator.getTask('B')!.config.workflowId },
       ],
       outputNodeId: 'new-node',
     });
 
     expect(orchestrator.getTask('B')!.status).toBe('completed');
-    expect(orchestrator.getTask('B')!.completedAt).toBeDefined();
+    expect(orchestrator.getTask('B')!.execution.completedAt).toBeDefined();
 
     expect(orchestrator.getTask('C')!.status).toBe('stale');
     const cv2 = orchestrator.getTask('C-v2');
@@ -138,7 +146,7 @@ describe('applyGraphMutation', () => {
       sourceNodeId: 'B',
       sourceDisposition: 'stale',
       newNodes: [
-        { id: 'fix', description: 'Fix', dependencies: ['A'], workflowId: orchestrator.getTask('B')!.workflowId },
+        { id: 'fix', description: 'Fix', dependencies: ['A'], workflowId: orchestrator.getTask('B')!.config.workflowId },
       ],
       outputNodeId: 'fix',
     });
@@ -168,9 +176,9 @@ describe('applyGraphMutation', () => {
       sourceNodeId: 'A',
       sourceDisposition: 'complete',
       newNodes: [
-        { id: 'exp1', description: 'Exp 1', dependencies: ['A'], workflowId: orchestrator.getTask('A')!.workflowId },
-        { id: 'exp2', description: 'Exp 2', dependencies: ['A'], workflowId: orchestrator.getTask('A')!.workflowId },
-        { id: 'recon', description: 'Recon', dependencies: ['exp1', 'exp2'], workflowId: orchestrator.getTask('A')!.workflowId },
+        { id: 'exp1', description: 'Exp 1', dependencies: ['A'], workflowId: orchestrator.getTask('A')!.config.workflowId },
+        { id: 'exp2', description: 'Exp 2', dependencies: ['A'], workflowId: orchestrator.getTask('A')!.config.workflowId },
+        { id: 'recon', description: 'Recon', dependencies: ['exp1', 'exp2'], workflowId: orchestrator.getTask('A')!.config.workflowId },
       ],
       outputNodeId: 'recon',
     });
@@ -201,7 +209,7 @@ describe('applyGraphMutation', () => {
       sourceNodeId: 'B',
       sourceDisposition: 'stale',
       newNodes: [
-        { id: 'fix', description: 'Fix', dependencies: ['A'], workflowId: orchestrator.getTask('B')!.workflowId },
+        { id: 'fix', description: 'Fix', dependencies: ['A'], workflowId: orchestrator.getTask('B')!.config.workflowId },
       ],
       outputNodeId: 'fix',
     });
@@ -232,7 +240,7 @@ describe('applyGraphMutation', () => {
       sourceNodeId: 'B',
       sourceDisposition: 'stale',
       newNodes: [
-        { id: 'fix', description: 'Fix', dependencies: ['A'], workflowId: orchestrator.getTask('B')!.workflowId },
+        { id: 'fix', description: 'Fix', dependencies: ['A'], workflowId: orchestrator.getTask('B')!.config.workflowId },
       ],
       outputNodeId: 'fix',
     });

@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { Orchestrator } from '../orchestrator.js';
 import type { PlanDefinition, OrchestratorPersistence, OrchestratorMessageBus } from '../orchestrator.js';
-import type { TaskState, TaskDelta } from '../task-types.js';
+import type { TaskState, TaskDelta, TaskStateChanges } from '../task-types.js';
 import type { WorkResponse } from '@invoker/protocol';
 
 // ── In-Memory Persistence Mock ──────────────────────────────
@@ -27,10 +27,16 @@ class InMemoryPersistence implements OrchestratorPersistence {
     this.tasks.set(task.id, { workflowId, task });
   }
 
-  updateTask(taskId: string, changes: Partial<TaskState>): void {
+  updateTask(taskId: string, changes: TaskStateChanges): void {
     const entry = this.tasks.get(taskId);
     if (entry) {
-      entry.task = { ...entry.task, ...changes } as TaskState;
+      entry.task = {
+        ...entry.task,
+        ...(changes.status !== undefined ? { status: changes.status } : {}),
+        ...(changes.dependencies !== undefined ? { dependencies: changes.dependencies } : {}),
+        config: { ...entry.task.config, ...changes.config },
+        execution: { ...entry.task.execution, ...changes.execution },
+      } as TaskState;
     }
   }
 
@@ -144,7 +150,7 @@ describe('Orchestrator', () => {
         tasks: [{ id: 't1', description: 'Pivot task', pivot: true }],
       });
 
-      expect(orchestrator.getTask('t1')!.pivot).toBe(true);
+      expect(orchestrator.getTask('t1')!.config.pivot).toBe(true);
     });
 
     it('passes experimentVariants when specified', () => {
@@ -157,7 +163,7 @@ describe('Orchestrator', () => {
         tasks: [{ id: 't1', description: 'Experiment task', experimentVariants: variants }],
       });
 
-      expect(orchestrator.getTask('t1')!.experimentVariants).toEqual(variants);
+      expect(orchestrator.getTask('t1')!.config.experimentVariants).toEqual(variants);
     });
 
     it('passes requiresManualApproval', () => {
@@ -166,7 +172,7 @@ describe('Orchestrator', () => {
         tasks: [{ id: 't1', description: 'Approval task', requiresManualApproval: true }],
       });
 
-      expect(orchestrator.getTask('t1')!.requiresManualApproval).toBe(true);
+      expect(orchestrator.getTask('t1')!.config.requiresManualApproval).toBe(true);
     });
 
     it('passes familiarType when specified', () => {
@@ -178,8 +184,8 @@ describe('Orchestrator', () => {
         ],
       });
 
-      expect(orchestrator.getTask('t1')!.familiarType).toBe('worktree');
-      expect(orchestrator.getTask('t2')!.familiarType).toBe('worktree');
+      expect(orchestrator.getTask('t1')!.config.familiarType).toBe('worktree');
+      expect(orchestrator.getTask('t2')!.config.familiarType).toBe('worktree');
     });
 
     it('passes autoFix and maxFixAttempts', () => {
@@ -189,8 +195,8 @@ describe('Orchestrator', () => {
       });
 
       const task = orchestrator.getTask('t1');
-      expect(task!.autoFix).toBe(true);
-      expect(task!.maxFixAttempts).toBe(2);
+      expect(task!.config.autoFix).toBe(true);
+      expect(task!.config.maxFixAttempts).toBe(2);
     });
 
     it('publishes created deltas for each task', () => {
@@ -219,7 +225,7 @@ describe('Orchestrator', () => {
         ],
       });
 
-      const mergeNode = orchestrator.getAllTasks().find((t) => t.isMergeNode);
+      const mergeNode = orchestrator.getAllTasks().find((t) => t.config.isMergeNode);
       expect(mergeNode).toBeDefined();
       expect(mergeNode!.dependencies.sort()).toEqual(['c', 'd']);
       expect(mergeNode!.status).toBe('pending');
@@ -348,7 +354,7 @@ describe('Orchestrator', () => {
 
       const task = orchestrator.getTask('t1');
       expect(task!.status).toBe('needs_input');
-      expect(task!.inputPrompt).toBe('What directory?');
+      expect(task!.execution.inputPrompt).toBe('What directory?');
     });
 
     it('persists completed status to DB', () => {
@@ -411,7 +417,7 @@ describe('Orchestrator', () => {
       orchestrator.setTaskAwaitingApproval('a1');
 
       expect(orchestrator.getTask('a1')!.status).toBe('awaiting_approval');
-      expect(orchestrator.getTask('a1')!.completedAt).toBeDefined();
+      expect(orchestrator.getTask('a1')!.execution.completedAt).toBeDefined();
 
       const delta = publishedDeltas.find(
         (d) => d.type === 'updated' && d.taskId === 'a1',
@@ -578,8 +584,8 @@ describe('Orchestrator', () => {
       const reconTask = orchestrator.getTask('pivot-reconciliation');
       expect(reconTask).toBeDefined();
       expect(reconTask!.status).toBe('needs_input');
-      expect(reconTask!.experimentResults).toBeDefined();
-      expect(reconTask!.experimentResults!.length).toBe(2);
+      expect(reconTask!.execution.experimentResults).toBeDefined();
+      expect(reconTask!.execution.experimentResults!.length).toBe(2);
     });
 
     it('failed experiment still counts toward completion tracking', () => {
@@ -628,9 +634,9 @@ describe('Orchestrator', () => {
       const reconTask = orchestrator.getTask('pivot-reconciliation');
       expect(reconTask).toBeDefined();
       expect(reconTask!.status).toBe('needs_input');
-      expect(reconTask!.experimentResults).toBeDefined();
+      expect(reconTask!.execution.experimentResults).toBeDefined();
 
-      const results = reconTask!.experimentResults!;
+      const results = reconTask!.execution.experimentResults!;
       const v1Result = results.find((r) => r.id === 'pivot-exp-v1');
       const v2Result = results.find((r) => r.id === 'pivot-exp-v2');
       expect(v1Result).toBeDefined();
@@ -668,8 +674,8 @@ describe('Orchestrator', () => {
           status: 'completed',
           dependencies: [],
           createdAt: new Date(),
-          completedAt: new Date(),
-          exitCode: 0,
+          config: {},
+          execution: { completedAt: new Date(), exitCode: 0 },
         },
         {
           id: 't2',
@@ -677,6 +683,8 @@ describe('Orchestrator', () => {
           status: 'pending',
           dependencies: ['t1'],
           createdAt: new Date(),
+          config: {},
+          execution: {},
         },
       ];
       for (const t of storedTasks) {
@@ -705,7 +713,8 @@ describe('Orchestrator', () => {
         status: 'running',
         dependencies: [],
         createdAt: new Date(),
-        startedAt,
+        config: {},
+        execution: { startedAt },
       };
       hydratePersistence.saveTask('wf-hydrate', task);
 
@@ -719,7 +728,7 @@ describe('Orchestrator', () => {
 
       const restored = hydrateOrchestrator.getTask('t1')!;
       expect(restored.status).toBe('running');
-      expect(restored.startedAt).toBe(startedAt);
+      expect(restored.execution.startedAt).toBe(startedAt);
     });
 
     it('restartTask recovers a stuck running task after syncFromDb', () => {
@@ -730,7 +739,8 @@ describe('Orchestrator', () => {
         status: 'running',
         dependencies: [],
         createdAt: new Date(),
-        startedAt: new Date(),
+        config: {},
+        execution: { startedAt: new Date() },
       };
       hydratePersistence.saveTask('wf-hydrate', task);
 
@@ -755,7 +765,8 @@ describe('Orchestrator', () => {
         status: 'failed',
         dependencies: [],
         createdAt: new Date(),
-        error: 'something broke',
+        config: {},
+        execution: { error: 'something broke' },
       };
       hydratePersistence.saveTask('wf-hydrate', task);
 
@@ -785,6 +796,8 @@ describe('Orchestrator', () => {
         status: 'completed',
         dependencies: [],
         createdAt: new Date(),
+        config: {},
+        execution: {},
       });
       hydratePersistence.saveTask('wf-b', {
         id: 'b1',
@@ -792,7 +805,8 @@ describe('Orchestrator', () => {
         status: 'failed',
         dependencies: [],
         createdAt: new Date(),
-        error: 'something broke',
+        config: {},
+        execution: { error: 'something broke' },
       });
 
       const hydrateOrchestrator = new Orchestrator({
@@ -818,6 +832,8 @@ describe('Orchestrator', () => {
         status: 'awaiting_approval',
         dependencies: [],
         createdAt: new Date(),
+        config: {},
+        execution: {},
       });
 
       const hydrateOrchestrator = new Orchestrator({
@@ -844,8 +860,8 @@ describe('Orchestrator', () => {
         status: 'completed',
         dependencies: [],
         createdAt: new Date(),
-        completedAt: new Date(),
-        exitCode: 0,
+        config: {},
+        execution: { completedAt: new Date(), exitCode: 0 },
       });
       resumePersistence.saveTask('wf-resume', {
         id: 't2',
@@ -853,6 +869,8 @@ describe('Orchestrator', () => {
         status: 'pending',
         dependencies: ['t1'],
         createdAt: new Date(),
+        config: {},
+        execution: {},
       });
 
       const resumeOrchestrator = new Orchestrator({
@@ -876,7 +894,8 @@ describe('Orchestrator', () => {
         status: 'completed',
         dependencies: [],
         createdAt: new Date(),
-        completedAt: new Date(),
+        config: {},
+        execution: { completedAt: new Date() },
       });
       resumePersistence.saveTask('wf-resume', {
         id: 't2',
@@ -884,6 +903,8 @@ describe('Orchestrator', () => {
         status: 'pending',
         dependencies: ['t1'],
         createdAt: new Date(),
+        config: {},
+        execution: {},
       });
       resumePersistence.saveTask('wf-resume', {
         id: 't3',
@@ -891,6 +912,8 @@ describe('Orchestrator', () => {
         status: 'pending',
         dependencies: ['t2'],
         createdAt: new Date(),
+        config: {},
+        execution: {},
       });
 
       const resumeOrchestrator = new Orchestrator({
@@ -920,7 +943,8 @@ describe('Orchestrator', () => {
         status: 'running',
         dependencies: [],
         createdAt: new Date(),
-        startedAt: new Date(),
+        config: {},
+        execution: { startedAt: new Date() },
       });
 
       const resumeOrchestrator = new Orchestrator({
@@ -1012,7 +1036,7 @@ describe('Orchestrator', () => {
       const reconTask = orchestrator.getTask('t1-reconciliation');
       expect(reconTask).toBeDefined();
       expect(reconTask!.status).toBe('needs_input');
-      expect(reconTask!.experimentResults).toHaveLength(2);
+      expect(reconTask!.execution.experimentResults).toHaveLength(2);
 
       orchestrator.selectExperiment('t1-reconciliation', 't1-exp-fix-conservative');
       expect(orchestrator.getTask('t1-reconciliation')!.status).toBe('completed');
@@ -1053,8 +1077,8 @@ describe('Orchestrator', () => {
 
       const fixTask = orchestrator.getTask('t1-exp-fix-conservative');
       expect(fixTask).toBeDefined();
-      expect(fixTask!.prompt).toContain('ModuleNotFoundError: xyz');
-      expect(fixTask!.prompt).toContain('Build widgets');
+      expect(fixTask!.config.prompt).toContain('ModuleNotFoundError: xyz');
+      expect(fixTask!.config.prompt).toContain('Build widgets');
     });
   });
 
@@ -1092,7 +1116,7 @@ describe('Orchestrator', () => {
       );
       expect(orchestrator.getTask('t3')!.status).toBe('completed');
 
-      const mergeNode = orchestrator.getAllTasks().find((t) => t.isMergeNode);
+      const mergeNode = orchestrator.getAllTasks().find((t) => t.config.isMergeNode);
       expect(mergeNode!.status).toBe('running');
       orchestrator.handleWorkerResponse(
         makeResponse({ actionId: mergeNode!.id, status: 'completed', outputs: { exitCode: 0 } }),
@@ -1124,7 +1148,7 @@ describe('Orchestrator', () => {
         makeResponse({ actionId: 't2', status: 'completed', outputs: { exitCode: 0 } }),
       );
 
-      const mergeNode = orchestrator.getAllTasks().find((t) => t.isMergeNode);
+      const mergeNode = orchestrator.getAllTasks().find((t) => t.config.isMergeNode);
       orchestrator.handleWorkerResponse(
         makeResponse({ actionId: mergeNode!.id, status: 'completed', outputs: { exitCode: 0 } }),
       );
@@ -1199,7 +1223,7 @@ describe('Orchestrator', () => {
         makeResponse({ actionId: 't1', status: 'completed', outputs: { exitCode: 0 } }),
       );
 
-      const mergeNode = orchestrator.getAllTasks().find((t) => t.isMergeNode);
+      const mergeNode = orchestrator.getAllTasks().find((t) => t.config.isMergeNode);
       orchestrator.handleWorkerResponse(
         makeResponse({ actionId: mergeNode!.id, status: 'completed', outputs: { exitCode: 0 } }),
       );
@@ -1280,7 +1304,7 @@ describe('Orchestrator', () => {
 
       const started = orchestrator.editTaskCommand('t1', 'echo new');
       const task = orchestrator.getTask('t1');
-      expect(task?.command).toBe('echo new');
+      expect(task?.config.command).toBe('echo new');
       expect(task?.status).toBe('running');
       expect(started).toHaveLength(1);
       expect(started[0].id).toBe('t1');
@@ -1308,7 +1332,7 @@ describe('Orchestrator', () => {
 
       const started = orchestrator.editTaskCommand('parent', 'echo updated');
 
-      expect(orchestrator.getTask('parent')?.command).toBe('echo updated');
+      expect(orchestrator.getTask('parent')?.config.command).toBe('echo updated');
       expect(orchestrator.getTask('parent')?.status).toBe('running');
       expect(orchestrator.getTask('child')?.status).toBe('stale');
 
@@ -1343,7 +1367,7 @@ describe('Orchestrator', () => {
 
       const persisted = persistence.tasks.get('t1');
       expect(persisted).toBeDefined();
-      expect(persisted?.task.command).toBe('echo fixed');
+      expect(persisted?.task.config.command).toBe('echo fixed');
     });
   });
 
@@ -1360,11 +1384,11 @@ describe('Orchestrator', () => {
       orchestrator.handleWorkerResponse(
         makeResponse({ actionId: 't1', status: 'failed', outputs: { exitCode: 1, error: 'fail' } }),
       );
-      expect(orchestrator.getTask('t1')?.familiarType).toBe('local');
+      expect(orchestrator.getTask('t1')?.config.familiarType).toBe('local');
 
       const started = orchestrator.editTaskType('t1', 'worktree');
       const task = orchestrator.getTask('t1');
-      expect(task?.familiarType).toBe('worktree');
+      expect(task?.config.familiarType).toBe('worktree');
       expect(task?.status).toBe('running');
       expect(started).toHaveLength(1);
     });
@@ -1419,7 +1443,7 @@ describe('Orchestrator', () => {
 
       const persisted = persistence.tasks.get('t1');
       expect(persisted).toBeDefined();
-      expect(persisted?.task.familiarType).toBe('worktree');
+      expect(persisted?.task.config.familiarType).toBe('worktree');
     });
   });
 
@@ -1524,7 +1548,7 @@ describe('Orchestrator', () => {
       orchestrator.startExecution();
 
       // Simulate an external process modifying the DB directly
-      persistence.updateTask('t1', { status: 'completed', completedAt: new Date(), exitCode: 0 });
+      persistence.updateTask('t1', { status: 'completed', execution: { completedAt: new Date(), exitCode: 0 } });
 
       // The orchestrator sees the external change on next mutation
       // (restartTask calls refreshFromDb internally)
@@ -1553,7 +1577,7 @@ describe('Orchestrator', () => {
 
       const allTasks = orchestrator.getAllTasks();
       expect(allTasks).toHaveLength(4);
-      const userTasks = allTasks.filter((t) => !t.isMergeNode);
+      const userTasks = allTasks.filter((t) => !t.config.isMergeNode);
       expect(userTasks.map((t) => t.id).sort()).toEqual(['a1', 'b1']);
     });
 
@@ -1644,9 +1668,9 @@ describe('Orchestrator', () => {
 
       const a1 = orchestrator.getTask('a1')!;
       const b1 = orchestrator.getTask('b1')!;
-      expect(a1.workflowId).toBeDefined();
-      expect(b1.workflowId).toBeDefined();
-      expect(a1.workflowId).not.toBe(b1.workflowId);
+      expect(a1.config.workflowId).toBeDefined();
+      expect(b1.config.workflowId).toBeDefined();
+      expect(a1.config.workflowId).not.toBe(b1.config.workflowId);
     });
 
     it('getWorkflowIds returns all active workflow IDs', () => {
@@ -1738,13 +1762,13 @@ describe('Orchestrator', () => {
       orchestrator.handleWorkerResponse(
         makeResponse({ actionId: 'A', status: 'failed', outputs: { exitCode: 1, error: 'boom' } }),
       );
-      expect(orchestrator.getTask('C')!.blockedBy).toBe('A');
+      expect(orchestrator.getTask('C')!.execution.blockedBy).toBe('A');
 
       // Fail B — C's blockedBy should be overwritten to B
       orchestrator.handleWorkerResponse(
         makeResponse({ actionId: 'B', status: 'failed', outputs: { exitCode: 1, error: 'boom' } }),
       );
-      expect(orchestrator.getTask('C')!.blockedBy).toBe('B');
+      expect(orchestrator.getTask('C')!.execution.blockedBy).toBe('B');
 
       expect(warnSpy).toHaveBeenCalledWith(
         expect.stringContaining('blockDependents: "C" blockedBy overwritten from "A" to "B"'),
@@ -1879,12 +1903,12 @@ describe('Orchestrator', () => {
       orchestrator.handleWorkerResponse(
         makeResponse({ actionId: 'A', status: 'failed', outputs: { exitCode: 1, error: 'a' } }),
       );
-      expect(orchestrator.getTask('D')!.blockedBy).toBe('A');
+      expect(orchestrator.getTask('D')!.execution.blockedBy).toBe('A');
 
       orchestrator.handleWorkerResponse(
         makeResponse({ actionId: 'B', status: 'failed', outputs: { exitCode: 1, error: 'b' } }),
       );
-      expect(orchestrator.getTask('D')!.blockedBy).toBe('B');
+      expect(orchestrator.getTask('D')!.execution.blockedBy).toBe('B');
       expect(warnSpy).toHaveBeenCalledWith(
         expect.stringContaining('blockedBy overwritten from "A" to "B"'),
       );
@@ -1892,7 +1916,7 @@ describe('Orchestrator', () => {
       orchestrator.handleWorkerResponse(
         makeResponse({ actionId: 'C', status: 'failed', outputs: { exitCode: 1, error: 'c' } }),
       );
-      expect(orchestrator.getTask('D')!.blockedBy).toBe('C');
+      expect(orchestrator.getTask('D')!.execution.blockedBy).toBe('C');
       expect(warnSpy).toHaveBeenCalledWith(
         expect.stringContaining('blockedBy overwritten from "B" to "C"'),
       );
@@ -2011,10 +2035,10 @@ describe('Orchestrator', () => {
 
       const recon = orchestrator.getTask('pivot-reconciliation')!;
       expect(recon.status).toBe('completed');
-      expect(recon.selectedExperiment).toBe('pivot-exp-v1');
-      expect(recon.selectedExperiments).toEqual(['pivot-exp-v1', 'pivot-exp-v2']);
-      expect(recon.branch).toBe('reconciliation/pivot-reconciliation');
-      expect(recon.commit).toBe('abc123');
+      expect(recon.execution.selectedExperiment).toBe('pivot-exp-v1');
+      expect(recon.execution.selectedExperiments).toEqual(['pivot-exp-v1', 'pivot-exp-v2']);
+      expect(recon.execution.branch).toBe('reconciliation/pivot-reconciliation');
+      expect(recon.execution.commit).toBe('abc123');
     });
 
     it('multi-select unblocks downstream tasks', () => {
@@ -2036,18 +2060,17 @@ describe('Orchestrator', () => {
       setupReconciliation();
 
       persistence.updateTask('pivot-exp-v1', {
-        branch: 'experiment/pivot-exp-v1-hash',
-        commit: 'singlecommit',
+        execution: { branch: 'experiment/pivot-exp-v1-hash', commit: 'singlecommit' },
       });
 
       orchestrator.selectExperiments('pivot-reconciliation', ['pivot-exp-v1']);
 
       const recon = orchestrator.getTask('pivot-reconciliation')!;
       expect(recon.status).toBe('completed');
-      expect(recon.selectedExperiment).toBe('pivot-exp-v1');
-      expect(recon.branch).toBe('experiment/pivot-exp-v1-hash');
-      expect(recon.commit).toBe('singlecommit');
-      expect(recon.selectedExperiments).toBeUndefined();
+      expect(recon.execution.selectedExperiment).toBe('pivot-exp-v1');
+      expect(recon.execution.branch).toBe('experiment/pivot-exp-v1-hash');
+      expect(recon.execution.commit).toBe('singlecommit');
+      expect(recon.execution.selectedExperiments).toBeUndefined();
     });
 
     it('publishes delta with selectedExperiments field', () => {
@@ -2065,7 +2088,7 @@ describe('Orchestrator', () => {
         (d) => d.type === 'updated' && d.taskId === 'pivot-reconciliation',
       );
       expect(reconDelta).toBeDefined();
-      expect((reconDelta as any).changes.selectedExperiments).toEqual(['pivot-exp-v2', 'pivot-exp-v3']);
+      expect((reconDelta as any).changes.execution.selectedExperiments).toEqual(['pivot-exp-v2', 'pivot-exp-v3']);
     });
   });
 });

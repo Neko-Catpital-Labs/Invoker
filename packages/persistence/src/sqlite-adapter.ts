@@ -5,7 +5,7 @@
  */
 
 import Database from 'better-sqlite3';
-import type { TaskState } from '@invoker/core';
+import type { TaskState, TaskStateChanges } from '@invoker/core';
 import type { PersistenceAdapter, Workflow, TaskEvent, ActivityLogEntry, Conversation, ConversationMessage } from './adapter.js';
 
 /**
@@ -166,6 +166,12 @@ export class SQLiteAdapter implements PersistenceAdapter {
       'ALTER TABLE workflows ADD COLUMN feature_branch TEXT',
       'ALTER TABLE workflows ADD COLUMN generation INTEGER DEFAULT 0',
       'ALTER TABLE tasks ADD COLUMN last_heartbeat_at TEXT',
+      'ALTER TABLE tasks ADD COLUMN experiment_prompt TEXT',
+      'ALTER TABLE tasks ADD COLUMN auto_fix INTEGER DEFAULT 0',
+      'ALTER TABLE tasks ADD COLUMN max_fix_attempts INTEGER',
+      'ALTER TABLE tasks ADD COLUMN action_request_id TEXT',
+      'ALTER TABLE tasks ADD COLUMN experiments TEXT',
+      'ALTER TABLE tasks ADD COLUMN selected_experiments TEXT',
     ];
     for (const sql of migrations) {
       try { this.db.exec(sql); } catch { /* Column already exists */ }
@@ -249,114 +255,170 @@ export class SQLiteAdapter implements PersistenceAdapter {
   // ── Tasks ─────────────────────────────────────────────
 
   saveTask(workflowId: string, task: TaskState): void {
+    const cfg = task.config;
+    const exec = task.execution;
     this.db.prepare(`
       INSERT OR REPLACE INTO tasks (
         id, workflow_id, description, status, blocked_by, dependencies,
-        command, prompt, exit_code, error, input_prompt,
+        command, prompt, experiment_prompt, exit_code, error, input_prompt,
         summary, problem, approach, test_plan, repro_command,
         branch, commit_hash, parent_task,
         pivot, experiment_variants, is_reconciliation, selected_experiment,
-        experiment_results, requires_manual_approval,
+        selected_experiments, experiment_results, requires_manual_approval,
         repo_url, feature_branch,
-        is_merge_node,
+        is_merge_node, auto_fix, max_fix_attempts,
         familiar_type, claude_session_id, workspace_path, container_id,
+        action_request_id, experiments,
         created_at, started_at, completed_at, last_heartbeat_at
       ) VALUES (
         ?, ?, ?, ?, ?, ?,
-        ?, ?, ?, ?, ?,
+        ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?,
         ?, ?, ?,
         ?, ?, ?, ?,
+        ?, ?, ?,
         ?, ?,
-        ?, ?,
-        ?,
+        ?, ?, ?,
         ?, ?, ?, ?,
+        ?, ?,
         ?, ?, ?, ?
       )
     `).run(
       task.id, workflowId, task.description, task.status,
-      task.blockedBy ?? null,
+      exec.blockedBy ?? null,
       JSON.stringify(task.dependencies),
-      task.command ?? null, task.prompt ?? null,
-      task.exitCode ?? null, task.error ?? null, task.inputPrompt ?? null,
-      task.summary ?? null, task.problem ?? null, task.approach ?? null,
-      task.testPlan ?? null, task.reproCommand ?? null,
-      task.branch ?? null, task.commit ?? null, task.parentTask ?? null,
-      task.pivot ? 1 : 0,
-      task.experimentVariants ? JSON.stringify(task.experimentVariants) : null,
-      task.isReconciliation ? 1 : 0,
-      task.selectedExperiment ?? null,
-      task.experimentResults ? JSON.stringify(task.experimentResults) : null,
-      task.requiresManualApproval ? 1 : 0,
-      task.repoUrl ?? null, task.featureBranch ?? null,
-      task.isMergeNode ? 1 : 0,
-      task.familiarType ?? null,
-      task.claudeSessionId ?? null,
-      task.workspacePath ?? null,
-      task.containerId ?? null,
+      cfg.command ?? null, cfg.prompt ?? null, cfg.experimentPrompt ?? null,
+      exec.exitCode ?? null, exec.error ?? null, exec.inputPrompt ?? null,
+      cfg.summary ?? null, cfg.problem ?? null, cfg.approach ?? null,
+      cfg.testPlan ?? null, cfg.reproCommand ?? null,
+      exec.branch ?? null, exec.commit ?? null, cfg.parentTask ?? null,
+      cfg.pivot ? 1 : 0,
+      cfg.experimentVariants ? JSON.stringify(cfg.experimentVariants) : null,
+      cfg.isReconciliation ? 1 : 0,
+      exec.selectedExperiment ?? null,
+      exec.selectedExperiments ? JSON.stringify(exec.selectedExperiments) : null,
+      exec.experimentResults ? JSON.stringify(exec.experimentResults) : null,
+      cfg.requiresManualApproval ? 1 : 0,
+      cfg.repoUrl ?? null, cfg.featureBranch ?? null,
+      cfg.isMergeNode ? 1 : 0,
+      cfg.autoFix ? 1 : 0, cfg.maxFixAttempts ?? null,
+      cfg.familiarType ?? null,
+      exec.claudeSessionId ?? null,
+      exec.workspacePath ?? null,
+      exec.containerId ?? null,
+      exec.actionRequestId ?? null,
+      exec.experiments ? JSON.stringify(exec.experiments) : null,
       task.createdAt.toISOString(),
-      task.startedAt?.toISOString() ?? null,
-      task.completedAt?.toISOString() ?? null,
-      task.lastHeartbeatAt?.toISOString() ?? null,
+      exec.startedAt?.toISOString() ?? null,
+      exec.completedAt?.toISOString() ?? null,
+      exec.lastHeartbeatAt?.toISOString() ?? null,
     );
   }
 
-  updateTask(taskId: string, changes: Partial<TaskState>): void {
+  updateTask(taskId: string, changes: TaskStateChanges): void {
     const setClauses: string[] = [];
     const values: any[] = [];
 
-    const fieldMap: Record<string, string> = {
-      status: 'status',
-      blockedBy: 'blocked_by',
-      dependencies: 'dependencies',
-      command: 'command',
-      prompt: 'prompt',
-      exitCode: 'exit_code',
-      error: 'error',
-      inputPrompt: 'input_prompt',
-      summary: 'summary',
-      problem: 'problem',
-      approach: 'approach',
-      testPlan: 'test_plan',
-      reproCommand: 'repro_command',
-      branch: 'branch',
-      commit: 'commit_hash',
-      parentTask: 'parent_task',
-      selectedExperiment: 'selected_experiment',
-      claudeSessionId: 'claude_session_id',
-      workspacePath: 'workspace_path',
-      familiarType: 'familiar_type',
-      containerId: 'container_id',
-      startedAt: 'started_at',
-      completedAt: 'completed_at',
-      lastHeartbeatAt: 'last_heartbeat_at',
-    };
+    if (changes.status !== undefined) {
+      setClauses.push('status = ?');
+      values.push(changes.status);
+    }
+    if (changes.dependencies !== undefined) {
+      setClauses.push('dependencies = ?');
+      values.push(JSON.stringify(changes.dependencies));
+    }
 
-    for (const [key, value] of Object.entries(changes)) {
-      const col = fieldMap[key];
-      if (!col) continue;
+    if (changes.config) {
+      const configMap: Record<string, string> = {
+        workflowId: 'workflow_id',
+        parentTask: 'parent_task',
+        command: 'command',
+        prompt: 'prompt',
+        experimentPrompt: 'experiment_prompt',
+        summary: 'summary',
+        problem: 'problem',
+        approach: 'approach',
+        testPlan: 'test_plan',
+        reproCommand: 'repro_command',
+        repoUrl: 'repo_url',
+        featureBranch: 'feature_branch',
+        familiarType: 'familiar_type',
+      };
+      const configBoolMap: Record<string, string> = {
+        pivot: 'pivot',
+        isReconciliation: 'is_reconciliation',
+        requiresManualApproval: 'requires_manual_approval',
+        isMergeNode: 'is_merge_node',
+        autoFix: 'auto_fix',
+      };
 
-      setClauses.push(`${col} = ?`);
-
-      if (key === 'dependencies') {
-        values.push(JSON.stringify(value));
-      } else if (key === 'experimentResults' || key === 'experimentVariants') {
-        values.push(JSON.stringify(value));
-      } else if (value instanceof Date) {
-        values.push(value.toISOString());
-      } else {
-        values.push(value ?? null);
+      for (const [key, col] of Object.entries(configMap)) {
+        if (key in changes.config) {
+          setClauses.push(`${col} = ?`);
+          values.push((changes.config as any)[key] ?? null);
+        }
+      }
+      for (const [key, col] of Object.entries(configBoolMap)) {
+        if (key in changes.config) {
+          setClauses.push(`${col} = ?`);
+          values.push((changes.config as any)[key] ? 1 : 0);
+        }
+      }
+      if ('maxFixAttempts' in changes.config) {
+        setClauses.push('max_fix_attempts = ?');
+        values.push(changes.config.maxFixAttempts ?? null);
+      }
+      if ('experimentVariants' in changes.config) {
+        setClauses.push('experiment_variants = ?');
+        values.push(changes.config.experimentVariants ? JSON.stringify(changes.config.experimentVariants) : null);
       }
     }
 
-    // Handle JSON fields separately
-    if ('experimentResults' in changes) {
-      setClauses.push('experiment_results = ?');
-      values.push(changes.experimentResults ? JSON.stringify(changes.experimentResults) : null);
-    }
-    if ('experimentVariants' in changes) {
-      setClauses.push('experiment_variants = ?');
-      values.push(changes.experimentVariants ? JSON.stringify(changes.experimentVariants) : null);
+    if (changes.execution) {
+      const execMap: Record<string, string> = {
+        blockedBy: 'blocked_by',
+        inputPrompt: 'input_prompt',
+        exitCode: 'exit_code',
+        error: 'error',
+        actionRequestId: 'action_request_id',
+        branch: 'branch',
+        commit: 'commit_hash',
+        claudeSessionId: 'claude_session_id',
+        workspacePath: 'workspace_path',
+        containerId: 'container_id',
+        selectedExperiment: 'selected_experiment',
+      };
+      const execDateMap: Record<string, string> = {
+        startedAt: 'started_at',
+        completedAt: 'completed_at',
+        lastHeartbeatAt: 'last_heartbeat_at',
+      };
+      const execJsonFields: Record<string, string> = {
+        experiments: 'experiments',
+        selectedExperiments: 'selected_experiments',
+        experimentResults: 'experiment_results',
+      };
+
+      for (const [key, col] of Object.entries(execMap)) {
+        if (key in changes.execution) {
+          setClauses.push(`${col} = ?`);
+          values.push((changes.execution as any)[key] ?? null);
+        }
+      }
+      for (const [key, col] of Object.entries(execDateMap)) {
+        if (key in changes.execution) {
+          setClauses.push(`${col} = ?`);
+          const val = (changes.execution as any)[key];
+          values.push(val instanceof Date ? val.toISOString() : val ?? null);
+        }
+      }
+      for (const [key, col] of Object.entries(execJsonFields)) {
+        if (key in changes.execution) {
+          setClauses.push(`${col} = ?`);
+          const val = (changes.execution as any)[key];
+          values.push(val ? JSON.stringify(val) : null);
+        }
+      }
     }
 
     if (setClauses.length === 0) return;
@@ -652,41 +714,51 @@ export class SQLiteAdapter implements PersistenceAdapter {
   private rowToTask(row: any): TaskState {
     return {
       id: row.id,
-      workflowId: row.workflow_id ?? undefined,
       description: row.description,
       status: row.status,
-      blockedBy: row.blocked_by ?? undefined,
       dependencies: JSON.parse(row.dependencies || '[]'),
-      command: row.command ?? undefined,
-      prompt: row.prompt ?? undefined,
-      exitCode: row.exit_code ?? undefined,
-      error: row.error ?? undefined,
-      inputPrompt: row.input_prompt ?? undefined,
-      summary: row.summary ?? undefined,
-      problem: row.problem ?? undefined,
-      approach: row.approach ?? undefined,
-      testPlan: row.test_plan ?? undefined,
-      reproCommand: row.repro_command ?? undefined,
-      branch: row.branch ?? undefined,
-      commit: row.commit_hash ?? undefined,
-      parentTask: row.parent_task ?? undefined,
-      pivot: row.pivot === 1 ? true : undefined,
-      experimentVariants: row.experiment_variants ? JSON.parse(row.experiment_variants) : undefined,
-      isReconciliation: row.is_reconciliation === 1 ? true : undefined,
-      selectedExperiment: row.selected_experiment ?? undefined,
-      experimentResults: row.experiment_results ? JSON.parse(row.experiment_results) : undefined,
-      requiresManualApproval: row.requires_manual_approval === 1 ? true : undefined,
-      repoUrl: row.repo_url ?? undefined,
-      featureBranch: row.feature_branch ?? undefined,
-      isMergeNode: row.is_merge_node === 1 ? true : undefined,
-      familiarType: row.familiar_type ?? undefined,
-      claudeSessionId: row.claude_session_id ?? undefined,
-      workspacePath: row.workspace_path ?? undefined,
-      containerId: row.container_id ?? undefined,
       createdAt: new Date(row.created_at),
-      startedAt: row.started_at ? new Date(row.started_at) : undefined,
-      completedAt: row.completed_at ? new Date(row.completed_at) : undefined,
-      lastHeartbeatAt: row.last_heartbeat_at ? new Date(row.last_heartbeat_at) : undefined,
+      config: {
+        workflowId: row.workflow_id ?? undefined,
+        parentTask: row.parent_task ?? undefined,
+        command: row.command ?? undefined,
+        prompt: row.prompt ?? undefined,
+        experimentPrompt: row.experiment_prompt ?? undefined,
+        pivot: row.pivot === 1 ? true : undefined,
+        experimentVariants: row.experiment_variants ? JSON.parse(row.experiment_variants) : undefined,
+        isReconciliation: row.is_reconciliation === 1 ? true : undefined,
+        requiresManualApproval: row.requires_manual_approval === 1 ? true : undefined,
+        repoUrl: row.repo_url ?? undefined,
+        featureBranch: row.feature_branch ?? undefined,
+        familiarType: row.familiar_type ?? undefined,
+        autoFix: row.auto_fix === 1 ? true : undefined,
+        maxFixAttempts: row.max_fix_attempts ?? undefined,
+        isMergeNode: row.is_merge_node === 1 ? true : undefined,
+        summary: row.summary ?? undefined,
+        problem: row.problem ?? undefined,
+        approach: row.approach ?? undefined,
+        testPlan: row.test_plan ?? undefined,
+        reproCommand: row.repro_command ?? undefined,
+      },
+      execution: {
+        blockedBy: row.blocked_by ?? undefined,
+        inputPrompt: row.input_prompt ?? undefined,
+        exitCode: row.exit_code ?? undefined,
+        error: row.error ?? undefined,
+        startedAt: row.started_at ? new Date(row.started_at) : undefined,
+        completedAt: row.completed_at ? new Date(row.completed_at) : undefined,
+        lastHeartbeatAt: row.last_heartbeat_at ? new Date(row.last_heartbeat_at) : undefined,
+        actionRequestId: row.action_request_id ?? undefined,
+        branch: row.branch ?? undefined,
+        commit: row.commit_hash ?? undefined,
+        claudeSessionId: row.claude_session_id ?? undefined,
+        workspacePath: row.workspace_path ?? undefined,
+        containerId: row.container_id ?? undefined,
+        experiments: row.experiments ? JSON.parse(row.experiments) : undefined,
+        selectedExperiment: row.selected_experiment ?? undefined,
+        selectedExperiments: row.selected_experiments ? JSON.parse(row.selected_experiments) : undefined,
+        experimentResults: row.experiment_results ? JSON.parse(row.experiment_results) : undefined,
+      },
     };
   }
 }

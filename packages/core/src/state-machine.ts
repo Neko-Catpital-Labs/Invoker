@@ -101,7 +101,7 @@ export class TaskStateMachine {
 
     for (const task of this.graph.getAllNodes()) {
       if (task.status !== 'blocked') continue;
-      if (task.blockedBy !== taskId) continue;
+      if (task.execution.blockedBy !== taskId) continue;
       unblocked.push(task.id);
     }
 

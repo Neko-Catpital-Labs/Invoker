@@ -5,7 +5,7 @@
  * This allows swapping storage backends (in-memory, SQLite, etc.)
  */
 
-import type { TaskState, PlanDefinition } from '@invoker/core';
+import type { TaskState, TaskStateChanges, PlanDefinition } from '@invoker/core';
 
 // ── Conversation Types ─────────────────────────────────────
 
@@ -71,7 +71,7 @@ export interface PersistenceAdapter {
 
   // Tasks
   saveTask(workflowId: string, task: TaskState): void;
-  updateTask(taskId: string, changes: Partial<TaskState>): void;
+  updateTask(taskId: string, changes: TaskStateChanges): void;
   loadTasks(workflowId: string): TaskState[];
   getAllTaskIds(): string[];
   getAllTaskBranches(): string[];

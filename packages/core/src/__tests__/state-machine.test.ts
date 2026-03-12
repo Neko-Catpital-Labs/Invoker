@@ -1,12 +1,12 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { TaskStateMachine } from '../state-machine.js';
-import type { TaskState } from '../task-types.js';
+import type { TaskState, TaskConfig, TaskExecution } from '../task-types.js';
 
 function makeTask(
   id: string,
   deps: string[] = [],
   status: TaskState['status'] = 'pending',
-  extra: Partial<TaskState> = {},
+  extra: { config?: Partial<TaskConfig>; execution?: Partial<TaskExecution> } = {},
 ): TaskState {
   return {
     id,
@@ -14,7 +14,8 @@ function makeTask(
     status,
     dependencies: deps,
     createdAt: new Date(),
-    ...extra,
+    config: { ...extra.config },
+    execution: { ...extra.execution },
   };
 }
 
@@ -195,8 +196,8 @@ describe('TaskStateMachine', () => {
   describe('computeTasksToUnblock', () => {
     it('returns tasks blocked by the given task', () => {
       sm.restoreTask(makeTask('t1', [], 'pending'));
-      sm.restoreTask(makeTask('t2', ['t1'], 'blocked', { blockedBy: 't1' }));
-      sm.restoreTask(makeTask('t3', ['t1'], 'blocked', { blockedBy: 't1' }));
+      sm.restoreTask(makeTask('t2', ['t1'], 'blocked', { execution: { blockedBy: 't1' } }));
+      sm.restoreTask(makeTask('t3', ['t1'], 'blocked', { execution: { blockedBy: 't1' } }));
 
       const unblocked = sm.computeTasksToUnblock('t1');
       expect(unblocked.sort()).toEqual(['t2', 't3']);
@@ -205,8 +206,8 @@ describe('TaskStateMachine', () => {
     it('does not return tasks blocked by a different task', () => {
       sm.restoreTask(makeTask('a', [], 'failed'));
       sm.restoreTask(makeTask('b', [], 'failed'));
-      sm.restoreTask(makeTask('c', ['a'], 'blocked', { blockedBy: 'a' }));
-      sm.restoreTask(makeTask('d', ['b'], 'blocked', { blockedBy: 'b' }));
+      sm.restoreTask(makeTask('c', ['a'], 'blocked', { execution: { blockedBy: 'a' } }));
+      sm.restoreTask(makeTask('d', ['b'], 'blocked', { execution: { blockedBy: 'b' } }));
 
       expect(sm.computeTasksToUnblock('a')).toEqual(['c']);
       expect(sm.computeTasksToUnblock('b')).toEqual(['d']);

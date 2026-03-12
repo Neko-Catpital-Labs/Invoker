@@ -136,14 +136,14 @@ export class TaskExecutor {
 
   private async executeTaskInner(task: TaskState): Promise<void> {
     // Merge nodes: execute git consolidation/merge or auto-complete
-    if (task.isMergeNode) {
+    if (task.config.isMergeNode) {
       await this.executeMergeNode(task);
       return;
     }
 
     // Pivot tasks with experimentVariants: synthesize a spawn_experiments
     // response instead of running through the familiar.
-    if (task.pivot && task.experimentVariants && task.experimentVariants.length > 0) {
+    if (task.config.pivot && task.config.experimentVariants && task.config.experimentVariants.length > 0) {
       const response: WorkResponse = {
         requestId: `req-${task.id}`,
         actionId: task.id,
@@ -152,7 +152,7 @@ export class TaskExecutor {
         dagMutation: {
           spawnExperiments: {
             description: task.description,
-            variants: task.experimentVariants.map((v: ExperimentVariant) => ({
+            variants: task.config.experimentVariants.map((v: ExperimentVariant) => ({
               id: v.id,
               description: v.description,
               prompt: v.prompt,
@@ -173,7 +173,7 @@ export class TaskExecutor {
     const upstreamBranches = this.collectUpstreamBranches(task);
 
     // Read workflow generation for content-addressable branch salt
-    const workflow = task.workflowId ? this.persistence.loadWorkflow?.(task.workflowId) : undefined;
+    const workflow = task.config.workflowId ? this.persistence.loadWorkflow?.(task.config.workflowId) : undefined;
     const generation = (workflow as any)?.generation ?? 0;
 
     const request: WorkRequest = {
@@ -182,11 +182,11 @@ export class TaskExecutor {
       actionType: this.determineActionType(task),
       inputs: {
         description: task.description,
-        command: task.command,
-        prompt: task.prompt,
+        command: task.config.command,
+        prompt: task.config.prompt,
         workspacePath: this.cwd,
-        repoUrl: task.repoUrl,
-        featureBranch: task.featureBranch,
+        repoUrl: task.config.repoUrl,
+        featureBranch: task.config.featureBranch,
         upstreamContext: upstreamContext.length > 0 ? upstreamContext : undefined,
         upstreamBranches: upstreamBranches.length > 0 ? upstreamBranches : undefined,
         salt: generation > 0 ? generation.toString() : undefined,
@@ -203,12 +203,14 @@ export class TaskExecutor {
 
     // Persist execution metadata immediately at task start — all fields explicit
     {
-      const changes: Record<string, unknown> = {
-        familiarType: familiar.type,
-        workspacePath: handle.workspacePath ?? this.cwd,
-        claudeSessionId: handle.claudeSessionId ?? null,
-        containerId: handle.containerId ?? null,
-        branch: handle.branch ?? null,
+      const changes = {
+        config: { familiarType: familiar.type },
+        execution: {
+          workspacePath: handle.workspacePath ?? this.cwd,
+          claudeSessionId: handle.claudeSessionId ?? null,
+          containerId: handle.containerId ?? null,
+          branch: handle.branch ?? null,
+        },
       };
       this.persistence.updateTask(task.id, changes);
       console.log(`[trace] TaskExecutor: persisted metadata for task=${task.id}`);
@@ -251,8 +253,8 @@ export class TaskExecutor {
    */
   selectFamiliar(task: TaskState): Familiar {
     // Infer 'worktree' when task has repoUrl but no explicit familiarType
-    const effectiveType = task.familiarType
-      ?? (task.repoUrl ? 'worktree' : undefined);
+    const effectiveType = task.config.familiarType
+      ?? (task.config.repoUrl ? 'worktree' : undefined);
 
     if (effectiveType) {
       const registered = this.familiarRegistry.get(effectiveType);
@@ -285,7 +287,7 @@ export class TaskExecutor {
     }
 
     // Merge gate tasks need local familiar for direct repo access
-    if (task.isMergeNode) {
+    if (task.config.isMergeNode) {
       const mergeGateFamiliar = this.familiarRegistry.getMergeGateFamiliar();
       console.log(`[trace] TaskExecutor.selectFamiliar: task=${task.id} isMergeNode=true → ${mergeGateFamiliar.type} (merge gate)`);
       return mergeGateFamiliar;
@@ -301,16 +303,16 @@ export class TaskExecutor {
    * Priority: isReconciliation > command > prompt > default 'command'.
    */
   determineActionType(task: TaskState): ActionType {
-    if (task.isReconciliation) return 'reconciliation';
-    if (task.command) return 'command';
-    if (task.prompt) return 'claude';
+    if (task.config.isReconciliation) return 'reconciliation';
+    if (task.config.command) return 'command';
+    if (task.config.prompt) return 'claude';
     return 'command';
   }
 
   // ── Merge Node Execution ─────────────────────────────────
 
   private async executeMergeNode(task: TaskState): Promise<void> {
-    const workflowId = task.workflowId;
+    const workflowId = task.config.workflowId;
     const workflow = workflowId
       ? this.persistence.loadWorkflow(workflowId)
       : undefined;
@@ -424,8 +426,8 @@ export class TaskExecutor {
 
       const allTasks = this.orchestrator.getAllTasks();
       const taskBranches = allTasks
-        .filter((t) => t.workflowId === workflowId && t.status === 'completed' && t.branch && !t.isMergeNode)
-        .map((t) => t.branch!);
+        .filter((t) => t.config.workflowId === workflowId && t.status === 'completed' && t.execution.branch && !t.config.isMergeNode)
+        .map((t) => t.execution.branch!);
 
       for (const branch of taskBranches) {
         console.log(`[merge] Merging task branch: ${branch} → ${featureBranch}`);
@@ -516,17 +518,17 @@ export class TaskExecutor {
   ): Promise<{ branch: string; commit: string }> {
     if (experimentIds.length === 1) {
       const task = this.orchestrator.getTask(experimentIds[0]);
-      if (!task?.branch) {
+      if (!task?.execution.branch) {
         throw new Error(`Experiment ${experimentIds[0]} has no branch`);
       }
-      return { branch: task.branch, commit: task.commit ?? '' };
+      return { branch: task.execution.branch, commit: task.execution.commit ?? '' };
     }
 
     const branchName = `reconciliation/${reconTaskId}`;
     const reconTask = this.orchestrator.getTask(reconTaskId);
-    const parentId = reconTask?.parentTask;
+    const parentId = reconTask?.config.parentTask;
     const parentTask = parentId ? this.orchestrator.getTask(parentId) : undefined;
-    const baseBranch = parentTask?.branch
+    const baseBranch = parentTask?.execution.branch
       ?? this.defaultBranch
       ?? await this.detectDefaultBranch();
 
@@ -543,10 +545,10 @@ export class TaskExecutor {
 
       for (const expId of experimentIds) {
         const expTask = this.orchestrator.getTask(expId);
-        if (!expTask?.branch) {
+        if (!expTask?.execution.branch) {
           throw new Error(`Experiment ${expId} has no branch`);
         }
-        await this.execGit(['merge', '--no-ff', '-m', `Merge ${expTask.branch}`, expTask.branch]);
+        await this.execGit(['merge', '--no-ff', '-m', `Merge ${expTask.execution.branch}`, expTask.execution.branch]);
       }
 
       const commit = await this.execGit(['rev-parse', 'HEAD']);
@@ -564,8 +566,8 @@ export class TaskExecutor {
     const branches: string[] = [];
     for (const depId of task.dependencies) {
       const dep = this.orchestrator.getTask(depId);
-      if (dep && dep.status === 'completed' && dep.branch) {
-        branches.push(dep.branch);
+      if (dep && dep.status === 'completed' && dep.execution.branch) {
+        branches.push(dep.execution.branch);
       }
     }
     return branches;
@@ -580,9 +582,9 @@ export class TaskExecutor {
       const dep = this.orchestrator.getTask(depId);
       if (dep && dep.status === 'completed') {
         let commitMessage: string | undefined;
-        if (dep.commit) {
+        if (dep.execution.commit) {
           try {
-            commitMessage = await this.gitLogMessage(dep.commit);
+            commitMessage = await this.gitLogMessage(dep.execution.commit);
           } catch {
             // Not in a git repo or commit not found
           }
@@ -590,8 +592,8 @@ export class TaskExecutor {
         context.push({
           taskId: dep.id,
           description: dep.description,
-          summary: dep.summary,
-          commitHash: dep.commit,
+          summary: dep.config.summary,
+          commitHash: dep.execution.commit,
           commitMessage,
         });
       }
@@ -611,8 +613,8 @@ export class TaskExecutor {
     const originalBranch = await this.execGit(['branch', '--show-current']);
     const allTasks = this.orchestrator.getAllTasks();
     const taskBranches = allTasks
-      .filter((t) => t.workflowId === workflowId && t.status === 'completed' && t.branch && !t.isMergeNode)
-      .map((t) => t.branch!);
+      .filter((t) => t.config.workflowId === workflowId && t.status === 'completed' && t.execution.branch && !t.config.isMergeNode)
+      .map((t) => t.execution.branch!);
 
     const rebasedBranches: string[] = [];
     const errors: string[] = [];

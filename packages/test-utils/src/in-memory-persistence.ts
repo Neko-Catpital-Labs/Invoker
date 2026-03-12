@@ -1,4 +1,4 @@
-import type { TaskState, OrchestratorPersistence } from '@invoker/core';
+import type { TaskState, TaskStateChanges, OrchestratorPersistence } from '@invoker/core';
 
 /**
  * In-memory implementation of OrchestratorPersistence for testing.
@@ -43,9 +43,17 @@ export class InMemoryPersistence implements OrchestratorPersistence {
     this.tasks.set(task.id, { workflowId, task });
   }
 
-  updateTask(taskId: string, changes: Partial<TaskState>): void {
+  updateTask(taskId: string, changes: TaskStateChanges): void {
     const entry = this.tasks.get(taskId);
-    if (entry) entry.task = { ...entry.task, ...changes } as TaskState;
+    if (entry) {
+      entry.task = {
+        ...entry.task,
+        ...(changes.status !== undefined ? { status: changes.status } : {}),
+        ...(changes.dependencies !== undefined ? { dependencies: changes.dependencies } : {}),
+        config: { ...entry.task.config, ...changes.config },
+        execution: { ...entry.task.execution, ...changes.execution },
+      } as TaskState;
+    }
   }
 
   listWorkflows(): Array<{ id: string; name: string; status: string; createdAt: string; updatedAt: string; baseBranch?: string; onFinish?: string; generation?: number }> {

@@ -19,7 +19,7 @@ import type {
   OrchestratorPersistence,
   OrchestratorMessageBus,
 } from '../orchestrator.js';
-import type { TaskState, TaskDelta } from '../task-types.js';
+import type { TaskState, TaskDelta, TaskStateChanges } from '../task-types.js';
 import type { WorkResponse } from '@invoker/protocol';
 
 // ── In-Memory Test Doubles ──────────────────────────────────
@@ -46,9 +46,17 @@ class InMemoryPersistence implements OrchestratorPersistence {
     this.tasks.set(task.id, { workflowId, task });
   }
 
-  updateTask(taskId: string, changes: Partial<TaskState>): void {
+  updateTask(taskId: string, changes: TaskStateChanges): void {
     const entry = this.tasks.get(taskId);
-    if (entry) entry.task = { ...entry.task, ...changes } as TaskState;
+    if (entry) {
+      entry.task = {
+        ...entry.task,
+        ...(changes.status !== undefined ? { status: changes.status } : {}),
+        ...(changes.dependencies !== undefined ? { dependencies: changes.dependencies } : {}),
+        config: { ...entry.task.config, ...changes.config },
+        execution: { ...entry.task.execution, ...changes.execution },
+      } as TaskState;
+    }
   }
 
   loadTasks(workflowId: string): TaskState[] {
@@ -194,7 +202,7 @@ describe('Parity — Feature Coverage', () => {
 
     const recon = orchestrator.getTask('pivot-reconciliation');
     expect(recon).toBeDefined();
-    expect(recon!.isReconciliation).toBe(true);
+    expect(recon!.config.isReconciliation).toBe(true);
   });
 
   // ── Test 4: Dependency rewriting ──────────────────────────
@@ -266,7 +274,7 @@ describe('Parity — Feature Coverage', () => {
     const reconTask = orchestrator.getTask('pivot-reconciliation');
     expect(reconTask).toBeDefined();
     expect(reconTask!.status).toBe('needs_input');
-    expect(reconTask!.experimentResults).toHaveLength(2);
+    expect(reconTask!.execution.experimentResults).toHaveLength(2);
   });
 
   // ── Test 6: Experiment selection ──────────────────────────

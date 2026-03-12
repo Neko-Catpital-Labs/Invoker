@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { Orchestrator } from '../orchestrator.js';
 import type { OrchestratorPersistence, OrchestratorMessageBus } from '../orchestrator.js';
-import type { TaskState } from '../task-types.js';
+import type { TaskState, TaskStateChanges } from '../task-types.js';
 import { validateDAG } from '../dag.js';
 
 // ── Mocks ────────────────────────────────────────────────────
@@ -28,9 +28,17 @@ class InMemoryPersistence implements OrchestratorPersistence {
     this.tasks.set(task.id, { workflowId, task });
   }
 
-  updateTask(taskId: string, changes: Partial<TaskState>): void {
+  updateTask(taskId: string, changes: TaskStateChanges): void {
     const entry = this.tasks.get(taskId);
-    if (entry) entry.task = { ...entry.task, ...changes } as TaskState;
+    if (entry) {
+      entry.task = {
+        ...entry.task,
+        ...(changes.status !== undefined ? { status: changes.status } : {}),
+        ...(changes.dependencies !== undefined ? { dependencies: changes.dependencies } : {}),
+        config: { ...entry.task.config, ...changes.config },
+        execution: { ...entry.task.execution, ...changes.execution },
+      } as TaskState;
+    }
   }
 
   loadTasks(workflowId: string): TaskState[] {
@@ -111,7 +119,7 @@ describe('replaceTask', () => {
 
     // Downstream is stale'd (not forked) — merge node gets 'fix' added
     expect(orchestrator.getTask('C')!.status).toBe('stale');
-    const mergeNode = orchestrator.getAllTasks().find((t) => t.isMergeNode);
+    const mergeNode = orchestrator.getAllTasks().find((t) => t.config.isMergeNode);
     expect(mergeNode!.dependencies).toContain('fix');
 
     expect(started).toHaveLength(1);
@@ -143,7 +151,7 @@ describe('replaceTask', () => {
 
     // C is stale, merge node gets s2 (the leaf) added
     expect(orchestrator.getTask('C')!.status).toBe('stale');
-    const mergeNode = orchestrator.getAllTasks().find((t) => t.isMergeNode);
+    const mergeNode = orchestrator.getAllTasks().find((t) => t.config.isMergeNode);
     expect(mergeNode!.dependencies).toContain('s2');
   });
 
@@ -168,7 +176,7 @@ describe('replaceTask', () => {
 
     // No X-merge node; the workflow merge node's deps include both leaves
     expect(orchestrator.getTask('X-merge')).toBeUndefined();
-    const mergeNode = orchestrator.getAllTasks().find((t) => t.isMergeNode);
+    const mergeNode = orchestrator.getAllTasks().find((t) => t.config.isMergeNode);
     expect(mergeNode).toBeDefined();
     expect(mergeNode!.dependencies).toContain('s2a');
     expect(mergeNode!.dependencies).toContain('s2b');
@@ -244,7 +252,7 @@ describe('replaceTask', () => {
     // Downstream is stale'd, not forked — merge node gets 'fix'
     expect(orchestrator.getTask('C')!.status).toBe('stale');
     expect(orchestrator.getTask('D')!.status).toBe('stale');
-    const mergeNode = orchestrator.getAllTasks().find((t) => t.isMergeNode);
+    const mergeNode = orchestrator.getAllTasks().find((t) => t.config.isMergeNode);
     expect(mergeNode!.dependencies).toContain('fix');
   });
 
@@ -307,7 +315,7 @@ describe('replaceTask', () => {
     expect(orchestrator.getTask('fix')!.status).toBe('completed');
 
     // Merge node becomes ready (C is stale=satisfied, fix is completed)
-    const mergeNode = orchestrator.getAllTasks().find((t) => t.isMergeNode);
+    const mergeNode = orchestrator.getAllTasks().find((t) => t.config.isMergeNode);
     expect(mergeNode).toBeDefined();
     expect(mergeNode!.status).toBe('running');
     completeTask(orchestrator, mergeNode!.id);
@@ -357,7 +365,7 @@ describe('replaceTask', () => {
       { id: 'fix', description: 'Fix', command: 'echo fix' },
     ]);
 
-    expect(orchestrator.getTask('fix')!.familiarType).toBe('worktree');
+    expect(orchestrator.getTask('fix')!.config.familiarType).toBe('worktree');
   });
 
   it('replacement can override familiarType', () => {
@@ -374,6 +382,6 @@ describe('replaceTask', () => {
       { id: 'fix', description: 'Fix', command: 'echo fix', familiarType: 'docker' },
     ]);
 
-    expect(orchestrator.getTask('fix')!.familiarType).toBe('docker');
+    expect(orchestrator.getTask('fix')!.config.familiarType).toBe('docker');
   });
 });

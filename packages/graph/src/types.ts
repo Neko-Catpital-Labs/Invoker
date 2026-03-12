@@ -17,6 +17,55 @@ export type TaskStatus =
   | 'awaiting_approval'
   | 'stale';
 
+// ── Task Config (definition / spec) ────────────────────────
+// Copied wholesale when cloning/forking: clone.config = original.config
+
+export interface TaskConfig {
+  readonly workflowId?: string;
+  readonly parentTask?: string;
+  readonly command?: string;
+  readonly prompt?: string;
+  readonly experimentPrompt?: string;
+  readonly pivot?: boolean;
+  readonly experimentVariants?: readonly ExperimentVariant[];
+  readonly isReconciliation?: boolean;
+  readonly requiresManualApproval?: boolean;
+  readonly repoUrl?: string;
+  readonly featureBranch?: string;
+  readonly familiarType?: string;
+  readonly autoFix?: boolean;
+  readonly maxFixAttempts?: number;
+  readonly isMergeNode?: boolean;
+  readonly summary?: string;
+  readonly problem?: string;
+  readonly approach?: string;
+  readonly testPlan?: string;
+  readonly reproCommand?: string;
+}
+
+// ── Task Execution (runtime state) ─────────────────────────
+// Never copied when cloning. Reset on restart.
+
+export interface TaskExecution {
+  readonly blockedBy?: string;
+  readonly inputPrompt?: string;
+  readonly exitCode?: number;
+  readonly error?: string;
+  readonly startedAt?: Date;
+  readonly completedAt?: Date;
+  readonly lastHeartbeatAt?: Date;
+  readonly actionRequestId?: string;
+  readonly branch?: string;
+  readonly commit?: string;
+  readonly claudeSessionId?: string;
+  readonly workspacePath?: string;
+  readonly containerId?: string;
+  readonly experiments?: readonly string[];
+  readonly selectedExperiment?: string;
+  readonly selectedExperiments?: readonly string[];
+  readonly experimentResults?: readonly ExperimentResultEntry[];
+}
+
 // ── Task State ──────────────────────────────────────────────
 
 export interface TaskState {
@@ -24,82 +73,9 @@ export interface TaskState {
   readonly description: string;
   readonly status: TaskStatus;
   readonly dependencies: readonly string[];
-
-  // Workflow membership
-  readonly workflowId?: string;
-
-  // Blocking info
-  readonly blockedBy?: string;
-
-  // Input
-  readonly inputPrompt?: string;
-
-  // Exit info
-  readonly exitCode?: number;
-  readonly error?: string;
-
-  // Timestamps
   readonly createdAt: Date;
-  readonly startedAt?: Date;
-  readonly completedAt?: Date;
-  readonly lastHeartbeatAt?: Date;
-
-  // Worker protocol correlation
-  readonly actionRequestId?: string;
-
-  // Git-backed context (Beads-inspired)
-  readonly summary?: string;
-  readonly problem?: string;
-  readonly approach?: string;
-  readonly testPlan?: string;
-  readonly reproCommand?: string;
-
-  // Git tracking
-  readonly branch?: string;
-  readonly commit?: string;
-  readonly parentTask?: string;
-
-  // Execution directives
-  readonly command?: string;
-  readonly prompt?: string;
-
-  // Manual approval
-  readonly requiresManualApproval?: boolean;
-
-  // Experiment fields
-  readonly pivot?: boolean;
-  readonly experiments?: readonly string[];
-  readonly selectedExperiment?: string;
-  readonly selectedExperiments?: readonly string[];
-  readonly experimentPrompt?: string;
-  readonly experimentVariants?: readonly ExperimentVariant[];
-
-  // Reconciliation fields
-  readonly isReconciliation?: boolean;
-  readonly experimentResults?: readonly ExperimentResultEntry[];
-
-  // Repository info
-  readonly repoUrl?: string;
-  readonly featureBranch?: string;
-
-  // Familiar selection (e.g. 'local', 'worktree', 'docker')
-  readonly familiarType?: string;
-
-  // Claude session ID for resuming terminal sessions
-  readonly claudeSessionId?: string;
-
-  // Workspace path where the task executed (for session recovery)
-  readonly workspacePath?: string;
-
-  // Docker container ID for terminal reconnection
-  readonly containerId?: string;
-
-  // Auto-fix support
-  readonly autoFix?: boolean;
-  readonly maxFixAttempts?: number;
-
-  // Terminal merge node marker
-  readonly isMergeNode?: boolean;
+  readonly config: TaskConfig;
+  readonly execution: TaskExecution;
 }
 
 export interface ExperimentVariant {
@@ -116,11 +92,20 @@ export interface ExperimentResultEntry {
   readonly exitCode?: number;
 }
 
+// ── Task State Changes (for updates / deltas) ───────────────
+
+export interface TaskStateChanges {
+  readonly status?: TaskStatus;
+  readonly dependencies?: readonly string[];
+  readonly config?: Partial<TaskConfig>;
+  readonly execution?: Partial<TaskExecution>;
+}
+
 // ── Task Delta (for UI updates) ─────────────────────────────
 
 export type TaskDelta =
   | { readonly type: 'created'; readonly task: TaskState }
-  | { readonly type: 'updated'; readonly taskId: string; readonly changes: Partial<TaskState> }
+  | { readonly type: 'updated'; readonly taskId: string; readonly changes: TaskStateChanges }
   | { readonly type: 'removed'; readonly taskId: string };
 
 // ── Task Transition (audit log entry) ───────────────────────
@@ -148,30 +133,9 @@ export interface TransitionResult {
   readonly sideEffects: readonly SideEffect[];
 }
 
-// ── Task Create Options ─────────────────────────────────────
+// ── Task Create Options (alias for TaskConfig) ──────────────
 
-export interface TaskCreateOptions {
-  workflowId?: string;
-  parentTask?: string;
-  command?: string;
-  prompt?: string;
-  experimentPrompt?: string;
-  pivot?: boolean;
-  experimentVariants?: ExperimentVariant[];
-  isReconciliation?: boolean;
-  requiresManualApproval?: boolean;
-  repoUrl?: string;
-  featureBranch?: string;
-  familiarType?: string;
-  autoFix?: boolean;
-  maxFixAttempts?: number;
-  isMergeNode?: boolean;
-  summary?: string;
-  problem?: string;
-  approach?: string;
-  testPlan?: string;
-  reproCommand?: string;
-}
+export type TaskCreateOptions = Partial<TaskConfig>;
 
 // ── Helper to create a new TaskState ────────────────────────
 
@@ -187,6 +151,7 @@ export function createTaskState(
     status: 'pending',
     dependencies: [...dependencies],
     createdAt: new Date(),
-    ...options,
+    config: { ...options },
+    execution: {},
   };
 }

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { nextVersion } from '../dag.js';
 import { Orchestrator } from '../orchestrator.js';
 import type { OrchestratorPersistence, OrchestratorMessageBus } from '../orchestrator.js';
-import type { TaskState, TaskDelta } from '../task-types.js';
+import type { TaskState, TaskDelta, TaskStateChanges } from '../task-types.js';
 
 // ── Mocks ────────────────────────────────────────────────────
 
@@ -27,9 +27,17 @@ class InMemoryPersistence implements OrchestratorPersistence {
   saveTask(workflowId: string, task: TaskState): void {
     this.tasks.set(task.id, { workflowId, task });
   }
-  updateTask(taskId: string, changes: Partial<TaskState>): void {
+  updateTask(taskId: string, changes: TaskStateChanges): void {
     const entry = this.tasks.get(taskId);
-    if (entry) entry.task = { ...entry.task, ...changes } as TaskState;
+    if (entry) {
+      entry.task = {
+        ...entry.task,
+        ...(changes.status !== undefined ? { status: changes.status } : {}),
+        ...(changes.dependencies !== undefined ? { dependencies: changes.dependencies } : {}),
+        config: { ...entry.task.config, ...changes.config },
+        execution: { ...entry.task.execution, ...changes.execution },
+      } as TaskState;
+    }
   }
   loadTasks(workflowId: string): TaskState[] {
     return Array.from(this.tasks.values())

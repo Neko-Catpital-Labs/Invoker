@@ -737,13 +737,23 @@ describe('merge gate commit topology (real git)', () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  function makeTaskState(overrides: Partial<TaskState> & { id: string }): TaskState {
+  function makeTaskState(overrides: {
+    id: string;
+    description?: string;
+    status?: string;
+    dependencies?: string[];
+    createdAt?: Date;
+    config?: Partial<TaskState['config']>;
+    execution?: Partial<TaskState['execution']>;
+  }): TaskState {
     return {
-      description: overrides.id,
-      status: 'completed',
-      dependencies: [],
-      createdAt: new Date(),
-      ...overrides,
+      id: overrides.id,
+      description: overrides.description ?? overrides.id,
+      status: overrides.status ?? 'completed',
+      dependencies: overrides.dependencies ?? [],
+      createdAt: overrides.createdAt ?? new Date(),
+      config: { ...overrides.config },
+      execution: { ...overrides.execution },
     } as TaskState;
   }
 
@@ -790,9 +800,9 @@ describe('merge gate commit topology (real git)', () => {
     execSync('git checkout master', { cwd: tmpDir });
 
     const tasks: TaskState[] = [
-      makeTaskState({ id: 'task-a', workflowId: 'wf-1', status: 'completed', branch: 'experiment/task-a' }),
-      makeTaskState({ id: 'task-b', workflowId: 'wf-1', status: 'completed', branch: 'experiment/task-b' }),
-      makeTaskState({ id: '__merge__wf-1', workflowId: 'wf-1', status: 'running', isMergeNode: true }),
+      makeTaskState({ id: 'task-a', config: { workflowId: 'wf-1' }, status: 'completed', execution: { branch: 'experiment/task-a' } }),
+      makeTaskState({ id: 'task-b', config: { workflowId: 'wf-1' }, status: 'completed', execution: { branch: 'experiment/task-b' } }),
+      makeTaskState({ id: '__merge__wf-1', config: { workflowId: 'wf-1', isMergeNode: true }, status: 'running' }),
     ];
 
     const workflow = {
@@ -807,7 +817,7 @@ describe('merge gate commit topology (real git)', () => {
     const executor = createExecutor(tasks, workflow);
 
     // Phase 1: consolidation (manual mode — effectiveOnFinish='none')
-    const mergeTask = tasks.find(t => t.isMergeNode)!;
+    const mergeTask = tasks.find(t => t.config.isMergeNode)!;
     await (executor as any).executeMergeNode(mergeTask);
 
     // Feature branch should exist and contain both task branches
@@ -871,9 +881,9 @@ describe('merge gate commit topology (real git)', () => {
     execSync('git checkout master', { cwd: tmpDir });
 
     const tasks: TaskState[] = [
-      makeTaskState({ id: 'task-a', workflowId: 'wf-1', status: 'completed', branch: 'experiment/task-a' }),
-      makeTaskState({ id: 'task-b', workflowId: 'wf-1', status: 'completed', branch: 'experiment/task-b' }),
-      makeTaskState({ id: '__merge__wf-1', workflowId: 'wf-1', status: 'running', isMergeNode: true }),
+      makeTaskState({ id: 'task-a', config: { workflowId: 'wf-1' }, status: 'completed', execution: { branch: 'experiment/task-a' } }),
+      makeTaskState({ id: 'task-b', config: { workflowId: 'wf-1' }, status: 'completed', execution: { branch: 'experiment/task-b' } }),
+      makeTaskState({ id: '__merge__wf-1', config: { workflowId: 'wf-1', isMergeNode: true }, status: 'running' }),
     ];
 
     const workflow = {
@@ -886,7 +896,7 @@ describe('merge gate commit topology (real git)', () => {
     };
 
     const executor = createExecutor(tasks, workflow);
-    const mergeTask = tasks.find(t => t.isMergeNode)!;
+    const mergeTask = tasks.find(t => t.config.isMergeNode)!;
     await (executor as any).executeMergeNode(mergeTask);
 
     // Master should have moved (full merge in one step)
@@ -924,13 +934,23 @@ describe('mergeExperimentBranches (real git)', () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  function makeTaskState(overrides: Partial<TaskState> & { id: string }): TaskState {
+  function makeTaskState(overrides: {
+    id: string;
+    description?: string;
+    status?: string;
+    dependencies?: string[];
+    createdAt?: Date;
+    config?: Partial<TaskState['config']>;
+    execution?: Partial<TaskState['execution']>;
+  }): TaskState {
     return {
-      description: overrides.id,
-      status: 'completed',
-      dependencies: [],
-      createdAt: new Date(),
-      ...overrides,
+      id: overrides.id,
+      description: overrides.description ?? overrides.id,
+      status: overrides.status ?? 'completed',
+      dependencies: overrides.dependencies ?? [],
+      createdAt: overrides.createdAt ?? new Date(),
+      config: { ...overrides.config },
+      execution: { ...overrides.execution },
     } as TaskState;
   }
 
@@ -967,11 +987,11 @@ describe('mergeExperimentBranches (real git)', () => {
     const hashV3 = execSync('git rev-parse experiment/exp-v3', { cwd: tmpDir }).toString().trim();
 
     const tasks = [
-      makeTaskState({ id: 'pivot', status: 'completed', branch: 'master' }),
-      makeTaskState({ id: 'pivot-exp-v1', status: 'completed', branch: 'experiment/exp-v1', commit: hashV1 }),
-      makeTaskState({ id: 'pivot-exp-v2', status: 'completed', branch: 'experiment/exp-v2', commit: hashV2 }),
-      makeTaskState({ id: 'pivot-exp-v3', status: 'completed', branch: 'experiment/exp-v3', commit: hashV3 }),
-      makeTaskState({ id: 'pivot-reconciliation', isReconciliation: true, parentTask: 'pivot', status: 'needs_input' }),
+      makeTaskState({ id: 'pivot', status: 'completed', execution: { branch: 'master' } }),
+      makeTaskState({ id: 'pivot-exp-v1', status: 'completed', execution: { branch: 'experiment/exp-v1', commit: hashV1 } }),
+      makeTaskState({ id: 'pivot-exp-v2', status: 'completed', execution: { branch: 'experiment/exp-v2', commit: hashV2 } }),
+      makeTaskState({ id: 'pivot-exp-v3', status: 'completed', execution: { branch: 'experiment/exp-v3', commit: hashV3 } }),
+      makeTaskState({ id: 'pivot-reconciliation', config: { isReconciliation: true, parentTask: 'pivot' }, status: 'needs_input' }),
     ];
 
     const executor = createMergeExecutor(tasks);
@@ -1019,10 +1039,10 @@ describe('mergeExperimentBranches (real git)', () => {
     execSync('git checkout master', { cwd: tmpDir });
 
     const tasks = [
-      makeTaskState({ id: 'pivot', status: 'completed', branch: 'master' }),
-      makeTaskState({ id: 'pivot-exp-cv1', status: 'completed', branch: 'experiment/conflict-v1' }),
-      makeTaskState({ id: 'pivot-exp-cv2', status: 'completed', branch: 'experiment/conflict-v2' }),
-      makeTaskState({ id: 'pivot-reconciliation', isReconciliation: true, parentTask: 'pivot', status: 'needs_input' }),
+      makeTaskState({ id: 'pivot', status: 'completed', execution: { branch: 'master' } }),
+      makeTaskState({ id: 'pivot-exp-cv1', status: 'completed', execution: { branch: 'experiment/conflict-v1' } }),
+      makeTaskState({ id: 'pivot-exp-cv2', status: 'completed', execution: { branch: 'experiment/conflict-v2' } }),
+      makeTaskState({ id: 'pivot-reconciliation', config: { isReconciliation: true, parentTask: 'pivot' }, status: 'needs_input' }),
     ];
 
     const executor = createMergeExecutor(tasks);
