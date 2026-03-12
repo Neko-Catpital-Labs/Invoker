@@ -66,6 +66,8 @@ const api: InvokerAPI = {
     return () => ipcRenderer.removeListener('invoker:workflows-changed', handler);
   },
   cleanupWorktrees: () => ipcRenderer.invoke('invoker:cleanup-worktrees'),
+  restartWorkflow: (workflowId: string) =>
+    ipcRenderer.invoke('invoker:restart-workflow', workflowId),
   rebaseAndRetry: (mergeTaskId: string) =>
     ipcRenderer.invoke('invoker:rebase-and-retry', mergeTaskId),
   setMergeBranch: (workflowId: string, baseBranch: string) =>

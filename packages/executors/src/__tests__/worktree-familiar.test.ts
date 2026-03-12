@@ -138,6 +138,24 @@ describe('computeBranchHash', () => {
     const b = computeBranchHash('t1', 'cmd', undefined, ['c2', 'c1'], 'HEAD1');
     expect(a).toBe(b);
   });
+
+  it('is sensitive to salt changes', () => {
+    const a = computeBranchHash('t1', 'cmd', undefined, [], 'HEAD1', '0');
+    const b = computeBranchHash('t1', 'cmd', undefined, [], 'HEAD1', '1');
+    expect(a).not.toBe(b);
+  });
+
+  it('produces same hash when salt is identical', () => {
+    const a = computeBranchHash('t1', 'cmd', undefined, [], 'HEAD1', '42');
+    const b = computeBranchHash('t1', 'cmd', undefined, [], 'HEAD1', '42');
+    expect(a).toBe(b);
+  });
+
+  it('is backward compatible when salt is omitted or empty', () => {
+    const noSalt = computeBranchHash('t1', 'cmd', undefined, [], 'HEAD1');
+    const emptySalt = computeBranchHash('t1', 'cmd', undefined, [], 'HEAD1', '');
+    expect(noSalt).toBe(emptySalt);
+  });
 });
 
 describe('WorktreeFamiliar', () => {

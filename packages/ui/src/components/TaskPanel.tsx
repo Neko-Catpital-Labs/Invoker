@@ -14,12 +14,14 @@ import { getStatusColor } from '../lib/colors.js';
 
 interface TaskPanelProps {
   task: TaskState | null;
+  baseBranch?: string;
   onProvideInput: (task: TaskState) => void;
   onApprove: (task: TaskState) => void;
   onReject: (task: TaskState) => void;
   onSelectExperiment: (task: TaskState) => void;
   onEditCommand?: (taskId: string, newCommand: string) => void;
   onEditType?: (taskId: string, familiarType: string) => void;
+  onSetMergeBranch?: (workflowId: string, baseBranch: string) => Promise<void>;
 }
 
 function formatDate(date?: Date | string): string {
@@ -30,20 +32,24 @@ function formatDate(date?: Date | string): string {
 
 export function TaskPanel({
   task,
+  baseBranch,
   onProvideInput,
   onApprove,
   onReject,
   onSelectExperiment,
   onEditCommand,
   onEditType,
+  onSetMergeBranch,
 }: TaskPanelProps) {
   const [isEditingCommand, setIsEditingCommand] = useState(false);
   const [editCommandValue, setEditCommandValue] = useState('');
+  const [branchValue, setBranchValue] = useState(baseBranch ?? '');
 
   useEffect(() => {
     setIsEditingCommand(false);
     setEditCommandValue(task?.command ?? '');
-  }, [task?.id]);
+    setBranchValue(baseBranch ?? '');
+  }, [task?.id, baseBranch]);
 
   if (!task) {
     return (
@@ -92,6 +98,33 @@ export function TaskPanel({
           {task.status.toUpperCase().replace('_', ' ')}
         </span>
       </div>
+
+      {/* Target branch (merge gates only) */}
+      {task.isMergeNode && onSetMergeBranch && task.workflowId && (
+        <div className="flex items-center justify-between">
+          <span className="text-sm text-gray-400">Target Branch</span>
+          <input
+            data-testid="target-branch-input"
+            value={branchValue}
+            onChange={(e) => setBranchValue(e.target.value)}
+            onBlur={() => {
+              const trimmed = branchValue.trim();
+              if (trimmed && trimmed !== baseBranch) {
+                onSetMergeBranch(task.workflowId!, trimmed);
+              }
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                (e.target as HTMLInputElement).blur();
+              }
+              if (e.key === 'Escape') {
+                setBranchValue(baseBranch ?? '');
+              }
+            }}
+            className="bg-gray-700 text-gray-200 text-xs font-mono rounded px-2 py-1 border border-gray-600 focus:outline-none focus:border-blue-500 w-28 text-right"
+          />
+        </div>
+      )}
 
       {/* Executor type selector */}
       {onEditType && (

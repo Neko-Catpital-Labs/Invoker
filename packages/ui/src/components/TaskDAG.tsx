@@ -21,7 +21,7 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 
-import type { TaskState } from '../types.js';
+import type { TaskState, WorkflowMeta } from '../types.js';
 import { layoutNodes } from '../lib/layout.js';
 import { getEdgeStyle } from '../lib/colors.js';
 import { TaskNode } from './TaskNode.js';
@@ -31,9 +31,7 @@ import { isMergeGateId, groupTasksByWorkflow } from '../lib/merge-gate.js';
 
 interface TaskDAGProps {
   tasks: Map<string, TaskState>;
-  onFinish?: 'none' | 'merge' | 'pull_request';
-  baseBranch?: string;
-  onSetMergeBranch?: (workflowId: string, baseBranch: string) => Promise<void>;
+  workflows?: Map<string, WorkflowMeta>;
   onTaskClick?: (task: TaskState) => void;
   onTaskDoubleClick?: (task: TaskState) => void;
   onTaskContextMenu?: (task: TaskState, event: React.MouseEvent) => void;
@@ -49,7 +47,7 @@ function buildEdgeLabel(source: TaskState, target: TaskState): string {
   return `${srcId} → ${tgtId}`;
 }
 
-function TaskDAGInner({ tasks, onFinish, baseBranch, onSetMergeBranch, onTaskClick, onTaskDoubleClick, onTaskContextMenu }: TaskDAGProps) {
+function TaskDAGInner({ tasks, workflows, onTaskClick, onTaskDoubleClick, onTaskContextMenu }: TaskDAGProps) {
   const { fitView } = useReactFlow();
   const prevNodeCount = useRef(0);
 
@@ -61,7 +59,6 @@ function TaskDAGInner({ tasks, onFinish, baseBranch, onSetMergeBranch, onTaskCli
     const taskArray = [...tasks.values()];
     if (taskArray.length === 0) return { nodes: [], edges: [] };
 
-    const effectiveOnFinish = onFinish ?? 'merge';
     const workflowGroups = groupTasksByWorkflow(taskArray);
 
     const allNodes: Node[] = [];
@@ -71,7 +68,10 @@ function TaskDAGInner({ tasks, onFinish, baseBranch, onSetMergeBranch, onTaskCli
     let yOffset = 0;
     const WORKFLOW_GAP = 100;
 
-    for (const [_wfId, wfTasks] of workflowGroups) {
+    for (const [wfGroupId, wfTasks] of workflowGroups) {
+      const wfMeta = workflows?.get(wfGroupId);
+      const effectiveOnFinish = (wfMeta?.onFinish as 'none' | 'merge' | 'pull_request') ?? 'merge';
+      const wfBaseBranch = wfMeta?.baseBranch;
       const positions = layoutNodes(wfTasks);
 
       // Find bounding box to apply yOffset
@@ -85,9 +85,7 @@ function TaskDAGInner({ tasks, onFinish, baseBranch, onSetMergeBranch, onTaskCli
       for (const task of wfTasks) {
         const pos = positions.get(task.id) ?? { x: 0, y: 0 };
         if (task.isMergeNode) {
-          // Render real merge nodes with the MergeGateNode component
           gateStatuses.set(task.id, task.status);
-          const wfId = task.workflowId;
           allNodes.push({
             id: task.id,
             type: 'mergeGateNode',
@@ -96,10 +94,7 @@ function TaskDAGInner({ tasks, onFinish, baseBranch, onSetMergeBranch, onTaskCli
               status: task.status,
               label: 'All tasks must pass',
               onFinish: effectiveOnFinish === 'pull_request' ? 'pull_request' : 'merge',
-              baseBranch,
-              onSetMergeBranch: wfId && onSetMergeBranch
-                ? (branch: string) => onSetMergeBranch(wfId, branch)
-                : undefined,
+              baseBranch: wfBaseBranch,
             },
           });
         } else {
@@ -192,7 +187,7 @@ function TaskDAGInner({ tasks, onFinish, baseBranch, onSetMergeBranch, onTaskCli
     });
 
     return { nodes: allNodes, edges: newEdges };
-  }, [tasks, onFinish, baseBranch, onSetMergeBranch]);
+  }, [tasks, workflows]);
 
   // Merge task-derived nodes with React Flow's internal dimension/selection state.
   // Without this, each task-delta re-render creates new node objects that discard

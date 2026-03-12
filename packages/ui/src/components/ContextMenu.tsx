@@ -16,14 +16,16 @@ interface ContextMenuProps {
   onReplace: (taskId: string) => void;
   onOpenTerminal: (taskId: string) => void;
   onRebaseAndRetry?: (taskId: string) => void;
+  onRestartWorkflow?: (workflowId: string) => void;
   onClose: () => void;
 }
 
-export function ContextMenu({ x, y, task, onRestart, onReplace, onOpenTerminal, onRebaseAndRetry, onClose }: ContextMenuProps) {
+export function ContextMenu({ x, y, task, onRestart, onReplace, onOpenTerminal, onRebaseAndRetry, onRestartWorkflow, onClose }: ContextMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
   const canRestart = task.status !== 'running';
   const canReplace = task.status === 'failed' || task.status === 'blocked';
   const canRebaseAndRetry = task.isMergeNode === true && task.status === 'failed' && !!onRebaseAndRetry;
+  const canRestartWorkflow = task.isMergeNode === true && !!task.workflowId && !!onRestartWorkflow;
 
   useEffect(() => {
     const handleClick = (e: MouseEvent) => {
@@ -85,6 +87,17 @@ export function ContextMenu({ x, y, task, onRestart, onReplace, onOpenTerminal, 
             onClick={() => onRebaseAndRetry!(task.id)}
           >
             Rebase &amp; Retry
+          </button>
+        </>
+      )}
+      {canRestartWorkflow && (
+        <>
+          <div className="border-t border-gray-600 my-1" />
+          <button
+            className="w-full text-left px-3 py-1.5 text-sm text-red-300 hover:bg-gray-700"
+            onClick={() => onRestartWorkflow!(task.workflowId!)}
+          >
+            Restart Workflow
           </button>
         </>
       )}

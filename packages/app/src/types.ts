@@ -21,6 +21,16 @@ export interface TaskReplacementDef {
   maxFixAttempts?: number;
 }
 
+// ── Workflow Metadata ────────────────────────────────────────
+
+export interface WorkflowMeta {
+  id: string;
+  name: string;
+  status: string;
+  baseBranch?: string;
+  onFinish?: string;
+}
+
 // ── Workflow Status ──────────────────────────────────────────
 
 export interface WorkflowStatus {
@@ -55,7 +65,7 @@ export interface InvokerAPI {
   start: () => Promise<TaskState[]>;
   stop: () => Promise<void>;
   clear: () => Promise<void>;
-  getTasks: () => Promise<TaskState[]>;
+  getTasks: () => Promise<{ tasks: TaskState[]; workflows: WorkflowMeta[] }>;
   getStatus: () => Promise<WorkflowStatus>;
   provideInput: (taskId: string, input: string) => Promise<void>;
   approve: (taskId: string) => Promise<void>;
@@ -83,6 +93,9 @@ export interface InvokerAPI {
   deleteAllWorkflows: () => Promise<void>;
   getAllCompletedTasks: () => Promise<Array<TaskState & { workflowName: string }>>;
   cleanupWorktrees: () => Promise<{ removed: string[]; errors: string[] }>;
+
+  // Restart entire workflow with generation bump (fresh branch hashes)
+  restartWorkflow: (workflowId: string) => Promise<void>;
 
   // Rebase & Retry for merge gates
   rebaseAndRetry: (mergeTaskId: string) => Promise<{

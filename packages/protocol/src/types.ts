@@ -26,6 +26,8 @@ export interface WorkRequestInputs {
   upstreamContext?: Array<{taskId: string; description: string; summary?: string; commitHash?: string; commitMessage?: string}>;
   /** Branch names from completed upstream dependencies to merge into the worktree. */
   upstreamBranches?: string[];
+  /** Workflow generation salt — changes content-addressable branch hashes on restart. */
+  salt?: string;
 }
 
 export interface WorkRequest {

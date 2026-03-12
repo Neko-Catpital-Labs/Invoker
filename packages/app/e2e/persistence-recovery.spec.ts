@@ -35,7 +35,8 @@ test.describe('Persistence recovery', () => {
     // Wait for the slow task to start running
     await page.waitForFunction(
       async () => {
-        const tasks = await window.invoker.getTasks();
+        const result = await window.invoker.getTasks();
+        const tasks = Array.isArray(result) ? result : result.tasks;
         return tasks.some((t: any) => t.id === 'slow-task' && t.status === 'running');
       },
       null,

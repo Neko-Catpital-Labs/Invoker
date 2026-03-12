@@ -67,7 +67,8 @@ test.describe('Edit task command', () => {
     await waitForTaskStatus(page, 'task-will-fail', 'completed', 15000);
 
     // Verify command was updated
-    const tasks = await page.evaluate(() => window.invoker.getTasks());
+    const result = await page.evaluate(() => window.invoker.getTasks());
+    const tasks = Array.isArray(result) ? result : result.tasks;
     const editedTask = tasks.find((t: any) => t.id === 'task-will-fail');
     expect(editedTask?.command).toBe('echo fixed');
     expect(editedTask?.status).toBe('completed');
@@ -116,7 +117,8 @@ test.describe('Edit task command', () => {
     await waitForTaskStatus(page, 'parent-task', 'completed', 15000);
 
     // Original child should be stale, a forked copy should exist
-    const tasks = await page.evaluate(() => window.invoker.getTasks());
+    const result = await page.evaluate(() => window.invoker.getTasks());
+    const tasks = Array.isArray(result) ? result : result.tasks;
     const childTask = tasks.find((t: any) => t.id === 'child-task');
     expect(childTask?.status).toBe('stale');
 

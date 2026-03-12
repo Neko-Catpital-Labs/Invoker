@@ -13,7 +13,8 @@ test.describe('Workflow lifecycle', () => {
     await startPlan(page);
 
     // task-alpha should start running (or may have already completed)
-    const tasks = await page.evaluate(() => window.invoker.getTasks());
+    const result = await page.evaluate(() => window.invoker.getTasks());
+    const tasks = Array.isArray(result) ? result : result.tasks;
     const alpha = tasks.find((t: any) => t.id === 'task-alpha');
     expect(['running', 'completed']).toContain(alpha?.status);
   });
@@ -25,7 +26,8 @@ test.describe('Workflow lifecycle', () => {
     await waitForTaskStatus(page, 'task-alpha', 'completed');
     await waitForTaskStatus(page, 'task-beta', 'completed');
 
-    const tasks = await page.evaluate(() => window.invoker.getTasks());
+    const result = await page.evaluate(() => window.invoker.getTasks());
+    const tasks = Array.isArray(result) ? result : result.tasks;
     expect(tasks.every((t: any) => t.status === 'completed')).toBe(true);
   });
 
@@ -44,12 +46,14 @@ test.describe('Workflow lifecycle', () => {
   test('clear resets task state via IPC', async ({ page }) => {
     await loadPlan(page, TEST_PLAN);
 
-    let tasks = await page.evaluate(() => window.invoker.getTasks());
+    let result = await page.evaluate(() => window.invoker.getTasks());
+    let tasks = Array.isArray(result) ? result : result.tasks;
     expect(tasks.length).toBe(2);
 
     await page.evaluate(() => window.invoker.clear());
 
-    tasks = await page.evaluate(() => window.invoker.getTasks());
+    result = await page.evaluate(() => window.invoker.getTasks());
+    tasks = Array.isArray(result) ? result : result.tasks;
     expect(tasks.length).toBe(0);
   });
 
@@ -65,7 +69,8 @@ test.describe('Workflow lifecycle', () => {
     // Wait for stop to take effect
     await page.waitForTimeout(2000);
 
-    const tasks = await page.evaluate(() => window.invoker.getTasks());
+    const result = await page.evaluate(() => window.invoker.getTasks());
+    const tasks = Array.isArray(result) ? result : result.tasks;
     const allSettled = tasks.every(
       (t: any) => t.status === 'failed' || t.status === 'completed' || t.status === 'pending',
     );

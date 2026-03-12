@@ -1009,8 +1009,9 @@ function setupGuiMode(): void {
 
     ipcMain.handle('invoker:get-tasks', () => {
       const tasks = orchestrator.getAllTasks();
-      console.log(`[ipc] get-tasks returning ${tasks.length} tasks`);
-      return tasks;
+      const workflows = persistence.listWorkflows();
+      console.log(`[ipc] get-tasks returning ${tasks.length} tasks, ${workflows.length} workflows`);
+      return { tasks, workflows };
     });
     ipcMain.handle('invoker:get-events', (_event, taskId: string) => persistence.getEvents(taskId));
     ipcMain.handle('invoker:get-status', () => orchestrator.getWorkflowStatus());
@@ -1045,6 +1046,25 @@ function setupGuiMode(): void {
         await taskExecutor.executeTasks(runnable);
       } catch (err) {
         console.error(`[ipc] restart-task failed: ${err}`);
+        throw err;
+      }
+    });
+
+    ipcMain.handle('invoker:restart-workflow', async (_event, workflowId: string) => {
+      console.log(`[ipc] restart-workflow: "${workflowId}"`);
+      try {
+        const workflow = persistence.loadWorkflow(workflowId);
+        if (!workflow) throw new Error(`Workflow ${workflowId} not found`);
+
+        const nextGen = (workflow.generation ?? 0) + 1;
+        persistence.updateWorkflow(workflowId, { generation: nextGen });
+        console.log(`[ipc] restart-workflow: bumped generation to ${nextGen}`);
+
+        const started = orchestrator.restartWorkflow(workflowId);
+        const runnable = started.filter(t => t.status === 'running');
+        await taskExecutor.executeTasks(runnable);
+      } catch (err) {
+        console.error(`[ipc] restart-workflow failed: ${err}`);
         throw err;
       }
     });

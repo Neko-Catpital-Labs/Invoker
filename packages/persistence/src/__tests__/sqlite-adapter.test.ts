@@ -708,6 +708,49 @@ describe('SQLiteAdapter', () => {
     });
   });
 
+  describe('updateWorkflow with generation', () => {
+    it('saves and loads generation field', () => {
+      adapter.saveWorkflow({ ...testWorkflow, generation: 0 });
+
+      const loaded = adapter.loadWorkflow('wf-1');
+      expect(loaded!.generation).toBe(0);
+    });
+
+    it('defaults generation to 0 when not provided', () => {
+      adapter.saveWorkflow(testWorkflow);
+
+      const loaded = adapter.loadWorkflow('wf-1');
+      expect(loaded!.generation).toBe(0);
+    });
+
+    it('updates generation via updateWorkflow', () => {
+      adapter.saveWorkflow(testWorkflow);
+
+      adapter.updateWorkflow('wf-1', { generation: 3 });
+
+      const loaded = adapter.loadWorkflow('wf-1');
+      expect(loaded!.generation).toBe(3);
+    });
+
+    it('updates generation without affecting status or baseBranch', () => {
+      adapter.saveWorkflow({ ...testWorkflow, baseBranch: 'master' });
+
+      adapter.updateWorkflow('wf-1', { generation: 5 });
+
+      const loaded = adapter.loadWorkflow('wf-1');
+      expect(loaded!.status).toBe('running');
+      expect(loaded!.baseBranch).toBe('master');
+      expect(loaded!.generation).toBe(5);
+    });
+
+    it('includes generation in listWorkflows', () => {
+      adapter.saveWorkflow({ ...testWorkflow, generation: 2 });
+
+      const workflows = adapter.listWorkflows();
+      expect(workflows[0].generation).toBe(2);
+    });
+  });
+
   describe('getAllTaskIds', () => {
     it('returns empty array when no tasks', () => {
       expect(adapter.getAllTaskIds()).toEqual([]);

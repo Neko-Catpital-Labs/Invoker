@@ -20,7 +20,8 @@ test.describe('Plan loading', () => {
   test('tasks are in pending state after loading', async ({ page }) => {
     await loadPlan(page, TEST_PLAN);
 
-    const tasks = await page.evaluate(() => window.invoker.getTasks());
+    const result = await page.evaluate(() => window.invoker.getTasks());
+    const tasks = Array.isArray(result) ? result : result.tasks;
     expect(tasks.length).toBe(2);
     expect(tasks.every((t: any) => t.status === 'pending')).toBe(true);
   });

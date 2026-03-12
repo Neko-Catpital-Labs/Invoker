@@ -171,6 +171,10 @@ export class TaskExecutor {
     const upstreamContext = await this.buildUpstreamContext(task);
     const upstreamBranches = this.collectUpstreamBranches(task);
 
+    // Read workflow generation for content-addressable branch salt
+    const workflow = task.workflowId ? this.persistence.loadWorkflow?.(task.workflowId) : undefined;
+    const generation = (workflow as any)?.generation ?? 0;
+
     const request: WorkRequest = {
       requestId: randomUUID(),
       actionId: task.id,
@@ -183,6 +187,7 @@ export class TaskExecutor {
         featureBranch: task.featureBranch,
         upstreamContext: upstreamContext.length > 0 ? upstreamContext : undefined,
         upstreamBranches: upstreamBranches.length > 0 ? upstreamBranches : undefined,
+        salt: generation > 0 ? generation.toString() : undefined,
       },
       callbackUrl: '',
       timestamps: {

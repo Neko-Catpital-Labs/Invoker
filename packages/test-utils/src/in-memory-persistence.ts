@@ -9,6 +9,7 @@ export class InMemoryPersistence implements OrchestratorPersistence {
     id: string; name: string; status: string;
     createdAt: string; updatedAt: string;
     onFinish?: string; baseBranch?: string; featureBranch?: string;
+    generation?: number;
   }>();
   tasks = new Map<string, { workflowId: string; task: TaskState }>();
 
@@ -16,6 +17,7 @@ export class InMemoryPersistence implements OrchestratorPersistence {
     id: string; name: string; status: string;
     createdAt?: string; updatedAt?: string;
     onFinish?: string; baseBranch?: string; featureBranch?: string;
+    generation?: number;
   }): void {
     const now = new Date().toISOString();
     this.workflows.set(workflow.id, {
@@ -25,11 +27,13 @@ export class InMemoryPersistence implements OrchestratorPersistence {
     });
   }
 
-  updateWorkflow(workflowId: string, changes: { status?: string; updatedAt?: string }): void {
+  updateWorkflow(workflowId: string, changes: { status?: string; updatedAt?: string; baseBranch?: string; generation?: number }): void {
     const wf = this.workflows.get(workflowId);
     if (wf) {
       if (changes.status) wf.status = changes.status;
       if (changes.updatedAt) wf.updatedAt = changes.updatedAt;
+      if (changes.baseBranch !== undefined) wf.baseBranch = changes.baseBranch;
+      if (changes.generation !== undefined) wf.generation = changes.generation;
     }
   }
 
@@ -42,7 +46,7 @@ export class InMemoryPersistence implements OrchestratorPersistence {
     if (entry) entry.task = { ...entry.task, ...changes } as TaskState;
   }
 
-  listWorkflows(): Array<{ id: string; name: string; status: string; createdAt: string; updatedAt: string }> {
+  listWorkflows(): Array<{ id: string; name: string; status: string; createdAt: string; updatedAt: string; baseBranch?: string; onFinish?: string; generation?: number }> {
     return Array.from(this.workflows.values());
   }
 

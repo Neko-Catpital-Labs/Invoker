@@ -452,6 +452,77 @@ describe('Flow 5: dagMutation via spawn_experiments', () => {
   });
 });
 
+// ── Flow 6b: Set Merge Branch ────────────────────────────────
+
+describe('Flow 6b: set-merge-branch', () => {
+  let h: TestHarness;
+
+  beforeEach(() => {
+    h = createTestHarness();
+  });
+
+  it('updateWorkflow stores baseBranch and it persists via loadWorkflow', () => {
+    h.loadAndStart(PARALLEL_PLAN);
+    const mergeId = h.getAllTasks().find(t => t.isMergeNode)!.id;
+    const wfId = h.getTask(mergeId)!.workflowId!;
+
+    h.persistence.updateWorkflow(wfId, { baseBranch: 'develop' });
+    const wf = h.persistence.loadWorkflow(wfId);
+    expect(wf.baseBranch).toBe('develop');
+  });
+
+  it('listWorkflows returns baseBranch and onFinish per workflow', () => {
+    h.loadAndStart(PARALLEL_PLAN);
+    const workflows = h.persistence.listWorkflows();
+    expect(workflows.length).toBe(1);
+    expect(workflows[0].baseBranch).toBe('master');
+    expect(workflows[0].onFinish).toBe('merge');
+  });
+
+  it('changing baseBranch and restarting merge gate re-executes merge', async () => {
+    h.loadAndStart(PARALLEL_PLAN);
+
+    h.completeTask('A');
+    h.completeTask('B');
+    h.completeTask('C');
+
+    const mergeId = h.getAllTasks().find(t => t.isMergeNode)!.id;
+    const wfId = h.getTask(mergeId)!.workflowId!;
+
+    // Execute merge gate (succeeds initially)
+    const mergeTask = h.getTask(mergeId)!;
+    await h.executor.executeTasks([mergeTask]);
+    expect(h.getTask(mergeId)!.status).toBe('completed');
+
+    // Change baseBranch
+    h.persistence.updateWorkflow(wfId, { baseBranch: 'develop' });
+
+    // Restart merge gate
+    const restarted = h.orchestrator.restartTask(mergeId);
+    expect(restarted.some(t => t.id === mergeId && t.status === 'running')).toBe(true);
+
+    // Re-execute merge gate (it will re-run with new baseBranch)
+    const runnable = restarted.filter(t => t.status === 'running');
+    await h.executor.executeTasks(runnable);
+    expect(h.getTask(mergeId)!.status).toBe('completed');
+
+    // Verify the workflow's baseBranch persisted
+    const wf = h.persistence.loadWorkflow(wfId);
+    expect(wf.baseBranch).toBe('develop');
+  });
+
+  it('multiple workflows have independent baseBranch values', () => {
+    h.loadAndStart(PARALLEL_PLAN);
+    h.loadAndStart({ ...LINEAR_PLAN, name: 'Linear Plan 2', baseBranch: 'develop' });
+
+    const workflows = h.persistence.listWorkflows();
+    expect(workflows.length).toBe(2);
+
+    const branches = workflows.map(w => w.baseBranch).sort();
+    expect(branches).toEqual(['develop', 'master']);
+  });
+});
+
 // ── Flow 6: Content-Addressable Branch Names ────────────────
 
 describe('Flow 6: content-addressable branch names', () => {
@@ -559,5 +630,106 @@ describe('Flow 6: content-addressable branch names', () => {
     // to assign new content-addressable branches
     expect(h.getTask('A')!.status === 'pending' || h.getTask('A')!.status === 'running').toBe(true);
     expect(h.getTask('B')!.status === 'pending' || h.getTask('B')!.status === 'running').toBe(true);
+  });
+});
+
+// ── Flow 7: Restart Workflow with Generation Salt ───────────
+
+describe('Flow 7: restart workflow with generation salt', () => {
+  let h: TestHarness;
+
+  beforeEach(() => {
+    h = createTestHarness();
+  });
+
+  it('generation bump persists and restartWorkflow clears branches', () => {
+    h.loadAndStart(PARALLEL_PLAN);
+
+    h.completeTask('A');
+    h.completeTask('B');
+    h.completeTask('C');
+
+    // Simulate branches being set
+    h.persistence.updateTask('A', {
+      branch: 'experiment/A-gen0hash',
+      workspacePath: '/tmp/worktrees/exec-A',
+    } as any);
+    (h.orchestrator as any).refreshFromDb();
+
+    const mergeId = h.getAllTasks().find(t => t.isMergeNode)!.id;
+    const wfId = h.getTask(mergeId)!.workflowId!;
+
+    // Generation starts at 0
+    const wf0 = h.persistence.loadWorkflow(wfId);
+    expect((wf0 as any)?.generation ?? 0).toBe(0);
+
+    // Bump generation
+    h.persistence.updateWorkflow(wfId, { generation: 1 });
+    const wf1 = h.persistence.loadWorkflow(wfId);
+    expect((wf1 as any).generation).toBe(1);
+
+    // Restart workflow clears all branches
+    h.orchestrator.restartWorkflow(wfId);
+
+    for (const t of h.getAllTasks().filter(t => !t.isMergeNode)) {
+      expect(t.branch).toBeUndefined();
+      expect(t.workspacePath).toBeUndefined();
+    }
+
+    // Root tasks re-started
+    expect(['pending', 'running']).toContain(h.getTask('A')!.status);
+    expect(['pending', 'running']).toContain(h.getTask('B')!.status);
+  });
+
+  it('restartWorkflow clears old branch fields so executor gets fresh ones', () => {
+    h.loadAndStart(PARALLEL_PLAN);
+
+    h.completeTask('A');
+    h.completeTask('B');
+    h.completeTask('C');
+
+    // Simulate branches being set
+    h.persistence.updateTask('A', {
+      branch: 'experiment/A-oldHash',
+      workspacePath: '/tmp/worktrees/exec-A',
+    } as any);
+    h.persistence.updateTask('B', {
+      branch: 'experiment/B-oldHash',
+      workspacePath: '/tmp/worktrees/exec-B',
+    } as any);
+    (h.orchestrator as any).refreshFromDb();
+
+    const mergeId = h.getAllTasks().find(t => t.isMergeNode)!.id;
+    const wfId = h.getTask(mergeId)!.workflowId!;
+
+    // Bump generation and restart
+    h.persistence.updateWorkflow(wfId, { generation: 2 });
+    h.orchestrator.restartWorkflow(wfId);
+
+    for (const t of h.getAllTasks().filter(t => !t.isMergeNode)) {
+      expect(t.branch).toBeUndefined();
+      expect(t.workspacePath).toBeUndefined();
+    }
+
+    // Root tasks should be re-started
+    expect(['pending', 'running']).toContain(h.getTask('A')!.status);
+    expect(['pending', 'running']).toContain(h.getTask('B')!.status);
+  });
+
+  it('generation persists through save/load cycle', () => {
+    h.loadAndStart(LINEAR_PLAN);
+
+    const mergeId = h.getAllTasks().find(t => t.isMergeNode)!.id;
+    const wfId = h.getTask(mergeId)!.workflowId!;
+
+    // Initially generation is 0
+    const wf0 = h.persistence.loadWorkflow(wfId);
+    expect((wf0 as any)?.generation ?? 0).toBe(0);
+
+    // Update to 5
+    h.persistence.updateWorkflow(wfId, { generation: 5 });
+
+    const wf5 = h.persistence.loadWorkflow(wfId);
+    expect((wf5 as any).generation).toBe(5);
   });
 });

@@ -3,9 +3,9 @@
  *
  * Visually distinct from TaskNode: smaller, different accent.
  * Status reflects whether all tasks passed (merge proceeds) or any failed (merge blocked).
+ * Branch display is read-only; editing happens in TaskPanel.
  */
 
-import { useState, useRef, useEffect } from 'react';
 import { Handle, Position } from '@xyflow/react';
 import type { TaskStatus } from '../types.js';
 import { getStatusColor } from '../lib/colors.js';
@@ -15,7 +15,6 @@ interface MergeGateNodeData {
   label: string;
   onFinish: 'merge' | 'pull_request';
   baseBranch?: string;
-  onSetMergeBranch?: (branch: string) => void;
   [key: string]: unknown;
 }
 
@@ -24,26 +23,8 @@ interface MergeGateNodeProps {
 }
 
 export function MergeGateNode({ data }: MergeGateNodeProps) {
-  const { status, label, onFinish, baseBranch, onSetMergeBranch } = data;
+  const { status, label, onFinish, baseBranch } = data;
   const colors = getStatusColor(status);
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(baseBranch ?? '');
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    if (editing && inputRef.current) {
-      inputRef.current.focus();
-      inputRef.current.select();
-    }
-  }, [editing]);
-
-  const commitEdit = () => {
-    const trimmed = draft.trim();
-    if (trimmed && trimmed !== baseBranch && onSetMergeBranch) {
-      onSetMergeBranch(trimmed);
-    }
-    setEditing(false);
-  };
 
   const icon = onFinish === 'pull_request' ? (
     <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -75,34 +56,18 @@ export function MergeGateNode({ data }: MergeGateNodeProps) {
         {label}
       </div>
 
-      {baseBranch && (
-        <div className="flex items-center gap-1 mt-1">
-          <svg className="w-3 h-3 text-gray-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M13 7l5 5m0 0l-5 5m5-5H6" />
-          </svg>
-          {editing ? (
-            <input
-              ref={inputRef}
-              className="bg-gray-700 text-gray-200 text-xs font-mono px-1 rounded border border-gray-500 w-full outline-none focus:border-blue-400"
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              onBlur={commitEdit}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') commitEdit();
-                if (e.key === 'Escape') { setDraft(baseBranch); setEditing(false); }
-              }}
-            />
-          ) : (
-            <button
-              className="text-xs font-mono text-gray-400 hover:text-gray-200 truncate cursor-pointer"
-              onClick={() => { if (onSetMergeBranch) { setDraft(baseBranch); setEditing(true); } }}
-              title={onSetMergeBranch ? 'Click to change target branch' : baseBranch}
-            >
-              {baseBranch}
-            </button>
-          )}
-        </div>
-      )}
+      <div className="flex items-center gap-1 mt-1" data-testid="merge-branch-display">
+        <svg className="w-3 h-3 text-gray-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M13 7l5 5m0 0l-5 5m5-5H6" />
+        </svg>
+        <span
+          data-testid="merge-branch-label"
+          className="text-xs font-mono text-gray-400 truncate"
+          title={baseBranch ?? 'default'}
+        >
+          {baseBranch ?? 'default'}
+        </span>
+      </div>
 
       <div className="flex items-center gap-1.5 mt-1">
         <span

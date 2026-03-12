@@ -6,46 +6,50 @@
  * No polling -- all updates arrive via IPC subscription.
  */
 
-import { useState, useEffect, useCallback } from 'react';
-import type { TaskState } from '../types.js';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import type { TaskState, WorkflowMeta } from '../types.js';
 import { applyDelta } from '../lib/delta.js';
 
-export function useTasks(): { tasks: Map<string, TaskState>; clearTasks: () => void; refreshTasks: () => void } {
-  const [tasks, setTasks] = useState<Map<string, TaskState>>(new Map());
+export interface UseTasksResult {
+  tasks: Map<string, TaskState>;
+  workflows: Map<string, WorkflowMeta>;
+  clearTasks: () => void;
+  refreshTasks: () => void;
+}
 
-  const fetchTasks = useCallback(() => {
+export function useTasks(): UseTasksResult {
+  const [tasks, setTasks] = useState<Map<string, TaskState>>(new Map());
+  const [workflows, setWorkflows] = useState<Map<string, WorkflowMeta>>(new Map());
+  const workflowsRef = useRef(workflows);
+  workflowsRef.current = workflows;
+
+  const fetchAll = useCallback(() => {
     if (typeof window === 'undefined' || !window.invoker) return;
-    window.invoker.getTasks().then((taskList) => {
-      if (taskList.length === 0) return;
-      setTasks((prev) => {
-        const next = new Map(prev);
-        for (const t of taskList) {
-          next.set(t.id, t);
-        }
-        return next;
-      });
+    window.invoker.getTasks().then((result) => {
+      const taskList = Array.isArray(result) ? result : result.tasks;
+      const wfList = Array.isArray(result) ? [] : (result.workflows ?? []);
+      if (taskList.length > 0) {
+        setTasks((prev) => {
+          const next = new Map(prev);
+          for (const t of taskList) next.set(t.id, t);
+          return next;
+        });
+      }
+      if (wfList.length > 0) {
+        setWorkflows(() => {
+          const wfMap = new Map<string, WorkflowMeta>();
+          for (const wf of wfList) wfMap.set(wf.id, wf);
+          return wfMap;
+        });
+      }
     });
   }, []);
 
   useEffect(() => {
     if (typeof window === 'undefined' || !window.invoker) return;
 
-    // Initial load — merge with existing state to avoid overwriting deltas
-    // that arrived between subscription and this Promise resolving.
-    window.invoker.getTasks().then((taskList) => {
-      if (taskList.length === 0) return;
-      setTasks((prev) => {
-        const next = new Map(prev);
-        for (const t of taskList) {
-          if (!next.has(t.id)) {
-            next.set(t.id, t);
-          }
-        }
-        return next;
-      });
-    });
+    fetchAll();
 
-    // Subscribe to deltas
     const unsub = window.invoker.onTaskDelta((delta) => {
       setTasks((prev) => {
         const next = applyDelta(prev, delta);
@@ -54,12 +58,21 @@ export function useTasks(): { tasks: Map<string, TaskState>; clearTasks: () => v
         }
         return next;
       });
+
+      if (delta.type === 'created' && delta.task?.workflowId) {
+        if (!workflowsRef.current.has(delta.task.workflowId)) {
+          fetchAll();
+        }
+      }
     });
 
     return unsub;
+  }, [fetchAll]);
+
+  const clearTasks = useCallback(() => {
+    setTasks(new Map());
+    setWorkflows(new Map());
   }, []);
 
-  const clearTasks = useCallback(() => setTasks(new Map()), []);
-
-  return { tasks, clearTasks, refreshTasks: fetchTasks };
+  return { tasks, workflows, clearTasks, refreshTasks: fetchAll };
 }

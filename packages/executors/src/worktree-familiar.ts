@@ -21,6 +21,7 @@ export function computeBranchHash(
   prompt: string | undefined,
   upstreamCommits: string[],
   baseHead: string,
+  salt: string = '',
 ): string {
   const h = createHash('sha256');
   h.update(actionId);
@@ -28,6 +29,7 @@ export function computeBranchHash(
   h.update(prompt ?? '');
   for (const c of [...upstreamCommits].sort()) h.update(c);
   h.update(baseHead);
+  if (salt) h.update(salt);
   return h.digest('hex').slice(0, 8);
 }
 
@@ -120,6 +122,7 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
       request.inputs.prompt,
       upstreamCommits,
       baseHead,
+      request.inputs.salt,
     );
     const branch = `experiment/${request.actionId}-${hash}`;
     const worktreeDir = `${this.worktreeBaseDir}/${executionId}`;

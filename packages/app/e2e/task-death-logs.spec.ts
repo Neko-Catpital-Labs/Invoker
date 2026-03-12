@@ -59,7 +59,8 @@ test.describe('Task death logs', () => {
 
     await waitForTaskStatus(page, 'task-die', 'failed', 10000);
 
-    const tasks = await page.evaluate(() => window.invoker.getTasks());
+    const result = await page.evaluate(() => window.invoker.getTasks());
+    const tasks = Array.isArray(result) ? result : result.tasks;
     const task = tasks.find((t: any) => t.id === 'task-die');
     expect(task?.status).toBe('failed');
   });

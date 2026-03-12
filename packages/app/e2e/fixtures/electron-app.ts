@@ -81,7 +81,8 @@ export async function startPlan(page: Page): Promise<void> {
 
 /** Get all current tasks via the IPC bridge. */
 export async function getTasks(page: Page) {
-  return page.evaluate(() => window.invoker.getTasks());
+  const result = await page.evaluate(() => window.invoker.getTasks());
+  return Array.isArray(result) ? result : result.tasks;
 }
 
 /** Wait for a specific task to reach a given status via polling. */
@@ -93,7 +94,8 @@ export async function waitForTaskStatus(
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const tasks = await page.evaluate(() => window.invoker.getTasks());
+    const result = await page.evaluate(() => window.invoker.getTasks());
+    const tasks = Array.isArray(result) ? result : result.tasks;
     const task = tasks.find((t: any) => t.id === taskId);
     if (task && task.status === status) return;
     await page.waitForTimeout(300);

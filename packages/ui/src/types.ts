@@ -78,6 +78,16 @@ export type TaskDelta =
   | { readonly type: 'updated'; readonly taskId: string; readonly changes: Partial<TaskState> }
   | { readonly type: 'removed'; readonly taskId: string };
 
+// ── Workflow Metadata ────────────────────────────────────────
+
+export interface WorkflowMeta {
+  id: string;
+  name: string;
+  status: string;
+  baseBranch?: string;
+  onFinish?: string;
+}
+
 // ── Workflow Status ─────────────────────────────────────────
 
 export interface WorkflowStatus {
@@ -145,7 +155,7 @@ export interface InvokerAPI {
   start: () => Promise<TaskState[]>;
   stop: () => Promise<void>;
   clear: () => Promise<void>;
-  getTasks: () => Promise<TaskState[]>;
+  getTasks: () => Promise<{ tasks: TaskState[]; workflows: WorkflowMeta[] }>;
   getStatus: () => Promise<WorkflowStatus>;
   provideInput: (taskId: string, input: string) => Promise<void>;
   approve: (taskId: string) => Promise<void>;
@@ -171,6 +181,7 @@ export interface InvokerAPI {
   onWorkflowsChanged: (cb: (workflows: unknown[]) => void) => () => void;
   deleteAllWorkflows: () => Promise<void>;
   cleanupWorktrees: () => Promise<{ removed: string[]; errors: string[] }>;
+  restartWorkflow: (workflowId: string) => Promise<void>;
   rebaseAndRetry: (mergeTaskId: string) => Promise<{
     success: boolean;
     rebasedBranches: string[];

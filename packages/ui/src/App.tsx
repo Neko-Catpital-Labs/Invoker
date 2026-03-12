@@ -34,7 +34,7 @@ type ModalState =
   | { type: 'replace'; task: TaskState };
 
 export function App() {
-  const { tasks, clearTasks, refreshTasks } = useTasks();
+  const { tasks, workflows, clearTasks, refreshTasks } = useTasks();
   const invoker = useInvoker();
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [modal, setModal] = useState<ModalState>({ type: 'none' });
@@ -42,7 +42,6 @@ export function App() {
   const [hasStarted, setHasStarted] = useState(false);
   const [planName, setPlanName] = useState<string | null>(null);
   const [onFinish, setOnFinish] = useState<'none' | 'merge' | 'pull_request'>('merge');
-  const [baseBranch, setBaseBranch] = useState<string | undefined>();
   const [viewMode, setViewMode] = useState<'dag' | 'history' | 'timeline'>('dag');
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; task: TaskState } | null>(null);
 
@@ -107,6 +106,15 @@ export function App() {
     }
   }, []);
 
+  const handleRestartWorkflow = useCallback(async (workflowId: string) => {
+    setContextMenu(null);
+    try {
+      await window.invoker?.restartWorkflow(workflowId);
+    } catch (err) {
+      console.error('Restart Workflow failed:', err);
+    }
+  }, []);
+
   const closeContextMenu = useCallback(() => {
     setContextMenu(null);
   }, []);
@@ -121,12 +129,12 @@ export function App() {
         setHasLoadedPlan(true);
         setPlanName(plan.name ?? 'Untitled Plan');
         setOnFinish(plan.onFinish ?? 'merge');
-        setBaseBranch(plan.baseBranch);
+        refreshTasks();
       } catch (err) {
         console.error('Failed to load plan:', err);
       }
     },
-    [invoker],
+    [invoker, refreshTasks],
   );
 
   const handleStart = useCallback(async () => {
@@ -325,7 +333,7 @@ export function App() {
             </div>
           ) : (
             <div className="h-full">
-              <TaskDAG tasks={tasks} onFinish={onFinish} baseBranch={baseBranch} onSetMergeBranch={invoker?.setMergeBranch} onTaskClick={handleTaskClick} onTaskDoubleClick={handleTaskDoubleClick} onTaskContextMenu={handleTaskContextMenu} />
+              <TaskDAG tasks={tasks} workflows={workflows} onTaskClick={handleTaskClick} onTaskDoubleClick={handleTaskDoubleClick} onTaskContextMenu={handleTaskContextMenu} />
             </div>
           )}
         </div>
@@ -335,6 +343,7 @@ export function App() {
           <div className="flex-1 overflow-hidden bg-gray-800">
             <TaskPanel
               task={selectedTask}
+              baseBranch={selectedTask?.workflowId ? workflows.get(selectedTask.workflowId)?.baseBranch : undefined}
               onProvideInput={openInputModal}
               onApprove={openApprovalModal}
               onReject={(task) => {
@@ -343,6 +352,7 @@ export function App() {
               onSelectExperiment={openExperimentModal}
               onEditCommand={handleEditCommand}
               onEditType={handleEditType}
+              onSetMergeBranch={invoker?.setMergeBranch}
             />
           </div>
         </div>
@@ -394,6 +404,7 @@ export function App() {
           onReplace={handleReplaceTask}
           onOpenTerminal={handleOpenTerminal}
           onRebaseAndRetry={handleRebaseAndRetry}
+          onRestartWorkflow={handleRestartWorkflow}
           onClose={closeContextMenu}
         />
       )}

@@ -38,7 +38,8 @@ test.describe('Restart failed task', () => {
     await waitForTaskStatus(page, 'task-fail', 'failed');
 
     // Verify task-fail shows as failed
-    const failedTasks = await page.evaluate(() => window.invoker.getTasks());
+    let result = await page.evaluate(() => window.invoker.getTasks());
+    const failedTasks = Array.isArray(result) ? result : result.tasks;
     const failTask = failedTasks.find((t: any) => t.id === 'task-fail');
     expect(failTask?.status).toBe('failed');
 
@@ -60,7 +61,8 @@ test.describe('Restart failed task', () => {
     await waitForTaskStatus(page, 'task-fail', 'failed', 10000);
 
     // Verify the task was actually restarted by checking startedAt changed
-    const afterTasks = await page.evaluate(() => window.invoker.getTasks());
+    result = await page.evaluate(() => window.invoker.getTasks());
+    const afterTasks = Array.isArray(result) ? result : result.tasks;
     const afterFail = afterTasks.find((t: any) => t.id === 'task-fail');
     expect(afterFail?.status).toBe('failed');
   });

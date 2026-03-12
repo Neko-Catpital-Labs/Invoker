@@ -146,6 +146,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       'ALTER TABLE workflows ADD COLUMN on_finish TEXT',
       'ALTER TABLE workflows ADD COLUMN base_branch TEXT',
       'ALTER TABLE workflows ADD COLUMN feature_branch TEXT',
+      'ALTER TABLE workflows ADD COLUMN generation INTEGER DEFAULT 0',
     ];
     for (const sql of migrations) {
       try { this.db.exec(sql); } catch { /* Column already exists */ }
@@ -156,17 +157,18 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
   saveWorkflow(workflow: Workflow): void {
     this.db.prepare(`
-      INSERT OR REPLACE INTO workflows (id, name, status, plan_file, repo_url, branch, on_finish, base_branch, feature_branch, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT OR REPLACE INTO workflows (id, name, status, plan_file, repo_url, branch, on_finish, base_branch, feature_branch, generation, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       workflow.id, workflow.name, workflow.status,
       workflow.planFile ?? null, workflow.repoUrl ?? null, workflow.branch ?? null,
       workflow.onFinish ?? null, workflow.baseBranch ?? null, workflow.featureBranch ?? null,
+      workflow.generation ?? 0,
       workflow.createdAt, workflow.updatedAt,
     );
   }
 
-  updateWorkflow(workflowId: string, changes: Partial<Pick<Workflow, 'status' | 'updatedAt' | 'baseBranch'>>): void {
+  updateWorkflow(workflowId: string, changes: Partial<Pick<Workflow, 'status' | 'updatedAt' | 'baseBranch' | 'generation'>>): void {
     const setClauses: string[] = [];
     const values: unknown[] = [];
     if (changes.status !== undefined) {
@@ -176,6 +178,10 @@ export class SQLiteAdapter implements PersistenceAdapter {
     if (changes.baseBranch !== undefined) {
       setClauses.push('base_branch = ?');
       values.push(changes.baseBranch);
+    }
+    if (changes.generation !== undefined) {
+      setClauses.push('generation = ?');
+      values.push(changes.generation);
     }
     setClauses.push('updated_at = ?');
     values.push(changes.updatedAt ?? new Date().toISOString());
@@ -592,6 +598,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       onFinish: row.on_finish ?? undefined,
       baseBranch: row.base_branch ?? undefined,
       featureBranch: row.feature_branch ?? undefined,
+      generation: row.generation ?? 0,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };
