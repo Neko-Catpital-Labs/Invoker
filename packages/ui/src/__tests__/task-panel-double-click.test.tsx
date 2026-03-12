@@ -3,14 +3,17 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import { TaskPanel } from '../components/TaskPanel.js';
 import type { TaskState } from '../types.js';
 
-function makeTask(overrides: Partial<TaskState> = {}): TaskState {
+function makeTask(overrides: Partial<TaskState> & { command?: string; prompt?: string } = {}): TaskState {
+  const { command, prompt, ...rest } = overrides;
   return {
     id: 'test-task-1',
     description: 'Test task',
     status: 'pending',
     dependencies: [],
     createdAt: new Date(),
-    ...overrides,
+    config: { command, prompt },
+    execution: {},
+    ...rest,
   } as TaskState;
 }
 

@@ -3,7 +3,7 @@ import { computeMergeGateStatus, findLeafTasks, mergeGateId, isMergeGateId, grou
 import type { TaskState } from '../types.js';
 
 function makeTask(id: string, status: TaskState['status'], deps: string[] = [], workflowId?: string): TaskState {
-  return { id, description: `Task ${id}`, status, dependencies: deps, workflowId, createdAt: new Date() };
+  return { id, description: `Task ${id}`, status, dependencies: deps, config: { workflowId }, execution: {}, createdAt: new Date() };
 }
 
 describe('computeMergeGateStatus', () => {

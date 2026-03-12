@@ -6,13 +6,16 @@ import {
 } from '../components/TimelineView.js';
 import type { TaskState } from '../types.js';
 
-function makeTask(overrides: Partial<TaskState> & { id: string }): TaskState {
+function makeTask(overrides: Partial<TaskState> & { id: string } & { startedAt?: Date; completedAt?: Date }): TaskState {
+  const { startedAt, completedAt, ...rest } = overrides;
   return {
     description: `Task ${overrides.id}`,
     status: 'pending',
     dependencies: [],
     createdAt: new Date('2024-01-01T00:00:00Z'),
-    ...overrides,
+    config: {},
+    execution: { startedAt, completedAt },
+    ...rest,
   } as TaskState;
 }
 

@@ -32,6 +32,53 @@ export interface ExperimentResultEntry {
   readonly exitCode?: number;
 }
 
+// ── Task Config (plan-time / static fields) ────────────────
+
+export interface TaskConfig {
+  readonly workflowId?: string;
+  readonly parentTask?: string;
+  readonly command?: string;
+  readonly prompt?: string;
+  readonly experimentPrompt?: string;
+  readonly pivot?: boolean;
+  readonly experimentVariants?: readonly ExperimentVariant[];
+  readonly isReconciliation?: boolean;
+  readonly requiresManualApproval?: boolean;
+  readonly repoUrl?: string;
+  readonly featureBranch?: string;
+  readonly familiarType?: string;
+  readonly autoFix?: boolean;
+  readonly maxFixAttempts?: number;
+  readonly isMergeNode?: boolean;
+  readonly summary?: string;
+  readonly problem?: string;
+  readonly approach?: string;
+  readonly testPlan?: string;
+  readonly reproCommand?: string;
+}
+
+// ── Task Execution (runtime fields) ────────────────────────
+
+export interface TaskExecution {
+  readonly blockedBy?: string;
+  readonly inputPrompt?: string;
+  readonly exitCode?: number;
+  readonly error?: string;
+  readonly startedAt?: Date;
+  readonly completedAt?: Date;
+  readonly lastHeartbeatAt?: Date;
+  readonly actionRequestId?: string;
+  readonly branch?: string;
+  readonly commit?: string;
+  readonly claudeSessionId?: string;
+  readonly workspacePath?: string;
+  readonly containerId?: string;
+  readonly experiments?: readonly string[];
+  readonly selectedExperiment?: string;
+  readonly selectedExperiments?: readonly string[];
+  readonly experimentResults?: readonly ExperimentResultEntry[];
+}
+
 // ── Task State ──────────────────────────────────────────────
 
 export interface TaskState {
@@ -39,45 +86,26 @@ export interface TaskState {
   readonly description: string;
   readonly status: TaskStatus;
   readonly dependencies: readonly string[];
-  readonly workflowId?: string;
-  readonly blockedBy?: string;
-  readonly inputPrompt?: string;
-  readonly exitCode?: number;
-  readonly error?: string;
   readonly createdAt: Date;
-  readonly startedAt?: Date;
-  readonly completedAt?: Date;
-  readonly lastHeartbeatAt?: Date;
-  readonly actionRequestId?: string;
-  readonly summary?: string;
-  readonly problem?: string;
-  readonly approach?: string;
-  readonly testPlan?: string;
-  readonly reproCommand?: string;
-  readonly branch?: string;
-  readonly commit?: string;
-  readonly parentTask?: string;
-  readonly command?: string;
-  readonly prompt?: string;
-  readonly requiresManualApproval?: boolean;
-  readonly pivot?: boolean;
-  readonly experiments?: readonly string[];
-  readonly selectedExperiment?: string;
-  readonly selectedExperiments?: readonly string[];
-  readonly experimentPrompt?: string;
-  readonly experimentVariants?: readonly ExperimentVariant[];
-  readonly isReconciliation?: boolean;
-  readonly experimentResults?: readonly ExperimentResultEntry[];
-  readonly repoUrl?: string;
-  readonly featureBranch?: string;
-  readonly isMergeNode?: boolean;
+  readonly config: TaskConfig;
+  readonly execution: TaskExecution;
+}
+
+// ── Task State Changes ──────────────────────────────────────
+
+export interface TaskStateChanges {
+  readonly status?: TaskStatus;
+  readonly description?: string;
+  readonly dependencies?: readonly string[];
+  readonly config?: Partial<TaskConfig>;
+  readonly execution?: Partial<TaskExecution>;
 }
 
 // ── Task Delta ──────────────────────────────────────────────
 
 export type TaskDelta =
   | { readonly type: 'created'; readonly task: TaskState }
-  | { readonly type: 'updated'; readonly taskId: string; readonly changes: Partial<TaskState> }
+  | { readonly type: 'updated'; readonly taskId: string; readonly changes: TaskStateChanges }
   | { readonly type: 'removed'; readonly taskId: string };
 
 // ── Workflow Metadata ────────────────────────────────────────

@@ -122,7 +122,7 @@ describe('SlackSurface', () => {
         type: 'task_delta',
         delta: {
           type: 'created',
-          task: { id: 't1', description: 'Test task', status: 'pending', dependencies: [], createdAt: new Date() },
+          task: { id: 't1', description: 'Test task', status: 'pending', dependencies: [], createdAt: new Date(), config: {}, execution: {} },
         },
       };
 
@@ -147,7 +147,7 @@ describe('SlackSurface', () => {
         type: 'task_delta',
         delta: {
           type: 'created',
-          task: { id: 't1', description: 'Test', status: 'pending', dependencies: [], createdAt: new Date() },
+          task: { id: 't1', description: 'Test', status: 'pending', dependencies: [], createdAt: new Date(), config: {}, execution: {} },
         },
       });
 

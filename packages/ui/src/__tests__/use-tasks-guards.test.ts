@@ -14,6 +14,8 @@ function makeTask(overrides: Partial<TaskState> & { id: string }): TaskState {
     status: 'pending',
     dependencies: [],
     createdAt: new Date('2025-01-01'),
+    config: {},
+    execution: {},
     ...overrides,
   };
 }

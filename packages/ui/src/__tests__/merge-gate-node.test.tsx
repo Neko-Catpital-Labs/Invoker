@@ -57,10 +57,15 @@ describe('MergeGateNode', () => {
     expect(screen.getByTestId('merge-mode-label')).toHaveTextContent('Manual');
   });
 
-  it('shows approve button for manual merge gate with completed status', () => {
-    renderNode({ status: 'completed', label: 'All tasks must pass', onFinish: 'merge', baseBranch: 'master', mergeMode: 'manual', workflowId: 'wf-123' });
+  it('shows approve button for manual merge gate with awaiting_approval status', () => {
+    renderNode({ status: 'awaiting_approval', label: 'All tasks must pass', onFinish: 'merge', baseBranch: 'master', mergeMode: 'manual', workflowId: 'wf-123' });
     expect(screen.getByTestId('approve-merge-button')).toBeInTheDocument();
     expect(screen.getByTestId('approve-merge-button')).toHaveTextContent('Approve Merge');
+  });
+
+  it('does not show approve button for manual merge gate with completed status', () => {
+    renderNode({ status: 'completed', label: 'All tasks must pass', onFinish: 'merge', baseBranch: 'master', mergeMode: 'manual', workflowId: 'wf-123' });
+    expect(screen.queryByTestId('approve-merge-button')).not.toBeInTheDocument();
   });
 
   it('does not show approve button for automatic merge gate with completed status', () => {

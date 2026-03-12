@@ -24,8 +24,8 @@ export function ContextMenu({ x, y, task, onRestart, onReplace, onOpenTerminal, 
   const menuRef = useRef<HTMLDivElement>(null);
   const canRestart = task.status !== 'running';
   const canReplace = task.status === 'failed' || task.status === 'blocked';
-  const canRebaseAndRetry = !!task.workflowId && !!onRebaseAndRetry;
-  const canRestartWorkflow = !!task.workflowId && !!onRestartWorkflow;
+  const canRebaseAndRetry = !!task.config.workflowId && !!onRebaseAndRetry;
+  const canRestartWorkflow = !!task.config.workflowId && !!onRestartWorkflow;
 
   useEffect(() => {
     const handleClick = (e: MouseEvent) => {
@@ -95,7 +95,7 @@ export function ContextMenu({ x, y, task, onRestart, onReplace, onOpenTerminal, 
           <div className="border-t border-gray-600 my-1" />
           <button
             className="w-full text-left px-3 py-1.5 text-sm text-red-300 hover:bg-gray-700"
-            onClick={() => onRestartWorkflow!(task.workflowId!)}
+            onClick={() => onRestartWorkflow!(task.config.workflowId!)}
           >
             Restart Workflow
           </button>

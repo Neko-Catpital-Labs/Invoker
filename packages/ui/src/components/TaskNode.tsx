@@ -32,20 +32,20 @@ function useHeartbeatAge(task: TaskState): number | null {
   const [age, setAge] = useState<number | null>(null);
 
   useEffect(() => {
-    if (task.status !== 'running' || !task.lastHeartbeatAt) {
+    if (task.status !== 'running' || !task.execution.lastHeartbeatAt) {
       setAge(null);
       return;
     }
     const compute = () => {
-      const hb = task.lastHeartbeatAt instanceof Date
-        ? task.lastHeartbeatAt
-        : new Date(task.lastHeartbeatAt as unknown as string);
+      const hb = task.execution.lastHeartbeatAt instanceof Date
+        ? task.execution.lastHeartbeatAt
+        : new Date(task.execution.lastHeartbeatAt as unknown as string);
       setAge(Date.now() - hb.getTime());
     };
     compute();
     const timer = setInterval(compute, 10_000);
     return () => clearInterval(timer);
-  }, [task.status, task.lastHeartbeatAt]);
+  }, [task.status, task.execution.lastHeartbeatAt]);
 
   return age;
 }
@@ -63,7 +63,7 @@ export function TaskNode({ data }: TaskNodeProps) {
   const statusLabel =
     task.status === 'awaiting_approval'
       ? 'APPROVE'
-      : task.isReconciliation && task.status === 'needs_input'
+      : task.config.isReconciliation && task.status === 'needs_input'
         ? 'SELECT'
         : task.status.toUpperCase();
 
@@ -85,7 +85,7 @@ export function TaskNode({ data }: TaskNodeProps) {
       <Handle type="target" position={Position.Left} className="!bg-gray-500" />
 
       <div className={`font-mono text-xs opacity-60 truncate ${colors.text}`}>
-        {task.isReconciliation && <span className="mr-1">[R]</span>}
+        {task.config.isReconciliation && <span className="mr-1">[R]</span>}
         {task.id.length > 20 ? task.id.slice(0, 20) + '...' : task.id}
       </div>
 

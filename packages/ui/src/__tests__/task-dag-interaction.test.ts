@@ -9,6 +9,8 @@ describe('TaskDAG double-click', () => {
       status: 'running' as const,
       dependencies: [] as string[],
       createdAt: new Date(),
+      config: {},
+      execution: {},
     };
     const tasks = new Map([['task-1', mockTask]]);
     const onTaskDoubleClick = vi.fn();

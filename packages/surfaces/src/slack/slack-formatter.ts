@@ -218,9 +218,9 @@ export function formatSurfaceEvent(event: SurfaceEvent): SlackMessage | null {
       }
       if (delta.type === 'updated') {
         return formatTaskUpdated(delta.taskId, delta.changes.status as string, {
-          error: delta.changes.error as string | undefined,
-          summary: delta.changes.summary as string | undefined,
-          inputPrompt: delta.changes.inputPrompt as string | undefined,
+          error: delta.changes.execution?.error as string | undefined,
+          summary: delta.changes.config?.summary as string | undefined,
+          inputPrompt: delta.changes.execution?.inputPrompt as string | undefined,
         });
       }
       return null;

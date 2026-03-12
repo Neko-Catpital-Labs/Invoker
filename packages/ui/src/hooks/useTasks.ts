@@ -59,8 +59,8 @@ export function useTasks(): UseTasksResult {
         return next;
       });
 
-      if (delta.type === 'created' && delta.task?.workflowId) {
-        if (!workflowsRef.current.has(delta.task.workflowId)) {
+      if (delta.type === 'created' && delta.task?.config.workflowId) {
+        if (!workflowsRef.current.has(delta.task.config.workflowId)) {
           fetchAll();
         }
       }

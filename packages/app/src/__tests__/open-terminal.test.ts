@@ -17,6 +17,7 @@ import {
   type OrchestratorPersistence,
   type OrchestratorMessageBus,
 } from '@invoker/core';
+import type { TaskStateChanges } from '@invoker/graph';
 import {
   LocalFamiliar, DockerFamiliar, WorktreeFamiliar,
   type FamiliarHandle, type TerminalSpec, type PersistedTaskMeta,
@@ -46,7 +47,7 @@ class InMemoryPersistence implements OrchestratorPersistence {
   saveTask(workflowId: string, task: TaskState): void {
     this.tasks.set(task.id, { workflowId, task });
   }
-  updateTask(taskId: string, changes: Partial<TaskState>): void {
+  updateTask(taskId: string, changes: TaskStateChanges): void {
     const entry = this.tasks.get(taskId);
     if (entry) entry.task = { ...entry.task, ...changes } as TaskState;
   }
@@ -128,10 +129,10 @@ function executeTaskViaFamiliar(
   const request: WorkRequest = {
     requestId: randomUUID(),
     actionId: task.id,
-    actionType: task.command ? 'command' : 'claude',
+    actionType: task.config.command ? 'command' : 'claude',
     inputs: {
-      command: task.command,
-      prompt: task.prompt,
+      command: task.config.command,
+      prompt: task.config.prompt,
       workspacePath: process.cwd(),
     },
     callbackUrl: 'n/a',

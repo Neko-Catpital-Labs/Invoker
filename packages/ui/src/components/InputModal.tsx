@@ -39,9 +39,9 @@ export function InputModal({ task, onSubmit, onClose }: InputModalProps) {
           <p className="text-sm text-gray-300 mb-1">
             Task: <span className="font-mono text-gray-200">{task.id}</span>
           </p>
-          {task.inputPrompt && (
+          {task.execution.inputPrompt && (
             <div className="bg-amber-900/30 border border-amber-700 rounded p-3 mt-2">
-              <p className="text-sm text-amber-300">{task.inputPrompt}</p>
+              <p className="text-sm text-amber-300">{task.execution.inputPrompt}</p>
             </div>
           )}
         </div>

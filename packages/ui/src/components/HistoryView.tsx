@@ -72,8 +72,8 @@ export function HistoryView({ onTaskClick, selectedTaskId }: HistoryViewProps) {
                 <div className="flex justify-between items-center">
                   <span className="truncate mr-2">{task.description}</span>
                   <span className="text-xs text-gray-400 shrink-0">
-                    {task.completedAt
-                      ? new Date(task.completedAt).toLocaleDateString()
+                    {task.execution?.completedAt
+                      ? new Date(task.execution.completedAt).toLocaleDateString()
                       : ''}
                   </span>
                 </div>

@@ -249,7 +249,7 @@ if (isHeadless) {
 
 function headlessHeartbeat(taskId: string): void {
   const now = new Date();
-  try { persistence.updateTask(taskId, { lastHeartbeatAt: now }); } catch { /* db locked */ }
+  try { persistence.updateTask(taskId, { execution: { lastHeartbeatAt: now } }); } catch { /* db locked */ }
 }
 
 async function runHeadless(args: string[]): Promise<void> {
@@ -561,7 +561,7 @@ async function headlessRebaseAndRetry(taskId: string): Promise<void> {
   if (!task) throw new Error(`Task ${taskId} not found`);
 
   const mergeTask = orchestrator.getAllTasks().find(
-    t => t.workflowId === workflowId && t.isMergeNode,
+    t => t.config.workflowId === workflowId && t.config.isMergeNode,
   );
 
   const workflow = persistence.loadWorkflow(workflowId);
@@ -750,7 +750,7 @@ async function waitForCompletion(workflowId?: string): Promise<void> {
   while (Date.now() - start < maxWaitMs) {
     let tasks = orchestrator.getAllTasks();
     if (workflowId) {
-      tasks = tasks.filter((t) => t.workflowId === workflowId);
+      tasks = tasks.filter((t) => t.config.workflowId === workflowId);
     }
     const allSettled = tasks.every(
       (t) =>
@@ -830,11 +830,11 @@ function setupGuiMode(): void {
         },
         onHeartbeat: (taskId) => {
           const now = new Date();
-          try { persistence.updateTask(taskId, { lastHeartbeatAt: now }); } catch { /* db locked */ }
+          try { persistence.updateTask(taskId, { execution: { lastHeartbeatAt: now } }); } catch { /* db locked */ }
           messageBus.publish(Channels.TASK_DELTA, {
             type: 'updated' as const,
             taskId,
-            changes: { lastHeartbeatAt: now },
+            changes: { execution: { lastHeartbeatAt: now } },
           });
         },
       },
@@ -1137,11 +1137,11 @@ function setupGuiMode(): void {
       try {
         const task = orchestrator.getTask(taskId);
         if (!task) throw new Error(`Task ${taskId} not found`);
-        if (!task.workflowId) throw new Error(`Task ${taskId} has no associated workflow`);
+        if (!task.config.workflowId) throw new Error(`Task ${taskId} has no associated workflow`);
 
-        const workflowId = task.workflowId;
+        const workflowId = task.config.workflowId;
         const mergeTask = orchestrator.getAllTasks().find(
-          t => t.workflowId === workflowId && t.isMergeNode,
+          t => t.config.workflowId === workflowId && t.config.isMergeNode,
         );
 
         const workflow = persistence.loadWorkflow(workflowId);
@@ -1175,7 +1175,7 @@ function setupGuiMode(): void {
         persistence.updateWorkflow(workflowId, { baseBranch });
 
         const tasks = persistence.loadTasks(workflowId);
-        const mergeTask = tasks.find(t => t.isMergeNode);
+        const mergeTask = tasks.find(t => t.config.isMergeNode);
         if (mergeTask) {
           const started = orchestrator.restartTask(mergeTask.id);
           const runnable = started.filter(t => t.status === 'running');

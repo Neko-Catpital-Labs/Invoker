@@ -12,6 +12,8 @@ function makeTask(overrides: Partial<TaskState> & { id: string }): TaskState {
     status: 'pending',
     dependencies: [],
     createdAt: new Date('2025-01-01'),
+    config: {},
+    execution: {},
     ...overrides,
   };
 }
@@ -36,17 +38,33 @@ describe('applyDelta', () => {
     const delta: TaskDelta = {
       type: 'updated',
       taskId: 'task-1',
-      changes: { status: 'running', startedAt: new Date('2025-01-02') },
+      changes: { status: 'running', execution: { startedAt: new Date('2025-01-02') } },
     };
 
     const result = applyDelta(tasks, delta);
 
     expect(result.get('task-1')!.status).toBe('running');
-    expect(result.get('task-1')!.startedAt).toEqual(new Date('2025-01-02'));
+    expect(result.get('task-1')!.execution.startedAt).toEqual(new Date('2025-01-02'));
     // Other fields preserved
     expect(result.get('task-1')!.description).toBe('test task');
     // Original unchanged
     expect(tasks.get('task-1')!.status).toBe('pending');
+  });
+
+  it('updated: merges nested config changes', () => {
+    const task = makeTask({ id: 'task-1', config: { command: 'echo old' } });
+    const tasks = new Map<string, TaskState>([['task-1', task]]);
+    const delta: TaskDelta = {
+      type: 'updated',
+      taskId: 'task-1',
+      changes: { config: { command: 'echo new' } },
+    };
+
+    const result = applyDelta(tasks, delta);
+
+    expect(result.get('task-1')!.config.command).toBe('echo new');
+    // Original config unchanged
+    expect(tasks.get('task-1')!.config.command).toBe('echo old');
   });
 
   it('updated: ignores unknown taskId', () => {

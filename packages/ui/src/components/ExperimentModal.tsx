@@ -21,7 +21,7 @@ export function ExperimentModal({
 }: ExperimentModalProps) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
-  const results = task.experimentResults ?? [];
+  const results = task.execution.experimentResults ?? [];
 
   const toggleExperiment = (id: string) => {
     setSelected((prev) => {

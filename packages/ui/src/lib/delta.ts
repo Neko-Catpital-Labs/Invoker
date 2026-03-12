@@ -3,7 +3,7 @@
  *
  * Three delta types:
  * - created: adds a new task
- * - updated: merges changes into an existing task
+ * - updated: merges changes into an existing task (with nested config/execution)
  * - removed: deletes a task
  */
 
@@ -23,7 +23,13 @@ export function applyDelta(
     case 'updated': {
       const existing = next.get(delta.taskId);
       if (existing) {
-        next.set(delta.taskId, { ...existing, ...delta.changes });
+        const { config: cfgChanges, execution: execChanges, ...topLevel } = delta.changes;
+        next.set(delta.taskId, {
+          ...existing,
+          ...topLevel,
+          config: { ...existing.config, ...cfgChanges },
+          execution: { ...existing.execution, ...execChanges },
+        });
       }
       break;
     }
