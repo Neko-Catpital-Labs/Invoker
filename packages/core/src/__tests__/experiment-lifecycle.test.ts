@@ -595,4 +595,112 @@ describe('Experiment Lifecycle (integration)', () => {
     expect(status.running).toBe(0);
     expect(status.pending).toBe(0);
   });
+
+  // ── 10. selectExperiment branch/commit propagation ────────
+
+  describe('selectExperiment branch/commit propagation', () => {
+    /** Helper: run lifecycle up to reconciliation needs_input state. */
+    function runToReconciliation() {
+      orchestrator.loadPlan(standardPlan);
+      orchestrator.startExecution();
+      orchestrator.handleWorkerResponse(completedResponse('setup'));
+      orchestrator.handleWorkerResponse(
+        spawnResponse('pivot', [
+          { id: 'v1', prompt: 'A' },
+          { id: 'v2', prompt: 'B' },
+        ]),
+      );
+      orchestrator.handleWorkerResponse(completedResponse('pivot-exp-v1'));
+      orchestrator.handleWorkerResponse(completedResponse('pivot-exp-v2'));
+      // Recon is now needs_input
+      expect(orchestrator.getTask('pivot-reconciliation')!.status).toBe('needs_input');
+    }
+
+    it('propagates winner branch and commit to reconciliation task', () => {
+      runToReconciliation();
+
+      // Simulate task-executor setting branch/commit on winning experiment
+      persistence.updateTask('pivot-exp-v1', {
+        branch: 'experiment/pivot-exp-v1-abc12345',
+        commit: 'abc123deadbeef',
+      });
+
+      orchestrator.selectExperiment('pivot-reconciliation', 'pivot-exp-v1');
+
+      const recon = orchestrator.getTask('pivot-reconciliation')!;
+      expect(recon.status).toBe('completed');
+      expect(recon.selectedExperiment).toBe('pivot-exp-v1');
+      expect(recon.branch).toBe('experiment/pivot-exp-v1-abc12345');
+      expect(recon.commit).toBe('abc123deadbeef');
+    });
+
+    it('propagates branch when winner has no commit', () => {
+      runToReconciliation();
+
+      persistence.updateTask('pivot-exp-v2', {
+        branch: 'experiment/pivot-exp-v2-def45678',
+      });
+
+      orchestrator.selectExperiment('pivot-reconciliation', 'pivot-exp-v2');
+
+      const recon = orchestrator.getTask('pivot-reconciliation')!;
+      expect(recon.branch).toBe('experiment/pivot-exp-v2-def45678');
+      expect(recon.commit).toBeUndefined();
+    });
+
+    it('propagates commit when winner has no branch', () => {
+      runToReconciliation();
+
+      persistence.updateTask('pivot-exp-v1', {
+        commit: 'deadbeef12345678',
+      });
+
+      orchestrator.selectExperiment('pivot-reconciliation', 'pivot-exp-v1');
+
+      const recon = orchestrator.getTask('pivot-reconciliation')!;
+      expect(recon.branch).toBeUndefined();
+      expect(recon.commit).toBe('deadbeef12345678');
+    });
+
+    it('handles winner with neither branch nor commit', () => {
+      runToReconciliation();
+
+      // Don't set branch or commit on winner — default state
+      orchestrator.selectExperiment('pivot-reconciliation', 'pivot-exp-v1');
+
+      const recon = orchestrator.getTask('pivot-reconciliation')!;
+      expect(recon.status).toBe('completed');
+      expect(recon.branch).toBeUndefined();
+      expect(recon.commit).toBeUndefined();
+    });
+
+    it('propagates branch/commit even when winner experiment failed', () => {
+      orchestrator.loadPlan(standardPlan);
+      orchestrator.startExecution();
+      orchestrator.handleWorkerResponse(completedResponse('setup'));
+      orchestrator.handleWorkerResponse(
+        spawnResponse('pivot', [
+          { id: 'v1', prompt: 'A' },
+          { id: 'v2', prompt: 'B' },
+        ]),
+      );
+
+      // Fail v1 (but it still has branch/commit from before failure)
+      orchestrator.handleWorkerResponse(failedResponse('pivot-exp-v1', 'build failed'));
+      orchestrator.handleWorkerResponse(completedResponse('pivot-exp-v2'));
+
+      // Simulate task-executor having set branch/commit before failure
+      persistence.updateTask('pivot-exp-v1', {
+        branch: 'experiment/pivot-exp-v1-failed',
+        commit: 'failed123',
+      });
+
+      orchestrator.selectExperiment('pivot-reconciliation', 'pivot-exp-v1');
+
+      const recon = orchestrator.getTask('pivot-reconciliation')!;
+      expect(recon.status).toBe('completed');
+      expect(recon.branch).toBe('experiment/pivot-exp-v1-failed');
+      expect(recon.commit).toBe('failed123');
+    });
+  });
 });

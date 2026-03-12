@@ -426,10 +426,13 @@ export class Orchestrator {
     const task = this.stateMachine.getTask(taskId);
     if (!task || !task.isReconciliation) return [];
 
+    const winner = this.stateMachine.getTask(experimentId);
     const changes: Partial<TaskState> = {
       status: 'completed',
       selectedExperiment: experimentId,
       completedAt: new Date(),
+      branch: winner?.branch,
+      commit: winner?.commit,
     };
     this.writeAndSync(taskId, changes);
     const delta: TaskDelta = { type: 'updated', taskId, changes };
