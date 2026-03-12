@@ -40,6 +40,7 @@ export interface OrchestratorPersistence {
     onFinish?: string;
     baseBranch?: string;
     featureBranch?: string;
+    mergeMode?: 'manual' | 'automatic';
   }): void;
   updateWorkflow?(workflowId: string, changes: { status?: string; updatedAt?: string }): void;
   saveTask(workflowId: string, task: TaskState): void;
@@ -66,6 +67,7 @@ export interface PlanDefinition {
   onFinish?: 'none' | 'merge' | 'pull_request';
   baseBranch?: string;
   featureBranch?: string;
+  mergeMode?: 'manual' | 'automatic';
   tasks: Array<{
     id: string;
     description: string;

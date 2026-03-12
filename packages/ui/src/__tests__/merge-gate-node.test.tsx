@@ -41,4 +41,40 @@ describe('MergeGateNode', () => {
     renderNode({ status: 'pending', label: 'All tasks must pass', onFinish: 'merge' });
     expect(screen.getByTestId('merge-branch-display')).toBeInTheDocument();
   });
+
+  it('displays manual merge mode by default', () => {
+    renderNode({ status: 'pending', label: 'All tasks must pass', onFinish: 'merge', baseBranch: 'master' });
+    expect(screen.getByTestId('merge-mode-label')).toHaveTextContent('Manual');
+  });
+
+  it('displays automatic merge mode when specified', () => {
+    renderNode({ status: 'pending', label: 'All tasks must pass', onFinish: 'merge', baseBranch: 'master', mergeMode: 'automatic' });
+    expect(screen.getByTestId('merge-mode-label')).toHaveTextContent('Automatic');
+  });
+
+  it('displays manual merge mode when explicitly specified', () => {
+    renderNode({ status: 'pending', label: 'All tasks must pass', onFinish: 'merge', baseBranch: 'master', mergeMode: 'manual' });
+    expect(screen.getByTestId('merge-mode-label')).toHaveTextContent('Manual');
+  });
+
+  it('shows approve button for manual merge gate with completed status', () => {
+    renderNode({ status: 'completed', label: 'All tasks must pass', onFinish: 'merge', baseBranch: 'master', mergeMode: 'manual', workflowId: 'wf-123' });
+    expect(screen.getByTestId('approve-merge-button')).toBeInTheDocument();
+    expect(screen.getByTestId('approve-merge-button')).toHaveTextContent('Approve Merge');
+  });
+
+  it('does not show approve button for automatic merge gate with completed status', () => {
+    renderNode({ status: 'completed', label: 'All tasks must pass', onFinish: 'merge', baseBranch: 'master', mergeMode: 'automatic', workflowId: 'wf-123' });
+    expect(screen.queryByTestId('approve-merge-button')).not.toBeInTheDocument();
+  });
+
+  it('does not show approve button for manual merge gate with pending status', () => {
+    renderNode({ status: 'pending', label: 'All tasks must pass', onFinish: 'merge', baseBranch: 'master', mergeMode: 'manual', workflowId: 'wf-123' });
+    expect(screen.queryByTestId('approve-merge-button')).not.toBeInTheDocument();
+  });
+
+  it('does not show approve button for manual merge gate with failed status', () => {
+    renderNode({ status: 'failed', label: 'All tasks must pass', onFinish: 'merge', baseBranch: 'master', mergeMode: 'manual', workflowId: 'wf-123' });
+    expect(screen.queryByTestId('approve-merge-button')).not.toBeInTheDocument();
+  });
 });

@@ -54,6 +54,7 @@ A plan has this structure:
 \`\`\`yaml
 name: "Plan Name"
 onFinish: merge         # "merge" (default), "none", or "pull_request"
+mergeMode: manual       # "manual" (default) or "automatic"
 baseBranch: ${defaultBranch}        # base git branch
 featureBranch: plan/my-feature  # auto-generated from plan name if omitted
 tasks:
@@ -628,6 +629,7 @@ export function extractYamlPlan(text: string, defaultBranch?: string): PlanDefin
     }
 
     const onFinish = (plan.onFinish as PlanDefinition['onFinish']) ?? 'merge';
+    const mergeMode = (plan.mergeMode as PlanDefinition['mergeMode']) ?? 'manual';
     let featureBranch = plan.featureBranch as string | undefined;
     if ((onFinish === 'merge' || onFinish === 'pull_request') && !featureBranch) {
       const slug = (plan.name as string).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
@@ -636,6 +638,7 @@ export function extractYamlPlan(text: string, defaultBranch?: string): PlanDefin
     return {
       name: plan.name,
       onFinish,
+      mergeMode,
       baseBranch: (plan.baseBranch as string) ?? defaultBranch ?? 'main',
       featureBranch,
       tasks: (plan.tasks as any[]).map((t) => ({

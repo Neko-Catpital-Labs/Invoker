@@ -72,6 +72,7 @@ function TaskDAGInner({ tasks, workflows, onTaskClick, onTaskDoubleClick, onTask
       const wfMeta = workflows?.get(wfGroupId);
       const effectiveOnFinish = (wfMeta?.onFinish as 'none' | 'merge' | 'pull_request') ?? 'merge';
       const wfBaseBranch = wfMeta?.baseBranch;
+      const wfMergeMode = (wfMeta?.mergeMode as 'manual' | 'automatic') ?? 'manual';
       const positions = layoutNodes(wfTasks);
 
       // Find bounding box to apply yOffset
@@ -95,6 +96,8 @@ function TaskDAGInner({ tasks, workflows, onTaskClick, onTaskDoubleClick, onTask
               label: 'All tasks must pass',
               onFinish: effectiveOnFinish === 'pull_request' ? 'pull_request' : 'merge',
               baseBranch: wfBaseBranch,
+              mergeMode: wfMergeMode,
+              workflowId: wfGroupId,
             },
           });
         } else {

@@ -128,6 +128,18 @@ describe('extractYamlPlan', () => {
     expect(plan!.baseBranch).toBe('develop');
   });
 
+  it('defaults mergeMode to manual when not specified', () => {
+    const text = '```yaml\nname: "Defaults"\ntasks:\n  - id: t1\n    description: "test"\n    dependencies: []\n```';
+    const plan = extractYamlPlan(text);
+    expect(plan!.mergeMode).toBe('manual');
+  });
+
+  it('parses mergeMode from YAML when specified', () => {
+    const text = '```yaml\nname: "Explicit"\nmergeMode: automatic\ntasks:\n  - id: t1\n    description: "test"\n    dependencies: []\n```';
+    const plan = extractYamlPlan(text);
+    expect(plan!.mergeMode).toBe('automatic');
+  });
+
   it('defaults dependencies to empty array', () => {
     const text = '```yaml\nname: "NoDeps"\ntasks:\n  - id: t1\n    description: "test"\n```';
     const plan = extractYamlPlan(text);

@@ -29,6 +29,7 @@ export interface WorkflowMeta {
   status: string;
   baseBranch?: string;
   onFinish?: string;
+  mergeMode?: string;
 }
 
 // ── Workflow Status ──────────────────────────────────────────
