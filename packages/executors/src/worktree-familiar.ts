@@ -556,7 +556,8 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
 
   private provisionWorktree(dir: string): Promise<void> {
     return new Promise((resolve, reject) => {
-      const child = spawn('/bin/sh', ['-c', 'pnpm install --frozen-lockfile'], {
+      const cmd = 'pnpm install --frozen-lockfile && node scripts/rebuild-for-electron.js';
+      const child = spawn('/bin/sh', ['-c', cmd], {
         cwd: dir,
         env: cleanElectronEnv(),
         stdio: ['ignore', 'pipe', 'pipe'],
@@ -565,7 +566,7 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
       child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
       child.on('close', (code) => {
         if (code === 0) resolve();
-        else reject(new Error(`pnpm install failed in worktree ${dir} (exit ${code}): ${stderr.trim()}`));
+        else reject(new Error(`Worktree provisioning failed in ${dir} (exit ${code}): ${stderr.trim()}`));
       });
     });
   }
