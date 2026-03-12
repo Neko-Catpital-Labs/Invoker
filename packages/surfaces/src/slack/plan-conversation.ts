@@ -77,7 +77,13 @@ Rules:
 2. After exploring, generate the YAML plan directly. Do NOT ask clarifying questions unless absolutely necessary — prefer making reasonable assumptions based on the code you read.
 3. Keep plans focused — 3-8 tasks maximum.
 4. Each task should have either a \`command\` or a \`prompt\`, not both.
-5. Every step MUST be testable. Every implementation task MUST have a corresponding test task that verifies it works using a concrete, executable \`command\` (e.g. \`pnpm test\`, \`git diff --name-only\`). The test command must produce a clear pass/fail exit code. Do NOT skip tests for any step. Do NOT use prompts for test tasks — use commands only. NEVER use \`npx vitest run\` — always use \`pnpm test\` which runs through electron-vitest with the correct native module ABI.
+5. Every step MUST be testable. Every implementation task MUST have a corresponding test task that verifies it works using a concrete, executable \`command\` (e.g. \`cd packages/protocol && pnpm test\`, \`git diff --name-only\`). The test command must produce a clear pass/fail exit code. Do NOT skip tests for any step. Do NOT use prompts for test tasks — use commands only.
+   Test command rules:
+   - ALWAYS cd into the package directory first: \`cd packages/<pkg> && pnpm test\`
+   - To target a specific test file: \`cd packages/<pkg> && pnpm test -- src/__tests__/file.test.ts\`
+   - NEVER run \`pnpm test <path>\` from the repo root — it runs \`pnpm -r test\` across all packages and the path will be wrong
+   - NEVER use \`npx vitest run\` — always use \`pnpm test\` which runs through electron-vitest with the correct native module ABI
+   - NEVER invent test file names. Use list_files or search_files to verify the test file exists before referencing it in a command.
 6. Use meaningful task IDs (kebab-case).
 7. When ready, output the plan inside a \`\`\`yaml code block.
 8. Always include \`dependencies\` (even if empty array).
@@ -551,6 +557,26 @@ export function globToRegex(pattern: string): RegExp {
   return new RegExp(`^${escaped}$`);
 }
 
+// ── Command Rewriting ────────────────────────────────────────
+
+/**
+ * Rewrite `pnpm test packages/<pkg>/...` (run from repo root, incorrect)
+ * into `cd packages/<pkg> && pnpm test -- <relative-path>` (correct).
+ */
+export function rewritePnpmTestCommand(cmd: string): string {
+  const withFile = cmd.match(/^(pnpm test)\s+(?:--\s+)?packages\/([^/\s]+)\/(\S+)(.*)/);
+  if (withFile) {
+    const [, , pkg, rest, suffix] = withFile;
+    return `cd packages/${pkg} && pnpm test -- ${rest}${suffix}`;
+  }
+  const pkgOnly = cmd.match(/^(pnpm test)\s+(?:--\s+)?packages\/([^/\s]+)(.*)/);
+  if (pkgOnly) {
+    const [, , pkg, suffix] = pkgOnly;
+    return `cd packages/${pkg} && pnpm test${suffix}`;
+  }
+  return cmd;
+}
+
 // ── YAML Extraction ─────────────────────────────────────────
 
 /**
@@ -591,6 +617,13 @@ export function extractYamlPlan(text: string, defaultBranch?: string): PlanDefin
       if (task.command && /\bnpx vitest run\b/.test(task.command)) {
         console.warn(`extractYamlPlan: task "${task.id}" uses 'npx vitest run' — rewriting to 'pnpm test'`);
         task.command = task.command.replace(/\bnpx vitest run\b/, 'pnpm test');
+      }
+      if (task.command && /\bpnpm test\b.*\bpackages\//.test(task.command)) {
+        const rewritten = rewritePnpmTestCommand(task.command);
+        if (rewritten !== task.command) {
+          console.warn(`extractYamlPlan: task "${task.id}" uses root-level 'pnpm test packages/...' — rewriting to '${rewritten}'`);
+          task.command = rewritten;
+        }
       }
     }
 

@@ -27,7 +27,7 @@ export class RepoPool {
 
   constructor(config: RepoPoolConfig) {
     this.cacheDir = config.cacheDir;
-    this.maxWorktrees = config.maxWorktrees ?? 3;
+    this.maxWorktrees = config.maxWorktrees ?? 5;
     this.worktreeBaseDir = config.worktreeBaseDir;
   }
 

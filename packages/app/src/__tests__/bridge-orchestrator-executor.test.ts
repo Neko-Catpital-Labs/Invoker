@@ -186,6 +186,101 @@ describe('Flow 1: rebase-and-retry', () => {
   });
 });
 
+// ── Flow 1b: Rebase & Retry from any node ───────────────────
+
+describe('Flow 1b: rebase-and-retry from any node', () => {
+  let h: TestHarness;
+
+  beforeEach(() => {
+    h = createTestHarness();
+  });
+
+  it('clean rebase triggered from leaf task restarts merge gate only', async () => {
+    h.loadAndStart(PARALLEL_PLAN);
+
+    h.completeTask('A');
+    h.completeTask('B');
+    h.completeTask('C');
+
+    const mergeId = h.getAllTasks().find(t => t.isMergeNode)!.id;
+    const mergeTask = h.getTask(mergeId)!;
+
+    // Merge fails
+    h.git.onMerge(new Error('CONFLICT'));
+    await h.executor.executeTasks([mergeTask]);
+    expect(h.getTask(mergeId)!.status).toBe('failed');
+
+    // Trigger rebase from leaf task A (not the merge gate)
+    const leafTask = h.getTask('A')!;
+    const result = await h.executor.rebaseTaskBranches(
+      leafTask.workflowId!,
+      'master',
+    );
+    expect(result.success).toBe(true);
+
+    // Find merge gate from workflow (same logic as the updated IPC handler)
+    const foundMerge = h.getAllTasks().find(
+      t => t.workflowId === leafTask.workflowId && t.isMergeNode,
+    );
+    expect(foundMerge).toBeDefined();
+
+    // Clean rebase: restart merge gate only
+    h.git.reset();
+    const restarted = h.orchestrator.restartTask(foundMerge!.id);
+    expect(restarted.some(t => t.id === mergeId && t.status === 'running')).toBe(true);
+
+    // Leaf tasks stay completed
+    expect(h.getTask('A')!.status).toBe('completed');
+    expect(h.getTask('B')!.status).toBe('completed');
+    expect(h.getTask('C')!.status).toBe('completed');
+  });
+
+  it('conflicting rebase triggered from leaf task resets entire DAG', async () => {
+    h.loadAndStart(PARALLEL_PLAN);
+
+    h.completeTask('A');
+    h.completeTask('B');
+    h.persistence.updateTask('A', { branch: 'experiment/task-a-abc12345' } as any);
+    h.persistence.updateTask('B', { branch: 'experiment/task-b-def67890' } as any);
+    (h.orchestrator as any).refreshFromDb();
+
+    h.completeTask('C');
+
+    const mergeId = h.getAllTasks().find(t => t.isMergeNode)!.id;
+    const mergeTask = h.getTask(mergeId)!;
+
+    // Merge fails
+    h.git.onMerge(new Error('CONFLICT'));
+    await h.executor.executeTasks([mergeTask]);
+    expect(h.getTask(mergeId)!.status).toBe('failed');
+
+    // Trigger rebase from leaf task B (not the merge gate)
+    const leafTask = h.getTask('B')!;
+    h.git.on(
+      (args) => args[0] === 'rebase',
+      new Error('CONFLICT in file.txt'),
+    );
+    const result = await h.executor.rebaseTaskBranches(
+      leafTask.workflowId!,
+      'master',
+    );
+    expect(result.success).toBe(false);
+
+    // Conflict: reset entire DAG
+    const workflowStarted = h.orchestrator.restartWorkflow(leafTask.workflowId!);
+
+    // All non-merge tasks should be pending or running
+    const nonMergeTasks = h.getAllTasks().filter(t => !t.isMergeNode);
+    for (const t of nonMergeTasks) {
+      expect(['pending', 'running']).toContain(t.status);
+    }
+
+    // Root tasks should have started
+    expect(workflowStarted.some(t => t.id === 'A')).toBe(true);
+    expect(workflowStarted.some(t => t.id === 'B')).toBe(true);
+  });
+});
+
 // ── Flow 2: Restart Task ────────────────────────────────────
 
 describe('Flow 2: restart task', () => {

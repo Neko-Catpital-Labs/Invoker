@@ -553,13 +553,16 @@ async function headlessRestart(taskId: string): Promise<void> {
   await waitForCompletion();
 }
 
-async function headlessRebaseAndRetry(mergeTaskId: string): Promise<void> {
-  if (!mergeTaskId) throw new Error('Missing arguments. Usage: --headless rebase-and-retry <mergeTaskId>');
-  const workflowId = restoreWorkflowForTask(mergeTaskId);
+async function headlessRebaseAndRetry(taskId: string): Promise<void> {
+  if (!taskId) throw new Error('Missing arguments. Usage: --headless rebase-and-retry <taskId>');
+  const workflowId = restoreWorkflowForTask(taskId);
 
-  const task = orchestrator.getTask(mergeTaskId);
-  if (!task) throw new Error(`Task ${mergeTaskId} not found`);
-  if (!task.isMergeNode) throw new Error(`Task ${mergeTaskId} is not a merge gate`);
+  const task = orchestrator.getTask(taskId);
+  if (!task) throw new Error(`Task ${taskId} not found`);
+
+  const mergeTask = orchestrator.getAllTasks().find(
+    t => t.workflowId === workflowId && t.isMergeNode,
+  );
 
   const workflow = persistence.loadWorkflow(workflowId);
   const te = new TaskExecutor({
@@ -588,8 +591,8 @@ async function headlessRebaseAndRetry(mergeTaskId: string): Promise<void> {
   }
 
   let runnable: ReturnType<typeof orchestrator.restartTask>;
-  if (result.success) {
-    runnable = orchestrator.restartTask(mergeTaskId).filter(t => t.status === 'running');
+  if (result.success && mergeTask) {
+    runnable = orchestrator.restartTask(mergeTask.id).filter(t => t.status === 'running');
     console.log(`Clean rebase — restarting merge gate only (${runnable.length} task(s))`);
   } else {
     runnable = orchestrator.restartWorkflow(workflowId).filter(t => t.status === 'running');
@@ -1120,31 +1123,32 @@ function setupGuiMode(): void {
       }
     });
 
-    ipcMain.handle('invoker:rebase-and-retry', async (_event, mergeTaskId: string) => {
-      console.log(`[ipc] rebase-and-retry: "${mergeTaskId}"`);
+    ipcMain.handle('invoker:rebase-and-retry', async (_event, taskId: string) => {
+      console.log(`[ipc] rebase-and-retry: "${taskId}"`);
       try {
-        const task = orchestrator.getTask(mergeTaskId);
-        if (!task) throw new Error(`Task ${mergeTaskId} not found`);
-        if (!task.isMergeNode) throw new Error(`Task ${mergeTaskId} is not a merge gate`);
+        const task = orchestrator.getTask(taskId);
+        if (!task) throw new Error(`Task ${taskId} not found`);
+        if (!task.workflowId) throw new Error(`Task ${taskId} has no associated workflow`);
 
-        const workflow = task.workflowId
-          ? persistence.loadWorkflow(task.workflowId)
-          : undefined;
+        const workflowId = task.workflowId;
+        const mergeTask = orchestrator.getAllTasks().find(
+          t => t.workflowId === workflowId && t.isMergeNode,
+        );
+
+        const workflow = persistence.loadWorkflow(workflowId);
         const baseBranch = workflow?.baseBranch ?? invokerConfig.defaultBranch ?? await taskExecutor.detectDefaultBranch();
 
-        if (!task.workflowId) throw new Error('Merge task has no associated workflow');
+        const result = await taskExecutor.rebaseTaskBranches(workflowId, baseBranch);
 
-        const result = await taskExecutor.rebaseTaskBranches(task.workflowId, baseBranch);
-
-        if (result.success) {
+        if (result.success && mergeTask) {
           // Clean rebase: restart merge gate only
-          const started = orchestrator.restartTask(mergeTaskId);
+          const started = orchestrator.restartTask(mergeTask.id);
           const runnable = started.filter(t => t.status === 'running');
           await taskExecutor.executeTasks(runnable);
         } else {
-          // Conflicting rebase: reset entire DAG and re-execute from scratch
-          console.log(`[ipc] rebase-and-retry: rebase had conflicts, resetting entire workflow ${task.workflowId}`);
-          const started = orchestrator.restartWorkflow(task.workflowId);
+          // Conflicting rebase or no merge gate: reset entire DAG
+          console.log(`[ipc] rebase-and-retry: resetting entire workflow ${workflowId}`);
+          const started = orchestrator.restartWorkflow(workflowId);
           const runnable = started.filter(t => t.status === 'running');
           await taskExecutor.executeTasks(runnable);
         }

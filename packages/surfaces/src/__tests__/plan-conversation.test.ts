@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { PlanConversation, extractYamlPlan, globToRegex, isDangerousCommand } from '../slack/plan-conversation.js';
+import { PlanConversation, extractYamlPlan, rewritePnpmTestCommand, globToRegex, isDangerousCommand } from '../slack/plan-conversation.js';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
@@ -174,6 +174,20 @@ tasks:
     expect(plan!.tasks[0].command).toBe('cd packages/surfaces && pnpm test');
   });
 
+  it('rewrites pnpm test packages/... to cd packages/... && pnpm test', () => {
+    const text = `\`\`\`yaml
+name: "Rewrite Root Test"
+tasks:
+  - id: run-tests
+    description: "Run tests"
+    command: "pnpm test packages/protocol/src/__tests__/validation.test.ts"
+    dependencies: []
+\`\`\``;
+    const plan = extractYamlPlan(text);
+    expect(plan).not.toBeNull();
+    expect(plan!.tasks[0].command).toBe('cd packages/protocol && pnpm test -- src/__tests__/validation.test.ts');
+  });
+
   describe('diagnostic logging', () => {
     let warnSpy: ReturnType<typeof vi.spyOn>;
 
@@ -225,6 +239,33 @@ tasks:
         expect.stringContaining('task missing id or description'),
       );
     });
+  });
+});
+
+describe('rewritePnpmTestCommand', () => {
+  it('rewrites pnpm test packages/<pkg>/<path> to cd + pnpm test -- <relpath>', () => {
+    expect(rewritePnpmTestCommand('pnpm test packages/protocol/src/__tests__/validation.test.ts'))
+      .toBe('cd packages/protocol && pnpm test -- src/__tests__/validation.test.ts');
+  });
+
+  it('rewrites pnpm test -- packages/<pkg>/<path>', () => {
+    expect(rewritePnpmTestCommand('pnpm test -- packages/surfaces/src/__tests__/slack.test.ts'))
+      .toBe('cd packages/surfaces && pnpm test -- src/__tests__/slack.test.ts');
+  });
+
+  it('rewrites pnpm test packages/<pkg> (no file)', () => {
+    expect(rewritePnpmTestCommand('pnpm test packages/protocol'))
+      .toBe('cd packages/protocol && pnpm test');
+  });
+
+  it('preserves trailing suffixes like 2>&1', () => {
+    expect(rewritePnpmTestCommand('pnpm test packages/ui/src/__tests__/foo.test.ts 2>&1'))
+      .toBe('cd packages/ui && pnpm test -- src/__tests__/foo.test.ts 2>&1');
+  });
+
+  it('returns already-correct commands unchanged', () => {
+    expect(rewritePnpmTestCommand('cd packages/protocol && pnpm test'))
+      .toBe('cd packages/protocol && pnpm test');
   });
 });
 

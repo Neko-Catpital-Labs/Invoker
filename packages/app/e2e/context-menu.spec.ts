@@ -8,6 +8,20 @@
 
 import { test, expect, TEST_PLAN, loadPlan } from './fixtures/electron-app.js';
 
+const MERGE_PLAN = {
+  name: 'Context Menu Merge Test',
+  onFinish: 'merge' as const,
+  baseBranch: 'master',
+  tasks: [
+    {
+      id: 'leaf-task',
+      description: 'A regular leaf task',
+      command: 'echo hello',
+      dependencies: [],
+    },
+  ],
+};
+
 test.describe('Context menu', () => {
   test('right-clicking a task node shows context menu', async ({ page }) => {
     await loadPlan(page, TEST_PLAN);
@@ -68,5 +82,25 @@ test.describe('Context menu', () => {
     const openTermBtn = page.locator('button').filter({ hasText: 'Open Terminal' });
     await expect(openTermBtn).toBeVisible({ timeout: 2000 });
     await expect(openTermBtn).toBeEnabled();
+  });
+
+  test('Rebase & Retry is visible on non-merge task nodes in a merge workflow', async ({ page }) => {
+    await loadPlan(page, MERGE_PLAN);
+
+    await page.locator('[data-testid="rf__node-leaf-task"]').click({ button: 'right' });
+
+    const rebaseBtn = page.locator('button').filter({ hasText: 'Rebase & Retry' });
+    await expect(rebaseBtn).toBeVisible({ timeout: 2000 });
+    await expect(rebaseBtn).toBeEnabled();
+  });
+
+  test('Rebase & Retry is visible on tasks from non-merge workflow too', async ({ page }) => {
+    await loadPlan(page, TEST_PLAN);
+
+    await page.locator('[data-testid="rf__node-task-alpha"]').click({ button: 'right' });
+
+    await expect(page.getByText('Restart Task')).toBeVisible({ timeout: 2000 });
+    // All tasks have workflowId, so Rebase & Retry should be available
+    await expect(page.locator('button').filter({ hasText: 'Rebase & Retry' })).toBeVisible({ timeout: 2000 });
   });
 });
