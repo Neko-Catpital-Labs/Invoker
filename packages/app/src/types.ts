@@ -107,6 +107,9 @@ export interface InvokerAPI {
 
   // Change merge target branch for a workflow
   setMergeBranch: (workflowId: string, baseBranch: string) => Promise<void>;
+
+  // Approve manual merge: perform final merge of featureBranch into baseBranch
+  approveMerge: (workflowId: string) => Promise<void>;
 }
 
 // ── Augment global Window ────────────────────────────────────

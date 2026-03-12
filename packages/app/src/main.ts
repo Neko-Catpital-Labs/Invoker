@@ -1180,6 +1180,16 @@ function setupGuiMode(): void {
       }
     });
 
+    ipcMain.handle('invoker:approve-merge', async (_event, workflowId: string) => {
+      console.log(`[ipc] approve-merge: "${workflowId}"`);
+      try {
+        await taskExecutor.approveMerge(workflowId);
+      } catch (err) {
+        console.error(`[ipc] approve-merge failed: ${err}`);
+        throw err;
+      }
+    });
+
     ipcMain.handle('invoker:edit-task-command', async (_event, taskId: string, newCommand: string) => {
       console.log(`[ipc] edit-task-command: "${taskId}" → "${newCommand}"`);
       try {

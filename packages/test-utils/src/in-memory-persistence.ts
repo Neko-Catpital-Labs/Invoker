@@ -9,6 +9,7 @@ export class InMemoryPersistence implements OrchestratorPersistence {
     id: string; name: string; status: string;
     createdAt: string; updatedAt: string;
     onFinish?: string; baseBranch?: string; featureBranch?: string;
+    mergeMode?: 'manual' | 'automatic';
     generation?: number;
   }>();
   tasks = new Map<string, { workflowId: string; task: TaskState }>();
@@ -17,6 +18,7 @@ export class InMemoryPersistence implements OrchestratorPersistence {
     id: string; name: string; status: string;
     createdAt?: string; updatedAt?: string;
     onFinish?: string; baseBranch?: string; featureBranch?: string;
+    mergeMode?: 'manual' | 'automatic';
     generation?: number;
   }): void {
     const now = new Date().toISOString();

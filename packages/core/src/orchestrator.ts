@@ -217,6 +217,7 @@ export class Orchestrator {
       onFinish: plan.onFinish,
       baseBranch: plan.baseBranch,
       featureBranch: plan.featureBranch,
+      mergeMode: plan.mergeMode,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     });

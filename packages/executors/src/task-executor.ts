@@ -315,14 +315,16 @@ export class TaskExecutor {
       ? this.persistence.loadWorkflow(workflowId)
       : undefined;
     const onFinish = workflow?.onFinish ?? 'none';
+    const mergeMode = workflow?.mergeMode ?? 'manual';
     const baseBranch = workflow?.baseBranch ?? this.defaultBranch ?? await this.detectDefaultBranch();
     const featureBranch = workflow?.featureBranch;
 
     let response: WorkResponse;
 
     if (onFinish !== 'none' && featureBranch) {
+      const effectiveOnFinish = mergeMode === 'manual' ? 'none' : onFinish;
       try {
-        await this.consolidateAndMerge(onFinish, baseBranch, featureBranch, workflowId, workflow?.name);
+        await this.consolidateAndMerge(effectiveOnFinish, baseBranch, featureBranch, workflowId, workflow?.name);
         response = {
           requestId: `merge-${task.id}`,
           actionId: task.id,
@@ -353,6 +355,37 @@ export class TaskExecutor {
     const newlyStarted = this.orchestrator.handleWorkerResponse(response) ?? [];
     if (newlyStarted.length > 0) {
       this.executeTasks(newlyStarted);
+    }
+  }
+
+  async approveMerge(workflowId: string): Promise<void> {
+    const workflow = this.persistence.loadWorkflow(workflowId);
+    if (!workflow) throw new Error(`Workflow ${workflowId} not found`);
+
+    const onFinish = workflow.onFinish ?? 'none';
+    const baseBranch = workflow.baseBranch ?? this.defaultBranch ?? await this.detectDefaultBranch();
+    const featureBranch = workflow.featureBranch;
+
+    if (onFinish === 'none' || !featureBranch) {
+      throw new Error(`Workflow ${workflowId} has no merge configured (onFinish=${onFinish}, featureBranch=${featureBranch})`);
+    }
+
+    const originalBranch = await this.execGit(['branch', '--show-current']);
+    try {
+      const mergeMessage = workflow.name ?? 'Workflow';
+      if (onFinish === 'merge') {
+        await this.execGit(['checkout', baseBranch]);
+        await this.execGit(['merge', '--no-ff', '-m', mergeMessage, featureBranch]);
+        console.log(`[merge] Approved: merged ${featureBranch} into ${baseBranch} (no-ff)`);
+      } else if (onFinish === 'pull_request') {
+        await this.execGit(['push', '-u', 'origin', featureBranch]);
+        await this.execPr(baseBranch, featureBranch, mergeMessage);
+        console.log(`[merge] Approved: created pull request ${featureBranch} → ${baseBranch}`);
+      }
+    } catch (err) {
+      try { await this.execGit(['merge', '--abort']); } catch { /* no merge in progress */ }
+      try { await this.execGit(['checkout', originalBranch]); } catch { /* best effort */ }
+      throw err;
     }
   }
 

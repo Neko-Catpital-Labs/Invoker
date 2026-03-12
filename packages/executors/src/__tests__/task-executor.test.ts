@@ -569,4 +569,179 @@ describe('TaskExecutor', () => {
       expect(checkoutCalls[0][1]).toBe('experiment/t1');
     });
   });
+
+  describe('manual merge mode', () => {
+    it('executeMergeNode skips final merge when mergeMode=manual', async () => {
+      const allTasks = [
+        makeTask({ id: 't1', workflowId: 'wf-1', status: 'completed', branch: 'experiment/t1' }),
+      ];
+      const orchestrator = {
+        getTask: (id: string) => allTasks.find(t => t.id === id),
+        getAllTasks: () => allTasks,
+        handleWorkerResponse: vi.fn(() => []),
+      };
+      const persistence = {
+        loadWorkflow: () => ({
+          id: 'wf-1',
+          onFinish: 'merge',
+          mergeMode: 'manual',
+          baseBranch: 'master',
+          featureBranch: 'plan/feature',
+          name: 'Test Workflow',
+        }),
+        updateTask: vi.fn(),
+      };
+      const onComplete = vi.fn();
+      const executor = new TaskExecutor({
+        orchestrator: orchestrator as any,
+        persistence: persistence as any,
+        familiarRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+        callbacks: { onComplete },
+      });
+
+      const gitCalls: string[][] = [];
+      (executor as any).execGit = async (args: string[]) => {
+        gitCalls.push(args);
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        return '';
+      };
+
+      const mergeTask = makeTask({
+        id: '__merge__wf-1',
+        status: 'running',
+        isMergeNode: true,
+        workflowId: 'wf-1',
+      });
+
+      await (executor as any).executeMergeNode(mergeTask);
+
+      // Should consolidate task branches into featureBranch
+      const consolidateMerge = gitCalls.find(c => c[0] === 'merge' && c.includes('experiment/t1'));
+      expect(consolidateMerge).toBeDefined();
+
+      // Should NOT merge featureBranch into baseBranch
+      const finalMerge = gitCalls.find(c =>
+        c[0] === 'merge' && c.includes('plan/feature') && c.includes('--no-ff'),
+      );
+      expect(finalMerge).toBeUndefined();
+
+      // Should still report completed
+      expect(orchestrator.handleWorkerResponse).toHaveBeenCalledWith(
+        expect.objectContaining({ status: 'completed' }),
+      );
+    });
+
+    it('executeMergeNode performs full merge when mergeMode=automatic', async () => {
+      const allTasks = [
+        makeTask({ id: 't1', workflowId: 'wf-1', status: 'completed', branch: 'experiment/t1' }),
+      ];
+      const orchestrator = {
+        getTask: (id: string) => allTasks.find(t => t.id === id),
+        getAllTasks: () => allTasks,
+        handleWorkerResponse: vi.fn(() => []),
+      };
+      const persistence = {
+        loadWorkflow: () => ({
+          id: 'wf-1',
+          onFinish: 'merge',
+          mergeMode: 'automatic',
+          baseBranch: 'master',
+          featureBranch: 'plan/feature',
+          name: 'Test Workflow',
+        }),
+        updateTask: vi.fn(),
+      };
+      const executor = new TaskExecutor({
+        orchestrator: orchestrator as any,
+        persistence: persistence as any,
+        familiarRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+        callbacks: { onComplete: vi.fn() },
+      });
+
+      const gitCalls: string[][] = [];
+      (executor as any).execGit = async (args: string[]) => {
+        gitCalls.push(args);
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        return '';
+      };
+
+      const mergeTask = makeTask({
+        id: '__merge__wf-1',
+        status: 'running',
+        isMergeNode: true,
+        workflowId: 'wf-1',
+      });
+
+      await (executor as any).executeMergeNode(mergeTask);
+
+      // Should perform final merge of featureBranch into baseBranch
+      const finalMerge = gitCalls.find(c =>
+        c[0] === 'merge' && c.includes('plan/feature') && c.includes('--no-ff'),
+      );
+      expect(finalMerge).toBeDefined();
+
+      expect(orchestrator.handleWorkerResponse).toHaveBeenCalledWith(
+        expect.objectContaining({ status: 'completed' }),
+      );
+    });
+
+    it('approveMerge performs the final merge step', async () => {
+      const persistence = {
+        loadWorkflow: () => ({
+          id: 'wf-1',
+          onFinish: 'merge',
+          baseBranch: 'master',
+          featureBranch: 'plan/feature',
+          name: 'Test Workflow',
+        }),
+        updateTask: vi.fn(),
+      };
+      const executor = new TaskExecutor({
+        orchestrator: { getTask: () => null, getAllTasks: () => [] } as any,
+        persistence: persistence as any,
+        familiarRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+      });
+
+      const gitCalls: string[][] = [];
+      (executor as any).execGit = async (args: string[]) => {
+        gitCalls.push(args);
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        return '';
+      };
+
+      await executor.approveMerge('wf-1');
+
+      // Should checkout baseBranch and merge featureBranch
+      const checkoutBase = gitCalls.find(c => c[0] === 'checkout' && c[1] === 'master');
+      expect(checkoutBase).toBeDefined();
+
+      const finalMerge = gitCalls.find(c =>
+        c[0] === 'merge' && c.includes('plan/feature') && c.includes('--no-ff'),
+      );
+      expect(finalMerge).toBeDefined();
+    });
+
+    it('approveMerge throws when workflow has no merge configured', async () => {
+      const persistence = {
+        loadWorkflow: () => ({
+          id: 'wf-1',
+          onFinish: 'none',
+          baseBranch: 'master',
+          name: 'Test Workflow',
+        }),
+        updateTask: vi.fn(),
+      };
+      const executor = new TaskExecutor({
+        orchestrator: { getTask: () => null, getAllTasks: () => [] } as any,
+        persistence: persistence as any,
+        familiarRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+      });
+
+      await expect(executor.approveMerge('wf-1')).rejects.toThrow('no merge configured');
+    });
+  });
 });

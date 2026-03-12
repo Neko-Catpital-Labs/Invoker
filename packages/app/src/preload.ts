@@ -72,6 +72,8 @@ const api: InvokerAPI = {
     ipcRenderer.invoke('invoker:rebase-and-retry', mergeTaskId),
   setMergeBranch: (workflowId: string, baseBranch: string) =>
     ipcRenderer.invoke('invoker:set-merge-branch', workflowId, baseBranch),
+  approveMerge: (workflowId: string) =>
+    ipcRenderer.invoke('invoker:approve-merge', workflowId),
 };
 
 contextBridge.exposeInMainWorld('invoker', api);

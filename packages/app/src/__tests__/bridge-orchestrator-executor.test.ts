@@ -915,3 +915,107 @@ describe('Flow 8: restart workflow with generation salt', () => {
     expect((wf5 as any).generation).toBe(5);
   });
 });
+
+// ── Flow 9: Manual Merge Mode ───────────────────────────────
+
+const MANUAL_MERGE_PLAN: PlanDefinition = {
+  name: 'Manual Merge Plan',
+  onFinish: 'merge',
+  mergeMode: 'manual',
+  baseBranch: 'master',
+  featureBranch: 'plan/manual-merge',
+  tasks: [
+    { id: 'A', description: 'Task A', command: 'echo a' },
+    { id: 'B', description: 'Task B', command: 'echo b' },
+  ],
+};
+
+describe('Flow 9: manual merge mode', () => {
+  let h: TestHarness;
+
+  beforeEach(() => {
+    h = createTestHarness();
+  });
+
+  it('merge node consolidates but does not merge into baseBranch in manual mode', async () => {
+    h.loadAndStart(MANUAL_MERGE_PLAN);
+
+    h.completeTask('A');
+    h.completeTask('B');
+
+    const mergeId = h.getAllTasks().find(t => t.isMergeNode)!.id;
+    const mergeTask = h.getTask(mergeId)!;
+    expect(mergeTask.status).toBe('running');
+
+    await h.executor.executeTasks([mergeTask]);
+
+    // Merge node should complete (consolidation succeeded)
+    expect(h.getTask(mergeId)!.status).toBe('completed');
+
+    // Verify git calls: consolidation happened but final merge did not
+    const consolidateBranch = h.git.calls.find(c =>
+      c[0] === 'checkout' && c[1] === '-b' && c[2] === 'plan/manual-merge',
+    );
+    expect(consolidateBranch).toBeDefined();
+
+    // No final merge of featureBranch into baseBranch
+    const finalMerge = h.git.calls.find(c =>
+      c[0] === 'merge' && c.includes('plan/manual-merge') && c.includes('--no-ff'),
+    );
+    expect(finalMerge).toBeUndefined();
+  });
+
+  it('approveMerge performs the final merge after manual consolidation', async () => {
+    h.loadAndStart(MANUAL_MERGE_PLAN);
+
+    h.completeTask('A');
+    h.completeTask('B');
+
+    const mergeId = h.getAllTasks().find(t => t.isMergeNode)!.id;
+    const mergeTask = h.getTask(mergeId)!;
+
+    await h.executor.executeTasks([mergeTask]);
+    expect(h.getTask(mergeId)!.status).toBe('completed');
+
+    // Clear git history from consolidation phase
+    h.git.reset();
+
+    // Approve the merge
+    const wfId = mergeTask.workflowId!;
+    await h.executor.approveMerge(wfId);
+
+    // Verify the final merge was performed
+    const checkoutBase = h.git.calls.find(c => c[0] === 'checkout' && c[1] === 'master');
+    expect(checkoutBase).toBeDefined();
+
+    const finalMerge = h.git.calls.find(c =>
+      c[0] === 'merge' && c.includes('plan/manual-merge') && c.includes('--no-ff'),
+    );
+    expect(finalMerge).toBeDefined();
+  });
+
+  it('automatic merge mode performs full merge in merge node', async () => {
+    const autoPlan: PlanDefinition = {
+      ...MANUAL_MERGE_PLAN,
+      name: 'Auto Merge Plan',
+      mergeMode: 'automatic',
+      featureBranch: 'plan/auto-merge',
+    };
+    h.loadAndStart(autoPlan);
+
+    h.completeTask('A');
+    h.completeTask('B');
+
+    const mergeId = h.getAllTasks().find(t => t.isMergeNode)!.id;
+    const mergeTask = h.getTask(mergeId)!;
+
+    await h.executor.executeTasks([mergeTask]);
+    expect(h.getTask(mergeId)!.status).toBe('completed');
+
+    // Verify git calls include the final merge
+    const finalMerge = h.git.calls.find(c =>
+      c[0] === 'merge' && c.includes('plan/auto-merge') && c.includes('--no-ff'),
+    );
+    expect(finalMerge).toBeDefined();
+  });
+});
