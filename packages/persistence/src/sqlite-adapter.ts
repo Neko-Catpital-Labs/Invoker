@@ -172,6 +172,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       'ALTER TABLE tasks ADD COLUMN action_request_id TEXT',
       'ALTER TABLE tasks ADD COLUMN experiments TEXT',
       'ALTER TABLE tasks ADD COLUMN selected_experiments TEXT',
+      'ALTER TABLE tasks ADD COLUMN utilization INTEGER',
     ];
     for (const sql of migrations) {
       try { this.db.exec(sql); } catch { /* Column already exists */ }
@@ -269,7 +270,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
         is_merge_node, auto_fix, max_fix_attempts,
         familiar_type, claude_session_id, workspace_path, container_id,
         action_request_id, experiments,
-        created_at, started_at, completed_at, last_heartbeat_at
+        created_at, started_at, completed_at, last_heartbeat_at,
+        utilization
       ) VALUES (
         ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?, ?,
@@ -281,7 +283,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
         ?, ?, ?,
         ?, ?, ?, ?,
         ?, ?,
-        ?, ?, ?, ?
+        ?, ?, ?, ?,
+        ?
       )
     `).run(
       task.id, workflowId, task.description, task.status,
@@ -312,6 +315,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       exec.startedAt?.toISOString() ?? null,
       exec.completedAt?.toISOString() ?? null,
       exec.lastHeartbeatAt?.toISOString() ?? null,
+      cfg.utilization ?? null,
     );
   }
 
@@ -367,6 +371,10 @@ export class SQLiteAdapter implements PersistenceAdapter {
       if ('maxFixAttempts' in changes.config) {
         setClauses.push('max_fix_attempts = ?');
         values.push(changes.config.maxFixAttempts ?? null);
+      }
+      if ('utilization' in changes.config) {
+        setClauses.push('utilization = ?');
+        values.push(changes.config.utilization ?? null);
       }
       if ('experimentVariants' in changes.config) {
         setClauses.push('experiment_variants = ?');
@@ -739,6 +747,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         approach: row.approach ?? undefined,
         testPlan: row.test_plan ?? undefined,
         reproCommand: row.repro_command ?? undefined,
+        utilization: row.utilization ?? undefined,
       },
       execution: {
         blockedBy: row.blocked_by ?? undefined,

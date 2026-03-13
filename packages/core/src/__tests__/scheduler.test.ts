@@ -4,13 +4,12 @@ import { TaskScheduler } from '../scheduler.js';
 describe('TaskScheduler', () => {
   describe('enqueue', () => {
     it('adds jobs sorted by priority (high first)', () => {
-      const scheduler = new TaskScheduler();
+      const scheduler = new TaskScheduler(200);
 
-      scheduler.enqueue({ taskId: 'low', priority: 1 });
-      scheduler.enqueue({ taskId: 'high', priority: 10 });
-      scheduler.enqueue({ taskId: 'mid', priority: 5 });
+      scheduler.enqueue({ taskId: 'low', priority: 1, utilization: 10 });
+      scheduler.enqueue({ taskId: 'high', priority: 10, utilization: 10 });
+      scheduler.enqueue({ taskId: 'mid', priority: 5, utilization: 10 });
 
-      // Dequeue order should be high → mid → low.
       expect(scheduler.dequeue()!.taskId).toBe('high');
       expect(scheduler.dequeue()!.taskId).toBe('mid');
       expect(scheduler.dequeue()!.taskId).toBe('low');
@@ -30,18 +29,18 @@ describe('TaskScheduler', () => {
       expect(job!.priority).toBe(7);
     });
 
-    it('respects maxWorkers limit (returns null when at capacity)', () => {
-      const scheduler = new TaskScheduler(2);
+    it('respects utilization budget (returns null when at capacity)', () => {
+      // Default utilization is 50, budget is 100 → fits 2 tasks
+      const scheduler = new TaskScheduler(100);
 
       scheduler.enqueue({ taskId: 'a', priority: 1 });
       scheduler.enqueue({ taskId: 'b', priority: 2 });
       scheduler.enqueue({ taskId: 'c', priority: 3 });
 
-      // Fill both worker slots.
-      expect(scheduler.dequeue()).not.toBeNull();
-      expect(scheduler.dequeue()).not.toBeNull();
+      expect(scheduler.dequeue()).not.toBeNull(); // c: 50/100
+      expect(scheduler.dequeue()).not.toBeNull(); // b: 100/100
 
-      // Third dequeue should return null — at capacity.
+      // Third dequeue should return null — at capacity
       expect(scheduler.dequeue()).toBeNull();
     });
 
@@ -53,22 +52,18 @@ describe('TaskScheduler', () => {
 
   describe('completeJob', () => {
     it('frees capacity, allows next dequeue', () => {
-      const scheduler = new TaskScheduler(1);
+      const scheduler = new TaskScheduler(50);
 
-      scheduler.enqueue({ taskId: 'a', priority: 1 });
-      scheduler.enqueue({ taskId: 'b', priority: 2 });
+      scheduler.enqueue({ taskId: 'a', priority: 1, utilization: 50 });
+      scheduler.enqueue({ taskId: 'b', priority: 2, utilization: 50 });
 
-      // Fill the single worker slot.
       const first = scheduler.dequeue();
       expect(first!.taskId).toBe('b');
 
-      // At capacity — dequeue blocked.
       expect(scheduler.dequeue()).toBeNull();
 
-      // Complete the running job.
       scheduler.completeJob('b');
 
-      // Now the next job can be dequeued.
       const second = scheduler.dequeue();
       expect(second).not.toBeNull();
       expect(second!.taskId).toBe('a');
@@ -77,42 +72,42 @@ describe('TaskScheduler', () => {
 
   describe('killAll', () => {
     it('clears queue and running set, returns counts', () => {
-      const scheduler = new TaskScheduler(4);
+      const scheduler = new TaskScheduler(200);
 
-      scheduler.enqueue({ taskId: 'a', priority: 1 });
-      scheduler.enqueue({ taskId: 'b', priority: 2 });
-      scheduler.enqueue({ taskId: 'c', priority: 3 });
+      scheduler.enqueue({ taskId: 'a', priority: 1, utilization: 50 });
+      scheduler.enqueue({ taskId: 'b', priority: 2, utilization: 50 });
+      scheduler.enqueue({ taskId: 'c', priority: 3, utilization: 50 });
 
-      // Move two into running state.
       scheduler.dequeue();
       scheduler.dequeue();
 
-      // 2 running, 1 queued.
       const result = scheduler.killAll();
       expect(result.killedCount).toBe(2);
       expect(result.clearedCount).toBe(1);
 
-      // Everything is empty now.
       const status = scheduler.getStatus();
       expect(status.queueLength).toBe(0);
       expect(status.runningCount).toBe(0);
+      expect(status.runningUtilization).toBe(0);
     });
   });
 
   describe('getStatus', () => {
     it('returns correct counts', () => {
-      const scheduler = new TaskScheduler(3);
+      const scheduler = new TaskScheduler(200);
 
-      scheduler.enqueue({ taskId: 'a', priority: 1 });
-      scheduler.enqueue({ taskId: 'b', priority: 2 });
-      scheduler.enqueue({ taskId: 'c', priority: 3 });
+      scheduler.enqueue({ taskId: 'a', priority: 1, utilization: 50 });
+      scheduler.enqueue({ taskId: 'b', priority: 2, utilization: 50 });
+      scheduler.enqueue({ taskId: 'c', priority: 3, utilization: 50 });
 
       scheduler.dequeue(); // 'c' moves to running
 
       const status = scheduler.getStatus();
       expect(status.queueLength).toBe(2);
       expect(status.runningCount).toBe(1);
-      expect(status.maxWorkers).toBe(3);
+      expect(status.maxUtilization).toBe(200);
+      expect(status.runningUtilization).toBe(50);
+      expect(status.maxWorkers).toBe(200);
     });
   });
 
@@ -131,144 +126,146 @@ describe('TaskScheduler', () => {
     });
   });
 
-  describe('weight-based scheduling', () => {
-    it('respects weight budget: heavy task blocks others', () => {
-      const scheduler = new TaskScheduler(3);
+  describe('utilization-based scheduling', () => {
+    it('respects utilization budget: exclusive task blocks others', () => {
+      const scheduler = new TaskScheduler(100);
 
-      scheduler.enqueue({ taskId: 'heavy', priority: 5, weight: 3 });
-      scheduler.enqueue({ taskId: 'light', priority: 1, weight: 1 });
+      scheduler.enqueue({ taskId: 'exclusive', priority: 5, utilization: 100 });
+      scheduler.enqueue({ taskId: 'light', priority: 1, utilization: 10 });
 
       const first = scheduler.dequeue();
-      expect(first!.taskId).toBe('heavy');
+      expect(first!.taskId).toBe('exclusive');
 
-      // Budget exhausted (3/3), light task cannot start
+      // Budget exhausted (100/100), light task cannot start
       expect(scheduler.dequeue()).toBeNull();
     });
 
     it('allows multiple light tasks within budget', () => {
-      const scheduler = new TaskScheduler(3);
+      const scheduler = new TaskScheduler(100);
 
-      scheduler.enqueue({ taskId: 'a', priority: 1, weight: 1 });
-      scheduler.enqueue({ taskId: 'b', priority: 1, weight: 1 });
-      scheduler.enqueue({ taskId: 'c', priority: 1, weight: 1 });
-      scheduler.enqueue({ taskId: 'd', priority: 1, weight: 1 });
+      scheduler.enqueue({ taskId: 'a', priority: 1, utilization: 25 });
+      scheduler.enqueue({ taskId: 'b', priority: 1, utilization: 25 });
+      scheduler.enqueue({ taskId: 'c', priority: 1, utilization: 25 });
+      scheduler.enqueue({ taskId: 'd', priority: 1, utilization: 25 });
+      scheduler.enqueue({ taskId: 'e', priority: 1, utilization: 25 });
 
-      expect(scheduler.dequeue()).not.toBeNull();
-      expect(scheduler.dequeue()).not.toBeNull();
-      expect(scheduler.dequeue()).not.toBeNull();
-      // Budget full (3/3)
+      expect(scheduler.dequeue()).not.toBeNull(); // 25/100
+      expect(scheduler.dequeue()).not.toBeNull(); // 50/100
+      expect(scheduler.dequeue()).not.toBeNull(); // 75/100
+      expect(scheduler.dequeue()).not.toBeNull(); // 100/100
+      // Budget full
       expect(scheduler.dequeue()).toBeNull();
-    });
-
-    it('skips heavy job to fit lighter one when budget is tight', () => {
-      const scheduler = new TaskScheduler(3);
-
-      scheduler.enqueue({ taskId: 'heavy', priority: 10, weight: 3 });
-      scheduler.enqueue({ taskId: 'light', priority: 1, weight: 1 });
-
-      // Start the light one first (weight 1, fits in budget)
-      const first = scheduler.dequeue();
-      expect(first!.taskId).toBe('heavy'); // heavy has higher priority and fits initially
-
-      // Now 3/3 used, light cannot fit
-      expect(scheduler.dequeue()).toBeNull();
-
-      // Complete heavy, now light can run
-      scheduler.completeJob('heavy');
-      const second = scheduler.dequeue();
-      expect(second!.taskId).toBe('light');
     });
 
     it('picks lower-priority job that fits when high-priority is too heavy', () => {
-      const scheduler = new TaskScheduler(3);
+      const scheduler = new TaskScheduler(100);
 
-      // Start a weight-2 task to leave 1 unit of budget
-      scheduler.enqueue({ taskId: 'medium', priority: 5, weight: 2 });
-      scheduler.dequeue(); // running weight = 2
+      // Start a utilization-60 task to leave 40 remaining
+      scheduler.enqueue({ taskId: 'medium', priority: 5, utilization: 60 });
+      scheduler.dequeue(); // running utilization = 60
 
-      // Queue a heavy (3) and a light (1)
-      scheduler.enqueue({ taskId: 'heavy', priority: 10, weight: 3 });
-      scheduler.enqueue({ taskId: 'light', priority: 1, weight: 1 });
+      // Queue a heavy (80) and a light (30)
+      scheduler.enqueue({ taskId: 'heavy', priority: 10, utilization: 80 });
+      scheduler.enqueue({ taskId: 'light', priority: 1, utilization: 30 });
 
-      // Heavy doesn't fit (2+3=5 > 3), but light does (2+1=3 <= 3)
+      // Heavy doesn't fit (60+80=140 > 100), but light does (60+30=90 <= 100)
       const next = scheduler.dequeue();
       expect(next!.taskId).toBe('light');
     });
 
     it('deadlock prevention: force-starts oversized task when nothing running', () => {
-      const scheduler = new TaskScheduler(2);
+      const scheduler = new TaskScheduler(100);
 
-      scheduler.enqueue({ taskId: 'oversized', priority: 5, weight: 5 });
+      scheduler.enqueue({ taskId: 'oversized', priority: 5, utilization: 200 });
 
-      // Weight 5 exceeds budget of 2, but nothing is running → force start
+      // Utilization 200 exceeds budget of 100, but nothing is running → force start
       const job = scheduler.dequeue();
       expect(job).not.toBeNull();
       expect(job!.taskId).toBe('oversized');
     });
 
-    it('completeJob frees weight correctly', () => {
-      const scheduler = new TaskScheduler(3);
+    it('completeJob frees utilization correctly', () => {
+      const scheduler = new TaskScheduler(100);
 
-      scheduler.enqueue({ taskId: 'a', priority: 1, weight: 2 });
-      scheduler.enqueue({ taskId: 'b', priority: 1, weight: 2 });
+      scheduler.enqueue({ taskId: 'a', priority: 1, utilization: 70 });
+      scheduler.enqueue({ taskId: 'b', priority: 1, utilization: 70 });
 
-      scheduler.dequeue(); // a starts, running weight = 2
-      expect(scheduler.dequeue()).toBeNull(); // b (2) doesn't fit (2+2=4 > 3)
+      scheduler.dequeue(); // a starts, running utilization = 70
+      expect(scheduler.dequeue()).toBeNull(); // b (70) doesn't fit (70+70=140 > 100)
 
-      scheduler.completeJob('a'); // frees weight 2
+      scheduler.completeJob('a'); // frees 70
 
       const next = scheduler.dequeue();
       expect(next!.taskId).toBe('b');
     });
 
-    it('weight defaults to 1 when not specified', () => {
-      const scheduler = new TaskScheduler(2);
+    it('default utilization is 50 when not specified', () => {
+      const scheduler = new TaskScheduler(100);
 
       scheduler.enqueue({ taskId: 'a', priority: 1 });
       scheduler.enqueue({ taskId: 'b', priority: 1 });
       scheduler.enqueue({ taskId: 'c', priority: 1 });
 
-      expect(scheduler.dequeue()).not.toBeNull();
-      expect(scheduler.dequeue()).not.toBeNull();
-      // 2 default-weight tasks fill budget of 2
+      expect(scheduler.dequeue()).not.toBeNull(); // 50/100
+      expect(scheduler.dequeue()).not.toBeNull(); // 100/100
+      // 2 default-utilization tasks fill budget of 100
       expect(scheduler.dequeue()).toBeNull();
     });
 
-    it('zero-weight tasks do not consume budget', () => {
-      const scheduler = new TaskScheduler(1);
+    it('zero-utilization tasks do not consume budget', () => {
+      const scheduler = new TaskScheduler(50);
 
-      scheduler.enqueue({ taskId: 'real', priority: 1, weight: 1 });
-      scheduler.enqueue({ taskId: 'free1', priority: 1, weight: 0 });
-      scheduler.enqueue({ taskId: 'free2', priority: 1, weight: 0 });
+      scheduler.enqueue({ taskId: 'real', priority: 1, utilization: 50 });
+      scheduler.enqueue({ taskId: 'free1', priority: 1, utilization: 0 });
+      scheduler.enqueue({ taskId: 'free2', priority: 1, utilization: 0 });
 
-      // All three should be dequeueable: real (1/1) + two zero-weight
       expect(scheduler.dequeue()).not.toBeNull();
       expect(scheduler.dequeue()).not.toBeNull();
       expect(scheduler.dequeue()).not.toBeNull();
     });
 
-    it('getStatus reports weight info', () => {
-      const scheduler = new TaskScheduler(5);
+    it('getStatus reports utilization info', () => {
+      const scheduler = new TaskScheduler(100);
 
-      scheduler.enqueue({ taskId: 'a', priority: 1, weight: 3 });
+      scheduler.enqueue({ taskId: 'a', priority: 1, utilization: 60 });
       scheduler.dequeue();
 
       const status = scheduler.getStatus();
-      expect(status.runningWeight).toBe(3);
-      expect(status.maxWeight).toBe(5);
+      expect(status.runningUtilization).toBe(60);
+      expect(status.maxUtilization).toBe(100);
     });
 
-    it('killAll resets weight tracking', () => {
-      const scheduler = new TaskScheduler(5);
+    it('killAll resets utilization tracking', () => {
+      const scheduler = new TaskScheduler(100);
 
-      scheduler.enqueue({ taskId: 'a', priority: 1, weight: 3 });
+      scheduler.enqueue({ taskId: 'a', priority: 1, utilization: 60 });
       scheduler.dequeue();
 
       scheduler.killAll();
 
       const status = scheduler.getStatus();
-      expect(status.runningWeight).toBe(0);
+      expect(status.runningUtilization).toBe(0);
       expect(status.runningCount).toBe(0);
+    });
+
+    it('UTILIZATION_MAX blocks everything when running', () => {
+      const UTILIZATION_MAX = 2147483647;
+      const scheduler = new TaskScheduler(100);
+
+      // When only an exclusive task is queued, deadlock prevention force-starts it
+      scheduler.enqueue({ taskId: 'exclusive', priority: 5, utilization: UTILIZATION_MAX });
+
+      const first = scheduler.dequeue();
+      expect(first!.taskId).toBe('exclusive');
+
+      // While exclusive is running, nothing else can start
+      scheduler.enqueue({ taskId: 'normal', priority: 1, utilization: 50 });
+      expect(scheduler.dequeue()).toBeNull();
+
+      // After exclusive completes, normal can run
+      scheduler.completeJob('exclusive');
+      const next = scheduler.dequeue();
+      expect(next!.taskId).toBe('normal');
     });
   });
 });

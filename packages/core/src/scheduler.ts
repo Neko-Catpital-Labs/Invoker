@@ -1,26 +1,29 @@
 /**
- * Priority queue with weight-based resource budgeting for task scheduling.
+ * Priority queue with utilization-based resource budgeting for task scheduling.
  *
  * No I/O, no Docker, no Git — just a sorted queue and resource tracking.
- * Higher priority numbers are dequeued first. Each job carries a resource
- * weight; the scheduler only dequeues when the running weight budget allows.
+ * Higher priority numbers are dequeued first. Each job carries a utilization
+ * value (0-100 or UTILIZATION_MAX); the scheduler only dequeues when the
+ * running utilization budget allows.
  */
 
 export interface TaskJob {
   taskId: string;
   priority: number;
-  weight?: number; // Resource weight (default: 1). Higher = heavier.
+  utilization?: number; // 0-100 or UTILIZATION_MAX. Default: 50.
 }
+
+const DEFAULT_UTILIZATION = 50;
 
 export class TaskScheduler {
   private queue: TaskJob[] = [];
   private running: Set<string> = new Set();
-  private taskWeights = new Map<string, number>();
-  private runningWeight = 0;
-  private maxWeight: number;
+  private taskUtilizations = new Map<string, number>();
+  private runningUtilization = 0;
+  private maxUtilization: number;
 
-  constructor(maxWeight: number = 4) {
-    this.maxWeight = maxWeight;
+  constructor(maxUtilization: number = 100) {
+    this.maxUtilization = maxUtilization;
   }
 
   /** Add a job to the queue, sorted by priority (high first). */
@@ -42,10 +45,10 @@ export class TaskScheduler {
 
   /**
    * Remove and return the highest-priority job that fits within the
-   * remaining weight budget. Returns null if at capacity or queue empty.
+   * remaining utilization budget. Returns null if at capacity or queue empty.
    *
    * Deadlock prevention: if nothing fits but nothing is running,
-   * force-start the highest-priority job regardless of weight.
+   * force-start the highest-priority job regardless of utilization.
    */
   dequeue(): TaskJob | null {
     if (this.queue.length === 0) {
@@ -53,15 +56,14 @@ export class TaskScheduler {
     }
 
     for (let i = 0; i < this.queue.length; i++) {
-      const w = this.queue[i].weight ?? 1;
-      if (this.runningWeight + w <= this.maxWeight) {
+      const u = this.queue[i].utilization ?? DEFAULT_UTILIZATION;
+      if (this.runningUtilization + u <= this.maxUtilization) {
         const job = this.queue.splice(i, 1)[0];
         this.startJob(job);
         return job;
       }
     }
 
-    // Deadlock prevention: if nothing is running, force-start the first job
     if (this.running.size === 0) {
       const job = this.queue.shift()!;
       this.startJob(job);
@@ -72,18 +74,18 @@ export class TaskScheduler {
   }
 
   private startJob(job: TaskJob): void {
-    const w = job.weight ?? 1;
+    const u = job.utilization ?? DEFAULT_UTILIZATION;
     this.running.add(job.taskId);
-    this.taskWeights.set(job.taskId, w);
-    this.runningWeight += w;
+    this.taskUtilizations.set(job.taskId, u);
+    this.runningUtilization += u;
   }
 
-  /** Mark a job as complete, freeing its resource weight. */
+  /** Mark a job as complete, freeing its utilization. */
   completeJob(taskId: string): void {
     this.running.delete(taskId);
-    const w = this.taskWeights.get(taskId) ?? 0;
-    this.runningWeight -= w;
-    this.taskWeights.delete(taskId);
+    const u = this.taskUtilizations.get(taskId) ?? 0;
+    this.runningUtilization -= u;
+    this.taskUtilizations.delete(taskId);
   }
 
   /** Kill all running jobs and clear the queue. */
@@ -91,20 +93,20 @@ export class TaskScheduler {
     const killedCount = this.running.size;
     const clearedCount = this.queue.length;
     this.running.clear();
-    this.taskWeights.clear();
-    this.runningWeight = 0;
+    this.taskUtilizations.clear();
+    this.runningUtilization = 0;
     this.queue = [];
     return { killedCount, clearedCount };
   }
 
   /** Get current status. */
-  getStatus(): { queueLength: number; runningCount: number; maxWorkers: number; runningWeight: number; maxWeight: number } {
+  getStatus(): { queueLength: number; runningCount: number; maxWorkers: number; runningUtilization: number; maxUtilization: number } {
     return {
       queueLength: this.queue.length,
       runningCount: this.running.size,
-      maxWorkers: this.maxWeight,
-      maxWeight: this.maxWeight,
-      runningWeight: this.runningWeight,
+      maxWorkers: this.maxUtilization,
+      runningUtilization: this.runningUtilization,
+      maxUtilization: this.maxUtilization,
     };
   }
 

@@ -12,6 +12,20 @@ import { homedir } from 'node:os';
 
 export interface InvokerConfig {
   defaultBranch?: string;
+  /**
+   * When true, skip local executor for non-merge-gate tasks.
+   * Environment variable DISABLE_LOCAL_EXECUTOR_EXCEPT_MERGE_GATE overrides this.
+   * Default: false
+   */
+  disableLocalExecutorExceptMergeGate?: boolean;
+  /**
+   * Pattern-based rules mapping command substrings to utilization values.
+   * Utilization is 0-100 (percentage of executor capacity) or "max" (exclusive).
+   * First matching rule wins. Checked after per-task config.utilization.
+   */
+  utilizationRules?: Array<{ pattern: string; utilization: number | 'max' }>;
+  /** Default utilization when no rule matches. Default: 50 */
+  defaultUtilization?: number;
 }
 
 function readJsonSafe(path: string): InvokerConfig {

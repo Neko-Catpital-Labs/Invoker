@@ -17,6 +17,11 @@ export type TaskStatus =
   | 'awaiting_approval'
   | 'stale';
 
+// ── Utilization Constants ────────────────────────────────────
+
+/** Task demands exclusive execution — nothing else runs alongside it. */
+export const UTILIZATION_MAX = 2147483647;
+
 // ── Task Config (definition / spec) ────────────────────────
 // Copied wholesale when cloning/forking: clone.config = original.config
 
@@ -41,6 +46,7 @@ export interface TaskConfig {
   readonly approach?: string;
   readonly testPlan?: string;
   readonly reproCommand?: string;
+  readonly utilization?: number;
 }
 
 // ── Task Execution (runtime state) ─────────────────────────
