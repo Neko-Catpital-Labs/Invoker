@@ -111,8 +111,12 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
   async start(request: WorkRequest): Promise<FamiliarHandle> {
     const handle = this.createHandle(request);
     const executionId = handle.executionId;
+    const t0 = Date.now();
+    const log = (step: string) => console.log(`[WorktreeFamiliar] start task=${request.actionId} step=${step} elapsed=${Date.now() - t0}ms`);
 
+    log('rev-parse HEAD begin');
     const baseHead = await this.execGit(['rev-parse', 'HEAD'], this.repoDir);
+    log('rev-parse HEAD done');
     const upstreamCommits = (request.inputs.upstreamContext ?? [])
       .map(c => c.commitHash)
       .filter((h): h is string => !!h);
@@ -261,13 +265,17 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
     }
 
     // Clean up stale worktree references (e.g. from a previous crashed run)
+    log('worktree prune begin');
     await this.execGit(['worktree', 'prune'], this.repoDir);
+    log('worktree prune done');
 
     // Force-remove any existing worktree that holds this branch
     // (prune only removes references whose directories were deleted;
     //  this handles the case where the old directory still exists on disk)
     try {
+      log('worktree list begin');
       const porcelain = await this.execGit(['worktree', 'list', '--porcelain'], this.repoDir);
+      log('worktree list done');
       console.log(`[WorktreeFamiliar] worktree list found ${porcelain.split('worktree ').length - 1} entries for branch=${branch}`);
       const branchRef = `branch refs/heads/${branch}`;
       const lines = porcelain.split('\n');
@@ -277,7 +285,9 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
             if (lines[j].startsWith('worktree ')) {
               const oldPath = lines[j].slice('worktree '.length);
               console.log(`[WorktreeFamiliar] Force-removing stale worktree: ${oldPath} (branch=${branch})`);
+              log('worktree remove --force begin');
               await this.execGit(['worktree', 'remove', '--force', oldPath], this.repoDir);
+              log('worktree remove --force done');
               console.log(`[WorktreeFamiliar] Successfully removed stale worktree: ${oldPath}`);
               break;
             }
@@ -291,17 +301,21 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
 
     // -- Create the worktree with a new branch --
     try {
+      log('worktree add -b begin');
       await this.execGit(
         ['worktree', 'add', '-b', branch, worktreeDir],
         this.repoDir,
       );
+      log('worktree add -b done');
     } catch (err) {
       // If the branch already exists, try without -b
       try {
+        log('worktree add (no -b) begin');
         await this.execGit(
           ['worktree', 'add', worktreeDir, branch],
           this.repoDir,
         );
+        log('worktree add (no -b) done');
       } catch (retryErr) {
         throw new Error(
           `Failed to create worktree: ${retryErr}. Original: ${err}`,
@@ -310,10 +324,14 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
     }
 
     // -- Merge upstream dependency branches into the worktree --
+    log('mergeUpstreamBranches begin');
     await this.mergeUpstreamBranches(request.inputs.upstreamBranches, worktreeDir);
+    log('mergeUpstreamBranches done');
 
     // -- Install dependencies so tasks can build/test in the worktree --
+    log('provisionWorktree begin');
     await this.provisionWorktree(worktreeDir);
+    log('provisionWorktree done');
 
     // -- Determine what to run --
     let cmd: string;
@@ -340,12 +358,14 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
     }
 
     // -- Spawn the process in the worktree directory --
+    log(`spawn begin cmd=${cmd}`);
     const child = spawn(cmd, args, {
       stdio: [request.actionType === 'claude' ? 'ignore' : 'pipe', 'pipe', 'pipe'],
       cwd: worktreeDir,
       detached: true,
       env: cleanElectronEnv(),
     });
+    log(`spawn done pid=${child.pid}`);
 
     const entry: WorktreeEntry = {
       process: child,
@@ -409,6 +429,7 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
     });
 
     this.startHeartbeat(executionId, child);
+    log('startHeartbeat done — start() returning');
     return handle;
   }
 
@@ -588,6 +609,8 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
   }
 
   private provisionWorktree(dir: string): Promise<void> {
+    console.log(`[WorktreeFamiliar] provisionWorktree begin dir=${dir}`);
+    const t0 = Date.now();
     return new Promise((resolve, reject) => {
       const cmd = 'pnpm install --frozen-lockfile && node scripts/rebuild-for-electron.js';
       const child = spawn('/bin/sh', ['-c', cmd], {
@@ -595,9 +618,17 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
         env: cleanElectronEnv(),
         stdio: ['ignore', 'pipe', 'pipe'],
       });
+      console.log(`[WorktreeFamiliar] provisionWorktree spawned pid=${child.pid}`);
       let stderr = '';
-      child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
+      child.stdout?.on('data', (d: Buffer) => {
+        console.log(`[WorktreeFamiliar] provision stdout: ${d.toString().trimEnd()}`);
+      });
+      child.stderr?.on('data', (d: Buffer) => {
+        stderr += d.toString();
+        console.log(`[WorktreeFamiliar] provision stderr: ${d.toString().trimEnd()}`);
+      });
       child.on('close', (code) => {
+        console.log(`[WorktreeFamiliar] provisionWorktree finished dir=${dir} code=${code} elapsed=${Date.now() - t0}ms`);
         if (code === 0) resolve();
         else reject(new Error(`Worktree provisioning failed in ${dir} (exit ${code}): ${stderr.trim()}`));
       });

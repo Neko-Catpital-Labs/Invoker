@@ -198,8 +198,10 @@ export class TaskExecutor {
     };
 
     const familiar = this.selectFamiliar(task);
+    console.log(`[trace] TaskExecutor: task=${task.id} calling familiar.start() type=${familiar.type}`);
+    const startT0 = Date.now();
     const handle = await familiar.start(request);
-    console.log(`[trace] TaskExecutor: task=${task.id} familiar=${familiar.type} sessionId=${handle.claudeSessionId ?? 'none'} workspace=${handle.workspacePath ?? 'default'}`);
+    console.log(`[trace] TaskExecutor: task=${task.id} familiar.start() returned after ${Date.now() - startT0}ms familiar=${familiar.type} sessionId=${handle.claudeSessionId ?? 'none'} workspace=${handle.workspacePath ?? 'default'}`);
 
     // Persist execution metadata immediately at task start — all fields explicit
     {

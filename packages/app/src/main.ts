@@ -189,16 +189,10 @@ async function wireSlackBot(deps: SlackBotDeps): Promise<any> {
       case 'provide_input':
         orchestrator.provideInput(command.taskId, command.input);
         break;
-      case 'get_status': {
-        const status = orchestrator.getWorkflowStatus();
-        await slack.handleEvent({ type: 'workflow_status', status });
+      case 'get_status':
         break;
-      }
       case 'start_plan': {
         deps.logFn('trace', 'info', `slackBot: loading plan "${command.plan.name}" (${command.plan.tasks.length} tasks)`);
-        // Stop any running tasks from a previous workflow before loading a new plan.
-        // loadPlan() calls stateMachine.clear(), which would orphan running child processes.
-        await Promise.all(familiarRegistry.getAll().map(f => f.destroyAll()));
         deps.onStartPlan?.();
         deps.onPlanLoaded?.(command.plan);
         orchestrator.loadPlan(command.plan);
@@ -208,13 +202,6 @@ async function wireSlackBot(deps: SlackBotDeps): Promise<any> {
         break;
       }
     }
-  });
-
-  // Forward task deltas to Slack
-  messageBus.subscribe<TaskDelta>(Channels.TASK_DELTA, (delta) => {
-    slack.handleEvent({ type: 'task_delta', delta }).catch((err: unknown) => {
-      deps.logFn('slack', 'error', `Delta forward error: ${err}`);
-    });
   });
 
   return slack;
