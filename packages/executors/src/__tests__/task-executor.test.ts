@@ -230,6 +230,141 @@ describe('TaskExecutor', () => {
     });
   });
 
+  describe('baseBranch in WorkRequest', () => {
+    it('includes workflow baseBranch in request inputs', async () => {
+      let capturedRequest: any;
+      const capturingFamiliar = {
+        type: 'worktree',
+        start: async (req: any) => {
+          capturedRequest = req;
+          return { executionId: 'exec-1', taskId: 'task-bb' };
+        },
+        onOutput: () => () => {},
+        onComplete: () => () => {},
+        onHeartbeat: () => () => {},
+      };
+      const registry = {
+        getDefault: () => capturingFamiliar,
+        get: () => capturingFamiliar,
+        getAll: () => [capturingFamiliar],
+      };
+      const persistence = {
+        updateTask: vi.fn(),
+        loadWorkflow: () => ({ baseBranch: 'main', generation: 0 }),
+      };
+      const orchestrator = {
+        getTask: () => undefined,
+        handleWorkerResponse: vi.fn(),
+      };
+
+      const executor = new TaskExecutor({
+        orchestrator: orchestrator as any,
+        persistence: persistence as any,
+        familiarRegistry: registry as any,
+        cwd: '/tmp',
+      });
+
+      const task = makeTask({
+        id: 'task-bb',
+        status: 'running',
+        config: { command: 'echo hi', workflowId: 'wf-1' },
+      });
+      await executor.executeTask(task);
+
+      expect(capturedRequest).toBeDefined();
+      expect(capturedRequest.inputs.baseBranch).toBe('main');
+    });
+
+    it('uses defaultBranch when workflow has no baseBranch', async () => {
+      let capturedRequest: any;
+      const capturingFamiliar = {
+        type: 'worktree',
+        start: async (req: any) => {
+          capturedRequest = req;
+          return { executionId: 'exec-1', taskId: 'task-bb2' };
+        },
+        onOutput: () => () => {},
+        onComplete: () => () => {},
+        onHeartbeat: () => () => {},
+      };
+      const registry = {
+        getDefault: () => capturingFamiliar,
+        get: () => capturingFamiliar,
+        getAll: () => [capturingFamiliar],
+      };
+      const persistence = {
+        updateTask: vi.fn(),
+        loadWorkflow: () => ({ generation: 0 }),
+      };
+      const orchestrator = {
+        getTask: () => undefined,
+        handleWorkerResponse: vi.fn(),
+      };
+
+      const executor = new TaskExecutor({
+        orchestrator: orchestrator as any,
+        persistence: persistence as any,
+        familiarRegistry: registry as any,
+        cwd: '/tmp',
+        defaultBranch: 'develop',
+      });
+
+      const task = makeTask({
+        id: 'task-bb2',
+        status: 'running',
+        config: { command: 'echo hi', workflowId: 'wf-1' },
+      });
+      await executor.executeTask(task);
+
+      expect(capturedRequest).toBeDefined();
+      expect(capturedRequest.inputs.baseBranch).toBe('develop');
+    });
+
+    it('omits baseBranch when neither workflow nor defaultBranch is set', async () => {
+      let capturedRequest: any;
+      const capturingFamiliar = {
+        type: 'worktree',
+        start: async (req: any) => {
+          capturedRequest = req;
+          return { executionId: 'exec-1', taskId: 'task-bb3' };
+        },
+        onOutput: () => () => {},
+        onComplete: () => () => {},
+        onHeartbeat: () => () => {},
+      };
+      const registry = {
+        getDefault: () => capturingFamiliar,
+        get: () => capturingFamiliar,
+        getAll: () => [capturingFamiliar],
+      };
+      const persistence = {
+        updateTask: vi.fn(),
+        loadWorkflow: () => ({ generation: 0 }),
+      };
+      const orchestrator = {
+        getTask: () => undefined,
+        handleWorkerResponse: vi.fn(),
+      };
+
+      const executor = new TaskExecutor({
+        orchestrator: orchestrator as any,
+        persistence: persistence as any,
+        familiarRegistry: registry as any,
+        cwd: '/tmp',
+      });
+
+      const task = makeTask({
+        id: 'task-bb3',
+        status: 'running',
+        config: { command: 'echo hi', workflowId: 'wf-1' },
+      });
+      await executor.executeTask(task);
+
+      expect(capturedRequest).toBeDefined();
+      expect(capturedRequest.inputs.baseBranch).toBeUndefined();
+    });
+  });
+
   describe('detectDefaultBranch', () => {
     it('returns branch from git symbolic-ref when available', async () => {
       const executor = createExecutorWithTasks(new Map());

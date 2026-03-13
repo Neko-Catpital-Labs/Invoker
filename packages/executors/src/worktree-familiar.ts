@@ -114,9 +114,10 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
     const t0 = Date.now();
     const log = (step: string) => console.log(`[WorktreeFamiliar] start task=${request.actionId} step=${step} elapsed=${Date.now() - t0}ms`);
 
-    log('rev-parse HEAD begin');
-    const baseHead = await this.execGit(['rev-parse', 'HEAD'], this.repoDir);
-    log('rev-parse HEAD done');
+    const baseRef = request.inputs.baseBranch ?? 'HEAD';
+    log(`rev-parse ${baseRef} begin`);
+    const baseHead = await this.execGit(['rev-parse', baseRef], this.repoDir);
+    log(`rev-parse ${baseRef} done`);
     const upstreamCommits = (request.inputs.upstreamContext ?? [])
       .map(c => c.commitHash)
       .filter((h): h is string => !!h);
@@ -300,10 +301,11 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
     }
 
     // -- Create the worktree with a new branch --
+    const startPoint = request.inputs.baseBranch ?? 'HEAD';
     try {
       log('worktree add -b begin');
       await this.execGit(
-        ['worktree', 'add', '-b', branch, worktreeDir],
+        ['worktree', 'add', '-b', branch, worktreeDir, startPoint],
         this.repoDir,
       );
       log('worktree add -b done');

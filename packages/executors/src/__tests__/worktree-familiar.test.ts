@@ -773,6 +773,80 @@ describe('WorktreeFamiliar', () => {
     });
   });
 
+  describe('baseBranch start point', () => {
+    it('uses baseBranch for rev-parse and worktree add start point', async () => {
+      const { taskProcess } = setupSpawnMock();
+
+      const request = makeRequest({
+        inputs: { command: 'echo hello', baseBranch: 'master' },
+      });
+      await familiar.start(request);
+
+      const gitCalls = mockedSpawn.mock.calls.filter(
+        (call) => call[0] === 'git',
+      );
+
+      // rev-parse should target baseBranch, not HEAD
+      const revParseCall = gitCalls.find(
+        (call) => (call[1] as string[])?.[0] === 'rev-parse',
+      );
+      expect(revParseCall).toBeDefined();
+      expect((revParseCall![1] as string[])[1]).toBe('master');
+
+      // worktree add should include baseBranch as the start point (last arg)
+      const worktreeAddCall = gitCalls.find(
+        (call) => {
+          const a = call[1] as string[];
+          return a?.includes('worktree') && a?.includes('add') && a?.includes('-b');
+        },
+      );
+      expect(worktreeAddCall).toBeDefined();
+      const args = worktreeAddCall![1] as string[];
+      expect(args[args.length - 1]).toBe('master');
+
+      taskProcess.emit('close', 0, null);
+    });
+
+    it('falls back to HEAD when baseBranch is not provided', async () => {
+      const { taskProcess } = setupSpawnMock();
+
+      const request = makeRequest({
+        inputs: { command: 'echo hello' },
+      });
+      await familiar.start(request);
+
+      const gitCalls = mockedSpawn.mock.calls.filter(
+        (call) => call[0] === 'git',
+      );
+
+      // rev-parse should target HEAD
+      const revParseCall = gitCalls.find(
+        (call) => (call[1] as string[])?.[0] === 'rev-parse',
+      );
+      expect(revParseCall).toBeDefined();
+      expect((revParseCall![1] as string[])[1]).toBe('HEAD');
+
+      // worktree add should use HEAD as start point
+      const worktreeAddCall = gitCalls.find(
+        (call) => {
+          const a = call[1] as string[];
+          return a?.includes('worktree') && a?.includes('add') && a?.includes('-b');
+        },
+      );
+      expect(worktreeAddCall).toBeDefined();
+      const args = worktreeAddCall![1] as string[];
+      expect(args[args.length - 1]).toBe('HEAD');
+
+      taskProcess.emit('close', 0, null);
+    });
+
+    it('baseBranch changes content-addressable branch hash', () => {
+      const hashWithMaster = computeBranchHash('t1', 'cmd', undefined, [], 'master-sha');
+      const hashWithDev = computeBranchHash('t1', 'cmd', undefined, [], 'dev-sha');
+      expect(hashWithMaster).not.toBe(hashWithDev);
+    });
+  });
+
   describe('stale worktree on restart', () => {
     const expectedHash = computeBranchHash('action-1', 'echo hello', undefined, [], 'abc123def456');
     const porcelainWithConflict = [

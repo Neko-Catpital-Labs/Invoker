@@ -30,6 +30,8 @@ export interface WorkRequestInputs {
   upstreamBranches?: string[];
   /** Workflow generation salt — changes content-addressable branch hashes on restart. */
   salt?: string;
+  /** Workflow base branch — worktrees are created from this ref instead of HEAD. */
+  baseBranch?: string;
 }
 
 export interface WorkRequest {
