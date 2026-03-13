@@ -248,6 +248,53 @@ describe('TaskScheduler', () => {
       expect(status.runningCount).toBe(0);
     });
 
+    it('getRunningTaskIds returns current running set', () => {
+      const scheduler = new TaskScheduler(200);
+
+      scheduler.enqueue({ taskId: 'a', priority: 1, utilization: 50 });
+      scheduler.enqueue({ taskId: 'b', priority: 2, utilization: 50 });
+      scheduler.enqueue({ taskId: 'c', priority: 3, utilization: 50 });
+
+      expect(scheduler.getRunningTaskIds()).toEqual([]);
+
+      scheduler.dequeue(); // c
+      scheduler.dequeue(); // b
+      expect(scheduler.getRunningTaskIds().sort()).toEqual(['b', 'c']);
+
+      scheduler.completeJob('c');
+      expect(scheduler.getRunningTaskIds()).toEqual(['b']);
+    });
+
+    it('completeJob on non-running task is a no-op', () => {
+      const scheduler = new TaskScheduler(100);
+      scheduler.enqueue({ taskId: 'a', priority: 1, utilization: 50 });
+      scheduler.dequeue();
+
+      scheduler.completeJob('unknown');
+      expect(scheduler.getStatus().runningCount).toBe(1);
+      expect(scheduler.getStatus().runningUtilization).toBe(50);
+    });
+
+    it('runningUtilization inflates when completeJob is never called (proves the leak)', () => {
+      const scheduler = new TaskScheduler(100);
+
+      scheduler.enqueue({ taskId: 'a', priority: 1, utilization: 50 });
+      scheduler.enqueue({ taskId: 'b', priority: 2, utilization: 50 });
+      scheduler.enqueue({ taskId: 'c', priority: 3, utilization: 50 });
+
+      scheduler.dequeue(); // c: 50/100
+      scheduler.dequeue(); // b: 100/100
+
+      // Without completeJob, capacity stays full — new task can't start
+      expect(scheduler.dequeue()).toBeNull();
+      expect(scheduler.getStatus().runningUtilization).toBe(100);
+      expect(scheduler.getStatus().runningCount).toBe(2);
+
+      // After completing one, capacity opens
+      scheduler.completeJob('c');
+      expect(scheduler.dequeue()).not.toBeNull();
+    });
+
     it('UTILIZATION_MAX blocks everything when running', () => {
       const UTILIZATION_MAX = 2147483647;
       const scheduler = new TaskScheduler(100);

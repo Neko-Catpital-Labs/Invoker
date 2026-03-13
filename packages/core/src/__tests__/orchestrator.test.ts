@@ -1979,6 +1979,238 @@ describe('Orchestrator', () => {
     });
   });
 
+  // ── Scheduler health ────────────────────────────────────
+
+  describe('scheduler health', () => {
+    let logSpy: ReturnType<typeof vi.spyOn>;
+    let warnSpy: ReturnType<typeof vi.spyOn>;
+
+    beforeEach(() => {
+      logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+      logSpy.mockRestore();
+      warnSpy.mockRestore();
+    });
+
+    it('scheduler.runningCount matches actual running tasks after handleWorkerResponse', () => {
+      orchestrator.loadPlan({
+        name: 'scheduler-sync-test',
+        tasks: [
+          { id: 't1', description: 'Task 1' },
+          { id: 't2', description: 'Task 2', dependencies: ['t1'] },
+        ],
+      });
+      orchestrator.startExecution();
+
+      const schedulerBefore = (orchestrator as any).scheduler.getStatus();
+      expect(schedulerBefore.runningCount).toBe(1);
+
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 't1', status: 'completed', outputs: { exitCode: 0 } }),
+      );
+
+      const schedulerAfter = (orchestrator as any).scheduler.getStatus();
+      const runningTasks = orchestrator.getAllTasks().filter(t => t.status === 'running');
+      expect(schedulerAfter.runningCount).toBe(runningTasks.length);
+    });
+
+    it('scheduler.runningCount matches after selectExperiment completes reconciliation', () => {
+      orchestrator.loadPlan({
+        name: 'recon-scheduler-test',
+        tasks: [
+          { id: 'pivot', description: 'Pivot task', pivot: true },
+          { id: 'downstream', description: 'After recon', dependencies: ['pivot'] },
+        ],
+      });
+      orchestrator.startExecution();
+
+      orchestrator.handleWorkerResponse({
+        requestId: 'spawn',
+        actionId: 'pivot',
+        status: 'spawn_experiments',
+        outputs: { exitCode: 0 },
+        dagMutation: {
+          spawnExperiments: {
+            description: 'Variants',
+            variants: [
+              { id: 'v1', prompt: 'A' },
+              { id: 'v2', prompt: 'B' },
+            ],
+          },
+        },
+      });
+
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 'pivot-exp-v1', status: 'completed', outputs: { exitCode: 0 } }),
+      );
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 'pivot-exp-v2', status: 'completed', outputs: { exitCode: 0 } }),
+      );
+
+      expect(orchestrator.getTask('pivot-reconciliation')!.status).toBe('needs_input');
+
+      persistence.updateTask('pivot-exp-v1', {
+        execution: { branch: 'experiment/v1', commit: 'abc' },
+      });
+
+      orchestrator.selectExperiment('pivot-reconciliation', 'pivot-exp-v1');
+
+      const scheduler = (orchestrator as any).scheduler;
+      const runningTasks = orchestrator.getAllTasks().filter(t => t.status === 'running');
+      expect(scheduler.getStatus().runningCount).toBe(runningTasks.length);
+    });
+
+    it('drainScheduler self-heals leaked scheduler slots', () => {
+      orchestrator.loadPlan({
+        name: 'leak-heal-test',
+        tasks: [
+          { id: 't1', description: 'Task 1' },
+          { id: 't2', description: 'Task 2' },
+          { id: 't3', description: 'Task 3' },
+        ],
+      });
+      orchestrator.startExecution();
+
+      const scheduler = (orchestrator as any).scheduler;
+
+      // Simulate a leak: complete t1 in the state machine but NOT in the scheduler
+      persistence.updateTask('t1', { status: 'completed', execution: { completedAt: new Date(), exitCode: 0 } });
+      const wfId = orchestrator.getWorkflowIds()[0];
+      orchestrator.syncFromDb(wfId);
+
+      expect(orchestrator.getTask('t1')!.status).toBe('completed');
+      expect(scheduler.isRunning('t1')).toBe(true); // Leaked!
+
+      // Completing t2 triggers drainScheduler which should self-heal
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 't2', status: 'completed', outputs: { exitCode: 0 } }),
+      );
+
+      expect(scheduler.isRunning('t1')).toBe(false);
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('freeing leaked scheduler slot for "t1"'),
+      );
+    });
+
+    it('selectExperiments starts downstream tasks when scheduler has capacity', () => {
+      orchestrator.loadPlan({
+        name: 'multi-select-capacity-test',
+        tasks: [
+          { id: 'pivot', description: 'Pivot', pivot: true },
+          { id: 'downstream', description: 'After recon', dependencies: ['pivot'] },
+        ],
+      });
+      orchestrator.startExecution();
+
+      orchestrator.handleWorkerResponse({
+        requestId: 'spawn',
+        actionId: 'pivot',
+        status: 'spawn_experiments',
+        outputs: { exitCode: 0 },
+        dagMutation: {
+          spawnExperiments: {
+            description: 'Variants',
+            variants: [
+              { id: 'v1', prompt: 'A' },
+              { id: 'v2', prompt: 'B' },
+            ],
+          },
+        },
+      });
+
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 'pivot-exp-v1', status: 'completed', outputs: { exitCode: 0 } }),
+      );
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 'pivot-exp-v2', status: 'completed', outputs: { exitCode: 0 } }),
+      );
+
+      const started = orchestrator.selectExperiments(
+        'pivot-reconciliation',
+        ['pivot-exp-v1', 'pivot-exp-v2'],
+        'recon-branch',
+        'recon-commit',
+      );
+
+      expect(started.length).toBeGreaterThan(0);
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.stringContaining('selectExperiments "pivot-reconciliation"'),
+      );
+    });
+  });
+
+  // ── Long session resilience ────────────────────────────
+
+  describe('long session resilience', () => {
+    let logSpy: ReturnType<typeof vi.spyOn>;
+    let warnSpy: ReturnType<typeof vi.spyOn>;
+
+    beforeEach(() => {
+      logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+      logSpy.mockRestore();
+      warnSpy.mockRestore();
+    });
+
+    it('scheduler stays healthy across 2 workflows with 20+ task completions', () => {
+      for (let w = 0; w < 2; w++) {
+        const tasks = Array.from({ length: 12 }, (_, i) => ({
+          id: `w${w}-t${i}`,
+          description: `Workflow ${w} Task ${i}`,
+        }));
+        orchestrator.loadPlan({ name: `workflow-${w}`, tasks });
+      }
+      orchestrator.startExecution();
+
+      const allTasks = orchestrator.getAllTasks().filter(t => !t.config.isMergeNode);
+      for (const task of allTasks) {
+        if (task.status === 'running') {
+          orchestrator.handleWorkerResponse(
+            makeResponse({ actionId: task.id, status: 'completed', outputs: { exitCode: 0 } }),
+          );
+        }
+      }
+
+      const scheduler = (orchestrator as any).scheduler;
+      const status = scheduler.getStatus();
+      const stillRunning = orchestrator.getAllTasks().filter(t => t.status === 'running');
+      expect(status.runningCount).toBe(stillRunning.length);
+    });
+
+    it('scheduler recovers after simulated process death mid-session', () => {
+      orchestrator.loadPlan({
+        name: 'death-recovery-test',
+        tasks: [
+          { id: 't1', description: 'Task 1' },
+          { id: 't2', description: 'Task 2' },
+          { id: 't3', description: 'Task 3', dependencies: ['t1'] },
+        ],
+      });
+      orchestrator.startExecution();
+
+      // Simulate process death: directly set t1 back to pending in DB (as if stale-running detected)
+      persistence.updateTask('t1', { status: 'pending', execution: {} });
+      const wfId = orchestrator.getWorkflowIds()[0];
+      orchestrator.syncFromDb(wfId);
+
+      // restartTask should recover
+      const started = orchestrator.restartTask('t1');
+      const t1 = orchestrator.getTask('t1')!;
+      expect(t1.status).toBe('running');
+      expect(started.length).toBeGreaterThanOrEqual(1);
+
+      const scheduler = (orchestrator as any).scheduler;
+      const runningTasks = orchestrator.getAllTasks().filter(t => t.status === 'running');
+      expect(scheduler.getStatus().runningCount).toBe(runningTasks.length);
+    });
+  });
+
   // ── selectExperiments (multi-select) ────────────────────
 
   describe('selectExperiments', () => {

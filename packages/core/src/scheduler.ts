@@ -114,4 +114,9 @@ export class TaskScheduler {
   isRunning(taskId: string): boolean {
     return this.running.has(taskId);
   }
+
+  /** Return all task IDs currently in the running set. */
+  getRunningTaskIds(): string[] {
+    return Array.from(this.running);
+  }
 }

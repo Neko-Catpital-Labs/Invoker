@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { existsSync, unlinkSync } from 'node:fs';
+import { resolve, join } from 'node:path';
 import { homedir } from 'node:os';
 import type { WorkRequest, WorkResponse } from '@invoker/protocol';
 import type { FamiliarHandle, PersistedTaskMeta, TerminalSpec } from './familiar.js';
@@ -167,6 +167,8 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
     if (this.pool && request.inputs.repoUrl) {
       const acquired = await this.pool.acquireWorktree(request.inputs.repoUrl, branch);
 
+      this.cleanStaleLocks(acquired.worktreePath);
+
       // Merge upstream dependency branches into the pool worktree
       await this.mergeUpstreamBranches(request.inputs.upstreamBranches, acquired.worktreePath);
 
@@ -324,6 +326,8 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
         );
       }
     }
+
+    this.cleanStaleLocks(worktreeDir);
 
     // -- Merge upstream dependency branches into the worktree --
     log('mergeUpstreamBranches begin');
@@ -549,6 +553,18 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
   // ---------------------------------------------------------------------------
   // Internal helpers
   // ---------------------------------------------------------------------------
+
+  private cleanStaleLocks(dir: string): void {
+    const gitDir = join(dir, '.git');
+    const lockFiles = ['index.lock', 'shallow.lock', 'HEAD.lock'];
+    for (const lockFile of lockFiles) {
+      const lockPath = join(gitDir, lockFile);
+      if (existsSync(lockPath)) {
+        console.warn(`[WorktreeFamiliar] Removing stale git lock: ${lockPath}`);
+        try { unlinkSync(lockPath); } catch { /* race: already removed */ }
+      }
+    }
+  }
 
   /**
    * Merge upstream dependency branches into a worktree.

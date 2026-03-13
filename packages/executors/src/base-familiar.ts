@@ -4,6 +4,7 @@ import type { WorkRequest, WorkResponse } from '@invoker/protocol';
 import type { Familiar, FamiliarHandle, PersistedTaskMeta, TerminalSpec, Unsubscribe } from './familiar.js';
 
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
+const DEFAULT_MAX_DURATION_MS = 4 * 60 * 60 * 1000; // 4 hours
 
 export interface BaseEntry {
   request: WorkRequest;
@@ -17,6 +18,8 @@ export interface BaseEntry {
   completionResponse?: WorkResponse;
   /** Heartbeat timer handle for orphan detection. */
   heartbeatTimer?: ReturnType<typeof setInterval>;
+  /** Timestamp when the heartbeat was started, for max duration enforcement. */
+  heartbeatStartedAt?: number;
 }
 
 export interface ClaudeSessionParams {
@@ -29,9 +32,11 @@ export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar
   abstract readonly type: string;
   protected entries = new Map<string, TEntry>();
   protected heartbeatIntervalMs: number;
+  protected maxDurationMs: number;
 
-  constructor(heartbeatIntervalMs?: number) {
+  constructor(heartbeatIntervalMs?: number, maxDurationMs?: number) {
     this.heartbeatIntervalMs = heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
+    this.maxDurationMs = maxDurationMs ?? DEFAULT_MAX_DURATION_MS;
   }
 
   protected createHandle(request: WorkRequest): FamiliarHandle {
@@ -85,6 +90,8 @@ export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar
     const entry = this.entries.get(executionId);
     if (!entry) return;
 
+    entry.heartbeatStartedAt = Date.now();
+
     entry.heartbeatTimer = setInterval(() => {
       if (entry.completed) {
         clearInterval(entry.heartbeatTimer);
@@ -110,9 +117,19 @@ export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar
           },
         };
         this.emitComplete(executionId, response);
-      } else {
-        this.emitHeartbeat(executionId);
+        return;
       }
+
+      const elapsed = Date.now() - (entry.heartbeatStartedAt ?? Date.now());
+      if (this.maxDurationMs > 0 && elapsed > this.maxDurationMs) {
+        console.warn(`[${this.type}] Task ${entry.request.actionId} exceeded max duration (${Math.round(elapsed / 1000)}s), killing`);
+        this.emitOutput(executionId,
+          `[${this.type}] Process exceeded max duration of ${Math.round(this.maxDurationMs / 1000)}s, sending SIGTERM\n`);
+        try { child.kill('SIGTERM'); } catch { /* already dead */ }
+        return;
+      }
+
+      this.emitHeartbeat(executionId);
     }, this.heartbeatIntervalMs);
   }
 

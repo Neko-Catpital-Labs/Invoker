@@ -1151,3 +1151,158 @@ describe('Flow 10: multi-experiment selection', () => {
     expect(branches).toContain('reconciliation/combined-branch');
   });
 });
+
+// ── Flow: Scheduler health across experiment lifecycle ───────
+
+describe('Flow: scheduler health across experiment lifecycle', () => {
+  let h: TestHarness;
+
+  const EXPERIMENT_PLAN: PlanDefinition = {
+    name: 'Scheduler Health Plan',
+    onFinish: 'merge',
+    mergeMode: 'automatic',
+    baseBranch: 'master',
+    featureBranch: 'plan/scheduler-health',
+    tasks: [
+      { id: 'A', description: 'Pivot task', command: 'echo pivot', pivot: true },
+      { id: 'B', description: 'Downstream', command: 'echo down', dependencies: ['A'] },
+    ],
+  };
+
+  beforeEach(() => {
+    h = createTestHarness();
+  });
+
+  function getSchedulerStatus(orchestrator: any) {
+    return orchestrator.scheduler.getStatus();
+  }
+
+  it('multi-select experiment -> downstream tasks execute with healthy scheduler', () => {
+    h.loadAndStart(EXPERIMENT_PLAN);
+
+    h.orchestrator.handleWorkerResponse({
+      requestId: 'spawn-A',
+      actionId: 'A',
+      status: 'spawn_experiments' as const,
+      outputs: { exitCode: 0 },
+      dagMutation: {
+        spawnExperiments: {
+          description: 'Try',
+          variants: [
+            { id: 'v1', description: 'V1', prompt: 'A' },
+            { id: 'v2', description: 'V2', prompt: 'B' },
+          ],
+        },
+      },
+    });
+
+    const expIds = h.getAllTasks()
+      .filter(t => t.id.startsWith('A-exp-'))
+      .map(t => t.id);
+
+    for (const id of expIds) {
+      h.completeTask(id);
+      h.persistence.updateTask(id, {
+        execution: { branch: `experiment/${id}-hash`, commit: `commit-${id}` },
+      });
+    }
+    (h.orchestrator as any).refreshFromDb();
+
+    const reconTask = h.getAllTasks().find(t => t.id.includes('reconciliation'))!;
+    expect(reconTask.status).toBe('needs_input');
+
+    const started = h.orchestrator.selectExperiments(
+      reconTask.id,
+      expIds,
+      'reconciliation/combined',
+      'combined-commit',
+    );
+
+    // Scheduler should be healthy
+    const status = getSchedulerStatus(h.orchestrator);
+    const runningTasks = h.getAllTasks().filter(t => t.status === 'running');
+    expect(status.runningCount).toBe(runningTasks.length);
+
+    // Downstream should have started
+    expect(started.length).toBeGreaterThan(0);
+  });
+
+  it('scheduler recovers from leaked slot during experiment selection', () => {
+    h.loadAndStart(EXPERIMENT_PLAN);
+
+    h.orchestrator.handleWorkerResponse({
+      requestId: 'spawn-A',
+      actionId: 'A',
+      status: 'spawn_experiments' as const,
+      outputs: { exitCode: 0 },
+      dagMutation: {
+        spawnExperiments: {
+          description: 'Try',
+          variants: [
+            { id: 'v1', description: 'V1', prompt: 'A' },
+            { id: 'v2', description: 'V2', prompt: 'B' },
+          ],
+        },
+      },
+    });
+
+    const expIds = h.getAllTasks()
+      .filter(t => t.id.startsWith('A-exp-'))
+      .map(t => t.id);
+
+    for (const id of expIds) {
+      h.completeTask(id);
+      h.persistence.updateTask(id, {
+        execution: { branch: `experiment/${id}-hash`, commit: `commit-${id}` },
+      });
+    }
+    (h.orchestrator as any).refreshFromDb();
+
+    // Inject a leaked scheduler slot by manually adding a fake running task
+    const scheduler = (h.orchestrator as any).scheduler;
+    scheduler.enqueue({ taskId: 'phantom-leaked', priority: 1, utilization: 50 });
+    scheduler.dequeue(); // moves phantom to running set
+    expect(scheduler.isRunning('phantom-leaked')).toBe(true);
+
+    const reconTask = h.getAllTasks().find(t => t.id.includes('reconciliation'))!;
+    h.orchestrator.selectExperiments(
+      reconTask.id,
+      expIds,
+      'reconciliation/combined',
+      'combined-commit',
+    );
+
+    // drainScheduler should have cleaned up the phantom
+    expect(scheduler.isRunning('phantom-leaked')).toBe(false);
+  });
+
+  it('process-dies-silently: orphaned running task does not permanently block scheduler', () => {
+    h.loadAndStart({
+      name: 'Process Death Plan',
+      onFinish: 'none',
+      tasks: [
+        { id: 'A', description: 'Task A', command: 'echo a' },
+        { id: 'B', description: 'Task B', command: 'echo b' },
+        { id: 'C', description: 'Task C', command: 'echo c', dependencies: ['A'] },
+      ],
+    });
+
+    expect(h.getTask('A')!.status).toBe('running');
+    expect(h.getTask('B')!.status).toBe('running');
+
+    // Simulate process death: A's process died, but the scheduler still thinks it's running.
+    // We update DB to mark it as pending (as stale-running detection would do before restart).
+    h.persistence.updateTask('A', { status: 'pending', execution: {} });
+    const wfId = h.orchestrator.getWorkflowIds()[0];
+    h.orchestrator.syncFromDb(wfId);
+
+    // The scheduler still has a slot for A (leaked). restartTask triggers drainScheduler.
+    const restarted = h.orchestrator.restartTask('A');
+    expect(h.getTask('A')!.status).toBe('running');
+
+    // Scheduler should be healthy
+    const status = getSchedulerStatus(h.orchestrator);
+    const runningTasks = h.getAllTasks().filter(t => t.status === 'running');
+    expect(status.runningCount).toBe(runningTasks.length);
+  });
+});

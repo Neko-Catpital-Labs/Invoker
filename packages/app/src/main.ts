@@ -1118,13 +1118,19 @@ function setupGuiMode(): void {
 
     ipcMain.handle('invoker:select-experiment', async (_event, taskId: string, experimentId: string | string[]) => {
       const ids = Array.isArray(experimentId) ? experimentId : [experimentId];
-      if (ids.length === 1) {
-        const newlyStarted = orchestrator.selectExperiment(taskId, ids[0]);
-        await taskExecutor.executeTasks(newlyStarted);
-      } else {
-        const { branch, commit } = await taskExecutor.mergeExperimentBranches(taskId, ids);
-        const newlyStarted = orchestrator.selectExperiments(taskId, ids, branch, commit);
-        await taskExecutor.executeTasks(newlyStarted);
+      console.log(`[ipc] select-experiment: "${taskId}" experimentIds=${JSON.stringify(ids)}`);
+      try {
+        if (ids.length === 1) {
+          const newlyStarted = orchestrator.selectExperiment(taskId, ids[0]);
+          await taskExecutor.executeTasks(newlyStarted);
+        } else {
+          const { branch, commit } = await taskExecutor.mergeExperimentBranches(taskId, ids);
+          const newlyStarted = orchestrator.selectExperiments(taskId, ids, branch, commit);
+          await taskExecutor.executeTasks(newlyStarted);
+        }
+      } catch (err) {
+        console.error(`[ipc] select-experiment failed: ${err}`);
+        throw err;
       }
     });
 
@@ -1258,7 +1264,7 @@ function setupGuiMode(): void {
     });
 
     // ── DB Polling — detect external workflow changes ───
-    dbPollInterval = setInterval(() => {
+    dbPollInterval = setInterval(async () => {
       if (!mainWindow || mainWindow.isDestroyed()) return;
       try {
         const workflows = persistence.listWorkflows();
@@ -1275,7 +1281,11 @@ function setupGuiMode(): void {
           lastKnownTaskStates.clear();
         }
 
+        const STALE_HEARTBEAT_MS = 5 * 60 * 1000;
+        const now = Date.now();
+
         for (const wf of workflows) {
+          if (wf.status === 'completed' || wf.status === 'failed') continue;
           const tasks = persistence.loadTasks(wf.id);
           for (const task of tasks) {
             const snapshot = JSON.stringify(task);
@@ -1292,6 +1302,31 @@ function setupGuiMode(): void {
               try { persistence.writeActivityLog('db-poll', 'info', msg); } catch { /* db locked */ }
               lastKnownTaskStates.set(task.id, snapshot);
               mainWindow.webContents.send('invoker:task-delta', { type: 'created', task });
+            }
+
+            if (task.status === 'running') {
+              const heartbeatTime = task.execution?.lastHeartbeatAt
+                ? new Date(task.execution.lastHeartbeatAt as string | number).getTime()
+                : null;
+              const startedTime = task.execution?.startedAt
+                ? new Date(task.execution.startedAt as string | number).getTime()
+                : null;
+              const referenceTime = heartbeatTime ?? startedTime;
+
+              if (referenceTime && (now - referenceTime) > STALE_HEARTBEAT_MS) {
+                const ageSeconds = Math.round((now - referenceTime) / 1000);
+                const source = heartbeatTime ? 'last heartbeat' : 'started';
+                console.warn(`[db-poll] Stale running task "${task.id}": ${source} ${ageSeconds}s ago, restarting`);
+                try { persistence.writeActivityLog('db-poll', 'warn', `Stale running task "${task.id}": ${source} ${ageSeconds}s ago, restarting`); } catch { /* db locked */ }
+                try {
+                  const restarted = orchestrator.restartTask(task.id);
+                  await killInvalidatedTasks(orchestrator.lastInvalidatedTaskIds);
+                  const runnable = restarted.filter(t => t.status === 'running');
+                  await taskExecutor.executeTasks(runnable);
+                } catch (err) {
+                  console.error(`[db-poll] Failed to restart stale task "${task.id}":`, err);
+                }
+              }
             }
           }
         }

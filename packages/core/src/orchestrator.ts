@@ -457,6 +457,8 @@ export class Orchestrator {
     this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
 
     const readyTaskIds = this.stateMachine.findNewlyReadyTasks(taskId);
+    const schedulerStatus = this.scheduler.getStatus();
+    console.log(`[orchestrator] selectExperiment "${taskId}": ${readyTaskIds.length} newly ready: [${readyTaskIds.join(', ')}], scheduler: util=${schedulerStatus.runningUtilization}/${schedulerStatus.maxUtilization} running=${schedulerStatus.runningCount} queued=${schedulerStatus.queueLength}`);
     const started = this.autoStartReadyTasks(readyTaskIds);
     this.checkWorkflowCompletion();
     return started;
@@ -497,6 +499,8 @@ export class Orchestrator {
     this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
 
     const readyTaskIds = this.stateMachine.findNewlyReadyTasks(taskId);
+    const schedulerStatus = this.scheduler.getStatus();
+    console.log(`[orchestrator] selectExperiments "${taskId}": ${readyTaskIds.length} newly ready: [${readyTaskIds.join(', ')}], scheduler: util=${schedulerStatus.runningUtilization}/${schedulerStatus.maxUtilization} running=${schedulerStatus.runningCount} queued=${schedulerStatus.queueLength}`);
     const started = this.autoStartReadyTasks(readyTaskIds);
     this.checkWorkflowCompletion();
     return started;
@@ -1294,6 +1298,14 @@ export class Orchestrator {
 
   /** Drain the scheduler queue, starting tasks that fit the resource budget. */
   private drainScheduler(): TaskState[] {
+    for (const runningId of this.scheduler.getRunningTaskIds()) {
+      const task = this.stateMachine.getTask(runningId);
+      if (!task || task.status !== 'running') {
+        console.warn(`[orchestrator] drainScheduler: freeing leaked scheduler slot for "${runningId}" (actual status: ${task?.status ?? 'not found'})`);
+        this.scheduler.completeJob(runningId);
+      }
+    }
+
     const started: TaskState[] = [];
     let job = this.scheduler.dequeue();
     while (job) {
