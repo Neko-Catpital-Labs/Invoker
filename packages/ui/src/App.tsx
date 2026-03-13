@@ -192,22 +192,6 @@ export function App() {
     }
   }, [invoker, clearTasks]);
 
-  const handleCleanupWorktrees = useCallback(async () => {
-    if (!invoker) return;
-    try {
-      const result = await invoker.cleanupWorktrees();
-      if (result.removed.length > 0) {
-        window.alert(`Removed ${result.removed.length} orphan worktree(s): ${result.removed.join(', ')}`);
-      } else {
-        window.alert('No orphan worktrees found.');
-      }
-      if (result.errors.length > 0) {
-        console.warn('Worktree cleanup errors:', result.errors);
-      }
-    } catch (err) {
-      console.error('Failed to cleanup worktrees:', err);
-    }
-  }, [invoker]);
 
   // True when all tasks have reached a terminal state.
   const allSettled = useMemo(() => {
@@ -310,7 +294,6 @@ export function App() {
         onClear={handleClear}
         onDeleteDB={handleDeleteDB}
         onRefresh={refreshTasks}
-        onCleanupWorktrees={handleCleanupWorktrees}
         viewMode={viewMode}
         onToggleView={setViewMode}
       />

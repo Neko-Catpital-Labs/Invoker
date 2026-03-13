@@ -21,7 +21,6 @@ interface TopBarProps {
   onClear: () => void;
   onDeleteDB: () => void;
   onRefresh: () => void;
-  onCleanupWorktrees: () => void;
   viewMode: 'dag' | 'history' | 'timeline';
   onToggleView: (mode: 'dag' | 'history' | 'timeline') => void;
 }
@@ -37,7 +36,6 @@ export function TopBar({
   onClear,
   onDeleteDB,
   onRefresh,
-  onCleanupWorktrees,
   viewMode,
   onToggleView,
 }: TopBarProps) {
@@ -130,14 +128,6 @@ export function TopBar({
         title="Force refresh task graph from main process"
       >
         Refresh
-      </button>
-
-      <button
-        onClick={onCleanupWorktrees}
-        className="px-3 py-1.5 bg-amber-700 hover:bg-amber-600 text-white rounded text-xs font-medium transition-colors"
-        title="Remove orphan git worktrees not linked to any task in the DB"
-      >
-        Clean Worktrees
       </button>
 
       <button
