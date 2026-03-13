@@ -43,7 +43,6 @@ import {
   type Familiar, type FamiliarHandle, type PersistedTaskMeta,
 } from '@invoker/executors';
 import type { TaskOutputData } from './types.js';
-import { cleanupOrphanWorktrees } from './worktree-cleanup.js';
 import { loadConfig, type InvokerConfig } from './config.js';
 import { startApiServer, type ApiServer } from './api-server.js';
 import { spawn } from 'node:child_process';
@@ -109,16 +108,6 @@ function initServices(): void {
     console.log(`[init] DB workflow "${wf.id}" (${wf.name}): ${tasks.length} tasks`);
   }
   console.log(`[init] Orchestrator graph has ${orchestrator.getAllTasks().length} tasks across ${workflows.length} workflows`);
-
-  // Clean up orphan worktrees that no longer correspond to any task in the DB
-  const knownBranches = new Set(persistence.getAllTaskBranches());
-  const cleanup = cleanupOrphanWorktrees(repoRoot, knownBranches);
-  if (cleanup.removed.length > 0) {
-    console.log(`[init] Cleaned up ${cleanup.removed.length} orphan worktrees: ${cleanup.removed.join(', ')}`);
-  }
-  if (cleanup.errors.length > 0) {
-    console.warn(`[init] Worktree cleanup errors: ${cleanup.errors.join('; ')}`);
-  }
 }
 
 // ── Load @invoker/surfaces at runtime ────────────────────────
@@ -1348,13 +1337,6 @@ function setupGuiMode(): void {
         // DB might be locked — skip this tick
       }
     }, 2000);
-
-    ipcMain.handle('invoker:cleanup-worktrees', () => {
-      const knownBranches = new Set(persistence.getAllTaskBranches());
-      const result = cleanupOrphanWorktrees(repoRoot, knownBranches);
-      console.log(`[ipc] cleanup-worktrees: removed ${result.removed.length}, errors ${result.errors.length}`);
-      return result;
-    });
 
     ipcMain.handle('invoker:get-activity-logs', () => {
       return persistence.getActivityLogs(0);
