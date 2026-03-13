@@ -8,6 +8,7 @@
 import { execSync } from 'node:child_process';
 import { parse as parseYaml } from 'yaml';
 import type { PlanDefinition } from '@invoker/core';
+import { UTILIZATION_MAX } from '@invoker/core';
 import { loadConfig } from './config.js';
 
 export interface RawExperimentVariant {
@@ -31,6 +32,7 @@ export interface RawPlanTask {
   familiarType?: string;
   autoFix?: boolean;
   maxFixAttempts?: number;
+  utilization?: number | 'max';
 }
 
 export interface RawPlan {
@@ -148,6 +150,7 @@ export function parsePlan(yamlContent: string, repoDir?: string): PlanDefinition
       familiarType: task.familiarType ?? defaultFamiliarType,
       autoFix: task.autoFix,
       maxFixAttempts: task.maxFixAttempts,
+      utilization: task.utilization === 'max' ? UTILIZATION_MAX : task.utilization,
     };
   });
 

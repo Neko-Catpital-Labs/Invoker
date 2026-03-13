@@ -33,8 +33,8 @@ if (process.platform === 'linux') {
   app.commandLine.appendSwitch('disable-dev-shm-usage');
 }
 
-import { Orchestrator } from '@invoker/core';
-import type { PlanDefinition, TaskDelta, TaskReplacementDef, TaskState } from '@invoker/core';
+import { Orchestrator, UTILIZATION_MAX } from '@invoker/core';
+import type { PlanDefinition, TaskDelta, TaskReplacementDef, TaskState, UtilizationRule } from '@invoker/core';
 import { SQLiteAdapter, ConversationRepository } from '@invoker/persistence';
 import { LocalBus, Channels } from '@invoker/transport';
 import {
@@ -78,6 +78,14 @@ let orchestrator: Orchestrator;
 const repoRoot = path.resolve(__dirname, '..', '..', '..');
 const invokerConfig: InvokerConfig = loadConfig(repoRoot);
 
+function resolveUtilizationRules(config: InvokerConfig): UtilizationRule[] {
+  if (!config.utilizationRules) return [];
+  return config.utilizationRules.map((r) => ({
+    pattern: r.pattern,
+    utilization: r.utilization === 'max' ? UTILIZATION_MAX : r.utilization,
+  }));
+}
+
 function initServices(): void {
   messageBus = new LocalBus();
   const dbDir = process.env.NODE_ENV === 'test'
@@ -87,7 +95,12 @@ function initServices(): void {
   persistence = new SQLiteAdapter(path.join(dbDir, 'invoker.db'));
   familiarRegistry = new FamiliarRegistry();
   familiarRegistry.register('local', new LocalFamiliar());
-  orchestrator = new Orchestrator({ persistence, messageBus, maxResourceWeight: 3 });
+  orchestrator = new Orchestrator({
+    persistence, messageBus,
+    maxUtilization: 100,
+    utilizationRules: resolveUtilizationRules(invokerConfig),
+    defaultUtilization: invokerConfig.defaultUtilization,
+  });
 
   orchestrator.syncAllFromDb();
   const workflows = persistence.listWorkflows();
@@ -1044,7 +1057,12 @@ function setupGuiMode(): void {
         });
       }
 
-      orchestrator = new Orchestrator({ persistence, messageBus, maxResourceWeight: 3 });
+      orchestrator = new Orchestrator({
+    persistence, messageBus,
+    maxUtilization: 100,
+    utilizationRules: resolveUtilizationRules(invokerConfig),
+    defaultUtilization: invokerConfig.defaultUtilization,
+  });
       rebuildTaskExecutor();
       taskHandles.clear();
     });
@@ -1054,7 +1072,12 @@ function setupGuiMode(): void {
     ipcMain.handle('invoker:delete-all-workflows', () => {
       console.log('[ipc] delete-all-workflows');
       persistence.deleteAllWorkflows();
-      orchestrator = new Orchestrator({ persistence, messageBus, maxResourceWeight: 3 });
+      orchestrator = new Orchestrator({
+    persistence, messageBus,
+    maxUtilization: 100,
+    utilizationRules: resolveUtilizationRules(invokerConfig),
+    defaultUtilization: invokerConfig.defaultUtilization,
+  });
       rebuildTaskExecutor();
       taskHandles.clear();
       lastKnownTaskStates.clear();

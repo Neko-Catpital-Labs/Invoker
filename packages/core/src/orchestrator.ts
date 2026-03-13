@@ -17,6 +17,7 @@ import { ResponseHandler } from './response-handler.js';
 import type { ParsedResponse } from './response-handler.js';
 import { TaskScheduler } from './scheduler.js';
 import { ResourceEstimator } from './resource-estimator.js';
+import type { UtilizationRule } from './resource-estimator.js';
 import type { TaskState, TaskDelta, TaskStateChanges, TaskCreateOptions } from './task-types.js';
 import { createTaskState } from './task-types.js';
 import type { WorkResponse } from '@invoker/protocol';
@@ -126,7 +127,9 @@ export interface OrchestratorConfig {
   persistence: OrchestratorPersistence;
   messageBus: OrchestratorMessageBus;
   maxConcurrency?: number;
-  maxResourceWeight?: number;
+  maxUtilization?: number;
+  utilizationRules?: UtilizationRule[];
+  defaultUtilization?: number;
 }
 
 // ── Orchestrator ────────────────────────────────────────────
@@ -149,10 +152,14 @@ export class Orchestrator {
 
     this.stateMachine = new TaskStateMachine(new ActionGraph());
     this.responseHandler = new ResponseHandler();
-    this.estimator = new ResourceEstimator();
+    this.estimator = new ResourceEstimator(
+      config.utilizationRules ?? [],
+      config.defaultUtilization ?? 50,
+    );
 
-    const maxWeight = config.maxResourceWeight ?? this.maxConcurrency;
-    this.scheduler = new TaskScheduler(maxWeight);
+    const defaultUtil = config.defaultUtilization ?? 50;
+    const maxUtil = config.maxUtilization ?? (config.maxConcurrency ? config.maxConcurrency * defaultUtil : 100);
+    this.scheduler = new TaskScheduler(maxUtil);
   }
 
   // ── DB Sync Helpers ────────────────────────────────────────
@@ -294,8 +301,8 @@ export class Orchestrator {
     const started: TaskState[] = [];
 
     for (const task of readyTasks) {
-      const weight = this.estimator.estimateWeight(task);
-      this.scheduler.enqueue({ taskId: task.id, priority: 0, weight });
+      const utilization = this.estimator.estimateUtilization(task);
+      this.scheduler.enqueue({ taskId: task.id, priority: 0, utilization });
     }
 
     return this.drainScheduler();
@@ -889,7 +896,6 @@ export class Orchestrator {
         allTasks.push(task);
       }
     }
-    this.estimator.loadHistory(allTasks);
   }
 
   /**
@@ -984,7 +990,6 @@ export class Orchestrator {
     this.persistence.logEvent?.(taskId, 'task.completed', changes);
     this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
 
-    this.estimator.recordCompletion(completed);
     this.checkExperimentCompletion(taskId);
 
     const readyTaskIds = this.stateMachine.findNewlyReadyTasks(taskId);
@@ -1011,7 +1016,6 @@ export class Orchestrator {
     this.persistence.logEvent?.(taskId, 'task.failed', changes);
     this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
 
-    this.estimator.recordCompletion(failed);
     this.blockDependents(taskId);
     this.checkExperimentCompletion(taskId);
     this.checkWorkflowCompletion();
@@ -1281,8 +1285,8 @@ export class Orchestrator {
   private autoStartReadyTasks(taskIds: string[]): TaskState[] {
     for (const taskId of taskIds) {
       const task = this.stateMachine.getTask(taskId);
-      const weight = task ? this.estimator.estimateWeight(task) : 1;
-      this.scheduler.enqueue({ taskId, priority: 0, weight });
+      const utilization = task ? this.estimator.estimateUtilization(task) : 50;
+      this.scheduler.enqueue({ taskId, priority: 0, utilization });
     }
 
     return this.drainScheduler();
