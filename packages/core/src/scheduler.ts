@@ -1,27 +1,30 @@
 /**
- * Pure priority queue with concurrency control for task scheduling.
+ * Priority queue with weight-based resource budgeting for task scheduling.
  *
- * No I/O, no Docker, no Git — just a sorted queue and worker-slot tracking.
- * Higher priority numbers are dequeued first.
+ * No I/O, no Docker, no Git — just a sorted queue and resource tracking.
+ * Higher priority numbers are dequeued first. Each job carries a resource
+ * weight; the scheduler only dequeues when the running weight budget allows.
  */
 
 export interface TaskJob {
   taskId: string;
-  priority: number; // Higher = more important
+  priority: number;
+  weight?: number; // Resource weight (default: 1). Higher = heavier.
 }
 
 export class TaskScheduler {
   private queue: TaskJob[] = [];
   private running: Set<string> = new Set();
-  private maxWorkers: number;
+  private taskWeights = new Map<string, number>();
+  private runningWeight = 0;
+  private maxWeight: number;
 
-  constructor(maxWorkers: number = 4) {
-    this.maxWorkers = maxWorkers;
+  constructor(maxWeight: number = 4) {
+    this.maxWeight = maxWeight;
   }
 
   /** Add a job to the queue, sorted by priority (high first). */
   enqueue(job: TaskJob): void {
-    // Binary search for insertion point to keep descending order.
     let low = 0;
     let high = this.queue.length;
 
@@ -37,24 +40,50 @@ export class TaskScheduler {
     this.queue.splice(low, 0, job);
   }
 
-  /** Remove and return the highest priority job if capacity allows. Returns null if at capacity or queue empty. */
+  /**
+   * Remove and return the highest-priority job that fits within the
+   * remaining weight budget. Returns null if at capacity or queue empty.
+   *
+   * Deadlock prevention: if nothing fits but nothing is running,
+   * force-start the highest-priority job regardless of weight.
+   */
   dequeue(): TaskJob | null {
-    if (this.running.size >= this.maxWorkers) {
-      return null;
-    }
-
     if (this.queue.length === 0) {
       return null;
     }
 
-    const job = this.queue.shift()!;
-    this.running.add(job.taskId);
-    return job;
+    for (let i = 0; i < this.queue.length; i++) {
+      const w = this.queue[i].weight ?? 1;
+      if (this.runningWeight + w <= this.maxWeight) {
+        const job = this.queue.splice(i, 1)[0];
+        this.startJob(job);
+        return job;
+      }
+    }
+
+    // Deadlock prevention: if nothing is running, force-start the first job
+    if (this.running.size === 0) {
+      const job = this.queue.shift()!;
+      this.startJob(job);
+      return job;
+    }
+
+    return null;
   }
 
-  /** Mark a job as complete, freeing a worker slot. */
+  private startJob(job: TaskJob): void {
+    const w = job.weight ?? 1;
+    this.running.add(job.taskId);
+    this.taskWeights.set(job.taskId, w);
+    this.runningWeight += w;
+  }
+
+  /** Mark a job as complete, freeing its resource weight. */
   completeJob(taskId: string): void {
     this.running.delete(taskId);
+    const w = this.taskWeights.get(taskId) ?? 0;
+    this.runningWeight -= w;
+    this.taskWeights.delete(taskId);
   }
 
   /** Kill all running jobs and clear the queue. */
@@ -62,16 +91,20 @@ export class TaskScheduler {
     const killedCount = this.running.size;
     const clearedCount = this.queue.length;
     this.running.clear();
+    this.taskWeights.clear();
+    this.runningWeight = 0;
     this.queue = [];
     return { killedCount, clearedCount };
   }
 
   /** Get current status. */
-  getStatus(): { queueLength: number; runningCount: number; maxWorkers: number } {
+  getStatus(): { queueLength: number; runningCount: number; maxWorkers: number; runningWeight: number; maxWeight: number } {
     return {
       queueLength: this.queue.length,
       runningCount: this.running.size,
-      maxWorkers: this.maxWorkers,
+      maxWorkers: this.maxWeight,
+      maxWeight: this.maxWeight,
+      runningWeight: this.runningWeight,
     };
   }
 

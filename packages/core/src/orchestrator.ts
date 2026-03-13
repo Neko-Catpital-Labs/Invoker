@@ -13,10 +13,10 @@
  */
 
 import { TaskStateMachine } from './state-machine.js';
-import { ExperimentManager } from './experiments.js';
 import { ResponseHandler } from './response-handler.js';
 import type { ParsedResponse } from './response-handler.js';
 import { TaskScheduler } from './scheduler.js';
+import { ResourceEstimator } from './resource-estimator.js';
 import type { TaskState, TaskDelta, TaskStateChanges, TaskCreateOptions } from './task-types.js';
 import { createTaskState } from './task-types.js';
 import type { WorkResponse } from '@invoker/protocol';
@@ -126,18 +126,19 @@ export interface OrchestratorConfig {
   persistence: OrchestratorPersistence;
   messageBus: OrchestratorMessageBus;
   maxConcurrency?: number;
+  maxResourceWeight?: number;
 }
 
 // ── Orchestrator ────────────────────────────────────────────
 
 export class Orchestrator {
   private readonly stateMachine: TaskStateMachine;
-  private readonly experimentManager: ExperimentManager;
   private readonly responseHandler: ResponseHandler;
   private readonly scheduler: TaskScheduler;
   private readonly persistence: OrchestratorPersistence;
   private readonly messageBus: OrchestratorMessageBus;
   private readonly maxConcurrency: number;
+  private readonly estimator: ResourceEstimator;
 
   private activeWorkflowIds = new Set<string>();
 
@@ -147,9 +148,11 @@ export class Orchestrator {
     this.messageBus = config.messageBus;
 
     this.stateMachine = new TaskStateMachine(new ActionGraph());
-    this.experimentManager = new ExperimentManager();
     this.responseHandler = new ResponseHandler();
-    this.scheduler = new TaskScheduler(this.maxConcurrency);
+    this.estimator = new ResourceEstimator();
+
+    const maxWeight = config.maxResourceWeight ?? this.maxConcurrency;
+    this.scheduler = new TaskScheduler(maxWeight);
   }
 
   // ── DB Sync Helpers ────────────────────────────────────────
@@ -291,33 +294,11 @@ export class Orchestrator {
     const started: TaskState[] = [];
 
     for (const task of readyTasks) {
-      this.scheduler.enqueue({ taskId: task.id, priority: 0 });
+      const weight = this.estimator.estimateWeight(task);
+      this.scheduler.enqueue({ taskId: task.id, priority: 0, weight });
     }
 
-    let job = this.scheduler.dequeue();
-    while (job) {
-      const task = this.stateMachine.getTask(job.taskId);
-      if (!task || task.status !== 'pending') {
-        this.scheduler.completeJob(job.taskId);
-        job = this.scheduler.dequeue();
-        continue;
-      }
-
-      const changes: TaskStateChanges = {
-        status: 'running',
-        execution: { startedAt: new Date() },
-      };
-      const updated = this.writeAndSync(job.taskId, changes);
-      started.push(updated);
-
-      const delta: TaskDelta = { type: 'updated', taskId: job.taskId, changes };
-      this.persistence.logEvent?.(job.taskId, 'task.running', changes);
-      this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
-
-      job = this.scheduler.dequeue();
-    }
-
-    return started;
+    return this.drainScheduler();
   }
 
   /**
@@ -576,6 +557,24 @@ export class Orchestrator {
       const unblockDelta: TaskDelta = { type: 'updated', taskId: id, changes: unblockChanges };
       this.persistence.logEvent?.(id, 'task.pending', unblockChanges);
       this.messageBus.publish(TASK_DELTA_CHANNEL, unblockDelta);
+    }
+
+    // Reset any reconciliation task that was already in needs_input but now
+    // has a dependency that is no longer terminal (because we just restarted it).
+    for (const recon of this.stateMachine.getAllTasks()) {
+      if (!recon.config.isReconciliation) continue;
+      if (recon.status !== 'needs_input') continue;
+      if (!recon.dependencies.includes(taskId)) continue;
+
+      const reconReset: TaskStateChanges = {
+        status: 'pending',
+        execution: { experimentResults: undefined },
+      };
+      this.writeAndSync(recon.id, reconReset);
+      const reconDelta: TaskDelta = { type: 'updated', taskId: recon.id, changes: reconReset };
+      this.persistence.logEvent?.(recon.id, 'task.pending', reconReset);
+      this.messageBus.publish(TASK_DELTA_CHANNEL, reconDelta);
+      console.log(`[orchestrator] restartTask "${taskId}": reset reconciliation "${recon.id}" back to pending`);
     }
 
     this.scheduler.completeJob(taskId);
@@ -880,14 +879,17 @@ export class Orchestrator {
   syncAllFromDb(): void {
     this.stateMachine.clear();
     this.activeWorkflowIds.clear();
+    const allTasks: TaskState[] = [];
     const workflows = this.persistence.listWorkflows();
     for (const wf of workflows) {
       this.activeWorkflowIds.add(wf.id);
       const tasks = this.persistence.loadTasks(wf.id);
       for (const task of tasks) {
         this.stateMachine.restoreTask(task);
+        allTasks.push(task);
       }
     }
+    this.estimator.loadHistory(allTasks);
   }
 
   /**
@@ -977,11 +979,12 @@ export class Orchestrator {
         completedAt: new Date(),
       },
     };
-    this.writeAndSync(taskId, changes);
+    const completed = this.writeAndSync(taskId, changes);
     const delta: TaskDelta = { type: 'updated', taskId, changes };
     this.persistence.logEvent?.(taskId, 'task.completed', changes);
     this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
 
+    this.estimator.recordCompletion(completed);
     this.checkExperimentCompletion(taskId);
 
     const readyTaskIds = this.stateMachine.findNewlyReadyTasks(taskId);
@@ -1003,11 +1006,12 @@ export class Orchestrator {
         completedAt: new Date(),
       },
     };
-    this.writeAndSync(taskId, changes);
+    const failed = this.writeAndSync(taskId, changes);
     const delta: TaskDelta = { type: 'updated', taskId, changes };
     this.persistence.logEvent?.(taskId, 'task.failed', changes);
     this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
 
+    this.estimator.recordCompletion(failed);
     this.blockDependents(taskId);
     this.checkExperimentCompletion(taskId);
     this.checkWorkflowCompletion();
@@ -1033,59 +1037,45 @@ export class Orchestrator {
     taskId: string,
     parsed: Extract<ParsedResponse, { type: 'spawn_experiments' }>,
   ): TaskState[] {
-    // Capture parent task info before mutation modifies it
     const parentTask = this.stateMachine.getTask(taskId);
+    const wfId = parentTask?.config.workflowId;
 
-    // Plan experiment group
-    const plan = this.experimentManager.planExperimentGroup(
-      taskId,
-      parsed.variants.map((v) => ({
-        id: v.id,
-        description: v.description ?? `Experiment: ${v.id}`,
-        prompt: v.prompt,
-        command: v.command,
-      })),
-      parentTask?.config.repoUrl,
-      parentTask?.config.familiarType,
-    );
+    const experimentTasks: GraphMutationNodeDef[] = parsed.variants.map((v) => ({
+      id: v.id,
+      description: v.description ?? `Experiment: ${v.id}`,
+      dependencies: [taskId],
+      workflowId: wfId,
+      parentTask: taskId,
+      experimentPrompt: v.prompt,
+      prompt: v.prompt,
+      command: v.command,
+      repoUrl: parentTask?.config.repoUrl,
+      familiarType: parentTask?.config.familiarType,
+    }));
 
-    // Build new nodes: experiments + reconciliation
+    const reconciliationId = `${taskId}-reconciliation`;
     const newNodes: GraphMutationNodeDef[] = [
-      ...plan.experimentTasks.map((t) => ({
-        id: t.id,
-        description: t.description,
-        dependencies: t.dependencies,
-        workflowId: parentTask?.config.workflowId,
-        parentTask: t.parentTask,
-        experimentPrompt: t.experimentPrompt,
-        prompt: t.prompt,
-        command: t.command,
-        repoUrl: t.repoUrl,
-        familiarType: t.familiarType,
-      })),
+      ...experimentTasks,
       {
-        id: plan.reconciliationTask.id,
-        description: plan.reconciliationTask.description,
-        dependencies: plan.reconciliationTask.dependencies,
-        workflowId: parentTask?.config.workflowId,
-        parentTask: plan.reconciliationTask.parentTask,
-        isReconciliation: plan.reconciliationTask.isReconciliation,
-        requiresManualApproval: plan.reconciliationTask.requiresManualApproval,
+        id: reconciliationId,
+        description: `Review and select winning experiment for ${taskId}`,
+        dependencies: experimentTasks.map((t) => t.id),
+        workflowId: wfId,
+        parentTask: taskId,
+        isReconciliation: true,
+        requiresManualApproval: true,
       },
     ];
 
-    // Apply unified graph mutation: fork downstream, complete pivot, create nodes
     this.applyGraphMutation({
       sourceNodeId: taskId,
       sourceDisposition: 'complete',
       newNodes,
-      outputNodeId: plan.reconciliationTask.id,
+      outputNodeId: reconciliationId,
     });
 
-    // Auto-start the experiment tasks (they depend on the now-completed pivot)
-    const readyIds = plan.experimentTasks.map((t) => t.id);
-    const started = this.autoStartReadyTasks(readyIds);
-    return started;
+    const readyIds = experimentTasks.map((t) => t.id);
+    return this.autoStartReadyTasks(readyIds);
   }
 
   private handleSelectExperiment(
@@ -1185,29 +1175,34 @@ export class Orchestrator {
   }
 
   private checkExperimentCompletion(taskId: string): void {
-    const task = this.stateMachine.getTask(taskId);
-    if (!task) return;
+    for (const recon of this.stateMachine.getAllTasks()) {
+      if (!recon.config.isReconciliation) continue;
+      if (recon.status === 'needs_input' || recon.status === 'completed') continue;
+      if (!recon.dependencies.includes(taskId)) continue;
 
-    const result = this.experimentManager.onExperimentCompleted(taskId, {
-      id: taskId,
-      status: task.status === 'completed' ? 'completed' : 'failed',
-      summary: task.config.summary,
-      exitCode: task.execution.exitCode,
-    });
+      const allReported = recon.dependencies.every((depId) => {
+        const dep = this.stateMachine.getTask(depId);
+        return dep && (dep.status === 'completed' || dep.status === 'failed');
+      });
 
-    if (!result) return;
+      if (allReported) {
+        const experimentResults = recon.dependencies.map((depId) => {
+          const dep = this.stateMachine.getTask(depId)!;
+          return {
+            id: depId,
+            status: (dep.status === 'completed' ? 'completed' : 'failed') as 'completed' | 'failed',
+            summary: dep.config.summary,
+            exitCode: dep.execution.exitCode,
+          };
+        });
 
-    if (result.allDone) {
-      const reconId = result.group.reconciliationTaskId;
-      const reconTask = this.stateMachine.getTask(reconId);
-      if (reconTask) {
         const reconChanges: TaskStateChanges = {
           status: 'needs_input',
-          execution: { experimentResults: Array.from(result.group.completedExperiments.values()) },
+          execution: { experimentResults },
         };
-        this.writeAndSync(reconId, reconChanges);
-        const delta: TaskDelta = { type: 'updated', taskId: reconId, changes: reconChanges };
-        this.persistence.logEvent?.(reconId, 'task.needs_input', reconChanges);
+        this.writeAndSync(recon.id, reconChanges);
+        const delta: TaskDelta = { type: 'updated', taskId: recon.id, changes: reconChanges };
+        this.persistence.logEvent?.(recon.id, 'task.needs_input', reconChanges);
         this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
       }
     }
@@ -1284,11 +1279,18 @@ export class Orchestrator {
   }
 
   private autoStartReadyTasks(taskIds: string[]): TaskState[] {
-    const started: TaskState[] = [];
     for (const taskId of taskIds) {
-      this.scheduler.enqueue({ taskId, priority: 0 });
+      const task = this.stateMachine.getTask(taskId);
+      const weight = task ? this.estimator.estimateWeight(task) : 1;
+      this.scheduler.enqueue({ taskId, priority: 0, weight });
     }
 
+    return this.drainScheduler();
+  }
+
+  /** Drain the scheduler queue, starting tasks that fit the resource budget. */
+  private drainScheduler(): TaskState[] {
+    const started: TaskState[] = [];
     let job = this.scheduler.dequeue();
     while (job) {
       const task = this.stateMachine.getTask(job.taskId);

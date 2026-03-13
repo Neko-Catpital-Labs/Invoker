@@ -87,7 +87,7 @@ function initServices(): void {
   persistence = new SQLiteAdapter(path.join(dbDir, 'invoker.db'));
   familiarRegistry = new FamiliarRegistry();
   familiarRegistry.register('local', new LocalFamiliar());
-  orchestrator = new Orchestrator({ persistence, messageBus, maxConcurrency: 1 });
+  orchestrator = new Orchestrator({ persistence, messageBus, maxResourceWeight: 3 });
 
   orchestrator.syncAllFromDb();
   const workflows = persistence.listWorkflows();
@@ -155,6 +155,7 @@ async function wireSlackBot(deps: SlackBotDeps): Promise<any> {
     workingDir: repoRoot,
     conversationRepo,
     defaultBranch: invokerConfig.defaultBranch,
+    disableLocalExecutorExceptMergeGate: invokerConfig.disableLocalExecutorExceptMergeGate,
     log: deps.logFn,
   });
 
@@ -372,6 +373,7 @@ async function headlessRun(planPath: string): Promise<void> {
     familiarRegistry,
     cwd: repoRoot,
     defaultBranch: invokerConfig.defaultBranch,
+    disableLocalExecutorExceptMergeGate: invokerConfig.disableLocalExecutorExceptMergeGate,
     callbacks: {
       onOutput: (taskId, data) => {
         process.stdout.write(`\x1b[2m[${taskId}]\x1b[0m ${data}`);
@@ -423,6 +425,7 @@ async function headlessResume(workflowId: string): Promise<void> {
     familiarRegistry,
     cwd: repoRoot,
     defaultBranch: invokerConfig.defaultBranch,
+    disableLocalExecutorExceptMergeGate: invokerConfig.disableLocalExecutorExceptMergeGate,
     callbacks: {
       onOutput: (taskId, data) => {
         process.stdout.write(`\x1b[2m[${taskId}]\x1b[0m ${data}`);
@@ -512,6 +515,7 @@ async function headlessSelect(taskId: string, experimentId: string): Promise<voi
     familiarRegistry,
     cwd: repoRoot,
     defaultBranch: invokerConfig.defaultBranch,
+    disableLocalExecutorExceptMergeGate: invokerConfig.disableLocalExecutorExceptMergeGate,
     callbacks: {
       onOutput: (tid, data) => {
         process.stdout.write(`\x1b[2m[${tid}]\x1b[0m ${data}`);
@@ -541,6 +545,7 @@ async function headlessRestart(taskId: string): Promise<void> {
     familiarRegistry,
     cwd: repoRoot,
     defaultBranch: invokerConfig.defaultBranch,
+    disableLocalExecutorExceptMergeGate: invokerConfig.disableLocalExecutorExceptMergeGate,
     callbacks: {
       onOutput: (tid, data) => {
         process.stdout.write(`\x1b[2m[${tid}]\x1b[0m ${data}`);
@@ -571,6 +576,7 @@ async function headlessRebaseAndRetry(taskId: string): Promise<void> {
     familiarRegistry,
     cwd: repoRoot,
     defaultBranch: invokerConfig.defaultBranch,
+    disableLocalExecutorExceptMergeGate: invokerConfig.disableLocalExecutorExceptMergeGate,
     callbacks: {
       onOutput: (tid, data) => {
         process.stdout.write(`\x1b[2m[${tid}]\x1b[0m ${data}`);
@@ -627,6 +633,7 @@ async function headlessEdit(taskId: string, newCommand: string): Promise<void> {
     familiarRegistry,
     cwd: repoRoot,
     defaultBranch: invokerConfig.defaultBranch,
+    disableLocalExecutorExceptMergeGate: invokerConfig.disableLocalExecutorExceptMergeGate,
     callbacks: {
       onOutput: (tid, data) => {
         process.stdout.write(`\x1b[2m[${tid}]\x1b[0m ${data}`);
@@ -652,6 +659,7 @@ async function headlessEditType(taskId: string, familiarType: string): Promise<v
     familiarRegistry,
     cwd: repoRoot,
     defaultBranch: invokerConfig.defaultBranch,
+    disableLocalExecutorExceptMergeGate: invokerConfig.disableLocalExecutorExceptMergeGate,
     callbacks: {
       onOutput: (tid, data) => {
         process.stdout.write(`\x1b[2m[${tid}]\x1b[0m ${data}`);
@@ -694,6 +702,7 @@ async function headlessSlack(): Promise<void> {
     familiarRegistry,
     cwd: repoRoot,
     defaultBranch: invokerConfig.defaultBranch,
+    disableLocalExecutorExceptMergeGate: invokerConfig.disableLocalExecutorExceptMergeGate,
     callbacks: {
       onOutput: (taskId, data) => {
         process.stdout.write(`\x1b[2m[${taskId}]\x1b[0m ${data}`);
@@ -810,6 +819,7 @@ function setupGuiMode(): void {
       familiarRegistry,
       cwd: repoRoot,
       defaultBranch: invokerConfig.defaultBranch,
+    disableLocalExecutorExceptMergeGate: invokerConfig.disableLocalExecutorExceptMergeGate,
       callbacks: {
         onOutput: (taskId, data) => {
           console.log(`[output] ${taskId}: ${data.trimEnd()}`);
@@ -1034,7 +1044,7 @@ function setupGuiMode(): void {
         });
       }
 
-      orchestrator = new Orchestrator({ persistence, messageBus, maxConcurrency: 1 });
+      orchestrator = new Orchestrator({ persistence, messageBus, maxResourceWeight: 3 });
       rebuildTaskExecutor();
       taskHandles.clear();
     });
@@ -1044,7 +1054,7 @@ function setupGuiMode(): void {
     ipcMain.handle('invoker:delete-all-workflows', () => {
       console.log('[ipc] delete-all-workflows');
       persistence.deleteAllWorkflows();
-      orchestrator = new Orchestrator({ persistence, messageBus, maxConcurrency: 1 });
+      orchestrator = new Orchestrator({ persistence, messageBus, maxResourceWeight: 3 });
       rebuildTaskExecutor();
       taskHandles.clear();
       lastKnownTaskStates.clear();
