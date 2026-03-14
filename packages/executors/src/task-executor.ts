@@ -171,6 +171,7 @@ export class TaskExecutor {
     // Gather upstream context from completed dependencies
     const upstreamContext = await this.buildUpstreamContext(task);
     const upstreamBranches = this.collectUpstreamBranches(task);
+    const alternatives = this.buildAlternatives(task);
 
     // Read workflow generation for content-addressable branch salt
     const workflow = task.config.workflowId ? this.persistence.loadWorkflow?.(task.config.workflowId) : undefined;
@@ -189,6 +190,7 @@ export class TaskExecutor {
         repoUrl: task.config.repoUrl,
         featureBranch: task.config.featureBranch,
         upstreamContext: upstreamContext.length > 0 ? upstreamContext : undefined,
+        alternatives: alternatives.length > 0 ? alternatives : undefined,
         upstreamBranches: upstreamBranches.length > 0 ? upstreamBranches : undefined,
         salt: generation > 0 ? generation.toString() : undefined,
         baseBranch,
@@ -575,6 +577,35 @@ export class TaskExecutor {
       }
     }
     return branches;
+  }
+
+  private buildAlternatives(
+    task: TaskState,
+  ): Array<{taskId: string; description: string; branch?: string; commitHash?: string; status: 'completed' | 'failed'; exitCode?: number; summary?: string; selected?: boolean}> {
+    const alternatives: Array<{taskId: string; description: string; branch?: string; commitHash?: string; status: 'completed' | 'failed'; exitCode?: number; summary?: string; selected?: boolean}> = [];
+
+    for (const depId of task.dependencies) {
+      const dep = this.orchestrator.getTask(depId);
+      if (!dep?.config.isReconciliation) continue;
+
+      const selectedSet = new Set(dep.execution.selectedExperiments ?? (dep.execution.selectedExperiment ? [dep.execution.selectedExperiment] : []));
+
+      for (const result of dep.execution.experimentResults ?? []) {
+        const expTask = this.orchestrator.getTask(result.id);
+        alternatives.push({
+          taskId: result.id,
+          description: expTask?.description ?? result.id,
+          branch: expTask?.execution.branch,
+          commitHash: expTask?.execution.commit,
+          status: result.status,
+          exitCode: result.exitCode,
+          summary: result.summary ?? expTask?.config.summary,
+          selected: selectedSet.has(result.id),
+        });
+      }
+    }
+
+    return alternatives;
   }
 
   private async buildUpstreamContext(

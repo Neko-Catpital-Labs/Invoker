@@ -26,6 +26,17 @@ export interface WorkRequestInputs {
   featureBranch?: string;
   /** Summaries from completed upstream dependencies, providing context for this task. */
   upstreamContext?: Array<{taskId: string; description: string; summary?: string; commitHash?: string; commitMessage?: string}>;
+  /** Experiment alternatives from upstream reconciliation tasks. */
+  alternatives?: Array<{
+    taskId: string;
+    description: string;
+    branch?: string;
+    commitHash?: string;
+    status: 'completed' | 'failed';
+    exitCode?: number;
+    summary?: string;
+    selected?: boolean;
+  }>;
   /** Branch names from completed upstream dependencies to merge into the worktree. */
   upstreamBranches?: string[];
   /** Workflow generation salt — changes content-addressable branch hashes on restart. */

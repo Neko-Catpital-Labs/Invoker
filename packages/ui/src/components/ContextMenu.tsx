@@ -22,7 +22,7 @@ interface ContextMenuProps {
 
 export function ContextMenu({ x, y, task, onRestart, onReplace, onOpenTerminal, onRebaseAndRetry, onRestartWorkflow, onClose }: ContextMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
-  const canRestart = task.status !== 'running';
+  const canRestart = true;
   const canReplace = task.status === 'failed' || task.status === 'blocked';
   const canRebaseAndRetry = !!task.config.workflowId && !!onRebaseAndRetry;
   const canRestartWorkflow = !!task.config.workflowId && !!onRestartWorkflow;

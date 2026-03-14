@@ -840,6 +840,14 @@ function setupGuiMode(): void {
     });
   }
 
+  async function killRunningTask(taskId: string): Promise<void> {
+    const entry = taskHandles.get(taskId);
+    if (!entry) return;
+    console.log(`[kill] Killing running task "${taskId}" before restart`);
+    await entry.familiar.kill(entry.handle);
+    taskHandles.delete(taskId);
+  }
+
   function createWindow(): void {
     mainWindow = new BrowserWindow({
       width: 1200,
@@ -899,6 +907,7 @@ function setupGuiMode(): void {
       persistence,
       familiarRegistry,
       taskExecutor,
+      killRunningTask,
     });
 
     const dbPath = path.join(homedir(), '.invoker', 'invoker.db');
@@ -1126,6 +1135,7 @@ function setupGuiMode(): void {
     ipcMain.handle('invoker:restart-task', async (_event, taskId: string) => {
       console.log(`[ipc] restart-task: "${taskId}"`);
       try {
+        await killRunningTask(taskId);
         const started = orchestrator.restartTask(taskId);
         const runnable = started.filter(t => t.status === 'running');
         await taskExecutor.executeTasks(runnable);
@@ -1308,8 +1318,8 @@ function setupGuiMode(): void {
                 console.warn(`[db-poll] Stale running task "${task.id}": ${source} ${ageSeconds}s ago, restarting`);
                 try { persistence.writeActivityLog('db-poll', 'warn', `Stale running task "${task.id}": ${source} ${ageSeconds}s ago, restarting`); } catch { /* db locked */ }
                 try {
+                  await killRunningTask(task.id);
                   const restarted = orchestrator.restartTask(task.id);
-                  await killInvalidatedTasks(orchestrator.lastInvalidatedTaskIds);
                   const runnable = restarted.filter(t => t.status === 'running');
                   await taskExecutor.executeTasks(runnable);
                 } catch (err) {
