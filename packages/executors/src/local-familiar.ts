@@ -223,12 +223,7 @@ export class LocalFamiliar extends BaseFamiliar<ProcessEntry> {
         if (entry.request.actionType === 'claude' && exitCode === 0) {
           const hash = await this.autoCommit(
             entry.request.inputs.workspacePath ?? process.cwd(),
-            entry.request.actionId,
-            {
-              description: entry.request.inputs.description ?? entry.request.inputs.command,
-              prompt: entry.request.inputs.prompt,
-              upstreamContext: entry.request.inputs.upstreamContext,
-            },
+            entry.request,
           );
           commitHash = hash ?? undefined;
         }

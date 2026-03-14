@@ -4,8 +4,19 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execSync } from 'node:child_process';
 import { BaseFamiliar, type BaseEntry } from '../base-familiar.js';
-import type { WorkRequest, WorkResponse } from '@invoker/protocol';
+import type { WorkRequest, WorkRequestInputs, WorkResponse } from '@invoker/protocol';
 import type { FamiliarHandle, TerminalSpec } from '../familiar.js';
+
+function makeRequest(actionId: string, inputs: Partial<WorkRequestInputs> = {}): WorkRequest {
+  return {
+    requestId: 'test-req',
+    actionId,
+    actionType: inputs.prompt ? 'claude' : 'command',
+    inputs: { ...inputs },
+    callbackUrl: '',
+    timestamps: { createdAt: new Date().toISOString() },
+  };
+}
 
 // Concrete implementation for testing
 class TestFamiliar extends BaseFamiliar<BaseEntry> {
@@ -17,19 +28,11 @@ class TestFamiliar extends BaseFamiliar<BaseEntry> {
   async kill(_handle: FamiliarHandle): Promise<void> {}
   sendInput(_handle: FamiliarHandle, _input: string): void {}
   getTerminalSpec(_handle: FamiliarHandle): TerminalSpec | null { return null; }
+  getRestoredTerminalSpec(): TerminalSpec { throw new Error('Not implemented'); }
   async destroyAll(): Promise<void> { this.entries.clear(); }
 
-  // Expose protected methods for testing
-  async testAutoCommit(
-    cwd: string,
-    actionId: string,
-    meta?: {
-      description?: string;
-      prompt?: string;
-      upstreamContext?: Array<{taskId: string; description: string; summary?: string; commitMessage?: string}>;
-    },
-  ): Promise<string | null> {
-    return this.autoCommit(cwd, actionId, meta);
+  async testAutoCommit(cwd: string, request: WorkRequest): Promise<string | null> {
+    return this.autoCommit(cwd, request);
   }
 
   async testEnsureFeatureBranch(cwd: string, branchName: string): Promise<void> {
@@ -62,25 +65,24 @@ describe('BaseFamiliar.autoCommit', () => {
 
   it('commits changes and returns hash', async () => {
     writeFileSync(join(tmpDir, 'new-file.txt'), 'new content');
-    const hash = await familiar.testAutoCommit(tmpDir, 'test-action');
+    const hash = await familiar.testAutoCommit(tmpDir, makeRequest('test-action'));
 
     expect(hash).toBeDefined();
     expect(hash).not.toBeNull();
     expect(hash!.length).toBeGreaterThan(0);
 
-    // Verify the commit message
     const log = execSync('git log -1 --pretty=%s', { cwd: tmpDir }).toString().trim();
     expect(log).toBe('invoker: test-action');
   });
 
   it('returns null when no changes', async () => {
-    const hash = await familiar.testAutoCommit(tmpDir, 'test-action');
+    const hash = await familiar.testAutoCommit(tmpDir, makeRequest('test-action'));
     expect(hash).toBeNull();
   });
 
   it('returns null for non-git directories', async () => {
     const nonGitDir = mkdtempSync(join(tmpdir(), 'non-git-'));
-    const hash = await familiar.testAutoCommit(nonGitDir, 'test-action');
+    const hash = await familiar.testAutoCommit(nonGitDir, makeRequest('test-action'));
     expect(hash).toBeNull();
     rmSync(nonGitDir, { recursive: true, force: true });
   });
@@ -121,12 +123,12 @@ describe('BaseFamiliar.ensureFeatureBranch', () => {
     // Create step1 branch and commit
     await familiar.testEnsureFeatureBranch(tmpDir, 'task/step-1');
     writeFileSync(join(tmpDir, 'step1.txt'), 'step1');
-    await familiar.testAutoCommit(tmpDir, 'step-1');
+    await familiar.testAutoCommit(tmpDir, makeRequest('step-1'));
 
     // Create step2 branch (from current HEAD = task/step-1)
     await familiar.testEnsureFeatureBranch(tmpDir, 'task/step-2');
     writeFileSync(join(tmpDir, 'step2.txt'), 'step2');
-    await familiar.testAutoCommit(tmpDir, 'step-2');
+    await familiar.testAutoCommit(tmpDir, makeRequest('step-2'));
 
     const branch = execSync('git branch --show-current', { cwd: tmpDir }).toString().trim();
     expect(branch).toBe('task/step-2');
@@ -141,7 +143,7 @@ describe('BaseFamiliar.ensureFeatureBranch', () => {
     for (const step of ['step-1', 'step-2', 'step-3']) {
       await familiar.testEnsureFeatureBranch(tmpDir, `task/${step}`);
       writeFileSync(join(tmpDir, `${step}.txt`), step);
-      await familiar.testAutoCommit(tmpDir, step);
+      await familiar.testAutoCommit(tmpDir, makeRequest(step));
     }
 
     const step1 = execSync('git rev-parse task/step-1', { cwd: tmpDir }).toString().trim();
@@ -204,9 +206,9 @@ describe('autoCommit with meta', () => {
 
   it('includes description in commit headline', async () => {
     writeFileSync(join(tmpDir, 'file.txt'), 'content');
-    await familiar.testAutoCommit(tmpDir, 'task-1', {
+    await familiar.testAutoCommit(tmpDir, makeRequest('task-1', {
       description: 'Implement auth middleware',
-    });
+    }));
 
     const subject = getCommitSubject(tmpDir);
     expect(subject).toBe('invoker: task-1 — Implement auth middleware');
@@ -214,47 +216,141 @@ describe('autoCommit with meta', () => {
 
   it('includes Prompt section in commit body', async () => {
     writeFileSync(join(tmpDir, 'file.txt'), 'content');
-    await familiar.testAutoCommit(tmpDir, 'task-1', {
+    await familiar.testAutoCommit(tmpDir, makeRequest('task-1', {
       prompt: 'Add login endpoint',
-    });
+    }));
 
     const body = getCommitBody(tmpDir);
-    expect(body).toContain('## Prompt');
+    expect(body).toContain('Prompt:');
     expect(body).toContain('Add login endpoint');
   });
 
-  it('includes Upstream Context section with task entries', async () => {
+  it('includes Command section when command is set', async () => {
     writeFileSync(join(tmpDir, 'file.txt'), 'content');
-    await familiar.testAutoCommit(tmpDir, 'task-2', {
-      upstreamContext: [
-        { taskId: 'task-1', description: 'Setup database', summary: 'created schema' },
-      ],
-    });
+    await familiar.testAutoCommit(tmpDir, makeRequest('task-1', {
+      command: 'npx prisma migrate dev',
+    }));
 
     const body = getCommitBody(tmpDir);
-    expect(body).toContain('## Upstream Context');
-    expect(body).toContain('task-1: Setup database');
-    expect(body).toContain('created schema');
+    expect(body).toContain('Command:');
+    expect(body).toContain('npx prisma migrate dev');
+    expect(body).not.toContain('Prompt:');
   });
 
-  it('prefers commitMessage first line over summary in upstream context', async () => {
+  it('includes Context section with upstream DAG deps and hashes', async () => {
     writeFileSync(join(tmpDir, 'file.txt'), 'content');
-    await familiar.testAutoCommit(tmpDir, 'task-2', {
+    await familiar.testAutoCommit(tmpDir, makeRequest('task-2', {
       upstreamContext: [
-        {
-          taskId: 'task-1',
-          description: 'Setup database',
-          summary: 'branch=experiment/task-1 commit=abc123',
-          commitMessage: 'invoker: task-1 — Setup database\n\n## Prompt\nCreate tables',
-        },
+        { taskId: 'task-1', description: 'Setup database', commitHash: 'abc1234567890' },
       ],
-    });
+    }));
 
     const body = getCommitBody(tmpDir);
-    expect(body).toContain('## Upstream Context');
-    // Should use first line of commitMessage, not the raw summary
-    expect(body).toContain('invoker: task-1 — Setup database');
-    expect(body).not.toContain('branch=experiment/task-1');
+    expect(body).toContain('Context:');
+    expect(body).toContain('task-1 (abc1234): Setup database');
+  });
+
+  it('includes Context section without hash when commitHash missing', async () => {
+    writeFileSync(join(tmpDir, 'file.txt'), 'content');
+    await familiar.testAutoCommit(tmpDir, makeRequest('task-2', {
+      upstreamContext: [
+        { taskId: 'task-1', description: 'Setup database' },
+      ],
+    }));
+
+    const body = getCommitBody(tmpDir);
+    expect(body).toContain('Context:');
+    expect(body).toContain('task-1: Setup database');
+  });
+
+  it('includes Alternatives Considered section with experiment data', async () => {
+    writeFileSync(join(tmpDir, 'file.txt'), 'content');
+    await familiar.testAutoCommit(tmpDir, makeRequest('task-3', {
+      description: 'Implement auth',
+      prompt: 'Add auth middleware',
+      alternatives: [
+        {
+          taskId: 'exp-v1',
+          description: 'JWT approach',
+          branch: 'experiment/exp-v1-a1b2c3d4',
+          commitHash: 'abc1234567890',
+          status: 'completed',
+          summary: 'Used JWT tokens',
+          selected: true,
+        },
+        {
+          taskId: 'exp-v2',
+          description: 'OAuth2 approach',
+          branch: 'experiment/exp-v2-e5f6g7h8',
+          commitHash: 'fed9876543210',
+          status: 'failed',
+          exitCode: 1,
+          summary: 'Tried OAuth2 flow',
+          selected: false,
+        },
+      ],
+    }));
+
+    const body = getCommitBody(tmpDir);
+    expect(body).toContain('Alternatives Considered:');
+    expect(body).toContain('exp-v1 abc1234');
+    expect(body).toContain('experiment/exp-v1-a1b2c3d4, completed');
+    expect(body).toContain('Used JWT tokens');
+    expect(body).toContain('[selected]');
+    expect(body).toContain('exp-v2 fed9876');
+    expect(body).toContain('failed, exit 1');
+    expect(body).toContain('Tried OAuth2 flow');
+  });
+
+  it('includes Solution section from description', async () => {
+    writeFileSync(join(tmpDir, 'file.txt'), 'content');
+    await familiar.testAutoCommit(tmpDir, makeRequest('task-1', {
+      description: 'Implement auth middleware',
+      prompt: 'Add auth',
+    }));
+
+    const body = getCommitBody(tmpDir);
+    expect(body).toContain('Solution:');
+    expect(body).toContain('Implement auth middleware');
+  });
+
+  it('omits sections when data is empty', async () => {
+    writeFileSync(join(tmpDir, 'file.txt'), 'content');
+    await familiar.testAutoCommit(tmpDir, makeRequest('task-1'));
+
+    const body = getCommitBody(tmpDir);
+    expect(body).toBe('invoker: task-1');
+    expect(body).not.toContain('Context:');
+    expect(body).not.toContain('Prompt:');
+    expect(body).not.toContain('Command:');
+    expect(body).not.toContain('Alternatives Considered:');
+    expect(body).not.toContain('Solution:');
+  });
+
+  it('all four sections appear in correct order', async () => {
+    writeFileSync(join(tmpDir, 'file.txt'), 'content');
+    await familiar.testAutoCommit(tmpDir, makeRequest('task-5', {
+      description: 'Add login page',
+      prompt: 'Create login page',
+      upstreamContext: [
+        { taskId: 'task-1', description: 'Setup project', commitHash: 'aaa1111111111' },
+        { taskId: 'task-2', description: 'Add database', commitHash: 'bbb2222222222' },
+      ],
+      alternatives: [
+        { taskId: 'exp-v1', description: 'Approach A', commitHash: 'ccc3333333333', branch: 'experiment/exp-v1', status: 'completed', selected: true },
+      ],
+    }));
+
+    const body = getCommitBody(tmpDir);
+    const contextIdx = body.indexOf('Context:');
+    const promptIdx = body.indexOf('Prompt:');
+    const altIdx = body.indexOf('Alternatives Considered:');
+    const solIdx = body.indexOf('Solution:');
+
+    expect(contextIdx).toBeGreaterThan(-1);
+    expect(promptIdx).toBeGreaterThan(contextIdx);
+    expect(altIdx).toBeGreaterThan(promptIdx);
+    expect(solIdx).toBeGreaterThan(altIdx);
   });
 });
 
@@ -276,55 +372,54 @@ describe('commit context propagation', () => {
   it('downstream task reads upstream commit message in context', async () => {
     // Task A commits
     writeFileSync(join(tmpDir, 'a.txt'), 'task-a work');
-    await familiar.testAutoCommit(tmpDir, 'task-a', {
+    await familiar.testAutoCommit(tmpDir, makeRequest('task-a', {
       description: 'Implement auth',
-    });
+    }));
     const commitA = getCommitBody(tmpDir);
 
     // Task B uses A's commit message as upstream context
     writeFileSync(join(tmpDir, 'b.txt'), 'task-b work');
-    await familiar.testAutoCommit(tmpDir, 'task-b', {
+    await familiar.testAutoCommit(tmpDir, makeRequest('task-b', {
       description: 'Add login page',
       upstreamContext: [
         { taskId: 'task-a', description: 'Implement auth', commitMessage: commitA },
       ],
-    });
+    }));
 
     const commitB = getCommitBody(tmpDir);
-    expect(commitB).toContain('## Upstream Context');
+    expect(commitB).toContain('Context:');
     expect(commitB).toContain('task-a: Implement auth');
-    expect(commitB).toContain('invoker: task-a — Implement auth');
   });
 
   it('fan-out: two downstream tasks both read same upstream commit', async () => {
     // Task A commits
     writeFileSync(join(tmpDir, 'a.txt'), 'task-a work');
-    await familiar.testAutoCommit(tmpDir, 'task-a', {
+    await familiar.testAutoCommit(tmpDir, makeRequest('task-a', {
       description: 'Shared setup',
-    });
+    }));
     const hashA = execSync('git rev-parse HEAD', { cwd: tmpDir }).toString().trim();
     const commitA = getCommitBody(tmpDir);
 
     // Task B branches from A
     execSync('git checkout -b task-b', { cwd: tmpDir });
     writeFileSync(join(tmpDir, 'b.txt'), 'task-b work');
-    await familiar.testAutoCommit(tmpDir, 'task-b', {
+    await familiar.testAutoCommit(tmpDir, makeRequest('task-b', {
       description: 'Feature B',
       upstreamContext: [
         { taskId: 'task-a', description: 'Shared setup', commitMessage: commitA },
       ],
-    });
+    }));
 
     // Task C branches from A
     execSync(`git checkout ${hashA}`, { cwd: tmpDir });
     execSync('git checkout -b task-c', { cwd: tmpDir });
     writeFileSync(join(tmpDir, 'c.txt'), 'task-c work');
-    await familiar.testAutoCommit(tmpDir, 'task-c', {
+    await familiar.testAutoCommit(tmpDir, makeRequest('task-c', {
       description: 'Feature C',
       upstreamContext: [
         { taskId: 'task-a', description: 'Shared setup', commitMessage: commitA },
       ],
-    });
+    }));
 
     // Both B and C reference A
     const commitB = getCommitBody(tmpDir, 'task-b');
@@ -340,30 +435,30 @@ describe('commit context propagation', () => {
   it('chain: A → B → C, C sees both A and B in upstream context', async () => {
     // Task A
     writeFileSync(join(tmpDir, 'a.txt'), 'a');
-    await familiar.testAutoCommit(tmpDir, 'task-a', { description: 'Step A' });
+    await familiar.testAutoCommit(tmpDir, makeRequest('task-a', { description: 'Step A' }));
     const hashA = execSync('git rev-parse HEAD', { cwd: tmpDir }).toString().trim();
     const commitA = getCommitBody(tmpDir);
 
     // Task B
     writeFileSync(join(tmpDir, 'b.txt'), 'b');
-    await familiar.testAutoCommit(tmpDir, 'task-b', {
+    await familiar.testAutoCommit(tmpDir, makeRequest('task-b', {
       description: 'Step B',
       upstreamContext: [
         { taskId: 'task-a', description: 'Step A', commitMessage: commitA },
       ],
-    });
+    }));
     const hashB = execSync('git rev-parse HEAD', { cwd: tmpDir }).toString().trim();
     const commitB = getCommitBody(tmpDir);
 
     // Task C with both A and B in upstream context
     writeFileSync(join(tmpDir, 'c.txt'), 'c');
-    await familiar.testAutoCommit(tmpDir, 'task-c', {
+    await familiar.testAutoCommit(tmpDir, makeRequest('task-c', {
       description: 'Step C',
       upstreamContext: [
         { taskId: 'task-a', description: 'Step A', commitMessage: commitA },
         { taskId: 'task-b', description: 'Step B', commitMessage: commitB },
       ],
-    });
+    }));
 
     const commitC = getCommitBody(tmpDir);
     expect(commitC).toContain('task-a: Step A');
@@ -397,14 +492,14 @@ describe('diamond dependency merge', () => {
     // B: branch from A with unique file
     execSync('git checkout -b task-b', { cwd: tmpDir });
     writeFileSync(join(tmpDir, 'b.txt'), 'b-work');
-    await familiar.testAutoCommit(tmpDir, 'task-b', { description: 'Feature B' });
+    await familiar.testAutoCommit(tmpDir, makeRequest('task-b', { description: 'Feature B' }));
     const hashB = execSync('git rev-parse HEAD', { cwd: tmpDir }).toString().trim();
 
     // C: branch from A with unique file
     execSync(`git checkout ${hashA}`, { cwd: tmpDir });
     execSync('git checkout -b task-c', { cwd: tmpDir });
     writeFileSync(join(tmpDir, 'c.txt'), 'c-work');
-    await familiar.testAutoCommit(tmpDir, 'task-c', { description: 'Feature C' });
+    await familiar.testAutoCommit(tmpDir, makeRequest('task-c', { description: 'Feature C' }));
     const hashC = execSync('git rev-parse HEAD', { cwd: tmpDir }).toString().trim();
 
     // D: merge B then C (simulating worktree merge strategy)
@@ -413,13 +508,13 @@ describe('diamond dependency merge', () => {
     execSync(`git merge -m "Merge upstream task-b" task-b`, { cwd: tmpDir });
     execSync(`git merge -m "Merge upstream task-c" task-c`, { cwd: tmpDir });
     writeFileSync(join(tmpDir, 'd.txt'), 'd-work');
-    await familiar.testAutoCommit(tmpDir, 'task-d', {
+    await familiar.testAutoCommit(tmpDir, makeRequest('task-d', {
       description: 'Combine B and C',
       upstreamContext: [
         { taskId: 'task-b', description: 'Feature B', commitMessage: getCommitBody(tmpDir, hashB) },
         { taskId: 'task-c', description: 'Feature C', commitMessage: getCommitBody(tmpDir, hashC) },
       ],
-    });
+    }));
 
     // Verify ancestry
     expect(isAncestor(tmpDir, hashA, 'HEAD')).toBe(true);
@@ -506,13 +601,13 @@ describe('diamond dependency merge', () => {
 
     execSync('git checkout -b task-b', { cwd: tmpDir });
     writeFileSync(join(tmpDir, 'b.txt'), 'b');
-    await familiar.testAutoCommit(tmpDir, 'task-b', { description: 'Implement B' });
+    await familiar.testAutoCommit(tmpDir, makeRequest('task-b', { description: 'Implement B' }));
     const hashB = execSync('git rev-parse HEAD', { cwd: tmpDir }).toString().trim();
 
     execSync(`git checkout ${hashA}`, { cwd: tmpDir });
     execSync('git checkout -b task-c', { cwd: tmpDir });
     writeFileSync(join(tmpDir, 'c.txt'), 'c');
-    await familiar.testAutoCommit(tmpDir, 'task-c', { description: 'Implement C' });
+    await familiar.testAutoCommit(tmpDir, makeRequest('task-c', { description: 'Implement C' }));
     const hashC = execSync('git rev-parse HEAD', { cwd: tmpDir }).toString().trim();
 
     execSync(`git checkout ${hashA}`, { cwd: tmpDir });
@@ -520,18 +615,17 @@ describe('diamond dependency merge', () => {
     execSync(`git merge -m "Merge upstream task-b" task-b`, { cwd: tmpDir });
     execSync(`git merge -m "Merge upstream task-c" task-c`, { cwd: tmpDir });
     writeFileSync(join(tmpDir, 'd.txt'), 'd');
-    await familiar.testAutoCommit(tmpDir, 'task-d', {
+    await familiar.testAutoCommit(tmpDir, makeRequest('task-d', {
       description: 'Combine results',
       upstreamContext: [
         { taskId: 'task-b', description: 'Implement B', commitMessage: getCommitBody(tmpDir, hashB) },
         { taskId: 'task-c', description: 'Implement C', commitMessage: getCommitBody(tmpDir, hashC) },
       ],
-    });
+    }));
 
     const body = getCommitBody(tmpDir);
-    // Should use commitMessage headlines, not raw summaries
-    expect(body).toContain('task-b: Implement B → invoker: task-b — Implement B');
-    expect(body).toContain('task-c: Implement C → invoker: task-c — Implement C');
+    expect(body).toContain('task-b: Implement B');
+    expect(body).toContain('task-c: Implement C');
   });
 
   it('deep diamond: A→B→D, A→C→D→E with different path lengths', async () => {

@@ -168,34 +168,25 @@ export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar
    */
   protected async autoCommit(
     cwd: string,
-    actionId: string,
-    meta?: {
-      description?: string;
-      prompt?: string;
-      upstreamContext?: Array<{taskId: string; description: string; summary?: string}>;
-    },
+    request: WorkRequest,
   ): Promise<string | null> {
     try {
-      // Check if it's a git repo
       await this.execGitSimple(['rev-parse', '--is-inside-work-tree'], cwd);
-
-      // Stage all changes
       await this.execGitSimple(['add', '-A'], cwd);
 
-      // Check if there are staged changes
       try {
         await this.execGitSimple(['diff', '--cached', '--quiet'], cwd);
-        return null; // No changes
+        return null;
       } catch {
         // There are staged changes — commit
       }
 
-      const message = this.buildCommitMessage(actionId, meta);
+      const message = this.buildCommitMessage(request);
       await this.execGitSimple(['commit', '-m', message], cwd);
       const hash = await this.execGitSimple(['rev-parse', 'HEAD'], cwd);
       return hash.trim();
     } catch {
-      return null; // Not a git repo or git error
+      return null;
     }
   }
 
@@ -224,31 +215,44 @@ export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar
     }
   }
 
-  private buildCommitMessage(
-    actionId: string,
-    meta?: {
-      description?: string;
-      prompt?: string;
-      upstreamContext?: Array<{taskId: string; description: string; summary?: string; commitMessage?: string}>;
-    },
-  ): string {
-    const headline = meta?.description
-      ? `invoker: ${actionId} — ${meta.description}`
+  private buildCommitMessage(request: WorkRequest): string {
+    const { actionId, inputs } = request;
+    const headline = inputs.description
+      ? `invoker: ${actionId} — ${inputs.description}`
       : `invoker: ${actionId}`;
 
     const parts = [headline];
 
-    if (meta?.prompt) {
-      parts.push(`\n## Prompt\n${meta.prompt}`);
+    if (inputs.upstreamContext?.length) {
+      const lines = inputs.upstreamContext.map(ctx => {
+        const hash = ctx.commitHash ? ` (${ctx.commitHash.slice(0, 7)})` : '';
+        return `  ${ctx.taskId}${hash}: ${ctx.description}`;
+      });
+      parts.push(`\nContext:\n${lines.join('\n')}`);
     }
 
-    if (meta?.upstreamContext?.length) {
-      const entries = meta.upstreamContext.map(ctx => {
-        // Prefer first line of commit message over raw summary (which is often "branch=... commit=...")
-        const detail = ctx.commitMessage?.split('\n')[0] ?? ctx.summary;
-        return `- ${ctx.taskId}: ${ctx.description}${detail ? ` → ${detail}` : ''}`;
+    if (inputs.prompt) {
+      parts.push(`\nPrompt:\n  ${inputs.prompt.replace(/\n/g, '\n  ')}`);
+    } else if (inputs.command) {
+      parts.push(`\nCommand:\n  ${inputs.command.replace(/\n/g, '\n  ')}`);
+    }
+
+    if (inputs.alternatives?.length) {
+      const lines = inputs.alternatives.map(alt => {
+        const hash = alt.commitHash ? ` ${alt.commitHash.slice(0, 7)}` : '';
+        const branch = alt.branch ? ` (${alt.branch}` : ' (';
+        const status = alt.status === 'failed'
+          ? `failed${alt.exitCode !== undefined ? `, exit ${alt.exitCode}` : ''}`
+          : alt.status;
+        const suffix = alt.selected ? '  [selected]' : '';
+        const summary = alt.summary ? `: ${alt.summary}` : '';
+        return `  - ${alt.taskId}${hash}${branch}, ${status})${summary}${suffix}`;
       });
-      parts.push(`\n## Upstream Context\n${entries.join('\n')}`);
+      parts.push(`\nAlternatives Considered:\n${lines.join('\n')}`);
+    }
+
+    if (inputs.description) {
+      parts.push(`\nSolution:\n  ${inputs.description}`);
     }
 
     return parts.join('\n');

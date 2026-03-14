@@ -27,6 +27,7 @@ export interface ApiServerDeps {
   persistence: SQLiteAdapter;
   familiarRegistry: FamiliarRegistry;
   taskExecutor: TaskExecutor;
+  killRunningTask?: (taskId: string) => Promise<void>;
 }
 
 export interface ApiServer {
@@ -81,7 +82,7 @@ function serializeTask(task: any): any {
 }
 
 export function startApiServer(deps: ApiServerDeps): ApiServer {
-  const { orchestrator, persistence, familiarRegistry, taskExecutor } = deps;
+  const { orchestrator, persistence, familiarRegistry, taskExecutor, killRunningTask } = deps;
   const port = parseInt(process.env.INVOKER_API_PORT ?? '4100', 10);
 
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
@@ -155,6 +156,7 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
       if (method === 'POST' && restartMatch) {
         const taskId = decodeURIComponent(restartMatch[1]);
         try {
+          await killRunningTask?.(taskId);
           const started = orchestrator.restartTask(taskId);
           const runnable = started.filter(t => t.status === 'running');
           await taskExecutor.executeTasks(runnable);

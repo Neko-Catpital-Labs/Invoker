@@ -239,11 +239,7 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
 
         let commitHash = 'unknown';
         try {
-          await this.autoCommit(acquired.worktreePath, request.actionId, {
-            description: request.inputs.description,
-            prompt: request.inputs.prompt,
-            upstreamContext: request.inputs.upstreamContext,
-          });
+          await this.autoCommit(acquired.worktreePath, request);
           commitHash = await this.execGit(['rev-parse', 'HEAD'], acquired.worktreePath);
         } catch (err) {
           this.emitOutput(executionId,
@@ -410,11 +406,7 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
 
       let commitHash = 'unknown';
       try {
-        await this.autoCommit(worktreeDir, request.actionId, {
-          description: request.inputs.description,
-          prompt: request.inputs.prompt,
-          upstreamContext: request.inputs.upstreamContext,
-        });
+        await this.autoCommit(worktreeDir, request);
         commitHash = await this.execGit(['rev-parse', 'HEAD'], worktreeDir);
       } catch (err) {
         this.emitOutput(executionId,

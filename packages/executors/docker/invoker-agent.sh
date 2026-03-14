@@ -116,6 +116,53 @@ send_response() {
     fi
 }
 
+# Build a structured commit message from request.json
+build_commit_message() {
+    local description
+    description=$(echo "$REQUEST" | jq -r '.inputs.description // empty')
+
+    local headline="invoker: ${ACTION_ID}"
+    if [ -n "$description" ]; then
+        headline="invoker: ${ACTION_ID} — ${description}"
+    fi
+
+    local msg="$headline"
+
+    # Context section from upstream deps
+    local upstream_count
+    upstream_count=$(echo "$REQUEST" | jq -r '.inputs.upstreamContext // [] | length')
+    if [ "$upstream_count" -gt 0 ]; then
+        msg="$msg"$'\n\nContext:'
+        local i=0
+        while [ "$i" -lt "$upstream_count" ]; do
+            local tid hash desc
+            tid=$(echo "$REQUEST" | jq -r ".inputs.upstreamContext[$i].taskId")
+            hash=$(echo "$REQUEST" | jq -r ".inputs.upstreamContext[$i].commitHash // empty")
+            desc=$(echo "$REQUEST" | jq -r ".inputs.upstreamContext[$i].description")
+            if [ -n "$hash" ]; then
+                msg="$msg"$'\n'"  ${tid} (${hash:0:7}): ${desc}"
+            else
+                msg="$msg"$'\n'"  ${tid}: ${desc}"
+            fi
+            i=$((i + 1))
+        done
+    fi
+
+    # Prompt or Command section
+    if [ -n "$PROMPT" ]; then
+        msg="$msg"$'\n\nPrompt:\n'"  $PROMPT"
+    elif [ -n "$COMMAND" ]; then
+        msg="$msg"$'\n\nCommand:\n'"  $COMMAND"
+    fi
+
+    # Solution section
+    if [ -n "$description" ]; then
+        msg="$msg"$'\n\nSolution:\n'"  $description"
+    fi
+
+    printf '%s' "$msg"
+}
+
 # Execute a command action
 execute_command() {
     log "Executing command: $COMMAND"
@@ -134,7 +181,7 @@ execute_command() {
     # Auto-commit any changes
     if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
         git add -A
-        git diff --cached --quiet || git commit -m "invoker: ${ACTION_ID}" --allow-empty-message 2>/dev/null || true
+        git diff --cached --quiet || git commit -m "$(build_commit_message)" --allow-empty-message 2>/dev/null || true
     fi
 
     log "Command exit code: $exit_code"
@@ -170,7 +217,7 @@ execute_claude() {
     # Auto-commit any changes
     if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
         git add -A
-        git diff --cached --quiet || git commit -m "invoker: ${ACTION_ID}" --allow-empty-message 2>/dev/null || true
+        git diff --cached --quiet || git commit -m "$(build_commit_message)" --allow-empty-message 2>/dev/null || true
     fi
 
     log "Claude exit code: $exit_code"
