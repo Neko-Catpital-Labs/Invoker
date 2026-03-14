@@ -75,11 +75,11 @@ test.describe('Persistence recovery', () => {
     const tasks = result.tasks as any[];
     for (const task of tasks) {
       if (task.status === 'pending') {
-        expect(task.startedAt).toBeFalsy();
-        expect(task.completedAt).toBeFalsy();
+        expect(task.execution.startedAt).toBeFalsy();
+        expect(task.execution.completedAt).toBeFalsy();
       } else if (task.status === 'completed') {
-        expect(task.startedAt).toBeTruthy();
-        expect(task.completedAt).toBeTruthy();
+        expect(task.execution.startedAt).toBeTruthy();
+        expect(task.execution.completedAt).toBeTruthy();
       }
     }
   });
@@ -102,7 +102,7 @@ test.describe('Persistence recovery', () => {
     );
 
     const tasks = result.tasks as any[];
-    expect(tasks).toHaveLength(2);
+    expect(tasks).toHaveLength(3);
 
     const alpha = tasks.find((t: any) => t.id === 'task-alpha');
     const beta = tasks.find((t: any) => t.id === 'task-beta');

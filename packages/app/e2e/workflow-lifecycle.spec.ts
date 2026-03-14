@@ -39,7 +39,7 @@ test.describe('Workflow lifecycle', () => {
     await waitForTaskStatus(page, 'task-beta', 'completed');
 
     const status = await page.evaluate(() => window.invoker.getStatus());
-    expect(status.completed).toBe(2);
+    expect(status.completed).toBe(3);
     expect(status.running).toBe(0);
   });
 
@@ -48,7 +48,7 @@ test.describe('Workflow lifecycle', () => {
 
     let result = await page.evaluate(() => window.invoker.getTasks());
     let tasks = Array.isArray(result) ? result : result.tasks;
-    expect(tasks.length).toBe(2);
+    expect(tasks.length).toBe(3);
 
     await page.evaluate(() => window.invoker.clear());
 

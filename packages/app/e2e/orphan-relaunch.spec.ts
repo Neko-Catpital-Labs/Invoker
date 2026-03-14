@@ -2,15 +2,19 @@
  * E2E: Orphan task relaunch — verify that tasks stuck in 'running' from a
  * previous session are automatically relaunched when the app restarts.
  *
- * Simulates an app crash by starting a slow task, force-closing the app
- * (without cleanup), then relaunching. The startup reconciliation should
- * detect the orphaned running task and relaunch it.
+ * Simulates an app crash by closing gracefully, then patching the DB to
+ * set the task status back to 'running' (as if the before-quit cleanup
+ * never ran). On relaunch, startup reconciliation should detect and
+ * relaunch the orphaned task.
  */
 
 import { test as base, _electron as electron, expect, type ElectronApplication, type Page } from '@playwright/test';
+import { execSync } from 'node:child_process';
+import { homedir } from 'node:os';
 import * as path from 'node:path';
 
 const MAIN_JS = path.resolve(__dirname, '..', 'dist', 'main.js');
+const DB_PATH = path.join(homedir(), '.invoker', 'test', 'invoker.db');
 
 const RELAUNCH_PLAN = {
   name: 'Orphan Relaunch Test',
@@ -45,9 +49,13 @@ async function waitForInvoker(page: Page): Promise<void> {
   await page.waitForFunction(() => typeof window.invoker !== 'undefined', null, { timeout: 10000 });
 }
 
+function sqliteExec(sql: string): void {
+  execSync(`sqlite3 "${DB_PATH}" "${sql}"`);
+}
+
 base.describe('Orphan task relaunch on restart', () => {
   base('orphaned running task is relaunched after app restart', async () => {
-    // --- Session 1: start a plan, get a task running, then force-close ---
+    // --- Session 1: start a plan, get a task running, then close ---
     const app1 = await electron.launch({
       args: launchArgs(),
       env: { ...process.env, NODE_ENV: 'test' },
@@ -75,14 +83,18 @@ base.describe('Orphan task relaunch on restart', () => {
       await page1.waitForTimeout(300);
     }
 
-    // Verify slow-task is running before we kill the app
+    // Verify slow-task is running before we close the app
     const preResult = await page1.evaluate(() => window.invoker.getTasks());
     const preTasks = Array.isArray(preResult) ? preResult : preResult.tasks;
     const preSlow = preTasks.find((t: any) => t.id === 'slow-task');
     expect(preSlow?.status).toBe('running');
 
-    // Force-close without cleanup (simulates crash / kill)
+    // Close gracefully — before-quit handler marks tasks as 'failed'
     await app1.close();
+
+    // Patch DB to simulate a crash: set slow-task back to 'running'
+    // as if the before-quit cleanup never ran.
+    sqliteExec("UPDATE tasks SET status = 'running', completed_at = NULL, error = NULL, exit_code = NULL WHERE id = 'slow-task'");
 
     // --- Session 2: relaunch and verify orphan reconciliation ---
     const app2 = await electron.launch({
