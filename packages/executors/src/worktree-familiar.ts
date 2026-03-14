@@ -586,9 +586,19 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
         // Not an ancestor — proceed with merge
       }
 
+      // Verify the branch ref exists before attempting merge
+      try {
+        await this.execGit(['rev-parse', '--verify', upBranch], worktreeDir);
+      } catch {
+        throw new Error(
+          `Upstream branch "${upBranch}" does not exist. ` +
+          `The dependency task's branch may not be visible in this worktree.`,
+        );
+      }
+
       try {
         await this.execGit(
-          ['merge', '-m', `Merge upstream ${upBranch}`, upBranch],
+          ['merge', '--no-edit', '-m', `Merge upstream ${upBranch}`, upBranch],
           worktreeDir,
         );
       } catch (err) {
@@ -621,7 +631,10 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
       });
       child.on('close', (code) => {
         if (code === 0) resolve(stdout.trim());
-        else reject(new Error(`git ${args.join(' ')} failed (code ${code}): ${stderr.trim()}`));
+        else {
+          const details = [stderr.trim(), stdout.trim()].filter(Boolean).join('\n');
+          reject(new Error(`git ${args.join(' ')} failed (code ${code}): ${details}`));
+        }
       });
     });
   }
