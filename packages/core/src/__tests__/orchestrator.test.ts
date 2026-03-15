@@ -490,7 +490,7 @@ describe('Orchestrator', () => {
   // ── Experiment Completion Wiring ────────────────────────
 
   describe('experiment completion wiring', () => {
-    it('handleWorkerResponse for experiment task calls onExperimentCompleted', () => {
+    it('completing one experiment tracks it without triggering reconciliation', () => {
       orchestrator.loadPlan({
         name: 'experiment-test',
         tasks: [
@@ -529,10 +529,11 @@ describe('Orchestrator', () => {
         }),
       );
 
-      const em = (orchestrator as any).experimentManager;
-      const groups = em.getAllGroups();
-      expect(groups.length).toBe(1);
-      expect(groups[0].completedExperiments.has('pivot-exp-v1')).toBe(true);
+      expect(orchestrator.getTask('pivot-exp-v1')!.status).toBe('completed');
+      expect(orchestrator.getTask('pivot-exp-v2')!.status).toBe('running');
+      const recon = orchestrator.getTask('pivot-reconciliation');
+      expect(recon).toBeDefined();
+      expect(recon!.status).not.toBe('needs_input');
     });
 
     it('all experiments completing triggers reconciliation on recon task', () => {
