@@ -21,11 +21,18 @@ function makeRequest(overrides: Partial<WorkRequest> = {}): WorkRequest {
   };
 }
 
+function mockGitLifecycle(instance: LocalFamiliar): void {
+  vi.spyOn(instance as any, 'setupTaskBranch').mockResolvedValue(undefined);
+  vi.spyOn(instance as any, 'recordTaskResult').mockResolvedValue(null);
+  vi.spyOn(instance as any, 'restoreBranch').mockResolvedValue(undefined);
+}
+
 describe('LocalFamiliar', () => {
   let familiar: LocalFamiliar;
 
   beforeEach(() => {
     familiar = new LocalFamiliar();
+    mockGitLifecycle(familiar);
   });
 
   afterEach(async () => {
@@ -235,6 +242,7 @@ describe('LocalFamiliar', () => {
         claudeCommand: '/bin/echo',
         claudeFallback: false,
       });
+      mockGitLifecycle(claudeFamiliar);
 
       const request = makeRequest({
         actionType: 'claude',
@@ -265,6 +273,7 @@ describe('LocalFamiliar', () => {
         claudeCommand: '__nonexistent_claude_binary__',
         claudeFallback: true,
       });
+      mockGitLifecycle(claudeFamiliar);
 
       const request = makeRequest({
         actionType: 'claude',
@@ -291,6 +300,7 @@ describe('LocalFamiliar', () => {
         claudeCommand: '/bin/echo',
         claudeFallback: false,
       });
+      mockGitLifecycle(claudeFamiliar);
 
       const request = makeRequest({
         actionType: 'claude',
@@ -323,6 +333,7 @@ describe('LocalFamiliar', () => {
         claudeCommand: '/dev/null',
         claudeFallback: false,
       });
+      mockGitLifecycle(claudeFamiliar);
 
       const request = makeRequest({
         actionType: 'claude',
@@ -346,6 +357,7 @@ describe('LocalFamiliar', () => {
         claudeCommand: '__nonexistent_binary__',
         claudeFallback: false,
       });
+      mockGitLifecycle(claudeFamiliar);
 
       const request = makeRequest({
         actionType: 'claude',
@@ -394,6 +406,7 @@ describe('LocalFamiliar', () => {
         claudeCommand: '/bin/echo',
         claudeFallback: false,
       });
+      mockGitLifecycle(claudeFamiliar);
 
       const request = makeRequest({
         actionType: 'claude',
@@ -418,6 +431,7 @@ describe('LocalFamiliar', () => {
         claudeCommand: '/bin/echo',
         claudeFallback: false,
       });
+      mockGitLifecycle(claudeFamiliar);
 
       const request = makeRequest({
         actionType: 'claude',
@@ -444,6 +458,7 @@ describe('LocalFamiliar', () => {
         claudeCommand: '/bin/echo',
         claudeFallback: false,
       });
+      mockGitLifecycle(claudeFamiliar);
 
       const request = makeRequest({
         actionType: 'claude',
@@ -515,15 +530,16 @@ describe('LocalFamiliar', () => {
       expect(combined).toContain('exitCode=0');
     });
 
-    it('completion fires even when autoCommit throws', async () => {
+    it('completion fires even when recordTaskResult throws', async () => {
       const claudeFamiliar = new LocalFamiliar({
         claudeCommand: '/bin/echo',
         claudeFallback: false,
       });
+      mockGitLifecycle(claudeFamiliar);
 
-      // Mock autoCommit to throw
-      (claudeFamiliar as any).autoCommit = async () => {
-        throw new Error('Simulated autoCommit failure');
+      // Override recordTaskResult to throw
+      (claudeFamiliar as any).recordTaskResult = async () => {
+        throw new Error('Simulated recordTaskResult failure');
       };
 
       const request = makeRequest({
@@ -535,7 +551,6 @@ describe('LocalFamiliar', () => {
       const output: string[] = [];
       claudeFamiliar.onOutput(handle, (data) => output.push(data));
 
-      // This MUST resolve. If autoCommit throw is uncaught, this hangs forever.
       const response = await Promise.race([
         new Promise<WorkResponse>((resolve) => {
           claudeFamiliar.onComplete(handle, (res) => resolve(res));
@@ -545,9 +560,9 @@ describe('LocalFamiliar', () => {
         ),
       ]);
 
-      expect(response.status).toBe('completed');
-      expect(response.outputs.exitCode).toBe(0);
-      expect(output.join('')).toContain('autoCommit');
+      expect(response.status).toBe('failed');
+      expect(response.outputs.exitCode).toBe(1);
+      expect(output.join('')).toContain('recordTaskResult');
 
       await claudeFamiliar.destroyAll();
     }, 10_000);
@@ -558,6 +573,7 @@ describe('LocalFamiliar', () => {
   describe('heartbeat', () => {
     it('forces completion when close handler fails silently', async () => {
       const heartbeatFamiliar = new LocalFamiliar({ heartbeatIntervalMs: 200 });
+      mockGitLifecycle(heartbeatFamiliar);
 
       const request = makeRequest({ inputs: { command: 'echo fast' } });
       const handle = await heartbeatFamiliar.start(request);

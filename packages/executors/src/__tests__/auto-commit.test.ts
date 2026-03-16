@@ -38,6 +38,18 @@ class TestFamiliar extends BaseFamiliar<BaseEntry> {
   async testEnsureFeatureBranch(cwd: string, branchName: string): Promise<void> {
     return this.ensureFeatureBranch(cwd, branchName);
   }
+
+  async testSetupTaskBranch(cwd: string, request: WorkRequest, handle: FamiliarHandle): Promise<string | undefined> {
+    return this.setupTaskBranch(cwd, request, handle);
+  }
+
+  async testRecordTaskResult(cwd: string, request: WorkRequest, exitCode: number): Promise<string | null> {
+    return this.recordTaskResult(cwd, request, exitCode);
+  }
+
+  async testRestoreBranch(cwd: string, originalBranch: string | undefined): Promise<void> {
+    return this.restoreBranch(cwd, originalBranch);
+  }
 }
 
 function createTempRepo(): string {
@@ -1151,5 +1163,234 @@ describe('mergeExperimentBranches (real git)', () => {
 
     const status = execSync('git status --porcelain', { cwd: tmpDir }).toString().trim();
     expect(status).toBe('');
+  });
+});
+
+// ── setupTaskBranch ─────────────────────────────────────────
+
+describe('BaseFamiliar.setupTaskBranch', () => {
+  let familiar: TestFamiliar;
+  let tmpDir: string;
+
+  beforeEach(() => {
+    familiar = new TestFamiliar();
+    tmpDir = createTempRepo();
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('creates branch from baseBranch when no upstreams', async () => {
+    const handle: FamiliarHandle = { executionId: 'e1', taskId: 'task-a' };
+    const request = makeRequest('task-a', { baseBranch: 'master' });
+    const original = await familiar.testSetupTaskBranch(tmpDir, request, handle);
+
+    expect(original).toBe('master');
+    expect(handle.branch).toBe('invoker/task-a');
+
+    const branch = execSync('git branch --show-current', { cwd: tmpDir }).toString().trim();
+    expect(branch).toBe('invoker/task-a');
+  });
+
+  it('creates branch from single upstream (inherits transitive history)', async () => {
+    // Create upstream branch with a commit
+    execSync('git checkout -b invoker/task-a', { cwd: tmpDir });
+    writeFileSync(join(tmpDir, 'a.txt'), 'a-work');
+    execSync('git add -A && git commit -m "task-a work"', { cwd: tmpDir });
+    const hashA = execSync('git rev-parse HEAD', { cwd: tmpDir }).toString().trim();
+    execSync('git checkout master', { cwd: tmpDir });
+
+    const handle: FamiliarHandle = { executionId: 'e2', taskId: 'task-b' };
+    const request = makeRequest('task-b', {
+      baseBranch: 'master',
+      upstreamBranches: ['invoker/task-a'],
+    });
+    const original = await familiar.testSetupTaskBranch(tmpDir, request, handle);
+
+    expect(original).toBe('master');
+    expect(handle.branch).toBe('invoker/task-b');
+
+    // task-b branch should be based on task-a
+    expect(isAncestor(tmpDir, hashA, 'HEAD')).toBe(true);
+    expect(existsSync(join(tmpDir, 'a.txt'))).toBe(true);
+  });
+
+  it('merges additional upstream branches (DAG fan-in)', async () => {
+    const masterHead = execSync('git rev-parse HEAD', { cwd: tmpDir }).toString().trim();
+
+    // Create two upstream branches from master
+    execSync('git checkout -b invoker/task-a', { cwd: tmpDir });
+    writeFileSync(join(tmpDir, 'a.txt'), 'a-work');
+    execSync('git add -A && git commit -m "task-a"', { cwd: tmpDir });
+    const hashA = execSync('git rev-parse HEAD', { cwd: tmpDir }).toString().trim();
+
+    execSync(`git checkout ${masterHead}`, { cwd: tmpDir });
+    execSync('git checkout -b invoker/task-b', { cwd: tmpDir });
+    writeFileSync(join(tmpDir, 'b.txt'), 'b-work');
+    execSync('git add -A && git commit -m "task-b"', { cwd: tmpDir });
+    const hashB = execSync('git rev-parse HEAD', { cwd: tmpDir }).toString().trim();
+
+    execSync('git checkout master', { cwd: tmpDir });
+
+    const handle: FamiliarHandle = { executionId: 'e3', taskId: 'task-c' };
+    const request = makeRequest('task-c', {
+      baseBranch: 'master',
+      upstreamBranches: ['invoker/task-a', 'invoker/task-b'],
+    });
+    await familiar.testSetupTaskBranch(tmpDir, request, handle);
+
+    expect(handle.branch).toBe('invoker/task-c');
+    expect(isAncestor(tmpDir, hashA, 'HEAD')).toBe(true);
+    expect(isAncestor(tmpDir, hashB, 'HEAD')).toBe(true);
+    expect(existsSync(join(tmpDir, 'a.txt'))).toBe(true);
+    expect(existsSync(join(tmpDir, 'b.txt'))).toBe(true);
+  });
+
+  it('returns undefined for non-git directories', async () => {
+    const nonGitDir = mkdtempSync(join(tmpdir(), 'non-git-'));
+    const handle: FamiliarHandle = { executionId: 'e4', taskId: 'task-x' };
+    const request = makeRequest('task-x');
+    const original = await familiar.testSetupTaskBranch(nonGitDir, request, handle);
+
+    expect(original).toBeUndefined();
+    expect(handle.branch).toBeUndefined();
+    rmSync(nonGitDir, { recursive: true, force: true });
+  });
+
+  it('A->B->C chain: each branch carries transitive history', async () => {
+    // A: branch from master, commit
+    const handleA: FamiliarHandle = { executionId: 'e-a', taskId: 'task-a' };
+    await familiar.testSetupTaskBranch(tmpDir, makeRequest('task-a', { baseBranch: 'master' }), handleA);
+    writeFileSync(join(tmpDir, 'a.txt'), 'a');
+    execSync('git add -A && git commit -m "task-a"', { cwd: tmpDir });
+    const hashA = execSync('git rev-parse HEAD', { cwd: tmpDir }).toString().trim();
+    await familiar.testRestoreBranch(tmpDir, 'master');
+
+    // B: branch from A
+    const handleB: FamiliarHandle = { executionId: 'e-b', taskId: 'task-b' };
+    await familiar.testSetupTaskBranch(tmpDir, makeRequest('task-b', {
+      baseBranch: 'master',
+      upstreamBranches: ['invoker/task-a'],
+    }), handleB);
+    writeFileSync(join(tmpDir, 'b.txt'), 'b');
+    execSync('git add -A && git commit -m "task-b"', { cwd: tmpDir });
+    const hashB = execSync('git rev-parse HEAD', { cwd: tmpDir }).toString().trim();
+    await familiar.testRestoreBranch(tmpDir, 'master');
+
+    // C: branch from B
+    const handleC: FamiliarHandle = { executionId: 'e-c', taskId: 'task-c' };
+    await familiar.testSetupTaskBranch(tmpDir, makeRequest('task-c', {
+      baseBranch: 'master',
+      upstreamBranches: ['invoker/task-b'],
+    }), handleC);
+
+    // C should have A's and B's files (transitive)
+    expect(existsSync(join(tmpDir, 'a.txt'))).toBe(true);
+    expect(existsSync(join(tmpDir, 'b.txt'))).toBe(true);
+    expect(isAncestor(tmpDir, hashA, 'HEAD')).toBe(true);
+    expect(isAncestor(tmpDir, hashB, 'HEAD')).toBe(true);
+  });
+});
+
+// ── recordTaskResult ────────────────────────────────────────
+
+describe('BaseFamiliar.recordTaskResult', () => {
+  let familiar: TestFamiliar;
+  let tmpDir: string;
+
+  beforeEach(() => {
+    familiar = new TestFamiliar();
+    tmpDir = createTempRepo();
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('commits file changes via autoCommit', async () => {
+    writeFileSync(join(tmpDir, 'new.txt'), 'content');
+    const hash = await familiar.testRecordTaskResult(tmpDir, makeRequest('task-1', {
+      description: 'Add new file',
+    }), 0);
+
+    expect(hash).toBeTruthy();
+    const subject = getCommitSubject(tmpDir);
+    expect(subject).toContain('task-1');
+    expect(subject).toContain('Add new file');
+  });
+
+  it('creates empty commit when no file changes (command task)', async () => {
+    const hash = await familiar.testRecordTaskResult(tmpDir, makeRequest('task-1', {
+      command: 'pnpm build && pnpm test',
+      description: 'Build and test',
+    }), 0);
+
+    expect(hash).toBeTruthy();
+    const body = getCommitBody(tmpDir);
+    expect(body).toContain('task-1');
+    expect(body).toContain('Build and test');
+    expect(body).toContain('pnpm build && pnpm test');
+    expect(body).toContain('Exit code: 0');
+  });
+
+  it('records non-zero exit code in empty commit', async () => {
+    const hash = await familiar.testRecordTaskResult(tmpDir, makeRequest('task-1', {
+      command: 'false',
+    }), 1);
+
+    expect(hash).toBeTruthy();
+    const body = getCommitBody(tmpDir);
+    expect(body).toContain('Exit code: 1');
+  });
+
+  it('returns null for non-git directories', async () => {
+    const nonGitDir = mkdtempSync(join(tmpdir(), 'non-git-'));
+    const hash = await familiar.testRecordTaskResult(nonGitDir, makeRequest('task-1'), 0);
+    expect(hash).toBeNull();
+    rmSync(nonGitDir, { recursive: true, force: true });
+  });
+
+  it('prefers autoCommit over empty commit when changes exist', async () => {
+    writeFileSync(join(tmpDir, 'file.txt'), 'data');
+    await familiar.testRecordTaskResult(tmpDir, makeRequest('task-1', {
+      description: 'Changed files',
+      command: 'do stuff',
+    }), 0);
+
+    // Should use buildCommitMessage (from autoCommit), not buildResultCommitMessage
+    const body = getCommitBody(tmpDir);
+    expect(body).toContain('invoker: task-1');
+    expect(body).not.toContain('Exit code:');
+  });
+});
+
+// ── restoreBranch ───────────────────────────────────────────
+
+describe('BaseFamiliar.restoreBranch', () => {
+  let familiar: TestFamiliar;
+  let tmpDir: string;
+
+  beforeEach(() => {
+    familiar = new TestFamiliar();
+    tmpDir = createTempRepo();
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('restores original branch', async () => {
+    execSync('git checkout -b some-branch', { cwd: tmpDir });
+    await familiar.testRestoreBranch(tmpDir, 'master');
+    const branch = execSync('git branch --show-current', { cwd: tmpDir }).toString().trim();
+    expect(branch).toBe('master');
+  });
+
+  it('no-op when originalBranch is undefined', async () => {
+    const before = execSync('git branch --show-current', { cwd: tmpDir }).toString().trim();
+    await familiar.testRestoreBranch(tmpDir, undefined);
+    const after = execSync('git branch --show-current', { cwd: tmpDir }).toString().trim();
+    expect(after).toBe(before);
   });
 });
