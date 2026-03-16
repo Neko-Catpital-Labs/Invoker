@@ -317,6 +317,16 @@ export class Orchestrator {
   handleWorkerResponse(response: WorkResponse): TaskState[] {
     this.refreshFromDb();
 
+    // Ignore responses for stale tasks — their processes are orphaned
+    // and should not affect the graph.
+    {
+      const earlyTask = this.stateMachine.getTask(response.actionId);
+      if (earlyTask?.status === 'stale') {
+        this.scheduler.completeJob(response.actionId);
+        return [];
+      }
+    }
+
     // Auto-fix interception
     if (response.status === 'failed') {
       const task = this.stateMachine.getTask(response.actionId);
