@@ -1291,6 +1291,126 @@ describe('BaseFamiliar.setupTaskBranch', () => {
     expect(isAncestor(tmpDir, hashA, 'HEAD')).toBe(true);
     expect(isAncestor(tmpDir, hashB, 'HEAD')).toBe(true);
   });
+
+  describe('fan-in merge conflict handling', () => {
+    it('local fan-in merge conflict throws instead of silently failing', async () => {
+      const masterHead = execSync('git rev-parse HEAD', { cwd: tmpDir }).toString().trim();
+
+      execSync('git checkout -b invoker/branch-a', { cwd: tmpDir });
+      writeFileSync(join(tmpDir, 'conflict.txt'), 'content from branch A');
+      execSync('git add -A && git commit -m "branch A changes"', { cwd: tmpDir });
+
+      execSync(`git checkout ${masterHead}`, { cwd: tmpDir });
+      execSync('git checkout -b invoker/branch-b', { cwd: tmpDir });
+      writeFileSync(join(tmpDir, 'conflict.txt'), 'content from branch B');
+      execSync('git add -A && git commit -m "branch B changes"', { cwd: tmpDir });
+
+      execSync('git checkout master', { cwd: tmpDir });
+
+      const handle: FamiliarHandle = { executionId: 'e-conflict', taskId: 'task-conflict' };
+      const request = makeRequest('task-conflict', {
+        baseBranch: 'master',
+        upstreamBranches: ['invoker/branch-a', 'invoker/branch-b'],
+      });
+
+      await expect(familiar.testSetupTaskBranch(tmpDir, request, handle))
+        .rejects.toThrow('Failed to merge upstream branch');
+    });
+
+    it('local fan-in merge conflict runs merge --abort', async () => {
+      const masterHead = execSync('git rev-parse HEAD', { cwd: tmpDir }).toString().trim();
+
+      execSync('git checkout -b invoker/branch-c', { cwd: tmpDir });
+      writeFileSync(join(tmpDir, 'conflict2.txt'), 'content from branch C');
+      execSync('git add -A && git commit -m "branch C changes"', { cwd: tmpDir });
+
+      execSync(`git checkout ${masterHead}`, { cwd: tmpDir });
+      execSync('git checkout -b invoker/branch-d', { cwd: tmpDir });
+      writeFileSync(join(tmpDir, 'conflict2.txt'), 'content from branch D');
+      execSync('git add -A && git commit -m "branch D changes"', { cwd: tmpDir });
+
+      execSync('git checkout master', { cwd: tmpDir });
+
+      const handle: FamiliarHandle = { executionId: 'e-conflict2', taskId: 'task-conflict2' };
+      const request = makeRequest('task-conflict2', {
+        baseBranch: 'master',
+        upstreamBranches: ['invoker/branch-c', 'invoker/branch-d'],
+      });
+
+      await expect(familiar.testSetupTaskBranch(tmpDir, request, handle))
+        .rejects.toThrow('Failed to merge upstream branch');
+
+      const status = execSync('git status --porcelain', { cwd: tmpDir }).toString().trim();
+      expect(status).toBe('');
+    });
+
+    it('diamond conflict recovery: restart one side and re-execute resolves fan-in', async () => {
+      const masterHead = execSync('git rev-parse HEAD', { cwd: tmpDir }).toString().trim();
+
+      execSync('git checkout -b invoker/branch-b1', { cwd: tmpDir });
+      writeFileSync(join(tmpDir, 'shared-recover.txt'), 'content from B1');
+      execSync('git add -A && git commit -m "branch B1 changes"', { cwd: tmpDir });
+
+      execSync(`git checkout ${masterHead}`, { cwd: tmpDir });
+      execSync('git checkout -b invoker/branch-c1', { cwd: tmpDir });
+      writeFileSync(join(tmpDir, 'shared-recover.txt'), 'content from C1');
+      execSync('git add -A && git commit -m "branch C1 changes"', { cwd: tmpDir });
+
+      execSync('git checkout master', { cwd: tmpDir });
+
+      const handle: FamiliarHandle = { executionId: 'e-recover', taskId: 'task-recover' };
+      const request = makeRequest('task-recover', {
+        baseBranch: 'master',
+        upstreamBranches: ['invoker/branch-b1', 'invoker/branch-c1'],
+      });
+
+      await expect(familiar.testSetupTaskBranch(tmpDir, request, handle))
+        .rejects.toThrow('Failed to merge upstream branch');
+
+      execSync('git checkout invoker/branch-c1', { cwd: tmpDir });
+      execSync('git reset --soft HEAD~1', { cwd: tmpDir });
+      execSync('git rm -f shared-recover.txt', { cwd: tmpDir });
+      writeFileSync(join(tmpDir, 'c1-only.txt'), 'non-conflicting content');
+      execSync('git add c1-only.txt && git commit -m "branch C1 revised"', { cwd: tmpDir });
+      execSync('git checkout master', { cwd: tmpDir });
+
+      execSync('git branch -D invoker/task-recover', { cwd: tmpDir });
+
+      const handle2: FamiliarHandle = { executionId: 'e-recover2', taskId: 'task-recover' };
+      const original = await familiar.testSetupTaskBranch(tmpDir, request, handle2);
+
+      expect(original).toBe('master');
+      expect(handle2.branch).toBe('invoker/task-recover');
+      expect(existsSync(join(tmpDir, 'shared-recover.txt'))).toBe(true);
+      const content = readFileSync(join(tmpDir, 'shared-recover.txt'), 'utf-8');
+      expect(content).toBe('content from B1');
+      expect(existsSync(join(tmpDir, 'c1-only.txt'))).toBe(true);
+    });
+
+    it('diamond conflict at setupTaskBranch surfaces error with merge details', async () => {
+      const masterHead = execSync('git rev-parse HEAD', { cwd: tmpDir }).toString().trim();
+
+      execSync('git checkout -b invoker/branch-x', { cwd: tmpDir });
+      writeFileSync(join(tmpDir, 'shared-detail.txt'), 'content from X');
+      execSync('git add -A && git commit -m "branch X changes"', { cwd: tmpDir });
+
+      execSync(`git checkout ${masterHead}`, { cwd: tmpDir });
+      execSync('git checkout -b invoker/branch-y', { cwd: tmpDir });
+      writeFileSync(join(tmpDir, 'shared-detail.txt'), 'content from Y');
+      execSync('git add -A && git commit -m "branch Y changes"', { cwd: tmpDir });
+
+      execSync('git checkout master', { cwd: tmpDir });
+
+      const handle: FamiliarHandle = { executionId: 'e-detail', taskId: 'task-detail' };
+      const request = makeRequest('task-detail', {
+        baseBranch: 'master',
+        upstreamBranches: ['invoker/branch-x', 'invoker/branch-y'],
+      });
+
+      await expect(familiar.testSetupTaskBranch(tmpDir, request, handle))
+        .rejects.toThrow(/invoker\/branch-y/);
+    });
+  });
 });
 
 // ── recordTaskResult ────────────────────────────────────────

@@ -2143,6 +2143,198 @@ describe('Orchestrator', () => {
     });
   });
 
+  // ── restartTask edge cases ─────────────────────────────
+
+  describe('restartTask edge cases', () => {
+    let logSpy: ReturnType<typeof vi.spyOn>;
+    let warnSpy: ReturnType<typeof vi.spyOn>;
+
+    beforeEach(() => {
+      logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+      logSpy.mockRestore();
+      warnSpy.mockRestore();
+    });
+
+    it('restartTask from blocked status resets to pending', () => {
+      orchestrator.loadPlan({
+        name: 'blocked-restart-test',
+        tasks: [
+          { id: 'A', description: 'Root', command: 'echo A' },
+          { id: 'B', description: 'Depends on A', command: 'echo B', dependencies: ['A'] },
+        ],
+      });
+      orchestrator.startExecution();
+
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 'A', status: 'failed', outputs: { exitCode: 1, error: 'fail' } }),
+      );
+      expect(orchestrator.getTask('B')!.status).toBe('blocked');
+
+      const result = orchestrator.restartTask('B');
+
+      expect(result).toHaveLength(1);
+      expect(result[0].status).toBe('pending');
+      expect(orchestrator.getTask('B')!.status).toBe('pending');
+    });
+
+    it('restartTask from needs_input status resets to pending', () => {
+      orchestrator.loadPlan({
+        name: 'needs-input-restart-test',
+        tasks: [
+          { id: 't1', description: 'Task needing input', command: 'echo t1' },
+        ],
+      });
+      orchestrator.startExecution();
+
+      orchestrator.handleWorkerResponse(
+        makeResponse({
+          actionId: 't1',
+          status: 'needs_input',
+          outputs: { summary: 'What path?' },
+        }),
+      );
+      expect(orchestrator.getTask('t1')!.status).toBe('needs_input');
+
+      const result = orchestrator.restartTask('t1');
+
+      expect(result).toHaveLength(1);
+      expect(result[0].status).toBe('running');
+      expect(orchestrator.getTask('t1')!.status).toBe('running');
+    });
+
+    it('restartTask on running task sets it to pending', () => {
+      orchestrator.loadPlan({
+        name: 'running-restart-test',
+        tasks: [
+          { id: 't1', description: 'Running task', command: 'echo t1' },
+        ],
+      });
+      orchestrator.startExecution();
+      expect(orchestrator.getTask('t1')!.status).toBe('running');
+
+      const result = orchestrator.restartTask('t1');
+
+      expect(result).toHaveLength(1);
+      expect(result[0].status).toBe('running');
+      expect(orchestrator.getTask('t1')!.status).toBe('running');
+    });
+
+    it('restartTask clears commit but preserves branch and workspacePath', () => {
+      const hydratePersistence = new InMemoryPersistence();
+      const hydrateBus = new InMemoryBus();
+
+      hydratePersistence.saveTask('wf-branch-test', {
+        id: 't1',
+        description: 'Completed with branch info',
+        status: 'completed',
+        dependencies: [],
+        createdAt: new Date(),
+        config: {},
+        execution: {
+          branch: 'feature/test',
+          workspacePath: '/tmp/workspace',
+          commit: 'abc123',
+          completedAt: new Date(),
+          exitCode: 0,
+        },
+      });
+
+      const testOrchestrator = new Orchestrator({
+        persistence: hydratePersistence,
+        messageBus: hydrateBus,
+        maxConcurrency: 3,
+      });
+
+      testOrchestrator.syncFromDb('wf-branch-test');
+      testOrchestrator.restartTask('t1');
+
+      const task = testOrchestrator.getTask('t1')!;
+      expect(task.execution.commit).toBeUndefined();
+      expect(task.execution.branch).toBe('feature/test');
+      expect(task.execution.workspacePath).toBe('/tmp/workspace');
+    });
+
+    it('blockedBy overwrite: restart first failure does not unblock task blocked by second failure', () => {
+      orchestrator.loadPlan({
+        name: 'blocked-overwrite-test',
+        tasks: [
+          { id: 'A', description: 'Root A', command: 'echo A' },
+          { id: 'B', description: 'Root B', command: 'echo B' },
+          { id: 'C', description: 'Fan-in', command: 'echo C', dependencies: ['A', 'B'] },
+        ],
+      });
+      orchestrator.startExecution();
+
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 'A', status: 'failed', outputs: { exitCode: 1, error: 'a' } }),
+      );
+      expect(orchestrator.getTask('C')!.execution.blockedBy).toBe('A');
+
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 'B', status: 'failed', outputs: { exitCode: 1, error: 'b' } }),
+      );
+      expect(orchestrator.getTask('C')!.execution.blockedBy).toBe('B');
+
+      orchestrator.restartTask('A');
+
+      expect(orchestrator.getTask('C')!.status).toBe('blocked');
+      expect(orchestrator.getTask('C')!.execution.blockedBy).toBe('B');
+    });
+
+    it('restarting failed experiment resets reconciliation from needs_input to pending', () => {
+      orchestrator.loadPlan({
+        name: 'recon-reset-test',
+        tasks: [
+          { id: 'pivot', description: 'Pivot task', pivot: true },
+          { id: 'downstream', description: 'After pivot', dependencies: ['pivot'] },
+        ],
+      });
+      orchestrator.startExecution();
+
+      orchestrator.handleWorkerResponse(
+        makeResponse({
+          actionId: 'pivot',
+          status: 'spawn_experiments',
+          dagMutation: {
+            spawnExperiments: {
+              description: 'Try variants',
+              variants: [
+                { id: 'v1', prompt: 'Approach A' },
+                { id: 'v2', prompt: 'Approach B' },
+              ],
+            },
+          },
+        }),
+      );
+
+      orchestrator.handleWorkerResponse(
+        makeResponse({
+          actionId: 'pivot-exp-v1',
+          status: 'completed',
+          outputs: { exitCode: 0 },
+        }),
+      );
+
+      orchestrator.handleWorkerResponse(
+        makeResponse({
+          actionId: 'pivot-exp-v2',
+          status: 'completed',
+          outputs: { exitCode: 0 },
+        }),
+      );
+
+      expect(orchestrator.getTask('pivot-reconciliation')!.status).toBe('needs_input');
+
+      orchestrator.restartTask('pivot-exp-v1');
+
+      expect(orchestrator.getTask('pivot-reconciliation')!.status).toBe('pending');
+    });
+  });
+
   // ── Long session resilience ────────────────────────────
 
   describe('long session resilience', () => {
