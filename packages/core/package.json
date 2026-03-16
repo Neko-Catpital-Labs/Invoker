@@ -12,7 +12,7 @@
   },
   "scripts": {
     "build": "tsup src/index.ts --format esm --dts",
-    "test": "vitest run",
+    "test": "../../scripts/electron-vitest run",
     "test:watch": "vitest",
     "clean": "rm -rf dist"
   },

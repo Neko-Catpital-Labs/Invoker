@@ -13,7 +13,7 @@
   "scripts": {
     "build": "tsup src/index.ts --format esm --dts",
     "docker:build": "docker build -t invoker-agent:latest -f docker/Dockerfile.claude docker/",
-    "test": "vitest run",
+    "test": "../../scripts/electron-vitest run",
     "clean": "rm -rf dist"
   },
   "dependencies": {
