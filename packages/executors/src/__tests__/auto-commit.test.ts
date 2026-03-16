@@ -50,6 +50,35 @@ class TestFamiliar extends BaseFamiliar<BaseEntry> {
   async testRestoreBranch(cwd: string, originalBranch: string | undefined): Promise<void> {
     return this.restoreBranch(cwd, originalBranch);
   }
+
+  async testSyncFromRemote(cwd: string, executionId?: string): Promise<void> {
+    return this.syncFromRemote(cwd, executionId);
+  }
+
+  async testPushBranchToRemote(cwd: string, branch: string, executionId?: string): Promise<void> {
+    return this.pushBranchToRemote(cwd, branch, executionId);
+  }
+
+  testBuildCommandAndArgs(request: WorkRequest, claudeCommand?: string) {
+    return this.buildCommandAndArgs(request, claudeCommand);
+  }
+
+  testScheduleReconciliationResponse(executionId: string) {
+    return this.scheduleReconciliationResponse(executionId);
+  }
+
+  registerTestEntry(executionId: string, request: WorkRequest) {
+    const entry: BaseEntry = {
+      request,
+      outputListeners: new Set(),
+      outputBuffer: [],
+      completeListeners: new Set(),
+      heartbeatListeners: new Set(),
+      completed: false,
+    };
+    this.entries.set(executionId, entry);
+    return entry;
+  }
 }
 
 function createTempRepo(): string {
@@ -1512,5 +1541,189 @@ describe('BaseFamiliar.restoreBranch', () => {
     await familiar.testRestoreBranch(tmpDir, undefined);
     const after = execSync('git branch --show-current', { cwd: tmpDir }).toString().trim();
     expect(after).toBe(before);
+  });
+});
+
+// ── Sync hooks ──────────────────────────────────────────
+
+describe('BaseFamiliar.syncFromRemote', () => {
+  let familiar: TestFamiliar;
+  let originDir: string;
+  let cloneDir: string;
+
+  beforeEach(() => {
+    familiar = new TestFamiliar();
+    // Create a bare origin and a clone
+    originDir = mkdtempSync(join(tmpdir(), 'sync-origin-'));
+    execSync('git init --bare', { cwd: originDir });
+    cloneDir = mkdtempSync(join(tmpdir(), 'sync-clone-'));
+    execSync(`git clone ${originDir} .`, { cwd: cloneDir });
+    execSync('git config user.email "test@test.com"', { cwd: cloneDir });
+    execSync('git config user.name "Test"', { cwd: cloneDir });
+    writeFileSync(join(cloneDir, 'file.txt'), 'initial');
+    execSync('git add -A && git commit -m "initial"', { cwd: cloneDir });
+    execSync('git push origin HEAD', { cwd: cloneDir });
+  });
+
+  afterEach(() => {
+    rmSync(originDir, { recursive: true, force: true });
+    rmSync(cloneDir, { recursive: true, force: true });
+  });
+
+  it('fetches new commits from remote', async () => {
+    // Push a second commit via a separate clone so the first clone is behind
+    const clone2 = mkdtempSync(join(tmpdir(), 'sync-clone2-'));
+    execSync(`git clone ${originDir} .`, { cwd: clone2 });
+    execSync('git config user.email "test@test.com"', { cwd: clone2 });
+    execSync('git config user.name "Test"', { cwd: clone2 });
+    writeFileSync(join(clone2, 'file2.txt'), 'second');
+    execSync('git add -A && git commit -m "second" && git push origin HEAD', { cwd: clone2 });
+    rmSync(clone2, { recursive: true, force: true });
+
+    // Before sync, cloneDir doesn't know about the new commit
+    const beforeCount = execSync('git rev-list --count HEAD', { cwd: cloneDir }).toString().trim();
+    expect(beforeCount).toBe('1');
+
+    await familiar.testSyncFromRemote(cloneDir);
+
+    // After sync, origin/master has 2 commits
+    const afterCount = execSync('git rev-list --count origin/master', { cwd: cloneDir }).toString().trim();
+    expect(afterCount).toBe('2');
+  });
+
+  it('does not throw when not in a git repo', async () => {
+    const noGit = mkdtempSync(join(tmpdir(), 'sync-nogit-'));
+    await expect(familiar.testSyncFromRemote(noGit)).resolves.toBeUndefined();
+    rmSync(noGit, { recursive: true, force: true });
+  });
+
+  it('does not throw when remote is unreachable', async () => {
+    // Point origin to a nonexistent path
+    execSync('git remote set-url origin /nonexistent/repo', { cwd: cloneDir });
+    await expect(familiar.testSyncFromRemote(cloneDir)).resolves.toBeUndefined();
+  });
+});
+
+describe('BaseFamiliar.pushBranchToRemote', () => {
+  let familiar: TestFamiliar;
+  let originDir: string;
+  let cloneDir: string;
+
+  beforeEach(() => {
+    familiar = new TestFamiliar();
+    originDir = mkdtempSync(join(tmpdir(), 'push-origin-'));
+    execSync('git init --bare', { cwd: originDir });
+    cloneDir = mkdtempSync(join(tmpdir(), 'push-clone-'));
+    execSync(`git clone ${originDir} .`, { cwd: cloneDir });
+    execSync('git config user.email "test@test.com"', { cwd: cloneDir });
+    execSync('git config user.name "Test"', { cwd: cloneDir });
+    writeFileSync(join(cloneDir, 'file.txt'), 'initial');
+    execSync('git add -A && git commit -m "initial"', { cwd: cloneDir });
+    execSync('git push origin HEAD', { cwd: cloneDir });
+  });
+
+  afterEach(() => {
+    rmSync(originDir, { recursive: true, force: true });
+    rmSync(cloneDir, { recursive: true, force: true });
+  });
+
+  it('pushes a local branch to the remote', async () => {
+    execSync('git checkout -b invoker/task-push', { cwd: cloneDir });
+    writeFileSync(join(cloneDir, 'task.txt'), 'task result');
+    execSync('git add -A && git commit -m "task commit"', { cwd: cloneDir });
+
+    await familiar.testPushBranchToRemote(cloneDir, 'invoker/task-push');
+
+    // Verify the branch exists on the bare remote
+    const remoteBranches = execSync('git branch', { cwd: originDir }).toString();
+    expect(remoteBranches).toContain('invoker/task-push');
+  });
+
+  it('does not throw when branch does not exist', async () => {
+    await expect(
+      familiar.testPushBranchToRemote(cloneDir, 'nonexistent-branch'),
+    ).resolves.toBeUndefined();
+  });
+
+  it('does not throw when remote is unreachable', async () => {
+    execSync('git checkout -b invoker/task-nopush', { cwd: cloneDir });
+    execSync('git remote set-url origin /nonexistent/repo', { cwd: cloneDir });
+    await expect(
+      familiar.testPushBranchToRemote(cloneDir, 'invoker/task-nopush'),
+    ).resolves.toBeUndefined();
+  });
+});
+
+// ── buildCommandAndArgs ─────────────────────────────────
+
+describe('BaseFamiliar.buildCommandAndArgs', () => {
+  let familiar: TestFamiliar;
+
+  beforeEach(() => {
+    familiar = new TestFamiliar();
+  });
+
+  it('returns shell command for actionType=command', () => {
+    const req = makeRequest('act', { command: 'echo hello' });
+    req.actionType = 'command';
+    const result = familiar.testBuildCommandAndArgs(req);
+    expect(result.cmd).toBe('/bin/sh');
+    expect(result.args).toEqual(['-c', 'echo hello']);
+    expect(result.claudeSessionId).toBeUndefined();
+  });
+
+  it('throws when actionType=command has no command', () => {
+    const req = makeRequest('act', {});
+    req.actionType = 'command';
+    req.inputs.command = undefined;
+    expect(() => familiar.testBuildCommandAndArgs(req)).toThrow('must have inputs.command');
+  });
+
+  it('returns claude CLI for actionType=claude', () => {
+    const req = makeRequest('act', { prompt: 'Do something' });
+    req.actionType = 'claude';
+    const result = familiar.testBuildCommandAndArgs(req, 'my-claude');
+    expect(result.cmd).toBe('my-claude');
+    expect(result.claudeSessionId).toBeDefined();
+    expect(result.args).toContain('--dangerously-skip-permissions');
+  });
+
+  it('returns echo stub for unsupported actionType', () => {
+    const req = makeRequest('act', {});
+    req.actionType = 'reconciliation';
+    const result = familiar.testBuildCommandAndArgs(req);
+    expect(result.cmd).toBe('/bin/sh');
+    expect(result.args[1]).toContain('Unsupported');
+  });
+});
+
+// ── scheduleReconciliationResponse ──────────────────────
+
+describe('BaseFamiliar.scheduleReconciliationResponse', () => {
+  let familiar: TestFamiliar;
+
+  beforeEach(() => {
+    familiar = new TestFamiliar();
+  });
+
+  it('emits needs_input response asynchronously', async () => {
+    const req = makeRequest('recon-task', {});
+    const entry = familiar.registerTestEntry('exec-1', req);
+
+    let receivedResponse: WorkResponse | undefined;
+    entry.completeListeners.add((r) => { receivedResponse = r; });
+
+    familiar.testScheduleReconciliationResponse('exec-1');
+
+    // Should not fire synchronously
+    expect(receivedResponse).toBeUndefined();
+
+    // Wait for setTimeout(0)
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(receivedResponse).toBeDefined();
+    expect(receivedResponse!.status).toBe('needs_input');
+    expect(receivedResponse!.actionId).toBe('recon-task');
+    expect(entry.completed).toBe(true);
   });
 });
