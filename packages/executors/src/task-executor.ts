@@ -444,7 +444,10 @@ export class TaskExecutor {
 
       for (const branch of taskBranches) {
         console.log(`[merge] Merging task branch: ${branch} → ${featureBranch}`);
-        await this.execGit(['merge', '--no-ff', '-m', `Merge ${branch}`, branch]);
+        const task = allTasks.find(t => t.execution.branch === branch);
+        const desc = task?.description ?? '';
+        const mergeMsg = desc ? `Merge ${branch} — ${desc}` : `Merge ${branch}`;
+        await this.execGit(['merge', '--no-ff', '-m', mergeMsg, branch]);
       }
       console.log(`[merge] Consolidated ${taskBranches.length} task branches into ${featureBranch}`);
 
@@ -561,7 +564,8 @@ export class TaskExecutor {
         if (!expTask?.execution.branch) {
           throw new Error(`Experiment ${expId} has no branch`);
         }
-        await this.execGit(['merge', '--no-ff', '-m', `Merge ${expTask.execution.branch}`, expTask.execution.branch]);
+        const expMergeMsg = `Merge ${expTask.execution.branch} — ${expTask.description}`;
+        await this.execGit(['merge', '--no-ff', '-m', expMergeMsg, expTask.execution.branch]);
       }
 
       const commit = await this.execGit(['rev-parse', 'HEAD']);
@@ -608,7 +612,11 @@ export class TaskExecutor {
 
       // Re-merge the conflicting upstream branch (will reproduce the conflict)
       try {
-        await this.execGit(['merge', '--no-edit', '-m', `Merge upstream ${conflictInfo.failedBranch}`, conflictInfo.failedBranch]);
+        const depTask = this.orchestrator.getAllTasks().find(t => t.execution.branch === conflictInfo.failedBranch);
+        const conflictMergeMsg = depTask?.description
+          ? `Merge upstream ${conflictInfo.failedBranch} — ${depTask.description}`
+          : `Merge upstream ${conflictInfo.failedBranch}`;
+        await this.execGit(['merge', '--no-edit', '-m', conflictMergeMsg, conflictInfo.failedBranch]);
         console.log(`[resolveConflict] Merge succeeded without conflict on retry for ${taskId}`);
       } catch {
         // Expected: conflict reproduced — now spawn Claude to resolve it

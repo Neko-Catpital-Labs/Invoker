@@ -287,6 +287,19 @@ export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar
     });
   }
 
+  protected async buildUpstreamMergeMessage(branch: string, cwd: string): Promise<string> {
+    try {
+      const tipMsg = (await this.execGitSimple(['log', '--first-parent', '--no-merges', '-1', '--format=%B', branch], cwd)).trim();
+      const firstLine = tipMsg.split('\n')[0];
+      const desc = firstLine.includes(' — ') ? firstLine.split(' — ').slice(1).join(' — ') : '';
+      const headline = desc ? `Merge upstream ${branch} — ${desc}` : `Merge upstream ${branch}`;
+      const body = tipMsg.split('\n').slice(1).join('\n').trim();
+      return body ? `${headline}\n\n${body}` : headline;
+    } catch {
+      return `Merge upstream ${branch}`;
+    }
+  }
+
   // ── Shared branch lifecycle ────────────────────────────────
 
   /**
@@ -314,7 +327,8 @@ export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar
 
       for (const ub of upstreams.slice(1)) {
         try {
-          await this.execGitSimple(['merge', '--no-edit', '-m', `Merge upstream ${ub}`, ub], cwd);
+          const mergeMsg = await this.buildUpstreamMergeMessage(ub, cwd);
+          await this.execGitSimple(['merge', '--no-edit', '-m', mergeMsg, ub], cwd);
         } catch (err) {
           let conflictFiles: string[] = [];
           try {

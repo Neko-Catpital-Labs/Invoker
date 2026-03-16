@@ -572,6 +572,137 @@ describe('WorktreeFamiliar', () => {
       taskProcess.emit('close', 0, null);
     });
 
+    it('includes tip commit description in merge -m message', async () => {
+      const taskProcess = createMockProcess();
+      let taskReturned = false;
+
+      mockedSpawn.mockImplementation((cmd: string, args?: readonly string[], _options?: any) => {
+        if (cmd === 'git') {
+          const gitProc = createMockProcess();
+          Promise.resolve().then(() => {
+            const argsArr = args as string[];
+            if (argsArr?.includes('rev-parse')) {
+              gitProc.stdout!.emit('data', Buffer.from('abc123def456\n'));
+            }
+            if (argsArr?.[0] === 'merge-base' && argsArr?.[1] === '--is-ancestor') {
+              gitProc.emit('close', 1, null);
+              return;
+            }
+            if (argsArr?.[0] === 'log' && argsArr?.includes('--format=%B')) {
+              gitProc.stdout!.emit('data', Buffer.from(
+                'invoker: dep-task — Add typing indicator support\n\nPrompt:\n  Add typing indicator functionality\nExit code: 0\n',
+              ));
+            }
+            gitProc.emit('close', 0, null);
+          });
+          return gitProc as any;
+        }
+        if (cmd === '/bin/sh' && (args as string[])?.[1]?.includes('pnpm install')) {
+          const installProc = createMockProcess();
+          Promise.resolve().then(() => installProc.emit('close', 0, null));
+          return installProc as any;
+        }
+        if (!taskReturned) {
+          taskReturned = true;
+          return taskProcess as any;
+        }
+        return createMockProcess() as any;
+      });
+
+      const request = makeRequest({
+        inputs: {
+          command: 'echo hello',
+          upstreamBranches: ['experiment/dep-task-abc123'],
+        },
+      });
+      await familiar.start(request);
+
+      const gitCalls = mockedSpawn.mock.calls.filter(
+        (call) => call[0] === 'git',
+      );
+      const mergeCalls = gitCalls.filter(
+        (call) => (call[1] as string[])?.[0] === 'merge',
+      );
+
+      expect(mergeCalls).toHaveLength(1);
+      const mergeArgs = mergeCalls[0][1] as string[];
+      const mIdx = mergeArgs.indexOf('-m');
+      const mergeMsg = mergeArgs[mIdx + 1];
+      expect(mergeMsg).toContain('experiment/dep-task-abc123');
+      expect(mergeMsg).toContain('Add typing indicator support');
+      expect(mergeMsg).toContain('Prompt:');
+
+      taskProcess.emit('close', 0, null);
+    });
+
+    it('extracts task commit description, not merge commit, for nested merges', async () => {
+      const taskProcess = createMockProcess();
+      let taskReturned = false;
+
+      mockedSpawn.mockImplementation((cmd: string, args?: readonly string[], _options?: any) => {
+        if (cmd === 'git') {
+          const gitProc = createMockProcess();
+          Promise.resolve().then(() => {
+            const argsArr = args as string[];
+            if (argsArr?.includes('rev-parse')) {
+              gitProc.stdout!.emit('data', Buffer.from('abc123def456\n'));
+            }
+            if (argsArr?.[0] === 'merge-base' && argsArr?.[1] === '--is-ancestor') {
+              gitProc.emit('close', 1, null);
+              return;
+            }
+            if (argsArr?.[0] === 'log' && argsArr?.includes('--format=%B')) {
+              if (argsArr?.includes('--first-parent') && argsArr?.includes('--no-merges')) {
+                gitProc.stdout!.emit('data', Buffer.from(
+                  'invoker: fork1-add-api — Build REST API endpoints\n\nPrompt:\n  Create REST API endpoints\nExit code: 0\n',
+                ));
+              } else {
+                gitProc.stdout!.emit('data', Buffer.from(
+                  'Merge upstream experiment/fork2-add-caching — Add Redis caching layer\n\nPrompt:\n  Add Redis caching\nExit code: 0\n',
+                ));
+              }
+            }
+            gitProc.emit('close', 0, null);
+          });
+          return gitProc as any;
+        }
+        if (cmd === '/bin/sh' && (args as string[])?.[1]?.includes('pnpm install')) {
+          const installProc = createMockProcess();
+          Promise.resolve().then(() => installProc.emit('close', 0, null));
+          return installProc as any;
+        }
+        if (!taskReturned) {
+          taskReturned = true;
+          return taskProcess as any;
+        }
+        return createMockProcess() as any;
+      });
+
+      const request = makeRequest({
+        inputs: {
+          command: 'echo hello',
+          upstreamBranches: ['experiment/fork1-add-api-hash1'],
+        },
+      });
+      await familiar.start(request);
+
+      const gitCalls = mockedSpawn.mock.calls.filter(
+        (call) => call[0] === 'git',
+      );
+      const mergeCalls = gitCalls.filter(
+        (call) => (call[1] as string[])?.[0] === 'merge',
+      );
+
+      expect(mergeCalls).toHaveLength(1);
+      const mergeArgs = mergeCalls[0][1] as string[];
+      const mIdx = mergeArgs.indexOf('-m');
+      const mergeMsg = mergeArgs[mIdx + 1];
+      expect(mergeMsg).toContain('Build REST API endpoints');
+      expect(mergeMsg).not.toContain('Add Redis caching layer');
+
+      taskProcess.emit('close', 0, null);
+    });
+
     it('fails the task start when merge conflicts occur', async () => {
       // Override spawn to make merge commands fail
       const taskProcess = createMockProcess();
