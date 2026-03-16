@@ -545,8 +545,9 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
       }
 
       try {
+        const mergeMsg = await this.buildUpstreamMergeMessage(upBranch, worktreeDir);
         await this.execGitSimple(
-          ['merge', '--no-edit', '-m', `Merge upstream ${upBranch}`, upBranch],
+          ['merge', '--no-edit', '-m', mergeMsg, upBranch],
           worktreeDir,
         );
       } catch (err) {

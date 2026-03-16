@@ -1345,7 +1345,10 @@ describe('TaskExecutor', () => {
         },
       }));
 
-      const orchestrator = { getTask: (id: string) => tasks.get(id) };
+      const orchestrator = {
+        getTask: (id: string) => tasks.get(id),
+        getAllTasks: () => Array.from(tasks.values()),
+      };
       const executor = new TaskExecutor({
         orchestrator: orchestrator as any,
         persistence: {} as any,
@@ -1369,6 +1372,166 @@ describe('TaskExecutor', () => {
       // Should have attempted to merge the conflicting branch
       const mergeCall = gitCalls.find(c => c[0] === 'merge' && c.includes('invoker/dep-task'));
       expect(mergeCall).toBeDefined();
+    });
+  });
+
+  describe('merge commit messages include task descriptions', () => {
+    it('consolidateAndMerge includes task description in merge -m', async () => {
+      const tasks = new Map<string, TaskState>();
+      tasks.set('task-a', makeTask({
+        id: 'task-a',
+        description: 'Add user authentication',
+        status: 'completed',
+        config: { workflowId: 'wf-msg' },
+        execution: { branch: 'invoker/task-a' },
+      }));
+      tasks.set('__merge__wf-msg', makeTask({
+        id: '__merge__wf-msg',
+        status: 'running',
+        dependencies: ['task-a'],
+        config: { workflowId: 'wf-msg', isMergeNode: true },
+      }));
+
+      const orchestrator = {
+        getTask: (id: string) => tasks.get(id),
+        getAllTasks: () => Array.from(tasks.values()),
+        handleWorkerResponse: vi.fn(),
+        setTaskAwaitingApproval: vi.fn(),
+      };
+
+      const executor = new TaskExecutor({
+        orchestrator: orchestrator as any,
+        persistence: { loadWorkflow: () => ({ onFinish: 'merge', mergeMode: 'automatic', baseBranch: 'master', featureBranch: 'feature/wf-msg', name: 'Test' }), updateTask: vi.fn() } as any,
+        familiarRegistry: { getDefault: () => ({ type: 'local' }), get: () => null, getAll: () => [], getMergeGateFamiliar: () => ({ type: 'local' }) } as any,
+        cwd: '/tmp',
+      });
+
+      const mergeMsgs: string[] = [];
+      (executor as any).execGit = async (args: string[]) => {
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        if (args[0] === 'merge' && args[1] === '--no-ff') {
+          const mIdx = args.indexOf('-m');
+          if (mIdx !== -1) mergeMsgs.push(args[mIdx + 1]);
+        }
+        return '';
+      };
+
+      await executor.executeTask(tasks.get('__merge__wf-msg')!);
+
+      const taskMergeMsg = mergeMsgs.find(m => m.includes('invoker/task-a'));
+      expect(taskMergeMsg).toBeDefined();
+      expect(taskMergeMsg).toContain('Add user authentication');
+    });
+
+    it('mergeExperimentBranches includes experiment description in merge -m', async () => {
+      const tasks = new Map<string, TaskState>();
+      tasks.set('exp-v1', makeTask({
+        id: 'exp-v1',
+        description: 'Use Redis for caching',
+        status: 'completed',
+        execution: { branch: 'experiment/exp-v1-abc', commit: 'c1' },
+      }));
+      tasks.set('exp-v2', makeTask({
+        id: 'exp-v2',
+        description: 'Use Memcached for caching',
+        status: 'completed',
+        execution: { branch: 'experiment/exp-v2-def', commit: 'c2' },
+      }));
+      tasks.set('recon', makeTask({
+        id: 'recon',
+        config: { isReconciliation: true, parentTask: 'pivot' },
+      }));
+      tasks.set('pivot', makeTask({
+        id: 'pivot',
+        status: 'completed',
+        execution: { branch: 'experiment/pivot-base' },
+      }));
+
+      const orchestrator = {
+        getTask: (id: string) => tasks.get(id),
+        getAllTasks: () => Array.from(tasks.values()),
+      };
+
+      const executor = new TaskExecutor({
+        orchestrator: orchestrator as any,
+        persistence: {} as any,
+        familiarRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+        defaultBranch: 'master',
+      });
+
+      const mergeMsgs: string[] = [];
+      (executor as any).execGit = async (args: string[]) => {
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        if (args[0] === 'rev-parse' && args[1] === 'HEAD') return 'merged-hash';
+        if (args[0] === 'merge' && args[1] === '--no-ff') {
+          const mIdx = args.indexOf('-m');
+          if (mIdx !== -1) mergeMsgs.push(args[mIdx + 1]);
+        }
+        return '';
+      };
+
+      await executor.mergeExperimentBranches('recon', ['exp-v1', 'exp-v2']);
+
+      expect(mergeMsgs).toHaveLength(2);
+      expect(mergeMsgs[0]).toContain('experiment/exp-v1-abc');
+      expect(mergeMsgs[0]).toContain('Use Redis for caching');
+      expect(mergeMsgs[1]).toContain('experiment/exp-v2-def');
+      expect(mergeMsgs[1]).toContain('Use Memcached for caching');
+    });
+
+    it('resolveConflictWithClaude includes dep description in merge -m', async () => {
+      const tasks = new Map<string, TaskState>();
+      tasks.set('dep-task', makeTask({
+        id: 'dep-task',
+        description: 'Add typing indicator support',
+        status: 'completed',
+        execution: { branch: 'invoker/dep-task' },
+      }));
+
+      const conflictError = JSON.stringify({
+        type: 'merge_conflict',
+        failedBranch: 'invoker/dep-task',
+        conflictFiles: ['src/handler.ts'],
+      });
+      tasks.set('conflict-task', makeTask({
+        id: 'conflict-task',
+        description: 'Update handler',
+        status: 'failed',
+        execution: {
+          error: conflictError,
+          branch: 'invoker/conflict-task',
+          workspacePath: '/tmp/workspace',
+        },
+      }));
+
+      const orchestrator = {
+        getTask: (id: string) => tasks.get(id),
+        getAllTasks: () => Array.from(tasks.values()),
+      };
+
+      const executor = new TaskExecutor({
+        orchestrator: orchestrator as any,
+        persistence: {} as any,
+        familiarRegistry: { getDefault: () => ({ type: 'local' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+      });
+
+      const mergeMsgs: string[] = [];
+      (executor as any).execGit = async (args: string[]) => {
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        if (args[0] === 'merge') {
+          const mIdx = args.indexOf('-m');
+          if (mIdx !== -1) mergeMsgs.push(args[mIdx + 1]);
+        }
+        return '';
+      };
+
+      await executor.resolveConflictWithClaude('conflict-task');
+
+      expect(mergeMsgs).toHaveLength(1);
+      expect(mergeMsgs[0]).toContain('invoker/dep-task');
+      expect(mergeMsgs[0]).toContain('Add typing indicator support');
     });
   });
 });
