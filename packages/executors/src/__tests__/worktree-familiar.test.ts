@@ -12,12 +12,12 @@ vi.mock('node:child_process', () => ({
 
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>();
-  return { ...actual, existsSync: vi.fn(actual.existsSync) };
+  return { ...actual, existsSync: vi.fn(actual.existsSync), mkdirSync: vi.fn() };
 });
 
 // Must import after mock setup
 import { spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import { WorktreeFamiliar, computeBranchHash } from '../worktree-familiar.js';
 
 const mockedSpawn = vi.mocked(spawn);

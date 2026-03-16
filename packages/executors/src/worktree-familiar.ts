@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, unlinkSync } from 'node:fs';
+import { existsSync, mkdirSync, unlinkSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { homedir } from 'node:os';
 import type { WorkRequest, WorkResponse } from '@invoker/protocol';
@@ -242,6 +242,13 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
           for (let j = i - 1; j >= 0; j--) {
             if (lines[j].startsWith('worktree ')) {
               const oldPath = lines[j].slice('worktree '.length);
+              const isActive = Array.from(this.entries.values()).some(
+                e => e.worktreeDir === oldPath && !e.completed,
+              );
+              if (isActive) {
+                console.log(`[WorktreeFamiliar] Skipping force-remove of active worktree: ${oldPath} (branch=${branch})`);
+                break;
+              }
               console.log(`[WorktreeFamiliar] Force-removing stale worktree: ${oldPath} (branch=${branch})`);
               log('worktree remove --force begin');
               await this.execGitSimple(['worktree', 'remove', '--force', oldPath], this.repoDir);
@@ -258,6 +265,7 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
     }
 
     // -- Create the worktree with a new branch --
+    mkdirSync(this.worktreeBaseDir, { recursive: true });
     const startPoint = request.inputs.baseBranch ?? 'HEAD';
     try {
       log('worktree add -b begin');
