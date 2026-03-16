@@ -237,22 +237,26 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
         this.emitOutput(executionId,
           `[WorktreeFamiliar] Process exited: actionId=${request.actionId} exitCode=${exitCode}${signalInfo}\n`);
 
-        let commitHash = 'unknown';
+        let commitHash: string | undefined;
+        let status: 'completed' | 'failed' = exitCode === 0 ? 'completed' : 'failed';
         try {
-          await this.autoCommit(acquired.worktreePath, request);
-          commitHash = await this.execGit(['rev-parse', 'HEAD'], acquired.worktreePath);
+          const hash = await this.recordTaskResult(acquired.worktreePath, request, exitCode);
+          commitHash = hash ?? undefined;
         } catch (err) {
           this.emitOutput(executionId,
             `[WorktreeFamiliar] post-exit error: ${err}\n`);
+          if (exitCode === 0) {
+            status = 'failed';
+          }
         }
 
         const response: WorkResponse = {
           requestId: request.requestId,
           actionId: request.actionId,
-          status: exitCode === 0 ? 'completed' : 'failed',
+          status,
           outputs: {
-            exitCode,
-            summary: `branch=${branch} commit=${commitHash}`,
+            exitCode: status === 'failed' && exitCode === 0 ? 1 : exitCode,
+            summary: `branch=${branch} commit=${commitHash ?? 'unknown'}`,
             claudeSessionId: entry.claudeSessionId,
           },
         };
@@ -404,22 +408,26 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
       this.emitOutput(executionId,
         `[WorktreeFamiliar] Process exited: actionId=${request.actionId} exitCode=${exitCode}${signalInfo}\n`);
 
-      let commitHash = 'unknown';
+      let commitHash: string | undefined;
+      let status: 'completed' | 'failed' = exitCode === 0 ? 'completed' : 'failed';
       try {
-        await this.autoCommit(worktreeDir, request);
-        commitHash = await this.execGit(['rev-parse', 'HEAD'], worktreeDir);
+        const hash = await this.recordTaskResult(worktreeDir, request, exitCode);
+        commitHash = hash ?? undefined;
       } catch (err) {
         this.emitOutput(executionId,
           `[WorktreeFamiliar] post-exit error: ${err}\n`);
+        if (exitCode === 0) {
+          status = 'failed';
+        }
       }
 
       const response: WorkResponse = {
         requestId: request.requestId,
         actionId: request.actionId,
-        status: exitCode === 0 ? 'completed' : 'failed',
+        status,
         outputs: {
-          exitCode,
-          summary: `branch=${branch} commit=${commitHash}`,
+          exitCode: status === 'failed' && exitCode === 0 ? 1 : exitCode,
+          summary: `branch=${branch} commit=${commitHash ?? 'unknown'}`,
           claudeSessionId: entry.claudeSessionId,
         },
       };
