@@ -302,12 +302,24 @@ export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar
       }
 
       for (const ub of upstreams.slice(1)) {
-        await this.execGitSimple(['merge', '--no-edit', '-m', `Merge upstream ${ub}`, ub], cwd);
+        try {
+          await this.execGitSimple(['merge', '--no-edit', '-m', `Merge upstream ${ub}`, ub], cwd);
+        } catch (err) {
+          try {
+            await this.execGitSimple(['merge', '--abort'], cwd);
+          } catch {
+            // merge --abort can fail if there's nothing to abort
+          }
+          throw new Error(`Failed to merge upstream branch ${ub}: ${err}`);
+        }
       }
 
       handle.branch = branchName;
       return originalBranch;
-    } catch {
+    } catch (err) {
+      if (err instanceof Error && err.message.startsWith('Failed to merge upstream branch')) {
+        throw err;
+      }
       return undefined;
     }
   }
