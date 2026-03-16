@@ -112,6 +112,16 @@ export interface EdgeStyle {
 }
 
 export function getEdgeStyle(sourceStatus: string, targetStatus: string): EdgeStyle {
+  if (sourceStatus === 'stale' || targetStatus === 'stale') {
+    return {
+      stroke: '#9ca3af',
+      strokeWidth: 1,
+      strokeDasharray: '4 4',
+      hoverStroke: '#9ca3af',
+      hoverWidth: 1.5,
+    };
+  }
+
   const sourceColors = getStatusInlineColors(sourceStatus);
 
   // Base defaults

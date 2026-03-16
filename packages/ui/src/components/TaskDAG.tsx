@@ -165,7 +165,7 @@ function TaskDAGInner({ tasks, workflows, onTaskClick, onTaskDoubleClick, onTask
         source: e.source,
         target: e.target,
         type: 'bundled',
-        animated: sourceStatus === 'running',
+        animated: sourceStatus === 'running' && targetStatus !== 'stale',
         style: {
           stroke: edgeStyle.stroke,
           strokeWidth: edgeStyle.strokeWidth,
