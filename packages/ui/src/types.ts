@@ -77,6 +77,10 @@ export interface TaskExecution {
   readonly selectedExperiment?: string;
   readonly selectedExperiments?: readonly string[];
   readonly experimentResults?: readonly ExperimentResultEntry[];
+  readonly mergeConflict?: {
+    readonly failedBranch: string;
+    readonly conflictFiles: readonly string[];
+  };
 }
 
 // ── Task State ──────────────────────────────────────────────
@@ -221,6 +225,7 @@ export interface InvokerAPI {
   }>;
   setMergeBranch: (workflowId: string, baseBranch: string) => Promise<void>;
   approveMerge: (workflowId: string) => Promise<void>;
+  resolveConflict: (taskId: string) => Promise<void>;
 }
 
 // ── Augment global Window ───────────────────────────────────

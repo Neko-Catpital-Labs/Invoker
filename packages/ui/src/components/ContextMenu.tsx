@@ -17,15 +17,17 @@ interface ContextMenuProps {
   onOpenTerminal: (taskId: string) => void;
   onRebaseAndRetry?: (taskId: string) => void;
   onRestartWorkflow?: (workflowId: string) => void;
+  onResolveConflict?: (taskId: string) => void;
   onClose: () => void;
 }
 
-export function ContextMenu({ x, y, task, onRestart, onReplace, onOpenTerminal, onRebaseAndRetry, onRestartWorkflow, onClose }: ContextMenuProps) {
+export function ContextMenu({ x, y, task, onRestart, onReplace, onOpenTerminal, onRebaseAndRetry, onRestartWorkflow, onResolveConflict, onClose }: ContextMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
   const canRestart = true;
   const canReplace = task.status === 'failed' || task.status === 'blocked';
   const canRebaseAndRetry = !!task.config.workflowId && !!onRebaseAndRetry;
   const canRestartWorkflow = !!task.config.workflowId && !!onRestartWorkflow;
+  const hasMergeConflict = task.status === 'failed' && !!task.execution.mergeConflict;
 
   useEffect(() => {
     const handleClick = (e: MouseEvent) => {
@@ -79,6 +81,17 @@ export function ContextMenu({ x, y, task, onRestart, onReplace, onOpenTerminal, 
       >
         Open Terminal
       </button>
+      {hasMergeConflict && onResolveConflict && (
+        <>
+          <div className="border-t border-gray-600 my-1" />
+          <button
+            className="w-full text-left px-3 py-1.5 text-sm text-blue-300 hover:bg-gray-700"
+            onClick={() => onResolveConflict(task.id)}
+          >
+            Resolve with Claude
+          </button>
+        </>
+      )}
       {canRebaseAndRetry && (
         <>
           <div className="border-t border-gray-600 my-1" />

@@ -3,9 +3,9 @@ import { createHash } from 'node:crypto';
 import { existsSync, unlinkSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { homedir } from 'node:os';
-import type { WorkRequest } from '@invoker/protocol';
+import type { WorkRequest, WorkResponse } from '@invoker/protocol';
 import type { FamiliarHandle, PersistedTaskMeta, TerminalSpec } from './familiar.js';
-import { BaseFamiliar, type BaseEntry } from './base-familiar.js';
+import { BaseFamiliar, type BaseEntry, MergeConflictError } from './base-familiar.js';
 import { RepoPool } from './repo-pool.js';
 import { killProcessGroup, cleanElectronEnv, SIGKILL_TIMEOUT_MS } from './process-utils.js';
 
@@ -131,7 +131,40 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
       const acquired = await this.pool.acquireWorktree(request.inputs.repoUrl, branch);
 
       this.cleanStaleLocks(acquired.worktreePath);
-      await this.mergeUpstreamBranches(request.inputs.upstreamBranches, acquired.worktreePath);
+
+      try {
+        await this.mergeUpstreamBranches(request.inputs.upstreamBranches, acquired.worktreePath);
+      } catch (err) {
+        if (err instanceof MergeConflictError) {
+          const entry: WorktreeEntry = {
+            process: null, request, worktreeDir: acquired.worktreePath, branch,
+            outputListeners: new Set(), outputBuffer: [],
+            completeListeners: new Set(), heartbeatListeners: new Set(),
+            completed: true,
+            poolRelease: acquired.release,
+          };
+          this.registerEntry(handle, entry);
+          handle.workspacePath = acquired.worktreePath;
+          handle.branch = acquired.branch;
+          const response: WorkResponse = {
+            requestId: request.requestId,
+            actionId: request.actionId,
+            status: 'failed',
+            outputs: {
+              exitCode: 1,
+              error: JSON.stringify({
+                type: 'merge_conflict',
+                failedBranch: err.failedBranch,
+                conflictFiles: err.conflictFiles,
+              }),
+            },
+          };
+          this.emitComplete(handle.executionId, response);
+          return handle;
+        }
+        throw err;
+      }
+
       await this.provisionWorktree(acquired.worktreePath);
 
       const { cmd, args, claudeSessionId } = this.buildCommandAndArgs(request, this.claudeCommand);
@@ -248,7 +281,37 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
 
     // -- Merge upstream dependency branches into the worktree --
     log('mergeUpstreamBranches begin');
-    await this.mergeUpstreamBranches(request.inputs.upstreamBranches, worktreeDir);
+    try {
+      await this.mergeUpstreamBranches(request.inputs.upstreamBranches, worktreeDir);
+    } catch (err) {
+      if (err instanceof MergeConflictError) {
+        const entry: WorktreeEntry = {
+          process: null, request, worktreeDir, branch,
+          outputListeners: new Set(), outputBuffer: [],
+          completeListeners: new Set(), heartbeatListeners: new Set(),
+          completed: true,
+        };
+        this.registerEntry(handle, entry);
+        handle.workspacePath = worktreeDir;
+        handle.branch = branch;
+        const response: WorkResponse = {
+          requestId: request.requestId,
+          actionId: request.actionId,
+          status: 'failed',
+          outputs: {
+            exitCode: 1,
+            error: JSON.stringify({
+              type: 'merge_conflict',
+              failedBranch: err.failedBranch,
+              conflictFiles: err.conflictFiles,
+            }),
+          },
+        };
+        this.emitComplete(handle.executionId, response);
+        return handle;
+      }
+      throw err;
+    }
     log('mergeUpstreamBranches done');
 
     // -- Install dependencies so tasks can build/test in the worktree --
@@ -474,15 +537,20 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
           worktreeDir,
         );
       } catch (err) {
-        // Abort the failed merge to leave worktree in a clean state
+        let conflictFiles: string[] = [];
+        try {
+          const raw = await this.execGitSimple(
+            ['diff', '--name-only', '--diff-filter=U'], worktreeDir,
+          );
+          conflictFiles = raw.split('\n').filter(Boolean);
+        } catch { /* best effort */ }
+
         try {
           await this.execGitSimple(['merge', '--abort'], worktreeDir);
         } catch {
           // merge --abort can fail if there's nothing to abort
         }
-        throw new Error(
-          `Failed to merge upstream branch ${upBranch}: ${err}`,
-        );
+        throw new MergeConflictError(upBranch, conflictFiles, err);
       }
     }
   }

@@ -1225,6 +1225,19 @@ function setupGuiMode(): void {
       }
     });
 
+    ipcMain.handle('invoker:resolve-conflict', async (_event, taskId: string) => {
+      console.log(`[ipc] resolve-conflict: "${taskId}"`);
+      try {
+        await taskExecutor.resolveConflictWithClaude(taskId);
+        const started = orchestrator.restartTask(taskId);
+        const runnable = started.filter(t => t.status === 'running');
+        await taskExecutor.executeTasks(runnable);
+      } catch (err) {
+        console.error(`[ipc] resolve-conflict failed: ${err}`);
+        throw err;
+      }
+    });
+
     ipcMain.handle('invoker:edit-task-command', async (_event, taskId: string, newCommand: string) => {
       console.log(`[ipc] edit-task-command: "${taskId}" → "${newCommand}"`);
       try {

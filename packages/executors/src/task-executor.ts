@@ -332,7 +332,7 @@ export class TaskExecutor {
     if (onFinish !== 'none' && featureBranch) {
       const effectiveOnFinish = mergeMode === 'manual' ? 'none' : onFinish;
       try {
-        await this.consolidateAndMerge(effectiveOnFinish, baseBranch, featureBranch, workflowId, workflow?.name);
+        await this.consolidateAndMerge(effectiveOnFinish, baseBranch, featureBranch, workflowId, workflow?.name, task.dependencies);
         if (mergeMode === 'manual') {
           const manualResponse: WorkResponse = {
             requestId: `merge-${task.id}`,
@@ -414,6 +414,7 @@ export class TaskExecutor {
     featureBranch: string,
     workflowId?: string,
     workflowName?: string,
+    leafTaskIds?: readonly string[],
   ): Promise<void> {
     const originalBranch = await this.execGit(['branch', '--show-current']);
 
@@ -432,8 +433,14 @@ export class TaskExecutor {
 
       const allTasks = this.orchestrator.getAllTasks();
       const taskBranches = allTasks
-        .filter((t) => t.config.workflowId === workflowId && t.status === 'completed' && t.execution.branch && !t.config.isMergeNode)
-        .map((t) => t.execution.branch!);
+        .filter((t) => {
+          if (!t.execution.branch || t.config.isMergeNode) return false;
+          if (t.status !== 'completed') return false;
+          if (leafTaskIds) return leafTaskIds.includes(t.id);
+          return t.config.workflowId === workflowId;
+        })
+        .map((t) => t.execution.branch!)
+        .sort();
 
       for (const branch of taskBranches) {
         console.log(`[merge] Merging task branch: ${branch} → ${featureBranch}`);
@@ -560,6 +567,84 @@ export class TaskExecutor {
       const commit = await this.execGit(['rev-parse', 'HEAD']);
       return { branch: branchName, commit };
     } catch (err) {
+      try { await this.execGit(['merge', '--abort']); } catch { /* no merge in progress */ }
+      try { await this.execGit(['checkout', originalBranch]); } catch { /* best effort */ }
+      throw err;
+    }
+  }
+
+  /**
+   * Resolve a merge conflict by re-creating the merge state and spawning Claude to fix it.
+   * After resolution, the task is restarted so it can proceed normally.
+   */
+  async resolveConflictWithClaude(taskId: string): Promise<void> {
+    const task = this.orchestrator.getTask(taskId);
+    if (!task) throw new Error(`Task ${taskId} not found`);
+    if (task.status !== 'failed') throw new Error(`Task ${taskId} is not failed (status: ${task.status})`);
+
+    const errorStr = task.execution.error;
+    if (!errorStr) throw new Error(`Task ${taskId} has no error information`);
+
+    let conflictInfo: { failedBranch: string; conflictFiles: string[] };
+    try {
+      const parsed = JSON.parse(errorStr);
+      if (parsed?.type !== 'merge_conflict') throw new Error('not a merge conflict');
+      conflictInfo = { failedBranch: parsed.failedBranch, conflictFiles: parsed.conflictFiles };
+    } catch {
+      throw new Error(`Task ${taskId} does not have merge conflict information`);
+    }
+
+    const taskBranch = task.execution.branch ?? `invoker/${taskId}`;
+    const cwd = task.execution.workspacePath ?? this.cwd;
+    const originalBranch = await this.execGit(['branch', '--show-current']);
+
+    try {
+      // Checkout the task branch
+      try {
+        await this.execGit(['checkout', taskBranch]);
+      } catch {
+        throw new Error(`Cannot checkout task branch ${taskBranch}`);
+      }
+
+      // Re-merge the conflicting upstream branch (will reproduce the conflict)
+      try {
+        await this.execGit(['merge', '--no-edit', '-m', `Merge upstream ${conflictInfo.failedBranch}`, conflictInfo.failedBranch]);
+        console.log(`[resolveConflict] Merge succeeded without conflict on retry for ${taskId}`);
+      } catch {
+        // Expected: conflict reproduced — now spawn Claude to resolve it
+        console.log(`[resolveConflict] Conflict reproduced for ${taskId}, spawning Claude to resolve...`);
+
+        const conflictFilesList = conflictInfo.conflictFiles.join(', ');
+        const prompt = [
+          `The following git merge has conflicts that need to be resolved.`,
+          `Conflicting files: ${conflictFilesList}`,
+          ``,
+          `Please resolve ALL merge conflicts in these files by:`,
+          `1. Reading each conflicted file`,
+          `2. Choosing the correct resolution (not just picking one side)`,
+          `3. Removing all conflict markers (<<<<<<<, =======, >>>>>>>)`,
+          `4. Staging the resolved files with 'git add'`,
+          `5. Completing the merge with 'git commit --no-edit'`,
+        ].join('\n');
+
+        await new Promise<void>((resolve, reject) => {
+          const child = spawn('claude', ['-p', prompt, '--dangerously-skip-permissions'], {
+            cwd,
+            stdio: ['ignore', 'pipe', 'pipe'],
+          });
+          let stderr = '';
+          child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
+          child.on('close', (code) => {
+            if (code === 0) resolve();
+            else reject(new Error(`Claude exited with code ${code}: ${stderr.trim()}`));
+          });
+          child.on('error', (err) => reject(err));
+        });
+      }
+
+      console.log(`[resolveConflict] Successfully resolved conflict for ${taskId}`);
+    } catch (err) {
+      // Clean up on failure
       try { await this.execGit(['merge', '--abort']); } catch { /* no merge in progress */ }
       try { await this.execGit(['checkout', originalBranch]); } catch { /* best effort */ }
       throw err;

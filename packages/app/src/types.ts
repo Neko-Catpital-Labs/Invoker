@@ -110,6 +110,9 @@ export interface InvokerAPI {
 
   // Approve manual merge: perform final merge of featureBranch into baseBranch
   approveMerge: (workflowId: string) => Promise<void>;
+
+  // Resolve merge conflict with Claude and restart task
+  resolveConflict: (taskId: string) => Promise<void>;
 }
 
 // ── Augment global Window ────────────────────────────────────

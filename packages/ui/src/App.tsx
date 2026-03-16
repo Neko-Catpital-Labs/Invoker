@@ -115,6 +115,15 @@ export function App() {
     }
   }, []);
 
+  const handleResolveConflict = useCallback(async (taskId: string) => {
+    setContextMenu(null);
+    try {
+      await window.invoker?.resolveConflict(taskId);
+    } catch (err) {
+      console.error('Resolve conflict failed:', err);
+    }
+  }, []);
+
   const closeContextMenu = useCallback(() => {
     setContextMenu(null);
   }, []);
@@ -388,6 +397,7 @@ export function App() {
           onOpenTerminal={handleOpenTerminal}
           onRebaseAndRetry={handleRebaseAndRetry}
           onRestartWorkflow={handleRestartWorkflow}
+          onResolveConflict={handleResolveConflict}
           onClose={closeContextMenu}
         />
       )}

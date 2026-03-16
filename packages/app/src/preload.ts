@@ -73,6 +73,8 @@ const api: InvokerAPI = {
     ipcRenderer.invoke('invoker:set-merge-branch', workflowId, baseBranch),
   approveMerge: (workflowId: string) =>
     ipcRenderer.invoke('invoker:approve-merge', workflowId),
+  resolveConflict: (taskId: string) =>
+    ipcRenderer.invoke('invoker:resolve-conflict', taskId),
 };
 
 contextBridge.exposeInMainWorld('invoker', api);

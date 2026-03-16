@@ -492,6 +492,7 @@ describe('TaskExecutor', () => {
       const mergeTask = makeTask({
         id: '__merge__wf-1',
         status: 'running',
+        dependencies: ['t1'],
         config: { isMergeNode: true, workflowId: 'wf-1' },
       });
 
@@ -564,6 +565,7 @@ describe('TaskExecutor', () => {
       const mergeTask = makeTask({
         id: '__merge__wf-1',
         status: 'running',
+        dependencies: ['t1'],
         config: { isMergeNode: true, workflowId: 'wf-1' },
       });
 
@@ -755,6 +757,7 @@ describe('TaskExecutor', () => {
       const mergeTask = makeTask({
         id: '__merge__wf-1',
         status: 'running',
+        dependencies: ['t1'],
         config: { isMergeNode: true, workflowId: 'wf-1' },
       });
 
@@ -817,6 +820,7 @@ describe('TaskExecutor', () => {
       const mergeTask = makeTask({
         id: '__merge__wf-1',
         status: 'running',
+        dependencies: ['t1'],
         config: { isMergeNode: true, workflowId: 'wf-1' },
       });
 
@@ -1020,6 +1024,351 @@ describe('TaskExecutor', () => {
 
       expect(result.branch).toBe('experiment/pivot-exp-v1-hash1');
       expect(result.commit).toBe('single-commit');
+    });
+  });
+
+  describe('consolidateAndMerge', () => {
+    it('only merges leaf branches (merge gate deps), not intermediate', async () => {
+      const tasks = new Map<string, TaskState>();
+      // Diamond: A -> B, C -> D. Merge gate depends on [D]
+      tasks.set('A', makeTask({ id: 'A', status: 'completed', config: { workflowId: 'wf-1' }, execution: { branch: 'invoker/A' } }));
+      tasks.set('B', makeTask({ id: 'B', status: 'completed', config: { workflowId: 'wf-1' }, execution: { branch: 'invoker/B' } }));
+      tasks.set('C', makeTask({ id: 'C', status: 'completed', config: { workflowId: 'wf-1' }, execution: { branch: 'invoker/C' } }));
+      tasks.set('D', makeTask({ id: 'D', status: 'completed', config: { workflowId: 'wf-1' }, execution: { branch: 'invoker/D' } }));
+      tasks.set('__merge__wf-1', makeTask({
+        id: '__merge__wf-1',
+        status: 'running',
+        dependencies: ['D'],
+        config: { workflowId: 'wf-1', isMergeNode: true },
+      }));
+
+      const orchestrator = {
+        getTask: (id: string) => tasks.get(id),
+        getAllTasks: () => Array.from(tasks.values()),
+        handleWorkerResponse: vi.fn(),
+        setTaskAwaitingApproval: vi.fn(),
+      };
+
+      const executor = new TaskExecutor({
+        orchestrator: orchestrator as any,
+        persistence: { loadWorkflow: () => ({ onFinish: 'merge', mergeMode: 'automatic', baseBranch: 'master', featureBranch: 'feature/wf-1', name: 'Test' }), updateTask: vi.fn() } as any,
+        familiarRegistry: { getDefault: () => ({ type: 'local' }), get: () => null, getAll: () => [], getMergeGateFamiliar: () => ({ type: 'local' }) } as any,
+        cwd: '/tmp',
+      });
+
+      const mergedBranches: string[] = [];
+      (executor as any).execGit = async (args: string[]) => {
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        if (args[0] === 'checkout') return '';
+        if (args[0] === 'merge' && args[1] === '--no-ff') {
+          mergedBranches.push(args[args.length - 1]);
+          return '';
+        }
+        if (args[0] === 'branch' && args[1] === '-D') return '';
+        return '';
+      };
+
+      await executor.executeTask(tasks.get('__merge__wf-1')!);
+
+      // Only D's branch should be merged, not A, B, or C
+      expect(mergedBranches).toContain('invoker/D');
+      expect(mergedBranches).not.toContain('invoker/A');
+      expect(mergedBranches).not.toContain('invoker/B');
+      expect(mergedBranches).not.toContain('invoker/C');
+    });
+
+    it('forked leaves: merges only leaf branches from merge gate deps', async () => {
+      const tasks = new Map<string, TaskState>();
+      // A -> B -> D, A -> C -> E. Merge gate depends on [D, E]
+      tasks.set('A', makeTask({ id: 'A', status: 'completed', config: { workflowId: 'wf-2' }, execution: { branch: 'invoker/A' } }));
+      tasks.set('B', makeTask({ id: 'B', status: 'completed', config: { workflowId: 'wf-2' }, execution: { branch: 'invoker/B' } }));
+      tasks.set('C', makeTask({ id: 'C', status: 'completed', config: { workflowId: 'wf-2' }, execution: { branch: 'invoker/C' } }));
+      tasks.set('D', makeTask({ id: 'D', status: 'completed', config: { workflowId: 'wf-2' }, execution: { branch: 'invoker/D' } }));
+      tasks.set('E', makeTask({ id: 'E', status: 'completed', config: { workflowId: 'wf-2' }, execution: { branch: 'invoker/E' } }));
+      tasks.set('__merge__wf-2', makeTask({
+        id: '__merge__wf-2',
+        status: 'running',
+        dependencies: ['D', 'E'],
+        config: { workflowId: 'wf-2', isMergeNode: true },
+      }));
+
+      const orchestrator = {
+        getTask: (id: string) => tasks.get(id),
+        getAllTasks: () => Array.from(tasks.values()),
+        handleWorkerResponse: vi.fn(),
+        setTaskAwaitingApproval: vi.fn(),
+      };
+
+      const executor = new TaskExecutor({
+        orchestrator: orchestrator as any,
+        persistence: { loadWorkflow: () => ({ onFinish: 'merge', mergeMode: 'automatic', baseBranch: 'master', featureBranch: 'feature/wf-2', name: 'Test' }), updateTask: vi.fn() } as any,
+        familiarRegistry: { getDefault: () => ({ type: 'local' }), get: () => null, getAll: () => [], getMergeGateFamiliar: () => ({ type: 'local' }) } as any,
+        cwd: '/tmp',
+      });
+
+      const mergedBranches: string[] = [];
+      (executor as any).execGit = async (args: string[]) => {
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        if (args[0] === 'checkout') return '';
+        if (args[0] === 'merge' && args[1] === '--no-ff') {
+          mergedBranches.push(args[args.length - 1]);
+          return '';
+        }
+        if (args[0] === 'branch' && args[1] === '-D') return '';
+        return '';
+      };
+
+      await executor.executeTask(tasks.get('__merge__wf-2')!);
+
+      // Only D and E (leaf deps) should be merged
+      expect(mergedBranches).toContain('invoker/D');
+      expect(mergedBranches).toContain('invoker/E');
+      expect(mergedBranches).not.toContain('invoker/A');
+      expect(mergedBranches).not.toContain('invoker/B');
+      expect(mergedBranches).not.toContain('invoker/C');
+    });
+
+    it('merges branches in sorted order for determinism', async () => {
+      const tasks = new Map<string, TaskState>();
+      tasks.set('z-task', makeTask({ id: 'z-task', status: 'completed', config: { workflowId: 'wf-3' }, execution: { branch: 'invoker/z-task' } }));
+      tasks.set('a-task', makeTask({ id: 'a-task', status: 'completed', config: { workflowId: 'wf-3' }, execution: { branch: 'invoker/a-task' } }));
+      tasks.set('m-task', makeTask({ id: 'm-task', status: 'completed', config: { workflowId: 'wf-3' }, execution: { branch: 'invoker/m-task' } }));
+      tasks.set('__merge__wf-3', makeTask({
+        id: '__merge__wf-3',
+        status: 'running',
+        dependencies: ['z-task', 'a-task', 'm-task'],
+        config: { workflowId: 'wf-3', isMergeNode: true },
+      }));
+
+      const orchestrator = {
+        getTask: (id: string) => tasks.get(id),
+        getAllTasks: () => Array.from(tasks.values()),
+        handleWorkerResponse: vi.fn(),
+        setTaskAwaitingApproval: vi.fn(),
+      };
+
+      const executor = new TaskExecutor({
+        orchestrator: orchestrator as any,
+        persistence: { loadWorkflow: () => ({ onFinish: 'merge', mergeMode: 'automatic', baseBranch: 'master', featureBranch: 'feature/wf-3', name: 'Test' }), updateTask: vi.fn() } as any,
+        familiarRegistry: { getDefault: () => ({ type: 'local' }), get: () => null, getAll: () => [], getMergeGateFamiliar: () => ({ type: 'local' }) } as any,
+        cwd: '/tmp',
+      });
+
+      const mergeOrder: string[] = [];
+      (executor as any).execGit = async (args: string[]) => {
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        if (args[0] === 'checkout') return '';
+        if (args[0] === 'merge' && args[1] === '--no-ff') {
+          const branch = args[args.length - 1];
+          // Only capture task branch merges (invoker/...), not the final feature branch merge
+          if (branch.startsWith('invoker/')) mergeOrder.push(branch);
+          return '';
+        }
+        if (args[0] === 'branch' && args[1] === '-D') return '';
+        return '';
+      };
+
+      await executor.executeTask(tasks.get('__merge__wf-3')!);
+
+      // Branches should be merged in sorted order
+      expect(mergeOrder).toEqual(['invoker/a-task', 'invoker/m-task', 'invoker/z-task']);
+    });
+
+    it('approveMerge aborts and restores branch on merge failure', async () => {
+      const executor = new TaskExecutor({
+        orchestrator: { getTask: () => undefined } as any,
+        persistence: { loadWorkflow: () => ({ onFinish: 'merge', baseBranch: 'master', featureBranch: 'feature/test', name: 'Test' }), updateTask: vi.fn() } as any,
+        familiarRegistry: { getDefault: () => ({ type: 'local' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+      });
+
+      const calls: string[][] = [];
+      (executor as any).execGit = async (args: string[]) => {
+        calls.push([...args]);
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'original-branch';
+        if (args[0] === 'checkout' && args[1] === 'master') return '';
+        if (args[0] === 'merge' && args[1] === '--no-ff') throw new Error('CONFLICT');
+        return '';
+      };
+
+      await expect(executor.approveMerge('wf-test')).rejects.toThrow('CONFLICT');
+
+      // Should have attempted merge --abort and checkout back to original
+      const abortCall = calls.find(c => c[0] === 'merge' && c[1] === '--abort');
+      const restoreCall = calls.find(c => c[0] === 'checkout' && c[1] === 'original-branch');
+      expect(abortCall).toBeDefined();
+      expect(restoreCall).toBeDefined();
+    });
+  });
+
+  describe('mergeExperimentBranches conflict handling', () => {
+    it('conflict between 2 experiments aborts cleanly', async () => {
+      const tasks = new Map<string, TaskState>();
+      tasks.set('exp-1', makeTask({ id: 'exp-1', status: 'completed', execution: { branch: 'experiment/exp-1' } }));
+      tasks.set('exp-2', makeTask({ id: 'exp-2', status: 'completed', execution: { branch: 'experiment/exp-2' } }));
+      tasks.set('recon', makeTask({ id: 'recon', config: { isReconciliation: true, parentTask: 'parent' } }));
+      tasks.set('parent', makeTask({ id: 'parent', status: 'completed', execution: { branch: 'experiment/parent' } }));
+
+      const orchestrator = { getTask: (id: string) => tasks.get(id) };
+      const executor = new TaskExecutor({
+        orchestrator: orchestrator as any,
+        persistence: { loadWorkflow: () => null } as any,
+        familiarRegistry: { getDefault: () => ({ type: 'local' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+        defaultBranch: 'master',
+      });
+
+      const calls: string[][] = [];
+      let mergeCount = 0;
+      (executor as any).execGit = async (args: string[]) => {
+        calls.push([...args]);
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        if (args[0] === 'merge') {
+          mergeCount++;
+          if (mergeCount === 2) throw new Error('CONFLICT (content)');
+        }
+        if (args[0] === 'rev-parse') return 'abc123';
+        return '';
+      };
+
+      await expect(executor.mergeExperimentBranches('recon', ['exp-1', 'exp-2'])).rejects.toThrow('CONFLICT');
+
+      const abortCall = calls.find(c => c[0] === 'merge' && c[1] === '--abort');
+      const restoreCall = calls.find(c => c[0] === 'checkout' && c[1] === 'master');
+      expect(abortCall).toBeDefined();
+      expect(restoreCall).toBeDefined();
+    });
+
+    it('3 experiments: conflict at 2nd identifies which failed', async () => {
+      const tasks = new Map<string, TaskState>();
+      tasks.set('exp-a', makeTask({ id: 'exp-a', status: 'completed', execution: { branch: 'experiment/exp-a' } }));
+      tasks.set('exp-b', makeTask({ id: 'exp-b', status: 'completed', execution: { branch: 'experiment/exp-b' } }));
+      tasks.set('exp-c', makeTask({ id: 'exp-c', status: 'completed', execution: { branch: 'experiment/exp-c' } }));
+      tasks.set('recon', makeTask({ id: 'recon', config: { isReconciliation: true, parentTask: 'parent' } }));
+      tasks.set('parent', makeTask({ id: 'parent', status: 'completed', execution: { branch: 'experiment/parent' } }));
+
+      const orchestrator = { getTask: (id: string) => tasks.get(id) };
+      const executor = new TaskExecutor({
+        orchestrator: orchestrator as any,
+        persistence: { loadWorkflow: () => null } as any,
+        familiarRegistry: { getDefault: () => ({ type: 'local' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+        defaultBranch: 'master',
+      });
+
+      let mergeCount = 0;
+      (executor as any).execGit = async (args: string[]) => {
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        if (args[0] === 'merge' && args[1] === '--no-ff') {
+          mergeCount++;
+          if (mergeCount === 2) throw new Error('CONFLICT merging exp-b branch');
+        }
+        if (args[0] === 'rev-parse') return 'abc123';
+        return '';
+      };
+
+      // The first merge (exp-a) succeeds, second (exp-b) fails, third (exp-c) is never attempted
+      await expect(executor.mergeExperimentBranches('recon', ['exp-a', 'exp-b', 'exp-c'])).rejects.toThrow('CONFLICT');
+      // exp-c's merge should not have been attempted
+      expect(mergeCount).toBe(2);
+    });
+  });
+
+  describe('resolveConflictWithClaude', () => {
+    it('throws for non-failed task', async () => {
+      const tasks = new Map<string, TaskState>();
+      tasks.set('running-task', makeTask({
+        id: 'running-task',
+        status: 'running',
+      }));
+
+      const orchestrator = { getTask: (id: string) => tasks.get(id) };
+      const executor = new TaskExecutor({
+        orchestrator: orchestrator as any,
+        persistence: {} as any,
+        familiarRegistry: { getDefault: () => ({ type: 'local' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+      });
+
+      await expect(executor.resolveConflictWithClaude('running-task'))
+        .rejects.toThrow('not failed');
+    });
+
+    it('throws for task without merge conflict info', async () => {
+      const tasks = new Map<string, TaskState>();
+      tasks.set('failed-task', makeTask({
+        id: 'failed-task',
+        status: 'failed',
+        execution: { error: 'Some generic error' },
+      }));
+
+      const orchestrator = { getTask: (id: string) => tasks.get(id) };
+      const executor = new TaskExecutor({
+        orchestrator: orchestrator as any,
+        persistence: {} as any,
+        familiarRegistry: { getDefault: () => ({ type: 'local' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+      });
+
+      await expect(executor.resolveConflictWithClaude('failed-task'))
+        .rejects.toThrow('does not have merge conflict information');
+    });
+
+    it('throws for nonexistent task', async () => {
+      const orchestrator = { getTask: () => undefined };
+      const executor = new TaskExecutor({
+        orchestrator: orchestrator as any,
+        persistence: {} as any,
+        familiarRegistry: { getDefault: () => ({ type: 'local' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+      });
+
+      await expect(executor.resolveConflictWithClaude('nonexistent'))
+        .rejects.toThrow('not found');
+    });
+
+    it('re-creates merge state and runs git operations', async () => {
+      const conflictError = JSON.stringify({
+        type: 'merge_conflict',
+        failedBranch: 'invoker/dep-task',
+        conflictFiles: ['shared.ts'],
+      });
+
+      const tasks = new Map<string, TaskState>();
+      tasks.set('conflict-task', makeTask({
+        id: 'conflict-task',
+        status: 'failed',
+        execution: {
+          error: conflictError,
+          branch: 'invoker/conflict-task',
+          workspacePath: '/tmp/workspace',
+        },
+      }));
+
+      const orchestrator = { getTask: (id: string) => tasks.get(id) };
+      const executor = new TaskExecutor({
+        orchestrator: orchestrator as any,
+        persistence: {} as any,
+        familiarRegistry: { getDefault: () => ({ type: 'local' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+      });
+
+      const gitCalls: string[][] = [];
+      (executor as any).execGit = async (args: string[]) => {
+        gitCalls.push([...args]);
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        return '';
+      };
+
+      await executor.resolveConflictWithClaude('conflict-task');
+
+      // Should have checked out the task branch
+      const checkoutCall = gitCalls.find(c => c[0] === 'checkout' && c[1] === 'invoker/conflict-task');
+      expect(checkoutCall).toBeDefined();
+
+      // Should have attempted to merge the conflicting branch
+      const mergeCall = gitCalls.find(c => c[0] === 'merge' && c.includes('invoker/dep-task'));
+      expect(mergeCall).toBeDefined();
     });
   });
 });

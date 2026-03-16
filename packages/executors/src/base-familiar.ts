@@ -28,6 +28,18 @@ export interface ClaudeSessionParams {
   fullPrompt: string;
 }
 
+export class MergeConflictError extends Error {
+  constructor(
+    public readonly failedBranch: string,
+    public readonly conflictFiles: string[],
+    cause?: unknown,
+  ) {
+    super(`Merge conflict merging ${failedBranch}: ${conflictFiles.join(', ')}`);
+    this.name = 'MergeConflictError';
+    if (cause instanceof Error) this.cause = cause;
+  }
+}
+
 export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar {
   abstract readonly type: string;
   protected entries = new Map<string, TEntry>();
@@ -298,29 +310,31 @@ export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar
       const upstreams = request.inputs.upstreamBranches ?? [];
       const base = upstreams[0] ?? request.inputs.baseBranch ?? 'HEAD';
 
-      try {
-        await this.execGitSimple(['checkout', '-b', branchName, base], cwd);
-      } catch {
-        await this.execGitSimple(['checkout', branchName], cwd);
-      }
+      await this.execGitSimple(['checkout', '-B', branchName, base], cwd);
 
       for (const ub of upstreams.slice(1)) {
         try {
           await this.execGitSimple(['merge', '--no-edit', '-m', `Merge upstream ${ub}`, ub], cwd);
         } catch (err) {
+          let conflictFiles: string[] = [];
+          try {
+            const raw = await this.execGitSimple(['diff', '--name-only', '--diff-filter=U'], cwd);
+            conflictFiles = raw.split('\n').filter(Boolean);
+          } catch { /* best effort */ }
+
           try {
             await this.execGitSimple(['merge', '--abort'], cwd);
           } catch {
             // merge --abort can fail if there's nothing to abort
           }
-          throw new Error(`Failed to merge upstream branch ${ub}: ${err}`);
+          throw new MergeConflictError(ub, conflictFiles, err);
         }
       }
 
       handle.branch = branchName;
       return originalBranch;
     } catch (err) {
-      if (err instanceof Error && err.message.startsWith('Failed to merge upstream branch')) {
+      if (err instanceof MergeConflictError) {
         throw err;
       }
       return undefined;

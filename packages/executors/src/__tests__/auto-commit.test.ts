@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'no
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execSync } from 'node:child_process';
-import { BaseFamiliar, type BaseEntry } from '../base-familiar.js';
+import { BaseFamiliar, type BaseEntry, MergeConflictError } from '../base-familiar.js';
 import type { WorkRequest, WorkRequestInputs, WorkResponse } from '@invoker/protocol';
 import type { FamiliarHandle, TerminalSpec } from '../familiar.js';
 
@@ -937,7 +937,7 @@ describe('merge gate commit topology (real git)', () => {
     const tasks: TaskState[] = [
       makeTaskState({ id: 'task-a', config: { workflowId: 'wf-1' }, status: 'completed', execution: { branch: 'experiment/task-a' } }),
       makeTaskState({ id: 'task-b', config: { workflowId: 'wf-1' }, status: 'completed', execution: { branch: 'experiment/task-b' } }),
-      makeTaskState({ id: '__merge__wf-1', config: { workflowId: 'wf-1', isMergeNode: true }, status: 'running' }),
+      makeTaskState({ id: '__merge__wf-1', dependencies: ['task-a', 'task-b'], config: { workflowId: 'wf-1', isMergeNode: true }, status: 'running' }),
     ];
 
     const workflow = {
@@ -1018,7 +1018,7 @@ describe('merge gate commit topology (real git)', () => {
     const tasks: TaskState[] = [
       makeTaskState({ id: 'task-a', config: { workflowId: 'wf-1' }, status: 'completed', execution: { branch: 'experiment/task-a' } }),
       makeTaskState({ id: 'task-b', config: { workflowId: 'wf-1' }, status: 'completed', execution: { branch: 'experiment/task-b' } }),
-      makeTaskState({ id: '__merge__wf-1', config: { workflowId: 'wf-1', isMergeNode: true }, status: 'running' }),
+      makeTaskState({ id: '__merge__wf-1', dependencies: ['task-a', 'task-b'], config: { workflowId: 'wf-1', isMergeNode: true }, status: 'running' }),
     ];
 
     const workflow = {
@@ -1343,7 +1343,7 @@ describe('BaseFamiliar.setupTaskBranch', () => {
       });
 
       await expect(familiar.testSetupTaskBranch(tmpDir, request, handle))
-        .rejects.toThrow('Failed to merge upstream branch');
+        .rejects.toThrow('Merge conflict merging');
     });
 
     it('local fan-in merge conflict runs merge --abort', async () => {
@@ -1367,7 +1367,7 @@ describe('BaseFamiliar.setupTaskBranch', () => {
       });
 
       await expect(familiar.testSetupTaskBranch(tmpDir, request, handle))
-        .rejects.toThrow('Failed to merge upstream branch');
+        .rejects.toThrow('Merge conflict merging');
 
       const status = execSync('git status --porcelain', { cwd: tmpDir }).toString().trim();
       expect(status).toBe('');
@@ -1394,7 +1394,7 @@ describe('BaseFamiliar.setupTaskBranch', () => {
       });
 
       await expect(familiar.testSetupTaskBranch(tmpDir, request, handle))
-        .rejects.toThrow('Failed to merge upstream branch');
+        .rejects.toThrow('Merge conflict merging');
 
       execSync('git checkout invoker/branch-c1', { cwd: tmpDir });
       execSync('git reset --soft HEAD~1', { cwd: tmpDir });
@@ -1725,5 +1725,293 @@ describe('BaseFamiliar.scheduleReconciliationResponse', () => {
     expect(receivedResponse!.status).toBe('needs_input');
     expect(receivedResponse!.actionId).toBe('recon-task');
     expect(entry.completed).toBe(true);
+  });
+});
+
+// ── N-dependency merge conflict tests ──────────────────────
+
+describe('BaseFamiliar.setupTaskBranch n-dependency conflicts', () => {
+  let tmpDir: string;
+  let familiar: TestFamiliar;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'ndep-'));
+    execSync('git init && git commit --allow-empty -m "init"', { cwd: tmpDir });
+    familiar = new TestFamiliar();
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('3 deps: conflict at position 2 aborts cleanly, error identifies failed branch', async () => {
+    const masterHead = execSync('git rev-parse HEAD', { cwd: tmpDir }).toString().trim();
+
+    // B1: modifies file-a.txt
+    execSync('git checkout -b branch-b1', { cwd: tmpDir });
+    writeFileSync(join(tmpDir, 'file-a.txt'), 'content from B1');
+    execSync('git add -A && git commit -m "B1"', { cwd: tmpDir });
+
+    // B2: modifies file-b.txt (no conflict with B1)
+    execSync(`git checkout ${masterHead}`, { cwd: tmpDir });
+    execSync('git checkout -b branch-b2', { cwd: tmpDir });
+    writeFileSync(join(tmpDir, 'file-b.txt'), 'content from B2');
+    execSync('git add -A && git commit -m "B2"', { cwd: tmpDir });
+
+    // B3: modifies file-a.txt differently (conflicts with B1)
+    execSync(`git checkout ${masterHead}`, { cwd: tmpDir });
+    execSync('git checkout -b branch-b3', { cwd: tmpDir });
+    writeFileSync(join(tmpDir, 'file-a.txt'), 'DIFFERENT content from B3');
+    execSync('git add -A && git commit -m "B3"', { cwd: tmpDir });
+
+    execSync('git checkout master', { cwd: tmpDir });
+
+    const request = makeRequest('ndep-task', {
+      upstreamBranches: ['branch-b1', 'branch-b2', 'branch-b3'],
+    });
+    const handle: FamiliarHandle = { executionId: 'e1', taskId: 'ndep-task' };
+
+    const err = await familiar.testSetupTaskBranch(tmpDir, request, handle).catch(e => e);
+    expect(err).toBeInstanceOf(MergeConflictError);
+    expect((err as MergeConflictError).failedBranch).toBe('branch-b3');
+    expect((err as MergeConflictError).conflictFiles).toContain('file-a.txt');
+  });
+
+  it('3 deps: conflict at position 1 produces no partial merges', async () => {
+    const masterHead = execSync('git rev-parse HEAD', { cwd: tmpDir }).toString().trim();
+
+    execSync('git checkout -b branch-c1', { cwd: tmpDir });
+    writeFileSync(join(tmpDir, 'shared.txt'), 'C1 content');
+    execSync('git add -A && git commit -m "C1"', { cwd: tmpDir });
+
+    // C2 conflicts with C1 immediately
+    execSync(`git checkout ${masterHead}`, { cwd: tmpDir });
+    execSync('git checkout -b branch-c2', { cwd: tmpDir });
+    writeFileSync(join(tmpDir, 'shared.txt'), 'C2 different content');
+    execSync('git add -A && git commit -m "C2"', { cwd: tmpDir });
+
+    // C3 would succeed if reached (modifies different file)
+    execSync(`git checkout ${masterHead}`, { cwd: tmpDir });
+    execSync('git checkout -b branch-c3', { cwd: tmpDir });
+    writeFileSync(join(tmpDir, 'other.txt'), 'C3 content');
+    execSync('git add -A && git commit -m "C3"', { cwd: tmpDir });
+
+    execSync('git checkout master', { cwd: tmpDir });
+
+    const request = makeRequest('ndep-task2', {
+      upstreamBranches: ['branch-c1', 'branch-c2', 'branch-c3'],
+    });
+    const handle: FamiliarHandle = { executionId: 'e2', taskId: 'ndep-task2' };
+
+    const err = await familiar.testSetupTaskBranch(tmpDir, request, handle).catch(e => e);
+    expect(err).toBeInstanceOf(MergeConflictError);
+    expect((err as MergeConflictError).failedBranch).toBe('branch-c2');
+  });
+
+  it('n deps: all succeed when no conflicts', async () => {
+    const masterHead = execSync('git rev-parse HEAD', { cwd: tmpDir }).toString().trim();
+
+    for (let i = 1; i <= 4; i++) {
+      execSync(`git checkout ${masterHead}`, { cwd: tmpDir });
+      execSync(`git checkout -b branch-ok-${i}`, { cwd: tmpDir });
+      writeFileSync(join(tmpDir, `file-${i}.txt`), `content ${i}`);
+      execSync(`git add -A && git commit -m "OK ${i}"`, { cwd: tmpDir });
+    }
+
+    execSync('git checkout master', { cwd: tmpDir });
+
+    const request = makeRequest('ndep-ok', {
+      upstreamBranches: ['branch-ok-1', 'branch-ok-2', 'branch-ok-3', 'branch-ok-4'],
+    });
+    const handle: FamiliarHandle = { executionId: 'e3', taskId: 'ndep-ok' };
+
+    const result = await familiar.testSetupTaskBranch(tmpDir, request, handle);
+    expect(result).toBe('master');
+    expect(handle.branch).toBe('invoker/ndep-ok');
+
+    // All files should exist
+    for (let i = 1; i <= 4; i++) {
+      expect(existsSync(join(tmpDir, `file-${i}.txt`))).toBe(true);
+    }
+  });
+
+  it('branch is clean after merge abort (no markers, no staged files)', async () => {
+    const masterHead = execSync('git rev-parse HEAD', { cwd: tmpDir }).toString().trim();
+
+    execSync('git checkout -b branch-clean-1', { cwd: tmpDir });
+    writeFileSync(join(tmpDir, 'conflict.txt'), 'version A');
+    execSync('git add -A && git commit -m "A"', { cwd: tmpDir });
+
+    execSync(`git checkout ${masterHead}`, { cwd: tmpDir });
+    execSync('git checkout -b branch-clean-2', { cwd: tmpDir });
+    writeFileSync(join(tmpDir, 'conflict.txt'), 'version B');
+    execSync('git add -A && git commit -m "B"', { cwd: tmpDir });
+
+    execSync('git checkout master', { cwd: tmpDir });
+
+    const request = makeRequest('clean-task', {
+      upstreamBranches: ['branch-clean-1', 'branch-clean-2'],
+    });
+    const handle: FamiliarHandle = { executionId: 'e4', taskId: 'clean-task' };
+
+    await expect(familiar.testSetupTaskBranch(tmpDir, request, handle))
+      .rejects.toThrow();
+
+    const status = execSync('git status --porcelain', { cwd: tmpDir }).toString().trim();
+    expect(status).toBe('');
+
+    const diff = execSync('git diff', { cwd: tmpDir }).toString().trim();
+    expect(diff).toBe('');
+  });
+});
+
+// ── Branch reset tests ──────────────────────────────────────
+
+describe('BaseFamiliar.setupTaskBranch branch reset', () => {
+  let tmpDir: string;
+  let familiar: TestFamiliar;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'reset-'));
+    execSync('git init && git commit --allow-empty -m "init"', { cwd: tmpDir });
+    familiar = new TestFamiliar();
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('resets existing branch to new base on restart', async () => {
+    // First run: create branch from master
+    const request = makeRequest('reset-task', { baseBranch: 'master' });
+    const handle1: FamiliarHandle = { executionId: 'e1', taskId: 'reset-task' };
+    await familiar.testSetupTaskBranch(tmpDir, request, handle1);
+
+    // Make a commit on the task branch
+    writeFileSync(join(tmpDir, 'old-work.txt'), 'stale');
+    execSync('git add -A && git commit -m "old work"', { cwd: tmpDir });
+    const oldHead = execSync('git rev-parse HEAD', { cwd: tmpDir }).toString().trim();
+
+    // Move master forward
+    execSync('git checkout master', { cwd: tmpDir });
+    writeFileSync(join(tmpDir, 'new-base.txt'), 'new');
+    execSync('git add -A && git commit -m "new base"', { cwd: tmpDir });
+    const newMasterHead = execSync('git rev-parse HEAD', { cwd: tmpDir }).toString().trim();
+
+    // Second run: same actionId but base has moved
+    const handle2: FamiliarHandle = { executionId: 'e2', taskId: 'reset-task' };
+    await familiar.testSetupTaskBranch(tmpDir, request, handle2);
+
+    const currentHead = execSync('git rev-parse HEAD', { cwd: tmpDir }).toString().trim();
+    // Should be at the new master head, not the old stale commit
+    expect(currentHead).toBe(newMasterHead);
+    expect(currentHead).not.toBe(oldHead);
+  });
+
+  it('restart after conflict re-fails with same conflict', async () => {
+    const masterHead = execSync('git rev-parse HEAD', { cwd: tmpDir }).toString().trim();
+
+    execSync('git checkout -b branch-x', { cwd: tmpDir });
+    writeFileSync(join(tmpDir, 'conflict.txt'), 'X version');
+    execSync('git add -A && git commit -m "X"', { cwd: tmpDir });
+
+    execSync(`git checkout ${masterHead}`, { cwd: tmpDir });
+    execSync('git checkout -b branch-y', { cwd: tmpDir });
+    writeFileSync(join(tmpDir, 'conflict.txt'), 'Y version');
+    execSync('git add -A && git commit -m "Y"', { cwd: tmpDir });
+
+    execSync('git checkout master', { cwd: tmpDir });
+
+    const request = makeRequest('refail-task', {
+      upstreamBranches: ['branch-x', 'branch-y'],
+    });
+
+    // First attempt fails
+    const handle1: FamiliarHandle = { executionId: 'e1', taskId: 'refail-task' };
+    await expect(familiar.testSetupTaskBranch(tmpDir, request, handle1))
+      .rejects.toBeInstanceOf(MergeConflictError);
+
+    // Second attempt (restart) also fails with same conflict
+    execSync('git checkout master', { cwd: tmpDir });
+    const handle2: FamiliarHandle = { executionId: 'e2', taskId: 'refail-task' };
+    await expect(familiar.testSetupTaskBranch(tmpDir, request, handle2))
+      .rejects.toBeInstanceOf(MergeConflictError);
+  });
+
+  it('merge conflict produces no new commit on the branch', async () => {
+    const masterHead = execSync('git rev-parse HEAD', { cwd: tmpDir }).toString().trim();
+
+    execSync('git checkout -b up-1', { cwd: tmpDir });
+    writeFileSync(join(tmpDir, 'f.txt'), 'A');
+    execSync('git add -A && git commit -m "A"', { cwd: tmpDir });
+    const upHead = execSync('git rev-parse HEAD', { cwd: tmpDir }).toString().trim();
+
+    execSync(`git checkout ${masterHead}`, { cwd: tmpDir });
+    execSync('git checkout -b up-2', { cwd: tmpDir });
+    writeFileSync(join(tmpDir, 'f.txt'), 'B');
+    execSync('git add -A && git commit -m "B"', { cwd: tmpDir });
+
+    execSync('git checkout master', { cwd: tmpDir });
+
+    const request = makeRequest('ncommit-task', {
+      upstreamBranches: ['up-1', 'up-2'],
+    });
+    const handle: FamiliarHandle = { executionId: 'e1', taskId: 'ncommit-task' };
+
+    await expect(familiar.testSetupTaskBranch(tmpDir, request, handle))
+      .rejects.toThrow();
+
+    // The task branch should be at up-1's HEAD (the base), no new commits
+    execSync('git checkout invoker/ncommit-task', { cwd: tmpDir });
+    const branchHead = execSync('git rev-parse HEAD', { cwd: tmpDir }).toString().trim();
+    expect(branchHead).toBe(upHead);
+  });
+
+  it('recordTaskResult with non-zero exit still commits file changes', async () => {
+    execSync('git checkout -b invoker/fail-commit', { cwd: tmpDir });
+    writeFileSync(join(tmpDir, 'output.txt'), 'partial results');
+
+    const request = makeRequest('fail-task', { description: 'failing task' });
+    const hash = await familiar.testRecordTaskResult(tmpDir, request, 1);
+
+    expect(hash).toBeDefined();
+    expect(hash).not.toBeNull();
+
+    const msg = execSync(`git log -1 --format=%B`, { cwd: tmpDir }).toString();
+    expect(msg).toContain('fail-task');
+  });
+
+  it('MergeConflictError captures conflicted files', async () => {
+    const masterHead = execSync('git rev-parse HEAD', { cwd: tmpDir }).toString().trim();
+
+    execSync('git checkout -b mc-branch-1', { cwd: tmpDir });
+    writeFileSync(join(tmpDir, 'fileA.txt'), 'version 1');
+    writeFileSync(join(tmpDir, 'fileB.txt'), 'version 1');
+    execSync('git add -A && git commit -m "branch 1"', { cwd: tmpDir });
+
+    execSync(`git checkout ${masterHead}`, { cwd: tmpDir });
+    execSync('git checkout -b mc-branch-2', { cwd: tmpDir });
+    writeFileSync(join(tmpDir, 'fileA.txt'), 'version 2');
+    writeFileSync(join(tmpDir, 'fileB.txt'), 'version 2');
+    execSync('git add -A && git commit -m "branch 2"', { cwd: tmpDir });
+
+    execSync('git checkout master', { cwd: tmpDir });
+
+    const request = makeRequest('mc-task', {
+      upstreamBranches: ['mc-branch-1', 'mc-branch-2'],
+    });
+    const handle: FamiliarHandle = { executionId: 'e1', taskId: 'mc-task' };
+
+    try {
+      await familiar.testSetupTaskBranch(tmpDir, request, handle);
+      expect.fail('Should have thrown MergeConflictError');
+    } catch (err) {
+      expect(err).toBeInstanceOf(MergeConflictError);
+      const mce = err as MergeConflictError;
+      expect(mce.failedBranch).toBe('mc-branch-2');
+      expect(mce.conflictFiles).toContain('fileA.txt');
+      expect(mce.conflictFiles).toContain('fileB.txt');
+      expect(mce.conflictFiles.length).toBe(2);
+    }
   });
 });

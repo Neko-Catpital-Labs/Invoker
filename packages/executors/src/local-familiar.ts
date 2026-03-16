@@ -2,7 +2,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import type { WorkRequest, WorkResponse } from '@invoker/protocol';
 import type { FamiliarHandle, PersistedTaskMeta, TerminalSpec } from './familiar.js';
-import { BaseFamiliar, type BaseEntry } from './base-familiar.js';
+import { BaseFamiliar, type BaseEntry, MergeConflictError } from './base-familiar.js';
 import { killProcessGroup, cleanElectronEnv, SIGKILL_TIMEOUT_MS } from './process-utils.js';
 
 interface ProcessEntry extends BaseEntry {
@@ -30,6 +30,7 @@ export class LocalFamiliar extends BaseFamiliar<ProcessEntry> {
   readonly type = 'local';
   private claudeCommand: string;
   private claudeFallback: boolean;
+  private workspaceLocks = new Map<string, Promise<void>>();
 
   constructor(options: LocalFamiliarOptions = {}) {
     super(options.heartbeatIntervalMs);
@@ -67,26 +68,65 @@ export class LocalFamiliar extends BaseFamiliar<ProcessEntry> {
     const cwd = request.inputs.workspacePath ?? process.cwd();
     console.log(`[LocalFamiliar] ${request.actionId} workspace: ${cwd}`);
 
-    // Create feature branch before spawning if specified
-    if (request.inputs.featureBranch && request.inputs.workspacePath) {
-      await this.ensureFeatureBranch(
-        request.inputs.workspacePath,
-        request.inputs.featureBranch,
-      );
+    // Serialize checkout+spawn per workspace to prevent branch races
+    const prevLock = this.workspaceLocks.get(cwd) ?? Promise.resolve();
+    let releaseLock!: () => void;
+    const newLock = new Promise<void>(r => { releaseLock = r; });
+    this.workspaceLocks.set(cwd, newLock);
+    await prevLock;
+
+    let originalBranch: string | undefined;
+    let child: ChildProcess;
+    try {
+      // Create feature branch before spawning if specified
+      if (request.inputs.featureBranch && request.inputs.workspacePath) {
+        await this.ensureFeatureBranch(
+          request.inputs.workspacePath,
+          request.inputs.featureBranch,
+        );
+      }
+
+      // Pre-sync: pull latest from remote
+      await this.syncFromRemote(cwd, handle.executionId);
+
+      // Create task-specific branch based off upstream dependency branch
+      originalBranch = await this.setupTaskBranch(cwd, request, handle);
+
+      child = spawn(cmd, args, {
+        stdio: [request.actionType === 'claude' ? 'ignore' : 'pipe', 'pipe', 'pipe'],
+        cwd,
+        detached: true,
+        env: cleanElectronEnv(),
+      });
+    } catch (err) {
+      if (err instanceof MergeConflictError) {
+        const entry: ProcessEntry = {
+          process: null, request,
+          outputListeners: new Set(), outputBuffer: [],
+          completeListeners: new Set(), heartbeatListeners: new Set(),
+          completed: true, fallbackActive: false,
+        };
+        this.registerEntry(handle, entry);
+        const response: WorkResponse = {
+          requestId: request.requestId,
+          actionId: request.actionId,
+          status: 'failed',
+          outputs: {
+            exitCode: 1,
+            error: JSON.stringify({
+              type: 'merge_conflict',
+              failedBranch: err.failedBranch,
+              conflictFiles: err.conflictFiles,
+            }),
+          },
+        };
+        this.emitComplete(handle.executionId, response);
+        return handle;
+      }
+      throw err;
+    } finally {
+      releaseLock();
     }
-
-    // Pre-sync: pull latest from remote
-    await this.syncFromRemote(cwd, handle.executionId);
-
-    // Create task-specific branch based off upstream dependency branch
-    const originalBranch = await this.setupTaskBranch(cwd, request, handle);
-
-    const child = spawn(cmd, args, {
-      stdio: [request.actionType === 'claude' ? 'ignore' : 'pipe', 'pipe', 'pipe'],
-      cwd,
-      detached: true,
-      env: cleanElectronEnv(),
-    });
 
     const entry: ProcessEntry = {
       process: child,

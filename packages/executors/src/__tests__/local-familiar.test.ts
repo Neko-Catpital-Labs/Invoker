@@ -660,4 +660,49 @@ describe('LocalFamiliar', () => {
       });
     });
   });
+
+  describe('concurrent workspace serialization', () => {
+    it('serializes concurrent starts in the same workspace', async () => {
+      const setupOrder: string[] = [];
+      const sharedCwd = process.cwd();
+
+      const familiar = new LocalFamiliar({ claudeCommand: 'echo' });
+      mockGitLifecycle(familiar);
+      vi.spyOn(familiar as any, 'syncFromRemote').mockResolvedValue(undefined);
+      vi.mocked((familiar as any).setupTaskBranch).mockImplementation(
+        async (_cwd: string, request: any) => {
+          const id = request.actionId;
+          setupOrder.push(`enter-${id}`);
+          await new Promise(r => setTimeout(r, 50));
+          setupOrder.push(`exit-${id}`);
+          return 'master';
+        },
+      );
+
+      const req1: any = {
+        requestId: 'r1', actionId: 'task-1', actionType: 'command',
+        inputs: { command: 'echo 1', workspacePath: sharedCwd },
+        callbackUrl: '', timestamps: { createdAt: new Date().toISOString() },
+      };
+      const req2: any = {
+        requestId: 'r2', actionId: 'task-2', actionType: 'command',
+        inputs: { command: 'echo 2', workspacePath: sharedCwd },
+        callbackUrl: '', timestamps: { createdAt: new Date().toISOString() },
+      };
+
+      // Start both concurrently
+      await Promise.all([
+        familiar.start(req1),
+        familiar.start(req2),
+      ]);
+
+      // The order should show that task-2 doesn't enter until task-1 exits
+      expect(setupOrder[0]).toBe('enter-task-1');
+      expect(setupOrder[1]).toBe('exit-task-1');
+      expect(setupOrder[2]).toBe('enter-task-2');
+      expect(setupOrder[3]).toBe('exit-task-2');
+
+      await familiar.destroyAll();
+    });
+  });
 });

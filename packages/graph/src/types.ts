@@ -70,6 +70,10 @@ export interface TaskExecution {
   readonly selectedExperiment?: string;
   readonly selectedExperiments?: readonly string[];
   readonly experimentResults?: readonly ExperimentResultEntry[];
+  readonly mergeConflict?: {
+    readonly failedBranch: string;
+    readonly conflictFiles: readonly string[];
+  };
 }
 
 // ── Task State ──────────────────────────────────────────────

@@ -1007,11 +1007,22 @@ export class Orchestrator {
     taskId: string,
     parsed: Extract<ParsedResponse, { type: 'failed' }>,
   ): TaskState[] {
+    let mergeConflict: { failedBranch: string; conflictFiles: string[] } | undefined;
+    if (parsed.error) {
+      try {
+        const obj = JSON.parse(parsed.error);
+        if (obj?.type === 'merge_conflict') {
+          mergeConflict = { failedBranch: obj.failedBranch, conflictFiles: obj.conflictFiles };
+        }
+      } catch { /* not JSON — normal error string */ }
+    }
+
     const changes: TaskStateChanges = {
       status: 'failed',
       execution: {
         exitCode: parsed.exitCode,
         error: parsed.error,
+        mergeConflict,
         completedAt: new Date(),
       },
     };

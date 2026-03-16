@@ -594,6 +594,9 @@ describe('WorktreeFamiliar', () => {
               if (argsArr?.includes('rev-parse')) {
                 gitProc.stdout!.emit('data', Buffer.from('abc123\n'));
               }
+              if (argsArr?.[0] === 'diff' && argsArr?.[1] === '--name-only') {
+                gitProc.stdout!.emit('data', Buffer.from('file.ts\n'));
+              }
               gitProc.emit('close', 0, null);
             }
           });
@@ -613,7 +616,18 @@ describe('WorktreeFamiliar', () => {
         },
       });
 
-      await expect(familiar.start(request)).rejects.toThrow('Failed to merge upstream branch');
+      const handle = await familiar.start(request);
+      expect(handle).toBeDefined();
+
+      const response = await new Promise<WorkResponse>((resolve) => {
+        familiar.onComplete(handle, resolve);
+      });
+      expect(response.status).toBe('failed');
+      expect(response.outputs?.exitCode).toBe(1);
+      const errObj = JSON.parse(response.outputs!.error!);
+      expect(errObj.type).toBe('merge_conflict');
+      expect(errObj.failedBranch).toBe('experiment/conflicting');
+      expect(errObj.conflictFiles).toContain('file.ts');
     });
 
     it('error message includes stdout conflict details (not just stderr)', async () => {
@@ -636,6 +650,9 @@ describe('WorktreeFamiliar', () => {
               if (argsArr?.includes('rev-parse')) {
                 gitProc.stdout!.emit('data', Buffer.from('abc123\n'));
               }
+              if (argsArr?.[0] === 'diff' && argsArr?.[1] === '--name-only') {
+                gitProc.stdout!.emit('data', Buffer.from('App.tsx\n'));
+              }
               gitProc.emit('close', 0, null);
             }
           });
@@ -655,7 +672,14 @@ describe('WorktreeFamiliar', () => {
         },
       });
 
-      await expect(familiar.start(request)).rejects.toThrow('CONFLICT');
+      const handle = await familiar.start(request);
+      const response = await new Promise<WorkResponse>((resolve) => {
+        familiar.onComplete(handle, resolve);
+      });
+      expect(response.status).toBe('failed');
+      const errObj = JSON.parse(response.outputs!.error!);
+      expect(errObj.type).toBe('merge_conflict');
+      expect(errObj.conflictFiles).toContain('App.tsx');
     });
 
     it('gives clear error when upstream branch does not exist', async () => {
