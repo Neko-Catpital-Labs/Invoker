@@ -242,6 +242,21 @@ export function nextVersion(taskId: string): string {
   return `${taskId}-v2`;
 }
 
+// ── findLeafTaskIds ──────────────────────────────────────────
+
+/**
+ * Returns IDs of leaf tasks — tasks that no other task depends on.
+ * Operates on whatever task set is passed in (caller is responsible
+ * for pre-filtering by workflow, status, etc.).
+ */
+export function findLeafTaskIds(tasks: TaskState[]): string[] {
+  const dependedOn = new Set<string>();
+  for (const task of tasks) {
+    for (const dep of task.dependencies) dependedOn.add(dep);
+  }
+  return tasks.filter((t) => !dependedOn.has(t.id)).map((t) => t.id);
+}
+
 // ── getReadyTasks ────────────────────────────────────────────
 
 /**

@@ -21,7 +21,7 @@ import type { UtilizationRule } from './resource-estimator.js';
 import type { TaskState, TaskDelta, TaskStateChanges, TaskCreateOptions } from './task-types.js';
 import { createTaskState } from './task-types.js';
 import type { WorkResponse } from '@invoker/protocol';
-import { getTransitiveDependents, nextVersion } from './dag.js';
+import { getTransitiveDependents, nextVersion, findLeafTaskIds } from './dag.js';
 import { ActionGraph } from '@invoker/graph';
 
 // ── Channel Constants ───────────────────────────────────────
@@ -288,6 +288,8 @@ export class Orchestrator {
     for (const delta of deltas) {
       this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
     }
+
+    this.reconcileMergeLeaves(workflowId);
   }
 
   /**
@@ -734,31 +736,9 @@ export class Orchestrator {
       this.messageBus.publish(TASK_DELTA_CHANNEL, { type: 'created', task: newTask });
     }
 
-    // 3. Update merge node deps: remove stale'd deps, add replacement leaves
-    const leafIds = replacementTasks
-      .filter((rt) => !replacementTasks.some((other) => other.dependencies?.includes(rt.id)))
-      .map((rt) => rt.id);
-
+    // 3. Reconcile merge node deps from actual graph state
     if (task.config.workflowId) {
-      const mergeNode = this.getMergeNode(task.config.workflowId);
-      if (mergeNode) {
-        const staleIds = new Set([...descendantIds, taskId]);
-        const newDeps = [
-          ...mergeNode.dependencies.filter((d) => !staleIds.has(d)),
-          ...leafIds,
-        ];
-        const mergeChanges: TaskStateChanges = {
-          dependencies: newDeps,
-          status: 'pending',
-          execution: { blockedBy: undefined },
-        };
-        this.writeAndSync(mergeNode.id, mergeChanges);
-        this.messageBus.publish(TASK_DELTA_CHANNEL, {
-          type: 'updated',
-          taskId: mergeNode.id,
-          changes: mergeChanges,
-        });
-      }
+      this.reconcileMergeLeaves(task.config.workflowId);
     }
 
     this.scheduler.completeJob(taskId);
@@ -792,8 +772,11 @@ export class Orchestrator {
       (t) => !!t.config.isMergeNode,
     );
     if (descendantIds.length === 0) {
-      // No non-merge descendants; just update merge node deps if needed
-      this.updateMergeNodeDeps(dirtyTaskId, depOverrides);
+      // No non-merge descendants; reconcile merge leaves from graph state
+      const dirtyTask = taskMap.get(dirtyTaskId);
+      if (dirtyTask?.config.workflowId) {
+        this.reconcileMergeLeaves(dirtyTask.config.workflowId);
+      }
       return [];
     }
 
@@ -836,49 +819,52 @@ export class Orchestrator {
       deltas.push(delta);
     }
 
-    // Update merge node deps: replace stale'd leaves with their clones
+    // Reconcile merge node deps from actual graph state
     const dirtyTask = taskMap.get(dirtyTaskId);
     if (dirtyTask?.config.workflowId) {
-      const mergeNode = this.getMergeNode(dirtyTask.config.workflowId);
-      if (mergeNode) {
-        const newDeps = mergeNode.dependencies.map((dep) =>
-          idMap.get(dep) ?? depOverrides?.get(dep) ?? dep,
-        );
-        this.writeAndSync(mergeNode.id, { dependencies: newDeps });
-        const delta: TaskDelta = {
-          type: 'updated',
-          taskId: mergeNode.id,
-          changes: { dependencies: newDeps },
-        };
-        this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
-        deltas.push(delta);
-      }
+      this.reconcileMergeLeaves(dirtyTask.config.workflowId);
     }
 
     return deltas;
   }
 
   /**
-   * Update the merge node's dependencies when forkDirtySubtree has no
-   * non-merge descendants (the dirty task is a direct dep of the merge node).
+   * Recompute the merge node's dependencies from the actual graph state.
+   * Active (non-stale, non-merge) leaf tasks become the merge gate's deps.
+   * No-ops if deps are already correct.
    */
-  private updateMergeNodeDeps(dirtyTaskId: string, depOverrides?: Map<string, string>): void {
-    const dirtyTask = this.stateMachine.getTask(dirtyTaskId);
-    if (!dirtyTask?.config.workflowId) return;
-    const mergeNode = this.getMergeNode(dirtyTask.config.workflowId);
+  private reconcileMergeLeaves(workflowId: string): void {
+    const mergeNode = this.getMergeNode(workflowId);
     if (!mergeNode) return;
 
-    const override = depOverrides?.get(dirtyTaskId);
-    if (!override) return;
-
-    const newDeps = mergeNode.dependencies.map((dep) =>
-      dep === dirtyTaskId ? override : dep,
+    const allTasks = this.stateMachine.getAllTasks();
+    const activeTasks = allTasks.filter(
+      (t) =>
+        t.config.workflowId === workflowId &&
+        !t.config.isMergeNode &&
+        t.status !== 'stale',
     );
-    this.writeAndSync(mergeNode.id, { dependencies: newDeps });
+    const leafIds = findLeafTaskIds(activeTasks);
+
+    const currentDeps = new Set(mergeNode.dependencies);
+    const newDepsSet = new Set(leafIds);
+    if (
+      currentDeps.size === newDepsSet.size &&
+      [...currentDeps].every((d) => newDepsSet.has(d))
+    ) {
+      return;
+    }
+
+    const changes: TaskStateChanges = {
+      dependencies: leafIds,
+      status: 'pending',
+      execution: { blockedBy: undefined },
+    };
+    this.writeAndSync(mergeNode.id, changes);
     this.messageBus.publish(TASK_DELTA_CHANNEL, {
       type: 'updated',
       taskId: mergeNode.id,
-      changes: { dependencies: newDeps },
+      changes,
     });
   }
 
@@ -1170,6 +1156,12 @@ export class Orchestrator {
       this.persistence.logEvent?.(task.id, 'task.created');
       this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
       allDeltas.push(delta);
+    }
+
+    // 4. Reconcile merge leaves now that new nodes exist in the graph
+    const sourceTask = this.stateMachine.getTask(mutation.sourceNodeId);
+    if (sourceTask?.config.workflowId) {
+      this.reconcileMergeLeaves(sourceTask.config.workflowId);
     }
 
     return allDeltas;
