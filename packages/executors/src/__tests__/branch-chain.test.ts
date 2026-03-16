@@ -314,6 +314,163 @@ describe('A→B→C branch chain', () => {
     });
   });
 
+  describe('diamond: A→{B,C}→D', () => {
+    it('D branch contains commits from both B and C', async () => {
+      const taskA = makeTaskState({
+        id: 'task-a',
+        description: 'Step A',
+        config: { command: 'echo a', familiarType: 'local', workflowId: 'wf-test' },
+      });
+      const taskB = makeTaskState({
+        id: 'task-b',
+        description: 'Step B',
+        dependencies: ['task-a'],
+        config: { command: 'echo b', familiarType: 'local', workflowId: 'wf-test' },
+      });
+      const taskC = makeTaskState({
+        id: 'task-c',
+        description: 'Step C',
+        dependencies: ['task-a'],
+        config: { command: 'echo c', familiarType: 'local', workflowId: 'wf-test' },
+      });
+      const taskD = makeTaskState({
+        id: 'task-d',
+        description: 'Step D',
+        dependencies: ['task-b', 'task-c'],
+        config: { command: 'echo d', familiarType: 'local', workflowId: 'wf-test' },
+      });
+
+      const tasks = [taskA, taskB, taskC, taskD];
+      const registry = new FamiliarRegistry();
+      const localFamiliar = new LocalFamiliar({ claudeCommand: '/bin/echo', claudeFallback: false });
+      registry.register('local', localFamiliar);
+
+      const orchestrator = {
+        getTask: (id: string) => tasks.find(t => t.id === id),
+        getAllTasks: () => tasks,
+        handleWorkerResponse: (response: WorkResponse) => {
+          const task = tasks.find(t => t.id === response.actionId);
+          if (task) task.status = response.status;
+          return [];
+        },
+        setTaskAwaitingApproval: () => {},
+      };
+      const persistence = {
+        loadWorkflow: () => ({ id: 'wf-test', baseBranch: 'master' }),
+        updateTask: (id: string, changes: any) => {
+          const task = tasks.find(t => t.id === id);
+          if (task && changes.execution) Object.assign(task.execution, changes.execution);
+          if (task && changes.config) Object.assign(task.config, changes.config);
+        },
+      };
+
+      const executor = new TaskExecutor({
+        orchestrator: orchestrator as any,
+        persistence: persistence as any,
+        familiarRegistry: registry,
+        cwd: tmpDir,
+        defaultBranch: 'master',
+      });
+
+      // Execute A (root)
+      taskA.status = 'running';
+      await (executor as any).executeTaskInner(taskA);
+      const hashA = execSync('git rev-parse invoker/task-a', { cwd: tmpDir }).toString().trim();
+
+      // Execute B and C (both depend on A)
+      taskB.status = 'running';
+      await (executor as any).executeTaskInner(taskB);
+      const hashB = execSync('git rev-parse invoker/task-b', { cwd: tmpDir }).toString().trim();
+
+      taskC.status = 'running';
+      await (executor as any).executeTaskInner(taskC);
+      const hashC = execSync('git rev-parse invoker/task-c', { cwd: tmpDir }).toString().trim();
+
+      // Execute D (depends on B and C)
+      taskD.status = 'running';
+      await (executor as any).executeTaskInner(taskD);
+
+      // D has both B and C as ancestors
+      expect(isAncestor(tmpDir, hashA, 'invoker/task-d')).toBe(true);
+      expect(isAncestor(tmpDir, hashB, 'invoker/task-d')).toBe(true);
+      expect(isAncestor(tmpDir, hashC, 'invoker/task-d')).toBe(true);
+
+      // D's branch exists
+      expect(branchExists(tmpDir, 'invoker/task-d')).toBe(true);
+    });
+
+    it('collectUpstreamBranches returns both branches for D', async () => {
+      const taskA = makeTaskState({
+        id: 'task-a',
+        description: 'Step A',
+        config: { command: 'echo a', familiarType: 'local', workflowId: 'wf-test' },
+      });
+      const taskB = makeTaskState({
+        id: 'task-b',
+        description: 'Step B',
+        dependencies: ['task-a'],
+        config: { command: 'echo b', familiarType: 'local', workflowId: 'wf-test' },
+      });
+      const taskC = makeTaskState({
+        id: 'task-c',
+        description: 'Step C',
+        dependencies: ['task-a'],
+        config: { command: 'echo c', familiarType: 'local', workflowId: 'wf-test' },
+      });
+      const taskD = makeTaskState({
+        id: 'task-d',
+        description: 'Step D',
+        dependencies: ['task-b', 'task-c'],
+        config: { command: 'echo d', familiarType: 'local', workflowId: 'wf-test' },
+      });
+
+      const tasks = [taskA, taskB, taskC, taskD];
+      const registry = new FamiliarRegistry();
+      const localFamiliar = new LocalFamiliar({ claudeCommand: '/bin/echo', claudeFallback: false });
+      registry.register('local', localFamiliar);
+
+      const orchestrator = {
+        getTask: (id: string) => tasks.find(t => t.id === id),
+        getAllTasks: () => tasks,
+        handleWorkerResponse: (response: WorkResponse) => {
+          const task = tasks.find(t => t.id === response.actionId);
+          if (task) task.status = response.status;
+          return [];
+        },
+        setTaskAwaitingApproval: () => {},
+      };
+      const persistence = {
+        loadWorkflow: () => ({ id: 'wf-test', baseBranch: 'master' }),
+        updateTask: (id: string, changes: any) => {
+          const task = tasks.find(t => t.id === id);
+          if (task && changes.execution) Object.assign(task.execution, changes.execution);
+          if (task && changes.config) Object.assign(task.config, changes.config);
+        },
+      };
+
+      const executor = new TaskExecutor({
+        orchestrator: orchestrator as any,
+        persistence: persistence as any,
+        familiarRegistry: registry,
+        cwd: tmpDir,
+        defaultBranch: 'master',
+      });
+
+      // Execute A, B, C
+      taskA.status = 'running';
+      await (executor as any).executeTaskInner(taskA);
+      taskB.status = 'running';
+      await (executor as any).executeTaskInner(taskB);
+      taskC.status = 'running';
+      await (executor as any).executeTaskInner(taskC);
+
+      const upstreams = executor.collectUpstreamBranches(taskD);
+      expect(upstreams).toContain('invoker/task-b');
+      expect(upstreams).toContain('invoker/task-c');
+      expect(upstreams).toHaveLength(2);
+    });
+  });
+
   describe('fan-in: A→C, B→C', () => {
     it('C merges both upstream branches', async () => {
       const taskA = makeTaskState({

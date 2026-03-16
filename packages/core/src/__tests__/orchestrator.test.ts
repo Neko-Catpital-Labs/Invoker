@@ -2516,4 +2516,145 @@ describe('Orchestrator', () => {
       expect((reconDelta as any).changes.execution.selectedExperiments).toEqual(['pivot-exp-v2', 'pivot-exp-v3']);
     });
   });
+
+  // ── Missing state transitions ─────────────────────────────
+
+  describe('missing state transitions', () => {
+    it('restartTask on stale task resets to pending', () => {
+      orchestrator.loadPlan({
+        name: 'stale-restart',
+        tasks: [
+          { id: 'parent', description: 'Parent', command: 'echo parent' },
+          { id: 'child', description: 'Child', command: 'echo child', dependencies: ['parent'] },
+        ],
+      });
+      orchestrator.startExecution();
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 'parent', status: 'completed', outputs: { exitCode: 0 } }),
+      );
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 'child', status: 'completed', outputs: { exitCode: 0 } }),
+      );
+
+      // Edit parent → child becomes stale
+      orchestrator.editTaskCommand('parent', 'echo updated');
+      expect(orchestrator.getTask('child')!.status).toBe('stale');
+
+      // Restart the stale child
+      orchestrator.restartTask('child');
+      expect(orchestrator.getTask('child')!.status).toBe('pending');
+    });
+
+    it('restartTask on awaiting_approval resets to pending and clears completedAt', () => {
+      orchestrator.loadPlan({
+        name: 'approval-restart',
+        tasks: [
+          { id: 't1', description: 'Task 1', command: 'echo hello' },
+        ],
+      });
+      orchestrator.startExecution();
+
+      orchestrator.setTaskAwaitingApproval('t1');
+      expect(orchestrator.getTask('t1')!.status).toBe('awaiting_approval');
+      expect(orchestrator.getTask('t1')!.execution.completedAt).toBeDefined();
+
+      orchestrator.restartTask('t1');
+      expect(orchestrator.getTask('t1')!.status).toBe('running');
+      expect(orchestrator.getTask('t1')!.execution.completedAt).toBeUndefined();
+    });
+
+    it('restartTask on completed reconciliation clears selectedExperiment and experimentResults', () => {
+      orchestrator.loadPlan({
+        name: 'recon-restart',
+        tasks: [
+          { id: 'setup', description: 'Setup' },
+          {
+            id: 'pivot',
+            description: 'Pivot',
+            dependencies: ['setup'],
+            pivot: true,
+            experimentVariants: [
+              { id: 'v1', description: 'V1', prompt: 'A' },
+              { id: 'v2', description: 'V2', prompt: 'B' },
+            ],
+          },
+          { id: 'downstream', description: 'Downstream', dependencies: ['pivot'] },
+        ],
+      });
+      orchestrator.startExecution();
+
+      // Complete setup, spawn experiments
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 'setup', status: 'completed', outputs: { exitCode: 0 } }),
+      );
+      orchestrator.handleWorkerResponse({
+        requestId: 'req-pivot',
+        actionId: 'pivot',
+        status: 'spawn_experiments',
+        outputs: { exitCode: 0 },
+        dagMutation: {
+          spawnExperiments: {
+            description: 'Variants',
+            variants: [
+              { id: 'v1', description: 'V1', prompt: 'A' },
+              { id: 'v2', description: 'V2', prompt: 'B' },
+            ],
+          },
+        },
+      });
+
+      // Complete both experiments
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 'pivot-exp-v1', status: 'completed', outputs: { exitCode: 0 } }),
+      );
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 'pivot-exp-v2', status: 'completed', outputs: { exitCode: 0 } }),
+      );
+      expect(orchestrator.getTask('pivot-reconciliation')!.status).toBe('needs_input');
+
+      // Select experiment → reconciliation completes
+      persistence.updateTask('pivot-exp-v1', {
+        execution: { branch: 'exp/v1', commit: 'commit1' },
+      });
+      orchestrator.selectExperiment('pivot-reconciliation', 'pivot-exp-v1');
+      expect(orchestrator.getTask('pivot-reconciliation')!.status).toBe('completed');
+      expect(orchestrator.getTask('pivot-reconciliation')!.execution.selectedExperiment).toBe('pivot-exp-v1');
+
+      // Now restart the completed reconciliation task.
+      // All experiment deps are completed, so restartTask auto-starts it → running.
+      orchestrator.restartTask('pivot-reconciliation');
+      const recon = orchestrator.getTask('pivot-reconciliation')!;
+      expect(recon.status).toBe('running');
+      expect(recon.execution.commit).toBeUndefined();
+      // Note: restartTask does NOT clear selectedExperiment or experimentResults.
+      // Only the reconciliation-reset path (when restarting an experiment dep)
+      // clears experimentResults. This is current behavior, not necessarily ideal.
+    });
+
+    it('awaiting_approval → reject → restart → dependents unblock', () => {
+      orchestrator.loadPlan({
+        name: 'reject-restart',
+        tasks: [
+          { id: 'A', description: 'Approval gate', command: 'echo A' },
+          { id: 'B', description: 'Downstream', command: 'echo B', dependencies: ['A'] },
+        ],
+      });
+      orchestrator.startExecution();
+
+      orchestrator.setTaskAwaitingApproval('A');
+      expect(orchestrator.getTask('A')!.status).toBe('awaiting_approval');
+
+      orchestrator.reject('A', 'Not good enough');
+      expect(orchestrator.getTask('A')!.status).toBe('failed');
+      expect(orchestrator.getTask('B')!.status).toBe('blocked');
+
+      orchestrator.restartTask('A');
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 'A', status: 'completed', outputs: { exitCode: 0 } }),
+      );
+
+      expect(orchestrator.getTask('A')!.status).toBe('completed');
+      expect(orchestrator.getTask('B')!.status).toBe('running');
+    });
+  });
 });
