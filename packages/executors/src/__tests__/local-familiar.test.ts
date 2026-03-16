@@ -491,7 +491,7 @@ describe('LocalFamiliar', () => {
       });
 
       const combined = output.join('');
-      expect(combined).toContain('[LocalFamiliar] Process exited');
+      expect(combined).toContain('[local] Process exited');
       expect(combined).toContain('exitCode=42');
     });
 
@@ -510,7 +510,7 @@ describe('LocalFamiliar', () => {
       await responsePromise;
 
       const combined = output.join('');
-      expect(combined).toContain('[LocalFamiliar] Process exited');
+      expect(combined).toContain('[local] Process exited');
       expect(combined).toMatch(/signal=SIG(TERM|KILL)/);
     });
 
@@ -526,7 +526,7 @@ describe('LocalFamiliar', () => {
       });
 
       const combined = output.join('');
-      expect(combined).toContain('[LocalFamiliar] Process exited');
+      expect(combined).toContain('[local] Process exited');
       expect(combined).toContain('exitCode=0');
     });
 

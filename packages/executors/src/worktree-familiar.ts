@@ -3,12 +3,11 @@ import { createHash } from 'node:crypto';
 import { existsSync, unlinkSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { homedir } from 'node:os';
-import type { WorkRequest, WorkResponse } from '@invoker/protocol';
+import type { WorkRequest } from '@invoker/protocol';
 import type { FamiliarHandle, PersistedTaskMeta, TerminalSpec } from './familiar.js';
 import { BaseFamiliar, type BaseEntry } from './base-familiar.js';
 import { RepoPool } from './repo-pool.js';
-
-const SIGKILL_TIMEOUT_MS = 5_000;
+import { killProcessGroup, cleanElectronEnv, SIGKILL_TIMEOUT_MS } from './process-utils.js';
 
 /**
  * Merkle-style hash for content-addressable branch naming.
@@ -33,15 +32,6 @@ export function computeBranchHash(
   return h.digest('hex').slice(0, 8);
 }
 
-/** Strip Electron-specific env vars so child processes use the system Node.js. */
-function cleanElectronEnv(): NodeJS.ProcessEnv {
-  const env = { ...process.env };
-  delete env.ELECTRON_RUN_AS_NODE;
-  delete env.ELECTRON_NO_ASAR;
-  delete env.ELECTRON_NO_ATTACH_CONSOLE;
-  return env;
-}
-
 export interface WorktreeFamiliarConfig {
   /** Path to the main git repository. */
   repoDir: string;
@@ -63,20 +53,6 @@ interface WorktreeEntry extends BaseEntry {
   poolRelease?: () => Promise<void>;
   /** Claude session ID for resuming sessions. */
   claudeSessionId?: string;
-}
-
-/**
- * Sends a signal to the entire process group.
- * Uses negative PID to target the group when the process was spawned with detached: true.
- */
-function killProcessGroup(child: ChildProcess, signal: NodeJS.Signals): boolean {
-  if (child.pid == null) return false;
-  try {
-    process.kill(-child.pid, signal);
-    return true;
-  } catch {
-    return child.kill(signal);
-  }
 }
 
 /**
@@ -116,7 +92,7 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
 
     const baseRef = request.inputs.baseBranch ?? 'HEAD';
     log(`rev-parse ${baseRef} begin`);
-    const baseHead = await this.execGit(['rev-parse', baseRef], this.repoDir);
+    const baseHead = await this.execGitSimple(['rev-parse', baseRef], this.repoDir);
     log(`rev-parse ${baseRef} done`);
     const upstreamCommits = (request.inputs.upstreamContext ?? [])
       .map(c => c.commitHash)
@@ -146,20 +122,7 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
         completed: false,
       };
       this.registerEntry(handle, entry);
-
-      setTimeout(() => {
-        entry.completed = true;
-        const response: WorkResponse = {
-          requestId: request.requestId,
-          actionId: request.actionId,
-          status: 'needs_input',
-          outputs: { summary: 'Select winning experiment' },
-        };
-        for (const cb of entry.completeListeners) {
-          cb(response);
-        }
-      }, 0);
-
+      this.scheduleReconciliationResponse(handle.executionId);
       return handle;
     }
 
@@ -168,31 +131,10 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
       const acquired = await this.pool.acquireWorktree(request.inputs.repoUrl, branch);
 
       this.cleanStaleLocks(acquired.worktreePath);
-
-      // Merge upstream dependency branches into the pool worktree
       await this.mergeUpstreamBranches(request.inputs.upstreamBranches, acquired.worktreePath);
-
-      // Install dependencies so tasks can build/test in the worktree
       await this.provisionWorktree(acquired.worktreePath);
 
-      // Determine what to run (same logic as below)
-      let cmd: string;
-      let args: string[];
-      let claudeSessionId: string | undefined;
-      if (request.actionType === 'command') {
-        const command = request.inputs.command;
-        if (!command) throw new Error('WorkRequest with actionType "command" must have inputs.command');
-        cmd = '/bin/sh';
-        args = ['-c', command];
-      } else if (request.actionType === 'claude') {
-        const session = this.prepareClaudeSession(request);
-        claudeSessionId = session.sessionId;
-        cmd = this.claudeCommand;
-        args = session.cliArgs;
-      } else {
-        cmd = '/bin/sh';
-        args = ['-c', 'echo "Unsupported action type"'];
-      }
+      const { cmd, args, claudeSessionId } = this.buildCommandAndArgs(request, this.claudeCommand);
 
       const child = spawn(cmd, args, {
         stdio: [request.actionType === 'claude' ? 'ignore' : 'pipe', 'pipe', 'pipe'],
@@ -225,42 +167,17 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
       child.stdout?.on('data', (chunk: Buffer) => {
         this.emitOutput(executionId, chunk.toString());
       });
-
       child.stderr?.on('data', (chunk: Buffer) => {
         this.emitOutput(executionId, chunk.toString());
       });
 
       child.on('close', async (code, signal) => {
-        entry.completed = true;
         const exitCode = code ?? (signal ? 1 : 0);
-        const signalInfo = signal ? ` signal=${signal}` : '';
-        this.emitOutput(executionId,
-          `[WorktreeFamiliar] Process exited: actionId=${request.actionId} exitCode=${exitCode}${signalInfo}\n`);
-
-        let commitHash: string | undefined;
-        let status: 'completed' | 'failed' = exitCode === 0 ? 'completed' : 'failed';
-        try {
-          const hash = await this.recordTaskResult(acquired.worktreePath, request, exitCode);
-          commitHash = hash ?? undefined;
-        } catch (err) {
-          this.emitOutput(executionId,
-            `[WorktreeFamiliar] post-exit error: ${err}\n`);
-          if (exitCode === 0) {
-            status = 'failed';
-          }
-        }
-
-        const response: WorkResponse = {
-          requestId: request.requestId,
-          actionId: request.actionId,
-          status,
-          outputs: {
-            exitCode: status === 'failed' && exitCode === 0 ? 1 : exitCode,
-            summary: `branch=${branch} commit=${commitHash ?? 'unknown'}`,
-            claudeSessionId: entry.claudeSessionId,
-          },
-        };
-        this.emitComplete(executionId, response);
+        await this.handleProcessExit(executionId, request, acquired.worktreePath, exitCode, {
+          signal,
+          branch,
+          claudeSessionId: entry.claudeSessionId,
+        });
       });
 
       this.startHeartbeat(executionId, child);
@@ -269,7 +186,7 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
 
     // Clean up stale worktree references (e.g. from a previous crashed run)
     log('worktree prune begin');
-    await this.execGit(['worktree', 'prune'], this.repoDir);
+    await this.execGitSimple(['worktree', 'prune'], this.repoDir);
     log('worktree prune done');
 
     // Force-remove any existing worktree that holds this branch
@@ -277,7 +194,7 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
     //  this handles the case where the old directory still exists on disk)
     try {
       log('worktree list begin');
-      const porcelain = await this.execGit(['worktree', 'list', '--porcelain'], this.repoDir);
+      const porcelain = await this.execGitSimple(['worktree', 'list', '--porcelain'], this.repoDir);
       log('worktree list done');
       console.log(`[WorktreeFamiliar] worktree list found ${porcelain.split('worktree ').length - 1} entries for branch=${branch}`);
       const branchRef = `branch refs/heads/${branch}`;
@@ -289,7 +206,7 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
               const oldPath = lines[j].slice('worktree '.length);
               console.log(`[WorktreeFamiliar] Force-removing stale worktree: ${oldPath} (branch=${branch})`);
               log('worktree remove --force begin');
-              await this.execGit(['worktree', 'remove', '--force', oldPath], this.repoDir);
+              await this.execGitSimple(['worktree', 'remove', '--force', oldPath], this.repoDir);
               log('worktree remove --force done');
               console.log(`[WorktreeFamiliar] Successfully removed stale worktree: ${oldPath}`);
               break;
@@ -306,7 +223,7 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
     const startPoint = request.inputs.baseBranch ?? 'HEAD';
     try {
       log('worktree add -b begin');
-      await this.execGit(
+      await this.execGitSimple(
         ['worktree', 'add', '-b', branch, worktreeDir, startPoint],
         this.repoDir,
       );
@@ -315,7 +232,7 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
       // If the branch already exists, try without -b
       try {
         log('worktree add (no -b) begin');
-        await this.execGit(
+        await this.execGitSimple(
           ['worktree', 'add', worktreeDir, branch],
           this.repoDir,
         );
@@ -340,28 +257,7 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
     log('provisionWorktree done');
 
     // -- Determine what to run --
-    let cmd: string;
-    let args: string[];
-    let claudeSessionId: string | undefined;
-
-    if (request.actionType === 'command') {
-      const command = request.inputs.command;
-      if (!command) {
-        throw new Error(
-          'WorkRequest with actionType "command" must have inputs.command',
-        );
-      }
-      cmd = '/bin/sh';
-      args = ['-c', command];
-    } else if (request.actionType === 'claude') {
-      const session = this.prepareClaudeSession(request);
-      claudeSessionId = session.sessionId;
-      cmd = this.claudeCommand;
-      args = session.cliArgs;
-    } else {
-      cmd = '/bin/sh';
-      args = ['-c', 'echo "Unsupported action type"'];
-    }
+    const { cmd, args, claudeSessionId } = this.buildCommandAndArgs(request, this.claudeCommand);
 
     // -- Spawn the process in the worktree directory --
     log(`spawn begin cmd=${cmd}`);
@@ -402,36 +298,12 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
     });
 
     child.on('close', async (code, signal) => {
-      entry.completed = true;
       const exitCode = code ?? (signal ? 1 : 0);
-      const signalInfo = signal ? ` signal=${signal}` : '';
-      this.emitOutput(executionId,
-        `[WorktreeFamiliar] Process exited: actionId=${request.actionId} exitCode=${exitCode}${signalInfo}\n`);
-
-      let commitHash: string | undefined;
-      let status: 'completed' | 'failed' = exitCode === 0 ? 'completed' : 'failed';
-      try {
-        const hash = await this.recordTaskResult(worktreeDir, request, exitCode);
-        commitHash = hash ?? undefined;
-      } catch (err) {
-        this.emitOutput(executionId,
-          `[WorktreeFamiliar] post-exit error: ${err}\n`);
-        if (exitCode === 0) {
-          status = 'failed';
-        }
-      }
-
-      const response: WorkResponse = {
-        requestId: request.requestId,
-        actionId: request.actionId,
-        status,
-        outputs: {
-          exitCode: status === 'failed' && exitCode === 0 ? 1 : exitCode,
-          summary: `branch=${branch} commit=${commitHash ?? 'unknown'}`,
-          claudeSessionId: entry.claudeSessionId,
-        },
-      };
-      this.emitComplete(executionId, response);
+      await this.handleProcessExit(executionId, request, worktreeDir, exitCode, {
+        signal,
+        branch,
+        claudeSessionId: entry.claudeSessionId,
+      });
     });
 
     this.startHeartbeat(executionId, child);
@@ -579,7 +451,7 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
     for (const upBranch of upstreamBranches) {
       // Skip if already an ancestor of HEAD (redundant merge)
       try {
-        await this.execGit(['merge-base', '--is-ancestor', upBranch, 'HEAD'], worktreeDir);
+        await this.execGitSimple(['merge-base', '--is-ancestor', upBranch, 'HEAD'], worktreeDir);
         console.log(`[WorktreeFamiliar] Skipping merge of ${upBranch} — already ancestor of HEAD`);
         continue;
       } catch {
@@ -588,7 +460,7 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
 
       // Verify the branch ref exists before attempting merge
       try {
-        await this.execGit(['rev-parse', '--verify', upBranch], worktreeDir);
+        await this.execGitSimple(['rev-parse', '--verify', upBranch], worktreeDir);
       } catch {
         throw new Error(
           `Upstream branch "${upBranch}" does not exist. ` +
@@ -597,14 +469,14 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
       }
 
       try {
-        await this.execGit(
+        await this.execGitSimple(
           ['merge', '--no-edit', '-m', `Merge upstream ${upBranch}`, upBranch],
           worktreeDir,
         );
       } catch (err) {
         // Abort the failed merge to leave worktree in a clean state
         try {
-          await this.execGit(['merge', '--abort'], worktreeDir);
+          await this.execGitSimple(['merge', '--abort'], worktreeDir);
         } catch {
           // merge --abort can fail if there's nothing to abort
         }
@@ -613,30 +485,6 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
         );
       }
     }
-  }
-
-  private execGit(args: string[], cwd: string): Promise<string> {
-    return new Promise((resolve, reject) => {
-      const child = spawn('git', args, {
-        cwd,
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
-      let stdout = '';
-      let stderr = '';
-      child.stdout?.on('data', (d: Buffer) => {
-        stdout += d.toString();
-      });
-      child.stderr?.on('data', (d: Buffer) => {
-        stderr += d.toString();
-      });
-      child.on('close', (code) => {
-        if (code === 0) resolve(stdout.trim());
-        else {
-          const details = [stderr.trim(), stdout.trim()].filter(Boolean).join('\n');
-          reject(new Error(`git ${args.join(' ')} failed (code ${code}): ${details}`));
-        }
-      });
-    });
   }
 
   private provisionWorktree(dir: string): Promise<void> {
@@ -672,14 +520,14 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
       return;
     }
     try {
-      await this.execGit(
+      await this.execGitSimple(
         ['worktree', 'remove', '--force', entry.worktreeDir],
         this.repoDir,
       );
     } catch {
       // Worktree may already be removed or directory missing; prune instead.
       try {
-        await this.execGit(['worktree', 'prune'], this.repoDir);
+        await this.execGitSimple(['worktree', 'prune'], this.repoDir);
       } catch {
         // Best-effort cleanup
       }

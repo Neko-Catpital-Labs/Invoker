@@ -160,12 +160,12 @@ describe('DockerFamiliar', () => {
     mc.logStream.emit('data', Buffer.from('line 1\n'));
     mc.logStream.emit('data', Buffer.from('line 2\n'));
 
-    // Filter out system log lines ([DockerFamiliar] prefixed) to check container output
-    const containerOutput = output.filter((line) => !line.includes('[DockerFamiliar]'));
+    // Filter out system log lines to check container output
+    const containerOutput = output.filter((line) => !line.includes('[DockerFamiliar]') && !line.includes('[docker]'));
     expect(containerOutput).toEqual(['line 1\n', 'line 2\n']);
 
     // System logs should also be present in the output stream
-    const systemLogs = output.filter((line) => line.includes('[DockerFamiliar]'));
+    const systemLogs = output.filter((line) => line.includes('[DockerFamiliar]') || line.includes('[docker]'));
     expect(systemLogs.length).toBeGreaterThan(0);
   });
 

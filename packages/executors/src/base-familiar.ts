@@ -267,7 +267,10 @@ export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar
       child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
       child.on('close', (code) => {
         if (code === 0) resolve(stdout.trim());
-        else reject(new Error(`git ${args.join(' ')} failed (code ${code}): ${stderr.trim()}`));
+        else {
+          const details = [stderr.trim(), stdout.trim()].filter(Boolean).join('\n');
+          reject(new Error(`git ${args.join(' ')} failed (code ${code}): ${details}`));
+        }
       });
     });
   }
@@ -355,6 +358,132 @@ export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar
     try {
       await this.execGitSimple(['checkout', originalBranch], cwd);
     } catch { /* best effort */ }
+  }
+
+  // ── Pre/post sync hooks ──────────────────────────────────
+
+  /**
+   * Fetch from remote before starting a task.
+   * Errors are logged but non-fatal so tasks can still run against local state.
+   */
+  protected async syncFromRemote(cwd: string, executionId?: string): Promise<void> {
+    try {
+      await this.execGitSimple(['fetch', 'origin'], cwd);
+    } catch (err) {
+      const msg = `[${this.type}] syncFromRemote failed: ${err}\n`;
+      console.warn(msg);
+      if (executionId) this.emitOutput(executionId, msg);
+    }
+  }
+
+  /**
+   * Push task branch to remote after completion.
+   * Errors are logged but non-fatal.
+   */
+  protected async pushBranchToRemote(cwd: string, branch: string, executionId?: string): Promise<void> {
+    try {
+      await this.execGitSimple(['push', '-u', 'origin', branch], cwd);
+    } catch (err) {
+      const msg = `[${this.type}] pushBranchToRemote failed for ${branch}: ${err}\n`;
+      console.warn(msg);
+      if (executionId) this.emitOutput(executionId, msg);
+    }
+  }
+
+  // ── Shared command building ─────────────────────────────
+
+  /**
+   * Build command, args, and optional Claude session from a WorkRequest.
+   * Shared by LocalFamiliar and WorktreeFamiliar.
+   */
+  protected buildCommandAndArgs(
+    request: WorkRequest,
+    claudeCommand: string = 'claude',
+  ): { cmd: string; args: string[]; claudeSessionId?: string; fullPrompt?: string } {
+    if (request.actionType === 'command') {
+      const command = request.inputs.command;
+      if (!command) throw new Error('WorkRequest with actionType "command" must have inputs.command');
+      return { cmd: '/bin/sh', args: ['-c', command] };
+    }
+    if (request.actionType === 'claude') {
+      const session = this.prepareClaudeSession(request);
+      return { cmd: claudeCommand, args: session.cliArgs, claudeSessionId: session.sessionId, fullPrompt: session.fullPrompt };
+    }
+    return { cmd: '/bin/sh', args: ['-c', 'echo "Unsupported action type"'] };
+  }
+
+  /**
+   * Emit a deferred reconciliation response (needs_input) for reconciliation tasks.
+   * Uses setTimeout(0) so the caller can register onComplete listeners first.
+   */
+  protected scheduleReconciliationResponse(executionId: string): void {
+    setTimeout(() => {
+      const entry = this.entries.get(executionId);
+      if (!entry) return;
+      const response: WorkResponse = {
+        requestId: entry.request.requestId,
+        actionId: entry.request.actionId,
+        status: 'needs_input',
+        outputs: { summary: 'Select winning experiment' },
+      };
+      this.emitComplete(executionId, response);
+    }, 0);
+  }
+
+  /**
+   * Shared close/exit handler: record result, push to remote, restore branch, emit completion.
+   * Used by all familiars to avoid duplicating the exit path logic.
+   */
+  protected async handleProcessExit(
+    executionId: string,
+    request: WorkRequest,
+    cwd: string,
+    exitCode: number,
+    opts?: {
+      signal?: NodeJS.Signals | null;
+      branch?: string;
+      originalBranch?: string;
+      claudeSessionId?: string;
+    },
+  ): Promise<void> {
+    const entry = this.entries.get(executionId);
+    if (entry) entry.completed = true;
+
+    const signalInfo = opts?.signal ? ` signal=${opts.signal}` : '';
+    this.emitOutput(executionId,
+      `[${this.type}] Process exited: actionId=${request.actionId} exitCode=${exitCode}${signalInfo}\n`);
+
+    let commitHash: string | undefined;
+    let status: 'completed' | 'failed' = exitCode === 0 ? 'completed' : 'failed';
+    try {
+      const hash = await this.recordTaskResult(cwd, request, exitCode);
+      commitHash = hash ?? undefined;
+    } catch (err) {
+      this.emitOutput(executionId,
+        `[${this.type}] recordTaskResult error: ${err}\n`);
+      if (exitCode === 0) status = 'failed';
+    }
+
+    if (opts?.branch) {
+      await this.pushBranchToRemote(cwd, opts.branch, executionId);
+    }
+
+    if (opts?.originalBranch) {
+      await this.restoreBranch(cwd, opts.originalBranch);
+    }
+
+    const response: WorkResponse = {
+      requestId: request.requestId,
+      actionId: request.actionId,
+      status,
+      outputs: {
+        exitCode: status === 'failed' && exitCode === 0 ? 1 : exitCode,
+        commitHash,
+        claudeSessionId: opts?.claudeSessionId,
+        ...(opts?.branch ? { summary: `branch=${opts.branch} commit=${commitHash ?? 'unknown'}` } : {}),
+      },
+    };
+    this.emitComplete(executionId, response);
   }
 
   private buildResultCommitMessage(request: WorkRequest, exitCode: number): string {

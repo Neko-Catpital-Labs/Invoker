@@ -3,8 +3,7 @@ import { existsSync } from 'node:fs';
 import type { WorkRequest, WorkResponse } from '@invoker/protocol';
 import type { FamiliarHandle, PersistedTaskMeta, TerminalSpec } from './familiar.js';
 import { BaseFamiliar, type BaseEntry } from './base-familiar.js';
-
-const SIGKILL_TIMEOUT_MS = 5_000;
+import { killProcessGroup, cleanElectronEnv, SIGKILL_TIMEOUT_MS } from './process-utils.js';
 
 interface ProcessEntry extends BaseEntry {
   process: ChildProcess | null;
@@ -14,6 +13,8 @@ interface ProcessEntry extends BaseEntry {
   claudeSessionId?: string;
   /** Branch that was checked out before setupTaskBranch created the task branch. */
   originalBranch?: string;
+  /** Task branch created by setupTaskBranch, for post-sync push. */
+  taskBranch?: string;
 }
 
 export interface LocalFamiliarOptions {
@@ -23,21 +24,6 @@ export interface LocalFamiliarOptions {
   claudeFallback?: boolean;
   /** Heartbeat interval in ms for orphan detection. Defaults to 30000. */
   heartbeatIntervalMs?: number;
-}
-
-/**
- * Sends a signal to the entire process group.
- * Uses negative PID to target the group when the process was spawned with detached: true.
- */
-function killProcessGroup(child: ChildProcess, signal: NodeJS.Signals): boolean {
-  if (child.pid == null) return false;
-  try {
-    process.kill(-child.pid, signal);
-    return true;
-  } catch {
-    // Process group may already be dead
-    return child.kill(signal);
-  }
 }
 
 export class LocalFamiliar extends BaseFamiliar<ProcessEntry> {
@@ -61,52 +47,21 @@ export class LocalFamiliar extends BaseFamiliar<ProcessEntry> {
         process: null,
         request,
         outputListeners: new Set(),
-      outputBuffer: [],
+        outputBuffer: [],
         completeListeners: new Set(),
         heartbeatListeners: new Set(),
         completed: false,
         fallbackActive: false,
       };
       this.registerEntry(handle, entry);
-
-      // Emit after caller has a chance to register onComplete listener
-      setTimeout(() => {
-        entry.completed = true;
-        const response: WorkResponse = {
-          requestId: request.requestId,
-          actionId: request.actionId,
-          status: 'needs_input',
-          outputs: { summary: 'Select winning experiment' },
-        };
-        for (const cb of entry.completeListeners) {
-          cb(response);
-        }
-      }, 0);
-
+      this.scheduleReconciliationResponse(handle.executionId);
       return handle;
     }
 
     // ── Determine command and args ──
-    let cmd: string;
-    let args: string[];
-    let claudeSessionId: string | undefined;
-
-    if (request.actionType === 'command') {
-      const command = request.inputs.command;
-      if (!command) {
-        throw new Error('WorkRequest with actionType "command" must have inputs.command');
-      }
-      cmd = '/bin/sh';
-      args = ['-c', command];
-    } else if (request.actionType === 'claude') {
-      const session = this.prepareClaudeSession(request);
-      cmd = this.claudeCommand;
-      claudeSessionId = session.sessionId;
-      console.log(`[LocalFamiliar] Starting Claude session ${claudeSessionId} with prompt:\n${session.fullPrompt}`);
-      args = session.cliArgs;
-    } else {
-      cmd = '/bin/sh';
-      args = ['-c', 'echo "Unsupported action type"'];
+    const { cmd, args, claudeSessionId, fullPrompt } = this.buildCommandAndArgs(request, this.claudeCommand);
+    if (claudeSessionId && fullPrompt) {
+      console.log(`[LocalFamiliar] Starting Claude session ${claudeSessionId} with prompt:\n${fullPrompt}`);
     }
 
     const cwd = request.inputs.workspacePath ?? process.cwd();
@@ -120,19 +75,17 @@ export class LocalFamiliar extends BaseFamiliar<ProcessEntry> {
       );
     }
 
+    // Pre-sync: pull latest from remote
+    await this.syncFromRemote(cwd, handle.executionId);
+
     // Create task-specific branch based off upstream dependency branch
     const originalBranch = await this.setupTaskBranch(cwd, request, handle);
-
-    // Strip Electron-specific env vars so child processes use system Node.js
-    const cleanEnv = { ...process.env };
-    delete cleanEnv.ELECTRON_RUN_AS_NODE;
-    delete cleanEnv.ELECTRON_NO_ASAR;
 
     const child = spawn(cmd, args, {
       stdio: [request.actionType === 'claude' ? 'ignore' : 'pipe', 'pipe', 'pipe'],
       cwd,
       detached: true,
-      env: cleanEnv,
+      env: cleanElectronEnv(),
     });
 
     const entry: ProcessEntry = {
@@ -146,6 +99,7 @@ export class LocalFamiliar extends BaseFamiliar<ProcessEntry> {
       fallbackActive: false,
       claudeSessionId,
       originalBranch,
+      taskBranch: handle.branch,
     };
 
     this.registerEntry(handle, entry);
@@ -165,7 +119,7 @@ export class LocalFamiliar extends BaseFamiliar<ProcessEntry> {
             stdio: ['pipe', 'pipe', 'pipe'],
             cwd: request.inputs.workspacePath,
             detached: true,
-            env: cleanEnv,
+            env: cleanElectronEnv(),
           });
           // Replace the process reference
           entry.process = fallbackChild;
@@ -215,42 +169,15 @@ export class LocalFamiliar extends BaseFamiliar<ProcessEntry> {
     });
 
     child.on('close', async (code, signal) => {
-      // If a fallback process replaced this one, ignore the original close event
       if (entry.process !== child) return;
-
-      entry.completed = true;
-      const exitCode = code ?? (signal ? 1 : 0);
-      const signalInfo = signal ? ` signal=${signal}` : '';
       const taskCwd = entry.request.inputs.workspacePath ?? process.cwd();
-      this.emitOutput(executionId,
-        `[LocalFamiliar] Process exited: actionId=${entry.request.actionId} exitCode=${exitCode}${signalInfo}\n`);
-
-      let commitHash: string | undefined;
-      let status: 'completed' | 'failed' = exitCode === 0 ? 'completed' : 'failed';
-      try {
-        const hash = await this.recordTaskResult(taskCwd, entry.request, exitCode);
-        commitHash = hash ?? undefined;
-      } catch (err) {
-        this.emitOutput(executionId,
-          `[LocalFamiliar] recordTaskResult error: ${err}\n`);
-        if (exitCode === 0) {
-          status = 'failed';
-        }
-      }
-
-      await this.restoreBranch(taskCwd, entry.originalBranch);
-
-      const response: WorkResponse = {
-        requestId: entry.request.requestId,
-        actionId: entry.request.actionId,
-        status,
-        outputs: {
-          exitCode: status === 'failed' && exitCode === 0 ? 1 : exitCode,
-          commitHash,
-          claudeSessionId: entry.claudeSessionId,
-        },
-      };
-      this.emitComplete(executionId, response);
+      const exitCode = code ?? (signal ? 1 : 0);
+      await this.handleProcessExit(executionId, entry.request, taskCwd, exitCode, {
+        signal,
+        branch: entry.taskBranch,
+        originalBranch: entry.originalBranch,
+        claudeSessionId: entry.claudeSessionId,
+      });
     });
   }
 

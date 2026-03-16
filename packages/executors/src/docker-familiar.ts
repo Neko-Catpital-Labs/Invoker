@@ -1,7 +1,7 @@
 import { writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import type { WorkRequest, WorkResponse } from '@invoker/protocol';
+import type { WorkRequest } from '@invoker/protocol';
 import type { FamiliarHandle, PersistedTaskMeta, TerminalSpec } from './familiar.js';
 import { BaseFamiliar, type BaseEntry } from './base-familiar.js';
 import { DockerPool } from './docker-pool.js';
@@ -219,6 +219,9 @@ export class DockerFamiliar extends BaseFamiliar<ContainerEntry> {
       handle.claudeSessionId = claudeSessionId;
     }
 
+    // Pre-sync: pull latest from remote
+    await this.syncFromRemote(this.workspaceDir, handle.executionId);
+
     // Create task-specific branch in main repo for tracking
     const originalBranch = await this.setupTaskBranch(this.workspaceDir, request, handle);
     entry.originalBranch = originalBranch;
@@ -372,52 +375,19 @@ export class DockerFamiliar extends BaseFamiliar<ContainerEntry> {
   }
 
   private async monitorExit(container: any, executionId: string, entry: ContainerEntry): Promise<void> {
-    const emit = (msg: string) => {
-      console.log(msg);
-      this.emitOutput(executionId, msg + '\n');
-    };
-
     try {
       const result = await container.wait();
       const exitCode: number = result.StatusCode ?? 1;
-      emit(`${TAG} Container exited: actionId=${entry.request.actionId} exitCode=${exitCode}`);
-
-      entry.completed = true;
-
-      let commitHash: string | undefined;
-      let status: 'completed' | 'failed' = exitCode === 0 ? 'completed' : 'failed';
-      try {
-        const hash = await this.recordTaskResult(this.workspaceDir, entry.request, exitCode);
-        commitHash = hash ?? undefined;
-      } catch (err) {
-        emit(`${TAG} recordTaskResult error: ${err}`);
-        if (exitCode === 0) {
-          status = 'failed';
-        }
-      }
-
-      await this.restoreBranch(this.workspaceDir, entry.originalBranch);
-
-      const response: WorkResponse = {
-        requestId: entry.request.requestId,
-        actionId: entry.request.actionId,
-        status,
-        outputs: {
-          exitCode: status === 'failed' && exitCode === 0 ? 1 : exitCode,
-          commitHash,
-          claudeSessionId: entry.claudeSessionId,
-        },
-      };
-
-      entry.completionResponse = response;
-      console.log(`${TAG} Notifying ${entry.completeListeners.size} completion listener(s)`);
-      for (const cb of entry.completeListeners) {
-        cb(response);
-      }
+      await this.handleProcessExit(executionId, entry.request, this.workspaceDir, exitCode, {
+        originalBranch: entry.originalBranch,
+        claudeSessionId: entry.claudeSessionId,
+      });
     } catch (err) {
-      // If wait() fails the container is likely already gone.
-      emit(`${TAG} monitorExit error: ${err}`);
-      entry.completed = true;
+      this.emitOutput(executionId, `${TAG} monitorExit error: ${err}\n`);
+      await this.handleProcessExit(executionId, entry.request, this.workspaceDir, 1, {
+        originalBranch: entry.originalBranch,
+        claudeSessionId: entry.claudeSessionId,
+      });
     }
   }
 }
