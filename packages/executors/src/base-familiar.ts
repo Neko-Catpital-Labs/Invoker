@@ -258,7 +258,7 @@ export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar
     return parts.join('\n');
   }
 
-  private execGitSimple(args: string[], cwd: string): Promise<string> {
+  protected execGitSimple(args: string[], cwd: string): Promise<string> {
     return new Promise((resolve, reject) => {
       const child = spawn('git', args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
       let stdout = '';
@@ -270,6 +270,91 @@ export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar
         else reject(new Error(`git ${args.join(' ')} failed (code ${code}): ${stderr.trim()}`));
       });
     });
+  }
+
+  // ── Shared branch lifecycle ────────────────────────────────
+
+  /**
+   * Create a task-specific branch based off the upstream dependency's branch.
+   * The upstream branch carries transitive history by construction, so no
+   * explicit merging is needed for linear chains. For DAG fan-in (multiple
+   * upstreams), additional branches are merged after checkout.
+   *
+   * Sets `handle.branch` and returns the original branch name for restoration.
+   * Returns undefined if not in a git repo or git operations fail.
+   */
+  protected async setupTaskBranch(
+    cwd: string,
+    request: WorkRequest,
+    handle: FamiliarHandle,
+  ): Promise<string | undefined> {
+    try {
+      const originalBranch = (await this.execGitSimple(['branch', '--show-current'], cwd)).trim();
+      const branchName = `invoker/${request.actionId}`;
+
+      const upstreams = request.inputs.upstreamBranches ?? [];
+      const base = upstreams[0] ?? request.inputs.baseBranch ?? 'HEAD';
+
+      try {
+        await this.execGitSimple(['checkout', '-b', branchName, base], cwd);
+      } catch {
+        await this.execGitSimple(['checkout', branchName], cwd);
+      }
+
+      for (const ub of upstreams.slice(1)) {
+        await this.execGitSimple(['merge', '--no-edit', '-m', `Merge upstream ${ub}`, ub], cwd);
+      }
+
+      handle.branch = branchName;
+      return originalBranch;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * Record the task result as a commit. Calls autoCommit first; if there are
+   * no file changes (common for command tasks), creates an empty commit with
+   * the command/prompt and exit code. Returns the commit hash, or null on failure.
+   */
+  protected async recordTaskResult(
+    cwd: string,
+    request: WorkRequest,
+    exitCode: number,
+  ): Promise<string | null> {
+    try {
+      const hash = await this.autoCommit(cwd, request);
+      if (hash) return hash;
+
+      const message = this.buildResultCommitMessage(request, exitCode);
+      await this.execGitSimple(['commit', '--allow-empty', '-m', message], cwd);
+      return (await this.execGitSimple(['rev-parse', 'HEAD'], cwd)).trim();
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Restore the original branch after task completion.
+   * No-op if originalBranch is undefined (e.g., not in a git repo).
+   */
+  protected async restoreBranch(cwd: string, originalBranch: string | undefined): Promise<void> {
+    if (!originalBranch) return;
+    try {
+      await this.execGitSimple(['checkout', originalBranch], cwd);
+    } catch { /* best effort */ }
+  }
+
+  private buildResultCommitMessage(request: WorkRequest, exitCode: number): string {
+    const headline = request.inputs.description
+      ? `invoker: ${request.actionId} — ${request.inputs.description}`
+      : `invoker: ${request.actionId}`;
+    const detail = request.inputs.command
+      ? `Command: ${request.inputs.command}`
+      : request.inputs.prompt
+        ? `Prompt: ${request.inputs.prompt.slice(0, 200)}`
+        : 'No command or prompt';
+    return `${headline}\n\n${detail}\nExit code: ${exitCode}`;
   }
 
   // ── Shared Claude helpers ──────────────────────────────────

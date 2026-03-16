@@ -23,6 +23,8 @@ export interface DockerFamiliarConfig {
 interface ContainerEntry extends BaseEntry {
   containerId: string;
   claudeSessionId?: string;
+  /** Branch that was checked out before setupTaskBranch created the task branch. */
+  originalBranch?: string;
 }
 
 /**
@@ -217,6 +219,10 @@ export class DockerFamiliar extends BaseFamiliar<ContainerEntry> {
       handle.claudeSessionId = claudeSessionId;
     }
 
+    // Create task-specific branch in main repo for tracking
+    const originalBranch = await this.setupTaskBranch(this.workspaceDir, request, handle);
+    entry.originalBranch = originalBranch;
+
     emit(`${TAG} Starting container ${container.id.slice(0, 12)}...`);
     await container.start();
     emit(`${TAG} Container started`);
@@ -378,11 +384,29 @@ export class DockerFamiliar extends BaseFamiliar<ContainerEntry> {
 
       entry.completed = true;
 
+      let commitHash: string | undefined;
+      let status: 'completed' | 'failed' = exitCode === 0 ? 'completed' : 'failed';
+      try {
+        const hash = await this.recordTaskResult(this.workspaceDir, entry.request, exitCode);
+        commitHash = hash ?? undefined;
+      } catch (err) {
+        emit(`${TAG} recordTaskResult error: ${err}`);
+        if (exitCode === 0) {
+          status = 'failed';
+        }
+      }
+
+      await this.restoreBranch(this.workspaceDir, entry.originalBranch);
+
       const response: WorkResponse = {
         requestId: entry.request.requestId,
         actionId: entry.request.actionId,
-        status: exitCode === 0 ? 'completed' : 'failed',
-        outputs: { exitCode, claudeSessionId: entry.claudeSessionId },
+        status,
+        outputs: {
+          exitCode: status === 'failed' && exitCode === 0 ? 1 : exitCode,
+          commitHash,
+          claudeSessionId: entry.claudeSessionId,
+        },
       };
 
       entry.completionResponse = response;
@@ -390,9 +414,6 @@ export class DockerFamiliar extends BaseFamiliar<ContainerEntry> {
       for (const cb of entry.completeListeners) {
         cb(response);
       }
-
-      // Do NOT auto-remove container — keep for inspection and session resumption.
-      // Cleanup happens in kill() and destroyAll() only.
     } catch (err) {
       // If wait() fails the container is likely already gone.
       emit(`${TAG} monitorExit error: ${err}`);

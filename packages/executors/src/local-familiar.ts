@@ -12,6 +12,8 @@ interface ProcessEntry extends BaseEntry {
   fallbackActive: boolean;
   /** Claude session ID for resuming sessions on terminal double-click. */
   claudeSessionId?: string;
+  /** Branch that was checked out before setupTaskBranch created the task branch. */
+  originalBranch?: string;
 }
 
 export interface LocalFamiliarOptions {
@@ -118,6 +120,9 @@ export class LocalFamiliar extends BaseFamiliar<ProcessEntry> {
       );
     }
 
+    // Create task-specific branch based off upstream dependency branch
+    const originalBranch = await this.setupTaskBranch(cwd, request, handle);
+
     // Strip Electron-specific env vars so child processes use system Node.js
     const cleanEnv = { ...process.env };
     delete cleanEnv.ELECTRON_RUN_AS_NODE;
@@ -140,6 +145,7 @@ export class LocalFamiliar extends BaseFamiliar<ProcessEntry> {
       completed: false,
       fallbackActive: false,
       claudeSessionId,
+      originalBranch,
     };
 
     this.registerEntry(handle, entry);
@@ -215,29 +221,31 @@ export class LocalFamiliar extends BaseFamiliar<ProcessEntry> {
       entry.completed = true;
       const exitCode = code ?? (signal ? 1 : 0);
       const signalInfo = signal ? ` signal=${signal}` : '';
+      const taskCwd = entry.request.inputs.workspacePath ?? process.cwd();
       this.emitOutput(executionId,
         `[LocalFamiliar] Process exited: actionId=${entry.request.actionId} exitCode=${exitCode}${signalInfo}\n`);
 
       let commitHash: string | undefined;
+      let status: 'completed' | 'failed' = exitCode === 0 ? 'completed' : 'failed';
       try {
-        if (entry.request.actionType === 'claude' && exitCode === 0) {
-          const hash = await this.autoCommit(
-            entry.request.inputs.workspacePath ?? process.cwd(),
-            entry.request,
-          );
-          commitHash = hash ?? undefined;
-        }
+        const hash = await this.recordTaskResult(taskCwd, entry.request, exitCode);
+        commitHash = hash ?? undefined;
       } catch (err) {
         this.emitOutput(executionId,
-          `[LocalFamiliar] autoCommit error: ${err}\n`);
+          `[LocalFamiliar] recordTaskResult error: ${err}\n`);
+        if (exitCode === 0) {
+          status = 'failed';
+        }
       }
+
+      await this.restoreBranch(taskCwd, entry.originalBranch);
 
       const response: WorkResponse = {
         requestId: entry.request.requestId,
         actionId: entry.request.actionId,
-        status: exitCode === 0 ? 'completed' : 'failed',
+        status,
         outputs: {
-          exitCode,
+          exitCode: status === 'failed' && exitCode === 0 ? 1 : exitCode,
           commitHash,
           claudeSessionId: entry.claudeSessionId,
         },
