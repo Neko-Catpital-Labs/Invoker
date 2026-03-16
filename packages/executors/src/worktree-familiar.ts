@@ -165,7 +165,12 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
         throw err;
       }
 
-      await this.provisionWorktree(acquired.worktreePath);
+      try {
+        await this.provisionWorktree(acquired.worktreePath);
+      } catch (err) {
+        await acquired.release();
+        throw err;
+      }
 
       const { cmd, args, claudeSessionId } = this.buildCommandAndArgs(request, this.claudeCommand);
 
@@ -316,7 +321,15 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
 
     // -- Install dependencies so tasks can build/test in the worktree --
     log('provisionWorktree begin');
-    await this.provisionWorktree(worktreeDir);
+    try {
+      await this.provisionWorktree(worktreeDir);
+    } catch (err) {
+      log('provisionWorktree failed — removing worktree');
+      try {
+        await this.execGitSimple(['worktree', 'remove', '--force', worktreeDir], this.repoDir);
+      } catch { /* best-effort cleanup */ }
+      throw err;
+    }
     log('provisionWorktree done');
 
     // -- Determine what to run --
@@ -566,8 +579,10 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
         stdio: ['ignore', 'pipe', 'pipe'],
       });
       console.log(`[WorktreeFamiliar] provisionWorktree spawned pid=${child.pid}`);
+      let stdout = '';
       let stderr = '';
       child.stdout?.on('data', (d: Buffer) => {
+        stdout += d.toString();
         console.log(`[WorktreeFamiliar] provision stdout: ${d.toString().trimEnd()}`);
       });
       child.stderr?.on('data', (d: Buffer) => {
@@ -577,7 +592,10 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
       child.on('close', (code) => {
         console.log(`[WorktreeFamiliar] provisionWorktree finished dir=${dir} code=${code} elapsed=${Date.now() - t0}ms`);
         if (code === 0) resolve();
-        else reject(new Error(`Worktree provisioning failed in ${dir} (exit ${code}): ${stderr.trim()}`));
+        else {
+          const combined = [stderr.trim(), stdout.trim()].filter(Boolean).join('\n');
+          reject(new Error(`Worktree provisioning failed in ${dir} (exit ${code}): ${combined}`));
+        }
       });
     });
   }
