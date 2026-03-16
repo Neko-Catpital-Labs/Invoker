@@ -240,7 +240,7 @@ describe('TaskExecutor', () => {
           return { executionId: 'exec-1', taskId: 'task-bb' };
         },
         onOutput: () => () => {},
-        onComplete: () => () => {},
+        onComplete: (_handle: any, cb: any) => { cb({ requestId: 'r', actionId: 'task-bb', status: 'completed', outputs: { exitCode: 0 } }); return () => {}; },
         onHeartbeat: () => () => {},
       };
       const registry = {
@@ -284,7 +284,7 @@ describe('TaskExecutor', () => {
           return { executionId: 'exec-1', taskId: 'task-bb2' };
         },
         onOutput: () => () => {},
-        onComplete: () => () => {},
+        onComplete: (_handle: any, cb: any) => { cb({ requestId: 'r', actionId: 'task-bb2', status: 'completed', outputs: { exitCode: 0 } }); return () => {}; },
         onHeartbeat: () => () => {},
       };
       const registry = {
@@ -329,7 +329,7 @@ describe('TaskExecutor', () => {
           return { executionId: 'exec-1', taskId: 'task-bb3' };
         },
         onOutput: () => () => {},
-        onComplete: () => () => {},
+        onComplete: (_handle: any, cb: any) => { cb({ requestId: 'r', actionId: 'task-bb3', status: 'completed', outputs: { exitCode: 0 } }); return () => {}; },
         onHeartbeat: () => () => {},
       };
       const registry = {
