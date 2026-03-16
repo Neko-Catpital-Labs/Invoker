@@ -2657,4 +2657,235 @@ describe('Orchestrator', () => {
       expect(orchestrator.getTask('B')!.status).toBe('running');
     });
   });
+
+  // ── Merge gate leaf reconciliation ────────────────────────
+
+  describe('merge gate leaf reconciliation', () => {
+    let logSpy: ReturnType<typeof vi.spyOn>;
+    let warnSpy: ReturnType<typeof vi.spyOn>;
+
+    beforeEach(() => {
+      logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+      logSpy.mockRestore();
+      warnSpy.mockRestore();
+    });
+
+    it('loadPlan: merge gate depends on all leaves in a fan-out', () => {
+      orchestrator.loadPlan({
+        name: 'fan-out-test',
+        tasks: [
+          { id: 'root', description: 'Root' },
+          { id: 'b1', description: 'Branch 1', dependencies: ['root'] },
+          { id: 'b2', description: 'Branch 2', dependencies: ['root'] },
+          { id: 'b3', description: 'Branch 3', dependencies: ['root'] },
+        ],
+      });
+
+      const mergeNode = orchestrator.getAllTasks().find((t) => t.config.isMergeNode);
+      expect(mergeNode).toBeDefined();
+      expect(mergeNode!.dependencies.sort()).toEqual(['b1', 'b2', 'b3']);
+    });
+
+    it('loadPlan: independent tasks are all merge gate leaves', () => {
+      orchestrator.loadPlan({
+        name: 'independent-test',
+        tasks: [
+          { id: 'a', description: 'Independent A' },
+          { id: 'b', description: 'Independent B' },
+          { id: 'c', description: 'Independent C' },
+        ],
+      });
+
+      const mergeNode = orchestrator.getAllTasks().find((t) => t.config.isMergeNode);
+      expect(mergeNode!.dependencies.sort()).toEqual(['a', 'b', 'c']);
+    });
+
+    it('loadPlan: mixed independent and chained tasks all have leaves in merge gate', () => {
+      orchestrator.loadPlan({
+        name: 'mixed-test',
+        tasks: [
+          { id: 'a', description: 'Chain root' },
+          { id: 'b', description: 'Chain end', dependencies: ['a'] },
+          { id: 'c', description: 'Independent' },
+        ],
+      });
+
+      const mergeNode = orchestrator.getAllTasks().find((t) => t.config.isMergeNode);
+      expect(mergeNode!.dependencies.sort()).toEqual(['b', 'c']);
+    });
+
+    it('replaceTask: merge gate deps updated to replacement leaves', () => {
+      orchestrator.loadPlan({
+        name: 'replace-leaf-test',
+        tasks: [
+          { id: 'a', description: 'Root' },
+          { id: 'b', description: 'Leaf', dependencies: ['a'] },
+        ],
+      });
+      orchestrator.startExecution();
+
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 'a', status: 'completed', outputs: { exitCode: 0 } }),
+      );
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 'b', status: 'failed', outputs: { exitCode: 1, error: 'fail' } }),
+      );
+
+      orchestrator.replaceTask('b', [
+        { id: 's1', description: 'Step 1' },
+        { id: 's2', description: 'Step 2', dependencies: ['s1'] },
+      ]);
+
+      const mergeNode = orchestrator.getAllTasks().find((t) => t.config.isMergeNode);
+      expect(mergeNode!.dependencies).toEqual(['s2']);
+    });
+
+    it('experiment spawn: merge gate deps include reconciliation node', () => {
+      orchestrator.loadPlan({
+        name: 'experiment-leaf-test',
+        tasks: [
+          { id: 'pivot', description: 'Pivot task' },
+        ],
+      });
+      orchestrator.startExecution();
+
+      orchestrator.handleWorkerResponse(
+        makeResponse({
+          actionId: 'pivot',
+          status: 'spawn_experiments',
+          dagMutation: {
+            spawnExperiments: {
+              description: 'Try variants',
+              variants: [
+                { id: 'v1', prompt: 'Approach A' },
+                { id: 'v2', prompt: 'Approach B' },
+              ],
+            },
+          },
+        }),
+      );
+
+      const mergeNode = orchestrator.getAllTasks().find((t) => t.config.isMergeNode);
+      expect(mergeNode!.dependencies).toEqual(['pivot-reconciliation']);
+    });
+
+    it('experiment spawn with downstream: merge gate deps point to forked downstream', () => {
+      orchestrator.loadPlan({
+        name: 'experiment-downstream-test',
+        tasks: [
+          { id: 'pivot', description: 'Pivot task' },
+          { id: 'downstream', description: 'After pivot', dependencies: ['pivot'] },
+        ],
+      });
+      orchestrator.startExecution();
+
+      orchestrator.handleWorkerResponse(
+        makeResponse({
+          actionId: 'pivot',
+          status: 'spawn_experiments',
+          dagMutation: {
+            spawnExperiments: {
+              description: 'Try variants',
+              variants: [
+                { id: 'v1', prompt: 'Approach A' },
+                { id: 'v2', prompt: 'Approach B' },
+              ],
+            },
+          },
+        }),
+      );
+
+      const mergeNode = orchestrator.getAllTasks().find((t) => t.config.isMergeNode);
+      expect(mergeNode!.dependencies).toEqual(['downstream-v2']);
+
+      const forkedDownstream = orchestrator.getTask('downstream-v2');
+      expect(forkedDownstream).toBeDefined();
+      expect(forkedDownstream!.dependencies).toContain('pivot-reconciliation');
+    });
+
+    it('forkDirtySubtree: merge gate deps point to cloned leaves', () => {
+      orchestrator.loadPlan({
+        name: 'fork-leaf-test',
+        tasks: [
+          { id: 'parent', description: 'Parent', command: 'echo parent' },
+          { id: 'child1', description: 'Child 1', dependencies: ['parent'] },
+          { id: 'child2', description: 'Child 2', dependencies: ['parent'] },
+        ],
+      });
+      orchestrator.startExecution();
+
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 'parent', status: 'completed', outputs: { exitCode: 0 } }),
+      );
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 'child1', status: 'completed', outputs: { exitCode: 0 } }),
+      );
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 'child2', status: 'completed', outputs: { exitCode: 0 } }),
+      );
+
+      orchestrator.editTaskCommand('parent', 'echo updated');
+
+      const mergeNode = orchestrator.getAllTasks().find((t) => t.config.isMergeNode);
+      expect(mergeNode!.dependencies.sort()).toEqual(['child1-v2', 'child2-v2']);
+    });
+
+    it('stale tasks are excluded from merge gate deps', () => {
+      orchestrator.loadPlan({
+        name: 'stale-exclusion-test',
+        tasks: [
+          { id: 'a', description: 'Root' },
+          { id: 'b', description: 'Leaf', dependencies: ['a'] },
+        ],
+      });
+      orchestrator.startExecution();
+
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 'a', status: 'completed', outputs: { exitCode: 0 } }),
+      );
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 'b', status: 'completed', outputs: { exitCode: 0 } }),
+      );
+
+      orchestrator.editTaskCommand('a', 'echo new');
+
+      const mergeNode = orchestrator.getAllTasks().find((t) => t.config.isMergeNode);
+      expect(mergeNode!.dependencies).not.toContain('b');
+      expect(mergeNode!.dependencies).toContain('b-v2');
+    });
+
+    it('diamond DAG: merge gate depends only on convergence node', () => {
+      orchestrator.loadPlan({
+        name: 'diamond-test',
+        tasks: [
+          { id: 'a', description: 'Root' },
+          { id: 'b', description: 'Left', dependencies: ['a'] },
+          { id: 'c', description: 'Right', dependencies: ['a'] },
+          { id: 'd', description: 'Merge', dependencies: ['b', 'c'] },
+        ],
+      });
+
+      const mergeNode = orchestrator.getAllTasks().find((t) => t.config.isMergeNode);
+      expect(mergeNode!.dependencies).toEqual(['d']);
+    });
+
+    it('deep chain with side branch: merge gate depends on all leaf nodes', () => {
+      orchestrator.loadPlan({
+        name: 'deep-side-test',
+        tasks: [
+          { id: 'a', description: 'Root' },
+          { id: 'b', description: 'Chain', dependencies: ['a'] },
+          { id: 'c', description: 'Chain end', dependencies: ['b'] },
+          { id: 'd', description: 'Side branch', dependencies: ['a'] },
+        ],
+      });
+
+      const mergeNode = orchestrator.getAllTasks().find((t) => t.config.isMergeNode);
+      expect(mergeNode!.dependencies.sort()).toEqual(['c', 'd']);
+    });
+  });
 });

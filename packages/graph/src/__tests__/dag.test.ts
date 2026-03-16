@@ -7,6 +7,7 @@ import {
   computeLevels,
   getReadyTasks,
   nextVersion,
+  findLeafTaskIds,
 } from '../dag.js';
 
 function makeTask(
@@ -285,5 +286,55 @@ describe('getTransitiveDependents', () => {
     const dependents = getTransitiveDependents('B', taskMap);
 
     expect(dependents.sort()).toEqual(['C', 'D']);
+  });
+});
+
+// ── findLeafTaskIds ──────────────────────────────────────────
+
+describe('findLeafTaskIds', () => {
+  it('returns all tasks when none have dependents', () => {
+    const tasks = [makeTask('A'), makeTask('B'), makeTask('C')];
+    expect(findLeafTaskIds(tasks).sort()).toEqual(['A', 'B', 'C']);
+  });
+
+  it('returns only terminal node in a linear chain', () => {
+    const tasks = [
+      makeTask('A'),
+      makeTask('B', ['A']),
+      makeTask('C', ['B']),
+    ];
+    expect(findLeafTaskIds(tasks)).toEqual(['C']);
+  });
+
+  it('returns convergence node in a diamond DAG', () => {
+    const tasks = [
+      makeTask('A'),
+      makeTask('B', ['A']),
+      makeTask('C', ['A']),
+      makeTask('D', ['B', 'C']),
+    ];
+    expect(findLeafTaskIds(tasks)).toEqual(['D']);
+  });
+
+  it('returns all terminal branches in a fan-out', () => {
+    const tasks = [
+      makeTask('A'),
+      makeTask('B', ['A']),
+      makeTask('C', ['A']),
+    ];
+    expect(findLeafTaskIds(tasks).sort()).toEqual(['B', 'C']);
+  });
+
+  it('detects both chained and independent leaves', () => {
+    const tasks = [
+      makeTask('A'),
+      makeTask('B', ['A']),
+      makeTask('C'),
+    ];
+    expect(findLeafTaskIds(tasks).sort()).toEqual(['B', 'C']);
+  });
+
+  it('returns empty array for empty input', () => {
+    expect(findLeafTaskIds([])).toEqual([]);
   });
 });
