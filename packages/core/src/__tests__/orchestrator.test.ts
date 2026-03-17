@@ -2888,4 +2888,105 @@ describe('Orchestrator', () => {
       expect(mergeNode!.dependencies.sort()).toEqual(['c', 'd']);
     });
   });
+
+  describe('beginConflictResolution / revertConflictResolution', () => {
+    const mergeConflictError = JSON.stringify({
+      type: 'merge_conflict',
+      failedBranch: 'experiment/upstream-branch-abc123',
+      conflictFiles: ['src/App.tsx', 'src/utils.ts'],
+    });
+
+    beforeEach(() => {
+      orchestrator.loadPlan({
+        name: 'conflict-plan',
+        tasks: [
+          { id: 't1', description: 'Root task' },
+          { id: 't2', description: 'Downstream task', dependencies: ['t1'] },
+        ],
+      });
+      orchestrator.startExecution();
+
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 't1', status: 'completed', outputs: { exitCode: 0 } }),
+      );
+
+      orchestrator.handleWorkerResponse(
+        makeResponse({
+          actionId: 't2',
+          status: 'failed',
+          outputs: { exitCode: 1, error: mergeConflictError },
+        }),
+      );
+
+      expect(orchestrator.getTask('t2')!.status).toBe('failed');
+      publishedDeltas = [];
+    });
+
+    it('sets task to running and emits delta', () => {
+      orchestrator.beginConflictResolution('t2');
+
+      expect(orchestrator.getTask('t2')!.status).toBe('running');
+
+      const runningDeltas = publishedDeltas.filter(
+        (d) => d.type === 'updated' && d.taskId === 't2' && d.changes.status === 'running',
+      );
+      expect(runningDeltas).toHaveLength(1);
+    });
+
+    it('returns savedError for later revert', () => {
+      const { savedError } = orchestrator.beginConflictResolution('t2');
+      expect(savedError).toBe(mergeConflictError);
+    });
+
+    it('revertConflictResolution restores failed state with mergeConflict', () => {
+      const { savedError } = orchestrator.beginConflictResolution('t2');
+      expect(orchestrator.getTask('t2')!.status).toBe('running');
+
+      publishedDeltas = [];
+      orchestrator.revertConflictResolution('t2', savedError);
+
+      const task = orchestrator.getTask('t2')!;
+      expect(task.status).toBe('failed');
+      expect(task.execution.error).toBe(mergeConflictError);
+      expect(task.execution.mergeConflict).toEqual({
+        failedBranch: 'experiment/upstream-branch-abc123',
+        conflictFiles: ['src/App.tsx', 'src/utils.ts'],
+      });
+
+      const failedDeltas = publishedDeltas.filter(
+        (d) => d.type === 'updated' && d.taskId === 't2' && d.changes.status === 'failed',
+      );
+      expect(failedDeltas).toHaveLength(1);
+    });
+
+    it('throws if task is not failed', () => {
+      expect(() => orchestrator.beginConflictResolution('t1')).toThrow(
+        'is not failed',
+      );
+    });
+
+    it('throws if task does not exist', () => {
+      expect(() => orchestrator.beginConflictResolution('nonexistent')).toThrow(
+        'not found',
+      );
+    });
+
+    it('revert with non-JSON error preserves plain string without mergeConflict', () => {
+      orchestrator.handleWorkerResponse(
+        makeResponse({
+          actionId: 't1',
+          status: 'failed',
+          outputs: { exitCode: 1, error: 'plain error string' },
+        }),
+      );
+
+      const { savedError } = orchestrator.beginConflictResolution('t1');
+      orchestrator.revertConflictResolution('t1', savedError);
+
+      const task = orchestrator.getTask('t1')!;
+      expect(task.status).toBe('failed');
+      expect(task.execution.error).toBe('plain error string');
+      expect(task.execution.mergeConflict).toBeUndefined();
+    });
+  });
 });

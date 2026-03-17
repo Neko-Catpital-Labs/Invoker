@@ -1227,6 +1227,7 @@ function setupGuiMode(): void {
 
     ipcMain.handle('invoker:resolve-conflict', async (_event, taskId: string) => {
       console.log(`[ipc] resolve-conflict: "${taskId}"`);
+      const { savedError } = orchestrator.beginConflictResolution(taskId);
       try {
         await taskExecutor.resolveConflictWithClaude(taskId);
         const started = orchestrator.restartTask(taskId);
@@ -1234,6 +1235,7 @@ function setupGuiMode(): void {
         await taskExecutor.executeTasks(runnable);
       } catch (err) {
         console.error(`[ipc] resolve-conflict failed: ${err}`);
+        orchestrator.revertConflictResolution(taskId, savedError);
         throw err;
       }
     });
