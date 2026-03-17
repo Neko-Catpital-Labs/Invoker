@@ -584,7 +584,9 @@ export class TaskExecutor {
   async resolveConflictWithClaude(taskId: string): Promise<void> {
     const task = this.orchestrator.getTask(taskId);
     if (!task) throw new Error(`Task ${taskId} not found`);
-    if (task.status !== 'failed') throw new Error(`Task ${taskId} is not failed (status: ${task.status})`);
+    if (task.status !== 'failed' && task.status !== 'running') {
+      throw new Error(`Task ${taskId} is not in a resolvable state (status: ${task.status})`);
+    }
 
     const errorStr = task.execution.error;
     if (!errorStr) throw new Error(`Task ${taskId} has no error information`);

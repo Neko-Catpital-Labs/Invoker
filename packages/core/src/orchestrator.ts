@@ -651,6 +651,52 @@ export class Orchestrator {
   }
 
   /**
+   * Transition a failed task to running before an async conflict resolution.
+   * Returns the saved error string so the caller can revert on failure.
+   */
+  beginConflictResolution(taskId: string): { savedError: string } {
+    this.refreshFromDb();
+    const task = this.stateMachine.getTask(taskId);
+    if (!task) throw new Error(`Task ${taskId} not found`);
+    if (task.status !== 'failed') throw new Error(`Task ${taskId} is not failed (status: ${task.status})`);
+
+    const savedError = task.execution.error ?? '';
+
+    const changes: TaskStateChanges = { status: 'running' };
+    this.writeAndSync(taskId, changes);
+    const delta: TaskDelta = { type: 'updated', taskId, changes };
+    this.persistence.logEvent?.(taskId, 'task.running', changes);
+    this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
+
+    return { savedError };
+  }
+
+  /**
+   * Revert a conflict resolution attempt: restore the task to failed
+   * with its original error and re-parsed mergeConflict field.
+   */
+  revertConflictResolution(taskId: string, savedError: string): void {
+    this.refreshFromDb();
+
+    let mergeConflict: { failedBranch: string; conflictFiles: string[] } | undefined;
+    try {
+      const obj = JSON.parse(savedError);
+      if (obj?.type === 'merge_conflict') {
+        mergeConflict = { failedBranch: obj.failedBranch, conflictFiles: obj.conflictFiles };
+      }
+    } catch { /* not JSON — normal error string */ }
+
+    const changes: TaskStateChanges = {
+      status: 'failed',
+      execution: { error: savedError, mergeConflict },
+    };
+    this.writeAndSync(taskId, changes);
+    const delta: TaskDelta = { type: 'updated', taskId, changes };
+    this.persistence.logEvent?.(taskId, 'task.failed', changes);
+    this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
+  }
+
+  /**
    * Edit a task's command, fork its downstream subtree, and restart it.
    */
   editTaskCommand(taskId: string, newCommand: string): TaskState[] {
