@@ -15,5 +15,5 @@ export default defineConfig({
     '@invoker/executors',
     'yaml',
   ],
-  external: ['@slack/bolt', '@anthropic-ai/sdk', 'better-sqlite3', 'dockerode'],
+  external: ['@slack/bolt', 'better-sqlite3', 'dockerode'],
 });

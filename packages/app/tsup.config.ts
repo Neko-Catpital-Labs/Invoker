@@ -5,7 +5,7 @@ export default defineConfig({
   entry: ['src/main.ts', 'src/preload.ts'],
   format: ['cjs'],
   outDir: 'dist',
-  external: ['electron', 'better-sqlite3', 'dockerode', '@invoker/surfaces', '@slack/bolt', '@anthropic-ai/sdk', 'dotenv'],
+  external: ['electron', 'better-sqlite3', 'dockerode', '@invoker/surfaces', '@slack/bolt', 'dotenv'],
   noExternal: [
     '@invoker/core',
     '@invoker/protocol',

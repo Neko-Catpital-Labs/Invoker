@@ -7,33 +7,15 @@
  *   npx tsx src/sandbox.ts "how many lines of code are we at?"
  *   npx tsx src/sandbox.ts "refactor the auth module"
  *
- * Requires ANTHROPIC_API_KEY in .env or environment.
+ * Requires `cursor` CLI to be available on PATH (or set CURSOR_COMMAND).
  */
 
 import { resolve, dirname } from 'node:path';
-import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline';
 import { PlanConversation } from './slack/plan-conversation.js';
 
 const __dir = typeof __dirname !== 'undefined' ? __dirname : dirname(fileURLToPath(import.meta.url));
-
-// Load .env from repo root (no dotenv dependency)
-const envPath = resolve(__dir, '../../../.env');
-try {
-  const envContent = readFileSync(envPath, 'utf-8');
-  for (const line of envContent.split('\n')) {
-    const match = line.match(/^\s*([^#=]+?)\s*=\s*(.+?)\s*$/);
-    if (match && !process.env[match[1]]) process.env[match[1]] = match[2];
-  }
-} catch { /* no .env file */ }
-
-const apiKey = process.env.ANTHROPIC_API_KEY;
-if (!apiKey) {
-  console.error('Missing ANTHROPIC_API_KEY in .env or environment');
-  process.exit(1);
-}
-
 const repoRoot = resolve(__dir, '../../..');
 
 const log = (src: string, lvl: string, msg: string) => {
@@ -42,9 +24,8 @@ const log = (src: string, lvl: string, msg: string) => {
 };
 
 const conversation = new PlanConversation({
-  apiKey,
+  cursorCommand: process.env.CURSOR_COMMAND ?? 'cursor',
   workingDir: repoRoot,
-  maxToolIterations: 12,
   log,
 });
 

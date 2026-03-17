@@ -148,7 +148,7 @@ export class SessionHandle {
 // ── SessionManager ──────────────────────────────────────────────
 
 export interface SessionManagerConfig {
-  anthropicApiKey: string;
+  cursorCommand?: string;
   workingDir: string;
   conversationRepo: ConversationRepository;
   sessionTtlMs?: number;
@@ -178,7 +178,7 @@ const defaultLog: LogFn = (component, level, message) => {
  */
 export class SessionManager {
   private sessions = new Map<string, SessionHandle>();
-  private anthropicApiKey: string;
+  private cursorCommand: string;
   private workingDir: string;
   private conversationRepo: ConversationRepository;
   private defaultBranch?: string;
@@ -191,7 +191,7 @@ export class SessionManager {
   private readonly maxActiveSessions: number;
 
   constructor(config: SessionManagerConfig) {
-    this.anthropicApiKey = config.anthropicApiKey;
+    this.cursorCommand = config.cursorCommand ?? 'cursor';
     this.workingDir = config.workingDir;
     this.conversationRepo = config.conversationRepo;
     this.defaultBranch = config.defaultBranch;
@@ -275,7 +275,7 @@ export class SessionManager {
 
       this.log('session-manager', 'info', `[TRACE] Recovery path: creating PlanConversation + init() (threadTs=${id.threadTs})`);
       const conversation = new PlanConversation({
-        apiKey: this.anthropicApiKey,
+        cursorCommand: this.cursorCommand,
         workingDir: this.workingDir,
         threadTs: id.threadTs,
         conversationRepo: this.conversationRepo,
@@ -299,7 +299,7 @@ export class SessionManager {
 
       this.log('session-manager', 'info', `[TRACE] Creation path: new PlanConversation (threadTs=${id.threadTs}, hasConversationRepo=true, skipping init)`);
       const conversation = new PlanConversation({
-        apiKey: this.anthropicApiKey,
+        cursorCommand: this.cursorCommand,
         workingDir: this.workingDir,
         threadTs: id.threadTs,
         conversationRepo: this.conversationRepo,

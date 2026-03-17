@@ -25,8 +25,8 @@ export interface SlackSurfaceConfig {
   channelId: string;
   /** Port for Socket Mode. Default: 0 (auto). */
   port?: number;
-  /** Anthropic API key for plan conversations. If not set, @mention planning is disabled. */
-  anthropicApiKey?: string;
+  /** Command to invoke the Cursor CLI for plan conversations. Default: 'cursor'. */
+  cursorCommand?: string;
   /** Root directory for codebase exploration in plan conversations. */
   workingDir?: string;
   /** Repository for persisting plan conversation state across restarts. */
@@ -59,7 +59,7 @@ export class SlackSurface implements Surface {
   private taskMessages = new Map<string, string>();
   /** Maps thread_ts → PlanConversation for ongoing plan threads. */
   private planConversations = new Map<string, PlanConversation>();
-  private anthropicApiKey?: string;
+  private cursorCommand: string;
   private workingDir?: string;
   private defaultBranch?: string;
   private conversationRepo?: ConversationRepository;
@@ -85,7 +85,7 @@ export class SlackSurface implements Surface {
       port: config.port ?? 0,
     });
     this.channelId = config.channelId;
-    this.anthropicApiKey = config.anthropicApiKey;
+    this.cursorCommand = config.cursorCommand ?? 'cursor';
     this.workingDir = config.workingDir;
     this.defaultBranch = config.defaultBranch;
     this.conversationRepo = config.conversationRepo;
@@ -96,9 +96,9 @@ export class SlackSurface implements Surface {
     });
 
     // Create SessionManager when persistence is available
-    if (config.anthropicApiKey && config.conversationRepo) {
+    if (config.conversationRepo) {
       this.sessionManager = new SessionManager({
-        anthropicApiKey: config.anthropicApiKey,
+        cursorCommand: this.cursorCommand,
         workingDir: config.workingDir ?? process.cwd(),
         conversationRepo: config.conversationRepo,
         defaultBranch: config.defaultBranch,
@@ -244,15 +244,6 @@ export class SlackSurface implements Surface {
 
   private registerMentionHandler(): void {
     this.app.event('app_mention', async ({ event, say }) => {
-
-      if (!this.anthropicApiKey) {
-        await say({
-          text: 'Plan conversations are disabled (no ANTHROPIC_API_KEY configured).',
-          thread_ts: event.ts,
-        });
-        return;
-      }
-
       const text = event.text.replace(/<@[A-Z0-9]+>/g, '').trim();
       this.log('slack', 'info', `@mention: "${text.slice(0, 100)}${text.length > 100 ? '...' : ''}" (user=${event.user})`);
       if (!text) {
@@ -318,7 +309,7 @@ export class SlackSurface implements Surface {
       await say({ text: sanitized, thread_ts: threadTs });
 
       if (conversation.planSubmitted && conversation.submittedPlan) {
-        this.log('slack', 'info', `[SESSION_SUBMIT] Plan submitted via submit_plan tool (thread_ts=${threadTs}, plan="${conversation.submittedPlan.name}")`);
+        this.log('slack', 'info', `[SESSION_SUBMIT] Plan submitted via confirmation (thread_ts=${threadTs}, plan="${conversation.submittedPlan.name}")`);
         await say({
           text: `Starting execution of "${conversation.submittedPlan.name}"...`,
           thread_ts: threadTs,
@@ -511,10 +502,10 @@ export class SlackSurface implements Surface {
     // Fallback: no persistence configured
     this.log('slack', 'info', `[TRACE] Fallback path — no sessionManager (threadTs=${threadTs})`);
     let conversation = this.planConversations.get(threadTs);
-    if (!conversation && create && this.anthropicApiKey) {
+    if (!conversation && create) {
       this.sessionMetrics.created++;
       conversation = new PlanConversation({
-        apiKey: this.anthropicApiKey,
+        cursorCommand: this.cursorCommand,
         workingDir: this.workingDir,
         threadTs,
         conversationRepo: this.conversationRepo,
@@ -551,7 +542,7 @@ export class SlackSurface implements Surface {
    * Called once during start() so threads survive bot restarts.
    */
   private async recoverActiveConversations(): Promise<void> {
-    if (!this.anthropicApiKey || !this.conversationRepo) return;
+    if (!this.conversationRepo) return;
 
     try {
       const active = this.conversationRepo.listActiveConversations();
@@ -576,7 +567,7 @@ export class SlackSurface implements Surface {
         // Fallback: direct Map recovery
         for (const entry of active) {
           const conversation = new PlanConversation({
-            apiKey: this.anthropicApiKey,
+            cursorCommand: this.cursorCommand,
             workingDir: this.workingDir,
             threadTs: entry.threadTs,
             conversationRepo: this.conversationRepo,

@@ -153,7 +153,7 @@ async function wireSlackBot(deps: SlackBotDeps): Promise<any> {
     appToken: process.env.SLACK_APP_TOKEN!,
     signingSecret: process.env.SLACK_SIGNING_SECRET!,
     channelId: process.env.SLACK_CHANNEL_ID!,
-    anthropicApiKey: process.env.ANTHROPIC_API_KEY,
+    cursorCommand: process.env.CURSOR_COMMAND ?? 'cursor',
     workingDir: repoRoot,
     conversationRepo,
     defaultBranch: invokerConfig.defaultBranch,

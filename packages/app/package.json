@@ -13,7 +13,6 @@
     "test:e2e": "xvfb-run --auto-servernum playwright test"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.78.0",
     "@invoker/core": "workspace:*",
     "@invoker/executors": "workspace:*",
     "@invoker/persistence": "workspace:*",

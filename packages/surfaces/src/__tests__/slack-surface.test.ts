@@ -451,7 +451,7 @@ describe('SlackSurface', () => {
         appToken: 'xapp-test',
         signingSecret: 'test-secret',
         channelId: 'C-test',
-        anthropicApiKey: 'test-anthropic-key',
+        cursorCommand: 'cursor',
       });
     });
 

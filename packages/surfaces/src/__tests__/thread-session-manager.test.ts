@@ -1,17 +1,25 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { SessionManager, SessionIdentifier, SessionHandle } from '../slack/thread-session-manager.js';
 
-// ── Mock Anthropic SDK ──────────────────────────────────────
+// ── Mock child_process.spawn ────────────────────────────────
 
-vi.mock('@anthropic-ai/sdk', () => {
-  const mockCreate = vi.fn().mockResolvedValue({
-    stop_reason: 'end_turn',
-    content: [{ type: 'text', text: 'mock response' }],
-  });
-  class MockAnthropic {
-    messages = { create: mockCreate };
-  }
-  return { default: MockAnthropic };
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>();
+  return {
+    ...actual,
+    spawn: vi.fn(() => {
+      const { EventEmitter } = require('node:events');
+      const proc = new EventEmitter();
+      proc.stdout = new EventEmitter();
+      proc.stderr = new EventEmitter();
+      proc.kill = vi.fn();
+      setTimeout(() => {
+        proc.stdout.emit('data', Buffer.from('mock response'));
+        proc.emit('close', 0);
+      }, 0);
+      return proc;
+    }),
+  };
 });
 
 // ── Mock ConversationRepository ─────────────────────────────
@@ -64,7 +72,7 @@ describe('SessionManager', () => {
   beforeEach(() => {
     mockRepo = createMockRepo();
     manager = new SessionManager({
-      anthropicApiKey: 'test-key',
+      cursorCommand: 'cursor',
       workingDir: '/fake',
       conversationRepo: mockRepo as any,
       evictionIntervalMs: 60_000, // long interval to avoid interference
@@ -111,7 +119,7 @@ describe('SessionManager', () => {
 
   it('returns null when session limit is reached', async () => {
     const limited = new SessionManager({
-      anthropicApiKey: 'test-key',
+      cursorCommand: 'cursor',
       workingDir: '/fake',
       conversationRepo: mockRepo as any,
       maxActiveSessions: 1,
@@ -132,7 +140,7 @@ describe('SessionManager', () => {
 
   it('evicts submitted sessions to free capacity', async () => {
     const limited = new SessionManager({
-      anthropicApiKey: 'test-key',
+      cursorCommand: 'cursor',
       workingDir: '/fake',
       conversationRepo: mockRepo as any,
       maxActiveSessions: 1,
@@ -247,7 +255,7 @@ describe('SessionManager', () => {
   it('logs reason when conversation not found in DB', async () => {
     const logCalls: string[] = [];
     const loggingManager = new SessionManager({
-      anthropicApiKey: 'test-key',
+      cursorCommand: 'cursor',
       workingDir: '/fake',
       conversationRepo: mockRepo as any,
       evictionIntervalMs: 60_000,
@@ -266,7 +274,7 @@ describe('SessionManager', () => {
   it('logs channel mismatch when conversation found with wrong channelId', async () => {
     const logCalls: Array<{ level: string; msg: string }> = [];
     const loggingManager = new SessionManager({
-      anthropicApiKey: 'test-key',
+      cursorCommand: 'cursor',
       workingDir: '/fake',
       conversationRepo: mockRepo as any,
       evictionIntervalMs: 60_000,

@@ -10,7 +10,6 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.78.0",
     "@invoker/core": "workspace:*",
     "@invoker/executors": "workspace:*",
     "@invoker/persistence": "workspace:*",

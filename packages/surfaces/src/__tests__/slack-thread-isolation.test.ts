@@ -112,7 +112,7 @@ describe('Slack thread isolation', () => {
       appToken: 'xapp-test',
       signingSecret: 'test-secret',
       channelId: 'C-test',
-      anthropicApiKey: 'test-anthropic-key',
+      cursorCommand: 'cursor',
     });
   });
 
@@ -444,7 +444,7 @@ describe('Slack conversation recovery with persistence', () => {
       appToken: 'xapp-test',
       signingSecret: 'test-secret',
       channelId: 'C-test',
-      anthropicApiKey: 'test-anthropic-key',
+      cursorCommand: 'cursor',
       conversationRepo: repo,
     });
 
@@ -470,7 +470,7 @@ describe('Slack conversation recovery with persistence', () => {
       appToken: 'xapp-test',
       signingSecret: 'test-secret',
       channelId: 'C-test',
-      anthropicApiKey: 'test-anthropic-key',
+      cursorCommand: 'cursor',
       conversationRepo: repo,
     });
 
@@ -481,33 +481,13 @@ describe('Slack conversation recovery with persistence', () => {
     expect(threadTsArgs).not.toContain('ts-done');
   });
 
-  it('skips recovery when no anthropicApiKey is configured', async () => {
-    repo.saveConversation('ts-no-api', [
-      { role: 'user', content: 'no api key' },
-    ]);
-
-    surface = new SlackSurface({
-      botToken: 'xoxb-test',
-      appToken: 'xapp-test',
-      signingSecret: 'test-secret',
-      channelId: 'C-test',
-      // no anthropicApiKey
-      conversationRepo: repo,
-    });
-
-    await surface.start(async () => {});
-
-    // Should not have created any PlanConversation instances
-    expect(mockPlanConversationCtor).not.toHaveBeenCalled();
-  });
-
   it('skips recovery when no conversationRepo is configured', async () => {
     surface = new SlackSurface({
       botToken: 'xoxb-test',
       appToken: 'xapp-test',
       signingSecret: 'test-secret',
       channelId: 'C-test',
-      anthropicApiKey: 'test-anthropic-key',
+      cursorCommand: 'cursor',
       // no conversationRepo
     });
 
@@ -528,7 +508,7 @@ describe('Slack conversation recovery with persistence', () => {
       appToken: 'xapp-test',
       signingSecret: 'test-secret',
       channelId: 'C-test',
-      anthropicApiKey: 'test-anthropic-key',
+      cursorCommand: 'cursor',
       conversationRepo: repo,
     });
 
@@ -559,7 +539,7 @@ describe('Slack conversation recovery with persistence', () => {
       appToken: 'xapp-test',
       signingSecret: 'test-secret',
       channelId: 'C-test',
-      anthropicApiKey: 'test-anthropic-key',
+      cursorCommand: 'cursor',
     });
 
     await surface.start(async () => {});
@@ -614,7 +594,7 @@ Want me to execute this?`;
       appToken: 'xapp-test',
       signingSecret: 'test-secret',
       channelId: 'C-test',
-      anthropicApiKey: 'test-anthropic-key',
+      cursorCommand: 'cursor',
     });
   });
 
