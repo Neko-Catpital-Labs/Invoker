@@ -767,11 +767,11 @@ describe('TaskExecutor', () => {
       const consolidateMerge = gitCalls.find(c => c[0] === 'merge' && c.includes('experiment/t1'));
       expect(consolidateMerge).toBeDefined();
 
-      // Should NOT merge featureBranch into baseBranch
-      const finalMerge = gitCalls.find(c =>
-        c[0] === 'merge' && c.includes('plan/feature') && c.includes('--no-ff'),
-      );
-      expect(finalMerge).toBeUndefined();
+      // Should NOT rebase or squash-merge featureBranch into baseBranch (manual only consolidates)
+      const rebaseCall = gitCalls.find(c => c[0] === 'rebase');
+      expect(rebaseCall).toBeUndefined();
+      const squashCall = gitCalls.find(c => c[0] === 'merge' && c.includes('--squash'));
+      expect(squashCall).toBeUndefined();
 
       // Should call setTaskAwaitingApproval instead of handleWorkerResponse
       expect(orchestrator.setTaskAwaitingApproval).toHaveBeenCalledWith('__merge__wf-1');
@@ -781,10 +781,13 @@ describe('TaskExecutor', () => {
         expect.objectContaining({ status: 'completed' }),
       );
 
-      // Should persist familiarType='local' so open-terminal can resolve the familiar
+      // Should persist familiarType, branch, and workspacePath
       expect(persistence.updateTask).toHaveBeenCalledWith(
         '__merge__wf-1',
-        expect.objectContaining({ config: { familiarType: 'local' } }),
+        expect.objectContaining({
+          config: { familiarType: 'local' },
+          execution: { branch: 'plan/feature', workspacePath: '/tmp' },
+        }),
       );
     });
 
@@ -832,11 +835,13 @@ describe('TaskExecutor', () => {
 
       await (executor as any).executeMergeNode(mergeTask);
 
-      // Should perform final merge of featureBranch into baseBranch
-      const finalMerge = gitCalls.find(c =>
-        c[0] === 'merge' && c.includes('plan/feature') && c.includes('--no-ff'),
-      );
-      expect(finalMerge).toBeDefined();
+      // Should rebase then squash merge featureBranch into baseBranch
+      const rebaseCall = gitCalls.find(c => c[0] === 'rebase' && c.includes('master') && c.includes('plan/feature'));
+      expect(rebaseCall).toBeDefined();
+      const squashCall = gitCalls.find(c => c[0] === 'merge' && c.includes('--squash') && c.includes('plan/feature'));
+      expect(squashCall).toBeDefined();
+      const commitCall = gitCalls.find(c => c[0] === 'commit' && c.includes('-m'));
+      expect(commitCall).toBeDefined();
 
       expect(orchestrator.handleWorkerResponse).toHaveBeenCalledWith(
         expect.objectContaining({ status: 'completed' }),
@@ -870,14 +875,15 @@ describe('TaskExecutor', () => {
 
       await executor.approveMerge('wf-1');
 
-      // Should checkout baseBranch and merge featureBranch
+      // Should rebase, checkout baseBranch, squash merge, and commit
+      const rebaseCall = gitCalls.find(c => c[0] === 'rebase' && c.includes('master') && c.includes('plan/feature'));
+      expect(rebaseCall).toBeDefined();
       const checkoutBase = gitCalls.find(c => c[0] === 'checkout' && c[1] === 'master');
       expect(checkoutBase).toBeDefined();
-
-      const finalMerge = gitCalls.find(c =>
-        c[0] === 'merge' && c.includes('plan/feature') && c.includes('--no-ff'),
-      );
-      expect(finalMerge).toBeDefined();
+      const squashCall = gitCalls.find(c => c[0] === 'merge' && c.includes('--squash') && c.includes('plan/feature'));
+      expect(squashCall).toBeDefined();
+      const commitCall = gitCalls.find(c => c[0] === 'commit' && c.includes('-m'));
+      expect(commitCall).toBeDefined();
     });
 
     it('approveMerge throws when workflow has no merge configured', async () => {
@@ -1192,17 +1198,18 @@ describe('TaskExecutor', () => {
       (executor as any).execGit = async (args: string[]) => {
         calls.push([...args]);
         if (args[0] === 'branch' && args[1] === '--show-current') return 'original-branch';
-        if (args[0] === 'checkout' && args[1] === 'master') return '';
-        if (args[0] === 'merge' && args[1] === '--no-ff') throw new Error('CONFLICT');
+        if (args[0] === 'rebase') throw new Error('CONFLICT');
         return '';
       };
 
       await expect(executor.approveMerge('wf-test')).rejects.toThrow('CONFLICT');
 
-      // Should have attempted merge --abort and checkout back to original
-      const abortCall = calls.find(c => c[0] === 'merge' && c[1] === '--abort');
+      // Should have attempted rebase --abort, merge --abort, and checkout back to original
+      const rebaseAbort = calls.find(c => c[0] === 'rebase' && c[1] === '--abort');
+      const mergeAbort = calls.find(c => c[0] === 'merge' && c[1] === '--abort');
       const restoreCall = calls.find(c => c[0] === 'checkout' && c[1] === 'original-branch');
-      expect(abortCall).toBeDefined();
+      expect(rebaseAbort).toBeDefined();
+      expect(mergeAbort).toBeDefined();
       expect(restoreCall).toBeDefined();
     });
   });
@@ -1297,7 +1304,7 @@ describe('TaskExecutor', () => {
       });
 
       await expect(executor.resolveConflictWithClaude('running-task'))
-        .rejects.toThrow('not failed');
+        .rejects.toThrow('no error information');
     });
 
     it('throws for task without merge conflict info', async () => {

@@ -969,33 +969,28 @@ describe('merge gate commit topology (real git)', () => {
       .toString().trim().split('\n').filter(l => l);
     expect(featureMerges.length).toBe(2);
 
-    // Phase 2: approve — final merge into master
+    // Phase 2: approve — final squash merge into master
     await executor.approveMerge('wf-1');
 
-    // Master should now have the feature branch merged
+    // Master should now have the squash-merged changes
     const masterFinal = execSync('git rev-parse master', { cwd: tmpDir }).toString().trim();
     expect(masterFinal).not.toBe(masterHead);
-
-    // All task commits reachable from master
-    expect(isAncestor(tmpDir, hashA, 'master')).toBe(true);
-    expect(isAncestor(tmpDir, hashB, 'master')).toBe(true);
 
     // All files present on master
     expect(existsSync(join(tmpDir, 'a.txt'))).toBe(true);
     expect(existsSync(join(tmpDir, 'b.txt'))).toBe(true);
     expect(existsSync(join(tmpDir, 'initial.txt'))).toBe(true);
 
-    // Exactly 1 merge commit on master (the no-ff merge of feat/my-workflow)
-    const masterMerges = execSync('git log --merges --oneline master', { cwd: tmpDir })
-      .toString().trim().split('\n').filter(l => l);
-    // 2 from feature branch consolidation + 1 from final merge = 3 total on master
-    // But only 1 is directly on master (the no-ff merge of the feature branch)
+    // Squash merge: no merge commits on master's first-parent log
     const masterOnlyMerges = execSync(
       'git log --merges --first-parent --oneline master',
       { cwd: tmpDir },
-    ).toString().trim().split('\n').filter(l => l);
-    expect(masterOnlyMerges.length).toBe(1);
-    expect(masterOnlyMerges[0]).toContain('My Workflow');
+    ).toString().trim().split('\n').filter(l => l.length > 0);
+    expect(masterOnlyMerges.length).toBe(0);
+
+    // Tip commit message should match workflow name
+    const tipMsg = execSync('git log -1 --format=%s master', { cwd: tmpDir }).toString().trim();
+    expect(tipMsg).toBe('My Workflow');
   });
 
   it('automatic mode produces same topology in a single step', async () => {
@@ -1034,25 +1029,68 @@ describe('merge gate commit topology (real git)', () => {
     const mergeTask = tasks.find(t => t.config.isMergeNode)!;
     await (executor as any).executeMergeNode(mergeTask);
 
-    // Master should have moved (full merge in one step)
+    // Master should have moved (full squash merge in one step)
     const masterFinal = execSync('git rev-parse master', { cwd: tmpDir }).toString().trim();
     expect(masterFinal).not.toBe(masterHead);
-
-    // All task commits reachable from master
-    expect(isAncestor(tmpDir, hashA, 'master')).toBe(true);
-    expect(isAncestor(tmpDir, hashB, 'master')).toBe(true);
 
     // All files present
     expect(existsSync(join(tmpDir, 'a.txt'))).toBe(true);
     expect(existsSync(join(tmpDir, 'b.txt'))).toBe(true);
 
-    // 1 first-parent merge on master (the no-ff merge of the feature branch)
+    // Squash merge: no merge commits on master's first-parent log
     const masterOnlyMerges = execSync(
       'git log --merges --first-parent --oneline master',
       { cwd: tmpDir },
-    ).toString().trim().split('\n').filter(l => l);
-    expect(masterOnlyMerges.length).toBe(1);
-    expect(masterOnlyMerges[0]).toContain('Auto Workflow');
+    ).toString().trim().split('\n').filter(l => l.length > 0);
+    expect(masterOnlyMerges.length).toBe(0);
+
+    // Tip commit message should match workflow name
+    const tipMsg = execSync('git log -1 --format=%s master', { cwd: tmpDir }).toString().trim();
+    expect(tipMsg).toBe('Auto Workflow');
+  });
+
+  it('rebase handles diverged baseBranch', async () => {
+    // Create task branches
+    execSync('git checkout -b experiment/task-x', { cwd: tmpDir });
+    writeFileSync(join(tmpDir, 'x.txt'), 'x-work');
+    execSync('git add -A && git commit -m "task-x work"', { cwd: tmpDir });
+
+    execSync('git checkout master', { cwd: tmpDir });
+
+    // Advance master after the task branches were created (diverged base)
+    writeFileSync(join(tmpDir, 'diverged.txt'), 'diverged-work');
+    execSync('git add -A && git commit -m "diverged master commit"', { cwd: tmpDir });
+    const masterHead = execSync('git rev-parse HEAD', { cwd: tmpDir }).toString().trim();
+
+    const tasks: TaskState[] = [
+      makeTaskState({ id: 'task-x', config: { workflowId: 'wf-d' }, status: 'completed', execution: { branch: 'experiment/task-x' } }),
+      makeTaskState({ id: '__merge__wf-d', dependencies: ['task-x'], config: { workflowId: 'wf-d', isMergeNode: true }, status: 'running' }),
+    ];
+
+    const workflow = {
+      id: 'wf-d',
+      onFinish: 'merge',
+      mergeMode: 'automatic',
+      baseBranch: 'master',
+      featureBranch: 'feat/diverged-workflow',
+      name: 'Diverged Workflow',
+    };
+
+    const executor = createExecutor(tasks, workflow);
+    const mergeTask = tasks.find(t => t.config.isMergeNode)!;
+    await (executor as any).executeMergeNode(mergeTask);
+
+    // Master should have moved
+    const masterFinal = execSync('git rev-parse master', { cwd: tmpDir }).toString().trim();
+    expect(masterFinal).not.toBe(masterHead);
+
+    // Both diverged and task files present
+    expect(existsSync(join(tmpDir, 'x.txt'))).toBe(true);
+    expect(existsSync(join(tmpDir, 'diverged.txt'))).toBe(true);
+
+    // Tip commit message should match workflow name
+    const tipMsg = execSync('git log -1 --format=%s master', { cwd: tmpDir }).toString().trim();
+    expect(tipMsg).toBe('Diverged Workflow');
   });
 });
 

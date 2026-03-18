@@ -955,11 +955,11 @@ describe('Flow 9: manual merge mode', () => {
     );
     expect(consolidateBranch).toBeDefined();
 
-    // No final merge of featureBranch into baseBranch
-    const finalMerge = h.git.calls.find(c =>
-      c[0] === 'merge' && c.includes('plan/manual-merge') && c.includes('--no-ff'),
-    );
-    expect(finalMerge).toBeUndefined();
+    // No rebase or squash merge (manual only consolidates)
+    const rebaseCall = h.git.calls.find(c => c[0] === 'rebase');
+    expect(rebaseCall).toBeUndefined();
+    const squashCall = h.git.calls.find(c => c[0] === 'merge' && c.includes('--squash'));
+    expect(squashCall).toBeUndefined();
   });
 
   it('approve transitions merge node from awaiting_approval to completed', async () => {
@@ -985,14 +985,15 @@ describe('Flow 9: manual merge mode', () => {
     h.orchestrator.approve(mergeId);
     expect(h.getTask(mergeId)!.status).toBe('completed');
 
-    // Verify the final merge was performed
+    // Verify the final squash merge was performed: rebase + checkout + squash + commit
+    const rebaseCall = h.git.calls.find(c => c[0] === 'rebase' && c.includes('master') && c.includes('plan/manual-merge'));
+    expect(rebaseCall).toBeDefined();
     const checkoutBase = h.git.calls.find(c => c[0] === 'checkout' && c[1] === 'master');
     expect(checkoutBase).toBeDefined();
-
-    const finalMerge = h.git.calls.find(c =>
-      c[0] === 'merge' && c.includes('plan/manual-merge') && c.includes('--no-ff'),
-    );
-    expect(finalMerge).toBeDefined();
+    const squashCall = h.git.calls.find(c => c[0] === 'merge' && c.includes('--squash') && c.includes('plan/manual-merge'));
+    expect(squashCall).toBeDefined();
+    const commitCall = h.git.calls.find(c => c[0] === 'commit' && c.includes('-m'));
+    expect(commitCall).toBeDefined();
   });
 
   it('automatic merge mode performs full merge in merge node', async () => {
@@ -1013,11 +1014,13 @@ describe('Flow 9: manual merge mode', () => {
     await h.executor.executeTasks([mergeTask]);
     expect(h.getTask(mergeId)!.status).toBe('completed');
 
-    // Verify git calls include the final merge
-    const finalMerge = h.git.calls.find(c =>
-      c[0] === 'merge' && c.includes('plan/auto-merge') && c.includes('--no-ff'),
-    );
-    expect(finalMerge).toBeDefined();
+    // Verify git calls include rebase + squash merge + commit
+    const rebaseCall = h.git.calls.find(c => c[0] === 'rebase' && c.includes('master') && c.includes('plan/auto-merge'));
+    expect(rebaseCall).toBeDefined();
+    const squashCall = h.git.calls.find(c => c[0] === 'merge' && c.includes('--squash') && c.includes('plan/auto-merge'));
+    expect(squashCall).toBeDefined();
+    const commitCall = h.git.calls.find(c => c[0] === 'commit' && c.includes('-m'));
+    expect(commitCall).toBeDefined();
   });
 });
 

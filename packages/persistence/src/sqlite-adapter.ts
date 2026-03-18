@@ -547,6 +547,13 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return val === 'none' ? null : val;
   }
 
+  getBranch(taskId: string): string | null {
+    const row = this.db.prepare(
+      'SELECT branch FROM tasks WHERE id = ?',
+    ).get(taskId) as { branch: string | null } | undefined;
+    return row?.branch ?? null;
+  }
+
   // ── Conversations ───────────────────────────────────────
 
   saveConversation(conversation: Conversation): void {

@@ -414,7 +414,32 @@ describe('merge gate open-terminal', () => {
     expect(familiar!.type).toBe('local');
   });
 
-  it('opens terminal with cwd for merge gate task', () => {
+  it('opens terminal with git checkout for merge gate with branch', () => {
+    const registry = new FamiliarRegistry();
+    const local = new LocalFamiliar();
+    registry.register('local', local);
+
+    const meta: PersistedTaskMeta = {
+      taskId: '__merge__wf-123',
+      familiarType: 'merge',
+      workspacePath: process.cwd(),
+      branch: 'plan/my-workflow',
+    };
+
+    let familiar: any = registry.get(meta.familiarType);
+    if (!familiar) {
+      familiar = registry.get('local') ?? registry.getDefault();
+    }
+
+    vi.mocked(existsSync).mockReturnValue(true);
+    const spec = familiar.getRestoredTerminalSpec(meta);
+    expect(spec.cwd).toBe(process.cwd());
+    expect(spec.command).toBe('bash');
+    expect(spec.args).toContain('-c');
+    expect(spec.args![1]).toContain("git checkout 'plan/my-workflow'");
+  });
+
+  it('opens terminal with cwd only for merge gate without branch', () => {
     const registry = new FamiliarRegistry();
     const local = new LocalFamiliar();
     registry.register('local', local);

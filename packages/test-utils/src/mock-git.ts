@@ -32,10 +32,10 @@ export class MockGit {
     return this.on((args) => args[0] === cmd, response, once);
   }
 
-  /** Script merge to fail. */
+  /** Script merge to fail (matches both --no-ff consolidation and --squash final merges). */
   onMerge(error: Error): this {
     return this.on(
-      (args) => args[0] === 'merge' && args.includes('--no-ff'),
+      (args) => args[0] === 'merge' && (args.includes('--no-ff') || args.includes('--squash')),
       error,
     );
   }
@@ -43,7 +43,11 @@ export class MockGit {
   /** Script merge to succeed (removes any previous merge failure script). */
   onMergeSucceed(): this {
     this.scripts = this.scripts.filter(
-      (s) => !(s.match(['merge', '--no-ff', '-m', 'x', 'x']) === true && s.response instanceof Error),
+      (s) => {
+        const matchesNoFf = s.match(['merge', '--no-ff', '-m', 'x', 'x']) === true;
+        const matchesSquash = s.match(['merge', '--squash', 'x']) === true;
+        return !((matchesNoFf || matchesSquash) && s.response instanceof Error);
+      },
     );
     return this;
   }
@@ -98,6 +102,7 @@ export class MockGit {
     if (args[0] === 'checkout') return '';
     if (args[0] === 'merge') return '';
     if (args[0] === 'rebase') return '';
+    if (args[0] === 'commit') return '';
     if (args[0] === 'branch') return '';
     if (args[0] === 'symbolic-ref') return `refs/remotes/origin/${this.defaultBranch}`;
     if (args[0] === 'rev-parse') return 'abc123';
