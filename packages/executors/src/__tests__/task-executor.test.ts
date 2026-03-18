@@ -1414,15 +1414,38 @@ describe('TaskExecutor', () => {
       }));
       const orchestrator = { getTask: (id: string) => tasks.get(id) };
       const appendTaskOutput = vi.fn();
+      const updateTask = vi.fn();
       const executor = new TaskExecutor({
         orchestrator: orchestrator as any,
-        persistence: { appendTaskOutput } as any,
+        persistence: { appendTaskOutput, updateTask } as any,
         familiarRegistry: { getDefault: () => ({ type: 'local' }), get: () => null, getAll: () => [] } as any,
         cwd: '/tmp',
       });
-      (executor as any).spawnClaudeFix = async () => 'Fixed the import';
+      (executor as any).spawnClaudeFix = async () => ({ stdout: 'Fixed the import', sessionId: 'test-session-123' });
       await executor.fixWithClaude('fix-task', 'error output here');
       expect(appendTaskOutput).toHaveBeenCalledWith('fix-task', expect.stringContaining('Fixed the import'));
+    });
+
+    it('persists claudeSessionId after fix', async () => {
+      const tasks = new Map<string, TaskState>();
+      tasks.set('fix-task', makeTask({
+        id: 'fix-task',
+        status: 'failed',
+        config: { command: 'npm test' },
+        execution: { branch: 'invoker/fix-task', workspacePath: '/tmp/workspace' },
+      }));
+      const orchestrator = { getTask: (id: string) => tasks.get(id) };
+      const appendTaskOutput = vi.fn();
+      const updateTask = vi.fn();
+      const executor = new TaskExecutor({
+        orchestrator: orchestrator as any,
+        persistence: { appendTaskOutput, updateTask } as any,
+        familiarRegistry: { getDefault: () => ({ type: 'local' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+      });
+      (executor as any).spawnClaudeFix = async () => ({ stdout: 'Fixed it', sessionId: 'sess-abc-123' });
+      await executor.fixWithClaude('fix-task', 'error output');
+      expect(updateTask).toHaveBeenCalledWith('fix-task', { execution: { claudeSessionId: 'sess-abc-123' } });
     });
 
     it('does not perform any git checkout', async () => {
@@ -1435,9 +1458,10 @@ describe('TaskExecutor', () => {
       }));
       const orchestrator = { getTask: (id: string) => tasks.get(id) };
       const appendTaskOutput = vi.fn();
+      const updateTask = vi.fn();
       const executor = new TaskExecutor({
         orchestrator: orchestrator as any,
-        persistence: { appendTaskOutput } as any,
+        persistence: { appendTaskOutput, updateTask } as any,
         familiarRegistry: { getDefault: () => ({ type: 'local' }), get: () => null, getAll: () => [] } as any,
         cwd: '/tmp/repo',
       });
@@ -1446,7 +1470,7 @@ describe('TaskExecutor', () => {
         gitCalls.push([...args]);
         return '';
       };
-      (executor as any).spawnClaudeFix = async () => '';
+      (executor as any).spawnClaudeFix = async () => ({ stdout: '', sessionId: 'sess-xyz' });
       await executor.fixWithClaude('fix-task', 'error output');
       expect(gitCalls.find(c => c[0] === 'checkout')).toBeUndefined();
     });

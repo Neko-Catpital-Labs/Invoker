@@ -71,7 +71,6 @@ export interface TaskExecution {
   readonly selectedExperiments?: readonly string[];
   readonly experimentResults?: readonly ExperimentResultEntry[];
   readonly pendingFixError?: string;
-  readonly pendingFixError?: string;
   readonly mergeConflict?: {
     readonly failedBranch: string;
     readonly conflictFiles: readonly string[];
