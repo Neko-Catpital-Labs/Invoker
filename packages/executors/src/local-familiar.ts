@@ -174,12 +174,10 @@ export class LocalFamiliar extends BaseFamiliar<ProcessEntry> {
     // Generic error handler: catch spawn errors that are NOT handled by
     // the ENOENT fallback above (e.g., EACCES, EPERM, or other failures).
     child.on('error', (err: NodeJS.ErrnoException) => {
-      // ENOENT on claude tasks with fallback enabled is handled above
       if (err.code === 'ENOENT' && request.actionType === 'claude' && this.claudeFallback) {
         return;
       }
       if (!entry.completed && !entry.fallbackActive) {
-        entry.completed = true;
         const response: WorkResponse = {
           requestId: request.requestId,
           actionId: request.actionId,
@@ -189,9 +187,7 @@ export class LocalFamiliar extends BaseFamiliar<ProcessEntry> {
             error: `Spawn error: ${err.message}`,
           },
         };
-        for (const cb of entry.completeListeners) {
-          cb(response);
-        }
+        this.emitComplete(executionId, response);
       }
     });
 

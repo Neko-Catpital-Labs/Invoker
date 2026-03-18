@@ -2058,6 +2058,125 @@ describe('Orchestrator', () => {
     });
   });
 
+  // ── handleCompleted unblocking ──────────────────────────
+
+  describe('handleCompleted unblocking', () => {
+    let logSpy: ReturnType<typeof vi.spyOn>;
+    let warnSpy: ReturnType<typeof vi.spyOn>;
+
+    beforeEach(() => {
+      logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+      logSpy.mockRestore();
+      warnSpy.mockRestore();
+    });
+
+    it('handleCompleted unblocks previously-blocked dependents', () => {
+      orchestrator.loadPlan({
+        name: 'unblock-on-complete-test',
+        tasks: [
+          { id: 'A', description: 'Root', command: 'echo A' },
+          { id: 'B', description: 'Child', command: 'echo B', dependencies: ['A'] },
+        ],
+      });
+      orchestrator.startExecution();
+
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 'A', status: 'failed', outputs: { exitCode: 1, error: 'fail' } }),
+      );
+      expect(orchestrator.getTask('B')!.status).toBe('blocked');
+      expect(orchestrator.getTask('B')!.execution.blockedBy).toBe('A');
+
+      logSpy.mockClear();
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 'A', status: 'completed', outputs: { exitCode: 0 } }),
+      );
+
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.stringContaining('handleCompleted "A": unblocking'),
+      );
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.stringContaining('previously-blocked tasks: [B'),
+      );
+      expect(orchestrator.getTask('A')!.status).toBe('completed');
+      expect(orchestrator.getTask('B')!.status).toBe('running');
+      expect(orchestrator.getTask('B')!.execution.blockedBy).toBeUndefined();
+    });
+
+    it('handleCompleted unblocks multi-level blocked chain', () => {
+      orchestrator.loadPlan({
+        name: 'multi-level-unblock-test',
+        tasks: [
+          { id: 'A', description: 'Root', command: 'echo A' },
+          { id: 'B', description: 'Level 1', command: 'echo B', dependencies: ['A'] },
+          { id: 'C', description: 'Level 2', command: 'echo C', dependencies: ['B'] },
+        ],
+      });
+      orchestrator.startExecution();
+
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 'A', status: 'failed', outputs: { exitCode: 1, error: 'fail' } }),
+      );
+      expect(orchestrator.getTask('B')!.status).toBe('blocked');
+      expect(orchestrator.getTask('C')!.status).toBe('blocked');
+
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 'A', status: 'completed', outputs: { exitCode: 0 } }),
+      );
+
+      expect(orchestrator.getTask('B')!.status).toBe('running');
+      expect(orchestrator.getTask('B')!.execution.blockedBy).toBeUndefined();
+      // C is unblocked but not ready yet (B is not completed)
+      expect(orchestrator.getTask('C')!.status).toBe('pending');
+      expect(orchestrator.getTask('C')!.execution.blockedBy).toBeUndefined();
+    });
+
+    it('warns when response arrives for already-terminal task', () => {
+      orchestrator.loadPlan({
+        name: 'terminal-warn-test',
+        tasks: [
+          { id: 'A', description: 'Root', command: 'echo A' },
+        ],
+      });
+      orchestrator.startExecution();
+
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 'A', status: 'failed', outputs: { exitCode: 1, error: 'fail' } }),
+      );
+      warnSpy.mockClear();
+
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 'A', status: 'completed', outputs: { exitCode: 0 } }),
+      );
+
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('received "completed" for already-"failed" task "A"'),
+      );
+    });
+
+    it('scheduler slot freed on parse error', () => {
+      orchestrator.loadPlan({
+        name: 'scheduler-leak-test',
+        tasks: [
+          { id: 'A', description: 'Root', command: 'echo A' },
+        ],
+      });
+      orchestrator.startExecution();
+
+      const schedulerBefore = (orchestrator as any).scheduler.getStatus();
+      expect(schedulerBefore.runningCount).toBe(1);
+
+      // Response with valid actionId but missing required fields — triggers parse error
+      orchestrator.handleWorkerResponse({ actionId: 'A' } as any);
+
+      const schedulerAfter = (orchestrator as any).scheduler.getStatus();
+      expect(schedulerAfter.runningCount).toBe(0);
+    });
+  });
+
   // ── Scheduler health ────────────────────────────────────
 
   describe('scheduler health', () => {

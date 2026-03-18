@@ -705,4 +705,62 @@ describe('LocalFamiliar', () => {
       await familiar.destroyAll();
     });
   });
+
+  // ── emitComplete idempotency ──────────────────────────────────
+
+  describe('emitComplete idempotency', () => {
+    it('second emitComplete call is ignored — onComplete fires only once', async () => {
+      const request = makeRequest({ inputs: { command: 'echo hello' } });
+      const handle = await familiar.start(request);
+
+      const responses: WorkResponse[] = [];
+      familiar.onComplete(handle, (res) => responses.push(res));
+
+      const entry = (familiar as any).entries.get(handle.executionId);
+      const firstResponse: WorkResponse = {
+        requestId: 'req-1', actionId: 'action-1', status: 'failed',
+        outputs: { exitCode: 1, error: 'first' },
+      };
+      const secondResponse: WorkResponse = {
+        requestId: 'req-1', actionId: 'action-1', status: 'completed',
+        outputs: { exitCode: 0 },
+      };
+
+      (familiar as any).emitComplete(handle.executionId, firstResponse);
+      (familiar as any).emitComplete(handle.executionId, secondResponse);
+
+      expect(responses).toHaveLength(1);
+      expect(responses[0].status).toBe('failed');
+      expect(entry.completionResponse.status).toBe('failed');
+    });
+  });
+
+  // ── spawn error uses emitComplete ─────────────────────────────
+
+  describe('spawn error completion', () => {
+    it('spawn error sets completionResponse for late subscribers', async () => {
+      const request = makeRequest({
+        actionId: 'spawn-err',
+        inputs: { command: '/nonexistent/binary/xyz_does_not_exist' },
+      });
+
+      const handle = await familiar.start(request);
+
+      const response = await Promise.race([
+        new Promise<WorkResponse>((resolve) => {
+          familiar.onComplete(handle, (res) => resolve(res));
+        }),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('no completion received')), 5000),
+        ),
+      ]);
+
+      expect(response.status).toBe('failed');
+
+      // Late subscriber should also receive the response via replay
+      const entry = (familiar as any).entries.get(handle.executionId);
+      expect(entry.completionResponse).toBeDefined();
+      expect(entry.completionResponse.status).toBe('failed');
+    }, 10_000);
+  });
 });

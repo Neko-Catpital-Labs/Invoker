@@ -368,6 +368,9 @@ export class Orchestrator {
         this.scheduler.completeJob(response.actionId);
         return [];
       }
+      if (earlyTask && (earlyTask.status === 'failed' || earlyTask.status === 'completed')) {
+        console.warn(`[orchestrator] handleWorkerResponse: received "${response.status}" for already-"${earlyTask.status}" task "${response.actionId}"`);
+      }
     }
 
     // Auto-fix interception
@@ -381,12 +384,14 @@ export class Orchestrator {
 
     const parsed = this.responseHandler.parseResponse(response);
     if (!('type' in parsed)) {
+      this.scheduler.completeJob(response.actionId);
       return [];
     }
 
     const taskId = parsed.taskId;
     const task = this.stateMachine.getTask(taskId);
     if (!task) {
+      this.scheduler.completeJob(taskId);
       return [];
     }
 
@@ -1098,6 +1103,18 @@ export class Orchestrator {
     this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
 
     this.checkExperimentCompletion(taskId);
+
+    const unblockedIds = this.stateMachine.computeTasksToUnblock(taskId);
+    if (unblockedIds.length > 0) {
+      console.log(`[orchestrator] handleCompleted "${taskId}": unblocking ${unblockedIds.length} previously-blocked tasks: [${unblockedIds.join(', ')}]`);
+      for (const id of unblockedIds) {
+        const unblockChanges: TaskStateChanges = { status: 'pending', execution: { blockedBy: undefined } };
+        this.writeAndSync(id, unblockChanges);
+        const unblockDelta: TaskDelta = { type: 'updated', taskId: id, changes: unblockChanges };
+        this.persistence.logEvent?.(id, 'task.pending', unblockChanges);
+        this.messageBus.publish(TASK_DELTA_CHANNEL, unblockDelta);
+      }
+    }
 
     const readyTaskIds = this.stateMachine.findNewlyReadyTasks(taskId);
     console.log(`[orchestrator] handleCompleted "${taskId}": ${readyTaskIds.length} newly ready: [${readyTaskIds.join(', ')}]`);

@@ -36,6 +36,10 @@ vi.mock('@slack/bolt', () => {
       auth: {
         test: vi.fn().mockResolvedValue({ user_id: 'U_BOT' }),
       },
+      reactions: {
+        add: vi.fn().mockResolvedValue({}),
+        remove: vi.fn().mockResolvedValue({}),
+      },
     };
   }
 
@@ -470,14 +474,19 @@ describe('SlackSurface', () => {
       const app = surfaceWithApi.getApp() as any;
       const mentionHandler = app._eventHandlers.find((h: MockHandler) => h.pattern === 'app_mention')?.handler;
 
-      const say = vi.fn();
+      const say = vi.fn().mockResolvedValue({ ts: '1111.001' });
       await mentionHandler({
         event: { text: '<@U_BOT> build me a REST API', ts: '1111', thread_ts: undefined },
         say,
       });
 
-      // Should post Claude's reply + execution message
-      expect(say).toHaveBeenCalledWith(expect.objectContaining({ text: 'Submitting plan now.' }));
+      // Should post immediate ack (via say), replace it with actual response (via update), then post execution message
+      expect(say).toHaveBeenNthCalledWith(1, expect.objectContaining({ text: 'Processing your request...' }));
+      expect(app.client.chat.update).toHaveBeenCalledWith(expect.objectContaining({
+        channel: 'C-test',
+        ts: '1111.001',
+        text: 'Submitting plan now.',
+      }));
       expect(say).toHaveBeenCalledWith(expect.objectContaining({
         text: expect.stringContaining('Starting execution'),
       }));
@@ -502,15 +511,133 @@ describe('SlackSurface', () => {
       const app = surfaceWithApi.getApp() as any;
       const mentionHandler = app._eventHandlers.find((h: MockHandler) => h.pattern === 'app_mention')?.handler;
 
-      const say = vi.fn();
+      const say = vi.fn().mockResolvedValue({ ts: '2222.001' });
       await mentionHandler({
         event: { text: '<@U_BOT> build something', ts: '2222', thread_ts: undefined },
         say,
       });
 
-      // Should post reply but NOT execution message
+      // Should post immediate ack once, then replace it with actual response (via update), no execution message
       expect(say).toHaveBeenCalledTimes(1);
+      expect(say).toHaveBeenNthCalledWith(1, expect.objectContaining({ text: 'Processing your request...' }));
+      expect(app.client.chat.update).toHaveBeenCalledWith(expect.objectContaining({
+        channel: 'C-test',
+        ts: '2222.001',
+        text: 'Here is the plan. Want me to run it?',
+      }));
       expect(receivedCommands).toHaveLength(0);
+    });
+
+    it('posts messages normally when immediate ack is disabled', async () => {
+      mockSendMessage.mockImplementation(async () => {
+        mockPlanConversation.submittedPlan = null;
+        mockPlanConversation.planSubmitted = false;
+        return 'Here is my response.';
+      });
+
+      const surfaceNoAck = new SlackSurface({
+        botToken: 'xoxb-test',
+        appToken: 'xapp-test',
+        signingSecret: 'test-secret',
+        channelId: 'C-test',
+        anthropicApiKey: 'test-anthropic-key',
+        enableImmediateAck: false,
+      });
+
+      await surfaceNoAck.start(async (cmd) => {
+        receivedCommands.push(cmd);
+      });
+
+      const app = surfaceNoAck.getApp() as any;
+      const mentionHandler = app._eventHandlers.find((h: MockHandler) => h.pattern === 'app_mention')?.handler;
+
+      const say = vi.fn();
+      await mentionHandler({
+        event: { text: '<@U_BOT> hello', ts: '3333', thread_ts: undefined },
+        say,
+      });
+
+      // Should NOT post ack, just post response directly
+      expect(say).toHaveBeenCalledTimes(1);
+      expect(say).toHaveBeenNthCalledWith(1, expect.objectContaining({ text: 'Here is my response.' }));
+      // Should NOT call update since no ack was posted
+      expect(app.client.chat.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('typing indicator', () => {
+    it('adds and removes reaction when useTypingIndicator is enabled', async () => {
+      const surfaceWithTyping = new SlackSurface({
+        botToken: 'xoxb-test',
+        appToken: 'xapp-test',
+        signingSecret: 'test-secret',
+        channelId: 'C-test',
+        anthropicApiKey: 'test-key',
+        useTypingIndicator: true,
+        immediateAckEmoji: 'hourglass',
+      });
+
+      mockSendMessage.mockResolvedValue('Reply from Claude');
+      mockPlanConversation.planSubmitted = false;
+      mockPlanConversation.submittedPlan = null;
+
+      await surfaceWithTyping.start(async () => {});
+
+      const app = surfaceWithTyping.getApp() as any;
+      const mentionHandler = app._eventHandlers.find((h: MockHandler) => h.pattern === 'app_mention')?.handler;
+
+      const say = vi.fn();
+      await mentionHandler({
+        event: { text: '<@U_BOT> help me', ts: '3333.0000', thread_ts: undefined, user: 'U123' },
+        say,
+      });
+
+      // Should add reaction at start
+      expect(app.client.reactions.add).toHaveBeenCalledWith({
+        channel: 'C-test',
+        timestamp: '3333.0000',
+        name: 'hourglass',
+      });
+
+      // Should remove reaction after response
+      expect(app.client.reactions.remove).toHaveBeenCalledWith({
+        channel: 'C-test',
+        timestamp: '3333.0000',
+        name: 'hourglass',
+      });
+
+      // Should post reply
+      expect(say).toHaveBeenCalledWith(expect.objectContaining({ text: 'Reply from Claude' }));
+    });
+
+    it('does not add reaction when useTypingIndicator is false', async () => {
+      const surfaceNoTyping = new SlackSurface({
+        botToken: 'xoxb-test',
+        appToken: 'xapp-test',
+        signingSecret: 'test-secret',
+        channelId: 'C-test',
+        anthropicApiKey: 'test-key',
+        useTypingIndicator: false,
+      });
+
+      mockSendMessage.mockResolvedValue('Reply');
+      mockPlanConversation.planSubmitted = false;
+      mockPlanConversation.submittedPlan = null;
+
+      await surfaceNoTyping.start(async () => {});
+
+      const app = surfaceNoTyping.getApp() as any;
+      const mentionHandler = app._eventHandlers.find((h: MockHandler) => h.pattern === 'app_mention')?.handler;
+
+      const say = vi.fn();
+      await mentionHandler({
+        event: { text: '<@U_BOT> test', ts: '4444.0000', thread_ts: undefined, user: 'U123' },
+        say,
+      });
+
+      // Should NOT add or remove reactions
+      expect(app.client.reactions.add).not.toHaveBeenCalled();
+      expect(app.client.reactions.remove).not.toHaveBeenCalled();
     });
   });
 });

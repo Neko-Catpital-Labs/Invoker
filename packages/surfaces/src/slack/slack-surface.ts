@@ -37,6 +37,14 @@ export interface SlackSurfaceConfig {
   defaultBranch?: string;
   /** Optional structured log callback for activity tracking. */
   log?: LogFn;
+  /** Enable immediate acknowledgment when bot receives a message. Default: true. */
+  enableImmediateAck?: boolean;
+  /** Custom message for immediate acknowledgment. Default: 'Processing your request...'. */
+  immediateAckMessage?: string;
+  /** Custom emoji for immediate acknowledgment reaction. Default: ':thinking_face:'. */
+  immediateAckEmoji?: string;
+  /** Use typing indicator (emoji reaction) as acknowledgment method. Default: false. */
+  useTypingIndicator?: boolean;
 }
 
 // ── ConversationLike ─────────────────────────────────────────
@@ -68,6 +76,10 @@ export class SlackSurface implements Surface {
   private botUserId?: string;
   private adminUserIds: Set<string>;
   private log: LogFn;
+  private enableImmediateAck: boolean;
+  private immediateAckMessage: string;
+  private immediateAckEmoji: string;
+  private useTypingIndicator: boolean;
   /** Session lifecycle metrics */
   private sessionMetrics = {
     created: 0,
@@ -75,6 +87,8 @@ export class SlackSurface implements Surface {
     deleted: 0,
     errors: 0,
   };
+  /** Maps thread_ts → acknowledgment message timestamp */
+  private ackMessages = new Map<string, string>();
 
   constructor(config: SlackSurfaceConfig) {
     this.app = new App({
@@ -90,6 +104,10 @@ export class SlackSurface implements Surface {
     this.defaultBranch = config.defaultBranch;
     this.conversationRepo = config.conversationRepo;
     this.adminUserIds = new Set(config.adminUserIds ?? []);
+    this.enableImmediateAck = config.enableImmediateAck ?? true;
+    this.immediateAckMessage = config.immediateAckMessage ?? 'Processing your request...';
+    this.immediateAckEmoji = config.immediateAckEmoji ?? 'thinking_face';
+    this.useTypingIndicator = config.useTypingIndicator ?? false;
     this.log = config.log ?? ((source, level, msg) => {
       const fn = level === 'error' ? console.error : console.log;
       fn(`[${source}] ${msg}`);
@@ -255,6 +273,25 @@ export class SlackSurface implements Surface {
       }
 
       const threadTs = event.thread_ts ?? event.ts;
+
+      // Send immediate acknowledgment if enabled
+      if (this.enableImmediateAck) {
+        try {
+          const ackResult = await say({
+            text: this.immediateAckMessage,
+            thread_ts: threadTs,
+          });
+          // Store the ack message timestamp for potential future cleanup
+          if (ackResult?.ts) {
+            this.ackMessages.set(threadTs, ackResult.ts);
+          }
+          this.log('slack', 'info', `[ACK] Sent immediate acknowledgment (thread_ts=${threadTs})`);
+        } catch (err) {
+          this.log('slack', 'error', `[ACK] Failed to send immediate acknowledgment: ${err}`);
+          // Don't fail the request if ack fails - continue processing
+        }
+      }
+
       this.log('slack', 'info', `[TRACE] getSession start (channelId=${this.channelId}, threadTs=${threadTs}, userId=${event.user}, create=true)`);
       const conversation = await this.getSession(this.channelId, threadTs, event.user ?? 'unknown');
       this.log('slack', 'info', `[TRACE] getSession returned ${conversation ? 'session' : 'null'} (threadTs=${threadTs})`);
@@ -302,11 +339,36 @@ export class SlackSurface implements Surface {
   ): Promise<void> {
     this.log('slack', 'info', `[TRACE] handleConversationMessage (thread_ts=${threadTs}, text="${text.slice(0, 80)}")`);
 
+    // Start typing indicator if enabled
+    const typingStarted = await this.startTypingIndicator(this.channelId, threadTs);
+
     try {
       const reply = await conversation.sendMessage(text);
       this.log('slack', 'info', `[TRACE] conversation.sendMessage returned (threadTs=${threadTs}, replyLen=${reply.length}, planSubmitted=${conversation.planSubmitted})`);
-      const sanitized = sanitizeSlashCommands(reply);
-      await say({ text: sanitized, thread_ts: threadTs });
+
+      // Stop typing indicator before sending response
+      if (typingStarted) {
+        await this.stopTypingIndicator(this.channelId, threadTs);
+      }
+
+      const sanitized = truncateForSlack(sanitizeSlashCommands(reply));
+
+      // Check if we have a stored ack message to replace
+      const ackTs = this.ackMessages.get(threadTs);
+      if (ackTs) {
+        const updated = await this.updateMessage(ackTs, { text: sanitized, blocks: [] });
+        this.ackMessages.delete(threadTs);
+        if (updated) {
+          this.log('slack', 'info', `[ACK] Replaced immediate acknowledgment with actual response (thread_ts=${threadTs}, ack_ts=${ackTs})`);
+        } else {
+          this.log('slack', 'warn', `[ACK] Failed to replace ack, falling back to new message (thread_ts=${threadTs}, ack_ts=${ackTs})`);
+          await this.deleteMessage(ackTs);
+          await say({ text: sanitized, thread_ts: threadTs });
+        }
+      } else {
+        // No ack message to replace, post as normal
+        await say({ text: sanitized, thread_ts: threadTs });
+      }
 
       if (conversation.planSubmitted && conversation.submittedPlan) {
         this.log('slack', 'info', `[SESSION_SUBMIT] Plan submitted via confirmation (thread_ts=${threadTs}, plan="${conversation.submittedPlan.name}")`);
@@ -318,6 +380,11 @@ export class SlackSurface implements Surface {
         this.cleanupSession(threadTs, 'plan_submitted');
       }
     } catch (err) {
+      // Stop typing indicator on error
+      if (typingStarted) {
+        await this.stopTypingIndicator(this.channelId, threadTs);
+      }
+
       this.log('slack', 'error', `[SESSION_ERROR] Plan conversation error (thread_ts=${threadTs}): ${err}`);
       this.sessionMetrics.errors++;
       await say({
@@ -588,6 +655,44 @@ export class SlackSurface implements Surface {
 
   // ── Slack API Helpers ───────────────────────────────────
 
+  /**
+   * Start typing indicator by adding emoji reaction to a message.
+   * Returns true if reaction was added successfully.
+   */
+  private async startTypingIndicator(channel: string, timestamp: string): Promise<boolean> {
+    if (!this.useTypingIndicator) return false;
+    try {
+      await this.app.client.reactions.add({
+        channel,
+        timestamp,
+        name: this.immediateAckEmoji,
+      });
+      this.log('slack', 'info', `[TYPING] Started indicator (ts=${timestamp})`);
+      return true;
+    } catch (err) {
+      this.log('slack', 'error', `[TYPING] Failed to start indicator: ${err}`);
+      return false;
+    }
+  }
+
+  /**
+   * Stop typing indicator by removing emoji reaction from a message.
+   */
+  private async stopTypingIndicator(channel: string, timestamp: string): Promise<void> {
+    if (!this.useTypingIndicator) return;
+    try {
+      await this.app.client.reactions.remove({
+        channel,
+        timestamp,
+        name: this.immediateAckEmoji,
+      });
+      this.log('slack', 'info', `[TYPING] Stopped indicator (ts=${timestamp})`);
+    } catch (err) {
+      // Silently ignore removal failures (reaction may not exist)
+      this.log('slack', 'info', `[TYPING] Could not remove indicator (may not exist): ${err}`);
+    }
+  }
+
   private async postMessage(message: SlackMessage): Promise<string | undefined> {
     try {
       const result = await this.app.client.chat.postMessage({
@@ -603,7 +708,7 @@ export class SlackSurface implements Surface {
     }
   }
 
-  private async updateMessage(ts: string, message: SlackMessage): Promise<void> {
+  private async updateMessage(ts: string, message: SlackMessage): Promise<boolean> {
     try {
       await this.app.client.chat.update({
         channel: this.channelId,
@@ -611,8 +716,21 @@ export class SlackSurface implements Surface {
         text: message.text,
         blocks: message.blocks as any,
       });
+      return true;
     } catch (err) {
       this.log('slack', 'error', `Failed to update message: ${err}`);
+      return false;
+    }
+  }
+
+  private async deleteMessage(ts: string): Promise<void> {
+    try {
+      await this.app.client.chat.delete({
+        channel: this.channelId,
+        ts,
+      });
+    } catch (err) {
+      this.log('slack', 'error', `Failed to delete message: ${err}`);
     }
   }
 
@@ -630,6 +748,14 @@ export class SlackSurface implements Surface {
 }
 
 // ── Helpers ──────────────────────────────────────────────────
+
+const SLACK_MAX_TEXT_LENGTH = 39_000;
+
+export function truncateForSlack(text: string): string {
+  if (text.length <= SLACK_MAX_TEXT_LENGTH) return text;
+  const suffix = '\n... (message truncated)';
+  return text.slice(0, SLACK_MAX_TEXT_LENGTH - suffix.length) + suffix;
+}
 
 /**
  * Strip hallucinated /invoker commands from LLM responses.

@@ -83,6 +83,7 @@ export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar
   protected emitComplete(executionId: string, response: WorkResponse): void {
     const entry = this.entries.get(executionId);
     if (!entry) return;
+    if (entry.completionResponse) return;
     if (entry.heartbeatTimer) {
       clearInterval(entry.heartbeatTimer);
       entry.heartbeatTimer = undefined;
