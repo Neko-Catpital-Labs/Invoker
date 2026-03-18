@@ -1544,6 +1544,57 @@ describe('BaseFamiliar.restoreBranch', () => {
   });
 });
 
+// ── Branch lifecycle integration ────────────────────────
+
+describe('Branch lifecycle: ensureFeatureBranch -> setupTaskBranch -> restoreBranch', () => {
+  let familiar: TestFamiliar;
+  let tmpDir: string;
+
+  beforeEach(() => {
+    familiar = new TestFamiliar();
+    tmpDir = createTempRepo();
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('restores to the original branch, not the feature branch', async () => {
+    const startBranch = execSync('git branch --show-current', { cwd: tmpDir }).toString().trim();
+    expect(startBranch).toBe('master');
+
+    await familiar.testEnsureFeatureBranch(tmpDir, 'plan/my-feature');
+    const afterEnsure = execSync('git branch --show-current', { cwd: tmpDir }).toString().trim();
+    expect(afterEnsure).toBe('plan/my-feature');
+
+    const handle = { executionId: 'test-exec', taskId: 'test-task' } as FamiliarHandle;
+    const req = makeRequest('test-task', { baseBranch: 'plan/my-feature' });
+    const setupOriginal = await familiar.testSetupTaskBranch(tmpDir, req, handle);
+    expect(setupOriginal).toBe('plan/my-feature');
+
+    const taskBranch = execSync('git branch --show-current', { cwd: tmpDir }).toString().trim();
+    expect(taskBranch).toBe('invoker/test-task');
+
+    await familiar.testRestoreBranch(tmpDir, startBranch);
+    const finalBranch = execSync('git branch --show-current', { cwd: tmpDir }).toString().trim();
+    expect(finalBranch).toBe('master');
+  });
+
+  it('full lifecycle without featureBranch stays on original branch', async () => {
+    const startBranch = execSync('git branch --show-current', { cwd: tmpDir }).toString().trim();
+    expect(startBranch).toBe('master');
+
+    const handle = { executionId: 'test-exec', taskId: 'test-task' } as FamiliarHandle;
+    const req = makeRequest('test-task');
+    const setupOriginal = await familiar.testSetupTaskBranch(tmpDir, req, handle);
+    expect(setupOriginal).toBe('master');
+
+    await familiar.testRestoreBranch(tmpDir, setupOriginal);
+    const finalBranch = execSync('git branch --show-current', { cwd: tmpDir }).toString().trim();
+    expect(finalBranch).toBe('master');
+  });
+});
+
 // ── Sync hooks ──────────────────────────────────────────
 
 describe('BaseFamiliar.syncFromRemote', () => {

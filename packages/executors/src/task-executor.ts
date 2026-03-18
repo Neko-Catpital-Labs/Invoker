@@ -370,6 +370,7 @@ export class TaskExecutor {
       };
     }
 
+    this.persistence.updateTask(task.id, { config: { familiarType: 'local' } });
     this.callbacks.onComplete?.(task.id, response);
     const newlyStarted = this.orchestrator.handleWorkerResponse(response) ?? [];
     if (newlyStarted.length > 0) {
