@@ -1488,8 +1488,15 @@ function setupGuiMode(): void {
 
         // x-terminal-emulator wrappers (e.g. gnome-terminal.wrapper) silently
         // drop --working-directory. Use -e with an explicit cd instead.
-        const termArgs = spec.command
-          ? ['-e', 'bash', '-c', `cd '${cwd}' && ${[spec.command, ...(spec.args ?? [])].map(a => `'${a}'`).join(' ')}; echo ""; echo "Exit code: $?"; echo "Press Enter to close..."; read`]
+        const cmdStr = spec.command
+          ? [spec.command, ...(spec.args ?? [])].map(a => `'${a}'`).join(' ')
+          : undefined;
+        const isClaudeSession = spec.command === 'claude';
+        const suffix = isClaudeSession
+          ? '; exec bash'
+          : '; echo ""; echo "Exit code: $?"; echo "Press Enter to close..."; read';
+        const termArgs = cmdStr
+          ? ['-e', 'bash', '-c', `cd '${cwd}' && ${cmdStr}${suffix}`]
           : ['-e', 'bash', '-c', `cd '${cwd}' && exec bash`];
 
         console.log(`[open-terminal] spawning x-terminal-emulator with args: ${JSON.stringify(termArgs)}`);
