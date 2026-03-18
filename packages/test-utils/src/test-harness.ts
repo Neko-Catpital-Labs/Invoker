@@ -13,7 +13,7 @@ export interface TestHarness {
   git: MockGit;
 
   /** Load a plan and start execution. Returns started tasks. */
-  loadAndStart(plan: PlanDefinition): TaskState[];
+  loadAndStart(plan: PlanDefinition, opts?: { allowGraphMutation?: boolean }): TaskState[];
 
   /** Simulate a task completing (as if a familiar finished). Returns newly started tasks. */
   completeTask(taskId: string, extras?: Partial<WorkResponse['outputs']>): TaskState[];
@@ -62,8 +62,8 @@ export function createTestHarness(opts?: { maxConcurrency?: number }): TestHarne
     bus,
     git,
 
-    loadAndStart(plan: PlanDefinition): TaskState[] {
-      orchestrator.loadPlan(plan);
+    loadAndStart(plan: PlanDefinition, loadOpts?: { allowGraphMutation?: boolean }): TaskState[] {
+      orchestrator.loadPlan(plan, loadOpts);
       return orchestrator.startExecution();
     },
 

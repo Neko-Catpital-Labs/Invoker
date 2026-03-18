@@ -611,7 +611,7 @@ describe('Flow 6b: set-merge-branch', () => {
 
   it('multiple workflows have independent baseBranch values', () => {
     h.loadAndStart(PARALLEL_PLAN);
-    h.loadAndStart({ ...LINEAR_PLAN, name: 'Linear Plan 2', baseBranch: 'develop' });
+    h.loadAndStart({ ...LINEAR_PLAN, name: 'Linear Plan 2', baseBranch: 'develop' }, { allowGraphMutation: true });
 
     const workflows = h.persistence.listWorkflows();
     expect(workflows.length).toBe(2);

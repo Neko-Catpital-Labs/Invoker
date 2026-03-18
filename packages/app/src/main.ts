@@ -44,6 +44,7 @@ import {
 } from '@invoker/executors';
 import type { TaskOutputData } from './types.js';
 import { loadConfig, type InvokerConfig } from './config.js';
+import { backupPlan } from './plan-backup.js';
 import { startApiServer, type ApiServer } from './api-server.js';
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
@@ -184,7 +185,8 @@ async function wireSlackBot(deps: SlackBotDeps): Promise<any> {
         deps.logFn('trace', 'info', `slackBot: loading plan "${command.plan.name}" (${command.plan.tasks.length} tasks)`);
         deps.onStartPlan?.();
         deps.onPlanLoaded?.(command.plan);
-        orchestrator.loadPlan(command.plan);
+        backupPlan(command.plan);
+        orchestrator.loadPlan(command.plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
         const started = orchestrator.startExecution();
         deps.logFn('trace', 'info', `slackBot: startExecution returned ${started.length} tasks: [${started.map((t: any) => t.id).join(', ')}]`);
         await deps.executor.executeTasks(started);
@@ -328,10 +330,13 @@ ${BOLD}Usage:${RESET}
 async function headlessRun(planPath: string): Promise<void> {
   if (!planPath) throw new Error('Missing plan file. Usage: --headless run <plan.yaml>');
 
+  const { readFile } = await import('node:fs/promises');
   const { parsePlanFile } = await import('./plan-parser.js');
   const { formatTaskStatus, formatWorkflowStatus } = await import('./formatter.js');
 
+  const yamlSource = await readFile(planPath, 'utf-8');
   const plan = await parsePlanFile(planPath, repoRoot);
+  backupPlan(plan, yamlSource);
   console.log(`${BOLD}Loading plan: ${plan.name}${RESET}`);
   console.log(`Tasks: ${plan.tasks.length}\n`);
 
@@ -374,7 +379,7 @@ async function headlessRun(planPath: string): Promise<void> {
   const api = startApiServer({ orchestrator, persistence, familiarRegistry, taskExecutor });
 
   const wfIdsBefore = new Set(orchestrator.getWorkflowIds());
-  orchestrator.loadPlan(plan);
+  orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
   const currentWorkflowId = orchestrator.getWorkflowIds().find((id) => !wfIdsBefore.has(id));
 
   const started = orchestrator.startExecution();
@@ -954,7 +959,8 @@ function setupGuiMode(): void {
     ipcMain.handle('invoker:load-plan', (_event, plan: PlanDefinition) => {
       console.log(`[ipc] load-plan: "${plan.name}" (${plan.tasks.length} tasks)`);
       taskHandles.clear();
-      orchestrator.loadPlan(plan);
+      backupPlan(plan);
+      orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
     });
 
     ipcMain.handle('invoker:start', async () => {

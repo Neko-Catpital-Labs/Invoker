@@ -32,6 +32,13 @@ export interface InvokerConfig {
    * Default: false
    */
   disableAutoRunOnStartup?: boolean;
+  /**
+   * Allow plans with task IDs that overlap existing workflows.
+   * When false (default), submitting a plan whose task IDs already exist
+   * in an active workflow will be rejected with an error message.
+   * Set to true to permit intentional graph mutation.
+   */
+  allowGraphMutation?: boolean;
 }
 
 function readJsonSafe(path: string): InvokerConfig {

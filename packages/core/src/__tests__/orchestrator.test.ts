@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { Orchestrator } from '../orchestrator.js';
+import { Orchestrator, PlanConflictError } from '../orchestrator.js';
 import type { PlanDefinition, OrchestratorPersistence, OrchestratorMessageBus } from '../orchestrator.js';
 import type { TaskState, TaskDelta, TaskStateChanges } from '../task-types.js';
 import type { WorkResponse } from '@invoker/protocol';
@@ -243,6 +243,84 @@ describe('Orchestrator', () => {
       expect(persistence.tasks.size).toBe(3);
       expect(persistence.tasks.has('t1')).toBe(true);
       expect(persistence.tasks.has('t2')).toBe(true);
+    });
+
+    it('throws PlanConflictError when task IDs overlap with existing workflow', () => {
+      const plan: PlanDefinition = {
+        name: 'plan-A',
+        tasks: [
+          { id: 'shared-task', description: 'A task' },
+        ],
+      };
+      orchestrator.loadPlan(plan);
+
+      const plan2: PlanDefinition = {
+        name: 'plan-B',
+        tasks: [
+          { id: 'shared-task', description: 'Same task ID' },
+        ],
+      };
+      expect(() => orchestrator.loadPlan(plan2)).toThrow(PlanConflictError);
+    });
+
+    it('includes conflicting task IDs and workflow info in PlanConflictError', () => {
+      orchestrator.loadPlan({
+        name: 'Original Plan',
+        tasks: [
+          { id: 'task-x', description: 'X' },
+          { id: 'task-y', description: 'Y', dependencies: ['task-x'] },
+        ],
+      });
+
+      try {
+        orchestrator.loadPlan({
+          name: 'Duplicate Plan',
+          tasks: [
+            { id: 'task-y', description: 'Y again' },
+          ],
+        });
+        expect.unreachable('should have thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(PlanConflictError);
+        const conflict = err as PlanConflictError;
+        expect(conflict.conflictingTaskIds).toContain('task-y');
+        expect(conflict.conflictingWorkflows.length).toBeGreaterThan(0);
+        expect(conflict.conflictingWorkflows[0].name).toBe('Original Plan');
+        expect(conflict.message).toContain('task-y');
+        expect(conflict.message).toContain('allowGraphMutation');
+      }
+    });
+
+    it('allows overlapping IDs when allowGraphMutation is true', () => {
+      orchestrator.loadPlan({
+        name: 'plan-A',
+        tasks: [{ id: 'overlap', description: 'A' }],
+      });
+
+      expect(() =>
+        orchestrator.loadPlan(
+          { name: 'plan-B', tasks: [{ id: 'overlap', description: 'B' }] },
+          { allowGraphMutation: true },
+        ),
+      ).not.toThrow();
+
+      const task = orchestrator.getTask('overlap');
+      expect(task).toBeDefined();
+      expect(task!.description).toBe('B');
+    });
+
+    it('allows non-overlapping plans without allowGraphMutation', () => {
+      orchestrator.loadPlan({
+        name: 'plan-A',
+        tasks: [{ id: 'unique-a', description: 'A' }],
+      });
+
+      expect(() =>
+        orchestrator.loadPlan({
+          name: 'plan-B',
+          tasks: [{ id: 'unique-b', description: 'B' }],
+        }),
+      ).not.toThrow();
     });
   });
 
