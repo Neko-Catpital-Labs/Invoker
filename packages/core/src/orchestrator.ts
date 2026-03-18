@@ -29,6 +29,19 @@ import { ActionGraph } from '@invoker/graph';
 const TASK_DELTA_CHANNEL = 'task.delta';
 let workflowCounter = 0;
 
+// ── Errors ──────────────────────────────────────────────────
+
+export class PlanConflictError extends Error {
+  constructor(
+    message: string,
+    public readonly conflictingTaskIds: string[],
+    public readonly conflictingWorkflows: Array<{ id: string; name: string }>,
+  ) {
+    super(message);
+    this.name = 'PlanConflictError';
+  }
+}
+
 // ── Adapter Interfaces ──────────────────────────────────────
 
 export interface OrchestratorPersistence {
@@ -221,7 +234,37 @@ export class Orchestrator {
    * Parse a plan definition and create tasks with dependencies.
    * Persists workflow and tasks, publishes deltas via MessageBus.
    */
-  loadPlan(plan: PlanDefinition): void {
+  loadPlan(plan: PlanDefinition, opts?: { allowGraphMutation?: boolean }): void {
+    if (!opts?.allowGraphMutation) {
+      const newIds = new Set(plan.tasks.map((t) => t.id));
+      const existingTasks = this.stateMachine.getAllTasks();
+      const overlapping = existingTasks.filter(
+        (t) => newIds.has(t.id) && !t.config.isMergeNode,
+      );
+
+      if (overlapping.length > 0) {
+        const wfIds = new Set(overlapping.map((t) => t.config.workflowId).filter(Boolean) as string[]);
+        const workflows = this.persistence.listWorkflows();
+        const wfLookup = new Map(workflows.map((w) => [w.id, w.name]));
+        const conflictingWorkflows = [...wfIds].map((id) => ({
+          id,
+          name: wfLookup.get(id) ?? 'unknown',
+        }));
+        const conflictingIds = [...new Set(overlapping.map((t) => t.id))];
+        const wfSummary = conflictingWorkflows.map((w) => `"${w.name}" (${w.id})`).join(', ');
+
+        throw new PlanConflictError(
+          `Plan submission blocked: task IDs [${conflictingIds.join(', ')}] already exist ` +
+          `in workflow ${wfSummary}.\n\n` +
+          `Submitting this plan would modify the existing workflow's task graph. ` +
+          `If this is intentional, set "allowGraphMutation": true in ` +
+          `~/.invoker/config.json or <repoDir>/.invoker.json.`,
+          conflictingIds,
+          conflictingWorkflows,
+        );
+      }
+    }
+
     const workflowId = `wf-${Date.now()}-${++workflowCounter}`;
     this.activeWorkflowIds.add(workflowId);
 
