@@ -26,6 +26,12 @@ export interface InvokerConfig {
   utilizationRules?: Array<{ pattern: string; utilization: number | 'max' }>;
   /** Default utilization when no rule matches. Default: 50 */
   defaultUtilization?: number;
+  /**
+   * When true, skip relaunching orphaned running tasks on GUI startup.
+   * Useful when you want to inspect state before tasks resume automatically.
+   * Default: false
+   */
+  disableAutoRunOnStartup?: boolean;
 }
 
 function readJsonSafe(path: string): InvokerConfig {
