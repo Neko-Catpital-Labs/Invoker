@@ -11,7 +11,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { SlackSurface, truncateForSlack } from '../slack/slack-surface.js';
+import { SlackSurface, splitForSlack } from '../slack/slack-surface.js';
 import type { SurfaceCommand } from '../surface.js';
 
 // ── Mock @slack/bolt ────────────────────────────────────────
@@ -668,20 +668,67 @@ describe('SlackSurface Immediate Response - Integration Tests', () => {
   });
 });
 
-describe('truncateForSlack', () => {
-  it('returns short text unchanged', () => {
-    expect(truncateForSlack('hello')).toBe('hello');
+describe('splitForSlack', () => {
+  it('returns short text as a single chunk', () => {
+    expect(splitForSlack('hello')).toEqual(['hello']);
   });
 
-  it('truncates text exceeding the limit', () => {
-    const long = 'x'.repeat(40_000);
-    const result = truncateForSlack(long);
-    expect(result.length).toBeLessThanOrEqual(39_000);
-    expect(result).toContain('... (message truncated)');
+  it('returns text at exactly the limit as a single chunk', () => {
+    const exact = 'a'.repeat(3_800);
+    expect(splitForSlack(exact)).toEqual([exact]);
   });
 
-  it('returns text at exactly the limit unchanged', () => {
-    const exact = 'a'.repeat(39_000);
-    expect(truncateForSlack(exact)).toBe(exact);
+  it('splits long text into multiple chunks at paragraph boundaries', () => {
+    const para = 'x'.repeat(2_000);
+    const text = `${para}\n\n${para}\n\n${para}`;
+    const chunks = splitForSlack(text);
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.join('\n\n')).toBe(text);
+    for (const chunk of chunks) {
+      expect(chunk.length).toBeLessThanOrEqual(3_800);
+    }
+  });
+
+  it('splits at single newlines when a paragraph exceeds the limit', () => {
+    const line = 'y'.repeat(100);
+    const lines = Array(60).fill(line);
+    const text = lines.join('\n');
+    const chunks = splitForSlack(text);
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const chunk of chunks) {
+      expect(chunk.length).toBeLessThanOrEqual(3_800);
+    }
+    expect(chunks.join('\n')).toBe(text);
+  });
+
+  it('does not split inside a fenced code block', () => {
+    const before = 'a'.repeat(3_000);
+    const codeBlock = '```yaml\nname: "Test"\ntasks:\n  - id: t1\n    description: "task"\n```';
+    const text = `${before}\n\n${codeBlock}`;
+    const chunks = splitForSlack(text);
+    const hasUnclosedBlock = chunks.some(c => {
+      const fences = (c.match(/^```/gm) || []).length;
+      return fences % 2 !== 0;
+    });
+    expect(hasUnclosedBlock).toBe(false);
+  });
+
+  it('splits an oversized code block with fence close/re-open', () => {
+    const codeLine = '  key: ' + 'v'.repeat(80);
+    const codeLines = Array(80).fill(codeLine);
+    const text = '```yaml\n' + codeLines.join('\n') + '\n```';
+    const chunks = splitForSlack(text);
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const chunk of chunks) {
+      const fences = (chunk.match(/^```/gm) || []).length;
+      expect(fences % 2).toBe(0);
+    }
+  });
+
+  it('accepts a custom limit', () => {
+    const text = 'aaaa\n\nbbbb\n\ncccc';
+    const chunks = splitForSlack(text, 9);
+    expect(chunks.length).toBe(3);
+    expect(chunks).toEqual(['aaaa', 'bbbb', 'cccc']);
   });
 });
