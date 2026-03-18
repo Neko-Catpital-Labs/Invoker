@@ -22,7 +22,7 @@ export const test = base.extend<ElectronFixtures>({
           : []),
         path.resolve(__dirname, '..', '..', 'dist', 'main.js'),
       ],
-      env: { ...process.env, NODE_ENV: 'test' },
+      env: { ...process.env, NODE_ENV: 'test', INVOKER_CLAUDE_FIX_COMMAND: '/bin/true' },
     });
     await use(app);
     await app.close();

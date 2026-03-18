@@ -1375,6 +1375,83 @@ describe('TaskExecutor', () => {
     });
   });
 
+  describe('fixWithClaude', () => {
+    it('throws for nonexistent task', async () => {
+      const orchestrator = { getTask: () => undefined };
+      const executor = new TaskExecutor({
+        orchestrator: orchestrator as any,
+        persistence: {} as any,
+        familiarRegistry: { getDefault: () => ({ type: 'local' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+      });
+      await expect(executor.fixWithClaude('nonexistent', 'output')).rejects.toThrow('not found');
+    });
+
+    it('throws for non-failed/non-running task', async () => {
+      const tasks = new Map<string, TaskState>();
+      tasks.set('pending-task', makeTask({
+        id: 'pending-task',
+        status: 'pending',
+        config: { command: 'npm test' },
+      }));
+      const orchestrator = { getTask: (id: string) => tasks.get(id) };
+      const executor = new TaskExecutor({
+        orchestrator: orchestrator as any,
+        persistence: {} as any,
+        familiarRegistry: { getDefault: () => ({ type: 'local' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+      });
+      await expect(executor.fixWithClaude('pending-task', 'output')).rejects.toThrow('not in a fixable state');
+    });
+
+    it('appends Claude output to task output', async () => {
+      const tasks = new Map<string, TaskState>();
+      tasks.set('fix-task', makeTask({
+        id: 'fix-task',
+        status: 'failed',
+        config: { command: 'npm test' },
+        execution: { branch: 'invoker/fix-task', workspacePath: '/tmp/workspace' },
+      }));
+      const orchestrator = { getTask: (id: string) => tasks.get(id) };
+      const appendTaskOutput = vi.fn();
+      const executor = new TaskExecutor({
+        orchestrator: orchestrator as any,
+        persistence: { appendTaskOutput } as any,
+        familiarRegistry: { getDefault: () => ({ type: 'local' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+      });
+      (executor as any).spawnClaudeFix = async () => 'Fixed the import';
+      await executor.fixWithClaude('fix-task', 'error output here');
+      expect(appendTaskOutput).toHaveBeenCalledWith('fix-task', expect.stringContaining('Fixed the import'));
+    });
+
+    it('does not perform any git checkout', async () => {
+      const tasks = new Map<string, TaskState>();
+      tasks.set('fix-task', makeTask({
+        id: 'fix-task',
+        status: 'failed',
+        config: { command: 'npm test' },
+        execution: { branch: 'invoker/fix-task' },
+      }));
+      const orchestrator = { getTask: (id: string) => tasks.get(id) };
+      const appendTaskOutput = vi.fn();
+      const executor = new TaskExecutor({
+        orchestrator: orchestrator as any,
+        persistence: { appendTaskOutput } as any,
+        familiarRegistry: { getDefault: () => ({ type: 'local' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp/repo',
+      });
+      const gitCalls: string[][] = [];
+      (executor as any).execGit = async (args: string[]) => {
+        gitCalls.push([...args]);
+        return '';
+      };
+      (executor as any).spawnClaudeFix = async () => '';
+      await executor.fixWithClaude('fix-task', 'error output');
+      expect(gitCalls.find(c => c[0] === 'checkout')).toBeUndefined();
+    });
+  });
+
   describe('merge commit messages include task descriptions', () => {
     it('consolidateAndMerge includes task description in merge -m', async () => {
       const tasks = new Map<string, TaskState>();

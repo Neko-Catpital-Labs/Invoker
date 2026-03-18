@@ -173,6 +173,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       'ALTER TABLE tasks ADD COLUMN experiments TEXT',
       'ALTER TABLE tasks ADD COLUMN selected_experiments TEXT',
       'ALTER TABLE tasks ADD COLUMN utilization INTEGER',
+      'ALTER TABLE tasks ADD COLUMN pending_fix_error TEXT',
     ];
     for (const sql of migrations) {
       try { this.db.exec(sql); } catch { /* Column already exists */ }
@@ -271,7 +272,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         familiar_type, claude_session_id, workspace_path, container_id,
         action_request_id, experiments,
         created_at, started_at, completed_at, last_heartbeat_at,
-        utilization
+        utilization, pending_fix_error
       ) VALUES (
         ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?, ?,
@@ -284,7 +285,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         ?, ?, ?, ?,
         ?, ?,
         ?, ?, ?, ?,
-        ?
+        ?, ?
       )
     `).run(
       task.id, workflowId, task.description, task.status,
@@ -316,6 +317,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       exec.completedAt?.toISOString() ?? null,
       exec.lastHeartbeatAt?.toISOString() ?? null,
       cfg.utilization ?? null,
+      exec.pendingFixError ?? null,
     );
   }
 
@@ -395,6 +397,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         workspacePath: 'workspace_path',
         containerId: 'container_id',
         selectedExperiment: 'selected_experiment',
+        pendingFixError: 'pending_fix_error',
       };
       const execDateMap: Record<string, string> = {
         startedAt: 'started_at',
@@ -767,6 +770,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         selectedExperiment: row.selected_experiment ?? undefined,
         selectedExperiments: row.selected_experiments ? JSON.parse(row.selected_experiments) : undefined,
         experimentResults: row.experiment_results ? JSON.parse(row.experiment_results) : undefined,
+        pendingFixError: row.pending_fix_error ?? undefined,
       },
     };
   }

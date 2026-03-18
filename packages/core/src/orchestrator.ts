@@ -445,6 +445,24 @@ export class Orchestrator {
     this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
   }
 
+  setFixAwaitingApproval(taskId: string, originalError: string): void {
+    this.refreshFromDb();
+    const task = this.stateMachine.getTask(taskId);
+    if (!task) throw new Error(`Task ${taskId} not found`);
+    if (task.status !== 'running') throw new Error(`Task ${taskId} is not running (status: ${task.status})`);
+
+    this.scheduler.completeJob(taskId);
+
+    const changes: TaskStateChanges = {
+      status: 'awaiting_approval',
+      execution: { pendingFixError: originalError },
+    };
+    this.writeAndSync(taskId, changes);
+    const delta: TaskDelta = { type: 'updated', taskId, changes };
+    this.persistence.logEvent?.(taskId, 'task.awaiting_approval', changes);
+    this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
+  }
+
   /**
    * Approve a task awaiting approval. Completes it and unblocks dependents.
    */

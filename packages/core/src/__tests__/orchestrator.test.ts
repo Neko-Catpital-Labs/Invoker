@@ -3067,4 +3067,64 @@ describe('Orchestrator', () => {
       expect(task.execution.mergeConflict).toBeUndefined();
     });
   });
+
+  describe('fix-approval flow', () => {
+    beforeEach(() => {
+      orchestrator.loadPlan({
+        name: 'fix-test',
+        tasks: [
+          { id: 'f1', description: 'Root task' },
+          { id: 'f2', description: 'Failing task', dependencies: ['f1'] },
+        ],
+      });
+      orchestrator.startExecution();
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 'f1', status: 'completed', outputs: { exitCode: 0 } }),
+      );
+      orchestrator.handleWorkerResponse(
+        makeResponse({
+          actionId: 'f2',
+          status: 'failed',
+          outputs: { exitCode: 1, error: 'test failed: expected 1 to be 2' },
+        }),
+      );
+      expect(orchestrator.getTask('f2')!.status).toBe('failed');
+      publishedDeltas = [];
+    });
+
+    it('setFixAwaitingApproval transitions to awaiting_approval with pendingFixError', () => {
+      orchestrator.beginConflictResolution('f2');
+      orchestrator.setFixAwaitingApproval('f2', 'test failed: expected 1 to be 2');
+      const task = orchestrator.getTask('f2')!;
+      expect(task.status).toBe('awaiting_approval');
+      expect(task.execution.pendingFixError).toBe('test failed: expected 1 to be 2');
+    });
+
+    it('pendingFixError is readable via getTask', () => {
+      orchestrator.beginConflictResolution('f2');
+      orchestrator.setFixAwaitingApproval('f2', 'original error');
+      expect(orchestrator.getTask('f2')!.execution.pendingFixError).toBe('original error');
+    });
+
+    it('throws if task is not running', () => {
+      expect(() => orchestrator.setFixAwaitingApproval('f2', 'error')).toThrow('is not running');
+    });
+
+    it('restartTask clears the fix state', () => {
+      orchestrator.beginConflictResolution('f2');
+      orchestrator.setFixAwaitingApproval('f2', 'error');
+      orchestrator.restartTask('f2');
+      const task = orchestrator.getTask('f2')!;
+      expect(task.status === 'pending' || task.status === 'running').toBe(true);
+    });
+
+    it('revertConflictResolution restores failed state', () => {
+      orchestrator.beginConflictResolution('f2');
+      orchestrator.setFixAwaitingApproval('f2', 'test failed: expected 1 to be 2');
+      orchestrator.revertConflictResolution('f2', 'test failed: expected 1 to be 2');
+      const task = orchestrator.getTask('f2')!;
+      expect(task.status).toBe('failed');
+      expect(task.execution.error).toBe('test failed: expected 1 to be 2');
+    });
+  });
 });

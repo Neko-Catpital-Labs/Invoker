@@ -284,6 +284,38 @@ describe('SQLiteAdapter', () => {
     });
   });
 
+  describe('pendingFixError persistence', () => {
+    it('round-trips pendingFixError through save and load', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t1', { execution: { pendingFixError: 'build failed' } }));
+      const loaded = adapter.loadTasks('wf-1');
+      expect(loaded[0].execution.pendingFixError).toBe('build failed');
+    });
+
+    it('persists pendingFixError via updateTask', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t1'));
+      adapter.updateTask('t1', { execution: { pendingFixError: 'test error' } });
+      const loaded = adapter.loadTasks('wf-1');
+      expect(loaded[0].execution.pendingFixError).toBe('test error');
+    });
+
+    it('clears pendingFixError via updateTask', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t1', { execution: { pendingFixError: 'error' } }));
+      adapter.updateTask('t1', { execution: { pendingFixError: undefined } });
+      const loaded = adapter.loadTasks('wf-1');
+      expect(loaded[0].execution.pendingFixError).toBeUndefined();
+    });
+
+    it('returns undefined when pendingFixError is not set', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t1'));
+      const loaded = adapter.loadTasks('wf-1');
+      expect(loaded[0].execution.pendingFixError).toBeUndefined();
+    });
+  });
+
   describe('getClaudeSessionId', () => {
     it('returns session ID for a task with one', () => {
       adapter.saveWorkflow(testWorkflow);

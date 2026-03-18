@@ -1116,12 +1116,24 @@ function setupGuiMode(): void {
       orchestrator.provideInput(taskId, input);
     });
 
-    ipcMain.handle('invoker:approve', (_event, taskId: string) => {
-      orchestrator.approve(taskId);
+    ipcMain.handle('invoker:approve', async (_event, taskId: string) => {
+      const task = orchestrator.getTask(taskId);
+      if (task?.execution.pendingFixError !== undefined) {
+        const started = orchestrator.restartTask(taskId);
+        const runnable = started.filter(t => t.status === 'running');
+        await taskExecutor.executeTasks(runnable);
+      } else {
+        orchestrator.approve(taskId);
+      }
     });
 
     ipcMain.handle('invoker:reject', (_event, taskId: string, reason?: string) => {
-      orchestrator.reject(taskId, reason);
+      const task = orchestrator.getTask(taskId);
+      if (task?.execution.pendingFixError !== undefined) {
+        orchestrator.revertConflictResolution(taskId, task.execution.pendingFixError);
+      } else {
+        orchestrator.reject(taskId, reason);
+      }
     });
 
     ipcMain.handle('invoker:select-experiment', async (_event, taskId: string, experimentId: string | string[]) => {
@@ -1249,6 +1261,21 @@ function setupGuiMode(): void {
         throw err;
       }
     });
+
+    ipcMain.handle('invoker:fix-with-claude', async (_event, taskId: string) => {
+      console.log(`[ipc] fix-with-claude: "${taskId}"`);
+      const { savedError } = orchestrator.beginConflictResolution(taskId);
+      try {
+        const output = persistence.getTaskOutput(taskId);
+        await taskExecutor.fixWithClaude(taskId, output);
+        orchestrator.setFixAwaitingApproval(taskId, savedError);
+      } catch (err) {
+        console.error(`[ipc] fix-with-claude failed: ${err}`);
+        orchestrator.revertConflictResolution(taskId, savedError);
+        throw err;
+      }
+    });
+
 
     ipcMain.handle('invoker:edit-task-command', async (_event, taskId: string, newCommand: string) => {
       console.log(`[ipc] edit-task-command: "${taskId}" → "${newCommand}"`);

@@ -124,6 +124,15 @@ export function App() {
     }
   }, []);
 
+  const handleFixWithClaude = useCallback(async (taskId: string) => {
+    setContextMenu(null);
+    try {
+      await window.invoker?.fixWithClaude(taskId);
+    } catch (err) {
+      console.error('Fix with Claude failed:', err);
+    }
+  }, []);
+
   const closeContextMenu = useCallback(() => {
     setContextMenu(null);
   }, []);
@@ -398,6 +407,7 @@ export function App() {
           onRebaseAndRetry={handleRebaseAndRetry}
           onRestartWorkflow={handleRestartWorkflow}
           onResolveConflict={handleResolveConflict}
+          onFixWithClaude={handleFixWithClaude}
           onClose={closeContextMenu}
         />
       )}

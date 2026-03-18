@@ -661,6 +661,58 @@ export class TaskExecutor {
     }
   }
 
+  /**
+   * Fix a failed command task by spawning Claude with the error output.
+   * Claude's output is captured and appended to the task's output stream for auditing.
+   */
+  async fixWithClaude(taskId: string, taskOutput: string): Promise<void> {
+    const task = this.orchestrator.getTask(taskId);
+    if (!task) throw new Error(`Task ${taskId} not found`);
+    if (task.status !== 'failed' && task.status !== 'running') {
+      throw new Error(`Task ${taskId} is not in a fixable state (status: ${task.status})`);
+    }
+
+    const cwd = task.execution.workspacePath ?? this.cwd;
+
+    const errorLines = taskOutput.split('\n').slice(-200).join('\n');
+    const prompt = [
+      `A build/test command failed. Fix the code so the command succeeds.`,
+      ``,
+      `Task: ${task.description}`,
+      `Command: ${task.config.command}`,
+      ``,
+      `Error output (last 200 lines):`,
+      errorLines,
+      ``,
+      `Fix the underlying code issue. Do NOT modify the command itself.`,
+    ].join('\n');
+
+    const output = await this.spawnClaudeFix(prompt, cwd);
+    if (output) {
+      this.persistence.appendTaskOutput(taskId, `\n[Fix with Claude] Output:\n${output}`);
+    }
+    console.log(`[fixWithClaude] Successfully applied fix for ${taskId}`);
+  }
+
+  spawnClaudeFix(prompt: string, cwd: string): Promise<string> {
+    const cmd = process.env.INVOKER_CLAUDE_FIX_COMMAND ?? 'claude';
+    return new Promise<string>((resolve, reject) => {
+      const child = spawn(cmd, ['-p', prompt, '--dangerously-skip-permissions'], {
+        cwd,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      let stdout = '';
+      let stderr = '';
+      child.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
+      child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
+      child.on('close', (code) => {
+        if (code === 0) resolve(stdout);
+        else reject(new Error(`Claude exited with code ${code}: ${stderr.trim()}`));
+      });
+      child.on('error', (err) => reject(err));
+    });
+  }
+
   // ── Private Helpers ──────────────────────────────────────
 
   collectUpstreamBranches(task: TaskState): string[] {
