@@ -1420,6 +1420,7 @@ function setupGuiMode(): void {
         claudeSessionId: persistence.getClaudeSessionId(taskId) ?? undefined,
         containerId: persistence.getContainerId(taskId) ?? undefined,
         workspacePath: persistence.getWorkspacePath(taskId) ?? undefined,
+        branch: persistence.getBranch(taskId) ?? undefined,
       };
       console.log(`[open-terminal] task="${taskId}" meta=${JSON.stringify(meta)}`);
 

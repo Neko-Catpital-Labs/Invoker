@@ -26,6 +26,7 @@ export interface PersistedTaskMeta {
   claudeSessionId?: string;
   containerId?: string;
   workspacePath?: string;
+  branch?: string;
 }
 
 export interface Familiar {
