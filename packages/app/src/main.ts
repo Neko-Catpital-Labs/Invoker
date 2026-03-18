@@ -889,17 +889,21 @@ function setupGuiMode(): void {
 
     // Relaunch tasks stuck in 'running' from a previous session —
     // the child processes are gone after restart, so respawn them.
-    const orphanStarted: TaskState[] = [];
-    for (const task of orchestrator.getAllTasks()) {
-      if (task.status === 'running') {
-        console.log(`[init] relaunching orphaned running task "${task.id}"`);
-        const started = orchestrator.restartTask(task.id);
-        orphanStarted.push(...started.filter(t => t.status === 'running'));
+    if (invokerConfig.disableAutoRunOnStartup) {
+      console.log('[init] auto-run on startup disabled by config — skipping orphan relaunch');
+    } else {
+      const orphanStarted: TaskState[] = [];
+      for (const task of orchestrator.getAllTasks()) {
+        if (task.status === 'running') {
+          console.log(`[init] relaunching orphaned running task "${task.id}"`);
+          const started = orchestrator.restartTask(task.id);
+          orphanStarted.push(...started.filter(t => t.status === 'running'));
+        }
       }
-    }
-    if (orphanStarted.length > 0) {
-      console.log(`[init] relaunched ${orphanStarted.length} orphaned tasks: [${orphanStarted.map(t => t.id).join(', ')}]`);
-      taskExecutor.executeTasks(orphanStarted);
+      if (orphanStarted.length > 0) {
+        console.log(`[init] relaunched ${orphanStarted.length} orphaned tasks: [${orphanStarted.map(t => t.id).join(', ')}]`);
+        taskExecutor.executeTasks(orphanStarted);
+      }
     }
 
     apiServer = startApiServer({
