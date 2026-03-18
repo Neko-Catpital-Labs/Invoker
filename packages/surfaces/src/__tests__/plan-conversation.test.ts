@@ -370,7 +370,7 @@ describe('PlanConversation', () => {
     await conversation.sendMessage('Hello');
     expect(mockSpawn).toHaveBeenCalledWith(
       'cursor',
-      ['-p', expect.any(String)],
+      ['agent', '--print', '--trust', expect.any(String)],
       expect.objectContaining({ stdio: ['ignore', 'pipe', 'pipe'] }),
     );
   });
@@ -385,7 +385,7 @@ describe('PlanConversation', () => {
   it('includes system prompt in cursor prompt', async () => {
     mockCursorResponse('Hi');
     await conversation.sendMessage('Hello');
-    const prompt = mockSpawn.mock.calls[0][1][1] as string;
+    const prompt = mockSpawn.mock.calls[0][1][3] as string;
     expect(prompt).toContain('YAML task plan');
     expect(prompt).toContain('Hello');
   });
@@ -442,7 +442,7 @@ describe('PlanConversation', () => {
     mockCursorResponse('Here is a plan.');
     await conversation.sendMessage('A REST API');
 
-    const secondPrompt = mockSpawn.mock.calls[1][1][1] as string;
+    const secondPrompt = mockSpawn.mock.calls[1][1][3] as string;
     expect(secondPrompt).toContain('Conversation History');
     expect(secondPrompt).toContain('Build an API');
     expect(secondPrompt).toContain('I see, tell me more.');

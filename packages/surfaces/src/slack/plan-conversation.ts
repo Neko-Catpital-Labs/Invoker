@@ -298,7 +298,7 @@ export class PlanConversation {
 
   spawnCursor(prompt: string): Promise<string> {
     return new Promise((resolve, reject) => {
-      const child = spawn(this.cursorCommand, ['-p', prompt], {
+      const child = spawn(this.cursorCommand, ['agent', '--print', '--trust', prompt], {
         cwd: this.workingDir ?? process.cwd(),
         stdio: ['ignore', 'pipe', 'pipe'],
         env: { ...process.env },
