@@ -1441,7 +1441,7 @@ function setupGuiMode(): void {
           familiarRegistry.register('worktree', worktree);
           familiar = worktree;
         } else {
-          familiar = familiarRegistry.getDefault();
+          familiar = familiarRegistry.get('local') ?? familiarRegistry.getDefault();
         }
       }
       console.log(`[open-terminal] task="${taskId}" resolved familiar type="${familiar.type}"`);

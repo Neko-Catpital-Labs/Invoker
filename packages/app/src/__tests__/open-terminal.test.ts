@@ -19,7 +19,7 @@ import {
 } from '@invoker/core';
 import type { TaskStateChanges } from '@invoker/graph';
 import {
-  LocalFamiliar, DockerFamiliar, WorktreeFamiliar,
+  LocalFamiliar, DockerFamiliar, WorktreeFamiliar, FamiliarRegistry,
   type FamiliarHandle, type TerminalSpec, type PersistedTaskMeta,
 } from '@invoker/executors';
 import type { WorkResponse, WorkRequest } from '@invoker/protocol';
@@ -378,5 +378,61 @@ describe('getRestoredTerminalSpec routing', () => {
       };
       expect(() => docker.getRestoredTerminalSpec(meta)).toThrow(/No container ID/);
     });
+  });
+});
+
+// ── Merge gate open-terminal regression ───────────────────────
+
+describe('merge gate open-terminal', () => {
+  afterEach(() => {
+    vi.mocked(existsSync).mockReset();
+  });
+
+  it('resolves merge gate familiar to local', () => {
+    const registry = new FamiliarRegistry();
+    const local = new LocalFamiliar();
+    registry.register('local', local);
+
+    const meta: PersistedTaskMeta = {
+      taskId: '__merge__wf-123',
+      familiarType: 'merge',
+      workspacePath: process.cwd(),
+    };
+
+    let familiar = registry.get(meta.familiarType);
+    if (!familiar) {
+      if (meta.familiarType === 'docker') {
+        /* lazy-register docker */
+      } else if (meta.familiarType === 'worktree') {
+        /* lazy-register worktree */
+      } else {
+        familiar = registry.get('local') ?? registry.getDefault();
+      }
+    }
+
+    expect(familiar).toBe(local);
+    expect(familiar!.type).toBe('local');
+  });
+
+  it('opens terminal with cwd for merge gate task', () => {
+    const registry = new FamiliarRegistry();
+    const local = new LocalFamiliar();
+    registry.register('local', local);
+
+    const meta: PersistedTaskMeta = {
+      taskId: '__merge__wf-123',
+      familiarType: 'merge',
+      workspacePath: process.cwd(),
+    };
+
+    let familiar: any = registry.get(meta.familiarType);
+    if (!familiar) {
+      familiar = registry.get('local') ?? registry.getDefault();
+    }
+
+    vi.mocked(existsSync).mockReturnValue(true);
+    const spec = familiar.getRestoredTerminalSpec(meta);
+    expect(spec.cwd).toBe(process.cwd());
+    expect(spec.command).toBeUndefined();
   });
 });

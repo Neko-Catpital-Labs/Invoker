@@ -780,6 +780,12 @@ describe('TaskExecutor', () => {
         '__merge__wf-1',
         expect.objectContaining({ status: 'completed' }),
       );
+
+      // Should persist familiarType='local' so open-terminal can resolve the familiar
+      expect(persistence.updateTask).toHaveBeenCalledWith(
+        '__merge__wf-1',
+        expect.objectContaining({ config: { familiarType: 'local' } }),
+      );
     });
 
     it('executeMergeNode performs full merge when mergeMode=automatic', async () => {

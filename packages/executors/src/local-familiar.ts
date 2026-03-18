@@ -78,6 +78,11 @@ export class LocalFamiliar extends BaseFamiliar<ProcessEntry> {
     let originalBranch: string | undefined;
     let child: ChildProcess;
     try {
+      // Save the user's current branch BEFORE ensureFeatureBranch switches away
+      try {
+        originalBranch = (await this.execGitSimple(['branch', '--show-current'], cwd)).trim() || undefined;
+      } catch { /* not a git repo */ }
+
       // Create feature branch before spawning if specified
       if (request.inputs.featureBranch && request.inputs.workspacePath) {
         await this.ensureFeatureBranch(
@@ -90,7 +95,8 @@ export class LocalFamiliar extends BaseFamiliar<ProcessEntry> {
       await this.syncFromRemote(cwd, handle.executionId);
 
       // Create task-specific branch based off upstream dependency branch
-      originalBranch = await this.setupTaskBranch(cwd, request, handle);
+      // (ignore its return value — we already captured the real originalBranch above)
+      await this.setupTaskBranch(cwd, request, handle);
 
       child = spawn(cmd, args, {
         stdio: [request.actionType === 'claude' ? 'ignore' : 'pipe', 'pipe', 'pipe'],
