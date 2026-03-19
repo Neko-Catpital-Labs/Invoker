@@ -2530,6 +2530,134 @@ describe('Orchestrator', () => {
 
       expect(orchestrator.getTask('pivot-reconciliation')!.status).toBe('pending');
     });
+
+    it('restartTask clears lastHeartbeatAt from previous run', () => {
+      const testPersistence = new InMemoryPersistence();
+      const testBus = new InMemoryBus();
+
+      // Save a completed task with old heartbeat
+      const oldHeartbeat = new Date(Date.now() - 300000); // 5 minutes ago
+      testPersistence.saveTask('heartbeat-test', {
+        id: 't1',
+        description: 'Task with old heartbeat',
+        status: 'completed',
+        dependencies: [],
+        createdAt: new Date(),
+        config: {},
+        execution: {
+          startedAt: new Date(),
+          completedAt: new Date(),
+          lastHeartbeatAt: oldHeartbeat,
+          exitCode: 0,
+        },
+      });
+
+      const testOrchestrator = new Orchestrator({
+        persistence: testPersistence,
+        messageBus: testBus,
+        maxConcurrency: 3,
+      });
+
+      testOrchestrator.syncFromDb('heartbeat-test');
+      testOrchestrator.restartTask('t1');
+
+      const task = testOrchestrator.getTask('t1')!;
+
+      // After restart, lastHeartbeatAt should either be:
+      // - undefined (if task is pending)
+      // - a fresh timestamp (if task auto-started to running)
+      // It should NOT be the old 5-minute-ago value
+      if (task.execution.lastHeartbeatAt !== undefined) {
+        const timeSinceHeartbeat = Date.now() - task.execution.lastHeartbeatAt.getTime();
+        expect(timeSinceHeartbeat).toBeLessThan(2000); // Should be within last 2 seconds
+      }
+      // Either way, it should not be the old value
+      expect(task.execution.lastHeartbeatAt).not.toEqual(oldHeartbeat);
+    });
+
+    it('restartWorkflow clears lastHeartbeatAt for all tasks', () => {
+      const testPersistence = new InMemoryPersistence();
+      const testBus = new InMemoryBus();
+
+      const oldHeartbeat1 = new Date(Date.now() - 300000); // 5 minutes ago
+      const oldHeartbeat2 = new Date(Date.now() - 180000); // 3 minutes ago
+
+      // Save two independent tasks with old heartbeats
+      testPersistence.saveTask('workflow-heartbeat-test', {
+        id: 't1',
+        description: 'Task 1',
+        status: 'completed',
+        dependencies: [],
+        createdAt: new Date(),
+        config: {},
+        execution: {
+          startedAt: new Date(),
+          completedAt: new Date(),
+          lastHeartbeatAt: oldHeartbeat1,
+          exitCode: 0,
+        },
+      });
+
+      testPersistence.saveTask('workflow-heartbeat-test', {
+        id: 't2',
+        description: 'Task 2',
+        status: 'completed',
+        dependencies: [],
+        createdAt: new Date(),
+        config: {},
+        execution: {
+          startedAt: new Date(),
+          completedAt: new Date(),
+          lastHeartbeatAt: oldHeartbeat2,
+          exitCode: 0,
+        },
+      });
+
+      const testOrchestrator = new Orchestrator({
+        persistence: testPersistence,
+        messageBus: testBus,
+        maxConcurrency: 3,
+      });
+
+      testOrchestrator.syncFromDb('workflow-heartbeat-test');
+      testOrchestrator.restartWorkflow();
+
+      const task1 = testOrchestrator.getTask('t1')!;
+      const task2 = testOrchestrator.getTask('t2')!;
+
+      // Both tasks should have fresh or undefined lastHeartbeatAt
+      if (task1.execution.lastHeartbeatAt !== undefined) {
+        const timeSinceHeartbeat1 = Date.now() - task1.execution.lastHeartbeatAt.getTime();
+        expect(timeSinceHeartbeat1).toBeLessThan(2000);
+      }
+      expect(task1.execution.lastHeartbeatAt).not.toEqual(oldHeartbeat1);
+
+      if (task2.execution.lastHeartbeatAt !== undefined) {
+        const timeSinceHeartbeat2 = Date.now() - task2.execution.lastHeartbeatAt.getTime();
+        expect(timeSinceHeartbeat2).toBeLessThan(2000);
+      }
+      expect(task2.execution.lastHeartbeatAt).not.toEqual(oldHeartbeat2);
+    });
+
+    it('drainScheduler sets lastHeartbeatAt when starting a task', () => {
+      orchestrator.loadPlan({
+        name: 'heartbeat-start-test',
+        tasks: [{ id: 't1', description: 'Task to start', command: 'echo test' }],
+      });
+
+      const beforeStart = Date.now();
+      orchestrator.startExecution();
+      const afterStart = Date.now();
+
+      const task = orchestrator.getTask('t1')!;
+      expect(task.status).toBe('running');
+      expect(task.execution.lastHeartbeatAt).toBeDefined();
+
+      // Verify the heartbeat is recent (within the execution window)
+      const heartbeatTime = task.execution.lastHeartbeatAt!.getTime();
+      expect(heartbeatTime).toBeGreaterThanOrEqual(beforeStart);
+      expect(heartbeatTime).toBeLessThanOrEqual(afterStart + 1000); // Allow 1s tolerance
+    });
   });
 
   // ── Long session resilience ────────────────────────────

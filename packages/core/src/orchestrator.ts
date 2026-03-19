@@ -641,6 +641,7 @@ export class Orchestrator {
         exitCode: undefined,
         blockedBy: undefined,
         commit: undefined,
+        lastHeartbeatAt: undefined,
       },
     };
     this.writeAndSync(taskId, resetChanges);
@@ -730,6 +731,7 @@ export class Orchestrator {
         commit: undefined,
         branch: undefined,
         workspacePath: undefined,
+        lastHeartbeatAt: undefined,
       },
     };
 
@@ -1483,7 +1485,7 @@ export class Orchestrator {
 
       const changes: TaskStateChanges = {
         status: 'running',
-        execution: { startedAt: new Date() },
+        execution: { startedAt: new Date(), lastHeartbeatAt: new Date() },
       };
       const updated = this.writeAndSync(job.taskId, changes);
       started.push(updated);
