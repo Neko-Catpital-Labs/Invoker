@@ -959,6 +959,7 @@ function setupGuiMode(): void {
     const dbPath = path.join(homedir(), '.invoker', 'invoker.db');
     console.log(`[init] Database: ${dbPath}`);
     console.log(`[init] Repo root: ${repoRoot}`);
+    console.log(`[init] Config: disableAutoRunOnStartup=${invokerConfig.disableAutoRunOnStartup ?? false}`);
 
     // ── Start Slack bot if env vars are configured ───
     startSlackBot(taskExecutor, taskHandles).catch((err) => {
