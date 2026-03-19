@@ -96,6 +96,13 @@ Do **not** run `pnpm rebuild better-sqlite3` directly — that rebuilds for syst
 bash scripts/test-worktree-provisioning.sh
 ```
 
+### Familiar tests and git safety
+
+Tests that create real `LocalFamiliar`/`WorktreeFamiliar`/`DockerFamiliar` and call `.start()` run real git via `BaseFamiliar.execGitSimple()`. To prevent repo mutation:
+
+1. **Mock git lifecycle** (for tests that don't need real git): spy on `execGitSimple`, `syncFromRemote`, `setupTaskBranch`, `recordTaskResult`, `restoreBranch`, `pushBranchToRemote`. See `mockGitLifecycle()` in `local-familiar.test.ts`.
+2. **Use a sandbox repo** (for tests that validate git behavior): `mkdtempSync` + `git init`. See `auto-commit.test.ts`, `branch-chain.test.ts`.
+
 ## File Editing Discipline
 
 After making a change with any edit tool, **read the file back from disk** (using the Read tool or `rg` in the Shell) and verify the edit persisted before proceeding. Cursor's in-memory state can silently revert writes. If the change is missing on disk, re-apply it using the Shell tool (e.g. `python3 -c "..."` or `sed`) and verify again. When committing, always `git diff --stat` immediately before `git add` to confirm the working tree contains the expected modifications.

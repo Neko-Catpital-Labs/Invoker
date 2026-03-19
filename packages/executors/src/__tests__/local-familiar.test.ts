@@ -22,9 +22,16 @@ function makeRequest(overrides: Partial<WorkRequest> = {}): WorkRequest {
 }
 
 function mockGitLifecycle(instance: LocalFamiliar): void {
+  vi.spyOn(instance as any, 'execGitSimple').mockImplementation(async (...a: any[]) => {
+    const args = a[0] as string[];
+    if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+    return '';
+  });
+  vi.spyOn(instance as any, 'syncFromRemote').mockResolvedValue(undefined);
   vi.spyOn(instance as any, 'setupTaskBranch').mockResolvedValue(undefined);
   vi.spyOn(instance as any, 'recordTaskResult').mockResolvedValue(null);
   vi.spyOn(instance as any, 'restoreBranch').mockResolvedValue(undefined);
+  vi.spyOn(instance as any, 'pushBranchToRemote').mockResolvedValue(undefined);
 }
 
 describe('LocalFamiliar', () => {
