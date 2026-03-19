@@ -121,6 +121,7 @@ export interface WorkflowMeta {
   name: string;
   status: string;
   baseBranch?: string;
+  featureBranch?: string;
   onFinish?: string;
   mergeMode?: string;
 }

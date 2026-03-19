@@ -16,6 +16,7 @@ interface MergeGateNodeData {
   label: string;
   onFinish: 'merge' | 'pull_request';
   baseBranch?: string;
+  featureBranch?: string;
   mergeMode?: 'manual' | 'automatic';
   workflowId?: string;
   [key: string]: unknown;
@@ -26,7 +27,7 @@ interface MergeGateNodeProps {
 }
 
 export function MergeGateNode({ data }: MergeGateNodeProps) {
-  const { status, label, onFinish, baseBranch, mergeMode = 'manual', workflowId } = data;
+  const { status, label, onFinish, baseBranch, featureBranch, mergeMode = 'manual', workflowId } = data;
   const colors = getStatusColor(status);
   const [error, setError] = useState<string | null>(null);
 
@@ -70,6 +71,15 @@ export function MergeGateNode({ data }: MergeGateNodeProps) {
 
       <div className={`text-xs mt-1 ${colors.text} opacity-80`}>
         {label}
+      </div>
+
+      <div className="flex items-center gap-1 mt-1">
+        <svg className="w-3 h-3 text-gray-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M7 7v10m0-10a2 2 0 11-4 0 2 2 0 014 0zm10 10a2 2 0 104 0 2 2 0 00-4 0zm0 0V7a4 4 0 00-4-4H9" />
+        </svg>
+        <span className="text-xs font-mono text-gray-400 truncate" title={featureBranch ?? 'current'}>
+          {featureBranch ?? 'current'}
+        </span>
       </div>
 
       <div className="flex items-center gap-1 mt-1" data-testid="merge-branch-display">
