@@ -582,7 +582,7 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
     const t0 = Date.now();
     return new Promise((resolve, reject) => {
       const cmd = 'pnpm install --frozen-lockfile && node scripts/rebuild-for-electron.js';
-      const child = spawn('/bin/sh', ['-c', cmd], {
+      const child = spawn('/bin/bash', ['-c', cmd], {
         cwd: dir,
         env: cleanElectronEnv(),
         stdio: ['ignore', 'pipe', 'pipe'],

@@ -2003,7 +2003,7 @@ describe('BaseFamiliar.buildCommandAndArgs', () => {
     const req = makeRequest('act', { command: 'echo hello' });
     req.actionType = 'command';
     const result = familiar.testBuildCommandAndArgs(req);
-    expect(result.cmd).toBe('/bin/sh');
+    expect(result.cmd).toBe('/bin/bash');
     expect(result.args).toEqual(['-c', 'echo hello']);
     expect(result.claudeSessionId).toBeUndefined();
   });
@@ -2028,7 +2028,7 @@ describe('BaseFamiliar.buildCommandAndArgs', () => {
     const req = makeRequest('act', {});
     req.actionType = 'reconciliation';
     const result = familiar.testBuildCommandAndArgs(req);
-    expect(result.cmd).toBe('/bin/sh');
+    expect(result.cmd).toBe('/bin/bash');
     expect(result.args[1]).toContain('Unsupported');
   });
 });

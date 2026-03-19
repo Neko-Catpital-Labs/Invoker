@@ -161,7 +161,7 @@ export class LocalFamiliar extends BaseFamiliar<ProcessEntry> {
         if (err.code === 'ENOENT') {
           entry.fallbackActive = true;
           const prompt = request.inputs.prompt ?? '';
-          const fallbackChild = spawn('/bin/sh', ['-c', `echo "Claude prompt: ${prompt}"`], {
+          const fallbackChild = spawn('/bin/bash', ['-c', `echo "Claude prompt: ${prompt}"`], {
             stdio: ['pipe', 'pipe', 'pipe'],
             cwd: request.inputs.workspacePath,
             detached: true,

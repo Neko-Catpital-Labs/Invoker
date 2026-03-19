@@ -94,7 +94,7 @@ function setupSpawnMock(): {
 
     // Auto-succeed pnpm install (worktree provisioning)
     const argsArr = args as string[] | undefined;
-    if (cmd === '/bin/sh' && argsArr?.[1]?.includes('pnpm install')) {
+    if (cmd === '/bin/bash' && argsArr?.[1]?.includes('pnpm install')) {
       const installProc = createMockProcess();
       Promise.resolve().then(() => installProc.emit('close', 0, null));
       return installProc as any;
@@ -228,7 +228,7 @@ describe('WorktreeFamiliar', () => {
 
     // Find the task spawn call (non-git, non-pnpm-install)
     const taskCall = mockedSpawn.mock.calls.find(
-      ([cmd, args]) => cmd !== 'git' && !(cmd === '/bin/sh' && (args as string[])?.[1]?.includes('pnpm install')),
+      ([cmd, args]) => cmd !== 'git' && !(cmd === '/bin/bash' && (args as string[])?.[1]?.includes('pnpm install')),
     );
     expect(taskCall).toBeDefined();
 
@@ -248,14 +248,14 @@ describe('WorktreeFamiliar', () => {
     await familiar.start(request);
 
     const pnpmCall = mockedSpawn.mock.calls.find(
-      ([cmd, args]) => cmd === '/bin/sh' && (args as string[])?.[1]?.includes('pnpm install'),
+      ([cmd, args]) => cmd === '/bin/bash' && (args as string[])?.[1]?.includes('pnpm install'),
     );
     expect(pnpmCall).toBeDefined();
     expect((pnpmCall![1] as string[])[1]).toContain('--frozen-lockfile');
     expect((pnpmCall![1] as string[])[1]).toContain('rebuild-for-electron');
 
     const taskCall = mockedSpawn.mock.calls.find(
-      ([cmd, args]) => cmd === '/bin/sh' && (args as string[])?.[1] === 'echo hello',
+      ([cmd, args]) => cmd === '/bin/bash' && (args as string[])?.[1] === 'echo hello',
     );
     expect(taskCall).toBeDefined();
 
@@ -341,7 +341,7 @@ describe('WorktreeFamiliar', () => {
 
       // Auto-succeed pnpm install (worktree provisioning)
       const argsArr = args as string[] | undefined;
-      if (cmd === '/bin/sh' && argsArr?.[1]?.includes('pnpm install')) {
+      if (cmd === '/bin/bash' && argsArr?.[1]?.includes('pnpm install')) {
         const installProc = createMockProcess();
         Promise.resolve().then(() => installProc.emit('close', 0, null));
         return installProc as any;
@@ -597,7 +597,7 @@ describe('WorktreeFamiliar', () => {
           });
           return gitProc as any;
         }
-        if (cmd === '/bin/sh' && (args as string[])?.[1]?.includes('pnpm install')) {
+        if (cmd === '/bin/bash' && (args as string[])?.[1]?.includes('pnpm install')) {
           const installProc = createMockProcess();
           Promise.resolve().then(() => installProc.emit('close', 0, null));
           return installProc as any;
@@ -666,7 +666,7 @@ describe('WorktreeFamiliar', () => {
           });
           return gitProc as any;
         }
-        if (cmd === '/bin/sh' && (args as string[])?.[1]?.includes('pnpm install')) {
+        if (cmd === '/bin/bash' && (args as string[])?.[1]?.includes('pnpm install')) {
           const installProc = createMockProcess();
           Promise.resolve().then(() => installProc.emit('close', 0, null));
           return installProc as any;
@@ -875,9 +875,9 @@ describe('WorktreeFamiliar', () => {
       });
       const handle = await claudeFamiliar.start(request);
 
-      // Verify the command is the claude command, not /bin/sh echo
+      // Verify the command is the claude command, not /bin/bash echo
       const taskCall = mockedSpawn.mock.calls.find(
-        ([cmd, args]) => cmd !== 'git' && !(cmd === '/bin/sh' && (args as string[])?.[1]?.includes('pnpm install')),
+        ([cmd, args]) => cmd !== 'git' && !(cmd === '/bin/bash' && (args as string[])?.[1]?.includes('pnpm install')),
       );
       expect(taskCall).toBeDefined();
       expect(taskCall![0]).toBe('/bin/echo');
@@ -917,7 +917,7 @@ describe('WorktreeFamiliar', () => {
       await claudeFamiliar.start(request);
 
       const taskCall = mockedSpawn.mock.calls.find(
-        ([cmd, args]) => cmd !== 'git' && !(cmd === '/bin/sh' && (args as string[])?.[1]?.includes('pnpm install')),
+        ([cmd, args]) => cmd !== 'git' && !(cmd === '/bin/bash' && (args as string[])?.[1]?.includes('pnpm install')),
       );
       const args = taskCall![1] as string[];
       const promptArg = args[args.indexOf('-p') + 1];

@@ -432,13 +432,13 @@ export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar
     if (request.actionType === 'command') {
       const command = request.inputs.command;
       if (!command) throw new Error('WorkRequest with actionType "command" must have inputs.command');
-      return { cmd: '/bin/sh', args: ['-c', command] };
+      return { cmd: '/bin/bash', args: ['-c', command] };
     }
     if (request.actionType === 'claude') {
       const session = this.prepareClaudeSession(request);
       return { cmd: claudeCommand, args: session.cliArgs, claudeSessionId: session.sessionId, fullPrompt: session.fullPrompt };
     }
-    return { cmd: '/bin/sh', args: ['-c', 'echo "Unsupported action type"'] };
+    return { cmd: '/bin/bash', args: ['-c', 'echo "Unsupported action type"'] };
   }
 
   /**

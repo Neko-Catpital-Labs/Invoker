@@ -95,14 +95,14 @@ export class LocalExecutor implements Executor {
       if (!command) {
         throw new Error('WorkRequest with actionType "command" must have inputs.command');
       }
-      cmd = '/bin/sh';
+      cmd = '/bin/bash';
       args = ['-c', command];
     } else if (request.actionType === 'claude') {
       const prompt = request.inputs.prompt ?? '';
       cmd = this.claudeCommand;
       args = ['-p', prompt, '--output-format', 'json'];
     } else {
-      cmd = '/bin/sh';
+      cmd = '/bin/bash';
       args = ['-c', 'echo "Unsupported action type"'];
     }
 
@@ -130,7 +130,7 @@ export class LocalExecutor implements Executor {
         if (err.code === 'ENOENT') {
           entry.fallbackActive = true;
           const prompt = request.inputs.prompt ?? '';
-          const fallbackChild = spawn('/bin/sh', ['-c', `echo "Claude prompt: ${prompt}"`], {
+          const fallbackChild = spawn('/bin/bash', ['-c', `echo "Claude prompt: ${prompt}"`], {
             stdio: ['pipe', 'pipe', 'pipe'],
             cwd: request.inputs.workspacePath,
             detached: true,
