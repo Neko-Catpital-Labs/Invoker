@@ -104,4 +104,26 @@ describe('loadConfig', () => {
     const config = loadConfig(fakeRepo);
     expect(config.planningTimeoutMs).toBe(900000);
   });
+
+  it('reads disableAutoRunOnStartup from user config', () => {
+    writeFileSync(
+      join(fakeHome, '.invoker', 'config.json'),
+      JSON.stringify({ disableAutoRunOnStartup: true }),
+    );
+    const config = loadConfig(fakeRepo);
+    expect(config.disableAutoRunOnStartup).toBe(true);
+  });
+
+  it('repo-level overrides disableAutoRunOnStartup from user-level', () => {
+    writeFileSync(
+      join(fakeHome, '.invoker', 'config.json'),
+      JSON.stringify({ disableAutoRunOnStartup: false }),
+    );
+    writeFileSync(
+      join(fakeRepo, '.invoker.json'),
+      JSON.stringify({ disableAutoRunOnStartup: true }),
+    );
+    const config = loadConfig(fakeRepo);
+    expect(config.disableAutoRunOnStartup).toBe(true);
+  });
 });
