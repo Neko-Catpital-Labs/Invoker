@@ -938,6 +938,8 @@ function setupGuiMode(): void {
 
     rebuildTaskExecutor();
 
+    let startupAutoRunBlocked = !!invokerConfig.disableAutoRunOnStartup;
+
     // Relaunch orphaned running tasks and start any pending-but-ready tasks.
     if (invokerConfig.disableAutoRunOnStartup) {
       console.log('[init] auto-run on startup disabled by config — skipping orphan relaunch');
@@ -1010,6 +1012,7 @@ function setupGuiMode(): void {
     });
 
     ipcMain.handle('invoker:resume-workflow', async () => {
+      startupAutoRunBlocked = false;
       const workflows = persistence.listWorkflows();
       if (workflows.length === 0) {
         console.log(`[ipc] resume-workflow: no workflows found`);
@@ -1386,6 +1389,10 @@ function setupGuiMode(): void {
               const referenceTime = heartbeatTime ?? startedTime;
 
               if (referenceTime && (now - referenceTime) > STALE_HEARTBEAT_MS) {
+                if (startupAutoRunBlocked) {
+                  console.log(`[db-poll] Stale running task "${task.id}": auto-run blocked by config, skipping restart`);
+                  continue;
+                }
                 const ageSeconds = Math.round((now - referenceTime) / 1000);
                 const source = heartbeatTime ? 'last heartbeat' : 'started';
                 console.warn(`[db-poll] Stale running task "${task.id}": ${source} ${ageSeconds}s ago, restarting`);
