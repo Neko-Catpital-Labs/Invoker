@@ -20,6 +20,7 @@ import {
 import type { TaskStateChanges } from '@invoker/graph';
 import {
   LocalFamiliar, DockerFamiliar, WorktreeFamiliar, FamiliarRegistry,
+  BaseFamiliar,
   type FamiliarHandle, type TerminalSpec, type PersistedTaskMeta,
 } from '@invoker/executors';
 import type { WorkResponse, WorkRequest } from '@invoker/protocol';
@@ -163,10 +164,22 @@ describe('open-terminal integration', () => {
     orchestrator = new Orchestrator({ persistence, messageBus: bus });
     taskHandles.clear();
     vi.clearAllMocks();
+
+    // Prevent LocalFamiliar.start() from running real git on the repo.
+    vi.spyOn(BaseFamiliar.prototype as any, 'execGitSimple')
+      .mockImplementation(async (...a: any[]) => {
+        const args = a[0] as string[];
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        if (args[0] === 'rev-parse' && args[1] === 'HEAD') return 'abc123';
+        return '';
+      });
+    vi.spyOn(BaseFamiliar.prototype as any, 'syncFromRemote').mockResolvedValue(undefined);
+    vi.spyOn(BaseFamiliar.prototype as any, 'pushBranchToRemote').mockResolvedValue(undefined);
   });
 
   afterEach(async () => {
     await familiar.destroyAll();
+    vi.restoreAllMocks();
   });
 
   it('runs tasks, gets terminal spec, and spawns external terminal', async () => {
