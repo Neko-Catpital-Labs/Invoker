@@ -12,6 +12,9 @@
  *   4. publish delta    — notify UI
  */
 
+import { appendFileSync, mkdirSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { homedir } from 'node:os';
 import { TaskStateMachine } from './state-machine.js';
 import { ResponseHandler } from './response-handler.js';
 import type { ParsedResponse } from './response-handler.js';
@@ -21,6 +24,14 @@ import type { UtilizationRule } from './resource-estimator.js';
 import type { TaskState, TaskDelta, TaskStateChanges, TaskCreateOptions } from './task-types.js';
 import { createTaskState } from './task-types.js';
 import type { WorkResponse } from '@invoker/protocol';
+
+const MERGE_TRACE_LOG = resolve(homedir(), '.invoker', 'merge-trace.log');
+function mergeTrace(tag: string, data: Record<string, unknown>): void {
+  try {
+    mkdirSync(resolve(homedir(), '.invoker'), { recursive: true });
+    appendFileSync(MERGE_TRACE_LOG, `${new Date().toISOString()} [merge-trace:orchestrator] ${tag} ${JSON.stringify(data)}\n`);
+  } catch { /* best effort */ }
+}
 import { getTransitiveDependents, nextVersion, findLeafTaskIds } from './dag.js';
 import { ActionGraph } from '@invoker/graph';
 
@@ -478,12 +489,18 @@ export class Orchestrator {
    * before transitioning state, so merge nodes get git-merged automatically.
    */
   async approve(taskId: string): Promise<void> {
+    mergeTrace('APPROVE_ENTER', { taskId });
     this.refreshFromDb();
     const task = this.stateMachine.getTask(taskId);
+    mergeTrace('APPROVE_TASK_LOOKUP', { taskId, found: !!task, status: task?.status, isMergeNode: !!task?.config.isMergeNode, hasHook: !!this.beforeApproveHook });
     if (!task || task.status !== 'awaiting_approval') return;
 
     if (this.beforeApproveHook) {
+      mergeTrace('APPROVE_HOOK_FIRING', { taskId, workflowId: task.config.workflowId });
       await this.beforeApproveHook(task);
+      mergeTrace('APPROVE_HOOK_DONE', { taskId });
+    } else {
+      mergeTrace('APPROVE_NO_HOOK', { taskId });
     }
 
     const changes: TaskStateChanges = {
@@ -494,6 +511,7 @@ export class Orchestrator {
     const delta: TaskDelta = { type: 'updated', taskId, changes };
     this.persistence.logEvent?.(taskId, 'task.completed', changes);
     this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
+    mergeTrace('APPROVE_DONE', { taskId });
 
     const readyTaskIds = this.stateMachine.findNewlyReadyTasks(taskId);
     this.autoStartReadyTasks(readyTaskIds);

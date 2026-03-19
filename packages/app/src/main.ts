@@ -860,6 +860,7 @@ function setupGuiMode(): void {
         },
       },
     });
+    wireApproveHook();
   }
 
   function wireApproveHook(): void {
@@ -1084,7 +1085,6 @@ function setupGuiMode(): void {
     defaultUtilization: invokerConfig.defaultUtilization,
   });
       rebuildTaskExecutor();
-      wireApproveHook();
       taskHandles.clear();
     });
 

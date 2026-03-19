@@ -6,11 +6,19 @@
  */
 
 import { execSync, spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { createRequire } from 'node:module';
+
+const MERGE_TRACE_LOG = resolve(homedir(), '.invoker', 'merge-trace.log');
+function mergeTrace(tag: string, data: Record<string, unknown>): void {
+  try {
+    mkdirSync(resolve(homedir(), '.invoker'), { recursive: true });
+    appendFileSync(MERGE_TRACE_LOG, `${new Date().toISOString()} [merge-trace:executor] ${tag} ${JSON.stringify(data)}\n`);
+  } catch { /* best effort */ }
+}
 import type { Orchestrator, TaskState, ExperimentVariant } from '@invoker/core';
 import type { SQLiteAdapter } from '@invoker/persistence';
 import type { WorkRequest, WorkResponse, ActionType } from '@invoker/protocol';
@@ -392,31 +400,42 @@ export class TaskExecutor {
   }
 
   async approveMerge(workflowId: string): Promise<void> {
+    mergeTrace('APPROVE_MERGE_ENTER', { workflowId });
     const workflow = this.persistence.loadWorkflow(workflowId);
     if (!workflow) throw new Error(`Workflow ${workflowId} not found`);
 
     const onFinish = workflow.onFinish ?? 'none';
     const baseBranch = workflow.baseBranch ?? this.defaultBranch ?? await this.detectDefaultBranch();
     const featureBranch = workflow.featureBranch;
+    mergeTrace('APPROVE_MERGE_CONFIG', { workflowId, onFinish, baseBranch, featureBranch, workflowName: workflow.name });
 
     if (onFinish === 'none' || !featureBranch) {
+      mergeTrace('APPROVE_MERGE_SKIP', { workflowId, reason: 'no merge configured', onFinish, featureBranch });
       throw new Error(`Workflow ${workflowId} has no merge configured (onFinish=${onFinish}, featureBranch=${featureBranch})`);
     }
 
     const originalBranch = await this.execGit(['branch', '--show-current']);
+    mergeTrace('APPROVE_MERGE_ORIGINAL_BRANCH', { workflowId, originalBranch });
     try {
       const mergeMessage = workflow.name ?? 'Workflow';
       if (onFinish === 'merge') {
+        mergeTrace('GIT_CHECKOUT_BASE', { baseBranch });
         await this.execGit(['checkout', baseBranch]);
+        mergeTrace('GIT_MERGE_SQUASH', { featureBranch });
         await this.execGit(['merge', '--squash', featureBranch]);
+        mergeTrace('GIT_COMMIT', { mergeMessage });
         await this.execGit(['commit', '-m', mergeMessage]);
+        mergeTrace('SQUASH_MERGE_COMPLETE', { featureBranch, baseBranch });
         console.log(`[merge] Approved: squash-merged ${featureBranch} into ${baseBranch}`);
       } else if (onFinish === 'pull_request') {
+        mergeTrace('GIT_PUSH', { featureBranch });
         await this.execGit(['push', '-u', 'origin', featureBranch]);
         await this.execPr(baseBranch, featureBranch, mergeMessage);
+        mergeTrace('PR_CREATED', { featureBranch, baseBranch });
         console.log(`[merge] Approved: created pull request ${featureBranch} → ${baseBranch}`);
       }
     } catch (err) {
+      mergeTrace('APPROVE_MERGE_ERROR', { workflowId, error: String(err) });
       try { await this.execGit(['merge', '--abort']); } catch { /* no merge in progress */ }
       try { await this.execGit(['checkout', originalBranch]); } catch { /* best effort */ }
       throw err;
