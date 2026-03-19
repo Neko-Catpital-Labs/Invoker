@@ -342,17 +342,6 @@ async function headlessRun(planPath: string): Promise<void> {
   console.log(`${BOLD}Loading plan: ${plan.name}${RESET}`);
   console.log(`Tasks: ${plan.tasks.length}\n`);
 
-  // Create feature branch if specified
-  if (plan.featureBranch) {
-    try {
-      await execCommand('git', ['checkout', '-b', plan.featureBranch]);
-      console.log(`Created branch: ${plan.featureBranch}`);
-    } catch {
-      await execCommand('git', ['checkout', plan.featureBranch]);
-      console.log(`Switched to existing branch: ${plan.featureBranch}`);
-    }
-  }
-
   // Subscribe to deltas for live output
   messageBus.subscribe<TaskDelta>(Channels.TASK_DELTA, (delta) => {
     if (delta.type === 'updated') {
