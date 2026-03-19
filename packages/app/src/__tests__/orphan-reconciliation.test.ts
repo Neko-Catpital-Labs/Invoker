@@ -1,9 +1,12 @@
 /**
- * Tests for orphaned running task reconciliation on resume.
+ * Tests for task reconciliation on app resume/restart.
  *
- * Simulates the scenario where Electron restarts while tasks are running:
- * the DB still shows 'running' but the child processes are gone.
- * On resume, orphaned running tasks should be reset to pending and relaunched.
+ * Covers two scenarios:
+ * 1. Orphaned running tasks: DB shows 'running' but child processes are gone.
+ *    These should be reset to pending and relaunched.
+ * 2. Pending-but-ready tasks: tasks whose dependencies are satisfied but were
+ *    never started (e.g. app crashed before startExecution). These should be
+ *    picked up and started on resume.
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
@@ -65,18 +68,20 @@ function makeResponse(overrides: Partial<WorkResponse>): WorkResponse {
 }
 
 /**
- * Simulate the orphan reconciliation that main.ts performs on restart:
- * find all running tasks and call restartTask() to reset and relaunch them.
+ * Simulate the relaunchOrphansAndStartReady() helper that main.ts
+ * performs on startup: restart orphaned running tasks, then start any
+ * pending-but-ready tasks via startExecution().
  */
-function reconcileOrphans(orch: Orchestrator): TaskState[] {
-  const restarted: TaskState[] = [];
+function relaunchOrphansAndStartReady(orch: Orchestrator): TaskState[] {
+  const orphanRestarted: TaskState[] = [];
   for (const task of orch.getAllTasks()) {
     if (task.status === 'running') {
       const started = orch.restartTask(task.id);
-      restarted.push(...started.filter(t => t.status === 'running'));
+      orphanRestarted.push(...started.filter(t => t.status === 'running'));
     }
   }
-  return restarted;
+  const readyStarted = orch.startExecution();
+  return [...orphanRestarted, ...readyStarted];
 }
 
 // ── Tests ───────────────────────────────────────────────────
@@ -116,7 +121,7 @@ describe('orphan reconciliation on resume', () => {
     expect(orchestrator2.getTask('t1')?.status).toBe('running');
 
     // Reconcile: restartTask resets to pending, then auto-starts (deps met)
-    const restarted = reconcileOrphans(orchestrator2);
+    const restarted = relaunchOrphansAndStartReady(orchestrator2);
 
     expect(restarted.length).toBe(1);
     expect(restarted[0].id).toBe('t1');
@@ -142,7 +147,7 @@ describe('orphan reconciliation on resume', () => {
     const orchestrator2 = new Orchestrator({ persistence, messageBus: new InMemoryBus() });
     orchestrator2.syncAllFromDb();
 
-    const restarted = reconcileOrphans(orchestrator2);
+    const restarted = relaunchOrphansAndStartReady(orchestrator2);
 
     // t2 was orphaned running → relaunched; t1 stays completed
     expect(orchestrator2.getTask('t1')?.status).toBe('completed');
@@ -160,7 +165,7 @@ describe('orphan reconciliation on resume', () => {
     orchestrator2.syncAllFromDb();
 
     // Reconcile t1 → relaunched
-    const restarted = reconcileOrphans(orchestrator2);
+    const restarted = relaunchOrphansAndStartReady(orchestrator2);
     expect(restarted.length).toBe(1);
     expect(orchestrator2.getTask('t1')?.status).toBe('running');
 
@@ -191,31 +196,149 @@ describe('orphan reconciliation on resume', () => {
     orchestrator2.syncAllFromDb();
 
     // Reconcile — t1 is relaunched, t2 stays pending
-    reconcileOrphans(orchestrator2);
+    relaunchOrphansAndStartReady(orchestrator2);
 
     expect(orchestrator2.getTask('t1')?.status).toBe('running');
     expect(orchestrator2.getTask('t2')?.status).toBe('pending');
   });
 
-  it('startExecution after reconciliation does not double-start relaunched tasks', () => {
+  it('pending-but-ready tasks across multiple workflows are started on resume', () => {
+    const planA: PlanDefinition = {
+      name: 'Workflow A',
+      onFinish: 'none',
+      tasks: [
+        { id: 'a1', description: 'Task A1', command: 'echo a1' },
+        { id: 'a2', description: 'Task A2', command: 'echo a2', dependencies: ['a1'] },
+      ],
+    };
+    orchestrator.loadPlan(planA);
+    orchestrator.startExecution();
+    expect(orchestrator.getTask('a1')?.status).toBe('running');
+
+    const planB: PlanDefinition = {
+      name: 'Workflow B',
+      onFinish: 'none',
+      tasks: [
+        { id: 'b1', description: 'Task B1', command: 'echo b1' },
+        { id: 'b2', description: 'Task B2', command: 'echo b2', dependencies: ['b1'] },
+      ],
+    };
+    orchestrator.loadPlan(planB);
+    orchestrator.startExecution();
+    expect(orchestrator.getTask('b1')?.status).toBe('running');
+
+    const orchestrator2 = new Orchestrator({
+      persistence,
+      messageBus: new InMemoryBus(),
+      maxConcurrency: 10,
+    });
+    orchestrator2.syncAllFromDb();
+
+    expect(orchestrator2.getTask('a1')?.status).toBe('running');
+    expect(orchestrator2.getTask('b1')?.status).toBe('running');
+
+    const started = relaunchOrphansAndStartReady(orchestrator2);
+    const startedIds = started.map(t => t.id).sort();
+
+    expect(startedIds).toContain('a1');
+    expect(startedIds).toContain('b1');
+    expect(orchestrator2.getTask('a1')?.status).toBe('running');
+    expect(orchestrator2.getTask('b1')?.status).toBe('running');
+    expect(orchestrator2.getTask('a2')?.status).toBe('pending');
+    expect(orchestrator2.getTask('b2')?.status).toBe('pending');
+  });
+
+  it('pending root tasks from other workflows are started even with no orphans', () => {
+    const planA: PlanDefinition = {
+      name: 'Completed Workflow',
+      onFinish: 'none',
+      tasks: [
+        { id: 'done1', description: 'Already done', command: 'echo done' },
+      ],
+    };
+    orchestrator.loadPlan(planA);
+    orchestrator.startExecution();
+    orchestrator.handleWorkerResponse(
+      makeResponse({ actionId: 'done1', status: 'completed', outputs: { exitCode: 0 } }),
+    );
+    expect(orchestrator.getTask('done1')?.status).toBe('completed');
+
+    const planB: PlanDefinition = {
+      name: 'Never Started Workflow',
+      onFinish: 'none',
+      tasks: [
+        { id: 'fresh1', description: 'Fresh root task', command: 'echo fresh' },
+        { id: 'fresh2', description: 'Depends on fresh1', command: 'echo fresh2', dependencies: ['fresh1'] },
+      ],
+    };
+    orchestrator.loadPlan(planB);
+
+    expect(orchestrator.getTask('fresh1')?.status).toBe('pending');
+
+    const orchestrator2 = new Orchestrator({
+      persistence,
+      messageBus: new InMemoryBus(),
+      maxConcurrency: 10,
+    });
+    orchestrator2.syncAllFromDb();
+
+    const started = relaunchOrphansAndStartReady(orchestrator2);
+    const startedIds = started.map(t => t.id);
+
+    expect(startedIds).toContain('fresh1');
+    expect(orchestrator2.getTask('fresh1')?.status).toBe('running');
+    expect(orchestrator2.getTask('fresh2')?.status).toBe('pending');
+  });
+
+  it('pending tasks with completed deps across workflows are started on resume', () => {
     orchestrator.loadPlan(plan);
     orchestrator.startExecution();
 
-    // Complete t1, t2 starts running
+    orchestrator.handleWorkerResponse(
+      makeResponse({ actionId: 't1', status: 'completed', outputs: { exitCode: 0 } }),
+    );
+    expect(orchestrator.getTask('t2')?.status).toBe('running');
+
+    const planB: PlanDefinition = {
+      name: 'Ready Workflow',
+      onFinish: 'none',
+      tasks: [
+        { id: 'r1', description: 'Root', command: 'echo r1' },
+      ],
+    };
+    orchestrator.loadPlan(planB);
+
+    const orchestrator2 = new Orchestrator({
+      persistence,
+      messageBus: new InMemoryBus(),
+      maxConcurrency: 10,
+    });
+    orchestrator2.syncAllFromDb();
+
+    const started = relaunchOrphansAndStartReady(orchestrator2);
+    const startedIds = started.map(t => t.id).sort();
+
+    expect(startedIds).toContain('t2');
+    expect(startedIds).toContain('r1');
+    expect(orchestrator2.getTask('t2')?.status).toBe('running');
+    expect(orchestrator2.getTask('r1')?.status).toBe('running');
+  });
+
+  it('extra startExecution after relaunch does not double-start tasks', () => {
+    orchestrator.loadPlan(plan);
+    orchestrator.startExecution();
+
     orchestrator.handleWorkerResponse(
       makeResponse({ actionId: 't1', status: 'completed', outputs: { exitCode: 0 } }),
     );
 
-    // --- Simulate restart (t2 is running, merge node may be pending) ---
     const orchestrator2 = new Orchestrator({ persistence, messageBus: new InMemoryBus() });
     orchestrator2.syncAllFromDb();
 
-    // Reconcile: t2 gets relaunched
-    const restarted = reconcileOrphans(orchestrator2);
+    const restarted = relaunchOrphansAndStartReady(orchestrator2);
     expect(restarted.length).toBe(1);
     expect(restarted[0].id).toBe('t2');
 
-    // startExecution should not return t2 again (already running)
     const started = orchestrator2.startExecution();
     const startedIds = started.map(t => t.id);
     expect(startedIds).not.toContain('t2');

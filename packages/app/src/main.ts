@@ -881,6 +881,24 @@ function setupGuiMode(): void {
     taskHandles.delete(taskId);
   }
 
+  function relaunchOrphansAndStartReady(logPrefix: string): TaskState[] {
+    const orphanRestarted: TaskState[] = [];
+    for (const task of orchestrator.getAllTasks()) {
+      if (task.status === 'running') {
+        console.log(`[${logPrefix}] relaunching orphaned running task "${task.id}"`);
+        const started = orchestrator.restartTask(task.id);
+        orphanRestarted.push(...started.filter(t => t.status === 'running'));
+      }
+    }
+
+    const readyStarted = orchestrator.startExecution();
+    const allStarted = [...orphanRestarted, ...readyStarted];
+    if (allStarted.length > 0) {
+      console.log(`[${logPrefix}] started ${allStarted.length} tasks (${orphanRestarted.length} orphans relaunched, ${readyStarted.length} ready): [${allStarted.map(t => t.id).join(', ')}]`);
+    }
+    return allStarted;
+  }
+
   function createWindow(): void {
     mainWindow = new BrowserWindow({
       width: 1200,
@@ -920,22 +938,13 @@ function setupGuiMode(): void {
 
     rebuildTaskExecutor();
 
-    // Relaunch tasks stuck in 'running' from a previous session —
-    // the child processes are gone after restart, so respawn them.
+    // Relaunch orphaned running tasks and start any pending-but-ready tasks.
     if (invokerConfig.disableAutoRunOnStartup) {
       console.log('[init] auto-run on startup disabled by config — skipping orphan relaunch');
     } else {
-      const orphanStarted: TaskState[] = [];
-      for (const task of orchestrator.getAllTasks()) {
-        if (task.status === 'running') {
-          console.log(`[init] relaunching orphaned running task "${task.id}"`);
-          const started = orchestrator.restartTask(task.id);
-          orphanStarted.push(...started.filter(t => t.status === 'running'));
-        }
-      }
-      if (orphanStarted.length > 0) {
-        console.log(`[init] relaunched ${orphanStarted.length} orphaned tasks: [${orphanStarted.map(t => t.id).join(', ')}]`);
-        taskExecutor.executeTasks(orphanStarted);
+      const allStarted = relaunchOrphansAndStartReady('init');
+      if (allStarted.length > 0) {
+        taskExecutor.executeTasks(allStarted);
       }
     }
 
@@ -1007,23 +1016,7 @@ function setupGuiMode(): void {
       }
       orchestrator.syncAllFromDb();
 
-      // Relaunch tasks stuck in 'running' from a previous session —
-      // the child processes are gone after restart, so respawn them.
-      const orphanRestarted: TaskState[] = [];
-      for (const task of orchestrator.getAllTasks()) {
-        if (task.status === 'running') {
-          console.log(`[ipc] resume-workflow: relaunching orphaned running task "${task.id}"`);
-          const restarted = orchestrator.restartTask(task.id);
-          orphanRestarted.push(...restarted.filter(t => t.status === 'running'));
-        }
-      }
-
-      const allStarted: any[] = [...orphanRestarted];
-      for (const wf of workflows) {
-        if (wf.status === 'completed' || wf.status === 'failed') continue;
-        const started = orchestrator.startExecution();
-        allStarted.push(...started);
-      }
+      const allStarted = relaunchOrphansAndStartReady('resume-workflow');
       const tasks = orchestrator.getAllTasks();
       for (const task of tasks) {
         lastKnownTaskStates.set(task.id, JSON.stringify(task));
