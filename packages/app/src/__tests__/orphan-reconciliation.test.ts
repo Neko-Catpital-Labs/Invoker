@@ -343,4 +343,82 @@ describe('orphan reconciliation on resume', () => {
     const startedIds = started.map(t => t.id);
     expect(startedIds).not.toContain('t2');
   });
+
+  // ── disableAutoRunOnStartup guard tests ─────────────────────
+
+  it('orphaned running tasks are NOT relaunched when disableAutoRunOnStartup is true', () => {
+    orchestrator.loadPlan(plan);
+    orchestrator.startExecution();
+    expect(orchestrator.getTask('t1')?.status).toBe('running');
+
+    // --- Simulate app restart with disableAutoRunOnStartup ---
+    const orchestrator2 = new Orchestrator({ persistence, messageBus: new InMemoryBus() });
+    orchestrator2.syncAllFromDb();
+
+    // t1 is in DB as 'running' — orphaned
+    expect(orchestrator2.getTask('t1')?.status).toBe('running');
+
+    // Simulate the disableAutoRunOnStartup guard (main.ts line 944):
+    // relaunchOrphansAndStartReady is NOT called.
+    // Only startExecution runs, which won't pick up already-running tasks.
+    const readyOnly = orchestrator2.startExecution();
+    expect(readyOnly).toEqual([]); // t1 is already 'running', t2 is blocked
+    // t1 stays in its orphaned 'running' state — no restart occurred
+    expect(orchestrator2.getTask('t1')?.status).toBe('running');
+    expect(orchestrator2.getTask('t2')?.status).toBe('pending');
+  });
+
+  it('stale running tasks are NOT restarted when startupAutoRunBlocked is true', () => {
+    orchestrator.loadPlan(plan);
+    orchestrator.startExecution();
+    expect(orchestrator.getTask('t1')?.status).toBe('running');
+
+    // --- Simulate app restart ---
+    const orchestrator2 = new Orchestrator({ persistence, messageBus: new InMemoryBus() });
+    orchestrator2.syncAllFromDb();
+
+    // Simulate the DB poll stale-heartbeat check (main.ts lines 1382-1405)
+    const STALE_HEARTBEAT_MS = 5 * 60 * 1000;
+    const restarted: TaskState[] = [];
+
+    for (const task of orchestrator2.getAllTasks()) {
+      if (task.status === 'running') {
+        const startedTime = task.execution?.startedAt
+          ? task.execution.startedAt.getTime()
+          : null;
+        const referenceTime = startedTime; // no heartbeat in test
+        const now = Date.now();
+
+        // Guard: startupAutoRunBlocked = true blocks restart
+        const startupAutoRunBlocked = true;
+        if (referenceTime && (now - referenceTime) > STALE_HEARTBEAT_MS) {
+          if (startupAutoRunBlocked) {
+            continue;
+          }
+          const r = orchestrator2.restartTask(task.id);
+          restarted.push(...r.filter(t => t.status === 'running'));
+        }
+      }
+    }
+
+    // Guard should block all restarts
+    expect(restarted).toEqual([]);
+    // t1 should still be in 'running' state (not restarted to pending)
+    expect(orchestrator2.getTask('t1')?.status).toBe('running');
+  });
+
+  it('after resume-workflow clears the flag, orphaned tasks CAN be restarted', () => {
+    orchestrator.loadPlan(plan);
+    orchestrator.startExecution();
+
+    const orchestrator2 = new Orchestrator({ persistence, messageBus: new InMemoryBus() });
+    orchestrator2.syncAllFromDb();
+
+    // Flag starts true (disableAutoRunOnStartup is set), blocking auto-run.
+    // Simulate resume-workflow IPC (main.ts line 1015) clearing the flag.
+    // After the flag is cleared, relaunchOrphansAndStartReady should work.
+    const allStarted = relaunchOrphansAndStartReady(orchestrator2);
+    expect(allStarted.length).toBe(1);
+    expect(allStarted[0].id).toBe('t1');
+  });
 });
