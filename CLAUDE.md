@@ -96,6 +96,10 @@ Do **not** run `pnpm rebuild better-sqlite3` directly — that rebuilds for syst
 bash scripts/test-worktree-provisioning.sh
 ```
 
+## File Editing Discipline
+
+After making a change with any edit tool, **read the file back from disk** (using the Read tool or `rg` in the Shell) and verify the edit persisted before proceeding. Cursor's in-memory state can silently revert writes. If the change is missing on disk, re-apply it using the Shell tool (e.g. `python3 -c "..."` or `sed`) and verify again. When committing, always `git diff --stat` immediately before `git add` to confirm the working tree contains the expected modifications.
+
 ## Code Navigation
 
 Use LSP tools (`goToDefinition`, `findReferences`, `documentSymbol`, `workspaceSymbol`, `incomingCalls`, `outgoingCalls`, `hover`) for any task involving symbols, types, or cross-file relationships. Use Grep and Glob for literal text searches and file discovery.
