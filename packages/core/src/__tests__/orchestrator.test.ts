@@ -523,7 +523,7 @@ describe('Orchestrator', () => {
   // ── approve / reject ───────────────────────────────────
 
   describe('approve', () => {
-    it('completes task, unblocks dependents', () => {
+    it('completes task, unblocks dependents', async () => {
       orchestrator.loadPlan({
         name: 'approval-test',
         tasks: [
@@ -537,7 +537,7 @@ describe('Orchestrator', () => {
       persistence.updateTask('a1', { status: 'awaiting_approval' });
 
       publishedDeltas = [];
-      orchestrator.approve('a1');
+      await orchestrator.approve('a1');
 
       expect(orchestrator.getTask('a1')!.status).toBe('completed');
       expect(orchestrator.getTask('a2')!.status).toBe('running');

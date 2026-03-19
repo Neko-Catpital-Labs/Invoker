@@ -157,6 +157,7 @@ export class Orchestrator {
   private readonly estimator: ResourceEstimator;
 
   private activeWorkflowIds = new Set<string>();
+  private beforeApproveHook?: (task: TaskState) => Promise<void>;
 
   constructor(config: OrchestratorConfig) {
     this.maxConcurrency = config.maxConcurrency ?? 3;
@@ -468,13 +469,22 @@ export class Orchestrator {
     this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
   }
 
+  setBeforeApproveHook(fn: (task: TaskState) => Promise<void>): void {
+    this.beforeApproveHook = fn;
+  }
+
   /**
-   * Approve a task awaiting approval. Completes it and unblocks dependents.
+   * Approve a task awaiting approval. Fires beforeApproveHook (if set)
+   * before transitioning state, so merge nodes get git-merged automatically.
    */
-  approve(taskId: string): void {
+  async approve(taskId: string): Promise<void> {
     this.refreshFromDb();
     const task = this.stateMachine.getTask(taskId);
     if (!task || task.status !== 'awaiting_approval') return;
+
+    if (this.beforeApproveHook) {
+      await this.beforeApproveHook(task);
+    }
 
     const changes: TaskStateChanges = {
       status: 'completed',

@@ -464,7 +464,7 @@ describe('State × Topology Matrix', () => {
       expect(orchestrator.getTask('D')!.status).toBe('running');
     });
 
-    it('B gets awaiting_approval → approve after C completes → D starts', () => {
+    it('B gets awaiting_approval → approve after C completes → D starts', async () => {
       orchestrator.loadPlan(diamondPlan());
       orchestrator.startExecution();
 
@@ -475,7 +475,7 @@ describe('State × Topology Matrix', () => {
       expect(orchestrator.getTask('B')!.status).toBe('awaiting_approval');
       expect(orchestrator.getTask('D')!.status).toBe('pending');
 
-      orchestrator.approve('B');
+      await orchestrator.approve('B');
       expect(orchestrator.getTask('B')!.status).toBe('completed');
       expect(orchestrator.getTask('D')!.status).toBe('running');
     });

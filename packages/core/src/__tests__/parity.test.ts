@@ -357,7 +357,7 @@ describe('Parity — Feature Coverage', () => {
 
   // ── Test 8: Manual approval flow ──────────────────────────
 
-  it('manual approval flow: approve completes task, reject fails task', () => {
+  it('manual approval flow: approve completes task, reject fails task', async () => {
     orchestrator.loadPlan({
       name: 'approval-test',
       tasks: [
@@ -369,7 +369,7 @@ describe('Parity — Feature Coverage', () => {
 
     // Simulate external process setting awaiting_approval
     persistence.updateTask('a1', { status: 'awaiting_approval' });
-    orchestrator.approve('a1');
+    await orchestrator.approve('a1');
 
     expect(orchestrator.getTask('a1')!.status).toBe('completed');
     expect(orchestrator.getTask('a2')!.status).toBe('running');

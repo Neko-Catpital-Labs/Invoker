@@ -165,14 +165,9 @@ async function wireSlackBot(deps: SlackBotDeps): Promise<any> {
   await slack.start(async (command: any) => {
     deps.logFn('trace', 'info', `slackBot: command received — type=${command.type}`);
     switch (command.type) {
-      case 'approve': {
-        const approveTask = orchestrator.getTask(command.taskId);
-        if (approveTask?.config.isMergeNode && approveTask.config.workflowId) {
-          await deps.executor.approveMerge(approveTask.config.workflowId);
-        }
-        orchestrator.approve(command.taskId);
+      case 'approve':
+        await orchestrator.approve(command.taskId);
         break;
-      }
       case 'reject':
         orchestrator.reject(command.taskId, command.reason);
         break;
@@ -266,7 +261,7 @@ async function runHeadless(args: string[]): Promise<void> {
       await headlessStatus();
       break;
     case 'approve':
-      headlessApprove(args[1]);
+      await headlessApprove(args[1]);
       break;
     case 'reject':
       headlessReject(args[1], args.slice(2).join(' ') || undefined);
@@ -380,6 +375,11 @@ async function headlessRun(planPath: string): Promise<void> {
       onHeartbeat: headlessHeartbeat,
     },
   });
+  orchestrator.setBeforeApproveHook(async (task) => {
+    if (task.config.isMergeNode && task.config.workflowId) {
+      await taskExecutor.approveMerge(task.config.workflowId);
+    }
+  });
 
   const api = startApiServer({ orchestrator, persistence, familiarRegistry, taskExecutor });
 
@@ -432,6 +432,11 @@ async function headlessResume(workflowId: string): Promise<void> {
       onHeartbeat: headlessHeartbeat,
     },
   });
+  orchestrator.setBeforeApproveHook(async (task) => {
+    if (task.config.isMergeNode && task.config.workflowId) {
+      await taskExecutor.approveMerge(task.config.workflowId);
+    }
+  });
 
   const api = startApiServer({ orchestrator, persistence, familiarRegistry, taskExecutor });
 
@@ -480,10 +485,16 @@ async function headlessStatus(): Promise<void> {
   console.log(`\n${formatWorkflowStatus(status)}`);
 }
 
-function headlessApprove(taskId: string): void {
+async function headlessApprove(taskId: string): Promise<void> {
   if (!taskId) throw new Error('Missing taskId.');
   restoreWorkflowForTask(taskId);
-  orchestrator.approve(taskId);
+  const te = new TaskExecutor({ orchestrator, persistence, familiarRegistry, cwd: repoRoot, defaultBranch: invokerConfig.defaultBranch });
+  orchestrator.setBeforeApproveHook(async (task) => {
+    if (task.config.isMergeNode && task.config.workflowId) {
+      await te.approveMerge(task.config.workflowId);
+    }
+  });
+  await orchestrator.approve(taskId);
   console.log(`Approved task: ${taskId}`);
 }
 
@@ -712,6 +723,7 @@ async function headlessSlack(): Promise<void> {
       onHeartbeat: headlessHeartbeat,
     },
   });
+  wireApproveHook();
 
   const api = startApiServer({ orchestrator, persistence, familiarRegistry, taskExecutor });
 
@@ -847,6 +859,14 @@ function setupGuiMode(): void {
           });
         },
       },
+    });
+  }
+
+  function wireApproveHook(): void {
+    orchestrator.setBeforeApproveHook(async (task) => {
+      if (task.config.isMergeNode && task.config.workflowId) {
+        await taskExecutor.approveMerge(task.config.workflowId);
+      }
     });
   }
 
@@ -1064,6 +1084,7 @@ function setupGuiMode(): void {
     defaultUtilization: invokerConfig.defaultUtilization,
   });
       rebuildTaskExecutor();
+      wireApproveHook();
       taskHandles.clear();
     });
 
@@ -1127,11 +1148,8 @@ function setupGuiMode(): void {
         const started = orchestrator.restartTask(taskId);
         const runnable = started.filter(t => t.status === 'running');
         await taskExecutor.executeTasks(runnable);
-      } else if (task?.config.isMergeNode && task.config.workflowId) {
-        await taskExecutor.approveMerge(task.config.workflowId);
-        orchestrator.approve(taskId);
       } else {
-        orchestrator.approve(taskId);
+        await orchestrator.approve(taskId);
       }
     });
 
@@ -1247,8 +1265,7 @@ function setupGuiMode(): void {
       try {
         const mergeTask = orchestrator.getMergeNode(workflowId);
         if (!mergeTask) throw new Error(`No merge node for workflow ${workflowId}`);
-        await taskExecutor.approveMerge(workflowId);
-        orchestrator.approve(mergeTask.id);
+        await orchestrator.approve(mergeTask.id);
       } catch (err) {
         console.error(`[ipc] approve-merge failed: ${err}`);
         throw err;

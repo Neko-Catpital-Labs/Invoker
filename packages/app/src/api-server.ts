@@ -172,11 +172,7 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
       if (method === 'POST' && approveMatch) {
         const taskId = decodeURIComponent(approveMatch[1]);
         try {
-          const task = orchestrator.getTask(taskId);
-          if (task?.config.isMergeNode && task.config.workflowId) {
-            await taskExecutor.approveMerge(task.config.workflowId);
-          }
-          orchestrator.approve(taskId);
+          await orchestrator.approve(taskId);
           json(res, 200, { ok: true, taskId, action: 'approved' });
         } catch (err) {
           json(res, 400, { error: err instanceof Error ? err.message : String(err) });

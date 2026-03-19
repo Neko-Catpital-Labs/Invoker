@@ -55,6 +55,12 @@ export function createTestHarness(opts?: { maxConcurrency?: number }): TestHarne
   const git = new MockGit();
   git.install(executor);
 
+  orchestrator.setBeforeApproveHook(async (task) => {
+    if (task.config.isMergeNode && task.config.workflowId) {
+      await executor.approveMerge(task.config.workflowId);
+    }
+  });
+
   return {
     orchestrator,
     executor,
