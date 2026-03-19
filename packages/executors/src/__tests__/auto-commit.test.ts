@@ -859,7 +859,43 @@ describe('diamond dependency merge', () => {
 // ── Merge gate commit topology ─────────────────────────────────
 
 import { TaskExecutor, FamiliarRegistry } from '../index.js';
-import type { TaskState } from '@invoker/core';
+import { Orchestrator, type TaskState, type TaskStateChanges, type PlanDefinition, type OrchestratorPersistence, type OrchestratorMessageBus } from '@invoker/core';
+
+class TestPersistence implements OrchestratorPersistence {
+  workflows = new Map<string, any>();
+  tasks = new Map<string, { workflowId: string; task: TaskState }>();
+
+  saveWorkflow(wf: any): void {
+    this.workflows.set(wf.id, { ...wf, createdAt: wf.createdAt ?? new Date().toISOString(), updatedAt: wf.updatedAt ?? new Date().toISOString() });
+  }
+  updateWorkflow(id: string, changes: any): void {
+    const wf = this.workflows.get(id);
+    if (wf) Object.assign(wf, changes);
+  }
+  saveTask(workflowId: string, task: TaskState): void {
+    this.tasks.set(task.id, { workflowId, task });
+  }
+  updateTask(taskId: string, changes: TaskStateChanges): void {
+    const entry = this.tasks.get(taskId);
+    if (entry) {
+      entry.task = {
+        ...entry.task,
+        ...(changes.status !== undefined ? { status: changes.status } : {}),
+        ...(changes.dependencies !== undefined ? { dependencies: changes.dependencies } : {}),
+        config: { ...entry.task.config, ...changes.config },
+        execution: { ...entry.task.execution, ...changes.execution },
+      } as TaskState;
+    }
+  }
+  listWorkflows() { return Array.from(this.workflows.values()); }
+  loadTasks(wfId: string) { return Array.from(this.tasks.values()).filter(e => e.workflowId === wfId).map(e => e.task); }
+  loadWorkflow(id: string) { return this.workflows.get(id) as any; }
+  logEvent(): void {}
+}
+
+class TestBus implements OrchestratorMessageBus {
+  publish(): void {}
+}
 
 describe('merge gate commit topology (real git)', () => {
   let tmpDir: string;
@@ -1197,6 +1233,112 @@ describe('merge gate commit topology (real git)', () => {
     const tipMsgI = execSync('git log -1 --format=%s master', { cwd: tmpDir }).toString().trim();
     expect(tipMsgI).toBe('Intermediate Workflow');
   });
+
+  it('orchestrator.approve() with hook triggers real squash merge into master', async () => {
+    const masterHead = execSync('git rev-parse HEAD', { cwd: tmpDir }).toString().trim();
+
+    // Create task-a branch with a unique file
+    execSync('git checkout -b experiment/task-a', { cwd: tmpDir });
+    writeFileSync(join(tmpDir, 'a.txt'), 'a-work');
+    execSync('git add -A && git commit -m "task-a work"', { cwd: tmpDir });
+
+    // Create task-b branch from master with a unique file
+    execSync('git checkout master', { cwd: tmpDir });
+    execSync('git checkout -b experiment/task-b', { cwd: tmpDir });
+    writeFileSync(join(tmpDir, 'b.txt'), 'b-work');
+    execSync('git add -A && git commit -m "task-b work"', { cwd: tmpDir });
+
+    execSync('git checkout master', { cwd: tmpDir });
+
+    // Set up real Orchestrator + TaskExecutor with hook wired
+    const persistence = new TestPersistence();
+    const bus = new TestBus();
+    const orchestrator = new Orchestrator({ persistence, messageBus: bus, maxConcurrency: 10 });
+    const registry = new FamiliarRegistry();
+    const executor = new TaskExecutor({
+      orchestrator,
+      persistence: persistence as any,
+      familiarRegistry: registry,
+      cwd: tmpDir,
+      defaultBranch: 'master',
+    });
+
+    orchestrator.setBeforeApproveHook(async (task) => {
+      if (task.config.isMergeNode && task.config.workflowId) {
+        await executor.approveMerge(task.config.workflowId);
+      }
+    });
+
+    const plan: PlanDefinition = {
+      name: 'Hook E2E Plan',
+      onFinish: 'merge',
+      mergeMode: 'manual',
+      baseBranch: 'master',
+      featureBranch: 'feat/hook-e2e',
+      tasks: [
+        { id: 'task-a', description: 'Task A', command: 'echo a' },
+        { id: 'task-b', description: 'Task B', command: 'echo b' },
+      ],
+    };
+
+    orchestrator.loadPlan(plan);
+    orchestrator.startExecution();
+
+    // Simulate task completion with branch info
+    const taskA = orchestrator.getTask('task-a')!;
+    const taskB = orchestrator.getTask('task-b')!;
+    persistence.updateTask('task-a', { execution: { branch: 'experiment/task-a' } });
+    persistence.updateTask('task-b', { execution: { branch: 'experiment/task-b' } });
+    orchestrator.handleWorkerResponse({ requestId: 'r1', actionId: 'task-a', status: 'completed', outputs: { exitCode: 0 } });
+    orchestrator.handleWorkerResponse({ requestId: 'r2', actionId: 'task-b', status: 'completed', outputs: { exitCode: 0 } });
+
+    // Find the merge node and execute it (consolidation phase)
+    const mergeNode = orchestrator.getAllTasks().find(t => t.config.isMergeNode)!;
+    expect(mergeNode).toBeDefined();
+    await executor.executeTasks([orchestrator.getTask(mergeNode.id)!]);
+
+    // After consolidation, merge node should be awaiting_approval (manual mode)
+    expect(orchestrator.getTask(mergeNode.id)!.status).toBe('awaiting_approval');
+
+    // Master should NOT have moved yet
+    const masterBeforeApprove = execSync('git rev-parse master', { cwd: tmpDir }).toString().trim();
+    expect(masterBeforeApprove).toBe(masterHead);
+
+    // Approve via orchestrator — hook should fire and do the squash merge
+    await orchestrator.approve(mergeNode.id);
+
+    // State should be completed
+    expect(orchestrator.getTask(mergeNode.id)!.status).toBe('completed');
+
+    // Master should have moved
+    const masterFinal = execSync('git rev-parse master', { cwd: tmpDir }).toString().trim();
+    expect(masterFinal).not.toBe(masterHead);
+
+    // All files present on master
+    execSync('git checkout master', { cwd: tmpDir });
+    expect(existsSync(join(tmpDir, 'a.txt'))).toBe(true);
+    expect(existsSync(join(tmpDir, 'b.txt'))).toBe(true);
+    expect(existsSync(join(tmpDir, 'initial.txt'))).toBe(true);
+
+    // Squash merge: no merge commits on master's first-parent log
+    const masterOnlyMerges = execSync(
+      'git log --merges --first-parent --oneline master',
+      { cwd: tmpDir },
+    ).toString().trim().split('\n').filter(l => l.length > 0);
+    expect(masterOnlyMerges.length).toBe(0);
+
+    // Tip commit message should match plan name
+    const tipMsg = execSync('git log -1 --format=%s master', { cwd: tmpDir }).toString().trim();
+    expect(tipMsg).toBe('Hook E2E Plan');
+
+    // Exactly one new commit on master (squash merge)
+    const newCommits = execSync(
+      `git log --oneline ${masterHead}..master`,
+      { cwd: tmpDir },
+    ).toString().trim().split('\n').filter(l => l.length > 0);
+    expect(newCommits.length).toBe(1);
+  });
+
 });
 
 // ── mergeExperimentBranches (real git) ──────────────────
