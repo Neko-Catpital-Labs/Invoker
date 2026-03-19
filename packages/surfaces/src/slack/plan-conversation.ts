@@ -229,6 +229,11 @@ export class PlanConversation {
         this.saveState();
         return reply;
       }
+      // No valid plan found — return explicit error instead of falling through to Cursor
+      const errorReply = "I couldn't find a complete YAML plan in this conversation. Could you ask me to regenerate the plan?";
+      this.messages.push({ role: 'assistant', content: errorReply });
+      this.saveState();
+      return errorReply;
     }
 
     const prompt = this.buildCursorPrompt();
@@ -348,6 +353,17 @@ export class PlanConversation {
       const plan = extractYamlPlan(msg.content, this.defaultBranch);
       if (plan) return plan;
     }
+
+    // Fallback: try concatenating all assistant messages
+    const combined = this.messages
+      .filter(m => m.role === 'assistant' && m.content)
+      .map(m => m.content)
+      .join('\n');
+    if (combined.length > 0) {
+      const plan = extractYamlPlan(combined, this.defaultBranch);
+      if (plan) return plan;
+    }
+
     return null;
   }
 
@@ -412,16 +428,26 @@ export function rewritePnpmTestCommand(cmd: string): string {
  * Returns null if no valid plan is found.
  */
 export function extractYamlPlan(text: string, defaultBranch?: string): PlanDefinition | null {
-  const yamlMatch = text.match(/```yaml\n([\s\S]*?)```/);
-  if (!yamlMatch) {
+  // Find the last ```yaml opening fence
+  const fenceStart = text.lastIndexOf('```yaml\n');
+  if (fenceStart === -1) {
     if (text.length > 100) {
       console.warn(`extractYamlPlan: no \`\`\`yaml fence found in text of length ${text.length}`);
     }
     return null;
   }
+  const contentStart = fenceStart + '```yaml\n'.length;
+  const rest = text.slice(contentStart);
+  // Find closing ``` at start of a line (not indented = not inside YAML block scalar)
+  const closeMatch = rest.match(/^```\s*$/m);
+  if (!closeMatch || closeMatch.index === undefined) {
+    console.warn('extractYamlPlan: no closing fence found for ```yaml block');
+    return null;
+  }
+  const yamlContent = rest.slice(0, closeMatch.index);
 
   try {
-    const raw = parseYaml(yamlMatch[1]);
+    const raw = parseYaml(yamlContent);
     if (!raw || typeof raw !== 'object') {
       console.warn('extractYamlPlan: parsed YAML is not an object');
       return null;

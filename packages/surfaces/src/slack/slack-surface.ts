@@ -354,10 +354,12 @@ export class SlackSurface implements Surface {
     // Start heartbeat interval
     const heartbeatMs = this.planningHeartbeatIntervalMs ?? 60_000;
     let heartbeatTimer: NodeJS.Timeout | undefined;
+    const heartbeatTimestamps: string[] = [];
     if (heartbeatMs > 0) {
       heartbeatTimer = setInterval(async () => {
         try {
-          await say({ text: ':hourglass_flowing_sand: Still thinking...', thread_ts: threadTs });
+          const result = await say({ text: ':hourglass_flowing_sand: Still thinking...', thread_ts: threadTs });
+          if (result?.ts) heartbeatTimestamps.push(result.ts);
           this.log('slack', 'info', `[HEARTBEAT] Sent planning heartbeat (thread_ts=${threadTs})`);
         } catch (err) {
           this.log('slack', 'error', `[HEARTBEAT] Failed to send planning heartbeat: ${err}`);
@@ -368,6 +370,13 @@ export class SlackSurface implements Surface {
     try {
       const reply = await conversation.sendMessage(text);
       if (heartbeatTimer) clearInterval(heartbeatTimer);
+      for (const hbTs of heartbeatTimestamps) {
+        try {
+          await this.deleteMessage(hbTs);
+        } catch (err) {
+          this.log('slack', 'warn', `[HEARTBEAT] Failed to delete heartbeat message ${hbTs}: ${err}`);
+        }
+      }
       this.log('slack', 'info', `[TRACE] conversation.sendMessage returned (threadTs=${threadTs}, replyLen=${reply.length}, planSubmitted=${conversation.planSubmitted})`);
 
       // Stop typing indicator before sending response
@@ -409,6 +418,13 @@ export class SlackSurface implements Surface {
       }
     } catch (err) {
       if (heartbeatTimer) clearInterval(heartbeatTimer);
+      for (const hbTs of heartbeatTimestamps) {
+        try {
+          await this.deleteMessage(hbTs);
+        } catch (deleteErr) {
+          this.log('slack', 'warn', `[HEARTBEAT] Failed to delete heartbeat message ${hbTs}: ${deleteErr}`);
+        }
+      }
       // Stop typing indicator on error
       if (typingStarted) {
         await this.stopTypingIndicator(this.channelId, threadTs);

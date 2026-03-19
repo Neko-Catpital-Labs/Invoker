@@ -214,6 +214,72 @@ tasks:
     expect(plan!.tasks[0].command).toBe('cd packages/protocol && pnpm test -- src/__tests__/validation.test.ts');
   });
 
+  it('extracts correctly when YAML contains nested triple backticks', () => {
+    const text = `Here's a plan:
+
+\`\`\`yaml
+name: "Nested Backticks Plan"
+tasks:
+  - id: implement-feature
+    description: "Add the feature"
+    prompt: |
+      Create a new file with this content:
+      \`\`\`typescript
+      export function hello() {
+        return 'world';
+      }
+      \`\`\`
+      Then add tests.
+    dependencies: []
+  - id: run-tests
+    description: "Run tests"
+    command: "cd packages/core && pnpm test"
+    dependencies:
+      - implement-feature
+\`\`\`
+
+Let me know if you'd like changes!`;
+    const plan = extractYamlPlan(text);
+    expect(plan).not.toBeNull();
+    expect(plan!.name).toBe('Nested Backticks Plan');
+    expect(plan!.tasks).toHaveLength(2);
+    expect(plan!.tasks[0].prompt).toContain('```typescript');
+  });
+
+  it('returns null for truncated YAML with no closing fence', () => {
+    const text = '```yaml\nname: "Truncated"\ntasks:\n  - id: t1\n    description: "test"\n    dependencies: []';
+    const plan = extractYamlPlan(text);
+    expect(plan).toBeNull();
+  });
+
+  it('extracts from the last YAML block when multiple exist', () => {
+    const text = `First attempt:
+
+\`\`\`yaml
+name: "First Plan"
+tasks:
+  - id: t1
+    description: "first"
+    dependencies: []
+\`\`\`
+
+Actually, let me revise that:
+
+\`\`\`yaml
+name: "Revised Plan"
+tasks:
+  - id: t1
+    description: "revised"
+    dependencies: []
+\`\`\`
+
+Does this look better?`;
+    const plan = extractYamlPlan(text);
+    expect(plan).not.toBeNull();
+    expect(plan!.name).toBe('Revised Plan');
+    expect(plan!.tasks[0].description).toBe('revised');
+  });
+
   describe('diagnostic logging', () => {
     let warnSpy: ReturnType<typeof vi.spyOn>;
 
@@ -236,6 +302,13 @@ tasks:
     it('does not log for short text without yaml fence', () => {
       extractYamlPlan('No code block here');
       expect(warnSpy).not.toHaveBeenCalled();
+    });
+
+    it('logs when no closing fence found', () => {
+      extractYamlPlan('```yaml\nname: "Truncated"\ntasks:\n  - id: t1\n    description: "test"');
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('no closing fence found'),
+      );
     });
 
     it('logs on YAML parse error', () => {
@@ -413,12 +486,41 @@ describe('PlanConversation', () => {
     expect(mockSpawn).toHaveBeenCalledTimes(2); // not called for confirmation
   });
 
-  it('confirmation without plan falls through to Cursor', async () => {
-    mockCursorResponse('No plan to submit.');
+  it('confirmation without plan returns explicit error', async () => {
     const reply = await conversation.sendMessage('yes');
-    expect(reply).toBe('No plan to submit.');
+    expect(reply).toContain("couldn't find a complete YAML plan");
+    expect(reply).toContain('regenerate the plan');
     expect(conversation.planSubmitted).toBe(false);
+    expect(mockSpawn).not.toHaveBeenCalled();
+  });
+
+  it('confirmation with broken YAML returns error, does not call Cursor', async () => {
+    // Simulate an assistant message with invalid YAML
+    mockCursorResponse('Here is a plan:\n```yaml\nname: "Broken\ntasks: [invalid');
+    await conversation.sendMessage('Generate a plan');
+
+    const reply = await conversation.sendMessage('yes');
+    expect(reply).toContain("couldn't find a complete YAML plan");
+    expect(conversation.planSubmitted).toBe(false);
+    // Only 1 spawn call for the first message, not the confirmation
     expect(mockSpawn).toHaveBeenCalledTimes(1);
+  });
+
+  it('extracts plan from YAML split across two assistant messages', async () => {
+    // First message has the opening fence + partial YAML (split before tasks key)
+    mockCursorResponse('Here is the plan:\n```yaml\nname: "Split Plan"');
+    await conversation.sendMessage('Generate plan');
+
+    // Second message continues the YAML and closes the fence
+    mockCursorResponse('tasks:\n  - id: t1\n    description: "do stuff"\n    dependencies: []\n```');
+    await conversation.sendMessage('Continue');
+
+    const reply = await conversation.sendMessage('yes');
+    expect(reply).toContain('Split Plan');
+    expect(conversation.planSubmitted).toBe(true);
+    expect(conversation.submittedPlan!.name).toBe('Split Plan');
+    // Only 2 spawn calls for the two non-confirmation messages
+    expect(mockSpawn).toHaveBeenCalledTimes(2);
   });
 
   it('planSubmitted starts as false', () => {
