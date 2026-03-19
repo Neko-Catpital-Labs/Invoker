@@ -985,9 +985,9 @@ describe('Flow 9: manual merge mode', () => {
     h.orchestrator.approve(mergeId);
     expect(h.getTask(mergeId)!.status).toBe('completed');
 
-    // Verify the final squash merge was performed: rebase + checkout + squash + commit
-    const rebaseCall = h.git.calls.find(c => c[0] === 'rebase' && c.includes('master') && c.includes('plan/manual-merge'));
-    expect(rebaseCall).toBeDefined();
+    // Verify the final squash merge was performed: checkout + squash + commit (no rebase)
+    const rebaseCall = h.git.calls.find(c => c[0] === 'rebase');
+    expect(rebaseCall).toBeUndefined();
     const checkoutBase = h.git.calls.find(c => c[0] === 'checkout' && c[1] === 'master');
     expect(checkoutBase).toBeDefined();
     const squashCall = h.git.calls.find(c => c[0] === 'merge' && c.includes('--squash') && c.includes('plan/manual-merge'));
@@ -1014,10 +1014,68 @@ describe('Flow 9: manual merge mode', () => {
     await h.executor.executeTasks([mergeTask]);
     expect(h.getTask(mergeId)!.status).toBe('completed');
 
-    // Verify git calls include rebase + squash merge + commit
-    const rebaseCall = h.git.calls.find(c => c[0] === 'rebase' && c.includes('master') && c.includes('plan/auto-merge'));
-    expect(rebaseCall).toBeDefined();
+    // Verify git calls include squash merge + commit (no rebase)
+    const rebaseCall2 = h.git.calls.find(c => c[0] === 'rebase');
+    expect(rebaseCall2).toBeUndefined();
     const squashCall = h.git.calls.find(c => c[0] === 'merge' && c.includes('--squash') && c.includes('plan/auto-merge'));
+    expect(squashCall).toBeDefined();
+    const commitCall = h.git.calls.find(c => c[0] === 'commit' && c.includes('-m'));
+    expect(commitCall).toBeDefined();
+  });
+});
+
+// ── Flow 9b: TaskPanel approve bypass (regression) ──────
+
+describe('Flow 9b: TaskPanel approve must not bypass git merge for merge nodes', () => {
+  let h: TestHarness;
+
+  beforeEach(() => {
+    h = createTestHarness();
+  });
+
+  it('orchestrator.approve alone marks task completed WITHOUT performing git merge', async () => {
+    h.loadAndStart(MANUAL_MERGE_PLAN);
+    h.completeTask('A');
+    h.completeTask('B');
+
+    const mergeId = h.getAllTasks().find(t => t.config.isMergeNode)!.id;
+    const mergeTask = h.getTask(mergeId)!;
+
+    await h.executor.executeTasks([mergeTask]);
+    expect(h.getTask(mergeId)!.status).toBe('awaiting_approval');
+    h.git.reset();
+
+    h.orchestrator.approve(mergeId);
+    expect(h.getTask(mergeId)!.status).toBe('completed');
+
+    const checkoutBase = h.git.calls.find(c => c[0] === 'checkout' && c[1] === 'master');
+    expect(checkoutBase).toBeUndefined();
+    const squashCall = h.git.calls.find(c => c[0] === 'merge' && c.includes('--squash'));
+    expect(squashCall).toBeUndefined();
+    const commitCall = h.git.calls.find(c => c[0] === 'commit');
+    expect(commitCall).toBeUndefined();
+  });
+
+  it('correct path: approveMerge + approve performs git merge AND state transition', async () => {
+    h.loadAndStart(MANUAL_MERGE_PLAN);
+    h.completeTask('A');
+    h.completeTask('B');
+
+    const mergeId = h.getAllTasks().find(t => t.config.isMergeNode)!.id;
+    const mergeTask = h.getTask(mergeId)!;
+    const wfId = mergeTask.config.workflowId!;
+
+    await h.executor.executeTasks([mergeTask]);
+    expect(h.getTask(mergeId)!.status).toBe('awaiting_approval');
+    h.git.reset();
+
+    await h.executor.approveMerge(wfId);
+    h.orchestrator.approve(mergeId);
+    expect(h.getTask(mergeId)!.status).toBe('completed');
+
+    const checkoutBase = h.git.calls.find(c => c[0] === 'checkout' && c[1] === 'master');
+    expect(checkoutBase).toBeDefined();
+    const squashCall = h.git.calls.find(c => c[0] === 'merge' && c.includes('--squash') && c.includes('plan/manual-merge'));
     expect(squashCall).toBeDefined();
     const commitCall = h.git.calls.find(c => c[0] === 'commit' && c.includes('-m'));
     expect(commitCall).toBeDefined();

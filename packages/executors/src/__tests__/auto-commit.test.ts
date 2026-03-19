@@ -991,6 +991,13 @@ describe('merge gate commit topology (real git)', () => {
     // Tip commit message should match workflow name
     const tipMsg = execSync('git log -1 --format=%s master', { cwd: tmpDir }).toString().trim();
     expect(tipMsg).toBe('My Workflow');
+
+    // Exactly one new commit on master (squash merge)
+    const newCommits = execSync(
+      \`git log --oneline \${masterHead}..master\`,
+      { cwd: tmpDir },
+    ).toString().trim().split('\n').filter(l => l.length > 0);
+    expect(newCommits.length).toBe(1);
   });
 
   it('automatic mode produces same topology in a single step', async () => {
@@ -1047,6 +1054,13 @@ describe('merge gate commit topology (real git)', () => {
     // Tip commit message should match workflow name
     const tipMsg = execSync('git log -1 --format=%s master', { cwd: tmpDir }).toString().trim();
     expect(tipMsg).toBe('Auto Workflow');
+
+    // Exactly one new commit on master (squash merge)
+    const newCommits = execSync(
+      `git log --oneline ${masterHead}..master`,
+      { cwd: tmpDir },
+    ).toString().trim().split('\n').filter(l => l.length > 0);
+    expect(newCommits.length).toBe(1);
   });
 
   it('rebase handles diverged baseBranch', async () => {
