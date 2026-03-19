@@ -45,6 +45,10 @@ export interface SlackSurfaceConfig {
   immediateAckEmoji?: string;
   /** Use typing indicator (emoji reaction) as acknowledgment method. Default: false. */
   useTypingIndicator?: boolean;
+  /** Cursor CLI subprocess timeout for plan conversations in ms. Default: 300000 (5 minutes). */
+  planningTimeoutMs?: number;
+  /** Interval for heartbeat messages posted to Slack during planning in ms. Default: 60000 (60 seconds). Set to 0 to disable. */
+  planningHeartbeatIntervalMs?: number;
 }
 
 // ── ConversationLike ─────────────────────────────────────────
@@ -80,6 +84,8 @@ export class SlackSurface implements Surface {
   private immediateAckMessage: string;
   private immediateAckEmoji: string;
   private useTypingIndicator: boolean;
+  private planningTimeoutMs?: number;
+  private planningHeartbeatIntervalMs?: number;
   /** Session lifecycle metrics */
   private sessionMetrics = {
     created: 0,
@@ -108,6 +114,8 @@ export class SlackSurface implements Surface {
     this.immediateAckMessage = config.immediateAckMessage ?? 'Processing your request...';
     this.immediateAckEmoji = config.immediateAckEmoji ?? 'thinking_face';
     this.useTypingIndicator = config.useTypingIndicator ?? false;
+    this.planningTimeoutMs = config.planningTimeoutMs;
+    this.planningHeartbeatIntervalMs = config.planningHeartbeatIntervalMs;
     this.log = config.log ?? ((source, level, msg) => {
       const fn = level === 'error' ? console.error : console.log;
       fn(`[${source}] ${msg}`);
@@ -121,6 +129,7 @@ export class SlackSurface implements Surface {
         conversationRepo: config.conversationRepo,
         defaultBranch: config.defaultBranch,
         log: this.log,
+        timeoutMs: this.planningTimeoutMs,
       });
     }
   }
@@ -342,8 +351,23 @@ export class SlackSurface implements Surface {
     // Start typing indicator if enabled
     const typingStarted = await this.startTypingIndicator(this.channelId, threadTs);
 
+    // Start heartbeat interval
+    const heartbeatMs = this.planningHeartbeatIntervalMs ?? 60_000;
+    let heartbeatTimer: NodeJS.Timeout | undefined;
+    if (heartbeatMs > 0) {
+      heartbeatTimer = setInterval(async () => {
+        try {
+          await say({ text: ':hourglass_flowing_sand: Still thinking...', thread_ts: threadTs });
+          this.log('slack', 'info', `[HEARTBEAT] Sent planning heartbeat (thread_ts=${threadTs})`);
+        } catch (err) {
+          this.log('slack', 'error', `[HEARTBEAT] Failed to send planning heartbeat: ${err}`);
+        }
+      }, heartbeatMs);
+    }
+
     try {
       const reply = await conversation.sendMessage(text);
+      if (heartbeatTimer) clearInterval(heartbeatTimer);
       this.log('slack', 'info', `[TRACE] conversation.sendMessage returned (threadTs=${threadTs}, replyLen=${reply.length}, planSubmitted=${conversation.planSubmitted})`);
 
       // Stop typing indicator before sending response
@@ -384,6 +408,7 @@ export class SlackSurface implements Surface {
         this.cleanupSession(threadTs, 'plan_submitted');
       }
     } catch (err) {
+      if (heartbeatTimer) clearInterval(heartbeatTimer);
       // Stop typing indicator on error
       if (typingStarted) {
         await this.stopTypingIndicator(this.channelId, threadTs);
@@ -581,6 +606,7 @@ export class SlackSurface implements Surface {
         threadTs,
         conversationRepo: this.conversationRepo,
         defaultBranch: this.defaultBranch,
+        timeoutMs: this.planningTimeoutMs,
       });
       this.planConversations.set(threadTs, conversation);
     }

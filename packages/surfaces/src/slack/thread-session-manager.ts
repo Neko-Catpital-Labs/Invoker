@@ -156,6 +156,8 @@ export interface SessionManagerConfig {
   maxActiveSessions?: number;
   defaultBranch?: string;
   log?: LogFn;
+  /** Cursor CLI subprocess timeout in ms. Passed to PlanConversation. */
+  timeoutMs?: number;
 }
 
 export interface SessionMetrics {
@@ -189,6 +191,7 @@ export class SessionManager {
   private readonly sessionTtlMs: number;
   private readonly evictionIntervalMs: number;
   private readonly maxActiveSessions: number;
+  private readonly timeoutMs?: number;
 
   constructor(config: SessionManagerConfig) {
     this.cursorCommand = config.cursorCommand ?? 'cursor';
@@ -199,6 +202,7 @@ export class SessionManager {
     this.sessionTtlMs = config.sessionTtlMs ?? 30 * 60 * 1000; // 30 minutes
     this.evictionIntervalMs = config.evictionIntervalMs ?? 5 * 60 * 1000; // 5 minutes
     this.maxActiveSessions = config.maxActiveSessions ?? 100;
+    this.timeoutMs = config.timeoutMs;
   }
 
   /**
@@ -281,6 +285,7 @@ export class SessionManager {
         conversationRepo: this.conversationRepo,
         defaultBranch: this.defaultBranch,
         log: this.log,
+        timeoutMs: this.timeoutMs,
       });
       await conversation.init(); // Load state from database
       this.log('session-manager', 'info', `[TRACE] Recovery init() done (threadTs=${id.threadTs})`);
@@ -305,6 +310,7 @@ export class SessionManager {
         conversationRepo: this.conversationRepo,
         defaultBranch: this.defaultBranch,
         log: this.log,
+        timeoutMs: this.timeoutMs,
       });
       // Don't call init() for new sessions — nothing to load
 

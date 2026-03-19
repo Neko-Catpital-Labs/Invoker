@@ -95,3 +95,7 @@ Do **not** run `pnpm rebuild better-sqlite3` directly — that rebuilds for syst
 ```bash
 bash scripts/test-worktree-provisioning.sh
 ```
+
+## Code Navigation
+
+Use LSP tools (`goToDefinition`, `findReferences`, `documentSymbol`, `workspaceSymbol`, `incomingCalls`, `outgoingCalls`, `hover`) for any task involving symbols, types, or cross-file relationships. Use Grep and Glob for literal text searches and file discovery.
