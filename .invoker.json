@@ -1,3 +1,4 @@
 {
-  "defaultBranch": "master"
+  "defaultBranch": "master",
+  "planningTimeoutMs": 900000
 }
