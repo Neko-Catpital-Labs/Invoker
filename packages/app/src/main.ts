@@ -165,9 +165,14 @@ async function wireSlackBot(deps: SlackBotDeps): Promise<any> {
   await slack.start(async (command: any) => {
     deps.logFn('trace', 'info', `slackBot: command received — type=${command.type}`);
     switch (command.type) {
-      case 'approve':
+      case 'approve': {
+        const approveTask = orchestrator.getTask(command.taskId);
+        if (approveTask?.config.isMergeNode && approveTask.config.workflowId) {
+          await deps.executor.approveMerge(approveTask.config.workflowId);
+        }
         orchestrator.approve(command.taskId);
         break;
+      }
       case 'reject':
         orchestrator.reject(command.taskId, command.reason);
         break;
@@ -1122,6 +1127,9 @@ function setupGuiMode(): void {
         const started = orchestrator.restartTask(taskId);
         const runnable = started.filter(t => t.status === 'running');
         await taskExecutor.executeTasks(runnable);
+      } else if (task?.config.isMergeNode && task.config.workflowId) {
+        await taskExecutor.approveMerge(task.config.workflowId);
+        orchestrator.approve(taskId);
       } else {
         orchestrator.approve(taskId);
       }
