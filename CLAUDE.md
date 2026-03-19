@@ -95,7 +95,3 @@ Do **not** run `pnpm rebuild better-sqlite3` directly — that rebuilds for syst
 ```bash
 bash scripts/test-worktree-provisioning.sh
 ```
-
-## File Editing
-
-When `StrReplace` edits silently fail to persist to disk (changes report as applied but `git diff` shows nothing), fall back to direct filesystem writes via the Shell tool using bash (e.g. `sed`, `patch`, or heredocs). Do not use Python for file writes — use bash directly. After writing, immediately `git add` in the same shell command to lock in the changes before any external process can revert them.
