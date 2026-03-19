@@ -407,7 +407,6 @@ export class TaskExecutor {
     try {
       const mergeMessage = workflow.name ?? 'Workflow';
       if (onFinish === 'merge') {
-        await this.execGit(['rebase', baseBranch, featureBranch]);
         await this.execGit(['checkout', baseBranch]);
         await this.execGit(['merge', '--squash', featureBranch]);
         await this.execGit(['commit', '-m', mergeMessage]);
@@ -418,7 +417,6 @@ export class TaskExecutor {
         console.log(`[merge] Approved: created pull request ${featureBranch} → ${baseBranch}`);
       }
     } catch (err) {
-      try { await this.execGit(['rebase', '--abort']); } catch { /* no rebase in progress */ }
       try { await this.execGit(['merge', '--abort']); } catch { /* no merge in progress */ }
       try { await this.execGit(['checkout', originalBranch]); } catch { /* best effort */ }
       throw err;
@@ -471,7 +469,6 @@ export class TaskExecutor {
       const mergeMessage = workflowName ?? 'Workflow';
 
       if (onFinish === 'merge') {
-        await this.execGit(['rebase', baseBranch, featureBranch]);
         await this.execGit(['checkout', baseBranch]);
         await this.execGit(['merge', '--squash', featureBranch]);
         await this.execGit(['commit', '-m', mergeMessage]);
@@ -482,7 +479,6 @@ export class TaskExecutor {
         console.log(`[merge] Created pull request: ${featureBranch} → ${baseBranch}`);
       }
     } catch (err) {
-      try { await this.execGit(['rebase', '--abort']); } catch { /* no rebase in progress */ }
       try { await this.execGit(['merge', '--abort']); } catch { /* no merge in progress */ }
       try { await this.execGit(['checkout', originalBranch]); } catch { /* best effort */ }
       throw err;

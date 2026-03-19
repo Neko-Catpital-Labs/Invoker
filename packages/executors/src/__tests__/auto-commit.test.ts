@@ -1092,6 +1092,97 @@ describe('merge gate commit topology (real git)', () => {
     const tipMsg = execSync('git log -1 --format=%s master', { cwd: tmpDir }).toString().trim();
     expect(tipMsg).toBe('Diverged Workflow');
   });
+
+  it('task branches based on non-master intermediate branch merge correctly', async () => {
+    // Build an intermediate branch that contains a resolved merge commit.
+    // This models a real workflow where a previous plan's feature branch merged
+    // parallel task branches that touched the same file. The rebase approach
+    // (removed in this fix) would drop the merge commit and its conflict
+    // resolution, replaying the underlying conflicting commits linearly.
+    writeFileSync(join(tmpDir, 'config.txt'), 'base\n');
+    execSync('git add -A && git commit -m "add config"', { cwd: tmpDir });
+
+    execSync('git checkout -b upstream-a', { cwd: tmpDir });
+    writeFileSync(join(tmpDir, 'config.txt'), 'base\nupstream-a\n');
+    execSync('git add -A && git commit -m "upstream-a"', { cwd: tmpDir });
+
+    execSync('git checkout master', { cwd: tmpDir });
+    execSync('git checkout -b upstream-b', { cwd: tmpDir });
+    writeFileSync(join(tmpDir, 'config.txt'), 'base\nupstream-b\n');
+    execSync('git add -A && git commit -m "upstream-b"', { cwd: tmpDir });
+
+    execSync('git checkout master', { cwd: tmpDir });
+    execSync('git checkout -b intermediate', { cwd: tmpDir });
+    execSync('git merge --no-ff upstream-a -m "merge upstream-a"', { cwd: tmpDir });
+    try { execSync('git merge --no-ff upstream-b -m "merge upstream-b"', { cwd: tmpDir }); } catch { /* conflict expected */ }
+    writeFileSync(join(tmpDir, 'config.txt'), 'base\nupstream-a\nupstream-b\n');
+    execSync('git add -A && git commit --no-edit', { cwd: tmpDir });
+
+    // Task branches from intermediate, each adding a unique file
+    execSync('git checkout -b experiment/task-a', { cwd: tmpDir });
+    writeFileSync(join(tmpDir, 'a.txt'), 'a-work');
+    execSync('git add -A && git commit -m "task-a work"', { cwd: tmpDir });
+
+    execSync('git checkout intermediate', { cwd: tmpDir });
+    execSync('git checkout -b experiment/task-b', { cwd: tmpDir });
+    writeFileSync(join(tmpDir, 'b.txt'), 'b-work');
+    execSync('git add -A && git commit -m "task-b work"', { cwd: tmpDir });
+
+    execSync('git checkout master', { cwd: tmpDir });
+    const masterHead = execSync('git rev-parse HEAD', { cwd: tmpDir }).toString().trim();
+
+    const tasks: TaskState[] = [
+      makeTaskState({ id: 'task-a', config: { workflowId: 'wf-i' }, status: 'completed', execution: { branch: 'experiment/task-a' } }),
+      makeTaskState({ id: 'task-b', config: { workflowId: 'wf-i' }, status: 'completed', execution: { branch: 'experiment/task-b' } }),
+      makeTaskState({ id: '__merge__wf-i', dependencies: ['task-a', 'task-b'], config: { workflowId: 'wf-i', isMergeNode: true }, status: 'running' }),
+    ];
+
+    const workflow = {
+      id: 'wf-i',
+      onFinish: 'merge',
+      mergeMode: 'manual',
+      baseBranch: 'master',
+      featureBranch: 'feat/intermediate-workflow',
+      name: 'Intermediate Workflow',
+    };
+
+    const executor = createExecutor(tasks, workflow);
+
+    // Phase 1: consolidation (manual mode — effectiveOnFinish='none')
+    const mergeTask = tasks.find(t => t.config.isMergeNode)!;
+    await (executor as any).executeMergeNode(mergeTask);
+
+    // Feature branch should exist with both task branches merged
+    const featureTip = execSync('git rev-parse feat/intermediate-workflow', { cwd: tmpDir }).toString().trim();
+    expect(featureTip).toBeTruthy();
+
+    // Master should NOT have moved yet (manual mode)
+    const masterAfterConsolidate = execSync('git rev-parse master', { cwd: tmpDir }).toString().trim();
+    expect(masterAfterConsolidate).toBe(masterHead);
+
+    // Phase 2: approve — final squash merge into master
+    await executor.approveMerge('wf-i');
+
+    // Master should now have the squash-merged changes
+    const masterFinal = execSync('git rev-parse master', { cwd: tmpDir }).toString().trim();
+    expect(masterFinal).not.toBe(masterHead);
+
+    // All files present on master
+    expect(existsSync(join(tmpDir, 'a.txt'))).toBe(true);
+    expect(existsSync(join(tmpDir, 'b.txt'))).toBe(true);
+    expect(existsSync(join(tmpDir, 'config.txt'))).toBe(true);
+    expect(existsSync(join(tmpDir, 'initial.txt'))).toBe(true);
+
+    // Squash merge: no merge commits on master's first-parent log
+    const masterOnlyMerges = execSync(
+      'git log --merges --first-parent --oneline master',
+      { cwd: tmpDir },
+    ).toString().trim().split('\n').filter(l => l.length > 0);
+    expect(masterOnlyMerges.length).toBe(0);
+
+    const tipMsgI = execSync('git log -1 --format=%s master', { cwd: tmpDir }).toString().trim();
+    expect(tipMsgI).toBe('Intermediate Workflow');
+  });
 });
 
 // ── mergeExperimentBranches (real git) ──────────────────

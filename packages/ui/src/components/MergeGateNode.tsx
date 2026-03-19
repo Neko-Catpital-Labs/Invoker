@@ -6,6 +6,7 @@
  * Branch display is read-only; editing happens in TaskPanel.
  */
 
+import { useState } from 'react';
 import { Handle, Position } from '@xyflow/react';
 import type { TaskStatus } from '../types.js';
 import { getStatusColor } from '../lib/colors.js';
@@ -27,10 +28,14 @@ interface MergeGateNodeProps {
 export function MergeGateNode({ data }: MergeGateNodeProps) {
   const { status, label, onFinish, baseBranch, mergeMode = 'manual', workflowId } = data;
   const colors = getStatusColor(status);
+  const [error, setError] = useState<string | null>(null);
 
   const handleApproveMerge = () => {
     if (workflowId && window.invoker?.approveMerge) {
+      setError(null);
       window.invoker.approveMerge(workflowId).catch((err) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        setError(msg);
         console.error('Failed to approve merge:', err);
       });
     }
@@ -113,6 +118,16 @@ export function MergeGateNode({ data }: MergeGateNodeProps) {
         >
           Approve Merge
         </button>
+      )}
+
+      {error && (
+        <div
+          data-testid="merge-error"
+          className="mt-1 px-2 py-1 text-xs text-red-400 bg-red-900/30 rounded break-words"
+          title={error}
+        >
+          {error}
+        </div>
       )}
     </div>
   );

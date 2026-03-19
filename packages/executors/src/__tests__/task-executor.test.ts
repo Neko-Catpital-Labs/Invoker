@@ -835,9 +835,9 @@ describe('TaskExecutor', () => {
 
       await (executor as any).executeMergeNode(mergeTask);
 
-      // Should rebase then squash merge featureBranch into baseBranch
-      const rebaseCall = gitCalls.find(c => c[0] === 'rebase' && c.includes('master') && c.includes('plan/feature'));
-      expect(rebaseCall).toBeDefined();
+      // Should squash merge featureBranch into baseBranch (no rebase)
+      const rebaseCall = gitCalls.find(c => c[0] === 'rebase');
+      expect(rebaseCall).toBeUndefined();
       const squashCall = gitCalls.find(c => c[0] === 'merge' && c.includes('--squash') && c.includes('plan/feature'));
       expect(squashCall).toBeDefined();
       const commitCall = gitCalls.find(c => c[0] === 'commit' && c.includes('-m'));
@@ -875,9 +875,9 @@ describe('TaskExecutor', () => {
 
       await executor.approveMerge('wf-1');
 
-      // Should rebase, checkout baseBranch, squash merge, and commit
-      const rebaseCall = gitCalls.find(c => c[0] === 'rebase' && c.includes('master') && c.includes('plan/feature'));
-      expect(rebaseCall).toBeDefined();
+      // Should checkout baseBranch, squash merge, and commit (no rebase)
+      const rebaseCall = gitCalls.find(c => c[0] === 'rebase');
+      expect(rebaseCall).toBeUndefined();
       const checkoutBase = gitCalls.find(c => c[0] === 'checkout' && c[1] === 'master');
       expect(checkoutBase).toBeDefined();
       const squashCall = gitCalls.find(c => c[0] === 'merge' && c.includes('--squash') && c.includes('plan/feature'));
@@ -1198,17 +1198,17 @@ describe('TaskExecutor', () => {
       (executor as any).execGit = async (args: string[]) => {
         calls.push([...args]);
         if (args[0] === 'branch' && args[1] === '--show-current') return 'original-branch';
-        if (args[0] === 'rebase') throw new Error('CONFLICT');
+        if (args[0] === 'merge' && args.includes('--squash')) throw new Error('CONFLICT');
         return '';
       };
 
       await expect(executor.approveMerge('wf-test')).rejects.toThrow('CONFLICT');
 
-      // Should have attempted rebase --abort, merge --abort, and checkout back to original
+      // Should have attempted merge --abort and checkout back to original (no rebase)
       const rebaseAbort = calls.find(c => c[0] === 'rebase' && c[1] === '--abort');
       const mergeAbort = calls.find(c => c[0] === 'merge' && c[1] === '--abort');
       const restoreCall = calls.find(c => c[0] === 'checkout' && c[1] === 'original-branch');
-      expect(rebaseAbort).toBeDefined();
+      expect(rebaseAbort).toBeUndefined();
       expect(mergeAbort).toBeDefined();
       expect(restoreCall).toBeDefined();
     });
