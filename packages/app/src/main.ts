@@ -160,6 +160,8 @@ async function wireSlackBot(deps: SlackBotDeps): Promise<any> {
     defaultBranch: invokerConfig.defaultBranch,
     disableLocalExecutorExceptMergeGate: invokerConfig.disableLocalExecutorExceptMergeGate,
     log: deps.logFn,
+    planningTimeoutMs: invokerConfig.planningTimeoutMs,
+    planningHeartbeatIntervalMs: invokerConfig.planningHeartbeatIntervalMs,
   });
 
   await slack.start(async (command: any) => {

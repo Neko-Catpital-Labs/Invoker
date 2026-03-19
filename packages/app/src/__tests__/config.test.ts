@@ -73,4 +73,35 @@ describe('loadConfig', () => {
     const config = loadConfig(fakeRepo);
     expect(config).toEqual({});
   });
+
+  it('reads planningTimeoutMs from user config', () => {
+    writeFileSync(
+      join(fakeHome, '.invoker', 'config.json'),
+      JSON.stringify({ planningTimeoutMs: 600000 }),
+    );
+    const config = loadConfig(fakeRepo);
+    expect(config.planningTimeoutMs).toBe(600000);
+  });
+
+  it('reads planningHeartbeatIntervalMs from user config', () => {
+    writeFileSync(
+      join(fakeHome, '.invoker', 'config.json'),
+      JSON.stringify({ planningHeartbeatIntervalMs: 30000 }),
+    );
+    const config = loadConfig(fakeRepo);
+    expect(config.planningHeartbeatIntervalMs).toBe(30000);
+  });
+
+  it('repo-level overrides planningTimeoutMs from user-level', () => {
+    writeFileSync(
+      join(fakeHome, '.invoker', 'config.json'),
+      JSON.stringify({ planningTimeoutMs: 600000 }),
+    );
+    writeFileSync(
+      join(fakeRepo, '.invoker.json'),
+      JSON.stringify({ planningTimeoutMs: 900000 }),
+    );
+    const config = loadConfig(fakeRepo);
+    expect(config.planningTimeoutMs).toBe(900000);
+  });
 });

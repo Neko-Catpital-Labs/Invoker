@@ -39,6 +39,10 @@ export interface InvokerConfig {
    * Set to true to permit intentional graph mutation.
    */
   allowGraphMutation?: boolean;
+  /** Cursor CLI subprocess timeout for plan conversations in ms. Default: 300000 (5 minutes). */
+  planningTimeoutMs?: number;
+  /** Interval for heartbeat messages posted to Slack during planning in ms. Default: 60000 (60 seconds). Set to 0 to disable. */
+  planningHeartbeatIntervalMs?: number;
 }
 
 function readJsonSafe(path: string): InvokerConfig {

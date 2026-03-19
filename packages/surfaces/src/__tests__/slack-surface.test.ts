@@ -640,4 +640,18 @@ describe('SlackSurface', () => {
       expect(app.client.reactions.remove).not.toHaveBeenCalled();
     });
   });
+
+  describe('planning config threading', () => {
+    it('accepts planningTimeoutMs and planningHeartbeatIntervalMs config', () => {
+      const configuredSurface = new SlackSurface({
+        botToken: 'xoxb-test',
+        appToken: 'xapp-test',
+        signingSecret: 'test-secret',
+        channelId: 'C-test',
+        planningTimeoutMs: 600_000,
+        planningHeartbeatIntervalMs: 30_000,
+      });
+      expect(configuredSurface).toBeDefined();
+    });
+  });
 });
