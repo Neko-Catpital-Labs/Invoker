@@ -994,7 +994,7 @@ describe('merge gate commit topology (real git)', () => {
 
     // Exactly one new commit on master (squash merge)
     const newCommits = execSync(
-      \`git log --oneline \${masterHead}..master\`,
+      `git log --oneline ${masterHead}..master`,
       { cwd: tmpDir },
     ).toString().trim().split('\n').filter(l => l.length > 0);
     expect(newCommits.length).toBe(1);
