@@ -24,5 +24,14 @@ fi
 # VS Code terminals set this, which breaks electron imports.
 unset ELECTRON_RUN_AS_NODE
 
+SANDBOX_FLAG=""
+if [ "$(uname)" = "Linux" ]; then
+  SANDBOX_BIN="$REPO_ROOT/node_modules/.pnpm/electron@*/node_modules/electron/dist/chrome-sandbox"
+  # shellcheck disable=SC2086
+  if ! stat -c '%U:%a' $SANDBOX_BIN 2>/dev/null | grep -q '^root:4755$'; then
+    SANDBOX_FLAG="--no-sandbox"
+  fi
+fi
+
 echo "==> Submitting plan: $PLAN_FILE"
-./packages/app/node_modules/.bin/electron packages/app/dist/main.js --headless run "$PLAN_FILE"
+./packages/app/node_modules/.bin/electron packages/app/dist/main.js $SANDBOX_FLAG --headless run "$PLAN_FILE"
