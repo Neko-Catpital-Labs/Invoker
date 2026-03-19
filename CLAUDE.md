@@ -3,7 +3,10 @@
 ## Planning Rules
 
 - Every step in a plan MUST be testable. Each implementation step must have a corresponding verification with a concrete, executable command that produces a clear pass/fail exit code (e.g. `pnpm test`, `git diff --name-only`). Do not use AI prompts for test tasks — use commands only.
-- Bug fix plans MUST begin with a reproduction step. Before implementing any fix, first write a step that reproduces the bug with a concrete command or test that fails. This proves the bug exists and later confirms it is fixed.
+- Bug fix plans MUST follow a three-phase approach before any implementation:
+  1. **Reproduce** -- Find or write a concrete reproduction case (a failing test or a command that demonstrates the bug). Report back the exact repro steps and observed vs. expected behavior. Do not proceed until the bug is reliably reproducible.
+  2. **Debug and report** -- Investigate and report: (a) the root cause — why the code is in the buggy state, and (b) the test gap — how the bug escaped existing tests (missing coverage, wrong assumptions, untested edge case, etc.).
+  3. **Plan the fix** -- Only after completing steps 1 and 2, create the implementation plan. The plan must include a verification step that re-runs the reproduction case to confirm the fix.
 
 ## Testing Architecture
 
