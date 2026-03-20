@@ -345,6 +345,7 @@ export function App() {
             <TaskPanel
               task={selectedTask}
               baseBranch={selectedTask?.config.workflowId ? workflows.get(selectedTask.config.workflowId)?.baseBranch : undefined}
+              mergeMode={selectedTask?.config.workflowId ? workflows.get(selectedTask.config.workflowId)?.mergeMode : undefined}
               onProvideInput={openInputModal}
               onApprove={openApprovalModal}
               onReject={(task) => {
@@ -354,6 +355,7 @@ export function App() {
               onEditCommand={handleEditCommand}
               onEditType={handleEditType}
               onSetMergeBranch={invoker?.setMergeBranch}
+              onSetMergeMode={invoker?.setMergeMode}
             />
           </div>
         </div>

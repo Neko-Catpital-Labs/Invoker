@@ -174,6 +174,10 @@ export class SQLiteAdapter implements PersistenceAdapter {
       'ALTER TABLE tasks ADD COLUMN selected_experiments TEXT',
       'ALTER TABLE tasks ADD COLUMN utilization INTEGER',
       'ALTER TABLE tasks ADD COLUMN pending_fix_error TEXT',
+      'ALTER TABLE workflows ADD COLUMN merge_mode TEXT',
+      'ALTER TABLE tasks ADD COLUMN pr_url TEXT',
+      'ALTER TABLE tasks ADD COLUMN pr_identifier TEXT',
+      'ALTER TABLE tasks ADD COLUMN pr_status TEXT',
     ];
     for (const sql of migrations) {
       try { this.db.exec(sql); } catch { /* Column already exists */ }
@@ -208,18 +212,19 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
   saveWorkflow(workflow: Workflow): void {
     this.db.prepare(`
-      INSERT OR REPLACE INTO workflows (id, name, status, plan_file, repo_url, branch, on_finish, base_branch, feature_branch, generation, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT OR REPLACE INTO workflows (id, name, status, plan_file, repo_url, branch, on_finish, base_branch, feature_branch, merge_mode, generation, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       workflow.id, workflow.name, workflow.status,
       workflow.planFile ?? null, workflow.repoUrl ?? null, workflow.branch ?? null,
       workflow.onFinish ?? null, workflow.baseBranch ?? null, workflow.featureBranch ?? null,
+      workflow.mergeMode ?? null,
       workflow.generation ?? 0,
       workflow.createdAt, workflow.updatedAt,
     );
   }
 
-  updateWorkflow(workflowId: string, changes: Partial<Pick<Workflow, 'status' | 'updatedAt' | 'baseBranch' | 'generation'>>): void {
+  updateWorkflow(workflowId: string, changes: Partial<Pick<Workflow, 'status' | 'updatedAt' | 'baseBranch' | 'generation' | 'mergeMode'>>): void {
     const setClauses: string[] = [];
     const values: unknown[] = [];
     if (changes.status !== undefined) {
@@ -233,6 +238,10 @@ export class SQLiteAdapter implements PersistenceAdapter {
     if (changes.generation !== undefined) {
       setClauses.push('generation = ?');
       values.push(changes.generation);
+    }
+    if (changes.mergeMode !== undefined) {
+      setClauses.push('merge_mode = ?');
+      values.push(changes.mergeMode);
     }
     setClauses.push('updated_at = ?');
     values.push(changes.updatedAt ?? new Date().toISOString());
@@ -272,7 +281,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
         familiar_type, claude_session_id, workspace_path, container_id,
         action_request_id, experiments,
         created_at, started_at, completed_at, last_heartbeat_at,
-        utilization, pending_fix_error
+        utilization, pending_fix_error,
+        pr_url, pr_identifier, pr_status
       ) VALUES (
         ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?, ?,
@@ -285,7 +295,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
         ?, ?, ?, ?,
         ?, ?,
         ?, ?, ?, ?,
-        ?, ?
+        ?, ?,
+        ?, ?, ?
       )
     `).run(
       task.id, workflowId, task.description, task.status,
@@ -318,6 +329,9 @@ export class SQLiteAdapter implements PersistenceAdapter {
       exec.lastHeartbeatAt?.toISOString() ?? null,
       cfg.utilization ?? null,
       exec.pendingFixError ?? null,
+      exec.prUrl ?? null,
+      exec.prIdentifier ?? null,
+      exec.prStatus ?? null,
     );
   }
 
@@ -398,6 +412,9 @@ export class SQLiteAdapter implements PersistenceAdapter {
         containerId: 'container_id',
         selectedExperiment: 'selected_experiment',
         pendingFixError: 'pending_fix_error',
+        prUrl: 'pr_url',
+        prIdentifier: 'pr_identifier',
+        prStatus: 'pr_status',
       };
       const execDateMap: Record<string, string> = {
         startedAt: 'started_at',
@@ -723,6 +740,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       onFinish: row.on_finish ?? undefined,
       baseBranch: row.base_branch ?? undefined,
       featureBranch: row.feature_branch ?? undefined,
+      mergeMode: row.merge_mode ?? undefined,
       generation: row.generation ?? 0,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
@@ -778,6 +796,9 @@ export class SQLiteAdapter implements PersistenceAdapter {
         selectedExperiments: row.selected_experiments ? JSON.parse(row.selected_experiments) : undefined,
         experimentResults: row.experiment_results ? JSON.parse(row.experiment_results) : undefined,
         pendingFixError: row.pending_fix_error ?? undefined,
+        prUrl: row.pr_url ?? undefined,
+        prIdentifier: row.pr_identifier ?? undefined,
+        prStatus: row.pr_status ?? undefined,
       },
     };
   }

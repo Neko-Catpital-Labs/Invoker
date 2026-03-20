@@ -78,7 +78,9 @@ export interface TaskExecution {
   readonly selectedExperiments?: readonly string[];
   readonly experimentResults?: readonly ExperimentResultEntry[];
   readonly pendingFixError?: string;
-  readonly pendingFixError?: string;
+  readonly prUrl?: string;
+  readonly prIdentifier?: string;
+  readonly prStatus?: string;
   readonly mergeConflict?: {
     readonly failedBranch: string;
     readonly conflictFiles: readonly string[];
@@ -123,7 +125,7 @@ export interface WorkflowMeta {
   baseBranch?: string;
   featureBranch?: string;
   onFinish?: string;
-  mergeMode?: string;
+  mergeMode?: 'manual' | 'automatic' | 'github';
 }
 
 // ── Workflow Status ─────────────────────────────────────────
@@ -171,7 +173,7 @@ export interface PlanDefinition {
   tasks: PlanTask[];
   onFinish?: 'none' | 'merge' | 'pull_request';
   baseBranch?: string;
-  mergeMode?: 'manual' | 'automatic';
+  mergeMode?: 'manual' | 'automatic' | 'github';
 }
 
 // ── Task Replacement ────────────────────────────────────────
@@ -230,6 +232,7 @@ export interface InvokerAPI {
   approveMerge: (workflowId: string) => Promise<void>;
   resolveConflict: (taskId: string) => Promise<void>;
   fixWithClaude: (taskId: string) => Promise<void>;
+  setMergeMode: (workflowId: string, mergeMode: string) => Promise<void>;
 }
 
 // ── Augment global Window ───────────────────────────────────

@@ -24,6 +24,7 @@ import type { SQLiteAdapter } from '@invoker/persistence';
 import type { WorkRequest, WorkResponse, ActionType } from '@invoker/protocol';
 import type { Familiar, FamiliarHandle } from './familiar.js';
 import type { FamiliarRegistry } from './registry.js';
+import type { MergeGateProvider } from './merge-gate-provider.js';
 import { DockerFamiliar } from './docker-familiar.js';
 import { WorktreeFamiliar } from './worktree-familiar.js';
 
@@ -49,6 +50,7 @@ export interface TaskExecutorConfig {
   /** Default branch from config (e.g. "master"). Falls back to git heuristic if unset. */
   defaultBranch?: string;
   callbacks?: TaskExecutorCallbacks;
+  mergeGateProvider?: MergeGateProvider;
 }
 
 // ── TaskExecutor ──────────────────────────────────────────
@@ -62,6 +64,8 @@ export class TaskExecutor {
   private defaultBranch: string | undefined;
   private callbacks: TaskExecutorCallbacks;
   private abiChecked = false;
+  private mergeGateProvider?: MergeGateProvider;
+  private activePrPollers = new Map<string, ReturnType<typeof setInterval>>();
 
   constructor(config: TaskExecutorConfig) {
     this.orchestrator = config.orchestrator;
@@ -71,6 +75,7 @@ export class TaskExecutor {
     this.maxWorktreesPerRepo = config.maxWorktreesPerRepo ?? 5;
     this.defaultBranch = config.defaultBranch;
     this.callbacks = config.callbacks ?? {};
+    this.mergeGateProvider = config.mergeGateProvider;
   }
 
   /**
@@ -357,6 +362,44 @@ export class TaskExecutor {
           };
           this.callbacks.onComplete?.(task.id, manualResponse);
           this.orchestrator.setTaskAwaitingApproval(task.id);
+          return;
+        }
+        if (mergeMode === 'github') {
+          if (!this.mergeGateProvider) {
+            throw new Error('mergeMode is "github" but no mergeGateProvider configured');
+          }
+          // Consolidate branches without merging (effectiveOnFinish = 'none')
+          await this.consolidateAndMerge('none', baseBranch, featureBranch, workflowId, workflow?.name, task.dependencies);
+
+          // Create PR via provider
+          const result = await this.mergeGateProvider.createReview({
+            baseBranch,
+            featureBranch,
+            title: workflow?.name ?? 'Workflow',
+            cwd: this.cwd,
+          });
+
+          // Persist PR metadata
+          this.persistence.updateTask(task.id, {
+            config: { familiarType: 'local' },
+            execution: {
+              branch: featureBranch,
+              workspacePath: this.cwd,
+              prUrl: result.url,
+              prIdentifier: result.identifier,
+              prStatus: 'Awaiting review',
+            },
+          });
+
+          const prResponse: WorkResponse = {
+            requestId: `merge-${task.id}`,
+            actionId: task.id,
+            status: 'completed',
+            outputs: { exitCode: 0 },
+          };
+          this.callbacks.onComplete?.(task.id, prResponse);
+          this.orchestrator.setTaskAwaitingApproval(task.id);
+          this.startPrPolling(task.id, result.identifier, workflowId!);
           return;
         }
         response = {
@@ -728,6 +771,46 @@ export class TaskExecutor {
     }
     this.persistence.updateTask(taskId, { execution: { claudeSessionId: sessionId } });
     console.log(`[fixWithClaude] Successfully applied fix for ${taskId} (session=${sessionId})`);
+  }
+
+  private startPrPolling(taskId: string, prIdentifier: string, workflowId: string): void {
+    const pollIntervalMs = 30_000;
+    const interval = setInterval(async () => {
+      try {
+        if (!this.mergeGateProvider) return;
+        const status = await this.mergeGateProvider.checkApproval({
+          identifier: prIdentifier,
+          cwd: this.cwd,
+        });
+
+        // Update PR status on task
+        this.persistence.updateTask(taskId, {
+          execution: { prStatus: status.statusText },
+        });
+
+        if (status.approved) {
+          console.log(`[merge-gate] PR ${prIdentifier} approved, completing merge gate`);
+          this.stopPrPolling(taskId);
+          await this.orchestrator.approve(taskId);
+        } else if (status.rejected) {
+          console.log(`[merge-gate] PR ${prIdentifier} rejected: ${status.statusText}`);
+          this.stopPrPolling(taskId);
+          // Leave in awaiting_approval — user can retry
+        }
+      } catch (err) {
+        console.error(`[merge-gate] PR poll error for ${taskId}:`, err);
+        // Continue polling on transient errors
+      }
+    }, pollIntervalMs);
+    this.activePrPollers.set(taskId, interval);
+  }
+
+  private stopPrPolling(taskId: string): void {
+    const interval = this.activePrPollers.get(taskId);
+    if (interval) {
+      clearInterval(interval);
+      this.activePrPollers.delete(taskId);
+    }
   }
 
   spawnClaudeFix(prompt: string, cwd: string): Promise<{ stdout: string; sessionId: string }> {

@@ -39,7 +39,7 @@ import { SQLiteAdapter, ConversationRepository } from '@invoker/persistence';
 import { LocalBus, Channels } from '@invoker/transport';
 import {
   LocalFamiliar, FamiliarRegistry, TaskExecutor,
-  DockerFamiliar, WorktreeFamiliar,
+  DockerFamiliar, WorktreeFamiliar, GitHubMergeGateProvider,
   type Familiar, type FamiliarHandle, type PersistedTaskMeta,
 } from '@invoker/executors';
 import type { TaskOutputData } from './types.js';
@@ -359,6 +359,7 @@ async function headlessRun(planPath: string): Promise<void> {
     cwd: repoRoot,
     defaultBranch: invokerConfig.defaultBranch,
     disableLocalExecutorExceptMergeGate: invokerConfig.disableLocalExecutorExceptMergeGate,
+    mergeGateProvider: new GitHubMergeGateProvider(),
     callbacks: {
       onOutput: (taskId, data) => {
         process.stdout.write(`\x1b[2m[${taskId}]\x1b[0m ${data}`);
@@ -368,6 +369,8 @@ async function headlessRun(planPath: string): Promise<void> {
   });
   orchestrator.setBeforeApproveHook(async (task) => {
     if (task.config.isMergeNode && task.config.workflowId) {
+      const workflow = persistence.loadWorkflow(task.config.workflowId);
+      if (workflow?.mergeMode === "github") return; // PR is the merge mechanism
       await taskExecutor.approveMerge(task.config.workflowId);
     }
   });
@@ -416,6 +419,7 @@ async function headlessResume(workflowId: string): Promise<void> {
     cwd: repoRoot,
     defaultBranch: invokerConfig.defaultBranch,
     disableLocalExecutorExceptMergeGate: invokerConfig.disableLocalExecutorExceptMergeGate,
+    mergeGateProvider: new GitHubMergeGateProvider(),
     callbacks: {
       onOutput: (taskId, data) => {
         process.stdout.write(`\x1b[2m[${taskId}]\x1b[0m ${data}`);
@@ -425,6 +429,8 @@ async function headlessResume(workflowId: string): Promise<void> {
   });
   orchestrator.setBeforeApproveHook(async (task) => {
     if (task.config.isMergeNode && task.config.workflowId) {
+      const workflow = persistence.loadWorkflow(task.config.workflowId);
+      if (workflow?.mergeMode === "github") return; // PR is the merge mechanism
       await taskExecutor.approveMerge(task.config.workflowId);
     }
   });
@@ -479,9 +485,11 @@ async function headlessStatus(): Promise<void> {
 async function headlessApprove(taskId: string): Promise<void> {
   if (!taskId) throw new Error('Missing taskId.');
   restoreWorkflowForTask(taskId);
-  const te = new TaskExecutor({ orchestrator, persistence, familiarRegistry, cwd: repoRoot, defaultBranch: invokerConfig.defaultBranch });
+  const te = new TaskExecutor({ orchestrator, persistence, familiarRegistry, cwd: repoRoot, defaultBranch: invokerConfig.defaultBranch, mergeGateProvider: new GitHubMergeGateProvider() });
   orchestrator.setBeforeApproveHook(async (task) => {
     if (task.config.isMergeNode && task.config.workflowId) {
+      const workflow = persistence.loadWorkflow(task.config.workflowId);
+      if (workflow?.mergeMode === "github") return; // PR is the merge mechanism
       await te.approveMerge(task.config.workflowId);
     }
   });
@@ -517,6 +525,7 @@ async function headlessSelect(taskId: string, experimentId: string): Promise<voi
     cwd: repoRoot,
     defaultBranch: invokerConfig.defaultBranch,
     disableLocalExecutorExceptMergeGate: invokerConfig.disableLocalExecutorExceptMergeGate,
+    mergeGateProvider: new GitHubMergeGateProvider(),
     callbacks: {
       onOutput: (tid, data) => {
         process.stdout.write(`\x1b[2m[${tid}]\x1b[0m ${data}`);
@@ -547,6 +556,7 @@ async function headlessRestart(taskId: string): Promise<void> {
     cwd: repoRoot,
     defaultBranch: invokerConfig.defaultBranch,
     disableLocalExecutorExceptMergeGate: invokerConfig.disableLocalExecutorExceptMergeGate,
+    mergeGateProvider: new GitHubMergeGateProvider(),
     callbacks: {
       onOutput: (tid, data) => {
         process.stdout.write(`\x1b[2m[${tid}]\x1b[0m ${data}`);
@@ -578,6 +588,7 @@ async function headlessRebaseAndRetry(taskId: string): Promise<void> {
     cwd: repoRoot,
     defaultBranch: invokerConfig.defaultBranch,
     disableLocalExecutorExceptMergeGate: invokerConfig.disableLocalExecutorExceptMergeGate,
+    mergeGateProvider: new GitHubMergeGateProvider(),
     callbacks: {
       onOutput: (tid, data) => {
         process.stdout.write(`\x1b[2m[${tid}]\x1b[0m ${data}`);
@@ -635,6 +646,7 @@ async function headlessEdit(taskId: string, newCommand: string): Promise<void> {
     cwd: repoRoot,
     defaultBranch: invokerConfig.defaultBranch,
     disableLocalExecutorExceptMergeGate: invokerConfig.disableLocalExecutorExceptMergeGate,
+    mergeGateProvider: new GitHubMergeGateProvider(),
     callbacks: {
       onOutput: (tid, data) => {
         process.stdout.write(`\x1b[2m[${tid}]\x1b[0m ${data}`);
@@ -661,6 +673,7 @@ async function headlessEditType(taskId: string, familiarType: string): Promise<v
     cwd: repoRoot,
     defaultBranch: invokerConfig.defaultBranch,
     disableLocalExecutorExceptMergeGate: invokerConfig.disableLocalExecutorExceptMergeGate,
+    mergeGateProvider: new GitHubMergeGateProvider(),
     callbacks: {
       onOutput: (tid, data) => {
         process.stdout.write(`\x1b[2m[${tid}]\x1b[0m ${data}`);
@@ -704,6 +717,7 @@ async function headlessSlack(): Promise<void> {
     cwd: repoRoot,
     defaultBranch: invokerConfig.defaultBranch,
     disableLocalExecutorExceptMergeGate: invokerConfig.disableLocalExecutorExceptMergeGate,
+    mergeGateProvider: new GitHubMergeGateProvider(),
     callbacks: {
       onOutput: (taskId, data) => {
         process.stdout.write(`\x1b[2m[${taskId}]\x1b[0m ${data}`);
@@ -822,6 +836,7 @@ function setupGuiMode(): void {
       cwd: repoRoot,
       defaultBranch: invokerConfig.defaultBranch,
     disableLocalExecutorExceptMergeGate: invokerConfig.disableLocalExecutorExceptMergeGate,
+      mergeGateProvider: new GitHubMergeGateProvider(),
       callbacks: {
         onOutput: (taskId, data) => {
           console.log(`[output] ${taskId}: ${data.trimEnd()}`);
@@ -857,6 +872,8 @@ function setupGuiMode(): void {
   function wireApproveHook(): void {
     orchestrator.setBeforeApproveHook(async (task) => {
       if (task.config.isMergeNode && task.config.workflowId) {
+        const workflow = persistence.loadWorkflow(task.config.workflowId);
+        if (workflow?.mergeMode === "github") return; // PR is the merge mechanism
         await taskExecutor.approveMerge(task.config.workflowId);
       }
     });
@@ -1246,6 +1263,11 @@ function setupGuiMode(): void {
         console.error(`[ipc] set-merge-branch failed: ${err}`);
         throw err;
       }
+    });
+
+    ipcMain.handle('invoker:set-merge-mode', async (_event, workflowId: string, mergeMode: string) => {
+      console.log(`[ipc] set-merge-mode: workflow="${workflowId}" → "${mergeMode}"`);
+      persistence.updateWorkflow(workflowId, { mergeMode: mergeMode as any });
     });
 
     ipcMain.handle('invoker:approve-merge', async (_event, workflowId: string) => {

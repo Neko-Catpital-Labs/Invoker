@@ -77,6 +77,8 @@ const api: InvokerAPI = {
     ipcRenderer.invoke('invoker:resolve-conflict', taskId),
   fixWithClaude: (taskId: string) =>
     ipcRenderer.invoke('invoker:fix-with-claude', taskId),
+  setMergeMode: (workflowId: string, mergeMode: string) =>
+    ipcRenderer.invoke('invoker:set-merge-mode', workflowId, mergeMode),
 };
 
 contextBridge.exposeInMainWorld('invoker', api);

@@ -40,6 +40,7 @@ export interface RawPlan {
   onFinish?: string;
   baseBranch?: string;
   featureBranch?: string;
+  mergeMode?: string;
   repoUrl?: string;
   familiarType?: string;
   tasks?: RawPlanTask[];
@@ -102,6 +103,15 @@ export function parsePlan(yamlContent: string, repoDir?: string): PlanDefinition
   }
   const onFinish = (raw.onFinish as (typeof validOnFinishValues)[number]) ?? 'merge';
 
+  // Validate mergeMode
+  const validMergeModes = ['manual', 'automatic', 'github'] as const;
+  if (raw.mergeMode !== undefined && !validMergeModes.includes(raw.mergeMode as any)) {
+    throw new PlanParseError(
+      `"mergeMode" must be one of: ${validMergeModes.join(', ')}. Got: "${raw.mergeMode}"`,
+    );
+  }
+  const mergeMode = raw.mergeMode as (typeof validMergeModes)[number] | undefined;
+
   // Auto-generate featureBranch from plan name when merge/PR is requested but no branch specified
   if ((onFinish === 'merge' || onFinish === 'pull_request') && !raw.featureBranch) {
     const slug = (raw.name as string).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
@@ -159,6 +169,7 @@ export function parsePlan(yamlContent: string, repoDir?: string): PlanDefinition
     onFinish,
     baseBranch: raw.baseBranch ?? loadConfig(repoDir ?? process.cwd()).defaultBranch ?? detectDefaultBranch(),
     featureBranch: raw.featureBranch,
+    mergeMode,
     tasks,
   };
 }

@@ -17,8 +17,10 @@ interface MergeGateNodeData {
   onFinish: 'merge' | 'pull_request';
   baseBranch?: string;
   featureBranch?: string;
-  mergeMode?: 'manual' | 'automatic';
+  mergeMode?: 'manual' | 'automatic' | 'github';
   workflowId?: string;
+  prUrl?: string;
+  prStatus?: string;
   [key: string]: unknown;
 }
 
@@ -27,7 +29,7 @@ interface MergeGateNodeProps {
 }
 
 export function MergeGateNode({ data }: MergeGateNodeProps) {
-  const { status, label, onFinish, baseBranch, featureBranch, mergeMode = 'manual', workflowId } = data;
+  const { status, label, onFinish, baseBranch, featureBranch, mergeMode = 'manual', workflowId, prUrl, prStatus } = data;
   const colors = getStatusColor(status);
   const [error, setError] = useState<string | null>(null);
 
@@ -96,7 +98,11 @@ export function MergeGateNode({ data }: MergeGateNodeProps) {
       </div>
 
       <div className="flex items-center gap-1 mt-1" data-testid="merge-mode-display">
-        {mergeMode === 'manual' ? (
+        {mergeMode === 'github' ? (
+          <svg className="w-3 h-3 text-blue-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M7 7v10m0-10a2 2 0 11-4 0 2 2 0 014 0zm10 10a2 2 0 104 0 2 2 0 00-4 0zm0 0V7a4 4 0 00-4-4H9" />
+          </svg>
+        ) : mergeMode === 'manual' ? (
           <svg className="w-3 h-3 text-yellow-500 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
           </svg>
@@ -107,11 +113,30 @@ export function MergeGateNode({ data }: MergeGateNodeProps) {
         )}
         <span
           data-testid="merge-mode-label"
-          className={`text-xs font-mono ${mergeMode === 'manual' ? 'text-yellow-500' : 'text-green-500'}`}
+          className={`text-xs font-mono ${mergeMode === 'github' ? 'text-blue-400' : mergeMode === 'manual' ? 'text-yellow-500' : 'text-green-500'}`}
         >
-          {mergeMode === 'manual' ? 'Manual' : 'Automatic'}
+          {mergeMode === 'github' ? 'GitHub PR' : mergeMode === 'manual' ? 'Manual' : 'Automatic'}
         </span>
       </div>
+
+      {mergeMode === 'github' && prUrl && (
+        <div className="flex items-center gap-1 mt-1" data-testid="pr-link-display">
+          <a
+            href={prUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-xs font-mono text-blue-400 hover:text-blue-300 underline truncate"
+            title={prUrl}
+          >
+            {prUrl.replace(/^https?:\/\/github\.com\//, '')}
+          </a>
+        </div>
+      )}
+      {mergeMode === 'github' && prStatus && (
+        <div className="flex items-center gap-1 mt-1" data-testid="pr-status-display">
+          <span className="text-xs text-gray-400">{prStatus}</span>
+        </div>
+      )}
 
       <div className="flex items-center gap-1.5 mt-1">
         <span
