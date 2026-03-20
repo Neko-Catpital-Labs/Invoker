@@ -48,11 +48,13 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
       url: string;
     };
 
-    const approved = data.reviewDecision === 'APPROVED';
+    const approved = data.reviewDecision === 'APPROVED' || data.state === 'MERGED';
     const rejected = data.state === 'CLOSED' || data.reviewDecision === 'CHANGES_REQUESTED';
 
     let statusText: string;
-    if (approved) {
+    if (data.state === 'MERGED') {
+      statusText = 'Merged';
+    } else if (data.reviewDecision === 'APPROVED') {
       statusText = 'Approved';
     } else if (data.reviewDecision === 'CHANGES_REQUESTED') {
       statusText = 'Changes requested';

@@ -808,6 +808,52 @@ export class TaskExecutor {
     console.log(`[fixWithClaude] Successfully applied fix for ${taskId} (session=${sessionId})`);
   }
 
+  resumeMergeGatePolling(): void {
+    if (!this.mergeGateProvider) return;
+    for (const task of this.orchestrator.getAllTasks()) {
+      if (
+        task.config.isMergeNode &&
+        task.status === 'awaiting_approval' &&
+        task.execution.prIdentifier &&
+        !this.activePrPollers.has(task.id)
+      ) {
+        console.log(`[merge-gate] Resuming PR polling for ${task.id} (PR ${task.execution.prIdentifier})`);
+        this.startPrPolling(task.id, task.execution.prIdentifier, task.config.workflowId!);
+      }
+    }
+  }
+
+  async checkMergeGateStatuses(): Promise<void> {
+    if (!this.mergeGateProvider) return;
+    for (const task of this.orchestrator.getAllTasks()) {
+      if (
+        task.config.isMergeNode &&
+        task.status === 'awaiting_approval' &&
+        task.execution.prIdentifier
+      ) {
+        try {
+          const status = await this.mergeGateProvider.checkApproval({
+            identifier: task.execution.prIdentifier,
+            cwd: this.cwd,
+          });
+          this.persistence.updateTask(task.id, {
+            execution: { prStatus: status.statusText },
+          });
+          if (status.approved) {
+            console.log(`[merge-gate] PR ${task.execution.prIdentifier} approved (refresh), completing merge gate`);
+            this.stopPrPolling(task.id);
+            await this.orchestrator.approve(task.id);
+          } else if (status.rejected) {
+            console.log(`[merge-gate] PR ${task.execution.prIdentifier} rejected (refresh): ${status.statusText}`);
+            this.stopPrPolling(task.id);
+          }
+        } catch (err) {
+          console.error(`[merge-gate] PR status check error for ${task.id}:`, err);
+        }
+      }
+    }
+  }
+
   private startPrPolling(taskId: string, prIdentifier: string, workflowId: string): void {
     const pollIntervalMs = 30_000;
     const interval = setInterval(async () => {

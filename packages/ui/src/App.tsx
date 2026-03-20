@@ -151,6 +151,11 @@ export function App() {
     setContextMenu(null);
   }, []);
 
+  const handleRefresh = useCallback(() => {
+    refreshTasks();
+    window.invoker?.checkPrStatuses?.();
+  }, [refreshTasks]);
+
   // ── Plan loading ──────────────────────────────────────────
   const handleLoadPlan = useCallback(
     async (planText: string) => {
@@ -325,7 +330,7 @@ export function App() {
         onStop={handleStop}
         onClear={handleClear}
         onDeleteDB={handleDeleteDB}
-        onRefresh={refreshTasks}
+        onRefresh={handleRefresh}
         viewMode={viewMode}
         onToggleView={setViewMode}
       />

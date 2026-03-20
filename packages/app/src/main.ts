@@ -987,6 +987,7 @@ function setupGuiMode(): void {
       if (allStarted.length > 0) {
         taskExecutor.executeTasks(allStarted);
       }
+      taskExecutor.resumeMergeGatePolling();
     }
 
     apiServer = startApiServer({
@@ -1076,6 +1077,7 @@ function setupGuiMode(): void {
       }
       console.log(`[ipc] resume-workflow: ${tasks.length} tasks loaded across ${workflows.length} workflows, ${allStarted.length} started`);
       await taskExecutor.executeTasks(allStarted);
+      taskExecutor.resumeMergeGatePolling();
       return { workflow: workflows[0], taskCount: tasks.length, startedCount: allStarted.length };
     });
 
@@ -1371,6 +1373,11 @@ function setupGuiMode(): void {
         console.error(`[ipc] approve-merge failed: ${err}`);
         throw err;
       }
+    });
+
+    ipcMain.handle('invoker:check-pr-statuses', async () => {
+      console.log(`[ipc] check-pr-statuses`);
+      await taskExecutor.checkMergeGateStatuses();
     });
 
     ipcMain.handle('invoker:resolve-conflict', async (_event, taskId: string) => {

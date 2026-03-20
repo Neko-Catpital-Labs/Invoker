@@ -81,6 +81,7 @@ const api: InvokerAPI = {
     ipcRenderer.invoke('invoker:fix-with-claude', taskId),
   setMergeMode: (workflowId: string, mergeMode: string) =>
     ipcRenderer.invoke('invoker:set-merge-mode', workflowId, mergeMode),
+  checkPrStatuses: () => ipcRenderer.invoke('invoker:check-pr-statuses'),
 };
 
 contextBridge.exposeInMainWorld('invoker', api);

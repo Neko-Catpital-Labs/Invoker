@@ -140,6 +140,29 @@ describe('GitHubMergeGateProvider', () => {
       expect(result.url).toBe('https://github.com/owner/repo/pull/42');
     });
 
+    it('returns approved when state is MERGED', async () => {
+      const { spawn } = await import('node:child_process');
+      const spawnMock = vi.mocked(spawn);
+
+      const jsonResponse = JSON.stringify({
+        state: 'MERGED',
+        reviewDecision: null,
+        url: 'https://github.com/owner/repo/pull/42',
+      });
+
+      spawnMock.mockReturnValue(mockSpawnResult(jsonResponse, 0) as any);
+
+      const result = await provider.checkApproval({
+        identifier: '42',
+        cwd: '/tmp/repo',
+      });
+
+      expect(result.approved).toBe(true);
+      expect(result.rejected).toBe(false);
+      expect(result.statusText).toBe('Merged');
+      expect(result.url).toBe('https://github.com/owner/repo/pull/42');
+    });
+
     it('returns awaiting when no decision yet', async () => {
       const { spawn } = await import('node:child_process');
       const spawnMock = vi.mocked(spawn);
