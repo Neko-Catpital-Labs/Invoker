@@ -343,13 +343,15 @@ export class TaskExecutor {
     let response: WorkResponse;
     let prUrl: string | undefined;
 
+    const summary = workflowId ? await this.buildMergeSummary(workflowId) : undefined;
+
     if (onFinish !== 'none' && featureBranch) {
       const effectiveOnFinish = mergeMode === 'automatic' ? onFinish : 'none';
       try {
-        prUrl = await this.consolidateAndMerge(effectiveOnFinish, baseBranch, featureBranch, workflowId, workflow?.name, task.dependencies);
+        prUrl = await this.consolidateAndMerge(effectiveOnFinish, baseBranch, featureBranch, workflowId, workflow?.name, task.dependencies, summary);
         if (mergeMode === 'manual') {
           this.persistence.updateTask(task.id, {
-            config: { familiarType: 'local' },
+            config: { familiarType: 'local', summary },
             execution: {
               branch: featureBranch ?? undefined,
               workspacePath: this.cwd,
@@ -376,12 +378,13 @@ export class TaskExecutor {
             featureBranch,
             title: workflow?.name ?? 'Workflow',
             cwd: this.cwd,
+            body: summary,
           });
           console.log(`[merge] Created GitHub PR: ${result.url}`);
 
           // Persist PR metadata
           this.persistence.updateTask(task.id, {
-            config: { familiarType: 'local' },
+            config: { familiarType: 'local', summary },
             execution: {
               branch: featureBranch,
               workspacePath: this.cwd,
@@ -422,7 +425,7 @@ export class TaskExecutor {
     } else {
       if (mergeMode === 'manual' || mergeMode === 'github') {
         this.persistence.updateTask(task.id, {
-          config: { familiarType: 'local' },
+          config: { familiarType: 'local', summary },
           execution: {
             branch: featureBranch ?? undefined,
             workspacePath: this.cwd,
@@ -447,7 +450,7 @@ export class TaskExecutor {
     }
 
     this.persistence.updateTask(task.id, {
-      config: { familiarType: 'local' },
+      config: { familiarType: 'local', summary },
       execution: {
         branch: featureBranch ?? undefined,
         workspacePath: this.cwd,
@@ -480,6 +483,8 @@ export class TaskExecutor {
       throw new Error(`Workflow ${workflowId} has no merge configured (onFinish=${onFinish}, featureBranch=${featureBranch})`);
     }
 
+    const summary = await this.buildMergeSummary(workflowId);
+
     const originalBranch = await this.execGit(['branch', '--show-current']);
     mergeTrace('APPROVE_MERGE_ORIGINAL_BRANCH', { workflowId, originalBranch });
     try {
@@ -496,11 +501,12 @@ export class TaskExecutor {
       } else if (onFinish === 'pull_request') {
         mergeTrace('GIT_PUSH', { featureBranch });
         await this.execGit(['push', '--force', '-u', 'origin', featureBranch]);
-        const prUrl = await this.execPr(baseBranch, featureBranch, mergeMessage);
+        const prUrl = await this.execPr(baseBranch, featureBranch, mergeMessage, summary);
         mergeTrace('PR_CREATED', { featureBranch, baseBranch, prUrl });
         console.log(`[merge] Approved: created pull request ${prUrl}`);
         const mergeTaskId = `__merge__${workflowId}`;
         this.persistence.updateTask(mergeTaskId, {
+          config: { summary },
           execution: { prUrl },
         });
       }
@@ -512,6 +518,91 @@ export class TaskExecutor {
     }
   }
 
+  async buildMergeSummary(workflowId: string): Promise<string> {
+    const allTasks = this.orchestrator.getAllTasks();
+    const workflowTasks = allTasks.filter(
+      (t) => t.config.workflowId === workflowId && !t.config.isMergeNode,
+    );
+
+    const completed = workflowTasks.filter((t) => t.status === 'completed');
+    const failed = workflowTasks.filter((t) => t.status === 'failed');
+    const skipped = workflowTasks.filter(
+      (t) => t.status !== 'completed' && t.status !== 'failed',
+    );
+    const claudeResolved = completed.filter(
+      (t) => t.config.isReconciliation || t.execution.claudeSessionId,
+    );
+
+    const workflow = this.persistence.loadWorkflow(workflowId);
+    const workflowName = workflow?.name ?? 'Workflow';
+
+    const lines: string[] = [];
+
+    // Summary
+    lines.push('## Summary');
+    lines.push(
+      `${workflowName} — ${completed.length} tasks completed, ${failed.length} failed, ${skipped.length} skipped`,
+    );
+    lines.push('');
+
+    // Changes
+    if (completed.length > 0) {
+      lines.push('## Changes');
+      for (const t of completed) {
+        lines.push(`### ${t.id} — ${t.description}`);
+        lines.push(`**Status**: completed`);
+        if (t.execution.branch) {
+          lines.push(`**Branch**: ${t.execution.branch}`);
+        }
+        lines.push('');
+        if (t.execution.commit) {
+          try {
+            const msg = await this.gitLogMessage(t.execution.commit);
+            if (msg) {
+              lines.push(msg);
+              lines.push('');
+            }
+          } catch {
+            // Non-fatal — skip commit message
+          }
+        }
+        lines.push('---');
+        lines.push('');
+      }
+    }
+
+    // Conflict Resolutions
+    if (claudeResolved.length > 0) {
+      lines.push('## Conflict Resolutions');
+      for (const t of claudeResolved) {
+        lines.push(`- **${t.id}**: Resolved with Claude — ${t.description}`);
+      }
+      lines.push('');
+    }
+
+    // Failed Tasks
+    if (failed.length > 0) {
+      lines.push('## Failed Tasks');
+      for (const t of failed) {
+        lines.push(
+          `- **${t.id}**: ${t.description} — ${t.execution.error ?? 'unknown error'}`,
+        );
+      }
+      lines.push('');
+    }
+
+    // Skipped Tasks
+    if (skipped.length > 0) {
+      lines.push('## Skipped Tasks');
+      for (const t of skipped) {
+        lines.push(`- **${t.id}**: ${t.description}`);
+      }
+      lines.push('');
+    }
+
+    return lines.join('\n');
+  }
+
   private async consolidateAndMerge(
     onFinish: string,
     baseBranch: string,
@@ -519,6 +610,7 @@ export class TaskExecutor {
     workflowId?: string,
     workflowName?: string,
     leafTaskIds?: readonly string[],
+    body?: string,
   ): Promise<string | undefined> {
     const originalBranch = await this.execGit(['branch', '--show-current']);
 
@@ -571,7 +663,7 @@ export class TaskExecutor {
         }
       } else if (onFinish === 'pull_request') {
         await this.execGit(['push', '--force', '-u', 'origin', featureBranch]);
-        const prUrl = await this.execPr(baseBranch, featureBranch, workflowName ?? 'Workflow');
+        const prUrl = await this.execPr(baseBranch, featureBranch, workflowName ?? 'Workflow', body);
         console.log(`[merge] Created pull request: ${prUrl}`);
         return prUrl;
       }
@@ -615,11 +707,11 @@ export class TaskExecutor {
     }
   }
 
-  private execPr(baseBranch: string, featureBranch: string, title: string): Promise<string> {
+  private execPr(baseBranch: string, featureBranch: string, title: string, body?: string): Promise<string> {
     return new Promise((resolvePromise, reject) => {
       const child = spawn('gh', [
         'pr', 'create', '--base', baseBranch,
-        '--head', featureBranch, '--title', title, '--body', '',
+        '--head', featureBranch, '--title', title, '--body', body ?? '',
       ], {
         cwd: this.cwd,
         stdio: ['ignore', 'pipe', 'pipe'],

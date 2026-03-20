@@ -101,6 +101,7 @@ function TaskDAGInner({ tasks, workflows, onTaskClick, onTaskDoubleClick, onTask
               workflowId: wfGroupId,
               prUrl: task.execution?.prUrl,
               prStatus: task.execution?.prStatus,
+              summary: task.config?.summary,
             },
           });
         } else {

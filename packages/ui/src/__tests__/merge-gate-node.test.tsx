@@ -137,4 +137,41 @@ describe('MergeGateNode', () => {
     );
     expect(screen.getByTestId('merge-mode-label')).toHaveClass('text-green-500');
   });
+
+  it('shows summary preview when summary is provided', () => {
+    renderNode({
+      status: 'awaiting_approval',
+      label: 'All tasks must pass',
+      onFinish: 'pull_request',
+      baseBranch: 'master',
+      summary: 'Short summary text',
+    });
+    const preview = screen.getByTestId('merge-summary-preview');
+    expect(preview).toBeInTheDocument();
+    expect(preview).toHaveTextContent('Short summary text');
+  });
+
+  it('does not show summary preview when summary is absent', () => {
+    renderNode({
+      status: 'awaiting_approval',
+      label: 'All tasks must pass',
+      onFinish: 'pull_request',
+      baseBranch: 'master',
+    });
+    expect(screen.queryByTestId('merge-summary-preview')).not.toBeInTheDocument();
+  });
+
+  it('truncates long summary with ellipsis', () => {
+    const longSummary = 'A'.repeat(200);
+    renderNode({
+      status: 'awaiting_approval',
+      label: 'All tasks must pass',
+      onFinish: 'pull_request',
+      baseBranch: 'master',
+      summary: longSummary,
+    });
+    const preview = screen.getByTestId('merge-summary-preview');
+    expect(preview.textContent).toBe('A'.repeat(120) + '...');
+    expect(preview).toHaveAttribute('title', longSummary);
+  });
 });

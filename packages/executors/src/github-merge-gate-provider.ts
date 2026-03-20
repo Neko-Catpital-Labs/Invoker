@@ -9,8 +9,9 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
     featureBranch: string;
     title: string;
     cwd: string;
+    body?: string;
   }): Promise<MergeGateProviderResult> {
-    const { baseBranch, featureBranch, title, cwd } = opts;
+    const { baseBranch, featureBranch, title, cwd, body } = opts;
 
     // Push feature branch to origin
     await this.exec('git', ['push', '--force', '-u', 'origin', featureBranch], cwd);
@@ -21,7 +22,7 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
       '--base', baseBranch,
       '--head', featureBranch,
       '--title', title,
-      '--body', '',
+      '--body', body ?? '',
     ], cwd);
 
     // Extract PR URL from stdout (last line typically contains the URL)

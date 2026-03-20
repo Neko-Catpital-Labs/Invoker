@@ -781,11 +781,11 @@ describe('TaskExecutor', () => {
         expect.objectContaining({ status: 'completed' }),
       );
 
-      // Should persist familiarType, branch, and workspacePath
+      // Should persist familiarType, branch, workspacePath, and summary
       expect(persistence.updateTask).toHaveBeenCalledWith(
         '__merge__wf-1',
         expect.objectContaining({
-          config: { familiarType: 'local' },
+          config: expect.objectContaining({ familiarType: 'local' }),
           execution: { branch: 'plan/feature', workspacePath: '/tmp' },
         }),
       );
@@ -919,12 +919,14 @@ describe('TaskExecutor', () => {
       expect(commitCall).toBeUndefined();
 
       // Should create a PR via mergeGateProvider
-      expect(mergeGateProvider.createReview).toHaveBeenCalledWith({
-        baseBranch: 'master',
-        featureBranch: 'plan/feature',
-        title: 'Test Workflow',
-        cwd: '/tmp',
-      });
+      expect(mergeGateProvider.createReview).toHaveBeenCalledWith(
+        expect.objectContaining({
+          baseBranch: 'master',
+          featureBranch: 'plan/feature',
+          title: 'Test Workflow',
+          cwd: '/tmp',
+        }),
+      );
 
       // Should set task awaiting approval (not handleWorkerResponse)
       expect(orchestrator.setTaskAwaitingApproval).toHaveBeenCalledWith('__merge__wf-1');
@@ -938,7 +940,7 @@ describe('TaskExecutor', () => {
       expect(persistence.updateTask).toHaveBeenCalledWith(
         '__merge__wf-1',
         expect.objectContaining({
-          config: { familiarType: 'local' },
+          config: expect.objectContaining({ familiarType: 'local' }),
           execution: expect.objectContaining({
             branch: 'plan/feature',
             prUrl: 'https://github.com/owner/repo/pull/42',
@@ -1238,7 +1240,7 @@ describe('TaskExecutor', () => {
 
       expect(consolidateSpy).toHaveBeenCalledTimes(1);
       expect(consolidateSpy).toHaveBeenCalledWith(
-        'none', 'master', 'plan/feature', 'wf-1', 'Test Workflow', ['t1'],
+        'none', 'master', 'plan/feature', 'wf-1', 'Test Workflow', ['t1'], expect.any(String),
       );
 
       consolidateSpy.mockRestore();
@@ -1273,12 +1275,13 @@ describe('TaskExecutor', () => {
       await executor.approveMerge('wf-1');
 
       // Should push + create PR
-      expect((executor as any).execPr).toHaveBeenCalledWith('master', 'plan/feature', 'Test Workflow');
+      expect((executor as any).execPr).toHaveBeenCalledWith('master', 'plan/feature', 'Test Workflow', expect.any(String));
 
       // Should persist the PR URL on the merge task
       expect(persistence.updateTask).toHaveBeenCalledWith(
         '__merge__wf-1',
         expect.objectContaining({
+          config: expect.objectContaining({ summary: expect.any(String) }),
           execution: { prUrl: 'https://github.com/owner/repo/pull/55' },
         }),
       );
@@ -1349,6 +1352,362 @@ describe('TaskExecutor', () => {
       expect(orchestrator.handleWorkerResponse).toHaveBeenCalledWith(
         expect.objectContaining({ status: 'completed' }),
       );
+    });
+
+    it('executeMergeNode passes summary body to createReview in github mode', async () => {
+      const allTasks = [
+        makeTask({ id: 't1', config: { workflowId: 'wf-1' }, status: 'completed', execution: { branch: 'experiment/t1' } }),
+      ];
+      const orchestrator = {
+        getTask: (id: string) => allTasks.find(t => t.id === id),
+        getAllTasks: () => allTasks,
+        handleWorkerResponse: vi.fn(() => []),
+        setTaskAwaitingApproval: vi.fn(),
+      };
+      const persistence = {
+        loadWorkflow: () => ({
+          id: 'wf-1',
+          onFinish: 'merge',
+          mergeMode: 'github',
+          baseBranch: 'master',
+          featureBranch: 'plan/feature',
+          name: 'Test Workflow',
+        }),
+        updateTask: vi.fn(),
+      };
+      const mergeGateProvider = {
+        createReview: vi.fn().mockResolvedValue({
+          url: 'https://github.com/owner/repo/pull/42',
+          identifier: '42',
+        }),
+      };
+      const executor = new TaskExecutor({
+        orchestrator: orchestrator as any,
+        persistence: persistence as any,
+        familiarRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+        mergeGateProvider: mergeGateProvider as any,
+      });
+
+      (executor as any).execGit = async (args: string[]) => {
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        return '';
+      };
+      (executor as any).startPrPolling = vi.fn();
+      (executor as any).buildMergeSummary = vi.fn().mockResolvedValue('## Summary\nTest summary');
+
+      const mergeTask = makeTask({
+        id: '__merge__wf-1',
+        status: 'running',
+        dependencies: ['t1'],
+        config: { isMergeNode: true, workflowId: 'wf-1' },
+      });
+
+      await (executor as any).executeMergeNode(mergeTask);
+
+      expect(mergeGateProvider.createReview).toHaveBeenCalledWith(
+        expect.objectContaining({ body: '## Summary\nTest summary' }),
+      );
+      expect(persistence.updateTask).toHaveBeenCalledWith(
+        '__merge__wf-1',
+        expect.objectContaining({
+          config: expect.objectContaining({ summary: '## Summary\nTest summary' }),
+        }),
+      );
+    });
+
+    it('executeMergeNode persists summary on merge task in manual mode', async () => {
+      const allTasks = [
+        makeTask({ id: 't1', config: { workflowId: 'wf-1' }, status: 'completed', execution: { branch: 'experiment/t1' } }),
+      ];
+      const orchestrator = {
+        getTask: (id: string) => allTasks.find(t => t.id === id),
+        getAllTasks: () => allTasks,
+        handleWorkerResponse: vi.fn(() => []),
+        setTaskAwaitingApproval: vi.fn(),
+      };
+      const persistence = {
+        loadWorkflow: () => ({
+          id: 'wf-1',
+          onFinish: 'merge',
+          mergeMode: 'manual',
+          baseBranch: 'master',
+          featureBranch: 'plan/feature',
+          name: 'Test Workflow',
+        }),
+        updateTask: vi.fn(),
+      };
+      const executor = new TaskExecutor({
+        orchestrator: orchestrator as any,
+        persistence: persistence as any,
+        familiarRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+        callbacks: { onComplete: vi.fn() },
+      });
+
+      (executor as any).execGit = async (args: string[]) => {
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        return '';
+      };
+      (executor as any).buildMergeSummary = vi.fn().mockResolvedValue('## Summary\nManual summary');
+
+      const mergeTask = makeTask({
+        id: '__merge__wf-1',
+        status: 'running',
+        dependencies: ['t1'],
+        config: { isMergeNode: true, workflowId: 'wf-1' },
+      });
+
+      await (executor as any).executeMergeNode(mergeTask);
+
+      expect(persistence.updateTask).toHaveBeenCalledWith(
+        '__merge__wf-1',
+        expect.objectContaining({
+          config: expect.objectContaining({ summary: '## Summary\nManual summary' }),
+        }),
+      );
+    });
+
+    it('approveMerge passes summary body to execPr for pull_request onFinish', async () => {
+      const persistence = {
+        loadWorkflow: () => ({
+          id: 'wf-1',
+          onFinish: 'pull_request',
+          baseBranch: 'master',
+          featureBranch: 'plan/feature',
+          name: 'Test Workflow',
+        }),
+        updateTask: vi.fn(),
+      };
+      const executor = new TaskExecutor({
+        orchestrator: { getTask: () => null, getAllTasks: () => [] } as any,
+        persistence: persistence as any,
+        familiarRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+      });
+
+      (executor as any).execGit = async (args: string[]) => {
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        return '';
+      };
+      (executor as any).buildMergeSummary = vi.fn().mockResolvedValue('## Summary\nApprove summary');
+      (executor as any).execPr = vi.fn().mockResolvedValue('https://github.com/owner/repo/pull/88');
+
+      await executor.approveMerge('wf-1');
+
+      expect((executor as any).execPr).toHaveBeenCalledWith(
+        'master', 'plan/feature', 'Test Workflow', '## Summary\nApprove summary',
+      );
+      expect(persistence.updateTask).toHaveBeenCalledWith(
+        '__merge__wf-1',
+        expect.objectContaining({
+          config: expect.objectContaining({ summary: '## Summary\nApprove summary' }),
+        }),
+      );
+    });
+  });
+
+  // ── buildMergeSummary ─────────────────────────────────
+
+  describe('buildMergeSummary', () => {
+    function createExecutorForSummary(
+      allTasks: TaskState[],
+      workflowMeta?: { name?: string },
+    ) {
+      const orchestrator = {
+        getTask: (id: string) => allTasks.find(t => t.id === id),
+        getAllTasks: () => allTasks,
+      };
+      const persistence = {
+        loadWorkflow: () => workflowMeta ? { id: 'wf-1', name: workflowMeta.name ?? 'Test Workflow', ...workflowMeta } : undefined,
+        updateTask: vi.fn(),
+      };
+      const executor = new TaskExecutor({
+        orchestrator: orchestrator as any,
+        persistence: persistence as any,
+        familiarRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+      });
+      return { executor, persistence };
+    }
+
+    it('collects commit messages from all completed workflow tasks', async () => {
+      const tasks = [
+        makeTask({
+          id: 'task-1',
+          description: 'Add login page',
+          status: 'completed',
+          config: { workflowId: 'wf-1' },
+          execution: { branch: 'experiment/task-1', commit: 'abc123' },
+        }),
+        makeTask({
+          id: 'task-2',
+          description: 'Add signup page',
+          status: 'completed',
+          config: { workflowId: 'wf-1' },
+          execution: { branch: 'experiment/task-2', commit: 'def456' },
+        }),
+      ];
+      const { executor } = createExecutorForSummary(tasks, { name: 'Auth Feature' });
+      (executor as any).gitLogMessage = vi.fn()
+        .mockResolvedValueOnce('feat: add login page')
+        .mockResolvedValueOnce('feat: add signup page');
+
+      const result = await executor.buildMergeSummary('wf-1');
+
+      expect(result).toContain('## Summary');
+      expect(result).toContain('2 tasks completed');
+      expect(result).toContain('Add login page');
+      expect(result).toContain('Add signup page');
+      expect(result).toContain('feat: add login page');
+      expect(result).toContain('feat: add signup page');
+      expect(result).toContain('experiment/task-1');
+      expect(result).toContain('experiment/task-2');
+    });
+
+    it('handles gitLogMessage failures gracefully', async () => {
+      const tasks = [
+        makeTask({
+          id: 'task-1',
+          description: 'Add feature',
+          status: 'completed',
+          config: { workflowId: 'wf-1' },
+          execution: { branch: 'experiment/task-1', commit: 'abc123' },
+        }),
+      ];
+      const { executor } = createExecutorForSummary(tasks, { name: 'Feature' });
+      (executor as any).gitLogMessage = vi.fn().mockRejectedValue(new Error('git log failed'));
+
+      const result = await executor.buildMergeSummary('wf-1');
+
+      expect(result).toContain('Add feature');
+      expect(result).toContain('experiment/task-1');
+    });
+
+    it('identifies Claude-resolved reconciliation tasks', async () => {
+      const tasks = [
+        makeTask({
+          id: 'recon-task',
+          description: 'Reconcile conflicts',
+          status: 'completed',
+          config: { isReconciliation: true, workflowId: 'wf-1' },
+          execution: { branch: 'experiment/recon-task' },
+        }),
+      ];
+      const { executor } = createExecutorForSummary(tasks, { name: 'Workflow' });
+      (executor as any).gitLogMessage = vi.fn();
+
+      const result = await executor.buildMergeSummary('wf-1');
+
+      expect(result).toContain('## Conflict Resolutions');
+      expect(result).toContain('recon-task');
+    });
+
+    it('identifies Claude-fixed tasks via claudeSessionId', async () => {
+      const tasks = [
+        makeTask({
+          id: 'claude-task',
+          description: 'Fix with Claude',
+          status: 'completed',
+          config: { workflowId: 'wf-1' },
+          execution: { claudeSessionId: 'session-123', branch: 'experiment/claude-task' },
+        }),
+      ];
+      const { executor } = createExecutorForSummary(tasks, { name: 'Workflow' });
+      (executor as any).gitLogMessage = vi.fn();
+
+      const result = await executor.buildMergeSummary('wf-1');
+
+      expect(result).toContain('## Conflict Resolutions');
+      expect(result).toContain('claude-task');
+    });
+
+    it('reports failed tasks', async () => {
+      const tasks = [
+        makeTask({
+          id: 'fail-task',
+          description: 'Build step',
+          status: 'failed',
+          config: { workflowId: 'wf-1' },
+          execution: { error: 'Build failed' },
+        }),
+      ];
+      const { executor } = createExecutorForSummary(tasks, { name: 'Workflow' });
+
+      const result = await executor.buildMergeSummary('wf-1');
+
+      expect(result).toContain('## Failed Tasks');
+      expect(result).toContain('Build failed');
+    });
+
+    it('reports skipped tasks', async () => {
+      const tasks = [
+        makeTask({
+          id: 'skip-task',
+          description: 'Pending step',
+          status: 'pending',
+          config: { workflowId: 'wf-1' },
+        }),
+      ];
+      const { executor } = createExecutorForSummary(tasks, { name: 'Workflow' });
+
+      const result = await executor.buildMergeSummary('wf-1');
+
+      expect(result).toContain('## Skipped Tasks');
+      expect(result).toContain('Pending step');
+    });
+
+    it('omits empty sections', async () => {
+      const tasks = [
+        makeTask({
+          id: 'task-1',
+          description: 'Task one',
+          status: 'completed',
+          config: { workflowId: 'wf-1' },
+          execution: { branch: 'experiment/task-1' },
+        }),
+        makeTask({
+          id: 'task-2',
+          description: 'Task two',
+          status: 'completed',
+          config: { workflowId: 'wf-1' },
+          execution: { branch: 'experiment/task-2' },
+        }),
+      ];
+      const { executor } = createExecutorForSummary(tasks, { name: 'Workflow' });
+      (executor as any).gitLogMessage = vi.fn();
+
+      const result = await executor.buildMergeSummary('wf-1');
+
+      expect(result).not.toContain('## Failed Tasks');
+      expect(result).not.toContain('## Skipped Tasks');
+      expect(result).not.toContain('## Conflict Resolutions');
+    });
+
+    it('filters tasks to the given workflowId', async () => {
+      const tasks = [
+        makeTask({
+          id: 'wf1-task',
+          description: 'Workflow 1 task',
+          status: 'completed',
+          config: { workflowId: 'wf-1' },
+          execution: { branch: 'experiment/wf1-task' },
+        }),
+        makeTask({
+          id: 'wf2-task',
+          description: 'Workflow 2 task',
+          status: 'completed',
+          config: { workflowId: 'wf-2' },
+          execution: { branch: 'experiment/wf2-task' },
+        }),
+      ];
+      const { executor } = createExecutorForSummary(tasks, { name: 'Workflow' });
+      (executor as any).gitLogMessage = vi.fn();
+
+      const result = await executor.buildMergeSummary('wf-1');
+
+      expect(result).toContain('Workflow 1 task');
+      expect(result).not.toContain('Workflow 2 task');
     });
   });
 
@@ -1633,7 +1992,7 @@ describe('TaskExecutor', () => {
 
     it('approveMerge aborts and restores branch on merge failure', async () => {
       const executor = new TaskExecutor({
-        orchestrator: { getTask: () => undefined } as any,
+        orchestrator: { getTask: () => undefined, getAllTasks: () => [] } as any,
         persistence: { loadWorkflow: () => ({ onFinish: 'merge', baseBranch: 'master', featureBranch: 'feature/test', name: 'Test' }), updateTask: vi.fn() } as any,
         familiarRegistry: { getDefault: () => ({ type: 'local' }), get: () => null, getAll: () => [] } as any,
         cwd: '/tmp',

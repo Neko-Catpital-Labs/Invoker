@@ -21,6 +21,7 @@ interface MergeGateNodeData {
   workflowId?: string;
   prUrl?: string;
   prStatus?: string;
+  summary?: string;
   [key: string]: unknown;
 }
 
@@ -29,7 +30,7 @@ interface MergeGateNodeProps {
 }
 
 export function MergeGateNode({ data }: MergeGateNodeProps) {
-  const { status, label, onFinish, baseBranch, featureBranch, mergeMode = 'manual', workflowId, prUrl, prStatus } = data;
+  const { status, label, onFinish, baseBranch, featureBranch, mergeMode = 'manual', workflowId, prUrl, prStatus, summary } = data;
   const colors = getStatusColor(status);
   const [error, setError] = useState<string | null>(null);
 
@@ -125,6 +126,16 @@ export function MergeGateNode({ data }: MergeGateNodeProps) {
         />
         <span className={`text-xs uppercase ${colors.text}`}>{statusLabel}</span>
       </div>
+
+      {summary && (
+        <div
+          className="mt-1 text-xs text-gray-400 line-clamp-2 cursor-help"
+          title={summary}
+          data-testid="merge-summary-preview"
+        >
+          {summary.length > 120 ? summary.slice(0, 120) + '...' : summary}
+        </div>
+      )}
 
       {mergeMode === 'manual' && status === 'awaiting_approval' && (
         <button

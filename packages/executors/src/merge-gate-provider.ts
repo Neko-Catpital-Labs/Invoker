@@ -18,6 +18,7 @@ export interface MergeGateProvider {
     featureBranch: string;
     title: string;
     cwd: string;
+    body?: string;
   }): Promise<MergeGateProviderResult>;
 
   checkApproval(opts: {

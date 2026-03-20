@@ -68,6 +68,57 @@ describe('GitHubMergeGateProvider', () => {
         expect.objectContaining({ cwd: '/tmp/repo' }),
       );
     });
+
+    it('passes body to gh pr create', async () => {
+      const { spawn } = await import('node:child_process');
+      const spawnMock = vi.mocked(spawn);
+
+      let callCount = 0;
+      spawnMock.mockImplementation((() => {
+        callCount++;
+        if (callCount === 1) return mockSpawnResult('', 0);
+        else return mockSpawnResult('https://github.com/owner/repo/pull/43', 0);
+      }) as any);
+
+      await provider.createReview({
+        baseBranch: 'main',
+        featureBranch: 'feature/summary',
+        title: 'PR with body',
+        cwd: '/tmp/repo',
+        body: '## Summary\nTest body',
+      });
+
+      expect(spawnMock).toHaveBeenCalledWith(
+        'gh',
+        ['pr', 'create', '--base', 'main', '--head', 'feature/summary', '--title', 'PR with body', '--body', '## Summary\nTest body'],
+        expect.objectContaining({ cwd: '/tmp/repo' }),
+      );
+    });
+
+    it('uses empty body when body is omitted', async () => {
+      const { spawn } = await import('node:child_process');
+      const spawnMock = vi.mocked(spawn);
+
+      let callCount = 0;
+      spawnMock.mockImplementation((() => {
+        callCount++;
+        if (callCount === 1) return mockSpawnResult('', 0);
+        else return mockSpawnResult('https://github.com/owner/repo/pull/44', 0);
+      }) as any);
+
+      await provider.createReview({
+        baseBranch: 'main',
+        featureBranch: 'feature/no-body',
+        title: 'PR without body',
+        cwd: '/tmp/repo',
+      });
+
+      expect(spawnMock).toHaveBeenCalledWith(
+        'gh',
+        ['pr', 'create', '--base', 'main', '--head', 'feature/no-body', '--title', 'PR without body', '--body', ''],
+        expect.objectContaining({ cwd: '/tmp/repo' }),
+      );
+    });
   });
 
   describe('checkApproval', () => {
