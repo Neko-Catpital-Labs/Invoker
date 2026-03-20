@@ -193,7 +193,7 @@ export function TaskPanel({
           <select
             value={mergeMode ?? 'manual'}
             onChange={(e) => onSetMergeMode(task.config.workflowId!, e.target.value)}
-            disabled={task.status === 'running' || task.status === 'completed'}
+            disabled={task.status === 'running'}
             className="bg-gray-700 text-gray-200 text-xs rounded px-2 py-1 border border-gray-600 focus:outline-none focus:border-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
             data-testid="merge-mode-select"
           >
