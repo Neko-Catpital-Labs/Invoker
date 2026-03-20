@@ -7,5 +7,7 @@ export * from './worktree-familiar.js';
 export * from './repo-pool.js';
 export * from './registry.js';
 export * from './task-executor.js';
+export * from './merge-executor.js';
+export * from './conflict-resolver.js';
 export * from './merge-gate-provider.js';
 export * from './github-merge-gate-provider.js';

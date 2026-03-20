@@ -16,7 +16,28 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
     // Push feature branch to origin
     await this.exec('git', ['push', '--force', '-u', 'origin', featureBranch], cwd);
 
-    // Create PR and capture URL
+    // Check for existing open PR on this branch
+    const listOutput = await this.exec('gh', [
+      'pr', 'list',
+      '--head', featureBranch,
+      '--base', baseBranch,
+      '--state', 'open',
+      '--json', 'url,number',
+      '--limit', '1',
+    ], cwd);
+
+    const existing = JSON.parse(listOutput) as { url: string; number: number }[];
+
+    if (existing.length > 0) {
+      // Update title of existing PR and reuse it
+      await this.exec('gh', [
+        'pr', 'edit', String(existing[0].number),
+        '--title', title,
+      ], cwd);
+      return { url: existing[0].url, identifier: String(existing[0].number) };
+    }
+
+    // No existing PR — create a new one
     const stdout = await this.exec('gh', [
       'pr', 'create',
       '--base', baseBranch,

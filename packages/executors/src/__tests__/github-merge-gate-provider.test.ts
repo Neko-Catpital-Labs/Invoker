@@ -38,6 +38,9 @@ describe('GitHubMergeGateProvider', () => {
         if (callCount === 1) {
           // git push
           return mockSpawnResult('', 0);
+        } else if (callCount === 2) {
+          // gh pr list — no existing PR
+          return mockSpawnResult('[]', 0);
         } else {
           // gh pr create
           return mockSpawnResult('https://github.com/owner/repo/pull/42', 0);
@@ -69,6 +72,50 @@ describe('GitHubMergeGateProvider', () => {
       );
     });
 
+    it('reuses existing open PR and updates title', async () => {
+      const { spawn } = await import('node:child_process');
+      const spawnMock = vi.mocked(spawn);
+
+      let callCount = 0;
+      spawnMock.mockImplementation((() => {
+        callCount++;
+        if (callCount === 1) {
+          // git push
+          return mockSpawnResult('', 0);
+        } else if (callCount === 2) {
+          // gh pr list — existing PR found
+          return mockSpawnResult('[{"url":"https://github.com/owner/repo/pull/10","number":10}]', 0);
+        } else {
+          // gh pr edit
+          return mockSpawnResult('', 0);
+        }
+      }) as any);
+
+      const result = await provider.createReview({
+        baseBranch: 'main',
+        featureBranch: 'feature/test',
+        title: 'Test PR',
+        cwd: '/tmp/repo',
+      });
+
+      expect(result.url).toBe('https://github.com/owner/repo/pull/10');
+      expect(result.identifier).toBe('10');
+
+      // Verify gh pr create was NOT called
+      expect(spawnMock).not.toHaveBeenCalledWith(
+        'gh',
+        expect.arrayContaining(['pr', 'create']),
+        expect.anything(),
+      );
+
+      // Verify gh pr edit was called to update the title
+      expect(spawnMock).toHaveBeenCalledWith(
+        'gh',
+        ['pr', 'edit', '10', '--title', 'Test PR'],
+        expect.objectContaining({ cwd: '/tmp/repo' }),
+      );
+    });
+
     it('passes body to gh pr create', async () => {
       const { spawn } = await import('node:child_process');
       const spawnMock = vi.mocked(spawn);
@@ -77,6 +124,7 @@ describe('GitHubMergeGateProvider', () => {
       spawnMock.mockImplementation((() => {
         callCount++;
         if (callCount === 1) return mockSpawnResult('', 0);
+        else if (callCount === 2) return mockSpawnResult('[]', 0);
         else return mockSpawnResult('https://github.com/owner/repo/pull/43', 0);
       }) as any);
 
@@ -103,6 +151,7 @@ describe('GitHubMergeGateProvider', () => {
       spawnMock.mockImplementation((() => {
         callCount++;
         if (callCount === 1) return mockSpawnResult('', 0);
+        else if (callCount === 2) return mockSpawnResult('[]', 0);
         else return mockSpawnResult('https://github.com/owner/repo/pull/44', 0);
       }) as any);
 
