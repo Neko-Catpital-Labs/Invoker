@@ -101,7 +101,7 @@ export function parsePlan(yamlContent: string, repoDir?: string): PlanDefinition
       `"onFinish" must be one of: ${validOnFinishValues.join(', ')}. Got: "${raw.onFinish}"`,
     );
   }
-  const onFinish = (raw.onFinish as (typeof validOnFinishValues)[number]) ?? 'merge';
+  const onFinish = (raw.onFinish as (typeof validOnFinishValues)[number]) ?? 'pull_request';
 
   // Validate mergeMode
   const validMergeModes = ['manual', 'automatic', 'github'] as const;

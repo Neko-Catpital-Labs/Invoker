@@ -77,7 +77,7 @@ Use your judgment: if the request can be answered with 1-2 commands or a short e
 A plan has this structure:
 \`\`\`yaml
 name: "Plan Name"
-onFinish: merge         # "merge" (default), "none", or "pull_request"
+onFinish: pull_request  # "pull_request" (default), "merge", or "none"
 mergeMode: manual       # "manual" (default) or "automatic"
 baseBranch: ${defaultBranch}        # base git branch
 featureBranch: plan/my-feature  # auto-generated from plan name if omitted
@@ -481,7 +481,7 @@ export function extractYamlPlan(text: string, defaultBranch?: string): PlanDefin
       }
     }
 
-    const onFinish = (plan.onFinish as PlanDefinition['onFinish']) ?? 'merge';
+    const onFinish = (plan.onFinish as PlanDefinition['onFinish']) ?? 'pull_request';
     const mergeMode = (plan.mergeMode as PlanDefinition['mergeMode']) ?? 'manual';
     let featureBranch = plan.featureBranch as string | undefined;
     if ((onFinish === 'merge' || onFinish === 'pull_request') && !featureBranch) {

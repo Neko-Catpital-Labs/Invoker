@@ -171,7 +171,7 @@ tasks:
       expect(plan.onFinish).toBe('pull_request');
     });
 
-    it('defaults onFinish to merge when omitted', () => {
+    it('defaults onFinish to pull_request when omitted', () => {
       const yaml = `
 name: Simple Plan
 tasks:
@@ -179,7 +179,7 @@ tasks:
     description: Build the project
 `;
       const plan = parsePlan(yaml);
-      expect(plan.onFinish).toBe('merge');
+      expect(plan.onFinish).toBe('pull_request');
       // Auto-generates featureBranch from plan name
       expect(plan.featureBranch).toBe('plan/simple-plan');
     });
