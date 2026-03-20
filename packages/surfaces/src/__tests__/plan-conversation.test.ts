@@ -118,10 +118,10 @@ describe('extractYamlPlan', () => {
     expect(extractYamlPlan(text)).toBeNull();
   });
 
-  it('defaults onFinish to merge', () => {
+  it('defaults onFinish to pull_request', () => {
     const text = '```yaml\nname: "Defaults"\ntasks:\n  - id: t1\n    description: "test"\n    dependencies: []\n```';
     const plan = extractYamlPlan(text);
-    expect(plan!.onFinish).toBe('merge');
+    expect(plan!.onFinish).toBe('pull_request');
   });
 
   it('defaults baseBranch to main when no defaultBranch provided', () => {
