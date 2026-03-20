@@ -66,7 +66,20 @@ export function useTasks(): UseTasksResult {
       }
     });
 
-    return unsub;
+    const unsubWf = window.invoker.onWorkflowsChanged?.((wfList: any[]) => {
+      if (Array.isArray(wfList) && wfList.length > 0) {
+        setWorkflows(() => {
+          const wfMap = new Map<string, WorkflowMeta>();
+          for (const wf of wfList) wfMap.set(wf.id, wf);
+          return wfMap;
+        });
+      }
+    });
+
+    return () => {
+      unsub();
+      unsubWf?.();
+    };
   }, [fetchAll]);
 
   const clearTasks = useCallback(() => {

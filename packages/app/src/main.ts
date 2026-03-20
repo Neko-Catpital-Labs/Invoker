@@ -1314,6 +1314,10 @@ function setupGuiMode(): void {
     ipcMain.handle('invoker:set-merge-mode', async (_event, workflowId: string, mergeMode: string) => {
       console.log(`[ipc] set-merge-mode: workflow="${workflowId}" → "${mergeMode}"`);
       persistence.updateWorkflow(workflowId, { mergeMode: mergeMode as any });
+      const workflows = persistence.listWorkflows();
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('invoker:workflows-changed', workflows);
+      }
     });
 
     ipcMain.handle('invoker:approve-merge', async (_event, workflowId: string) => {
