@@ -2398,6 +2398,85 @@ describe('TaskExecutor', () => {
       expect(mergeMsgs[1]).toContain('Use Memcached for caching');
     });
 
+    it('execPr reuses existing open PR instead of creating new one', async () => {
+      const executor = new TaskExecutor({
+        orchestrator: { getTask: () => null } as any,
+        persistence: {} as any,
+        familiarRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+      });
+
+      const ghCalls: string[][] = [];
+      (executor as any).execGh = async (args: string[]) => {
+        ghCalls.push(args);
+        if (args[0] === 'pr' && args[1] === 'list') {
+          return JSON.stringify([{ url: 'https://github.com/owner/repo/pull/42', number: 42 }]);
+        }
+        if (args[0] === 'pr' && args[1] === 'edit') {
+          return '';
+        }
+        return '';
+      };
+
+      const url = await (executor as any).execPr('main', 'feature/test', 'My Workflow');
+      expect(url).toBe('https://github.com/owner/repo/pull/42');
+
+      // Should have called gh pr list with correct args
+      const listCall = ghCalls.find(c => c[0] === 'pr' && c[1] === 'list');
+      expect(listCall).toBeDefined();
+      expect(listCall).toContain('feature/test');
+      expect(listCall).toContain('main');
+
+      // Should have called gh pr edit to update title
+      const editCall = ghCalls.find(c => c[0] === 'pr' && c[1] === 'edit');
+      expect(editCall).toBeDefined();
+      expect(editCall).toContain('42');
+      expect(editCall).toContain('My Workflow');
+
+      // Should NOT have called gh pr create
+      const createCall = ghCalls.find(c => c[0] === 'pr' && c[1] === 'create');
+      expect(createCall).toBeUndefined();
+    });
+
+    it('execPr creates new PR when no open PR exists', async () => {
+      const executor = new TaskExecutor({
+        orchestrator: { getTask: () => null } as any,
+        persistence: {} as any,
+        familiarRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+      });
+
+      const ghCalls: string[][] = [];
+      (executor as any).execGh = async (args: string[]) => {
+        ghCalls.push(args);
+        if (args[0] === 'pr' && args[1] === 'list') {
+          return '[]';
+        }
+        if (args[0] === 'pr' && args[1] === 'create') {
+          return 'https://github.com/owner/repo/pull/99';
+        }
+        return '';
+      };
+
+      const url = await (executor as any).execPr('main', 'feature/new', 'New Workflow');
+      expect(url).toBe('https://github.com/owner/repo/pull/99');
+
+      // Should have called gh pr list
+      const listCall = ghCalls.find(c => c[0] === 'pr' && c[1] === 'list');
+      expect(listCall).toBeDefined();
+
+      // Should have called gh pr create with correct args
+      const createCall = ghCalls.find(c => c[0] === 'pr' && c[1] === 'create');
+      expect(createCall).toBeDefined();
+      expect(createCall).toContain('main');
+      expect(createCall).toContain('feature/new');
+      expect(createCall).toContain('New Workflow');
+
+      // Should NOT have called gh pr edit
+      const editCall = ghCalls.find(c => c[0] === 'pr' && c[1] === 'edit');
+      expect(editCall).toBeUndefined();
+    });
+
     it('resolveConflictWithClaude includes dep description in merge -m', async () => {
       const tasks = new Map<string, TaskState>();
       tasks.set('dep-task', makeTask({

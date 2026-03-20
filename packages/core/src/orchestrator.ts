@@ -21,7 +21,7 @@ import type { ParsedResponse } from './response-handler.js';
 import { TaskScheduler } from './scheduler.js';
 import { ResourceEstimator } from './resource-estimator.js';
 import type { UtilizationRule } from './resource-estimator.js';
-import type { TaskState, TaskDelta, TaskStateChanges, TaskCreateOptions } from './task-types.js';
+import type { TaskState, TaskDelta, TaskStateChanges } from './task-types.js';
 import { createTaskState } from './task-types.js';
 import type { WorkResponse } from '@invoker/protocol';
 
@@ -32,8 +32,10 @@ function mergeTrace(tag: string, data: Record<string, unknown>): void {
     appendFileSync(MERGE_TRACE_LOG, `${new Date().toISOString()} [merge-trace:orchestrator] ${tag} ${JSON.stringify(data)}\n`);
   } catch { /* best effort */ }
 }
-import { getTransitiveDependents, nextVersion, findLeafTaskIds } from './dag.js';
+import { getTransitiveDependents } from './dag.js';
 import { ActionGraph } from '@invoker/graph';
+import { forkDirtySubtreeImpl, reconcileMergeLeavesImpl, applyGraphMutationImpl } from './graph-mutation.js';
+import type { GraphMutationHost } from './graph-mutation.js';
 
 // ── Channel Constants ───────────────────────────────────────
 
@@ -737,6 +739,9 @@ export class Orchestrator {
         branch: undefined,
         workspacePath: undefined,
         lastHeartbeatAt: undefined,
+        prUrl: undefined,
+        prIdentifier: undefined,
+        prStatus: undefined,
       },
     };
 
@@ -919,70 +924,7 @@ export class Orchestrator {
    *   replacement node instead of the original dirty task.
    */
   forkDirtySubtree(dirtyTaskId: string, depOverrides?: Map<string, string>): TaskDelta[] {
-    const allTasks = this.stateMachine.getAllTasks();
-    const taskMap = new Map(allTasks.map((t) => [t.id, t]));
-
-    // Skip merge nodes: they are terminal and should not be forked
-    const descendantIds = getTransitiveDependents(
-      dirtyTaskId,
-      taskMap,
-      (t) => !!t.config.isMergeNode,
-    );
-    if (descendantIds.length === 0) {
-      // No non-merge descendants; reconcile merge leaves from graph state
-      const dirtyTask = taskMap.get(dirtyTaskId);
-      if (dirtyTask?.config.workflowId) {
-        this.reconcileMergeLeaves(dirtyTask.config.workflowId);
-      }
-      return [];
-    }
-
-    const deltas: TaskDelta[] = [];
-
-    // Mark descendants as stale
-    for (const id of descendantIds) {
-      const t = this.stateMachine.getTask(id);
-      if (!t) continue;
-      const staleChanges: TaskStateChanges = { status: 'stale' };
-      this.writeAndSync(id, staleChanges);
-      const delta: TaskDelta = { type: 'updated', taskId: id, changes: staleChanges };
-      this.persistence.logEvent?.(id, 'task.stale', staleChanges);
-      this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
-      deltas.push(delta);
-    }
-
-    // Build ID mapping: original → clone
-    const idMap = new Map<string, string>();
-    for (const id of descendantIds) {
-      idMap.set(id, nextVersion(id));
-    }
-
-    // Create cloned tasks with remapped dependencies
-    for (const originalId of descendantIds) {
-      const original = taskMap.get(originalId);
-      if (!original) continue;
-
-      const cloneId = idMap.get(originalId)!;
-      const remappedDeps = original.dependencies.map((dep) =>
-        depOverrides?.get(dep) ?? idMap.get(dep) ?? dep,
-      );
-
-      const cloneTask = createTaskState(cloneId, original.description, remappedDeps as string[], original.config);
-
-      this.createAndSync(cloneTask);
-      const delta: TaskDelta = { type: 'created', task: cloneTask };
-      this.persistence.logEvent?.(cloneId, 'task.created');
-      this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
-      deltas.push(delta);
-    }
-
-    // Reconcile merge node deps from actual graph state
-    const dirtyTask = taskMap.get(dirtyTaskId);
-    if (dirtyTask?.config.workflowId) {
-      this.reconcileMergeLeaves(dirtyTask.config.workflowId);
-    }
-
-    return deltas;
+    return forkDirtySubtreeImpl(this as unknown as GraphMutationHost, dirtyTaskId, depOverrides);
   }
 
   /**
@@ -991,38 +933,7 @@ export class Orchestrator {
    * No-ops if deps are already correct.
    */
   private reconcileMergeLeaves(workflowId: string): void {
-    const mergeNode = this.getMergeNode(workflowId);
-    if (!mergeNode) return;
-
-    const allTasks = this.stateMachine.getAllTasks();
-    const activeTasks = allTasks.filter(
-      (t) =>
-        t.config.workflowId === workflowId &&
-        !t.config.isMergeNode &&
-        t.status !== 'stale',
-    );
-    const leafIds = findLeafTaskIds(activeTasks);
-
-    const currentDeps = new Set(mergeNode.dependencies);
-    const newDepsSet = new Set(leafIds);
-    if (
-      currentDeps.size === newDepsSet.size &&
-      [...currentDeps].every((d) => newDepsSet.has(d))
-    ) {
-      return;
-    }
-
-    const changes: TaskStateChanges = {
-      dependencies: leafIds,
-      status: 'pending',
-      execution: { blockedBy: undefined },
-    };
-    this.writeAndSync(mergeNode.id, changes);
-    this.messageBus.publish(TASK_DELTA_CHANNEL, {
-      type: 'updated',
-      taskId: mergeNode.id,
-      changes,
-    });
+    reconcileMergeLeavesImpl(this as unknown as GraphMutationHost, workflowId);
   }
 
   /**
@@ -1286,69 +1197,7 @@ export class Orchestrator {
    *   3. Create all new nodes
    */
   private applyGraphMutation(mutation: GraphMutation): TaskDelta[] {
-    const allDeltas: TaskDelta[] = [];
-
-    // 1. Fork downstream with dep override: sourceNode → outputNode
-    const forkDeltas = this.forkDirtySubtree(
-      mutation.sourceNodeId,
-      new Map([[mutation.sourceNodeId, mutation.outputNodeId]]),
-    );
-    allDeltas.push(...forkDeltas);
-
-    // 2. Apply source disposition
-    const baseChanges: TaskStateChanges = mutation.sourceDisposition === 'complete'
-      ? { status: 'completed' as const, execution: { completedAt: new Date() } }
-      : { status: 'stale' as const };
-    const sourceChanges: TaskStateChanges = {
-      ...baseChanges,
-      ...mutation.sourceChanges,
-      config: { ...baseChanges.config, ...mutation.sourceChanges?.config },
-      execution: { ...baseChanges.execution, ...mutation.sourceChanges?.execution },
-    };
-    this.writeAndSync(mutation.sourceNodeId, sourceChanges);
-    const sourceDelta: TaskDelta = {
-      type: 'updated',
-      taskId: mutation.sourceNodeId,
-      changes: sourceChanges,
-    };
-    this.persistence.logEvent?.(
-      mutation.sourceNodeId,
-      mutation.sourceDisposition === 'complete' ? 'task.completed' : 'task.stale',
-      sourceChanges,
-    );
-    this.messageBus.publish(TASK_DELTA_CHANNEL, sourceDelta);
-    allDeltas.push(sourceDelta);
-
-    // 3. Create new nodes
-    for (const nodeDef of mutation.newNodes) {
-      const task = createTaskState(nodeDef.id, nodeDef.description, nodeDef.dependencies, {
-        workflowId: nodeDef.workflowId,
-        parentTask: nodeDef.parentTask,
-        experimentPrompt: nodeDef.experimentPrompt,
-        prompt: nodeDef.prompt,
-        command: nodeDef.command,
-        repoUrl: nodeDef.repoUrl,
-        familiarType: nodeDef.familiarType,
-        isReconciliation: nodeDef.isReconciliation,
-        requiresManualApproval: nodeDef.requiresManualApproval,
-        autoFix: nodeDef.autoFix,
-        maxFixAttempts: nodeDef.maxFixAttempts,
-        isMergeNode: nodeDef.isMergeNode,
-      });
-      this.createAndSync(task);
-      const delta: TaskDelta = { type: 'created', task };
-      this.persistence.logEvent?.(task.id, 'task.created');
-      this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
-      allDeltas.push(delta);
-    }
-
-    // 4. Reconcile merge leaves now that new nodes exist in the graph
-    const sourceTask = this.stateMachine.getTask(mutation.sourceNodeId);
-    if (sourceTask?.config.workflowId) {
-      this.reconcileMergeLeaves(sourceTask.config.workflowId);
-    }
-
-    return allDeltas;
+    return applyGraphMutationImpl(this as unknown as GraphMutationHost, mutation);
   }
 
   // ── Private: Helpers ──────────────────────────────────────

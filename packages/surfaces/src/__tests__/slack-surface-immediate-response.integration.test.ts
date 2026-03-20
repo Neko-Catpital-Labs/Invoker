@@ -11,7 +11,8 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { SlackSurface, splitForSlack } from '../slack/slack-surface.js';
+import { SlackSurface } from '../slack/slack-surface.js';
+import { splitForSlack } from '../slack/slack-message-helpers.js';
 import type { SurfaceCommand } from '../surface.js';
 
 // ── Mock @slack/bolt ────────────────────────────────────────

@@ -2639,6 +2639,39 @@ describe('Orchestrator', () => {
       expect(task2.execution.lastHeartbeatAt).not.toEqual(oldHeartbeat2);
     });
 
+    it('restartWorkflow clears PR state for merge nodes', () => {
+      const testPersistence = new InMemoryPersistence();
+      const testBus = new InMemoryBus();
+
+      testPersistence.saveTask('workflow-pr-test', {
+        id: '__merge__workflow-pr-test',
+        description: 'Merge gate',
+        status: 'completed',
+        dependencies: [],
+        createdAt: new Date(),
+        config: { isMergeNode: true, workflowId: 'workflow-pr-test' },
+        execution: {
+          prUrl: 'https://github.com/org/repo/pull/42',
+          prIdentifier: '42',
+          prStatus: 'open',
+        },
+      });
+
+      const testOrchestrator = new Orchestrator({
+        persistence: testPersistence,
+        messageBus: testBus,
+        maxConcurrency: 3,
+      });
+
+      testOrchestrator.syncFromDb('workflow-pr-test');
+      testOrchestrator.restartWorkflow('workflow-pr-test');
+
+      const mergeTask = testOrchestrator.getTask('__merge__workflow-pr-test')!;
+      expect(mergeTask.execution.prUrl).toBeUndefined();
+      expect(mergeTask.execution.prIdentifier).toBeUndefined();
+      expect(mergeTask.execution.prStatus).toBeUndefined();
+    });
+
     it('drainScheduler sets lastHeartbeatAt when starting a task', () => {
       orchestrator.loadPlan({
         name: 'heartbeat-start-test',

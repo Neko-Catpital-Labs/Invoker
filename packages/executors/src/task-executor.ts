@@ -6,19 +6,12 @@
  */
 
 import { execSync, spawn } from 'node:child_process';
-import { appendFileSync, existsSync, mkdirSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { createRequire } from 'node:module';
 
-const MERGE_TRACE_LOG = resolve(homedir(), '.invoker', 'merge-trace.log');
-function mergeTrace(tag: string, data: Record<string, unknown>): void {
-  try {
-    mkdirSync(resolve(homedir(), '.invoker'), { recursive: true });
-    appendFileSync(MERGE_TRACE_LOG, `${new Date().toISOString()} [merge-trace:executor] ${tag} ${JSON.stringify(data)}\n`);
-  } catch { /* best effort */ }
-}
 import type { Orchestrator, TaskState, ExperimentVariant } from '@invoker/core';
 import type { SQLiteAdapter } from '@invoker/persistence';
 import type { WorkRequest, WorkResponse, ActionType } from '@invoker/protocol';
@@ -27,6 +20,17 @@ import type { FamiliarRegistry } from './registry.js';
 import type { MergeGateProvider } from './merge-gate-provider.js';
 import { DockerFamiliar } from './docker-familiar.js';
 import { WorktreeFamiliar } from './worktree-familiar.js';
+import {
+  executeMergeNodeImpl,
+  approveMergeImpl,
+  buildMergeSummaryImpl,
+  consolidateAndMergeImpl,
+} from './merge-executor.js';
+import {
+  resolveConflictWithClaudeImpl,
+  fixWithClaudeImpl,
+  spawnClaudeFixImpl,
+} from './conflict-resolver.js';
 
 // ── Callbacks ─────────────────────────────────────────────
 
@@ -56,15 +60,15 @@ export interface TaskExecutorConfig {
 // ── TaskExecutor ──────────────────────────────────────────
 
 export class TaskExecutor {
-  private orchestrator: Orchestrator;
-  private persistence: SQLiteAdapter;
+  /** @internal */ orchestrator: Orchestrator;
+  /** @internal */ persistence: SQLiteAdapter;
   private familiarRegistry: FamiliarRegistry;
-  private cwd: string;
+  /** @internal */ cwd: string;
   private maxWorktreesPerRepo: number;
-  private defaultBranch: string | undefined;
-  private callbacks: TaskExecutorCallbacks;
+  /** @internal */ defaultBranch: string | undefined;
+  /** @internal */ callbacks: TaskExecutorCallbacks;
   private abiChecked = false;
-  private mergeGateProvider?: MergeGateProvider;
+  /** @internal */ mergeGateProvider?: MergeGateProvider;
   private activePrPollers = new Map<string, ReturnType<typeof setInterval>>();
 
   constructor(config: TaskExecutorConfig) {
@@ -331,279 +335,18 @@ export class TaskExecutor {
   // ── Merge Node Execution ─────────────────────────────────
 
   private async executeMergeNode(task: TaskState): Promise<void> {
-    const workflowId = task.config.workflowId;
-    const workflow = workflowId
-      ? this.persistence.loadWorkflow(workflowId)
-      : undefined;
-    const onFinish = workflow?.onFinish ?? 'none';
-    const mergeMode = workflow?.mergeMode ?? 'manual';
-    const baseBranch = workflow?.baseBranch ?? this.defaultBranch ?? await this.detectDefaultBranch();
-    const featureBranch = workflow?.featureBranch;
-
-    let response: WorkResponse;
-    let prUrl: string | undefined;
-
-    const summary = workflowId ? await this.buildMergeSummary(workflowId) : undefined;
-
-    if (onFinish !== 'none' && featureBranch) {
-      const effectiveOnFinish = mergeMode === 'automatic' ? onFinish : 'none';
-      try {
-        prUrl = await this.consolidateAndMerge(effectiveOnFinish, baseBranch, featureBranch, workflowId, workflow?.name, task.dependencies, summary);
-        if (mergeMode === 'manual') {
-          this.persistence.updateTask(task.id, {
-            config: { familiarType: 'local', summary },
-            execution: {
-              branch: featureBranch ?? undefined,
-              workspacePath: this.cwd,
-            },
-          });
-          const manualResponse: WorkResponse = {
-            requestId: `merge-${task.id}`,
-            actionId: task.id,
-            status: 'completed',
-            outputs: { exitCode: 0 },
-          };
-          this.callbacks.onComplete?.(task.id, manualResponse);
-          this.orchestrator.setTaskAwaitingApproval(task.id);
-          return;
-        }
-        if (mergeMode === 'github') {
-          if (!this.mergeGateProvider) {
-            throw new Error('mergeMode is "github" but no mergeGateProvider configured');
-          }
-
-          // Create PR via provider (consolidation already done above)
-          const result = await this.mergeGateProvider.createReview({
-            baseBranch,
-            featureBranch,
-            title: workflow?.name ?? 'Workflow',
-            cwd: this.cwd,
-            body: summary,
-          });
-          console.log(`[merge] Created GitHub PR: ${result.url}`);
-
-          // Persist PR metadata
-          this.persistence.updateTask(task.id, {
-            config: { familiarType: 'local', summary },
-            execution: {
-              branch: featureBranch,
-              workspacePath: this.cwd,
-              prUrl: result.url,
-              prIdentifier: result.identifier,
-              prStatus: 'Awaiting review',
-            },
-          });
-
-          const prResponse: WorkResponse = {
-            requestId: `merge-${task.id}`,
-            actionId: task.id,
-            status: 'completed',
-            outputs: { exitCode: 0 },
-          };
-          this.callbacks.onComplete?.(task.id, prResponse);
-          this.orchestrator.setTaskAwaitingApproval(task.id);
-          this.startPrPolling(task.id, result.identifier, workflowId!);
-          return;
-        }
-        response = {
-          requestId: `merge-${task.id}`,
-          actionId: task.id,
-          status: 'completed',
-          outputs: { exitCode: 0 },
-        };
-      } catch (err) {
-        response = {
-          requestId: `merge-${task.id}`,
-          actionId: task.id,
-          status: 'failed',
-          outputs: {
-            exitCode: 1,
-            error: `Merge failed: ${err instanceof Error ? err.message : String(err)}`,
-          },
-        };
-      }
-    } else {
-      if (mergeMode === 'manual' || mergeMode === 'github') {
-        this.persistence.updateTask(task.id, {
-          config: { familiarType: 'local', summary },
-          execution: {
-            branch: featureBranch ?? undefined,
-            workspacePath: this.cwd,
-          },
-        });
-        const gateResponse: WorkResponse = {
-          requestId: `merge-${task.id}`,
-          actionId: task.id,
-          status: 'completed',
-          outputs: { exitCode: 0 },
-        };
-        this.callbacks.onComplete?.(task.id, gateResponse);
-        this.orchestrator.setTaskAwaitingApproval(task.id);
-        return;
-      }
-      response = {
-        requestId: `merge-${task.id}`,
-        actionId: task.id,
-        status: 'completed',
-        outputs: { exitCode: 0 },
-      };
-    }
-
-    this.persistence.updateTask(task.id, {
-      config: { familiarType: 'local', summary },
-      execution: {
-        branch: featureBranch ?? undefined,
-        workspacePath: this.cwd,
-        ...(prUrl ? { prUrl } : {}),
-      },
-    });
-    this.callbacks.onComplete?.(task.id, response);
-    if (mergeMode === 'manual' && response.status === 'completed') {
-      this.orchestrator.setTaskAwaitingApproval(task.id);
-    } else {
-      const newlyStarted = this.orchestrator.handleWorkerResponse(response) ?? [];
-      if (newlyStarted.length > 0) {
-        this.executeTasks(newlyStarted);
-      }
-    }
+    return executeMergeNodeImpl(this, task);
   }
 
   async approveMerge(workflowId: string): Promise<void> {
-    mergeTrace('APPROVE_MERGE_ENTER', { workflowId });
-    const workflow = this.persistence.loadWorkflow(workflowId);
-    if (!workflow) throw new Error(`Workflow ${workflowId} not found`);
-
-    const onFinish = workflow.onFinish ?? 'none';
-    const baseBranch = workflow.baseBranch ?? this.defaultBranch ?? await this.detectDefaultBranch();
-    const featureBranch = workflow.featureBranch;
-    mergeTrace('APPROVE_MERGE_CONFIG', { workflowId, onFinish, baseBranch, featureBranch, workflowName: workflow.name });
-
-    if (onFinish === 'none' || !featureBranch) {
-      mergeTrace('APPROVE_MERGE_SKIP', { workflowId, reason: 'no merge configured', onFinish, featureBranch });
-      throw new Error(`Workflow ${workflowId} has no merge configured (onFinish=${onFinish}, featureBranch=${featureBranch})`);
-    }
-
-    const summary = await this.buildMergeSummary(workflowId);
-
-    const originalBranch = await this.execGit(['branch', '--show-current']);
-    mergeTrace('APPROVE_MERGE_ORIGINAL_BRANCH', { workflowId, originalBranch });
-    try {
-      const mergeMessage = workflow.name ?? 'Workflow';
-      if (onFinish === 'merge') {
-        mergeTrace('GIT_CHECKOUT_BASE', { baseBranch });
-        await this.execGit(['checkout', baseBranch]);
-        mergeTrace('GIT_MERGE_SQUASH', { featureBranch });
-        await this.execGit(['merge', '--squash', featureBranch]);
-        mergeTrace('GIT_COMMIT', { mergeMessage });
-        await this.execGit(['commit', '-m', mergeMessage]);
-        mergeTrace('SQUASH_MERGE_COMPLETE', { featureBranch, baseBranch });
-        console.log(`[merge] Approved: squash-merged ${featureBranch} into ${baseBranch}`);
-      } else if (onFinish === 'pull_request') {
-        mergeTrace('GIT_PUSH', { featureBranch });
-        await this.execGit(['push', '--force', '-u', 'origin', featureBranch]);
-        const prUrl = await this.execPr(baseBranch, featureBranch, mergeMessage, summary);
-        mergeTrace('PR_CREATED', { featureBranch, baseBranch, prUrl });
-        console.log(`[merge] Approved: created pull request ${prUrl}`);
-        const mergeTaskId = `__merge__${workflowId}`;
-        this.persistence.updateTask(mergeTaskId, {
-          config: { summary },
-          execution: { prUrl },
-        });
-      }
-    } catch (err) {
-      mergeTrace('APPROVE_MERGE_ERROR', { workflowId, error: String(err) });
-      try { await this.execGit(['merge', '--abort']); } catch { /* no merge in progress */ }
-      try { await this.execGit(['checkout', originalBranch]); } catch { /* best effort */ }
-      throw err;
-    }
+    return approveMergeImpl(this, workflowId);
   }
 
   async buildMergeSummary(workflowId: string): Promise<string> {
-    const allTasks = this.orchestrator.getAllTasks();
-    const workflowTasks = allTasks.filter(
-      (t) => t.config.workflowId === workflowId && !t.config.isMergeNode,
-    );
-
-    const completed = workflowTasks.filter((t) => t.status === 'completed');
-    const failed = workflowTasks.filter((t) => t.status === 'failed');
-    const skipped = workflowTasks.filter(
-      (t) => t.status !== 'completed' && t.status !== 'failed',
-    );
-    const claudeResolved = completed.filter(
-      (t) => t.config.isReconciliation || t.execution.claudeSessionId,
-    );
-
-    const workflow = this.persistence.loadWorkflow(workflowId);
-    const workflowName = workflow?.name ?? 'Workflow';
-
-    const lines: string[] = [];
-
-    // Summary
-    lines.push('## Summary');
-    lines.push(
-      `${workflowName} — ${completed.length} tasks completed, ${failed.length} failed, ${skipped.length} skipped`,
-    );
-    lines.push('');
-
-    // Changes
-    if (completed.length > 0) {
-      lines.push('## Changes');
-      for (const t of completed) {
-        lines.push(`### ${t.id} — ${t.description}`);
-        lines.push(`**Status**: completed`);
-        if (t.execution.branch) {
-          lines.push(`**Branch**: ${t.execution.branch}`);
-        }
-        lines.push('');
-        if (t.execution.commit) {
-          try {
-            const msg = await this.gitLogMessage(t.execution.commit);
-            if (msg) {
-              lines.push(msg);
-              lines.push('');
-            }
-          } catch {
-            // Non-fatal — skip commit message
-          }
-        }
-        lines.push('---');
-        lines.push('');
-      }
-    }
-
-    // Conflict Resolutions
-    if (claudeResolved.length > 0) {
-      lines.push('## Conflict Resolutions');
-      for (const t of claudeResolved) {
-        lines.push(`- **${t.id}**: Resolved with Claude — ${t.description}`);
-      }
-      lines.push('');
-    }
-
-    // Failed Tasks
-    if (failed.length > 0) {
-      lines.push('## Failed Tasks');
-      for (const t of failed) {
-        lines.push(
-          `- **${t.id}**: ${t.description} — ${t.execution.error ?? 'unknown error'}`,
-        );
-      }
-      lines.push('');
-    }
-
-    // Skipped Tasks
-    if (skipped.length > 0) {
-      lines.push('## Skipped Tasks');
-      for (const t of skipped) {
-        lines.push(`- **${t.id}**: ${t.description}`);
-      }
-      lines.push('');
-    }
-
-    return lines.join('\n');
+    return buildMergeSummaryImpl(this, workflowId);
   }
 
-  private async consolidateAndMerge(
+  /** @internal */ async consolidateAndMerge(
     onFinish: string,
     baseBranch: string,
     featureBranch: string,
@@ -612,69 +355,10 @@ export class TaskExecutor {
     leafTaskIds?: readonly string[],
     body?: string,
   ): Promise<string | undefined> {
-    const originalBranch = await this.execGit(['branch', '--show-current']);
-
-    try {
-      // Consolidate all completed task branches into featureBranch
-      try {
-        await this.execGit(['checkout', '-b', featureBranch, baseBranch]);
-        console.log(`[merge] Created ${featureBranch} from ${baseBranch}`);
-      } catch {
-        // Branch exists from a previous attempt — delete and recreate for a clean slate
-        await this.execGit(['checkout', baseBranch]);
-        await this.execGit(['branch', '-D', featureBranch]);
-        await this.execGit(['checkout', '-b', featureBranch, baseBranch]);
-        console.log(`[merge] Recreated ${featureBranch} from ${baseBranch}`);
-      }
-
-      const allTasks = this.orchestrator.getAllTasks();
-      const taskBranches = allTasks
-        .filter((t) => {
-          if (!t.execution.branch || t.config.isMergeNode) return false;
-          if (t.status !== 'completed') return false;
-          if (leafTaskIds) return leafTaskIds.includes(t.id);
-          return t.config.workflowId === workflowId;
-        })
-        .map((t) => t.execution.branch!)
-        .sort();
-
-      for (const branch of taskBranches) {
-        console.log(`[merge] Merging task branch: ${branch} → ${featureBranch}`);
-        const task = allTasks.find(t => t.execution.branch === branch);
-        const desc = task?.description ?? '';
-        const mergeMsg = desc ? `Merge ${branch} — ${desc}` : `Merge ${branch}`;
-        await this.execGit(['merge', '--no-ff', '-m', mergeMsg, branch]);
-      }
-      console.log(`[merge] Consolidated ${taskBranches.length} task branches into ${featureBranch}`);
-
-      const mergeMessage = workflowName ?? 'Workflow';
-
-      if (onFinish === 'merge') {
-        await this.execGit(['checkout', baseBranch]);
-        await this.execGit(['merge', '--squash', featureBranch]);
-        const hasChanges = await this.execGit(['diff', '--cached', '--quiet'])
-          .then(() => false)
-          .catch(() => true);
-        if (hasChanges) {
-          await this.execGit(['commit', '-m', mergeMessage]);
-          console.log(`[merge] Squash-merged ${featureBranch} into ${baseBranch}`);
-        } else {
-          console.log(`[merge] No changes to commit — ${baseBranch} already up-to-date with ${featureBranch}`);
-        }
-      } else if (onFinish === 'pull_request') {
-        await this.execGit(['push', '--force', '-u', 'origin', featureBranch]);
-        const prUrl = await this.execPr(baseBranch, featureBranch, workflowName ?? 'Workflow', body);
-        console.log(`[merge] Created pull request: ${prUrl}`);
-        return prUrl;
-      }
-    } catch (err) {
-      try { await this.execGit(['merge', '--abort']); } catch { /* no merge in progress */ }
-      try { await this.execGit(['checkout', originalBranch]); } catch { /* best effort */ }
-      throw err;
-    }
+    return consolidateAndMergeImpl(this, onFinish, baseBranch, featureBranch, workflowId, workflowName, leafTaskIds, body);
   }
 
-  private execGit(args: string[]): Promise<string> {
+  /** @internal */ execGit(args: string[]): Promise<string> {
     return new Promise((resolvePromise, reject) => {
       const child = spawn('git', args, {
         cwd: this.cwd,
@@ -707,12 +391,9 @@ export class TaskExecutor {
     }
   }
 
-  private execPr(baseBranch: string, featureBranch: string, title: string, body?: string): Promise<string> {
+  /** @internal */ execGh(args: string[]): Promise<string> {
     return new Promise((resolvePromise, reject) => {
-      const child = spawn('gh', [
-        'pr', 'create', '--base', baseBranch,
-        '--head', featureBranch, '--title', title, '--body', body ?? '',
-      ], {
+      const child = spawn('gh', args, {
         cwd: this.cwd,
         stdio: ['ignore', 'pipe', 'pipe'],
       });
@@ -722,9 +403,31 @@ export class TaskExecutor {
       child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
       child.on('close', (code) => {
         if (code === 0) resolvePromise(stdout.trim());
-        else reject(new Error(`gh pr create failed (code ${code}): ${stderr.trim()}`));
+        else reject(new Error(`gh ${args[0]} ${args[1]} failed (code ${code}): ${stderr.trim()}`));
       });
     });
+  }
+
+  /** @internal */ async execPr(baseBranch: string, featureBranch: string, title: string, body?: string): Promise<string> {
+    // Check for an existing open PR first
+    const listOutput = await this.execGh([
+      'pr', 'list', '--head', featureBranch, '--base', baseBranch,
+      '--state', 'open', '--json', 'url,number', '--limit', '1',
+    ]);
+
+    const existing: Array<{ url: string; number: number }> = JSON.parse(listOutput || '[]');
+    if (existing.length > 0) {
+      const pr = existing[0];
+      // Update the PR title to match the current workflow name
+      await this.execGh(['pr', 'edit', String(pr.number), '--title', title]);
+      return pr.url;
+    }
+
+    // No existing PR — create a new one
+    return this.execGh([
+      'pr', 'create', '--base', baseBranch,
+      '--head', featureBranch, '--title', title, '--body', body ?? '',
+    ]);
   }
 
   // ── Experiment Branch Merging ────────────────────────────
@@ -787,83 +490,7 @@ export class TaskExecutor {
    * After resolution, the task is restarted so it can proceed normally.
    */
   async resolveConflictWithClaude(taskId: string): Promise<void> {
-    const task = this.orchestrator.getTask(taskId);
-    if (!task) throw new Error(`Task ${taskId} not found`);
-    if (task.status !== 'failed' && task.status !== 'running') {
-      throw new Error(`Task ${taskId} is not in a resolvable state (status: ${task.status})`);
-    }
-
-    const errorStr = task.execution.error;
-    if (!errorStr) throw new Error(`Task ${taskId} has no error information`);
-
-    let conflictInfo: { failedBranch: string; conflictFiles: string[] };
-    try {
-      const parsed = JSON.parse(errorStr);
-      if (parsed?.type !== 'merge_conflict') throw new Error('not a merge conflict');
-      conflictInfo = { failedBranch: parsed.failedBranch, conflictFiles: parsed.conflictFiles };
-    } catch {
-      throw new Error(`Task ${taskId} does not have merge conflict information`);
-    }
-
-    const taskBranch = task.execution.branch ?? `invoker/${taskId}`;
-    const cwd = task.execution.workspacePath ?? this.cwd;
-    const originalBranch = await this.execGit(['branch', '--show-current']);
-
-    try {
-      // Checkout the task branch
-      try {
-        await this.execGit(['checkout', taskBranch]);
-      } catch {
-        throw new Error(`Cannot checkout task branch ${taskBranch}`);
-      }
-
-      // Re-merge the conflicting upstream branch (will reproduce the conflict)
-      try {
-        const depTask = this.orchestrator.getAllTasks().find(t => t.execution.branch === conflictInfo.failedBranch);
-        const conflictMergeMsg = depTask?.description
-          ? `Merge upstream ${conflictInfo.failedBranch} — ${depTask.description}`
-          : `Merge upstream ${conflictInfo.failedBranch}`;
-        await this.execGit(['merge', '--no-edit', '-m', conflictMergeMsg, conflictInfo.failedBranch]);
-        console.log(`[resolveConflict] Merge succeeded without conflict on retry for ${taskId}`);
-      } catch {
-        // Expected: conflict reproduced — now spawn Claude to resolve it
-        console.log(`[resolveConflict] Conflict reproduced for ${taskId}, spawning Claude to resolve...`);
-
-        const conflictFilesList = conflictInfo.conflictFiles.join(', ');
-        const prompt = [
-          `The following git merge has conflicts that need to be resolved.`,
-          `Conflicting files: ${conflictFilesList}`,
-          ``,
-          `Please resolve ALL merge conflicts in these files by:`,
-          `1. Reading each conflicted file`,
-          `2. Choosing the correct resolution (not just picking one side)`,
-          `3. Removing all conflict markers (<<<<<<<, =======, >>>>>>>)`,
-          `4. Staging the resolved files with 'git add'`,
-          `5. Completing the merge with 'git commit --no-edit'`,
-        ].join('\n');
-
-        await new Promise<void>((resolve, reject) => {
-          const child = spawn('claude', ['-p', prompt, '--dangerously-skip-permissions'], {
-            cwd,
-            stdio: ['ignore', 'pipe', 'pipe'],
-          });
-          let stderr = '';
-          child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
-          child.on('close', (code) => {
-            if (code === 0) resolve();
-            else reject(new Error(`Claude exited with code ${code}: ${stderr.trim()}`));
-          });
-          child.on('error', (err) => reject(err));
-        });
-      }
-
-      console.log(`[resolveConflict] Successfully resolved conflict for ${taskId}`);
-    } catch (err) {
-      // Clean up on failure
-      try { await this.execGit(['merge', '--abort']); } catch { /* no merge in progress */ }
-      try { await this.execGit(['checkout', originalBranch]); } catch { /* best effort */ }
-      throw err;
-    }
+    return resolveConflictWithClaudeImpl(this, taskId);
   }
 
   /**
@@ -871,33 +498,7 @@ export class TaskExecutor {
    * Claude's output is captured and appended to the task's output stream for auditing.
    */
   async fixWithClaude(taskId: string, taskOutput: string): Promise<void> {
-    const task = this.orchestrator.getTask(taskId);
-    if (!task) throw new Error(`Task ${taskId} not found`);
-    if (task.status !== 'failed' && task.status !== 'running') {
-      throw new Error(`Task ${taskId} is not in a fixable state (status: ${task.status})`);
-    }
-
-    const cwd = task.execution.workspacePath ?? this.cwd;
-
-    const errorLines = taskOutput.split('\n').slice(-200).join('\n');
-    const prompt = [
-      `A build/test command failed. Fix the code so the command succeeds.`,
-      ``,
-      `Task: ${task.description}`,
-      `Command: ${task.config.command}`,
-      ``,
-      `Error output (last 200 lines):`,
-      errorLines,
-      ``,
-      `Fix the underlying code issue. Do NOT modify the command itself.`,
-    ].join('\n');
-
-    const { stdout: output, sessionId } = await this.spawnClaudeFix(prompt, cwd);
-    if (output) {
-      this.persistence.appendTaskOutput(taskId, `\n[Fix with Claude] Output:\n${output}`);
-    }
-    this.persistence.updateTask(taskId, { execution: { claudeSessionId: sessionId } });
-    console.log(`[fixWithClaude] Successfully applied fix for ${taskId} (session=${sessionId})`);
+    return fixWithClaudeImpl(this, taskId, taskOutput);
   }
 
   resumeMergeGatePolling(): void {
@@ -946,7 +547,7 @@ export class TaskExecutor {
     }
   }
 
-  private startPrPolling(taskId: string, prIdentifier: string, workflowId: string): void {
+  /** @internal */ startPrPolling(taskId: string, prIdentifier: string, workflowId: string): void {
     const pollIntervalMs = 30_000;
     const interval = setInterval(async () => {
       try {
@@ -987,23 +588,7 @@ export class TaskExecutor {
   }
 
   spawnClaudeFix(prompt: string, cwd: string): Promise<{ stdout: string; sessionId: string }> {
-    const cmd = process.env.INVOKER_CLAUDE_FIX_COMMAND ?? 'claude';
-    const sessionId = randomUUID();
-    return new Promise<{ stdout: string; sessionId: string }>((resolve, reject) => {
-      const child = spawn(cmd, ['--session-id', sessionId, '-p', prompt, '--dangerously-skip-permissions'], {
-        cwd,
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
-      let stdout = '';
-      let stderr = '';
-      child.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
-      child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
-      child.on('close', (code) => {
-        if (code === 0) resolve({ stdout, sessionId });
-        else reject(new Error(`Claude exited with code ${code}: ${stderr.trim()}`));
-      });
-      child.on('error', (err) => reject(err));
-    });
+    return spawnClaudeFixImpl(prompt, cwd);
   }
 
   // ── Private Helpers ──────────────────────────────────────
@@ -1117,7 +702,7 @@ export class TaskExecutor {
     };
   }
 
-  private gitLogMessage(commitHash: string): Promise<string> {
+  /** @internal */ gitLogMessage(commitHash: string): Promise<string> {
     return new Promise((resolvePromise, reject) => {
       const child = spawn('git', ['log', '-1', '--format=%B', commitHash], {
         cwd: this.cwd,
