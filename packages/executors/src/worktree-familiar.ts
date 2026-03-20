@@ -264,18 +264,19 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
       console.warn(`[WorktreeFamiliar] Force-remove failed (will attempt add anyway):`, err);
     }
 
-    // -- Create the worktree with a new branch --
-    // Use -B (force-create) so that if the branch already exists from a
-    // previous run it is reset to startPoint, avoiding stale-content
-    // merge conflicts with upstream dependency branches.
+    // -- Create the worktree with preservation support --
+    // Delegates to setupTaskBranch which preserves cherry-picked commits
+    // on restart instead of unconditionally force-resetting the branch.
     mkdirSync(this.worktreeBaseDir, { recursive: true });
     const startPoint = request.inputs.baseBranch ?? 'HEAD';
-    log('worktree add -B begin');
-    await this.execGitSimple(
-      ['worktree', 'add', '-B', branch, worktreeDir, startPoint],
-      this.repoDir,
-    );
-    log('worktree add -B done');
+    log('setupTaskBranch begin');
+    await this.setupTaskBranch(this.repoDir, request, handle, {
+      branchName: branch,
+      base: startPoint,
+      worktreeDir,
+      skipUpstreams: true,  // handled below by mergeUpstreamBranches
+    });
+    log('setupTaskBranch done');
 
     this.cleanStaleLocks(worktreeDir);
 

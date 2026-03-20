@@ -89,4 +89,37 @@ describe('RepoPool', () => {
     const result = execSync('git rev-parse --is-inside-work-tree', { cwd: clonePath }).toString().trim();
     expect(result).toBe('true');
   });
+
+  it('preserves commits on re-acquire when branch has commits ahead', async () => {
+    // First acquire
+    const wt1 = await pool.acquireWorktree(localRepoUrl, 'experiment/preserve-test');
+
+    // Make a commit in the worktree (simulates cherry-pick/fix)
+    writeFileSync(join(wt1.worktreePath, 'fix.txt'), 'cherry-picked fix');
+    execSync('git add -A && git commit -m "cherry-pick fix"', { cwd: wt1.worktreePath });
+
+    // Release the worktree
+    await wt1.release();
+
+    // Re-acquire the same branch — the fix commit should survive
+    const wt2 = await pool.acquireWorktree(localRepoUrl, 'experiment/preserve-test');
+    // The fix file should be present in the worktree
+    expect(execSync('cat fix.txt', { cwd: wt2.worktreePath }).toString()).toBe('cherry-picked fix');
+
+    await wt2.release();
+  });
+
+  it('resets branch on re-acquire when no extra commits exist', async () => {
+    // First acquire (no extra commits)
+    const wt1 = await pool.acquireWorktree(localRepoUrl, 'experiment/clean-test');
+    const head1 = execSync('git rev-parse HEAD', { cwd: wt1.worktreePath }).toString().trim();
+    await wt1.release();
+
+    // Re-acquire — should be a clean reset to HEAD
+    const wt2 = await pool.acquireWorktree(localRepoUrl, 'experiment/clean-test');
+    const head2 = execSync('git rev-parse HEAD', { cwd: wt2.worktreePath }).toString().trim();
+    expect(head2).toBe(head1);  // Same HEAD, no extra commits
+
+    await wt2.release();
+  });
 });

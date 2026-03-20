@@ -28,6 +28,17 @@ export interface ClaudeSessionParams {
   fullPrompt: string;
 }
 
+export interface SetupBranchOptions {
+  /** Override default branch name (default: `invoker/{actionId}`). */
+  branchName?: string;
+  /** Override the base ref computation. */
+  base?: string;
+  /** If set, use `git worktree add` instead of `git checkout`. Value = worktree dir path. */
+  worktreeDir?: string;
+  /** Skip upstream branch merging (default: false). Caller handles upstream merging separately. */
+  skipUpstreams?: boolean;
+}
+
 export class MergeConflictError extends Error {
   constructor(
     public readonly failedBranch: string,
@@ -316,33 +327,77 @@ export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar
     cwd: string,
     request: WorkRequest,
     handle: FamiliarHandle,
+    opts?: SetupBranchOptions,
   ): Promise<string | undefined> {
     try {
-      const originalBranch = (await this.execGitSimple(['branch', '--show-current'], cwd)).trim();
-      const branchName = `invoker/${request.actionId}`;
-
+      const branchName = opts?.branchName ?? `invoker/${request.actionId}`;
       const upstreams = request.inputs.upstreamBranches ?? [];
-      const base = upstreams[0] ?? request.inputs.baseBranch ?? 'HEAD';
+      const base = opts?.base ?? upstreams[0] ?? request.inputs.baseBranch ?? 'HEAD';
+      const mergeCwd = opts?.worktreeDir ?? cwd;
 
-      await this.execGitSimple(['checkout', '-B', branchName, base], cwd);
+      // Worktrees don't need original branch tracking (they're separate checkouts)
+      let originalBranch: string | undefined;
+      if (!opts?.worktreeDir) {
+        originalBranch = (await this.execGitSimple(['branch', '--show-current'], cwd)).trim();
+      }
 
-      for (const ub of upstreams.slice(1)) {
-        try {
-          const mergeMsg = await this.buildUpstreamMergeMessage(ub, cwd);
-          await this.execGitSimple(['merge', '--no-edit', '-m', mergeMsg, ub], cwd);
-        } catch (err) {
-          let conflictFiles: string[] = [];
-          try {
-            const raw = await this.execGitSimple(['diff', '--name-only', '--diff-filter=U'], cwd);
-            conflictFiles = raw.split('\n').filter(Boolean);
-          } catch { /* best effort */ }
-
-          try {
-            await this.execGitSimple(['merge', '--abort'], cwd);
-          } catch {
-            // merge --abort can fail if there's nothing to abort
+      // If the task branch already exists and has commits ahead of the base,
+      // preserve it (e.g., AI fix or manual commit) and merge the base in.
+      // Otherwise, force-create from the base for a clean start.
+      let preserved = false;
+      try {
+        await this.execGitSimple(['rev-parse', '--verify', branchName], cwd);
+        // Resolve base to concrete SHA so rev-list comparison is unambiguous
+        const baseSha = (await this.execGitSimple(['rev-parse', base], cwd)).trim();
+        const aheadCount = (await this.execGitSimple(
+          ['rev-list', '--count', `${baseSha}..${branchName}`], cwd,
+        )).trim();
+        if (parseInt(aheadCount, 10) > 0) {
+          if (opts?.worktreeDir) {
+            // Worktree mode: attach the existing branch without resetting it
+            await this.execGitSimple(
+              ['worktree', 'add', opts.worktreeDir, branchName], cwd,
+            );
+            await this.execGitSimple(['merge', '--no-edit', baseSha], opts.worktreeDir);
+          } else {
+            await this.execGitSimple(['checkout', branchName], cwd);
+            await this.execGitSimple(['merge', '--no-edit', base], cwd);
           }
-          throw new MergeConflictError(ub, conflictFiles, err);
+          preserved = true;
+        }
+      } catch {
+        // Branch doesn't exist or rev-list failed — fall through to force-create
+      }
+
+      if (!preserved) {
+        if (opts?.worktreeDir) {
+          await this.execGitSimple(
+            ['worktree', 'add', '-B', branchName, opts.worktreeDir, base], cwd,
+          );
+        } else {
+          await this.execGitSimple(['checkout', '-B', branchName, base], cwd);
+        }
+      }
+
+      if (!opts?.skipUpstreams) {
+        for (const ub of upstreams.slice(1)) {
+          try {
+            const mergeMsg = await this.buildUpstreamMergeMessage(ub, mergeCwd);
+            await this.execGitSimple(['merge', '--no-edit', '-m', mergeMsg, ub], mergeCwd);
+          } catch (err) {
+            let conflictFiles: string[] = [];
+            try {
+              const raw = await this.execGitSimple(['diff', '--name-only', '--diff-filter=U'], mergeCwd);
+              conflictFiles = raw.split('\n').filter(Boolean);
+            } catch { /* best effort */ }
+
+            try {
+              await this.execGitSimple(['merge', '--abort'], mergeCwd);
+            } catch {
+              // merge --abort can fail if there's nothing to abort
+            }
+            throw new MergeConflictError(ub, conflictFiles, err);
+          }
         }
       }
 
@@ -350,6 +405,10 @@ export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar
       return originalBranch;
     } catch (err) {
       if (err instanceof MergeConflictError) {
+        throw err;
+      }
+      // In worktree mode, creation failure is fatal — re-throw
+      if (opts?.worktreeDir) {
         throw err;
       }
       return undefined;

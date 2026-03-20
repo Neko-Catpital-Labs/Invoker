@@ -84,10 +84,25 @@ export class RepoPool {
       : `${clonePath}/worktrees/${sanitized}`;
     const worktreeParent = worktreePath.substring(0, worktreePath.lastIndexOf('/'));
     mkdirSync(worktreeParent, { recursive: true });
-    // -B force-creates the branch, resetting it to HEAD if it already exists
-    // from a previous run. This prevents stale branch content from causing
-    // spurious merge conflicts with upstream dependency branches.
-    await this.execGit(['worktree', 'add', '-B', branch, worktreePath], clonePath);
+    // Preserve cherry-picks: if branch has commits ahead of HEAD, reuse it
+    let preserved = false;
+    try {
+      await this.execGit(['rev-parse', '--verify', branch], clonePath);
+      const cloneHead = (await this.execGit(['rev-parse', 'HEAD'], clonePath)).trim();
+      const aheadCount = (await this.execGit(
+        ['rev-list', '--count', `${cloneHead}..${branch}`], clonePath,
+      )).trim();
+      if (parseInt(aheadCount, 10) > 0) {
+        await this.execGit(['worktree', 'add', worktreePath, branch], clonePath);
+        await this.execGit(['merge', '--no-edit', cloneHead], worktreePath);
+        preserved = true;
+      }
+    } catch {
+      // Branch doesn't exist or check failed — force-create
+    }
+    if (!preserved) {
+      await this.execGit(['worktree', 'add', '-B', branch, worktreePath], clonePath);
+    }
     active.add(worktreePath);
     this.activeWorktrees.set(repoUrl, active);
 

@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'no
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execSync } from 'node:child_process';
-import { BaseFamiliar, type BaseEntry, MergeConflictError } from '../base-familiar.js';
+import { BaseFamiliar, type BaseEntry, MergeConflictError, type SetupBranchOptions } from '../base-familiar.js';
 import type { WorkRequest, WorkRequestInputs, WorkResponse } from '@invoker/protocol';
 import type { FamiliarHandle, TerminalSpec } from '../familiar.js';
 
@@ -39,8 +39,8 @@ class TestFamiliar extends BaseFamiliar<BaseEntry> {
     return this.ensureFeatureBranch(cwd, branchName);
   }
 
-  async testSetupTaskBranch(cwd: string, request: WorkRequest, handle: FamiliarHandle): Promise<string | undefined> {
-    return this.setupTaskBranch(cwd, request, handle);
+  async testSetupTaskBranch(cwd: string, request: WorkRequest, handle: FamiliarHandle, opts?: SetupBranchOptions): Promise<string | undefined> {
+    return this.setupTaskBranch(cwd, request, handle, opts);
   }
 
   async testRecordTaskResult(cwd: string, request: WorkRequest, exitCode: number): Promise<string | null> {
@@ -2349,5 +2349,157 @@ describe('BaseFamiliar.setupTaskBranch branch reset', () => {
       expect(mce.conflictFiles).toContain('fileB.txt');
       expect(mce.conflictFiles.length).toBe(2);
     }
+  });
+});
+
+// ── setupTaskBranch worktree mode tests ────────────────────
+
+describe('BaseFamiliar.setupTaskBranch worktree mode', () => {
+  let tmpDir: string;
+  let familiar: TestFamiliar;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'wt-setup-'));
+    execSync('git init && git commit --allow-empty -m "init"', { cwd: tmpDir });
+    execSync('git config user.email "test@test.com"', { cwd: tmpDir });
+    execSync('git config user.name "Test"', { cwd: tmpDir });
+  });
+
+  afterEach(() => {
+    // Clean up worktrees before removing the temp dir
+    try { execSync('git worktree prune', { cwd: tmpDir }); } catch { /* */ }
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('preserves branch with commits ahead via worktree add (no -B) + merge', async () => {
+    familiar = new TestFamiliar();
+    const branch = 'experiment/wt-preserve';
+    const worktreeDir1 = join(tmpDir, 'wt1');
+    const worktreeDir2 = join(tmpDir, 'wt2');
+
+    // First run: create the branch in a worktree
+    const request = makeRequest('wt-preserve', { baseBranch: 'master' });
+    const handle1: FamiliarHandle = { executionId: 'e1', taskId: 'wt-preserve' };
+    await familiar.testSetupTaskBranch(tmpDir, request, handle1, {
+      branchName: branch,
+      base: 'master',
+      worktreeDir: worktreeDir1,
+      skipUpstreams: true,
+    });
+
+    // Make a commit on the branch inside the worktree (simulates a fix/cherry-pick)
+    writeFileSync(join(worktreeDir1, 'fix.txt'), 'cherry-picked fix');
+    execSync('git add -A && git commit -m "cherry-pick fix"', { cwd: worktreeDir1 });
+
+    // Remove the first worktree so the branch ref is free
+    execSync(`git worktree remove --force ${worktreeDir1}`, { cwd: tmpDir });
+
+    // Move master forward
+    writeFileSync(join(tmpDir, 'new-base.txt'), 'new base content');
+    execSync('git add -A && git commit -m "advance master"', { cwd: tmpDir });
+
+    // Second run: setupTaskBranch should preserve the fix and merge new base
+    const handle2: FamiliarHandle = { executionId: 'e2', taskId: 'wt-preserve' };
+    await familiar.testSetupTaskBranch(tmpDir, request, handle2, {
+      branchName: branch,
+      base: 'master',
+      worktreeDir: worktreeDir2,
+      skipUpstreams: true,
+    });
+
+    // Both the fix and the new base content should be present
+    expect(existsSync(join(worktreeDir2, 'fix.txt'))).toBe(true);
+    expect(existsSync(join(worktreeDir2, 'new-base.txt'))).toBe(true);
+
+    // Clean up
+    execSync(`git worktree remove --force ${worktreeDir2}`, { cwd: tmpDir });
+  });
+
+  it('force-creates via worktree add -B when branch has 0 commits ahead', async () => {
+    familiar = new TestFamiliar();
+    const branch = 'experiment/wt-clean';
+    const worktreeDir1 = join(tmpDir, 'wt1');
+    const worktreeDir2 = join(tmpDir, 'wt2');
+
+    // First run: create branch (no extra commits)
+    const request = makeRequest('wt-clean', { baseBranch: 'master' });
+    const handle1: FamiliarHandle = { executionId: 'e1', taskId: 'wt-clean' };
+    await familiar.testSetupTaskBranch(tmpDir, request, handle1, {
+      branchName: branch,
+      base: 'master',
+      worktreeDir: worktreeDir1,
+      skipUpstreams: true,
+    });
+
+    // Remove first worktree
+    execSync(`git worktree remove --force ${worktreeDir1}`, { cwd: tmpDir });
+
+    // Move master forward
+    writeFileSync(join(tmpDir, 'new.txt'), 'new');
+    execSync('git add -A && git commit -m "advance"', { cwd: tmpDir });
+    const newMasterHead = execSync('git rev-parse master', { cwd: tmpDir }).toString().trim();
+
+    // Second run: no commits ahead → force-reset
+    const handle2: FamiliarHandle = { executionId: 'e2', taskId: 'wt-clean' };
+    await familiar.testSetupTaskBranch(tmpDir, request, handle2, {
+      branchName: branch,
+      base: 'master',
+      worktreeDir: worktreeDir2,
+      skipUpstreams: true,
+    });
+
+    const wtHead = execSync('git rev-parse HEAD', { cwd: worktreeDir2 }).toString().trim();
+    expect(wtHead).toBe(newMasterHead);
+
+    // Clean up
+    execSync(`git worktree remove --force ${worktreeDir2}`, { cwd: tmpDir });
+  });
+
+  it('force-creates via worktree add -B when branch does not exist', async () => {
+    familiar = new TestFamiliar();
+    const branch = 'experiment/wt-new';
+    const worktreeDir = join(tmpDir, 'wt-new');
+
+    const masterHead = execSync('git rev-parse master', { cwd: tmpDir }).toString().trim();
+
+    const request = makeRequest('wt-new', { baseBranch: 'master' });
+    const handle: FamiliarHandle = { executionId: 'e1', taskId: 'wt-new' };
+    await familiar.testSetupTaskBranch(tmpDir, request, handle, {
+      branchName: branch,
+      base: 'master',
+      worktreeDir,
+      skipUpstreams: true,
+    });
+
+    // Should be at master HEAD
+    const wtHead = execSync('git rev-parse HEAD', { cwd: worktreeDir }).toString().trim();
+    expect(wtHead).toBe(masterHead);
+
+    // Branch should be the one we asked for
+    const currentBranch = execSync('git branch --show-current', { cwd: worktreeDir }).toString().trim();
+    expect(currentBranch).toBe(branch);
+
+    // Clean up
+    execSync(`git worktree remove --force ${worktreeDir}`, { cwd: tmpDir });
+  });
+
+  it('returns undefined (no originalBranch) in worktree mode', async () => {
+    familiar = new TestFamiliar();
+    const branch = 'experiment/wt-no-orig';
+    const worktreeDir = join(tmpDir, 'wt-no-orig');
+
+    const request = makeRequest('wt-no-orig', { baseBranch: 'master' });
+    const handle: FamiliarHandle = { executionId: 'e1', taskId: 'wt-no-orig' };
+    const result = await familiar.testSetupTaskBranch(tmpDir, request, handle, {
+      branchName: branch,
+      base: 'master',
+      worktreeDir,
+      skipUpstreams: true,
+    });
+
+    expect(result).toBeUndefined();
+
+    // Clean up
+    execSync(`git worktree remove --force ${worktreeDir}`, { cwd: tmpDir });
   });
 });
