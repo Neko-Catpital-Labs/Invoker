@@ -22,6 +22,9 @@ if [ "$1" = "--headless" ]; then
   fi
 
   unset ELECTRON_RUN_AS_NODE
+  if [ "$(uname)" = "Linux" ]; then
+    export LIBGL_ALWAYS_SOFTWARE=1
+  fi
   exec ./packages/app/node_modules/.bin/electron packages/app/dist/main.js $SANDBOX_FLAG --headless "$@"
 fi
 
@@ -48,4 +51,7 @@ if [ "$(uname)" = "Linux" ]; then
   fi
 fi
 
+if [ "$(uname)" = "Linux" ]; then
+  export LIBGL_ALWAYS_SOFTWARE=1
+fi
 ELECTRON_ENABLE_LOGGING=1 exec ./packages/app/node_modules/.bin/electron packages/app/dist/main.js $SANDBOX_FLAG "$@"

@@ -26,13 +26,15 @@ import * as path from 'node:path';
 import { mkdirSync, appendFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 
-// Work around Chromium shared-memory / zygote issues on Linux
+// Prevent desktop-wide freezes on Linux (Chromium GPU + X11/Wayland compositors).
+// Defense-in-depth: API-level disable, command-line flags, and env var (LIBGL_ALWAYS_SOFTWARE).
 if (process.platform === 'linux') {
+  app.disableHardwareAcceleration();
   app.commandLine.appendSwitch('no-sandbox');
   app.commandLine.appendSwitch('no-zygote');
   app.commandLine.appendSwitch('disable-dev-shm-usage');
-  // Disable GPU compositing to prevent desktop-wide freezes (Chromium + GNOME/X11)
   app.commandLine.appendSwitch('disable-gpu');
+  app.commandLine.appendSwitch('disable-gpu-compositing');
   app.commandLine.appendSwitch('disable-gpu-sandbox');
   app.commandLine.appendSwitch('disable-software-rasterizer');
 }

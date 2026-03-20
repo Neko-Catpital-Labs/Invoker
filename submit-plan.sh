@@ -33,5 +33,9 @@ if [ "$(uname)" = "Linux" ]; then
   fi
 fi
 
+if [ "$(uname)" = "Linux" ]; then
+  export LIBGL_ALWAYS_SOFTWARE=1
+fi
+
 echo "==> Submitting plan: $PLAN_FILE"
 ./packages/app/node_modules/.bin/electron packages/app/dist/main.js $SANDBOX_FLAG --headless run "$PLAN_FILE"

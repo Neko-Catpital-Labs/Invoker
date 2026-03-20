@@ -18,7 +18,7 @@ export const test = base.extend<ElectronFixtures>({
     const app = await electron.launch({
       args: [
         ...(process.platform === 'linux'
-          ? ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu', '--disable-gpu-compositing']
+          ? ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu', '--disable-gpu-compositing', '--disable-gpu-sandbox', '--disable-software-rasterizer']
           : []),
         path.resolve(__dirname, '..', '..', 'dist', 'main.js'),
       ],

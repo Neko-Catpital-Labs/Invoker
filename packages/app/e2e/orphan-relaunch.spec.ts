@@ -38,7 +38,7 @@ const RELAUNCH_PLAN = {
 function launchArgs(): string[] {
   return [
     ...(process.platform === 'linux'
-      ? ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu', '--disable-gpu-compositing']
+      ? ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu', '--disable-gpu-compositing', '--disable-gpu-sandbox', '--disable-software-rasterizer']
       : []),
     MAIN_JS,
   ];
