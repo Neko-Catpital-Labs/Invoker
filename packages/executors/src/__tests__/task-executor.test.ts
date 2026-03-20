@@ -823,6 +823,10 @@ describe('TaskExecutor', () => {
       (executor as any).execGit = async (args: string[]) => {
         gitCalls.push(args);
         if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        // diff --cached --quiet exits non-zero when there are staged changes
+        if (args[0] === 'diff' && args.includes('--cached') && args.includes('--quiet')) {
+          throw new Error('exit code 1');
+        }
         return '';
       };
 
@@ -845,6 +849,103 @@ describe('TaskExecutor', () => {
 
       expect(orchestrator.handleWorkerResponse).toHaveBeenCalledWith(
         expect.objectContaining({ status: 'completed' }),
+      );
+    });
+
+    it('executeMergeNode skips squash-merge and creates PR when mergeMode=github', async () => {
+      const allTasks = [
+        makeTask({ id: 't1', config: { workflowId: 'wf-1' }, status: 'completed', execution: { branch: 'experiment/t1' } }),
+      ];
+      const orchestrator = {
+        getTask: (id: string) => allTasks.find(t => t.id === id),
+        getAllTasks: () => allTasks,
+        handleWorkerResponse: vi.fn(() => []),
+        setTaskAwaitingApproval: vi.fn(),
+      };
+      const persistence = {
+        loadWorkflow: () => ({
+          id: 'wf-1',
+          onFinish: 'merge',
+          mergeMode: 'github',
+          baseBranch: 'master',
+          featureBranch: 'plan/feature',
+          name: 'Test Workflow',
+        }),
+        updateTask: vi.fn(),
+      };
+      const mergeGateProvider = {
+        createReview: vi.fn().mockResolvedValue({
+          url: 'https://github.com/owner/repo/pull/42',
+          identifier: 'owner/repo#42',
+        }),
+      };
+      const onComplete = vi.fn();
+      const executor = new TaskExecutor({
+        orchestrator: orchestrator as any,
+        persistence: persistence as any,
+        familiarRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+        callbacks: { onComplete },
+        mergeGateProvider: mergeGateProvider as any,
+      });
+
+      const gitCalls: string[][] = [];
+      (executor as any).execGit = async (args: string[]) => {
+        gitCalls.push(args);
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        return '';
+      };
+
+      const mergeTask = makeTask({
+        id: '__merge__wf-1',
+        status: 'running',
+        dependencies: ['t1'],
+        config: { isMergeNode: true, workflowId: 'wf-1' },
+      });
+
+      // Prevent setInterval leak from startPrPolling
+      (executor as any).startPrPolling = vi.fn();
+
+      await (executor as any).executeMergeNode(mergeTask);
+
+      // Should consolidate task branches into featureBranch
+      const consolidateMerge = gitCalls.find(c => c[0] === 'merge' && c.includes('experiment/t1'));
+      expect(consolidateMerge).toBeDefined();
+
+      // Should NOT squash-merge featureBranch into baseBranch
+      const squashCall = gitCalls.find(c => c[0] === 'merge' && c.includes('--squash'));
+      expect(squashCall).toBeUndefined();
+      const commitCall = gitCalls.find(c => c[0] === 'commit');
+      expect(commitCall).toBeUndefined();
+
+      // Should create a PR via mergeGateProvider
+      expect(mergeGateProvider.createReview).toHaveBeenCalledWith({
+        baseBranch: 'master',
+        featureBranch: 'plan/feature',
+        title: 'Test Workflow',
+        cwd: '/tmp',
+      });
+
+      // Should set task awaiting approval (not handleWorkerResponse)
+      expect(orchestrator.setTaskAwaitingApproval).toHaveBeenCalledWith('__merge__wf-1');
+      expect(orchestrator.handleWorkerResponse).not.toHaveBeenCalled();
+      expect(onComplete).toHaveBeenCalledWith(
+        '__merge__wf-1',
+        expect.objectContaining({ status: 'completed' }),
+      );
+
+      // Should persist PR metadata
+      expect(persistence.updateTask).toHaveBeenCalledWith(
+        '__merge__wf-1',
+        expect.objectContaining({
+          config: { familiarType: 'local' },
+          execution: expect.objectContaining({
+            branch: 'plan/feature',
+            prUrl: 'https://github.com/owner/repo/pull/42',
+            prIdentifier: 'owner/repo#42',
+            prStatus: 'Awaiting review',
+          }),
+        }),
       );
     });
 

@@ -13,7 +13,7 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
     const { baseBranch, featureBranch, title, cwd } = opts;
 
     // Push feature branch to origin
-    await this.exec('git', ['push', '-u', 'origin', featureBranch], cwd);
+    await this.exec('git', ['push', '--force', '-u', 'origin', featureBranch], cwd);
 
     // Create PR and capture URL
     const stdout = await this.exec('gh', [

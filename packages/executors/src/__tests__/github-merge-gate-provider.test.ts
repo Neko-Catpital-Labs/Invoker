@@ -57,7 +57,7 @@ describe('GitHubMergeGateProvider', () => {
       // Verify git push was called
       expect(spawnMock).toHaveBeenCalledWith(
         'git',
-        ['push', '-u', 'origin', 'feature/test'],
+        ['push', '--force', '-u', 'origin', 'feature/test'],
         expect.objectContaining({ cwd: '/tmp/repo' }),
       );
 

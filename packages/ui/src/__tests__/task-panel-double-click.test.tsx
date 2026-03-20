@@ -578,4 +578,48 @@ describe('TaskPanel double-click editing', () => {
       expect(commandDisplay).not.toHaveClass('cursor-pointer');
     });
   });
+
+  describe('Executor dropdown for merge nodes', () => {
+    it('does not render executor dropdown when task is a merge node', () => {
+      const task = {
+        ...makeTask({ command: 'echo test', status: 'pending' }),
+        config: { command: 'echo test', isMergeNode: true },
+      } as TaskState;
+      const mockOnEditType = vi.fn();
+      render(
+        <TaskPanel
+          task={task}
+          onProvideInput={mockOnProvideInput}
+          onApprove={mockOnApprove}
+          onReject={mockOnReject}
+          onSelectExperiment={mockOnSelectExperiment}
+          onEditCommand={mockOnEditCommand}
+          onEditType={mockOnEditType}
+        />,
+      );
+
+      expect(screen.queryByTestId('executor-type-select')).not.toBeInTheDocument();
+    });
+
+    it('renders executor dropdown for non-merge nodes when onEditType is provided', () => {
+      const task = makeTask({
+        command: 'echo test',
+        status: 'pending',
+      });
+      const mockOnEditType = vi.fn();
+      render(
+        <TaskPanel
+          task={task}
+          onProvideInput={mockOnProvideInput}
+          onApprove={mockOnApprove}
+          onReject={mockOnReject}
+          onSelectExperiment={mockOnSelectExperiment}
+          onEditCommand={mockOnEditCommand}
+          onEditType={mockOnEditType}
+        />,
+      );
+
+      expect(screen.getByTestId('executor-type-select')).toBeInTheDocument();
+    });
+  });
 });

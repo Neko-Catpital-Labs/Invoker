@@ -203,7 +203,7 @@ export function TaskPanel({
       )}
 
       {/* Executor type selector */}
-      {onEditType && (
+      {onEditType && !task.config.isMergeNode && (
         <div className="flex items-center justify-between">
           <span className="text-sm text-gray-400">Executor</span>
           <select
