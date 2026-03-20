@@ -420,6 +420,24 @@ export class TaskExecutor {
         };
       }
     } else {
+      if (mergeMode === 'manual' || mergeMode === 'github') {
+        this.persistence.updateTask(task.id, {
+          config: { familiarType: 'local' },
+          execution: {
+            branch: featureBranch ?? undefined,
+            workspacePath: this.cwd,
+          },
+        });
+        const gateResponse: WorkResponse = {
+          requestId: `merge-${task.id}`,
+          actionId: task.id,
+          status: 'completed',
+          outputs: { exitCode: 0 },
+        };
+        this.callbacks.onComplete?.(task.id, gateResponse);
+        this.orchestrator.setTaskAwaitingApproval(task.id);
+        return;
+      }
       response = {
         requestId: `merge-${task.id}`,
         actionId: task.id,
@@ -437,9 +455,13 @@ export class TaskExecutor {
       },
     });
     this.callbacks.onComplete?.(task.id, response);
-    const newlyStarted = this.orchestrator.handleWorkerResponse(response) ?? [];
-    if (newlyStarted.length > 0) {
-      this.executeTasks(newlyStarted);
+    if (mergeMode === 'manual' && response.status === 'completed') {
+      this.orchestrator.setTaskAwaitingApproval(task.id);
+    } else {
+      const newlyStarted = this.orchestrator.handleWorkerResponse(response) ?? [];
+      if (newlyStarted.length > 0) {
+        this.executeTasks(newlyStarted);
+      }
     }
   }
 

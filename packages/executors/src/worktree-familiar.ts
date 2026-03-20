@@ -265,30 +265,17 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
     }
 
     // -- Create the worktree with a new branch --
+    // Use -B (force-create) so that if the branch already exists from a
+    // previous run it is reset to startPoint, avoiding stale-content
+    // merge conflicts with upstream dependency branches.
     mkdirSync(this.worktreeBaseDir, { recursive: true });
     const startPoint = request.inputs.baseBranch ?? 'HEAD';
-    try {
-      log('worktree add -b begin');
-      await this.execGitSimple(
-        ['worktree', 'add', '-b', branch, worktreeDir, startPoint],
-        this.repoDir,
-      );
-      log('worktree add -b done');
-    } catch (err) {
-      // If the branch already exists, try without -b
-      try {
-        log('worktree add (no -b) begin');
-        await this.execGitSimple(
-          ['worktree', 'add', worktreeDir, branch],
-          this.repoDir,
-        );
-        log('worktree add (no -b) done');
-      } catch (retryErr) {
-        throw new Error(
-          `Failed to create worktree: ${retryErr}. Original: ${err}`,
-        );
-      }
-    }
+    log('worktree add -B begin');
+    await this.execGitSimple(
+      ['worktree', 'add', '-B', branch, worktreeDir, startPoint],
+      this.repoDir,
+    );
+    log('worktree add -B done');
 
     this.cleanStaleLocks(worktreeDir);
 

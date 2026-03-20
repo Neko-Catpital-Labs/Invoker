@@ -1347,6 +1347,18 @@ function setupGuiMode(): void {
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('invoker:workflows-changed', workflows);
       }
+
+      try {
+        const tasks = persistence.loadTasks(workflowId);
+        const mergeTask = tasks.find(t => t.config.isMergeNode);
+        if (mergeTask && (mergeTask.status === 'completed' || mergeTask.status === 'awaiting_approval')) {
+          const started = orchestrator.restartTask(mergeTask.id);
+          const runnable = started.filter(t => t.status === 'running');
+          await taskExecutor.executeTasks(runnable);
+        }
+      } catch (err) {
+        console.error(`[ipc] set-merge-mode restart failed: ${err}`);
+      }
     });
 
     ipcMain.handle('invoker:approve-merge', async (_event, workflowId: string) => {

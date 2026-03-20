@@ -212,7 +212,7 @@ describe('WorktreeFamiliar', () => {
 
     const worktreeArgs = worktreeAddCall![1] as string[];
     expect(worktreeArgs).toContain('add');
-    expect(worktreeArgs).toContain('-b');
+    expect(worktreeArgs).toContain('-B');
     const branchArg = worktreeArgs.find(a => a.startsWith('experiment/'));
     expect(branchArg).toMatch(/^experiment\/action-1-[0-9a-f]{8}$/);
 
@@ -408,7 +408,7 @@ describe('WorktreeFamiliar', () => {
     });
 
     const request = makeRequest();
-    await expect(familiar.start(request)).rejects.toThrow('Failed to create worktree');
+    await expect(familiar.start(request)).rejects.toThrow('failed (code 128)');
   });
 
   it('onOutput relays stdout and stderr from task process', async () => {
@@ -1037,7 +1037,7 @@ describe('WorktreeFamiliar', () => {
       const worktreeAddCall = gitCalls.find(
         (call) => {
           const a = call[1] as string[];
-          return a?.includes('worktree') && a?.includes('add') && a?.includes('-b');
+          return a?.includes('worktree') && a?.includes('add') && a?.includes('-B');
         },
       );
       expect(worktreeAddCall).toBeDefined();
@@ -1070,7 +1070,7 @@ describe('WorktreeFamiliar', () => {
       const worktreeAddCall = gitCalls.find(
         (call) => {
           const a = call[1] as string[];
-          return a?.includes('worktree') && a?.includes('add') && a?.includes('-b');
+          return a?.includes('worktree') && a?.includes('add') && a?.includes('-B');
         },
       );
       expect(worktreeAddCall).toBeDefined();
@@ -1162,7 +1162,7 @@ describe('WorktreeFamiliar', () => {
       });
 
       const request = makeRequest();
-      await expect(familiar.start(request)).rejects.toThrow(/Failed to create worktree/);
+      await expect(familiar.start(request)).rejects.toThrow(/failed \(code 128\)/);
     });
 
     it('no force-remove needed when no conflicting worktree exists', async () => {

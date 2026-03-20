@@ -84,15 +84,10 @@ export class RepoPool {
       : `${clonePath}/worktrees/${sanitized}`;
     const worktreeParent = worktreePath.substring(0, worktreePath.lastIndexOf('/'));
     mkdirSync(worktreeParent, { recursive: true });
-    try {
-      await this.execGit(['worktree', 'add', '-b', branch, worktreePath], clonePath);
-    } catch {
-      try {
-        await this.execGit(['worktree', 'add', worktreePath, branch], clonePath);
-      } catch (retryErr) {
-        throw new Error(`Failed to create worktree for branch ${branch}: ${retryErr}`);
-      }
-    }
+    // -B force-creates the branch, resetting it to HEAD if it already exists
+    // from a previous run. This prevents stale branch content from causing
+    // spurious merge conflicts with upstream dependency branches.
+    await this.execGit(['worktree', 'add', '-B', branch, worktreePath], clonePath);
     active.add(worktreePath);
     this.activeWorktrees.set(repoUrl, active);
 

@@ -949,6 +949,124 @@ describe('TaskExecutor', () => {
       );
     });
 
+    it('executeMergeNode goes to awaiting_approval when mergeMode=manual and onFinish=none', async () => {
+      const orchestrator = {
+        getTask: () => null,
+        getAllTasks: () => [],
+        handleWorkerResponse: vi.fn(() => []),
+        setTaskAwaitingApproval: vi.fn(),
+      };
+      const persistence = {
+        loadWorkflow: () => ({
+          id: 'wf-1',
+          onFinish: 'none',
+          mergeMode: 'manual',
+          baseBranch: 'master',
+          name: 'Test Workflow',
+        }),
+        updateTask: vi.fn(),
+      };
+      const onComplete = vi.fn();
+      const executor = new TaskExecutor({
+        orchestrator: orchestrator as any,
+        persistence: persistence as any,
+        familiarRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+        callbacks: { onComplete },
+      });
+
+      const mergeTask = makeTask({
+        id: '__merge__wf-1',
+        status: 'running',
+        dependencies: [],
+        config: { isMergeNode: true, workflowId: 'wf-1' },
+      });
+
+      await (executor as any).executeMergeNode(mergeTask);
+
+      expect(orchestrator.setTaskAwaitingApproval).toHaveBeenCalledWith('__merge__wf-1');
+      expect(orchestrator.handleWorkerResponse).not.toHaveBeenCalled();
+    });
+
+    it('executeMergeNode auto-completes when mergeMode=automatic and onFinish=none', async () => {
+      const orchestrator = {
+        getTask: () => null,
+        getAllTasks: () => [],
+        handleWorkerResponse: vi.fn(() => []),
+        setTaskAwaitingApproval: vi.fn(),
+      };
+      const persistence = {
+        loadWorkflow: () => ({
+          id: 'wf-1',
+          onFinish: 'none',
+          mergeMode: 'automatic',
+          baseBranch: 'master',
+          name: 'Test Workflow',
+        }),
+        updateTask: vi.fn(),
+      };
+      const onComplete = vi.fn();
+      const executor = new TaskExecutor({
+        orchestrator: orchestrator as any,
+        persistence: persistence as any,
+        familiarRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+        callbacks: { onComplete },
+      });
+
+      const mergeTask = makeTask({
+        id: '__merge__wf-1',
+        status: 'running',
+        dependencies: [],
+        config: { isMergeNode: true, workflowId: 'wf-1' },
+      });
+
+      await (executor as any).executeMergeNode(mergeTask);
+
+      expect(orchestrator.handleWorkerResponse).toHaveBeenCalledWith(
+        expect.objectContaining({ status: 'completed' }),
+      );
+      expect(orchestrator.setTaskAwaitingApproval).not.toHaveBeenCalled();
+    });
+
+    it('executeMergeNode goes to awaiting_approval when mergeMode=manual and no featureBranch', async () => {
+      const orchestrator = {
+        getTask: () => null,
+        getAllTasks: () => [],
+        handleWorkerResponse: vi.fn(() => []),
+        setTaskAwaitingApproval: vi.fn(),
+      };
+      const persistence = {
+        loadWorkflow: () => ({
+          id: 'wf-1',
+          onFinish: 'merge',
+          mergeMode: 'manual',
+          baseBranch: 'master',
+          name: 'Test Workflow',
+        }),
+        updateTask: vi.fn(),
+      };
+      const onComplete = vi.fn();
+      const executor = new TaskExecutor({
+        orchestrator: orchestrator as any,
+        persistence: persistence as any,
+        familiarRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+        callbacks: { onComplete },
+      });
+
+      const mergeTask = makeTask({
+        id: '__merge__wf-1',
+        status: 'running',
+        dependencies: [],
+        config: { isMergeNode: true, workflowId: 'wf-1' },
+      });
+
+      await (executor as any).executeMergeNode(mergeTask);
+
+      expect(orchestrator.setTaskAwaitingApproval).toHaveBeenCalledWith('__merge__wf-1');
+    });
+
     it('approveMerge performs the final merge step', async () => {
       const persistence = {
         loadWorkflow: () => ({
