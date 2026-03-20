@@ -93,6 +93,7 @@ export interface InvokerAPI {
   loadWorkflow: (workflowId: string) => Promise<{ workflow: unknown; tasks: unknown[] }>;
   onWorkflowsChanged: (cb: (workflows: unknown[]) => void) => () => void;
   deleteAllWorkflows: () => Promise<void>;
+  deleteWorkflow: (workflowId: string) => Promise<void>;
   getAllCompletedTasks: () => Promise<Array<TaskState & { workflowName: string }>>;
   cleanupWorktrees: () => Promise<{ removed: string[]; errors: string[] }>;
 

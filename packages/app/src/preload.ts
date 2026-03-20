@@ -59,6 +59,8 @@ const api: InvokerAPI = {
   loadWorkflow: (workflowId: string) =>
     ipcRenderer.invoke('invoker:load-workflow', workflowId),
   deleteAllWorkflows: () => ipcRenderer.invoke('invoker:delete-all-workflows'),
+  deleteWorkflow: (workflowId: string) =>
+    ipcRenderer.invoke('invoker:delete-workflow', workflowId),
   getAllCompletedTasks: () => ipcRenderer.invoke('invoker:get-all-completed-tasks'),
   onWorkflowsChanged: (cb: (workflows: unknown[]) => void) => {
     const handler = (_event: Electron.IpcRendererEvent, workflows: unknown[]) => cb(workflows);

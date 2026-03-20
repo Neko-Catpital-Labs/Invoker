@@ -115,6 +115,20 @@ export function App() {
     }
   }, []);
 
+  const handleDeleteWorkflow = useCallback(async (workflowId: string) => {
+    setContextMenu(null);
+    const confirmed = window.confirm(
+      'Delete this workflow and all its tasks? This cannot be undone.',
+    );
+    if (!confirmed) return;
+    try {
+      await window.invoker?.deleteWorkflow(workflowId);
+      setSelectedTaskId(null);
+    } catch (err) {
+      console.error('Delete Workflow failed:', err);
+    }
+  }, []);
+
   const handleResolveConflict = useCallback(async (taskId: string) => {
     setContextMenu(null);
     try {
@@ -408,6 +422,7 @@ export function App() {
           onOpenTerminal={handleOpenTerminal}
           onRebaseAndRetry={handleRebaseAndRetry}
           onRestartWorkflow={handleRestartWorkflow}
+          onDeleteWorkflow={handleDeleteWorkflow}
           onResolveConflict={handleResolveConflict}
           onFixWithClaude={handleFixWithClaude}
           onClose={closeContextMenu}

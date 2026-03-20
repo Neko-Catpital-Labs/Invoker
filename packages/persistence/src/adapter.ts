@@ -77,6 +77,7 @@ export interface PersistenceAdapter {
   getAllTaskBranches(): string[];
   deleteAllTasks(workflowId: string): void;
   deleteAllWorkflows(): void;
+  deleteWorkflow(workflowId: string): void;
 
   // Events (audit trail)
   logEvent(taskId: string, eventType: string, payload?: unknown): void;

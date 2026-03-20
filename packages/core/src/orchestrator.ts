@@ -1064,6 +1064,21 @@ export class Orchestrator {
     return this.startExecution();
   }
 
+  /**
+   * Remove a workflow from in-memory state and reload remaining workflows.
+   * Called after the workflow has been deleted from the DB.
+   */
+  removeWorkflow(workflowId: string): void {
+    this.activeWorkflowIds.delete(workflowId);
+    this.stateMachine.clear();
+    for (const wfId of this.activeWorkflowIds) {
+      const tasks = this.persistence.loadTasks(wfId);
+      for (const task of tasks) {
+        this.stateMachine.restoreTask(task);
+      }
+    }
+  }
+
   // ── Queries ───────────────────────────────────────────────
 
   getTask(taskId: string): TaskState | undefined {

@@ -496,6 +496,32 @@ export class SQLiteAdapter implements PersistenceAdapter {
     this.db.exec('DELETE FROM workflows');
   }
 
+  deleteWorkflow(workflowId: string): void {
+    const deleteTransaction = this.db.transaction(() => {
+      // Delete events first (FK constraint: events -> tasks)
+      this.db.prepare(`
+        DELETE FROM events WHERE task_id IN (
+          SELECT id FROM tasks WHERE workflow_id = ?
+        )
+      `).run(workflowId);
+
+      // Delete task output (FK constraint: task_output -> tasks)
+      this.db.prepare(`
+        DELETE FROM task_output WHERE task_id IN (
+          SELECT id FROM tasks WHERE workflow_id = ?
+        )
+      `).run(workflowId);
+
+      // Delete tasks (FK constraint: tasks -> workflows)
+      this.db.prepare('DELETE FROM tasks WHERE workflow_id = ?').run(workflowId);
+
+      // Finally delete the workflow
+      this.db.prepare('DELETE FROM workflows WHERE id = ?').run(workflowId);
+    });
+
+    deleteTransaction();
+  }
+
   // ── Events ────────────────────────────────────────────
 
   logEvent(taskId: string, eventType: string, payload?: unknown): void {

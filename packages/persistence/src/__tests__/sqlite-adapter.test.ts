@@ -392,6 +392,93 @@ describe('SQLiteAdapter', () => {
     });
   });
 
+  describe('deleteWorkflow', () => {
+    it('deletes a single workflow and its tasks/events but keeps other workflows', () => {
+      // Create two workflows with tasks and events
+      adapter.saveWorkflow({
+        id: 'wf-1',
+        name: 'First',
+        status: 'running',
+        createdAt: '2024-01-01T00:00:00Z',
+        updatedAt: '2024-01-01T00:00:00Z',
+      });
+      adapter.saveWorkflow({
+        id: 'wf-2',
+        name: 'Second',
+        status: 'running',
+        createdAt: '2024-01-02T00:00:00Z',
+        updatedAt: '2024-01-02T00:00:00Z',
+      });
+
+      adapter.saveTask('wf-1', makeTask('t1'));
+      adapter.saveTask('wf-1', makeTask('t2'));
+      adapter.saveTask('wf-2', makeTask('t3'));
+
+      adapter.logEvent('t1', 'started');
+      adapter.logEvent('t2', 'started');
+      adapter.logEvent('t3', 'started');
+
+      adapter.appendTaskOutput('t1', 'output from t1\n');
+      adapter.appendTaskOutput('t3', 'output from t3\n');
+
+      // Delete wf-1
+      adapter.deleteWorkflow('wf-1');
+
+      // Assert wf-1 is gone
+      const workflows = adapter.listWorkflows();
+      expect(workflows).toHaveLength(1);
+      expect(workflows[0].id).toBe('wf-2');
+      expect(adapter.loadWorkflow('wf-1')).toBeUndefined();
+      expect(adapter.loadTasks('wf-1')).toEqual([]);
+      expect(adapter.getEvents('t1')).toEqual([]);
+      expect(adapter.getEvents('t2')).toEqual([]);
+      expect(adapter.getTaskOutput('t1')).toBe('');
+
+      // Assert wf-2 is intact
+      expect(adapter.loadWorkflow('wf-2')).toBeDefined();
+      expect(adapter.loadWorkflow('wf-2')!.name).toBe('Second');
+      const wf2Tasks = adapter.loadTasks('wf-2');
+      expect(wf2Tasks).toHaveLength(1);
+      expect(wf2Tasks[0].id).toBe('t3');
+      expect(adapter.getEvents('t3')).toHaveLength(1);
+      expect(adapter.getTaskOutput('t3')).toBe('output from t3\n');
+    });
+
+    it('works when workflow has no tasks', () => {
+      adapter.saveWorkflow({
+        id: 'wf-empty',
+        name: 'Empty Workflow',
+        status: 'running',
+        createdAt: '2024-01-01T00:00:00Z',
+        updatedAt: '2024-01-01T00:00:00Z',
+      });
+
+      adapter.deleteWorkflow('wf-empty');
+
+      expect(adapter.loadWorkflow('wf-empty')).toBeUndefined();
+      expect(adapter.listWorkflows()).toEqual([]);
+    });
+
+    it('is a no-op for non-existent workflow', () => {
+      adapter.saveWorkflow({
+        id: 'wf-exists',
+        name: 'Existing',
+        status: 'running',
+        createdAt: '2024-01-01T00:00:00Z',
+        updatedAt: '2024-01-01T00:00:00Z',
+      });
+      adapter.saveTask('wf-exists', makeTask('t1'));
+
+      // Call deleteWorkflow on a non-existent workflow
+      adapter.deleteWorkflow('nonexistent');
+
+      // Verify no error and existing data is untouched
+      expect(adapter.loadWorkflow('wf-exists')).toBeDefined();
+      expect(adapter.loadTasks('wf-exists')).toHaveLength(1);
+      expect(adapter.listWorkflows()).toHaveLength(1);
+    });
+  });
+
   // ── Task Output ──────────────────────────────────────
 
   describe('task output', () => {

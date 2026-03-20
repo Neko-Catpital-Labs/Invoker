@@ -185,4 +185,48 @@ describe('ContextMenu visibility logic', () => {
       expect(canFixWithClaude).toBe(false);
     });
   });
+
+  describe('Delete Workflow visibility', () => {
+    it('is visible for any node with a workflowId', () => {
+      const task = makeTask({ id: 'regular-task', workflowId: 'wf-1' });
+      const onDeleteWorkflow = vi.fn();
+
+      const canDeleteWorkflow = !!task.config.workflowId && !!onDeleteWorkflow;
+      expect(canDeleteWorkflow).toBe(true);
+    });
+
+    it('is visible for merge nodes with a workflowId', () => {
+      const task = makeTask({ id: '__merge__wf-1', isMergeNode: true, workflowId: 'wf-1' });
+      const onDeleteWorkflow = vi.fn();
+
+      const canDeleteWorkflow = !!task.config.workflowId && !!onDeleteWorkflow;
+      expect(canDeleteWorkflow).toBe(true);
+    });
+
+    it('is hidden when task has no workflowId', () => {
+      const task = makeTask({ id: 'orphan-task' });
+      const onDeleteWorkflow = vi.fn();
+
+      const canDeleteWorkflow = !!task.config.workflowId && !!onDeleteWorkflow;
+      expect(canDeleteWorkflow).toBe(false);
+    });
+
+    it('is hidden when onDeleteWorkflow callback is not provided', () => {
+      const task = makeTask({ id: 'task-1', workflowId: 'wf-1' });
+      const onDeleteWorkflow = undefined;
+
+      const canDeleteWorkflow = !!task.config.workflowId && !!onDeleteWorkflow;
+      expect(canDeleteWorkflow).toBe(false);
+    });
+
+    it('is visible regardless of task status', () => {
+      const onDeleteWorkflow = vi.fn();
+
+      for (const status of ['pending', 'running', 'completed', 'failed'] as const) {
+        const task = makeTask({ id: 'task-1', status, workflowId: 'wf-1' });
+        const canDeleteWorkflow = !!task.config.workflowId && !!onDeleteWorkflow;
+        expect(canDeleteWorkflow).toBe(true);
+      }
+    });
+  });
 });

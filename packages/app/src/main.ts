@@ -31,6 +31,10 @@ if (process.platform === 'linux') {
   app.commandLine.appendSwitch('no-sandbox');
   app.commandLine.appendSwitch('no-zygote');
   app.commandLine.appendSwitch('disable-dev-shm-usage');
+  // Disable GPU compositing to prevent desktop-wide freezes (Chromium + GNOME/X11)
+  app.commandLine.appendSwitch('disable-gpu');
+  app.commandLine.appendSwitch('disable-gpu-sandbox');
+  app.commandLine.appendSwitch('disable-software-rasterizer');
 }
 
 import { Orchestrator, UTILIZATION_MAX } from '@invoker/core';
@@ -1110,6 +1114,48 @@ function setupGuiMode(): void {
       lastKnownWorkflowCount = 0;
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('invoker:workflows-changed', []);
+      }
+    });
+
+    ipcMain.handle('invoker:delete-workflow', async (_event, workflowId: string) => {
+      console.log(`[ipc] delete-workflow: "${workflowId}"`);
+      try {
+        // Kill all running tasks belonging to the workflow
+        const allTasks = orchestrator.getAllTasks();
+        const workflowTasks = allTasks.filter(
+          (t) => t.config.workflowId === workflowId && t.status === 'running',
+        );
+        for (const task of workflowTasks) {
+          await killRunningTask(task.id);
+        }
+
+        // Delete from DB
+        persistence.deleteWorkflow(workflowId);
+
+        // Update in-memory state
+        orchestrator.removeWorkflow(workflowId);
+
+        // Clean up task handles and last known states
+        for (const task of allTasks.filter((t) => t.config.workflowId === workflowId)) {
+          lastKnownTaskStates.delete(task.id);
+          // Send removal deltas
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('invoker:task-delta', {
+              type: 'removed',
+              taskId: task.id,
+            });
+          }
+        }
+
+        // Update workflow count and send workflows-changed
+        const workflows = persistence.listWorkflows();
+        lastKnownWorkflowCount = workflows.length;
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('invoker:workflows-changed', workflows);
+        }
+      } catch (err) {
+        console.error(`[ipc] delete-workflow failed: ${err}`);
+        throw err;
       }
     });
 
