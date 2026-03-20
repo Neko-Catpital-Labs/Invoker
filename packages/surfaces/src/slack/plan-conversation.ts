@@ -349,21 +349,8 @@ export class PlanConversation {
       const msg = this.messages[i];
       if (msg.role !== 'assistant') continue;
       if (!msg.content) continue;
-
-      const plan = extractYamlPlan(msg.content, this.defaultBranch);
-      if (plan) return plan;
+      return extractYamlPlan(msg.content, this.defaultBranch);
     }
-
-    // Fallback: try concatenating all assistant messages
-    const combined = this.messages
-      .filter(m => m.role === 'assistant' && m.content)
-      .map(m => m.content)
-      .join('\n');
-    if (combined.length > 0) {
-      const plan = extractYamlPlan(combined, this.defaultBranch);
-      if (plan) return plan;
-    }
-
     return null;
   }
 

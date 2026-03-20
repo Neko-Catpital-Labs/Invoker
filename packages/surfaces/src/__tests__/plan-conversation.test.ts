@@ -506,20 +506,17 @@ describe('PlanConversation', () => {
     expect(mockSpawn).toHaveBeenCalledTimes(1);
   });
 
-  it('extracts plan from YAML split across two assistant messages', async () => {
-    // First message has the opening fence + partial YAML (split before tasks key)
-    mockCursorResponse('Here is the plan:\n```yaml\nname: "Split Plan"');
-    await conversation.sendMessage('Generate plan');
+  it('does not pick up illustrative YAML from earlier assistant messages', async () => {
+    const illustrativeYaml = '```yaml\nname: "Example Plan"\ntasks:\n  - id: example\n    description: "illustrative example"\n    dependencies: []\n```';
+    mockCursorResponse(`Here is an example of the format:\n\n${illustrativeYaml}\n\nWant me to generate a real plan?`);
+    await conversation.sendMessage('How do plans work?');
 
-    // Second message continues the YAML and closes the fence
-    mockCursorResponse('tasks:\n  - id: t1\n    description: "do stuff"\n    dependencies: []\n```');
-    await conversation.sendMessage('Continue');
+    mockCursorResponse('Sure, what feature would you like to build?');
+    await conversation.sendMessage('Tell me more');
 
     const reply = await conversation.sendMessage('yes');
-    expect(reply).toContain('Split Plan');
-    expect(conversation.planSubmitted).toBe(true);
-    expect(conversation.submittedPlan!.name).toBe('Split Plan');
-    // Only 2 spawn calls for the two non-confirmation messages
+    expect(reply).toContain("couldn't find a complete YAML plan");
+    expect(conversation.planSubmitted).toBe(false);
     expect(mockSpawn).toHaveBeenCalledTimes(2);
   });
 

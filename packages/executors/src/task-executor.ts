@@ -341,11 +341,12 @@ export class TaskExecutor {
     const featureBranch = workflow?.featureBranch;
 
     let response: WorkResponse;
+    let prUrl: string | undefined;
 
     if (onFinish !== 'none' && featureBranch) {
       const effectiveOnFinish = mergeMode === 'automatic' ? onFinish : 'none';
       try {
-        await this.consolidateAndMerge(effectiveOnFinish, baseBranch, featureBranch, workflowId, workflow?.name, task.dependencies);
+        prUrl = await this.consolidateAndMerge(effectiveOnFinish, baseBranch, featureBranch, workflowId, workflow?.name, task.dependencies);
         if (mergeMode === 'manual') {
           this.persistence.updateTask(task.id, {
             config: { familiarType: 'local' },
@@ -368,16 +369,15 @@ export class TaskExecutor {
           if (!this.mergeGateProvider) {
             throw new Error('mergeMode is "github" but no mergeGateProvider configured');
           }
-          // Consolidate branches without merging (effectiveOnFinish = 'none')
-          await this.consolidateAndMerge('none', baseBranch, featureBranch, workflowId, workflow?.name, task.dependencies);
 
-          // Create PR via provider
+          // Create PR via provider (consolidation already done above)
           const result = await this.mergeGateProvider.createReview({
             baseBranch,
             featureBranch,
             title: workflow?.name ?? 'Workflow',
             cwd: this.cwd,
           });
+          console.log(`[merge] Created GitHub PR: ${result.url}`);
 
           // Persist PR metadata
           this.persistence.updateTask(task.id, {
@@ -433,6 +433,7 @@ export class TaskExecutor {
       execution: {
         branch: featureBranch ?? undefined,
         workspacePath: this.cwd,
+        ...(prUrl ? { prUrl } : {}),
       },
     });
     this.callbacks.onComplete?.(task.id, response);
@@ -473,9 +474,13 @@ export class TaskExecutor {
       } else if (onFinish === 'pull_request') {
         mergeTrace('GIT_PUSH', { featureBranch });
         await this.execGit(['push', '--force', '-u', 'origin', featureBranch]);
-        await this.execPr(baseBranch, featureBranch, mergeMessage);
-        mergeTrace('PR_CREATED', { featureBranch, baseBranch });
-        console.log(`[merge] Approved: created pull request ${featureBranch} → ${baseBranch}`);
+        const prUrl = await this.execPr(baseBranch, featureBranch, mergeMessage);
+        mergeTrace('PR_CREATED', { featureBranch, baseBranch, prUrl });
+        console.log(`[merge] Approved: created pull request ${prUrl}`);
+        const mergeTaskId = `__merge__${workflowId}`;
+        this.persistence.updateTask(mergeTaskId, {
+          execution: { prUrl },
+        });
       }
     } catch (err) {
       mergeTrace('APPROVE_MERGE_ERROR', { workflowId, error: String(err) });
@@ -492,7 +497,7 @@ export class TaskExecutor {
     workflowId?: string,
     workflowName?: string,
     leafTaskIds?: readonly string[],
-  ): Promise<void> {
+  ): Promise<string | undefined> {
     const originalBranch = await this.execGit(['branch', '--show-current']);
 
     try {
@@ -544,8 +549,9 @@ export class TaskExecutor {
         }
       } else if (onFinish === 'pull_request') {
         await this.execGit(['push', '--force', '-u', 'origin', featureBranch]);
-        await this.execPr(baseBranch, featureBranch, workflowName ?? 'Workflow');
-        console.log(`[merge] Created pull request: ${featureBranch} → ${baseBranch}`);
+        const prUrl = await this.execPr(baseBranch, featureBranch, workflowName ?? 'Workflow');
+        console.log(`[merge] Created pull request: ${prUrl}`);
+        return prUrl;
       }
     } catch (err) {
       try { await this.execGit(['merge', '--abort']); } catch { /* no merge in progress */ }

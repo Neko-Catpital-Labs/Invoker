@@ -1006,6 +1006,232 @@ describe('TaskExecutor', () => {
 
       await expect(executor.approveMerge('wf-1')).rejects.toThrow('no merge configured');
     });
+
+    it('github merge path logs PR URL to console', async () => {
+      const allTasks = [
+        makeTask({ id: 't1', config: { workflowId: 'wf-1' }, status: 'completed', execution: { branch: 'experiment/t1' } }),
+      ];
+      const orchestrator = {
+        getTask: (id: string) => allTasks.find(t => t.id === id),
+        getAllTasks: () => allTasks,
+        handleWorkerResponse: vi.fn(() => []),
+        setTaskAwaitingApproval: vi.fn(),
+      };
+      const persistence = {
+        loadWorkflow: () => ({
+          id: 'wf-1',
+          onFinish: 'merge',
+          mergeMode: 'github',
+          baseBranch: 'master',
+          featureBranch: 'plan/feature',
+          name: 'Test Workflow',
+        }),
+        updateTask: vi.fn(),
+      };
+      const mergeGateProvider = {
+        createReview: vi.fn().mockResolvedValue({
+          url: 'https://github.com/owner/repo/pull/99',
+          identifier: '99',
+        }),
+      };
+      const executor = new TaskExecutor({
+        orchestrator: orchestrator as any,
+        persistence: persistence as any,
+        familiarRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+        mergeGateProvider: mergeGateProvider as any,
+      });
+
+      (executor as any).execGit = async (args: string[]) => {
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        return '';
+      };
+      (executor as any).startPrPolling = vi.fn();
+
+      const logSpy = vi.spyOn(console, 'log');
+
+      const mergeTask = makeTask({
+        id: '__merge__wf-1',
+        status: 'running',
+        dependencies: ['t1'],
+        config: { isMergeNode: true, workflowId: 'wf-1' },
+      });
+
+      await (executor as any).executeMergeNode(mergeTask);
+
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.stringContaining('https://github.com/owner/repo/pull/99'),
+      );
+
+      logSpy.mockRestore();
+    });
+
+    it('github merge path calls consolidateAndMerge exactly once', async () => {
+      const allTasks = [
+        makeTask({ id: 't1', config: { workflowId: 'wf-1' }, status: 'completed', execution: { branch: 'experiment/t1' } }),
+      ];
+      const orchestrator = {
+        getTask: (id: string) => allTasks.find(t => t.id === id),
+        getAllTasks: () => allTasks,
+        handleWorkerResponse: vi.fn(() => []),
+        setTaskAwaitingApproval: vi.fn(),
+      };
+      const persistence = {
+        loadWorkflow: () => ({
+          id: 'wf-1',
+          onFinish: 'merge',
+          mergeMode: 'github',
+          baseBranch: 'master',
+          featureBranch: 'plan/feature',
+          name: 'Test Workflow',
+        }),
+        updateTask: vi.fn(),
+      };
+      const mergeGateProvider = {
+        createReview: vi.fn().mockResolvedValue({
+          url: 'https://github.com/owner/repo/pull/42',
+          identifier: '42',
+        }),
+      };
+      const executor = new TaskExecutor({
+        orchestrator: orchestrator as any,
+        persistence: persistence as any,
+        familiarRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+        mergeGateProvider: mergeGateProvider as any,
+      });
+
+      (executor as any).execGit = async (args: string[]) => {
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        return '';
+      };
+      (executor as any).startPrPolling = vi.fn();
+
+      const consolidateSpy = vi.spyOn(executor as any, 'consolidateAndMerge');
+
+      const mergeTask = makeTask({
+        id: '__merge__wf-1',
+        status: 'running',
+        dependencies: ['t1'],
+        config: { isMergeNode: true, workflowId: 'wf-1' },
+      });
+
+      await (executor as any).executeMergeNode(mergeTask);
+
+      expect(consolidateSpy).toHaveBeenCalledTimes(1);
+      expect(consolidateSpy).toHaveBeenCalledWith(
+        'none', 'master', 'plan/feature', 'wf-1', 'Test Workflow', ['t1'],
+      );
+
+      consolidateSpy.mockRestore();
+    });
+
+    it('approveMerge with onFinish=pull_request persists PR URL', async () => {
+      const persistence = {
+        loadWorkflow: () => ({
+          id: 'wf-1',
+          onFinish: 'pull_request',
+          baseBranch: 'master',
+          featureBranch: 'plan/feature',
+          name: 'Test Workflow',
+        }),
+        updateTask: vi.fn(),
+      };
+      const executor = new TaskExecutor({
+        orchestrator: { getTask: () => null, getAllTasks: () => [] } as any,
+        persistence: persistence as any,
+        familiarRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+      });
+
+      (executor as any).execGit = async (args: string[]) => {
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        return '';
+      };
+      (executor as any).execPr = vi.fn().mockResolvedValue('https://github.com/owner/repo/pull/55');
+
+      const logSpy = vi.spyOn(console, 'log');
+
+      await executor.approveMerge('wf-1');
+
+      // Should push + create PR
+      expect((executor as any).execPr).toHaveBeenCalledWith('master', 'plan/feature', 'Test Workflow');
+
+      // Should persist the PR URL on the merge task
+      expect(persistence.updateTask).toHaveBeenCalledWith(
+        '__merge__wf-1',
+        expect.objectContaining({
+          execution: { prUrl: 'https://github.com/owner/repo/pull/55' },
+        }),
+      );
+
+      // Should log the PR URL
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.stringContaining('https://github.com/owner/repo/pull/55'),
+      );
+
+      logSpy.mockRestore();
+    });
+
+    it('automatic merge with onFinish=pull_request persists PR URL', async () => {
+      const allTasks = [
+        makeTask({ id: 't1', config: { workflowId: 'wf-1' }, status: 'completed', execution: { branch: 'experiment/t1' } }),
+      ];
+      const orchestrator = {
+        getTask: (id: string) => allTasks.find(t => t.id === id),
+        getAllTasks: () => allTasks,
+        handleWorkerResponse: vi.fn(() => []),
+      };
+      const persistence = {
+        loadWorkflow: () => ({
+          id: 'wf-1',
+          onFinish: 'pull_request',
+          mergeMode: 'automatic',
+          baseBranch: 'master',
+          featureBranch: 'plan/feature',
+          name: 'Test Workflow',
+        }),
+        updateTask: vi.fn(),
+      };
+      const onComplete = vi.fn();
+      const executor = new TaskExecutor({
+        orchestrator: orchestrator as any,
+        persistence: persistence as any,
+        familiarRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+        callbacks: { onComplete },
+      });
+
+      (executor as any).execGit = async (args: string[]) => {
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        return '';
+      };
+      (executor as any).execPr = vi.fn().mockResolvedValue('https://github.com/owner/repo/pull/77');
+
+      const mergeTask = makeTask({
+        id: '__merge__wf-1',
+        status: 'running',
+        dependencies: ['t1'],
+        config: { isMergeNode: true, workflowId: 'wf-1' },
+      });
+
+      await (executor as any).executeMergeNode(mergeTask);
+
+      // Should persist the PR URL via the final updateTask call
+      expect(persistence.updateTask).toHaveBeenCalledWith(
+        '__merge__wf-1',
+        expect.objectContaining({
+          execution: expect.objectContaining({
+            prUrl: 'https://github.com/owner/repo/pull/77',
+          }),
+        }),
+      );
+
+      // Should complete successfully
+      expect(orchestrator.handleWorkerResponse).toHaveBeenCalledWith(
+        expect.objectContaining({ status: 'completed' }),
+      );
+    });
   });
 
   // ── mergeExperimentBranches ─────────────────────────────

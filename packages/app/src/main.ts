@@ -396,6 +396,14 @@ async function headlessRun(planPath: string): Promise<void> {
   const status = orchestrator.getWorkflowStatus(currentWorkflowId);
   console.log(`\n${formatWorkflowStatus(status)}`);
 
+  // Print PR URL if the merge gate created one
+  const mergeTask = orchestrator.getAllTasks().find(
+    t => t.config.workflowId === currentWorkflowId && t.config.isMergeNode,
+  );
+  if (mergeTask?.execution?.prUrl) {
+    console.log(`\nPull Request: ${mergeTask.execution.prUrl}`);
+  }
+
   // onFinish is now handled by the merge node in the TaskExecutor
   if (status.failed > 0) process.exitCode = 1;
 }
