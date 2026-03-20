@@ -43,6 +43,8 @@ export interface InvokerConfig {
   planningTimeoutMs?: number;
   /** Interval for heartbeat messages posted to Slack during planning in ms. Default: 60000 (60 seconds). Set to 0 to disable. */
   planningHeartbeatIntervalMs?: number;
+  /** Maximum number of tasks that can run concurrently. Overrides utilization-based scheduling. Default: 3 (from Orchestrator). */
+  maxConcurrency?: number;
 }
 
 function readJsonSafe(path: string): InvokerConfig {

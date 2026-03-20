@@ -126,4 +126,26 @@ describe('loadConfig', () => {
     const config = loadConfig(fakeRepo);
     expect(config.disableAutoRunOnStartup).toBe(true);
   });
+
+  it('reads maxConcurrency from repo config', () => {
+    writeFileSync(
+      join(fakeRepo, '.invoker.json'),
+      JSON.stringify({ maxConcurrency: 6 }),
+    );
+    const config = loadConfig(fakeRepo);
+    expect(config.maxConcurrency).toBe(6);
+  });
+
+  it('repo-level overrides maxConcurrency from user-level', () => {
+    writeFileSync(
+      join(fakeHome, '.invoker', 'config.json'),
+      JSON.stringify({ maxConcurrency: 4 }),
+    );
+    writeFileSync(
+      join(fakeRepo, '.invoker.json'),
+      JSON.stringify({ maxConcurrency: 8 }),
+    );
+    const config = loadConfig(fakeRepo);
+    expect(config.maxConcurrency).toBe(8);
+  });
 });
