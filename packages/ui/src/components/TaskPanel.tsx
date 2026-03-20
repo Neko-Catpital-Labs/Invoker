@@ -153,7 +153,9 @@ export function TaskPanel({
               task.status === 'running' ? 'animate-pulse' : ''
             }`}
           />
-          {task.status.toUpperCase().replace('_', ' ')}
+          {task.status === 'running' && task.execution.isFixingWithAI
+            ? 'FIXING WITH AI'
+            : task.status.toUpperCase().replace('_', ' ')}
         </span>
       </div>
 
@@ -199,6 +201,31 @@ export function TaskPanel({
             <option value="automatic">Automatic</option>
             <option value="github">GitHub PR</option>
           </select>
+        </div>
+      )}
+
+      {/* GitHub PR link (merge gates only) */}
+      {task.config.isMergeNode && task.execution?.prUrl && (
+        <div className="flex items-center justify-between">
+          <span className="text-sm text-gray-400">Pull Request</span>
+          <a
+            href={task.execution.prUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-xs font-mono text-blue-400 hover:text-blue-300 underline truncate max-w-[200px]"
+            title={task.execution.prUrl}
+            data-testid="pr-url-link"
+          >
+            {task.execution.prUrl.replace(/^https?:\/\/github\.com\//, '')}
+          </a>
+        </div>
+      )}
+      {task.config.isMergeNode && task.execution?.prStatus && (
+        <div className="flex items-center justify-between">
+          <span className="text-sm text-gray-400">PR Status</span>
+          <span className="text-xs text-gray-200" data-testid="pr-status-text">
+            {task.execution.prStatus}
+          </span>
         </div>
       )}
 

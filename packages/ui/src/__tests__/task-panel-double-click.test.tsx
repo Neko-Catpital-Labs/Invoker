@@ -622,4 +622,67 @@ describe('TaskPanel double-click editing', () => {
       expect(screen.getByTestId('executor-type-select')).toBeInTheDocument();
     });
   });
+
+  describe('PR URL display for merge gates', () => {
+    it('renders PR URL link when merge gate task has prUrl', () => {
+      const task = makeTask({
+        status: 'awaiting_approval',
+        config: { isMergeNode: true, workflowId: 'wf-1' } as TaskState['config'],
+        execution: { prUrl: 'https://github.com/owner/repo/pull/42' } as TaskState['execution'],
+      });
+      render(
+        <TaskPanel
+          task={task}
+          onProvideInput={mockOnProvideInput}
+          onApprove={mockOnApprove}
+          onReject={mockOnReject}
+          onSelectExperiment={mockOnSelectExperiment}
+        />,
+      );
+
+      const link = screen.getByTestId('pr-url-link');
+      expect(link).toBeInTheDocument();
+      expect(link).toHaveAttribute('href', 'https://github.com/owner/repo/pull/42');
+      expect(link).toHaveTextContent('owner/repo/pull/42');
+    });
+
+    it('renders PR status when merge gate task has prStatus', () => {
+      const task = makeTask({
+        status: 'awaiting_approval',
+        config: { isMergeNode: true, workflowId: 'wf-1' } as TaskState['config'],
+        execution: { prUrl: 'https://github.com/owner/repo/pull/42', prStatus: 'Awaiting review' } as TaskState['execution'],
+      });
+      render(
+        <TaskPanel
+          task={task}
+          onProvideInput={mockOnProvideInput}
+          onApprove={mockOnApprove}
+          onReject={mockOnReject}
+          onSelectExperiment={mockOnSelectExperiment}
+        />,
+      );
+
+      const statusEl = screen.getByTestId('pr-status-text');
+      expect(statusEl).toBeInTheDocument();
+      expect(statusEl).toHaveTextContent('Awaiting review');
+    });
+
+    it('does not render PR link when task is not a merge gate', () => {
+      const task = makeTask({
+        status: 'completed',
+        execution: { prUrl: 'https://github.com/owner/repo/pull/99' } as TaskState['execution'],
+      });
+      render(
+        <TaskPanel
+          task={task}
+          onProvideInput={mockOnProvideInput}
+          onApprove={mockOnApprove}
+          onReject={mockOnReject}
+          onSelectExperiment={mockOnSelectExperiment}
+        />,
+      );
+
+      expect(screen.queryByTestId('pr-url-link')).not.toBeInTheDocument();
+    });
+  });
 });

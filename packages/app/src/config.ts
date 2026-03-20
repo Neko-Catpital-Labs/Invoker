@@ -45,6 +45,8 @@ export interface InvokerConfig {
   planningHeartbeatIntervalMs?: number;
   /** Maximum number of tasks that can run concurrently. Overrides utilization-based scheduling. Default: 3 (from Orchestrator). */
   maxConcurrency?: number;
+  /** Browser executable for opening external URLs (e.g. "firefox"). Default: Chrome. */
+  browser?: string;
 }
 
 function readJsonSafe(path: string): InvokerConfig {

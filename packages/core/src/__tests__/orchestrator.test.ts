@@ -3251,6 +3251,7 @@ describe('Orchestrator', () => {
       orchestrator.beginConflictResolution('t2');
 
       expect(orchestrator.getTask('t2')!.status).toBe('running');
+      expect(orchestrator.getTask('t2')!.execution.isFixingWithAI).toBe(true);
 
       const runningDeltas = publishedDeltas.filter(
         (d) => d.type === 'updated' && d.taskId === 't2' && d.changes.status === 'running',
@@ -3277,6 +3278,7 @@ describe('Orchestrator', () => {
         failedBranch: 'experiment/upstream-branch-abc123',
         conflictFiles: ['src/App.tsx', 'src/utils.ts'],
       });
+      expect(task.execution.isFixingWithAI).toBeUndefined();
 
       const failedDeltas = publishedDeltas.filter(
         (d) => d.type === 'updated' && d.taskId === 't2' && d.changes.status === 'failed',
@@ -3312,6 +3314,7 @@ describe('Orchestrator', () => {
       expect(task.status).toBe('failed');
       expect(task.execution.error).toBe('plain error string');
       expect(task.execution.mergeConflict).toBeUndefined();
+      expect(task.execution.isFixingWithAI).toBeUndefined();
     });
   });
 
@@ -3341,10 +3344,12 @@ describe('Orchestrator', () => {
 
     it('setFixAwaitingApproval transitions to awaiting_approval with pendingFixError', () => {
       orchestrator.beginConflictResolution('f2');
+      expect(orchestrator.getTask('f2')!.execution.isFixingWithAI).toBe(true);
       orchestrator.setFixAwaitingApproval('f2', 'test failed: expected 1 to be 2');
       const task = orchestrator.getTask('f2')!;
       expect(task.status).toBe('awaiting_approval');
       expect(task.execution.pendingFixError).toBe('test failed: expected 1 to be 2');
+      expect(task.execution.isFixingWithAI).toBeUndefined();
     });
 
     it('pendingFixError is readable via getTask', () => {
@@ -3363,6 +3368,7 @@ describe('Orchestrator', () => {
       orchestrator.restartTask('f2');
       const task = orchestrator.getTask('f2')!;
       expect(task.status === 'pending' || task.status === 'running').toBe(true);
+      expect(task.execution.isFixingWithAI).toBeUndefined();
     });
 
     it('revertConflictResolution restores failed state', () => {

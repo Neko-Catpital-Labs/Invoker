@@ -21,7 +21,7 @@
  * with native modules (better-sqlite3).
  */
 
-import { app, BrowserWindow, ipcMain, nativeImage } from 'electron';
+import { app, BrowserWindow, ipcMain, nativeImage, shell } from 'electron';
 import * as path from 'node:path';
 import { mkdirSync, appendFileSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -949,6 +949,27 @@ function setupGuiMode(): void {
     }
 
     mainWindow.on('closed', () => { mainWindow = null; });
+
+    mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+      if (url.startsWith('https://') || url.startsWith('http://')) {
+        const browserCmd = invokerConfig.browser;
+        if (browserCmd) {
+          spawn(browserCmd, [url], { detached: true, stdio: 'ignore' }).unref();
+        } else {
+          const chromeCmd: [string, string[]] = process.platform === 'darwin'
+            ? ['open', ['-a', 'Google Chrome', url]]
+            : process.platform === 'win32'
+              ? ['cmd', ['/c', 'start', 'chrome', url]]
+              : ['google-chrome', [url]];
+          try {
+            spawn(chromeCmd[0], chromeCmd[1], { detached: true, stdio: 'ignore' }).unref();
+          } catch {
+            shell.openExternal(url);
+          }
+        }
+      }
+      return { action: 'deny' as const };
+    });
   }
 
   app.whenReady().then(() => {
@@ -999,7 +1020,14 @@ function setupGuiMode(): void {
       } else if (d.type === 'updated') {
         const existing = lastKnownTaskStates.get(d.taskId);
         if (existing) {
-          const task = { ...JSON.parse(existing), ...d.changes };
+          const prev = JSON.parse(existing);
+          const { config: cfgChanges, execution: execChanges, ...topLevel } = d.changes;
+          const task = {
+            ...prev,
+            ...topLevel,
+            config: { ...prev.config, ...cfgChanges },
+            execution: { ...prev.execution, ...execChanges },
+          };
           lastKnownTaskStates.set(d.taskId, JSON.stringify(task));
         }
       } else if (d.type === 'removed') {
@@ -1202,14 +1230,7 @@ function setupGuiMode(): void {
     });
 
     ipcMain.handle('invoker:approve', async (_event, taskId: string) => {
-      const task = orchestrator.getTask(taskId);
-      if (task?.execution.pendingFixError !== undefined) {
-        const started = orchestrator.restartTask(taskId);
-        const runnable = started.filter(t => t.status === 'running');
-        await taskExecutor.executeTasks(runnable);
-      } else {
-        await orchestrator.approve(taskId);
-      }
+      await orchestrator.approve(taskId);
     });
 
     ipcMain.handle('invoker:reject', (_event, taskId: string, reason?: string) => {

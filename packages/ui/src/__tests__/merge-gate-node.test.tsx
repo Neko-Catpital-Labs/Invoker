@@ -88,22 +88,6 @@ describe('MergeGateNode', () => {
     expect(screen.getByTestId('merge-mode-label')).toHaveTextContent('GitHub PR');
   });
 
-  it('shows PR link when prUrl is provided in github mode', () => {
-    renderNode({
-      status: 'awaiting_approval', label: 'All tasks must pass', onFinish: 'merge',
-      baseBranch: 'master', mergeMode: 'github', prUrl: 'https://github.com/owner/repo/pull/42',
-    });
-    expect(screen.getByTestId('pr-link-display')).toBeInTheDocument();
-  });
-
-  it('shows PR status when prStatus is provided in github mode', () => {
-    renderNode({
-      status: 'awaiting_approval', label: 'All tasks must pass', onFinish: 'merge',
-      baseBranch: 'master', mergeMode: 'github', prStatus: 'Awaiting review',
-    });
-    expect(screen.getByTestId('pr-status-display')).toHaveTextContent('Awaiting review');
-  });
-
   it('does NOT show approve button in github mode even when awaiting_approval', () => {
     renderNode({
       status: 'awaiting_approval', label: 'All tasks must pass', onFinish: 'merge',

@@ -178,6 +178,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       'ALTER TABLE tasks ADD COLUMN pr_url TEXT',
       'ALTER TABLE tasks ADD COLUMN pr_identifier TEXT',
       'ALTER TABLE tasks ADD COLUMN pr_status TEXT',
+      'ALTER TABLE tasks ADD COLUMN is_fixing_with_ai INTEGER DEFAULT 0',
     ];
     for (const sql of migrations) {
       try { this.db.exec(sql); } catch { /* Column already exists */ }
@@ -282,7 +283,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
         action_request_id, experiments,
         created_at, started_at, completed_at, last_heartbeat_at,
         utilization, pending_fix_error,
-        pr_url, pr_identifier, pr_status
+        pr_url, pr_identifier, pr_status,
+        is_fixing_with_ai
       ) VALUES (
         ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?, ?,
@@ -296,7 +298,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
         ?, ?,
         ?, ?, ?, ?,
         ?, ?,
-        ?, ?, ?
+        ?, ?, ?,
+        ?
       )
     `).run(
       task.id, workflowId, task.description, task.status,
@@ -332,6 +335,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       exec.prUrl ?? null,
       exec.prIdentifier ?? null,
       exec.prStatus ?? null,
+      exec.isFixingWithAI ? 1 : 0,
     );
   }
 
@@ -412,6 +416,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         containerId: 'container_id',
         selectedExperiment: 'selected_experiment',
         pendingFixError: 'pending_fix_error',
+        isFixingWithAI: 'is_fixing_with_ai',
         prUrl: 'pr_url',
         prIdentifier: 'pr_identifier',
         prStatus: 'pr_status',
@@ -822,6 +827,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         selectedExperiments: row.selected_experiments ? JSON.parse(row.selected_experiments) : undefined,
         experimentResults: row.experiment_results ? JSON.parse(row.experiment_results) : undefined,
         pendingFixError: row.pending_fix_error ?? undefined,
+        isFixingWithAI: row.is_fixing_with_ai ? true : undefined,
         prUrl: row.pr_url ?? undefined,
         prIdentifier: row.pr_identifier ?? undefined,
         prStatus: row.pr_status ?? undefined,

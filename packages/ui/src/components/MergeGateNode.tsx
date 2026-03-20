@@ -119,25 +119,6 @@ export function MergeGateNode({ data }: MergeGateNodeProps) {
         </span>
       </div>
 
-      {mergeMode === 'github' && prUrl && (
-        <div className="flex items-center gap-1 mt-1" data-testid="pr-link-display">
-          <a
-            href={prUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-xs font-mono text-blue-400 hover:text-blue-300 underline truncate"
-            title={prUrl}
-          >
-            {prUrl.replace(/^https?:\/\/github\.com\//, '')}
-          </a>
-        </div>
-      )}
-      {mergeMode === 'github' && prStatus && (
-        <div className="flex items-center gap-1 mt-1" data-testid="pr-status-display">
-          <span className="text-xs text-gray-400">{prStatus}</span>
-        </div>
-      )}
-
       <div className="flex items-center gap-1.5 mt-1">
         <span
           className={`w-2 h-2 rounded-full ${colors.dot} ${status === 'pending' ? 'animate-pulse' : ''}`}

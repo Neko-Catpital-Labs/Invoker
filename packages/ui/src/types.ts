@@ -78,6 +78,7 @@ export interface TaskExecution {
   readonly selectedExperiments?: readonly string[];
   readonly experimentResults?: readonly ExperimentResultEntry[];
   readonly pendingFixError?: string;
+  readonly isFixingWithAI?: boolean;
   readonly prUrl?: string;
   readonly prIdentifier?: string;
   readonly prStatus?: string;
@@ -85,6 +86,7 @@ export interface TaskExecution {
     readonly failedBranch: string;
     readonly conflictFiles: readonly string[];
   };
+  readonly isFixingWithAI?: boolean;
 }
 
 // ── Task State ──────────────────────────────────────────────

@@ -476,7 +476,7 @@ export class Orchestrator {
 
     const changes: TaskStateChanges = {
       status: 'awaiting_approval',
-      execution: { pendingFixError: originalError },
+      execution: { pendingFixError: originalError, isFixingWithAI: undefined },
     };
     this.writeAndSync(taskId, changes);
     const delta: TaskDelta = { type: 'updated', taskId, changes };
@@ -646,6 +646,7 @@ export class Orchestrator {
         blockedBy: undefined,
         commit: undefined,
         lastHeartbeatAt: undefined,
+        isFixingWithAI: undefined,
       },
     };
     this.writeAndSync(taskId, resetChanges);
@@ -762,7 +763,7 @@ export class Orchestrator {
 
     const savedError = task.execution.error ?? '';
 
-    const changes: TaskStateChanges = { status: 'running' };
+    const changes: TaskStateChanges = { status: 'running', execution: { isFixingWithAI: true } };
     this.writeAndSync(taskId, changes);
     const delta: TaskDelta = { type: 'updated', taskId, changes };
     this.persistence.logEvent?.(taskId, 'task.running', changes);
@@ -788,7 +789,7 @@ export class Orchestrator {
 
     const changes: TaskStateChanges = {
       status: 'failed',
-      execution: { error: savedError, mergeConflict },
+      execution: { error: savedError, mergeConflict, isFixingWithAI: undefined },
     };
     this.writeAndSync(taskId, changes);
     const delta: TaskDelta = { type: 'updated', taskId, changes };

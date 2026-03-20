@@ -61,11 +61,13 @@ export function TaskNode({ data }: TaskNodeProps) {
     task.status === 'awaiting_approval';
 
   const statusLabel =
-    task.status === 'awaiting_approval'
-      ? 'APPROVE'
-      : task.config.isReconciliation && task.status === 'needs_input'
-        ? 'SELECT'
-        : task.status.toUpperCase();
+    task.status === 'running' && task.execution.isFixingWithAI
+      ? 'FIXING WITH AI'
+      : task.status === 'awaiting_approval'
+        ? 'APPROVE'
+        : task.config.isReconciliation && task.status === 'needs_input'
+          ? 'SELECT'
+          : task.status.toUpperCase();
 
   const isStale = task.status === 'stale';
 
