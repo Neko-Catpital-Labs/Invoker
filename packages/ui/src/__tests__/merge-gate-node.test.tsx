@@ -111,4 +111,46 @@ describe('MergeGateNode', () => {
     });
     expect(screen.queryByTestId('approve-merge-button')).not.toBeInTheDocument();
   });
+
+  it('updates merge mode display when re-rendered with new mergeMode', () => {
+    const baseData = { status: 'pending', label: 'All tasks must pass', onFinish: 'merge', baseBranch: 'master' };
+
+    const { rerender } = renderNode({ ...baseData, mergeMode: 'manual' });
+    expect(screen.getByTestId('merge-mode-label')).toHaveTextContent('Manual');
+
+    rerender(
+      <ReactFlowProvider>
+        <MergeGateNode data={{ ...baseData, mergeMode: 'github' } as any} />
+      </ReactFlowProvider>,
+    );
+    expect(screen.getByTestId('merge-mode-label')).toHaveTextContent('GitHub PR');
+
+    rerender(
+      <ReactFlowProvider>
+        <MergeGateNode data={{ ...baseData, mergeMode: 'automatic' } as any} />
+      </ReactFlowProvider>,
+    );
+    expect(screen.getByTestId('merge-mode-label')).toHaveTextContent('Automatic');
+  });
+
+  it('each merge mode has a distinct color class on the label', () => {
+    const baseData = { status: 'pending', label: 'All tasks must pass', onFinish: 'merge', baseBranch: 'master' };
+
+    const { rerender } = renderNode({ ...baseData, mergeMode: 'manual' });
+    expect(screen.getByTestId('merge-mode-label')).toHaveClass('text-yellow-500');
+
+    rerender(
+      <ReactFlowProvider>
+        <MergeGateNode data={{ ...baseData, mergeMode: 'github' } as any} />
+      </ReactFlowProvider>,
+    );
+    expect(screen.getByTestId('merge-mode-label')).toHaveClass('text-blue-400');
+
+    rerender(
+      <ReactFlowProvider>
+        <MergeGateNode data={{ ...baseData, mergeMode: 'automatic' } as any} />
+      </ReactFlowProvider>,
+    );
+    expect(screen.getByTestId('merge-mode-label')).toHaveClass('text-green-500');
+  });
 });

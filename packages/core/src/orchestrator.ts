@@ -67,7 +67,7 @@ export interface OrchestratorPersistence {
     featureBranch?: string;
     mergeMode?: 'manual' | 'automatic' | 'github';
   }): void;
-  updateWorkflow?(workflowId: string, changes: { status?: string; updatedAt?: string }): void;
+  updateWorkflow?(workflowId: string, changes: { status?: string; updatedAt?: string; baseBranch?: string; generation?: number; mergeMode?: 'manual' | 'automatic' | 'github' }): void;
   saveTask(workflowId: string, task: TaskState): void;
   updateTask(taskId: string, changes: TaskStateChanges): void;
   logEvent?(taskId: string, eventType: string, payload?: unknown): void;
@@ -77,6 +77,10 @@ export interface OrchestratorPersistence {
     status: string;
     createdAt: string;
     updatedAt: string;
+    baseBranch?: string;
+    onFinish?: string;
+    mergeMode?: 'manual' | 'automatic' | 'github';
+    generation?: number;
   }>;
   loadTasks(workflowId: string): TaskState[];
 }
