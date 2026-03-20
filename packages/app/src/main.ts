@@ -101,7 +101,7 @@ function initServices(): void {
   familiarRegistry.register('local', new LocalFamiliar());
   orchestrator = new Orchestrator({
     persistence, messageBus,
-    maxUtilization: 100,
+    maxConcurrency: invokerConfig.maxConcurrency,
     utilizationRules: resolveUtilizationRules(invokerConfig),
     defaultUtilization: invokerConfig.defaultUtilization,
   });
@@ -1089,7 +1089,7 @@ function setupGuiMode(): void {
 
       orchestrator = new Orchestrator({
     persistence, messageBus,
-    maxUtilization: 100,
+    maxConcurrency: invokerConfig.maxConcurrency,
     utilizationRules: resolveUtilizationRules(invokerConfig),
     defaultUtilization: invokerConfig.defaultUtilization,
   });
@@ -1104,7 +1104,7 @@ function setupGuiMode(): void {
       persistence.deleteAllWorkflows();
       orchestrator = new Orchestrator({
     persistence, messageBus,
-    maxUtilization: 100,
+    maxConcurrency: invokerConfig.maxConcurrency,
     utilizationRules: resolveUtilizationRules(invokerConfig),
     defaultUtilization: invokerConfig.defaultUtilization,
   });
