@@ -32,6 +32,8 @@ interface TaskPanelProps {
   onEditCommand?: (taskId: string, newCommand: string) => void;
   onEditType?: (taskId: string, familiarType: string) => void;
   onSetMergeBranch?: (workflowId: string, baseBranch: string) => Promise<void>;
+  mergeMode?: string;
+  onSetMergeMode?: (workflowId: string, mergeMode: string) => Promise<void>;
 }
 
 function formatDate(date?: Date | string): string {
@@ -94,6 +96,8 @@ export function TaskPanel({
   onEditCommand,
   onEditType,
   onSetMergeBranch,
+  mergeMode,
+  onSetMergeMode,
 }: TaskPanelProps) {
   const [isEditingCommand, setIsEditingCommand] = useState(false);
   const [editCommandValue, setEditCommandValue] = useState('');
@@ -177,6 +181,24 @@ export function TaskPanel({
             }}
             className="bg-gray-700 text-gray-200 text-xs font-mono rounded px-2 py-1 border border-gray-600 focus:outline-none focus:border-blue-500 w-28 text-right"
           />
+        </div>
+      )}
+
+      {/* Merge mode selector (merge gates only) */}
+      {task.config.isMergeNode && onSetMergeMode && task.config.workflowId && (
+        <div className="flex items-center justify-between">
+          <span className="text-sm text-gray-400">Merge Mode</span>
+          <select
+            value={mergeMode ?? 'manual'}
+            onChange={(e) => onSetMergeMode(task.config.workflowId!, e.target.value)}
+            disabled={task.status === 'running' || task.status === 'completed'}
+            className="bg-gray-700 text-gray-200 text-xs rounded px-2 py-1 border border-gray-600 focus:outline-none focus:border-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+            data-testid="merge-mode-select"
+          >
+            <option value="manual">Manual</option>
+            <option value="automatic">Automatic</option>
+            <option value="github">GitHub PR</option>
+          </select>
         </div>
       )}
 

@@ -65,7 +65,7 @@ export interface OrchestratorPersistence {
     onFinish?: string;
     baseBranch?: string;
     featureBranch?: string;
-    mergeMode?: 'manual' | 'automatic';
+    mergeMode?: 'manual' | 'automatic' | 'github';
   }): void;
   updateWorkflow?(workflowId: string, changes: { status?: string; updatedAt?: string }): void;
   saveTask(workflowId: string, task: TaskState): void;
@@ -92,7 +92,7 @@ export interface PlanDefinition {
   onFinish?: 'none' | 'merge' | 'pull_request';
   baseBranch?: string;
   featureBranch?: string;
-  mergeMode?: 'manual' | 'automatic';
+  mergeMode?: 'manual' | 'automatic' | 'github';
   tasks: Array<{
     id: string;
     description: string;

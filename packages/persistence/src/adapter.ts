@@ -40,7 +40,7 @@ export interface Workflow {
   onFinish?: 'none' | 'merge' | 'pull_request';
   baseBranch?: string;
   featureBranch?: string;
-  mergeMode?: 'manual' | 'automatic';
+  mergeMode?: 'manual' | 'automatic' | 'github';
   generation?: number;
   createdAt: string;
   updatedAt: string;
@@ -65,7 +65,7 @@ export interface ActivityLogEntry {
 export interface PersistenceAdapter {
   // Workflows
   saveWorkflow(workflow: Workflow): void;
-  updateWorkflow(workflowId: string, changes: Partial<Pick<Workflow, 'status' | 'updatedAt' | 'baseBranch' | 'generation'>>): void;
+  updateWorkflow(workflowId: string, changes: Partial<Pick<Workflow, 'status' | 'updatedAt' | 'baseBranch' | 'generation' | 'mergeMode'>>): void;
   loadWorkflow(workflowId: string): Workflow | undefined;
   listWorkflows(): Workflow[];
 

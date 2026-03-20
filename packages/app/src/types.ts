@@ -115,6 +115,7 @@ export interface InvokerAPI {
   // Resolve merge conflict with Claude and restart task
   resolveConflict: (taskId: string) => Promise<void>;
   fixWithClaude: (taskId: string) => Promise<void>;
+  setMergeMode: (workflowId: string, mergeMode: string) => Promise<void>;
 }
 
 // ── Augment global Window ────────────────────────────────────
