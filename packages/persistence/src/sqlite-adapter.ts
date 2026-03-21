@@ -5,7 +5,7 @@
  */
 
 import Database from 'better-sqlite3';
-import type { TaskState, TaskStateChanges } from '@invoker/core';
+import type { TaskState, TaskStateChanges, Attempt } from '@invoker/core';
 import type { PersistenceAdapter, Workflow, TaskEvent, ActivityLogEntry, Conversation, ConversationMessage } from './adapter.js';
 
 /**
@@ -150,6 +150,49 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
       CREATE INDEX IF NOT EXISTS idx_task_output_task
         ON task_output(task_id);
+
+      CREATE TABLE IF NOT EXISTS attempts (
+        id TEXT PRIMARY KEY,
+        node_id TEXT NOT NULL,
+        attempt_number INTEGER NOT NULL,
+        status TEXT DEFAULT 'pending',
+
+        -- Input snapshot
+        snapshot_commit TEXT,
+        base_branch TEXT,
+        upstream_attempt_ids TEXT DEFAULT '[]',
+
+        -- Overrides
+        command_override TEXT,
+        prompt_override TEXT,
+
+        -- Execution state
+        started_at TEXT,
+        completed_at TEXT,
+        exit_code INTEGER,
+        error TEXT,
+        last_heartbeat_at TEXT,
+
+        -- Output
+        branch TEXT,
+        commit_hash TEXT,
+        summary TEXT,
+        workspace_path TEXT,
+        claude_session_id TEXT,
+        container_id TEXT,
+
+        -- Lineage
+        supersedes_attempt_id TEXT,
+        created_at TEXT DEFAULT (datetime('now')),
+
+        -- Merge conflict
+        merge_conflict TEXT,
+
+        FOREIGN KEY (node_id) REFERENCES tasks(id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_attempts_node
+        ON attempts(node_id, attempt_number);
     `);
   }
 
@@ -179,6 +222,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       'ALTER TABLE tasks ADD COLUMN pr_identifier TEXT',
       'ALTER TABLE tasks ADD COLUMN pr_status TEXT',
       'ALTER TABLE tasks ADD COLUMN is_fixing_with_ai INTEGER DEFAULT 0',
+      'ALTER TABLE tasks ADD COLUMN selected_attempt_id TEXT',
     ];
     for (const sql of migrations) {
       try { this.db.exec(sql); } catch { /* Column already exists */ }
@@ -420,6 +464,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         prUrl: 'pr_url',
         prIdentifier: 'pr_identifier',
         prStatus: 'pr_status',
+        selectedAttemptId: 'selected_attempt_id',
       };
       const execDateMap: Record<string, string> = {
         startedAt: 'started_at',
@@ -731,6 +776,88 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return rows.map((r) => r.data).join('');
   }
 
+  // ── Attempts ────────────────────────────────────────────
+
+  saveAttempt(attempt: Attempt): void {
+    this.db.prepare(`
+      INSERT OR REPLACE INTO attempts (
+        id, node_id, attempt_number, status,
+        snapshot_commit, base_branch, upstream_attempt_ids,
+        command_override, prompt_override,
+        started_at, completed_at, exit_code, error, last_heartbeat_at,
+        branch, commit_hash, summary, workspace_path, claude_session_id, container_id,
+        supersedes_attempt_id, created_at, merge_conflict
+      ) VALUES (
+        ?, ?, ?, ?,
+        ?, ?, ?,
+        ?, ?,
+        ?, ?, ?, ?, ?,
+        ?, ?, ?, ?, ?, ?,
+        ?, ?, ?
+      )
+    `).run(
+      attempt.id, attempt.nodeId, attempt.attemptNumber, attempt.status,
+      attempt.snapshotCommit ?? null, attempt.baseBranch ?? null,
+      JSON.stringify(attempt.upstreamAttemptIds),
+      attempt.commandOverride ?? null, attempt.promptOverride ?? null,
+      attempt.startedAt?.toISOString() ?? null,
+      attempt.completedAt?.toISOString() ?? null,
+      attempt.exitCode ?? null, attempt.error ?? null,
+      attempt.lastHeartbeatAt?.toISOString() ?? null,
+      attempt.branch ?? null, attempt.commit ?? null, attempt.summary ?? null,
+      attempt.workspacePath ?? null, attempt.claudeSessionId ?? null,
+      attempt.containerId ?? null,
+      attempt.supersedesAttemptId ?? null,
+      attempt.createdAt.toISOString(),
+      attempt.mergeConflict ? JSON.stringify(attempt.mergeConflict) : null,
+    );
+  }
+
+  loadAttempts(nodeId: string): Attempt[] {
+    const rows = this.db.prepare(
+      'SELECT * FROM attempts WHERE node_id = ? ORDER BY attempt_number ASC',
+    ).all(nodeId) as any[];
+    return rows.map(this.rowToAttempt);
+  }
+
+  loadAttempt(attemptId: string): Attempt | undefined {
+    const row = this.db.prepare(
+      'SELECT * FROM attempts WHERE id = ?',
+    ).get(attemptId) as any;
+    if (!row) return undefined;
+    return this.rowToAttempt(row);
+  }
+
+  updateAttempt(attemptId: string, changes: Partial<Pick<Attempt, 'status' | 'startedAt' | 'completedAt' | 'exitCode' | 'error' | 'lastHeartbeatAt' | 'branch' | 'commit' | 'summary' | 'workspacePath' | 'claudeSessionId' | 'containerId' | 'mergeConflict'>>): void {
+    const setClauses: string[] = [];
+    const values: any[] = [];
+
+    if (changes.status !== undefined) { setClauses.push('status = ?'); values.push(changes.status); }
+    if (changes.startedAt !== undefined) { setClauses.push('started_at = ?'); values.push(changes.startedAt instanceof Date ? changes.startedAt.toISOString() : changes.startedAt ?? null); }
+    if (changes.completedAt !== undefined) { setClauses.push('completed_at = ?'); values.push(changes.completedAt instanceof Date ? changes.completedAt.toISOString() : changes.completedAt ?? null); }
+    if (changes.exitCode !== undefined) { setClauses.push('exit_code = ?'); values.push(changes.exitCode); }
+    if (changes.error !== undefined) { setClauses.push('error = ?'); values.push(changes.error); }
+    if (changes.lastHeartbeatAt !== undefined) { setClauses.push('last_heartbeat_at = ?'); values.push(changes.lastHeartbeatAt instanceof Date ? changes.lastHeartbeatAt.toISOString() : changes.lastHeartbeatAt ?? null); }
+    if (changes.branch !== undefined) { setClauses.push('branch = ?'); values.push(changes.branch); }
+    if (changes.commit !== undefined) { setClauses.push('commit_hash = ?'); values.push(changes.commit); }
+    if (changes.summary !== undefined) { setClauses.push('summary = ?'); values.push(changes.summary); }
+    if (changes.workspacePath !== undefined) { setClauses.push('workspace_path = ?'); values.push(changes.workspacePath); }
+    if (changes.claudeSessionId !== undefined) { setClauses.push('claude_session_id = ?'); values.push(changes.claudeSessionId); }
+    if (changes.containerId !== undefined) { setClauses.push('container_id = ?'); values.push(changes.containerId); }
+    if (changes.mergeConflict !== undefined) { setClauses.push('merge_conflict = ?'); values.push(changes.mergeConflict ? JSON.stringify(changes.mergeConflict) : null); }
+
+    if (setClauses.length === 0) return;
+    values.push(attemptId);
+    this.db.prepare(`UPDATE attempts SET ${setClauses.join(', ')} WHERE id = ?`).run(...values);
+  }
+
+  getNextAttemptNumber(nodeId: string): number {
+    const row = this.db.prepare(
+      'SELECT COALESCE(MAX(attempt_number), 0) AS max_num FROM attempts WHERE node_id = ?',
+    ).get(nodeId) as { max_num: number };
+    return row.max_num + 1;
+  }
+
   // ── Activity Log ─────────────────────────────────────
 
   writeActivityLog(source: string, level: string, message: string): void {
@@ -831,7 +958,36 @@ export class SQLiteAdapter implements PersistenceAdapter {
         prUrl: row.pr_url ?? undefined,
         prIdentifier: row.pr_identifier ?? undefined,
         prStatus: row.pr_status ?? undefined,
+        selectedAttemptId: row.selected_attempt_id ?? undefined,
       },
+    };
+  }
+
+  private rowToAttempt(row: any): Attempt {
+    return {
+      id: row.id,
+      nodeId: row.node_id,
+      attemptNumber: row.attempt_number,
+      status: row.status,
+      snapshotCommit: row.snapshot_commit ?? undefined,
+      baseBranch: row.base_branch ?? undefined,
+      upstreamAttemptIds: JSON.parse(row.upstream_attempt_ids || '[]'),
+      commandOverride: row.command_override ?? undefined,
+      promptOverride: row.prompt_override ?? undefined,
+      startedAt: row.started_at ? new Date(row.started_at) : undefined,
+      completedAt: row.completed_at ? new Date(row.completed_at) : undefined,
+      exitCode: row.exit_code ?? undefined,
+      error: row.error ?? undefined,
+      lastHeartbeatAt: row.last_heartbeat_at ? new Date(row.last_heartbeat_at) : undefined,
+      branch: row.branch ?? undefined,
+      commit: row.commit_hash ?? undefined,
+      summary: row.summary ?? undefined,
+      workspacePath: row.workspace_path ?? undefined,
+      claudeSessionId: row.claude_session_id ?? undefined,
+      containerId: row.container_id ?? undefined,
+      supersedesAttemptId: row.supersedes_attempt_id ?? undefined,
+      createdAt: new Date(row.created_at),
+      mergeConflict: row.merge_conflict ? JSON.parse(row.merge_conflict) : undefined,
     };
   }
 }

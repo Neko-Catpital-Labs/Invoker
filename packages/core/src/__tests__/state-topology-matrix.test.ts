@@ -179,7 +179,7 @@ describe('State × Topology Matrix', () => {
   // ── Diamond: A→{B,C}→D ─────────────────────────────────
 
   describe('diamond topology: A→{B,C}→D', () => {
-    it('B fails → D blocked, C unaffected', () => {
+    it('B fails → D stays pending, C unaffected', () => {
       orchestrator.loadPlan(diamondPlan());
       orchestrator.startExecution();
 
@@ -187,8 +187,7 @@ describe('State × Topology Matrix', () => {
       orchestrator.handleWorkerResponse(complete('C'));
       orchestrator.handleWorkerResponse(fail('B'));
 
-      expect(orchestrator.getTask('D')!.status).toBe('blocked');
-      expect(orchestrator.getTask('D')!.execution.blockedBy).toBe('B');
+      expect(orchestrator.getTask('D')!.status).toBe('pending');
       expect(orchestrator.getTask('C')!.status).toBe('completed');
     });
 
@@ -199,7 +198,7 @@ describe('State × Topology Matrix', () => {
       orchestrator.handleWorkerResponse(complete('A'));
       orchestrator.handleWorkerResponse(complete('C'));
       orchestrator.handleWorkerResponse(fail('B'));
-      expect(orchestrator.getTask('D')!.status).toBe('blocked');
+      expect(orchestrator.getTask('D')!.status).toBe('pending');
 
       orchestrator.restartTask('B');
       expect(orchestrator.getTask('D')!.status).toBe('pending');
@@ -208,19 +207,19 @@ describe('State × Topology Matrix', () => {
       expect(orchestrator.getTask('D')!.status).toBe('running');
     });
 
-    it('B and C both fail → D.blockedBy is the last failure', () => {
+    it('B and C both fail → D stays pending', () => {
       orchestrator.loadPlan(diamondPlan());
       orchestrator.startExecution();
 
       orchestrator.handleWorkerResponse(complete('A'));
       orchestrator.handleWorkerResponse(fail('B'));
-      expect(orchestrator.getTask('D')!.execution.blockedBy).toBe('B');
+      expect(orchestrator.getTask('D')!.status).toBe('pending');
 
       orchestrator.handleWorkerResponse(fail('C'));
-      expect(orchestrator.getTask('D')!.execution.blockedBy).toBe('C');
+      expect(orchestrator.getTask('D')!.status).toBe('pending');
     });
 
-    it('B and C both fail → restart B only → D still blocked by C', () => {
+    it('B and C both fail → restart B only → D still pending (C still failed)', () => {
       orchestrator.loadPlan(diamondPlan());
       orchestrator.startExecution();
 
@@ -229,9 +228,9 @@ describe('State × Topology Matrix', () => {
       orchestrator.handleWorkerResponse(fail('C'));
 
       orchestrator.restartTask('B');
+      orchestrator.handleWorkerResponse(complete('B'));
 
-      expect(orchestrator.getTask('D')!.status).toBe('blocked');
-      expect(orchestrator.getTask('D')!.execution.blockedBy).toBe('C');
+      expect(orchestrator.getTask('D')!.status).toBe('pending');
     });
 
     it('all complete → restart B → D stays completed (no auto-invalidation)', () => {
@@ -249,7 +248,7 @@ describe('State × Topology Matrix', () => {
       expect(orchestrator.getTask('D')!.status).toBe('completed');
     });
 
-    it('all complete → editTaskCommand on A → B, C, D become stale, clones created', () => {
+    it('all complete → editTaskCommand on A → A restarts with new command, downstream unchanged', () => {
       orchestrator.loadPlan(diamondPlan());
       orchestrator.startExecution();
 
@@ -260,34 +259,34 @@ describe('State × Topology Matrix', () => {
 
       orchestrator.editTaskCommand('A', 'echo A-v2');
 
-      expect(orchestrator.getTask('B')!.status).toBe('stale');
-      expect(orchestrator.getTask('C')!.status).toBe('stale');
-      expect(orchestrator.getTask('D')!.status).toBe('stale');
+      // A restarts with new command
+      expect(orchestrator.getTask('A')!.status).toBe('running');
+      expect(orchestrator.getTask('A')!.config.command).toBe('echo A-v2');
 
+      // Downstream tasks stay completed (no fork, no stale)
+      expect(orchestrator.getTask('B')!.status).toBe('completed');
+      expect(orchestrator.getTask('C')!.status).toBe('completed');
+      expect(orchestrator.getTask('D')!.status).toBe('completed');
+
+      // No clones created
       const allTasks = orchestrator.getAllTasks();
-      const cloneB = allTasks.find((t) => t.id === 'B-v2');
-      const cloneC = allTasks.find((t) => t.id === 'C-v2');
-      const cloneD = allTasks.find((t) => t.id === 'D-v2');
-
-      expect(cloneB).toBeDefined();
-      expect(cloneC).toBeDefined();
-      expect(cloneD).toBeDefined();
-      expect(cloneD!.dependencies).toContain('B-v2');
-      expect(cloneD!.dependencies).toContain('C-v2');
+      expect(allTasks.find((t) => t.id === 'B-v2')).toBeUndefined();
+      expect(allTasks.find((t) => t.id === 'C-v2')).toBeUndefined();
+      expect(allTasks.find((t) => t.id === 'D-v2')).toBeUndefined();
     });
   });
 
   // ── Fork: A→{B,C} ──────────────────────────────────────
 
   describe('fork topology: A→{B,C}', () => {
-    it('root A fails → both B and C blocked', () => {
+    it('root A fails → both B and C stay pending', () => {
       orchestrator.loadPlan(forkPlan());
       orchestrator.startExecution();
 
       orchestrator.handleWorkerResponse(fail('A'));
 
-      expect(orchestrator.getTask('B')!.status).toBe('blocked');
-      expect(orchestrator.getTask('C')!.status).toBe('blocked');
+      expect(orchestrator.getTask('B')!.status).toBe('pending');
+      expect(orchestrator.getTask('C')!.status).toBe('pending');
     });
 
     it('root A fails, restart A, complete A → B and C both start', () => {
@@ -295,7 +294,7 @@ describe('State × Topology Matrix', () => {
       orchestrator.startExecution();
 
       orchestrator.handleWorkerResponse(fail('A'));
-      expect(orchestrator.getTask('B')!.status).toBe('blocked');
+      expect(orchestrator.getTask('B')!.status).toBe('pending');
 
       orchestrator.restartTask('A');
       orchestrator.handleWorkerResponse(complete('A'));
@@ -308,13 +307,13 @@ describe('State × Topology Matrix', () => {
   // ── Join: {A,B}→C ──────────────────────────────────────
 
   describe('join topology: {A,B}→C', () => {
-    it('A completes, B fails → C blocked → restart B, complete B → C starts', () => {
+    it('A completes, B fails → C stays pending → restart B, complete B → C starts', () => {
       orchestrator.loadPlan(joinPlan());
       orchestrator.startExecution();
 
       orchestrator.handleWorkerResponse(complete('A'));
       orchestrator.handleWorkerResponse(fail('B'));
-      expect(orchestrator.getTask('C')!.status).toBe('blocked');
+      expect(orchestrator.getTask('C')!.status).toBe('pending');
 
       orchestrator.restartTask('B');
       orchestrator.handleWorkerResponse(complete('B'));
@@ -322,13 +321,13 @@ describe('State × Topology Matrix', () => {
       expect(orchestrator.getTask('C')!.status).toBe('running');
     });
 
-    it('A and B both fail → C.blockedBy overwritten → restart both → C starts', () => {
+    it('A and B both fail → C stays pending → restart both → C starts', () => {
       orchestrator.loadPlan(joinPlan());
       orchestrator.startExecution();
 
       orchestrator.handleWorkerResponse(fail('A'));
       orchestrator.handleWorkerResponse(fail('B'));
-      expect(orchestrator.getTask('C')!.execution.blockedBy).toBe('B');
+      expect(orchestrator.getTask('C')!.status).toBe('pending');
 
       orchestrator.restartTask('A');
       orchestrator.restartTask('B');
@@ -373,7 +372,7 @@ describe('State × Topology Matrix', () => {
       }
     });
 
-    it('B fails → D,E,F,G all blocked → restart B → cascade unblocks', () => {
+    it('B fails → D,E,F,G stay pending → restart B → cascade unblocks', () => {
       orchestrator.loadPlan(butterflyPlan());
       orchestrator.startExecution();
 
@@ -381,10 +380,10 @@ describe('State × Topology Matrix', () => {
       orchestrator.handleWorkerResponse(complete('C'));
       orchestrator.handleWorkerResponse(fail('B'));
 
-      expect(orchestrator.getTask('D')!.status).toBe('blocked');
-      expect(orchestrator.getTask('E')!.status).toBe('blocked');
-      expect(orchestrator.getTask('F')!.status).toBe('blocked');
-      expect(orchestrator.getTask('G')!.status).toBe('blocked');
+      expect(orchestrator.getTask('D')!.status).toBe('pending');
+      expect(orchestrator.getTask('E')!.status).toBe('pending');
+      expect(orchestrator.getTask('F')!.status).toBe('pending');
+      expect(orchestrator.getTask('G')!.status).toBe('pending');
 
       orchestrator.restartTask('B');
       orchestrator.handleWorkerResponse(complete('B'));
@@ -395,7 +394,7 @@ describe('State × Topology Matrix', () => {
       expect(orchestrator.getTask('F')!.status).toBe('running');
     });
 
-    it('D fails → E,F,G blocked but B,C unaffected', () => {
+    it('D fails → E,F,G stay pending but B,C unaffected', () => {
       orchestrator.loadPlan(butterflyPlan());
       orchestrator.startExecution();
 
@@ -404,9 +403,9 @@ describe('State × Topology Matrix', () => {
       orchestrator.handleWorkerResponse(complete('C'));
       orchestrator.handleWorkerResponse(fail('D'));
 
-      expect(orchestrator.getTask('E')!.status).toBe('blocked');
-      expect(orchestrator.getTask('F')!.status).toBe('blocked');
-      expect(orchestrator.getTask('G')!.status).toBe('blocked');
+      expect(orchestrator.getTask('E')!.status).toBe('pending');
+      expect(orchestrator.getTask('F')!.status).toBe('pending');
+      expect(orchestrator.getTask('G')!.status).toBe('pending');
 
       expect(orchestrator.getTask('B')!.status).toBe('completed');
       expect(orchestrator.getTask('C')!.status).toBe('completed');
@@ -416,18 +415,18 @@ describe('State × Topology Matrix', () => {
   // ── Mesh: {A,B}→{C,D} ─────────────────────────────────
 
   describe('mesh topology: {A,B}→{C,D}', () => {
-    it('A fails → C and D both blocked', () => {
+    it('A fails → C and D stay pending', () => {
       orchestrator.loadPlan(meshPlan());
       orchestrator.startExecution();
 
       orchestrator.handleWorkerResponse(complete('B'));
       orchestrator.handleWorkerResponse(fail('A'));
 
-      expect(orchestrator.getTask('C')!.status).toBe('blocked');
-      expect(orchestrator.getTask('D')!.status).toBe('blocked');
+      expect(orchestrator.getTask('C')!.status).toBe('pending');
+      expect(orchestrator.getTask('D')!.status).toBe('pending');
     });
 
-    it('A and B both fail → restart A only → C,D still blocked by B', () => {
+    it('A and B both fail → restart A only → C,D still pending (B still failed)', () => {
       orchestrator.loadPlan(meshPlan());
       orchestrator.startExecution();
 
@@ -437,9 +436,8 @@ describe('State × Topology Matrix', () => {
       orchestrator.restartTask('A');
       orchestrator.handleWorkerResponse(complete('A'));
 
-      expect(orchestrator.getTask('C')!.status).toBe('blocked');
-      expect(orchestrator.getTask('D')!.status).toBe('blocked');
-      expect(orchestrator.getTask('C')!.execution.blockedBy).toBe('B');
+      expect(orchestrator.getTask('C')!.status).toBe('pending');
+      expect(orchestrator.getTask('D')!.status).toBe('pending');
     });
   });
 
@@ -482,7 +480,7 @@ describe('State × Topology Matrix', () => {
   });
 
   describe('edit in fork topology', () => {
-    it('edit completed root A → B and C become stale, clones created', () => {
+    it('edit completed root A → A restarts with new command, B and C unchanged', () => {
       orchestrator.loadPlan(forkPlan());
       orchestrator.startExecution();
 
@@ -492,15 +490,18 @@ describe('State × Topology Matrix', () => {
 
       orchestrator.editTaskCommand('A', 'echo A-v2');
 
-      expect(orchestrator.getTask('B')!.status).toBe('stale');
-      expect(orchestrator.getTask('C')!.status).toBe('stale');
+      // A restarts with new command
+      expect(orchestrator.getTask('A')!.status).toBe('running');
+      expect(orchestrator.getTask('A')!.config.command).toBe('echo A-v2');
 
+      // Downstream stays completed (no fork, no stale)
+      expect(orchestrator.getTask('B')!.status).toBe('completed');
+      expect(orchestrator.getTask('C')!.status).toBe('completed');
+
+      // No clones created
       const allTasks = orchestrator.getAllTasks();
-      const cloneB = allTasks.find((t) => t.id === 'B-v2');
-      const cloneC = allTasks.find((t) => t.id === 'C-v2');
-      expect(cloneB).toBeDefined();
-      expect(cloneC).toBeDefined();
-      expect(cloneB!.dependencies).toContain('A');
+      expect(allTasks.find((t) => t.id === 'B-v2')).toBeUndefined();
+      expect(allTasks.find((t) => t.id === 'C-v2')).toBeUndefined();
     });
   });
 });

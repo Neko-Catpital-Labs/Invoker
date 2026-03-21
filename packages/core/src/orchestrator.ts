@@ -21,8 +21,8 @@ import type { ParsedResponse } from './response-handler.js';
 import { TaskScheduler } from './scheduler.js';
 import { ResourceEstimator } from './resource-estimator.js';
 import type { UtilizationRule } from './resource-estimator.js';
-import type { TaskState, TaskDelta, TaskStateChanges } from './task-types.js';
-import { createTaskState } from './task-types.js';
+import type { TaskState, TaskDelta, TaskStateChanges, Attempt } from './task-types.js';
+import { createTaskState, createAttempt } from './task-types.js';
 import type { WorkResponse } from '@invoker/protocol';
 
 const MERGE_TRACE_LOG = resolve(homedir(), '.invoker', 'merge-trace.log');
@@ -34,7 +34,7 @@ function mergeTrace(tag: string, data: Record<string, unknown>): void {
 }
 import { getTransitiveDependents } from './dag.js';
 import { ActionGraph } from '@invoker/graph';
-import { forkDirtySubtreeImpl, reconcileMergeLeavesImpl, applyGraphMutationImpl } from './graph-mutation.js';
+import { reconcileMergeLeavesImpl, applyGraphMutationImpl } from './graph-mutation.js';
 import type { GraphMutationHost } from './graph-mutation.js';
 
 // ── Channel Constants ───────────────────────────────────────
@@ -85,6 +85,12 @@ export interface OrchestratorPersistence {
     generation?: number;
   }>;
   loadTasks(workflowId: string): TaskState[];
+  // Attempt methods (optional for backward compat)
+  saveAttempt?(attempt: Attempt): void;
+  loadAttempts?(nodeId: string): Attempt[];
+  loadAttempt?(attemptId: string): Attempt | undefined;
+  updateAttempt?(attemptId: string, changes: Partial<Pick<Attempt, 'status' | 'startedAt' | 'completedAt' | 'exitCode' | 'error' | 'lastHeartbeatAt' | 'branch' | 'commit' | 'summary' | 'workspacePath' | 'claudeSessionId' | 'containerId' | 'mergeConflict'>>): void;
+  getNextAttemptNumber?(nodeId: string): number;
 }
 
 export interface OrchestratorMessageBus {
@@ -160,6 +166,7 @@ export interface OrchestratorConfig {
   maxUtilization?: number;
   utilizationRules?: UtilizationRule[];
   defaultUtilization?: number;
+  maxAttemptsPerNode?: number;
 }
 
 // ── Orchestrator ────────────────────────────────────────────
@@ -171,6 +178,7 @@ export class Orchestrator {
   private readonly persistence: OrchestratorPersistence;
   private readonly messageBus: OrchestratorMessageBus;
   private readonly maxConcurrency: number;
+  private readonly maxAttemptsPerNode: number;
   private readonly estimator: ResourceEstimator;
 
   private activeWorkflowIds = new Set<string>();
@@ -178,6 +186,7 @@ export class Orchestrator {
 
   constructor(config: OrchestratorConfig) {
     this.maxConcurrency = config.maxConcurrency ?? 3;
+    this.maxAttemptsPerNode = config.maxAttemptsPerNode ?? 10;
     this.persistence = config.persistence;
     this.messageBus = config.messageBus;
 
@@ -451,7 +460,7 @@ export class Orchestrator {
    * Used by the merge gate in manual mode after successful consolidation.
    * Does NOT trigger checkWorkflowCompletion (the workflow stays open).
    */
-  setTaskAwaitingApproval(taskId: string): void {
+  setTaskAwaitingApproval(taskId: string, additionalChanges?: TaskStateChanges): void {
     this.refreshFromDb();
     const task = this.stateMachine.getTask(taskId);
     if (!task) return;
@@ -460,7 +469,8 @@ export class Orchestrator {
 
     const changes: TaskStateChanges = {
       status: 'awaiting_approval',
-      execution: { completedAt: new Date() },
+      config: additionalChanges?.config,
+      execution: { ...additionalChanges?.execution, completedAt: new Date() },
     };
     this.writeAndSync(taskId, changes);
     const delta: TaskDelta = { type: 'updated', taskId, changes };
@@ -494,12 +504,12 @@ export class Orchestrator {
    * Approve a task awaiting approval. Fires beforeApproveHook (if set)
    * before transitioning state, so merge nodes get git-merged automatically.
    */
-  async approve(taskId: string): Promise<void> {
+  async approve(taskId: string): Promise<TaskState[]> {
     mergeTrace('APPROVE_ENTER', { taskId });
     this.refreshFromDb();
     const task = this.stateMachine.getTask(taskId);
     mergeTrace('APPROVE_TASK_LOOKUP', { taskId, found: !!task, status: task?.status, isMergeNode: !!task?.config.isMergeNode, hasHook: !!this.beforeApproveHook });
-    if (!task || task.status !== 'awaiting_approval') return;
+    if (!task || task.status !== 'awaiting_approval') return [];
 
     if (this.beforeApproveHook) {
       mergeTrace('APPROVE_HOOK_FIRING', { taskId, workflowId: task.config.workflowId });
@@ -520,8 +530,9 @@ export class Orchestrator {
     mergeTrace('APPROVE_DONE', { taskId });
 
     const readyTaskIds = this.stateMachine.findNewlyReadyTasks(taskId);
-    this.autoStartReadyTasks(readyTaskIds);
+    const started = this.autoStartReadyTasks(readyTaskIds);
     this.checkWorkflowCompletion();
+    return started;
   }
 
   /**
@@ -541,7 +552,6 @@ export class Orchestrator {
     this.persistence.logEvent?.(taskId, 'task.failed', changes);
     this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
 
-    this.blockDependents(taskId);
     this.checkWorkflowCompletion();
   }
 
@@ -627,6 +637,14 @@ export class Orchestrator {
     const task = this.stateMachine.getTask(taskId);
     if (!task) throw new Error(`Task ${taskId} not found`);
 
+    // Enforce maxAttemptsPerNode
+    if (this.persistence.getNextAttemptNumber) {
+      const nextNum = this.persistence.getNextAttemptNumber(taskId);
+      if (nextNum > this.maxAttemptsPerNode) {
+        throw new Error(`Task "${taskId}" has reached the maximum of ${this.maxAttemptsPerNode} attempts`);
+      }
+    }
+
     const prevStatus = task.status;
     console.log(`[orchestrator] restartTask "${taskId}" (was ${prevStatus})`);
 
@@ -637,6 +655,23 @@ export class Orchestrator {
       console.warn(`[orchestrator] restartTask "${taskId}": ${completedDownstream.length} downstream task(s) are completed and will NOT be invalidated: [${completedDownstream.map(t => t.id).join(', ')}]`);
     }
 
+    // Supersede current selected attempt and create a new one (best-effort)
+    try {
+      if (this.persistence.loadAttempts && this.persistence.updateAttempt && this.persistence.saveAttempt && this.persistence.getNextAttemptNumber) {
+        const attempts = this.persistence.loadAttempts(taskId);
+        const current = attempts[attempts.length - 1];
+        if (current && (current.status === 'running' || current.status === 'pending')) {
+          this.persistence.updateAttempt(current.id, { status: 'superseded' });
+        }
+        const nextNum = this.persistence.getNextAttemptNumber(taskId);
+        const newAttempt = createAttempt(taskId, nextNum, {
+          snapshotCommit: current?.commit,
+          supersedesAttemptId: current?.id,
+        });
+        this.persistence.saveAttempt(newAttempt);
+      }
+    } catch { /* best effort */ }
+
     const resetChanges: TaskStateChanges = {
       status: 'pending',
       config: { summary: undefined },
@@ -645,7 +680,6 @@ export class Orchestrator {
         completedAt: undefined,
         error: undefined,
         exitCode: undefined,
-        blockedBy: undefined,
         commit: undefined,
         lastHeartbeatAt: undefined,
         isFixingWithAI: undefined,
@@ -655,34 +689,6 @@ export class Orchestrator {
     const resetDelta: TaskDelta = { type: 'updated', taskId, changes: resetChanges };
     this.persistence.logEvent?.(taskId, 'task.pending', resetChanges);
     this.messageBus.publish(TASK_DELTA_CHANNEL, resetDelta);
-
-    // Unblock dependents
-    const unblockedIds = this.stateMachine.computeTasksToUnblock(taskId);
-    console.log(`[orchestrator] restartTask "${taskId}": unblocked ${unblockedIds.length} tasks: [${unblockedIds.join(', ')}]`);
-
-    const blockedByOther = this.stateMachine.getAllTasks().filter(
-      t => t.status === 'blocked' && t.dependencies.includes(taskId) && t.execution.blockedBy !== taskId,
-    );
-    if (blockedByOther.length > 0) {
-      console.warn(`[orchestrator] restartTask "${taskId}": ${blockedByOther.length} task(s) depend on "${taskId}" but are blocked by a different task: ${blockedByOther.map(t => `"${t.id}" (blockedBy: ${t.execution.blockedBy})`).join(', ')}`);
-    }
-
-    for (const id of unblockedIds) {
-      const t = this.stateMachine.getTask(id);
-      const failedDeps = t?.dependencies.filter(depId => {
-        const dep = this.stateMachine.getTask(depId);
-        return dep?.status === 'failed';
-      }) ?? [];
-      if (failedDeps.length > 0) {
-        console.warn(`[orchestrator] restartTask: unblocking "${id}" but it still has failed deps: [${failedDeps.join(', ')}]`);
-      }
-
-      const unblockChanges: TaskStateChanges = { status: 'pending', execution: { blockedBy: undefined } };
-      this.writeAndSync(id, unblockChanges);
-      const unblockDelta: TaskDelta = { type: 'updated', taskId: id, changes: unblockChanges };
-      this.persistence.logEvent?.(id, 'task.pending', unblockChanges);
-      this.messageBus.publish(TASK_DELTA_CHANNEL, unblockDelta);
-    }
 
     // Reset any reconciliation task that was already in needs_input but now
     // has a dependency that is no longer terminal (because we just restarted it).
@@ -734,7 +740,6 @@ export class Orchestrator {
         completedAt: undefined,
         error: undefined,
         exitCode: undefined,
-        blockedBy: undefined,
         commit: undefined,
         branch: undefined,
         workspacePath: undefined,
@@ -745,7 +750,9 @@ export class Orchestrator {
       },
     };
 
+    console.log(`[orchestrator] restartWorkflow: resetting ${allTasks.length} tasks for workflow ${workflowId}`);
     for (const task of allTasks) {
+      console.log(`[orchestrator]   reset "${task.id}" (was ${task.status}, branch=${task.execution.branch ?? 'none'}, commit=${task.execution.commit?.slice(0, 7) ?? 'none'})`);
       this.writeAndSync(task.id, resetChanges);
       const delta: TaskDelta = { type: 'updated', taskId: task.id, changes: resetChanges };
       this.persistence.logEvent?.(task.id, 'task.pending', resetChanges);
@@ -768,7 +775,10 @@ export class Orchestrator {
 
     const savedError = task.execution.error ?? '';
 
-    const changes: TaskStateChanges = { status: 'running', execution: { isFixingWithAI: true } };
+    const changes: TaskStateChanges = {
+      status: 'running',
+      execution: { isFixingWithAI: true, startedAt: new Date(), lastHeartbeatAt: new Date() },
+    };
     this.writeAndSync(taskId, changes);
     const delta: TaskDelta = { type: 'updated', taskId, changes };
     this.persistence.logEvent?.(taskId, 'task.running', changes);
@@ -818,7 +828,22 @@ export class Orchestrator {
     this.persistence.logEvent?.(taskId, 'task.updated', cmdChanges);
     this.messageBus.publish(TASK_DELTA_CHANNEL, cmdDelta);
 
-    this.forkDirtySubtree(taskId);
+    // Create a fresh-start attempt with commandOverride (best-effort)
+    try {
+      if (this.persistence.loadAttempts && this.persistence.updateAttempt && this.persistence.saveAttempt && this.persistence.getNextAttemptNumber) {
+        const attempts = this.persistence.loadAttempts(taskId);
+        const current = attempts[attempts.length - 1];
+        if (current && (current.status === 'running' || current.status === 'pending')) {
+          this.persistence.updateAttempt(current.id, { status: 'superseded' });
+        }
+        const nextNum = this.persistence.getNextAttemptNumber(taskId);
+        const freshAttempt = createAttempt(taskId, nextNum, {
+          commandOverride: newCommand,
+          supersedesAttemptId: current?.id,
+        });
+        this.persistence.saveAttempt(freshAttempt);
+      }
+    } catch { /* best effort */ }
 
     return this.restartTask(taskId);
   }
@@ -914,17 +939,6 @@ export class Orchestrator {
       })
       .map((rt) => rt.id);
     return this.autoStartReadyTasks(rootIds);
-  }
-
-  /**
-   * Fork the subtree downstream of a dirty task.
-   *
-   * @param depOverrides Optional map of dependency ID replacements applied
-   *   before the clone ID map. Use this to point forked clones at a
-   *   replacement node instead of the original dirty task.
-   */
-  forkDirtySubtree(dirtyTaskId: string, depOverrides?: Map<string, string>): TaskDelta[] {
-    return forkDirtySubtreeImpl(this as unknown as GraphMutationHost, dirtyTaskId, depOverrides);
   }
 
   /**
@@ -1058,24 +1072,32 @@ export class Orchestrator {
         completedAt: new Date(),
       },
     };
-    const completed = this.writeAndSync(taskId, changes);
+    this.writeAndSync(taskId, changes);
     const delta: TaskDelta = { type: 'updated', taskId, changes };
     this.persistence.logEvent?.(taskId, 'task.completed', changes);
     this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
 
-    this.checkExperimentCompletion(taskId);
-
-    const unblockedIds = this.stateMachine.computeTasksToUnblock(taskId);
-    if (unblockedIds.length > 0) {
-      console.log(`[orchestrator] handleCompleted "${taskId}": unblocking ${unblockedIds.length} previously-blocked tasks: [${unblockedIds.join(', ')}]`);
-      for (const id of unblockedIds) {
-        const unblockChanges: TaskStateChanges = { status: 'pending', execution: { blockedBy: undefined } };
-        this.writeAndSync(id, unblockChanges);
-        const unblockDelta: TaskDelta = { type: 'updated', taskId: id, changes: unblockChanges };
-        this.persistence.logEvent?.(id, 'task.pending', unblockChanges);
-        this.messageBus.publish(TASK_DELTA_CHANNEL, unblockDelta);
+    // Dual-write: update latest Attempt to completed, auto-select (best-effort)
+    try {
+      if (this.persistence.loadAttempts && this.persistence.updateAttempt) {
+        const attempts = this.persistence.loadAttempts(taskId);
+        const latest = attempts[attempts.length - 1];
+        if (latest && latest.status === 'running') {
+          this.persistence.updateAttempt(latest.id, {
+            status: 'completed',
+            exitCode: parsed.exitCode,
+            commit: parsed.commitHash,
+            claudeSessionId: parsed.claudeSessionId,
+            completedAt: new Date(),
+          });
+          // Auto-select this attempt
+          const selectChanges: TaskStateChanges = { execution: { selectedAttemptId: latest.id } };
+          this.writeAndSync(taskId, selectChanges);
+        }
       }
-    }
+    } catch { /* best effort */ }
+
+    this.checkExperimentCompletion(taskId);
 
     const readyTaskIds = this.stateMachine.findNewlyReadyTasks(taskId);
     console.log(`[orchestrator] handleCompleted "${taskId}": ${readyTaskIds.length} newly ready: [${readyTaskIds.join(', ')}]`);
@@ -1107,12 +1129,28 @@ export class Orchestrator {
         completedAt: new Date(),
       },
     };
-    const failed = this.writeAndSync(taskId, changes);
+    this.writeAndSync(taskId, changes);
     const delta: TaskDelta = { type: 'updated', taskId, changes };
     this.persistence.logEvent?.(taskId, 'task.failed', changes);
     this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
 
-    this.blockDependents(taskId);
+    // Dual-write: update latest Attempt to failed (best-effort)
+    try {
+      if (this.persistence.loadAttempts && this.persistence.updateAttempt) {
+        const attempts = this.persistence.loadAttempts(taskId);
+        const latest = attempts[attempts.length - 1];
+        if (latest && latest.status === 'running') {
+          this.persistence.updateAttempt(latest.id, {
+            status: 'failed',
+            exitCode: parsed.exitCode,
+            error: parsed.error,
+            mergeConflict,
+            completedAt: new Date(),
+          });
+        }
+      }
+    } catch { /* best effort */ }
+
     this.checkExperimentCompletion(taskId);
     this.checkWorkflowCompletion();
     return [];
@@ -1201,22 +1239,6 @@ export class Orchestrator {
   }
 
   // ── Private: Helpers ──────────────────────────────────────
-
-  private blockDependents(failedTaskId: string): void {
-    const toBlock = this.stateMachine.computeTasksToBlock(failedTaskId);
-    for (const id of toBlock) {
-      const existing = this.stateMachine.getTask(id);
-      if (existing?.execution.blockedBy && existing.execution.blockedBy !== failedTaskId) {
-        console.warn(`[orchestrator] blockDependents: "${id}" blockedBy overwritten from "${existing.execution.blockedBy}" to "${failedTaskId}"`);
-      }
-
-      const blockChanges: TaskStateChanges = { status: 'blocked', execution: { blockedBy: failedTaskId } };
-      this.writeAndSync(id, blockChanges);
-      const delta: TaskDelta = { type: 'updated', taskId: id, changes: blockChanges };
-      this.persistence.logEvent?.(id, 'task.blocked', blockChanges);
-      this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
-    }
-  }
 
   private checkExperimentCompletion(taskId: string): void {
     for (const recon of this.stateMachine.getAllTasks()) {
@@ -1352,9 +1374,10 @@ export class Orchestrator {
         continue;
       }
 
+      const now = new Date();
       const changes: TaskStateChanges = {
         status: 'running',
-        execution: { startedAt: new Date(), lastHeartbeatAt: new Date() },
+        execution: { startedAt: now, lastHeartbeatAt: now },
       };
       const updated = this.writeAndSync(job.taskId, changes);
       started.push(updated);
@@ -1362,6 +1385,18 @@ export class Orchestrator {
       const delta: TaskDelta = { type: 'updated', taskId: job.taskId, changes };
       this.persistence.logEvent?.(job.taskId, 'task.running', changes);
       this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
+
+      // Dual-write: create Attempt record (best-effort)
+      try {
+        if (this.persistence.getNextAttemptNumber && this.persistence.saveAttempt) {
+          const attemptNum = this.persistence.getNextAttemptNumber(job.taskId);
+          const attempt = createAttempt(job.taskId, attemptNum, {
+            status: 'running',
+            startedAt: now,
+          });
+          this.persistence.saveAttempt(attempt);
+        }
+      } catch { /* best effort — never break existing flow */ }
 
       job = this.scheduler.dequeue();
     }

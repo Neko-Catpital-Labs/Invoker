@@ -407,7 +407,7 @@ describe('Orchestrator', () => {
       expect(orchestrator.getTask('t3')!.status).toBe('running');
     });
 
-    it('failed: marks task failed, blocks dependents', () => {
+    it('failed: marks task failed, dependents stay pending', () => {
       orchestrator.handleWorkerResponse(
         makeResponse({
           actionId: 't1',
@@ -417,8 +417,8 @@ describe('Orchestrator', () => {
       );
 
       expect(orchestrator.getTask('t1')!.status).toBe('failed');
-      expect(orchestrator.getTask('t2')!.status).toBe('blocked');
-      expect(orchestrator.getTask('t3')!.status).toBe('blocked');
+      expect(orchestrator.getTask('t2')!.status).toBe('pending');
+      expect(orchestrator.getTask('t3')!.status).toBe('pending');
     });
 
     it('needs_input: pauses task with prompt', () => {
@@ -444,13 +444,13 @@ describe('Orchestrator', () => {
       expect(persisted!.task.status).toBe('completed');
     });
 
-    it('persists blocked status to DB', () => {
+    it('dependents remain pending in DB after failure', () => {
       orchestrator.handleWorkerResponse(
         makeResponse({ actionId: 't1', status: 'failed', outputs: { exitCode: 1, error: 'fail' } }),
       );
 
       const persisted = persistence.tasks.get('t2');
-      expect(persisted!.task.status).toBe('blocked');
+      expect(persisted!.task.status).toBe('pending');
     });
   });
 
@@ -518,6 +518,47 @@ describe('Orchestrator', () => {
       const workflows = persistence.listWorkflows();
       expect(workflows[0].status).toBe('running');
     });
+
+    it('includes additionalChanges in task state and delta', () => {
+      orchestrator.loadPlan({
+        name: 'additional-changes-test',
+        tasks: [
+          { id: 'a1', description: 'Task' },
+        ],
+      });
+      orchestrator.startExecution();
+      expect(orchestrator.getTask('a1')!.status).toBe('running');
+
+      publishedDeltas = [];
+      orchestrator.setTaskAwaitingApproval('a1', {
+        config: { familiarType: 'local', summary: 'test summary' },
+        execution: {
+          branch: 'plan/feature',
+          workspacePath: '/tmp',
+          prUrl: 'https://github.com/owner/repo/pull/1',
+          prIdentifier: 'owner/repo#1',
+          prStatus: 'Awaiting review',
+        },
+      });
+
+      const task = orchestrator.getTask('a1')!;
+      expect(task.status).toBe('awaiting_approval');
+      expect(task.config.familiarType).toBe('local');
+      expect(task.config.summary).toBe('test summary');
+      expect(task.execution.branch).toBe('plan/feature');
+      expect(task.execution.workspacePath).toBe('/tmp');
+      expect(task.execution.prUrl).toBe('https://github.com/owner/repo/pull/1');
+      expect(task.execution.prIdentifier).toBe('owner/repo#1');
+      expect(task.execution.prStatus).toBe('Awaiting review');
+      expect(task.execution.completedAt).toBeDefined();
+
+      const delta = publishedDeltas.find(
+        (d) => d.type === 'updated' && d.taskId === 'a1',
+      );
+      expect(delta).toBeDefined();
+      expect(delta!.type === 'updated' && delta!.changes.config?.familiarType).toBe('local');
+      expect(delta!.type === 'updated' && delta!.changes.execution?.prUrl).toBe('https://github.com/owner/repo/pull/1');
+    });
   });
 
   // ── approve / reject ───────────────────────────────────
@@ -542,10 +583,38 @@ describe('Orchestrator', () => {
       expect(orchestrator.getTask('a1')!.status).toBe('completed');
       expect(orchestrator.getTask('a2')!.status).toBe('running');
     });
+
+    it('starts dependents after approve following a prior failure', async () => {
+      orchestrator.loadPlan({
+        name: 'approve-unblock-test',
+        tasks: [
+          { id: 'a1', description: 'Task that will fail then be fixed' },
+          { id: 'a2', description: 'Downstream dependent', dependencies: ['a1'] },
+        ],
+      });
+      orchestrator.startExecution();
+
+      // a1 fails → a2 stays pending (no blocked status)
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 'a1', status: 'failed', outputs: { exitCode: 1, error: 'some error' } }),
+      );
+      expect(orchestrator.getTask('a2')!.status).toBe('pending');
+
+      // Fix with Claude → awaiting_approval
+      orchestrator.beginConflictResolution('a1');
+      orchestrator.setFixAwaitingApproval('a1', 'some error');
+      expect(orchestrator.getTask('a1')!.status).toBe('awaiting_approval');
+
+      // Approve → a2 becomes ready and starts
+      const started = await orchestrator.approve('a1');
+      expect(orchestrator.getTask('a1')!.status).toBe('completed');
+      expect(orchestrator.getTask('a2')!.status).toBe('running');
+      expect(started.some(t => t.id === 'a2')).toBe(true);
+    });
   });
 
   describe('reject', () => {
-    it('fails task, blocks dependents', () => {
+    it('fails task, dependents stay pending', () => {
       orchestrator.loadPlan({
         name: 'reject-test',
         tasks: [
@@ -561,7 +630,7 @@ describe('Orchestrator', () => {
       orchestrator.reject('t1', 'Not good enough');
 
       expect(orchestrator.getTask('t1')!.status).toBe('failed');
-      expect(orchestrator.getTask('t2')!.status).toBe('blocked');
+      expect(orchestrator.getTask('t2')!.status).toBe('pending');
     });
   });
 
@@ -1136,7 +1205,7 @@ describe('Orchestrator', () => {
       );
 
       expect(orchestrator.getTask('t1')!.status).toBe('failed');
-      expect(orchestrator.getTask('t2')!.status).toBe('blocked');
+      expect(orchestrator.getTask('t2')!.status).toBe('pending');
     });
 
     it('fix experiment prompts include original error message', () => {
@@ -1236,7 +1305,7 @@ describe('Orchestrator', () => {
       expect(wf.status).toBe('completed');
     });
 
-    it('marks workflow failed when any task fails', () => {
+    it('workflow stays running when a task fails but dependents are still pending', () => {
       orchestrator.loadPlan({
         name: 'fail-completion-test',
         tasks: [
@@ -1250,8 +1319,9 @@ describe('Orchestrator', () => {
         makeResponse({ actionId: 't1', status: 'failed', outputs: { exitCode: 1, error: 'boom' } }),
       );
 
+      // t2 stays pending (not blocked), so workflow is not settled
       const wf = Array.from(persistence.workflows.values())[0];
-      expect(wf.status).toBe('failed');
+      expect(wf.status).toBe('running');
     });
 
     it('does not mark workflow complete while tasks are running', () => {
@@ -1389,7 +1459,7 @@ describe('Orchestrator', () => {
       expect(started[0].id).toBe('t1');
     });
 
-    it('forks dirty subtree when editing a completed task with dependents', () => {
+    it('restarts task with new command, downstream stays unchanged', () => {
       orchestrator.loadPlan({
         name: 'edit-fork-test',
         tasks: [
@@ -1409,16 +1479,15 @@ describe('Orchestrator', () => {
       expect(orchestrator.getTask('parent')?.status).toBe('completed');
       expect(orchestrator.getTask('child')?.status).toBe('completed');
 
+      const taskCountBefore = orchestrator.getAllTasks().length;
       const started = orchestrator.editTaskCommand('parent', 'echo updated');
 
       expect(orchestrator.getTask('parent')?.config.command).toBe('echo updated');
       expect(orchestrator.getTask('parent')?.status).toBe('running');
-      expect(orchestrator.getTask('child')?.status).toBe('stale');
-
-      const allTasks = orchestrator.getAllTasks();
-      const forkedChild = allTasks.find((t) => t.id !== 'child' && t.description === 'Child');
-      expect(forkedChild).toBeDefined();
-      expect(forkedChild?.status).toBe('pending');
+      // Child stays completed - no fork, no stale
+      expect(orchestrator.getTask('child')?.status).toBe('completed');
+      // No new tasks created (no -v2 clones)
+      expect(orchestrator.getAllTasks().length).toBe(taskCountBefore);
     });
 
     it('throws when trying to edit a running task', () => {
@@ -1826,7 +1895,7 @@ describe('Orchestrator', () => {
       logSpy.mockRestore();
     });
 
-    it('warns when blockedBy is overwritten by a second failure', () => {
+    it('fan-in dependents stay pending when multiple roots fail', () => {
       orchestrator.loadPlan({
         name: 'overwrite-test',
         tasks: [
@@ -1837,21 +1906,17 @@ describe('Orchestrator', () => {
       });
       orchestrator.startExecution();
 
-      // Fail A — C gets blockedBy: A
+      // Fail A — C stays pending
       orchestrator.handleWorkerResponse(
         makeResponse({ actionId: 'A', status: 'failed', outputs: { exitCode: 1, error: 'boom' } }),
       );
-      expect(orchestrator.getTask('C')!.execution.blockedBy).toBe('A');
+      expect(orchestrator.getTask('C')!.status).toBe('pending');
 
-      // Fail B — C's blockedBy should be overwritten to B
+      // Fail B — C still pending
       orchestrator.handleWorkerResponse(
         makeResponse({ actionId: 'B', status: 'failed', outputs: { exitCode: 1, error: 'boom' } }),
       );
-      expect(orchestrator.getTask('C')!.execution.blockedBy).toBe('B');
-
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('blockDependents: "C" blockedBy overwritten from "A" to "B"'),
-      );
+      expect(orchestrator.getTask('C')!.status).toBe('pending');
     });
 
     it('warns about completed downstream tasks that will not be invalidated on restart', () => {
@@ -1887,7 +1952,7 @@ describe('Orchestrator', () => {
       );
     });
 
-    it('warns when unblocking a task that still has other failed dependencies', () => {
+    it('restarting one failed root leaves fan-in pending when other root still failed', () => {
       orchestrator.loadPlan({
         name: 'premature-unblock-test',
         tasks: [
@@ -1898,23 +1963,22 @@ describe('Orchestrator', () => {
       });
       orchestrator.startExecution();
 
-      // Fail A, then B — C ends up with blockedBy: B
+      // Fail A, then B — C stays pending
       orchestrator.handleWorkerResponse(
         makeResponse({ actionId: 'A', status: 'failed', outputs: { exitCode: 1, error: 'boom' } }),
       );
       orchestrator.handleWorkerResponse(
         makeResponse({ actionId: 'B', status: 'failed', outputs: { exitCode: 1, error: 'boom' } }),
       );
+      expect(orchestrator.getTask('C')!.status).toBe('pending');
 
-      warnSpy.mockClear();
       orchestrator.restartTask('B');
 
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('unblocking "C" but it still has failed deps: [A]'),
-      );
+      // C still pending because A is still failed
+      expect(orchestrator.getTask('C')!.status).toBe('pending');
     });
 
-    it('logs blockedBy mismatch when restarting a task whose dependents are blocked by another', () => {
+    it('restarting one failed root in fan-in does not affect pending dependent', () => {
       orchestrator.loadPlan({
         name: 'mismatch-test',
         tasks: [
@@ -1931,17 +1995,11 @@ describe('Orchestrator', () => {
       orchestrator.handleWorkerResponse(
         makeResponse({ actionId: 'B', status: 'failed', outputs: { exitCode: 1, error: 'boom' } }),
       );
+      expect(orchestrator.getTask('C')!.status).toBe('pending');
 
-      warnSpy.mockClear();
-      // Restart A — C is blocked by B, not A, so unblock won't find it
+      // Restart A — C stays pending because B is still failed
       orchestrator.restartTask('A');
-
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('depend on "A" but are blocked by a different task'),
-      );
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('"C" (blockedBy: B)'),
-      );
+      expect(orchestrator.getTask('C')!.status).toBe('pending');
     });
 
     it('handleCompleted logs newly ready downstream tasks', () => {
@@ -1966,7 +2024,7 @@ describe('Orchestrator', () => {
 
     // ── Integration: full fan-in multi-failure restart cycle ──
 
-    it('integration: three-root fan-in tracks all warnings through failure and restart cycle', () => {
+    it('integration: three-root fan-in — all fail, restart all, complete all → D starts', () => {
       orchestrator.loadPlan({
         name: 'fan-in-integration',
         tasks: [
@@ -1978,67 +2036,29 @@ describe('Orchestrator', () => {
       });
       orchestrator.startExecution();
 
-      // Phase 1: All three roots fail, producing blockedBy overwrite warnings
+      // Phase 1: All three roots fail — D stays pending throughout
       orchestrator.handleWorkerResponse(
         makeResponse({ actionId: 'A', status: 'failed', outputs: { exitCode: 1, error: 'a' } }),
       );
-      expect(orchestrator.getTask('D')!.execution.blockedBy).toBe('A');
+      expect(orchestrator.getTask('D')!.status).toBe('pending');
 
       orchestrator.handleWorkerResponse(
         makeResponse({ actionId: 'B', status: 'failed', outputs: { exitCode: 1, error: 'b' } }),
       );
-      expect(orchestrator.getTask('D')!.execution.blockedBy).toBe('B');
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('blockedBy overwritten from "A" to "B"'),
-      );
+      expect(orchestrator.getTask('D')!.status).toBe('pending');
 
       orchestrator.handleWorkerResponse(
         makeResponse({ actionId: 'C', status: 'failed', outputs: { exitCode: 1, error: 'c' } }),
       );
-      expect(orchestrator.getTask('D')!.execution.blockedBy).toBe('C');
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('blockedBy overwritten from "B" to "C"'),
-      );
-
-      // Phase 2: Restart A — D is blocked by C, not A
-      warnSpy.mockClear();
-      logSpy.mockClear();
-      orchestrator.restartTask('A');
-
-      expect(logSpy).toHaveBeenCalledWith(
-        expect.stringContaining('restartTask "A" (was failed)'),
-      );
-      expect(logSpy).toHaveBeenCalledWith(
-        expect.stringContaining('restartTask "A": unblocked 0 tasks'),
-      );
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('depend on "A" but are blocked by a different task'),
-      );
-
-      // D still blocked
-      expect(orchestrator.getTask('D')!.status).toBe('blocked');
-
-      // Phase 3: Restart B — D still blocked by C
-      warnSpy.mockClear();
-      orchestrator.restartTask('B');
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('depend on "B" but are blocked by a different task'),
-      );
-      expect(orchestrator.getTask('D')!.status).toBe('blocked');
-
-      // Phase 4: Restart C — C matches blockedBy, D is unblocked
-      warnSpy.mockClear();
-      logSpy.mockClear();
-      orchestrator.restartTask('C');
-
-      const unblockLog = logSpy.mock.calls.find(
-        call => typeof call[0] === 'string' && call[0].includes('restartTask "C": unblocked'),
-      );
-      expect(unblockLog).toBeDefined();
-      expect(unblockLog![0]).toContain('D');
       expect(orchestrator.getTask('D')!.status).toBe('pending');
 
-      // Phase 5: Complete A, B, C — D should become ready after the last one
+      // Phase 2: Restart all three roots
+      orchestrator.restartTask('A');
+      orchestrator.restartTask('B');
+      orchestrator.restartTask('C');
+      expect(orchestrator.getTask('D')!.status).toBe('pending');
+
+      // Phase 3: Complete A, B, C — D should become ready after the last one
       orchestrator.handleWorkerResponse(
         makeResponse({ actionId: 'A', status: 'completed', outputs: { exitCode: 0 } }),
       );
@@ -2074,7 +2094,7 @@ describe('Orchestrator', () => {
       warnSpy.mockRestore();
     });
 
-    it('handleCompleted unblocks previously-blocked dependents', () => {
+    it('handleCompleted starts pending dependents after A fails then completes', () => {
       orchestrator.loadPlan({
         name: 'unblock-on-complete-test',
         tasks: [
@@ -2084,29 +2104,23 @@ describe('Orchestrator', () => {
       });
       orchestrator.startExecution();
 
+      // A fails → B stays pending
       orchestrator.handleWorkerResponse(
         makeResponse({ actionId: 'A', status: 'failed', outputs: { exitCode: 1, error: 'fail' } }),
       );
-      expect(orchestrator.getTask('B')!.status).toBe('blocked');
-      expect(orchestrator.getTask('B')!.execution.blockedBy).toBe('A');
+      expect(orchestrator.getTask('B')!.status).toBe('pending');
 
+      // A completes (late response or restart+complete) → B starts
       logSpy.mockClear();
       orchestrator.handleWorkerResponse(
         makeResponse({ actionId: 'A', status: 'completed', outputs: { exitCode: 0 } }),
       );
 
-      expect(logSpy).toHaveBeenCalledWith(
-        expect.stringContaining('handleCompleted "A": unblocking'),
-      );
-      expect(logSpy).toHaveBeenCalledWith(
-        expect.stringContaining('previously-blocked tasks: [B'),
-      );
       expect(orchestrator.getTask('A')!.status).toBe('completed');
       expect(orchestrator.getTask('B')!.status).toBe('running');
-      expect(orchestrator.getTask('B')!.execution.blockedBy).toBeUndefined();
     });
 
-    it('handleCompleted unblocks multi-level blocked chain', () => {
+    it('handleCompleted starts B after A fails then completes; C stays pending', () => {
       orchestrator.loadPlan({
         name: 'multi-level-unblock-test',
         tasks: [
@@ -2117,21 +2131,20 @@ describe('Orchestrator', () => {
       });
       orchestrator.startExecution();
 
+      // A fails → B, C stay pending
       orchestrator.handleWorkerResponse(
         makeResponse({ actionId: 'A', status: 'failed', outputs: { exitCode: 1, error: 'fail' } }),
       );
-      expect(orchestrator.getTask('B')!.status).toBe('blocked');
-      expect(orchestrator.getTask('C')!.status).toBe('blocked');
+      expect(orchestrator.getTask('B')!.status).toBe('pending');
+      expect(orchestrator.getTask('C')!.status).toBe('pending');
 
+      // A completes → B starts, C still pending (B not completed yet)
       orchestrator.handleWorkerResponse(
         makeResponse({ actionId: 'A', status: 'completed', outputs: { exitCode: 0 } }),
       );
 
       expect(orchestrator.getTask('B')!.status).toBe('running');
-      expect(orchestrator.getTask('B')!.execution.blockedBy).toBeUndefined();
-      // C is unblocked but not ready yet (B is not completed)
       expect(orchestrator.getTask('C')!.status).toBe('pending');
-      expect(orchestrator.getTask('C')!.execution.blockedBy).toBeUndefined();
     });
 
     it('warns when response arrives for already-terminal task', () => {
@@ -2356,9 +2369,9 @@ describe('Orchestrator', () => {
       warnSpy.mockRestore();
     });
 
-    it('restartTask from blocked status resets to pending', () => {
+    it('restartTask from pending status stays pending when deps not met', () => {
       orchestrator.loadPlan({
-        name: 'blocked-restart-test',
+        name: 'pending-restart-test',
         tasks: [
           { id: 'A', description: 'Root', command: 'echo A' },
           { id: 'B', description: 'Depends on A', command: 'echo B', dependencies: ['A'] },
@@ -2366,13 +2379,15 @@ describe('Orchestrator', () => {
       });
       orchestrator.startExecution();
 
+      // A fails → B stays pending (not blocked)
       orchestrator.handleWorkerResponse(
         makeResponse({ actionId: 'A', status: 'failed', outputs: { exitCode: 1, error: 'fail' } }),
       );
-      expect(orchestrator.getTask('B')!.status).toBe('blocked');
+      expect(orchestrator.getTask('B')!.status).toBe('pending');
 
       const result = orchestrator.restartTask('B');
 
+      // B stays pending because A is still failed
       expect(result).toHaveLength(1);
       expect(result[0].status).toBe('pending');
       expect(orchestrator.getTask('B')!.status).toBe('pending');
@@ -2455,9 +2470,9 @@ describe('Orchestrator', () => {
       expect(task.execution.workspacePath).toBe('/tmp/workspace');
     });
 
-    it('blockedBy overwrite: restart first failure does not unblock task blocked by second failure', () => {
+    it('fan-in C stays pending when only one failed root is restarted', () => {
       orchestrator.loadPlan({
-        name: 'blocked-overwrite-test',
+        name: 'pending-fan-in-test',
         tasks: [
           { id: 'A', description: 'Root A', command: 'echo A' },
           { id: 'B', description: 'Root B', command: 'echo B' },
@@ -2469,17 +2484,14 @@ describe('Orchestrator', () => {
       orchestrator.handleWorkerResponse(
         makeResponse({ actionId: 'A', status: 'failed', outputs: { exitCode: 1, error: 'a' } }),
       );
-      expect(orchestrator.getTask('C')!.execution.blockedBy).toBe('A');
-
       orchestrator.handleWorkerResponse(
         makeResponse({ actionId: 'B', status: 'failed', outputs: { exitCode: 1, error: 'b' } }),
       );
-      expect(orchestrator.getTask('C')!.execution.blockedBy).toBe('B');
+      expect(orchestrator.getTask('C')!.status).toBe('pending');
 
+      // Restart only A — C stays pending because B is still failed
       orchestrator.restartTask('A');
-
-      expect(orchestrator.getTask('C')!.status).toBe('blocked');
-      expect(orchestrator.getTask('C')!.execution.blockedBy).toBe('B');
+      expect(orchestrator.getTask('C')!.status).toBe('pending');
     });
 
     it('restarting failed experiment resets reconciliation from needs_input to pending', () => {
@@ -2834,9 +2846,11 @@ describe('Orchestrator', () => {
         'def456',
       );
 
-      const downstreamV2 = orchestrator.getTask('downstream-v2');
-      expect(downstreamV2).toBeDefined();
-      expect(downstreamV2!.status).toBe('running');
+      // Downstream is remapped in-place (no -v2 clone), depends on pivot-reconciliation
+      const downstream = orchestrator.getTask('downstream');
+      expect(downstream).toBeDefined();
+      expect(downstream!.status).toBe('running');
+      expect(downstream!.dependencies).toContain('pivot-reconciliation');
     });
 
     it('single-element array delegates to selectExperiment', () => {
@@ -2891,16 +2905,18 @@ describe('Orchestrator', () => {
         makeResponse({ actionId: 'parent', status: 'completed', outputs: { exitCode: 0 } }),
       );
       orchestrator.handleWorkerResponse(
-        makeResponse({ actionId: 'child', status: 'completed', outputs: { exitCode: 0 } }),
+        makeResponse({ actionId: 'child', status: 'failed', outputs: { exitCode: 1, error: 'fail' } }),
       );
 
-      // Edit parent → child becomes stale
-      orchestrator.editTaskCommand('parent', 'echo updated');
+      // Replace child → child becomes stale, replacement created
+      orchestrator.replaceTask('child', [
+        { id: 'child-replacement', description: 'Replacement' },
+      ]);
       expect(orchestrator.getTask('child')!.status).toBe('stale');
 
-      // Restart the stale child
+      // Restart the stale child — parent is completed, so child is ready and auto-starts
       orchestrator.restartTask('child');
-      expect(orchestrator.getTask('child')!.status).toBe('pending');
+      expect(orchestrator.getTask('child')!.status).toBe('running');
     });
 
     it('restartTask on awaiting_approval resets to pending and clears completedAt', () => {
@@ -2989,7 +3005,7 @@ describe('Orchestrator', () => {
       // clears experimentResults. This is current behavior, not necessarily ideal.
     });
 
-    it('awaiting_approval → reject → restart → dependents unblock', () => {
+    it('awaiting_approval → reject → restart → complete → dependents start', () => {
       orchestrator.loadPlan({
         name: 'reject-restart',
         tasks: [
@@ -3004,7 +3020,8 @@ describe('Orchestrator', () => {
 
       orchestrator.reject('A', 'Not good enough');
       expect(orchestrator.getTask('A')!.status).toBe('failed');
-      expect(orchestrator.getTask('B')!.status).toBe('blocked');
+      // B stays pending (no blocked status)
+      expect(orchestrator.getTask('B')!.status).toBe('pending');
 
       orchestrator.restartTask('A');
       orchestrator.handleWorkerResponse(
@@ -3131,7 +3148,7 @@ describe('Orchestrator', () => {
       expect(mergeNode!.dependencies).toEqual(['pivot-reconciliation']);
     });
 
-    it('experiment spawn with downstream: merge gate deps point to forked downstream', () => {
+    it('experiment spawn with downstream: merge gate deps point to remapped downstream', () => {
       orchestrator.loadPlan({
         name: 'experiment-downstream-test',
         tasks: [
@@ -3157,17 +3174,19 @@ describe('Orchestrator', () => {
         }),
       );
 
+      // Downstream is remapped in-place (no -v2 clone)
       const mergeNode = orchestrator.getAllTasks().find((t) => t.config.isMergeNode);
-      expect(mergeNode!.dependencies).toEqual(['downstream-v2']);
+      expect(mergeNode!.dependencies).toEqual(['downstream']);
 
-      const forkedDownstream = orchestrator.getTask('downstream-v2');
-      expect(forkedDownstream).toBeDefined();
-      expect(forkedDownstream!.dependencies).toContain('pivot-reconciliation');
+      // Downstream's dependency was remapped from pivot → pivot-reconciliation
+      const downstream = orchestrator.getTask('downstream');
+      expect(downstream).toBeDefined();
+      expect(downstream!.dependencies).toContain('pivot-reconciliation');
     });
 
-    it('forkDirtySubtree: merge gate deps point to cloned leaves', () => {
+    it('editTaskCommand: merge gate deps unchanged (no fork)', () => {
       orchestrator.loadPlan({
-        name: 'fork-leaf-test',
+        name: 'edit-leaf-test',
         tasks: [
           { id: 'parent', description: 'Parent', command: 'echo parent' },
           { id: 'child1', description: 'Child 1', dependencies: ['parent'] },
@@ -3188,11 +3207,12 @@ describe('Orchestrator', () => {
 
       orchestrator.editTaskCommand('parent', 'echo updated');
 
+      // No fork, no stale. Merge gate deps stay the same.
       const mergeNode = orchestrator.getAllTasks().find((t) => t.config.isMergeNode);
-      expect(mergeNode!.dependencies.sort()).toEqual(['child1-v2', 'child2-v2']);
+      expect(mergeNode!.dependencies.sort()).toEqual(['child1', 'child2']);
     });
 
-    it('stale tasks are excluded from merge gate deps', () => {
+    it('stale tasks are excluded from merge gate deps (via replaceTask)', () => {
       orchestrator.loadPlan({
         name: 'stale-exclusion-test',
         tasks: [
@@ -3206,14 +3226,17 @@ describe('Orchestrator', () => {
         makeResponse({ actionId: 'a', status: 'completed', outputs: { exitCode: 0 } }),
       );
       orchestrator.handleWorkerResponse(
-        makeResponse({ actionId: 'b', status: 'completed', outputs: { exitCode: 0 } }),
+        makeResponse({ actionId: 'b', status: 'failed', outputs: { exitCode: 1, error: 'fail' } }),
       );
 
-      orchestrator.editTaskCommand('a', 'echo new');
+      // replaceTask stales 'b' and creates replacement
+      orchestrator.replaceTask('b', [
+        { id: 'b-replacement', description: 'Replacement for b' },
+      ]);
 
       const mergeNode = orchestrator.getAllTasks().find((t) => t.config.isMergeNode);
       expect(mergeNode!.dependencies).not.toContain('b');
-      expect(mergeNode!.dependencies).toContain('b-v2');
+      expect(mergeNode!.dependencies).toContain('b-replacement');
     });
 
     it('diamond DAG: merge gate depends only on convergence node', () => {
@@ -3290,6 +3313,20 @@ describe('Orchestrator', () => {
         (d) => d.type === 'updated' && d.taskId === 't2' && d.changes.status === 'running',
       );
       expect(runningDeltas).toHaveLength(1);
+    });
+
+    it('resets startedAt and lastHeartbeatAt timestamps', () => {
+      const before = Date.now();
+      orchestrator.beginConflictResolution('t2');
+      const after = Date.now();
+
+      const task = orchestrator.getTask('t2')!;
+      expect(task.execution.startedAt).toBeInstanceOf(Date);
+      expect(task.execution.lastHeartbeatAt).toBeInstanceOf(Date);
+      expect(task.execution.startedAt!.getTime()).toBeGreaterThanOrEqual(before);
+      expect(task.execution.startedAt!.getTime()).toBeLessThanOrEqual(after);
+      expect(task.execution.lastHeartbeatAt!.getTime()).toBeGreaterThanOrEqual(before);
+      expect(task.execution.lastHeartbeatAt!.getTime()).toBeLessThanOrEqual(after);
     });
 
     it('returns savedError for later revert', () => {

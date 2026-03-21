@@ -231,12 +231,11 @@ describe('Experiment Lifecycle (integration)', () => {
     expect(recon!.dependencies).toContain('pivot-exp-v1');
     expect(recon!.dependencies).toContain('pivot-exp-v2');
 
-    // Downstream forked: original is stale, clone depends on reconciliation
-    expect(orchestrator.getTask('downstream')!.status).toBe('stale');
-    const downstreamV2 = orchestrator.getTask('downstream-v2');
-    expect(downstreamV2).toBeDefined();
-    expect(downstreamV2!.dependencies).toContain('pivot-reconciliation');
-    expect(downstreamV2!.dependencies).not.toContain('pivot');
+    // Downstream remapped in-place: dependencies changed from ['pivot'] to ['pivot-reconciliation']
+    expect(orchestrator.getTask('downstream')!.status).toBe('pending');
+    expect(orchestrator.getTask('downstream')!.dependencies).toContain('pivot-reconciliation');
+    expect(orchestrator.getTask('downstream')!.dependencies).not.toContain('pivot');
+    expect(orchestrator.getTask('downstream-v2')).toBeUndefined();
 
     // Pivot itself completed (parent task completes when spawning)
     expect(orchestrator.getTask('pivot')!.status).toBe('completed');
@@ -270,9 +269,9 @@ describe('Experiment Lifecycle (integration)', () => {
     expect(ids).toContain('pivot-exp-v1');
     expect(ids).toContain('pivot-exp-v2');
 
-    // Downstream-v2 is still pending (blocked by recon)
-    expect(orchestrator.getTask('downstream')!.status).toBe('stale');
-    expect(orchestrator.getTask('downstream-v2')!.status).toBe('pending');
+    // Downstream is still pending (blocked by recon, which is needs_input)
+    expect(orchestrator.getTask('downstream')!.status).toBe('pending');
+    expect(orchestrator.getTask('downstream-v2')).toBeUndefined();
   });
 
   // ── 4. selectExperiment -> recon completes, downstream unblocks ─
@@ -299,9 +298,9 @@ describe('Experiment Lifecycle (integration)', () => {
     expect(recon!.status).toBe('completed');
     expect(recon!.execution.selectedExperiment).toBe('pivot-exp-v1');
 
-    // Downstream-v2 unblocked and auto-started (original downstream is stale)
-    expect(orchestrator.getTask('downstream')!.status).toBe('stale');
-    expect(orchestrator.getTask('downstream-v2')!.status).toBe('running');
+    // Downstream unblocked and auto-started (remapped in-place, no clone)
+    expect(orchestrator.getTask('downstream')!.status).toBe('running');
+    expect(orchestrator.getTask('downstream-v2')).toBeUndefined();
   });
 
   // ── 5. Complete downstream -> workflow fully done ──────────
@@ -320,17 +319,16 @@ describe('Experiment Lifecycle (integration)', () => {
     orchestrator.handleWorkerResponse(completedResponse('pivot-exp-v2'));
     orchestrator.selectExperiment('pivot-reconciliation', 'pivot-exp-v1');
 
-    // Downstream-v2 is running (original downstream is stale). Complete it.
-    orchestrator.handleWorkerResponse(completedResponse('downstream-v2'));
+    // Downstream is running (remapped in-place, no clone). Complete it.
+    orchestrator.handleWorkerResponse(completedResponse('downstream'));
 
-    expect(orchestrator.getTask('downstream-v2')!.status).toBe('completed');
-    expect(orchestrator.getTask('downstream')!.status).toBe('stale');
+    expect(orchestrator.getTask('downstream')!.status).toBe('completed');
+    expect(orchestrator.getTask('downstream-v2')).toBeUndefined();
 
-    // Complete the merge node (not forked — deps were updated in place)
+    // Complete the merge node
     const mergeNode = orchestrator.getAllTasks().find(t => t.config.isMergeNode && t.status === 'running');
     orchestrator.handleWorkerResponse(completedResponse(mergeNode!.id));
 
-    // Merge node is not forked: 4 original + 2 experiments + 1 recon + 1 downstream fork = 8
     const status = orchestrator.getWorkflowStatus();
     expect(status.completed).toBeGreaterThan(0);
     expect(status.failed).toBe(0);
@@ -373,10 +371,9 @@ describe('Experiment Lifecycle (integration)', () => {
     orchestrator.selectExperiment('pivot-reconciliation', 'pivot-exp-v2');
     expect(orchestrator.getTask('pivot-reconciliation')!.status).toBe('completed');
 
-    // Original downstream is stale (forked during spawn).
-    // downstream-v2 was blocked by the experiment failure cascade.
-    expect(orchestrator.getTask('downstream')!.status).toBe('stale');
-    expect(orchestrator.getTask('downstream-v2')!.status).toBe('blocked');
+    // Downstream is running (remapped in-place, recon completed after selectExperiment)
+    expect(orchestrator.getTask('downstream')!.status).toBe('running');
+    expect(orchestrator.getTask('downstream-v2')).toBeUndefined();
   });
 
   // ── 7. Re-experimentation (second round) ──────────────────
@@ -414,9 +411,9 @@ describe('Experiment Lifecycle (integration)', () => {
     orchestrator.selectExperiment('pivot-reconciliation', 'pivot-exp-r1v1');
     expect(orchestrator.getTask('pivot-reconciliation')!.status).toBe('completed');
 
-    // Original downstream is stale, downstream-v2 should be unblocked and running
-    expect(orchestrator.getTask('downstream')!.status).toBe('stale');
-    expect(orchestrator.getTask('downstream-v2')!.status).toBe('running');
+    // Downstream is remapped in-place and unblocked after recon completes
+    expect(orchestrator.getTask('downstream')!.status).toBe('running');
+    expect(orchestrator.getTask('downstream-v2')).toBeUndefined();
   });
 
   // ── 8. All state transitions produce deltas ────────────────
@@ -459,21 +456,18 @@ describe('Experiment Lifecycle (integration)', () => {
     );
 
     // Expected deltas from spawn:
-    // - downstream stale (fork), downstream-v2 created (fork)
+    // - downstream remap (dependency change from pivot to pivot-reconciliation)
     // - pivot completed (source disposition)
     // - exp-v1 created, exp-v2 created, reconciliation created (new nodes)
     // - exp-v1 started, exp-v2 started (auto-start)
-    expect(publishedDeltas.length).toBeGreaterThanOrEqual(7);
+    expect(publishedDeltas.length).toBeGreaterThanOrEqual(6);
 
-    // Verify fork deltas: downstream stale + downstream-v2 created
-    const downstreamStale = publishedDeltas.find(
-      (d) => d.type === 'updated' && d.taskId === 'downstream' && (d.changes as any).status === 'stale',
+    // Verify remap delta: downstream dependencies updated
+    const downstreamRemap = publishedDeltas.find(
+      (d) => d.type === 'updated' && d.taskId === 'downstream' && (d.changes as any).dependencies !== undefined,
     );
-    expect(downstreamStale).toBeDefined();
-    const downstreamV2Created = publishedDeltas.find(
-      (d) => d.type === 'created' && d.task.id === 'downstream-v2',
-    );
-    expect(downstreamV2Created).toBeDefined();
+    expect(downstreamRemap).toBeDefined();
+    expect(orchestrator.getTask('downstream-v2')).toBeUndefined();
 
     // Verify experiment create deltas exist
     const expCreatedDeltas = publishedDeltas.filter(
@@ -514,23 +508,23 @@ describe('Experiment Lifecycle (integration)', () => {
     publishedDeltas = [];
     orchestrator.selectExperiment('pivot-reconciliation', 'pivot-exp-v1');
 
-    // Recon completed + downstream-v2 started (original downstream is stale)
+    // Recon completed + downstream started (remapped in-place, no clone)
     const reconComplete = publishedDeltas.find(
       (d) => d.type === 'updated' && d.taskId === 'pivot-reconciliation',
     );
-    const downstreamV2Start = publishedDeltas.find(
-      (d) => d.type === 'updated' && d.taskId === 'downstream-v2',
+    const downstreamStart = publishedDeltas.find(
+      (d) => d.type === 'updated' && d.taskId === 'downstream',
     );
     expect(reconComplete).toBeDefined();
-    expect(downstreamV2Start).toBeDefined();
+    expect(downstreamStart).toBeDefined();
 
     publishedDeltas = [];
-    orchestrator.handleWorkerResponse(completedResponse('downstream-v2'));
+    orchestrator.handleWorkerResponse(completedResponse('downstream'));
 
-    const downstreamV2Complete = publishedDeltas.find(
-      (d) => d.type === 'updated' && d.taskId === 'downstream-v2',
+    const downstreamComplete = publishedDeltas.find(
+      (d) => d.type === 'updated' && d.taskId === 'downstream',
     );
-    expect(downstreamV2Complete).toBeDefined();
+    expect(downstreamComplete).toBeDefined();
   });
 
   // ── 9. Experiment lifecycle with 5 variants ────────────────
@@ -584,14 +578,14 @@ describe('Experiment Lifecycle (integration)', () => {
     expect(orchestrator.getTask('pivot-reconciliation')!.status).toBe('completed');
     expect(orchestrator.getTask('pivot-reconciliation')!.execution.selectedExperiment).toBe('pivot-exp-v3');
 
-    // Downstream-v2 unblocked (original downstream is stale)
-    expect(orchestrator.getTask('downstream')!.status).toBe('stale');
-    expect(orchestrator.getTask('downstream-v2')!.status).toBe('running');
+    // Downstream unblocked (remapped in-place, no clone)
+    expect(orchestrator.getTask('downstream')!.status).toBe('running');
+    expect(orchestrator.getTask('downstream-v2')).toBeUndefined();
 
-    // Complete downstream-v2
-    orchestrator.handleWorkerResponse(completedResponse('downstream-v2'));
+    // Complete downstream
+    orchestrator.handleWorkerResponse(completedResponse('downstream'));
 
-    // Complete the merge node (not forked — deps updated in place)
+    // Complete the merge node
     const mergeNode = orchestrator.getAllTasks().find(t => t.config.isMergeNode && t.status === 'running');
     orchestrator.handleWorkerResponse(completedResponse(mergeNode!.id));
 
@@ -792,12 +786,12 @@ describe('Experiment Lifecycle (integration)', () => {
     expect(reconAfter.execution.branch).toBe('reconciliation/pivot-reconciliation');
     expect(reconAfter.execution.commit).toBe('merged-abc');
 
-    // Downstream forked version is now running
-    expect(orchestrator.getTask('downstream')!.status).toBe('stale');
-    expect(orchestrator.getTask('downstream-v2')!.status).toBe('running');
+    // Downstream remapped in-place and now running
+    expect(orchestrator.getTask('downstream')!.status).toBe('running');
+    expect(orchestrator.getTask('downstream-v2')).toBeUndefined();
 
     // Complete downstream and merge node
-    orchestrator.handleWorkerResponse(completedResponse('downstream-v2'));
+    orchestrator.handleWorkerResponse(completedResponse('downstream'));
     const mergeNode = orchestrator.getAllTasks().find(t => t.config.isMergeNode && t.status === 'running');
     orchestrator.handleWorkerResponse(completedResponse(mergeNode!.id));
 

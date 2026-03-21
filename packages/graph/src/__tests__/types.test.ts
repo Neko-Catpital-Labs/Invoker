@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createTaskState } from '../types.js';
+import { createTaskState, createAttempt } from '../types.js';
 import type { TaskConfig } from '../types.js';
 
 describe('createTaskState', () => {
@@ -26,6 +26,68 @@ describe('createTaskState', () => {
     expect(task.execution).toEqual({});
   });
 
+  it('copies dependencies without shared reference', () => {
+    const deps = ['a', 'b'];
+    const task = createTaskState('t', 'desc', deps);
+    deps.push('c');
+    expect(task.dependencies).toEqual(['a', 'b']);
+  });
+});
+
+describe('createAttempt', () => {
+  it('creates attempt with correct defaults', () => {
+    const attempt = createAttempt('taskA', 1);
+
+    expect(attempt.id).toBe('taskA-a1');
+    expect(attempt.nodeId).toBe('taskA');
+    expect(attempt.attemptNumber).toBe(1);
+    expect(attempt.status).toBe('pending');
+    expect(attempt.upstreamAttemptIds).toEqual([]);
+    expect(attempt.createdAt).toBeInstanceOf(Date);
+    expect(attempt.snapshotCommit).toBeUndefined();
+    expect(attempt.commandOverride).toBeUndefined();
+    expect(attempt.supersedesAttemptId).toBeUndefined();
+  });
+
+  it('generates correct ID format', () => {
+    expect(createAttempt('taskA', 1).id).toBe('taskA-a1');
+    expect(createAttempt('taskA', 3).id).toBe('taskA-a3');
+    expect(createAttempt('my-task', 10).id).toBe('my-task-a10');
+  });
+
+  it('accepts overrides', () => {
+    const attempt = createAttempt('taskB', 2, {
+      status: 'running',
+      snapshotCommit: 'abc123',
+      commandOverride: 'pnpm test -- --watch',
+      upstreamAttemptIds: ['taskA-a1'],
+      supersedesAttemptId: 'taskB-a1',
+    });
+
+    expect(attempt.id).toBe('taskB-a2');
+    expect(attempt.status).toBe('running');
+    expect(attempt.snapshotCommit).toBe('abc123');
+    expect(attempt.commandOverride).toBe('pnpm test -- --watch');
+    expect(attempt.upstreamAttemptIds).toEqual(['taskA-a1']);
+    expect(attempt.supersedesAttemptId).toBe('taskB-a1');
+  });
+
+  it('preserves mergeConflict field', () => {
+    const attempt = createAttempt('merge-task', 1, {
+      mergeConflict: {
+        failedBranch: 'feat/broken',
+        conflictFiles: ['src/main.ts', 'package.json'],
+      },
+    });
+
+    expect(attempt.mergeConflict).toEqual({
+      failedBranch: 'feat/broken',
+      conflictFiles: ['src/main.ts', 'package.json'],
+    });
+  });
+});
+
+describe('createTaskState', () => {
   it('config is fully copyable for cloning', () => {
     const fullConfig: TaskConfig = {
       workflowId: 'wf-1',

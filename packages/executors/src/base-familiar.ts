@@ -353,6 +353,7 @@ export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar
           ['rev-list', '--count', `${baseSha}..${branchName}`], cwd,
         )).trim();
         if (parseInt(aheadCount, 10) > 0) {
+          console.log(`[setupTaskBranch] PRESERVING ${branchName} (${aheadCount} commits ahead of ${base})`);
           if (opts?.worktreeDir) {
             // Worktree mode: attach the existing branch without resetting it
             await this.execGitSimple(
@@ -370,6 +371,7 @@ export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar
       }
 
       if (!preserved) {
+        console.log(`[setupTaskBranch] FORCE-RESET ${branchName} → ${base} (no commits ahead or branch did not exist)`);
         if (opts?.worktreeDir) {
           await this.execGitSimple(
             ['worktree', 'add', '-B', branchName, opts.worktreeDir, base], cwd,

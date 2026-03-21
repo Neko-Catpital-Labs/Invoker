@@ -174,7 +174,7 @@ describe('Type × Topology Matrix', () => {
       expect(downstreamClone!.dependencies).toContain('pivot-reconciliation');
     });
 
-    it('experiment pivot at B in diamond: recon replaces B, D-clone depends on B-recon and C', () => {
+    it('experiment pivot at B in diamond: recon replaces B, D remapped to depend on B-recon and C', () => {
       const plan: PlanDefinition = {
         name: 'exp-diamond',
         tasks: [
@@ -210,11 +210,11 @@ describe('Type × Topology Matrix', () => {
       const recon = allTasks.find((t) => t.id === 'B-reconciliation');
       expect(recon).toBeDefined();
 
-      // D should be stale, D-v2 should depend on B-reconciliation and C
-      expect(orchestrator.getTask('D')!.status).toBe('stale');
-      const dClone = allTasks.find((t) => t.description === 'Join' && t.status !== 'stale');
-      expect(dClone).toBeDefined();
-      expect(dClone!.dependencies).toContain('B-reconciliation');
+      // D's dependencies are remapped in-place: [B, C] → [B-reconciliation, C]
+      const d = orchestrator.getTask('D')!;
+      expect(d.status).toBe('pending');
+      expect(d.dependencies).toContain('B-reconciliation');
+      expect(d.dependencies).toContain('C');
     });
 
     it('all experiments fail → reconciliation still gets needs_input', () => {

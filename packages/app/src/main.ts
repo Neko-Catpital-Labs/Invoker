@@ -52,7 +52,13 @@ import type { TaskOutputData } from './types.js';
 import { loadConfig, type InvokerConfig } from './config.js';
 import { backupPlan } from './plan-backup.js';
 import { startApiServer, type ApiServer } from './api-server.js';
-import { runHeadless, bumpGenerationAndRestart } from './headless.js';
+import { runHeadless } from './headless.js';
+import {
+  rebaseAndRetry,
+  rejectTask,
+  restartWorkflow as sharedRestartWorkflow,
+  selectExperiments as sharedSelectExperiments,
+} from './workflow-actions.js';
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 
@@ -178,7 +184,7 @@ async function wireSlackBot(deps: SlackBotDeps): Promise<any> {
         await orchestrator.approve(command.taskId);
         break;
       case 'reject':
-        orchestrator.reject(command.taskId, command.reason);
+        rejectTask(command.taskId, { orchestrator }, command.reason);
         break;
       case 'select_experiment': {
         const started = orchestrator.selectExperiment(command.taskId, command.experimentId);
@@ -664,30 +670,21 @@ function setupGuiMode(): void {
     });
 
     ipcMain.handle('invoker:approve', async (_event, taskId: string) => {
-      await orchestrator.approve(taskId);
+      const started = await orchestrator.approve(taskId);
+      const runnable = started.filter(t => t.status === 'running');
+      if (runnable.length > 0) await taskExecutor.executeTasks(runnable);
     });
 
     ipcMain.handle('invoker:reject', (_event, taskId: string, reason?: string) => {
-      const task = orchestrator.getTask(taskId);
-      if (task?.execution.pendingFixError !== undefined) {
-        orchestrator.revertConflictResolution(taskId, task.execution.pendingFixError);
-      } else {
-        orchestrator.reject(taskId, reason);
-      }
+      rejectTask(taskId, { orchestrator }, reason);
     });
 
     ipcMain.handle('invoker:select-experiment', async (_event, taskId: string, experimentId: string | string[]) => {
       const ids = Array.isArray(experimentId) ? experimentId : [experimentId];
       console.log(`[ipc] select-experiment: "${taskId}" experimentIds=${JSON.stringify(ids)}`);
       try {
-        if (ids.length === 1) {
-          const newlyStarted = orchestrator.selectExperiment(taskId, ids[0]);
-          await taskExecutor.executeTasks(newlyStarted);
-        } else {
-          const { branch, commit } = await taskExecutor.mergeExperimentBranches(taskId, ids);
-          const newlyStarted = orchestrator.selectExperiments(taskId, ids, branch, commit);
-          await taskExecutor.executeTasks(newlyStarted);
-        }
+        const newlyStarted = await sharedSelectExperiments(taskId, ids, { orchestrator, taskExecutor });
+        await taskExecutor.executeTasks(newlyStarted);
       } catch (err) {
         console.error(`[ipc] select-experiment failed: ${err}`);
         throw err;
@@ -710,7 +707,7 @@ function setupGuiMode(): void {
     ipcMain.handle('invoker:restart-workflow', async (_event, workflowId: string) => {
       console.log(`[ipc] restart-workflow: "${workflowId}"`);
       try {
-        const started = bumpGenerationAndRestart(workflowId, { persistence, orchestrator });
+        const started = sharedRestartWorkflow(workflowId, { persistence, orchestrator });
         const runnable = started.filter(t => t.status === 'running');
         await taskExecutor.executeTasks(runnable);
       } catch (err) {
@@ -722,34 +719,9 @@ function setupGuiMode(): void {
     ipcMain.handle('invoker:rebase-and-retry', async (_event, taskId: string) => {
       console.log(`[ipc] rebase-and-retry: "${taskId}"`);
       try {
-        const task = orchestrator.getTask(taskId);
-        if (!task) throw new Error(`Task ${taskId} not found`);
-        if (!task.config.workflowId) throw new Error(`Task ${taskId} has no associated workflow`);
-
-        const workflowId = task.config.workflowId;
-        const mergeTask = orchestrator.getAllTasks().find(
-          t => t.config.workflowId === workflowId && t.config.isMergeNode,
-        );
-
-        const workflow = persistence.loadWorkflow(workflowId);
-        const baseBranch = workflow?.baseBranch ?? invokerConfig.defaultBranch ?? await taskExecutor.detectDefaultBranch();
-
-        const result = await taskExecutor.rebaseTaskBranches(workflowId, baseBranch);
-
-        if (result.success && mergeTask) {
-          // Clean rebase: restart merge gate only
-          const started = orchestrator.restartTask(mergeTask.id);
-          const runnable = started.filter(t => t.status === 'running');
-          await taskExecutor.executeTasks(runnable);
-        } else {
-          // Conflicting rebase or no merge gate: reset entire DAG
-          console.log(`[ipc] rebase-and-retry: resetting entire workflow ${workflowId}`);
-          const started = bumpGenerationAndRestart(workflowId, { persistence, orchestrator });
-          const runnable = started.filter(t => t.status === 'running');
-          await taskExecutor.executeTasks(runnable);
-        }
-
-        return result;
+        const started = await rebaseAndRetry(taskId, { orchestrator, persistence, repoRoot });
+        const runnable = started.filter(t => t.status === 'running');
+        await taskExecutor.executeTasks(runnable);
       } catch (err) {
         console.error(`[ipc] rebase-and-retry failed: ${err}`);
         throw err;
@@ -800,7 +772,9 @@ function setupGuiMode(): void {
       try {
         const mergeTask = orchestrator.getMergeNode(workflowId);
         if (!mergeTask) throw new Error(`No merge node for workflow ${workflowId}`);
-        await orchestrator.approve(mergeTask.id);
+        const started = await orchestrator.approve(mergeTask.id);
+        const runnable = started.filter(t => t.status === 'running');
+        if (runnable.length > 0) await taskExecutor.executeTasks(runnable);
       } catch (err) {
         console.error(`[ipc] approve-merge failed: ${err}`);
         throw err;
@@ -921,6 +895,7 @@ function setupGuiMode(): void {
             }
 
             if (task.status === 'running') {
+              if (task.execution?.isFixingWithAI) continue;
               const heartbeatTime = task.execution?.lastHeartbeatAt
                 ? new Date(task.execution.lastHeartbeatAt as string | number).getTime()
                 : null;
@@ -1036,12 +1011,7 @@ function setupGuiMode(): void {
           execSync('git diff HEAD --quiet', { cwd, stdio: 'ignore' });
           console.log(`[dirty-detect] task="${taskId}" — no changes detected`);
         } catch {
-          console.log(`[dirty-detect] task="${taskId}" — changes detected, forking subtree`);
-          try {
-            orchestrator.forkDirtySubtree(taskId);
-          } catch (err) {
-            console.error(`[dirty-detect] forkDirtySubtree failed:`, err);
-          }
+          console.log(`[dirty-detect] task="${taskId}" — changes detected (downstream staleness derived from attempt lineage)`);
         }
       };
 

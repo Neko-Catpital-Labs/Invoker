@@ -5,7 +5,7 @@
  * This allows swapping storage backends (in-memory, SQLite, etc.)
  */
 
-import type { TaskState, TaskStateChanges, PlanDefinition } from '@invoker/core';
+import type { TaskState, TaskStateChanges, PlanDefinition, Attempt } from '@invoker/core';
 
 // ── Conversation Types ─────────────────────────────────────
 
@@ -100,6 +100,13 @@ export interface PersistenceAdapter {
   // Task output (stdout/stderr persistence)
   appendTaskOutput(taskId: string, data: string): void;
   getTaskOutput(taskId: string): string;
+
+  // Attempts (optional — backward compat)
+  saveAttempt?(attempt: Attempt): void;
+  loadAttempts?(nodeId: string): Attempt[];
+  loadAttempt?(attemptId: string): Attempt | undefined;
+  updateAttempt?(attemptId: string, changes: Partial<Pick<Attempt, 'status' | 'startedAt' | 'completedAt' | 'exitCode' | 'error' | 'lastHeartbeatAt' | 'branch' | 'commit' | 'summary' | 'workspacePath' | 'claudeSessionId' | 'containerId' | 'mergeConflict'>>): void;
+  getNextAttemptNumber?(nodeId: string): number;
 
   // Lifecycle
   close(): void;

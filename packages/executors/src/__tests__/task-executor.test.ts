@@ -574,8 +574,11 @@ describe('TaskExecutor', () => {
       const deleteCall = gitCalls.find(c => c[0] === 'branch' && c[1] === '-D' && c[2] === 'plan/feature');
       expect(deleteCall).toBeDefined();
 
-      // Default mergeMode is 'manual', so setTaskAwaitingApproval is called
-      expect(orchestrator.setTaskAwaitingApproval).toHaveBeenCalledWith('__merge__wf-1');
+      // Default mergeMode is 'manual', so setTaskAwaitingApproval is called with metadata
+      expect(orchestrator.setTaskAwaitingApproval).toHaveBeenCalledWith('__merge__wf-1', expect.objectContaining({
+        config: expect.objectContaining({ familiarType: 'local' }),
+        execution: expect.objectContaining({ branch: 'plan/feature', workspacePath: '/tmp' }),
+      }));
     });
   });
 
@@ -773,21 +776,15 @@ describe('TaskExecutor', () => {
       const squashCall = gitCalls.find(c => c[0] === 'merge' && c.includes('--squash'));
       expect(squashCall).toBeUndefined();
 
-      // Should call setTaskAwaitingApproval instead of handleWorkerResponse
-      expect(orchestrator.setTaskAwaitingApproval).toHaveBeenCalledWith('__merge__wf-1');
+      // Should call setTaskAwaitingApproval with metadata instead of handleWorkerResponse
+      expect(orchestrator.setTaskAwaitingApproval).toHaveBeenCalledWith('__merge__wf-1', expect.objectContaining({
+        config: expect.objectContaining({ familiarType: 'local' }),
+        execution: expect.objectContaining({ branch: 'plan/feature', workspacePath: '/tmp' }),
+      }));
       expect(orchestrator.handleWorkerResponse).not.toHaveBeenCalled();
       expect(onComplete).toHaveBeenCalledWith(
         '__merge__wf-1',
         expect.objectContaining({ status: 'completed' }),
-      );
-
-      // Should persist familiarType, branch, workspacePath, and summary
-      expect(persistence.updateTask).toHaveBeenCalledWith(
-        '__merge__wf-1',
-        expect.objectContaining({
-          config: expect.objectContaining({ familiarType: 'local' }),
-          execution: { branch: 'plan/feature', workspacePath: '/tmp' },
-        }),
       );
     });
 
@@ -928,26 +925,20 @@ describe('TaskExecutor', () => {
         }),
       );
 
-      // Should set task awaiting approval (not handleWorkerResponse)
-      expect(orchestrator.setTaskAwaitingApproval).toHaveBeenCalledWith('__merge__wf-1');
+      // Should set task awaiting approval with PR metadata (not handleWorkerResponse)
+      expect(orchestrator.setTaskAwaitingApproval).toHaveBeenCalledWith('__merge__wf-1', expect.objectContaining({
+        config: expect.objectContaining({ familiarType: 'local' }),
+        execution: expect.objectContaining({
+          branch: 'plan/feature',
+          prUrl: 'https://github.com/owner/repo/pull/42',
+          prIdentifier: 'owner/repo#42',
+          prStatus: 'Awaiting review',
+        }),
+      }));
       expect(orchestrator.handleWorkerResponse).not.toHaveBeenCalled();
       expect(onComplete).toHaveBeenCalledWith(
         '__merge__wf-1',
         expect.objectContaining({ status: 'completed' }),
-      );
-
-      // Should persist PR metadata
-      expect(persistence.updateTask).toHaveBeenCalledWith(
-        '__merge__wf-1',
-        expect.objectContaining({
-          config: expect.objectContaining({ familiarType: 'local' }),
-          execution: expect.objectContaining({
-            branch: 'plan/feature',
-            prUrl: 'https://github.com/owner/repo/pull/42',
-            prIdentifier: 'owner/repo#42',
-            prStatus: 'Awaiting review',
-          }),
-        }),
       );
     });
 
@@ -986,7 +977,10 @@ describe('TaskExecutor', () => {
 
       await (executor as any).executeMergeNode(mergeTask);
 
-      expect(orchestrator.setTaskAwaitingApproval).toHaveBeenCalledWith('__merge__wf-1');
+      expect(orchestrator.setTaskAwaitingApproval).toHaveBeenCalledWith('__merge__wf-1', expect.objectContaining({
+        config: expect.objectContaining({ familiarType: 'local' }),
+        execution: expect.objectContaining({ workspacePath: '/tmp' }),
+      }));
       expect(orchestrator.handleWorkerResponse).not.toHaveBeenCalled();
     });
 
@@ -1031,6 +1025,83 @@ describe('TaskExecutor', () => {
       expect(orchestrator.setTaskAwaitingApproval).not.toHaveBeenCalled();
     });
 
+    it('executeMergeNode creates PR when mergeMode=github and onFinish=none', async () => {
+      const allTasks = [
+        makeTask({ id: 't1', config: { workflowId: 'wf-1' }, status: 'completed', execution: { branch: 'experiment/t1' } }),
+      ];
+      const orchestrator = {
+        getTask: (id: string) => allTasks.find(t => t.id === id),
+        getAllTasks: () => allTasks,
+        handleWorkerResponse: vi.fn(() => []),
+        setTaskAwaitingApproval: vi.fn(),
+      };
+      const persistence = {
+        loadWorkflow: () => ({
+          id: 'wf-1',
+          onFinish: 'none',
+          mergeMode: 'github',
+          baseBranch: 'master',
+          featureBranch: 'plan/feature',
+          name: 'Test Workflow',
+        }),
+        updateTask: vi.fn(),
+      };
+      const mergeGateProvider = {
+        createReview: vi.fn().mockResolvedValue({
+          url: 'https://github.com/owner/repo/pull/55',
+          identifier: 'owner/repo#55',
+        }),
+      };
+      const onComplete = vi.fn();
+      const executor = new TaskExecutor({
+        orchestrator: orchestrator as any,
+        persistence: persistence as any,
+        familiarRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+        callbacks: { onComplete },
+        mergeGateProvider: mergeGateProvider as any,
+      });
+
+      (executor as any).execGit = async (args: string[]) => {
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        return '';
+      };
+      (executor as any).startPrPolling = vi.fn();
+
+      const mergeTask = makeTask({
+        id: '__merge__wf-1',
+        status: 'running',
+        dependencies: ['t1'],
+        config: { isMergeNode: true, workflowId: 'wf-1' },
+      });
+
+      await (executor as any).executeMergeNode(mergeTask);
+
+      // Should create a PR via mergeGateProvider
+      expect(mergeGateProvider.createReview).toHaveBeenCalledWith(
+        expect.objectContaining({
+          baseBranch: 'master',
+          featureBranch: 'plan/feature',
+          title: 'Test Workflow',
+        }),
+      );
+
+      // Should pass PR metadata through setTaskAwaitingApproval
+      expect(orchestrator.setTaskAwaitingApproval).toHaveBeenCalledWith('__merge__wf-1', expect.objectContaining({
+        config: expect.objectContaining({ familiarType: 'local' }),
+        execution: expect.objectContaining({
+          branch: 'plan/feature',
+          prUrl: 'https://github.com/owner/repo/pull/55',
+          prIdentifier: 'owner/repo#55',
+          prStatus: 'Awaiting review',
+        }),
+      }));
+      expect(orchestrator.handleWorkerResponse).not.toHaveBeenCalled();
+
+      // Should start polling
+      expect((executor as any).startPrPolling).toHaveBeenCalledWith('__merge__wf-1', 'owner/repo#55', 'wf-1');
+    });
+
     it('executeMergeNode goes to awaiting_approval when mergeMode=manual and no featureBranch', async () => {
       const orchestrator = {
         getTask: () => null,
@@ -1066,7 +1137,10 @@ describe('TaskExecutor', () => {
 
       await (executor as any).executeMergeNode(mergeTask);
 
-      expect(orchestrator.setTaskAwaitingApproval).toHaveBeenCalledWith('__merge__wf-1');
+      expect(orchestrator.setTaskAwaitingApproval).toHaveBeenCalledWith('__merge__wf-1', expect.objectContaining({
+        config: expect.objectContaining({ familiarType: 'local' }),
+        execution: expect.objectContaining({ workspacePath: '/tmp' }),
+      }));
     });
 
     it('approveMerge performs the final merge step', async () => {
@@ -1408,7 +1482,7 @@ describe('TaskExecutor', () => {
       expect(mergeGateProvider.createReview).toHaveBeenCalledWith(
         expect.objectContaining({ body: '## Summary\nTest summary' }),
       );
-      expect(persistence.updateTask).toHaveBeenCalledWith(
+      expect(orchestrator.setTaskAwaitingApproval).toHaveBeenCalledWith(
         '__merge__wf-1',
         expect.objectContaining({
           config: expect.objectContaining({ summary: '## Summary\nTest summary' }),
@@ -1460,7 +1534,7 @@ describe('TaskExecutor', () => {
 
       await (executor as any).executeMergeNode(mergeTask);
 
-      expect(persistence.updateTask).toHaveBeenCalledWith(
+      expect(orchestrator.setTaskAwaitingApproval).toHaveBeenCalledWith(
         '__merge__wf-1',
         expect.objectContaining({
           config: expect.objectContaining({ summary: '## Summary\nManual summary' }),

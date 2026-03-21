@@ -63,51 +63,6 @@ export class TaskStateMachine {
     return ready;
   }
 
-  /**
-   * Compute all tasks that should be blocked when `failedTaskId` fails.
-   * Returns transitive dependents (BFS) that are pending or blocked.
-   * Does NOT mutate the graph — returns IDs only.
-   */
-  computeTasksToBlock(failedTaskId: string): string[] {
-    const blocked: string[] = [];
-    const queue = [failedTaskId];
-    const visited = new Set<string>();
-
-    while (queue.length > 0) {
-      const currentId = queue.shift()!;
-      if (visited.has(currentId)) continue;
-      visited.add(currentId);
-
-      for (const task of this.graph.getAllNodes()) {
-        if (task.status !== 'pending' && task.status !== 'blocked') continue;
-        if (!task.dependencies.includes(currentId)) continue;
-        if (visited.has(task.id)) continue;
-
-        blocked.push(task.id);
-        queue.push(task.id);
-      }
-    }
-
-    return blocked;
-  }
-
-  /**
-   * Compute tasks that should be unblocked when `taskId` is restarted.
-   * Returns IDs of tasks currently blocked by `taskId`.
-   * Does NOT mutate the graph — returns IDs only.
-   */
-  computeTasksToUnblock(taskId: string): string[] {
-    const unblocked: string[] = [];
-
-    for (const task of this.graph.getAllNodes()) {
-      if (task.status !== 'blocked') continue;
-      if (task.execution.blockedBy !== taskId) continue;
-      unblocked.push(task.id);
-    }
-
-    return unblocked;
-  }
-
   // ── Sync (only way to write to graph) ──────────────────
 
   /**

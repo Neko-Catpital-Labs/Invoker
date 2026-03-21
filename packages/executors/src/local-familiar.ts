@@ -81,6 +81,7 @@ export class LocalFamiliar extends BaseFamiliar<ProcessEntry> {
       // Save the user's current branch BEFORE ensureFeatureBranch switches away
       try {
         originalBranch = (await this.execGitSimple(['branch', '--show-current'], cwd)).trim() || undefined;
+        console.log(`[LocalFamiliar] ${request.actionId} originalBranch=${originalBranch ?? 'none'}`);
       } catch { /* not a git repo */ }
 
       // Create feature branch before spawning if specified

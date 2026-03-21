@@ -407,6 +407,51 @@ describe('orphan reconciliation on resume', () => {
     expect(orchestrator2.getTask('t1')?.status).toBe('running');
   });
 
+  it('stale detector skips tasks with isFixingWithAI', () => {
+    orchestrator.loadPlan(plan);
+    orchestrator.startExecution();
+
+    // Fail t1 so we can call beginConflictResolution
+    orchestrator.handleWorkerResponse(
+      makeResponse({ actionId: 't1', status: 'failed', outputs: { exitCode: 1, error: 'merge conflict' } }),
+    );
+    expect(orchestrator.getTask('t1')?.status).toBe('failed');
+
+    orchestrator.beginConflictResolution('t1');
+    expect(orchestrator.getTask('t1')?.status).toBe('running');
+    expect(orchestrator.getTask('t1')?.execution.isFixingWithAI).toBe(true);
+
+    // --- Simulate app restart ---
+    const orchestrator2 = new Orchestrator({ persistence, messageBus: new InMemoryBus() });
+    orchestrator2.syncAllFromDb();
+
+    // Simulate the DB poll stale-heartbeat check (main.ts) with isFixingWithAI guard
+    const STALE_HEARTBEAT_MS = 5 * 60 * 1000;
+    const restarted: TaskState[] = [];
+    // Use a far-future "now" to guarantee the task looks stale
+    const now = Date.now() + STALE_HEARTBEAT_MS + 60_000;
+
+    for (const task of orchestrator2.getAllTasks()) {
+      if (task.status === 'running') {
+        if (task.execution?.isFixingWithAI) continue; // ← the guard under test
+        const startedTime = task.execution?.startedAt
+          ? task.execution.startedAt.getTime()
+          : null;
+        const referenceTime = startedTime;
+
+        if (referenceTime && (now - referenceTime) > STALE_HEARTBEAT_MS) {
+          const r = orchestrator2.restartTask(task.id);
+          restarted.push(...r.filter(t => t.status === 'running'));
+        }
+      }
+    }
+
+    // isFixingWithAI task should NOT be restarted
+    expect(restarted).toEqual([]);
+    expect(orchestrator2.getTask('t1')?.status).toBe('running');
+    expect(orchestrator2.getTask('t1')?.execution.isFixingWithAI).toBe(true);
+  });
+
   it('after resume-workflow clears the flag, orphaned tasks CAN be restarted', () => {
     orchestrator.loadPlan(plan);
     orchestrator.startExecution();

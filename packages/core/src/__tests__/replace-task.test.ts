@@ -242,8 +242,8 @@ describe('replaceTask', () => {
     completeTask(orchestrator, 'A');
     failTask(orchestrator, 'X');
 
-    expect(orchestrator.getTask('C')!.status).toBe('blocked');
-    expect(orchestrator.getTask('D')!.status).toBe('blocked');
+    expect(orchestrator.getTask('C')!.status).toBe('pending');
+    expect(orchestrator.getTask('D')!.status).toBe('pending');
 
     orchestrator.replaceTask('X', [
       { id: 'fix', description: 'Fix', command: 'echo fix' },

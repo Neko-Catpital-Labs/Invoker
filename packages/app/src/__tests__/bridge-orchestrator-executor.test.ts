@@ -313,7 +313,7 @@ describe('Flow 2: restart task', () => {
     h.failTask('A', 'initial failure');
 
     expect(h.getTask('A')!.status).toBe('failed');
-    expect(h.getTask('B')!.status).toBe('blocked');
+    expect(h.getTask('B')!.status).toBe('pending');
 
     // Restart A
     h.orchestrator.restartTask('A');
@@ -386,7 +386,7 @@ describe('Flow 4: edit/fork mutations', () => {
     h = createTestHarness();
   });
 
-  it('editTaskCommand forks dirty subtree', () => {
+  it('editTaskCommand restarts task in-place without forking downstream', () => {
     h.loadAndStart(LINEAR_PLAN);
     h.completeTask('A');
     expect(h.getTask('B')!.status).toBe('running');
@@ -395,7 +395,7 @@ describe('Flow 4: edit/fork mutations', () => {
     h.completeTask('B');
     h.completeTask('C');
 
-    // Edit A's command — should fork B and C
+    // Edit A's command — restarts A in-place, no fork
     h.orchestrator.editTaskCommand('A', 'echo new-a');
 
     // A should be restarted
@@ -403,16 +403,13 @@ describe('Flow 4: edit/fork mutations', () => {
     expect(a.status === 'pending' || a.status === 'running').toBe(true);
     expect(a.config.command).toBe('echo new-a');
 
-    // B should be stale, B-v2 should exist
-    expect(h.getTask('B')!.status).toBe('stale');
-    const bv2 = h.getAllTasks().find(t => t.id === 'B-v2');
-    expect(bv2).toBeDefined();
-    expect(bv2!.status).toBe('pending');
+    // B and C stay completed (no fork, no stale)
+    expect(h.getTask('B')!.status).toBe('completed');
+    expect(h.getTask('C')!.status).toBe('completed');
 
-    // C should be stale, C-v2 should exist
-    expect(h.getTask('C')!.status).toBe('stale');
-    const cv2 = h.getAllTasks().find(t => t.id === 'C-v2');
-    expect(cv2).toBeDefined();
+    // No v2 nodes exist
+    expect(h.getAllTasks().find(t => t.id === 'B-v2')).toBeUndefined();
+    expect(h.getAllTasks().find(t => t.id === 'C-v2')).toBeUndefined();
   });
 
   it('editTaskType does NOT fork subtree', () => {
@@ -439,7 +436,7 @@ describe('Flow 4: edit/fork mutations', () => {
     h.failTask('A', 'broken');
 
     expect(h.getTask('A')!.status).toBe('failed');
-    expect(h.getTask('B')!.status).toBe('blocked');
+    expect(h.getTask('B')!.status).toBe('pending');
 
     // Replace A with two sub-tasks
     const replacements = h.orchestrator.replaceTask('A', [
@@ -502,8 +499,8 @@ describe('Flow 5: dagMutation via spawn_experiments', () => {
       expect(['pending', 'running']).toContain(t.status);
     }
 
-    // B should be stale (forked due to graph mutation)
-    expect(h.getTask('B')!.status).toBe('stale');
+    // B stays pending (dependencies remapped in-place, no fork)
+    expect(h.getTask('B')!.status).toBe('pending');
 
     // A reconciliation task should exist
     const reconTask = allTasks.find(t => t.id.includes('reconciliation'));
@@ -1146,10 +1143,9 @@ describe('Flow 10: multi-experiment selection', () => {
     expect(reconAfter.execution.selectedExperiments).toEqual(selectedIds);
     expect(reconAfter.execution.branch).toBe('reconciliation/combined');
 
-    // Downstream should have been unblocked
-    const downstreamV2 = h.getAllTasks().find(t => t.id.startsWith('B-v'));
-    expect(downstreamV2).toBeDefined();
-    expect(downstreamV2!.status).toBe('running');
+    // Downstream B (original, remapped in-place) should be running
+    const b = h.getTask('B')!;
+    expect(b.status).toBe('running');
   });
 
   it('multi-select branch propagation: downstream sees combined reconciliation branch', () => {
@@ -1192,11 +1188,9 @@ describe('Flow 10: multi-experiment selection', () => {
       'combined-hash',
     );
 
-    // Downstream task's upstream branches should include the combined branch
-    const downstreamV2 = h.getAllTasks().find(t => t.id.startsWith('B-v'));
-    expect(downstreamV2).toBeDefined();
-
-    const branches = h.executor.collectUpstreamBranches(downstreamV2!);
+    // Downstream B (original, remapped in-place) should see the combined branch
+    const b = h.getTask('B')!;
+    const branches = h.executor.collectUpstreamBranches(b);
     expect(branches).toContain('reconciliation/combined-branch');
   });
 });

@@ -1,16 +1,20 @@
 /**
  * Extracted graph-mutation primitives.
  *
- * These functions implement structural graph mutations (fork, reconcile,
- * apply) as standalone functions that operate on a `GraphMutationHost`.
+ * These functions implement structural graph mutations (reconcile, apply)
+ * as standalone functions that operate on a `GraphMutationHost`.
  * The Orchestrator delegates to them, keeping the methods on the class
  * for API compatibility.
+ *
+ * Forking (forkDirtySubtreeImpl) and versioning (nextVersion) have been
+ * removed. Downstream staleness is now derived from attempt lineage via
+ * the validity functions in @invoker/graph.
  */
 
 import type { TaskState, TaskDelta, TaskStateChanges } from './task-types.js';
 import type { GraphMutation, OrchestratorPersistence, OrchestratorMessageBus } from './orchestrator.js';
 import { createTaskState } from './task-types.js';
-import { getTransitiveDependents, nextVersion, findLeafTaskIds } from './dag.js';
+import { findLeafTaskIds } from './dag.js';
 
 const TASK_DELTA_CHANNEL = 'task.delta';
 
@@ -34,84 +38,6 @@ export interface GraphMutationHost {
 }
 
 // ── Extracted Functions ─────────────────────────────────────
-
-/**
- * Fork the subtree downstream of a dirty task.
- *
- * @param depOverrides Optional map of dependency ID replacements applied
- *   before the clone ID map. Use this to point forked clones at a
- *   replacement node instead of the original dirty task.
- */
-export function forkDirtySubtreeImpl(
-  host: GraphMutationHost,
-  dirtyTaskId: string,
-  depOverrides?: Map<string, string>,
-): TaskDelta[] {
-  const allTasks = host.stateMachine.getAllTasks();
-  const taskMap = new Map(allTasks.map((t) => [t.id, t]));
-
-  // Skip merge nodes: they are terminal and should not be forked
-  const descendantIds = getTransitiveDependents(
-    dirtyTaskId,
-    taskMap,
-    (t) => !!t.config.isMergeNode,
-  );
-  if (descendantIds.length === 0) {
-    // No non-merge descendants; reconcile merge leaves from graph state
-    const dirtyTask = taskMap.get(dirtyTaskId);
-    if (dirtyTask?.config.workflowId) {
-      reconcileMergeLeavesImpl(host, dirtyTask.config.workflowId);
-    }
-    return [];
-  }
-
-  const deltas: TaskDelta[] = [];
-
-  // Mark descendants as stale
-  for (const id of descendantIds) {
-    const t = host.stateMachine.getTask(id);
-    if (!t) continue;
-    const staleChanges: TaskStateChanges = { status: 'stale' };
-    host.writeAndSync(id, staleChanges);
-    const delta: TaskDelta = { type: 'updated', taskId: id, changes: staleChanges };
-    host.persistence.logEvent?.(id, 'task.stale', staleChanges);
-    host.messageBus.publish(TASK_DELTA_CHANNEL, delta);
-    deltas.push(delta);
-  }
-
-  // Build ID mapping: original → clone
-  const idMap = new Map<string, string>();
-  for (const id of descendantIds) {
-    idMap.set(id, nextVersion(id));
-  }
-
-  // Create cloned tasks with remapped dependencies
-  for (const originalId of descendantIds) {
-    const original = taskMap.get(originalId);
-    if (!original) continue;
-
-    const cloneId = idMap.get(originalId)!;
-    const remappedDeps = original.dependencies.map((dep) =>
-      depOverrides?.get(dep) ?? idMap.get(dep) ?? dep,
-    );
-
-    const cloneTask = createTaskState(cloneId, original.description, remappedDeps as string[], original.config);
-
-    host.createAndSync(cloneTask);
-    const delta: TaskDelta = { type: 'created', task: cloneTask };
-    host.persistence.logEvent?.(cloneId, 'task.created');
-    host.messageBus.publish(TASK_DELTA_CHANNEL, delta);
-    deltas.push(delta);
-  }
-
-  // Reconcile merge node deps from actual graph state
-  const dirtyTask = taskMap.get(dirtyTaskId);
-  if (dirtyTask?.config.workflowId) {
-    reconcileMergeLeavesImpl(host, dirtyTask.config.workflowId);
-  }
-
-  return deltas;
-}
 
 /**
  * Recompute the merge node's dependencies from the actual graph state.
@@ -143,7 +69,7 @@ export function reconcileMergeLeavesImpl(host: GraphMutationHost, workflowId: st
   const changes: TaskStateChanges = {
     dependencies: leafIds,
     status: 'pending',
-    execution: { blockedBy: undefined },
+    execution: {},
   };
   host.writeAndSync(mergeNode.id, changes);
   host.messageBus.publish(TASK_DELTA_CHANNEL, {
@@ -157,21 +83,29 @@ export function reconcileMergeLeavesImpl(host: GraphMutationHost, workflowId: st
  * Shared primitive for structural graph mutations (experiments, replacement).
  *
  * Order matters:
- *   1. Fork downstream FIRST (before creating new nodes, so new nodes
- *      aren't included in the descendant set)
+ *   1. Remap downstream dependencies in-place (sourceNode → outputNode)
  *   2. Apply source disposition (complete or stale)
  *   3. Create all new nodes
  */
 export function applyGraphMutationImpl(host: GraphMutationHost, mutation: GraphMutation): TaskDelta[] {
   const allDeltas: TaskDelta[] = [];
 
-  // 1. Fork downstream with dep override: sourceNode → outputNode
-  const forkDeltas = forkDirtySubtreeImpl(
-    host,
-    mutation.sourceNodeId,
-    new Map([[mutation.sourceNodeId, mutation.outputNodeId]]),
-  );
-  allDeltas.push(...forkDeltas);
+  // 1. Remap downstream dependencies: sourceNode → outputNode
+  const allTasks = host.stateMachine.getAllTasks();
+  for (const task of allTasks) {
+    if (task.config.isMergeNode) continue;
+    if (!task.dependencies.includes(mutation.sourceNodeId)) continue;
+    // Skip new nodes being created in this same mutation
+    if (mutation.newNodes.some(n => n.id === task.id)) continue;
+    const newDeps = task.dependencies.map((dep) =>
+      dep === mutation.sourceNodeId ? mutation.outputNodeId : dep,
+    );
+    const remapChanges: TaskStateChanges = { dependencies: newDeps };
+    host.writeAndSync(task.id, remapChanges);
+    const delta: TaskDelta = { type: 'updated', taskId: task.id, changes: remapChanges };
+    host.messageBus.publish(TASK_DELTA_CHANNEL, delta);
+    allDeltas.push(delta);
+  }
 
   // 2. Apply source disposition
   const baseChanges: TaskStateChanges = mutation.sourceDisposition === 'complete'

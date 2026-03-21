@@ -6,7 +6,6 @@ import {
   validateDAG,
   computeLevels,
   getReadyTasks,
-  nextVersion,
   findLeafTaskIds,
 } from '../dag.js';
 
@@ -225,26 +224,6 @@ describe('getReadyTasks', () => {
 
   it('returns empty array for empty input', () => {
     expect(getReadyTasks([])).toEqual([]);
-  });
-});
-
-// ── nextVersion ──────────────────────────────────────────────
-
-describe('nextVersion', () => {
-  it('appends -v2 to a plain ID', () => {
-    expect(nextVersion('test-feature')).toBe('test-feature-v2');
-  });
-
-  it('increments v2 to v3', () => {
-    expect(nextVersion('test-feature-v2')).toBe('test-feature-v3');
-  });
-
-  it('increments v10 to v11', () => {
-    expect(nextVersion('test-feature-v10')).toBe('test-feature-v11');
-  });
-
-  it('handles IDs with dashes', () => {
-    expect(nextVersion('task-with-dashes')).toBe('task-with-dashes-v2');
   });
 });
 

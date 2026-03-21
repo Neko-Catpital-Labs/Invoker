@@ -35,8 +35,6 @@ describe('TaskStateMachine', () => {
       expect(typeof sm.getReadyTasks).toBe('function');
       expect(typeof sm.getTaskCount).toBe('function');
       expect(typeof sm.findNewlyReadyTasks).toBe('function');
-      expect(typeof sm.computeTasksToBlock).toBe('function');
-      expect(typeof sm.computeTasksToUnblock).toBe('function');
       expect(typeof sm.restoreTask).toBe('function');
       expect(typeof sm.clear).toBe('function');
     });
@@ -150,72 +148,6 @@ describe('TaskStateMachine', () => {
       sm.restoreTask(makeTask('b', ['a'], 'running'));
 
       expect(sm.findNewlyReadyTasks('a')).toEqual([]);
-    });
-  });
-
-  // ── computeTasksToBlock ────────────────────────────────
-
-  describe('computeTasksToBlock', () => {
-    it('returns direct dependents of failed task', () => {
-      sm.restoreTask(makeTask('failed', [], 'failed'));
-      sm.restoreTask(makeTask('child', ['failed'], 'pending'));
-
-      const blocked = sm.computeTasksToBlock('failed');
-      expect(blocked).toEqual(['child']);
-    });
-
-    it('returns transitive dependents via BFS', () => {
-      sm.restoreTask(makeTask('root', [], 'failed'));
-      sm.restoreTask(makeTask('mid', ['root'], 'pending'));
-      sm.restoreTask(makeTask('leaf', ['mid'], 'pending'));
-
-      const blocked = sm.computeTasksToBlock('root');
-      expect(blocked).toContain('mid');
-      expect(blocked).toContain('leaf');
-      expect(blocked).toHaveLength(2);
-    });
-
-    it('skips running and completed tasks', () => {
-      sm.restoreTask(makeTask('failed', [], 'failed'));
-      sm.restoreTask(makeTask('running', ['failed'], 'running'));
-      sm.restoreTask(makeTask('done', ['failed'], 'completed'));
-      sm.restoreTask(makeTask('pending', ['failed'], 'pending'));
-
-      const blocked = sm.computeTasksToBlock('failed');
-      expect(blocked).toEqual(['pending']);
-    });
-
-    it('returns empty when no dependents', () => {
-      sm.restoreTask(makeTask('isolated', [], 'failed'));
-      expect(sm.computeTasksToBlock('isolated')).toEqual([]);
-    });
-  });
-
-  // ── computeTasksToUnblock ──────────────────────────────
-
-  describe('computeTasksToUnblock', () => {
-    it('returns tasks blocked by the given task', () => {
-      sm.restoreTask(makeTask('t1', [], 'pending'));
-      sm.restoreTask(makeTask('t2', ['t1'], 'blocked', { execution: { blockedBy: 't1' } }));
-      sm.restoreTask(makeTask('t3', ['t1'], 'blocked', { execution: { blockedBy: 't1' } }));
-
-      const unblocked = sm.computeTasksToUnblock('t1');
-      expect(unblocked.sort()).toEqual(['t2', 't3']);
-    });
-
-    it('does not return tasks blocked by a different task', () => {
-      sm.restoreTask(makeTask('a', [], 'failed'));
-      sm.restoreTask(makeTask('b', [], 'failed'));
-      sm.restoreTask(makeTask('c', ['a'], 'blocked', { execution: { blockedBy: 'a' } }));
-      sm.restoreTask(makeTask('d', ['b'], 'blocked', { execution: { blockedBy: 'b' } }));
-
-      expect(sm.computeTasksToUnblock('a')).toEqual(['c']);
-      expect(sm.computeTasksToUnblock('b')).toEqual(['d']);
-    });
-
-    it('returns empty when nothing is blocked', () => {
-      sm.restoreTask(makeTask('t1', [], 'completed'));
-      expect(sm.computeTasksToUnblock('t1')).toEqual([]);
     });
   });
 

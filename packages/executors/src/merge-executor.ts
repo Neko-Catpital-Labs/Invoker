@@ -87,18 +87,11 @@ export async function executeMergeNodeImpl(
     },
   });
 
-  if (onFinish !== 'none' && featureBranch) {
+  if (featureBranch && (onFinish !== 'none' || mergeMode === 'github')) {
     const effectiveOnFinish = mergeMode === 'automatic' ? onFinish : 'none';
     try {
       prUrl = await host.consolidateAndMerge(effectiveOnFinish, baseBranch, featureBranch, workflowId, workflow?.name, task.dependencies, summary);
       if (mergeMode === 'manual') {
-        host.persistence.updateTask(task.id, {
-          config: { familiarType: 'local', summary },
-          execution: {
-            branch: featureBranch ?? undefined,
-            workspacePath: host.cwd,
-          },
-        });
         const manualResponse: WorkResponse = {
           requestId: `merge-${task.id}`,
           actionId: task.id,
@@ -106,7 +99,10 @@ export async function executeMergeNodeImpl(
           outputs: { exitCode: 0 },
         };
         host.callbacks.onComplete?.(task.id, manualResponse);
-        host.orchestrator.setTaskAwaitingApproval(task.id);
+        host.orchestrator.setTaskAwaitingApproval(task.id, {
+          config: { familiarType: 'local', summary },
+          execution: { branch: featureBranch ?? undefined, workspacePath: host.cwd },
+        });
         return;
       }
       if (mergeMode === 'github') {
@@ -124,8 +120,14 @@ export async function executeMergeNodeImpl(
         });
         console.log(`[merge] Created GitHub PR: ${result.url}`);
 
-        // Persist PR metadata
-        host.persistence.updateTask(task.id, {
+        const prResponse: WorkResponse = {
+          requestId: `merge-${task.id}`,
+          actionId: task.id,
+          status: 'completed',
+          outputs: { exitCode: 0 },
+        };
+        host.callbacks.onComplete?.(task.id, prResponse);
+        host.orchestrator.setTaskAwaitingApproval(task.id, {
           config: { familiarType: 'local', summary },
           execution: {
             branch: featureBranch,
@@ -135,15 +137,6 @@ export async function executeMergeNodeImpl(
             prStatus: 'Awaiting review',
           },
         });
-
-        const prResponse: WorkResponse = {
-          requestId: `merge-${task.id}`,
-          actionId: task.id,
-          status: 'completed',
-          outputs: { exitCode: 0 },
-        };
-        host.callbacks.onComplete?.(task.id, prResponse);
-        host.orchestrator.setTaskAwaitingApproval(task.id);
         host.startPrPolling(task.id, result.identifier, workflowId!);
         return;
       }
@@ -166,13 +159,6 @@ export async function executeMergeNodeImpl(
     }
   } else {
     if (mergeMode === 'manual' || mergeMode === 'github') {
-      host.persistence.updateTask(task.id, {
-        config: { familiarType: 'local', summary },
-        execution: {
-          branch: featureBranch ?? undefined,
-          workspacePath: host.cwd,
-        },
-      });
       const gateResponse: WorkResponse = {
         requestId: `merge-${task.id}`,
         actionId: task.id,
@@ -180,7 +166,10 @@ export async function executeMergeNodeImpl(
         outputs: { exitCode: 0 },
       };
       host.callbacks.onComplete?.(task.id, gateResponse);
-      host.orchestrator.setTaskAwaitingApproval(task.id);
+      host.orchestrator.setTaskAwaitingApproval(task.id, {
+        config: { familiarType: 'local', summary },
+        execution: { branch: featureBranch ?? undefined, workspacePath: host.cwd },
+      });
       return;
     }
     response = {
@@ -201,7 +190,14 @@ export async function executeMergeNodeImpl(
   });
   host.callbacks.onComplete?.(task.id, response);
   if (mergeMode === 'manual' && response.status === 'completed') {
-    host.orchestrator.setTaskAwaitingApproval(task.id);
+    host.orchestrator.setTaskAwaitingApproval(task.id, {
+      config: { familiarType: 'local', summary },
+      execution: {
+        branch: featureBranch ?? undefined,
+        workspacePath: host.cwd,
+        ...(prUrl ? { prUrl } : {}),
+      },
+    });
   } else {
     const newlyStarted = host.orchestrator.handleWorkerResponse(response) ?? [];
     if (newlyStarted.length > 0) {
@@ -362,6 +358,7 @@ export async function consolidateAndMergeImpl(
   body?: string,
 ): Promise<string | undefined> {
   const originalBranch = await host.execGit(['branch', '--show-current']);
+  console.log(`[merge] consolidateAndMerge: featureBranch=${featureBranch}, baseBranch=${baseBranch}, originalBranch=${originalBranch}`);
 
   try {
     // Consolidate all completed task branches into featureBranch
@@ -370,6 +367,7 @@ export async function consolidateAndMergeImpl(
       console.log(`[merge] Created ${featureBranch} from ${baseBranch}`);
     } catch {
       // Branch exists from a previous attempt — delete and recreate for a clean slate
+      console.log(`[merge] WARNING: Deleting existing ${featureBranch} to recreate from ${baseBranch}`);
       await host.execGit(['checkout', baseBranch]);
       await host.execGit(['branch', '-D', featureBranch]);
       await host.execGit(['checkout', '-b', featureBranch, baseBranch]);

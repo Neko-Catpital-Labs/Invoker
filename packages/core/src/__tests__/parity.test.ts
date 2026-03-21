@@ -137,7 +137,7 @@ describe('Parity — Feature Coverage', () => {
       makeResponse({ actionId: 't-fail', status: 'failed', outputs: { exitCode: 1, error: 'boom' } }),
     );
     expect(orchestrator.getTask('t-fail')!.status).toBe('failed');
-    expect(orchestrator.getTask('t-blocked')!.status).toBe('blocked');
+    expect(orchestrator.getTask('t-blocked')!.status).toBe('pending');
 
     // needs_input
     orchestrator.handleWorkerResponse(
@@ -163,8 +163,8 @@ describe('Parity — Feature Coverage', () => {
       makeResponse({ actionId: 'A', status: 'failed', outputs: { exitCode: 1, error: 'fail' } }),
     );
 
-    expect(orchestrator.getTask('B')!.status).toBe('blocked');
-    expect(orchestrator.getTask('C')!.status).toBe('blocked');
+    expect(orchestrator.getTask('B')!.status).toBe('pending');
+    expect(orchestrator.getTask('C')!.status).toBe('pending');
   });
 
   // ── Test 3: Experiment spawning ───────────────────────────
@@ -232,11 +232,11 @@ describe('Parity — Feature Coverage', () => {
       }),
     );
 
-    // Original downstream is stale, forked downstream-v2 depends on reconciliation
-    expect(orchestrator.getTask('downstream')!.status).toBe('stale');
-    const downstreamV2 = orchestrator.getTask('downstream-v2')!;
-    expect(downstreamV2.dependencies).toContain('pivot-reconciliation');
-    expect(downstreamV2.dependencies).not.toContain('pivot');
+    // Downstream's dependencies are remapped in-place from ['pivot'] to ['pivot-reconciliation']
+    const downstream = orchestrator.getTask('downstream')!;
+    expect(downstream.status).not.toBe('stale');
+    expect(downstream.dependencies).toContain('pivot-reconciliation');
+    expect(downstream.dependencies).not.toContain('pivot');
   });
 
   // ── Test 5: Reconciliation triggers ───────────────────────
@@ -316,9 +316,8 @@ describe('Parity — Feature Coverage', () => {
     orchestrator.selectExperiment('pivot-reconciliation', 'pivot-exp-v1');
 
     expect(orchestrator.getTask('pivot-reconciliation')!.status).toBe('completed');
-    // Original downstream is stale, forked downstream-v2 is running
-    expect(orchestrator.getTask('downstream')!.status).toBe('stale');
-    expect(orchestrator.getTask('downstream-v2')!.status).toBe('running');
+    // Downstream (remapped in-place) is now running, not stale
+    expect(orchestrator.getTask('downstream')!.status).toBe('running');
   });
 
   // ── Test 7: Re-experimentation via ExperimentManager ──────

@@ -227,21 +227,6 @@ export function computeLevels(tasks: TaskState[]): Map<string, number> {
   return levels;
 }
 
-// ── nextVersion ──────────────────────────────────────────────
-
-/**
- * Compute the next version suffix for a task ID.
- * 'task-a' → 'task-a-v2', 'task-a-v2' → 'task-a-v3', etc.
- */
-export function nextVersion(taskId: string): string {
-  const match = taskId.match(/-v(\d+)$/);
-  if (match) {
-    const num = parseInt(match[1], 10);
-    return taskId.replace(/-v\d+$/, `-v${num + 1}`);
-  }
-  return `${taskId}-v2`;
-}
-
 // ── findLeafTaskIds ──────────────────────────────────────────
 
 /**

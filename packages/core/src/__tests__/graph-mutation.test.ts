@@ -120,11 +120,10 @@ describe('applyGraphMutation', () => {
     expect(orchestrator.getTask('B')!.status).toBe('completed');
     expect(orchestrator.getTask('B')!.execution.completedAt).toBeDefined();
 
-    expect(orchestrator.getTask('C')!.status).toBe('stale');
-    const cv2 = orchestrator.getTask('C-v2');
-    expect(cv2).toBeDefined();
-    expect(cv2!.dependencies).toEqual(['new-node']);
-    expect(cv2!.status).toBe('pending');
+    // C is remapped in-place: dependencies changed from ['B'] to ['new-node'], no stale, no clone
+    expect(orchestrator.getTask('C')!.status).toBe('pending');
+    expect(orchestrator.getTask('C')!.dependencies).toEqual(['new-node']);
+    expect(orchestrator.getTask('C-v2')).toBeUndefined();
 
     expect(orchestrator.getTask('new-node')).toBeDefined();
     expect(orchestrator.getTask('new-node')!.status).toBe('pending');
@@ -152,11 +151,11 @@ describe('applyGraphMutation', () => {
     });
 
     expect(orchestrator.getTask('B')!.status).toBe('stale');
-    expect(orchestrator.getTask('C')!.status).toBe('stale');
 
-    const cv2 = orchestrator.getTask('C-v2');
-    expect(cv2).toBeDefined();
-    expect(cv2!.dependencies).toEqual(['fix']);
+    // C is remapped in-place: dependencies changed from ['B'] to ['fix'], no stale, no clone
+    expect(orchestrator.getTask('C')!.status).toBe('pending');
+    expect(orchestrator.getTask('C')!.dependencies).toEqual(['fix']);
+    expect(orchestrator.getTask('C-v2')).toBeUndefined();
 
     expect(orchestrator.getTask('fix')).toBeDefined();
   });
@@ -188,9 +187,11 @@ describe('applyGraphMutation', () => {
     expect(orchestrator.getTask('exp2')!.status).toBe('pending');
     expect(orchestrator.getTask('recon')!.status).toBe('pending');
 
-    // Original downstream forked
-    expect(orchestrator.getTask('B')!.status).toBe('stale');
-    expect(orchestrator.getTask('B-v2')!.dependencies).toEqual(['recon']);
+    // Original downstream remapped in-place: dependencies changed from ['A'] to ['recon']
+    // B was already running (auto-started after A completed), remap doesn't change status
+    expect(orchestrator.getTask('B')!.status).toBe('running');
+    expect(orchestrator.getTask('B')!.dependencies).toEqual(['recon']);
+    expect(orchestrator.getTask('B-v2')).toBeUndefined();
   });
 
   it('no downstream: fork is a no-op', () => {
@@ -214,9 +215,11 @@ describe('applyGraphMutation', () => {
       outputNodeId: 'fix',
     });
 
-    // Merge node is skipped (not forked), only the new 'fix' node is created
-    const forkDeltas = deltas.filter((d) => d.type === 'created');
-    expect(forkDeltas).toHaveLength(1);
+    // No downstream to remap, only the new 'fix' node is created
+    const createdDeltas = deltas.filter((d) => d.type === 'created');
+    expect(createdDeltas).toHaveLength(1);
+    expect(createdDeltas[0]).toHaveProperty('task');
+    expect((createdDeltas[0] as any).task.id).toBe('fix');
 
     expect(orchestrator.getTask('B')!.status).toBe('stale');
     expect(orchestrator.getTask('fix')).toBeDefined();
@@ -249,12 +252,9 @@ describe('applyGraphMutation', () => {
       .filter((p) => p.channel === 'task.delta')
       .map((p) => p.message as TaskDelta);
 
-    // Fork deltas first: C stale, C-v2 created
-    const cStale = deltas.findIndex(
-      (d) => d.type === 'updated' && d.taskId === 'C' && (d.changes as any).status === 'stale',
-    );
-    const cv2Created = deltas.findIndex(
-      (d) => d.type === 'created' && (d as any).task.id === 'C-v2',
+    // Remap deltas first: C dependencies updated from ['B'] to ['fix']
+    const cRemap = deltas.findIndex(
+      (d) => d.type === 'updated' && d.taskId === 'C' && (d.changes as any).dependencies !== undefined,
     );
     // Source disposition
     const bStale = deltas.findIndex(
@@ -265,9 +265,9 @@ describe('applyGraphMutation', () => {
       (d) => d.type === 'created' && (d as any).task.id === 'fix',
     );
 
-    // Order: fork (C stale, C-v2) → source (B stale) → new node (fix)
-    expect(cStale).toBeLessThan(bStale);
-    expect(cv2Created).toBeLessThan(bStale);
+    // Order: remap (C dep change) → source (B stale) → new node (fix)
+    expect(cRemap).toBeGreaterThanOrEqual(0);
+    expect(cRemap).toBeLessThan(bStale);
     expect(bStale).toBeLessThan(fixCreated);
   });
 });

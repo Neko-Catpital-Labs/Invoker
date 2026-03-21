@@ -29,28 +29,30 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
     const existing = JSON.parse(listOutput) as { url: string; number: number }[];
 
     if (existing.length > 0) {
-      // Update title of existing PR and reuse it
-      await this.exec('gh', [
-        'pr', 'edit', String(existing[0].number),
-        '--title', title,
-      ], cwd);
+      // Update title (and body if provided) of existing PR via REST API.
+      // gh pr edit uses the deprecated projectCards GraphQL field which
+      // causes exit-code 1 on gh CLI v2.45.0+.
+      const apiArgs = [
+        'api', `repos/{owner}/{repo}/pulls/${existing[0].number}`,
+        '--method', 'PATCH', '-f', `title=${title}`,
+      ];
+      if (body) apiArgs.push('-f', `body=${body}`);
+      await this.exec('gh', apiArgs, cwd);
       return { url: existing[0].url, identifier: String(existing[0].number) };
     }
 
-    // No existing PR — create a new one
-    const stdout = await this.exec('gh', [
-      'pr', 'create',
-      '--base', baseBranch,
-      '--head', featureBranch,
-      '--title', title,
-      '--body', body ?? '',
-    ], cwd);
+    // No existing PR — create a new one via REST API.
+    // gh pr create may also trigger the deprecated projectCards query.
+    const createArgs = [
+      'api', 'repos/{owner}/{repo}/pulls',
+      '--method', 'POST', '-f', `base=${baseBranch}`,
+      '-f', `head=${featureBranch}`, '-f', `title=${title}`,
+      '-f', `body=${body ?? ''}`,
+    ];
+    const stdout = await this.exec('gh', createArgs, cwd);
+    const pr = JSON.parse(stdout) as { html_url: string; number: number };
 
-    // Extract PR URL from stdout (last line typically contains the URL)
-    const url = stdout.trim();
-    const prNumber = url.split('/').pop() ?? '';
-
-    return { url, identifier: prNumber };
+    return { url: pr.html_url, identifier: String(pr.number) };
   }
 
   async checkApproval(opts: {

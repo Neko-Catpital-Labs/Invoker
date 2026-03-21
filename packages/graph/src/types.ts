@@ -80,6 +80,7 @@ export interface TaskExecution {
     readonly conflictFiles: readonly string[];
   };
   readonly isFixingWithAI?: boolean;
+  readonly selectedAttemptId?: string;
 }
 
 // ── Task State ──────────────────────────────────────────────
@@ -169,5 +170,76 @@ export function createTaskState(
     createdAt: new Date(),
     config: { ...options },
     execution: {},
+  };
+}
+
+// ── Attempt Status ──────────────────────────────────────────
+
+export type AttemptStatus =
+  | 'pending'
+  | 'running'
+  | 'completed'
+  | 'failed'
+  | 'needs_input'
+  | 'superseded';
+
+// ── Attempt (immutable execution record) ────────────────────
+
+export interface Attempt {
+  readonly id: string;                      // e.g., "taskA-a3"
+  readonly nodeId: string;
+  readonly attemptNumber: number;           // 1-based, monotonically increasing per node
+
+  // ── Input snapshot ──
+  readonly snapshotCommit?: string;
+  readonly baseBranch?: string;
+  readonly upstreamAttemptIds: readonly string[];
+
+  // ── Overrides (per-attempt variation of node config) ──
+  readonly commandOverride?: string;
+  readonly promptOverride?: string;
+
+  // ── Execution state ──
+  readonly status: AttemptStatus;
+  readonly startedAt?: Date;
+  readonly completedAt?: Date;
+  readonly exitCode?: number;
+  readonly error?: string;
+  readonly lastHeartbeatAt?: Date;
+
+  // ── Output ──
+  readonly branch?: string;
+  readonly commit?: string;
+  readonly summary?: string;
+  readonly workspacePath?: string;
+  readonly claudeSessionId?: string;
+  readonly containerId?: string;
+
+  // ── Lineage ──
+  readonly supersedesAttemptId?: string;
+  readonly createdAt: Date;
+
+  // ── Merge conflict ──
+  readonly mergeConflict?: {
+    readonly failedBranch: string;
+    readonly conflictFiles: readonly string[];
+  };
+}
+
+// ── Helper to create a new Attempt ──────────────────────────
+
+export function createAttempt(
+  nodeId: string,
+  attemptNumber: number,
+  opts: Partial<Omit<Attempt, 'id' | 'nodeId' | 'attemptNumber' | 'createdAt'>> = {},
+): Attempt {
+  return {
+    id: `${nodeId}-a${attemptNumber}`,
+    nodeId,
+    attemptNumber,
+    status: 'pending',
+    upstreamAttemptIds: [],
+    createdAt: new Date(),
+    ...opts,
   };
 }
