@@ -14,6 +14,7 @@
  *   electron dist/main.js --headless input <taskId> <text>
  *   electron dist/main.js --headless select <taskId> <expId>
  *   electron dist/main.js --headless restart <taskId>
+ *   electron dist/main.js --headless fix <taskId>
  *   electron dist/main.js --headless edit <taskId> <newCommand>
  *   electron dist/main.js --headless audit <taskId>
  *

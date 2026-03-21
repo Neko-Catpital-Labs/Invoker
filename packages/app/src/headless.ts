@@ -123,6 +123,9 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
     case 'restart':
       await headlessRestart(args[1], deps);
       break;
+    case 'fix':
+      await headlessFix(args[1], deps);
+      break;
     case 'rebase-and-retry':
       await headlessRebaseAndRetry(args[1], deps);
       break;
@@ -169,6 +172,7 @@ ${BOLD}Usage:${RESET}
   electron dist/main.js --headless input <id> <text>  Provide input to task
   electron dist/main.js --headless select <id> <exp>  Select winning experiment
   electron dist/main.js --headless restart <id>       Restart a failed/stuck task
+  electron dist/main.js --headless fix <taskId>       Fix a failed task with Claude
   electron dist/main.js --headless edit <id> <cmd>    Edit task command and re-run
   electron dist/main.js --headless audit <taskId>     Print event history
   electron dist/main.js --headless slack              Start Slack bot (long-running)
@@ -347,6 +351,23 @@ async function headlessRestart(taskId: string, deps: HeadlessDeps): Promise<void
   const taskExecutor = createHeadlessExecutor(deps);
   await taskExecutor.executeTasks(runnable);
   await waitForCompletion(deps.orchestrator);
+}
+
+async function headlessFix(taskId: string, deps: HeadlessDeps): Promise<void> {
+  if (!taskId) throw new Error('Missing taskId. Usage: --headless fix <taskId>');
+  restoreWorkflowForTask(taskId, deps);
+
+  const te = createHeadlessExecutor(deps);
+  const { savedError } = deps.orchestrator.beginConflictResolution(taskId);
+  try {
+    const output = deps.persistence.getTaskOutput(taskId);
+    await te.fixWithClaude(taskId, output);
+    deps.orchestrator.setFixAwaitingApproval(taskId, savedError);
+    console.log(`Fix applied for task: ${taskId}. Use 'approve ${taskId}' or 'reject ${taskId}' to finalize.`);
+  } catch (err) {
+    deps.orchestrator.revertConflictResolution(taskId, savedError);
+    throw err;
+  }
 }
 
 async function headlessRebaseAndRetry(taskId: string, deps: HeadlessDeps): Promise<void> {

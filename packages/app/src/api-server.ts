@@ -193,7 +193,12 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
               reason = parsed.reason;
             } catch { /* not JSON, ignore */ }
           }
-          orchestrator.reject(taskId, reason);
+          const task = orchestrator.getTask(taskId);
+          if (task?.execution.pendingFixError !== undefined) {
+            orchestrator.revertConflictResolution(taskId, task.execution.pendingFixError);
+          } else {
+            orchestrator.reject(taskId, reason);
+          }
           json(res, 200, { ok: true, taskId, action: 'rejected', reason });
         } catch (err) {
           json(res, 400, { error: err instanceof Error ? err.message : String(err) });
