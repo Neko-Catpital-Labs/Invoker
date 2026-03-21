@@ -193,7 +193,14 @@ export interface TaskReplacementDef {
 
 // ── IPC Bridge API ──────────────────────────────────────────
 
+export interface ClaudeMessage {
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: string;
+}
+
 export interface InvokerAPI {
+  getClaudeSession: (sessionId: string) => Promise<ClaudeMessage[] | null>;
   loadPlan: (plan: PlanDefinition) => Promise<void>;
   start: () => Promise<TaskState[]>;
   stop: () => Promise<void>;

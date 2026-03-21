@@ -24,7 +24,7 @@
 
 import { app, BrowserWindow, ipcMain, nativeImage, shell } from 'electron';
 import * as path from 'node:path';
-import { mkdirSync, appendFileSync } from 'node:fs';
+import { mkdirSync, appendFileSync, readdirSync, readFileSync, existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 
 // Prevent desktop-wide freezes on Linux (Chromium GPU + X11/Wayland compositors).
@@ -664,6 +664,70 @@ function setupGuiMode(): void {
 
     ipcMain.handle('invoker:get-all-completed-tasks', () => {
       return persistence.loadAllCompletedTasks();
+    });
+
+    ipcMain.handle('invoker:get-claude-session', (_event, sessionId: string) => {
+      console.log(`[ipc] get-claude-session: "${sessionId}"`);
+      try {
+        const claudeProjectsDir = path.join(homedir(), '.claude', 'projects');
+        if (!existsSync(claudeProjectsDir)) return null;
+
+        const projectDirs = readdirSync(claudeProjectsDir, { withFileTypes: true })
+          .filter(d => d.isDirectory())
+          .map(d => d.name);
+
+        let jsonlPath: string | null = null;
+        for (const dir of projectDirs) {
+          const candidate = path.join(claudeProjectsDir, dir, `${sessionId}.jsonl`);
+          if (existsSync(candidate)) {
+            jsonlPath = candidate;
+            break;
+          }
+        }
+        if (!jsonlPath) return null;
+
+        const raw = readFileSync(jsonlPath, 'utf-8');
+        const messages: Array<{ role: 'user' | 'assistant'; content: string; timestamp: string }> = [];
+
+        for (const line of raw.split('\n')) {
+          if (!line.trim()) continue;
+          try {
+            const entry = JSON.parse(line);
+            if (entry.type === 'user' && entry.message?.content) {
+              const content = typeof entry.message.content === 'string'
+                ? entry.message.content
+                : JSON.stringify(entry.message.content);
+              messages.push({
+                role: 'user',
+                content,
+                timestamp: entry.timestamp ?? '',
+              });
+            } else if (entry.type === 'assistant' && entry.message?.content) {
+              const blocks = Array.isArray(entry.message.content)
+                ? entry.message.content
+                : [entry.message.content];
+              const text = blocks
+                .filter((b: any) => typeof b === 'string' || b?.type === 'text')
+                .map((b: any) => typeof b === 'string' ? b : b.text ?? '')
+                .join('\n');
+              if (text) {
+                messages.push({
+                  role: 'assistant',
+                  content: text,
+                  timestamp: entry.timestamp ?? '',
+                });
+              }
+            }
+          } catch {
+            // Skip malformed lines
+          }
+        }
+
+        return messages;
+      } catch (err) {
+        console.error(`[ipc] get-claude-session failed:`, err);
+        return null;
+      }
     });
 
     ipcMain.handle('invoker:provide-input', (_event, taskId: string, input: string) => {

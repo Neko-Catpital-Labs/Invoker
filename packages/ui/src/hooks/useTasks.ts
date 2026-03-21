@@ -51,10 +51,19 @@ export function useTasks(): UseTasksResult {
     fetchAll();
 
     const unsub = window.invoker.onTaskDelta((delta) => {
+      if ('changes' in delta && (delta as any).changes?.execution) {
+        console.log(`[useTasks] delta for ${(delta as any).taskId}:`, JSON.stringify((delta as any).changes.execution));
+      }
       setTasks((prev) => {
         const next = applyDelta(prev, delta);
         if (next.size === 0 && prev.size > 0) {
           console.warn('[useTasks] Tasks map went from', prev.size, 'to 0 after delta:', delta);
+        }
+        if ('taskId' in delta) {
+          const merged = next.get((delta as any).taskId);
+          if (merged) {
+            console.log(`[useTasks] after merge: claudeSessionId=${merged.execution.claudeSessionId}`);
+          }
         }
         return next;
       });

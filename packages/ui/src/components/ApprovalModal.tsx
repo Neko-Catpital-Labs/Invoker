@@ -5,8 +5,8 @@
  * Reject optionally collects a reason.
  */
 
-import { useState } from 'react';
-import type { TaskState } from '../types.js';
+import { useState, useEffect } from 'react';
+import type { TaskState, ClaudeMessage } from '../types.js';
 
 interface ApprovalModalProps {
   task: TaskState;
@@ -21,8 +21,34 @@ export function ApprovalModal({
   onReject,
   onClose,
 }: ApprovalModalProps) {
-  const [reason, setReason] = useState('');
-  const [showRejectInput, setShowRejectInput] = useState(false);
+  const isFixApproval = Boolean(task.execution.pendingFixError);
+  console.log(`[ApprovalModal] render: taskId=${task.id} isFixApproval=${isFixApproval} claudeSessionId=${task.execution.claudeSessionId}`);
+
+  const defaultReason = [
+    task.execution.claudeSessionId && `Claude session: ${task.execution.claudeSessionId}`,
+    isFixApproval && `Original error: ${task.execution.pendingFixError}`,
+  ].filter(Boolean).join('\n');
+
+  const [reason, setReason] = useState(defaultReason);
+  const [showRejectInput, setShowRejectInput] = useState(isFixApproval);
+  const [sessionMessages, setSessionMessages] = useState<ClaudeMessage[] | null>(null);
+  const [sessionLoading, setSessionLoading] = useState(false);
+  const [sessionError, setSessionError] = useState(false);
+
+  useEffect(() => {
+    if (!task.execution.claudeSessionId) return;
+    setSessionLoading(true);
+    window.invoker
+      .getClaudeSession(task.execution.claudeSessionId)
+      .then((msgs) => {
+        setSessionMessages(msgs);
+        setSessionLoading(false);
+      })
+      .catch(() => {
+        setSessionError(true);
+        setSessionLoading(false);
+      });
+  }, [task.execution.claudeSessionId]);
 
   const handleApprove = () => {
     onApprove(task.id);
@@ -40,9 +66,9 @@ export function ApprovalModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-      <div className="bg-gray-800 rounded-lg shadow-xl w-full max-w-md p-6 border border-gray-700">
+      <div className="bg-gray-800 rounded-lg shadow-xl w-full max-w-2xl p-6 border border-gray-700">
         <h2 className="text-lg font-semibold text-gray-100 mb-2">
-          Manual Approval Required
+          {isFixApproval ? 'Confirm Approve' : 'Manual Approval Required'}
         </h2>
 
         <div className="mb-4">
@@ -51,6 +77,37 @@ export function ApprovalModal({
           </p>
           <p className="text-sm text-gray-400">{task.description}</p>
         </div>
+
+        {task.execution.claudeSessionId && (
+          <div className="mb-4 bg-gray-700/50 rounded p-3" data-testid="claude-session-context">
+            <h3 className="text-sm font-medium text-gray-300 mb-2">Claude Session</h3>
+            <p className="text-xs text-gray-500 mb-2 font-mono">{task.execution.claudeSessionId}</p>
+            {sessionLoading && <p className="text-xs text-gray-500" data-testid="session-loading">Loading conversation...</p>}
+            {sessionMessages && (
+              <div className="max-h-[40vh] overflow-y-auto space-y-2" data-testid="session-messages">
+                {sessionMessages.map((msg, i) => (
+                  <div key={i} className="text-xs">
+                    <span className={msg.role === 'user' ? 'text-blue-400' : 'text-green-400'}>
+                      {msg.role === 'user' ? 'Human' : 'Claude'}:
+                    </span>
+                    <pre className="text-gray-300 whitespace-pre-wrap mt-0.5">{msg.content}</pre>
+                  </div>
+                ))}
+              </div>
+            )}
+            {sessionError && <p className="text-xs text-red-400" data-testid="session-error">Could not load session</p>}
+          </div>
+        )}
+
+        {isFixApproval && (
+          <div className="mb-4 bg-gray-700/50 rounded p-3" data-testid="fix-context">
+            <h3 className="text-sm font-medium text-gray-300 mb-1">Fix Context</h3>
+            <p className="text-xs text-gray-400 whitespace-pre-wrap">
+              <span className="text-gray-500">Error: </span>
+              {task.execution.pendingFixError}
+            </p>
+          </div>
+        )}
 
         {task.config.summary && (
           <div className="mb-4 bg-gray-700/50 rounded p-3">

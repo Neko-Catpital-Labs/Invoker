@@ -9,6 +9,7 @@ import { contextBridge, ipcRenderer } from 'electron';
 import type { InvokerAPI } from './types.js';
 
 const api: InvokerAPI = {
+  getClaudeSession: (sessionId) => ipcRenderer.invoke('invoker:get-claude-session', sessionId),
   loadPlan: (plan) => ipcRenderer.invoke('invoker:load-plan', plan),
   start: () => ipcRenderer.invoke('invoker:start'),
   stop: () => ipcRenderer.invoke('invoker:stop'),

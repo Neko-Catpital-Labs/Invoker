@@ -60,9 +60,18 @@ export interface ActivityLogEntry {
   message: string;
 }
 
+// ── Claude Session Messages ─────────────────────────────────
+
+export interface ClaudeMessage {
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: string;
+}
+
 // ── IPC Bridge API ───────────────────────────────────────────
 
 export interface InvokerAPI {
+  getClaudeSession: (sessionId: string) => Promise<ClaudeMessage[] | null>;
   loadPlan: (plan: PlanDefinition) => Promise<void>;
   start: () => Promise<TaskState[]>;
   stop: () => Promise<void>;
