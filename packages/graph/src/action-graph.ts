@@ -29,7 +29,7 @@ export class ActionGraph {
    */
   getReadyNodes(): TaskState[] {
     return Array.from(this.nodes.values()).filter((node) => {
-      if (node.status !== 'pending') return false;
+      if (node.status !== 'pending' && node.status !== 'blocked') return false;
       return node.dependencies.every((depId) => {
         const dep = this.nodes.get(depId);
         return dep?.status === 'completed' || dep?.status === 'stale';

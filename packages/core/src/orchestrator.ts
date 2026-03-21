@@ -531,8 +531,26 @@ export class Orchestrator {
     this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
     mergeTrace('APPROVE_DONE', { taskId });
 
+    const workflowId = task.config.workflowId;
+    if (workflowId) {
+      const mergeNode = this.getMergeNode(workflowId);
+      mergeTrace('APPROVE_MERGE_NODE_STATE', {
+        taskId,
+        workflowId,
+        mergeNodeId: mergeNode?.id,
+        mergeNodeStatus: mergeNode?.status,
+        mergeNodeDeps: mergeNode?.dependencies,
+        mergeNodeDepsStatuses: mergeNode?.dependencies.map(depId => {
+          const dep = this.stateMachine.getTask(depId);
+          return { id: depId, status: dep?.status ?? 'NOT_FOUND' };
+        }),
+      });
+    }
+
     const readyTaskIds = this.stateMachine.findNewlyReadyTasks(taskId);
+    mergeTrace('APPROVE_READY_TASKS', { taskId, readyTaskIds });
     const started = this.autoStartReadyTasks(readyTaskIds);
+    mergeTrace('APPROVE_STARTED', { taskId, startedIds: started.map(t => t.id), startedStatuses: started.map(t => t.status) });
     this.checkWorkflowCompletion();
     return started;
   }
@@ -1349,7 +1367,15 @@ export class Orchestrator {
   private autoStartReadyTasks(taskIds: string[]): TaskState[] {
     for (const taskId of taskIds) {
       const task = this.stateMachine.getTask(taskId);
-      const utilization = task ? this.estimator.estimateUtilization(task) : 50;
+      if (!task) continue;
+
+      // Unblock: if a blocked task's deps are all complete, it's genuinely ready
+      if (task.status === 'blocked') {
+        console.log(`[orchestrator] autoStartReadyTasks: unblocking "${taskId}" (was blocked, deps now satisfied)`);
+        this.writeAndSync(taskId, { status: 'pending' });
+      }
+
+      const utilization = this.estimator.estimateUtilization(task);
       this.scheduler.enqueue({ taskId, priority: 0, utilization });
     }
 
@@ -1370,7 +1396,9 @@ export class Orchestrator {
     let job = this.scheduler.dequeue();
     while (job) {
       const task = this.stateMachine.getTask(job.taskId);
+      console.log(`[orchestrator] drainScheduler: dequeued "${job.taskId}" actual status=${task?.status ?? 'NOT_FOUND'}`);
       if (!task || task.status !== 'pending') {
+        console.log(`[orchestrator] drainScheduler: SKIPPING "${job.taskId}" — not pending`);
         this.scheduler.completeJob(job.taskId);
         job = this.scheduler.dequeue();
         continue;

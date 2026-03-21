@@ -3466,4 +3466,66 @@ describe('Orchestrator', () => {
       expect(task.execution.error).toBe('test failed: expected 1 to be 2');
     });
   });
+
+  describe('blocked task unblocking', () => {
+    it('unblocks a blocked task when all deps complete', () => {
+      orchestrator.loadPlan({
+        name: 'unblock-test',
+        tasks: [
+          { id: 'dep', description: 'dependency' },
+          { id: 'gate', description: 'gate task', dependencies: ['dep'] },
+        ],
+      });
+      orchestrator.startExecution();
+
+      // Manually set gate to blocked (simulating legacy DB state)
+      persistence.updateTask('gate', { status: 'blocked' });
+      orchestrator.syncAllFromDb();
+      expect(orchestrator.getTask('gate')!.status).toBe('blocked');
+
+      // Complete the dependency
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 'dep', status: 'completed', outputs: { exitCode: 0 } }),
+      );
+
+      // Gate should now be running (unblocked and started)
+      expect(orchestrator.getTask('gate')!.status).toBe('running');
+    });
+
+    it('unblocks a blocked merge node when last dep is approved', async () => {
+      orchestrator.loadPlan({
+        name: 'merge-unblock-test',
+        tasks: [
+          { id: 'task-a', description: 'task A' },
+          { id: 'task-b', description: 'task B' },
+        ],
+      });
+      orchestrator.startExecution();
+
+      // Complete both tasks
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 'task-a', status: 'completed', outputs: { exitCode: 0 } }),
+      );
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 'task-b', status: 'completed', outputs: { exitCode: 0 } }),
+      );
+
+      // Merge node exists and is pending
+      const mergeId = orchestrator.getAllTasks().find(t => t.config.isMergeNode)!.id;
+
+      // Simulate: set merge node to blocked (legacy DB state)
+      persistence.updateTask(mergeId, { status: 'blocked' });
+      orchestrator.syncAllFromDb();
+      expect(orchestrator.getTask(mergeId)!.status).toBe('blocked');
+
+      // Set task-b to awaiting_approval to simulate the approve flow
+      persistence.updateTask('task-b', { status: 'awaiting_approval' });
+      orchestrator.syncAllFromDb();
+
+      // Approve task-b — this should find the merge node ready and unblock it
+      const started = await orchestrator.approve('task-b');
+      expect(started.some(t => t.id === mergeId)).toBe(true);
+      expect(orchestrator.getTask(mergeId)!.status).toBe('running');
+    });
+  });
 });

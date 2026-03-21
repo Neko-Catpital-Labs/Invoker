@@ -735,8 +735,11 @@ function setupGuiMode(): void {
     });
 
     ipcMain.handle('invoker:approve', async (_event, taskId: string) => {
+      console.log(`[ipc] approve: "${taskId}"`);
       const started = await orchestrator.approve(taskId);
+      console.log(`[ipc] approve: orchestrator returned ${started.length} started tasks: [${started.map(t => `${t.id}(${t.status})`).join(', ')}]`);
       const runnable = started.filter(t => t.status === 'running');
+      console.log(`[ipc] approve: ${runnable.length} runnable after filter: [${runnable.map(t => t.id).join(', ')}]`);
       if (runnable.length > 0) await taskExecutor.executeTasks(runnable);
     });
 
