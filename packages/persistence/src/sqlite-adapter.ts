@@ -550,6 +550,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
   deleteAllWorkflows(): void {
     this.db.exec('DELETE FROM events');
+    this.db.exec('DELETE FROM task_output');
+    this.db.exec('DELETE FROM attempts');
     this.db.exec('DELETE FROM tasks');
     this.db.exec('DELETE FROM workflows');
   }
@@ -566,6 +568,13 @@ export class SQLiteAdapter implements PersistenceAdapter {
       // Delete task output (FK constraint: task_output -> tasks)
       this.db.prepare(`
         DELETE FROM task_output WHERE task_id IN (
+          SELECT id FROM tasks WHERE workflow_id = ?
+        )
+      `).run(workflowId);
+
+      // Delete attempts (FK constraint: attempts -> tasks)
+      this.db.prepare(`
+        DELETE FROM attempts WHERE node_id IN (
           SELECT id FROM tasks WHERE workflow_id = ?
         )
       `).run(workflowId);
