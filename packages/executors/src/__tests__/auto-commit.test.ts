@@ -2217,7 +2217,7 @@ describe('BaseFamiliar.setupTaskBranch branch reset', () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it('resets existing branch to new base on restart', async () => {
+  it('preserves existing branch and merges new base on restart', async () => {
     // First run: create branch from master
     const request = makeRequest('reset-task', { baseBranch: 'master' });
     const handle1: FamiliarHandle = { executionId: 'e1', taskId: 'reset-task' };
@@ -2239,9 +2239,19 @@ describe('BaseFamiliar.setupTaskBranch branch reset', () => {
     await familiar.testSetupTaskBranch(tmpDir, request, handle2);
 
     const currentHead = execSync('git rev-parse HEAD', { cwd: tmpDir }).toString().trim();
-    // Should be at the new master head, not the old stale commit
-    expect(currentHead).toBe(newMasterHead);
-    expect(currentHead).not.toBe(oldHead);
+    // Should preserve old work and merge new base (creates merge commit)
+    expect(currentHead).not.toBe(oldHead); // Not the old commit (merge happened)
+    expect(currentHead).not.toBe(newMasterHead); // Not exactly new master (it's a merge commit)
+
+    // Both files should exist after merge
+    expect(existsSync(join(tmpDir, 'old-work.txt'))).toBe(true);
+    expect(existsSync(join(tmpDir, 'new-base.txt'))).toBe(true);
+
+    // Verify the merge commit has both parents
+    const parents = execSync('git rev-list --parents -n 1 HEAD', { cwd: tmpDir }).toString().trim().split(' ');
+    expect(parents.length).toBe(3); // commit hash + 2 parents
+    expect(parents.slice(1)).toContain(oldHead);
+    expect(parents.slice(1)).toContain(newMasterHead);
   });
 
   it('restart after conflict re-fails with same conflict', async () => {
