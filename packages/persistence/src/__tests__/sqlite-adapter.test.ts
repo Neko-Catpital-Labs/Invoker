@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { SQLiteAdapter } from '../sqlite-adapter.js';
 import type { Workflow, Conversation } from '../adapter.js';
+import { createAttempt } from '@invoker/core';
 import type { TaskState, TaskStateChanges } from '@invoker/core';
 
 describe('SQLiteAdapter', () => {
@@ -473,6 +474,21 @@ describe('SQLiteAdapter', () => {
 
       expect(adapter.loadWorkflow('wf-empty')).toBeUndefined();
       expect(adapter.listWorkflows()).toEqual([]);
+    });
+
+    it('deletes workflow that has attempts on its tasks', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t1'));
+
+      const attempt = createAttempt('t1', 1, { status: 'running' });
+      adapter.saveAttempt(attempt);
+
+      // Should not throw SQLITE_CONSTRAINT_FOREIGNKEY
+      adapter.deleteWorkflow('wf-1');
+
+      expect(adapter.loadWorkflow('wf-1')).toBeUndefined();
+      expect(adapter.loadTasks('wf-1')).toEqual([]);
+      expect(adapter.loadAttempts('t1')).toEqual([]);
     });
 
     it('is a no-op for non-existent workflow', () => {
