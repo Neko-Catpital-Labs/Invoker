@@ -1764,7 +1764,6 @@ describe('BaseFamiliar.recordTaskResult', () => {
     const body = getCommitBody(tmpDir);
     expect(body).toContain('task-1');
     expect(body).toContain('Build and test');
-    expect(body).toContain('pnpm build && pnpm test');
     expect(body).toContain('Exit code: 0');
   });
 

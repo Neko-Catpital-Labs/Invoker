@@ -418,8 +418,9 @@ export class TaskExecutor {
     const existing: Array<{ url: string; number: number }> = JSON.parse(listOutput || '[]');
     if (existing.length > 0) {
       const pr = existing[0];
-      // Update the PR title to match the current workflow name
-      await this.execGh(['pr', 'edit', String(pr.number), '--title', title]);
+      const editArgs = ['pr', 'edit', String(pr.number), '--title', title];
+      if (body) editArgs.push('--body', body);
+      await this.execGh(editArgs);
       return pr.url;
     }
 
@@ -713,6 +714,22 @@ export class TaskExecutor {
       child.on('close', (code) => {
         if (code === 0) resolvePromise(stdout.trim());
         else reject(new Error(`git log failed (code ${code})`));
+      });
+    });
+  }
+
+  /** @internal */ gitDiffStat(branch: string): Promise<string> {
+    return new Promise((resolvePromise, reject) => {
+      const baseBranch = this.defaultBranch ?? 'master';
+      const child = spawn('git', ['diff', '--stat', `${baseBranch}...${branch}`], {
+        cwd: this.cwd,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      let stdout = '';
+      child.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
+      child.on('close', (code) => {
+        if (code === 0) resolvePromise(stdout.trim());
+        else reject(new Error(`git diff --stat failed (code ${code})`));
       });
     });
   }

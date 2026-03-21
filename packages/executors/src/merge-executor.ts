@@ -45,6 +45,7 @@ export interface MergeExecutorHost {
   execPr(baseBranch: string, featureBranch: string, title: string, body?: string): Promise<string>;
   detectDefaultBranch(): Promise<string>;
   gitLogMessage(commitHash: string): Promise<string>;
+  gitDiffStat(branch: string): Promise<string>;
   startPrPolling(taskId: string, prIdentifier: string, workflowId: string): void;
   executeTasks(tasks: TaskState[]): Promise<void>;
   buildMergeSummary(workflowId: string): Promise<string>;
@@ -236,7 +237,8 @@ export async function approveMergeImpl(
       mergeTrace('GIT_MERGE_SQUASH', { featureBranch });
       await host.execGit(['merge', '--squash', featureBranch]);
       mergeTrace('GIT_COMMIT', { mergeMessage });
-      await host.execGit(['commit', '-m', mergeMessage]);
+      const commitBody = summary ? `${mergeMessage}\n\n${summary}` : mergeMessage;
+      await host.execGit(['commit', '-m', commitBody]);
       mergeTrace('SQUASH_MERGE_COMPLETE', { featureBranch, baseBranch });
       console.log(`[merge] Approved: squash-merged ${featureBranch} into ${baseBranch}`);
     } else if (onFinish === 'pull_request') {
@@ -282,40 +284,30 @@ export async function buildMergeSummaryImpl(
 
   const lines: string[] = [];
 
-  // Summary
   lines.push('## Summary');
   lines.push(
     `${workflowName} — ${completed.length} tasks completed, ${failed.length} failed, ${skipped.length} skipped`,
   );
   lines.push('');
 
-  // Changes
   if (completed.length > 0) {
     lines.push('## Changes');
     for (const t of completed) {
-      lines.push(`### ${t.id} — ${t.description}`);
-      lines.push(`**Status**: completed`);
+      const statusHint = t.config.command ? ' (passed)' : '';
+      lines.push(`### ${t.id} — ${t.description}${statusHint}`);
       if (t.execution.branch) {
-        lines.push(`**Branch**: ${t.execution.branch}`);
-      }
-      lines.push('');
-      if (t.execution.commit) {
         try {
-          const msg = await host.gitLogMessage(t.execution.commit);
-          if (msg) {
-            lines.push(msg);
-            lines.push('');
+          const stat = await host.gitDiffStat(t.execution.branch);
+          if (stat) {
+            lines.push(stat);
           }
         } catch {
-          // Non-fatal — skip commit message
         }
       }
-      lines.push('---');
       lines.push('');
     }
   }
 
-  // Conflict Resolutions
   if (claudeResolved.length > 0) {
     lines.push('## Conflict Resolutions');
     for (const t of claudeResolved) {
@@ -324,7 +316,6 @@ export async function buildMergeSummaryImpl(
     lines.push('');
   }
 
-  // Failed Tasks
   if (failed.length > 0) {
     lines.push('## Failed Tasks');
     for (const t of failed) {
@@ -335,7 +326,6 @@ export async function buildMergeSummaryImpl(
     lines.push('');
   }
 
-  // Skipped Tasks
   if (skipped.length > 0) {
     lines.push('## Skipped Tasks');
     for (const t of skipped) {
@@ -403,7 +393,8 @@ export async function consolidateAndMergeImpl(
         .then(() => false)
         .catch(() => true);
       if (hasChanges) {
-        await host.execGit(['commit', '-m', mergeMessage]);
+        const commitBody = body ? `${mergeMessage}\n\n${body}` : mergeMessage;
+        await host.execGit(['commit', '-m', commitBody]);
         console.log(`[merge] Squash-merged ${featureBranch} into ${baseBranch}`);
       } else {
         console.log(`[merge] No changes to commit — ${baseBranch} already up-to-date with ${featureBranch}`);

@@ -255,12 +255,6 @@ export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar
       parts.push(`\nContext:\n${lines.join('\n')}`);
     }
 
-    if (inputs.prompt) {
-      parts.push(`\nPrompt:\n  ${inputs.prompt.replace(/\n/g, '\n  ')}`);
-    } else if (inputs.command) {
-      parts.push(`\nCommand:\n  ${inputs.command.replace(/\n/g, '\n  ')}`);
-    }
-
     if (inputs.alternatives?.length) {
       const lines = inputs.alternatives.map(alt => {
         const hash = alt.commitHash ? ` ${alt.commitHash.slice(0, 7)}` : '';
@@ -580,12 +574,7 @@ export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar
     const headline = request.inputs.description
       ? `invoker: ${request.actionId} — ${request.inputs.description}`
       : `invoker: ${request.actionId}`;
-    const detail = request.inputs.command
-      ? `Command: ${request.inputs.command}`
-      : request.inputs.prompt
-        ? `Prompt: ${request.inputs.prompt.slice(0, 200)}`
-        : 'No command or prompt';
-    return `${headline}\n\n${detail}\nExit code: ${exitCode}`;
+    return `${headline}\n\nExit code: ${exitCode}`;
   }
 
   // ── Shared Claude helpers ──────────────────────────────────

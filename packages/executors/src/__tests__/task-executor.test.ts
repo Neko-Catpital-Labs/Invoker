@@ -1605,57 +1605,58 @@ describe('TaskExecutor', () => {
       return { executor, persistence };
     }
 
-    it('collects commit messages from all completed workflow tasks', async () => {
+    it('produces concise output with git diff --stat without raw prompts', async () => {
       const tasks = [
         makeTask({
-          id: 'task-1',
-          description: 'Add login page',
+          id: 'impl-1',
+          description: 'Add feature X',
           status: 'completed',
           config: { workflowId: 'wf-1' },
-          execution: { branch: 'experiment/task-1', commit: 'abc123' },
+          execution: { branch: 'experiment/impl-1' },
         }),
         makeTask({
-          id: 'task-2',
-          description: 'Add signup page',
+          id: 'test-1',
+          description: 'Run tests',
           status: 'completed',
-          config: { workflowId: 'wf-1' },
-          execution: { branch: 'experiment/task-2', commit: 'def456' },
+          config: { workflowId: 'wf-1', command: 'pnpm test' },
+          execution: { branch: 'experiment/test-1' },
         }),
       ];
-      const { executor } = createExecutorForSummary(tasks, { name: 'Auth Feature' });
-      (executor as any).gitLogMessage = vi.fn()
-        .mockResolvedValueOnce('feat: add login page')
-        .mockResolvedValueOnce('feat: add signup page');
+      const { executor } = createExecutorForSummary(tasks, { name: 'My Feature' });
+      (executor as any).gitDiffStat = vi.fn()
+        .mockResolvedValueOnce(' src/foo.ts | 5 ++---')
+        .mockResolvedValueOnce(' tests/foo.test.ts | 3 +++');
 
       const result = await executor.buildMergeSummary('wf-1');
 
       expect(result).toContain('## Summary');
+      expect(result).toContain('My Feature');
       expect(result).toContain('2 tasks completed');
-      expect(result).toContain('Add login page');
-      expect(result).toContain('Add signup page');
-      expect(result).toContain('feat: add login page');
-      expect(result).toContain('feat: add signup page');
-      expect(result).toContain('experiment/task-1');
-      expect(result).toContain('experiment/task-2');
+      expect(result).toContain('### impl-1');
+      expect(result).toContain('### test-1');
+      expect(result).toContain('(passed)');
+      expect(result).toContain('src/foo.ts');
+      expect(result).toContain('tests/foo.test.ts');
+      expect(result).not.toContain('Prompt:');
+      expect(result).not.toContain('Command:');
     });
 
-    it('handles gitLogMessage failures gracefully', async () => {
+    it('handles gitDiffStat failures gracefully', async () => {
       const tasks = [
         makeTask({
           id: 'task-1',
           description: 'Add feature',
           status: 'completed',
           config: { workflowId: 'wf-1' },
-          execution: { branch: 'experiment/task-1', commit: 'abc123' },
+          execution: { branch: 'experiment/task-1' },
         }),
       ];
       const { executor } = createExecutorForSummary(tasks, { name: 'Feature' });
-      (executor as any).gitLogMessage = vi.fn().mockRejectedValue(new Error('git log failed'));
+      (executor as any).gitDiffStat = vi.fn().mockRejectedValue(new Error('git diff --stat failed'));
 
       const result = await executor.buildMergeSummary('wf-1');
 
       expect(result).toContain('Add feature');
-      expect(result).toContain('experiment/task-1');
     });
 
     it('identifies Claude-resolved reconciliation tasks', async () => {
@@ -1669,7 +1670,7 @@ describe('TaskExecutor', () => {
         }),
       ];
       const { executor } = createExecutorForSummary(tasks, { name: 'Workflow' });
-      (executor as any).gitLogMessage = vi.fn();
+      (executor as any).gitDiffStat = vi.fn();
 
       const result = await executor.buildMergeSummary('wf-1');
 
@@ -1749,7 +1750,7 @@ describe('TaskExecutor', () => {
         }),
       ];
       const { executor } = createExecutorForSummary(tasks, { name: 'Workflow' });
-      (executor as any).gitLogMessage = vi.fn();
+      (executor as any).gitDiffStat = vi.fn();
 
       const result = await executor.buildMergeSummary('wf-1');
 
@@ -1776,7 +1777,7 @@ describe('TaskExecutor', () => {
         }),
       ];
       const { executor } = createExecutorForSummary(tasks, { name: 'Workflow' });
-      (executor as any).gitLogMessage = vi.fn();
+      (executor as any).gitDiffStat = vi.fn();
 
       const result = await executor.buildMergeSummary('wf-1');
 
