@@ -460,7 +460,6 @@ export class SQLiteAdapter implements PersistenceAdapter {
         containerId: 'container_id',
         selectedExperiment: 'selected_experiment',
         pendingFixError: 'pending_fix_error',
-        isFixingWithAI: 'is_fixing_with_ai',
         prUrl: 'pr_url',
         prIdentifier: 'pr_identifier',
         prStatus: 'pr_status',
@@ -495,6 +494,15 @@ export class SQLiteAdapter implements PersistenceAdapter {
           setClauses.push(`${col} = ?`);
           const val = (changes.execution as any)[key];
           values.push(val ? JSON.stringify(val) : null);
+        }
+      }
+      const execBoolMap: Record<string, string> = {
+        isFixingWithAI: 'is_fixing_with_ai',
+      };
+      for (const [key, col] of Object.entries(execBoolMap)) {
+        if (key in changes.execution) {
+          setClauses.push(`${col} = ?`);
+          values.push((changes.execution as any)[key] ? 1 : 0);
         }
       }
     }
