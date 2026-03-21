@@ -314,6 +314,22 @@ describe('SQLiteAdapter', () => {
       const loaded = adapter.loadTasks('wf-1');
       expect(loaded[0].execution.pendingFixError).toBeUndefined();
     });
+
+    it('persists isFixingWithAI via updateTask', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t1'));
+      adapter.updateTask('t1', { execution: { isFixingWithAI: true } } as any);
+      const loaded = adapter.loadTasks('wf-1');
+      expect(loaded[0].execution.isFixingWithAI).toBe(true);
+    });
+
+    it('clears isFixingWithAI via updateTask', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t1', { execution: { isFixingWithAI: true } }));
+      adapter.updateTask('t1', { execution: { isFixingWithAI: undefined } } as any);
+      const loaded = adapter.loadTasks('wf-1');
+      expect(loaded[0].execution.isFixingWithAI).toBeFalsy();
+    });
   });
 
   describe('getClaudeSessionId', () => {
