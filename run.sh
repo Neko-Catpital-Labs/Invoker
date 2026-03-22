@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Build and launch the Invoker Electron app (GUI mode).
 # Also used for headless mode: ./run.sh --headless run <plan.yaml>
 set -e

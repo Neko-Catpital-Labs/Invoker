@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Kill all running Invoker Electron instances and wait for them to die
 if pkill -f "electron.*dist/main.js" 2>/dev/null; then
   echo "Sent SIGTERM to Invoker processes, waiting..."

@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Integration test: verify that a fresh git worktree can be provisioned
 # and run tests successfully (Electron binary present, ABI correct).
 set -e

@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Submit a plan YAML to Invoker and execute it (headless mode).
 # Uses the same Electron binary as the GUI to avoid ABI mismatches.
 #
