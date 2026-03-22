@@ -277,6 +277,9 @@ export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar
   }
 
   protected execGitSimple(args: string[], cwd: string): Promise<string> {
+    const stack = new Error().stack;
+    const callerFrames = stack?.split('\n').slice(1, 5).map(l => l.trim()).join('\n    ') ?? '(no stack)';
+    console.log(`[git-trace] git ${args.join(' ')}  cwd=${cwd}\n    ${callerFrames}`);
     return new Promise((resolve, reject) => {
       const child = spawn('git', args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
       let stdout = '';

@@ -175,6 +175,11 @@ export class DockerFamiliar extends BaseFamiliar<ContainerEntry> {
       HostConfig: {
         Binds: binds,
         NetworkMode: 'host',
+        // On Linux, host.docker.internal isn't available by default.
+        // Add an extra_hosts mapping so the container can reach the host.
+        ...(process.platform === 'linux' ? {
+          ExtraHosts: ['host.docker.internal:host-gateway'],
+        } : {}),
       },
       WorkingDir: '/app',
     };

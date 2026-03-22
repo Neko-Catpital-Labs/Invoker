@@ -73,6 +73,11 @@ function createHeadlessExecutor(
     callbacks: {
       onOutput: (taskId, data) => {
         process.stdout.write(`\x1b[2m[${taskId}]\x1b[0m ${data}`);
+        try {
+          deps.persistence.appendTaskOutput(taskId, data);
+        } catch (err) {
+          console.error(`[output] Failed to persist output for ${taskId}:`, err);
+        }
       },
       onHeartbeat: (taskId) => headlessHeartbeat(taskId, deps),
       ...callbackOverrides,

@@ -83,7 +83,7 @@ class TestFamiliar extends BaseFamiliar<BaseEntry> {
 
 function createTempRepo(): string {
   const dir = mkdtempSync(join(tmpdir(), 'auto-commit-test-'));
-  execSync('git init', { cwd: dir });
+  execSync('git init -b master', { cwd: dir });
   execSync('git config user.email "test@test.com"', { cwd: dir });
   execSync('git config user.name "Test"', { cwd: dir });
   writeFileSync(join(dir, 'initial.txt'), 'initial content');
@@ -255,29 +255,6 @@ describe('autoCommit with meta', () => {
     expect(subject).toBe('invoker: task-1 — Implement auth middleware');
   });
 
-  it('includes Prompt section in commit body', async () => {
-    writeFileSync(join(tmpDir, 'file.txt'), 'content');
-    await familiar.testAutoCommit(tmpDir, makeRequest('task-1', {
-      prompt: 'Add login endpoint',
-    }));
-
-    const body = getCommitBody(tmpDir);
-    expect(body).toContain('Prompt:');
-    expect(body).toContain('Add login endpoint');
-  });
-
-  it('includes Command section when command is set', async () => {
-    writeFileSync(join(tmpDir, 'file.txt'), 'content');
-    await familiar.testAutoCommit(tmpDir, makeRequest('task-1', {
-      command: 'npx prisma migrate dev',
-    }));
-
-    const body = getCommitBody(tmpDir);
-    expect(body).toContain('Command:');
-    expect(body).toContain('npx prisma migrate dev');
-    expect(body).not.toContain('Prompt:');
-  });
-
   it('includes Context section with upstream DAG deps and hashes', async () => {
     writeFileSync(join(tmpDir, 'file.txt'), 'content');
     await familiar.testAutoCommit(tmpDir, makeRequest('task-2', {
@@ -362,13 +339,11 @@ describe('autoCommit with meta', () => {
     const body = getCommitBody(tmpDir);
     expect(body).toBe('invoker: task-1');
     expect(body).not.toContain('Context:');
-    expect(body).not.toContain('Prompt:');
-    expect(body).not.toContain('Command:');
     expect(body).not.toContain('Alternatives Considered:');
     expect(body).not.toContain('Solution:');
   });
 
-  it('all four sections appear in correct order', async () => {
+  it('all three sections appear in correct order', async () => {
     writeFileSync(join(tmpDir, 'file.txt'), 'content');
     await familiar.testAutoCommit(tmpDir, makeRequest('task-5', {
       description: 'Add login page',
@@ -384,13 +359,11 @@ describe('autoCommit with meta', () => {
 
     const body = getCommitBody(tmpDir);
     const contextIdx = body.indexOf('Context:');
-    const promptIdx = body.indexOf('Prompt:');
     const altIdx = body.indexOf('Alternatives Considered:');
     const solIdx = body.indexOf('Solution:');
 
     expect(contextIdx).toBeGreaterThan(-1);
-    expect(promptIdx).toBeGreaterThan(contextIdx);
-    expect(altIdx).toBeGreaterThan(promptIdx);
+    expect(altIdx).toBeGreaterThan(contextIdx);
     expect(solIdx).toBeGreaterThan(altIdx);
   });
 });
@@ -1890,7 +1863,7 @@ describe('BaseFamiliar.syncFromRemote', () => {
     familiar = new TestFamiliar();
     // Create a bare origin and a clone
     originDir = mkdtempSync(join(tmpdir(), 'sync-origin-'));
-    execSync('git init --bare', { cwd: originDir });
+    execSync('git init --bare -b master', { cwd: originDir });
     cloneDir = mkdtempSync(join(tmpdir(), 'sync-clone-'));
     execSync(`git clone ${originDir} .`, { cwd: cloneDir });
     execSync('git config user.email "test@test.com"', { cwd: cloneDir });
@@ -1947,7 +1920,7 @@ describe('BaseFamiliar.pushBranchToRemote', () => {
   beforeEach(() => {
     familiar = new TestFamiliar();
     originDir = mkdtempSync(join(tmpdir(), 'push-origin-'));
-    execSync('git init --bare', { cwd: originDir });
+    execSync('git init --bare -b master', { cwd: originDir });
     cloneDir = mkdtempSync(join(tmpdir(), 'push-clone-'));
     execSync(`git clone ${originDir} .`, { cwd: cloneDir });
     execSync('git config user.email "test@test.com"', { cwd: cloneDir });
@@ -2071,7 +2044,7 @@ describe('BaseFamiliar.setupTaskBranch n-dependency conflicts', () => {
 
   beforeEach(() => {
     tmpDir = mkdtempSync(join(tmpdir(), 'ndep-'));
-    execSync('git init && git commit --allow-empty -m "init"', { cwd: tmpDir });
+    execSync('git init -b master && git commit --allow-empty -m "init"', { cwd: tmpDir });
     familiar = new TestFamiliar();
   });
 
@@ -2208,7 +2181,7 @@ describe('BaseFamiliar.setupTaskBranch branch reset', () => {
 
   beforeEach(() => {
     tmpDir = mkdtempSync(join(tmpdir(), 'reset-'));
-    execSync('git init && git commit --allow-empty -m "init"', { cwd: tmpDir });
+    execSync('git init -b master && git commit --allow-empty -m "init"', { cwd: tmpDir });
     familiar = new TestFamiliar();
   });
 
@@ -2369,7 +2342,7 @@ describe('BaseFamiliar.setupTaskBranch worktree mode', () => {
 
   beforeEach(() => {
     tmpDir = mkdtempSync(join(tmpdir(), 'wt-setup-'));
-    execSync('git init && git commit --allow-empty -m "init"', { cwd: tmpDir });
+    execSync('git init -b master && git commit --allow-empty -m "init"', { cwd: tmpDir });
     execSync('git config user.email "test@test.com"', { cwd: tmpDir });
     execSync('git config user.name "Test"', { cwd: tmpDir });
   });

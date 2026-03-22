@@ -49,12 +49,17 @@ describe('DockerPool', () => {
     const name = await pool.ensureImage(docker, 'https://github.com/test/repo.git');
 
     expect(name).toMatch(/^invoker-cache:/);
-    expect(docker.createContainer).toHaveBeenCalledTimes(1);
+    // 2 containers: clone + provision
+    expect(docker.createContainer).toHaveBeenCalledTimes(2);
 
-    // Verify the container was created with git clone command
+    // Verify the first container was created with git clone command
     const createArgs = docker.createContainer.mock.calls[0][0];
     expect(createArgs.Entrypoint).toEqual(['git']);
     expect(createArgs.Cmd).toEqual(['clone', 'https://github.com/test/repo.git', '/app']);
+
+    // Verify the second container runs dependency provisioning
+    const provisionArgs = docker.createContainer.mock.calls[1][0];
+    expect(provisionArgs.Entrypoint).toEqual(['/bin/sh']);
   });
 
   it('ensureImage: returns cached image on second call', async () => {
@@ -65,8 +70,8 @@ describe('DockerPool', () => {
     const name2 = await pool.ensureImage(docker, 'https://github.com/test/repo.git');
 
     expect(name1).toBe(name2);
-    // Only one container should have been created (the first time)
-    expect(docker.createContainer).toHaveBeenCalledTimes(1);
+    // Only two containers should have been created (clone + provision, the first time)
+    expect(docker.createContainer).toHaveBeenCalledTimes(2);
   });
 
   it('different repos get different cached images', async () => {
@@ -77,7 +82,8 @@ describe('DockerPool', () => {
     const name2 = await pool.ensureImage(docker, 'https://github.com/test/repo2.git');
 
     expect(name1).not.toBe(name2);
-    expect(docker.createContainer).toHaveBeenCalledTimes(2);
+    // 2 containers per repo (clone + provision) × 2 repos = 4
+    expect(docker.createContainer).toHaveBeenCalledTimes(4);
   });
 
   it('destroyAll removes all cached images', async () => {

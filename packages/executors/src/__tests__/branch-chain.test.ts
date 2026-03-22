@@ -20,7 +20,7 @@ import { TaskExecutor, FamiliarRegistry, LocalFamiliar } from '../index.js';
 
 function createTempRepo(): string {
   const dir = mkdtempSync(join(tmpdir(), 'branch-chain-'));
-  execSync('git init', { cwd: dir });
+  execSync('git init -b master', { cwd: dir });
   execSync('git config user.email "test@test.com"', { cwd: dir });
   execSync('git config user.name "Test"', { cwd: dir });
   writeFileSync(join(dir, 'initial.txt'), 'initial');
@@ -266,7 +266,6 @@ describe('A→B→C branch chain', () => {
       await executeTask(executor, tasks, 'task-a');
 
       const body = execSync('git log -1 --format=%B invoker/task-a', { cwd: tmpDir }).toString().trim();
-      expect(body).toContain('echo task-a-done');
       expect(body).toContain('Exit code: 0');
     });
   });

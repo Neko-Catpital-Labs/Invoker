@@ -76,16 +76,55 @@ export class DockerPool {
       throw new Error(`Failed to clone ${repoUrl} into cached image (exit code ${result.StatusCode})`);
     }
 
-    // Commit the container as a new image, restoring the original entrypoint
-    // (overridden during clone step)
+    // Commit the cloned container as a temp image
+    const tempTag = `${this.urlHash(repoUrl)}-cloned`;
+    const tempImageName = `${this.imagePrefix}:${tempTag}`;
     await container.commit({
+      repo: this.imagePrefix,
+      tag: tempTag,
+      changes: ['WORKDIR /app'],
+    });
+
+    // Remove clone container
+    try { await container.remove(); } catch { /* */ }
+
+    // Provision dependencies: detect package manager and install
+    const provisionCmd = [
+      'if [ -f pnpm-lock.yaml ]; then corepack enable 2>/dev/null; corepack prepare pnpm@latest --activate 2>/dev/null; pnpm install --frozen-lockfile;',
+      'elif [ -f package-lock.json ]; then npm ci;',
+      'elif [ -f yarn.lock ]; then npm i -g yarn && yarn install --frozen-lockfile;',
+      'fi',
+    ].join(' ');
+
+    const provisionContainer = await docker.createContainer({
+      Image: tempImageName,
+      Entrypoint: ['/bin/sh'],
+      Cmd: ['-c', provisionCmd],
+      WorkingDir: '/app',
+      HostConfig: { NetworkMode: 'host' },
+    });
+
+    await provisionContainer.start();
+    const provisionResult = await provisionContainer.wait();
+
+    if (provisionResult.StatusCode !== 0) {
+      // Provisioning failed — still commit the cloned-only image so we don't lose work
+      console.warn(`[DockerPool] Dependency provisioning failed (exit ${provisionResult.StatusCode}), committing without deps`);
+    }
+
+    // Commit the provisioned container as the final cached image
+    await provisionContainer.commit({
       repo: this.imagePrefix,
       tag: this.urlHash(repoUrl),
       changes: ['ENTRYPOINT ["/usr/local/bin/invoker-agent.sh"]', 'WORKDIR /app'],
     });
 
-    // Remove temp container
-    try { await container.remove(); } catch { /* */ }
+    // Clean up provision container and temp image
+    try { await provisionContainer.remove(); } catch { /* */ }
+    try {
+      const tempImage = docker.getImage(tempImageName);
+      await tempImage.remove({ force: true });
+    } catch { /* */ }
 
     this.cachedImages.set(repoUrl, name);
     return name;
