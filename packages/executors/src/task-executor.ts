@@ -288,6 +288,12 @@ export class TaskExecutor {
 
       // Lazy registration for Docker
       if (effectiveType === 'docker') {
+        // Per-task dockerImage: create a one-off DockerFamiliar (not cached in registry)
+        if (task.config.dockerImage) {
+          const docker = new DockerFamiliar({ workspaceDir: this.cwd, imageName: task.config.dockerImage });
+          console.log(`[trace] TaskExecutor.selectFamiliar: task=${task.id} effectiveType=docker dockerImage=${task.config.dockerImage} → docker (per-task image)`);
+          return docker;
+        }
         const docker = new DockerFamiliar({ workspaceDir: this.cwd });
         this.familiarRegistry.register('docker', docker);
         console.log(`[trace] TaskExecutor.selectFamiliar: task=${task.id} effectiveType=docker → docker (lazy registered)`);

@@ -105,11 +105,32 @@ export class DockerPool {
     });
 
     await provisionContainer.start();
+
+    // Capture provisioning logs for error reporting
+    const provisionLogs = await new Promise<string>((resolve) => {
+      let output = '';
+      provisionContainer.logs(
+        { follow: true, stdout: true, stderr: true },
+        (err: Error | null, stream: NodeJS.ReadableStream | undefined) => {
+          if (err || !stream) { resolve(output); return; }
+          stream.on('data', (d: Buffer) => { output += d.toString(); });
+          stream.on('end', () => resolve(output));
+          stream.on('error', () => resolve(output));
+        },
+      );
+    });
+
     const provisionResult = await provisionContainer.wait();
 
     if (provisionResult.StatusCode !== 0) {
-      // Provisioning failed — still commit the cloned-only image so we don't lose work
-      console.warn(`[DockerPool] Dependency provisioning failed (exit ${provisionResult.StatusCode}), committing without deps`);
+      const logs = provisionLogs.trim().slice(-2000); // Last 2000 chars
+      console.error(`[DockerPool] Dependency provisioning failed (exit ${provisionResult.StatusCode}):\n${logs}`);
+      // Clean up before throwing
+      try { await provisionContainer.remove(); } catch { /* */ }
+      try { await docker.getImage(tempImageName).remove({ force: true }); } catch { /* */ }
+      throw new Error(
+        `Docker dependency provisioning failed (exit ${provisionResult.StatusCode}):\n${logs}`,
+      );
     }
 
     // Commit the provisioned container as the final cached image

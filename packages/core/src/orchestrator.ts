@@ -119,6 +119,7 @@ export interface PlanDefinition {
     familiarType?: string;
     autoFix?: boolean;
     maxFixAttempts?: number;
+    dockerImage?: string;
   }>;
 }
 
@@ -331,6 +332,7 @@ export class Orchestrator {
           repoUrl: taskDef.repoUrl,
           featureBranch: taskDef.featureBranch,
           familiarType: taskDef.familiarType ?? (taskDef.command ? 'local' : 'worktree'),
+          dockerImage: taskDef.dockerImage,
           autoFix: taskDef.autoFix,
           maxFixAttempts: taskDef.maxFixAttempts,
         },

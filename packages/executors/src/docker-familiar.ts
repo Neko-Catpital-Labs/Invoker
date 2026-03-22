@@ -131,7 +131,16 @@ export class DockerFamiliar extends BaseFamiliar<ContainerEntry> {
     let useBindMount = true;
 
     if (this.pool && request.inputs.repoUrl) {
-      containerImage = await this.pool.ensureImage(docker, request.inputs.repoUrl);
+      try {
+        containerImage = await this.pool.ensureImage(docker, request.inputs.repoUrl);
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        for (const msg of earlyLogs) {
+          this.emitOutput(handle.executionId, msg + '\n');
+        }
+        this.emitOutput(handle.executionId, `${TAG} Image provisioning failed: ${errMsg}\n`);
+        throw new Error(`Docker image provisioning failed: ${errMsg}`);
+      }
       useBindMount = false; // Repo is inside the cached image
     }
 
@@ -192,7 +201,17 @@ export class DockerFamiliar extends BaseFamiliar<ContainerEntry> {
 
     // Full config goes to console only (too verbose for embedded terminal)
     console.log(`${TAG} Container config:`, JSON.stringify(containerConfig, null, 2));
-    const container = await docker.createContainer(containerConfig);
+    let container;
+    try {
+      container = await docker.createContainer(containerConfig);
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      for (const msg of earlyLogs) {
+        this.emitOutput(handle.executionId, msg + '\n');
+      }
+      this.emitOutput(handle.executionId, `${TAG} Container creation failed: ${errMsg}\n`);
+      throw new Error(`Docker container creation failed: ${errMsg}`);
+    }
     log(`${TAG} Container created: ${container.id.slice(0, 12)} image=${containerImage}`);
 
     const entry: ContainerEntry = {
@@ -232,7 +251,13 @@ export class DockerFamiliar extends BaseFamiliar<ContainerEntry> {
     entry.originalBranch = originalBranch;
 
     emit(`${TAG} Starting container ${container.id.slice(0, 12)}...`);
-    await container.start();
+    try {
+      await container.start();
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      emit(`${TAG} Container failed to start: ${errMsg}`);
+      throw new Error(`Docker container failed to start: ${errMsg}`);
+    }
     emit(`${TAG} Container started`);
 
     // Attach log stream after starting; awaited to ensure listener is registered

@@ -30,6 +30,7 @@ export interface RawPlanTask {
   repoUrl?: string;
   featureBranch?: string;
   familiarType?: string;
+  dockerImage?: string;
   autoFix?: boolean;
   maxFixAttempts?: number;
   utilization?: number | 'max';
@@ -158,6 +159,7 @@ export function parsePlan(yamlContent: string, repoDir?: string): PlanDefinition
       repoUrl: task.repoUrl ?? defaultRepoUrl,
       featureBranch: task.featureBranch,
       familiarType: task.familiarType ?? defaultFamiliarType,
+      dockerImage: task.dockerImage,
       autoFix: task.autoFix,
       maxFixAttempts: task.maxFixAttempts,
       utilization: task.utilization === 'max' ? UTILIZATION_MAX : task.utilization,

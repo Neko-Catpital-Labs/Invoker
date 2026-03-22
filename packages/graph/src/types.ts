@@ -38,6 +38,7 @@ export interface TaskConfig {
   readonly repoUrl?: string;
   readonly featureBranch?: string;
   readonly familiarType?: string;
+  readonly dockerImage?: string;
   readonly autoFix?: boolean;
   readonly maxFixAttempts?: number;
   readonly isMergeNode?: boolean;
@@ -79,7 +80,6 @@ export interface TaskExecution {
     readonly failedBranch: string;
     readonly conflictFiles: readonly string[];
   };
-  readonly isFixingWithAI?: boolean;
   readonly selectedAttemptId?: string;
 }
 

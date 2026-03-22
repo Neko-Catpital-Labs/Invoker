@@ -317,15 +317,19 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
 
     // -- Install dependencies so tasks can build/test in the worktree --
     log('provisionWorktree begin');
+    this.emitOutput(handle.executionId, '[worktree] Provisioning dependencies…\n');
     try {
-      await this.provisionWorktree(worktreeDir);
+      await this.provisionWorktree(worktreeDir, handle.executionId);
     } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      this.emitOutput(handle.executionId, `[worktree] Provisioning failed: ${errMsg}\n`);
       log('provisionWorktree failed — removing worktree');
       try {
         await this.execGitSimple(['worktree', 'remove', '--force', worktreeDir], this.repoDir);
       } catch { /* best-effort cleanup */ }
       throw err;
     }
+    this.emitOutput(handle.executionId, '[worktree] Provisioning complete\n');
     log('provisionWorktree done');
 
     // -- Determine what to run --
@@ -565,7 +569,7 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
     }
   }
 
-  private provisionWorktree(dir: string): Promise<void> {
+  private provisionWorktree(dir: string, executionId?: string): Promise<void> {
     console.log(`[WorktreeFamiliar] provisionWorktree begin dir=${dir}`);
     const t0 = Date.now();
     return new Promise((resolve, reject) => {
@@ -579,12 +583,16 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
       let stdout = '';
       let stderr = '';
       child.stdout?.on('data', (d: Buffer) => {
-        stdout += d.toString();
-        console.log(`[WorktreeFamiliar] provision stdout: ${d.toString().trimEnd()}`);
+        const text = d.toString();
+        stdout += text;
+        console.log(`[WorktreeFamiliar] provision stdout: ${text.trimEnd()}`);
+        if (executionId) this.emitOutput(executionId, text);
       });
       child.stderr?.on('data', (d: Buffer) => {
-        stderr += d.toString();
-        console.log(`[WorktreeFamiliar] provision stderr: ${d.toString().trimEnd()}`);
+        const text = d.toString();
+        stderr += text;
+        console.log(`[WorktreeFamiliar] provision stderr: ${text.trimEnd()}`);
+        if (executionId) this.emitOutput(executionId, text);
       });
       child.on('close', (code) => {
         console.log(`[WorktreeFamiliar] provisionWorktree finished dir=${dir} code=${code} elapsed=${Date.now() - t0}ms`);
