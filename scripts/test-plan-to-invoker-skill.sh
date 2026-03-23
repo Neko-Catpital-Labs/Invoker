@@ -38,17 +38,20 @@ if [[ -e "$CURSOR_LINK" ]]; then
   esac
 fi
 
-# SKILL.md — intended flow and runtime gate
+# SKILL.md — agent-first behavioral verification + optional Invoker verify YAML
 must_contain "$SKILL_MD" "## Intended flow (do not skip steps)" "SKILL must document the full flow"
-must_contain "$SKILL_MD" "Runtime verification via Invoker" "SKILL must name runtime Invoker verification"
-must_contain "$SKILL_MD" "pnpm test" "SKILL must require pnpm test (electron-vitest) for runtime proof"
-must_contain "$SKILL_MD" "Grep-only verification is not step 3" "SKILL must forbid treating grep as step 3"
-must_contain "$SKILL_MD" "Phase 1b" "SKILL Execution must reference playbook Phase 1b"
+must_contain "$SKILL_MD" "Behavioral verification (agent environment, first)" "SKILL must require agent-first behavioral verification"
+must_contain "$SKILL_MD" "Invoker \`command\` tasks are optional / secondary" "SKILL must state Invoker command tasks are secondary to agent runs"
+must_contain "$SKILL_MD" "pnpm test" "SKILL must mention pnpm test (electron-vitest) for behavioral proof"
+must_contain "$SKILL_MD" "Grep-only checks belong in step 2" "SKILL must separate grep from behavioral verification"
+must_contain "$SKILL_MD" "see playbook Phase 1b" "SKILL Execution must reference playbook Phase 1b"
+must_contain "$SKILL_MD" "see playbook Phase 1c" "SKILL Execution must reference optional Invoker verify YAML (Phase 1c)"
 
-# Playbook — Phase 1a / 1b split and anti-pattern
+# Playbook — Phase 1a / 1b / 1c and anti-patterns
 must_contain "$PLAYBOOK" "### Phase 1a — Static analysis" "Playbook must define Phase 1a"
-must_contain "$PLAYBOOK" "### Phase 1b — Runtime verification (Invoker)" "Playbook must define Phase 1b"
-must_contain "$PLAYBOOK" "pnpm test" "Playbook must document pnpm test for runtime verification"
-must_contain "$PLAYBOOK" "Static-only verification for behavioral claims" "Playbook anti-patterns must warn about static-only"
+must_contain "$PLAYBOOK" "### Phase 1b — Behavioral verification (agent environment" "Playbook must define agent-first behavioral verification"
+must_contain "$PLAYBOOK" "### Phase 1c — Invoker verification YAML (optional" "Playbook must define optional secondary Invoker verify plan"
+must_contain "$PLAYBOOK" "pnpm test" "Playbook must document pnpm test for behavioral verification"
+must_contain "$PLAYBOOK" "**Invoker-only runtime**" "Playbook anti-patterns must warn about Invoker as first runtime"
 
 echo "OK: plan-to-invoker skill contract checks passed"
