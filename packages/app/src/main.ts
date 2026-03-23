@@ -62,6 +62,11 @@ import {
   selectExperiments as sharedSelectExperiments,
 } from './workflow-actions.js';
 import { spawn } from 'node:child_process';
+import {
+  buildLinuxXTerminalBashScript,
+  buildMacOSOsascriptArgs,
+  spawnDetachedTerminal,
+} from './terminal-external-launch.js';
 import { createRequire } from 'node:module';
 
 // ── Detect headless mode ─────────────────────────────────────
@@ -1043,7 +1048,7 @@ function setupGuiMode(): void {
     });
 
     // ── External terminal launcher ──────────────────────────────
-    ipcMain.handle('invoker:open-terminal', (_event, taskId: string): { opened: boolean; reason?: string } => {
+    ipcMain.handle('invoker:open-terminal', async (_event, taskId: string): Promise<{ opened: boolean; reason?: string }> => {
       console.log(`[open-terminal] invoked for task="${taskId}"`);
       const taskStatus = persistence.getTaskStatus(taskId);
       console.log(`[open-terminal] task="${taskId}" status="${taskStatus}"`);
@@ -1121,45 +1126,30 @@ function setupGuiMode(): void {
         cleanEnv.PATH = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin';
         if (!cleanEnv.TERM) cleanEnv.TERM = 'xterm-256color';
 
-        // x-terminal-emulator wrappers (e.g. gnome-terminal.wrapper) silently
-        // drop --working-directory. Use -e with an explicit cd instead.
-        const cmdStr = spec.command
-          ? [spec.command, ...(spec.args ?? [])].map(a => `'${a}'`).join(' ')
-          : undefined;
-        const isClaudeSession = spec.command === 'claude';
-        const suffix = isClaudeSession
-          ? '; exec bash'
-          : '; echo ""; echo "Exit code: $?"; echo "Press Enter to close..."; read';
-        const termArgs = cmdStr
-          ? ['-e', 'bash', '-c', `cd '${cwd}' && ${cmdStr}${suffix}`]
-          : ['-e', 'bash', '-c', `cd '${cwd}' && exec bash`];
+        const bashScript = buildLinuxXTerminalBashScript(spec, cwd);
+        const termArgs = ['-e', 'bash', '-c', bashScript];
 
         console.log(`[open-terminal] spawning x-terminal-emulator with args: ${JSON.stringify(termArgs)}`);
-        const child = spawn('x-terminal-emulator', termArgs, {
-          detached: true,
-          stdio: 'ignore',
-          env: cleanEnv,
-        });
-        child.on('close', onTerminalClose);
-        child.unref();
-      } else if (process.platform === 'darwin') {
-        if (spec.command) {
-          const fullCmd = [spec.command, ...(spec.args ?? [])].join(' ');
-          const child = spawn('osascript', [
-            '-e', `tell application "Terminal" to do script "${fullCmd}"`,
-          ], { detached: true, stdio: 'ignore' });
-          child.on('close', onTerminalClose);
-          child.unref();
-        } else {
-          const child = spawn('open', ['-a', 'Terminal', cwd], {
-            detached: true,
-            stdio: 'ignore',
-          });
-          child.on('close', onTerminalClose);
-          child.unref();
-        }
+        const linuxResult = await spawnDetachedTerminal('x-terminal-emulator', termArgs, { env: cleanEnv }, onTerminalClose);
+        console.log(`[open-terminal] task="${taskId}" result=${JSON.stringify(linuxResult)}`);
+        return linuxResult;
       }
-      return { opened: true };
+
+      if (process.platform === 'darwin') {
+        if (spec.command) {
+          const osaArgs = buildMacOSOsascriptArgs(spec, cwd);
+          console.log(`[open-terminal] spawning osascript with args: ${JSON.stringify(osaArgs)}`);
+          const osaResult = await spawnDetachedTerminal('osascript', osaArgs, {}, onTerminalClose);
+          console.log(`[open-terminal] task="${taskId}" result=${JSON.stringify(osaResult)}`);
+          return osaResult;
+        }
+        console.log(`[open-terminal] spawning open -a Terminal cwd="${cwd}"`);
+        const openResult = await spawnDetachedTerminal('open', ['-a', 'Terminal', cwd], {}, onTerminalClose);
+        console.log(`[open-terminal] task="${taskId}" result=${JSON.stringify(openResult)}`);
+        return openResult;
+      }
+
+      return { opened: false, reason: `External terminal is not supported on platform: ${process.platform}` };
     });
 
     createWindow();

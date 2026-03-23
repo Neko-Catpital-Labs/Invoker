@@ -26,6 +26,11 @@ import {
   type FamiliarHandle, type TerminalSpec, type PersistedTaskMeta,
 } from '@invoker/executors';
 import type { WorkResponse, WorkRequest } from '@invoker/protocol';
+import {
+  buildLinuxXTerminalBashScript,
+  buildMacOSOsascriptArgs,
+  buildTerminalShellCommand,
+} from '../terminal-external-launch.js';
 
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>();
@@ -92,13 +97,13 @@ function buildCleanEnv(): Record<string, string> {
 }
 
 function openExternalTerminal(spec: TerminalSpec | null): void {
-  const cwd = spec?.cwd ?? process.cwd();
+  const defaultCwd = spec?.cwd ?? process.cwd();
+  const meta = { cwd: spec?.cwd, command: spec?.command, args: spec?.args };
 
   if (process.platform === 'linux') {
     const cleanEnv = buildCleanEnv();
-    const termArgs = spec?.command
-      ? ['-e', spec.command, ...(spec.args ?? [])]
-      : ['--working-directory', cwd];
+    const bashScript = buildLinuxXTerminalBashScript(meta, defaultCwd);
+    const termArgs = ['-e', 'bash', '-c', bashScript];
 
     const child = mockSpawn('x-terminal-emulator', termArgs, {
       detached: true,
@@ -108,13 +113,11 @@ function openExternalTerminal(spec: TerminalSpec | null): void {
     child.unref();
   } else if (process.platform === 'darwin') {
     if (spec?.command) {
-      const fullCmd = [spec.command, ...(spec.args ?? [])].join(' ');
-      const child = mockSpawn('osascript', [
-        '-e', `tell application "Terminal" to do script "${fullCmd}"`,
-      ], { detached: true, stdio: 'ignore' });
+      const osaArgs = buildMacOSOsascriptArgs(meta, defaultCwd);
+      const child = mockSpawn('osascript', osaArgs, { detached: true, stdio: 'ignore' });
       child.unref();
     } else {
-      const child = mockSpawn('open', ['-a', 'Terminal', cwd], {
+      const child = mockSpawn('open', ['-a', 'Terminal', defaultCwd], {
         detached: true,
         stdio: 'ignore',
       });
@@ -234,20 +237,24 @@ describe('open-terminal integration', () => {
     );
   });
 
-  it('directory mode: spawns --working-directory on linux', () => {
+  it('directory mode: spawns bash -c with cd and exec bash on linux', () => {
     const spec: TerminalSpec = { cwd: '/tmp/workspace' };
     openExternalTerminal(spec);
 
     if (process.platform === 'linux') {
+      const expectedScript = buildLinuxXTerminalBashScript(
+        { cwd: '/tmp/workspace' },
+        '/tmp/workspace',
+      );
       expect(mockSpawn).toHaveBeenCalledWith(
         'x-terminal-emulator',
-        ['--working-directory', '/tmp/workspace'],
+        ['-e', 'bash', '-c', expectedScript],
         expect.objectContaining({ detached: true, stdio: 'ignore', env: expect.any(Object) }),
       );
     }
   });
 
-  it('command mode: spawns -e with command and args on linux', () => {
+  it('command mode: spawns bash -c with POSIX-quoted argv on linux', () => {
     const spec: TerminalSpec = {
       command: 'docker',
       args: ['exec', '-it', 'container-abc', '/bin/bash'],
@@ -255,9 +262,13 @@ describe('open-terminal integration', () => {
     openExternalTerminal(spec);
 
     if (process.platform === 'linux') {
+      const expectedScript = buildLinuxXTerminalBashScript(
+        { command: 'docker', args: ['exec', '-it', 'container-abc', '/bin/bash'] },
+        process.cwd(),
+      );
       expect(mockSpawn).toHaveBeenCalledWith(
         'x-terminal-emulator',
-        ['-e', 'docker', 'exec', '-it', 'container-abc', '/bin/bash'],
+        ['-e', 'bash', '-c', expectedScript],
         expect.objectContaining({ detached: true, stdio: 'ignore', env: expect.any(Object) }),
       );
     }
@@ -276,6 +287,46 @@ describe('open-terminal integration', () => {
       expect(env).not.toHaveProperty('LD_LIBRARY_PATH');
       expect(env).not.toHaveProperty('SNAP');
     }
+  });
+});
+
+describe('terminal-external-launch', () => {
+  it('joins argv with POSIX quotes so bash -c script stays one argument', () => {
+    const spec = {
+      command: 'bash' as const,
+      args: ['-c', `git checkout 'feature/x' 2>/dev/null; exec bash`],
+      cwd: '/tmp/wt',
+    };
+    const line = buildTerminalShellCommand(spec, '/fallback');
+    expect(line).toContain(`cd '/tmp/wt'`);
+    expect(line).toMatch(/'bash' '-c' '/);
+    expect(line).toContain('git checkout');
+    expect(line).toContain('feature/x');
+  });
+
+  it('uses backslash-quote idiom for embedded single quotes (no double quotes in output)', () => {
+    const line = buildTerminalShellCommand(
+      { command: 'bash', args: ['-c', "echo 'hello'"] },
+      '/tmp',
+    );
+    // Should use '\'' (backslash-quote) not '"'"' (double-quote idiom)
+    expect(line).toContain("\\'");
+    expect(line).not.toMatch(/'"'"'/);
+  });
+
+  it('buildMacOSOsascriptArgs includes activate and uses multi-line AppleScript', () => {
+    const args = buildMacOSOsascriptArgs(
+      { command: 'echo', args: ['a"b'], cwd: '/tmp' },
+      '/tmp',
+    );
+    // Multi-line: tell, activate, do script, end tell
+    expect(args).toEqual(expect.arrayContaining([
+      '-e', 'tell application "Terminal"',
+      '-e', 'activate',
+    ]));
+    const doScriptArg = args.find(a => a.startsWith('do script'));
+    expect(doScriptArg).toBeDefined();
+    expect(doScriptArg).toContain('\\"');
   });
 });
 
