@@ -621,6 +621,26 @@ describe('TaskPanel double-click editing', () => {
 
       expect(screen.getByTestId('executor-type-select')).toBeInTheDocument();
     });
+
+    it('defaults executor select to worktree when familiarType and repoUrl are unset (matches TaskExecutor default)', () => {
+      const task = makeTask({
+        prompt: 'Write a test',
+        status: 'pending',
+      });
+      render(
+        <TaskPanel
+          task={task}
+          onProvideInput={mockOnProvideInput}
+          onApprove={mockOnApprove}
+          onReject={mockOnReject}
+          onSelectExperiment={mockOnSelectExperiment}
+          onEditCommand={mockOnEditCommand}
+          onEditType={vi.fn()}
+        />,
+      );
+
+      expect(screen.getByTestId('executor-type-select')).toHaveValue('worktree');
+    });
   });
 
   describe('PR URL display for merge gates', () => {

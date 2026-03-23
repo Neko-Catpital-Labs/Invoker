@@ -68,7 +68,6 @@ function createHeadlessExecutor(
     familiarRegistry: deps.familiarRegistry,
     cwd: deps.repoRoot,
     defaultBranch: deps.invokerConfig.defaultBranch,
-    disableLocalExecutorExceptMergeGate: deps.invokerConfig.disableLocalExecutorExceptMergeGate,
     mergeGateProvider: new GitHubMergeGateProvider(),
     callbacks: {
       onOutput: (taskId, data) => {

@@ -42,6 +42,16 @@ function formatDate(date?: Date | string): string {
   return d.toLocaleTimeString();
 }
 
+/**
+ * Value for the executor select — mirrors TaskExecutor.selectFamiliar
+ * (packages/executors/src/task-executor.ts). Merge nodes hide the selector.
+ */
+function effectiveExecutorSelectValue(task: TaskState): string {
+  const effective =
+    task.config.familiarType ?? (task.config.repoUrl ? 'worktree' : undefined);
+  return effective ?? 'worktree';
+}
+
 function HeartbeatTimingSection({ task, formatDate: fmtDate }: { task: TaskState; formatDate: (d?: Date | string) => string }) {
   const [, setTick] = useState(0);
 
@@ -234,15 +244,17 @@ export function TaskPanel({
         <div className="flex items-center justify-between">
           <span className="text-sm text-gray-400">Executor</span>
           <select
-            value={task.config.familiarType ?? 'local'}
+            value={effectiveExecutorSelectValue(task)}
             onChange={(e) => onEditType(task.id, e.target.value)}
             disabled={task.status === 'running'}
             className="bg-gray-700 text-gray-200 text-xs rounded px-2 py-1 border border-gray-600 focus:outline-none focus:border-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
             data-testid="executor-type-select"
           >
-            <option value="local">Local</option>
             <option value="worktree">Worktree</option>
             <option value="docker">Docker</option>
+            {task.config.familiarType === 'local' ? (
+              <option value="local">Local</option>
+            ) : null}
           </select>
         </div>
       )}

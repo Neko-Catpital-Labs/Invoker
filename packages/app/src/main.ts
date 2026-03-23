@@ -172,7 +172,6 @@ async function wireSlackBot(deps: SlackBotDeps): Promise<any> {
     workingDir: repoRoot,
     conversationRepo,
     defaultBranch: invokerConfig.defaultBranch,
-    disableLocalExecutorExceptMergeGate: invokerConfig.disableLocalExecutorExceptMergeGate,
     log: deps.logFn,
     planningTimeoutMs: invokerConfig.planningTimeoutMs,
     planningHeartbeatIntervalMs: invokerConfig.planningHeartbeatIntervalMs,
@@ -286,7 +285,6 @@ function setupGuiMode(): void {
       familiarRegistry,
       cwd: repoRoot,
       defaultBranch: invokerConfig.defaultBranch,
-    disableLocalExecutorExceptMergeGate: invokerConfig.disableLocalExecutorExceptMergeGate,
       mergeGateProvider: new GitHubMergeGateProvider(),
       callbacks: {
         onOutput: (taskId, data) => {
@@ -1028,7 +1026,7 @@ function setupGuiMode(): void {
 
       const meta: PersistedTaskMeta = {
         taskId,
-        familiarType: persistence.getFamiliarType(taskId) ?? 'local',
+        familiarType: persistence.getFamiliarType(taskId) ?? 'worktree',
         claudeSessionId: persistence.getClaudeSessionId(taskId) ?? undefined,
         containerId: persistence.getContainerId(taskId) ?? undefined,
         workspacePath: persistence.getWorkspacePath(taskId) ?? undefined,
