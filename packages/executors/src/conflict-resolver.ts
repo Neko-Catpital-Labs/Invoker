@@ -116,6 +116,60 @@ export async function resolveConflictWithClaudeImpl(
 }
 
 /**
+ * Build the Claude fix prompt based on task type.
+ *
+ * - Merge-gate tasks get a merge-conflict-focused prompt.
+ * - Command tasks get the existing command-focused prompt.
+ * - Prompt-only / other tasks get a generic failure prompt.
+ */
+export function buildFixPrompt(
+  task: { description: string; config: { command?: string; isMergeNode?: boolean; prompt?: string }; execution: { error?: string } },
+  taskOutput: string,
+): string {
+  const errorLines = taskOutput.split('\n').slice(-200).join('\n');
+
+  if (task.config.isMergeNode) {
+    return [
+      `A merge operation failed while consolidating task branches. Fix the underlying issue so the merge can succeed.`,
+      ``,
+      `Task: ${task.description}`,
+      ``,
+      `Error: ${task.execution.error ?? 'Unknown error'}`,
+      ...(errorLines ? [``, `Output (last 200 lines):`, errorLines] : []),
+      ``,
+      `Diagnose and fix the root cause. Common issues include merge conflicts between task branches, ` +
+      `incompatible changes across parallel tasks, or missing files. Fix the code so branches can merge cleanly.`,
+    ].join('\n');
+  }
+
+  if (task.config.command) {
+    return [
+      `A build/test command failed. Fix the code so the command succeeds.`,
+      ``,
+      `Task: ${task.description}`,
+      `Command: ${task.config.command}`,
+      ``,
+      `Error output (last 200 lines):`,
+      errorLines,
+      ``,
+      `Fix the underlying code issue. Do NOT modify the command itself.`,
+    ].join('\n');
+  }
+
+  return [
+    `A task failed. Fix the underlying issue so the task can succeed.`,
+    ``,
+    `Task: ${task.description}`,
+    ...(task.config.prompt ? [`Original prompt: ${task.config.prompt}`] : []),
+    ``,
+    `Error: ${task.execution.error ?? 'Unknown error'}`,
+    ...(errorLines ? [``, `Output (last 200 lines):`, errorLines] : []),
+    ``,
+    `Fix the underlying code issue that caused this task to fail.`,
+  ].join('\n');
+}
+
+/**
  * Fix a failed command task by spawning Claude with the error output.
  * Claude's output is captured and appended to the task's output stream for auditing.
  */
@@ -132,18 +186,7 @@ export async function fixWithClaudeImpl(
 
   const cwd = task.execution.workspacePath ?? host.cwd;
 
-  const errorLines = taskOutput.split('\n').slice(-200).join('\n');
-  const prompt = [
-    `A build/test command failed. Fix the code so the command succeeds.`,
-    ``,
-    `Task: ${task.description}`,
-    `Command: ${task.config.command}`,
-    ``,
-    `Error output (last 200 lines):`,
-    errorLines,
-    ``,
-    `Fix the underlying code issue. Do NOT modify the command itself.`,
-  ].join('\n');
+  const prompt = buildFixPrompt(task, taskOutput);
 
   const { stdout: output, sessionId } = await host.spawnClaudeFix(prompt, cwd);
   if (output) {

@@ -31,7 +31,7 @@ export function ContextMenu({ x, y, task, onRestart, onReplace, onOpenTerminal, 
   const canRestartWorkflow = !!task.config.workflowId && !!onRestartWorkflow;
   const canDeleteWorkflow = !!task.config.workflowId && !!onDeleteWorkflow;
   const hasMergeConflict = task.status === 'failed' && !!task.execution.mergeConflict;
-  const canFixWithClaude = task.status === 'failed' && !!task.config.command && !hasMergeConflict && !!onFixWithClaude;
+  const canFixWithClaude = task.status === 'failed' && !hasMergeConflict && !!onFixWithClaude;
 
   useEffect(() => {
     const handleClick = (e: MouseEvent) => {
