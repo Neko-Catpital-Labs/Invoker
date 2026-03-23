@@ -124,10 +124,11 @@ export function App() {
     try {
       await window.invoker?.deleteWorkflow(workflowId);
       setSelectedTaskId(null);
+      refreshTasks();
     } catch (err) {
       console.error('Delete Workflow failed:', err);
     }
-  }, []);
+  }, [refreshTasks]);
 
   const handleResolveConflict = useCallback(async (taskId: string) => {
     setContextMenu(null);

@@ -76,7 +76,7 @@ export function useTasks(): UseTasksResult {
     });
 
     const unsubWf = window.invoker.onWorkflowsChanged?.((wfList: any[]) => {
-      if (Array.isArray(wfList) && wfList.length > 0) {
+      if (Array.isArray(wfList)) {
         setWorkflows(() => {
           const wfMap = new Map<string, WorkflowMeta>();
           for (const wf of wfList) wfMap.set(wf.id, wf);
