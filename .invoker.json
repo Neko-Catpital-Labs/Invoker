@@ -1,5 +1,5 @@
 {
   "defaultBranch": "master",
-  "planningTimeoutMs": 900000,
+  "planningTimeoutMs": 3600000,
   "maxConcurrency": 6
 }
