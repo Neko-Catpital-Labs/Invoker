@@ -1,4 +1,4 @@
-import { FamiliarRegistry, LocalFamiliar, WorktreeFamiliar, DockerFamiliar } from '@invoker/executors';
+import { FamiliarRegistry, WorktreeFamiliar, DockerFamiliar } from '@invoker/executors';
 import type { Familiar, FamiliarHandle } from '@invoker/executors';
 import type { TaskState } from '@invoker/core';
 
@@ -21,7 +21,6 @@ describe('Terminal routing via selectFamiliar', () => {
 
   beforeEach(() => {
     registry = new FamiliarRegistry();
-    registry.register('local', new LocalFamiliar());
     registry.register('worktree', new WorktreeFamiliar({ repoDir: '/tmp' }));
   });
 
@@ -31,10 +30,10 @@ describe('Terminal routing via selectFamiliar', () => {
     expect(familiar.type).toBe('worktree');
   });
 
-  it('returns local familiar for familiarType "local"', () => {
-    const task = { config: { familiarType: 'local' }, execution: {} } as TaskState;
+  it('returns worktree familiar for familiarType "worktree"', () => {
+    const task = { config: { familiarType: 'worktree' }, execution: {} } as TaskState;
     const familiar = selectFamiliar(registry, task);
-    expect(familiar.type).toBe('local');
+    expect(familiar.type).toBe('worktree');
   });
 
   it('lazily creates and returns docker familiar for familiarType "docker"', () => {

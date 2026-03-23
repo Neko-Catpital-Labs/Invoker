@@ -127,7 +127,7 @@ describe('ResourceEstimator', () => {
     it('returns utilization unchanged (stub)', () => {
       const estimator = new ResourceEstimator();
       expect(estimator.adjustForPool(UTILIZATION_MAX, 'remote-1')).toBe(UTILIZATION_MAX);
-      expect(estimator.adjustForPool(50, 'local')).toBe(50);
+      expect(estimator.adjustForPool(50, 'worktree')).toBe(50);
     });
   });
 });

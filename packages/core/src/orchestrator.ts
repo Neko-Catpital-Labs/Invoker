@@ -24,6 +24,7 @@ import type { UtilizationRule } from './resource-estimator.js';
 import type { TaskState, TaskDelta, TaskStateChanges, Attempt } from './task-types.js';
 import { createTaskState, createAttempt } from './task-types.js';
 import type { WorkResponse } from '@invoker/protocol';
+import { normalizeFamiliarType } from '@invoker/graph';
 
 const MERGE_TRACE_LOG = resolve(homedir(), '.invoker', 'merge-trace.log');
 function mergeTrace(tag: string, data: Record<string, unknown>): void {
@@ -331,7 +332,7 @@ export class Orchestrator {
           requiresManualApproval: taskDef.requiresManualApproval,
           repoUrl: taskDef.repoUrl,
           featureBranch: taskDef.featureBranch,
-          familiarType: taskDef.familiarType ?? (taskDef.command ? 'local' : 'worktree'),
+          familiarType: normalizeFamiliarType(taskDef.familiarType) ?? 'worktree',
           dockerImage: taskDef.dockerImage,
           autoFix: taskDef.autoFix,
           maxFixAttempts: taskDef.maxFixAttempts,
@@ -881,7 +882,8 @@ export class Orchestrator {
     if (task.config.isMergeNode) throw new Error(`Cannot change executor type of merge node ${taskId}`);
     if (task.status === 'running') throw new Error(`Cannot edit running task ${taskId}`);
 
-    const typeChanges: TaskStateChanges = { config: { familiarType } };
+    const effectiveType = normalizeFamiliarType(familiarType) ?? familiarType;
+    const typeChanges: TaskStateChanges = { config: { familiarType: effectiveType } };
     this.writeAndSync(taskId, typeChanges);
     const typeDelta: TaskDelta = { type: 'updated', taskId, changes: typeChanges };
     this.persistence.logEvent?.(taskId, 'task.updated', typeChanges);

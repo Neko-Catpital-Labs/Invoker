@@ -455,6 +455,15 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
       console.log(`[WorktreeFamiliar] getRestoredTerminalSpec task="${meta.taskId}" → claude --resume spec, cwd="${spec.cwd}"`);
       return spec;
     }
+    if (meta.branch) {
+      const spec = {
+        command: 'bash',
+        args: ['-c', `git checkout '${meta.branch}' 2>/dev/null; exec bash`],
+        cwd: meta.workspacePath,
+      };
+      console.log(`[WorktreeFamiliar] getRestoredTerminalSpec task="${meta.taskId}" → checkout branch spec, branch="${meta.branch}" cwd="${spec.cwd}"`);
+      return spec;
+    }
     console.log(`[WorktreeFamiliar] getRestoredTerminalSpec task="${meta.taskId}" → cwd-only spec, cwd="${meta.workspacePath}"`);
     return { cwd: meta.workspacePath };
   }

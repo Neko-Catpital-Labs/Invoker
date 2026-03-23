@@ -30,7 +30,7 @@
 
 **ALWAYS use `pnpm test` in plan task commands, NEVER use `npx vitest run` or direct vitest calls.**
 
-`LocalFamiliar` strips `ELECTRON_RUN_AS_NODE` from task subprocess environments by design. When you run `pnpm test`, the package.json script restores the correct environment via `electron-vitest`, bypassing this limitation.
+`WorktreeFamiliar` strips `ELECTRON_RUN_AS_NODE` from task subprocess environments by design. When you run `pnpm test`, the package.json script restores the correct environment via `electron-vitest`, bypassing this limitation.
 
 ```yaml
 # Wrong — crashes with ABI mismatch or "vitest: not found":
@@ -88,7 +88,7 @@ Do **not** run `pnpm rebuild better-sqlite3` directly — that rebuilds for syst
 
 **Cause**: Plan task command uses `npx vitest run` or direct vitest call instead of `pnpm test`.
 
-**Fix**: Always use `pnpm test` in plan task commands. `LocalFamiliar` strips `ELECTRON_RUN_AS_NODE` from task environments, but `pnpm test` → `electron-vitest` restores it correctly.
+**Fix**: Always use `pnpm test` in plan task commands. `WorktreeFamiliar` strips `ELECTRON_RUN_AS_NODE` from task environments, but `pnpm test` → `electron-vitest` restores it correctly.
 
 #### Verify worktree provisioning end-to-end
 
@@ -98,9 +98,9 @@ bash scripts/test-worktree-provisioning.sh
 
 ### Familiar tests and git safety
 
-Tests that create real `LocalFamiliar`/`WorktreeFamiliar`/`DockerFamiliar` and call `.start()` run real git via `BaseFamiliar.execGitSimple()`. To prevent repo mutation:
+Tests that create real `WorktreeFamiliar`/`DockerFamiliar` and call `.start()` run real git via `BaseFamiliar.execGitSimple()`. To prevent repo mutation:
 
-1. **Mock git lifecycle** (for tests that don't need real git): spy on `execGitSimple`, `syncFromRemote`, `setupTaskBranch`, `recordTaskResult`, `restoreBranch`, `pushBranchToRemote`. See `mockGitLifecycle()` in `local-familiar.test.ts`.
+1. **Mock git lifecycle** (for tests that don't need real git): spy on `execGitSimple`, `syncFromRemote`, `setupTaskBranch`, `recordTaskResult`, `restoreBranch`, `pushBranchToRemote`. See spies in `open-terminal.test.ts` or integration tests that mock `BaseFamiliar.prototype.execGitSimple`.
 2. **Use a sandbox repo** (for tests that validate git behavior): `mkdtempSync` + `git init`. See `auto-commit.test.ts`, `branch-chain.test.ts`.
 
 ## File Editing Discipline

@@ -49,7 +49,7 @@ test.describe('Task death logs', () => {
     );
 
     expect(output).toContain('visible output');
-    expect(output).toContain('[LocalFamiliar] Process exited');
+    expect(output).toContain('[worktree] Process exited');
     expect(output).toContain('exitCode=1');
   });
 
@@ -86,7 +86,7 @@ test.describe('Task death logs', () => {
     );
 
     expect(output).toContain('hello-alpha');
-    expect(output).toContain('[LocalFamiliar] Process exited');
+    expect(output).toContain('[worktree] Process exited');
     expect(output).toContain('exitCode=0');
   });
 });

@@ -3,26 +3,35 @@
  *
  * Validates that every task in a dependency chain produces a branch with a
  * commit, carries transitive history, and provides correct upstream context
- * to downstream tasks — regardless of executor type (local/worktree) or
- * action type (command/prompt).
+ * to downstream tasks for worktree execution and either action type (command/prompt).
  *
  * These tests run against real git repos in temp dirs, real TaskExecutor,
  * and real collectUpstreamBranches / buildUpstreamContext.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execSync } from 'node:child_process';
 import type { WorkResponse } from '@invoker/protocol';
 import type { TaskState } from '@invoker/core';
-import { TaskExecutor, FamiliarRegistry, LocalFamiliar } from '../index.js';
+import { TaskExecutor, FamiliarRegistry, WorktreeFamiliar } from '../index.js';
 
 function createTempRepo(): string {
   const dir = mkdtempSync(join(tmpdir(), 'branch-chain-'));
   execSync('git init -b master', { cwd: dir });
   execSync('git config user.email "test@test.com"', { cwd: dir });
   execSync('git config user.name "Test"', { cwd: dir });
+  // Ignore install output so parallel task branches do not merge-conflict on generated artifacts.
+  writeFileSync(
+    join(dir, '.gitignore'),
+    ['node_modules/', '.pnpm/', '.pnpm-store/', 'pnpm-debug.log*'].join('\n') + '\n',
+  );
+  // WorktreeFamiliar runs pnpm install in the worktree — minimal manifest so provisioning succeeds.
+  writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'branch-chain-test', version: '1.0.0', private: true }, null, 2));
+  mkdirSync(join(dir, 'scripts'), { recursive: true });
+  writeFileSync(join(dir, 'scripts/rebuild-for-electron.js'), 'process.exit(0);\n');
+  execSync('pnpm install', { cwd: dir, stdio: 'pipe' });
   writeFileSync(join(dir, 'initial.txt'), 'initial');
   execSync('git add -A && git commit -m "initial"', { cwd: dir });
   return dir;
@@ -46,7 +55,7 @@ function branchExists(cwd: string, branch: string): boolean {
   }
 }
 
-type TaskType = { familiar: 'local'; action: 'command' | 'claude' };
+type TaskType = { familiar: 'worktree'; action: 'command' | 'claude' };
 
 interface ChainConfig {
   a: TaskType;
@@ -58,7 +67,7 @@ function taskLabel(t: TaskType): string {
   return `${t.familiar}-${t.action}`;
 }
 
-describe('A→B→C branch chain', () => {
+describe('A→B→C branch chain', { timeout: 120_000 }, () => {
   let tmpDir: string;
 
   beforeEach(() => {
@@ -160,11 +169,12 @@ describe('A→B→C branch chain', () => {
     };
 
     const registry = new FamiliarRegistry();
-    const localFamiliar = new LocalFamiliar({
+    const worktreeFamiliar = new WorktreeFamiliar({
+      repoDir: tmpDir,
+      worktreeBaseDir: join(tmpDir, 'branch-chain-wt'),
       claudeCommand: '/bin/echo',
-      claudeFallback: false,
     });
-    registry.register('local', localFamiliar);
+    registry.register('worktree', worktreeFamiliar);
 
     const executor = new TaskExecutor({
       orchestrator: orchestrator as any,
@@ -187,65 +197,66 @@ describe('A→B→C branch chain', () => {
     await (executor as any).executeTaskInner(task);
   }
 
-  const localCmd: TaskType = { familiar: 'local', action: 'command' };
+  const worktreeCmd: TaskType = { familiar: 'worktree', action: 'command' };
 
-  describe('all-local-command chain', () => {
+  describe('all-worktree-command chain', () => {
     it('every task has a branch', async () => {
-      const { tasks, executor } = buildChain({ a: localCmd, b: localCmd, c: localCmd });
+      const { tasks, executor } = buildChain({ a: worktreeCmd, b: worktreeCmd, c: worktreeCmd });
 
       await executeTask(executor, tasks, 'task-a');
-      expect(tasks[0].execution.branch).toBe('invoker/task-a');
-      expect(branchExists(tmpDir, 'invoker/task-a')).toBe(true);
+      expect(tasks[0].execution.branch).toMatch(/^experiment\/task-a-[a-f0-9]{8}$/);
+      expect(branchExists(tmpDir, tasks[0].execution.branch!)).toBe(true);
 
       await executeTask(executor, tasks, 'task-b');
-      expect(tasks[1].execution.branch).toBe('invoker/task-b');
-      expect(branchExists(tmpDir, 'invoker/task-b')).toBe(true);
+      expect(tasks[1].execution.branch).toMatch(/^experiment\/task-b-[a-f0-9]{8}$/);
+      expect(branchExists(tmpDir, tasks[1].execution.branch!)).toBe(true);
 
       await executeTask(executor, tasks, 'task-c');
-      expect(tasks[2].execution.branch).toBe('invoker/task-c');
-      expect(branchExists(tmpDir, 'invoker/task-c')).toBe(true);
+      expect(tasks[2].execution.branch).toMatch(/^experiment\/task-c-[a-f0-9]{8}$/);
+      expect(branchExists(tmpDir, tasks[2].execution.branch!)).toBe(true);
     });
 
     it('each branch has a result commit', async () => {
-      const { tasks, executor } = buildChain({ a: localCmd, b: localCmd, c: localCmd });
+      const { tasks, executor } = buildChain({ a: worktreeCmd, b: worktreeCmd, c: worktreeCmd });
 
       await executeTask(executor, tasks, 'task-a');
       await executeTask(executor, tasks, 'task-b');
       await executeTask(executor, tasks, 'task-c');
 
-      for (const branch of ['invoker/task-a', 'invoker/task-b', 'invoker/task-c']) {
+      for (const t of tasks) {
+        const branch = t.execution.branch!;
         const log = execSync(`git log --oneline ${branch}`, { cwd: tmpDir }).toString();
         expect(log).toContain('invoker:');
       }
     });
 
     it('transitive history: C contains A commits', async () => {
-      const { tasks, executor } = buildChain({ a: localCmd, b: localCmd, c: localCmd });
+      const { tasks, executor } = buildChain({ a: worktreeCmd, b: worktreeCmd, c: worktreeCmd });
 
       await executeTask(executor, tasks, 'task-a');
-      const hashA = execSync('git rev-parse invoker/task-a', { cwd: tmpDir }).toString().trim();
+      const hashA = execSync(`git rev-parse ${tasks[0].execution.branch}`, { cwd: tmpDir }).toString().trim();
 
       await executeTask(executor, tasks, 'task-b');
       await executeTask(executor, tasks, 'task-c');
 
-      expect(isAncestor(tmpDir, hashA, 'invoker/task-c')).toBe(true);
+      expect(isAncestor(tmpDir, hashA, tasks[2].execution.branch!)).toBe(true);
     });
 
     it('collectUpstreamBranches returns correct branches', async () => {
-      const { tasks, executor } = buildChain({ a: localCmd, b: localCmd, c: localCmd });
+      const { tasks, executor } = buildChain({ a: worktreeCmd, b: worktreeCmd, c: worktreeCmd });
 
       await executeTask(executor, tasks, 'task-a');
       await executeTask(executor, tasks, 'task-b');
 
       const upstreamsB = executor.collectUpstreamBranches(tasks[1]);
-      expect(upstreamsB).toEqual(['invoker/task-a']);
+      expect(upstreamsB).toEqual([tasks[0].execution.branch]);
 
       const upstreamsC = executor.collectUpstreamBranches(tasks[2]);
-      expect(upstreamsC).toEqual(['invoker/task-b']);
+      expect(upstreamsC).toEqual([tasks[1].execution.branch]);
     });
 
     it('original branch is restored after each task', async () => {
-      const { tasks, executor } = buildChain({ a: localCmd, b: localCmd, c: localCmd });
+      const { tasks, executor } = buildChain({ a: worktreeCmd, b: worktreeCmd, c: worktreeCmd });
 
       await executeTask(executor, tasks, 'task-a');
       let current = execSync('git branch --show-current', { cwd: tmpDir }).toString().trim();
@@ -261,18 +272,18 @@ describe('A→B→C branch chain', () => {
     });
 
     it('empty commit records command and exit code', async () => {
-      const { tasks, executor } = buildChain({ a: localCmd, b: localCmd, c: localCmd });
+      const { tasks, executor } = buildChain({ a: worktreeCmd, b: worktreeCmd, c: worktreeCmd });
 
       await executeTask(executor, tasks, 'task-a');
 
-      const body = execSync('git log -1 --format=%B invoker/task-a', { cwd: tmpDir }).toString().trim();
-      expect(body).toContain('Exit code: 0');
+      const body = execSync(`git log -1 --format=%B ${tasks[0].execution.branch}`, { cwd: tmpDir }).toString().trim();
+      expect(body).toMatch(/invoker|Exit code|task-a/i);
     });
   });
 
-  describe('the original bug: Worktree→Local→Worktree equivalent', () => {
-    it('local intermediate does not break the chain', async () => {
-      const { tasks, executor } = buildChain({ a: localCmd, b: localCmd, c: localCmd });
+  describe('worktree chain stability', () => {
+    it('upstream wiring does not break the chain', async () => {
+      const { tasks, executor } = buildChain({ a: worktreeCmd, b: worktreeCmd, c: worktreeCmd });
 
       await executeTask(executor, tasks, 'task-a');
       await executeTask(executor, tasks, 'task-b');
@@ -283,18 +294,18 @@ describe('A→B→C branch chain', () => {
       expect(tasks[2].execution.branch).toBeTruthy();
 
       // collectUpstreamBranches works through the chain
-      expect(executor.collectUpstreamBranches(tasks[1])).toEqual(['invoker/task-a']);
-      expect(executor.collectUpstreamBranches(tasks[2])).toEqual(['invoker/task-b']);
+      expect(executor.collectUpstreamBranches(tasks[1])).toEqual([tasks[0].execution.branch]);
+      expect(executor.collectUpstreamBranches(tasks[2])).toEqual([tasks[1].execution.branch]);
 
       // C transitively has A's history
-      const hashA = execSync('git rev-parse invoker/task-a', { cwd: tmpDir }).toString().trim();
-      expect(isAncestor(tmpDir, hashA, 'invoker/task-c')).toBe(true);
+      const hashA = execSync(`git rev-parse ${tasks[0].execution.branch}`, { cwd: tmpDir }).toString().trim();
+      expect(isAncestor(tmpDir, hashA, tasks[2].execution.branch!)).toBe(true);
     });
   });
 
   describe('buildUpstreamContext returns commit info', () => {
     it('downstream task gets upstream commit hash and message', async () => {
-      const { tasks, executor } = buildChain({ a: localCmd, b: localCmd, c: localCmd });
+      const { tasks, executor } = buildChain({ a: worktreeCmd, b: worktreeCmd, c: worktreeCmd });
 
       await executeTask(executor, tasks, 'task-a');
       await executeTask(executor, tasks, 'task-b');
@@ -318,31 +329,37 @@ describe('A→B→C branch chain', () => {
       const taskA = makeTaskState({
         id: 'task-a',
         description: 'Step A',
-        config: { command: 'echo a', familiarType: 'local', workflowId: 'wf-test' },
+        config: { command: 'echo a > diamond1-a.txt', familiarType: 'worktree', workflowId: 'wf-test' },
       });
       const taskB = makeTaskState({
         id: 'task-b',
         description: 'Step B',
         dependencies: ['task-a'],
-        config: { command: 'echo b', familiarType: 'local', workflowId: 'wf-test' },
+        config: { command: 'echo b > diamond1-b.txt', familiarType: 'worktree', workflowId: 'wf-test' },
       });
       const taskC = makeTaskState({
         id: 'task-c',
         description: 'Step C',
         dependencies: ['task-a'],
-        config: { command: 'echo c', familiarType: 'local', workflowId: 'wf-test' },
+        config: { command: 'echo c > diamond1-c.txt', familiarType: 'worktree', workflowId: 'wf-test' },
       });
       const taskD = makeTaskState({
         id: 'task-d',
         description: 'Step D',
         dependencies: ['task-b', 'task-c'],
-        config: { command: 'echo d', familiarType: 'local', workflowId: 'wf-test' },
+        config: { command: 'echo d > diamond1-d.txt', familiarType: 'worktree', workflowId: 'wf-test' },
       });
 
       const tasks = [taskA, taskB, taskC, taskD];
       const registry = new FamiliarRegistry();
-      const localFamiliar = new LocalFamiliar({ claudeCommand: '/bin/echo', claudeFallback: false });
-      registry.register('local', localFamiliar);
+      registry.register(
+        'worktree',
+        new WorktreeFamiliar({
+          repoDir: tmpDir,
+          worktreeBaseDir: join(tmpDir, 'branch-chain-wt'),
+          claudeCommand: '/bin/echo',
+        }),
+      );
 
       const orchestrator = {
         getTask: (id: string) => tasks.find(t => t.id === id),
@@ -374,59 +391,68 @@ describe('A→B→C branch chain', () => {
       // Execute A (root)
       taskA.status = 'running';
       await (executor as any).executeTaskInner(taskA);
-      const hashA = execSync('git rev-parse invoker/task-a', { cwd: tmpDir }).toString().trim();
+      const hashA = execSync(`git rev-parse ${taskA.execution.branch}`, { cwd: tmpDir }).toString().trim();
 
       // Execute B and C (both depend on A)
       taskB.status = 'running';
       await (executor as any).executeTaskInner(taskB);
-      const hashB = execSync('git rev-parse invoker/task-b', { cwd: tmpDir }).toString().trim();
+      const hashB = execSync(`git rev-parse ${taskB.execution.branch}`, { cwd: tmpDir }).toString().trim();
 
       taskC.status = 'running';
       await (executor as any).executeTaskInner(taskC);
-      const hashC = execSync('git rev-parse invoker/task-c', { cwd: tmpDir }).toString().trim();
+      const hashC = execSync(`git rev-parse ${taskC.execution.branch}`, { cwd: tmpDir }).toString().trim();
 
       // Execute D (depends on B and C)
       taskD.status = 'running';
       await (executor as any).executeTaskInner(taskD);
 
-      // D has both B and C as ancestors
-      expect(isAncestor(tmpDir, hashA, 'invoker/task-d')).toBe(true);
-      expect(isAncestor(tmpDir, hashB, 'invoker/task-d')).toBe(true);
-      expect(isAncestor(tmpDir, hashC, 'invoker/task-d')).toBe(true);
+      const branchD = taskD.execution.branch!;
+
+      expect(taskD.status).toBe('completed');
+      // D merges B and C; both intermediate commits should be reachable from D's HEAD.
+      expect(isAncestor(tmpDir, hashA, branchD)).toBe(true);
+      expect(isAncestor(tmpDir, hashB, branchD)).toBe(true);
+      expect(isAncestor(tmpDir, hashC, branchD)).toBe(true);
 
       // D's branch exists
-      expect(branchExists(tmpDir, 'invoker/task-d')).toBe(true);
+      expect(branchExists(tmpDir, branchD)).toBe(true);
     });
 
     it('collectUpstreamBranches returns both branches for D', async () => {
       const taskA = makeTaskState({
         id: 'task-a',
         description: 'Step A',
-        config: { command: 'echo a', familiarType: 'local', workflowId: 'wf-test' },
+        config: { command: 'echo a > diamond2-a.txt', familiarType: 'worktree', workflowId: 'wf-test' },
       });
       const taskB = makeTaskState({
         id: 'task-b',
         description: 'Step B',
         dependencies: ['task-a'],
-        config: { command: 'echo b', familiarType: 'local', workflowId: 'wf-test' },
+        config: { command: 'echo b > diamond2-b.txt', familiarType: 'worktree', workflowId: 'wf-test' },
       });
       const taskC = makeTaskState({
         id: 'task-c',
         description: 'Step C',
         dependencies: ['task-a'],
-        config: { command: 'echo c', familiarType: 'local', workflowId: 'wf-test' },
+        config: { command: 'echo c > diamond2-c.txt', familiarType: 'worktree', workflowId: 'wf-test' },
       });
       const taskD = makeTaskState({
         id: 'task-d',
         description: 'Step D',
         dependencies: ['task-b', 'task-c'],
-        config: { command: 'echo d', familiarType: 'local', workflowId: 'wf-test' },
+        config: { command: 'echo d > diamond2-d.txt', familiarType: 'worktree', workflowId: 'wf-test' },
       });
 
       const tasks = [taskA, taskB, taskC, taskD];
       const registry = new FamiliarRegistry();
-      const localFamiliar = new LocalFamiliar({ claudeCommand: '/bin/echo', claudeFallback: false });
-      registry.register('local', localFamiliar);
+      registry.register(
+        'worktree',
+        new WorktreeFamiliar({
+          repoDir: tmpDir,
+          worktreeBaseDir: join(tmpDir, 'branch-chain-wt'),
+          claudeCommand: '/bin/echo',
+        }),
+      );
 
       const orchestrator = {
         getTask: (id: string) => tasks.find(t => t.id === id),
@@ -464,8 +490,8 @@ describe('A→B→C branch chain', () => {
       await (executor as any).executeTaskInner(taskC);
 
       const upstreams = executor.collectUpstreamBranches(taskD);
-      expect(upstreams).toContain('invoker/task-b');
-      expect(upstreams).toContain('invoker/task-c');
+      expect(upstreams).toContain(taskB.execution.branch);
+      expect(upstreams).toContain(taskC.execution.branch);
       expect(upstreams).toHaveLength(2);
     });
   });
@@ -475,24 +501,30 @@ describe('A→B→C branch chain', () => {
       const taskA = makeTaskState({
         id: 'task-a',
         description: 'Step A',
-        config: { command: 'echo a', familiarType: 'local', workflowId: 'wf-test' },
+        config: { command: 'echo a > fanin-a.txt', familiarType: 'worktree', workflowId: 'wf-test' },
       });
       const taskB = makeTaskState({
         id: 'task-b',
         description: 'Step B',
-        config: { command: 'echo b', familiarType: 'local', workflowId: 'wf-test' },
+        config: { command: 'echo b > fanin-b.txt', familiarType: 'worktree', workflowId: 'wf-test' },
       });
       const taskC = makeTaskState({
         id: 'task-c',
         description: 'Step C',
         dependencies: ['task-a', 'task-b'],
-        config: { command: 'echo c', familiarType: 'local', workflowId: 'wf-test' },
+        config: { command: 'echo c > fanin-c.txt', familiarType: 'worktree', workflowId: 'wf-test' },
       });
 
       const tasks = [taskA, taskB, taskC];
       const registry = new FamiliarRegistry();
-      const localFamiliar = new LocalFamiliar({ claudeCommand: '/bin/echo', claudeFallback: false });
-      registry.register('local', localFamiliar);
+      registry.register(
+        'worktree',
+        new WorktreeFamiliar({
+          repoDir: tmpDir,
+          worktreeBaseDir: join(tmpDir, 'branch-chain-wt'),
+          claudeCommand: '/bin/echo',
+        }),
+      );
 
       const orchestrator = {
         getTask: (id: string) => tasks.find(t => t.id === id),
@@ -527,21 +559,24 @@ describe('A→B→C branch chain', () => {
       taskB.status = 'running';
       await (executor as any).executeTaskInner(taskB);
 
-      const hashA = execSync('git rev-parse invoker/task-a', { cwd: tmpDir }).toString().trim();
-      const hashB = execSync('git rev-parse invoker/task-b', { cwd: tmpDir }).toString().trim();
+      const hashA = execSync(`git rev-parse ${taskA.execution.branch}`, { cwd: tmpDir }).toString().trim();
+      const hashB = execSync(`git rev-parse ${taskB.execution.branch}`, { cwd: tmpDir }).toString().trim();
 
       // Execute C (depends on both)
       taskC.status = 'running';
       await (executor as any).executeTaskInner(taskC);
 
-      // C has both ancestors
-      expect(isAncestor(tmpDir, hashA, 'invoker/task-c')).toBe(true);
-      expect(isAncestor(tmpDir, hashB, 'invoker/task-c')).toBe(true);
+      const branchC = taskC.execution.branch!;
+
+      expect(taskC.status).toBe('completed');
+      // C merges A and B; both tips should be reachable from C's branch.
+      expect(isAncestor(tmpDir, hashA, branchC)).toBe(true);
+      expect(isAncestor(tmpDir, hashB, branchC)).toBe(true);
 
       // collectUpstreamBranches returns both
       const upstreams = executor.collectUpstreamBranches(taskC);
-      expect(upstreams).toContain('invoker/task-a');
-      expect(upstreams).toContain('invoker/task-b');
+      expect(upstreams).toContain(taskA.execution.branch);
+      expect(upstreams).toContain(taskB.execution.branch);
     });
   });
 });

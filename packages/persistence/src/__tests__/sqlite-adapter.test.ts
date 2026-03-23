@@ -520,12 +520,12 @@ describe('SQLiteAdapter', () => {
 
       adapter.appendTaskOutput('t1', 'line 1\n');
       adapter.appendTaskOutput('t1', 'line 2\n');
-      adapter.appendTaskOutput('t1', '[LocalFamiliar] Process exited: exitCode=0\n');
+      adapter.appendTaskOutput('t1', '[worktree] Process exited: exitCode=0\n');
 
       const output = adapter.getTaskOutput('t1');
       expect(output).toContain('line 1');
       expect(output).toContain('line 2');
-      expect(output).toContain('[LocalFamiliar] Process exited');
+      expect(output).toContain('[worktree] Process exited');
     });
 
     it('returns empty string for task with no output', () => {

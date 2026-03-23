@@ -576,7 +576,7 @@ describe('TaskExecutor', () => {
 
       // Default mergeMode is 'manual', so setTaskAwaitingApproval is called with metadata
       expect(orchestrator.setTaskAwaitingApproval).toHaveBeenCalledWith('__merge__wf-1', expect.objectContaining({
-        config: expect.objectContaining({ familiarType: 'local' }),
+        config: expect.objectContaining({ familiarType: 'worktree' }),
         execution: expect.objectContaining({ branch: 'plan/feature', workspacePath: '/tmp' }),
       }));
     });
@@ -778,7 +778,7 @@ describe('TaskExecutor', () => {
 
       // Should call setTaskAwaitingApproval with metadata instead of handleWorkerResponse
       expect(orchestrator.setTaskAwaitingApproval).toHaveBeenCalledWith('__merge__wf-1', expect.objectContaining({
-        config: expect.objectContaining({ familiarType: 'local' }),
+        config: expect.objectContaining({ familiarType: 'worktree' }),
         execution: expect.objectContaining({ branch: 'plan/feature', workspacePath: '/tmp' }),
       }));
       expect(orchestrator.handleWorkerResponse).not.toHaveBeenCalled();
@@ -927,7 +927,7 @@ describe('TaskExecutor', () => {
 
       // Should set task awaiting approval with PR metadata (not handleWorkerResponse)
       expect(orchestrator.setTaskAwaitingApproval).toHaveBeenCalledWith('__merge__wf-1', expect.objectContaining({
-        config: expect.objectContaining({ familiarType: 'local' }),
+        config: expect.objectContaining({ familiarType: 'worktree' }),
         execution: expect.objectContaining({
           branch: 'plan/feature',
           prUrl: 'https://github.com/owner/repo/pull/42',
@@ -978,7 +978,7 @@ describe('TaskExecutor', () => {
       await (executor as any).executeMergeNode(mergeTask);
 
       expect(orchestrator.setTaskAwaitingApproval).toHaveBeenCalledWith('__merge__wf-1', expect.objectContaining({
-        config: expect.objectContaining({ familiarType: 'local' }),
+        config: expect.objectContaining({ familiarType: 'worktree' }),
         execution: expect.objectContaining({ workspacePath: '/tmp' }),
       }));
       expect(orchestrator.handleWorkerResponse).not.toHaveBeenCalled();
@@ -1088,7 +1088,7 @@ describe('TaskExecutor', () => {
 
       // Should pass PR metadata through setTaskAwaitingApproval
       expect(orchestrator.setTaskAwaitingApproval).toHaveBeenCalledWith('__merge__wf-1', expect.objectContaining({
-        config: expect.objectContaining({ familiarType: 'local' }),
+        config: expect.objectContaining({ familiarType: 'worktree' }),
         execution: expect.objectContaining({
           branch: 'plan/feature',
           prUrl: 'https://github.com/owner/repo/pull/55',
@@ -1138,7 +1138,7 @@ describe('TaskExecutor', () => {
       await (executor as any).executeMergeNode(mergeTask);
 
       expect(orchestrator.setTaskAwaitingApproval).toHaveBeenCalledWith('__merge__wf-1', expect.objectContaining({
-        config: expect.objectContaining({ familiarType: 'local' }),
+        config: expect.objectContaining({ familiarType: 'worktree' }),
         execution: expect.objectContaining({ workspacePath: '/tmp' }),
       }));
     });
@@ -1943,7 +1943,7 @@ describe('TaskExecutor', () => {
       const executor = new TaskExecutor({
         orchestrator: orchestrator as any,
         persistence: { loadWorkflow: () => ({ onFinish: 'merge', mergeMode: 'automatic', baseBranch: 'master', featureBranch: 'feature/wf-1', name: 'Test' }), updateTask: vi.fn() } as any,
-        familiarRegistry: { getDefault: () => ({ type: 'local' }), get: () => null, getAll: () => [], getMergeGateFamiliar: () => ({ type: 'local' }) } as any,
+        familiarRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
         cwd: '/tmp',
       });
 
@@ -1993,7 +1993,7 @@ describe('TaskExecutor', () => {
       const executor = new TaskExecutor({
         orchestrator: orchestrator as any,
         persistence: { loadWorkflow: () => ({ onFinish: 'merge', mergeMode: 'automatic', baseBranch: 'master', featureBranch: 'feature/wf-2', name: 'Test' }), updateTask: vi.fn() } as any,
-        familiarRegistry: { getDefault: () => ({ type: 'local' }), get: () => null, getAll: () => [], getMergeGateFamiliar: () => ({ type: 'local' }) } as any,
+        familiarRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
         cwd: '/tmp',
       });
 
@@ -2041,7 +2041,7 @@ describe('TaskExecutor', () => {
       const executor = new TaskExecutor({
         orchestrator: orchestrator as any,
         persistence: { loadWorkflow: () => ({ onFinish: 'merge', mergeMode: 'automatic', baseBranch: 'master', featureBranch: 'feature/wf-3', name: 'Test' }), updateTask: vi.fn() } as any,
-        familiarRegistry: { getDefault: () => ({ type: 'local' }), get: () => null, getAll: () => [], getMergeGateFamiliar: () => ({ type: 'local' }) } as any,
+        familiarRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
         cwd: '/tmp',
       });
 
@@ -2069,7 +2069,7 @@ describe('TaskExecutor', () => {
       const executor = new TaskExecutor({
         orchestrator: { getTask: () => undefined, getAllTasks: () => [] } as any,
         persistence: { loadWorkflow: () => ({ onFinish: 'merge', baseBranch: 'master', featureBranch: 'feature/test', name: 'Test' }), updateTask: vi.fn() } as any,
-        familiarRegistry: { getDefault: () => ({ type: 'local' }), get: () => null, getAll: () => [] } as any,
+        familiarRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
         cwd: '/tmp',
       });
 
@@ -2105,7 +2105,7 @@ describe('TaskExecutor', () => {
       const executor = new TaskExecutor({
         orchestrator: orchestrator as any,
         persistence: { loadWorkflow: () => null } as any,
-        familiarRegistry: { getDefault: () => ({ type: 'local' }), get: () => null, getAll: () => [] } as any,
+        familiarRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
         cwd: '/tmp',
         defaultBranch: 'master',
       });
@@ -2143,7 +2143,7 @@ describe('TaskExecutor', () => {
       const executor = new TaskExecutor({
         orchestrator: orchestrator as any,
         persistence: { loadWorkflow: () => null } as any,
-        familiarRegistry: { getDefault: () => ({ type: 'local' }), get: () => null, getAll: () => [] } as any,
+        familiarRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
         cwd: '/tmp',
         defaultBranch: 'master',
       });
@@ -2178,7 +2178,7 @@ describe('TaskExecutor', () => {
       const executor = new TaskExecutor({
         orchestrator: orchestrator as any,
         persistence: {} as any,
-        familiarRegistry: { getDefault: () => ({ type: 'local' }), get: () => null, getAll: () => [] } as any,
+        familiarRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
         cwd: '/tmp',
       });
 
@@ -2198,7 +2198,7 @@ describe('TaskExecutor', () => {
       const executor = new TaskExecutor({
         orchestrator: orchestrator as any,
         persistence: {} as any,
-        familiarRegistry: { getDefault: () => ({ type: 'local' }), get: () => null, getAll: () => [] } as any,
+        familiarRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
         cwd: '/tmp',
       });
 
@@ -2211,7 +2211,7 @@ describe('TaskExecutor', () => {
       const executor = new TaskExecutor({
         orchestrator: orchestrator as any,
         persistence: {} as any,
-        familiarRegistry: { getDefault: () => ({ type: 'local' }), get: () => null, getAll: () => [] } as any,
+        familiarRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
         cwd: '/tmp',
       });
 
@@ -2244,7 +2244,7 @@ describe('TaskExecutor', () => {
       const executor = new TaskExecutor({
         orchestrator: orchestrator as any,
         persistence: {} as any,
-        familiarRegistry: { getDefault: () => ({ type: 'local' }), get: () => null, getAll: () => [] } as any,
+        familiarRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
         cwd: '/tmp',
       });
 
@@ -2273,7 +2273,7 @@ describe('TaskExecutor', () => {
       const executor = new TaskExecutor({
         orchestrator: orchestrator as any,
         persistence: {} as any,
-        familiarRegistry: { getDefault: () => ({ type: 'local' }), get: () => null, getAll: () => [] } as any,
+        familiarRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
         cwd: '/tmp',
       });
       await expect(executor.fixWithClaude('nonexistent', 'output')).rejects.toThrow('not found');
@@ -2290,7 +2290,7 @@ describe('TaskExecutor', () => {
       const executor = new TaskExecutor({
         orchestrator: orchestrator as any,
         persistence: {} as any,
-        familiarRegistry: { getDefault: () => ({ type: 'local' }), get: () => null, getAll: () => [] } as any,
+        familiarRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
         cwd: '/tmp',
       });
       await expect(executor.fixWithClaude('pending-task', 'output')).rejects.toThrow('not in a fixable state');
@@ -2310,7 +2310,7 @@ describe('TaskExecutor', () => {
       const executor = new TaskExecutor({
         orchestrator: orchestrator as any,
         persistence: { appendTaskOutput, updateTask } as any,
-        familiarRegistry: { getDefault: () => ({ type: 'local' }), get: () => null, getAll: () => [] } as any,
+        familiarRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
         cwd: '/tmp',
       });
       (executor as any).spawnClaudeFix = async () => ({ stdout: 'Fixed the import', sessionId: 'test-session-123' });
@@ -2332,7 +2332,7 @@ describe('TaskExecutor', () => {
       const executor = new TaskExecutor({
         orchestrator: orchestrator as any,
         persistence: { appendTaskOutput, updateTask } as any,
-        familiarRegistry: { getDefault: () => ({ type: 'local' }), get: () => null, getAll: () => [] } as any,
+        familiarRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
         cwd: '/tmp',
       });
       (executor as any).spawnClaudeFix = async () => ({ stdout: 'Fixed it', sessionId: 'sess-abc-123' });
@@ -2354,7 +2354,7 @@ describe('TaskExecutor', () => {
       const executor = new TaskExecutor({
         orchestrator: orchestrator as any,
         persistence: { appendTaskOutput, updateTask } as any,
-        familiarRegistry: { getDefault: () => ({ type: 'local' }), get: () => null, getAll: () => [] } as any,
+        familiarRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
         cwd: '/tmp/repo',
       });
       const gitCalls: string[][] = [];
@@ -2395,7 +2395,7 @@ describe('TaskExecutor', () => {
       const executor = new TaskExecutor({
         orchestrator: orchestrator as any,
         persistence: { loadWorkflow: () => ({ onFinish: 'merge', mergeMode: 'automatic', baseBranch: 'master', featureBranch: 'feature/wf-msg', name: 'Test' }), updateTask: vi.fn() } as any,
-        familiarRegistry: { getDefault: () => ({ type: 'local' }), get: () => null, getAll: () => [], getMergeGateFamiliar: () => ({ type: 'local' }) } as any,
+        familiarRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
         cwd: '/tmp',
       });
 
@@ -2585,7 +2585,7 @@ describe('TaskExecutor', () => {
       const executor = new TaskExecutor({
         orchestrator: orchestrator as any,
         persistence: {} as any,
-        familiarRegistry: { getDefault: () => ({ type: 'local' }), get: () => null, getAll: () => [] } as any,
+        familiarRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
         cwd: '/tmp',
       });
 

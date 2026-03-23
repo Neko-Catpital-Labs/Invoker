@@ -1,5 +1,5 @@
 /**
- * Integration test — Orchestrator + LocalFamiliar + open-terminal handler.
+ * Integration test — Orchestrator + WorktreeFamiliar + open-terminal handler.
  *
  * Exercises the same wiring as main.ts without Electron:
  * 1. Load a plan, start execution, run tasks to completion.
@@ -9,6 +9,8 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { randomUUID } from 'node:crypto';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 
 import {
   Orchestrator,
@@ -19,7 +21,7 @@ import {
 } from '@invoker/core';
 import type { TaskStateChanges } from '@invoker/graph';
 import {
-  LocalFamiliar, DockerFamiliar, WorktreeFamiliar, FamiliarRegistry,
+  DockerFamiliar, WorktreeFamiliar, FamiliarRegistry,
   BaseFamiliar,
   type FamiliarHandle, type TerminalSpec, type PersistedTaskMeta,
 } from '@invoker/executors';
@@ -124,7 +126,7 @@ function openExternalTerminal(spec: TerminalSpec | null): void {
 const taskHandles = new Map<string, FamiliarHandle>();
 
 function executeTaskViaFamiliar(
-  familiar: LocalFamiliar,
+  familiar: WorktreeFamiliar,
   task: TaskState,
 ): Promise<WorkResponse> {
   const request: WorkRequest = {
@@ -155,17 +157,20 @@ function executeTaskViaFamiliar(
 
 describe('open-terminal integration', () => {
   let orchestrator: Orchestrator;
-  let familiar: LocalFamiliar;
+  let familiar: WorktreeFamiliar;
 
   beforeEach(() => {
     const persistence = new InMemoryPersistence();
     const bus = new InMemoryBus();
-    familiar = new LocalFamiliar();
+    familiar = new WorktreeFamiliar({
+      repoDir: process.cwd(),
+      worktreeBaseDir: join(tmpdir(), `open-term-wt-${randomUUID()}`),
+    });
     orchestrator = new Orchestrator({ persistence, messageBus: bus });
     taskHandles.clear();
     vi.clearAllMocks();
 
-    // Prevent LocalFamiliar.start() from running real git on the repo.
+    // Prevent WorktreeFamiliar.start() from running real git on the repo.
     vi.spyOn(BaseFamiliar.prototype as any, 'execGitSimple')
       .mockImplementation(async (...a: any[]) => {
         const args = a[0] as string[];
@@ -201,17 +206,18 @@ describe('open-terminal integration', () => {
     orchestrator.handleWorkerResponse(resp1);
     expect(orchestrator.getTask('greet')!.status).toBe('completed');
 
-    // Verify getTerminalSpec returns cwd
+    // Verify getTerminalSpec returns cwd (worktree dir, not repo root)
     const handle = taskHandles.get('greet')!;
     const spec = familiar.getTerminalSpec(handle);
-    expect(spec).toEqual({ cwd: process.cwd() });
+    expect(spec?.cwd).toBeDefined();
+    expect(spec).toEqual(expect.objectContaining({ cwd: expect.any(String) }));
 
     // Open terminal using spec
     openExternalTerminal(spec);
 
     expect(mockSpawn).toHaveBeenCalledWith(
       expect.any(String),
-      expect.arrayContaining([process.cwd()]),
+      expect.arrayContaining([spec!.cwd!]),
       expect.objectContaining({ detached: true, stdio: 'ignore' }),
     );
     expect(mockUnref).toHaveBeenCalled();
@@ -281,18 +287,18 @@ describe('getRestoredTerminalSpec routing', () => {
     vi.mocked(existsSync).mockReset();
   });
 
-  describe('LocalFamiliar', () => {
-    const local = new LocalFamiliar();
+  describe('WorktreeFamiliar', () => {
+    const wt = new WorktreeFamiliar({ repoDir: '/tmp/repo', worktreeBaseDir: '/tmp/wt', cacheDir: '/tmp/cache' });
 
-    it('returns claude --resume spec with cwd for worktree-like task with session', () => {
+    it('returns claude --resume spec with cwd when session is set', () => {
       vi.mocked(existsSync).mockReturnValue(true);
       const meta: PersistedTaskMeta = {
         taskId: 'task-1',
-        familiarType: 'local',
+        familiarType: 'worktree',
         claudeSessionId: 'abc-123-session',
         workspacePath: '/home/user/repo',
       };
-      const spec = local.getRestoredTerminalSpec(meta);
+      const spec = wt.getRestoredTerminalSpec(meta);
       expect(spec.command).toBe('claude');
       expect(spec.args).toContain('--resume');
       expect(spec.args).toContain('abc-123-session');
@@ -303,10 +309,10 @@ describe('getRestoredTerminalSpec routing', () => {
       vi.mocked(existsSync).mockReturnValue(true);
       const meta: PersistedTaskMeta = {
         taskId: 'task-cmd',
-        familiarType: 'local',
+        familiarType: 'worktree',
         workspacePath: '/home/user/repo',
       };
-      const spec = local.getRestoredTerminalSpec(meta);
+      const spec = wt.getRestoredTerminalSpec(meta);
       expect(spec.command).toBeUndefined();
       expect(spec.cwd).toBe('/home/user/repo');
     });
@@ -314,9 +320,9 @@ describe('getRestoredTerminalSpec routing', () => {
     it('returns spec with undefined cwd when workspace_path is not set', () => {
       const meta: PersistedTaskMeta = {
         taskId: 'task-unknown',
-        familiarType: 'local',
+        familiarType: 'worktree',
       };
-      const spec = local.getRestoredTerminalSpec(meta);
+      const spec = wt.getRestoredTerminalSpec(meta);
       expect(spec.cwd).toBeUndefined();
     });
 
@@ -324,17 +330,14 @@ describe('getRestoredTerminalSpec routing', () => {
       vi.mocked(existsSync).mockReturnValue(false);
       const meta: PersistedTaskMeta = {
         taskId: 'task-missing',
-        familiarType: 'local',
+        familiarType: 'worktree',
         workspacePath: '/tmp/gone',
       };
-      expect(() => local.getRestoredTerminalSpec(meta)).toThrow(/no longer exists/);
+      expect(() => wt.getRestoredTerminalSpec(meta)).toThrow(/no longer exists.*cleaned up/);
     });
-  });
 
-  describe('WorktreeFamiliar', () => {
     it('returns cwd spec for worktree with existing path', () => {
       vi.mocked(existsSync).mockReturnValue(true);
-      const wt = new WorktreeFamiliar({ repoDir: '/tmp/repo', worktreeBaseDir: '/tmp/wt', cacheDir: '/tmp/cache' });
       const meta: PersistedTaskMeta = {
         taskId: 'task-wt',
         familiarType: 'worktree',
@@ -344,9 +347,8 @@ describe('getRestoredTerminalSpec routing', () => {
       expect(spec.cwd).toBe('/home/user/.invoker/worktrees/wt-abc');
     });
 
-    it('throws when worktree path no longer exists', () => {
+    it('throws when worktree path no longer exists (explicit)', () => {
       vi.mocked(existsSync).mockReturnValue(false);
-      const wt = new WorktreeFamiliar({ repoDir: '/tmp/repo', worktreeBaseDir: '/tmp/wt', cacheDir: '/tmp/cache' });
       const meta: PersistedTaskMeta = {
         taskId: 'task-wt-gone',
         familiarType: 'worktree',
@@ -401,10 +403,10 @@ describe('merge gate open-terminal', () => {
     vi.mocked(existsSync).mockReset();
   });
 
-  it('resolves merge gate familiar to local', () => {
+  it('resolves merge gate fallback to default worktree familiar', () => {
     const registry = new FamiliarRegistry();
-    const local = new LocalFamiliar();
-    registry.register('local', local);
+    const worktree = new WorktreeFamiliar({ repoDir: process.cwd(), worktreeBaseDir: join(tmpdir(), 'merge-gate-wt') });
+    registry.register('worktree', worktree);
 
     const meta: PersistedTaskMeta = {
       taskId: '__merge__wf-123',
@@ -419,18 +421,18 @@ describe('merge gate open-terminal', () => {
       } else if (meta.familiarType === 'worktree') {
         /* lazy-register worktree */
       } else {
-        familiar = registry.get('local') ?? registry.getDefault();
+        familiar = registry.getDefault();
       }
     }
 
-    expect(familiar).toBe(local);
-    expect(familiar!.type).toBe('local');
+    expect(familiar).toBe(worktree);
+    expect(familiar!.type).toBe('worktree');
   });
 
   it('opens terminal with git checkout for merge gate with branch', () => {
     const registry = new FamiliarRegistry();
-    const local = new LocalFamiliar();
-    registry.register('local', local);
+    const worktree = new WorktreeFamiliar({ repoDir: process.cwd(), worktreeBaseDir: join(tmpdir(), 'merge-gate-wt-b') });
+    registry.register('worktree', worktree);
 
     const meta: PersistedTaskMeta = {
       taskId: '__merge__wf-123',
@@ -441,7 +443,7 @@ describe('merge gate open-terminal', () => {
 
     let familiar: any = registry.get(meta.familiarType);
     if (!familiar) {
-      familiar = registry.get('local') ?? registry.getDefault();
+      familiar = registry.getDefault();
     }
 
     vi.mocked(existsSync).mockReturnValue(true);
@@ -454,8 +456,8 @@ describe('merge gate open-terminal', () => {
 
   it('opens terminal with cwd only for merge gate without branch', () => {
     const registry = new FamiliarRegistry();
-    const local = new LocalFamiliar();
-    registry.register('local', local);
+    const worktree = new WorktreeFamiliar({ repoDir: process.cwd(), worktreeBaseDir: join(tmpdir(), 'merge-gate-wt-c') });
+    registry.register('worktree', worktree);
 
     const meta: PersistedTaskMeta = {
       taskId: '__merge__wf-123',
@@ -465,7 +467,7 @@ describe('merge gate open-terminal', () => {
 
     let familiar: any = registry.get(meta.familiarType);
     if (!familiar) {
-      familiar = registry.get('local') ?? registry.getDefault();
+      familiar = registry.getDefault();
     }
 
     vi.mocked(existsSync).mockReturnValue(true);

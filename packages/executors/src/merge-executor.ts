@@ -101,7 +101,7 @@ export async function executeMergeNodeImpl(
         };
         host.callbacks.onComplete?.(task.id, manualResponse);
         host.orchestrator.setTaskAwaitingApproval(task.id, {
-          config: { familiarType: 'local', summary },
+          config: { familiarType: 'worktree', summary },
           execution: { branch: featureBranch ?? undefined, workspacePath: host.cwd },
         });
         return;
@@ -129,7 +129,7 @@ export async function executeMergeNodeImpl(
         };
         host.callbacks.onComplete?.(task.id, prResponse);
         host.orchestrator.setTaskAwaitingApproval(task.id, {
-          config: { familiarType: 'local', summary },
+          config: { familiarType: 'worktree', summary },
           execution: {
             branch: featureBranch,
             workspacePath: host.cwd,
@@ -168,7 +168,7 @@ export async function executeMergeNodeImpl(
       };
       host.callbacks.onComplete?.(task.id, gateResponse);
       host.orchestrator.setTaskAwaitingApproval(task.id, {
-        config: { familiarType: 'local', summary },
+        config: { familiarType: 'worktree', summary },
         execution: { branch: featureBranch ?? undefined, workspacePath: host.cwd },
       });
       return;
@@ -182,7 +182,7 @@ export async function executeMergeNodeImpl(
   }
 
   host.persistence.updateTask(task.id, {
-    config: { familiarType: 'local', summary },
+    config: { familiarType: 'worktree', summary },
     execution: {
       branch: featureBranch ?? undefined,
       workspacePath: host.cwd,
@@ -192,7 +192,7 @@ export async function executeMergeNodeImpl(
   host.callbacks.onComplete?.(task.id, response);
   if (mergeMode === 'manual' && response.status === 'completed') {
     host.orchestrator.setTaskAwaitingApproval(task.id, {
-      config: { familiarType: 'local', summary },
+      config: { familiarType: 'worktree', summary },
       execution: {
         branch: featureBranch ?? undefined,
         workspacePath: host.cwd,

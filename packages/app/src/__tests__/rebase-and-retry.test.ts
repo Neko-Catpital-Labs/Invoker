@@ -9,17 +9,17 @@
  * commits ahead of the base — merging master in instead of starting fresh.
  * This means stale task work from the previous run carries over.
  *
- * Pattern: sandbox git repo + real LocalFamiliar + real TaskExecutor
+ * Pattern: sandbox git repo + real WorktreeFamiliar + real TaskExecutor
  * (follows branch-chain.test.ts).
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execSync } from 'node:child_process';
 import type { WorkResponse } from '@invoker/protocol';
 import type { TaskState } from '@invoker/core';
-import { TaskExecutor, FamiliarRegistry, LocalFamiliar } from '@invoker/executors';
+import { TaskExecutor, FamiliarRegistry, WorktreeFamiliar } from '@invoker/executors';
 import { rebaseAndRetry, bumpGenerationAndRestart } from '../workflow-actions.js';
 
 function createTempRepo(): string {
@@ -27,6 +27,10 @@ function createTempRepo(): string {
   execSync('git init', { cwd: dir });
   execSync('git config user.email "test@test.com"', { cwd: dir });
   execSync('git config user.name "Test"', { cwd: dir });
+  writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'rebase-retry-test', version: '1.0.0', private: true }, null, 2));
+  mkdirSync(join(dir, 'scripts'), { recursive: true });
+  writeFileSync(join(dir, 'scripts/rebuild-for-electron.js'), 'process.exit(0);\n');
+  execSync('pnpm install', { cwd: dir, stdio: 'pipe' });
   writeFileSync(join(dir, 'initial.txt'), 'initial');
   execSync('git add -A && git commit -m "initial commit X"', { cwd: dir });
   return dir;
@@ -73,7 +77,7 @@ function makeTaskState(overrides: {
   } as TaskState;
 }
 
-describe('rebase-and-retry: branch deletion before restart', () => {
+describe('rebase-and-retry: branch deletion before restart', { timeout: 120_000 }, () => {
   let tmpDir: string;
 
   beforeEach(() => {
@@ -90,7 +94,7 @@ describe('rebase-and-retry: branch deletion before restart', () => {
       description: 'Test task',
       config: {
         command: 'echo hello',
-        familiarType: 'local',
+        familiarType: 'worktree',
         workflowId: 'wf-test',
       },
     });
@@ -154,11 +158,14 @@ describe('rebase-and-retry: branch deletion before restart', () => {
     };
 
     const registry = new FamiliarRegistry();
-    const localFamiliar = new LocalFamiliar({
-      claudeCommand: '/bin/echo',
-      claudeFallback: false,
-    });
-    registry.register('local', localFamiliar);
+    registry.register(
+      'worktree',
+      new WorktreeFamiliar({
+        repoDir: tmpDir,
+        worktreeBaseDir: join(tmpDir, 'rebase-retry-wt'),
+        claudeCommand: '/bin/echo',
+      }),
+    );
 
     const executor = new TaskExecutor({
       orchestrator: orchestrator as any,
@@ -223,11 +230,12 @@ describe('rebase-and-retry: branch deletion before restart', () => {
   it('without branch deletion (old behavior): setupTaskBranch preserves stale branch', async () => {
     const { task, executor, orchestrator, persistence } = buildHarness();
 
-    // Step 1: Execute task → creates invoker/task-a with a task commit
+    // Step 1: Execute task → creates experiment/task-a-* with a task commit
     await executeTask(executor, task);
-    expect(branchExists(tmpDir, 'invoker/task-a')).toBe(true);
+    const branchFirst = task.execution.branch!;
+    expect(branchExists(tmpDir, branchFirst)).toBe(true);
 
-    const oldTaskCommit = getSha(tmpDir, 'invoker/task-a');
+    const oldTaskCommit = getSha(tmpDir, branchFirst);
 
     // Step 2: Add commit Y to master
     const commitY = addCommitToMaster(tmpDir, 'new-feature.txt', 'commit Y: new feature');
@@ -240,17 +248,18 @@ describe('rebase-and-retry: branch deletion before restart', () => {
     });
 
     // Branch still exists (not deleted)
-    expect(branchExists(tmpDir, 'invoker/task-a')).toBe(true);
+    expect(branchExists(tmpDir, branchFirst)).toBe(true);
 
     // Step 4: Re-execute — setupTaskBranch finds existing branch with commits ahead,
     // so it PRESERVES the branch and merges master in
     await executeTask(executor, task);
+    const branchAfter = task.execution.branch!;
 
     // commit Y IS an ancestor (master was merged in)
-    expect(isAncestor(tmpDir, commitY, 'invoker/task-a')).toBe(true);
+    expect(isAncestor(tmpDir, commitY, branchAfter)).toBe(true);
 
     // OLD task commit IS STILL an ancestor (branch was preserved, not recreated)
     // This is the BUG behavior — stale work carries over
-    expect(isAncestor(tmpDir, oldTaskCommit, 'invoker/task-a')).toBe(true);
+    expect(isAncestor(tmpDir, oldTaskCommit, branchAfter)).toBe(true);
   });
 });

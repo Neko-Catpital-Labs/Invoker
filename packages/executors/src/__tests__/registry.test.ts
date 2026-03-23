@@ -1,7 +1,17 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { FamiliarRegistry } from '../registry.js';
-import { LocalFamiliar } from '../local-familiar.js';
 import type { Familiar } from '../familiar.js';
+
+const stubFamiliar = (type: string): Familiar => ({
+  type,
+  start: async () => ({ executionId: '', taskId: '' }),
+  kill: async () => {},
+  sendInput: () => {},
+  onOutput: () => () => {},
+  onComplete: () => () => {},
+  getTerminalSpec: () => null,
+  destroyAll: async () => {},
+});
 
 describe('FamiliarRegistry', () => {
   let registry: FamiliarRegistry;
@@ -11,24 +21,15 @@ describe('FamiliarRegistry', () => {
   });
 
   it('register + get returns familiar', () => {
-    const familiar = new LocalFamiliar();
-    registry.register('local', familiar);
+    const familiar = stubFamiliar('worktree');
+    registry.register('worktree', familiar);
 
-    const result = registry.get('local');
+    const result = registry.get('worktree');
     expect(result).toBe(familiar);
   });
 
   it('getDefault returns worktree familiar', () => {
-    const worktree: Familiar = {
-      type: 'worktree',
-      start: async () => ({ executionId: '', taskId: '' }),
-      kill: async () => {},
-      sendInput: () => {},
-      onOutput: () => () => {},
-      onComplete: () => () => {},
-      getTerminalSpec: () => null,
-      destroyAll: async () => {},
-    };
+    const worktree = stubFamiliar('worktree');
     registry.register('worktree', worktree);
 
     const result = registry.getDefault();
@@ -39,42 +40,21 @@ describe('FamiliarRegistry', () => {
     expect(() => registry.getDefault()).toThrow('No "worktree" familiar registered. Register one before calling getDefault().');
   });
 
-  it('getMergeGateFamiliar returns local familiar', () => {
-    const local = new LocalFamiliar();
-    registry.register('local', local);
-
-    const result = registry.getMergeGateFamiliar();
-    expect(result).toBe(local);
-  });
-
-  it('getMergeGateFamiliar throws when local familiar not registered', () => {
-    expect(() => registry.getMergeGateFamiliar()).toThrow('No "local" familiar registered. Register one before calling getMergeGateFamiliar().');
-  });
-
   it('get returns undefined for unknown type', () => {
     const result = registry.get('nonexistent');
     expect(result).toBeUndefined();
   });
 
   it('getAll returns all registered familiars', () => {
-    const local = new LocalFamiliar();
-    const docker: Familiar = {
-      type: 'docker',
-      start: async () => ({ executionId: '', taskId: '' }),
-      kill: async () => {},
-      sendInput: () => {},
-      onOutput: () => () => {},
-      onComplete: () => () => {},
-      getTerminalSpec: () => null,
-      destroyAll: async () => {},
-    };
+    const worktree = stubFamiliar('worktree');
+    const docker = stubFamiliar('docker');
 
-    registry.register('local', local);
+    registry.register('worktree', worktree);
     registry.register('docker', docker);
 
     const all = registry.getAll();
     expect(all).toHaveLength(2);
-    expect(all).toContain(local);
+    expect(all).toContain(worktree);
     expect(all).toContain(docker);
   });
 

@@ -6,6 +6,7 @@
 
 import Database from 'better-sqlite3';
 import type { TaskState, TaskStateChanges, Attempt } from '@invoker/core';
+import { normalizeFamiliarType } from '@invoker/core';
 import type { PersistenceAdapter, Workflow, TaskEvent, ActivityLogEntry, Conversation, ConversationMessage } from './adapter.js';
 
 /**
@@ -639,7 +640,9 @@ export class SQLiteAdapter implements PersistenceAdapter {
     const row = this.db.prepare(
       'SELECT familiar_type FROM tasks WHERE id = ?',
     ).get(taskId) as { familiar_type: string | null } | undefined;
-    return row?.familiar_type ?? null;
+    const raw = row?.familiar_type ?? null;
+    if (raw === null) return null;
+    return normalizeFamiliarType(raw) ?? raw;
   }
 
   getTaskStatus(taskId: string): string | null {
@@ -941,7 +944,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         requiresManualApproval: row.requires_manual_approval === 1 ? true : undefined,
         repoUrl: row.repo_url ?? undefined,
         featureBranch: row.feature_branch ?? undefined,
-        familiarType: row.familiar_type ?? undefined,
+        familiarType: normalizeFamiliarType(row.familiar_type ?? undefined),
         autoFix: row.auto_fix === 1 ? true : undefined,
         maxFixAttempts: row.max_fix_attempts ?? undefined,
         isMergeNode: row.is_merge_node === 1 ? true : undefined,

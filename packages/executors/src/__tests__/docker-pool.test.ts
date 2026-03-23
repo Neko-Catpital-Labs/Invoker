@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import { Readable } from 'node:stream';
 import { DockerPool } from '../docker-pool.js';
 
 function createMockDocker() {
@@ -23,6 +24,11 @@ function createMockDocker() {
           images.set(imageName, { name: imageName });
         }),
         remove: vi.fn().mockResolvedValue(undefined),
+        logs: vi.fn().mockImplementation(
+          (_opts: unknown, callback: (err: Error | null, stream?: NodeJS.ReadableStream) => void) => {
+            callback(null, Readable.from([]) as NodeJS.ReadableStream);
+          },
+        ),
       };
       containers.push(container);
       return container;

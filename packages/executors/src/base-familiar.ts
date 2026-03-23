@@ -481,7 +481,7 @@ export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar
 
   /**
    * Build command, args, and optional Claude session from a WorkRequest.
-   * Shared by LocalFamiliar and WorktreeFamiliar.
+   * Shared by WorktreeFamiliar and other familiars.
    */
   protected buildCommandAndArgs(
     request: WorkRequest,

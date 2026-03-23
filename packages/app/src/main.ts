@@ -45,7 +45,7 @@ import type { PlanDefinition, TaskDelta, TaskReplacementDef, TaskState, Utilizat
 import { SQLiteAdapter, ConversationRepository } from '@invoker/persistence';
 import { LocalBus, Channels } from '@invoker/transport';
 import {
-  LocalFamiliar, FamiliarRegistry, TaskExecutor,
+  FamiliarRegistry, TaskExecutor,
   DockerFamiliar, WorktreeFamiliar, GitHubMergeGateProvider,
   type Familiar, type FamiliarHandle, type PersistedTaskMeta,
 } from '@invoker/executors';
@@ -108,7 +108,16 @@ function initServices(): void {
   mkdirSync(dbDir, { recursive: true });
   persistence = new SQLiteAdapter(path.join(dbDir, 'invoker.db'));
   familiarRegistry = new FamiliarRegistry();
-  familiarRegistry.register('local', new LocalFamiliar());
+  const invokerHomeInit = path.join(homedir(), '.invoker');
+  familiarRegistry.register(
+    'worktree',
+    new WorktreeFamiliar({
+      repoDir: repoRoot,
+      worktreeBaseDir: path.resolve(invokerHomeInit, 'worktrees'),
+      cacheDir: path.resolve(invokerHomeInit, 'repos'),
+      maxWorktrees: 5,
+    }),
+  );
   orchestrator = new Orchestrator({
     persistence, messageBus,
     maxConcurrency: invokerConfig.maxConcurrency,
@@ -1048,11 +1057,12 @@ function setupGuiMode(): void {
             repoDir: repoRoot,
             worktreeBaseDir: path.resolve(invokerHome, 'worktrees'),
             cacheDir: path.resolve(invokerHome, 'repos'),
+            maxWorktrees: 5,
           });
           familiarRegistry.register('worktree', worktree);
           familiar = worktree;
         } else {
-          familiar = familiarRegistry.get('local') ?? familiarRegistry.getDefault();
+          familiar = familiarRegistry.getDefault();
         }
       }
       console.log(`[open-terminal] task="${taskId}" resolved familiar type="${familiar.type}"`);

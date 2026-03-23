@@ -531,7 +531,7 @@ describe('Orchestrator', () => {
 
       publishedDeltas = [];
       orchestrator.setTaskAwaitingApproval('a1', {
-        config: { familiarType: 'local', summary: 'test summary' },
+        config: { familiarType: 'worktree', summary: 'test summary' },
         execution: {
           branch: 'plan/feature',
           workspacePath: '/tmp',
@@ -543,7 +543,7 @@ describe('Orchestrator', () => {
 
       const task = orchestrator.getTask('a1')!;
       expect(task.status).toBe('awaiting_approval');
-      expect(task.config.familiarType).toBe('local');
+      expect(task.config.familiarType).toBe('worktree');
       expect(task.config.summary).toBe('test summary');
       expect(task.execution.branch).toBe('plan/feature');
       expect(task.execution.workspacePath).toBe('/tmp');
@@ -556,7 +556,7 @@ describe('Orchestrator', () => {
         (d) => d.type === 'updated' && d.taskId === 'a1',
       );
       expect(delta).toBeDefined();
-      expect(delta!.type === 'updated' && delta!.changes.config?.familiarType).toBe('local');
+      expect(delta!.type === 'updated' && delta!.changes.config?.familiarType).toBe('worktree');
       expect(delta!.type === 'updated' && delta!.changes.execution?.prUrl).toBe('https://github.com/owner/repo/pull/1');
     });
   });
@@ -1525,14 +1525,14 @@ describe('Orchestrator', () => {
     it('changes familiarType and restarts the task', () => {
       orchestrator.loadPlan({
         name: 'edit-type-test',
-        tasks: [{ id: 't1', description: 'Task 1', command: 'echo hello', familiarType: 'local' }],
+        tasks: [{ id: 't1', description: 'Task 1', command: 'echo hello', familiarType: 'docker' }],
       });
       orchestrator.startExecution();
 
       orchestrator.handleWorkerResponse(
         makeResponse({ actionId: 't1', status: 'failed', outputs: { exitCode: 1, error: 'fail' } }),
       );
-      expect(orchestrator.getTask('t1')?.config.familiarType).toBe('local');
+      expect(orchestrator.getTask('t1')?.config.familiarType).toBe('docker');
 
       const started = orchestrator.editTaskType('t1', 'worktree');
       const task = orchestrator.getTask('t1');
@@ -1545,7 +1545,7 @@ describe('Orchestrator', () => {
       orchestrator.loadPlan({
         name: 'edit-type-no-fork',
         tasks: [
-          { id: 'parent', description: 'Parent', command: 'echo parent', familiarType: 'local' },
+          { id: 'parent', description: 'Parent', command: 'echo parent', familiarType: 'docker' },
           { id: 'child', description: 'Child', command: 'echo child', dependencies: ['parent'] },
         ],
       });
@@ -1569,7 +1569,7 @@ describe('Orchestrator', () => {
     it('throws when trying to edit a running task', () => {
       orchestrator.loadPlan({
         name: 'edit-type-running',
-        tasks: [{ id: 't1', description: 'Task 1', command: 'sleep 100', familiarType: 'local' }],
+        tasks: [{ id: 't1', description: 'Task 1', command: 'sleep 100', familiarType: 'docker' }],
       });
       orchestrator.startExecution();
 
@@ -1579,7 +1579,7 @@ describe('Orchestrator', () => {
     it('persists the updated familiarType', () => {
       orchestrator.loadPlan({
         name: 'edit-type-persist',
-        tasks: [{ id: 't1', description: 'Task 1', command: 'echo old', familiarType: 'local' }],
+        tasks: [{ id: 't1', description: 'Task 1', command: 'echo old', familiarType: 'docker' }],
       });
       orchestrator.startExecution();
 

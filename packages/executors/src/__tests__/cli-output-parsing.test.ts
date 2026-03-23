@@ -263,7 +263,7 @@ describe('CLI Output Parsing — Claude vs Cursor Equivalence', () => {
 
   describe('Claude CLI Fallback Behavior', () => {
     it('should detect ENOENT when claude command not found', async () => {
-      // This test simulates the ENOENT fallback in LocalFamiliar
+      // This test simulates the ENOENT fallback in command execution
       let enoentDetected = false;
 
       try {
@@ -278,7 +278,7 @@ describe('CLI Output Parsing — Claude vs Cursor Equivalence', () => {
     });
 
     it('should provide fallback echo stub on ENOENT', async () => {
-      // Simulate the fallback behavior from LocalFamiliar:153-168
+      // Simulate the fallback behavior when the CLI binary is missing
       const prompt = 'Test prompt for fallback';
       const result = await executeCLI('/bin/sh', [
         '-c',

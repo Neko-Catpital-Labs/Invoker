@@ -44,13 +44,13 @@ function formatDate(date?: Date | string): string {
 
 /**
  * Display value when task.config.familiarType is unset: matches orchestrator
- * loadPlan (packages/core/src/orchestrator.ts) — command → local, else worktree;
- * repoUrl alone implies worktree (TaskExecutor.selectFamiliar). Merge nodes hide the selector.
+ * loadPlan default worktree; repoUrl alone implies worktree (TaskExecutor.selectFamiliar).
+ * Merge nodes hide the selector.
  */
 function effectiveExecutorSelectValue(task: TaskState): string {
   if (task.config.familiarType) return task.config.familiarType;
   if (task.config.repoUrl) return 'worktree';
-  return task.config.command !== undefined ? 'local' : 'worktree';
+  return 'worktree';
 }
 
 function HeartbeatTimingSection({ task, formatDate: fmtDate }: { task: TaskState; formatDate: (d?: Date | string) => string }) {
@@ -254,10 +254,6 @@ export function TaskPanel({
           >
             <option value="worktree">Worktree</option>
             <option value="docker">Docker</option>
-            {/* Include Local when the effective value is local (explicit or orchestrator default for command tasks), else <select> cannot show the right value */}
-            {executorSelectValue === 'local' ? (
-              <option value="local">Local</option>
-            ) : null}
           </select>
         </div>
       )}

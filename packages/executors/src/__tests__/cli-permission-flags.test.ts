@@ -164,7 +164,7 @@ describe('CLI Permission Flags — Claude vs Cursor Equivalence', () => {
     });
 
     it('should include permission flag in resume operations', () => {
-      // This validates resume behavior from local-familiar.ts:308 and worktree-familiar.ts:496
+      // This validates resume behavior from worktree-familiar.ts (resume flags)
       const expectedResumeArgs = ['--resume', 'session-id', '--dangerously-skip-permissions'];
 
       const sessionId = 'session-id';
@@ -384,7 +384,7 @@ describe('CLI Permission Flags — Claude vs Cursor Equivalence', () => {
     });
 
     it('should validate --resume includes permission flag', () => {
-      // Per local-familiar.ts:308 and worktree-familiar.ts:496
+      // Per worktree-familiar resume handling
       const args = ['--resume', 'session-id', '--dangerously-skip-permissions'];
 
       expect(args[0]).toBe('--resume');
@@ -478,8 +478,8 @@ describe('CLI Permission Flags — Claude vs Cursor Equivalence', () => {
   });
 
   describe('Integration with Invoker Executors', () => {
-    it('should validate LocalFamiliar includes permission flag', () => {
-      // LocalFamiliar.ts:308 uses --dangerously-skip-permissions in resume
+    it('should validate worktree resume includes permission flag', () => {
+      // WorktreeFamiliar uses --dangerously-skip-permissions in resume
       const resumeArgs = ['--resume', 'session-id', '--dangerously-skip-permissions'];
       expect(resumeArgs).toContain('--dangerously-skip-permissions');
     });

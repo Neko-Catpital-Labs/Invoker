@@ -642,7 +642,7 @@ describe('TaskPanel double-click editing', () => {
       expect(screen.getByTestId('executor-type-select')).toHaveValue('worktree');
     });
 
-    it('defaults executor select to local for command task when familiarType unset (orchestrator default)', () => {
+    it('defaults executor select to worktree for command task when familiarType unset (orchestrator default)', () => {
       const task = makeTask({
         command: 'echo test',
         status: 'pending',
@@ -659,7 +659,7 @@ describe('TaskPanel double-click editing', () => {
         />,
       );
 
-      expect(screen.getByTestId('executor-type-select')).toHaveValue('local');
+      expect(screen.getByTestId('executor-type-select')).toHaveValue('worktree');
     });
   });
 
