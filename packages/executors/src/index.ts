@@ -3,6 +3,7 @@ export * from './base-familiar.js';
 export * from './process-utils.js';
 export * from './docker-familiar.js';
 export * from './worktree-familiar.js';
+export * from './ssh-familiar.js';
 export * from './repo-pool.js';
 export * from './registry.js';
 export * from './task-executor.js';

@@ -121,6 +121,7 @@ export interface PlanDefinition {
     autoFix?: boolean;
     maxFixAttempts?: number;
     dockerImage?: string;
+    remoteTargetId?: string;
   }>;
 }
 
@@ -334,6 +335,7 @@ export class Orchestrator {
           featureBranch: taskDef.featureBranch,
           familiarType: normalizeFamiliarType(taskDef.familiarType) ?? 'worktree',
           dockerImage: taskDef.dockerImage,
+          remoteTargetId: taskDef.remoteTargetId,
           autoFix: taskDef.autoFix,
           maxFixAttempts: taskDef.maxFixAttempts,
         },

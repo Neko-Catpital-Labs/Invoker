@@ -224,6 +224,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       'ALTER TABLE tasks ADD COLUMN pr_status TEXT',
       'ALTER TABLE tasks ADD COLUMN is_fixing_with_ai INTEGER DEFAULT 0',
       'ALTER TABLE tasks ADD COLUMN selected_attempt_id TEXT',
+      'ALTER TABLE tasks ADD COLUMN remote_target_id TEXT',
     ];
     for (const sql of migrations) {
       try { this.db.exec(sql); } catch { /* Column already exists */ }
@@ -329,7 +330,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
         created_at, started_at, completed_at, last_heartbeat_at,
         utilization, pending_fix_error,
         pr_url, pr_identifier, pr_status,
-        is_fixing_with_ai
+        is_fixing_with_ai,
+        remote_target_id
       ) VALUES (
         ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?, ?,
@@ -344,6 +346,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         ?, ?, ?, ?,
         ?, ?,
         ?, ?, ?,
+        ?,
         ?
       )
     `).run(
@@ -381,6 +384,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       exec.prIdentifier ?? null,
       exec.prStatus ?? null,
       exec.isFixingWithAI ? 1 : 0,
+      cfg.remoteTargetId ?? null,
     );
   }
 
@@ -412,6 +416,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         repoUrl: 'repo_url',
         featureBranch: 'feature_branch',
         familiarType: 'familiar_type',
+        remoteTargetId: 'remote_target_id',
       };
       const configBoolMap: Record<string, string> = {
         pivot: 'pivot',
@@ -665,6 +670,13 @@ export class SQLiteAdapter implements PersistenceAdapter {
       'SELECT branch FROM tasks WHERE id = ?',
     ).get(taskId) as { branch: string | null } | undefined;
     return row?.branch ?? null;
+  }
+
+  getRemoteTargetId(taskId: string): string | null {
+    const row = this.db.prepare(
+      'SELECT remote_target_id FROM tasks WHERE id = ?',
+    ).get(taskId) as { remote_target_id: string | null } | undefined;
+    return row?.remote_target_id ?? null;
   }
 
   // ── Conversations ───────────────────────────────────────
@@ -945,6 +957,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         repoUrl: row.repo_url ?? undefined,
         featureBranch: row.feature_branch ?? undefined,
         familiarType: normalizeFamiliarType(row.familiar_type ?? undefined),
+        remoteTargetId: row.remote_target_id ?? undefined,
         autoFix: row.auto_fix === 1 ? true : undefined,
         maxFixAttempts: row.max_fix_attempts ?? undefined,
         isMergeNode: row.is_merge_node === 1 ? true : undefined,

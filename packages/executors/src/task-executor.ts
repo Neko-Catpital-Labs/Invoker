@@ -20,6 +20,7 @@ import type { FamiliarRegistry } from './registry.js';
 import type { MergeGateProvider } from './merge-gate-provider.js';
 import { DockerFamiliar } from './docker-familiar.js';
 import { WorktreeFamiliar } from './worktree-familiar.js';
+import { SshFamiliar } from './ssh-familiar.js';
 import {
   executeMergeNodeImpl,
   approveMergeImpl,
@@ -55,6 +56,13 @@ export interface TaskExecutorConfig {
   defaultBranch?: string;
   callbacks?: TaskExecutorCallbacks;
   mergeGateProvider?: MergeGateProvider;
+  /** Remote SSH targets keyed by target ID. Resolved from InvokerConfig.remoteTargets. */
+  remoteTargets?: Record<string, {
+    host: string;
+    user: string;
+    sshKeyPath: string;
+    port?: number;
+  }>;
 }
 
 // ── TaskExecutor ──────────────────────────────────────────
@@ -70,6 +78,7 @@ export class TaskExecutor {
   private abiChecked = false;
   /** @internal */ mergeGateProvider?: MergeGateProvider;
   private activePrPollers = new Map<string, ReturnType<typeof setInterval>>();
+  private remoteTargets: Record<string, { host: string; user: string; sshKeyPath: string; port?: number }>;
 
   constructor(config: TaskExecutorConfig) {
     this.orchestrator = config.orchestrator;
@@ -80,6 +89,7 @@ export class TaskExecutor {
     this.defaultBranch = config.defaultBranch;
     this.callbacks = config.callbacks ?? {};
     this.mergeGateProvider = config.mergeGateProvider;
+    this.remoteTargets = config.remoteTargets ?? {};
   }
 
   /**
@@ -312,6 +322,29 @@ export class TaskExecutor {
         this.familiarRegistry.register('worktree', worktree);
         console.log(`[trace] TaskExecutor.selectFamiliar: task=${task.id} effectiveType=worktree → worktree (lazy registered)`);
         return worktree;
+      }
+
+      // Lazy registration for SSH — resolve remoteTargetId from config
+      if (effectiveType === 'ssh') {
+        const targetId = task.config.remoteTargetId;
+        if (!targetId) {
+          throw new Error(`Task ${task.id} has familiarType=ssh but no remoteTargetId`);
+        }
+        const target = this.remoteTargets[targetId];
+        if (!target) {
+          throw new Error(
+            `Task ${task.id} references remoteTargetId="${targetId}" but no matching ` +
+            `entry exists in remoteTargets config. Available: [${Object.keys(this.remoteTargets).join(', ')}]`,
+          );
+        }
+        const ssh = new SshFamiliar({
+          host: target.host,
+          user: target.user,
+          sshKeyPath: target.sshKeyPath,
+          port: target.port,
+        });
+        console.log(`[trace] TaskExecutor.selectFamiliar: task=${task.id} effectiveType=ssh remoteTarget=${targetId} → ssh (per-task)`);
+        return ssh;
       }
     }
 

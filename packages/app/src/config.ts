@@ -43,6 +43,15 @@ export interface InvokerConfig {
   maxAttemptsPerNode?: number;
   /** Browser executable for opening external URLs (e.g. "firefox"). Default: Chrome. */
   browser?: string;
+  /** Named remote SSH targets for running tasks on remote machines via SSH key auth. */
+  remoteTargets?: Record<string, {
+    host: string;
+    user: string;
+    /** Path to SSH identity file (private key). */
+    sshKeyPath: string;
+    /** SSH port. Default: 22. */
+    port?: number;
+  }>;
 }
 
 function readJsonSafe(path: string): InvokerConfig {

@@ -70,6 +70,7 @@ function createHeadlessExecutor(
     familiarRegistry: deps.familiarRegistry,
     cwd: deps.repoRoot,
     defaultBranch: deps.invokerConfig.defaultBranch,
+    remoteTargets: deps.invokerConfig.remoteTargets,
     mergeGateProvider: new GitHubMergeGateProvider(),
     callbacks: {
       onOutput: (taskId, data) => {

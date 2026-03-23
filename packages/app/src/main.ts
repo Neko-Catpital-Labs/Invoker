@@ -47,7 +47,7 @@ import { IpcBus, Channels } from '@invoker/transport';
 import type { MessageBus } from '@invoker/transport';
 import {
   FamiliarRegistry, TaskExecutor,
-  DockerFamiliar, WorktreeFamiliar, GitHubMergeGateProvider,
+  DockerFamiliar, WorktreeFamiliar, SshFamiliar, GitHubMergeGateProvider,
   type Familiar, type FamiliarHandle, type PersistedTaskMeta,
 } from '@invoker/executors';
 import type { TaskOutputData } from './types.js';
@@ -308,6 +308,7 @@ function setupGuiMode(): void {
       familiarRegistry,
       cwd: repoRoot,
       defaultBranch: invokerConfig.defaultBranch,
+      remoteTargets: invokerConfig.remoteTargets,
       mergeGateProvider: new GitHubMergeGateProvider(),
       callbacks: {
         onOutput: (taskId, data) => {
@@ -1085,6 +1086,14 @@ function setupGuiMode(): void {
           });
           familiarRegistry.register('worktree', worktree);
           familiar = worktree;
+        } else if (meta.familiarType === 'ssh') {
+          const targetId = persistence.getRemoteTargetId?.(taskId);
+          const target = targetId ? invokerConfig.remoteTargets?.[targetId] : undefined;
+          if (target) {
+            familiar = new SshFamiliar(target);
+          } else {
+            familiar = familiarRegistry.getDefault();
+          }
         } else {
           familiar = familiarRegistry.getDefault();
         }
