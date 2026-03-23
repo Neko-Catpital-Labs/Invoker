@@ -13,6 +13,7 @@ interface ApprovalModalProps {
   onApprove: (taskId: string) => void;
   onReject: (taskId: string, reason?: string) => void;
   onClose: () => void;
+  initialAction?: 'approve' | 'reject';
 }
 
 export function ApprovalModal({
@@ -20,6 +21,7 @@ export function ApprovalModal({
   onApprove,
   onReject,
   onClose,
+  initialAction = 'approve',
 }: ApprovalModalProps) {
   const isFixApproval = Boolean(task.execution.pendingFixError);
   console.log(`[ApprovalModal] render: taskId=${task.id} isFixApproval=${isFixApproval} claudeSessionId=${task.execution.claudeSessionId}`);
@@ -30,7 +32,7 @@ export function ApprovalModal({
   ].filter(Boolean).join('\n');
 
   const [reason, setReason] = useState(defaultReason);
-  const [showRejectInput, setShowRejectInput] = useState(isFixApproval);
+  const [showRejectInput, setShowRejectInput] = useState(initialAction === 'reject');
   const [sessionMessages, setSessionMessages] = useState<ClaudeMessage[] | null>(null);
   const [sessionLoading, setSessionLoading] = useState(false);
   const [sessionError, setSessionError] = useState(false);

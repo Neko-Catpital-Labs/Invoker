@@ -29,7 +29,7 @@ import { ReplaceTaskModal } from './components/ReplaceTaskModal.js';
 type ModalState =
   | { type: 'none' }
   | { type: 'input'; task: TaskState }
-  | { type: 'approval'; task: TaskState }
+  | { type: 'approval'; task: TaskState; action: 'approve' | 'reject' }
   | { type: 'experiment'; task: TaskState }
   | { type: 'replace'; task: TaskState };
 
@@ -308,7 +308,7 @@ export function App() {
 
   const openApprovalModal = useCallback((task: TaskState) => {
     console.log(`[openApprovalModal] taskId=${task.id} claudeSessionId=${task.execution.claudeSessionId} pendingFixError=${!!task.execution.pendingFixError}`);
-    setModal({ type: 'approval', task });
+    setModal({ type: 'approval', task, action: 'approve' });
   }, []);
 
   const openExperimentModal = useCallback((task: TaskState) => {
@@ -370,7 +370,7 @@ export function App() {
               onProvideInput={openInputModal}
               onApprove={openApprovalModal}
               onReject={(task) => {
-                setModal({ type: 'approval', task });
+                setModal({ type: 'approval', task, action: 'reject' });
               }}
               onSelectExperiment={openExperimentModal}
               onEditCommand={handleEditCommand}
@@ -400,6 +400,7 @@ export function App() {
           onApprove={handleApprove}
           onReject={handleReject}
           onClose={closeModal}
+          initialAction={modal.action}
         />
       )}
 

@@ -120,6 +120,7 @@ describe('ApprovalModal', () => {
         onApprove={vi.fn()}
         onReject={vi.fn()}
         onClose={vi.fn()}
+        initialAction="reject"
       />,
     );
     const textarea = screen.getByRole('textbox');
@@ -137,13 +138,14 @@ describe('ApprovalModal', () => {
         onApprove={vi.fn()}
         onReject={vi.fn()}
         onClose={vi.fn()}
+        initialAction="reject"
       />,
     );
     const textarea = screen.getByRole('textbox');
     expect(textarea).toHaveValue('Original error: Exit code 1');
   });
 
-  it('shows rejection textarea immediately for fix approval', () => {
+  it('shows rejection textarea immediately when initialAction is reject', () => {
     render(
       <ApprovalModal
         task={makeTask({
@@ -152,9 +154,26 @@ describe('ApprovalModal', () => {
         onApprove={vi.fn()}
         onReject={vi.fn()}
         onClose={vi.fn()}
+        initialAction="reject"
       />,
     );
     expect(screen.getByRole('textbox')).toBeInTheDocument();
+  });
+
+  it('shows Approve button for fix-approval task when initialAction is approve', () => {
+    render(
+      <ApprovalModal
+        task={makeTask({
+          execution: { pendingFixError: 'some error' },
+        })}
+        onApprove={vi.fn()}
+        onReject={vi.fn()}
+        onClose={vi.fn()}
+        initialAction="approve"
+      />,
+    );
+    expect(screen.getByText('Approve')).toBeInTheDocument();
+    expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
   });
 
   // ── Context info blocks ──────────────────────────────
