@@ -6,6 +6,23 @@ const path = require('path');
 const fs = require('fs');
 
 const MODULE_NAME = 'better-sqlite3';
+const ELECTRON_HEADERS_DISTURL = 'https://electronjs.org/headers';
+
+function getElectronVersion() {
+  // This script runs under Electron (`ELECTRON_RUN_AS_NODE=1`) but `node-gyp` rebuild
+  // still needs explicit `runtime=electron` + `target=<electronVersion>` so it
+  // downloads the right Electron headers (not system Node headers).
+  const versionFromRuntime = process && process.versions && process.versions.electron;
+  if (typeof versionFromRuntime === 'string' && versionFromRuntime.length > 0) return versionFromRuntime;
+
+  const electronPkgPath = path.join(__dirname, '..', 'packages', 'app', 'node_modules', 'electron', 'package.json');
+  try {
+    const pkgRaw = fs.readFileSync(electronPkgPath, 'utf8');
+    const pkg = JSON.parse(pkgRaw);
+    if (pkg && typeof pkg.version === 'string' && pkg.version.length > 0) return pkg.version;
+  } catch {}
+  return null;
+}
 
 // pnpm strict linking means better-sqlite3 isn't resolvable from root.
 // Resolve from a workspace package that depends on it, or fall back to glob.
@@ -79,11 +96,22 @@ function tryLoad() {
 
 function rebuild() {
   const runtimeVer = parseInt(process.versions.modules, 10);
+  const electronVersion = getElectronVersion();
+  const electronTargetEnv = electronVersion
+    ? {
+        npm_config_runtime: 'electron',
+        npm_config_target: electronVersion,
+        npm_config_disturl: ELECTRON_HEADERS_DISTURL,
+      }
+    : null;
 
   // Try pnpm rebuild first (handles prebuild-install download)
   console.log(`[check-native-modules] Running: pnpm rebuild ${MODULE_NAME}`);
   try {
-    execSync(`pnpm rebuild ${MODULE_NAME}`, { stdio: 'inherit' });
+    execSync(`pnpm rebuild ${MODULE_NAME}`, {
+      stdio: 'inherit',
+      env: electronTargetEnv ? { ...process.env, ...electronTargetEnv } : process.env,
+    });
   } catch {}
 
   // Check if pnpm rebuild fixed it (binary exists with correct MODULE_VERSION)
@@ -99,7 +127,16 @@ function rebuild() {
     if (pkgDir) {
       console.log(`[check-native-modules] Running: node-gyp rebuild in ${pkgDir}`);
       try {
-        execSync('npx node-gyp rebuild', { cwd: pkgDir, stdio: 'inherit' });
+        if (electronVersion) {
+          // Force node-gyp to fetch Electron headers and compile against Electron's
+          // ABI (NODE_MODULE_VERSION), avoiding a system-Node ABI mismatch.
+          execSync(
+            `npx node-gyp rebuild --runtime=electron --target=${electronVersion} --dist-url=${ELECTRON_HEADERS_DISTURL}`,
+            { cwd: pkgDir, stdio: 'inherit', env: { ...process.env, ...electronTargetEnv } }
+          );
+        } else {
+          execSync('npx node-gyp rebuild', { cwd: pkgDir, stdio: 'inherit' });
+        }
       } catch {
         return false;
       }
