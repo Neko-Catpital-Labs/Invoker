@@ -12,7 +12,8 @@
 import { Orchestrator } from '@invoker/core';
 import type { TaskDelta, TaskState } from '@invoker/core';
 import { SQLiteAdapter } from '@invoker/persistence';
-import { LocalBus, Channels } from '@invoker/transport';
+import { Channels } from '@invoker/transport';
+import type { MessageBus } from '@invoker/transport';
 import { FamiliarRegistry, TaskExecutor, GitHubMergeGateProvider } from '@invoker/executors';
 import type { InvokerConfig } from './config.js';
 import { backupPlan } from './plan-backup.js';
@@ -34,7 +35,7 @@ export interface HeadlessDeps {
   orchestrator: Orchestrator;
   persistence: SQLiteAdapter;
   familiarRegistry: FamiliarRegistry;
-  messageBus: LocalBus;
+  messageBus: MessageBus;
   repoRoot: string;
   invokerConfig: InvokerConfig;
   initServices: () => void;
