@@ -43,7 +43,8 @@ if (process.platform === 'linux') {
 import { Orchestrator, UTILIZATION_MAX } from '@invoker/core';
 import type { PlanDefinition, TaskDelta, TaskReplacementDef, TaskState, UtilizationRule } from '@invoker/core';
 import { SQLiteAdapter, ConversationRepository } from '@invoker/persistence';
-import { LocalBus, Channels } from '@invoker/transport';
+import { IpcBus, Channels } from '@invoker/transport';
+import type { MessageBus } from '@invoker/transport';
 import {
   FamiliarRegistry, TaskExecutor,
   DockerFamiliar, WorktreeFamiliar, GitHubMergeGateProvider,
@@ -83,7 +84,7 @@ if (process.platform === 'linux') {
 
 // ── Shared state ─────────────────────────────────────────────
 
-let messageBus: LocalBus;
+let messageBus: MessageBus;
 let persistence: SQLiteAdapter;
 let familiarRegistry: FamiliarRegistry;
 let orchestrator: Orchestrator;
@@ -101,7 +102,7 @@ function resolveUtilizationRules(config: InvokerConfig): UtilizationRule[] {
 }
 
 function initServices(): void {
-  messageBus = new LocalBus();
+  messageBus = new IpcBus();
   const dbDir = process.env.NODE_ENV === 'test'
     ? path.join(homedir(), '.invoker', 'test')
     : path.join(homedir(), '.invoker');
