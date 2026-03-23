@@ -432,12 +432,24 @@ export class SlackSurface implements Surface {
       }
 
       this.log('slack', 'error', `[SESSION_ERROR] Plan conversation error (thread_ts=${threadTs}): ${err}`);
+      if (this.isCursorCliMissingError(err)) {
+        this.log(
+          'slack',
+          'error',
+          '[ACTION_REQUIRED] Cursor CLI is missing. Please install Cursor CLI or set CURSOR_COMMAND to an absolute path (for macOS app installs, try /Applications/Cursor.app/Contents/Resources/app/bin/cursor).',
+        );
+      }
       this.sessionMetrics.errors++;
       await say({
         text: `Error: ${err instanceof Error ? err.message : String(err)}`,
         thread_ts: threadTs,
       });
     }
+  }
+
+  private isCursorCliMissingError(err: unknown): boolean {
+    const msg = err instanceof Error ? err.message : String(err);
+    return msg.includes('Failed to spawn Cursor CLI') && msg.includes('ENOENT');
   }
 
   // ── Conversation Admin Commands ─────────────────────────
