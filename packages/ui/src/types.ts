@@ -49,6 +49,7 @@ export interface TaskConfig {
   readonly familiarType?: string;
   readonly autoFix?: boolean;
   readonly maxFixAttempts?: number;
+  readonly remoteTargetId?: string;
   readonly isMergeNode?: boolean;
   readonly summary?: string;
   readonly problem?: string;
