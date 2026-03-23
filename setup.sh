@@ -108,12 +108,49 @@ echo "==> Running pnpm install (triggers postinstall → native module rebuild f
 pnpm install
 echo ""
 
+# --- Cursor CLI ---
+echo "==> Checking Cursor CLI..."
+if has cursor; then
+  echo "    OK: cursor CLI on PATH"
+  cursor --version | sed 's/^/    /'
+else
+  CURSOR_APP_CLI="/Applications/Cursor.app/Contents/Resources/app/bin/cursor"
+  if [ "$OS" = "Darwin" ] && [ -x "$CURSOR_APP_CLI" ]; then
+    echo "    Cursor app found, but 'cursor' is not on PATH."
+    echo "    Fallback supported: set CURSOR_COMMAND in .env"
+    echo "    CURSOR_COMMAND=$CURSOR_APP_CLI"
+  elif [ "$OS" = "Darwin" ] && has brew; then
+    echo "    Cursor CLI not found. Attempting install via Homebrew cask..."
+    brew install --cask cursor || true
+    if has cursor; then
+      echo "    Installed: cursor CLI on PATH"
+      cursor --version | sed 's/^/    /'
+    elif [ -x "$CURSOR_APP_CLI" ]; then
+      echo "    Cursor app installed, but PATH still missing CLI."
+      echo "    Set CURSOR_COMMAND in .env:"
+      echo "    CURSOR_COMMAND=$CURSOR_APP_CLI"
+    else
+      echo "    WARNING: Cursor CLI is still unavailable."
+      echo "    Install Cursor and set CURSOR_COMMAND in .env."
+    fi
+  else
+    echo "    WARNING: Cursor CLI not found."
+    echo "    Install Cursor CLI and set CURSOR_COMMAND in .env if needed."
+  fi
+fi
+echo ""
+
 # --- Summary ---
 echo "============================================"
 echo "  Setup complete!"
 echo ""
 echo "  Node.js: $(node --version)"
 echo "  pnpm:    $(pnpm --version)"
+if has cursor; then
+  echo "  cursor:  $(command -v cursor)"
+else
+  echo "  cursor:  not on PATH (fallback via CURSOR_COMMAND is supported)"
+fi
 if [ "$OS" = "Linux" ]; then
   if has xdotool; then
     echo "  xdotool: installed"

@@ -6,6 +6,7 @@
   "scripts": {
     "test": "bash scripts/test-plan-to-invoker-skill.sh && pnpm -r test",
     "test:plan-to-invoker-skill": "bash scripts/test-plan-to-invoker-skill.sh",
+    "setup": "bash scripts/setup-cursor-skills.sh",
     "build": "pnpm -r build",
     "clean": "pnpm -r clean",
     "postinstall": "node scripts/rebuild-for-electron.js",
