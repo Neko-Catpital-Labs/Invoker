@@ -4,7 +4,8 @@
   "version": "0.1.0",
   "description": "Auditable multi-agent orchestration with a mutating action graph",
   "scripts": {
-    "test": "pnpm -r test",
+    "test": "bash scripts/test-plan-to-invoker-skill.sh && pnpm -r test",
+    "test:plan-to-invoker-skill": "bash scripts/test-plan-to-invoker-skill.sh",
     "build": "pnpm -r build",
     "clean": "pnpm -r clean",
     "postinstall": "node scripts/rebuild-for-electron.js",
