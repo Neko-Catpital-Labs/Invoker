@@ -72,7 +72,14 @@ const headlessIndex = process.argv.indexOf('--headless');
 const isHeadless = headlessIndex !== -1;
 
 // In headless mode, extract the CLI args after --headless
-const cliArgs = isHeadless ? process.argv.slice(headlessIndex + 1) : [];
+let cliArgs = isHeadless ? process.argv.slice(headlessIndex + 1) : [];
+
+// Parse --wait-for-approval flag
+const waitForApprovalIndex = cliArgs.indexOf('--wait-for-approval');
+const waitForApproval = waitForApprovalIndex !== -1;
+if (waitForApproval) {
+  cliArgs = [...cliArgs.slice(0, waitForApprovalIndex), ...cliArgs.slice(waitForApprovalIndex + 1)];
+}
 
 // Set app name early so Electron uses "invoker" as WM_CLASS (X11) and app_id (Wayland).
 // --class tells Chromium to set WM_CLASS explicitly, preventing GNOME from
@@ -240,6 +247,7 @@ if (isHeadless) {
       await runHeadless(cliArgs, {
         orchestrator, persistence, familiarRegistry, messageBus,
         repoRoot, invokerConfig, initServices, wireSlackBot,
+        waitForApproval,
       });
     } catch (err) {
       console.error(`${RED}Error:${RESET} ${err instanceof Error ? err.message : String(err)}`);
@@ -860,6 +868,16 @@ function setupGuiMode(): void {
     ipcMain.handle('invoker:check-pr-statuses', async () => {
       console.log(`[ipc] check-pr-statuses`);
       await taskExecutor.checkMergeGateStatuses();
+    });
+
+    ipcMain.handle('invoker:check-pr-status', async () => {
+      const tasks = orchestrator.getAllTasks();
+      const awaitingMergeGates = tasks.filter(
+        t => t.config.isMergeNode && t.status === 'awaiting_approval'
+      );
+      await Promise.all(
+        awaitingMergeGates.map(t => taskExecutor.checkPrApprovalNow(t.id))
+      );
     });
 
     ipcMain.handle('invoker:resolve-conflict', async (_event, taskId: string) => {

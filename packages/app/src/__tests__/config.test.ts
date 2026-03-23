@@ -148,4 +148,26 @@ describe('loadConfig', () => {
     const config = loadConfig(fakeRepo);
     expect(config.maxConcurrency).toBe(8);
   });
+
+  it('loadConfig picks up browser field', () => {
+    writeFileSync(
+      join(fakeHome, '.invoker', 'config.json'),
+      JSON.stringify({ browser: 'firefox' }),
+    );
+    const config = loadConfig(fakeRepo);
+    expect(config.browser).toBe('firefox');
+  });
+
+  it('repo-level overrides browser from user-level', () => {
+    writeFileSync(
+      join(fakeHome, '.invoker', 'config.json'),
+      JSON.stringify({ browser: 'firefox' }),
+    );
+    writeFileSync(
+      join(fakeRepo, '.invoker.json'),
+      JSON.stringify({ browser: 'chromium' }),
+    );
+    const config = loadConfig(fakeRepo);
+    expect(config.browser).toBe('chromium');
+  });
 });

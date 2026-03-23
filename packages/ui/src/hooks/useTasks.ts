@@ -43,6 +43,7 @@ export function useTasks(): UseTasksResult {
         });
       }
     });
+    window.invoker.checkPrStatus?.();
   }, []);
 
   useEffect(() => {

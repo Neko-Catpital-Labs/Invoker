@@ -286,6 +286,9 @@ export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar
       let stderr = '';
       child.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
       child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
+      child.on('error', (err) => {
+        reject(new Error(`Failed to spawn git: ${err.message}`));
+      });
       child.on('close', (code) => {
         if (code === 0) resolve(stdout.trim());
         else {

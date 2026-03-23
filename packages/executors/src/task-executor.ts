@@ -373,6 +373,9 @@ export class TaskExecutor {
       let stderr = '';
       child.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
       child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
+      child.on('error', (err) => {
+        reject(new Error(`Failed to spawn git: ${err.message}`));
+      });
       child.on('close', (code) => {
         if (code === 0) resolvePromise(stdout.trim());
         else reject(new Error(
@@ -593,6 +596,38 @@ export class TaskExecutor {
     }
   }
 
+  async checkPrApprovalNow(taskId: string): Promise<void> {
+    if (!this.mergeGateProvider) return;
+    if (!this.activePrPollers.has(taskId)) return;
+
+    // Read prIdentifier from persistence
+    const task = this.orchestrator.getTask(taskId);
+    const prIdentifier = task?.execution.prIdentifier;
+    if (!prIdentifier) return;
+
+    try {
+      const status = await this.mergeGateProvider.checkApproval({
+        identifier: prIdentifier,
+        cwd: this.cwd,
+      });
+
+      this.persistence.updateTask(taskId, {
+        execution: { prStatus: status.statusText },
+      });
+
+      if (status.approved) {
+        console.log(`[merge-gate] PR ${prIdentifier} approved (manual check), completing merge gate`);
+        this.stopPrPolling(taskId);
+        await this.orchestrator.approve(taskId);
+      } else if (status.rejected) {
+        console.log(`[merge-gate] PR ${prIdentifier} rejected (manual check): ${status.statusText}`);
+        this.stopPrPolling(taskId);
+      }
+    } catch (err) {
+      console.error(`[merge-gate] Manual PR check error for ${taskId}:`, err);
+    }
+  }
+
   spawnClaudeFix(prompt: string, cwd: string): Promise<{ stdout: string; sessionId: string }> {
     return spawnClaudeFixImpl(prompt, cwd);
   }
@@ -716,6 +751,9 @@ export class TaskExecutor {
       });
       let stdout = '';
       child.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
+      child.on('error', (err) => {
+        reject(new Error(`Failed to spawn git: ${err.message}`));
+      });
       child.on('close', (code) => {
         if (code === 0) resolvePromise(stdout.trim());
         else reject(new Error(`git log failed (code ${code})`));
@@ -732,6 +770,9 @@ export class TaskExecutor {
       });
       let stdout = '';
       child.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
+      child.on('error', (err) => {
+        reject(new Error(`Failed to spawn git: ${err.message}`));
+      });
       child.on('close', (code) => {
         if (code === 0) resolvePromise(stdout.trim());
         else reject(new Error(`git diff --stat failed (code ${code})`));

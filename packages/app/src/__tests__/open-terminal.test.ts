@@ -180,6 +180,7 @@ describe('open-terminal integration', () => {
       });
     vi.spyOn(BaseFamiliar.prototype as any, 'syncFromRemote').mockResolvedValue(undefined);
     vi.spyOn(BaseFamiliar.prototype as any, 'pushBranchToRemote').mockResolvedValue(undefined);
+    vi.spyOn(WorktreeFamiliar.prototype as any, 'provisionWorktree').mockResolvedValue(undefined);
   });
 
   afterEach(async () => {

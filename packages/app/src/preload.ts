@@ -63,6 +63,7 @@ const api: InvokerAPI = {
   deleteWorkflow: (workflowId: string) =>
     ipcRenderer.invoke('invoker:delete-workflow', workflowId),
   getAllCompletedTasks: () => ipcRenderer.invoke('invoker:get-all-completed-tasks'),
+  cleanupWorktrees: () => ipcRenderer.invoke('invoker:cleanup-worktrees'),
   onWorkflowsChanged: (cb: (workflows: unknown[]) => void) => {
     const handler = (_event: Electron.IpcRendererEvent, workflows: unknown[]) => cb(workflows);
     ipcRenderer.on('invoker:workflows-changed', handler);
@@ -83,6 +84,7 @@ const api: InvokerAPI = {
   setMergeMode: (workflowId: string, mergeMode: string) =>
     ipcRenderer.invoke('invoker:set-merge-mode', workflowId, mergeMode),
   checkPrStatuses: () => ipcRenderer.invoke('invoker:check-pr-statuses'),
+  checkPrStatus: () => ipcRenderer.invoke('invoker:check-pr-status'),
 };
 
 contextBridge.exposeInMainWorld('invoker', api);

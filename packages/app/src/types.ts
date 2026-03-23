@@ -127,6 +127,7 @@ export interface InvokerAPI {
   fixWithClaude: (taskId: string) => Promise<void>;
   setMergeMode: (workflowId: string, mergeMode: string) => Promise<void>;
   checkPrStatuses: () => Promise<void>;
+  checkPrStatus: () => Promise<void>;
 }
 
 // ── Augment global Window ────────────────────────────────────

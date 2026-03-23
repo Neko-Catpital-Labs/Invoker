@@ -181,6 +181,21 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
         env: cleanElectronEnv(),
       });
 
+      // Register error handler IMMEDIATELY to catch synchronous spawn failures
+      child.on('error', (err) => {
+        console.log(`[WorktreeFamiliar] child process spawn error: ${err.message}`);
+        const response: WorkResponse = {
+          requestId: request.requestId,
+          actionId: request.actionId,
+          status: 'failed',
+          outputs: {
+            exitCode: 1,
+            error: `Failed to spawn command: ${err.message}`,
+          },
+        };
+        this.emitComplete(executionId, response);
+      });
+
       const entry: WorktreeEntry = {
         process: child,
         request,
@@ -344,6 +359,21 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
       env: cleanElectronEnv(),
     });
     log(`spawn done pid=${child.pid}`);
+
+    // Register error handler IMMEDIATELY to catch synchronous spawn failures
+    child.on('error', (err) => {
+      console.log(`[WorktreeFamiliar] child process spawn error: ${err.message}`);
+      const response: WorkResponse = {
+        requestId: request.requestId,
+        actionId: request.actionId,
+        status: 'failed',
+        outputs: {
+          exitCode: 1,
+          error: `Failed to spawn command: ${err.message}`,
+        },
+      };
+      this.emitComplete(executionId, response);
+    });
 
     const entry: WorktreeEntry = {
       process: child,
@@ -602,6 +632,10 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
         stderr += text;
         console.log(`[WorktreeFamiliar] provision stderr: ${text.trimEnd()}`);
         if (executionId) this.emitOutput(executionId, text);
+      });
+      child.on('error', (err) => {
+        console.log(`[WorktreeFamiliar] provisionWorktree error: ${err.message}`);
+        reject(new Error(`Failed to spawn provisioning process: ${err.message}`));
       });
       child.on('close', (code) => {
         console.log(`[WorktreeFamiliar] provisionWorktree finished dir=${dir} code=${code} elapsed=${Date.now() - t0}ms`);

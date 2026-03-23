@@ -44,6 +44,7 @@ export interface HeadlessDeps {
     logFn: (source: string, level: string, message: string) => void;
     onPlanLoaded?: () => void;
   }) => Promise<any>;
+  waitForApproval?: boolean;
 }
 
 // ── ANSI Helpers ─────────────────────────────────────────────
@@ -102,13 +103,13 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
 
   switch (command) {
     case 'run':
-      await headlessRun(args[1], deps);
+      await headlessRun(args[1], deps, deps.waitForApproval);
       break;
     case 'list':
       await headlessList(deps);
       break;
     case 'resume':
-      await headlessResume(args[1], deps);
+      await headlessResume(args[1], deps, deps.waitForApproval);
       break;
     case 'status':
       await headlessStatus(deps);
@@ -181,12 +182,15 @@ ${BOLD}Usage:${RESET}
   electron dist/main.js --headless edit <id> <cmd>    Edit task command and re-run
   electron dist/main.js --headless audit <taskId>     Print event history
   electron dist/main.js --headless slack              Start Slack bot (long-running)
+
+${BOLD}Options:${RESET}
+  --wait-for-approval    Keep running until PR approval (use with 'run' or 'resume')
 `);
 }
 
 // ── Headless Commands ────────────────────────────────────────
 
-async function headlessRun(planPath: string, deps: HeadlessDeps): Promise<void> {
+async function headlessRun(planPath: string, deps: HeadlessDeps, waitForApproval?: boolean): Promise<void> {
   const { orchestrator, messageBus, repoRoot, invokerConfig } = deps;
   if (!planPath) throw new Error('Missing plan file. Usage: --headless run <plan.yaml>');
 
@@ -221,7 +225,7 @@ async function headlessRun(planPath: string, deps: HeadlessDeps): Promise<void> 
   const started = orchestrator.startExecution();
   await taskExecutor.executeTasks(started);
 
-  await waitForCompletion(orchestrator, currentWorkflowId);
+  await waitForCompletion(orchestrator, currentWorkflowId, waitForApproval);
 
   await api.close().catch(() => {});
 
@@ -238,7 +242,7 @@ async function headlessRun(planPath: string, deps: HeadlessDeps): Promise<void> 
   if (status.failed > 0) process.exitCode = 1;
 }
 
-async function headlessResume(workflowId: string, deps: HeadlessDeps): Promise<void> {
+async function headlessResume(workflowId: string, deps: HeadlessDeps, waitForApproval?: boolean): Promise<void> {
   const { orchestrator, messageBus } = deps;
   if (!workflowId) throw new Error('Missing workflowId. Usage: --headless resume <id>');
 
@@ -274,7 +278,7 @@ async function headlessResume(workflowId: string, deps: HeadlessDeps): Promise<v
 
   const started = orchestrator.startExecution();
   await taskExecutor.executeTasks([...orphanRestarted, ...started]);
-  await waitForCompletion(orchestrator);
+  await waitForCompletion(orchestrator, undefined, waitForApproval);
 
   await api.close().catch(() => {});
 
@@ -340,7 +344,7 @@ async function headlessSelect(taskId: string, experimentId: string, deps: Headle
   const taskExecutor = createHeadlessExecutor(deps);
   const started = deps.orchestrator.resumeWorkflow(workflowId);
   await taskExecutor.executeTasks(started);
-  await waitForCompletion(deps.orchestrator);
+  await waitForCompletion(deps.orchestrator, undefined, undefined);
 }
 
 async function headlessRestart(taskId: string, deps: HeadlessDeps): Promise<void> {
@@ -355,7 +359,7 @@ async function headlessRestart(taskId: string, deps: HeadlessDeps): Promise<void
 
   const taskExecutor = createHeadlessExecutor(deps);
   await taskExecutor.executeTasks(runnable);
-  await waitForCompletion(deps.orchestrator);
+  await waitForCompletion(deps.orchestrator, undefined, undefined);
 }
 
 async function headlessFix(taskId: string, deps: HeadlessDeps): Promise<void> {
@@ -387,7 +391,7 @@ async function headlessRebaseAndRetry(taskId: string, deps: HeadlessDeps): Promi
 
   const te = createHeadlessExecutor(deps);
   await te.executeTasks(runnable);
-  await waitForCompletion(deps.orchestrator, deps.orchestrator.getTask(taskId)?.config.workflowId);
+  await waitForCompletion(deps.orchestrator, deps.orchestrator.getTask(taskId)?.config.workflowId, undefined);
 }
 
 async function headlessEdit(taskId: string, newCommand: string, deps: HeadlessDeps): Promise<void> {
@@ -399,7 +403,7 @@ async function headlessEdit(taskId: string, newCommand: string, deps: HeadlessDe
 
   const taskExecutor = createHeadlessExecutor(deps);
   await taskExecutor.executeTasks(started);
-  await waitForCompletion(deps.orchestrator);
+  await waitForCompletion(deps.orchestrator, undefined, undefined);
 }
 
 async function headlessEditType(taskId: string, familiarType: string, deps: HeadlessDeps): Promise<void> {
@@ -411,7 +415,7 @@ async function headlessEditType(taskId: string, familiarType: string, deps: Head
 
   const taskExecutor = createHeadlessExecutor(deps);
   await taskExecutor.executeTasks(started);
-  await waitForCompletion(deps.orchestrator);
+  await waitForCompletion(deps.orchestrator, undefined, undefined);
 }
 
 async function headlessQuerySelect(taskId: string, deps: Pick<HeadlessDeps, 'persistence'>): Promise<void> {
@@ -485,25 +489,24 @@ function restoreWorkflowForTask(taskId: string, deps: Pick<HeadlessDeps, 'orches
   throw new Error(`Task "${taskId}" not found in any workflow`);
 }
 
-async function waitForCompletion(orchestrator: Orchestrator, workflowId?: string): Promise<void> {
-  const maxWaitMs = 300_000; // 5 minutes
+async function waitForCompletion(orchestrator: Orchestrator, workflowId?: string, waitForApproval?: boolean): Promise<void> {
+  const maxWaitMs = waitForApproval ? 86_400_000 : 300_000; // 24 hours if waiting for approval, else 5 minutes
   const pollIntervalMs = 100;
   const start = Date.now();
+
+  if (waitForApproval) {
+    console.log('[headless] Waiting for PR approval (--wait-for-approval)...');
+  }
 
   while (Date.now() - start < maxWaitMs) {
     let tasks = orchestrator.getAllTasks();
     if (workflowId) {
       tasks = tasks.filter((t) => t.config.workflowId === workflowId);
     }
-    const allSettled = tasks.every(
-      (t) =>
-        t.status === 'completed' ||
-        t.status === 'failed' ||
-        t.status === 'needs_input' ||
-        t.status === 'awaiting_approval' ||
-        t.status === 'blocked' ||
-        t.status === 'stale',
-    );
+    const settledStatuses = waitForApproval
+      ? ['completed', 'failed', 'needs_input', 'blocked', 'stale']
+      : ['completed', 'failed', 'needs_input', 'awaiting_approval', 'blocked', 'stale'];
+    const allSettled = tasks.every((t) => settledStatuses.includes(t.status));
     if (allSettled) return;
     await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
   }
