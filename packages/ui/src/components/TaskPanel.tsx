@@ -43,13 +43,14 @@ function formatDate(date?: Date | string): string {
 }
 
 /**
- * Value for the executor select — mirrors TaskExecutor.selectFamiliar
- * (packages/executors/src/task-executor.ts). Merge nodes hide the selector.
+ * Display value when task.config.familiarType is unset: matches orchestrator
+ * loadPlan (packages/core/src/orchestrator.ts) — command → local, else worktree;
+ * repoUrl alone implies worktree (TaskExecutor.selectFamiliar). Merge nodes hide the selector.
  */
 function effectiveExecutorSelectValue(task: TaskState): string {
-  const effective =
-    task.config.familiarType ?? (task.config.repoUrl ? 'worktree' : undefined);
-  return effective ?? 'worktree';
+  if (task.config.familiarType) return task.config.familiarType;
+  if (task.config.repoUrl) return 'worktree';
+  return task.config.command !== undefined ? 'local' : 'worktree';
 }
 
 function HeartbeatTimingSection({ task, formatDate: fmtDate }: { task: TaskState; formatDate: (d?: Date | string) => string }) {
@@ -142,6 +143,7 @@ export function TaskPanel({
   };
 
   const colors = getStatusColor(task.status);
+  const executorSelectValue = effectiveExecutorSelectValue(task);
 
   return (
     <div className="h-full overflow-y-auto p-4 space-y-4">
@@ -244,7 +246,7 @@ export function TaskPanel({
         <div className="flex items-center justify-between">
           <span className="text-sm text-gray-400">Executor</span>
           <select
-            value={effectiveExecutorSelectValue(task)}
+            value={executorSelectValue}
             onChange={(e) => onEditType(task.id, e.target.value)}
             disabled={task.status === 'running'}
             className="bg-gray-700 text-gray-200 text-xs rounded px-2 py-1 border border-gray-600 focus:outline-none focus:border-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
@@ -252,7 +254,8 @@ export function TaskPanel({
           >
             <option value="worktree">Worktree</option>
             <option value="docker">Docker</option>
-            {task.config.familiarType === 'local' ? (
+            {/* Include Local when the effective value is local (explicit or orchestrator default for command tasks), else <select> cannot show the right value */}
+            {executorSelectValue === 'local' ? (
               <option value="local">Local</option>
             ) : null}
           </select>

@@ -622,7 +622,7 @@ describe('TaskPanel double-click editing', () => {
       expect(screen.getByTestId('executor-type-select')).toBeInTheDocument();
     });
 
-    it('defaults executor select to worktree when familiarType and repoUrl are unset (matches TaskExecutor default)', () => {
+    it('defaults executor select to worktree for prompt-only task when familiarType unset (orchestrator default)', () => {
       const task = makeTask({
         prompt: 'Write a test',
         status: 'pending',
@@ -640,6 +640,26 @@ describe('TaskPanel double-click editing', () => {
       );
 
       expect(screen.getByTestId('executor-type-select')).toHaveValue('worktree');
+    });
+
+    it('defaults executor select to local for command task when familiarType unset (orchestrator default)', () => {
+      const task = makeTask({
+        command: 'echo test',
+        status: 'pending',
+      });
+      render(
+        <TaskPanel
+          task={task}
+          onProvideInput={mockOnProvideInput}
+          onApprove={mockOnApprove}
+          onReject={mockOnReject}
+          onSelectExperiment={mockOnSelectExperiment}
+          onEditCommand={mockOnEditCommand}
+          onEditType={vi.fn()}
+        />,
+      );
+
+      expect(screen.getByTestId('executor-type-select')).toHaveValue('local');
     });
   });
 
