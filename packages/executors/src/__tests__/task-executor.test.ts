@@ -2249,8 +2249,10 @@ describe('TaskExecutor', () => {
       });
 
       const gitCalls: string[][] = [];
-      (executor as any).execGit = async (args: string[]) => {
+      const gitCwds: (string | undefined)[] = [];
+      (executor as any).execGit = async (args: string[], cwd?: string) => {
         gitCalls.push([...args]);
+        gitCwds.push(cwd);
         if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
         return '';
       };
@@ -2264,6 +2266,9 @@ describe('TaskExecutor', () => {
       // Should have attempted to merge the conflicting branch
       const mergeCall = gitCalls.find(c => c[0] === 'merge' && c.includes('invoker/dep-task'));
       expect(mergeCall).toBeDefined();
+
+      // All git calls should use the task's workspacePath
+      expect(gitCwds.every(c => c === '/tmp/workspace')).toBe(true);
     });
   });
 
@@ -2590,7 +2595,9 @@ describe('TaskExecutor', () => {
       });
 
       const mergeMsgs: string[] = [];
-      (executor as any).execGit = async (args: string[]) => {
+      const gitCwds: (string | undefined)[] = [];
+      (executor as any).execGit = async (args: string[], cwd?: string) => {
+        gitCwds.push(cwd);
         if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
         if (args[0] === 'merge') {
           const mIdx = args.indexOf('-m');
@@ -2604,6 +2611,53 @@ describe('TaskExecutor', () => {
       expect(mergeMsgs).toHaveLength(1);
       expect(mergeMsgs[0]).toContain('invoker/dep-task');
       expect(mergeMsgs[0]).toContain('Add typing indicator support');
+
+      // All git calls should use the task's workspacePath
+      expect(gitCwds.every(c => c === '/tmp/workspace')).toBe(true);
+    });
+
+    it('resolveConflictWithClaude uses host.cwd when workspacePath is undefined', async () => {
+      // Create a task without workspacePath
+      const conflictError = JSON.stringify({
+        type: 'merge_conflict',
+        failedBranch: 'invoker/dep-task',
+        conflictFiles: ['shared.ts'],
+      });
+
+      const tasks = new Map<string, TaskState>();
+      tasks.set('conflict-task', makeTask({
+        id: 'conflict-task',
+        status: 'failed',
+        execution: {
+          error: conflictError,
+          branch: 'invoker/conflict-task',
+          // No workspacePath — should fall back to host.cwd
+        },
+      }));
+
+      const orchestrator = {
+        getTask: (id: string) => tasks.get(id),
+        getAllTasks: () => Array.from(tasks.values()),
+      };
+
+      const executor = new TaskExecutor({
+        orchestrator: orchestrator as any,
+        persistence: {} as any,
+        familiarRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+      });
+
+      const gitCwds: (string | undefined)[] = [];
+      (executor as any).execGit = async (args: string[], cwd?: string) => {
+        gitCwds.push(cwd);
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        return '';
+      };
+
+      await executor.resolveConflictWithClaude('conflict-task');
+
+      // Should fall back to host.cwd ('/tmp') since no workspacePath
+      expect(gitCwds.every(c => c === '/tmp')).toBe(true);
     });
   });
 });

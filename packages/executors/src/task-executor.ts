@@ -363,10 +363,10 @@ export class TaskExecutor {
     return consolidateAndMergeImpl(this, onFinish, baseBranch, featureBranch, workflowId, workflowName, leafTaskIds, body);
   }
 
-  /** @internal */ execGit(args: string[]): Promise<string> {
+  /** @internal */ execGit(args: string[], cwd?: string): Promise<string> {
     return new Promise((resolvePromise, reject) => {
       const child = spawn('git', args, {
-        cwd: this.cwd,
+        cwd: cwd ?? this.cwd,
         stdio: ['ignore', 'pipe', 'pipe'],
       });
       let stdout = '';
