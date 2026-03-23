@@ -144,16 +144,24 @@ describe('ContextMenu visibility logic', () => {
       (task as any).config.command = 'npm test';
       const onFixWithClaude = vi.fn();
       const hasMergeConflict = task.status === 'failed' && !!task.execution.mergeConflict;
-      const canFixWithClaude = task.status === 'failed' && !!task.config.command && !hasMergeConflict && !!onFixWithClaude;
+      const canFixWithClaude = task.status === 'failed' && !hasMergeConflict && !!onFixWithClaude;
       expect(canFixWithClaude).toBe(true);
     });
 
-    it('is hidden for prompt-only task (no command)', () => {
+    it('is visible for failed prompt-only task (no command)', () => {
       const task = makeTask({ status: 'failed' });
       const onFixWithClaude = vi.fn();
       const hasMergeConflict = task.status === 'failed' && !!task.execution.mergeConflict;
-      const canFixWithClaude = task.status === 'failed' && !!task.config.command && !hasMergeConflict && !!onFixWithClaude;
-      expect(canFixWithClaude).toBe(false);
+      const canFixWithClaude = task.status === 'failed' && !hasMergeConflict && !!onFixWithClaude;
+      expect(canFixWithClaude).toBe(true);
+    });
+
+    it('is visible for failed merge gate node', () => {
+      const task = makeTask({ status: 'failed', isMergeNode: true, workflowId: 'wf-1' });
+      const onFixWithClaude = vi.fn();
+      const hasMergeConflict = task.status === 'failed' && !!task.execution.mergeConflict;
+      const canFixWithClaude = task.status === 'failed' && !hasMergeConflict && !!onFixWithClaude;
+      expect(canFixWithClaude).toBe(true);
     });
 
     it('is hidden when task has merge conflict', () => {
@@ -161,7 +169,7 @@ describe('ContextMenu visibility logic', () => {
       (task as any).config.command = 'npm test';
       const onFixWithClaude = vi.fn();
       const hasMergeConflict = task.status === 'failed' && !!task.execution.mergeConflict;
-      const canFixWithClaude = task.status === 'failed' && !!task.config.command && !hasMergeConflict && !!onFixWithClaude;
+      const canFixWithClaude = task.status === 'failed' && !hasMergeConflict && !!onFixWithClaude;
       expect(canFixWithClaude).toBe(false);
     });
 
@@ -171,7 +179,7 @@ describe('ContextMenu visibility logic', () => {
         const task = makeTask({ status });
         (task as any).config.command = 'npm test';
         const hasMergeConflict = task.status === 'failed' && !!task.execution.mergeConflict;
-        const canFixWithClaude = task.status === 'failed' && !!task.config.command && !hasMergeConflict && !!onFixWithClaude;
+        const canFixWithClaude = task.status === 'failed' && !hasMergeConflict && !!onFixWithClaude;
         expect(canFixWithClaude).toBe(false);
       }
     });
@@ -181,7 +189,7 @@ describe('ContextMenu visibility logic', () => {
       (task as any).config.command = 'npm test';
       const onFixWithClaude = undefined;
       const hasMergeConflict = task.status === 'failed' && !!task.execution.mergeConflict;
-      const canFixWithClaude = task.status === 'failed' && !!task.config.command && !hasMergeConflict && !!onFixWithClaude;
+      const canFixWithClaude = task.status === 'failed' && !hasMergeConflict && !!onFixWithClaude;
       expect(canFixWithClaude).toBe(false);
     });
   });
