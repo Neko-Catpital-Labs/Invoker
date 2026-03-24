@@ -8,7 +8,7 @@
 
 import { useState, useEffect } from 'react';
 import type { TaskState } from '../types.js';
-import { getStatusInlineColors } from '../lib/colors.js';
+import { getStatusInlineColors, getEffectiveVisualStatus } from '../lib/colors.js';
 
 // ── Exported helpers (tested independently) ─────────────────
 
@@ -130,7 +130,7 @@ export function TimelineView({ tasks, onTaskClick, selectedTaskId }: TimelineVie
       <div className="space-y-1">
         {taskList.map((task) => {
           const bar = barMap.get(task.id)!;
-          const colors = getStatusInlineColors(task.status);
+          const colors = getStatusInlineColors(getEffectiveVisualStatus(task.status, task.execution));
           const isSelected = selectedTaskId === task.id;
           const elapsed = task.execution.startedAt
             ? formatElapsed(
