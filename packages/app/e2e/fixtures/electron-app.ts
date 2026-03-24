@@ -7,6 +7,7 @@
 
 import { test as base, _electron as electron, type ElectronApplication, type Page } from '@playwright/test';
 import * as path from 'node:path';
+import * as fs from 'node:fs/promises';
 
 export type ElectronFixtures = {
   electronApp: ElectronApplication;
@@ -101,4 +102,25 @@ export async function waitForTaskStatus(
     await page.waitForTimeout(300);
   }
   throw new Error(`Task "${taskId}" did not reach status "${status}" within ${timeoutMs}ms`);
+}
+
+/** Wait for UI animations to settle before capturing. */
+export async function waitForStableUI(page: Page): Promise<void> {
+  await page.evaluate(() =>
+    new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))
+  );
+  await page.waitForTimeout(300);
+}
+
+/** Capture a named screenshot. No-op unless CAPTURE_MODE env var is set. */
+export async function captureScreenshot(page: Page, name: string): Promise<void> {
+  const mode = process.env.CAPTURE_MODE;
+  if (!mode) return;
+  const dir = path.resolve(__dirname, '..', 'visual-proof', mode);
+  await fs.mkdir(dir, { recursive: true });
+  await waitForStableUI(page);
+  await page.screenshot({
+    path: path.join(dir, `${name}.png`),
+    fullPage: true,
+  });
 }
