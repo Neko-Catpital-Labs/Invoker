@@ -252,6 +252,59 @@ describe('ApprovalModal', () => {
     expect(screen.queryByTestId('fix-context')).not.toBeInTheDocument();
   });
 
+  // ── Merge node approval ──────────────────────────────────
+
+  it('renders "Approve Merge" heading for merge node approval', () => {
+    render(
+      <ApprovalModal
+        task={makeTask({ config: { isMergeNode: true } })}
+        onApprove={vi.fn()}
+        onReject={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole('heading', { name: 'Approve Merge' })).toBeInTheDocument();
+  });
+
+  it('shows "Approve Merge" button label for merge node', () => {
+    render(
+      <ApprovalModal
+        task={makeTask({ config: { isMergeNode: true } })}
+        onApprove={vi.fn()}
+        onReject={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    // Heading + button both say "Approve Merge"
+    expect(screen.getAllByText('Approve Merge')).toHaveLength(2);
+  });
+
+  it('shows "Reject Merge" button label for merge node', () => {
+    render(
+      <ApprovalModal
+        task={makeTask({ config: { isMergeNode: true } })}
+        onApprove={vi.fn()}
+        onReject={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    expect(screen.getByText('Reject Merge')).toBeInTheDocument();
+  });
+
+  it('shows "Confirm Reject Merge" after clicking Reject Merge for merge node', () => {
+    render(
+      <ApprovalModal
+        task={makeTask({ config: { isMergeNode: true } })}
+        onApprove={vi.fn()}
+        onReject={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByText('Reject Merge'));
+    expect(screen.getByText('Confirm Reject Merge')).toBeInTheDocument();
+    expect(screen.getByRole('textbox')).toBeInTheDocument();
+  });
+
   // ── Claude session conversation loading ─────────────────────
 
   it('shows loading state while fetching session conversation', () => {

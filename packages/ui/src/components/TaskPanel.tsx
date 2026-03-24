@@ -460,13 +460,13 @@ export function TaskPanel({
               onClick={() => onApprove(task)}
               className="flex-1 px-4 py-2 bg-green-600 hover:bg-green-500 text-white rounded text-sm font-medium transition-colors"
             >
-              Approve
+              {task.config.isMergeNode ? 'Approve Merge' : 'Approve'}
             </button>
             <button
               onClick={() => onReject(task)}
               className="flex-1 px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded text-sm font-medium transition-colors"
             >
-              Reject
+              {task.config.isMergeNode ? 'Reject Merge' : 'Reject'}
             </button>
           </div>
         )}
