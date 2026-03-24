@@ -33,10 +33,10 @@ export interface InvokerConfig {
    * Set to true to permit intentional graph mutation.
    */
   allowGraphMutation?: boolean;
-  /** Cursor CLI subprocess timeout for plan conversations in ms. Default: 300000 (5 minutes). */
-  planningTimeoutMs?: number;
-  /** Interval for heartbeat messages posted to Slack during planning in ms. Default: 60000 (60 seconds). Set to 0 to disable. */
-  planningHeartbeatIntervalMs?: number;
+  /** Cursor CLI subprocess timeout for plan conversations in seconds. Default: 7200 (2 hours). */
+  planningTimeoutSeconds?: number;
+  /** Interval for heartbeat messages posted to Slack during planning in seconds. Default: 120 (2 minutes). Set to 0 to disable. */
+  planningHeartbeatIntervalSeconds?: number;
   /** Maximum number of tasks that can run concurrently. Overrides utilization-based scheduling. Default: 3 (from Orchestrator). */
   maxConcurrency?: number;
   /** Maximum number of execution attempts per task node before refusing retries. Default: 10. */

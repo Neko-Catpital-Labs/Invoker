@@ -1,13 +1,14 @@
 {
   "allowGraphMutation": true,
   "defaultBranch": "master",
-  "planningTimeoutMs": 3600000,
+  "planningTimeoutSeconds": 7200,
+  "planningHeartbeatIntervalSeconds": 120,
   "maxConcurrency": 6,
   "remoteTargets": {
     "do-droplet": {
       "host": "178.128.181.133",
       "user": "root",
-      "sshKeyPath": "/home/edbert-chan/.ssh/id_ed25519"
+      "sshKeyPath": "/Users/edbertchan/.ssh/id_ed25519"
     }
   }
 }

@@ -199,8 +199,8 @@ async function wireSlackBot(deps: SlackBotDeps): Promise<any> {
     conversationRepo,
     defaultBranch: invokerConfig.defaultBranch,
     log: deps.logFn,
-    planningTimeoutMs: invokerConfig.planningTimeoutMs,
-    planningHeartbeatIntervalMs: invokerConfig.planningHeartbeatIntervalMs,
+    planningTimeoutSeconds: invokerConfig.planningTimeoutSeconds,
+    planningHeartbeatIntervalSeconds: invokerConfig.planningHeartbeatIntervalSeconds,
   });
 
   await slack.start(async (command: any) => {

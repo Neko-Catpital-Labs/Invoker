@@ -74,35 +74,35 @@ describe('loadConfig', () => {
     expect(config).toEqual({});
   });
 
-  it('reads planningTimeoutMs from user config', () => {
+  it('reads planningTimeoutSeconds from user config', () => {
     writeFileSync(
       join(fakeHome, '.invoker', 'config.json'),
-      JSON.stringify({ planningTimeoutMs: 600000 }),
+      JSON.stringify({ planningTimeoutSeconds: 600 }),
     );
     const config = loadConfig(fakeRepo);
-    expect(config.planningTimeoutMs).toBe(600000);
+    expect(config.planningTimeoutSeconds).toBe(600);
   });
 
-  it('reads planningHeartbeatIntervalMs from user config', () => {
+  it('reads planningHeartbeatIntervalSeconds from user config', () => {
     writeFileSync(
       join(fakeHome, '.invoker', 'config.json'),
-      JSON.stringify({ planningHeartbeatIntervalMs: 30000 }),
+      JSON.stringify({ planningHeartbeatIntervalSeconds: 30 }),
     );
     const config = loadConfig(fakeRepo);
-    expect(config.planningHeartbeatIntervalMs).toBe(30000);
+    expect(config.planningHeartbeatIntervalSeconds).toBe(30);
   });
 
-  it('repo-level overrides planningTimeoutMs from user-level', () => {
+  it('repo-level overrides planningTimeoutSeconds from user-level', () => {
     writeFileSync(
       join(fakeHome, '.invoker', 'config.json'),
-      JSON.stringify({ planningTimeoutMs: 600000 }),
+      JSON.stringify({ planningTimeoutSeconds: 600 }),
     );
     writeFileSync(
       join(fakeRepo, '.invoker.json'),
-      JSON.stringify({ planningTimeoutMs: 900000 }),
+      JSON.stringify({ planningTimeoutSeconds: 900 }),
     );
     const config = loadConfig(fakeRepo);
-    expect(config.planningTimeoutMs).toBe(900000);
+    expect(config.planningTimeoutSeconds).toBe(900);
   });
 
   it('reads disableAutoRunOnStartup from user config', () => {

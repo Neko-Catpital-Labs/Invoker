@@ -46,10 +46,10 @@ export interface SlackSurfaceConfig {
   immediateAckEmoji?: string;
   /** Use typing indicator (emoji reaction) as acknowledgment method. Default: false. */
   useTypingIndicator?: boolean;
-  /** Cursor CLI subprocess timeout for plan conversations in ms. Default: 300000 (5 minutes). */
-  planningTimeoutMs?: number;
-  /** Interval for heartbeat messages posted to Slack during planning in ms. Default: 60000 (60 seconds). Set to 0 to disable. */
-  planningHeartbeatIntervalMs?: number;
+  /** Cursor CLI subprocess timeout for plan conversations in seconds. Default: 7200 (2 hours). */
+  planningTimeoutSeconds?: number;
+  /** Interval for heartbeat messages posted to Slack during planning in seconds. Default: 120 (2 minutes). Set to 0 to disable. */
+  planningHeartbeatIntervalSeconds?: number;
 }
 
 // ── ConversationLike ─────────────────────────────────────────
@@ -85,8 +85,10 @@ export class SlackSurface implements Surface {
   private immediateAckMessage: string;
   private immediateAckEmoji: string;
   private useTypingIndicator: boolean;
-  private planningTimeoutMs?: number;
-  private planningHeartbeatIntervalMs?: number;
+  private planningTimeoutSeconds?: number;
+  private planningHeartbeatIntervalSeconds?: number;
+  /** Minimum spacing between thread message posts to avoid Slack burst limits. */
+  private readonly messagePacingMs = 1_100;
   /** Session lifecycle metrics */
   private sessionMetrics = {
     created: 0,
@@ -115,8 +117,8 @@ export class SlackSurface implements Surface {
     this.immediateAckMessage = config.immediateAckMessage ?? 'Processing your request...';
     this.immediateAckEmoji = config.immediateAckEmoji ?? 'thinking_face';
     this.useTypingIndicator = config.useTypingIndicator ?? false;
-    this.planningTimeoutMs = config.planningTimeoutMs;
-    this.planningHeartbeatIntervalMs = config.planningHeartbeatIntervalMs;
+    this.planningTimeoutSeconds = config.planningTimeoutSeconds;
+    this.planningHeartbeatIntervalSeconds = config.planningHeartbeatIntervalSeconds;
     this.log = config.log ?? ((source, level, msg) => {
       const fn = level === 'error' ? console.error : console.log;
       fn(`[${source}] ${msg}`);
@@ -130,7 +132,7 @@ export class SlackSurface implements Surface {
         conversationRepo: config.conversationRepo,
         defaultBranch: config.defaultBranch,
         log: this.log,
-        timeoutMs: this.planningTimeoutMs,
+        timeoutMs: (this.planningTimeoutSeconds ?? 7_200) * 1_000,
       });
     }
   }
@@ -353,17 +355,25 @@ export class SlackSurface implements Surface {
     const typingStarted = await this.startTypingIndicator(this.channelId, threadTs);
 
     // Start heartbeat interval
-    const heartbeatMs = this.planningHeartbeatIntervalMs ?? 60_000;
+    const heartbeatMs = (this.planningHeartbeatIntervalSeconds ?? 120) * 1_000;
     let heartbeatTimer: NodeJS.Timeout | undefined;
     const heartbeatTimestamps: string[] = [];
+    let heartbeatInFlight = false;
     if (heartbeatMs > 0) {
       heartbeatTimer = setInterval(async () => {
+        if (heartbeatInFlight) return;
+        heartbeatInFlight = true;
         try {
-          const result = await say({ text: ':hourglass_flowing_sand: Still thinking...', thread_ts: threadTs });
+          const result = await this.sayWithRateLimitRetry(say, {
+            text: ':hourglass_flowing_sand: Still thinking...',
+            thread_ts: threadTs,
+          });
           if (result?.ts) heartbeatTimestamps.push(result.ts);
           this.log('slack', 'info', `[HEARTBEAT] Sent planning heartbeat (thread_ts=${threadTs})`);
         } catch (err) {
           this.log('slack', 'error', `[HEARTBEAT] Failed to send planning heartbeat: ${err}`);
+        } finally {
+          heartbeatInFlight = false;
         }
       }, heartbeatMs);
     }
@@ -397,20 +407,21 @@ export class SlackSurface implements Surface {
         } else {
           this.log('slack', 'warn', `[ACK] Failed to replace ack, falling back to new message (thread_ts=${threadTs}, ack_ts=${ackTs})`);
           await this.deleteMessage(ackTs);
-          await say({ text: chunks[0], thread_ts: threadTs });
+          await this.sayWithRateLimitRetry(say, { text: chunks[0], thread_ts: threadTs });
         }
       } else {
-        await say({ text: chunks[0], thread_ts: threadTs });
+        await this.sayWithRateLimitRetry(say, { text: chunks[0], thread_ts: threadTs });
       }
 
       // Send remaining chunks as follow-up messages in the thread
       for (let i = 1; i < chunks.length; i++) {
-        await say({ text: chunks[i], thread_ts: threadTs });
+        await this.sleep(this.messagePacingMs);
+        await this.sayWithRateLimitRetry(say, { text: chunks[i], thread_ts: threadTs });
       }
 
       if (conversation.planSubmitted && conversation.submittedPlan) {
         this.log('slack', 'info', `[SESSION_SUBMIT] Plan submitted via confirmation (thread_ts=${threadTs}, plan="${conversation.submittedPlan.name}")`);
-        await say({
+        await this.sayWithRateLimitRetry(say, {
           text: `Starting execution of "${conversation.submittedPlan.name}"...`,
           thread_ts: threadTs,
         });
@@ -440,10 +451,45 @@ export class SlackSurface implements Surface {
         );
       }
       this.sessionMetrics.errors++;
-      await say({
+      await this.sayWithRateLimitRetry(say, {
         text: `Error: ${err instanceof Error ? err.message : String(err)}`,
         thread_ts: threadTs,
       });
+    }
+  }
+
+  private async sleep(ms: number): Promise<void> {
+    await new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  private getRetryAfterMs(err: unknown): number | null {
+    const maybeErr = err as any;
+    const retryAfter =
+      maybeErr?.data?.retry_after ??
+      maybeErr?.retryAfter ??
+      maybeErr?.headers?.['retry-after'] ??
+      maybeErr?.response?.headers?.['retry-after'];
+    const code = maybeErr?.data?.error ?? maybeErr?.code;
+    if (code === 'rate_limited' || retryAfter !== undefined) {
+      const retrySeconds = Number(retryAfter);
+      if (!Number.isNaN(retrySeconds) && retrySeconds > 0) return retrySeconds * 1000;
+      return 1_000;
+    }
+    return null;
+  }
+
+  private async sayWithRateLimitRetry(
+    say: (msg: { text: string; thread_ts: string }) => Promise<any>,
+    msg: { text: string; thread_ts: string },
+  ): Promise<any> {
+    try {
+      return await say(msg);
+    } catch (err) {
+      const retryAfterMs = this.getRetryAfterMs(err);
+      if (retryAfterMs === null) throw err;
+      this.log('slack', 'warn', `[RATE_LIMIT] Delaying retry for ${retryAfterMs}ms (thread_ts=${msg.thread_ts})`);
+      await this.sleep(retryAfterMs + 100);
+      return await say(msg);
     }
   }
 
@@ -635,7 +681,7 @@ export class SlackSurface implements Surface {
         threadTs,
         conversationRepo: this.conversationRepo,
         defaultBranch: this.defaultBranch,
-        timeoutMs: this.planningTimeoutMs,
+        timeoutMs: (this.planningTimeoutSeconds ?? 7_200) * 1_000,
       });
       this.planConversations.set(threadTs, conversation);
     }

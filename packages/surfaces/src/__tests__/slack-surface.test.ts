@@ -642,14 +642,14 @@ describe('SlackSurface', () => {
   });
 
   describe('planning config threading', () => {
-    it('accepts planningTimeoutMs and planningHeartbeatIntervalMs config', () => {
+    it('accepts planningTimeoutSeconds and planningHeartbeatIntervalSeconds config', () => {
       const configuredSurface = new SlackSurface({
         botToken: 'xoxb-test',
         appToken: 'xapp-test',
         signingSecret: 'test-secret',
         channelId: 'C-test',
-        planningTimeoutMs: 600_000,
-        planningHeartbeatIntervalMs: 30_000,
+        planningTimeoutSeconds: 600,
+        planningHeartbeatIntervalSeconds: 30,
       });
       expect(configuredSurface).toBeDefined();
     });

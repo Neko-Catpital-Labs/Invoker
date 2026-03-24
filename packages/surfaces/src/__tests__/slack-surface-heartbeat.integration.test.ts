@@ -119,7 +119,7 @@ describe('SlackSurface Heartbeat - Integration Tests', () => {
       appToken: 'xapp-test',
       signingSecret: 'test-secret',
       channelId: 'C-test',
-      planningHeartbeatIntervalMs: 5_000,
+      planningHeartbeatIntervalSeconds: 5,
       enableImmediateAck: false,
       useTypingIndicator: false,
     });
@@ -152,7 +152,7 @@ describe('SlackSurface Heartbeat - Integration Tests', () => {
       appToken: 'xapp-test',
       signingSecret: 'test-secret',
       channelId: 'C-test',
-      planningHeartbeatIntervalMs: 5_000,
+      planningHeartbeatIntervalSeconds: 5,
       enableImmediateAck: false,
       useTypingIndicator: false,
     });
@@ -186,7 +186,7 @@ describe('SlackSurface Heartbeat - Integration Tests', () => {
       appToken: 'xapp-test',
       signingSecret: 'test-secret',
       channelId: 'C-test',
-      planningHeartbeatIntervalMs: 5_000,
+      planningHeartbeatIntervalSeconds: 5,
       enableImmediateAck: false,
       useTypingIndicator: false,
     });
@@ -218,7 +218,7 @@ describe('SlackSurface Heartbeat - Integration Tests', () => {
       appToken: 'xapp-test',
       signingSecret: 'test-secret',
       channelId: 'C-test',
-      planningHeartbeatIntervalMs: 0,
+      planningHeartbeatIntervalSeconds: 0,
       enableImmediateAck: false,
       useTypingIndicator: false,
     });
@@ -232,7 +232,7 @@ describe('SlackSurface Heartbeat - Integration Tests', () => {
     expect(heartbeats.length).toBe(0);
   });
 
-  it('does not send heartbeats when using default (60s) and response is fast', async () => {
+  it('does not send heartbeats when using default (120s) and response is fast', async () => {
     surface = new SlackSurface({
       botToken: 'xoxb-test',
       appToken: 'xapp-test',
