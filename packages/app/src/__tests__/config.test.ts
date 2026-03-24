@@ -158,6 +158,23 @@ describe('loadConfig', () => {
     expect(config.browser).toBe('firefox');
   });
 
+  it('reads imageStorage from user config', () => {
+    const imageStorage = {
+      provider: 'r2',
+      accountId: 'abc123',
+      bucketName: 'my-bucket',
+      accessKeyId: 'key',
+      secretAccessKey: 'secret',
+      publicUrlBase: 'https://my-bucket.r2.dev',
+    };
+    writeFileSync(
+      join(fakeHome, '.invoker', 'config.json'),
+      JSON.stringify({ imageStorage }),
+    );
+    const config = loadConfig(fakeRepo);
+    expect(config.imageStorage).toEqual(imageStorage);
+  });
+
   it('repo-level overrides browser from user-level', () => {
     writeFileSync(
       join(fakeHome, '.invoker', 'config.json'),
