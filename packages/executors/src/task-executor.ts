@@ -384,6 +384,34 @@ export class TaskExecutor {
     return buildMergeSummaryImpl(this, workflowId);
   }
 
+  async runVisualProofCapture(baseBranch: string, featureBranch: string, slug: string): Promise<string | undefined> {
+    try {
+      const scriptPath = resolve(this.cwd, 'scripts/ui-visual-proof.sh');
+      const result = await new Promise<string>((resolveP, reject) => {
+        const child = spawn('bash', [scriptPath, 'embed', '--base', baseBranch, '--feature', featureBranch, '--slug', slug], {
+          cwd: this.cwd,
+          stdio: ['ignore', 'pipe', 'pipe'],
+        });
+        let stdout = '';
+        let stderr = '';
+        child.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
+        child.stderr?.on('data', (d: Buffer) => {
+          stderr += d.toString();
+          console.log(`[visual-proof] ${d.toString().trimEnd()}`);
+        });
+        child.on('error', (err) => reject(err));
+        child.on('close', (code) => {
+          if (code !== 0) reject(new Error(`Visual proof capture failed (exit ${code}): ${stderr}`));
+          else resolveP(stdout);
+        });
+      });
+      return result.trim() || undefined;
+    } catch (err) {
+      console.warn(`[visual-proof] Capture failed (non-blocking): ${err instanceof Error ? err.message : String(err)}`);
+      return undefined;
+    }
+  }
+
   /** @internal */ async consolidateAndMerge(
     onFinish: string,
     baseBranch: string,
@@ -392,8 +420,9 @@ export class TaskExecutor {
     workflowName?: string,
     leafTaskIds?: readonly string[],
     body?: string,
+    visualProof?: boolean,
   ): Promise<string | undefined> {
-    return consolidateAndMergeImpl(this, onFinish, baseBranch, featureBranch, workflowId, workflowName, leafTaskIds, body);
+    return consolidateAndMergeImpl(this, onFinish, baseBranch, featureBranch, workflowId, workflowName, leafTaskIds, body, visualProof);
   }
 
   /**

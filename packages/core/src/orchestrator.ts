@@ -63,6 +63,7 @@ export interface OrchestratorPersistence {
     id: string;
     name: string;
     description?: string;
+    visualProof?: boolean;
     status: 'running' | 'completed' | 'failed';
     createdAt: string;
     updatedAt: string;
@@ -104,6 +105,7 @@ export interface OrchestratorMessageBus {
 export interface PlanDefinition {
   name: string;
   description?: string;
+  visualProof?: boolean;
   onFinish?: 'none' | 'merge' | 'pull_request';
   baseBranch?: string;
   featureBranch?: string;
@@ -349,6 +351,7 @@ export class Orchestrator {
       id: workflowId,
       name: plan.name,
       description: plan.description,
+      visualProof: plan.visualProof,
       status: 'running',
       onFinish: plan.onFinish,
       baseBranch: plan.baseBranch,

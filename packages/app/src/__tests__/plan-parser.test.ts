@@ -284,6 +284,34 @@ tasks:
     const result = parsePlan(yaml);
     expect(result.description).toBeUndefined();
   });
+
+  it('parses visualProof field from plan YAML', () => {
+    const yaml = [
+      'name: "Test Plan"',
+      'description: "Architecture context"',
+      'visualProof: true',
+      'tasks:',
+      '  - id: task-1',
+      '    description: "Do something"',
+      '    command: "echo hello"',
+      '    dependencies: []',
+    ].join('\n');
+    const result = parsePlan(yaml);
+    expect(result.visualProof).toBe(true);
+  });
+
+  it('visualProof defaults to undefined when not set', () => {
+    const yaml = [
+      'name: "Test Plan"',
+      'tasks:',
+      '  - id: task-1',
+      '    description: "Do something"',
+      '    command: "echo hello"',
+      '    dependencies: []',
+    ].join('\n');
+    const result = parsePlan(yaml);
+    expect(result.visualProof).toBeUndefined();
+  });
 });
 
 describe('detectDefaultBranch', () => {

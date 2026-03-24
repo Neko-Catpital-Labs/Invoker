@@ -52,6 +52,7 @@ export interface MergeExecutorHost {
   startPrPolling(taskId: string, prIdentifier: string, workflowId: string): void;
   executeTasks(tasks: TaskState[]): Promise<void>;
   buildMergeSummary(workflowId: string): Promise<string>;
+  runVisualProofCapture?(baseBranch: string, featureBranch: string, slug: string): Promise<string | undefined>;
   consolidateAndMerge(
     onFinish: string,
     baseBranch: string,
@@ -60,6 +61,7 @@ export interface MergeExecutorHost {
     workflowName?: string,
     leafTaskIds?: readonly string[],
     body?: string,
+    visualProof?: boolean,
   ): Promise<string | undefined>;
 }
 
@@ -77,6 +79,7 @@ export async function executeMergeNodeImpl(
   const mergeMode = workflow?.mergeMode ?? 'manual';
   const baseBranch = workflow?.baseBranch ?? host.defaultBranch ?? await host.detectDefaultBranch();
   const featureBranch = workflow?.featureBranch;
+  const visualProof = workflow?.visualProof ?? false;
 
   let response: WorkResponse;
   let prUrl: string | undefined;
@@ -103,7 +106,7 @@ export async function executeMergeNodeImpl(
   if (featureBranch && (onFinish !== 'none' || mergeMode === 'github')) {
     const effectiveOnFinish = mergeMode === 'automatic' ? onFinish : 'none';
     try {
-      prUrl = await host.consolidateAndMerge(effectiveOnFinish, baseBranch, featureBranch, workflowId, workflow?.name, task.dependencies, summary);
+      prUrl = await host.consolidateAndMerge(effectiveOnFinish, baseBranch, featureBranch, workflowId, workflow?.name, task.dependencies, summary, visualProof);
       if (mergeMode === 'manual') {
         const manualResponse: WorkResponse = {
           requestId: `merge-${task.id}`,
@@ -123,13 +126,22 @@ export async function executeMergeNodeImpl(
           throw new Error('mergeMode is "github" but no mergeGateProvider configured');
         }
 
+        let fullSummary = summary;
+        if (visualProof && host.runVisualProofCapture) {
+          const slug = (featureBranch ?? 'workflow').replace(/\//g, '-');
+          const vpMarkdown = await host.runVisualProofCapture(baseBranch, featureBranch!, slug);
+          if (vpMarkdown) {
+            fullSummary = (summary ?? '') + '\n\n' + vpMarkdown;
+          }
+        }
+
         // Create PR via provider (consolidation already done above)
         const result = await host.mergeGateProvider.createReview({
           baseBranch,
           featureBranch,
           title: workflow?.name ?? 'Workflow',
           cwd: host.cwd,
-          body: summary,
+          body: fullSummary,
         });
         console.log(`[merge] Created GitHub PR: ${result.url}`);
 
@@ -238,6 +250,15 @@ export async function approveMergeImpl(
   }
 
   const summary = await host.buildMergeSummary(workflowId);
+  let fullSummary = summary;
+  const visualProof = workflow.visualProof ?? false;
+  if (visualProof && host.runVisualProofCapture) {
+    const slug = (featureBranch ?? 'workflow').replace(/\//g, '-');
+    const vpMarkdown = await host.runVisualProofCapture(baseBranch, featureBranch!, slug);
+    if (vpMarkdown) {
+      fullSummary = summary + '\n\n' + vpMarkdown;
+    }
+  }
   const mergeMessage = workflow.name ?? 'Workflow';
 
   // Clean up the persistent gate worktree created by executeMergeNodeImpl
@@ -250,7 +271,7 @@ export async function approveMergeImpl(
       mergeTrace('GIT_MERGE_SQUASH', { featureBranch, worktreeDir });
       await host.execGitIn(['merge', '--squash', featureBranch], worktreeDir);
       mergeTrace('GIT_COMMIT', { mergeMessage });
-      const commitBody = summary ? `${mergeMessage}\n\n${summary}` : mergeMessage;
+      const commitBody = fullSummary ? `${mergeMessage}\n\n${fullSummary}` : mergeMessage;
       await host.execGitIn(['commit', '-m', commitBody], worktreeDir);
       await host.execGitIn(['update-ref', 'refs/heads/' + baseBranch, 'HEAD'], worktreeDir);
       mergeTrace('SQUASH_MERGE_COMPLETE', { featureBranch, baseBranch });
@@ -270,7 +291,7 @@ export async function approveMergeImpl(
     try {
       mergeTrace('GIT_PUSH', { featureBranch, worktreeDir });
       await host.execGitIn(['push', '--force', '-u', 'origin', featureBranch], worktreeDir);
-      const prUrl = await host.execPr(baseBranch, featureBranch, mergeMessage, summary);
+      const prUrl = await host.execPr(baseBranch, featureBranch, mergeMessage, fullSummary);
       mergeTrace('PR_CREATED', { featureBranch, baseBranch, prUrl });
       console.log(`[merge] Approved: created pull request ${prUrl}`);
       host.persistence.updateTask(mergeTaskId, {
@@ -404,6 +425,7 @@ export async function consolidateAndMergeImpl(
   workflowName?: string,
   leafTaskIds?: readonly string[],
   body?: string,
+  visualProof?: boolean,
 ): Promise<string | undefined> {
   const worktreeDir = await host.createMergeWorktree(baseBranch, 'consolidate-' + (workflowId ?? 'default'));
   console.log(`[merge] consolidateAndMerge: featureBranch=${featureBranch}, baseBranch=${baseBranch}, worktree=${worktreeDir}`);
@@ -440,6 +462,14 @@ export async function consolidateAndMergeImpl(
       await host.execGitIn(['merge', '--no-ff', '-m', mergeMsg, branch], worktreeDir);
     }
     console.log(`[merge] Consolidated ${taskBranches.length} task branches into ${featureBranch}`);
+
+    if (visualProof && host.runVisualProofCapture) {
+      const slug = (featureBranch ?? 'workflow').replace(/\//g, '-');
+      const vpMarkdown = await host.runVisualProofCapture(baseBranch, featureBranch, slug);
+      if (vpMarkdown) {
+        body = (body ? body + '\n\n' : '') + vpMarkdown;
+      }
+    }
 
     const mergeMessage = workflowName ?? 'Workflow';
 

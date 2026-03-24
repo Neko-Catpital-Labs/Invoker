@@ -12,6 +12,7 @@ Commands:
   before                    Capture baseline screenshots (run on base branch)
   after                     Capture changed screenshots (run after UI changes)
   pr --title <t> --base <b> Upload proof and create PR
+  embed --base <b> --feature <f> --slug <s>  Capture and upload proof, output markdown to stdout
   cleanup <slug>            Delete draft release after PR merge
 EOF
   exit 1
@@ -109,10 +110,88 @@ cleanup_command() {
   echo "Cleaned up visual proof release vp-${SLUG}"
 }
 
+embed_command() {
+  local BASE=""
+  local FEATURE=""
+  local SLUG=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --base)    BASE="$2"; shift 2 ;;
+      --feature) FEATURE="$2"; shift 2 ;;
+      --slug)    SLUG="$2"; shift 2 ;;
+      *)         echo "Unknown option: $1" >&2; usage ;;
+    esac
+  done
+  if [[ -z "${BASE}" || -z "${FEATURE}" || -z "${SLUG}" ]]; then
+    echo "Error: --base, --feature, and --slug are required" >&2
+    usage
+  fi
+
+  ORIG_BRANCH=$(git branch --show-current)
+
+  echo "Checking out base branch: ${BASE}" >&2
+  git checkout "${BASE}" >&2
+  capture "before" >&2
+
+  echo "Checking out feature branch: ${FEATURE}" >&2
+  git checkout "${FEATURE}" >&2
+  capture "after" >&2
+
+  echo "Restoring original branch: ${ORIG_BRANCH}" >&2
+  git checkout "${ORIG_BRANCH}" >&2
+
+  NWO=$(gh repo view --json nameWithOwner -q .nameWithOwner)
+  TAG="vp-${SLUG}"
+
+  echo "Creating draft release: ${TAG}" >&2
+  gh release create "${TAG}" --draft --title "Visual proof: ${SLUG}" --notes "Auto-generated" >&2
+
+  TMPDIR=$(mktemp -d)
+  for mode in before after; do
+    for f in "${PROOF_DIR}/${mode}"/*.png; do
+      [[ -e "$f" ]] && cp "$f" "${TMPDIR}/${mode}--$(basename "$f")"
+    done
+    for f in "${PROOF_DIR}/${mode}"/*.webm; do
+      [[ -e "$f" ]] && cp "$f" "${TMPDIR}/${mode}--$(basename "$f")"
+    done
+  done
+
+  echo "Uploading assets to release ${TAG}" >&2
+  gh release upload "${TAG}" ${TMPDIR}/* >&2
+
+  rm -rf "${TMPDIR}"
+
+  BASE_URL="https://github.com/${NWO}/releases/download/${TAG}"
+
+  echo "## Visual Proof"
+  echo ""
+  for state in "${STATES[@]}"; do
+    STATE_NAME=$(echo "${state}" | sed 's/-/ /g; s/\b\(.\)/\u\1/g')
+    echo "<details open>"
+    echo "<summary>${STATE_NAME}</summary>"
+    echo ""
+    echo "| Before | After |"
+    echo "|--------|-------|"
+    echo "| ![before](${BASE_URL}/before--${state}.png) | ![after](${BASE_URL}/after--${state}.png) |"
+    echo ""
+    echo "</details>"
+    echo ""
+  done
+
+  echo "<details>"
+  echo "<summary>Video Walkthroughs</summary>"
+  echo ""
+  echo "- [Before walkthrough](${BASE_URL}/before--walkthrough.webm)"
+  echo "- [After walkthrough](${BASE_URL}/after--walkthrough.webm)"
+  echo ""
+  echo "</details>"
+}
+
 case "${1:-}" in
   before)  capture "before" ;;
   after)   capture "after" ;;
   pr)      shift; pr_command "$@" ;;
+  embed)   shift; embed_command "$@" ;;
   cleanup) cleanup_command "${2:-}" ;;
   *)       usage ;;
 esac

@@ -40,6 +40,7 @@ export interface RawPlanTask {
 export interface RawPlan {
   name?: string;
   description?: string;
+  visualProof?: boolean;
   onFinish?: string;
   baseBranch?: string;
   featureBranch?: string;
@@ -172,6 +173,7 @@ export function parsePlan(yamlContent: string, repoDir?: string): PlanDefinition
   return {
     name: raw.name,
     description: raw.description,
+    visualProof: raw.visualProof,
     onFinish,
     baseBranch: raw.baseBranch ?? loadConfig(repoDir ?? process.cwd()).defaultBranch ?? detectDefaultBranch(),
     featureBranch: raw.featureBranch,

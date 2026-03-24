@@ -1465,7 +1465,7 @@ describe('TaskExecutor', () => {
 
       expect(consolidateSpy).toHaveBeenCalledTimes(1);
       expect(consolidateSpy).toHaveBeenCalledWith(
-        'none', 'master', 'plan/feature', 'wf-1', 'Test Workflow', ['t1'], expect.any(String),
+        'none', 'master', 'plan/feature', 'wf-1', 'Test Workflow', ['t1'], expect.any(String), false,
       );
 
       consolidateSpy.mockRestore();
@@ -1921,7 +1921,7 @@ describe('TaskExecutor', () => {
   describe('buildMergeSummary', () => {
     function createExecutorForSummary(
       allTasks: TaskState[],
-      workflowMeta?: { name?: string; description?: string },
+      workflowMeta?: { name?: string; description?: string; visualProof?: boolean },
     ) {
       const orchestrator = {
         getTask: (id: string) => allTasks.find(t => t.id === id),
@@ -2681,6 +2681,144 @@ describe('TaskExecutor', () => {
       const mergeAbort = calls.find(c => c[0] === 'merge' && c[1] === '--abort');
       expect(rebaseAbort).toBeUndefined();
       expect(mergeAbort).toBeDefined();
+    });
+
+    it('appends visual proof markdown when runVisualProofCapture returns content', async () => {
+      const tasks = new Map<string, TaskState>();
+      tasks.set('t1', makeTask({
+        id: 't1', status: 'completed',
+        config: { workflowId: 'wf-1' },
+        execution: { branch: 'experiment/t1' },
+      }));
+
+      const orchestrator = {
+        getTask: (id: string) => tasks.get(id),
+        getAllTasks: () => Array.from(tasks.values()),
+        handleWorkerResponse: vi.fn(),
+        setTaskAwaitingApproval: vi.fn(),
+      };
+      const persistence = {
+        loadWorkflow: () => ({ id: 'wf-1', name: 'Test', visualProof: true }),
+        updateTask: vi.fn(),
+      };
+      const executor = new TaskExecutor({
+        orchestrator: orchestrator as any,
+        persistence: persistence as any,
+        familiarRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+      });
+
+      (executor as any).execGitReadonly = async (args: string[]) => {
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        return '';
+      };
+      (executor as any).execGitIn = async (args: string[], _dir: string) => {
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        return '';
+      };
+      (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
+      (executor as any).removeMergeWorktree = async () => {};
+      (executor as any).runVisualProofCapture = vi.fn().mockResolvedValue('## Visual Proof\n| Before | After |');
+
+      await executor.consolidateAndMerge(
+        'none', 'master', 'plan/test', 'wf-1', 'Test', ['t1'],
+        'original body', true,
+      );
+
+      expect((executor as any).runVisualProofCapture).toHaveBeenCalledWith(
+        'master', 'plan/test', expect.any(String),
+      );
+    });
+
+    it('proceeds normally when runVisualProofCapture returns undefined', async () => {
+      const tasks = new Map<string, TaskState>();
+      tasks.set('t1', makeTask({
+        id: 't1', status: 'completed',
+        config: { workflowId: 'wf-1' },
+        execution: { branch: 'experiment/t1' },
+      }));
+
+      const orchestrator = {
+        getTask: (id: string) => tasks.get(id),
+        getAllTasks: () => Array.from(tasks.values()),
+        handleWorkerResponse: vi.fn(),
+        setTaskAwaitingApproval: vi.fn(),
+      };
+      const persistence = {
+        loadWorkflow: () => ({ id: 'wf-1', name: 'Test', visualProof: true }),
+        updateTask: vi.fn(),
+      };
+      const executor = new TaskExecutor({
+        orchestrator: orchestrator as any,
+        persistence: persistence as any,
+        familiarRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+      });
+
+      (executor as any).execGitReadonly = async (args: string[]) => {
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        return '';
+      };
+      (executor as any).execGitIn = async (args: string[], _dir: string) => {
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        return '';
+      };
+      (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
+      (executor as any).removeMergeWorktree = async () => {};
+      (executor as any).runVisualProofCapture = vi.fn().mockResolvedValue(undefined);
+
+      // Should not throw
+      await executor.consolidateAndMerge(
+        'none', 'master', 'plan/test', 'wf-1', 'Test', ['t1'],
+        'original body', true,
+      );
+
+      expect((executor as any).runVisualProofCapture).toHaveBeenCalled();
+    });
+
+    it('skips visual proof when visualProof is false', async () => {
+      const tasks = new Map<string, TaskState>();
+      tasks.set('t1', makeTask({
+        id: 't1', status: 'completed',
+        config: { workflowId: 'wf-1' },
+        execution: { branch: 'experiment/t1' },
+      }));
+
+      const orchestrator = {
+        getTask: (id: string) => tasks.get(id),
+        getAllTasks: () => Array.from(tasks.values()),
+        handleWorkerResponse: vi.fn(),
+        setTaskAwaitingApproval: vi.fn(),
+      };
+      const persistence = {
+        loadWorkflow: () => ({ id: 'wf-1', name: 'Test' }),
+        updateTask: vi.fn(),
+      };
+      const executor = new TaskExecutor({
+        orchestrator: orchestrator as any,
+        persistence: persistence as any,
+        familiarRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+      });
+
+      (executor as any).execGitReadonly = async (args: string[]) => {
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        return '';
+      };
+      (executor as any).execGitIn = async (args: string[], _dir: string) => {
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        return '';
+      };
+      (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
+      (executor as any).removeMergeWorktree = async () => {};
+      (executor as any).runVisualProofCapture = vi.fn();
+
+      await executor.consolidateAndMerge(
+        'none', 'master', 'plan/test', 'wf-1', 'Test', ['t1'],
+        'original body', false,
+      );
+
+      expect((executor as any).runVisualProofCapture).not.toHaveBeenCalled();
     });
   });
 
