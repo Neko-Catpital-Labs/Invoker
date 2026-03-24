@@ -315,4 +315,127 @@ describe('TaskScheduler', () => {
       expect(next!.taskId).toBe('normal');
     });
   });
+
+  describe('getQueuedJobs', () => {
+    it('returns empty array when queue is empty', () => {
+      const scheduler = new TaskScheduler();
+      expect(scheduler.getQueuedJobs()).toEqual([]);
+    });
+
+    it('returns queued (not-yet-dequeued) jobs in priority order', () => {
+      const scheduler = new TaskScheduler(200);
+
+      scheduler.enqueue({ taskId: 'low', priority: 1, utilization: 10 });
+      scheduler.enqueue({ taskId: 'high', priority: 10, utilization: 20 });
+      scheduler.enqueue({ taskId: 'mid', priority: 5, utilization: 30 });
+
+      // Dequeue the highest priority job ('high')
+      scheduler.dequeue();
+
+      const queued = scheduler.getQueuedJobs();
+      expect(queued).toHaveLength(2);
+      expect(queued[0].taskId).toBe('mid');
+      expect(queued[1].taskId).toBe('low');
+    });
+
+    it('returns shallow copy (mutating the result does not affect internal queue)', () => {
+      const scheduler = new TaskScheduler();
+
+      scheduler.enqueue({ taskId: 'a', priority: 1, utilization: 10 });
+      scheduler.enqueue({ taskId: 'b', priority: 2, utilization: 20 });
+
+      const copy = scheduler.getQueuedJobs();
+      copy.splice(0, copy.length); // clear the returned array
+
+      // Internal queue should be unaffected
+      expect(scheduler.getQueuedJobs()).toHaveLength(2);
+    });
+  });
+
+  describe('removeJob', () => {
+    it('removes a queued job and returns true', () => {
+      const scheduler = new TaskScheduler();
+
+      scheduler.enqueue({ taskId: 'a', priority: 1 });
+      scheduler.enqueue({ taskId: 'b', priority: 2 });
+
+      expect(scheduler.removeJob('a')).toBe(true);
+      expect(scheduler.getQueuedJobs().map(j => j.taskId)).toEqual(['b']);
+    });
+
+    it('returns false for a job that is already running (dequeued)', () => {
+      const scheduler = new TaskScheduler(200);
+
+      scheduler.enqueue({ taskId: 'a', priority: 1, utilization: 50 });
+      scheduler.dequeue(); // 'a' is now running
+
+      expect(scheduler.removeJob('a')).toBe(false);
+    });
+
+    it('returns false for an unknown taskId', () => {
+      const scheduler = new TaskScheduler();
+      expect(scheduler.removeJob('nonexistent')).toBe(false);
+    });
+
+    it('queue state is correct after removal (remaining jobs unaffected)', () => {
+      const scheduler = new TaskScheduler(200);
+
+      scheduler.enqueue({ taskId: 'a', priority: 1, utilization: 10 });
+      scheduler.enqueue({ taskId: 'b', priority: 5, utilization: 20 });
+      scheduler.enqueue({ taskId: 'c', priority: 10, utilization: 30 });
+
+      scheduler.removeJob('b');
+
+      // Remaining queue should still be in priority order: c, a
+      const queued = scheduler.getQueuedJobs();
+      expect(queued).toHaveLength(2);
+      expect(queued[0].taskId).toBe('c');
+      expect(queued[1].taskId).toBe('a');
+
+      // Dequeue should work normally
+      expect(scheduler.dequeue()!.taskId).toBe('c');
+      expect(scheduler.dequeue()!.taskId).toBe('a');
+    });
+  });
+
+  describe('getRunningJobs', () => {
+    it('returns empty array when nothing is running', () => {
+      const scheduler = new TaskScheduler();
+      expect(scheduler.getRunningJobs()).toEqual([]);
+    });
+
+    it('returns running tasks with their utilization after dequeue', () => {
+      const scheduler = new TaskScheduler(200);
+
+      scheduler.enqueue({ taskId: 'a', priority: 1, utilization: 30 });
+      scheduler.enqueue({ taskId: 'b', priority: 2, utilization: 70 });
+
+      scheduler.dequeue(); // b
+      scheduler.dequeue(); // a
+
+      const running = scheduler.getRunningJobs();
+      expect(running).toHaveLength(2);
+
+      const byId = new Map(running.map(j => [j.taskId, j.utilization]));
+      expect(byId.get('a')).toBe(30);
+      expect(byId.get('b')).toBe(70);
+    });
+
+    it('correctly reports utilization after completeJob', () => {
+      const scheduler = new TaskScheduler(200);
+
+      scheduler.enqueue({ taskId: 'a', priority: 1, utilization: 40 });
+      scheduler.enqueue({ taskId: 'b', priority: 2, utilization: 60 });
+
+      scheduler.dequeue(); // b
+      scheduler.dequeue(); // a
+
+      scheduler.completeJob('b');
+
+      const running = scheduler.getRunningJobs();
+      expect(running).toHaveLength(1);
+      expect(running[0].taskId).toBe('a');
+      expect(running[0].utilization).toBe(40);
+    });
+  });
 });

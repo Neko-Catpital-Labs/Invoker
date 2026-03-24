@@ -1916,7 +1916,7 @@ describe('TaskExecutor', () => {
   describe('buildMergeSummary', () => {
     function createExecutorForSummary(
       allTasks: TaskState[],
-      workflowMeta?: { name?: string },
+      workflowMeta?: { name?: string; description?: string },
     ) {
       const orchestrator = {
         getTask: (id: string) => allTasks.find(t => t.id === id),
@@ -1962,11 +1962,13 @@ describe('TaskExecutor', () => {
       expect(result).toContain('## Summary');
       expect(result).toContain('My Feature');
       expect(result).toContain('2 tasks completed');
-      expect(result).toContain('### impl-1');
-      expect(result).toContain('### test-1');
+      expect(result).toContain('impl-1');
+      expect(result).toContain('test-1');
       expect(result).toContain('(passed)');
       expect(result).toContain('src/foo.ts');
       expect(result).toContain('tests/foo.test.ts');
+      expect(result).toContain('<details>');
+      expect(result).toContain('File changes per task');
       expect(result).not.toContain('Prompt:');
       expect(result).not.toContain('Command:');
     });
@@ -2008,7 +2010,7 @@ describe('TaskExecutor', () => {
       expect(result).toContain('recon-task');
     });
 
-    it('identifies Claude-fixed tasks via claudeSessionId', async () => {
+    it('does NOT treat claudeSessionId tasks as conflict resolutions', async () => {
       const tasks = [
         makeTask({
           id: 'claude-task',
@@ -2019,11 +2021,12 @@ describe('TaskExecutor', () => {
         }),
       ];
       const { executor } = createExecutorForSummary(tasks, { name: 'Workflow' });
-      (executor as any).gitLogMessage = vi.fn();
+      (executor as any).gitDiffStat = vi.fn();
 
       const result = await executor.buildMergeSummary('wf-1');
 
-      expect(result).toContain('## Conflict Resolutions');
+      // Bug fix: claudeSessionId alone does NOT make a task a conflict resolution
+      expect(result).not.toContain('## Conflict Resolutions');
       expect(result).toContain('claude-task');
     });
 
@@ -2113,6 +2116,197 @@ describe('TaskExecutor', () => {
 
       expect(result).toContain('Workflow 1 task');
       expect(result).not.toContain('Workflow 2 task');
+    });
+
+    it('includes workflow description with horizontal rule when present', async () => {
+      const tasks = [
+        makeTask({
+          id: 'task-1',
+          description: 'Task one',
+          status: 'completed',
+          config: { workflowId: 'wf-1' },
+          execution: { branch: 'experiment/task-1' },
+        }),
+      ];
+      const { executor } = createExecutorForSummary(tasks, {
+        name: 'Feature Workflow',
+        description: 'This workflow adds a new feature.\n\nIt includes multiple steps.',
+      });
+      (executor as any).gitDiffStat = vi.fn();
+
+      const result = await executor.buildMergeSummary('wf-1');
+
+      expect(result).toContain('## Summary');
+      expect(result).toContain('This workflow adds a new feature.');
+      expect(result).toContain('It includes multiple steps.');
+      expect(result).toContain('---');
+      expect(result).toContain('Feature Workflow — 1 tasks completed');
+    });
+
+    it('omits description and horizontal rule when description is empty', async () => {
+      const tasks = [
+        makeTask({
+          id: 'task-1',
+          description: 'Task one',
+          status: 'completed',
+          config: { workflowId: 'wf-1' },
+          execution: { branch: 'experiment/task-1' },
+        }),
+      ];
+      const { executor } = createExecutorForSummary(tasks, {
+        name: 'Feature Workflow',
+        description: '',
+      });
+      (executor as any).gitDiffStat = vi.fn();
+
+      const result = await executor.buildMergeSummary('wf-1');
+
+      expect(result).toContain('## Summary');
+      // Check that horizontal rule separator is NOT present
+      // (table header separator contains dashes but is different format)
+      const lines = result.split('\n');
+      const summaryIdx = lines.indexOf('## Summary');
+      expect(lines[summaryIdx + 1]).toContain('Feature Workflow — 1 tasks completed');
+      expect(lines[summaryIdx + 1]).not.toContain('---');
+      expect(result).not.toMatch(/\n---\n/);
+    });
+
+    it('includes task breakdown table with all tasks', async () => {
+      const tasks = [
+        makeTask({
+          id: 'impl-1',
+          description: 'Implement feature',
+          status: 'completed',
+          config: { workflowId: 'wf-1' },
+          execution: { branch: 'experiment/impl-1' },
+        }),
+        makeTask({
+          id: 'test-1',
+          description: 'Run tests',
+          status: 'completed',
+          config: { workflowId: 'wf-1', command: 'pnpm test' },
+          execution: { branch: 'experiment/test-1' },
+        }),
+        makeTask({
+          id: 'fail-1',
+          description: 'Failed command',
+          status: 'failed',
+          config: { workflowId: 'wf-1', command: 'pnpm build' },
+          execution: { error: 'Build error' },
+        }),
+        makeTask({
+          id: 'pending-1',
+          description: 'Pending task',
+          status: 'pending',
+          config: { workflowId: 'wf-1' },
+        }),
+      ];
+      const { executor } = createExecutorForSummary(tasks, { name: 'Workflow' });
+      (executor as any).gitDiffStat = vi.fn();
+
+      const result = await executor.buildMergeSummary('wf-1');
+
+      expect(result).toContain('<summary>Task breakdown</summary>');
+      expect(result).toContain('| Task | Description | Status |');
+      expect(result).toContain('| impl-1 | Implement feature | completed |');
+      expect(result).toContain('| test-1 | Run tests | completed (passed) |');
+      expect(result).toContain('| fail-1 | Failed command | failed (failed) |');
+      expect(result).toContain('| pending-1 | Pending task | pending |');
+    });
+
+    it('wraps file changes in collapsible details', async () => {
+      const tasks = [
+        makeTask({
+          id: 'impl-1',
+          description: 'Add feature X',
+          status: 'completed',
+          config: { workflowId: 'wf-1' },
+          execution: { branch: 'experiment/impl-1' },
+        }),
+      ];
+      const { executor } = createExecutorForSummary(tasks, { name: 'Workflow' });
+      (executor as any).gitDiffStat = vi.fn().mockResolvedValue(' src/foo.ts | 5 ++---');
+
+      const result = await executor.buildMergeSummary('wf-1');
+
+      expect(result).toContain('<summary>File changes per task</summary>');
+      expect(result).toContain('### impl-1 — Add feature X');
+      expect(result).toContain('src/foo.ts');
+    });
+
+    it('PROOF: logs full summary with description for visual inspection', async () => {
+      const tasks = [
+        makeTask({
+          id: 'scheduler-methods',
+          description: 'Add getQueuedJobs, removeJob, getRunningJobs methods to TaskScheduler',
+          status: 'completed',
+          config: { workflowId: 'wf-1' },
+          execution: { branch: 'task/scheduler-methods' },
+        }),
+        makeTask({
+          id: 'orchestrator-cancel',
+          description: 'Add cancelTask and getQueueStatus methods to Orchestrator',
+          status: 'completed',
+          config: { workflowId: 'wf-1' },
+          execution: { branch: 'task/orchestrator-cancel' },
+        }),
+        makeTask({
+          id: 'verify-core-tests',
+          description: 'Run core package tests to verify scheduler and cancel implementations',
+          status: 'completed',
+          config: { workflowId: 'wf-1', command: 'cd packages/core && pnpm test' },
+          execution: { branch: 'task/verify-core' },
+        }),
+        makeTask({
+          id: 'ui-queue-view',
+          description: 'Add QueueView component with utilization bar and cancel buttons',
+          status: 'completed',
+          config: { workflowId: 'wf-1' },
+          execution: { branch: 'task/ui-queue-view', claudeSessionId: 'session-abc' },
+        }),
+        makeTask({
+          id: 'flaky-build',
+          description: 'Build UI package to verify compilation',
+          status: 'failed',
+          config: { workflowId: 'wf-1', command: 'cd packages/ui && pnpm build' },
+          execution: { error: 'TS2345: Type mismatch in QueueView.tsx' },
+        }),
+      ];
+      const { executor } = createExecutorForSummary(tasks, {
+        name: 'Queue visibility and task cancellation with DAG cascade',
+        description: [
+          'Adds the ability to view queued tasks and cancel running tasks with automatic',
+          'cascade through the task DAG.',
+          '',
+          'Architecture: TaskScheduler gains three introspection methods (getQueuedJobs,',
+          'removeJob, getRunningJobs) for low-level queue management. Orchestrator wraps',
+          'these with DAG-aware cancelTask semantics — cancelling a task also cancels all',
+          'downstream dependents. The UI surfaces this through a QueueView panel and a',
+          'Cancel Task option in the existing context menu.',
+          '',
+          'Tradeoffs: Cancel sends SIGTERM immediately rather than waiting for graceful',
+          'shutdown. The queue view polls on an interval rather than subscribing to events.',
+        ].join('\n'),
+      });
+      (executor as any).gitDiffStat = vi.fn()
+        .mockResolvedValueOnce(' packages/core/src/scheduler.ts | 23 +++\n 1 file changed, 23 insertions(+)')
+        .mockResolvedValueOnce(' packages/core/src/orchestrator.ts | 91 ++++++\n 1 file changed, 91 insertions(+)')
+        .mockResolvedValueOnce(' (empty)')
+        .mockResolvedValueOnce(' packages/ui/src/components/QueueView.tsx | 218 +++++++++\n 1 file changed, 218 insertions(+)');
+
+      const result = await executor.buildMergeSummary('wf-1');
+
+      console.log('\n========== PROOF: NEW PR SUMMARY FORMAT ==========');
+      console.log(result);
+      console.log('========== END PROOF ==========\n');
+
+      expect(result).toContain('Adds the ability to view queued tasks');
+      expect(result).toContain('Architecture: TaskScheduler');
+      expect(result).toContain('Tradeoffs: Cancel sends SIGTERM');
+      expect(result).toContain('4 tasks completed, 1 failed');
+      expect(result).toContain('<details>');
+      expect(result).not.toContain('## Conflict Resolutions');
+      expect(result).toContain('## Failed Tasks');
     });
   });
 

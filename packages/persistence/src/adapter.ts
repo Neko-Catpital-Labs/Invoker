@@ -33,6 +33,7 @@ export interface ConversationMessage {
 export interface Workflow {
   id: string;
   name: string;
+  description?: string;
   status: 'running' | 'completed' | 'failed';
   planFile?: string;
   repoUrl?: string;

@@ -21,8 +21,8 @@ interface TopBarProps {
   onClear: () => void;
   onDeleteDB: () => void;
   onRefresh: () => void;
-  viewMode: 'dag' | 'history' | 'timeline';
-  onToggleView: (mode: 'dag' | 'history' | 'timeline') => void;
+  viewMode: 'dag' | 'history' | 'timeline' | 'queue';
+  onToggleView: (mode: 'dag' | 'history' | 'timeline' | 'queue') => void;
 }
 
 export function TopBar({
@@ -85,7 +85,7 @@ export function TopBar({
       )}
 
       <div className="flex rounded overflow-hidden border border-gray-600">
-        {(['dag', 'timeline', 'history'] as const).map((mode) => (
+        {(['dag', 'timeline', 'history', 'queue'] as const).map((mode) => (
           <button
             key={mode}
             onClick={() => onToggleView(mode)}
@@ -95,7 +95,7 @@ export function TopBar({
                 : 'bg-gray-700 hover:bg-gray-600 text-gray-300'
             }`}
           >
-            {mode === 'dag' ? 'DAG' : mode === 'timeline' ? 'Timeline' : 'History'}
+            {mode === 'dag' ? 'DAG' : mode === 'timeline' ? 'Timeline' : mode === 'history' ? 'History' : 'Queue'}
           </button>
         ))}
       </div>

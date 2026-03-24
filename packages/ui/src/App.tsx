@@ -24,6 +24,7 @@ import { ApprovalModal } from './components/ApprovalModal.js';
 import { InputModal } from './components/InputModal.js';
 import { ExperimentModal } from './components/ExperimentModal.js';
 import { ContextMenu } from './components/ContextMenu.js';
+import { QueueView } from './components/QueueView.js';
 import { ReplaceTaskModal } from './components/ReplaceTaskModal.js';
 
 type ModalState =
@@ -42,7 +43,7 @@ export function App() {
   const [hasStarted, setHasStarted] = useState(false);
   const [planName, setPlanName] = useState<string | null>(null);
   const [onFinish, setOnFinish] = useState<'none' | 'merge' | 'pull_request'>('merge');
-  const [viewMode, setViewMode] = useState<'dag' | 'history' | 'timeline'>('dag');
+  const [viewMode, setViewMode] = useState<'dag' | 'history' | 'timeline' | 'queue'>('dag');
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; task: TaskState } | null>(null);
   const [remoteTargets, setRemoteTargets] = useState<string[]>([]);
 
@@ -150,6 +151,19 @@ export function App() {
       await window.invoker?.fixWithClaude(taskId);
     } catch (err) {
       console.error('Fix with Claude failed:', err);
+    }
+  }, []);
+
+  const handleCancelTask = useCallback(async (taskId: string) => {
+    setContextMenu(null);
+    const confirmed = window.confirm(
+      `Cancel task "${taskId}" and all downstream dependents?`
+    );
+    if (!confirmed) return;
+    try {
+      await window.invoker?.cancelTask(taskId);
+    } catch (err) {
+      console.error('Failed to cancel task:', err);
     }
   }, []);
 
@@ -346,7 +360,16 @@ export function App() {
       <div className="flex-1 flex overflow-hidden">
         {/* Left: DAG visualization (60%) */}
         <div className="w-3/5 border-r border-gray-700">
-          {viewMode === 'history' ? (
+          {viewMode === 'queue' ? (
+            <div className="h-full">
+              <QueueView
+                tasks={tasks}
+                onTaskClick={handleTaskClick}
+                onCancel={handleCancelTask}
+                selectedTaskId={selectedTaskId}
+              />
+            </div>
+          ) : viewMode === 'history' ? (
             <div className="h-full">
               <HistoryView onTaskClick={handleTaskClick} selectedTaskId={selectedTaskId} />
             </div>
@@ -439,6 +462,7 @@ export function App() {
           onDeleteWorkflow={handleDeleteWorkflow}
           onResolveConflict={handleResolveConflict}
           onFixWithClaude={handleFixWithClaude}
+          onCancel={handleCancelTask}
           onClose={closeContextMenu}
         />
       )}

@@ -244,6 +244,33 @@ tasks:
       expect(plan.featureBranch).toBe('plan/missing-feature-branch');
     });
   });
+
+  it('parses description field from plan YAML', () => {
+    const yaml = [
+      'name: "Test Plan"',
+      'description: "This plan adds feature X"',
+      'tasks:',
+      '  - id: task-1',
+      '    description: "Do something"',
+      '    command: "echo hello"',
+      '    dependencies: []',
+    ].join('\n');
+    const result = parsePlan(yaml);
+    expect(result.description).toBe('This plan adds feature X');
+  });
+
+  it('description is optional', () => {
+    const yaml = [
+      'name: "Test Plan"',
+      'tasks:',
+      '  - id: task-1',
+      '    description: "Do something"',
+      '    command: "echo hello"',
+      '    dependencies: []',
+    ].join('\n');
+    const result = parsePlan(yaml);
+    expect(result.description).toBeUndefined();
+  });
 });
 
 describe('detectDefaultBranch', () => {

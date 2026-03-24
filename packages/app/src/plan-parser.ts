@@ -39,6 +39,7 @@ export interface RawPlanTask {
 
 export interface RawPlan {
   name?: string;
+  description?: string;
   onFinish?: string;
   baseBranch?: string;
   featureBranch?: string;
@@ -114,8 +115,8 @@ export function parsePlan(yamlContent: string, repoDir?: string): PlanDefinition
   }
   const mergeMode = raw.mergeMode as (typeof validMergeModes)[number] | undefined;
 
-  // Auto-generate featureBranch from plan name when merge/PR is requested but no branch specified
-  if ((onFinish === 'merge' || onFinish === 'pull_request') && !raw.featureBranch) {
+  // Auto-generate featureBranch from plan name when not explicitly specified
+  if (!raw.featureBranch) {
     const slug = (raw.name as string).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
     raw.featureBranch = `plan/${slug}`;
   }
@@ -170,6 +171,7 @@ export function parsePlan(yamlContent: string, repoDir?: string): PlanDefinition
 
   return {
     name: raw.name,
+    description: raw.description,
     onFinish,
     baseBranch: raw.baseBranch ?? loadConfig(repoDir ?? process.cwd()).defaultBranch ?? detectDefaultBranch(),
     featureBranch: raw.featureBranch,

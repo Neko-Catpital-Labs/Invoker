@@ -98,7 +98,11 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
 
   private exec(cmd: string, args: string[], cwd: string): Promise<string> {
     return new Promise((resolve, reject) => {
-      const child = spawn(cmd, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
+      const child = spawn(cmd, args, {
+        cwd,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: { ...process.env }, // Ensure full environment is inherited for keyring/credential access
+      });
       let stdout = '';
       let stderr = '';
       child.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });

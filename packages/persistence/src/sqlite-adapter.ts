@@ -225,6 +225,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       'ALTER TABLE tasks ADD COLUMN is_fixing_with_ai INTEGER DEFAULT 0',
       'ALTER TABLE tasks ADD COLUMN selected_attempt_id TEXT',
       'ALTER TABLE tasks ADD COLUMN remote_target_id TEXT',
+      'ALTER TABLE workflows ADD COLUMN description TEXT',
     ];
     for (const sql of migrations) {
       try { this.db.exec(sql); } catch { /* Column already exists */ }
@@ -259,10 +260,12 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
   saveWorkflow(workflow: Workflow): void {
     this.db.prepare(`
-      INSERT OR REPLACE INTO workflows (id, name, status, plan_file, repo_url, branch, on_finish, base_branch, feature_branch, merge_mode, generation, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT OR REPLACE INTO workflows (id, name, description, status, plan_file, repo_url, branch, on_finish, base_branch, feature_branch, merge_mode, generation, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
-      workflow.id, workflow.name, workflow.status,
+      workflow.id, workflow.name,
+      workflow.description ?? null,
+      workflow.status,
       workflow.planFile ?? null, workflow.repoUrl ?? null, workflow.branch ?? null,
       workflow.onFinish ?? null, workflow.baseBranch ?? null, workflow.featureBranch ?? null,
       workflow.mergeMode ?? null,
@@ -923,6 +926,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return {
       id: row.id,
       name: row.name,
+      description: row.description ?? undefined,
       status: row.status,
       planFile: row.plan_file ?? undefined,
       repoUrl: row.repo_url ?? undefined,

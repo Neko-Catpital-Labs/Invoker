@@ -62,6 +62,7 @@ export interface OrchestratorPersistence {
   saveWorkflow(workflow: {
     id: string;
     name: string;
+    description?: string;
     status: 'running' | 'completed' | 'failed';
     createdAt: string;
     updatedAt: string;
@@ -102,6 +103,7 @@ export interface OrchestratorMessageBus {
 
 export interface PlanDefinition {
   name: string;
+  description?: string;
   onFinish?: 'none' | 'merge' | 'pull_request';
   baseBranch?: string;
   featureBranch?: string;
@@ -301,6 +303,7 @@ export class Orchestrator {
     this.persistence.saveWorkflow({
       id: workflowId,
       name: plan.name,
+      description: plan.description,
       status: 'running',
       onFinish: plan.onFinish,
       baseBranch: plan.baseBranch,

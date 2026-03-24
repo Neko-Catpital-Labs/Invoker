@@ -246,6 +246,17 @@ export interface InvokerAPI {
   fixWithClaude: (taskId: string) => Promise<void>;
   setMergeMode: (workflowId: string, mergeMode: string) => Promise<void>;
   checkPrStatuses: () => Promise<void>;
+
+  // Cancel task with DAG cascade
+  cancelTask: (taskId: string) => Promise<{ cancelled: string[]; runningCancelled: string[] }>;
+
+  // Queue status with utilization details
+  getQueueStatus: () => Promise<{
+    maxUtilization: number;
+    runningUtilization: number;
+    running: Array<{ taskId: string; utilization: number; description: string }>;
+    queued: Array<{ taskId: string; priority: number; utilization: number; description: string }>;
+  }>;
 }
 
 // ── Augment global Window ───────────────────────────────────

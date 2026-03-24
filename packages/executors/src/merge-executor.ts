@@ -283,36 +283,69 @@ export async function buildMergeSummaryImpl(
     (t) => t.status !== 'completed' && t.status !== 'failed',
   );
   const claudeResolved = completed.filter(
-    (t) => t.config.isReconciliation || t.execution.claudeSessionId,
+    (t) => t.config.isReconciliation,
   );
 
   const workflow = host.persistence.loadWorkflow(workflowId);
   const workflowName = workflow?.name ?? 'Workflow';
+  const description = workflow?.description;
 
   const lines: string[] = [];
 
   lines.push('## Summary');
+
+  // Add description if present
+  if (description && description.trim()) {
+    lines.push(description);
+    lines.push('');
+    lines.push('---');
+  }
+
   lines.push(
     `${workflowName} — ${completed.length} tasks completed, ${failed.length} failed, ${skipped.length} skipped`,
   );
   lines.push('');
 
+  // Task breakdown table
+  lines.push('<details>');
+  lines.push('<summary>Task breakdown</summary>');
+  lines.push('');
+  lines.push('| Task | Description | Status |');
+  lines.push('|------|-------------|--------|');
+  for (const t of workflowTasks) {
+    let statusDisplay: string = t.status;
+    if (t.status === 'completed' && t.config.command) {
+      statusDisplay = 'completed (passed)';
+    } else if (t.status === 'failed' && t.config.command) {
+      statusDisplay = 'failed (failed)';
+    }
+    lines.push(`| ${t.id} | ${t.description} | ${statusDisplay} |`);
+  }
+  lines.push('');
+  lines.push('</details>');
+  lines.push('');
+
+  // File changes per task
   if (completed.length > 0) {
-    lines.push('## Changes');
+    lines.push('<details>');
+    lines.push('<summary>File changes per task</summary>');
+    lines.push('');
     for (const t of completed) {
-      const statusHint = t.config.command ? ' (passed)' : '';
-      lines.push(`### ${t.id} — ${t.description}${statusHint}`);
       if (t.execution.branch) {
+        lines.push(`### ${t.id} — ${t.description}`);
         try {
           const stat = await host.gitDiffStat(t.execution.branch);
           if (stat) {
             lines.push(stat);
           }
         } catch {
+          // Silently skip if git diff fails
         }
+        lines.push('');
       }
-      lines.push('');
     }
+    lines.push('</details>');
+    lines.push('');
   }
 
   if (claudeResolved.length > 0) {

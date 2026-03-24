@@ -20,10 +20,11 @@ interface ContextMenuProps {
   onDeleteWorkflow?: (workflowId: string) => void;
   onResolveConflict?: (taskId: string) => void;
   onFixWithClaude?: (taskId: string) => void;
+  onCancel?: (taskId: string) => void;
   onClose: () => void;
 }
 
-export function ContextMenu({ x, y, task, onRestart, onReplace, onOpenTerminal, onRebaseAndRetry, onRestartWorkflow, onDeleteWorkflow, onResolveConflict, onFixWithClaude, onClose }: ContextMenuProps) {
+export function ContextMenu({ x, y, task, onRestart, onReplace, onOpenTerminal, onRebaseAndRetry, onRestartWorkflow, onDeleteWorkflow, onResolveConflict, onFixWithClaude, onCancel, onClose }: ContextMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
   const canRestart = true;
   const canReplace = task.status === 'failed' || task.status === 'blocked';
@@ -32,6 +33,7 @@ export function ContextMenu({ x, y, task, onRestart, onReplace, onOpenTerminal, 
   const canDeleteWorkflow = !!task.config.workflowId && !!onDeleteWorkflow;
   const hasMergeConflict = task.status === 'failed' && !!task.execution.mergeConflict;
   const canFixWithClaude = task.status === 'failed' && !hasMergeConflict && !!onFixWithClaude;
+  const canCancel = task.status !== 'completed' && task.status !== 'stale' && !!onCancel;
 
   useEffect(() => {
     const handleClick = (e: MouseEvent) => {
@@ -139,6 +141,14 @@ export function ContextMenu({ x, y, task, onRestart, onReplace, onOpenTerminal, 
             Delete Workflow
           </button>
         </>
+      )}
+      {canCancel && (
+        <button
+          className="w-full text-left px-3 py-1.5 text-sm text-red-300 hover:bg-gray-700 rounded"
+          onClick={() => { onCancel!(task.id); }}
+        >
+          Cancel Task (+ dependents)
+        </button>
       )}
     </div>
   );
