@@ -863,6 +863,10 @@ class TestPersistence implements OrchestratorPersistence {
   listWorkflows() { return Array.from(this.workflows.values()); }
   loadTasks(wfId: string) { return Array.from(this.tasks.values()).filter(e => e.workflowId === wfId).map(e => e.task); }
   loadWorkflow(id: string) { return this.workflows.get(id) as any; }
+  getWorkspacePath(taskId: string) {
+    const entry = this.tasks.get(taskId);
+    return entry?.task.execution.workspacePath ?? null;
+  }
   logEvent(): void {}
 }
 
@@ -914,6 +918,7 @@ describe('merge gate commit topology (real git)', () => {
     const persistence = {
       loadWorkflow: () => workflow,
       updateTask: () => {},
+      getWorkspacePath: () => null,
     };
     const registry = new FamiliarRegistry();
     return new TaskExecutor({

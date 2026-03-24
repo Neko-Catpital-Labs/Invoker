@@ -640,7 +640,7 @@ describe('TaskExecutor', () => {
       // Default mergeMode is 'manual', so setTaskAwaitingApproval is called with metadata
       expect(orchestrator.setTaskAwaitingApproval).toHaveBeenCalledWith('__merge__wf-1', expect.objectContaining({
         config: expect.objectContaining({ familiarType: 'worktree' }),
-        execution: expect.objectContaining({ branch: 'plan/feature', workspacePath: '/tmp' }),
+        execution: expect.objectContaining({ branch: 'plan/feature', workspacePath: '/tmp/mock-wt' }),
       }));
     });
   });
@@ -880,7 +880,7 @@ describe('TaskExecutor', () => {
       // Should call setTaskAwaitingApproval with metadata instead of handleWorkerResponse
       expect(orchestrator.setTaskAwaitingApproval).toHaveBeenCalledWith('__merge__wf-1', expect.objectContaining({
         config: expect.objectContaining({ familiarType: 'worktree' }),
-        execution: expect.objectContaining({ branch: 'plan/feature', workspacePath: '/tmp' }),
+        execution: expect.objectContaining({ branch: 'plan/feature', workspacePath: '/tmp/mock-wt' }),
       }));
       expect(orchestrator.handleWorkerResponse).not.toHaveBeenCalled();
       expect(onComplete).toHaveBeenCalledWith(
@@ -1100,9 +1100,10 @@ describe('TaskExecutor', () => {
 
       await (executor as any).executeMergeNode(mergeTask);
 
+      // No featureBranch set → gateWorkspacePath is undefined
       expect(orchestrator.setTaskAwaitingApproval).toHaveBeenCalledWith('__merge__wf-1', expect.objectContaining({
         config: expect.objectContaining({ familiarType: 'worktree' }),
-        execution: expect.objectContaining({ workspacePath: '/tmp' }),
+        execution: expect.objectContaining({ workspacePath: undefined }),
       }));
       expect(orchestrator.handleWorkerResponse).not.toHaveBeenCalled();
     });
@@ -1266,9 +1267,10 @@ describe('TaskExecutor', () => {
 
       await (executor as any).executeMergeNode(mergeTask);
 
+      // No featureBranch set → gateWorkspacePath is undefined
       expect(orchestrator.setTaskAwaitingApproval).toHaveBeenCalledWith('__merge__wf-1', expect.objectContaining({
         config: expect.objectContaining({ familiarType: 'worktree' }),
-        execution: expect.objectContaining({ workspacePath: '/tmp' }),
+        execution: expect.objectContaining({ workspacePath: undefined }),
       }));
     });
 
@@ -1282,6 +1284,7 @@ describe('TaskExecutor', () => {
           name: 'Test Workflow',
         }),
         updateTask: vi.fn(),
+        getWorkspacePath: () => null,
       };
       const executor = new TaskExecutor({
         orchestrator: { getTask: () => null, getAllTasks: () => [] } as any,
@@ -1478,6 +1481,7 @@ describe('TaskExecutor', () => {
           name: 'Test Workflow',
         }),
         updateTask: vi.fn(),
+        getWorkspacePath: () => null,
       };
       const executor = new TaskExecutor({
         orchestrator: { getTask: () => null, getAllTasks: () => [] } as any,
@@ -1724,6 +1728,7 @@ describe('TaskExecutor', () => {
           name: 'Test Workflow',
         }),
         updateTask: vi.fn(),
+        getWorkspacePath: () => null,
       };
       const executor = new TaskExecutor({
         orchestrator: { getTask: () => null, getAllTasks: () => [] } as any,
@@ -2648,7 +2653,7 @@ describe('TaskExecutor', () => {
     it('approveMerge aborts and restores branch on merge failure', async () => {
       const executor = new TaskExecutor({
         orchestrator: { getTask: () => undefined, getAllTasks: () => [] } as any,
-        persistence: { loadWorkflow: () => ({ onFinish: 'merge', baseBranch: 'master', featureBranch: 'feature/test', name: 'Test' }), updateTask: vi.fn() } as any,
+        persistence: { loadWorkflow: () => ({ onFinish: 'merge', baseBranch: 'master', featureBranch: 'feature/test', name: 'Test' }), updateTask: vi.fn(), getWorkspacePath: () => null } as any,
         familiarRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
         cwd: '/tmp',
       });
