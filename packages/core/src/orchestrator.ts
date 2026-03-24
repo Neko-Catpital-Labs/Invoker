@@ -164,6 +164,48 @@ export interface TaskReplacementDef {
   maxFixAttempts?: number;
 }
 
+/** A single routing rule that maps a task command to a familiarType and remoteTargetId. */
+export interface ExecutorRoutingRule {
+  /** Substring to match against the task command. */
+  pattern?: string;
+  /** Regular expression matched against the task command; compiled with new RegExp(regex). */
+  regex?: string;
+  /** Familiar type to assign (e.g. "ssh", "docker", "worktree"). */
+  familiarType: string;
+  /** Remote target ID to assign; must correspond to an entry in remoteTargets. */
+  remoteTargetId: string;
+}
+
+/**
+ * Resolve which familiarType and remoteTargetId to apply to a task.
+ *
+ * Returns `{}` (no override) when:
+ *   - The plan already sets `familiarType` OR `remoteTargetId` on the task.
+ *   - No rule matches the command.
+ *
+ * Otherwise returns the familiarType and remoteTargetId from the first matching rule.
+ * A rule matches when `pattern` is a substring of `command`, `regex` compiles and tests
+ * true against `command`, or both (either is sufficient).
+ */
+export function resolveExecutorRouting(
+  command: string,
+  planFamiliarType: string | undefined,
+  planRemoteTargetId: string | undefined,
+  rules: ExecutorRoutingRule[],
+): { familiarType?: string; remoteTargetId?: string } {
+  if (planFamiliarType !== undefined || planRemoteTargetId !== undefined) {
+    return {};
+  }
+  for (const rule of rules) {
+    const patternMatch = rule.pattern !== undefined && command.includes(rule.pattern);
+    const regexMatch = rule.regex !== undefined && new RegExp(rule.regex).test(command);
+    if (patternMatch || regexMatch) {
+      return { familiarType: rule.familiarType, remoteTargetId: rule.remoteTargetId };
+    }
+  }
+  return {};
+}
+
 export interface OrchestratorConfig {
   persistence: OrchestratorPersistence;
   messageBus: OrchestratorMessageBus;
@@ -172,6 +214,7 @@ export interface OrchestratorConfig {
   utilizationRules?: UtilizationRule[];
   defaultUtilization?: number;
   maxAttemptsPerNode?: number;
+  executorRoutingRules?: ExecutorRoutingRule[];
 }
 
 // ── Orchestrator ────────────────────────────────────────────
@@ -185,6 +228,7 @@ export class Orchestrator {
   private readonly maxConcurrency: number;
   private readonly maxAttemptsPerNode: number;
   private readonly estimator: ResourceEstimator;
+  private readonly executorRoutingRules: ExecutorRoutingRule[];
 
   private activeWorkflowIds = new Set<string>();
   private beforeApproveHook?: (task: TaskState) => Promise<void>;
@@ -194,6 +238,7 @@ export class Orchestrator {
     this.maxAttemptsPerNode = config.maxAttemptsPerNode ?? 10;
     this.persistence = config.persistence;
     this.messageBus = config.messageBus;
+    this.executorRoutingRules = config.executorRoutingRules ?? [];
 
     this.stateMachine = new TaskStateMachine(new ActionGraph());
     this.responseHandler = new ResponseHandler();
@@ -323,6 +368,11 @@ export class Orchestrator {
     }
 
     for (const taskDef of plan.tasks) {
+      const routing = taskDef.command && this.executorRoutingRules.length > 0
+        ? resolveExecutorRouting(taskDef.command, taskDef.familiarType, taskDef.remoteTargetId, this.executorRoutingRules)
+        : {};
+      const effectiveFamiliarType = routing.familiarType ?? taskDef.familiarType;
+      const effectiveRemoteTargetId = routing.remoteTargetId ?? taskDef.remoteTargetId;
       const task = createTaskState(
         taskDef.id,
         taskDef.description,
@@ -336,9 +386,9 @@ export class Orchestrator {
           requiresManualApproval: taskDef.requiresManualApproval,
           repoUrl: taskDef.repoUrl,
           featureBranch: taskDef.featureBranch,
-          familiarType: normalizeFamiliarType(taskDef.familiarType) ?? 'worktree',
+          familiarType: normalizeFamiliarType(effectiveFamiliarType) ?? 'worktree',
           dockerImage: taskDef.dockerImage,
-          remoteTargetId: taskDef.remoteTargetId,
+          remoteTargetId: effectiveRemoteTargetId,
           autoFix: taskDef.autoFix,
           maxFixAttempts: taskDef.maxFixAttempts,
         },

@@ -115,6 +115,7 @@ function resolveUtilizationRules(config: InvokerConfig): UtilizationRule[] {
   }));
 }
 
+
 function initServices(): void {
   messageBus = new IpcBus();
   const dbDir = process.env.NODE_ENV === 'test'
@@ -138,6 +139,7 @@ function initServices(): void {
     maxConcurrency: invokerConfig.maxConcurrency,
     utilizationRules: resolveUtilizationRules(invokerConfig),
     defaultUtilization: invokerConfig.defaultUtilization,
+    executorRoutingRules: invokerConfig.executorRoutingRules ?? [],
   });
 
   orchestrator.syncAllFromDb();
@@ -602,6 +604,7 @@ function setupGuiMode(): void {
     maxConcurrency: invokerConfig.maxConcurrency,
     utilizationRules: resolveUtilizationRules(invokerConfig),
     defaultUtilization: invokerConfig.defaultUtilization,
+    executorRoutingRules: invokerConfig.executorRoutingRules ?? [],
   });
       rebuildTaskExecutor();
       taskHandles.clear();
@@ -617,6 +620,7 @@ function setupGuiMode(): void {
     maxConcurrency: invokerConfig.maxConcurrency,
     utilizationRules: resolveUtilizationRules(invokerConfig),
     defaultUtilization: invokerConfig.defaultUtilization,
+    executorRoutingRules: invokerConfig.executorRoutingRules ?? [],
   });
       rebuildTaskExecutor();
       taskHandles.clear();

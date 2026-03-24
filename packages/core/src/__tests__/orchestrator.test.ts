@@ -322,6 +322,90 @@ describe('Orchestrator', () => {
         }),
       ).not.toThrow();
     });
+
+    // ── executor routing rules ───────────────────────────────
+
+    describe('executor routing rules', () => {
+      it('applies matching pattern rule: sets familiarType ssh and remoteTargetId', () => {
+        const routedOrchestrator = new Orchestrator({
+          persistence: new InMemoryPersistence(),
+          messageBus: new InMemoryBus(),
+          maxConcurrency: 3,
+          executorRoutingRules: [
+            { pattern: 'deploy', familiarType: 'ssh', remoteTargetId: 'prod-server' },
+          ],
+        });
+
+        routedOrchestrator.loadPlan({
+          name: 'routing-test',
+          tasks: [{ id: 't1', description: 'Deploy task', command: 'deploy --env prod' }],
+        });
+
+        const task = routedOrchestrator.getTask('t1');
+        expect(task!.config.familiarType).toBe('ssh');
+        expect(task!.config.remoteTargetId).toBe('prod-server');
+      });
+
+      it('explicit task familiarType worktree overrides matching rule', () => {
+        const routedOrchestrator = new Orchestrator({
+          persistence: new InMemoryPersistence(),
+          messageBus: new InMemoryBus(),
+          maxConcurrency: 3,
+          executorRoutingRules: [
+            { pattern: 'deploy', familiarType: 'ssh', remoteTargetId: 'prod-server' },
+          ],
+        });
+
+        routedOrchestrator.loadPlan({
+          name: 'override-test',
+          tasks: [{ id: 't1', description: 'Deploy task', command: 'deploy --env prod', familiarType: 'worktree' }],
+        });
+
+        const task = routedOrchestrator.getTask('t1');
+        expect(task!.config.familiarType).toBe('worktree');
+        expect(task!.config.remoteTargetId).toBeUndefined();
+      });
+
+      it('prompt-only task (no command) does not get routing from rules', () => {
+        const routedOrchestrator = new Orchestrator({
+          persistence: new InMemoryPersistence(),
+          messageBus: new InMemoryBus(),
+          maxConcurrency: 3,
+          executorRoutingRules: [
+            { pattern: 'deploy', familiarType: 'ssh', remoteTargetId: 'prod-server' },
+          ],
+        });
+
+        routedOrchestrator.loadPlan({
+          name: 'prompt-only-test',
+          tasks: [{ id: 't1', description: 'Prompt task', prompt: 'deploy to prod' }],
+        });
+
+        const task = routedOrchestrator.getTask('t1');
+        expect(task!.config.familiarType).toBe('worktree');
+        expect(task!.config.remoteTargetId).toBeUndefined();
+      });
+
+      it('merge node always has familiarType merge regardless of routing rules', () => {
+        const routedOrchestrator = new Orchestrator({
+          persistence: new InMemoryPersistence(),
+          messageBus: new InMemoryBus(),
+          maxConcurrency: 3,
+          executorRoutingRules: [
+            { pattern: 'deploy', familiarType: 'ssh', remoteTargetId: 'prod-server' },
+          ],
+        });
+
+        routedOrchestrator.loadPlan({
+          name: 'merge-routing-test',
+          tasks: [{ id: 't1', description: 'Deploy task', command: 'deploy --env prod' }],
+        });
+
+        const mergeNode = routedOrchestrator.getAllTasks().find((t) => t.config.isMergeNode);
+        expect(mergeNode).toBeDefined();
+        expect(mergeNode!.config.familiarType).toBe('merge');
+      });
+    });
   });
 
   // ── startExecution ──────────────────────────────────────
