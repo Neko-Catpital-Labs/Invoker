@@ -243,6 +243,19 @@ tasks:
       expect(plan.onFinish).toBe('merge');
       expect(plan.featureBranch).toBe('plan/missing-feature-branch');
     });
+
+    it('auto-generates featureBranch even when onFinish is none', () => {
+      const yaml = `
+name: No Finish Branch
+onFinish: none
+tasks:
+  - id: build
+    description: Build the project
+`;
+      const plan = parsePlan(yaml);
+      expect(plan.onFinish).toBe('none');
+      expect(plan.featureBranch).toBe('plan/no-finish-branch');
+    });
   });
 
   it('parses description field from plan YAML', () => {
