@@ -1248,6 +1248,32 @@ describe('WorktreeFamiliar', () => {
       ).toThrow(/no longer exists.*cleaned up/);
     });
 
+    it('returns git checkout when workspacePath equals repoDir and branch is set', () => {
+      vi.mocked(existsSync).mockReturnValue(true);
+      const spec = familiar.getRestoredTerminalSpec({
+        ...baseMeta,
+        workspacePath: '/fake/repo',
+        branch: 'plan/my-workflow',
+      });
+      expect(spec.command).toBe('bash');
+      expect(spec.cwd).toBe('/fake/repo');
+      expect(spec.args![1]).toContain("git checkout 'plan/my-workflow'");
+      expect(spec.args![1]).not.toContain('worktree add');
+    });
+
+    it('returns git checkout when workspacePath is a worktree path (not repoDir) and branch is set', () => {
+      vi.mocked(existsSync).mockReturnValue(true);
+      const spec = familiar.getRestoredTerminalSpec({
+        ...baseMeta,
+        workspacePath: '/fake/worktrees/wt-abc',
+        branch: 'plan/my-workflow',
+      });
+      expect(spec.command).toBe('bash');
+      expect(spec.cwd).toBe('/fake/worktrees/wt-abc');
+      expect(spec.args![1]).toContain("git checkout 'plan/my-workflow'");
+      expect(spec.args![1]).not.toContain('worktree add');
+    });
+
     it('returns spec with undefined cwd when no workspace path', () => {
       const spec = familiar.getRestoredTerminalSpec(baseMeta);
       expect(spec).toEqual({ cwd: undefined });

@@ -481,15 +481,17 @@ describe('merge gate open-terminal', () => {
     expect(familiar!.type).toBe('worktree');
   });
 
-  it('opens terminal with git checkout for merge gate with branch', () => {
+  it('opens terminal with git checkout for merge gate with branch when workspacePath is a worktree', () => {
+    const wtBase = join(tmpdir(), 'merge-gate-wt-b');
     const registry = new FamiliarRegistry();
-    const worktree = new WorktreeFamiliar({ repoDir: process.cwd(), worktreeBaseDir: join(tmpdir(), 'merge-gate-wt-b') });
+    const worktree = new WorktreeFamiliar({ repoDir: process.cwd(), worktreeBaseDir: wtBase });
     registry.register('worktree', worktree);
 
+    const worktreePath = join(wtBase, 'gate-wt');
     const meta: PersistedTaskMeta = {
       taskId: '__merge__wf-123',
       familiarType: 'merge',
-      workspacePath: process.cwd(),
+      workspacePath: worktreePath,
       branch: 'plan/my-workflow',
     };
 
@@ -500,10 +502,39 @@ describe('merge gate open-terminal', () => {
 
     vi.mocked(existsSync).mockReturnValue(true);
     const spec = familiar.getRestoredTerminalSpec(meta);
-    expect(spec.cwd).toBe(process.cwd());
+    expect(spec.cwd).toBe(worktreePath);
     expect(spec.command).toBe('bash');
     expect(spec.args).toContain('-c');
     expect(spec.args![1]).toContain("git checkout 'plan/my-workflow'");
+    expect(spec.args![1]).not.toContain('worktree add');
+  });
+
+  it('opens terminal with git checkout for merge gate with branch when workspacePath is a worktree', () => {
+    const wtBase = join(tmpdir(), 'merge-gate-wt-d');
+    const registry = new FamiliarRegistry();
+    const worktree = new WorktreeFamiliar({ repoDir: process.cwd(), worktreeBaseDir: wtBase });
+    registry.register('worktree', worktree);
+
+    const worktreePath = join(wtBase, 'existing-wt');
+    const meta: PersistedTaskMeta = {
+      taskId: '__merge__wf-456',
+      familiarType: 'merge',
+      workspacePath: worktreePath,
+      branch: 'plan/my-workflow',
+    };
+
+    let familiar: any = registry.get(meta.familiarType);
+    if (!familiar) {
+      familiar = registry.getDefault();
+    }
+
+    vi.mocked(existsSync).mockReturnValue(true);
+    const spec = familiar.getRestoredTerminalSpec(meta);
+    expect(spec.cwd).toBe(worktreePath);
+    expect(spec.command).toBe('bash');
+    expect(spec.args).toContain('-c');
+    expect(spec.args![1]).toContain("git checkout 'plan/my-workflow'");
+    expect(spec.args![1]).not.toContain('worktree add');
   });
 
   it('opens terminal with cwd only for merge gate without branch', () => {

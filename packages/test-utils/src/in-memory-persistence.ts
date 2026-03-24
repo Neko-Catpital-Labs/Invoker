@@ -71,5 +71,10 @@ export class InMemoryPersistence implements OrchestratorPersistence {
     return this.workflows.get(workflowId) as any;
   }
 
+  getWorkspacePath(taskId: string): string | null {
+    const entry = this.tasks.get(taskId);
+    return entry?.task.execution.workspacePath ?? null;
+  }
+
   logEvent(): void {}
 }

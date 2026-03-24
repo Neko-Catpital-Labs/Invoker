@@ -91,6 +91,15 @@ export async function executeMergeNodeImpl(
     },
   });
 
+  // Create a persistent gate worktree so workspacePath is never the main repo.
+  // Use baseBranch as the ref because featureBranch may not exist yet
+  // (it gets created inside consolidateAndMerge). Terminal restore does
+  // `git checkout <branch>` to switch to featureBranch anyway.
+  let gateWorkspacePath: string | undefined;
+  if (featureBranch) {
+    gateWorkspacePath = await host.createMergeWorktree(baseBranch, 'gate-' + task.id.replace(/[^a-zA-Z0-9_-]/g, '-'));
+  }
+
   if (featureBranch && (onFinish !== 'none' || mergeMode === 'github')) {
     const effectiveOnFinish = mergeMode === 'automatic' ? onFinish : 'none';
     try {
@@ -105,7 +114,7 @@ export async function executeMergeNodeImpl(
         host.callbacks.onComplete?.(task.id, manualResponse);
         host.orchestrator.setTaskAwaitingApproval(task.id, {
           config: { familiarType: 'worktree', summary },
-          execution: { branch: featureBranch ?? undefined, workspacePath: host.cwd },
+          execution: { branch: featureBranch ?? undefined, workspacePath: gateWorkspacePath },
         });
         return;
       }
@@ -135,7 +144,7 @@ export async function executeMergeNodeImpl(
           config: { familiarType: 'worktree', summary },
           execution: {
             branch: featureBranch,
-            workspacePath: host.cwd,
+            workspacePath: gateWorkspacePath,
             prUrl: result.url,
             prIdentifier: result.identifier,
             prStatus: 'Awaiting review',
@@ -172,7 +181,7 @@ export async function executeMergeNodeImpl(
       host.callbacks.onComplete?.(task.id, gateResponse);
       host.orchestrator.setTaskAwaitingApproval(task.id, {
         config: { familiarType: 'worktree', summary },
-        execution: { branch: featureBranch ?? undefined, workspacePath: host.cwd },
+        execution: { branch: featureBranch ?? undefined, workspacePath: gateWorkspacePath },
       });
       return;
     }
@@ -188,7 +197,7 @@ export async function executeMergeNodeImpl(
     config: { familiarType: 'worktree', summary },
     execution: {
       branch: featureBranch ?? undefined,
-      workspacePath: host.cwd,
+      workspacePath: gateWorkspacePath,
       ...(prUrl ? { prUrl } : {}),
     },
   });
@@ -198,7 +207,7 @@ export async function executeMergeNodeImpl(
       config: { familiarType: 'worktree', summary },
       execution: {
         branch: featureBranch ?? undefined,
-        workspacePath: host.cwd,
+        workspacePath: gateWorkspacePath,
         ...(prUrl ? { prUrl } : {}),
       },
     });
@@ -231,6 +240,10 @@ export async function approveMergeImpl(
   const summary = await host.buildMergeSummary(workflowId);
   const mergeMessage = workflow.name ?? 'Workflow';
 
+  // Clean up the persistent gate worktree created by executeMergeNodeImpl
+  const mergeTaskId = `__merge__${workflowId}`;
+  const gateWorktreePath = host.persistence.getWorkspacePath(mergeTaskId);
+
   if (onFinish === 'merge') {
     const worktreeDir = await host.createMergeWorktree(baseBranch, 'approve-' + workflowId);
     try {
@@ -248,6 +261,9 @@ export async function approveMergeImpl(
       throw err;
     } finally {
       await host.removeMergeWorktree(worktreeDir);
+      if (gateWorktreePath) {
+        await host.removeMergeWorktree(gateWorktreePath);
+      }
     }
   } else if (onFinish === 'pull_request') {
     const worktreeDir = await host.createMergeWorktree(featureBranch, 'approve-pr-' + workflowId);
@@ -257,13 +273,15 @@ export async function approveMergeImpl(
       const prUrl = await host.execPr(baseBranch, featureBranch, mergeMessage, summary);
       mergeTrace('PR_CREATED', { featureBranch, baseBranch, prUrl });
       console.log(`[merge] Approved: created pull request ${prUrl}`);
-      const mergeTaskId = `__merge__${workflowId}`;
       host.persistence.updateTask(mergeTaskId, {
         config: { summary },
         execution: { prUrl },
       });
     } finally {
       await host.removeMergeWorktree(worktreeDir);
+      if (gateWorktreePath) {
+        await host.removeMergeWorktree(gateWorktreePath);
+      }
     }
   }
 }

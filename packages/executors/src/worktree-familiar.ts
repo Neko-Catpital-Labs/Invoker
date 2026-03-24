@@ -486,6 +486,7 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
       return spec;
     }
     if (meta.branch) {
+      // workspacePath is already a worktree — just checkout the branch there.
       const spec = {
         command: 'bash',
         args: ['-c', `git checkout '${meta.branch}' 2>/dev/null; exec bash`],
