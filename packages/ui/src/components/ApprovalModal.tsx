@@ -69,10 +69,10 @@ export function ApprovalModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-      <div className="bg-gray-800 rounded-lg shadow-xl w-full max-w-2xl max-h-[85vh] flex flex-col border border-gray-700">
+      <div className="bg-gray-800 rounded-lg shadow-xl w-full max-w-2xl max-h-[90vh] flex flex-col border border-gray-700">
         {/* Header */}
         <div className="p-6 pb-0 shrink-0">
-          <h2 className="text-lg font-semibold text-gray-100 mb-2">
+          <h2 className="text-lg font-semibold text-gray-100 mb-2 shrink-0">
             {isMergeNode ? 'Approve Merge' : isFixApproval ? 'Confirm Approve' : 'Manual Approval Required'}
           </h2>
           <p className="text-sm text-gray-300 mb-1">
@@ -107,7 +107,7 @@ export function ApprovalModal({
           {isFixApproval && (
             <div className="bg-gray-700/50 rounded p-3" data-testid="fix-context">
               <h3 className="text-sm font-medium text-gray-300 mb-1">Fix Context</h3>
-              <p className="text-xs text-gray-400 whitespace-pre-wrap">
+              <p className="text-xs text-gray-400 whitespace-pre-wrap max-h-[20vh] overflow-y-auto">
                 <span className="text-gray-500">Error: </span>
                 {task.execution.pendingFixError}
               </p>
@@ -117,7 +117,7 @@ export function ApprovalModal({
           {task.config.summary && (
             <div className="bg-gray-700/50 rounded p-3">
               <h3 className="text-sm font-medium text-gray-300 mb-1">Summary</h3>
-              <p className="text-xs text-gray-400 whitespace-pre-wrap max-h-[40vh] overflow-y-auto">
+              <p className="text-xs text-gray-400 whitespace-pre-wrap max-h-[20vh] overflow-y-auto">
                 {task.config.summary}
               </p>
             </div>
