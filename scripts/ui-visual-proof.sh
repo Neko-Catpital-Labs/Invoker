@@ -13,7 +13,6 @@ Commands:
   after                     Capture changed screenshots (run after UI changes)
   pr --title <t> --base <b> Upload proof and create PR
   embed --base <b> --feature <f> --slug <s>  Capture and upload proof, output markdown to stdout
-  cleanup <slug>            Delete draft release after PR merge
 EOF
   exit 1
 }
@@ -46,68 +45,44 @@ pr_command() {
     usage
   fi
 
-  NWO=$(gh repo view --json nameWithOwner -q .nameWithOwner)
-  BRANCH=$(git branch --show-current)
-  SLUG=$(echo "$BRANCH" | sed 's|/|-|g; s|^-||')
-  TAG="vp-${SLUG}"
+  # Build PR body with local image paths — create-pr.mjs uploads them to R2
+  BODY_FILE=$(mktemp --suffix=.md)
 
-  git push -u origin HEAD
-
-  gh release create "${TAG}" --draft --title "Visual proof: ${SLUG}" --notes "Auto-generated visual proof"
-
-  TMPDIR=$(mktemp -d)
-  for mode in before after; do
-    for f in "${PROOF_DIR}/${mode}"/*.png; do
-      [[ -e "$f" ]] && cp "$f" "${TMPDIR}/${mode}--$(basename "$f")"
-    done
-    for f in "${PROOF_DIR}/${mode}"/*.webm; do
-      [[ -e "$f" ]] && cp "$f" "${TMPDIR}/${mode}--$(basename "$f")"
-    done
-  done
-
-  gh release upload "${TAG}" ${TMPDIR}/*
-
-  rm -rf "${TMPDIR}"
-
-  BASE_URL="https://github.com/${NWO}/releases/download/${TAG}"
-
-  BODY="## Visual Proof
-"
+  echo "## Visual Proof" > "${BODY_FILE}"
+  echo "" >> "${BODY_FILE}"
   for state in "${STATES[@]}"; do
     STATE_NAME=$(echo "${state}" | sed 's/-/ /g; s/\b\(.\)/\u\1/g')
-    BODY+="
+    BEFORE_IMG="${PROOF_DIR}/before/${state}.png"
+    AFTER_IMG="${PROOF_DIR}/after/${state}.png"
+    cat >> "${BODY_FILE}" <<SECTION
 <details open>
 <summary>${STATE_NAME}</summary>
 
 | Before | After |
 |--------|-------|
-| ![before](${BASE_URL}/before--${state}.png) | ![after](${BASE_URL}/after--${state}.png) |
+| ![before](${BEFORE_IMG}) | ![after](${AFTER_IMG}) |
 
 </details>
-"
+
+SECTION
   done
 
-  BODY+="
+  BEFORE_VIDEO="${PROOF_DIR}/before/walkthrough.webm"
+  AFTER_VIDEO="${PROOF_DIR}/after/walkthrough.webm"
+  cat >> "${BODY_FILE}" <<SECTION
 <details>
 <summary>Video Walkthroughs</summary>
 
-- [Before walkthrough](${BASE_URL}/before--walkthrough.webm)
-- [After walkthrough](${BASE_URL}/after--walkthrough.webm)
+- [Before walkthrough](${BEFORE_VIDEO})
+- [After walkthrough](${AFTER_VIDEO})
 
 </details>
-"
+SECTION
 
-  gh pr create --title "${TITLE}" --base "${BASE}" --body "${BODY}"
-}
+  # create-pr.mjs handles: git push, R2 image upload, PR creation via REST API
+  node scripts/create-pr.mjs --title "${TITLE}" --base "${BASE}" --body-file "${BODY_FILE}"
 
-cleanup_command() {
-  local SLUG="$1"
-  if [[ -z "${SLUG}" ]]; then
-    echo "Error: slug is required"
-    usage
-  fi
-  gh release delete "vp-${SLUG}" --yes --cleanup-tag
-  echo "Cleaned up visual proof release vp-${SLUG}"
+  rm -f "${BODY_FILE}"
 }
 
 embed_command() {
@@ -140,12 +115,7 @@ embed_command() {
   echo "Restoring original branch: ${ORIG_BRANCH}" >&2
   git checkout "${ORIG_BRANCH}" >&2
 
-  NWO=$(gh repo view --json nameWithOwner -q .nameWithOwner)
-  TAG="vp-${SLUG}"
-
-  echo "Creating draft release: ${TAG}" >&2
-  gh release create "${TAG}" --draft --title "Visual proof: ${SLUG}" --notes "Auto-generated" >&2
-
+  # Copy files to temp directory with proper naming
   TMPDIR=$(mktemp -d)
   for mode in before after; do
     for f in "${PROOF_DIR}/${mode}"/*.png; do
@@ -156,33 +126,36 @@ embed_command() {
     done
   done
 
-  echo "Uploading assets to release ${TAG}" >&2
-  gh release upload "${TAG}" ${TMPDIR}/* >&2
+  echo "Uploading assets to R2" >&2
+  URL_MAP=$(node scripts/upload-pr-images.mjs ${TMPDIR}/*)
 
   rm -rf "${TMPDIR}"
-
-  BASE_URL="https://github.com/${NWO}/releases/download/${TAG}"
 
   echo "## Visual Proof"
   echo ""
   for state in "${STATES[@]}"; do
     STATE_NAME=$(echo "${state}" | sed 's/-/ /g; s/\b\(.\)/\u\1/g')
+    BEFORE_URL=$(echo "$URL_MAP" | jq -r ".\"before--${state}.png\"")
+    AFTER_URL=$(echo "$URL_MAP" | jq -r ".\"after--${state}.png\"")
     echo "<details open>"
     echo "<summary>${STATE_NAME}</summary>"
     echo ""
     echo "| Before | After |"
     echo "|--------|-------|"
-    echo "| ![before](${BASE_URL}/before--${state}.png) | ![after](${BASE_URL}/after--${state}.png) |"
+    echo "| ![before](${BEFORE_URL}) | ![after](${AFTER_URL}) |"
     echo ""
     echo "</details>"
     echo ""
   done
 
+  BEFORE_VIDEO=$(echo "$URL_MAP" | jq -r ".\"before--walkthrough.webm\"")
+  AFTER_VIDEO=$(echo "$URL_MAP" | jq -r ".\"after--walkthrough.webm\"")
+
   echo "<details>"
   echo "<summary>Video Walkthroughs</summary>"
   echo ""
-  echo "- [Before walkthrough](${BASE_URL}/before--walkthrough.webm)"
-  echo "- [After walkthrough](${BASE_URL}/after--walkthrough.webm)"
+  echo "- [Before walkthrough](${BEFORE_VIDEO})"
+  echo "- [After walkthrough](${AFTER_VIDEO})"
   echo ""
   echo "</details>"
 }
@@ -192,6 +165,5 @@ case "${1:-}" in
   after)   capture "after" ;;
   pr)      shift; pr_command "$@" ;;
   embed)   shift; embed_command "$@" ;;
-  cleanup) cleanup_command "${2:-}" ;;
   *)       usage ;;
 esac

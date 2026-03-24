@@ -43,6 +43,16 @@ export interface InvokerConfig {
   maxAttemptsPerNode?: number;
   /** Browser executable for opening external URLs (e.g. "firefox"). Default: Chrome. */
   browser?: string;
+  /** Cloudflare R2 (or S3-compatible) storage for PR images. Env var fallback: R2_*. */
+  imageStorage?: {
+    provider: 'r2';
+    accountId: string;
+    bucketName: string;
+    accessKeyId: string;
+    secretAccessKey: string;
+    /** e.g. "https://bucket.r2.dev" or custom domain */
+    publicUrlBase: string;
+  };
   /** Named remote SSH targets for running tasks on remote machines via SSH key auth. */
   remoteTargets?: Record<string, {
     host: string;

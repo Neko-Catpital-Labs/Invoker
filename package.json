@@ -19,7 +19,10 @@
     "node": ">=22 <23"
   },
   "pnpm": {
-    "onlyBuiltDependencies": ["better-sqlite3", "electron"]
+    "onlyBuiltDependencies": [
+      "better-sqlite3",
+      "electron"
+    ]
   },
   "build": {
     "appId": "com.invoker.app",
@@ -31,12 +34,20 @@
       "packages/app/dist/**/*"
     ],
     "mac": {
-      "target": ["dmg"],
+      "target": [
+        "dmg"
+      ],
       "category": "public.app-category.developer-tools"
     },
     "linux": {
-      "target": ["AppImage", "deb"],
+      "target": [
+        "AppImage",
+        "deb"
+      ],
       "category": "Development"
     }
+  },
+  "devDependencies": {
+    "aws4": "^1.13.2"
   }
 }
