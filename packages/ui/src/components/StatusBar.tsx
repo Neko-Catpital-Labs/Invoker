@@ -20,6 +20,8 @@ export function StatusBar({ tasks, onSystemLog }: StatusBarProps) {
   let needsInput = 0;
   let awaitingApproval = 0;
   let blocked = 0;
+  let fixing = 0;
+  let fixApproval = 0;
 
   for (const task of tasks.values()) {
     switch (task.status) {
@@ -27,7 +29,11 @@ export function StatusBar({ tasks, onSystemLog }: StatusBarProps) {
         completed++;
         break;
       case 'running':
-        running++;
+        if (task.execution.isFixingWithAI) {
+          fixing++;
+        } else {
+          running++;
+        }
         break;
       case 'failed':
         failed++;
@@ -39,7 +45,11 @@ export function StatusBar({ tasks, onSystemLog }: StatusBarProps) {
         needsInput++;
         break;
       case 'awaiting_approval':
-        awaitingApproval++;
+        if (task.execution.pendingFixError) {
+          fixApproval++;
+        } else {
+          awaitingApproval++;
+        }
         break;
       case 'blocked':
         blocked++;
@@ -87,6 +97,16 @@ export function StatusBar({ tasks, onSystemLog }: StatusBarProps) {
       {blocked > 0 && (
         <span className="text-gray-500">
           Blocked: <span className="font-medium">{blocked}</span>
+        </span>
+      )}
+      {fixing > 0 && (
+        <span className="text-orange-400">
+          Fixing: <span className="font-medium">{fixing}</span>
+        </span>
+      )}
+      {fixApproval > 0 && (
+        <span className="text-amber-500">
+          Fix Approval: <span className="font-medium">{fixApproval}</span>
         </span>
       )}
     </div>

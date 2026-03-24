@@ -10,7 +10,7 @@
 
 import { useState, useEffect } from 'react';
 import type { TaskState } from '../types.js';
-import { getStatusColor } from '../lib/colors.js';
+import { getStatusColor, getEffectiveVisualStatus } from '../lib/colors.js';
 
 function formatElapsed(dateVal: Date | string | undefined): string {
   if (!dateVal) return '--';
@@ -148,7 +148,8 @@ export function TaskPanel({
     setIsEditingCommand(false);
   };
 
-  const colors = getStatusColor(task.status);
+  const visualStatus = getEffectiveVisualStatus(task.status, task.execution);
+  const colors = getStatusColor(visualStatus);
   const executorSelectValue = effectiveExecutorSelectValue(task);
 
   return (
@@ -171,9 +172,11 @@ export function TaskPanel({
               task.status === 'running' ? 'animate-pulse' : ''
             }`}
           />
-          {task.status === 'running' && task.execution.isFixingWithAI
+          {visualStatus === 'fixing_with_ai'
             ? 'FIXING WITH AI'
-            : task.status.toUpperCase().replace('_', ' ')}
+            : visualStatus === 'fix_approval'
+              ? 'APPROVE FIX'
+              : task.status.toUpperCase().replace('_', ' ')}
         </span>
       </div>
 

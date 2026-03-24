@@ -13,7 +13,7 @@
 import { useState, useEffect } from 'react';
 import { Handle, Position } from '@xyflow/react';
 import type { TaskState } from '../types.js';
-import { getStatusColor } from '../lib/colors.js';
+import { getStatusColor, getEffectiveVisualStatus } from '../lib/colors.js';
 
 const HEARTBEAT_WARN_MS = 60_000;
 const HEARTBEAT_STALE_MS = 90_000;
@@ -52,7 +52,8 @@ function useHeartbeatAge(task: TaskState): number | null {
 
 export function TaskNode({ data }: TaskNodeProps) {
   const { task } = data;
-  const colors = getStatusColor(task.status);
+  const visualStatus = getEffectiveVisualStatus(task.status, task.execution);
+  const colors = getStatusColor(visualStatus);
   const heartbeatAge = useHeartbeatAge(task);
 
   const isAnimated =
@@ -61,13 +62,15 @@ export function TaskNode({ data }: TaskNodeProps) {
     task.status === 'awaiting_approval';
 
   const statusLabel =
-    task.status === 'running' && task.execution.isFixingWithAI
+    visualStatus === 'fixing_with_ai'
       ? 'FIXING WITH AI'
-      : task.status === 'awaiting_approval'
-        ? 'APPROVE'
-        : task.config.isReconciliation && task.status === 'needs_input'
-          ? 'SELECT'
-          : task.status.toUpperCase();
+      : visualStatus === 'fix_approval'
+        ? 'APPROVE FIX'
+        : task.status === 'awaiting_approval'
+          ? 'APPROVE'
+          : task.config.isReconciliation && task.status === 'needs_input'
+            ? 'SELECT'
+            : task.status.toUpperCase();
 
   const isStale = task.status === 'stale';
 

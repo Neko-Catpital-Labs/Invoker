@@ -13,7 +13,7 @@ export interface StatusColors {
   dot: string;
 }
 
-const STATUS_COLOR_MAP: Record<TaskStatus, StatusColors> = {
+const STATUS_COLOR_MAP: Record<string, StatusColors> = {
   pending: {
     bg: 'bg-gray-200',
     border: 'border-gray-400',
@@ -25,6 +25,12 @@ const STATUS_COLOR_MAP: Record<TaskStatus, StatusColors> = {
     border: 'border-blue-500',
     text: 'text-blue-950',
     dot: 'bg-blue-600',
+  },
+  fixing_with_ai: {
+    bg: 'bg-orange-400',
+    border: 'border-orange-500',
+    text: 'text-orange-950',
+    dot: 'bg-orange-600',
   },
   completed: {
     bg: 'bg-green-400',
@@ -55,6 +61,12 @@ const STATUS_COLOR_MAP: Record<TaskStatus, StatusColors> = {
     border: 'border-purple-500',
     text: 'text-purple-950',
     dot: 'bg-purple-600',
+  },
+  fix_approval: {
+    bg: 'bg-amber-500',
+    border: 'border-amber-600',
+    text: 'text-amber-950',
+    dot: 'bg-amber-700',
   },
   stale: {
     bg: 'bg-gray-300',
@@ -96,10 +108,22 @@ export function getStatusInlineColors(status: string): {
     blocked: { bg: '#9ca3af', border: '#6b7280', text: '#1f2937' },
     needs_input: { bg: '#fbbf24', border: '#f59e0b', text: '#451a03' },
     awaiting_approval: { bg: '#c084fc', border: '#a855f7', text: '#3b0764' },
+    fixing_with_ai: { bg: '#fb923c', border: '#f97316', text: '#431407' },
+    fix_approval: { bg: '#f59e0b', border: '#d97706', text: '#451a03' },
     stale: { bg: '#d1d5db', border: '#9ca3af', text: '#6b7280' },
   };
 
   return map[status] ?? { bg: '#e5e7eb', border: '#9ca3af', text: '#374151' };
+}
+
+/**
+ * Returns the visual status key for color lookups, accounting for
+ * AI-fix and fix-approval substates.
+ */
+export function getEffectiveVisualStatus(status: string, execution?: { isFixingWithAI?: boolean; pendingFixError?: string }): string {
+  if (status === 'running' && execution?.isFixingWithAI) return 'fixing_with_ai';
+  if (status === 'awaiting_approval' && execution?.pendingFixError) return 'fix_approval';
+  return status;
 }
 
 /** Edge styling per status — stroke width, dash pattern, and hover color. */

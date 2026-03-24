@@ -16,6 +16,7 @@ const RED = '\x1b[31m';
 const YELLOW = '\x1b[33m';
 const BLUE = '\x1b[34m';
 const CYAN = '\x1b[36m';
+const MAGENTA = '\x1b[35m';
 const DIM = '\x1b[2m';
 
 // ── Status Colors ────────────────────────────────────────────
@@ -28,6 +29,7 @@ const STATUS_COLORS: Record<TaskStatus, string> = {
   needs_input: BLUE,
   blocked: DIM,
   awaiting_approval: CYAN,
+  stale: DIM,
 };
 
 const STATUS_ICONS: Record<TaskStatus, string> = {
@@ -38,6 +40,7 @@ const STATUS_ICONS: Record<TaskStatus, string> = {
   needs_input: '?',
   blocked: '⊘',
   awaiting_approval: '⏳',
+  stale: '◌',
 };
 
 // ── Public API ───────────────────────────────────────────────
@@ -48,9 +51,12 @@ const STATUS_ICONS: Record<TaskStatus, string> = {
  * Example: "  ✓ greet — Say hello [completed]"
  */
 export function formatTaskStatus(task: TaskState): string {
-  const color = STATUS_COLORS[task.status] ?? RESET;
-  const icon = STATUS_ICONS[task.status] ?? '?';
-  return `${color}  ${icon} ${BOLD}${task.id}${RESET}${color} — ${task.description} [${task.status}]${RESET}`;
+  const isFixing = task.status === 'running' && task.execution.isFixingWithAI;
+  const isFixApproval = task.status === 'awaiting_approval' && task.execution.pendingFixError;
+  const color = isFixing ? MAGENTA : isFixApproval ? YELLOW : (STATUS_COLORS[task.status] ?? RESET);
+  const icon = isFixing ? '🔧' : isFixApproval ? '🔧' : (STATUS_ICONS[task.status] ?? '?');
+  const label = isFixing ? 'fixing_with_ai' : isFixApproval ? 'fix_approval' : task.status;
+  return `${color}  ${icon} ${BOLD}${task.id}${RESET}${color} — ${task.description} [${label}]${RESET}`;
 }
 
 /**
