@@ -1,4 +1,5 @@
 {
+  "allowGraphMutation": true,
   "defaultBranch": "master",
   "planningTimeoutMs": 3600000,
   "maxConcurrency": 6,
