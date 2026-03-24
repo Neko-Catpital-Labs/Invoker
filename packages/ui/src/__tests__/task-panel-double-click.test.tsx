@@ -661,6 +661,114 @@ describe('TaskPanel double-click editing', () => {
 
       expect(screen.getByTestId('executor-type-select')).toHaveValue('worktree');
     });
+
+    it('renders SSH remote target options when remoteTargets are provided', () => {
+      const task = makeTask({ command: 'echo test', status: 'pending' });
+      render(
+        <TaskPanel
+          task={task}
+          remoteTargets={['do-droplet', 'aws-instance']}
+          onProvideInput={mockOnProvideInput}
+          onApprove={mockOnApprove}
+          onReject={mockOnReject}
+          onSelectExperiment={mockOnSelectExperiment}
+          onEditCommand={mockOnEditCommand}
+          onEditType={vi.fn()}
+        />,
+      );
+
+      const select = screen.getByTestId('executor-type-select');
+      const options = select.querySelectorAll('option');
+      expect(options).toHaveLength(4);
+      expect(options[2]).toHaveValue('ssh:do-droplet');
+      expect(options[2]).toHaveTextContent('SSH: do-droplet');
+      expect(options[3]).toHaveValue('ssh:aws-instance');
+      expect(options[3]).toHaveTextContent('SSH: aws-instance');
+    });
+
+    it('does not render SSH options when remoteTargets is empty', () => {
+      const task = makeTask({ command: 'echo test', status: 'pending' });
+      render(
+        <TaskPanel
+          task={task}
+          remoteTargets={[]}
+          onProvideInput={mockOnProvideInput}
+          onApprove={mockOnApprove}
+          onReject={mockOnReject}
+          onSelectExperiment={mockOnSelectExperiment}
+          onEditCommand={mockOnEditCommand}
+          onEditType={vi.fn()}
+        />,
+      );
+
+      const select = screen.getByTestId('executor-type-select');
+      const options = select.querySelectorAll('option');
+      expect(options).toHaveLength(2);
+    });
+
+    it('selects SSH target when task has familiarType=ssh and remoteTargetId', () => {
+      const task = makeTask({
+        command: 'echo test',
+        status: 'pending',
+        config: { command: 'echo test', familiarType: 'ssh', remoteTargetId: 'do-droplet' } as TaskState['config'],
+      });
+      render(
+        <TaskPanel
+          task={task}
+          remoteTargets={['do-droplet']}
+          onProvideInput={mockOnProvideInput}
+          onApprove={mockOnApprove}
+          onReject={mockOnReject}
+          onSelectExperiment={mockOnSelectExperiment}
+          onEditCommand={mockOnEditCommand}
+          onEditType={vi.fn()}
+        />,
+      );
+
+      expect(screen.getByTestId('executor-type-select')).toHaveValue('ssh:do-droplet');
+    });
+
+    it('calls onEditType with ssh and remoteTargetId when SSH option selected', () => {
+      const task = makeTask({ command: 'echo test', status: 'pending' });
+      const mockOnEditType = vi.fn();
+      render(
+        <TaskPanel
+          task={task}
+          remoteTargets={['do-droplet']}
+          onProvideInput={mockOnProvideInput}
+          onApprove={mockOnApprove}
+          onReject={mockOnReject}
+          onSelectExperiment={mockOnSelectExperiment}
+          onEditCommand={mockOnEditCommand}
+          onEditType={mockOnEditType}
+        />,
+      );
+
+      const select = screen.getByTestId('executor-type-select');
+      fireEvent.change(select, { target: { value: 'ssh:do-droplet' } });
+      expect(mockOnEditType).toHaveBeenCalledWith('test-task-1', 'ssh', 'do-droplet');
+    });
+
+    it('calls onEditType without remoteTargetId when non-SSH option selected', () => {
+      const task = makeTask({ command: 'echo test', status: 'pending' });
+      const mockOnEditType = vi.fn();
+      render(
+        <TaskPanel
+          task={task}
+          remoteTargets={['do-droplet']}
+          onProvideInput={mockOnProvideInput}
+          onApprove={mockOnApprove}
+          onReject={mockOnReject}
+          onSelectExperiment={mockOnSelectExperiment}
+          onEditCommand={mockOnEditCommand}
+          onEditType={mockOnEditType}
+        />,
+      );
+
+      const select = screen.getByTestId('executor-type-select');
+      fireEvent.change(select, { target: { value: 'docker' } });
+      expect(mockOnEditType).toHaveBeenCalledWith('test-task-1', 'docker');
+    });
   });
 
   describe('PR URL display for merge gates', () => {

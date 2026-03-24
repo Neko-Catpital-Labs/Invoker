@@ -8,7 +8,7 @@ interface ScriptedResponse {
 }
 
 /**
- * Scriptable git mock that records all execGit calls and lets you
+ * Scriptable git mock that records all git calls and lets you
  * script success/failure responses per command pattern.
  *
  * Usage:
@@ -69,11 +69,21 @@ export class MockGit {
     return this;
   }
 
-  /** Replace execGit on a TaskExecutor instance. */
+  /** Replace execGitReadonly, execGitIn, and worktree methods on a TaskExecutor instance. */
   install(executor: TaskExecutor): void {
-    (executor as any).execGit = async (args: string[]) => {
+    (executor as any).execGitReadonly = async (args: string[]) => {
       this.calls.push([...args]);
       return this.resolve(args);
+    };
+    (executor as any).execGitIn = async (args: string[], _dir: string) => {
+      this.calls.push([...args]);
+      return this.resolve(args);
+    };
+    (executor as any).createMergeWorktree = async (_ref: string, _label: string) => {
+      return '/tmp/mock-merge-worktree';
+    };
+    (executor as any).removeMergeWorktree = async (_dir: string) => {
+      // no-op in tests
     };
   }
 

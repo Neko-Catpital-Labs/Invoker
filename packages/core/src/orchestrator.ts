@@ -877,7 +877,7 @@ export class Orchestrator {
    * Change a task's executor type (familiarType) and restart it.
    * Does NOT fork the dirty subtree.
    */
-  editTaskType(taskId: string, familiarType: string): TaskState[] {
+  editTaskType(taskId: string, familiarType: string, remoteTargetId?: string): TaskState[] {
     this.refreshFromDb();
     const task = this.stateMachine.getTask(taskId);
     if (!task) throw new Error(`Task ${taskId} not found`);
@@ -885,7 +885,13 @@ export class Orchestrator {
     if (task.status === 'running') throw new Error(`Cannot edit running task ${taskId}`);
 
     const effectiveType = normalizeFamiliarType(familiarType) ?? familiarType;
-    const typeChanges: TaskStateChanges = { config: { familiarType: effectiveType } };
+    const configPatch: Record<string, unknown> = { familiarType: effectiveType };
+    if (effectiveType === 'ssh') {
+      configPatch.remoteTargetId = remoteTargetId;
+    } else {
+      configPatch.remoteTargetId = undefined;
+    }
+    const typeChanges: TaskStateChanges = { config: configPatch };
     this.writeAndSync(taskId, typeChanges);
     const typeDelta: TaskDelta = { type: 'updated', taskId, changes: typeChanges };
     this.persistence.logEvent?.(taskId, 'task.updated', typeChanges);
@@ -1080,6 +1086,97 @@ export class Orchestrator {
 
   getWorkflowIds(): string[] {
     return Array.from(this.activeWorkflowIds);
+  }
+
+  /**
+   * Cancel a task and cascade-cancel all downstream DAG dependents.
+   * Returns cancelled task IDs and which were running (need process kill by caller).
+   */
+  cancelTask(taskId: string): { cancelled: string[]; runningCancelled: string[] } {
+    this.refreshFromDb();
+
+    const task = this.stateMachine.getTask(taskId);
+    if (!task) throw new Error(`Task "${taskId}" not found`);
+
+    const terminal = new Set(['completed', 'stale']);
+    if (terminal.has(task.status)) {
+      throw new Error(`Task "${taskId}" is already ${task.status}`);
+    }
+
+    // Find all transitive dependents, skipping completed/stale
+    const allTasks = this.stateMachine.getAllTasks();
+    const taskMap = new Map(allTasks.map(t => [t.id, t]));
+    const descendantIds = getTransitiveDependents(
+      taskId,
+      taskMap,
+      (t) => t.status === 'completed' || t.status === 'stale',
+    );
+
+    const toCancelIds = [taskId, ...descendantIds];
+    const cancelled: string[] = [];
+    const runningCancelled: string[] = [];
+
+    for (const id of toCancelIds) {
+      const t = this.stateMachine.getTask(id);
+      if (!t || t.status === 'completed' || t.status === 'stale') continue;
+
+      const wasRunning = t.status === 'running';
+
+      // Free scheduler slot
+      if (wasRunning) {
+        this.scheduler.completeJob(id);
+        runningCancelled.push(id);
+      } else {
+        this.scheduler.removeJob(id);
+      }
+
+      // Mark as failed
+      const errorMsg = id === taskId
+        ? 'Cancelled by user'
+        : `Cancelled: upstream task "${taskId}" was cancelled`;
+      const changes: TaskStateChanges = {
+        status: 'failed',
+        execution: { error: errorMsg, completedAt: new Date() },
+      };
+      this.writeAndSync(id, changes);
+      const delta: TaskDelta = { type: 'updated', taskId: id, changes };
+      this.persistence.logEvent?.(id, 'task.cancelled', changes);
+      this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
+
+      cancelled.push(id);
+    }
+
+    this.checkWorkflowCompletion();
+    return { cancelled, runningCancelled };
+  }
+
+  /**
+   * Get detailed queue status with task metadata for display.
+   */
+  getQueueStatus(): {
+    maxUtilization: number;
+    runningUtilization: number;
+    running: Array<{ taskId: string; utilization: number; description: string }>;
+    queued: Array<{ taskId: string; priority: number; utilization: number; description: string }>;
+  } {
+    const status = this.scheduler.getStatus();
+    const runningJobs = this.scheduler.getRunningJobs();
+    const queuedJobs = this.scheduler.getQueuedJobs();
+
+    return {
+      maxUtilization: status.maxUtilization,
+      runningUtilization: status.runningUtilization,
+      running: runningJobs.map(j => ({
+        ...j,
+        description: this.stateMachine.getTask(j.taskId)?.description ?? '',
+      })),
+      queued: queuedJobs.map(j => ({
+        taskId: j.taskId,
+        priority: j.priority,
+        utilization: j.utilization ?? 50,
+        description: this.stateMachine.getTask(j.taskId)?.description ?? '',
+      })),
+    };
   }
 
   // ── Private: Response Handling ─────────────────────────────

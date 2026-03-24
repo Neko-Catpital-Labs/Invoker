@@ -1,5 +1,12 @@
 {
   "defaultBranch": "master",
   "planningTimeoutMs": 3600000,
-  "maxConcurrency": 6
+  "maxConcurrency": 6,
+  "remoteTargets": {
+    "do-droplet": {
+      "host": "178.128.181.133",
+      "user": "root",
+      "sshKeyPath": "/home/edbert-chan/.ssh/id_ed25519"
+    }
+  }
 }

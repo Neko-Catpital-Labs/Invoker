@@ -142,8 +142,9 @@ export function editTaskType(
   taskId: string,
   familiarType: string,
   deps: Pick<ActionDeps, 'orchestrator'>,
+  remoteTargetId?: string,
 ): TaskState[] {
-  return deps.orchestrator.editTaskType(taskId, familiarType);
+  return deps.orchestrator.editTaskType(taskId, familiarType, remoteTargetId);
 }
 
 export function selectExperiment(

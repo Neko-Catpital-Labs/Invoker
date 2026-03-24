@@ -145,6 +145,12 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
     case 'audit':
       await headlessAudit(args[1], deps);
       break;
+    case 'cancel':
+      await headlessCancel(args[1], deps);
+      break;
+    case 'queue':
+      await headlessQueue(deps);
+      break;
     case 'query-select':
       await headlessQuerySelect(args[1], deps);
       break;
@@ -181,6 +187,8 @@ ${BOLD}Usage:${RESET}
   electron dist/main.js --headless restart <id>       Restart a failed/stuck task
   electron dist/main.js --headless fix <taskId>       Fix a failed task with Claude
   electron dist/main.js --headless edit <id> <cmd>    Edit task command and re-run
+  electron dist/main.js --headless cancel <taskId>    Cancel task + all downstream
+  electron dist/main.js --headless queue              Show queue status & utilization
   electron dist/main.js --headless audit <taskId>     Print event history
   electron dist/main.js --headless slack              Start Slack bot (long-running)
 
@@ -432,6 +440,27 @@ async function headlessAudit(taskId: string | undefined, deps: Pick<HeadlessDeps
   if (!taskId) throw new Error('Usage: --headless audit <taskId>');
   const events = deps.persistence.getEvents(taskId);
   console.log(formatEventLog(events));
+}
+
+async function headlessCancel(taskId: string, deps: HeadlessDeps): Promise<void> {
+  if (!taskId) throw new Error('Missing taskId. Usage: --headless cancel <taskId>');
+  restoreWorkflowForTask(taskId, deps);
+
+  const result = deps.orchestrator.cancelTask(taskId);
+  console.log(`Cancelled ${result.cancelled.length} task(s): [${result.cancelled.join(', ')}]`);
+  if (result.runningCancelled.length > 0) {
+    console.log(`Killed running: [${result.runningCancelled.join(', ')}]`);
+  }
+}
+
+async function headlessQueue(deps: HeadlessDeps): Promise<void> {
+  const { formatQueueStatus } = await import('./formatter.js');
+  const workflows = deps.persistence.listWorkflows();
+  if (workflows.length > 0) {
+    deps.orchestrator.resumeWorkflow(workflows[0].id);
+  }
+  const status = deps.orchestrator.getQueueStatus();
+  console.log(formatQueueStatus(status));
 }
 
 async function headlessSlack(deps: HeadlessDeps): Promise<void> {

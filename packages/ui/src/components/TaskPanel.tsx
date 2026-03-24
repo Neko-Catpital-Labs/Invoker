@@ -25,12 +25,13 @@ function formatElapsed(dateVal: Date | string | undefined): string {
 interface TaskPanelProps {
   task: TaskState | null;
   baseBranch?: string;
+  remoteTargets?: string[];
   onProvideInput: (task: TaskState) => void;
   onApprove: (task: TaskState) => void;
   onReject: (task: TaskState) => void;
   onSelectExperiment: (task: TaskState) => void;
   onEditCommand?: (taskId: string, newCommand: string) => void;
-  onEditType?: (taskId: string, familiarType: string) => void;
+  onEditType?: (taskId: string, familiarType: string, remoteTargetId?: string) => void;
   onSetMergeBranch?: (workflowId: string, baseBranch: string) => Promise<void>;
   mergeMode?: string;
   onSetMergeMode?: (workflowId: string, mergeMode: string) => Promise<void>;
@@ -45,9 +46,13 @@ function formatDate(date?: Date | string): string {
 /**
  * Display value when task.config.familiarType is unset: matches orchestrator
  * loadPlan default worktree; repoUrl alone implies worktree (TaskExecutor.selectFamiliar).
+ * SSH tasks encode the remote target ID as "ssh:<targetId>" for the compound select.
  * Merge nodes hide the selector.
  */
 function effectiveExecutorSelectValue(task: TaskState): string {
+  if (task.config.familiarType === 'ssh' && task.config.remoteTargetId) {
+    return `ssh:${task.config.remoteTargetId}`;
+  }
   if (task.config.familiarType) return task.config.familiarType;
   if (task.config.repoUrl) return 'worktree';
   return 'worktree';
@@ -100,6 +105,7 @@ function HeartbeatTimingSection({ task, formatDate: fmtDate }: { task: TaskState
 export function TaskPanel({
   task,
   baseBranch,
+  remoteTargets,
   onProvideInput,
   onApprove,
   onReject,
@@ -247,13 +253,25 @@ export function TaskPanel({
           <span className="text-sm text-gray-400">Executor</span>
           <select
             value={executorSelectValue}
-            onChange={(e) => onEditType(task.id, e.target.value)}
+            onChange={(e) => {
+              const val = e.target.value;
+              if (val.startsWith('ssh:')) {
+                onEditType(task.id, 'ssh', val.slice(4));
+              } else {
+                onEditType(task.id, val);
+              }
+            }}
             disabled={task.status === 'running'}
             className="bg-gray-700 text-gray-200 text-xs rounded px-2 py-1 border border-gray-600 focus:outline-none focus:border-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
             data-testid="executor-type-select"
           >
             <option value="worktree">Worktree</option>
             <option value="docker">Docker</option>
+            {remoteTargets?.map((targetId) => (
+              <option key={targetId} value={`ssh:${targetId}`}>
+                SSH: {targetId}
+              </option>
+            ))}
           </select>
         </div>
       )}

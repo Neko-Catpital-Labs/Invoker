@@ -27,8 +27,9 @@ const api: InvokerAPI = {
     ipcRenderer.invoke('invoker:restart-task', taskId),
   editTaskCommand: (taskId, newCommand) =>
     ipcRenderer.invoke('invoker:edit-task-command', taskId, newCommand),
-  editTaskType: (taskId, familiarType) =>
-    ipcRenderer.invoke('invoker:edit-task-type', taskId, familiarType),
+  editTaskType: (taskId, familiarType, remoteTargetId?) =>
+    ipcRenderer.invoke('invoker:edit-task-type', taskId, familiarType, remoteTargetId),
+  getRemoteTargets: () => ipcRenderer.invoke('invoker:get-remote-targets'),
   replaceTask: (taskId, replacementTasks) =>
     ipcRenderer.invoke('invoker:replace-task', taskId, replacementTasks),
   onTaskDelta: (cb) => {
@@ -85,6 +86,9 @@ const api: InvokerAPI = {
     ipcRenderer.invoke('invoker:set-merge-mode', workflowId, mergeMode),
   checkPrStatuses: () => ipcRenderer.invoke('invoker:check-pr-statuses'),
   checkPrStatus: () => ipcRenderer.invoke('invoker:check-pr-status'),
+  cancelTask: (taskId: string) =>
+    ipcRenderer.invoke('invoker:cancel-task', taskId),
+  getQueueStatus: () => ipcRenderer.invoke('invoker:get-queue-status'),
 };
 
 contextBridge.exposeInMainWorld('invoker', api);

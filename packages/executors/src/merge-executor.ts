@@ -40,7 +40,10 @@ export interface MergeExecutorHost {
   readonly cwd: string;
   readonly mergeGateProvider?: MergeGateProvider;
 
-  execGit(args: string[]): Promise<string>;
+  execGitReadonly(args: string[]): Promise<string>;
+  execGitIn(args: string[], dir: string): Promise<string>;
+  createMergeWorktree(ref: string, label: string): Promise<string>;
+  removeMergeWorktree(dir: string): Promise<void>;
   execGh(args: string[]): Promise<string>;
   execPr(baseBranch: string, featureBranch: string, title: string, body?: string): Promise<string>;
   detectDefaultBranch(): Promise<string>;
@@ -226,24 +229,31 @@ export async function approveMergeImpl(
   }
 
   const summary = await host.buildMergeSummary(workflowId);
+  const mergeMessage = workflow.name ?? 'Workflow';
 
-  const originalBranch = await host.execGit(['branch', '--show-current']);
-  mergeTrace('APPROVE_MERGE_ORIGINAL_BRANCH', { workflowId, originalBranch });
-  try {
-    const mergeMessage = workflow.name ?? 'Workflow';
-    if (onFinish === 'merge') {
-      mergeTrace('GIT_CHECKOUT_BASE', { baseBranch });
-      await host.execGit(['checkout', baseBranch]);
-      mergeTrace('GIT_MERGE_SQUASH', { featureBranch });
-      await host.execGit(['merge', '--squash', featureBranch]);
+  if (onFinish === 'merge') {
+    const worktreeDir = await host.createMergeWorktree(baseBranch, 'approve-' + workflowId);
+    try {
+      mergeTrace('GIT_MERGE_SQUASH', { featureBranch, worktreeDir });
+      await host.execGitIn(['merge', '--squash', featureBranch], worktreeDir);
       mergeTrace('GIT_COMMIT', { mergeMessage });
       const commitBody = summary ? `${mergeMessage}\n\n${summary}` : mergeMessage;
-      await host.execGit(['commit', '-m', commitBody]);
+      await host.execGitIn(['commit', '-m', commitBody], worktreeDir);
+      await host.execGitIn(['update-ref', 'refs/heads/' + baseBranch, 'HEAD'], worktreeDir);
       mergeTrace('SQUASH_MERGE_COMPLETE', { featureBranch, baseBranch });
       console.log(`[merge] Approved: squash-merged ${featureBranch} into ${baseBranch}`);
-    } else if (onFinish === 'pull_request') {
-      mergeTrace('GIT_PUSH', { featureBranch });
-      await host.execGit(['push', '--force', '-u', 'origin', featureBranch]);
+    } catch (err) {
+      mergeTrace('APPROVE_MERGE_ERROR', { workflowId, error: String(err) });
+      try { await host.execGitIn(['merge', '--abort'], worktreeDir); } catch { /* no merge in progress */ }
+      throw err;
+    } finally {
+      await host.removeMergeWorktree(worktreeDir);
+    }
+  } else if (onFinish === 'pull_request') {
+    const worktreeDir = await host.createMergeWorktree(featureBranch, 'approve-pr-' + workflowId);
+    try {
+      mergeTrace('GIT_PUSH', { featureBranch, worktreeDir });
+      await host.execGitIn(['push', '--force', '-u', 'origin', featureBranch], worktreeDir);
       const prUrl = await host.execPr(baseBranch, featureBranch, mergeMessage, summary);
       mergeTrace('PR_CREATED', { featureBranch, baseBranch, prUrl });
       console.log(`[merge] Approved: created pull request ${prUrl}`);
@@ -252,12 +262,9 @@ export async function approveMergeImpl(
         config: { summary },
         execution: { prUrl },
       });
+    } finally {
+      await host.removeMergeWorktree(worktreeDir);
     }
-  } catch (err) {
-    mergeTrace('APPROVE_MERGE_ERROR', { workflowId, error: String(err) });
-    try { await host.execGit(['merge', '--abort']); } catch { /* no merge in progress */ }
-    try { await host.execGit(['checkout', originalBranch]); } catch { /* best effort */ }
-    throw err;
   }
 }
 
@@ -347,20 +354,19 @@ export async function consolidateAndMergeImpl(
   leafTaskIds?: readonly string[],
   body?: string,
 ): Promise<string | undefined> {
-  const originalBranch = await host.execGit(['branch', '--show-current']);
-  console.log(`[merge] consolidateAndMerge: featureBranch=${featureBranch}, baseBranch=${baseBranch}, originalBranch=${originalBranch}`);
+  const worktreeDir = await host.createMergeWorktree(baseBranch, 'consolidate-' + (workflowId ?? 'default'));
+  console.log(`[merge] consolidateAndMerge: featureBranch=${featureBranch}, baseBranch=${baseBranch}, worktree=${worktreeDir}`);
 
   try {
-    // Consolidate all completed task branches into featureBranch
+    // Create feature branch in worktree
     try {
-      await host.execGit(['checkout', '-b', featureBranch, baseBranch]);
+      await host.execGitIn(['checkout', '-b', featureBranch, baseBranch], worktreeDir);
       console.log(`[merge] Created ${featureBranch} from ${baseBranch}`);
     } catch {
       // Branch exists from a previous attempt — delete and recreate for a clean slate
       console.log(`[merge] WARNING: Deleting existing ${featureBranch} to recreate from ${baseBranch}`);
-      await host.execGit(['checkout', baseBranch]);
-      await host.execGit(['branch', '-D', featureBranch]);
-      await host.execGit(['checkout', '-b', featureBranch, baseBranch]);
+      await host.execGitIn(['branch', '-D', featureBranch], worktreeDir);
+      await host.execGitIn(['checkout', '-b', featureBranch, baseBranch], worktreeDir);
       console.log(`[merge] Recreated ${featureBranch} from ${baseBranch}`);
     }
 
@@ -380,34 +386,37 @@ export async function consolidateAndMergeImpl(
       const task = allTasks.find(t => t.execution.branch === branch);
       const desc = task?.description ?? '';
       const mergeMsg = desc ? `Merge ${branch} — ${desc}` : `Merge ${branch}`;
-      await host.execGit(['merge', '--no-ff', '-m', mergeMsg, branch]);
+      await host.execGitIn(['merge', '--no-ff', '-m', mergeMsg, branch], worktreeDir);
     }
     console.log(`[merge] Consolidated ${taskBranches.length} task branches into ${featureBranch}`);
 
     const mergeMessage = workflowName ?? 'Workflow';
 
     if (onFinish === 'merge') {
-      await host.execGit(['checkout', baseBranch]);
-      await host.execGit(['merge', '--squash', featureBranch]);
-      const hasChanges = await host.execGit(['diff', '--cached', '--quiet'])
+      // Detach at baseBranch and squash merge
+      await host.execGitIn(['checkout', '--detach', baseBranch], worktreeDir);
+      await host.execGitIn(['merge', '--squash', featureBranch], worktreeDir);
+      const hasChanges = await host.execGitIn(['diff', '--cached', '--quiet'], worktreeDir)
         .then(() => false)
         .catch(() => true);
       if (hasChanges) {
         const commitBody = body ? `${mergeMessage}\n\n${body}` : mergeMessage;
-        await host.execGit(['commit', '-m', commitBody]);
+        await host.execGitIn(['commit', '-m', commitBody], worktreeDir);
+        await host.execGitIn(['update-ref', 'refs/heads/' + baseBranch, 'HEAD'], worktreeDir);
         console.log(`[merge] Squash-merged ${featureBranch} into ${baseBranch}`);
       } else {
         console.log(`[merge] No changes to commit — ${baseBranch} already up-to-date with ${featureBranch}`);
       }
     } else if (onFinish === 'pull_request') {
-      await host.execGit(['push', '--force', '-u', 'origin', featureBranch]);
+      await host.execGitIn(['push', '--force', '-u', 'origin', featureBranch], worktreeDir);
       const prUrl = await host.execPr(baseBranch, featureBranch, workflowName ?? 'Workflow', body);
       console.log(`[merge] Created pull request: ${prUrl}`);
       return prUrl;
     }
   } catch (err) {
-    try { await host.execGit(['merge', '--abort']); } catch { /* no merge in progress */ }
-    try { await host.execGit(['checkout', originalBranch]); } catch { /* best effort */ }
+    try { await host.execGitIn(['merge', '--abort'], worktreeDir); } catch { /* no merge in progress */ }
     throw err;
+  } finally {
+    await host.removeMergeWorktree(worktreeDir);
   }
 }

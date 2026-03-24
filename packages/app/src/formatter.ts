@@ -119,3 +119,65 @@ export function formatEventLog(events: TaskEvent[]): string {
 
   return lines.join('\n');
 }
+
+/**
+ * Format queue status showing utilization and running/queued tasks.
+ *
+ * Example output:
+ * ```
+ * Utilization: 75/100 (75%)
+ *
+ * Running (2):
+ *   ● task-a — Run tests [util: 50]
+ *   ● task-b — Build frontend [util: 25]
+ *
+ * Queued (1):
+ *   ○ task-c — Deploy staging [util: 50, pri: 0]
+ * ```
+ */
+export function formatQueueStatus(status: {
+  maxUtilization: number;
+  runningUtilization: number;
+  running: Array<{ taskId: string; utilization: number; description: string }>;
+  queued: Array<{ taskId: string; priority: number; utilization: number; description: string }>;
+}): string {
+  const utilizationPct = status.maxUtilization > 0
+    ? Math.round((status.runningUtilization / status.maxUtilization) * 100)
+    : 0;
+
+  const lines: string[] = [];
+
+  // Utilization header
+  lines.push(
+    `${BOLD}Utilization:${RESET} ${status.runningUtilization}/${status.maxUtilization} (${utilizationPct}%)`,
+  );
+  lines.push('');
+
+  // Running section
+  lines.push(`${BOLD}${YELLOW}Running (${status.running.length}):${RESET}`);
+  if (status.running.length === 0) {
+    lines.push(`${DIM}  (none)${RESET}`);
+  } else {
+    for (const task of status.running) {
+      lines.push(
+        `${YELLOW}  ● ${BOLD}${task.taskId}${RESET}${YELLOW} — ${task.description} ${DIM}[util: ${task.utilization}]${RESET}`,
+      );
+    }
+  }
+  lines.push('');
+
+  // Queued section
+  lines.push(`${BOLD}${CYAN}Queued (${status.queued.length}):${RESET}`);
+  if (status.queued.length === 0) {
+    lines.push(`${DIM}  (none)${RESET}`);
+  } else {
+    for (const task of status.queued) {
+      lines.push(
+        `${CYAN}  ○ ${BOLD}${task.taskId}${RESET}${CYAN} — ${task.description} ${DIM}[util: ${task.utilization}, pri: ${task.priority}]${RESET}`,
+      );
+    }
+  }
+  lines.push('');
+
+  return lines.join('\n');
+}

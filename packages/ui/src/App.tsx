@@ -44,6 +44,11 @@ export function App() {
   const [onFinish, setOnFinish] = useState<'none' | 'merge' | 'pull_request'>('merge');
   const [viewMode, setViewMode] = useState<'dag' | 'history' | 'timeline'>('dag');
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; task: TaskState } | null>(null);
+  const [remoteTargets, setRemoteTargets] = useState<string[]>([]);
+
+  useEffect(() => {
+    window.invoker?.getRemoteTargets?.().then(setRemoteTargets).catch(() => {});
+  }, []);
 
   const selectedTask = selectedTaskId ? tasks.get(selectedTaskId) ?? null : null;
 
@@ -290,10 +295,10 @@ export function App() {
 
   // ── Edit task executor type ───────────────────────────────
   const handleEditType = useCallback(
-    async (taskId: string, familiarType: string) => {
+    async (taskId: string, familiarType: string, remoteTargetId?: string) => {
       if (!invoker) return;
       try {
-        await invoker.editTaskType(taskId, familiarType);
+        await invoker.editTaskType(taskId, familiarType, remoteTargetId);
       } catch (err) {
         console.error('Failed to edit task type:', err);
       }
@@ -367,6 +372,7 @@ export function App() {
               task={selectedTask}
               baseBranch={selectedTask?.config.workflowId ? workflows.get(selectedTask.config.workflowId)?.baseBranch : undefined}
               mergeMode={selectedTask?.config.workflowId ? workflows.get(selectedTask.config.workflowId)?.mergeMode : undefined}
+              remoteTargets={remoteTargets}
               onProvideInput={openInputModal}
               onApprove={openApprovalModal}
               onReject={(task) => {

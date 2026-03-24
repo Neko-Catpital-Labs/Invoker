@@ -28,6 +28,7 @@ export interface ApiServerDeps {
   familiarRegistry: FamiliarRegistry;
   taskExecutor: TaskExecutor;
   killRunningTask?: (taskId: string) => Promise<void>;
+  cancelTask?: (taskId: string) => Promise<{ cancelled: string[]; runningCancelled: string[] }>;
 }
 
 export interface ApiServer {
@@ -82,7 +83,7 @@ function serializeTask(task: any): any {
 }
 
 export function startApiServer(deps: ApiServerDeps): ApiServer {
-  const { orchestrator, persistence, familiarRegistry, taskExecutor, killRunningTask } = deps;
+  const { orchestrator, persistence, familiarRegistry, taskExecutor, killRunningTask, cancelTask } = deps;
   const port = parseInt(process.env.INVOKER_API_PORT ?? '4100', 10);
 
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
@@ -130,24 +131,18 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
       const cancelMatch = path.match(/^\/api\/tasks\/([^/]+)\/cancel$/);
       if (method === 'POST' && cancelMatch) {
         const taskId = decodeURIComponent(cancelMatch[1]);
-        const task = orchestrator.getTask(taskId);
-        if (!task) {
-          json(res, 404, { error: `Task "${taskId}" not found` });
-          return;
+        try {
+          if (!cancelTask) {
+            json(res, 501, { error: 'Cancel not available' });
+            return;
+          }
+          const result = await cancelTask(taskId);
+          json(res, 200, { ok: true, ...result });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          const statusCode = message.includes('not found') ? 404 : 400;
+          json(res, statusCode, { error: message });
         }
-        if (task.status !== 'running') {
-          json(res, 400, { error: `Task "${taskId}" is not running (status: ${task.status})` });
-          return;
-        }
-        // Kill via familiar and mark as failed
-        await Promise.all(familiarRegistry.getAll().map(f => f.destroyAll()));
-        orchestrator.handleWorkerResponse({
-          requestId: `api-cancel-${taskId}`,
-          actionId: taskId,
-          status: 'failed',
-          outputs: { exitCode: 1, error: 'Cancelled via API' },
-        });
-        json(res, 200, { ok: true, taskId, action: 'cancelled' });
         return;
       }
 
@@ -203,6 +198,13 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
         } catch (err) {
           json(res, 400, { error: err instanceof Error ? err.message : String(err) });
         }
+        return;
+      }
+
+      // GET /api/queue
+      if (method === 'GET' && path === '/api/queue') {
+        const queueStatus = orchestrator.getQueueStatus();
+        json(res, 200, queueStatus);
         return;
       }
 

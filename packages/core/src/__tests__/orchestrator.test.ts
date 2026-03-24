@@ -1593,6 +1593,46 @@ describe('Orchestrator', () => {
       expect(persisted).toBeDefined();
       expect(persisted?.task.config.familiarType).toBe('worktree');
     });
+
+    it('persists remoteTargetId when switching to ssh', () => {
+      orchestrator.loadPlan({
+        name: 'edit-type-ssh',
+        tasks: [{ id: 't1', description: 'Task 1', command: 'echo hello', familiarType: 'worktree' }],
+      });
+      orchestrator.startExecution();
+
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 't1', status: 'failed', outputs: { exitCode: 1, error: 'fail' } }),
+      );
+
+      orchestrator.editTaskType('t1', 'ssh', 'do-droplet');
+
+      const task = orchestrator.getTask('t1');
+      expect(task?.config.familiarType).toBe('ssh');
+      expect(task?.config.remoteTargetId).toBe('do-droplet');
+
+      const persisted = persistence.tasks.get('t1');
+      expect(persisted?.task.config.familiarType).toBe('ssh');
+      expect(persisted?.task.config.remoteTargetId).toBe('do-droplet');
+    });
+
+    it('clears remoteTargetId when switching away from ssh', () => {
+      orchestrator.loadPlan({
+        name: 'edit-type-clear-remote',
+        tasks: [{ id: 't1', description: 'Task 1', command: 'echo hello', familiarType: 'ssh', remoteTargetId: 'do-droplet' }],
+      });
+      orchestrator.startExecution();
+
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 't1', status: 'failed', outputs: { exitCode: 1, error: 'fail' } }),
+      );
+
+      orchestrator.editTaskType('t1', 'worktree');
+
+      const task = orchestrator.getTask('t1');
+      expect(task?.config.familiarType).toBe('worktree');
+      expect(task?.config.remoteTargetId).toBeUndefined();
+    });
   });
 
   // ── Scheduler queue drain ──────────────────────────────

@@ -22,7 +22,10 @@ export interface ConflictResolverHost {
   readonly persistence: SQLiteAdapter;
   readonly cwd: string;
 
-  execGit(args: string[], cwd?: string): Promise<string>;
+  execGitReadonly(args: string[], cwd?: string): Promise<string>;
+  execGitIn(args: string[], dir: string): Promise<string>;
+  createMergeWorktree(ref: string, label: string): Promise<string>;
+  removeMergeWorktree(dir: string): Promise<void>;
   spawnClaudeFix(prompt: string, cwd: string): Promise<{ stdout: string; sessionId: string }>;
 }
 
@@ -55,13 +58,17 @@ export async function resolveConflictWithClaudeImpl(
   }
 
   const taskBranch = task.execution.branch ?? `invoker/${taskId}`;
-  const cwd = task.execution.workspacePath ?? host.cwd;
-  const originalBranch = await host.execGit(['branch', '--show-current'], cwd);
+  const cwd = task.execution.workspacePath;
+  if (!cwd) {
+    throw new Error(`Task ${taskId} has no workspacePath — cannot resolve conflict outside a worktree`);
+  }
+
+  const originalBranch = await host.execGitIn(['branch', '--show-current'], cwd);
 
   try {
     // Checkout the task branch
     try {
-      await host.execGit(['checkout', taskBranch], cwd);
+      await host.execGitIn(['checkout', taskBranch], cwd);
     } catch {
       throw new Error(`Cannot checkout task branch ${taskBranch}`);
     }
@@ -72,7 +79,7 @@ export async function resolveConflictWithClaudeImpl(
       const conflictMergeMsg = depTask?.description
         ? `Merge upstream ${conflictInfo.failedBranch} — ${depTask.description}`
         : `Merge upstream ${conflictInfo.failedBranch}`;
-      await host.execGit(['merge', '--no-edit', '-m', conflictMergeMsg, conflictInfo.failedBranch], cwd);
+      await host.execGitIn(['merge', '--no-edit', '-m', conflictMergeMsg, conflictInfo.failedBranch], cwd);
       console.log(`[resolveConflict] Merge succeeded without conflict on retry for ${taskId}`);
     } catch {
       // Expected: conflict reproduced — now spawn Claude to resolve it
@@ -109,8 +116,8 @@ export async function resolveConflictWithClaudeImpl(
     console.log(`[resolveConflict] Successfully resolved conflict for ${taskId}`);
   } catch (err) {
     // Clean up on failure
-    try { await host.execGit(['merge', '--abort'], cwd); } catch { /* no merge in progress */ }
-    try { await host.execGit(['checkout', originalBranch], cwd); } catch { /* best effort */ }
+    try { await host.execGitIn(['merge', '--abort'], cwd); } catch { /* no merge in progress */ }
+    try { await host.execGitIn(['checkout', originalBranch], cwd); } catch { /* best effort */ }
     throw err;
   }
 }

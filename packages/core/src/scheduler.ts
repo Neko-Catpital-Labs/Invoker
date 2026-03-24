@@ -119,4 +119,27 @@ export class TaskScheduler {
   getRunningTaskIds(): string[] {
     return Array.from(this.running);
   }
+
+  /** Return a shallow copy of the internal queue (not-yet-running jobs). */
+  getQueuedJobs(): TaskJob[] {
+    return [...this.queue];
+  }
+
+  /** Find and remove a job from the queue by taskId. Returns true if found and removed, false otherwise. */
+  removeJob(taskId: string): boolean {
+    const index = this.queue.findIndex(job => job.taskId === taskId);
+    if (index === -1) {
+      return false;
+    }
+    this.queue.splice(index, 1);
+    return true;
+  }
+
+  /** Return running tasks with their utilization values. */
+  getRunningJobs(): Array<{ taskId: string; utilization: number }> {
+    return Array.from(this.running).map(taskId => ({
+      taskId,
+      utilization: this.taskUtilizations.get(taskId) ?? 0,
+    }));
+  }
 }

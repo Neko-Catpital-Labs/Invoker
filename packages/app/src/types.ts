@@ -84,7 +84,8 @@ export interface InvokerAPI {
   selectExperiment: (taskId: string, experimentId: string | string[]) => Promise<void>;
   restartTask: (taskId: string) => Promise<void>;
   editTaskCommand: (taskId: string, newCommand: string) => Promise<void>;
-  editTaskType: (taskId: string, familiarType: string) => Promise<void>;
+  editTaskType: (taskId: string, familiarType: string, remoteTargetId?: string) => Promise<void>;
+  getRemoteTargets: () => Promise<string[]>;
   replaceTask: (taskId: string, replacementTasks: TaskReplacementDef[]) => Promise<TaskState[]>;
   onTaskDelta: (cb: (delta: TaskDelta) => void) => () => void;
   onTaskOutput: (cb: (data: TaskOutputData) => void) => () => void;
@@ -128,6 +129,17 @@ export interface InvokerAPI {
   setMergeMode: (workflowId: string, mergeMode: string) => Promise<void>;
   checkPrStatuses: () => Promise<void>;
   checkPrStatus: () => Promise<void>;
+
+  // Cancel task with DAG cascade
+  cancelTask: (taskId: string) => Promise<{ cancelled: string[]; runningCancelled: string[] }>;
+
+  // Queue status with utilization details
+  getQueueStatus: () => Promise<{
+    maxUtilization: number;
+    runningUtilization: number;
+    running: Array<{ taskId: string; utilization: number; description: string }>;
+    queued: Array<{ taskId: string; priority: number; utilization: number; description: string }>;
+  }>;
 }
 
 // ── Augment global Window ────────────────────────────────────

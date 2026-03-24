@@ -369,13 +369,21 @@ describe('TaskExecutor', () => {
     it('returns branch from git symbolic-ref when available', async () => {
       const executor = createExecutorWithTasks(new Map());
 
-      const origExecGit = (executor as any).execGit.bind(executor);
-      (executor as any).execGit = async (args: string[]) => {
+      const origExecGitReadonly = (executor as any).execGitReadonly.bind(executor);
+      (executor as any).execGitReadonly = async (args: string[], cwd?: string) => {
         if (args.includes('symbolic-ref')) {
           return 'refs/remotes/origin/master';
         }
-        return origExecGit(args);
+        return origExecGitReadonly(args);
       };
+      (executor as any).execGitIn = async (args: string[], _dir: string) => {
+        if (args.includes('symbolic-ref')) {
+          return 'refs/remotes/origin/master';
+        }
+        return origExecGitReadonly(args);
+      };
+      (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
+      (executor as any).removeMergeWorktree = async () => {};
 
       const branch = await executor.detectDefaultBranch();
       expect(branch).toBe('master');
@@ -384,7 +392,7 @@ describe('TaskExecutor', () => {
     it('falls back to main when symbolic-ref fails but main exists', async () => {
       const executor = createExecutorWithTasks(new Map());
 
-      (executor as any).execGit = async (args: string[]) => {
+      (executor as any).execGitReadonly = async (args: string[], cwd?: string) => {
         if (args.includes('symbolic-ref')) {
           throw new Error('not set');
         }
@@ -393,6 +401,17 @@ describe('TaskExecutor', () => {
         }
         throw new Error('unexpected');
       };
+      (executor as any).execGitIn = async (args: string[], _dir: string) => {
+        if (args.includes('symbolic-ref')) {
+          throw new Error('not set');
+        }
+        if (args.includes('rev-parse') && args.includes('main')) {
+          return 'abc123';
+        }
+        throw new Error('unexpected');
+      };
+      (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
+      (executor as any).removeMergeWorktree = async () => {};
 
       const branch = await executor.detectDefaultBranch();
       expect(branch).toBe('main');
@@ -401,16 +420,21 @@ describe('TaskExecutor', () => {
     it('falls back to master when both symbolic-ref and main fail', async () => {
       const executor = createExecutorWithTasks(new Map());
 
-      (executor as any).execGit = async () => {
+      (executor as any).execGitReadonly = async () => {
         throw new Error('not found');
       };
+      (executor as any).execGitIn = async (_args: string[], _dir: string) => {
+        throw new Error('not found');
+      };
+      (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
+      (executor as any).removeMergeWorktree = async () => {};
 
       const branch = await executor.detectDefaultBranch();
       expect(branch).toBe('master');
     });
   });
 
-  describe('execGit error format', () => {
+  describe('execGitReadonly error format', () => {
     it('includes stdout in error message when present', async () => {
       const spawn = await import('child_process').then(m => m.spawn);
       vi.mock('child_process', async (importOriginal) => {
@@ -426,8 +450,8 @@ describe('TaskExecutor', () => {
       fakeChild.stdout = stdoutEmitter;
       fakeChild.stderr = stderrEmitter;
 
-      const origExecGit = (executor as any).execGit.bind(executor);
-      (executor as any).execGit = (args: string[]) => {
+      const origExecGitReadonly = (executor as any).execGitReadonly.bind(executor);
+      (executor as any).execGitReadonly = (args: string[]) => {
         return new Promise((_resolve, reject) => {
           if (args[0] === 'merge') {
             reject(new Error(
@@ -438,9 +462,22 @@ describe('TaskExecutor', () => {
           }
         });
       };
+      (executor as any).execGitIn = (args: string[], _dir: string) => {
+        return new Promise((_resolve, reject) => {
+          if (args[0] === 'merge') {
+            reject(new Error(
+              `git ${args.join(' ')} failed (code 1): Auto-merging file.txt\nCONFLICT (content): Merge conflict in file.txt`
+            ));
+          } else {
+            _resolve('ok');
+          }
+        });
+      };
+      (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
+      (executor as any).removeMergeWorktree = async () => {};
 
       try {
-        await (executor as any).execGit(['merge', '--no-ff', 'some-branch']);
+        await (executor as any).execGitReadonly(['merge', '--no-ff', 'some-branch']);
         expect.fail('should have thrown');
       } catch (err: any) {
         expect(err.message).toContain('CONFLICT');
@@ -479,7 +516,7 @@ describe('TaskExecutor', () => {
       });
 
       const gitCalls: string[][] = [];
-      (executor as any).execGit = async (args: string[]) => {
+      (executor as any).execGitReadonly = async (args: string[], cwd?: string) => {
         gitCalls.push(args);
         if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
         if (args[0] === 'checkout' && args[1] === '-b') return '';
@@ -488,6 +525,17 @@ describe('TaskExecutor', () => {
         }
         return '';
       };
+      (executor as any).execGitIn = async (args: string[], _dir: string) => {
+        gitCalls.push(args);
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        if (args[0] === 'checkout' && args[1] === '-b') return '';
+        if (args[0] === 'merge' && args.includes('--no-ff')) {
+          throw new Error('git merge --no-ff failed (code 1): CONFLICT (content): file.txt');
+        }
+        return '';
+      };
+      (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
+      (executor as any).removeMergeWorktree = async () => {};
 
       const mergeTask = makeTask({
         id: '__merge__wf-1',
@@ -500,9 +548,6 @@ describe('TaskExecutor', () => {
 
       const mergeAbortCall = gitCalls.find(c => c[0] === 'merge' && c[1] === '--abort');
       expect(mergeAbortCall).toBeDefined();
-
-      const checkoutOriginal = gitCalls.filter(c => c[0] === 'checkout' && c[1] === 'master');
-      expect(checkoutOriginal.length).toBeGreaterThanOrEqual(1);
 
       expect(onComplete).toHaveBeenCalledWith(
         '__merge__wf-1',
@@ -545,7 +590,7 @@ describe('TaskExecutor', () => {
 
       const gitCalls: string[][] = [];
       let checkoutNewBranchAttempt = 0;
-      (executor as any).execGit = async (args: string[]) => {
+      (executor as any).execGitReadonly = async (args: string[], cwd?: string) => {
         gitCalls.push(args);
         if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
         if (args[0] === 'checkout' && args[1] === '-b') {
@@ -561,6 +606,24 @@ describe('TaskExecutor', () => {
         if (args[0] === 'merge' && args.includes('--no-ff') && args.includes('plan/feature')) return '';
         return '';
       };
+      (executor as any).execGitIn = async (args: string[], _dir: string) => {
+        gitCalls.push(args);
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        if (args[0] === 'checkout' && args[1] === '-b') {
+          checkoutNewBranchAttempt++;
+          if (checkoutNewBranchAttempt === 1) {
+            throw new Error('branch already exists');
+          }
+          return '';
+        }
+        if (args[0] === 'branch' && args[1] === '-D') return '';
+        if (args[0] === 'checkout') return '';
+        if (args[0] === 'merge' && args.includes('--no-ff') && args.includes('experiment/t1')) return '';
+        if (args[0] === 'merge' && args.includes('--no-ff') && args.includes('plan/feature')) return '';
+        return '';
+      };
+      (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
+      (executor as any).removeMergeWorktree = async () => {};
 
       const mergeTask = makeTask({
         id: '__merge__wf-1',
@@ -602,11 +665,18 @@ describe('TaskExecutor', () => {
       });
 
       const gitCalls: string[][] = [];
-      (executor as any).execGit = async (args: string[]) => {
+      (executor as any).execGitReadonly = async (args: string[], cwd?: string) => {
         gitCalls.push(args);
         if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
         return '';
       };
+      (executor as any).execGitIn = async (args: string[], _dir: string) => {
+        gitCalls.push(args);
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        return '';
+      };
+      (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
+      (executor as any).removeMergeWorktree = async () => {};
 
       const result = await executor.rebaseTaskBranches('wf-1', 'master');
 
@@ -637,7 +707,7 @@ describe('TaskExecutor', () => {
       });
 
       const gitCalls: string[][] = [];
-      (executor as any).execGit = async (args: string[]) => {
+      (executor as any).execGitReadonly = async (args: string[], cwd?: string) => {
         gitCalls.push(args);
         if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
         if (args[0] === 'rebase' && gitCalls.filter(c => c[0] === 'checkout' && c[1] === 'experiment/t2').length > 0) {
@@ -645,6 +715,16 @@ describe('TaskExecutor', () => {
         }
         return '';
       };
+      (executor as any).execGitIn = async (args: string[], _dir: string) => {
+        gitCalls.push(args);
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        if (args[0] === 'rebase' && gitCalls.filter(c => c[0] === 'checkout' && c[1] === 'experiment/t2').length > 0) {
+          throw new Error('CONFLICT in file.txt');
+        }
+        return '';
+      };
+      (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
+      (executor as any).removeMergeWorktree = async () => {};
 
       const result = await executor.rebaseTaskBranches('wf-1', 'master');
 
@@ -658,7 +738,7 @@ describe('TaskExecutor', () => {
       expect(abortCalls).toHaveLength(1);
     });
 
-    it('restores original branch after rebase', async () => {
+    it('rebases task branches in worktree', async () => {
       const allTasks = [
         makeTask({ id: 't1', config: { workflowId: 'wf-1' }, status: 'completed', execution: { branch: 'experiment/t1' } }),
       ];
@@ -674,16 +754,23 @@ describe('TaskExecutor', () => {
       });
 
       const gitCalls: string[][] = [];
-      (executor as any).execGit = async (args: string[]) => {
+      (executor as any).execGitReadonly = async (args: string[], cwd?: string) => {
         gitCalls.push(args);
         if (args[0] === 'branch' && args[1] === '--show-current') return 'my-feature';
         return '';
       };
+      (executor as any).execGitIn = async (args: string[], _dir: string) => {
+        gitCalls.push(args);
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'my-feature';
+        return '';
+      };
+      (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
+      (executor as any).removeMergeWorktree = async () => {};
 
       await executor.rebaseTaskBranches('wf-1', 'master');
 
-      const lastCheckout = gitCalls.filter(c => c[0] === 'checkout').pop();
-      expect(lastCheckout).toEqual(['checkout', 'my-feature']);
+      const rebaseCalls = gitCalls.filter(c => c[0] === 'rebase');
+      expect(rebaseCalls.length).toBeGreaterThan(0);
     });
 
     it('skips merge nodes and non-completed tasks', async () => {
@@ -704,11 +791,18 @@ describe('TaskExecutor', () => {
       });
 
       const gitCalls: string[][] = [];
-      (executor as any).execGit = async (args: string[]) => {
+      (executor as any).execGitReadonly = async (args: string[], cwd?: string) => {
         gitCalls.push(args);
         if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
         return '';
       };
+      (executor as any).execGitIn = async (args: string[], _dir: string) => {
+        gitCalls.push(args);
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        return '';
+      };
+      (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
+      (executor as any).removeMergeWorktree = async () => {};
 
       const result = await executor.rebaseTaskBranches('wf-1', 'master');
 
@@ -751,11 +845,18 @@ describe('TaskExecutor', () => {
       });
 
       const gitCalls: string[][] = [];
-      (executor as any).execGit = async (args: string[]) => {
+      (executor as any).execGitReadonly = async (args: string[], cwd?: string) => {
         gitCalls.push(args);
         if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
         return '';
       };
+      (executor as any).execGitIn = async (args: string[], _dir: string) => {
+        gitCalls.push(args);
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        return '';
+      };
+      (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
+      (executor as any).removeMergeWorktree = async () => {};
 
       const mergeTask = makeTask({
         id: '__merge__wf-1',
@@ -817,7 +918,7 @@ describe('TaskExecutor', () => {
       });
 
       const gitCalls: string[][] = [];
-      (executor as any).execGit = async (args: string[]) => {
+      (executor as any).execGitReadonly = async (args: string[], cwd?: string) => {
         gitCalls.push(args);
         if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
         // diff --cached --quiet exits non-zero when there are staged changes
@@ -826,6 +927,17 @@ describe('TaskExecutor', () => {
         }
         return '';
       };
+      (executor as any).execGitIn = async (args: string[], _dir: string) => {
+        gitCalls.push(args);
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        // diff --cached --quiet exits non-zero when there are staged changes
+        if (args[0] === 'diff' && args.includes('--cached') && args.includes('--quiet')) {
+          throw new Error('exit code 1');
+        }
+        return '';
+      };
+      (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
+      (executor as any).removeMergeWorktree = async () => {};
 
       const mergeTask = makeTask({
         id: '__merge__wf-1',
@@ -836,13 +948,17 @@ describe('TaskExecutor', () => {
 
       await (executor as any).executeMergeNode(mergeTask);
 
-      // Should squash merge featureBranch into baseBranch (no rebase)
+      // Should squash merge featureBranch into baseBranch using detached HEAD pattern (no rebase)
       const rebaseCall = gitCalls.find(c => c[0] === 'rebase');
       expect(rebaseCall).toBeUndefined();
+      const detachCall = gitCalls.find(c => c[0] === 'checkout' && c[1] === '--detach' && c[2] === 'master');
+      expect(detachCall).toBeDefined();
       const squashCall = gitCalls.find(c => c[0] === 'merge' && c.includes('--squash') && c.includes('plan/feature'));
       expect(squashCall).toBeDefined();
       const commitCall = gitCalls.find(c => c[0] === 'commit' && c.includes('-m'));
       expect(commitCall).toBeDefined();
+      const updateRefCall = gitCalls.find(c => c[0] === 'update-ref' && c[1] === 'refs/heads/master' && c[2] === 'HEAD');
+      expect(updateRefCall).toBeDefined();
 
       expect(orchestrator.handleWorkerResponse).toHaveBeenCalledWith(
         expect.objectContaining({ status: 'completed' }),
@@ -887,11 +1003,18 @@ describe('TaskExecutor', () => {
       });
 
       const gitCalls: string[][] = [];
-      (executor as any).execGit = async (args: string[]) => {
+      (executor as any).execGitReadonly = async (args: string[], cwd?: string) => {
         gitCalls.push(args);
         if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
         return '';
       };
+      (executor as any).execGitIn = async (args: string[], _dir: string) => {
+        gitCalls.push(args);
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        return '';
+      };
+      (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
+      (executor as any).removeMergeWorktree = async () => {};
 
       const mergeTask = makeTask({
         id: '__merge__wf-1',
@@ -1062,10 +1185,16 @@ describe('TaskExecutor', () => {
         mergeGateProvider: mergeGateProvider as any,
       });
 
-      (executor as any).execGit = async (args: string[]) => {
+      (executor as any).execGitReadonly = async (args: string[], cwd?: string) => {
         if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
         return '';
       };
+      (executor as any).execGitIn = async (args: string[], _dir: string) => {
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        return '';
+      };
+      (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
+      (executor as any).removeMergeWorktree = async () => {};
       (executor as any).startPrPolling = vi.fn();
 
       const mergeTask = makeTask({
@@ -1162,23 +1291,30 @@ describe('TaskExecutor', () => {
       });
 
       const gitCalls: string[][] = [];
-      (executor as any).execGit = async (args: string[]) => {
+      (executor as any).execGitReadonly = async (args: string[], cwd?: string) => {
         gitCalls.push(args);
         if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
         return '';
       };
+      (executor as any).execGitIn = async (args: string[], _dir: string) => {
+        gitCalls.push(args);
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        return '';
+      };
+      (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
+      (executor as any).removeMergeWorktree = async () => {};
 
       await executor.approveMerge('wf-1');
 
-      // Should checkout baseBranch, squash merge, and commit (no rebase)
+      // Should squash merge in worktree (no rebase, no checkout since worktree is created at baseBranch)
       const rebaseCall = gitCalls.find(c => c[0] === 'rebase');
       expect(rebaseCall).toBeUndefined();
-      const checkoutBase = gitCalls.find(c => c[0] === 'checkout' && c[1] === 'master');
-      expect(checkoutBase).toBeDefined();
       const squashCall = gitCalls.find(c => c[0] === 'merge' && c.includes('--squash') && c.includes('plan/feature'));
       expect(squashCall).toBeDefined();
       const commitCall = gitCalls.find(c => c[0] === 'commit' && c.includes('-m'));
       expect(commitCall).toBeDefined();
+      const updateRefCall = gitCalls.find(c => c[0] === 'update-ref' && c.includes('refs/heads/master'));
+      expect(updateRefCall).toBeDefined();
     });
 
     it('approveMerge throws when workflow has no merge configured', async () => {
@@ -1236,10 +1372,16 @@ describe('TaskExecutor', () => {
         mergeGateProvider: mergeGateProvider as any,
       });
 
-      (executor as any).execGit = async (args: string[]) => {
+      (executor as any).execGitReadonly = async (args: string[], cwd?: string) => {
         if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
         return '';
       };
+      (executor as any).execGitIn = async (args: string[], _dir: string) => {
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        return '';
+      };
+      (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
+      (executor as any).removeMergeWorktree = async () => {};
       (executor as any).startPrPolling = vi.fn();
 
       const logSpy = vi.spyOn(console, 'log');
@@ -1295,10 +1437,16 @@ describe('TaskExecutor', () => {
         mergeGateProvider: mergeGateProvider as any,
       });
 
-      (executor as any).execGit = async (args: string[]) => {
+      (executor as any).execGitReadonly = async (args: string[], cwd?: string) => {
         if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
         return '';
       };
+      (executor as any).execGitIn = async (args: string[], _dir: string) => {
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        return '';
+      };
+      (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
+      (executor as any).removeMergeWorktree = async () => {};
       (executor as any).startPrPolling = vi.fn();
 
       const consolidateSpy = vi.spyOn(executor as any, 'consolidateAndMerge');
@@ -1338,10 +1486,16 @@ describe('TaskExecutor', () => {
         cwd: '/tmp',
       });
 
-      (executor as any).execGit = async (args: string[]) => {
+      (executor as any).execGitReadonly = async (args: string[], cwd?: string) => {
         if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
         return '';
       };
+      (executor as any).execGitIn = async (args: string[], _dir: string) => {
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        return '';
+      };
+      (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
+      (executor as any).removeMergeWorktree = async () => {};
       (executor as any).execPr = vi.fn().mockResolvedValue('https://github.com/owner/repo/pull/55');
 
       const logSpy = vi.spyOn(console, 'log');
@@ -1397,10 +1551,16 @@ describe('TaskExecutor', () => {
         callbacks: { onComplete },
       });
 
-      (executor as any).execGit = async (args: string[]) => {
+      (executor as any).execGitReadonly = async (args: string[], cwd?: string) => {
         if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
         return '';
       };
+      (executor as any).execGitIn = async (args: string[], _dir: string) => {
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        return '';
+      };
+      (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
+      (executor as any).removeMergeWorktree = async () => {};
       (executor as any).execPr = vi.fn().mockResolvedValue('https://github.com/owner/repo/pull/77');
 
       const mergeTask = makeTask({
@@ -1463,10 +1623,16 @@ describe('TaskExecutor', () => {
         mergeGateProvider: mergeGateProvider as any,
       });
 
-      (executor as any).execGit = async (args: string[]) => {
+      (executor as any).execGitReadonly = async (args: string[], cwd?: string) => {
         if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
         return '';
       };
+      (executor as any).execGitIn = async (args: string[], _dir: string) => {
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        return '';
+      };
+      (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
+      (executor as any).removeMergeWorktree = async () => {};
       (executor as any).startPrPolling = vi.fn();
       (executor as any).buildMergeSummary = vi.fn().mockResolvedValue('## Summary\nTest summary');
 
@@ -1519,10 +1685,16 @@ describe('TaskExecutor', () => {
         callbacks: { onComplete: vi.fn() },
       });
 
-      (executor as any).execGit = async (args: string[]) => {
+      (executor as any).execGitReadonly = async (args: string[], cwd?: string) => {
         if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
         return '';
       };
+      (executor as any).execGitIn = async (args: string[], _dir: string) => {
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        return '';
+      };
+      (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
+      (executor as any).removeMergeWorktree = async () => {};
       (executor as any).buildMergeSummary = vi.fn().mockResolvedValue('## Summary\nManual summary');
 
       const mergeTask = makeTask({
@@ -1560,10 +1732,16 @@ describe('TaskExecutor', () => {
         cwd: '/tmp',
       });
 
-      (executor as any).execGit = async (args: string[]) => {
+      (executor as any).execGitReadonly = async (args: string[], cwd?: string) => {
         if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
         return '';
       };
+      (executor as any).execGitIn = async (args: string[], _dir: string) => {
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        return '';
+      };
+      (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
+      (executor as any).removeMergeWorktree = async () => {};
       (executor as any).buildMergeSummary = vi.fn().mockResolvedValue('## Summary\nApprove summary');
       (executor as any).execPr = vi.fn().mockResolvedValue('https://github.com/owner/repo/pull/88');
 
@@ -1977,12 +2155,20 @@ describe('TaskExecutor', () => {
       });
 
       const gitCalls: string[][] = [];
-      (executor as any).execGit = async (args: string[]) => {
+      (executor as any).execGitReadonly = async (args: string[], cwd?: string) => {
         gitCalls.push(args);
         if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
         if (args[0] === 'rev-parse' && args[1] === 'HEAD') return 'merged-commit-hash';
         return '';
       };
+      (executor as any).execGitIn = async (args: string[], _dir: string) => {
+        gitCalls.push(args);
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        if (args[0] === 'rev-parse' && args[1] === 'HEAD') return 'merged-commit-hash';
+        return '';
+      };
+      (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
+      (executor as any).removeMergeWorktree = async () => {};
 
       const result = await executor.mergeExperimentBranches('pivot-reconciliation', ['pivot-exp-v1', 'pivot-exp-v2']);
 
@@ -2030,7 +2216,7 @@ describe('TaskExecutor', () => {
       });
 
       let mergeCount = 0;
-      (executor as any).execGit = async (args: string[]) => {
+      (executor as any).execGitReadonly = async (args: string[], cwd?: string) => {
         if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
         if (args[0] === 'merge') {
           mergeCount++;
@@ -2038,6 +2224,16 @@ describe('TaskExecutor', () => {
         }
         return '';
       };
+      (executor as any).execGitIn = async (args: string[], _dir: string) => {
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        if (args[0] === 'merge') {
+          mergeCount++;
+          if (mergeCount === 2) throw new Error('CONFLICT (content)');
+        }
+        return '';
+      };
+      (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
+      (executor as any).removeMergeWorktree = async () => {};
 
       await expect(
         executor.mergeExperimentBranches('pivot-reconciliation', ['pivot-exp-v1', 'pivot-exp-v2']),
@@ -2100,7 +2296,7 @@ describe('TaskExecutor', () => {
       });
 
       const mergedBranches: string[] = [];
-      (executor as any).execGit = async (args: string[]) => {
+      (executor as any).execGitReadonly = async (args: string[], cwd?: string) => {
         if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
         if (args[0] === 'checkout') return '';
         if (args[0] === 'merge' && args[1] === '--no-ff') {
@@ -2110,6 +2306,18 @@ describe('TaskExecutor', () => {
         if (args[0] === 'branch' && args[1] === '-D') return '';
         return '';
       };
+      (executor as any).execGitIn = async (args: string[], _dir: string) => {
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        if (args[0] === 'checkout') return '';
+        if (args[0] === 'merge' && args[1] === '--no-ff') {
+          mergedBranches.push(args[args.length - 1]);
+          return '';
+        }
+        if (args[0] === 'branch' && args[1] === '-D') return '';
+        return '';
+      };
+      (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
+      (executor as any).removeMergeWorktree = async () => {};
 
       await executor.executeTask(tasks.get('__merge__wf-1')!);
 
@@ -2150,7 +2358,7 @@ describe('TaskExecutor', () => {
       });
 
       const mergedBranches: string[] = [];
-      (executor as any).execGit = async (args: string[]) => {
+      (executor as any).execGitReadonly = async (args: string[], cwd?: string) => {
         if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
         if (args[0] === 'checkout') return '';
         if (args[0] === 'merge' && args[1] === '--no-ff') {
@@ -2160,6 +2368,18 @@ describe('TaskExecutor', () => {
         if (args[0] === 'branch' && args[1] === '-D') return '';
         return '';
       };
+      (executor as any).execGitIn = async (args: string[], _dir: string) => {
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        if (args[0] === 'checkout') return '';
+        if (args[0] === 'merge' && args[1] === '--no-ff') {
+          mergedBranches.push(args[args.length - 1]);
+          return '';
+        }
+        if (args[0] === 'branch' && args[1] === '-D') return '';
+        return '';
+      };
+      (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
+      (executor as any).removeMergeWorktree = async () => {};
 
       await executor.executeTask(tasks.get('__merge__wf-2')!);
 
@@ -2198,7 +2418,7 @@ describe('TaskExecutor', () => {
       });
 
       const mergeOrder: string[] = [];
-      (executor as any).execGit = async (args: string[]) => {
+      (executor as any).execGitReadonly = async (args: string[], cwd?: string) => {
         if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
         if (args[0] === 'checkout') return '';
         if (args[0] === 'merge' && args[1] === '--no-ff') {
@@ -2210,6 +2430,20 @@ describe('TaskExecutor', () => {
         if (args[0] === 'branch' && args[1] === '-D') return '';
         return '';
       };
+      (executor as any).execGitIn = async (args: string[], _dir: string) => {
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        if (args[0] === 'checkout') return '';
+        if (args[0] === 'merge' && args[1] === '--no-ff') {
+          const branch = args[args.length - 1];
+          // Only capture task branch merges (invoker/...), not the final feature branch merge
+          if (branch.startsWith('invoker/')) mergeOrder.push(branch);
+          return '';
+        }
+        if (args[0] === 'branch' && args[1] === '-D') return '';
+        return '';
+      };
+      (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
+      (executor as any).removeMergeWorktree = async () => {};
 
       await executor.executeTask(tasks.get('__merge__wf-3')!);
 
@@ -2226,22 +2460,28 @@ describe('TaskExecutor', () => {
       });
 
       const calls: string[][] = [];
-      (executor as any).execGit = async (args: string[]) => {
+      (executor as any).execGitReadonly = async (args: string[], cwd?: string) => {
         calls.push([...args]);
         if (args[0] === 'branch' && args[1] === '--show-current') return 'original-branch';
         if (args[0] === 'merge' && args.includes('--squash')) throw new Error('CONFLICT');
         return '';
       };
+      (executor as any).execGitIn = async (args: string[], _dir: string) => {
+        calls.push([...args]);
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'original-branch';
+        if (args[0] === 'merge' && args.includes('--squash')) throw new Error('CONFLICT');
+        return '';
+      };
+      (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
+      (executor as any).removeMergeWorktree = async () => {};
 
       await expect(executor.approveMerge('wf-test')).rejects.toThrow('CONFLICT');
 
-      // Should have attempted merge --abort and checkout back to original (no rebase)
+      // Should have attempted merge --abort (no rebase)
       const rebaseAbort = calls.find(c => c[0] === 'rebase' && c[1] === '--abort');
       const mergeAbort = calls.find(c => c[0] === 'merge' && c[1] === '--abort');
-      const restoreCall = calls.find(c => c[0] === 'checkout' && c[1] === 'original-branch');
       expect(rebaseAbort).toBeUndefined();
       expect(mergeAbort).toBeDefined();
-      expect(restoreCall).toBeDefined();
     });
   });
 
@@ -2264,7 +2504,7 @@ describe('TaskExecutor', () => {
 
       const calls: string[][] = [];
       let mergeCount = 0;
-      (executor as any).execGit = async (args: string[]) => {
+      (executor as any).execGitReadonly = async (args: string[], cwd?: string) => {
         calls.push([...args]);
         if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
         if (args[0] === 'merge') {
@@ -2274,13 +2514,23 @@ describe('TaskExecutor', () => {
         if (args[0] === 'rev-parse') return 'abc123';
         return '';
       };
+      (executor as any).execGitIn = async (args: string[], _dir: string) => {
+        calls.push([...args]);
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        if (args[0] === 'merge') {
+          mergeCount++;
+          if (mergeCount === 2) throw new Error('CONFLICT (content)');
+        }
+        if (args[0] === 'rev-parse') return 'abc123';
+        return '';
+      };
+      (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
+      (executor as any).removeMergeWorktree = async () => {};
 
       await expect(executor.mergeExperimentBranches('recon', ['exp-1', 'exp-2'])).rejects.toThrow('CONFLICT');
 
       const abortCall = calls.find(c => c[0] === 'merge' && c[1] === '--abort');
-      const restoreCall = calls.find(c => c[0] === 'checkout' && c[1] === 'master');
       expect(abortCall).toBeDefined();
-      expect(restoreCall).toBeDefined();
     });
 
     it('3 experiments: conflict at 2nd identifies which failed', async () => {
@@ -2301,7 +2551,7 @@ describe('TaskExecutor', () => {
       });
 
       let mergeCount = 0;
-      (executor as any).execGit = async (args: string[]) => {
+      (executor as any).execGitReadonly = async (args: string[], cwd?: string) => {
         if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
         if (args[0] === 'merge' && args[1] === '--no-ff') {
           mergeCount++;
@@ -2310,6 +2560,17 @@ describe('TaskExecutor', () => {
         if (args[0] === 'rev-parse') return 'abc123';
         return '';
       };
+      (executor as any).execGitIn = async (args: string[], _dir: string) => {
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        if (args[0] === 'merge' && args[1] === '--no-ff') {
+          mergeCount++;
+          if (mergeCount === 2) throw new Error('CONFLICT merging exp-b branch');
+        }
+        if (args[0] === 'rev-parse') return 'abc123';
+        return '';
+      };
+      (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
+      (executor as any).removeMergeWorktree = async () => {};
 
       // The first merge (exp-a) succeeds, second (exp-b) fails, third (exp-c) is never attempted
       await expect(executor.mergeExperimentBranches('recon', ['exp-a', 'exp-b', 'exp-c'])).rejects.toThrow('CONFLICT');
@@ -2402,12 +2663,20 @@ describe('TaskExecutor', () => {
 
       const gitCalls: string[][] = [];
       const gitCwds: (string | undefined)[] = [];
-      (executor as any).execGit = async (args: string[], cwd?: string) => {
+      (executor as any).execGitReadonly = async (args: string[], cwd?: string) => {
         gitCalls.push([...args]);
         gitCwds.push(cwd);
         if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
         return '';
       };
+      (executor as any).execGitIn = async (args: string[], _dir: string) => {
+        gitCalls.push([...args]);
+        gitCwds.push(_dir);
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        return '';
+      };
+      (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
+      (executor as any).removeMergeWorktree = async () => {};
 
       await executor.resolveConflictWithClaude('conflict-task');
 
@@ -2515,10 +2784,16 @@ describe('TaskExecutor', () => {
         cwd: '/tmp/repo',
       });
       const gitCalls: string[][] = [];
-      (executor as any).execGit = async (args: string[]) => {
+      (executor as any).execGitReadonly = async (args: string[], cwd?: string) => {
         gitCalls.push([...args]);
         return '';
       };
+      (executor as any).execGitIn = async (args: string[], _dir: string) => {
+        gitCalls.push([...args]);
+        return '';
+      };
+      (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
+      (executor as any).removeMergeWorktree = async () => {};
       (executor as any).spawnClaudeFix = async () => ({ stdout: '', sessionId: 'sess-xyz' });
       await executor.fixWithClaude('fix-task', 'error output');
       expect(gitCalls.find(c => c[0] === 'checkout')).toBeUndefined();
@@ -2557,7 +2832,7 @@ describe('TaskExecutor', () => {
       });
 
       const mergeMsgs: string[] = [];
-      (executor as any).execGit = async (args: string[]) => {
+      (executor as any).execGitReadonly = async (args: string[], cwd?: string) => {
         if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
         if (args[0] === 'merge' && args[1] === '--no-ff') {
           const mIdx = args.indexOf('-m');
@@ -2565,6 +2840,16 @@ describe('TaskExecutor', () => {
         }
         return '';
       };
+      (executor as any).execGitIn = async (args: string[], _dir: string) => {
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        if (args[0] === 'merge' && args[1] === '--no-ff') {
+          const mIdx = args.indexOf('-m');
+          if (mIdx !== -1) mergeMsgs.push(args[mIdx + 1]);
+        }
+        return '';
+      };
+      (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
+      (executor as any).removeMergeWorktree = async () => {};
 
       await executor.executeTask(tasks.get('__merge__wf-msg')!);
 
@@ -2611,7 +2896,7 @@ describe('TaskExecutor', () => {
       });
 
       const mergeMsgs: string[] = [];
-      (executor as any).execGit = async (args: string[]) => {
+      (executor as any).execGitReadonly = async (args: string[], cwd?: string) => {
         if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
         if (args[0] === 'rev-parse' && args[1] === 'HEAD') return 'merged-hash';
         if (args[0] === 'merge' && args[1] === '--no-ff') {
@@ -2620,6 +2905,17 @@ describe('TaskExecutor', () => {
         }
         return '';
       };
+      (executor as any).execGitIn = async (args: string[], _dir: string) => {
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        if (args[0] === 'rev-parse' && args[1] === 'HEAD') return 'merged-hash';
+        if (args[0] === 'merge' && args[1] === '--no-ff') {
+          const mIdx = args.indexOf('-m');
+          if (mIdx !== -1) mergeMsgs.push(args[mIdx + 1]);
+        }
+        return '';
+      };
+      (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
+      (executor as any).removeMergeWorktree = async () => {};
 
       await executor.mergeExperimentBranches('recon', ['exp-v1', 'exp-v2']);
 
@@ -2748,8 +3044,8 @@ describe('TaskExecutor', () => {
 
       const mergeMsgs: string[] = [];
       const gitCwds: (string | undefined)[] = [];
-      (executor as any).execGit = async (args: string[], cwd?: string) => {
-        gitCwds.push(cwd);
+      (executor as any).execGitReadonly = async (args: string[], cwd?: string) => {
+        gitCwds.push(undefined);
         if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
         if (args[0] === 'merge') {
           const mIdx = args.indexOf('-m');
@@ -2757,6 +3053,17 @@ describe('TaskExecutor', () => {
         }
         return '';
       };
+      (executor as any).execGitIn = async (args: string[], _dir: string) => {
+        gitCwds.push(_dir);
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        if (args[0] === 'merge') {
+          const mIdx = args.indexOf('-m');
+          if (mIdx !== -1) mergeMsgs.push(args[mIdx + 1]);
+        }
+        return '';
+      };
+      (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
+      (executor as any).removeMergeWorktree = async () => {};
 
       await executor.resolveConflictWithClaude('conflict-task');
 
@@ -2768,7 +3075,7 @@ describe('TaskExecutor', () => {
       expect(gitCwds.every(c => c === '/tmp/workspace')).toBe(true);
     });
 
-    it('resolveConflictWithClaude uses host.cwd when workspacePath is undefined', async () => {
+    it('resolveConflictWithClaude throws when workspacePath is undefined', async () => {
       // Create a task without workspacePath
       const conflictError = JSON.stringify({
         type: 'merge_conflict',
@@ -2783,7 +3090,7 @@ describe('TaskExecutor', () => {
         execution: {
           error: conflictError,
           branch: 'invoker/conflict-task',
-          // No workspacePath — should fall back to host.cwd
+          // No workspacePath — should throw error
         },
       }));
 
@@ -2799,17 +3106,8 @@ describe('TaskExecutor', () => {
         cwd: '/tmp',
       });
 
-      const gitCwds: (string | undefined)[] = [];
-      (executor as any).execGit = async (args: string[], cwd?: string) => {
-        gitCwds.push(cwd);
-        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
-        return '';
-      };
-
-      await executor.resolveConflictWithClaude('conflict-task');
-
-      // Should fall back to host.cwd ('/tmp') since no workspacePath
-      expect(gitCwds.every(c => c === '/tmp')).toBe(true);
+      await expect(executor.resolveConflictWithClaude('conflict-task'))
+        .rejects.toThrow('no workspacePath');
     });
   });
 });

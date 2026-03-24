@@ -214,7 +214,8 @@ export interface InvokerAPI {
   selectExperiment: (taskId: string, experimentId: string | string[]) => Promise<void>;
   restartTask: (taskId: string) => Promise<void>;
   editTaskCommand: (taskId: string, newCommand: string) => Promise<void>;
-  editTaskType: (taskId: string, familiarType: string) => Promise<void>;
+  editTaskType: (taskId: string, familiarType: string, remoteTargetId?: string) => Promise<void>;
+  getRemoteTargets: () => Promise<string[]>;
   replaceTask: (taskId: string, replacementTasks: TaskReplacementDef[]) => Promise<TaskState[]>;
   onTaskDelta: (cb: (delta: TaskDelta) => void) => () => void;
   onTaskOutput: (cb: (data: TaskOutputData) => void) => () => void;

@@ -6,7 +6,7 @@
  */
 
 import { execSync, spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
@@ -396,7 +396,10 @@ export class TaskExecutor {
     return consolidateAndMergeImpl(this, onFinish, baseBranch, featureBranch, workflowId, workflowName, leafTaskIds, body);
   }
 
-  /** @internal */ execGit(args: string[], cwd?: string): Promise<string> {
+  /**
+   * @internal Read-only git queries only. For mutations, use execGitIn.
+   */
+  execGitReadonly(args: string[], cwd?: string): Promise<string> {
     return new Promise((resolvePromise, reject) => {
       const child = spawn('git', args, {
         cwd: cwd ?? this.cwd,
@@ -418,13 +421,52 @@ export class TaskExecutor {
     });
   }
 
+  /** @internal */ execGitIn(args: string[], dir: string): Promise<string> {
+    return new Promise((resolvePromise, reject) => {
+      const child = spawn('git', args, {
+        cwd: dir,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      let stdout = '';
+      let stderr = '';
+      child.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
+      child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
+      child.on('error', (err) => {
+        reject(new Error(`Failed to spawn git: ${err.message}`));
+      });
+      child.on('close', (code) => {
+        if (code === 0) resolvePromise(stdout.trim());
+        else reject(new Error(
+          `git ${args.join(' ')} failed (code ${code}): ${stderr.trim()}${stdout.trim() ? '\n' + stdout.trim() : ''}`
+        ));
+      });
+    });
+  }
+
+  /** @internal */ async createMergeWorktree(ref: string, label: string): Promise<string> {
+    const wtPath = resolve(homedir(), '.invoker', 'merge-worktrees', `${label}-${Date.now()}`);
+    mkdirSync(resolve(homedir(), '.invoker', 'merge-worktrees'), { recursive: true });
+    await this.execGitReadonly(['worktree', 'prune']);
+    await this.execGitReadonly(['worktree', 'add', '--force', '--detach', wtPath, ref]);
+    return wtPath;
+  }
+
+  /** @internal */ async removeMergeWorktree(dir: string): Promise<void> {
+    try {
+      await this.execGitReadonly(['worktree', 'remove', '--force', dir]);
+      await this.execGitReadonly(['worktree', 'prune']);
+    } catch (err) {
+      console.warn(`[TaskExecutor] removeMergeWorktree failed (best-effort): ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
   async detectDefaultBranch(): Promise<string> {
     try {
-      const ref = await this.execGit(['symbolic-ref', 'refs/remotes/origin/HEAD']);
+      const ref = await this.execGitReadonly(['symbolic-ref', 'refs/remotes/origin/HEAD']);
       return ref.replace('refs/remotes/origin/', '');
     } catch {
       try {
-        await this.execGit(['rev-parse', '--verify', 'main']);
+        await this.execGitReadonly(['rev-parse', '--verify', 'main']);
         return 'main';
       } catch {
         return 'master';
@@ -498,15 +540,14 @@ export class TaskExecutor {
       ?? this.defaultBranch
       ?? await this.detectDefaultBranch();
 
-    const originalBranch = await this.execGit(['branch', '--show-current']);
+    const worktreeDir = await this.createMergeWorktree(baseBranch, 'recon-' + reconTaskId);
 
     try {
       try {
-        await this.execGit(['checkout', '-b', branchName, baseBranch]);
+        await this.execGitIn(['checkout', '-b', branchName, baseBranch], worktreeDir);
       } catch {
-        await this.execGit(['checkout', baseBranch]);
-        await this.execGit(['branch', '-D', branchName]);
-        await this.execGit(['checkout', '-b', branchName, baseBranch]);
+        await this.execGitIn(['branch', '-D', branchName], worktreeDir);
+        await this.execGitIn(['checkout', '-b', branchName, baseBranch], worktreeDir);
       }
 
       for (const expId of experimentIds) {
@@ -515,15 +556,16 @@ export class TaskExecutor {
           throw new Error(`Experiment ${expId} has no branch`);
         }
         const expMergeMsg = `Merge ${expTask.execution.branch} — ${expTask.description}`;
-        await this.execGit(['merge', '--no-ff', '-m', expMergeMsg, expTask.execution.branch]);
+        await this.execGitIn(['merge', '--no-ff', '-m', expMergeMsg, expTask.execution.branch], worktreeDir);
       }
 
-      const commit = await this.execGit(['rev-parse', 'HEAD']);
+      const commit = await this.execGitIn(['rev-parse', 'HEAD'], worktreeDir);
       return { branch: branchName, commit };
     } catch (err) {
-      try { await this.execGit(['merge', '--abort']); } catch { /* no merge in progress */ }
-      try { await this.execGit(['checkout', originalBranch]); } catch { /* best effort */ }
+      try { await this.execGitIn(['merge', '--abort'], worktreeDir); } catch { /* no merge in progress */ }
       throw err;
+    } finally {
+      await this.removeMergeWorktree(worktreeDir);
     }
   }
 
@@ -744,36 +786,39 @@ export class TaskExecutor {
     workflowId: string,
     baseBranch: string,
   ): Promise<{ success: boolean; rebasedBranches: string[]; errors: string[] }> {
-    const originalBranch = await this.execGit(['branch', '--show-current']);
     const allTasks = this.orchestrator.getAllTasks();
     const taskBranches = allTasks
       .filter((t) => t.config.workflowId === workflowId && t.status === 'completed' && t.execution.branch && !t.config.isMergeNode)
       .map((t) => t.execution.branch!);
 
+    const worktreeDir = await this.createMergeWorktree(baseBranch, 'rebase-' + workflowId);
+
     const rebasedBranches: string[] = [];
     const errors: string[] = [];
 
-    for (const branch of taskBranches) {
-      try {
-        await this.execGit(['checkout', branch]);
-        await this.execGit(['rebase', baseBranch]);
-        rebasedBranches.push(branch);
-        console.log(`[rebase] Successfully rebased ${branch} onto ${baseBranch}`);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        errors.push(`${branch}: ${msg}`);
-        console.error(`[rebase] Failed to rebase ${branch}: ${msg}`);
-        try { await this.execGit(['rebase', '--abort']); } catch { /* no rebase in progress */ }
+    try {
+      for (const branch of taskBranches) {
+        try {
+          await this.execGitIn(['checkout', branch], worktreeDir);
+          await this.execGitIn(['rebase', baseBranch], worktreeDir);
+          rebasedBranches.push(branch);
+          console.log(`[rebase] Successfully rebased ${branch} onto ${baseBranch}`);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          errors.push(`${branch}: ${msg}`);
+          console.error(`[rebase] Failed to rebase ${branch}: ${msg}`);
+          try { await this.execGitIn(['rebase', '--abort'], worktreeDir); } catch { /* no rebase in progress */ }
+        }
       }
+
+      return {
+        success: errors.length === 0,
+        rebasedBranches,
+        errors,
+      };
+    } finally {
+      await this.removeMergeWorktree(worktreeDir);
     }
-
-    try { await this.execGit(['checkout', originalBranch]); } catch { /* best effort */ }
-
-    return {
-      success: errors.length === 0,
-      rebasedBranches,
-      errors,
-    };
   }
 
   /** @internal */ gitLogMessage(commitHash: string): Promise<string> {

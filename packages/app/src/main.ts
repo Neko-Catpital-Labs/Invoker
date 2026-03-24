@@ -360,6 +360,15 @@ function setupGuiMode(): void {
     taskHandles.delete(taskId);
   }
 
+  /** Cancel a task and cascade-kill all downstream DAG dependents. Shared by IPC, headless, and API. */
+  async function performCancelTask(taskId: string): Promise<{ cancelled: string[]; runningCancelled: string[] }> {
+    const result = orchestrator.cancelTask(taskId);
+    for (const id of result.runningCancelled) {
+      await killRunningTask(id);
+    }
+    return result;
+  }
+
   function relaunchOrphansAndStartReady(logPrefix: string): TaskState[] {
     const orphanRestarted: TaskState[] = [];
     for (const task of orchestrator.getAllTasks()) {
@@ -794,6 +803,20 @@ function setupGuiMode(): void {
       }
     });
 
+    ipcMain.handle('invoker:cancel-task', async (_event, taskId: string) => {
+      console.log(`[ipc] cancel-task: "${taskId}"`);
+      try {
+        return await performCancelTask(taskId);
+      } catch (err) {
+        console.error(`[ipc] cancel-task failed: ${err}`);
+        throw err;
+      }
+    });
+
+    ipcMain.handle('invoker:get-queue-status', () => {
+      return orchestrator.getQueueStatus();
+    });
+
     ipcMain.handle('invoker:restart-workflow', async (_event, workflowId: string) => {
       console.log(`[ipc] restart-workflow: "${workflowId}"`);
       try {
@@ -928,16 +951,20 @@ function setupGuiMode(): void {
       }
     });
 
-    ipcMain.handle('invoker:edit-task-type', async (_event, taskId: string, familiarType: string) => {
-      console.log(`[ipc] edit-task-type: "${taskId}" → "${familiarType}"`);
+    ipcMain.handle('invoker:edit-task-type', async (_event, taskId: string, familiarType: string, remoteTargetId?: string) => {
+      console.log(`[ipc] edit-task-type: "${taskId}" → "${familiarType}" remoteTargetId=${remoteTargetId ?? 'none'}`);
       try {
-        const started = orchestrator.editTaskType(taskId, familiarType);
+        const started = orchestrator.editTaskType(taskId, familiarType, remoteTargetId);
         const runnable = started.filter(t => t.status === 'running');
         await taskExecutor.executeTasks(runnable);
       } catch (err) {
         console.error(`[ipc] edit-task-type failed: ${err}`);
         throw err;
       }
+    });
+
+    ipcMain.handle('invoker:get-remote-targets', () => {
+      return Object.keys(invokerConfig.remoteTargets ?? {});
     });
 
     ipcMain.handle('invoker:replace-task', async (_event, taskId: string, replacementTasks: unknown[]) => {

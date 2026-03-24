@@ -169,7 +169,7 @@ describe('Flow 1: rebase-and-retry', () => {
     expect(failed.execution.error).toContain('App.tsx');
   });
 
-  it('failed merge cleans up: abort + checkout original branch', async () => {
+  it('failed merge cleans up: abort', async () => {
     h.loadAndStart(PARALLEL_PLAN);
     h.completeTask('A');
     h.completeTask('B');
@@ -183,10 +183,6 @@ describe('Flow 1: rebase-and-retry', () => {
 
     const mergeAbort = h.git.getCalls('merge').find(c => c.includes('--abort'));
     expect(mergeAbort).toBeDefined();
-
-    const checkoutCalls = h.git.getCalls('checkout');
-    const lastCheckout = checkoutCalls[checkoutCalls.length - 1];
-    expect(lastCheckout).toContain('master');
   });
 });
 
@@ -979,15 +975,16 @@ describe('Flow 9: manual merge mode', () => {
     await h.orchestrator.approve(mergeId);
     expect(h.getTask(mergeId)!.status).toBe('completed');
 
-    // Verify the final squash merge was performed: checkout + squash + commit (no rebase)
+    // Verify the final squash merge was performed: squash + commit + update-ref (no rebase, no checkout)
+    // Note: worktree is created detached via 'worktree add --detach', not via 'checkout --detach'
     const rebaseCall = h.git.calls.find(c => c[0] === 'rebase');
     expect(rebaseCall).toBeUndefined();
-    const checkoutBase = h.git.calls.find(c => c[0] === 'checkout' && c[1] === 'master');
-    expect(checkoutBase).toBeDefined();
     const squashCall = h.git.calls.find(c => c[0] === 'merge' && c.includes('--squash') && c.includes('plan/manual-merge'));
     expect(squashCall).toBeDefined();
     const commitCall = h.git.calls.find(c => c[0] === 'commit' && c.includes('-m'));
     expect(commitCall).toBeDefined();
+    const updateRefCall = h.git.calls.find(c => c[0] === 'update-ref' && c[1] === 'refs/heads/master');
+    expect(updateRefCall).toBeDefined();
   });
 
   it('automatic merge mode performs full merge in merge node', async () => {
@@ -1008,13 +1005,16 @@ describe('Flow 9: manual merge mode', () => {
     await h.executor.executeTasks([mergeTask]);
     expect(h.getTask(mergeId)!.status).toBe('completed');
 
-    // Verify git calls include squash merge + commit (no rebase)
+    // Verify git calls include squash merge + commit + update-ref (no rebase, no checkout)
+    // Note: worktree is created detached via 'worktree add --detach', not via 'checkout --detach'
     const rebaseCall2 = h.git.calls.find(c => c[0] === 'rebase');
     expect(rebaseCall2).toBeUndefined();
     const squashCall = h.git.calls.find(c => c[0] === 'merge' && c.includes('--squash') && c.includes('plan/auto-merge'));
     expect(squashCall).toBeDefined();
     const commitCall = h.git.calls.find(c => c[0] === 'commit' && c.includes('-m'));
     expect(commitCall).toBeDefined();
+    const updateRefCall = h.git.calls.find(c => c[0] === 'update-ref' && c[1] === 'refs/heads/master');
+    expect(updateRefCall).toBeDefined();
   });
 });
 
@@ -1042,7 +1042,7 @@ describe('Flow 9b: beforeApproveHook fires for merge nodes', () => {
     await orch.approve(mergeId);
     expect(orch.getTask(mergeId)!.status).toBe('completed');
 
-    expect(git.calls.find(c => c[0] === 'checkout' && c[1] === 'master')).toBeUndefined();
+    // Without hook: no git merge happens (state transition only)
     expect(git.calls.find(c => c[0] === 'merge' && c.includes('--squash'))).toBeUndefined();
     expect(git.calls.find(c => c[0] === 'commit')).toBeUndefined();
   });
@@ -1061,9 +1061,10 @@ describe('Flow 9b: beforeApproveHook fires for merge nodes', () => {
     await h.orchestrator.approve(mergeId);
     expect(h.getTask(mergeId)!.status).toBe('completed');
 
-    expect(h.git.calls.find(c => c[0] === 'checkout' && c[1] === 'master')).toBeDefined();
+    // Worktree-based merge uses 'worktree add --detach', not 'checkout --detach'
     expect(h.git.calls.find(c => c[0] === 'merge' && c.includes('--squash') && c.includes('plan/manual-merge'))).toBeDefined();
     expect(h.git.calls.find(c => c[0] === 'commit' && c.includes('-m'))).toBeDefined();
+    expect(h.git.calls.find(c => c[0] === 'update-ref' && c[1] === 'refs/heads/master')).toBeDefined();
   });
 });
 
