@@ -8,6 +8,7 @@ import type { FamiliarHandle, PersistedTaskMeta, TerminalSpec } from './familiar
 import { BaseFamiliar, type BaseEntry, MergeConflictError } from './base-familiar.js';
 import { RepoPool } from './repo-pool.js';
 import { killProcessGroup, cleanElectronEnv, SIGKILL_TIMEOUT_MS } from './process-utils.js';
+import { DEFAULT_WORKTREE_PROVISION_COMMAND } from './default-worktree-provision-command.js';
 
 /**
  * Merkle-style hash for content-addressable branch naming.
@@ -613,7 +614,7 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
     console.log(`[WorktreeFamiliar] provisionWorktree begin dir=${dir}`);
     const t0 = Date.now();
     return new Promise((resolve, reject) => {
-      const cmd = 'pnpm install --frozen-lockfile && node scripts/rebuild-for-electron.js';
+      const cmd = `set -euo pipefail; ${DEFAULT_WORKTREE_PROVISION_COMMAND}`;
       const child = spawn('/bin/bash', ['-c', cmd], {
         cwd: dir,
         env: cleanElectronEnv(),

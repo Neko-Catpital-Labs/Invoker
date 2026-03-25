@@ -107,17 +107,25 @@ function rebuild() {
 
   // Try pnpm rebuild first (handles prebuild-install download)
   console.log(`[check-native-modules] Running: pnpm rebuild ${MODULE_NAME}`);
+  let pnpmRebuildOk = false;
   try {
     execSync(`pnpm rebuild ${MODULE_NAME}`, {
       stdio: 'inherit',
       env: electronTargetEnv ? { ...process.env, ...electronTargetEnv } : process.env,
     });
-  } catch {}
+    pnpmRebuildOk = true;
+    console.log(`[check-native-modules] pnpm rebuild exited 0`);
+  } catch (e) {
+    console.log(`[check-native-modules] pnpm rebuild failed or non-zero: ${e && e.message ? e.message : String(e)}`);
+  }
 
   // Check if pnpm rebuild fixed it (binary exists with correct MODULE_VERSION)
   const binaryAfter = findBinaryPath();
   const versionAfter = binaryAfter ? getBinaryModuleVersion(binaryAfter) : null;
   const needsNodeGyp = !binaryAfter || (versionAfter && versionAfter !== runtimeVer);
+  console.log(
+    `[check-native-modules] after pnpm rebuild: pnpmOk=${pnpmRebuildOk} binaryAfter=${Boolean(binaryAfter)} versionAfter=${versionAfter} runtimeVer=${runtimeVer} needsNodeGyp=${needsNodeGyp} electronTarget=${electronVersion || 'none'}`
+  );
 
   if (needsNodeGyp) {
     // pnpm rebuild didn't fix it. Common causes:
@@ -130,14 +138,34 @@ function rebuild() {
         if (electronVersion) {
           // Force node-gyp to fetch Electron headers and compile against Electron's
           // ABI (NODE_MODULE_VERSION), avoiding a system-Node ABI mismatch.
+          // #region agent log
+          // Note: this runs on the *remote* host during SSH provisioning.
+          // We still emit console logs into the task output (f9.txt) as runtime evidence.
+          const buildDir = path.join(pkgDir, 'build');
+          const binsDir = path.join(buildDir, 'node_gyp_bins');
+          console.log(
+            `[check-native-modules] preflight: pkgDir=${pkgDir} buildDirExists=${fs.existsSync(buildDir)} binsDirExists=${fs.existsSync(binsDir)}`
+          );
+          try {
+            if (fs.existsSync(buildDir)) {
+              const entries = fs.readdirSync(buildDir).slice(0, 50);
+              console.log(`[check-native-modules] preflight: buildDir entries (first 50): ${entries.join(', ')}`);
+            }
+          } catch (e) {
+            console.log(`[check-native-modules] preflight: failed reading buildDir: ${e && e.message ? e.message : String(e)}`);
+          }
+          // #endregion
           execSync(
             `npx node-gyp rebuild --runtime=electron --target=${electronVersion} --dist-url=${ELECTRON_HEADERS_DISTURL}`,
             { cwd: pkgDir, stdio: 'inherit', env: { ...process.env, ...electronTargetEnv } }
           );
+          console.log(`[check-native-modules] npx node-gyp (electron) exited 0`);
         } else {
           execSync('npx node-gyp rebuild', { cwd: pkgDir, stdio: 'inherit' });
+          console.log(`[check-native-modules] npx node-gyp (node) exited 0`);
         }
-      } catch {
+      } catch (e) {
+        console.log(`[check-native-modules] node-gyp rebuild failed: ${e && e.message ? e.message : String(e)}`);
         return false;
       }
     } else {

@@ -26,7 +26,9 @@ import {
   approveMergeImpl,
   buildMergeSummaryImpl,
   consolidateAndMergeImpl,
+  ensureLocalBranchForMerge,
 } from './merge-executor.js';
+import { normalizeBranchForGithubCli } from './github-branch-ref.js';
 import {
   resolveConflictWithClaudeImpl,
   fixWithClaudeImpl,
@@ -521,9 +523,11 @@ export class TaskExecutor {
   }
 
   /** @internal */ async execPr(baseBranch: string, featureBranch: string, title: string, body?: string): Promise<string> {
+    const ghBase = normalizeBranchForGithubCli(baseBranch);
+    const ghHead = normalizeBranchForGithubCli(featureBranch);
     // Check for an existing open PR first
     const listOutput = await this.execGh([
-      'pr', 'list', '--head', featureBranch, '--base', baseBranch,
+      'pr', 'list', '--head', ghHead, '--base', ghBase,
       '--state', 'open', '--json', 'url,number', '--limit', '1',
     ]);
 
@@ -538,8 +542,8 @@ export class TaskExecutor {
 
     // No existing PR — create a new one
     return this.execGh([
-      'pr', 'create', '--base', baseBranch,
-      '--head', featureBranch, '--title', title, '--body', body ?? '',
+      'pr', 'create', '--base', ghBase,
+      '--head', ghHead, '--title', title, '--body', body ?? '',
     ]);
   }
 
@@ -584,8 +588,10 @@ export class TaskExecutor {
         if (!expTask?.execution.branch) {
           throw new Error(`Experiment ${expId} has no branch`);
         }
-        const expMergeMsg = `Merge ${expTask.execution.branch} — ${expTask.description}`;
-        await this.execGitIn(['merge', '--no-ff', '-m', expMergeMsg, expTask.execution.branch], worktreeDir);
+        const b = expTask.execution.branch;
+        await ensureLocalBranchForMerge(this, worktreeDir, b);
+        const expMergeMsg = `Merge ${b} — ${expTask.description}`;
+        await this.execGitIn(['merge', '--no-ff', '-m', expMergeMsg, b], worktreeDir);
       }
 
       const commit = await this.execGitIn(['rev-parse', 'HEAD'], worktreeDir);
@@ -738,14 +744,44 @@ export class TaskExecutor {
 
   // ── Private Helpers ──────────────────────────────────────
 
+  /**
+   * Branch names from completed direct dependencies, for every executor that merges
+   * upstream work (`setupTaskBranch`, WorktreeFamiliar merge loop, SshFamiliar remote merges).
+   *
+   * For **fan-in** (two or more upstream branches), prepends the workflow plan base
+   * (`loadWorkflow(...).baseBranch` or `defaultBranch`) when it is not already listed,
+   * so `setupTaskBranch` uses a single merge base: `base → merge dep₁ → merge dep₂ → …`.
+   */
   collectUpstreamBranches(task: TaskState): string[] {
     const branches: string[] = [];
+    const seen = new Set<string>();
+
     for (const depId of task.dependencies) {
       const dep = this.orchestrator.getTask(depId);
       if (dep && dep.status === 'completed' && dep.execution.branch) {
-        branches.push(dep.execution.branch);
+        const b = dep.execution.branch;
+        if (!seen.has(b)) {
+          seen.add(b);
+          branches.push(b);
+        }
       }
     }
+
+    let planBase: string | undefined;
+    if (task.config.workflowId && this.persistence.loadWorkflow) {
+      try {
+        const wf = this.persistence.loadWorkflow(task.config.workflowId) as { baseBranch?: string } | undefined;
+        planBase = wf?.baseBranch;
+      } catch {
+        planBase = undefined;
+      }
+    }
+    if (!planBase) planBase = this.defaultBranch;
+
+    if (planBase && branches.length >= 2 && !seen.has(planBase)) {
+      branches.unshift(planBase);
+    }
+
     return branches;
   }
 

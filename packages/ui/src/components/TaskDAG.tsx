@@ -27,7 +27,12 @@ import { getEdgeStyle } from '../lib/colors.js';
 import { TaskNode } from './TaskNode.js';
 import { BundledEdge, type BundledEdgeData } from './BundledEdge.js';
 import { MergeGateNode } from './MergeGateNode.js';
-import { isMergeGateId, groupTasksByWorkflow } from '../lib/merge-gate.js';
+import {
+  isMergeGateId,
+  groupTasksByWorkflow,
+  resolveMergeGateKind,
+  mergeGatePlanTitle,
+} from '../lib/merge-gate.js';
 
 interface TaskDAGProps {
   tasks: Map<string, TaskState>;
@@ -70,7 +75,6 @@ function TaskDAGInner({ tasks, workflows, onTaskClick, onTaskDoubleClick, onTask
 
     for (const [wfGroupId, wfTasks] of workflowGroups) {
       const wfMeta = workflows?.get(wfGroupId);
-      const effectiveOnFinish = (wfMeta?.onFinish as 'none' | 'merge' | 'pull_request') ?? 'merge';
       const wfBaseBranch = wfMeta?.baseBranch;
       const wfMergeMode = (wfMeta?.mergeMode as 'manual' | 'automatic' | 'github') ?? 'manual';
       const positions = layoutNodes(wfTasks);
@@ -87,14 +91,20 @@ function TaskDAGInner({ tasks, workflows, onTaskClick, onTaskDoubleClick, onTask
         const pos = positions.get(task.id) ?? { x: 0, y: 0 };
         if (task.config.isMergeNode) {
           gateStatuses.set(task.id, task.status);
+          let gateKind = resolveMergeGateKind(task, wfMeta);
+          if (wfMergeMode === 'github') {
+            gateKind = 'github_pr';
+          }
+          const showMergeModeRow = gateKind !== 'github_pr';
           allNodes.push({
             id: task.id,
             type: 'mergeGateNode',
             position: { x: pos.x, y: pos.y + yOffset },
             data: {
               status: task.status,
-              label: 'All tasks must pass',
-              onFinish: effectiveOnFinish === 'pull_request' ? 'pull_request' : 'merge',
+              label: mergeGatePlanTitle(task.description),
+              gateKind,
+              showMergeModeRow,
               baseBranch: wfBaseBranch,
               featureBranch: wfMeta?.featureBranch,
               mergeMode: wfMergeMode,

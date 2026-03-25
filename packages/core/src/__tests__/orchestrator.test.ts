@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { Orchestrator, PlanConflictError } from '../orchestrator.js';
+import { Orchestrator, PlanConflictError, descriptionForMergeNode } from '../orchestrator.js';
 import type { PlanDefinition, OrchestratorPersistence, OrchestratorMessageBus } from '../orchestrator.js';
 import type { TaskState, TaskDelta, TaskStateChanges } from '../task-types.js';
 import type { WorkResponse } from '@invoker/protocol';
@@ -113,6 +113,38 @@ describe('Orchestrator', () => {
       persistence,
       messageBus: bus,
       maxConcurrency: 3,
+    });
+  });
+
+  describe('descriptionForMergeNode', () => {
+    it('uses GitHub PR gate when mergeMode is github', () => {
+      expect(descriptionForMergeNode({ name: 'My plan', onFinish: 'none', mergeMode: 'github' })).toBe(
+        'GitHub PR gate for My plan',
+      );
+    });
+
+    it('uses Pull request gate when onFinish is pull_request', () => {
+      expect(descriptionForMergeNode({ name: 'My plan', onFinish: 'pull_request', mergeMode: 'manual' })).toBe(
+        'Pull request gate for My plan',
+      );
+    });
+
+    it('uses Merge gate when onFinish is merge and not GitHub PR mode', () => {
+      expect(descriptionForMergeNode({ name: 'My plan', onFinish: 'merge', mergeMode: 'manual' })).toBe(
+        'Merge gate for My plan',
+      );
+    });
+
+    it('uses Workflow gate when onFinish is none and mergeMode is manual', () => {
+      expect(descriptionForMergeNode({ name: 'My plan', onFinish: 'none', mergeMode: 'manual' })).toBe(
+        'Workflow gate for My plan',
+      );
+    });
+
+    it('prefers GitHub PR gate when mergeMode is github even if onFinish is merge', () => {
+      expect(descriptionForMergeNode({ name: 'My plan', onFinish: 'merge', mergeMode: 'github' })).toBe(
+        'GitHub PR gate for My plan',
+      );
     });
   });
 

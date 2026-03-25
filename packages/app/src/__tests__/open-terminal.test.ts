@@ -21,7 +21,7 @@ import {
 } from '@invoker/core';
 import type { TaskStateChanges } from '@invoker/graph';
 import {
-  DockerFamiliar, WorktreeFamiliar, FamiliarRegistry,
+  DockerFamiliar, WorktreeFamiliar, FamiliarRegistry, SshFamiliar,
   BaseFamiliar,
   type FamiliarHandle, type TerminalSpec, type PersistedTaskMeta,
 } from '@invoker/executors';
@@ -557,5 +557,38 @@ describe('merge gate open-terminal', () => {
     const spec = familiar.getRestoredTerminalSpec(meta);
     expect(spec.cwd).toBe(process.cwd());
     expect(spec.command).toBeUndefined();
+  });
+});
+
+describe('SshFamiliar getRestoredTerminalSpec', () => {
+  it('uses ssh -t bash -lc with cd and git checkout when workspacePath and branch are set', () => {
+    const ssh = new SshFamiliar({
+      host: 'droplet.example',
+      user: 'root',
+      sshKeyPath: '/home/me/.ssh/id_rsa',
+      port: 2222,
+    });
+    const meta: PersistedTaskMeta = {
+      taskId: 'remote-task',
+      familiarType: 'ssh',
+      workspacePath: '~/.invoker/worktrees/abc123/experiment-remote-task-deadbeef',
+      branch: 'experiment/remote-task-deadbeef',
+    };
+    const spec = ssh.getRestoredTerminalSpec(meta);
+    expect(spec.command).toBe('ssh');
+    expect(spec.args).toEqual(expect.arrayContaining(['-i', '/home/me/.ssh/id_rsa', '-p', '2222', '-t', 'root@droplet.example', 'bash', '-lc']));
+    const lc = spec.args![spec.args!.length - 1];
+    expect(lc).toContain('cd');
+    expect(lc).toContain('experiment/remote-task-deadbeef');
+    expect(lc).toContain('exec bash -l');
+    expect(spec.args!.join(' ')).not.toContain('BatchMode');
+  });
+
+  it('falls back to non-interactive ssh args when workspacePath is missing', () => {
+    const ssh = new SshFamiliar({ host: 'h', user: 'u', sshKeyPath: '/k' });
+    const spec = ssh.getRestoredTerminalSpec({ taskId: 't', familiarType: 'ssh' });
+    expect(spec.command).toBe('ssh');
+    expect(spec.args).toContain('BatchMode=yes');
+    expect(spec.args).not.toContain('-t');
   });
 });

@@ -10,11 +10,15 @@ import { useState } from 'react';
 import { Handle, Position } from '@xyflow/react';
 import type { TaskStatus } from '../types.js';
 import { getStatusColor } from '../lib/colors.js';
+import type { MergeGateKind } from '../lib/merge-gate.js';
 
 interface MergeGateNodeData {
   status: TaskStatus;
+  /** Plan title only (no "… gate for" prefix). */
   label: string;
-  onFinish: 'merge' | 'pull_request';
+  gateKind: MergeGateKind;
+  /** When false, omit Manual/Automatic/GitHub row (used for github_pr — primary already says GitHub PR). */
+  showMergeModeRow?: boolean;
   baseBranch?: string;
   featureBranch?: string;
   mergeMode?: 'manual' | 'automatic' | 'github';
@@ -29,10 +33,34 @@ interface MergeGateNodeProps {
   data: MergeGateNodeData;
 }
 
+const PRIMARY_LABEL: Record<MergeGateKind, string> = {
+  github_pr: 'GitHub PR',
+  pull_request: 'Pull request',
+  merge: 'Merge',
+  workflow: 'Workflow',
+};
+
 export function MergeGateNode({ data }: MergeGateNodeProps) {
-  const { status, label, onFinish, baseBranch, featureBranch, mergeMode = 'manual', workflowId, prUrl, prStatus, summary } = data;
+  const {
+    status,
+    label,
+    gateKind,
+    showMergeModeRow = true,
+    baseBranch,
+    featureBranch,
+    mergeMode = 'manual',
+    workflowId,
+    prUrl,
+    prStatus,
+    summary,
+  } = data;
   const colors = getStatusColor(status);
   const [error, setError] = useState<string | null>(null);
+
+  /** mergeMode wins over gateKind so we never show "Pull request" + "GitHub PR" when workflow is GitHub mode. */
+  const effectiveGateKind: MergeGateKind = mergeMode === 'github' ? 'github_pr' : gateKind;
+  const shouldShowMergeModeRow =
+    showMergeModeRow && mergeMode !== 'github' && effectiveGateKind !== 'github_pr';
 
   const handleApproveMerge = () => {
     if (workflowId && window.invoker?.approveMerge) {
@@ -45,7 +73,8 @@ export function MergeGateNode({ data }: MergeGateNodeProps) {
     }
   };
 
-  const icon = onFinish === 'pull_request' ? (
+  const usePrIcon = effectiveGateKind === 'github_pr' || effectiveGateKind === 'pull_request';
+  const icon = usePrIcon ? (
     <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
       <path strokeLinecap="round" strokeLinejoin="round" d="M7 7v10m0-10a2 2 0 11-4 0 2 2 0 014 0zm10 10a2 2 0 104 0 2 2 0 00-4 0zm0 0V7a4 4 0 00-4-4H9" />
     </svg>
@@ -67,12 +96,15 @@ export function MergeGateNode({ data }: MergeGateNodeProps) {
 
       <div className={`flex items-center gap-1.5 ${colors.text}`}>
         {icon}
-        <span className="font-mono text-xs font-semibold uppercase">
-          {onFinish === 'pull_request' ? 'Pull Request' : 'Merge'}
+        <span className="font-mono text-xs font-semibold" data-testid="merge-gate-primary-label">
+          {PRIMARY_LABEL[effectiveGateKind]}
         </span>
       </div>
 
-      <div className={`text-xs mt-1 ${colors.text} opacity-80`}>
+      <div
+        className={`text-xs mt-1 ${colors.text} opacity-80 truncate`}
+        title={typeof label === 'string' ? label : undefined}
+      >
         {label}
       </div>
 
@@ -98,27 +130,29 @@ export function MergeGateNode({ data }: MergeGateNodeProps) {
         </span>
       </div>
 
-      <div className="flex items-center gap-1 mt-1" data-testid="merge-mode-display">
-        {mergeMode === 'github' ? (
-          <svg className="w-3 h-3 text-blue-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M7 7v10m0-10a2 2 0 11-4 0 2 2 0 014 0zm10 10a2 2 0 104 0 2 2 0 00-4 0zm0 0V7a4 4 0 00-4-4H9" />
-          </svg>
-        ) : mergeMode === 'manual' ? (
-          <svg className="w-3 h-3 text-yellow-500 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-          </svg>
-        ) : (
-          <svg className="w-3 h-3 text-green-500 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-          </svg>
-        )}
-        <span
-          data-testid="merge-mode-label"
-          className={`text-xs font-mono ${mergeMode === 'github' ? 'text-blue-400' : mergeMode === 'manual' ? 'text-yellow-500' : 'text-green-500'}`}
-        >
-          {mergeMode === 'github' ? 'GitHub PR' : mergeMode === 'manual' ? 'Manual' : 'Automatic'}
-        </span>
-      </div>
+      {shouldShowMergeModeRow && (
+        <div className="flex items-center gap-1 mt-1" data-testid="merge-mode-display">
+          {mergeMode === 'github' ? (
+            <svg className="w-3 h-3 text-blue-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M7 7v10m0-10a2 2 0 11-4 0 2 2 0 014 0zm10 10a2 2 0 104 0 2 2 0 00-4 0zm0 0V7a4 4 0 00-4-4H9" />
+            </svg>
+          ) : mergeMode === 'manual' ? (
+            <svg className="w-3 h-3 text-yellow-500 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+            </svg>
+          ) : (
+            <svg className="w-3 h-3 text-green-500 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+          )}
+          <span
+            data-testid="merge-mode-label"
+            className={`text-xs font-mono ${mergeMode === 'github' ? 'text-blue-400' : mergeMode === 'manual' ? 'text-yellow-500' : 'text-green-500'}`}
+          >
+            {mergeMode === 'github' ? 'GitHub PR' : mergeMode === 'manual' ? 'Manual' : 'Automatic'}
+          </span>
+        </div>
+      )}
 
       <div className="flex items-center gap-1.5 mt-1">
         <span

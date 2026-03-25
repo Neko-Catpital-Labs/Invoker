@@ -11,6 +11,7 @@
 import { useState, useEffect } from 'react';
 import type { TaskState } from '../types.js';
 import { getStatusColor, getEffectiveVisualStatus } from '../lib/colors.js';
+import { mergeGatePanelHeading } from '../lib/merge-gate.js';
 
 function formatElapsed(dateVal: Date | string | undefined): string {
   if (!dateVal) return '--';
@@ -152,12 +153,14 @@ export function TaskPanel({
   const colors = getStatusColor(visualStatus);
   const executorSelectValue = effectiveExecutorSelectValue(task);
 
+  const mergeGateDisplayTitle = mergeGatePanelHeading(task, mergeMode);
+
   return (
     <div className="h-full overflow-y-auto p-4 space-y-4">
       {/* Header */}
       <div>
         <h2 className="text-lg font-semibold text-gray-100 truncate">
-          {task.description}
+          {mergeGateDisplayTitle}
         </h2>
         <p className="text-xs font-mono text-gray-400 mt-1">{task.id}</p>
       </div>
@@ -220,7 +223,7 @@ export function TaskPanel({
           >
             <option value="manual">Manual</option>
             <option value="automatic">Automatic</option>
-            <option value="github">GitHub PR</option>
+            <option value="github">GitHub</option>
           </select>
         </div>
       )}
@@ -228,7 +231,7 @@ export function TaskPanel({
       {/* GitHub PR link (merge gates only) */}
       {task.config.isMergeNode && task.execution?.prUrl && (
         <div className="flex items-center justify-between">
-          <span className="text-sm text-gray-400">Pull Request</span>
+          <span className="text-sm text-gray-400">PR link</span>
           <a
             href={task.execution.prUrl}
             target="_blank"
