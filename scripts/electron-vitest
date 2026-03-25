@@ -7,6 +7,11 @@
 # Usage (from a package directory):
 #   ../../scripts/electron-vitest run
 #   ../../scripts/electron-vitest run --reporter=verbose
+#
+# Worker parallelism (prepended before "$@" so explicit --max-workers can override):
+#   Default: --max-workers=50% (gentle on laptops / low-RAM CI)
+#   INVOKER_VITEST_HIGH_RESOURCE=1 — Vitest default worker count (full parallelism)
+#   INVOKER_VITEST_MAX_WORKERS=N|N% — explicit cap (overrides default and HIGH_RESOURCE)
 set -e
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -21,4 +26,13 @@ fi
 # node_modules/.bin/vitest is a bash wrapper; Electron needs the actual JS entry.
 VITEST_BIN=$(node -e "process.stdout.write(require.resolve('vitest/vitest.mjs'))")
 
-ELECTRON_RUN_AS_NODE=1 exec "$ELECTRON" "$VITEST_BIN" "$@"
+EXTRA_VITEST_ARGS=()
+if [ -n "${INVOKER_VITEST_MAX_WORKERS:-}" ]; then
+  EXTRA_VITEST_ARGS+=(--max-workers="${INVOKER_VITEST_MAX_WORKERS}")
+elif [ "${INVOKER_VITEST_HIGH_RESOURCE:-}" = "1" ]; then
+  :
+else
+  EXTRA_VITEST_ARGS+=(--max-workers=50%)
+fi
+
+ELECTRON_RUN_AS_NODE=1 exec "$ELECTRON" "$VITEST_BIN" "${EXTRA_VITEST_ARGS[@]}" "$@"
