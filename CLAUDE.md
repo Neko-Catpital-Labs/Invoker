@@ -23,6 +23,8 @@
 
 - Every package's `package.json` has `"test": "../../scripts/electron-vitest run"`
 - `electron-vitest` is a wrapper that sets `ELECTRON_RUN_AS_NODE=1` and runs vitest under Electron's Node.js
+- By default it passes `--max-workers=50%` to Vitest so local and constrained machines stay responsive. Use `INVOKER_VITEST_HIGH_RESOURCE=1` (or root `pnpm run test:high-resource` for the full monorepo) for Vitest’s default parallelism. Override with `INVOKER_VITEST_MAX_WORKERS` when you want an explicit cap.
+- Root `pnpm test` runs packages **one at a time** (`pnpm -r --workspace-concurrency=1`) for the same reason; `pnpm run test:high-resource` restores parallel package runs plus high-resource Vitest.
 - This ensures `better-sqlite3` (compiled for Electron ABI 133) is loaded by the correct Node runtime
 - Works for ALL packages, not just those with native dependencies
 

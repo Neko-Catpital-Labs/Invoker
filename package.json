@@ -4,7 +4,11 @@
   "version": "0.1.0",
   "description": "Auditable multi-agent orchestration with a mutating action graph",
   "scripts": {
-    "test": "bash scripts/test-plan-to-invoker-skill.sh && pnpm -r test",
+    "test": "bash scripts/test-plan-to-invoker-skill.sh && pnpm -r --workspace-concurrency=1 test",
+    "test:high-resource": "bash scripts/test-plan-to-invoker-skill.sh && INVOKER_VITEST_HIGH_RESOURCE=1 pnpm -r test",
+    "test:low-resource": "pnpm run test",
+    "test:low-resource:packages": "pnpm -r --workspace-concurrency=1 test",
+    "test:guarded": "bash scripts/run-with-resource-guard.sh pnpm -r --workspace-concurrency=1 test",
     "test:plan-to-invoker-skill": "bash scripts/test-plan-to-invoker-skill.sh",
     "setup": "bash scripts/setup-cursor-skills.sh",
     "build": "pnpm -r build",
