@@ -107,7 +107,7 @@ Rules:
    - ALWAYS cd into the package directory first: \`cd packages/<pkg> && pnpm test\`
    - To target a specific test file: \`cd packages/<pkg> && pnpm test -- src/__tests__/file.test.ts\`
    - NEVER run \`pnpm test <path>\` from the repo root — it runs \`pnpm -r test\` across all packages and the path will be wrong
-   - NEVER use \`npx vitest run\` — always use \`pnpm test\` which runs through electron-vitest with the correct native module ABI
+   - NEVER use \`npx vitest run\` — always use \`pnpm test\` which runs the package.json test script
    - NEVER invent test file names. Verify the test file exists before referencing it in a command.
 6. Use meaningful task IDs (kebab-case).
 7. When ready, output the plan inside a \`\`\`yaml code block.

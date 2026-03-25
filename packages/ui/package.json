@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "test": "../../scripts/electron-vitest run"
+    "test": "vitest run"
   },
   "dependencies": {
     "@xyflow/react": "^12.0.0",

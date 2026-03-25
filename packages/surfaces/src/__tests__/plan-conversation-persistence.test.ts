@@ -72,9 +72,9 @@ describe('PlanConversation persistence', () => {
   let adapter: SQLiteAdapter;
   let repo: ConversationRepository;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     mockSpawn.mockReset();
-    adapter = new SQLiteAdapter(':memory:');
+    adapter = await SQLiteAdapter.create(':memory:');
     repo = new ConversationRepository(adapter, silentLogger);
   });
 

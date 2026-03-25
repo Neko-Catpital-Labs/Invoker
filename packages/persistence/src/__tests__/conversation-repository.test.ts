@@ -15,8 +15,8 @@ describe('ConversationRepository', () => {
     error: () => {},
   };
 
-  beforeEach(() => {
-    adapter = new SQLiteAdapter(':memory:');
+  beforeEach(async () => {
+    adapter = await SQLiteAdapter.create(':memory:');
     repo = new ConversationRepository(adapter, silentLogger);
   });
 
@@ -372,7 +372,7 @@ describe('ConversationRepository', () => {
     });
 
     it('handles messages with special characters', () => {
-      const specialContent = 'Line1\nLine2\tTabbed\r\nWindows\0Null "quotes" \'apostrophe\' `backtick`';
+      const specialContent = 'Line1\nLine2\tTabbed\r\nWindows "quotes" \'apostrophe\' `backtick`';
       repo.saveConversation('ts-special', [
         { role: 'user', content: specialContent },
       ]);

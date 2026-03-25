@@ -13,7 +13,7 @@
  * (follows branch-chain.test.ts).
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execSync } from 'node:child_process';
@@ -28,8 +28,6 @@ function createTempRepo(): string {
   execSync('git config user.email "test@test.com"', { cwd: dir });
   execSync('git config user.name "Test"', { cwd: dir });
   writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'rebase-retry-test', version: '1.0.0', private: true }, null, 2));
-  mkdirSync(join(dir, 'scripts'), { recursive: true });
-  writeFileSync(join(dir, 'scripts/rebuild-for-electron.js'), 'process.exit(0);\n');
   execSync('pnpm install', { cwd: dir, stdio: 'pipe' });
   writeFileSync(join(dir, 'initial.txt'), 'initial');
   execSync('git add -A && git commit -m "initial commit X"', { cwd: dir });

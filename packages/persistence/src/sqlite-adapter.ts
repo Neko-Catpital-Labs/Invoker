@@ -1,10 +1,13 @@
 /**
- * SQLiteAdapter — PersistenceAdapter backed by better-sqlite3.
+ * SQLiteAdapter — PersistenceAdapter backed by sql.js (WASM SQLite).
  *
  * Uses `:memory:` for testing, file path for production.
+ * Construction is async (WASM init), all operations after init are synchronous.
  */
 
-import Database from 'better-sqlite3';
+import initSqlJs, { type Database as SqlJsDatabase } from 'sql.js';
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { dirname } from 'node:path';
 import type { TaskState, TaskStateChanges, Attempt } from '@invoker/core';
 import { normalizeFamiliarType } from '@invoker/core';
 import type { PersistenceAdapter, Workflow, TaskEvent, ActivityLogEntry, Conversation, ConversationMessage } from './adapter.js';
@@ -27,18 +30,98 @@ function rewritePnpmTestCommand(cmd: string): string {
   return cmd;
 }
 
-export class SQLiteAdapter implements PersistenceAdapter {
-  private db: Database.Database;
+/** Cached sql.js init promise — WASM is loaded only once per process. */
+let sqlJsPromise: ReturnType<typeof initSqlJs> | null = null;
 
-  constructor(dbPath: string = ':memory:') {
-    this.db = new Database(dbPath);
-    this.db.pragma('journal_mode = WAL');
+export class SQLiteAdapter implements PersistenceAdapter {
+  private db: SqlJsDatabase;
+  private dbPath: string | null;
+  private flushTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /** Use SQLiteAdapter.create() instead. */
+  private constructor(db: SqlJsDatabase, dbPath: string | null) {
+    this.db = db;
+    this.dbPath = dbPath;
+    this.db.run('PRAGMA foreign_keys = ON');
     this.initSchema();
     this.migrate();
   }
 
+  /**
+   * Async factory — loads WASM once, opens or creates the database.
+   * @param dbPath File path or ':memory:' (default).
+   */
+  static async create(dbPath: string = ':memory:'): Promise<SQLiteAdapter> {
+    if (!sqlJsPromise) {
+      sqlJsPromise = initSqlJs();
+    }
+    const SQL = await sqlJsPromise;
+
+    let db: SqlJsDatabase;
+    const isFile = dbPath !== ':memory:';
+    if (isFile && existsSync(dbPath)) {
+      const buffer = readFileSync(dbPath);
+      db = new SQL.Database(buffer);
+    } else {
+      db = new SQL.Database();
+    }
+
+    return new SQLiteAdapter(db, isFile ? dbPath : null);
+  }
+
+  // ── sql.js Helpers ───────────────────────────────────────
+
+  /** Run a single-row SELECT, returning the row as an object or undefined. */
+  private queryOne(sql: string, params: unknown[] = []): Record<string, unknown> | undefined {
+    const stmt = this.db.prepare(sql);
+    stmt.bind(params as any[]);
+    if (stmt.step()) {
+      const row = stmt.getAsObject();
+      stmt.free();
+      return row as Record<string, unknown>;
+    }
+    stmt.free();
+    return undefined;
+  }
+
+  /** Run a multi-row SELECT, returning an array of row objects. */
+  private queryAll(sql: string, params: unknown[] = []): Record<string, unknown>[] {
+    const stmt = this.db.prepare(sql);
+    stmt.bind(params as any[]);
+    const rows: Record<string, unknown>[] = [];
+    while (stmt.step()) {
+      rows.push(stmt.getAsObject() as Record<string, unknown>);
+    }
+    stmt.free();
+    return rows;
+  }
+
+  /** Run an INSERT/UPDATE/DELETE and schedule a flush. */
+  private execRun(sql: string, params: unknown[] = []): void {
+    this.db.run(sql, params as any[]);
+    this.scheduleFlush();
+  }
+
+  /** Flush DB to disk (no-op for :memory:). */
+  private flush(): void {
+    if (!this.dbPath) return;
+    const dir = dirname(this.dbPath);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(this.dbPath, Buffer.from(this.db.export()));
+  }
+
+  /** Debounced flush — coalesces rapid writes into a single I/O. */
+  private scheduleFlush(): void {
+    if (!this.dbPath) return;
+    if (this.flushTimer) clearTimeout(this.flushTimer);
+    this.flushTimer = setTimeout(() => {
+      this.flush();
+      this.flushTimer = null;
+    }, 1000);
+  }
+
   private initSchema(): void {
-    this.db.exec(`
+    this.db.run(`
       CREATE TABLE IF NOT EXISTS workflows (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
@@ -229,7 +312,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       'ALTER TABLE workflows ADD COLUMN visual_proof INTEGER',
     ];
     for (const sql of migrations) {
-      try { this.db.exec(sql); } catch { /* Column already exists */ }
+      try { this.db.run(sql); } catch { /* Column already exists */ }
     }
 
     this.migrateTestCommands();
@@ -242,14 +325,14 @@ export class SQLiteAdapter implements PersistenceAdapter {
    */
   private migrateTestCommands(): void {
     try {
-      const rows = this.db.prepare(
+      const rows = this.queryAll(
         `SELECT id, command FROM tasks WHERE command LIKE 'pnpm test packages/%' OR command LIKE 'pnpm test -- packages/%'`,
-      ).all() as Array<{ id: string; command: string }>;
+      ) as Array<{ id: string; command: string }>;
 
       for (const row of rows) {
         const fixed = rewritePnpmTestCommand(row.command);
         if (fixed !== row.command) {
-          this.db.prepare('UPDATE tasks SET command = ? WHERE id = ?').run(fixed, row.id);
+          this.execRun('UPDATE tasks SET command = ? WHERE id = ?', [fixed, row.id]);
         }
       }
     } catch {
@@ -260,10 +343,10 @@ export class SQLiteAdapter implements PersistenceAdapter {
   // ── Workflows ─────────────────────────────────────────
 
   saveWorkflow(workflow: Workflow): void {
-    this.db.prepare(`
+    this.execRun(`
       INSERT OR REPLACE INTO workflows (id, name, description, visual_proof, status, plan_file, repo_url, branch, on_finish, base_branch, feature_branch, merge_mode, generation, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
+    `, [
       workflow.id, workflow.name,
       workflow.description ?? null,
       workflow.visualProof ? 1 : 0,
@@ -273,7 +356,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       workflow.mergeMode ?? null,
       workflow.generation ?? 0,
       workflow.createdAt, workflow.updatedAt,
-    );
+    ]);
   }
 
   updateWorkflow(workflowId: string, changes: Partial<Pick<Workflow, 'status' | 'updatedAt' | 'baseBranch' | 'generation' | 'mergeMode'>>): void {
@@ -299,19 +382,19 @@ export class SQLiteAdapter implements PersistenceAdapter {
     values.push(changes.updatedAt ?? new Date().toISOString());
     if (setClauses.length === 0) return;
     values.push(workflowId);
-    this.db.prepare(`UPDATE workflows SET ${setClauses.join(', ')} WHERE id = ?`).run(...values);
+    this.execRun(`UPDATE workflows SET ${setClauses.join(', ')} WHERE id = ?`, values);
   }
 
   loadWorkflow(workflowId: string): Workflow | undefined {
-    const row = this.db.prepare('SELECT * FROM workflows WHERE id = ?').get(workflowId) as any;
+    const row = this.queryOne('SELECT * FROM workflows WHERE id = ?', [workflowId]);
     if (!row) return undefined;
     return this.rowToWorkflow(row);
   }
 
   listWorkflows(): Workflow[] {
-    const rows = this.db.prepare(
+    const rows = this.queryAll(
       'SELECT * FROM workflows ORDER BY created_at DESC',
-    ).all() as any[];
+    );
     return rows.map((row: any) => this.rowToWorkflow(row));
   }
 
@@ -320,7 +403,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
   saveTask(workflowId: string, task: TaskState): void {
     const cfg = task.config;
     const exec = task.execution;
-    this.db.prepare(`
+    this.execRun(`
       INSERT OR REPLACE INTO tasks (
         id, workflow_id, description, status, blocked_by, dependencies,
         command, prompt, experiment_prompt, exit_code, error, input_prompt,
@@ -354,7 +437,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         ?,
         ?
       )
-    `).run(
+    `, [
       task.id, workflowId, task.description, task.status,
       exec.blockedBy ?? null,
       JSON.stringify(task.dependencies),
@@ -390,7 +473,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       exec.prStatus ?? null,
       exec.isFixingWithAI ? 1 : 0,
       cfg.remoteTargetId ?? null,
-    );
+    ]);
   }
 
   updateTask(taskId: string, changes: TaskStateChanges): void {
@@ -521,34 +604,34 @@ export class SQLiteAdapter implements PersistenceAdapter {
     if (setClauses.length === 0) return;
 
     values.push(taskId);
-    this.db.prepare(`UPDATE tasks SET ${setClauses.join(', ')} WHERE id = ?`).run(...values);
+    this.execRun(`UPDATE tasks SET ${setClauses.join(', ')} WHERE id = ?`, values);
   }
 
   loadTasks(workflowId: string): TaskState[] {
-    const rows = this.db.prepare('SELECT * FROM tasks WHERE workflow_id = ?').all(workflowId) as any[];
+    const rows = this.queryAll('SELECT * FROM tasks WHERE workflow_id = ?', [workflowId]);
     return rows.map(this.rowToTask);
   }
 
   getAllTaskIds(): string[] {
-    const rows = this.db.prepare('SELECT id FROM tasks').all() as Array<{ id: string }>;
+    const rows = this.queryAll('SELECT id FROM tasks') as Array<{ id: string }>;
     return rows.map((r) => r.id);
   }
 
   getAllTaskBranches(): string[] {
-    const rows = this.db.prepare(
+    const rows = this.queryAll(
       'SELECT DISTINCT branch FROM tasks WHERE branch IS NOT NULL',
-    ).all() as Array<{ branch: string }>;
+    ) as Array<{ branch: string }>;
     return rows.map((r) => r.branch);
   }
 
   loadAllCompletedTasks(): Array<TaskState & { workflowName: string }> {
-    const rows = this.db.prepare(`
+    const rows = this.queryAll(`
       SELECT t.*, w.name AS workflow_name
       FROM tasks t
       JOIN workflows w ON w.id = t.workflow_id
       WHERE t.status = 'completed'
       ORDER BY t.completed_at DESC
-    `).all() as any[];
+    `);
     return rows.map((row: any) => ({
       ...this.rowToTask(row),
       workflowName: row.workflow_name,
@@ -556,64 +639,71 @@ export class SQLiteAdapter implements PersistenceAdapter {
   }
 
   deleteAllTasks(workflowId: string): void {
-    this.db.prepare('DELETE FROM tasks WHERE workflow_id = ?').run(workflowId);
+    this.execRun('DELETE FROM tasks WHERE workflow_id = ?', [workflowId]);
   }
 
   deleteAllWorkflows(): void {
-    this.db.exec('DELETE FROM events');
-    this.db.exec('DELETE FROM task_output');
-    this.db.exec('DELETE FROM attempts');
-    this.db.exec('DELETE FROM tasks');
-    this.db.exec('DELETE FROM workflows');
+    this.db.run('DELETE FROM events');
+    this.db.run('DELETE FROM task_output');
+    this.db.run('DELETE FROM attempts');
+    this.db.run('DELETE FROM tasks');
+    this.db.run('DELETE FROM workflows');
+    this.scheduleFlush();
   }
 
   deleteWorkflow(workflowId: string): void {
-    const deleteTransaction = this.db.transaction(() => {
+    this.db.run('BEGIN');
+    try {
       // Delete events first (FK constraint: events -> tasks)
-      this.db.prepare(`
+      this.db.run(`
         DELETE FROM events WHERE task_id IN (
           SELECT id FROM tasks WHERE workflow_id = ?
         )
-      `).run(workflowId);
+      `, [workflowId]);
 
       // Delete task output (FK constraint: task_output -> tasks)
-      this.db.prepare(`
+      this.db.run(`
         DELETE FROM task_output WHERE task_id IN (
           SELECT id FROM tasks WHERE workflow_id = ?
         )
-      `).run(workflowId);
+      `, [workflowId]);
 
       // Delete attempts (FK constraint: attempts -> tasks)
-      this.db.prepare(`
+      this.db.run(`
         DELETE FROM attempts WHERE node_id IN (
           SELECT id FROM tasks WHERE workflow_id = ?
         )
-      `).run(workflowId);
+      `, [workflowId]);
 
       // Delete tasks (FK constraint: tasks -> workflows)
-      this.db.prepare('DELETE FROM tasks WHERE workflow_id = ?').run(workflowId);
+      this.db.run('DELETE FROM tasks WHERE workflow_id = ?', [workflowId]);
 
       // Finally delete the workflow
-      this.db.prepare('DELETE FROM workflows WHERE id = ?').run(workflowId);
-    });
+      this.db.run('DELETE FROM workflows WHERE id = ?', [workflowId]);
 
-    deleteTransaction();
+      this.db.run('COMMIT');
+    } catch (err) {
+      this.db.run('ROLLBACK');
+      throw err;
+    }
+    this.scheduleFlush();
   }
 
   // ── Events ────────────────────────────────────────────
 
   logEvent(taskId: string, eventType: string, payload?: unknown): void {
-    this.db.prepare(`
+    this.execRun(`
       INSERT INTO events (task_id, event_type, payload)
       VALUES (?, ?, ?)
-    `).run(taskId, eventType, payload ? JSON.stringify(payload) : null);
+    `, [taskId, eventType, payload ? JSON.stringify(payload) : null]);
   }
 
   getEvents(taskId: string): TaskEvent[] {
-    const rows = this.db.prepare(
+    const rows = this.queryAll(
       'SELECT * FROM events WHERE task_id = ? ORDER BY id ASC',
-    ).all(taskId) as any[];
-    return rows.map((row) => ({
+      [taskId],
+    );
+    return rows.map((row: any) => ({
       id: row.id,
       taskId: row.task_id,
       eventType: row.event_type,
@@ -625,72 +715,80 @@ export class SQLiteAdapter implements PersistenceAdapter {
   // ── Queries ─────────────────────────────────────────
 
   getSelectedExperiment(taskId: string): string | null {
-    const row = this.db.prepare(
+    const row = this.queryOne(
       'SELECT selected_experiment FROM tasks WHERE id = ?',
-    ).get(taskId) as { selected_experiment: string | null } | undefined;
-    return row?.selected_experiment ?? null;
+      [taskId],
+    );
+    return (row?.selected_experiment as string) ?? null;
   }
 
   getWorkspacePath(taskId: string): string | null {
-    const row = this.db.prepare(
+    const row = this.queryOne(
       'SELECT workspace_path FROM tasks WHERE id = ?',
-    ).get(taskId) as { workspace_path: string | null } | undefined;
-    return row?.workspace_path ?? null;
+      [taskId],
+    );
+    return (row?.workspace_path as string) ?? null;
   }
 
   getClaudeSessionId(taskId: string): string | null {
-    const row = this.db.prepare(
+    const row = this.queryOne(
       'SELECT claude_session_id FROM tasks WHERE id = ?',
-    ).get(taskId) as { claude_session_id: string | null } | undefined;
-    const val = row?.claude_session_id ?? null;
+      [taskId],
+    );
+    const val = (row?.claude_session_id as string) ?? null;
     return val === 'none' ? null : val;
   }
 
   getFamiliarType(taskId: string): string | null {
-    const row = this.db.prepare(
+    const row = this.queryOne(
       'SELECT familiar_type FROM tasks WHERE id = ?',
-    ).get(taskId) as { familiar_type: string | null } | undefined;
-    const raw = row?.familiar_type ?? null;
+      [taskId],
+    );
+    const raw = (row?.familiar_type as string) ?? null;
     if (raw === null) return null;
     return normalizeFamiliarType(raw) ?? raw;
   }
 
   getTaskStatus(taskId: string): string | null {
-    const row = this.db.prepare(
+    const row = this.queryOne(
       'SELECT status FROM tasks WHERE id = ?',
-    ).get(taskId) as { status: string | null } | undefined;
-    return row?.status ?? null;
+      [taskId],
+    );
+    return (row?.status as string) ?? null;
   }
 
   getContainerId(taskId: string): string | null {
-    const row = this.db.prepare(
+    const row = this.queryOne(
       'SELECT container_id FROM tasks WHERE id = ?',
-    ).get(taskId) as { container_id: string | null } | undefined;
-    const val = row?.container_id ?? null;
+      [taskId],
+    );
+    const val = (row?.container_id as string) ?? null;
     return val === 'none' ? null : val;
   }
 
   getBranch(taskId: string): string | null {
-    const row = this.db.prepare(
+    const row = this.queryOne(
       'SELECT branch FROM tasks WHERE id = ?',
-    ).get(taskId) as { branch: string | null } | undefined;
-    return row?.branch ?? null;
+      [taskId],
+    );
+    return (row?.branch as string) ?? null;
   }
 
   getRemoteTargetId(taskId: string): string | null {
-    const row = this.db.prepare(
+    const row = this.queryOne(
       'SELECT remote_target_id FROM tasks WHERE id = ?',
-    ).get(taskId) as { remote_target_id: string | null } | undefined;
-    return row?.remote_target_id ?? null;
+      [taskId],
+    );
+    return (row?.remote_target_id as string) ?? null;
   }
 
   // ── Conversations ───────────────────────────────────────
 
   saveConversation(conversation: Conversation): void {
-    this.db.prepare(`
+    this.execRun(`
       INSERT OR REPLACE INTO conversations (thread_ts, channel_id, user_id, extracted_plan, plan_submitted, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(
+    `, [
       conversation.threadTs,
       conversation.channelId,
       conversation.userId,
@@ -698,20 +796,20 @@ export class SQLiteAdapter implements PersistenceAdapter {
       conversation.planSubmitted ? 1 : 0,
       conversation.createdAt,
       conversation.updatedAt,
-    );
+    ]);
   }
 
   loadConversation(threadTs: string): Conversation | undefined {
-    const row = this.db.prepare('SELECT * FROM conversations WHERE thread_ts = ?').get(threadTs) as any;
+    const row = this.queryOne('SELECT * FROM conversations WHERE thread_ts = ?', [threadTs]);
     if (!row) return undefined;
     return {
-      threadTs: row.thread_ts,
-      channelId: row.channel_id,
-      userId: row.user_id,
-      extractedPlan: row.extracted_plan ?? null,
+      threadTs: row.thread_ts as string,
+      channelId: row.channel_id as string,
+      userId: row.user_id as string,
+      extractedPlan: (row.extracted_plan as string) ?? null,
       planSubmitted: row.plan_submitted === 1,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
+      createdAt: row.created_at as string,
+      updatedAt: row.updated_at as string,
     };
   }
 
@@ -734,61 +832,66 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
     if (setClauses.length === 0) return;
     values.push(threadTs);
-    this.db.prepare(`UPDATE conversations SET ${setClauses.join(', ')} WHERE thread_ts = ?`).run(...values);
+    this.execRun(`UPDATE conversations SET ${setClauses.join(', ')} WHERE thread_ts = ?`, values);
   }
 
   deleteConversation(threadTs: string): void {
-    this.db.prepare('DELETE FROM conversation_messages WHERE thread_ts = ?').run(threadTs);
-    this.db.prepare('DELETE FROM conversations WHERE thread_ts = ?').run(threadTs);
+    this.execRun('DELETE FROM conversation_messages WHERE thread_ts = ?', [threadTs]);
+    this.execRun('DELETE FROM conversations WHERE thread_ts = ?', [threadTs]);
   }
 
   listActiveConversations(): Conversation[] {
-    const rows = this.db.prepare(
+    const rows = this.queryAll(
       'SELECT * FROM conversations WHERE plan_submitted = 0 ORDER BY updated_at DESC',
-    ).all() as any[];
-    return rows.map((row) => ({
-      threadTs: row.thread_ts,
-      channelId: row.channel_id,
-      userId: row.user_id,
-      extractedPlan: row.extracted_plan ?? null,
+    );
+    return rows.map((row: any) => ({
+      threadTs: row.thread_ts as string,
+      channelId: row.channel_id as string,
+      userId: row.user_id as string,
+      extractedPlan: (row.extracted_plan as string) ?? null,
       planSubmitted: row.plan_submitted === 1,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
+      createdAt: row.created_at as string,
+      updatedAt: row.updated_at as string,
     }));
   }
 
   deleteConversationsOlderThan(cutoffIso: string): number {
     // Delete messages first (FK constraint)
-    this.db.prepare(`
+    this.db.run(`
       DELETE FROM conversation_messages WHERE thread_ts IN (
         SELECT thread_ts FROM conversations WHERE updated_at < ?
       )
-    `).run(cutoffIso);
-    const result = this.db.prepare(
+    `, [cutoffIso]);
+    this.db.run(
       'DELETE FROM conversations WHERE updated_at < ?',
-    ).run(cutoffIso);
-    return result.changes;
+      [cutoffIso],
+    );
+    const changes = this.db.getRowsModified();
+    this.scheduleFlush();
+    return changes;
   }
 
   // ── Conversation Messages ──────────────────────────────
 
   appendMessage(threadTs: string, role: 'user' | 'assistant', content: string): void {
-    const row = this.db.prepare(
+    const row = this.queryOne(
       'SELECT COALESCE(MAX(seq), 0) AS max_seq FROM conversation_messages WHERE thread_ts = ?',
-    ).get(threadTs) as { max_seq: number };
-    const nextSeq = row.max_seq + 1;
+      [threadTs],
+    ) as { max_seq: number } | undefined;
+    const nextSeq = ((row?.max_seq as number) ?? 0) + 1;
 
-    this.db.prepare(`
+    this.execRun(`
       INSERT INTO conversation_messages (thread_ts, seq, role, content)
       VALUES (?, ?, ?, ?)
-    `).run(threadTs, nextSeq, role, content);
+    `, [threadTs, nextSeq, role, content]);
   }
 
   loadMessages(threadTs: string): ConversationMessage[] {
-    const rows = this.db.prepare(
+    const rows = this.queryAll(
       'SELECT * FROM conversation_messages WHERE thread_ts = ? ORDER BY seq ASC',
-    ).all(threadTs) as any[];
-    return rows.map((row) => ({
+      [threadTs],
+    );
+    return rows.map((row: any) => ({
       id: row.id,
       threadTs: row.thread_ts,
       seq: row.seq,
@@ -801,22 +904,24 @@ export class SQLiteAdapter implements PersistenceAdapter {
   // ── Task Output ─────────────────────────────────────
 
   appendTaskOutput(taskId: string, data: string): void {
-    this.db.prepare(
+    this.execRun(
       'INSERT INTO task_output (task_id, data) VALUES (?, ?)',
-    ).run(taskId, data);
+      [taskId, data],
+    );
   }
 
   getTaskOutput(taskId: string): string {
-    const rows = this.db.prepare(
+    const rows = this.queryAll(
       'SELECT data FROM task_output WHERE task_id = ? ORDER BY id ASC',
-    ).all(taskId) as Array<{ data: string }>;
+      [taskId],
+    ) as Array<{ data: string }>;
     return rows.map((r) => r.data).join('');
   }
 
   // ── Attempts ────────────────────────────────────────────
 
   saveAttempt(attempt: Attempt): void {
-    this.db.prepare(`
+    this.execRun(`
       INSERT OR REPLACE INTO attempts (
         id, node_id, attempt_number, status,
         snapshot_commit, base_branch, upstream_attempt_ids,
@@ -832,7 +937,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         ?, ?, ?, ?, ?, ?,
         ?, ?, ?
       )
-    `).run(
+    `, [
       attempt.id, attempt.nodeId, attempt.attemptNumber, attempt.status,
       attempt.snapshotCommit ?? null, attempt.baseBranch ?? null,
       JSON.stringify(attempt.upstreamAttemptIds),
@@ -847,20 +952,22 @@ export class SQLiteAdapter implements PersistenceAdapter {
       attempt.supersedesAttemptId ?? null,
       attempt.createdAt.toISOString(),
       attempt.mergeConflict ? JSON.stringify(attempt.mergeConflict) : null,
-    );
+    ]);
   }
 
   loadAttempts(nodeId: string): Attempt[] {
-    const rows = this.db.prepare(
+    const rows = this.queryAll(
       'SELECT * FROM attempts WHERE node_id = ? ORDER BY attempt_number ASC',
-    ).all(nodeId) as any[];
+      [nodeId],
+    );
     return rows.map(this.rowToAttempt);
   }
 
   loadAttempt(attemptId: string): Attempt | undefined {
-    const row = this.db.prepare(
+    const row = this.queryOne(
       'SELECT * FROM attempts WHERE id = ?',
-    ).get(attemptId) as any;
+      [attemptId],
+    );
     if (!row) return undefined;
     return this.rowToAttempt(row);
   }
@@ -885,29 +992,32 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
     if (setClauses.length === 0) return;
     values.push(attemptId);
-    this.db.prepare(`UPDATE attempts SET ${setClauses.join(', ')} WHERE id = ?`).run(...values);
+    this.execRun(`UPDATE attempts SET ${setClauses.join(', ')} WHERE id = ?`, values);
   }
 
   getNextAttemptNumber(nodeId: string): number {
-    const row = this.db.prepare(
+    const row = this.queryOne(
       'SELECT COALESCE(MAX(attempt_number), 0) AS max_num FROM attempts WHERE node_id = ?',
-    ).get(nodeId) as { max_num: number };
-    return row.max_num + 1;
+      [nodeId],
+    ) as { max_num: number } | undefined;
+    return ((row?.max_num as number) ?? 0) + 1;
   }
 
   // ── Activity Log ─────────────────────────────────────
 
   writeActivityLog(source: string, level: string, message: string): void {
-    this.db.prepare(
+    this.execRun(
       'INSERT INTO activity_log (source, level, message) VALUES (?, ?, ?)',
-    ).run(source, level, message);
+      [source, level, message],
+    );
   }
 
   getActivityLogs(sinceId = 0, limit = 200): ActivityLogEntry[] {
-    const rows = this.db.prepare(
+    const rows = this.queryAll(
       'SELECT * FROM activity_log WHERE id > ? ORDER BY id ASC LIMIT ?',
-    ).all(sinceId, limit) as any[];
-    return rows.map((row) => ({
+      [sinceId, limit],
+    );
+    return rows.map((row: any) => ({
       id: row.id,
       timestamp: row.timestamp,
       source: row.source,
@@ -919,6 +1029,11 @@ export class SQLiteAdapter implements PersistenceAdapter {
   // ── Lifecycle ─────────────────────────────────────────
 
   close(): void {
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer);
+      this.flushTimer = null;
+    }
+    this.flush();
     this.db.close();
   }
 

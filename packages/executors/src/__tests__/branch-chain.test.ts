@@ -9,7 +9,7 @@
  * and real collectUpstreamBranches / buildUpstreamContext.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execSync } from 'node:child_process';
@@ -29,8 +29,6 @@ function createTempRepo(): string {
   );
   // WorktreeFamiliar runs pnpm install in the worktree — minimal manifest so provisioning succeeds.
   writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'branch-chain-test', version: '1.0.0', private: true }, null, 2));
-  mkdirSync(join(dir, 'scripts'), { recursive: true });
-  writeFileSync(join(dir, 'scripts/rebuild-for-electron.js'), 'process.exit(0);\n');
   execSync('pnpm install', { cwd: dir, stdio: 'pipe' });
   writeFileSync(join(dir, 'initial.txt'), 'initial');
   execSync('git add -A && git commit -m "initial"', { cwd: dir });

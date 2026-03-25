@@ -5,8 +5,8 @@ import { createAttempt, createTaskState } from '@invoker/core';
 describe('Attempt persistence', () => {
   let adapter: SQLiteAdapter;
 
-  beforeEach(() => {
-    adapter = new SQLiteAdapter(':memory:');
+  beforeEach(async () => {
+    adapter = await SQLiteAdapter.create(':memory:');
     // Create a workflow and task so FK constraints pass
     adapter.saveWorkflow({
       id: 'wf-1', name: 'Test', status: 'running',
@@ -111,10 +111,14 @@ describe('Attempt persistence', () => {
     // Save a task and verify we can set selected_attempt_id via raw SQL
     adapter.saveAttempt(createAttempt('taskA', 1, { status: 'completed' }));
 
-    // Access the raw db to verify column exists
+    // Access the raw db to verify column exists (sql.js API)
     const db = (adapter as any).db;
-    db.prepare('UPDATE tasks SET selected_attempt_id = ? WHERE id = ?').run('taskA-a1', 'taskA');
-    const row = db.prepare('SELECT selected_attempt_id FROM tasks WHERE id = ?').get('taskA') as any;
+    db.run('UPDATE tasks SET selected_attempt_id = ? WHERE id = ?', ['taskA-a1', 'taskA']);
+    const stmt = db.prepare('SELECT selected_attempt_id FROM tasks WHERE id = ?');
+    stmt.bind(['taskA']);
+    stmt.step();
+    const row = stmt.getAsObject();
+    stmt.free();
     expect(row.selected_attempt_id).toBe('taskA-a1');
   });
 });

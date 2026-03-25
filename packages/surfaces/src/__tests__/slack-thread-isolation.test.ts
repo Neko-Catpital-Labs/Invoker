@@ -417,11 +417,11 @@ describe('Slack conversation recovery with persistence', () => {
   let surface: SlackSurface;
   let receivedCommands: SurfaceCommand[];
 
-  beforeEach(() => {
+  beforeEach(async () => {
     receivedCommands = [];
     conversationInstances.clear();
     mockPlanConversationCtor.mockClear();
-    adapter = new SQLiteAdapter(':memory:');
+    adapter = await SQLiteAdapter.create(':memory:');
     repo = new ConversationRepository(adapter, silentLogger);
   });
 

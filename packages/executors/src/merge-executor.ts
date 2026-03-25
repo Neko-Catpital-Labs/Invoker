@@ -309,6 +309,7 @@ export async function approveMergeImpl(
       const commitBody = fullSummary ? `${mergeMessage}\n\n${fullSummary}` : mergeMessage;
       await host.execGitIn(['commit', '-m', commitBody], worktreeDir);
       await host.execGitIn(['update-ref', 'refs/heads/' + baseBranch, 'HEAD'], worktreeDir);
+      await host.execGitIn(['reset', '--hard', baseBranch], host.cwd);
       mergeTrace('SQUASH_MERGE_COMPLETE', { featureBranch, baseBranch });
       console.log(`[merge] Approved: squash-merged ${featureBranch} into ${baseBranch}`);
     } catch (err) {
@@ -499,7 +500,7 @@ export async function consolidateAndMergeImpl(
     }
     console.log(`[merge] Consolidated ${taskBranches.length} task branches into ${featureBranch}`);
 
-    if (visualProof && host.runVisualProofCapture) {
+    if (visualProof && onFinish === 'pull_request' && host.runVisualProofCapture) {
       const slug = (featureBranch ?? 'workflow').replace(/\//g, '-');
       const vpMarkdown = await host.runVisualProofCapture(baseBranch, featureBranch, slug);
       if (vpMarkdown) {
@@ -520,6 +521,7 @@ export async function consolidateAndMergeImpl(
         const commitBody = body ? `${mergeMessage}\n\n${body}` : mergeMessage;
         await host.execGitIn(['commit', '-m', commitBody], worktreeDir);
         await host.execGitIn(['update-ref', 'refs/heads/' + baseBranch, 'HEAD'], worktreeDir);
+        await host.execGitIn(['reset', '--hard', baseBranch], host.cwd);
         console.log(`[merge] Squash-merged ${featureBranch} into ${baseBranch}`);
       } else {
         console.log(`[merge] No changes to commit — ${baseBranch} already up-to-date with ${featureBranch}`);

@@ -10,8 +10,8 @@ import type { TaskState, TaskStateChanges } from '@invoker/core';
 describe('SQLiteAdapter', () => {
   let adapter: SQLiteAdapter;
 
-  beforeEach(() => {
-    adapter = new SQLiteAdapter(':memory:');
+  beforeEach(async () => {
+    adapter = await SQLiteAdapter.create(':memory:');
   });
 
   afterEach(() => {
@@ -1002,11 +1002,11 @@ describe('SQLiteAdapter', () => {
   });
 
   describe('migrateTestCommands', () => {
-    it('rewrites bad pnpm test commands when DB is re-opened', () => {
+    it('rewrites bad pnpm test commands when DB is re-opened', async () => {
       const tmpDir = mkdtempSync(join(tmpdir(), 'invoker-test-'));
       const dbPath = join(tmpDir, 'migrate.db');
 
-      const db1 = new SQLiteAdapter(dbPath);
+      const db1 = await SQLiteAdapter.create(dbPath);
       db1.saveWorkflow(testWorkflow);
       db1.saveTask('wf-1', makeTask('t-bad1', {
         config: { command: 'pnpm test packages/protocol/src/__tests__/validation.test.ts' },
@@ -1019,7 +1019,7 @@ describe('SQLiteAdapter', () => {
       }));
       db1.close();
 
-      const db2 = new SQLiteAdapter(dbPath);
+      const db2 = await SQLiteAdapter.create(dbPath);
       const tasks = db2.loadTasks('wf-1');
       const bad1 = tasks.find(t => t.id === 't-bad1')!;
       const bad2 = tasks.find(t => t.id === 't-bad2')!;

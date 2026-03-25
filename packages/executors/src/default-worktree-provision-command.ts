@@ -21,4 +21,4 @@ export const DEFAULT_WORKTREE_PROVISION_COMMAND =
       exit 1 \
     ) \
   ) \
-  ) && node scripts/rebuild-for-electron.js';
+  )';

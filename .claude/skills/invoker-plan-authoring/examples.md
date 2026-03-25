@@ -303,14 +303,14 @@ These examples show **WRONG** plans with explanations of what's broken.
 ### Anti-Pattern A: Using `npx vitest run`
 
 ```yaml
-# WRONG: npx vitest run causes ABI mismatch with native modules
+# WRONG: npx vitest run may not resolve correctly in worktrees
 tasks:
   - id: test-core
     description: "Run core tests"
     command: "cd packages/core && npx vitest run"
     dependencies: []
 
-# CORRECT: Always use pnpm test, which runs through electron-vitest
+# CORRECT: Always use pnpm test, which runs the package.json test script
 tasks:
   - id: test-core
     description: "Run core tests"
@@ -318,7 +318,7 @@ tasks:
     dependencies: []
 ```
 
-**Why this is wrong**: This project uses `better-sqlite3`, a native addon compiled for Electron's Node.js ABI (133). Running `npx vitest run` uses system Node (ABI 127), causing a binary mismatch crash. Always use `pnpm test`, which invokes `electron-vitest` with the correct runtime.
+**Why this is wrong**: Running `npx vitest run` may fail in worktrees where `node_modules/.bin` isn't in PATH. Always use `pnpm test`, which resolves vitest through the package.json `test` script reliably.
 
 ### Anti-Pattern B: Running tests from repo root
 
@@ -445,7 +445,7 @@ If you MUST use a potentially dangerous command, use `requiresManualApproval: tr
 - **Multi-step refactors**: Use `familiarType: worktree` for isolation, chain dependencies
 - **Large refactors**: Use `onFinish: pull_request`, complex DAGs with diamond dependencies
 - **Always verify**: Every prompt task needs a corresponding test command task
-- **Always use `pnpm test`**: Never `npx vitest run` or running from repo root
+- **Always use `pnpm test`**: Never `npx vitest run` or direct vitest calls
 - **Always include `dependencies`**: Even if it's an empty array
 
 For complete reference documentation, see [SKILL.md](SKILL.md) and [reference.md](reference.md).

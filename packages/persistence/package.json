@@ -12,15 +12,15 @@
   },
   "scripts": {
     "build": "tsup src/index.ts --format esm --dts",
-    "test": "../../scripts/electron-vitest run",
+    "test": "vitest run",
     "clean": "rm -rf dist"
   },
   "dependencies": {
     "@invoker/core": "workspace:*",
-    "better-sqlite3": "^12.6.0"
+    "sql.js": "^1.12.0"
   },
   "devDependencies": {
-    "@types/better-sqlite3": "^7.6.13",
+    "@types/sql.js": "^1.4.0",
     "typescript": "^5.7.0",
     "vitest": "^3.0.0",
     "tsup": "^8.0.0"

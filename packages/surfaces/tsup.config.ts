@@ -6,7 +6,7 @@ export default defineConfig({
   dts: true,
   clean: true,
   // Bundle workspace deps (their package.json point to .ts source, won't load at runtime).
-  // better-sqlite3/dockerode stay external — native modules resolved from node_modules.
+  // sql.js/dockerode stay external — resolved from node_modules.
   noExternal: [
     '@invoker/core',
     '@invoker/protocol',
@@ -15,5 +15,5 @@ export default defineConfig({
     '@invoker/executors',
     'yaml',
   ],
-  external: ['@slack/bolt', 'better-sqlite3', 'dockerode'],
+  external: ['@slack/bolt', 'sql.js', 'dockerode'],
 });

@@ -8,14 +8,59 @@
 import { test as base, _electron as electron, type ElectronApplication, type Page } from '@playwright/test';
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
+import { execSync } from 'node:child_process';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 
 export type ElectronFixtures = {
   electronApp: ElectronApplication;
   page: Page;
+  testDir: string;
 };
 
+const repoRoot = path.resolve(__dirname, '..', '..', '..', '..');
+
+function cleanStaleExperimentState(): void {
+  // Git-level cleanup only. DB cleanup is handled by tmpdir isolation.
+  try {
+    execSync('git worktree prune', { cwd: repoRoot, stdio: 'ignore' });
+
+    const porcelain = execSync('git worktree list --porcelain', {
+      cwd: repoRoot, encoding: 'utf8',
+    });
+    const lines = porcelain.split('\n');
+    for (let i = 0; i < lines.length; i++) {
+      if (lines[i].startsWith('branch refs/heads/experiment/')) {
+        for (let j = i - 1; j >= 0; j--) {
+          if (lines[j].startsWith('worktree ')) {
+            const wtPath = lines[j].slice('worktree '.length);
+            try { execSync(`git worktree remove --force "${wtPath}"`, { cwd: repoRoot, stdio: 'ignore' }); } catch { /* ok */ }
+            break;
+          }
+        }
+      }
+    }
+
+    execSync('git worktree prune', { cwd: repoRoot, stdio: 'ignore' });
+
+    const branches = execSync('git branch --list "experiment/*"', {
+      cwd: repoRoot, encoding: 'utf8',
+    }).trim().split('\n').map(b => b.trim()).filter(Boolean);
+    for (const branch of branches) {
+      try { execSync(`git branch -D "${branch}"`, { cwd: repoRoot, stdio: 'ignore' }); } catch { /* ok */ }
+    }
+  } catch { /* ignore */ }
+}
+
 export const test = base.extend<ElectronFixtures>({
-  electronApp: async ({}, use) => {
+  testDir: async ({}, use) => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'invoker-e2e-'));
+    await use(dir);
+    rmSync(dir, { recursive: true, force: true });
+  },
+
+  electronApp: async ({ testDir }, use) => {
+    cleanStaleExperimentState();
     const app = await electron.launch({
       args: [
         ...(process.platform === 'linux'
@@ -23,7 +68,7 @@ export const test = base.extend<ElectronFixtures>({
           : []),
         path.resolve(__dirname, '..', '..', 'dist', 'main.js'),
       ],
-      env: { ...process.env, NODE_ENV: 'test', INVOKER_CLAUDE_FIX_COMMAND: '/bin/true' },
+      env: { ...process.env, NODE_ENV: 'test', INVOKER_DB_DIR: testDir, INVOKER_CLAUDE_FIX_COMMAND: '/bin/true' },
     });
     await use(app);
     await app.close();
@@ -49,7 +94,8 @@ export const test = base.extend<ElectronFixtures>({
 
 export { expect } from '@playwright/test';
 
-/** Minimal plan with two command tasks for testing UI rendering and lifecycle. */
+/** Minimal plan with two command tasks for testing UI rendering and lifecycle.
+ *  Commands sleep briefly so the "running" state is visible long enough to capture. */
 export const TEST_PLAN = {
   name: 'E2E Test Plan',
   onFinish: 'none' as const,
@@ -57,13 +103,13 @@ export const TEST_PLAN = {
     {
       id: 'task-alpha',
       description: 'First test task',
-      command: 'echo hello-alpha',
+      command: 'sleep 5 && echo hello-alpha',
       dependencies: [],
     },
     {
       id: 'task-beta',
       description: 'Second test task depending on alpha',
-      command: 'echo hello-beta',
+      command: 'sleep 3 && echo hello-beta',
       dependencies: ['task-alpha'],
     },
   ],
@@ -91,7 +137,7 @@ export async function waitForTaskStatus(
   page: Page,
   taskId: string,
   status: string,
-  timeoutMs = 30000,
+  timeoutMs = 55000,
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -102,6 +148,23 @@ export async function waitForTaskStatus(
     await page.waitForTimeout(300);
   }
   throw new Error(`Task "${taskId}" did not reach status "${status}" within ${timeoutMs}ms`);
+}
+
+/** Wait for a task to leave pending (running, completed, or failed). */
+export async function waitForTaskStarted(
+  page: Page,
+  taskId: string,
+  timeoutMs = 30000,
+): Promise<string> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const result = await page.evaluate(() => window.invoker.getTasks());
+    const tasks = Array.isArray(result) ? result : result.tasks;
+    const task = tasks.find((t: any) => t.id === taskId);
+    if (task && task.status !== 'pending') return task.status;
+    await page.waitForTimeout(100);
+  }
+  throw new Error(`Task "${taskId}" did not leave pending within ${timeoutMs}ms`);
 }
 
 /** Wait for UI animations to settle before capturing. */
@@ -121,6 +184,6 @@ export async function captureScreenshot(page: Page, name: string): Promise<void>
   await waitForStableUI(page);
   await page.screenshot({
     path: path.join(dir, `${name}.png`),
-    fullPage: true,
+    timeout: 60000,
   });
 }

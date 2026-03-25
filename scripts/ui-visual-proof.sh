@@ -1,169 +1,112 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PROOF_DIR="packages/app/e2e/visual-proof"
+# Capture UI screenshots and video for the current working tree state.
+#
+# This script builds the UI + app, runs Playwright visual-proof tests, and
+# saves screenshots + video to an output directory. It does NOT handle git
+# checkouts or before/after comparisons — the caller orchestrates that.
+#
+# Usage:
+#   scripts/ui-visual-proof.sh [--validate] [--label <name>] [--output-dir <dir>] [--spec <file>]
+#
+# Modes:
+#   --validate    Run DOM snapshot tests (fast, no Electron needed)
+#   [default]     Capture pixel screenshots via Playwright + Electron
+#
+# Options:
+#   --label       Subdirectory name under output-dir (default: "capture")
+#   --output-dir  Base directory for captures (default: packages/app/e2e/visual-proof)
+#   --spec        Playwright spec file to run (default: visual-proof.spec.ts)
+#   --skip-build  Skip the pnpm build step (useful when already built)
+#
+# Output structure (capture mode):
+#   <output-dir>/<label>/
+#     ├── empty-state.png
+#     ├── dag-loaded.png
+#     ├── task-running.png
+#     ├── task-complete.png
+#     ├── task-panel.png
+#     └── walkthrough.webm
+
+LABEL="capture"
+OUTPUT_DIR="packages/app/e2e/visual-proof"
+SPEC="visual-proof.spec.ts"
+SKIP_BUILD=false
 RESULTS_DIR="packages/app/e2e/test-results"
-STATES=("empty-state" "dag-loaded" "task-running" "task-complete" "task-panel")
+VALIDATE=false
 
 usage() {
-  cat <<EOF
-Usage: scripts/ui-visual-proof.sh <command> [options]
-Commands:
-  before                    Capture baseline screenshots (run on base branch)
-  after                     Capture changed screenshots (run after UI changes)
-  pr --title <t> --base <b> Upload proof and create PR
-  embed --base <b> --feature <f> --slug <s>  Capture and upload proof, output markdown to stdout
-EOF
+  sed -n '3,/^$/p' "$0" | sed 's/^# \?//'
   exit 1
 }
 
-capture() {
-  local mode="$1"
-  echo "Capturing ${mode} state..."
-  mkdir -p "${PROOF_DIR}/${mode}"
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --validate)   VALIDATE=true; shift ;;
+    --label)      LABEL="$2"; shift 2 ;;
+    --output-dir) OUTPUT_DIR="$2"; shift 2 ;;
+    --spec)       SPEC="$2"; shift 2 ;;
+    --skip-build) SKIP_BUILD=true; shift ;;
+    --help|-h)    usage ;;
+    *)            echo "Unknown option: $1" >&2; usage ;;
+  esac
+done
+
+# --validate mode: run DOM snapshot tests and exit
+if [[ "${VALIDATE}" == "true" ]]; then
+  echo "[visual-proof] Running DOM snapshot tests..." >&2
+  cd packages/ui && pnpm test -- --run src/__tests__/visual-proof-snapshots.test.tsx
+  exit $?
+fi
+
+CAPTURE_DIR="${OUTPUT_DIR}/${LABEL}"
+
+echo "[visual-proof] Capturing to ${CAPTURE_DIR}" >&2
+mkdir -p "${CAPTURE_DIR}"
+
+# Cleanup: wipe stale experiment worktrees and branches.
+# DB cleanup is handled by tmpdir isolation in the E2E fixture.
+echo "[visual-proof] Cleaning stale experiment state..." >&2
+rm -rf "${HOME}/.invoker/worktrees"/* 2>/dev/null || true
+git worktree prune 2>/dev/null || true
+{ git for-each-ref --format='%(refname:short)' refs/heads/experiment/ 2>/dev/null | xargs -r -n 50 git branch -D 2>/dev/null; } || true
+
+if [[ "${SKIP_BUILD}" == "false" ]]; then
+  echo "[visual-proof] Building UI and app..." >&2
   pnpm --filter @invoker/ui build && pnpm --filter @invoker/app build
-  cd packages/app && CAPTURE_MODE="${mode}" CAPTURE_VIDEO=1 \
-    xvfb-run --auto-servernum npx playwright test visual-proof.spec.ts
-  cd ../..
-  find ${RESULTS_DIR} -name '*.webm' -exec cp {} "${PROOF_DIR}/${mode}/walkthrough.webm" \;
-  echo "Captured files:"
-  ls -la "${PROOF_DIR}/${mode}/"
-}
+fi
 
-pr_command() {
-  local TITLE=""
-  local BASE=""
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --title) TITLE="$2"; shift 2 ;;
-      --base)  BASE="$2"; shift 2 ;;
-      *)       echo "Unknown option: $1"; usage ;;
-    esac
-  done
-  if [[ -z "${TITLE}" || -z "${BASE}" ]]; then
-    echo "Error: --title and --base are required"
-    usage
-  fi
+echo "[visual-proof] Running Playwright: ${SPEC}" >&2
+PLAYWRIGHT_EXIT=0
+cd packages/app && CAPTURE_MODE="${LABEL}" CAPTURE_VIDEO=1 \
+  xvfb-run --auto-servernum npx playwright test "${SPEC}" || PLAYWRIGHT_EXIT=$?
+cd ../..
 
-  # Build PR body with local image paths — create-pr.mjs uploads them to R2
-  BODY_FILE=$(mktemp --suffix=.md)
+if [[ "${PLAYWRIGHT_EXIT}" -ne 0 ]]; then
+  echo "[visual-proof] Playwright exited ${PLAYWRIGHT_EXIT} — collecting any screenshots produced" >&2
+fi
 
-  echo "## Visual Proof" > "${BODY_FILE}"
-  echo "" >> "${BODY_FILE}"
-  for state in "${STATES[@]}"; do
-    STATE_NAME=$(echo "${state}" | sed 's/-/ /g; s/\b\(.\)/\u\1/g')
-    BEFORE_IMG="${PROOF_DIR}/before/${state}.png"
-    AFTER_IMG="${PROOF_DIR}/after/${state}.png"
-    cat >> "${BODY_FILE}" <<SECTION
-<details open>
-<summary>${STATE_NAME}</summary>
+# Move screenshots from the Playwright-internal capture dir to our output dir.
+# captureScreenshot() in electron-app.ts writes to packages/app/e2e/visual-proof/<CAPTURE_MODE>/
+# which is the same as CAPTURE_DIR when using default OUTPUT_DIR. When OUTPUT_DIR is overridden
+# we need to move them.
+PLAYWRIGHT_CAPTURE_DIR="packages/app/e2e/visual-proof/${LABEL}"
+if [[ "${PLAYWRIGHT_CAPTURE_DIR}" != "${CAPTURE_DIR}" ]] && [[ -d "${PLAYWRIGHT_CAPTURE_DIR}" ]]; then
+  cp "${PLAYWRIGHT_CAPTURE_DIR}"/*.png "${CAPTURE_DIR}/" 2>/dev/null || true
+fi
 
-| Before | After |
-|--------|-------|
-| ![before](${BEFORE_IMG}) | ![after](${AFTER_IMG}) |
+# Copy video from test-results
+find "${RESULTS_DIR}" -name '*.webm' -exec cp {} "${CAPTURE_DIR}/walkthrough.webm" \; 2>/dev/null || true
 
-</details>
+echo "[visual-proof] Captured files:" >&2
+ls -la "${CAPTURE_DIR}/" >&2
 
-SECTION
-  done
+SCREENSHOT_COUNT=$(find "${CAPTURE_DIR}" -name '*.png' 2>/dev/null | wc -l)
+if [[ "${SCREENSHOT_COUNT}" -eq 0 ]]; then
+  echo "[visual-proof] ERROR: No screenshots captured" >&2
+  exit 1
+fi
 
-  BEFORE_VIDEO="${PROOF_DIR}/before/walkthrough.webm"
-  AFTER_VIDEO="${PROOF_DIR}/after/walkthrough.webm"
-  cat >> "${BODY_FILE}" <<SECTION
-<details>
-<summary>Video Walkthroughs</summary>
-
-- [Before walkthrough](${BEFORE_VIDEO})
-- [After walkthrough](${AFTER_VIDEO})
-
-</details>
-SECTION
-
-  # create-pr.mjs handles: git push, R2 image upload, PR creation via REST API
-  node scripts/create-pr.mjs --title "${TITLE}" --base "${BASE}" --body-file "${BODY_FILE}"
-
-  rm -f "${BODY_FILE}"
-}
-
-embed_command() {
-  local BASE=""
-  local FEATURE=""
-  local SLUG=""
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --base)    BASE="$2"; shift 2 ;;
-      --feature) FEATURE="$2"; shift 2 ;;
-      --slug)    SLUG="$2"; shift 2 ;;
-      *)         echo "Unknown option: $1" >&2; usage ;;
-    esac
-  done
-  if [[ -z "${BASE}" || -z "${FEATURE}" || -z "${SLUG}" ]]; then
-    echo "Error: --base, --feature, and --slug are required" >&2
-    usage
-  fi
-
-  ORIG_BRANCH=$(git branch --show-current)
-
-  echo "Checking out base branch: ${BASE}" >&2
-  git checkout "${BASE}" >&2
-  capture "before" >&2
-
-  echo "Checking out feature branch: ${FEATURE}" >&2
-  git checkout "${FEATURE}" >&2
-  capture "after" >&2
-
-  echo "Restoring original branch: ${ORIG_BRANCH}" >&2
-  git checkout "${ORIG_BRANCH}" >&2
-
-  # Copy files to temp directory with proper naming
-  TMPDIR=$(mktemp -d)
-  for mode in before after; do
-    for f in "${PROOF_DIR}/${mode}"/*.png; do
-      [[ -e "$f" ]] && cp "$f" "${TMPDIR}/${mode}--$(basename "$f")"
-    done
-    for f in "${PROOF_DIR}/${mode}"/*.webm; do
-      [[ -e "$f" ]] && cp "$f" "${TMPDIR}/${mode}--$(basename "$f")"
-    done
-  done
-
-  echo "Uploading assets to R2" >&2
-  URL_MAP=$(node scripts/upload-pr-images.mjs ${TMPDIR}/*)
-
-  rm -rf "${TMPDIR}"
-
-  echo "## Visual Proof"
-  echo ""
-  for state in "${STATES[@]}"; do
-    STATE_NAME=$(echo "${state}" | sed 's/-/ /g; s/\b\(.\)/\u\1/g')
-    BEFORE_URL=$(echo "$URL_MAP" | jq -r ".\"before--${state}.png\"")
-    AFTER_URL=$(echo "$URL_MAP" | jq -r ".\"after--${state}.png\"")
-    echo "<details open>"
-    echo "<summary>${STATE_NAME}</summary>"
-    echo ""
-    echo "| Before | After |"
-    echo "|--------|-------|"
-    echo "| ![before](${BEFORE_URL}) | ![after](${AFTER_URL}) |"
-    echo ""
-    echo "</details>"
-    echo ""
-  done
-
-  BEFORE_VIDEO=$(echo "$URL_MAP" | jq -r ".\"before--walkthrough.webm\"")
-  AFTER_VIDEO=$(echo "$URL_MAP" | jq -r ".\"after--walkthrough.webm\"")
-
-  echo "<details>"
-  echo "<summary>Video Walkthroughs</summary>"
-  echo ""
-  echo "- [Before walkthrough](${BEFORE_VIDEO})"
-  echo "- [After walkthrough](${AFTER_VIDEO})"
-  echo ""
-  echo "</details>"
-}
-
-case "${1:-}" in
-  before)  capture "before" ;;
-  after)   capture "after" ;;
-  pr)      shift; pr_command "$@" ;;
-  embed)   shift; embed_command "$@" ;;
-  *)       usage ;;
-esac
+echo "[visual-proof] ${SCREENSHOT_COUNT} screenshot(s) captured" >&2
+echo "${CAPTURE_DIR}"

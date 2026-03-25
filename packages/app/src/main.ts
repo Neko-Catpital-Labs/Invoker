@@ -20,8 +20,7 @@
  *   electron dist/main.js --headless queue
  *   electron dist/main.js --headless audit <taskId>
  *
- * Using the same Electron binary for both modes eliminates ABI mismatches
- * with native modules (better-sqlite3).
+ * Using the same Electron binary for both modes provides a consistent runtime.
  */
 
 import { app, BrowserWindow, ipcMain, nativeImage, shell } from 'electron';
@@ -116,15 +115,17 @@ function resolveUtilizationRules(config: InvokerConfig): UtilizationRule[] {
 }
 
 
-function initServices(): void {
+async function initServices(): Promise<void> {
   messageBus = new IpcBus();
-  const dbDir = process.env.NODE_ENV === 'test'
-    ? path.join(homedir(), '.invoker', 'test')
-    : path.join(homedir(), '.invoker');
+  const dbDir = process.env.INVOKER_DB_DIR
+    ?? (process.env.NODE_ENV === 'test'
+      ? path.join(homedir(), '.invoker', 'test')
+      : path.join(homedir(), '.invoker'));
   mkdirSync(dbDir, { recursive: true });
-  persistence = new SQLiteAdapter(path.join(dbDir, 'invoker.db'));
+  persistence = await SQLiteAdapter.create(path.join(dbDir, 'invoker.db'));
   familiarRegistry = new FamiliarRegistry();
-  const invokerHomeInit = path.join(homedir(), '.invoker');
+  const invokerHomeInit = process.env.INVOKER_DB_DIR
+    ?? path.join(homedir(), '.invoker');
   familiarRegistry.register(
     'worktree',
     new WorktreeFamiliar({
@@ -152,8 +153,6 @@ function initServices(): void {
 }
 
 // ── Load @invoker/surfaces at runtime ────────────────────────
-// Uses createRequire anchored to this file so Node resolves
-// better-sqlite3 from packages/app/node_modules/ (not surfaces/).
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function loadSurfaces(): any {
   const req = createRequire(__filename);
@@ -251,7 +250,7 @@ const RED = '\x1b[31m';
 
 if (isHeadless) {
   app.whenReady().then(async () => {
-    initServices();
+    await initServices();
     try {
       await runHeadless(cliArgs, {
         orchestrator, persistence, familiarRegistry, messageBus,
@@ -446,8 +445,8 @@ function setupGuiMode(): void {
     });
   }
 
-  app.whenReady().then(() => {
-    initServices();
+  app.whenReady().then(async () => {
+    await initServices();
 
     rebuildTaskExecutor();
 
@@ -472,7 +471,9 @@ function setupGuiMode(): void {
       killRunningTask,
     });
 
-    const dbPath = path.join(homedir(), '.invoker', 'invoker.db');
+    const dbPath = process.env.INVOKER_DB_DIR
+      ? path.join(process.env.INVOKER_DB_DIR, 'invoker.db')
+      : path.join(homedir(), '.invoker', 'invoker.db');
     console.log(`[init] Database: ${dbPath}`);
     console.log(`[init] Repo root: ${repoRoot}`);
     console.log(`[init] Config: disableAutoRunOnStartup=${invokerConfig.disableAutoRunOnStartup ?? false}`);

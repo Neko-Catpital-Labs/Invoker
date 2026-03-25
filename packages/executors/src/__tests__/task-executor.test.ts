@@ -2758,9 +2758,10 @@ describe('TaskExecutor', () => {
       (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
       (executor as any).removeMergeWorktree = async () => {};
       (executor as any).runVisualProofCapture = vi.fn().mockResolvedValue('## Visual Proof\n| Before | After |');
+      (executor as any).execPr = vi.fn().mockResolvedValue('https://example.com/pr');
 
       await executor.consolidateAndMerge(
-        'none', 'master', 'plan/test', 'wf-1', 'Test', ['t1'],
+        'pull_request', 'master', 'plan/test', 'wf-1', 'Test', ['t1'],
         'original body', true,
       );
 
@@ -2805,10 +2806,11 @@ describe('TaskExecutor', () => {
       (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
       (executor as any).removeMergeWorktree = async () => {};
       (executor as any).runVisualProofCapture = vi.fn().mockResolvedValue(undefined);
+      (executor as any).execPr = vi.fn().mockResolvedValue('https://example.com/pr');
 
       // Should not throw
       await executor.consolidateAndMerge(
-        'none', 'master', 'plan/test', 'wf-1', 'Test', ['t1'],
+        'pull_request', 'master', 'plan/test', 'wf-1', 'Test', ['t1'],
         'original body', true,
       );
 

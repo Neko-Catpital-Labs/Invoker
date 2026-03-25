@@ -241,7 +241,7 @@ For ESM-only packages, use dynamic import:
 - **ALWAYS cd into the package directory**: `cd packages/<pkg> && pnpm test`
 - To target a specific test file: `cd packages/<pkg> && pnpm test -- src/__tests__/file.test.ts`
 - **NEVER run `pnpm test <path>` from the repo root** — it runs `pnpm -r test` across all packages
-- **NEVER use `npx vitest run` or direct vitest calls** — always use `pnpm test` which runs through electron-vitest with the correct native module ABI
+- **NEVER use `npx vitest run` or direct vitest calls** — always use `pnpm test` which runs the package.json test script
 - **NEVER invent test file names** — verify the test file exists before referencing it
 - **Do not use AI prompts for test/verification tasks** — use commands only
 
@@ -417,7 +417,7 @@ Resource budget for scheduling control. Value from 0-100 or "max". Tasks with hi
 
 - **Syntax-only verification for new scripts**: `node --check` and `bash -n` prove syntax, not behavior. Verification must actually run the code with inputs and check output. See "Verification strength ladder" above.
 - **Not verifying new npm dependencies are importable**: `pnpm add` succeeding doesn't mean the package resolves at runtime. Add `node -e "require('pkg')"` or `node -e "import('pkg')"` to the install command.
-- **Using `npx vitest run` instead of `pnpm test`**: Always use `pnpm test` to get the correct electron-vitest wrapper.
+- **Using `npx vitest run` instead of `pnpm test`**: Always use `pnpm test` to run the package.json test script.
 - **Running `pnpm test packages/...` from the repo root**: Always cd into the package first.
 - **Putting both `command` and `prompt` on a single task**: A task must have one or the other, never both.
 - **Omitting the `dependencies` array**: Always include it, even if empty `[]`.

@@ -5,12 +5,11 @@
  * the CLI runner and Electron app execution paths.
  */
 
-import { execSync, spawn } from 'node:child_process';
-import { existsSync, mkdirSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { spawn } from 'node:child_process';
+import { mkdirSync, readdirSync, copyFileSync, rmSync, mkdtempSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
-import { createRequire } from 'node:module';
 
 import type { Orchestrator, TaskState, ExperimentVariant } from '@invoker/core';
 import type { SQLiteAdapter } from '@invoker/persistence';
@@ -77,7 +76,6 @@ export class TaskExecutor {
   private maxWorktreesPerRepo: number;
   /** @internal */ defaultBranch: string | undefined;
   /** @internal */ callbacks: TaskExecutorCallbacks;
-  private abiChecked = false;
   /** @internal */ mergeGateProvider?: MergeGateProvider;
   private activePrPollers = new Map<string, ReturnType<typeof setInterval>>();
   private remoteTargets: Record<string, { host: string; user: string; sshKeyPath: string; port?: number }>;
@@ -98,40 +96,7 @@ export class TaskExecutor {
    * Execute multiple tasks concurrently.
    */
   async executeTasks(tasks: TaskState[]): Promise<void> {
-    if (!this.abiChecked) {
-      this.abiChecked = true;
-      this.checkNativeModuleAbi();
-    }
     await Promise.all(tasks.map((task) => this.executeTask(task)));
-  }
-
-  /**
-   * One-time check: warn if better-sqlite3 was compiled for a different ABI
-   * than the system Node that task subprocesses will use.
-   */
-  private checkNativeModuleAbi(): void {
-    try {
-      const req = createRequire(resolve(this.cwd, 'packages', 'persistence', 'dummy.js'));
-      const pkgPath = req.resolve('better-sqlite3/package.json');
-      const binaryPath = resolve(dirname(pkgPath), 'build', 'Release', 'better_sqlite3.node');
-      if (!existsSync(binaryPath)) return;
-
-      const nm = execSync(`nm -D "${binaryPath}" 2>/dev/null || true`, { encoding: 'utf8' });
-      const match = nm.match(/node_register_module_v(\d+)/);
-      if (!match) return;
-
-      const binaryAbi = parseInt(match[1], 10);
-      const runtimeAbi = parseInt(process.versions.modules, 10);
-      if (binaryAbi === runtimeAbi) return;
-
-      console.warn(
-        `[TaskExecutor] better-sqlite3 ABI mismatch: binary=${binaryAbi}, ` +
-        `runtime=${runtimeAbi}. Task commands that use 'npx vitest run' will crash. ` +
-        `Use 'pnpm test' (electron-vitest) in plan tasks instead.`,
-      );
-    } catch {
-      // Non-fatal — skip check if anything goes wrong
-    }
   }
 
   /**
@@ -389,25 +354,89 @@ export class TaskExecutor {
   async runVisualProofCapture(baseBranch: string, featureBranch: string, slug: string): Promise<string | undefined> {
     try {
       const scriptPath = resolve(this.cwd, 'scripts/ui-visual-proof.sh');
-      const result = await new Promise<string>((resolveP, reject) => {
-        const child = spawn('bash', [scriptPath, 'embed', '--base', baseBranch, '--feature', featureBranch, '--slug', slug], {
+      const outputDir = resolve(this.cwd, 'packages/app/e2e/visual-proof');
+      const origBranch = (await this.execGitReadonly(['branch', '--show-current'])).trim();
+
+      const runCapture = (label: string): Promise<string> => {
+        return new Promise((resolveP, reject) => {
+          const child = spawn('bash', [scriptPath, '--label', label, '--output-dir', outputDir], {
+            cwd: this.cwd,
+            stdio: ['ignore', 'pipe', 'pipe'],
+          });
+          let stdout = '';
+          let stderr = '';
+          child.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
+          child.stderr?.on('data', (d: Buffer) => {
+            stderr += d.toString();
+            console.log(`[visual-proof] ${d.toString().trimEnd()}`);
+          });
+          child.on('error', (err) => reject(err));
+          child.on('close', (code) => {
+            if (code !== 0) reject(new Error(`Visual proof capture failed (exit ${code}): ${stderr}`));
+            else resolveP(stdout.trim());
+          });
+        });
+      };
+
+      await this.execGitIn(['clean', '-fd'], this.cwd);
+      const baseSha = (await this.execGitReadonly(['rev-parse', baseBranch])).trim();
+      await this.execGitIn(['checkout', '-f', '--detach', baseSha], this.cwd);
+      await runCapture('before');
+
+      await this.execGitIn(['clean', '-fd'], this.cwd);
+      const featureSha = (await this.execGitReadonly(['rev-parse', featureBranch])).trim();
+      await this.execGitIn(['checkout', '-f', '--detach', featureSha], this.cwd);
+      await runCapture('after');
+
+      await this.execGitIn(['clean', '-fd'], this.cwd);
+      if (origBranch) {
+        await this.execGitIn(['checkout', '-f', origBranch], this.cwd);
+      }
+
+      // Upload and build markdown
+      const states = ['empty-state', 'dag-loaded', 'task-running', 'task-complete', 'task-panel'];
+      mkdirSync(resolve(homedir(), '.invoker'), { recursive: true });
+      const tmpDir = mkdtempSync(resolve(homedir(), '.invoker', 'vp-'));
+      for (const mode of ['before', 'after']) {
+        for (const f of readdirSync(resolve(outputDir, mode))) {
+          copyFileSync(resolve(outputDir, mode, f), resolve(tmpDir, `${mode}--${f}`));
+        }
+      }
+
+      const uploadResult = await new Promise<string>((resolveP, reject) => {
+        const files = readdirSync(tmpDir).map(f => resolve(tmpDir, f));
+        const child = spawn('node', [resolve(this.cwd, 'scripts/upload-pr-images.mjs'), ...files], {
           cwd: this.cwd,
           stdio: ['ignore', 'pipe', 'pipe'],
         });
         let stdout = '';
-        let stderr = '';
         child.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
-        child.stderr?.on('data', (d: Buffer) => {
-          stderr += d.toString();
-          console.log(`[visual-proof] ${d.toString().trimEnd()}`);
-        });
         child.on('error', (err) => reject(err));
         child.on('close', (code) => {
-          if (code !== 0) reject(new Error(`Visual proof capture failed (exit ${code}): ${stderr}`));
-          else resolveP(stdout);
+          if (code !== 0) reject(new Error(`Upload failed (exit ${code})`));
+          else resolveP(stdout.trim());
         });
       });
-      return result.trim() || undefined;
+
+      rmSync(tmpDir, { recursive: true, force: true });
+
+      const urlMap = JSON.parse(uploadResult);
+      const lines: string[] = ['## Visual Proof', ''];
+      for (const state of states) {
+        const stateName = state.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+        const beforeUrl = urlMap[`before--${state}.png`] ?? '';
+        const afterUrl = urlMap[`after--${state}.png`] ?? '';
+        lines.push(`<details open>`, `<summary>${stateName}</summary>`, '',
+          '| Before | After |', '|--------|-------|',
+          `| ![before](${beforeUrl}) | ![after](${afterUrl}) |`, '', '</details>', '');
+      }
+      const beforeVideo = urlMap['before--walkthrough.webm'] ?? '';
+      const afterVideo = urlMap['after--walkthrough.webm'] ?? '';
+      lines.push('<details>', '<summary>Video Walkthroughs</summary>', '',
+        `- [Before walkthrough](${beforeVideo})`, `- [After walkthrough](${afterVideo})`,
+        '', '</details>');
+
+      return lines.join('\n');
     } catch (err) {
       console.warn(`[visual-proof] Capture failed (non-blocking): ${err instanceof Error ? err.message : String(err)}`);
       return undefined;

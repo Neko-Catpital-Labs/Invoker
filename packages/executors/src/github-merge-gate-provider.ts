@@ -104,7 +104,7 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
       const child = spawn(cmd, args, {
         cwd,
         stdio: ['ignore', 'pipe', 'pipe'],
-        env: { ...process.env }, // Ensure full environment is inherited for keyring/credential access
+        env: { ...process.env },
       });
       let stdout = '';
       let stderr = '';

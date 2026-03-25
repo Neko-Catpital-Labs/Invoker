@@ -10,89 +10,31 @@
 
 ## Testing Architecture
 
-**ALL packages in this project use `../../scripts/electron-vitest run` for running tests.** This is the ONE CORRECT WAY to run tests, regardless of whether the package uses native modules or not.
-
-### Why this approach
-
-1. **Consistency**: Same test command works in main repo and worktrees
-2. **No node_modules needed**: Script path is relative, works from any worktree
-3. **ABI safety**: Handles native module ABI mismatches automatically
-4. **Environment handling**: Correctly sets `ELECTRON_RUN_AS_NODE=1` for all tests
+All packages use standard `vitest run` via `pnpm test`. The persistence layer uses `sql.js` (WASM-based SQLite), so tests run under system Node with no native SQLite addon or Electron test runtime.
 
 ### How it works
 
-- Every package's `package.json` has `"test": "../../scripts/electron-vitest run"`
-- `electron-vitest` is a wrapper that sets `ELECTRON_RUN_AS_NODE=1` and runs vitest under Electron's Node.js
-- By default it passes `--max-workers=50%` to Vitest so local and constrained machines stay responsive. Use `INVOKER_VITEST_HIGH_RESOURCE=1` (or root `pnpm run test:high-resource` for the full monorepo) for Vitest’s default parallelism. Override with `INVOKER_VITEST_MAX_WORKERS` when you want an explicit cap.
-- Root `pnpm test` runs packages **one at a time** (`pnpm -r --workspace-concurrency=1`) for the same reason; `pnpm run test:high-resource` restores parallel package runs plus high-resource Vitest.
-- This ensures `better-sqlite3` (compiled for Electron ABI 133) is loaded by the correct Node runtime
-- Works for ALL packages, not just those with native dependencies
+- Every package's `package.json` has `"test": "vitest run"`.
+- Root `pnpm test` runs packages **one at a time** (`pnpm -r --workspace-concurrency=1`) so constrained machines stay responsive; `pnpm run test:high-resource` uses parallel package runs.
 
 ### In plan tasks
 
 **ALWAYS use `pnpm test` in plan task commands, NEVER use `npx vitest run` or direct vitest calls.**
 
-`WorktreeFamiliar` strips `ELECTRON_RUN_AS_NODE` from task subprocess environments by design. When you run `pnpm test`, the package.json script restores the correct environment via `electron-vitest`, bypassing this limitation.
-
 ```yaml
-# Wrong — crashes with ABI mismatch or "vitest: not found":
+# Wrong — vitest may not be in PATH:
 command: "cd packages/surfaces && npx vitest run"
 command: "cd packages/surfaces && vitest run"
 
-# Right — uses electron-vitest, ABI matches:
+# Right — uses package.json test script:
 command: "cd packages/surfaces && pnpm test"
 ```
 
-## Native Module ABI
+### Worktree provisioning
 
-This project uses `better-sqlite3`, a native C++ addon that must be compiled for a specific Node.js ABI. Electron bundles its own Node.js with a **different ABI** than system Node, even when the major version matches:
+Git worktrees created by `WorktreeFamiliar` run `pnpm install --frozen-lockfile` to provision dependencies. No rebuild step needed.
 
-| Runtime | ABI | Used by |
-|---------|-----|---------|
-| System Node v22 | 127 | scripts, packages without native deps |
-| Electron 35 | 133 | app, E2E tests, headless mode |
-
-**The project standardizes on Electron's ABI (133).** The binary is compiled once for Electron and all tests run under Electron's Node via `ELECTRON_RUN_AS_NODE=1`.
-
-### How it works
-
-- `pnpm install` triggers `postinstall` → `scripts/rebuild-for-electron.js`, which runs `scripts/check-native-modules.js` under Electron's Node (`ELECTRON_RUN_AS_NODE=1`) to compile `better-sqlite3` for ABI 133.
-- `onlyBuiltDependencies` in root `package.json` allows both `better-sqlite3` (native compile) and `electron` (binary download) to run their install scripts.
-- **ALL packages** run tests through `scripts/electron-vitest`, which executes vitest under Electron's bundled Node.js (ABI 133). This includes packages without native deps for consistency.
-- All Electron entry points (`dev`, `run.sh`, `submit-plan.sh`, `test:e2e`) use ABI 133 natively.
-- Git worktrees created by `WorktreeFamiliar` run `pnpm install --frozen-lockfile && node scripts/rebuild-for-electron.js` to provision dependencies and ensure the correct ABI.
-
-### Troubleshooting
-
-#### "vitest: not found" or "command not found" in worktrees
-
-**Cause**: Package is trying to run `vitest` directly instead of using `electron-vitest` script.
-
-**Fix**: Update the package's `package.json` to use:
-```json
-"test": "../../scripts/electron-vitest run"
-```
-
-This uses a relative path to the script (no node_modules needed) and works in both main repo and worktrees.
-
-#### `NODE_MODULE_VERSION` mismatch errors
-
-**Cause**: `better-sqlite3` was compiled for wrong ABI or test is running under wrong Node runtime.
-
-**Fix**: Rebuild for Electron ABI:
-```bash
-pnpm run rebuild:electron
-```
-
-Do **not** run `pnpm rebuild better-sqlite3` directly — that rebuilds for system Node (ABI 127) which will break Electron.
-
-#### Plan tasks failing with test errors in worktrees
-
-**Cause**: Plan task command uses `npx vitest run` or direct vitest call instead of `pnpm test`.
-
-**Fix**: Always use `pnpm test` in plan task commands. `WorktreeFamiliar` strips `ELECTRON_RUN_AS_NODE` from task environments, but `pnpm test` → `electron-vitest` restores it correctly.
-
-#### Verify worktree provisioning end-to-end
+Verify worktree provisioning end-to-end:
 
 ```bash
 bash scripts/test-worktree-provisioning.sh

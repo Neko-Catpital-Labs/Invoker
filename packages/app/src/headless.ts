@@ -38,7 +38,7 @@ export interface HeadlessDeps {
   messageBus: MessageBus;
   repoRoot: string;
   invokerConfig: InvokerConfig;
-  initServices: () => void;
+  initServices: () => Promise<void>;
   wireSlackBot: (deps: {
     executor: TaskExecutor;
     logFn: (source: string, level: string, message: string) => void;
@@ -472,7 +472,7 @@ async function headlessSlack(deps: HeadlessDeps): Promise<void> {
     persistence.writeActivityLog(source, level, message);
   };
 
-  initServices();
+  await initServices();
 
   const taskExecutor = createHeadlessExecutor(deps, {
     onComplete: (taskId) => {
@@ -520,7 +520,7 @@ function restoreWorkflowForTask(taskId: string, deps: Pick<HeadlessDeps, 'orches
 }
 
 async function waitForCompletion(orchestrator: Orchestrator, workflowId?: string, waitForApproval?: boolean): Promise<void> {
-  const maxWaitMs = waitForApproval ? 86_400_000 : 300_000; // 24 hours if waiting for approval, else 5 minutes
+  const maxWaitMs = waitForApproval ? 86_400_000 : 1_800_000; // 24 hours if waiting for approval, else 30 minutes
   const pollIntervalMs = 100;
   const start = Date.now();
 

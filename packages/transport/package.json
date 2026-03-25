@@ -12,7 +12,7 @@
   },
   "scripts": {
     "build": "tsup",
-    "test": "../../scripts/electron-vitest run",
+    "test": "vitest run",
     "clean": "rm -rf dist"
   },
   "devDependencies": {

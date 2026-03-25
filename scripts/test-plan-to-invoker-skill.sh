@@ -42,7 +42,7 @@ fi
 must_contain "$SKILL_MD" "## Intended flow (do not skip steps)" "SKILL must document the full flow"
 must_contain "$SKILL_MD" "Behavioral verification (agent environment, first)" "SKILL must require agent-first behavioral verification"
 must_contain "$SKILL_MD" "Invoker \`command\` tasks are optional / secondary" "SKILL must state Invoker command tasks are secondary to agent runs"
-must_contain "$SKILL_MD" "pnpm test" "SKILL must mention pnpm test (electron-vitest) for behavioral proof"
+must_contain "$SKILL_MD" "pnpm test" "SKILL must mention pnpm test for behavioral proof"
 must_contain "$SKILL_MD" "Grep-only checks belong in step 2" "SKILL must separate grep from behavioral verification"
 must_contain "$SKILL_MD" "see playbook Phase 1b" "SKILL Execution must reference playbook Phase 1b"
 must_contain "$SKILL_MD" "see playbook Phase 1c" "SKILL Execution must reference optional Invoker verify YAML (Phase 1c)"

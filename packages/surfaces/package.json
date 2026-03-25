@@ -5,7 +5,7 @@
   "types": "dist/index.d.ts",
   "scripts": {
     "build": "tsup",
-    "test": "../../scripts/electron-vitest run",
+    "test": "vitest run",
     "test:watch": "vitest",
     "clean": "rm -rf dist"
   },
@@ -16,7 +16,6 @@
     "@invoker/protocol": "workspace:*",
     "@invoker/transport": "workspace:*",
     "@slack/bolt": "^4.6.0",
-    "better-sqlite3": "^12.6.2",
     "yaml": "^2.7.0"
   },
   "devDependencies": {

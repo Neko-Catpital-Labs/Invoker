@@ -8,13 +8,13 @@
  * relaunch the orphaned task.
  */
 
-import { test as base, _electron as electron, expect, type ElectronApplication, type Page } from '@playwright/test';
+import { test as base, _electron as electron, expect, type Page } from '@playwright/test';
 import { execSync } from 'node:child_process';
-import { homedir } from 'node:os';
+import { tmpdir } from 'node:os';
+import { mkdtempSync, rmSync } from 'node:fs';
 import * as path from 'node:path';
 
 const MAIN_JS = path.resolve(__dirname, '..', 'dist', 'main.js');
-const DB_PATH = path.join(homedir(), '.invoker', 'test', 'invoker.db');
 
 const RELAUNCH_PLAN = {
   name: 'Orphan Relaunch Test',
@@ -49,16 +49,20 @@ async function waitForInvoker(page: Page): Promise<void> {
   await page.waitForFunction(() => typeof window.invoker !== 'undefined', null, { timeout: 10000 });
 }
 
-function sqliteExec(sql: string): void {
-  execSync(`sqlite3 "${DB_PATH}" "${sql}"`);
-}
-
 base.describe('Orphan task relaunch on restart', () => {
   base('orphaned running task is relaunched after app restart', async () => {
+    const testDir = mkdtempSync(path.join(tmpdir(), 'invoker-e2e-'));
+    const DB_PATH = path.join(testDir, 'invoker.db');
+
+    function sqliteExec(sql: string): void {
+      execSync(`sqlite3 "${DB_PATH}" "${sql}"`);
+    }
+
+    try {
     // --- Session 1: start a plan, get a task running, then close ---
     const app1 = await electron.launch({
       args: launchArgs(),
-      env: { ...process.env, NODE_ENV: 'test' },
+      env: { ...process.env, NODE_ENV: 'test', INVOKER_DB_DIR: testDir },
     });
     const page1 = await app1.firstWindow();
     await waitForInvoker(page1);
@@ -99,7 +103,7 @@ base.describe('Orphan task relaunch on restart', () => {
     // --- Session 2: relaunch and verify orphan reconciliation ---
     const app2 = await electron.launch({
       args: launchArgs(),
-      env: { ...process.env, NODE_ENV: 'test' },
+      env: { ...process.env, NODE_ENV: 'test', INVOKER_DB_DIR: testDir },
     });
     const page2 = await app2.firstWindow();
     await waitForInvoker(page2);
@@ -124,5 +128,8 @@ base.describe('Orphan task relaunch on restart', () => {
     expect(postFast?.status).toBe('completed');
 
     await app2.close();
+    } finally {
+      rmSync(testDir, { recursive: true, force: true });
+    }
   });
 });

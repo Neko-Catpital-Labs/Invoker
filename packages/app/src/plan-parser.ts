@@ -137,8 +137,8 @@ export function parsePlan(yamlContent: string, repoDir?: string): PlanDefinition
 
     if (task.command && /\bnpx vitest run\b/.test(task.command)) {
       throw new PlanParseError(
-        `Task "${task.id}" uses 'npx vitest run' which causes ABI mismatch errors. ` +
-        `Use 'pnpm test' instead (runs electron-vitest with the correct ABI).`,
+        `Task "${task.id}" uses 'npx vitest run' which may not resolve correctly. ` +
+        `Use 'pnpm test' instead.`,
       );
     }
 
