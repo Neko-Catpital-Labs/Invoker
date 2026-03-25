@@ -129,6 +129,22 @@ export interface PlanDefinition {
   }>;
 }
 
+/** User-visible merge-node description aligned with `onFinish` / `mergeMode` (list + graph subtitle). */
+export function descriptionForMergeNode(plan: Pick<PlanDefinition, 'name' | 'onFinish' | 'mergeMode'>): string {
+  const onFinish = plan.onFinish ?? 'none';
+  const mergeMode = plan.mergeMode ?? 'manual';
+  if (mergeMode === 'github') {
+    return `GitHub PR gate for ${plan.name}`;
+  }
+  if (onFinish === 'pull_request') {
+    return `Pull request gate for ${plan.name}`;
+  }
+  if (onFinish === 'merge') {
+    return `Merge gate for ${plan.name}`;
+  }
+  return `Workflow gate for ${plan.name}`;
+}
+
 export interface GraphMutationNodeDef {
   id: string;
   description: string;
@@ -409,7 +425,7 @@ export class Orchestrator {
     const mergeNodeId = `__merge__${workflowId}`;
     const mergeTask = createTaskState(
       mergeNodeId,
-      `Merge gate for ${plan.name}`,
+      descriptionForMergeNode(plan),
       leafIds,
       { workflowId, isMergeNode: true, familiarType: 'merge' },
     );

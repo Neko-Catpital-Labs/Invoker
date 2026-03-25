@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { normalizeBranchForGithubCli } from './github-branch-ref.js';
 import type { MergeGateProvider, MergeGateProviderResult, MergeGateApprovalStatus } from './merge-gate-provider.js';
 
 export class GitHubMergeGateProvider implements MergeGateProvider {
@@ -12,6 +13,8 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
     body?: string;
   }): Promise<MergeGateProviderResult> {
     const { baseBranch, featureBranch, title, cwd, body } = opts;
+    const ghBase = normalizeBranchForGithubCli(baseBranch);
+    const ghHead = normalizeBranchForGithubCli(featureBranch);
 
     // Push feature branch to origin
     await this.exec('git', ['push', '--force', '-u', 'origin', featureBranch], cwd);
@@ -19,8 +22,8 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
     // Check for existing open PR on this branch
     const listOutput = await this.exec('gh', [
       'pr', 'list',
-      '--head', featureBranch,
-      '--base', baseBranch,
+      '--head', ghHead,
+      '--base', ghBase,
       '--state', 'open',
       '--json', 'url,number',
       '--limit', '1',
@@ -45,8 +48,8 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
     // gh pr create may also trigger the deprecated projectCards query.
     const createArgs = [
       'api', 'repos/{owner}/{repo}/pulls',
-      '--method', 'POST', '-f', `base=${baseBranch}`,
-      '-f', `head=${featureBranch}`, '-f', `title=${title}`,
+      '--method', 'POST', '-f', `base=${ghBase}`,
+      '-f', `head=${ghHead}`, '-f', `title=${title}`,
       '-f', `body=${body ?? ''}`,
     ];
     const stdout = await this.exec('gh', createArgs, cwd);

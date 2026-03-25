@@ -239,7 +239,7 @@ export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar
     }
   }
 
-  private buildCommitMessage(request: WorkRequest): string {
+  protected buildCommitMessage(request: WorkRequest): string {
     const { actionId, inputs } = request;
     const headline = inputs.description
       ? `invoker: ${actionId} — ${inputs.description}`
@@ -576,7 +576,7 @@ export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar
     this.emitComplete(executionId, response);
   }
 
-  private buildResultCommitMessage(request: WorkRequest, exitCode: number): string {
+  protected buildResultCommitMessage(request: WorkRequest, exitCode: number): string {
     const headline = request.inputs.description
       ? `invoker: ${request.actionId} — ${request.inputs.description}`
       : `invoker: ${request.actionId}`;

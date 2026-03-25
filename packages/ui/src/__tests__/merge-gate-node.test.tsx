@@ -13,91 +13,168 @@ function renderNode(data: Record<string, unknown>) {
 
 describe('MergeGateNode', () => {
   it('displays baseBranch when provided', () => {
-    renderNode({ status: 'pending', label: 'All tasks must pass', onFinish: 'merge', baseBranch: 'master' });
+    renderNode({ status: 'pending', label: 'Plan', gateKind: 'merge', baseBranch: 'master' });
     expect(screen.getByTestId('merge-branch-label')).toHaveTextContent('master');
   });
 
   it('displays "default" when baseBranch is undefined', () => {
-    renderNode({ status: 'pending', label: 'All tasks must pass', onFinish: 'merge' });
+    renderNode({ status: 'pending', label: 'Plan', gateKind: 'merge' });
     expect(screen.getByTestId('merge-branch-label')).toHaveTextContent('default');
   });
 
   it('branch label is read-only (no input rendered)', () => {
-    renderNode({ status: 'pending', label: 'All tasks must pass', onFinish: 'merge', baseBranch: 'master' });
+    renderNode({ status: 'pending', label: 'Plan', gateKind: 'merge', baseBranch: 'master' });
     expect(screen.queryByTestId('merge-branch-input')).not.toBeInTheDocument();
   });
 
-  it('shows pull request icon and label when onFinish is pull_request', () => {
-    renderNode({ status: 'completed', label: 'All tasks must pass', onFinish: 'pull_request', baseBranch: 'master' });
-    expect(screen.getByText('Pull Request')).toBeInTheDocument();
+  it('shows pull request primary label when gateKind is pull_request', () => {
+    renderNode({ status: 'completed', label: 'My plan', gateKind: 'pull_request', baseBranch: 'master' });
+    expect(screen.getByTestId('merge-gate-primary-label')).toHaveTextContent('Pull request');
   });
 
-  it('shows merge icon and label when onFinish is merge', () => {
-    renderNode({ status: 'completed', label: 'All tasks must pass', onFinish: 'merge', baseBranch: 'master' });
-    expect(screen.getByText('Merge')).toBeInTheDocument();
+  it('shows merge primary label when gateKind is merge', () => {
+    renderNode({ status: 'completed', label: 'My plan', gateKind: 'merge', baseBranch: 'master' });
+    expect(screen.getByTestId('merge-gate-primary-label')).toHaveTextContent('Merge');
+  });
+
+  it('shows GitHub PR primary label when gateKind is github_pr', () => {
+    renderNode({
+      status: 'pending',
+      label: 'My plan',
+      gateKind: 'github_pr',
+      showMergeModeRow: false,
+      baseBranch: 'master',
+      mergeMode: 'github',
+    });
+    expect(screen.getByTestId('merge-gate-primary-label')).toHaveTextContent('GitHub PR');
+  });
+
+  it('hides duplicate merge mode row for github_pr', () => {
+    renderNode({
+      status: 'pending',
+      label: 'My plan',
+      gateKind: 'github_pr',
+      showMergeModeRow: false,
+      baseBranch: 'master',
+      mergeMode: 'github',
+    });
+    expect(screen.queryByTestId('merge-mode-display')).not.toBeInTheDocument();
   });
 
   it('always renders the branch display area', () => {
-    renderNode({ status: 'pending', label: 'All tasks must pass', onFinish: 'merge' });
+    renderNode({ status: 'pending', label: 'Plan', gateKind: 'merge' });
     expect(screen.getByTestId('merge-branch-display')).toBeInTheDocument();
   });
 
   it('displays manual merge mode by default', () => {
-    renderNode({ status: 'pending', label: 'All tasks must pass', onFinish: 'merge', baseBranch: 'master' });
+    renderNode({ status: 'pending', label: 'Plan', gateKind: 'merge', baseBranch: 'master' });
     expect(screen.getByTestId('merge-mode-label')).toHaveTextContent('Manual');
   });
 
   it('displays automatic merge mode when specified', () => {
-    renderNode({ status: 'pending', label: 'All tasks must pass', onFinish: 'merge', baseBranch: 'master', mergeMode: 'automatic' });
+    renderNode({ status: 'pending', label: 'Plan', gateKind: 'merge', baseBranch: 'master', mergeMode: 'automatic' });
     expect(screen.getByTestId('merge-mode-label')).toHaveTextContent('Automatic');
   });
 
   it('displays manual merge mode when explicitly specified', () => {
-    renderNode({ status: 'pending', label: 'All tasks must pass', onFinish: 'merge', baseBranch: 'master', mergeMode: 'manual' });
+    renderNode({ status: 'pending', label: 'Plan', gateKind: 'merge', baseBranch: 'master', mergeMode: 'manual' });
     expect(screen.getByTestId('merge-mode-label')).toHaveTextContent('Manual');
   });
 
   it('shows approve button for manual merge gate with awaiting_approval status', () => {
-    renderNode({ status: 'awaiting_approval', label: 'All tasks must pass', onFinish: 'merge', baseBranch: 'master', mergeMode: 'manual', workflowId: 'wf-123' });
+    renderNode({
+      status: 'awaiting_approval',
+      label: 'Plan',
+      gateKind: 'merge',
+      baseBranch: 'master',
+      mergeMode: 'manual',
+      workflowId: 'wf-123',
+    });
     expect(screen.getByTestId('approve-merge-button')).toBeInTheDocument();
     expect(screen.getByTestId('approve-merge-button')).toHaveTextContent('Approve Merge');
   });
 
   it('does not show approve button for manual merge gate with completed status', () => {
-    renderNode({ status: 'completed', label: 'All tasks must pass', onFinish: 'merge', baseBranch: 'master', mergeMode: 'manual', workflowId: 'wf-123' });
+    renderNode({
+      status: 'completed',
+      label: 'Plan',
+      gateKind: 'merge',
+      baseBranch: 'master',
+      mergeMode: 'manual',
+      workflowId: 'wf-123',
+    });
     expect(screen.queryByTestId('approve-merge-button')).not.toBeInTheDocument();
   });
 
   it('does not show approve button for automatic merge gate with completed status', () => {
-    renderNode({ status: 'completed', label: 'All tasks must pass', onFinish: 'merge', baseBranch: 'master', mergeMode: 'automatic', workflowId: 'wf-123' });
+    renderNode({
+      status: 'completed',
+      label: 'Plan',
+      gateKind: 'merge',
+      baseBranch: 'master',
+      mergeMode: 'automatic',
+      workflowId: 'wf-123',
+    });
     expect(screen.queryByTestId('approve-merge-button')).not.toBeInTheDocument();
   });
 
   it('does not show approve button for manual merge gate with pending status', () => {
-    renderNode({ status: 'pending', label: 'All tasks must pass', onFinish: 'merge', baseBranch: 'master', mergeMode: 'manual', workflowId: 'wf-123' });
+    renderNode({
+      status: 'pending',
+      label: 'Plan',
+      gateKind: 'merge',
+      baseBranch: 'master',
+      mergeMode: 'manual',
+      workflowId: 'wf-123',
+    });
     expect(screen.queryByTestId('approve-merge-button')).not.toBeInTheDocument();
   });
 
   it('does not show approve button for manual merge gate with failed status', () => {
-    renderNode({ status: 'failed', label: 'All tasks must pass', onFinish: 'merge', baseBranch: 'master', mergeMode: 'manual', workflowId: 'wf-123' });
+    renderNode({
+      status: 'failed',
+      label: 'Plan',
+      gateKind: 'merge',
+      baseBranch: 'master',
+      mergeMode: 'manual',
+      workflowId: 'wf-123',
+    });
     expect(screen.queryByTestId('approve-merge-button')).not.toBeInTheDocument();
   });
 
-  it('displays GitHub PR merge mode when specified', () => {
-    renderNode({ status: 'pending', label: 'All tasks must pass', onFinish: 'merge', baseBranch: 'master', mergeMode: 'github' });
-    expect(screen.getByTestId('merge-mode-label')).toHaveTextContent('GitHub PR');
+  it('forces GitHub PR primary and hides mode row when mergeMode is github (even if gateKind was merge)', () => {
+    renderNode({ status: 'pending', label: 'Plan', gateKind: 'merge', baseBranch: 'master', mergeMode: 'github' });
+    expect(screen.getByTestId('merge-gate-primary-label')).toHaveTextContent('GitHub PR');
+    expect(screen.queryByTestId('merge-mode-display')).not.toBeInTheDocument();
+  });
+
+  it('hides mode row when mergeMode is github even if gateKind is pull_request', () => {
+    renderNode({
+      status: 'pending',
+      label: 'Plan',
+      gateKind: 'pull_request',
+      baseBranch: 'master',
+      mergeMode: 'github',
+    });
+    expect(screen.getByTestId('merge-gate-primary-label')).toHaveTextContent('GitHub PR');
+    expect(screen.queryByTestId('merge-mode-display')).not.toBeInTheDocument();
   });
 
   it('does NOT show approve button in github mode even when awaiting_approval', () => {
     renderNode({
-      status: 'awaiting_approval', label: 'All tasks must pass', onFinish: 'merge',
-      baseBranch: 'master', mergeMode: 'github', workflowId: 'wf-123',
+      status: 'awaiting_approval',
+      label: 'Plan',
+      gateKind: 'github_pr',
+      showMergeModeRow: false,
+      baseBranch: 'master',
+      mergeMode: 'github',
+      workflowId: 'wf-123',
     });
     expect(screen.queryByTestId('approve-merge-button')).not.toBeInTheDocument();
   });
 
   it('updates merge mode display when re-rendered with new mergeMode', () => {
-    const baseData = { status: 'pending', label: 'All tasks must pass', onFinish: 'merge', baseBranch: 'master' };
+    const baseData = { status: 'pending', label: 'Plan', gateKind: 'merge' as const, baseBranch: 'master' };
 
     const { rerender } = renderNode({ ...baseData, mergeMode: 'manual' });
     expect(screen.getByTestId('merge-mode-label')).toHaveTextContent('Manual');
@@ -107,7 +184,8 @@ describe('MergeGateNode', () => {
         <MergeGateNode data={{ ...baseData, mergeMode: 'github' } as any} />
       </ReactFlowProvider>,
     );
-    expect(screen.getByTestId('merge-mode-label')).toHaveTextContent('GitHub PR');
+    expect(screen.getByTestId('merge-gate-primary-label')).toHaveTextContent('GitHub PR');
+    expect(screen.queryByTestId('merge-mode-display')).not.toBeInTheDocument();
 
     rerender(
       <ReactFlowProvider>
@@ -118,7 +196,7 @@ describe('MergeGateNode', () => {
   });
 
   it('each merge mode has a distinct color class on the label', () => {
-    const baseData = { status: 'pending', label: 'All tasks must pass', onFinish: 'merge', baseBranch: 'master' };
+    const baseData = { status: 'pending', label: 'Plan', gateKind: 'merge' as const, baseBranch: 'master' };
 
     const { rerender } = renderNode({ ...baseData, mergeMode: 'manual' });
     expect(screen.getByTestId('merge-mode-label')).toHaveClass('text-yellow-500');
@@ -128,7 +206,7 @@ describe('MergeGateNode', () => {
         <MergeGateNode data={{ ...baseData, mergeMode: 'github' } as any} />
       </ReactFlowProvider>,
     );
-    expect(screen.getByTestId('merge-mode-label')).toHaveClass('text-blue-400');
+    expect(screen.getByTestId('merge-gate-primary-label')).toHaveTextContent('GitHub PR');
 
     rerender(
       <ReactFlowProvider>
@@ -141,8 +219,8 @@ describe('MergeGateNode', () => {
   it('shows summary preview when summary is provided', () => {
     renderNode({
       status: 'awaiting_approval',
-      label: 'All tasks must pass',
-      onFinish: 'pull_request',
+      label: 'Plan',
+      gateKind: 'pull_request',
       baseBranch: 'master',
       summary: 'Short summary text',
     });
@@ -154,8 +232,8 @@ describe('MergeGateNode', () => {
   it('does not show summary preview when summary is absent', () => {
     renderNode({
       status: 'awaiting_approval',
-      label: 'All tasks must pass',
-      onFinish: 'pull_request',
+      label: 'Plan',
+      gateKind: 'pull_request',
       baseBranch: 'master',
     });
     expect(screen.queryByTestId('merge-summary-preview')).not.toBeInTheDocument();
@@ -165,8 +243,8 @@ describe('MergeGateNode', () => {
     const longSummary = 'A'.repeat(200);
     renderNode({
       status: 'awaiting_approval',
-      label: 'All tasks must pass',
-      onFinish: 'pull_request',
+      label: 'Plan',
+      gateKind: 'pull_request',
       baseBranch: 'master',
       summary: longSummary,
     });

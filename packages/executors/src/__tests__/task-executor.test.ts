@@ -187,6 +187,45 @@ describe('TaskExecutor', () => {
       expect(executor.collectUpstreamBranches(childB)).toEqual(['experiment/parent']);
       expect(executor.collectUpstreamBranches(childC)).toEqual(['experiment/parent']);
     });
+
+    it('fan-in: prepends workflow baseBranch when two or more upstream branches exist', () => {
+      const tasks = new Map<string, TaskState>();
+      tasks.set('dep-a', makeTask({
+        id: 'dep-a',
+        status: 'completed',
+        execution: { branch: 'experiment/dep-a' },
+      }));
+      tasks.set('dep-b', makeTask({
+        id: 'dep-b',
+        status: 'completed',
+        execution: { branch: 'experiment/dep-b' },
+      }));
+
+      const orchestrator = { getTask: (id: string) => tasks.get(id) };
+      const persistence = {
+        loadWorkflow: () => ({ id: 'wf-1', baseBranch: 'origin/main' }),
+      };
+
+      const executor = new TaskExecutor({
+        orchestrator: orchestrator as any,
+        persistence: persistence as any,
+        familiarRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+        defaultBranch: 'master',
+      });
+
+      const child = makeTask({
+        id: 'fan-in-child',
+        dependencies: ['dep-a', 'dep-b'],
+        config: { workflowId: 'wf-1' },
+      });
+
+      expect(executor.collectUpstreamBranches(child)).toEqual([
+        'origin/main',
+        'experiment/dep-a',
+        'experiment/dep-b',
+      ]);
+    });
   });
 
   describe('executeTask error handling', () => {
@@ -3340,6 +3379,40 @@ describe('TaskExecutor', () => {
       // Should NOT have called gh pr edit
       const editCall = ghCalls.find(c => c[0] === 'pr' && c[1] === 'edit');
       expect(editCall).toBeUndefined();
+    });
+
+    it('execPr passes normalized branch names to gh when base uses origin/ remote-tracking form', async () => {
+      const executor = new TaskExecutor({
+        orchestrator: { getTask: () => null } as any,
+        persistence: {} as any,
+        familiarRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+      });
+
+      const ghCalls: string[][] = [];
+      (executor as any).execGh = async (args: string[]) => {
+        ghCalls.push(args);
+        if (args[0] === 'pr' && args[1] === 'list') return '[]';
+        if (args[0] === 'pr' && args[1] === 'create') return 'https://github.com/owner/repo/pull/200';
+        return '';
+      };
+
+      await (executor as any).execPr(
+        'origin/fix/my-work',
+        'origin/plan/experiment',
+        'Title',
+        'Body',
+      );
+
+      const listCall = ghCalls.find(c => c[0] === 'pr' && c[1] === 'list');
+      expect(listCall?.indexOf('--base')).toBeGreaterThan(-1);
+      expect(listCall?.[listCall.indexOf('--base') + 1]).toBe('fix/my-work');
+      expect(listCall?.[listCall.indexOf('--head') + 1]).toBe('plan/experiment');
+
+      const createCall = ghCalls.find(c => c[0] === 'pr' && c[1] === 'create');
+      expect(createCall?.indexOf('--base')).toBeGreaterThan(-1);
+      expect(createCall?.[createCall.indexOf('--base') + 1]).toBe('fix/my-work');
+      expect(createCall?.[createCall.indexOf('--head') + 1]).toBe('plan/experiment');
     });
 
     it('resolveConflictWithClaude includes dep description in merge -m', async () => {

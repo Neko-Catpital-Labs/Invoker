@@ -72,6 +72,51 @@ describe('GitHubMergeGateProvider', () => {
       );
     });
 
+    it('normalizes origin/ base branch for gh API and pr list', async () => {
+      const { spawn } = await import('node:child_process');
+      const spawnMock = vi.mocked(spawn);
+
+      let callCount = 0;
+      spawnMock.mockImplementation((() => {
+        callCount++;
+        if (callCount === 1) return mockSpawnResult('', 0);
+        if (callCount === 2) return mockSpawnResult('[]', 0);
+        return mockSpawnResult('{"html_url":"https://github.com/o/r/pull/99","number":99}', 0);
+      }) as any);
+
+      await provider.createReview({
+        baseBranch: 'origin/fix/remote-ssh-build',
+        featureBranch: 'plan/feature-github-pr',
+        title: 'PR title',
+        cwd: '/tmp/repo',
+      });
+
+      expect(spawnMock).toHaveBeenCalledWith(
+        'gh',
+        [
+          'pr', 'list',
+          '--head', 'plan/feature-github-pr',
+          '--base', 'fix/remote-ssh-build',
+          '--state', 'open',
+          '--json', 'url,number',
+          '--limit', '1',
+        ],
+        expect.anything(),
+      );
+      expect(spawnMock).toHaveBeenCalledWith(
+        'gh',
+        [
+          'api', 'repos/{owner}/{repo}/pulls',
+          '--method', 'POST',
+          '-f', 'base=fix/remote-ssh-build',
+          '-f', 'head=plan/feature-github-pr',
+          '-f', 'title=PR title',
+          '-f', 'body=',
+        ],
+        expect.anything(),
+      );
+    });
+
     it('reuses existing open PR and updates title', async () => {
       const { spawn } = await import('node:child_process');
       const spawnMock = vi.mocked(spawn);

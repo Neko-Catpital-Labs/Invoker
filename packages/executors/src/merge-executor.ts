@@ -65,6 +65,41 @@ export interface MergeExecutorHost {
   ): Promise<string | undefined>;
 }
 
+/**
+ * Ensure `branch` resolves in `worktreeDir` for `git merge`. Local worktree tasks
+ * already have the ref; SSH (or other) tasks often push to origin from another host,
+ * so fetch into refs/heads/{branch} when missing.
+ */
+export async function ensureLocalBranchForMerge(
+  host: MergeExecutorHost,
+  worktreeDir: string,
+  branch: string,
+): Promise<void> {
+  let hadLocal = false;
+  try {
+    await host.execGitIn(['rev-parse', '--verify', branch], worktreeDir);
+    hadLocal = true;
+  } catch {
+    /* ref missing — try origin */
+  }
+
+  if (hadLocal) return;
+
+  try {
+    await host.execGitIn(
+      ['fetch', 'origin', `+refs/heads/${branch}:refs/heads/${branch}`],
+      worktreeDir,
+    );
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      `Cannot merge ${branch}: not found locally and fetch from origin failed (${msg}). ` +
+        'For SSH remote worktrees, ensure the task pushed this branch to origin before merging.',
+    );
+  }
+
+}
+
 // ── Extracted functions ──────────────────────────────────
 
 export async function executeMergeNodeImpl(
@@ -456,6 +491,7 @@ export async function consolidateAndMergeImpl(
 
     for (const branch of taskBranches) {
       console.log(`[merge] Merging task branch: ${branch} → ${featureBranch}`);
+      await ensureLocalBranchForMerge(host, worktreeDir, branch);
       const task = allTasks.find(t => t.execution.branch === branch);
       const desc = task?.description ?? '';
       const mergeMsg = desc ? `Merge ${branch} — ${desc}` : `Merge ${branch}`;

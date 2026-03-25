@@ -490,9 +490,10 @@ describe('A→B→C branch chain', { timeout: 120_000 }, () => {
       await (executor as any).executeTaskInner(taskC);
 
       const upstreams = executor.collectUpstreamBranches(taskD);
+      expect(upstreams).toContain('master');
       expect(upstreams).toContain(taskB.execution.branch);
       expect(upstreams).toContain(taskC.execution.branch);
-      expect(upstreams).toHaveLength(2);
+      expect(upstreams).toHaveLength(3);
     });
   });
 
@@ -573,10 +574,12 @@ describe('A→B→C branch chain', { timeout: 120_000 }, () => {
       expect(isAncestor(tmpDir, hashA, branchC)).toBe(true);
       expect(isAncestor(tmpDir, hashB, branchC)).toBe(true);
 
-      // collectUpstreamBranches returns both
+      // collectUpstreamBranches returns plan base + both dependency branches (fan-in)
       const upstreams = executor.collectUpstreamBranches(taskC);
+      expect(upstreams).toContain('master');
       expect(upstreams).toContain(taskA.execution.branch);
       expect(upstreams).toContain(taskB.execution.branch);
+      expect(upstreams).toHaveLength(3);
     });
   });
 });
