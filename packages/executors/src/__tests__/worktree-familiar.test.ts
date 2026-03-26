@@ -289,7 +289,7 @@ describe('WorktreeFamiliar', () => {
     expect(response.outputs.summary).toContain('abc123def456');
   });
 
-  it('kill terminates process and removes worktree', async () => {
+  it('kill terminates process without removing worktree', async () => {
     const { taskProcess } = setupSpawnMock();
 
     const request = makeRequest({ inputs: { command: 'sleep 60' } });
@@ -310,18 +310,19 @@ describe('WorktreeFamiliar', () => {
 
     await familiar.kill(handle);
 
-    // Verify git worktree remove was called
+    // Worktrees are intentionally preserved so users can inspect task output
     const removeCalls = mockedSpawn.mock.calls.filter(
       (call) =>
         call[0] === 'git' &&
+        (call[1] as string[])?.includes('worktree') &&
         (call[1] as string[])?.includes('remove'),
     );
-    expect(removeCalls.length).toBeGreaterThanOrEqual(1);
+    expect(removeCalls.length).toBe(0);
 
     vi.mocked(process.kill).mockRestore();
   });
 
-  it('destroyAll removes all worktrees', async () => {
+  it('destroyAll kills processes without removing worktrees', async () => {
     const taskProcesses: Array<ChildProcess & EventEmitter> = [];
 
     // Override spawn to return unique task processes
@@ -373,13 +374,14 @@ describe('WorktreeFamiliar', () => {
 
     await familiar.destroyAll();
 
-    // Verify worktree remove was called for cleanup
+    // Worktrees are intentionally preserved so users can inspect task output
     const removeCalls = mockedSpawn.mock.calls.filter(
       (call) =>
         call[0] === 'git' &&
+        (call[1] as string[])?.includes('worktree') &&
         (call[1] as string[])?.includes('remove'),
     );
-    expect(removeCalls.length).toBeGreaterThanOrEqual(2);
+    expect(removeCalls.length).toBe(0);
 
     vi.mocked(process.kill).mockRestore();
   });

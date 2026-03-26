@@ -123,7 +123,7 @@ describe('BUG REPRO: worktree lifecycle leaks', () => {
     });
   });
 
-  it('should remove worktree after normal task completion', async () => {
+  it('should preserve worktree after normal task completion', async () => {
     const { taskProcess } = setupSpawnMock();
 
     const request = makeRequest();
@@ -149,8 +149,8 @@ describe('BUG REPRO: worktree lifecycle leaks', () => {
         (call[1] as string[])?.includes('remove'),
     );
 
-    // This WILL FAIL (0 remove calls) because handleProcessExit never calls removeWorktree
-    expect(removeCalls.length).toBeGreaterThanOrEqual(1);
+    // Worktrees are intentionally preserved so users can inspect task output
+    expect(removeCalls.length).toBe(0);
   });
 
   it('should clean entries map after task completion', async () => {
