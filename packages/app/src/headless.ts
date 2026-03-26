@@ -10,8 +10,9 @@
  */
 
 import { Orchestrator } from '@invoker/core';
-import type { TaskDelta, TaskState } from '@invoker/core';
+import type { TaskDelta, TaskState, TaskStateChanges } from '@invoker/core';
 import { SQLiteAdapter } from '@invoker/persistence';
+import { resolve as resolvePath } from 'node:path';
 import { Channels } from '@invoker/transport';
 import type { MessageBus } from '@invoker/transport';
 import { FamiliarRegistry, TaskExecutor, GitHubMergeGateProvider } from '@invoker/executors';
@@ -537,6 +538,161 @@ async function waitForCompletion(orchestrator: Orchestrator, workflowId?: string
       ? ['completed', 'failed', 'needs_input', 'blocked', 'stale']
       : ['completed', 'failed', 'needs_input', 'awaiting_approval', 'blocked', 'stale'];
     const allSettled = tasks.every((t) => settledStatuses.includes(t.status));
+    if (allSettled) return;
+    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+  }
+}
+
+// ── Headless Delegation ──────────────────────────────────────
+
+/**
+ * Try to delegate 'run' command to a GUI process. Returns true if delegated, false if no GUI available.
+ */
+export async function tryDelegateRun(planPath: string, messageBus: MessageBus, waitForApproval?: boolean): Promise<boolean> {
+  return tryDelegate('headless.run', { planPath: resolvePath(planPath) }, messageBus, waitForApproval);
+}
+
+/**
+ * Try to delegate 'resume' command to a GUI process. Returns true if delegated, false if no GUI available.
+ */
+export async function tryDelegateResume(workflowId: string, messageBus: MessageBus, waitForApproval?: boolean): Promise<boolean> {
+  return tryDelegate('headless.resume', { workflowId }, messageBus, waitForApproval);
+}
+
+/**
+ * Core delegation logic: send request to GUI, stream updates, wait for completion.
+ * Returns true if delegated successfully, false if no GUI is available (fall back to standalone).
+ */
+async function tryDelegate(
+  channel: string,
+  payload: unknown,
+  messageBus: MessageBus,
+  waitForApproval?: boolean,
+): Promise<boolean> {
+  const { formatTaskStatus } = await import('./formatter.js');
+
+  // Local task state tracking
+  const tasks = new Map<string, TaskState>();
+  let targetWorkflowId: string | undefined;
+
+  // Subscribe to task deltas BEFORE sending request (critical to not miss initial 'created' deltas)
+  const deltaUnsub = messageBus.subscribe<TaskDelta>(Channels.TASK_DELTA, (delta) => {
+    if (delta.type === 'created') {
+      const task = delta.task;
+      if (!targetWorkflowId || task.config.workflowId === targetWorkflowId) {
+        tasks.set(task.id, task);
+        console.log(formatTaskStatus(task));
+      }
+    } else if (delta.type === 'updated') {
+      const existing = tasks.get(delta.taskId);
+      if (existing) {
+        // Merge changes into existing task (same pattern as main.ts setupGuiMode)
+        const { config: cfgChanges, execution: execChanges, ...topLevel } = delta.changes;
+        const updated: TaskState = {
+          ...existing,
+          ...topLevel,
+          config: { ...existing.config, ...cfgChanges },
+          execution: { ...existing.execution, ...execChanges },
+        };
+        tasks.set(delta.taskId, updated);
+        console.log(formatTaskStatus(updated));
+      }
+    } else if (delta.type === 'removed') {
+      tasks.delete(delta.taskId);
+    }
+  });
+
+  // Subscribe to task output for live streaming
+  const outputUnsub = messageBus.subscribe<{ taskId: string; data: string }>(Channels.TASK_OUTPUT, ({ taskId, data }) => {
+    if (tasks.has(taskId)) {
+      process.stdout.write(`\x1b[2m[${taskId}]\x1b[0m ${data}`);
+    }
+  });
+
+  try {
+    // Send request with timeout (5 seconds) to detect if GUI is available
+    const DELEGATION_TIMEOUT = Symbol('delegation-timeout');
+    const timeoutPromise = new Promise<typeof DELEGATION_TIMEOUT>((_, reject) => {
+      setTimeout(() => reject(DELEGATION_TIMEOUT), 5000);
+    });
+
+    let response: { workflowId: string; tasks: TaskState[] };
+    try {
+      response = await Promise.race([
+        messageBus.request<typeof payload, typeof response>(channel, payload),
+        timeoutPromise,
+      ]) as { workflowId: string; tasks: TaskState[] };
+    } catch (err) {
+      if (err === DELEGATION_TIMEOUT) {
+        // No GUI available, fall back to standalone
+        return false;
+      }
+      // Real error, rethrow
+      throw err;
+    }
+
+    // Delegation successful
+    targetWorkflowId = response.workflowId;
+    console.log(`Delegated to GUI — workflow: ${targetWorkflowId}`);
+
+    // Seed local map from response tasks (for tasks not yet received via delta)
+    for (const task of response.tasks) {
+      if (!tasks.has(task.id)) {
+        tasks.set(task.id, task);
+      }
+    }
+
+    // Wait for settlement
+    await waitForDelegatedSettlement(tasks, targetWorkflowId, waitForApproval);
+
+    // Print final summary
+    const taskArray = Array.from(tasks.values());
+    const completedCount = taskArray.filter(t => t.status === 'completed').length;
+    const failedCount = taskArray.filter(t => t.status === 'failed').length;
+    console.log(`\n${BOLD}Summary:${RESET} ${completedCount} completed, ${failedCount} failed`);
+
+    // Check for PR URL
+    const mergeTask = taskArray.find(t => t.config.isMergeNode);
+    if (mergeTask?.execution?.prUrl) {
+      console.log(`\nPull Request: ${mergeTask.execution.prUrl}`);
+    }
+
+    // Set exit code if any tasks failed
+    if (failedCount > 0) {
+      process.exitCode = 1;
+    }
+
+    return true;
+  } finally {
+    // Always unsubscribe
+    deltaUnsub();
+    outputUnsub();
+  }
+}
+
+/**
+ * Wait for all tasks in the workflow to reach a settled state.
+ * Polls the local task map every 500ms.
+ */
+async function waitForDelegatedSettlement(
+  tasks: Map<string, TaskState>,
+  workflowId: string,
+  waitForApproval?: boolean,
+): Promise<void> {
+  const maxWaitMs = waitForApproval ? 86_400_000 : 1_800_000; // 24 hours if waiting for approval, else 30 minutes
+  const pollIntervalMs = 500;
+  const start = Date.now();
+
+  if (waitForApproval) {
+    console.log('[headless] Waiting for PR approval (--wait-for-approval)...');
+  }
+
+  while (Date.now() - start < maxWaitMs) {
+    const taskArray = Array.from(tasks.values()).filter(t => t.config.workflowId === workflowId);
+    const settledStatuses = waitForApproval
+      ? ['completed', 'failed', 'needs_input', 'blocked', 'stale']
+      : ['completed', 'failed', 'needs_input', 'awaiting_approval', 'blocked', 'stale'];
+    const allSettled = taskArray.every((t) => settledStatuses.includes(t.status));
     if (allSettled) return;
     await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
   }

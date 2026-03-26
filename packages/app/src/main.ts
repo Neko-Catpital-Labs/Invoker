@@ -63,7 +63,7 @@ import { loadConfig, type InvokerConfig } from './config.js';
 import { backupPlan } from './plan-backup.js';
 import { applyPlanDefinitionDefaults } from './plan-parser.js';
 import { startApiServer, type ApiServer } from './api-server.js';
-import { runHeadless } from './headless.js';
+import { runHeadless, tryDelegateRun, tryDelegateResume } from './headless.js';
 import {
   rebaseAndRetry,
   rejectTask,
@@ -258,6 +258,41 @@ const RED = '\x1b[31m';
 
 if (isHeadless) {
   app.whenReady().then(async () => {
+    const command = cliArgs[0];
+
+    // Try delegation for 'run' and 'resume' commands
+    if (command === 'run' || command === 'resume') {
+      const delegationBus = new IpcBus();
+      try {
+        await delegationBus.ready();
+
+        let delegated = false;
+        if (command === 'run') {
+          const planPath = cliArgs[1];
+          if (!planPath) throw new Error('Missing plan file. Usage: --headless run <plan.yaml>');
+          delegated = await tryDelegateRun(planPath, delegationBus, waitForApproval);
+        } else if (command === 'resume') {
+          const workflowId = cliArgs[1];
+          if (!workflowId) throw new Error('Missing workflowId. Usage: --headless resume <id>');
+          delegated = await tryDelegateResume(workflowId, delegationBus, waitForApproval);
+        }
+
+        if (delegated) {
+          // Successfully delegated to GUI
+          delegationBus.disconnect();
+          process.exit(process.exitCode ?? 0);
+        }
+
+        // No GUI available, fall through to standalone
+        delegationBus.disconnect();
+      } catch (err) {
+        console.error(`${RED}Delegation error:${RESET} ${err instanceof Error ? err.message : String(err)}`);
+        delegationBus.disconnect();
+        process.exit(1);
+      }
+    }
+
+    // Standalone mode: initialize services and run headless
     await initServices();
     try {
       await runHeadless(cliArgs, {
@@ -458,6 +493,49 @@ function setupGuiMode(): void {
     await initServices();
 
     rebuildTaskExecutor();
+
+    // ── IPC Delegation Handlers — headless → GUI ────────────────
+    // Headless processes delegate write-heavy commands to the GUI process via IpcBus.
+    messageBus.onRequest('headless.run', async (req: unknown) => {
+      const { planPath } = req as { planPath: string };
+      console.log(`[ipc-delegate] headless.run: "${planPath}"`);
+      const { parsePlanFile } = await import('./plan-parser.js');
+      const plan = await parsePlanFile(planPath, repoRoot);
+      taskHandles.clear();
+      backupPlan(plan);
+      const normalized = applyPlanDefinitionDefaults(plan, repoRoot);
+      const wfIdsBefore = new Set(orchestrator.getWorkflowIds());
+      orchestrator.loadPlan(normalized, { allowGraphMutation: invokerConfig.allowGraphMutation });
+      const workflowId = orchestrator.getWorkflowIds().find(id => !wfIdsBefore.has(id))!;
+      const started = orchestrator.startExecution();
+      console.log(`[ipc-delegate] started ${started.length} tasks for workflow "${workflowId}"`);
+      await taskExecutor.executeTasks(started);
+      const tasks = orchestrator.getAllTasks().filter(t => t.config.workflowId === workflowId);
+      return { workflowId, tasks };
+    });
+
+    messageBus.onRequest('headless.resume', async (req: unknown) => {
+      const { workflowId } = req as { workflowId: string };
+      console.log(`[ipc-delegate] headless.resume: "${workflowId}"`);
+      orchestrator.syncFromDb(workflowId);
+
+      const orphanRestarted: TaskState[] = [];
+      for (const task of orchestrator.getAllTasks()) {
+        if (task.status === 'running' && task.config.workflowId === workflowId) {
+          console.log(`[ipc-delegate] relaunching orphaned running task "${task.id}"`);
+          const started = orchestrator.restartTask(task.id);
+          orphanRestarted.push(...started.filter(t => t.status === 'running'));
+        }
+      }
+
+      const started = orchestrator.startExecution();
+      const allStarted = [...orphanRestarted, ...started];
+      console.log(`[ipc-delegate] started ${allStarted.length} tasks (${orphanRestarted.length} orphans relaunched, ${started.length} ready)`);
+      await taskExecutor.executeTasks(allStarted);
+      taskExecutor.resumeMergeGatePolling();
+      const tasks = orchestrator.getAllTasks().filter(t => t.config.workflowId === workflowId);
+      return { workflowId, tasks };
+    });
 
     let startupAutoRunBlocked = !!invokerConfig.disableAutoRunOnStartup;
 
