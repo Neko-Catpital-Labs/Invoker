@@ -6,7 +6,7 @@
  */
 
 import type { TaskStateChanges } from '@invoker/core';
-import { test as base, _electron as electron, type ElectronApplication, type Page } from '@playwright/test';
+import { test as base, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test';
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
 import { execSync } from 'node:child_process';
@@ -93,7 +93,7 @@ export const test = base.extend<ElectronFixtures>({
   },
 });
 
-export { expect } from '@playwright/test';
+export { expect };
 
 /** Minimal plan with two command tasks for testing UI rendering and lifecycle.
  *  Commands sleep briefly so the "running" state is visible long enough to capture. */
@@ -187,7 +187,21 @@ export async function waitForStableUI(page: Page): Promise<void> {
   await page.waitForTimeout(300);
 }
 
-/** Capture a named screenshot. No-op unless CAPTURE_MODE env var is set. */
+/**
+ * Assert a named screenshot matches the committed baseline (toHaveScreenshot).
+ * Used by normal regression tests. Viewport capture (not fullPage) to match
+ * the Playwright config's toHaveScreenshot defaults.
+ */
+export async function assertPageScreenshot(page: Page, name: string): Promise<void> {
+  await waitForStableUI(page);
+  await expect(page).toHaveScreenshot(`${name}.png`);
+}
+
+/**
+ * Capture a named screenshot to disk. No-op unless CAPTURE_MODE env var is set.
+ * Used by scripts/ui-visual-proof.sh for merge-gate before/after capture;
+ * normal regression tests use assertPageScreenshot / toHaveScreenshot instead.
+ */
 export async function captureScreenshot(page: Page, name: string): Promise<void> {
   const mode = process.env.CAPTURE_MODE;
   if (!mode) return;

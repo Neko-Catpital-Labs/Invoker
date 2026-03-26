@@ -2,8 +2,10 @@
  * E2E: Visual proof capture.
  *
  * Captures screenshots at key UI states for before/after comparison in PRs.
- * When CAPTURE_MODE env var is set, screenshots are saved to disk.
+ * When CAPTURE_MODE env var is set, screenshots are saved to disk via captureScreenshot
+ * (used by scripts/ui-visual-proof.sh for merge-gate proof).
  * Always validates UI state via DOM assertions so it doubles as a regression test.
+ * Committed PNG baselines are asserted via assertPageScreenshot / toHaveScreenshot.
  */
 
 import {
@@ -13,6 +15,7 @@ import {
   loadPlan,
   injectTaskStates,
   captureScreenshot,
+  assertPageScreenshot,
 } from './fixtures/electron-app.js';
 
 test.describe('Visual proof capture', () => {
@@ -22,6 +25,7 @@ test.describe('Visual proof capture', () => {
     await expect(page.getByText('Refresh')).toBeVisible();
     await expect(page.getByText('Clear')).toBeVisible();
     await captureScreenshot(page, 'empty-state');
+    await assertPageScreenshot(page, 'empty-state');
   });
 
   test('dag loaded', async ({ page }) => {
@@ -29,6 +33,7 @@ test.describe('Visual proof capture', () => {
     await expect(page.locator('[data-testid="rf__node-task-alpha"]')).toBeVisible();
     await expect(page.locator('[data-testid="rf__node-task-beta"]')).toBeVisible();
     await captureScreenshot(page, 'dag-loaded');
+    await assertPageScreenshot(page, 'dag-loaded');
   });
 
   test('task running', async ({ page }) => {
@@ -38,6 +43,7 @@ test.describe('Visual proof capture', () => {
       { taskId: 'task-alpha', changes: { status: 'running', execution: { startedAt: now } } },
     ]);
     await captureScreenshot(page, 'task-running');
+    await assertPageScreenshot(page, 'task-running');
   });
 
   test('task complete', async ({ page }) => {
@@ -65,6 +71,7 @@ test.describe('Visual proof capture', () => {
     const workTasks = tasks.filter((t: { id: string }) => !t.id.startsWith('__merge__'));
     expect(workTasks.every((t: { status: string }) => t.status === 'completed')).toBe(true);
     await captureScreenshot(page, 'task-complete');
+    await assertPageScreenshot(page, 'task-complete');
   });
 
   test('task panel', async ({ page }) => {
@@ -74,5 +81,22 @@ test.describe('Visual proof capture', () => {
     const panel = page.locator('.overflow-y-auto');
     await expect(panel.locator('text=task-alpha')).toBeVisible();
     await captureScreenshot(page, 'task-panel');
+    await assertPageScreenshot(page, 'task-panel');
+  });
+
+  test('dag before and after task selection', async ({ page }) => {
+    await loadPlan(page, TEST_PLAN);
+    await expect(page.locator('[data-testid="rf__node-task-alpha"]')).toBeVisible();
+    await expect(page.locator('[data-testid="rf__node-task-beta"]')).toBeVisible();
+
+    // Before: DAG loaded, no task selected
+    await assertPageScreenshot(page, 'dag-before-selection');
+
+    // Action: click a task node to open the detail panel
+    await page.locator('[data-testid="rf__node-task-beta"]').click();
+    await expect(page.getByRole('heading', { name: 'Second test task depending on alpha' })).toBeVisible();
+
+    // After: task panel is open
+    await assertPageScreenshot(page, 'dag-after-selection');
   });
 });
