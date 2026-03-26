@@ -6,7 +6,7 @@
  */
 
 import initSqlJs, { type Database as SqlJsDatabase } from 'sql.js';
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { TaskState, TaskStateChanges, Attempt } from '@invoker/core';
 import { normalizeFamiliarType } from '@invoker/core';
@@ -49,6 +49,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
   /**
    * Async factory — loads WASM once, opens or creates the database.
+   * If the on-disk file is corrupted, backs it up and starts fresh.
    * @param dbPath File path or ':memory:' (default).
    */
   static async create(dbPath: string = ':memory:'): Promise<SQLiteAdapter> {
@@ -57,15 +58,24 @@ export class SQLiteAdapter implements PersistenceAdapter {
     }
     const SQL = await sqlJsPromise;
 
-    let db: SqlJsDatabase;
     const isFile = dbPath !== ':memory:';
+
     if (isFile && existsSync(dbPath)) {
       const buffer = readFileSync(dbPath);
-      db = new SQL.Database(buffer);
-    } else {
-      db = new SQL.Database();
+      try {
+        const db = new SQL.Database(buffer);
+        return new SQLiteAdapter(db, dbPath);
+      } catch (err) {
+        const backupPath = `${dbPath}.corrupt-${Date.now()}`;
+        console.error(
+          `[SQLiteAdapter] Database corrupted (${err instanceof Error ? err.message : String(err)}). ` +
+          `Backing up to ${backupPath} and starting fresh.`,
+        );
+        renameSync(dbPath, backupPath);
+      }
     }
 
+    const db = new SQL.Database();
     return new SQLiteAdapter(db, isFile ? dbPath : null);
   }
 
