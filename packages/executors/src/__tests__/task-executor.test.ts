@@ -269,6 +269,52 @@ describe('TaskExecutor', () => {
     });
   });
 
+  describe('pre-start heartbeat', () => {
+    it('fires onHeartbeat while awaiting a slow familiar.start', async () => {
+      vi.useFakeTimers();
+      try {
+        const heartbeats: string[] = [];
+        const handle = { executionId: 'exec-slow', taskId: 'slow-start' };
+        const slowFamiliar = {
+          type: 'worktree',
+          start: vi.fn(async () => {
+            await new Promise<void>((r) => { setTimeout(r, 65_000); });
+            return handle;
+          }),
+          onOutput: () => () => {},
+          onComplete: (_h: unknown, cb: (r: unknown) => void) => {
+            cb({ requestId: 'r', actionId: 'slow-start', status: 'completed', outputs: { exitCode: 0 } });
+            return () => {};
+          },
+          onHeartbeat: () => () => {},
+        };
+        const executor = new TaskExecutor({
+          orchestrator: { getTask: () => undefined, handleWorkerResponse: vi.fn() } as any,
+          persistence: { updateTask: vi.fn() } as any,
+          familiarRegistry: {
+            getDefault: () => slowFamiliar,
+            get: () => slowFamiliar,
+            getAll: () => [slowFamiliar],
+          } as any,
+          cwd: '/tmp',
+          callbacks: {
+            onHeartbeat: (taskId: string) => { heartbeats.push(taskId); },
+          },
+        });
+        const task = makeTask({ id: 'slow-start', status: 'running', config: { command: 'echo' } });
+        const done = executor.executeTask(task);
+        await vi.advanceTimersByTimeAsync(30_000);
+        expect(heartbeats).toEqual(['slow-start']);
+        await vi.advanceTimersByTimeAsync(35_000);
+        await done;
+        expect(heartbeats).toEqual(['slow-start', 'slow-start']);
+        expect(slowFamiliar.start).toHaveBeenCalledTimes(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
   describe('baseBranch in WorkRequest', () => {
     it('includes workflow baseBranch in request inputs', async () => {
       let capturedRequest: any;
