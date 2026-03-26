@@ -99,7 +99,10 @@ function readJsonSafe(path: string): InvokerConfig {
 
 export function loadConfig(repoDir: string): InvokerConfig {
   const userConfig = readJsonSafe(join(homedir(), '.invoker', 'config.json'));
-  const repoConfig = readJsonSafe(join(repoDir, '.invoker.json'));
+  // INVOKER_REPO_CONFIG_PATH overrides the default .invoker.json path so verification
+  // scripts can inject fixture configs without clobbering the checked-in repo file.
+  const repoConfigPath = process.env.INVOKER_REPO_CONFIG_PATH ?? join(repoDir, '.invoker.json');
+  const repoConfig = readJsonSafe(repoConfigPath);
   return { ...userConfig, ...repoConfig };
 }
 

@@ -155,6 +155,9 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
     case 'query-select':
       await headlessQuerySelect(args[1], deps);
       break;
+    case 'delete-workflow':
+      await headlessDeleteWorkflow(args[1], deps);
+      break;
     case 'delete-all':
       deps.persistence.deleteAllWorkflows();
       console.log('All workflows deleted.');
@@ -188,10 +191,11 @@ ${BOLD}Usage:${RESET}
   electron dist/main.js --headless restart <id>       Restart a failed/stuck task
   electron dist/main.js --headless fix <taskId>       Fix a failed task with Claude
   electron dist/main.js --headless edit <id> <cmd>    Edit task command and re-run
-  electron dist/main.js --headless cancel <taskId>    Cancel task + all downstream
-  electron dist/main.js --headless queue              Show queue status & utilization
-  electron dist/main.js --headless audit <taskId>     Print event history
-  electron dist/main.js --headless slack              Start Slack bot (long-running)
+  electron dist/main.js --headless cancel <taskId>         Cancel task + all downstream
+  electron dist/main.js --headless queue                   Show queue status & utilization
+  electron dist/main.js --headless audit <taskId>          Print event history
+  electron dist/main.js --headless delete-workflow <id>    Delete a single workflow by ID
+  electron dist/main.js --headless slack                   Start Slack bot (long-running)
 
 ${BOLD}Options:${RESET}
   --wait-for-approval    Keep running until PR approval (use with 'run' or 'resume')
@@ -231,6 +235,7 @@ async function headlessRun(planPath: string, deps: HeadlessDeps, waitForApproval
   const wfIdsBefore = new Set(orchestrator.getWorkflowIds());
   orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
   const currentWorkflowId = orchestrator.getWorkflowIds().find((id) => !wfIdsBefore.has(id));
+  if (currentWorkflowId) console.log(`Workflow ID: ${currentWorkflowId}`);
 
   const started = orchestrator.startExecution();
   await taskExecutor.executeTasks(started);
@@ -452,6 +457,13 @@ async function headlessCancel(taskId: string, deps: HeadlessDeps): Promise<void>
   if (result.runningCancelled.length > 0) {
     console.log(`Killed running: [${result.runningCancelled.join(', ')}]`);
   }
+}
+
+async function headlessDeleteWorkflow(workflowId: string, deps: Pick<HeadlessDeps, 'orchestrator' | 'persistence'>): Promise<void> {
+  if (!workflowId) throw new Error('Missing workflowId. Usage: --headless delete-workflow <workflowId>');
+  deps.persistence.deleteWorkflow(workflowId);
+  deps.orchestrator.removeWorkflow(workflowId);
+  console.log(`Deleted workflow: ${workflowId}`);
 }
 
 async function headlessQueue(deps: HeadlessDeps): Promise<void> {
