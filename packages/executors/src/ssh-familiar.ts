@@ -269,15 +269,29 @@ if [ "$preserved" -eq 0 ]; then
 fi
 while IFS= read -r upBranch || [ -n "$upBranch" ]; do
   [ -z "$upBranch" ] && continue
-  if git -C "$WT" merge-base --is-ancestor "$upBranch" HEAD 2>/dev/null; then
+  # Upstream branches from other tasks exist as remote tracking refs (origin/...)
+  # after git fetch --all. Bare names like experiment/foo don't resolve because
+  # git disambiguation checks refs/remotes/<name>, not refs/remotes/origin/<name>.
+  if git -C "$WT" rev-parse --verify "$upBranch" >/dev/null 2>&1; then
+    upRef="$upBranch"
+  elif git -C "$WT" rev-parse --verify "origin/$upBranch" >/dev/null 2>&1; then
+    upRef="origin/$upBranch"
+  else
+    echo "[SshFamiliar] Upstream branch $upBranch does not exist on remote (tried bare and origin/ prefix)" >&2
+    exit 30
+  fi
+  if git -C "$WT" merge-base --is-ancestor "$upRef" HEAD 2>/dev/null; then
     echo "[SshFamiliar] Skipping merge of $upBranch — already ancestor"
     continue
   fi
-  if ! git -C "$WT" rev-parse --verify "$upBranch" >/dev/null 2>&1; then
-    echo "[SshFamiliar] Upstream branch $upBranch does not exist on remote" >&2
-    exit 30
+  if ! git -C "$WT" merge --no-edit -m "Invoker: merge $upBranch" "$upRef" 2>&1; then
+    conflictFiles=$(git -C "$WT" diff --name-only --diff-filter=U 2>/dev/null || echo "(unable to list)")
+    echo "[SshFamiliar] MERGE_CONFLICT_BRANCH=$upBranch" >&2
+    echo "[SshFamiliar] MERGE_CONFLICT_FILES:" >&2
+    echo "$conflictFiles" >&2
+    git -C "$WT" merge --abort 2>/dev/null || true
+    exit 31
   fi
-  git -C "$WT" merge --no-edit -m "Invoker: merge $upBranch" "$upBranch" || exit 31
 done <<< "$(echo ${upstreamB64} | base64 -d)"
 cd "$WT"
 echo "[SshFamiliar] Provisioning remote worktree (pnpm install + electron native rebuild)..."
@@ -421,11 +435,17 @@ git push -u origin "$BR"
         if (e) e.completed = true;
 
         let status: 'completed' | 'failed' = exitCode === 0 ? 'completed' : 'failed';
-        let mappedError = exitCode === 30
-          ? 'Upstream branch missing on remote clone'
-          : exitCode === 31
-            ? 'Merge conflict merging upstream branch on remote'
-            : undefined;
+        let mappedError: string | undefined;
+        if (exitCode === 30) {
+          mappedError = 'Upstream branch missing on remote clone';
+        } else if (exitCode === 31) {
+          const output = e?.outputBuffer.join('') ?? '';
+          const branchMatch = output.match(/MERGE_CONFLICT_BRANCH=(.+)/);
+          const filesSection = output.match(/MERGE_CONFLICT_FILES:\n([\s\S]*?)(?:\n\[Ssh|$)/);
+          const branch = branchMatch?.[1]?.trim() ?? 'unknown';
+          const files = filesSection?.[1]?.trim() ?? '(see task output)';
+          mappedError = `Merge conflict merging upstream branch "${branch}" on remote.\nConflicting files:\n${files}`;
+        }
 
         let commitHash: string | undefined;
 
@@ -446,12 +466,24 @@ git push -u origin "$BR"
           }
         }
 
+        // When the command fails but no specific error was mapped (exit 30/31),
+        // capture the tail of the output buffer so the UI shows what went wrong.
+        if (!mappedError && exitCode !== 0 && e) {
+          const allOutput = e.outputBuffer.join('');
+          const lines = allOutput.split('\n');
+          const tail = lines.slice(-50).join('\n').trim();
+          if (tail) {
+            mappedError = tail.length > 3000 ? tail.slice(-3000) : tail;
+          }
+        }
+
+        const finalExitCode = status === 'failed' && exitCode === 0 ? 1 : exitCode;
         const response: WorkResponse = {
           requestId: request.requestId,
           actionId: request.actionId,
           status,
           outputs: {
-            exitCode: status === 'failed' && exitCode === 0 ? 1 : exitCode,
+            exitCode: finalExitCode,
             commitHash,
             claudeSessionId: entry.claudeSessionId,
             ...(mappedError ? { error: mappedError } : {}),

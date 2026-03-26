@@ -582,6 +582,18 @@ export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar
       await this.restoreBranch(cwd, opts.originalBranch);
     }
 
+    // When the command fails, capture the tail of the output buffer so the
+    // UI error section shows what went wrong (not just "Exit code: N").
+    let error: string | undefined;
+    if (exitCode !== 0 && entry) {
+      const allOutput = entry.outputBuffer.join('');
+      const lines = allOutput.split('\n');
+      const tail = lines.slice(-50).join('\n').trim();
+      if (tail) {
+        error = tail.length > 3000 ? tail.slice(-3000) : tail;
+      }
+    }
+
     const response: WorkResponse = {
       requestId: request.requestId,
       actionId: request.actionId,
@@ -590,6 +602,7 @@ export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar
         exitCode: status === 'failed' && exitCode === 0 ? 1 : exitCode,
         commitHash,
         claudeSessionId: opts?.claudeSessionId,
+        ...(error ? { error } : {}),
         ...(opts?.branch ? { summary: `branch=${opts.branch} commit=${commitHash ?? 'unknown'}` } : {}),
       },
     };
