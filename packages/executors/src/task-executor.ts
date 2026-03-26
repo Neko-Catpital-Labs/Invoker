@@ -165,10 +165,27 @@ export class TaskExecutor {
       return;
     }
 
+    // #region agent log
+    fetch('http://127.0.0.1:7658/ingest/762b7479-8057-4c6f-a805-85ee7d433bf5',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'a9e0bf'},body:JSON.stringify({sessionId:'a9e0bf',location:'task-executor.ts:executeTaskInner',message:'Task config before execution',data:{taskId:task.id,repoUrl:task.config.repoUrl??null,familiarType:task.config.familiarType??null,remoteTargetId:task.config.remoteTargetId??null,command:task.config.command?.slice(0,100)??null,cwd:this.cwd},timestamp:Date.now(),hypothesisId:'H1,H3'})}).catch(()=>{});
+    // #endregion
+
     // Gather upstream context from completed dependencies
     const upstreamContext = await this.buildUpstreamContext(task);
     const upstreamBranches = this.collectUpstreamBranches(task);
     const alternatives = this.buildAlternatives(task);
+
+    // Guard: every completed non-local dependency must have branch metadata.
+    // Without it the worktree would run against bare base branch, silently
+    // dropping all upstream implementation changes.
+    for (const depId of task.dependencies) {
+      const dep = this.orchestrator.getTask(depId);
+      if (dep && dep.status === 'completed' && !dep.execution.branch && dep.config.familiarType !== 'local') {
+        throw new Error(
+          `Task "${task.id}": dependency "${depId}" completed without branch metadata` +
+          ` — upstream changes would be silently dropped. The plan may need to be restarted.`,
+        );
+      }
+    }
 
     // Read workflow generation for content-addressable branch salt
     const workflow = task.config.workflowId ? this.persistence.loadWorkflow?.(task.config.workflowId) : undefined;
