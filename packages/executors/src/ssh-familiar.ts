@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { accessSync, constants } from 'node:fs';
 import type { WorkRequest, WorkResponse } from '@invoker/protocol';
 import type { FamiliarHandle, PersistedTaskMeta, TerminalSpec } from './familiar.js';
 import { BaseFamiliar, type BaseEntry } from './base-familiar.js';
@@ -142,9 +143,26 @@ fi`;
       return handle;
     }
 
+    try {
+      accessSync(this.sshKeyPath, constants.R_OK);
+    } catch {
+      throw new Error(
+        `SSH key file not accessible: ${this.sshKeyPath}\n` +
+        `Update "sshKeyPath" in your Invoker config (.invoker.json or ~/.invoker/config.json).`,
+      );
+    }
+
     const repoUrl = request.inputs.repoUrl;
     const command = request.inputs.command;
     const useRemoteWorktree = request.actionType === 'command' && !!repoUrl && !!command;
+
+    if (request.actionType === 'command' && command && !repoUrl) {
+      throw new Error(
+        `SSH task "${request.actionId}" has a command but no repoUrl. ` +
+        `SSH command tasks require repoUrl to clone the repo on the remote host. ` +
+        `Add a top-level "repoUrl" to your plan YAML (e.g. repoUrl: git@github.com:user/repo.git).`,
+      );
+    }
 
     if (useRemoteWorktree) {
       return this.startRemoteWorktreeCommand(request, handle, repoUrl!, command!);

@@ -95,6 +95,14 @@ export class DockerFamiliar extends BaseFamiliar<ContainerEntry> {
 
     log(`${TAG} start() actionType=${request.actionType} actionId=${request.actionId}`);
     const docker = await this.getDocker();
+    try {
+      await docker.ping();
+    } catch (err) {
+      throw new Error(
+        `Docker daemon is not reachable. Is Docker running?\n` +
+        `${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
     const handle = this.createHandle(request);
 
     // Determine container command based on action type
@@ -244,6 +252,7 @@ export class DockerFamiliar extends BaseFamiliar<ContainerEntry> {
     }
 
     // Pre-sync: pull latest from remote
+    await this.ensureGitAvailable();
     await this.syncFromRemote(this.workspaceDir, handle.executionId);
 
     // Create task-specific branch in main repo for tracking

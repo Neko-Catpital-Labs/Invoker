@@ -268,6 +268,267 @@ describe('TaskExecutor', () => {
       );
       expect(onComplete).toHaveBeenCalled();
     });
+
+    it('startup error includes phase prefix in outputs.error', async () => {
+      const handleWorkerResponse = vi.fn();
+      const orchestrator = {
+        getTask: () => undefined,
+        handleWorkerResponse,
+      };
+      const throwingFamiliar = {
+        type: 'worktree',
+        start: async () => { throw new Error('bad key'); },
+        onOutput: () => () => {},
+        onComplete: () => () => {},
+      };
+      const registry = {
+        getDefault: () => throwingFamiliar,
+        get: () => throwingFamiliar,
+        getAll: () => [throwingFamiliar],
+      };
+      const onComplete = vi.fn();
+
+      const executor = new TaskExecutor({
+        orchestrator: orchestrator as any,
+        persistence: { updateTask: vi.fn() } as any,
+        familiarRegistry: registry as any,
+        cwd: '/tmp',
+        callbacks: { onComplete },
+      });
+
+      const task = makeTask({ id: 'failing-start', status: 'running', config: { command: 'echo hi' } });
+      await executor.executeTask(task);
+
+      expect(handleWorkerResponse).toHaveBeenCalledWith(
+        expect.objectContaining({
+          outputs: expect.objectContaining({
+            error: expect.stringContaining('Familiar startup failed (worktree): bad key'),
+          }),
+        }),
+      );
+    });
+
+    it('startup error includes stack trace in outputs.error', async () => {
+      const handleWorkerResponse = vi.fn();
+      const orchestrator = {
+        getTask: () => undefined,
+        handleWorkerResponse,
+      };
+      const throwingFamiliar = {
+        type: 'worktree',
+        start: async () => { throw new Error('bad key'); },
+        onOutput: () => () => {},
+        onComplete: () => () => {},
+      };
+      const registry = {
+        getDefault: () => throwingFamiliar,
+        get: () => throwingFamiliar,
+        getAll: () => [throwingFamiliar],
+      };
+      const onComplete = vi.fn();
+
+      const executor = new TaskExecutor({
+        orchestrator: orchestrator as any,
+        persistence: { updateTask: vi.fn() } as any,
+        familiarRegistry: registry as any,
+        cwd: '/tmp',
+        callbacks: { onComplete },
+      });
+
+      const task = makeTask({ id: 'failing-start', status: 'running', config: { command: 'echo hi' } });
+      await executor.executeTask(task);
+
+      expect(handleWorkerResponse).toHaveBeenCalledWith(
+        expect.objectContaining({
+          outputs: expect.objectContaining({
+            error: expect.stringContaining('at '),
+          }),
+        }),
+      );
+    });
+  });
+
+  describe('upstream branch metadata guard', () => {
+    it('fails task when a completed worktree dep has no branch', async () => {
+      const tasks = new Map<string, TaskState>();
+      tasks.set('dep-a', makeTask({
+        id: 'dep-a',
+        status: 'completed',
+        config: { familiarType: 'worktree' },
+      }));
+
+      const handleWorkerResponse = vi.fn();
+      const orchestrator = {
+        getTask: (id: string) => tasks.get(id),
+        handleWorkerResponse,
+      };
+      const onComplete = vi.fn();
+
+      const executor = new TaskExecutor({
+        orchestrator: orchestrator as any,
+        persistence: { updateTask: vi.fn() } as any,
+        familiarRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+        callbacks: { onComplete },
+      });
+
+      const child = makeTask({
+        id: 'child-task',
+        status: 'running',
+        dependencies: ['dep-a'],
+        config: { command: 'echo test' },
+      });
+
+      await executor.executeTask(child);
+
+      expect(handleWorkerResponse).toHaveBeenCalledWith(
+        expect.objectContaining({
+          actionId: 'child-task',
+          status: 'failed',
+          outputs: expect.objectContaining({
+            error: expect.stringContaining('completed without branch metadata'),
+          }),
+        }),
+      );
+    });
+
+    it('allows completed local dep with no branch', async () => {
+      let capturedRequest: any;
+      const tasks = new Map<string, TaskState>();
+      tasks.set('dep-local', makeTask({
+        id: 'dep-local',
+        status: 'completed',
+        config: { familiarType: 'local' },
+      }));
+
+      const capturingFamiliar = {
+        type: 'worktree',
+        start: async (req: any) => {
+          capturedRequest = req;
+          return { executionId: 'exec-1', taskId: 'child-task' };
+        },
+        onOutput: () => () => {},
+        onComplete: (_h: any, cb: any) => {
+          cb({ requestId: 'r', actionId: 'child-task', status: 'completed', outputs: { exitCode: 0 } });
+          return () => {};
+        },
+        onHeartbeat: () => () => {},
+      };
+
+      const executor = new TaskExecutor({
+        orchestrator: {
+          getTask: (id: string) => tasks.get(id),
+          handleWorkerResponse: vi.fn(),
+        } as any,
+        persistence: { updateTask: vi.fn() } as any,
+        familiarRegistry: {
+          getDefault: () => capturingFamiliar,
+          get: () => capturingFamiliar,
+          getAll: () => [capturingFamiliar],
+        } as any,
+        cwd: '/tmp',
+      });
+
+      const child = makeTask({
+        id: 'child-task',
+        status: 'running',
+        dependencies: ['dep-local'],
+        config: { command: 'echo test' },
+      });
+
+      await executor.executeTask(child);
+
+      expect(capturedRequest).toBeDefined();
+      expect(capturedRequest.inputs.upstreamBranches).toBeUndefined();
+    });
+
+    it('allows completed dep with branch (happy path)', async () => {
+      let capturedRequest: any;
+      const tasks = new Map<string, TaskState>();
+      tasks.set('dep-a', makeTask({
+        id: 'dep-a',
+        status: 'completed',
+        execution: { branch: 'experiment/dep-a-abc123' },
+      }));
+
+      const capturingFamiliar = {
+        type: 'worktree',
+        start: async (req: any) => {
+          capturedRequest = req;
+          return { executionId: 'exec-1', taskId: 'child-task' };
+        },
+        onOutput: () => () => {},
+        onComplete: (_h: any, cb: any) => {
+          cb({ requestId: 'r', actionId: 'child-task', status: 'completed', outputs: { exitCode: 0 } });
+          return () => {};
+        },
+        onHeartbeat: () => () => {},
+      };
+
+      const executor = new TaskExecutor({
+        orchestrator: {
+          getTask: (id: string) => tasks.get(id),
+          handleWorkerResponse: vi.fn(),
+        } as any,
+        persistence: { updateTask: vi.fn() } as any,
+        familiarRegistry: {
+          getDefault: () => capturingFamiliar,
+          get: () => capturingFamiliar,
+          getAll: () => [capturingFamiliar],
+        } as any,
+        cwd: '/tmp',
+      });
+
+      const child = makeTask({
+        id: 'child-task',
+        status: 'running',
+        dependencies: ['dep-a'],
+        config: { command: 'echo test' },
+      });
+
+      await executor.executeTask(child);
+
+      expect(capturedRequest).toBeDefined();
+      expect(capturedRequest.inputs.upstreamBranches).toEqual(['experiment/dep-a-abc123']);
+    });
+
+    it('fails when dep has no familiarType set and no branch', async () => {
+      const tasks = new Map<string, TaskState>();
+      tasks.set('dep-a', makeTask({
+        id: 'dep-a',
+        status: 'completed',
+      }));
+
+      const handleWorkerResponse = vi.fn();
+      const executor = new TaskExecutor({
+        orchestrator: {
+          getTask: (id: string) => tasks.get(id),
+          handleWorkerResponse,
+        } as any,
+        persistence: { updateTask: vi.fn() } as any,
+        familiarRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+      });
+
+      const child = makeTask({
+        id: 'child-task',
+        status: 'running',
+        dependencies: ['dep-a'],
+        config: { command: 'echo test' },
+      });
+
+      await executor.executeTask(child);
+
+      expect(handleWorkerResponse).toHaveBeenCalledWith(
+        expect.objectContaining({
+          actionId: 'child-task',
+          status: 'failed',
+          outputs: expect.objectContaining({
+            error: expect.stringContaining('completed without branch metadata'),
+          }),
+        }),
+      );
+    });
   });
 
   describe('upstream branch metadata guard', () => {
