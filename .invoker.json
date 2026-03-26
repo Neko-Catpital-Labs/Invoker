@@ -5,7 +5,7 @@
   "planningHeartbeatIntervalSeconds": 120,
   "maxConcurrency": 6,
   "remoteTargets": {
-    "do-droplet": {
+    "remote_digital_ocean": {
       "host": "178.128.181.133",
       "user": "root",
       "sshKeyPath": "/Users/edbertchan/.ssh/id_ed25519"

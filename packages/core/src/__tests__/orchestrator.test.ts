@@ -1721,21 +1721,21 @@ describe('Orchestrator', () => {
         makeResponse({ actionId: 't1', status: 'failed', outputs: { exitCode: 1, error: 'fail' } }),
       );
 
-      orchestrator.editTaskType('t1', 'ssh', 'do-droplet');
+      orchestrator.editTaskType('t1', 'ssh', 'remote_digital_ocean');
 
       const task = orchestrator.getTask('t1');
       expect(task?.config.familiarType).toBe('ssh');
-      expect(task?.config.remoteTargetId).toBe('do-droplet');
+      expect(task?.config.remoteTargetId).toBe('remote_digital_ocean');
 
       const persisted = persistence.tasks.get('t1');
       expect(persisted?.task.config.familiarType).toBe('ssh');
-      expect(persisted?.task.config.remoteTargetId).toBe('do-droplet');
+      expect(persisted?.task.config.remoteTargetId).toBe('remote_digital_ocean');
     });
 
     it('clears remoteTargetId when switching away from ssh', () => {
       orchestrator.loadPlan({
         name: 'edit-type-clear-remote',
-        tasks: [{ id: 't1', description: 'Task 1', command: 'echo hello', familiarType: 'ssh', remoteTargetId: 'do-droplet' }],
+        tasks: [{ id: 't1', description: 'Task 1', command: 'echo hello', familiarType: 'ssh', remoteTargetId: 'remote_digital_ocean' }],
       });
       orchestrator.startExecution();
 
