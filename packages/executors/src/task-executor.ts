@@ -34,6 +34,9 @@ import {
   spawnClaudeFixImpl,
 } from './conflict-resolver.js';
 
+/** Keeps `lastHeartbeatAt` fresh while `familiar.start()` is awaited (SSH remote setup/provision can take minutes). Matches BaseFamiliar default heartbeat cadence. */
+const PRE_START_HEARTBEAT_INTERVAL_MS = 30_000;
+
 // ── Callbacks ─────────────────────────────────────────────
 
 export interface TaskExecutorCallbacks {
@@ -198,7 +201,15 @@ export class TaskExecutor {
     const familiar = this.selectFamiliar(task);
     console.log(`[trace] TaskExecutor: task=${task.id} calling familiar.start() type=${familiar.type}`);
     const startT0 = Date.now();
-    const handle = await familiar.start(request);
+    const preStartHeartbeatTimer = setInterval(() => {
+      this.callbacks.onHeartbeat?.(task.id);
+    }, PRE_START_HEARTBEAT_INTERVAL_MS);
+    let handle: FamiliarHandle;
+    try {
+      handle = await familiar.start(request);
+    } finally {
+      clearInterval(preStartHeartbeatTimer);
+    }
     console.log(`[trace] TaskExecutor: task=${task.id} familiar.start() returned after ${Date.now() - startT0}ms familiar=${familiar.type} sessionId=${handle.claudeSessionId ?? 'none'} workspace=${handle.workspacePath ?? 'default'}`);
 
     // Persist execution metadata immediately at task start — all fields explicit

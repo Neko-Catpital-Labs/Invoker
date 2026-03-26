@@ -11,6 +11,30 @@ import type { PlanDefinition } from '@invoker/core';
 import { UTILIZATION_MAX } from '@invoker/core';
 import { loadConfig } from './config.js';
 
+/** Empty / whitespace `baseBranch` in YAML (`baseBranch:`) must fall through to config + git like a missing key. */
+function resolveDefaultBaseBranch(plan: PlanDefinition, dir: string): string {
+  const b = plan.baseBranch;
+  if (typeof b === 'string' && b.trim() !== '') return b.trim();
+  return loadConfig(dir).defaultBranch ?? detectDefaultBranch(dir);
+}
+
+/**
+ * Top-level plan defaults aligned with {@link parsePlan} (merge target, feature branch, onFinish).
+ * Use when a {@link PlanDefinition} is built outside the YAML parser — e.g. GUI `yaml.load` + IPC.
+ */
+export function applyPlanDefinitionDefaults(plan: PlanDefinition, repoDir?: string): PlanDefinition {
+  const dir = repoDir ?? process.cwd();
+  const slug = plan.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  const fb = plan.featureBranch;
+  const featureBranch = typeof fb === 'string' && fb.trim() !== '' ? fb.trim() : `plan/${slug}`;
+  return {
+    ...plan,
+    onFinish: plan.onFinish ?? 'pull_request',
+    baseBranch: resolveDefaultBaseBranch(plan, dir),
+    featureBranch,
+  };
+}
+
 export interface RawExperimentVariant {
   id?: string;
   description?: string;
@@ -170,16 +194,16 @@ export function parsePlan(yamlContent: string, repoDir?: string): PlanDefinition
     };
   });
 
-  return {
+  return applyPlanDefinitionDefaults({
     name: raw.name,
     description: raw.description,
     visualProof: raw.visualProof,
     onFinish,
-    baseBranch: raw.baseBranch ?? loadConfig(repoDir ?? process.cwd()).defaultBranch ?? detectDefaultBranch(),
+    baseBranch: raw.baseBranch,
     featureBranch: raw.featureBranch,
     mergeMode,
     tasks,
-  };
+  }, repoDir);
 }
 
 /**

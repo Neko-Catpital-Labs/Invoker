@@ -1,11 +1,54 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { parsePlan, PlanParseError, detectDefaultBranch } from '../plan-parser.js';
+import { parsePlan, PlanParseError, detectDefaultBranch, applyPlanDefinitionDefaults } from '../plan-parser.js';
 
 vi.mock('node:child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:child_process')>();
   return { ...actual, execSync: vi.fn(actual.execSync) };
 });
 import { execSync } from 'node:child_process';
+
+describe('applyPlanDefinitionDefaults', () => {
+  it('fills baseBranch, featureBranch, onFinish when omitted (GUI yaml.load shape)', () => {
+    const plan = applyPlanDefinitionDefaults({
+      name: 'My Plan',
+      tasks: [{ id: 'a', description: 'd', command: 'echo' }],
+    }, process.cwd());
+    expect(plan.onFinish).toBe('pull_request');
+    expect(plan.featureBranch).toBe('plan/my-plan');
+    expect(plan.baseBranch).toBeDefined();
+    expect(typeof plan.baseBranch).toBe('string');
+  });
+
+  it('preserves explicit baseBranch, featureBranch, and onFinish', () => {
+    const plan = applyPlanDefinitionDefaults({
+      name: 'X',
+      baseBranch: 'develop',
+      featureBranch: 'feat/x',
+      onFinish: 'merge',
+      tasks: [{ id: 'a', description: 'd', command: 'echo' }],
+    });
+    expect(plan.baseBranch).toBe('develop');
+    expect(plan.featureBranch).toBe('feat/x');
+    expect(plan.onFinish).toBe('merge');
+  });
+
+  it('treats empty or whitespace baseBranch like omitted (YAML `baseBranch:`)', () => {
+    const empty = applyPlanDefinitionDefaults({
+      name: 'Remote PR Plan',
+      baseBranch: '',
+      tasks: [{ id: 'a', description: 'd', command: 'echo' }],
+    }, process.cwd());
+    expect(empty.baseBranch).toBeDefined();
+    expect(empty.baseBranch!.length).toBeGreaterThan(0);
+
+    const spaces = applyPlanDefinitionDefaults({
+      name: 'Remote PR Plan',
+      baseBranch: '   ',
+      tasks: [{ id: 'a', description: 'd', command: 'echo' }],
+    }, process.cwd());
+    expect(spaces.baseBranch).toEqual(empty.baseBranch);
+  });
+});
 
 describe('parsePlan', () => {
   it('parses valid YAML plan', () => {

@@ -61,6 +61,7 @@ import {
 import type { TaskOutputData } from './types.js';
 import { loadConfig, type InvokerConfig } from './config.js';
 import { backupPlan } from './plan-backup.js';
+import { applyPlanDefinitionDefaults } from './plan-parser.js';
 import { startApiServer, type ApiServer } from './api-server.js';
 import { runHeadless } from './headless.js';
 import {
@@ -530,7 +531,8 @@ function setupGuiMode(): void {
       console.log(`[ipc] load-plan: "${plan.name}" (${plan.tasks.length} tasks)`);
       taskHandles.clear();
       backupPlan(plan);
-      orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
+      const normalized = applyPlanDefinitionDefaults(plan, repoRoot);
+      orchestrator.loadPlan(normalized, { allowGraphMutation: invokerConfig.allowGraphMutation });
     });
 
     if (process.env.NODE_ENV === 'test') {
