@@ -237,6 +237,28 @@ describe('resolveExecutorRouting', () => {
     expect(resolveExecutorRouting('pnpm deploy', 'docker', 'prod', [rule])).toEqual({});
   });
 
+  it('matches test command by pattern substring', () => {
+    const testRule = { pattern: 'pnpm test', familiarType: 'ssh', remoteTargetId: 'ci-box' };
+    expect(resolveExecutorRouting('pnpm test --coverage', undefined, undefined, [testRule]))
+      .toEqual({ familiarType: 'ssh', remoteTargetId: 'ci-box' });
+  });
+
+  it('matches test command by regex', () => {
+    const testRule = { regex: '^pnpm test', familiarType: 'ssh', remoteTargetId: 'ci-box' };
+    expect(resolveExecutorRouting('pnpm test', undefined, undefined, [testRule]))
+      .toEqual({ familiarType: 'ssh', remoteTargetId: 'ci-box' });
+  });
+
+  it('does not match test rule against non-test command', () => {
+    const testRule = { regex: '^pnpm test', familiarType: 'ssh', remoteTargetId: 'ci-box' };
+    expect(resolveExecutorRouting('pnpm build', undefined, undefined, [testRule])).toEqual({});
+  });
+
+  it('YAML familiarType wins over test routing rule', () => {
+    const testRule = { pattern: 'pnpm test', familiarType: 'ssh', remoteTargetId: 'ci-box' };
+    expect(resolveExecutorRouting('pnpm test', 'worktree', undefined, [testRule])).toEqual({});
+  });
+
   it('first matching rule wins', () => {
     const rules = [
       { pattern: 'deploy', familiarType: 'ssh', remoteTargetId: 'prod' },

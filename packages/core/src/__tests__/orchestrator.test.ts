@@ -418,6 +418,86 @@ describe('Orchestrator', () => {
         expect(task!.config.remoteTargetId).toBeUndefined();
       });
 
+      it('applies regex rule matching pnpm test: sets familiarType ssh and remoteTargetId ci-box', () => {
+        const routedOrchestrator = new Orchestrator({
+          persistence: new InMemoryPersistence(),
+          messageBus: new InMemoryBus(),
+          maxConcurrency: 3,
+          executorRoutingRules: [
+            { regex: '^pnpm test', familiarType: 'ssh', remoteTargetId: 'ci-box' },
+          ],
+        });
+
+        routedOrchestrator.loadPlan({
+          name: 'test-routing',
+          tasks: [{ id: 't1', description: 'Run tests', command: 'pnpm test' }],
+        });
+
+        const task = routedOrchestrator.getTask('t1');
+        expect(task!.config.familiarType).toBe('ssh');
+        expect(task!.config.remoteTargetId).toBe('ci-box');
+      });
+
+      it('applies pattern rule matching test command: sets familiarType ssh and remoteTargetId ci-box', () => {
+        const routedOrchestrator = new Orchestrator({
+          persistence: new InMemoryPersistence(),
+          messageBus: new InMemoryBus(),
+          maxConcurrency: 3,
+          executorRoutingRules: [
+            { pattern: 'pnpm test', familiarType: 'ssh', remoteTargetId: 'ci-box' },
+          ],
+        });
+
+        routedOrchestrator.loadPlan({
+          name: 'test-routing-pattern',
+          tasks: [{ id: 't1', description: 'Run tests', command: 'pnpm test --coverage' }],
+        });
+
+        const task = routedOrchestrator.getTask('t1');
+        expect(task!.config.familiarType).toBe('ssh');
+        expect(task!.config.remoteTargetId).toBe('ci-box');
+      });
+
+      it('explicit task familiarType overrides test routing rule', () => {
+        const routedOrchestrator = new Orchestrator({
+          persistence: new InMemoryPersistence(),
+          messageBus: new InMemoryBus(),
+          maxConcurrency: 3,
+          executorRoutingRules: [
+            { regex: '^pnpm test', familiarType: 'ssh', remoteTargetId: 'ci-box' },
+          ],
+        });
+
+        routedOrchestrator.loadPlan({
+          name: 'test-override',
+          tasks: [{ id: 't1', description: 'Run tests locally', command: 'pnpm test', familiarType: 'worktree' }],
+        });
+
+        const task = routedOrchestrator.getTask('t1');
+        expect(task!.config.familiarType).toBe('worktree');
+        expect(task!.config.remoteTargetId).toBeUndefined();
+      });
+
+      it('explicit task remoteTargetId overrides test routing rule', () => {
+        const routedOrchestrator = new Orchestrator({
+          persistence: new InMemoryPersistence(),
+          messageBus: new InMemoryBus(),
+          maxConcurrency: 3,
+          executorRoutingRules: [
+            { pattern: 'pnpm test', familiarType: 'ssh', remoteTargetId: 'ci-box' },
+          ],
+        });
+
+        routedOrchestrator.loadPlan({
+          name: 'test-remote-override',
+          tasks: [{ id: 't1', description: 'Run tests on staging', command: 'pnpm test', remoteTargetId: 'staging-box' }],
+        });
+
+        const task = routedOrchestrator.getTask('t1');
+        expect(task!.config.familiarType).toBe('worktree');
+        expect(task!.config.remoteTargetId).toBe('staging-box');
+      });
+
       it('merge node always has familiarType merge regardless of routing rules', () => {
         const routedOrchestrator = new Orchestrator({
           persistence: new InMemoryPersistence(),
