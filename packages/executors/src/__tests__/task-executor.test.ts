@@ -4013,4 +4013,56 @@ describe('TaskExecutor', () => {
         .rejects.toThrow('no workspacePath');
     });
   });
+
+  describe('remoteTargetsProvider', () => {
+    it('reads remote targets lazily from the provider on each selectFamiliar call', () => {
+      const provider = vi.fn()
+        .mockReturnValueOnce({
+          'do-droplet': { host: '1.2.3.4', user: 'root', sshKeyPath: '/old/key' },
+        })
+        .mockReturnValueOnce({
+          'do-droplet': { host: '1.2.3.4', user: 'root', sshKeyPath: '/new/key' },
+        });
+
+      const executor = new TaskExecutor({
+        orchestrator: { getTask: () => undefined } as any,
+        persistence: {} as any,
+        familiarRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+        remoteTargetsProvider: provider,
+      });
+
+      const task = makeTask({
+        id: 'ssh-task',
+        config: { familiarType: 'ssh', remoteTargetId: 'do-droplet' },
+      });
+
+      const familiar1 = executor.selectFamiliar(task);
+      expect(familiar1.type).toBe('ssh');
+      expect((familiar1 as any).sshKeyPath).toBe('/old/key');
+
+      const familiar2 = executor.selectFamiliar(task);
+      expect((familiar2 as any).sshKeyPath).toBe('/new/key');
+
+      expect(provider).toHaveBeenCalledTimes(2);
+    });
+
+    it('throws when provider returns no entry for the target ID', () => {
+      const provider = vi.fn().mockReturnValue({});
+      const executor = new TaskExecutor({
+        orchestrator: { getTask: () => undefined } as any,
+        persistence: {} as any,
+        familiarRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+        remoteTargetsProvider: provider,
+      });
+
+      const task = makeTask({
+        id: 'ssh-task',
+        config: { familiarType: 'ssh', remoteTargetId: 'missing-target' },
+      });
+
+      expect(() => executor.selectFamiliar(task)).toThrow('no matching');
+    });
+  });
 });

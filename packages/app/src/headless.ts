@@ -16,7 +16,7 @@ import { resolve as resolvePath } from 'node:path';
 import { Channels } from '@invoker/transport';
 import type { MessageBus } from '@invoker/transport';
 import { FamiliarRegistry, TaskExecutor, GitHubMergeGateProvider } from '@invoker/executors';
-import type { InvokerConfig } from './config.js';
+import { loadConfig, type InvokerConfig } from './config.js';
 import { backupPlan } from './plan-backup.js';
 import { startApiServer } from './api-server.js';
 import {
@@ -71,7 +71,7 @@ function createHeadlessExecutor(
     familiarRegistry: deps.familiarRegistry,
     cwd: deps.repoRoot,
     defaultBranch: deps.invokerConfig.defaultBranch,
-    remoteTargets: deps.invokerConfig.remoteTargets,
+    remoteTargetsProvider: () => loadConfig(deps.repoRoot).remoteTargets ?? {},
     mergeGateProvider: new GitHubMergeGateProvider(),
     callbacks: {
       onOutput: (taskId, data) => {
