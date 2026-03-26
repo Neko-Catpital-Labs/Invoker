@@ -67,6 +67,7 @@ export interface OrchestratorPersistence {
     status: 'running' | 'completed' | 'failed';
     createdAt: string;
     updatedAt: string;
+    repoUrl?: string;
     onFinish?: string;
     baseBranch?: string;
     featureBranch?: string;
@@ -110,6 +111,7 @@ export interface PlanDefinition {
   baseBranch?: string;
   featureBranch?: string;
   mergeMode?: 'manual' | 'automatic' | 'github';
+  repoUrl?: string;
   tasks: Array<{
     id: string;
     description: string;
@@ -369,6 +371,7 @@ export class Orchestrator {
       description: plan.description,
       visualProof: plan.visualProof,
       status: 'running',
+      repoUrl: plan.repoUrl,
       onFinish: plan.onFinish,
       baseBranch: plan.baseBranch,
       featureBranch: plan.featureBranch,

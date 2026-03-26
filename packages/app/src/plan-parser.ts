@@ -27,11 +27,18 @@ export function applyPlanDefinitionDefaults(plan: PlanDefinition, repoDir?: stri
   const slug = plan.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
   const fb = plan.featureBranch;
   const featureBranch = typeof fb === 'string' && fb.trim() !== '' ? fb.trim() : `plan/${slug}`;
+
+  // Inherit plan-level repoUrl onto tasks that don't specify their own
+  const tasks = plan.repoUrl
+    ? plan.tasks.map(t => t.repoUrl ? t : { ...t, repoUrl: plan.repoUrl })
+    : plan.tasks;
+
   return {
     ...plan,
     onFinish: plan.onFinish ?? 'pull_request',
     baseBranch: resolveDefaultBaseBranch(plan, dir),
     featureBranch,
+    tasks,
   };
 }
 
@@ -194,6 +201,16 @@ export function parsePlan(yamlContent: string, repoDir?: string): PlanDefinition
     };
   });
 
+  // SSH command tasks require repoUrl to clone the repo on the remote host
+  for (const task of tasks) {
+    if (task.familiarType === 'ssh' && task.command && !task.repoUrl) {
+      throw new PlanParseError(
+        `Task "${task.id}" uses familiarType "ssh" with a command but has no repoUrl. ` +
+        `Add a top-level "repoUrl" to your plan YAML (e.g. repoUrl: git@github.com:user/repo.git).`,
+      );
+    }
+  }
+
   return applyPlanDefinitionDefaults({
     name: raw.name,
     description: raw.description,
@@ -202,6 +219,7 @@ export function parsePlan(yamlContent: string, repoDir?: string): PlanDefinition
     baseBranch: raw.baseBranch,
     featureBranch: raw.featureBranch,
     mergeMode,
+    repoUrl: raw.repoUrl,
     tasks,
   }, repoDir);
 }

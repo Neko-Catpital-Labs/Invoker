@@ -191,20 +191,7 @@ export class TaskExecutor {
     const generation = (workflow as any)?.generation ?? 0;
     const baseBranch = workflow?.baseBranch ?? this.defaultBranch;
 
-    // Auto-detect repoUrl from git remote when missing (needed for SSH command tasks)
-    let repoUrl = task.config.repoUrl;
-    if (!repoUrl && task.config.familiarType === 'ssh' && task.config.command) {
-      try {
-        repoUrl = (await this.execGitReadonly(['remote', 'get-url', 'origin'])).trim();
-        console.log(`[TaskExecutor] auto-detected repoUrl from git remote: ${repoUrl}`);
-      } catch {
-        console.warn(`[TaskExecutor] failed to auto-detect repoUrl from git remote for SSH task "${task.id}"`);
-      }
-    }
-
-    // #region agent log
-    fetch('http://127.0.0.1:7658/ingest/762b7479-8057-4c6f-a805-85ee7d433bf5',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'8f5a16'},body:JSON.stringify({sessionId:'8f5a16',location:'task-executor.ts:executeTaskInner',message:'repoUrl resolution',data:{taskId:task.id,configRepoUrl:task.config.repoUrl??null,resolvedRepoUrl:repoUrl??null,familiarType:task.config.familiarType??null,remoteTargetId:task.config.remoteTargetId??null,command:task.config.command?.slice(0,100)??null,autoDetected:!task.config.repoUrl&&!!repoUrl},timestamp:Date.now()})}).catch(()=>{});
-    // #endregion
+    const repoUrl = task.config.repoUrl ?? workflow?.repoUrl;
 
     const request: WorkRequest = {
       requestId: randomUUID(),
