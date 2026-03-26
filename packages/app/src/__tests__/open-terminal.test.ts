@@ -11,6 +11,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { mkdirSync, rmSync } from 'node:fs';
+import { EventEmitter } from 'node:events';
 
 import {
   Orchestrator,
@@ -37,6 +39,8 @@ vi.mock('node:fs', async (importOriginal) => {
   return { ...actual, existsSync: vi.fn(actual.existsSync) };
 });
 import { existsSync } from 'node:fs';
+
+
 
 // ── Lightweight in-memory mocks ─────────────────────────────
 
@@ -140,6 +144,8 @@ function executeTaskViaFamiliar(
       command: task.config.command,
       prompt: task.config.prompt,
       workspacePath: process.cwd(),
+      repoUrl: '/fake/repo',
+      baseBranch: 'master',
     },
     callbackUrl: 'n/a',
     timestamps: { createdAt: new Date().toISOString() },
@@ -161,6 +167,7 @@ function executeTaskViaFamiliar(
 describe('open-terminal integration', () => {
   let orchestrator: Orchestrator;
   let familiar: WorktreeFamiliar;
+  let mockWorktreeDir: string;
 
   beforeEach(() => {
     const persistence = new InMemoryPersistence();
@@ -173,22 +180,51 @@ describe('open-terminal integration', () => {
     taskHandles.clear();
     vi.clearAllMocks();
 
+    // Create a real temp directory for the worktree to use
+    mockWorktreeDir = join(tmpdir(), `mock-wt-${randomUUID()}`);
+    mkdirSync(mockWorktreeDir, { recursive: true });
+
+    // Mock the pool to return our temp directory
+    Object.defineProperty(familiar, 'pool', {
+      value: {
+        acquireWorktree: vi.fn().mockResolvedValue({
+          worktreePath: mockWorktreeDir,
+          branch: 'test-branch',
+          release: vi.fn(),
+        }),
+      },
+      writable: true,
+      configurable: true,
+    });
+
     // Prevent WorktreeFamiliar.start() from running real git on the repo.
     vi.spyOn(BaseFamiliar.prototype as any, 'execGitSimple')
       .mockImplementation(async (...a: any[]) => {
         const args = a[0] as string[];
         if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
         if (args[0] === 'rev-parse' && args[1] === 'HEAD') return 'abc123';
+        if (args[0] === 'rev-parse' && args[1] === '--verify') {
+          // Branch doesn't exist yet
+          throw new Error('fatal: Needed a single revision');
+        }
         return '';
       });
     vi.spyOn(BaseFamiliar.prototype as any, 'syncFromRemote').mockResolvedValue(undefined);
+    vi.spyOn(BaseFamiliar.prototype as any, 'setupTaskBranch').mockResolvedValue(undefined);
     vi.spyOn(BaseFamiliar.prototype as any, 'pushBranchToRemote').mockResolvedValue(undefined);
+    vi.spyOn(BaseFamiliar.prototype as any, 'recordTaskResult').mockResolvedValue(undefined);
     vi.spyOn(WorktreeFamiliar.prototype as any, 'provisionWorktree').mockResolvedValue(undefined);
   });
 
   afterEach(async () => {
     await familiar.destroyAll();
     vi.restoreAllMocks();
+    // Clean up temp directory
+    try {
+      rmSync(mockWorktreeDir, { recursive: true, force: true });
+    } catch {
+      // ignore cleanup errors
+    }
   });
 
   it('runs tasks, gets terminal spec, and spawns external terminal', async () => {
@@ -219,22 +255,40 @@ describe('open-terminal integration', () => {
     // Open terminal using spec
     openExternalTerminal(spec);
 
-    expect(mockSpawn).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.arrayContaining([spec!.cwd!]),
-      expect.objectContaining({ detached: true, stdio: 'ignore' }),
-    );
+    if (process.platform === 'linux') {
+      // On Linux, cwd is embedded in the bash script
+      expect(mockSpawn).toHaveBeenCalledWith(
+        'x-terminal-emulator',
+        expect.arrayContaining([expect.stringContaining(spec!.cwd!)]),
+        expect.objectContaining({ detached: true, stdio: 'ignore' }),
+      );
+    } else {
+      expect(mockSpawn).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.arrayContaining([spec!.cwd!]),
+        expect.objectContaining({ detached: true, stdio: 'ignore' }),
+      );
+    }
     expect(mockUnref).toHaveBeenCalled();
   }, 15_000);
 
   it('falls back to process.cwd() when spec is null', () => {
     openExternalTerminal(null);
 
-    expect(mockSpawn).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.arrayContaining([process.cwd()]),
-      expect.objectContaining({ detached: true }),
-    );
+    if (process.platform === 'linux') {
+      // On Linux, cwd is embedded in the bash script
+      expect(mockSpawn).toHaveBeenCalledWith(
+        'x-terminal-emulator',
+        expect.arrayContaining([expect.stringContaining(process.cwd())]),
+        expect.objectContaining({ detached: true }),
+      );
+    } else {
+      expect(mockSpawn).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.arrayContaining([process.cwd()]),
+        expect.objectContaining({ detached: true }),
+      );
+    }
   });
 
   it('directory mode: spawns bash -c with cd and exec bash on linux', () => {
