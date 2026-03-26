@@ -19,6 +19,7 @@ vi.mock('node:fs', async (importOriginal) => {
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync } from 'node:fs';
 import { WorktreeFamiliar, computeBranchHash } from '../worktree-familiar.js';
+import { BaseFamiliar } from '../base-familiar.js';
 
 const mockedSpawn = vi.mocked(spawn);
 
@@ -1278,6 +1279,38 @@ describe('WorktreeFamiliar', () => {
     it('returns spec with undefined cwd when no workspace path', () => {
       const spec = familiar.getRestoredTerminalSpec(baseMeta);
       expect(spec).toEqual({ cwd: undefined });
+    });
+  });
+
+  describe('git availability pre-flight check', () => {
+    beforeEach(() => {
+      BaseFamiliar.resetGitAvailableCheck();
+    });
+
+    it('throws when git is not available', async () => {
+      const spy = vi.spyOn(
+        BaseFamiliar.prototype as any,
+        'execGitSimple',
+      ).mockRejectedValueOnce(
+        new Error('Failed to spawn git: spawn git ENOENT'),
+      );
+
+      const familiar = new WorktreeFamiliar({
+        repoDir: '/tmp/fake-repo',
+        worktreeBaseDir: '/tmp/fake-worktrees',
+      });
+      const request = {
+        requestId: 'req-1',
+        actionId: 'test',
+        actionType: 'command' as const,
+        inputs: { command: 'echo hi', description: 'test' },
+        callbackUrl: '',
+        timestamps: { createdAt: new Date().toISOString() },
+      };
+      await expect(familiar.start(request)).rejects.toThrow(
+        'git is not available on PATH',
+      );
+      spy.mockRestore();
     });
   });
 });

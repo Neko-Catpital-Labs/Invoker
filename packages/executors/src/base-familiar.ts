@@ -276,6 +276,26 @@ export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar
     return parts.join('\n');
   }
 
+  private static gitAvailableChecked = false;
+
+  /** @internal — exposed for testing only */
+  static resetGitAvailableCheck(): void {
+    BaseFamiliar.gitAvailableChecked = false;
+  }
+
+  protected async ensureGitAvailable(): Promise<void> {
+    if (BaseFamiliar.gitAvailableChecked) return;
+    try {
+      await this.execGitSimple(['--version'], process.cwd());
+      BaseFamiliar.gitAvailableChecked = true;
+    } catch (err) {
+      throw new Error(
+        `git is not available on PATH. Install git and ensure it is in your shell PATH.\n` +
+        `${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
   protected execGitSimple(args: string[], cwd: string): Promise<string> {
     const stack = new Error().stack;
     const callerFrames = stack?.split('\n').slice(1, 5).map(l => l.trim()).join('\n    ') ?? '(no stack)';

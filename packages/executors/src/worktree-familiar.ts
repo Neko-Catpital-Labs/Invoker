@@ -86,6 +86,7 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
   }
 
   async start(request: WorkRequest): Promise<FamiliarHandle> {
+    await this.ensureGitAvailable();
     const handle = this.createHandle(request);
     const executionId = handle.executionId;
     const t0 = Date.now();

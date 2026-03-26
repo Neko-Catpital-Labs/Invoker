@@ -55,12 +55,14 @@ const mockState = {
   containers: [] as ReturnType<typeof createMockContainer>[],
   createContainer: null as ReturnType<typeof vi.fn> | null,
   getContainer: null as ReturnType<typeof vi.fn> | null,
+  ping: null as ReturnType<typeof vi.fn> | null,
 };
 
 vi.mock('dockerode', () => {
   const MockDocker = function (this: any) {
     this.createContainer = (...args: any[]) => mockState.createContainer!(...args);
     this.getContainer = (...args: any[]) => mockState.getContainer!(...args);
+    this.ping = (...args: any[]) => mockState.ping!(...args);
   };
   return { default: MockDocker };
 });
@@ -98,6 +100,8 @@ describe('DockerFamiliar', () => {
       if (!mc) throw new Error(`No such container: ${id}`);
       return mc.container;
     });
+
+    mockState.ping = vi.fn().mockResolvedValue('OK');
 
     const mod = await import('../docker-familiar.js');
     DockerFamiliar = mod.DockerFamiliar;
@@ -418,6 +422,28 @@ describe('DockerFamiliar', () => {
           familiarType: 'docker',
         }),
       ).toThrow(/No container ID found/);
+    });
+  });
+
+  describe('Docker daemon availability check', () => {
+    it('throws when Docker daemon is not reachable', async () => {
+      // Temporarily make ping reject
+      mockState.ping!.mockRejectedValueOnce(
+        new Error('connect ENOENT /var/run/docker.sock'),
+      );
+
+      const familiar = new DockerFamiliar({ workspaceDir: '/tmp' });
+      const request = {
+        requestId: 'req-1',
+        actionId: 'ping-test',
+        actionType: 'command' as const,
+        inputs: { command: 'echo hi', description: 'test' },
+        callbackUrl: '',
+        timestamps: { createdAt: new Date().toISOString() },
+      };
+      await expect(familiar.start(request)).rejects.toThrow(
+        'Docker daemon is not reachable',
+      );
     });
   });
 });

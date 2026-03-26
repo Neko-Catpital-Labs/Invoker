@@ -123,7 +123,7 @@ export class TaskExecutor {
         status: 'failed',
         outputs: {
           exitCode: 1,
-          error: `executeTask error: ${err instanceof Error ? err.message : String(err)}`,
+          error: err instanceof Error ? (err.stack ?? err.message) : String(err),
         },
       };
       this.callbacks.onComplete?.(task.id, response);
@@ -224,6 +224,11 @@ export class TaskExecutor {
     let handle: FamiliarHandle;
     try {
       handle = await familiar.start(request);
+    } catch (err) {
+      throw new Error(
+        `Familiar startup failed (${familiar.type}): ${err instanceof Error ? err.message : String(err)}`,
+        { cause: err },
+      );
     } finally {
       clearInterval(preStartHeartbeatTimer);
     }

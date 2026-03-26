@@ -9,7 +9,7 @@
  * - Successful task output is persisted and retrievable
  */
 
-import { test, expect, TEST_PLAN, loadPlan, startPlan, waitForTaskStatus } from './fixtures/electron-app.js';
+import { test, expect, TEST_PLAN, loadPlan, startPlan, waitForTaskStatus, injectTaskStates } from './fixtures/electron-app.js';
 
 const DEATH_LOG_PLAN = {
   name: 'E2E Death Log Plan',
@@ -88,5 +88,32 @@ test.describe('Task death logs', () => {
     expect(output).toContain('hello-alpha');
     expect(output).toContain('[worktree] Process exited');
     expect(output).toContain('exitCode=0');
+  });
+
+  test('failed task shows execution error string in task details', async ({ page }) => {
+    await loadPlan(page, SILENT_FAIL_PLAN);
+
+    await injectTaskStates(page, [
+      {
+        taskId: 'silent-fail',
+        changes: {
+          status: 'failed',
+          execution: {
+            error: 'Familiar startup failed (worktree): git not found',
+            exitCode: 1,
+            completedAt: new Date(),
+          },
+        },
+      },
+    ]);
+
+    await page.locator('[data-testid="rf__node-silent-fail"]').click();
+
+    await expect(
+      page.locator('text=Familiar startup failed (worktree): git not found'),
+    ).toBeVisible({ timeout: 3000 });
+    await expect(
+      page.locator('text=Exit code: 1'),
+    ).toBeVisible({ timeout: 3000 });
   });
 });
