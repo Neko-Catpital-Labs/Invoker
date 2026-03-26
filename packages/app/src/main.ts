@@ -42,7 +42,14 @@ if (process.platform === 'linux') {
 }
 
 import { Orchestrator, UTILIZATION_MAX } from '@invoker/core';
-import type { PlanDefinition, TaskDelta, TaskReplacementDef, TaskState, UtilizationRule } from '@invoker/core';
+import type {
+  PlanDefinition,
+  TaskDelta,
+  TaskReplacementDef,
+  TaskState,
+  TaskStateChanges,
+  UtilizationRule,
+} from '@invoker/core';
 import { SQLiteAdapter, ConversationRepository } from '@invoker/persistence';
 import { IpcBus, Channels } from '@invoker/transport';
 import type { MessageBus } from '@invoker/transport';
@@ -394,7 +401,8 @@ function setupGuiMode(): void {
     mainWindow = new BrowserWindow({
       width: 1200,
       height: 800,
-      show: process.env.NODE_ENV !== 'test',
+      // Hidden windows in NODE_ENV=test avoid focus stealing; visual proof sets CAPTURE_MODE and needs a real compositor path for screenshots.
+      show: process.env.NODE_ENV !== 'test' || Boolean(process.env.CAPTURE_MODE),
       webPreferences: {
         preload: path.join(__dirname, 'preload.js'),
         contextIsolation: true,
@@ -524,6 +532,23 @@ function setupGuiMode(): void {
       backupPlan(plan);
       orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
     });
+
+    if (process.env.NODE_ENV === 'test') {
+      ipcMain.handle(
+        'invoker:inject-task-states',
+        async (_event, updates: Array<{ taskId: string; changes: TaskStateChanges }>) => {
+          for (const { taskId, changes } of updates) {
+            persistence.updateTask(taskId, changes);
+            messageBus.publish(Channels.TASK_DELTA, {
+              type: 'updated',
+              taskId,
+              changes,
+            } satisfies TaskDelta);
+          }
+          orchestrator.syncAllFromDb();
+        },
+      );
+    }
 
     ipcMain.handle('invoker:start', async () => {
       console.log(`[ipc] start`);

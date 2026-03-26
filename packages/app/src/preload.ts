@@ -6,6 +6,7 @@
  */
 
 import { contextBridge, ipcRenderer } from 'electron';
+import type { TaskStateChanges } from '@invoker/core';
 import type { InvokerAPI } from './types.js';
 
 const api: InvokerAPI = {
@@ -90,5 +91,10 @@ const api: InvokerAPI = {
     ipcRenderer.invoke('invoker:cancel-task', taskId),
   getQueueStatus: () => ipcRenderer.invoke('invoker:get-queue-status'),
 };
+
+if (process.env.NODE_ENV === 'test') {
+  api.injectTaskStates = (updates: Array<{ taskId: string; changes: TaskStateChanges }>) =>
+    ipcRenderer.invoke('invoker:inject-task-states', updates);
+}
 
 contextBridge.exposeInMainWorld('invoker', api);

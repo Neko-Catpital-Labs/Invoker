@@ -5,7 +5,7 @@
  * The renderer uses these types; the main process implements them via ipcMain.handle.
  */
 
-import type { TaskState, TaskDelta } from '@invoker/core';
+import type { TaskState, TaskDelta, TaskStateChanges } from '@invoker/core';
 import type { PlanDefinition } from '@invoker/core';
 
 // ── Task Replacement ────────────────────────────────────────
@@ -140,6 +140,9 @@ export interface InvokerAPI {
     running: Array<{ taskId: string; utilization: number; description: string }>;
     queued: Array<{ taskId: string; priority: number; utilization: number; description: string }>;
   }>;
+
+  /** Test-only (NODE_ENV=test): persist task updates and push deltas without running the executor. */
+  injectTaskStates?: (updates: Array<{ taskId: string; changes: TaskStateChanges }>) => Promise<void>;
 }
 
 // ── Augment global Window ────────────────────────────────────

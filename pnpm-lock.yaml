@@ -41,6 +41,9 @@ importers:
       dotenv:
         specifier: ^16.0.0
         version: 16.6.1
+      sql.js:
+        specifier: ^1.12.0
+        version: 1.14.1
       yaml:
         specifier: ^2.7.0
         version: 2.8.2

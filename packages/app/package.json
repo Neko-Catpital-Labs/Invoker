@@ -21,6 +21,7 @@
     "@invoker/transport": "workspace:*",
     "@slack/bolt": "^4.6.0",
     "dockerode": "^4.0.0",
+    "sql.js": "^1.12.0",
     "dotenv": "^16.0.0",
     "yaml": "^2.7.0"
   },

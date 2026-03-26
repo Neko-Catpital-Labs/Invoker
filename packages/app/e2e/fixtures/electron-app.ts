@@ -5,6 +5,7 @@
  * Handles platform-specific flags (Linux --no-sandbox) and cleanup.
  */
 
+import type { TaskStateChanges } from '@invoker/core';
 import { test as base, _electron as electron, type ElectronApplication, type Page } from '@playwright/test';
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
@@ -119,6 +120,17 @@ export const TEST_PLAN = {
 export async function loadPlan(page: Page, plan: typeof TEST_PLAN): Promise<void> {
   await page.evaluate((p) => window.invoker.loadPlan(p), plan);
   await page.locator(`[data-testid="rf__node-${plan.tasks[0].id}"]`).waitFor({ state: 'visible', timeout: 10000 });
+}
+
+/** Test-only: inject task status/execution into persistence and UI without running commands. */
+export async function injectTaskStates(
+  page: Page,
+  updates: Array<{ taskId: string; changes: TaskStateChanges }>,
+): Promise<void> {
+  await page.evaluate(async (u) => {
+    await window.invoker.injectTaskStates!(u);
+  }, updates);
+  await page.waitForTimeout(200);
 }
 
 /** Start the loaded plan via the IPC bridge. */
