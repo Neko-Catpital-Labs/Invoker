@@ -806,6 +806,10 @@ export class TaskExecutor {
     return spawnClaudeFixImpl(prompt, cwd);
   }
 
+  getRemoteTargetConfig(targetId: string): { host: string; user: string; sshKeyPath: string; port?: number } | undefined {
+    return this.getRemoteTargets()[targetId];
+  }
+
   // ── Private Helpers ──────────────────────────────────────
 
   /**
