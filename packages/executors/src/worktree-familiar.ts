@@ -91,6 +91,11 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
     const t0 = Date.now();
     const log = (step: string) => console.log(`[WorktreeFamiliar] start task=${request.actionId} step=${step} elapsed=${Date.now() - t0}ms`);
 
+    // Fetch from remote before resolving baseRef (only for local-repo path; pool fetches in ensureClone)
+    if (!(this.pool && request.inputs.repoUrl)) {
+      await this.syncFromRemote(this.repoDir, executionId);
+    }
+
     const baseRef = request.inputs.baseBranch ?? 'HEAD';
     log(`rev-parse ${baseRef} begin`);
     const baseHead = await this.execGitSimple(['rev-parse', baseRef], this.repoDir);
@@ -232,6 +237,8 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
           branch,
           claudeSessionId: entry.claudeSessionId,
         });
+        try { await this.removeWorktree(entry); } catch { /* best-effort */ }
+        this.entries.delete(executionId);
       });
 
       this.startHeartbeat(executionId, child);
@@ -411,6 +418,8 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
         branch,
         claudeSessionId: entry.claudeSessionId,
       });
+      try { await this.removeWorktree(entry); } catch { /* best-effort */ }
+      this.entries.delete(executionId);
     });
 
     this.startHeartbeat(executionId, child);
