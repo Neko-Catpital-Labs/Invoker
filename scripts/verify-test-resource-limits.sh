@@ -5,7 +5,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT/packages/core"
 
-echo "==> packages/core pnpm test (default: 50% workers via electron-vitest)"
+echo "==> packages/core pnpm test (default: 50% workers via vitest.shared.ts)"
 pnpm test
 
 echo "==> packages/core INVOKER_VITEST_HIGH_RESOURCE=1 pnpm test"

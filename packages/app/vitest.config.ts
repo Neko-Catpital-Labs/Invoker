@@ -1,7 +1,8 @@
-import { defineConfig } from 'vitest/config';
-export default defineConfig({
+import { defineConfig, mergeConfig } from 'vitest/config';
+import sharedConfig from '../../vitest.shared.ts';
+
+export default mergeConfig(sharedConfig, defineConfig({
   test: {
-    globals: true,
     exclude: ['e2e/**', 'node_modules/**'],
   },
-});
+}));
