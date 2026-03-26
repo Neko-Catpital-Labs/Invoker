@@ -237,7 +237,6 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
           branch,
           claudeSessionId: entry.claudeSessionId,
         });
-        try { await this.removeWorktree(entry); } catch { /* best-effort */ }
         this.entries.delete(executionId);
       });
 
@@ -418,7 +417,6 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
         branch,
         claudeSessionId: entry.claudeSessionId,
       });
-      try { await this.removeWorktree(entry); } catch { /* best-effort */ }
       this.entries.delete(executionId);
     });
 
@@ -455,9 +453,6 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
 
       killProcessGroup(child, 'SIGTERM');
     });
-
-    // Remove the worktree after killing
-    await this.removeWorktree(entry);
   }
 
   sendInput(handle: FamiliarHandle, input: string): void {
@@ -533,19 +528,7 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
 
     await Promise.all(closePromises);
 
-    // Remove all worktrees
-    const removePromises: Promise<void>[] = [];
-    for (const [, entry] of allEntries) {
-      removePromises.push(this.removeWorktree(entry));
-    }
-    await Promise.allSettled(removePromises);
-
     this.entries.clear();
-
-    // Destroy pool if present
-    if (this.pool) {
-      await this.pool.destroyAll();
-    }
   }
 
   // ---------------------------------------------------------------------------
@@ -659,23 +642,4 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
     });
   }
 
-  private async removeWorktree(entry: WorktreeEntry): Promise<void> {
-    if (entry.poolRelease) {
-      await entry.poolRelease();
-      return;
-    }
-    try {
-      await this.execGitSimple(
-        ['worktree', 'remove', '--force', entry.worktreeDir],
-        this.repoDir,
-      );
-    } catch {
-      // Worktree may already be removed or directory missing; prune instead.
-      try {
-        await this.execGitSimple(['worktree', 'prune'], this.repoDir);
-      } catch {
-        // Best-effort cleanup
-      }
-    }
-  }
 }
