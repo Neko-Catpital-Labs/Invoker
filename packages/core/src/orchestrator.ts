@@ -891,7 +891,7 @@ export class Orchestrator {
    * Revert a conflict resolution attempt: restore the task to failed
    * with its original error and re-parsed mergeConflict field.
    */
-  revertConflictResolution(taskId: string, savedError: string): void {
+  revertConflictResolution(taskId: string, savedError: string, fixError?: string): void {
     this.refreshFromDb();
 
     let mergeConflict: { failedBranch: string; conflictFiles: string[] } | undefined;
@@ -902,9 +902,12 @@ export class Orchestrator {
       }
     } catch { /* not JSON — normal error string */ }
 
+    const displayError = fixError
+      ? `[Fix with Claude failed] ${fixError}\n\n${savedError}`
+      : savedError;
     const changes: TaskStateChanges = {
       status: 'failed',
-      execution: { error: savedError, mergeConflict, isFixingWithAI: undefined },
+      execution: { error: displayError, mergeConflict, isFixingWithAI: undefined },
     };
     this.writeAndSync(taskId, changes);
     const delta: TaskDelta = { type: 'updated', taskId, changes };

@@ -1034,7 +1034,9 @@ function setupGuiMode(): void {
         await taskExecutor.executeTasks(runnable);
       } catch (err) {
         console.error(`[ipc] resolve-conflict failed: ${err}`);
-        orchestrator.revertConflictResolution(taskId, savedError);
+        const msg = err instanceof Error ? err.message : String(err);
+        persistence.appendTaskOutput(taskId, `\n[Resolve Conflict] Failed: ${msg}`);
+        orchestrator.revertConflictResolution(taskId, savedError, msg);
         throw err;
       }
     });
@@ -1048,7 +1050,9 @@ function setupGuiMode(): void {
         orchestrator.setFixAwaitingApproval(taskId, savedError);
       } catch (err) {
         console.error(`[ipc] fix-with-claude failed: ${err}`);
-        orchestrator.revertConflictResolution(taskId, savedError);
+        const msg = err instanceof Error ? err.message : String(err);
+        persistence.appendTaskOutput(taskId, `\n[Fix with Claude] Failed: ${msg}`);
+        orchestrator.revertConflictResolution(taskId, savedError, msg);
         throw err;
       }
     });

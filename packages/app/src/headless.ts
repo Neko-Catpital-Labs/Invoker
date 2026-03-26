@@ -389,7 +389,9 @@ async function headlessFix(taskId: string, deps: HeadlessDeps): Promise<void> {
     deps.orchestrator.setFixAwaitingApproval(taskId, savedError);
     console.log(`Fix applied for task: ${taskId}. Use 'approve ${taskId}' or 'reject ${taskId}' to finalize.`);
   } catch (err) {
-    deps.orchestrator.revertConflictResolution(taskId, savedError);
+    const msg = err instanceof Error ? err.message : String(err);
+    deps.persistence.appendTaskOutput(taskId, `\n[Fix with Claude] Failed: ${msg}`);
+    deps.orchestrator.revertConflictResolution(taskId, savedError, msg);
     throw err;
   }
 }

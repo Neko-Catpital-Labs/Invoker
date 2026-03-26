@@ -7,11 +7,20 @@
 
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { existsSync } from 'node:fs';
 
 import type { Orchestrator } from '@invoker/core';
 import type { SQLiteAdapter } from '@invoker/persistence';
+import { cleanElectronEnv } from './process-utils.js';
 
 // ── Host interface ───────────────────────────────────────
+
+export interface RemoteTargetConfig {
+  host: string;
+  user: string;
+  sshKeyPath: string;
+  port?: number;
+}
 
 /**
  * Subset of TaskExecutor that conflict resolution functions need.
@@ -27,6 +36,7 @@ export interface ConflictResolverHost {
   createMergeWorktree(ref: string, label: string): Promise<string>;
   removeMergeWorktree(dir: string): Promise<void>;
   spawnClaudeFix(prompt: string, cwd: string): Promise<{ stdout: string; sessionId: string }>;
+  getRemoteTargetConfig?(targetId: string): RemoteTargetConfig | undefined;
 }
 
 // ── Extracted functions ──────────────────────────────────
@@ -58,22 +68,31 @@ export async function resolveConflictWithClaudeImpl(
   }
 
   const taskBranch = task.execution.branch ?? `invoker/${taskId}`;
-  const cwd = task.execution.workspacePath;
-  if (!cwd) {
+  const rawCwd = task.execution.workspacePath;
+  if (!rawCwd) {
     throw new Error(`Task ${taskId} has no workspacePath — cannot resolve conflict outside a worktree`);
   }
 
+  // SSH tasks: run conflict resolution on the remote host
+  if (task.config.familiarType === 'ssh' && task.config.remoteTargetId && !existsSync(rawCwd)) {
+    const target = host.getRemoteTargetConfig?.(task.config.remoteTargetId);
+    if (!target) {
+      throw new Error(`No remote target config for "${task.config.remoteTargetId}" — cannot resolve conflict on remote`);
+    }
+    await resolveConflictRemote(host, task, taskBranch, conflictInfo, rawCwd, target);
+    return;
+  }
+
+  const cwd = rawCwd;
   const originalBranch = await host.execGitIn(['branch', '--show-current'], cwd);
 
   try {
-    // Checkout the task branch
     try {
       await host.execGitIn(['checkout', taskBranch], cwd);
     } catch {
       throw new Error(`Cannot checkout task branch ${taskBranch}`);
     }
 
-    // Re-merge the conflicting upstream branch (will reproduce the conflict)
     try {
       const depTask = host.orchestrator.getAllTasks().find(t => t.execution.branch === conflictInfo.failedBranch);
       const conflictMergeMsg = depTask?.description
@@ -82,7 +101,6 @@ export async function resolveConflictWithClaudeImpl(
       await host.execGitIn(['merge', '--no-edit', '-m', conflictMergeMsg, conflictInfo.failedBranch], cwd);
       console.log(`[resolveConflict] Merge succeeded without conflict on retry for ${taskId}`);
     } catch {
-      // Expected: conflict reproduced — now spawn Claude to resolve it
       console.log(`[resolveConflict] Conflict reproduced for ${taskId}, spawning Claude to resolve...`);
 
       const conflictFilesList = conflictInfo.conflictFiles.join(', ');
@@ -102,6 +120,7 @@ export async function resolveConflictWithClaudeImpl(
         const child = spawn('claude', ['-p', prompt, '--dangerously-skip-permissions'], {
           cwd,
           stdio: ['ignore', 'pipe', 'pipe'],
+          env: cleanElectronEnv(),
         });
         let stderr = '';
         child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
@@ -115,19 +134,63 @@ export async function resolveConflictWithClaudeImpl(
 
     console.log(`[resolveConflict] Successfully resolved conflict for ${taskId}`);
   } catch (err) {
-    // Clean up on failure
     try { await host.execGitIn(['merge', '--abort'], cwd); } catch { /* no merge in progress */ }
     try { await host.execGitIn(['checkout', originalBranch], cwd); } catch { /* best effort */ }
     throw err;
   }
 }
 
+async function resolveConflictRemote(
+  host: ConflictResolverHost,
+  task: ReturnType<Orchestrator['getTask']> & {},
+  taskBranch: string,
+  conflictInfo: { failedBranch: string; conflictFiles: string[] },
+  remoteCwd: string,
+  target: RemoteTargetConfig,
+): Promise<void> {
+  const conflictFilesList = conflictInfo.conflictFiles.join(', ');
+  const prompt = [
+    `The following git merge has conflicts that need to be resolved.`,
+    `Conflicting files: ${conflictFilesList}`,
+    ``,
+    `Please resolve ALL merge conflicts in these files by:`,
+    `1. Reading each conflicted file`,
+    `2. Choosing the correct resolution (not just picking one side)`,
+    `3. Removing all conflict markers (<<<<<<<, =======, >>>>>>>)`,
+    `4. Staging the resolved files with 'git add'`,
+    `5. Completing the merge with 'git commit --no-edit'`,
+  ].join('\n');
+
+  const depTask = host.orchestrator.getAllTasks().find(t => t.execution.branch === conflictInfo.failedBranch);
+  const conflictMergeMsg = depTask?.description
+    ? `Merge upstream ${conflictInfo.failedBranch} — ${depTask.description}`
+    : `Merge upstream ${conflictInfo.failedBranch}`;
+
+  const sessionId = randomUUID();
+  const promptB64 = Buffer.from(prompt).toString('base64');
+  const mergeMsgB64 = Buffer.from(conflictMergeMsg).toString('base64');
+
+  const script = `set -euo pipefail
+WT="${remoteCwd}"
+if [[ "$WT" == '~' ]]; then WT="$HOME"; elif [[ "\${WT:0:2}" == '~/' ]]; then WT="$HOME/\${WT:2}"; fi
+cd "$WT"
+git checkout "${taskBranch}"
+MERGE_MSG=$(echo "${mergeMsgB64}" | base64 -d)
+if git merge --no-edit -m "$MERGE_MSG" "${conflictInfo.failedBranch}" 2>/dev/null; then
+  echo "[resolveConflict] Merge succeeded without conflict on retry"
+else
+  echo "[resolveConflict] Conflict reproduced, spawning Claude to resolve..."
+  PROMPT=$(echo "${promptB64}" | base64 -d)
+  claude --session-id "${sessionId}" -p "$PROMPT" --dangerously-skip-permissions
+fi
+`;
+
+  await execRemoteSsh(target, script);
+  console.log(`[resolveConflict] Successfully resolved remote conflict for ${task.id}`);
+}
+
 /**
  * Build the Claude fix prompt based on task type.
- *
- * - Merge-gate tasks get a merge-conflict-focused prompt.
- * - Command tasks get the existing command-focused prompt.
- * - Prompt-only / other tasks get a generic failure prompt.
  */
 export function buildFixPrompt(
   task: { description: string; config: { command?: string; isMergeNode?: boolean; prompt?: string }; execution: { error?: string } },
@@ -178,7 +241,7 @@ export function buildFixPrompt(
 
 /**
  * Fix a failed command task by spawning Claude with the error output.
- * Claude's output is captured and appended to the task's output stream for auditing.
+ * For SSH tasks, Claude runs on the remote host in the remote worktree.
  */
 export async function fixWithClaudeImpl(
   host: ConflictResolverHost,
@@ -191,9 +254,25 @@ export async function fixWithClaudeImpl(
     throw new Error(`Task ${taskId} is not in a fixable state (status: ${task.status})`);
   }
 
-  const cwd = task.execution.workspacePath ?? host.cwd;
-
   const prompt = buildFixPrompt(task, taskOutput);
+  const workspacePath = task.execution.workspacePath;
+
+  // SSH tasks: run Claude on the remote host
+  if (task.config.familiarType === 'ssh' && task.config.remoteTargetId && workspacePath && !existsSync(workspacePath)) {
+    const target = host.getRemoteTargetConfig?.(task.config.remoteTargetId);
+    if (!target) {
+      throw new Error(`No remote target config for "${task.config.remoteTargetId}" — cannot fix on remote`);
+    }
+    const { stdout: output, sessionId } = await spawnRemoteClaudeFixImpl(prompt, workspacePath, target);
+    if (output) {
+      host.persistence.appendTaskOutput(taskId, `\n[Fix with Claude (remote)] Output:\n${output}`);
+    }
+    host.persistence.updateTask(taskId, { execution: { claudeSessionId: sessionId } });
+    console.log(`[fixWithClaude] Successfully applied remote fix for ${taskId} (session=${sessionId})`);
+    return;
+  }
+
+  const cwd = workspacePath ?? host.cwd;
 
   const { stdout: output, sessionId } = await host.spawnClaudeFix(prompt, cwd);
   if (output) {
@@ -204,7 +283,7 @@ export async function fixWithClaudeImpl(
 }
 
 /**
- * Spawn Claude subprocess for fixes.
+ * Spawn Claude subprocess for local fixes.
  */
 export function spawnClaudeFixImpl(
   prompt: string,
@@ -216,6 +295,7 @@ export function spawnClaudeFixImpl(
     const child = spawn(cmd, ['--session-id', sessionId, '-p', prompt, '--dangerously-skip-permissions'], {
       cwd,
       stdio: ['ignore', 'pipe', 'pipe'],
+      env: cleanElectronEnv(),
     });
     let stdout = '';
     let stderr = '';
@@ -224,6 +304,87 @@ export function spawnClaudeFixImpl(
     child.on('close', (code) => {
       if (code === 0) resolve({ stdout, sessionId });
       else reject(new Error(`Claude exited with code ${code}: ${stderr.trim()}`));
+    });
+    child.on('error', (err) => reject(err));
+  });
+}
+
+/**
+ * Spawn Claude on a remote SSH host for fixing SSH-executed tasks.
+ */
+export function spawnRemoteClaudeFixImpl(
+  prompt: string,
+  remoteCwd: string,
+  target: RemoteTargetConfig,
+): Promise<{ stdout: string; sessionId: string }> {
+  const sessionId = randomUUID();
+  const promptB64 = Buffer.from(prompt).toString('base64');
+
+  const script = `set -euo pipefail
+WT="${remoteCwd}"
+if [[ "$WT" == '~' ]]; then WT="$HOME"; elif [[ "\${WT:0:2}" == '~/' ]]; then WT="$HOME/\${WT:2}"; fi
+cd "$WT"
+PROMPT=$(echo "${promptB64}" | base64 -d)
+claude --session-id "${sessionId}" -p "$PROMPT" --dangerously-skip-permissions
+`;
+
+  const sshArgs = [
+    '-i', target.sshKeyPath,
+    '-p', String(target.port ?? 22),
+    '-o', 'StrictHostKeyChecking=accept-new',
+    '-o', 'BatchMode=yes',
+    `${target.user}@${target.host}`,
+    'bash', '-s',
+  ];
+
+  return new Promise<{ stdout: string; sessionId: string }>((resolve, reject) => {
+    const child = spawn('ssh', sshArgs, {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: cleanElectronEnv(),
+    });
+    child.stdin?.write(script);
+    child.stdin?.end();
+
+    let stdout = '';
+    let stderr = '';
+    child.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
+    child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
+    child.on('close', (code) => {
+      if (code === 0) resolve({ stdout, sessionId });
+      else reject(new Error(`Remote Claude fix failed (exit ${code}): ${stderr.trim()}`));
+    });
+    child.on('error', (err) => reject(err));
+  });
+}
+
+/**
+ * Execute a bash script on a remote host via SSH. Throws on non-zero exit.
+ */
+function execRemoteSsh(target: RemoteTargetConfig, script: string): Promise<string> {
+  const sshArgs = [
+    '-i', target.sshKeyPath,
+    '-p', String(target.port ?? 22),
+    '-o', 'StrictHostKeyChecking=accept-new',
+    '-o', 'BatchMode=yes',
+    `${target.user}@${target.host}`,
+    'bash', '-s',
+  ];
+
+  return new Promise((resolve, reject) => {
+    const child = spawn('ssh', sshArgs, {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: cleanElectronEnv(),
+    });
+    child.stdin?.write(script);
+    child.stdin?.end();
+
+    let stdout = '';
+    let stderr = '';
+    child.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
+    child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
+    child.on('close', (code) => {
+      if (code === 0) resolve(stdout);
+      else reject(new Error(`SSH remote script failed (${code}): ${stderr.trim() || stdout.trim()}`));
     });
     child.on('error', (err) => reject(err));
   });
