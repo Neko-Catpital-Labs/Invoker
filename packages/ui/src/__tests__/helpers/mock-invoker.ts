@@ -41,10 +41,19 @@ export function createMockInvoker(
   let workflowsCallback: ((workflows: unknown[]) => void) | undefined;
 
   const api: InvokerAPI = {
-    getTasks: vi.fn(async () => ({
-      tasks: taskSnapshot,
-      workflows: workflowSnapshot,
-    })),
+    // Defer resolution one microtask so snapshot is read after synchronous setTasks()
+    // in tests (useTasks fetchAll races mount vs setTasks; real IPC resolves later too).
+    getTasks: vi.fn(
+      () =>
+        new Promise<{ tasks: TaskState[]; workflows: WorkflowMeta[] }>((resolve) => {
+          queueMicrotask(() => {
+            resolve({
+              tasks: taskSnapshot,
+              workflows: workflowSnapshot,
+            });
+          });
+        }),
+    ),
     onTaskDelta: vi.fn((cb: (delta: TaskDelta) => void) => {
       deltaCallback = cb;
       return () => { deltaCallback = undefined; };
@@ -99,12 +108,6 @@ export function createMockInvoker(
   function setTasks(tasks: TaskState[], workflows?: WorkflowMeta[]) {
     taskSnapshot = tasks;
     if (workflows) workflowSnapshot = workflows;
-
-    // Update getTasks to return new snapshot
-    (api.getTasks as ReturnType<typeof vi.fn>).mockResolvedValue({
-      tasks: taskSnapshot,
-      workflows: workflowSnapshot,
-    });
 
     // Fire created deltas for each task
     for (const task of tasks) {
