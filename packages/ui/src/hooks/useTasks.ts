@@ -22,26 +22,29 @@ export function useTasks(): UseTasksResult {
   const [workflows, setWorkflows] = useState<Map<string, WorkflowMeta>>(new Map());
   const workflowsRef = useRef(workflows);
   workflowsRef.current = workflows;
+  /** Bumps on each refresh so stale getTasks IPC (e.g. mount snapshot before loadPlan) cannot wipe newer state. */
+  const getTasksGenerationRef = useRef(0);
 
   const fetchAll = useCallback(() => {
     if (typeof window === 'undefined' || !window.invoker) return;
+    const gen = ++getTasksGenerationRef.current;
     window.invoker.getTasks().then((result) => {
-      const taskList = Array.isArray(result) ? result : result.tasks;
+      if (gen !== getTasksGenerationRef.current) {
+        return;
+      }
+      const taskList = Array.isArray(result) ? result : (result.tasks ?? []);
       const wfList = Array.isArray(result) ? [] : (result.workflows ?? []);
-      if (taskList.length > 0) {
-        setTasks((prev) => {
-          const next = new Map(prev);
-          for (const t of taskList) next.set(t.id, t);
-          return next;
-        });
-      }
-      if (wfList.length > 0) {
-        setWorkflows(() => {
-          const wfMap = new Map<string, WorkflowMeta>();
-          for (const wf of wfList) wfMap.set(wf.id, wf);
-          return wfMap;
-        });
-      }
+      // Always replace from server snapshot — empty lists mean "no tasks/workflows" (e.g. after delete).
+      setTasks(() => {
+        const next = new Map<string, TaskState>();
+        for (const t of taskList) next.set(t.id, t);
+        return next;
+      });
+      setWorkflows(() => {
+        const wfMap = new Map<string, WorkflowMeta>();
+        for (const wf of wfList) wfMap.set(wf.id, wf);
+        return wfMap;
+      });
     });
     window.invoker.checkPrStatus?.();
   }, []);

@@ -1,10 +1,12 @@
 /**
  * useTasks — workflows-changed must clear workflow metadata when main sends [].
+ * Overlapping getTasks responses: older empty snapshot must not wipe after refreshTasks.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act, waitFor } from '@testing-library/react';
 import { useTasks } from '../hooks/useTasks.js';
+import { makeUITask } from './helpers/mock-invoker.js';
 
 describe('useTasks', () => {
   let workflowsChangedHandler: ((wfList: unknown[]) => void) | undefined;
@@ -75,5 +77,40 @@ describe('useTasks', () => {
     expect(result.current.workflows.size).toBe(1);
     expect(result.current.workflows.has('wf-a')).toBe(false);
     expect(result.current.workflows.get('wf-b')?.status).toBe('failed');
+  });
+
+  it('ignores stale getTasks when a newer refresh returned tasks', async () => {
+    let releaseFirst: (v: { tasks: ReturnType<typeof makeUITask>[]; workflows: unknown[] }) => void;
+    const firstPending = new Promise<{ tasks: ReturnType<typeof makeUITask>[]; workflows: unknown[] }>((resolve) => {
+      releaseFirst = resolve;
+    });
+
+    const t1 = makeUITask({ id: 't1', description: 'Alpha' });
+    (window as unknown as { invoker: Record<string, unknown> }).invoker = {
+      getTasks: vi
+        .fn()
+        .mockReturnValueOnce(firstPending)
+        .mockResolvedValue({ tasks: [t1], workflows: [] }),
+      onTaskDelta: vi.fn(() => () => {}),
+      onWorkflowsChanged: vi.fn(() => () => {}),
+    };
+
+    const { result } = renderHook(() => useTasks());
+
+    await act(async () => {
+      result.current.refreshTasks();
+    });
+
+    await waitFor(() => {
+      expect(result.current.tasks.size).toBe(1);
+      expect(result.current.tasks.get('t1')?.description).toBe('Alpha');
+    });
+
+    await act(async () => {
+      releaseFirst!({ tasks: [], workflows: [] });
+    });
+
+    expect(result.current.tasks.size).toBe(1);
+    expect(result.current.tasks.get('t1')?.id).toBe('t1');
   });
 });

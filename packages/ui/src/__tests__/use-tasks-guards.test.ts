@@ -1,6 +1,6 @@
 /**
- * Tests for useTasks guard behaviors:
- * - refreshTasks should not replace tasks with empty data
+ * Tests for useTasks behaviors:
+ * - refreshTasks replaces tasks/workflows from getTasks snapshot (including empty)
  * - delta handler should warn when tasks map drops to 0
  */
 
@@ -21,37 +21,18 @@ function makeTask(overrides: Partial<TaskState> & { id: string }): TaskState {
 }
 
 describe('useTasks guard logic', () => {
-  describe('refreshTasks empty guard', () => {
-    it('simulates the guard: empty taskList should not replace existing tasks', () => {
-      const existingTasks = new Map<string, TaskState>([
-        ['t1', makeTask({ id: 't1' })],
-        ['t2', makeTask({ id: 't2' })],
-      ]);
-
+  describe('refreshTasks snapshot replace', () => {
+    it('simulates empty getTasks snapshot clearing UI state (e.g. after delete workflow)', () => {
       const taskList: TaskState[] = [];
-
-      // The guard: if (taskList.length === 0) return;
-      if (taskList.length === 0) {
-        // Should keep existing tasks
-        expect(existingTasks.size).toBe(2);
-        return;
-      }
-
-      // This line should not be reached
-      expect.unreachable('Should have returned early for empty taskList');
+      const next = new Map<string, TaskState>();
+      for (const t of taskList) next.set(t.id, t);
+      expect(next.size).toBe(0);
     });
 
-    it('simulates the guard: non-empty taskList should replace tasks', () => {
+    it('simulates non-empty snapshot replacing task map', () => {
       const taskList = [makeTask({ id: 't3' })];
-
-      // The guard passes, proceed with replacement
-      expect(taskList.length).toBeGreaterThan(0);
-
       const next = new Map<string, TaskState>();
-      for (const t of taskList) {
-        next.set(t.id, t);
-      }
-
+      for (const t of taskList) next.set(t.id, t);
       expect(next.size).toBe(1);
       expect(next.has('t3')).toBe(true);
     });
