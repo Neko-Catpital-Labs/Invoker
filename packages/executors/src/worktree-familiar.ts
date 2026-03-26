@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from 'node:child_process';
+import { spawn, execSync, type ChildProcess } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, unlinkSync } from 'node:fs';
 import { resolve, join } from 'node:path';
@@ -474,9 +474,16 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
     console.log(`[WorktreeFamiliar] getRestoredTerminalSpec task="${meta.taskId}" workspacePath="${meta.workspacePath ?? 'none'}" sessionId="${meta.claudeSessionId ?? 'none'}"`);
     if (meta.workspacePath && !existsSync(meta.workspacePath)) {
       console.log(`[WorktreeFamiliar] getRestoredTerminalSpec task="${meta.taskId}" — worktree path does NOT exist: ${meta.workspacePath}`);
-      throw new Error(
-        `Worktree ${meta.workspacePath} no longer exists for task ${meta.taskId}. It may have been cleaned up.`,
-      );
+      // Fall back to finding the worktree by branch via git worktree list
+      const recovered = meta.branch ? this.findWorktreeByBranch(meta.branch) : undefined;
+      if (recovered) {
+        console.log(`[WorktreeFamiliar] getRestoredTerminalSpec task="${meta.taskId}" — recovered worktree by branch: ${recovered}`);
+        meta = { ...meta, workspacePath: recovered };
+      } else {
+        throw new Error(
+          `Worktree ${meta.workspacePath} no longer exists for task ${meta.taskId}. It may have been cleaned up.`,
+        );
+      }
     }
     if (meta.workspacePath) {
       console.log(`[WorktreeFamiliar] getRestoredTerminalSpec task="${meta.taskId}" — worktree path exists: ${meta.workspacePath}`);
@@ -502,6 +509,37 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
     }
     console.log(`[WorktreeFamiliar] getRestoredTerminalSpec task="${meta.taskId}" → cwd-only spec, cwd="${meta.workspacePath}"`);
     return { cwd: meta.workspacePath };
+  }
+
+  /**
+   * Look up a worktree path by branch name using `git worktree list --porcelain`.
+   * Returns the worktree directory if found, undefined otherwise.
+   */
+  private findWorktreeByBranch(branch: string): string | undefined {
+    try {
+      const porcelain = execSync('git worktree list --porcelain', {
+        cwd: this.repoDir,
+        encoding: 'utf-8',
+        timeout: 5000,
+      });
+      const branchRef = `branch refs/heads/${branch}`;
+      const lines = porcelain.split('\n');
+      for (let i = 0; i < lines.length; i++) {
+        if (lines[i] === branchRef) {
+          for (let j = i - 1; j >= 0; j--) {
+            if (lines[j].startsWith('worktree ')) {
+              const wtPath = lines[j].slice('worktree '.length);
+              if (existsSync(wtPath)) return wtPath;
+              break;
+            }
+          }
+          break;
+        }
+      }
+    } catch (err) {
+      console.warn(`[WorktreeFamiliar] findWorktreeByBranch failed: ${err}`);
+    }
+    return undefined;
   }
 
   async destroyAll(): Promise<void> {
