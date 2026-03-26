@@ -60,8 +60,11 @@ export interface TaskExecutorConfig {
   defaultBranch?: string;
   callbacks?: TaskExecutorCallbacks;
   mergeGateProvider?: MergeGateProvider;
-  /** Remote SSH targets keyed by target ID. Resolved from InvokerConfig.remoteTargets. */
-  remoteTargets?: Record<string, {
+  /**
+   * Provider that returns remote SSH targets keyed by target ID.
+   * Called at task-execution time so config file changes take effect on retry.
+   */
+  remoteTargetsProvider?: () => Record<string, {
     host: string;
     user: string;
     sshKeyPath: string;
@@ -81,7 +84,7 @@ export class TaskExecutor {
   /** @internal */ callbacks: TaskExecutorCallbacks;
   /** @internal */ mergeGateProvider?: MergeGateProvider;
   private activePrPollers = new Map<string, ReturnType<typeof setInterval>>();
-  private remoteTargets: Record<string, { host: string; user: string; sshKeyPath: string; port?: number }>;
+  private getRemoteTargets: () => Record<string, { host: string; user: string; sshKeyPath: string; port?: number }>;
 
   constructor(config: TaskExecutorConfig) {
     this.orchestrator = config.orchestrator;
@@ -92,7 +95,7 @@ export class TaskExecutor {
     this.defaultBranch = config.defaultBranch;
     this.callbacks = config.callbacks ?? {};
     this.mergeGateProvider = config.mergeGateProvider;
-    this.remoteTargets = config.remoteTargets ?? {};
+    this.getRemoteTargets = config.remoteTargetsProvider ?? (() => ({}));
   }
 
   /**
@@ -165,10 +168,6 @@ export class TaskExecutor {
       return;
     }
 
-    // #region agent log
-    fetch('http://127.0.0.1:7658/ingest/762b7479-8057-4c6f-a805-85ee7d433bf5',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'a9e0bf'},body:JSON.stringify({sessionId:'a9e0bf',location:'task-executor.ts:executeTaskInner',message:'Task config before execution',data:{taskId:task.id,repoUrl:task.config.repoUrl??null,familiarType:task.config.familiarType??null,remoteTargetId:task.config.remoteTargetId??null,command:task.config.command?.slice(0,100)??null,cwd:this.cwd},timestamp:Date.now(),hypothesisId:'H1,H3'})}).catch(()=>{});
-    // #endregion
-
     // Gather upstream context from completed dependencies
     const upstreamContext = await this.buildUpstreamContext(task);
     const upstreamBranches = this.collectUpstreamBranches(task);
@@ -192,6 +191,21 @@ export class TaskExecutor {
     const generation = (workflow as any)?.generation ?? 0;
     const baseBranch = workflow?.baseBranch ?? this.defaultBranch;
 
+    // Auto-detect repoUrl from git remote when missing (needed for SSH command tasks)
+    let repoUrl = task.config.repoUrl;
+    if (!repoUrl && task.config.familiarType === 'ssh' && task.config.command) {
+      try {
+        repoUrl = (await this.execGitReadonly(['remote', 'get-url', 'origin'])).trim();
+        console.log(`[TaskExecutor] auto-detected repoUrl from git remote: ${repoUrl}`);
+      } catch {
+        console.warn(`[TaskExecutor] failed to auto-detect repoUrl from git remote for SSH task "${task.id}"`);
+      }
+    }
+
+    // #region agent log
+    fetch('http://127.0.0.1:7658/ingest/762b7479-8057-4c6f-a805-85ee7d433bf5',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'8f5a16'},body:JSON.stringify({sessionId:'8f5a16',location:'task-executor.ts:executeTaskInner',message:'repoUrl resolution',data:{taskId:task.id,configRepoUrl:task.config.repoUrl??null,resolvedRepoUrl:repoUrl??null,familiarType:task.config.familiarType??null,remoteTargetId:task.config.remoteTargetId??null,command:task.config.command?.slice(0,100)??null,autoDetected:!task.config.repoUrl&&!!repoUrl},timestamp:Date.now()})}).catch(()=>{});
+    // #endregion
+
     const request: WorkRequest = {
       requestId: randomUUID(),
       actionId: task.id,
@@ -201,7 +215,7 @@ export class TaskExecutor {
         command: task.config.command,
         prompt: task.config.prompt,
         workspacePath: this.cwd,
-        repoUrl: task.config.repoUrl,
+        repoUrl,
         featureBranch: task.config.featureBranch,
         upstreamContext: upstreamContext.length > 0 ? upstreamContext : undefined,
         alternatives: alternatives.length > 0 ? alternatives : undefined,
@@ -330,11 +344,12 @@ export class TaskExecutor {
         if (!targetId) {
           throw new Error(`Task ${task.id} has familiarType=ssh but no remoteTargetId`);
         }
-        const target = this.remoteTargets[targetId];
+        const remoteTargets = this.getRemoteTargets();
+        const target = remoteTargets[targetId];
         if (!target) {
           throw new Error(
             `Task ${task.id} references remoteTargetId="${targetId}" but no matching ` +
-            `entry exists in remoteTargets config. Available: [${Object.keys(this.remoteTargets).join(', ')}]`,
+            `entry exists in remoteTargets config. Available: [${Object.keys(remoteTargets).join(', ')}]`,
           );
         }
         const ssh = new SshFamiliar({

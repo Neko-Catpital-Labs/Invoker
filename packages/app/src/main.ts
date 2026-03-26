@@ -146,6 +146,7 @@ async function initServices(): Promise<void> {
   orchestrator = new Orchestrator({
     persistence, messageBus,
     maxConcurrency: invokerConfig.maxConcurrency,
+    maxAttemptsPerNode: invokerConfig.maxAttemptsPerNode,
     utilizationRules: resolveUtilizationRules(invokerConfig),
     defaultUtilization: invokerConfig.defaultUtilization,
     executorRoutingRules: invokerConfig.executorRoutingRules ?? [],
@@ -354,7 +355,7 @@ function setupGuiMode(): void {
       familiarRegistry,
       cwd: repoRoot,
       defaultBranch: invokerConfig.defaultBranch,
-      remoteTargets: invokerConfig.remoteTargets,
+      remoteTargetsProvider: () => loadConfig(repoRoot).remoteTargets ?? {},
       mergeGateProvider: new GitHubMergeGateProvider(),
       callbacks: {
         onOutput: (taskId, data) => {
@@ -708,6 +709,7 @@ function setupGuiMode(): void {
       orchestrator = new Orchestrator({
     persistence, messageBus,
     maxConcurrency: invokerConfig.maxConcurrency,
+    maxAttemptsPerNode: invokerConfig.maxAttemptsPerNode,
     utilizationRules: resolveUtilizationRules(invokerConfig),
     defaultUtilization: invokerConfig.defaultUtilization,
     executorRoutingRules: invokerConfig.executorRoutingRules ?? [],
@@ -724,6 +726,7 @@ function setupGuiMode(): void {
       orchestrator = new Orchestrator({
     persistence, messageBus,
     maxConcurrency: invokerConfig.maxConcurrency,
+    maxAttemptsPerNode: invokerConfig.maxAttemptsPerNode,
     utilizationRules: resolveUtilizationRules(invokerConfig),
     defaultUtilization: invokerConfig.defaultUtilization,
     executorRoutingRules: invokerConfig.executorRoutingRules ?? [],
@@ -1076,7 +1079,7 @@ function setupGuiMode(): void {
     });
 
     ipcMain.handle('invoker:get-remote-targets', () => {
-      return Object.keys(invokerConfig.remoteTargets ?? {});
+      return Object.keys(loadConfig(repoRoot).remoteTargets ?? {});
     });
 
     ipcMain.handle('invoker:replace-task', async (_event, taskId: string, replacementTasks: unknown[]) => {
@@ -1227,7 +1230,7 @@ function setupGuiMode(): void {
           familiar = worktree;
         } else if (meta.familiarType === 'ssh') {
           const targetId = persistence.getRemoteTargetId?.(taskId);
-          const target = targetId ? invokerConfig.remoteTargets?.[targetId] : undefined;
+          const target = targetId ? loadConfig(repoRoot).remoteTargets?.[targetId] : undefined;
           if (target) {
             familiar = new SshFamiliar(target);
           } else {
