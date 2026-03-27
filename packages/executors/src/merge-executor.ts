@@ -116,6 +116,7 @@ export async function executeMergeNodeImpl(
   const featureBranch = workflow?.featureBranch;
   const visualProof = workflow?.visualProof ?? false;
 
+
   let response: WorkResponse;
   let prUrl: string | undefined;
 

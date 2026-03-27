@@ -272,7 +272,7 @@ export async function fixWithClaudeImpl(
     return;
   }
 
-  const cwd = workspacePath ?? host.cwd;
+  const cwd = (workspacePath && existsSync(workspacePath)) ? workspacePath : host.cwd;
 
   const { stdout: output, sessionId } = await host.spawnClaudeFix(prompt, cwd);
   if (output) {

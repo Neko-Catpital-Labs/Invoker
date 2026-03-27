@@ -67,8 +67,19 @@ mkdir -p "${CAPTURE_DIR}"
 
 # Cleanup: wipe stale experiment worktrees and branches.
 # DB cleanup is handled by tmpdir isolation in the E2E fixture.
+# When running inside a worktree, skip cleanup entirely to avoid race conditions
+# where the script's cwd gets deleted while pnpm is still initializing.
 echo "[visual-proof] Cleaning stale experiment state..." >&2
-rm -rf "${HOME}/.invoker/worktrees"/* 2>/dev/null || true
+_CUR="$(pwd -P 2>/dev/null || true)"
+if [[ "${_CUR}" == "${HOME}/.invoker/worktrees/"* ]]; then
+  echo "[visual-proof] Running inside worktree, skipping worktree cleanup" >&2
+else
+  # Only clean worktrees when running from main repo
+  for _wt in "${HOME}/.invoker/worktrees"/*; do
+    [ -e "${_wt}" ] || continue
+    rm -rf "${_wt}" 2>/dev/null || true
+  done
+fi
 git worktree prune 2>/dev/null || true
 { git for-each-ref --format='%(refname:short)' refs/heads/experiment/ 2>/dev/null | xargs -r -n 50 git branch -D 2>/dev/null; } || true
 

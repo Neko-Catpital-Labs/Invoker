@@ -26,7 +26,7 @@ describe('SshFamiliar pre-flight validation', () => {
     );
   });
 
-  it('throws when command task has no repoUrl', async () => {
+  it('throws when task has no repoUrl', async () => {
     // Use /dev/null as a readable file to pass the key check
     const ssh = new SshFamiliar({
       host: 'localhost',
@@ -40,7 +40,7 @@ describe('SshFamiliar pre-flight validation', () => {
       },
     });
     await expect(ssh.start(req)).rejects.toThrow(
-      'has a command but no repoUrl',
+      'requires repoUrl',
     );
   });
 
