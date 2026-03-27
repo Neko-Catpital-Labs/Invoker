@@ -541,9 +541,7 @@ git push -u origin "$BR"
       const base = this.buildSshArgsInteractive();
       const userAtHost = base[base.length - 1]!;
       const opts = base.slice(0, -1);
-      const inner = handle.branch
-        ? `${SshFamiliar.sshInteractiveCdFragment(handle.workspacePath)} && git checkout ${SshFamiliar.shellPosixSingleQuote(handle.branch)} 2>/dev/null; exec bash -l`
-        : `${SshFamiliar.sshInteractiveCdFragment(handle.workspacePath)} && exec bash -l`;
+      const inner = this.buildRemoteTerminalInner(handle.workspacePath, handle.branch, entry.claudeSessionId);
       return {
         command: 'ssh',
         args: [...opts, '-t', userAtHost, inner],
@@ -560,9 +558,7 @@ git push -u origin "$BR"
       const base = this.buildSshArgsInteractive();
       const userAtHost = base[base.length - 1]!;
       const opts = base.slice(0, -1);
-      const inner = meta.branch
-        ? `${SshFamiliar.sshInteractiveCdFragment(meta.workspacePath)} && git checkout ${SshFamiliar.shellPosixSingleQuote(meta.branch)} 2>/dev/null; exec bash -l`
-        : `${SshFamiliar.sshInteractiveCdFragment(meta.workspacePath)} && exec bash -l`;
+      const inner = this.buildRemoteTerminalInner(meta.workspacePath, meta.branch, meta.claudeSessionId);
       return {
         command: 'ssh',
         args: [...opts, '-t', userAtHost, inner],
@@ -572,6 +568,19 @@ git push -u origin "$BR"
       command: 'ssh',
       args: this.buildSshArgs(),
     };
+  }
+
+  private buildRemoteTerminalInner(workspacePath: string, branch?: string, claudeSessionId?: string): string {
+    const cdPart = SshFamiliar.sshInteractiveCdFragment(workspacePath);
+    if (claudeSessionId) {
+      const resumeCmd = `claude --resume ${SshFamiliar.shellPosixSingleQuote(claudeSessionId)} --dangerously-skip-permissions`;
+      return branch
+        ? `${cdPart} && git checkout ${SshFamiliar.shellPosixSingleQuote(branch)} 2>/dev/null; ${resumeCmd}`
+        : `${cdPart} && ${resumeCmd}`;
+    }
+    return branch
+      ? `${cdPart} && git checkout ${SshFamiliar.shellPosixSingleQuote(branch)} 2>/dev/null; exec bash -l`
+      : `${cdPart} && exec bash -l`;
   }
 
   async destroyAll(): Promise<void> {
