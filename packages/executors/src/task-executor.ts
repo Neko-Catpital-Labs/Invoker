@@ -395,12 +395,13 @@ export class TaskExecutor {
     try {
       const scriptPath = resolve(this.cwd, 'scripts/ui-visual-proof.sh');
       const outputDir = resolve(this.cwd, 'packages/app/e2e/visual-proof');
-      const origBranch = (await this.execGitReadonly(['branch', '--show-current'])).trim();
+
+      const wtDir = await this.createMergeWorktree(baseBranch, 'vp-' + slug);
 
       const runCapture = (label: string): Promise<string> => {
         return new Promise((resolveP, reject) => {
           const child = spawn('bash', [scriptPath, '--label', label, '--output-dir', outputDir], {
-            cwd: this.cwd,
+            cwd: wtDir,
             stdio: ['ignore', 'pipe', 'pipe'],
           });
           let stdout = '';
@@ -418,19 +419,13 @@ export class TaskExecutor {
         });
       };
 
-      await this.execGitIn(['clean', '-fd'], this.cwd);
-      const baseSha = (await this.execGitReadonly(['rev-parse', baseBranch])).trim();
-      await this.execGitIn(['checkout', '-f', '--detach', baseSha], this.cwd);
-      await runCapture('before');
-
-      await this.execGitIn(['clean', '-fd'], this.cwd);
-      const featureSha = (await this.execGitReadonly(['rev-parse', featureBranch])).trim();
-      await this.execGitIn(['checkout', '-f', '--detach', featureSha], this.cwd);
-      await runCapture('after');
-
-      await this.execGitIn(['clean', '-fd'], this.cwd);
-      if (origBranch) {
-        await this.execGitIn(['checkout', '-f', origBranch], this.cwd);
+      try {
+        await runCapture('before');
+        const featureSha = (await this.execGitReadonly(['rev-parse', featureBranch])).trim();
+        await this.execGitIn(['checkout', '-f', '--detach', featureSha], wtDir);
+        await runCapture('after');
+      } finally {
+        await this.removeMergeWorktree(wtDir);
       }
 
       // Upload and build markdown
@@ -544,17 +539,22 @@ export class TaskExecutor {
   }
 
   /** @internal */ async createMergeWorktree(ref: string, label: string): Promise<string> {
-    const wtPath = resolve(homedir(), '.invoker', 'merge-worktrees', `${label}-${Date.now()}`);
-    mkdirSync(resolve(homedir(), '.invoker', 'merge-worktrees'), { recursive: true });
-    await this.execGitReadonly(['worktree', 'prune']);
-    await this.execGitReadonly(['worktree', 'add', '--force', '--detach', wtPath, ref]);
-    return wtPath;
+    const clonePath = resolve(homedir(), '.invoker', 'merge-clones', `${label}-${Date.now()}`);
+    mkdirSync(resolve(homedir(), '.invoker', 'merge-clones'), { recursive: true });
+    // Clone with hard-linked objects — near-instant, fully isolated refs
+    await this.execGitReadonly(['clone', '--local', '--no-checkout', this.cwd, clonePath]);
+    // Detach HEAD so the fetch can overwrite all branch refs (including the default branch)
+    const headSha = (await this.execGitIn(['rev-parse', 'HEAD'], clonePath)).trim();
+    await this.execGitIn(['update-ref', '--no-deref', 'HEAD', headSha], clonePath);
+    // Mirror all host branches as local refs so bare branch names resolve
+    await this.execGitIn(['fetch', 'origin', '+refs/heads/*:refs/heads/*'], clonePath);
+    await this.execGitIn(['checkout', '--detach', ref], clonePath);
+    return clonePath;
   }
 
   /** @internal */ async removeMergeWorktree(dir: string): Promise<void> {
     try {
-      await this.execGitReadonly(['worktree', 'remove', '--force', dir]);
-      await this.execGitReadonly(['worktree', 'prune']);
+      rmSync(dir, { recursive: true, force: true });
     } catch (err) {
       console.warn(`[TaskExecutor] removeMergeWorktree failed (best-effort): ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -662,6 +662,9 @@ export class TaskExecutor {
         const expMergeMsg = `Merge ${b} — ${expTask.description}`;
         await this.execGitIn(['merge', '--no-ff', '-m', expMergeMsg, b], worktreeDir);
       }
+
+      // Push reconciliation branch from clone to host.cwd
+      await this.execGitIn(['push', '--force', 'origin', `${branchName}:refs/heads/${branchName}`], worktreeDir);
 
       const commit = await this.execGitIn(['rev-parse', 'HEAD'], worktreeDir);
       return { branch: branchName, commit };
@@ -939,6 +942,8 @@ export class TaskExecutor {
         try {
           await this.execGitIn(['checkout', branch], worktreeDir);
           await this.execGitIn(['rebase', baseBranch], worktreeDir);
+          // Push rebased branch from clone to host.cwd
+          await this.execGitIn(['push', '--force', 'origin', `${branch}:refs/heads/${branch}`], worktreeDir);
           rebasedBranches.push(branch);
           console.log(`[rebase] Successfully rebased ${branch} onto ${baseBranch}`);
         } catch (err) {

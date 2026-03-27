@@ -1473,8 +1473,14 @@ describe('TaskExecutor', () => {
       expect(squashCall).toBeDefined();
       const commitCall = gitCalls.find(c => c[0] === 'commit' && c.includes('-m'));
       expect(commitCall).toBeDefined();
-      const updateRefCall = gitCalls.find(c => c[0] === 'update-ref' && c[1] === 'refs/heads/master' && c[2] === 'HEAD');
-      expect(updateRefCall).toBeDefined();
+      // Merge commit hash is captured then applied to cwd via merge --ff-only or update-ref
+      const revParseCall = gitCalls.find(c => c[0] === 'rev-parse' && c[1] === 'HEAD');
+      expect(revParseCall).toBeDefined();
+      const ffMergeOrUpdateRef = gitCalls.find(c =>
+        (c[0] === 'merge' && c.includes('--ff-only')) ||
+        (c[0] === 'update-ref' && c[1]?.startsWith('refs/heads/')),
+      );
+      expect(ffMergeOrUpdateRef).toBeDefined();
 
       expect(orchestrator.handleWorkerResponse).toHaveBeenCalledWith(
         expect.objectContaining({ status: 'completed' }),
@@ -1832,8 +1838,14 @@ describe('TaskExecutor', () => {
       expect(squashCall).toBeDefined();
       const commitCall = gitCalls.find(c => c[0] === 'commit' && c.includes('-m'));
       expect(commitCall).toBeDefined();
-      const updateRefCall = gitCalls.find(c => c[0] === 'update-ref' && c.includes('refs/heads/master'));
-      expect(updateRefCall).toBeDefined();
+      // Merge commit hash is captured then applied to cwd via merge --ff-only or update-ref
+      const revParseCall = gitCalls.find(c => c[0] === 'rev-parse' && c[1] === 'HEAD');
+      expect(revParseCall).toBeDefined();
+      const ffMergeOrUpdateRef = gitCalls.find(c =>
+        (c[0] === 'merge' && c.includes('--ff-only')) ||
+        (c[0] === 'update-ref' && c[1]?.startsWith('refs/heads/')),
+      );
+      expect(ffMergeOrUpdateRef).toBeDefined();
     });
 
     it('approveMerge throws when workflow has no merge configured', async () => {
