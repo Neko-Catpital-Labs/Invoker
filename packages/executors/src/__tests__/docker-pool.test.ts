@@ -1,5 +1,4 @@
 import { describe, it, expect, vi } from 'vitest';
-import { Readable } from 'node:stream';
 import { DockerPool } from '../docker-pool.js';
 
 function createMockDocker() {
@@ -7,7 +6,7 @@ function createMockDocker() {
   const images = new Map<string, any>();
 
   const docker = {
-    createContainer: vi.fn().mockImplementation(async (opts: any) => {
+    createContainer: vi.fn().mockImplementation(async () => {
       let waitResolve: any;
       const waitPromise = new Promise((resolve) => { waitResolve = resolve; });
 
@@ -15,7 +14,6 @@ function createMockDocker() {
         id: `container-${containers.length}`,
         start: vi.fn().mockResolvedValue(undefined),
         wait: vi.fn().mockImplementation(() => {
-          // Auto-resolve with success for git clone
           waitResolve({ StatusCode: 0 });
           return waitPromise;
         }),
@@ -24,11 +22,6 @@ function createMockDocker() {
           images.set(imageName, { name: imageName });
         }),
         remove: vi.fn().mockResolvedValue(undefined),
-        logs: vi.fn().mockImplementation(
-          (_opts: unknown, callback: (err: Error | null, stream?: NodeJS.ReadableStream) => void) => {
-            callback(null, Readable.from([]) as NodeJS.ReadableStream);
-          },
-        ),
       };
       containers.push(container);
       return container;
@@ -48,24 +41,18 @@ function createMockDocker() {
 }
 
 describe('DockerPool', () => {
-  it('ensureImage: creates cached image on first call', async () => {
+  it('ensureImage: creates cached image on first call (clone only, no provisioning)', async () => {
     const pool = new DockerPool();
     const { docker } = createMockDocker();
 
     const name = await pool.ensureImage(docker, 'https://github.com/test/repo.git');
 
     expect(name).toMatch(/^invoker-cache:/);
-    // 2 containers: clone + provision
-    expect(docker.createContainer).toHaveBeenCalledTimes(2);
+    expect(docker.createContainer).toHaveBeenCalledTimes(1);
 
-    // Verify the first container was created with git clone command
     const createArgs = docker.createContainer.mock.calls[0][0];
     expect(createArgs.Entrypoint).toEqual(['git']);
     expect(createArgs.Cmd).toEqual(['clone', 'https://github.com/test/repo.git', '/app']);
-
-    // Verify the second container runs dependency provisioning
-    const provisionArgs = docker.createContainer.mock.calls[1][0];
-    expect(provisionArgs.Entrypoint).toEqual(['/bin/sh']);
   });
 
   it('ensureImage: returns cached image on second call', async () => {
@@ -76,8 +63,7 @@ describe('DockerPool', () => {
     const name2 = await pool.ensureImage(docker, 'https://github.com/test/repo.git');
 
     expect(name1).toBe(name2);
-    // Only two containers should have been created (clone + provision, the first time)
-    expect(docker.createContainer).toHaveBeenCalledTimes(2);
+    expect(docker.createContainer).toHaveBeenCalledTimes(1);
   });
 
   it('different repos get different cached images', async () => {
@@ -88,8 +74,7 @@ describe('DockerPool', () => {
     const name2 = await pool.ensureImage(docker, 'https://github.com/test/repo2.git');
 
     expect(name1).not.toBe(name2);
-    // 2 containers per repo (clone + provision) × 2 repos = 4
-    expect(docker.createContainer).toHaveBeenCalledTimes(4);
+    expect(docker.createContainer).toHaveBeenCalledTimes(2);
   });
 
   it('destroyAll removes all cached images', async () => {
@@ -99,7 +84,6 @@ describe('DockerPool', () => {
     await pool.ensureImage(docker, 'https://github.com/test/repo.git');
     await pool.destroyAll(docker);
 
-    // getImage should have been called for removal
     expect(docker.getImage).toHaveBeenCalled();
   });
 
@@ -121,7 +105,6 @@ describe('DockerPool', () => {
     const pool = new DockerPool();
     const { docker } = createMockDocker();
 
-    // Override createContainer to simulate a failed clone
     docker.createContainer.mockImplementationOnce(async () => {
       let waitResolve: any;
       const waitPromise = new Promise((resolve) => { waitResolve = resolve; });
@@ -147,7 +130,6 @@ describe('DockerPool', () => {
     const pool = new DockerPool();
     const { docker, images } = createMockDocker();
 
-    // Pre-populate the images map to simulate an image already in Docker
     const repoUrl = 'https://github.com/test/existing.git';
     const expectedName = pool.imageName(repoUrl);
     images.set(expectedName, { name: expectedName });
@@ -155,7 +137,26 @@ describe('DockerPool', () => {
     const name = await pool.ensureImage(docker, repoUrl);
 
     expect(name).toBe(expectedName);
-    // No container should have been created since image already exists
     expect(docker.createContainer).not.toHaveBeenCalled();
+  });
+
+  it('ensureImage: mounts SSH dir when configured', async () => {
+    const pool = new DockerPool({ sshDir: '/home/user/.ssh' });
+    const { docker } = createMockDocker();
+
+    await pool.ensureImage(docker, 'git@github.com:test/private-repo.git');
+
+    const createArgs = docker.createContainer.mock.calls[0][0];
+    expect(createArgs.HostConfig.Binds).toContainEqual('/home/user/.ssh:/root/.ssh:ro');
+  });
+
+  it('ensureImage: no SSH binds when sshDir is not configured', async () => {
+    const pool = new DockerPool();
+    const { docker } = createMockDocker();
+
+    await pool.ensureImage(docker, 'https://github.com/test/repo.git');
+
+    const createArgs = docker.createContainer.mock.calls[0][0];
+    expect(createArgs.HostConfig.Binds).toBeUndefined();
   });
 });

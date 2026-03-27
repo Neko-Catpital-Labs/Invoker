@@ -53,6 +53,13 @@ export interface InvokerConfig {
     /** e.g. "https://bucket.r2.dev" or custom domain */
     publicUrlBase: string;
   };
+  /** Docker execution environment configuration. */
+  docker?: {
+    /** Docker image to use for container tasks. Default: 'invoker-agent:latest'. */
+    imageName?: string;
+    /** If true, the image already contains the repo — skip cloning. Default: false. */
+    repoInImage?: boolean;
+  };
   /** Named remote SSH targets for running tasks on remote machines via SSH key auth. */
   remoteTargets?: Record<string, {
     host: string;

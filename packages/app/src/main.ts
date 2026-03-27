@@ -355,6 +355,7 @@ function setupGuiMode(): void {
       familiarRegistry,
       cwd: repoRoot,
       defaultBranch: invokerConfig.defaultBranch,
+      dockerConfig: invokerConfig.docker,
       remoteTargetsProvider: () => loadConfig(repoRoot).remoteTargets ?? {},
       mergeGateProvider: new GitHubMergeGateProvider(),
       callbacks: {
@@ -1235,6 +1236,9 @@ function setupGuiMode(): void {
         } else if (meta.familiarType === 'ssh') {
           const targetId = persistence.getRemoteTargetId?.(taskId);
           const target = targetId ? loadConfig(repoRoot).remoteTargets?.[targetId] : undefined;
+          // #region agent log
+          fetch('http://127.0.0.1:7658/ingest/762b7479-8057-4c6f-a805-85ee7d433bf5',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'a1ebc0'},body:JSON.stringify({sessionId:'a1ebc0',location:'main.ts:open-terminal:ssh-resolve',message:'SSH familiar resolve',data:{taskId,targetId,hasTarget:!!target,targetUser:target?.user,targetHost:target?.host,metaWorkspacePath:meta.workspacePath,metaBranch:meta.branch,registryHasSsh:!!familiarRegistry.get('ssh')},timestamp:Date.now()})}).catch(()=>{});
+          // #endregion
           if (target) {
             familiar = new SshFamiliar(target);
           } else {
@@ -1250,6 +1254,9 @@ function setupGuiMode(): void {
       try {
         spec = familiar.getRestoredTerminalSpec(meta);
         console.log(`[open-terminal] task="${taskId}" getRestoredTerminalSpec returned: ${JSON.stringify(spec)}`);
+        // #region agent log
+        fetch('http://127.0.0.1:7658/ingest/762b7479-8057-4c6f-a805-85ee7d433bf5',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'a1ebc0'},body:JSON.stringify({sessionId:'a1ebc0',location:'main.ts:open-terminal:spec',message:'terminal spec',data:{taskId,familiarType:familiar.type,spec},timestamp:Date.now()})}).catch(()=>{});
+        // #endregion
       } catch (err) {
         const reason = err instanceof Error ? err.message : String(err);
         console.log(`[open-terminal] task="${taskId}" getRestoredTerminalSpec THREW: ${reason}`);

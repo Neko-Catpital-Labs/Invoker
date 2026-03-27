@@ -1,7 +1,7 @@
-import { writeFileSync, mkdirSync, existsSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import type { WorkRequest } from '@invoker/protocol';
+import type { WorkRequest, WorkResponse } from '@invoker/protocol';
 import type { FamiliarHandle, PersistedTaskMeta, TerminalSpec } from './familiar.js';
 import { BaseFamiliar, type BaseEntry } from './base-familiar.js';
 import { DockerPool } from './docker-pool.js';
@@ -15,7 +15,8 @@ export interface DockerFamiliarConfig {
   callbackPort?: number;
   claudeConfigDir?: string;
   sshDir?: string;
-  cacheImages?: boolean;
+  /** When true, the image already contains the repo — skip DockerPool clone. */
+  repoInImage?: boolean;
   /** ANTHROPIC_API_KEY to pass into the container. Falls back to process.env.ANTHROPIC_API_KEY. */
   anthropicApiKey?: string;
 }
@@ -23,18 +24,17 @@ export interface DockerFamiliarConfig {
 interface ContainerEntry extends BaseEntry {
   containerId: string;
   claudeSessionId?: string;
-  /** Branch that was checked out before setupTaskBranch created the task branch. */
-  originalBranch?: string;
+  /** Task branch name created inside the container. */
+  branch?: string;
 }
 
 /**
  * Familiar implementation that runs tasks inside Docker containers.
  *
- * For `actionType === 'claude'`, the container runs the Claude CLI directly.
- * The Docker image must have `claude` installed in $PATH.
- *
- * Requires the `dockerode` npm package at runtime.
- * If not installed, start() throws with installation instructions.
+ * Images are fully isolated: the host repo is never bind-mounted. Instead,
+ * the repo is either cloned into a cached Docker image (default) or
+ * pre-loaded by the user (`repoInImage: true`). Git lifecycle (fetch,
+ * branch, commit, push) runs inside the container via a wrapper script.
  */
 export class DockerFamiliar extends BaseFamiliar<ContainerEntry> {
   readonly type = 'docker';
@@ -45,7 +45,8 @@ export class DockerFamiliar extends BaseFamiliar<ContainerEntry> {
   private readonly claudeConfigDir: string;
   private readonly sshDir: string;
   private readonly anthropicApiKey: string;
-  private readonly pool: DockerPool | null = null;
+  private readonly repoInImage: boolean;
+  private readonly pool: DockerPool;
 
   /** Lazily-resolved dockerode instance. Null until first use. */
   private dockerInstance: any | null = null;
@@ -58,9 +59,8 @@ export class DockerFamiliar extends BaseFamiliar<ContainerEntry> {
     this.claudeConfigDir = config.claudeConfigDir ?? join(homedir(), '.claude');
     this.sshDir = config.sshDir ?? join(homedir(), '.ssh');
     this.anthropicApiKey = config.anthropicApiKey ?? process.env.ANTHROPIC_API_KEY ?? '';
-    if (config.cacheImages) {
-      this.pool = new DockerPool({ baseImage: this.imageName });
-    }
+    this.repoInImage = config.repoInImage ?? false;
+    this.pool = new DockerPool({ baseImage: this.imageName, sshDir: this.sshDir });
   }
 
   // ---------------------------------------------------------------------------
@@ -85,11 +85,84 @@ export class DockerFamiliar extends BaseFamiliar<ContainerEntry> {
   }
 
   // ---------------------------------------------------------------------------
+  // Repo URL resolution
+  // ---------------------------------------------------------------------------
+
+  private async resolveRepoUrl(request: WorkRequest): Promise<string> {
+    if (request.inputs.repoUrl) return request.inputs.repoUrl;
+    try {
+      return await this.execGitSimple(['remote', 'get-url', 'origin'], this.workspaceDir);
+    } catch {
+      throw new Error(
+        `Docker task "${request.actionId}" requires a repoUrl but none was provided and ` +
+        `"git remote get-url origin" failed in ${this.workspaceDir}. ` +
+        `Either add repoUrl to your plan YAML, set docker.repoInImage in .invoker.json, ` +
+        `or ensure the repo has an origin remote.`,
+      );
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Git wrapper script builder
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Build a shell script that wraps the task command with git lifecycle:
+   *   1. Configure git user
+   *   2. Fetch origin and checkout task branch
+   *   3. Merge upstream branches (for DAG fan-in)
+   *   4. Run the actual task
+   *   5. Commit results and push to remote
+   */
+  buildWrappedCommand(
+    innerCmd: string[],
+    branchName: string,
+    request: WorkRequest,
+  ): string[] {
+    const base = request.inputs.upstreamBranches?.[0]
+      ?? (request.inputs.baseBranch ? `origin/${request.inputs.baseBranch}` : 'origin/HEAD');
+    const upstreams = request.inputs.upstreamBranches ?? [];
+    const isClaudeTask = request.actionType === 'claude';
+
+    const lines: string[] = [
+      'set -e',
+      'git config user.email "invoker@localhost"',
+      'git config user.name "Invoker"',
+      'git fetch origin',
+      `git checkout -B ${this.shellEscape(branchName)} ${this.shellEscape(base)}`,
+    ];
+
+    // Merge additional upstream branches (fan-in)
+    for (const ub of upstreams.slice(1)) {
+      lines.push(`git merge --no-edit ${this.shellEscape(ub)}`);
+    }
+
+    lines.push('set +e');
+    lines.push(innerCmd.map(a => this.shellEscape(a)).join(' '));
+    lines.push('TASK_EXIT=$?');
+    lines.push('set -e');
+
+    if (!isClaudeTask) {
+      const msg = this.buildCommitMessage(request);
+      lines.push('git add -A');
+      lines.push(`git commit --allow-empty -m ${this.shellEscape(msg)}`);
+    }
+
+    lines.push(`git push -u origin ${this.shellEscape(branchName)} || true`);
+    lines.push('exit $TASK_EXIT');
+
+    return ['/bin/bash', '-c', lines.join('\n')];
+  }
+
+  private shellEscape(s: string): string {
+    return "'" + s.replace(/'/g, "'\\''") + "'";
+  }
+
+  // ---------------------------------------------------------------------------
   // Familiar interface
   // ---------------------------------------------------------------------------
 
   async start(request: WorkRequest): Promise<FamiliarHandle> {
-    // Buffer logs before entry registration so they can be flushed to outputListeners
     const earlyLogs: string[] = [];
     const log = (msg: string) => { console.log(msg); earlyLogs.push(msg); };
 
@@ -105,42 +178,38 @@ export class DockerFamiliar extends BaseFamiliar<ContainerEntry> {
     }
     const handle = this.createHandle(request);
 
-    // Determine container command based on action type
-    let containerCmd: string[];
+    // Compute branch name for this task (mirrors BaseFamiliar.setupTaskBranch logic)
+    const branchName = `invoker/${request.actionId}`;
+    handle.branch = branchName;
+
+    // Determine the raw task command (before wrapping with git lifecycle)
+    let innerCmd: string[];
     let claudeSessionId: string | undefined;
 
     if (request.actionType === 'claude') {
       log(`${TAG} preparing Claude session for "${request.actionId}"`);
       const session = this.prepareClaudeSession(request);
       claudeSessionId = session.sessionId;
-      containerCmd = ['claude', ...session.cliArgs];
+      innerCmd = ['claude', ...session.cliArgs];
       log(`${TAG} Claude sessionId=${claudeSessionId} prompt=${session.fullPrompt.slice(0, 100)}...`);
     } else if (request.actionType === 'command') {
       const command = request.inputs.command;
       if (!command) throw new Error('WorkRequest with actionType "command" must have inputs.command');
-      containerCmd = ['/bin/sh', '-c', command];
+      innerCmd = ['/bin/sh', '-c', command];
       log(`${TAG} command: ${command}`);
     } else {
-      log(`${TAG} legacy/reconciliation action, writing request.json`);
-      // For reconciliation or other types, write request.json for legacy agent scripts
-      const invokerDir = join(this.workspaceDir, '.invoker');
-      if (!existsSync(invokerDir)) {
-        mkdirSync(invokerDir, { recursive: true });
-      }
-      writeFileSync(
-        join(invokerDir, 'request.json'),
-        JSON.stringify(request, null, 2),
-      );
-      containerCmd = [];
+      innerCmd = ['/bin/sh', '-c', 'echo "Unsupported action type"; exit 1'];
     }
 
-    // Determine image: use cached image if pool + repoUrl, else default
-    let containerImage = this.imageName;
-    let useBindMount = true;
+    // Wrap with git lifecycle
+    const containerCmd = this.buildWrappedCommand(innerCmd, branchName, request);
 
-    if (this.pool && request.inputs.repoUrl) {
+    // Resolve container image
+    let containerImage = this.imageName;
+    if (!this.repoInImage) {
+      const repoUrl = await this.resolveRepoUrl(request);
       try {
-        containerImage = await this.pool.ensureImage(docker, request.inputs.repoUrl);
+        containerImage = await this.pool.ensureImage(docker, repoUrl);
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err);
         for (const msg of earlyLogs) {
@@ -149,21 +218,11 @@ export class DockerFamiliar extends BaseFamiliar<ContainerEntry> {
         this.emitOutput(handle.executionId, `${TAG} Image provisioning failed: ${errMsg}\n`);
         throw new Error(`Docker image provisioning failed: ${errMsg}`);
       }
-      useBindMount = false; // Repo is inside the cached image
     }
+    log(`${TAG} image=${containerImage} repoInImage=${this.repoInImage}`);
 
-    // Volume mounts
+    // Volume mounts — never mount workspaceDir
     const binds: string[] = [];
-    if (useBindMount) {
-      binds.push(`${this.workspaceDir}:/app`);
-    } else {
-      // Pool-based: repo is inside the image, but we still need .invoker dir
-      const invokerDir = join(this.workspaceDir, '.invoker');
-      binds.push(`${invokerDir}:/app/.invoker`);
-    }
-
-    // Mount Claude config read-write so sessions persist after container exit.
-    // Also mount ~/.claude.json into .claude/ so the in-image symlink resolves.
     if (existsSync(this.claudeConfigDir)) {
       binds.push(`${this.claudeConfigDir}:/home/invoker/.claude`);
       const claudeJsonPath = join(homedir(), '.claude.json');
@@ -180,7 +239,6 @@ export class DockerFamiliar extends BaseFamiliar<ContainerEntry> {
     const containerConfig: Record<string, unknown> = {
       Image: containerImage,
       Tty: true,
-      // Run as the host user so bind-mounted files are writable
       User: `${process.getuid?.() ?? 1000}:${process.getgid?.() ?? 1000}`,
       Env: [
         `ANTHROPIC_API_KEY=${this.anthropicApiKey}`,
@@ -192,22 +250,15 @@ export class DockerFamiliar extends BaseFamiliar<ContainerEntry> {
       HostConfig: {
         Binds: binds,
         NetworkMode: 'host',
-        // On Linux, host.docker.internal isn't available by default.
-        // Add an extra_hosts mapping so the container can reach the host.
         ...(process.platform === 'linux' ? {
           ExtraHosts: ['host.docker.internal:host-gateway'],
         } : {}),
       },
       WorkingDir: '/app',
+      Cmd: containerCmd,
+      Entrypoint: [],
     };
 
-    if (containerCmd.length > 0) {
-      containerConfig.Cmd = containerCmd;
-      // Override any ENTRYPOINT from the image so Cmd runs directly
-      containerConfig.Entrypoint = [];
-    }
-
-    // Full config goes to console only (too verbose for embedded terminal)
     console.log(`${TAG} Container config:`, JSON.stringify(containerConfig, null, 2));
     let container;
     try {
@@ -226,6 +277,7 @@ export class DockerFamiliar extends BaseFamiliar<ContainerEntry> {
       containerId: container.id,
       request,
       claudeSessionId,
+      branch: branchName,
       outputListeners: new Set(),
       outputBuffer: [],
       completeListeners: new Set(),
@@ -235,12 +287,10 @@ export class DockerFamiliar extends BaseFamiliar<ContainerEntry> {
 
     this.registerEntry(handle, entry);
 
-    // Flush early logs to embedded terminal
     for (const msg of earlyLogs) {
       this.emitOutput(handle.executionId, msg + '\n');
     }
 
-    // From here, emit directly to both console and embedded terminal
     const emit = (msg: string) => {
       console.log(msg);
       this.emitOutput(handle.executionId, msg + '\n');
@@ -250,14 +300,6 @@ export class DockerFamiliar extends BaseFamiliar<ContainerEntry> {
     if (claudeSessionId) {
       handle.claudeSessionId = claudeSessionId;
     }
-
-    // Pre-sync: pull latest from remote
-    await this.ensureGitAvailable();
-    await this.syncFromRemote(this.workspaceDir, handle.executionId);
-
-    // Create task-specific branch in main repo for tracking
-    const originalBranch = await this.setupTaskBranch(this.workspaceDir, request, handle);
-    entry.originalBranch = originalBranch;
 
     emit(`${TAG} Starting container ${container.id.slice(0, 12)}...`);
     try {
@@ -269,11 +311,7 @@ export class DockerFamiliar extends BaseFamiliar<ContainerEntry> {
     }
     emit(`${TAG} Container started`);
 
-    // Attach log stream after starting; awaited to ensure listener is registered
-    // before the caller adds their own onOutput listeners.
     await this.streamLogs(container, entry);
-
-    // Monitor container exit
     this.monitorExit(container, handle.executionId, entry);
 
     return handle;
@@ -289,7 +327,6 @@ export class DockerFamiliar extends BaseFamiliar<ContainerEntry> {
     try {
       await container.stop({ t: CONTAINER_STOP_TIMEOUT_S });
     } catch (err: any) {
-      // Container may already be stopped
       if (!err.message?.includes('is not running') && !err.message?.includes('not running')) {
         throw err;
       }
@@ -305,8 +342,6 @@ export class DockerFamiliar extends BaseFamiliar<ContainerEntry> {
   }
 
   sendInput(handle: FamiliarHandle, _input: string): void {
-    // Docker containers communicate via the callback URL, not stdin.
-    // This is a no-op for DockerFamiliar.
     const entry = this.entries.get(handle.executionId);
     if (!entry || entry.completed) return;
   }
@@ -378,10 +413,7 @@ export class DockerFamiliar extends BaseFamiliar<ContainerEntry> {
     await Promise.all(killPromises);
     this.entries.clear();
 
-    // Destroy cached images if pool exists
-    if (this.pool) {
-      await this.pool.destroyAll(docker);
-    }
+    await this.pool.destroyAll(docker);
   }
 
   // ---------------------------------------------------------------------------
@@ -396,7 +428,6 @@ export class DockerFamiliar extends BaseFamiliar<ContainerEntry> {
         stderr: true,
       });
 
-      // With Tty: true, the stream is plain text (no multiplexed headers).
       logStream.on('data', (chunk: Buffer) => {
         const data = chunk.toString();
         entry.outputBuffer.push(data);
@@ -413,20 +444,61 @@ export class DockerFamiliar extends BaseFamiliar<ContainerEntry> {
     }
   }
 
+  /**
+   * Docker-specific exit handler. Git operations (commit, push) already ran
+   * inside the container via the wrapper script, so we only need to fetch the
+   * commit hash from the remote and emit the completion response.
+   */
   private async monitorExit(container: any, executionId: string, entry: ContainerEntry): Promise<void> {
+    let exitCode = 1;
     try {
       const result = await container.wait();
-      const exitCode: number = result.StatusCode ?? 1;
-      await this.handleProcessExit(executionId, entry.request, this.workspaceDir, exitCode, {
-        originalBranch: entry.originalBranch,
-        claudeSessionId: entry.claudeSessionId,
-      });
+      exitCode = result.StatusCode ?? 1;
     } catch (err) {
       this.emitOutput(executionId, `${TAG} monitorExit error: ${err}\n`);
-      await this.handleProcessExit(executionId, entry.request, this.workspaceDir, 1, {
-        originalBranch: entry.originalBranch,
-        claudeSessionId: entry.claudeSessionId,
-      });
     }
+
+    entry.completed = true;
+    const status: 'completed' | 'failed' = exitCode === 0 ? 'completed' : 'failed';
+
+    this.emitOutput(executionId,
+      `[${this.type}] Process exited: actionId=${entry.request.actionId} exitCode=${exitCode}\n`);
+
+    // Extract commit hash from remote (the container pushed the branch)
+    let commitHash: string | undefined;
+    if (entry.branch) {
+      try {
+        await this.execGitSimple(['fetch', 'origin'], this.workspaceDir);
+        commitHash = (await this.execGitSimple(
+          ['rev-parse', `origin/${entry.branch}`], this.workspaceDir,
+        )).trim();
+      } catch {
+        // Push may have failed inside the container — non-fatal
+      }
+    }
+
+    let error: string | undefined;
+    if (exitCode !== 0) {
+      const allOutput = entry.outputBuffer.join('');
+      const lines = allOutput.split('\n');
+      const tail = lines.slice(-50).join('\n').trim();
+      if (tail) {
+        error = tail.length > 3000 ? tail.slice(-3000) : tail;
+      }
+    }
+
+    const response: WorkResponse = {
+      requestId: entry.request.requestId,
+      actionId: entry.request.actionId,
+      status,
+      outputs: {
+        exitCode: status === 'failed' && exitCode === 0 ? 1 : exitCode,
+        commitHash,
+        claudeSessionId: entry.claudeSessionId,
+        ...(error ? { error } : {}),
+        ...(entry.branch ? { summary: `branch=${entry.branch} commit=${commitHash ?? 'unknown'}` } : {}),
+      },
+    };
+    this.emitComplete(executionId, response);
   }
 }

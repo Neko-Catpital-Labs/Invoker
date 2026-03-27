@@ -71,6 +71,7 @@ function createHeadlessExecutor(
     familiarRegistry: deps.familiarRegistry,
     cwd: deps.repoRoot,
     defaultBranch: deps.invokerConfig.defaultBranch,
+    dockerConfig: deps.invokerConfig.docker,
     remoteTargetsProvider: () => loadConfig(deps.repoRoot).remoteTargets ?? {},
     mergeGateProvider: new GitHubMergeGateProvider(),
     callbacks: {
