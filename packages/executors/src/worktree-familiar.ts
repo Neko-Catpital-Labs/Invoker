@@ -466,7 +466,7 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
     const entry = this.entries.get(handle.executionId);
     if (!entry) return null;
     if (entry.claudeSessionId) {
-      return { command: 'claude', args: ['--resume', entry.claudeSessionId], cwd: entry.worktreeDir };
+      return { command: 'claude', args: ['--resume', entry.claudeSessionId, '--dangerously-skip-permissions'], cwd: entry.worktreeDir };
     }
     return { cwd: entry.worktreeDir };
   }

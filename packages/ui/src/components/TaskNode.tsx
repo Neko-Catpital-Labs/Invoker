@@ -21,6 +21,7 @@ const HEARTBEAT_STALE_MS = 90_000;
 interface TaskNodeData {
   task: TaskState;
   label?: string;
+  dimmed?: boolean;
   [key: string]: unknown;
 }
 
@@ -52,6 +53,7 @@ function useHeartbeatAge(task: TaskState): number | null {
 
 export function TaskNode({ data }: TaskNodeProps) {
   const { task } = data;
+  const dimmed = data.dimmed ?? false;
   const visualStatus = getEffectiveVisualStatus(task.status, task.execution);
   const colors = getStatusColor(visualStatus);
   const heartbeatAge = useHeartbeatAge(task);
@@ -86,7 +88,7 @@ export function TaskNode({ data }: TaskNodeProps) {
   }
 
   return (
-    <div className={`rounded-lg border-2 px-3 py-2 w-[260px] ${colors.bg} ${colors.border} ${isStale ? 'opacity-50' : ''}`}>
+    <div className={`rounded-lg border-2 px-3 py-2 w-[260px] transition-opacity duration-200 ${colors.bg} ${colors.border} ${dimmed ? 'opacity-20 pointer-events-none' : isStale ? 'opacity-50' : ''}`}>
       <Handle type="target" position={Position.Left} className="!bg-gray-500" />
 
       <div className={`font-mono text-xs opacity-60 truncate ${colors.text}`}>

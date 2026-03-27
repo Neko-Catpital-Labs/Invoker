@@ -9,6 +9,10 @@
   transition: stroke 0.2s ease, stroke-width 0.2s ease;
 }
 
+.react-flow__edge {
+  transition: opacity 0.2s ease;
+}
+
 /* Animated running edges: dashed flow animation */
 .react-flow__edge.animated .react-flow__edge-path {
   stroke-dasharray: 8 4;

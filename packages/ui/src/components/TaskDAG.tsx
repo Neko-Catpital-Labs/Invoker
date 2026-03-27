@@ -23,7 +23,7 @@ import '@xyflow/react/dist/style.css';
 
 import type { TaskState, WorkflowMeta } from '../types.js';
 import { layoutNodes } from '../lib/layout.js';
-import { getEdgeStyle } from '../lib/colors.js';
+import { getEdgeStyle, getEffectiveVisualStatus } from '../lib/colors.js';
 import { TaskNode } from './TaskNode.js';
 import { BundledEdge, type BundledEdgeData } from './BundledEdge.js';
 import { MergeGateNode } from './MergeGateNode.js';
@@ -40,6 +40,7 @@ interface TaskDAGProps {
   onTaskClick?: (task: TaskState) => void;
   onTaskDoubleClick?: (task: TaskState) => void;
   onTaskContextMenu?: (task: TaskState, event: React.MouseEvent) => void;
+  statusFilters?: Set<string>;
 }
 
 const nodeTypes = { taskNode: TaskNode, mergeGateNode: MergeGateNode };
@@ -52,7 +53,7 @@ function buildEdgeLabel(source: TaskState, target: TaskState): string {
   return `${srcId} → ${tgtId}`;
 }
 
-function TaskDAGInner({ tasks, workflows, onTaskClick, onTaskDoubleClick, onTaskContextMenu }: TaskDAGProps) {
+function TaskDAGInner({ tasks, workflows, onTaskClick, onTaskDoubleClick, onTaskContextMenu, statusFilters }: TaskDAGProps) {
   const { fitView } = useReactFlow();
   const prevNodeCount = useRef(0);
 
@@ -96,6 +97,7 @@ function TaskDAGInner({ tasks, workflows, onTaskClick, onTaskDoubleClick, onTask
             gateKind = 'github_pr';
           }
           const showMergeModeRow = gateKind !== 'github_pr';
+          const mergeGateDimmed = statusFilters && statusFilters.size > 0 && !statusFilters.has(task.status);
           allNodes.push({
             id: task.id,
             type: 'mergeGateNode',
@@ -112,14 +114,17 @@ function TaskDAGInner({ tasks, workflows, onTaskClick, onTaskDoubleClick, onTask
               prUrl: task.execution?.prUrl,
               prStatus: task.execution?.prStatus,
               summary: task.config?.summary,
+              dimmed: mergeGateDimmed,
             },
           });
         } else {
+          const taskVisualStatus = getEffectiveVisualStatus(task.status, task.execution);
+          const taskDimmed = statusFilters && statusFilters.size > 0 && !statusFilters.has(taskVisualStatus);
           allNodes.push({
             id: task.id,
             type: 'taskNode',
             position: { x: pos.x, y: pos.y + yOffset },
-            data: { task, label: task.description },
+            data: { task, label: task.description, dimmed: taskDimmed },
           });
         }
       }
@@ -134,6 +139,19 @@ function TaskDAGInner({ tasks, workflows, onTaskClick, onTaskDoubleClick, onTask
 
       const groupHeight = maxY === -Infinity ? 0 : maxY - minY + 80;
       yOffset += groupHeight + WORKFLOW_GAP;
+    }
+
+    // Build dimmed node set for edge opacity
+    const dimmedNodeIds = new Set<string>();
+    if (statusFilters && statusFilters.size > 0) {
+      for (const task of taskArray) {
+        const vs = task.config.isMergeNode
+          ? task.status
+          : getEffectiveVisualStatus(task.status, task.execution);
+        if (!statusFilters.has(vs)) {
+          dimmedNodeIds.add(task.id);
+        }
+      }
     }
 
     // Build edges with offset calculations
@@ -174,6 +192,8 @@ function TaskDAGInner({ tasks, workflows, onTaskClick, onTaskDoubleClick, onTask
       const truncTgt = tgtLabel.length > 12 ? tgtLabel.slice(0, 12) + '..' : tgtLabel;
       const label = `${truncSrc} → ${truncTgt}`;
 
+      const edgeDimmed = dimmedNodeIds.has(e.source) || dimmedNodeIds.has(e.target);
+
       return {
         id: `${e.source}->${e.target}`,
         source: e.source,
@@ -184,6 +204,7 @@ function TaskDAGInner({ tasks, workflows, onTaskClick, onTaskDoubleClick, onTask
           stroke: edgeStyle.stroke,
           strokeWidth: edgeStyle.strokeWidth,
           strokeDasharray: edgeStyle.strokeDasharray,
+          opacity: edgeDimmed ? 0.15 : 1,
         },
         markerEnd: {
           type: MarkerType.ArrowClosed,
@@ -204,7 +225,7 @@ function TaskDAGInner({ tasks, workflows, onTaskClick, onTaskDoubleClick, onTask
     });
 
     return { nodes: allNodes, edges: newEdges };
-  }, [tasks, workflows]);
+  }, [tasks, workflows, statusFilters]);
 
   // Merge task-derived nodes with React Flow's internal dimension/selection state.
   // Without this, each task-delta re-render creates new node objects that discard

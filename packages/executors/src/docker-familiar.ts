@@ -441,10 +441,14 @@ export class DockerFamiliar extends BaseFamiliar<ContainerEntry> {
     if (!entry) return null;
     const cid = entry.containerId;
     if (entry.claudeSessionId) {
+      // NOTE: Claude CLI's interactive TUI has known freeze/deadlock issues inside
+      // Docker containers (see github.com/anthropics/claude-code/issues/20572,
+      // #24068, #25286). The --resume terminal may hang after the trust prompt.
+      // The automated -p (pipe) execution path is unaffected.
       console.log(`${TAG} getTerminalSpec() -> docker start + exec claude --resume ${entry.claudeSessionId}`);
       return {
         command: 'bash',
-        args: ['-c', `docker start ${cid} >/dev/null 2>&1; docker exec -it ${cid} claude --resume ${entry.claudeSessionId}`],
+        args: ['-c', `docker start ${cid} >/dev/null 2>&1; docker exec -it ${cid} claude --resume ${entry.claudeSessionId} --dangerously-skip-permissions`],
       };
     }
     console.log(`${TAG} getTerminalSpec() -> docker start + exec /bin/bash`);
@@ -462,6 +466,9 @@ export class DockerFamiliar extends BaseFamiliar<ContainerEntry> {
     }
     const cid = meta.containerId;
     if (meta.claudeSessionId) {
+      // NOTE: Claude CLI's interactive TUI has known freeze/deadlock issues inside
+      // Docker containers (see github.com/anthropics/claude-code/issues/20572,
+      // #24068, #25286). The --resume terminal may hang after the trust prompt.
       console.log(`[DockerFamiliar] getRestoredTerminalSpec task="${meta.taskId}" → docker exec claude --resume`);
       return {
         command: 'bash',

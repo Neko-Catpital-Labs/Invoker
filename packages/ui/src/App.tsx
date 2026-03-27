@@ -46,9 +46,31 @@ export function App() {
   const [viewMode, setViewMode] = useState<'dag' | 'history' | 'timeline' | 'queue'>('dag');
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; task: TaskState } | null>(null);
   const [remoteTargets, setRemoteTargets] = useState<string[]>([]);
+  const [statusFilters, setStatusFilters] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     window.invoker?.getRemoteTargets?.().then(setRemoteTargets).catch(() => {});
+  }, []);
+
+  const handleStatusClick = useCallback((filterKey: string) => {
+    setStatusFilters(prev => {
+      const next = new Set(prev);
+      if (next.has(filterKey)) {
+        next.delete(filterKey);
+      } else {
+        next.add(filterKey);
+      }
+      return next;
+    });
+  }, []);
+
+  const handleStatusDoubleClick = useCallback((filterKey: string) => {
+    setStatusFilters(prev => {
+      if (prev.size === 1 && prev.has(filterKey)) {
+        return new Set<string>();
+      }
+      return new Set([filterKey]);
+    });
   }, []);
 
   const selectedTask = selectedTaskId ? tasks.get(selectedTaskId) ?? null : null;
@@ -147,12 +169,23 @@ export function App() {
 
   const handleFixWithClaude = useCallback(async (taskId: string) => {
     setContextMenu(null);
+    const task = tasks.get(taskId);
+    if (task?.config.familiarType === 'docker') {
+      const proceed = window.confirm(
+        'Note: Claude CLI\'s interactive TUI has known freeze issues inside Docker containers ' +
+        '(see github.com/anthropics/claude-code #20572, #24068). The automated fix will run ' +
+        'Claude in non-interactive pipe mode which is unaffected.\n\n' +
+        'However, double-clicking to resume the Claude session interactively may freeze.\n\n' +
+        'Proceed with Fix with Claude?',
+      );
+      if (!proceed) return;
+    }
     try {
       await window.invoker?.fixWithClaude(taskId);
     } catch (err) {
       console.error('Fix with Claude failed:', err);
     }
-  }, []);
+  }, [tasks]);
 
   const handleCancelTask = useCallback(async (taskId: string) => {
     setContextMenu(null);
@@ -225,6 +258,7 @@ export function App() {
       setOnFinish('merge');
       setSelectedTaskId(null);
       setModal({ type: 'none' });
+      setStatusFilters(new Set());
     } catch (err) {
       console.error('Failed to clear:', err);
     }
@@ -383,7 +417,7 @@ export function App() {
             </div>
           ) : (
             <div className="h-full">
-              <TaskDAG tasks={tasks} workflows={workflows} onTaskClick={handleTaskClick} onTaskDoubleClick={handleTaskDoubleClick} onTaskContextMenu={handleTaskContextMenu} />
+              <TaskDAG tasks={tasks} workflows={workflows} onTaskClick={handleTaskClick} onTaskDoubleClick={handleTaskDoubleClick} onTaskContextMenu={handleTaskContextMenu} statusFilters={statusFilters} />
             </div>
           )}
         </div>
@@ -412,7 +446,7 @@ export function App() {
       </div>
 
       {/* Status bar */}
-      <StatusBar tasks={tasks} onSystemLog={() => setSelectedTaskId('__system__')} />
+      <StatusBar tasks={tasks} onSystemLog={() => setSelectedTaskId('__system__')} activeFilters={statusFilters} onStatusClick={handleStatusClick} onStatusDoubleClick={handleStatusDoubleClick} />
 
       {/* Modals */}
       {modal.type === 'input' && (

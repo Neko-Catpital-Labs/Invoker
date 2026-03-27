@@ -26,6 +26,7 @@ interface MergeGateNodeData {
   prUrl?: string;
   prStatus?: string;
   summary?: string;
+  dimmed?: boolean;
   [key: string]: unknown;
 }
 
@@ -53,7 +54,9 @@ export function MergeGateNode({ data }: MergeGateNodeProps) {
     prUrl,
     prStatus,
     summary,
+    dimmed: dataDimmed,
   } = data;
+  const dimmed = dataDimmed ?? false;
   const colors = getStatusColor(status);
   const [error, setError] = useState<string | null>(null);
 
@@ -91,7 +94,7 @@ export function MergeGateNode({ data }: MergeGateNodeProps) {
     'WAITING';
 
   return (
-    <div className={`rounded-lg border-2 border-dashed px-3 py-2 w-[200px] ${colors.bg} ${colors.border}`}>
+    <div className={`rounded-lg border-2 border-dashed px-3 py-2 w-[200px] transition-opacity duration-200 ${colors.bg} ${colors.border} ${dimmed ? 'opacity-20 pointer-events-none' : ''}`}>
       <Handle type="target" position={Position.Left} className="!bg-gray-500" />
 
       <div className={`flex items-center gap-1.5 ${colors.text}`}>
