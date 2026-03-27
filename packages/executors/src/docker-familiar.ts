@@ -223,6 +223,7 @@ export class DockerFamiliar extends BaseFamiliar<ContainerEntry> {
         `INVOKER_REQUEST_ID=${request.requestId}`,
         `INVOKER_ACTION_ID=${request.actionId}`,
         `HOME=/home/invoker`,
+        `COREPACK_HOME=/opt/corepack`,
       ],
       HostConfig: {
         Binds: binds,

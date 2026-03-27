@@ -38,8 +38,8 @@ export class DockerPool {
 
   /**
    * Ensure a cached image exists for the given repo URL.
-   * Clones the repo into the base image and commits it. No dependency
-   * provisioning -- the user's base image must include all required tooling.
+   * Clones the repo into the base image, runs dependency provisioning
+   * (`pnpm install` if a lockfile exists), and commits the result.
    */
   async ensureImage(docker: any, repoUrl: string): Promise<string> {
     const name = this.imageName(repoUrl);
@@ -62,14 +62,22 @@ export class DockerPool {
       binds.push(`${this.sshDir}:/root/.ssh:ro`);
     }
 
+    const cloneAndProvision = [
+      `git clone ${repoUrl} /app`,
+      'cd /app',
+      '[ -f pnpm-lock.yaml ] && NODE_ENV=development pnpm install --frozen-lockfile || true',
+      'chmod -R a+rwX /app /opt/corepack 2>/dev/null || true',
+    ].join(' && ');
+
     const container = await docker.createContainer({
       Image: this.baseImage,
       Entrypoint: ['/bin/sh'],
-      Cmd: ['-c', `git clone ${repoUrl} /app && chmod -R a+rwX /app`],
+      Cmd: ['-c', cloneAndProvision],
       WorkingDir: '/',
       User: '0:0',
       Env: [
         'GIT_SSH_COMMAND=ssh -o StrictHostKeyChecking=accept-new -F /dev/null',
+        'COREPACK_HOME=/opt/corepack',
       ],
       HostConfig: {
         NetworkMode: 'host',

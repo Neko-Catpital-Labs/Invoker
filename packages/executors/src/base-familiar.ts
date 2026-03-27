@@ -492,7 +492,7 @@ export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar
    */
   protected async pushBranchToRemote(cwd: string, branch: string, executionId?: string): Promise<void> {
     try {
-      await this.execGitSimple(['push', '-u', 'origin', branch], cwd);
+      await this.execGitSimple(['push', '--force-with-lease', '-u', 'origin', branch], cwd);
     } catch (err) {
       const msg = `[${this.type}] pushBranchToRemote failed for ${branch}: ${err}\n`;
       console.warn(msg);
