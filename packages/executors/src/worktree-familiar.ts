@@ -233,7 +233,8 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
 
       child.on('close', async (code, signal) => {
         const exitCode = code ?? (signal ? 1 : 0);
-        await this.handleProcessExit(executionId, request, acquired.worktreePath, exitCode, {
+        const effectiveCwd = existsSync(acquired.worktreePath) ? acquired.worktreePath : this.repoDir;
+        await this.handleProcessExit(executionId, request, effectiveCwd, exitCode, {
           signal,
           branch,
           claudeSessionId: entry.claudeSessionId,
@@ -413,7 +414,8 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
 
     child.on('close', async (code, signal) => {
       const exitCode = code ?? (signal ? 1 : 0);
-      await this.handleProcessExit(executionId, request, worktreeDir, exitCode, {
+      const effectiveCwd = existsSync(worktreeDir) ? worktreeDir : this.repoDir;
+      await this.handleProcessExit(executionId, request, effectiveCwd, exitCode, {
         signal,
         branch,
         claudeSessionId: entry.claudeSessionId,

@@ -392,8 +392,8 @@ describe('TaskExecutor', () => {
       );
     });
 
-    it('allows completed local dep with no branch', async () => {
-      let capturedRequest: any;
+    it('rejects completed local dep with no branch (no type exceptions)', async () => {
+      const handleWorkerResponse = vi.fn();
       const tasks = new Map<string, TaskState>();
       tasks.set('dep-local', makeTask({
         id: 'dep-local',
@@ -401,30 +401,16 @@ describe('TaskExecutor', () => {
         config: { familiarType: 'local' },
       }));
 
-      const capturingFamiliar = {
-        type: 'worktree',
-        start: async (req: any) => {
-          capturedRequest = req;
-          return { executionId: 'exec-1', taskId: 'child-task' };
-        },
-        onOutput: () => () => {},
-        onComplete: (_h: any, cb: any) => {
-          cb({ requestId: 'r', actionId: 'child-task', status: 'completed', outputs: { exitCode: 0 } });
-          return () => {};
-        },
-        onHeartbeat: () => () => {},
-      };
-
       const executor = new TaskExecutor({
         orchestrator: {
           getTask: (id: string) => tasks.get(id),
-          handleWorkerResponse: vi.fn(),
+          handleWorkerResponse,
         } as any,
         persistence: { updateTask: vi.fn() } as any,
         familiarRegistry: {
-          getDefault: () => capturingFamiliar,
-          get: () => capturingFamiliar,
-          getAll: () => [capturingFamiliar],
+          getDefault: () => ({ type: 'worktree' }),
+          get: () => ({ type: 'worktree' }),
+          getAll: () => [{ type: 'worktree' }],
         } as any,
         cwd: '/tmp',
       });
@@ -438,8 +424,15 @@ describe('TaskExecutor', () => {
 
       await executor.executeTask(child);
 
-      expect(capturedRequest).toBeDefined();
-      expect(capturedRequest.inputs.upstreamBranches).toBeUndefined();
+      expect(handleWorkerResponse).toHaveBeenCalledWith(
+        expect.objectContaining({
+          actionId: 'child-task',
+          status: 'failed',
+          outputs: expect.objectContaining({
+            error: expect.stringContaining('completed without branch metadata'),
+          }),
+        }),
+      );
     });
 
     it('allows completed dep with branch (happy path)', async () => {
@@ -575,8 +568,8 @@ describe('TaskExecutor', () => {
       );
     });
 
-    it('allows completed local dep with no branch', async () => {
-      let capturedRequest: any;
+    it('rejects completed local dep with no branch (no type exceptions)', async () => {
+      const handleWorkerResponse = vi.fn();
       const tasks = new Map<string, TaskState>();
       tasks.set('dep-local', makeTask({
         id: 'dep-local',
@@ -584,30 +577,16 @@ describe('TaskExecutor', () => {
         config: { familiarType: 'local' },
       }));
 
-      const capturingFamiliar = {
-        type: 'worktree',
-        start: async (req: any) => {
-          capturedRequest = req;
-          return { executionId: 'exec-1', taskId: 'child-task' };
-        },
-        onOutput: () => () => {},
-        onComplete: (_h: any, cb: any) => {
-          cb({ requestId: 'r', actionId: 'child-task', status: 'completed', outputs: { exitCode: 0 } });
-          return () => {};
-        },
-        onHeartbeat: () => () => {},
-      };
-
       const executor = new TaskExecutor({
         orchestrator: {
           getTask: (id: string) => tasks.get(id),
-          handleWorkerResponse: vi.fn(),
+          handleWorkerResponse,
         } as any,
         persistence: { updateTask: vi.fn() } as any,
         familiarRegistry: {
-          getDefault: () => capturingFamiliar,
-          get: () => capturingFamiliar,
-          getAll: () => [capturingFamiliar],
+          getDefault: () => ({ type: 'worktree' }),
+          get: () => ({ type: 'worktree' }),
+          getAll: () => [{ type: 'worktree' }],
         } as any,
         cwd: '/tmp',
       });
@@ -621,8 +600,15 @@ describe('TaskExecutor', () => {
 
       await executor.executeTask(child);
 
-      expect(capturedRequest).toBeDefined();
-      expect(capturedRequest.inputs.upstreamBranches).toBeUndefined();
+      expect(handleWorkerResponse).toHaveBeenCalledWith(
+        expect.objectContaining({
+          actionId: 'child-task',
+          status: 'failed',
+          outputs: expect.objectContaining({
+            error: expect.stringContaining('completed without branch metadata'),
+          }),
+        }),
+      );
     });
 
     it('allows completed dep with branch (happy path)', async () => {

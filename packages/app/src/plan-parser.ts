@@ -201,11 +201,11 @@ export function parsePlan(yamlContent: string, repoDir?: string): PlanDefinition
     };
   });
 
-  // SSH command tasks require repoUrl to clone the repo on the remote host
+  // SSH tasks always require repoUrl to clone the repo on the remote host
   for (const task of tasks) {
-    if (task.familiarType === 'ssh' && task.command && !task.repoUrl) {
+    if (task.familiarType === 'ssh' && !task.repoUrl) {
       throw new PlanParseError(
-        `Task "${task.id}" uses familiarType "ssh" with a command but has no repoUrl. ` +
+        `Task "${task.id}" uses familiarType "ssh" but has no repoUrl. ` +
         `Add a top-level "repoUrl" to your plan YAML (e.g. repoUrl: git@github.com:user/repo.git).`,
       );
     }

@@ -180,12 +180,12 @@ export class TaskExecutor {
     const upstreamBranches = this.collectUpstreamBranches(task);
     const alternatives = this.buildAlternatives(task);
 
-    // Guard: every completed non-local dependency must have branch metadata.
-    // Without it the worktree would run against bare base branch, silently
-    // dropping all upstream implementation changes.
+    // Guard: every completed dependency must have branch metadata.
+    // Without it the downstream worktree would run against bare base branch,
+    // silently dropping all upstream implementation changes.
     for (const depId of task.dependencies) {
       const dep = this.orchestrator.getTask(depId);
-      if (dep && dep.status === 'completed' && !dep.execution.branch && dep.config.familiarType !== 'local') {
+      if (dep && dep.status === 'completed' && !dep.execution.branch) {
         throw new Error(
           `Task "${task.id}": dependency "${depId}" completed without branch metadata` +
           ` — upstream changes would be silently dropped. The plan may need to be restarted.`,

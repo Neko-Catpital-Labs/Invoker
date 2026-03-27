@@ -25,12 +25,10 @@ interface SshEntry extends BaseEntry {
 /**
  * Familiar that executes tasks on a remote machine via SSH key-based auth.
  *
- * When `repoUrl` is set on the work request, clones / worktrees on the remote
+ * Requires `repoUrl` on the work request. Clones / worktrees on the remote
  * under ~/.invoker (mirroring local RepoPool layout), provisions with the same
- * command as WorktreeFamiliar, then runs the task command in that directory.
- *
- * Without `repoUrl`, runs the raw command remotely (default remote shell cwd,
- * usually ~ — suitable only for commands that do not need the repo).
+ * command as WorktreeFamiliar, then runs the task (command or Claude) in that
+ * directory. Always produces a branch and commits on completion.
  */
 export class SshFamiliar extends BaseFamiliar<SshEntry> {
   readonly type = 'ssh';
@@ -153,49 +151,37 @@ fi`;
     }
 
     const repoUrl = request.inputs.repoUrl;
-    const command = request.inputs.command;
-    const useRemoteWorktree = request.actionType === 'command' && !!repoUrl && !!command;
-
-    if (request.actionType === 'command' && command && !repoUrl) {
+    if (!repoUrl) {
       throw new Error(
-        `SSH task "${request.actionId}" has a command but no repoUrl. ` +
-        `SSH command tasks require repoUrl to clone the repo on the remote host. ` +
+        `SSH task "${request.actionId}" requires repoUrl. ` +
         `Add a top-level "repoUrl" to your plan YAML (e.g. repoUrl: git@github.com:user/repo.git).`,
       );
     }
 
-    if (useRemoteWorktree) {
-      return this.startRemoteWorktreeCommand(request, handle, repoUrl!, command!);
-    }
-
-    if (request.actionType === 'claude' && repoUrl) {
-      throw new Error(
-        'SshFamiliar: claude tasks with repoUrl are not supported yet remote worktree + Claude must be wired.',
-      );
-    }
-
-    let remoteCommand: string;
+    let payload: string;
     let claudeSessionId: string | undefined;
 
     if (request.actionType === 'command') {
+      const command = request.inputs.command;
       if (!command) throw new Error('WorkRequest with actionType "command" must have inputs.command');
-      remoteCommand = command;
+      payload = command;
     } else if (request.actionType === 'claude') {
       const session = this.prepareClaudeSession(request);
       claudeSessionId = session.sessionId;
-      remoteCommand = `claude ${session.cliArgs.map(a => this.shellQuote(a)).join(' ')}`;
+      payload = `claude ${session.cliArgs.map(a => this.shellQuote(a)).join(' ')}`;
     } else {
-      remoteCommand = 'echo "Unsupported action type"';
+      payload = 'echo "Unsupported action type"';
     }
 
-    return this.spawnSshRemoteStdin(executionId, request, handle, remoteCommand, claudeSessionId, undefined);
+    return this.startRemoteWorktree(request, handle, repoUrl, payload, claudeSessionId);
   }
 
-  private async startRemoteWorktreeCommand(
+  private async startRemoteWorktree(
     request: WorkRequest,
     handle: FamiliarHandle,
     repoUrl: string,
-    command: string,
+    payload: string,
+    claudeSessionId?: string,
   ): Promise<FamiliarHandle> {
     const executionId = handle.executionId;
     const h = SshFamiliar.urlHash(repoUrl);
@@ -218,8 +204,8 @@ git -C "$CLONE" rev-parse "$BASE"
     const baseHead = (await this.execRemoteCapture(script1)).trim();
     const hash8 = computeBranchHash(
       request.actionId,
-      command,
-      undefined,
+      request.inputs.command,
+      request.inputs.prompt,
       upstreamCommits,
       baseHead,
       salt,
@@ -228,7 +214,7 @@ git -C "$CLONE" rev-parse "$BASE"
     const san = experimentBranch.replace(/\//g, '-');
     const upstreamLines = (request.inputs.upstreamBranches ?? []).join('\n');
     const provB64 = SshFamiliar.b64(DEFAULT_WORKTREE_PROVISION_COMMAND);
-    const cmdB64 = SshFamiliar.b64(command);
+    const payloadB64 = SshFamiliar.b64(payload);
     const branchB64 = SshFamiliar.b64(experimentBranch);
     const upstreamB64 = SshFamiliar.b64(upstreamLines);
     const baseB64 = SshFamiliar.b64(baseRef);
@@ -296,11 +282,11 @@ done <<< "$(echo ${upstreamB64} | base64 -d)"
 cd "$WT"
 echo "[SshFamiliar] Provisioning remote worktree (pnpm install + electron native rebuild)..."
 eval "$(echo ${provB64} | base64 -d)"
-echo "[SshFamiliar] Running task command..."
-echo ${cmdB64} | base64 -d | bash -se
+echo "[SshFamiliar] Running task payload..."
+echo ${payloadB64} | base64 -d | bash -se
 `;
 
-    return this.spawnSshRemoteStdin(executionId, request, handle, script2, undefined, {
+    return this.spawnSshRemoteStdin(executionId, request, handle, script2, claudeSessionId, {
       worktreePath: handle.workspacePath!,
       branch: experimentBranch,
     });
@@ -554,11 +540,22 @@ git push -u origin "$BR"
   }
 
   getRestoredTerminalSpec(meta: PersistedTaskMeta): TerminalSpec {
-    if (meta.workspacePath) {
+    const isRemotePath = meta.workspacePath?.startsWith('~') || meta.workspacePath?.startsWith('/home/' + this.user + '/');
+    if (meta.workspacePath && isRemotePath) {
       const base = this.buildSshArgsInteractive();
       const userAtHost = base[base.length - 1]!;
       const opts = base.slice(0, -1);
       const inner = this.buildRemoteTerminalInner(meta.workspacePath, meta.branch, meta.claudeSessionId);
+      return {
+        command: 'ssh',
+        args: [...opts, '-t', userAtHost, inner],
+      };
+    }
+    if (meta.claudeSessionId || meta.branch) {
+      const base = this.buildSshArgsInteractive();
+      const userAtHost = base[base.length - 1]!;
+      const opts = base.slice(0, -1);
+      const inner = this.buildRemoteTerminalInner('~', meta.branch, meta.claudeSessionId);
       return {
         command: 'ssh',
         args: [...opts, '-t', userAtHost, inner],
