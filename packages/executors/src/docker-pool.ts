@@ -5,17 +5,21 @@ export interface DockerPoolConfig {
   baseImage?: string;
   /** Prefix for cached image names. Default: 'invoker-cache'. */
   imagePrefix?: string;
+  /** Host SSH directory to mount into clone containers for private repo access. */
+  sshDir?: string;
 }
 
 export class DockerPool {
   private readonly baseImage: string;
   private readonly imagePrefix: string;
+  private readonly sshDir: string | undefined;
   /** Track cached image names per repo URL. */
   private cachedImages = new Map<string, string>();
 
   constructor(config: DockerPoolConfig = {}) {
     this.baseImage = config.baseImage ?? 'invoker-agent:latest';
     this.imagePrefix = config.imagePrefix ?? 'invoker-cache';
+    this.sshDir = config.sshDir;
   }
 
   /**
@@ -34,22 +38,16 @@ export class DockerPool {
 
   /**
    * Ensure a cached image exists for the given repo URL.
-   * If not cached:
-   *   1. Start a temp container from baseImage
-   *   2. Run `git clone <repoUrl> /app` inside it
-   *   3. `docker commit` the container as a cached image
-   *   4. Remove the temp container
-   * Returns the cached image name.
+   * Clones the repo into the base image and commits it. No dependency
+   * provisioning -- the user's base image must include all required tooling.
    */
   async ensureImage(docker: any, repoUrl: string): Promise<string> {
     const name = this.imageName(repoUrl);
 
-    // Already cached in memory
     if (this.cachedImages.has(repoUrl)) {
       return this.cachedImages.get(repoUrl)!;
     }
 
-    // Check if image exists in Docker
     try {
       const image = docker.getImage(name);
       await image.inspect();
@@ -59,13 +57,20 @@ export class DockerPool {
       // Image doesn't exist — build it
     }
 
-    // Create temp container from base image, clone repo, commit
+    const binds: string[] = [];
+    if (this.sshDir) {
+      binds.push(`${this.sshDir}:/root/.ssh:ro`);
+    }
+
     const container = await docker.createContainer({
       Image: this.baseImage,
       Entrypoint: ['git'],
       Cmd: ['clone', repoUrl, '/app'],
       WorkingDir: '/',
-      HostConfig: { NetworkMode: 'host' },
+      HostConfig: {
+        NetworkMode: 'host',
+        ...(binds.length > 0 ? { Binds: binds } : {}),
+      },
     });
 
     await container.start();
@@ -76,76 +81,13 @@ export class DockerPool {
       throw new Error(`Failed to clone ${repoUrl} into cached image (exit code ${result.StatusCode})`);
     }
 
-    // Commit the cloned container as a temp image
-    const tempTag = `${this.urlHash(repoUrl)}-cloned`;
-    const tempImageName = `${this.imagePrefix}:${tempTag}`;
     await container.commit({
       repo: this.imagePrefix,
-      tag: tempTag,
+      tag: this.urlHash(repoUrl),
       changes: ['WORKDIR /app'],
     });
 
-    // Remove clone container
     try { await container.remove(); } catch { /* */ }
-
-    // Provision dependencies: detect package manager and install
-    const provisionCmd = [
-      'if [ -f pnpm-lock.yaml ]; then corepack enable 2>/dev/null; corepack prepare pnpm@latest --activate 2>/dev/null; pnpm install --frozen-lockfile;',
-      'elif [ -f package-lock.json ]; then npm ci;',
-      'elif [ -f yarn.lock ]; then npm i -g yarn && yarn install --frozen-lockfile;',
-      'fi',
-    ].join(' ');
-
-    const provisionContainer = await docker.createContainer({
-      Image: tempImageName,
-      Entrypoint: ['/bin/sh'],
-      Cmd: ['-c', provisionCmd],
-      WorkingDir: '/app',
-      HostConfig: { NetworkMode: 'host' },
-    });
-
-    await provisionContainer.start();
-
-    // Capture provisioning logs for error reporting
-    const provisionLogs = await new Promise<string>((resolve) => {
-      let output = '';
-      provisionContainer.logs(
-        { follow: true, stdout: true, stderr: true },
-        (err: Error | null, stream: NodeJS.ReadableStream | undefined) => {
-          if (err || !stream) { resolve(output); return; }
-          stream.on('data', (d: Buffer) => { output += d.toString(); });
-          stream.on('end', () => resolve(output));
-          stream.on('error', () => resolve(output));
-        },
-      );
-    });
-
-    const provisionResult = await provisionContainer.wait();
-
-    if (provisionResult.StatusCode !== 0) {
-      const logs = provisionLogs.trim().slice(-2000); // Last 2000 chars
-      console.error(`[DockerPool] Dependency provisioning failed (exit ${provisionResult.StatusCode}):\n${logs}`);
-      // Clean up before throwing
-      try { await provisionContainer.remove(); } catch { /* */ }
-      try { await docker.getImage(tempImageName).remove({ force: true }); } catch { /* */ }
-      throw new Error(
-        `Docker dependency provisioning failed (exit ${provisionResult.StatusCode}):\n${logs}`,
-      );
-    }
-
-    // Commit the provisioned container as the final cached image
-    await provisionContainer.commit({
-      repo: this.imagePrefix,
-      tag: this.urlHash(repoUrl),
-      changes: ['ENTRYPOINT ["/usr/local/bin/invoker-agent.sh"]', 'WORKDIR /app'],
-    });
-
-    // Clean up provision container and temp image
-    try { await provisionContainer.remove(); } catch { /* */ }
-    try {
-      const tempImage = docker.getImage(tempImageName);
-      await tempImage.remove({ force: true });
-    } catch { /* */ }
 
     this.cachedImages.set(repoUrl, name);
     return name;
