@@ -41,7 +41,7 @@ function createMockDocker() {
 }
 
 describe('DockerPool', () => {
-  it('ensureImage: creates cached image on first call (clone only, no provisioning)', async () => {
+  it('ensureImage: creates cached image on first call (clone + provision)', async () => {
     const pool = new DockerPool();
     const { docker } = createMockDocker();
 
@@ -54,6 +54,7 @@ describe('DockerPool', () => {
     expect(createArgs.Entrypoint).toEqual(['/bin/sh']);
     const cmd = createArgs.Cmd[1];
     expect(cmd).toContain('git clone https://github.com/test/repo.git /app');
+    expect(cmd).toContain('pnpm install --frozen-lockfile');
     expect(cmd).toContain('chmod -R a+rwX /app');
     expect(createArgs.User).toBe('0:0');
     expect(createArgs.Env).toContainEqual(expect.stringContaining('GIT_SSH_COMMAND='));
