@@ -48,6 +48,22 @@ describe('isStale', () => {
     const { getNode, getAttempt } = makeLookups([depA, node], [aAttempt2, bAttempt]);
     expect(isStale(node, getNode, getAttempt)).toBe(true);
   });
+
+  it('returns false when upstreamAttemptIds is empty (backward compat guard)', () => {
+    const depA = withSelectedAttempt(createTaskState('A', 'A', []), 'A-a1');
+    const node = withSelectedAttempt(createTaskState('B', 'B', ['A']), 'B-a1');
+    const aAttempt = createAttempt('A', 1, { status: 'completed' });
+    const bAttempt = createAttempt('B', 1, { status: 'completed', upstreamAttemptIds: [] });
+    const { getNode, getAttempt } = makeLookups([depA, node], [aAttempt, bAttempt]);
+    expect(isStale(node, getNode, getAttempt)).toBe(false);
+  });
+
+  it('returns false for root node with empty upstreamAttemptIds (no deps)', () => {
+    const node = withSelectedAttempt(createTaskState('A', 'A', []), 'A-a1');
+    const attempt = createAttempt('A', 1, { status: 'completed' });
+    const { getNode, getAttempt } = makeLookups([node], [attempt]);
+    expect(isStale(node, getNode, getAttempt)).toBe(false);
+  });
 });
 
 describe('isBlocked', () => {

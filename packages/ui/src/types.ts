@@ -241,6 +241,7 @@ export interface InvokerAPI {
     errors: string[];
   }>;
   setMergeBranch: (workflowId: string, baseBranch: string) => Promise<void>;
+  notifyBranchUpdated: (taskId: string) => Promise<void>;
   approveMerge: (workflowId: string) => Promise<void>;
   resolveConflict: (taskId: string) => Promise<void>;
   fixWithClaude: (taskId: string) => Promise<void>;
