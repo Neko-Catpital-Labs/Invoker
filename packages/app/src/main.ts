@@ -70,7 +70,7 @@ import {
   restartWorkflow as sharedRestartWorkflow,
   selectExperiments as sharedSelectExperiments,
 } from './workflow-actions.js';
-import { spawn } from 'node:child_process';
+import { spawn, execSync } from 'node:child_process';
 import {
   buildLinuxXTerminalBashScript,
   buildMacOSOsascriptArgs,
@@ -1005,6 +1005,27 @@ function setupGuiMode(): void {
         }
       } catch (err) {
         console.error(`[ipc] set-merge-branch failed: ${err}`);
+        throw err;
+      }
+    });
+
+    ipcMain.handle('invoker:notify-branch-updated', async (_event, taskId: string) => {
+      console.log(`[ipc] notify-branch-updated: "${taskId}"`);
+      try {
+        const task = orchestrator.getTask(taskId);
+        let commit: string | undefined;
+        if (task?.execution.branch) {
+          try {
+            commit = execSync(`git rev-parse ${task.execution.branch}`, {
+              cwd: repoRoot,
+              encoding: 'utf-8',
+              stdio: ['ignore', 'pipe', 'ignore'],
+            }).trim();
+          } catch { /* branch may not exist locally */ }
+        }
+        orchestrator.notifyBranchUpdated(taskId, { commit });
+      } catch (err) {
+        console.error(`[ipc] notify-branch-updated failed: ${err}`);
         throw err;
       }
     });

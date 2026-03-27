@@ -34,6 +34,7 @@ interface TaskPanelProps {
   onEditCommand?: (taskId: string, newCommand: string) => void;
   onEditType?: (taskId: string, familiarType: string, remoteTargetId?: string) => void;
   onSetMergeBranch?: (workflowId: string, baseBranch: string) => Promise<void>;
+  onNotifyBranchUpdated?: (taskId: string) => Promise<void>;
   mergeMode?: string;
   onSetMergeMode?: (workflowId: string, mergeMode: string) => Promise<void>;
 }
@@ -114,6 +115,7 @@ export function TaskPanel({
   onEditCommand,
   onEditType,
   onSetMergeBranch,
+  onNotifyBranchUpdated,
   mergeMode,
   onSetMergeMode,
 }: TaskPanelProps) {
@@ -483,6 +485,16 @@ export function TaskPanel({
             className="w-full px-4 py-2 bg-purple-600 hover:bg-purple-500 text-white rounded text-sm font-medium transition-colors"
           >
             Select Experiment
+          </button>
+        )}
+
+        {task.status === 'completed' && task.execution.branch && onNotifyBranchUpdated && (
+          <button
+            onClick={() => onNotifyBranchUpdated(task.id)}
+            className="w-full px-4 py-2 bg-orange-600 hover:bg-orange-500 text-white rounded text-sm font-medium transition-colors"
+            data-testid="notify-branch-updated-btn"
+          >
+            Branch Updated
           </button>
         )}
       </div>

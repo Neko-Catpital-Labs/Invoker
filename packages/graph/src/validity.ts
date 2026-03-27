@@ -25,6 +25,14 @@ export function isStale(
   const attempt = getAttempt(attemptId);
   if (!attempt || attempt.status !== 'completed') return false;
 
+  // Old attempts created before lineage wiring have empty upstreamAttemptIds.
+  // Without this guard, they'd be treated as stale for any dep with a
+  // selectedAttemptId (empty array never includes anything). Treat empty
+  // lineage as "unknown — assume not stale" for backward compatibility.
+  if (attempt.upstreamAttemptIds.length === 0 && node.dependencies.length > 0) {
+    return false;
+  }
+
   return node.dependencies.some((depId) => {
     const dep = getNode(depId);
     if (!dep?.execution.selectedAttemptId) return false;
