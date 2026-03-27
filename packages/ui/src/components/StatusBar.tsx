@@ -11,13 +11,12 @@ import type { TaskState } from '../types.js';
 
 interface StatusBarProps {
   tasks: Map<string, TaskState>;
-  onSystemLog?: () => void;
   activeFilters?: Set<string>;
   onStatusClick?: (filterKey: string) => void;
   onStatusDoubleClick?: (filterKey: string) => void;
 }
 
-export function StatusBar({ tasks, onSystemLog, activeFilters, onStatusClick, onStatusDoubleClick }: StatusBarProps) {
+export function StatusBar({ tasks, activeFilters, onStatusClick, onStatusDoubleClick }: StatusBarProps) {
   let completed = 0;
   let running = 0;
   let failed = 0;
@@ -87,14 +86,6 @@ export function StatusBar({ tasks, onSystemLog, activeFilters, onStatusClick, on
 
   return (
     <div className="flex items-center gap-6 px-4 py-2 bg-gray-800 border-t border-gray-700 text-sm">
-      {onSystemLog && (
-        <button
-          onClick={onSystemLog}
-          className="text-cyan-400 hover:text-cyan-300 font-medium cursor-pointer"
-        >
-          System Log
-        </button>
-      )}
       <span className="text-gray-400">
         Total: <span className="text-gray-100 font-medium">{total}</span>
       </span>

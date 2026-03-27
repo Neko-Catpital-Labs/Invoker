@@ -99,4 +99,14 @@ test.describe('Visual proof capture', () => {
     // After: task panel is open
     await assertPageScreenshot(page, 'dag-after-selection');
   });
+
+  test('status bar — no system log button', async ({ page }) => {
+    await loadPlan(page, TEST_PLAN);
+    await expect(page.locator('[data-testid="rf__node-task-alpha"]')).toBeVisible();
+    const statusBar = page.locator('.bg-gray-800.border-t');
+    await expect(statusBar).toBeVisible();
+    await expect(statusBar.getByText('Total:')).toBeVisible();
+    await expect(statusBar.locator('text=System Log')).not.toBeVisible();
+    await captureScreenshot(page, 'status-bar-no-system-log');
+  });
 });
