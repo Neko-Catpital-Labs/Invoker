@@ -9,3 +9,5 @@ coverage/
 
 packages/app/e2e/visual-proof/
 packages/app/e2e/test-results/
+packages/app/test-results/
+packages/app/test-results/

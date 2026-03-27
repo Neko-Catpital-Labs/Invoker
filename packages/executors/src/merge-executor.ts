@@ -305,12 +305,26 @@ export async function approveMergeImpl(
     const worktreeDir = await host.createMergeWorktree(baseBranch, 'approve-' + workflowId);
     try {
       mergeTrace('GIT_MERGE_SQUASH', { featureBranch, worktreeDir });
+      await ensureLocalBranchForMerge(host, worktreeDir, featureBranch);
       await host.execGitIn(['merge', '--squash', featureBranch], worktreeDir);
       mergeTrace('GIT_COMMIT', { mergeMessage });
       const commitBody = fullSummary ? `${mergeMessage}\n\n${fullSummary}` : mergeMessage;
       await host.execGitIn(['commit', '-m', commitBody], worktreeDir);
-      await host.execGitIn(['update-ref', 'refs/heads/' + baseBranch, 'HEAD'], worktreeDir);
-      await host.execGitIn(['reset', '--hard', baseBranch], host.cwd);
+      const mergeHash = (await host.execGitIn(['rev-parse', 'HEAD'], worktreeDir)).trim();
+      // Fetch squash commit into host.cwd so the hash is valid in its object store
+      await host.execGitIn(['fetch', worktreeDir, 'HEAD'], host.cwd);
+      try {
+        const currentBranch = (await host.execGitIn(['branch', '--show-current'], host.cwd)).trim();
+        if (currentBranch === baseBranch) {
+          await host.execGitIn(['merge', '--ff-only', mergeHash], host.cwd);
+          console.log(`[merge] Synced main working tree to ${baseBranch}`);
+        } else {
+          await host.execGitIn(['update-ref', 'refs/heads/' + baseBranch, mergeHash], host.cwd);
+          console.log(`[merge] Advanced ${baseBranch} ref (cwd on "${currentBranch}")`);
+        }
+      } catch (err) {
+        console.log(`[merge] Failed to advance ${baseBranch}: ${err instanceof Error ? err.message : String(err)}`);
+      }
       mergeTrace('SQUASH_MERGE_COMPLETE', { featureBranch, baseBranch });
       console.log(`[merge] Approved: squash-merged ${featureBranch} into ${baseBranch}`);
     } catch (err) {
@@ -327,7 +341,9 @@ export async function approveMergeImpl(
     const worktreeDir = await host.createMergeWorktree(featureBranch, 'approve-pr-' + workflowId);
     try {
       mergeTrace('GIT_PUSH', { featureBranch, worktreeDir });
-      await host.execGitIn(['push', '--force', '-u', 'origin', featureBranch], worktreeDir);
+      // Push feature branch from clone to host.cwd, then from host.cwd to GitHub
+      await host.execGitIn(['push', '--force', 'origin', `HEAD:refs/heads/${featureBranch}`], worktreeDir);
+      await host.execGitIn(['push', '--force', '-u', 'origin', featureBranch], host.cwd);
       const prUrl = await host.execPr(baseBranch, featureBranch, mergeMessage, fullSummary);
       mergeTrace('PR_CREATED', { featureBranch, baseBranch, prUrl });
       console.log(`[merge] Approved: created pull request ${prUrl}`);
@@ -500,6 +516,8 @@ export async function consolidateAndMergeImpl(
       await host.execGitIn(['merge', '--no-ff', '-m', mergeMsg, branch], worktreeDir);
     }
     console.log(`[merge] Consolidated ${taskBranches.length} task branches into ${featureBranch}`);
+    // Persist feature branch in host.cwd (clone's origin) for later operations
+    await host.execGitIn(['push', '--force', 'origin', `${featureBranch}:refs/heads/${featureBranch}`], worktreeDir);
 
     if (visualProof && onFinish === 'pull_request' && host.runVisualProofCapture) {
       const slug = (featureBranch ?? 'workflow').replace(/\//g, '-');
@@ -521,14 +539,28 @@ export async function consolidateAndMergeImpl(
       if (hasChanges) {
         const commitBody = body ? `${mergeMessage}\n\n${body}` : mergeMessage;
         await host.execGitIn(['commit', '-m', commitBody], worktreeDir);
-        await host.execGitIn(['update-ref', 'refs/heads/' + baseBranch, 'HEAD'], worktreeDir);
-        await host.execGitIn(['reset', '--hard', baseBranch], host.cwd);
-        console.log(`[merge] Squash-merged ${featureBranch} into ${baseBranch}`);
+        const mergeHash = (await host.execGitIn(['rev-parse', 'HEAD'], worktreeDir)).trim();
+        // Fetch squash commit into host.cwd so the hash is valid in its object store
+        await host.execGitIn(['fetch', worktreeDir, 'HEAD'], host.cwd);
+        try {
+          const currentBranch = (await host.execGitIn(['branch', '--show-current'], host.cwd)).trim();
+          if (currentBranch === baseBranch) {
+            await host.execGitIn(['merge', '--ff-only', mergeHash], host.cwd);
+            console.log(`[merge] Synced main working tree to ${baseBranch}`);
+            console.log(`[merge] Squash-merged ${featureBranch} into ${baseBranch}`);
+          } else {
+            await host.execGitIn(['update-ref', 'refs/heads/' + baseBranch, mergeHash], host.cwd);
+            console.log(`[merge] Advanced ${baseBranch} ref (cwd on "${currentBranch}")`);
+          }
+        } catch (err) {
+          console.log(`[merge] Failed to advance ${baseBranch}: ${err instanceof Error ? err.message : String(err)}`);
+        }
       } else {
         console.log(`[merge] No changes to commit — ${baseBranch} already up-to-date with ${featureBranch}`);
       }
     } else if (onFinish === 'pull_request') {
-      await host.execGitIn(['push', '--force', '-u', 'origin', featureBranch], worktreeDir);
+      // Feature branch already pushed to host.cwd above; push from host.cwd to GitHub
+      await host.execGitIn(['push', '--force', '-u', 'origin', featureBranch], host.cwd);
       const prUrl = await host.execPr(baseBranch, featureBranch, workflowName ?? 'Workflow', body);
       console.log(`[merge] Created pull request: ${prUrl}`);
       return prUrl;
