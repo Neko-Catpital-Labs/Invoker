@@ -813,64 +813,98 @@ function setupGuiMode(): void {
       return persistence.loadAllCompletedTasks();
     });
 
-    ipcMain.handle('invoker:get-claude-session', (_event, sessionId: string) => {
+    function parseClaudeSessionJsonl(raw: string): Array<{ role: 'user' | 'assistant'; content: string; timestamp: string }> {
+      const messages: Array<{ role: 'user' | 'assistant'; content: string; timestamp: string }> = [];
+      for (const line of raw.split('\n')) {
+        if (!line.trim()) continue;
+        try {
+          const entry = JSON.parse(line);
+          if (entry.type === 'user' && entry.message?.content) {
+            const content = typeof entry.message.content === 'string'
+              ? entry.message.content
+              : JSON.stringify(entry.message.content);
+            messages.push({ role: 'user', content, timestamp: entry.timestamp ?? '' });
+          } else if (entry.type === 'assistant' && entry.message?.content) {
+            const blocks = Array.isArray(entry.message.content)
+              ? entry.message.content
+              : [entry.message.content];
+            const text = blocks
+              .filter((b: any) => typeof b === 'string' || b?.type === 'text')
+              .map((b: any) => typeof b === 'string' ? b : b.text ?? '')
+              .join('\n');
+            if (text) {
+              messages.push({ role: 'assistant', content: text, timestamp: entry.timestamp ?? '' });
+            }
+          }
+        } catch {
+          // Skip malformed lines
+        }
+      }
+      return messages;
+    }
+
+    function fetchRemoteClaudeSession(
+      sessionId: string,
+      target: { host: string; user: string; sshKeyPath: string; port?: number },
+    ): Promise<string | null> {
+      return new Promise((resolve) => {
+        const script = `find ~/.claude/projects -name '${sessionId}.jsonl' -print -quit 2>/dev/null | head -1 | xargs cat 2>/dev/null`;
+        const sshArgs = [
+          '-i', target.sshKeyPath,
+          '-p', String(target.port ?? 22),
+          '-o', 'StrictHostKeyChecking=accept-new',
+          '-o', 'BatchMode=yes',
+          `${target.user}@${target.host}`,
+          script,
+        ];
+        const child = spawn('ssh', sshArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
+        let stdout = '';
+        child.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
+        child.on('close', (code) => {
+          resolve(code === 0 && stdout.trim() ? stdout : null);
+        });
+        child.on('error', () => resolve(null));
+      });
+    }
+
+    ipcMain.handle('invoker:get-claude-session', async (_event, sessionId: string) => {
       console.log(`[ipc] get-claude-session: "${sessionId}"`);
       try {
+        // Try local first
         const claudeProjectsDir = path.join(homedir(), '.claude', 'projects');
-        if (!existsSync(claudeProjectsDir)) return null;
+        if (existsSync(claudeProjectsDir)) {
+          const projectDirs = readdirSync(claudeProjectsDir, { withFileTypes: true })
+            .filter(d => d.isDirectory())
+            .map(d => d.name);
 
-        const projectDirs = readdirSync(claudeProjectsDir, { withFileTypes: true })
-          .filter(d => d.isDirectory())
-          .map(d => d.name);
-
-        let jsonlPath: string | null = null;
-        for (const dir of projectDirs) {
-          const candidate = path.join(claudeProjectsDir, dir, `${sessionId}.jsonl`);
-          if (existsSync(candidate)) {
-            jsonlPath = candidate;
-            break;
-          }
-        }
-        if (!jsonlPath) return null;
-
-        const raw = readFileSync(jsonlPath, 'utf-8');
-        const messages: Array<{ role: 'user' | 'assistant'; content: string; timestamp: string }> = [];
-
-        for (const line of raw.split('\n')) {
-          if (!line.trim()) continue;
-          try {
-            const entry = JSON.parse(line);
-            if (entry.type === 'user' && entry.message?.content) {
-              const content = typeof entry.message.content === 'string'
-                ? entry.message.content
-                : JSON.stringify(entry.message.content);
-              messages.push({
-                role: 'user',
-                content,
-                timestamp: entry.timestamp ?? '',
-              });
-            } else if (entry.type === 'assistant' && entry.message?.content) {
-              const blocks = Array.isArray(entry.message.content)
-                ? entry.message.content
-                : [entry.message.content];
-              const text = blocks
-                .filter((b: any) => typeof b === 'string' || b?.type === 'text')
-                .map((b: any) => typeof b === 'string' ? b : b.text ?? '')
-                .join('\n');
-              if (text) {
-                messages.push({
-                  role: 'assistant',
-                  content: text,
-                  timestamp: entry.timestamp ?? '',
-                });
-              }
+          for (const dir of projectDirs) {
+            const candidate = path.join(claudeProjectsDir, dir, `${sessionId}.jsonl`);
+            if (existsSync(candidate)) {
+              return parseClaudeSessionJsonl(readFileSync(candidate, 'utf-8'));
             }
-          } catch {
-            // Skip malformed lines
           }
         }
 
-        return messages;
+        // Not found locally — check if this session belongs to an SSH task
+        const allTasks = orchestrator.getAllTasks();
+        const sshTask = allTasks.find(
+          t => t.execution.claudeSessionId === sessionId
+            && t.config.familiarType === 'ssh'
+            && t.config.remoteTargetId,
+        );
+        if (sshTask) {
+          const targetId = sshTask.config.remoteTargetId!;
+          const targets = loadConfig(repoRoot).remoteTargets ?? {};
+          const target = targets[targetId];
+          if (target) {
+            const raw = await fetchRemoteClaudeSession(sessionId, target);
+            if (raw) {
+              return parseClaudeSessionJsonl(raw);
+            }
+          }
+        }
+
+        return null;
       } catch (err) {
         console.error(`[ipc] get-claude-session failed:`, err);
         return null;
