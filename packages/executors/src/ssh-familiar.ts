@@ -546,7 +546,7 @@ git push -u origin "$BR"
         : `${SshFamiliar.sshInteractiveCdFragment(handle.workspacePath)} && exec bash -l`;
       return {
         command: 'ssh',
-        args: [...opts, '-t', userAtHost, 'bash', '-lc', inner],
+        args: [...opts, '-t', userAtHost, inner],
       };
     }
     return {
@@ -565,7 +565,7 @@ git push -u origin "$BR"
         : `${SshFamiliar.sshInteractiveCdFragment(meta.workspacePath)} && exec bash -l`;
       return {
         command: 'ssh',
-        args: [...opts, '-t', userAtHost, 'bash', '-lc', inner],
+        args: [...opts, '-t', userAtHost, inner],
       };
     }
     return {

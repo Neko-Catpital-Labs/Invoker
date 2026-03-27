@@ -2113,6 +2113,49 @@ describe('Orchestrator', () => {
       expect((wf as any).baseBranch).toBe('main');
       expect((wf as any).featureBranch).toBe('feat/test');
     });
+
+    describe('allowGraphMutation merge gate orphaning', () => {
+      it('resubmitting overlapping task IDs orphans first workflow merge gate dependencies', () => {
+        // 1. Load Plan A with two tasks: 'shared-task' and 'unique-a'
+        orchestrator.loadPlan({
+          name: 'Plan A',
+          tasks: [
+            { id: 'shared-task', description: 'Shared', command: 'echo shared' },
+            { id: 'unique-a', description: 'Unique A', command: 'echo a', dependencies: ['shared-task'] },
+          ],
+        });
+
+        const wfAId = orchestrator.getWorkflowIds()[0];
+        const mergeGateBefore = orchestrator.getMergeNode(wfAId);
+
+        // Verify merge gate exists and depends on 'unique-a' (the leaf)
+        expect(mergeGateBefore).toBeDefined();
+        expect(mergeGateBefore!.dependencies).toContain('unique-a');
+
+        // 2. Load Plan B with overlapping 'shared-task' ID
+        orchestrator.loadPlan(
+          { name: 'Plan B', tasks: [{ id: 'shared-task', description: 'Shared (B)', command: 'echo b' }] },
+          { allowGraphMutation: true },
+        );
+
+        // 3. Check: Plan A's 'shared-task' was stolen by Plan B
+        const tasksA = persistence.loadTasks(wfAId);
+        const taskIdsA = tasksA.map(t => t.id);
+
+        // BUG: 'shared-task' is no longer in workflow A — it was overwritten to wf-B
+        expect(taskIdsA).toContain('shared-task');
+
+        // 4. The merge gate should still be resolvable within its workflow
+        const mergeGateAfter = tasksA.find(t => t.config.isMergeNode);
+        expect(mergeGateAfter).toBeDefined();
+
+        // BUG: merge gate depends on 'unique-a', whose own dependency 'shared-task'
+        // is no longer in the same workflow
+        for (const dep of mergeGateAfter!.dependencies) {
+          expect(taskIdsA).toContain(dep);
+        }
+      });
+    });
   });
 
   // ── restart invalidation logging ────────────────────────
