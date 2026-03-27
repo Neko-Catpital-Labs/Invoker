@@ -304,22 +304,15 @@ export class TaskExecutor {
         return registered;
       }
 
-      // Lazy registration for Docker
+      // Per-task Docker instance (each task gets its own container + execGitSimple routing)
       if (effectiveType === 'docker') {
-        const dockerOpts = {
+        const docker = new DockerFamiliar({
           workspaceDir: this.cwd,
-          imageName: this.dockerConfig.imageName,
+          imageName: task.config.dockerImage ?? this.dockerConfig.imageName,
           repoInImage: this.dockerConfig.repoInImage,
-        };
-        // Per-task dockerImage: create a one-off DockerFamiliar (not cached in registry)
-        if (task.config.dockerImage) {
-          const docker = new DockerFamiliar({ ...dockerOpts, imageName: task.config.dockerImage });
-          console.log(`[trace] TaskExecutor.selectFamiliar: task=${task.id} effectiveType=docker dockerImage=${task.config.dockerImage} → docker (per-task image)`);
-          return docker;
-        }
-        const docker = new DockerFamiliar(dockerOpts);
-        this.familiarRegistry.register('docker', docker);
-        console.log(`[trace] TaskExecutor.selectFamiliar: task=${task.id} effectiveType=docker → docker (lazy registered)`);
+        });
+        this.familiarRegistry.register(`docker:${task.id}`, docker);
+        console.log(`[trace] TaskExecutor.selectFamiliar: task=${task.id} effectiveType=docker → docker (per-task)`);
         return docker;
       }
 

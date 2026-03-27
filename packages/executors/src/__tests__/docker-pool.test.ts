@@ -51,8 +51,12 @@ describe('DockerPool', () => {
     expect(docker.createContainer).toHaveBeenCalledTimes(1);
 
     const createArgs = docker.createContainer.mock.calls[0][0];
-    expect(createArgs.Entrypoint).toEqual(['git']);
-    expect(createArgs.Cmd).toEqual(['clone', 'https://github.com/test/repo.git', '/app']);
+    expect(createArgs.Entrypoint).toEqual(['/bin/sh']);
+    const cmd = createArgs.Cmd[1];
+    expect(cmd).toContain('git clone https://github.com/test/repo.git /app');
+    expect(cmd).toContain('chmod -R a+rwX /app');
+    expect(createArgs.User).toBe('0:0');
+    expect(createArgs.Env).toContainEqual(expect.stringContaining('GIT_SSH_COMMAND='));
   });
 
   it('ensureImage: returns cached image on second call', async () => {

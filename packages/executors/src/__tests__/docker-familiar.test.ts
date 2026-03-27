@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 import type { WorkRequest, WorkResponse } from '@invoker/protocol';
-import type { PersistedTaskMeta } from '../familiar.js';
+import type { FamiliarHandle, PersistedTaskMeta } from '../familiar.js';
+import { BaseFamiliar } from '../base-familiar.js';
 
 // ---------------------------------------------------------------------------
 // Mock helpers
@@ -19,32 +20,34 @@ function makeRequest(overrides: Partial<WorkRequest> = {}): WorkRequest {
   };
 }
 
-function createMockLogStream(): EventEmitter {
-  return new EventEmitter();
-}
-
 function createMockContainer(id = 'container-abc123') {
-  const logStream = createMockLogStream();
-
-  let waitResolve: ((value: { StatusCode: number }) => void) | null = null;
-  const waitPromise = new Promise<{ StatusCode: number }>((resolve) => {
-    waitResolve = resolve;
-  });
-
   const container = {
     id,
     start: vi.fn().mockResolvedValue(undefined),
     stop: vi.fn().mockResolvedValue(undefined),
     remove: vi.fn().mockResolvedValue(undefined),
-    logs: vi.fn().mockResolvedValue(logStream),
-    wait: vi.fn().mockReturnValue(waitPromise),
   };
+  return { container };
+}
 
-  return { container, logStream, waitResolve: waitResolve! };
+function createMockChildProcess() {
+  const child = new EventEmitter() as any;
+  child.stdin = { write: vi.fn(), end: vi.fn() };
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  child.pid = 99999999;
+  child.killed = false;
+  child.exitCode = null;
+  child.kill = vi.fn((signal?: string) => {
+    child.killed = true;
+    setTimeout(() => child.emit('close', null, signal ?? 'SIGTERM'), 5);
+    return true;
+  });
+  return child;
 }
 
 // ---------------------------------------------------------------------------
-// Module-level dockerode mock
+// Module-level mocks
 // ---------------------------------------------------------------------------
 
 const mockState = {
@@ -72,6 +75,21 @@ vi.mock('node:fs', async (importOriginal) => {
   };
 });
 
+/** Task child processes created during test — call .emit('close', code) to trigger completion. */
+let taskChildren: ReturnType<typeof createMockChildProcess>[] = [];
+
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = (await importOriginal()) as any;
+  return {
+    ...actual,
+    spawn: vi.fn((..._args: any[]) => {
+      const child = createMockChildProcess();
+      taskChildren.push(child);
+      return child;
+    }),
+  };
+});
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -80,11 +98,16 @@ describe('DockerFamiliar', () => {
   let DockerFamiliar: typeof import('../docker-familiar.js').DockerFamiliar;
   let familiar: InstanceType<typeof DockerFamiliar>;
 
+  // Spies on BaseFamiliar lifecycle methods
+  let syncFromRemoteSpy: ReturnType<typeof vi.spyOn>;
+  let setupTaskBranchSpy: ReturnType<typeof vi.spyOn>;
+  let handleProcessExitSpy: ReturnType<typeof vi.spyOn>;
+  let execRemoteCaptureSpy: ReturnType<typeof vi.spyOn>;
+
   beforeEach(async () => {
     mockState.containers = [];
+    taskChildren = [];
 
-    // First createContainer call is from DockerPool.ensureImage (clone).
-    // Subsequent calls are the actual task container.
     mockState.createContainer = vi.fn().mockImplementation(() => {
       const mc = createMockContainer(`container-${mockState.containers.length}`);
       mockState.containers.push(mc);
@@ -102,7 +125,27 @@ describe('DockerFamiliar', () => {
     const mod = await import('../docker-familiar.js');
     DockerFamiliar = mod.DockerFamiliar;
 
-    // repoInImage: true to skip DockerPool clone in most tests
+    // Mock execRemoteCapture to bypass docker exec CLI for git config
+    execRemoteCaptureSpy = vi.spyOn(
+      DockerFamiliar.prototype as any, 'execRemoteCapture',
+    ).mockResolvedValue('');
+
+    // Mock lifecycle methods so we don't need real git
+    syncFromRemoteSpy = vi.spyOn(
+      BaseFamiliar.prototype as any, 'syncFromRemote',
+    ).mockResolvedValue(undefined);
+
+    setupTaskBranchSpy = vi.spyOn(
+      BaseFamiliar.prototype as any, 'setupTaskBranch',
+    ).mockImplementation(async (_cwd: string, request: WorkRequest, handle: FamiliarHandle) => {
+      handle.branch = `invoker/${request.actionId}`;
+      return undefined;
+    });
+
+    handleProcessExitSpy = vi.spyOn(
+      BaseFamiliar.prototype as any, 'handleProcessExit',
+    ).mockResolvedValue(undefined);
+
     familiar = new DockerFamiliar({
       workspaceDir: '/tmp',
       callbackPort: 4000,
@@ -113,69 +156,170 @@ describe('DockerFamiliar', () => {
   });
 
   afterEach(async () => {
-    for (const mc of mockState.containers) {
-      mc.waitResolve({ StatusCode: 0 });
-    }
     await familiar.destroyAll();
+    vi.restoreAllMocks();
   });
 
   // -------------------------------------------------------------------------
-  // Isolation: no workspaceDir bind mount
+  // Container configuration
   // -------------------------------------------------------------------------
 
+  it('creates container with idle command (tail -f /dev/null)', async () => {
+    await familiar.start(makeRequest());
+
+    const createArgs = mockState.createContainer!.mock.calls[0][0];
+    expect(createArgs.Cmd).toEqual(['tail', '-f', '/dev/null']);
+    expect(createArgs.Entrypoint).toEqual([]);
+  });
+
   it('does NOT bind-mount workspaceDir into container', async () => {
-    const request = makeRequest();
-    await familiar.start(request);
+    await familiar.start(makeRequest());
 
     const createArgs = mockState.createContainer!.mock.calls[0][0];
     const binds: string[] = createArgs.HostConfig.Binds;
-
-    // workspaceDir (/tmp) should NOT appear as /app mount
     const appBinds = binds.filter((b: string) => b.endsWith(':/app') || b.includes(':/app:'));
     expect(appBinds).toHaveLength(0);
   });
 
-  it('still mounts .claude and .ssh directories', async () => {
-    const request = makeRequest();
-    await familiar.start(request);
+  it('mounts SSH keys at both /root/.ssh and /home/invoker/.ssh', async () => {
+    await familiar.start(makeRequest());
 
     const createArgs = mockState.createContainer!.mock.calls[0][0];
     const binds: string[] = createArgs.HostConfig.Binds;
-
-    const claudeBind = binds.find((b: string) => b.includes('.claude'));
-    expect(claudeBind).toBeDefined();
-    expect(claudeBind).not.toContain(':ro');
     expect(binds).toContainEqual(expect.stringContaining(':/home/invoker/.ssh:ro'));
+    expect(binds).toContainEqual(expect.stringContaining(':/root/.ssh:ro'));
   });
 
-  // -------------------------------------------------------------------------
-  // Git wrapper
-  // -------------------------------------------------------------------------
-
-  it('wraps command with git lifecycle script', async () => {
-    const request = makeRequest();
-    await familiar.start(request);
+  it('does NOT include GIT_SSH_COMMAND in container env', async () => {
+    await familiar.start(makeRequest());
 
     const createArgs = mockState.createContainer!.mock.calls[0][0];
-    const cmd: string[] = createArgs.Cmd;
-
-    expect(cmd[0]).toBe('/bin/bash');
-    expect(cmd[1]).toBe('-c');
-    const script = cmd[2];
-    expect(script).toContain('git fetch origin');
-    expect(script).toContain('git checkout -B');
-    expect(script).toContain('invoker/action-1');
-    expect(script).toContain('echo hello');
-    expect(script).toContain('git add -A');
-    expect(script).toContain('git commit --allow-empty');
-    expect(script).toContain('git push -u origin');
-    expect(script).toContain('exit $TASK_EXIT');
+    const env: string[] = createArgs.Env;
+    const sshEnv = env.find((e: string) => e.startsWith('GIT_SSH_COMMAND='));
+    expect(sshEnv).toBeUndefined();
   });
 
-  it('sets handle.branch to the computed branch name', async () => {
-    const request = makeRequest();
-    const handle = await familiar.start(request);
+  it('still mounts .claude directory', async () => {
+    await familiar.start(makeRequest());
+
+    const createArgs = mockState.createContainer!.mock.calls[0][0];
+    const binds: string[] = createArgs.HostConfig.Binds;
+    const claudeBind = binds.find((b: string) => b.includes('.claude'));
+    expect(claudeBind).toBeDefined();
+  });
+
+  // -------------------------------------------------------------------------
+  // Git lifecycle delegation to BaseFamiliar
+  // -------------------------------------------------------------------------
+
+  it('calls execRemoteCapture for one-time git config', async () => {
+    await familiar.start(makeRequest());
+
+    expect(execRemoteCaptureSpy).toHaveBeenCalledWith(
+      expect.stringContaining('git config --global core.sshCommand'),
+    );
+    expect(execRemoteCaptureSpy).toHaveBeenCalledWith(
+      expect.stringContaining('git config --global user.email'),
+    );
+  });
+
+  it('calls syncFromRemote with /app', async () => {
+    await familiar.start(makeRequest());
+
+    expect(syncFromRemoteSpy).toHaveBeenCalledWith('/app', expect.any(String));
+  });
+
+  it('calls setupTaskBranch with /app and correct branch', async () => {
+    await familiar.start(makeRequest());
+
+    expect(setupTaskBranchSpy).toHaveBeenCalledWith(
+      '/app',
+      expect.objectContaining({ actionId: 'action-1' }),
+      expect.any(Object),
+      expect.objectContaining({ branchName: 'invoker/action-1' }),
+    );
+  });
+
+  it('sets handle.branch from setupTaskBranch', async () => {
+    const handle = await familiar.start(makeRequest());
     expect(handle.branch).toBe('invoker/action-1');
+  });
+
+  // -------------------------------------------------------------------------
+  // Task execution via docker exec CLI
+  // -------------------------------------------------------------------------
+
+  it('spawns task command via docker exec as host user', async () => {
+    const { spawn } = await import('node:child_process');
+    await familiar.start(makeRequest());
+
+    // The last spawn call should be the task execution
+    expect(spawn).toHaveBeenCalledWith(
+      'docker',
+      expect.arrayContaining(['exec', '-i']),
+      expect.objectContaining({ detached: true }),
+    );
+
+    // Verify it uses the container ID and runs the task command
+    const lastCall = (spawn as any).mock.calls[(spawn as any).mock.calls.length - 1];
+    const dockerArgs: string[] = lastCall[1];
+    expect(dockerArgs).toContain('exec');
+    expect(dockerArgs).toContain('-i');
+    // Should contain the task command somewhere
+    const bashArg = dockerArgs[dockerArgs.length - 1];
+    expect(bashArg).toContain('echo hello');
+  });
+
+  // -------------------------------------------------------------------------
+  // Completion
+  // -------------------------------------------------------------------------
+
+  it('calls handleProcessExit on task child close', async () => {
+    await familiar.start(makeRequest({ requestId: 'req-exit', actionId: 'act-exit' }));
+
+    // Find the task child (last one created)
+    const taskChild = taskChildren[taskChildren.length - 1];
+    taskChild.emit('close', 0, null);
+
+    // Allow async handler to run
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(handleProcessExitSpy).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ actionId: 'act-exit' }),
+      '/app',
+      0,
+      expect.objectContaining({ branch: 'invoker/act-exit' }),
+    );
+  });
+
+  it('stops container after handleProcessExit completes', async () => {
+    await familiar.start(makeRequest());
+
+    const mc = mockState.containers[0];
+    const taskChild = taskChildren[taskChildren.length - 1];
+    taskChild.emit('close', 0, null);
+
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(mc.container.stop).toHaveBeenCalledWith({ t: 5 });
+  });
+
+  it('passes non-zero exit code to handleProcessExit', async () => {
+    await familiar.start(makeRequest());
+
+    const taskChild = taskChildren[taskChildren.length - 1];
+    taskChild.emit('close', 1, null);
+
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(handleProcessExitSpy).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.any(Object),
+      '/app',
+      1,
+      expect.any(Object),
+    );
   });
 
   // -------------------------------------------------------------------------
@@ -183,25 +327,6 @@ describe('DockerFamiliar', () => {
   // -------------------------------------------------------------------------
 
   describe('claude action type', () => {
-    it('wraps claude CLI with git lifecycle but skips git add/commit (claude auto-commits)', async () => {
-      const request = makeRequest({
-        actionType: 'claude',
-        inputs: { prompt: 'analyze this code', repoUrl: 'https://github.com/test/repo.git' },
-      });
-      await familiar.start(request);
-
-      const createArgs = mockState.createContainer!.mock.calls[0][0];
-      const script: string = createArgs.Cmd[2];
-
-      expect(script).toContain('claude');
-      expect(script).toContain('--session-id');
-      expect(script).toContain('git fetch origin');
-      expect(script).toContain('git push -u origin');
-      // Should NOT contain git add/commit for claude tasks
-      expect(script).not.toContain('git add -A');
-      expect(script).not.toContain('git commit');
-    });
-
     it('sets claudeSessionId on handle', async () => {
       const request = makeRequest({
         actionType: 'claude',
@@ -254,103 +379,17 @@ describe('DockerFamiliar', () => {
   });
 
   // -------------------------------------------------------------------------
-  // Completion
-  // -------------------------------------------------------------------------
-
-  it('onComplete fires with WorkResponse on container exit', async () => {
-    const request = makeRequest({ requestId: 'req-exit', actionId: 'act-exit' });
-    const handle = await familiar.start(request);
-
-    const responsePromise = new Promise<WorkResponse>((resolve) => {
-      familiar.onComplete(handle, (res) => resolve(res));
-    });
-
-    const mc = mockState.containers[0];
-    mc.waitResolve({ StatusCode: 0 });
-
-    const response = await responsePromise;
-    expect(response.requestId).toBe('req-exit');
-    expect(response.actionId).toBe('act-exit');
-    expect(response.status).toBe('completed');
-    expect(response.outputs.exitCode).toBe(0);
-  });
-
-  it('onComplete reports failed status on non-zero exit', async () => {
-    const request = makeRequest({ requestId: 'req-fail', actionId: 'act-fail' });
-    const handle = await familiar.start(request);
-
-    const responsePromise = new Promise<WorkResponse>((resolve) => {
-      familiar.onComplete(handle, (res) => resolve(res));
-    });
-
-    const mc = mockState.containers[0];
-    mc.waitResolve({ StatusCode: 1 });
-
-    const response = await responsePromise;
-    expect(response.status).toBe('failed');
-    expect(response.outputs.exitCode).toBe(1);
-  });
-
-  it('includes claudeSessionId in completion response', async () => {
-    const request = makeRequest({
-      actionType: 'claude',
-      inputs: { prompt: 'test', repoUrl: 'https://github.com/test/repo.git' },
-    });
-    const handle = await familiar.start(request);
-
-    const responsePromise = new Promise<WorkResponse>((resolve) => {
-      familiar.onComplete(handle, (res) => resolve(res));
-    });
-
-    const mc = mockState.containers[0];
-    mc.waitResolve({ StatusCode: 0 });
-
-    const response = await responsePromise;
-    expect(response.outputs.claudeSessionId).toBe(handle.claudeSessionId);
-  });
-
-  // -------------------------------------------------------------------------
   // Container lifecycle
   // -------------------------------------------------------------------------
 
-  it('onOutput streams container logs', async () => {
-    const request = makeRequest();
-    const handle = await familiar.start(request);
-
-    const output: string[] = [];
-    familiar.onOutput(handle, (data) => output.push(data));
-
-    const mc = mockState.containers[0];
-    mc.logStream.emit('data', Buffer.from('line 1\n'));
-    mc.logStream.emit('data', Buffer.from('line 2\n'));
-
-    const containerOutput = output.filter((line) => !line.includes('[DockerFamiliar]') && !line.includes('[docker]'));
-    expect(containerOutput).toEqual(['line 1\n', 'line 2\n']);
-  });
-
   it('kill stops and removes container', async () => {
-    const request = makeRequest();
-    const handle = await familiar.start(request);
+    const handle = await familiar.start(makeRequest());
 
     const mc = mockState.containers[0];
     await familiar.kill(handle);
 
     expect(mc.container.stop).toHaveBeenCalledWith({ t: 5 });
     expect(mc.container.remove).toHaveBeenCalled();
-  });
-
-  it('destroyAll kills all active containers', async () => {
-    await familiar.start(makeRequest({ requestId: 'req-a', actionId: 'act-a' }));
-    await familiar.start(makeRequest({ requestId: 'req-b', actionId: 'act-b' }));
-
-    expect(mockState.containers).toHaveLength(2);
-
-    await familiar.destroyAll();
-
-    for (const mc of mockState.containers) {
-      expect(mc.container.stop).toHaveBeenCalled();
-      expect(mc.container.remove).toHaveBeenCalled();
-    }
   });
 
   it('getTerminalSpec returns docker start + exec bash for command tasks', async () => {
@@ -374,17 +413,15 @@ describe('DockerFamiliar', () => {
 
   describe('repoInImage: false (default, uses DockerPool)', () => {
     it('calls DockerPool to create cached image when repoInImage is false', async () => {
-      // DockerPool clone containers need auto-resolving wait
       let callCount = 0;
       const origCreate = mockState.createContainer!;
       mockState.createContainer = vi.fn().mockImplementation((...args: any[]) => {
         callCount++;
         if (callCount === 1) {
-          // Clone container: auto-resolve wait immediately
-          const mc = createMockContainer(`container-clone`);
+          const mc = createMockContainer('container-clone');
           mockState.containers.push(mc);
-          mc.container.wait = vi.fn().mockResolvedValue({ StatusCode: 0 });
-          mc.container.commit = vi.fn().mockResolvedValue(undefined);
+          (mc.container as any).wait = vi.fn().mockResolvedValue({ StatusCode: 0 });
+          (mc.container as any).commit = vi.fn().mockResolvedValue(undefined);
           return Promise.resolve(mc.container);
         }
         return origCreate(...args);
@@ -401,14 +438,15 @@ describe('DockerFamiliar', () => {
         inputs: { command: 'echo test', repoUrl: 'https://github.com/test/repo.git' },
       }));
 
+      // 2 containers: clone (DockerPool) + task
       expect(mockState.createContainer).toHaveBeenCalledTimes(2);
 
       const cloneArgs = mockState.createContainer!.mock.calls[0][0];
-      expect(cloneArgs.Entrypoint).toEqual(['git']);
-      expect(cloneArgs.Cmd).toEqual(['clone', 'https://github.com/test/repo.git', '/app']);
+      expect(cloneArgs.Entrypoint).toEqual(['/bin/sh']);
+      expect(cloneArgs.Cmd[1]).toContain('git clone https://github.com/test/repo.git /app');
 
       const taskArgs = mockState.createContainer!.mock.calls[1][0];
-      expect(taskArgs.Cmd[0]).toBe('/bin/bash');
+      expect(taskArgs.Cmd).toEqual(['tail', '-f', '/dev/null']);
     });
   });
 
@@ -416,88 +454,10 @@ describe('DockerFamiliar', () => {
     it('uses image directly without calling DockerPool', async () => {
       await familiar.start(makeRequest());
 
-      // Only 1 container: the task container (no clone)
       expect(mockState.createContainer).toHaveBeenCalledTimes(1);
 
       const createArgs = mockState.createContainer!.mock.calls[0][0];
       expect(createArgs.Image).toBe('invoker-agent:latest');
-    });
-  });
-
-  // -------------------------------------------------------------------------
-  // buildWrappedCommand
-  // -------------------------------------------------------------------------
-
-  describe('buildWrappedCommand', () => {
-    it('generates correct script for command tasks', () => {
-      const request = makeRequest({ inputs: { command: 'pnpm test', baseBranch: 'master' } });
-      const cmd = familiar.buildWrappedCommand(
-        ['/bin/sh', '-c', 'pnpm test'],
-        'invoker/test-task',
-        request,
-      );
-
-      expect(cmd[0]).toBe('/bin/bash');
-      expect(cmd[1]).toBe('-c');
-      const script = cmd[2];
-      expect(script).toContain('git config user.email');
-      expect(script).toContain('git fetch origin');
-      expect(script).toContain("git checkout -B 'invoker/test-task' 'origin/master'");
-      expect(script).toContain('git add -A');
-      expect(script).toContain('git commit --allow-empty');
-      expect(script).toContain("git push -u origin 'invoker/test-task'");
-      expect(script).toContain('exit $TASK_EXIT');
-    });
-
-    it('generates correct script for claude tasks (no git add/commit)', () => {
-      const request = makeRequest({
-        actionType: 'claude',
-        inputs: { prompt: 'fix it', baseBranch: 'main' },
-      });
-      const cmd = familiar.buildWrappedCommand(
-        ['claude', '--session-id', 'abc', '-p', 'fix it'],
-        'invoker/fix-task',
-        request,
-      );
-
-      const script = cmd[2];
-      expect(script).toContain('claude');
-      expect(script).toContain('git push');
-      expect(script).not.toContain('git add -A');
-      expect(script).not.toContain('git commit');
-    });
-
-    it('merges upstream branches for fan-in', () => {
-      const request = makeRequest({
-        inputs: {
-          command: 'echo test',
-          upstreamBranches: ['invoker/dep-a', 'invoker/dep-b', 'invoker/dep-c'],
-        },
-      });
-      const cmd = familiar.buildWrappedCommand(
-        ['/bin/sh', '-c', 'echo test'],
-        'invoker/fanin-task',
-        request,
-      );
-
-      const script = cmd[2];
-      // First upstream is the base for checkout
-      expect(script).toContain("git checkout -B 'invoker/fanin-task' 'invoker/dep-a'");
-      // Additional upstreams are merged
-      expect(script).toContain("git merge --no-edit 'invoker/dep-b'");
-      expect(script).toContain("git merge --no-edit 'invoker/dep-c'");
-    });
-
-    it('falls back to origin/HEAD when no base branch', () => {
-      const request = makeRequest({ inputs: { command: 'echo test' } });
-      const cmd = familiar.buildWrappedCommand(
-        ['/bin/sh', '-c', 'echo test'],
-        'invoker/no-base',
-        request,
-      );
-
-      const script = cmd[2];
-      expect(script).toContain("git checkout -B 'invoker/no-base' 'origin/HEAD'");
     });
   });
 
@@ -540,6 +500,10 @@ describe('DockerFamiliar', () => {
       ).toThrow(/No container ID found/);
     });
   });
+
+  // -------------------------------------------------------------------------
+  // Docker daemon availability check
+  // -------------------------------------------------------------------------
 
   describe('Docker daemon availability check', () => {
     it('throws when Docker daemon is not reachable', async () => {

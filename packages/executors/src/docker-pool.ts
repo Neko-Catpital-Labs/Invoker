@@ -64,9 +64,13 @@ export class DockerPool {
 
     const container = await docker.createContainer({
       Image: this.baseImage,
-      Entrypoint: ['git'],
-      Cmd: ['clone', repoUrl, '/app'],
+      Entrypoint: ['/bin/sh'],
+      Cmd: ['-c', `git clone ${repoUrl} /app && chmod -R a+rwX /app`],
       WorkingDir: '/',
+      User: '0:0',
+      Env: [
+        'GIT_SSH_COMMAND=ssh -o StrictHostKeyChecking=accept-new -F /dev/null',
+      ],
       HostConfig: {
         NetworkMode: 'host',
         ...(binds.length > 0 ? { Binds: binds } : {}),
