@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { spawn, type ChildProcess } from 'node:child_process';
 import type { WorkRequest, WorkResponse } from '@invoker/protocol';
 import type { Familiar, FamiliarHandle, PersistedTaskMeta, TerminalSpec, Unsubscribe } from './familiar.js';
+import { bashPreserveOrReset, bashMergeUpstreams, parsePreserveResult, parseMergeError } from './branch-utils.js';
 
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
 const DEFAULT_MAX_DURATION_MS = 4 * 60 * 60 * 1000; // 4 hours
@@ -35,8 +36,6 @@ export interface SetupBranchOptions {
   base?: string;
   /** If set, use `git worktree add` instead of `git checkout`. Value = worktree dir path. */
   worktreeDir?: string;
-  /** Skip upstream branch merging (default: false). Caller handles upstream merging separately. */
-  skipUpstreams?: boolean;
 }
 
 export class MergeConflictError extends Error {
@@ -335,6 +334,41 @@ export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar
   // ── Shared branch lifecycle ────────────────────────────────
 
   /**
+   * Execute a bash script and return its stdout.
+   * Default implementation spawns bash locally. Subclasses override for their
+   * transport (e.g., DockerFamiliar routes through docker exec, SshFamiliar
+   * routes through SSH).
+   */
+  protected runBash(script: string, cwd: string): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const child = spawn('bash', ['-c', script], {
+        cwd,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+
+      let stdout = '';
+      let stderr = '';
+      child.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
+      child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
+
+      child.on('error', (err) => {
+        reject(new Error(`Failed to spawn bash: ${err.message}`));
+      });
+
+      child.on('close', (code) => {
+        if (code === 0) {
+          resolve(stdout);
+        } else {
+          const err = new Error(`bash exited with code ${code}: ${stderr.trim()}`);
+          (err as any).exitCode = code;
+          (err as any).stderr = stderr;
+          reject(err);
+        }
+      });
+    });
+  }
+
+  /**
    * Create a task-specific branch based off the upstream dependency's branch.
    * The upstream branch carries transitive history by construction, so no
    * explicit merging is needed for linear chains. For DAG fan-in (multiple
@@ -352,74 +386,44 @@ export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar
     try {
       const branchName = opts?.branchName ?? `invoker/${request.actionId}`;
       const upstreams = request.inputs.upstreamBranches ?? [];
+      // When opts.base is provided, all upstreams need merging.
+      // When not provided, upstreams[0] becomes the base and the rest are merged.
+      const baseFromUpstream = !opts?.base && upstreams.length > 0;
       const base = opts?.base ?? upstreams[0] ?? request.inputs.baseBranch ?? 'HEAD';
       const mergeCwd = opts?.worktreeDir ?? cwd;
 
-      // Worktrees don't need original branch tracking (they're separate checkouts)
       let originalBranch: string | undefined;
       if (!opts?.worktreeDir) {
         originalBranch = (await this.execGitSimple(['branch', '--show-current'], cwd)).trim();
       }
 
-      // If the task branch already exists and has commits ahead of the base,
-      // preserve it (e.g., AI fix or manual commit) and merge the base in.
-      // Otherwise, force-create from the base for a clean start.
-      let preserved = false;
-      try {
-        await this.execGitSimple(['rev-parse', '--verify', branchName], cwd);
-        // Resolve base to concrete SHA so rev-list comparison is unambiguous
-        const baseSha = (await this.execGitSimple(['rev-parse', base], cwd)).trim();
-        const aheadCount = (await this.execGitSimple(
-          ['rev-list', '--count', `${baseSha}..${branchName}`], cwd,
-        )).trim();
-        if (parseInt(aheadCount, 10) > 0) {
-          console.log(`[setupTaskBranch] PRESERVING ${branchName} (${aheadCount} commits ahead of ${base})`);
-          if (opts?.worktreeDir) {
-            // Worktree mode: attach the existing branch without resetting it
-            await this.execGitSimple(
-              ['worktree', 'add', opts.worktreeDir, branchName], cwd,
-            );
-            await this.execGitSimple(['merge', '--no-edit', baseSha], opts.worktreeDir);
-          } else {
-            await this.execGitSimple(['checkout', branchName], cwd);
-            await this.execGitSimple(['merge', '--no-edit', base], cwd);
+      const preserveScript = bashPreserveOrReset({
+        repoDir: cwd,
+        worktreeDir: opts?.worktreeDir,
+        branch: branchName,
+        base,
+      });
+      const preserveStdout = await this.runBash(preserveScript, cwd);
+      const { preserved } = parsePreserveResult(preserveStdout);
+      console.log(`[setupTaskBranch] ${preserved ? 'PRESERVING' : 'FORCE-RESET'} ${branchName} (base=${base})`);
+
+      const upstreamsToMerge = baseFromUpstream ? upstreams.slice(1) : upstreams;
+      if (upstreamsToMerge.length > 0) {
+        const mergeScript = bashMergeUpstreams({
+          worktreeDir: mergeCwd,
+          upstreamBranches: upstreamsToMerge,
+          skipAncestors: true,
+        });
+        try {
+          await this.runBash(mergeScript, mergeCwd);
+        } catch (err: any) {
+          const exitCode = err.exitCode ?? 1;
+          const stderr = err.stderr ?? err.message ?? '';
+          const parsed = parseMergeError(exitCode, stderr);
+          if (exitCode === 31) {
+            throw new MergeConflictError(parsed.failedBranch, parsed.conflictFiles, err);
           }
-          preserved = true;
-        }
-      } catch {
-        // Branch doesn't exist or rev-list failed — fall through to force-create
-      }
-
-      if (!preserved) {
-        console.log(`[setupTaskBranch] FORCE-RESET ${branchName} → ${base} (no commits ahead or branch did not exist)`);
-        if (opts?.worktreeDir) {
-          await this.execGitSimple(
-            ['worktree', 'add', '-B', branchName, opts.worktreeDir, base], cwd,
-          );
-        } else {
-          await this.execGitSimple(['checkout', '-B', branchName, base], cwd);
-        }
-      }
-
-      if (!opts?.skipUpstreams) {
-        for (const ub of upstreams.slice(1)) {
-          try {
-            const mergeMsg = await this.buildUpstreamMergeMessage(ub, mergeCwd);
-            await this.execGitSimple(['merge', '--no-edit', '-m', mergeMsg, ub], mergeCwd);
-          } catch (err) {
-            let conflictFiles: string[] = [];
-            try {
-              const raw = await this.execGitSimple(['diff', '--name-only', '--diff-filter=U'], mergeCwd);
-              conflictFiles = raw.split('\n').filter(Boolean);
-            } catch { /* best effort */ }
-
-            try {
-              await this.execGitSimple(['merge', '--abort'], mergeCwd);
-            } catch {
-              // merge --abort can fail if there's nothing to abort
-            }
-            throw new MergeConflictError(ub, conflictFiles, err);
-          }
+          throw err;
         }
       }
 
@@ -429,7 +433,6 @@ export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar
       if (err instanceof MergeConflictError) {
         throw err;
       }
-      // In worktree mode, creation failure is fatal — re-throw
       if (opts?.worktreeDir) {
         throw err;
       }

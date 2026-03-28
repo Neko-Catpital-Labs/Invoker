@@ -194,11 +194,12 @@ describe('rebase-and-retry: branch deletion before restart', { timeout: 120_000 
   it('with branch deletion (fix): fresh branch from new HEAD, stale work removed', async () => {
     const { task, executor, orchestrator, persistence } = buildHarness();
 
-    // Step 1: Execute task → creates invoker/task-a with a task commit
+    // Step 1: Execute task → creates experiment/task-a-<hash> with a task commit
     await executeTask(executor, task);
-    expect(branchExists(tmpDir, 'invoker/task-a')).toBe(true);
+    const branchFirst = task.execution.branch!;
+    expect(branchExists(tmpDir, branchFirst)).toBe(true);
 
-    const oldTaskCommit = getSha(tmpDir, 'invoker/task-a');
+    const oldTaskCommit = getSha(tmpDir, branchFirst);
 
     // Step 2: Add commit Y to master
     const commitY = addCommitToMaster(tmpDir, 'new-feature.txt', 'commit Y: new feature');
@@ -212,17 +213,18 @@ describe('rebase-and-retry: branch deletion before restart', { timeout: 120_000 
     await rebaseAndRetry('task-a', deps);
 
     // Branch should have been deleted by rebaseAndRetry
-    expect(branchExists(tmpDir, 'invoker/task-a')).toBe(false);
+    expect(branchExists(tmpDir, branchFirst)).toBe(false);
 
     // Step 4: Re-execute the task (simulates TaskExecutor running the restarted task)
     await executeTask(executor, task);
+    const branchAfter = task.execution.branch!;
 
     // Assertions:
-    // (a) commit Y IS an ancestor of invoker/task-a (new master is included)
-    expect(isAncestor(tmpDir, commitY, 'invoker/task-a')).toBe(true);
+    // (a) commit Y IS an ancestor of the new branch (new master is included)
+    expect(isAncestor(tmpDir, commitY, branchAfter)).toBe(true);
 
-    // (b) old task commit SHA is NOT an ancestor of invoker/task-a (stale work removed)
-    expect(isAncestor(tmpDir, oldTaskCommit, 'invoker/task-a')).toBe(false);
+    // (b) old task commit SHA is NOT an ancestor of the new branch (stale work removed)
+    expect(isAncestor(tmpDir, oldTaskCommit, branchAfter)).toBe(false);
   });
 
   it('without branch deletion (old behavior): setupTaskBranch preserves stale branch', async () => {

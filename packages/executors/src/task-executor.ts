@@ -142,12 +142,6 @@ export class TaskExecutor {
   }
 
   private async executeTaskInner(task: TaskState): Promise<void> {
-    // Merge nodes: execute git consolidation/merge or auto-complete
-    if (task.config.isMergeNode) {
-      await this.executeMergeNode(task);
-      return;
-    }
-
     // Pivot tasks with experimentVariants: synthesize a spawn_experiments
     // response instead of running through the familiar.
     if (task.config.pivot && task.config.experimentVariants && task.config.experimentVariants.length > 0) {
@@ -183,13 +177,16 @@ export class TaskExecutor {
     // Guard: every completed dependency must have branch metadata.
     // Without it the downstream worktree would run against bare base branch,
     // silently dropping all upstream implementation changes.
-    for (const depId of task.dependencies) {
-      const dep = this.orchestrator.getTask(depId);
-      if (dep && dep.status === 'completed' && !dep.execution.branch) {
-        throw new Error(
-          `Task "${task.id}": dependency "${depId}" completed without branch metadata` +
-          ` — upstream changes would be silently dropped. The plan may need to be restarted.`,
-        );
+    // Skip for merge nodes: they collect branches from the full workflow, not just direct deps.
+    if (!task.config.isMergeNode) {
+      for (const depId of task.dependencies) {
+        const dep = this.orchestrator.getTask(depId);
+        if (dep && dep.status === 'completed' && !dep.execution.branch) {
+          throw new Error(
+            `Task "${task.id}": dependency "${depId}" completed without branch metadata` +
+            ` — upstream changes would be silently dropped. The plan may need to be restarted.`,
+          );
+        }
       }
     }
 
@@ -272,14 +269,35 @@ export class TaskExecutor {
 
     // Wait for completion and feed response to orchestrator
     return new Promise<void>((resolvePromise) => {
-      familiar.onComplete(handle, (response: WorkResponse) => {
-        this.callbacks.onComplete?.(task.id, response);
+      familiar.onComplete(handle, async (response: WorkResponse) => {
+        try {
+          // Merge nodes: run consolidation/finish logic after familiar completes
+          if (task.config.isMergeNode) {
+            await this.executeMergeNode(task);
+            resolvePromise();
+            return;
+          }
 
-        const newlyStarted = this.orchestrator.handleWorkerResponse(response) ?? [];
+          this.callbacks.onComplete?.(task.id, response);
 
-        // Execute any newly started tasks returned by the orchestrator
-        if (newlyStarted.length > 0) {
-          this.executeTasks(newlyStarted);
+          const newlyStarted = this.orchestrator.handleWorkerResponse(response) ?? [];
+
+          if (newlyStarted.length > 0) {
+            this.executeTasks(newlyStarted);
+          }
+        } catch (err) {
+          console.error(`[TaskExecutor] onComplete handler failed for task=${task.id}:`, err);
+          const errResponse: WorkResponse = {
+            requestId: response.requestId,
+            actionId: task.id,
+            status: 'failed',
+            outputs: {
+              exitCode: 1,
+              error: err instanceof Error ? (err.stack ?? err.message) : String(err),
+            },
+          };
+          this.callbacks.onComplete?.(task.id, errResponse);
+          this.orchestrator.handleWorkerResponse(errResponse);
         }
 
         resolvePromise();
@@ -487,8 +505,20 @@ export class TaskExecutor {
     leafTaskIds?: readonly string[],
     body?: string,
     visualProof?: boolean,
+    mergeNodeTaskId?: string,
   ): Promise<string | undefined> {
-    return consolidateAndMergeImpl(this, onFinish, baseBranch, featureBranch, workflowId, workflowName, leafTaskIds, body, visualProof);
+    return consolidateAndMergeImpl(
+      this,
+      onFinish,
+      baseBranch,
+      featureBranch,
+      workflowId,
+      workflowName,
+      leafTaskIds,
+      body,
+      visualProof,
+      mergeNodeTaskId,
+    );
   }
 
   /**

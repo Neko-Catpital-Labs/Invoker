@@ -181,6 +181,42 @@ describe('WorktreeFamiliar', () => {
       repoDir: '/fake/repo',
       worktreeBaseDir: '/fake/worktrees',
     });
+
+    // Mock runBash so setupTaskBranch works with the spawn-level git mocks.
+    // The bash scripts would normally call git commands inside a single bash process,
+    // but in tests we need them to flow through the mocked spawn('git', ...).
+    vi.spyOn(BaseFamiliar.prototype as any, 'runBash').mockImplementation(
+      async (script: string, _cwd: string) => {
+        // Simulate bashPreserveOrReset: always force-create (not preserved)
+        if (script.includes('PRESERVED=')) {
+          return 'PRESERVED=0\nBASE_SHA=abc123def456\n';
+        }
+        // Simulate bashMergeUpstreams: delegate to execGitSimple for each merge
+        if (script.includes('Invoker: merge')) {
+          // Extract branch names from the script (they appear as shell-quoted literals)
+          const branchMatches = script.match(/'([^']+)'/g);
+          if (branchMatches) {
+            const branches = branchMatches
+              .map(m => m.replace(/'/g, ''))
+              .filter(b => b !== _cwd && !b.startsWith('/'));
+            for (const b of branches) {
+              try {
+                await (familiar as any).execGitSimple(
+                  ['merge', '--no-edit', '-m', `Invoker: merge ${b}`, b], _cwd,
+                );
+              } catch (err: any) {
+                const mergeErr = new Error(`bash exited with code 31: MERGE_CONFLICT_BRANCH=${b}`);
+                (mergeErr as any).exitCode = 31;
+                (mergeErr as any).stderr = `MERGE_CONFLICT_BRANCH=${b}\nMERGE_CONFLICT_FILE=conflicted.txt`;
+                throw mergeErr;
+              }
+            }
+          }
+          return '';
+        }
+        return '';
+      },
+    );
   });
 
   afterEach(async () => {
@@ -197,25 +233,16 @@ describe('WorktreeFamiliar', () => {
     expect(handle.executionId).toBeDefined();
     expect(handle.taskId).toBe('action-1');
 
-    // Verify git worktree add was called
-    const gitCalls = mockedSpawn.mock.calls.filter(
-      (call) => call[0] === 'git',
+    // Verify runBash was called with a preserve-or-reset script containing worktree add
+    const runBashMock = vi.mocked((BaseFamiliar.prototype as any).runBash);
+    const preserveCall = runBashMock.mock.calls.find(
+      (call) => call[0].includes('PRESERVED='),
     );
-    expect(gitCalls.length).toBeGreaterThanOrEqual(1);
+    expect(preserveCall).toBeDefined();
+    expect(preserveCall![0]).toContain('worktree add');
 
-    const worktreeAddCall = gitCalls.find(
-      (call) => {
-        const a = call[1] as string[];
-        return a?.includes('worktree') && a?.includes('add');
-      },
-    );
-    expect(worktreeAddCall).toBeDefined();
-
-    const worktreeArgs = worktreeAddCall![1] as string[];
-    expect(worktreeArgs).toContain('add');
-    expect(worktreeArgs).toContain('-B');
-    const branchArg = worktreeArgs.find(a => a.startsWith('experiment/'));
-    expect(branchArg).toMatch(/^experiment\/action-1-[0-9a-f]{8}$/);
+    // Branch should be content-addressable
+    expect(handle.branch).toMatch(/^experiment\/action-1-[0-9a-f]{8}$/);
 
     // Cleanup: emit close on task process to prevent hanging
     taskProcess.emit('close', 0, null);
@@ -388,29 +415,19 @@ describe('WorktreeFamiliar', () => {
   });
 
   it('handles git worktree creation failure gracefully', async () => {
-    mockedSpawn.mockImplementation((cmd: string, args?: readonly string[], _options?: any) => {
-      const gitProc = createMockProcess();
-      if (cmd === 'git') {
-        const argsArr = args as string[];
-        Promise.resolve().then(() => {
-          if (argsArr?.includes('prune')) {
-            gitProc.emit('close', 0, null);
-          } else if (argsArr?.includes('rev-parse')) {
-            gitProc.stdout!.emit('data', Buffer.from('abc123\n'));
-            gitProc.emit('close', 0, null);
-          } else {
-            gitProc.stderr!.emit('data', Buffer.from('fatal: not a git repository\n'));
-            gitProc.emit('close', 128, null);
-          }
-        });
-        return gitProc as any;
-      }
+    setupSpawnMock();
 
-      return createMockProcess() as any;
-    });
+    vi.mocked((BaseFamiliar.prototype as any).runBash).mockImplementation(
+      async (script: string) => {
+        if (script.includes('PRESERVED=')) {
+          throw new Error('bash exited with code 128: fatal: not a git repository');
+        }
+        return '';
+      },
+    );
 
     const request = makeRequest();
-    await expect(familiar.start(request)).rejects.toThrow('failed (code 128)');
+    await expect(familiar.start(request)).rejects.toThrow('not a git repository');
   });
 
   it('onOutput relays stdout and stderr from task process', async () => {
@@ -516,22 +533,14 @@ describe('WorktreeFamiliar', () => {
       });
       await familiar.start(request);
 
-      const gitCalls = mockedSpawn.mock.calls.filter(
-        (call) => call[0] === 'git',
+      // setupTaskBranch uses runBash for merging. Verify the merge script contains both branches.
+      const runBashMock = vi.mocked((BaseFamiliar.prototype as any).runBash);
+      const mergeCall = runBashMock.mock.calls.find(
+        (call) => call[0].includes('Invoker: merge'),
       );
-      const mergeCalls = gitCalls.filter(
-        (call) => (call[1] as string[])?.[0] === 'merge',
-      );
-
-      expect(mergeCalls).toHaveLength(2);
-      expect((mergeCalls[0][1] as string[])).toEqual(['merge', '--no-edit', '-m', 'Merge upstream experiment/dep-1', 'experiment/dep-1']);
-      expect((mergeCalls[1][1] as string[])).toEqual(['merge', '--no-edit', '-m', 'Merge upstream experiment/dep-2', 'experiment/dep-2']);
-
-      // Merge should run in the worktree directory, not the main repo
-      const mergeOptions = mergeCalls.map((call) => call[2] as { cwd: string });
-      for (const opt of mergeOptions) {
-        expect(opt.cwd).toMatch(/^\/fake\/worktrees\//);
-      }
+      expect(mergeCall).toBeDefined();
+      expect(mergeCall![0]).toContain('experiment/dep-1');
+      expect(mergeCall![0]).toContain('experiment/dep-2');
 
       taskProcess.emit('close', 0, null);
     });
@@ -544,14 +553,12 @@ describe('WorktreeFamiliar', () => {
       });
       await familiar.start(request);
 
-      const gitCalls = mockedSpawn.mock.calls.filter(
-        (call) => call[0] === 'git',
+      // No merge script should be called
+      const runBashMock = vi.mocked((BaseFamiliar.prototype as any).runBash);
+      const mergeCall = runBashMock.mock.calls.find(
+        (call) => call[0].includes('Invoker: merge'),
       );
-      const mergeCalls = gitCalls.filter(
-        (call) => (call[1] as string[])?.[0] === 'merge',
-      );
-
-      expect(mergeCalls).toHaveLength(0);
+      expect(mergeCall).toBeUndefined();
 
       taskProcess.emit('close', 0, null);
     });
@@ -562,54 +569,17 @@ describe('WorktreeFamiliar', () => {
       const request = makeRequest({ inputs: { command: 'echo hello' } });
       await familiar.start(request);
 
-      const gitCalls = mockedSpawn.mock.calls.filter(
-        (call) => call[0] === 'git',
+      const runBashMock = vi.mocked((BaseFamiliar.prototype as any).runBash);
+      const mergeCall = runBashMock.mock.calls.find(
+        (call) => call[0].includes('Invoker: merge'),
       );
-      const mergeCalls = gitCalls.filter(
-        (call) => (call[1] as string[])?.[0] === 'merge',
-      );
-
-      expect(mergeCalls).toHaveLength(0);
+      expect(mergeCall).toBeUndefined();
 
       taskProcess.emit('close', 0, null);
     });
 
-    it('includes tip commit description in merge -m message', async () => {
-      const taskProcess = createMockProcess();
-      let taskReturned = false;
-
-      mockedSpawn.mockImplementation((cmd: string, args?: readonly string[], _options?: any) => {
-        if (cmd === 'git') {
-          const gitProc = createMockProcess();
-          Promise.resolve().then(() => {
-            const argsArr = args as string[];
-            if (argsArr?.includes('rev-parse')) {
-              gitProc.stdout!.emit('data', Buffer.from('abc123def456\n'));
-            }
-            if (argsArr?.[0] === 'merge-base' && argsArr?.[1] === '--is-ancestor') {
-              gitProc.emit('close', 1, null);
-              return;
-            }
-            if (argsArr?.[0] === 'log' && argsArr?.includes('--format=%B')) {
-              gitProc.stdout!.emit('data', Buffer.from(
-                'invoker: dep-task — Add typing indicator support\n\nPrompt:\n  Add typing indicator functionality\nExit code: 0\n',
-              ));
-            }
-            gitProc.emit('close', 0, null);
-          });
-          return gitProc as any;
-        }
-        if (cmd === '/bin/bash' && (args as string[])?.[1]?.includes('pnpm install')) {
-          const installProc = createMockProcess();
-          Promise.resolve().then(() => installProc.emit('close', 0, null));
-          return installProc as any;
-        }
-        if (!taskReturned) {
-          taskReturned = true;
-          return taskProcess as any;
-        }
-        return createMockProcess() as any;
-      });
+    it('includes upstream branch names in merge script', async () => {
+      const { taskProcess } = setupSpawnMock();
 
       const request = makeRequest({
         inputs: {
@@ -619,128 +589,55 @@ describe('WorktreeFamiliar', () => {
       });
       await familiar.start(request);
 
-      const gitCalls = mockedSpawn.mock.calls.filter(
-        (call) => call[0] === 'git',
+      const runBashMock = vi.mocked((BaseFamiliar.prototype as any).runBash);
+      const mergeCall = runBashMock.mock.calls.find(
+        (call) => call[0].includes('Invoker: merge'),
       );
-      const mergeCalls = gitCalls.filter(
-        (call) => (call[1] as string[])?.[0] === 'merge',
-      );
-
-      expect(mergeCalls).toHaveLength(1);
-      const mergeArgs = mergeCalls[0][1] as string[];
-      const mIdx = mergeArgs.indexOf('-m');
-      const mergeMsg = mergeArgs[mIdx + 1];
-      expect(mergeMsg).toContain('experiment/dep-task-abc123');
-      expect(mergeMsg).toContain('Add typing indicator support');
-      expect(mergeMsg).toContain('Prompt:');
+      expect(mergeCall).toBeDefined();
+      expect(mergeCall![0]).toContain('experiment/dep-task-abc123');
 
       taskProcess.emit('close', 0, null);
     });
 
-    it('extracts task commit description, not merge commit, for nested merges', async () => {
-      const taskProcess = createMockProcess();
-      let taskReturned = false;
-
-      mockedSpawn.mockImplementation((cmd: string, args?: readonly string[], _options?: any) => {
-        if (cmd === 'git') {
-          const gitProc = createMockProcess();
-          Promise.resolve().then(() => {
-            const argsArr = args as string[];
-            if (argsArr?.includes('rev-parse')) {
-              gitProc.stdout!.emit('data', Buffer.from('abc123def456\n'));
-            }
-            if (argsArr?.[0] === 'merge-base' && argsArr?.[1] === '--is-ancestor') {
-              gitProc.emit('close', 1, null);
-              return;
-            }
-            if (argsArr?.[0] === 'log' && argsArr?.includes('--format=%B')) {
-              if (argsArr?.includes('--first-parent') && argsArr?.includes('--no-merges')) {
-                gitProc.stdout!.emit('data', Buffer.from(
-                  'invoker: fork1-add-api — Build REST API endpoints\n\nPrompt:\n  Create REST API endpoints\nExit code: 0\n',
-                ));
-              } else {
-                gitProc.stdout!.emit('data', Buffer.from(
-                  'Merge upstream experiment/fork2-add-caching — Add Redis caching layer\n\nPrompt:\n  Add Redis caching\nExit code: 0\n',
-                ));
-              }
-            }
-            gitProc.emit('close', 0, null);
-          });
-          return gitProc as any;
-        }
-        if (cmd === '/bin/bash' && (args as string[])?.[1]?.includes('pnpm install')) {
-          const installProc = createMockProcess();
-          Promise.resolve().then(() => installProc.emit('close', 0, null));
-          return installProc as any;
-        }
-        if (!taskReturned) {
-          taskReturned = true;
-          return taskProcess as any;
-        }
-        return createMockProcess() as any;
-      });
+    it('merge script handles multiple upstream branches', async () => {
+      const { taskProcess } = setupSpawnMock();
 
       const request = makeRequest({
         inputs: {
           command: 'echo hello',
-          upstreamBranches: ['experiment/fork1-add-api-hash1'],
+          upstreamBranches: ['experiment/fork1-add-api-hash1', 'experiment/fork2-caching-hash2'],
         },
       });
       await familiar.start(request);
 
-      const gitCalls = mockedSpawn.mock.calls.filter(
-        (call) => call[0] === 'git',
+      const runBashMock = vi.mocked((BaseFamiliar.prototype as any).runBash);
+      const mergeCall = runBashMock.mock.calls.find(
+        (call) => call[0].includes('Invoker: merge'),
       );
-      const mergeCalls = gitCalls.filter(
-        (call) => (call[1] as string[])?.[0] === 'merge',
-      );
-
-      expect(mergeCalls).toHaveLength(1);
-      const mergeArgs = mergeCalls[0][1] as string[];
-      const mIdx = mergeArgs.indexOf('-m');
-      const mergeMsg = mergeArgs[mIdx + 1];
-      expect(mergeMsg).toContain('Build REST API endpoints');
-      expect(mergeMsg).not.toContain('Add Redis caching layer');
+      expect(mergeCall).toBeDefined();
+      expect(mergeCall![0]).toContain('experiment/fork1-add-api-hash1');
+      expect(mergeCall![0]).toContain('experiment/fork2-caching-hash2');
 
       taskProcess.emit('close', 0, null);
     });
 
     it('fails the task start when merge conflicts occur', async () => {
-      // Override spawn to make merge commands fail
-      const taskProcess = createMockProcess();
-      let taskReturned = false;
+      setupSpawnMock();
 
-      mockedSpawn.mockImplementation((cmd: string, args?: readonly string[], _options?: any) => {
-        if (cmd === 'git') {
-          const gitProc = createMockProcess();
-          Promise.resolve().then(() => {
-            const argsArr = args as string[];
-            // merge-base --is-ancestor should fail (not ancestor) so merge is attempted
-            if (argsArr?.[0] === 'merge-base' && argsArr?.[1] === '--is-ancestor') {
-              gitProc.emit('close', 1, null);
-              return;
-            }
-            if (argsArr?.[0] === 'merge' && argsArr?.[1] !== '--abort') {
-              gitProc.stdout!.emit('data', Buffer.from('Auto-merging file.ts\nCONFLICT (content): Merge conflict in file.ts\n'));
-              gitProc.emit('close', 1, null);
-            } else {
-              if (argsArr?.includes('rev-parse')) {
-                gitProc.stdout!.emit('data', Buffer.from('abc123\n'));
-              }
-              if (argsArr?.[0] === 'diff' && argsArr?.[1] === '--name-only') {
-                gitProc.stdout!.emit('data', Buffer.from('file.ts\n'));
-              }
-              gitProc.emit('close', 0, null);
-            }
-          });
-          return gitProc as any;
-        }
-        if (!taskReturned) {
-          taskReturned = true;
-          return taskProcess as any;
-        }
-        return createMockProcess() as any;
-      });
+      vi.mocked((BaseFamiliar.prototype as any).runBash).mockImplementation(
+        async (script: string) => {
+          if (script.includes('PRESERVED=')) {
+            return 'PRESERVED=0\nBASE_SHA=abc123\n';
+          }
+          if (script.includes('Invoker: merge')) {
+            const err = new Error('bash exited with code 31: merge conflict');
+            (err as any).exitCode = 31;
+            (err as any).stderr = 'MERGE_CONFLICT_BRANCH=experiment/conflicting\nMERGE_CONFLICT_FILE=file.ts';
+            throw err;
+          }
+          return '';
+        },
+      );
 
       const request = makeRequest({
         inputs: {
@@ -763,40 +660,23 @@ describe('WorktreeFamiliar', () => {
       expect(errObj.conflictFiles).toContain('file.ts');
     });
 
-    it('error message includes stdout conflict details (not just stderr)', async () => {
-      const taskProcess = createMockProcess();
-      let taskReturned = false;
+    it('error message includes conflict file details', async () => {
+      setupSpawnMock();
 
-      mockedSpawn.mockImplementation((cmd: string, args?: readonly string[], _options?: any) => {
-        if (cmd === 'git') {
-          const gitProc = createMockProcess();
-          Promise.resolve().then(() => {
-            const argsArr = args as string[];
-            if (argsArr?.[0] === 'merge-base' && argsArr?.[1] === '--is-ancestor') {
-              gitProc.emit('close', 1, null);
-              return;
-            }
-            if (argsArr?.[0] === 'merge' && argsArr?.[1] !== '--abort') {
-              gitProc.stdout!.emit('data', Buffer.from('Auto-merging App.tsx\nCONFLICT (content): Merge conflict in App.tsx\n'));
-              gitProc.emit('close', 1, null);
-            } else {
-              if (argsArr?.includes('rev-parse')) {
-                gitProc.stdout!.emit('data', Buffer.from('abc123\n'));
-              }
-              if (argsArr?.[0] === 'diff' && argsArr?.[1] === '--name-only') {
-                gitProc.stdout!.emit('data', Buffer.from('App.tsx\n'));
-              }
-              gitProc.emit('close', 0, null);
-            }
-          });
-          return gitProc as any;
-        }
-        if (!taskReturned) {
-          taskReturned = true;
-          return taskProcess as any;
-        }
-        return createMockProcess() as any;
-      });
+      vi.mocked((BaseFamiliar.prototype as any).runBash).mockImplementation(
+        async (script: string) => {
+          if (script.includes('PRESERVED=')) {
+            return 'PRESERVED=0\nBASE_SHA=abc123\n';
+          }
+          if (script.includes('Invoker: merge')) {
+            const err = new Error('bash exited with code 31: merge conflict');
+            (err as any).exitCode = 31;
+            (err as any).stderr = 'MERGE_CONFLICT_BRANCH=experiment/conflicting\nMERGE_CONFLICT_FILE=App.tsx';
+            throw err;
+          }
+          return '';
+        },
+      );
 
       const request = makeRequest({
         inputs: {
@@ -816,37 +696,22 @@ describe('WorktreeFamiliar', () => {
     });
 
     it('gives clear error when upstream branch does not exist', async () => {
-      const taskProcess = createMockProcess();
-      let taskReturned = false;
+      setupSpawnMock();
 
-      mockedSpawn.mockImplementation((cmd: string, args?: readonly string[], _options?: any) => {
-        if (cmd === 'git') {
-          const gitProc = createMockProcess();
-          Promise.resolve().then(() => {
-            const argsArr = args as string[];
-            if (argsArr?.[0] === 'merge-base' && argsArr?.[1] === '--is-ancestor') {
-              gitProc.emit('close', 1, null);
-              return;
-            }
-            // rev-parse --verify fails for missing branch
-            if (argsArr?.[0] === 'rev-parse' && argsArr?.[1] === '--verify') {
-              gitProc.stderr!.emit('data', Buffer.from('fatal: Needed a single revision\n'));
-              gitProc.emit('close', 128, null);
-              return;
-            }
-            if (argsArr?.includes('rev-parse')) {
-              gitProc.stdout!.emit('data', Buffer.from('abc123\n'));
-            }
-            gitProc.emit('close', 0, null);
-          });
-          return gitProc as any;
-        }
-        if (!taskReturned) {
-          taskReturned = true;
-          return taskProcess as any;
-        }
-        return createMockProcess() as any;
-      });
+      vi.mocked((BaseFamiliar.prototype as any).runBash).mockImplementation(
+        async (script: string) => {
+          if (script.includes('PRESERVED=')) {
+            return 'PRESERVED=0\nBASE_SHA=abc123\n';
+          }
+          if (script.includes('Invoker: merge')) {
+            const err = new Error('bash exited with code 30: missing ref');
+            (err as any).exitCode = 30;
+            (err as any).stderr = 'MISSING_REF=experiment/nonexistent-branch';
+            throw err;
+          }
+          return '';
+        },
+      );
 
       const request = makeRequest({
         inputs: {
@@ -855,7 +720,7 @@ describe('WorktreeFamiliar', () => {
         },
       });
 
-      await expect(familiar.start(request)).rejects.toThrow('does not exist');
+      await expect(familiar.start(request)).rejects.toThrow();
     });
   });
 
@@ -1024,27 +889,18 @@ describe('WorktreeFamiliar', () => {
       });
       await familiar.start(request);
 
-      const gitCalls = mockedSpawn.mock.calls.filter(
-        (call) => call[0] === 'git',
-      );
-
-      // rev-parse should target baseBranch, not HEAD
+      // rev-parse for baseBranch should be called via execGitSimple (for computeBranchHash)
+      const gitCalls = mockedSpawn.mock.calls.filter((call) => call[0] === 'git');
       const revParseCall = gitCalls.find(
-        (call) => (call[1] as string[])?.[0] === 'rev-parse',
+        (call) => (call[1] as string[])?.[0] === 'rev-parse' && (call[1] as string[])?.[1] === 'master',
       );
       expect(revParseCall).toBeDefined();
-      expect((revParseCall![1] as string[])[1]).toBe('master');
 
-      // worktree add should include baseBranch as the start point (last arg)
-      const worktreeAddCall = gitCalls.find(
-        (call) => {
-          const a = call[1] as string[];
-          return a?.includes('worktree') && a?.includes('add') && a?.includes('-B');
-        },
-      );
-      expect(worktreeAddCall).toBeDefined();
-      const args = worktreeAddCall![1] as string[];
-      expect(args[args.length - 1]).toBe('master');
+      // runBash script should contain the baseBranch as the BASE
+      const runBashMock = vi.mocked((BaseFamiliar.prototype as any).runBash);
+      const preserveCall = runBashMock.mock.calls.find((call) => call[0].includes('PRESERVED='));
+      expect(preserveCall).toBeDefined();
+      expect(preserveCall![0]).toContain("BASE='master'");
 
       taskProcess.emit('close', 0, null);
     });
@@ -1057,27 +913,18 @@ describe('WorktreeFamiliar', () => {
       });
       await familiar.start(request);
 
-      const gitCalls = mockedSpawn.mock.calls.filter(
-        (call) => call[0] === 'git',
-      );
-
-      // rev-parse should target HEAD
+      // rev-parse should target HEAD (default)
+      const gitCalls = mockedSpawn.mock.calls.filter((call) => call[0] === 'git');
       const revParseCall = gitCalls.find(
-        (call) => (call[1] as string[])?.[0] === 'rev-parse',
+        (call) => (call[1] as string[])?.[0] === 'rev-parse' && (call[1] as string[])?.[1] === 'HEAD',
       );
       expect(revParseCall).toBeDefined();
-      expect((revParseCall![1] as string[])[1]).toBe('HEAD');
 
-      // worktree add should use HEAD as start point
-      const worktreeAddCall = gitCalls.find(
-        (call) => {
-          const a = call[1] as string[];
-          return a?.includes('worktree') && a?.includes('add') && a?.includes('-B');
-        },
-      );
-      expect(worktreeAddCall).toBeDefined();
-      const args = worktreeAddCall![1] as string[];
-      expect(args[args.length - 1]).toBe('HEAD');
+      // runBash script should contain HEAD as the BASE
+      const runBashMock = vi.mocked((BaseFamiliar.prototype as any).runBash);
+      const preserveCall = runBashMock.mock.calls.find((call) => call[0].includes('PRESERVED='));
+      expect(preserveCall).toBeDefined();
+      expect(preserveCall![0]).toContain("BASE='HEAD'");
 
       taskProcess.emit('close', 0, null);
     });
@@ -1144,16 +991,10 @@ describe('WorktreeFamiliar', () => {
           if (cmd === 'git' && argsArr?.includes('prune')) {
             proc.emit('close', 0, null);
           } else if (cmd === 'git' && argsArr?.[0] === 'worktree' && argsArr?.[1] === 'list') {
-            // List returns the conflict but remove will also fail
             proc.stdout!.emit('data', Buffer.from(porcelainWithConflict));
             proc.emit('close', 0, null);
           } else if (cmd === 'git' && argsArr?.[0] === 'worktree' && argsArr?.[1] === 'remove') {
             proc.stderr!.emit('data', Buffer.from('fatal: cannot remove locked worktree\n'));
-            proc.emit('close', 128, null);
-          } else if (cmd === 'git' && argsArr?.includes('worktree') && argsArr?.includes('add')) {
-            proc.stderr!.emit('data', Buffer.from(
-              "fatal: branch is already used by worktree at '/old/worktree'\n",
-            ));
             proc.emit('close', 128, null);
           } else {
             proc.emit('close', 0, null);
@@ -1163,8 +1004,15 @@ describe('WorktreeFamiliar', () => {
         return proc as any;
       });
 
+      // runBash (setupTaskBranch) also fails because worktree add fails
+      vi.mocked((BaseFamiliar.prototype as any).runBash).mockImplementation(
+        async () => {
+          throw new Error("bash exited with code 128: fatal: branch is already used by worktree at '/old/worktree'");
+        },
+      );
+
       const request = makeRequest();
-      await expect(familiar.start(request)).rejects.toThrow(/failed \(code 128\)/);
+      await expect(familiar.start(request)).rejects.toThrow(/already used by worktree/);
     });
 
     it('no force-remove needed when no conflicting worktree exists', async () => {

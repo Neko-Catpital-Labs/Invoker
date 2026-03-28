@@ -17,6 +17,7 @@ vi.mock('node:fs', async (importOriginal) => {
 // Must import after mock setup
 import { spawn } from 'node:child_process';
 import { WorktreeFamiliar } from '../worktree-familiar.js';
+import { BaseFamiliar } from '../base-familiar.js';
 
 const mockedSpawn = vi.mocked(spawn);
 
@@ -121,6 +122,16 @@ describe('BUG REPRO: worktree lifecycle leaks', () => {
       repoDir: '/fake/repo',
       worktreeBaseDir: '/fake/worktrees',
     });
+
+    // Mock runBash so setupTaskBranch works without real bash
+    vi.spyOn(BaseFamiliar.prototype as any, 'runBash').mockImplementation(
+      async (script: string) => {
+        if (script.includes('PRESERVED=')) {
+          return 'PRESERVED=0\nBASE_SHA=abc123def456\n';
+        }
+        return '';
+      },
+    );
   });
 
   it('should preserve worktree after normal task completion', async () => {

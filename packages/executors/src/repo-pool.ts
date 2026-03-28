@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdirSync, existsSync } from 'node:fs';
+import { bashPreserveOrReset, runBashLocal, parsePreserveResult } from './branch-utils.js';
 
 export interface RepoPoolConfig {
   cacheDir: string;
@@ -84,25 +85,13 @@ export class RepoPool {
       : `${clonePath}/worktrees/${sanitized}`;
     const worktreeParent = worktreePath.substring(0, worktreePath.lastIndexOf('/'));
     mkdirSync(worktreeParent, { recursive: true });
-    // Preserve cherry-picks: if branch has commits ahead of HEAD, reuse it
-    let preserved = false;
-    try {
-      await this.execGit(['rev-parse', '--verify', branch], clonePath);
-      const cloneHead = (await this.execGit(['rev-parse', 'HEAD'], clonePath)).trim();
-      const aheadCount = (await this.execGit(
-        ['rev-list', '--count', `${cloneHead}..${branch}`], clonePath,
-      )).trim();
-      if (parseInt(aheadCount, 10) > 0) {
-        await this.execGit(['worktree', 'add', worktreePath, branch], clonePath);
-        await this.execGit(['merge', '--no-edit', cloneHead], worktreePath);
-        preserved = true;
-      }
-    } catch {
-      // Branch doesn't exist or check failed — force-create
-    }
-    if (!preserved) {
-      await this.execGit(['worktree', 'add', '-B', branch, worktreePath], clonePath);
-    }
+    const script = bashPreserveOrReset({
+      repoDir: clonePath,
+      worktreeDir: worktreePath,
+      branch,
+      base: 'HEAD',
+    });
+    await runBashLocal(script, clonePath);
     active.add(worktreePath);
     this.activeWorktrees.set(repoUrl, active);
 

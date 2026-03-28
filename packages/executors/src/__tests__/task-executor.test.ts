@@ -1,7 +1,48 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { TaskExecutor } from '../task-executor.js';
+import { collectTransitiveNonMergeTaskIds } from '../merge-executor.js';
 import type { TaskState } from '@invoker/core';
+import type { WorkResponse } from '@invoker/protocol';
 import { EventEmitter } from 'events';
+
+/**
+ * Creates a mock familiar that auto-completes on start().
+ * For merge nodes (no command/prompt), this simulates the familiar's
+ * handleProcessExit(0) path which immediately completes.
+ */
+function createAutoCompleteFamiliar() {
+  let completeCallback: ((response: WorkResponse) => void) | undefined;
+  return {
+    type: 'worktree',
+    start: vi.fn().mockImplementation(async (request: any) => {
+      const handle = {
+        executionId: `exec-${request.actionId}`,
+        taskId: request.actionId,
+        workspacePath: '/tmp/mock-worktree',
+        branch: `experiment/${request.actionId}-mock`,
+      };
+      // Auto-complete after start (simulates no-command path)
+      setTimeout(() => {
+        if (completeCallback) {
+          completeCallback({
+            requestId: request.requestId,
+            actionId: request.actionId,
+            status: 'completed',
+            outputs: { exitCode: 0 },
+          });
+        }
+      }, 0);
+      return handle;
+    }),
+    onComplete: vi.fn().mockImplementation((_handle: any, cb: any) => {
+      completeCallback = cb;
+    }),
+    onOutput: vi.fn(),
+    onHeartbeat: vi.fn(),
+    kill: vi.fn(),
+    destroyAll: vi.fn(),
+  };
+}
 
 function makeTask(overrides: {
   id?: string;
@@ -37,6 +78,36 @@ function createExecutorWithTasks(tasks: Map<string, TaskState>): TaskExecutor {
 }
 
 describe('TaskExecutor', () => {
+  describe('collectTransitiveNonMergeTaskIds', () => {
+    it('walks backwards from merge deps to include intermediate tasks', () => {
+      const tasks = new Map<string, TaskState>();
+      tasks.set('verify-ui-tests', makeTask({ id: 'verify-ui-tests', dependencies: [] }));
+      tasks.set('distinguish', makeTask({ id: 'distinguish', dependencies: ['verify-ui-tests'] }));
+      const merge = makeTask({
+        id: '__merge__wf-1',
+        dependencies: ['distinguish'],
+        config: { isMergeNode: true },
+      });
+      const ids = collectTransitiveNonMergeTaskIds(merge, (id) => tasks.get(id));
+      expect([...ids].sort()).toEqual(['distinguish', 'verify-ui-tests']);
+    });
+
+    it('stops at merge nodes in the dependency chain', () => {
+      const tasks = new Map<string, TaskState>();
+      tasks.set('a', makeTask({ id: 'a', dependencies: [] }));
+      const innerMerge = makeTask({ id: '__merge__inner', dependencies: ['a'], config: { isMergeNode: true } });
+      tasks.set('__merge__inner', innerMerge);
+      tasks.set('b', makeTask({ id: 'b', dependencies: ['__merge__inner'] }));
+      const rootMerge = makeTask({
+        id: '__merge__root',
+        dependencies: ['b'],
+        config: { isMergeNode: true },
+      });
+      const ids = collectTransitiveNonMergeTaskIds(rootMerge, (id) => tasks.get(id));
+      expect([...ids].sort()).toEqual(['b']);
+    });
+  });
+
   describe('collectUpstreamBranches', () => {
     it('collects branches from completed dependencies', () => {
       const tasks = new Map<string, TaskState>();
@@ -1993,7 +2064,15 @@ describe('TaskExecutor', () => {
 
       expect(consolidateSpy).toHaveBeenCalledTimes(1);
       expect(consolidateSpy).toHaveBeenCalledWith(
-        'none', 'master', 'plan/feature', 'wf-1', 'Test Workflow', ['t1'], expect.any(String), false,
+        'none',
+        'master',
+        'plan/feature',
+        'wf-1',
+        'Test Workflow',
+        undefined,
+        expect.any(String),
+        false,
+        '__merge__wf-1',
       );
 
       consolidateSpy.mockRestore();
@@ -2994,13 +3073,12 @@ describe('TaskExecutor', () => {
   });
 
   describe('consolidateAndMerge', () => {
-    it('only merges leaf branches (merge gate deps), not intermediate', async () => {
+    it('merges the full linear chain when merge gate depends only on the tip task', async () => {
       const tasks = new Map<string, TaskState>();
-      // Diamond: A -> B, C -> D. Merge gate depends on [D]
       tasks.set('A', makeTask({ id: 'A', status: 'completed', config: { workflowId: 'wf-1' }, execution: { branch: 'invoker/A' } }));
-      tasks.set('B', makeTask({ id: 'B', status: 'completed', config: { workflowId: 'wf-1' }, execution: { branch: 'invoker/B' } }));
-      tasks.set('C', makeTask({ id: 'C', status: 'completed', config: { workflowId: 'wf-1' }, execution: { branch: 'invoker/C' } }));
-      tasks.set('D', makeTask({ id: 'D', status: 'completed', config: { workflowId: 'wf-1' }, execution: { branch: 'invoker/D' } }));
+      tasks.set('B', makeTask({ id: 'B', status: 'completed', dependencies: ['A'], config: { workflowId: 'wf-1' }, execution: { branch: 'invoker/B' } }));
+      tasks.set('C', makeTask({ id: 'C', status: 'completed', dependencies: ['B'], config: { workflowId: 'wf-1' }, execution: { branch: 'invoker/C' } }));
+      tasks.set('D', makeTask({ id: 'D', status: 'completed', dependencies: ['C'], config: { workflowId: 'wf-1' }, execution: { branch: 'invoker/D' } }));
       tasks.set('__merge__wf-1', makeTask({
         id: '__merge__wf-1',
         status: 'running',
@@ -3015,15 +3093,16 @@ describe('TaskExecutor', () => {
         setTaskAwaitingApproval: vi.fn(),
       };
 
+      const mockFamiliar = createAutoCompleteFamiliar();
       const executor = new TaskExecutor({
         orchestrator: orchestrator as any,
         persistence: { loadWorkflow: () => ({ onFinish: 'merge', mergeMode: 'automatic', baseBranch: 'master', featureBranch: 'feature/wf-1', name: 'Test' }), updateTask: vi.fn() } as any,
-        familiarRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        familiarRegistry: { getDefault: () => mockFamiliar, get: () => null, getAll: () => [] } as any,
         cwd: '/tmp',
       });
 
       const mergedBranches: string[] = [];
-      (executor as any).execGitReadonly = async (args: string[], cwd?: string) => {
+      (executor as any).execGitReadonly = async (args: string[]) => {
         if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
         if (args[0] === 'checkout') return '';
         if (args[0] === 'merge' && args[1] === '--no-ff') {
@@ -3048,21 +3127,167 @@ describe('TaskExecutor', () => {
 
       await executor.executeTask(tasks.get('__merge__wf-1')!);
 
-      // Only D's branch should be merged, not A, B, or C
-      expect(mergedBranches).toContain('invoker/D');
-      expect(mergedBranches).not.toContain('invoker/A');
-      expect(mergedBranches).not.toContain('invoker/B');
-      expect(mergedBranches).not.toContain('invoker/C');
+      expect(mergedBranches.sort()).toEqual(['invoker/A', 'invoker/B', 'invoker/C', 'invoker/D']);
+    });
+
+    it('includes parallel workflow leaves even when merge.dependencies omits one leaf', async () => {
+      const tasks = new Map<string, TaskState>();
+      tasks.set('verify-ui-tests', makeTask({
+        id: 'verify-ui-tests',
+        status: 'completed',
+        config: { workflowId: 'wf-par' },
+        execution: { branch: 'experiment/verify-par' },
+      }));
+      tasks.set('distinguish', makeTask({
+        id: 'distinguish',
+        status: 'completed',
+        config: { workflowId: 'wf-par' },
+        execution: { branch: 'experiment/distinguish-par' },
+      }));
+      tasks.set('__merge__wf-par', makeTask({
+        id: '__merge__wf-par',
+        status: 'running',
+        dependencies: ['distinguish'],
+        config: { workflowId: 'wf-par', isMergeNode: true },
+      }));
+
+      const orchestrator = {
+        getTask: (id: string) => tasks.get(id),
+        getAllTasks: () => Array.from(tasks.values()),
+        handleWorkerResponse: vi.fn(),
+        setTaskAwaitingApproval: vi.fn(),
+      };
+
+      const mockFamiliar = createAutoCompleteFamiliar();
+      const executor = new TaskExecutor({
+        orchestrator: orchestrator as any,
+        persistence: {
+          loadWorkflow: () => ({
+            onFinish: 'merge',
+            mergeMode: 'automatic',
+            baseBranch: 'master',
+            featureBranch: 'feature/wf-par',
+            name: 'Test',
+          }),
+          updateTask: vi.fn(),
+        } as any,
+        familiarRegistry: { getDefault: () => mockFamiliar, get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+      });
+
+      const mergedBranches: string[] = [];
+      (executor as any).execGitReadonly = async (args: string[]) => {
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        if (args[0] === 'checkout') return '';
+        if (args[0] === 'merge' && args[1] === '--no-ff') {
+          mergedBranches.push(args[args.length - 1]);
+          return '';
+        }
+        if (args[0] === 'branch' && args[1] === '-D') return '';
+        return '';
+      };
+      (executor as any).execGitIn = async (args: string[], _dir: string) => {
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        if (args[0] === 'checkout') return '';
+        if (args[0] === 'merge' && args[1] === '--no-ff') {
+          mergedBranches.push(args[args.length - 1]);
+          return '';
+        }
+        if (args[0] === 'branch' && args[1] === '-D') return '';
+        return '';
+      };
+      (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
+      (executor as any).removeMergeWorktree = async () => {};
+
+      await executor.executeTask(tasks.get('__merge__wf-par')!);
+
+      expect(mergedBranches.sort()).toEqual(['experiment/distinguish-par', 'experiment/verify-par']);
+    });
+
+    it('merges transitive upstream branches when merge gate depends only on the final leaf', async () => {
+      const tasks = new Map<string, TaskState>();
+      tasks.set('verify-ui-tests', makeTask({
+        id: 'verify-ui-tests',
+        status: 'completed',
+        config: { workflowId: 'wf-chain' },
+        execution: { branch: 'experiment/verify-ce05' },
+      }));
+      tasks.set('distinguish', makeTask({
+        id: 'distinguish',
+        status: 'completed',
+        dependencies: ['verify-ui-tests'],
+        config: { workflowId: 'wf-chain' },
+        execution: { branch: 'experiment/distinguish-aa' },
+      }));
+      tasks.set('__merge__wf-chain', makeTask({
+        id: '__merge__wf-chain',
+        status: 'running',
+        dependencies: ['distinguish'],
+        config: { workflowId: 'wf-chain', isMergeNode: true },
+      }));
+
+      const orchestrator = {
+        getTask: (id: string) => tasks.get(id),
+        getAllTasks: () => Array.from(tasks.values()),
+        handleWorkerResponse: vi.fn(),
+        setTaskAwaitingApproval: vi.fn(),
+      };
+
+      const mockFamiliar = createAutoCompleteFamiliar();
+      const executor = new TaskExecutor({
+        orchestrator: orchestrator as any,
+        persistence: {
+          loadWorkflow: () => ({
+            onFinish: 'merge',
+            mergeMode: 'automatic',
+            baseBranch: 'master',
+            featureBranch: 'feature/wf-chain',
+            name: 'Test',
+          }),
+          updateTask: vi.fn(),
+        } as any,
+        familiarRegistry: { getDefault: () => mockFamiliar, get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+      });
+
+      const mergedBranches: string[] = [];
+      (executor as any).execGitReadonly = async (args: string[]) => {
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        if (args[0] === 'checkout') return '';
+        if (args[0] === 'merge' && args[1] === '--no-ff') {
+          mergedBranches.push(args[args.length - 1]);
+          return '';
+        }
+        if (args[0] === 'branch' && args[1] === '-D') return '';
+        return '';
+      };
+      (executor as any).execGitIn = async (args: string[], _dir: string) => {
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        if (args[0] === 'checkout') return '';
+        if (args[0] === 'merge' && args[1] === '--no-ff') {
+          mergedBranches.push(args[args.length - 1]);
+          return '';
+        }
+        if (args[0] === 'branch' && args[1] === '-D') return '';
+        return '';
+      };
+      (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
+      (executor as any).removeMergeWorktree = async () => {};
+
+      await executor.executeTask(tasks.get('__merge__wf-chain')!);
+
+      expect(mergedBranches).toContain('experiment/distinguish-aa');
+      expect(mergedBranches).toContain('experiment/verify-ce05');
     });
 
     it('forked leaves: merges only leaf branches from merge gate deps', async () => {
       const tasks = new Map<string, TaskState>();
       // A -> B -> D, A -> C -> E. Merge gate depends on [D, E]
       tasks.set('A', makeTask({ id: 'A', status: 'completed', config: { workflowId: 'wf-2' }, execution: { branch: 'invoker/A' } }));
-      tasks.set('B', makeTask({ id: 'B', status: 'completed', config: { workflowId: 'wf-2' }, execution: { branch: 'invoker/B' } }));
-      tasks.set('C', makeTask({ id: 'C', status: 'completed', config: { workflowId: 'wf-2' }, execution: { branch: 'invoker/C' } }));
-      tasks.set('D', makeTask({ id: 'D', status: 'completed', config: { workflowId: 'wf-2' }, execution: { branch: 'invoker/D' } }));
-      tasks.set('E', makeTask({ id: 'E', status: 'completed', config: { workflowId: 'wf-2' }, execution: { branch: 'invoker/E' } }));
+      tasks.set('B', makeTask({ id: 'B', status: 'completed', dependencies: ['A'], config: { workflowId: 'wf-2' }, execution: { branch: 'invoker/B' } }));
+      tasks.set('C', makeTask({ id: 'C', status: 'completed', dependencies: ['A'], config: { workflowId: 'wf-2' }, execution: { branch: 'invoker/C' } }));
+      tasks.set('D', makeTask({ id: 'D', status: 'completed', dependencies: ['B'], config: { workflowId: 'wf-2' }, execution: { branch: 'invoker/D' } }));
+      tasks.set('E', makeTask({ id: 'E', status: 'completed', dependencies: ['C'], config: { workflowId: 'wf-2' }, execution: { branch: 'invoker/E' } }));
       tasks.set('__merge__wf-2', makeTask({
         id: '__merge__wf-2',
         status: 'running',
@@ -3080,7 +3305,7 @@ describe('TaskExecutor', () => {
       const executor = new TaskExecutor({
         orchestrator: orchestrator as any,
         persistence: { loadWorkflow: () => ({ onFinish: 'merge', mergeMode: 'automatic', baseBranch: 'master', featureBranch: 'feature/wf-2', name: 'Test' }), updateTask: vi.fn() } as any,
-        familiarRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        familiarRegistry: { getDefault: () => createAutoCompleteFamiliar(), get: () => null, getAll: () => [] } as any,
         cwd: '/tmp',
       });
 
@@ -3110,12 +3335,14 @@ describe('TaskExecutor', () => {
 
       await executor.executeTask(tasks.get('__merge__wf-2')!);
 
-      // Only D and E (leaf deps) should be merged
-      expect(mergedBranches).toContain('invoker/D');
-      expect(mergedBranches).toContain('invoker/E');
-      expect(mergedBranches).not.toContain('invoker/A');
-      expect(mergedBranches).not.toContain('invoker/B');
-      expect(mergedBranches).not.toContain('invoker/C');
+      // Transitive closure from leaves D,E includes fork ancestors A,B,C
+      expect(mergedBranches.sort()).toEqual([
+        'invoker/A',
+        'invoker/B',
+        'invoker/C',
+        'invoker/D',
+        'invoker/E',
+      ]);
     });
 
     it('merges branches in sorted order for determinism', async () => {
@@ -3140,7 +3367,7 @@ describe('TaskExecutor', () => {
       const executor = new TaskExecutor({
         orchestrator: orchestrator as any,
         persistence: { loadWorkflow: () => ({ onFinish: 'merge', mergeMode: 'automatic', baseBranch: 'master', featureBranch: 'feature/wf-3', name: 'Test' }), updateTask: vi.fn() } as any,
-        familiarRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        familiarRegistry: { getDefault: () => createAutoCompleteFamiliar(), get: () => null, getAll: () => [] } as any,
         cwd: '/tmp',
       });
 
@@ -3694,7 +3921,7 @@ describe('TaskExecutor', () => {
       const executor = new TaskExecutor({
         orchestrator: orchestrator as any,
         persistence: { loadWorkflow: () => ({ onFinish: 'merge', mergeMode: 'automatic', baseBranch: 'master', featureBranch: 'feature/wf-msg', name: 'Test' }), updateTask: vi.fn() } as any,
-        familiarRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        familiarRegistry: { getDefault: () => createAutoCompleteFamiliar(), get: () => null, getAll: () => [] } as any,
         cwd: '/tmp',
       });
 

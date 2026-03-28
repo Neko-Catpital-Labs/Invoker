@@ -832,6 +832,7 @@ describe('diamond dependency merge', () => {
 // ── Merge gate commit topology ─────────────────────────────────
 
 import { TaskExecutor, FamiliarRegistry } from '../index.js';
+import { WorktreeFamiliar } from '../worktree-familiar.js';
 import { Orchestrator, type TaskState, type TaskStateChanges, type PlanDefinition, type OrchestratorPersistence, type OrchestratorMessageBus } from '@invoker/core';
 
 class TestPersistence implements OrchestratorPersistence {
@@ -1233,6 +1234,8 @@ describe('merge gate commit topology (real git)', () => {
     const bus = new TestBus();
     const orchestrator = new Orchestrator({ persistence, messageBus: bus, maxConcurrency: 10 });
     const registry = new FamiliarRegistry();
+    const wtFamiliar = new WorktreeFamiliar({ repoDir: tmpDir });
+    registry.register('worktree', wtFamiliar);
     const executor = new TaskExecutor({
       orchestrator,
       persistence: persistence as any,

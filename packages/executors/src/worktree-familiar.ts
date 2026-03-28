@@ -1,5 +1,4 @@
 import { spawn, execSync, type ChildProcess } from 'node:child_process';
-import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, unlinkSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { homedir } from 'node:os';
@@ -9,29 +8,10 @@ import { BaseFamiliar, type BaseEntry, MergeConflictError } from './base-familia
 import { RepoPool } from './repo-pool.js';
 import { killProcessGroup, cleanElectronEnv, SIGKILL_TIMEOUT_MS } from './process-utils.js';
 import { DEFAULT_WORKTREE_PROVISION_COMMAND } from './default-worktree-provision-command.js';
+import { computeBranchHash, bashMergeUpstreams, parseMergeError } from './branch-utils.js';
 
-/**
- * Merkle-style hash for content-addressable branch naming.
- * Inputs: task identity + command/prompt + upstream dependency commits + base branch HEAD.
- * When any input changes (e.g. master moves forward), the hash changes and a fresh branch is created.
- */
-export function computeBranchHash(
-  actionId: string,
-  command: string | undefined,
-  prompt: string | undefined,
-  upstreamCommits: string[],
-  baseHead: string,
-  salt: string = '',
-): string {
-  const h = createHash('sha256');
-  h.update(actionId);
-  h.update(command ?? '');
-  h.update(prompt ?? '');
-  for (const c of [...upstreamCommits].sort()) h.update(c);
-  h.update(baseHead);
-  if (salt) h.update(salt);
-  return h.digest('hex').slice(0, 8);
-}
+// Re-export for backward compatibility
+export { computeBranchHash } from './branch-utils.js';
 
 export interface WorktreeFamiliarConfig {
   /** Path to the main git repository. */
@@ -114,6 +94,7 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
     );
     const branch = `experiment/${request.actionId}-${hash}`;
     const worktreeDir = `${this.worktreeBaseDir}/${executionId}`;
+    console.log(`[WorktreeFamiliar] branch=${branch} hash=${hash}`);
 
     // -- Reconciliation: no process, immediate needs_input --
     if (request.actionType === 'reconciliation') {
@@ -139,37 +120,65 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
 
       this.cleanStaleLocks(acquired.worktreePath);
 
-      try {
-        await this.mergeUpstreamBranches(request.inputs.upstreamBranches, acquired.worktreePath);
-      } catch (err) {
-        if (err instanceof MergeConflictError) {
-          const entry: WorktreeEntry = {
-            process: null, request, worktreeDir: acquired.worktreePath, branch,
-            outputListeners: new Set(), outputBuffer: [],
-            completeListeners: new Set(), heartbeatListeners: new Set(),
-            completed: true,
-            poolRelease: acquired.release,
-          };
-          this.registerEntry(handle, entry);
-          handle.workspacePath = acquired.worktreePath;
-          handle.branch = acquired.branch;
-          const response: WorkResponse = {
-            requestId: request.requestId,
-            actionId: request.actionId,
-            status: 'failed',
-            outputs: {
-              exitCode: 1,
-              error: JSON.stringify({
-                type: 'merge_conflict',
-                failedBranch: err.failedBranch,
-                conflictFiles: err.conflictFiles,
-              }),
-            },
-          };
-          this.emitComplete(handle.executionId, response);
-          return handle;
+      // Merge upstream dependency branches (pool already did preserve-or-reset)
+      const poolUpstreams = request.inputs.upstreamBranches ?? [];
+      if (poolUpstreams.length > 0) {
+        try {
+          const mergeScript = bashMergeUpstreams({
+            worktreeDir: acquired.worktreePath,
+            upstreamBranches: poolUpstreams,
+            skipAncestors: true,
+          });
+          await this.runBash(mergeScript, acquired.worktreePath);
+        } catch (err: any) {
+          const exitCode = err.exitCode ?? 1;
+          const stderr = err.stderr ?? err.message ?? '';
+          if (exitCode === 31) {
+            const parsed = parseMergeError(exitCode, stderr);
+            const entry: WorktreeEntry = {
+              process: null, request, worktreeDir: acquired.worktreePath, branch,
+              outputListeners: new Set(), outputBuffer: [],
+              completeListeners: new Set(), heartbeatListeners: new Set(),
+              completed: true,
+              poolRelease: acquired.release,
+            };
+            this.registerEntry(handle, entry);
+            handle.workspacePath = acquired.worktreePath;
+            handle.branch = acquired.branch;
+            const response: WorkResponse = {
+              requestId: request.requestId,
+              actionId: request.actionId,
+              status: 'failed',
+              outputs: {
+                exitCode: 1,
+                error: JSON.stringify({
+                  type: 'merge_conflict',
+                  failedBranch: parsed.failedBranch,
+                  conflictFiles: parsed.conflictFiles,
+                }),
+              },
+            };
+            this.emitComplete(handle.executionId, response);
+            return handle;
+          }
+          throw err;
         }
-        throw err;
+      }
+
+      // No-command tasks: complete immediately after branch setup
+      if (!request.inputs.command && !request.inputs.prompt) {
+        const entry: WorktreeEntry = {
+          process: null, request, worktreeDir: acquired.worktreePath, branch,
+          outputListeners: new Set(), outputBuffer: [],
+          completeListeners: new Set(), heartbeatListeners: new Set(),
+          completed: false,
+          poolRelease: acquired.release,
+        };
+        this.registerEntry(handle, entry);
+        handle.workspacePath = acquired.worktreePath;
+        handle.branch = acquired.branch;
+        await this.handleProcessExit(executionId, request, acquired.worktreePath, 0, { branch });
+        return handle;
       }
 
       try {
@@ -288,26 +297,16 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
       console.warn(`[WorktreeFamiliar] Force-remove failed (will attempt add anyway):`, err);
     }
 
-    // -- Create the worktree with preservation support --
-    // Delegates to setupTaskBranch which preserves cherry-picked commits
-    // on restart instead of unconditionally force-resetting the branch.
+    // -- Create the worktree with preservation support + merge upstreams --
     mkdirSync(this.worktreeBaseDir, { recursive: true });
     const startPoint = request.inputs.baseBranch ?? 'HEAD';
     log('setupTaskBranch begin');
-    await this.setupTaskBranch(this.repoDir, request, handle, {
-      branchName: branch,
-      base: startPoint,
-      worktreeDir,
-      skipUpstreams: true,  // handled below by mergeUpstreamBranches
-    });
-    log('setupTaskBranch done');
-
-    this.cleanStaleLocks(worktreeDir);
-
-    // -- Merge upstream dependency branches into the worktree --
-    log('mergeUpstreamBranches begin');
     try {
-      await this.mergeUpstreamBranches(request.inputs.upstreamBranches, worktreeDir);
+      await this.setupTaskBranch(this.repoDir, request, handle, {
+        branchName: branch,
+        base: startPoint,
+        worktreeDir,
+      });
     } catch (err) {
       if (err instanceof MergeConflictError) {
         const entry: WorktreeEntry = {
@@ -337,7 +336,25 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
       }
       throw err;
     }
-    log('mergeUpstreamBranches done');
+    log('setupTaskBranch done');
+
+    this.cleanStaleLocks(worktreeDir);
+
+    // -- No-command tasks: complete immediately after branch setup --
+    if (!request.inputs.command && !request.inputs.prompt) {
+      log('no command/prompt — completing immediately');
+      const entry: WorktreeEntry = {
+        process: null, request, worktreeDir, branch,
+        outputListeners: new Set(), outputBuffer: [],
+        completeListeners: new Set(), heartbeatListeners: new Set(),
+        completed: false,
+      };
+      this.registerEntry(handle, entry);
+      handle.workspacePath = worktreeDir;
+      handle.branch = branch;
+      await this.handleProcessExit(executionId, request, worktreeDir, 0, { branch });
+      return handle;
+    }
 
     // -- Install dependencies so tasks can build/test in the worktree --
     log('provisionWorktree begin');
@@ -584,61 +601,6 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
       if (existsSync(lockPath)) {
         console.warn(`[WorktreeFamiliar] Removing stale git lock: ${lockPath}`);
         try { unlinkSync(lockPath); } catch { /* race: already removed */ }
-      }
-    }
-  }
-
-  /**
-   * Merge upstream dependency branches into a worktree.
-   * Skips branches already in HEAD's ancestry. Aborts cleanly on conflict.
-   */
-  private async mergeUpstreamBranches(
-    upstreamBranches: string[] | undefined,
-    worktreeDir: string,
-  ): Promise<void> {
-    if (!upstreamBranches?.length) return;
-
-    for (const upBranch of upstreamBranches) {
-      // Skip if already an ancestor of HEAD (redundant merge)
-      try {
-        await this.execGitSimple(['merge-base', '--is-ancestor', upBranch, 'HEAD'], worktreeDir);
-        console.log(`[WorktreeFamiliar] Skipping merge of ${upBranch} — already ancestor of HEAD`);
-        continue;
-      } catch {
-        // Not an ancestor — proceed with merge
-      }
-
-      // Verify the branch ref exists before attempting merge
-      try {
-        await this.execGitSimple(['rev-parse', '--verify', upBranch], worktreeDir);
-      } catch {
-        throw new Error(
-          `Upstream branch "${upBranch}" does not exist. ` +
-          `The dependency task's branch may not be visible in this worktree.`,
-        );
-      }
-
-      try {
-        const mergeMsg = await this.buildUpstreamMergeMessage(upBranch, worktreeDir);
-        await this.execGitSimple(
-          ['merge', '--no-edit', '-m', mergeMsg, upBranch],
-          worktreeDir,
-        );
-      } catch (err) {
-        let conflictFiles: string[] = [];
-        try {
-          const raw = await this.execGitSimple(
-            ['diff', '--name-only', '--diff-filter=U'], worktreeDir,
-          );
-          conflictFiles = raw.split('\n').filter(Boolean);
-        } catch { /* best effort */ }
-
-        try {
-          await this.execGitSimple(['merge', '--abort'], worktreeDir);
-        } catch {
-          // merge --abort can fail if there's nothing to abort
-        }
-        throw new MergeConflictError(upBranch, conflictFiles, err);
       }
     }
   }

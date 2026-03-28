@@ -62,6 +62,7 @@ export interface MergeExecutorHost {
     leafTaskIds?: readonly string[],
     body?: string,
     visualProof?: boolean,
+    mergeNodeTaskId?: string,
   ): Promise<string | undefined>;
 }
 
@@ -90,14 +91,61 @@ export async function ensureLocalBranchForMerge(
       ['fetch', 'origin', `+refs/heads/${branch}:refs/heads/${branch}`],
       worktreeDir,
     );
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    throw new Error(
-      `Cannot merge ${branch}: not found locally and fetch from origin failed (${msg}). ` +
-        'For SSH remote worktrees, ensure the task pushed this branch to origin before merging.',
-    );
+  } catch {
+    // Local ref not found in origin's refs/heads — try remote-tracking ref.
+    // Task branches are pushed to the GitHub remote but may not persist as
+    // local refs in the host repo (worktree cleanup, restarts, etc.).
+    try {
+      await host.execGitIn(
+        ['fetch', 'origin', `+refs/remotes/origin/${branch}:refs/heads/${branch}`],
+        worktreeDir,
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new Error(
+        `Cannot merge ${branch}: not found locally and fetch from origin failed (${msg}). ` +
+          'For SSH remote worktrees, ensure the task pushed this branch to origin before merging.',
+      );
+    }
   }
 
+}
+
+/**
+ * All non-merge tasks reachable by walking backwards from the merge gate's
+ * direct dependencies. Used so consolidation merges every task branch that
+ * fed the gate, not only leaf tips (a leaf may not contain an intermediate
+ * sibling's commits if branch setup preserved stale state).
+ */
+export function collectTransitiveNonMergeTaskIds(
+  mergeTask: TaskState,
+  getTask: (id: string) => TaskState | undefined,
+): Set<string> {
+  const out = new Set<string>();
+  const stack = [...mergeTask.dependencies];
+  while (stack.length > 0) {
+    const id = stack.pop()!;
+    if (out.has(id)) continue;
+    const t = getTask(id);
+    if (!t || t.config.isMergeNode) continue;
+    out.add(id);
+    for (const d of t.dependencies) {
+      if (!out.has(d)) stack.push(d);
+    }
+  }
+  return out;
+}
+
+/** Leaf tasks in a workflow (same semantics as reconcileMergeLeaves / findLeafTaskIds). */
+function findLeafTaskIdsInWorkflow(allTasks: TaskState[], workflowId: string): string[] {
+  const wf = allTasks.filter(
+    (t) => t.config.workflowId === workflowId && !t.config.isMergeNode && t.status !== 'stale',
+  );
+  const dependedOn = new Set<string>();
+  for (const t of wf) {
+    for (const d of t.dependencies) dependedOn.add(d);
+  }
+  return wf.filter((t) => !dependedOn.has(t.id)).map((t) => t.id);
 }
 
 // ── Extracted functions ──────────────────────────────────
@@ -115,7 +163,6 @@ export async function executeMergeNodeImpl(
   const baseBranch = workflow?.baseBranch ?? host.defaultBranch ?? await host.detectDefaultBranch();
   const featureBranch = workflow?.featureBranch;
   const visualProof = workflow?.visualProof ?? false;
-
 
   let response: WorkResponse;
   let prUrl: string | undefined;
@@ -142,7 +189,17 @@ export async function executeMergeNodeImpl(
   if (featureBranch && (onFinish !== 'none' || mergeMode === 'github')) {
     const effectiveOnFinish = mergeMode === 'automatic' ? onFinish : 'none';
     try {
-      prUrl = await host.consolidateAndMerge(effectiveOnFinish, baseBranch, featureBranch, workflowId, workflow?.name, task.dependencies, summary, visualProof);
+      prUrl = await host.consolidateAndMerge(
+        effectiveOnFinish,
+        baseBranch,
+        featureBranch,
+        workflowId,
+        workflow?.name,
+        undefined,
+        summary,
+        visualProof,
+        task.id,
+      );
       if (mergeMode === 'manual') {
         const manualResponse: WorkResponse = {
           requestId: `merge-${task.id}`,
@@ -479,6 +536,7 @@ export async function consolidateAndMergeImpl(
   leafTaskIds?: readonly string[],
   body?: string,
   visualProof?: boolean,
+  mergeNodeTaskId?: string,
 ): Promise<string | undefined> {
   const worktreeDir = await host.createMergeWorktree(baseBranch, 'consolidate-' + (workflowId ?? 'default'));
   console.log(`[merge] consolidateAndMerge: featureBranch=${featureBranch}, baseBranch=${baseBranch}, worktree=${worktreeDir}`);
@@ -497,16 +555,38 @@ export async function consolidateAndMergeImpl(
     }
 
     const allTasks = host.orchestrator.getAllTasks();
+    let allowedTaskIds: Set<string> | undefined;
+    if (mergeNodeTaskId && workflowId) {
+      const mergeT = allTasks.find((x) => x.id === mergeNodeTaskId && x.config.isMergeNode);
+      if (mergeT) {
+        allowedTaskIds = collectTransitiveNonMergeTaskIds(mergeT, (id) => host.orchestrator.getTask(id));
+        // Parallel workflow leaves must all consolidate even if merge.dependencies was
+        // synced incorrectly (e.g. stale task dropped from leaf set, DB skew). Walking
+        // only merge.deps misses a sibling leaf like verify-ui-tests.
+        for (const lid of findLeafTaskIdsInWorkflow(allTasks, workflowId)) {
+          allowedTaskIds.add(lid);
+        }
+        console.log(
+          `[merge] consolidation task set (${allowedTaskIds.size} ids): ${[...allowedTaskIds].sort().join(', ')}`,
+        );
+        mergeTrace('CONSOLIDATION_TASK_SET', {
+          workflowId,
+          mergeNodeTaskId,
+          ids: [...allowedTaskIds].sort(),
+          leafIds: findLeafTaskIdsInWorkflow(allTasks, workflowId),
+        });
+      }
+    }
     const taskBranches = allTasks
       .filter((t) => {
         if (!t.execution.branch || t.config.isMergeNode) return false;
         if (t.status !== 'completed') return false;
-        if (leafTaskIds) return leafTaskIds.includes(t.id);
+        if (allowedTaskIds) return allowedTaskIds.has(t.id);
+        if (leafTaskIds && leafTaskIds.length > 0) return leafTaskIds.includes(t.id);
         return t.config.workflowId === workflowId;
       })
       .map((t) => t.execution.branch!)
       .sort();
-
     for (const branch of taskBranches) {
       console.log(`[merge] Merging task branch: ${branch} → ${featureBranch}`);
       await ensureLocalBranchForMerge(host, worktreeDir, branch);
@@ -516,8 +596,10 @@ export async function consolidateAndMergeImpl(
       await host.execGitIn(['merge', '--no-ff', '-m', mergeMsg, branch], worktreeDir);
     }
     console.log(`[merge] Consolidated ${taskBranches.length} task branches into ${featureBranch}`);
-    // Persist feature branch in host.cwd (clone's origin) for later operations
-    await host.execGitIn(['push', '--force', 'origin', `${featureBranch}:refs/heads/${featureBranch}`], worktreeDir);
+    // Persist feature branch in host.cwd (clone's origin) for later operations.
+    // Use fetch-into instead of push to bypass receive.denyCurrentBranch when
+    // a stale gate worktree has the feature branch checked out.
+    await host.execGitIn(['fetch', worktreeDir, `+${featureBranch}:refs/heads/${featureBranch}`], host.cwd);
 
     if (visualProof && onFinish === 'pull_request' && host.runVisualProofCapture) {
       const slug = (featureBranch ?? 'workflow').replace(/\//g, '-');
