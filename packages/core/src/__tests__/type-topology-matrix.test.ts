@@ -7,7 +7,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { Orchestrator } from '../orchestrator.js';
 import type { PlanDefinition, OrchestratorPersistence, OrchestratorMessageBus } from '../orchestrator.js';
-import type { TaskState, TaskStateChanges } from '../task-types.js';
+import type { TaskState, TaskStateChanges , Attempt} from '../task-types.js';
 import type { WorkResponse } from '@invoker/protocol';
 
 // ── In-Memory Persistence Mock ──────────────────────────────
@@ -15,6 +15,7 @@ import type { WorkResponse } from '@invoker/protocol';
 class InMemoryPersistence implements OrchestratorPersistence {
   workflows = new Map<string, { id: string; name: string; status: string; createdAt: string; updatedAt: string }>();
   tasks = new Map<string, { workflowId: string; task: TaskState }>();
+  private attempts = new Map<string, Attempt[]>();
 
   saveWorkflow(workflow: { id: string; name: string; status: string }): void {
     const now = new Date().toISOString();
@@ -54,6 +55,39 @@ class InMemoryPersistence implements OrchestratorPersistence {
   }
 
   logEvent(): void {}
+
+  saveAttempt(attempt: Attempt): void {
+    const list = this.attempts.get(attempt.nodeId) ?? [];
+    list.push(attempt);
+    this.attempts.set(attempt.nodeId, list);
+  }
+
+  loadAttempts(nodeId: string): Attempt[] {
+    return this.attempts.get(nodeId) ?? [];
+  }
+
+  loadAttempt(attemptId: string): Attempt | undefined {
+    for (const list of this.attempts.values()) {
+      const found = list.find(a => a.id === attemptId);
+      if (found) return found;
+    }
+    return undefined;
+  }
+
+  updateAttempt(attemptId: string, changes: Partial<Pick<Attempt, 'status' | 'startedAt' | 'completedAt' | 'exitCode' | 'error' | 'lastHeartbeatAt' | 'branch' | 'commit' | 'summary' | 'workspacePath' | 'claudeSessionId' | 'containerId' | 'mergeConflict'>>): void {
+    for (const list of this.attempts.values()) {
+      const idx = list.findIndex(a => a.id === attemptId);
+      if (idx !== -1) {
+        list[idx] = { ...list[idx], ...changes } as Attempt;
+        return;
+      }
+    }
+  }
+
+  getNextAttemptNumber(nodeId: string): number {
+    const list = this.attempts.get(nodeId) ?? [];
+    return list.length + 1;
+  }
 }
 
 // ── In-Memory MessageBus Mock ───────────────────────────────

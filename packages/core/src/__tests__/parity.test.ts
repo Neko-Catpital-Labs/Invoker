@@ -9,7 +9,6 @@
 
 import { describe, it, expect, beforeEach } from 'vitest';
 import { TaskStateMachine } from '../state-machine.js';
-import { ExperimentManager } from '../experiments.js';
 import { ResponseHandler } from '../response-handler.js';
 import { TaskScheduler } from '../scheduler.js';
 import { Orchestrator } from '../orchestrator.js';
@@ -19,7 +18,7 @@ import type {
   OrchestratorPersistence,
   OrchestratorMessageBus,
 } from '../orchestrator.js';
-import type { TaskState, TaskDelta, TaskStateChanges } from '../task-types.js';
+import type { TaskState, TaskDelta, TaskStateChanges, Attempt } from '../task-types.js';
 import type { WorkResponse } from '@invoker/protocol';
 
 // ── In-Memory Test Doubles ──────────────────────────────────
@@ -27,6 +26,7 @@ import type { WorkResponse } from '@invoker/protocol';
 class InMemoryPersistence implements OrchestratorPersistence {
   workflows = new Map<string, { id: string; name: string; status: string; createdAt: string; updatedAt: string }>();
   tasks = new Map<string, { workflowId: string; task: TaskState }>();
+  private attempts = new Map<string, Attempt[]>();
 
   saveWorkflow(workflow: { id: string; name: string; status: string }): void {
     const now = new Date().toISOString();
@@ -63,6 +63,39 @@ class InMemoryPersistence implements OrchestratorPersistence {
     return Array.from(this.tasks.values())
       .filter((e) => e.workflowId === workflowId)
       .map((e) => e.task);
+  }
+
+  saveAttempt(attempt: Attempt): void {
+    const list = this.attempts.get(attempt.nodeId) ?? [];
+    list.push(attempt);
+    this.attempts.set(attempt.nodeId, list);
+  }
+
+  loadAttempts(nodeId: string): Attempt[] {
+    return this.attempts.get(nodeId) ?? [];
+  }
+
+  loadAttempt(attemptId: string): Attempt | undefined {
+    for (const list of this.attempts.values()) {
+      const found = list.find(a => a.id === attemptId);
+      if (found) return found;
+    }
+    return undefined;
+  }
+
+  updateAttempt(attemptId: string, changes: Partial<Pick<Attempt, 'status' | 'startedAt' | 'completedAt' | 'exitCode' | 'error' | 'lastHeartbeatAt' | 'branch' | 'commit' | 'summary' | 'workspacePath' | 'claudeSessionId' | 'containerId' | 'mergeConflict'>>): void {
+    for (const list of this.attempts.values()) {
+      const idx = list.findIndex(a => a.id === attemptId);
+      if (idx !== -1) {
+        list[idx] = { ...list[idx], ...changes } as Attempt;
+        return;
+      }
+    }
+  }
+
+  getNextAttemptNumber(nodeId: string): number {
+    const list = this.attempts.get(nodeId) ?? [];
+    return list.length + 1;
   }
 }
 
@@ -320,40 +353,6 @@ describe('Parity — Feature Coverage', () => {
     expect(orchestrator.getTask('downstream')!.status).toBe('running');
   });
 
-  // ── Test 7: Re-experimentation via ExperimentManager ──────
-
-  it('re-experimentation: second round carries forward previous results', () => {
-    const em = new ExperimentManager();
-
-    const round1 = em.planExperimentGroup(
-      'pivot',
-      [
-        { id: 'r1-exp-1', description: 'Round 1 exp 1' },
-        { id: 'r1-exp-2', description: 'Round 1 exp 2' },
-      ],
-    );
-
-    em.onExperimentCompleted('r1-exp-1', { id: 'r1-exp-1', status: 'completed', summary: 'good' });
-    em.onExperimentCompleted('r1-exp-2', { id: 'r1-exp-2', status: 'completed', summary: 'ok' });
-
-    const previousResults = [
-      { id: 'r1-exp-1', status: 'completed' as const, summary: 'good' },
-      { id: 'r1-exp-2', status: 'completed' as const, summary: 'ok' },
-    ];
-
-    const round2 = em.planExperimentGroup(
-      'pivot',
-      [{ id: 'r2-exp-1', description: 'Round 2 exp 1' }],
-      undefined,
-      undefined,
-      previousResults,
-    );
-
-    expect(round2.group.experimentIds).toHaveLength(3);
-    expect(round2.group.experimentIds).toContain('r1-exp-1');
-    expect(round2.group.completedExperiments.size).toBe(2);
-  });
-
   // ── Test 8: Manual approval flow ──────────────────────────
 
   it('manual approval flow: approve completes task, reject fails task', async () => {
@@ -490,14 +489,11 @@ describe('Parity — Architectural Superiority', () => {
 
   // ── Test 14: Pure domain logic — zero I/O ─────────────────
 
-  it('pure domain logic: StateMachine and ExperimentManager have zero I/O dependencies', () => {
+  it('pure domain logic: StateMachine and TaskScheduler have zero I/O dependencies', () => {
     const sm = new TaskStateMachine();
     sm.restoreTask(createTaskState('t1', 'root', []));
     sm.restoreTask(createTaskState('t2', 'child', ['t1']));
     expect(sm.getTaskCount()).toBe(2);
-
-    const em = new ExperimentManager();
-    expect(em.getAllGroups()).toEqual([]);
 
     const scheduler = new TaskScheduler(3);
     expect(scheduler.getStatus().queueLength).toBe(0);

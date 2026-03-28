@@ -103,12 +103,12 @@ export interface PersistenceAdapter {
   appendTaskOutput(taskId: string, data: string): void;
   getTaskOutput(taskId: string): string;
 
-  // Attempts (optional — backward compat)
-  saveAttempt?(attempt: Attempt): void;
-  loadAttempts?(nodeId: string): Attempt[];
-  loadAttempt?(attemptId: string): Attempt | undefined;
-  updateAttempt?(attemptId: string, changes: Partial<Pick<Attempt, 'status' | 'startedAt' | 'completedAt' | 'exitCode' | 'error' | 'lastHeartbeatAt' | 'branch' | 'commit' | 'summary' | 'workspacePath' | 'claudeSessionId' | 'containerId' | 'mergeConflict'>>): void;
-  getNextAttemptNumber?(nodeId: string): number;
+  // Attempts
+  saveAttempt(attempt: Attempt): void;
+  loadAttempts(nodeId: string): Attempt[];
+  loadAttempt(attemptId: string): Attempt | undefined;
+  updateAttempt(attemptId: string, changes: Partial<Pick<Attempt, 'status' | 'startedAt' | 'completedAt' | 'exitCode' | 'error' | 'lastHeartbeatAt' | 'branch' | 'commit' | 'summary' | 'workspacePath' | 'claudeSessionId' | 'containerId' | 'mergeConflict'>>): void;
+  getNextAttemptNumber(nodeId: string): number;
 
   // Lifecycle
   close(): void;

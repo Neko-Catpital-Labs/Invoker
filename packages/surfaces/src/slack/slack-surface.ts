@@ -851,7 +851,3 @@ export class SlackSurface implements Surface {
     return this.taskMessages;
   }
 }
-
-// ── Re-exports for backward compatibility ───────────────────
-
-export { splitForSlack, sanitizeSlashCommands };

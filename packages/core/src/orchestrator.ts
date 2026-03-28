@@ -89,12 +89,12 @@ export interface OrchestratorPersistence {
     generation?: number;
   }>;
   loadTasks(workflowId: string): TaskState[];
-  // Attempt methods (optional for backward compat)
-  saveAttempt?(attempt: Attempt): void;
-  loadAttempts?(nodeId: string): Attempt[];
-  loadAttempt?(attemptId: string): Attempt | undefined;
-  updateAttempt?(attemptId: string, changes: Partial<Pick<Attempt, 'status' | 'startedAt' | 'completedAt' | 'exitCode' | 'error' | 'lastHeartbeatAt' | 'branch' | 'commit' | 'summary' | 'workspacePath' | 'claudeSessionId' | 'containerId' | 'mergeConflict'>>): void;
-  getNextAttemptNumber?(nodeId: string): number;
+  // Attempt methods
+  saveAttempt(attempt: Attempt): void;
+  loadAttempts(nodeId: string): Attempt[];
+  loadAttempt(attemptId: string): Attempt | undefined;
+  updateAttempt(attemptId: string, changes: Partial<Pick<Attempt, 'status' | 'startedAt' | 'completedAt' | 'exitCode' | 'error' | 'lastHeartbeatAt' | 'branch' | 'commit' | 'summary' | 'workspacePath' | 'claudeSessionId' | 'containerId' | 'mergeConflict'>>): void;
+  getNextAttemptNumber(nodeId: string): number;
 }
 
 export interface OrchestratorMessageBus {
@@ -757,11 +757,9 @@ export class Orchestrator {
     if (!task) throw new Error(`Task ${taskId} not found`);
 
     // Enforce maxAttemptsPerNode
-    if (this.persistence.getNextAttemptNumber) {
-      const nextNum = this.persistence.getNextAttemptNumber(taskId);
-      if (nextNum > this.maxAttemptsPerNode) {
-        throw new Error(`Task "${taskId}" has reached the maximum of ${this.maxAttemptsPerNode} attempts`);
-      }
+    const nextNum = this.persistence.getNextAttemptNumber(taskId);
+    if (nextNum > this.maxAttemptsPerNode) {
+      throw new Error(`Task "${taskId}" has reached the maximum of ${this.maxAttemptsPerNode} attempts`);
     }
 
     const prevStatus = task.status;
@@ -776,19 +774,17 @@ export class Orchestrator {
 
     // Supersede current selected attempt and create a new one (best-effort)
     try {
-      if (this.persistence.loadAttempts && this.persistence.updateAttempt && this.persistence.saveAttempt && this.persistence.getNextAttemptNumber) {
-        const attempts = this.persistence.loadAttempts(taskId);
-        const current = attempts[attempts.length - 1];
-        if (current && (current.status === 'running' || current.status === 'pending')) {
-          this.persistence.updateAttempt(current.id, { status: 'superseded' });
-        }
-        const nextNum = this.persistence.getNextAttemptNumber(taskId);
-        const newAttempt = createAttempt(taskId, nextNum, {
-          snapshotCommit: current?.commit,
-          supersedesAttemptId: current?.id,
-        });
-        this.persistence.saveAttempt(newAttempt);
+      const attempts = this.persistence.loadAttempts(taskId);
+      const current = attempts[attempts.length - 1];
+      if (current && (current.status === 'running' || current.status === 'pending')) {
+        this.persistence.updateAttempt(current.id, { status: 'superseded' });
       }
+      const nextNum = this.persistence.getNextAttemptNumber(taskId);
+      const newAttempt = createAttempt(taskId, nextNum, {
+        snapshotCommit: current?.commit,
+        supersedesAttemptId: current?.id,
+      });
+      this.persistence.saveAttempt(newAttempt);
     } catch { /* best effort */ }
 
     const resetChanges: TaskStateChanges = {
@@ -952,19 +948,17 @@ export class Orchestrator {
 
     // Create a fresh-start attempt with commandOverride (best-effort)
     try {
-      if (this.persistence.loadAttempts && this.persistence.updateAttempt && this.persistence.saveAttempt && this.persistence.getNextAttemptNumber) {
-        const attempts = this.persistence.loadAttempts(taskId);
-        const current = attempts[attempts.length - 1];
-        if (current && (current.status === 'running' || current.status === 'pending')) {
-          this.persistence.updateAttempt(current.id, { status: 'superseded' });
-        }
-        const nextNum = this.persistence.getNextAttemptNumber(taskId);
-        const freshAttempt = createAttempt(taskId, nextNum, {
-          commandOverride: newCommand,
-          supersedesAttemptId: current?.id,
-        });
-        this.persistence.saveAttempt(freshAttempt);
+      const attempts = this.persistence.loadAttempts(taskId);
+      const current = attempts[attempts.length - 1];
+      if (current && (current.status === 'running' || current.status === 'pending')) {
+        this.persistence.updateAttempt(current.id, { status: 'superseded' });
       }
+      const nextNum = this.persistence.getNextAttemptNumber(taskId);
+      const freshAttempt = createAttempt(taskId, nextNum, {
+        commandOverride: newCommand,
+        supersedesAttemptId: current?.id,
+      });
+      this.persistence.saveAttempt(freshAttempt);
     } catch { /* best effort */ }
 
     return this.restartTask(taskId);
@@ -1427,21 +1421,19 @@ export class Orchestrator {
 
     // Dual-write: update latest Attempt to completed, auto-select (best-effort)
     try {
-      if (this.persistence.loadAttempts && this.persistence.updateAttempt) {
-        const attempts = this.persistence.loadAttempts(taskId);
-        const latest = attempts[attempts.length - 1];
-        if (latest && latest.status === 'running') {
-          this.persistence.updateAttempt(latest.id, {
-            status: 'completed',
-            exitCode: parsed.exitCode,
-            commit: parsed.commitHash,
-            claudeSessionId: parsed.claudeSessionId,
-            completedAt: new Date(),
-          });
-          // Auto-select this attempt
-          const selectChanges: TaskStateChanges = { execution: { selectedAttemptId: latest.id } };
-          this.writeAndSync(taskId, selectChanges);
-        }
+      const attempts = this.persistence.loadAttempts(taskId);
+      const latest = attempts[attempts.length - 1];
+      if (latest && latest.status === 'running') {
+        this.persistence.updateAttempt(latest.id, {
+          status: 'completed',
+          exitCode: parsed.exitCode,
+          commit: parsed.commitHash,
+          claudeSessionId: parsed.claudeSessionId,
+          completedAt: new Date(),
+        });
+        // Auto-select this attempt
+        const selectChanges: TaskStateChanges = { execution: { selectedAttemptId: latest.id } };
+        this.writeAndSync(taskId, selectChanges);
       }
     } catch { /* best effort */ }
 
@@ -1484,18 +1476,16 @@ export class Orchestrator {
 
     // Dual-write: update latest Attempt to failed (best-effort)
     try {
-      if (this.persistence.loadAttempts && this.persistence.updateAttempt) {
-        const attempts = this.persistence.loadAttempts(taskId);
-        const latest = attempts[attempts.length - 1];
-        if (latest && latest.status === 'running') {
-          this.persistence.updateAttempt(latest.id, {
-            status: 'failed',
-            exitCode: parsed.exitCode,
-            error: parsed.error,
-            mergeConflict,
-            completedAt: new Date(),
-          });
-        }
+      const attempts = this.persistence.loadAttempts(taskId);
+      const latest = attempts[attempts.length - 1];
+      if (latest && latest.status === 'running') {
+        this.persistence.updateAttempt(latest.id, {
+          status: 'failed',
+          exitCode: parsed.exitCode,
+          error: parsed.error,
+          mergeConflict,
+          completedAt: new Date(),
+        });
       }
     } catch { /* best effort */ }
 
@@ -1746,18 +1736,16 @@ export class Orchestrator {
 
       // Dual-write: create Attempt record (best-effort)
       try {
-        if (this.persistence.getNextAttemptNumber && this.persistence.saveAttempt) {
-          const attemptNum = this.persistence.getNextAttemptNumber(job.taskId);
-          const upstreamAttemptIds = task.dependencies
-            .map(depId => this.stateMachine.getTask(depId)?.execution.selectedAttemptId)
-            .filter((id): id is string => !!id);
-          const attempt = createAttempt(job.taskId, attemptNum, {
-            status: 'running',
-            startedAt: now,
-            upstreamAttemptIds,
-          });
-          this.persistence.saveAttempt(attempt);
-        }
+        const attemptNum = this.persistence.getNextAttemptNumber(job.taskId);
+        const upstreamAttemptIds = task.dependencies
+          .map(depId => this.stateMachine.getTask(depId)?.execution.selectedAttemptId)
+          .filter((id): id is string => !!id);
+        const attempt = createAttempt(job.taskId, attemptNum, {
+          status: 'running',
+          startedAt: now,
+          upstreamAttemptIds,
+        });
+        this.persistence.saveAttempt(attempt);
       } catch { /* best effort — never break existing flow */ }
 
       job = this.scheduler.dequeue();

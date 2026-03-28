@@ -6,7 +6,6 @@ import {
   isMergeGateId,
   groupTasksByWorkflow,
   sortedWorkflowGroups,
-  MERGE_GATE_ID,
   mergeGateKindFromDescription,
   mergeGatePanelHeading,
   mergeGatePlanTitle,
@@ -202,12 +201,6 @@ describe('sortedWorkflowGroups', () => {
   });
 });
 
-describe('MERGE_GATE_ID', () => {
-  it('is a stable constant', () => {
-    expect(MERGE_GATE_ID).toBe('__merge_gate__');
-  });
-});
-
 describe('mergeGateId', () => {
   it('produces unique IDs per workflow', () => {
     const gateA = mergeGateId('wf-a');
@@ -225,7 +218,7 @@ describe('mergeGateId', () => {
 describe('isMergeGateId', () => {
   it('returns true for merge gate IDs', () => {
     expect(isMergeGateId(mergeGateId('wf-a'))).toBe(true);
-    expect(isMergeGateId(MERGE_GATE_ID)).toBe(true);
+    expect(isMergeGateId('__merge_gate__')).toBe(true);
   });
 
   it('returns false for regular task IDs', () => {

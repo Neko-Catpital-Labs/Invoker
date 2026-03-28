@@ -1,4 +1,4 @@
-import type { TaskState, TaskStateChanges, OrchestratorPersistence } from '@invoker/core';
+import type { TaskState, TaskStateChanges, OrchestratorPersistence, Attempt } from '@invoker/core';
 
 /**
  * In-memory implementation of OrchestratorPersistence for testing.
@@ -13,6 +13,7 @@ export class InMemoryPersistence implements OrchestratorPersistence {
     generation?: number;
   }>();
   tasks = new Map<string, { workflowId: string; task: TaskState }>();
+  private attempts = new Map<string, Attempt[]>();
 
   saveWorkflow(workflow: {
     id: string; name: string; status: string;
@@ -77,4 +78,37 @@ export class InMemoryPersistence implements OrchestratorPersistence {
   }
 
   logEvent(): void {}
+
+  saveAttempt(attempt: Attempt): void {
+    const list = this.attempts.get(attempt.nodeId) ?? [];
+    list.push(attempt);
+    this.attempts.set(attempt.nodeId, list);
+  }
+
+  loadAttempts(nodeId: string): Attempt[] {
+    return this.attempts.get(nodeId) ?? [];
+  }
+
+  loadAttempt(attemptId: string): Attempt | undefined {
+    for (const list of this.attempts.values()) {
+      const found = list.find(a => a.id === attemptId);
+      if (found) return found;
+    }
+    return undefined;
+  }
+
+  updateAttempt(attemptId: string, changes: Partial<Pick<Attempt, 'status' | 'startedAt' | 'completedAt' | 'exitCode' | 'error' | 'lastHeartbeatAt' | 'branch' | 'commit' | 'summary' | 'workspacePath' | 'claudeSessionId' | 'containerId' | 'mergeConflict'>>): void {
+    for (const list of this.attempts.values()) {
+      const idx = list.findIndex(a => a.id === attemptId);
+      if (idx !== -1) {
+        list[idx] = { ...list[idx], ...changes } as Attempt;
+        return;
+      }
+    }
+  }
+
+  getNextAttemptNumber(nodeId: string): number {
+    const list = this.attempts.get(nodeId) ?? [];
+    return list.length + 1;
+  }
 }

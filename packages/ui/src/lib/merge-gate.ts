@@ -82,9 +82,6 @@ export function isMergeGateId(id: string): boolean {
   return id.startsWith('__merge_gate__');
 }
 
-/** Backward-compatible constant for single-workflow usage. */
-export const MERGE_GATE_ID = '__merge_gate__';
-
 /** Compute the merge gate status from a set of tasks. */
 export function computeMergeGateStatus(tasks: TaskState[]): TaskStatus {
   let anyFailed = false;

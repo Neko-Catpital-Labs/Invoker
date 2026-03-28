@@ -126,31 +126,6 @@ export type TaskDelta =
   | { readonly type: 'updated'; readonly taskId: string; readonly changes: TaskStateChanges }
   | { readonly type: 'removed'; readonly taskId: string };
 
-// ── Task Transition (audit log entry) ───────────────────────
-
-export interface TaskTransition {
-  readonly from: TaskStatus;
-  readonly to: TaskStatus;
-  readonly taskId: string;
-  readonly timestamp: Date;
-}
-
-// ── Side Effects ────────────────────────────────────────────
-
-export type SideEffect =
-  | { readonly type: 'tasks_ready'; readonly taskIds: readonly string[] }
-  | { readonly type: 'tasks_blocked'; readonly taskIds: readonly string[]; readonly blockedBy: string }
-  | { readonly type: 'reconciliation_triggered'; readonly taskId: string };
-
-// ── Transition Result ───────────────────────────────────────
-
-export interface TransitionResult {
-  readonly task: TaskState;
-  readonly delta: TaskDelta;
-  readonly transition: TaskTransition;
-  readonly sideEffects: readonly SideEffect[];
-}
-
 // ── Task Create Options (alias for TaskConfig) ──────────────
 
 export type TaskCreateOptions = Partial<TaskConfig>;

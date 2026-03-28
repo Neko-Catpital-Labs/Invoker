@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { Orchestrator } from '../orchestrator.js';
 import type { PlanDefinition, OrchestratorPersistence, OrchestratorMessageBus } from '../orchestrator.js';
-import type { TaskState, TaskDelta, TaskStateChanges } from '../task-types.js';
+import type { TaskState, TaskDelta, TaskStateChanges , Attempt} from '../task-types.js';
 import type { WorkResponse } from '@invoker/protocol';
 
 // ── In-Memory Persistence Mock ──────────────────────────────
@@ -9,6 +9,7 @@ import type { WorkResponse } from '@invoker/protocol';
 class InMemoryPersistence implements OrchestratorPersistence {
   workflows = new Map<string, { id: string; name: string; status: string; createdAt: string; updatedAt: string }>();
   tasks = new Map<string, { workflowId: string; task: TaskState }>();
+  private attempts = new Map<string, Attempt[]>();
   events: Array<{ taskId: string; eventType: string; payload?: unknown }> = [];
 
   saveWorkflow(workflow: { id: string; name: string; status: string }): void {
