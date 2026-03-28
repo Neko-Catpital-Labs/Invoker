@@ -24,6 +24,7 @@ import { SshFamiliar } from './ssh-familiar.js';
 import {
   executeMergeNodeImpl,
   approveMergeImpl,
+  publishAfterFixImpl,
   buildMergeSummaryImpl,
   consolidateAndMergeImpl,
   ensureLocalBranchForMerge,
@@ -430,6 +431,10 @@ export class TaskExecutor {
 
   async approveMerge(workflowId: string): Promise<void> {
     return approveMergeImpl(this, workflowId);
+  }
+
+  async publishAfterFix(task: TaskState): Promise<void> {
+    return publishAfterFixImpl(this, task);
   }
 
   async buildMergeSummary(workflowId: string): Promise<string> {

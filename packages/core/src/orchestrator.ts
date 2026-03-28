@@ -593,21 +593,23 @@ export class Orchestrator {
     mergeTrace('APPROVE_TASK_LOOKUP', { taskId, found: !!task, status: task?.status, isMergeNode: !!task?.config.isMergeNode, hasHook: !!this.beforeApproveHook });
     if (!task || task.status !== 'awaiting_approval') return [];
 
-    // Merge gate fixed by Claude: first approve clears pendingFixError only;
-    // second approve runs the merge hook and completes (see setFixAwaitingApproval).
+    // Merge gate fixed by Claude: approve the fix → running while PR/git
+    // prep executes; caller must drive the async publish work via executor.
     if (
       task.config.isMergeNode &&
       task.execution.pendingFixError !== undefined
     ) {
+      const now = new Date();
       const fixClearChanges: TaskStateChanges = {
-        status: 'awaiting_approval',
-        execution: { pendingFixError: undefined },
+        status: 'running',
+        execution: { pendingFixError: undefined, startedAt: now, lastHeartbeatAt: now },
       };
       this.writeAndSync(taskId, fixClearChanges);
       const fixDelta: TaskDelta = { type: 'updated', taskId, changes: fixClearChanges };
-      this.persistence.logEvent?.(taskId, 'task.awaiting_approval', fixClearChanges);
+      this.persistence.logEvent?.(taskId, 'task.running', fixClearChanges);
       this.messageBus.publish(TASK_DELTA_CHANNEL, fixDelta);
-      return [];
+      const updated = this.stateMachine.getTask(taskId)!;
+      return [updated];
     }
 
     if (this.beforeApproveHook) {

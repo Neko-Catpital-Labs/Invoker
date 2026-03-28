@@ -417,6 +417,191 @@ export async function approveMergeImpl(
   }
 }
 
+/**
+ * Re-run consolidation + push + PR creation after a Claude fix was approved.
+ * Called when orchestrator.approve() transitions a merge gate from
+ * awaiting_approval (with pendingFixError) to running.
+ *
+ * Key insight: Claude fixed the code in the gate clone (on its HEAD, typically
+ * the baseBranch). We must consolidate task branches starting from the gate
+ * clone's HEAD (which has the fixes), NOT from host.cwd's baseBranch.
+ * Using the normal consolidateAndMerge would destroy the fixes by recreating
+ * the feature branch from the un-fixed baseBranch.
+ *
+ * On success: sets awaiting_approval (ready for second-step merge approval).
+ * On failure: sets failed with the error.
+ */
+export async function publishAfterFixImpl(
+  host: MergeExecutorHost,
+  task: TaskState,
+): Promise<void> {
+  const workflowId = task.config.workflowId;
+  const workflow = workflowId
+    ? host.persistence.loadWorkflow(workflowId)
+    : undefined;
+  const onFinish = workflow?.onFinish ?? 'none';
+  const mergeMode = workflow?.mergeMode ?? 'manual';
+  const baseBranch = workflow?.baseBranch ?? host.defaultBranch ?? await host.detectDefaultBranch();
+  const featureBranch = workflow?.featureBranch;
+  const visualProof = workflow?.visualProof ?? false;
+
+  mergeTrace('PUBLISH_AFTER_FIX_ENTER', {
+    taskId: task.id, workflowId, onFinish, mergeMode, baseBranch, featureBranch,
+  });
+
+  const summary = workflowId ? await host.buildMergeSummary(workflowId) : undefined;
+  const gateWorkspacePath = host.persistence.getWorkspacePath(task.id) ?? undefined;
+
+  // #region agent log
+  fetch('http://127.0.0.1:7658/ingest/762b7479-8057-4c6f-a805-85ee7d433bf5',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'16cf33'},body:JSON.stringify({sessionId:'16cf33',location:'merge-executor.ts:publishAfterFixImpl',message:'publishAfterFix config',data:{taskId:task.id,workflowId,onFinish,mergeMode,baseBranch,featureBranch,gateWorkspacePath},timestamp:Date.now(),runId:'post-fix-v3'})}).catch(()=>{});
+  // #endregion
+
+  try {
+    if (!featureBranch) {
+      host.orchestrator.setTaskAwaitingApproval(task.id, {
+        config: { familiarType: 'worktree', summary },
+        execution: { workspacePath: gateWorkspacePath },
+      });
+      return;
+    }
+
+    // Consolidate task branches in the gate clone, starting from the gate
+    // clone's current HEAD (which has Claude's fixes).
+    const consolidateDir = gateWorkspacePath ?? host.cwd;
+
+    // Refresh branch refs from host.cwd into the gate clone
+    if (gateWorkspacePath) {
+      await host.execGitIn(['fetch', 'origin', '+refs/heads/*:refs/heads/*'], gateWorkspacePath);
+    }
+
+    // Create/reset feature branch from HEAD (Claude's fixed base)
+    try {
+      await host.execGitIn(['checkout', '-b', featureBranch], consolidateDir);
+    } catch {
+      await host.execGitIn(['branch', '-D', featureBranch], consolidateDir);
+      await host.execGitIn(['checkout', '-b', featureBranch], consolidateDir);
+    }
+
+    // Gather task branches (same logic as consolidateAndMergeImpl)
+    const allTasks = host.orchestrator.getAllTasks();
+    let allowedTaskIds: Set<string> | undefined;
+    if (task.id && workflowId) {
+      const mergeT = allTasks.find((x) => x.id === task.id && x.config.isMergeNode);
+      if (mergeT) {
+        allowedTaskIds = collectTransitiveNonMergeTaskIds(mergeT, (id) => host.orchestrator.getTask(id));
+        for (const lid of findLeafTaskIdsInWorkflow(allTasks, workflowId)) {
+          allowedTaskIds.add(lid);
+        }
+      }
+    }
+    const taskBranches = allTasks
+      .filter((t) => {
+        if (!t.execution.branch || t.config.isMergeNode) return false;
+        if (t.status !== 'completed') return false;
+        if (allowedTaskIds) return allowedTaskIds.has(t.id);
+        return t.config.workflowId === workflowId;
+      })
+      .map((t) => ({ branch: t.execution.branch!, description: t.description }))
+      .sort((a, b) => a.branch.localeCompare(b.branch));
+
+    // #region agent log
+    fetch('http://127.0.0.1:7658/ingest/762b7479-8057-4c6f-a805-85ee7d433bf5',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'16cf33'},body:JSON.stringify({sessionId:'16cf33',location:'merge-executor.ts:publishAfterFixImpl:consolidate',message:'consolidating in gate clone',data:{taskId:task.id,consolidateDir,branchCount:taskBranches.length,branches:taskBranches.map(t=>t.branch)},timestamp:Date.now(),runId:'post-fix-v3'})}).catch(()=>{});
+    // #endregion
+
+    for (const { branch, description } of taskBranches) {
+      console.log(`[merge] Post-fix: merging task branch ${branch} → ${featureBranch}`);
+      await ensureLocalBranchForMerge(host, consolidateDir, branch);
+      const mergeMsg = description ? `Merge ${branch} — ${description}` : `Merge ${branch}`;
+      await host.execGitIn(['merge', '--no-ff', '-m', mergeMsg, branch], consolidateDir);
+    }
+    console.log(`[merge] Post-fix: consolidated ${taskBranches.length} task branches into ${featureBranch}`);
+
+    // Push feature branch from gate clone → host.cwd → origin
+    await host.execGitIn(
+      ['fetch', consolidateDir, `+${featureBranch}:refs/heads/${featureBranch}`],
+      host.cwd,
+    );
+    await host.execGitIn(
+      ['push', '--force', '-u', 'origin', featureBranch],
+      host.cwd,
+    );
+
+    let fullSummary = summary;
+    if (visualProof && host.runVisualProofCapture) {
+      const slug = featureBranch.replace(/\//g, '-');
+      const vpMarkdown = await host.runVisualProofCapture(baseBranch, featureBranch, slug);
+      if (vpMarkdown) {
+        fullSummary = (summary ?? '') + '\n\n' + vpMarkdown;
+      }
+    }
+
+    if (mergeMode === 'github') {
+      if (!host.mergeGateProvider) {
+        throw new Error('mergeMode is "github" but no mergeGateProvider configured');
+      }
+
+      const result = await host.mergeGateProvider.createReview({
+        baseBranch,
+        featureBranch,
+        title: workflow?.name ?? 'Workflow',
+        cwd: host.cwd,
+        body: fullSummary,
+      });
+      console.log(`[merge] Post-fix: created/updated GitHub PR: ${result.url}`);
+
+      // #region agent log
+      fetch('http://127.0.0.1:7658/ingest/762b7479-8057-4c6f-a805-85ee7d433bf5',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'16cf33'},body:JSON.stringify({sessionId:'16cf33',location:'merge-executor.ts:publishAfterFixImpl:success',message:'PR created successfully',data:{taskId:task.id,prUrl:result.url},timestamp:Date.now(),runId:'post-fix-v3'})}).catch(()=>{});
+      // #endregion
+
+      host.orchestrator.setTaskAwaitingApproval(task.id, {
+        config: { familiarType: 'worktree', summary },
+        execution: {
+          branch: featureBranch,
+          workspacePath: gateWorkspacePath,
+          prUrl: result.url,
+          prIdentifier: result.identifier,
+          prStatus: 'Awaiting review',
+        },
+      });
+      host.startPrPolling(task.id, result.identifier, workflowId!);
+      return;
+    }
+
+    // manual mode with pull_request onFinish
+    if (onFinish === 'pull_request') {
+      const prUrl = await host.execPr(baseBranch, featureBranch, workflow?.name ?? 'Workflow', fullSummary);
+      console.log(`[merge] Post-fix: created pull request ${prUrl}`);
+      host.persistence.updateTask(task.id, {
+        config: { summary },
+        execution: { prUrl },
+      });
+    }
+
+    host.orchestrator.setTaskAwaitingApproval(task.id, {
+      config: { familiarType: 'worktree', summary },
+      execution: {
+        branch: featureBranch,
+        workspacePath: gateWorkspacePath,
+      },
+    });
+    mergeTrace('PUBLISH_AFTER_FIX_DONE', { taskId: task.id });
+  } catch (err) {
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    // #region agent log
+    fetch('http://127.0.0.1:7658/ingest/762b7479-8057-4c6f-a805-85ee7d433bf5',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'16cf33'},body:JSON.stringify({sessionId:'16cf33',location:'merge-executor.ts:publishAfterFixImpl:catch',message:'publishAfterFix error',data:{taskId:task.id,error:errorMsg},timestamp:Date.now(),runId:'post-fix-v3'})}).catch(()=>{});
+    // #endregion
+    mergeTrace('PUBLISH_AFTER_FIX_FAILED', { taskId: task.id, error: errorMsg });
+    console.error(`[merge] Post-fix PR prep failed for ${task.id}: ${errorMsg}`);
+    const failedResponse: WorkResponse = {
+      requestId: `postfix-${task.id}`,
+      actionId: task.id,
+      status: 'failed',
+      outputs: { exitCode: 1, error: `Post-fix PR prep failed: ${errorMsg}` },
+    };
+    host.orchestrator.handleWorkerResponse(failedResponse);
+  }
+}
+
 export async function buildMergeSummaryImpl(
   host: MergeExecutorHost,
   workflowId: string,

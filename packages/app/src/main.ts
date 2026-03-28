@@ -215,9 +215,18 @@ async function wireSlackBot(deps: SlackBotDeps): Promise<any> {
   await slack.start(async (command: any) => {
     deps.logFn('trace', 'info', `slackBot: command received — type=${command.type}`);
     switch (command.type) {
-      case 'approve':
-        await orchestrator.approve(command.taskId);
+      case 'approve': {
+        const approveStarted = await orchestrator.approve(command.taskId);
+        const pfm = approveStarted.filter(t => t.status === 'running' && t.config.isMergeNode);
+        for (const task of pfm) {
+          deps.executor.publishAfterFix(task).catch(err => {
+            console.error(`[slack] approve: publishAfterFix failed for "${task.id}":`, err);
+          });
+        }
+        const runnable = approveStarted.filter(t => t.status === 'running' && !t.config.isMergeNode);
+        if (runnable.length > 0) await deps.executor.executeTasks(runnable);
         break;
+      }
       case 'reject':
         rejectTask(command.taskId, { orchestrator }, command.reason);
         break;
@@ -920,7 +929,16 @@ function setupGuiMode(): void {
       console.log(`[ipc] approve: "${taskId}"`);
       const started = await orchestrator.approve(taskId);
       console.log(`[ipc] approve: orchestrator returned ${started.length} started tasks: [${started.map(t => `${t.id}(${t.status})`).join(', ')}]`);
-      const runnable = started.filter(t => t.status === 'running');
+
+      const postFixMerge = started.filter(t => t.status === 'running' && t.config.isMergeNode);
+      for (const task of postFixMerge) {
+        console.log(`[ipc] approve: post-fix PR prep for merge gate "${task.id}"`);
+        taskExecutor.publishAfterFix(task).catch(err => {
+          console.error(`[ipc] approve: publishAfterFix failed for "${task.id}":`, err);
+        });
+      }
+
+      const runnable = started.filter(t => t.status === 'running' && !t.config.isMergeNode);
       console.log(`[ipc] approve: ${runnable.length} runnable after filter: [${runnable.map(t => t.id).join(', ')}]`);
       if (runnable.length > 0) await taskExecutor.executeTasks(runnable);
     });
@@ -1064,7 +1082,13 @@ function setupGuiMode(): void {
         const mergeTask = orchestrator.getMergeNode(workflowId);
         if (!mergeTask) throw new Error(`No merge node for workflow ${workflowId}`);
         const started = await orchestrator.approve(mergeTask.id);
-        const runnable = started.filter(t => t.status === 'running');
+        const postFixMerge = started.filter(t => t.status === 'running' && t.config.isMergeNode);
+        for (const task of postFixMerge) {
+          taskExecutor.publishAfterFix(task).catch(err => {
+            console.error(`[ipc] approve-merge: publishAfterFix failed for "${task.id}":`, err);
+          });
+        }
+        const runnable = started.filter(t => t.status === 'running' && !t.config.isMergeNode);
         if (runnable.length > 0) await taskExecutor.executeTasks(runnable);
       } catch (err) {
         console.error(`[ipc] approve-merge failed: ${err}`);

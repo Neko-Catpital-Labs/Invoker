@@ -3773,26 +3773,29 @@ describe('Orchestrator', () => {
       return mergeNode.id;
     }
 
-    it('first approve clears pendingFixError, stays awaiting_approval, does not fire beforeApproveHook', async () => {
+    it('first approve transitions to running (for PR prep), clears pendingFixError, does not fire beforeApproveHook', async () => {
       const hookSpy = vi.fn();
       orchestrator.setBeforeApproveHook(hookSpy);
       const mergeId = setupMergeGateAwaitingFixApproval();
 
       const started = await orchestrator.approve(mergeId);
 
-      expect(started).toEqual([]);
+      expect(started).toHaveLength(1);
+      expect(started[0].id).toBe(mergeId);
+      expect(started[0].status).toBe('running');
       expect(hookSpy).not.toHaveBeenCalled();
       const task = orchestrator.getTask(mergeId)!;
-      expect(task.status).toBe('awaiting_approval');
+      expect(task.status).toBe('running');
       expect(task.execution.pendingFixError).toBeUndefined();
     });
 
-    it('second approve completes merge node and fires beforeApproveHook once', async () => {
+    it('after PR prep sets awaiting_approval, second approve completes and fires hook', async () => {
       const hookSpy = vi.fn();
       orchestrator.setBeforeApproveHook(hookSpy);
       const mergeId = setupMergeGateAwaitingFixApproval();
 
       await orchestrator.approve(mergeId);
+      orchestrator.setTaskAwaitingApproval(mergeId);
       await orchestrator.approve(mergeId);
 
       expect(hookSpy).toHaveBeenCalledTimes(1);

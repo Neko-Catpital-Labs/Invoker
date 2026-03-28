@@ -167,7 +167,15 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
       if (method === 'POST' && approveMatch) {
         const taskId = decodeURIComponent(approveMatch[1]);
         try {
-          await orchestrator.approve(taskId);
+          const started = await orchestrator.approve(taskId);
+          const postFixMerge = started.filter(t => t.status === 'running' && t.config.isMergeNode);
+          for (const task of postFixMerge) {
+            taskExecutor.publishAfterFix(task).catch(err => {
+              console.error(`[api] approve: publishAfterFix failed for "${task.id}":`, err);
+            });
+          }
+          const runnable = started.filter(t => t.status === 'running' && !t.config.isMergeNode);
+          if (runnable.length > 0) await taskExecutor.executeTasks(runnable);
           json(res, 200, { ok: true, taskId, action: 'approved' });
         } catch (err) {
           json(res, 400, { error: err instanceof Error ? err.message : String(err) });

@@ -332,7 +332,11 @@ async function headlessApprove(taskId: string, deps: HeadlessDeps): Promise<void
   const te = createHeadlessExecutor(deps);
   wireHeadlessApproveHook(deps, te);
   const started = await deps.orchestrator.approve(taskId);
-  const runnable = started.filter(t => t.status === 'running');
+  const postFixMerge = started.filter(t => t.status === 'running' && t.config.isMergeNode);
+  for (const task of postFixMerge) {
+    await te.publishAfterFix(task);
+  }
+  const runnable = started.filter(t => t.status === 'running' && !t.config.isMergeNode);
   if (runnable.length > 0) await te.executeTasks(runnable);
   console.log(`Approved task: ${taskId}`);
 }
