@@ -9,7 +9,7 @@
 import { useState } from 'react';
 import { Handle, Position } from '@xyflow/react';
 import type { TaskStatus } from '../types.js';
-import { getStatusColor } from '../lib/colors.js';
+import { getStatusColor, getEffectiveVisualStatus } from '../lib/colors.js';
 import type { MergeGateKind } from '../lib/merge-gate.js';
 
 interface MergeGateNodeData {
@@ -26,6 +26,8 @@ interface MergeGateNodeData {
   prUrl?: string;
   prStatus?: string;
   summary?: string;
+  /** Set when merge gate was fixed with Claude — first approve clears this (orchestrator). */
+  pendingFixError?: string;
   dimmed?: boolean;
   [key: string]: unknown;
 }
@@ -54,10 +56,15 @@ export function MergeGateNode({ data }: MergeGateNodeProps) {
     prUrl,
     prStatus,
     summary,
+    pendingFixError,
     dimmed: dataDimmed,
   } = data;
   const dimmed = dataDimmed ?? false;
-  const colors = getStatusColor(status);
+  const visualStatus = getEffectiveVisualStatus(
+    status,
+    pendingFixError ? { pendingFixError } : undefined,
+  );
+  const colors = getStatusColor(visualStatus);
   const [error, setError] = useState<string | null>(null);
 
   /** mergeMode wins over gateKind so we never show "Pull request" + "GitHub PR" when workflow is GitHub mode. */
@@ -88,13 +95,15 @@ export function MergeGateNode({ data }: MergeGateNodeProps) {
   );
 
   const statusLabel =
-    status === 'completed' ? 'COMPLETED' :
-    status === 'awaiting_approval' ? 'NEEDS APPROVAL' :
-    status === 'failed' ? 'BLOCKED' :
+    visualStatus === 'completed' ? 'COMPLETED' :
+    visualStatus === 'fix_approval' ? 'APPROVE FIX' :
+    visualStatus === 'awaiting_approval' ? 'NEEDS APPROVAL' :
+    visualStatus === 'failed' ? 'BLOCKED' :
     'WAITING';
 
-  const approveLabel = effectiveGateKind === 'pull_request' ? 'Approve & Create PR'
+  const mergeApproveLabel = effectiveGateKind === 'pull_request' ? 'Approve & Create PR'
     : effectiveGateKind === 'merge' ? 'Approve & Merge' : 'Approve';
+  const approveLabel = pendingFixError ? 'Approve Fix' : mergeApproveLabel;
 
   return (
     <div className={`rounded-lg border-2 border-dashed px-3 py-2 w-[200px] transition-opacity duration-200 ${colors.bg} ${colors.border} ${dimmed ? 'opacity-20 pointer-events-none' : ''}`}>
@@ -162,7 +171,7 @@ export function MergeGateNode({ data }: MergeGateNodeProps) {
 
       <div className="flex items-center gap-1.5 mt-1">
         <span
-          className={`w-2 h-2 rounded-full ${colors.dot} ${status === 'pending' ? 'animate-pulse' : ''}`}
+          className={`w-2 h-2 rounded-full ${colors.dot} ${visualStatus === 'pending' ? 'animate-pulse' : ''}`}
         />
         <span className={`text-xs uppercase ${colors.text}`}>{statusLabel}</span>
       </div>

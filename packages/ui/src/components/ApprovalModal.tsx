@@ -69,21 +69,35 @@ export function ApprovalModal({
     onClose();
   };
 
+  const heading = isFixApproval
+    ? 'Approve AI Fix'
+    : isMergeNode
+      ? onFinish === 'merge'
+        ? 'Confirm Merge'
+        : onFinish === 'pull_request'
+          ? 'Confirm Pull Request'
+          : 'Approve Merge'
+      : 'Manual Approval Required';
+
+  const approveButtonLabel = isFixApproval
+    ? 'Approve Fix'
+    : isMergeNode
+      ? onFinish === 'pull_request'
+        ? 'Confirm Create PR'
+        : 'Approve Merge'
+      : 'Approve';
+
+  const rejectButtonLabel = showRejectInput
+    ? (isFixApproval ? 'Confirm Reject Fix' : isMergeNode ? 'Confirm Reject Merge' : 'Confirm Reject')
+    : (isFixApproval ? 'Reject Fix' : isMergeNode ? 'Reject Merge' : 'Reject');
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
       <div className="bg-gray-800 rounded-lg shadow-xl w-full max-w-2xl max-h-[90vh] flex flex-col border border-gray-700">
         {/* Header */}
         <div className="p-6 pb-0 shrink-0">
           <h2 className="text-lg font-semibold text-gray-100 mb-2 shrink-0">
-            {isMergeNode
-            ? onFinish === 'merge'
-              ? 'Confirm Merge'
-              : onFinish === 'pull_request'
-                ? 'Confirm Pull Request'
-                : 'Approve Merge'
-            : isFixApproval
-              ? 'Approve AI Fix'
-              : 'Manual Approval Required'}
+            {heading}
           </h2>
           <p className="text-sm text-gray-300 mb-1">
             Task: <span className="font-mono text-gray-200">{task.id}</span>
@@ -163,20 +177,14 @@ export function ApprovalModal({
               onClick={handleReject}
               className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded text-sm font-medium transition-colors"
             >
-              {showRejectInput
-                ? (isMergeNode ? 'Confirm Reject Merge' : 'Confirm Reject')
-                : (isMergeNode ? 'Reject Merge' : 'Reject')}
+              {rejectButtonLabel}
             </button>
             {!showRejectInput && (
               <button
                 onClick={handleApprove}
                 className="px-4 py-2 bg-green-600 hover:bg-green-500 text-white rounded text-sm font-medium transition-colors"
               >
-                {isMergeNode
-                  ? onFinish === 'pull_request'
-                    ? 'Confirm Create PR'
-                    : 'Approve Merge'
-                  : 'Approve'}
+                {approveButtonLabel}
               </button>
             )}
           </div>

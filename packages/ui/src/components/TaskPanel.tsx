@@ -156,6 +156,7 @@ export function TaskPanel({
   const executorSelectValue = effectiveExecutorSelectValue(task);
 
   const mergeGateDisplayTitle = mergeGatePanelHeading(task, mergeMode);
+  const isFixApproval = Boolean(task.execution.pendingFixError);
 
   return (
     <div className="h-full overflow-y-auto p-4 space-y-4">
@@ -468,13 +469,13 @@ export function TaskPanel({
               onClick={() => onApprove(task)}
               className="flex-1 px-4 py-2 bg-green-600 hover:bg-green-500 text-white rounded text-sm font-medium transition-colors"
             >
-              {task.config.isMergeNode ? 'Approve Merge' : 'Approve'}
+              {isFixApproval ? 'Approve Fix' : task.config.isMergeNode ? 'Approve Merge' : 'Approve'}
             </button>
             <button
               onClick={() => onReject(task)}
               className="flex-1 px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded text-sm font-medium transition-colors"
             >
-              {task.config.isMergeNode ? 'Reject Merge' : 'Reject'}
+              {isFixApproval ? 'Reject Fix' : task.config.isMergeNode ? 'Reject Merge' : 'Reject'}
             </button>
           </div>
         )}

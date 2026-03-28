@@ -107,6 +107,19 @@ describe('MergeGateNode', () => {
     expect(screen.getByTestId('approve-merge-button')).toHaveTextContent('Approve & Create PR');
   });
 
+  it('shows "Approve Fix" when pendingFixError is set (overrides gate kind label)', () => {
+    renderNode({
+      status: 'awaiting_approval',
+      label: 'Plan',
+      gateKind: 'pull_request',
+      baseBranch: 'master',
+      mergeMode: 'manual',
+      workflowId: 'wf-123',
+      pendingFixError: 'merge conflict',
+    });
+    expect(screen.getByTestId('approve-merge-button')).toHaveTextContent('Approve Fix');
+  });
+
   it('shows "Approve" for workflow gate kind', () => {
     renderNode({
       status: 'awaiting_approval',

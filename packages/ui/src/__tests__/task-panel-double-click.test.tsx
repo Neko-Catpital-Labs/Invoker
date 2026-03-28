@@ -771,6 +771,47 @@ describe('TaskPanel double-click editing', () => {
     });
   });
 
+  describe('Fix approval button labels', () => {
+    it('shows Approve Fix and Reject Fix for merge node awaiting fix approval', () => {
+      const task = makeTask({
+        status: 'awaiting_approval',
+        config: { isMergeNode: true, workflowId: 'wf-1' } as TaskState['config'],
+        execution: { pendingFixError: 'tests failed' } as TaskState['execution'],
+      });
+      render(
+        <TaskPanel
+          task={task}
+          onProvideInput={mockOnProvideInput}
+          onApprove={mockOnApprove}
+          onReject={mockOnReject}
+          onSelectExperiment={mockOnSelectExperiment}
+        />,
+      );
+      expect(screen.getByText('Approve Fix')).toBeInTheDocument();
+      expect(screen.getByText('Reject Fix')).toBeInTheDocument();
+      expect(screen.queryByText('Approve Merge')).not.toBeInTheDocument();
+    });
+
+    it('shows Approve Merge when merge node has no pendingFixError', () => {
+      const task = makeTask({
+        status: 'awaiting_approval',
+        config: { isMergeNode: true, workflowId: 'wf-1' } as TaskState['config'],
+        execution: {} as TaskState['execution'],
+      });
+      render(
+        <TaskPanel
+          task={task}
+          onProvideInput={mockOnProvideInput}
+          onApprove={mockOnApprove}
+          onReject={mockOnReject}
+          onSelectExperiment={mockOnSelectExperiment}
+        />,
+      );
+      expect(screen.getByText('Approve Merge')).toBeInTheDocument();
+      expect(screen.getByText('Reject Merge')).toBeInTheDocument();
+    });
+  });
+
   describe('PR URL display for merge gates', () => {
     it('renders PR URL link when merge gate task has prUrl', () => {
       const task = makeTask({
