@@ -469,12 +469,15 @@ export async function publishAfterFixImpl(
     // clone's current HEAD (which has Claude's fixes).
     const consolidateDir = gateWorkspacePath ?? host.cwd;
 
-    // Refresh branch refs from host.cwd into the gate clone
+    // Refresh branch refs from host.cwd into the gate clone.
+    // Must detach HEAD first — git refuses to fetch into a checked-out branch.
     if (gateWorkspacePath) {
+      const headSha = (await host.execGitIn(['rev-parse', 'HEAD'], gateWorkspacePath)).trim();
+      await host.execGitIn(['checkout', '--detach', headSha], gateWorkspacePath);
       await host.execGitIn(['fetch', 'origin', '+refs/heads/*:refs/heads/*'], gateWorkspacePath);
     }
 
-    // Create/reset feature branch from HEAD (Claude's fixed base)
+    // Create feature branch from HEAD (Claude's fixed base)
     try {
       await host.execGitIn(['checkout', '-b', featureBranch], consolidateDir);
     } catch {
