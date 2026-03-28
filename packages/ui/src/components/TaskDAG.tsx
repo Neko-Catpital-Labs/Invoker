@@ -30,6 +30,7 @@ import { MergeGateNode } from './MergeGateNode.js';
 import {
   isMergeGateId,
   groupTasksByWorkflow,
+  sortedWorkflowGroups,
   resolveMergeGateKind,
   mergeGatePlanTitle,
 } from '../lib/merge-gate.js';
@@ -74,7 +75,8 @@ function TaskDAGInner({ tasks, workflows, onTaskClick, onTaskDoubleClick, onTask
     let yOffset = 0;
     const WORKFLOW_GAP = 100;
 
-    for (const [wfGroupId, wfTasks] of workflowGroups) {
+    for (const [wfGroupId, wfTasksRaw] of sortedWorkflowGroups(workflowGroups)) {
+      const wfTasks = [...wfTasksRaw].sort((a, b) => a.id.localeCompare(b.id));
       const wfMeta = workflows?.get(wfGroupId);
       const wfBaseBranch = wfMeta?.baseBranch;
       const wfMergeMode = (wfMeta?.mergeMode as 'manual' | 'automatic' | 'github') ?? 'manual';

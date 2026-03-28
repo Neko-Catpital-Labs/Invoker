@@ -18,6 +18,19 @@ import {
   assertPageScreenshot,
 } from './fixtures/electron-app.js';
 
+/** Multi-task DAG for verifying deterministic layout ordering. */
+const DAG_DETERMINISM_PLAN = {
+  name: 'DAG determinism test',
+  onFinish: 'none' as const,
+  tasks: [
+    { id: 'task-a', description: 'Task A', command: 'echo a', dependencies: [] },
+    { id: 'task-b', description: 'Task B', command: 'echo b', dependencies: [] },
+    { id: 'task-c', description: 'Task C (depends on A)', command: 'echo c', dependencies: ['task-a'] },
+    { id: 'task-d', description: 'Task D (depends on A, B)', command: 'echo d', dependencies: ['task-a', 'task-b'] },
+    { id: 'task-e', description: 'Task E (depends on C, D)', command: 'echo e', dependencies: ['task-c', 'task-d'] },
+  ],
+};
+
 test.describe('Visual proof capture', () => {
   test('empty state', async ({ page }) => {
     await expect(page.getByText('Load a plan to get started')).toBeVisible({ timeout: 5000 });
@@ -98,6 +111,17 @@ test.describe('Visual proof capture', () => {
 
     // After: task panel is open
     await assertPageScreenshot(page, 'dag-after-selection');
+  });
+
+  test('stable-layout-and-dag-ordering — deterministic dag layout', async ({ page }) => {
+    await loadPlan(page, DAG_DETERMINISM_PLAN);
+    await expect(page.locator('[data-testid="rf__node-task-a"]')).toBeVisible();
+    await expect(page.locator('[data-testid="rf__node-task-b"]')).toBeVisible();
+    await expect(page.locator('[data-testid="rf__node-task-c"]')).toBeVisible();
+    await expect(page.locator('[data-testid="rf__node-task-d"]')).toBeVisible();
+    await expect(page.locator('[data-testid="rf__node-task-e"]')).toBeVisible();
+    await captureScreenshot(page, 'deterministic-dag-layout');
+    await assertPageScreenshot(page, 'deterministic-dag-layout');
   });
 
   test('status bar — no system log button', async ({ page }) => {

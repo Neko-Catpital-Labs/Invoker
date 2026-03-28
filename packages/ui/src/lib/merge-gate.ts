@@ -117,3 +117,12 @@ export function groupTasksByWorkflow(tasks: TaskState[]): Map<string, TaskState[
   }
   return groups;
 }
+
+/** Returns workflow group entries sorted by workflowId; 'unknown' is sorted last. */
+export function sortedWorkflowGroups(groups: Map<string, TaskState[]>): [string, TaskState[]][] {
+  return [...groups.entries()].sort(([a], [b]) => {
+    if (a === 'unknown') return 1;
+    if (b === 'unknown') return -1;
+    return a.localeCompare(b);
+  });
+}

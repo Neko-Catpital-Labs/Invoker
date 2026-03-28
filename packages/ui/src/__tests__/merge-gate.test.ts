@@ -5,6 +5,7 @@ import {
   mergeGateId,
   isMergeGateId,
   groupTasksByWorkflow,
+  sortedWorkflowGroups,
   MERGE_GATE_ID,
   mergeGateKindFromDescription,
   mergeGatePanelHeading,
@@ -176,6 +177,28 @@ describe('mergeGatePanelHeading', () => {
       prUrl: 'https://github.com/o/r/pull/1',
     });
     expect(mergeGatePanelHeading(task, undefined)).toBe('GitHub PR gate for Plan A');
+  });
+});
+
+describe('sortedWorkflowGroups', () => {
+  it('sorts entries by workflowId with unknown last', () => {
+    const empty: TaskState[] = [];
+    const groups = new Map<string, TaskState[]>([
+      ['unknown', empty],
+      ['wf-b', empty],
+      ['wf-a', empty],
+    ]);
+    const sorted = sortedWorkflowGroups(groups);
+    expect(sorted.map(([id]) => id)).toEqual(['wf-a', 'wf-b', 'unknown']);
+  });
+
+  it('handles only the unknown group', () => {
+    const groups = new Map<string, TaskState[]>([['unknown', []]]);
+    expect(sortedWorkflowGroups(groups).map(([id]) => id)).toEqual(['unknown']);
+  });
+
+  it('returns empty array for empty map', () => {
+    expect(sortedWorkflowGroups(new Map())).toEqual([]);
   });
 });
 

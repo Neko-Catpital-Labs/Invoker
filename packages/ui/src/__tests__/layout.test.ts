@@ -192,6 +192,23 @@ describe('layoutNodes', () => {
     expect(Math.abs(posLeaf.y - midCenter)).toBeLessThan(100);
   });
 
+  it('gives deterministic positions regardless of input order', () => {
+    const tasks = [
+      makeTask('z', ['m']),
+      makeTask('a'),
+      makeTask('m', ['a']),
+    ];
+    // Shuffle the input order
+    const shuffled = [tasks[1], tasks[2], tasks[0]];
+
+    const pos1 = layoutNodes(tasks);
+    const pos2 = layoutNodes(shuffled);
+
+    expect(pos1.get('a')).toEqual(pos2.get('a'));
+    expect(pos1.get('m')).toEqual(pos2.get('m'));
+    expect(pos1.get('z')).toEqual(pos2.get('z'));
+  });
+
   it('preserves correct levels for wide fan-in', () => {
     // a, b, c all feed into d
     const tasks = [

@@ -351,13 +351,16 @@ export function layoutNodes(
 
   if (tasks.length === 0) return positions;
 
-  const levels = computeLevels(tasks);
-  const { children, parents } = buildAdjacency(tasks);
-  const connections = countConnections(tasks, children, parents);
+  // Sort by id so level grouping and barycenter tie-breaks are deterministic regardless of caller order.
+  const sorted = [...tasks].sort((a, b) => a.id.localeCompare(b.id));
+
+  const levels = computeLevels(sorted);
+  const { children, parents } = buildAdjacency(sorted);
+  const connections = countConnections(sorted, children, parents);
 
   // Group tasks by level
   let levelGroups = new Map<number, TaskState[]>();
-  for (const task of tasks) {
+  for (const task of sorted) {
     const level = levels.get(task.id) ?? 0;
     if (!levelGroups.has(level)) levelGroups.set(level, []);
     levelGroups.get(level)!.push(task);

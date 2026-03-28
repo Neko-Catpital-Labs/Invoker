@@ -90,8 +90,13 @@ fi
 
 echo "[visual-proof] Running Playwright: ${SPEC}" >&2
 PLAYWRIGHT_EXIT=0
-cd packages/app && CAPTURE_MODE="${LABEL}" CAPTURE_VIDEO=1 \
-  xvfb-run --auto-servernum npx playwright test "${SPEC}" || PLAYWRIGHT_EXIT=$?
+if [[ "$(uname)" == "Linux" ]]; then
+  cd packages/app && CAPTURE_MODE="${LABEL}" CAPTURE_VIDEO=1 \
+    xvfb-run --auto-servernum npx playwright test "${SPEC}" || PLAYWRIGHT_EXIT=$?
+else
+  cd packages/app && CAPTURE_MODE="${LABEL}" CAPTURE_VIDEO=1 \
+    npx playwright test "${SPEC}" || PLAYWRIGHT_EXIT=$?
+fi
 cd ../..
 
 if [[ "${PLAYWRIGHT_EXIT}" -ne 0 ]]; then
