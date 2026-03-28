@@ -91,7 +91,33 @@ describe('MergeGateNode', () => {
       workflowId: 'wf-123',
     });
     expect(screen.getByTestId('approve-merge-button')).toBeInTheDocument();
-    expect(screen.getByTestId('approve-merge-button')).toHaveTextContent('Approve Merge');
+    expect(screen.getByTestId('approve-merge-button')).toHaveTextContent('Approve & Merge');
+  });
+
+  it('shows "Approve & Create PR" for pull_request gate kind', () => {
+    renderNode({
+      status: 'awaiting_approval',
+      label: 'Plan',
+      gateKind: 'pull_request',
+      baseBranch: 'master',
+      mergeMode: 'manual',
+      workflowId: 'wf-123',
+    });
+    expect(screen.getByTestId('approve-merge-button')).toBeInTheDocument();
+    expect(screen.getByTestId('approve-merge-button')).toHaveTextContent('Approve & Create PR');
+  });
+
+  it('shows "Approve" for workflow gate kind', () => {
+    renderNode({
+      status: 'awaiting_approval',
+      label: 'Plan',
+      gateKind: 'workflow',
+      baseBranch: 'master',
+      mergeMode: 'manual',
+      workflowId: 'wf-123',
+    });
+    expect(screen.getByTestId('approve-merge-button')).toBeInTheDocument();
+    expect(screen.getByTestId('approve-merge-button')).toHaveTextContent('Approve');
   });
 
   it('does not show approve button for manual merge gate with completed status', () => {

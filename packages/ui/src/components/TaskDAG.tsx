@@ -114,6 +114,7 @@ function TaskDAGInner({ tasks, workflows, onTaskClick, onTaskDoubleClick, onTask
               prUrl: task.execution?.prUrl,
               prStatus: task.execution?.prStatus,
               summary: task.config?.summary,
+              onFinish: wfMeta?.onFinish,
               dimmed: mergeGateDimmed,
             },
           });

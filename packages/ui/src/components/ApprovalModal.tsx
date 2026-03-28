@@ -14,6 +14,7 @@ interface ApprovalModalProps {
   onReject: (taskId: string, reason?: string) => void;
   onClose: () => void;
   initialAction?: 'approve' | 'reject';
+  onFinish?: string;
 }
 
 export function ApprovalModal({
@@ -22,6 +23,7 @@ export function ApprovalModal({
   onReject,
   onClose,
   initialAction = 'approve',
+  onFinish,
 }: ApprovalModalProps) {
   const isFixApproval = Boolean(task.execution.pendingFixError);
   const isMergeNode = Boolean(task.config.isMergeNode);
@@ -73,7 +75,15 @@ export function ApprovalModal({
         {/* Header */}
         <div className="p-6 pb-0 shrink-0">
           <h2 className="text-lg font-semibold text-gray-100 mb-2 shrink-0">
-            {isMergeNode ? 'Approve Merge' : isFixApproval ? 'Confirm Approve' : 'Manual Approval Required'}
+            {isMergeNode
+            ? onFinish === 'merge'
+              ? 'Confirm Merge'
+              : onFinish === 'pull_request'
+                ? 'Confirm Pull Request'
+                : 'Approve Merge'
+            : isFixApproval
+              ? 'Approve AI Fix'
+              : 'Manual Approval Required'}
           </h2>
           <p className="text-sm text-gray-300 mb-1">
             Task: <span className="font-mono text-gray-200">{task.id}</span>
@@ -162,7 +172,11 @@ export function ApprovalModal({
                 onClick={handleApprove}
                 className="px-4 py-2 bg-green-600 hover:bg-green-500 text-white rounded text-sm font-medium transition-colors"
               >
-                {isMergeNode ? 'Approve Merge' : 'Approve'}
+                {isMergeNode
+                  ? onFinish === 'pull_request'
+                    ? 'Confirm Create PR'
+                    : 'Approve Merge'
+                  : 'Approve'}
               </button>
             )}
           </div>

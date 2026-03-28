@@ -429,6 +429,7 @@ export function App() {
               task={selectedTask}
               baseBranch={selectedTask?.config.workflowId ? workflows.get(selectedTask.config.workflowId)?.baseBranch : undefined}
               mergeMode={selectedTask?.config.workflowId ? workflows.get(selectedTask.config.workflowId)?.mergeMode : undefined}
+              onFinish={selectedTask?.config.workflowId ? workflows.get(selectedTask.config.workflowId)?.onFinish : undefined}
               remoteTargets={remoteTargets}
               onProvideInput={openInputModal}
               onApprove={openApprovalModal}
@@ -465,6 +466,7 @@ export function App() {
           onReject={handleReject}
           onClose={closeModal}
           initialAction={modal.action}
+          onFinish={modal.task.config.workflowId ? workflows.get(modal.task.config.workflowId)?.onFinish : undefined}
         />
       )}
 

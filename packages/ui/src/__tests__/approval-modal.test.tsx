@@ -94,7 +94,7 @@ describe('ApprovalModal', () => {
 
   // ── Fix-with-Claude approval (pendingFixError set) ─────────
 
-  it('renders "Confirm Approve" heading for fix-with-claude approval', () => {
+  it('renders "Approve AI Fix" heading for fix-with-claude approval', () => {
     render(
       <ApprovalModal
         task={makeTask({
@@ -105,7 +105,7 @@ describe('ApprovalModal', () => {
         onClose={vi.fn()}
       />,
     );
-    expect(screen.getByText('Confirm Approve')).toBeInTheDocument();
+    expect(screen.getByText('Approve AI Fix')).toBeInTheDocument();
   });
 
   it('pre-fills rejection reason with session and error for fix approval', () => {
@@ -441,5 +441,57 @@ describe('ApprovalModal', () => {
     fireEvent.click(screen.getByText('Reject'));
     fireEvent.click(screen.getByText('Confirm Reject'));
     expect(onReject).toHaveBeenCalledWith('task-8', undefined);
+  });
+
+  it('renders "Confirm Merge" heading for merge node with onFinish="merge"', () => {
+    render(
+      <ApprovalModal
+        task={makeTask({ config: { isMergeNode: true } })}
+        onApprove={vi.fn()}
+        onReject={vi.fn()}
+        onClose={vi.fn()}
+        onFinish="merge"
+      />,
+    );
+    expect(screen.getByRole('heading', { name: 'Confirm Merge' })).toBeInTheDocument();
+  });
+
+  it('renders "Confirm Pull Request" heading for merge node with onFinish="pull_request"', () => {
+    render(
+      <ApprovalModal
+        task={makeTask({ config: { isMergeNode: true } })}
+        onApprove={vi.fn()}
+        onReject={vi.fn()}
+        onClose={vi.fn()}
+        onFinish="pull_request"
+      />,
+    );
+    expect(screen.getByRole('heading', { name: 'Confirm Pull Request' })).toBeInTheDocument();
+  });
+
+  it('shows "Confirm Merge" button label for merge node with onFinish="merge"', () => {
+    render(
+      <ApprovalModal
+        task={makeTask({ config: { isMergeNode: true } })}
+        onApprove={vi.fn()}
+        onReject={vi.fn()}
+        onClose={vi.fn()}
+        onFinish="merge"
+      />,
+    );
+    expect(screen.getByText('Confirm Merge')).toBeInTheDocument();
+  });
+
+  it('shows "Confirm Create PR" button label for merge node with onFinish="pull_request"', () => {
+    render(
+      <ApprovalModal
+        task={makeTask({ config: { isMergeNode: true } })}
+        onApprove={vi.fn()}
+        onReject={vi.fn()}
+        onClose={vi.fn()}
+        onFinish="pull_request"
+      />,
+    );
+    expect(screen.getByText('Confirm Create PR')).toBeInTheDocument();
   });
 });

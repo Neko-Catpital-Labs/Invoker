@@ -93,6 +93,9 @@ export function MergeGateNode({ data }: MergeGateNodeProps) {
     status === 'failed' ? 'BLOCKED' :
     'WAITING';
 
+  const approveLabel = effectiveGateKind === 'pull_request' ? 'Approve & Create PR'
+    : effectiveGateKind === 'merge' ? 'Approve & Merge' : 'Approve';
+
   return (
     <div className={`rounded-lg border-2 border-dashed px-3 py-2 w-[200px] transition-opacity duration-200 ${colors.bg} ${colors.border} ${dimmed ? 'opacity-20 pointer-events-none' : ''}`}>
       <Handle type="target" position={Position.Left} className="!bg-gray-500" />
@@ -180,7 +183,7 @@ export function MergeGateNode({ data }: MergeGateNodeProps) {
           data-testid="approve-merge-button"
           className="mt-2 w-full px-2 py-1 text-xs font-semibold text-white bg-green-600 hover:bg-green-700 rounded transition-colors"
         >
-          Approve Merge
+          {approveLabel}
         </button>
       )}
 
