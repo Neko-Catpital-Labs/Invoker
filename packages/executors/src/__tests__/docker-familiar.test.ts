@@ -137,8 +137,8 @@ describe('DockerFamiliar', () => {
 
     setupTaskBranchSpy = vi.spyOn(
       BaseFamiliar.prototype as any, 'setupTaskBranch',
-    ).mockImplementation(async (_cwd: string, request: WorkRequest, handle: FamiliarHandle) => {
-      handle.branch = `invoker/${request.actionId}`;
+    ).mockImplementation(async (_cwd: string, _request: WorkRequest, handle: FamiliarHandle, opts?: any) => {
+      handle.branch = opts?.branchName ?? `experiment/${_request.actionId}-00000000`;
       return undefined;
     });
 
@@ -229,20 +229,22 @@ describe('DockerFamiliar', () => {
     expect(syncFromRemoteSpy).toHaveBeenCalledWith('/app', expect.any(String));
   });
 
-  it('calls setupTaskBranch with /app and correct branch', async () => {
+  it('calls setupTaskBranch with /app and content-addressable branch', async () => {
     await familiar.start(makeRequest());
 
     expect(setupTaskBranchSpy).toHaveBeenCalledWith(
       '/app',
       expect.objectContaining({ actionId: 'action-1' }),
       expect.any(Object),
-      expect.objectContaining({ branchName: 'invoker/action-1' }),
+      expect.objectContaining({
+        branchName: expect.stringMatching(/^experiment\/action-1-[0-9a-f]{8}$/),
+      }),
     );
   });
 
   it('sets handle.branch from setupTaskBranch', async () => {
     const handle = await familiar.start(makeRequest());
-    expect(handle.branch).toBe('invoker/action-1');
+    expect(handle.branch).toMatch(/^experiment\/action-1-[0-9a-f]{8}$/);
   });
 
   // -------------------------------------------------------------------------
@@ -289,7 +291,7 @@ describe('DockerFamiliar', () => {
       expect.objectContaining({ actionId: 'act-exit' }),
       '/app',
       0,
-      expect.objectContaining({ branch: 'invoker/act-exit' }),
+      expect.objectContaining({ branch: expect.stringMatching(/^experiment\/act-exit-[0-9a-f]{8}$/) }),
     );
   });
 

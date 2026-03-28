@@ -5,7 +5,7 @@ import type { WorkRequest, WorkResponse } from '@invoker/protocol';
 import type { FamiliarHandle, PersistedTaskMeta, TerminalSpec } from './familiar.js';
 import { BaseFamiliar, type BaseEntry } from './base-familiar.js';
 import { killProcessGroup, cleanElectronEnv, SIGKILL_TIMEOUT_MS } from './process-utils.js';
-import { computeBranchHash } from './worktree-familiar.js';
+import { computeBranchHash } from './branch-utils.js';
 import { DEFAULT_WORKTREE_PROVISION_COMMAND } from './default-worktree-provision-command.js';
 
 export interface SshFamiliarConfig {
@@ -117,9 +117,18 @@ fi`;
       child.on('error', reject);
       child.on('close', (code) => {
         if (code === 0) resolve(out);
-        else reject(new Error(`SSH remote script failed (${code}): ${err.trim() || out.trim()}`));
+        else {
+          const error = new Error(`SSH remote script failed (${code}): ${err.trim() || out.trim()}`);
+          (error as any).exitCode = code;
+          (error as any).stderr = err;
+          reject(error);
+        }
       });
     });
+  }
+
+  protected override runBash(script: string, _cwd: string): Promise<string> {
+    return this.execRemoteCapture(script);
   }
 
   async start(request: WorkRequest): Promise<FamiliarHandle> {
@@ -191,6 +200,7 @@ fi`;
       .filter((x): x is string => !!x);
     const salt = request.inputs.salt ?? '';
 
+    // Step 1: Clone/fetch on remote + resolve baseHead
     const script1 = `set -euo pipefail
 REPO=$(echo ${SshFamiliar.b64(repoUrl)} | base64 -d)
 BASE=$(echo ${SshFamiliar.b64(baseRef)} | base64 -d)
@@ -212,73 +222,47 @@ git -C "$CLONE" rev-parse "$BASE"
     );
     const experimentBranch = `experiment/${request.actionId}-${hash8}`;
     const san = experimentBranch.replace(/\//g, '-');
-    const upstreamLines = (request.inputs.upstreamBranches ?? []).join('\n');
-    const provB64 = SshFamiliar.b64(DEFAULT_WORKTREE_PROVISION_COMMAND);
-    const payloadB64 = SshFamiliar.b64(payload);
-    const branchB64 = SshFamiliar.b64(experimentBranch);
-    const upstreamB64 = SshFamiliar.b64(upstreamLines);
-    const baseB64 = SshFamiliar.b64(baseRef);
+    const remoteClone = `$HOME/.invoker/repos/${h}`;
+    const remoteWt = `$HOME/.invoker/worktrees/${h}/${san}`;
 
     handle.workspacePath = `~/.invoker/worktrees/${h}/${san}`;
     handle.branch = experimentBranch;
 
-    const script2 = `set -euo pipefail
-H="${h}"
-SAN="${san}"
-REPO=$(echo ${SshFamiliar.b64(repoUrl)} | base64 -d)
-BRANCH=$(echo ${branchB64} | base64 -d)
-BASE=$(echo ${baseB64} | base64 -d)
-CLONE="$HOME/.invoker/repos/$H"
-WT="$HOME/.invoker/worktrees/$H/$SAN"
-mkdir -p "$(dirname "$CLONE")" "$(dirname "$WT")"
-if [ ! -d "$CLONE/.git" ]; then git clone "$REPO" "$CLONE"; fi
-git -C "$CLONE" fetch --all
+    // Step 2: Prune stale worktrees on remote
+    const cleanupScript = `set -euo pipefail
+CLONE="${remoteClone}"
+WT="${remoteWt}"
+mkdir -p "$(dirname "$WT")"
 git -C "$CLONE" worktree prune 2>/dev/null || true
 if [ -e "$WT" ]; then
-  echo "[SshFamiliar] Removing stale worktree path (leftover from a previous run): $WT"
+  echo "[SshFamiliar] Removing stale worktree path: $WT"
   git -C "$CLONE" worktree remove --force "$WT" 2>/dev/null || true
   rm -rf "$WT"
   git -C "$CLONE" worktree prune 2>/dev/null || true
 fi
-preserved=0
-if git -C "$CLONE" rev-parse --verify "$BRANCH" >/dev/null 2>&1; then
-  CLONE_HEAD=$(git -C "$CLONE" rev-parse HEAD)
-  AHEAD=$(git -C "$CLONE" rev-list --count "$CLONE_HEAD..$BRANCH" 2>/dev/null || echo 0)
-  if [ "\${AHEAD:-0}" -gt 0 ]; then
-    git -C "$CLONE" worktree add "$WT" "$BRANCH"
-    git -C "$WT" merge --no-edit "$CLONE_HEAD"
-    preserved=1
-  fi
-fi
-if [ "$preserved" -eq 0 ]; then
-  git -C "$CLONE" worktree add -B "$BRANCH" "$WT" "$BASE"
-fi
-while IFS= read -r upBranch || [ -n "$upBranch" ]; do
-  [ -z "$upBranch" ] && continue
-  # Upstream branches from other tasks exist as remote tracking refs (origin/...)
-  # after git fetch --all. Bare names like experiment/foo don't resolve because
-  # git disambiguation checks refs/remotes/<name>, not refs/remotes/origin/<name>.
-  if git -C "$WT" rev-parse --verify "$upBranch" >/dev/null 2>&1; then
-    upRef="$upBranch"
-  elif git -C "$WT" rev-parse --verify "origin/$upBranch" >/dev/null 2>&1; then
-    upRef="origin/$upBranch"
-  else
-    echo "[SshFamiliar] Upstream branch $upBranch does not exist on remote (tried bare and origin/ prefix)" >&2
-    exit 30
-  fi
-  if git -C "$WT" merge-base --is-ancestor "$upRef" HEAD 2>/dev/null; then
-    echo "[SshFamiliar] Skipping merge of $upBranch — already ancestor"
-    continue
-  fi
-  if ! git -C "$WT" merge --no-edit -m "Invoker: merge $upBranch" "$upRef" 2>&1; then
-    conflictFiles=$(git -C "$WT" diff --name-only --diff-filter=U 2>/dev/null || echo "(unable to list)")
-    echo "[SshFamiliar] MERGE_CONFLICT_BRANCH=$upBranch" >&2
-    echo "[SshFamiliar] MERGE_CONFLICT_FILES:" >&2
-    echo "$conflictFiles" >&2
-    git -C "$WT" merge --abort 2>/dev/null || true
-    exit 31
-  fi
-done <<< "$(echo ${upstreamB64} | base64 -d)"
+`;
+    await this.execRemoteCapture(cleanupScript);
+
+    // Step 3: Branch setup via setupTaskBranch (uses runBash → SSH for preserve/reset + merge)
+    await this.setupTaskBranch(remoteClone, request, handle, {
+      branchName: experimentBranch,
+      base: baseRef,
+      worktreeDir: remoteWt,
+    });
+
+    // Step 4: No-command tasks complete immediately
+    if (!request.inputs.command && !request.inputs.prompt) {
+      await this.handleProcessExit(executionId, request, remoteWt, 0, {
+        branch: experimentBranch,
+      });
+      return handle;
+    }
+
+    // Step 5: Provision + run payload in a single SSH session
+    const provB64 = SshFamiliar.b64(DEFAULT_WORKTREE_PROVISION_COMMAND);
+    const payloadB64 = SshFamiliar.b64(payload);
+    const runScript = `set -euo pipefail
+WT="${remoteWt}"
 cd "$WT"
 echo "[SshFamiliar] Provisioning remote worktree (pnpm install + electron native rebuild)..."
 eval "$(echo ${provB64} | base64 -d)"
@@ -286,7 +270,7 @@ echo "[SshFamiliar] Running task payload..."
 echo ${payloadB64} | base64 -d | bash -se
 `;
 
-    return this.spawnSshRemoteStdin(executionId, request, handle, script2, claudeSessionId, {
+    return this.spawnSshRemoteStdin(executionId, request, handle, runScript, claudeSessionId, {
       worktreePath: handle.workspacePath!,
       branch: experimentBranch,
     });

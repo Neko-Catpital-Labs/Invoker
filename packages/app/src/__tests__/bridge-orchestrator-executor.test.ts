@@ -975,16 +975,18 @@ describe('Flow 9: manual merge mode', () => {
     await h.orchestrator.approve(mergeId);
     expect(h.getTask(mergeId)!.status).toBe('completed');
 
-    // Verify the final squash merge was performed: squash + commit + update-ref (no rebase, no checkout)
-    // Note: worktree is created detached via 'worktree add --detach', not via 'checkout --detach'
+    // Verify the final squash merge was performed: squash + commit + (update-ref OR ff-only merge)
     const rebaseCall = h.git.calls.find(c => c[0] === 'rebase');
     expect(rebaseCall).toBeUndefined();
     const squashCall = h.git.calls.find(c => c[0] === 'merge' && c.includes('--squash') && c.includes('plan/manual-merge'));
     expect(squashCall).toBeDefined();
     const commitCall = h.git.calls.find(c => c[0] === 'commit' && c.includes('-m'));
     expect(commitCall).toBeDefined();
-    const updateRefCall = h.git.calls.find(c => c[0] === 'update-ref' && c[1] === 'refs/heads/master');
-    expect(updateRefCall).toBeDefined();
+    const advancedBase = h.git.calls.find(c =>
+      (c[0] === 'update-ref' && c[1] === 'refs/heads/master') ||
+      (c[0] === 'merge' && c.includes('--ff-only')),
+    );
+    expect(advancedBase).toBeDefined();
   });
 
   it('automatic merge mode performs full merge in merge node', async () => {
@@ -1005,16 +1007,18 @@ describe('Flow 9: manual merge mode', () => {
     await h.executor.executeTasks([mergeTask]);
     expect(h.getTask(mergeId)!.status).toBe('completed');
 
-    // Verify git calls include squash merge + commit + update-ref (no rebase, no checkout)
-    // Note: worktree is created detached via 'worktree add --detach', not via 'checkout --detach'
+    // Verify git calls include squash merge + commit + (update-ref OR ff-only merge)
     const rebaseCall2 = h.git.calls.find(c => c[0] === 'rebase');
     expect(rebaseCall2).toBeUndefined();
     const squashCall = h.git.calls.find(c => c[0] === 'merge' && c.includes('--squash') && c.includes('plan/auto-merge'));
     expect(squashCall).toBeDefined();
     const commitCall = h.git.calls.find(c => c[0] === 'commit' && c.includes('-m'));
     expect(commitCall).toBeDefined();
-    const updateRefCall = h.git.calls.find(c => c[0] === 'update-ref' && c[1] === 'refs/heads/master');
-    expect(updateRefCall).toBeDefined();
+    const advancedBase = h.git.calls.find(c =>
+      (c[0] === 'update-ref' && c[1] === 'refs/heads/master') ||
+      (c[0] === 'merge' && c.includes('--ff-only')),
+    );
+    expect(advancedBase).toBeDefined();
   });
 });
 
@@ -1025,7 +1029,11 @@ describe('Flow 9b: beforeApproveHook fires for merge nodes', () => {
     const persistence = new InMemoryPersistence();
     const bus = new InMemoryBus();
     const orch = new Orchestrator({ persistence, messageBus: bus, maxConcurrency: 10 });
-    const exec = new TaskExecutor({ orchestrator: orch, persistence: persistence as any, familiarRegistry: new FamiliarRegistry(), cwd: '/tmp/test' });
+    const reg = new FamiliarRegistry();
+    // Merge nodes now route through the familiar pipeline; register a mock
+    // that auto-completes so executeMergeNode can handle the finish step.
+    reg.register('worktree', { type: 'worktree', start: async (req: any) => { const h = { executionId: `e-${req.actionId}`, taskId: req.actionId, workspacePath: '/tmp/mock', branch: `experiment/${req.actionId}-mock` }; setTimeout(() => (h as any)._cb?.({ requestId: req.requestId, actionId: req.actionId, status: 'completed', outputs: { exitCode: 0 } }), 0); return h; }, onComplete: (_h: any, cb: any) => { _h._cb = cb; return () => {}; }, onOutput: () => () => {}, onHeartbeat: () => () => {}, sendInput: () => {}, kill: async () => {}, getTerminalSpec: () => null, getRestoredTerminalSpec: () => { throw new Error('not impl'); }, destroyAll: async () => {} } as any);
+    const exec = new TaskExecutor({ orchestrator: orch, persistence: persistence as any, familiarRegistry: reg, cwd: '/tmp/test' });
     const git = new MockGit();
     git.install(exec);
 
@@ -1061,10 +1069,13 @@ describe('Flow 9b: beforeApproveHook fires for merge nodes', () => {
     await h.orchestrator.approve(mergeId);
     expect(h.getTask(mergeId)!.status).toBe('completed');
 
-    // Worktree-based merge uses 'worktree add --detach', not 'checkout --detach'
     expect(h.git.calls.find(c => c[0] === 'merge' && c.includes('--squash') && c.includes('plan/manual-merge'))).toBeDefined();
     expect(h.git.calls.find(c => c[0] === 'commit' && c.includes('-m'))).toBeDefined();
-    expect(h.git.calls.find(c => c[0] === 'update-ref' && c[1] === 'refs/heads/master')).toBeDefined();
+    const advancedBase = h.git.calls.find(c =>
+      (c[0] === 'update-ref' && c[1] === 'refs/heads/master') ||
+      (c[0] === 'merge' && c.includes('--ff-only')),
+    );
+    expect(advancedBase).toBeDefined();
   });
 });
 

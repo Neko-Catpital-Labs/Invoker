@@ -7,6 +7,7 @@ import type { FamiliarHandle, PersistedTaskMeta, TerminalSpec } from './familiar
 import { BaseFamiliar, type BaseEntry } from './base-familiar.js';
 import { DockerPool } from './docker-pool.js';
 import { killProcessGroup, cleanElectronEnv, SIGKILL_TIMEOUT_MS } from './process-utils.js';
+import { computeBranchHash } from './branch-utils.js';
 
 const CONTAINER_STOP_TIMEOUT_S = 5;
 const TAG = '[DockerFamiliar]';
@@ -87,6 +88,10 @@ export class DockerFamiliar extends BaseFamiliar<ContainerEntry> {
     if (!this.activeContainerId) return super.execGitSimple(args, cwd);
     const escapedArgs = args.map(a => shellEscape(a)).join(' ');
     const script = `cd ${shellEscape(cwd)} && git ${escapedArgs}`;
+    return this.execRemoteCapture(script);
+  }
+
+  protected override runBash(script: string, _cwd: string): Promise<string> {
     return this.execRemoteCapture(script);
   }
 
@@ -305,10 +310,23 @@ export class DockerFamiliar extends BaseFamiliar<ContainerEntry> {
       emit(`${TAG} git config failed: ${err instanceof Error ? err.message : String(err)}`);
     }
 
-    // -- Git setup (reuses BaseFamiliar methods via overridden execGitSimple) --
+    // -- Git setup (reuses BaseFamiliar methods via overridden execGitSimple + runBash) --
     await this.syncFromRemote(CONTAINER_CWD, executionId);
 
-    const branchName = `invoker/${request.actionId}`;
+    const baseRef = request.inputs.baseBranch ?? 'HEAD';
+    const baseHead = (await this.execGitSimple(['rev-parse', baseRef], CONTAINER_CWD)).trim();
+    const upstreamCommits = (request.inputs.upstreamContext ?? [])
+      .map(c => c.commitHash)
+      .filter((h): h is string => !!h);
+    const hash = computeBranchHash(
+      request.actionId,
+      request.inputs.command,
+      request.inputs.prompt,
+      upstreamCommits,
+      baseHead,
+      request.inputs.salt,
+    );
+    const branchName = `experiment/${request.actionId}-${hash}`;
     const baseBranch = request.inputs.upstreamBranches?.[0]
       ?? request.inputs.baseBranch
       ?? 'HEAD';
@@ -318,6 +336,14 @@ export class DockerFamiliar extends BaseFamiliar<ContainerEntry> {
       base: baseBranch,
     });
     entry.branch = handle.branch;
+
+    // -- No-command tasks: complete immediately after branch setup --
+    if (!request.inputs.command && !request.inputs.prompt) {
+      await this.handleProcessExit(executionId, request, CONTAINER_CWD, 0, {
+        branch: handle.branch,
+      });
+      return handle;
+    }
 
     // -- Spawn task command via docker exec CLI --
     const taskCmd = `cd ${shellEscape(CONTAINER_CWD)} && exec ${cmd} ${cmdArgs.map(a => shellEscape(a)).join(' ')}`;

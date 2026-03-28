@@ -1,9 +1,54 @@
 import { Orchestrator, type PlanDefinition, type TaskState } from '@invoker/core';
 import { TaskExecutor, FamiliarRegistry } from '@invoker/executors';
-import type { WorkResponse } from '@invoker/protocol';
+import type { WorkRequest, WorkResponse } from '@invoker/protocol';
+import type { Familiar, FamiliarHandle } from '@invoker/executors';
 import { InMemoryPersistence } from './in-memory-persistence.js';
 import { InMemoryBus } from './in-memory-bus.js';
 import { MockGit } from './mock-git.js';
+
+/**
+ * A minimal familiar that auto-completes on start().
+ * Used by the test harness so merge nodes (which now route through the
+ * familiar pipeline) can complete without real git or child processes.
+ */
+class MockFamiliar implements Familiar {
+  readonly type = 'worktree';
+  private completeCallbacks = new Map<string, (response: WorkResponse) => void>();
+
+  async start(request: WorkRequest): Promise<FamiliarHandle> {
+    const handle: FamiliarHandle = {
+      executionId: `mock-exec-${request.actionId}-${Date.now()}`,
+      taskId: request.actionId,
+      workspacePath: '/tmp/mock-worktree',
+      branch: `experiment/${request.actionId}-mock0000`,
+    };
+    setTimeout(() => {
+      const cb = this.completeCallbacks.get(handle.executionId);
+      if (cb) {
+        cb({
+          requestId: request.requestId,
+          actionId: request.actionId,
+          status: 'completed',
+          outputs: { exitCode: 0 },
+        });
+      }
+    }, 0);
+    return handle;
+  }
+
+  onComplete(handle: FamiliarHandle, callback: (response: WorkResponse) => void) {
+    this.completeCallbacks.set(handle.executionId, callback);
+    return () => { this.completeCallbacks.delete(handle.executionId); };
+  }
+
+  onOutput() { return () => {}; }
+  onHeartbeat() { return () => {}; }
+  sendInput() {}
+  async kill() {}
+  getTerminalSpec() { return null; }
+  getRestoredTerminalSpec() { throw new Error('Not implemented'); }
+  async destroyAll() { this.completeCallbacks.clear(); }
+}
 
 export interface TestHarness {
   orchestrator: Orchestrator;
@@ -44,6 +89,7 @@ export function createTestHarness(opts?: { maxConcurrency?: number }): TestHarne
   });
 
   const familiarRegistry = new FamiliarRegistry();
+  familiarRegistry.register('worktree', new MockFamiliar());
 
   const executor = new TaskExecutor({
     orchestrator,
@@ -74,6 +120,13 @@ export function createTestHarness(opts?: { maxConcurrency?: number }): TestHarne
     },
 
     completeTask(taskId: string, extras?: Partial<WorkResponse['outputs']>): TaskState[] {
+      // Set branch metadata on the task (simulates what the familiar does)
+      const task = orchestrator.getTask(taskId);
+      if (task && !task.execution.branch) {
+        persistence.updateTask(taskId, {
+          execution: { branch: `experiment/${taskId}-test0000` },
+        });
+      }
       const response: WorkResponse = {
         requestId: `complete-${taskId}`,
         actionId: taskId,
