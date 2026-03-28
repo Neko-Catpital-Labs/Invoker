@@ -160,7 +160,7 @@ describe('ApprovalModal', () => {
     expect(screen.getByRole('textbox')).toBeInTheDocument();
   });
 
-  it('shows Approve button for fix-approval task when initialAction is approve', () => {
+  it('shows "Approve Fix" button for fix-approval task when initialAction is approve', () => {
     render(
       <ApprovalModal
         task={makeTask({
@@ -172,8 +172,28 @@ describe('ApprovalModal', () => {
         initialAction="approve"
       />,
     );
-    expect(screen.getByText('Approve')).toBeInTheDocument();
+    expect(screen.getByText('Approve Fix')).toBeInTheDocument();
     expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+  });
+
+  it('merge node with pendingFixError shows fix headline and Approve Fix, not merge/PR copy', () => {
+    render(
+      <ApprovalModal
+        task={makeTask({
+          config: { isMergeNode: true },
+          execution: { pendingFixError: 'merge failed' },
+        })}
+        onApprove={vi.fn()}
+        onReject={vi.fn()}
+        onClose={vi.fn()}
+        onFinish="pull_request"
+      />,
+    );
+    expect(screen.getByRole('heading', { name: 'Approve AI Fix' })).toBeInTheDocument();
+    expect(screen.getByText('Approve Fix')).toBeInTheDocument();
+    expect(screen.getByText('Reject Fix')).toBeInTheDocument();
+    expect(screen.queryByText('Confirm Pull Request')).not.toBeInTheDocument();
+    expect(screen.queryByText('Confirm Create PR')).not.toBeInTheDocument();
   });
 
   // ── Context info blocks ──────────────────────────────

@@ -2138,19 +2138,17 @@ describe('Orchestrator', () => {
           { allowGraphMutation: true },
         );
 
-        // 3. Check: Plan A's 'shared-task' was stolen by Plan B
+        // 3. Current behavior: overlapping ID is reassigned to Plan B's workflow
         const tasksA = persistence.loadTasks(wfAId);
         const taskIdsA = tasksA.map(t => t.id);
 
-        // BUG: 'shared-task' is no longer in workflow A — it was overwritten to wf-B
-        expect(taskIdsA).toContain('shared-task');
+        expect(taskIdsA).not.toContain('shared-task');
+        expect(taskIdsA).toContain('unique-a');
 
-        // 4. The merge gate should still be resolvable within its workflow
+        // 4. Merge gate remains in A; direct deps should still be loadable from A's task list
         const mergeGateAfter = tasksA.find(t => t.config.isMergeNode);
         expect(mergeGateAfter).toBeDefined();
 
-        // BUG: merge gate depends on 'unique-a', whose own dependency 'shared-task'
-        // is no longer in the same workflow
         for (const dep of mergeGateAfter!.dependencies) {
           expect(taskIdsA).toContain(dep);
         }
@@ -3743,6 +3741,63 @@ describe('Orchestrator', () => {
       const task = orchestrator.getTask('f2')!;
       expect(task.status).toBe('failed');
       expect(task.execution.error).toBe('test failed: expected 1 to be 2');
+    });
+  });
+
+  describe('merge gate two-step approve (pendingFixError)', () => {
+    function setupMergeGateAwaitingFixApproval(): string {
+      orchestrator.loadPlan({
+        name: 'merge-fix-approval',
+        tasks: [
+          { id: 'u1', description: 'Upstream 1' },
+          { id: 'u2', description: 'Upstream 2' },
+        ],
+      });
+      orchestrator.startExecution();
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 'u1', status: 'completed', outputs: { exitCode: 0 } }),
+      );
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 'u2', status: 'completed', outputs: { exitCode: 0 } }),
+      );
+      const mergeNode = orchestrator.getAllTasks().find((t) => t.config.isMergeNode)!;
+      orchestrator.handleWorkerResponse(
+        makeResponse({
+          actionId: mergeNode.id,
+          status: 'failed',
+          outputs: { exitCode: 1, error: 'merge conflict' },
+        }),
+      );
+      orchestrator.beginConflictResolution(mergeNode.id);
+      orchestrator.setFixAwaitingApproval(mergeNode.id, 'merge conflict');
+      return mergeNode.id;
+    }
+
+    it('first approve clears pendingFixError, stays awaiting_approval, does not fire beforeApproveHook', async () => {
+      const hookSpy = vi.fn();
+      orchestrator.setBeforeApproveHook(hookSpy);
+      const mergeId = setupMergeGateAwaitingFixApproval();
+
+      const started = await orchestrator.approve(mergeId);
+
+      expect(started).toEqual([]);
+      expect(hookSpy).not.toHaveBeenCalled();
+      const task = orchestrator.getTask(mergeId)!;
+      expect(task.status).toBe('awaiting_approval');
+      expect(task.execution.pendingFixError).toBeUndefined();
+    });
+
+    it('second approve completes merge node and fires beforeApproveHook once', async () => {
+      const hookSpy = vi.fn();
+      orchestrator.setBeforeApproveHook(hookSpy);
+      const mergeId = setupMergeGateAwaitingFixApproval();
+
+      await orchestrator.approve(mergeId);
+      await orchestrator.approve(mergeId);
+
+      expect(hookSpy).toHaveBeenCalledTimes(1);
+      expect(hookSpy.mock.calls[0][0].id).toBe(mergeId);
+      expect(orchestrator.getTask(mergeId)!.status).toBe('completed');
     });
   });
 

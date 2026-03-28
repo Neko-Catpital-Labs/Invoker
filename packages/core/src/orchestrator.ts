@@ -593,6 +593,23 @@ export class Orchestrator {
     mergeTrace('APPROVE_TASK_LOOKUP', { taskId, found: !!task, status: task?.status, isMergeNode: !!task?.config.isMergeNode, hasHook: !!this.beforeApproveHook });
     if (!task || task.status !== 'awaiting_approval') return [];
 
+    // Merge gate fixed by Claude: first approve clears pendingFixError only;
+    // second approve runs the merge hook and completes (see setFixAwaitingApproval).
+    if (
+      task.config.isMergeNode &&
+      task.execution.pendingFixError !== undefined
+    ) {
+      const fixClearChanges: TaskStateChanges = {
+        status: 'awaiting_approval',
+        execution: { pendingFixError: undefined },
+      };
+      this.writeAndSync(taskId, fixClearChanges);
+      const fixDelta: TaskDelta = { type: 'updated', taskId, changes: fixClearChanges };
+      this.persistence.logEvent?.(taskId, 'task.awaiting_approval', fixClearChanges);
+      this.messageBus.publish(TASK_DELTA_CHANNEL, fixDelta);
+      return [];
+    }
+
     if (this.beforeApproveHook) {
       mergeTrace('APPROVE_HOOK_FIRING', { taskId, workflowId: task.config.workflowId });
       await this.beforeApproveHook(task);

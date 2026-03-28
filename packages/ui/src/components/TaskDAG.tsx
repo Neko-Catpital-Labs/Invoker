@@ -99,7 +99,8 @@ function TaskDAGInner({ tasks, workflows, onTaskClick, onTaskDoubleClick, onTask
             gateKind = 'github_pr';
           }
           const showMergeModeRow = gateKind !== 'github_pr';
-          const mergeGateDimmed = statusFilters && statusFilters.size > 0 && !statusFilters.has(task.status);
+          const mergeVisualStatus = getEffectiveVisualStatus(task.status, task.execution);
+          const mergeGateDimmed = statusFilters && statusFilters.size > 0 && !statusFilters.has(mergeVisualStatus);
           allNodes.push({
             id: task.id,
             type: 'mergeGateNode',
@@ -117,6 +118,7 @@ function TaskDAGInner({ tasks, workflows, onTaskClick, onTaskDoubleClick, onTask
               prStatus: task.execution?.prStatus,
               summary: task.config?.summary,
               onFinish: wfMeta?.onFinish,
+              pendingFixError: task.execution?.pendingFixError,
               dimmed: mergeGateDimmed,
             },
           });
@@ -148,9 +150,7 @@ function TaskDAGInner({ tasks, workflows, onTaskClick, onTaskDoubleClick, onTask
     const dimmedNodeIds = new Set<string>();
     if (statusFilters && statusFilters.size > 0) {
       for (const task of taskArray) {
-        const vs = task.config.isMergeNode
-          ? task.status
-          : getEffectiveVisualStatus(task.status, task.execution);
+        const vs = getEffectiveVisualStatus(task.status, task.execution);
         if (!statusFilters.has(vs)) {
           dimmedNodeIds.add(task.id);
         }
