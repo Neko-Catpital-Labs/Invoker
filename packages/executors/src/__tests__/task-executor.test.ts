@@ -4290,4 +4290,277 @@ describe('TaskExecutor', () => {
       expect(() => executor.selectFamiliar(task)).toThrow('no matching');
     });
   });
+
+  describe('publishAfterFix', () => {
+    function setupPublishAfterFix(opts: {
+      mergeMode?: string;
+      onFinish?: string;
+      featureBranch?: string;
+      gateWorkspacePath?: string | null;
+      taskBranches?: TaskState[];
+    }) {
+      const mergeTaskId = '__merge__wf-pub';
+      const workflowId = 'wf-pub';
+
+      const mergeTask = makeTask({
+        id: mergeTaskId,
+        status: 'running',
+        dependencies: (opts.taskBranches ?? []).map((t) => t.id),
+        config: { isMergeNode: true, workflowId },
+        execution: { pendingFixError: undefined },
+      });
+
+      const allTasks = [mergeTask, ...(opts.taskBranches ?? [])];
+
+      const orchestrator = {
+        getTask: (id: string) => allTasks.find((t) => t.id === id),
+        getAllTasks: () => allTasks,
+        handleWorkerResponse: vi.fn(),
+        setTaskAwaitingApproval: vi.fn(),
+      };
+
+      const persistence = {
+        loadWorkflow: () => ({
+          id: workflowId,
+          onFinish: opts.onFinish ?? 'none',
+          mergeMode: opts.mergeMode ?? 'manual',
+          baseBranch: 'master',
+          featureBranch: opts.featureBranch,
+          name: 'Test Workflow',
+        }),
+        updateTask: vi.fn(),
+        getWorkspacePath: () => opts.gateWorkspacePath ?? null,
+      };
+
+      const mergeGateProvider = {
+        createReview: vi.fn().mockResolvedValue({
+          url: 'https://github.com/owner/repo/pull/99',
+          identifier: 'owner/repo#99',
+        }),
+      };
+
+      const gitCalls: { args: string[]; dir: string }[] = [];
+      const executor = new TaskExecutor({
+        orchestrator: orchestrator as any,
+        persistence: persistence as any,
+        familiarRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp/host',
+        mergeGateProvider: mergeGateProvider as any,
+      });
+
+      (executor as any).execGitReadonly = async (args: string[]) => {
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        return '';
+      };
+      (executor as any).execGitIn = async (args: string[], dir: string) => {
+        gitCalls.push({ args: [...args], dir });
+        if (args[0] === 'rev-parse' && args[1] === 'HEAD') return 'abc123deadbeef';
+        if (args[0] === 'rev-parse' && args[1] === '--verify') return '';
+        return '';
+      };
+      (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
+      (executor as any).removeMergeWorktree = async () => {};
+      (executor as any).startPrPolling = vi.fn();
+      (executor as any).buildMergeSummary = vi.fn().mockResolvedValue('## Summary');
+      (executor as any).execPr = vi.fn().mockResolvedValue('https://github.com/owner/repo/pull/100');
+
+      return { executor, mergeTask, orchestrator, persistence, mergeGateProvider, gitCalls };
+    }
+
+    it('github mode: detaches HEAD, fetches, consolidates, creates PR', async () => {
+      const completedTask = makeTask({
+        id: 't1',
+        status: 'completed',
+        config: { workflowId: 'wf-pub' },
+        execution: { branch: 'invoker/t1' },
+        description: 'Task 1',
+      });
+
+      const { executor, mergeTask, orchestrator, mergeGateProvider, gitCalls } = setupPublishAfterFix({
+        mergeMode: 'github',
+        featureBranch: 'plan/feature',
+        gateWorkspacePath: '/tmp/gate-clone',
+        taskBranches: [completedTask],
+      });
+
+      await executor.publishAfterFix(mergeTask);
+
+      // Verify detach HEAD sequence in gate clone (regression test for checked-out branch bug)
+      const gateGitCalls = gitCalls.filter((c) => c.dir === '/tmp/gate-clone');
+      expect(gateGitCalls.length).toBeGreaterThanOrEqual(3);
+      expect(gateGitCalls[0].args).toEqual(['rev-parse', 'HEAD']);
+      expect(gateGitCalls[1].args).toEqual(['checkout', '--detach', 'abc123deadbeef']);
+      expect(gateGitCalls[2].args).toEqual(['fetch', 'origin', '+refs/heads/*:refs/heads/*']);
+
+      // Feature branch created from detached HEAD
+      const checkoutBranch = gateGitCalls.find((c) => c.args[0] === 'checkout' && c.args[1] === '-b');
+      expect(checkoutBranch).toBeDefined();
+      expect(checkoutBranch!.args[2]).toBe('plan/feature');
+
+      // Task branch merged
+      const mergeCall = gateGitCalls.find((c) => c.args[0] === 'merge' && c.args.includes('invoker/t1'));
+      expect(mergeCall).toBeDefined();
+
+      // Feature branch pushed via host.cwd
+      const hostFetch = gitCalls.find((c) => c.dir === '/tmp/host' && c.args[0] === 'fetch');
+      expect(hostFetch).toBeDefined();
+      expect(hostFetch!.args).toContain('+plan/feature:refs/heads/plan/feature');
+      const hostPush = gitCalls.find((c) => c.dir === '/tmp/host' && c.args[0] === 'push');
+      expect(hostPush).toBeDefined();
+
+      // PR created via mergeGateProvider
+      expect(mergeGateProvider.createReview).toHaveBeenCalledWith(
+        expect.objectContaining({
+          baseBranch: 'master',
+          featureBranch: 'plan/feature',
+          title: 'Test Workflow',
+        }),
+      );
+
+      // Task set to awaiting_approval with PR metadata
+      expect(orchestrator.setTaskAwaitingApproval).toHaveBeenCalledWith('__merge__wf-pub', expect.objectContaining({
+        execution: expect.objectContaining({
+          branch: 'plan/feature',
+          prUrl: 'https://github.com/owner/repo/pull/99',
+          prIdentifier: 'owner/repo#99',
+          prStatus: 'Awaiting review',
+        }),
+      }));
+
+      expect(orchestrator.handleWorkerResponse).not.toHaveBeenCalled();
+    });
+
+    it('pull_request mode: calls execPr and persists prUrl', async () => {
+      const completedTask = makeTask({
+        id: 't1',
+        status: 'completed',
+        config: { workflowId: 'wf-pub' },
+        execution: { branch: 'invoker/t1' },
+      });
+
+      const { executor, mergeTask, orchestrator, persistence } = setupPublishAfterFix({
+        mergeMode: 'manual',
+        onFinish: 'pull_request',
+        featureBranch: 'plan/feature',
+        gateWorkspacePath: '/tmp/gate-clone',
+        taskBranches: [completedTask],
+      });
+
+      await executor.publishAfterFix(mergeTask);
+
+      expect((executor as any).execPr).toHaveBeenCalledWith('master', 'plan/feature', 'Test Workflow', '## Summary');
+      expect(persistence.updateTask).toHaveBeenCalledWith('__merge__wf-pub', expect.objectContaining({
+        execution: expect.objectContaining({ prUrl: 'https://github.com/owner/repo/pull/100' }),
+      }));
+      expect(orchestrator.setTaskAwaitingApproval).toHaveBeenCalled();
+      expect(orchestrator.handleWorkerResponse).not.toHaveBeenCalled();
+    });
+
+    it('no featureBranch: early exit with setTaskAwaitingApproval', async () => {
+      const { executor, mergeTask, orchestrator, gitCalls } = setupPublishAfterFix({
+        featureBranch: undefined,
+        gateWorkspacePath: '/tmp/gate-clone',
+      });
+
+      await executor.publishAfterFix(mergeTask);
+
+      expect(orchestrator.setTaskAwaitingApproval).toHaveBeenCalledWith('__merge__wf-pub', expect.objectContaining({
+        config: expect.objectContaining({ familiarType: 'worktree' }),
+        execution: expect.objectContaining({ workspacePath: '/tmp/gate-clone' }),
+      }));
+
+      // No git merge operations should have been attempted
+      const mergeOps = gitCalls.filter((c) => c.args[0] === 'merge');
+      expect(mergeOps).toHaveLength(0);
+      const checkoutOps = gitCalls.filter((c) => c.args[0] === 'checkout');
+      expect(checkoutOps).toHaveLength(0);
+    });
+
+    it('merge conflict: calls handleWorkerResponse with failed status', async () => {
+      const completedTask = makeTask({
+        id: 't1',
+        status: 'completed',
+        config: { workflowId: 'wf-pub' },
+        execution: { branch: 'invoker/t1' },
+      });
+
+      const { executor, mergeTask, orchestrator, gitCalls: _gitCalls } = setupPublishAfterFix({
+        mergeMode: 'github',
+        featureBranch: 'plan/feature',
+        gateWorkspacePath: '/tmp/gate-clone',
+        taskBranches: [completedTask],
+      });
+
+      // Override execGitIn to fail on merge
+      (executor as any).execGitIn = async (args: string[], dir: string) => {
+        _gitCalls.push({ args: [...args], dir });
+        if (args[0] === 'rev-parse' && args[1] === 'HEAD') return 'abc123deadbeef';
+        if (args[0] === 'merge') throw new Error('CONFLICT (content): Merge conflict in shared.ts');
+        return '';
+      };
+
+      await executor.publishAfterFix(mergeTask);
+
+      expect(orchestrator.handleWorkerResponse).toHaveBeenCalledWith(expect.objectContaining({
+        status: 'failed',
+        outputs: expect.objectContaining({
+          error: expect.stringContaining('Post-fix PR prep failed'),
+        }),
+      }));
+      expect(orchestrator.setTaskAwaitingApproval).not.toHaveBeenCalled();
+    });
+
+    it('detach-HEAD sequence: exact order regression test', async () => {
+      const { executor, mergeTask, gitCalls } = setupPublishAfterFix({
+        mergeMode: 'manual',
+        featureBranch: 'plan/feature',
+        gateWorkspacePath: '/tmp/gate-clone',
+        taskBranches: [],
+      });
+
+      await executor.publishAfterFix(mergeTask);
+
+      // Extract only the gate clone calls in order
+      const gateCalls = gitCalls
+        .filter((c) => c.dir === '/tmp/gate-clone')
+        .map((c) => c.args);
+
+      // The first three calls must be the detach-HEAD-then-fetch sequence
+      expect(gateCalls[0]).toEqual(['rev-parse', 'HEAD']);
+      expect(gateCalls[1]).toEqual(['checkout', '--detach', 'abc123deadbeef']);
+      expect(gateCalls[2]).toEqual(['fetch', 'origin', '+refs/heads/*:refs/heads/*']);
+
+      // The fourth call creates the feature branch
+      expect(gateCalls[3]).toEqual(['checkout', '-b', 'plan/feature']);
+    });
+
+    it('without gateWorkspacePath: uses host.cwd and skips detach', async () => {
+      const completedTask = makeTask({
+        id: 't1',
+        status: 'completed',
+        config: { workflowId: 'wf-pub' },
+        execution: { branch: 'invoker/t1' },
+      });
+
+      const { executor, mergeTask, gitCalls } = setupPublishAfterFix({
+        mergeMode: 'manual',
+        featureBranch: 'plan/feature',
+        gateWorkspacePath: null,
+        taskBranches: [completedTask],
+      });
+
+      await executor.publishAfterFix(mergeTask);
+
+      // No detach/fetch calls for gate clone (there is none)
+      const detachCalls = gitCalls.filter((c) => c.args[0] === 'checkout' && c.args[1] === '--detach');
+      expect(detachCalls).toHaveLength(0);
+      const refsFetch = gitCalls.filter((c) => c.args.includes('+refs/heads/*:refs/heads/*'));
+      expect(refsFetch).toHaveLength(0);
+
+      // Feature branch created in host.cwd
+      const checkoutBranch = gitCalls.find((c) => c.args[0] === 'checkout' && c.args[1] === '-b');
+      expect(checkoutBranch).toBeDefined();
+      expect(checkoutBranch!.dir).toBe('/tmp/host');
+    });
+  });
 });
