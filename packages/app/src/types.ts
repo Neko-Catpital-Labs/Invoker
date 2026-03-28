@@ -120,9 +120,6 @@ export interface InvokerAPI {
   // Change merge target branch for a workflow
   setMergeBranch: (workflowId: string, baseBranch: string) => Promise<void>;
 
-  // Notify that a completed task's branch was externally updated
-  notifyBranchUpdated: (taskId: string) => Promise<void>;
-
   // Approve manual merge: perform final merge of featureBranch into baseBranch
   approveMerge: (workflowId: string) => Promise<void>;
 

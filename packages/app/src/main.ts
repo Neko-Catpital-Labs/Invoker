@@ -1034,27 +1034,6 @@ function setupGuiMode(): void {
       }
     });
 
-    ipcMain.handle('invoker:notify-branch-updated', async (_event, taskId: string) => {
-      console.log(`[ipc] notify-branch-updated: "${taskId}"`);
-      try {
-        const task = orchestrator.getTask(taskId);
-        let commit: string | undefined;
-        if (task?.execution.branch) {
-          try {
-            commit = execSync(`git rev-parse ${task.execution.branch}`, {
-              cwd: repoRoot,
-              encoding: 'utf-8',
-              stdio: ['ignore', 'pipe', 'ignore'],
-            }).trim();
-          } catch { /* branch may not exist locally */ }
-        }
-        orchestrator.notifyBranchUpdated(taskId, { commit });
-      } catch (err) {
-        console.error(`[ipc] notify-branch-updated failed: ${err}`);
-        throw err;
-      }
-    });
-
     ipcMain.handle('invoker:set-merge-mode', async (_event, workflowId: string, mergeMode: string) => {
       console.log(`[ipc] set-merge-mode: workflow="${workflowId}" → "${mergeMode}"`);
       persistence.updateWorkflow(workflowId, { mergeMode: mergeMode as any });
