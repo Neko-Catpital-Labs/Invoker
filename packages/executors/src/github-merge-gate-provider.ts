@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { normalizeBranchForGithubCli } from './github-branch-ref.js';
 import type { MergeGateProvider, MergeGateProviderResult, MergeGateApprovalStatus } from './merge-gate-provider.js';
+import { RESTART_TO_BRANCH_TRACE } from './exec-trace.js';
 
 export class GitHubMergeGateProvider implements MergeGateProvider {
   readonly name = 'github';
@@ -13,6 +14,7 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
     body?: string;
   }): Promise<MergeGateProviderResult> {
     const { baseBranch, featureBranch, title, cwd, body } = opts;
+    console.log(`${RESTART_TO_BRANCH_TRACE} GitHubMergeGateProvider.createReview baseBranch=${baseBranch} featureBranch=${featureBranch} title=${title} cwd=${cwd} body=${body}`);
     const ghBase = normalizeBranchForGithubCli(baseBranch);
     const ghHead = normalizeBranchForGithubCli(featureBranch);
 
@@ -28,19 +30,24 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
       '--json', 'url,number',
       '--limit', '1',
     ], cwd);
+    console.log(`${RESTART_TO_BRANCH_TRACE} GitHubMergeGateProvider.createReview listOutput=${listOutput}`);
 
     const existing = JSON.parse(listOutput) as { url: string; number: number }[];
+    console.log(`${RESTART_TO_BRANCH_TRACE} GitHubMergeGateProvider.createReview existing=${existing}`);
 
     if (existing.length > 0) {
       // Update title (and body if provided) of existing PR via REST API.
       // gh pr edit uses the deprecated projectCards GraphQL field which
       // causes exit-code 1 on gh CLI v2.45.0+.
+
       const apiArgs = [
         'api', `repos/{owner}/{repo}/pulls/${existing[0].number}`,
         '--method', 'PATCH', '-f', `title=${title}`,
       ];
       if (body) apiArgs.push('-f', `body=${body}`);
-      await this.exec('gh', apiArgs, cwd);
+      const gh_result = await this.exec('gh', apiArgs, cwd);
+      console.log(`${RESTART_TO_BRANCH_TRACE} GitHubMergeGateProvider.createReview update existing gh_result=${gh_result}`);
+
       return { url: existing[0].url, identifier: String(existing[0].number) };
     }
 
@@ -55,6 +62,7 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
     const stdout = await this.exec('gh', createArgs, cwd);
     const pr = JSON.parse(stdout) as { html_url: string; number: number };
 
+    console.log(`${RESTART_TO_BRANCH_TRACE} GitHubMergeGateProvider.createReview creating stdout=${stdout}`);
     return { url: pr.html_url, identifier: String(pr.number) };
   }
 
