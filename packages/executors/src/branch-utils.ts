@@ -43,29 +43,6 @@ export function bashPreserveOrReset(opts: PreserveOrResetOpts): string {
   const { repoDir, worktreeDir, branch, base } = opts;
   const q = shellQuote;
 
-  // #region agent log
-  if (repoDir.includes('$HOME') || repoDir.startsWith('~/')) {
-    fetch('http://127.0.0.1:7658/ingest/762b7479-8057-4c6f-a805-85ee7d433bf5', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '39b8ae' },
-      body: JSON.stringify({
-        sessionId: '39b8ae',
-        runId: 'pre-fix',
-        hypothesisId: 'H1',
-        location: 'branch-utils.ts:bashPreserveOrReset',
-        message: 'preserve script path quoting',
-        data: {
-          repoDir,
-          worktreeDir: worktreeDir ?? null,
-          repoDirAssignment: `REPO_DIR=${q(repoDir)}`.slice(0, 120),
-          usedSingleQuotedHome: q(repoDir).startsWith("'$HOME"),
-        },
-        timestamp: Date.now(),
-      }),
-    }).catch(() => {});
-  }
-  // #endregion
-
   // All paths/refs are injected as shell-quoted literals.
   // The script resolves the base ref to a concrete SHA, checks if the branch
   // exists with commits ahead, and either preserves or force-creates.

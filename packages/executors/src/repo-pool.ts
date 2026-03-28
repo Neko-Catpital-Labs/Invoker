@@ -1,7 +1,10 @@
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdirSync, existsSync } from 'node:fs';
-import { bashPreserveOrReset, runBashLocal, parsePreserveResult } from './branch-utils.js';
+import { mkdirSync, existsSync, rmSync } from 'node:fs';
+import { normalize } from 'node:path';
+import { bashPreserveOrReset, runBashLocal } from './branch-utils.js';
+import { RESTART_TO_BRANCH_TRACE } from './exec-trace.js';
+import { findManagedWorktreeForBranch, abbrevRefMatchesBranch } from './worktree-discovery.js';
 
 export interface RepoPoolConfig {
   cacheDir: string;
@@ -54,6 +57,25 @@ export class RepoPool {
     }
   }
 
+  /**
+   * Drop leftover worktree registration and/or directory from a prior run (crash, restart,
+   * or release never called). Without this, `git worktree add` fails with "already exists".
+   */
+  private async reconcileStaleWorktreePath(clonePath: string, worktreePath: string): Promise<void> {
+    try {
+      await this.execGit(['worktree', 'remove', '--force', worktreePath], clonePath);
+    } catch {
+      /* not registered with this clone */
+    }
+    if (existsSync(worktreePath)) {
+      try {
+        rmSync(worktreePath, { recursive: true, force: true });
+      } catch {
+        /* best-effort; bashPreserveOrReset will surface failure */
+      }
+    }
+  }
+
   private async doEnsureClone(repoUrl: string): Promise<string> {
     const dir = this.cloneDir(repoUrl);
     if (existsSync(dir)) {
@@ -74,6 +96,9 @@ export class RepoPool {
   }
 
   private async doAcquireWorktree(repoUrl: string, branch: string): Promise<AcquiredWorktree> {
+    console.log(
+      `${RESTART_TO_BRANCH_TRACE} RepoPool.doAcquireWorktree branch=${branch} (bashPreserveOrReset here; BaseFamiliar.setupTaskBranch is not used for this path)`,
+    );
     const clonePath = await this.ensureClone(repoUrl);
     const active = this.activeWorktrees.get(repoUrl) ?? new Set();
     if (active.size >= this.maxWorktrees) {
@@ -84,27 +109,67 @@ export class RepoPool {
       ? `${this.worktreeBaseDir}/${this.urlHash(repoUrl)}/${sanitized}`
       : `${clonePath}/worktrees/${sanitized}`;
     const worktreeParent = worktreePath.substring(0, worktreePath.lastIndexOf('/'));
-    mkdirSync(worktreeParent, { recursive: true });
-    const script = bashPreserveOrReset({
-      repoDir: clonePath,
-      worktreeDir: worktreePath,
-      branch,
-      base: 'HEAD',
-    });
-    await runBashLocal(script, clonePath);
-    active.add(worktreePath);
+    const managedPrefixes = [
+      normalize(
+        this.worktreeBaseDir
+          ? `${this.worktreeBaseDir}/${this.urlHash(repoUrl)}`
+          : `${clonePath}/worktrees`,
+      ),
+    ];
+
+    let porcelain = '';
+    try {
+      porcelain = await this.execGit(['worktree', 'list', '--porcelain'], clonePath);
+    } catch {
+      porcelain = '';
+    }
+
+    let effectivePath = worktreePath;
+    let reusedExisting = false;
+    const reuseCandidate = findManagedWorktreeForBranch(porcelain, branch, managedPrefixes);
+    if (reuseCandidate && existsSync(reuseCandidate)) {
+      try {
+        const head = (await this.execGit(['rev-parse', '--abbrev-ref', 'HEAD'], reuseCandidate)).trim();
+        if (abbrevRefMatchesBranch(head, branch)) {
+          effectivePath = reuseCandidate;
+          reusedExisting = true;
+          console.log(
+            `${RESTART_TO_BRANCH_TRACE} RepoPool.doAcquireWorktree reuse existing worktree path=${effectivePath} branch=${branch}`,
+          );
+        }
+      } catch {
+        /* fall through to create */
+      }
+    }
+
+    if (!reusedExisting) {
+      await this.reconcileStaleWorktreePath(clonePath, worktreePath);
+      mkdirSync(worktreeParent, { recursive: true });
+      const script = bashPreserveOrReset({
+        repoDir: clonePath,
+        worktreeDir: worktreePath,
+        branch,
+        base: 'HEAD',
+      });
+      await runBashLocal(script, clonePath);
+      effectivePath = worktreePath;
+    } else {
+      mkdirSync(worktreeParent, { recursive: true });
+    }
+
+    active.add(effectivePath);
     this.activeWorktrees.set(repoUrl, active);
 
     const release = async () => {
       try {
-        await this.execGit(['worktree', 'remove', '--force', worktreePath], clonePath);
+        await this.execGit(['worktree', 'remove', '--force', effectivePath], clonePath);
       } catch {
         try { await this.execGit(['worktree', 'prune'], clonePath); } catch { /* best-effort */ }
       }
-      active.delete(worktreePath);
+      active.delete(effectivePath);
     };
 
-    return { clonePath, worktreePath, branch, release };
+    return { clonePath, worktreePath: effectivePath, branch, release };
   }
 
   async destroyAll(): Promise<void> {

@@ -15,6 +15,7 @@ import type { Orchestrator, TaskState, ExperimentVariant } from '@invoker/core';
 import type { SQLiteAdapter } from '@invoker/persistence';
 import type { WorkRequest, WorkResponse, ActionType } from '@invoker/protocol';
 import type { Familiar, FamiliarHandle } from './familiar.js';
+import { RESTART_TO_BRANCH_TRACE } from './exec-trace.js';
 import type { FamiliarRegistry } from './registry.js';
 import type { MergeGateProvider } from './merge-gate-provider.js';
 import { DockerFamiliar } from './docker-familiar.js';
@@ -109,6 +110,11 @@ export class TaskExecutor {
    * Execute multiple tasks concurrently.
    */
   async executeTasks(tasks: TaskState[]): Promise<void> {
+    if (tasks.length > 0) {
+      console.log(
+        `${RESTART_TO_BRANCH_TRACE} TaskExecutor.executeTasks count=${tasks.length} ids=${tasks.map((t) => t.id).join(', ')}`,
+      );
+    }
     await Promise.all(tasks.map((task) => this.executeTask(task)));
   }
 
@@ -123,6 +129,9 @@ export class TaskExecutor {
    * 6. On completion → feed response to orchestrator → auto-execute newly ready tasks
    */
   async executeTask(task: TaskState): Promise<void> {
+    console.log(
+      `${RESTART_TO_BRANCH_TRACE} TaskExecutor.executeTask BEGIN taskId=${task.id} isMergeNode=${Boolean(task.config.isMergeNode)} status=${task.status}`,
+    );
     try {
       await this.executeTaskInner(task);
     } catch (err) {
@@ -168,6 +177,10 @@ export class TaskExecutor {
       }
       return;
     }
+
+    console.log(
+      `${RESTART_TO_BRANCH_TRACE} executeTaskInner taskId=${task.id} (past pivot check) → gather upstreams + build WorkRequest`,
+    );
 
     // Gather upstream context from completed dependencies
     const upstreamContext = await this.buildUpstreamContext(task);
@@ -220,7 +233,14 @@ export class TaskExecutor {
       },
     };
 
+    console.log(
+      `${RESTART_TO_BRANCH_TRACE} executeTaskInner taskId=${task.id} WorkRequest built actionType=${request.actionType} repoUrl=${request.inputs.repoUrl ?? '(none)'} upstreamBranches=${JSON.stringify(request.inputs.upstreamBranches ?? [])}`,
+    );
+
     const familiar = this.selectFamiliar(task);
+    console.log(
+      `${RESTART_TO_BRANCH_TRACE} executeTaskInner taskId=${task.id} selectFamiliar → type=${familiar.type} calling familiar.start()`,
+    );
     console.log(`[trace] TaskExecutor: task=${task.id} calling familiar.start() type=${familiar.type}`);
     const startT0 = Date.now();
     const preStartHeartbeatTimer = setInterval(() => {
@@ -271,8 +291,14 @@ export class TaskExecutor {
     return new Promise<void>((resolvePromise) => {
       familiar.onComplete(handle, async (response: WorkResponse) => {
         try {
+          console.log(
+            `${RESTART_TO_BRANCH_TRACE} resolvePromise | task.config.isMergeNode = ${task.config.isMergeNode}`,
+          );
           // Merge nodes: run consolidation/finish logic after familiar completes
           if (task.config.isMergeNode) {
+            console.log(
+              `${RESTART_TO_BRANCH_TRACE} familiar.onComplete taskId=${task.id} isMergeNode → executeMergeNode (consolidate / gate)`,
+            );
             await this.executeMergeNode(task);
             resolvePromise();
             return;
@@ -398,6 +424,7 @@ export class TaskExecutor {
   // ── Merge Node Execution ─────────────────────────────────
 
   private async executeMergeNode(task: TaskState): Promise<void> {
+    console.log(`${RESTART_TO_BRANCH_TRACE} TaskExecutor.executeMergeNode taskId=${task.id} → merge-executor.executeMergeNodeImpl`);
     return executeMergeNodeImpl(this, task);
   }
 

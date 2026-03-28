@@ -9,6 +9,13 @@ import { RepoPool } from './repo-pool.js';
 import { killProcessGroup, cleanElectronEnv, SIGKILL_TIMEOUT_MS } from './process-utils.js';
 import { DEFAULT_WORKTREE_PROVISION_COMMAND } from './default-worktree-provision-command.js';
 import { computeBranchHash, bashMergeUpstreams, parseMergeError } from './branch-utils.js';
+import { RESTART_TO_BRANCH_TRACE } from './exec-trace.js';
+import {
+  findManagedWorktreeForBranch,
+  abbrevRefMatchesBranch,
+  parseGitWorktreePorcelain,
+} from './worktree-discovery.js';
+import { normalize } from 'node:path';
 
 // Re-export for backward compatibility
 export { computeBranchHash } from './branch-utils.js';
@@ -66,6 +73,9 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
   }
 
   async start(request: WorkRequest): Promise<FamiliarHandle> {
+    console.log(
+      `${RESTART_TO_BRANCH_TRACE} WorktreeFamiliar.start() actionId=${request.actionId} hasPool=${Boolean(this.pool)} repoUrl=${request.inputs.repoUrl ?? '(none)'}`,
+    );
     await this.ensureGitAvailable();
     const handle = this.createHandle(request);
     const executionId = handle.executionId;
@@ -93,7 +103,8 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
       request.inputs.salt,
     );
     const branch = `experiment/${request.actionId}-${hash}`;
-    const worktreeDir = `${this.worktreeBaseDir}/${executionId}`;
+    let worktreeDir = `${this.worktreeBaseDir}/${executionId}`;
+    const startPoint = request.inputs.baseBranch ?? 'HEAD';
     console.log(`[WorktreeFamiliar] branch=${branch} hash=${hash}`);
 
     // -- Reconciliation: no process, immediate needs_input --
@@ -116,6 +127,9 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
 
     // -- Pool-based worktree (when repoUrl is provided and pool is available) --
     if (this.pool && request.inputs.repoUrl) {
+      console.log(
+        `${RESTART_TO_BRANCH_TRACE} WorktreeFamiliar.start() actionId=${request.actionId} → RepoPool path: preserve via RepoPool + merge upstreams here; BaseFamiliar.setupTaskBranch() is NOT called`,
+      );
       const acquired = await this.pool.acquireWorktree(request.inputs.repoUrl, branch);
 
       this.cleanStaleLocks(acquired.worktreePath);
@@ -260,83 +274,142 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
     await this.execGitSimple(['worktree', 'prune'], this.repoDir);
     log('worktree prune done');
 
-    // Force-remove any existing worktree that holds this branch
-    // (prune only removes references whose directories were deleted;
-    //  this handles the case where the old directory still exists on disk)
+    let reusedManagedWorktree = false;
+    let porcelain = '';
     try {
       log('worktree list begin');
-      const porcelain = await this.execGitSimple(['worktree', 'list', '--porcelain'], this.repoDir);
+      porcelain = await this.execGitSimple(['worktree', 'list', '--porcelain'], this.repoDir);
       log('worktree list done');
-      console.log(`[WorktreeFamiliar] worktree list found ${porcelain.split('worktree ').length - 1} entries for branch=${branch}`);
-      const branchRef = `branch refs/heads/${branch}`;
-      const lines = porcelain.split('\n');
-      for (let i = 0; i < lines.length; i++) {
-        if (lines[i] === branchRef) {
-          for (let j = i - 1; j >= 0; j--) {
-            if (lines[j].startsWith('worktree ')) {
-              const oldPath = lines[j].slice('worktree '.length);
-              const isActive = Array.from(this.entries.values()).some(
-                e => e.worktreeDir === oldPath && !e.completed,
-              );
-              if (isActive) {
-                console.log(`[WorktreeFamiliar] Skipping force-remove of active worktree: ${oldPath} (branch=${branch})`);
-                break;
-              }
-              console.log(`[WorktreeFamiliar] Force-removing stale worktree: ${oldPath} (branch=${branch})`);
-              log('worktree remove --force begin');
-              await this.execGitSimple(['worktree', 'remove', '--force', oldPath], this.repoDir);
-              log('worktree remove --force done');
-              console.log(`[WorktreeFamiliar] Successfully removed stale worktree: ${oldPath}`);
-              break;
-            }
+      const reusePath = findManagedWorktreeForBranch(porcelain, branch, [this.worktreeBaseDir]);
+      if (reusePath && existsSync(reusePath)) {
+        const isActive = Array.from(this.entries.values()).some(
+          (e) => e.worktreeDir === reusePath && !e.completed,
+        );
+        if (isActive) {
+          throw new Error(
+            `Branch "${branch}" is already checked out in an active worktree (${reusePath}). ` +
+              'Wait for that task to finish before starting another that uses the same branch.',
+          );
+        } else {
+          const head = (await this.execGitSimple(['rev-parse', '--abbrev-ref', 'HEAD'], reusePath)).trim();
+          if (abbrevRefMatchesBranch(head, branch)) {
+            worktreeDir = reusePath;
+            reusedManagedWorktree = true;
+            console.log(`[WorktreeFamiliar] Reusing managed worktree at ${reusePath} (branch=${branch})`);
           }
-          break;
         }
       }
     } catch (err) {
-      console.warn(`[WorktreeFamiliar] Force-remove failed (will attempt add anyway):`, err);
+      if (
+        err instanceof Error &&
+        err.message.includes('already checked out in an active worktree')
+      ) {
+        throw err;
+      }
+      console.warn(`[WorktreeFamiliar] Worktree reuse probe failed (will provision fresh if needed):`, err);
     }
 
-    // -- Create the worktree with preservation support + merge upstreams --
-    mkdirSync(this.worktreeBaseDir, { recursive: true });
-    const startPoint = request.inputs.baseBranch ?? 'HEAD';
-    log('setupTaskBranch begin');
+    // Drop any other checkout of this branch (e.g. unmanaged path or stale managed dir we did not reuse)
     try {
-      await this.setupTaskBranch(this.repoDir, request, handle, {
-        branchName: branch,
-        base: startPoint,
-        worktreeDir,
-      });
-    } catch (err) {
-      if (err instanceof MergeConflictError) {
-        const entry: WorktreeEntry = {
-          process: null, request, worktreeDir, branch,
-          outputListeners: new Set(), outputBuffer: [],
-          completeListeners: new Set(), heartbeatListeners: new Set(),
-          completed: true,
-        };
-        this.registerEntry(handle, entry);
-        handle.workspacePath = worktreeDir;
-        handle.branch = branch;
-        const response: WorkResponse = {
-          requestId: request.requestId,
-          actionId: request.actionId,
-          status: 'failed',
-          outputs: {
-            exitCode: 1,
-            error: JSON.stringify({
-              type: 'merge_conflict',
-              failedBranch: err.failedBranch,
-              conflictFiles: err.conflictFiles,
-            }),
-          },
-        };
-        this.emitComplete(handle.executionId, response);
-        return handle;
+      for (const e of parseGitWorktreePorcelain(porcelain)) {
+        if (e.branch !== branch) continue;
+        const p = e.path;
+        const isActiveHere = Array.from(this.entries.values()).some(
+          (ent) => ent.worktreeDir === p && !ent.completed,
+        );
+        if (isActiveHere) continue;
+        const np = normalize(p);
+        const nw = normalize(worktreeDir);
+        if (np === nw) continue;
+        console.log(`[WorktreeFamiliar] Removing other worktree holding ${branch}: ${p}`);
+        await this.execGitSimple(['worktree', 'remove', '--force', p], this.repoDir);
       }
-      throw err;
+    } catch (err) {
+      console.warn(`[WorktreeFamiliar] Worktree cleanup for branch=${branch} failed:`, err);
     }
-    log('setupTaskBranch done');
+
+    mkdirSync(this.worktreeBaseDir, { recursive: true });
+    console.log(
+      `${RESTART_TO_BRANCH_TRACE} WorktreeFamiliar.start() actionId=${request.actionId} → local main-repo path: ` +
+        (reusedManagedWorktree
+          ? `reused worktree at ${worktreeDir}; merge upstreams only`
+          : `calling BaseFamiliar.setupTaskBranch() next (branch=${branch} base=${startPoint})`),
+    );
+
+    if (reusedManagedWorktree) {
+      log('mergeRequestUpstreamBranches (reuse path) begin');
+      try {
+        await this.mergeRequestUpstreamBranches(request, worktreeDir, startPoint);
+        handle.branch = branch;
+      } catch (err) {
+        if (err instanceof MergeConflictError) {
+          const entry: WorktreeEntry = {
+            process: null, request, worktreeDir, branch,
+            outputListeners: new Set(), outputBuffer: [],
+            completeListeners: new Set(), heartbeatListeners: new Set(),
+            completed: true,
+          };
+          this.registerEntry(handle, entry);
+          handle.workspacePath = worktreeDir;
+          handle.branch = branch;
+          const response: WorkResponse = {
+            requestId: request.requestId,
+            actionId: request.actionId,
+            status: 'failed',
+            outputs: {
+              exitCode: 1,
+              error: JSON.stringify({
+                type: 'merge_conflict',
+                failedBranch: err.failedBranch,
+                conflictFiles: err.conflictFiles,
+              }),
+            },
+          };
+          this.emitComplete(handle.executionId, response);
+          return handle;
+        }
+        throw err;
+      }
+      log('mergeRequestUpstreamBranches (reuse path) done');
+    } else {
+      log('setupTaskBranch begin');
+      try {
+        await this.setupTaskBranch(this.repoDir, request, handle, {
+          branchName: branch,
+          base: startPoint,
+          worktreeDir,
+        });
+      } catch (err) {
+        if (err instanceof MergeConflictError) {
+          const entry: WorktreeEntry = {
+            process: null, request, worktreeDir, branch,
+            outputListeners: new Set(), outputBuffer: [],
+            completeListeners: new Set(), heartbeatListeners: new Set(),
+            completed: true,
+          };
+          this.registerEntry(handle, entry);
+          handle.workspacePath = worktreeDir;
+          handle.branch = branch;
+          const response: WorkResponse = {
+            requestId: request.requestId,
+            actionId: request.actionId,
+            status: 'failed',
+            outputs: {
+              exitCode: 1,
+              error: JSON.stringify({
+                type: 'merge_conflict',
+                failedBranch: err.failedBranch,
+                conflictFiles: err.conflictFiles,
+              }),
+            },
+          };
+          this.emitComplete(handle.executionId, response);
+          return handle;
+        }
+        throw err;
+      }
+      log('setupTaskBranch done');
+    }
 
     this.cleanStaleLocks(worktreeDir);
 

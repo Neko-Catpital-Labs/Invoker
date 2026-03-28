@@ -56,6 +56,7 @@ import type { MessageBus } from '@invoker/transport';
 import {
   FamiliarRegistry, TaskExecutor,
   DockerFamiliar, WorktreeFamiliar, SshFamiliar, GitHubMergeGateProvider,
+  RESTART_TO_BRANCH_TRACE,
   type Familiar, type FamiliarHandle, type PersistedTaskMeta,
 } from '@invoker/executors';
 import type { TaskOutputData } from './types.js';
@@ -945,7 +946,13 @@ function setupGuiMode(): void {
       try {
         await killRunningTask(taskId);
         const started = orchestrator.restartTask(taskId);
+        console.log(
+          `${RESTART_TO_BRANCH_TRACE} ipc invoker:restart-task after orchestrator.restartTask: count=${started.length} [${started.map((t) => `${t.id}(${t.status})`).join(', ')}]`,
+        );
         const runnable = started.filter(t => t.status === 'running');
+        console.log(
+          `${RESTART_TO_BRANCH_TRACE} ipc invoker:restart-task runnable=${runnable.length} [${runnable.map((t) => t.id).join(', ') || '(none)'}] → taskExecutor.executeTasks`,
+        );
         await taskExecutor.executeTasks(runnable);
       } catch (err) {
         console.error(`[ipc] restart-task failed: ${err}`);

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execSync } from 'node:child_process';
@@ -107,6 +107,18 @@ describe('RepoPool', () => {
     expect(execSync('cat fix.txt', { cwd: wt2.worktreePath }).toString()).toBe('cherry-picked fix');
 
     await wt2.release();
+  });
+
+  it('acquireWorktree: succeeds when stale path+registration left from abandoned pool (simulated restart)', async () => {
+    const wt = await pool.acquireWorktree(localRepoUrl, 'stale-restart-branch');
+    expect(existsSync(wt.worktreePath)).toBe(true);
+    // No wt.release() — same as crash or new process with empty in-memory active set
+    const pool2 = new RepoPool({ cacheDir: tmpDir });
+    const wt2 = await pool2.acquireWorktree(localRepoUrl, 'stale-restart-branch');
+    expect(wt2.worktreePath).toBe(wt.worktreePath);
+    const branch = execSync('git branch --show-current', { cwd: wt2.worktreePath }).toString().trim();
+    expect(branch).toBe('stale-restart-branch');
+    await pool2.destroyAll();
   });
 
   it('resets branch on re-acquire when no extra commits exist', async () => {

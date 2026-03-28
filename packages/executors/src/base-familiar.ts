@@ -3,6 +3,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import type { WorkRequest, WorkResponse } from '@invoker/protocol';
 import type { Familiar, FamiliarHandle, PersistedTaskMeta, TerminalSpec, Unsubscribe } from './familiar.js';
 import { bashPreserveOrReset, bashMergeUpstreams, parsePreserveResult, parseMergeError } from './branch-utils.js';
+import { RESTART_TO_BRANCH_TRACE } from './exec-trace.js';
 
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
 const DEFAULT_MAX_DURATION_MS = 4 * 60 * 60 * 1000; // 4 hours
@@ -377,6 +378,51 @@ export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar
    * Sets `handle.branch` and returns the original branch name for restoration.
    * Returns undefined if not in a git repo or git operations fail.
    */
+  /**
+   * Merge `request.inputs.upstreamBranches` into `mergeCwd` using the same rules as
+   * {@link setupTaskBranch} (baseFromUpstream when `setupBranchExplicitBase` is unset).
+   */
+  protected async mergeRequestUpstreamBranches(
+    request: WorkRequest,
+    mergeCwd: string,
+    setupBranchExplicitBase?: string,
+  ): Promise<void> {
+    const upstreams = request.inputs.upstreamBranches ?? [];
+    const baseFromUpstream = !setupBranchExplicitBase && upstreams.length > 0;
+    const upstreamsToMerge = baseFromUpstream ? upstreams.slice(1) : upstreams;
+    console.log(
+      `${RESTART_TO_BRANCH_TRACE} [mergeRequestUpstreamBranches] upstreamsToMerge=${JSON.stringify(upstreamsToMerge)} ` +
+        `(baseFromUpstream=${baseFromUpstream}) mergeCwd=${mergeCwd}`,
+    );
+    if (upstreamsToMerge.length === 0) {
+      console.log(`${RESTART_TO_BRANCH_TRACE} [mergeRequestUpstreamBranches] no upstream merges`);
+      return;
+    }
+    const mergeScript = bashMergeUpstreams({
+      worktreeDir: mergeCwd,
+      upstreamBranches: upstreamsToMerge,
+      skipAncestors: true,
+    });
+    try {
+      await this.runBash(mergeScript, mergeCwd);
+      console.log(
+        `${RESTART_TO_BRANCH_TRACE} [mergeRequestUpstreamBranches] merge OK (${upstreamsToMerge.length} branch(es))`,
+      );
+    } catch (err: any) {
+      const exitCode = err.exitCode ?? 1;
+      const stderr = err.stderr ?? err.message ?? '';
+      const parsed = parseMergeError(exitCode, stderr);
+      console.log(
+        `${RESTART_TO_BRANCH_TRACE} [mergeRequestUpstreamBranches] merge FAILED exitCode=${exitCode} ` +
+          `parsed.failedBranch=${parsed.failedBranch}`,
+      );
+      if (exitCode === 31) {
+        throw new MergeConflictError(parsed.failedBranch, parsed.conflictFiles, err);
+      }
+      throw err;
+    }
+  }
+
   protected async setupTaskBranch(
     cwd: string,
     request: WorkRequest,
@@ -388,13 +434,29 @@ export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar
       const upstreams = request.inputs.upstreamBranches ?? [];
       // When opts.base is provided, all upstreams need merging.
       // When not provided, upstreams[0] becomes the base and the rest are merged.
-      const baseFromUpstream = !opts?.base && upstreams.length > 0;
       const base = opts?.base ?? upstreams[0] ?? request.inputs.baseBranch ?? 'HEAD';
       const mergeCwd = opts?.worktreeDir ?? cwd;
+
+      console.log(
+        `${RESTART_TO_BRANCH_TRACE} [setupTaskBranch] enter familiar=${this.type} actionId=${request.actionId}\n` +
+          `  cwd=${cwd}\n` +
+          `  opts.branchName=${opts?.branchName ?? '(default)'}\n` +
+          `  opts.base=${opts?.base ?? '(unset)'}\n` +
+          `  opts.worktreeDir=${opts?.worktreeDir ?? '(unset)'}\n` +
+          `  → branchName=${branchName}\n` +
+          `  request.inputs.baseBranch=${request.inputs.baseBranch ?? '(unset)'}\n` +
+          `  request.inputs.upstreamBranches=${JSON.stringify(upstreams)}\n` +
+          `  request.inputs.upstreamContext=${JSON.stringify(request.inputs.upstreamContext ?? [])}\n` +
+          `  → base=${base}\n` +
+          `  → mergeCwd=${mergeCwd}`,
+      );
 
       let originalBranch: string | undefined;
       if (!opts?.worktreeDir) {
         originalBranch = (await this.execGitSimple(['branch', '--show-current'], cwd)).trim();
+        console.log(`${RESTART_TO_BRANCH_TRACE} [setupTaskBranch] originalBranch (repo checkout mode)=${originalBranch}`);
+      } else {
+        console.log(`${RESTART_TO_BRANCH_TRACE} [setupTaskBranch] originalBranch=(skipped, worktree mode)`);
       }
 
       const preserveScript = bashPreserveOrReset({
@@ -403,33 +465,26 @@ export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar
         branch: branchName,
         base,
       });
+      console.log(`${RESTART_TO_BRANCH_TRACE} [setupTaskBranch] preserveScript length=${preserveScript.length} chars`);
       const preserveStdout = await this.runBash(preserveScript, cwd);
-      const { preserved } = parsePreserveResult(preserveStdout);
-      console.log(`[setupTaskBranch] ${preserved ? 'PRESERVING' : 'FORCE-RESET'} ${branchName} (base=${base})`);
+      const { preserved, baseSha } = parsePreserveResult(preserveStdout);
+      console.log(
+        `${RESTART_TO_BRANCH_TRACE} [setupTaskBranch] preserve done preserved=${preserved} baseSha=${baseSha}\n` +
+          `  stdout (trimmed): ${preserveStdout.trim().replace(/\n/g, ' | ')}`,
+      );
 
-      const upstreamsToMerge = baseFromUpstream ? upstreams.slice(1) : upstreams;
-      if (upstreamsToMerge.length > 0) {
-        const mergeScript = bashMergeUpstreams({
-          worktreeDir: mergeCwd,
-          upstreamBranches: upstreamsToMerge,
-          skipAncestors: true,
-        });
-        try {
-          await this.runBash(mergeScript, mergeCwd);
-        } catch (err: any) {
-          const exitCode = err.exitCode ?? 1;
-          const stderr = err.stderr ?? err.message ?? '';
-          const parsed = parseMergeError(exitCode, stderr);
-          if (exitCode === 31) {
-            throw new MergeConflictError(parsed.failedBranch, parsed.conflictFiles, err);
-          }
-          throw err;
-        }
-      }
+      await this.mergeRequestUpstreamBranches(request, mergeCwd, opts?.base);
 
       handle.branch = branchName;
+      console.log(`${RESTART_TO_BRANCH_TRACE} [setupTaskBranch] exit OK handle.branch=${branchName}`);
       return originalBranch;
     } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.log(
+        `${RESTART_TO_BRANCH_TRACE} [setupTaskBranch] catch familiar=${this.type} actionId=${request.actionId} ` +
+          `MergeConflictError=${err instanceof MergeConflictError} worktreeDir=${Boolean(opts?.worktreeDir)} ` +
+          `error=${msg}`,
+      );
       if (err instanceof MergeConflictError) {
         throw err;
       }

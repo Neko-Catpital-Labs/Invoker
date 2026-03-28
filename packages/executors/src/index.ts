@@ -1,3 +1,4 @@
+export { RESTART_TO_BRANCH_TRACE } from './exec-trace.js';
 export * from './familiar.js';
 export * from './base-familiar.js';
 export * from './process-utils.js';
