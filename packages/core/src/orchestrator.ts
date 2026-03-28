@@ -24,7 +24,7 @@ import type { UtilizationRule } from './resource-estimator.js';
 import type { TaskState, TaskDelta, TaskStateChanges, Attempt } from './task-types.js';
 import { createTaskState, createAttempt } from './task-types.js';
 import type { WorkResponse } from '@invoker/protocol';
-import { normalizeFamiliarType, deriveNodeStatus } from '@invoker/graph';
+import { normalizeFamiliarType } from '@invoker/graph';
 
 const MERGE_TRACE_LOG = resolve(homedir(), '.invoker', 'merge-trace.log');
 function mergeTrace(tag: string, data: Record<string, unknown>): void {
@@ -1062,134 +1062,6 @@ export class Orchestrator {
       })
       .map((rt) => rt.id);
     return this.autoStartReadyTasks(rootIds);
-  }
-
-  /**
-   * Notify the orchestrator that a completed task's branch was externally
-   * updated (e.g. user pushed new commits outside of Invoker).
-   *
-   * Append-only: creates a new completed attempt for the task, selects it,
-   * then runs a derivation pass so downstream nodes whose attempts reference
-   * the old upstream attempt are marked stale.
-   */
-  notifyBranchUpdated(taskId: string, opts?: { commit?: string }): string[] {
-    this.refreshFromDb();
-    const task = this.stateMachine.getTask(taskId);
-    if (!task) throw new Error(`Task ${taskId} not found`);
-    if (task.status !== 'completed') throw new Error(`Task ${taskId} is not completed (status: ${task.status})`);
-
-    const staled: string[] = [];
-
-    // 1. Create a new completed attempt representing the external update
-    try {
-      if (this.persistence.loadAttempts && this.persistence.updateAttempt && this.persistence.saveAttempt && this.persistence.getNextAttemptNumber) {
-        const attempts = this.persistence.loadAttempts(taskId);
-        const current = attempts[attempts.length - 1];
-
-        // Copy upstreamAttemptIds from previous attempt (A's own upstream deps haven't changed)
-        const prevUpstreamAttemptIds = current?.upstreamAttemptIds ?? [];
-
-        if (current && current.status !== 'superseded') {
-          this.persistence.updateAttempt(current.id, { status: 'superseded' });
-        }
-
-        const nextNum = this.persistence.getNextAttemptNumber(taskId);
-        const newAttempt = createAttempt(taskId, nextNum, {
-          status: 'completed',
-          branch: task.execution.branch,
-          commit: opts?.commit ?? task.execution.commit,
-          completedAt: new Date(),
-          upstreamAttemptIds: prevUpstreamAttemptIds,
-          supersedesAttemptId: current?.id,
-        });
-        this.persistence.saveAttempt(newAttempt);
-
-        // Select the new attempt
-        const selectChanges: TaskStateChanges = {
-          execution: {
-            selectedAttemptId: newAttempt.id,
-            ...(opts?.commit ? { commit: opts.commit } : {}),
-          },
-        };
-        this.writeAndSync(taskId, selectChanges);
-        const selectDelta: TaskDelta = { type: 'updated', taskId, changes: selectChanges };
-        this.persistence.logEvent?.(taskId, 'task.branch_updated', selectChanges);
-        this.messageBus.publish(TASK_DELTA_CHANNEL, selectDelta);
-      }
-    } catch (err) {
-      console.error(`[orchestrator] notifyBranchUpdated "${taskId}": attempt creation failed: ${err}`);
-    }
-
-    // 2. Derive downstream staleness from attempt lineage
-    const allTasks = this.stateMachine.getAllTasks();
-    const taskMap = new Map(allTasks.map((t) => [t.id, t]));
-    const descendantIds = getTransitiveDependents(
-      taskId,
-      taskMap,
-      (t) => !!t.config.isMergeNode,
-    );
-
-    const derivedStale = this.deriveAndPersistStatuses(descendantIds);
-    staled.push(...derivedStale);
-
-    // 3. Reconcile merge leaves if any status changed
-    if (staled.length > 0 && task.config.workflowId) {
-      this.reconcileMergeLeaves(task.config.workflowId);
-    }
-
-    console.log(`[orchestrator] notifyBranchUpdated "${taskId}": ${staled.length} downstream task(s) marked stale: [${staled.join(', ')}]`);
-    return staled;
-  }
-
-  /**
-   * Run the attempt-lineage derivation pass for a set of task IDs.
-   *
-   * Two-layer check (processed in BFS order so direct deps are resolved first):
-   *   1. Attempt-lineage: deriveNodeStatus detects stale via upstreamAttemptIds mismatch
-   *   2. Cascade: if any dependency is now stale, completed tasks are also stale
-   *
-   * Returns IDs of tasks whose status changed.
-   */
-  private deriveAndPersistStatuses(taskIds: string[]): string[] {
-    const changed: string[] = [];
-
-    const getNode = (id: string) => this.stateMachine.getTask(id);
-    const getAttempt = (id: string) => this.persistence.loadAttempt?.(id);
-
-    for (const id of taskIds) {
-      const task = this.stateMachine.getTask(id);
-      if (!task || task.status !== 'completed') continue;
-
-      let shouldStale = false;
-
-      // Layer 1: attempt-lineage derivation
-      if (task.execution.selectedAttemptId) {
-        const derived = deriveNodeStatus(task, getNode, getAttempt);
-        if (derived === 'stale') {
-          shouldStale = true;
-        }
-      }
-
-      // Layer 2: cascade — if any upstream dep is stale, propagate
-      if (!shouldStale) {
-        shouldStale = task.dependencies.some(depId => {
-          const dep = this.stateMachine.getTask(depId);
-          return dep?.status === 'stale';
-        });
-      }
-
-      if (shouldStale) {
-        const staleChanges: TaskStateChanges = { status: 'stale' };
-        this.writeAndSync(id, staleChanges);
-        this.persistence.logEvent?.(id, 'task.stale', staleChanges);
-        this.messageBus.publish(TASK_DELTA_CHANNEL, {
-          type: 'updated', taskId: id, changes: staleChanges,
-        });
-        changed.push(id);
-      }
-    }
-
-    return changed;
   }
 
   /**

@@ -440,7 +440,6 @@ export function App() {
               onEditCommand={handleEditCommand}
               onEditType={handleEditType}
               onSetMergeBranch={invoker?.setMergeBranch}
-              onNotifyBranchUpdated={invoker?.notifyBranchUpdated}
               onSetMergeMode={invoker?.setMergeMode}
             />
           </div>
