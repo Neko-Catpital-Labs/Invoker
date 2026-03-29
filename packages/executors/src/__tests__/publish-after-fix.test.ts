@@ -202,4 +202,52 @@ describe('publishAfterFixImpl integration (real git)', () => {
       git('fetch origin +refs/heads/*:refs/heads/*', sandbox.gateDir);
     }).not.toThrow();
   });
+
+  it('merges pre-pushed plan/feature tip in one step when present (avoids re-merging task branches)', async () => {
+    const sandbox = createSandbox();
+    root = sandbox.root;
+
+    // Simulate consolidateAndMerge: feature branch already on origin before the gate fix path.
+    git('checkout -b plan/feature', sandbox.hostDir);
+    gitExec(['merge', '--no-ff', '-m', 'Merge invoker/t1', 'invoker/t1'], sandbox.hostDir);
+    git('push -u origin plan/feature', sandbox.hostDir);
+    git('checkout master', sandbox.hostDir);
+
+    const fixCommit = git('rev-parse HEAD', sandbox.gateDir);
+
+    const mergeTask: TaskState = {
+      id: '__merge__wf-int',
+      description: 'Merge gate',
+      status: 'running',
+      dependencies: ['t1'],
+      createdAt: new Date(),
+      config: { isMergeNode: true, workflowId: 'wf-int' } as any,
+      execution: {} as any,
+    };
+
+    const taskT1: TaskState = {
+      id: 't1',
+      description: 'Task 1',
+      status: 'completed',
+      dependencies: [],
+      createdAt: new Date(),
+      config: { workflowId: 'wf-int' } as any,
+      execution: { branch: 'invoker/t1' } as any,
+    };
+
+    const host = makeHost(sandbox.hostDir, sandbox.gateDir, [mergeTask, taskT1]);
+    await publishAfterFixImpl(host, mergeTask);
+
+    expect(host.orchestrator.handleWorkerResponse).not.toHaveBeenCalled();
+
+    git('fetch origin', sandbox.hostDir);
+    // Gate force-pushed plan/feature; reset local branch to match origin (avoid stale pre-push tip).
+    gitExec(['checkout', '-B', 'plan/feature', 'origin/plan/feature'], sandbox.hostDir);
+    expect(existsSync(join(sandbox.hostDir, 't1.txt'))).toBe(true);
+    expect(existsSync(join(sandbox.hostDir, 'fix.txt'))).toBe(true);
+
+    const featureSha = git('rev-parse plan/feature', sandbox.hostDir);
+    const isAncestor = gitSilent(`merge-base --is-ancestor ${fixCommit} ${featureSha}`, sandbox.hostDir);
+    expect(isAncestor).toBe('');
+  });
 });

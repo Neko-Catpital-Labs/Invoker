@@ -470,10 +470,6 @@ export async function publishAfterFixImpl(
   const summary = workflowId ? await host.buildMergeSummary(workflowId) : undefined;
   const gateWorkspacePath = host.persistence.getWorkspacePath(task.id) ?? undefined;
 
-  // #region agent log
-  fetch('http://127.0.0.1:7658/ingest/762b7479-8057-4c6f-a805-85ee7d433bf5',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'16cf33'},body:JSON.stringify({sessionId:'16cf33',location:'merge-executor.ts:publishAfterFixImpl',message:'publishAfterFix config',data:{taskId:task.id,workflowId,onFinish,mergeMode,baseBranch,featureBranch,gateWorkspacePath},timestamp:Date.now(),runId:'post-fix-v3'})}).catch(()=>{});
-  // #endregion
-
   try {
     if (!featureBranch) {
       host.orchestrator.setTaskAwaitingApproval(task.id, {
@@ -495,6 +491,19 @@ export async function publishAfterFixImpl(
     const headSha = (await execGitInMergeSafe(host, ['rev-parse', 'HEAD'], gateWorkspacePath)).trim();
     await execGitInMergeSafe(host, ['checkout', '--detach', headSha], gateWorkspacePath);
     await execGitInMergeSafe(host, ['fetch', 'origin', '+refs/heads/*:refs/heads/*'], gateWorkspacePath);
+
+    // If consolidateAndMerge already pushed featureBranch, remember its tip before we
+    // delete/recreate the local branch name. Merging that one commit graph avoids
+    // re-merging every experiment/* branch on top of Claude's gate HEAD (which can
+    // produce spurious conflicts when resolutions overlap the same files).
+    let priorConsolidatedSha: string | undefined;
+    try {
+      priorConsolidatedSha = (
+        await execGitInMergeSafe(host, ['rev-parse', '--verify', featureBranch], consolidateDir)
+      ).trim();
+    } catch {
+      /* no local ref — e.g. consolidate failed before first push */
+    }
 
     // Create feature branch from HEAD (Claude's fixed base)
     try {
@@ -526,17 +535,37 @@ export async function publishAfterFixImpl(
       .map((t) => ({ branch: t.execution.branch!, description: t.description }))
       .sort((a, b) => a.branch.localeCompare(b.branch));
 
-    // #region agent log
-    fetch('http://127.0.0.1:7658/ingest/762b7479-8057-4c6f-a805-85ee7d433bf5',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'16cf33'},body:JSON.stringify({sessionId:'16cf33',location:'merge-executor.ts:publishAfterFixImpl:consolidate',message:'consolidating in gate clone',data:{taskId:task.id,consolidateDir,branchCount:taskBranches.length,branches:taskBranches.map(t=>t.branch)},timestamp:Date.now(),runId:'post-fix-v3'})}).catch(()=>{});
-    // #endregion
-
-    for (const { branch, description } of taskBranches) {
-      console.log(`[merge] Post-fix: merging task branch ${branch} → ${featureBranch}`);
-      await ensureLocalBranchForMerge(host, consolidateDir, branch);
-      const mergeMsg = description ? `Merge ${branch} — ${description}` : `Merge ${branch}`;
-      await execGitInMergeSafe(host, ['merge', '--no-ff', '-m', mergeMsg, branch], consolidateDir);
+    let mergedViaPriorConsolidation = false;
+    if (priorConsolidatedSha) {
+      try {
+        const mergeMsg = `Merge ${featureBranch} (workflow consolidation)`;
+        await execGitInMergeSafe(
+          host,
+          ['merge', '--no-ff', '-m', mergeMsg, priorConsolidatedSha],
+          consolidateDir,
+        );
+        mergedViaPriorConsolidation = true;
+        console.log(
+          `[merge] Post-fix: merged pre-pushed consolidation ${priorConsolidatedSha.slice(0, 7)} → ${featureBranch}`,
+        );
+      } catch {
+        try {
+          await execGitInMergeSafe(host, ['merge', '--abort'], consolidateDir);
+        } catch {
+          /* no merge in progress */
+        }
+      }
     }
-    console.log(`[merge] Post-fix: consolidated ${taskBranches.length} task branches into ${featureBranch}`);
+
+    if (!mergedViaPriorConsolidation) {
+      for (const { branch, description } of taskBranches) {
+        console.log(`[merge] Post-fix: merging task branch ${branch} → ${featureBranch}`);
+        await ensureLocalBranchForMerge(host, consolidateDir, branch);
+        const mergeMsg = description ? `Merge ${branch} — ${description}` : `Merge ${branch}`;
+        await execGitInMergeSafe(host, ['merge', '--no-ff', '-m', mergeMsg, branch], consolidateDir);
+      }
+      console.log(`[merge] Post-fix: consolidated ${taskBranches.length} task branches into ${featureBranch}`);
+    }
 
     // Push feature branch directly to origin (GitHub) from the gate clone
     await execGitInMergeSafe(host, ['push', '--force', '-u', 'origin', featureBranch], consolidateDir);
@@ -563,10 +592,6 @@ export async function publishAfterFixImpl(
         body: fullSummary,
       });
       console.log(`[merge] Post-fix: created/updated GitHub PR: ${result.url}`);
-
-      // #region agent log
-      fetch('http://127.0.0.1:7658/ingest/762b7479-8057-4c6f-a805-85ee7d433bf5',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'16cf33'},body:JSON.stringify({sessionId:'16cf33',location:'merge-executor.ts:publishAfterFixImpl:success',message:'PR created successfully',data:{taskId:task.id,prUrl:result.url},timestamp:Date.now(),runId:'post-fix-v3'})}).catch(()=>{});
-      // #endregion
 
       host.orchestrator.setTaskAwaitingApproval(task.id, {
         config: { familiarType: 'worktree', summary },
@@ -602,9 +627,6 @@ export async function publishAfterFixImpl(
     mergeTrace('PUBLISH_AFTER_FIX_DONE', { taskId: task.id });
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : String(err);
-    // #region agent log
-    fetch('http://127.0.0.1:7658/ingest/762b7479-8057-4c6f-a805-85ee7d433bf5',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'16cf33'},body:JSON.stringify({sessionId:'16cf33',location:'merge-executor.ts:publishAfterFixImpl:catch',message:'publishAfterFix error',data:{taskId:task.id,error:errorMsg},timestamp:Date.now(),runId:'post-fix-v3'})}).catch(()=>{});
-    // #endregion
     mergeTrace('PUBLISH_AFTER_FIX_FAILED', { taskId: task.id, error: errorMsg });
     console.error(`[merge] Post-fix PR prep failed for ${task.id}: ${errorMsg}`);
     const failedResponse: WorkResponse = {

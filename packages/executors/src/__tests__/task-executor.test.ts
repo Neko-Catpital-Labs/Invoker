@@ -4522,8 +4522,9 @@ describe('TaskExecutor', () => {
       expect(gateCalls[1]).toEqual(['checkout', '--detach', 'abc123deadbeef']);
       expect(gateCalls[2]).toEqual(['fetch', 'origin', '+refs/heads/*:refs/heads/*']);
 
-      // The fourth call creates the feature branch
-      expect(gateCalls[3]).toEqual(['checkout', '-b', 'plan/feature']);
+      // Capture pre-pushed feature tip (if any), then create the feature branch
+      expect(gateCalls[3]).toEqual(['rev-parse', '--verify', 'plan/feature']);
+      expect(gateCalls[4]).toEqual(['checkout', '-b', 'plan/feature']);
     });
 
     it('without gateWorkspacePath: throws requiring a managed clone', async () => {
