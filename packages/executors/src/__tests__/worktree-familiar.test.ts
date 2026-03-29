@@ -777,8 +777,8 @@ describe('WorktreeFamiliar', () => {
       expect(args).toContain('test prompt');
 
       // Verify session ID is set on handle
-      expect(handle.claudeSessionId).toBeDefined();
-      expect(handle.claudeSessionId).toMatch(/^[0-9a-f-]+$/);
+      expect(handle.agentSessionId).toBeDefined();
+      expect(handle.agentSessionId).toMatch(/^[0-9a-f-]+$/);
 
       // Cleanup
       taskProcess.emit('close', 0, null);
@@ -816,7 +816,7 @@ describe('WorktreeFamiliar', () => {
       taskProcess.emit('close', 0, null);
     });
 
-    it('includes claudeSessionId in completion response outputs', async () => {
+    it('includes agentSessionId in completion response outputs', async () => {
       const claudeFamiliar = new WorktreeFamiliar({
         cacheDir: '/fake/cache',
         worktreeBaseDir: '/fake/worktrees',
@@ -839,7 +839,7 @@ describe('WorktreeFamiliar', () => {
       taskProcess.emit('close', 0, null);
       const response = await responsePromise;
 
-      expect(response.outputs.claudeSessionId).toBe(handle.claudeSessionId);
+      expect(response.outputs.agentSessionId).toBe(handle.agentSessionId);
     });
 
     it('getTerminalSpec returns claude --resume for claude tasks', async () => {
@@ -862,19 +862,19 @@ describe('WorktreeFamiliar', () => {
       expect(spec).toBeDefined();
       expect(spec!.command).toBe('claude');
       expect(spec!.args).toContain('--resume');
-      expect(spec!.args).toContain(handle.claudeSessionId);
+      expect(spec!.args).toContain(handle.agentSessionId);
       expect(spec!.cwd).toMatch(/^\/fake\/worktrees\//);
 
       taskProcess.emit('close', 0, null);
     });
 
-    it('does not set claudeSessionId for command tasks', async () => {
+    it('does not set agentSessionId for command tasks', async () => {
       const { taskProcess } = setupSpawnMock();
 
       const request = makeRequest({ inputs: { command: 'echo hello' } });
       const handle = await familiar.start(request);
 
-      expect(handle.claudeSessionId).toBeUndefined();
+      expect(handle.agentSessionId).toBeUndefined();
 
       taskProcess.emit('close', 0, null);
     });
@@ -1020,7 +1020,7 @@ describe('WorktreeFamiliar', () => {
       const spec = familiar.getRestoredTerminalSpec({
         ...baseMeta,
         workspacePath: '/home/user/.invoker/worktrees/wt-abc',
-        claudeSessionId: 'session-wt-1',
+        agentSessionId: 'session-wt-1',
       });
       expect(spec).toEqual({
         command: 'claude',

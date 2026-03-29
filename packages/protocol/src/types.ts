@@ -72,7 +72,9 @@ export interface WorkResponseOutputs {
   error?: string;
   summary?: string;
   commitHash?: string;
-  claudeSessionId?: string;
+  agentSessionId?: string;
+  /** Name of the ExecutionAgent that produced this session (e.g. 'claude'). */
+  agentName?: string;
 }
 
 export interface SpawnExperimentsRequest {

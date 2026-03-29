@@ -8,6 +8,7 @@ import { BaseFamiliar, type BaseEntry } from './base-familiar.js';
 import { DockerPool } from './docker-pool.js';
 import { killProcessGroup, cleanElectronEnv, SIGKILL_TIMEOUT_MS } from './process-utils.js';
 import { computeBranchHash } from './branch-utils.js';
+import type { AgentRegistry } from './agent-registry.js';
 
 const CONTAINER_STOP_TIMEOUT_S = 5;
 const TAG = '[DockerFamiliar]';
@@ -23,12 +24,16 @@ export interface DockerFamiliarConfig {
   repoInImage?: boolean;
   /** ANTHROPIC_API_KEY to pass into the container. Falls back to process.env.ANTHROPIC_API_KEY. */
   anthropicApiKey?: string;
+  /** Agent registry for pluggable agent command building. */
+  agentRegistry?: AgentRegistry;
 }
 
 interface ContainerEntry extends BaseEntry {
   containerId: string;
   process: ChildProcess | null;
-  claudeSessionId?: string;
+  agentSessionId?: string;
+  /** Name of the ExecutionAgent that produced this session. */
+  agentName?: string;
   branch?: string;
 }
 
@@ -56,6 +61,7 @@ export class DockerFamiliar extends BaseFamiliar<ContainerEntry> {
   private readonly anthropicApiKey: string;
   private readonly repoInImage: boolean;
   private readonly pool: DockerPool;
+  private readonly agentRegistry?: AgentRegistry;
 
   /** Lazily-resolved dockerode instance. Null until first use. */
   private dockerInstance: any | null = null;
@@ -73,6 +79,7 @@ export class DockerFamiliar extends BaseFamiliar<ContainerEntry> {
     this.anthropicApiKey = config.anthropicApiKey ?? process.env.ANTHROPIC_API_KEY ?? '';
     this.repoInImage = config.repoInImage ?? false;
     this.pool = new DockerPool({ baseImage: this.imageName, sshDir: this.sshDir });
+    this.agentRegistry = config.agentRegistry;
   }
 
   // ---------------------------------------------------------------------------
@@ -257,13 +264,16 @@ export class DockerFamiliar extends BaseFamiliar<ContainerEntry> {
     log(`${TAG} Container created: ${container.id.slice(0, 12)} image=${containerImage}`);
 
     // Determine task command and Claude session before entry registration
-    const { cmd, args: cmdArgs, claudeSessionId } = this.buildCommandAndArgs(request);
+    const { cmd, args: cmdArgs, agentSessionId, agentName } = this.buildCommandAndArgs(request, {
+      agentRegistry: this.agentRegistry,
+    });
 
     const entry: ContainerEntry = {
       containerId: container.id,
       process: null,
       request,
-      claudeSessionId,
+      agentSessionId,
+      agentName,
       outputListeners: new Set(),
       outputBuffer: [],
       completeListeners: new Set(),
@@ -283,8 +293,11 @@ export class DockerFamiliar extends BaseFamiliar<ContainerEntry> {
     };
 
     handle.containerId = container.id;
-    if (claudeSessionId) {
-      handle.claudeSessionId = claudeSessionId;
+    if (agentSessionId) {
+      handle.agentSessionId = agentSessionId;
+    }
+    if (agentName) {
+      handle.agentName = agentName;
     }
 
     // -- Start container (idle process) --
@@ -388,7 +401,8 @@ export class DockerFamiliar extends BaseFamiliar<ContainerEntry> {
         await this.handleProcessExit(executionId, request, CONTAINER_CWD, exitCode, {
           signal,
           branch: handle.branch,
-          claudeSessionId: entry.claudeSessionId,
+          agentSessionId: entry.agentSessionId,
+          agentName: entry.agentName,
         });
 
         // Stop the idle container after git finalize completes
@@ -463,18 +477,22 @@ export class DockerFamiliar extends BaseFamiliar<ContainerEntry> {
 
   getTerminalSpec(handle: FamiliarHandle): TerminalSpec | null {
     const entry = this.entries.get(handle.executionId);
-    console.log(`${TAG} getTerminalSpec() handle=${handle.executionId} hasEntry=${!!entry} claudeSessionId=${entry?.claudeSessionId} containerId=${entry?.containerId?.slice(0, 12)}`);
+    console.log(`${TAG} getTerminalSpec() handle=${handle.executionId} hasEntry=${!!entry} agentSessionId=${entry?.agentSessionId} containerId=${entry?.containerId?.slice(0, 12)}`);
     if (!entry) return null;
     const cid = entry.containerId;
-    if (entry.claudeSessionId) {
+    if (entry.agentSessionId) {
       // NOTE: Claude CLI's interactive TUI has known freeze/deadlock issues inside
       // Docker containers (see github.com/anthropics/claude-code/issues/20572,
       // #24068, #25286). The --resume terminal may hang after the trust prompt.
       // The automated -p (pipe) execution path is unaffected.
-      console.log(`${TAG} getTerminalSpec() -> docker start + exec claude --resume ${entry.claudeSessionId}`);
+      const resume = this.agentRegistry
+        ? this.agentRegistry.getOrThrow(entry.agentName ?? 'claude').buildResumeArgs(entry.agentSessionId)
+        : { cmd: 'claude', args: ['--resume', entry.agentSessionId, '--dangerously-skip-permissions'] };
+      const resumeCmd = [resume.cmd, ...resume.args].join(' ');
+      console.log(`${TAG} getTerminalSpec() -> docker start + exec ${resumeCmd}`);
       return {
         command: 'bash',
-        args: ['-c', `docker start ${cid} >/dev/null 2>&1; docker exec -it ${cid} claude --resume ${entry.claudeSessionId} --dangerously-skip-permissions`],
+        args: ['-c', `docker start ${cid} >/dev/null 2>&1; docker exec -it ${cid} ${resumeCmd}`],
       };
     }
     console.log(`${TAG} getTerminalSpec() -> docker start + exec /bin/bash`);
@@ -485,20 +503,24 @@ export class DockerFamiliar extends BaseFamiliar<ContainerEntry> {
   }
 
   getRestoredTerminalSpec(meta: PersistedTaskMeta): TerminalSpec {
-    console.log(`[DockerFamiliar] getRestoredTerminalSpec task="${meta.taskId}" containerId="${meta.containerId ?? 'none'}" sessionId="${meta.claudeSessionId ?? 'none'}"`);
+    console.log(`[DockerFamiliar] getRestoredTerminalSpec task="${meta.taskId}" containerId="${meta.containerId ?? 'none'}" sessionId="${meta.agentSessionId ?? 'none'}"`);
     if (!meta.containerId) {
       console.log(`[DockerFamiliar] getRestoredTerminalSpec task="${meta.taskId}" — no container ID`);
       throw new Error(`No container ID found for task ${meta.taskId}`);
     }
     const cid = meta.containerId;
-    if (meta.claudeSessionId) {
+    if (meta.agentSessionId) {
       // NOTE: Claude CLI's interactive TUI has known freeze/deadlock issues inside
       // Docker containers (see github.com/anthropics/claude-code/issues/20572,
       // #24068, #25286). The --resume terminal may hang after the trust prompt.
-      console.log(`[DockerFamiliar] getRestoredTerminalSpec task="${meta.taskId}" → docker exec claude --resume`);
+      const resume = this.agentRegistry
+        ? this.agentRegistry.getOrThrow(meta.agentName ?? 'claude').buildResumeArgs(meta.agentSessionId)
+        : { cmd: 'claude', args: ['--resume', meta.agentSessionId, '--dangerously-skip-permissions'] };
+      const resumeCmd = [resume.cmd, ...resume.args].join(' ');
+      console.log(`[DockerFamiliar] getRestoredTerminalSpec task="${meta.taskId}" → docker exec ${resumeCmd}`);
       return {
         command: 'bash',
-        args: ['-c', `docker start ${cid} >/dev/null 2>&1; docker exec -it ${cid} claude --resume ${meta.claudeSessionId} --dangerously-skip-permissions`],
+        args: ['-c', `docker start ${cid} >/dev/null 2>&1; docker exec -it ${cid} ${resumeCmd}`],
       };
     }
     console.log(`[DockerFamiliar] getRestoredTerminalSpec task="${meta.taskId}" → docker exec /bin/bash`);

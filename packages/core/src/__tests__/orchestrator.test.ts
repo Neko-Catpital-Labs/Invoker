@@ -73,7 +73,7 @@ class InMemoryPersistence implements OrchestratorPersistence {
     return undefined;
   }
 
-  updateAttempt(attemptId: string, changes: Partial<Pick<Attempt, 'status' | 'startedAt' | 'completedAt' | 'exitCode' | 'error' | 'lastHeartbeatAt' | 'branch' | 'commit' | 'summary' | 'workspacePath' | 'claudeSessionId' | 'containerId' | 'mergeConflict'>>): void {
+  updateAttempt(attemptId: string, changes: Partial<Pick<Attempt, 'status' | 'startedAt' | 'completedAt' | 'exitCode' | 'error' | 'lastHeartbeatAt' | 'branch' | 'commit' | 'summary' | 'workspacePath' | 'agentSessionId' | 'containerId' | 'mergeConflict'>>): void {
     for (const list of this.attempts.values()) {
       const idx = list.findIndex(a => a.id === attemptId);
       if (idx !== -1) {
@@ -3733,10 +3733,10 @@ describe('Orchestrator', () => {
       expect(task.execution.isFixingWithAI).toBeUndefined();
     });
 
-    it('setFixAwaitingApproval delta includes claudeSessionId from DB', () => {
+    it('setFixAwaitingApproval delta includes agentSessionId from DB', () => {
       orchestrator.beginConflictResolution('f2');
       // Simulate conflict-resolver persisting sessionId directly to DB
-      persistence.updateTask('f2', { execution: { claudeSessionId: 'sess-fix-1' } });
+      persistence.updateTask('f2', { execution: { agentSessionId: 'sess-fix-1' } });
       publishedDeltas = [];
 
       orchestrator.setFixAwaitingApproval('f2', 'test failed: expected 1 to be 2');
@@ -3745,8 +3745,8 @@ describe('Orchestrator', () => {
         (d) => d.type === 'updated' && d.taskId === 'f2',
       );
       expect(delta).toBeDefined();
-      expect((delta as any).changes.execution.claudeSessionId).toBe('sess-fix-1');
-      expect(orchestrator.getTask('f2')!.execution.claudeSessionId).toBe('sess-fix-1');
+      expect((delta as any).changes.execution.agentSessionId).toBe('sess-fix-1');
+      expect(orchestrator.getTask('f2')!.execution.agentSessionId).toBe('sess-fix-1');
     });
 
     it('pendingFixError is readable via getTask', () => {

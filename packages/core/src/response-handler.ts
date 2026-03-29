@@ -25,7 +25,7 @@ export type ParsedResponse =
       exitCode: number;
       summary?: string;
       commitHash?: string;
-      claudeSessionId?: string;
+      agentSessionId?: string;
     }
   | {
       type: 'failed';
@@ -72,7 +72,7 @@ export class ResponseHandler {
           exitCode: outputs.exitCode ?? 0,
           summary: outputs.summary,
           commitHash: outputs.commitHash,
-          claudeSessionId: outputs.claudeSessionId,
+          agentSessionId: outputs.agentSessionId,
         };
 
       case 'failed':

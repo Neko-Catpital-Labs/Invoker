@@ -234,31 +234,31 @@ describe('SQLiteAdapter', () => {
     });
   });
 
-  describe('claudeSessionId persistence', () => {
-    it('round-trips claudeSessionId through save and load', () => {
+  describe('agentSessionId persistence', () => {
+    it('round-trips agentSessionId through save and load', () => {
       adapter.saveWorkflow(testWorkflow);
-      adapter.saveTask('wf-1', makeTask('t1', { execution: { claudeSessionId: 'sess-abc' } }));
+      adapter.saveTask('wf-1', makeTask('t1', { execution: { agentSessionId: 'sess-abc' } }));
 
       const loaded = adapter.loadTasks('wf-1');
-      expect(loaded[0].execution.claudeSessionId).toBe('sess-abc');
+      expect(loaded[0].execution.agentSessionId).toBe('sess-abc');
     });
 
-    it('persists claudeSessionId via updateTask', () => {
+    it('persists agentSessionId via updateTask', () => {
       adapter.saveWorkflow(testWorkflow);
       adapter.saveTask('wf-1', makeTask('t1'));
 
-      adapter.updateTask('t1', { execution: { claudeSessionId: 'sess-xyz' } });
+      adapter.updateTask('t1', { execution: { agentSessionId: 'sess-xyz' } });
 
       const loaded = adapter.loadTasks('wf-1');
-      expect(loaded[0].execution.claudeSessionId).toBe('sess-xyz');
+      expect(loaded[0].execution.agentSessionId).toBe('sess-xyz');
     });
 
-    it('returns undefined when claudeSessionId is not set', () => {
+    it('returns undefined when agentSessionId is not set', () => {
       adapter.saveWorkflow(testWorkflow);
       adapter.saveTask('wf-1', makeTask('t1'));
 
       const loaded = adapter.loadTasks('wf-1');
-      expect(loaded[0].execution.claudeSessionId).toBeUndefined();
+      expect(loaded[0].execution.agentSessionId).toBeUndefined();
     });
   });
 
@@ -271,7 +271,7 @@ describe('SQLiteAdapter', () => {
       const task = loaded[0];
 
       expect(task.config.familiarType).toBeUndefined();
-      expect(task.execution.claudeSessionId).toBeUndefined();
+      expect(task.execution.agentSessionId).toBeUndefined();
       expect(task.execution.workspacePath).toBeUndefined();
       expect(task.execution.containerId).toBeUndefined();
     });
@@ -333,23 +333,23 @@ describe('SQLiteAdapter', () => {
     });
   });
 
-  describe('getClaudeSessionId', () => {
+  describe('getAgentSessionId', () => {
     it('returns session ID for a task with one', () => {
       adapter.saveWorkflow(testWorkflow);
-      adapter.saveTask('wf-1', makeTask('t1', { execution: { claudeSessionId: 'sess-lookup' } }));
+      adapter.saveTask('wf-1', makeTask('t1', { execution: { agentSessionId: 'sess-lookup' } }));
 
-      expect(adapter.getClaudeSessionId('t1')).toBe('sess-lookup');
+      expect(adapter.getAgentSessionId('t1')).toBe('sess-lookup');
     });
 
     it('returns null when no session ID set', () => {
       adapter.saveWorkflow(testWorkflow);
       adapter.saveTask('wf-1', makeTask('t1'));
 
-      expect(adapter.getClaudeSessionId('t1')).toBeNull();
+      expect(adapter.getAgentSessionId('t1')).toBeNull();
     });
 
     it('returns null for non-existent task', () => {
-      expect(adapter.getClaudeSessionId('nonexistent')).toBeNull();
+      expect(adapter.getAgentSessionId('nonexistent')).toBeNull();
     });
   });
 

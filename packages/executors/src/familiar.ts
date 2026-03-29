@@ -5,7 +5,9 @@ export type Unsubscribe = () => void;
 export interface FamiliarHandle {
   executionId: string;
   taskId: string;
-  claudeSessionId?: string;
+  agentSessionId?: string;
+  /** Name of the ExecutionAgent that produced this session (e.g. 'claude'). */
+  agentName?: string;
   containerId?: string;
   workspacePath?: string;
   branch?: string;
@@ -23,7 +25,9 @@ export interface TerminalSpec {
 export interface PersistedTaskMeta {
   taskId: string;
   familiarType: string;
-  claudeSessionId?: string;
+  agentSessionId?: string;
+  /** Name of the ExecutionAgent that produced this session (e.g. 'claude'). */
+  agentName?: string;
   containerId?: string;
   workspacePath?: string;
   branch?: string;

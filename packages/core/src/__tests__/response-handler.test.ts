@@ -31,11 +31,11 @@ describe('ResponseHandler (pure parser)', () => {
       expect(result.exitCode).toBe(0);
     });
 
-    it('includes summary, commitHash, claudeSessionId when present', () => {
+    it('includes summary, commitHash, agentSessionId when present', () => {
       const result = handler.parseResponse(
         makeResponse({
           status: 'completed',
-          outputs: { exitCode: 0, summary: 'done', commitHash: 'abc', claudeSessionId: 'sess-1' },
+          outputs: { exitCode: 0, summary: 'done', commitHash: 'abc', agentSessionId: 'sess-1' },
         }),
       );
       expect('type' in result).toBe(true);
@@ -46,7 +46,7 @@ describe('ResponseHandler (pure parser)', () => {
         exitCode: 0,
         summary: 'done',
         commitHash: 'abc',
-        claudeSessionId: 'sess-1',
+        agentSessionId: 'sess-1',
       });
     });
   });

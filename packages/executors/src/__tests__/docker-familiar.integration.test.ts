@@ -447,8 +447,8 @@ describe.skipIf(!DOCKER_OK || !HAS_API_KEY)('DockerFamiliar Claude E2E (real Doc
 
     const handle = await familiar.start(request);
 
-    expect(handle.claudeSessionId).toBeDefined();
-    expect(handle.claudeSessionId).toMatch(/^[0-9a-f-]+$/);
+    expect(handle.agentSessionId).toBeDefined();
+    expect(handle.agentSessionId).toMatch(/^[0-9a-f-]+$/);
   }, 120_000);
 
   it('claude session completes and returns sessionId in outputs', async () => {
@@ -463,7 +463,7 @@ describe.skipIf(!DOCKER_OK || !HAS_API_KEY)('DockerFamiliar Claude E2E (real Doc
     const response = await waitForComplete(familiar, handle, 120_000);
 
     expect(response.status).toBe('completed');
-    expect(response.outputs.claudeSessionId).toBe(handle.claudeSessionId);
+    expect(response.outputs.agentSessionId).toBe(handle.agentSessionId);
     expect(response.outputs.exitCode).toBe(0);
   }, 180_000);
 
@@ -483,6 +483,6 @@ describe.skipIf(!DOCKER_OK || !HAS_API_KEY)('DockerFamiliar Claude E2E (real Doc
     const bashCmd = spec!.args![1];
     expect(bashCmd).toContain('docker start');
     expect(bashCmd).toContain(`docker exec -it`);
-    expect(bashCmd).toContain(`claude --resume ${handle.claudeSessionId}`);
+    expect(bashCmd).toContain(`claude --resume ${handle.agentSessionId}`);
   }, 120_000);
 });

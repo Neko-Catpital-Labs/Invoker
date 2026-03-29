@@ -35,7 +35,7 @@ export interface ConflictResolverHost {
   execGitIn(args: string[], dir: string): Promise<string>;
   createMergeWorktree(ref: string, label: string): Promise<string>;
   removeMergeWorktree(dir: string): Promise<void>;
-  spawnClaudeFix(prompt: string, cwd: string): Promise<{ stdout: string; sessionId: string }>;
+  spawnAgentFix(prompt: string, cwd: string): Promise<{ stdout: string; sessionId: string }>;
   getRemoteTargetConfig?(targetId: string): RemoteTargetConfig | undefined;
 }
 
@@ -267,18 +267,18 @@ export async function fixWithClaudeImpl(
     if (output) {
       host.persistence.appendTaskOutput(taskId, `\n[Fix with Claude (remote)] Output:\n${output}`);
     }
-    host.persistence.updateTask(taskId, { execution: { claudeSessionId: sessionId } });
+    host.persistence.updateTask(taskId, { execution: { agentSessionId: sessionId } });
     console.log(`[fixWithClaude] Successfully applied remote fix for ${taskId} (session=${sessionId})`);
     return;
   }
 
   const cwd = (workspacePath && existsSync(workspacePath)) ? workspacePath : host.cwd;
 
-  const { stdout: output, sessionId } = await host.spawnClaudeFix(prompt, cwd);
+  const { stdout: output, sessionId } = await host.spawnAgentFix(prompt, cwd);
   if (output) {
     host.persistence.appendTaskOutput(taskId, `\n[Fix with Claude] Output:\n${output}`);
   }
-  host.persistence.updateTask(taskId, { execution: { claudeSessionId: sessionId } });
+  host.persistence.updateTask(taskId, { execution: { agentSessionId: sessionId } });
   console.log(`[fixWithClaude] Successfully applied fix for ${taskId} (session=${sessionId})`);
 }
 

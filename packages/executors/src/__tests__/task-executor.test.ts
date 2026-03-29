@@ -2612,14 +2612,14 @@ describe('TaskExecutor', () => {
       expect(result).toContain('recon-task');
     });
 
-    it('does NOT treat claudeSessionId tasks as conflict resolutions', async () => {
+    it('does NOT treat agentSessionId tasks as conflict resolutions', async () => {
       const tasks = [
         makeTask({
           id: 'claude-task',
           description: 'Fix with Claude',
           status: 'completed',
           config: { workflowId: 'wf-1' },
-          execution: { claudeSessionId: 'session-123', branch: 'experiment/claude-task' },
+          execution: { agentSessionId: 'session-123', branch: 'experiment/claude-task' },
         }),
       ];
       const { executor } = createExecutorForSummary(tasks, { name: 'Workflow' });
@@ -2627,7 +2627,7 @@ describe('TaskExecutor', () => {
 
       const result = await executor.buildMergeSummary('wf-1');
 
-      // Bug fix: claudeSessionId alone does NOT make a task a conflict resolution
+      // Bug fix: agentSessionId alone does NOT make a task a conflict resolution
       expect(result).not.toContain('## Conflict Resolutions');
       expect(result).toContain('claude-task');
     });
@@ -2864,7 +2864,7 @@ describe('TaskExecutor', () => {
           description: 'Add QueueView component with utilization bar and cancel buttons',
           status: 'completed',
           config: { workflowId: 'wf-1' },
-          execution: { branch: 'task/ui-queue-view', claudeSessionId: 'session-abc' },
+          execution: { branch: 'task/ui-queue-view', agentSessionId: 'session-abc' },
         }),
         makeTask({
           id: 'flaky-build',
@@ -3823,12 +3823,12 @@ describe('TaskExecutor', () => {
         familiarRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
         cwd: '/tmp',
       });
-      (executor as any).spawnClaudeFix = async () => ({ stdout: 'Fixed the import', sessionId: 'test-session-123' });
+      (executor as any).spawnAgentFix = async () => ({ stdout: 'Fixed the import', sessionId: 'test-session-123' });
       await executor.fixWithClaude('fix-task', 'error output here');
       expect(appendTaskOutput).toHaveBeenCalledWith('fix-task', expect.stringContaining('Fixed the import'));
     });
 
-    it('persists claudeSessionId after fix', async () => {
+    it('persists agentSessionId after fix', async () => {
       const tasks = new Map<string, TaskState>();
       tasks.set('fix-task', makeTask({
         id: 'fix-task',
@@ -3845,9 +3845,9 @@ describe('TaskExecutor', () => {
         familiarRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
         cwd: '/tmp',
       });
-      (executor as any).spawnClaudeFix = async () => ({ stdout: 'Fixed it', sessionId: 'sess-abc-123' });
+      (executor as any).spawnAgentFix = async () => ({ stdout: 'Fixed it', sessionId: 'sess-abc-123' });
       await executor.fixWithClaude('fix-task', 'error output');
-      expect(updateTask).toHaveBeenCalledWith('fix-task', { execution: { claudeSessionId: 'sess-abc-123' } });
+      expect(updateTask).toHaveBeenCalledWith('fix-task', { execution: { agentSessionId: 'sess-abc-123' } });
     });
 
     it('does not perform any git checkout', async () => {
@@ -3878,7 +3878,7 @@ describe('TaskExecutor', () => {
       };
       (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
       (executor as any).removeMergeWorktree = async () => {};
-      (executor as any).spawnClaudeFix = async () => ({ stdout: '', sessionId: 'sess-xyz' });
+      (executor as any).spawnAgentFix = async () => ({ stdout: '', sessionId: 'sess-xyz' });
       await executor.fixWithClaude('fix-task', 'error output');
       expect(gitCalls.find(c => c[0] === 'checkout')).toBeUndefined();
     });

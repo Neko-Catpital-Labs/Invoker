@@ -4,6 +4,7 @@ import type { WorkRequest, WorkResponse } from '@invoker/protocol';
 import type { Familiar, FamiliarHandle, PersistedTaskMeta, TerminalSpec, Unsubscribe } from './familiar.js';
 import { bashPreserveOrReset, bashMergeUpstreams, parsePreserveResult, parseMergeError } from './branch-utils.js';
 import { RESTART_TO_BRANCH_TRACE } from './exec-trace.js';
+import type { AgentRegistry } from './agent-registry.js';
 
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
 const DEFAULT_MAX_DURATION_MS = 4 * 60 * 60 * 1000; // 4 hours
@@ -561,21 +562,30 @@ export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar
   // ── Shared command building ─────────────────────────────
 
   /**
-   * Build command, args, and optional Claude session from a WorkRequest.
-   * Shared by WorktreeFamiliar and other familiars.
+   * Build command, args, and optional agent session from a WorkRequest.
+   * When an AgentRegistry is available, uses it for 'claude' actions;
+   * otherwise falls back to prepareClaudeSession().
    */
   protected buildCommandAndArgs(
     request: WorkRequest,
-    claudeCommand: string = 'claude',
-  ): { cmd: string; args: string[]; claudeSessionId?: string; fullPrompt?: string } {
+    opts?: { claudeCommand?: string; agentRegistry?: AgentRegistry },
+  ): { cmd: string; args: string[]; agentSessionId?: string; agentName?: string; fullPrompt?: string } {
     if (request.actionType === 'command') {
       const command = request.inputs.command;
       if (!command) throw new Error('WorkRequest with actionType "command" must have inputs.command');
       return { cmd: '/bin/bash', args: ['-c', command] };
     }
     if (request.actionType === 'claude') {
+      if (opts?.agentRegistry) {
+        const agent = opts.agentRegistry.getOrThrow('claude');
+        const fullPrompt = this.buildFullPrompt(request);
+        const spec = agent.buildCommand(fullPrompt);
+        return { cmd: spec.cmd, args: spec.args, agentSessionId: spec.sessionId, agentName: agent.name, fullPrompt: spec.fullPrompt };
+      }
+      // Fallback: use legacy prepareClaudeSession
+      const claudeCommand = opts?.claudeCommand ?? 'claude';
       const session = this.prepareClaudeSession(request);
-      return { cmd: claudeCommand, args: session.cliArgs, claudeSessionId: session.sessionId, fullPrompt: session.fullPrompt };
+      return { cmd: claudeCommand, args: session.cliArgs, agentSessionId: session.sessionId, agentName: 'claude', fullPrompt: session.fullPrompt };
     }
     return { cmd: '/bin/bash', args: ['-c', 'echo "Unsupported action type"'] };
   }
@@ -611,7 +621,8 @@ export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar
       signal?: NodeJS.Signals | null;
       branch?: string;
       originalBranch?: string;
-      claudeSessionId?: string;
+      agentSessionId?: string;
+      agentName?: string;
     },
   ): Promise<void> {
     const entry = this.entries.get(executionId);
@@ -659,7 +670,8 @@ export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar
       outputs: {
         exitCode: status === 'failed' && exitCode === 0 ? 1 : exitCode,
         commitHash,
-        claudeSessionId: opts?.claudeSessionId,
+        agentSessionId: opts?.agentSessionId,
+        agentName: opts?.agentName,
         ...(error ? { error } : {}),
         ...(opts?.branch ? { summary: `branch=${opts.branch} commit=${commitHash ?? 'unknown'}` } : {}),
       },

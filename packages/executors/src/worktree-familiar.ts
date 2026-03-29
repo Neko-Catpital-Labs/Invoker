@@ -23,6 +23,8 @@ export interface WorktreeFamiliarConfig {
   maxWorktrees?: number;
   /** Command to invoke the Claude CLI. Defaults to 'claude'. */
   claudeCommand?: string;
+  /** Agent registry for pluggable AI agents. When set, overrides claudeCommand. */
+  agentRegistry?: import('./agent-registry.js').AgentRegistry;
 }
 
 interface WorktreeEntry extends BaseEntry {
@@ -31,8 +33,10 @@ interface WorktreeEntry extends BaseEntry {
   branch: string;
   /** Release function for pool-managed worktrees. */
   poolRelease?: () => Promise<void>;
-  /** Claude session ID for resuming sessions. */
-  claudeSessionId?: string;
+  /** Agent session ID for resuming sessions. */
+  agentSessionId?: string;
+  /** Name of the ExecutionAgent that produced this session. */
+  agentName?: string;
 }
 
 /**
@@ -46,11 +50,13 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
 
   private readonly worktreeBaseDir: string;
   private readonly claudeCommand: string;
+  private readonly agentRegistry?: import('./agent-registry.js').AgentRegistry;
   private pool: RepoPool;
 
   constructor(config: WorktreeFamiliarConfig) {
     super();
     this.claudeCommand = config.claudeCommand ?? 'claude';
+    this.agentRegistry = config.agentRegistry;
     this.worktreeBaseDir =
       config.worktreeBaseDir ?? resolve(homedir(), '.invoker', 'worktrees');
     this.pool = new RepoPool({
@@ -192,10 +198,16 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
       throw err;
     }
 
-    const { cmd, args, claudeSessionId } = this.buildCommandAndArgs(request, this.claudeCommand);
+    const { cmd, args, agentSessionId, agentName } = this.buildCommandAndArgs(request, {
+      claudeCommand: this.claudeCommand,
+      agentRegistry: this.agentRegistry,
+    });
 
+    const stdinMode = this.agentRegistry && agentName
+      ? this.agentRegistry.getOrThrow(agentName).stdinMode
+      : (request.actionType === 'claude' ? 'ignore' : 'pipe');
     const child = spawn(cmd, args, {
-      stdio: [request.actionType === 'claude' ? 'ignore' : 'pipe', 'pipe', 'pipe'],
+      stdio: [stdinMode, 'pipe', 'pipe'],
       cwd: acquired.worktreePath,
       detached: true,
       env: cleanElectronEnv(),
@@ -227,14 +239,18 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
       heartbeatListeners: new Set(),
       completed: false,
       poolRelease: acquired.release,
-      claudeSessionId,
+      agentSessionId,
+      agentName,
     };
 
     this.registerEntry(handle, entry);
     handle.workspacePath = acquired.worktreePath;
     handle.branch = acquired.branch;
-    if (claudeSessionId) {
-      handle.claudeSessionId = claudeSessionId;
+    if (agentSessionId) {
+      handle.agentSessionId = agentSessionId;
+    }
+    if (agentName) {
+      handle.agentName = agentName;
     }
 
     child.stdout?.on('data', (chunk: Buffer) => {
@@ -249,7 +265,8 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
       await this.handleProcessExit(executionId, request, acquired.worktreePath, exitCode, {
         signal,
         branch,
-        claudeSessionId: entry.claudeSessionId,
+        agentSessionId: entry.agentSessionId,
+        agentName: entry.agentName,
       });
       this.entries.delete(executionId);
     });
@@ -298,14 +315,17 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
   getTerminalSpec(handle: FamiliarHandle): TerminalSpec | null {
     const entry = this.entries.get(handle.executionId);
     if (!entry) return null;
-    if (entry.claudeSessionId) {
-      return { command: 'claude', args: ['--resume', entry.claudeSessionId, '--dangerously-skip-permissions'], cwd: entry.worktreeDir };
+    if (entry.agentSessionId) {
+      const resume = this.agentRegistry
+        ? this.agentRegistry.getOrThrow(entry.agentName ?? 'claude').buildResumeArgs(entry.agentSessionId)
+        : { cmd: 'claude', args: ['--resume', entry.agentSessionId, '--dangerously-skip-permissions'] };
+      return { command: resume.cmd, args: resume.args, cwd: entry.worktreeDir };
     }
     return { cwd: entry.worktreeDir };
   }
 
   getRestoredTerminalSpec(meta: PersistedTaskMeta): TerminalSpec {
-    console.log(`[WorktreeFamiliar] getRestoredTerminalSpec task="${meta.taskId}" workspacePath="${meta.workspacePath ?? 'none'}" sessionId="${meta.claudeSessionId ?? 'none'}"`);
+    console.log(`[WorktreeFamiliar] getRestoredTerminalSpec task="${meta.taskId}" workspacePath="${meta.workspacePath ?? 'none'}" sessionId="${meta.agentSessionId ?? 'none'}"`);
     if (meta.workspacePath && !existsSync(meta.workspacePath)) {
       console.log(`[WorktreeFamiliar] getRestoredTerminalSpec task="${meta.taskId}" — worktree path does NOT exist: ${meta.workspacePath}`);
       // Fall back to finding the worktree by branch via git worktree list
@@ -322,13 +342,16 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
     if (meta.workspacePath) {
       console.log(`[WorktreeFamiliar] getRestoredTerminalSpec task="${meta.taskId}" — worktree path exists: ${meta.workspacePath}`);
     }
-    if (meta.claudeSessionId) {
+    if (meta.agentSessionId) {
+      const resume = this.agentRegistry
+        ? this.agentRegistry.getOrThrow(meta.agentName ?? 'claude').buildResumeArgs(meta.agentSessionId)
+        : { cmd: 'claude', args: ['--resume', meta.agentSessionId, '--dangerously-skip-permissions'] };
       const spec = {
-        command: 'claude',
-        args: ['--resume', meta.claudeSessionId, '--dangerously-skip-permissions'],
+        command: resume.cmd,
+        args: resume.args,
         cwd: meta.workspacePath,
       };
-      console.log(`[WorktreeFamiliar] getRestoredTerminalSpec task="${meta.taskId}" → claude --resume spec, cwd="${spec.cwd}"`);
+      console.log(`[WorktreeFamiliar] getRestoredTerminalSpec task="${meta.taskId}" → agent --resume spec, cwd="${spec.cwd}"`);
       return spec;
     }
     if (meta.branch) {

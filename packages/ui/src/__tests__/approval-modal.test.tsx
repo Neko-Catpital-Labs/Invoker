@@ -75,11 +75,11 @@ describe('ApprovalModal', () => {
     expect(screen.getByRole('textbox')).toHaveValue('');
   });
 
-  it('pre-fills rejection reason with session ID for generic approval with claudeSessionId', () => {
+  it('pre-fills rejection reason with session ID for generic approval with agentSessionId', () => {
     render(
       <ApprovalModal
         task={makeTask({
-          execution: { claudeSessionId: 'sess-generic-456' },
+          execution: { agentSessionId: 'sess-generic-456' },
         })}
         onApprove={vi.fn()}
         onReject={vi.fn()}
@@ -114,7 +114,7 @@ describe('ApprovalModal', () => {
         task={makeTask({
           execution: {
             pendingFixError: 'Test failed: expected 1 but got 2',
-            claudeSessionId: 'sess-abc-123',
+            agentSessionId: 'sess-abc-123',
           },
         })}
         onApprove={vi.fn()}
@@ -208,7 +208,7 @@ describe('ApprovalModal', () => {
         task={makeTask({
           execution: {
             pendingFixError: 'Test failed: expected 1 but got 2',
-            claudeSessionId: 'sess-abc-123',
+            agentSessionId: 'sess-abc-123',
           },
         })}
         onApprove={vi.fn()}
@@ -242,11 +242,11 @@ describe('ApprovalModal', () => {
     expect(fixBlock).toHaveTextContent('Exit code 1');
   });
 
-  it('renders session block for generic approval with claudeSessionId', () => {
+  it('renders session block for generic approval with agentSessionId', () => {
     render(
       <ApprovalModal
         task={makeTask({
-          execution: { claudeSessionId: 'sess-generic-456' },
+          execution: { agentSessionId: 'sess-generic-456' },
         })}
         onApprove={vi.fn()}
         onReject={vi.fn()}
@@ -334,7 +334,7 @@ describe('ApprovalModal', () => {
     render(
       <ApprovalModal
         task={makeTask({
-          execution: { claudeSessionId: 'sess-loading-test' },
+          execution: { agentSessionId: 'sess-loading-test' },
         })}
         onApprove={vi.fn()}
         onReject={vi.fn()}
@@ -354,7 +354,7 @@ describe('ApprovalModal', () => {
     render(
       <ApprovalModal
         task={makeTask({
-          execution: { claudeSessionId: 'sess-conv-test' },
+          execution: { agentSessionId: 'sess-conv-test' },
         })}
         onApprove={vi.fn()}
         onReject={vi.fn()}
@@ -378,7 +378,7 @@ describe('ApprovalModal', () => {
     render(
       <ApprovalModal
         task={makeTask({
-          execution: { claudeSessionId: 'sess-error-test' },
+          execution: { agentSessionId: 'sess-error-test' },
         })}
         onApprove={vi.fn()}
         onReject={vi.fn()}
@@ -393,7 +393,7 @@ describe('ApprovalModal', () => {
     expect(screen.getByTestId('session-error')).toHaveTextContent('Could not load session');
   });
 
-  it('does not fetch session when no claudeSessionId', () => {
+  it('does not fetch session when no agentSessionId', () => {
     render(
       <ApprovalModal
         task={makeTask()}
