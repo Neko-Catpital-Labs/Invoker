@@ -227,27 +227,27 @@ export function TaskPanel({
         </div>
       )}
 
-      {/* GitHub PR link (merge gates only) */}
-      {task.config.isMergeNode && task.execution?.prUrl && (
+      {/* Review link (merge gates only) */}
+      {task.config.isMergeNode && task.execution?.reviewUrl && (
         <div className="flex items-center justify-between">
-          <span className="text-sm text-gray-400">PR link</span>
+          <span className="text-sm text-gray-400">Review link</span>
           <a
-            href={task.execution.prUrl}
+            href={task.execution.reviewUrl}
             target="_blank"
             rel="noopener noreferrer"
             className="text-xs font-mono text-blue-400 hover:text-blue-300 underline truncate max-w-[200px]"
-            title={task.execution.prUrl}
+            title={task.execution.reviewUrl}
             data-testid="pr-url-link"
           >
-            {task.execution.prUrl.replace(/^https?:\/\/github\.com\//, '')}
+            {task.execution.reviewUrl.replace(/^https?:\/\/[^/]+\//, '')}
           </a>
         </div>
       )}
-      {task.config.isMergeNode && task.execution?.prStatus && (
+      {task.config.isMergeNode && task.execution?.reviewStatus && (
         <div className="flex items-center justify-between">
-          <span className="text-sm text-gray-400">PR Status</span>
+          <span className="text-sm text-gray-400">Review Status</span>
           <span className="text-xs text-gray-200" data-testid="pr-status-text">
-            {task.execution.prStatus}
+            {task.execution.reviewStatus}
           </span>
         </div>
       )}

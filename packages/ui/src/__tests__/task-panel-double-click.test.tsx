@@ -812,12 +812,12 @@ describe('TaskPanel double-click editing', () => {
     });
   });
 
-  describe('PR URL display for merge gates', () => {
-    it('renders PR URL link when merge gate task has prUrl', () => {
+  describe('Review URL display for merge gates', () => {
+    it('renders review URL link when merge gate task has reviewUrl', () => {
       const task = makeTask({
         status: 'awaiting_approval',
         config: { isMergeNode: true, workflowId: 'wf-1' } as TaskState['config'],
-        execution: { prUrl: 'https://github.com/owner/repo/pull/42' } as TaskState['execution'],
+        execution: { reviewUrl: 'https://github.com/owner/repo/pull/42' } as TaskState['execution'],
       });
       render(
         <TaskPanel
@@ -835,11 +835,11 @@ describe('TaskPanel double-click editing', () => {
       expect(link).toHaveTextContent('owner/repo/pull/42');
     });
 
-    it('renders PR status when merge gate task has prStatus', () => {
+    it('renders review status when merge gate task has reviewStatus', () => {
       const task = makeTask({
         status: 'awaiting_approval',
         config: { isMergeNode: true, workflowId: 'wf-1' } as TaskState['config'],
-        execution: { prUrl: 'https://github.com/owner/repo/pull/42', prStatus: 'Awaiting review' } as TaskState['execution'],
+        execution: { reviewUrl: 'https://github.com/owner/repo/pull/42', reviewStatus: 'Awaiting review' } as TaskState['execution'],
       });
       render(
         <TaskPanel
@@ -856,10 +856,10 @@ describe('TaskPanel double-click editing', () => {
       expect(statusEl).toHaveTextContent('Awaiting review');
     });
 
-    it('does not render PR link when task is not a merge gate', () => {
+    it('does not render review link when task is not a merge gate', () => {
       const task = makeTask({
         status: 'completed',
-        execution: { prUrl: 'https://github.com/owner/repo/pull/99' } as TaskState['execution'],
+        execution: { reviewUrl: 'https://github.com/owner/repo/pull/99' } as TaskState['execution'],
       });
       render(
         <TaskPanel

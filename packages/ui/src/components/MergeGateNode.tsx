@@ -17,14 +17,14 @@ interface MergeGateNodeData {
   /** Plan title only (no "… gate for" prefix). */
   label: string;
   gateKind: MergeGateKind;
-  /** When false, omit Manual/Automatic/GitHub row (used for github_pr — primary already says GitHub PR). */
+  /** When false, omit Manual/Automatic/Review row (used for external_review — primary already says Review). */
   showMergeModeRow?: boolean;
   baseBranch?: string;
   featureBranch?: string;
-  mergeMode?: 'manual' | 'automatic' | 'github';
+  mergeMode?: 'manual' | 'automatic' | 'external_review';
   workflowId?: string;
-  prUrl?: string;
-  prStatus?: string;
+  reviewUrl?: string;
+  reviewStatus?: string;
   summary?: string;
   /** Set when merge gate was fixed with Claude — first approve clears this (orchestrator). */
   pendingFixError?: string;
@@ -37,7 +37,7 @@ interface MergeGateNodeProps {
 }
 
 const PRIMARY_LABEL: Record<MergeGateKind, string> = {
-  github_pr: 'GitHub PR',
+  external_review: 'Review',
   pull_request: 'Pull request',
   merge: 'Merge',
   workflow: 'Workflow',
@@ -53,8 +53,8 @@ export function MergeGateNode({ data }: MergeGateNodeProps) {
     featureBranch,
     mergeMode = 'manual',
     workflowId,
-    prUrl,
-    prStatus,
+    reviewUrl,
+    reviewStatus,
     summary,
     pendingFixError,
     dimmed: dataDimmed,
@@ -67,10 +67,10 @@ export function MergeGateNode({ data }: MergeGateNodeProps) {
   const colors = getStatusColor(visualStatus);
   const [error, setError] = useState<string | null>(null);
 
-  /** mergeMode wins over gateKind so we never show "Pull request" + "GitHub PR" when workflow is GitHub mode. */
-  const effectiveGateKind: MergeGateKind = mergeMode === 'github' ? 'github_pr' : gateKind;
+  /** mergeMode wins over gateKind so we never show "Pull request" + "Review" when workflow is external_review mode. */
+  const effectiveGateKind: MergeGateKind = mergeMode === 'external_review' ? 'external_review' : gateKind;
   const shouldShowMergeModeRow =
-    showMergeModeRow && mergeMode !== 'github' && effectiveGateKind !== 'github_pr';
+    showMergeModeRow && mergeMode !== 'external_review' && effectiveGateKind !== 'external_review';
 
   const handleApproveMerge = () => {
     if (workflowId && window.invoker?.approveMerge) {
@@ -83,7 +83,7 @@ export function MergeGateNode({ data }: MergeGateNodeProps) {
     }
   };
 
-  const usePrIcon = effectiveGateKind === 'github_pr' || effectiveGateKind === 'pull_request';
+  const usePrIcon = effectiveGateKind === 'external_review' || effectiveGateKind === 'pull_request';
   const icon = usePrIcon ? (
     <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
       <path strokeLinecap="round" strokeLinejoin="round" d="M7 7v10m0-10a2 2 0 11-4 0 2 2 0 014 0zm10 10a2 2 0 104 0 2 2 0 00-4 0zm0 0V7a4 4 0 00-4-4H9" />
@@ -148,11 +148,7 @@ export function MergeGateNode({ data }: MergeGateNodeProps) {
 
       {shouldShowMergeModeRow && (
         <div className="flex items-center gap-1 mt-1" data-testid="merge-mode-display">
-          {mergeMode === 'github' ? (
-            <svg className="w-3 h-3 text-blue-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M7 7v10m0-10a2 2 0 11-4 0 2 2 0 014 0zm10 10a2 2 0 104 0 2 2 0 00-4 0zm0 0V7a4 4 0 00-4-4H9" />
-            </svg>
-          ) : mergeMode === 'manual' ? (
+          {mergeMode === 'manual' ? (
             <svg className="w-3 h-3 text-yellow-500 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
             </svg>
@@ -163,9 +159,9 @@ export function MergeGateNode({ data }: MergeGateNodeProps) {
           )}
           <span
             data-testid="merge-mode-label"
-            className={`text-xs font-mono ${mergeMode === 'github' ? 'text-blue-400' : mergeMode === 'manual' ? 'text-yellow-500' : 'text-green-500'}`}
+            className={`text-xs font-mono ${mergeMode === 'manual' ? 'text-yellow-500' : 'text-green-500'}`}
           >
-            {mergeMode === 'github' ? 'GitHub PR' : mergeMode === 'manual' ? 'Manual' : 'Automatic'}
+            {mergeMode === 'manual' ? 'Manual' : 'Automatic'}
           </span>
         </div>
       )}

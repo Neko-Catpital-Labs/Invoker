@@ -18,6 +18,7 @@ import type { Familiar, FamiliarHandle } from './familiar.js';
 import { RESTART_TO_BRANCH_TRACE } from './exec-trace.js';
 import type { FamiliarRegistry } from './registry.js';
 import type { MergeGateProvider } from './merge-gate-provider.js';
+import type { ReviewProviderRegistry } from './review-provider-registry.js';
 import { DockerFamiliar } from './docker-familiar.js';
 import { WorktreeFamiliar } from './worktree-familiar.js';
 import { SshFamiliar } from './ssh-familiar.js';
@@ -62,6 +63,7 @@ export interface TaskExecutorConfig {
   defaultBranch?: string;
   callbacks?: TaskExecutorCallbacks;
   mergeGateProvider?: MergeGateProvider;
+  reviewProviderRegistry?: ReviewProviderRegistry;
   /**
    * Provider that returns remote SSH targets keyed by target ID.
    * Called at task-execution time so config file changes take effect on retry.
@@ -90,6 +92,7 @@ export class TaskExecutor {
   /** @internal */ defaultBranch: string | undefined;
   /** @internal */ callbacks: TaskExecutorCallbacks;
   /** @internal */ mergeGateProvider?: MergeGateProvider;
+  /** @internal */ reviewProviderRegistry?: ReviewProviderRegistry;
   private activePrPollers = new Map<string, ReturnType<typeof setInterval>>();
   private getRemoteTargets: () => Record<string, { host: string; user: string; sshKeyPath: string; port?: number }>;
   private dockerConfig: { imageName?: string; repoInImage?: boolean };
@@ -103,6 +106,7 @@ export class TaskExecutor {
     this.defaultBranch = config.defaultBranch;
     this.callbacks = config.callbacks ?? {};
     this.mergeGateProvider = config.mergeGateProvider;
+    this.reviewProviderRegistry = config.reviewProviderRegistry;
     this.getRemoteTargets = config.remoteTargetsProvider ?? (() => ({}));
     this.dockerConfig = config.dockerConfig ?? {};
   }
@@ -761,11 +765,11 @@ export class TaskExecutor {
       if (
         task.config.isMergeNode &&
         task.status === 'awaiting_approval' &&
-        task.execution.prIdentifier &&
+        task.execution.reviewId &&
         !this.activePrPollers.has(task.id)
       ) {
-        console.log(`[merge-gate] Resuming PR polling for ${task.id} (PR ${task.execution.prIdentifier})`);
-        this.startPrPolling(task.id, task.execution.prIdentifier, task.config.workflowId!);
+        console.log(`[merge-gate] Resuming PR polling for ${task.id} (PR ${task.execution.reviewId})`);
+        this.startPrPolling(task.id, task.execution.reviewId, task.config.workflowId!);
       }
     }
   }
@@ -776,22 +780,22 @@ export class TaskExecutor {
       if (
         task.config.isMergeNode &&
         task.status === 'awaiting_approval' &&
-        task.execution.prIdentifier
+        task.execution.reviewId
       ) {
         try {
           const status = await this.mergeGateProvider.checkApproval({
-            identifier: task.execution.prIdentifier,
+            identifier: task.execution.reviewId,
             cwd: this.cwd,
           });
           this.persistence.updateTask(task.id, {
-            execution: { prStatus: status.statusText },
+            execution: { reviewStatus: status.statusText },
           });
           if (status.approved) {
-            console.log(`[merge-gate] PR ${task.execution.prIdentifier} approved (refresh), completing merge gate`);
+            console.log(`[merge-gate] PR ${task.execution.reviewId} approved (refresh), completing merge gate`);
             this.stopPrPolling(task.id);
             await this.orchestrator.approve(task.id);
           } else if (status.rejected) {
-            console.log(`[merge-gate] PR ${task.execution.prIdentifier} rejected (refresh): ${status.statusText}`);
+            console.log(`[merge-gate] PR ${task.execution.reviewId} rejected (refresh): ${status.statusText}`);
             this.stopPrPolling(task.id);
           }
         } catch (err) {
@@ -801,27 +805,27 @@ export class TaskExecutor {
     }
   }
 
-  /** @internal */ startPrPolling(taskId: string, prIdentifier: string, workflowId: string): void {
+  /** @internal */ startPrPolling(taskId: string, reviewId: string, workflowId: string): void {
     const pollIntervalMs = 30_000;
     const interval = setInterval(async () => {
       try {
         if (!this.mergeGateProvider) return;
         const status = await this.mergeGateProvider.checkApproval({
-          identifier: prIdentifier,
+          identifier: reviewId,
           cwd: this.cwd,
         });
 
         // Update PR status on task
         this.persistence.updateTask(taskId, {
-          execution: { prStatus: status.statusText },
+          execution: { reviewStatus: status.statusText },
         });
 
         if (status.approved) {
-          console.log(`[merge-gate] PR ${prIdentifier} approved, completing merge gate`);
+          console.log(`[merge-gate] PR ${reviewId} approved, completing merge gate`);
           this.stopPrPolling(taskId);
           await this.orchestrator.approve(taskId);
         } else if (status.rejected) {
-          console.log(`[merge-gate] PR ${prIdentifier} rejected: ${status.statusText}`);
+          console.log(`[merge-gate] PR ${reviewId} rejected: ${status.statusText}`);
           this.stopPrPolling(taskId);
           // Leave in awaiting_approval — user can retry
         }
@@ -845,27 +849,27 @@ export class TaskExecutor {
     if (!this.mergeGateProvider) return;
     if (!this.activePrPollers.has(taskId)) return;
 
-    // Read prIdentifier from persistence
+    // Read reviewId from persistence
     const task = this.orchestrator.getTask(taskId);
-    const prIdentifier = task?.execution.prIdentifier;
-    if (!prIdentifier) return;
+    const reviewId = task?.execution.reviewId;
+    if (!reviewId) return;
 
     try {
       const status = await this.mergeGateProvider.checkApproval({
-        identifier: prIdentifier,
+        identifier: reviewId,
         cwd: this.cwd,
       });
 
       this.persistence.updateTask(taskId, {
-        execution: { prStatus: status.statusText },
+        execution: { reviewStatus: status.statusText },
       });
 
       if (status.approved) {
-        console.log(`[merge-gate] PR ${prIdentifier} approved (manual check), completing merge gate`);
+        console.log(`[merge-gate] PR ${reviewId} approved (manual check), completing merge gate`);
         this.stopPrPolling(taskId);
         await this.orchestrator.approve(taskId);
       } else if (status.rejected) {
-        console.log(`[merge-gate] PR ${prIdentifier} rejected (manual check): ${status.statusText}`);
+        console.log(`[merge-gate] PR ${reviewId} rejected (manual check): ${status.statusText}`);
         this.stopPrPolling(taskId);
       }
     } catch (err) {

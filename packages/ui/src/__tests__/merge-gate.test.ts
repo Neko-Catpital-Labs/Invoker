@@ -111,9 +111,9 @@ describe('findLeafTasks', () => {
 });
 
 describe('mergeGateKindFromDescription / mergeGatePlanTitle / resolveMergeGateKind', () => {
-  it('parses GitHub PR gate prefix', () => {
-    const desc = 'GitHub PR gate for My feature';
-    expect(mergeGateKindFromDescription(desc)).toBe('github_pr');
+  it('parses Review gate prefix', () => {
+    const desc = 'Review gate for My feature';
+    expect(mergeGateKindFromDescription(desc)).toBe('external_review');
     expect(mergeGatePlanTitle(desc)).toBe('My feature');
   });
 
@@ -129,7 +129,7 @@ describe('mergeGateKindFromDescription / mergeGatePlanTitle / resolveMergeGateKi
       id: 'wf-x',
       name: 'Legacy',
       status: 'running',
-      mergeMode: 'github',
+      mergeMode: 'external_review',
       onFinish: 'pull_request',
     };
     expect(resolveMergeGateKind(task, wf)).toBe('merge');
@@ -142,28 +142,28 @@ describe('mergeGateKindFromDescription / mergeGatePlanTitle / resolveMergeGateKi
         id: 'wf-y',
         name: 'Y',
         status: 'running',
-        mergeMode: 'github',
+        mergeMode: 'external_review',
       }),
-    ).toBe('github_pr');
+    ).toBe('external_review');
   });
 });
 
 describe('mergeGatePanelHeading', () => {
   const mergeTask = (desc: string, extras?: Partial<TaskState['execution']>): TaskState => makeMergeTask(desc, 'wf-1', extras);
 
-  it('rewrites Pull request gate to GitHub PR gate when mergeMode is github', () => {
+  it('rewrites Pull request gate to Review gate when mergeMode is external_review', () => {
     const task = mergeTask('Pull request gate for Plan A');
-    expect(mergeGatePanelHeading(task, 'github')).toBe('GitHub PR gate for Plan A');
+    expect(mergeGatePanelHeading(task, 'external_review')).toBe('Review gate for Plan A');
   });
 
   it('is case-insensitive on pull request prefix', () => {
     const task = mergeTask('Pull Request gate for Plan A');
-    expect(mergeGatePanelHeading(task, 'github')).toBe('GitHub PR gate for Plan A');
+    expect(mergeGatePanelHeading(task, 'external_review')).toBe('Review gate for Plan A');
   });
 
-  it('rewrites other prefixed gates to GitHub PR gate when mergeMode is github', () => {
+  it('rewrites other prefixed gates to Review gate when mergeMode is external_review', () => {
     const task = mergeTask('Merge gate for Plan B');
-    expect(mergeGatePanelHeading(task, 'github')).toBe('GitHub PR gate for Plan B');
+    expect(mergeGatePanelHeading(task, 'external_review')).toBe('Review gate for Plan B');
   });
 
   it('does not rewrite when mergeMode is manual', () => {
@@ -171,11 +171,11 @@ describe('mergeGatePanelHeading', () => {
     expect(mergeGatePanelHeading(task, 'manual')).toBe('Pull request gate for Plan A');
   });
 
-  it('rewrites when prUrl is set even if mergeMode is unset', () => {
+  it('rewrites when reviewUrl is set even if mergeMode is unset', () => {
     const task = mergeTask('Pull request gate for Plan A', {
-      prUrl: 'https://github.com/o/r/pull/1',
+      reviewUrl: 'https://github.com/o/r/pull/1',
     });
-    expect(mergeGatePanelHeading(task, undefined)).toBe('GitHub PR gate for Plan A');
+    expect(mergeGatePanelHeading(task, undefined)).toBe('Review gate for Plan A');
   });
 });
 

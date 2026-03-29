@@ -9,7 +9,7 @@ export class InMemoryPersistence implements OrchestratorPersistence {
     id: string; name: string; status: string;
     createdAt: string; updatedAt: string;
     onFinish?: string; baseBranch?: string; featureBranch?: string;
-    mergeMode?: 'manual' | 'automatic' | 'github';
+    mergeMode?: 'manual' | 'automatic' | 'external_review';
     generation?: number;
   }>();
   tasks = new Map<string, { workflowId: string; task: TaskState }>();
@@ -19,7 +19,7 @@ export class InMemoryPersistence implements OrchestratorPersistence {
     id: string; name: string; status: string;
     createdAt?: string; updatedAt?: string;
     onFinish?: string; baseBranch?: string; featureBranch?: string;
-    mergeMode?: 'manual' | 'automatic' | 'github';
+    mergeMode?: 'manual' | 'automatic' | 'external_review';
     generation?: number;
   }): void {
     const now = new Date().toISOString();
@@ -30,7 +30,7 @@ export class InMemoryPersistence implements OrchestratorPersistence {
     });
   }
 
-  updateWorkflow(workflowId: string, changes: { status?: string; updatedAt?: string; baseBranch?: string; generation?: number; mergeMode?: 'manual' | 'automatic' | 'github' }): void {
+  updateWorkflow(workflowId: string, changes: { status?: string; updatedAt?: string; baseBranch?: string; generation?: number; mergeMode?: 'manual' | 'automatic' | 'external_review' }): void {
     const wf = this.workflows.get(workflowId);
     if (wf) {
       if (changes.status) wf.status = changes.status;
@@ -58,7 +58,7 @@ export class InMemoryPersistence implements OrchestratorPersistence {
     }
   }
 
-  listWorkflows(): Array<{ id: string; name: string; status: string; createdAt: string; updatedAt: string; baseBranch?: string; onFinish?: string; mergeMode?: 'manual' | 'automatic' | 'github'; generation?: number }> {
+  listWorkflows(): Array<{ id: string; name: string; status: string; createdAt: string; updatedAt: string; baseBranch?: string; onFinish?: string; mergeMode?: 'manual' | 'automatic' | 'external_review'; generation?: number }> {
     return Array.from(this.workflows.values());
   }
 

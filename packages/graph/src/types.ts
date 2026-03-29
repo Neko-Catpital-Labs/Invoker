@@ -73,9 +73,10 @@ export interface TaskExecution {
   readonly experimentResults?: readonly ExperimentResultEntry[];
   readonly pendingFixError?: string;
   readonly isFixingWithAI?: boolean;
-  readonly prUrl?: string;
-  readonly prIdentifier?: string;
-  readonly prStatus?: string;
+  readonly reviewUrl?: string;
+  readonly reviewId?: string;
+  readonly reviewStatus?: string;
+  readonly reviewProviderId?: string;
   readonly mergeConflict?: {
     readonly failedBranch: string;
     readonly conflictFiles: readonly string[];

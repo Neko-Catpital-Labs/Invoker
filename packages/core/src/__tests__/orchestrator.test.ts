@@ -151,9 +151,9 @@ describe('Orchestrator', () => {
   });
 
   describe('descriptionForMergeNode', () => {
-    it('uses GitHub PR gate when mergeMode is github', () => {
-      expect(descriptionForMergeNode({ name: 'My plan', onFinish: 'none', mergeMode: 'github' })).toBe(
-        'GitHub PR gate for My plan',
+    it('uses Review gate when mergeMode is external_review', () => {
+      expect(descriptionForMergeNode({ name: 'My plan', onFinish: 'none', mergeMode: 'external_review' })).toBe(
+        'Review gate for My plan',
       );
     });
 
@@ -175,9 +175,9 @@ describe('Orchestrator', () => {
       );
     });
 
-    it('prefers GitHub PR gate when mergeMode is github even if onFinish is merge', () => {
-      expect(descriptionForMergeNode({ name: 'My plan', onFinish: 'merge', mergeMode: 'github' })).toBe(
-        'GitHub PR gate for My plan',
+    it('prefers Review gate when mergeMode is external_review even if onFinish is merge', () => {
+      expect(descriptionForMergeNode({ name: 'My plan', onFinish: 'merge', mergeMode: 'external_review' })).toBe(
+        'Review gate for My plan',
       );
     });
   });
@@ -765,9 +765,9 @@ describe('Orchestrator', () => {
         execution: {
           branch: 'plan/feature',
           workspacePath: '/tmp',
-          prUrl: 'https://github.com/owner/repo/pull/1',
-          prIdentifier: 'owner/repo#1',
-          prStatus: 'Awaiting review',
+          reviewUrl: 'https://github.com/owner/repo/pull/1',
+          reviewId: 'owner/repo#1',
+          reviewStatus: 'Awaiting review',
         },
       });
 
@@ -777,9 +777,9 @@ describe('Orchestrator', () => {
       expect(task.config.summary).toBe('test summary');
       expect(task.execution.branch).toBe('plan/feature');
       expect(task.execution.workspacePath).toBe('/tmp');
-      expect(task.execution.prUrl).toBe('https://github.com/owner/repo/pull/1');
-      expect(task.execution.prIdentifier).toBe('owner/repo#1');
-      expect(task.execution.prStatus).toBe('Awaiting review');
+      expect(task.execution.reviewUrl).toBe('https://github.com/owner/repo/pull/1');
+      expect(task.execution.reviewId).toBe('owner/repo#1');
+      expect(task.execution.reviewStatus).toBe('Awaiting review');
       expect(task.execution.completedAt).toBeDefined();
 
       const delta = publishedDeltas.find(
@@ -787,7 +787,7 @@ describe('Orchestrator', () => {
       );
       expect(delta).toBeDefined();
       expect(delta!.type === 'updated' && delta!.changes.config?.familiarType).toBe('worktree');
-      expect(delta!.type === 'updated' && delta!.changes.execution?.prUrl).toBe('https://github.com/owner/repo/pull/1');
+      expect(delta!.type === 'updated' && delta!.changes.execution?.reviewUrl).toBe('https://github.com/owner/repo/pull/1');
     });
   });
 
@@ -2974,9 +2974,9 @@ describe('Orchestrator', () => {
         createdAt: new Date(),
         config: { isMergeNode: true, workflowId: 'workflow-pr-test' },
         execution: {
-          prUrl: 'https://github.com/org/repo/pull/42',
-          prIdentifier: '42',
-          prStatus: 'open',
+          reviewUrl: 'https://github.com/org/repo/pull/42',
+          reviewId: '42',
+          reviewStatus: 'open',
         },
       });
 
@@ -2990,9 +2990,9 @@ describe('Orchestrator', () => {
       testOrchestrator.restartWorkflow('workflow-pr-test');
 
       const mergeTask = testOrchestrator.getTask('__merge__workflow-pr-test')!;
-      expect(mergeTask.execution.prUrl).toBeUndefined();
-      expect(mergeTask.execution.prIdentifier).toBeUndefined();
-      expect(mergeTask.execution.prStatus).toBeUndefined();
+      expect(mergeTask.execution.reviewUrl).toBeUndefined();
+      expect(mergeTask.execution.reviewId).toBeUndefined();
+      expect(mergeTask.execution.reviewStatus).toBeUndefined();
     });
 
     it('drainScheduler sets lastHeartbeatAt when starting a task', () => {

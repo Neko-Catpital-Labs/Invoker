@@ -79,7 +79,7 @@ function TaskDAGInner({ tasks, workflows, onTaskClick, onTaskDoubleClick, onTask
       const wfTasks = [...wfTasksRaw].sort((a, b) => a.id.localeCompare(b.id));
       const wfMeta = workflows?.get(wfGroupId);
       const wfBaseBranch = wfMeta?.baseBranch;
-      const wfMergeMode = (wfMeta?.mergeMode as 'manual' | 'automatic' | 'github') ?? 'manual';
+      const wfMergeMode = (wfMeta?.mergeMode as 'manual' | 'automatic' | 'external_review') ?? 'manual';
       const positions = layoutNodes(wfTasks);
 
       // Find bounding box to apply yOffset
@@ -95,10 +95,10 @@ function TaskDAGInner({ tasks, workflows, onTaskClick, onTaskDoubleClick, onTask
         if (task.config.isMergeNode) {
           gateStatuses.set(task.id, task.status);
           let gateKind = resolveMergeGateKind(task, wfMeta);
-          if (wfMergeMode === 'github') {
-            gateKind = 'github_pr';
+          if (wfMergeMode === 'external_review') {
+            gateKind = 'external_review';
           }
-          const showMergeModeRow = gateKind !== 'github_pr';
+          const showMergeModeRow = gateKind !== 'external_review';
           const mergeVisualStatus = getEffectiveVisualStatus(task.status, task.execution);
           const mergeGateDimmed = statusFilters && statusFilters.size > 0 && !statusFilters.has(mergeVisualStatus);
           allNodes.push({
@@ -114,8 +114,8 @@ function TaskDAGInner({ tasks, workflows, onTaskClick, onTaskDoubleClick, onTask
               featureBranch: wfMeta?.featureBranch,
               mergeMode: wfMergeMode,
               workflowId: wfGroupId,
-              prUrl: task.execution?.prUrl,
-              prStatus: task.execution?.prStatus,
+              reviewUrl: task.execution?.reviewUrl,
+              reviewStatus: task.execution?.reviewStatus,
               summary: task.config?.summary,
               onFinish: wfMeta?.onFinish,
               pendingFixError: task.execution?.pendingFixError,

@@ -71,9 +71,9 @@ export interface OrchestratorPersistence {
     onFinish?: string;
     baseBranch?: string;
     featureBranch?: string;
-    mergeMode?: 'manual' | 'automatic' | 'github';
+    mergeMode?: 'manual' | 'automatic' | 'external_review';
   }): void;
-  updateWorkflow?(workflowId: string, changes: { status?: string; updatedAt?: string; baseBranch?: string; generation?: number; mergeMode?: 'manual' | 'automatic' | 'github' }): void;
+  updateWorkflow?(workflowId: string, changes: { status?: string; updatedAt?: string; baseBranch?: string; generation?: number; mergeMode?: 'manual' | 'automatic' | 'external_review' }): void;
   saveTask(workflowId: string, task: TaskState): void;
   updateTask(taskId: string, changes: TaskStateChanges): void;
   logEvent?(taskId: string, eventType: string, payload?: unknown): void;
@@ -85,7 +85,7 @@ export interface OrchestratorPersistence {
     updatedAt: string;
     baseBranch?: string;
     onFinish?: string;
-    mergeMode?: 'manual' | 'automatic' | 'github';
+    mergeMode?: 'manual' | 'automatic' | 'external_review';
     generation?: number;
   }>;
   loadTasks(workflowId: string): TaskState[];
@@ -112,7 +112,8 @@ export interface PlanDefinition {
   onFinish?: 'none' | 'merge' | 'pull_request';
   baseBranch?: string;
   featureBranch?: string;
-  mergeMode?: 'manual' | 'automatic' | 'github';
+  mergeMode?: 'manual' | 'automatic' | 'external_review';
+  reviewProvider?: string;
   repoUrl?: string;
   tasks: Array<{
     id: string;
@@ -136,8 +137,8 @@ export interface PlanDefinition {
 export function descriptionForMergeNode(plan: Pick<PlanDefinition, 'name' | 'onFinish' | 'mergeMode'>): string {
   const onFinish = plan.onFinish ?? 'none';
   const mergeMode = plan.mergeMode ?? 'manual';
-  if (mergeMode === 'github') {
-    return `GitHub PR gate for ${plan.name}`;
+  if (mergeMode === 'external_review') {
+    return `Review gate for ${plan.name}`;
   }
   if (onFinish === 'pull_request') {
     return `Pull request gate for ${plan.name}`;
@@ -858,9 +859,10 @@ export class Orchestrator {
         branch: undefined,
         workspacePath: undefined,
         lastHeartbeatAt: undefined,
-        prUrl: undefined,
-        prIdentifier: undefined,
-        prStatus: undefined,
+        reviewUrl: undefined,
+        reviewId: undefined,
+        reviewStatus: undefined,
+        reviewProviderId: undefined,
       },
     };
 

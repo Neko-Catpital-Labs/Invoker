@@ -37,26 +37,26 @@ describe('MergeGateNode', () => {
     expect(screen.getByTestId('merge-gate-primary-label')).toHaveTextContent('Merge');
   });
 
-  it('shows GitHub PR primary label when gateKind is github_pr', () => {
+  it('shows Review primary label when gateKind is external_review', () => {
     renderNode({
       status: 'pending',
       label: 'My plan',
-      gateKind: 'github_pr',
+      gateKind: 'external_review',
       showMergeModeRow: false,
       baseBranch: 'master',
-      mergeMode: 'github',
+      mergeMode: 'external_review',
     });
-    expect(screen.getByTestId('merge-gate-primary-label')).toHaveTextContent('GitHub PR');
+    expect(screen.getByTestId('merge-gate-primary-label')).toHaveTextContent('Review');
   });
 
-  it('hides duplicate merge mode row for github_pr', () => {
+  it('hides duplicate merge mode row for external_review', () => {
     renderNode({
       status: 'pending',
       label: 'My plan',
-      gateKind: 'github_pr',
+      gateKind: 'external_review',
       showMergeModeRow: false,
       baseBranch: 'master',
-      mergeMode: 'github',
+      mergeMode: 'external_review',
     });
     expect(screen.queryByTestId('merge-mode-display')).not.toBeInTheDocument();
   });
@@ -181,32 +181,32 @@ describe('MergeGateNode', () => {
     expect(screen.queryByTestId('approve-merge-button')).not.toBeInTheDocument();
   });
 
-  it('forces GitHub PR primary and hides mode row when mergeMode is github (even if gateKind was merge)', () => {
-    renderNode({ status: 'pending', label: 'Plan', gateKind: 'merge', baseBranch: 'master', mergeMode: 'github' });
-    expect(screen.getByTestId('merge-gate-primary-label')).toHaveTextContent('GitHub PR');
+  it('forces Review primary and hides mode row when mergeMode is external_review (even if gateKind was merge)', () => {
+    renderNode({ status: 'pending', label: 'Plan', gateKind: 'merge', baseBranch: 'master', mergeMode: 'external_review' });
+    expect(screen.getByTestId('merge-gate-primary-label')).toHaveTextContent('Review');
     expect(screen.queryByTestId('merge-mode-display')).not.toBeInTheDocument();
   });
 
-  it('hides mode row when mergeMode is github even if gateKind is pull_request', () => {
+  it('hides mode row when mergeMode is external_review even if gateKind is pull_request', () => {
     renderNode({
       status: 'pending',
       label: 'Plan',
       gateKind: 'pull_request',
       baseBranch: 'master',
-      mergeMode: 'github',
+      mergeMode: 'external_review',
     });
-    expect(screen.getByTestId('merge-gate-primary-label')).toHaveTextContent('GitHub PR');
+    expect(screen.getByTestId('merge-gate-primary-label')).toHaveTextContent('Review');
     expect(screen.queryByTestId('merge-mode-display')).not.toBeInTheDocument();
   });
 
-  it('does NOT show approve button in github mode even when awaiting_approval', () => {
+  it('does NOT show approve button in external_review mode even when awaiting_approval', () => {
     renderNode({
       status: 'awaiting_approval',
       label: 'Plan',
-      gateKind: 'github_pr',
+      gateKind: 'external_review',
       showMergeModeRow: false,
       baseBranch: 'master',
-      mergeMode: 'github',
+      mergeMode: 'external_review',
       workflowId: 'wf-123',
     });
     expect(screen.queryByTestId('approve-merge-button')).not.toBeInTheDocument();
@@ -220,10 +220,10 @@ describe('MergeGateNode', () => {
 
     rerender(
       <ReactFlowProvider>
-        <MergeGateNode data={{ ...baseData, mergeMode: 'github' } as any} />
+        <MergeGateNode data={{ ...baseData, mergeMode: 'external_review' } as any} />
       </ReactFlowProvider>,
     );
-    expect(screen.getByTestId('merge-gate-primary-label')).toHaveTextContent('GitHub PR');
+    expect(screen.getByTestId('merge-gate-primary-label')).toHaveTextContent('Review');
     expect(screen.queryByTestId('merge-mode-display')).not.toBeInTheDocument();
 
     rerender(
@@ -242,10 +242,10 @@ describe('MergeGateNode', () => {
 
     rerender(
       <ReactFlowProvider>
-        <MergeGateNode data={{ ...baseData, mergeMode: 'github' } as any} />
+        <MergeGateNode data={{ ...baseData, mergeMode: 'external_review' } as any} />
       </ReactFlowProvider>,
     );
-    expect(screen.getByTestId('merge-gate-primary-label')).toHaveTextContent('GitHub PR');
+    expect(screen.getByTestId('merge-gate-primary-label')).toHaveTextContent('Review');
 
     rerender(
       <ReactFlowProvider>

@@ -42,7 +42,8 @@ export interface Workflow {
   onFinish?: 'none' | 'merge' | 'pull_request';
   baseBranch?: string;
   featureBranch?: string;
-  mergeMode?: 'manual' | 'automatic' | 'github';
+  mergeMode?: 'manual' | 'automatic' | 'external_review';
+  reviewProvider?: string;
   generation?: number;
   createdAt: string;
   updatedAt: string;

@@ -312,9 +312,10 @@ export class SQLiteAdapter implements PersistenceAdapter {
       'ALTER TABLE tasks ADD COLUMN utilization INTEGER',
       'ALTER TABLE tasks ADD COLUMN pending_fix_error TEXT',
       'ALTER TABLE workflows ADD COLUMN merge_mode TEXT',
-      'ALTER TABLE tasks ADD COLUMN pr_url TEXT',
-      'ALTER TABLE tasks ADD COLUMN pr_identifier TEXT',
-      'ALTER TABLE tasks ADD COLUMN pr_status TEXT',
+      'ALTER TABLE tasks ADD COLUMN review_url TEXT',
+      'ALTER TABLE tasks ADD COLUMN review_id TEXT',
+      'ALTER TABLE tasks ADD COLUMN review_status TEXT',
+      'ALTER TABLE tasks ADD COLUMN review_provider_id TEXT',
       'ALTER TABLE tasks ADD COLUMN is_fixing_with_ai INTEGER DEFAULT 0',
       'ALTER TABLE tasks ADD COLUMN selected_attempt_id TEXT',
       'ALTER TABLE tasks ADD COLUMN remote_target_id TEXT',
@@ -323,6 +324,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       // agent_session_id: new column for pluggable agent architecture
       'ALTER TABLE tasks ADD COLUMN agent_session_id TEXT',
       'ALTER TABLE attempts ADD COLUMN agent_session_id TEXT',
+      'ALTER TABLE workflows ADD COLUMN review_provider TEXT',
     ];
     for (const sql of migrations) {
       try { this.db.run(sql); } catch { /* Column already exists */ }
@@ -357,8 +359,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
   saveWorkflow(workflow: Workflow): void {
     this.execRun(`
-      INSERT OR REPLACE INTO workflows (id, name, description, visual_proof, status, plan_file, repo_url, branch, on_finish, base_branch, feature_branch, merge_mode, generation, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT OR REPLACE INTO workflows (id, name, description, visual_proof, status, plan_file, repo_url, branch, on_finish, base_branch, feature_branch, merge_mode, review_provider, generation, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
       workflow.id, workflow.name,
       workflow.description ?? null,
@@ -367,6 +369,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       workflow.planFile ?? null, workflow.repoUrl ?? null, workflow.branch ?? null,
       workflow.onFinish ?? null, workflow.baseBranch ?? null, workflow.featureBranch ?? null,
       workflow.mergeMode ?? null,
+      workflow.reviewProvider ?? null,
       workflow.generation ?? 0,
       workflow.createdAt, workflow.updatedAt,
     ]);
@@ -430,7 +433,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         action_request_id, experiments,
         created_at, started_at, completed_at, last_heartbeat_at,
         utilization, pending_fix_error,
-        pr_url, pr_identifier, pr_status,
+        review_url, review_id, review_status, review_provider_id,
         is_fixing_with_ai,
         remote_target_id
       ) VALUES (
@@ -446,7 +449,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         ?, ?,
         ?, ?, ?, ?,
         ?, ?,
-        ?, ?, ?,
+        ?, ?, ?, ?,
         ?,
         ?
       )
@@ -481,9 +484,10 @@ export class SQLiteAdapter implements PersistenceAdapter {
       exec.lastHeartbeatAt?.toISOString() ?? null,
       cfg.utilization ?? null,
       exec.pendingFixError ?? null,
-      exec.prUrl ?? null,
-      exec.prIdentifier ?? null,
-      exec.prStatus ?? null,
+      exec.reviewUrl ?? null,
+      exec.reviewId ?? null,
+      exec.reviewStatus ?? null,
+      exec.reviewProviderId ?? null,
       exec.isFixingWithAI ? 1 : 0,
       cfg.remoteTargetId ?? null,
     ]);
@@ -566,9 +570,10 @@ export class SQLiteAdapter implements PersistenceAdapter {
         containerId: 'container_id',
         selectedExperiment: 'selected_experiment',
         pendingFixError: 'pending_fix_error',
-        prUrl: 'pr_url',
-        prIdentifier: 'pr_identifier',
-        prStatus: 'pr_status',
+        reviewUrl: 'review_url',
+        reviewId: 'review_id',
+        reviewStatus: 'review_status',
+        reviewProviderId: 'review_provider_id',
         selectedAttemptId: 'selected_attempt_id',
       };
       const execDateMap: Record<string, string> = {
@@ -1065,6 +1070,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       baseBranch: row.base_branch ?? undefined,
       featureBranch: row.feature_branch ?? undefined,
       mergeMode: row.merge_mode ?? undefined,
+      reviewProvider: row.review_provider ?? undefined,
       generation: row.generation ?? 0,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
@@ -1121,9 +1127,10 @@ export class SQLiteAdapter implements PersistenceAdapter {
         experimentResults: row.experiment_results ? JSON.parse(row.experiment_results) : undefined,
         pendingFixError: row.pending_fix_error ?? undefined,
         isFixingWithAI: row.is_fixing_with_ai ? true : undefined,
-        prUrl: row.pr_url ?? undefined,
-        prIdentifier: row.pr_identifier ?? undefined,
-        prStatus: row.pr_status ?? undefined,
+        reviewUrl: row.review_url ?? undefined,
+        reviewId: row.review_id ?? undefined,
+        reviewStatus: row.review_status ?? undefined,
+        reviewProviderId: row.review_provider_id ?? undefined,
         selectedAttemptId: row.selected_attempt_id ?? undefined,
       },
     };

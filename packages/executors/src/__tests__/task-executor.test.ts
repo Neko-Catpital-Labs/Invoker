@@ -1553,7 +1553,7 @@ describe('TaskExecutor', () => {
       );
     });
 
-    it('executeMergeNode skips squash-merge and creates PR when mergeMode=github', async () => {
+    it('executeMergeNode skips squash-merge and creates PR when mergeMode=external_review', async () => {
       const allTasks = [
         makeTask({ id: 't1', config: { workflowId: 'wf-1' }, status: 'completed', execution: { branch: 'experiment/t1' } }),
       ];
@@ -1567,7 +1567,7 @@ describe('TaskExecutor', () => {
         loadWorkflow: () => ({
           id: 'wf-1',
           onFinish: 'merge',
-          mergeMode: 'github',
+          mergeMode: 'external_review',
           baseBranch: 'master',
           featureBranch: 'plan/feature',
           name: 'Test Workflow',
@@ -1641,9 +1641,9 @@ describe('TaskExecutor', () => {
         config: expect.objectContaining({ familiarType: 'worktree' }),
         execution: expect.objectContaining({
           branch: 'plan/feature',
-          prUrl: 'https://github.com/owner/repo/pull/42',
-          prIdentifier: 'owner/repo#42',
-          prStatus: 'Awaiting review',
+          reviewUrl: 'https://github.com/owner/repo/pull/42',
+          reviewId: 'owner/repo#42',
+          reviewStatus: 'Awaiting review',
         }),
       }));
       expect(orchestrator.handleWorkerResponse).not.toHaveBeenCalled();
@@ -1737,7 +1737,7 @@ describe('TaskExecutor', () => {
       expect(orchestrator.setTaskAwaitingApproval).not.toHaveBeenCalled();
     });
 
-    it('executeMergeNode creates PR when mergeMode=github and onFinish=none', async () => {
+    it('executeMergeNode creates PR when mergeMode=external_review and onFinish=none', async () => {
       const allTasks = [
         makeTask({ id: 't1', config: { workflowId: 'wf-1' }, status: 'completed', execution: { branch: 'experiment/t1' } }),
       ];
@@ -1751,7 +1751,7 @@ describe('TaskExecutor', () => {
         loadWorkflow: () => ({
           id: 'wf-1',
           onFinish: 'none',
-          mergeMode: 'github',
+          mergeMode: 'external_review',
           baseBranch: 'master',
           featureBranch: 'plan/feature',
           name: 'Test Workflow',
@@ -1809,9 +1809,9 @@ describe('TaskExecutor', () => {
         config: expect.objectContaining({ familiarType: 'worktree' }),
         execution: expect.objectContaining({
           branch: 'plan/feature',
-          prUrl: 'https://github.com/owner/repo/pull/55',
-          prIdentifier: 'owner/repo#55',
-          prStatus: 'Awaiting review',
+          reviewUrl: 'https://github.com/owner/repo/pull/55',
+          reviewId: 'owner/repo#55',
+          reviewStatus: 'Awaiting review',
         }),
       }));
       expect(orchestrator.handleWorkerResponse).not.toHaveBeenCalled();
@@ -1929,7 +1929,7 @@ describe('TaskExecutor', () => {
       await expect(executor.approveMerge('wf-1')).rejects.toThrow('no merge configured');
     });
 
-    it('github merge path logs PR URL to console', async () => {
+    it('external_review merge path logs PR URL to console', async () => {
       const allTasks = [
         makeTask({ id: 't1', config: { workflowId: 'wf-1' }, status: 'completed', execution: { branch: 'experiment/t1' } }),
       ];
@@ -1943,7 +1943,7 @@ describe('TaskExecutor', () => {
         loadWorkflow: () => ({
           id: 'wf-1',
           onFinish: 'merge',
-          mergeMode: 'github',
+          mergeMode: 'external_review',
           baseBranch: 'master',
           featureBranch: 'plan/feature',
           name: 'Test Workflow',
@@ -1994,7 +1994,7 @@ describe('TaskExecutor', () => {
       logSpy.mockRestore();
     });
 
-    it('github merge path calls consolidateAndMerge exactly once', async () => {
+    it('external_review merge path calls consolidateAndMerge exactly once', async () => {
       const allTasks = [
         makeTask({ id: 't1', config: { workflowId: 'wf-1' }, status: 'completed', execution: { branch: 'experiment/t1' } }),
       ];
@@ -2008,7 +2008,7 @@ describe('TaskExecutor', () => {
         loadWorkflow: () => ({
           id: 'wf-1',
           onFinish: 'merge',
-          mergeMode: 'github',
+          mergeMode: 'external_review',
           baseBranch: 'master',
           featureBranch: 'plan/feature',
           name: 'Test Workflow',
@@ -2111,7 +2111,7 @@ describe('TaskExecutor', () => {
         '__merge__wf-1',
         expect.objectContaining({
           config: expect.objectContaining({ summary: expect.any(String) }),
-          execution: { prUrl: 'https://github.com/owner/repo/pull/55' },
+          execution: { reviewUrl: 'https://github.com/owner/repo/pull/55' },
         }),
       );
 
@@ -2178,7 +2178,7 @@ describe('TaskExecutor', () => {
         '__merge__wf-1',
         expect.objectContaining({
           execution: expect.objectContaining({
-            prUrl: 'https://github.com/owner/repo/pull/77',
+            reviewUrl: 'https://github.com/owner/repo/pull/77',
           }),
         }),
       );
@@ -2189,7 +2189,7 @@ describe('TaskExecutor', () => {
       );
     });
 
-    it('executeMergeNode passes summary body to createReview in github mode', async () => {
+    it('executeMergeNode passes summary body to createReview in external_review mode', async () => {
       const allTasks = [
         makeTask({ id: 't1', config: { workflowId: 'wf-1' }, status: 'completed', execution: { branch: 'experiment/t1' } }),
       ];
@@ -2203,7 +2203,7 @@ describe('TaskExecutor', () => {
         loadWorkflow: () => ({
           id: 'wf-1',
           onFinish: 'merge',
-          mergeMode: 'github',
+          mergeMode: 'external_review',
           baseBranch: 'master',
           featureBranch: 'plan/feature',
           name: 'Test Workflow',
@@ -2369,7 +2369,7 @@ describe('TaskExecutor', () => {
         getTask: vi.fn((id: string) => ({
           id,
           status: 'awaiting_approval',
-          execution: { prIdentifier: 'owner/repo#42' },
+          execution: { reviewId: 'owner/repo#42' },
         })),
         approve: vi.fn(),
       };
@@ -2404,7 +2404,7 @@ describe('TaskExecutor', () => {
         cwd: '/tmp',
       });
       expect(persistence.updateTask).toHaveBeenCalledWith('task-1', {
-        execution: { prStatus: 'Awaiting review' },
+        execution: { reviewStatus: 'Awaiting review' },
       });
       expect(orchestrator.approve).not.toHaveBeenCalled();
 
@@ -2418,7 +2418,7 @@ describe('TaskExecutor', () => {
         getTask: vi.fn((id: string) => ({
           id,
           status: 'awaiting_approval',
-          execution: { prIdentifier: 'owner/repo#42' },
+          execution: { reviewId: 'owner/repo#42' },
         })),
         approve: vi.fn(),
       };
@@ -2449,7 +2449,7 @@ describe('TaskExecutor', () => {
       await executor.checkPrApprovalNow('task-1');
 
       expect(persistence.updateTask).toHaveBeenCalledWith('task-1', {
-        execution: { prStatus: 'Approved' },
+        execution: { reviewStatus: 'Approved' },
       });
       expect(orchestrator.approve).toHaveBeenCalledWith('task-1');
 
@@ -4357,7 +4357,7 @@ describe('TaskExecutor', () => {
       return { executor, mergeTask, orchestrator, persistence, mergeGateProvider, gitCalls };
     }
 
-    it('github mode: detaches HEAD, fetches, consolidates, creates PR', async () => {
+    it('external_review mode: detaches HEAD, fetches, consolidates, creates PR', async () => {
       const completedTask = makeTask({
         id: 't1',
         status: 'completed',
@@ -4367,7 +4367,7 @@ describe('TaskExecutor', () => {
       });
 
       const { executor, mergeTask, orchestrator, mergeGateProvider, gitCalls } = setupPublishAfterFix({
-        mergeMode: 'github',
+        mergeMode: 'external_review',
         featureBranch: 'plan/feature',
         gateWorkspacePath: '/tmp/gate-clone',
         taskBranches: [completedTask],
@@ -4413,16 +4413,16 @@ describe('TaskExecutor', () => {
       expect(orchestrator.setTaskAwaitingApproval).toHaveBeenCalledWith('__merge__wf-pub', expect.objectContaining({
         execution: expect.objectContaining({
           branch: 'plan/feature',
-          prUrl: 'https://github.com/owner/repo/pull/99',
-          prIdentifier: 'owner/repo#99',
-          prStatus: 'Awaiting review',
+          reviewUrl: 'https://github.com/owner/repo/pull/99',
+          reviewId: 'owner/repo#99',
+          reviewStatus: 'Awaiting review',
         }),
       }));
 
       expect(orchestrator.handleWorkerResponse).not.toHaveBeenCalled();
     });
 
-    it('pull_request mode: calls execPr and persists prUrl', async () => {
+    it('pull_request mode: calls execPr and persists reviewUrl', async () => {
       const completedTask = makeTask({
         id: 't1',
         status: 'completed',
@@ -4442,7 +4442,7 @@ describe('TaskExecutor', () => {
 
       expect((executor as any).execPr).toHaveBeenCalledWith('master', 'plan/feature', 'Test Workflow', '## Summary', '/tmp/gate-clone');
       expect(persistence.updateTask).toHaveBeenCalledWith('__merge__wf-pub', expect.objectContaining({
-        execution: expect.objectContaining({ prUrl: 'https://github.com/owner/repo/pull/100' }),
+        execution: expect.objectContaining({ reviewUrl: 'https://github.com/owner/repo/pull/100' }),
       }));
       expect(orchestrator.setTaskAwaitingApproval).toHaveBeenCalled();
       expect(orchestrator.handleWorkerResponse).not.toHaveBeenCalled();
@@ -4477,7 +4477,7 @@ describe('TaskExecutor', () => {
       });
 
       const { executor, mergeTask, orchestrator, gitCalls: _gitCalls } = setupPublishAfterFix({
-        mergeMode: 'github',
+        mergeMode: 'external_review',
         featureBranch: 'plan/feature',
         gateWorkspacePath: '/tmp/gate-clone',
         taskBranches: [completedTask],

@@ -15,7 +15,7 @@ import { SQLiteAdapter } from '@invoker/persistence';
 import { resolve as resolvePath } from 'node:path';
 import { Channels } from '@invoker/transport';
 import type { MessageBus } from '@invoker/transport';
-import { FamiliarRegistry, TaskExecutor, GitHubMergeGateProvider } from '@invoker/executors';
+import { FamiliarRegistry, TaskExecutor, GitHubMergeGateProvider, ReviewProviderRegistry } from '@invoker/executors';
 import { loadConfig, type InvokerConfig } from './config.js';
 import { backupPlan } from './plan-backup.js';
 import { startApiServer } from './api-server.js';
@@ -75,6 +75,11 @@ function createHeadlessExecutor(
     dockerConfig: deps.invokerConfig.docker,
     remoteTargetsProvider: () => loadConfig().remoteTargets ?? {},
     mergeGateProvider: new GitHubMergeGateProvider(),
+    reviewProviderRegistry: (() => {
+      const registry = new ReviewProviderRegistry();
+      registry.register(new GitHubMergeGateProvider());
+      return registry;
+    })(),
     callbacks: {
       onOutput: (taskId, data) => {
         process.stdout.write(`\x1b[2m[${taskId}]\x1b[0m ${data}`);
@@ -94,7 +99,7 @@ function wireHeadlessApproveHook(deps: HeadlessDeps, te: TaskExecutor): void {
   deps.orchestrator.setBeforeApproveHook(async (task) => {
     if (task.config.isMergeNode && task.config.workflowId) {
       const workflow = deps.persistence.loadWorkflow(task.config.workflowId);
-      if (workflow?.mergeMode === "github") return;
+      if (workflow?.mergeMode === "external_review") return;
       await te.approveMerge(task.config.workflowId);
     }
   });
@@ -261,8 +266,8 @@ async function headlessRun(planPath: string, deps: HeadlessDeps, waitForApproval
   const mergeTask = orchestrator.getAllTasks().find(
     t => t.config.workflowId === currentWorkflowId && t.config.isMergeNode,
   );
-  if (mergeTask?.execution?.prUrl) {
-    console.log(`\nPull Request: ${mergeTask.execution.prUrl}`);
+  if (mergeTask?.execution?.reviewUrl) {
+    console.log(`\nPull Request: ${mergeTask.execution.reviewUrl}`);
   }
 
   if (status.failed > 0) process.exitCode = 1;
@@ -712,8 +717,8 @@ async function tryDelegate(
 
     // Check for PR URL
     const mergeTask = taskArray.find(t => t.config.isMergeNode);
-    if (mergeTask?.execution?.prUrl) {
-      console.log(`\nPull Request: ${mergeTask.execution.prUrl}`);
+    if (mergeTask?.execution?.reviewUrl) {
+      console.log(`\nPull Request: ${mergeTask.execution.reviewUrl}`);
     }
 
     // Set exit code if any tasks failed

@@ -5,10 +5,10 @@
 import type { TaskState, TaskStatus, WorkflowMeta } from '../types.js';
 
 /** How the terminal merge task finishes — drives a single primary label on the graph node. */
-export type MergeGateKind = 'github_pr' | 'pull_request' | 'merge' | 'workflow';
+export type MergeGateKind = 'external_review' | 'pull_request' | 'merge' | 'workflow';
 
 const MERGE_DESC_PREFIXES: readonly { readonly prefix: string; readonly kind: MergeGateKind }[] = [
-  { prefix: 'GitHub PR gate for ', kind: 'github_pr' },
+  { prefix: 'Review gate for ', kind: 'external_review' },
   { prefix: 'Pull request gate for ', kind: 'pull_request' },
   { prefix: 'Merge gate for ', kind: 'merge' },
   { prefix: 'Workflow gate for ', kind: 'workflow' },
@@ -47,12 +47,12 @@ export function mergeGatePlanTitleInsensitive(description: string): string {
  */
 export function mergeGatePanelHeading(task: TaskState, mergeMode?: string): string {
   if (!task.config.isMergeNode) return task.description;
-  const githubUi = mergeMode === 'github' || Boolean(task.execution?.prUrl);
-  if (!githubUi) return task.description;
+  const externalReviewUi = mergeMode === 'external_review' || Boolean(task.execution?.reviewUrl);
+  if (!externalReviewUi) return task.description;
   const lower = task.description.toLowerCase();
   const hadPrefix = MERGE_DESC_PREFIXES.some(p => lower.startsWith(p.prefix.toLowerCase()));
   if (hadPrefix) {
-    return `GitHub PR gate for ${mergeGatePlanTitleInsensitive(task.description)}`;
+    return `Review gate for ${mergeGatePlanTitleInsensitive(task.description)}`;
   }
   return task.description;
 }
@@ -66,7 +66,7 @@ export function resolveMergeGateKind(task: TaskState, wfMeta?: WorkflowMeta): Me
   if (fromDesc) return fromDesc;
   const mm = wfMeta?.mergeMode ?? 'manual';
   const of = (wfMeta?.onFinish as 'none' | 'merge' | 'pull_request' | undefined) ?? 'none';
-  if (mm === 'github') return 'github_pr';
+  if (mm === 'external_review') return 'external_review';
   if (of === 'pull_request') return 'pull_request';
   if (of === 'merge') return 'merge';
   return 'workflow';

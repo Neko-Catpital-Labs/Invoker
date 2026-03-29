@@ -14,6 +14,7 @@ import type { SQLiteAdapter } from '@invoker/persistence';
 import type { WorkResponse } from '@invoker/protocol';
 import type { TaskExecutorCallbacks } from './task-executor.js';
 import type { MergeGateProvider } from './merge-gate-provider.js';
+import type { ReviewProviderRegistry } from './review-provider-registry.js';
 
 // ── Trace logging ────────────────────────────────────────
 
@@ -61,6 +62,7 @@ export interface MergeExecutorHost {
   readonly callbacks: TaskExecutorCallbacks;
   readonly cwd: string;
   readonly mergeGateProvider?: MergeGateProvider;
+  readonly reviewProviderRegistry?: ReviewProviderRegistry;
 
   execGitReadonly(args: string[]): Promise<string>;
   execGitIn(args: string[], dir: string): Promise<string>;
@@ -71,7 +73,7 @@ export interface MergeExecutorHost {
   detectDefaultBranch(): Promise<string>;
   gitLogMessage(commitHash: string): Promise<string>;
   gitDiffStat(branch: string): Promise<string>;
-  startPrPolling(taskId: string, prIdentifier: string, workflowId: string): void;
+  startPrPolling(taskId: string, reviewId: string, workflowId: string): void;
   executeTasks(tasks: TaskState[]): Promise<void>;
   buildMergeSummary(workflowId: string): Promise<string>;
   runVisualProofCapture?(baseBranch: string, featureBranch: string, slug: string): Promise<string | undefined>;
@@ -186,15 +188,15 @@ export async function executeMergeNodeImpl(
   const visualProof = workflow?.visualProof ?? false;
 
   let response: WorkResponse;
-  let prUrl: string | undefined;
+  let reviewUrl: string | undefined;
 
   const summary = workflowId ? await host.buildMergeSummary(workflowId) : undefined;
 
   host.persistence.updateTask(task.id, {
     execution: {
-      prUrl: undefined,
-      prIdentifier: undefined,
-      prStatus: undefined,
+      reviewUrl: undefined,
+      reviewId: undefined,
+      reviewStatus: undefined,
     },
   });
 
@@ -207,10 +209,10 @@ export async function executeMergeNodeImpl(
     gateWorkspacePath = await host.createMergeWorktree(baseBranch, 'gate-' + task.id.replace(/[^a-zA-Z0-9_-]/g, '-'));
   }
 
-  if (featureBranch && (onFinish !== 'none' || mergeMode === 'github')) {
+  if (featureBranch && (onFinish !== 'none' || mergeMode === 'external_review')) {
     const effectiveOnFinish = mergeMode === 'automatic' ? onFinish : 'none';
     try {
-      prUrl = await host.consolidateAndMerge(
+      reviewUrl = await host.consolidateAndMerge(
         effectiveOnFinish,
         baseBranch,
         featureBranch,
@@ -235,9 +237,9 @@ export async function executeMergeNodeImpl(
         });
         return;
       }
-      if (mergeMode === 'github') {
+      if (mergeMode === 'external_review') {
         if (!host.mergeGateProvider) {
-          throw new Error('mergeMode is "github" but no mergeGateProvider configured');
+          throw new Error('mergeMode is "external_review" but no review provider configured');
         }
 
         let fullSummary = summary;
@@ -279,9 +281,9 @@ export async function executeMergeNodeImpl(
           execution: {
             branch: featureBranch,
             workspacePath: gateWorkspacePath,
-            prUrl: result.url,
-            prIdentifier: result.identifier,
-            prStatus: 'Awaiting review',
+            reviewUrl: result.url,
+            reviewId: result.identifier,
+            reviewStatus: 'Awaiting review',
           },
         });
         host.startPrPolling(task.id, result.identifier, workflowId!);
@@ -305,7 +307,7 @@ export async function executeMergeNodeImpl(
       };
     }
   } else {
-    if (mergeMode === 'manual' || mergeMode === 'github') {
+    if (mergeMode === 'manual' || mergeMode === 'external_review') {
       const gateResponse: WorkResponse = {
         requestId: `merge-${task.id}`,
         actionId: task.id,
@@ -332,7 +334,7 @@ export async function executeMergeNodeImpl(
     execution: {
       branch: featureBranch ?? undefined,
       workspacePath: gateWorkspacePath,
-      ...(prUrl ? { prUrl } : {}),
+      ...(reviewUrl ? { reviewUrl } : {}),
     },
   });
   host.callbacks.onComplete?.(task.id, response);
@@ -342,7 +344,7 @@ export async function executeMergeNodeImpl(
       execution: {
         branch: featureBranch ?? undefined,
         workspacePath: gateWorkspacePath,
-        ...(prUrl ? { prUrl } : {}),
+        ...(reviewUrl ? { reviewUrl } : {}),
       },
     });
   } else {
@@ -419,12 +421,12 @@ export async function approveMergeImpl(
       mergeTrace('GIT_PUSH', { featureBranch, worktreeDir });
       // Push feature branch directly to origin (GitHub) from the clone
       await execGitInMergeSafe(host, ['push', '--force', '-u', 'origin', featureBranch], worktreeDir);
-      const prUrl = await host.execPr(baseBranch, featureBranch, mergeMessage, fullSummary, worktreeDir);
-      mergeTrace('PR_CREATED', { featureBranch, baseBranch, prUrl });
-      console.log(`[merge] Approved: created pull request ${prUrl}`);
+      const reviewUrl = await host.execPr(baseBranch, featureBranch, mergeMessage, fullSummary, worktreeDir);
+      mergeTrace('PR_CREATED', { featureBranch, baseBranch, reviewUrl });
+      console.log(`[merge] Approved: created pull request ${reviewUrl}`);
       host.persistence.updateTask(mergeTaskId, {
         config: { summary },
-        execution: { prUrl },
+        execution: { reviewUrl },
       });
     } finally {
       await host.removeMergeWorktree(worktreeDir);
@@ -579,9 +581,9 @@ export async function publishAfterFixImpl(
       }
     }
 
-    if (mergeMode === 'github') {
+    if (mergeMode === 'external_review') {
       if (!host.mergeGateProvider) {
-        throw new Error('mergeMode is "github" but no mergeGateProvider configured');
+        throw new Error('mergeMode is "external_review" but no review provider configured');
       }
 
       const result = await host.mergeGateProvider.createReview({
@@ -593,14 +595,16 @@ export async function publishAfterFixImpl(
       });
       console.log(`[merge] Post-fix: created/updated GitHub PR: ${result.url}`);
 
+
+
       host.orchestrator.setTaskAwaitingApproval(task.id, {
         config: { familiarType: 'worktree', summary },
         execution: {
           branch: featureBranch,
           workspacePath: gateWorkspacePath,
-          prUrl: result.url,
-          prIdentifier: result.identifier,
-          prStatus: 'Awaiting review',
+          reviewUrl: result.url,
+          reviewId: result.identifier,
+          reviewStatus: 'Awaiting review',
         },
       });
       host.startPrPolling(task.id, result.identifier, workflowId!);
@@ -609,11 +613,11 @@ export async function publishAfterFixImpl(
 
     // manual mode with pull_request onFinish
     if (onFinish === 'pull_request') {
-      const prUrl = await host.execPr(baseBranch, featureBranch, workflow?.name ?? 'Workflow', fullSummary, consolidateDir);
-      console.log(`[merge] Post-fix: created pull request ${prUrl}`);
+      const reviewUrl = await host.execPr(baseBranch, featureBranch, workflow?.name ?? 'Workflow', fullSummary, consolidateDir);
+      console.log(`[merge] Post-fix: created pull request ${reviewUrl}`);
       host.persistence.updateTask(task.id, {
         config: { summary },
-        execution: { prUrl },
+        execution: { reviewUrl },
       });
     }
 
@@ -851,9 +855,9 @@ export async function consolidateAndMergeImpl(
     } else if (onFinish === 'pull_request') {
       // Push feature branch directly to origin (GitHub) from the clone
       await execGitInMergeSafe(host, ['push', '--force', '-u', 'origin', featureBranch], worktreeDir);
-      const prUrl = await host.execPr(baseBranch, featureBranch, workflowName ?? 'Workflow', body, worktreeDir);
-      console.log(`[merge] Created pull request: ${prUrl}`);
-      return prUrl;
+      const reviewUrl = await host.execPr(baseBranch, featureBranch, workflowName ?? 'Workflow', body, worktreeDir);
+      console.log(`[merge] Created pull request: ${reviewUrl}`);
+      return reviewUrl;
     }
   } catch (err) {
     try { await execGitInMergeSafe(host, ['merge', '--abort'], worktreeDir); } catch { /* no merge in progress */ }

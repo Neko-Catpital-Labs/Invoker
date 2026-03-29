@@ -80,14 +80,14 @@ export interface TaskExecution {
   readonly experimentResults?: readonly ExperimentResultEntry[];
   readonly pendingFixError?: string;
   readonly isFixingWithAI?: boolean;
-  readonly prUrl?: string;
-  readonly prIdentifier?: string;
-  readonly prStatus?: string;
+  readonly reviewUrl?: string;
+  readonly reviewId?: string;
+  readonly reviewStatus?: string;
+  readonly reviewProviderId?: string;
   readonly mergeConflict?: {
     readonly failedBranch: string;
     readonly conflictFiles: readonly string[];
   };
-  readonly isFixingWithAI?: boolean;
 }
 
 // ── Task State ──────────────────────────────────────────────
@@ -128,7 +128,8 @@ export interface WorkflowMeta {
   baseBranch?: string;
   featureBranch?: string;
   onFinish?: string;
-  mergeMode?: 'manual' | 'automatic' | 'github';
+  mergeMode?: 'manual' | 'automatic' | 'external_review';
+  reviewProvider?: string;
 }
 
 // ── Workflow Status ─────────────────────────────────────────
@@ -176,7 +177,7 @@ export interface PlanDefinition {
   tasks: PlanTask[];
   onFinish?: 'none' | 'merge' | 'pull_request';
   baseBranch?: string;
-  mergeMode?: 'manual' | 'automatic' | 'github';
+  mergeMode?: 'manual' | 'automatic' | 'external_review';
 }
 
 // ── Task Replacement ────────────────────────────────────────

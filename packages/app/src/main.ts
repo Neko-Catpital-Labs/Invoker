@@ -55,7 +55,7 @@ import { IpcBus, Channels } from '@invoker/transport';
 import type { MessageBus } from '@invoker/transport';
 import {
   FamiliarRegistry, TaskExecutor,
-  DockerFamiliar, WorktreeFamiliar, SshFamiliar, GitHubMergeGateProvider,
+  DockerFamiliar, WorktreeFamiliar, SshFamiliar, GitHubMergeGateProvider, ReviewProviderRegistry,
   RESTART_TO_BRANCH_TRACE,
   type Familiar, type FamiliarHandle, type PersistedTaskMeta,
 } from '@invoker/executors';
@@ -370,6 +370,11 @@ function setupGuiMode(): void {
       dockerConfig: invokerConfig.docker,
       remoteTargetsProvider: () => loadConfig().remoteTargets ?? {},
       mergeGateProvider: new GitHubMergeGateProvider(),
+      reviewProviderRegistry: (() => {
+        const registry = new ReviewProviderRegistry();
+        registry.register(new GitHubMergeGateProvider());
+        return registry;
+      })(),
       callbacks: {
         onOutput: (taskId, data) => {
           console.log(`[output] ${taskId}: ${data.trimEnd()}`);
@@ -406,7 +411,7 @@ function setupGuiMode(): void {
     orchestrator.setBeforeApproveHook(async (task) => {
       if (task.config.isMergeNode && task.config.workflowId) {
         const workflow = persistence.loadWorkflow(task.config.workflowId);
-        if (workflow?.mergeMode === "github") return; // PR is the merge mechanism
+        if (workflow?.mergeMode === "external_review") return; // external review is the merge mechanism
         await taskExecutor.approveMerge(task.config.workflowId);
       }
     });
