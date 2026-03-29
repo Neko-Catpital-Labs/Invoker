@@ -631,7 +631,12 @@ describe('SshFamiliar getRestoredTerminalSpec', () => {
     };
     const spec = ssh.getRestoredTerminalSpec(meta);
     expect(spec.command).toBe('ssh');
-    expect(spec.args).toEqual(expect.arrayContaining(['-i', '/home/me/.ssh/id_rsa', '-p', '2222', '-t', 'root@droplet.example', 'bash', '-lc']));
+    expect(spec.args).toEqual(expect.arrayContaining([
+      '-i', '/home/me/.ssh/id_rsa',
+      '-p', '2222',
+      '-o', 'StrictHostKeyChecking=accept-new',
+      '-t', 'root@droplet.example',
+    ]));
     const lc = spec.args![spec.args!.length - 1];
     expect(lc).toContain('cd');
     expect(lc).toContain('experiment/remote-task-deadbeef');

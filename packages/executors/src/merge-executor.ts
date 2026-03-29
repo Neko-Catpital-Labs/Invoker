@@ -391,6 +391,9 @@ export async function approveMergeImpl(
       await execGitInMergeSafe(host, ['commit', '-m', commitBody], worktreeDir);
       // Push squash commit directly to origin (GitHub) from the clone
       await execGitInMergeSafe(host, ['push', '--force', 'origin', `HEAD:refs/heads/${baseBranch}`], worktreeDir);
+      // Advance the baseBranch ref in the clone so subsequent operations see the updated base
+      const newHead = (await execGitInMergeSafe(host, ['rev-parse', 'HEAD'], worktreeDir)).trim();
+      await execGitInMergeSafe(host, ['update-ref', `refs/heads/${baseBranch}`, newHead], worktreeDir);
       mergeTrace('SQUASH_MERGE_COMPLETE', { featureBranch, baseBranch });
       console.log(`[merge] Approved: squash-merged ${featureBranch} into ${baseBranch}`);
     } catch (err) {
@@ -804,6 +807,9 @@ export async function consolidateAndMergeImpl(
         const commitBody = body ? `${mergeMessage}\n\n${body}` : mergeMessage;
         await execGitInMergeSafe(host, ['commit', '-m', commitBody], worktreeDir);
         await execGitInMergeSafe(host, ['push', '--force', 'origin', `HEAD:refs/heads/${baseBranch}`], worktreeDir);
+        // Advance the baseBranch ref in the clone so subsequent operations see the updated base
+        const newHead = (await execGitInMergeSafe(host, ['rev-parse', 'HEAD'], worktreeDir)).trim();
+        await execGitInMergeSafe(host, ['update-ref', `refs/heads/${baseBranch}`, newHead], worktreeDir);
         console.log(`[merge] Squash-merged ${featureBranch} into ${baseBranch} (pushed to origin)`);
       } else {
         console.log(`[merge] No changes to commit — ${baseBranch} already up-to-date with ${featureBranch}`);

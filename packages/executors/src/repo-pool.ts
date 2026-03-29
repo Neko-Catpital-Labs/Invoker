@@ -80,6 +80,13 @@ export class RepoPool {
     const dir = this.cloneDir(repoUrl);
     if (existsSync(dir)) {
       await this.execGit(['fetch', '--all'], dir);
+      // Advance local HEAD branch to match origin so rev-parse returns the fresh ref
+      try {
+        const branch = (await this.execGit(['rev-parse', '--abbrev-ref', 'HEAD'], dir)).trim();
+        if (branch !== 'HEAD') {
+          await this.execGit(['merge', '--ff-only', `origin/${branch}`], dir);
+        }
+      } catch { /* non-ff or detached; leave as-is */ }
       return dir;
     }
     mkdirSync(this.cacheDir, { recursive: true });
@@ -87,15 +94,15 @@ export class RepoPool {
     return dir;
   }
 
-  async acquireWorktree(repoUrl: string, branch: string): Promise<AcquiredWorktree> {
+  async acquireWorktree(repoUrl: string, branch: string, base?: string): Promise<AcquiredWorktree> {
     // Serialize per-repo to prevent concurrent git worktree operations
     const prev = this.repoChains.get(repoUrl) ?? Promise.resolve();
-    const next = prev.then(() => this.doAcquireWorktree(repoUrl, branch));
+    const next = prev.then(() => this.doAcquireWorktree(repoUrl, branch, base));
     this.repoChains.set(repoUrl, next.catch(() => {}));
     return next;
   }
 
-  private async doAcquireWorktree(repoUrl: string, branch: string): Promise<AcquiredWorktree> {
+  private async doAcquireWorktree(repoUrl: string, branch: string, base?: string): Promise<AcquiredWorktree> {
     console.log(
       `${RESTART_TO_BRANCH_TRACE} RepoPool.doAcquireWorktree branch=${branch} (bashPreserveOrReset here; BaseFamiliar.setupTaskBranch is not used for this path)`,
     );
@@ -149,7 +156,7 @@ export class RepoPool {
         repoDir: clonePath,
         worktreeDir: worktreePath,
         branch,
-        base: 'HEAD',
+        base: base ?? 'HEAD',
       });
       await runBashLocal(script, clonePath);
       effectivePath = worktreePath;

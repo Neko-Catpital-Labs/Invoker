@@ -19,7 +19,7 @@ export class InMemoryPersistence implements OrchestratorPersistence {
     id: string; name: string; status: string;
     createdAt?: string; updatedAt?: string;
     onFinish?: string; baseBranch?: string; featureBranch?: string;
-    mergeMode?: 'manual' | 'automatic';
+    mergeMode?: 'manual' | 'automatic' | 'github';
     generation?: number;
   }): void {
     const now = new Date().toISOString();

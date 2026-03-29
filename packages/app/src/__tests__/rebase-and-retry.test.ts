@@ -5,9 +5,9 @@
  * branches before restarting, so setupTaskBranch creates fresh branches
  * from current HEAD (including new commits).
  *
- * Without branch deletion, setupTaskBranch preserves branches that have
- * commits ahead of the base — merging master in instead of starting fresh.
- * This means stale task work from the previous run carries over.
+ * Additionally verifies that RepoPool.doEnsureClone fast-forwards local
+ * branches after fetch, so even without explicit branch deletion the
+ * worktree gets a fresh base (stale work no longer carries over).
  *
  * Pattern: sandbox git repo + real WorktreeFamiliar + real TaskExecutor
  * (follows branch-chain.test.ts).
@@ -228,7 +228,7 @@ describe('rebase-and-retry: branch deletion before restart', { timeout: 120_000 
     expect(isAncestor(tmpDir, oldTaskCommit, branchAfter)).toBe(false);
   });
 
-  it('without branch deletion (old behavior): setupTaskBranch preserves stale branch', async () => {
+  it('without branch deletion: clone fast-forward prevents stale branches', async () => {
     const { task, executor, orchestrator, persistence } = buildHarness();
 
     // Step 1: Execute task → creates experiment/task-a-* with a task commit
@@ -241,8 +241,7 @@ describe('rebase-and-retry: branch deletion before restart', { timeout: 120_000 
     // Step 2: Add commit Y to master
     const commitY = addCommitToMaster(tmpDir, 'new-feature.txt', 'commit Y: new feature');
 
-    // Step 3: Restart WITHOUT deleting branches (old behavior)
-    // This calls bumpGenerationAndRestart directly, skipping branch deletion
+    // Step 3: Restart WITHOUT deleting branches
     bumpGenerationAndRestart('wf-test', {
       orchestrator: orchestrator as any,
       persistence: persistence as any,
@@ -251,16 +250,16 @@ describe('rebase-and-retry: branch deletion before restart', { timeout: 120_000 
     // Branch still exists (not deleted)
     expect(branchExists(tmpDir, branchFirst)).toBe(true);
 
-    // Step 4: Re-execute — setupTaskBranch finds existing branch with commits ahead,
-    // so it PRESERVES the branch and merges master in
+    // Step 4: Re-execute — RepoPool.doEnsureClone now fast-forwards the clone's
+    // local master after fetch, so bashPreserveOrReset resets the worktree branch
+    // to the fresh base. Stale work no longer carries over.
     await executeTask(executor, task);
     const branchAfter = task.execution.branch!;
 
-    // commit Y IS an ancestor (master was merged in)
+    // commit Y IS an ancestor (fresh base includes it)
     expect(isAncestor(tmpDir, commitY, branchAfter)).toBe(true);
 
-    // OLD task commit IS STILL an ancestor (branch was preserved, not recreated)
-    // This is the BUG behavior — stale work carries over
-    expect(isAncestor(tmpDir, oldTaskCommit, branchAfter)).toBe(true);
+    // OLD task commit is NOT an ancestor (branch was recreated from fresh base)
+    expect(isAncestor(tmpDir, oldTaskCommit, branchAfter)).toBe(false);
   });
 });

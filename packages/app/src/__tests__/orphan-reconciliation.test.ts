@@ -15,43 +15,10 @@ import {
   Orchestrator,
   type PlanDefinition,
   type TaskState,
-  type OrchestratorPersistence,
   type OrchestratorMessageBus,
 } from '@invoker/core';
-import type { TaskStateChanges } from '@invoker/graph';
 import type { WorkResponse } from '@invoker/protocol';
-
-// ── Lightweight in-memory mocks ─────────────────────────────
-
-class InMemoryPersistence implements OrchestratorPersistence {
-  workflows = new Map<string, { id: string; name: string; status: string; createdAt: string; updatedAt: string }>();
-  tasks = new Map<string, { workflowId: string; task: TaskState }>();
-
-  saveWorkflow(workflow: { id: string; name: string; status: string }): void {
-    const now = new Date().toISOString();
-    this.workflows.set(workflow.id, { ...workflow, createdAt: (workflow as any).createdAt ?? now, updatedAt: (workflow as any).updatedAt ?? now });
-  }
-  updateWorkflow(workflowId: string, changes: { status?: string }): void {
-    const wf = this.workflows.get(workflowId);
-    if (wf && changes.status) wf.status = changes.status;
-  }
-  saveTask(workflowId: string, task: TaskState): void {
-    this.tasks.set(task.id, { workflowId, task });
-  }
-  updateTask(taskId: string, changes: TaskStateChanges): void {
-    const entry = this.tasks.get(taskId);
-    if (entry) entry.task = { ...entry.task, ...changes } as TaskState;
-  }
-  listWorkflows(): Array<{ id: string; name: string; status: string; createdAt: string; updatedAt: string }> {
-    return Array.from(this.workflows.values());
-  }
-  loadTasks(workflowId: string): TaskState[] {
-    return Array.from(this.tasks.values())
-      .filter((e) => e.workflowId === workflowId)
-      .map((e) => e.task);
-  }
-  logEvent(): void {}
-}
+import { InMemoryPersistence } from '@invoker/test-utils';
 
 class InMemoryBus implements OrchestratorMessageBus {
   publish(): void {}

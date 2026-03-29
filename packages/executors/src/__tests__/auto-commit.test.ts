@@ -869,6 +869,11 @@ class TestPersistence implements OrchestratorPersistence {
     return entry?.task.execution.workspacePath ?? null;
   }
   logEvent(): void {}
+  saveAttempt(): void {}
+  loadAttempts(): any[] { return []; }
+  loadAttempt(): undefined { return undefined; }
+  updateAttempt(): void {}
+  getNextAttemptNumber(): number { return 1; }
 }
 
 class TestBus implements OrchestratorMessageBus {
@@ -1251,6 +1256,10 @@ describe('merge gate commit topology (real git)', () => {
 
     execSync('git checkout master', { cwd: tmpDir });
 
+    // Push task branches to origin so the merge clone can find them
+    execSync('git push origin experiment/task-a', { cwd: tmpDir });
+    execSync('git push origin experiment/task-b', { cwd: tmpDir });
+
     // Set up real Orchestrator + TaskExecutor with hook wired
     const persistence = new TestPersistence();
     const bus = new TestBus();
@@ -1274,6 +1283,7 @@ describe('merge gate commit topology (real git)', () => {
 
     const plan: PlanDefinition = {
       name: 'Hook E2E Plan',
+      repoUrl: `file://${tmpDir}`,
       onFinish: 'merge',
       mergeMode: 'manual',
       baseBranch: 'master',
