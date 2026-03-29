@@ -74,7 +74,7 @@ class InMemoryPersistence implements OrchestratorPersistence {
     return undefined;
   }
 
-  updateAttempt(attemptId: string, changes: Partial<Pick<Attempt, 'status' | 'startedAt' | 'completedAt' | 'exitCode' | 'error' | 'lastHeartbeatAt' | 'branch' | 'commit' | 'summary' | 'workspacePath' | 'claudeSessionId' | 'containerId' | 'mergeConflict'>>): void {
+  updateAttempt(attemptId: string, changes: Partial<Pick<Attempt, 'status' | 'startedAt' | 'completedAt' | 'exitCode' | 'error' | 'lastHeartbeatAt' | 'branch' | 'commit' | 'summary' | 'workspacePath' | 'agentSessionId' | 'containerId' | 'mergeConflict'>>): void {
     for (const list of this.attempts.values()) {
       const idx = list.findIndex(a => a.id === attemptId);
       if (idx !== -1) {
@@ -368,7 +368,7 @@ describe('Type × Topology Matrix', () => {
       orchestrator.handleWorkerResponse(complete('A'));
       expect(orchestrator.getTask('B')!.status).toBe('running');
 
-      orchestrator.handleWorkerResponse(complete('B', { claudeSessionId: 'sess-1' }));
+      orchestrator.handleWorkerResponse(complete('B', { agentSessionId: 'sess-1' }));
       expect(orchestrator.getTask('C')!.status).toBe('running');
 
       orchestrator.handleWorkerResponse(complete('C'));
@@ -378,7 +378,7 @@ describe('Type × Topology Matrix', () => {
       expect(orchestrator.getTask('C')!.status).toBe('completed');
     });
 
-    it('claude task fails → restart → claudeSessionId not carried over', () => {
+    it('claude task fails → restart → agentSessionId not carried over', () => {
       const plan: PlanDefinition = {
         name: 'claude-restart',
         tasks: [
@@ -390,12 +390,12 @@ describe('Type × Topology Matrix', () => {
       orchestrator.startExecution();
 
       orchestrator.handleWorkerResponse(
-        complete('A', { claudeSessionId: 'sess-1' }),
+        complete('A', { agentSessionId: 'sess-1' }),
       );
-      expect(orchestrator.getTask('A')!.execution.claudeSessionId).toBe('sess-1');
+      expect(orchestrator.getTask('A')!.execution.agentSessionId).toBe('sess-1');
 
       orchestrator.restartTask('A');
-      // restartTask clears commit but may or may not clear claudeSessionId
+      // restartTask clears commit but may or may not clear agentSessionId
       // This test documents the actual behavior
       const restarted = orchestrator.getTask('A')!;
       expect(restarted.status).toBe('running');

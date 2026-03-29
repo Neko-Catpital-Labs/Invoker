@@ -320,6 +320,9 @@ export class SQLiteAdapter implements PersistenceAdapter {
       'ALTER TABLE tasks ADD COLUMN remote_target_id TEXT',
       'ALTER TABLE workflows ADD COLUMN description TEXT',
       'ALTER TABLE workflows ADD COLUMN visual_proof INTEGER',
+      // agent_session_id: new column for pluggable agent architecture
+      'ALTER TABLE tasks ADD COLUMN agent_session_id TEXT',
+      'ALTER TABLE attempts ADD COLUMN agent_session_id TEXT',
     ];
     for (const sql of migrations) {
       try { this.db.run(sql); } catch { /* Column already exists */ }
@@ -423,7 +426,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         selected_experiments, experiment_results, requires_manual_approval,
         repo_url, feature_branch,
         is_merge_node, auto_fix, max_fix_attempts,
-        familiar_type, claude_session_id, workspace_path, container_id,
+        familiar_type, agent_session_id, workspace_path, container_id,
         action_request_id, experiments,
         created_at, started_at, completed_at, last_heartbeat_at,
         utilization, pending_fix_error,
@@ -467,7 +470,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       cfg.isMergeNode ? 1 : 0,
       cfg.autoFix ? 1 : 0, cfg.maxFixAttempts ?? null,
       cfg.familiarType ?? null,
-      exec.claudeSessionId ?? null,
+      exec.agentSessionId ?? null,
       exec.workspacePath ?? null,
       exec.containerId ?? null,
       exec.actionRequestId ?? null,
@@ -558,7 +561,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         actionRequestId: 'action_request_id',
         branch: 'branch',
         commit: 'commit_hash',
-        claudeSessionId: 'claude_session_id',
+        agentSessionId: 'agent_session_id',
         workspacePath: 'workspace_path',
         containerId: 'container_id',
         selectedExperiment: 'selected_experiment',
@@ -739,12 +742,12 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return (row?.workspace_path as string) ?? null;
   }
 
-  getClaudeSessionId(taskId: string): string | null {
+  getAgentSessionId(taskId: string): string | null {
     const row = this.queryOne(
-      'SELECT claude_session_id FROM tasks WHERE id = ?',
+      'SELECT agent_session_id FROM tasks WHERE id = ?',
       [taskId],
     );
-    const val = (row?.claude_session_id as string) ?? null;
+    const val = (row?.agent_session_id as string) ?? null;
     return val === 'none' ? null : val;
   }
 
@@ -936,7 +939,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         snapshot_commit, base_branch, upstream_attempt_ids,
         command_override, prompt_override,
         started_at, completed_at, exit_code, error, last_heartbeat_at,
-        branch, commit_hash, summary, workspace_path, claude_session_id, container_id,
+        branch, commit_hash, summary, workspace_path, agent_session_id, container_id,
         supersedes_attempt_id, created_at, merge_conflict
       ) VALUES (
         ?, ?, ?, ?,
@@ -956,7 +959,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       attempt.exitCode ?? null, attempt.error ?? null,
       attempt.lastHeartbeatAt?.toISOString() ?? null,
       attempt.branch ?? null, attempt.commit ?? null, attempt.summary ?? null,
-      attempt.workspacePath ?? null, attempt.claudeSessionId ?? null,
+      attempt.workspacePath ?? null, attempt.agentSessionId ?? null,
       attempt.containerId ?? null,
       attempt.supersedesAttemptId ?? null,
       attempt.createdAt.toISOString(),
@@ -981,7 +984,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return this.rowToAttempt(row);
   }
 
-  updateAttempt(attemptId: string, changes: Partial<Pick<Attempt, 'status' | 'startedAt' | 'completedAt' | 'exitCode' | 'error' | 'lastHeartbeatAt' | 'branch' | 'commit' | 'summary' | 'workspacePath' | 'claudeSessionId' | 'containerId' | 'mergeConflict'>>): void {
+  updateAttempt(attemptId: string, changes: Partial<Pick<Attempt, 'status' | 'startedAt' | 'completedAt' | 'exitCode' | 'error' | 'lastHeartbeatAt' | 'branch' | 'commit' | 'summary' | 'workspacePath' | 'agentSessionId' | 'containerId' | 'mergeConflict'>>): void {
     const setClauses: string[] = [];
     const values: any[] = [];
 
@@ -995,7 +998,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
     if (changes.commit !== undefined) { setClauses.push('commit_hash = ?'); values.push(changes.commit); }
     if (changes.summary !== undefined) { setClauses.push('summary = ?'); values.push(changes.summary); }
     if (changes.workspacePath !== undefined) { setClauses.push('workspace_path = ?'); values.push(changes.workspacePath); }
-    if (changes.claudeSessionId !== undefined) { setClauses.push('claude_session_id = ?'); values.push(changes.claudeSessionId); }
+    if (changes.agentSessionId !== undefined) { setClauses.push('agent_session_id = ?'); values.push(changes.agentSessionId); }
     if (changes.containerId !== undefined) { setClauses.push('container_id = ?'); values.push(changes.containerId); }
     if (changes.mergeConflict !== undefined) { setClauses.push('merge_conflict = ?'); values.push(changes.mergeConflict ? JSON.stringify(changes.mergeConflict) : null); }
 
@@ -1109,7 +1112,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         actionRequestId: row.action_request_id ?? undefined,
         branch: row.branch ?? undefined,
         commit: row.commit_hash ?? undefined,
-        claudeSessionId: row.claude_session_id ?? undefined,
+        agentSessionId: row.agent_session_id || undefined,
         workspacePath: row.workspace_path ?? undefined,
         containerId: row.container_id ?? undefined,
         experiments: row.experiments ? JSON.parse(row.experiments) : undefined,
@@ -1146,7 +1149,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       commit: row.commit_hash ?? undefined,
       summary: row.summary ?? undefined,
       workspacePath: row.workspace_path ?? undefined,
-      claudeSessionId: row.claude_session_id ?? undefined,
+      agentSessionId: row.agent_session_id || undefined,
       containerId: row.container_id ?? undefined,
       supersedesAttemptId: row.supersedes_attempt_id ?? undefined,
       createdAt: new Date(row.created_at),

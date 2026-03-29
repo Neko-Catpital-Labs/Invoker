@@ -897,7 +897,7 @@ function setupGuiMode(): void {
         // Not found locally — check if this session belongs to an SSH task
         const allTasks = orchestrator.getAllTasks();
         const sshTask = allTasks.find(
-          t => t.execution.claudeSessionId === sessionId
+          t => t.execution.agentSessionId === sessionId
             && t.config.familiarType === 'ssh'
             && t.config.remoteTargetId,
         );
@@ -1272,7 +1272,7 @@ function setupGuiMode(): void {
       const meta: PersistedTaskMeta = {
         taskId,
         familiarType: persistence.getFamiliarType(taskId) ?? 'worktree',
-        claudeSessionId: persistence.getClaudeSessionId(taskId) ?? undefined,
+        agentSessionId: persistence.getAgentSessionId(taskId) ?? undefined,
         containerId: persistence.getContainerId(taskId) ?? undefined,
         workspacePath: persistence.getWorkspacePath(taskId) ?? undefined,
         branch: persistence.getBranch(taskId) ?? undefined,

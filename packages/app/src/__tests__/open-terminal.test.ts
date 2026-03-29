@@ -402,7 +402,7 @@ describe('getRestoredTerminalSpec routing', () => {
       const meta: PersistedTaskMeta = {
         taskId: 'task-1',
         familiarType: 'worktree',
-        claudeSessionId: 'abc-123-session',
+        agentSessionId: 'abc-123-session',
         workspacePath: '/home/user/repo',
       };
       const spec = wt.getRestoredTerminalSpec(meta);
@@ -472,7 +472,7 @@ describe('getRestoredTerminalSpec routing', () => {
       const meta: PersistedTaskMeta = {
         taskId: 'task-docker',
         familiarType: 'docker',
-        claudeSessionId: 'docker-session-1',
+        agentSessionId: 'docker-session-1',
         containerId: 'container-abc',
       };
       const spec = docker.getRestoredTerminalSpec(meta);

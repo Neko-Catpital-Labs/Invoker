@@ -329,19 +329,19 @@ describe('DockerFamiliar', () => {
   // -------------------------------------------------------------------------
 
   describe('claude action type', () => {
-    it('sets claudeSessionId on handle', async () => {
+    it('sets agentSessionId on handle', async () => {
       const request = makeRequest({
         actionType: 'claude',
         inputs: { prompt: 'test', repoUrl: 'https://github.com/test/repo.git' },
       });
       const handle = await familiar.start(request);
-      expect(handle.claudeSessionId).toBeDefined();
-      expect(handle.claudeSessionId).toMatch(/^[0-9a-f-]+$/);
+      expect(handle.agentSessionId).toBeDefined();
+      expect(handle.agentSessionId).toMatch(/^[0-9a-f-]+$/);
     });
 
-    it('does not set claudeSessionId for command actions', async () => {
+    it('does not set agentSessionId for command actions', async () => {
       const handle = await familiar.start(makeRequest());
-      expect(handle.claudeSessionId).toBeUndefined();
+      expect(handle.agentSessionId).toBeUndefined();
     });
 
     it('passes ANTHROPIC_API_KEY to container environment', async () => {
@@ -376,7 +376,7 @@ describe('DockerFamiliar', () => {
       expect(spec!.command).toBe('bash');
       const bashCmd = spec!.args![1];
       expect(bashCmd).toContain(`docker start ${cid}`);
-      expect(bashCmd).toContain(`docker exec -it ${cid} claude --resume ${handle.claudeSessionId}`);
+      expect(bashCmd).toContain(`docker exec -it ${cid} claude --resume ${handle.agentSessionId}`);
     });
   });
 
@@ -485,7 +485,7 @@ describe('DockerFamiliar', () => {
     it('returns docker exec claude --resume spec with session', () => {
       const spec = familiar.getRestoredTerminalSpec({
         ...baseMeta,
-        claudeSessionId: 'session-docker-1',
+        agentSessionId: 'session-docker-1',
       });
       expect(spec.command).toBe('bash');
       expect(spec.args![1]).toContain('docker start container-abc123');

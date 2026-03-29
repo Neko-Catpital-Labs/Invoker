@@ -60,7 +60,7 @@ class TestFamiliar extends BaseFamiliar<BaseEntry> {
   }
 
   testBuildCommandAndArgs(request: WorkRequest, claudeCommand?: string) {
-    return this.buildCommandAndArgs(request, claudeCommand);
+    return this.buildCommandAndArgs(request, claudeCommand ? { claudeCommand } : undefined);
   }
 
   testScheduleReconciliationResponse(executionId: string) {
@@ -2037,7 +2037,7 @@ describe('BaseFamiliar.buildCommandAndArgs', () => {
     const result = familiar.testBuildCommandAndArgs(req);
     expect(result.cmd).toBe('/bin/bash');
     expect(result.args).toEqual(['-c', 'echo hello']);
-    expect(result.claudeSessionId).toBeUndefined();
+    expect(result.agentSessionId).toBeUndefined();
   });
 
   it('throws when actionType=command has no command', () => {
@@ -2052,7 +2052,7 @@ describe('BaseFamiliar.buildCommandAndArgs', () => {
     req.actionType = 'claude';
     const result = familiar.testBuildCommandAndArgs(req, 'my-claude');
     expect(result.cmd).toBe('my-claude');
-    expect(result.claudeSessionId).toBeDefined();
+    expect(result.agentSessionId).toBeDefined();
     expect(result.args).toContain('--dangerously-skip-permissions');
   });
 

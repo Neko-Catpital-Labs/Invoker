@@ -27,10 +27,10 @@ export function ApprovalModal({
 }: ApprovalModalProps) {
   const isFixApproval = Boolean(task.execution.pendingFixError);
   const isMergeNode = Boolean(task.config.isMergeNode);
-  console.log(`[ApprovalModal] render: taskId=${task.id} isFixApproval=${isFixApproval} claudeSessionId=${task.execution.claudeSessionId}`);
+  console.log(`[ApprovalModal] render: taskId=${task.id} isFixApproval=${isFixApproval} agentSessionId=${task.execution.agentSessionId}`);
 
   const defaultReason = [
-    task.execution.claudeSessionId && `Claude session: ${task.execution.claudeSessionId}`,
+    task.execution.agentSessionId && `Claude session: ${task.execution.agentSessionId}`,
     isFixApproval && `Original error: ${task.execution.pendingFixError}`,
   ].filter(Boolean).join('\n');
 
@@ -41,10 +41,10 @@ export function ApprovalModal({
   const [sessionError, setSessionError] = useState(false);
 
   useEffect(() => {
-    if (!task.execution.claudeSessionId) return;
+    if (!task.execution.agentSessionId) return;
     setSessionLoading(true);
     window.invoker
-      .getClaudeSession(task.execution.claudeSessionId)
+      .getClaudeSession(task.execution.agentSessionId)
       .then((msgs) => {
         setSessionMessages(msgs);
         setSessionLoading(false);
@@ -53,7 +53,7 @@ export function ApprovalModal({
         setSessionError(true);
         setSessionLoading(false);
       });
-  }, [task.execution.claudeSessionId]);
+  }, [task.execution.agentSessionId]);
 
   const handleApprove = () => {
     onApprove(task.id);
@@ -107,10 +107,10 @@ export function ApprovalModal({
 
         {/* Scrollable content */}
         <div className="flex-1 overflow-y-auto min-h-0 px-6 py-4 space-y-4">
-          {task.execution.claudeSessionId && (
+          {task.execution.agentSessionId && (
             <div className="bg-gray-700/50 rounded p-3" data-testid="claude-session-context">
               <h3 className="text-sm font-medium text-gray-300 mb-2">Claude Session</h3>
-              <p className="text-xs text-gray-500 mb-2 font-mono">{task.execution.claudeSessionId}</p>
+              <p className="text-xs text-gray-500 mb-2 font-mono">{task.execution.agentSessionId}</p>
               {sessionLoading && <p className="text-xs text-gray-500" data-testid="session-loading">Loading conversation...</p>}
               {sessionMessages && (
                 <div className="max-h-[40vh] overflow-y-auto space-y-2" data-testid="session-messages">

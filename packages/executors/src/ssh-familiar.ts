@@ -9,6 +9,7 @@ import { killProcessGroup, cleanElectronEnv, SIGKILL_TIMEOUT_MS } from './proces
 import { computeBranchHash } from './branch-utils.js';
 import { findManagedWorktreeForBranch, abbrevRefMatchesBranch } from './worktree-discovery.js';
 import { DEFAULT_WORKTREE_PROVISION_COMMAND } from './default-worktree-provision-command.js';
+import type { AgentRegistry } from './agent-registry.js';
 
 export interface SshFamiliarConfig {
   host: string;
@@ -17,11 +18,15 @@ export interface SshFamiliarConfig {
   sshKeyPath: string;
   /** SSH port. Default: 22. */
   port?: number;
+  /** Agent registry for pluggable agent command building. */
+  agentRegistry?: AgentRegistry;
 }
 
 interface SshEntry extends BaseEntry {
   process: ChildProcess | null;
-  claudeSessionId?: string;
+  agentSessionId?: string;
+  /** Name of the ExecutionAgent that produced this session. */
+  agentName?: string;
 }
 
 /**
@@ -39,6 +44,7 @@ export class SshFamiliar extends BaseFamiliar<SshEntry> {
   private readonly user: string;
   private readonly sshKeyPath: string;
   private readonly port: number;
+  private readonly agentRegistry?: AgentRegistry;
 
   constructor(config: SshFamiliarConfig) {
     super();
@@ -46,6 +52,7 @@ export class SshFamiliar extends BaseFamiliar<SshEntry> {
     this.user = config.user;
     this.sshKeyPath = config.sshKeyPath;
     this.port = config.port ?? 22;
+    this.agentRegistry = config.agentRegistry;
   }
 
   private static urlHash(repoUrl: string): string {
@@ -170,21 +177,32 @@ fi`;
     }
 
     let payload: string;
-    let claudeSessionId: string | undefined;
+    let agentSessionId: string | undefined;
+    let agentName: string | undefined;
 
     if (request.actionType === 'command') {
       const command = request.inputs.command;
       if (!command) throw new Error('WorkRequest with actionType "command" must have inputs.command');
       payload = command;
     } else if (request.actionType === 'claude') {
-      const session = this.prepareClaudeSession(request);
-      claudeSessionId = session.sessionId;
-      payload = `claude ${session.cliArgs.map(a => this.shellQuote(a)).join(' ')}`;
+      if (this.agentRegistry) {
+        const agent = this.agentRegistry.getOrThrow('claude');
+        const fullPrompt = this.buildFullPrompt(request);
+        const spec = agent.buildCommand(fullPrompt);
+        agentSessionId = spec.sessionId;
+        agentName = agent.name;
+        payload = `${spec.cmd} ${spec.args.map(a => this.shellQuote(a)).join(' ')}`;
+      } else {
+        const session = this.prepareClaudeSession(request);
+        agentSessionId = session.sessionId;
+        agentName = 'claude';
+        payload = `claude ${session.cliArgs.map(a => this.shellQuote(a)).join(' ')}`;
+      }
     } else {
       payload = 'echo "Unsupported action type"';
     }
 
-    return this.startRemoteWorktree(request, handle, repoUrl, payload, claudeSessionId);
+    return this.startRemoteWorktree(request, handle, repoUrl, payload, agentSessionId, agentName);
   }
 
   private async startRemoteWorktree(
@@ -192,7 +210,8 @@ fi`;
     handle: FamiliarHandle,
     repoUrl: string,
     payload: string,
-    claudeSessionId?: string,
+    agentSessionId?: string,
+    agentName?: string,
   ): Promise<FamiliarHandle> {
     const executionId = handle.executionId;
     const h = SshFamiliar.urlHash(repoUrl);
@@ -313,7 +332,7 @@ echo "[SshFamiliar] Running task payload..."
 echo ${payloadB64} | base64 -d | bash -se
 `;
 
-    return this.spawnSshRemoteStdin(executionId, request, handle, runScript, claudeSessionId, {
+    return this.spawnSshRemoteStdin(executionId, request, handle, runScript, agentSessionId, agentName, {
       worktreePath: handle.workspacePath!,
       branch: experimentBranch,
     });
@@ -391,7 +410,8 @@ git push -u origin "$BR"
     request: WorkRequest,
     handle: FamiliarHandle,
     bashScript: string,
-    claudeSessionId: string | undefined,
+    agentSessionId: string | undefined,
+    agentName: string | undefined,
     finalizeRemote: { worktreePath: string; branch: string } | undefined,
   ): FamiliarHandle {
     const child = spawn('ssh', [...this.buildSshArgs(), 'bash', '-s'], {
@@ -410,10 +430,14 @@ git push -u origin "$BR"
       completeListeners: new Set(),
       heartbeatListeners: new Set(),
       completed: false,
-      claudeSessionId,
+      agentSessionId,
+      agentName,
     };
 
     this.registerEntry(handle, entry);
+    if (agentName) {
+      handle.agentName = agentName;
+    }
 
     child.on('error', (err) => {
       const e = this.entries.get(executionId);
@@ -429,8 +453,8 @@ git push -u origin "$BR"
       };
       this.emitComplete(executionId, response);
     });
-    if (claudeSessionId) {
-      handle.claudeSessionId = claudeSessionId;
+    if (agentSessionId) {
+      handle.agentSessionId = agentSessionId;
     }
 
     child.stdout?.on('data', (chunk: Buffer) => {
@@ -498,7 +522,8 @@ git push -u origin "$BR"
           outputs: {
             exitCode: finalExitCode,
             commitHash,
-            claudeSessionId: entry.claudeSessionId,
+            agentSessionId: entry.agentSessionId,
+            agentName: entry.agentName,
             ...(mappedError ? { error: mappedError } : {}),
             ...(finalizeRemote && commitHash
               ? { summary: `branch=${finalizeRemote.branch} commit=${commitHash}` }
@@ -554,7 +579,7 @@ git push -u origin "$BR"
       const base = this.buildSshArgsInteractive();
       const userAtHost = base[base.length - 1]!;
       const opts = base.slice(0, -1);
-      const inner = this.buildRemoteTerminalInner(handle.workspacePath, handle.branch, entry.claudeSessionId);
+      const inner = this.buildRemoteTerminalInner(handle.workspacePath, handle.branch, entry.agentSessionId, entry.agentName);
       return {
         command: 'ssh',
         args: [...opts, '-t', userAtHost, inner],
@@ -572,17 +597,17 @@ git push -u origin "$BR"
       const base = this.buildSshArgsInteractive();
       const userAtHost = base[base.length - 1]!;
       const opts = base.slice(0, -1);
-      const inner = this.buildRemoteTerminalInner(meta.workspacePath, meta.branch, meta.claudeSessionId);
+      const inner = this.buildRemoteTerminalInner(meta.workspacePath, meta.branch, meta.agentSessionId, meta.agentName);
       return {
         command: 'ssh',
         args: [...opts, '-t', userAtHost, inner],
       };
     }
-    if (meta.claudeSessionId || meta.branch) {
+    if (meta.agentSessionId || meta.branch) {
       const base = this.buildSshArgsInteractive();
       const userAtHost = base[base.length - 1]!;
       const opts = base.slice(0, -1);
-      const inner = this.buildRemoteTerminalInner('~', meta.branch, meta.claudeSessionId);
+      const inner = this.buildRemoteTerminalInner('~', meta.branch, meta.agentSessionId, meta.agentName);
       return {
         command: 'ssh',
         args: [...opts, '-t', userAtHost, inner],
@@ -594,10 +619,16 @@ git push -u origin "$BR"
     };
   }
 
-  private buildRemoteTerminalInner(workspacePath: string, branch?: string, claudeSessionId?: string): string {
+  private buildRemoteTerminalInner(workspacePath: string, branch?: string, agentSessionId?: string, agentName?: string): string {
     const cdPart = SshFamiliar.sshInteractiveCdFragment(workspacePath);
-    if (claudeSessionId) {
-      const resumeCmd = `claude --resume ${SshFamiliar.shellPosixSingleQuote(claudeSessionId)} --dangerously-skip-permissions`;
+    if (agentSessionId) {
+      let resumeCmd: string;
+      if (this.agentRegistry) {
+        const resume = this.agentRegistry.getOrThrow(agentName ?? 'claude').buildResumeArgs(agentSessionId);
+        resumeCmd = [resume.cmd, ...resume.args.map(a => SshFamiliar.shellPosixSingleQuote(a))].join(' ');
+      } else {
+        resumeCmd = `claude --resume ${SshFamiliar.shellPosixSingleQuote(agentSessionId)} --dangerously-skip-permissions`;
+      }
       return branch
         ? `${cdPart} && git checkout ${SshFamiliar.shellPosixSingleQuote(branch)} 2>/dev/null; ${resumeCmd}`
         : `${cdPart} && ${resumeCmd}`;

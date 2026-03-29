@@ -360,7 +360,7 @@ export function App() {
   }, []);
 
   const openApprovalModal = useCallback((task: TaskState) => {
-    console.log(`[openApprovalModal] taskId=${task.id} claudeSessionId=${task.execution.claudeSessionId} pendingFixError=${!!task.execution.pendingFixError}`);
+    console.log(`[openApprovalModal] taskId=${task.id} agentSessionId=${task.execution.agentSessionId} pendingFixError=${!!task.execution.pendingFixError}`);
     setModal({ type: 'approval', task, action: 'approve' });
   }, []);
 

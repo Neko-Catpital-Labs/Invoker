@@ -93,7 +93,7 @@ export interface OrchestratorPersistence {
   saveAttempt(attempt: Attempt): void;
   loadAttempts(nodeId: string): Attempt[];
   loadAttempt(attemptId: string): Attempt | undefined;
-  updateAttempt(attemptId: string, changes: Partial<Pick<Attempt, 'status' | 'startedAt' | 'completedAt' | 'exitCode' | 'error' | 'lastHeartbeatAt' | 'branch' | 'commit' | 'summary' | 'workspacePath' | 'claudeSessionId' | 'containerId' | 'mergeConflict'>>): void;
+  updateAttempt(attemptId: string, changes: Partial<Pick<Attempt, 'status' | 'startedAt' | 'completedAt' | 'exitCode' | 'error' | 'lastHeartbeatAt' | 'branch' | 'commit' | 'summary' | 'workspacePath' | 'agentSessionId' | 'containerId' | 'mergeConflict'>>): void;
   getNextAttemptNumber(nodeId: string): number;
   /** Load a workflow by ID (needed for SSH validation in editTaskType). */
   loadWorkflow?(workflowId: string): { repoUrl?: string; baseBranch?: string } | undefined;
@@ -562,13 +562,13 @@ export class Orchestrator {
     const task = this.stateMachine.getTask(taskId);
     if (!task) throw new Error(`Task ${taskId} not found`);
     if (task.status !== 'running') throw new Error(`Task ${taskId} is not running (status: ${task.status})`);
-    console.log(`[setFixAwaitingApproval] taskId=${taskId} claudeSessionId=${task.execution.claudeSessionId}`);
+    console.log(`[setFixAwaitingApproval] taskId=${taskId} agentSessionId=${task.execution.agentSessionId}`);
 
     this.scheduler.completeJob(taskId);
 
     const changes: TaskStateChanges = {
       status: 'awaiting_approval',
-      execution: { pendingFixError: originalError, isFixingWithAI: undefined, claudeSessionId: task.execution.claudeSessionId },
+      execution: { pendingFixError: originalError, isFixingWithAI: undefined, agentSessionId: task.execution.agentSessionId },
     };
     console.log(`[setFixAwaitingApproval] delta.changes.execution=`, JSON.stringify(changes.execution));
     this.writeAndSync(taskId, changes);
@@ -1293,7 +1293,7 @@ export class Orchestrator {
       execution: {
         exitCode: parsed.exitCode,
         commit: parsed.commitHash,
-        claudeSessionId: parsed.claudeSessionId,
+        agentSessionId: parsed.agentSessionId,
         completedAt: new Date(),
       },
     };
@@ -1311,7 +1311,7 @@ export class Orchestrator {
           status: 'completed',
           exitCode: parsed.exitCode,
           commit: parsed.commitHash,
-          claudeSessionId: parsed.claudeSessionId,
+          agentSessionId: parsed.agentSessionId,
           completedAt: new Date(),
         });
         // Auto-select this attempt

@@ -64,7 +64,7 @@ export interface TaskExecution {
   readonly actionRequestId?: string;
   readonly branch?: string;
   readonly commit?: string;
-  readonly claudeSessionId?: string;
+  readonly agentSessionId?: string;
   readonly workspacePath?: string;
   readonly containerId?: string;
   readonly experiments?: readonly string[];
@@ -187,7 +187,7 @@ export interface Attempt {
   readonly commit?: string;
   readonly summary?: string;
   readonly workspacePath?: string;
-  readonly claudeSessionId?: string;
+  readonly agentSessionId?: string;
   readonly containerId?: string;
 
   // ── Lineage ──

@@ -125,7 +125,7 @@ export class TaskExecutor {
    * 1. Pivot tasks with variants → synthesize spawn_experiments response
    * 2. Build upstream context from completed dependencies
    * 3. Build WorkRequest with workspacePath
-   * 4. Start familiar → persist claudeSessionId + workspacePath immediately
+   * 4. Start familiar → persist agentSessionId + workspacePath immediately
    * 5. Wire output/completion callbacks
    * 6. On completion → feed response to orchestrator → auto-execute newly ready tasks
    */
@@ -258,7 +258,7 @@ export class TaskExecutor {
     } finally {
       clearInterval(preStartHeartbeatTimer);
     }
-    console.log(`[trace] TaskExecutor: task=${task.id} familiar.start() returned after ${Date.now() - startT0}ms familiar=${familiar.type} sessionId=${handle.claudeSessionId ?? 'none'} workspace=${handle.workspacePath ?? 'default'}`);
+    console.log(`[trace] TaskExecutor: task=${task.id} familiar.start() returned after ${Date.now() - startT0}ms familiar=${familiar.type} sessionId=${handle.agentSessionId ?? 'none'} workspace=${handle.workspacePath ?? 'default'}`);
 
     // Persist execution metadata immediately at task start — all fields explicit
     {
@@ -266,7 +266,7 @@ export class TaskExecutor {
         config: { familiarType: familiar.type },
         execution: {
           workspacePath: handle.workspacePath ?? this.cwd,
-          claudeSessionId: handle.claudeSessionId ?? undefined,
+          agentSessionId: handle.agentSessionId ?? undefined,
           containerId: handle.containerId ?? undefined,
           branch: handle.branch ?? undefined,
         },
@@ -873,7 +873,7 @@ export class TaskExecutor {
     }
   }
 
-  spawnClaudeFix(prompt: string, cwd: string): Promise<{ stdout: string; sessionId: string }> {
+  spawnAgentFix(prompt: string, cwd: string): Promise<{ stdout: string; sessionId: string }> {
     return spawnClaudeFixImpl(prompt, cwd);
   }
 
