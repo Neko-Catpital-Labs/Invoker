@@ -168,6 +168,7 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
       break;
     case 'delete-all':
       deps.persistence.deleteAllWorkflows();
+      deps.orchestrator.removeAllWorkflows();
       console.log('All workflows deleted.');
       break;
     case 'slack':

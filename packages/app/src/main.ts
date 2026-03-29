@@ -736,15 +736,7 @@ function setupGuiMode(): void {
     ipcMain.handle('invoker:delete-all-workflows', () => {
       console.log('[ipc] delete-all-workflows');
       persistence.deleteAllWorkflows();
-      orchestrator = new Orchestrator({
-    persistence, messageBus,
-    maxConcurrency: invokerConfig.maxConcurrency,
-    maxAttemptsPerNode: invokerConfig.maxAttemptsPerNode,
-    utilizationRules: resolveUtilizationRules(invokerConfig),
-    defaultUtilization: invokerConfig.defaultUtilization,
-    executorRoutingRules: invokerConfig.executorRoutingRules ?? [],
-  });
-      rebuildTaskExecutor();
+      orchestrator.removeAllWorkflows();
       taskHandles.clear();
       lastKnownTaskStates.clear();
       lastKnownWorkflowCount = 0;
