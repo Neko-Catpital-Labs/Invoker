@@ -46,16 +46,14 @@ function formatDate(date?: Date | string): string {
 
 /**
  * Display value when task.config.familiarType is unset: matches orchestrator
- * loadPlan default worktree; repoUrl alone implies worktree (TaskExecutor.selectFamiliar).
- * SSH tasks encode the remote target ID as "ssh:<targetId>" for the compound select.
- * Merge nodes hide the selector.
+ * loadPlan default worktree. SSH tasks encode the remote target ID as
+ * "ssh:<targetId>" for the compound select. Merge nodes hide the selector.
  */
 function effectiveExecutorSelectValue(task: TaskState): string {
   if (task.config.familiarType === 'ssh' && task.config.remoteTargetId) {
     return `ssh:${task.config.remoteTargetId}`;
   }
   if (task.config.familiarType) return task.config.familiarType;
-  if (task.config.repoUrl) return 'worktree';
   return 'worktree';
 }
 

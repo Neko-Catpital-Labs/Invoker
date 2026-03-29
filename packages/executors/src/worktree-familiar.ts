@@ -1,32 +1,24 @@
-import { spawn, execSync, type ChildProcess } from 'node:child_process';
-import { existsSync, mkdirSync, unlinkSync } from 'node:fs';
+import { spawn, type ChildProcess } from 'node:child_process';
+import { existsSync, unlinkSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { homedir } from 'node:os';
 import type { WorkRequest, WorkResponse } from '@invoker/protocol';
 import type { FamiliarHandle, PersistedTaskMeta, TerminalSpec } from './familiar.js';
-import { BaseFamiliar, type BaseEntry, MergeConflictError } from './base-familiar.js';
+import { BaseFamiliar, type BaseEntry } from './base-familiar.js';
 import { RepoPool } from './repo-pool.js';
 import { killProcessGroup, cleanElectronEnv, SIGKILL_TIMEOUT_MS } from './process-utils.js';
 import { DEFAULT_WORKTREE_PROVISION_COMMAND } from './default-worktree-provision-command.js';
 import { computeBranchHash, bashMergeUpstreams, parseMergeError } from './branch-utils.js';
 import { RESTART_TO_BRANCH_TRACE } from './exec-trace.js';
-import {
-  findManagedWorktreeForBranch,
-  abbrevRefMatchesBranch,
-  parseGitWorktreePorcelain,
-} from './worktree-discovery.js';
-import { normalize } from 'node:path';
 
 // Re-export for backward compatibility
 export { computeBranchHash } from './branch-utils.js';
 
 export interface WorktreeFamiliarConfig {
-  /** Path to the main git repository. */
-  repoDir: string;
-  /** Directory where worktrees are created. Defaults to {repoDir}/.invoker/worktrees. */
+  /** Directory where worktrees are created. */
   worktreeBaseDir?: string;
-  /** Enable RepoPool: cache clones in this directory. When set, repoUrl in WorkRequest triggers pool usage. */
-  cacheDir?: string;
+  /** Directory for RepoPool clone cache. Required. */
+  cacheDir: string;
   /** Maximum worktrees per cached repo. Default: 5. */
   maxWorktrees?: number;
   /** Command to invoke the Claude CLI. Defaults to 'claude'. */
@@ -52,29 +44,32 @@ interface WorktreeEntry extends BaseEntry {
 export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
   readonly type = 'worktree';
 
-  private readonly repoDir: string;
   private readonly worktreeBaseDir: string;
   private readonly claudeCommand: string;
-  private pool: RepoPool | null = null;
+  private pool: RepoPool;
 
   constructor(config: WorktreeFamiliarConfig) {
-    super();  
-    this.repoDir = config.repoDir;
+    super();
     this.claudeCommand = config.claudeCommand ?? 'claude';
     this.worktreeBaseDir =
       config.worktreeBaseDir ?? resolve(homedir(), '.invoker', 'worktrees');
-    if (config.cacheDir) {
-      this.pool = new RepoPool({
-        cacheDir: config.cacheDir,
-        maxWorktrees: config.maxWorktrees,
-        worktreeBaseDir: this.worktreeBaseDir,
-      });
-    }
+    this.pool = new RepoPool({
+      cacheDir: config.cacheDir,
+      maxWorktrees: config.maxWorktrees,
+      worktreeBaseDir: this.worktreeBaseDir,
+    });
   }
 
   async start(request: WorkRequest): Promise<FamiliarHandle> {
+    const repoUrl = request.inputs.repoUrl;
+    if (!repoUrl) {
+      throw new Error(
+        `WorktreeFamiliar.start(): missing repoUrl for task "${request.actionId}". ` +
+        `Plans must declare a repoUrl.`,
+      );
+    }
     console.log(
-      `${RESTART_TO_BRANCH_TRACE} WorktreeFamiliar.start() actionId=${request.actionId} hasPool=${Boolean(this.pool)} repoUrl=${request.inputs.repoUrl ?? '(none)'}`,
+      `${RESTART_TO_BRANCH_TRACE} WorktreeFamiliar.start() actionId=${request.actionId} repoUrl=${repoUrl}`,
     );
     await this.ensureGitAvailable();
     const handle = this.createHandle(request);
@@ -82,14 +77,11 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
     const t0 = Date.now();
     const log = (step: string) => console.log(`[WorktreeFamiliar] start task=${request.actionId} step=${step} elapsed=${Date.now() - t0}ms`);
 
-    // Fetch from remote before resolving baseRef (only for local-repo path; pool fetches in ensureClone)
-    if (!(this.pool && request.inputs.repoUrl)) {
-      await this.syncFromRemote(this.repoDir, executionId);
-    }
-
+    // Resolve base ref from pool clone (ensureClone does the fetch)
+    const clonePath = await this.pool.ensureClone(repoUrl);
     const baseRef = request.inputs.baseBranch ?? 'HEAD';
     log(`rev-parse ${baseRef} begin`);
-    const baseHead = await this.execGitSimple(['rev-parse', baseRef], this.repoDir);
+    const baseHead = await this.execGitSimple(['rev-parse', baseRef], clonePath);
     log(`rev-parse ${baseRef} done`);
     const upstreamCommits = (request.inputs.upstreamContext ?? [])
       .map(c => c.commitHash)
@@ -103,12 +95,11 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
       request.inputs.salt,
     );
     const branch = `experiment/${request.actionId}-${hash}`;
-    let worktreeDir = `${this.worktreeBaseDir}/${executionId}`;
-    const startPoint = request.inputs.baseBranch ?? 'HEAD';
     console.log(`[WorktreeFamiliar] branch=${branch} hash=${hash}`);
 
     // -- Reconciliation: no process, immediate needs_input --
     if (request.actionType === 'reconciliation') {
+      const worktreeDir = `${this.worktreeBaseDir}/${executionId}`;
       const entry: WorktreeEntry = {
         process: null,
         request,
@@ -125,271 +116,39 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
       return handle;
     }
 
-    // -- Pool-based worktree (when repoUrl is provided and pool is available) --
-    if (this.pool && request.inputs.repoUrl) {
-      console.log(
-        `${RESTART_TO_BRANCH_TRACE} WorktreeFamiliar.start() actionId=${request.actionId} → RepoPool path: preserve via RepoPool + merge upstreams here; BaseFamiliar.setupTaskBranch() is NOT called`,
-      );
-      const acquired = await this.pool.acquireWorktree(request.inputs.repoUrl, branch);
-
-      this.cleanStaleLocks(acquired.worktreePath);
-
-      // Merge upstream dependency branches (pool already did preserve-or-reset)
-      const poolUpstreams = request.inputs.upstreamBranches ?? [];
-      if (poolUpstreams.length > 0) {
-        try {
-          const mergeScript = bashMergeUpstreams({
-            worktreeDir: acquired.worktreePath,
-            upstreamBranches: poolUpstreams,
-            skipAncestors: true,
-          });
-          await this.runBash(mergeScript, acquired.worktreePath);
-        } catch (err: any) {
-          const exitCode = err.exitCode ?? 1;
-          const stderr = err.stderr ?? err.message ?? '';
-          if (exitCode === 31) {
-            const parsed = parseMergeError(exitCode, stderr);
-            const entry: WorktreeEntry = {
-              process: null, request, worktreeDir: acquired.worktreePath, branch,
-              outputListeners: new Set(), outputBuffer: [],
-              completeListeners: new Set(), heartbeatListeners: new Set(),
-              completed: true,
-              poolRelease: acquired.release,
-            };
-            this.registerEntry(handle, entry);
-            handle.workspacePath = acquired.worktreePath;
-            handle.branch = acquired.branch;
-            const response: WorkResponse = {
-              requestId: request.requestId,
-              actionId: request.actionId,
-              status: 'failed',
-              outputs: {
-                exitCode: 1,
-                error: JSON.stringify({
-                  type: 'merge_conflict',
-                  failedBranch: parsed.failedBranch,
-                  conflictFiles: parsed.conflictFiles,
-                }),
-              },
-            };
-            this.emitComplete(handle.executionId, response);
-            return handle;
-          }
-          throw err;
-        }
-      }
-
-      // No-command tasks: complete immediately after branch setup
-      if (!request.inputs.command && !request.inputs.prompt) {
-        const entry: WorktreeEntry = {
-          process: null, request, worktreeDir: acquired.worktreePath, branch,
-          outputListeners: new Set(), outputBuffer: [],
-          completeListeners: new Set(), heartbeatListeners: new Set(),
-          completed: false,
-          poolRelease: acquired.release,
-        };
-        this.registerEntry(handle, entry);
-        handle.workspacePath = acquired.worktreePath;
-        handle.branch = acquired.branch;
-        await this.handleProcessExit(executionId, request, acquired.worktreePath, 0, { branch });
-        return handle;
-      }
-
-      try {
-        await this.provisionWorktree(acquired.worktreePath);
-      } catch (err) {
-        await acquired.release();
-        throw err;
-      }
-
-      const { cmd, args, claudeSessionId } = this.buildCommandAndArgs(request, this.claudeCommand);
-
-      const child = spawn(cmd, args, {
-        stdio: [request.actionType === 'claude' ? 'ignore' : 'pipe', 'pipe', 'pipe'],
-        cwd: acquired.worktreePath,
-        detached: true,
-        env: cleanElectronEnv(),
-      });
-
-      // Register error handler IMMEDIATELY to catch synchronous spawn failures
-      child.on('error', (err) => {
-        console.log(`[WorktreeFamiliar] child process spawn error: ${err.message}`);
-        const response: WorkResponse = {
-          requestId: request.requestId,
-          actionId: request.actionId,
-          status: 'failed',
-          outputs: {
-            exitCode: 1,
-            error: `Failed to spawn command: ${err.message}`,
-          },
-        };
-        this.emitComplete(executionId, response);
-      });
-
-      const entry: WorktreeEntry = {
-        process: child,
-        request,
-        worktreeDir: acquired.worktreePath,
-        branch: acquired.branch,
-        outputListeners: new Set(),
-        outputBuffer: [],
-        completeListeners: new Set(),
-        heartbeatListeners: new Set(),
-        completed: false,
-        poolRelease: acquired.release,
-        claudeSessionId,
-      };
-
-      this.registerEntry(handle, entry);
-      handle.workspacePath = acquired.worktreePath;
-      handle.branch = acquired.branch;
-      if (claudeSessionId) {
-        handle.claudeSessionId = claudeSessionId;
-      }
-
-      child.stdout?.on('data', (chunk: Buffer) => {
-        this.emitOutput(executionId, chunk.toString());
-      });
-      child.stderr?.on('data', (chunk: Buffer) => {
-        this.emitOutput(executionId, chunk.toString());
-      });
-
-      child.on('close', async (code, signal) => {
-        const exitCode = code ?? (signal ? 1 : 0);
-        const effectiveCwd = existsSync(acquired.worktreePath) ? acquired.worktreePath : this.repoDir;
-        await this.handleProcessExit(executionId, request, effectiveCwd, exitCode, {
-          signal,
-          branch,
-          claudeSessionId: entry.claudeSessionId,
-        });
-        this.entries.delete(executionId);
-      });
-
-      this.startHeartbeat(executionId, child);
-      return handle;
-    }
-
-    // Clean up stale worktree references (e.g. from a previous crashed run)
-    log('worktree prune begin');
-    await this.execGitSimple(['worktree', 'prune'], this.repoDir);
-    log('worktree prune done');
-
-    let reusedManagedWorktree = false;
-    let porcelain = '';
-    try {
-      log('worktree list begin');
-      porcelain = await this.execGitSimple(['worktree', 'list', '--porcelain'], this.repoDir);
-      log('worktree list done');
-      const reusePath = findManagedWorktreeForBranch(porcelain, branch, [this.worktreeBaseDir]);
-      if (reusePath && existsSync(reusePath)) {
-        const isActive = Array.from(this.entries.values()).some(
-          (e) => e.worktreeDir === reusePath && !e.completed,
-        );
-        if (isActive) {
-          throw new Error(
-            `Branch "${branch}" is already checked out in an active worktree (${reusePath}). ` +
-              'Wait for that task to finish before starting another that uses the same branch.',
-          );
-        } else {
-          const head = (await this.execGitSimple(['rev-parse', '--abbrev-ref', 'HEAD'], reusePath)).trim();
-          if (abbrevRefMatchesBranch(head, branch)) {
-            worktreeDir = reusePath;
-            reusedManagedWorktree = true;
-            console.log(`[WorktreeFamiliar] Reusing managed worktree at ${reusePath} (branch=${branch})`);
-          }
-        }
-      }
-    } catch (err) {
-      if (
-        err instanceof Error &&
-        err.message.includes('already checked out in an active worktree')
-      ) {
-        throw err;
-      }
-      console.warn(`[WorktreeFamiliar] Worktree reuse probe failed (will provision fresh if needed):`, err);
-    }
-
-    // Drop any other checkout of this branch (e.g. unmanaged path or stale managed dir we did not reuse)
-    try {
-      for (const e of parseGitWorktreePorcelain(porcelain)) {
-        if (e.branch !== branch) continue;
-        const p = e.path;
-        const isActiveHere = Array.from(this.entries.values()).some(
-          (ent) => ent.worktreeDir === p && !ent.completed,
-        );
-        if (isActiveHere) continue;
-        const np = normalize(p);
-        const nw = normalize(worktreeDir);
-        if (np === nw) continue;
-        console.log(`[WorktreeFamiliar] Removing other worktree holding ${branch}: ${p}`);
-        await this.execGitSimple(['worktree', 'remove', '--force', p], this.repoDir);
-      }
-    } catch (err) {
-      console.warn(`[WorktreeFamiliar] Worktree cleanup for branch=${branch} failed:`, err);
-    }
-
-    mkdirSync(this.worktreeBaseDir, { recursive: true });
+    // -- Always use RepoPool --
     console.log(
-      `${RESTART_TO_BRANCH_TRACE} WorktreeFamiliar.start() actionId=${request.actionId} → local main-repo path: ` +
-        (reusedManagedWorktree
-          ? `reused worktree at ${worktreeDir}; merge upstreams only`
-          : `calling BaseFamiliar.setupTaskBranch() next (branch=${branch} base=${startPoint})`),
+      `${RESTART_TO_BRANCH_TRACE} WorktreeFamiliar.start() actionId=${request.actionId} → RepoPool path`,
     );
+    const acquired = await this.pool.acquireWorktree(repoUrl, branch);
 
-    if (reusedManagedWorktree) {
-      log('mergeRequestUpstreamBranches (reuse path) begin');
+    this.cleanStaleLocks(acquired.worktreePath);
+
+    // Merge upstream dependency branches (pool already did preserve-or-reset)
+    const poolUpstreams = request.inputs.upstreamBranches ?? [];
+    if (poolUpstreams.length > 0) {
       try {
-        await this.mergeRequestUpstreamBranches(request, worktreeDir, startPoint);
-        handle.branch = branch;
-      } catch (err) {
-        if (err instanceof MergeConflictError) {
-          const entry: WorktreeEntry = {
-            process: null, request, worktreeDir, branch,
-            outputListeners: new Set(), outputBuffer: [],
-            completeListeners: new Set(), heartbeatListeners: new Set(),
-            completed: true,
-          };
-          this.registerEntry(handle, entry);
-          handle.workspacePath = worktreeDir;
-          handle.branch = branch;
-          const response: WorkResponse = {
-            requestId: request.requestId,
-            actionId: request.actionId,
-            status: 'failed',
-            outputs: {
-              exitCode: 1,
-              error: JSON.stringify({
-                type: 'merge_conflict',
-                failedBranch: err.failedBranch,
-                conflictFiles: err.conflictFiles,
-              }),
-            },
-          };
-          this.emitComplete(handle.executionId, response);
-          return handle;
-        }
-        throw err;
-      }
-      log('mergeRequestUpstreamBranches (reuse path) done');
-    } else {
-      log('setupTaskBranch begin');
-      try {
-        await this.setupTaskBranch(this.repoDir, request, handle, {
-          branchName: branch,
-          base: startPoint,
-          worktreeDir,
+        const mergeScript = bashMergeUpstreams({
+          worktreeDir: acquired.worktreePath,
+          upstreamBranches: poolUpstreams,
+          skipAncestors: true,
         });
-      } catch (err) {
-        if (err instanceof MergeConflictError) {
+        await this.runBash(mergeScript, acquired.worktreePath);
+      } catch (err: any) {
+        const exitCode = err.exitCode ?? 1;
+        const stderr = err.stderr ?? err.message ?? '';
+        if (exitCode === 31) {
+          const parsed = parseMergeError(exitCode, stderr);
           const entry: WorktreeEntry = {
-            process: null, request, worktreeDir, branch,
+            process: null, request, worktreeDir: acquired.worktreePath, branch,
             outputListeners: new Set(), outputBuffer: [],
             completeListeners: new Set(), heartbeatListeners: new Set(),
             completed: true,
+            poolRelease: acquired.release,
           };
           this.registerEntry(handle, entry);
-          handle.workspacePath = worktreeDir;
-          handle.branch = branch;
+          handle.workspacePath = acquired.worktreePath;
+          handle.branch = acquired.branch;
           const response: WorkResponse = {
             requestId: request.requestId,
             actionId: request.actionId,
@@ -398,8 +157,8 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
               exitCode: 1,
               error: JSON.stringify({
                 type: 'merge_conflict',
-                failedBranch: err.failedBranch,
-                conflictFiles: err.conflictFiles,
+                failedBranch: parsed.failedBranch,
+                conflictFiles: parsed.conflictFiles,
               }),
             },
           };
@@ -408,56 +167,39 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
         }
         throw err;
       }
-      log('setupTaskBranch done');
     }
 
-    this.cleanStaleLocks(worktreeDir);
-
-    // -- No-command tasks: complete immediately after branch setup --
+    // No-command tasks: complete immediately after branch setup
     if (!request.inputs.command && !request.inputs.prompt) {
-      log('no command/prompt — completing immediately');
       const entry: WorktreeEntry = {
-        process: null, request, worktreeDir, branch,
+        process: null, request, worktreeDir: acquired.worktreePath, branch,
         outputListeners: new Set(), outputBuffer: [],
         completeListeners: new Set(), heartbeatListeners: new Set(),
         completed: false,
+        poolRelease: acquired.release,
       };
       this.registerEntry(handle, entry);
-      handle.workspacePath = worktreeDir;
-      handle.branch = branch;
-      await this.handleProcessExit(executionId, request, worktreeDir, 0, { branch });
+      handle.workspacePath = acquired.worktreePath;
+      handle.branch = acquired.branch;
+      await this.handleProcessExit(executionId, request, acquired.worktreePath, 0, { branch });
       return handle;
     }
 
-    // -- Install dependencies so tasks can build/test in the worktree --
-    log('provisionWorktree begin');
-    this.emitOutput(handle.executionId, '[worktree] Provisioning dependencies…\n');
     try {
-      await this.provisionWorktree(worktreeDir, handle.executionId);
+      await this.provisionWorktree(acquired.worktreePath);
     } catch (err) {
-      const errMsg = err instanceof Error ? err.message : String(err);
-      this.emitOutput(handle.executionId, `[worktree] Provisioning failed: ${errMsg}\n`);
-      log('provisionWorktree failed — removing worktree');
-      try {
-        await this.execGitSimple(['worktree', 'remove', '--force', worktreeDir], this.repoDir);
-      } catch { /* best-effort cleanup */ }
+      await acquired.release();
       throw err;
     }
-    this.emitOutput(handle.executionId, '[worktree] Provisioning complete\n');
-    log('provisionWorktree done');
 
-    // -- Determine what to run --
     const { cmd, args, claudeSessionId } = this.buildCommandAndArgs(request, this.claudeCommand);
 
-    // -- Spawn the process in the worktree directory --
-    log(`spawn begin cmd=${cmd}`);
     const child = spawn(cmd, args, {
       stdio: [request.actionType === 'claude' ? 'ignore' : 'pipe', 'pipe', 'pipe'],
-      cwd: worktreeDir,
+      cwd: acquired.worktreePath,
       detached: true,
       env: cleanElectronEnv(),
     });
-    log(`spawn done pid=${child.pid}`);
 
     // Register error handler IMMEDIATELY to catch synchronous spawn failures
     child.on('error', (err) => {
@@ -477,19 +219,20 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
     const entry: WorktreeEntry = {
       process: child,
       request,
-      worktreeDir,
-      branch,
+      worktreeDir: acquired.worktreePath,
+      branch: acquired.branch,
       outputListeners: new Set(),
       outputBuffer: [],
       completeListeners: new Set(),
       heartbeatListeners: new Set(),
       completed: false,
+      poolRelease: acquired.release,
       claudeSessionId,
     };
 
     this.registerEntry(handle, entry);
-    handle.workspacePath = worktreeDir;
-    handle.branch = branch;
+    handle.workspacePath = acquired.worktreePath;
+    handle.branch = acquired.branch;
     if (claudeSessionId) {
       handle.claudeSessionId = claudeSessionId;
     }
@@ -497,15 +240,13 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
     child.stdout?.on('data', (chunk: Buffer) => {
       this.emitOutput(executionId, chunk.toString());
     });
-
     child.stderr?.on('data', (chunk: Buffer) => {
       this.emitOutput(executionId, chunk.toString());
     });
 
     child.on('close', async (code, signal) => {
       const exitCode = code ?? (signal ? 1 : 0);
-      const effectiveCwd = existsSync(worktreeDir) ? worktreeDir : this.repoDir;
-      await this.handleProcessExit(executionId, request, effectiveCwd, exitCode, {
+      await this.handleProcessExit(executionId, request, acquired.worktreePath, exitCode, {
         signal,
         branch,
         claudeSessionId: entry.claudeSessionId,
@@ -605,28 +346,19 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
   }
 
   /**
-   * Look up a worktree path by branch name using `git worktree list --porcelain`.
+   * Look up a worktree path by branch name.
+   * Searches the worktreeBaseDir for a directory matching the sanitized branch name.
    * Returns the worktree directory if found, undefined otherwise.
    */
   private findWorktreeByBranch(branch: string): string | undefined {
     try {
-      const porcelain = execSync('git worktree list --porcelain', {
-        cwd: this.repoDir,
-        encoding: 'utf-8',
-        timeout: 5000,
-      });
-      const branchRef = `branch refs/heads/${branch}`;
-      const lines = porcelain.split('\n');
-      for (let i = 0; i < lines.length; i++) {
-        if (lines[i] === branchRef) {
-          for (let j = i - 1; j >= 0; j--) {
-            if (lines[j].startsWith('worktree ')) {
-              const wtPath = lines[j].slice('worktree '.length);
-              if (existsSync(wtPath)) return wtPath;
-              break;
-            }
-          }
-          break;
+      // The pool creates worktrees at {worktreeBaseDir}/{urlHash}/{sanitizedBranch}
+      const sanitized = branch.replace(/\//g, '-');
+      const { readdirSync } = require('node:fs') as typeof import('node:fs');
+      for (const sub of readdirSync(this.worktreeBaseDir, { withFileTypes: true })) {
+        if (sub.isDirectory()) {
+          const candidate = join(this.worktreeBaseDir, sub.name, sanitized);
+          if (existsSync(candidate)) return candidate;
         }
       }
     } catch (err) {

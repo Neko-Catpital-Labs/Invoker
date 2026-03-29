@@ -349,12 +349,12 @@ export class SlackSurface implements Surface {
     threadTs: string,
     say: (msg: { text: string; thread_ts: string }) => Promise<any>,
   ): Promise<void> {
+    const tEntry = Date.now();
     this.log('slack', 'info', `[TRACE] handleConversationMessage (thread_ts=${threadTs}, text="${text.slice(0, 80)}")`);
 
-    // Start typing indicator if enabled
     const typingStarted = await this.startTypingIndicator(this.channelId, threadTs);
+    const tSetup = Date.now();
 
-    // Start heartbeat interval
     const heartbeatMs = (this.planningHeartbeatIntervalSeconds ?? 120) * 1_000;
     let heartbeatTimer: NodeJS.Timeout | undefined;
     const heartbeatTimestamps: string[] = [];
@@ -380,6 +380,7 @@ export class SlackSurface implements Surface {
 
     try {
       const reply = await conversation.sendMessage(text);
+      const tCursor = Date.now();
       if (heartbeatTimer) clearInterval(heartbeatTimer);
       for (const hbTs of heartbeatTimestamps) {
         try {
@@ -388,16 +389,15 @@ export class SlackSurface implements Surface {
           this.log('slack', 'warn', `[HEARTBEAT] Failed to delete heartbeat message ${hbTs}: ${err}`);
         }
       }
+      const tHeartbeatCleanup = Date.now();
       this.log('slack', 'info', `[TRACE] conversation.sendMessage returned (threadTs=${threadTs}, replyLen=${reply.length}, planSubmitted=${conversation.planSubmitted})`);
 
-      // Stop typing indicator before sending response
       if (typingStarted) {
         await this.stopTypingIndicator(this.channelId, threadTs);
       }
 
       const chunks = splitForSlack(sanitizeSlashCommands(reply));
 
-      // Send first chunk — replace the ack message if we have one
       const ackTs = this.ackMessages.get(threadTs);
       if (ackTs) {
         const updated = await this.updateMessage(ackTs, { text: chunks[0], blocks: [] });
@@ -413,11 +413,11 @@ export class SlackSurface implements Surface {
         await this.sayWithRateLimitRetry(say, { text: chunks[0], thread_ts: threadTs });
       }
 
-      // Send remaining chunks as follow-up messages in the thread
       for (let i = 1; i < chunks.length; i++) {
         await this.sleep(this.messagePacingMs);
         await this.sayWithRateLimitRetry(say, { text: chunks[i], thread_ts: threadTs });
       }
+      const tPosting = Date.now();
 
       if (conversation.planSubmitted && conversation.submittedPlan) {
         this.log('slack', 'info', `[SESSION_SUBMIT] Plan submitted via confirmation (thread_ts=${threadTs}, plan="${conversation.submittedPlan.name}")`);
@@ -428,6 +428,9 @@ export class SlackSurface implements Surface {
         await this.onCommand?.({ type: 'start_plan', plan: conversation.submittedPlan });
         this.cleanupSession(threadTs, 'plan_submitted');
       }
+      const tEnd = Date.now();
+
+      this.log('slack', 'info', `[PERF] thread_ts=${threadTs} setup=${tSetup - tEntry}ms cursor=${tCursor - tSetup}ms heartbeatCleanup=${tHeartbeatCleanup - tCursor}ms posting=${tPosting - tHeartbeatCleanup}ms chunks=${chunks.length} total=${tEnd - tEntry}ms`);
     } catch (err) {
       if (heartbeatTimer) clearInterval(heartbeatTimer);
       for (const hbTs of heartbeatTimestamps) {
@@ -437,12 +440,12 @@ export class SlackSurface implements Surface {
           this.log('slack', 'warn', `[HEARTBEAT] Failed to delete heartbeat message ${hbTs}: ${deleteErr}`);
         }
       }
-      // Stop typing indicator on error
       if (typingStarted) {
         await this.stopTypingIndicator(this.channelId, threadTs);
       }
 
-      this.log('slack', 'error', `[SESSION_ERROR] Plan conversation error (thread_ts=${threadTs}): ${err}`);
+      const tErr = Date.now();
+      this.log('slack', 'error', `[SESSION_ERROR] Plan conversation error (thread_ts=${threadTs}, elapsed=${tErr - tEntry}ms): ${err}`);
       if (this.isCursorCliMissingError(err)) {
         this.log(
           'slack',

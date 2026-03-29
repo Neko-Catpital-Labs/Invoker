@@ -22,15 +22,38 @@ import { BaseFamiliar } from '../base-familiar.js';
 const mockedSpawn = vi.mocked(spawn);
 
 function makeRequest(overrides: Partial<WorkRequest> = {}): WorkRequest {
+  const { inputs: inputOverrides, ...restOverrides } = overrides;
   return {
     requestId: 'req-1',
     actionId: 'action-1',
     actionType: 'command',
-    inputs: { command: 'echo hello' },
+    inputs: { command: 'echo hello', repoUrl: 'git@github.com:test/repo.git', ...inputOverrides },
     callbackUrl: 'http://localhost:3000/callback',
     timestamps: { createdAt: new Date().toISOString() },
-    ...overrides,
+    ...restOverrides,
   };
+}
+
+/**
+ * Mock the RepoPool on a WorktreeFamiliar instance.
+ */
+function mockPool(fam: WorktreeFamiliar) {
+  const pool = {
+    ensureClone: vi.fn().mockResolvedValue('/fake/cache/clone'),
+    acquireWorktree: vi.fn().mockImplementation((_repoUrl: string, branch: string) => {
+      const sanitized = branch.replace(/\//g, '-');
+      return Promise.resolve({
+        clonePath: '/fake/cache/clone',
+        worktreePath: `/fake/worktrees/${sanitized}`,
+        branch,
+        release: vi.fn().mockResolvedValue(undefined),
+      });
+    }),
+    destroyAll: vi.fn().mockResolvedValue(undefined),
+    getClonePath: vi.fn().mockReturnValue('/fake/cache/clone'),
+  };
+  (fam as any).pool = pool;
+  return pool;
 }
 
 /**
@@ -119,11 +142,12 @@ describe('BUG REPRO: worktree lifecycle leaks', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     familiar = new WorktreeFamiliar({
-      repoDir: '/fake/repo',
+      cacheDir: '/fake/cache',
       worktreeBaseDir: '/fake/worktrees',
     });
+    mockPool(familiar);
 
-    // Mock runBash so setupTaskBranch works without real bash
+    // Mock runBash so upstream merge scripts work without real bash
     vi.spyOn(BaseFamiliar.prototype as any, 'runBash').mockImplementation(
       async (script: string) => {
         if (script.includes('PRESERVED=')) {
@@ -186,7 +210,7 @@ describe('BUG REPRO: worktree lifecycle leaks', () => {
     expect((familiar as any).entries.size).toBe(0);
   });
 
-  it('should fetch from remote before branching when baseBranch is set', async () => {
+  it('should call pool.ensureClone (which fetches) before branching when baseBranch is set', async () => {
     const { taskProcess } = setupSpawnMock();
 
     const request = makeRequest({
@@ -194,15 +218,9 @@ describe('BUG REPRO: worktree lifecycle leaks', () => {
     });
     await familiar.start(request);
 
-    // Filter for git fetch calls
-    const fetchCalls = mockedSpawn.mock.calls.filter(
-      (call) =>
-        call[0] === 'git' &&
-        (call[1] as string[])?.[0] === 'fetch',
-    );
-
-    // This WILL FAIL (0 fetch calls) because start() never calls syncFromRemote
-    expect(fetchCalls.length).toBeGreaterThanOrEqual(1);
+    // pool.ensureClone handles fetching internally (git fetch --all on existing clones)
+    const pool = (familiar as any).pool;
+    expect(pool.ensureClone).toHaveBeenCalledWith('git@github.com:test/repo.git');
 
     // Cleanup
     taskProcess.emit('close', 0, null);

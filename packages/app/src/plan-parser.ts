@@ -11,34 +11,27 @@ import type { PlanDefinition } from '@invoker/core';
 import { UTILIZATION_MAX } from '@invoker/core';
 import { loadConfig } from './config.js';
 
-/** Empty / whitespace `baseBranch` in YAML (`baseBranch:`) must fall through to config + git like a missing key. */
-function resolveDefaultBaseBranch(plan: PlanDefinition, dir: string): string {
+/** Empty / whitespace `baseBranch` in YAML (`baseBranch:`) must fall through to config + remote detection like a missing key. */
+function resolveDefaultBaseBranch(plan: PlanDefinition): string {
   const b = plan.baseBranch;
   if (typeof b === 'string' && b.trim() !== '') return b.trim();
-  return loadConfig(dir).defaultBranch ?? detectDefaultBranch(dir);
+  return loadConfig().defaultBranch ?? (plan.repoUrl ? detectDefaultBranchRemote(plan.repoUrl) : 'main');
 }
 
 /**
  * Top-level plan defaults aligned with {@link parsePlan} (merge target, feature branch, onFinish).
  * Use when a {@link PlanDefinition} is built outside the YAML parser — e.g. GUI `yaml.load` + IPC.
  */
-export function applyPlanDefinitionDefaults(plan: PlanDefinition, repoDir?: string): PlanDefinition {
-  const dir = repoDir ?? process.cwd();
+export function applyPlanDefinitionDefaults(plan: PlanDefinition): PlanDefinition {
   const slug = plan.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
   const fb = plan.featureBranch;
   const featureBranch = typeof fb === 'string' && fb.trim() !== '' ? fb.trim() : `plan/${slug}`;
 
-  // Inherit plan-level repoUrl onto tasks that don't specify their own
-  const tasks = plan.repoUrl
-    ? plan.tasks.map(t => t.repoUrl ? t : { ...t, repoUrl: plan.repoUrl })
-    : plan.tasks;
-
   return {
     ...plan,
     onFinish: plan.onFinish ?? 'pull_request',
-    baseBranch: resolveDefaultBaseBranch(plan, dir),
+    baseBranch: resolveDefaultBaseBranch(plan),
     featureBranch,
-    tasks,
   };
 }
 
@@ -58,7 +51,6 @@ export interface RawPlanTask {
   pivot?: boolean;
   experimentVariants?: RawExperimentVariant[];
   requiresManualApproval?: boolean;
-  repoUrl?: string;
   featureBranch?: string;
   familiarType?: string;
   dockerImage?: string;
@@ -103,6 +95,24 @@ export function detectDefaultBranch(cwd?: string): string {
   }
 }
 
+/**
+ * Detect the default branch from a remote URL using `git ls-remote --symref`.
+ * Falls back to 'main' if detection fails.
+ */
+export function detectDefaultBranchRemote(repoUrl: string): string {
+  try {
+    const output = execSync(`git ls-remote --symref ${repoUrl} HEAD`, {
+      encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 10000,
+    }).trim();
+    // Output format: "ref: refs/heads/main\tHEAD"
+    const match = output.match(/ref:\s+refs\/heads\/(\S+)\s+HEAD/);
+    if (match) return match[1];
+  } catch {
+    // Network error or timeout
+  }
+  return 'main';
+}
+
 export class PlanParseError extends Error {
   constructor(message: string) {
     super(message);
@@ -114,7 +124,7 @@ export class PlanParseError extends Error {
  * Parse a YAML string into a validated PlanDefinition.
  * Throws PlanParseError if validation fails.
  */
-export function parsePlan(yamlContent: string, repoDir?: string): PlanDefinition {
+export function parsePlan(yamlContent: string): PlanDefinition {
   const raw = parseYaml(yamlContent) as RawPlan;
 
   if (!raw || typeof raw !== 'object') {
@@ -153,8 +163,13 @@ export function parsePlan(yamlContent: string, repoDir?: string): PlanDefinition
     raw.featureBranch = `plan/${slug}`;
   }
 
-  // Top-level defaults that tasks inherit when not overridden
-  const defaultRepoUrl = raw.repoUrl;
+  // Require plan-level repoUrl
+  if (!raw.repoUrl || typeof raw.repoUrl !== 'string') {
+    throw new PlanParseError(
+      'Plan must have a "repoUrl" field (e.g. repoUrl: git@github.com:user/repo.git).',
+    );
+  }
+
   const defaultFamiliarType = raw.familiarType;
 
   const tasks = raw.tasks.map((task, index) => {
@@ -190,7 +205,6 @@ export function parsePlan(yamlContent: string, repoDir?: string): PlanDefinition
       pivot: task.pivot,
       experimentVariants,
       requiresManualApproval: task.requiresManualApproval,
-      repoUrl: task.repoUrl ?? defaultRepoUrl,
       featureBranch: task.featureBranch,
       familiarType: task.familiarType ?? defaultFamiliarType,
       dockerImage: task.dockerImage,
@@ -200,16 +214,6 @@ export function parsePlan(yamlContent: string, repoDir?: string): PlanDefinition
       utilization: task.utilization === 'max' ? UTILIZATION_MAX : task.utilization,
     };
   });
-
-  // SSH tasks always require repoUrl to clone the repo on the remote host
-  for (const task of tasks) {
-    if (task.familiarType === 'ssh' && !task.repoUrl) {
-      throw new PlanParseError(
-        `Task "${task.id}" uses familiarType "ssh" but has no repoUrl. ` +
-        `Add a top-level "repoUrl" to your plan YAML (e.g. repoUrl: git@github.com:user/repo.git).`,
-      );
-    }
-  }
 
   return applyPlanDefinitionDefaults({
     name: raw.name,
@@ -221,14 +225,14 @@ export function parsePlan(yamlContent: string, repoDir?: string): PlanDefinition
     mergeMode,
     repoUrl: raw.repoUrl,
     tasks,
-  }, repoDir);
+  });
 }
 
 /**
  * Parse a YAML plan file from disk.
  */
-export async function parsePlanFile(filePath: string, repoDir?: string): Promise<PlanDefinition> {
+export async function parsePlanFile(filePath: string): Promise<PlanDefinition> {
   const { readFile } = await import('node:fs/promises');
   const content = await readFile(filePath, 'utf-8');
-  return parsePlan(content, repoDir);
+  return parsePlan(content);
 }

@@ -611,3 +611,157 @@ describe('isDangerousCommand', () => {
   it('allows cat', () => expect(isDangerousCommand('cat package.json')).toBe(false));
   it('allows find', () => expect(isDangerousCommand('find . -name "*.ts" | wc -l')).toBe(false));
 });
+
+describe('PlanConversation instrumentation', () => {
+  let logSpy: ReturnType<typeof vi.fn>;
+
+  function createInstrumentedConversation() {
+    logSpy = vi.fn();
+    return new PlanConversation({ log: logSpy });
+  }
+
+  function logMessages(): string[] {
+    return logSpy.mock.calls.map((c: any[]) => c[2] as string);
+  }
+
+  beforeEach(() => {
+    mockSpawn.mockReset();
+  });
+
+  it('emits [PERF] sendMessage summary on Cursor path', async () => {
+    const conv = createInstrumentedConversation();
+    mockCursorResponse('Some response');
+    await conv.sendMessage('Hello');
+
+    const perfLines = logMessages().filter(m => m.startsWith('[PERF] sendMessage:'));
+    expect(perfLines).toHaveLength(1);
+    expect(perfLines[0]).toMatch(/init=\d+ms/);
+    expect(perfLines[0]).toMatch(/buildPrompt=\d+ms/);
+    expect(perfLines[0]).toMatch(/cursor=\d+ms/);
+    expect(perfLines[0]).toMatch(/saveState=\d+ms/);
+    expect(perfLines[0]).toMatch(/total=\d+ms/);
+  });
+
+  it('emits [PERF] sendMessage summary on confirmation path', async () => {
+    const conv = createInstrumentedConversation();
+    mockCursorResponse(VALID_YAML_PLAN);
+    await conv.sendMessage('Generate plan');
+    await conv.sendMessage('yes');
+
+    const perfLines = logMessages().filter(m => m.startsWith('[PERF] sendMessage (confirmation):'));
+    expect(perfLines).toHaveLength(1);
+    expect(perfLines[0]).toMatch(/init=\d+ms/);
+    expect(perfLines[0]).toMatch(/total=\d+ms/);
+  });
+
+  it('emits [PERF] sendMessage summary on failed confirmation path', async () => {
+    const conv = createInstrumentedConversation();
+    await conv.sendMessage('yes');
+
+    const perfLines = logMessages().filter(m => m.startsWith('[PERF] sendMessage (confirmation-failed):'));
+    expect(perfLines).toHaveLength(1);
+    expect(perfLines[0]).toMatch(/init=\d+ms/);
+    expect(perfLines[0]).toMatch(/total=\d+ms/);
+  });
+
+  it('emits [CONV] prompt and response previews', async () => {
+    const conv = createInstrumentedConversation();
+    mockCursorResponse('Here is the plan...');
+    await conv.sendMessage('Build an API');
+
+    const convLines = logMessages().filter(m => m.startsWith('[CONV]'));
+    expect(convLines).toHaveLength(2);
+
+    const promptLine = convLines[0];
+    expect(promptLine).toMatch(/Turn 1:/);
+    expect(promptLine).toMatch(/promptLen=\d+/);
+    expect(promptLine).toMatch(/historyMsgs=0/);
+    expect(promptLine).toContain('promptPreview=');
+
+    const responseLine = convLines[1];
+    expect(responseLine).toMatch(/Turn 1:/);
+    expect(responseLine).toMatch(/responseLen=\d+/);
+    expect(responseLine).toContain('responsePreview=');
+    expect(responseLine).toContain('Here is the plan...');
+  });
+
+  it('emits [CONV] with correct turn number on multi-turn', async () => {
+    const conv = createInstrumentedConversation();
+    mockCursorResponse('Tell me more.');
+    await conv.sendMessage('First');
+    mockCursorResponse('Got it.');
+    await conv.sendMessage('Second');
+
+    const convLines = logMessages().filter(m => m.startsWith('[CONV]'));
+    expect(convLines).toHaveLength(4);
+    expect(convLines[0]).toMatch(/Turn 1:/);
+    expect(convLines[1]).toMatch(/Turn 1:/);
+    expect(convLines[2]).toMatch(/Turn 2:/);
+    expect(convLines[3]).toMatch(/Turn 2:/);
+  });
+
+  it('emits [PERF] cursor_stdout chunk logs during spawnCursor', async () => {
+    const conv = createInstrumentedConversation();
+
+    const proc = new EventEmitter() as any;
+    const stdoutEmitter = new EventEmitter();
+    proc.stdout = stdoutEmitter;
+    proc.stderr = new EventEmitter();
+    proc.kill = vi.fn();
+    mockSpawn.mockReturnValueOnce(proc);
+
+    const promise = conv.sendMessage('Hello');
+    setTimeout(() => {
+      stdoutEmitter.emit('data', Buffer.from('chunk1'));
+      stdoutEmitter.emit('data', Buffer.from('chunk2'));
+      proc.emit('close', 0);
+    }, 0);
+    await promise;
+
+    const chunkLines = logMessages().filter(m => m.startsWith('[PERF] cursor_stdout chunk'));
+    expect(chunkLines).toHaveLength(2);
+    expect(chunkLines[0]).toContain('#1');
+    expect(chunkLines[0]).toContain('+6 bytes');
+    expect(chunkLines[0]).toContain('total=6');
+    expect(chunkLines[1]).toContain('#2');
+    expect(chunkLines[1]).toContain('+6 bytes');
+    expect(chunkLines[1]).toContain('total=12');
+  });
+
+  it('emits [PERF] cursor_exit log on subprocess close', async () => {
+    const conv = createInstrumentedConversation();
+    mockCursorResponse('Done');
+    await conv.sendMessage('Hello');
+
+    const exitLines = logMessages().filter(m => m.startsWith('[PERF] cursor_exit:'));
+    expect(exitLines).toHaveLength(1);
+    expect(exitLines[0]).toMatch(/code=0/);
+    expect(exitLines[0]).toMatch(/stdoutBytes=\d+/);
+    expect(exitLines[0]).toMatch(/chunks=\d+/);
+    expect(exitLines[0]).toMatch(/elapsed=\d+ms/);
+  });
+
+  it('does not emit [CONV] on confirmation path', async () => {
+    const conv = createInstrumentedConversation();
+    mockCursorResponse(VALID_YAML_PLAN);
+    await conv.sendMessage('Generate plan');
+    logSpy.mockClear();
+
+    await conv.sendMessage('yes');
+
+    const convLines = logMessages().filter(m => m.startsWith('[CONV]'));
+    expect(convLines).toHaveLength(0);
+  });
+
+  it('reports growing historyMsgs across turns', async () => {
+    const conv = createInstrumentedConversation();
+    mockCursorResponse('Reply 1');
+    await conv.sendMessage('Message 1');
+    mockCursorResponse('Reply 2');
+    await conv.sendMessage('Message 2');
+
+    const promptLines = logMessages().filter(m => m.startsWith('[CONV] Turn') && m.includes('promptLen='));
+    expect(promptLines[0]).toContain('historyMsgs=0');
+    expect(promptLines[1]).toContain('historyMsgs=2');
+  });
+});

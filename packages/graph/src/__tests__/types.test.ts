@@ -99,7 +99,6 @@ describe('createTaskState', () => {
       experimentVariants: [{ id: 'v1', description: 'variant 1' }],
       isReconciliation: true,
       requiresManualApproval: true,
-      repoUrl: 'https://github.com/test/repo',
       featureBranch: 'feat/clone',
       familiarType: 'worktree',
       autoFix: true,

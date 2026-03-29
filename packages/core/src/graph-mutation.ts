@@ -139,7 +139,6 @@ export function applyGraphMutationImpl(host: GraphMutationHost, mutation: GraphM
       experimentPrompt: nodeDef.experimentPrompt,
       prompt: nodeDef.prompt,
       command: nodeDef.command,
-      repoUrl: nodeDef.repoUrl,
       familiarType: nodeDef.familiarType,
       isReconciliation: nodeDef.isReconciliation,
       requiresManualApproval: nodeDef.requiresManualApproval,

@@ -113,7 +113,7 @@ let orchestrator: Orchestrator;
 
 // Repo root: 3 levels up from packages/app/dist/
 const repoRoot = path.resolve(__dirname, '..', '..', '..');
-const invokerConfig: InvokerConfig = loadConfig(repoRoot);
+const invokerConfig: InvokerConfig = loadConfig();
 
 function resolveUtilizationRules(config: InvokerConfig): UtilizationRule[] {
   if (!config.utilizationRules) return [];
@@ -138,7 +138,6 @@ async function initServices(): Promise<void> {
   familiarRegistry.register(
     'worktree',
     new WorktreeFamiliar({
-      repoDir: repoRoot,
       worktreeBaseDir: path.resolve(invokerHomeInit, 'worktrees'),
       cacheDir: path.resolve(invokerHomeInit, 'repos'),
       maxWorktrees: 5,
@@ -366,7 +365,7 @@ function setupGuiMode(): void {
       cwd: repoRoot,
       defaultBranch: invokerConfig.defaultBranch,
       dockerConfig: invokerConfig.docker,
-      remoteTargetsProvider: () => loadConfig(repoRoot).remoteTargets ?? {},
+      remoteTargetsProvider: () => loadConfig().remoteTargets ?? {},
       mergeGateProvider: new GitHubMergeGateProvider(),
       callbacks: {
         onOutput: (taskId, data) => {
@@ -512,10 +511,10 @@ function setupGuiMode(): void {
       const { planPath } = req as { planPath: string };
       console.log(`[ipc-delegate] headless.run: "${planPath}"`);
       const { parsePlanFile } = await import('./plan-parser.js');
-      const plan = await parsePlanFile(planPath, repoRoot);
+      const plan = await parsePlanFile(planPath);
       taskHandles.clear();
       backupPlan(plan);
-      const normalized = applyPlanDefinitionDefaults(plan, repoRoot);
+      const normalized = applyPlanDefinitionDefaults(plan);
       const wfIdsBefore = new Set(orchestrator.getWorkflowIds());
       orchestrator.loadPlan(normalized, { allowGraphMutation: invokerConfig.allowGraphMutation });
       const workflowId = orchestrator.getWorkflowIds().find(id => !wfIdsBefore.has(id))!;
@@ -621,7 +620,7 @@ function setupGuiMode(): void {
       console.log(`[ipc] load-plan: "${plan.name}" (${plan.tasks.length} tasks)`);
       taskHandles.clear();
       backupPlan(plan);
-      const normalized = applyPlanDefinitionDefaults(plan, repoRoot);
+      const normalized = applyPlanDefinitionDefaults(plan);
       orchestrator.loadPlan(normalized, { allowGraphMutation: invokerConfig.allowGraphMutation });
     });
 
@@ -904,7 +903,7 @@ function setupGuiMode(): void {
         );
         if (sshTask) {
           const targetId = sshTask.config.remoteTargetId!;
-          const targets = loadConfig(repoRoot).remoteTargets ?? {};
+          const targets = loadConfig().remoteTargets ?? {};
           const target = targets[targetId];
           if (target) {
             const raw = await fetchRemoteClaudeSession(sessionId, target);
@@ -1149,7 +1148,7 @@ function setupGuiMode(): void {
     });
 
     ipcMain.handle('invoker:get-remote-targets', () => {
-      return Object.keys(loadConfig(repoRoot).remoteTargets ?? {});
+      return Object.keys(loadConfig().remoteTargets ?? {});
     });
 
     ipcMain.handle('invoker:replace-task', async (_event, taskId: string, replacementTasks: unknown[]) => {
@@ -1291,7 +1290,6 @@ function setupGuiMode(): void {
         } else if (meta.familiarType === 'worktree') {
           const invokerHome = path.resolve(homedir(), '.invoker');
           const worktree = new WorktreeFamiliar({
-            repoDir: repoRoot,
             worktreeBaseDir: path.resolve(invokerHome, 'worktrees'),
             cacheDir: path.resolve(invokerHome, 'repos'),
             maxWorktrees: 5,
@@ -1300,7 +1298,7 @@ function setupGuiMode(): void {
           familiar = worktree;
         } else if (meta.familiarType === 'ssh') {
           const targetId = persistence.getRemoteTargetId?.(taskId);
-          const target = targetId ? loadConfig(repoRoot).remoteTargets?.[targetId] : undefined;
+          const target = targetId ? loadConfig().remoteTargets?.[targetId] : undefined;
           if (target) {
             familiar = new SshFamiliar(target);
           } else {

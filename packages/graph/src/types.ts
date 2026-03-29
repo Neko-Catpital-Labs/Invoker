@@ -35,7 +35,6 @@ export interface TaskConfig {
   readonly experimentVariants?: readonly ExperimentVariant[];
   readonly isReconciliation?: boolean;
   readonly requiresManualApproval?: boolean;
-  readonly repoUrl?: string;
   readonly featureBranch?: string;
   readonly familiarType?: string;
   readonly dockerImage?: string;
