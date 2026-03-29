@@ -26,8 +26,10 @@ export interface SlackSurfaceConfig {
   channelId: string;
   /** Port for Socket Mode. Default: 0 (auto). */
   port?: number;
-  /** Command to invoke the Cursor CLI for plan conversations. Default: 'cursor'. */
+  /** Command to invoke the agent CLI for plan conversations. Default: 'agent'. */
   cursorCommand?: string;
+  /** Model to use for the agent CLI (e.g. 'auto', 'sonnet-4'). Omit to use the CLI default. */
+  model?: string;
   /** Root directory for codebase exploration in plan conversations. */
   workingDir?: string;
   /** Repository for persisting plan conversation state across restarts. */
@@ -85,6 +87,7 @@ export class SlackSurface implements Surface {
   private immediateAckMessage: string;
   private immediateAckEmoji: string;
   private useTypingIndicator: boolean;
+  private model?: string;
   private planningTimeoutSeconds?: number;
   private planningHeartbeatIntervalSeconds?: number;
   /** Minimum spacing between thread message posts to avoid Slack burst limits. */
@@ -108,7 +111,8 @@ export class SlackSurface implements Surface {
       port: config.port ?? 0,
     });
     this.channelId = config.channelId;
-    this.cursorCommand = config.cursorCommand ?? 'cursor';
+    this.cursorCommand = config.cursorCommand ?? 'agent';
+    this.model = config.model;
     this.workingDir = config.workingDir;
     this.defaultBranch = config.defaultBranch;
     this.conversationRepo = config.conversationRepo;
@@ -128,6 +132,7 @@ export class SlackSurface implements Surface {
     if (config.conversationRepo) {
       this.sessionManager = new SessionManager({
         cursorCommand: this.cursorCommand,
+        model: this.model,
         workingDir: config.workingDir ?? process.cwd(),
         conversationRepo: config.conversationRepo,
         defaultBranch: config.defaultBranch,
@@ -680,6 +685,7 @@ export class SlackSurface implements Surface {
       this.sessionMetrics.created++;
       conversation = new PlanConversation({
         cursorCommand: this.cursorCommand,
+        model: this.model,
         workingDir: this.workingDir,
         threadTs,
         conversationRepo: this.conversationRepo,
@@ -743,6 +749,7 @@ export class SlackSurface implements Surface {
         for (const entry of active) {
           const conversation = new PlanConversation({
             cursorCommand: this.cursorCommand,
+            model: this.model,
             workingDir: this.workingDir,
             threadTs: entry.threadTs,
             conversationRepo: this.conversationRepo,

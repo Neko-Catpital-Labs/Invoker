@@ -24,7 +24,8 @@ const log = (src: string, lvl: string, msg: string) => {
 };
 
 const conversation = new PlanConversation({
-  cursorCommand: process.env.CURSOR_COMMAND ?? 'cursor',
+  cursorCommand: process.env.CURSOR_COMMAND ?? 'agent',
+  model: process.env.CURSOR_MODEL,
   workingDir: repoRoot,
   log,
 });

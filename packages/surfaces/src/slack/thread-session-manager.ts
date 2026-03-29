@@ -149,6 +149,8 @@ export class SessionHandle {
 
 export interface SessionManagerConfig {
   cursorCommand?: string;
+  /** Model to use for the agent CLI (e.g. 'auto', 'sonnet-4'). */
+  model?: string;
   workingDir: string;
   conversationRepo: ConversationRepository;
   sessionTtlMs?: number;
@@ -181,6 +183,7 @@ const defaultLog: LogFn = (component, level, message) => {
 export class SessionManager {
   private sessions = new Map<string, SessionHandle>();
   private cursorCommand: string;
+  private model?: string;
   private workingDir: string;
   private conversationRepo: ConversationRepository;
   private defaultBranch?: string;
@@ -194,7 +197,8 @@ export class SessionManager {
   private readonly timeoutMs?: number;
 
   constructor(config: SessionManagerConfig) {
-    this.cursorCommand = config.cursorCommand ?? 'cursor';
+    this.cursorCommand = config.cursorCommand ?? 'agent';
+    this.model = config.model;
     this.workingDir = config.workingDir;
     this.conversationRepo = config.conversationRepo;
     this.defaultBranch = config.defaultBranch;
@@ -280,6 +284,7 @@ export class SessionManager {
       this.log('session-manager', 'info', `[TRACE] Recovery path: creating PlanConversation + init() (threadTs=${id.threadTs})`);
       const conversation = new PlanConversation({
         cursorCommand: this.cursorCommand,
+        model: this.model,
         workingDir: this.workingDir,
         threadTs: id.threadTs,
         conversationRepo: this.conversationRepo,
@@ -305,6 +310,7 @@ export class SessionManager {
       this.log('session-manager', 'info', `[TRACE] Creation path: new PlanConversation (threadTs=${id.threadTs}, hasConversationRepo=true, skipping init)`);
       const conversation = new PlanConversation({
         cursorCommand: this.cursorCommand,
+        model: this.model,
         workingDir: this.workingDir,
         threadTs: id.threadTs,
         conversationRepo: this.conversationRepo,

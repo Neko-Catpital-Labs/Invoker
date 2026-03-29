@@ -24,8 +24,10 @@ export interface ConversationMessage {
 }
 
 export interface PlanConversationConfig {
-  /** Command to invoke the Cursor CLI. Default: 'cursor'. */
+  /** Command to invoke the agent CLI. Default: 'agent'. */
   cursorCommand?: string;
+  /** Model to use (e.g. 'auto', 'sonnet-4'). Omit to use the CLI default. */
+  model?: string;
   /** Root directory for codebase exploration. */
   workingDir?: string;
   /** Subprocess timeout in milliseconds. Default: 300000 (5 minutes). */
@@ -148,6 +150,7 @@ const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 
 export class PlanConversation {
   private cursorCommand: string;
+  private model?: string;
   private messages: ConversationMessage[] = [];
   private _submittedPlan: PlanDefinition | null = null;
   private _planSubmitted = false;
@@ -160,7 +163,8 @@ export class PlanConversation {
   private _initialized = false;
 
   constructor(config: PlanConversationConfig) {
-    this.cursorCommand = config.cursorCommand ?? 'cursor';
+    this.cursorCommand = config.cursorCommand ?? 'agent';
+    this.model = config.model;
     this.workingDir = config.workingDir;
     this.timeoutMs = config.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.threadTs = config.threadTs;
@@ -317,7 +321,10 @@ export class PlanConversation {
   spawnCursor(prompt: string): Promise<string> {
     const spawnStart = Date.now();
     return new Promise((resolve, reject) => {
-      const child = spawn(this.cursorCommand, ['agent', '--print', '--trust', prompt], {
+      const args = ['--print'];
+      if (this.model) args.push('--model', this.model);
+      args.push(prompt);
+      const child = spawn(this.cursorCommand, args, {
         cwd: this.workingDir ?? process.cwd(),
         stdio: ['ignore', 'pipe', 'pipe'],
         env: { ...process.env },
@@ -326,6 +333,9 @@ export class PlanConversation {
       let stdout = '';
       let stderr = '';
       let stdoutChunks = 0;
+      let stderrChunks = 0;
+
+      this.log('plan-conversation', 'info', `[PERF] cursor_spawn: pid=${child.pid ?? 'none'}, cmd="${this.cursorCommand} ${args.slice(0, -1).join(' ')} <prompt>", promptLen=${prompt.length}, cwd=${this.workingDir ?? process.cwd()}`);
 
       child.stdout?.on('data', (chunk: Buffer) => {
         const chunkStr = chunk.toString();
@@ -335,17 +345,21 @@ export class PlanConversation {
       });
 
       child.stderr?.on('data', (chunk: Buffer) => {
-        stderr += chunk.toString();
+        const chunkStr = chunk.toString();
+        stderr += chunkStr;
+        stderrChunks++;
+        this.log('plan-conversation', 'info', `[PERF] cursor_stderr chunk #${stderrChunks}: +${chunkStr.length} bytes (total=${stderr.length}, elapsed=${Date.now() - spawnStart}ms), preview="${chunkStr.slice(0, 200).replace(/\n/g, '\\n')}"`);
       });
 
       const timer = setTimeout(() => {
+        this.log('plan-conversation', 'error', `[PERF] cursor_timeout: pid=${child.pid ?? 'none'}, stdoutBytes=${stdout.length}, stderrBytes=${stderr.length}, stdoutChunks=${stdoutChunks}, stderrChunks=${stderrChunks}, elapsed=${Date.now() - spawnStart}ms, stderrTail="${stderr.slice(-500).replace(/\n/g, '\\n')}"`);
         try { child.kill('SIGTERM'); } catch { /* already dead */ }
         reject(new Error(`Cursor CLI timed out after ${this.timeoutMs}ms`));
       }, this.timeoutMs);
 
       child.on('close', (code) => {
         clearTimeout(timer);
-        this.log('plan-conversation', 'info', `[PERF] cursor_exit: code=${code}, stdoutBytes=${stdout.length}, stderrBytes=${stderr.length}, chunks=${stdoutChunks}, elapsed=${Date.now() - spawnStart}ms`);
+        this.log('plan-conversation', 'info', `[PERF] cursor_exit: code=${code}, stdoutBytes=${stdout.length}, stderrBytes=${stderr.length}, stdoutChunks=${stdoutChunks}, stderrChunks=${stderrChunks}, elapsed=${Date.now() - spawnStart}ms`);
         if (code === 0) {
           resolve(stdout.trim() || '(no output)');
         } else {
