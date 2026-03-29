@@ -18,6 +18,8 @@ export interface AcquiredWorktree {
   worktreePath: string;
   branch: string;
   release: () => Promise<void>;
+  /** Free the pool slot without removing the worktree from disk. */
+  softRelease: () => void;
 }
 
 export class RepoPool {
@@ -176,7 +178,9 @@ export class RepoPool {
       active.delete(effectivePath);
     };
 
-    return { clonePath, worktreePath: effectivePath, branch, release };
+    const softRelease = () => { active.delete(effectivePath); };
+
+    return { clonePath, worktreePath: effectivePath, branch, release, softRelease };
   }
 
   /** Get the deterministic clone directory path for a given repo URL. */

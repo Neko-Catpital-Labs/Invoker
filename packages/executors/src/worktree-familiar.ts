@@ -31,8 +31,10 @@ interface WorktreeEntry extends BaseEntry {
   process: ChildProcess | null;
   worktreeDir: string;
   branch: string;
-  /** Release function for pool-managed worktrees. */
+  /** Release function for pool-managed worktrees (removes worktree from disk). */
   poolRelease?: () => Promise<void>;
+  /** Soft-release: frees the pool slot without removing the worktree from disk. */
+  poolSoftRelease?: () => void;
   /** Agent session ID for resuming sessions. */
   agentSessionId?: string;
   /** Name of the ExecutionAgent that produced this session. */
@@ -151,6 +153,7 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
             completeListeners: new Set(), heartbeatListeners: new Set(),
             completed: true,
             poolRelease: acquired.release,
+            poolSoftRelease: acquired.softRelease,
           };
           this.registerEntry(handle, entry);
           handle.workspacePath = acquired.worktreePath;
@@ -169,6 +172,7 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
             },
           };
           this.emitComplete(handle.executionId, response);
+          entry.poolSoftRelease?.();
           return handle;
         }
         throw err;
@@ -183,11 +187,13 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
         completeListeners: new Set(), heartbeatListeners: new Set(),
         completed: false,
         poolRelease: acquired.release,
+        poolSoftRelease: acquired.softRelease,
       };
       this.registerEntry(handle, entry);
       handle.workspacePath = acquired.worktreePath;
       handle.branch = acquired.branch;
       await this.handleProcessExit(executionId, request, acquired.worktreePath, 0, { branch });
+      entry.poolSoftRelease?.();
       return handle;
     }
 
@@ -226,6 +232,7 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
         },
       };
       this.emitComplete(executionId, response);
+      acquired.softRelease();
     });
 
     const entry: WorktreeEntry = {
@@ -239,6 +246,7 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
       heartbeatListeners: new Set(),
       completed: false,
       poolRelease: acquired.release,
+      poolSoftRelease: acquired.softRelease,
       agentSessionId,
       agentName,
     };
@@ -268,6 +276,7 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
         agentSessionId: entry.agentSessionId,
         agentName: entry.agentName,
       });
+      entry.poolSoftRelease?.();
       this.entries.delete(executionId);
     });
 
@@ -304,6 +313,8 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
 
       killProcessGroup(child, 'SIGTERM');
     });
+
+    entry.poolSoftRelease?.();
   }
 
   sendInput(handle: FamiliarHandle, input: string): void {
@@ -413,6 +424,15 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
     }
 
     await Promise.all(closePromises);
+
+    // Full release: remove worktrees from disk during shutdown
+    const releasePromises: Promise<void>[] = [];
+    for (const [_executionId, entry] of allEntries) {
+      if (entry.poolRelease) {
+        releasePromises.push(entry.poolRelease().catch(() => {}));
+      }
+    }
+    await Promise.allSettled(releasePromises);
 
     this.entries.clear();
   }

@@ -121,6 +121,39 @@ describe('RepoPool', () => {
     await pool2.destroyAll();
   });
 
+  it('softRelease: frees slot without removing worktree from disk', async () => {
+    const limitedPool = new RepoPool({ cacheDir: tmpDir, maxWorktrees: 1 });
+    const wt1 = await limitedPool.acquireWorktree(localRepoUrl, 'branch-soft');
+    const worktreePath = wt1.worktreePath;
+
+    // Soft-release frees the slot but keeps the directory
+    wt1.softRelease();
+    expect(existsSync(worktreePath)).toBe(true);
+
+    // Can acquire again — slot was freed
+    const wt2 = await limitedPool.acquireWorktree(localRepoUrl, 'branch-soft');
+    expect(wt2.worktreePath).toBe(worktreePath); // Reused existing worktree
+    await limitedPool.destroyAll();
+  });
+
+  it('softRelease then full release: both work in sequence', async () => {
+    const limitedPool = new RepoPool({ cacheDir: tmpDir, maxWorktrees: 1 });
+    const wt1 = await limitedPool.acquireWorktree(localRepoUrl, 'branch-both');
+    const worktreePath = wt1.worktreePath;
+
+    // Soft-release frees slot
+    wt1.softRelease();
+
+    // Full release removes from disk (and is idempotent on the slot)
+    await wt1.release();
+    expect(existsSync(worktreePath)).toBe(false);
+
+    // Can acquire again after full release
+    const wt2 = await limitedPool.acquireWorktree(localRepoUrl, 'branch-both');
+    expect(wt2.worktreePath).toBeDefined();
+    await limitedPool.destroyAll();
+  });
+
   it('resets branch on re-acquire when no extra commits exist', async () => {
     // First acquire (no extra commits)
     const wt1 = await pool.acquireWorktree(localRepoUrl, 'experiment/clean-test');
