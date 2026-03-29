@@ -65,24 +65,6 @@ CAPTURE_DIR="${OUTPUT_DIR}/${LABEL}"
 echo "[visual-proof] Capturing to ${CAPTURE_DIR}" >&2
 mkdir -p "${CAPTURE_DIR}"
 
-# Cleanup: wipe stale experiment worktrees and branches.
-# DB cleanup is handled by tmpdir isolation in the E2E fixture.
-# When running inside a worktree, skip cleanup entirely to avoid race conditions
-# where the script's cwd gets deleted while pnpm is still initializing.
-echo "[visual-proof] Cleaning stale experiment state..." >&2
-_CUR="$(pwd -P 2>/dev/null || true)"
-if [[ "${_CUR}" == "${HOME}/.invoker/worktrees/"* ]]; then
-  echo "[visual-proof] Running inside worktree, skipping worktree cleanup" >&2
-else
-  # Only clean worktrees when running from main repo
-  for _wt in "${HOME}/.invoker/worktrees"/*; do
-    [ -e "${_wt}" ] || continue
-    rm -rf "${_wt}" 2>/dev/null || true
-  done
-fi
-git worktree prune 2>/dev/null || true
-{ git for-each-ref --format='%(refname:short)' refs/heads/experiment/ 2>/dev/null | xargs -r -n 50 git branch -D 2>/dev/null; } || true
-
 if [[ "${SKIP_BUILD}" == "false" ]]; then
   echo "[visual-proof] Building UI and app..." >&2
   pnpm --filter @invoker/ui build && pnpm --filter @invoker/app build

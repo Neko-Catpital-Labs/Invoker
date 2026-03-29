@@ -1143,6 +1143,16 @@ export class Orchestrator {
     }
   }
 
+  /**
+   * Remove all workflows from in-memory state.
+   * Called after all workflows have been deleted from the DB.
+   */
+  removeAllWorkflows(): void {
+    this.activeWorkflowIds.clear();
+    this.stateMachine.clear();
+    this.scheduler.killAll();
+  }
+
   // ── Queries ───────────────────────────────────────────────
 
   getTask(taskId: string): TaskState | undefined {

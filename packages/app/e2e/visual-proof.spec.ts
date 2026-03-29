@@ -133,4 +133,25 @@ test.describe('Visual proof capture', () => {
     await expect(statusBar.locator('text=System Log')).not.toBeVisible();
     await captureScreenshot(page, 'status-bar-no-system-log');
   });
+
+  test('fixing-with-ai vs fix-approval colors', async ({ page }) => {
+    await loadPlan(page, TEST_PLAN);
+    await injectTaskStates(page, [
+      {
+        taskId: 'task-alpha',
+        changes: {
+          status: 'running',
+          execution: { isFixingWithAI: true, startedAt: new Date() },
+        },
+      },
+      {
+        taskId: 'task-beta',
+        changes: {
+          status: 'awaiting_approval',
+          execution: { pendingFixError: 'Test error for color comparison' },
+        },
+      },
+    ]);
+    await captureScreenshot(page, 'fixing-vs-fix-approval-colors');
+  });
 });
