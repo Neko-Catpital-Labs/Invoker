@@ -172,8 +172,7 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
       await headlessDeleteWorkflow(args[1], deps);
       break;
     case 'delete-all':
-      deps.persistence.deleteAllWorkflows();
-      deps.orchestrator.removeAllWorkflows();
+      deps.orchestrator.deleteAllWorkflows();
       console.log('All workflows deleted.');
       break;
     case 'slack':
@@ -506,10 +505,9 @@ function headlessTaskStatus(taskId: string, deps: Pick<HeadlessDeps, 'orchestrat
   console.log(task.status);
 }
 
-async function headlessDeleteWorkflow(workflowId: string, deps: Pick<HeadlessDeps, 'orchestrator' | 'persistence'>): Promise<void> {
+async function headlessDeleteWorkflow(workflowId: string, deps: Pick<HeadlessDeps, 'orchestrator'>): Promise<void> {
   if (!workflowId) throw new Error('Missing workflowId. Usage: --headless delete-workflow <workflowId>');
-  deps.persistence.deleteWorkflow(workflowId);
-  deps.orchestrator.removeWorkflow(workflowId);
+  deps.orchestrator.deleteWorkflow(workflowId);
   console.log(`Deleted workflow: ${workflowId}`);
 }
 

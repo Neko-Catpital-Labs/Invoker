@@ -97,6 +97,10 @@ export interface OrchestratorPersistence {
   getNextAttemptNumber(nodeId: string): number;
   /** Load a workflow by ID (needed for SSH validation in editTaskType). */
   loadWorkflow?(workflowId: string): { repoUrl?: string; baseBranch?: string } | undefined;
+  /** Delete a single workflow and its tasks from the DB. */
+  deleteWorkflow?(workflowId: string): void;
+  /** Delete all workflows and tasks from the DB. */
+  deleteAllWorkflows?(): void;
 }
 
 export interface OrchestratorMessageBus {
@@ -1133,6 +1137,7 @@ export class Orchestrator {
   /**
    * Remove a workflow from in-memory state and reload remaining workflows.
    * Called after the workflow has been deleted from the DB.
+   * @deprecated Use deleteWorkflow() instead — it coordinates DB, scheduler, memory, and UI in one call.
    */
   removeWorkflow(workflowId: string): void {
     this.activeWorkflowIds.delete(workflowId);
@@ -1148,11 +1153,73 @@ export class Orchestrator {
   /**
    * Remove all workflows from in-memory state.
    * Called after all workflows have been deleted from the DB.
+   * @deprecated Use deleteAllWorkflows() instead — it coordinates DB, scheduler, memory, and UI in one call.
    */
   removeAllWorkflows(): void {
     this.activeWorkflowIds.clear();
     this.stateMachine.clear();
     this.scheduler.killAll();
+  }
+
+  /**
+   * Delete a single workflow: DB first, then scheduler, memory, and publish removal deltas.
+   * Follows the same DB→memory→publish pattern as writeAndSync().
+   */
+  deleteWorkflow(workflowId: string): void {
+    // 1. Collect affected tasks before DB delete (needed for deltas and scheduler cleanup)
+    const affectedTasks = this.stateMachine.getAllTasks().filter(
+      (t) => t.config.workflowId === workflowId,
+    );
+
+    // 2. DB first — single source of truth
+    this.persistence.deleteWorkflow?.(workflowId);
+
+    // 3. Clean scheduler: free slots for all tasks in this workflow
+    for (const task of affectedTasks) {
+      this.scheduler.completeJob(task.id);
+      this.scheduler.removeJob(task.id);
+    }
+
+    // 4. Clear memory and reload remaining workflows
+    this.activeWorkflowIds.delete(workflowId);
+    this.stateMachine.clear();
+    for (const wfId of this.activeWorkflowIds) {
+      const tasks = this.persistence.loadTasks(wfId);
+      for (const task of tasks) {
+        this.stateMachine.restoreTask(task);
+      }
+    }
+
+    // 5. Publish removal deltas — drives UI cache cleanup via messageBus subscriber
+    for (const task of affectedTasks) {
+      const delta: TaskDelta = { type: 'removed', taskId: task.id };
+      this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
+    }
+  }
+
+  /**
+   * Delete all workflows: DB first, then scheduler, memory, and publish removal deltas.
+   * Follows the same DB→memory→publish pattern as writeAndSync().
+   */
+  deleteAllWorkflows(): void {
+    // 1. Collect all tasks before clearing (needed for deltas)
+    const allTasks = this.stateMachine.getAllTasks();
+
+    // 2. DB first
+    this.persistence.deleteAllWorkflows?.();
+
+    // 3. Clear scheduler
+    this.scheduler.killAll();
+
+    // 4. Clear memory
+    this.activeWorkflowIds.clear();
+    this.stateMachine.clear();
+
+    // 5. Publish removal deltas
+    for (const task of allTasks) {
+      const delta: TaskDelta = { type: 'removed', taskId: task.id };
+      this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
+    }
   }
 
   // ── Queries ───────────────────────────────────────────────

@@ -740,8 +740,7 @@ function setupGuiMode(): void {
 
     ipcMain.handle('invoker:delete-all-workflows', () => {
       console.log('[ipc] delete-all-workflows');
-      persistence.deleteAllWorkflows();
-      orchestrator.removeAllWorkflows();
+      orchestrator.deleteAllWorkflows();
       taskHandles.clear();
       lastKnownTaskStates.clear();
       lastKnownWorkflowCount = 0;
@@ -753,7 +752,7 @@ function setupGuiMode(): void {
     ipcMain.handle('invoker:delete-workflow', async (_event, workflowId: string) => {
       console.log(`[ipc] delete-workflow: "${workflowId}"`);
       try {
-        // Kill all running tasks belonging to the workflow
+        // Kill all running tasks belonging to the workflow (process management is outside orchestrator scope)
         const allTasks = orchestrator.getAllTasks();
         const workflowTasks = allTasks.filter(
           (t) => t.config.workflowId === workflowId && t.status === 'running',
@@ -762,23 +761,10 @@ function setupGuiMode(): void {
           await killRunningTask(task.id);
         }
 
-        // Delete from DB
-        persistence.deleteWorkflow(workflowId);
-
-        // Update in-memory state
-        orchestrator.removeWorkflow(workflowId);
-
-        // Clean up task handles and last known states
-        for (const task of allTasks.filter((t) => t.config.workflowId === workflowId)) {
-          lastKnownTaskStates.delete(task.id);
-          // Send removal deltas
-          if (mainWindow && !mainWindow.isDestroyed()) {
-            mainWindow.webContents.send('invoker:task-delta', {
-              type: 'removed',
-              taskId: task.id,
-            });
-          }
-        }
+        // Single call: DB delete + memory clear + scheduler cleanup + removal deltas
+        // The 'removed' deltas flow through the messageBus subscriber which handles
+        // lastKnownTaskStates.delete() and IPC forwarding to the renderer.
+        orchestrator.deleteWorkflow(workflowId);
 
         // Update workflow count and send workflows-changed
         const workflows = persistence.listWorkflows();

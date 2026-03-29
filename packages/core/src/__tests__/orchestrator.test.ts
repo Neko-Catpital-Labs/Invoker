@@ -87,6 +87,18 @@ class InMemoryPersistence implements OrchestratorPersistence {
     const list = this.attempts.get(nodeId) ?? [];
     return list.length + 1;
   }
+
+  deleteWorkflow(workflowId: string): void {
+    this.workflows.delete(workflowId);
+    for (const [taskId, entry] of this.tasks) {
+      if (entry.workflowId === workflowId) this.tasks.delete(taskId);
+    }
+  }
+
+  deleteAllWorkflows(): void {
+    this.workflows.clear();
+    this.tasks.clear();
+  }
 }
 
 // ── In-Memory MessageBus Mock ───────────────────────────────
@@ -3835,6 +3847,166 @@ describe('Orchestrator', () => {
       expect(hookSpy).toHaveBeenCalledTimes(1);
       expect(hookSpy.mock.calls[0][0].id).toBe(mergeId);
       expect(orchestrator.getTask(mergeId)!.status).toBe('completed');
+    });
+  });
+
+  describe('deleteWorkflow', () => {
+    it('removes tasks from memory after delete', () => {
+      orchestrator.loadPlan({
+        name: 'wf-to-delete',
+        tasks: [
+          { id: 'd1', description: 'Task 1' },
+          { id: 'd2', description: 'Task 2', dependencies: ['d1'] },
+        ],
+      });
+      const wfId = orchestrator.getWorkflowIds()[0];
+      expect(orchestrator.getAllTasks().length).toBeGreaterThan(0);
+
+      orchestrator.deleteWorkflow(wfId);
+
+      expect(orchestrator.getAllTasks()).toHaveLength(0);
+      expect(orchestrator.getTask('d1')).toBeUndefined();
+      expect(orchestrator.getTask('d2')).toBeUndefined();
+    });
+
+    it('removes workflow from persistence after delete', () => {
+      orchestrator.loadPlan({
+        name: 'wf-persist-delete',
+        tasks: [{ id: 'p1', description: 'Task' }],
+      });
+      const wfId = orchestrator.getWorkflowIds()[0];
+      expect(persistence.workflows.has(wfId)).toBe(true);
+
+      orchestrator.deleteWorkflow(wfId);
+
+      expect(persistence.workflows.has(wfId)).toBe(false);
+      expect(persistence.loadTasks(wfId)).toHaveLength(0);
+    });
+
+    it('publishes removal deltas for each task', () => {
+      orchestrator.loadPlan({
+        name: 'wf-delta-delete',
+        tasks: [
+          { id: 'r1', description: 'Task 1' },
+          { id: 'r2', description: 'Task 2', dependencies: ['r1'] },
+        ],
+      });
+      const wfId = orchestrator.getWorkflowIds()[0];
+      publishedDeltas = [];
+
+      orchestrator.deleteWorkflow(wfId);
+
+      const removedDeltas = publishedDeltas.filter(
+        (d) => d.type === 'removed',
+      ) as Array<{ type: 'removed'; taskId: string }>;
+      // 2 tasks + 1 merge node = 3 removed deltas
+      expect(removedDeltas).toHaveLength(3);
+      const removedIds = removedDeltas.map((d) => d.taskId);
+      expect(removedIds).toContain('r1');
+      expect(removedIds).toContain('r2');
+    });
+
+    it('leaves other workflows unaffected', () => {
+      orchestrator.loadPlan({
+        name: 'wf-keep',
+        tasks: [{ id: 'keep1', description: 'Keep this' }],
+      });
+      const keepWfId = orchestrator.getWorkflowIds()[0];
+
+      orchestrator.loadPlan({
+        name: 'wf-remove',
+        tasks: [{ id: 'rm1', description: 'Remove this' }],
+      });
+      const removeWfId = orchestrator.getWorkflowIds().find((id) => id !== keepWfId)!;
+      expect(removeWfId).toBeDefined();
+
+      orchestrator.deleteWorkflow(removeWfId);
+
+      expect(orchestrator.getTask('keep1')).toBeDefined();
+      expect(orchestrator.getTask('rm1')).toBeUndefined();
+      expect(orchestrator.getWorkflowIds()).toContain(keepWfId);
+      expect(orchestrator.getWorkflowIds()).not.toContain(removeWfId);
+    });
+
+    it('frees scheduler slots for running tasks', () => {
+      orchestrator.loadPlan({
+        name: 'wf-scheduler',
+        tasks: [{ id: 's1', description: 'Running task' }],
+      });
+      orchestrator.startExecution();
+      expect(orchestrator.getTask('s1')!.status).toBe('running');
+      const wfId = orchestrator.getWorkflowIds()[0];
+
+      // Should not throw — scheduler slots are freed
+      orchestrator.deleteWorkflow(wfId);
+      expect(orchestrator.getAllTasks()).toHaveLength(0);
+    });
+  });
+
+  describe('deleteAllWorkflows', () => {
+    it('removes all tasks from memory', () => {
+      orchestrator.loadPlan({
+        name: 'wf-all-1',
+        tasks: [{ id: 'a1', description: 'Task A' }],
+      });
+      orchestrator.loadPlan({
+        name: 'wf-all-2',
+        tasks: [{ id: 'b1', description: 'Task B' }],
+      });
+      expect(orchestrator.getAllTasks().length).toBeGreaterThan(0);
+
+      orchestrator.deleteAllWorkflows();
+
+      expect(orchestrator.getAllTasks()).toHaveLength(0);
+      expect(orchestrator.getWorkflowIds()).toHaveLength(0);
+    });
+
+    it('publishes removal deltas for all tasks', () => {
+      orchestrator.loadPlan({
+        name: 'wf-delta-all',
+        tasks: [
+          { id: 'da1', description: 'Task 1' },
+          { id: 'da2', description: 'Task 2' },
+        ],
+      });
+      publishedDeltas = [];
+
+      orchestrator.deleteAllWorkflows();
+
+      const removedDeltas = publishedDeltas.filter(
+        (d) => d.type === 'removed',
+      );
+      // 2 tasks + 1 merge node = 3 removed deltas
+      expect(removedDeltas).toHaveLength(3);
+    });
+
+    it('clears persistence', () => {
+      orchestrator.loadPlan({
+        name: 'wf-persist-all',
+        tasks: [{ id: 'pa1', description: 'Task' }],
+      });
+      expect(persistence.workflows.size).toBeGreaterThan(0);
+
+      orchestrator.deleteAllWorkflows();
+
+      expect(persistence.workflows.size).toBe(0);
+      expect(persistence.tasks.size).toBe(0);
+    });
+
+    it('orchestrator remains usable after deleteAll', () => {
+      orchestrator.loadPlan({
+        name: 'wf-before',
+        tasks: [{ id: 'old1', description: 'Old task' }],
+      });
+      orchestrator.deleteAllWorkflows();
+
+      // Should be able to load a new plan
+      orchestrator.loadPlan({
+        name: 'wf-after',
+        tasks: [{ id: 'new1', description: 'New task' }],
+      });
+      expect(orchestrator.getTask('new1')).toBeDefined();
+      expect(orchestrator.getWorkflowIds()).toHaveLength(1);
     });
   });
 

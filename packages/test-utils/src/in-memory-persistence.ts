@@ -111,4 +111,16 @@ export class InMemoryPersistence implements OrchestratorPersistence {
     const list = this.attempts.get(nodeId) ?? [];
     return list.length + 1;
   }
+
+  deleteWorkflow(workflowId: string): void {
+    this.workflows.delete(workflowId);
+    for (const [taskId, entry] of this.tasks) {
+      if (entry.workflowId === workflowId) this.tasks.delete(taskId);
+    }
+  }
+
+  deleteAllWorkflows(): void {
+    this.workflows.clear();
+    this.tasks.clear();
+  }
 }
