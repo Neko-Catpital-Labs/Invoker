@@ -249,6 +249,13 @@ export async function executeMergeNodeImpl(
           }
         }
 
+        // Fetch the feature branch from origin into the gate clone.
+        // consolidateAndMerge() pushed it from a separate (now removed) clone.
+        await host.execGitIn(
+          ['fetch', 'origin', `+refs/heads/${featureBranch}:refs/heads/${featureBranch}`],
+          gateWorkspacePath!,
+        );
+
         // Create PR via provider (consolidation already done above).
         // Use the gate clone dir so gh CLI resolves the correct GitHub remote.
         const result = await host.mergeGateProvider.createReview({
@@ -785,6 +792,11 @@ export async function consolidateAndMergeImpl(
       await execGitInMergeSafe(host, ['merge', '--no-ff', '-m', mergeMsg, branch], worktreeDir);
     }
     console.log(`[merge] Consolidated ${taskBranches.length} task branches into ${featureBranch}`);
+
+    // Push feature branch to origin so other clones (e.g., the gate clone used
+    // by mergeMode='github') can access it. The consolidation clone is removed
+    // in the finally block, so without this push the branch would be lost.
+    await execGitInMergeSafe(host, ['push', '--force', '-u', 'origin', featureBranch], worktreeDir);
 
     if (visualProof && onFinish === 'pull_request' && host.runVisualProofCapture) {
       const slug = (featureBranch ?? 'workflow').replace(/\//g, '-');

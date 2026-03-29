@@ -150,6 +150,9 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
     case 'cancel':
       await headlessCancel(args[1], deps);
       break;
+    case 'task-status':
+      headlessTaskStatus(args[1], deps);
+      break;
     case 'queue':
       await headlessQueue(deps);
       break;
@@ -192,6 +195,7 @@ ${BOLD}Usage:${RESET}
   electron dist/main.js --headless restart <id>       Restart a failed/stuck task
   electron dist/main.js --headless fix <taskId>       Fix a failed task with Claude
   electron dist/main.js --headless edit <id> <cmd>    Edit task command and re-run
+  electron dist/main.js --headless task-status <taskId>     Print raw task status
   electron dist/main.js --headless cancel <taskId>         Cancel task + all downstream
   electron dist/main.js --headless queue                   Show queue status & utilization
   electron dist/main.js --headless audit <taskId>          Print event history
@@ -466,6 +470,14 @@ async function headlessCancel(taskId: string, deps: HeadlessDeps): Promise<void>
   }
 }
 
+function headlessTaskStatus(taskId: string, deps: Pick<HeadlessDeps, 'orchestrator' | 'persistence'>): void {
+  if (!taskId) throw new Error('Missing taskId. Usage: --headless task-status <taskId>');
+  restoreWorkflowForTask(taskId, deps);
+  const task = deps.orchestrator.getTask(taskId);
+  if (!task) throw new Error(`Task "${taskId}" not found`);
+  console.log(task.status);
+}
+
 async function headlessDeleteWorkflow(workflowId: string, deps: Pick<HeadlessDeps, 'orchestrator' | 'persistence'>): Promise<void> {
   if (!workflowId) throw new Error('Missing workflowId. Usage: --headless delete-workflow <workflowId>');
   deps.persistence.deleteWorkflow(workflowId);
@@ -558,6 +570,11 @@ async function waitForCompletion(orchestrator: Orchestrator, workflowId?: string
       : ['completed', 'failed', 'needs_input', 'awaiting_approval', 'blocked', 'stale'];
     const allSettled = tasks.every((t) => settledStatuses.includes(t.status));
     if (allSettled) return;
+    // Also settle if nothing is running and at least one task awaits human action.
+    // Pending merge gates can't progress until their upstream is approved.
+    const noneRunning = !tasks.some((t) => t.status === 'running');
+    const hasHumanBlocked = tasks.some((t) => settledStatuses.includes(t.status) && t.status !== 'completed');
+    if (noneRunning && hasHumanBlocked) return;
     await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
   }
 }

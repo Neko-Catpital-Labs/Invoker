@@ -1287,8 +1287,11 @@ export class Orchestrator {
     taskId: string,
     parsed: Extract<ParsedResponse, { type: 'completed' }>,
   ): TaskState[] {
+    const task = this.stateMachine.getTask(taskId);
+    const needsApproval = task?.config.requiresManualApproval === true;
+
     const changes: TaskStateChanges = {
-      status: 'completed',
+      status: needsApproval ? 'awaiting_approval' : 'completed',
       config: { summary: parsed.summary },
       execution: {
         exitCode: parsed.exitCode,
@@ -1299,7 +1302,8 @@ export class Orchestrator {
     };
     this.writeAndSync(taskId, changes);
     const delta: TaskDelta = { type: 'updated', taskId, changes };
-    this.persistence.logEvent?.(taskId, 'task.completed', changes);
+    const eventName = needsApproval ? 'task.awaiting_approval' : 'task.completed';
+    this.persistence.logEvent?.(taskId, eventName, changes);
     this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
 
     // Dual-write: update latest Attempt to completed, auto-select (best-effort)
@@ -1319,6 +1323,9 @@ export class Orchestrator {
         this.writeAndSync(taskId, selectChanges);
       }
     } catch { /* best effort */ }
+
+    // If task requires manual approval, don't trigger downstream tasks yet
+    if (needsApproval) return [];
 
     this.checkExperimentCompletion(taskId);
 

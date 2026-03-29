@@ -10,6 +10,8 @@
     "test:low-resource:packages": "pnpm -r --workspace-concurrency=1 test",
     "test:guarded": "bash scripts/run-with-resource-guard.sh pnpm -r --workspace-concurrency=1 test",
     "test:plan-to-invoker-skill": "bash scripts/test-plan-to-invoker-skill.sh",
+    "test:e2e-dry-run": "bash scripts/e2e-dry-run/run-all.sh",
+    "test:e2e-ssh": "bash scripts/e2e-ssh/run-all.sh",
     "setup": "bash scripts/setup-cursor-skills.sh",
     "build": "pnpm -r build",
     "clean": "pnpm -r clean",

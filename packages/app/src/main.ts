@@ -270,8 +270,11 @@ if (isHeadless) {
   app.whenReady().then(async () => {
     const command = cliArgs[0];
 
-    // Try delegation for 'run' and 'resume' commands
-    if (command === 'run' || command === 'resume') {
+    // Try delegation for 'run' and 'resume' commands (skip when IPC would hit a non-GUI peer — e.g. e2e / CI).
+    if (
+      (command === 'run' || command === 'resume')
+      && process.env.INVOKER_HEADLESS_STANDALONE !== '1'
+    ) {
       const delegationBus = new IpcBus();
       try {
         await delegationBus.ready();

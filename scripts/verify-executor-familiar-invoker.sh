@@ -10,6 +10,11 @@ if [[ ! -f packages/app/dist/main.js ]]; then
   exit 1
 fi
 
+# shellcheck disable=SC1091
+source "$ROOT/scripts/e2e-dry-run/lib/common.sh"
+invoker_e2e_init
+trap invoker_e2e_cleanup EXIT
+
 unset ELECTRON_RUN_AS_NODE
 echo "==> headless delete-all (clear workflows for clean verify)"
 ./run.sh --headless delete-all

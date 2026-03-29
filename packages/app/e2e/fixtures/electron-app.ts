@@ -62,6 +62,18 @@ export const test = base.extend<ElectronFixtures>({
 
   electronApp: async ({ testDir }, use) => {
     cleanStaleExperimentState();
+    // Dummy `claude` on PATH + fix command — same as scripts/e2e-dry-run (no real CLI).
+    const claudeMarker = path.join(repoRoot, 'scripts', 'e2e-dry-run', 'fixtures', 'claude-marker.sh');
+    const stubDir = path.join(testDir, 'claude-stub');
+    const markerRoot = path.join(testDir, 'e2e-markers');
+    await fs.mkdir(stubDir, { recursive: true });
+    await fs.mkdir(markerRoot, { recursive: true });
+    try {
+      await fs.symlink(claudeMarker, path.join(stubDir, 'claude'));
+    } catch {
+      // Windows / EPERM: fix path still uses INVOKER_CLAUDE_FIX_COMMAND; prompt tasks may hit real claude.
+    }
+    const pathEnv = `${stubDir}${path.delimiter}${process.env.PATH ?? ''}`;
     const app = await electron.launch({
       args: [
         ...(process.platform === 'linux'
@@ -69,7 +81,14 @@ export const test = base.extend<ElectronFixtures>({
           : []),
         path.resolve(__dirname, '..', '..', 'dist', 'main.js'),
       ],
-      env: { ...process.env, NODE_ENV: 'test', INVOKER_DB_DIR: testDir, INVOKER_CLAUDE_FIX_COMMAND: '/bin/true' },
+      env: {
+        ...process.env,
+        NODE_ENV: 'test',
+        INVOKER_DB_DIR: testDir,
+        INVOKER_E2E_MARKER_ROOT: markerRoot,
+        INVOKER_CLAUDE_FIX_COMMAND: claudeMarker,
+        PATH: pathEnv,
+      },
     });
     await use(app);
     await app.close();
