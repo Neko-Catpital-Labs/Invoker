@@ -27,6 +27,7 @@ import {
   editTaskType as sharedEditTaskType,
   selectExperiment as sharedSelectExperiment,
 } from './workflow-actions.js';
+import { openExternalTerminalForTask } from './open-terminal-for-task.js';
 
 export { bumpGenerationAndRestart } from './workflow-actions.js';
 
@@ -150,6 +151,9 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
     case 'cancel':
       await headlessCancel(args[1], deps);
       break;
+    case 'open-terminal':
+      await headlessOpenTerminal(args[1], deps);
+      break;
     case 'task-status':
       headlessTaskStatus(args[1], deps);
       break;
@@ -197,6 +201,7 @@ ${BOLD}Usage:${RESET}
   electron dist/main.js --headless edit <id> <cmd>    Edit task command and re-run
   electron dist/main.js --headless task-status <taskId>     Print raw task status
   electron dist/main.js --headless cancel <taskId>         Cancel task + all downstream
+  electron dist/main.js --headless open-terminal <taskId>  Open OS terminal for a task
   electron dist/main.js --headless queue                   Show queue status & utilization
   electron dist/main.js --headless audit <taskId>          Print event history
   electron dist/main.js --headless delete-workflow <id>    Delete a single workflow by ID
@@ -467,6 +472,23 @@ async function headlessCancel(taskId: string, deps: HeadlessDeps): Promise<void>
   console.log(`Cancelled ${result.cancelled.length} task(s): [${result.cancelled.join(', ')}]`);
   if (result.runningCancelled.length > 0) {
     console.log(`Killed running: [${result.runningCancelled.join(', ')}]`);
+  }
+}
+
+async function headlessOpenTerminal(taskId: string, deps: HeadlessDeps): Promise<void> {
+  if (!taskId) throw new Error('Missing taskId. Usage: --headless open-terminal <taskId>');
+  const result = await openExternalTerminalForTask({
+    taskId,
+    persistence: deps.persistence,
+    familiarRegistry: deps.familiarRegistry,
+    repoRoot: deps.repoRoot,
+    runningTaskReason: 'Task is still running. View output in logs.',
+  });
+  if (result.opened) {
+    console.log(`Opened terminal for task: ${taskId}`);
+  } else {
+    console.error(`Could not open terminal: ${result.reason}`);
+    process.exitCode = 1;
   }
 }
 
