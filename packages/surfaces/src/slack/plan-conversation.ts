@@ -214,8 +214,12 @@ export class PlanConversation {
    * YAML plan from history and submits it. Otherwise spawns the Cursor CLI.
    */
   async sendMessage(userMessage: string): Promise<string> {
-    this.log('plan-conversation', 'info', `[TRACE] sendMessage() start (threadTs=${this.threadTs}, initialized=${this._initialized}, msgCount=${this.messages.length})`);
+    const t0 = Date.now();
+    const turn = this.messages.filter(m => m.role === 'user').length + 1;
+    this.log('plan-conversation', 'info', `[TRACE] sendMessage() start (threadTs=${this.threadTs}, initialized=${this._initialized}, msgCount=${this.messages.length}, turn=${turn})`);
+
     if (!this._initialized) await this.init();
+    const tInit = Date.now();
 
     this.messages.push({ role: 'user', content: userMessage });
 
@@ -227,22 +231,31 @@ export class PlanConversation {
         const reply = `Plan "${plan.name}" submitted for execution.`;
         this.messages.push({ role: 'assistant', content: reply });
         this.saveState();
+        const tEnd = Date.now();
+        this.log('plan-conversation', 'info', `[PERF] sendMessage (confirmation): init=${tInit - t0}ms, total=${tEnd - t0}ms`);
         return reply;
       }
-      // No valid plan found — return explicit error instead of falling through to Cursor
       const errorReply = "I couldn't find a complete YAML plan in this conversation. Could you ask me to regenerate the plan?";
       this.messages.push({ role: 'assistant', content: errorReply });
       this.saveState();
+      const tEnd = Date.now();
+      this.log('plan-conversation', 'info', `[PERF] sendMessage (confirmation-failed): init=${tInit - t0}ms, total=${tEnd - t0}ms`);
       return errorReply;
     }
 
     const prompt = this.buildCursorPrompt();
-    this.log('plan-conversation', 'info', `Spawning Cursor CLI (promptLen=${prompt.length})...`);
+    const tPrompt = Date.now();
+    this.log('plan-conversation', 'info', `[CONV] Turn ${turn}: promptLen=${prompt.length}, historyMsgs=${this.messages.length - 1}, promptPreview="${prompt.slice(0, 500).replace(/\n/g, '\\n')}"`);
+
     const response = await this.spawnCursor(prompt);
-    this.log('plan-conversation', 'info', `Cursor responded (responseLen=${response.length})`);
+    const tCursor = Date.now();
+    this.log('plan-conversation', 'info', `[CONV] Turn ${turn}: responseLen=${response.length}, responsePreview="${response.slice(0, 500).replace(/\n/g, '\\n')}"`);
 
     this.messages.push({ role: 'assistant', content: response });
     this.saveState();
+    const tSave = Date.now();
+
+    this.log('plan-conversation', 'info', `[PERF] sendMessage: init=${tInit - t0}ms, buildPrompt=${tPrompt - tInit}ms, cursor=${tCursor - tPrompt}ms, saveState=${tSave - tCursor}ms, total=${tSave - t0}ms`);
     return response;
   }
 
@@ -302,6 +315,7 @@ export class PlanConversation {
   // ── Cursor CLI Subprocess ─────────────────────────────
 
   spawnCursor(prompt: string): Promise<string> {
+    const spawnStart = Date.now();
     return new Promise((resolve, reject) => {
       const child = spawn(this.cursorCommand, ['agent', '--print', '--trust', prompt], {
         cwd: this.workingDir ?? process.cwd(),
@@ -311,9 +325,13 @@ export class PlanConversation {
 
       let stdout = '';
       let stderr = '';
+      let stdoutChunks = 0;
 
       child.stdout?.on('data', (chunk: Buffer) => {
-        stdout += chunk.toString();
+        const chunkStr = chunk.toString();
+        stdout += chunkStr;
+        stdoutChunks++;
+        this.log('plan-conversation', 'info', `[PERF] cursor_stdout chunk #${stdoutChunks}: +${chunkStr.length} bytes (total=${stdout.length}, elapsed=${Date.now() - spawnStart}ms)`);
       });
 
       child.stderr?.on('data', (chunk: Buffer) => {
@@ -327,6 +345,7 @@ export class PlanConversation {
 
       child.on('close', (code) => {
         clearTimeout(timer);
+        this.log('plan-conversation', 'info', `[PERF] cursor_exit: code=${code}, stdoutBytes=${stdout.length}, stderrBytes=${stderr.length}, chunks=${stdoutChunks}, elapsed=${Date.now() - spawnStart}ms`);
         if (code === 0) {
           resolve(stdout.trim() || '(no output)');
         } else {

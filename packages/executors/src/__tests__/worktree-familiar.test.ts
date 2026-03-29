@@ -24,15 +24,39 @@ import { BaseFamiliar } from '../base-familiar.js';
 const mockedSpawn = vi.mocked(spawn);
 
 function makeRequest(overrides: Partial<WorkRequest> = {}): WorkRequest {
+  const { inputs: inputOverrides, ...restOverrides } = overrides;
   return {
     requestId: 'req-1',
     actionId: 'action-1',
     actionType: 'command',
-    inputs: { command: 'echo hello' },
+    inputs: { command: 'echo hello', repoUrl: 'git@github.com:test/repo.git', ...inputOverrides },
     callbackUrl: 'http://localhost:3000/callback',
     timestamps: { createdAt: new Date().toISOString() },
-    ...overrides,
+    ...restOverrides,
   };
+}
+
+/**
+ * Mock the RepoPool on a WorktreeFamiliar instance so that
+ * pool.ensureClone / pool.acquireWorktree bypass real git.
+ */
+function mockPool(fam: WorktreeFamiliar) {
+  const pool = {
+    ensureClone: vi.fn().mockResolvedValue('/fake/cache/clone'),
+    acquireWorktree: vi.fn().mockImplementation((_repoUrl: string, branch: string) => {
+      const sanitized = branch.replace(/\//g, '-');
+      return Promise.resolve({
+        clonePath: '/fake/cache/clone',
+        worktreePath: `/fake/worktrees/${sanitized}`,
+        branch,
+        release: vi.fn().mockResolvedValue(undefined),
+      });
+    }),
+    destroyAll: vi.fn().mockResolvedValue(undefined),
+    getClonePath: vi.fn().mockReturnValue('/fake/cache/clone'),
+  };
+  (fam as any).pool = pool;
+  return pool;
 }
 
 /**
@@ -178,11 +202,12 @@ describe('WorktreeFamiliar', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     familiar = new WorktreeFamiliar({
-      repoDir: '/fake/repo',
+      cacheDir: '/fake/cache',
       worktreeBaseDir: '/fake/worktrees',
     });
+    mockPool(familiar);
 
-    // Mock runBash so setupTaskBranch works with the spawn-level git mocks.
+    // Mock runBash so upstream merge scripts work with the spawn-level git mocks.
     // The bash scripts would normally call git commands inside a single bash process,
     // but in tests we need them to flow through the mocked spawn('git', ...).
     vi.spyOn(BaseFamiliar.prototype as any, 'runBash').mockImplementation(
@@ -233,13 +258,12 @@ describe('WorktreeFamiliar', () => {
     expect(handle.executionId).toBeDefined();
     expect(handle.taskId).toBe('action-1');
 
-    // Verify runBash was called with a preserve-or-reset script containing worktree add
-    const runBashMock = vi.mocked((BaseFamiliar.prototype as any).runBash);
-    const preserveCall = runBashMock.mock.calls.find(
-      (call) => call[0].includes('PRESERVED='),
-    );
-    expect(preserveCall).toBeDefined();
-    expect(preserveCall![0]).toContain('worktree add');
+    // Verify pool.acquireWorktree was called with the correct branch
+    const pool = (familiar as any).pool;
+    expect(pool.acquireWorktree).toHaveBeenCalledTimes(1);
+    const [calledUrl, calledBranch] = pool.acquireWorktree.mock.calls[0];
+    expect(calledUrl).toBe('git@github.com:test/repo.git');
+    expect(calledBranch).toMatch(/^experiment\/action-1-[0-9a-f]{8}$/);
 
     // Branch should be content-addressable
     expect(handle.branch).toMatch(/^experiment\/action-1-[0-9a-f]{8}$/);
@@ -417,13 +441,9 @@ describe('WorktreeFamiliar', () => {
   it('handles git worktree creation failure gracefully', async () => {
     setupSpawnMock();
 
-    vi.mocked((BaseFamiliar.prototype as any).runBash).mockImplementation(
-      async (script: string) => {
-        if (script.includes('PRESERVED=')) {
-          throw new Error('bash exited with code 128: fatal: not a git repository');
-        }
-        return '';
-      },
+    // Mock pool.acquireWorktree to reject
+    (familiar as any).pool.acquireWorktree.mockRejectedValue(
+      new Error('bash exited with code 128: fatal: not a git repository'),
     );
 
     const request = makeRequest();
@@ -729,10 +749,11 @@ describe('WorktreeFamiliar', () => {
   describe('claude action type', () => {
     it('spawns claude CLI with session ID instead of echo stub', async () => {
       const claudeFamiliar = new WorktreeFamiliar({
-        repoDir: '/fake/repo',
+        cacheDir: '/fake/cache',
         worktreeBaseDir: '/fake/worktrees',
         claudeCommand: '/bin/echo',
       });
+      mockPool(claudeFamiliar);
 
       const { taskProcess } = setupSpawnMock();
 
@@ -765,10 +786,11 @@ describe('WorktreeFamiliar', () => {
 
     it('prepends upstream context to prompt', async () => {
       const claudeFamiliar = new WorktreeFamiliar({
-        repoDir: '/fake/repo',
+        cacheDir: '/fake/cache',
         worktreeBaseDir: '/fake/worktrees',
         claudeCommand: '/bin/echo',
       });
+      mockPool(claudeFamiliar);
 
       const { taskProcess } = setupSpawnMock();
 
@@ -796,10 +818,11 @@ describe('WorktreeFamiliar', () => {
 
     it('includes claudeSessionId in completion response outputs', async () => {
       const claudeFamiliar = new WorktreeFamiliar({
-        repoDir: '/fake/repo',
+        cacheDir: '/fake/cache',
         worktreeBaseDir: '/fake/worktrees',
         claudeCommand: '/bin/echo',
       });
+      mockPool(claudeFamiliar);
 
       const { taskProcess } = setupSpawnMock();
 
@@ -821,10 +844,11 @@ describe('WorktreeFamiliar', () => {
 
     it('getTerminalSpec returns claude --resume for claude tasks', async () => {
       const claudeFamiliar = new WorktreeFamiliar({
-        repoDir: '/fake/repo',
+        cacheDir: '/fake/cache',
         worktreeBaseDir: '/fake/worktrees',
         claudeCommand: '/bin/echo',
       });
+      mockPool(claudeFamiliar);
 
       const { taskProcess } = setupSpawnMock();
 
@@ -857,10 +881,11 @@ describe('WorktreeFamiliar', () => {
 
     it('uses ignore for stdin when actionType is claude', async () => {
       const claudeFamiliar = new WorktreeFamiliar({
-        repoDir: '/fake/repo',
+        cacheDir: '/fake/cache',
         worktreeBaseDir: '/fake/worktrees',
         claudeCommand: '/bin/echo',
       });
+      mockPool(claudeFamiliar);
 
       const { taskProcess } = setupSpawnMock();
 
@@ -896,11 +921,9 @@ describe('WorktreeFamiliar', () => {
       );
       expect(revParseCall).toBeDefined();
 
-      // runBash script should contain the baseBranch as the BASE
-      const runBashMock = vi.mocked((BaseFamiliar.prototype as any).runBash);
-      const preserveCall = runBashMock.mock.calls.find((call) => call[0].includes('PRESERVED='));
-      expect(preserveCall).toBeDefined();
-      expect(preserveCall![0]).toContain("BASE='master'");
+      // pool.acquireWorktree should have been called with the branch
+      const pool = (familiar as any).pool;
+      expect(pool.acquireWorktree).toHaveBeenCalledTimes(1);
 
       taskProcess.emit('close', 0, null);
     });
@@ -920,11 +943,9 @@ describe('WorktreeFamiliar', () => {
       );
       expect(revParseCall).toBeDefined();
 
-      // runBash script should contain HEAD as the BASE
-      const runBashMock = vi.mocked((BaseFamiliar.prototype as any).runBash);
-      const preserveCall = runBashMock.mock.calls.find((call) => call[0].includes('PRESERVED='));
-      expect(preserveCall).toBeDefined();
-      expect(preserveCall![0]).toContain("BASE='HEAD'");
+      // pool.acquireWorktree should have been called
+      const pool = (familiar as any).pool;
+      expect(pool.acquireWorktree).toHaveBeenCalledTimes(1);
 
       taskProcess.emit('close', 0, null);
     });
@@ -937,121 +958,41 @@ describe('WorktreeFamiliar', () => {
   });
 
   describe('stale worktree on restart', () => {
-    const expectedHash = computeBranchHash('action-1', 'echo hello', undefined, [], 'abc123def456');
-    const porcelainWithConflict = [
-      'worktree /repo',
-      'HEAD aaa111',
-      'branch refs/heads/main',
-      '',
-      'worktree /old/worktree',
-      'HEAD bbb222',
-      `branch refs/heads/experiment/action-1-${expectedHash}`,
-      '',
-    ].join('\n');
-
-    it('force-removes conflicting worktree found via worktree list', async () => {
-      let removedPath: string | null = null;
-
-      mockedSpawn.mockImplementation((cmd: string, args?: readonly string[]) => {
-        const proc = createMockProcess();
-        const argsArr = args as string[];
-
-        Promise.resolve().then(() => {
-          if (cmd === 'git' && argsArr?.includes('prune')) {
-            proc.emit('close', 0, null);
-          } else if (cmd === 'git' && argsArr?.[0] === 'worktree' && argsArr?.[1] === 'list') {
-            proc.stdout!.emit('data', Buffer.from(porcelainWithConflict));
-            proc.emit('close', 0, null);
-          } else if (cmd === 'git' && argsArr?.[0] === 'worktree' && argsArr?.[1] === 'remove') {
-            removedPath = argsArr[3]; // ['worktree', 'remove', '--force', '<path>']
-            proc.emit('close', 0, null);
-          } else if (cmd === 'git' && argsArr?.includes('rev-parse')) {
-            proc.stdout!.emit('data', Buffer.from('abc123def456\n'));
-            proc.emit('close', 0, null);
-          } else {
-            proc.emit('close', 0, null);
-          }
-        });
-
-        return proc as any;
-      });
+    it('pool.acquireWorktree is called with the content-addressable branch name', async () => {
+      const { taskProcess } = setupSpawnMock();
 
       const request = makeRequest();
       const handle = await familiar.start(request);
       expect(handle).toBeDefined();
-      expect(removedPath).toBe('/old/worktree');
+
+      const pool = (familiar as any).pool;
+      expect(pool.acquireWorktree).toHaveBeenCalledTimes(1);
+      const [, calledBranch] = pool.acquireWorktree.mock.calls[0];
+      expect(calledBranch).toMatch(/^experiment\/action-1-[0-9a-f]{8}$/);
+
+      taskProcess.emit('close', 0, null);
     });
 
-    it('still fails if force-remove and worktree add both fail', async () => {
-      mockedSpawn.mockImplementation((cmd: string, args?: readonly string[]) => {
-        const proc = createMockProcess();
-        const argsArr = args as string[];
+    it('still fails if pool.acquireWorktree rejects', async () => {
+      setupSpawnMock();
 
-        Promise.resolve().then(() => {
-          if (cmd === 'git' && argsArr?.includes('prune')) {
-            proc.emit('close', 0, null);
-          } else if (cmd === 'git' && argsArr?.[0] === 'worktree' && argsArr?.[1] === 'list') {
-            proc.stdout!.emit('data', Buffer.from(porcelainWithConflict));
-            proc.emit('close', 0, null);
-          } else if (cmd === 'git' && argsArr?.[0] === 'worktree' && argsArr?.[1] === 'remove') {
-            proc.stderr!.emit('data', Buffer.from('fatal: cannot remove locked worktree\n'));
-            proc.emit('close', 128, null);
-          } else {
-            proc.emit('close', 0, null);
-          }
-        });
-
-        return proc as any;
-      });
-
-      // runBash (setupTaskBranch) also fails because worktree add fails
-      vi.mocked((BaseFamiliar.prototype as any).runBash).mockImplementation(
-        async () => {
-          throw new Error("bash exited with code 128: fatal: branch is already used by worktree at '/old/worktree'");
-        },
+      (familiar as any).pool.acquireWorktree.mockRejectedValue(
+        new Error("bash exited with code 128: fatal: branch is already used by worktree at '/old/worktree'"),
       );
 
       const request = makeRequest();
       await expect(familiar.start(request)).rejects.toThrow(/already used by worktree/);
     });
 
-    it('no force-remove needed when no conflicting worktree exists', async () => {
-      const emptyPorcelain = [
-        'worktree /repo',
-        'HEAD aaa111',
-        'branch refs/heads/main',
-        '',
-      ].join('\n');
-      let removeWasCalled = false;
-
-      mockedSpawn.mockImplementation((cmd: string, args?: readonly string[]) => {
-        const proc = createMockProcess();
-        const argsArr = args as string[];
-
-        Promise.resolve().then(() => {
-          if (cmd === 'git' && argsArr?.includes('prune')) {
-            proc.emit('close', 0, null);
-          } else if (cmd === 'git' && argsArr?.[0] === 'worktree' && argsArr?.[1] === 'list') {
-            proc.stdout!.emit('data', Buffer.from(emptyPorcelain));
-            proc.emit('close', 0, null);
-          } else if (cmd === 'git' && argsArr?.[0] === 'worktree' && argsArr?.[1] === 'remove') {
-            removeWasCalled = true;
-            proc.emit('close', 0, null);
-          } else if (cmd === 'git' && argsArr?.includes('rev-parse')) {
-            proc.stdout!.emit('data', Buffer.from('abc123def456\n'));
-            proc.emit('close', 0, null);
-          } else {
-            proc.emit('close', 0, null);
-          }
-        });
-
-        return proc as any;
-      });
+    it('start succeeds when pool.acquireWorktree succeeds (no conflict)', async () => {
+      const { taskProcess } = setupSpawnMock();
 
       const request = makeRequest();
       const handle = await familiar.start(request);
       expect(handle).toBeDefined();
-      expect(removeWasCalled).toBe(false);
+      expect(handle.workspacePath).toMatch(/^\/fake\/worktrees\//);
+
+      taskProcess.emit('close', 0, null);
     });
   });
 
@@ -1098,7 +1039,7 @@ describe('WorktreeFamiliar', () => {
       ).toThrow(/no longer exists.*cleaned up/);
     });
 
-    it('returns git checkout when workspacePath equals repoDir and branch is set', () => {
+    it('returns git checkout when workspacePath and branch are set', () => {
       vi.mocked(existsSync).mockReturnValue(true);
       const spec = familiar.getRestoredTerminalSpec({
         ...baseMeta,
@@ -1111,7 +1052,7 @@ describe('WorktreeFamiliar', () => {
       expect(spec.args![1]).not.toContain('worktree add');
     });
 
-    it('returns git checkout when workspacePath is a worktree path (not repoDir) and branch is set', () => {
+    it('returns git checkout when workspacePath is a worktree path and branch is set', () => {
       vi.mocked(existsSync).mockReturnValue(true);
       const spec = familiar.getRestoredTerminalSpec({
         ...baseMeta,
@@ -1144,14 +1085,14 @@ describe('WorktreeFamiliar', () => {
       );
 
       const familiar = new WorktreeFamiliar({
-        repoDir: '/tmp/fake-repo',
+        cacheDir: '/tmp/fake-cache',
         worktreeBaseDir: '/tmp/fake-worktrees',
       });
       const request = {
         requestId: 'req-1',
         actionId: 'test',
         actionType: 'command' as const,
-        inputs: { command: 'echo hi', description: 'test' },
+        inputs: { command: 'echo hi', description: 'test', repoUrl: 'git@github.com:test/repo.git' },
         callbackUrl: '',
         timestamps: { createdAt: new Date().toISOString() },
       };

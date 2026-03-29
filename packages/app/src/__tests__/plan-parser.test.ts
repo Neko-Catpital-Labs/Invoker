@@ -11,8 +11,9 @@ describe('applyPlanDefinitionDefaults', () => {
   it('fills baseBranch, featureBranch, onFinish when omitted (GUI yaml.load shape)', () => {
     const plan = applyPlanDefinitionDefaults({
       name: 'My Plan',
+      repoUrl: 'git@github.com:test/repo.git',
       tasks: [{ id: 'a', description: 'd', command: 'echo' }],
-    }, process.cwd());
+    });
     expect(plan.onFinish).toBe('pull_request');
     expect(plan.featureBranch).toBe('plan/my-plan');
     expect(plan.baseBranch).toBeDefined();
@@ -35,25 +36,40 @@ describe('applyPlanDefinitionDefaults', () => {
   it('treats empty or whitespace baseBranch like omitted (YAML `baseBranch:`)', () => {
     const empty = applyPlanDefinitionDefaults({
       name: 'Remote PR Plan',
+      repoUrl: 'git@github.com:test/repo.git',
       baseBranch: '',
       tasks: [{ id: 'a', description: 'd', command: 'echo' }],
-    }, process.cwd());
+    });
     expect(empty.baseBranch).toBeDefined();
     expect(empty.baseBranch!.length).toBeGreaterThan(0);
 
     const spaces = applyPlanDefinitionDefaults({
       name: 'Remote PR Plan',
+      repoUrl: 'git@github.com:test/repo.git',
       baseBranch: '   ',
       tasks: [{ id: 'a', description: 'd', command: 'echo' }],
-    }, process.cwd());
+    });
     expect(spaces.baseBranch).toEqual(empty.baseBranch);
   });
 });
 
 describe('parsePlan', () => {
+  it('rejects plan without repoUrl', () => {
+    const yaml = `
+name: No Repo Plan
+tasks:
+  - id: greet
+    description: Say hello
+    command: echo "Hello"
+`;
+    expect(() => parsePlan(yaml)).toThrow(PlanParseError);
+    expect(() => parsePlan(yaml)).toThrow('must have a "repoUrl" field');
+  });
+
   it('parses valid YAML plan', () => {
     const yaml = `
 name: Hello World Test
+repoUrl: git@github.com:test/repo.git
 tasks:
   - id: greet
     description: Say hello
@@ -70,6 +86,7 @@ tasks:
   it('parses plan with dependencies', () => {
     const yaml = `
 name: Dependency Test
+repoUrl: git@github.com:test/repo.git
 tasks:
   - id: first
     description: First task
@@ -121,6 +138,7 @@ tasks: []
   it('rejects task without id', () => {
     const yaml = `
 name: Bad Task Plan
+repoUrl: git@github.com:test/repo.git
 tasks:
   - description: No ID here
     command: echo "oops"
@@ -132,6 +150,7 @@ tasks:
   it('rejects task without description', () => {
     const yaml = `
 name: Bad Task Plan
+repoUrl: git@github.com:test/repo.git
 tasks:
   - id: no-desc
     command: echo "oops"
@@ -143,6 +162,7 @@ tasks:
   it('rejects task commands using npx vitest run', () => {
     const yaml = `
 name: Bad Command Plan
+repoUrl: git@github.com:test/repo.git
 tasks:
   - id: test-it
     description: "Run tests"
@@ -155,6 +175,7 @@ tasks:
   it('parses task with prompt instead of command', () => {
     const yaml = `
 name: Prompt Plan
+repoUrl: git@github.com:test/repo.git
 tasks:
   - id: ask
     description: Ask a question
@@ -168,6 +189,7 @@ tasks:
   it('parses autoFix and maxFixAttempts from task definitions', () => {
     const yaml = `
 name: AutoFix Test
+repoUrl: git@github.com:test/repo.git
 tasks:
   - id: fix-task
     description: "A fixable task"
@@ -188,6 +210,7 @@ tasks:
     it('parses plan with onFinish: merge', () => {
       const yaml = `
 name: Merge Plan
+repoUrl: git@github.com:test/repo.git
 onFinish: merge
 baseBranch: develop
 featureBranch: feat/x
@@ -204,6 +227,7 @@ tasks:
     it('parses plan with onFinish: pull_request', () => {
       const yaml = `
 name: PR Plan
+repoUrl: git@github.com:test/repo.git
 onFinish: pull_request
 featureBranch: feat/pr
 tasks:
@@ -217,6 +241,7 @@ tasks:
     it('defaults onFinish to pull_request when omitted', () => {
       const yaml = `
 name: Simple Plan
+repoUrl: git@github.com:test/repo.git
 tasks:
   - id: build
     description: Build the project
@@ -230,14 +255,15 @@ tasks:
     it('auto-detects baseBranch when omitted', () => {
       const mockExecSync = vi.mocked(execSync);
       mockExecSync.mockImplementation(((cmd: string) => {
-        if (typeof cmd === 'string' && cmd.includes('symbolic-ref')) {
-          return 'refs/remotes/origin/develop\n';
+        if (typeof cmd === 'string' && cmd.includes('ls-remote')) {
+          return 'ref: refs/heads/develop\tHEAD\nabc123\tHEAD\n';
         }
         throw new Error('unexpected');
       }) as any);
 
       const yaml = `
 name: No Base Branch
+repoUrl: git@github.com:test/repo.git
 onFinish: merge
 featureBranch: feat/x
 tasks:
@@ -252,6 +278,7 @@ tasks:
     it('explicit baseBranch overrides auto-detection', () => {
       const yaml = `
 name: Explicit Base
+repoUrl: git@github.com:test/repo.git
 onFinish: merge
 baseBranch: release
 featureBranch: feat/x
@@ -266,6 +293,7 @@ tasks:
     it('rejects invalid onFinish value', () => {
       const yaml = `
 name: Bad Finish
+repoUrl: git@github.com:test/repo.git
 onFinish: explode
 tasks:
   - id: build
@@ -277,6 +305,7 @@ tasks:
     it('auto-generates featureBranch when onFinish is merge without explicit branch', () => {
       const yaml = `
 name: Missing Feature Branch
+repoUrl: git@github.com:test/repo.git
 onFinish: merge
 tasks:
   - id: build
@@ -290,6 +319,7 @@ tasks:
     it('auto-generates featureBranch even when onFinish is none', () => {
       const yaml = `
 name: No Finish Branch
+repoUrl: git@github.com:test/repo.git
 onFinish: none
 tasks:
   - id: build
@@ -304,6 +334,7 @@ tasks:
   it('parses description field from plan YAML', () => {
     const yaml = [
       'name: "Test Plan"',
+      'repoUrl: "git@github.com:test/repo.git"',
       'description: "This plan adds feature X"',
       'tasks:',
       '  - id: task-1',
@@ -318,6 +349,7 @@ tasks:
   it('description is optional', () => {
     const yaml = [
       'name: "Test Plan"',
+      'repoUrl: "git@github.com:test/repo.git"',
       'tasks:',
       '  - id: task-1',
       '    description: "Do something"',
@@ -331,6 +363,7 @@ tasks:
   it('parses visualProof field from plan YAML', () => {
     const yaml = [
       'name: "Test Plan"',
+      'repoUrl: "git@github.com:test/repo.git"',
       'description: "Architecture context"',
       'visualProof: true',
       'tasks:',
@@ -346,6 +379,7 @@ tasks:
   it('visualProof defaults to undefined when not set', () => {
     const yaml = [
       'name: "Test Plan"',
+      'repoUrl: "git@github.com:test/repo.git"',
       'tasks:',
       '  - id: task-1',
       '    description: "Do something"',

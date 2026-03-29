@@ -1544,14 +1544,9 @@ describe('TaskExecutor', () => {
       expect(squashCall).toBeDefined();
       const commitCall = gitCalls.find(c => c[0] === 'commit' && c.includes('-m'));
       expect(commitCall).toBeDefined();
-      // Merge commit hash is captured then applied to cwd via merge --ff-only or update-ref
-      const revParseCall = gitCalls.find(c => c[0] === 'rev-parse' && c[1] === 'HEAD');
-      expect(revParseCall).toBeDefined();
-      const ffMergeOrUpdateRef = gitCalls.find(c =>
-        (c[0] === 'merge' && c.includes('--ff-only')) ||
-        (c[0] === 'update-ref' && c[1]?.startsWith('refs/heads/')),
-      );
-      expect(ffMergeOrUpdateRef).toBeDefined();
+      // Squash commit pushed directly to origin from the clone
+      const pushCall = gitCalls.find(c => c[0] === 'push' && c.includes('--force') && c.includes('origin') && c.some(a => a.startsWith('HEAD:refs/heads/')));
+      expect(pushCall).toBeDefined();
 
       expect(orchestrator.handleWorkerResponse).toHaveBeenCalledWith(
         expect.objectContaining({ status: 'completed' }),
@@ -1631,13 +1626,13 @@ describe('TaskExecutor', () => {
       const commitCall = gitCalls.find(c => c[0] === 'commit');
       expect(commitCall).toBeUndefined();
 
-      // Should create a PR via mergeGateProvider
+      // Should create a PR via mergeGateProvider (using the gate clone dir, not host.cwd)
       expect(mergeGateProvider.createReview).toHaveBeenCalledWith(
         expect.objectContaining({
           baseBranch: 'master',
           featureBranch: 'plan/feature',
           title: 'Test Workflow',
-          cwd: '/tmp',
+          cwd: '/tmp/mock-wt',
         }),
       );
 
@@ -1909,14 +1904,9 @@ describe('TaskExecutor', () => {
       expect(squashCall).toBeDefined();
       const commitCall = gitCalls.find(c => c[0] === 'commit' && c.includes('-m'));
       expect(commitCall).toBeDefined();
-      // Merge commit hash is captured then applied to cwd via merge --ff-only or update-ref
-      const revParseCall = gitCalls.find(c => c[0] === 'rev-parse' && c[1] === 'HEAD');
-      expect(revParseCall).toBeDefined();
-      const ffMergeOrUpdateRef = gitCalls.find(c =>
-        (c[0] === 'merge' && c.includes('--ff-only')) ||
-        (c[0] === 'update-ref' && c[1]?.startsWith('refs/heads/')),
-      );
-      expect(ffMergeOrUpdateRef).toBeDefined();
+      // Squash commit pushed directly to origin from the clone
+      const pushCall = gitCalls.find(c => c[0] === 'push' && c.includes('--force') && c.includes('origin') && c.some(a => a.startsWith('HEAD:refs/heads/')));
+      expect(pushCall).toBeDefined();
     });
 
     it('approveMerge throws when workflow has no merge configured', async () => {
@@ -2113,8 +2103,8 @@ describe('TaskExecutor', () => {
 
       await executor.approveMerge('wf-1');
 
-      // Should push + create PR
-      expect((executor as any).execPr).toHaveBeenCalledWith('master', 'plan/feature', 'Test Workflow', expect.any(String));
+      // Should push + create PR (with clone dir as cwd)
+      expect((executor as any).execPr).toHaveBeenCalledWith('master', 'plan/feature', 'Test Workflow', expect.any(String), '/tmp/mock-wt');
 
       // Should persist the PR URL on the merge task
       expect(persistence.updateTask).toHaveBeenCalledWith(
@@ -2360,7 +2350,7 @@ describe('TaskExecutor', () => {
       await executor.approveMerge('wf-1');
 
       expect((executor as any).execPr).toHaveBeenCalledWith(
-        'master', 'plan/feature', 'Test Workflow', '## Summary\nApprove summary',
+        'master', 'plan/feature', 'Test Workflow', '## Summary\nApprove summary', '/tmp/mock-wt',
       );
       expect(persistence.updateTask).toHaveBeenCalledWith(
         '__merge__wf-1',
@@ -4401,19 +4391,21 @@ describe('TaskExecutor', () => {
       const mergeCall = gateGitCalls.find((c) => c.args[0] === 'merge' && c.args.includes('invoker/t1'));
       expect(mergeCall).toBeDefined();
 
-      // Feature branch pushed via host.cwd
-      const hostFetch = gitCalls.find((c) => c.dir === '/tmp/host' && c.args[0] === 'fetch');
-      expect(hostFetch).toBeDefined();
-      expect(hostFetch!.args).toContain('+plan/feature:refs/heads/plan/feature');
-      const hostPush = gitCalls.find((c) => c.dir === '/tmp/host' && c.args[0] === 'push');
-      expect(hostPush).toBeDefined();
+      // Feature branch pushed directly from gate clone to origin
+      const gatePush = gateGitCalls.find((c) => c.args[0] === 'push' && c.args.includes('origin') && c.args.includes('plan/feature'));
+      expect(gatePush).toBeDefined();
 
-      // PR created via mergeGateProvider
+      // No git operations in host.cwd
+      const hostCalls = gitCalls.filter((c) => c.dir === '/tmp/host');
+      expect(hostCalls).toHaveLength(0);
+
+      // PR created via mergeGateProvider (using gate clone dir, not host.cwd)
       expect(mergeGateProvider.createReview).toHaveBeenCalledWith(
         expect.objectContaining({
           baseBranch: 'master',
           featureBranch: 'plan/feature',
           title: 'Test Workflow',
+          cwd: '/tmp/gate-clone',
         }),
       );
 
@@ -4448,7 +4440,7 @@ describe('TaskExecutor', () => {
 
       await executor.publishAfterFix(mergeTask);
 
-      expect((executor as any).execPr).toHaveBeenCalledWith('master', 'plan/feature', 'Test Workflow', '## Summary');
+      expect((executor as any).execPr).toHaveBeenCalledWith('master', 'plan/feature', 'Test Workflow', '## Summary', '/tmp/gate-clone');
       expect(persistence.updateTask).toHaveBeenCalledWith('__merge__wf-pub', expect.objectContaining({
         execution: expect.objectContaining({ prUrl: 'https://github.com/owner/repo/pull/100' }),
       }));
@@ -4534,7 +4526,7 @@ describe('TaskExecutor', () => {
       expect(gateCalls[3]).toEqual(['checkout', '-b', 'plan/feature']);
     });
 
-    it('without gateWorkspacePath: uses host.cwd and skips detach', async () => {
+    it('without gateWorkspacePath: throws requiring a managed clone', async () => {
       const completedTask = makeTask({
         id: 't1',
         status: 'completed',
@@ -4542,7 +4534,7 @@ describe('TaskExecutor', () => {
         execution: { branch: 'invoker/t1' },
       });
 
-      const { executor, mergeTask, gitCalls } = setupPublishAfterFix({
+      const { executor, mergeTask, orchestrator } = setupPublishAfterFix({
         mergeMode: 'manual',
         featureBranch: 'plan/feature',
         gateWorkspacePath: null,
@@ -4551,16 +4543,14 @@ describe('TaskExecutor', () => {
 
       await executor.publishAfterFix(mergeTask);
 
-      // No detach/fetch calls for gate clone (there is none)
-      const detachCalls = gitCalls.filter((c) => c.args[0] === 'checkout' && c.args[1] === '--detach');
-      expect(detachCalls).toHaveLength(0);
-      const refsFetch = gitCalls.filter((c) => c.args.includes('+refs/heads/*:refs/heads/*'));
-      expect(refsFetch).toHaveLength(0);
-
-      // Feature branch created in host.cwd
-      const checkoutBranch = gitCalls.find((c) => c.args[0] === 'checkout' && c.args[1] === '-b');
-      expect(checkoutBranch).toBeDefined();
-      expect(checkoutBranch!.dir).toBe('/tmp/host');
+      // publishAfterFixImpl now requires gateWorkspacePath; without it the error
+      // is caught and forwarded as a failed WorkResponse
+      expect(orchestrator.handleWorkerResponse).toHaveBeenCalledWith(expect.objectContaining({
+        status: 'failed',
+        outputs: expect.objectContaining({
+          error: expect.stringContaining('requires a gate workspace'),
+        }),
+      }));
     });
   });
 });

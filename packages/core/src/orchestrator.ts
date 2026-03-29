@@ -95,6 +95,8 @@ export interface OrchestratorPersistence {
   loadAttempt(attemptId: string): Attempt | undefined;
   updateAttempt(attemptId: string, changes: Partial<Pick<Attempt, 'status' | 'startedAt' | 'completedAt' | 'exitCode' | 'error' | 'lastHeartbeatAt' | 'branch' | 'commit' | 'summary' | 'workspacePath' | 'claudeSessionId' | 'containerId' | 'mergeConflict'>>): void;
   getNextAttemptNumber(nodeId: string): number;
+  /** Load a workflow by ID (needed for SSH validation in editTaskType). */
+  loadWorkflow?(workflowId: string): { repoUrl?: string; baseBranch?: string } | undefined;
 }
 
 export interface OrchestratorMessageBus {
@@ -121,7 +123,6 @@ export interface PlanDefinition {
     pivot?: boolean;
     experimentVariants?: Array<{ id: string; description: string; prompt?: string; command?: string }>;
     requiresManualApproval?: boolean;
-    repoUrl?: string;
     featureBranch?: string;
     familiarType?: string;
     autoFix?: boolean;
@@ -156,7 +157,6 @@ export interface GraphMutationNodeDef {
   experimentPrompt?: string;
   prompt?: string;
   command?: string;
-  repoUrl?: string;
   familiarType?: string;
   isReconciliation?: boolean;
   requiresManualApproval?: boolean;
@@ -355,7 +355,7 @@ export class Orchestrator {
           `in workflow ${wfSummary}.\n\n` +
           `Submitting this plan would modify the existing workflow's task graph. ` +
           `If this is intentional, set "allowGraphMutation": true in ` +
-          `~/.invoker/config.json or <repoDir>/.invoker.json.`,
+          `~/.invoker/config.json.`,
           conflictingIds,
           conflictingWorkflows,
         );
@@ -406,7 +406,6 @@ export class Orchestrator {
           pivot: taskDef.pivot,
           experimentVariants: taskDef.experimentVariants,
           requiresManualApproval: taskDef.requiresManualApproval,
-          repoUrl: taskDef.repoUrl,
           featureBranch: taskDef.featureBranch,
           familiarType: normalizeFamiliarType(effectiveFamiliarType) ?? 'worktree',
           dockerImage: taskDef.dockerImage,
@@ -976,6 +975,18 @@ export class Orchestrator {
     if (task.status === 'running') throw new Error(`Cannot edit running task ${taskId}`);
 
     const effectiveType = normalizeFamiliarType(familiarType) ?? familiarType;
+
+    // SSH requires repoUrl on the workflow to clone onto the remote host
+    if (effectiveType === 'ssh' && task.config.workflowId && this.persistence.loadWorkflow) {
+      const wf = this.persistence.loadWorkflow(task.config.workflowId);
+      if (!wf?.repoUrl) {
+        throw new Error(
+          `Cannot switch task "${taskId}" to SSH: workflow has no repoUrl. ` +
+          `Add repoUrl to the plan YAML.`,
+        );
+      }
+    }
+
     const configPatch: Record<string, unknown> = { familiarType: effectiveType };
     if (effectiveType === 'ssh') {
       configPatch.remoteTargetId = remoteTargetId;
@@ -1397,7 +1408,6 @@ export class Orchestrator {
       experimentPrompt: v.prompt,
       prompt: v.prompt,
       command: v.command,
-      repoUrl: parentTask?.config.repoUrl,
       familiarType: parentTask?.config.familiarType,
     }));
 

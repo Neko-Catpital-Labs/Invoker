@@ -209,7 +209,7 @@ export class TaskExecutor {
     const generation = (workflow as any)?.generation ?? 0;
     const baseBranch = workflow?.baseBranch ?? this.defaultBranch;
 
-    const repoUrl = task.config.repoUrl ?? workflow?.repoUrl;
+    const repoUrl = workflow?.repoUrl;
 
     const request: WorkRequest = {
       requestId: randomUUID(),
@@ -338,9 +338,7 @@ export class TaskExecutor {
    * Merge gate tasks use the default (worktree) familiar when selected explicitly.
    */
   selectFamiliar(task: TaskState): Familiar {
-    // Infer 'worktree' when task has repoUrl but no explicit familiarType
-    const effectiveType = task.config.familiarType
-      ?? (task.config.repoUrl ? 'worktree' : undefined);
+    const effectiveType = task.config.familiarType;
 
     if (effectiveType) {
       const registered = this.familiarRegistry.get(effectiveType);
@@ -365,7 +363,6 @@ export class TaskExecutor {
       if (effectiveType === 'worktree') {
         const invokerHome = resolve(homedir(), '.invoker');
         const worktree = new WorktreeFamiliar({
-          repoDir: this.cwd,
           worktreeBaseDir: resolve(invokerHome, 'worktrees'),
           cacheDir: resolve(invokerHome, 'repos'),
           maxWorktrees: this.maxWorktreesPerRepo,
@@ -603,13 +600,18 @@ export class TaskExecutor {
   /** @internal */ async createMergeWorktree(ref: string, label: string): Promise<string> {
     const clonePath = resolve(homedir(), '.invoker', 'merge-clones', `${label}-${Date.now()}`);
     mkdirSync(resolve(homedir(), '.invoker', 'merge-clones'), { recursive: true });
-    // Clone with hard-linked objects — near-instant, fully isolated refs
+    // Clone with hard-linked objects from host repo — near-instant, fully isolated refs
     await this.execGitReadonly(['clone', '--local', '--no-checkout', this.cwd, clonePath]);
     // Detach HEAD so the fetch can overwrite all branch refs (including the default branch)
     const headSha = (await this.execGitIn(['rev-parse', 'HEAD'], clonePath)).trim();
     await this.execGitIn(['update-ref', '--no-deref', 'HEAD', headSha], clonePath);
-    // Mirror all host branches as local refs so bare branch names resolve
+    // Mirror all host branches as local refs so bare branch names resolve.
+    // At this point origin still points to host.cwd, so this is a fast local fetch.
     await this.execGitIn(['fetch', 'origin', '+refs/heads/*:refs/heads/*'], clonePath);
+    // Reconfigure origin to the real GitHub remote so subsequent push/fetch
+    // operations go directly to GitHub, bypassing the user's working directory.
+    const realOrigin = (await this.execGitReadonly(['remote', 'get-url', 'origin'])).trim();
+    await this.execGitIn(['remote', 'set-url', 'origin', realOrigin], clonePath);
     await this.execGitIn(['checkout', '--detach', ref], clonePath);
     return clonePath;
   }
@@ -636,10 +638,11 @@ export class TaskExecutor {
     }
   }
 
-  /** @internal */ execGh(args: string[]): Promise<string> {
+  /** @internal */ execGh(args: string[], cwd?: string): Promise<string> {
+    const effectiveCwd = cwd ?? this.cwd;
     return new Promise((resolvePromise, reject) => {
       const child = spawn('gh', args, {
-        cwd: this.cwd,
+        cwd: effectiveCwd,
         stdio: ['ignore', 'pipe', 'pipe'],
       });
       let stdout = '';
@@ -653,29 +656,27 @@ export class TaskExecutor {
     });
   }
 
-  /** @internal */ async execPr(baseBranch: string, featureBranch: string, title: string, body?: string): Promise<string> {
+  /** @internal */ async execPr(baseBranch: string, featureBranch: string, title: string, body?: string, cwd?: string): Promise<string> {
     const ghBase = normalizeBranchForGithubCli(baseBranch);
     const ghHead = normalizeBranchForGithubCli(featureBranch);
-    // Check for an existing open PR first
     const listOutput = await this.execGh([
       'pr', 'list', '--head', ghHead, '--base', ghBase,
       '--state', 'open', '--json', 'url,number', '--limit', '1',
-    ]);
+    ], cwd);
 
     const existing: Array<{ url: string; number: number }> = JSON.parse(listOutput || '[]');
     if (existing.length > 0) {
       const pr = existing[0];
       const editArgs = ['pr', 'edit', String(pr.number), '--title', title];
       if (body) editArgs.push('--body', body);
-      await this.execGh(editArgs);
+      await this.execGh(editArgs, cwd);
       return pr.url;
     }
 
-    // No existing PR — create a new one
     return this.execGh([
       'pr', 'create', '--base', ghBase,
       '--head', ghHead, '--title', title, '--body', body ?? '',
-    ]);
+    ], cwd);
   }
 
   // ── Experiment Branch Merging ────────────────────────────
@@ -725,7 +726,7 @@ export class TaskExecutor {
         await this.execGitIn(['merge', '--no-ff', '-m', expMergeMsg, b], worktreeDir);
       }
 
-      // Push reconciliation branch from clone to host.cwd
+      // Push reconciliation branch from clone to origin (GitHub)
       await this.execGitIn(['push', '--force', 'origin', `${branchName}:refs/heads/${branchName}`], worktreeDir);
 
       const commit = await this.execGitIn(['rev-parse', 'HEAD'], worktreeDir);
@@ -1004,7 +1005,7 @@ export class TaskExecutor {
         try {
           await this.execGitIn(['checkout', branch], worktreeDir);
           await this.execGitIn(['rebase', baseBranch], worktreeDir);
-          // Push rebased branch from clone to host.cwd
+          // Push rebased branch from clone to origin (GitHub)
           await this.execGitIn(['push', '--force', 'origin', `${branch}:refs/heads/${branch}`], worktreeDir);
           rebasedBranches.push(branch);
           console.log(`[rebase] Successfully rebased ${branch} onto ${baseBranch}`);

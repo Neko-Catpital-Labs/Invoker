@@ -1,9 +1,8 @@
 /**
- * Layered configuration loader for Invoker.
+ * Configuration loader for Invoker.
  *
- * Resolution order (last wins):
- *   1. ~/.invoker/config.json   (user-level defaults)
- *   2. <repoDir>/.invoker.json  (repo-level overrides, checked into git)
+ * Reads from ~/.invoker/config.json (user-level config).
+ * Override with INVOKER_REPO_CONFIG_PATH env var (for tests).
  */
 
 import { readFileSync } from 'node:fs';
@@ -104,13 +103,11 @@ function readJsonSafe(path: string): InvokerConfig {
   }
 }
 
-export function loadConfig(repoDir: string): InvokerConfig {
-  const userConfig = readJsonSafe(join(homedir(), '.invoker', 'config.json'));
-  // INVOKER_REPO_CONFIG_PATH overrides the default .invoker.json path so verification
-  // scripts can inject fixture configs without clobbering the checked-in repo file.
-  const repoConfigPath = process.env.INVOKER_REPO_CONFIG_PATH ?? join(repoDir, '.invoker.json');
-  const repoConfig = readJsonSafe(repoConfigPath);
-  return { ...userConfig, ...repoConfig };
+export function loadConfig(): InvokerConfig {
+  if (process.env.INVOKER_REPO_CONFIG_PATH) {
+    return readJsonSafe(process.env.INVOKER_REPO_CONFIG_PATH);
+  }
+  return readJsonSafe(join(homedir(), '.invoker', 'config.json'));
 }
 
 /** A single executor routing rule from InvokerConfig.executorRoutingRules. */

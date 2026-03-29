@@ -72,7 +72,7 @@ function createHeadlessExecutor(
     cwd: deps.repoRoot,
     defaultBranch: deps.invokerConfig.defaultBranch,
     dockerConfig: deps.invokerConfig.docker,
-    remoteTargetsProvider: () => loadConfig(deps.repoRoot).remoteTargets ?? {},
+    remoteTargetsProvider: () => loadConfig().remoteTargets ?? {},
     mergeGateProvider: new GitHubMergeGateProvider(),
     callbacks: {
       onOutput: (taskId, data) => {
@@ -214,7 +214,7 @@ async function headlessRun(planPath: string, deps: HeadlessDeps, waitForApproval
   const { formatTaskStatus, formatWorkflowStatus } = await import('./formatter.js');
 
   const yamlSource = await readFile(planPath, 'utf-8');
-  const plan = await parsePlanFile(planPath, repoRoot);
+  const plan = await parsePlanFile(planPath);
   backupPlan(plan, yamlSource);
   console.log(`${BOLD}Loading plan: ${plan.name}${RESET}`);
   console.log(`Tasks: ${plan.tasks.length}\n`);

@@ -21,7 +21,7 @@ describe('Terminal routing via selectFamiliar', () => {
 
   beforeEach(() => {
     registry = new FamiliarRegistry();
-    registry.register('worktree', new WorktreeFamiliar({ repoDir: '/tmp' }));
+    registry.register('worktree', new WorktreeFamiliar({ cacheDir: '/tmp/cache' }));
   });
 
   it('returns worktree familiar when no familiarType specified', () => {

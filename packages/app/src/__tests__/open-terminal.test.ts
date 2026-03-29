@@ -173,7 +173,7 @@ describe('open-terminal integration', () => {
     const persistence = new InMemoryPersistence();
     const bus = new InMemoryBus();
     familiar = new WorktreeFamiliar({
-      repoDir: process.cwd(),
+      cacheDir: join(tmpdir(), `open-term-cache-${randomUUID()}`),
       worktreeBaseDir: join(tmpdir(), `open-term-wt-${randomUUID()}`),
     });
     orchestrator = new Orchestrator({ persistence, messageBus: bus });
@@ -187,6 +187,7 @@ describe('open-terminal integration', () => {
     // Mock the pool to return our temp directory
     Object.defineProperty(familiar, 'pool', {
       value: {
+        ensureClone: vi.fn().mockResolvedValue(mockWorktreeDir),
         acquireWorktree: vi.fn().mockResolvedValue({
           worktreePath: mockWorktreeDir,
           branch: 'test-branch',
@@ -394,7 +395,7 @@ describe('getRestoredTerminalSpec routing', () => {
   });
 
   describe('WorktreeFamiliar', () => {
-    const wt = new WorktreeFamiliar({ repoDir: '/tmp/repo', worktreeBaseDir: '/tmp/wt', cacheDir: '/tmp/cache' });
+    const wt = new WorktreeFamiliar({ worktreeBaseDir: '/tmp/wt', cacheDir: '/tmp/cache' });
 
     it('returns claude --resume spec with cwd when session is set', () => {
       vi.mocked(existsSync).mockReturnValue(true);
@@ -511,7 +512,7 @@ describe('merge gate open-terminal', () => {
 
   it('resolves merge gate fallback to default worktree familiar', () => {
     const registry = new FamiliarRegistry();
-    const worktree = new WorktreeFamiliar({ repoDir: process.cwd(), worktreeBaseDir: join(tmpdir(), 'merge-gate-wt') });
+    const worktree = new WorktreeFamiliar({ cacheDir: join(tmpdir(), 'cache'), worktreeBaseDir: join(tmpdir(), 'merge-gate-wt') });
     registry.register('worktree', worktree);
 
     const meta: PersistedTaskMeta = {
@@ -538,7 +539,7 @@ describe('merge gate open-terminal', () => {
   it('opens terminal with git checkout for merge gate with branch when workspacePath is a worktree', () => {
     const wtBase = join(tmpdir(), 'merge-gate-wt-b');
     const registry = new FamiliarRegistry();
-    const worktree = new WorktreeFamiliar({ repoDir: process.cwd(), worktreeBaseDir: wtBase });
+    const worktree = new WorktreeFamiliar({ cacheDir: join(tmpdir(), 'cache'), worktreeBaseDir: wtBase });
     registry.register('worktree', worktree);
 
     const worktreePath = join(wtBase, 'gate-wt');
@@ -566,7 +567,7 @@ describe('merge gate open-terminal', () => {
   it('opens terminal with git checkout for merge gate with branch when workspacePath is a worktree', () => {
     const wtBase = join(tmpdir(), 'merge-gate-wt-d');
     const registry = new FamiliarRegistry();
-    const worktree = new WorktreeFamiliar({ repoDir: process.cwd(), worktreeBaseDir: wtBase });
+    const worktree = new WorktreeFamiliar({ cacheDir: join(tmpdir(), 'cache'), worktreeBaseDir: wtBase });
     registry.register('worktree', worktree);
 
     const worktreePath = join(wtBase, 'existing-wt');
@@ -593,7 +594,7 @@ describe('merge gate open-terminal', () => {
 
   it('opens terminal with cwd only for merge gate without branch', () => {
     const registry = new FamiliarRegistry();
-    const worktree = new WorktreeFamiliar({ repoDir: process.cwd(), worktreeBaseDir: join(tmpdir(), 'merge-gate-wt-c') });
+    const worktree = new WorktreeFamiliar({ cacheDir: join(tmpdir(), 'cache'), worktreeBaseDir: join(tmpdir(), 'merge-gate-wt-c') });
     registry.register('worktree', worktree);
 
     const meta: PersistedTaskMeta = {

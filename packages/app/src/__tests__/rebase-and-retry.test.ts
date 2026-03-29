@@ -137,6 +137,7 @@ describe('rebase-and-retry: branch deletion before restart', { timeout: 120_000 
       loadWorkflow: () => ({
         id: 'wf-test',
         baseBranch: 'master',
+        repoUrl: `file://${tmpDir}`,
         generation,
       }),
       updateWorkflow: (_id: string, changes: any) => {
@@ -159,7 +160,7 @@ describe('rebase-and-retry: branch deletion before restart', { timeout: 120_000 
     registry.register(
       'worktree',
       new WorktreeFamiliar({
-        repoDir: tmpDir,
+        cacheDir: join(tmpDir, 'rebase-retry-cache'),
         worktreeBaseDir: join(tmpDir, 'rebase-retry-wt'),
         claudeCommand: '/bin/echo',
       }),

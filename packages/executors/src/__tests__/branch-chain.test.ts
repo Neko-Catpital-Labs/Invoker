@@ -154,6 +154,7 @@ describe('A→B→C branch chain', { timeout: 120_000 }, () => {
       loadWorkflow: () => ({
         id: 'wf-test',
         baseBranch: 'master',
+        repoUrl: `file://${tmpDir}`,
       }),
       updateTask: (id: string, changes: any) => {
         const task = tasks.find(t => t.id === id);
@@ -168,7 +169,7 @@ describe('A→B→C branch chain', { timeout: 120_000 }, () => {
 
     const registry = new FamiliarRegistry();
     const worktreeFamiliar = new WorktreeFamiliar({
-      repoDir: tmpDir,
+      cacheDir: join(tmpDir, 'branch-chain-cache'),
       worktreeBaseDir: join(tmpDir, 'branch-chain-wt'),
       claudeCommand: '/bin/echo',
     });
@@ -353,7 +354,7 @@ describe('A→B→C branch chain', { timeout: 120_000 }, () => {
       registry.register(
         'worktree',
         new WorktreeFamiliar({
-          repoDir: tmpDir,
+          cacheDir: join(tmpDir, 'branch-chain-cache'),
           worktreeBaseDir: join(tmpDir, 'branch-chain-wt'),
           claudeCommand: '/bin/echo',
         }),
@@ -370,7 +371,7 @@ describe('A→B→C branch chain', { timeout: 120_000 }, () => {
         setTaskAwaitingApproval: () => {},
       };
       const persistence = {
-        loadWorkflow: () => ({ id: 'wf-test', baseBranch: 'master' }),
+        loadWorkflow: () => ({ id: 'wf-test', baseBranch: 'master', repoUrl: `file://${tmpDir}` }),
         updateTask: (id: string, changes: any) => {
           const task = tasks.find(t => t.id === id);
           if (task && changes.execution) Object.assign(task.execution, changes.execution);
@@ -446,7 +447,7 @@ describe('A→B→C branch chain', { timeout: 120_000 }, () => {
       registry.register(
         'worktree',
         new WorktreeFamiliar({
-          repoDir: tmpDir,
+          cacheDir: join(tmpDir, 'branch-chain-cache'),
           worktreeBaseDir: join(tmpDir, 'branch-chain-wt'),
           claudeCommand: '/bin/echo',
         }),
@@ -463,7 +464,7 @@ describe('A→B→C branch chain', { timeout: 120_000 }, () => {
         setTaskAwaitingApproval: () => {},
       };
       const persistence = {
-        loadWorkflow: () => ({ id: 'wf-test', baseBranch: 'master' }),
+        loadWorkflow: () => ({ id: 'wf-test', baseBranch: 'master', repoUrl: `file://${tmpDir}` }),
         updateTask: (id: string, changes: any) => {
           const task = tasks.find(t => t.id === id);
           if (task && changes.execution) Object.assign(task.execution, changes.execution);
@@ -519,7 +520,7 @@ describe('A→B→C branch chain', { timeout: 120_000 }, () => {
       registry.register(
         'worktree',
         new WorktreeFamiliar({
-          repoDir: tmpDir,
+          cacheDir: join(tmpDir, 'branch-chain-cache'),
           worktreeBaseDir: join(tmpDir, 'branch-chain-wt'),
           claudeCommand: '/bin/echo',
         }),
@@ -536,7 +537,7 @@ describe('A→B→C branch chain', { timeout: 120_000 }, () => {
         setTaskAwaitingApproval: () => {},
       };
       const persistence = {
-        loadWorkflow: () => ({ id: 'wf-test', baseBranch: 'master' }),
+        loadWorkflow: () => ({ id: 'wf-test', baseBranch: 'master', repoUrl: `file://${tmpDir}` }),
         updateTask: (id: string, changes: any) => {
           const task = tasks.find(t => t.id === id);
           if (task && changes.execution) Object.assign(task.execution, changes.execution);

@@ -172,6 +172,11 @@ export class RepoPool {
     return { clonePath, worktreePath: effectivePath, branch, release };
   }
 
+  /** Get the deterministic clone directory path for a given repo URL. */
+  getClonePath(repoUrl: string): string {
+    return this.cloneDir(repoUrl);
+  }
+
   async destroyAll(): Promise<void> {
     const releasePromises: Promise<void>[] = [];
     for (const [repoUrl, paths] of this.activeWorktrees) {

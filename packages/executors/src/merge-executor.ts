@@ -6,7 +6,7 @@
  */
 
 import { appendFileSync, mkdirSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { normalize, resolve } from 'node:path';
 import { homedir } from 'node:os';
 
 import type { Orchestrator, TaskState } from '@invoker/core';
@@ -24,6 +24,28 @@ export function mergeTrace(tag: string, data: Record<string, unknown>): void {
     mkdirSync(resolve(homedir(), '.invoker'), { recursive: true });
     appendFileSync(MERGE_TRACE_LOG, `${new Date().toISOString()} [merge-trace:executor] ${tag} ${JSON.stringify(data)}\n`);
   } catch { /* best effort */ }
+}
+
+// ── Host-cwd safety guard ─────────────────────────────────
+
+/**
+ * Wrapper around host.execGitIn that throws if the target directory is the
+ * user's main working directory (host.cwd). All merge-executor git operations
+ * must target a managed merge clone, never the host repo.
+ */
+async function execGitInMergeSafe(
+  host: MergeExecutorHost,
+  args: string[],
+  dir: string,
+): Promise<string> {
+  if (normalize(resolve(dir)) === normalize(resolve(host.cwd))) {
+    throw new Error(
+      `SAFETY: merge-executor must not run git in host repo (${host.cwd}). ` +
+      `All merge git operations must use a managed merge clone. ` +
+      `git args: [${args.join(', ')}]\n${new Error().stack}`,
+    );
+  }
+  return host.execGitIn(args, dir);
 }
 
 // ── Host interface ───────────────────────────────────────
@@ -44,8 +66,8 @@ export interface MergeExecutorHost {
   execGitIn(args: string[], dir: string): Promise<string>;
   createMergeWorktree(ref: string, label: string): Promise<string>;
   removeMergeWorktree(dir: string): Promise<void>;
-  execGh(args: string[]): Promise<string>;
-  execPr(baseBranch: string, featureBranch: string, title: string, body?: string): Promise<string>;
+  execGh(args: string[], cwd?: string): Promise<string>;
+  execPr(baseBranch: string, featureBranch: string, title: string, body?: string, cwd?: string): Promise<string>;
   detectDefaultBranch(): Promise<string>;
   gitLogMessage(commitHash: string): Promise<string>;
   gitDiffStat(branch: string): Promise<string>;
@@ -78,7 +100,7 @@ export async function ensureLocalBranchForMerge(
 ): Promise<void> {
   let hadLocal = false;
   try {
-    await host.execGitIn(['rev-parse', '--verify', branch], worktreeDir);
+    await execGitInMergeSafe(host, ['rev-parse', '--verify', branch], worktreeDir);
     hadLocal = true;
   } catch {
     /* ref missing — try origin */
@@ -87,16 +109,15 @@ export async function ensureLocalBranchForMerge(
   if (hadLocal) return;
 
   try {
-    await host.execGitIn(
+    await execGitInMergeSafe(
+      host,
       ['fetch', 'origin', `+refs/heads/${branch}:refs/heads/${branch}`],
       worktreeDir,
     );
   } catch {
-    // Local ref not found in origin's refs/heads — try remote-tracking ref.
-    // Task branches are pushed to the GitHub remote but may not persist as
-    // local refs in the host repo (worktree cleanup, restarts, etc.).
     try {
-      await host.execGitIn(
+      await execGitInMergeSafe(
+        host,
         ['fetch', 'origin', `+refs/remotes/origin/${branch}:refs/heads/${branch}`],
         worktreeDir,
       );
@@ -228,12 +249,13 @@ export async function executeMergeNodeImpl(
           }
         }
 
-        // Create PR via provider (consolidation already done above)
+        // Create PR via provider (consolidation already done above).
+        // Use the gate clone dir so gh CLI resolves the correct GitHub remote.
         const result = await host.mergeGateProvider.createReview({
           baseBranch,
           featureBranch,
           title: workflow?.name ?? 'Workflow',
-          cwd: host.cwd,
+          cwd: gateWorkspacePath!,
           body: fullSummary,
         });
         console.log(`[merge] Created GitHub PR: ${result.url}`);
@@ -363,30 +385,17 @@ export async function approveMergeImpl(
     try {
       mergeTrace('GIT_MERGE_SQUASH', { featureBranch, worktreeDir });
       await ensureLocalBranchForMerge(host, worktreeDir, featureBranch);
-      await host.execGitIn(['merge', '--squash', featureBranch], worktreeDir);
+      await execGitInMergeSafe(host, ['merge', '--squash', featureBranch], worktreeDir);
       mergeTrace('GIT_COMMIT', { mergeMessage });
       const commitBody = fullSummary ? `${mergeMessage}\n\n${fullSummary}` : mergeMessage;
-      await host.execGitIn(['commit', '-m', commitBody], worktreeDir);
-      const mergeHash = (await host.execGitIn(['rev-parse', 'HEAD'], worktreeDir)).trim();
-      // Fetch squash commit into host.cwd so the hash is valid in its object store
-      await host.execGitIn(['fetch', worktreeDir, 'HEAD'], host.cwd);
-      try {
-        const currentBranch = (await host.execGitIn(['branch', '--show-current'], host.cwd)).trim();
-        if (currentBranch === baseBranch) {
-          await host.execGitIn(['merge', '--ff-only', mergeHash], host.cwd);
-          console.log(`[merge] Synced main working tree to ${baseBranch}`);
-        } else {
-          await host.execGitIn(['update-ref', 'refs/heads/' + baseBranch, mergeHash], host.cwd);
-          console.log(`[merge] Advanced ${baseBranch} ref (cwd on "${currentBranch}")`);
-        }
-      } catch (err) {
-        console.log(`[merge] Failed to advance ${baseBranch}: ${err instanceof Error ? err.message : String(err)}`);
-      }
+      await execGitInMergeSafe(host, ['commit', '-m', commitBody], worktreeDir);
+      // Push squash commit directly to origin (GitHub) from the clone
+      await execGitInMergeSafe(host, ['push', '--force', 'origin', `HEAD:refs/heads/${baseBranch}`], worktreeDir);
       mergeTrace('SQUASH_MERGE_COMPLETE', { featureBranch, baseBranch });
       console.log(`[merge] Approved: squash-merged ${featureBranch} into ${baseBranch}`);
     } catch (err) {
       mergeTrace('APPROVE_MERGE_ERROR', { workflowId, error: String(err) });
-      try { await host.execGitIn(['merge', '--abort'], worktreeDir); } catch { /* no merge in progress */ }
+      try { await execGitInMergeSafe(host, ['merge', '--abort'], worktreeDir); } catch { /* no merge in progress */ }
       throw err;
     } finally {
       await host.removeMergeWorktree(worktreeDir);
@@ -398,10 +407,9 @@ export async function approveMergeImpl(
     const worktreeDir = await host.createMergeWorktree(featureBranch, 'approve-pr-' + workflowId);
     try {
       mergeTrace('GIT_PUSH', { featureBranch, worktreeDir });
-      // Push feature branch from clone to host.cwd, then from host.cwd to GitHub
-      await host.execGitIn(['push', '--force', 'origin', `HEAD:refs/heads/${featureBranch}`], worktreeDir);
-      await host.execGitIn(['push', '--force', '-u', 'origin', featureBranch], host.cwd);
-      const prUrl = await host.execPr(baseBranch, featureBranch, mergeMessage, fullSummary);
+      // Push feature branch directly to origin (GitHub) from the clone
+      await execGitInMergeSafe(host, ['push', '--force', '-u', 'origin', featureBranch], worktreeDir);
+      const prUrl = await host.execPr(baseBranch, featureBranch, mergeMessage, fullSummary, worktreeDir);
       mergeTrace('PR_CREATED', { featureBranch, baseBranch, prUrl });
       console.log(`[merge] Approved: created pull request ${prUrl}`);
       host.persistence.updateTask(mergeTaskId, {
@@ -424,7 +432,7 @@ export async function approveMergeImpl(
  *
  * Key insight: Claude fixed the code in the gate clone (on its HEAD, typically
  * the baseBranch). We must consolidate task branches starting from the gate
- * clone's HEAD (which has the fixes), NOT from host.cwd's baseBranch.
+ * clone's HEAD (which has the fixes), NOT from the original baseBranch.
  * Using the normal consolidateAndMerge would destroy the fixes by recreating
  * the feature branch from the un-fixed baseBranch.
  *
@@ -467,22 +475,23 @@ export async function publishAfterFixImpl(
 
     // Consolidate task branches in the gate clone, starting from the gate
     // clone's current HEAD (which has Claude's fixes).
-    const consolidateDir = gateWorkspacePath ?? host.cwd;
-
-    // Refresh branch refs from host.cwd into the gate clone.
-    // Must detach HEAD first — git refuses to fetch into a checked-out branch.
-    if (gateWorkspacePath) {
-      const headSha = (await host.execGitIn(['rev-parse', 'HEAD'], gateWorkspacePath)).trim();
-      await host.execGitIn(['checkout', '--detach', headSha], gateWorkspacePath);
-      await host.execGitIn(['fetch', 'origin', '+refs/heads/*:refs/heads/*'], gateWorkspacePath);
+    if (!gateWorkspacePath) {
+      throw new Error('publishAfterFix requires a gate workspace (managed clone), not host.cwd');
     }
+    const consolidateDir = gateWorkspacePath;
+
+    // Refresh branch refs from origin (GitHub) into the gate clone.
+    // Must detach HEAD first — git refuses to fetch into a checked-out branch.
+    const headSha = (await execGitInMergeSafe(host, ['rev-parse', 'HEAD'], gateWorkspacePath)).trim();
+    await execGitInMergeSafe(host, ['checkout', '--detach', headSha], gateWorkspacePath);
+    await execGitInMergeSafe(host, ['fetch', 'origin', '+refs/heads/*:refs/heads/*'], gateWorkspacePath);
 
     // Create feature branch from HEAD (Claude's fixed base)
     try {
-      await host.execGitIn(['checkout', '-b', featureBranch], consolidateDir);
+      await execGitInMergeSafe(host, ['checkout', '-b', featureBranch], consolidateDir);
     } catch {
-      await host.execGitIn(['branch', '-D', featureBranch], consolidateDir);
-      await host.execGitIn(['checkout', '-b', featureBranch], consolidateDir);
+      await execGitInMergeSafe(host, ['branch', '-D', featureBranch], consolidateDir);
+      await execGitInMergeSafe(host, ['checkout', '-b', featureBranch], consolidateDir);
     }
 
     // Gather task branches (same logic as consolidateAndMergeImpl)
@@ -515,19 +524,12 @@ export async function publishAfterFixImpl(
       console.log(`[merge] Post-fix: merging task branch ${branch} → ${featureBranch}`);
       await ensureLocalBranchForMerge(host, consolidateDir, branch);
       const mergeMsg = description ? `Merge ${branch} — ${description}` : `Merge ${branch}`;
-      await host.execGitIn(['merge', '--no-ff', '-m', mergeMsg, branch], consolidateDir);
+      await execGitInMergeSafe(host, ['merge', '--no-ff', '-m', mergeMsg, branch], consolidateDir);
     }
     console.log(`[merge] Post-fix: consolidated ${taskBranches.length} task branches into ${featureBranch}`);
 
-    // Push feature branch from gate clone → host.cwd → origin
-    await host.execGitIn(
-      ['fetch', consolidateDir, `+${featureBranch}:refs/heads/${featureBranch}`],
-      host.cwd,
-    );
-    await host.execGitIn(
-      ['push', '--force', '-u', 'origin', featureBranch],
-      host.cwd,
-    );
+    // Push feature branch directly to origin (GitHub) from the gate clone
+    await execGitInMergeSafe(host, ['push', '--force', '-u', 'origin', featureBranch], consolidateDir);
 
     let fullSummary = summary;
     if (visualProof && host.runVisualProofCapture) {
@@ -547,7 +549,7 @@ export async function publishAfterFixImpl(
         baseBranch,
         featureBranch,
         title: workflow?.name ?? 'Workflow',
-        cwd: host.cwd,
+        cwd: consolidateDir,
         body: fullSummary,
       });
       console.log(`[merge] Post-fix: created/updated GitHub PR: ${result.url}`);
@@ -572,7 +574,7 @@ export async function publishAfterFixImpl(
 
     // manual mode with pull_request onFinish
     if (onFinish === 'pull_request') {
-      const prUrl = await host.execPr(baseBranch, featureBranch, workflow?.name ?? 'Workflow', fullSummary);
+      const prUrl = await host.execPr(baseBranch, featureBranch, workflow?.name ?? 'Workflow', fullSummary, consolidateDir);
       console.log(`[merge] Post-fix: created pull request ${prUrl}`);
       host.persistence.updateTask(task.id, {
         config: { summary },
@@ -732,13 +734,12 @@ export async function consolidateAndMergeImpl(
   try {
     // Create feature branch in worktree
     try {
-      await host.execGitIn(['checkout', '-b', featureBranch, baseBranch], worktreeDir);
+      await execGitInMergeSafe(host, ['checkout', '-b', featureBranch, baseBranch], worktreeDir);
       console.log(`[merge] Created ${featureBranch} from ${baseBranch}`);
     } catch {
-      // Branch exists from a previous attempt — delete and recreate for a clean slate
       console.log(`[merge] WARNING: Deleting existing ${featureBranch} to recreate from ${baseBranch}`);
-      await host.execGitIn(['branch', '-D', featureBranch], worktreeDir);
-      await host.execGitIn(['checkout', '-b', featureBranch, baseBranch], worktreeDir);
+      await execGitInMergeSafe(host, ['branch', '-D', featureBranch], worktreeDir);
+      await execGitInMergeSafe(host, ['checkout', '-b', featureBranch, baseBranch], worktreeDir);
       console.log(`[merge] Recreated ${featureBranch} from ${baseBranch}`);
     }
 
@@ -748,9 +749,6 @@ export async function consolidateAndMergeImpl(
       const mergeT = allTasks.find((x) => x.id === mergeNodeTaskId && x.config.isMergeNode);
       if (mergeT) {
         allowedTaskIds = collectTransitiveNonMergeTaskIds(mergeT, (id) => host.orchestrator.getTask(id));
-        // Parallel workflow leaves must all consolidate even if merge.dependencies was
-        // synced incorrectly (e.g. stale task dropped from leaf set, DB skew). Walking
-        // only merge.deps misses a sibling leaf like verify-ui-tests.
         for (const lid of findLeafTaskIdsInWorkflow(allTasks, workflowId)) {
           allowedTaskIds.add(lid);
         }
@@ -781,13 +779,9 @@ export async function consolidateAndMergeImpl(
       const task = allTasks.find(t => t.execution.branch === branch);
       const desc = task?.description ?? '';
       const mergeMsg = desc ? `Merge ${branch} — ${desc}` : `Merge ${branch}`;
-      await host.execGitIn(['merge', '--no-ff', '-m', mergeMsg, branch], worktreeDir);
+      await execGitInMergeSafe(host, ['merge', '--no-ff', '-m', mergeMsg, branch], worktreeDir);
     }
     console.log(`[merge] Consolidated ${taskBranches.length} task branches into ${featureBranch}`);
-    // Persist feature branch in host.cwd (clone's origin) for later operations.
-    // Use fetch-into instead of push to bypass receive.denyCurrentBranch when
-    // a stale gate worktree has the feature branch checked out.
-    await host.execGitIn(['fetch', worktreeDir, `+${featureBranch}:refs/heads/${featureBranch}`], host.cwd);
 
     if (visualProof && onFinish === 'pull_request' && host.runVisualProofCapture) {
       const slug = (featureBranch ?? 'workflow').replace(/\//g, '-');
@@ -800,43 +794,29 @@ export async function consolidateAndMergeImpl(
     const mergeMessage = workflowName ?? 'Workflow';
 
     if (onFinish === 'merge') {
-      // Detach at baseBranch and squash merge
-      await host.execGitIn(['checkout', '--detach', baseBranch], worktreeDir);
-      await host.execGitIn(['merge', '--squash', featureBranch], worktreeDir);
-      const hasChanges = await host.execGitIn(['diff', '--cached', '--quiet'], worktreeDir)
+      // Squash merge in the clone and push result directly to origin (GitHub)
+      await execGitInMergeSafe(host, ['checkout', '--detach', baseBranch], worktreeDir);
+      await execGitInMergeSafe(host, ['merge', '--squash', featureBranch], worktreeDir);
+      const hasChanges = await execGitInMergeSafe(host, ['diff', '--cached', '--quiet'], worktreeDir)
         .then(() => false)
         .catch(() => true);
       if (hasChanges) {
         const commitBody = body ? `${mergeMessage}\n\n${body}` : mergeMessage;
-        await host.execGitIn(['commit', '-m', commitBody], worktreeDir);
-        const mergeHash = (await host.execGitIn(['rev-parse', 'HEAD'], worktreeDir)).trim();
-        // Fetch squash commit into host.cwd so the hash is valid in its object store
-        await host.execGitIn(['fetch', worktreeDir, 'HEAD'], host.cwd);
-        try {
-          const currentBranch = (await host.execGitIn(['branch', '--show-current'], host.cwd)).trim();
-          if (currentBranch === baseBranch) {
-            await host.execGitIn(['merge', '--ff-only', mergeHash], host.cwd);
-            console.log(`[merge] Synced main working tree to ${baseBranch}`);
-            console.log(`[merge] Squash-merged ${featureBranch} into ${baseBranch}`);
-          } else {
-            await host.execGitIn(['update-ref', 'refs/heads/' + baseBranch, mergeHash], host.cwd);
-            console.log(`[merge] Advanced ${baseBranch} ref (cwd on "${currentBranch}")`);
-          }
-        } catch (err) {
-          console.log(`[merge] Failed to advance ${baseBranch}: ${err instanceof Error ? err.message : String(err)}`);
-        }
+        await execGitInMergeSafe(host, ['commit', '-m', commitBody], worktreeDir);
+        await execGitInMergeSafe(host, ['push', '--force', 'origin', `HEAD:refs/heads/${baseBranch}`], worktreeDir);
+        console.log(`[merge] Squash-merged ${featureBranch} into ${baseBranch} (pushed to origin)`);
       } else {
         console.log(`[merge] No changes to commit — ${baseBranch} already up-to-date with ${featureBranch}`);
       }
     } else if (onFinish === 'pull_request') {
-      // Feature branch already pushed to host.cwd above; push from host.cwd to GitHub
-      await host.execGitIn(['push', '--force', '-u', 'origin', featureBranch], host.cwd);
-      const prUrl = await host.execPr(baseBranch, featureBranch, workflowName ?? 'Workflow', body);
+      // Push feature branch directly to origin (GitHub) from the clone
+      await execGitInMergeSafe(host, ['push', '--force', '-u', 'origin', featureBranch], worktreeDir);
+      const prUrl = await host.execPr(baseBranch, featureBranch, workflowName ?? 'Workflow', body, worktreeDir);
       console.log(`[merge] Created pull request: ${prUrl}`);
       return prUrl;
     }
   } catch (err) {
-    try { await host.execGitIn(['merge', '--abort'], worktreeDir); } catch { /* no merge in progress */ }
+    try { await execGitInMergeSafe(host, ['merge', '--abort'], worktreeDir); } catch { /* no merge in progress */ }
     throw err;
   } finally {
     await host.removeMergeWorktree(worktreeDir);

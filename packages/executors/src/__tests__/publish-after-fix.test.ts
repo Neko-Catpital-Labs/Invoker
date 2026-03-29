@@ -162,8 +162,10 @@ describe('publishAfterFixImpl integration (real git)', () => {
     expect(isAncestor).toBe('');
 
     // Feature branch should contain the task branch's file
+    // (hostDir must fetch first — the new code pushes directly from gateDir to origin,
+    // so hostDir's remote tracking refs are stale.)
+    git('fetch origin', sandbox.hostDir);
     git('checkout plan/feature', sandbox.hostDir);
-    git('pull origin plan/feature', sandbox.hostDir);
     expect(existsSync(join(sandbox.hostDir, 't1.txt'))).toBe(true);
 
     // Feature branch should contain Claude's fix file

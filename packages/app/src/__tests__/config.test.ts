@@ -6,11 +6,9 @@ import { tmpdir } from 'node:os';
 
 const testDir = join(tmpdir(), `invoker-config-test-${process.pid}`);
 const fakeHome = join(testDir, 'home');
-const fakeRepo = join(testDir, 'repo');
 
 beforeEach(() => {
   mkdirSync(join(fakeHome, '.invoker'), { recursive: true });
-  mkdirSync(fakeRepo, { recursive: true });
 });
 
 afterEach(() => {
@@ -27,7 +25,7 @@ vi.mock('node:os', async (importOriginal) => {
 
 describe('loadConfig', () => {
   it('returns empty config when no files exist', () => {
-    const config = loadConfig(fakeRepo);
+    const config = loadConfig();
     expect(config).toEqual({});
   });
 
@@ -36,41 +34,19 @@ describe('loadConfig', () => {
       join(fakeHome, '.invoker', 'config.json'),
       JSON.stringify({ defaultBranch: 'main' }),
     );
-    const config = loadConfig(fakeRepo);
+    const config = loadConfig();
     expect(config.defaultBranch).toBe('main');
   });
 
-  it('reads repo-level .invoker.json', () => {
-    writeFileSync(
-      join(fakeRepo, '.invoker.json'),
-      JSON.stringify({ defaultBranch: 'master' }),
-    );
-    const config = loadConfig(fakeRepo);
-    expect(config.defaultBranch).toBe('master');
-  });
-
-  it('repo-level overrides user-level', () => {
-    writeFileSync(
-      join(fakeHome, '.invoker', 'config.json'),
-      JSON.stringify({ defaultBranch: 'main' }),
-    );
-    writeFileSync(
-      join(fakeRepo, '.invoker.json'),
-      JSON.stringify({ defaultBranch: 'develop' }),
-    );
-    const config = loadConfig(fakeRepo);
-    expect(config.defaultBranch).toBe('develop');
-  });
-
   it('handles malformed JSON gracefully', () => {
-    writeFileSync(join(fakeRepo, '.invoker.json'), 'not json {{{');
-    const config = loadConfig(fakeRepo);
+    writeFileSync(join(fakeHome, '.invoker', 'config.json'), 'not json {{{');
+    const config = loadConfig();
     expect(config).toEqual({});
   });
 
   it('handles non-object JSON gracefully', () => {
-    writeFileSync(join(fakeRepo, '.invoker.json'), '"just a string"');
-    const config = loadConfig(fakeRepo);
+    writeFileSync(join(fakeHome, '.invoker', 'config.json'), '"just a string"');
+    const config = loadConfig();
     expect(config).toEqual({});
   });
 
@@ -79,7 +55,7 @@ describe('loadConfig', () => {
       join(fakeHome, '.invoker', 'config.json'),
       JSON.stringify({ planningTimeoutSeconds: 600 }),
     );
-    const config = loadConfig(fakeRepo);
+    const config = loadConfig();
     expect(config.planningTimeoutSeconds).toBe(600);
   });
 
@@ -88,21 +64,8 @@ describe('loadConfig', () => {
       join(fakeHome, '.invoker', 'config.json'),
       JSON.stringify({ planningHeartbeatIntervalSeconds: 30 }),
     );
-    const config = loadConfig(fakeRepo);
+    const config = loadConfig();
     expect(config.planningHeartbeatIntervalSeconds).toBe(30);
-  });
-
-  it('repo-level overrides planningTimeoutSeconds from user-level', () => {
-    writeFileSync(
-      join(fakeHome, '.invoker', 'config.json'),
-      JSON.stringify({ planningTimeoutSeconds: 600 }),
-    );
-    writeFileSync(
-      join(fakeRepo, '.invoker.json'),
-      JSON.stringify({ planningTimeoutSeconds: 900 }),
-    );
-    const config = loadConfig(fakeRepo);
-    expect(config.planningTimeoutSeconds).toBe(900);
   });
 
   it('reads disableAutoRunOnStartup from user config', () => {
@@ -110,43 +73,17 @@ describe('loadConfig', () => {
       join(fakeHome, '.invoker', 'config.json'),
       JSON.stringify({ disableAutoRunOnStartup: true }),
     );
-    const config = loadConfig(fakeRepo);
+    const config = loadConfig();
     expect(config.disableAutoRunOnStartup).toBe(true);
   });
 
-  it('repo-level overrides disableAutoRunOnStartup from user-level', () => {
+  it('reads maxConcurrency from user config', () => {
     writeFileSync(
       join(fakeHome, '.invoker', 'config.json'),
-      JSON.stringify({ disableAutoRunOnStartup: false }),
-    );
-    writeFileSync(
-      join(fakeRepo, '.invoker.json'),
-      JSON.stringify({ disableAutoRunOnStartup: true }),
-    );
-    const config = loadConfig(fakeRepo);
-    expect(config.disableAutoRunOnStartup).toBe(true);
-  });
-
-  it('reads maxConcurrency from repo config', () => {
-    writeFileSync(
-      join(fakeRepo, '.invoker.json'),
       JSON.stringify({ maxConcurrency: 6 }),
     );
-    const config = loadConfig(fakeRepo);
+    const config = loadConfig();
     expect(config.maxConcurrency).toBe(6);
-  });
-
-  it('repo-level overrides maxConcurrency from user-level', () => {
-    writeFileSync(
-      join(fakeHome, '.invoker', 'config.json'),
-      JSON.stringify({ maxConcurrency: 4 }),
-    );
-    writeFileSync(
-      join(fakeRepo, '.invoker.json'),
-      JSON.stringify({ maxConcurrency: 8 }),
-    );
-    const config = loadConfig(fakeRepo);
-    expect(config.maxConcurrency).toBe(8);
   });
 
   it('loadConfig picks up browser field', () => {
@@ -154,7 +91,7 @@ describe('loadConfig', () => {
       join(fakeHome, '.invoker', 'config.json'),
       JSON.stringify({ browser: 'firefox' }),
     );
-    const config = loadConfig(fakeRepo);
+    const config = loadConfig();
     expect(config.browser).toBe('firefox');
   });
 
@@ -171,21 +108,8 @@ describe('loadConfig', () => {
       join(fakeHome, '.invoker', 'config.json'),
       JSON.stringify({ imageStorage }),
     );
-    const config = loadConfig(fakeRepo);
+    const config = loadConfig();
     expect(config.imageStorage).toEqual(imageStorage);
-  });
-
-  it('repo-level overrides browser from user-level', () => {
-    writeFileSync(
-      join(fakeHome, '.invoker', 'config.json'),
-      JSON.stringify({ browser: 'firefox' }),
-    );
-    writeFileSync(
-      join(fakeRepo, '.invoker.json'),
-      JSON.stringify({ browser: 'chromium' }),
-    );
-    const config = loadConfig(fakeRepo);
-    expect(config.browser).toBe('chromium');
   });
 });
 
