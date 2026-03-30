@@ -3710,7 +3710,7 @@ describe('Orchestrator', () => {
         failedBranch: 'experiment/upstream-branch-abc123',
         conflictFiles: ['src/App.tsx', 'src/utils.ts'],
       });
-      expect(task.execution.isFixingWithAI).toBeUndefined();
+      expect(task.execution.isFixingWithAI).toBeFalsy();
 
       const failedDeltas = publishedDeltas.filter(
         (d) => d.type === 'updated' && d.taskId === 't2' && d.changes.status === 'failed',
@@ -3746,7 +3746,7 @@ describe('Orchestrator', () => {
       expect(task.status).toBe('failed');
       expect(task.execution.error).toBe('plain error string');
       expect(task.execution.mergeConflict).toBeUndefined();
-      expect(task.execution.isFixingWithAI).toBeUndefined();
+      expect(task.execution.isFixingWithAI).toBeFalsy();
     });
   });
 
@@ -3781,7 +3781,7 @@ describe('Orchestrator', () => {
       const task = orchestrator.getTask('f2')!;
       expect(task.status).toBe('awaiting_approval');
       expect(task.execution.pendingFixError).toBe('test failed: expected 1 to be 2');
-      expect(task.execution.isFixingWithAI).toBeUndefined();
+      expect(task.execution.isFixingWithAI).toBeFalsy();
     });
 
     it('setFixAwaitingApproval delta includes agentSessionId from DB', () => {
@@ -3816,7 +3816,7 @@ describe('Orchestrator', () => {
       orchestrator.restartTask('f2');
       const task = orchestrator.getTask('f2')!;
       expect(task.status === 'pending' || task.status === 'running').toBe(true);
-      expect(task.execution.isFixingWithAI).toBeUndefined();
+      expect(task.execution.isFixingWithAI).toBeFalsy();
     });
 
     it('revertConflictResolution restores failed state', () => {

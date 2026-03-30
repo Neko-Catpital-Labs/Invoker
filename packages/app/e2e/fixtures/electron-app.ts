@@ -12,6 +12,7 @@ import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { stringify as yamlStringify } from 'yaml';
 
 export type ElectronFixtures = {
   electronApp: ElectronApplication;
@@ -106,7 +107,8 @@ export const TEST_PLAN = {
 
 /** Load a plan into the running app via the IPC bridge and wait for DAG to render. */
 export async function loadPlan(page: Page, plan: typeof TEST_PLAN): Promise<void> {
-  await page.evaluate((p) => window.invoker.loadPlan(p), plan);
+  const planYaml = yamlStringify(plan);
+  await page.evaluate((p) => window.invoker.loadPlan(p), planYaml);
   await page.locator(`[data-testid="rf__node-${plan.tasks[0].id}"]`).waitFor({ state: 'visible', timeout: 10000 });
 }
 

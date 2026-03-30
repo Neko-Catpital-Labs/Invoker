@@ -585,7 +585,7 @@ export class Orchestrator {
 
     const changes: TaskStateChanges = {
       status: 'awaiting_approval',
-      execution: { pendingFixError: originalError, isFixingWithAI: undefined, agentSessionId: task.execution.agentSessionId },
+      execution: { pendingFixError: originalError, isFixingWithAI: false, agentSessionId: task.execution.agentSessionId },
     };
     console.log(`[setFixAwaitingApproval] delta.changes.execution=`, JSON.stringify(changes.execution));
     this.writeAndSync(taskId, changes);
@@ -846,7 +846,7 @@ export class Orchestrator {
         exitCode: undefined,
         commit: undefined,
         lastHeartbeatAt: undefined,
-        isFixingWithAI: undefined,
+        isFixingWithAI: false,
         agentSessionId: undefined,
         containerId: undefined,
       },
@@ -1015,7 +1015,7 @@ export class Orchestrator {
       : savedError;
     const changes: TaskStateChanges = {
       status: 'failed',
-      execution: { error: displayError, mergeConflict, isFixingWithAI: undefined },
+      execution: { error: displayError, mergeConflict, isFixingWithAI: false },
     };
     this.writeAndSync(taskId, changes);
     const delta: TaskDelta = { type: 'updated', taskId, changes };

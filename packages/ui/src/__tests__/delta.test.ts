@@ -83,6 +83,29 @@ describe('applyDelta', () => {
     expect(result.has('nonexistent')).toBe(false);
   });
 
+  it('updated: clears isFixingWithAI via explicit false', () => {
+    const task = makeTask({
+      id: 'task-1',
+      status: 'running',
+      execution: { isFixingWithAI: true },
+    });
+    const tasks = new Map<string, TaskState>([['task-1', task]]);
+    const delta: TaskDelta = {
+      type: 'updated',
+      taskId: 'task-1',
+      changes: {
+        status: 'awaiting_approval',
+        execution: { isFixingWithAI: false, pendingFixError: 'some error' },
+      },
+    };
+
+    const result = applyDelta(tasks, delta);
+
+    expect(result.get('task-1')!.status).toBe('awaiting_approval');
+    expect(result.get('task-1')!.execution.isFixingWithAI).toBe(false);
+    expect(result.get('task-1')!.execution.pendingFixError).toBe('some error');
+  });
+
   it('removed: deletes task from map', () => {
     const task = makeTask({ id: 'task-1' });
     const tasks = new Map<string, TaskState>([['task-1', task]]);

@@ -162,10 +162,11 @@ export function App() {
     setContextMenu(null);
     try {
       await window.invoker?.resolveConflict(taskId);
+      refreshTasks();
     } catch (err) {
       console.error('Resolve conflict failed:', err);
     }
-  }, []);
+  }, [refreshTasks]);
 
   const handleFixWithClaude = useCallback(async (taskId: string) => {
     setContextMenu(null);
@@ -182,10 +183,11 @@ export function App() {
     }
     try {
       await window.invoker?.fixWithClaude(taskId);
+      refreshTasks();
     } catch (err) {
       console.error('Fix with Claude failed:', err);
     }
-  }, [tasks]);
+  }, [tasks, refreshTasks]);
 
   const handleCancelTask = useCallback(async (taskId: string) => {
     setContextMenu(null);
