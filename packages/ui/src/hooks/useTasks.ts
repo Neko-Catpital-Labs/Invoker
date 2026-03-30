@@ -55,7 +55,27 @@ export function useTasks(): UseTasksResult {
     fetchAll();
 
     const unsub = window.invoker.onTaskDelta((delta) => {
+      if (delta.type === 'created') {
+        console.log(
+          `[useTasks:task-delta] created id=${delta.task.id} status=${delta.task.status}`,
+        );
+      } else if (delta.type === 'removed') {
+        console.log(`[useTasks:task-delta] removed taskId=${delta.taskId}`);
+      } else {
+        const ex = delta.changes.execution;
+        console.log(
+          `[useTasks:task-delta] updated taskId=${delta.taskId} ` +
+            `changes.status=${delta.changes.status ?? '—'} ` +
+            `execPatchKeys=${ex ? Object.keys(ex).join(',') : '—'}`,
+        );
+      }
+
       setTasks((prev) => {
+        if (delta.type === 'updated' && !prev.has(delta.taskId)) {
+          console.warn(
+            `[useTasks:task-delta] updated for taskId=${delta.taskId} not in local map before merge (stale snapshot?)`,
+          );
+        }
         const next = applyDelta(prev, delta);
         return next;
       });

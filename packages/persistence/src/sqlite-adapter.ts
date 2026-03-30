@@ -616,6 +616,25 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
     if (setClauses.length === 0) return;
 
+    if (changes.execution && 'workspacePath' in changes.execution) {
+      try {
+        const row = this.queryOne(
+          'SELECT is_merge_node AS isMerge, workspace_path AS prevPath FROM tasks WHERE id = ?',
+          [taskId],
+        ) as { isMerge?: number; prevPath?: string | null } | undefined;
+        if (row?.isMerge === 1) {
+          const nextWs = (changes.execution as { workspacePath?: string }).workspacePath;
+          console.log(
+            `[merge-gate-workspace] sqlite.updateTask mergeNode task=${taskId} ` +
+              `workspace_path ${row.prevPath ?? 'NULL'} → ${nextWs ?? 'NULL'} ` +
+              '(caller sets familiar worktree path and/or gate clone path)',
+          );
+        }
+      } catch {
+        /* best-effort diagnostics only */
+      }
+    }
+
     values.push(taskId);
     this.execRun(`UPDATE tasks SET ${setClauses.join(', ')} WHERE id = ?`, values);
   }

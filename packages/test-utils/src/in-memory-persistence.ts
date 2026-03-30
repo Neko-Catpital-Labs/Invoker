@@ -48,6 +48,18 @@ export class InMemoryPersistence implements OrchestratorPersistence {
   updateTask(taskId: string, changes: TaskStateChanges): void {
     const entry = this.tasks.get(taskId);
     if (entry) {
+      if (
+        changes.execution &&
+        'workspacePath' in changes.execution &&
+        entry.task.config.isMergeNode
+      ) {
+        const prev = entry.task.execution.workspacePath ?? null;
+        const next = changes.execution.workspacePath ?? null;
+        console.log(
+          `[merge-gate-workspace] inMemory.updateTask mergeNode task=${taskId} ` +
+            `workspacePath ${prev ?? 'NULL'} → ${next ?? 'NULL'}`,
+        );
+      }
       entry.task = {
         ...entry.task,
         ...(changes.status !== undefined ? { status: changes.status } : {}),

@@ -548,6 +548,16 @@ export class Orchestrator {
       config: additionalChanges?.config,
       execution: { ...additionalChanges?.execution, completedAt: new Date() },
     };
+    if (task.config.isMergeNode && changes.execution && 'workspacePath' in changes.execution) {
+      mergeTrace('GATE_WS_SET_TASK_AWAITING_APPROVAL', {
+        taskId,
+        workspacePath: changes.execution.workspacePath ?? null,
+      });
+      console.log(
+        `[merge-gate-workspace] setTaskAwaitingApproval mergeNode=${taskId} ` +
+          `execution.workspacePath=${changes.execution.workspacePath ?? 'NULL'}`,
+      );
+    }
     this.writeAndSync(taskId, changes);
     const delta: TaskDelta = { type: 'updated', taskId, changes };
     this.persistence.logEvent?.(taskId, 'task.awaiting_approval', changes);
@@ -560,6 +570,16 @@ export class Orchestrator {
     if (!task) throw new Error(`Task ${taskId} not found`);
     if (task.status !== 'running') throw new Error(`Task ${taskId} is not running (status: ${task.status})`);
     console.log(`[setFixAwaitingApproval] taskId=${taskId} agentSessionId=${task.execution.agentSessionId}`);
+    if (task.config.isMergeNode) {
+      console.log(
+        `[merge-gate-workspace] setFixAwaitingApproval mergeNode=${taskId} ` +
+          `workspacePath unchanged by this call; current=${task.execution.workspacePath ?? 'none'}`,
+      );
+      mergeTrace('GATE_WS_SET_FIX_AWAITING', {
+        taskId,
+        workspacePath: task.execution.workspacePath ?? null,
+      });
+    }
 
     this.scheduler.completeJob(taskId);
 
@@ -587,7 +607,19 @@ export class Orchestrator {
     this.refreshFromDb();
     const task = this.stateMachine.getTask(taskId);
     mergeTrace('APPROVE_TASK_LOOKUP', { taskId, found: !!task, status: task?.status, isMergeNode: !!task?.config.isMergeNode, hasHook: !!this.beforeApproveHook });
-    if (!task || task.status !== 'awaiting_approval') return [];
+    if (!task || task.status !== 'awaiting_approval') {
+      mergeTrace('APPROVE_SKIPPED_NOT_AWAITING', {
+        taskId,
+        found: !!task,
+        status: task?.status ?? 'NOT_FOUND',
+        pendingFixError: task?.execution.pendingFixError !== undefined,
+      });
+      console.log(
+        `[orchestrator.approve] skipped taskId=${taskId} ` +
+          (!task ? '(task not found)' : `(status=${task.status}, expected awaiting_approval)`),
+      );
+      return [];
+    }
 
     // Merge gate fixed by Claude: approve the fix → running while PR/git
     // prep executes; caller must drive the async publish work via executor.
@@ -595,6 +627,14 @@ export class Orchestrator {
       task.config.isMergeNode &&
       task.execution.pendingFixError !== undefined
     ) {
+      console.log(
+        `[merge-gate-workspace] approve(post-fix) mergeNode=${taskId} ` +
+          `before writeAndSync execution.workspacePath=${task.execution.workspacePath ?? 'none'}`,
+      );
+      mergeTrace('GATE_WS_APPROVE_POST_FIX', {
+        taskId,
+        workspacePathBefore: task.execution.workspacePath ?? null,
+      });
       const now = new Date();
       const fixClearChanges: TaskStateChanges = {
         status: 'running',
@@ -605,6 +645,15 @@ export class Orchestrator {
       this.persistence.logEvent?.(taskId, 'task.running', fixClearChanges);
       this.messageBus.publish(TASK_DELTA_CHANNEL, fixDelta);
       const updated = this.stateMachine.getTask(taskId)!;
+      console.log(
+        `[merge-gate-workspace] approve(post-fix) mergeNode=${taskId} ` +
+          `after writeAndSync execution.workspacePath=${updated.execution.workspacePath ?? 'none'} ` +
+          '(pendingFix cleared; path should be unchanged)',
+      );
+      mergeTrace('GATE_WS_APPROVE_POST_FIX_AFTER', {
+        taskId,
+        workspacePathAfter: updated.execution.workspacePath ?? null,
+      });
       return [updated];
     }
 
@@ -754,6 +803,17 @@ export class Orchestrator {
 
     const prevStatus = task.status;
     console.log(`[orchestrator] restartTask "${taskId}" (was ${prevStatus})`);
+    if (task.config.isMergeNode) {
+      console.log(
+        `[merge-gate-workspace] restartTask mergeNode=${taskId} ` +
+          `before reset workspacePath=${task.execution.workspacePath ?? 'none'} ` +
+          '(restartTask does not clear workspacePath)',
+      );
+      mergeTrace('GATE_WS_RESTART_TASK_MERGE', {
+        taskId,
+        workspacePathBefore: task.execution.workspacePath ?? null,
+      });
+    }
 
     const completedDownstream = this.stateMachine.getAllTasks().filter(
       t => t.status === 'completed' && t.dependencies.includes(taskId),
@@ -800,6 +860,16 @@ export class Orchestrator {
     console.log(
       `[agent-session-trace] restartTask: after writeAndSync task="${taskId}" agentSessionId=${afterRt.execution.agentSessionId ?? 'null'}`,
     );
+    if (afterRt.config.isMergeNode) {
+      console.log(
+        `[merge-gate-workspace] restartTask mergeNode=${taskId} ` +
+          `after reset workspacePath=${afterRt.execution.workspacePath ?? 'none'}`,
+      );
+      mergeTrace('GATE_WS_RESTART_TASK_MERGE_AFTER', {
+        taskId,
+        workspacePathAfter: afterRt.execution.workspacePath ?? null,
+      });
+    }
     const resetDelta: TaskDelta = { type: 'updated', taskId, changes: resetChanges };
     this.persistence.logEvent?.(taskId, 'task.pending', resetChanges);
     this.messageBus.publish(TASK_DELTA_CHANNEL, resetDelta);
@@ -874,6 +944,16 @@ export class Orchestrator {
     for (const task of allTasks) {
       const prevSess = task.execution.agentSessionId ?? null;
       const prevCt = task.execution.containerId ?? null;
+      if (task.config.isMergeNode) {
+        console.log(
+          `[merge-gate-workspace] restartWorkflow mergeNode=${task.id} ` +
+            `will clear workspace_path (was ${task.execution.workspacePath ?? 'NULL'})`,
+        );
+        mergeTrace('GATE_WS_RESTART_WORKFLOW_MERGE', {
+          taskId: task.id,
+          workspacePathBefore: task.execution.workspacePath ?? null,
+        });
+      }
       console.log(`[orchestrator]   reset "${task.id}" (was ${task.status}, branch=${task.execution.branch ?? 'none'}, commit=${task.execution.commit?.slice(0, 7) ?? 'none'})`);
       console.log(
         `[agent-session-trace] restartWorkflow: before writeAndSync task="${task.id}" agentSessionId=${prevSess ?? 'null'} containerId=${prevCt ?? 'null'}`,

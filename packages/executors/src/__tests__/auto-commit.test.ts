@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -55,8 +55,18 @@ class TestFamiliar extends BaseFamiliar<BaseEntry> {
     return this.syncFromRemote(cwd, executionId);
   }
 
-  async testPushBranchToRemote(cwd: string, branch: string, executionId?: string): Promise<void> {
+  async testPushBranchToRemote(cwd: string, branch: string, executionId?: string): Promise<string | undefined> {
     return this.pushBranchToRemote(cwd, branch, executionId);
+  }
+
+  async testHandleProcessExit(
+    executionId: string,
+    request: WorkRequest,
+    cwd: string,
+    exitCode: number,
+    opts?: { branch?: string; originalBranch?: string },
+  ): Promise<void> {
+    return this.handleProcessExit(executionId, request, cwd, exitCode, opts);
   }
 
   testBuildCommandAndArgs(request: WorkRequest, claudeCommand?: string) {
@@ -1999,25 +2009,70 @@ describe('BaseFamiliar.pushBranchToRemote', () => {
     writeFileSync(join(cloneDir, 'task.txt'), 'task result');
     execSync('git add -A && git commit -m "task commit"', { cwd: cloneDir });
 
-    await familiar.testPushBranchToRemote(cloneDir, 'invoker/task-push');
+    const pushErr = await familiar.testPushBranchToRemote(cloneDir, 'invoker/task-push');
+    expect(pushErr).toBeUndefined();
 
     // Verify the branch exists on the bare remote
     const remoteBranches = execSync('git branch', { cwd: originDir }).toString();
     expect(remoteBranches).toContain('invoker/task-push');
   });
 
-  it('does not throw when branch does not exist', async () => {
-    await expect(
-      familiar.testPushBranchToRemote(cloneDir, 'nonexistent-branch'),
-    ).resolves.toBeUndefined();
+  it('returns an error message when branch does not exist on remote', async () => {
+    const err = await familiar.testPushBranchToRemote(cloneDir, 'nonexistent-branch');
+    expect(err).toBeDefined();
+    expect(typeof err).toBe('string');
   });
 
-  it('does not throw when remote is unreachable', async () => {
+  it('returns an error message when remote is unreachable', async () => {
     execSync('git checkout -b invoker/task-nopush', { cwd: cloneDir });
     execSync('git remote set-url origin /nonexistent/repo', { cwd: cloneDir });
-    await expect(
-      familiar.testPushBranchToRemote(cloneDir, 'invoker/task-nopush'),
-    ).resolves.toBeUndefined();
+    const err = await familiar.testPushBranchToRemote(cloneDir, 'invoker/task-nopush');
+    expect(err).toBeDefined();
+    expect(typeof err).toBe('string');
+  });
+});
+
+describe('BaseFamiliar.handleProcessExit push semantics', () => {
+  let familiar: TestFamiliar;
+  let originDir: string;
+  let cloneDir: string;
+
+  beforeEach(() => {
+    familiar = new TestFamiliar();
+    originDir = mkdtempSync(join(tmpdir(), 'hpe-origin-'));
+    execSync('git init --bare -b master', { cwd: originDir });
+    cloneDir = mkdtempSync(join(tmpdir(), 'hpe-clone-'));
+    execSync(`git clone ${originDir} .`, { cwd: cloneDir });
+    execSync('git config user.email "test@test.com"', { cwd: cloneDir });
+    execSync('git config user.name "Test"', { cwd: cloneDir });
+    writeFileSync(join(cloneDir, 'file.txt'), 'initial');
+    execSync('git add -A && git commit -m "initial"', { cwd: cloneDir });
+    execSync('git push origin HEAD', { cwd: cloneDir });
+  });
+
+  afterEach(() => {
+    rmSync(originDir, { recursive: true, force: true });
+    rmSync(cloneDir, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
+
+  it('marks task failed when exit 0 but push fails', async () => {
+    execSync('git checkout -b invoker/b', { cwd: cloneDir });
+    writeFileSync(join(cloneDir, 't.txt'), 'x');
+    execSync('git add -A && git commit -m task', { cwd: cloneDir });
+
+    const req = makeRequest('task-1', { description: 'x' });
+    const entry = familiar.registerTestEntry('e1', req);
+    let response: WorkResponse | undefined;
+    entry.completeListeners.add((r) => { response = r; });
+
+    vi.spyOn(BaseFamiliar.prototype as any, 'pushBranchToRemote').mockResolvedValue('push denied');
+
+    await familiar.testHandleProcessExit('e1', req, cloneDir, 0, { branch: 'invoker/b' });
+
+    expect(response?.status).toBe('failed');
+    expect(response?.outputs.exitCode).toBe(1);
+    expect(response?.outputs.error).toBe('push denied');
   });
 });
 

@@ -8,6 +8,7 @@
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { normalize, resolve } from 'node:path';
 import { homedir } from 'node:os';
+import { pathToFileURL } from 'node:url';
 
 import type { Orchestrator, TaskState } from '@invoker/core';
 import type { SQLiteAdapter } from '@invoker/persistence';
@@ -25,6 +26,14 @@ export function mergeTrace(tag: string, data: Record<string, unknown>): void {
     mkdirSync(resolve(homedir(), '.invoker'), { recursive: true });
     appendFileSync(MERGE_TRACE_LOG, `${new Date().toISOString()} [merge-trace:executor] ${tag} ${JSON.stringify(data)}\n`);
   } catch { /* best effort */ }
+}
+
+/** Unit tests may use partial persistence mocks without {@link SQLiteAdapter.getWorkspacePath}. */
+function safeGetWorkspacePath(persistence: SQLiteAdapter, taskId: string): string | null | undefined {
+  const p = persistence as { getWorkspacePath?: (this: SQLiteAdapter, id: string) => string | null };
+  return typeof p.getWorkspacePath === 'function'
+    ? p.getWorkspacePath.call(persistence, taskId)
+    : undefined;
 }
 
 // ── Host-cwd safety guard ─────────────────────────────────
@@ -77,6 +86,8 @@ export interface MergeExecutorHost {
   executeTasks(tasks: TaskState[]): Promise<void>;
   buildMergeSummary(workflowId: string): Promise<string>;
   runVisualProofCapture?(baseBranch: string, featureBranch: string, slug: string): Promise<string | undefined>;
+  /** Pool mirror path for `repoUrl`, when worktree familiar + repo pool are available. */
+  ensureRepoMirrorPath?(repoUrl: string): Promise<string | undefined>;
   consolidateAndMerge(
     onFinish: string,
     baseBranch: string,
@@ -99,6 +110,7 @@ export async function ensureLocalBranchForMerge(
   host: MergeExecutorHost,
   worktreeDir: string,
   branch: string,
+  repoUrl?: string,
 ): Promise<void> {
   let hadLocal = false;
   try {
@@ -110,28 +122,47 @@ export async function ensureLocalBranchForMerge(
 
   if (hadLocal) return;
 
+  let originErr: unknown;
   try {
     await execGitInMergeSafe(
       host,
       ['fetch', 'origin', `+refs/heads/${branch}:refs/heads/${branch}`],
       worktreeDir,
     );
-  } catch {
-    try {
-      await execGitInMergeSafe(
-        host,
-        ['fetch', 'origin', `+refs/remotes/origin/${branch}:refs/heads/${branch}`],
-        worktreeDir,
-      );
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      throw new Error(
-        `Cannot merge ${branch}: not found locally and fetch from origin failed (${msg}). ` +
-          'For SSH remote worktrees, ensure the task pushed this branch to origin before merging.',
-      );
+    return;
+  } catch (err) {
+    originErr = err;
+  }
+
+  const trimmedUrl = repoUrl?.trim();
+  let mirrorErr: string | undefined;
+  if (trimmedUrl && host.ensureRepoMirrorPath) {
+    const mirror = await host.ensureRepoMirrorPath(trimmedUrl);
+    if (mirror) {
+      try {
+        const mirrorUrl = pathToFileURL(mirror).href;
+        await execGitInMergeSafe(
+          host,
+          ['fetch', mirrorUrl, `+refs/heads/${branch}:refs/heads/${branch}`],
+          worktreeDir,
+        );
+        console.log(
+          `[merge-gate-workspace] ensureLocalBranchForMerge fetched ${branch} from pool mirror ${mirror}`,
+        );
+        return;
+      } catch (e) {
+        mirrorErr = e instanceof Error ? e.message : String(e);
+      }
     }
   }
 
+  const originMsg = originErr instanceof Error ? originErr.message : String(originErr);
+  throw new Error(
+    `Cannot merge ${branch}: not found locally; origin fetch failed (${originMsg}).` +
+      (mirrorErr ? ` Mirror fetch failed (${mirrorErr}).` : '') +
+      ' The branch must exist on origin or the pool mirror (e.g. task pushed experiment/* to GitHub). ' +
+      'For SSH remote worktrees, ensure the task pushed this branch before merging.',
+  );
 }
 
 /**
@@ -192,6 +223,20 @@ export async function executeMergeNodeImpl(
 
   const summary = workflowId ? await host.buildMergeSummary(workflowId) : undefined;
 
+  mergeTrace('GATE_WS_EXECUTE_MERGE_ENTER', {
+    taskId: task.id,
+    workflowId,
+    onFinish,
+    mergeMode,
+    baseBranch,
+    featureBranch: featureBranch ?? null,
+    persistedWorkspaceBefore: safeGetWorkspacePath(host.persistence, task.id),
+  });
+  console.log(
+    `[merge-gate-workspace] executeMergeNode enter task=${task.id} featureBranch=${featureBranch ?? 'none'} ` +
+      `mergeMode=${mergeMode} onFinish=${onFinish} dbWorkspacePath=${safeGetWorkspacePath(host.persistence, task.id) ?? 'NULL'}`,
+  );
+
   host.persistence.updateTask(task.id, {
     execution: {
       reviewUrl: undefined,
@@ -207,6 +252,11 @@ export async function executeMergeNodeImpl(
   let gateWorkspacePath: string | undefined;
   if (featureBranch) {
     gateWorkspacePath = await host.createMergeWorktree(baseBranch, 'gate-' + task.id.replace(/[^a-zA-Z0-9_-]/g, '-'));
+    mergeTrace('GATE_WS_GATE_CLONE_CREATED', { taskId: task.id, gateWorkspacePath });
+    console.log(`[merge-gate-workspace] gate clone created task=${task.id} path=${gateWorkspacePath}`);
+  } else {
+    mergeTrace('GATE_WS_GATE_CLONE_SKIPPED', { taskId: task.id, reason: 'no_feature_branch' });
+    console.log(`[merge-gate-workspace] gate clone skipped task=${task.id} (no featureBranch on workflow)`);
   }
 
   if (featureBranch && (onFinish !== 'none' || mergeMode === 'external_review')) {
@@ -224,6 +274,11 @@ export async function executeMergeNodeImpl(
         task.id,
       );
       if (mergeMode === 'manual') {
+        mergeTrace('GATE_WS_PATH_MANUAL_AWAIT', { taskId: task.id, gateWorkspacePath: gateWorkspacePath ?? null });
+        console.log(
+          `[merge-gate-workspace] setTaskAwaitingApproval path=manual branch consolidate ` +
+            `task=${task.id} gateWorkspacePath=${gateWorkspacePath ?? 'NULL'}`,
+        );
         const manualResponse: WorkResponse = {
           requestId: `merge-${task.id}`,
           actionId: task.id,
@@ -276,6 +331,15 @@ export async function executeMergeNodeImpl(
           outputs: { exitCode: 0 },
         };
         host.callbacks.onComplete?.(task.id, prResponse);
+        mergeTrace('GATE_WS_PATH_EXTERNAL_REVIEW_AWAIT', {
+          taskId: task.id,
+          gateWorkspacePath: gateWorkspacePath ?? null,
+          reviewUrl: result.url,
+        });
+        console.log(
+          `[merge-gate-workspace] setTaskAwaitingApproval path=external_review ` +
+            `task=${task.id} gateWorkspacePath=${gateWorkspacePath ?? 'NULL'}`,
+        );
         host.orchestrator.setTaskAwaitingApproval(task.id, {
           config: { familiarType: 'worktree', summary },
           execution: {
@@ -308,6 +372,15 @@ export async function executeMergeNodeImpl(
     }
   } else {
     if (mergeMode === 'manual' || mergeMode === 'external_review') {
+      mergeTrace('GATE_WS_PATH_NO_CONSOLIDATE_AWAIT', {
+        taskId: task.id,
+        gateWorkspacePath: gateWorkspacePath ?? null,
+        mergeMode,
+      });
+      console.log(
+        `[merge-gate-workspace] setTaskAwaitingApproval path=no_consolidate_branch ` +
+          `task=${task.id} gateWorkspacePath=${gateWorkspacePath ?? 'NULL'} mergeMode=${mergeMode}`,
+      );
       const gateResponse: WorkResponse = {
         requestId: `merge-${task.id}`,
         actionId: task.id,
@@ -329,6 +402,15 @@ export async function executeMergeNodeImpl(
     };
   }
 
+  mergeTrace('GATE_WS_UPDATE_TASK_BEFORE_CALLBACK', {
+    taskId: task.id,
+    gateWorkspacePath: gateWorkspacePath ?? null,
+    responseStatus: response.status,
+  });
+  console.log(
+    `[merge-gate-workspace] updateTask(merge metadata) task=${task.id} ` +
+      `gateWorkspacePath=${gateWorkspacePath ?? 'NULL'} response=${response.status}`,
+  );
   host.persistence.updateTask(task.id, {
     config: { familiarType: 'worktree', summary },
     execution: {
@@ -339,6 +421,14 @@ export async function executeMergeNodeImpl(
   });
   host.callbacks.onComplete?.(task.id, response);
   if (mergeMode === 'manual' && response.status === 'completed') {
+    mergeTrace('GATE_WS_PATH_MANUAL_AFTER_SUCCESS', {
+      taskId: task.id,
+      gateWorkspacePath: gateWorkspacePath ?? null,
+    });
+    console.log(
+      `[merge-gate-workspace] setTaskAwaitingApproval path=manual_post_success ` +
+        `task=${task.id} gateWorkspacePath=${gateWorkspacePath ?? 'NULL'}`,
+    );
     host.orchestrator.setTaskAwaitingApproval(task.id, {
       config: { familiarType: 'worktree', summary },
       execution: {
@@ -387,13 +477,13 @@ export async function approveMergeImpl(
 
   // Clean up the persistent gate worktree created by executeMergeNodeImpl
   const mergeTaskId = `__merge__${workflowId}`;
-  const gateWorktreePath = host.persistence.getWorkspacePath(mergeTaskId);
+  const gateWorktreePath = safeGetWorkspacePath(host.persistence, mergeTaskId);
 
   if (onFinish === 'merge') {
     const worktreeDir = await host.createMergeWorktree(baseBranch, 'approve-' + workflowId);
     try {
       mergeTrace('GIT_MERGE_SQUASH', { featureBranch, worktreeDir });
-      await ensureLocalBranchForMerge(host, worktreeDir, featureBranch);
+      await ensureLocalBranchForMerge(host, worktreeDir, featureBranch, workflow.repoUrl);
       await execGitInMergeSafe(host, ['merge', '--squash', featureBranch], worktreeDir);
       mergeTrace('GIT_COMMIT', { mergeMessage });
       const commitBody = fullSummary ? `${mergeMessage}\n\n${fullSummary}` : mergeMessage;
@@ -465,15 +555,34 @@ export async function publishAfterFixImpl(
   const featureBranch = workflow?.featureBranch;
   const visualProof = workflow?.visualProof ?? false;
 
-  mergeTrace('PUBLISH_AFTER_FIX_ENTER', {
-    taskId: task.id, workflowId, onFinish, mergeMode, baseBranch, featureBranch,
-  });
-
   const summary = workflowId ? await host.buildMergeSummary(workflowId) : undefined;
-  const gateWorkspacePath = host.persistence.getWorkspacePath(task.id) ?? undefined;
+  const gateWorkspacePath = safeGetWorkspacePath(host.persistence, task.id) ?? undefined;
+
+  mergeTrace('PUBLISH_AFTER_FIX_ENTER', {
+    taskId: task.id,
+    workflowId,
+    onFinish,
+    mergeMode,
+    baseBranch,
+    featureBranch,
+    gateWorkspacePathFromDb: gateWorkspacePath ?? null,
+    taskExecutionWorkspacePath: task.execution.workspacePath ?? null,
+  });
+  console.log(
+    `[merge-gate-workspace] publishAfterFix enter task=${task.id} featureBranch=${featureBranch ?? 'none'} ` +
+      `db.getWorkspacePath=${gateWorkspacePath ?? 'NULL'} task.execution.workspacePath=${task.execution.workspacePath ?? 'none'}`,
+  );
 
   try {
     if (!featureBranch) {
+      mergeTrace('PUBLISH_AFTER_FIX_NO_FEATURE_BRANCH', {
+        taskId: task.id,
+        gateWorkspacePathFromDb: gateWorkspacePath ?? null,
+      });
+      console.log(
+        `[merge-gate-workspace] publishAfterFix early return (no featureBranch) task=${task.id} ` +
+          `will persist workspacePath=${gateWorkspacePath ?? 'NULL'}`,
+      );
       host.orchestrator.setTaskAwaitingApproval(task.id, {
         config: { familiarType: 'worktree', summary },
         execution: { workspacePath: gateWorkspacePath },
@@ -484,6 +593,14 @@ export async function publishAfterFixImpl(
     // Consolidate task branches in the gate clone, starting from the gate
     // clone's current HEAD (which has Claude's fixes).
     if (!gateWorkspacePath) {
+      mergeTrace('PUBLISH_AFTER_FIX_MISSING_GATE_PATH', {
+        taskId: task.id,
+        taskExecutionWorkspacePath: task.execution.workspacePath ?? null,
+      });
+      console.error(
+        `[merge-gate-workspace] publishAfterFix ABORT task=${task.id}: no gate path in DB ` +
+          `(task.execution.workspacePath=${task.execution.workspacePath ?? 'none'})`,
+      );
       throw new Error('publishAfterFix requires a gate workspace (managed clone), not host.cwd');
     }
     const consolidateDir = gateWorkspacePath;
@@ -562,7 +679,7 @@ export async function publishAfterFixImpl(
     if (!mergedViaPriorConsolidation) {
       for (const { branch, description } of taskBranches) {
         console.log(`[merge] Post-fix: merging task branch ${branch} → ${featureBranch}`);
-        await ensureLocalBranchForMerge(host, consolidateDir, branch);
+        await ensureLocalBranchForMerge(host, consolidateDir, branch, workflow?.repoUrl);
         const mergeMsg = description ? `Merge ${branch} — ${description}` : `Merge ${branch}`;
         await execGitInMergeSafe(host, ['merge', '--no-ff', '-m', mergeMsg, branch], consolidateDir);
       }
@@ -768,6 +885,12 @@ export async function consolidateAndMergeImpl(
   console.log(`[merge] consolidateAndMerge: featureBranch=${featureBranch}, baseBranch=${baseBranch}, worktree=${worktreeDir}`);
 
   try {
+    const workflowForMerge =
+      workflowId !== undefined && workflowId !== ''
+        ? host.persistence.loadWorkflow(workflowId)
+        : undefined;
+    const repoUrlForMerge = workflowForMerge?.repoUrl;
+
     // Create feature branch in worktree
     try {
       await execGitInMergeSafe(host, ['checkout', '-b', featureBranch, baseBranch], worktreeDir);
@@ -811,7 +934,7 @@ export async function consolidateAndMergeImpl(
       .sort();
     for (const branch of taskBranches) {
       console.log(`[merge] Merging task branch: ${branch} → ${featureBranch}`);
-      await ensureLocalBranchForMerge(host, worktreeDir, branch);
+      await ensureLocalBranchForMerge(host, worktreeDir, branch, repoUrlForMerge);
       const task = allTasks.find(t => t.execution.branch === branch);
       const desc = task?.description ?? '';
       const mergeMsg = desc ? `Merge ${branch} — ${desc}` : `Merge ${branch}`;

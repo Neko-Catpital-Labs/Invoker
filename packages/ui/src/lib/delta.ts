@@ -30,6 +30,10 @@ export function applyDelta(
           config: { ...existing.config, ...cfgChanges },
           execution: { ...existing.execution, ...execChanges },
         });
+      } else {
+        console.warn(
+          `[applyDelta] dropped updated delta — task not in map (taskId=${delta.taskId})`,
+        );
       }
       break;
     }

@@ -121,6 +121,22 @@ export class TaskExecutor {
     await pool.removeManagedBranchesInMirror(repoUrl, branches);
   }
 
+  /**
+   * Ensure the pool mirror clone exists for merge resolution (branch may exist only there).
+   */
+  /** @internal */ async ensureRepoMirrorPath(repoUrl: string): Promise<string | undefined> {
+    const trimmed = repoUrl.trim();
+    if (!trimmed) return undefined;
+    const familiar = this.familiarRegistry.get('worktree');
+    if (!(familiar instanceof WorktreeFamiliar)) return undefined;
+    try {
+      return await familiar.getRepoPool().ensureClone(trimmed);
+    } catch (err) {
+      console.warn(`[merge] ensureRepoMirrorPath failed for ${trimmed}: ${err}`);
+      return undefined;
+    }
+  }
+
   private collectManagedWorkflowBranches(workflowId: string): string[] {
     return this.orchestrator
       .getAllTasks()
@@ -311,6 +327,13 @@ export class TaskExecutor {
       console.log(
         `[agent-session-trace] TaskExecutor.persistStartMetadata task=${task.id} agentSessionId=${handle.agentSessionId ?? 'null'}`,
       );
+      if (task.config.isMergeNode) {
+        console.log(
+          `[merge-gate-workspace] persistStartMetadata mergeNode=${task.id} ` +
+            `familiar workspacePath=${changes.execution.workspacePath ?? 'NULL'} ` +
+            '(gate clone path is written later in executeMergeNode)',
+        );
+      }
       console.log(`[trace] TaskExecutor: persisted metadata for task=${task.id}`);
     }
 
@@ -745,6 +768,11 @@ export class TaskExecutor {
       ?? await this.detectDefaultBranch();
 
     const worktreeDir = await this.createMergeWorktree(baseBranch, 'recon-' + reconTaskId);
+    const reconWorkflowId = reconTask?.config.workflowId;
+    const reconRepoUrl =
+      reconWorkflowId !== undefined && reconWorkflowId !== ''
+        ? this.persistence.loadWorkflow(reconWorkflowId)?.repoUrl
+        : undefined;
 
     try {
       try {
@@ -760,7 +788,7 @@ export class TaskExecutor {
           throw new Error(`Experiment ${expId} has no branch`);
         }
         const b = expTask.execution.branch;
-        await ensureLocalBranchForMerge(this, worktreeDir, b);
+        await ensureLocalBranchForMerge(this, worktreeDir, b, reconRepoUrl);
         const expMergeMsg = `Merge ${b} — ${expTask.description}`;
         await this.execGitIn(['merge', '--no-ff', '-m', expMergeMsg, b], worktreeDir);
       }

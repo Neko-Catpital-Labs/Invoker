@@ -547,15 +547,17 @@ export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar
 
   /**
    * Push task branch to remote after completion.
-   * Errors are logged but non-fatal.
+   * Returns `undefined` on success, or a short error message on failure (logged and echoed to the task stream).
    */
-  protected async pushBranchToRemote(cwd: string, branch: string, executionId?: string): Promise<void> {
+  protected async pushBranchToRemote(cwd: string, branch: string, executionId?: string): Promise<string | undefined> {
     try {
       await this.execGitSimple(['push', '--force-with-lease', '-u', 'origin', branch], cwd);
+      return undefined;
     } catch (err) {
       const msg = `[${this.type}] pushBranchToRemote failed for ${branch}: ${err}\n`;
       console.warn(msg);
       if (executionId) this.emitOutput(executionId, msg);
+      return err instanceof Error ? err.message : String(err);
     }
   }
 
@@ -643,8 +645,12 @@ export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar
       if (exitCode === 0) status = 'failed';
     }
 
+    let pushError: string | undefined;
     if (opts?.branch) {
-      await this.pushBranchToRemote(cwd, opts.branch, executionId);
+      pushError = await this.pushBranchToRemote(cwd, opts.branch, executionId);
+    }
+    if (exitCode === 0 && pushError !== undefined && opts?.branch) {
+      status = 'failed';
     }
 
     if (opts?.originalBranch) {
@@ -661,6 +667,9 @@ export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar
       if (tail) {
         error = tail.length > 3000 ? tail.slice(-3000) : tail;
       }
+    }
+    if (status === 'failed' && exitCode === 0 && pushError) {
+      error = pushError;
     }
 
     const response: WorkResponse = {
