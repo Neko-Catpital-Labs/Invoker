@@ -36,6 +36,14 @@ function safeGetWorkspacePath(persistence: SQLiteAdapter, taskId: string): strin
     : undefined;
 }
 
+/** DB / UI may still contain legacy `github`; executor always treats it like `external_review`. */
+function canonicalMergeMode(mode: string | undefined): 'manual' | 'automatic' | 'external_review' {
+  const m = mode ?? 'manual';
+  if (m === 'github' || m === 'external_review') return 'external_review';
+  if (m === 'automatic') return 'automatic';
+  return 'manual';
+}
+
 // ── Host-cwd safety guard ─────────────────────────────────
 
 /**
@@ -213,7 +221,7 @@ export async function executeMergeNodeImpl(
     ? host.persistence.loadWorkflow(workflowId)
     : undefined;
   const onFinish = workflow?.onFinish ?? 'none';
-  const mergeMode = workflow?.mergeMode ?? 'manual';
+  const mergeMode = canonicalMergeMode(workflow?.mergeMode);
   const baseBranch = workflow?.baseBranch ?? host.defaultBranch ?? await host.detectDefaultBranch();
   const featureBranch = workflow?.featureBranch;
   const visualProof = workflow?.visualProof ?? false;
@@ -550,7 +558,7 @@ export async function publishAfterFixImpl(
     ? host.persistence.loadWorkflow(workflowId)
     : undefined;
   const onFinish = workflow?.onFinish ?? 'none';
-  const mergeMode = workflow?.mergeMode ?? 'manual';
+  const mergeMode = canonicalMergeMode(workflow?.mergeMode);
   const baseBranch = workflow?.baseBranch ?? host.defaultBranch ?? await host.detectDefaultBranch();
   const featureBranch = workflow?.featureBranch;
   const visualProof = workflow?.visualProof ?? false;

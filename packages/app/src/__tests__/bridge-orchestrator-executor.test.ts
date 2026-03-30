@@ -9,7 +9,8 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { createTestHarness, type TestHarness, InMemoryBus, InMemoryPersistence, MockGit } from '@invoker/test-utils';
 import { Orchestrator, type PlanDefinition, type TaskState } from '@invoker/core';
-import { TaskExecutor, FamiliarRegistry } from '@invoker/executors';
+import { TaskExecutor, FamiliarRegistry, type MergeGateProvider } from '@invoker/executors';
+import { setWorkflowMergeMode } from '../workflow-actions.js';
 
 // ── Shared Plans ────────────────────────────────────────────
 
@@ -1024,6 +1025,55 @@ describe('Flow 9: manual merge mode', () => {
       (c[0] === 'merge' && c.includes('--ff-only')),
     );
     expect(advancedBase).toBeDefined();
+  });
+});
+
+/** Matches GUI “Manual” + onFinish none — switching merge mode to GitHub must not complete the gate without a PR. */
+const MANUAL_MERGE_ONFINISH_NONE_PLAN: PlanDefinition = {
+  name: 'Manual OnFinish None',
+  onFinish: 'none',
+  mergeMode: 'manual',
+  baseBranch: 'master',
+  featureBranch: 'plan/manual-onfinish-none',
+  tasks: [{ id: 'A', description: 'Task A', command: 'echo a' }],
+};
+
+// ── Flow 9c: UI `github` merge mode alias ───────────────────
+
+describe('Flow 9c: set-merge-mode github alias', () => {
+  const mockMergeGate: MergeGateProvider = {
+    name: 'mock',
+    createReview: async () => ({
+      url: 'https://github.com/owner/repo/pull/99',
+      identifier: 'owner/repo#99',
+    }),
+    checkApproval: async () => ({
+      approved: false,
+      rejected: false,
+      statusText: 'Open',
+      url: 'https://github.com/owner/repo/pull/99',
+    }),
+  };
+
+  it('switching manual gate to github creates PR metadata and persists external_review', async () => {
+    const h = createTestHarness({ mergeGateProvider: mockMergeGate });
+    h.loadAndStart(MANUAL_MERGE_ONFINISH_NONE_PLAN);
+    h.completeTask('A');
+
+    const mergeId = h.getAllTasks().find((t) => t.config.isMergeNode)!.id;
+    const wfId = h.getTask(mergeId)!.config.workflowId!;
+    await h.executor.executeTasks([h.getTask(mergeId)!]);
+    expect(h.getTask(mergeId)!.status).toBe('awaiting_approval');
+
+    await setWorkflowMergeMode(wfId, 'github', {
+      orchestrator: h.orchestrator,
+      persistence: h.persistence,
+      taskExecutor: h.executor,
+    });
+
+    expect(h.persistence.loadWorkflow(wfId)!.mergeMode).toBe('external_review');
+    expect(h.getTask(mergeId)!.status).toBe('awaiting_approval');
+    expect(h.getTask(mergeId)!.execution.reviewUrl).toBe('https://github.com/owner/repo/pull/99');
   });
 });
 

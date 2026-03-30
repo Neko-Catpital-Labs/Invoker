@@ -10,6 +10,7 @@ import type { Orchestrator } from '@invoker/core';
 import type { TaskState } from '@invoker/core';
 import type { SQLiteAdapter } from '@invoker/persistence';
 import type { TaskExecutor } from '@invoker/executors';
+import { normalizeMergeModeForPersistence } from './merge-mode.js';
 
 // ── Deps interfaces ──────────────────────────────────────────
 
@@ -152,6 +153,29 @@ export async function selectExperiments(
  * Merge-conflict resolution with Claude in the task worktree, then restart and execute.
  * Same sequence as GUI `invoker:resolve-conflict` and headless `resolve-conflict`.
  */
+/**
+ * Persist merge mode (normalizing `github` → `external_review`) and re-run the merge
+ * gate when it was already finished or waiting, matching GUI `invoker:set-merge-mode`.
+ */
+export async function setWorkflowMergeMode(
+  workflowId: string,
+  mergeMode: string,
+  deps: Pick<ActionDeps, 'orchestrator' | 'persistence'> & { taskExecutor: TaskExecutor },
+): Promise<void> {
+  const normalized = normalizeMergeModeForPersistence(mergeMode);
+  deps.persistence.updateWorkflow(workflowId, { mergeMode: normalized });
+  const tasks = deps.persistence.loadTasks(workflowId);
+  const mergeTask = tasks.find((t) => t.config.isMergeNode);
+  if (
+    mergeTask &&
+    (mergeTask.status === 'completed' || mergeTask.status === 'awaiting_approval')
+  ) {
+    const started = deps.orchestrator.restartTask(mergeTask.id);
+    const runnable = started.filter((t) => t.status === 'running');
+    await deps.taskExecutor.executeTasks(runnable);
+  }
+}
+
 export async function resolveConflictWithClaudeAction(
   taskId: string,
   deps: Pick<ActionDeps, 'orchestrator' | 'persistence'> & { taskExecutor: TaskExecutor },
