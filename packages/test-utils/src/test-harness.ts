@@ -1,5 +1,5 @@
 import { Orchestrator, type PlanDefinition, type TaskState } from '@invoker/core';
-import { TaskExecutor, FamiliarRegistry } from '@invoker/executors';
+import { TaskExecutor, FamiliarRegistry, type MergeGateProvider } from '@invoker/executors';
 import type { WorkRequest, WorkResponse } from '@invoker/protocol';
 import type { Familiar, FamiliarHandle } from '@invoker/executors';
 import { InMemoryPersistence } from './in-memory-persistence.js';
@@ -79,7 +79,10 @@ export interface TestHarness {
  * Uses InMemoryPersistence, InMemoryBus, MockGit, and a stub FamiliarRegistry.
  * No Electron, no real git, no real child processes.
  */
-export function createTestHarness(opts?: { maxConcurrency?: number }): TestHarness {
+export function createTestHarness(opts?: {
+  maxConcurrency?: number;
+  mergeGateProvider?: MergeGateProvider;
+}): TestHarness {
   const persistence = new InMemoryPersistence();
   const bus = new InMemoryBus();
   const orchestrator = new Orchestrator({
@@ -96,6 +99,7 @@ export function createTestHarness(opts?: { maxConcurrency?: number }): TestHarne
     persistence: persistence as any,
     familiarRegistry,
     cwd: '/tmp/test-harness',
+    mergeGateProvider: opts?.mergeGateProvider,
   });
 
   const git = new MockGit();

@@ -20,6 +20,7 @@
  *   electron dist/main.js --headless resolve-conflict <taskId>
  *   electron dist/main.js --headless edit <taskId> <newCommand>
  *   electron dist/main.js --headless cancel <taskId>
+ *   electron dist/main.js --headless set-merge-mode <workflowId> <mode>
  *   electron dist/main.js --headless queue
  *   electron dist/main.js --headless audit <taskId>
  *
@@ -77,6 +78,7 @@ import {
   restartWorkflow as sharedRestartWorkflow,
   resolveConflictWithClaudeAction,
   selectExperiments as sharedSelectExperiments,
+  setWorkflowMergeMode,
 } from './workflow-actions.js';
 import { spawn, execSync } from 'node:child_process';
 import {
@@ -1057,22 +1059,19 @@ function setupGuiMode(): void {
 
     ipcMain.handle('invoker:set-merge-mode', async (_event, workflowId: string, mergeMode: string) => {
       console.log(`[ipc] set-merge-mode: workflow="${workflowId}" → "${mergeMode}"`);
-      persistence.updateWorkflow(workflowId, { mergeMode: mergeMode as any });
+      try {
+        await setWorkflowMergeMode(workflowId, mergeMode, {
+          orchestrator,
+          persistence,
+          taskExecutor,
+        });
+      } catch (err) {
+        console.error(`[ipc] set-merge-mode failed: ${err}`);
+        throw err;
+      }
       const workflows = persistence.listWorkflows();
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('invoker:workflows-changed', workflows);
-      }
-
-      try {
-        const tasks = persistence.loadTasks(workflowId);
-        const mergeTask = tasks.find(t => t.config.isMergeNode);
-        if (mergeTask && (mergeTask.status === 'completed' || mergeTask.status === 'awaiting_approval')) {
-          const started = orchestrator.restartTask(mergeTask.id);
-          const runnable = started.filter(t => t.status === 'running');
-          await taskExecutor.executeTasks(runnable);
-        }
-      } catch (err) {
-        console.error(`[ipc] set-merge-mode restart failed: ${err}`);
       }
     });
 

@@ -34,6 +34,7 @@ import {
   editTaskCommand as sharedEditTaskCommand,
   editTaskType as sharedEditTaskType,
   selectExperiment as sharedSelectExperiment,
+  setWorkflowMergeMode,
 } from './workflow-actions.js';
 import { openExternalTerminalForTask } from './open-terminal-for-task.js';
 
@@ -185,6 +186,9 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
     case 'delete-workflow':
       await headlessDeleteWorkflow(args[1], deps);
       break;
+    case 'set-merge-mode':
+      await headlessSetMergeMode(args[1], args[2], deps);
+      break;
     case 'delete-all':
       deps.orchestrator.deleteAllWorkflows();
       console.log('All workflows deleted.');
@@ -227,6 +231,7 @@ ${BOLD}Usage:${RESET}
   electron dist/main.js --headless queue                   Show queue status & utilization
   electron dist/main.js --headless audit <taskId>          Print event history
   electron dist/main.js --headless delete-workflow <id>    Delete a single workflow by ID
+  electron dist/main.js --headless set-merge-mode <workflowId> <mode>  manual | automatic | github | external_review
   electron dist/main.js --headless slack                   Start Slack bot (long-running)
 
 ${BOLD}Options:${RESET}
@@ -556,6 +561,27 @@ async function headlessDeleteWorkflow(workflowId: string, deps: Pick<HeadlessDep
   if (!workflowId) throw new Error('Missing workflowId. Usage: --headless delete-workflow <workflowId>');
   deps.orchestrator.deleteWorkflow(workflowId);
   console.log(`Deleted workflow: ${workflowId}`);
+}
+
+async function headlessSetMergeMode(
+  workflowId: string,
+  mergeMode: string,
+  deps: HeadlessDeps,
+): Promise<void> {
+  if (!workflowId || !mergeMode) {
+    throw new Error(
+      'Missing arguments. Usage: --headless set-merge-mode <workflowId> <manual|automatic|github|external_review>',
+    );
+  }
+  const taskExecutor = createHeadlessExecutor(deps);
+  wireHeadlessApproveHook(deps, taskExecutor);
+  await setWorkflowMergeMode(workflowId, mergeMode, {
+    orchestrator: deps.orchestrator,
+    persistence: deps.persistence,
+    taskExecutor,
+  });
+  const wf = deps.persistence.loadWorkflow(workflowId);
+  console.log(`Merge mode updated for ${workflowId}: ${wf?.mergeMode ?? '?'}`);
 }
 
 async function headlessQueue(deps: HeadlessDeps): Promise<void> {

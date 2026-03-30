@@ -10,6 +10,7 @@ import { parse as parseYaml } from 'yaml';
 import type { PlanDefinition } from '@invoker/core';
 import { UTILIZATION_MAX } from '@invoker/core';
 import { loadConfig } from './config.js';
+import { normalizeMergeModeForPersistence } from './merge-mode.js';
 
 /** Empty / whitespace `baseBranch` in YAML (`baseBranch:`) must fall through to config + remote detection like a missing key. */
 function resolveDefaultBaseBranch(plan: PlanDefinition): string {
@@ -156,9 +157,9 @@ export function parsePlan(yamlContent: string): PlanDefinition {
     );
   }
   const rawMergeMode = raw.mergeMode as (typeof validMergeModes)[number] | undefined;
-  const mergeMode = (rawMergeMode === 'github' || rawMergeMode === 'external_review')
-    ? 'external_review' as const
-    : rawMergeMode;
+  const mergeMode = rawMergeMode !== undefined
+    ? normalizeMergeModeForPersistence(rawMergeMode)
+    : undefined;
 
   // Default reviewProvider to 'github' when mergeMode was 'github' or 'external_review'
   const reviewProvider = raw.reviewProvider
