@@ -50,6 +50,7 @@ function mockPool(fam: WorktreeFamiliar) {
         worktreePath: `/fake/worktrees/${sanitized}`,
         branch,
         release: vi.fn().mockResolvedValue(undefined),
+        softRelease: vi.fn(),
       });
     }),
     destroyAll: vi.fn().mockResolvedValue(undefined),

@@ -49,7 +49,6 @@ export async function cleanupManagedWorktrees(opts: {
         const wtPath = join(wtRoot, name);
         if (!statSync(wtPath).isDirectory()) continue;
         console.log(`[cleanup] removing external worktree: ${wtPath} (git worktree remove --force from ${clonePath})`);
-        throw new Error(`[cleanup] WORKTREE_CLEANUP_GUARD: cleanupManagedWorktrees would delete external worktree path=${wtPath} clone=${clonePath}`);
         try {
           await execGit(['worktree', 'remove', '--force', wtPath], clonePath);
           console.log(`[cleanup] removed worktree: ${wtPath}`);
@@ -75,7 +74,6 @@ export async function cleanupManagedWorktrees(opts: {
         const wtPath = join(embedded, name);
         if (!statSync(wtPath).isDirectory()) continue;
         console.log(`[cleanup] removing embedded worktree: ${wtPath} (from ${clonePath})`);
-        throw new Error(`[cleanup] WORKTREE_CLEANUP_GUARD: cleanupManagedWorktrees would delete embedded worktree path=${wtPath} clone=${clonePath}`);
         try {
           await execGit(['worktree', 'remove', '--force', wtPath], clonePath);
           console.log(`[cleanup] removed embedded worktree: ${wtPath}`);

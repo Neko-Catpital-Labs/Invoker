@@ -3,6 +3,7 @@
  *
  * Launches the built Electron app and provides the first window page.
  * Handles platform-specific flags (Linux --no-sandbox) and cleanup.
+ * Set INVOKER_E2E_KEEP_TMP=1 to skip deleting the temp INVOKER_DB_DIR after each test (debugging).
  */
 
 import type { TaskStateChanges } from '@invoker/core';
@@ -24,7 +25,9 @@ export const test = base.extend<ElectronFixtures>({
   testDir: async ({}, use) => {
     const dir = mkdtempSync(path.join(tmpdir(), 'invoker-e2e-'));
     await use(dir);
-    rmSync(dir, { recursive: true, force: true });
+    if (process.env.INVOKER_E2E_KEEP_TMP !== '1') {
+      rmSync(dir, { recursive: true, force: true });
+    }
   },
 
   electronApp: async ({ testDir }, use) => {

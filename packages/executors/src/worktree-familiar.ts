@@ -31,7 +31,7 @@ interface WorktreeEntry extends BaseEntry {
   process: ChildProcess | null;
   worktreeDir: string;
   branch: string;
-  /** Release function for pool-managed worktrees (removes worktree from disk). */
+  /** Full pool release: git worktree remove (used on provision failure, not on destroyAll). */
   poolRelease?: () => Promise<void>;
   /** Soft-release: frees the pool slot without removing the worktree from disk. */
   poolSoftRelease?: () => void;
@@ -425,14 +425,11 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
 
     await Promise.all(closePromises);
 
-    // Full release: remove worktrees from disk during shutdown
-    const releasePromises: Promise<void>[] = [];
+    // Soft-release only: free pool slots without git worktree remove (same as task end / kill).
+    // Hard removal stays in RepoPool.release and explicit cleanup flows.
     for (const [_executionId, entry] of allEntries) {
-      if (entry.poolRelease) {
-        releasePromises.push(entry.poolRelease().catch(() => {}));
-      }
+      entry.poolSoftRelease?.();
     }
-    await Promise.allSettled(releasePromises);
 
     this.entries.clear();
   }

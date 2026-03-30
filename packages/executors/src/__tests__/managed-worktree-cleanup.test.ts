@@ -32,11 +32,12 @@ describe('cleanupManagedWorktrees', () => {
     const pool = new RepoPool({ cacheDir, worktreeBaseDir });
     const wt = await pool.acquireWorktree(repoUrl, 'experiment/cleanup-smoke');
     expect(existsSync(wt.worktreePath)).toBe(true);
-    await pool.destroyAll();
 
     const { removed, errors } = await cleanupManagedWorktrees({ cacheDir, worktreeBaseDir });
     expect(removed).toContain(wt.worktreePath);
     expect(errors.length).toBe(0);
     expect(existsSync(wt.worktreePath)).toBe(false);
+
+    await pool.destroyAll();
   });
 });

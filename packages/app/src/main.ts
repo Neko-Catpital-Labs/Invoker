@@ -123,23 +123,27 @@ function resolveUtilizationRules(config: InvokerConfig): UtilizationRule[] {
   }));
 }
 
+/** Single root for DB, repos cache, and worktrees (must stay consistent). */
+function resolveInvokerHomeRoot(): string {
+  return (
+    process.env.INVOKER_DB_DIR
+    ?? (process.env.NODE_ENV === 'test'
+      ? path.join(homedir(), '.invoker', 'test')
+      : path.join(homedir(), '.invoker'))
+  );
+}
 
 async function initServices(): Promise<void> {
   messageBus = new IpcBus();
-  const dbDir = process.env.INVOKER_DB_DIR
-    ?? (process.env.NODE_ENV === 'test'
-      ? path.join(homedir(), '.invoker', 'test')
-      : path.join(homedir(), '.invoker'));
-  mkdirSync(dbDir, { recursive: true });
-  persistence = await SQLiteAdapter.create(path.join(dbDir, 'invoker.db'));
+  const invokerHomeRoot = resolveInvokerHomeRoot();
+  mkdirSync(invokerHomeRoot, { recursive: true });
+  persistence = await SQLiteAdapter.create(path.join(invokerHomeRoot, 'invoker.db'));
   familiarRegistry = new FamiliarRegistry();
-  const invokerHomeInit = process.env.INVOKER_DB_DIR
-    ?? path.join(homedir(), '.invoker');
   familiarRegistry.register(
     'worktree',
     new WorktreeFamiliar({
-      worktreeBaseDir: path.resolve(invokerHomeInit, 'worktrees'),
-      cacheDir: path.resolve(invokerHomeInit, 'repos'),
+      worktreeBaseDir: path.resolve(invokerHomeRoot, 'worktrees'),
+      cacheDir: path.resolve(invokerHomeRoot, 'repos'),
       maxWorktrees: 5,
     }),
   );
@@ -589,9 +593,7 @@ function setupGuiMode(): void {
       killRunningTask,
     });
 
-    const dbPath = process.env.INVOKER_DB_DIR
-      ? path.join(process.env.INVOKER_DB_DIR, 'invoker.db')
-      : path.join(homedir(), '.invoker', 'invoker.db');
+    const dbPath = path.join(resolveInvokerHomeRoot(), 'invoker.db');
     console.log(`[init] Database: ${dbPath}`);
     console.log(`[init] Repo root: ${repoRoot}`);
     console.log(`[init] Config: disableAutoRunOnStartup=${invokerConfig.disableAutoRunOnStartup ?? false}`);
