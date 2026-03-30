@@ -8,7 +8,7 @@
 import initSqlJs, { type Database as SqlJsDatabase } from 'sql.js';
 import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync } from 'node:fs';
 import { dirname } from 'node:path';
-import type { TaskState, TaskStateChanges, Attempt } from '@invoker/core';
+import type { TaskState, TaskStateChanges, Attempt, TaskStatus } from '@invoker/core';
 import { normalizeFamiliarType } from '@invoker/core';
 import type { PersistenceAdapter, Workflow, TaskEvent, ActivityLogEntry, Conversation, ConversationMessage } from './adapter.js';
 
@@ -1098,8 +1098,10 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
   private rowToTask(row: any): TaskState {
     const rawStatus = row.status as string;
-    const normalizedStatus =
-      rawStatus === 'running' && row.is_fixing_with_ai ? 'fixing_with_ai' : rawStatus;
+    const normalizedStatus: TaskStatus =
+      rawStatus === 'running' && row.is_fixing_with_ai
+        ? 'fixing_with_ai'
+        : (rawStatus as TaskStatus);
     return {
       id: row.id,
       description: row.description,
