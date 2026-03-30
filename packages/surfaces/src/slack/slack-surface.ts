@@ -160,7 +160,13 @@ export class SlackSurface implements Surface {
     // Start SessionManager eviction loop
     this.sessionManager?.start();
 
-    // Resolve bot user ID for filtering self-messages
+    // Run post-connect initialization in background — don't block event delivery
+    this.postConnectInit().catch((err) => {
+      this.log('slack', 'error', `Post-connect initialization failed: ${err}`);
+    });
+  }
+
+  private async postConnectInit(): Promise<void> {
     try {
       const authResult = await this.app.client.auth.test();
       this.botUserId = authResult.user_id as string;
@@ -169,7 +175,6 @@ export class SlackSurface implements Surface {
       this.log('slack', 'error', `Failed to resolve bot user ID: ${err}`);
     }
 
-    // Restore active conversations from the database
     await this.recoverActiveConversations();
   }
 

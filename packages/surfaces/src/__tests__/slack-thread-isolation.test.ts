@@ -411,6 +411,9 @@ describe('Slack thread isolation', () => {
   });
 });
 
+/** Flush pending microtasks so fire-and-forget async work (e.g. postConnectInit) settles. */
+const flushAsync = () => new Promise<void>((r) => setTimeout(r, 0));
+
 describe('Slack conversation recovery with persistence', () => {
   let adapter: SQLiteAdapter;
   let repo: ConversationRepository;
@@ -449,6 +452,7 @@ describe('Slack conversation recovery with persistence', () => {
     });
 
     await surface.start(async (cmd) => { receivedCommands.push(cmd); });
+    await flushAsync(); // wait for background postConnectInit()
 
     // PlanConversation constructor should have been called for each active conversation
     const threadTsArgs = mockPlanConversationCtor.mock.calls.map((c: any[]) => c[0].threadTs);
@@ -475,6 +479,7 @@ describe('Slack conversation recovery with persistence', () => {
     });
 
     await surface.start(async () => {});
+    await flushAsync(); // wait for background postConnectInit()
 
     const threadTsArgs = mockPlanConversationCtor.mock.calls.map((c: any[]) => c[0].threadTs);
     expect(threadTsArgs).toContain('ts-active');
@@ -492,6 +497,7 @@ describe('Slack conversation recovery with persistence', () => {
     });
 
     await surface.start(async () => {});
+    await flushAsync(); // wait for background postConnectInit()
 
     // No recovery should have happened
     expect(mockPlanConversationCtor).not.toHaveBeenCalled();
@@ -513,6 +519,7 @@ describe('Slack conversation recovery with persistence', () => {
     });
 
     await surface.start(async () => {});
+    await flushAsync(); // wait for background postConnectInit()
 
     // Clear any conversations created during start recovery
     const existingCalls = mockPlanConversationCtor.mock.calls.length;
