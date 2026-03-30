@@ -9,7 +9,6 @@ import type { TaskStateChanges } from '@invoker/core';
 import { test as base, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test';
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
-import { execSync } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 
@@ -21,38 +20,6 @@ export type ElectronFixtures = {
 
 const repoRoot = path.resolve(__dirname, '..', '..', '..', '..');
 
-function cleanStaleExperimentState(): void {
-  // Git-level cleanup only. DB cleanup is handled by tmpdir isolation.
-  try {
-    execSync('git worktree prune', { cwd: repoRoot, stdio: 'ignore' });
-
-    const porcelain = execSync('git worktree list --porcelain', {
-      cwd: repoRoot, encoding: 'utf8',
-    });
-    const lines = porcelain.split('\n');
-    for (let i = 0; i < lines.length; i++) {
-      if (lines[i].startsWith('branch refs/heads/experiment/')) {
-        for (let j = i - 1; j >= 0; j--) {
-          if (lines[j].startsWith('worktree ')) {
-            const wtPath = lines[j].slice('worktree '.length);
-            try { execSync(`git worktree remove --force "${wtPath}"`, { cwd: repoRoot, stdio: 'ignore' }); } catch { /* ok */ }
-            break;
-          }
-        }
-      }
-    }
-
-    execSync('git worktree prune', { cwd: repoRoot, stdio: 'ignore' });
-
-    const branches = execSync('git branch --list "experiment/*"', {
-      cwd: repoRoot, encoding: 'utf8',
-    }).trim().split('\n').map(b => b.trim()).filter(Boolean);
-    for (const branch of branches) {
-      try { execSync(`git branch -D "${branch}"`, { cwd: repoRoot, stdio: 'ignore' }); } catch { /* ok */ }
-    }
-  } catch { /* ignore */ }
-}
-
 export const test = base.extend<ElectronFixtures>({
   testDir: async ({}, use) => {
     const dir = mkdtempSync(path.join(tmpdir(), 'invoker-e2e-'));
@@ -61,7 +28,6 @@ export const test = base.extend<ElectronFixtures>({
   },
 
   electronApp: async ({ testDir }, use) => {
-    cleanStaleExperimentState();
     // Dummy `claude` on PATH + fix command — same as scripts/e2e-dry-run (no real CLI).
     const claudeMarker = path.join(repoRoot, 'scripts', 'e2e-dry-run', 'fixtures', 'claude-marker.sh');
     const stubDir = path.join(testDir, 'claude-stub');
