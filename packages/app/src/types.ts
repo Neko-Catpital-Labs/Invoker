@@ -18,7 +18,6 @@ export interface TaskReplacementDef {
   dependencies?: string[];
   familiarType?: string;
   autoFix?: boolean;
-  maxFixAttempts?: number;
 }
 
 // ── Workflow Metadata ────────────────────────────────────────

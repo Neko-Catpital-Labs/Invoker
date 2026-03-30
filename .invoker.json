@@ -3,7 +3,6 @@
   "defaultBranch": "master",
   "planningTimeoutSeconds": 7200,
   "planningHeartbeatIntervalSeconds": 120,
-  "maxAttemptsPerNode": 2000,
   "maxConcurrency": 6,
   "remoteTargets": {
     "remote_digital_ocean": {

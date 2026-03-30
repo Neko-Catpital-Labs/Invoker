@@ -83,11 +83,6 @@ class InMemoryPersistence implements OrchestratorPersistence {
     }
   }
 
-  getNextAttemptNumber(nodeId: string): number {
-    const list = this.attempts.get(nodeId) ?? [];
-    return list.length + 1;
-  }
-
   deleteWorkflow(workflowId: string): void {
     this.workflows.delete(workflowId);
     for (const [taskId, entry] of this.tasks) {
@@ -266,15 +261,14 @@ describe('Orchestrator', () => {
       expect(orchestrator.getTask('t2')!.config.familiarType).toBe('worktree');
     });
 
-    it('passes autoFix and maxFixAttempts', () => {
+    it('passes autoFix', () => {
       orchestrator.loadPlan({
         name: 'autofix-plan',
-        tasks: [{ id: 't1', description: 'Auto-fix task', autoFix: true, maxFixAttempts: 2 }],
+        tasks: [{ id: 't1', description: 'Auto-fix task', autoFix: true }],
       });
 
       const task = orchestrator.getTask('t1');
       expect(task!.config.autoFix).toBe(true);
-      expect(task!.config.maxFixAttempts).toBe(2);
     });
 
     it('publishes created deltas for each task', () => {
@@ -1357,7 +1351,7 @@ describe('Orchestrator', () => {
       orchestrator.loadPlan({
         name: 'autofix-test',
         tasks: [
-          { id: 't1', description: 'Auto-fix task', autoFix: true, maxFixAttempts: 2 },
+          { id: 't1', description: 'Auto-fix task', autoFix: true },
           { id: 't2', description: 'Depends on t1', dependencies: ['t1'] },
         ],
       });
@@ -1376,11 +1370,10 @@ describe('Orchestrator', () => {
 
       const fixConservative = orchestrator.getTask('t1-exp-fix-conservative');
       const fixRefactor = orchestrator.getTask('t1-exp-fix-refactor');
+      const fixAlternative = orchestrator.getTask('t1-exp-fix-alternative');
       expect(fixConservative).toBeDefined();
       expect(fixRefactor).toBeDefined();
-
-      const fixAlternative = orchestrator.getTask('t1-exp-fix-alternative');
-      expect(fixAlternative).toBeUndefined();
+      expect(fixAlternative).toBeDefined();
 
       expect(started.length).toBeGreaterThan(0);
     });
@@ -1389,7 +1382,7 @@ describe('Orchestrator', () => {
       orchestrator.loadPlan({
         name: 'autofix-recon-test',
         tasks: [
-          { id: 't1', description: 'Auto-fix task', autoFix: true, maxFixAttempts: 2 },
+          { id: 't1', description: 'Auto-fix task', autoFix: true },
           { id: 't2', description: 'After fix', dependencies: ['t1'] },
         ],
       });
@@ -1423,10 +1416,22 @@ describe('Orchestrator', () => {
         }),
       );
 
+      if (orchestrator.getTask('t1-exp-fix-alternative')!.status === 'pending') {
+        orchestrator.startExecution();
+      }
+
+      orchestrator.handleWorkerResponse(
+        makeResponse({
+          actionId: 't1-exp-fix-alternative',
+          status: 'completed',
+          outputs: { exitCode: 0, summary: 'Alternative approach' },
+        }),
+      );
+
       const reconTask = orchestrator.getTask('t1-reconciliation');
       expect(reconTask).toBeDefined();
       expect(reconTask!.status).toBe('needs_input');
-      expect(reconTask!.execution.experimentResults).toHaveLength(2);
+      expect(reconTask!.execution.experimentResults).toHaveLength(3);
 
       orchestrator.selectExperiment('t1-reconciliation', 't1-exp-fix-conservative');
       expect(orchestrator.getTask('t1-reconciliation')!.status).toBe('completed');

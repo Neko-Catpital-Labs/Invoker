@@ -56,7 +56,6 @@ export interface RawPlanTask {
   dockerImage?: string;
   remoteTargetId?: string;
   autoFix?: boolean;
-  maxFixAttempts?: number;
   utilization?: number | 'max';
 }
 
@@ -218,7 +217,6 @@ export function parsePlan(yamlContent: string): PlanDefinition {
       dockerImage: task.dockerImage,
       remoteTargetId: task.remoteTargetId,
       autoFix: task.autoFix,
-      maxFixAttempts: task.maxFixAttempts,
       utilization: task.utilization === 'max' ? UTILIZATION_MAX : task.utilization,
     };
   });

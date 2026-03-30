@@ -101,7 +101,6 @@ tasks:
         prompt: "Try approach A"
     requiresManualApproval: false
     autoFix: false               # auto-retry with experiments on failure
-    maxFixAttempts: 3
 \`\`\`
 
 Rules:

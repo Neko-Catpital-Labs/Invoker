@@ -186,7 +186,7 @@ tasks:
     expect(plan.tasks[0].command).toBeUndefined();
   });
 
-  it('parses autoFix and maxFixAttempts from task definitions', () => {
+  it('parses autoFix from task definitions', () => {
     const yaml = `
 name: AutoFix Test
 repoUrl: git@github.com:test/repo.git
@@ -195,14 +195,12 @@ tasks:
     description: "A fixable task"
     command: "npm test"
     autoFix: true
-    maxFixAttempts: 3
   - id: normal-task
     description: "No fix"
     command: "echo hi"
 `;
     const plan = parsePlan(yaml);
     expect(plan.tasks[0].autoFix).toBe(true);
-    expect(plan.tasks[0].maxFixAttempts).toBe(3);
     expect(plan.tasks[1].autoFix).toBeUndefined();
   });
 

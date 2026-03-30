@@ -146,7 +146,6 @@ async function initServices(): Promise<void> {
   orchestrator = new Orchestrator({
     persistence, messageBus,
     maxConcurrency: invokerConfig.maxConcurrency,
-    maxAttemptsPerNode: invokerConfig.maxAttemptsPerNode,
     utilizationRules: resolveUtilizationRules(invokerConfig),
     defaultUtilization: invokerConfig.defaultUtilization,
     executorRoutingRules: invokerConfig.executorRoutingRules ?? [],
@@ -741,7 +740,6 @@ function setupGuiMode(): void {
       orchestrator = new Orchestrator({
     persistence, messageBus,
     maxConcurrency: invokerConfig.maxConcurrency,
-    maxAttemptsPerNode: invokerConfig.maxAttemptsPerNode,
     utilizationRules: resolveUtilizationRules(invokerConfig),
     defaultUtilization: invokerConfig.defaultUtilization,
     executorRoutingRules: invokerConfig.executorRoutingRules ?? [],
