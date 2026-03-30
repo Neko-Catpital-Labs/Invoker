@@ -5,6 +5,8 @@ import { normalize } from 'node:path';
 import { bashPreserveOrReset, runBashLocal } from './branch-utils.js';
 import { RESTART_TO_BRANCH_TRACE } from './exec-trace.js';
 import { findManagedWorktreeForBranch, abbrevRefMatchesBranch } from './worktree-discovery.js';
+import { syncPlanBaseRemote, isInvokerManagedPoolBranch } from './plan-base-remote.js';
+import { remoteFetchForPool } from './remote-fetch-policy.js';
 
 export interface RepoPoolConfig {
   cacheDir: string;
@@ -45,6 +47,65 @@ export class RepoPool {
     return `${this.cacheDir}/${this.urlHash(repoUrl)}`;
   }
 
+  /** Deterministic external worktree path for a branch (requires worktreeBaseDir). */
+  externalWorktreePath(repoUrl: string, branch: string): string {
+    if (!this.worktreeBaseDir) {
+      throw new Error('RepoPool.externalWorktreePath requires worktreeBaseDir');
+    }
+    const sanitized = branch.replace(/\//g, '-');
+    return `${this.worktreeBaseDir}/${this.urlHash(repoUrl)}/${sanitized}`;
+  }
+
+  /**
+   * Force-fetch mirror and sync origin/<baseBranch> (rebase-and-retry). Ignores remoteFetchForPool.
+   */
+  async refreshMirrorForRebase(repoUrl: string, baseBranch: string): Promise<string> {
+    const dir = this.cloneDir(repoUrl);
+    if (existsSync(dir)) {
+      await this.execGit(['fetch', '--all'], dir);
+      try {
+        const branch = (await this.execGit(['rev-parse', '--abbrev-ref', 'HEAD'], dir)).trim();
+        if (branch !== 'HEAD') {
+          await this.execGit(['merge', '--ff-only', `origin/${branch}`], dir);
+        }
+      } catch { /* non-ff or detached */ }
+    } else {
+      mkdirSync(this.cacheDir, { recursive: true });
+      await this.execGit(['clone', repoUrl, dir], this.cacheDir);
+    }
+    const runGit = (args: string[]) => this.execGit(args, dir);
+    await syncPlanBaseRemote(runGit, baseBranch);
+    return dir;
+  }
+
+  /**
+   * Remove Invoker-managed branches (experiment/*, invoker/*) from the mirror and linked worktrees.
+   */
+  async removeManagedBranchesInMirror(repoUrl: string, branches: string[]): Promise<void> {
+    const dir = this.cloneDir(repoUrl);
+    if (!existsSync(dir) || !this.worktreeBaseDir) return;
+    for (const branch of branches) {
+      if (!isInvokerManagedPoolBranch(branch)) continue;
+      const sanitized = branch.replace(/\//g, '-');
+      const wtPath = `${this.worktreeBaseDir}/${this.urlHash(repoUrl)}/${sanitized}`;
+      try {
+        await this.execGit(['worktree', 'remove', '--force', wtPath], dir);
+      } catch {
+        /* not registered */
+      }
+      if (existsSync(wtPath)) {
+        try {
+          rmSync(wtPath, { recursive: true, force: true });
+        } catch { /* */ }
+      }
+      try {
+        await this.execGit(['branch', '-D', branch], dir);
+      } catch {
+        /* missing or checked out elsewhere */
+      }
+    }
+  }
+
   async ensureClone(repoUrl: string): Promise<string> {
     // Serialize clone operations per repo to prevent concurrent clone races
     const existing = this.cloneLocks.get(repoUrl);
@@ -81,14 +142,16 @@ export class RepoPool {
   private async doEnsureClone(repoUrl: string): Promise<string> {
     const dir = this.cloneDir(repoUrl);
     if (existsSync(dir)) {
-      await this.execGit(['fetch', '--all'], dir);
-      // Advance local HEAD branch to match origin so rev-parse returns the fresh ref
-      try {
-        const branch = (await this.execGit(['rev-parse', '--abbrev-ref', 'HEAD'], dir)).trim();
-        if (branch !== 'HEAD') {
-          await this.execGit(['merge', '--ff-only', `origin/${branch}`], dir);
-        }
-      } catch { /* non-ff or detached; leave as-is */ }
+      if (remoteFetchForPool.enabled) {
+        await this.execGit(['fetch', '--all'], dir);
+        // Advance local HEAD branch to match origin so rev-parse returns the fresh ref
+        try {
+          const branch = (await this.execGit(['rev-parse', '--abbrev-ref', 'HEAD'], dir)).trim();
+          if (branch !== 'HEAD') {
+            await this.execGit(['merge', '--ff-only', `origin/${branch}`], dir);
+          }
+        } catch { /* non-ff or detached; leave as-is */ }
+      }
       return dir;
     }
     mkdirSync(this.cacheDir, { recursive: true });

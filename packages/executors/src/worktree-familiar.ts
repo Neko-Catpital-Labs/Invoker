@@ -10,6 +10,12 @@ import { killProcessGroup, cleanElectronEnv, SIGKILL_TIMEOUT_MS } from './proces
 import { DEFAULT_WORKTREE_PROVISION_COMMAND } from './default-worktree-provision-command.js';
 import { computeBranchHash, bashMergeUpstreams, parseMergeError } from './branch-utils.js';
 import { RESTART_TO_BRANCH_TRACE } from './exec-trace.js';
+import {
+  syncPlanBaseRemote,
+  resolvePlanBaseRevision,
+  shouldResolveViaOriginTracking,
+} from './plan-base-remote.js';
+import { remoteFetchForPool } from './remote-fetch-policy.js';
 
 // Re-export for backward compatibility
 export { computeBranchHash } from './branch-utils.js';
@@ -68,6 +74,11 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
     });
   }
 
+  /** Pool mirror used for this familiar (rebase-and-retry / tests). */
+  getRepoPool(): RepoPool {
+    return this.pool;
+  }
+
   async start(request: WorkRequest): Promise<FamiliarHandle> {
     const repoUrl = request.inputs.repoUrl;
     if (!repoUrl) {
@@ -85,12 +96,15 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
     const t0 = Date.now();
     const log = (step: string) => console.log(`[WorktreeFamiliar] start task=${request.actionId} step=${step} elapsed=${Date.now() - t0}ms`);
 
-    // Resolve base ref from pool clone (ensureClone does the fetch)
     const clonePath = await this.pool.ensureClone(repoUrl);
     const baseRef = request.inputs.baseBranch ?? 'HEAD';
-    log(`rev-parse ${baseRef} begin`);
-    const baseHead = await this.execGitSimple(['rev-parse', baseRef], clonePath);
-    log(`rev-parse ${baseRef} done`);
+    log(`resolve base ${baseRef} begin`);
+    const runGit = (args: string[]) => this.execGitSimple(args, clonePath);
+    if (remoteFetchForPool.enabled && shouldResolveViaOriginTracking(baseRef)) {
+      await syncPlanBaseRemote(runGit, baseRef.trim());
+    }
+    const baseHead = await resolvePlanBaseRevision(runGit, baseRef);
+    log(`resolve base ${baseRef} done → ${baseHead}`);
     const upstreamCommits = (request.inputs.upstreamContext ?? [])
       .map(c => c.commitHash)
       .filter((h): h is string => !!h);

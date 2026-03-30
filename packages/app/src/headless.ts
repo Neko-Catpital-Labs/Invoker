@@ -15,7 +15,13 @@ import { SQLiteAdapter } from '@invoker/persistence';
 import { resolve as resolvePath } from 'node:path';
 import { Channels } from '@invoker/transport';
 import type { MessageBus } from '@invoker/transport';
-import { FamiliarRegistry, TaskExecutor, GitHubMergeGateProvider, ReviewProviderRegistry } from '@invoker/executors';
+import {
+  FamiliarRegistry,
+  TaskExecutor,
+  GitHubMergeGateProvider,
+  ReviewProviderRegistry,
+  remoteFetchForPool,
+} from '@invoker/executors';
 import { loadConfig, type InvokerConfig } from './config.js';
 import { backupPlan } from './plan-backup.js';
 import { startApiServer } from './api-server.js';
@@ -23,6 +29,7 @@ import {
   rebaseAndRetry,
   rejectTask,
   restartTask as sharedRestartTask,
+  restartWorkflow as sharedRestartWorkflow,
   editTaskCommand as sharedEditTaskCommand,
   editTaskType as sharedEditTaskType,
   selectExperiment as sharedSelectExperiment,
@@ -138,6 +145,9 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
     case 'restart':
       await headlessRestart(args[1], deps);
       break;
+    case 'restart-workflow':
+      await headlessRestartWorkflow(args[1], deps);
+      break;
     case 'fix':
       await headlessFix(args[1], deps);
       break;
@@ -202,6 +212,8 @@ ${BOLD}Usage:${RESET}
   electron dist/main.js --headless input <id> <text>  Provide input to task
   electron dist/main.js --headless select <id> <exp>  Select winning experiment
   electron dist/main.js --headless restart <id>       Restart a failed/stuck task
+  electron dist/main.js --headless restart-workflow <workflowId>  Bump generation + rerun (no pool fetch)
+  electron dist/main.js --headless rebase-and-retry <taskId>  Refresh pool base + rerun workflow
   electron dist/main.js --headless fix <taskId>       Fix a failed task with Claude
   electron dist/main.js --headless edit <id> <cmd>    Edit task command and re-run
   electron dist/main.js --headless task-status <taskId>     Print raw task status
@@ -419,15 +431,34 @@ async function headlessRebaseAndRetry(taskId: string, deps: HeadlessDeps): Promi
   if (!taskId) throw new Error('Missing arguments. Usage: --headless rebase-and-retry <taskId>');
   restoreWorkflowForTask(taskId, deps);
 
-  const started = await rebaseAndRetry(taskId, deps);
+  const te = createHeadlessExecutor(deps);
+  const started = await rebaseAndRetry(taskId, { ...deps, taskExecutor: te });
   const runnable = started.filter(t => t.status === 'running');
   console.log(`Rebase-and-retry: resetting workflow from current HEAD (${runnable.length} task(s))`);
 
   if (runnable.length === 0) return;
 
-  const te = createHeadlessExecutor(deps);
   await te.executeTasks(runnable);
   await waitForCompletion(deps.orchestrator, deps.orchestrator.getTask(taskId)?.config.workflowId, undefined);
+}
+
+async function headlessRestartWorkflow(workflowId: string, deps: HeadlessDeps): Promise<void> {
+  if (!workflowId) {
+    throw new Error('Missing arguments. Usage: --headless restart-workflow <workflowId>');
+  }
+  const started = sharedRestartWorkflow(workflowId, { persistence: deps.persistence, orchestrator: deps.orchestrator });
+  const runnable = started.filter(t => t.status === 'running');
+  console.log(`Restart-workflow "${workflowId}" — ${runnable.length} task(s) to execute (pool fetch skipped)`);
+  if (runnable.length === 0) return;
+
+  const te = createHeadlessExecutor(deps);
+  remoteFetchForPool.enabled = false;
+  try {
+    await te.executeTasks(runnable);
+  } finally {
+    remoteFetchForPool.enabled = true;
+  }
+  await waitForCompletion(deps.orchestrator, workflowId, undefined);
 }
 
 async function headlessEdit(taskId: string, newCommand: string, deps: HeadlessDeps): Promise<void> {

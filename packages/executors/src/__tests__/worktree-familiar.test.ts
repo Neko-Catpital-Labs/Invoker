@@ -915,11 +915,17 @@ describe('WorktreeFamiliar', () => {
       });
       await familiar.start(request);
 
-      // rev-parse for baseBranch should be called via execGitSimple (for computeBranchHash)
+      // Short branch names resolve via origin/<branch> after fetch (plan base on remote tip)
       const gitCalls = mockedSpawn.mock.calls.filter((call) => call[0] === 'git');
-      const revParseCall = gitCalls.find(
-        (call) => (call[1] as string[])?.[0] === 'rev-parse' && (call[1] as string[])?.[1] === 'master',
-      );
+      const fetchCall = gitCalls.find((call) => {
+        const args = call[1] as string[];
+        return args[0] === 'fetch' && args[1] === 'origin';
+      });
+      expect(fetchCall).toBeDefined();
+      const revParseCall = gitCalls.find((call) => {
+        const args = (call[1] as string[]).join(' ');
+        return args.includes('rev-parse') && args.includes('origin/master');
+      });
       expect(revParseCall).toBeDefined();
 
       // pool.acquireWorktree should have been called with the branch

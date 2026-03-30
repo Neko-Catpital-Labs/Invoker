@@ -21,6 +21,7 @@ import type { MergeGateProvider } from './merge-gate-provider.js';
 import type { ReviewProviderRegistry } from './review-provider-registry.js';
 import { DockerFamiliar } from './docker-familiar.js';
 import { WorktreeFamiliar } from './worktree-familiar.js';
+import { isInvokerManagedPoolBranch } from './plan-base-remote.js';
 import { SshFamiliar } from './ssh-familiar.js';
 import {
   executeMergeNodeImpl,
@@ -96,6 +97,37 @@ export class TaskExecutor {
   private activePrPollers = new Map<string, ReturnType<typeof setInterval>>();
   private getRemoteTargets: () => Record<string, { host: string; user: string; sshKeyPath: string; port?: number }>;
   private dockerConfig: { imageName?: string; repoInImage?: boolean };
+
+  /** Config default branch (e.g. master) for workflows without baseBranch. */
+  getDefaultBranchHint(): string | undefined {
+    return this.defaultBranch;
+  }
+
+  /**
+   * Before rebase-and-retry: refresh pool mirror + origin base, remove managed branches for this workflow.
+   */
+  async preparePoolForRebaseRetry(
+    workflowId: string,
+    repoUrl: string | undefined,
+    baseBranchHint: string | undefined,
+  ): Promise<void> {
+    if (!repoUrl) return;
+    const familiar = this.familiarRegistry.get('worktree');
+    if (!(familiar instanceof WorktreeFamiliar)) return;
+    const pool = familiar.getRepoPool();
+    const baseBranch = baseBranchHint?.trim() || this.defaultBranch || 'master';
+    await pool.refreshMirrorForRebase(repoUrl, baseBranch);
+    const branches = this.collectManagedWorkflowBranches(workflowId);
+    await pool.removeManagedBranchesInMirror(repoUrl, branches);
+  }
+
+  private collectManagedWorkflowBranches(workflowId: string): string[] {
+    return this.orchestrator
+      .getAllTasks()
+      .filter((t) => t.config.workflowId === workflowId && !t.config.isMergeNode)
+      .map((t) => t.execution.branch ?? `invoker/${t.id}`)
+      .filter((b) => isInvokerManagedPoolBranch(b));
+  }
 
   constructor(config: TaskExecutorConfig) {
     this.orchestrator = config.orchestrator;

@@ -14,6 +14,8 @@
  *   electron dist/main.js --headless input <taskId> <text>
  *   electron dist/main.js --headless select <taskId> <expId>
  *   electron dist/main.js --headless restart <taskId>
+ *   electron dist/main.js --headless restart-workflow <workflowId>
+ *   electron dist/main.js --headless rebase-and-retry <taskId>
  *   electron dist/main.js --headless fix <taskId>
  *   electron dist/main.js --headless edit <taskId> <newCommand>
  *   electron dist/main.js --headless cancel <taskId>
@@ -57,6 +59,7 @@ import {
   FamiliarRegistry, TaskExecutor,
   DockerFamiliar, WorktreeFamiliar, SshFamiliar, GitHubMergeGateProvider, ReviewProviderRegistry,
   RESTART_TO_BRANCH_TRACE,
+  remoteFetchForPool,
   type Familiar, type FamiliarHandle, type PersistedTaskMeta,
 } from '@invoker/executors';
 import type { TaskOutputData } from './types.js';
@@ -996,7 +999,12 @@ function setupGuiMode(): void {
       try {
         const started = sharedRestartWorkflow(workflowId, { persistence, orchestrator });
         const runnable = started.filter(t => t.status === 'running');
-        await taskExecutor.executeTasks(runnable);
+        remoteFetchForPool.enabled = false;
+        try {
+          await taskExecutor.executeTasks(runnable);
+        } finally {
+          remoteFetchForPool.enabled = true;
+        }
       } catch (err) {
         console.error(`[ipc] restart-workflow failed: ${err}`);
         throw err;
@@ -1006,7 +1014,12 @@ function setupGuiMode(): void {
     ipcMain.handle('invoker:rebase-and-retry', async (_event, taskId: string) => {
       console.log(`[ipc] rebase-and-retry: "${taskId}"`);
       try {
-        const started = await rebaseAndRetry(taskId, { orchestrator, persistence, repoRoot });
+        const started = await rebaseAndRetry(taskId, {
+          orchestrator,
+          persistence,
+          repoRoot,
+          taskExecutor,
+        });
         const runnable = started.filter(t => t.status === 'running');
         await taskExecutor.executeTasks(runnable);
       } catch (err) {

@@ -1,13 +1,12 @@
 /**
  * Rebase-and-retry integration test with real git.
  *
- * Proves that rebaseAndRetry() from workflow-actions.ts deletes old task
- * branches before restarting, so setupTaskBranch creates fresh branches
- * from current HEAD (including new commits).
+ * Proves that rebaseAndRetry() with taskExecutor refreshes the pool mirror,
+ * removes managed experiment branches there, then bumps generation so
+ * re-execution branches from the updated base (including new commits on master).
  *
- * Additionally verifies that RepoPool.doEnsureClone fast-forwards local
- * branches after fetch, so even without explicit branch deletion the
- * worktree gets a fresh base (stale work no longer carries over).
+ * Also verifies RepoPool.doEnsureClone fast-forwards after fetch when
+ * re-running without explicit pool cleanup (second scenario).
  *
  * Pattern: sandbox git repo + real WorktreeFamiliar + real TaskExecutor
  * (follows branch-chain.test.ts).
@@ -56,6 +55,12 @@ function getSha(cwd: string, ref: string): string {
   return execSync(`git rev-parse ${ref}`, { cwd }).toString().trim();
 }
 
+function mirrorClonePath(registry: FamiliarRegistry, repoUrl: string): string {
+  const wt = registry.get('worktree');
+  if (!(wt instanceof WorktreeFamiliar)) throw new Error('expected WorktreeFamiliar');
+  return wt.getRepoPool().getClonePath(repoUrl);
+}
+
 function makeTaskState(overrides: {
   id: string;
   description?: string;
@@ -75,7 +80,7 @@ function makeTaskState(overrides: {
   } as TaskState;
 }
 
-describe('rebase-and-retry: branch deletion before restart', { timeout: 120_000 }, () => {
+describe('rebase-and-retry: pool mirror cleanup before restart', { timeout: 120_000 }, () => {
   let tmpDir: string;
 
   beforeEach(() => {
@@ -133,11 +138,13 @@ describe('rebase-and-retry: branch deletion before restart', { timeout: 120_000 
       },
     };
 
+    const repoUrl = `file://${tmpDir}`;
+
     const persistence = {
       loadWorkflow: () => ({
         id: 'wf-test',
         baseBranch: 'master',
-        repoUrl: `file://${tmpDir}`,
+        repoUrl,
         generation,
       }),
       updateWorkflow: (_id: string, changes: any) => {
@@ -174,7 +181,7 @@ describe('rebase-and-retry: branch deletion before restart', { timeout: 120_000 
       defaultBranch: 'master',
     });
 
-    return { tasks, task, executor, orchestrator, persistence, responses };
+    return { tasks, task, executor, orchestrator, persistence, responses, registry, repoUrl };
   }
 
   async function executeTask(
@@ -192,74 +199,61 @@ describe('rebase-and-retry: branch deletion before restart', { timeout: 120_000 
     return getSha(cwd, 'HEAD');
   }
 
-  it('with branch deletion (fix): fresh branch from new HEAD, stale work removed', async () => {
-    const { task, executor, orchestrator, persistence } = buildHarness();
+  it('with taskExecutor: pool branch removed, fresh branch from new master, stale work removed', async () => {
+    const { task, executor, orchestrator, persistence, registry, repoUrl } = buildHarness();
+    const clonePath = () => mirrorClonePath(registry, repoUrl);
 
-    // Step 1: Execute task → creates experiment/task-a-<hash> with a task commit
+    // Step 1: Execute task → creates experiment/task-a-<hash> in pool mirror
     await executeTask(executor, task);
     const branchFirst = task.execution.branch!;
-    expect(branchExists(tmpDir, branchFirst)).toBe(true);
+    expect(branchExists(clonePath(), branchFirst)).toBe(true);
 
-    const oldTaskCommit = getSha(tmpDir, branchFirst);
+    const oldTaskCommit = getSha(clonePath(), branchFirst);
 
-    // Step 2: Add commit Y to master
+    // Step 2: Add commit Y to master (source repo)
     const commitY = addCommitToMaster(tmpDir, 'new-feature.txt', 'commit Y: new feature');
 
-    // Step 3: Call rebaseAndRetry (the fix) — deletes old branch, then restarts
+    // Step 3: rebaseAndRetry refreshes mirror, removes managed branches, bumps generation
     const deps = {
       orchestrator: orchestrator as any,
       persistence: persistence as any,
       repoRoot: tmpDir,
+      taskExecutor: executor,
     };
     await rebaseAndRetry('task-a', deps);
 
-    // Branch should have been deleted by rebaseAndRetry
-    expect(branchExists(tmpDir, branchFirst)).toBe(false);
+    expect(branchExists(clonePath(), branchFirst)).toBe(false);
 
-    // Step 4: Re-execute the task (simulates TaskExecutor running the restarted task)
     await executeTask(executor, task);
     const branchAfter = task.execution.branch!;
 
-    // Assertions:
-    // (a) commit Y IS an ancestor of the new branch (new master is included)
-    expect(isAncestor(tmpDir, commitY, branchAfter)).toBe(true);
-
-    // (b) old task commit SHA is NOT an ancestor of the new branch (stale work removed)
-    expect(isAncestor(tmpDir, oldTaskCommit, branchAfter)).toBe(false);
+    expect(isAncestor(clonePath(), commitY, branchAfter)).toBe(true);
+    expect(isAncestor(clonePath(), oldTaskCommit, branchAfter)).toBe(false);
   });
 
-  it('without branch deletion: clone fast-forward prevents stale branches', async () => {
-    const { task, executor, orchestrator, persistence } = buildHarness();
+  it('without pool deletion: clone fast-forward prevents stale branches', async () => {
+    const { task, executor, orchestrator, persistence, registry, repoUrl } = buildHarness();
+    const clonePath = () => mirrorClonePath(registry, repoUrl);
 
-    // Step 1: Execute task → creates experiment/task-a-* with a task commit
     await executeTask(executor, task);
     const branchFirst = task.execution.branch!;
-    expect(branchExists(tmpDir, branchFirst)).toBe(true);
+    expect(branchExists(clonePath(), branchFirst)).toBe(true);
 
-    const oldTaskCommit = getSha(tmpDir, branchFirst);
+    const oldTaskCommit = getSha(clonePath(), branchFirst);
 
-    // Step 2: Add commit Y to master
     const commitY = addCommitToMaster(tmpDir, 'new-feature.txt', 'commit Y: new feature');
 
-    // Step 3: Restart WITHOUT deleting branches
     bumpGenerationAndRestart('wf-test', {
       orchestrator: orchestrator as any,
       persistence: persistence as any,
     });
 
-    // Branch still exists (not deleted)
-    expect(branchExists(tmpDir, branchFirst)).toBe(true);
+    expect(branchExists(clonePath(), branchFirst)).toBe(true);
 
-    // Step 4: Re-execute — RepoPool.doEnsureClone now fast-forwards the clone's
-    // local master after fetch, so bashPreserveOrReset resets the worktree branch
-    // to the fresh base. Stale work no longer carries over.
     await executeTask(executor, task);
     const branchAfter = task.execution.branch!;
 
-    // commit Y IS an ancestor (fresh base includes it)
-    expect(isAncestor(tmpDir, commitY, branchAfter)).toBe(true);
-
-    // OLD task commit is NOT an ancestor (branch was recreated from fresh base)
-    expect(isAncestor(tmpDir, oldTaskCommit, branchAfter)).toBe(false);
+    expect(isAncestor(clonePath(), commitY, branchAfter)).toBe(true);
+    expect(isAncestor(clonePath(), oldTaskCommit, branchAfter)).toBe(false);
   });
 });

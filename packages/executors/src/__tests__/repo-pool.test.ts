@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execSync } from 'node:child_process';
 import { RepoPool } from '../repo-pool.js';
+import { remoteFetchForPool } from '../remote-fetch-policy.js';
 
 /**
  * Creates a temp git repo with an initial commit.
@@ -31,6 +32,7 @@ describe('RepoPool', () => {
   });
 
   afterEach(async () => {
+    remoteFetchForPool.enabled = true;
     await pool.destroyAll();
     rmSync(tmpDir, { recursive: true, force: true });
     rmSync(localRepoUrl, { recursive: true, force: true });
@@ -166,5 +168,24 @@ describe('RepoPool', () => {
     expect(head2).toBe(head1);  // Same HEAD, no extra commits
 
     await wt2.release();
+  });
+
+  it('ensureClone skips network refresh when remoteFetchForPool.enabled is false', async () => {
+    await pool.ensureClone(localRepoUrl);
+    const clonePath = pool.getClonePath(localRepoUrl);
+    const shaBefore = execSync('git rev-parse origin/master', { cwd: clonePath }).toString().trim();
+
+    writeFileSync(join(localRepoUrl, 'extra.md'), 'more');
+    execSync('git add -A && git commit -m "upstream advance"', { cwd: localRepoUrl });
+
+    remoteFetchForPool.enabled = false;
+    await pool.ensureClone(localRepoUrl);
+    const shaSkipped = execSync('git rev-parse origin/master', { cwd: clonePath }).toString().trim();
+    expect(shaSkipped).toBe(shaBefore);
+
+    remoteFetchForPool.enabled = true;
+    await pool.ensureClone(localRepoUrl);
+    const shaFresh = execSync('git rev-parse origin/master', { cwd: clonePath }).toString().trim();
+    expect(shaFresh).not.toBe(shaBefore);
   });
 });

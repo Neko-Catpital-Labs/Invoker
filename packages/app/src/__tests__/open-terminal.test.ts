@@ -205,7 +205,10 @@ describe('open-terminal integration', () => {
         if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
         if (args[0] === 'rev-parse' && args[1] === 'HEAD') return 'abc123';
         if (args[0] === 'rev-parse' && args[1] === '--verify') {
-          // Branch doesn't exist yet
+          const ref = String(args[2] ?? '');
+          if (ref.includes('origin/')) {
+            return 'deadbeef01deadbeef02deadbeef03deadbeef04';
+          }
           throw new Error('fatal: Needed a single revision');
         }
         return '';

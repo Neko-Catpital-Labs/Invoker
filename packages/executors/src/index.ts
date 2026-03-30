@@ -1,4 +1,11 @@
 export { RESTART_TO_BRANCH_TRACE } from './exec-trace.js';
+export { remoteFetchForPool } from './remote-fetch-policy.js';
+export {
+  syncPlanBaseRemote,
+  resolvePlanBaseRevision,
+  shouldResolveViaOriginTracking,
+  isInvokerManagedPoolBranch,
+} from './plan-base-remote.js';
 export * from './familiar.js';
 export * from './base-familiar.js';
 export * from './process-utils.js';

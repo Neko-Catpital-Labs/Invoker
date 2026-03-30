@@ -10,30 +10,16 @@ import type { Orchestrator } from '@invoker/core';
 import type { TaskState } from '@invoker/core';
 import type { SQLiteAdapter } from '@invoker/persistence';
 import type { TaskExecutor } from '@invoker/executors';
-import { spawn } from 'node:child_process';
 
 // ── Deps interfaces ──────────────────────────────────────────
 
 export interface ActionDeps {
   orchestrator: Orchestrator;
   persistence: SQLiteAdapter;
+  /** @deprecated Pool cleanup uses the workflow mirror; repoRoot branch deletion is no longer used. */
   repoRoot?: string;
-}
-
-// ── Helpers ──────────────────────────────────────────────────
-
-function execCommand(cmd: string, args: string[], cwd: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(cmd, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
-    let stdout = '';
-    let stderr = '';
-    child.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
-    child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
-    child.on('close', (code) => {
-      if (code === 0) resolve(stdout.trim());
-      else reject(new Error(`${cmd} ${args.join(' ')} failed (code ${code}): ${stderr.trim()}`));
-    });
-  });
+  /** When set, rebase-and-refreshes the pool mirror and removes managed branches before bumping generation. */
+  taskExecutor?: TaskExecutor;
 }
 
 // ── Actions ──────────────────────────────────────────────────
@@ -99,12 +85,11 @@ export function restartWorkflow(
 }
 
 /**
- * Rebase-and-retry: delete old task branches and recreate the entire workflow
- * from current HEAD.
+ * Rebase-and-retry: refresh the pool mirror / origin base, remove managed
+ * experiment/invoker branches in that mirror, bump generation, and restart the DAG.
  *
- * Previous implementation tried `git rebase` first, which was unreliable and
- * caused conflicts. The fix: always delete stale branches and do a full DAG
- * restart, so setupTaskBranch creates fresh branches from the latest HEAD.
+ * When `taskExecutor` is provided, `preparePoolForRebaseRetry` runs first; the
+ * caller then executes runnable tasks (normal pool fetch + origin base resolution apply).
  */
 export async function rebaseAndRetry(
   taskId: string,
@@ -114,19 +99,11 @@ export async function rebaseAndRetry(
   if (!task?.config.workflowId) throw new Error(`Task ${taskId} not found or has no workflow`);
   const workflowId = task.config.workflowId;
 
-  // Delete old task branches so setupTaskBranch creates fresh ones from current HEAD
-  const workflowTasks = deps.orchestrator.getAllTasks().filter(
-    t => t.config.workflowId === workflowId && !t.config.isMergeNode,
-  );
-  for (const t of workflowTasks) {
-    const branch = t.execution.branch ?? `invoker/${t.id}`;
-    try {
-      await execCommand('git', ['branch', '-D', branch], deps.repoRoot!);
-      console.log(`Deleted old branch: ${branch}`);
-    } catch { /* branch may not exist */ }
+  const workflow = deps.persistence.loadWorkflow(workflowId);
+  if (deps.taskExecutor && workflow?.repoUrl) {
+    await deps.taskExecutor.preparePoolForRebaseRetry(workflowId, workflow.repoUrl, workflow.baseBranch);
   }
 
-  // Always recreate workflow on current HEAD — no git rebase
   return bumpGenerationAndRestart(workflowId, deps);
 }
 
