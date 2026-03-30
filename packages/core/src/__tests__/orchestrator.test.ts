@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { reconciliationNeedsInputWorkResponse } from './reconciliation-needs-input-shim.js';
 import { Orchestrator, PlanConflictError, descriptionForMergeNode } from '../orchestrator.js';
 import type { PlanDefinition, OrchestratorPersistence, OrchestratorMessageBus } from '../orchestrator.js';
 import type { TaskState, TaskDelta, TaskStateChanges, Attempt } from '../task-types.js';
@@ -965,6 +966,8 @@ describe('Orchestrator', () => {
         }),
       );
 
+      orchestrator.handleWorkerResponse(reconciliationNeedsInputWorkResponse('pivot-reconciliation'));
+
       const reconTask = orchestrator.getTask('pivot-reconciliation');
       expect(reconTask).toBeDefined();
       expect(reconTask!.status).toBe('needs_input');
@@ -1014,6 +1017,8 @@ describe('Orchestrator', () => {
           outputs: { exitCode: 0 },
         }),
       );
+
+      orchestrator.handleWorkerResponse(reconciliationNeedsInputWorkResponse('pivot-reconciliation'));
 
       const reconTask = orchestrator.getTask('pivot-reconciliation');
       expect(reconTask).toBeDefined();
@@ -1427,6 +1432,8 @@ describe('Orchestrator', () => {
           outputs: { exitCode: 0, summary: 'Alternative approach' },
         }),
       );
+
+      orchestrator.handleWorkerResponse(reconciliationNeedsInputWorkResponse('t1-reconciliation'));
 
       const reconTask = orchestrator.getTask('t1-reconciliation');
       expect(reconTask).toBeDefined();
@@ -2589,6 +2596,8 @@ describe('Orchestrator', () => {
         makeResponse({ actionId: 'pivot-exp-v2', status: 'completed', outputs: { exitCode: 0 } }),
       );
 
+      orchestrator.handleWorkerResponse(reconciliationNeedsInputWorkResponse('pivot-reconciliation'));
+
       expect(orchestrator.getTask('pivot-reconciliation')!.status).toBe('needs_input');
 
       persistence.updateTask('pivot-exp-v1', {
@@ -2863,6 +2872,8 @@ describe('Orchestrator', () => {
           outputs: { exitCode: 0 },
         }),
       );
+
+      orchestrator.handleWorkerResponse(reconciliationNeedsInputWorkResponse('pivot-reconciliation'));
 
       expect(orchestrator.getTask('pivot-reconciliation')!.status).toBe('needs_input');
 
@@ -3176,6 +3187,8 @@ describe('Orchestrator', () => {
         makeResponse({ actionId: 'pivot-exp-v3', status: 'completed', outputs: { exitCode: 0 } }),
       );
 
+      orchestrator.handleWorkerResponse(reconciliationNeedsInputWorkResponse('pivot-reconciliation'));
+
       expect(orchestrator.getTask('pivot-reconciliation')!.status).toBe('needs_input');
     }
 
@@ -3346,6 +3359,7 @@ describe('Orchestrator', () => {
       orchestrator.handleWorkerResponse(
         makeResponse({ actionId: 'pivot-exp-v2', status: 'completed', outputs: { exitCode: 0 } }),
       );
+      orchestrator.handleWorkerResponse(reconciliationNeedsInputWorkResponse('pivot-reconciliation'));
       expect(orchestrator.getTask('pivot-reconciliation')!.status).toBe('needs_input');
 
       // Select experiment → reconciliation completes

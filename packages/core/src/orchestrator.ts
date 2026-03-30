@@ -727,6 +727,12 @@ export class Orchestrator {
     const task = this.stateMachine.getTask(taskId);
     if (!task || !task.config.isReconciliation) return [];
 
+    // Reconciliation may still be `running` if selection happens without a prior
+    // `needs_input` worker response (tests); free the scheduler slot either way.
+    if (task.status === 'running') {
+      this.scheduler.completeJob(taskId);
+    }
+
     const winner = this.stateMachine.getTask(experimentId);
     const changes: TaskStateChanges = {
       status: 'completed',
@@ -768,6 +774,10 @@ export class Orchestrator {
     this.refreshFromDb();
     const task = this.stateMachine.getTask(taskId);
     if (!task || !task.config.isReconciliation) return [];
+
+    if (task.status === 'running') {
+      this.scheduler.completeJob(taskId);
+    }
 
     const changes: TaskStateChanges = {
       status: 'completed',
@@ -1545,8 +1555,14 @@ export class Orchestrator {
     } catch { /* best effort */ }
 
     this.checkExperimentCompletion(taskId);
+
+    const readyTaskIds = this.stateMachine.findNewlyReadyTasks(taskId);
+    console.log(
+      `[orchestrator] handleFailed "${taskId}": ${readyTaskIds.length} newly ready: [${readyTaskIds.join(', ')}]`,
+    );
+    const started = this.autoStartReadyTasks(readyTaskIds);
     this.checkWorkflowCompletion();
-    return [];
+    return started;
   }
 
   private handleNeedsInput(
@@ -1597,9 +1613,21 @@ export class Orchestrator {
       },
     ];
 
+    const wf =
+      wfId && typeof this.persistence.loadWorkflow === 'function'
+        ? this.persistence.loadWorkflow(wfId)
+        : undefined;
+    const pivotBranch =
+      wf && typeof (wf as { baseBranch?: string }).baseBranch === 'string'
+        ? (wf as { baseBranch: string }).baseBranch.trim()
+        : '';
+    const sourceChanges =
+      pivotBranch !== '' ? { execution: { branch: pivotBranch } } : undefined;
+
     this.applyGraphMutation({
       sourceNodeId: taskId,
       sourceDisposition: 'complete',
+      sourceChanges,
       newNodes,
       outputNodeId: reconciliationId,
     });
@@ -1635,7 +1663,13 @@ export class Orchestrator {
   private checkExperimentCompletion(taskId: string): void {
     for (const recon of this.stateMachine.getAllTasks()) {
       if (!recon.config.isReconciliation) continue;
-      if (recon.status === 'needs_input' || recon.status === 'completed') continue;
+      if (
+        recon.status === 'needs_input' ||
+        recon.status === 'completed' ||
+        recon.status === 'running'
+      ) {
+        continue;
+      }
       if (!recon.dependencies.includes(taskId)) continue;
 
       const allReported = recon.dependencies.every((depId) => {
@@ -1654,13 +1688,14 @@ export class Orchestrator {
           };
         });
 
+        // Persist results only; reconciliation stays pending until the scheduler runs it.
+        // TaskExecutor then acquires a worktree and emits `needs_input` (open-terminal cwd).
         const reconChanges: TaskStateChanges = {
-          status: 'needs_input',
           execution: { experimentResults },
         };
         this.writeAndSync(recon.id, reconChanges);
         const delta: TaskDelta = { type: 'updated', taskId: recon.id, changes: reconChanges };
-        this.persistence.logEvent?.(recon.id, 'task.needs_input', reconChanges);
+        this.persistence.logEvent?.(recon.id, 'task.experiment_results_recorded', reconChanges);
         this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
       }
     }

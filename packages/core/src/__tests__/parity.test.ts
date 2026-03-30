@@ -8,6 +8,7 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
+import { reconciliationNeedsInputWorkResponse } from './reconciliation-needs-input-shim.js';
 import { TaskStateMachine } from '../state-machine.js';
 import { ResponseHandler } from '../response-handler.js';
 import { TaskScheduler } from '../scheduler.js';
@@ -299,6 +300,8 @@ describe('Parity — Feature Coverage', () => {
       makeResponse({ actionId: 'pivot-exp-v2', status: 'completed', outputs: { exitCode: 0 } }),
     );
 
+    orchestrator.handleWorkerResponse(reconciliationNeedsInputWorkResponse('pivot-reconciliation'));
+
     const reconTask = orchestrator.getTask('pivot-reconciliation');
     expect(reconTask).toBeDefined();
     expect(reconTask!.status).toBe('needs_input');
@@ -340,6 +343,8 @@ describe('Parity — Feature Coverage', () => {
     orchestrator.handleWorkerResponse(
       makeResponse({ actionId: 'pivot-exp-v2', status: 'completed', outputs: { exitCode: 0 } }),
     );
+
+    orchestrator.handleWorkerResponse(reconciliationNeedsInputWorkResponse('pivot-reconciliation'));
 
     orchestrator.selectExperiment('pivot-reconciliation', 'pivot-exp-v1');
 

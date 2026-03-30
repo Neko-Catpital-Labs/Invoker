@@ -5,6 +5,7 @@
  * and chain topologies. Pure orchestrator state machine.
  */
 import { describe, it, expect, beforeEach } from 'vitest';
+import { reconciliationNeedsInputWorkResponse } from './reconciliation-needs-input-shim.js';
 import { Orchestrator } from '../orchestrator.js';
 import type { PlanDefinition, OrchestratorPersistence, OrchestratorMessageBus } from '../orchestrator.js';
 import type { TaskState, TaskStateChanges , Attempt} from '../task-types.js';
@@ -282,6 +283,8 @@ describe('Type × Topology Matrix', () => {
       orchestrator.handleWorkerResponse(fail('pivot-exp-v2'));
       orchestrator.handleWorkerResponse(fail('pivot-exp-v3'));
 
+      orchestrator.handleWorkerResponse(reconciliationNeedsInputWorkResponse('pivot-reconciliation'));
+
       const recon = orchestrator.getTask('pivot-reconciliation')!;
       expect(recon.status).toBe('needs_input');
       expect(recon.execution.experimentResults).toBeDefined();
@@ -319,6 +322,8 @@ describe('Type × Topology Matrix', () => {
 
       // Complete the single experiment
       orchestrator.handleWorkerResponse(complete('B-exp-v1'));
+
+      orchestrator.handleWorkerResponse(reconciliationNeedsInputWorkResponse('B-reconciliation'));
 
       const recon = orchestrator.getTask('B-reconciliation')!;
       expect(recon.status).toBe('needs_input');

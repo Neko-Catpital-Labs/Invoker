@@ -457,6 +457,20 @@ describe('getRestoredTerminalSpec routing', () => {
       expect(spec.cwd).toBe('/home/user/.invoker/worktrees/wt-abc');
     });
 
+    it('reconciliation-style persisted meta uses checkout spec in worktree dir', () => {
+      vi.mocked(existsSync).mockReturnValue(true);
+      const meta: PersistedTaskMeta = {
+        taskId: 'pivot-reconciliation',
+        familiarType: 'worktree',
+        workspacePath: '/home/user/.invoker/worktrees/ab12/experiment-pivot-reconciliation-deadbeef',
+        branch: 'experiment/pivot-reconciliation-deadbeef',
+      };
+      const spec = wt.getRestoredTerminalSpec(meta);
+      expect(spec.cwd).toBe(meta.workspacePath);
+      expect(spec.command).toBe('bash');
+      expect(spec.args![1]).toContain("git checkout 'experiment/pivot-reconciliation-deadbeef'");
+    });
+
     it('throws when worktree path no longer exists (explicit)', () => {
       vi.mocked(existsSync).mockReturnValue(false);
       const meta: PersistedTaskMeta = {
