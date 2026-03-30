@@ -12,6 +12,7 @@ import type { SurfaceEvent, WorkflowStatus } from '../surface.js';
 const STATUS_EMOJI: Record<string, string> = {
   pending: ':white_circle:',
   running: ':large_blue_circle:',
+  fixing_with_ai: ':hammer_and_wrench:',
   completed: ':white_check_mark:',
   failed: ':x:',
   blocked: ':no_entry_sign:',
@@ -22,6 +23,7 @@ const STATUS_EMOJI: Record<string, string> = {
 const STATUS_LABEL: Record<string, string> = {
   pending: 'Pending',
   running: 'Running',
+  fixing_with_ai: 'Fixing with AI',
   completed: 'Completed',
   failed: 'Failed',
   blocked: 'Blocked',

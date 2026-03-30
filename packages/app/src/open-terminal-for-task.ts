@@ -53,12 +53,12 @@ export async function openExternalTerminalForTask(
   if (taskStatus == null) {
     return { opened: false, reason: `Task "${taskId}" not found.` };
   }
-  if (taskStatus === 'running') {
+  if (taskStatus === 'running' || taskStatus === 'fixing_with_ai') {
     return {
       opened: false,
       reason:
         runningTaskReason ??
-        'Task is still running. View output in the embedded terminal or logs.',
+        'Task is still running or being fixed with AI. View output in the embedded terminal or logs.',
     };
   }
 

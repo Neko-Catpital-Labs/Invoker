@@ -640,6 +640,12 @@ export class SQLiteAdapter implements PersistenceAdapter {
     }
 
     values.push(taskId);
+    const heartbeatOnly =
+      setClauses.length === 1 && setClauses[0].trimStart().startsWith('last_heartbeat_at =');
+    if (!heartbeatOnly && process.env.NODE_ENV !== 'test') {
+      const cols = setClauses.map((c) => c.split(/\s*=\s*/)[0]!.trim()).join(', ');
+      console.log(`[persist-sql] taskId=${taskId} columns=[${cols}]`);
+    }
     this.execRun(`UPDATE tasks SET ${setClauses.join(', ')} WHERE id = ?`, values);
   }
 
@@ -787,10 +793,12 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
   getTaskStatus(taskId: string): string | null {
     const row = this.queryOne(
-      'SELECT status FROM tasks WHERE id = ?',
+      'SELECT status, is_fixing_with_ai FROM tasks WHERE id = ?',
       [taskId],
-    );
-    return (row?.status as string) ?? null;
+    ) as { status?: string; is_fixing_with_ai?: number } | undefined;
+    if (!row?.status) return null;
+    if (row.status === 'running' && row.is_fixing_with_ai) return 'fixing_with_ai';
+    return row.status;
   }
 
   getContainerId(taskId: string): string | null {
@@ -1089,10 +1097,13 @@ export class SQLiteAdapter implements PersistenceAdapter {
   }
 
   private rowToTask(row: any): TaskState {
+    const rawStatus = row.status as string;
+    const normalizedStatus =
+      rawStatus === 'running' && row.is_fixing_with_ai ? 'fixing_with_ai' : rawStatus;
     return {
       id: row.id,
       description: row.description,
-      status: row.status,
+      status: normalizedStatus,
       dependencies: JSON.parse(row.dependencies || '[]'),
       createdAt: new Date(row.created_at),
       config: {
@@ -1136,7 +1147,12 @@ export class SQLiteAdapter implements PersistenceAdapter {
         selectedExperiments: row.selected_experiments ? JSON.parse(row.selected_experiments) : undefined,
         experimentResults: row.experiment_results ? JSON.parse(row.experiment_results) : undefined,
         pendingFixError: row.pending_fix_error ?? undefined,
-        isFixingWithAI: row.is_fixing_with_ai ? true : undefined,
+        isFixingWithAI:
+          normalizedStatus === 'fixing_with_ai'
+            ? undefined
+            : row.is_fixing_with_ai
+              ? true
+              : undefined,
         reviewUrl: row.review_url ?? undefined,
         reviewId: row.review_id ?? undefined,
         reviewStatus: row.review_status ?? undefined,

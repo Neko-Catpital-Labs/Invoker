@@ -24,6 +24,7 @@ const DIM = '\x1b[2m';
 const STATUS_COLORS: Record<TaskStatus, string> = {
   pending: DIM,
   running: YELLOW,
+  fixing_with_ai: MAGENTA,
   completed: GREEN,
   failed: RED,
   needs_input: BLUE,
@@ -35,6 +36,7 @@ const STATUS_COLORS: Record<TaskStatus, string> = {
 const STATUS_ICONS: Record<TaskStatus, string> = {
   pending: '○',
   running: '●',
+  fixing_with_ai: '🔧',
   completed: '✓',
   failed: '✗',
   needs_input: '?',
@@ -51,7 +53,9 @@ const STATUS_ICONS: Record<TaskStatus, string> = {
  * Example: "  ✓ greet — Say hello [completed]"
  */
 export function formatTaskStatus(task: TaskState): string {
-  const isFixing = task.status === 'running' && task.execution.isFixingWithAI;
+  const isFixing =
+    task.status === 'fixing_with_ai' ||
+    (task.status === 'running' && task.execution.isFixingWithAI);
   const isFixApproval = task.status === 'awaiting_approval' && task.execution.pendingFixError;
   const color = isFixing ? MAGENTA : isFixApproval ? YELLOW : (STATUS_COLORS[task.status] ?? RESET);
   const icon = isFixing ? '🔧' : isFixApproval ? '🔧' : (STATUS_ICONS[task.status] ?? '?');

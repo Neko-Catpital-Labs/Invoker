@@ -374,7 +374,7 @@ describe('orphan reconciliation on resume', () => {
     expect(orchestrator2.getTask('t1')?.status).toBe('running');
   });
 
-  it('stale detector skips tasks with isFixingWithAI', () => {
+  it('stale detector skips tasks in fixing_with_ai (and legacy running+isFixingWithAI)', () => {
     orchestrator.loadPlan(plan);
     orchestrator.startExecution();
 
@@ -385,22 +385,23 @@ describe('orphan reconciliation on resume', () => {
     expect(orchestrator.getTask('t1')?.status).toBe('failed');
 
     orchestrator.beginConflictResolution('t1');
-    expect(orchestrator.getTask('t1')?.status).toBe('running');
-    expect(orchestrator.getTask('t1')?.execution.isFixingWithAI).toBe(true);
+    expect(orchestrator.getTask('t1')?.status).toBe('fixing_with_ai');
+    expect(orchestrator.getTask('t1')?.execution.isFixingWithAI).toBeFalsy();
 
     // --- Simulate app restart ---
     const orchestrator2 = new Orchestrator({ persistence, messageBus: new InMemoryBus() });
     orchestrator2.syncAllFromDb();
 
-    // Simulate the DB poll stale-heartbeat check (main.ts) with isFixingWithAI guard
+    // Simulate the DB poll stale-heartbeat check (main.ts)
     const STALE_HEARTBEAT_MS = 5 * 60 * 1000;
     const restarted: TaskState[] = [];
     // Use a far-future "now" to guarantee the task looks stale
     const now = Date.now() + STALE_HEARTBEAT_MS + 60_000;
 
     for (const task of orchestrator2.getAllTasks()) {
+      if (task.status === 'fixing_with_ai') continue;
       if (task.status === 'running') {
-        if (task.execution?.isFixingWithAI) continue; // ← the guard under test
+        if (task.execution?.isFixingWithAI) continue;
         const startedTime = task.execution?.startedAt
           ? task.execution.startedAt.getTime()
           : null;
@@ -413,10 +414,8 @@ describe('orphan reconciliation on resume', () => {
       }
     }
 
-    // isFixingWithAI task should NOT be restarted
     expect(restarted).toEqual([]);
-    expect(orchestrator2.getTask('t1')?.status).toBe('running');
-    expect(orchestrator2.getTask('t1')?.execution.isFixingWithAI).toBe(true);
+    expect(orchestrator2.getTask('t1')?.status).toBe('fixing_with_ai');
   });
 
   it('after resume-workflow clears the flag, orphaned tasks CAN be restarted', () => {

@@ -10,11 +10,13 @@ describe('getStatusColor', () => {
   const allStatuses: TaskStatus[] = [
     'pending',
     'running',
+    'fixing_with_ai',
     'completed',
     'failed',
     'blocked',
     'needs_input',
     'awaiting_approval',
+    'stale',
   ];
 
   it('returns correct color for each status', () => {

@@ -503,7 +503,7 @@ describe('Flow 5: dagMutation via spawn_experiments', () => {
     expect(reconTask).toBeDefined();
   });
 
-  it('select_experiment completes the experiment lifecycle', () => {
+  it('select_experiment completes the experiment lifecycle', async () => {
     h.loadAndStart(LINEAR_PLAN);
 
     // Spawn experiments on A
@@ -531,10 +531,15 @@ describe('Flow 5: dagMutation via spawn_experiments', () => {
       h.completeTask(id);
     }
 
-    // Reconciliation should be needs_input (waiting for user to select winner)
-    const reconTask = h.getAllTasks().find(t => t.id.includes('reconciliation'));
+    // Reconciliation is auto-started as running; drive the executor so MockFamiliar emits needs_input
+    let reconTask = h.getAllTasks().find(t => t.id.includes('reconciliation'));
     expect(reconTask).toBeDefined();
-    expect(reconTask!.status).toBe('needs_input');
+    if (reconTask!.status === 'running') {
+      await h.executor.executeTasks([reconTask!]);
+    }
+    reconTask = h.getTask(reconTask!.id)!;
+    // WorktreeFamiliar emits needs_input; harness MockFamiliar auto-completes → awaiting_approval (recon has requiresManualApproval)
+    expect(['needs_input', 'awaiting_approval']).toContain(reconTask.status);
 
     // Select experiment v1 via selectExperiment
     h.orchestrator.selectExperiment(reconTask!.id, expIds[0]);
@@ -1100,7 +1105,7 @@ describe('Flow 10: multi-experiment selection', () => {
     h = createTestHarness();
   });
 
-  it('multi-select experiment flow completes reconciliation and unblocks downstream', () => {
+  it('multi-select experiment flow completes reconciliation and unblocks downstream', async () => {
     h.loadAndStart(EXPERIMENT_PLAN);
 
     // A spawns experiments
@@ -1135,10 +1140,13 @@ describe('Flow 10: multi-experiment selection', () => {
     }
     (h.orchestrator as any).refreshFromDb();
 
-    // Reconciliation should be needs_input
-    const reconTask = h.getAllTasks().find(t => t.id.includes('reconciliation'));
+    let reconTask = h.getAllTasks().find(t => t.id.includes('reconciliation'));
     expect(reconTask).toBeDefined();
-    expect(reconTask!.status).toBe('needs_input');
+    if (reconTask!.status === 'running') {
+      await h.executor.executeTasks([reconTask!]);
+    }
+    reconTask = h.getTask(reconTask!.id)!;
+    expect(['needs_input', 'awaiting_approval']).toContain(reconTask.status);
 
     // Multi-select: pick v1 and v3
     const selectedIds = [expIds[0], expIds[2]];
@@ -1232,7 +1240,7 @@ describe('Flow: scheduler health across experiment lifecycle', () => {
     return orchestrator.scheduler.getStatus();
   }
 
-  it('multi-select experiment -> downstream tasks execute with healthy scheduler', () => {
+  it('multi-select experiment -> downstream tasks execute with healthy scheduler', async () => {
     h.loadAndStart(EXPERIMENT_PLAN);
 
     h.orchestrator.handleWorkerResponse({
@@ -1263,8 +1271,12 @@ describe('Flow: scheduler health across experiment lifecycle', () => {
     }
     (h.orchestrator as any).refreshFromDb();
 
-    const reconTask = h.getAllTasks().find(t => t.id.includes('reconciliation'))!;
-    expect(reconTask.status).toBe('needs_input');
+    let reconTask = h.getAllTasks().find(t => t.id.includes('reconciliation'))!;
+    if (reconTask.status === 'running') {
+      await h.executor.executeTasks([reconTask]);
+    }
+    reconTask = h.getTask(reconTask.id)!;
+    expect(['needs_input', 'awaiting_approval']).toContain(reconTask.status);
 
     const started = h.orchestrator.selectExperiments(
       reconTask.id,

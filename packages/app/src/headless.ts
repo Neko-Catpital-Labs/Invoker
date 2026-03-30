@@ -28,6 +28,7 @@ import { startApiServer } from './api-server.js';
 import {
   rebaseAndRetry,
   rejectTask,
+  resolveConflictWithClaudeAction,
   restartTask as sharedRestartTask,
   restartWorkflow as sharedRestartWorkflow,
   editTaskCommand as sharedEditTaskCommand,
@@ -151,6 +152,9 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
     case 'fix':
       await headlessFix(args[1], deps);
       break;
+    case 'resolve-conflict':
+      await headlessResolveConflict(args[1], deps);
+      break;
     case 'rebase-and-retry':
       await headlessRebaseAndRetry(args[1], deps);
       break;
@@ -215,6 +219,7 @@ ${BOLD}Usage:${RESET}
   electron dist/main.js --headless restart-workflow <workflowId>  Bump generation + rerun (no pool fetch)
   electron dist/main.js --headless rebase-and-retry <taskId>  Refresh pool base + rerun workflow
   electron dist/main.js --headless fix <taskId>       Fix a failed task with Claude
+  electron dist/main.js --headless resolve-conflict <taskId>  Resolve merge conflict in worktree (Claude) + restart
   electron dist/main.js --headless edit <id> <cmd>    Edit task command and re-run
   electron dist/main.js --headless task-status <taskId>     Print raw task status
   electron dist/main.js --headless cancel <taskId>         Cancel task + all downstream
@@ -311,8 +316,8 @@ async function headlessResume(workflowId: string, deps: HeadlessDeps, waitForApp
   // Relaunch tasks stuck in 'running' from a previous session
   const orphanRestarted: TaskState[] = [];
   for (const task of orchestrator.getAllTasks()) {
-    if (task.status === 'running') {
-      console.log(`[headless] relaunching orphaned running task "${task.id}"`);
+    if (task.status === 'running' || task.status === 'fixing_with_ai') {
+      console.log(`[headless] relaunching orphaned in-flight task "${task.id}" (${task.status})`);
       const restarted = orchestrator.restartTask(task.id);
       orphanRestarted.push(...restarted.filter(t => t.status === 'running'));
     }
@@ -425,6 +430,17 @@ async function headlessFix(taskId: string, deps: HeadlessDeps): Promise<void> {
     deps.orchestrator.revertConflictResolution(taskId, savedError, msg);
     throw err;
   }
+}
+
+async function headlessResolveConflict(taskId: string, deps: HeadlessDeps): Promise<void> {
+  if (!taskId) throw new Error('Missing taskId. Usage: --headless resolve-conflict <taskId>');
+  restoreWorkflowForTask(taskId, deps);
+
+  const te = createHeadlessExecutor(deps);
+  await resolveConflictWithClaudeAction(taskId, { ...deps, taskExecutor: te });
+  const wfId = deps.orchestrator.getTask(taskId)?.config.workflowId;
+  await waitForCompletion(deps.orchestrator, wfId, undefined);
+  console.log(`Resolve-conflict finished for task: ${taskId}`);
 }
 
 async function headlessRebaseAndRetry(taskId: string, deps: HeadlessDeps): Promise<void> {
@@ -629,7 +645,9 @@ async function waitForCompletion(orchestrator: Orchestrator, workflowId?: string
     if (allSettled) return;
     // Also settle if nothing is running and at least one task awaits human action.
     // Pending merge gates can't progress until their upstream is approved.
-    const noneRunning = !tasks.some((t) => t.status === 'running');
+    const noneRunning = !tasks.some(
+      (t) => t.status === 'running' || t.status === 'fixing_with_ai',
+    );
     const hasHumanBlocked = tasks.some((t) => settledStatuses.includes(t.status) && t.status !== 'completed');
     if (noneRunning && hasHumanBlocked) return;
     await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));

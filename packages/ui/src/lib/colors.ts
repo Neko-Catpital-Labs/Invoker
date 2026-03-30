@@ -121,6 +121,7 @@ export function getStatusInlineColors(status: string): {
  * AI-fix and fix-approval substates.
  */
 export function getEffectiveVisualStatus(status: string, execution?: { isFixingWithAI?: boolean; pendingFixError?: string }): string {
+  if (status === 'fixing_with_ai') return 'fixing_with_ai';
   if (status === 'running' && execution?.isFixingWithAI) return 'fixing_with_ai';
   if (status === 'awaiting_approval' && execution?.pendingFixError) return 'fix_approval';
   return status;

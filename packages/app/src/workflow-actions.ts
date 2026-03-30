@@ -147,3 +147,26 @@ export async function selectExperiments(
   const { branch, commit } = await deps.taskExecutor.mergeExperimentBranches(taskId, ids);
   return deps.orchestrator.selectExperiments(taskId, ids, branch, commit);
 }
+
+/**
+ * Merge-conflict resolution with Claude in the task worktree, then restart and execute.
+ * Same sequence as GUI `invoker:resolve-conflict` and headless `resolve-conflict`.
+ */
+export async function resolveConflictWithClaudeAction(
+  taskId: string,
+  deps: Pick<ActionDeps, 'orchestrator' | 'persistence'> & { taskExecutor: TaskExecutor },
+): Promise<void> {
+  const { orchestrator, persistence, taskExecutor } = deps;
+  const { savedError } = orchestrator.beginConflictResolution(taskId);
+  try {
+    await taskExecutor.resolveConflictWithClaude(taskId);
+    const started = orchestrator.restartTask(taskId);
+    const runnable = started.filter((t) => t.status === 'running');
+    await taskExecutor.executeTasks(runnable);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    persistence.appendTaskOutput(taskId, `\n[Resolve Conflict] Failed: ${msg}`);
+    orchestrator.revertConflictResolution(taskId, savedError, msg);
+    throw err;
+  }
+}

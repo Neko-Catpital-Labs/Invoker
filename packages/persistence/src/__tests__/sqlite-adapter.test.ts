@@ -331,6 +331,15 @@ describe('SQLiteAdapter', () => {
       const loaded = adapter.loadTasks('wf-1');
       expect(loaded[0].execution.isFixingWithAI).toBeFalsy();
     });
+
+    it('normalizes legacy running + isFixingWithAI row to fixing_with_ai', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t1'));
+      adapter.updateTask('t1', { status: 'running', execution: { isFixingWithAI: true } } as any);
+      const loaded = adapter.loadTasks('wf-1');
+      expect(loaded[0].status).toBe('fixing_with_ai');
+      expect(loaded[0].execution.isFixingWithAI).toBeFalsy();
+    });
   });
 
   describe('getAgentSessionId', () => {
@@ -371,6 +380,13 @@ describe('SQLiteAdapter', () => {
       adapter.updateTask('t1', { status: 'running' });
 
       expect(adapter.getTaskStatus('t1')).toBe('running');
+    });
+
+    it('returns fixing_with_ai for legacy running + isFixingWithAI rows', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t1'));
+      adapter.updateTask('t1', { status: 'running', execution: { isFixingWithAI: true } } as any);
+      expect(adapter.getTaskStatus('t1')).toBe('fixing_with_ai');
     });
   });
 

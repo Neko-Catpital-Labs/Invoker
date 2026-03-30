@@ -305,6 +305,16 @@ export class Orchestrator {
       config: { ...existing.config, ...changes.config },
       execution: { ...existing.execution, ...changes.execution },
     };
+    if (process.env.NODE_ENV !== 'test') {
+      const ex = updated.execution;
+      const execKeys = changes.execution ? Object.keys(changes.execution).join(',') : '';
+      console.log(
+        `[persist-sync] taskId=${taskId} resolvedStatus=${updated.status} ` +
+          `isFixingWithAI=${ex.isFixingWithAI === true ? '1' : '0'} exitCode=${ex.exitCode ?? 'null'} ` +
+          `errorLen=${ex.error?.length ?? 0} pendingFix=${ex.pendingFixError ? '1' : '0'} ` +
+          `inputPrompt=${ex.inputPrompt ? '1' : '0'} changeStatus=${changes.status ?? '—'} execKeys=${execKeys || '—'}`,
+      );
+    }
     this.stateMachine.restoreTask(updated);
     return updated;
   }
@@ -487,6 +497,11 @@ export class Orchestrator {
 
     const parsed = this.responseHandler.parseResponse(response);
     if (!('type' in parsed)) {
+      const parseErr = 'error' in parsed ? (parsed as { error: string }).error : 'unknown';
+      console.warn(
+        `[worker-response] NO_ORCH_WRITE actionId=${response.actionId} parseError=${parseErr} ` +
+          `responseStatus=${String(response.status)} — DB task row is unchanged; UI/orchestrator may diverge`,
+      );
       this.scheduler.completeJob(response.actionId);
       return [];
     }
@@ -494,8 +509,16 @@ export class Orchestrator {
     const taskId = parsed.taskId;
     const task = this.stateMachine.getTask(taskId);
     if (!task) {
+      console.warn(`[worker-response] task not in graph taskId=${taskId} (stale response?)`);
       this.scheduler.completeJob(taskId);
       return [];
+    }
+
+    if (process.env.NODE_ENV !== 'test') {
+      console.log(
+        `[worker-response] write path parsedType=${parsed.type} taskId=${taskId} ` +
+          `graphStatusBefore=${task.status} workerResponseStatus=${response.status}`,
+      );
     }
 
     this.scheduler.completeJob(taskId);
@@ -568,7 +591,9 @@ export class Orchestrator {
     this.refreshFromDb();
     const task = this.stateMachine.getTask(taskId);
     if (!task) throw new Error(`Task ${taskId} not found`);
-    if (task.status !== 'running') throw new Error(`Task ${taskId} is not running (status: ${task.status})`);
+    if (task.status !== 'running' && task.status !== 'fixing_with_ai') {
+      throw new Error(`Task ${taskId} is not running or fixing with AI (status: ${task.status})`);
+    }
     console.log(`[setFixAwaitingApproval] taskId=${taskId} agentSessionId=${task.execution.agentSessionId}`);
     if (task.config.isMergeNode) {
       console.log(
@@ -729,7 +754,7 @@ export class Orchestrator {
 
     // Reconciliation may still be `running` if selection happens without a prior
     // `needs_input` worker response (tests); free the scheduler slot either way.
-    if (task.status === 'running') {
+    if (task.status === 'running' || task.status === 'fixing_with_ai') {
       this.scheduler.completeJob(taskId);
     }
 
@@ -775,7 +800,7 @@ export class Orchestrator {
     const task = this.stateMachine.getTask(taskId);
     if (!task || !task.config.isReconciliation) return [];
 
-    if (task.status === 'running') {
+    if (task.status === 'running' || task.status === 'fixing_with_ai') {
       this.scheduler.completeJob(taskId);
     }
 
@@ -982,7 +1007,8 @@ export class Orchestrator {
   }
 
   /**
-   * Transition a failed task to running before an async conflict resolution.
+   * Transition a failed task to fixing_with_ai before an async conflict resolution.
+   * Clears terminal failure fields on the row so SQLite does not show stale error/exit/completed.
    * Returns the saved error string so the caller can revert on failure.
    */
   beginConflictResolution(taskId: string): { savedError: string } {
@@ -994,12 +1020,20 @@ export class Orchestrator {
     const savedError = task.execution.error ?? '';
 
     const changes: TaskStateChanges = {
-      status: 'running',
-      execution: { isFixingWithAI: true, startedAt: new Date(), lastHeartbeatAt: new Date() },
+      status: 'fixing_with_ai',
+      execution: {
+        error: undefined,
+        exitCode: undefined,
+        completedAt: undefined,
+        mergeConflict: undefined,
+        isFixingWithAI: false,
+        startedAt: new Date(),
+        lastHeartbeatAt: new Date(),
+      },
     };
     this.writeAndSync(taskId, changes);
     const delta: TaskDelta = { type: 'updated', taskId, changes };
-    this.persistence.logEvent?.(taskId, 'task.running', changes);
+    this.persistence.logEvent?.(taskId, 'task.fixing_with_ai', changes);
     this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
 
     return { savedError };
@@ -1041,7 +1075,7 @@ export class Orchestrator {
     const task = this.stateMachine.getTask(taskId);
     if (!task) throw new Error(`Task ${taskId} not found`);
     if (task.config.isMergeNode) throw new Error(`Cannot edit merge node ${taskId}`);
-    if (task.status === 'running') throw new Error(`Cannot edit running task ${taskId}`);
+    if (task.status === 'running' || task.status === 'fixing_with_ai') throw new Error(`Cannot edit running task ${taskId}`);
 
     const cmdChanges: TaskStateChanges = { config: { command: newCommand } };
     this.writeAndSync(taskId, cmdChanges);
@@ -1075,7 +1109,7 @@ export class Orchestrator {
     const task = this.stateMachine.getTask(taskId);
     if (!task) throw new Error(`Task ${taskId} not found`);
     if (task.config.isMergeNode) throw new Error(`Cannot change executor type of merge node ${taskId}`);
-    if (task.status === 'running') throw new Error(`Cannot edit running task ${taskId}`);
+    if (task.status === 'running' || task.status === 'fixing_with_ai') throw new Error(`Cannot edit running task ${taskId}`);
 
     const effectiveType = normalizeFamiliarType(familiarType) ?? familiarType;
 
@@ -1116,7 +1150,7 @@ export class Orchestrator {
     this.refreshFromDb();
     const task = this.stateMachine.getTask(taskId);
     if (!task) throw new Error(`Task ${taskId} not found`);
-    if (task.status === 'running') throw new Error(`Cannot replace running task ${taskId}`);
+    if (task.status === 'running' || task.status === 'fixing_with_ai') throw new Error(`Cannot replace running task ${taskId}`);
     if (replacementTasks.length === 0) throw new Error('Must provide at least one replacement task');
 
     const replacementIds = new Set(replacementTasks.map((t) => t.id));
@@ -1356,7 +1390,7 @@ export class Orchestrator {
       total: tasks.length,
       completed: tasks.filter((t) => t.status === 'completed').length,
       failed: tasks.filter((t) => t.status === 'failed').length,
-      running: tasks.filter((t) => t.status === 'running').length,
+      running: tasks.filter((t) => t.status === 'running' || t.status === 'fixing_with_ai').length,
       pending: tasks.filter((t) => t.status === 'pending').length,
     };
   }
@@ -1397,7 +1431,7 @@ export class Orchestrator {
       const t = this.stateMachine.getTask(id);
       if (!t || t.status === 'completed' || t.status === 'stale') continue;
 
-      const wasRunning = t.status === 'running';
+      const wasRunning = t.status === 'running' || t.status === 'fixing_with_ai';
 
       // Free scheduler slot
       if (wasRunning) {
@@ -1465,15 +1499,26 @@ export class Orchestrator {
     const task = this.stateMachine.getTask(taskId);
     const needsApproval = task?.config.requiresManualApproval === true;
 
+    const execution: {
+      exitCode: number;
+      completedAt: Date;
+      commit?: string;
+      agentSessionId?: string;
+    } = {
+      exitCode: parsed.exitCode,
+      completedAt: new Date(),
+    };
+    if (parsed.commitHash !== undefined) {
+      execution.commit = parsed.commitHash;
+    }
+    if (parsed.agentSessionId !== undefined) {
+      execution.agentSessionId = parsed.agentSessionId;
+    }
+
     const changes: TaskStateChanges = {
       status: needsApproval ? 'awaiting_approval' : 'completed',
       config: { summary: parsed.summary },
-      execution: {
-        exitCode: parsed.exitCode,
-        commit: parsed.commitHash,
-        agentSessionId: parsed.agentSessionId,
-        completedAt: new Date(),
-      },
+      execution,
     };
     this.writeAndSync(taskId, changes);
     const delta: TaskDelta = { type: 'updated', taskId, changes };
@@ -1489,9 +1534,9 @@ export class Orchestrator {
         this.persistence.updateAttempt(latest.id, {
           status: 'completed',
           exitCode: parsed.exitCode,
-          commit: parsed.commitHash,
-          agentSessionId: parsed.agentSessionId,
           completedAt: new Date(),
+          ...(parsed.commitHash !== undefined ? { commit: parsed.commitHash } : {}),
+          ...(parsed.agentSessionId !== undefined ? { agentSessionId: parsed.agentSessionId } : {}),
         });
         // Auto-select this attempt
         const selectChanges: TaskStateChanges = { execution: { selectedAttemptId: latest.id } };
@@ -1666,7 +1711,8 @@ export class Orchestrator {
       if (
         recon.status === 'needs_input' ||
         recon.status === 'completed' ||
-        recon.status === 'running'
+        recon.status === 'running' ||
+        recon.status === 'fixing_with_ai'
       ) {
         continue;
       }
@@ -1792,7 +1838,7 @@ export class Orchestrator {
   private drainScheduler(): TaskState[] {
     for (const runningId of this.scheduler.getRunningTaskIds()) {
       const task = this.stateMachine.getTask(runningId);
-      if (!task || task.status !== 'running') {
+      if (!task || (task.status !== 'running' && task.status !== 'fixing_with_ai')) {
         console.warn(`[orchestrator] drainScheduler: freeing leaked scheduler slot for "${runningId}" (actual status: ${task?.status ?? 'not found'})`);
         this.scheduler.completeJob(runningId);
       }

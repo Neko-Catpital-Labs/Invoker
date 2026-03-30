@@ -17,6 +17,7 @@
  *   electron dist/main.js --headless restart-workflow <workflowId>
  *   electron dist/main.js --headless rebase-and-retry <taskId>
  *   electron dist/main.js --headless fix <taskId>
+ *   electron dist/main.js --headless resolve-conflict <taskId>
  *   electron dist/main.js --headless edit <taskId> <newCommand>
  *   electron dist/main.js --headless cancel <taskId>
  *   electron dist/main.js --headless queue
@@ -74,6 +75,7 @@ import {
   rebaseAndRetry,
   rejectTask,
   restartWorkflow as sharedRestartWorkflow,
+  resolveConflictWithClaudeAction,
   selectExperiments as sharedSelectExperiments,
 } from './workflow-actions.js';
 import { spawn, execSync } from 'node:child_process';
@@ -459,8 +461,8 @@ function setupGuiMode(): void {
   function relaunchOrphansAndStartReady(logPrefix: string): TaskState[] {
     const orphanRestarted: TaskState[] = [];
     for (const task of orchestrator.getAllTasks()) {
-      if (task.status === 'running') {
-        console.log(`[${logPrefix}] relaunching orphaned running task "${task.id}"`);
+      if (task.status === 'running' || task.status === 'fixing_with_ai') {
+        console.log(`[${logPrefix}] relaunching orphaned in-flight task "${task.id}" (${task.status})`);
         const started = orchestrator.restartTask(task.id);
         orphanRestarted.push(...started.filter(t => t.status === 'running'));
       }
@@ -561,8 +563,11 @@ function setupGuiMode(): void {
 
       const orphanRestarted: TaskState[] = [];
       for (const task of orchestrator.getAllTasks()) {
-        if (task.status === 'running' && task.config.workflowId === workflowId) {
-          console.log(`[ipc-delegate] relaunching orphaned running task "${task.id}"`);
+        if (
+          (task.status === 'running' || task.status === 'fixing_with_ai') &&
+          task.config.workflowId === workflowId
+        ) {
+          console.log(`[ipc-delegate] relaunching orphaned in-flight task "${task.id}" (${task.status})`);
           const started = orchestrator.restartTask(task.id);
           orphanRestarted.push(...started.filter(t => t.status === 'running'));
         }
@@ -705,8 +710,8 @@ function setupGuiMode(): void {
       await Promise.all(familiarRegistry.getAll().map(f => f.destroyAll()));
       const allTasks = orchestrator.getAllTasks();
       for (const task of allTasks) {
-        if (task.status === 'running') {
-          console.log(`[ipc] stop — failing running task "${task.id}"`);
+        if (task.status === 'running' || task.status === 'fixing_with_ai') {
+          console.log(`[ipc] stop — failing in-flight task "${task.id}" (${task.status})`);
           orchestrator.handleWorkerResponse({
             requestId: `stop-${task.id}`,
             actionId: task.id,
@@ -726,7 +731,7 @@ function setupGuiMode(): void {
       await Promise.all(familiarRegistry.getAll().map(f => f.destroyAll()));
       const allTasks = orchestrator.getAllTasks();
       for (const task of allTasks) {
-        if (task.status === 'running') {
+        if (task.status === 'running' || task.status === 'fixing_with_ai') {
           orchestrator.handleWorkerResponse({
             requestId: `clear-${task.id}`,
             actionId: task.id,
@@ -774,7 +779,9 @@ function setupGuiMode(): void {
         // Kill all running tasks belonging to the workflow (process management is outside orchestrator scope)
         const allTasks = orchestrator.getAllTasks();
         const workflowTasks = allTasks.filter(
-          (t) => t.config.workflowId === workflowId && t.status === 'running',
+          (t) =>
+            t.config.workflowId === workflowId &&
+            (t.status === 'running' || t.status === 'fixing_with_ai'),
         );
         for (const task of workflowTasks) {
           await killRunningTask(task.id);
@@ -1106,17 +1113,14 @@ function setupGuiMode(): void {
 
     ipcMain.handle('invoker:resolve-conflict', async (_event, taskId: string) => {
       console.log(`[ipc] resolve-conflict: "${taskId}"`);
-      const { savedError } = orchestrator.beginConflictResolution(taskId);
       try {
-        await taskExecutor.resolveConflictWithClaude(taskId);
-        const started = orchestrator.restartTask(taskId);
-        const runnable = started.filter(t => t.status === 'running');
-        await taskExecutor.executeTasks(runnable);
+        await resolveConflictWithClaudeAction(taskId, {
+          orchestrator,
+          persistence,
+          taskExecutor,
+        });
       } catch (err) {
         console.error(`[ipc] resolve-conflict failed: ${err}`);
-        const msg = err instanceof Error ? err.message : String(err);
-        persistence.appendTaskOutput(taskId, `\n[Resolve Conflict] Failed: ${msg}`);
-        orchestrator.revertConflictResolution(taskId, savedError, msg);
         throw err;
       }
     });
@@ -1220,6 +1224,7 @@ function setupGuiMode(): void {
               mainWindow.webContents.send('invoker:task-delta', { type: 'created', task });
             }
 
+            if (task.status === 'fixing_with_ai') continue;
             if (task.status === 'running') {
               if (task.execution?.isFixingWithAI) continue;
               const heartbeatTime = task.execution?.lastHeartbeatAt
@@ -1279,9 +1284,13 @@ function setupGuiMode(): void {
       console.log(`[open-terminal] invoked for task="${taskId}"`);
       const taskStatus = persistence.getTaskStatus(taskId);
       console.log(`[open-terminal] task="${taskId}" status="${taskStatus}"`);
-      if (taskStatus === 'running') {
-        console.log(`[open-terminal] BLOCKED task="${taskId}" — still running`);
-        return { opened: false, reason: 'Task is still running. View output in the terminal panel below.' };
+      if (taskStatus === 'running' || taskStatus === 'fixing_with_ai') {
+        console.log(`[open-terminal] BLOCKED task="${taskId}" — still in progress (${taskStatus})`);
+        return {
+          opened: false,
+          reason:
+            'Task is still running or being fixed with AI. View output in the terminal panel below.',
+        };
       }
 
       const meta: PersistedTaskMeta = {
@@ -1407,7 +1416,7 @@ function setupGuiMode(): void {
     if (activityPollInterval) clearInterval(activityPollInterval);
     await Promise.all(familiarRegistry.getAll().map(f => f.destroyAll()));
     for (const task of orchestrator.getAllTasks()) {
-      if (task.status === 'running') {
+      if (task.status === 'running' || task.status === 'fixing_with_ai') {
         orchestrator.handleWorkerResponse({
           requestId: `quit-${task.id}`,
           actionId: task.id,

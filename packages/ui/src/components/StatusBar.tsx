@@ -39,6 +39,9 @@ export function StatusBar({ tasks, activeFilters, onStatusClick, onStatusDoubleC
           running++;
         }
         break;
+      case 'fixing_with_ai':
+        fixing++;
+        break;
       case 'failed':
         failed++;
         break;

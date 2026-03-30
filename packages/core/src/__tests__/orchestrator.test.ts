@@ -689,6 +689,17 @@ describe('Orchestrator', () => {
       const persisted = persistence.tasks.get('t2');
       expect(persisted!.task.status).toBe('pending');
     });
+
+    it('preserves execution.agentSessionId when worker completion omits outputs.agentSessionId', () => {
+      persistence.updateTask('t1', {
+        execution: { agentSessionId: 'sess-kept', workspacePath: '/tmp/wt' },
+      });
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 't1', status: 'completed', outputs: { exitCode: 0 } }),
+      );
+      expect(orchestrator.getTask('t1')!.execution.agentSessionId).toBe('sess-kept');
+      expect(persistence.tasks.get('t1')!.task.execution.agentSessionId).toBe('sess-kept');
+    });
   });
 
   // ── provideInput ────────────────────────────────────────
@@ -3679,16 +3690,21 @@ describe('Orchestrator', () => {
       publishedDeltas = [];
     });
 
-    it('sets task to running and emits delta', () => {
+    it('sets task to fixing_with_ai, clears terminal execution fields, and emits delta', () => {
       orchestrator.beginConflictResolution('t2');
 
-      expect(orchestrator.getTask('t2')!.status).toBe('running');
-      expect(orchestrator.getTask('t2')!.execution.isFixingWithAI).toBe(true);
+      const task = orchestrator.getTask('t2')!;
+      expect(task.status).toBe('fixing_with_ai');
+      expect(task.execution.isFixingWithAI).toBeFalsy();
+      expect(task.execution.error).toBeUndefined();
+      expect(task.execution.exitCode).toBeUndefined();
+      expect(task.execution.completedAt).toBeUndefined();
+      expect(task.execution.mergeConflict).toBeUndefined();
 
-      const runningDeltas = publishedDeltas.filter(
-        (d) => d.type === 'updated' && d.taskId === 't2' && d.changes.status === 'running',
+      const fixDeltas = publishedDeltas.filter(
+        (d) => d.type === 'updated' && d.taskId === 't2' && d.changes.status === 'fixing_with_ai',
       );
-      expect(runningDeltas).toHaveLength(1);
+      expect(fixDeltas).toHaveLength(1);
     });
 
     it('resets startedAt and lastHeartbeatAt timestamps', () => {
@@ -3712,7 +3728,7 @@ describe('Orchestrator', () => {
 
     it('revertConflictResolution restores failed state with mergeConflict', () => {
       const { savedError } = orchestrator.beginConflictResolution('t2');
-      expect(orchestrator.getTask('t2')!.status).toBe('running');
+      expect(orchestrator.getTask('t2')!.status).toBe('fixing_with_ai');
 
       publishedDeltas = [];
       orchestrator.revertConflictResolution('t2', savedError);
@@ -3790,7 +3806,8 @@ describe('Orchestrator', () => {
 
     it('setFixAwaitingApproval transitions to awaiting_approval with pendingFixError', () => {
       orchestrator.beginConflictResolution('f2');
-      expect(orchestrator.getTask('f2')!.execution.isFixingWithAI).toBe(true);
+      expect(orchestrator.getTask('f2')!.status).toBe('fixing_with_ai');
+      expect(orchestrator.getTask('f2')!.execution.isFixingWithAI).toBeFalsy();
       orchestrator.setFixAwaitingApproval('f2', 'test failed: expected 1 to be 2');
       const task = orchestrator.getTask('f2')!;
       expect(task.status).toBe('awaiting_approval');
@@ -3820,8 +3837,8 @@ describe('Orchestrator', () => {
       expect(orchestrator.getTask('f2')!.execution.pendingFixError).toBe('original error');
     });
 
-    it('throws if task is not running', () => {
-      expect(() => orchestrator.setFixAwaitingApproval('f2', 'error')).toThrow('is not running');
+    it('throws if task is not running or fixing with AI', () => {
+      expect(() => orchestrator.setFixAwaitingApproval('f2', 'error')).toThrow('not running or fixing with AI');
     });
 
     it('restartTask clears the fix state', () => {
