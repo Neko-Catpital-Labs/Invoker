@@ -21,7 +21,7 @@ describe('Attempt persistence', () => {
   });
 
   it('round-trip: saveAttempt + loadAttempt', () => {
-    const attempt = createAttempt('taskA', 1, {
+    const attempt = createAttempt('taskA', {
       status: 'running',
       snapshotCommit: 'abc123',
       baseBranch: 'main',
@@ -32,12 +32,11 @@ describe('Attempt persistence', () => {
     });
 
     adapter.saveAttempt(attempt);
-    const loaded = adapter.loadAttempt('taskA-a1');
+    const loaded = adapter.loadAttempt(attempt.id);
 
     expect(loaded).toBeDefined();
-    expect(loaded!.id).toBe('taskA-a1');
+    expect(loaded!.id).toBe(attempt.id);
     expect(loaded!.nodeId).toBe('taskA');
-    expect(loaded!.attemptNumber).toBe(1);
     expect(loaded!.status).toBe('running');
     expect(loaded!.snapshotCommit).toBe('abc123');
     expect(loaded!.baseBranch).toBe('main');
@@ -48,14 +47,22 @@ describe('Attempt persistence', () => {
     expect(loaded!.createdAt).toBeInstanceOf(Date);
   });
 
-  it('loadAttempts returns ordered by attempt_number', () => {
-    adapter.saveAttempt(createAttempt('taskA', 3, { status: 'pending' }));
-    adapter.saveAttempt(createAttempt('taskA', 1, { status: 'completed' }));
-    adapter.saveAttempt(createAttempt('taskA', 2, { status: 'superseded' }));
+  it('loadAttempts returns ordered by created_at', () => {
+    const a1 = createAttempt('taskA', { status: 'completed' });
+    // Ensure distinct created_at by bumping time
+    const a2 = createAttempt('taskA', { status: 'superseded', createdAt: new Date(Date.now() + 1000) } as any);
+    const a3 = createAttempt('taskA', { status: 'pending', createdAt: new Date(Date.now() + 2000) } as any);
+
+    adapter.saveAttempt(a3);
+    adapter.saveAttempt(a1);
+    adapter.saveAttempt(a2);
 
     const attempts = adapter.loadAttempts('taskA');
     expect(attempts).toHaveLength(3);
-    expect(attempts.map(a => a.attemptNumber)).toEqual([1, 2, 3]);
+    // Should be ordered by created_at ASC
+    expect(attempts[0].id).toBe(a1.id);
+    expect(attempts[1].id).toBe(a2.id);
+    expect(attempts[2].id).toBe(a3.id);
   });
 
   it('loadAttempt returns undefined for missing ID', () => {
@@ -63,9 +70,10 @@ describe('Attempt persistence', () => {
   });
 
   it('updateAttempt updates specific fields', () => {
-    adapter.saveAttempt(createAttempt('taskA', 1, { status: 'running' }));
+    const attempt = createAttempt('taskA', { status: 'running' });
+    adapter.saveAttempt(attempt);
 
-    adapter.updateAttempt('taskA-a1', {
+    adapter.updateAttempt(attempt.id, {
       status: 'completed',
       exitCode: 0,
       completedAt: new Date('2024-01-01T01:00:00Z'),
@@ -73,7 +81,7 @@ describe('Attempt persistence', () => {
       commit: 'def456',
     });
 
-    const loaded = adapter.loadAttempt('taskA-a1')!;
+    const loaded = adapter.loadAttempt(attempt.id)!;
     expect(loaded.status).toBe('completed');
     expect(loaded.exitCode).toBe(0);
     expect(loaded.completedAt).toEqual(new Date('2024-01-01T01:00:00Z'));
@@ -82,14 +90,15 @@ describe('Attempt persistence', () => {
   });
 
   it('merge conflict JSON round-trip', () => {
-    adapter.saveAttempt(createAttempt('taskA', 1, {
+    const attempt = createAttempt('taskA', {
       mergeConflict: {
         failedBranch: 'feat/broken',
         conflictFiles: ['src/main.ts', 'package.json'],
       },
-    }));
+    });
+    adapter.saveAttempt(attempt);
 
-    const loaded = adapter.loadAttempt('taskA-a1')!;
+    const loaded = adapter.loadAttempt(attempt.id)!;
     expect(loaded.mergeConflict).toEqual({
       failedBranch: 'feat/broken',
       conflictFiles: ['src/main.ts', 'package.json'],
@@ -98,17 +107,17 @@ describe('Attempt persistence', () => {
 
   it('selected_attempt_id column exists on tasks table', () => {
     // The migration should have added the column
-    // Save a task and verify we can set selected_attempt_id via raw SQL
-    adapter.saveAttempt(createAttempt('taskA', 1, { status: 'completed' }));
+    const attempt = createAttempt('taskA', { status: 'completed' });
+    adapter.saveAttempt(attempt);
 
     // Access the raw db to verify column exists (sql.js API)
     const db = (adapter as any).db;
-    db.run('UPDATE tasks SET selected_attempt_id = ? WHERE id = ?', ['taskA-a1', 'taskA']);
+    db.run('UPDATE tasks SET selected_attempt_id = ? WHERE id = ?', [attempt.id, 'taskA']);
     const stmt = db.prepare('SELECT selected_attempt_id FROM tasks WHERE id = ?');
     stmt.bind(['taskA']);
     stmt.step();
     const row = stmt.getAsObject();
     stmt.free();
-    expect(row.selected_attempt_id).toBe('taskA-a1');
+    expect(row.selected_attempt_id).toBe(attempt.id);
   });
 });

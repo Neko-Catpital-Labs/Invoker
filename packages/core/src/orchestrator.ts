@@ -829,7 +829,7 @@ export class Orchestrator {
       if (current && (current.status === 'running' || current.status === 'pending')) {
         this.persistence.updateAttempt(current.id, { status: 'superseded' });
       }
-      const newAttempt = createAttempt(taskId, attempts.length + 1, {
+      const newAttempt = createAttempt(taskId, {
         snapshotCommit: current?.commit,
         supersedesAttemptId: current?.id,
       });
@@ -1046,7 +1046,7 @@ export class Orchestrator {
       if (current && (current.status === 'running' || current.status === 'pending')) {
         this.persistence.updateAttempt(current.id, { status: 'superseded' });
       }
-      const freshAttempt = createAttempt(taskId, attempts.length + 1, {
+      const freshAttempt = createAttempt(taskId, {
         commandOverride: newCommand,
         supersedesAttemptId: current?.id,
       });
@@ -1789,11 +1789,10 @@ export class Orchestrator {
 
       // Dual-write: create Attempt record (best-effort)
       try {
-        const existingAttempts = this.persistence.loadAttempts(job.taskId);
         const upstreamAttemptIds = task.dependencies
           .map(depId => this.stateMachine.getTask(depId)?.execution.selectedAttemptId)
           .filter((id): id is string => !!id);
-        const attempt = createAttempt(job.taskId, existingAttempts.length + 1, {
+        const attempt = createAttempt(job.taskId, {
           status: 'running',
           startedAt: now,
           upstreamAttemptIds,

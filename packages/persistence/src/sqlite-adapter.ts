@@ -285,8 +285,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
         FOREIGN KEY (node_id) REFERENCES tasks(id)
       );
 
-      CREATE INDEX IF NOT EXISTS idx_attempts_node
-        ON attempts(node_id, attempt_number);
+      CREATE INDEX IF NOT EXISTS idx_attempts_node_created
+        ON attempts(node_id, created_at);
     `);
   }
 
@@ -329,6 +329,10 @@ export class SQLiteAdapter implements PersistenceAdapter {
     for (const sql of migrations) {
       try { this.db.run(sql); } catch { /* Column already exists */ }
     }
+
+    // Replace old attempt_number index with created_at index
+    try { this.db.run('DROP INDEX IF EXISTS idx_attempts_node'); } catch { /* already gone */ }
+    try { this.db.run('CREATE INDEX IF NOT EXISTS idx_attempts_node_created ON attempts(node_id, created_at)'); } catch { /* already exists */ }
 
     this.migrateTestCommands();
   }
@@ -970,7 +974,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         ?, ?, ?
       )
     `, [
-      attempt.id, attempt.nodeId, attempt.attemptNumber, attempt.status,
+      attempt.id, attempt.nodeId, 0, attempt.status,
       attempt.snapshotCommit ?? null, attempt.baseBranch ?? null,
       JSON.stringify(attempt.upstreamAttemptIds),
       attempt.commandOverride ?? null, attempt.promptOverride ?? null,
@@ -989,7 +993,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
   loadAttempts(nodeId: string): Attempt[] {
     const rows = this.queryAll(
-      'SELECT * FROM attempts WHERE node_id = ? ORDER BY attempt_number ASC',
+      'SELECT * FROM attempts WHERE node_id = ? ORDER BY created_at ASC',
       [nodeId],
     );
     return rows.map(this.rowToAttempt);
@@ -1146,7 +1150,6 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return {
       id: row.id,
       nodeId: row.node_id,
-      attemptNumber: row.attempt_number,
       status: row.status,
       snapshotCommit: row.snapshot_commit ?? undefined,
       baseBranch: row.base_branch ?? undefined,

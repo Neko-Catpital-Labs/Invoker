@@ -36,11 +36,10 @@ describe('createTaskState', () => {
 
 describe('createAttempt', () => {
   it('creates attempt with correct defaults', () => {
-    const attempt = createAttempt('taskA', 1);
+    const attempt = createAttempt('taskA');
 
-    expect(attempt.id).toBe('taskA-a1');
+    expect(attempt.id).toMatch(/^taskA-a[0-9a-f]{8}$/);
     expect(attempt.nodeId).toBe('taskA');
-    expect(attempt.attemptNumber).toBe(1);
     expect(attempt.status).toBe('pending');
     expect(attempt.upstreamAttemptIds).toEqual([]);
     expect(attempt.createdAt).toBeInstanceOf(Date);
@@ -49,14 +48,16 @@ describe('createAttempt', () => {
     expect(attempt.supersedesAttemptId).toBeUndefined();
   });
 
-  it('generates correct ID format', () => {
-    expect(createAttempt('taskA', 1).id).toBe('taskA-a1');
-    expect(createAttempt('taskA', 3).id).toBe('taskA-a3');
-    expect(createAttempt('my-task', 10).id).toBe('my-task-a10');
+  it('generates unique IDs with nodeId prefix', () => {
+    const a1 = createAttempt('taskA');
+    const a2 = createAttempt('taskA');
+    expect(a1.id).toMatch(/^taskA-a[0-9a-f]{8}$/);
+    expect(a2.id).toMatch(/^taskA-a[0-9a-f]{8}$/);
+    expect(a1.id).not.toBe(a2.id);
   });
 
   it('accepts overrides', () => {
-    const attempt = createAttempt('taskB', 2, {
+    const attempt = createAttempt('taskB', {
       status: 'running',
       snapshotCommit: 'abc123',
       commandOverride: 'pnpm test -- --watch',
@@ -64,7 +65,7 @@ describe('createAttempt', () => {
       supersedesAttemptId: 'taskB-a1',
     });
 
-    expect(attempt.id).toBe('taskB-a2');
+    expect(attempt.id).toMatch(/^taskB-a[0-9a-f]{8}$/);
     expect(attempt.status).toBe('running');
     expect(attempt.snapshotCommit).toBe('abc123');
     expect(attempt.commandOverride).toBe('pnpm test -- --watch');
@@ -73,7 +74,7 @@ describe('createAttempt', () => {
   });
 
   it('preserves mergeConflict field', () => {
-    const attempt = createAttempt('merge-task', 1, {
+    const attempt = createAttempt('merge-task', {
       mergeConflict: {
         failedBranch: 'feat/broken',
         conflictFiles: ['src/main.ts', 'package.json'],
