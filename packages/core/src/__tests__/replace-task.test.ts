@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { Orchestrator } from '../orchestrator.js';
 import type { OrchestratorPersistence, OrchestratorMessageBus } from '../orchestrator.js';
-import type { TaskState, TaskStateChanges } from '../task-types.js';
+import type { TaskState, TaskStateChanges, Attempt } from '../task-types.js';
 import { validateDAG } from '../dag.js';
 
 // ── Mocks ────────────────────────────────────────────────────
@@ -67,7 +67,7 @@ class InMemoryPersistence implements OrchestratorPersistence {
   }
 
   updateAttempt(attemptId: string, changes: Partial<Pick<Attempt, 'status' | 'startedAt' | 'completedAt' | 'exitCode' | 'error' | 'lastHeartbeatAt' | 'branch' | 'commit' | 'summary' | 'workspacePath' | 'agentSessionId' | 'containerId' | 'mergeConflict'>>): void {
-    for (const list of self.attempts.values()) {
+    for (const list of this.attempts.values()) {
       const idx = list.findIndex(a => a.id === attemptId);
       if (idx !== -1) {
         list[idx] = { ...list[idx], ...changes } as Attempt;
@@ -75,12 +75,6 @@ class InMemoryPersistence implements OrchestratorPersistence {
       }
     }
   }
-
-  getNextAttemptNumber(nodeId: string): number {
-    const list = this.attempts.get(nodeId) ?? [];
-    return list.length + 1;
-  }
-
 }
 
 class InMemoryBus implements OrchestratorMessageBus {

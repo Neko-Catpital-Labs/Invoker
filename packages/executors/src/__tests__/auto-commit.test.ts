@@ -873,7 +873,6 @@ class TestPersistence implements OrchestratorPersistence {
   loadAttempts(): any[] { return []; }
   loadAttempt(): undefined { return undefined; }
   updateAttempt(): void {}
-  getNextAttemptNumber(): number { return 1; }
 }
 
 class TestBus implements OrchestratorMessageBus {

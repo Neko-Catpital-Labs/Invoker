@@ -143,7 +143,6 @@ export function applyGraphMutationImpl(host: GraphMutationHost, mutation: GraphM
       isReconciliation: nodeDef.isReconciliation,
       requiresManualApproval: nodeDef.requiresManualApproval,
       autoFix: nodeDef.autoFix,
-      maxFixAttempts: nodeDef.maxFixAttempts,
       isMergeNode: nodeDef.isMergeNode,
     });
     host.createAndSync(task);

@@ -40,7 +40,6 @@ export interface TaskConfig {
   readonly dockerImage?: string;
   readonly remoteTargetId?: string;
   readonly autoFix?: boolean;
-  readonly maxFixAttempts?: number;
   readonly isMergeNode?: boolean;
   readonly summary?: string;
   readonly problem?: string;

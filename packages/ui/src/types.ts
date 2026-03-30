@@ -48,7 +48,6 @@ export interface TaskConfig {
   readonly featureBranch?: string;
   readonly familiarType?: string;
   readonly autoFix?: boolean;
-  readonly maxFixAttempts?: number;
   readonly remoteTargetId?: string;
   readonly isMergeNode?: boolean;
   readonly summary?: string;
@@ -190,7 +189,6 @@ export interface TaskReplacementDef {
   dependencies?: string[];
   familiarType?: string;
   autoFix?: boolean;
-  maxFixAttempts?: number;
 }
 
 // ── IPC Bridge API ──────────────────────────────────────────

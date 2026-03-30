@@ -81,16 +81,6 @@ describe('Attempt persistence', () => {
     expect(loaded.commit).toBe('def456');
   });
 
-  it('getNextAttemptNumber starts at 1 and increments', () => {
-    expect(adapter.getNextAttemptNumber('taskA')).toBe(1);
-
-    adapter.saveAttempt(createAttempt('taskA', 1));
-    expect(adapter.getNextAttemptNumber('taskA')).toBe(2);
-
-    adapter.saveAttempt(createAttempt('taskA', 2));
-    expect(adapter.getNextAttemptNumber('taskA')).toBe(3);
-  });
-
   it('merge conflict JSON round-trip', () => {
     adapter.saveAttempt(createAttempt('taskA', 1, {
       mergeConflict: {

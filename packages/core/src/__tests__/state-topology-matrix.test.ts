@@ -84,11 +84,6 @@ class InMemoryPersistence implements OrchestratorPersistence {
       }
     }
   }
-
-  getNextAttemptNumber(nodeId: string): number {
-    const list = this.attempts.get(nodeId) ?? [];
-    return list.length + 1;
-  }
 }
 
 // ── In-Memory MessageBus Mock ───────────────────────────────

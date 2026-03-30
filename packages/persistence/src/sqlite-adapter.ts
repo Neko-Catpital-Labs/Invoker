@@ -471,7 +471,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       cfg.requiresManualApproval ? 1 : 0,
       null, cfg.featureBranch ?? null,
       cfg.isMergeNode ? 1 : 0,
-      cfg.autoFix ? 1 : 0, cfg.maxFixAttempts ?? null,
+      cfg.autoFix ? 1 : 0, null,
       cfg.familiarType ?? null,
       exec.agentSessionId ?? null,
       exec.workspacePath ?? null,
@@ -541,10 +541,6 @@ export class SQLiteAdapter implements PersistenceAdapter {
           setClauses.push(`${col} = ?`);
           values.push((changes.config as any)[key] ? 1 : 0);
         }
-      }
-      if ('maxFixAttempts' in changes.config) {
-        setClauses.push('max_fix_attempts = ?');
-        values.push(changes.config.maxFixAttempts ?? null);
       }
       if ('utilization' in changes.config) {
         setClauses.push('utilization = ?');
@@ -1012,14 +1008,6 @@ export class SQLiteAdapter implements PersistenceAdapter {
     this.execRun(`UPDATE attempts SET ${setClauses.join(', ')} WHERE id = ?`, values);
   }
 
-  getNextAttemptNumber(nodeId: string): number {
-    const row = this.queryOne(
-      'SELECT COALESCE(MAX(attempt_number), 0) AS max_num FROM attempts WHERE node_id = ?',
-      [nodeId],
-    ) as { max_num: number } | undefined;
-    return ((row?.max_num as number) ?? 0) + 1;
-  }
-
   // ── Activity Log ─────────────────────────────────────
 
   writeActivityLog(source: string, level: string, message: string): void {
@@ -1098,7 +1086,6 @@ export class SQLiteAdapter implements PersistenceAdapter {
         familiarType: normalizeFamiliarType(row.familiar_type ?? undefined),
         remoteTargetId: row.remote_target_id ?? undefined,
         autoFix: row.auto_fix === 1 ? true : undefined,
-        maxFixAttempts: row.max_fix_attempts ?? undefined,
         isMergeNode: row.is_merge_node === 1 ? true : undefined,
         summary: row.summary ?? undefined,
         problem: row.problem ?? undefined,

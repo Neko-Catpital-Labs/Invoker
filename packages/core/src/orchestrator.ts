@@ -94,7 +94,6 @@ export interface OrchestratorPersistence {
   loadAttempts(nodeId: string): Attempt[];
   loadAttempt(attemptId: string): Attempt | undefined;
   updateAttempt(attemptId: string, changes: Partial<Pick<Attempt, 'status' | 'startedAt' | 'completedAt' | 'exitCode' | 'error' | 'lastHeartbeatAt' | 'branch' | 'commit' | 'summary' | 'workspacePath' | 'agentSessionId' | 'containerId' | 'mergeConflict'>>): void;
-  getNextAttemptNumber(nodeId: string): number;
   /** Load a workflow by ID (needed for SSH validation in editTaskType). */
   loadWorkflow?(workflowId: string): { repoUrl?: string; baseBranch?: string } | undefined;
   /** Delete a single workflow and its tasks from the DB. */
@@ -131,7 +130,6 @@ export interface PlanDefinition {
     featureBranch?: string;
     familiarType?: string;
     autoFix?: boolean;
-    maxFixAttempts?: number;
     dockerImage?: string;
     remoteTargetId?: string;
   }>;
@@ -166,7 +164,6 @@ export interface GraphMutationNodeDef {
   isReconciliation?: boolean;
   requiresManualApproval?: boolean;
   autoFix?: boolean;
-  maxFixAttempts?: number;
   isMergeNode?: boolean;
 }
 
@@ -186,7 +183,6 @@ export interface TaskReplacementDef {
   dependencies?: string[];
   familiarType?: string;
   autoFix?: boolean;
-  maxFixAttempts?: number;
 }
 
 /** A single routing rule that maps a task command to a familiarType and remoteTargetId. */
@@ -238,7 +234,6 @@ export interface OrchestratorConfig {
   maxUtilization?: number;
   utilizationRules?: UtilizationRule[];
   defaultUtilization?: number;
-  maxAttemptsPerNode?: number;
   executorRoutingRules?: ExecutorRoutingRule[];
 }
 
@@ -251,7 +246,6 @@ export class Orchestrator {
   private readonly persistence: OrchestratorPersistence;
   private readonly messageBus: OrchestratorMessageBus;
   private readonly maxConcurrency: number;
-  private readonly maxAttemptsPerNode: number;
   private readonly estimator: ResourceEstimator;
   private readonly executorRoutingRules: ExecutorRoutingRule[];
 
@@ -260,7 +254,6 @@ export class Orchestrator {
 
   constructor(config: OrchestratorConfig) {
     this.maxConcurrency = config.maxConcurrency ?? 3;
-    this.maxAttemptsPerNode = config.maxAttemptsPerNode ?? 10;
     this.persistence = config.persistence;
     this.messageBus = config.messageBus;
     this.executorRoutingRules = config.executorRoutingRules ?? [];
@@ -416,7 +409,6 @@ export class Orchestrator {
           dockerImage: taskDef.dockerImage,
           remoteTargetId: effectiveRemoteTargetId,
           autoFix: taskDef.autoFix,
-          maxFixAttempts: taskDef.maxFixAttempts,
         },
       );
 
@@ -760,12 +752,6 @@ export class Orchestrator {
     const task = this.stateMachine.getTask(taskId);
     if (!task) throw new Error(`Task ${taskId} not found`);
 
-    // Enforce maxAttemptsPerNode
-    const nextNum = this.persistence.getNextAttemptNumber(taskId);
-    if (nextNum > this.maxAttemptsPerNode) {
-      throw new Error(`Task "${taskId}" has reached the maximum of ${this.maxAttemptsPerNode} attempts`);
-    }
-
     const prevStatus = task.status;
     console.log(`[orchestrator] restartTask "${taskId}" (was ${prevStatus})`);
 
@@ -783,8 +769,7 @@ export class Orchestrator {
       if (current && (current.status === 'running' || current.status === 'pending')) {
         this.persistence.updateAttempt(current.id, { status: 'superseded' });
       }
-      const nextNum = this.persistence.getNextAttemptNumber(taskId);
-      const newAttempt = createAttempt(taskId, nextNum, {
+      const newAttempt = createAttempt(taskId, attempts.length + 1, {
         snapshotCommit: current?.commit,
         supersedesAttemptId: current?.id,
       });
@@ -958,8 +943,7 @@ export class Orchestrator {
       if (current && (current.status === 'running' || current.status === 'pending')) {
         this.persistence.updateAttempt(current.id, { status: 'superseded' });
       }
-      const nextNum = this.persistence.getNextAttemptNumber(taskId);
-      const freshAttempt = createAttempt(taskId, nextNum, {
+      const freshAttempt = createAttempt(taskId, attempts.length + 1, {
         commandOverride: newCommand,
         supersedesAttemptId: current?.id,
       });
@@ -1057,7 +1041,6 @@ export class Orchestrator {
         prompt: rt.prompt,
         familiarType: rt.familiarType ?? task.config.familiarType,
         autoFix: rt.autoFix,
-        maxFixAttempts: rt.maxFixAttempts,
       });
       this.createAndSync(newTask);
       this.messageBus.publish(TASK_DELTA_CHANNEL, { type: 'created', task: newTask });
@@ -1581,7 +1564,6 @@ export class Orchestrator {
   }
 
   private buildAutoFixResponse(task: TaskState, outputs: WorkResponse['outputs']): WorkResponse {
-    const maxAttempts = task.config.maxFixAttempts ?? 3;
     const errorMsg = outputs.error ?? `Task failed with exit code ${outputs.exitCode ?? 1}`;
 
     const variants = [
@@ -1600,7 +1582,7 @@ export class Orchestrator {
         description: 'Alternative fix: try a completely different approach',
         prompt: `The following task failed. Try a COMPLETELY DIFFERENT implementation approach.\n\nOriginal task: ${task.description}\nOriginal prompt: ${task.config.prompt ?? task.config.command ?? 'N/A'}\nError: ${errorMsg}\n\nIgnore the previous approach and implement this from scratch using a different strategy.`,
       },
-    ].slice(0, maxAttempts);
+    ];
 
     return {
       requestId: `autofix-${task.id}`,
@@ -1704,11 +1686,11 @@ export class Orchestrator {
 
       // Dual-write: create Attempt record (best-effort)
       try {
-        const attemptNum = this.persistence.getNextAttemptNumber(job.taskId);
+        const existingAttempts = this.persistence.loadAttempts(job.taskId);
         const upstreamAttemptIds = task.dependencies
           .map(depId => this.stateMachine.getTask(depId)?.execution.selectedAttemptId)
           .filter((id): id is string => !!id);
-        const attempt = createAttempt(job.taskId, attemptNum, {
+        const attempt = createAttempt(job.taskId, existingAttempts.length + 1, {
           status: 'running',
           startedAt: now,
           upstreamAttemptIds,

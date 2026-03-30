@@ -102,7 +102,6 @@ describe('createTaskState', () => {
       featureBranch: 'feat/clone',
       familiarType: 'worktree',
       autoFix: true,
-      maxFixAttempts: 3,
       isMergeNode: false,
       summary: 'summary text',
       problem: 'problem text',
