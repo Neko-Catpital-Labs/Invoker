@@ -161,9 +161,8 @@ export type AttemptStatus =
 // ── Attempt (immutable execution record) ────────────────────
 
 export interface Attempt {
-  readonly id: string;                      // e.g., "taskA-a3"
+  readonly id: string;                      // e.g., "taskA-a3f1c0e2"
   readonly nodeId: string;
-  readonly attemptNumber: number;           // 1-based, monotonically increasing per node
 
   // ── Input snapshot ──
   readonly snapshotCommit?: string;
@@ -205,13 +204,12 @@ export interface Attempt {
 
 export function createAttempt(
   nodeId: string,
-  attemptNumber: number,
-  opts: Partial<Omit<Attempt, 'id' | 'nodeId' | 'attemptNumber' | 'createdAt'>> = {},
+  opts: Partial<Omit<Attempt, 'id' | 'nodeId' | 'createdAt'>> = {},
 ): Attempt {
+  const shortId = crypto.randomUUID().slice(0, 8);
   return {
-    id: `${nodeId}-a${attemptNumber}`,
+    id: `${nodeId}-a${shortId}`,
     nodeId,
-    attemptNumber,
     status: 'pending',
     upstreamAttemptIds: [],
     createdAt: new Date(),

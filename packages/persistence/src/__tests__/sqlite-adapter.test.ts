@@ -480,7 +480,7 @@ describe('SQLiteAdapter', () => {
       adapter.saveWorkflow(testWorkflow);
       adapter.saveTask('wf-1', makeTask('t1'));
 
-      const attempt = createAttempt('t1', 1, { status: 'running' });
+      const attempt = createAttempt('t1', { status: 'running' });
       adapter.saveAttempt(attempt);
 
       // Should not throw SQLITE_CONSTRAINT_FOREIGNKEY
