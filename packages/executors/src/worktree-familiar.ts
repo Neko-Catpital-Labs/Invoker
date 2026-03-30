@@ -119,22 +119,44 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
     const branch = `experiment/${request.actionId}-${hash}`;
     console.log(`[WorktreeFamiliar] branch=${branch} hash=${hash}`);
 
-    // -- Reconciliation: no process, immediate needs_input --
+    // -- Reconciliation: real pool worktree at plan base (no upstream merges), then needs_input --
     if (request.actionType === 'reconciliation') {
-      const worktreeDir = `${this.worktreeBaseDir}/${executionId}`;
+      console.log(
+        `${RESTART_TO_BRANCH_TRACE} WorktreeFamiliar.start() actionId=${request.actionId} reconciliation → acquireWorktree (skip upstream merge)`,
+      );
+      const acquired = await this.pool.acquireWorktree(repoUrl, branch, baseHead);
+      this.cleanStaleLocks(acquired.worktreePath);
+
       const entry: WorktreeEntry = {
         process: null,
         request,
-        worktreeDir,
-        branch,
+        worktreeDir: acquired.worktreePath,
+        branch: acquired.branch,
         outputListeners: new Set(),
         outputBuffer: [],
         completeListeners: new Set(),
         heartbeatListeners: new Set(),
         completed: false,
+        poolRelease: acquired.release,
+        poolSoftRelease: acquired.softRelease,
       };
       this.registerEntry(handle, entry);
-      this.scheduleReconciliationResponse(handle.executionId);
+      handle.workspacePath = acquired.worktreePath;
+      handle.branch = acquired.branch;
+
+      setTimeout(() => {
+        const e = this.entries.get(executionId);
+        if (!e) return;
+        const response: WorkResponse = {
+          requestId: request.requestId,
+          actionId: request.actionId,
+          status: 'needs_input',
+          outputs: { summary: 'Select winning experiment' },
+        };
+        this.emitComplete(executionId, response);
+        e.poolSoftRelease?.();
+      }, 0);
+
       return handle;
     }
 

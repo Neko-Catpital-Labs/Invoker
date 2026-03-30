@@ -40,8 +40,11 @@ export class TaskStateMachine {
 
   /**
    * Find pending tasks that just became ready because `completedTaskId`
-   * was marked completed. Reads from the graph — caller must ensure the
+   * was marked completed or failed. Reads from the graph — caller must ensure the
    * completed task is already synced in the graph before calling.
+   *
+   * Reconciliation tasks depend on experiment nodes that may end in `failed`; those
+   * deps still count as settled for readiness.
    */
   findNewlyReadyTasks(completedTaskId: string): string[] {
     const ready: string[] = [];
@@ -61,7 +64,15 @@ export class TaskStateMachine {
 
       const allDepsComplete = task.dependencies.every((depId) => {
         const dep = this.graph.getNode(depId);
-        return dep?.status === 'completed' || dep?.status === 'stale';
+        if (!dep) return false;
+        if (task.config?.isReconciliation) {
+          return (
+            dep.status === 'completed' ||
+            dep.status === 'failed' ||
+            dep.status === 'stale'
+          );
+        }
+        return dep.status === 'completed' || dep.status === 'stale';
       });
 
       if (allDepsComplete) {

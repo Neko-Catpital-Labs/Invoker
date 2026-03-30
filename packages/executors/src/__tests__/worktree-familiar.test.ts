@@ -487,6 +487,11 @@ describe('WorktreeFamiliar', () => {
     expect(response.status).toBe('needs_input');
     expect(response.outputs.summary).toBe('Select winning experiment');
 
+    const pool = (familiar as any).pool;
+    expect(pool.acquireWorktree).toHaveBeenCalledTimes(1);
+    expect(handle.workspacePath).toMatch(/^\/fake\/worktrees\//);
+    expect(handle.branch).toMatch(/^experiment\/action-1-[0-9a-f]{8}$/);
+
     // No non-git spawn should have occurred
     const taskCalls = mockedSpawn.mock.calls.filter(
       (call) => call[0] !== 'git',

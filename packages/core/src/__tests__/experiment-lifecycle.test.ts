@@ -6,6 +6,7 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
+import { reconciliationNeedsInputWorkResponse } from './reconciliation-needs-input-shim.js';
 import { Orchestrator } from '../orchestrator.js';
 import type { PlanDefinition, OrchestratorPersistence, OrchestratorMessageBus } from '../orchestrator.js';
 import type { TaskState, TaskDelta, TaskStateChanges, Attempt } from '../task-types.js';
@@ -53,6 +54,10 @@ class InMemoryPersistence implements OrchestratorPersistence {
     return Array.from(this.tasks.values())
       .filter((e) => e.workflowId === workflowId)
       .map((e) => e.task);
+  }
+
+  loadWorkflow(workflowId: string): { repoUrl?: string; baseBranch?: string } | undefined {
+    return this.workflows.get(workflowId) as { repoUrl?: string; baseBranch?: string } | undefined;
   }
 
   saveAttempt(attempt: Attempt): void {
@@ -166,6 +171,7 @@ describe('Experiment Lifecycle (integration)', () => {
   /** Standard 3-task plan: setup -> pivot -> downstream. */
   const standardPlan: PlanDefinition = {
     name: 'experiment-lifecycle',
+    baseBranch: 'main',
     tasks: [
       { id: 'setup', description: 'Setup task' },
       {
@@ -268,6 +274,7 @@ describe('Experiment Lifecycle (integration)', () => {
 
     // Pivot itself completed (parent task completes when spawning)
     expect(orchestrator.getTask('pivot')!.status).toBe('completed');
+    expect(orchestrator.getTask('pivot')!.execution.branch).toBe('main');
   });
 
   // ── 3. Complete all experiments -> reconciliation triggers ─
@@ -286,6 +293,8 @@ describe('Experiment Lifecycle (integration)', () => {
     // Both experiments are running. Complete them.
     orchestrator.handleWorkerResponse(completedResponse('pivot-exp-v1'));
     orchestrator.handleWorkerResponse(completedResponse('pivot-exp-v2'));
+
+    orchestrator.handleWorkerResponse(reconciliationNeedsInputWorkResponse('pivot-reconciliation'));
 
     // Reconciliation task should now be in needs_input (awaiting human selection)
     const recon = orchestrator.getTask('pivot-reconciliation');
@@ -318,6 +327,8 @@ describe('Experiment Lifecycle (integration)', () => {
     orchestrator.handleWorkerResponse(completedResponse('pivot-exp-v1'));
     orchestrator.handleWorkerResponse(completedResponse('pivot-exp-v2'));
 
+    orchestrator.handleWorkerResponse(reconciliationNeedsInputWorkResponse('pivot-reconciliation'));
+
     // Recon is now needs_input. Select v1 as winner.
     publishedDeltas = [];
     orchestrator.selectExperiment('pivot-reconciliation', 'pivot-exp-v1');
@@ -346,6 +357,7 @@ describe('Experiment Lifecycle (integration)', () => {
     );
     orchestrator.handleWorkerResponse(completedResponse('pivot-exp-v1'));
     orchestrator.handleWorkerResponse(completedResponse('pivot-exp-v2'));
+    orchestrator.handleWorkerResponse(reconciliationNeedsInputWorkResponse('pivot-reconciliation'));
     orchestrator.selectExperiment('pivot-reconciliation', 'pivot-exp-v1');
 
     // Downstream is running (remapped in-place, no clone). Complete it.
@@ -382,9 +394,9 @@ describe('Experiment Lifecycle (integration)', () => {
     orchestrator.handleWorkerResponse(failedResponse('pivot-exp-v1', 'build failed'));
     orchestrator.handleWorkerResponse(completedResponse('pivot-exp-v2'));
 
+    orchestrator.handleWorkerResponse(reconciliationNeedsInputWorkResponse('pivot-reconciliation'));
+
     // Reconciliation still triggers despite one failure.
-    // triggerReconciliation moves recon from blocked -> needs_input, overriding the
-    // blocked status that was set when pivot-exp-v1 failed.
     const recon = orchestrator.getTask('pivot-reconciliation');
     expect(recon!.status).toBe('needs_input');
     expect(recon!.execution.experimentResults).toHaveLength(2);
@@ -429,6 +441,8 @@ describe('Experiment Lifecycle (integration)', () => {
     );
     orchestrator.handleWorkerResponse(completedResponse('pivot-exp-r1v1'));
     orchestrator.handleWorkerResponse(completedResponse('pivot-exp-r1v2'));
+
+    orchestrator.handleWorkerResponse(reconciliationNeedsInputWorkResponse('pivot-reconciliation'));
 
     // Reconciliation triggers for first round
     const recon1 = orchestrator.getTask('pivot-reconciliation');
@@ -522,6 +536,8 @@ describe('Experiment Lifecycle (integration)', () => {
     publishedDeltas = [];
     orchestrator.handleWorkerResponse(completedResponse('pivot-exp-v2'));
 
+    orchestrator.handleWorkerResponse(reconciliationNeedsInputWorkResponse('pivot-reconciliation'));
+
     // At least 1 delta for experiment completion + reconciliation trigger
     const v2CompleteDelta = publishedDeltas.find(
       (d) => d.type === 'updated' && d.taskId === 'pivot-exp-v2',
@@ -598,6 +614,8 @@ describe('Experiment Lifecycle (integration)', () => {
       orchestrator.handleWorkerResponse(completedResponse(`pivot-exp-v${i}`));
     }
 
+    orchestrator.handleWorkerResponse(reconciliationNeedsInputWorkResponse('pivot-reconciliation'));
+
     // Reconciliation in needs_input with 5 results
     expect(orchestrator.getTask('pivot-reconciliation')!.status).toBe('needs_input');
     expect(orchestrator.getTask('pivot-reconciliation')!.execution.experimentResults).toHaveLength(5);
@@ -641,6 +659,7 @@ describe('Experiment Lifecycle (integration)', () => {
       );
       orchestrator.handleWorkerResponse(completedResponse('pivot-exp-v1'));
       orchestrator.handleWorkerResponse(completedResponse('pivot-exp-v2'));
+      orchestrator.handleWorkerResponse(reconciliationNeedsInputWorkResponse('pivot-reconciliation'));
       // Recon is now needs_input
       expect(orchestrator.getTask('pivot-reconciliation')!.status).toBe('needs_input');
     }
@@ -742,6 +761,8 @@ describe('Experiment Lifecycle (integration)', () => {
       orchestrator.handleWorkerResponse(failedResponse('pivot-exp-v1', 'build failed'));
       orchestrator.handleWorkerResponse(completedResponse('pivot-exp-v2'));
 
+      orchestrator.handleWorkerResponse(reconciliationNeedsInputWorkResponse('pivot-reconciliation'));
+
       // Simulate task-executor having set branch/commit before failure
       persistence.updateTask('pivot-exp-v1', {
         execution: {
@@ -793,6 +814,8 @@ describe('Experiment Lifecycle (integration)', () => {
     orchestrator.handleWorkerResponse(completedResponse('pivot-exp-v1'));
     orchestrator.handleWorkerResponse(completedResponse('pivot-exp-v2'));
     orchestrator.handleWorkerResponse(completedResponse('pivot-exp-v3'));
+
+    orchestrator.handleWorkerResponse(reconciliationNeedsInputWorkResponse('pivot-reconciliation'));
 
     // Reconciliation awaits input
     const recon = orchestrator.getTask('pivot-reconciliation')!;
