@@ -25,9 +25,11 @@
  * Using the same Electron binary for both modes provides a consistent runtime.
  */
 
+import './main-process-file-log.js';
+
 import { app, BrowserWindow, ipcMain, nativeImage, shell } from 'electron';
 import * as path from 'node:path';
-import { mkdirSync, appendFileSync, readdirSync, readFileSync, existsSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 
 // Prevent desktop-wide freezes on Linux (Chromium GPU + X11/Wayland compositors).
@@ -1423,11 +1425,9 @@ function setupGuiMode(): void {
     executor: TaskExecutor,
     handles: Map<string, { handle: FamiliarHandle; familiar: Familiar }>,
   ): Promise<void> {
-    const logFile = path.join(homedir(), '.invoker', 'invoker.log');
     const logFn = (source: string, level: string, message: string) => {
       const prefix = level === 'error' ? `${RED}[${source}]${RESET}` : `[${source}]`;
       console.log(`${prefix} ${message}`);
-      try { appendFileSync(logFile, `${new Date().toISOString()} [${source}] ${level}: ${message}\n`); } catch { /* ignore */ }
       try { persistence.writeActivityLog(source, level, message); } catch { /* db locked */ }
     };
 
