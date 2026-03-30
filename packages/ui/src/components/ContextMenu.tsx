@@ -7,6 +7,10 @@
 
 import { useEffect, useRef } from 'react';
 import type { TaskState } from '../types.js';
+import {
+  isExperimentSpawnPivotTask,
+  EXPERIMENT_SPAWN_PIVOT_OPEN_TERMINAL_MESSAGE,
+} from '../isExperimentSpawnPivot.js';
 
 interface ContextMenuProps {
   x: number;
@@ -34,6 +38,7 @@ export function ContextMenu({ x, y, task, onRestart, onReplace, onOpenTerminal, 
   const hasMergeConflict = task.status === 'failed' && !!task.execution.mergeConflict;
   const canFixWithClaude = task.status === 'failed' && !hasMergeConflict && !!onFixWithClaude;
   const canCancel = task.status !== 'completed' && task.status !== 'stale' && !!onCancel;
+  const canOpenTerminal = !isExperimentSpawnPivotTask(task);
 
   useEffect(() => {
     const handleClick = (e: MouseEvent) => {
@@ -82,8 +87,16 @@ export function ContextMenu({ x, y, task, onRestart, onReplace, onOpenTerminal, 
         Replace with...
       </button>
       <button
-        className="w-full text-left px-3 py-1.5 text-sm text-gray-100 hover:bg-gray-700"
-        onClick={() => onOpenTerminal(task.id)}
+        className={`w-full text-left px-3 py-1.5 text-sm ${
+          canOpenTerminal
+            ? 'text-gray-100 hover:bg-gray-700'
+            : 'text-gray-500 cursor-not-allowed'
+        }`}
+        onClick={() => {
+          if (canOpenTerminal) onOpenTerminal(task.id);
+        }}
+        disabled={!canOpenTerminal}
+        title={canOpenTerminal ? undefined : EXPERIMENT_SPAWN_PIVOT_OPEN_TERMINAL_MESSAGE}
       >
         Open Terminal
       </button>

@@ -26,6 +26,10 @@ import { ExperimentModal } from './components/ExperimentModal.js';
 import { ContextMenu } from './components/ContextMenu.js';
 import { QueueView } from './components/QueueView.js';
 import { ReplaceTaskModal } from './components/ReplaceTaskModal.js';
+import {
+  isExperimentSpawnPivotTask,
+  EXPERIMENT_SPAWN_PIVOT_OPEN_TERMINAL_MESSAGE,
+} from './isExperimentSpawnPivot.js';
 
 type ModalState =
   | { type: 'none' }
@@ -82,6 +86,10 @@ export function App() {
 
   const handleTaskDoubleClick = useCallback(async (task: TaskState) => {
     setSelectedTaskId(task.id);
+    if (isExperimentSpawnPivotTask(task)) {
+      window.alert(EXPERIMENT_SPAWN_PIVOT_OPEN_TERMINAL_MESSAGE);
+      return;
+    }
     const result = await window.invoker?.openTerminal(task.id);
     if (result && !result.opened) {
       window.alert(result.reason ?? 'Cannot open terminal for this task.');
@@ -103,10 +111,18 @@ export function App() {
     }
   }, [invoker]);
 
-  const handleOpenTerminal = useCallback((taskId: string) => {
-    setContextMenu(null);
-    window.invoker?.openTerminal(taskId);
-  }, []);
+  const handleOpenTerminal = useCallback(
+    (taskId: string) => {
+      setContextMenu(null);
+      const task = tasks.get(taskId);
+      if (task && isExperimentSpawnPivotTask(task)) {
+        window.alert(EXPERIMENT_SPAWN_PIVOT_OPEN_TERMINAL_MESSAGE);
+        return;
+      }
+      void window.invoker?.openTerminal(taskId);
+    },
+    [tasks],
+  );
 
   const handleReplaceTask = useCallback((taskId: string) => {
     setContextMenu(null);
