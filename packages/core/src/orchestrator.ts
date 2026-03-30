@@ -787,9 +787,19 @@ export class Orchestrator {
         commit: undefined,
         lastHeartbeatAt: undefined,
         isFixingWithAI: undefined,
+        agentSessionId: undefined,
+        containerId: undefined,
       },
     };
-    this.writeAndSync(taskId, resetChanges);
+    const t0 = this.stateMachine.getTask(taskId)!;
+    console.log(
+      `[agent-session-trace] restartTask: before writeAndSync task="${taskId}" agentSessionId=${t0.execution.agentSessionId ?? 'null'} ` +
+        '(reset clears agentSessionId/containerId; branch/workspacePath unchanged)',
+    );
+    const afterRt = this.writeAndSync(taskId, resetChanges);
+    console.log(
+      `[agent-session-trace] restartTask: after writeAndSync task="${taskId}" agentSessionId=${afterRt.execution.agentSessionId ?? 'null'}`,
+    );
     const resetDelta: TaskDelta = { type: 'updated', taskId, changes: resetChanges };
     this.persistence.logEvent?.(taskId, 'task.pending', resetChanges);
     this.messageBus.publish(TASK_DELTA_CHANNEL, resetDelta);
@@ -852,13 +862,26 @@ export class Orchestrator {
         reviewId: undefined,
         reviewStatus: undefined,
         reviewProviderId: undefined,
+        agentSessionId: undefined,
+        containerId: undefined,
       },
     };
 
     console.log(`[orchestrator] restartWorkflow: resetting ${allTasks.length} tasks for workflow ${workflowId}`);
+    console.log(
+      '[agent-session-trace] restartWorkflow: resetChanges.execution clears agentSessionId/containerId (DB NULL before next run)',
+    );
     for (const task of allTasks) {
+      const prevSess = task.execution.agentSessionId ?? null;
+      const prevCt = task.execution.containerId ?? null;
       console.log(`[orchestrator]   reset "${task.id}" (was ${task.status}, branch=${task.execution.branch ?? 'none'}, commit=${task.execution.commit?.slice(0, 7) ?? 'none'})`);
-      this.writeAndSync(task.id, resetChanges);
+      console.log(
+        `[agent-session-trace] restartWorkflow: before writeAndSync task="${task.id}" agentSessionId=${prevSess ?? 'null'} containerId=${prevCt ?? 'null'}`,
+      );
+      const after = this.writeAndSync(task.id, resetChanges);
+      console.log(
+        `[agent-session-trace] restartWorkflow: after writeAndSync task="${task.id}" agentSessionId=${after.execution.agentSessionId ?? 'null'} containerId=${after.execution.containerId ?? 'null'}`,
+      );
       const delta: TaskDelta = { type: 'updated', taskId: task.id, changes: resetChanges };
       this.persistence.logEvent?.(task.id, 'task.pending', resetChanges);
       this.messageBus.publish(TASK_DELTA_CHANNEL, delta);

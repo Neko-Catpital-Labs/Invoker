@@ -71,6 +71,12 @@ export async function openExternalTerminalForTask(
     branch: persistence.getBranch(taskId) ?? undefined,
   };
   console.log(`[open-terminal] meta from DB: familiarType=${meta.familiarType} workspacePath=${meta.workspacePath ?? 'undefined'} branch=${meta.branch ?? 'undefined'} agentSessionId=${meta.agentSessionId ?? 'undefined'} containerId=${meta.containerId ?? 'undefined'}`);
+  if (meta.agentSessionId) {
+    console.log(
+      '[agent-session-trace] open-terminal: building resume spec with persisted agentSessionId — ' +
+        'if restartWorkflow left a stale UUID (downstream still pending), claude --resume may report no conversation',
+    );
+  }
 
   let familiar = familiarRegistry.get(meta.familiarType);
   console.log(`[open-terminal] familiarRegistry.get("${meta.familiarType}") → ${familiar ? familiar.type : 'null (will lazy-create)'}`);
