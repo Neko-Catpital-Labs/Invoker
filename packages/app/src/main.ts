@@ -62,7 +62,7 @@ import {
 import type { TaskOutputData } from './types.js';
 import { loadConfig, type InvokerConfig } from './config.js';
 import { backupPlan } from './plan-backup.js';
-import { applyPlanDefinitionDefaults } from './plan-parser.js';
+// applyPlanDefinitionDefaults removed — parsePlan() applies defaults internally
 import { startApiServer, type ApiServer } from './api-server.js';
 import { runHeadless, tryDelegateRun, tryDelegateResume } from './headless.js';
 import {
@@ -197,6 +197,15 @@ async function wireSlackBot(deps: SlackBotDeps): Promise<any> {
     warn: (msg) => { console.warn(`[conversation-repo] ${msg}`); try { persistence.writeActivityLog('conversation-repo', 'warn', msg); } catch { /* db locked */ } },
     error: (msg) => { console.error(`[conversation-repo] ${msg}`); try { persistence.writeActivityLog('conversation-repo', 'error', msg); } catch { /* db locked */ } },
   });
+  let repoUrl = process.env.INVOKER_REPO_URL;
+  if (!repoUrl) {
+    try {
+      repoUrl = execSync('git remote get-url origin', { cwd: repoRoot, encoding: 'utf8' }).trim();
+    } catch {
+      deps.logFn('slack', 'warn', 'Could not detect repoUrl from git remote; plans will require repoUrl in YAML');
+    }
+  }
+
   const slack = new surfaces.SlackSurface({
     botToken: process.env.SLACK_BOT_TOKEN!,
     appToken: process.env.SLACK_APP_TOKEN!,
@@ -207,6 +216,7 @@ async function wireSlackBot(deps: SlackBotDeps): Promise<any> {
     workingDir: repoRoot,
     conversationRepo,
     defaultBranch: invokerConfig.defaultBranch,
+    repoUrl,
     log: deps.logFn,
     planningTimeoutSeconds: invokerConfig.planningTimeoutSeconds,
     planningHeartbeatIntervalSeconds: invokerConfig.planningHeartbeatIntervalSeconds,
@@ -241,11 +251,14 @@ async function wireSlackBot(deps: SlackBotDeps): Promise<any> {
       case 'get_status':
         break;
       case 'start_plan': {
-        deps.logFn('trace', 'info', `slackBot: loading plan "${command.plan.name}" (${command.plan.tasks.length} tasks)`);
+        const { parsePlan } = await import('./plan-parser.js');
+        const planText = command.planText as string;
+        const plan = parsePlan(planText);
+        deps.logFn('trace', 'info', `slackBot: loading plan "${plan.name}" (${plan.tasks.length} tasks)`);
         deps.onStartPlan?.();
-        deps.onPlanLoaded?.(command.plan);
-        backupPlan(command.plan);
-        orchestrator.loadPlan(command.plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
+        deps.onPlanLoaded?.(plan);
+        backupPlan(plan);
+        orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
         const started = orchestrator.startExecution();
         deps.logFn('trace', 'info', `slackBot: startExecution returned ${started.length} tasks: [${started.map((t: any) => t.id).join(', ')}]`);
         await deps.executor.executeTasks(started);
@@ -523,9 +536,8 @@ function setupGuiMode(): void {
       const plan = await parsePlanFile(planPath);
       taskHandles.clear();
       backupPlan(plan);
-      const normalized = applyPlanDefinitionDefaults(plan);
       const wfIdsBefore = new Set(orchestrator.getWorkflowIds());
-      orchestrator.loadPlan(normalized, { allowGraphMutation: invokerConfig.allowGraphMutation });
+      orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
       const workflowId = orchestrator.getWorkflowIds().find(id => !wfIdsBefore.has(id))!;
       const started = orchestrator.startExecution();
       console.log(`[ipc-delegate] started ${started.length} tasks for workflow "${workflowId}"`);
@@ -625,12 +637,13 @@ function setupGuiMode(): void {
     });
 
     // Register IPC handlers
-    ipcMain.handle('invoker:load-plan', (_event, plan: PlanDefinition) => {
+    ipcMain.handle('invoker:load-plan', async (_event, planText: string) => {
+      const { parsePlan } = await import('./plan-parser.js');
+      const plan = parsePlan(planText);
       console.log(`[ipc] load-plan: "${plan.name}" (${plan.tasks.length} tasks)`);
       taskHandles.clear();
       backupPlan(plan);
-      const normalized = applyPlanDefinitionDefaults(plan);
-      orchestrator.loadPlan(normalized, { allowGraphMutation: invokerConfig.allowGraphMutation });
+      orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
     });
 
     if (process.env.NODE_ENV === 'test') {

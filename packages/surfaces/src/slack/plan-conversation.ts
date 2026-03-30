@@ -11,8 +11,7 @@
  */
 
 import { spawn } from 'node:child_process';
-import { parse as parseYaml } from 'yaml';
-import type { PlanDefinition } from '@invoker/core';
+import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import type { ConversationRepository } from '@invoker/persistence';
 import type { LogFn } from '../surface.js';
 
@@ -38,6 +37,8 @@ export interface PlanConversationConfig {
   conversationRepo?: ConversationRepository;
   /** Default branch name (e.g. "master"). Used when plan YAML omits baseBranch. */
   defaultBranch?: string;
+  /** Default repo URL (e.g. "git@github.com:user/repo.git"). Used when plan YAML omits repoUrl. */
+  repoUrl?: string;
   /** Logging callback. Defaults to console.log/console.error. */
   log?: LogFn;
 }
@@ -67,7 +68,10 @@ export function isConfirmation(text: string): boolean {
 
 // ── System Prompt ───────────────────────────────────────────
 
-function buildSystemPrompt(defaultBranch: string): string {
+function buildSystemPrompt(defaultBranch: string, repoUrl?: string): string {
+  const repoUrlLine = repoUrl
+    ? `repoUrl: "${repoUrl}"          # git clone URL for the repository`
+    : `repoUrl: "git@github.com:user/repo.git"  # git clone URL for the repository`;
   return `You are an assistant for the Invoker orchestrator. You have two modes:
 
 **Direct answer mode** — For simple, self-contained requests (counting lines of code, checking versions, running a quick command, answering questions about the codebase). Explore the codebase as needed and report the result directly. Do NOT generate a YAML plan for these.
@@ -79,6 +83,7 @@ Use your judgment: if the request can be answered with 1-2 commands or a short e
 A plan has this structure:
 \`\`\`yaml
 name: "Plan Name"
+${repoUrlLine}
 onFinish: pull_request  # "pull_request" (default), "merge", or "none"
 mergeMode: manual       # "manual" (default) or "automatic"
 baseBranch: ${defaultBranch}        # base git branch
@@ -152,13 +157,14 @@ export class PlanConversation {
   private cursorCommand: string;
   private model?: string;
   private messages: ConversationMessage[] = [];
-  private _submittedPlan: PlanDefinition | null = null;
+  private _submittedPlanText: string | null = null;
   private _planSubmitted = false;
   private workingDir?: string;
   private timeoutMs: number;
   private threadTs?: string;
   private conversationRepo?: ConversationRepository;
   private defaultBranch?: string;
+  private repoUrl?: string;
   private log: LogFn;
   private _initialized = false;
 
@@ -170,6 +176,7 @@ export class PlanConversation {
     this.threadTs = config.threadTs;
     this.conversationRepo = config.conversationRepo;
     this.defaultBranch = config.defaultBranch;
+    this.repoUrl = config.repoUrl;
     this.log = config.log ?? ((src, lvl, msg) => {
       (lvl === 'error' ? console.error : console.log)(`[${src}] ${msg}`);
     });
@@ -228,11 +235,14 @@ export class PlanConversation {
     this.messages.push({ role: 'user', content: userMessage });
 
     if (isConfirmation(userMessage)) {
-      const plan = this.extractLastPlanFromMessages();
-      if (plan) {
-        this._submittedPlan = plan;
+      const planText = this.extractLastPlanFromMessages();
+      if (planText) {
+        this._submittedPlanText = planText;
         this._planSubmitted = true;
-        const reply = `Plan "${plan.name}" submitted for execution.`;
+        // Extract plan name from the text for the reply message
+        const parsed = parseYaml(planText) as Record<string, unknown>;
+        const planName = (parsed?.name as string) ?? 'Untitled';
+        const reply = `Plan "${planName}" submitted for execution.`;
         this.messages.push({ role: 'assistant', content: reply });
         this.saveState();
         const tEnd = Date.now();
@@ -263,9 +273,9 @@ export class PlanConversation {
     return response;
   }
 
-  /** Returns the plan that was submitted via confirmation, or null. */
-  get submittedPlan(): PlanDefinition | null {
-    return this._submittedPlan;
+  /** Returns the raw plan text that was submitted via confirmation, or null. */
+  get submittedPlanText(): string | null {
+    return this._submittedPlanText;
   }
 
   /** Returns true if the user confirmed and a plan was extracted. */
@@ -281,7 +291,7 @@ export class PlanConversation {
   /** Reset the conversation. */
   reset(): void {
     this.messages = [];
-    this._submittedPlan = null;
+    this._submittedPlanText = null;
     this._planSubmitted = false;
     if (this.conversationRepo && this.threadTs) {
       this.conversationRepo.deleteConversation(this.threadTs);
@@ -295,7 +305,7 @@ export class PlanConversation {
    * and the complete conversation history.
    */
   buildCursorPrompt(): string {
-    const systemPrompt = buildSystemPrompt(this.defaultBranch ?? 'main');
+    const systemPrompt = buildSystemPrompt(this.defaultBranch ?? 'main', this.repoUrl);
     const parts: string[] = [systemPrompt];
 
     if (this.messages.length > 1) {
@@ -377,12 +387,12 @@ export class PlanConversation {
 
   // ── Plan Extraction ────────────────────────────────────
 
-  private extractLastPlanFromMessages(): PlanDefinition | null {
+  private extractLastPlanFromMessages(): string | null {
     for (let i = this.messages.length - 1; i >= 0; i--) {
       const msg = this.messages[i];
       if (msg.role !== 'assistant') continue;
       if (!msg.content) continue;
-      return extractYamlPlan(msg.content, this.defaultBranch);
+      return extractYamlPlan(msg.content);
     }
     return null;
   }
@@ -445,9 +455,11 @@ export function rewritePnpmTestCommand(cmd: string): string {
 
 /**
  * Extract and validate a YAML plan from a message containing ```yaml blocks.
- * Returns null if no valid plan is found.
+ * Returns the raw YAML string (with command rewrites applied) or null if invalid.
+ * Defaulting (onFinish, baseBranch, mergeMode, etc.) is NOT applied here —
+ * callers should pass the returned string through parsePlan() for that.
  */
-export function extractYamlPlan(text: string, defaultBranch?: string): PlanDefinition | null {
+export function extractYamlPlan(text: string): string | null {
   // Find the last ```yaml opening fence
   const fenceStart = text.lastIndexOf('```yaml\n');
   if (fenceStart === -1) {
@@ -501,33 +513,8 @@ export function extractYamlPlan(text: string, defaultBranch?: string): PlanDefin
       }
     }
 
-    const onFinish = (plan.onFinish as PlanDefinition['onFinish']) ?? 'pull_request';
-    const mergeMode = (plan.mergeMode as PlanDefinition['mergeMode']) ?? 'manual';
-    let featureBranch = plan.featureBranch as string | undefined;
-    if ((onFinish === 'merge' || onFinish === 'pull_request') && !featureBranch) {
-      const slug = (plan.name as string).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-      featureBranch = `plan/${slug}`;
-    }
-    return {
-      name: plan.name,
-      onFinish,
-      mergeMode,
-      baseBranch: (plan.baseBranch as string) ?? defaultBranch ?? 'main',
-      featureBranch,
-      tasks: (plan.tasks as any[]).map((t) => ({
-        id: t.id,
-        description: t.description,
-        command: t.command,
-        prompt: t.prompt,
-        dependencies: t.dependencies ?? [],
-        familiarType: t.familiarType ?? t.familiar_type,
-        pivot: t.pivot,
-        experimentVariants: t.experimentVariants,
-        requiresManualApproval: t.requiresManualApproval,
-        autoFix: t.autoFix,
-        maxFixAttempts: t.maxFixAttempts,
-      })),
-    };
+    // Return serialized YAML (with command rewrites applied) — no defaulting
+    return stringifyYaml(plan);
   } catch (err) {
     console.warn(`extractYamlPlan: YAML parse error: ${err instanceof Error ? err.message : String(err)}`);
     return null;

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { PlanConversation, extractYamlPlan, rewritePnpmTestCommand, globToRegex, isDangerousCommand, isConfirmation } from '../slack/plan-conversation.js';
+import { parse as parseYaml } from 'yaml';
 import * as child_process from 'node:child_process';
 import { EventEmitter } from 'node:events';
 
@@ -50,6 +51,11 @@ function mockCursorResponse(text: string) {
   mockSpawn.mockReturnValueOnce(createMockProcess(text));
 }
 
+/** Helper: parse the returned plan text string into an object for assertions. */
+function parsePlanText(text: string): Record<string, any> {
+  return parseYaml(text) as Record<string, any>;
+}
+
 const VALID_YAML_PLAN = `Here's your plan:
 
 \`\`\`yaml
@@ -73,15 +79,17 @@ Let me know if you'd like changes!`;
 // ── Tests ───────────────────────────────────────────────────
 
 describe('extractYamlPlan', () => {
-  it('extracts a valid YAML plan from text', () => {
-    const plan = extractYamlPlan(VALID_YAML_PLAN);
-    expect(plan).not.toBeNull();
-    expect(plan!.name).toBe('Test Plan');
-    expect(plan!.tasks).toHaveLength(2);
-    expect(plan!.tasks[0].id).toBe('task-1');
-    expect(plan!.tasks[0].prompt).toBe('Do something');
-    expect(plan!.tasks[1].command).toBe('npm test');
-    expect(plan!.tasks[1].dependencies).toEqual(['task-1']);
+  it('extracts a valid YAML plan from text and returns a string', () => {
+    const result = extractYamlPlan(VALID_YAML_PLAN);
+    expect(result).not.toBeNull();
+    expect(typeof result).toBe('string');
+    const plan = parsePlanText(result!);
+    expect(plan.name).toBe('Test Plan');
+    expect(plan.tasks).toHaveLength(2);
+    expect(plan.tasks[0].id).toBe('task-1');
+    expect(plan.tasks[0].prompt).toBe('Do something');
+    expect(plan.tasks[1].command).toBe('npm test');
+    expect(plan.tasks[1].dependencies).toEqual(['task-1']);
   });
 
   it('returns null when no yaml block exists', () => {
@@ -118,54 +126,21 @@ describe('extractYamlPlan', () => {
     expect(extractYamlPlan(text)).toBeNull();
   });
 
-  it('defaults onFinish to pull_request', () => {
+  it('does not apply defaults — onFinish is preserved as-is from YAML', () => {
     const text = '```yaml\nname: "Defaults"\ntasks:\n  - id: t1\n    description: "test"\n    dependencies: []\n```';
-    const plan = extractYamlPlan(text);
-    expect(plan!.onFinish).toBe('pull_request');
+    const result = extractYamlPlan(text);
+    const plan = parsePlanText(result!);
+    // extractYamlPlan no longer defaults onFinish — that is parsePlan's job
+    expect(plan.onFinish).toBeUndefined();
   });
 
-  it('defaults baseBranch to main when no defaultBranch provided', () => {
-    const text = '```yaml\nname: "Defaults"\ntasks:\n  - id: t1\n    description: "test"\n    dependencies: []\n```';
-    const plan = extractYamlPlan(text);
-    expect(plan!.baseBranch).toBe('main');
-  });
-
-  it('uses defaultBranch parameter when baseBranch not in YAML', () => {
-    const text = '```yaml\nname: "Defaults"\ntasks:\n  - id: t1\n    description: "test"\n    dependencies: []\n```';
-    const plan = extractYamlPlan(text, 'master');
-    expect(plan!.baseBranch).toBe('master');
-  });
-
-  it('YAML baseBranch takes precedence over defaultBranch parameter', () => {
-    const text = '```yaml\nname: "Explicit"\nbaseBranch: develop\ntasks:\n  - id: t1\n    description: "test"\n    dependencies: []\n```';
-    const plan = extractYamlPlan(text, 'master');
-    expect(plan!.baseBranch).toBe('develop');
-  });
-
-  it('defaults mergeMode to manual when not specified', () => {
-    const text = '```yaml\nname: "Defaults"\ntasks:\n  - id: t1\n    description: "test"\n    dependencies: []\n```';
-    const plan = extractYamlPlan(text);
-    expect(plan!.mergeMode).toBe('manual');
-  });
-
-  it('parses mergeMode from YAML when specified', () => {
-    const text = '```yaml\nname: "Explicit"\nmergeMode: automatic\ntasks:\n  - id: t1\n    description: "test"\n    dependencies: []\n```';
-    const plan = extractYamlPlan(text);
-    expect(plan!.mergeMode).toBe('automatic');
-  });
-
-  it('defaults dependencies to empty array', () => {
-    const text = '```yaml\nname: "NoDeps"\ntasks:\n  - id: t1\n    description: "test"\n```';
-    const plan = extractYamlPlan(text);
-    expect(plan!.tasks[0].dependencies).toEqual([]);
-  });
-
-  it('preserves optional fields like featureBranch and pivot', () => {
+  it('preserves explicit fields from YAML', () => {
     const text = `\`\`\`yaml
 name: "Full"
 onFinish: merge
 baseBranch: develop
 featureBranch: feature/test
+mergeMode: automatic
 tasks:
   - id: t1
     description: "test"
@@ -176,14 +151,16 @@ tasks:
     maxFixAttempts: 5
     requiresManualApproval: true
 \`\`\``;
-    const plan = extractYamlPlan(text);
-    expect(plan!.onFinish).toBe('merge');
-    expect(plan!.baseBranch).toBe('develop');
-    expect(plan!.featureBranch).toBe('feature/test');
-    expect(plan!.tasks[0].pivot).toBe(true);
-    expect(plan!.tasks[0].autoFix).toBe(true);
-    expect(plan!.tasks[0].maxFixAttempts).toBe(5);
-    expect(plan!.tasks[0].requiresManualApproval).toBe(true);
+    const result = extractYamlPlan(text);
+    const plan = parsePlanText(result!);
+    expect(plan.onFinish).toBe('merge');
+    expect(plan.baseBranch).toBe('develop');
+    expect(plan.featureBranch).toBe('feature/test');
+    expect(plan.mergeMode).toBe('automatic');
+    expect(plan.tasks[0].pivot).toBe(true);
+    expect(plan.tasks[0].autoFix).toBe(true);
+    expect(plan.tasks[0].maxFixAttempts).toBe(5);
+    expect(plan.tasks[0].requiresManualApproval).toBe(true);
   });
 
   it('rewrites npx vitest run to pnpm test in task commands', () => {
@@ -195,9 +172,10 @@ tasks:
     command: "cd packages/surfaces && npx vitest run"
     dependencies: []
 \`\`\``;
-    const plan = extractYamlPlan(text);
-    expect(plan).not.toBeNull();
-    expect(plan!.tasks[0].command).toBe('cd packages/surfaces && pnpm test');
+    const result = extractYamlPlan(text);
+    expect(result).not.toBeNull();
+    const plan = parsePlanText(result!);
+    expect(plan.tasks[0].command).toBe('cd packages/surfaces && pnpm test');
   });
 
   it('rewrites pnpm test packages/... to cd packages/... && pnpm test', () => {
@@ -209,9 +187,10 @@ tasks:
     command: "pnpm test packages/protocol/src/__tests__/validation.test.ts"
     dependencies: []
 \`\`\``;
-    const plan = extractYamlPlan(text);
-    expect(plan).not.toBeNull();
-    expect(plan!.tasks[0].command).toBe('cd packages/protocol && pnpm test -- src/__tests__/validation.test.ts');
+    const result = extractYamlPlan(text);
+    expect(result).not.toBeNull();
+    const plan = parsePlanText(result!);
+    expect(plan.tasks[0].command).toBe('cd packages/protocol && pnpm test -- src/__tests__/validation.test.ts');
   });
 
   it('extracts correctly when YAML contains nested triple backticks', () => {
@@ -239,17 +218,18 @@ tasks:
 \`\`\`
 
 Let me know if you'd like changes!`;
-    const plan = extractYamlPlan(text);
-    expect(plan).not.toBeNull();
-    expect(plan!.name).toBe('Nested Backticks Plan');
-    expect(plan!.tasks).toHaveLength(2);
-    expect(plan!.tasks[0].prompt).toContain('```typescript');
+    const result = extractYamlPlan(text);
+    expect(result).not.toBeNull();
+    const plan = parsePlanText(result!);
+    expect(plan.name).toBe('Nested Backticks Plan');
+    expect(plan.tasks).toHaveLength(2);
+    expect(plan.tasks[0].prompt).toContain('```typescript');
   });
 
   it('returns null for truncated YAML with no closing fence', () => {
     const text = '```yaml\nname: "Truncated"\ntasks:\n  - id: t1\n    description: "test"\n    dependencies: []';
-    const plan = extractYamlPlan(text);
-    expect(plan).toBeNull();
+    const result = extractYamlPlan(text);
+    expect(result).toBeNull();
   });
 
   it('extracts from the last YAML block when multiple exist', () => {
@@ -274,10 +254,27 @@ tasks:
 \`\`\`
 
 Does this look better?`;
-    const plan = extractYamlPlan(text);
-    expect(plan).not.toBeNull();
-    expect(plan!.name).toBe('Revised Plan');
-    expect(plan!.tasks[0].description).toBe('revised');
+    const result = extractYamlPlan(text);
+    expect(result).not.toBeNull();
+    const plan = parsePlanText(result!);
+    expect(plan.name).toBe('Revised Plan');
+    expect(plan.tasks[0].description).toBe('revised');
+  });
+
+  it('preserves repoUrl from YAML when present', () => {
+    const text = '```yaml\nname: "With Repo"\nrepoUrl: "git@github.com:user/repo.git"\ntasks:\n  - id: t1\n    description: "test"\n    dependencies: []\n```';
+    const result = extractYamlPlan(text);
+    expect(result).not.toBeNull();
+    const plan = parsePlanText(result!);
+    expect(plan.repoUrl).toBe('git@github.com:user/repo.git');
+  });
+
+  it('does not inject repoUrl when YAML omits it', () => {
+    const text = '```yaml\nname: "No Repo"\ntasks:\n  - id: t1\n    description: "test"\n    dependencies: []\n```';
+    const result = extractYamlPlan(text);
+    expect(result).not.toBeNull();
+    const plan = parsePlanText(result!);
+    expect(plan.repoUrl).toBeUndefined();
   });
 
   describe('diagnostic logging', () => {
@@ -463,14 +460,14 @@ describe('PlanConversation', () => {
     expect(prompt).toContain('Hello');
   });
 
-  it('submittedPlan is null before confirmation', async () => {
-    expect(conversation.submittedPlan).toBeNull();
+  it('submittedPlanText is null before confirmation', async () => {
+    expect(conversation.submittedPlanText).toBeNull();
     mockCursorResponse(VALID_YAML_PLAN);
     await conversation.sendMessage('Generate the plan');
-    expect(conversation.submittedPlan).toBeNull();
+    expect(conversation.submittedPlanText).toBeNull();
   });
 
-  it('confirmation extracts and submits the latest YAML plan', async () => {
+  it('confirmation extracts and submits the latest plan as text', async () => {
     const firstYaml = '```yaml\nname: "First"\ntasks:\n  - id: t1\n    description: "one"\n    dependencies: []\n```';
     const secondYaml = '```yaml\nname: "Second"\ntasks:\n  - id: t2\n    description: "two"\n    dependencies: []\n```';
 
@@ -481,7 +478,9 @@ describe('PlanConversation', () => {
 
     const reply = await conversation.sendMessage('yes');
     expect(reply).toContain('Second');
-    expect(conversation.submittedPlan!.name).toBe('Second');
+    expect(typeof conversation.submittedPlanText).toBe('string');
+    const plan = parsePlanText(conversation.submittedPlanText!);
+    expect(plan.name).toBe('Second');
     expect(conversation.planSubmitted).toBe(true);
     expect(mockSpawn).toHaveBeenCalledTimes(2); // not called for confirmation
   });
@@ -524,14 +523,14 @@ describe('PlanConversation', () => {
     expect(conversation.planSubmitted).toBe(false);
   });
 
-  it('reset clears history and submitted plan', async () => {
+  it('reset clears history and submitted plan text', async () => {
     mockCursorResponse(VALID_YAML_PLAN);
     await conversation.sendMessage('Generate plan');
     await conversation.sendMessage('yes');
 
     conversation.reset();
     expect(conversation.history).toHaveLength(0);
-    expect(conversation.submittedPlan).toBeNull();
+    expect(conversation.submittedPlanText).toBeNull();
     expect(conversation.planSubmitted).toBe(false);
   });
 
@@ -594,6 +593,20 @@ describe('PlanConversation prompt construction', () => {
     expect(prompt).toContain('First message');
     expect(prompt).toContain('First reply');
     expect(prompt).toContain('Second message');
+  });
+
+  it('system prompt includes repoUrl when configured', () => {
+    const conv = new PlanConversation({ repoUrl: 'git@github.com:test/repo.git' });
+    (conv as any).messages.push({ role: 'user', content: 'Hello' });
+    const prompt = conv.buildCursorPrompt();
+    expect(prompt).toContain('repoUrl: "git@github.com:test/repo.git"');
+  });
+
+  it('system prompt includes generic repoUrl placeholder when not configured', () => {
+    const conv = new PlanConversation({});
+    (conv as any).messages.push({ role: 'user', content: 'Hello' });
+    const prompt = conv.buildCursorPrompt();
+    expect(prompt).toContain('repoUrl: "git@github.com:user/repo.git"');
   });
 });
 

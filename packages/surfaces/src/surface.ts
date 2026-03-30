@@ -6,7 +6,7 @@
  * wires surfaces to the Orchestrator and TaskExecutor.
  */
 
-import type { TaskDelta, PlanDefinition } from '@invoker/core';
+import type { TaskDelta } from '@invoker/core';
 
 // ── Commands (Surface → Orchestrator) ──────────────────────
 
@@ -16,7 +16,7 @@ export type SurfaceCommand =
   | { type: 'select_experiment'; taskId: string; experimentId: string }
   | { type: 'provide_input'; taskId: string; input: string }
   | { type: 'get_status' }
-  | { type: 'start_plan'; plan: PlanDefinition };
+  | { type: 'start_plan'; planText: string };
 
 // ── Events (Orchestrator → Surface) ────────────────────────
 

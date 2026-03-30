@@ -52,7 +52,7 @@ vi.mock('../slack/plan-conversation.js', () => ({
     const instance = {
       _config: config,
       _messages: [] as Array<{ role: string; content: string }>,
-      submittedPlan: null as any,
+      submittedPlanText: null as any,
       planSubmitted: false,
       init: vi.fn().mockResolvedValue(undefined),
       sendMessage: vi.fn().mockImplementation(async (text: string) => {
@@ -322,8 +322,8 @@ describe('Slack thread isolation', () => {
       });
 
       const conv = conversationInstances.get('thread-submit');
-      // Simulate Claude calling submit_plan (sets both planSubmitted and submittedPlan)
-      conv.submittedPlan = { name: 'Submit Test', tasks: [{ id: 't1', description: 'Test', dependencies: [] }] };
+      // Simulate plan submission (sets both planSubmitted and submittedPlanText)
+      conv.submittedPlanText = 'name: "Submit Test"\ntasks:\n  - id: t1\n    description: "Test"\n    dependencies: []\n';
       conv.planSubmitted = true;
       conv.sendMessage.mockResolvedValueOnce('Submitting plan.');
 
@@ -632,21 +632,12 @@ Want me to execute this?`;
       expect.objectContaining({ type: 'start_plan' }),
     );
 
-    // Step 3: User confirms → Claude calls submit_plan → planSubmitted + submittedPlan set
+    // Step 3: User confirms → planSubmitted + submittedPlanText set
     say.mockClear();
-    const expectedPlan = {
-      name: 'Add REST API',
-      onFinish: 'merge',
-      baseBranch: 'main',
-      featureBranch: 'plan/add-rest-api',
-      tasks: [
-        { id: 'implement', description: 'Implement the REST API endpoints', prompt: 'Add GET/POST endpoints for /users', dependencies: [], command: undefined, pivot: undefined, experimentVariants: undefined, requiresManualApproval: undefined, autoFix: undefined, maxFixAttempts: undefined },
-        { id: 'test', description: 'Test the endpoints', command: 'pnpm test', dependencies: ['implement'], prompt: undefined, pivot: undefined, experimentVariants: undefined, requiresManualApproval: undefined, autoFix: undefined, maxFixAttempts: undefined },
-      ],
-    };
+    const expectedPlanText = 'name: "Add REST API"\ntasks:\n  - id: implement\n    description: "Implement the REST API endpoints"\n  - id: test\n    description: "Test the endpoints"\n    command: "pnpm test"\n';
     conv.sendMessage.mockImplementationOnce(async () => {
       conv.planSubmitted = true;
-      conv.submittedPlan = expectedPlan;
+      conv.submittedPlanText = expectedPlanText;
       return 'Plan submitted! Starting execution now.';
     });
 
@@ -660,23 +651,17 @@ Want me to execute this?`;
       expect.objectContaining({ text: 'Plan submitted! Starting execution now.', thread_ts: 'thread-e2e' }),
     );
 
-    // Should post the "Starting execution" message
+    // Should post the "Starting" execution message
     expect(say).toHaveBeenCalledWith(
-      expect.objectContaining({ text: expect.stringContaining('Starting execution of "Add REST API"') }),
+      expect.objectContaining({ text: expect.stringContaining('Starting') }),
     );
 
-    // Should emit start_plan command with the correct plan
+    // Should emit start_plan command with the raw plan text
     expect(receivedCommands).toHaveLength(1);
     expect(receivedCommands[0]).toEqual(
       expect.objectContaining({
         type: 'start_plan',
-        plan: expect.objectContaining({
-          name: 'Add REST API',
-          tasks: expect.arrayContaining([
-            expect.objectContaining({ id: 'implement' }),
-            expect.objectContaining({ id: 'test', command: 'pnpm test' }),
-          ]),
-        }),
+        planText: expectedPlanText,
       }),
     );
   });

@@ -99,10 +99,10 @@ export class SessionHandle {
   }
 
   /**
-   * Get the plan submitted via the submit_plan tool.
+   * Get the raw plan text submitted via confirmation.
    */
-  get submittedPlan() {
-    return this.conversation.submittedPlan;
+  get submittedPlanText() {
+    return this.conversation.submittedPlanText;
   }
 
   /**
@@ -157,6 +157,8 @@ export interface SessionManagerConfig {
   evictionIntervalMs?: number;
   maxActiveSessions?: number;
   defaultBranch?: string;
+  /** Default repo URL (e.g. "git@github.com:user/repo.git"). Passed to PlanConversation. */
+  repoUrl?: string;
   log?: LogFn;
   /** Cursor CLI subprocess timeout in ms. Passed to PlanConversation. */
   timeoutMs?: number;
@@ -187,6 +189,7 @@ export class SessionManager {
   private workingDir: string;
   private conversationRepo: ConversationRepository;
   private defaultBranch?: string;
+  private repoUrl?: string;
   private evictionTimer?: NodeJS.Timeout;
   private log: LogFn;
 
@@ -202,6 +205,7 @@ export class SessionManager {
     this.workingDir = config.workingDir;
     this.conversationRepo = config.conversationRepo;
     this.defaultBranch = config.defaultBranch;
+    this.repoUrl = config.repoUrl;
     this.log = config.log ?? defaultLog;
     this.sessionTtlMs = config.sessionTtlMs ?? 30 * 60 * 1000; // 30 minutes
     this.evictionIntervalMs = config.evictionIntervalMs ?? 5 * 60 * 1000; // 5 minutes
@@ -289,6 +293,7 @@ export class SessionManager {
         threadTs: id.threadTs,
         conversationRepo: this.conversationRepo,
         defaultBranch: this.defaultBranch,
+        repoUrl: this.repoUrl,
         log: this.log,
         timeoutMs: this.timeoutMs,
       });
@@ -315,6 +320,7 @@ export class SessionManager {
         threadTs: id.threadTs,
         conversationRepo: this.conversationRepo,
         defaultBranch: this.defaultBranch,
+        repoUrl: this.repoUrl,
         log: this.log,
         timeoutMs: this.timeoutMs,
       });

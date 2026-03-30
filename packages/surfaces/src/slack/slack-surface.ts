@@ -15,7 +15,6 @@ import type { SlackMessage } from './slack-formatter.js';
 import { PlanConversation } from './plan-conversation.js';
 import { SessionManager, SessionIdentifier } from './thread-session-manager.js';
 import type { ConversationRepository } from '@invoker/persistence';
-import type { PlanDefinition } from '@invoker/core';
 
 // ── Config ──────────────────────────────────────────────────
 
@@ -38,6 +37,8 @@ export interface SlackSurfaceConfig {
   adminUserIds?: string[];
   /** Default branch name (e.g. "master"). Used when plan YAML omits baseBranch. */
   defaultBranch?: string;
+  /** Default repo URL (e.g. "git@github.com:user/repo.git"). Used when plan YAML omits repoUrl. */
+  repoUrl?: string;
   /** Optional structured log callback for activity tracking. */
   log?: LogFn;
   /** Enable immediate acknowledgment when bot receives a message. Default: true. */
@@ -60,7 +61,7 @@ export interface SlackSurfaceConfig {
 interface ConversationLike {
   sendMessage(message: string): Promise<string>;
   readonly planSubmitted: boolean;
-  readonly submittedPlan: PlanDefinition | null;
+  readonly submittedPlanText: string | null;
 }
 
 // ── SlackSurface ────────────────────────────────────────────
@@ -77,6 +78,7 @@ export class SlackSurface implements Surface {
   private cursorCommand: string;
   private workingDir?: string;
   private defaultBranch?: string;
+  private repoUrl?: string;
   private conversationRepo?: ConversationRepository;
   private sessionManager?: SessionManager;
   /** Bot user ID, resolved on start. */
@@ -115,6 +117,7 @@ export class SlackSurface implements Surface {
     this.model = config.model;
     this.workingDir = config.workingDir;
     this.defaultBranch = config.defaultBranch;
+    this.repoUrl = config.repoUrl;
     this.conversationRepo = config.conversationRepo;
     this.adminUserIds = new Set(config.adminUserIds ?? []);
     this.enableImmediateAck = config.enableImmediateAck ?? true;
@@ -136,6 +139,7 @@ export class SlackSurface implements Surface {
         workingDir: config.workingDir ?? process.cwd(),
         conversationRepo: config.conversationRepo,
         defaultBranch: config.defaultBranch,
+        repoUrl: config.repoUrl,
         log: this.log,
         timeoutMs: (this.planningTimeoutSeconds ?? 7_200) * 1_000,
       });
@@ -424,13 +428,13 @@ export class SlackSurface implements Surface {
       }
       const tPosting = Date.now();
 
-      if (conversation.planSubmitted && conversation.submittedPlan) {
-        this.log('slack', 'info', `[SESSION_SUBMIT] Plan submitted via confirmation (thread_ts=${threadTs}, plan="${conversation.submittedPlan.name}")`);
+      if (conversation.planSubmitted && conversation.submittedPlanText) {
+        this.log('slack', 'info', `[SESSION_SUBMIT] Plan submitted via confirmation (thread_ts=${threadTs})`);
         await this.sayWithRateLimitRetry(say, {
-          text: `Starting execution of "${conversation.submittedPlan.name}"...`,
+          text: `Starting plan execution...`,
           thread_ts: threadTs,
         });
-        await this.onCommand?.({ type: 'start_plan', plan: conversation.submittedPlan });
+        await this.onCommand?.({ type: 'start_plan', planText: conversation.submittedPlanText });
         this.cleanupSession(threadTs, 'plan_submitted');
       }
       const tEnd = Date.now();
@@ -690,6 +694,7 @@ export class SlackSurface implements Surface {
         threadTs,
         conversationRepo: this.conversationRepo,
         defaultBranch: this.defaultBranch,
+        repoUrl: this.repoUrl,
         timeoutMs: (this.planningTimeoutSeconds ?? 7_200) * 1_000,
       });
       this.planConversations.set(threadTs, conversation);
@@ -754,6 +759,7 @@ export class SlackSurface implements Surface {
             threadTs: entry.threadTs,
             conversationRepo: this.conversationRepo,
             defaultBranch: this.defaultBranch,
+            repoUrl: this.repoUrl,
           });
           await conversation.init();
           this.planConversations.set(entry.threadTs, conversation);

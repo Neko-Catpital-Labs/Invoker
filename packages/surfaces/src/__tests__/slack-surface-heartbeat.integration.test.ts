@@ -68,7 +68,7 @@ vi.mock('@slack/bolt', () => {
 const mockSendMessage = vi.fn();
 const mockPlanConversation = {
   sendMessage: mockSendMessage,
-  submittedPlan: null as any,
+  submittedPlanText: null as any,
   planSubmitted: false,
   init: vi.fn().mockResolvedValue(undefined),
 };
@@ -104,7 +104,7 @@ describe('SlackSurface Heartbeat - Integration Tests', () => {
     vi.useFakeTimers();
     apiCalls.length = 0;
     mockSendMessage.mockReset();
-    mockPlanConversation.submittedPlan = null;
+    mockPlanConversation.submittedPlanText = null;
     mockPlanConversation.planSubmitted = false;
   });
 

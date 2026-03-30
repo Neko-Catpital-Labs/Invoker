@@ -203,7 +203,7 @@ export interface ClaudeMessage {
 
 export interface InvokerAPI {
   getClaudeSession: (sessionId: string) => Promise<ClaudeMessage[] | null>;
-  loadPlan: (plan: PlanDefinition) => Promise<void>;
+  loadPlan: (planText: string) => Promise<void>;
   start: () => Promise<TaskState[]>;
   stop: () => Promise<void>;
   clear: () => Promise<void>;

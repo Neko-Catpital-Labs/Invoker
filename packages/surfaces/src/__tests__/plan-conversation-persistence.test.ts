@@ -165,8 +165,9 @@ describe('PlanConversation persistence', () => {
 
       const reply = await conv2.sendMessage('yes');
       expect(reply).toContain('submitted for execution');
-      expect(conv2.submittedPlan).not.toBeNull();
-      expect(conv2.submittedPlan!.name).toBe('Test Plan');
+      expect(conv2.submittedPlanText).not.toBeNull();
+      expect(typeof conv2.submittedPlanText).toBe('string');
+      expect(conv2.submittedPlanText).toContain('Test Plan');
     });
 
     it('recovers planSubmitted state from a previous session', async () => {
@@ -221,7 +222,7 @@ describe('PlanConversation persistence', () => {
       const conv = createConversation('ts-no-state');
       await conv.init();
       expect(conv.history).toHaveLength(0);
-      expect(conv.submittedPlan).toBeNull();
+      expect(conv.submittedPlanText).toBeNull();
       expect(conv.planSubmitted).toBe(false);
     });
   });
@@ -239,7 +240,7 @@ describe('PlanConversation persistence', () => {
 
       expect(repo.loadConversation('ts-reset')).toBeNull();
       expect(conv.history).toHaveLength(0);
-      expect(conv.submittedPlan).toBeNull();
+      expect(conv.submittedPlanText).toBeNull();
       expect(conv.planSubmitted).toBe(false);
     });
 
@@ -281,7 +282,7 @@ describe('PlanConversation persistence', () => {
 
       const reply = await conv.sendMessage('yes');
       expect(reply).toContain('Plan B');
-      expect(conv.submittedPlan!.name).toBe('Plan B');
+      expect(conv.submittedPlanText).toContain('Plan B');
     });
 
     it('complex plan is correctly found by confirmation', async () => {
@@ -323,7 +324,11 @@ tasks:
       const reply = await conv.sendMessage('yes');
       expect(reply).toContain('submitted for execution');
 
-      const plan = conv.submittedPlan!;
+      const planText = conv.submittedPlanText!;
+      expect(typeof planText).toBe('string');
+      // Parse to verify structure is preserved
+      const { parse: parseYaml } = await import('yaml');
+      const plan = parseYaml(planText) as Record<string, any>;
       expect(plan.name).toBe('Complex Plan');
       expect(plan.onFinish).toBe('pull_request');
       expect(plan.baseBranch).toBe('develop');
@@ -371,7 +376,7 @@ tasks:
 
       await conv2.init();
       expect(conv2.history).toHaveLength(0);
-      expect(conv2.submittedPlan).toBeNull();
+      expect(conv2.submittedPlanText).toBeNull();
     });
   });
 
@@ -398,8 +403,8 @@ tasks:
       const reply = await conv2.sendMessage('execute');
 
       expect(conv2.planSubmitted).toBe(true);
-      expect(conv2.submittedPlan).not.toBeNull();
-      expect(conv2.submittedPlan!.name).toBe('Test Plan');
+      expect(conv2.submittedPlanText).not.toBeNull();
+      expect(conv2.submittedPlanText).toContain('Test Plan');
 
       const saved2 = repo.loadConversation(threadTs);
       expect(saved2!.messages.length).toBeGreaterThanOrEqual(4);

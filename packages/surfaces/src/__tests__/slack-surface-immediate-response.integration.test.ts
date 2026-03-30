@@ -105,7 +105,7 @@ vi.mock('@slack/bolt', () => {
 const mockSendMessage = vi.fn();
 const mockPlanConversation = {
   sendMessage: mockSendMessage,
-  submittedPlan: null as any,
+  submittedPlanText: null as any,
   planSubmitted: false,
   init: vi.fn().mockResolvedValue(undefined),
 };
@@ -124,7 +124,7 @@ describe('SlackSurface Immediate Response - Integration Tests', () => {
     receivedCommands = [];
     apiCalls.length = 0; // Clear API call history
     mockSendMessage.mockReset();
-    mockPlanConversation.submittedPlan = null;
+    mockPlanConversation.submittedPlanText = null;
     mockPlanConversation.planSubmitted = false;
   });
 
@@ -204,13 +204,10 @@ describe('SlackSurface Immediate Response - Integration Tests', () => {
         anthropicApiKey: 'test-anthropic-key',
       });
 
-      const plan = {
-        name: 'Debug Issue',
-        tasks: [{ id: 't1', description: 'Run debugger', dependencies: [] }],
-      };
+      const planText = 'name: "Debug Issue"\ntasks:\n  - id: t1\n    description: "Run debugger"\n    dependencies: []\n';
 
       mockSendMessage.mockImplementation(async () => {
-        mockPlanConversation.submittedPlan = plan;
+        mockPlanConversation.submittedPlanText = planText;
         mockPlanConversation.planSubmitted = true;
         return 'Plan ready. Submitting now...';
       });
@@ -253,11 +250,11 @@ describe('SlackSurface Immediate Response - Integration Tests', () => {
 
       // 3. Execution started message
       expect(apiCalls[2].method).toBe('postMessage');
-      expect(apiCalls[2].text).toContain('Starting execution');
+      expect(apiCalls[2].text).toContain('Starting');
 
-      // 4. Command should be emitted
+      // 4. Command should be emitted with raw plan text
       expect(receivedCommands).toEqual([
-        expect.objectContaining({ type: 'start_plan', plan }),
+        expect.objectContaining({ type: 'start_plan', planText }),
       ]);
     });
   });

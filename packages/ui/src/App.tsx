@@ -11,7 +11,7 @@
 
 import { useState, useCallback, useMemo, useEffect } from 'react';
 import yaml from 'js-yaml';
-import type { TaskState, PlanDefinition, TaskReplacementDef } from './types.js';
+import type { TaskState, TaskReplacementDef } from './types.js';
 import { useTasks } from './hooks/useTasks.js';
 import { useInvoker } from './hooks/useInvoker.js';
 import { TaskDAG } from './components/TaskDAG.js';
@@ -214,11 +214,12 @@ export function App() {
     async (planText: string) => {
       if (!invoker) return;
       try {
-        const plan = yaml.load(planText) as PlanDefinition;
-        await invoker.loadPlan(plan);
+        await invoker.loadPlan(planText);
         setHasLoadedPlan(true);
-        setPlanName(plan.name ?? 'Untitled Plan');
-        setOnFinish(plan.onFinish ?? 'merge');
+        // Parse locally just for UI display state
+        const parsed = yaml.load(planText) as any;
+        setPlanName(parsed?.name ?? 'Untitled Plan');
+        setOnFinish(parsed?.onFinish ?? 'merge');
         refreshTasks();
       } catch (err) {
         console.error('Failed to load plan:', err);

@@ -6,7 +6,7 @@
  */
 
 import type { TaskState, TaskDelta, TaskStateChanges } from '@invoker/core';
-import type { PlanDefinition } from '@invoker/core';
+
 
 // ── Task Replacement ────────────────────────────────────────
 
@@ -72,7 +72,7 @@ export interface ClaudeMessage {
 
 export interface InvokerAPI {
   getClaudeSession: (sessionId: string) => Promise<ClaudeMessage[] | null>;
-  loadPlan: (plan: PlanDefinition) => Promise<void>;
+  loadPlan: (planText: string) => Promise<void>;
   start: () => Promise<TaskState[]>;
   stop: () => Promise<void>;
   clear: () => Promise<void>;

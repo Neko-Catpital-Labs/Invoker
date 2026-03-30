@@ -49,7 +49,7 @@ vi.mock('@slack/bolt', () => {
 const mockSendMessage = vi.fn();
 const mockPlanConversation = {
   sendMessage: mockSendMessage,
-  submittedPlan: null as any,
+  submittedPlanText: null as any,
   planSubmitted: false,
 };
 
@@ -447,7 +447,7 @@ describe('SlackSurface', () => {
 
     beforeEach(() => {
       mockSendMessage.mockReset();
-      mockPlanConversation.submittedPlan = null;
+      mockPlanConversation.submittedPlanText = null;
       mockPlanConversation.planSubmitted = false;
 
       surfaceWithApi = new SlackSurface({
@@ -460,9 +460,9 @@ describe('SlackSurface', () => {
     });
 
     it('calls start_plan when planSubmitted is true after sendMessage', async () => {
-      const plan = { name: 'Test Plan', tasks: [{ id: 't1', description: 'Do something', dependencies: [] }] };
+      const planText = 'name: "Test Plan"\ntasks:\n  - id: t1\n    description: "Do something"\n    dependencies: []\n';
       mockSendMessage.mockImplementation(async () => {
-        mockPlanConversation.submittedPlan = plan;
+        mockPlanConversation.submittedPlanText = planText;
         mockPlanConversation.planSubmitted = true;
         return 'Submitting plan now.';
       });
@@ -488,18 +488,18 @@ describe('SlackSurface', () => {
         text: 'Submitting plan now.',
       }));
       expect(say).toHaveBeenCalledWith(expect.objectContaining({
-        text: expect.stringContaining('Starting execution'),
+        text: expect.stringContaining('Starting'),
       }));
 
-      // Should emit start_plan command
+      // Should emit start_plan command with raw plan text
       expect(receivedCommands).toEqual([
-        expect.objectContaining({ type: 'start_plan', plan }),
+        expect.objectContaining({ type: 'start_plan', planText }),
       ]);
     });
 
     it('does not call start_plan when plan exists but planSubmitted is false', async () => {
       mockSendMessage.mockImplementation(async () => {
-        mockPlanConversation.submittedPlan = null;
+        mockPlanConversation.submittedPlanText = null;
         mockPlanConversation.planSubmitted = false;
         return 'Here is the plan. Want me to run it?';
       });
@@ -530,7 +530,7 @@ describe('SlackSurface', () => {
 
     it('posts messages normally when immediate ack is disabled', async () => {
       mockSendMessage.mockImplementation(async () => {
-        mockPlanConversation.submittedPlan = null;
+        mockPlanConversation.submittedPlanText = null;
         mockPlanConversation.planSubmitted = false;
         return 'Here is my response.';
       });
@@ -579,7 +579,7 @@ describe('SlackSurface', () => {
 
       mockSendMessage.mockResolvedValue('Reply from Claude');
       mockPlanConversation.planSubmitted = false;
-      mockPlanConversation.submittedPlan = null;
+      mockPlanConversation.submittedPlanText = null;
 
       await surfaceWithTyping.start(async () => {});
 
@@ -622,7 +622,7 @@ describe('SlackSurface', () => {
 
       mockSendMessage.mockResolvedValue('Reply');
       mockPlanConversation.planSubmitted = false;
-      mockPlanConversation.submittedPlan = null;
+      mockPlanConversation.submittedPlanText = null;
 
       await surfaceNoTyping.start(async () => {});
 
