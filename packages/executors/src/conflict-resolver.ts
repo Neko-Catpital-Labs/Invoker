@@ -51,7 +51,7 @@ export async function resolveConflictWithClaudeImpl(
 ): Promise<void> {
   const task = host.orchestrator.getTask(taskId);
   if (!task) throw new Error(`Task ${taskId} not found`);
-  if (task.status !== 'failed' && task.status !== 'running') {
+  if (task.status !== 'failed' && task.status !== 'running' && task.status !== 'fixing_with_ai') {
     throw new Error(`Task ${taskId} is not in a resolvable state (status: ${task.status})`);
   }
 
@@ -250,7 +250,7 @@ export async function fixWithClaudeImpl(
 ): Promise<void> {
   const task = host.orchestrator.getTask(taskId);
   if (!task) throw new Error(`Task ${taskId} not found`);
-  if (task.status !== 'failed' && task.status !== 'running') {
+  if (task.status !== 'failed' && task.status !== 'running' && task.status !== 'fixing_with_ai') {
     throw new Error(`Task ${taskId} is not in a fixable state (status: ${task.status})`);
   }
 
