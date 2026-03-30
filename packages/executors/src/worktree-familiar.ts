@@ -376,6 +376,9 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
         args: resume.args,
         cwd: meta.workspacePath,
       };
+      console.log(
+        `[agent-session-trace] WorktreeFamiliar.getRestoredTerminalSpec: task="${meta.taskId}" resume with agentSessionId=${meta.agentSessionId}`,
+      );
       console.log(`[WorktreeFamiliar] getRestoredTerminalSpec task="${meta.taskId}" → agent --resume spec, cwd="${spec.cwd}"`);
       return spec;
     }

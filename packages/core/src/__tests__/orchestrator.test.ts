@@ -3012,6 +3012,40 @@ describe('Orchestrator', () => {
       expect(mergeTask.execution.reviewStatus).toBeUndefined();
     });
 
+    it('restartWorkflow clears agentSessionId and containerId', () => {
+      const testPersistence = new InMemoryPersistence();
+      const testBus = new InMemoryBus();
+      const wf = 'workflow-agent-session-clear';
+
+      testPersistence.saveTask(wf, {
+        id: 't-sess',
+        description: 'Had agent metadata',
+        status: 'completed',
+        dependencies: [],
+        createdAt: new Date(),
+        config: { workflowId: wf },
+        execution: {
+          agentSessionId: 'stale-session-uuid',
+          containerId: 'stale-container-id',
+          commit: 'abc123',
+          exitCode: 0,
+        },
+      });
+
+      const testOrchestrator = new Orchestrator({
+        persistence: testPersistence,
+        messageBus: testBus,
+        maxConcurrency: 3,
+      });
+
+      testOrchestrator.syncFromDb(wf);
+      testOrchestrator.restartWorkflow(wf);
+
+      const t = testOrchestrator.getTask('t-sess')!;
+      expect(t.execution.agentSessionId).toBeUndefined();
+      expect(t.execution.containerId).toBeUndefined();
+    });
+
     it('drainScheduler sets lastHeartbeatAt when starting a task', () => {
       orchestrator.loadPlan({
         name: 'heartbeat-start-test',

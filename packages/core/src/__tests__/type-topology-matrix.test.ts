@@ -390,11 +390,10 @@ describe('Type × Topology Matrix', () => {
       expect(orchestrator.getTask('A')!.execution.agentSessionId).toBe('sess-1');
 
       orchestrator.restartTask('A');
-      // restartTask clears commit but may or may not clear agentSessionId
-      // This test documents the actual behavior
       const restarted = orchestrator.getTask('A')!;
       expect(restarted.status).toBe('running');
       expect(restarted.execution.commit).toBeUndefined();
+      expect(restarted.execution.agentSessionId).toBeUndefined();
     });
 
     it('diamond: B(claude) + C(command), both complete → D starts', () => {

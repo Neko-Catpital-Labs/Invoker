@@ -308,6 +308,9 @@ export class TaskExecutor {
         },
       };
       this.persistence.updateTask(task.id, changes);
+      console.log(
+        `[agent-session-trace] TaskExecutor.persistStartMetadata task=${task.id} agentSessionId=${handle.agentSessionId ?? 'null'}`,
+      );
       console.log(`[trace] TaskExecutor: persisted metadata for task=${task.id}`);
     }
 

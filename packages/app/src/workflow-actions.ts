@@ -34,6 +34,7 @@ export function bumpGenerationAndRestart(
   const nextGen = (workflow.generation ?? 0) + 1;
   persistence.updateWorkflow(workflowId, { generation: nextGen });
   console.log(`[workflow] bumped generation to ${nextGen} for ${workflowId}`);
+  console.log(`[agent-session-trace] bumpGenerationAndRestart: calling restartWorkflow(${workflowId})`);
   return orchestrator.restartWorkflow(workflowId);
 }
 
@@ -100,6 +101,9 @@ export async function rebaseAndRetry(
   const workflowId = task.config.workflowId;
 
   const workflow = deps.persistence.loadWorkflow(workflowId);
+  console.log(
+    `[agent-session-trace] rebaseAndRetry: taskId=${taskId} workflowId=${workflowId} → pool prep (if taskExecutor+repoUrl) → bumpGenerationAndRestart → restartWorkflow`,
+  );
   if (deps.taskExecutor && workflow?.repoUrl) {
     await deps.taskExecutor.preparePoolForRebaseRetry(workflowId, workflow.repoUrl, workflow.baseBranch);
   }
