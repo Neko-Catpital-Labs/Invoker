@@ -662,6 +662,9 @@ export class TaskExecutor {
   /** @internal */ async createMergeWorktree(ref: string, label: string): Promise<string> {
     const clonePath = resolve(homedir(), '.invoker', 'merge-clones', `${label}-${Date.now()}`);
     mkdirSync(resolve(homedir(), '.invoker', 'merge-clones'), { recursive: true });
+    // Resolve ref to SHA in the host repo — branch names may not resolve in the
+    // --no-checkout clone (git interprets them as paths and rejects --detach).
+    const refSha = (await this.execGitReadonly(['rev-parse', ref])).trim();
     // Clone with hard-linked objects from host repo — near-instant, fully isolated refs
     await this.execGitReadonly(['clone', '--local', '--no-checkout', this.cwd, clonePath]);
     // Detach HEAD so the fetch can overwrite all branch refs (including the default branch)
@@ -674,7 +677,7 @@ export class TaskExecutor {
     // operations go directly to GitHub, bypassing the user's working directory.
     const realOrigin = (await this.execGitReadonly(['remote', 'get-url', 'origin'])).trim();
     await this.execGitIn(['remote', 'set-url', 'origin', realOrigin], clonePath);
-    await this.execGitIn(['checkout', '--detach', ref], clonePath);
+    await this.execGitIn(['checkout', '--detach', refSha], clonePath);
     return clonePath;
   }
 
