@@ -273,7 +273,14 @@ export async function fixWithClaudeImpl(
     return;
   }
 
-  const cwd = (workspacePath && existsSync(workspacePath)) ? workspacePath : host.cwd;
+  if (!workspacePath || !existsSync(workspacePath)) {
+    throw new Error(
+      `fixWithClaude: task "${taskId}" has no valid workspace ` +
+      `(workspacePath=${workspacePath ?? 'undefined'}). ` +
+      `All tasks must have a managed workspace; refusing to fall back to host repo.`,
+    );
+  }
+  const cwd = workspacePath;
 
   const { stdout: output, sessionId } = await host.spawnAgentFix(prompt, cwd);
   if (output) {

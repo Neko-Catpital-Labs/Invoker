@@ -325,7 +325,12 @@ export class TaskExecutor {
       const changes = {
         config: { familiarType: familiar.type },
         execution: {
-          workspacePath: handle.workspacePath ?? this.cwd,
+          workspacePath: handle.workspacePath ?? (() => {
+            throw new Error(
+              `Familiar "${familiar.type}" did not provide workspacePath for task "${task.id}". ` +
+              `All familiars must set workspacePath; refusing to fall back to host repo.`,
+            );
+          })(),
           agentSessionId: handle.agentSessionId ?? undefined,
           agentName: handle.agentName ?? undefined,
           containerId: handle.containerId ?? undefined,

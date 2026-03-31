@@ -340,7 +340,7 @@ describe('POST /api/tasks/:id/approve', () => {
     expect(mocks.orchestrator.approve).toHaveBeenCalledWith('task-1');
   });
 
-  it('handles post-fix merge tasks', async () => {
+  it('routes downstream merge nodes to executeTasks (not publishAfterFix)', async () => {
     mocks.orchestrator.approve.mockResolvedValue([
       makeTask({ id: 'merge-1', status: 'running', config: { isMergeNode: true } }),
       makeTask({ id: 'task-2', status: 'running', config: {} }),
@@ -348,9 +348,24 @@ describe('POST /api/tasks/:id/approve', () => {
 
     const res = await request(port, 'POST', '/api/tasks/task-1/approve');
     expect(res.status).toBe(200);
-    expect(mocks.taskExecutor.publishAfterFix).toHaveBeenCalled();
+    expect(mocks.taskExecutor.publishAfterFix).not.toHaveBeenCalled();
     expect(mocks.taskExecutor.executeTasks).toHaveBeenCalledWith(
-      expect.arrayContaining([expect.objectContaining({ id: 'task-2' })]),
+      expect.arrayContaining([
+        expect.objectContaining({ id: 'merge-1' }),
+        expect.objectContaining({ id: 'task-2' }),
+      ]),
+    );
+  });
+
+  it('routes post-fix merge nodes to publishAfterFix', async () => {
+    mocks.orchestrator.approve.mockResolvedValue([
+      makeTask({ id: 'task-1', status: 'running', config: { isMergeNode: true } }),
+    ]);
+
+    const res = await request(port, 'POST', '/api/tasks/task-1/approve');
+    expect(res.status).toBe(200);
+    expect(mocks.taskExecutor.publishAfterFix).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'task-1' }),
     );
   });
 

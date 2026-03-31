@@ -3875,7 +3875,7 @@ describe('TaskExecutor', () => {
         id: 'fix-task',
         status: 'failed',
         config: { command: 'npm test' },
-        execution: { branch: 'invoker/fix-task', workspacePath: '/tmp/workspace' },
+        execution: { branch: 'invoker/fix-task', workspacePath: '/tmp' },
       }));
       const orchestrator = { getTask: (id: string) => tasks.get(id) };
       const appendTaskOutput = vi.fn();
@@ -3897,7 +3897,7 @@ describe('TaskExecutor', () => {
         id: 'fix-task',
         status: 'failed',
         config: { command: 'npm test' },
-        execution: { branch: 'invoker/fix-task', workspacePath: '/tmp/workspace' },
+        execution: { branch: 'invoker/fix-task', workspacePath: '/tmp' },
       }));
       const orchestrator = { getTask: (id: string) => tasks.get(id) };
       const appendTaskOutput = vi.fn();
@@ -3919,7 +3919,7 @@ describe('TaskExecutor', () => {
         id: 'fix-task',
         status: 'failed',
         config: { command: 'npm test' },
-        execution: { branch: 'invoker/fix-task' },
+        execution: { branch: 'invoker/fix-task', workspacePath: '/tmp' },
       }));
       const orchestrator = { getTask: (id: string) => tasks.get(id) };
       const appendTaskOutput = vi.fn();
