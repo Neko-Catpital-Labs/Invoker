@@ -118,28 +118,28 @@ export function MergeGateNode({ data }: MergeGateNodeProps) {
       </div>
 
       <div
-        className={`text-xs mt-1 ${colors.text} opacity-80 truncate`}
+        className={`text-xs mt-1 text-black truncate`}
         title={typeof label === 'string' ? label : undefined}
       >
         {label}
       </div>
 
       <div className="flex items-center gap-1 mt-1">
-        <svg className="w-3 h-3 text-gray-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <svg className="w-3 h-3 text-black shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
           <path strokeLinecap="round" strokeLinejoin="round" d="M7 7v10m0-10a2 2 0 11-4 0 2 2 0 014 0zm10 10a2 2 0 104 0 2 2 0 00-4 0zm0 0V7a4 4 0 00-4-4H9" />
         </svg>
-        <span className="text-xs font-mono text-gray-400 truncate" title={featureBranch ?? 'current'}>
+        <span className="text-xs font-mono text-black truncate" title={featureBranch ?? 'current'}>
           {featureBranch ?? 'current'}
         </span>
       </div>
 
       <div className="flex items-center gap-1 mt-1" data-testid="merge-branch-display">
-        <svg className="w-3 h-3 text-gray-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <svg className="w-3 h-3 text-black shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
           <path strokeLinecap="round" strokeLinejoin="round" d="M13 7l5 5m0 0l-5 5m5-5H6" />
         </svg>
         <span
           data-testid="merge-branch-label"
-          className="text-xs font-mono text-gray-400 truncate"
+          className="text-xs font-mono text-black truncate"
           title={baseBranch ?? 'default'}
         >
           {baseBranch ?? 'default'}
@@ -175,7 +175,7 @@ export function MergeGateNode({ data }: MergeGateNodeProps) {
 
       {summary && (
         <div
-          className="mt-1 text-xs text-gray-400 line-clamp-2 cursor-help"
+          className="mt-1 text-xs text-black line-clamp-2 cursor-help"
           title={summary}
           data-testid="merge-summary-preview"
         >

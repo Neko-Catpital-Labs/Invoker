@@ -18,6 +18,7 @@ import {
   assertPageScreenshot,
   E2E_REPO_URL,
 } from './fixtures/electron-app.js';
+import { stringify as yamlStringify } from 'yaml';
 
 /** Multi-task DAG for verifying deterministic layout ordering. */
 const DAG_DETERMINISM_PLAN = {
@@ -30,6 +31,22 @@ const DAG_DETERMINISM_PLAN = {
     { id: 'task-c', description: 'Task C (depends on A)', command: 'echo c', dependencies: ['task-a'] },
     { id: 'task-d', description: 'Task D (depends on A, B)', command: 'echo d', dependencies: ['task-a', 'task-b'] },
     { id: 'task-e', description: 'Task E (depends on C, D)', command: 'echo e', dependencies: ['task-c', 'task-d'] },
+  ],
+};
+
+/** Minimal plan that produces a merge gate in the DAG. */
+const MERGE_GATE_TEXT_VISUAL_PLAN = {
+  name: 'Merge gate text visual proof',
+  repoUrl: 'git@github.com:EdbertChan/Invoker.git',
+  onFinish: 'pull_request' as const,
+  mergeMode: 'github',
+  tasks: [
+    {
+      id: 'mg-visual-work',
+      description: 'Sole task before merge gate',
+      command: 'echo ok',
+      dependencies: [] as string[],
+    },
   ],
 };
 
@@ -155,5 +172,13 @@ test.describe('Visual proof capture', () => {
       },
     ]);
     await captureScreenshot(page, 'fixing-vs-fix-approval-colors');
+  });
+
+  test('merge-gate-node-text-black — merge gate visible', async ({ page }) => {
+    await page.evaluate((yaml) => window.invoker.loadPlan(yaml), yamlStringify(MERGE_GATE_TEXT_VISUAL_PLAN));
+    await page.locator('[data-testid="rf__node-mg-visual-work"]').waitFor({ state: 'visible', timeout: 15000 });
+    await expect(page.getByTestId('merge-gate-primary-label')).toBeVisible();
+    await expect(page.getByTestId('merge-branch-label')).toBeVisible();
+    await captureScreenshot(page, 'merge-gate-node-text-black');
   });
 });
