@@ -21,6 +21,9 @@ import {
   GitHubMergeGateProvider,
   ReviewProviderRegistry,
   remoteFetchForPool,
+  registerBuiltinAgents,
+  assertPlanExecutionAgentsRegistered,
+  type AgentRegistry,
 } from '@invoker/executors';
 import { loadConfig, type InvokerConfig } from './config.js';
 import { backupPlan } from './plan-backup.js';
@@ -29,6 +32,7 @@ import {
   rebaseAndRetry,
   rejectTask,
   resolveConflictWithClaudeAction,
+  resolveConflictWithCodexAction,
   restartTask as sharedRestartTask,
   restartWorkflow as sharedRestartWorkflow,
   editTaskCommand as sharedEditTaskCommand,
@@ -50,6 +54,7 @@ export interface HeadlessDeps {
   repoRoot: string;
   invokerConfig: InvokerConfig;
   initServices: () => Promise<void>;
+  executionAgentRegistry?: AgentRegistry;
   wireSlackBot: (deps: {
     executor: TaskExecutor;
     logFn: (source: string, level: string, message: string) => void;
@@ -89,6 +94,7 @@ function createHeadlessExecutor(
       registry.register(new GitHubMergeGateProvider());
       return registry;
     })(),
+    executionAgentRegistry: deps.executionAgentRegistry,
     callbacks: {
       onOutput: (taskId, data) => {
         process.stdout.write(`\x1b[2m[${taskId}]\x1b[0m ${data}`);
@@ -151,10 +157,10 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
       await headlessRestartWorkflow(args[1], deps);
       break;
     case 'fix':
-      await headlessFix(args[1], deps);
+      await headlessFix(args[1], deps, args[2]);
       break;
     case 'resolve-conflict':
-      await headlessResolveConflict(args[1], deps);
+      await headlessResolveConflict(args[1], deps, args[2]);
       break;
     case 'rebase-and-retry':
       await headlessRebaseAndRetry(args[1], deps);
@@ -222,8 +228,8 @@ ${BOLD}Usage:${RESET}
   electron dist/main.js --headless restart <id>       Restart a failed/stuck task
   electron dist/main.js --headless restart-workflow <workflowId>  Bump generation + rerun (no pool fetch)
   electron dist/main.js --headless rebase-and-retry <taskId>  Refresh pool base + rerun workflow
-  electron dist/main.js --headless fix <taskId>       Fix a failed task with Claude
-  electron dist/main.js --headless resolve-conflict <taskId>  Resolve merge conflict in worktree (Claude) + restart
+  electron dist/main.js --headless fix <taskId> [claude|codex]   Fix a failed task (default: claude)
+  electron dist/main.js --headless resolve-conflict <taskId> [claude|codex]  Resolve merge conflict + restart (default: claude)
   electron dist/main.js --headless edit <id> <cmd>    Edit task command and re-run
   electron dist/main.js --headless task-status <taskId>     Print raw task status
   electron dist/main.js --headless cancel <taskId>         Cancel task + all downstream
@@ -251,6 +257,8 @@ async function headlessRun(planPath: string, deps: HeadlessDeps, waitForApproval
 
   const yamlSource = await readFile(planPath, 'utf-8');
   const plan = await parsePlanFile(planPath);
+  const execRegistry = deps.executionAgentRegistry ?? registerBuiltinAgents();
+  assertPlanExecutionAgentsRegistered(plan, execRegistry);
   backupPlan(plan, yamlSource);
   console.log(`${BOLD}Loading plan: ${plan.name}${RESET}`);
   console.log(`Tasks: ${plan.tasks.length}\n`);
@@ -364,7 +372,7 @@ async function headlessStatus(deps: Pick<HeadlessDeps, 'orchestrator' | 'persist
 
 async function headlessApprove(taskId: string, deps: HeadlessDeps): Promise<void> {
   if (!taskId) throw new Error('Missing taskId.');
-  restoreWorkflowForTask(taskId, deps);
+  taskId = restoreWorkflowForTask(taskId, deps).resolvedTaskId;
   const te = createHeadlessExecutor(deps);
   wireHeadlessApproveHook(deps, te);
   const started = await deps.orchestrator.approve(taskId);
@@ -379,23 +387,23 @@ async function headlessApprove(taskId: string, deps: HeadlessDeps): Promise<void
 
 function headlessReject(taskId: string, deps: Pick<HeadlessDeps, 'orchestrator' | 'persistence'>, reason?: string): void {
   if (!taskId) throw new Error('Missing taskId.');
-  restoreWorkflowForTask(taskId, deps);
+  taskId = restoreWorkflowForTask(taskId, deps).resolvedTaskId;
   rejectTask(taskId, deps, reason);
   console.log(`Rejected task: ${taskId}${reason ? ` (reason: ${reason})` : ''}`);
 }
 
 function headlessInput(taskId: string, text: string, deps: Pick<HeadlessDeps, 'orchestrator' | 'persistence'>): void {
   if (!taskId || !text) throw new Error('Missing arguments. Usage: --headless input <taskId> <text>');
-  restoreWorkflowForTask(taskId, deps);
+  taskId = restoreWorkflowForTask(taskId, deps).resolvedTaskId;
   deps.orchestrator.provideInput(taskId, text);
   console.log(`Input provided to task: ${taskId}`);
 }
 
 async function headlessSelect(taskId: string, experimentId: string, deps: HeadlessDeps): Promise<void> {
   if (!taskId || !experimentId) throw new Error('Missing arguments. Usage: --headless select <taskId> <expId>');
-  const workflowId = restoreWorkflowForTask(taskId, deps);
-  sharedSelectExperiment(taskId, experimentId, deps);
-  console.log(`Selected experiment ${experimentId} for task: ${taskId}`);
+  const { workflowId, resolvedTaskId } = restoreWorkflowForTask(taskId, deps);
+  sharedSelectExperiment(resolvedTaskId, experimentId, deps);
+  console.log(`Selected experiment ${experimentId} for task: ${resolvedTaskId}`);
 
   const taskExecutor = createHeadlessExecutor(deps);
   const started = deps.orchestrator.resumeWorkflow(workflowId);
@@ -405,7 +413,7 @@ async function headlessSelect(taskId: string, experimentId: string, deps: Headle
 
 async function headlessRestart(taskId: string, deps: HeadlessDeps): Promise<void> {
   if (!taskId) throw new Error('Missing arguments. Usage: --headless restart <taskId>');
-  restoreWorkflowForTask(taskId, deps);
+  taskId = restoreWorkflowForTask(taskId, deps).resolvedTaskId;
 
   const started = sharedRestartTask(taskId, deps);
   const runnable = started.filter(t => t.status === 'running');
@@ -418,39 +426,50 @@ async function headlessRestart(taskId: string, deps: HeadlessDeps): Promise<void
   await waitForCompletion(deps.orchestrator, undefined, undefined);
 }
 
-async function headlessFix(taskId: string, deps: HeadlessDeps): Promise<void> {
-  if (!taskId) throw new Error('Missing taskId. Usage: --headless fix <taskId>');
-  restoreWorkflowForTask(taskId, deps);
+async function headlessFix(taskId: string, deps: HeadlessDeps, agentArg?: string): Promise<void> {
+  if (!taskId) throw new Error('Missing taskId. Usage: --headless fix <taskId> [claude|codex]');
+  taskId = restoreWorkflowForTask(taskId, deps).resolvedTaskId;
 
   const te = createHeadlessExecutor(deps);
   const { savedError } = deps.orchestrator.beginConflictResolution(taskId);
+  const agent = (agentArg ?? 'claude').toLowerCase() === 'codex' ? 'codex' : 'claude';
   try {
     const output = deps.persistence.getTaskOutput(taskId);
-    await te.fixWithClaude(taskId, output);
+    if (agent === 'codex') {
+      await te.fixWithCodex(taskId, output);
+    } else {
+      await te.fixWithClaude(taskId, output);
+    }
     deps.orchestrator.setFixAwaitingApproval(taskId, savedError);
-    console.log(`Fix applied for task: ${taskId}. Use 'approve ${taskId}' or 'reject ${taskId}' to finalize.`);
+    console.log(`Fix applied for task: ${taskId} (${agent}). Use 'approve ${taskId}' or 'reject ${taskId}' to finalize.`);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    deps.persistence.appendTaskOutput(taskId, `\n[Fix with Claude] Failed: ${msg}`);
+    const label = agent === 'codex' ? 'Codex' : 'Claude';
+    deps.persistence.appendTaskOutput(taskId, `\n[Fix with ${label}] Failed: ${msg}`);
     deps.orchestrator.revertConflictResolution(taskId, savedError, msg);
     throw err;
   }
 }
 
-async function headlessResolveConflict(taskId: string, deps: HeadlessDeps): Promise<void> {
-  if (!taskId) throw new Error('Missing taskId. Usage: --headless resolve-conflict <taskId>');
-  restoreWorkflowForTask(taskId, deps);
+async function headlessResolveConflict(taskId: string, deps: HeadlessDeps, agentArg?: string): Promise<void> {
+  if (!taskId) throw new Error('Missing taskId. Usage: --headless resolve-conflict <taskId> [claude|codex]');
+  taskId = restoreWorkflowForTask(taskId, deps).resolvedTaskId;
 
   const te = createHeadlessExecutor(deps);
-  await resolveConflictWithClaudeAction(taskId, { ...deps, taskExecutor: te });
+  const agent = (agentArg ?? 'claude').toLowerCase() === 'codex' ? 'codex' : 'claude';
+  if (agent === 'codex') {
+    await resolveConflictWithCodexAction(taskId, { ...deps, taskExecutor: te });
+  } else {
+    await resolveConflictWithClaudeAction(taskId, { ...deps, taskExecutor: te });
+  }
   const wfId = deps.orchestrator.getTask(taskId)?.config.workflowId;
   await waitForCompletion(deps.orchestrator, wfId, undefined);
-  console.log(`Resolve-conflict finished for task: ${taskId}`);
+  console.log(`Resolve-conflict finished for task: ${taskId} (${agent})`);
 }
 
 async function headlessRebaseAndRetry(taskId: string, deps: HeadlessDeps): Promise<void> {
   if (!taskId) throw new Error('Missing arguments. Usage: --headless rebase-and-retry <taskId>');
-  restoreWorkflowForTask(taskId, deps);
+  taskId = restoreWorkflowForTask(taskId, deps).resolvedTaskId;
 
   const te = createHeadlessExecutor(deps);
   const started = await rebaseAndRetry(taskId, { ...deps, taskExecutor: te });
@@ -484,7 +503,7 @@ async function headlessRestartWorkflow(workflowId: string, deps: HeadlessDeps): 
 
 async function headlessEdit(taskId: string, newCommand: string, deps: HeadlessDeps): Promise<void> {
   if (!taskId || !newCommand) throw new Error('Missing arguments. Usage: --headless edit <taskId> <newCommand>');
-  restoreWorkflowForTask(taskId, deps);
+  taskId = restoreWorkflowForTask(taskId, deps).resolvedTaskId;
 
   const started = sharedEditTaskCommand(taskId, newCommand, deps);
   console.log(`Edited task "${taskId}" command → "${newCommand}"`);
@@ -496,7 +515,7 @@ async function headlessEdit(taskId: string, newCommand: string, deps: HeadlessDe
 
 async function headlessEditType(taskId: string, familiarType: string, deps: HeadlessDeps): Promise<void> {
   if (!taskId || !familiarType) throw new Error('Missing arguments. Usage: --headless edit-type <taskId> <familiarType>');
-  restoreWorkflowForTask(taskId, deps);
+  taskId = restoreWorkflowForTask(taskId, deps).resolvedTaskId;
 
   const started = sharedEditTaskType(taskId, familiarType, deps);
   console.log(`Edited task "${taskId}" familiarType → "${familiarType}"`);
@@ -523,7 +542,7 @@ async function headlessAudit(taskId: string | undefined, deps: Pick<HeadlessDeps
 
 async function headlessCancel(taskId: string, deps: HeadlessDeps): Promise<void> {
   if (!taskId) throw new Error('Missing taskId. Usage: --headless cancel <taskId>');
-  restoreWorkflowForTask(taskId, deps);
+  taskId = restoreWorkflowForTask(taskId, deps).resolvedTaskId;
 
   const result = deps.orchestrator.cancelTask(taskId);
   console.log(`Cancelled ${result.cancelled.length} task(s): [${result.cancelled.join(', ')}]`);
@@ -539,6 +558,7 @@ async function headlessOpenTerminal(taskId: string, deps: HeadlessDeps): Promise
     persistence: deps.persistence,
     familiarRegistry: deps.familiarRegistry,
     repoRoot: deps.repoRoot,
+    executionAgentRegistry: deps.executionAgentRegistry,
     runningTaskReason: 'Task is still running. View output in logs.',
   });
   if (result.opened) {
@@ -551,7 +571,7 @@ async function headlessOpenTerminal(taskId: string, deps: HeadlessDeps): Promise
 
 function headlessTaskStatus(taskId: string, deps: Pick<HeadlessDeps, 'orchestrator' | 'persistence'>): void {
   if (!taskId) throw new Error('Missing taskId. Usage: --headless task-status <taskId>');
-  restoreWorkflowForTask(taskId, deps);
+  taskId = restoreWorkflowForTask(taskId, deps).resolvedTaskId;
   const task = deps.orchestrator.getTask(taskId);
   if (!task) throw new Error(`Task "${taskId}" not found`);
   console.log(task.status);
@@ -637,14 +657,18 @@ async function headlessSlack(deps: HeadlessDeps): Promise<void> {
 
 // ── Headless Helpers ─────────────────────────────────────────
 
-function restoreWorkflowForTask(taskId: string, deps: Pick<HeadlessDeps, 'orchestrator' | 'persistence'>): string {
+function restoreWorkflowForTask(
+  taskId: string,
+  deps: Pick<HeadlessDeps, 'orchestrator' | 'persistence'>,
+): { workflowId: string; resolvedTaskId: string } {
   const { orchestrator, persistence } = deps;
   const workflows = persistence.listWorkflows();
   for (const wf of workflows) {
     const tasks = persistence.loadTasks(wf.id);
-    if (tasks.some(t => t.id === taskId)) {
+    const match = tasks.find(t => t.id === taskId || t.id.endsWith('/' + taskId));
+    if (match) {
       orchestrator.resumeWorkflow(wf.id);
-      return wf.id;
+      return { workflowId: wf.id, resolvedTaskId: match.id };
     }
   }
   throw new Error(`Task "${taskId}" not found in any workflow`);
