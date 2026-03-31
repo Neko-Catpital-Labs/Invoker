@@ -48,6 +48,8 @@ export interface TaskConfig {
   readonly testPlan?: string;
   readonly reproCommand?: string;
   readonly utilization?: number;
+  /** Name of the execution agent to use (e.g. 'claude', 'codex'). Defaults to 'claude'. */
+  readonly executionAgent?: string;
 }
 
 // ── Task Execution (runtime state) ─────────────────────────
@@ -82,6 +84,8 @@ export interface TaskExecution {
     readonly conflictFiles: readonly string[];
   };
   readonly selectedAttemptId?: string;
+  /** Name of the ExecutionAgent that ran this task (e.g. 'claude', 'codex'). */
+  readonly agentName?: string;
 }
 
 // ── Task State ──────────────────────────────────────────────

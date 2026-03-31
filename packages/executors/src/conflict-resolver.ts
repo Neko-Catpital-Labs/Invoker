@@ -12,6 +12,7 @@ import { existsSync } from 'node:fs';
 import type { Orchestrator } from '@invoker/core';
 import type { SQLiteAdapter } from '@invoker/persistence';
 import { cleanElectronEnv } from './process-utils.js';
+import type { ExecutionAgent } from './agent.js';
 
 // ── Host interface ───────────────────────────────────────
 
@@ -35,7 +36,7 @@ export interface ConflictResolverHost {
   execGitIn(args: string[], dir: string): Promise<string>;
   createMergeWorktree(ref: string, label: string): Promise<string>;
   removeMergeWorktree(dir: string): Promise<void>;
-  spawnAgentFix(prompt: string, cwd: string): Promise<{ stdout: string; sessionId: string }>;
+  spawnAgentFix(prompt: string, cwd: string, agentName?: string): Promise<{ stdout: string; sessionId: string }>;
   getRemoteTargetConfig?(targetId: string): RemoteTargetConfig | undefined;
 }
 
@@ -360,6 +361,35 @@ claude --session-id "${sessionId}" -p "$PROMPT" --dangerously-skip-permissions
 /**
  * Execute a bash script on a remote host via SSH. Throws on non-zero exit.
  */
+/**
+ * Spawn an agent fix using the registry-backed ExecutionAgent.buildFixCommand().
+ */
+export function spawnAgentFixViaRegistry(
+  prompt: string,
+  cwd: string,
+  agent: ExecutionAgent,
+): Promise<{ stdout: string; sessionId: string }> {
+  const spec = agent.buildFixCommand?.(prompt);
+  if (!spec) throw new Error(`Agent "${agent.name}" does not support fix commands`);
+  const sessionId = spec.sessionId ?? randomUUID();
+  return new Promise<{ stdout: string; sessionId: string }>((resolve, reject) => {
+    const child = spawn(spec.cmd, spec.args, {
+      cwd,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: cleanElectronEnv(),
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
+    child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
+    child.on('close', (code) => {
+      if (code === 0) resolve({ stdout, sessionId });
+      else reject(new Error(`${agent.name} fix exited with code ${code}: ${stderr.trim()}`));
+    });
+    child.on('error', (err) => reject(err));
+  });
+}
+
 function execRemoteSsh(target: RemoteTargetConfig, script: string): Promise<string> {
   const sshArgs = [
     '-i', target.sshKeyPath,

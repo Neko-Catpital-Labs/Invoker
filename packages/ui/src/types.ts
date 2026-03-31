@@ -51,6 +51,7 @@ export interface TaskConfig {
   readonly autoFix?: boolean;
   readonly remoteTargetId?: string;
   readonly isMergeNode?: boolean;
+  readonly executionAgent?: string;
   readonly summary?: string;
   readonly problem?: string;
   readonly approach?: string;
@@ -88,6 +89,7 @@ export interface TaskExecution {
     readonly failedBranch: string;
     readonly conflictFiles: readonly string[];
   };
+  readonly agentName?: string;
 }
 
 // ── Task State ──────────────────────────────────────────────
@@ -190,6 +192,7 @@ export interface TaskReplacementDef {
   dependencies?: string[];
   familiarType?: string;
   autoFix?: boolean;
+  executionAgent?: string;
 }
 
 // ── IPC Bridge API ──────────────────────────────────────────
@@ -242,8 +245,8 @@ export interface InvokerAPI {
   }>;
   setMergeBranch: (workflowId: string, baseBranch: string) => Promise<void>;
   approveMerge: (workflowId: string) => Promise<void>;
-  resolveConflict: (taskId: string) => Promise<void>;
-  fixWithClaude: (taskId: string) => Promise<void>;
+  resolveConflict: (taskId: string, agentName?: string) => Promise<void>;
+  fixWithClaude: (taskId: string, agentName?: string) => Promise<void>;
   setMergeMode: (workflowId: string, mergeMode: string) => Promise<void>;
   checkPrStatuses: () => Promise<void>;
 

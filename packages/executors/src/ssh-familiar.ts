@@ -186,7 +186,8 @@ fi`;
       payload = command;
     } else if (request.actionType === 'claude') {
       if (this.agentRegistry) {
-        const agent = this.agentRegistry.getOrThrow('claude');
+        const requestedAgent = request.inputs.executionAgent ?? 'claude';
+        const agent = this.agentRegistry.getOrThrow(requestedAgent);
         const fullPrompt = this.buildFullPrompt(request);
         const spec = agent.buildCommand(fullPrompt);
         agentSessionId = spec.sessionId;

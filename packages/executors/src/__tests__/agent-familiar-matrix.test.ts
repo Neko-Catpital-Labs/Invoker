@@ -15,6 +15,7 @@ import type { WorkRequest } from '@invoker/protocol';
 import type { ExecutionAgent, AgentCommandSpec } from '../agent.js';
 import { AgentRegistry } from '../agent-registry.js';
 import { ClaudeExecutionAgent } from '../agents/claude-execution-agent.js';
+import { CodexExecutionAgent } from '../agents/codex-execution-agent.js';
 
 // ── Mock agent for testing alternative stdinMode + args ──────
 
@@ -70,6 +71,19 @@ const agents = [
     expectedCmdPrefix: 'claude-test',
     expectedResumeFlag: '--resume',
     hasContainerRequirements: true,
+    hasBuildFixCommand: true,
+    expectedLinuxTerminalTail: 'exec_bash' as const,
+  },
+  {
+    label: 'CodexExecutionAgent',
+    create: () => new CodexExecutionAgent({ command: 'codex-test' }),
+    name: 'codex',
+    stdinMode: 'ignore' as const,
+    expectedCmdPrefix: 'codex-test',
+    expectedResumeFlag: 'resume',
+    hasContainerRequirements: false,
+    hasBuildFixCommand: true,
+    expectedLinuxTerminalTail: 'exec_bash' as const,
   },
   {
     label: 'MockPipeAgent',
@@ -79,6 +93,8 @@ const agents = [
     expectedCmdPrefix: 'mock-agent',
     expectedResumeFlag: '--resume',
     hasContainerRequirements: true,
+    hasBuildFixCommand: false,
+    expectedLinuxTerminalTail: undefined,
   },
 ];
 
@@ -148,7 +164,22 @@ describe('Agent × Familiar matrix', () => {
       });
     }
 
-    // 7. Command task (no agent) — agent should not be involved
+    // 7. buildFixCommand (if applicable)
+    if (agentDef.hasBuildFixCommand) {
+      it('buildFixCommand returns correct cmd and args', () => {
+        const spec = agent.buildFixCommand?.('Fix the failing test');
+        expect(spec).toBeDefined();
+        expect(spec!.cmd).toBe(agentDef.expectedCmdPrefix);
+        expect(spec!.args.length).toBeGreaterThan(0);
+      });
+    }
+
+    // 8. linuxTerminalTail matches expected value
+    it(`linuxTerminalTail is "${agentDef.expectedLinuxTerminalTail ?? 'undefined'}"`, () => {
+      expect(agent.linuxTerminalTail).toBe(agentDef.expectedLinuxTerminalTail);
+    });
+
+    // 9. Command task (no agent) — agent should not be involved
     it('command actionType does not use agent (baseline)', () => {
       // Verify that a command-type request produces shell args, not agent args
       const commandReq = makeCommandRequest('npm test');

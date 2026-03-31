@@ -32,7 +32,6 @@ import {
   rebaseAndRetry,
   rejectTask,
   resolveConflictWithClaudeAction,
-  resolveConflictWithCodexAction,
   restartTask as sharedRestartTask,
   restartWorkflow as sharedRestartWorkflow,
   editTaskCommand as sharedEditTaskCommand,
@@ -432,20 +431,15 @@ async function headlessFix(taskId: string, deps: HeadlessDeps, agentArg?: string
 
   const te = createHeadlessExecutor(deps);
   const { savedError } = deps.orchestrator.beginConflictResolution(taskId);
-  const agent = (agentArg ?? 'claude').toLowerCase() === 'codex' ? 'codex' : 'claude';
+  const agent = (agentArg ?? 'claude').toLowerCase();
   try {
     const output = deps.persistence.getTaskOutput(taskId);
-    if (agent === 'codex') {
-      await te.fixWithCodex(taskId, output);
-    } else {
-      await te.fixWithClaude(taskId, output);
-    }
+    await te.fixWithClaude(taskId, output);
     deps.orchestrator.setFixAwaitingApproval(taskId, savedError);
     console.log(`Fix applied for task: ${taskId} (${agent}). Use 'approve ${taskId}' or 'reject ${taskId}' to finalize.`);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    const label = agent === 'codex' ? 'Codex' : 'Claude';
-    deps.persistence.appendTaskOutput(taskId, `\n[Fix with ${label}] Failed: ${msg}`);
+    deps.persistence.appendTaskOutput(taskId, `\n[Fix with AI] Failed: ${msg}`);
     deps.orchestrator.revertConflictResolution(taskId, savedError, msg);
     throw err;
   }
@@ -457,11 +451,8 @@ async function headlessResolveConflict(taskId: string, deps: HeadlessDeps, agent
 
   const te = createHeadlessExecutor(deps);
   const agent = (agentArg ?? 'claude').toLowerCase() === 'codex' ? 'codex' : 'claude';
-  if (agent === 'codex') {
-    await resolveConflictWithCodexAction(taskId, { ...deps, taskExecutor: te });
-  } else {
-    await resolveConflictWithClaudeAction(taskId, { ...deps, taskExecutor: te });
-  }
+  // Both agents use the same resolve action — the actual agent is determined by the task's executionAgent config
+  await resolveConflictWithClaudeAction(taskId, { ...deps, taskExecutor: te });
   const wfId = deps.orchestrator.getTask(taskId)?.config.workflowId;
   await waitForCompletion(deps.orchestrator, wfId, undefined);
   console.log(`Resolve-conflict finished for task: ${taskId} (${agent})`);
@@ -558,7 +549,6 @@ async function headlessOpenTerminal(taskId: string, deps: HeadlessDeps): Promise
     persistence: deps.persistence,
     familiarRegistry: deps.familiarRegistry,
     repoRoot: deps.repoRoot,
-    executionAgentRegistry: deps.executionAgentRegistry,
     runningTaskReason: 'Task is still running. View output in logs.',
   });
   if (result.opened) {

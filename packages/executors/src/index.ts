@@ -23,3 +23,4 @@ export * from './agent.js';
 export * from './agent-registry.js';
 export * from './review-provider-registry.js';
 export * from './agents/index.js';
+export * from './plan-execution-agents.js';

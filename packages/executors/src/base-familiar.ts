@@ -579,7 +579,8 @@ export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar
     }
     if (request.actionType === 'claude') {
       if (opts?.agentRegistry) {
-        const agent = opts.agentRegistry.getOrThrow('claude');
+        const agentName = request.inputs.executionAgent ?? 'claude';
+        const agent = opts.agentRegistry.getOrThrow(agentName);
         const fullPrompt = this.buildFullPrompt(request);
         const spec = agent.buildCommand(fullPrompt);
         return { cmd: spec.cmd, args: spec.args, agentSessionId: spec.sessionId, agentName: agent.name, fullPrompt: spec.fullPrompt };

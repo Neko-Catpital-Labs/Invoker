@@ -3,10 +3,12 @@
  */
 
 export { ClaudeExecutionAgent, type ClaudeExecutionAgentConfig } from './claude-execution-agent.js';
+export { CodexExecutionAgent, type CodexExecutionAgentConfig } from './codex-execution-agent.js';
 export { CursorPlanningAgent, type CursorPlanningAgentConfig } from './cursor-planning-agent.js';
 
 import { AgentRegistry } from '../agent-registry.js';
 import { ClaudeExecutionAgent, type ClaudeExecutionAgentConfig } from './claude-execution-agent.js';
+import { CodexExecutionAgent, type CodexExecutionAgentConfig } from './codex-execution-agent.js';
 import { CursorPlanningAgent, type CursorPlanningAgentConfig } from './cursor-planning-agent.js';
 
 /**
@@ -14,10 +16,12 @@ import { CursorPlanningAgent, type CursorPlanningAgentConfig } from './cursor-pl
  */
 export function registerBuiltinAgents(opts?: {
   claude?: ClaudeExecutionAgentConfig;
+  codex?: CodexExecutionAgentConfig;
   cursor?: CursorPlanningAgentConfig;
 }): AgentRegistry {
   const registry = new AgentRegistry();
   registry.registerExecution(new ClaudeExecutionAgent(opts?.claude));
+  registry.registerExecution(new CodexExecutionAgent(opts?.codex));
   registry.registerPlanning(new CursorPlanningAgent(opts?.cursor));
   return registry;
 }

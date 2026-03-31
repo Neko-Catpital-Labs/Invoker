@@ -58,6 +58,7 @@ export interface RawPlanTask {
   remoteTargetId?: string;
   autoFix?: boolean;
   utilization?: number | 'max';
+  executionAgent?: string;
 }
 
 export interface RawPlan {
@@ -219,6 +220,7 @@ export function parsePlan(yamlContent: string): PlanDefinition {
       remoteTargetId: task.remoteTargetId,
       autoFix: task.autoFix,
       utilization: task.utilization === 'max' ? UTILIZATION_MAX : task.utilization,
+      executionAgent: task.executionAgent?.trim() || undefined,
     };
   });
 

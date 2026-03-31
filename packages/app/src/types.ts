@@ -18,6 +18,7 @@ export interface TaskReplacementDef {
   dependencies?: string[];
   familiarType?: string;
   autoFix?: boolean;
+  executionAgent?: string;
 }
 
 // ── Workflow Metadata ────────────────────────────────────────
@@ -123,8 +124,8 @@ export interface InvokerAPI {
   approveMerge: (workflowId: string) => Promise<void>;
 
   // Resolve merge conflict with Claude and restart task
-  resolveConflict: (taskId: string) => Promise<void>;
-  fixWithClaude: (taskId: string) => Promise<void>;
+  resolveConflict: (taskId: string, agentName?: string) => Promise<void>;
+  fixWithClaude: (taskId: string, agentName?: string) => Promise<void>;
   setMergeMode: (workflowId: string, mergeMode: string) => Promise<void>;
   checkPrStatuses: () => Promise<void>;
   checkPrStatus: () => Promise<void>;
