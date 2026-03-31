@@ -5,10 +5,11 @@
  * and that re-hydrating from DB produces clean state without stale timestamps.
  */
 
-import { test, expect, TEST_PLAN, loadPlan, startPlan, waitForTaskStatus } from './fixtures/electron-app.js';
+import { test, expect, TEST_PLAN, loadPlan, startPlan, waitForTaskStatus, E2E_REPO_URL } from './fixtures/electron-app.js';
 
 const SLOW_PLAN = {
   name: 'Slow E2E Plan',
+  repoUrl: E2E_REPO_URL,
   onFinish: 'none' as const,
   tasks: [
     {

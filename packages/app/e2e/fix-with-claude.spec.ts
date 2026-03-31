@@ -9,10 +9,11 @@
  * sufficient to test the state transitions.
  */
 
-import { test, expect, loadPlan, startPlan, waitForTaskStatus } from './fixtures/electron-app.js';
+import { test, expect, loadPlan, startPlan, waitForTaskStatus, E2E_REPO_URL } from './fixtures/electron-app.js';
 
 const FAILING_PLAN = {
   name: 'E2E Fix with Claude Plan',
+  repoUrl: E2E_REPO_URL,
   onFinish: 'none' as const,
   tasks: [
     {

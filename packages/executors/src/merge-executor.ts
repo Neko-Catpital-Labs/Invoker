@@ -991,6 +991,7 @@ export async function consolidateAndMergeImpl(
       return reviewUrl;
     }
   } catch (err) {
+    console.error(`[merge] consolidateAndMerge FAILED: ${err instanceof Error ? err.message : String(err)}`);
     try { await execGitInMergeSafe(host, ['merge', '--abort'], worktreeDir); } catch { /* no merge in progress */ }
     throw err;
   } finally {

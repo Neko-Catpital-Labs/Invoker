@@ -13,11 +13,13 @@ import { execSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { mkdtempSync, rmSync } from 'node:fs';
 import * as path from 'node:path';
+import { E2E_REPO_URL } from './fixtures/electron-app.js';
 
 const MAIN_JS = path.resolve(__dirname, '..', 'dist', 'main.js');
 
 const RELAUNCH_PLAN = {
   name: 'Orphan Relaunch Test',
+  repoUrl: E2E_REPO_URL,
   onFinish: 'none' as const,
   tasks: [
     {

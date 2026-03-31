@@ -9,10 +9,11 @@
  * - Successful task output is persisted and retrievable
  */
 
-import { test, expect, TEST_PLAN, loadPlan, startPlan, waitForTaskStatus, injectTaskStates } from './fixtures/electron-app.js';
+import { test, expect, TEST_PLAN, loadPlan, startPlan, waitForTaskStatus, injectTaskStates, E2E_REPO_URL } from './fixtures/electron-app.js';
 
 const DEATH_LOG_PLAN = {
   name: 'E2E Death Log Plan',
+  repoUrl: E2E_REPO_URL,
   onFinish: 'none' as const,
   tasks: [
     {
@@ -26,6 +27,7 @@ const DEATH_LOG_PLAN = {
 
 const SILENT_FAIL_PLAN = {
   name: 'E2E Silent Fail',
+  repoUrl: E2E_REPO_URL,
   onFinish: 'none' as const,
   tasks: [
     {

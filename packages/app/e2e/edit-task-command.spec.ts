@@ -6,10 +6,11 @@
  * are forked (dirty subtree invalidation).
  */
 
-import { test, expect, loadPlan, startPlan, waitForTaskStatus } from './fixtures/electron-app.js';
+import { test, expect, loadPlan, startPlan, waitForTaskStatus, E2E_REPO_URL } from './fixtures/electron-app.js';
 
 const EDIT_CMD_PLAN = {
   name: 'E2E Edit Command Plan',
+  repoUrl: E2E_REPO_URL,
   onFinish: 'none' as const,
   tasks: [
     {
@@ -77,6 +78,7 @@ test.describe('Edit task command', () => {
   test('editing a completed task with dependents forks the downstream subtree', async ({ page }) => {
     const CHAIN_PLAN = {
       name: 'E2E Edit Fork Plan',
+      repoUrl: E2E_REPO_URL,
       onFinish: 'none' as const,
       tasks: [
         {

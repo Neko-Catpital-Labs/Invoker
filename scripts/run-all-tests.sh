@@ -61,7 +61,7 @@ run_dir() {
     echo "  [$label] $base"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-    if bash "$f"; then
+    if bash "$f" </dev/null; then
       total_pass=$((total_pass + 1))
     else
       local ec=$?

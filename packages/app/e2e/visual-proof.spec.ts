@@ -16,11 +16,13 @@ import {
   injectTaskStates,
   captureScreenshot,
   assertPageScreenshot,
+  E2E_REPO_URL,
 } from './fixtures/electron-app.js';
 
 /** Multi-task DAG for verifying deterministic layout ordering. */
 const DAG_DETERMINISM_PLAN = {
   name: 'DAG determinism test',
+  repoUrl: E2E_REPO_URL,
   onFinish: 'none' as const,
   tasks: [
     { id: 'task-a', description: 'Task A', command: 'echo a', dependencies: [] },

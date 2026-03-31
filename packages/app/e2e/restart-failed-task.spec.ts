@@ -7,10 +7,11 @@
  * for externally-created workflows, causing silent restart failures.
  */
 
-import { test, expect, loadPlan, startPlan, waitForTaskStatus } from './fixtures/electron-app.js';
+import { test, expect, loadPlan, startPlan, waitForTaskStatus, E2E_REPO_URL } from './fixtures/electron-app.js';
 
 const FAILING_PLAN = {
   name: 'E2E Restart Test Plan',
+  repoUrl: E2E_REPO_URL,
   onFinish: 'none' as const,
   tasks: [
     {
@@ -71,6 +72,7 @@ test.describe('Restart failed task', () => {
     // Load and run first plan (simulates "old" workflow the orchestrator knows about)
     const firstPlan = {
       name: 'First Plan',
+      repoUrl: E2E_REPO_URL,
       onFinish: 'none' as const,
       tasks: [
         { id: 'first-task', description: 'Quick task', command: 'echo done', dependencies: [] },
