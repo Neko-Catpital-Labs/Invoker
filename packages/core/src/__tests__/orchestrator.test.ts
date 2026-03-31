@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { reconciliationNeedsInputWorkResponse } from './reconciliation-needs-input-shim.js';
+import { rid, sid } from './scoped-test-helpers.js';
 import { Orchestrator, PlanConflictError, descriptionForMergeNode } from '../orchestrator.js';
 import type { PlanDefinition, OrchestratorPersistence, OrchestratorMessageBus } from '../orchestrator.js';
 import type { TaskState, TaskDelta, TaskStateChanges, Attempt } from '../task-types.js';
@@ -29,8 +30,37 @@ class InMemoryPersistence implements OrchestratorPersistence {
     this.tasks.set(task.id, { workflowId, task });
   }
 
+  /** Resolve bare plan-local id to the single matching persisted key when unambiguous (test helper). */
+  private resolveBareTaskKey(taskId: string): string {
+    let resolvedId = taskId;
+    let entry = this.tasks.get(resolvedId);
+    if (
+      !entry &&
+      !taskId.includes('/') &&
+      !taskId.startsWith('__merge__') &&
+      !taskId.endsWith('-reconciliation')
+    ) {
+      const suffix = `/${taskId}`;
+      const matches: string[] = [];
+      for (const id of this.tasks.keys()) {
+        if (id === taskId || id.endsWith(suffix)) {
+          matches.push(id);
+        }
+      }
+      if (matches.length === 1) {
+        resolvedId = matches[0];
+      }
+    }
+    return resolvedId;
+  }
+
+  getTaskEntry(taskId: string): { workflowId: string; task: TaskState } | undefined {
+    return this.tasks.get(this.resolveBareTaskKey(taskId));
+  }
+
   updateTask(taskId: string, changes: TaskStateChanges): void {
-    const entry = this.tasks.get(taskId);
+    const resolvedId = this.resolveBareTaskKey(taskId);
+    const entry = this.tasks.get(resolvedId);
     if (entry) {
       entry.task = {
         ...entry.task,
@@ -215,7 +245,7 @@ describe('Orchestrator', () => {
 
       const t2 = orchestrator.getTask('t2');
       expect(t2).toBeDefined();
-      expect(t2!.dependencies).toEqual(['t1']);
+      expect(t2!.dependencies).toEqual([sid(orchestrator, 0, 't1')]);
     });
 
     it('passes pivot=true when specified in plan', () => {
@@ -300,7 +330,9 @@ describe('Orchestrator', () => {
 
       const mergeNode = orchestrator.getAllTasks().find((t) => t.config.isMergeNode);
       expect(mergeNode).toBeDefined();
-      expect(mergeNode!.dependencies.sort()).toEqual(['c', 'd']);
+      expect(mergeNode!.dependencies.sort()).toEqual(
+        [sid(orchestrator, 0, 'c'), sid(orchestrator, 0, 'd')].sort(),
+      );
       expect(mergeNode!.status).toBe('pending');
     });
 
@@ -314,57 +346,37 @@ describe('Orchestrator', () => {
       });
 
       expect(persistence.tasks.size).toBe(3);
-      expect(persistence.tasks.has('t1')).toBe(true);
-      expect(persistence.tasks.has('t2')).toBe(true);
+      expect(persistence.tasks.has(sid(orchestrator, 0, 't1'))).toBe(true);
+      expect(persistence.tasks.has(sid(orchestrator, 0, 't2'))).toBe(true);
     });
 
-    it('throws PlanConflictError when task IDs overlap with existing workflow', () => {
-      const plan: PlanDefinition = {
-        name: 'plan-A',
-        tasks: [
-          { id: 'shared-task', description: 'A task' },
-        ],
-      };
-      orchestrator.loadPlan(plan);
-
-      const plan2: PlanDefinition = {
-        name: 'plan-B',
-        tasks: [
-          { id: 'shared-task', description: 'Same task ID' },
-        ],
-      };
-      expect(() => orchestrator.loadPlan(plan2)).toThrow(PlanConflictError);
-    });
-
-    it('includes conflicting task IDs and workflow info in PlanConflictError', () => {
+    it('allows two workflows to reuse the same YAML task ids (scoped runtime ids differ)', () => {
       orchestrator.loadPlan({
-        name: 'Original Plan',
-        tasks: [
-          { id: 'task-x', description: 'X' },
-          { id: 'task-y', description: 'Y', dependencies: ['task-x'] },
-        ],
+        name: 'plan-A',
+        tasks: [{ id: 'shared-task', description: 'A task' }],
       });
-
-      try {
+      expect(() =>
         orchestrator.loadPlan({
-          name: 'Duplicate Plan',
-          tasks: [
-            { id: 'task-y', description: 'Y again' },
-          ],
-        });
-        expect.unreachable('should have thrown');
-      } catch (err) {
-        expect(err).toBeInstanceOf(PlanConflictError);
-        const conflict = err as PlanConflictError;
-        expect(conflict.conflictingTaskIds).toContain('task-y');
-        expect(conflict.conflictingWorkflows.length).toBeGreaterThan(0);
-        expect(conflict.conflictingWorkflows[0].name).toBe('Original Plan');
-        expect(conflict.message).toContain('task-y');
-        expect(conflict.message).toContain('allowGraphMutation');
-      }
+          name: 'plan-B',
+          tasks: [{ id: 'shared-task', description: 'Same YAML id' }],
+        }),
+      ).not.toThrow();
+      expect(orchestrator.getTask(sid(orchestrator, 0, 'shared-task'))!.description).toBe('A task');
+      expect(orchestrator.getTask(sid(orchestrator, 1, 'shared-task'))!.description).toBe('Same YAML id');
     });
 
-    it('allows overlapping IDs when allowGraphMutation is true', () => {
+    it('PlanConflictError exposes conflicting task ids and workflows', () => {
+      const err = new PlanConflictError(
+        'Overlapping task IDs; pass allowGraphMutation: true to replace',
+        ['wf-1/t1'],
+        [{ id: 'wf-1', name: 'A' }],
+      );
+      expect(err.conflictingTaskIds).toEqual(['wf-1/t1']);
+      expect(err.conflictingWorkflows[0].name).toBe('A');
+      expect(err.message).toContain('allowGraphMutation');
+    });
+
+    it('allows overlapping YAML ids without allowGraphMutation (second workflow still loads)', () => {
       orchestrator.loadPlan({
         name: 'plan-A',
         tasks: [{ id: 'overlap', description: 'A' }],
@@ -373,13 +385,10 @@ describe('Orchestrator', () => {
       expect(() =>
         orchestrator.loadPlan(
           { name: 'plan-B', tasks: [{ id: 'overlap', description: 'B' }] },
-          { allowGraphMutation: true },
         ),
       ).not.toThrow();
 
-      const task = orchestrator.getTask('overlap');
-      expect(task).toBeDefined();
-      expect(task!.description).toBe('B');
+      expect(orchestrator.getTask(sid(orchestrator, 1, 'overlap'))!.description).toBe('B');
     });
 
     it('allows non-overlapping plans without allowGraphMutation', () => {
@@ -600,7 +609,7 @@ describe('Orchestrator', () => {
       const started = orchestrator.startExecution();
 
       expect(started).toHaveLength(1);
-      expect(started[0].id).toBe('t1');
+      expect(started[0].id).toBe(sid(orchestrator, 0, 't1'));
       expect(orchestrator.getTask('t2')!.status).toBe('pending');
       expect(orchestrator.getTask('t3')!.status).toBe('pending');
     });
@@ -613,7 +622,7 @@ describe('Orchestrator', () => {
 
       orchestrator.startExecution();
 
-      const persisted = persistence.tasks.get('t1');
+      const persisted = persistence.getTaskEntry('t1');
       expect(persisted!.task.status).toBe('running');
     });
   });
@@ -677,7 +686,7 @@ describe('Orchestrator', () => {
         makeResponse({ actionId: 't1', status: 'completed', outputs: { exitCode: 0 } }),
       );
 
-      const persisted = persistence.tasks.get('t1');
+      const persisted = persistence.getTaskEntry('t1');
       expect(persisted!.task.status).toBe('completed');
     });
 
@@ -686,7 +695,7 @@ describe('Orchestrator', () => {
         makeResponse({ actionId: 't1', status: 'failed', outputs: { exitCode: 1, error: 'fail' } }),
       );
 
-      const persisted = persistence.tasks.get('t2');
+      const persisted = persistence.getTaskEntry('t2');
       expect(persisted!.task.status).toBe('pending');
     });
 
@@ -698,7 +707,7 @@ describe('Orchestrator', () => {
         makeResponse({ actionId: 't1', status: 'completed', outputs: { exitCode: 0 } }),
       );
       expect(orchestrator.getTask('t1')!.execution.agentSessionId).toBe('sess-kept');
-      expect(persistence.tasks.get('t1')!.task.execution.agentSessionId).toBe('sess-kept');
+      expect(persistence.getTaskEntry('t1')!.task.execution.agentSessionId).toBe('sess-kept');
     });
   });
 
@@ -746,7 +755,7 @@ describe('Orchestrator', () => {
       expect(orchestrator.getTask('a1')!.execution.completedAt).toBeDefined();
 
       const delta = publishedDeltas.find(
-        (d) => d.type === 'updated' && d.taskId === 'a1',
+        (d) => d.type === 'updated' && d.taskId === sid(orchestrator, 0, 'a1'),
       );
       expect(delta).toBeDefined();
     });
@@ -801,7 +810,7 @@ describe('Orchestrator', () => {
       expect(task.execution.completedAt).toBeDefined();
 
       const delta = publishedDeltas.find(
-        (d) => d.type === 'updated' && d.taskId === 'a1',
+        (d) => d.type === 'updated' && d.taskId === sid(orchestrator, 0, 'a1'),
       );
       expect(delta).toBeDefined();
       expect(delta!.type === 'updated' && delta!.changes.config?.familiarType).toBe('worktree');
@@ -857,7 +866,7 @@ describe('Orchestrator', () => {
       const started = await orchestrator.approve('a1');
       expect(orchestrator.getTask('a1')!.status).toBe('completed');
       expect(orchestrator.getTask('a2')!.status).toBe('running');
-      expect(started.some(t => t.id === 'a2')).toBe(true);
+      expect(started.some((t) => t.id === sid(orchestrator, 0, 'a2'))).toBe(true);
     });
   });
 
@@ -1037,8 +1046,8 @@ describe('Orchestrator', () => {
       expect(reconTask!.execution.experimentResults).toBeDefined();
 
       const results = reconTask!.execution.experimentResults!;
-      const v1Result = results.find((r) => r.id === 'pivot-exp-v1');
-      const v2Result = results.find((r) => r.id === 'pivot-exp-v2');
+      const v1Result = results.find((r) => r.id === sid(orchestrator, 0, 'pivot-exp-v1'));
+      const v2Result = results.find((r) => r.id === sid(orchestrator, 0, 'pivot-exp-v2'));
       expect(v1Result).toBeDefined();
       expect(v1Result!.status).toBe('failed');
       expect(v2Result).toBeDefined();
@@ -1384,9 +1393,9 @@ describe('Orchestrator', () => {
       const t1 = orchestrator.getTask('t1');
       expect(t1!.status).toBe('completed');
 
-      const fixConservative = orchestrator.getTask('t1-exp-fix-conservative');
-      const fixRefactor = orchestrator.getTask('t1-exp-fix-refactor');
-      const fixAlternative = orchestrator.getTask('t1-exp-fix-alternative');
+      const fixConservative = orchestrator.getTask(sid(orchestrator, 0, 't1-exp-fix-conservative'));
+      const fixRefactor = orchestrator.getTask(sid(orchestrator, 0, 't1-exp-fix-refactor'));
+      const fixAlternative = orchestrator.getTask(sid(orchestrator, 0, 't1-exp-fix-alternative'));
       expect(fixConservative).toBeDefined();
       expect(fixRefactor).toBeDefined();
       expect(fixAlternative).toBeDefined();
@@ -1412,47 +1421,52 @@ describe('Orchestrator', () => {
         }),
       );
 
+      const expCon = sid(orchestrator, 0, 't1-exp-fix-conservative');
+      const expRef = sid(orchestrator, 0, 't1-exp-fix-refactor');
+      const expAlt = sid(orchestrator, 0, 't1-exp-fix-alternative');
+      const reconT1 = rid(orchestrator, 0, 't1');
+
       orchestrator.handleWorkerResponse(
         makeResponse({
-          actionId: 't1-exp-fix-conservative',
+          actionId: expCon,
           status: 'completed',
           outputs: { exitCode: 0, summary: 'Fixed with minimal change' },
         }),
       );
 
-      if (orchestrator.getTask('t1-exp-fix-refactor')!.status === 'pending') {
+      if (orchestrator.getTask(expRef)!.status === 'pending') {
         orchestrator.startExecution();
       }
 
       orchestrator.handleWorkerResponse(
         makeResponse({
-          actionId: 't1-exp-fix-refactor',
+          actionId: expRef,
           status: 'completed',
           outputs: { exitCode: 0, summary: 'Refactored approach' },
         }),
       );
 
-      if (orchestrator.getTask('t1-exp-fix-alternative')!.status === 'pending') {
+      if (orchestrator.getTask(expAlt)!.status === 'pending') {
         orchestrator.startExecution();
       }
 
       orchestrator.handleWorkerResponse(
         makeResponse({
-          actionId: 't1-exp-fix-alternative',
+          actionId: expAlt,
           status: 'completed',
           outputs: { exitCode: 0, summary: 'Alternative approach' },
         }),
       );
 
-      orchestrator.handleWorkerResponse(reconciliationNeedsInputWorkResponse('t1-reconciliation'));
+      orchestrator.handleWorkerResponse(reconciliationNeedsInputWorkResponse(reconT1));
 
-      const reconTask = orchestrator.getTask('t1-reconciliation');
+      const reconTask = orchestrator.getTask(reconT1);
       expect(reconTask).toBeDefined();
       expect(reconTask!.status).toBe('needs_input');
       expect(reconTask!.execution.experimentResults).toHaveLength(3);
 
-      orchestrator.selectExperiment('t1-reconciliation', 't1-exp-fix-conservative');
-      expect(orchestrator.getTask('t1-reconciliation')!.status).toBe('completed');
+      orchestrator.selectExperiment(reconT1, expCon);
+      expect(orchestrator.getTask(reconT1)!.status).toBe('completed');
     });
 
     it('non-autoFix failed task still fails normally', () => {
@@ -1488,7 +1502,7 @@ describe('Orchestrator', () => {
         }),
       );
 
-      const fixTask = orchestrator.getTask('t1-exp-fix-conservative');
+      const fixTask = orchestrator.getTask(sid(orchestrator, 0, 't1-exp-fix-conservative'));
       expect(fixTask).toBeDefined();
       expect(fixTask!.config.prompt).toContain('ModuleNotFoundError: xyz');
       expect(fixTask!.config.prompt).toContain('Build widgets');
@@ -1510,7 +1524,7 @@ describe('Orchestrator', () => {
 
       const started = orchestrator.startExecution();
       expect(started).toHaveLength(1);
-      expect(started[0].id).toBe('t1');
+      expect(started[0].id).toBe(sid(orchestrator, 0, 't1'));
 
       orchestrator.handleWorkerResponse(
         makeResponse({ actionId: 't1', status: 'completed', outputs: { exitCode: 0 } }),
@@ -1663,7 +1677,7 @@ describe('Orchestrator', () => {
 
       const startEvents = persistence.events.filter((e) => e.eventType === 'task.running');
       expect(startEvents).toHaveLength(1);
-      expect(startEvents[0].taskId).toBe('t1');
+      expect(startEvents[0].taskId).toBe(sid(orchestrator, 0, 't1'));
     });
 
     it('logs task.completed when task completes', () => {
@@ -1680,7 +1694,7 @@ describe('Orchestrator', () => {
 
       const completeEvents = persistence.events.filter((e) => e.eventType === 'task.completed');
       expect(completeEvents).toHaveLength(1);
-      expect(completeEvents[0].taskId).toBe('t1');
+      expect(completeEvents[0].taskId).toBe(sid(orchestrator, 0, 't1'));
     });
 
     it('logs task.failed when task fails', () => {
@@ -1697,7 +1711,7 @@ describe('Orchestrator', () => {
 
       const failEvents = persistence.events.filter((e) => e.eventType === 'task.failed');
       expect(failEvents).toHaveLength(1);
-      expect(failEvents[0].taskId).toBe('t1');
+      expect(failEvents[0].taskId).toBe(sid(orchestrator, 0, 't1'));
     });
   });
 
@@ -1721,7 +1735,7 @@ describe('Orchestrator', () => {
       expect(task?.config.command).toBe('echo new');
       expect(task?.status).toBe('running');
       expect(started).toHaveLength(1);
-      expect(started[0].id).toBe('t1');
+      expect(started[0].id).toBe(sid(orchestrator, 0, 't1'));
     });
 
     it('restarts task with new command, downstream stays unchanged', () => {
@@ -1778,7 +1792,7 @@ describe('Orchestrator', () => {
 
       orchestrator.editTaskCommand('t1', 'echo fixed');
 
-      const persisted = persistence.tasks.get('t1');
+      const persisted = persistence.getTaskEntry('t1');
       expect(persisted).toBeDefined();
       expect(persisted?.task.config.command).toBe('echo fixed');
     });
@@ -1854,7 +1868,7 @@ describe('Orchestrator', () => {
 
       orchestrator.editTaskType('t1', 'worktree');
 
-      const persisted = persistence.tasks.get('t1');
+      const persisted = persistence.getTaskEntry('t1');
       expect(persisted).toBeDefined();
       expect(persisted?.task.config.familiarType).toBe('worktree');
     });
@@ -1876,7 +1890,7 @@ describe('Orchestrator', () => {
       expect(task?.config.familiarType).toBe('ssh');
       expect(task?.config.remoteTargetId).toBe('remote_digital_ocean');
 
-      const persisted = persistence.tasks.get('t1');
+      const persisted = persistence.getTaskEntry('t1');
       expect(persisted?.task.config.familiarType).toBe('ssh');
       expect(persisted?.task.config.remoteTargetId).toBe('remote_digital_ocean');
     });
@@ -1947,7 +1961,7 @@ describe('Orchestrator', () => {
 
       const allInMemory = orchestrator.getAllTasks();
       for (const task of allInMemory) {
-        const persisted = persistence.tasks.get(task.id);
+        const persisted = persistence.getTaskEntry(task.id);
         expect(persisted).toBeDefined();
         expect(persisted!.task.id).toBe(task.id);
         expect(persisted!.task.status).toBe(task.status);
@@ -1965,7 +1979,7 @@ describe('Orchestrator', () => {
       orchestrator.startExecution();
 
       for (const task of orchestrator.getAllTasks()) {
-        const persisted = persistence.tasks.get(task.id);
+        const persisted = persistence.getTaskEntry(task.id);
         expect(persisted!.task.status).toBe(task.status);
       }
     });
@@ -1985,7 +1999,7 @@ describe('Orchestrator', () => {
       );
 
       for (const task of orchestrator.getAllTasks()) {
-        const persisted = persistence.tasks.get(task.id);
+        const persisted = persistence.getTaskEntry(task.id);
         expect(persisted!.task.status).toBe(task.status);
       }
     });
@@ -2031,7 +2045,9 @@ describe('Orchestrator', () => {
       const allTasks = orchestrator.getAllTasks();
       expect(allTasks).toHaveLength(4);
       const userTasks = allTasks.filter((t) => !t.config.isMergeNode);
-      expect(userTasks.map((t) => t.id).sort()).toEqual(['a1', 'b1']);
+      expect(userTasks.map((t) => t.id).sort()).toEqual(
+        [sid(orchestrator, 0, 'a1'), sid(orchestrator, 1, 'b1')].sort(),
+      );
     });
 
     it('loadPlan does NOT clear other workflows tasks', () => {
@@ -2184,8 +2200,7 @@ describe('Orchestrator', () => {
     });
 
     describe('allowGraphMutation merge gate orphaning', () => {
-      it('resubmitting overlapping task IDs orphans first workflow merge gate dependencies', () => {
-        // 1. Load Plan A with two tasks: 'shared-task' and 'unique-a'
+      it('scoped ids: two workflows with same YAML names keep independent merge gate dependency sets', () => {
         orchestrator.loadPlan({
           name: 'Plan A',
           tasks: [
@@ -2197,25 +2212,21 @@ describe('Orchestrator', () => {
         const wfAId = orchestrator.getWorkflowIds()[0];
         const mergeGateBefore = orchestrator.getMergeNode(wfAId);
 
-        // Verify merge gate exists and depends on 'unique-a' (the leaf)
         expect(mergeGateBefore).toBeDefined();
-        expect(mergeGateBefore!.dependencies).toContain('unique-a');
+        expect(mergeGateBefore!.dependencies).toContain(sid(orchestrator, 0, 'unique-a'));
 
-        // 2. Load Plan B with overlapping 'shared-task' ID
         orchestrator.loadPlan(
           { name: 'Plan B', tasks: [{ id: 'shared-task', description: 'Shared (B)', command: 'echo b' }] },
           { allowGraphMutation: true },
         );
 
-        // 3. Current behavior: overlapping ID is reassigned to Plan B's workflow
         const tasksA = persistence.loadTasks(wfAId);
-        const taskIdsA = tasksA.map(t => t.id);
+        const taskIdsA = tasksA.map((t) => t.id);
 
-        expect(taskIdsA).not.toContain('shared-task');
-        expect(taskIdsA).toContain('unique-a');
+        expect(taskIdsA).toContain(sid(orchestrator, 0, 'shared-task'));
+        expect(taskIdsA).toContain(sid(orchestrator, 0, 'unique-a'));
 
-        // 4. Merge gate remains in A; direct deps should still be loadable from A's task list
-        const mergeGateAfter = tasksA.find(t => t.config.isMergeNode);
+        const mergeGateAfter = tasksA.find((t) => t.config.isMergeNode);
         expect(mergeGateAfter).toBeDefined();
 
         for (const dep of mergeGateAfter!.dependencies) {
@@ -2287,9 +2298,7 @@ describe('Orchestrator', () => {
       warnSpy.mockClear();
       orchestrator.restartTask('A');
 
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('restartTask "A"'),
-      );
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('restartTask "'));
       expect(warnSpy).toHaveBeenCalledWith(
         expect.stringContaining('will NOT be invalidated'),
       );
@@ -2363,9 +2372,15 @@ describe('Orchestrator', () => {
         makeResponse({ actionId: 'A', status: 'completed', outputs: { exitCode: 0 } }),
       );
 
-      expect(logSpy).toHaveBeenCalledWith(
-        expect.stringContaining('handleCompleted "A": 1 newly ready: [B]'),
-      );
+      expect(
+        logSpy.mock.calls.some(
+          (c) =>
+            typeof c[0] === 'string' &&
+            c[0].includes('handleCompleted') &&
+            c[0].includes('newly ready: [') &&
+            c[0].includes('/B]'),
+        ),
+      ).toBe(true);
     });
 
     // ── Integration: full fan-in multi-failure restart cycle ──
@@ -2417,9 +2432,15 @@ describe('Orchestrator', () => {
         makeResponse({ actionId: 'C', status: 'completed', outputs: { exitCode: 0 } }),
       );
 
-      expect(logSpy).toHaveBeenCalledWith(
-        expect.stringContaining('handleCompleted "C": 1 newly ready: [D]'),
-      );
+      expect(
+        logSpy.mock.calls.some(
+          (c) =>
+            typeof c[0] === 'string' &&
+            c[0].includes('handleCompleted') &&
+            c[0].includes('newly ready: [') &&
+            c[0].includes('/D]'),
+        ),
+      ).toBe(true);
       expect(orchestrator.getTask('D')!.status).toBe('running');
     });
   });
@@ -2601,21 +2622,32 @@ describe('Orchestrator', () => {
       });
 
       orchestrator.handleWorkerResponse(
-        makeResponse({ actionId: 'pivot-exp-v1', status: 'completed', outputs: { exitCode: 0 } }),
+        makeResponse({
+          actionId: sid(orchestrator, 0, 'pivot-exp-v1'),
+          status: 'completed',
+          outputs: { exitCode: 0 },
+        }),
       );
       orchestrator.handleWorkerResponse(
-        makeResponse({ actionId: 'pivot-exp-v2', status: 'completed', outputs: { exitCode: 0 } }),
+        makeResponse({
+          actionId: sid(orchestrator, 0, 'pivot-exp-v2'),
+          status: 'completed',
+          outputs: { exitCode: 0 },
+        }),
       );
 
-      orchestrator.handleWorkerResponse(reconciliationNeedsInputWorkResponse('pivot-reconciliation'));
+      orchestrator.handleWorkerResponse(reconciliationNeedsInputWorkResponse(rid(orchestrator, 0, 'pivot')));
 
-      expect(orchestrator.getTask('pivot-reconciliation')!.status).toBe('needs_input');
+      expect(orchestrator.getTask(rid(orchestrator, 0, 'pivot'))!.status).toBe('needs_input');
 
-      persistence.updateTask('pivot-exp-v1', {
+      persistence.updateTask(sid(orchestrator, 0, 'pivot-exp-v1'), {
         execution: { branch: 'experiment/v1', commit: 'abc' },
       });
 
-      orchestrator.selectExperiment('pivot-reconciliation', 'pivot-exp-v1');
+      orchestrator.selectExperiment(
+        rid(orchestrator, 0, 'pivot'),
+        sid(orchestrator, 0, 'pivot-exp-v1'),
+      );
 
       const scheduler = (orchestrator as any).scheduler;
       const runningTasks = orchestrator.getAllTasks().filter(t => t.status === 'running');
@@ -2641,16 +2673,17 @@ describe('Orchestrator', () => {
       orchestrator.syncFromDb(wfId);
 
       expect(orchestrator.getTask('t1')!.status).toBe('completed');
-      expect(scheduler.isRunning('t1')).toBe(true); // Leaked!
+      const t1Scoped = sid(orchestrator, 0, 't1');
+      expect(scheduler.isRunning(t1Scoped)).toBe(true); // Leaked!
 
       // Completing t2 triggers drainScheduler which should self-heal
       orchestrator.handleWorkerResponse(
         makeResponse({ actionId: 't2', status: 'completed', outputs: { exitCode: 0 } }),
       );
 
-      expect(scheduler.isRunning('t1')).toBe(false);
+      expect(scheduler.isRunning(t1Scoped)).toBe(false);
       expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('freeing leaked scheduler slot for "t1"'),
+        expect.stringContaining('freeing leaked scheduler slot for'),
       );
     });
 
@@ -2681,23 +2714,40 @@ describe('Orchestrator', () => {
       });
 
       orchestrator.handleWorkerResponse(
-        makeResponse({ actionId: 'pivot-exp-v1', status: 'completed', outputs: { exitCode: 0 } }),
+        makeResponse({
+          actionId: sid(orchestrator, 0, 'pivot-exp-v1'),
+          status: 'completed',
+          outputs: { exitCode: 0 },
+        }),
       );
       orchestrator.handleWorkerResponse(
-        makeResponse({ actionId: 'pivot-exp-v2', status: 'completed', outputs: { exitCode: 0 } }),
+        makeResponse({
+          actionId: sid(orchestrator, 0, 'pivot-exp-v2'),
+          status: 'completed',
+          outputs: { exitCode: 0 },
+        }),
       );
 
+      const reconId = rid(orchestrator, 0, 'pivot');
+      const exp1 = sid(orchestrator, 0, 'pivot-exp-v1');
+      const exp2 = sid(orchestrator, 0, 'pivot-exp-v2');
+
       const started = orchestrator.selectExperiments(
-        'pivot-reconciliation',
-        ['pivot-exp-v1', 'pivot-exp-v2'],
+        reconId,
+        [exp1, exp2],
         'recon-branch',
         'recon-commit',
       );
 
       expect(started.length).toBeGreaterThan(0);
-      expect(logSpy).toHaveBeenCalledWith(
-        expect.stringContaining('selectExperiments "pivot-reconciliation"'),
-      );
+      expect(
+        logSpy.mock.calls.some(
+          (c) =>
+            typeof c[0] === 'string' &&
+            c[0].includes('selectExperiments') &&
+            c[0].includes('pivot-reconciliation'),
+        ),
+      ).toBe(true);
     });
   });
 
@@ -2870,7 +2920,7 @@ describe('Orchestrator', () => {
 
       orchestrator.handleWorkerResponse(
         makeResponse({
-          actionId: 'pivot-exp-v1',
+          actionId: sid(orchestrator, 0, 'pivot-exp-v1'),
           status: 'completed',
           outputs: { exitCode: 0 },
         }),
@@ -2878,19 +2928,19 @@ describe('Orchestrator', () => {
 
       orchestrator.handleWorkerResponse(
         makeResponse({
-          actionId: 'pivot-exp-v2',
+          actionId: sid(orchestrator, 0, 'pivot-exp-v2'),
           status: 'completed',
           outputs: { exitCode: 0 },
         }),
       );
 
-      orchestrator.handleWorkerResponse(reconciliationNeedsInputWorkResponse('pivot-reconciliation'));
+      orchestrator.handleWorkerResponse(reconciliationNeedsInputWorkResponse(rid(orchestrator, 0, 'pivot')));
 
-      expect(orchestrator.getTask('pivot-reconciliation')!.status).toBe('needs_input');
+      expect(orchestrator.getTask(rid(orchestrator, 0, 'pivot'))!.status).toBe('needs_input');
 
-      orchestrator.restartTask('pivot-exp-v1');
+      orchestrator.restartTask(sid(orchestrator, 0, 'pivot-exp-v1'));
 
-      expect(orchestrator.getTask('pivot-reconciliation')!.status).toBe('pending');
+      expect(orchestrator.getTask(rid(orchestrator, 0, 'pivot'))!.status).toBe('pending');
     });
 
     it('restartTask clears lastHeartbeatAt from previous run', () => {
@@ -3189,35 +3239,51 @@ describe('Orchestrator', () => {
       });
 
       orchestrator.handleWorkerResponse(
-        makeResponse({ actionId: 'pivot-exp-v1', status: 'completed', outputs: { exitCode: 0 } }),
+        makeResponse({
+          actionId: sid(orchestrator, 0, 'pivot-exp-v1'),
+          status: 'completed',
+          outputs: { exitCode: 0 },
+        }),
       );
       orchestrator.handleWorkerResponse(
-        makeResponse({ actionId: 'pivot-exp-v2', status: 'completed', outputs: { exitCode: 0 } }),
+        makeResponse({
+          actionId: sid(orchestrator, 0, 'pivot-exp-v2'),
+          status: 'completed',
+          outputs: { exitCode: 0 },
+        }),
       );
       orchestrator.handleWorkerResponse(
-        makeResponse({ actionId: 'pivot-exp-v3', status: 'completed', outputs: { exitCode: 0 } }),
+        makeResponse({
+          actionId: sid(orchestrator, 0, 'pivot-exp-v3'),
+          status: 'completed',
+          outputs: { exitCode: 0 },
+        }),
       );
 
-      orchestrator.handleWorkerResponse(reconciliationNeedsInputWorkResponse('pivot-reconciliation'));
+      orchestrator.handleWorkerResponse(reconciliationNeedsInputWorkResponse(rid(orchestrator, 0, 'pivot')));
 
-      expect(orchestrator.getTask('pivot-reconciliation')!.status).toBe('needs_input');
+      expect(orchestrator.getTask(rid(orchestrator, 0, 'pivot'))!.status).toBe('needs_input');
     }
 
     it('multi-select completes reconciliation with all IDs', () => {
       setupReconciliation();
       publishedDeltas = [];
 
+      const reconId = rid(orchestrator, 0, 'pivot');
+      const exp1 = sid(orchestrator, 0, 'pivot-exp-v1');
+      const exp2 = sid(orchestrator, 0, 'pivot-exp-v2');
+
       orchestrator.selectExperiments(
-        'pivot-reconciliation',
-        ['pivot-exp-v1', 'pivot-exp-v2'],
+        reconId,
+        [exp1, exp2],
         'reconciliation/pivot-reconciliation',
         'abc123',
       );
 
-      const recon = orchestrator.getTask('pivot-reconciliation')!;
+      const recon = orchestrator.getTask(reconId)!;
       expect(recon.status).toBe('completed');
-      expect(recon.execution.selectedExperiment).toBe('pivot-exp-v1');
-      expect(recon.execution.selectedExperiments).toEqual(['pivot-exp-v1', 'pivot-exp-v2']);
+      expect(recon.execution.selectedExperiment).toBe(exp1);
+      expect(recon.execution.selectedExperiments).toEqual([exp1, exp2]);
       expect(recon.execution.branch).toBe('reconciliation/pivot-reconciliation');
       expect(recon.execution.commit).toBe('abc123');
     });
@@ -3225,32 +3291,38 @@ describe('Orchestrator', () => {
     it('multi-select unblocks downstream tasks', () => {
       setupReconciliation();
 
+      const reconId = rid(orchestrator, 0, 'pivot');
+      const exp1 = sid(orchestrator, 0, 'pivot-exp-v1');
+      const exp3 = sid(orchestrator, 0, 'pivot-exp-v3');
+
       orchestrator.selectExperiments(
-        'pivot-reconciliation',
-        ['pivot-exp-v1', 'pivot-exp-v3'],
+        reconId,
+        [exp1, exp3],
         'reconciliation/pivot-reconciliation',
         'def456',
       );
 
-      // Downstream is remapped in-place (no -v2 clone), depends on pivot-reconciliation
-      const downstream = orchestrator.getTask('downstream');
+      const downstream = orchestrator.getTask(sid(orchestrator, 0, 'downstream'));
       expect(downstream).toBeDefined();
       expect(downstream!.status).toBe('running');
-      expect(downstream!.dependencies).toContain('pivot-reconciliation');
+      expect(downstream!.dependencies).toContain(reconId);
     });
 
     it('single-element array delegates to selectExperiment', () => {
       setupReconciliation();
 
-      persistence.updateTask('pivot-exp-v1', {
+      const reconId = rid(orchestrator, 0, 'pivot');
+      const exp1 = sid(orchestrator, 0, 'pivot-exp-v1');
+
+      persistence.updateTask(exp1, {
         execution: { branch: 'experiment/pivot-exp-v1-hash', commit: 'singlecommit' },
       });
 
-      orchestrator.selectExperiments('pivot-reconciliation', ['pivot-exp-v1']);
+      orchestrator.selectExperiments(reconId, [exp1]);
 
-      const recon = orchestrator.getTask('pivot-reconciliation')!;
+      const recon = orchestrator.getTask(reconId)!;
       expect(recon.status).toBe('completed');
-      expect(recon.execution.selectedExperiment).toBe('pivot-exp-v1');
+      expect(recon.execution.selectedExperiment).toBe(exp1);
       expect(recon.execution.branch).toBe('experiment/pivot-exp-v1-hash');
       expect(recon.execution.commit).toBe('singlecommit');
       expect(recon.execution.selectedExperiments).toBeUndefined();
@@ -3260,18 +3332,15 @@ describe('Orchestrator', () => {
       setupReconciliation();
       publishedDeltas = [];
 
-      orchestrator.selectExperiments(
-        'pivot-reconciliation',
-        ['pivot-exp-v2', 'pivot-exp-v3'],
-        'recon-branch',
-        'recon-commit',
-      );
+      const reconId = rid(orchestrator, 0, 'pivot');
+      const exp2 = sid(orchestrator, 0, 'pivot-exp-v2');
+      const exp3 = sid(orchestrator, 0, 'pivot-exp-v3');
 
-      const reconDelta = publishedDeltas.find(
-        (d) => d.type === 'updated' && d.taskId === 'pivot-reconciliation',
-      );
+      orchestrator.selectExperiments(reconId, [exp2, exp3], 'recon-branch', 'recon-commit');
+
+      const reconDelta = publishedDeltas.find((d) => d.type === 'updated' && d.taskId === reconId);
       expect(reconDelta).toBeDefined();
-      expect((reconDelta as any).changes.execution.selectedExperiments).toEqual(['pivot-exp-v2', 'pivot-exp-v3']);
+      expect((reconDelta as any).changes.execution.selectedExperiments).toEqual([exp2, exp3]);
     });
   });
 
@@ -3363,28 +3432,28 @@ describe('Orchestrator', () => {
         },
       });
 
-      // Complete both experiments
-      orchestrator.handleWorkerResponse(
-        makeResponse({ actionId: 'pivot-exp-v1', status: 'completed', outputs: { exitCode: 0 } }),
-      );
-      orchestrator.handleWorkerResponse(
-        makeResponse({ actionId: 'pivot-exp-v2', status: 'completed', outputs: { exitCode: 0 } }),
-      );
-      orchestrator.handleWorkerResponse(reconciliationNeedsInputWorkResponse('pivot-reconciliation'));
-      expect(orchestrator.getTask('pivot-reconciliation')!.status).toBe('needs_input');
+      const reconId = rid(orchestrator, 0, 'pivot');
+      const exp1 = sid(orchestrator, 0, 'pivot-exp-v1');
+      const exp2 = sid(orchestrator, 0, 'pivot-exp-v2');
 
-      // Select experiment → reconciliation completes
-      persistence.updateTask('pivot-exp-v1', {
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: exp1, status: 'completed', outputs: { exitCode: 0 } }),
+      );
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: exp2, status: 'completed', outputs: { exitCode: 0 } }),
+      );
+      orchestrator.handleWorkerResponse(reconciliationNeedsInputWorkResponse(reconId));
+      expect(orchestrator.getTask(reconId)!.status).toBe('needs_input');
+
+      persistence.updateTask(exp1, {
         execution: { branch: 'exp/v1', commit: 'commit1' },
       });
-      orchestrator.selectExperiment('pivot-reconciliation', 'pivot-exp-v1');
-      expect(orchestrator.getTask('pivot-reconciliation')!.status).toBe('completed');
-      expect(orchestrator.getTask('pivot-reconciliation')!.execution.selectedExperiment).toBe('pivot-exp-v1');
+      orchestrator.selectExperiment(reconId, exp1);
+      expect(orchestrator.getTask(reconId)!.status).toBe('completed');
+      expect(orchestrator.getTask(reconId)!.execution.selectedExperiment).toBe(exp1);
 
-      // Now restart the completed reconciliation task.
-      // All experiment deps are completed, so restartTask auto-starts it → running.
-      orchestrator.restartTask('pivot-reconciliation');
-      const recon = orchestrator.getTask('pivot-reconciliation')!;
+      orchestrator.restartTask(reconId);
+      const recon = orchestrator.getTask(reconId)!;
       expect(recon.status).toBe('running');
       expect(recon.execution.commit).toBeUndefined();
       // Note: restartTask does NOT clear selectedExperiment or experimentResults.
@@ -3449,7 +3518,9 @@ describe('Orchestrator', () => {
 
       const mergeNode = orchestrator.getAllTasks().find((t) => t.config.isMergeNode);
       expect(mergeNode).toBeDefined();
-      expect(mergeNode!.dependencies.sort()).toEqual(['b1', 'b2', 'b3']);
+      expect(mergeNode!.dependencies.sort()).toEqual(
+        [sid(orchestrator, 0, 'b1'), sid(orchestrator, 0, 'b2'), sid(orchestrator, 0, 'b3')].sort(),
+      );
     });
 
     it('loadPlan: independent tasks are all merge gate leaves', () => {
@@ -3463,7 +3534,9 @@ describe('Orchestrator', () => {
       });
 
       const mergeNode = orchestrator.getAllTasks().find((t) => t.config.isMergeNode);
-      expect(mergeNode!.dependencies.sort()).toEqual(['a', 'b', 'c']);
+      expect(mergeNode!.dependencies.sort()).toEqual(
+        [sid(orchestrator, 0, 'a'), sid(orchestrator, 0, 'b'), sid(orchestrator, 0, 'c')].sort(),
+      );
     });
 
     it('loadPlan: mixed independent and chained tasks all have leaves in merge gate', () => {
@@ -3477,7 +3550,9 @@ describe('Orchestrator', () => {
       });
 
       const mergeNode = orchestrator.getAllTasks().find((t) => t.config.isMergeNode);
-      expect(mergeNode!.dependencies.sort()).toEqual(['b', 'c']);
+      expect(mergeNode!.dependencies.sort()).toEqual(
+        [sid(orchestrator, 0, 'b'), sid(orchestrator, 0, 'c')].sort(),
+      );
     });
 
     it('replaceTask: merge gate deps updated to replacement leaves', () => {
@@ -3503,7 +3578,7 @@ describe('Orchestrator', () => {
       ]);
 
       const mergeNode = orchestrator.getAllTasks().find((t) => t.config.isMergeNode);
-      expect(mergeNode!.dependencies).toEqual(['s2']);
+      expect(mergeNode!.dependencies).toEqual([sid(orchestrator, 0, 's2')]);
     });
 
     it('experiment spawn: merge gate deps include reconciliation node', () => {
@@ -3532,7 +3607,7 @@ describe('Orchestrator', () => {
       );
 
       const mergeNode = orchestrator.getAllTasks().find((t) => t.config.isMergeNode);
-      expect(mergeNode!.dependencies).toEqual(['pivot-reconciliation']);
+      expect(mergeNode!.dependencies).toEqual([rid(orchestrator, 0, 'pivot')]);
     });
 
     it('experiment spawn with downstream: merge gate deps point to remapped downstream', () => {
@@ -3561,14 +3636,12 @@ describe('Orchestrator', () => {
         }),
       );
 
-      // Downstream is remapped in-place (no -v2 clone)
       const mergeNode = orchestrator.getAllTasks().find((t) => t.config.isMergeNode);
-      expect(mergeNode!.dependencies).toEqual(['downstream']);
+      expect(mergeNode!.dependencies).toEqual([sid(orchestrator, 0, 'downstream')]);
 
-      // Downstream's dependency was remapped from pivot → pivot-reconciliation
-      const downstream = orchestrator.getTask('downstream');
+      const downstream = orchestrator.getTask(sid(orchestrator, 0, 'downstream'));
       expect(downstream).toBeDefined();
-      expect(downstream!.dependencies).toContain('pivot-reconciliation');
+      expect(downstream!.dependencies).toContain(rid(orchestrator, 0, 'pivot'));
     });
 
     it('editTaskCommand: merge gate deps unchanged (no fork)', () => {
@@ -3594,9 +3667,10 @@ describe('Orchestrator', () => {
 
       orchestrator.editTaskCommand('parent', 'echo updated');
 
-      // No fork, no stale. Merge gate deps stay the same.
       const mergeNode = orchestrator.getAllTasks().find((t) => t.config.isMergeNode);
-      expect(mergeNode!.dependencies.sort()).toEqual(['child1', 'child2']);
+      expect(mergeNode!.dependencies.sort()).toEqual(
+        [sid(orchestrator, 0, 'child1'), sid(orchestrator, 0, 'child2')].sort(),
+      );
     });
 
     it('stale tasks are excluded from merge gate deps (via replaceTask)', () => {
@@ -3622,8 +3696,8 @@ describe('Orchestrator', () => {
       ]);
 
       const mergeNode = orchestrator.getAllTasks().find((t) => t.config.isMergeNode);
-      expect(mergeNode!.dependencies).not.toContain('b');
-      expect(mergeNode!.dependencies).toContain('b-replacement');
+      expect(mergeNode!.dependencies).not.toContain(sid(orchestrator, 0, 'b'));
+      expect(mergeNode!.dependencies).toContain(sid(orchestrator, 0, 'b-replacement'));
     });
 
     it('diamond DAG: merge gate depends only on convergence node', () => {
@@ -3638,7 +3712,7 @@ describe('Orchestrator', () => {
       });
 
       const mergeNode = orchestrator.getAllTasks().find((t) => t.config.isMergeNode);
-      expect(mergeNode!.dependencies).toEqual(['d']);
+      expect(mergeNode!.dependencies).toEqual([sid(orchestrator, 0, 'd')]);
     });
 
     it('deep chain with side branch: merge gate depends on all leaf nodes', () => {
@@ -3653,7 +3727,9 @@ describe('Orchestrator', () => {
       });
 
       const mergeNode = orchestrator.getAllTasks().find((t) => t.config.isMergeNode);
-      expect(mergeNode!.dependencies.sort()).toEqual(['c', 'd']);
+      expect(mergeNode!.dependencies.sort()).toEqual(
+        [sid(orchestrator, 0, 'c'), sid(orchestrator, 0, 'd')].sort(),
+      );
     });
   });
 
@@ -3701,8 +3777,9 @@ describe('Orchestrator', () => {
       expect(task.execution.completedAt).toBeUndefined();
       expect(task.execution.mergeConflict).toBeUndefined();
 
+      const t2id = sid(orchestrator, 0, 't2');
       const fixDeltas = publishedDeltas.filter(
-        (d) => d.type === 'updated' && d.taskId === 't2' && d.changes.status === 'fixing_with_ai',
+        (d) => d.type === 'updated' && d.taskId === t2id && d.changes.status === 'fixing_with_ai',
       );
       expect(fixDeltas).toHaveLength(1);
     });
@@ -3743,7 +3820,10 @@ describe('Orchestrator', () => {
       expect(task.execution.isFixingWithAI).toBeFalsy();
 
       const failedDeltas = publishedDeltas.filter(
-        (d) => d.type === 'updated' && d.taskId === 't2' && d.changes.status === 'failed',
+        (d) =>
+          d.type === 'updated' &&
+          d.taskId === sid(orchestrator, 0, 't2') &&
+          d.changes.status === 'failed',
       );
       expect(failedDeltas).toHaveLength(1);
     });
@@ -3824,7 +3904,7 @@ describe('Orchestrator', () => {
       orchestrator.setFixAwaitingApproval('f2', 'test failed: expected 1 to be 2');
 
       const delta = publishedDeltas.find(
-        (d) => d.type === 'updated' && d.taskId === 'f2',
+        (d) => d.type === 'updated' && d.taskId === sid(orchestrator, 0, 'f2'),
       );
       expect(delta).toBeDefined();
       expect((delta as any).changes.execution.agentSessionId).toBe('sess-fix-1');
@@ -3962,6 +4042,8 @@ describe('Orchestrator', () => {
         ],
       });
       const wfId = orchestrator.getWorkflowIds()[0];
+      const r1 = sid(orchestrator, 0, 'r1');
+      const r2 = sid(orchestrator, 0, 'r2');
       publishedDeltas = [];
 
       orchestrator.deleteWorkflow(wfId);
@@ -3972,8 +4054,8 @@ describe('Orchestrator', () => {
       // 2 tasks + 1 merge node = 3 removed deltas
       expect(removedDeltas).toHaveLength(3);
       const removedIds = removedDeltas.map((d) => d.taskId);
-      expect(removedIds).toContain('r1');
-      expect(removedIds).toContain('r2');
+      expect(removedIds).toContain(r1);
+      expect(removedIds).toContain(r2);
     });
 
     it('leaves other workflows unaffected', () => {

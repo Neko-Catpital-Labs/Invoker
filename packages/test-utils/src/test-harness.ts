@@ -124,16 +124,17 @@ export function createTestHarness(opts?: {
     },
 
     completeTask(taskId: string, extras?: Partial<WorkResponse['outputs']>): TaskState[] {
-      // Set branch metadata on the task (simulates what the familiar does)
       const task = orchestrator.getTask(taskId);
-      if (task && !task.execution.branch) {
-        persistence.updateTask(taskId, {
-          execution: { branch: `experiment/${taskId}-test0000` },
+      if (!task) return [];
+      const id = task.id;
+      if (!task.execution.branch) {
+        persistence.updateTask(id, {
+          execution: { branch: `experiment/${id}-test0000` },
         });
       }
       const response: WorkResponse = {
-        requestId: `complete-${taskId}`,
-        actionId: taskId,
+        requestId: `complete-${id}`,
+        actionId: id,
         status: 'completed',
         outputs: { exitCode: 0, ...extras },
       };
@@ -141,9 +142,12 @@ export function createTestHarness(opts?: {
     },
 
     failTask(taskId: string, error?: string): TaskState[] {
+      const task = orchestrator.getTask(taskId);
+      if (!task) return [];
+      const id = task.id;
       const response: WorkResponse = {
-        requestId: `fail-${taskId}`,
-        actionId: taskId,
+        requestId: `fail-${id}`,
+        actionId: id,
         status: 'failed',
         outputs: { exitCode: 1, error: error ?? 'task failed' },
       };

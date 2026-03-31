@@ -9,6 +9,15 @@
 import type { WorkResponse } from '@invoker/protocol';
 import { validateWorkResponse } from '@invoker/protocol';
 
+/** Plan-local id segment for experiment id prefixing (strip `${workflowId}/` when present). */
+function planLocalFromActionId(actionId: string): string {
+  if (actionId.startsWith('__merge__')) {
+    return actionId;
+  }
+  const i = actionId.indexOf('/');
+  return i === -1 ? actionId : actionId.slice(i + 1);
+}
+
 // ── Parsed Response Types ───────────────────────────────────
 
 export interface ParsedVariantDef {
@@ -94,9 +103,10 @@ export class ResponseHandler {
         if (!dagMutation?.spawnExperiments) {
           return { error: 'spawn_experiments requires dagMutation.spawnExperiments' };
         }
+        const pivotLocal = planLocalFromActionId(actionId);
         const variants: ParsedVariantDef[] =
           dagMutation.spawnExperiments.variants.map((v) => ({
-            id: `${actionId}-exp-${v.id}`,
+            id: `${pivotLocal}-exp-${v.id}`,
             description: v.description ?? `Experiment: ${v.id}`,
             prompt: v.prompt,
             command: v.command,

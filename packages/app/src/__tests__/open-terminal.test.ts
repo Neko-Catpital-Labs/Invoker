@@ -243,7 +243,7 @@ describe('open-terminal integration', () => {
     orchestrator.loadPlan(plan);
     const started = orchestrator.startExecution();
     expect(started).toHaveLength(1);
-    expect(started[0].id).toBe('greet');
+    expect(started[0].id.endsWith('/greet')).toBe(true);
 
     // Execute greet
     const resp1 = await executeTaskViaFamiliar(familiar, started[0]);
@@ -251,7 +251,7 @@ describe('open-terminal integration', () => {
     expect(orchestrator.getTask('greet')!.status).toBe('completed');
 
     // Verify getTerminalSpec returns cwd (worktree dir, not repo root)
-    const handle = taskHandles.get('greet')!;
+    const handle = taskHandles.get(started[0].id)!;
     const spec = familiar.getTerminalSpec(handle);
     expect(spec?.cwd).toBeDefined();
     expect(spec).toEqual(expect.objectContaining({ cwd: expect.any(String) }));

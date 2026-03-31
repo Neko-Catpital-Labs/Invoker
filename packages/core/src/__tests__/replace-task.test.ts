@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
+import { sid } from './scoped-test-helpers.js';
 import { Orchestrator } from '../orchestrator.js';
 import type { OrchestratorPersistence, OrchestratorMessageBus } from '../orchestrator.js';
 import type { TaskState, TaskStateChanges, Attempt } from '../task-types.js';
@@ -138,21 +139,21 @@ describe('replaceTask', () => {
     completeTask(orchestrator, 'A');
     failTask(orchestrator, 'X');
 
+    const s = (l: string) => sid(orchestrator, 0, l);
     const started = orchestrator.replaceTask('X', [
       { id: 'fix', description: 'Fix X', command: 'echo fix' },
     ]);
 
-    expect(orchestrator.getTask('X')!.status).toBe('stale');
-    expect(orchestrator.getTask('fix')).toBeDefined();
-    expect(orchestrator.getTask('fix')!.dependencies).toEqual(['A']);
+    expect(orchestrator.getTask(s('X'))!.status).toBe('stale');
+    expect(orchestrator.getTask(s('fix'))).toBeDefined();
+    expect(orchestrator.getTask(s('fix'))!.dependencies).toEqual([s('A')]);
 
-    // Downstream is stale'd (not forked) — merge node gets 'fix' added
-    expect(orchestrator.getTask('C')!.status).toBe('stale');
+    expect(orchestrator.getTask(s('C'))!.status).toBe('stale');
     const mergeNode = orchestrator.getAllTasks().find((t) => t.config.isMergeNode);
-    expect(mergeNode!.dependencies).toContain('fix');
+    expect(mergeNode!.dependencies).toContain(s('fix'));
 
     expect(started).toHaveLength(1);
-    expect(started[0].id).toBe('fix');
+    expect(started[0].id).toBe(s('fix'));
     expect(started[0].status).toBe('running');
   });
 
@@ -169,19 +170,19 @@ describe('replaceTask', () => {
     completeTask(orchestrator, 'A');
     failTask(orchestrator, 'X');
 
+    const s = (l: string) => sid(orchestrator, 0, l);
     orchestrator.replaceTask('X', [
       { id: 's1', description: 'Step 1', command: 'echo s1' },
       { id: 's2', description: 'Step 2', command: 'echo s2', dependencies: ['s1'] },
     ]);
 
-    expect(orchestrator.getTask('X')!.status).toBe('stale');
-    expect(orchestrator.getTask('s1')!.dependencies).toEqual(['A']);
-    expect(orchestrator.getTask('s2')!.dependencies).toEqual(['s1']);
+    expect(orchestrator.getTask(s('X'))!.status).toBe('stale');
+    expect(orchestrator.getTask(s('s1'))!.dependencies).toEqual([s('A')]);
+    expect(orchestrator.getTask(s('s2'))!.dependencies).toEqual([s('s1')]);
 
-    // C is stale, merge node gets s2 (the leaf) added
-    expect(orchestrator.getTask('C')!.status).toBe('stale');
+    expect(orchestrator.getTask(s('C'))!.status).toBe('stale');
     const mergeNode = orchestrator.getAllTasks().find((t) => t.config.isMergeNode);
-    expect(mergeNode!.dependencies).toContain('s2');
+    expect(mergeNode!.dependencies).toContain(s('s2'));
   });
 
   it('multi-node replacement with parallel leaves wires to merge node', () => {
@@ -207,11 +208,11 @@ describe('replaceTask', () => {
     expect(orchestrator.getTask('X-merge')).toBeUndefined();
     const mergeNode = orchestrator.getAllTasks().find((t) => t.config.isMergeNode);
     expect(mergeNode).toBeDefined();
-    expect(mergeNode!.dependencies).toContain('s2a');
-    expect(mergeNode!.dependencies).toContain('s2b');
+    const s = (l: string) => sid(orchestrator, 0, l);
+    expect(mergeNode!.dependencies).toContain(s('s2a'));
+    expect(mergeNode!.dependencies).toContain(s('s2b'));
 
-    // C is stale (downstream of X), no C-v2 (merge node is terminal)
-    expect(orchestrator.getTask('C')!.status).toBe('stale');
+    expect(orchestrator.getTask(s('C'))!.status).toBe('stale');
   });
 
   it('no downstream dependents: just creates replacement', () => {
@@ -226,13 +227,14 @@ describe('replaceTask', () => {
     completeTask(orchestrator, 'A');
     failTask(orchestrator, 'X');
 
+    const s = (l: string) => sid(orchestrator, 0, l);
     orchestrator.replaceTask('X', [
       { id: 'fix', description: 'Fix', command: 'echo fix' },
     ]);
 
-    expect(orchestrator.getTask('X')!.status).toBe('stale');
-    expect(orchestrator.getTask('fix')).toBeDefined();
-    expect(orchestrator.getTask('fix')!.dependencies).toEqual(['A']);
+    expect(orchestrator.getTask(s('X'))!.status).toBe('stale');
+    expect(orchestrator.getTask(s('fix'))).toBeDefined();
+    expect(orchestrator.getTask(s('fix'))!.dependencies).toEqual([s('A')]);
   });
 
   it('replacement inherits multiple upstream deps', () => {
@@ -250,11 +252,12 @@ describe('replaceTask', () => {
     completeTask(orchestrator, 'B');
     failTask(orchestrator, 'X');
 
+    const s = (l: string) => sid(orchestrator, 0, l);
     orchestrator.replaceTask('X', [
       { id: 'fix', description: 'Fix', command: 'echo fix' },
     ]);
 
-    expect(orchestrator.getTask('fix')!.dependencies.sort()).toEqual(['A', 'B']);
+    expect(orchestrator.getTask(s('fix'))!.dependencies.sort()).toEqual([s('A'), s('B')]);
   });
 
   it('blocked dependents are stale (not forked)', () => {
@@ -274,15 +277,15 @@ describe('replaceTask', () => {
     expect(orchestrator.getTask('C')!.status).toBe('pending');
     expect(orchestrator.getTask('D')!.status).toBe('pending');
 
+    const s = (l: string) => sid(orchestrator, 0, l);
     orchestrator.replaceTask('X', [
       { id: 'fix', description: 'Fix', command: 'echo fix' },
     ]);
 
-    // Downstream is stale'd, not forked — merge node gets 'fix'
-    expect(orchestrator.getTask('C')!.status).toBe('stale');
-    expect(orchestrator.getTask('D')!.status).toBe('stale');
+    expect(orchestrator.getTask(s('C'))!.status).toBe('stale');
+    expect(orchestrator.getTask(s('D'))!.status).toBe('stale');
     const mergeNode = orchestrator.getAllTasks().find((t) => t.config.isMergeNode);
-    expect(mergeNode!.dependencies).toContain('fix');
+    expect(mergeNode!.dependencies).toContain(s('fix'));
   });
 
   it('rejects replacing a running task', () => {
@@ -334,14 +337,15 @@ describe('replaceTask', () => {
     completeTask(orchestrator, 'A');
     failTask(orchestrator, 'X');
 
+    const s = (l: string) => sid(orchestrator, 0, l);
     orchestrator.replaceTask('X', [
       { id: 'fix', description: 'Fix', command: 'echo fix' },
     ]);
 
-    expect(orchestrator.getTask('fix')!.status).toBe('running');
+    expect(orchestrator.getTask(s('fix'))!.status).toBe('running');
 
-    completeTask(orchestrator, 'fix');
-    expect(orchestrator.getTask('fix')!.status).toBe('completed');
+    completeTask(orchestrator, s('fix'));
+    expect(orchestrator.getTask(s('fix'))!.status).toBe('completed');
 
     // Merge node becomes ready (C is stale=satisfied, fix is completed)
     const mergeNode = orchestrator.getAllTasks().find((t) => t.config.isMergeNode);
@@ -373,6 +377,10 @@ describe('replaceTask', () => {
       { id: 's1', description: 'S1', command: 'echo s1' },
       { id: 's2', description: 'S2', command: 'echo s2', dependencies: ['s1'] },
     ]);
+
+    const s = (l: string) => sid(orchestrator, 0, l);
+    expect(orchestrator.getTask(s('s1'))).toBeDefined();
+    expect(orchestrator.getTask(s('s2'))).toBeDefined();
 
     const nonStaleTasks = getNonStaleTasks(orchestrator);
     const result = validateDAG(nonStaleTasks);

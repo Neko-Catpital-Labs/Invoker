@@ -7,6 +7,7 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
+import { sid } from './scoped-test-helpers.js';
 import { Orchestrator } from '../orchestrator.js';
 import type { OrchestratorPersistence, OrchestratorMessageBus, GraphMutation } from '../orchestrator.js';
 import type { TaskState, TaskDelta, TaskStateChanges, Attempt } from '../task-types.js';
@@ -135,27 +136,32 @@ describe('applyGraphMutation', () => {
     orchestrator.startExecution();
     completeTask(orchestrator, 'A');
 
+    const s = (l: string) => sid(orchestrator, 0, l);
     bus.published = [];
 
     applyMutation(orchestrator, {
-      sourceNodeId: 'B',
+      sourceNodeId: s('B'),
       sourceDisposition: 'complete',
       newNodes: [
-        { id: 'new-node', description: 'Replacement', dependencies: ['B'], workflowId: orchestrator.getTask('B')!.config.workflowId },
+        {
+          id: s('new-node'),
+          description: 'Replacement',
+          dependencies: [s('B')],
+          workflowId: orchestrator.getTask('B')!.config.workflowId!,
+        },
       ],
-      outputNodeId: 'new-node',
+      outputNodeId: s('new-node'),
     });
 
-    expect(orchestrator.getTask('B')!.status).toBe('completed');
-    expect(orchestrator.getTask('B')!.execution.completedAt).toBeDefined();
+    expect(orchestrator.getTask(s('B'))!.status).toBe('completed');
+    expect(orchestrator.getTask(s('B'))!.execution.completedAt).toBeDefined();
 
-    // C is remapped in-place: dependencies changed from ['B'] to ['new-node'], no stale, no clone
-    expect(orchestrator.getTask('C')!.status).toBe('pending');
-    expect(orchestrator.getTask('C')!.dependencies).toEqual(['new-node']);
+    expect(orchestrator.getTask(s('C'))!.status).toBe('pending');
+    expect(orchestrator.getTask(s('C'))!.dependencies).toEqual([s('new-node')]);
     expect(orchestrator.getTask('C-v2')).toBeUndefined();
 
-    expect(orchestrator.getTask('new-node')).toBeDefined();
-    expect(orchestrator.getTask('new-node')!.status).toBe('pending');
+    expect(orchestrator.getTask(s('new-node'))).toBeDefined();
+    expect(orchestrator.getTask(s('new-node'))!.status).toBe('pending');
   });
 
   it('stale disposition: forks downstream and stales source', () => {
@@ -170,23 +176,28 @@ describe('applyGraphMutation', () => {
     orchestrator.startExecution();
     completeTask(orchestrator, 'A');
 
+    const s = (l: string) => sid(orchestrator, 0, l);
     applyMutation(orchestrator, {
-      sourceNodeId: 'B',
+      sourceNodeId: s('B'),
       sourceDisposition: 'stale',
       newNodes: [
-        { id: 'fix', description: 'Fix', dependencies: ['A'], workflowId: orchestrator.getTask('B')!.config.workflowId },
+        {
+          id: s('fix'),
+          description: 'Fix',
+          dependencies: [s('A')],
+          workflowId: orchestrator.getTask('B')!.config.workflowId!,
+        },
       ],
-      outputNodeId: 'fix',
+      outputNodeId: s('fix'),
     });
 
-    expect(orchestrator.getTask('B')!.status).toBe('stale');
+    expect(orchestrator.getTask(s('B'))!.status).toBe('stale');
 
-    // C is remapped in-place: dependencies changed from ['B'] to ['fix'], no stale, no clone
-    expect(orchestrator.getTask('C')!.status).toBe('pending');
-    expect(orchestrator.getTask('C')!.dependencies).toEqual(['fix']);
+    expect(orchestrator.getTask(s('C'))!.status).toBe('pending');
+    expect(orchestrator.getTask(s('C'))!.dependencies).toEqual([s('fix')]);
     expect(orchestrator.getTask('C-v2')).toBeUndefined();
 
-    expect(orchestrator.getTask('fix')).toBeDefined();
+    expect(orchestrator.getTask(s('fix'))).toBeDefined();
   });
 
   it('new nodes are created after fork (not staled)', () => {
@@ -200,26 +211,25 @@ describe('applyGraphMutation', () => {
     orchestrator.startExecution();
     completeTask(orchestrator, 'A');
 
+    const s = (l: string) => sid(orchestrator, 0, l);
+    const wfId = orchestrator.getTask('A')!.config.workflowId!;
     applyMutation(orchestrator, {
-      sourceNodeId: 'A',
+      sourceNodeId: s('A'),
       sourceDisposition: 'complete',
       newNodes: [
-        { id: 'exp1', description: 'Exp 1', dependencies: ['A'], workflowId: orchestrator.getTask('A')!.config.workflowId },
-        { id: 'exp2', description: 'Exp 2', dependencies: ['A'], workflowId: orchestrator.getTask('A')!.config.workflowId },
-        { id: 'recon', description: 'Recon', dependencies: ['exp1', 'exp2'], workflowId: orchestrator.getTask('A')!.config.workflowId },
+        { id: s('exp1'), description: 'Exp 1', dependencies: [s('A')], workflowId: wfId },
+        { id: s('exp2'), description: 'Exp 2', dependencies: [s('A')], workflowId: wfId },
+        { id: s('recon'), description: 'Recon', dependencies: [s('exp1'), s('exp2')], workflowId: wfId },
       ],
-      outputNodeId: 'recon',
+      outputNodeId: s('recon'),
     });
 
-    // New nodes should NOT be stale
-    expect(orchestrator.getTask('exp1')!.status).toBe('pending');
-    expect(orchestrator.getTask('exp2')!.status).toBe('pending');
-    expect(orchestrator.getTask('recon')!.status).toBe('pending');
+    expect(orchestrator.getTask(s('exp1'))!.status).toBe('pending');
+    expect(orchestrator.getTask(s('exp2'))!.status).toBe('pending');
+    expect(orchestrator.getTask(s('recon'))!.status).toBe('pending');
 
-    // Original downstream remapped in-place: dependencies changed from ['A'] to ['recon']
-    // B was already running (auto-started after A completed), remap doesn't change status
-    expect(orchestrator.getTask('B')!.status).toBe('running');
-    expect(orchestrator.getTask('B')!.dependencies).toEqual(['recon']);
+    expect(orchestrator.getTask(s('B'))!.status).toBe('running');
+    expect(orchestrator.getTask(s('B'))!.dependencies).toEqual([s('recon')]);
     expect(orchestrator.getTask('B-v2')).toBeUndefined();
   });
 
@@ -235,23 +245,28 @@ describe('applyGraphMutation', () => {
     completeTask(orchestrator, 'A');
     completeTask(orchestrator, 'B');
 
+    const s = (l: string) => sid(orchestrator, 0, l);
     const deltas = applyMutation(orchestrator, {
-      sourceNodeId: 'B',
+      sourceNodeId: s('B'),
       sourceDisposition: 'stale',
       newNodes: [
-        { id: 'fix', description: 'Fix', dependencies: ['A'], workflowId: orchestrator.getTask('B')!.config.workflowId },
+        {
+          id: s('fix'),
+          description: 'Fix',
+          dependencies: [s('A')],
+          workflowId: orchestrator.getTask('B')!.config.workflowId!,
+        },
       ],
-      outputNodeId: 'fix',
+      outputNodeId: s('fix'),
     });
 
-    // No downstream to remap, only the new 'fix' node is created
     const createdDeltas = deltas.filter((d) => d.type === 'created');
     expect(createdDeltas).toHaveLength(1);
     expect(createdDeltas[0]).toHaveProperty('task');
-    expect((createdDeltas[0] as any).task.id).toBe('fix');
+    expect((createdDeltas[0] as any).task.id).toBe(s('fix'));
 
-    expect(orchestrator.getTask('B')!.status).toBe('stale');
-    expect(orchestrator.getTask('fix')).toBeDefined();
+    expect(orchestrator.getTask(s('B'))!.status).toBe('stale');
+    expect(orchestrator.getTask(s('fix'))).toBeDefined();
   });
 
   it('emits deltas in correct order: fork, source, new nodes', () => {
@@ -268,30 +283,33 @@ describe('applyGraphMutation', () => {
 
     bus.published = [];
 
+    const s = (l: string) => sid(orchestrator, 0, l);
     applyMutation(orchestrator, {
-      sourceNodeId: 'B',
+      sourceNodeId: s('B'),
       sourceDisposition: 'stale',
       newNodes: [
-        { id: 'fix', description: 'Fix', dependencies: ['A'], workflowId: orchestrator.getTask('B')!.config.workflowId },
+        {
+          id: s('fix'),
+          description: 'Fix',
+          dependencies: [s('A')],
+          workflowId: orchestrator.getTask('B')!.config.workflowId!,
+        },
       ],
-      outputNodeId: 'fix',
+      outputNodeId: s('fix'),
     });
 
     const deltas = bus.published
       .filter((p) => p.channel === 'task.delta')
       .map((p) => p.message as TaskDelta);
 
-    // Remap deltas first: C dependencies updated from ['B'] to ['fix']
     const cRemap = deltas.findIndex(
-      (d) => d.type === 'updated' && d.taskId === 'C' && (d.changes as any).dependencies !== undefined,
+      (d) => d.type === 'updated' && d.taskId === s('C') && (d.changes as any).dependencies !== undefined,
     );
-    // Source disposition
     const bStale = deltas.findIndex(
-      (d) => d.type === 'updated' && d.taskId === 'B' && (d.changes as any).status === 'stale',
+      (d) => d.type === 'updated' && d.taskId === s('B') && (d.changes as any).status === 'stale',
     );
-    // New node creation
     const fixCreated = deltas.findIndex(
-      (d) => d.type === 'created' && (d as any).task.id === 'fix',
+      (d) => d.type === 'created' && (d as any).task.id === s('fix'),
     );
 
     // Order: remap (C dep change) → source (B stale) → new node (fix)

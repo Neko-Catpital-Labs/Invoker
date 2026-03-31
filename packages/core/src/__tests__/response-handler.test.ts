@@ -118,6 +118,26 @@ describe('ResponseHandler (pure parser)', () => {
       expect(result.variants[1].id).toBe('t1-exp-v2');
     });
 
+    it('uses plan-local pivot id when actionId is workflow-scoped', () => {
+      const result = handler.parseResponse(
+        makeResponse({
+          actionId: 'wf-abc/t1',
+          status: 'spawn_experiments',
+          dagMutation: {
+            spawnExperiments: {
+              description: 'Try variants',
+              variants: [{ id: 'v1', prompt: 'A' }],
+            },
+          },
+        }),
+      );
+      expect('type' in result).toBe(true);
+      if (!('type' in result)) return;
+      expect(result.type).toBe('spawn_experiments');
+      expect(result.taskId).toBe('wf-abc/t1');
+      expect(result.variants[0].id).toBe('t1-exp-v1');
+    });
+
     it('returns error when dagMutation.spawnExperiments is missing', () => {
       const result = handler.parseResponse(
         makeResponse({ status: 'spawn_experiments' }),

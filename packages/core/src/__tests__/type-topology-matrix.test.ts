@@ -6,6 +6,7 @@
  */
 import { describe, it, expect, beforeEach } from 'vitest';
 import { reconciliationNeedsInputWorkResponse } from './reconciliation-needs-input-shim.js';
+import { rid, sid } from './scoped-test-helpers.js';
 import { Orchestrator } from '../orchestrator.js';
 import type { PlanDefinition, OrchestratorPersistence, OrchestratorMessageBus } from '../orchestrator.js';
 import type { TaskState, TaskStateChanges , Attempt} from '../task-types.js';
@@ -187,21 +188,23 @@ describe('Type × Topology Matrix', () => {
       );
 
       const allTasks = orchestrator.getAllTasks();
-      const expV1 = allTasks.find((t) => t.id === 'pivot-exp-v1');
-      const expV2 = allTasks.find((t) => t.id === 'pivot-exp-v2');
-      const recon = allTasks.find((t) => t.id === 'pivot-reconciliation');
+      const e1 = sid(orchestrator, 0, 'pivot-exp-v1');
+      const e2 = sid(orchestrator, 0, 'pivot-exp-v2');
+      const reconId = rid(orchestrator, 0, 'pivot');
+      const expV1 = allTasks.find((t) => t.id === e1);
+      const expV2 = allTasks.find((t) => t.id === e2);
+      const recon = allTasks.find((t) => t.id === reconId);
 
       expect(expV1).toBeDefined();
       expect(expV2).toBeDefined();
       expect(recon).toBeDefined();
       expect(recon!.config.isReconciliation).toBe(true);
 
-      // Downstream should be rewired to depend on reconciliation (via fork/clone)
       const downstreamClone = allTasks.find(
         (t) => t.description === 'Downstream' && t.status !== 'stale',
       );
       expect(downstreamClone).toBeDefined();
-      expect(downstreamClone!.dependencies).toContain('pivot-reconciliation');
+      expect(downstreamClone!.dependencies).toContain(reconId);
     });
 
     it('experiment pivot at B in diamond: recon replaces B, D remapped to depend on B-recon and C', () => {
@@ -237,14 +240,14 @@ describe('Type × Topology Matrix', () => {
       );
 
       const allTasks = orchestrator.getAllTasks();
-      const recon = allTasks.find((t) => t.id === 'B-reconciliation');
+      const reconId = rid(orchestrator, 0, 'B');
+      const recon = allTasks.find((t) => t.id === reconId);
       expect(recon).toBeDefined();
 
-      // D's dependencies are remapped in-place: [B, C] → [B-reconciliation, C]
       const d = orchestrator.getTask('D')!;
       expect(d.status).toBe('pending');
-      expect(d.dependencies).toContain('B-reconciliation');
-      expect(d.dependencies).toContain('C');
+      expect(d.dependencies).toContain(reconId);
+      expect(d.dependencies).toContain(sid(orchestrator, 0, 'C'));
     });
 
     it('all experiments fail → reconciliation still gets needs_input', () => {
@@ -278,14 +281,13 @@ describe('Type × Topology Matrix', () => {
         ]),
       );
 
-      // All experiments fail
-      orchestrator.handleWorkerResponse(fail('pivot-exp-v1'));
-      orchestrator.handleWorkerResponse(fail('pivot-exp-v2'));
-      orchestrator.handleWorkerResponse(fail('pivot-exp-v3'));
+      orchestrator.handleWorkerResponse(fail(sid(orchestrator, 0, 'pivot-exp-v1')));
+      orchestrator.handleWorkerResponse(fail(sid(orchestrator, 0, 'pivot-exp-v2')));
+      orchestrator.handleWorkerResponse(fail(sid(orchestrator, 0, 'pivot-exp-v3')));
 
-      orchestrator.handleWorkerResponse(reconciliationNeedsInputWorkResponse('pivot-reconciliation'));
+      orchestrator.handleWorkerResponse(reconciliationNeedsInputWorkResponse(rid(orchestrator, 0, 'pivot')));
 
-      const recon = orchestrator.getTask('pivot-reconciliation')!;
+      const recon = orchestrator.getTask(rid(orchestrator, 0, 'pivot'))!;
       expect(recon.status).toBe('needs_input');
       expect(recon.execution.experimentResults).toBeDefined();
       expect(recon.execution.experimentResults!.length).toBe(3);
@@ -321,20 +323,19 @@ describe('Type × Topology Matrix', () => {
       );
 
       // Complete the single experiment
-      orchestrator.handleWorkerResponse(complete('B-exp-v1'));
+      orchestrator.handleWorkerResponse(complete(sid(orchestrator, 0, 'B-exp-v1')));
 
-      orchestrator.handleWorkerResponse(reconciliationNeedsInputWorkResponse('B-reconciliation'));
+      orchestrator.handleWorkerResponse(reconciliationNeedsInputWorkResponse(rid(orchestrator, 0, 'B')));
 
-      const recon = orchestrator.getTask('B-reconciliation')!;
+      const recon = orchestrator.getTask(rid(orchestrator, 0, 'B'))!;
       expect(recon.status).toBe('needs_input');
 
-      // Provide winner branch info on the experiment task
-      persistence.updateTask('B-exp-v1', {
+      persistence.updateTask(sid(orchestrator, 0, 'B-exp-v1'), {
         execution: { branch: 'experiment/B-exp-v1-hash', commit: 'abc123' },
       });
 
-      orchestrator.selectExperiment('B-reconciliation', 'B-exp-v1');
-      expect(orchestrator.getTask('B-reconciliation')!.status).toBe('completed');
+      orchestrator.selectExperiment(rid(orchestrator, 0, 'B'), sid(orchestrator, 0, 'B-exp-v1'));
+      expect(orchestrator.getTask(rid(orchestrator, 0, 'B'))!.status).toBe('completed');
 
       // D-clone should now start (both B-recon and C are completed)
       const allTasks = orchestrator.getAllTasks();

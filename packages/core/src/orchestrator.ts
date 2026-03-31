@@ -37,6 +37,7 @@ import { getTransitiveDependents } from './dag.js';
 import { ActionGraph } from '@invoker/graph';
 import { reconcileMergeLeavesImpl, applyGraphMutationImpl } from './graph-mutation.js';
 import type { GraphMutationHost } from './graph-mutation.js';
+import { buildPlanLocalToScopedIdMap, scopePlanTaskId } from './task-id-scope.js';
 
 // ── Channel Constants ───────────────────────────────────────
 
@@ -293,11 +294,12 @@ export class Orchestrator {
    * to match. Returns the updated task state.
    */
   private writeAndSync(taskId: string, changes: TaskStateChanges): TaskState {
-    this.persistence.updateTask(taskId, changes);
-    const existing = this.stateMachine.getTask(taskId);
+    const existing = this.stateGetTask(taskId);
     if (!existing) {
       throw new Error(`writeAndSync: task ${taskId} not found in graph`);
     }
+    const id = existing.id;
+    this.persistence.updateTask(id, changes);
     const updated: TaskState = {
       ...existing,
       ...(changes.status !== undefined ? { status: changes.status } : {}),
@@ -309,7 +311,7 @@ export class Orchestrator {
       const ex = updated.execution;
       const execKeys = changes.execution ? Object.keys(changes.execution).join(',') : '';
       console.log(
-        `[persist-sync] taskId=${taskId} resolvedStatus=${updated.status} ` +
+        `[persist-sync] taskId=${id} resolvedStatus=${updated.status} ` +
           `isFixingWithAI=${ex.isFixingWithAI === true ? '1' : '0'} exitCode=${ex.exitCode ?? 'null'} ` +
           `errorLen=${ex.error?.length ?? 0} pendingFix=${ex.pendingFixError ? '1' : '0'} ` +
           `inputPrompt=${ex.inputPrompt ? '1' : '0'} changeStatus=${changes.status ?? '—'} execKeys=${execKeys || '—'}`,
@@ -340,11 +342,14 @@ export class Orchestrator {
    * Persists workflow and tasks, publishes deltas via MessageBus.
    */
   loadPlan(plan: PlanDefinition, opts?: { allowGraphMutation?: boolean }): void {
+    const workflowId = `wf-${Date.now()}-${++workflowCounter}`;
+    const localToScoped = buildPlanLocalToScopedIdMap(workflowId, plan.tasks);
+
     if (!opts?.allowGraphMutation) {
-      const newIds = new Set(plan.tasks.map((t) => t.id));
+      const newScopedIds = new Set(plan.tasks.map((t) => localToScoped.get(t.id)!));
       const existingTasks = this.stateMachine.getAllTasks();
       const overlapping = existingTasks.filter(
-        (t) => newIds.has(t.id) && !t.config.isMergeNode,
+        (t) => newScopedIds.has(t.id) && !t.config.isMergeNode,
       );
 
       if (overlapping.length > 0) {
@@ -370,7 +375,6 @@ export class Orchestrator {
       }
     }
 
-    const workflowId = `wf-${Date.now()}-${++workflowCounter}`;
     this.activeWorkflowIds.add(workflowId);
 
     this.persistence.saveWorkflow({
@@ -389,7 +393,6 @@ export class Orchestrator {
     });
 
     const deltas: TaskDelta[] = [];
-    const taskIds = new Set(plan.tasks.map((t) => t.id));
     const dependedOn = new Set<string>();
     for (const taskDef of plan.tasks) {
       for (const dep of taskDef.dependencies ?? []) {
@@ -403,10 +406,18 @@ export class Orchestrator {
         : {};
       const effectiveFamiliarType = routing.familiarType ?? taskDef.familiarType;
       const effectiveRemoteTargetId = routing.remoteTargetId ?? taskDef.remoteTargetId;
+      const scopedId = localToScoped.get(taskDef.id)!;
+      const scopedDeps = (taskDef.dependencies ?? []).map((dep) => {
+        const s = localToScoped.get(dep);
+        if (!s) {
+          throw new Error(`Task "${taskDef.id}" depends on unknown task id "${dep}" in this plan`);
+        }
+        return s;
+      });
       const task = createTaskState(
-        taskDef.id,
+        scopedId,
         taskDef.description,
-        taskDef.dependencies ?? [],
+        scopedDeps,
         {
           workflowId,
           command: taskDef.command,
@@ -430,7 +441,7 @@ export class Orchestrator {
     // Create terminal merge node depending on all leaf tasks
     const leafIds = plan.tasks
       .filter((t) => !dependedOn.has(t.id))
-      .map((t) => t.id);
+      .map((t) => localToScoped.get(t.id)!);
     const mergeNodeId = `__merge__${workflowId}`;
     const mergeTask = createTaskState(
       mergeNodeId,
@@ -476,9 +487,9 @@ export class Orchestrator {
     // Ignore responses for stale tasks — their processes are orphaned
     // and should not affect the graph.
     {
-      const earlyTask = this.stateMachine.getTask(response.actionId);
+      const earlyTask = this.stateGetTask(response.actionId);
       if (earlyTask?.status === 'stale') {
-        this.scheduler.completeJob(response.actionId);
+        this.scheduler.completeJob(earlyTask.id);
         return [];
       }
       if (earlyTask && (earlyTask.status === 'failed' || earlyTask.status === 'completed')) {
@@ -488,7 +499,7 @@ export class Orchestrator {
 
     // Auto-fix interception
     if (response.status === 'failed') {
-      const task = this.stateMachine.getTask(response.actionId);
+      const task = this.stateGetTask(response.actionId);
       if (task?.config.autoFix) {
         const syntheticResponse = this.buildAutoFixResponse(task, response.outputs);
         return this.handleWorkerResponse(syntheticResponse);
@@ -502,38 +513,40 @@ export class Orchestrator {
         `[worker-response] NO_ORCH_WRITE actionId=${response.actionId} parseError=${parseErr} ` +
           `responseStatus=${String(response.status)} — DB task row is unchanged; UI/orchestrator may diverge`,
       );
-      this.scheduler.completeJob(response.actionId);
+      this.scheduler.completeJob(this.stateGetTask(response.actionId)?.id ?? response.actionId);
       return [];
     }
 
     const taskId = parsed.taskId;
-    const task = this.stateMachine.getTask(taskId);
+    const task = this.stateGetTask(taskId);
     if (!task) {
       console.warn(`[worker-response] task not in graph taskId=${taskId} (stale response?)`);
-      this.scheduler.completeJob(taskId);
+      this.scheduler.completeJob(this.stateGetTask(taskId)?.id ?? taskId);
       return [];
     }
 
+    const canonicalTaskId = task.id;
+
     if (process.env.NODE_ENV !== 'test') {
       console.log(
-        `[worker-response] write path parsedType=${parsed.type} taskId=${taskId} ` +
+        `[worker-response] write path parsedType=${parsed.type} taskId=${canonicalTaskId} ` +
           `graphStatusBefore=${task.status} workerResponseStatus=${response.status}`,
       );
     }
 
-    this.scheduler.completeJob(taskId);
+    this.scheduler.completeJob(canonicalTaskId);
 
     switch (parsed.type) {
       case 'completed':
-        return this.handleCompleted(taskId, parsed);
+        return this.handleCompleted(canonicalTaskId, parsed);
       case 'failed':
-        return this.handleFailed(taskId, parsed);
+        return this.handleFailed(canonicalTaskId, parsed);
       case 'needs_input':
-        return this.handleNeedsInput(taskId, parsed);
+        return this.handleNeedsInput(canonicalTaskId, parsed);
       case 'spawn_experiments':
-        return this.handleSpawnExperiments(taskId, parsed);
+        return this.handleSpawnExperiments(canonicalTaskId, parsed);
       case 'select_experiment':
-        return this.handleSelectExperiment(taskId, parsed);
+        return this.handleSelectExperiment(canonicalTaskId, parsed);
       default:
         return [];
     }
@@ -544,13 +557,14 @@ export class Orchestrator {
    */
   provideInput(taskId: string, input: string): void {
     this.refreshFromDb();
-    const task = this.stateMachine.getTask(taskId);
+    const task = this.stateGetTask(taskId);
     if (!task || task.status !== 'needs_input') return;
+    const id = task.id;
 
     const changes: TaskStateChanges = { status: 'running', execution: { inputPrompt: undefined } };
-    this.writeAndSync(taskId, changes);
-    const delta: TaskDelta = { type: 'updated', taskId, changes };
-    this.persistence.logEvent?.(taskId, 'task.running', changes);
+    this.writeAndSync(id, changes);
+    const delta: TaskDelta = { type: 'updated', taskId: id, changes };
+    this.persistence.logEvent?.(id, 'task.running', changes);
     this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
   }
 
@@ -561,10 +575,11 @@ export class Orchestrator {
    */
   setTaskAwaitingApproval(taskId: string, additionalChanges?: TaskStateChanges): void {
     this.refreshFromDb();
-    const task = this.stateMachine.getTask(taskId);
+    const task = this.stateGetTask(taskId);
     if (!task) return;
+    const id = task.id;
 
-    this.scheduler.completeJob(taskId);
+    this.scheduler.completeJob(id);
 
     const changes: TaskStateChanges = {
       status: 'awaiting_approval',
@@ -573,49 +588,50 @@ export class Orchestrator {
     };
     if (task.config.isMergeNode && changes.execution && 'workspacePath' in changes.execution) {
       mergeTrace('GATE_WS_SET_TASK_AWAITING_APPROVAL', {
-        taskId,
+        taskId: id,
         workspacePath: changes.execution.workspacePath ?? null,
       });
       console.log(
-        `[merge-gate-workspace] setTaskAwaitingApproval mergeNode=${taskId} ` +
+        `[merge-gate-workspace] setTaskAwaitingApproval mergeNode=${id} ` +
           `execution.workspacePath=${changes.execution.workspacePath ?? 'NULL'}`,
       );
     }
-    this.writeAndSync(taskId, changes);
-    const delta: TaskDelta = { type: 'updated', taskId, changes };
-    this.persistence.logEvent?.(taskId, 'task.awaiting_approval', changes);
+    this.writeAndSync(id, changes);
+    const delta: TaskDelta = { type: 'updated', taskId: id, changes };
+    this.persistence.logEvent?.(id, 'task.awaiting_approval', changes);
     this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
   }
 
   setFixAwaitingApproval(taskId: string, originalError: string): void {
     this.refreshFromDb();
-    const task = this.stateMachine.getTask(taskId);
+    const task = this.stateGetTask(taskId);
     if (!task) throw new Error(`Task ${taskId} not found`);
+    const tid = task.id;
     if (task.status !== 'running' && task.status !== 'fixing_with_ai') {
-      throw new Error(`Task ${taskId} is not running or fixing with AI (status: ${task.status})`);
+      throw new Error(`Task ${tid} is not running or fixing with AI (status: ${task.status})`);
     }
-    console.log(`[setFixAwaitingApproval] taskId=${taskId} agentSessionId=${task.execution.agentSessionId}`);
+    console.log(`[setFixAwaitingApproval] taskId=${tid} agentSessionId=${task.execution.agentSessionId}`);
     if (task.config.isMergeNode) {
       console.log(
-        `[merge-gate-workspace] setFixAwaitingApproval mergeNode=${taskId} ` +
+        `[merge-gate-workspace] setFixAwaitingApproval mergeNode=${tid} ` +
           `workspacePath unchanged by this call; current=${task.execution.workspacePath ?? 'none'}`,
       );
       mergeTrace('GATE_WS_SET_FIX_AWAITING', {
-        taskId,
+        taskId: tid,
         workspacePath: task.execution.workspacePath ?? null,
       });
     }
 
-    this.scheduler.completeJob(taskId);
+    this.scheduler.completeJob(tid);
 
     const changes: TaskStateChanges = {
       status: 'awaiting_approval',
       execution: { pendingFixError: originalError, isFixingWithAI: false, agentSessionId: task.execution.agentSessionId },
     };
     console.log(`[setFixAwaitingApproval] delta.changes.execution=`, JSON.stringify(changes.execution));
-    this.writeAndSync(taskId, changes);
-    const delta: TaskDelta = { type: 'updated', taskId, changes };
-    this.persistence.logEvent?.(taskId, 'task.awaiting_approval', changes);
+    this.writeAndSync(tid, changes);
+    const delta: TaskDelta = { type: 'updated', taskId: tid, changes };
+    this.persistence.logEvent?.(tid, 'task.awaiting_approval', changes);
     this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
   }
 
@@ -630,7 +646,7 @@ export class Orchestrator {
   async approve(taskId: string): Promise<TaskState[]> {
     mergeTrace('APPROVE_ENTER', { taskId });
     this.refreshFromDb();
-    const task = this.stateMachine.getTask(taskId);
+    const task = this.stateGetTask(taskId);
     mergeTrace('APPROVE_TASK_LOOKUP', { taskId, found: !!task, status: task?.status, isMergeNode: !!task?.config.isMergeNode, hasHook: !!this.beforeApproveHook });
     if (!task || task.status !== 'awaiting_approval') {
       mergeTrace('APPROVE_SKIPPED_NOT_AWAITING', {
@@ -669,7 +685,7 @@ export class Orchestrator {
       const fixDelta: TaskDelta = { type: 'updated', taskId, changes: fixClearChanges };
       this.persistence.logEvent?.(taskId, 'task.running', fixClearChanges);
       this.messageBus.publish(TASK_DELTA_CHANNEL, fixDelta);
-      const updated = this.stateMachine.getTask(taskId)!;
+      const updated = this.stateGetTask(taskId)!;
       console.log(
         `[merge-gate-workspace] approve(post-fix) mergeNode=${taskId} ` +
           `after writeAndSync execution.workspacePath=${updated.execution.workspacePath ?? 'none'} ` +
@@ -710,16 +726,16 @@ export class Orchestrator {
         mergeNodeStatus: mergeNode?.status,
         mergeNodeDeps: mergeNode?.dependencies,
         mergeNodeDepsStatuses: mergeNode?.dependencies.map(depId => {
-          const dep = this.stateMachine.getTask(depId);
+          const dep = this.stateGetTask(depId);
           return { id: depId, status: dep?.status ?? 'NOT_FOUND' };
         }),
       });
     }
 
-    const readyTaskIds = this.stateMachine.findNewlyReadyTasks(taskId);
-    mergeTrace('APPROVE_READY_TASKS', { taskId, readyTaskIds });
+    const readyTaskIds = this.stateMachine.findNewlyReadyTasks(task.id);
+    mergeTrace('APPROVE_READY_TASKS', { taskId: task.id, readyTaskIds });
     const started = this.autoStartReadyTasks(readyTaskIds);
-    mergeTrace('APPROVE_STARTED', { taskId, startedIds: started.map(t => t.id), startedStatuses: started.map(t => t.status) });
+    mergeTrace('APPROVE_STARTED', { taskId: task.id, startedIds: started.map(t => t.id), startedStatuses: started.map(t => t.status) });
     this.checkWorkflowCompletion();
     return started;
   }
@@ -729,7 +745,7 @@ export class Orchestrator {
    */
   reject(taskId: string, reason?: string): void {
     this.refreshFromDb();
-    const task = this.stateMachine.getTask(taskId);
+    const task = this.stateGetTask(taskId);
     if (!task || task.status !== 'awaiting_approval') return;
 
     const changes: TaskStateChanges = {
@@ -749,33 +765,35 @@ export class Orchestrator {
    */
   selectExperiment(taskId: string, experimentId: string): TaskState[] {
     this.refreshFromDb();
-    const task = this.stateMachine.getTask(taskId);
+    const task = this.stateGetTask(taskId);
     if (!task || !task.config.isReconciliation) return [];
+    const reconId = task.id;
 
     // Reconciliation may still be `running` if selection happens without a prior
     // `needs_input` worker response (tests); free the scheduler slot either way.
     if (task.status === 'running' || task.status === 'fixing_with_ai') {
-      this.scheduler.completeJob(taskId);
+      this.scheduler.completeJob(reconId);
     }
 
-    const winner = this.stateMachine.getTask(experimentId);
+    const winner = this.stateGetTask(experimentId);
+    const winnerId = winner?.id ?? experimentId;
     const changes: TaskStateChanges = {
       status: 'completed',
       execution: {
-        selectedExperiment: experimentId,
+        selectedExperiment: winnerId,
         completedAt: new Date(),
         branch: winner?.execution.branch,
         commit: winner?.execution.commit,
       },
     };
-    this.writeAndSync(taskId, changes);
-    const delta: TaskDelta = { type: 'updated', taskId, changes };
-    this.persistence.logEvent?.(taskId, 'task.completed', changes);
+    this.writeAndSync(reconId, changes);
+    const delta: TaskDelta = { type: 'updated', taskId: reconId, changes };
+    this.persistence.logEvent?.(reconId, 'task.completed', changes);
     this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
 
-    const readyTaskIds = this.stateMachine.findNewlyReadyTasks(taskId);
+    const readyTaskIds = this.stateMachine.findNewlyReadyTasks(reconId);
     const schedulerStatus = this.scheduler.getStatus();
-    console.log(`[orchestrator] selectExperiment "${taskId}": ${readyTaskIds.length} newly ready: [${readyTaskIds.join(', ')}], scheduler: util=${schedulerStatus.runningUtilization}/${schedulerStatus.maxUtilization} running=${schedulerStatus.runningCount} queued=${schedulerStatus.queueLength}`);
+    console.log(`[orchestrator] selectExperiment "${reconId}": ${readyTaskIds.length} newly ready: [${readyTaskIds.join(', ')}], scheduler: util=${schedulerStatus.runningUtilization}/${schedulerStatus.maxUtilization} running=${schedulerStatus.runningCount} queued=${schedulerStatus.queueLength}`);
     const started = this.autoStartReadyTasks(readyTaskIds);
     this.checkWorkflowCompletion();
     return started;
@@ -797,11 +815,12 @@ export class Orchestrator {
     }
 
     this.refreshFromDb();
-    const task = this.stateMachine.getTask(taskId);
+    const task = this.stateGetTask(taskId);
     if (!task || !task.config.isReconciliation) return [];
+    const reconId = task.id;
 
     if (task.status === 'running' || task.status === 'fixing_with_ai') {
-      this.scheduler.completeJob(taskId);
+      this.scheduler.completeJob(reconId);
     }
 
     const changes: TaskStateChanges = {
@@ -814,14 +833,14 @@ export class Orchestrator {
         commit: combinedCommit,
       },
     };
-    this.writeAndSync(taskId, changes);
-    const delta: TaskDelta = { type: 'updated', taskId, changes };
-    this.persistence.logEvent?.(taskId, 'task.completed', changes);
+    this.writeAndSync(reconId, changes);
+    const delta: TaskDelta = { type: 'updated', taskId: reconId, changes };
+    this.persistence.logEvent?.(reconId, 'task.completed', changes);
     this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
 
-    const readyTaskIds = this.stateMachine.findNewlyReadyTasks(taskId);
+    const readyTaskIds = this.stateMachine.findNewlyReadyTasks(reconId);
     const schedulerStatus = this.scheduler.getStatus();
-    console.log(`[orchestrator] selectExperiments "${taskId}": ${readyTaskIds.length} newly ready: [${readyTaskIds.join(', ')}], scheduler: util=${schedulerStatus.runningUtilization}/${schedulerStatus.maxUtilization} running=${schedulerStatus.runningCount} queued=${schedulerStatus.queueLength}`);
+    console.log(`[orchestrator] selectExperiments "${reconId}": ${readyTaskIds.length} newly ready: [${readyTaskIds.join(', ')}], scheduler: util=${schedulerStatus.runningUtilization}/${schedulerStatus.maxUtilization} running=${schedulerStatus.runningCount} queued=${schedulerStatus.queueLength}`);
     const started = this.autoStartReadyTasks(readyTaskIds);
     this.checkWorkflowCompletion();
     return started;
@@ -833,38 +852,39 @@ export class Orchestrator {
    */
   restartTask(taskId: string): TaskState[] {
     this.refreshFromDb();
-    const task = this.stateMachine.getTask(taskId);
+    const task = this.stateGetTask(taskId);
     if (!task) throw new Error(`Task ${taskId} not found`);
+    const id = task.id;
 
     const prevStatus = task.status;
-    console.log(`[orchestrator] restartTask "${taskId}" (was ${prevStatus})`);
+    console.log(`[orchestrator] restartTask "${id}" (was ${prevStatus})`);
     if (task.config.isMergeNode) {
       console.log(
-        `[merge-gate-workspace] restartTask mergeNode=${taskId} ` +
+        `[merge-gate-workspace] restartTask mergeNode=${id} ` +
           `before reset workspacePath=${task.execution.workspacePath ?? 'none'} ` +
           '(restartTask does not clear workspacePath)',
       );
       mergeTrace('GATE_WS_RESTART_TASK_MERGE', {
-        taskId,
+        taskId: id,
         workspacePathBefore: task.execution.workspacePath ?? null,
       });
     }
 
     const completedDownstream = this.stateMachine.getAllTasks().filter(
-      t => t.status === 'completed' && t.dependencies.includes(taskId),
+      t => t.status === 'completed' && t.dependencies.includes(id),
     );
     if (completedDownstream.length > 0 && prevStatus === 'completed') {
-      console.warn(`[orchestrator] restartTask "${taskId}": ${completedDownstream.length} downstream task(s) are completed and will NOT be invalidated: [${completedDownstream.map(t => t.id).join(', ')}]`);
+      console.warn(`[orchestrator] restartTask "${id}": ${completedDownstream.length} downstream task(s) are completed and will NOT be invalidated: [${completedDownstream.map(t => t.id).join(', ')}]`);
     }
 
     // Supersede current selected attempt and create a new one (best-effort)
     try {
-      const attempts = this.persistence.loadAttempts(taskId);
+      const attempts = this.persistence.loadAttempts(id);
       const current = attempts[attempts.length - 1];
       if (current && (current.status === 'running' || current.status === 'pending')) {
         this.persistence.updateAttempt(current.id, { status: 'superseded' });
       }
-      const newAttempt = createAttempt(taskId, {
+      const newAttempt = createAttempt(id, {
         snapshotCommit: current?.commit,
         supersedesAttemptId: current?.id,
       });
@@ -886,27 +906,27 @@ export class Orchestrator {
         containerId: undefined,
       },
     };
-    const t0 = this.stateMachine.getTask(taskId)!;
+    const t0 = this.stateGetTask(id)!;
     console.log(
-      `[agent-session-trace] restartTask: before writeAndSync task="${taskId}" agentSessionId=${t0.execution.agentSessionId ?? 'null'} ` +
+      `[agent-session-trace] restartTask: before writeAndSync task="${id}" agentSessionId=${t0.execution.agentSessionId ?? 'null'} ` +
         '(reset clears agentSessionId/containerId; branch/workspacePath unchanged)',
     );
-    const afterRt = this.writeAndSync(taskId, resetChanges);
+    const afterRt = this.writeAndSync(id, resetChanges);
     console.log(
-      `[agent-session-trace] restartTask: after writeAndSync task="${taskId}" agentSessionId=${afterRt.execution.agentSessionId ?? 'null'}`,
+      `[agent-session-trace] restartTask: after writeAndSync task="${id}" agentSessionId=${afterRt.execution.agentSessionId ?? 'null'}`,
     );
     if (afterRt.config.isMergeNode) {
       console.log(
-        `[merge-gate-workspace] restartTask mergeNode=${taskId} ` +
+        `[merge-gate-workspace] restartTask mergeNode=${id} ` +
           `after reset workspacePath=${afterRt.execution.workspacePath ?? 'none'}`,
       );
       mergeTrace('GATE_WS_RESTART_TASK_MERGE_AFTER', {
-        taskId,
+        taskId: id,
         workspacePathAfter: afterRt.execution.workspacePath ?? null,
       });
     }
-    const resetDelta: TaskDelta = { type: 'updated', taskId, changes: resetChanges };
-    this.persistence.logEvent?.(taskId, 'task.pending', resetChanges);
+    const resetDelta: TaskDelta = { type: 'updated', taskId: id, changes: resetChanges };
+    this.persistence.logEvent?.(id, 'task.pending', resetChanges);
     this.messageBus.publish(TASK_DELTA_CHANNEL, resetDelta);
 
     // Reset any reconciliation task that was already in needs_input but now
@@ -914,7 +934,7 @@ export class Orchestrator {
     for (const recon of this.stateMachine.getAllTasks()) {
       if (!recon.config.isReconciliation) continue;
       if (recon.status !== 'needs_input') continue;
-      if (!recon.dependencies.includes(taskId)) continue;
+      if (!recon.dependencies.includes(id)) continue;
 
       const reconReset: TaskStateChanges = {
         status: 'pending',
@@ -924,19 +944,19 @@ export class Orchestrator {
       const reconDelta: TaskDelta = { type: 'updated', taskId: recon.id, changes: reconReset };
       this.persistence.logEvent?.(recon.id, 'task.pending', reconReset);
       this.messageBus.publish(TASK_DELTA_CHANNEL, reconDelta);
-      console.log(`[orchestrator] restartTask "${taskId}": reset reconciliation "${recon.id}" back to pending`);
+      console.log(`[orchestrator] restartTask "${id}": reset reconciliation "${recon.id}" back to pending`);
     }
 
-    this.scheduler.completeJob(taskId);
+    this.scheduler.completeJob(id);
 
     const readyTasks = this.stateMachine.getReadyTasks();
-    const isReady = readyTasks.some((t) => t.id === taskId);
-    console.log(`[orchestrator] restartTask "${taskId}": ready=${isReady}`);
+    const isReady = readyTasks.some((t) => t.id === id);
+    console.log(`[orchestrator] restartTask "${id}": ready=${isReady}`);
     if (isReady) {
-      return this.autoStartReadyTasks([taskId]);
+      return this.autoStartReadyTasks([id]);
     }
 
-    return [this.stateMachine.getTask(taskId)!];
+    return [this.stateGetTask(id)!];
   }
 
   /**
@@ -1013,12 +1033,13 @@ export class Orchestrator {
    */
   beginConflictResolution(taskId: string): { savedError: string } {
     this.refreshFromDb();
-    const task = this.stateMachine.getTask(taskId);
+    const task = this.stateGetTask(taskId);
     if (!task) throw new Error(`Task ${taskId} not found`);
     if (task.status !== 'failed') throw new Error(`Task ${taskId} is not failed (status: ${task.status})`);
 
     const savedError = task.execution.error ?? '';
 
+    const id = task.id;
     const changes: TaskStateChanges = {
       status: 'fixing_with_ai',
       execution: {
@@ -1032,8 +1053,8 @@ export class Orchestrator {
       },
     };
     this.writeAndSync(taskId, changes);
-    const delta: TaskDelta = { type: 'updated', taskId, changes };
-    this.persistence.logEvent?.(taskId, 'task.fixing_with_ai', changes);
+    const delta: TaskDelta = { type: 'updated', taskId: id, changes };
+    this.persistence.logEvent?.(id, 'task.fixing_with_ai', changes);
     this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
 
     return { savedError };
@@ -1045,6 +1066,11 @@ export class Orchestrator {
    */
   revertConflictResolution(taskId: string, savedError: string, fixError?: string): void {
     this.refreshFromDb();
+    const task = this.stateGetTask(taskId);
+    if (!task) {
+      throw new Error(`Task ${taskId} not found`);
+    }
+    const id = task.id;
 
     let mergeConflict: { failedBranch: string; conflictFiles: string[] } | undefined;
     try {
@@ -1062,8 +1088,8 @@ export class Orchestrator {
       execution: { error: displayError, mergeConflict, isFixingWithAI: false },
     };
     this.writeAndSync(taskId, changes);
-    const delta: TaskDelta = { type: 'updated', taskId, changes };
-    this.persistence.logEvent?.(taskId, 'task.failed', changes);
+    const delta: TaskDelta = { type: 'updated', taskId: id, changes };
+    this.persistence.logEvent?.(id, 'task.failed', changes);
     this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
   }
 
@@ -1072,7 +1098,7 @@ export class Orchestrator {
    */
   editTaskCommand(taskId: string, newCommand: string): TaskState[] {
     this.refreshFromDb();
-    const task = this.stateMachine.getTask(taskId);
+    const task = this.stateGetTask(taskId);
     if (!task) throw new Error(`Task ${taskId} not found`);
     if (task.config.isMergeNode) throw new Error(`Cannot edit merge node ${taskId}`);
     if (task.status === 'running' || task.status === 'fixing_with_ai') throw new Error(`Cannot edit running task ${taskId}`);
@@ -1106,7 +1132,7 @@ export class Orchestrator {
    */
   editTaskType(taskId: string, familiarType: string, remoteTargetId?: string): TaskState[] {
     this.refreshFromDb();
-    const task = this.stateMachine.getTask(taskId);
+    const task = this.stateGetTask(taskId);
     if (!task) throw new Error(`Task ${taskId} not found`);
     if (task.config.isMergeNode) throw new Error(`Cannot change executor type of merge node ${taskId}`);
     if (task.status === 'running' || task.status === 'fixing_with_ai') throw new Error(`Cannot edit running task ${taskId}`);
@@ -1148,18 +1174,23 @@ export class Orchestrator {
    */
   replaceTask(taskId: string, replacementTasks: TaskReplacementDef[]): TaskState[] {
     this.refreshFromDb();
-    const task = this.stateMachine.getTask(taskId);
+    const task = this.stateGetTask(taskId);
     if (!task) throw new Error(`Task ${taskId} not found`);
     if (task.status === 'running' || task.status === 'fixing_with_ai') throw new Error(`Cannot replace running task ${taskId}`);
     if (replacementTasks.length === 0) throw new Error('Must provide at least one replacement task');
 
-    const replacementIds = new Set(replacementTasks.map((t) => t.id));
+    const wfId = task.config.workflowId;
+    if (!wfId) throw new Error(`replaceTask: task ${taskId} has no workflowId`);
+
+    const replacementRawIds = new Set(replacementTasks.map((t) => t.id));
+    const scopeLocal = (local: string) => scopePlanTaskId(wfId, local);
 
     // 1. Stale the broken task and all downstream (except merge node)
+    const sourceId = task.id;
     const allTasks = this.stateMachine.getAllTasks();
     const taskMap = new Map(allTasks.map((t) => [t.id, t]));
     const descendantIds = getTransitiveDependents(
-      taskId,
+      sourceId,
       taskMap,
       (t) => !!t.config.isMergeNode,
     );
@@ -1172,18 +1203,22 @@ export class Orchestrator {
       });
     }
     const sourceChanges: TaskStateChanges = { status: 'stale' };
-    this.writeAndSync(taskId, sourceChanges);
-    this.persistence.logEvent?.(taskId, 'task.stale', sourceChanges);
+    this.writeAndSync(sourceId, sourceChanges);
+    this.persistence.logEvent?.(sourceId, 'task.stale', sourceChanges);
     this.messageBus.publish(TASK_DELTA_CHANNEL, {
-      type: 'updated', taskId, changes: sourceChanges,
+      type: 'updated', taskId: sourceId, changes: sourceChanges,
     });
 
     // 2. Create replacement tasks
     for (const rt of replacementTasks) {
       const hasInternalDeps =
-        rt.dependencies?.length && rt.dependencies.some((d) => replacementIds.has(d));
-      const newTask = createTaskState(rt.id, rt.description, hasInternalDeps ? rt.dependencies! : [...task.dependencies], {
-        workflowId: task.config.workflowId,
+        rt.dependencies?.length && rt.dependencies.some((d) => replacementRawIds.has(d));
+      const scopedId = scopeLocal(rt.id);
+      const deps = hasInternalDeps
+        ? rt.dependencies!.map((d) => scopeLocal(d))
+        : [...task.dependencies];
+      const newTask = createTaskState(scopedId, rt.description, deps, {
+        workflowId: wfId,
         command: rt.command,
         prompt: rt.prompt,
         familiarType: rt.familiarType ?? task.config.familiarType,
@@ -1194,20 +1229,18 @@ export class Orchestrator {
     }
 
     // 3. Reconcile merge node deps from actual graph state
-    if (task.config.workflowId) {
-      this.reconcileMergeLeaves(task.config.workflowId);
-    }
+    this.reconcileMergeLeaves(wfId);
 
-    this.scheduler.completeJob(taskId);
+    this.scheduler.completeJob(task.id);
 
     // Auto-start ready replacement root tasks
     const rootIds = replacementTasks
       .filter((rt) => {
         const hasInternalDeps =
-          rt.dependencies?.length && rt.dependencies.some((d) => replacementIds.has(d));
+          rt.dependencies?.length && rt.dependencies.some((d) => replacementRawIds.has(d));
         return !hasInternalDeps;
       })
-      .map((rt) => rt.id);
+      .map((rt) => scopeLocal(rt.id));
     return this.autoStartReadyTasks(rootIds);
   }
 
@@ -1354,8 +1387,33 @@ export class Orchestrator {
 
   // ── Queries ───────────────────────────────────────────────
 
+  /**
+   * In tests only: resolve bare plan-local ids (e.g. `t1`) to `wf-…/t1` when exactly one loaded
+   * workflow has that task. Production always uses fully-qualified ids from the graph.
+   */
+  private bareToScopedIfUnique(taskId: string): string | undefined {
+    if (process.env.NODE_ENV !== 'test') return undefined;
+    if (taskId.includes('/') || taskId.startsWith('__merge__')) return undefined;
+    const sm = this.stateMachine;
+    const wfs = this.getWorkflowIds();
+    const hits: string[] = [];
+    for (const wf of wfs) {
+      const s = scopePlanTaskId(wf, taskId);
+      if (sm.getTask(s)) hits.push(s);
+    }
+    return hits.length === 1 ? hits[0] : undefined;
+  }
+
+  private stateGetTask(taskId: string): TaskState | undefined {
+    const sm = this.stateMachine;
+    const t0 = sm.getTask(taskId);
+    if (t0) return t0;
+    const alt = this.bareToScopedIfUnique(taskId);
+    return alt ? sm.getTask(alt) : undefined;
+  }
+
   getTask(taskId: string): TaskState | undefined {
-    return this.stateMachine.getTask(taskId);
+    return this.stateGetTask(taskId);
   }
 
   getAllTasks(): TaskState[] {
@@ -1406,7 +1464,7 @@ export class Orchestrator {
   cancelTask(taskId: string): { cancelled: string[]; runningCancelled: string[] } {
     this.refreshFromDb();
 
-    const task = this.stateMachine.getTask(taskId);
+    const task = this.stateGetTask(taskId);
     if (!task) throw new Error(`Task "${taskId}" not found`);
 
     const terminal = new Set(['completed', 'stale']);
@@ -1415,20 +1473,26 @@ export class Orchestrator {
     }
 
     // Find all transitive dependents, skipping completed/stale
+    const rootId = task.id;
+    const upstreamLabel =
+      rootId.includes('/') && !rootId.startsWith('__merge__')
+        ? rootId.slice(rootId.indexOf('/') + 1)
+        : rootId;
+
     const allTasks = this.stateMachine.getAllTasks();
-    const taskMap = new Map(allTasks.map(t => [t.id, t]));
+    const taskMap = new Map(allTasks.map((t) => [t.id, t]));
     const descendantIds = getTransitiveDependents(
-      taskId,
+      rootId,
       taskMap,
       (t) => t.status === 'completed' || t.status === 'stale',
     );
 
-    const toCancelIds = [taskId, ...descendantIds];
+    const toCancelIds = [rootId, ...descendantIds];
     const cancelled: string[] = [];
     const runningCancelled: string[] = [];
 
     for (const id of toCancelIds) {
-      const t = this.stateMachine.getTask(id);
+      const t = this.stateGetTask(id);
       if (!t || t.status === 'completed' || t.status === 'stale') continue;
 
       const wasRunning = t.status === 'running' || t.status === 'fixing_with_ai';
@@ -1442,9 +1506,10 @@ export class Orchestrator {
       }
 
       // Mark as failed
-      const errorMsg = id === taskId
-        ? 'Cancelled by user'
-        : `Cancelled: upstream task "${taskId}" was cancelled`;
+      const errorMsg =
+        id === rootId
+          ? 'Cancelled by user'
+          : `Cancelled: upstream task "${upstreamLabel}" was cancelled`;
       const changes: TaskStateChanges = {
         status: 'failed',
         execution: { error: errorMsg, completedAt: new Date() },
@@ -1479,13 +1544,13 @@ export class Orchestrator {
       runningUtilization: status.runningUtilization,
       running: runningJobs.map(j => ({
         ...j,
-        description: this.stateMachine.getTask(j.taskId)?.description ?? '',
+        description: this.stateGetTask(j.taskId)?.description ?? '',
       })),
       queued: queuedJobs.map(j => ({
         taskId: j.taskId,
         priority: j.priority,
         utilization: j.utilization ?? 50,
-        description: this.stateMachine.getTask(j.taskId)?.description ?? '',
+        description: this.stateGetTask(j.taskId)?.description ?? '',
       })),
     };
   }
@@ -1496,7 +1561,7 @@ export class Orchestrator {
     taskId: string,
     parsed: Extract<ParsedResponse, { type: 'completed' }>,
   ): TaskState[] {
-    const task = this.stateMachine.getTask(taskId);
+    const task = this.stateGetTask(taskId);
     const needsApproval = task?.config.requiresManualApproval === true;
 
     const execution: {
@@ -1629,11 +1694,16 @@ export class Orchestrator {
     taskId: string,
     parsed: Extract<ParsedResponse, { type: 'spawn_experiments' }>,
   ): TaskState[] {
-    const parentTask = this.stateMachine.getTask(taskId);
+    const parentTask = this.stateGetTask(taskId);
     const wfId = parentTask?.config.workflowId;
+    if (!wfId) {
+      console.warn(`[orchestrator] handleSpawnExperiments: task "${taskId}" has no workflowId; skipping`);
+      return [];
+    }
+    const scopeLocal = (local: string) => scopePlanTaskId(wfId, local);
 
     const experimentTasks: GraphMutationNodeDef[] = parsed.variants.map((v) => ({
-      id: v.id,
+      id: scopeLocal(v.id),
       description: v.description ?? `Experiment: ${v.id}`,
       dependencies: [taskId],
       workflowId: wfId,
@@ -1719,13 +1789,13 @@ export class Orchestrator {
       if (!recon.dependencies.includes(taskId)) continue;
 
       const allReported = recon.dependencies.every((depId) => {
-        const dep = this.stateMachine.getTask(depId);
+        const dep = this.stateGetTask(depId);
         return dep && (dep.status === 'completed' || dep.status === 'failed');
       });
 
       if (allReported) {
         const experimentResults = recon.dependencies.map((depId) => {
-          const dep = this.stateMachine.getTask(depId)!;
+          const dep = this.stateGetTask(depId)!;
           return {
             id: depId,
             status: (dep.status === 'completed' ? 'completed' : 'failed') as 'completed' | 'failed',
@@ -1818,7 +1888,7 @@ export class Orchestrator {
 
   private autoStartReadyTasks(taskIds: string[]): TaskState[] {
     for (const taskId of taskIds) {
-      const task = this.stateMachine.getTask(taskId);
+      const task = this.stateGetTask(taskId);
       if (!task) continue;
 
       // Unblock: if a blocked task's deps are all complete, it's genuinely ready
@@ -1837,7 +1907,7 @@ export class Orchestrator {
   /** Drain the scheduler queue, starting tasks that fit the resource budget. */
   private drainScheduler(): TaskState[] {
     for (const runningId of this.scheduler.getRunningTaskIds()) {
-      const task = this.stateMachine.getTask(runningId);
+      const task = this.stateGetTask(runningId);
       if (!task || (task.status !== 'running' && task.status !== 'fixing_with_ai')) {
         console.warn(`[orchestrator] drainScheduler: freeing leaked scheduler slot for "${runningId}" (actual status: ${task?.status ?? 'not found'})`);
         this.scheduler.completeJob(runningId);
@@ -1847,7 +1917,7 @@ export class Orchestrator {
     const started: TaskState[] = [];
     let job = this.scheduler.dequeue();
     while (job) {
-      const task = this.stateMachine.getTask(job.taskId);
+      const task = this.stateGetTask(job.taskId);
       console.log(`[orchestrator] drainScheduler: dequeued "${job.taskId}" actual status=${task?.status ?? 'NOT_FOUND'}`);
       if (!task || task.status !== 'pending') {
         console.log(`[orchestrator] drainScheduler: SKIPPING "${job.taskId}" — not pending`);
@@ -1871,7 +1941,7 @@ export class Orchestrator {
       // Dual-write: create Attempt record (best-effort)
       try {
         const upstreamAttemptIds = task.dependencies
-          .map(depId => this.stateMachine.getTask(depId)?.execution.selectedAttemptId)
+          .map(depId => this.stateGetTask(depId)?.execution.selectedAttemptId)
           .filter((id): id is string => !!id);
         const attempt = createAttempt(job.taskId, {
           status: 'running',

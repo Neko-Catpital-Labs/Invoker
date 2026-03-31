@@ -7,6 +7,7 @@
 
 import { describe, it, expect, beforeEach } from 'vitest';
 import { reconciliationNeedsInputWorkResponse } from './reconciliation-needs-input-shim.js';
+import { rid, sid } from './scoped-test-helpers.js';
 import { Orchestrator } from '../orchestrator.js';
 import type { PlanDefinition, OrchestratorPersistence, OrchestratorMessageBus } from '../orchestrator.js';
 import type { TaskState, TaskDelta, TaskStateChanges, Attempt } from '../task-types.js';
@@ -220,12 +221,11 @@ describe('Experiment Lifecycle (integration)', () => {
 
     // Downstream depends on pivot
     const downstream = orchestrator.getTask('downstream');
-    expect(downstream!.dependencies).toEqual(['pivot']);
+    expect(downstream!.dependencies).toEqual([sid(orchestrator, 0, 'pivot')]);
 
-    // Start execution: only setup is ready (no deps)
     const started = orchestrator.startExecution();
     expect(started).toHaveLength(1);
-    expect(started[0].id).toBe('setup');
+    expect(started[0].id).toBe(sid(orchestrator, 0, 'setup'));
     expect(orchestrator.getTask('pivot')!.status).toBe('pending');
     expect(orchestrator.getTask('downstream')!.status).toBe('pending');
   });
@@ -249,27 +249,27 @@ describe('Experiment Lifecycle (integration)', () => {
       ]),
     );
 
-    // Experiment tasks created and auto-started
-    const expV1 = orchestrator.getTask('pivot-exp-v1');
-    const expV2 = orchestrator.getTask('pivot-exp-v2');
+    const exp1 = sid(orchestrator, 0, 'pivot-exp-v1');
+    const exp2 = sid(orchestrator, 0, 'pivot-exp-v2');
+    const expV1 = orchestrator.getTask(exp1);
+    const expV2 = orchestrator.getTask(exp2);
     expect(expV1).toBeDefined();
     expect(expV2).toBeDefined();
     expect(expV1!.status).toBe('running');
     expect(expV2!.status).toBe('running');
-    expect(expV1!.config.parentTask).toBe('pivot');
-    expect(expV2!.config.parentTask).toBe('pivot');
+    const pivotId = sid(orchestrator, 0, 'pivot');
+    expect(expV1!.config.parentTask).toBe(pivotId);
+    expect(expV2!.config.parentTask).toBe(pivotId);
 
-    // Reconciliation task created
-    const recon = orchestrator.getTask('pivot-reconciliation');
+    const recon = orchestrator.getTask(rid(orchestrator, 0, 'pivot'));
     expect(recon).toBeDefined();
     expect(recon!.config.isReconciliation).toBe(true);
-    expect(recon!.dependencies).toContain('pivot-exp-v1');
-    expect(recon!.dependencies).toContain('pivot-exp-v2');
+    expect(recon!.dependencies).toContain(exp1);
+    expect(recon!.dependencies).toContain(exp2);
 
-    // Downstream remapped in-place: dependencies changed from ['pivot'] to ['pivot-reconciliation']
     expect(orchestrator.getTask('downstream')!.status).toBe('pending');
-    expect(orchestrator.getTask('downstream')!.dependencies).toContain('pivot-reconciliation');
-    expect(orchestrator.getTask('downstream')!.dependencies).not.toContain('pivot');
+    expect(orchestrator.getTask('downstream')!.dependencies).toContain(rid(orchestrator, 0, 'pivot'));
+    expect(orchestrator.getTask('downstream')!.dependencies).not.toContain(pivotId);
     expect(orchestrator.getTask('downstream-v2')).toBeUndefined();
 
     // Pivot itself completed (parent task completes when spawning)
@@ -291,21 +291,19 @@ describe('Experiment Lifecycle (integration)', () => {
     );
 
     // Both experiments are running. Complete them.
-    orchestrator.handleWorkerResponse(completedResponse('pivot-exp-v1'));
-    orchestrator.handleWorkerResponse(completedResponse('pivot-exp-v2'));
+    orchestrator.handleWorkerResponse(completedResponse(sid(orchestrator, 0, 'pivot-exp-v1')));
+    orchestrator.handleWorkerResponse(completedResponse(sid(orchestrator, 0, 'pivot-exp-v2')));
 
-    orchestrator.handleWorkerResponse(reconciliationNeedsInputWorkResponse('pivot-reconciliation'));
+    orchestrator.handleWorkerResponse(reconciliationNeedsInputWorkResponse(rid(orchestrator, 0, 'pivot')));
 
-    // Reconciliation task should now be in needs_input (awaiting human selection)
-    const recon = orchestrator.getTask('pivot-reconciliation');
+    const recon = orchestrator.getTask(rid(orchestrator, 0, 'pivot'));
     expect(recon!.status).toBe('needs_input');
     expect(recon!.execution.experimentResults).toBeDefined();
     expect(recon!.execution.experimentResults).toHaveLength(2);
 
-    // Both results recorded
     const ids = recon!.execution.experimentResults!.map((r) => r.id);
-    expect(ids).toContain('pivot-exp-v1');
-    expect(ids).toContain('pivot-exp-v2');
+    expect(ids).toContain(sid(orchestrator, 0, 'pivot-exp-v1'));
+    expect(ids).toContain(sid(orchestrator, 0, 'pivot-exp-v2'));
 
     // Downstream is still pending (blocked by recon, which is needs_input)
     expect(orchestrator.getTask('downstream')!.status).toBe('pending');
@@ -324,19 +322,20 @@ describe('Experiment Lifecycle (integration)', () => {
         { id: 'v2', prompt: 'B' },
       ]),
     );
-    orchestrator.handleWorkerResponse(completedResponse('pivot-exp-v1'));
-    orchestrator.handleWorkerResponse(completedResponse('pivot-exp-v2'));
+    orchestrator.handleWorkerResponse(completedResponse(sid(orchestrator, 0, 'pivot-exp-v1')));
+    orchestrator.handleWorkerResponse(completedResponse(sid(orchestrator, 0, 'pivot-exp-v2')));
 
-    orchestrator.handleWorkerResponse(reconciliationNeedsInputWorkResponse('pivot-reconciliation'));
+    orchestrator.handleWorkerResponse(reconciliationNeedsInputWorkResponse(rid(orchestrator, 0, 'pivot')));
 
-    // Recon is now needs_input. Select v1 as winner.
     publishedDeltas = [];
-    orchestrator.selectExperiment('pivot-reconciliation', 'pivot-exp-v1');
+    orchestrator.selectExperiment(
+      rid(orchestrator, 0, 'pivot'),
+      sid(orchestrator, 0, 'pivot-exp-v1'),
+    );
 
-    // Recon completed with selected experiment
-    const recon = orchestrator.getTask('pivot-reconciliation');
+    const recon = orchestrator.getTask(rid(orchestrator, 0, 'pivot'));
     expect(recon!.status).toBe('completed');
-    expect(recon!.execution.selectedExperiment).toBe('pivot-exp-v1');
+    expect(recon!.execution.selectedExperiment).toBe(sid(orchestrator, 0, 'pivot-exp-v1'));
 
     // Downstream unblocked and auto-started (remapped in-place, no clone)
     expect(orchestrator.getTask('downstream')!.status).toBe('running');
@@ -355,12 +354,14 @@ describe('Experiment Lifecycle (integration)', () => {
         { id: 'v2', prompt: 'B' },
       ]),
     );
-    orchestrator.handleWorkerResponse(completedResponse('pivot-exp-v1'));
-    orchestrator.handleWorkerResponse(completedResponse('pivot-exp-v2'));
-    orchestrator.handleWorkerResponse(reconciliationNeedsInputWorkResponse('pivot-reconciliation'));
-    orchestrator.selectExperiment('pivot-reconciliation', 'pivot-exp-v1');
+    orchestrator.handleWorkerResponse(completedResponse(sid(orchestrator, 0, 'pivot-exp-v1')));
+    orchestrator.handleWorkerResponse(completedResponse(sid(orchestrator, 0, 'pivot-exp-v2')));
+    orchestrator.handleWorkerResponse(reconciliationNeedsInputWorkResponse(rid(orchestrator, 0, 'pivot')));
+    orchestrator.selectExperiment(
+      rid(orchestrator, 0, 'pivot'),
+      sid(orchestrator, 0, 'pivot-exp-v1'),
+    );
 
-    // Downstream is running (remapped in-place, no clone). Complete it.
     orchestrator.handleWorkerResponse(completedResponse('downstream'));
 
     expect(orchestrator.getTask('downstream')!.status).toBe('completed');
@@ -390,27 +391,28 @@ describe('Experiment Lifecycle (integration)', () => {
       ]),
     );
 
-    // Fail v1, complete v2
-    orchestrator.handleWorkerResponse(failedResponse('pivot-exp-v1', 'build failed'));
-    orchestrator.handleWorkerResponse(completedResponse('pivot-exp-v2'));
+    orchestrator.handleWorkerResponse(failedResponse(sid(orchestrator, 0, 'pivot-exp-v1'), 'build failed'));
+    orchestrator.handleWorkerResponse(completedResponse(sid(orchestrator, 0, 'pivot-exp-v2')));
 
-    orchestrator.handleWorkerResponse(reconciliationNeedsInputWorkResponse('pivot-reconciliation'));
+    orchestrator.handleWorkerResponse(reconciliationNeedsInputWorkResponse(rid(orchestrator, 0, 'pivot')));
 
-    // Reconciliation still triggers despite one failure.
-    const recon = orchestrator.getTask('pivot-reconciliation');
+    const recon = orchestrator.getTask(rid(orchestrator, 0, 'pivot'));
     expect(recon!.status).toBe('needs_input');
     expect(recon!.execution.experimentResults).toHaveLength(2);
 
     // Verify individual statuses
     const results = recon!.execution.experimentResults!;
-    const v1Result = results.find((r) => r.id === 'pivot-exp-v1');
-    const v2Result = results.find((r) => r.id === 'pivot-exp-v2');
+    const v1Result = results.find((r) => r.id === sid(orchestrator, 0, 'pivot-exp-v1'));
+    const v2Result = results.find((r) => r.id === sid(orchestrator, 0, 'pivot-exp-v2'));
     expect(v1Result!.status).toBe('failed');
     expect(v2Result!.status).toBe('completed');
 
     // Can still select the successful experiment and complete reconciliation
-    orchestrator.selectExperiment('pivot-reconciliation', 'pivot-exp-v2');
-    expect(orchestrator.getTask('pivot-reconciliation')!.status).toBe('completed');
+    orchestrator.selectExperiment(
+      rid(orchestrator, 0, 'pivot'),
+      sid(orchestrator, 0, 'pivot-exp-v2'),
+    );
+    expect(orchestrator.getTask(rid(orchestrator, 0, 'pivot'))!.status).toBe('completed');
 
     // Downstream is running (remapped in-place, recon completed after selectExperiment)
     expect(orchestrator.getTask('downstream')!.status).toBe('running');
@@ -439,20 +441,21 @@ describe('Experiment Lifecycle (integration)', () => {
         { id: 'r1v2', prompt: 'Round 1 approach B' },
       ]),
     );
-    orchestrator.handleWorkerResponse(completedResponse('pivot-exp-r1v1'));
-    orchestrator.handleWorkerResponse(completedResponse('pivot-exp-r1v2'));
+    orchestrator.handleWorkerResponse(completedResponse(sid(orchestrator, 0, 'pivot-exp-r1v1')));
+    orchestrator.handleWorkerResponse(completedResponse(sid(orchestrator, 0, 'pivot-exp-r1v2')));
 
-    orchestrator.handleWorkerResponse(reconciliationNeedsInputWorkResponse('pivot-reconciliation'));
+    orchestrator.handleWorkerResponse(reconciliationNeedsInputWorkResponse(rid(orchestrator, 0, 'pivot')));
 
-    // Reconciliation triggers for first round
-    const recon1 = orchestrator.getTask('pivot-reconciliation');
+    const recon1 = orchestrator.getTask(rid(orchestrator, 0, 'pivot'));
     expect(recon1).toBeDefined();
     expect(recon1!.status).toBe('needs_input');
     expect(recon1!.execution.experimentResults).toHaveLength(2);
 
-    // User can now select, completing the first-round reconciliation
-    orchestrator.selectExperiment('pivot-reconciliation', 'pivot-exp-r1v1');
-    expect(orchestrator.getTask('pivot-reconciliation')!.status).toBe('completed');
+    orchestrator.selectExperiment(
+      rid(orchestrator, 0, 'pivot'),
+      sid(orchestrator, 0, 'pivot-exp-r1v1'),
+    );
+    expect(orchestrator.getTask(rid(orchestrator, 0, 'pivot'))!.status).toBe('completed');
 
     // Downstream is remapped in-place and unblocked after recon completes
     expect(orchestrator.getTask('downstream')!.status).toBe('running');
@@ -473,7 +476,7 @@ describe('Experiment Lifecycle (integration)', () => {
 
     // 1 delta: setup pending -> running
     const setupStartDelta = publishedDeltas.find(
-      (d) => d.type === 'updated' && d.taskId === 'setup',
+      (d) => d.type === 'updated' && d.taskId === sid(orchestrator, 0, 'setup'),
     );
     expect(setupStartDelta).toBeDefined();
 
@@ -482,10 +485,10 @@ describe('Experiment Lifecycle (integration)', () => {
 
     // setup completed + pivot auto-started = at least 2 deltas
     const setupComplete = publishedDeltas.find(
-      (d) => d.type === 'updated' && d.taskId === 'setup',
+      (d) => d.type === 'updated' && d.taskId === sid(orchestrator, 0, 'setup'),
     );
     const pivotStart = publishedDeltas.find(
-      (d) => d.type === 'updated' && d.taskId === 'pivot',
+      (d) => d.type === 'updated' && d.taskId === sid(orchestrator, 0, 'pivot'),
     );
     expect(setupComplete).toBeDefined();
     expect(pivotStart).toBeDefined();
@@ -507,58 +510,60 @@ describe('Experiment Lifecycle (integration)', () => {
 
     // Verify remap delta: downstream dependencies updated
     const downstreamRemap = publishedDeltas.find(
-      (d) => d.type === 'updated' && d.taskId === 'downstream' && (d.changes as any).dependencies !== undefined,
+      (d) =>
+        d.type === 'updated' &&
+        d.taskId === sid(orchestrator, 0, 'downstream') &&
+        (d.changes as any).dependencies !== undefined,
     );
     expect(downstreamRemap).toBeDefined();
     expect(orchestrator.getTask('downstream-v2')).toBeUndefined();
 
     // Verify experiment create deltas exist
+    const e1 = sid(orchestrator, 0, 'pivot-exp-v1');
+    const e2 = sid(orchestrator, 0, 'pivot-exp-v2');
     const expCreatedDeltas = publishedDeltas.filter(
-      (d) => d.type === 'created' && (d.task.id === 'pivot-exp-v1' || d.task.id === 'pivot-exp-v2'),
+      (d) => d.type === 'created' && (d.task.id === e1 || d.task.id === e2),
     );
     expect(expCreatedDeltas).toHaveLength(2);
 
     // Verify reconciliation create delta exists
     const reconCreated = publishedDeltas.filter(
-      (d) => d.type === 'created' && d.task.id === 'pivot-reconciliation',
+      (d) => d.type === 'created' && d.task.id === rid(orchestrator, 0, 'pivot'),
     );
     expect(reconCreated).toHaveLength(1);
 
     publishedDeltas = [];
-    orchestrator.handleWorkerResponse(completedResponse('pivot-exp-v1'));
+    orchestrator.handleWorkerResponse(completedResponse(e1));
 
-    // At least 1 delta for experiment completion
     const v1CompleteDelta = publishedDeltas.find(
-      (d) => d.type === 'updated' && d.taskId === 'pivot-exp-v1',
+      (d) => d.type === 'updated' && d.taskId === e1,
     );
     expect(v1CompleteDelta).toBeDefined();
 
     publishedDeltas = [];
-    orchestrator.handleWorkerResponse(completedResponse('pivot-exp-v2'));
+    orchestrator.handleWorkerResponse(completedResponse(e2));
 
-    orchestrator.handleWorkerResponse(reconciliationNeedsInputWorkResponse('pivot-reconciliation'));
+    orchestrator.handleWorkerResponse(reconciliationNeedsInputWorkResponse(rid(orchestrator, 0, 'pivot')));
 
-    // At least 1 delta for experiment completion + reconciliation trigger
     const v2CompleteDelta = publishedDeltas.find(
-      (d) => d.type === 'updated' && d.taskId === 'pivot-exp-v2',
+      (d) => d.type === 'updated' && d.taskId === e2,
     );
     expect(v2CompleteDelta).toBeDefined();
 
     // Reconciliation trigger delta
     const reconTrigger = publishedDeltas.find(
-      (d) => d.type === 'updated' && d.taskId === 'pivot-reconciliation',
+      (d) => d.type === 'updated' && d.taskId === rid(orchestrator, 0, 'pivot'),
     );
     expect(reconTrigger).toBeDefined();
 
     publishedDeltas = [];
-    orchestrator.selectExperiment('pivot-reconciliation', 'pivot-exp-v1');
+    orchestrator.selectExperiment(rid(orchestrator, 0, 'pivot'), e1);
 
-    // Recon completed + downstream started (remapped in-place, no clone)
     const reconComplete = publishedDeltas.find(
-      (d) => d.type === 'updated' && d.taskId === 'pivot-reconciliation',
+      (d) => d.type === 'updated' && d.taskId === rid(orchestrator, 0, 'pivot'),
     );
     const downstreamStart = publishedDeltas.find(
-      (d) => d.type === 'updated' && d.taskId === 'downstream',
+      (d) => d.type === 'updated' && d.taskId === sid(orchestrator, 0, 'downstream'),
     );
     expect(reconComplete).toBeDefined();
     expect(downstreamStart).toBeDefined();
@@ -567,7 +572,7 @@ describe('Experiment Lifecycle (integration)', () => {
     orchestrator.handleWorkerResponse(completedResponse('downstream'));
 
     const downstreamComplete = publishedDeltas.find(
-      (d) => d.type === 'updated' && d.taskId === 'downstream',
+      (d) => d.type === 'updated' && d.taskId === sid(orchestrator, 0, 'downstream'),
     );
     expect(downstreamComplete).toBeDefined();
   });
@@ -599,31 +604,33 @@ describe('Experiment Lifecycle (integration)', () => {
 
     // All 5 experiments should exist and be running
     for (let i = 1; i <= 5; i++) {
-      const exp = orchestrator.getTask(`pivot-exp-v${i}`);
+      const exp = orchestrator.getTask(sid(orchestrator, 0, `pivot-exp-v${i}`));
       expect(exp).toBeDefined();
       expect(exp!.status).toBe('running');
     }
 
-    // Reconciliation task exists
-    const recon = orchestrator.getTask('pivot-reconciliation');
+    const recon = orchestrator.getTask(rid(orchestrator, 0, 'pivot'));
     expect(recon).toBeDefined();
     expect(recon!.dependencies).toHaveLength(5);
 
     // Complete all 5 experiments
     for (let i = 1; i <= 5; i++) {
-      orchestrator.handleWorkerResponse(completedResponse(`pivot-exp-v${i}`));
+      orchestrator.handleWorkerResponse(completedResponse(sid(orchestrator, 0, `pivot-exp-v${i}`)));
     }
 
-    orchestrator.handleWorkerResponse(reconciliationNeedsInputWorkResponse('pivot-reconciliation'));
+    orchestrator.handleWorkerResponse(reconciliationNeedsInputWorkResponse(rid(orchestrator, 0, 'pivot')));
 
-    // Reconciliation in needs_input with 5 results
-    expect(orchestrator.getTask('pivot-reconciliation')!.status).toBe('needs_input');
-    expect(orchestrator.getTask('pivot-reconciliation')!.execution.experimentResults).toHaveLength(5);
+    expect(orchestrator.getTask(rid(orchestrator, 0, 'pivot'))!.status).toBe('needs_input');
+    expect(orchestrator.getTask(rid(orchestrator, 0, 'pivot'))!.execution.experimentResults).toHaveLength(5);
 
-    // Select variant 3 as winner
-    orchestrator.selectExperiment('pivot-reconciliation', 'pivot-exp-v3');
-    expect(orchestrator.getTask('pivot-reconciliation')!.status).toBe('completed');
-    expect(orchestrator.getTask('pivot-reconciliation')!.execution.selectedExperiment).toBe('pivot-exp-v3');
+    orchestrator.selectExperiment(
+      rid(orchestrator, 0, 'pivot'),
+      sid(orchestrator, 0, 'pivot-exp-v3'),
+    );
+    expect(orchestrator.getTask(rid(orchestrator, 0, 'pivot'))!.status).toBe('completed');
+    expect(orchestrator.getTask(rid(orchestrator, 0, 'pivot'))!.execution.selectedExperiment).toBe(
+      sid(orchestrator, 0, 'pivot-exp-v3'),
+    );
 
     // Downstream unblocked (remapped in-place, no clone)
     expect(orchestrator.getTask('downstream')!.status).toBe('running');
@@ -657,29 +664,28 @@ describe('Experiment Lifecycle (integration)', () => {
           { id: 'v2', prompt: 'B' },
         ]),
       );
-      orchestrator.handleWorkerResponse(completedResponse('pivot-exp-v1'));
-      orchestrator.handleWorkerResponse(completedResponse('pivot-exp-v2'));
-      orchestrator.handleWorkerResponse(reconciliationNeedsInputWorkResponse('pivot-reconciliation'));
-      // Recon is now needs_input
-      expect(orchestrator.getTask('pivot-reconciliation')!.status).toBe('needs_input');
+      orchestrator.handleWorkerResponse(completedResponse(sid(orchestrator, 0, 'pivot-exp-v1')));
+      orchestrator.handleWorkerResponse(completedResponse(sid(orchestrator, 0, 'pivot-exp-v2')));
+      orchestrator.handleWorkerResponse(reconciliationNeedsInputWorkResponse(rid(orchestrator, 0, 'pivot')));
+      expect(orchestrator.getTask(rid(orchestrator, 0, 'pivot'))!.status).toBe('needs_input');
     }
 
     it('propagates winner branch and commit to reconciliation task', () => {
       runToReconciliation();
 
       // Simulate task-executor setting branch/commit on winning experiment
-      persistence.updateTask('pivot-exp-v1', {
+      persistence.updateTask(sid(orchestrator, 0, 'pivot-exp-v1'), {
         execution: {
           branch: 'experiment/pivot-exp-v1-abc12345',
           commit: 'abc123deadbeef',
         },
       });
 
-      orchestrator.selectExperiment('pivot-reconciliation', 'pivot-exp-v1');
+      orchestrator.selectExperiment(rid(orchestrator, 0, 'pivot'), sid(orchestrator, 0, 'pivot-exp-v1'));
 
-      const recon = orchestrator.getTask('pivot-reconciliation')!;
+      const recon = orchestrator.getTask(rid(orchestrator, 0, 'pivot'))!;
       expect(recon.status).toBe('completed');
-      expect(recon.execution.selectedExperiment).toBe('pivot-exp-v1');
+      expect(recon.execution.selectedExperiment).toBe(sid(orchestrator, 0, 'pivot-exp-v1'));
       expect(recon.execution.branch).toBe('experiment/pivot-exp-v1-abc12345');
       expect(recon.execution.commit).toBe('abc123deadbeef');
     });
@@ -687,15 +693,15 @@ describe('Experiment Lifecycle (integration)', () => {
     it('propagates branch when winner has no commit', () => {
       runToReconciliation();
 
-      persistence.updateTask('pivot-exp-v2', {
+      persistence.updateTask(sid(orchestrator, 0, 'pivot-exp-v2'), {
         execution: {
           branch: 'experiment/pivot-exp-v2-def45678',
         },
       });
 
-      orchestrator.selectExperiment('pivot-reconciliation', 'pivot-exp-v2');
+      orchestrator.selectExperiment(rid(orchestrator, 0, 'pivot'), sid(orchestrator, 0, 'pivot-exp-v2'));
 
-      const recon = orchestrator.getTask('pivot-reconciliation')!;
+      const recon = orchestrator.getTask(rid(orchestrator, 0, 'pivot'))!;
       expect(recon.execution.branch).toBe('experiment/pivot-exp-v2-def45678');
       expect(recon.execution.commit).toBeUndefined();
     });
@@ -703,15 +709,15 @@ describe('Experiment Lifecycle (integration)', () => {
     it('propagates commit when winner has no branch', () => {
       runToReconciliation();
 
-      persistence.updateTask('pivot-exp-v1', {
+      persistence.updateTask(sid(orchestrator, 0, 'pivot-exp-v1'), {
         execution: {
           commit: 'deadbeef12345678',
         },
       });
 
-      orchestrator.selectExperiment('pivot-reconciliation', 'pivot-exp-v1');
+      orchestrator.selectExperiment(rid(orchestrator, 0, 'pivot'), sid(orchestrator, 0, 'pivot-exp-v1'));
 
-      const recon = orchestrator.getTask('pivot-reconciliation')!;
+      const recon = orchestrator.getTask(rid(orchestrator, 0, 'pivot'))!;
       expect(recon.execution.branch).toBeUndefined();
       expect(recon.execution.commit).toBe('deadbeef12345678');
     });
@@ -720,9 +726,9 @@ describe('Experiment Lifecycle (integration)', () => {
       runToReconciliation();
 
       // Don't set branch or commit on winner — default state
-      orchestrator.selectExperiment('pivot-reconciliation', 'pivot-exp-v1');
+      orchestrator.selectExperiment(rid(orchestrator, 0, 'pivot'), sid(orchestrator, 0, 'pivot-exp-v1'));
 
-      const recon = orchestrator.getTask('pivot-reconciliation')!;
+      const recon = orchestrator.getTask(rid(orchestrator, 0, 'pivot'))!;
       expect(recon.status).toBe('completed');
       expect(recon.execution.branch).toBeUndefined();
       expect(recon.execution.commit).toBeUndefined();
@@ -732,16 +738,19 @@ describe('Experiment Lifecycle (integration)', () => {
       runToReconciliation();
 
       orchestrator.selectExperiments(
-        'pivot-reconciliation',
-        ['pivot-exp-v1', 'pivot-exp-v2'],
+        rid(orchestrator, 0, 'pivot'),
+        [sid(orchestrator, 0, 'pivot-exp-v1'), sid(orchestrator, 0, 'pivot-exp-v2')],
         'reconciliation/pivot-reconciliation',
         'combined123',
       );
 
-      const recon = orchestrator.getTask('pivot-reconciliation')!;
+      const recon = orchestrator.getTask(rid(orchestrator, 0, 'pivot'))!;
       expect(recon.status).toBe('completed');
-      expect(recon.execution.selectedExperiment).toBe('pivot-exp-v1');
-      expect(recon.execution.selectedExperiments).toEqual(['pivot-exp-v1', 'pivot-exp-v2']);
+      expect(recon.execution.selectedExperiment).toBe(sid(orchestrator, 0, 'pivot-exp-v1'));
+      expect(recon.execution.selectedExperiments).toEqual([
+        sid(orchestrator, 0, 'pivot-exp-v1'),
+        sid(orchestrator, 0, 'pivot-exp-v2'),
+      ]);
       expect(recon.execution.branch).toBe('reconciliation/pivot-reconciliation');
       expect(recon.execution.commit).toBe('combined123');
     });
@@ -758,22 +767,21 @@ describe('Experiment Lifecycle (integration)', () => {
       );
 
       // Fail v1 (but it still has branch/commit from before failure)
-      orchestrator.handleWorkerResponse(failedResponse('pivot-exp-v1', 'build failed'));
-      orchestrator.handleWorkerResponse(completedResponse('pivot-exp-v2'));
+      orchestrator.handleWorkerResponse(failedResponse(sid(orchestrator, 0, 'pivot-exp-v1'), 'build failed'));
+      orchestrator.handleWorkerResponse(completedResponse(sid(orchestrator, 0, 'pivot-exp-v2')));
 
-      orchestrator.handleWorkerResponse(reconciliationNeedsInputWorkResponse('pivot-reconciliation'));
+      orchestrator.handleWorkerResponse(reconciliationNeedsInputWorkResponse(rid(orchestrator, 0, 'pivot')));
 
-      // Simulate task-executor having set branch/commit before failure
-      persistence.updateTask('pivot-exp-v1', {
+      persistence.updateTask(sid(orchestrator, 0, 'pivot-exp-v1'), {
         execution: {
           branch: 'experiment/pivot-exp-v1-failed',
           commit: 'failed123',
         },
       });
 
-      orchestrator.selectExperiment('pivot-reconciliation', 'pivot-exp-v1');
+      orchestrator.selectExperiment(rid(orchestrator, 0, 'pivot'), sid(orchestrator, 0, 'pivot-exp-v1'));
 
-      const recon = orchestrator.getTask('pivot-reconciliation')!;
+      const recon = orchestrator.getTask(rid(orchestrator, 0, 'pivot'))!;
       expect(recon.status).toBe('completed');
       expect(recon.execution.branch).toBe('experiment/pivot-exp-v1-failed');
       expect(recon.execution.commit).toBe('failed123');
@@ -806,35 +814,35 @@ describe('Experiment Lifecycle (integration)', () => {
     );
 
     // All 3 experiments running
-    expect(orchestrator.getTask('pivot-exp-v1')!.status).toBe('running');
-    expect(orchestrator.getTask('pivot-exp-v2')!.status).toBe('running');
-    expect(orchestrator.getTask('pivot-exp-v3')!.status).toBe('running');
+    expect(orchestrator.getTask(sid(orchestrator, 0, 'pivot-exp-v1'))!.status).toBe('running');
+    expect(orchestrator.getTask(sid(orchestrator, 0, 'pivot-exp-v2'))!.status).toBe('running');
+    expect(orchestrator.getTask(sid(orchestrator, 0, 'pivot-exp-v3'))!.status).toBe('running');
 
-    // Complete all 3
-    orchestrator.handleWorkerResponse(completedResponse('pivot-exp-v1'));
-    orchestrator.handleWorkerResponse(completedResponse('pivot-exp-v2'));
-    orchestrator.handleWorkerResponse(completedResponse('pivot-exp-v3'));
+    orchestrator.handleWorkerResponse(completedResponse(sid(orchestrator, 0, 'pivot-exp-v1')));
+    orchestrator.handleWorkerResponse(completedResponse(sid(orchestrator, 0, 'pivot-exp-v2')));
+    orchestrator.handleWorkerResponse(completedResponse(sid(orchestrator, 0, 'pivot-exp-v3')));
 
-    orchestrator.handleWorkerResponse(reconciliationNeedsInputWorkResponse('pivot-reconciliation'));
+    orchestrator.handleWorkerResponse(reconciliationNeedsInputWorkResponse(rid(orchestrator, 0, 'pivot')));
 
-    // Reconciliation awaits input
-    const recon = orchestrator.getTask('pivot-reconciliation')!;
+    const recon = orchestrator.getTask(rid(orchestrator, 0, 'pivot'))!;
     expect(recon.status).toBe('needs_input');
     expect(recon.execution.experimentResults).toHaveLength(3);
 
     // Multi-select: pick v1 and v3
     orchestrator.selectExperiments(
-      'pivot-reconciliation',
-      ['pivot-exp-v1', 'pivot-exp-v3'],
+      rid(orchestrator, 0, 'pivot'),
+      [sid(orchestrator, 0, 'pivot-exp-v1'), sid(orchestrator, 0, 'pivot-exp-v3')],
       'reconciliation/pivot-reconciliation',
       'merged-abc',
     );
 
-    // Reconciliation completed with multi-select fields
-    const reconAfter = orchestrator.getTask('pivot-reconciliation')!;
+    const reconAfter = orchestrator.getTask(rid(orchestrator, 0, 'pivot'))!;
     expect(reconAfter.status).toBe('completed');
-    expect(reconAfter.execution.selectedExperiment).toBe('pivot-exp-v1');
-    expect(reconAfter.execution.selectedExperiments).toEqual(['pivot-exp-v1', 'pivot-exp-v3']);
+    expect(reconAfter.execution.selectedExperiment).toBe(sid(orchestrator, 0, 'pivot-exp-v1'));
+    expect(reconAfter.execution.selectedExperiments).toEqual([
+      sid(orchestrator, 0, 'pivot-exp-v1'),
+      sid(orchestrator, 0, 'pivot-exp-v3'),
+    ]);
     expect(reconAfter.execution.branch).toBe('reconciliation/pivot-reconciliation');
     expect(reconAfter.execution.commit).toBe('merged-abc');
 

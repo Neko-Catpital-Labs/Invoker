@@ -64,8 +64,8 @@ describe('Flow 1: rebase-and-retry', () => {
 
   it('clean rebase: restarts merge gate only, leaf tasks stay completed', async () => {
     const started = h.loadAndStart(PARALLEL_PLAN);
-    expect(started.some(t => t.id === 'A' && t.status === 'running')).toBe(true);
-    expect(started.some(t => t.id === 'B' && t.status === 'running')).toBe(true);
+    expect(started.some((t) => t.id.endsWith('/A') && t.status === 'running')).toBe(true);
+    expect(started.some((t) => t.id.endsWith('/B') && t.status === 'running')).toBe(true);
 
     h.completeTask('A');
     h.completeTask('B');
@@ -146,8 +146,8 @@ describe('Flow 1: rebase-and-retry', () => {
     }
 
     // Root tasks should have started
-    expect(workflowStarted.some(t => t.id === 'A')).toBe(true);
-    expect(workflowStarted.some(t => t.id === 'B')).toBe(true);
+    expect(workflowStarted.some((t) => t.id.endsWith('/A'))).toBe(true);
+    expect(workflowStarted.some((t) => t.id.endsWith('/B'))).toBe(true);
   });
 
   it('merge gate error surfaces conflict file details', async () => {
@@ -277,8 +277,8 @@ describe('Flow 1b: rebase-and-retry from any node', () => {
     }
 
     // Root tasks should have started
-    expect(workflowStarted.some(t => t.id === 'A')).toBe(true);
-    expect(workflowStarted.some(t => t.id === 'B')).toBe(true);
+    expect(workflowStarted.some((t) => t.id.endsWith('/A'))).toBe(true);
+    expect(workflowStarted.some((t) => t.id.endsWith('/B'))).toBe(true);
   });
 });
 
@@ -405,8 +405,8 @@ describe('Flow 4: edit/fork mutations', () => {
     expect(h.getTask('C')!.status).toBe('completed');
 
     // No v2 nodes exist
-    expect(h.getAllTasks().find(t => t.id === 'B-v2')).toBeUndefined();
-    expect(h.getAllTasks().find(t => t.id === 'C-v2')).toBeUndefined();
+    expect(h.getAllTasks().find((t) => t.id.endsWith('/B-v2'))).toBeUndefined();
+    expect(h.getAllTasks().find((t) => t.id.endsWith('/C-v2'))).toBeUndefined();
   });
 
   it('editTaskType does NOT fork subtree', () => {
@@ -423,7 +423,7 @@ describe('Flow 4: edit/fork mutations', () => {
     expect(a.status === 'pending' || a.status === 'running').toBe(true);
 
     // B should still be the original (not forked), no B-v2 created
-    expect(h.getAllTasks().find(t => t.id === 'B-v2')).toBeUndefined();
+    expect(h.getAllTasks().find((t) => t.id.endsWith('/B-v2'))).toBeUndefined();
     // B stays completed since editTaskType doesn't fork downstream
     expect(h.getTask('B')!.status).toBe('completed');
   });
@@ -488,7 +488,7 @@ describe('Flow 5: dagMutation via spawn_experiments', () => {
 
     // Experiment nodes should exist
     const allTasks = h.getAllTasks();
-    const expTasks = allTasks.filter(t => t.id.startsWith('A-exp-'));
+    const expTasks = allTasks.filter((t) => t.id.includes('/A-exp-'));
     expect(expTasks.length).toBe(2);
 
     // Experiment tasks should be running or pending
@@ -526,7 +526,7 @@ describe('Flow 5: dagMutation via spawn_experiments', () => {
 
     // Complete both experiment tasks
     const expIds = h.getAllTasks()
-      .filter(t => t.id.startsWith('A-exp-'))
+      .filter((t) => t.id.includes('/A-exp-'))
       .map(t => t.id);
     for (const id of expIds) {
       h.completeTask(id);
@@ -757,13 +757,14 @@ describe('Flow 7: orphan relaunch on restart', () => {
     }
 
     expect(restarted.length).toBe(1);
-    expect(restarted[0].id).toBe('A');
+    const scopedA = restarted[0].id;
+    expect(scopedA.endsWith('/A')).toBe(true);
     expect(orchestrator2.getTask('A')?.status).toBe('running');
 
     // Complete A → B auto-starts
     orchestrator2.handleWorkerResponse({
       requestId: 'complete-A',
-      actionId: 'A',
+      actionId: scopedA,
       status: 'completed',
       outputs: { exitCode: 0 },
     });
@@ -806,9 +807,9 @@ describe('Flow 7: orphan relaunch on restart', () => {
       }
     }
 
-    // Both should be relaunched
-    const restartedIds = restarted.map((t: any) => t.id).sort();
-    expect(restartedIds).toEqual(['X', 'Y']);
+    // Both should be relaunched (task ids are workflow-scoped)
+    const restartedLocals = restarted.map((t) => t.id.split('/').pop()!).sort();
+    expect(restartedLocals).toEqual(['X', 'Y']);
 
     // Z should still be pending
     expect(orchestrator2.getTask('Z')?.status).toBe('pending');
@@ -1178,7 +1179,7 @@ describe('Flow 10: multi-experiment selection', () => {
 
     // Complete all experiments with branches
     const expIds = h.getAllTasks()
-      .filter(t => t.id.startsWith('A-exp-'))
+      .filter((t) => t.id.includes('/A-exp-'))
       .map(t => t.id);
     expect(expIds).toHaveLength(3);
 
@@ -1238,7 +1239,7 @@ describe('Flow 10: multi-experiment selection', () => {
     });
 
     const expIds = h.getAllTasks()
-      .filter(t => t.id.startsWith('A-exp-'))
+      .filter((t) => t.id.includes('/A-exp-'))
       .map(t => t.id);
 
     for (const id of expIds) {
@@ -1310,7 +1311,7 @@ describe('Flow: scheduler health across experiment lifecycle', () => {
     });
 
     const expIds = h.getAllTasks()
-      .filter(t => t.id.startsWith('A-exp-'))
+      .filter((t) => t.id.includes('/A-exp-'))
       .map(t => t.id);
 
     for (const id of expIds) {
@@ -1364,7 +1365,7 @@ describe('Flow: scheduler health across experiment lifecycle', () => {
     });
 
     const expIds = h.getAllTasks()
-      .filter(t => t.id.startsWith('A-exp-'))
+      .filter((t) => t.id.includes('/A-exp-'))
       .map(t => t.id);
 
     for (const id of expIds) {

@@ -9,6 +9,7 @@
 
 import { describe, it, expect, beforeEach } from 'vitest';
 import { reconciliationNeedsInputWorkResponse } from './reconciliation-needs-input-shim.js';
+import { rid, sid } from './scoped-test-helpers.js';
 import { TaskStateMachine } from '../state-machine.js';
 import { ResponseHandler } from '../response-handler.js';
 import { TaskScheduler } from '../scheduler.js';
@@ -225,11 +226,11 @@ describe('Parity — Feature Coverage', () => {
       }),
     );
 
-    expect(orchestrator.getTask('pivot-exp-alpha')).toBeDefined();
-    expect(orchestrator.getTask('pivot-exp-beta')).toBeDefined();
-    expect(orchestrator.getTask('pivot-exp-gamma')).toBeDefined();
+    expect(orchestrator.getTask(sid(orchestrator, 0, 'pivot-exp-alpha'))).toBeDefined();
+    expect(orchestrator.getTask(sid(orchestrator, 0, 'pivot-exp-beta'))).toBeDefined();
+    expect(orchestrator.getTask(sid(orchestrator, 0, 'pivot-exp-gamma'))).toBeDefined();
 
-    const recon = orchestrator.getTask('pivot-reconciliation');
+    const recon = orchestrator.getTask(rid(orchestrator, 0, 'pivot'));
     expect(recon).toBeDefined();
     expect(recon!.config.isReconciliation).toBe(true);
   });
@@ -246,7 +247,7 @@ describe('Parity — Feature Coverage', () => {
     });
     orchestrator.startExecution();
 
-    expect(orchestrator.getTask('downstream')!.dependencies).toContain('pivot');
+    expect(orchestrator.getTask('downstream')!.dependencies).toContain(sid(orchestrator, 0, 'pivot'));
 
     orchestrator.handleWorkerResponse(
       makeResponse({
@@ -264,8 +265,8 @@ describe('Parity — Feature Coverage', () => {
     // Downstream's dependencies are remapped in-place from ['pivot'] to ['pivot-reconciliation']
     const downstream = orchestrator.getTask('downstream')!;
     expect(downstream.status).not.toBe('stale');
-    expect(downstream.dependencies).toContain('pivot-reconciliation');
-    expect(downstream.dependencies).not.toContain('pivot');
+    expect(downstream.dependencies).toContain(rid(orchestrator, 0, 'pivot'));
+    expect(downstream.dependencies).not.toContain(sid(orchestrator, 0, 'pivot'));
   });
 
   // ── Test 5: Reconciliation triggers ───────────────────────
@@ -291,18 +292,26 @@ describe('Parity — Feature Coverage', () => {
     );
 
     orchestrator.handleWorkerResponse(
-      makeResponse({ actionId: 'pivot-exp-v1', status: 'completed', outputs: { exitCode: 0 } }),
+      makeResponse({
+        actionId: sid(orchestrator, 0, 'pivot-exp-v1'),
+        status: 'completed',
+        outputs: { exitCode: 0 },
+      }),
     );
-    if (orchestrator.getTask('pivot-exp-v2')!.status === 'pending') {
+    if (orchestrator.getTask(sid(orchestrator, 0, 'pivot-exp-v2'))!.status === 'pending') {
       orchestrator.startExecution();
     }
     orchestrator.handleWorkerResponse(
-      makeResponse({ actionId: 'pivot-exp-v2', status: 'completed', outputs: { exitCode: 0 } }),
+      makeResponse({
+        actionId: sid(orchestrator, 0, 'pivot-exp-v2'),
+        status: 'completed',
+        outputs: { exitCode: 0 },
+      }),
     );
 
-    orchestrator.handleWorkerResponse(reconciliationNeedsInputWorkResponse('pivot-reconciliation'));
+    orchestrator.handleWorkerResponse(reconciliationNeedsInputWorkResponse(rid(orchestrator, 0, 'pivot')));
 
-    const reconTask = orchestrator.getTask('pivot-reconciliation');
+    const reconTask = orchestrator.getTask(rid(orchestrator, 0, 'pivot'));
     expect(reconTask).toBeDefined();
     expect(reconTask!.status).toBe('needs_input');
     expect(reconTask!.execution.experimentResults).toHaveLength(2);
@@ -335,20 +344,28 @@ describe('Parity — Feature Coverage', () => {
 
     orchestrator.startExecution();
     orchestrator.handleWorkerResponse(
-      makeResponse({ actionId: 'pivot-exp-v1', status: 'completed', outputs: { exitCode: 0 } }),
+      makeResponse({
+        actionId: sid(orchestrator, 0, 'pivot-exp-v1'),
+        status: 'completed',
+        outputs: { exitCode: 0 },
+      }),
     );
-    if (orchestrator.getTask('pivot-exp-v2')!.status === 'pending') {
+    if (orchestrator.getTask(sid(orchestrator, 0, 'pivot-exp-v2'))!.status === 'pending') {
       orchestrator.startExecution();
     }
     orchestrator.handleWorkerResponse(
-      makeResponse({ actionId: 'pivot-exp-v2', status: 'completed', outputs: { exitCode: 0 } }),
+      makeResponse({
+        actionId: sid(orchestrator, 0, 'pivot-exp-v2'),
+        status: 'completed',
+        outputs: { exitCode: 0 },
+      }),
     );
 
-    orchestrator.handleWorkerResponse(reconciliationNeedsInputWorkResponse('pivot-reconciliation'));
+    orchestrator.handleWorkerResponse(reconciliationNeedsInputWorkResponse(rid(orchestrator, 0, 'pivot')));
 
-    orchestrator.selectExperiment('pivot-reconciliation', 'pivot-exp-v1');
+    orchestrator.selectExperiment(rid(orchestrator, 0, 'pivot'), sid(orchestrator, 0, 'pivot-exp-v1'));
 
-    expect(orchestrator.getTask('pivot-reconciliation')!.status).toBe('completed');
+    expect(orchestrator.getTask(rid(orchestrator, 0, 'pivot'))!.status).toBe('completed');
     // Downstream (remapped in-place) is now running, not stale
     expect(orchestrator.getTask('downstream')!.status).toBe('running');
   });
@@ -366,7 +383,7 @@ describe('Parity — Feature Coverage', () => {
     orchestrator.startExecution();
 
     // Simulate external process setting awaiting_approval
-    persistence.updateTask('a1', { status: 'awaiting_approval' });
+    persistence.updateTask(sid(orchestrator, 0, 'a1'), { status: 'awaiting_approval' });
     await orchestrator.approve('a1');
 
     expect(orchestrator.getTask('a1')!.status).toBe('completed');
@@ -471,15 +488,15 @@ describe('Parity — Architectural Superiority', () => {
     expect(persistence.tasks.size).toBe(3);
 
     orchestrator.startExecution();
-    // After startExecution: DB reflects running status
-    expect(persistence.tasks.get('t1')!.task.status).toBe('running');
+    const st1 = sid(orchestrator, 0, 't1');
+    const st2 = sid(orchestrator, 0, 't2');
+    expect(persistence.tasks.get(st1)!.task.status).toBe('running');
 
     orchestrator.handleWorkerResponse(
       makeResponse({ actionId: 't1', status: 'completed', outputs: { exitCode: 0 } }),
     );
-    // After completion: DB reflects completed and running
-    expect(persistence.tasks.get('t1')!.task.status).toBe('completed');
-    expect(persistence.tasks.get('t2')!.task.status).toBe('running');
+    expect(persistence.tasks.get(st1)!.task.status).toBe('completed');
+    expect(persistence.tasks.get(st2)!.task.status).toBe('running');
 
     // In-memory always matches DB
     for (const task of orchestrator.getAllTasks()) {

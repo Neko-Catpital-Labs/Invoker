@@ -24,6 +24,11 @@ class InMemoryBus implements OrchestratorMessageBus {
   publish(): void {}
 }
 
+/** Match plan-local id against workflow-scoped runtime ids. */
+function idEndsWithLocal(id: string, local: string): boolean {
+  return id === local || id.endsWith(`/${local}`);
+}
+
 function makeResponse(overrides: Partial<WorkResponse>): WorkResponse {
   return {
     requestId: 'req-1',
@@ -91,7 +96,7 @@ describe('orphan reconciliation on resume', () => {
     const restarted = relaunchOrphansAndStartReady(orchestrator2);
 
     expect(restarted.length).toBe(1);
-    expect(restarted[0].id).toBe('t1');
+    expect(idEndsWithLocal(restarted[0].id, 't1')).toBe(true);
     expect(orchestrator2.getTask('t1')?.status).toBe('running');
     // Error and previous state should be cleared
     expect(orchestrator2.getTask('t1')?.execution?.error).toBeUndefined();
@@ -120,7 +125,7 @@ describe('orphan reconciliation on resume', () => {
     expect(orchestrator2.getTask('t1')?.status).toBe('completed');
     expect(orchestrator2.getTask('t2')?.status).toBe('running');
     expect(restarted.length).toBe(1);
-    expect(restarted[0].id).toBe('t2');
+    expect(idEndsWithLocal(restarted[0].id, 't2')).toBe(true);
   });
 
   it('relaunched tasks can complete the full lifecycle', () => {
@@ -207,8 +212,8 @@ describe('orphan reconciliation on resume', () => {
     const started = relaunchOrphansAndStartReady(orchestrator2);
     const startedIds = started.map(t => t.id).sort();
 
-    expect(startedIds).toContain('a1');
-    expect(startedIds).toContain('b1');
+    expect(startedIds.some((id) => idEndsWithLocal(id, 'a1'))).toBe(true);
+    expect(startedIds.some((id) => idEndsWithLocal(id, 'b1'))).toBe(true);
     expect(orchestrator2.getTask('a1')?.status).toBe('running');
     expect(orchestrator2.getTask('b1')?.status).toBe('running');
     expect(orchestrator2.getTask('a2')?.status).toBe('pending');
@@ -252,7 +257,7 @@ describe('orphan reconciliation on resume', () => {
     const started = relaunchOrphansAndStartReady(orchestrator2);
     const startedIds = started.map(t => t.id);
 
-    expect(startedIds).toContain('fresh1');
+    expect(startedIds.some((id) => idEndsWithLocal(id, 'fresh1'))).toBe(true);
     expect(orchestrator2.getTask('fresh1')?.status).toBe('running');
     expect(orchestrator2.getTask('fresh2')?.status).toBe('pending');
   });
@@ -285,8 +290,8 @@ describe('orphan reconciliation on resume', () => {
     const started = relaunchOrphansAndStartReady(orchestrator2);
     const startedIds = started.map(t => t.id).sort();
 
-    expect(startedIds).toContain('t2');
-    expect(startedIds).toContain('r1');
+    expect(startedIds.some((id) => idEndsWithLocal(id, 't2'))).toBe(true);
+    expect(startedIds.some((id) => idEndsWithLocal(id, 'r1'))).toBe(true);
     expect(orchestrator2.getTask('t2')?.status).toBe('running');
     expect(orchestrator2.getTask('r1')?.status).toBe('running');
   });
@@ -304,11 +309,11 @@ describe('orphan reconciliation on resume', () => {
 
     const restarted = relaunchOrphansAndStartReady(orchestrator2);
     expect(restarted.length).toBe(1);
-    expect(restarted[0].id).toBe('t2');
+    expect(idEndsWithLocal(restarted[0].id, 't2')).toBe(true);
 
     const started = orchestrator2.startExecution();
     const startedIds = started.map(t => t.id);
-    expect(startedIds).not.toContain('t2');
+    expect(startedIds.some((id) => idEndsWithLocal(id, 't2'))).toBe(false);
   });
 
   // ── disableAutoRunOnStartup guard tests ─────────────────────
@@ -430,6 +435,6 @@ describe('orphan reconciliation on resume', () => {
     // After the flag is cleared, relaunchOrphansAndStartReady should work.
     const allStarted = relaunchOrphansAndStartReady(orchestrator2);
     expect(allStarted.length).toBe(1);
-    expect(allStarted[0].id).toBe('t1');
+    expect(idEndsWithLocal(allStarted[0].id, 't1')).toBe(true);
   });
 });

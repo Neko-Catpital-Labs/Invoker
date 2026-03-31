@@ -46,7 +46,26 @@ export class InMemoryPersistence implements OrchestratorPersistence {
   }
 
   updateTask(taskId: string, changes: TaskStateChanges): void {
-    const entry = this.tasks.get(taskId);
+    let resolvedId = taskId;
+    let entry = this.tasks.get(resolvedId);
+    if (
+      !entry &&
+      !taskId.includes('/') &&
+      !taskId.startsWith('__merge__') &&
+      !taskId.endsWith('-reconciliation')
+    ) {
+      const suffix = `/${taskId}`;
+      const matches: string[] = [];
+      for (const id of this.tasks.keys()) {
+        if (id === taskId || id.endsWith(suffix)) {
+          matches.push(id);
+        }
+      }
+      if (matches.length === 1) {
+        resolvedId = matches[0]!;
+        entry = this.tasks.get(resolvedId);
+      }
+    }
     if (entry) {
       if (
         changes.execution &&

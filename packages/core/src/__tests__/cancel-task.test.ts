@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
+import { sid } from './scoped-test-helpers.js';
 import { Orchestrator } from '../orchestrator.js';
 import type { PlanDefinition, OrchestratorPersistence, OrchestratorMessageBus } from '../orchestrator.js';
 import type { TaskState, TaskDelta, TaskStateChanges , Attempt} from '../task-types.js';
@@ -163,10 +164,10 @@ describe('cancelTask', () => {
     publishedDeltas = [];
     const result = orchestrator.cancelTask('a');
 
-    expect(result.runningCancelled).toContain('a');
-    expect(result.cancelled).toContain('a');
-    expect(result.cancelled).toContain('b');
-    expect(result.cancelled).toContain('c');
+    expect(result.runningCancelled).toContain(sid(orchestrator, 0, 'a'));
+    expect(result.cancelled).toContain(sid(orchestrator, 0, 'a'));
+    expect(result.cancelled).toContain(sid(orchestrator, 0, 'b'));
+    expect(result.cancelled).toContain(sid(orchestrator, 0, 'c'));
   });
 
   it('throws when cancelling a completed task', () => {
@@ -215,9 +216,9 @@ describe('cancelTask', () => {
     expect(orchestrator.getTask('b')!.status).toBe('completed');
     expect(orchestrator.getTask('c')!.status).toBe('failed');
     expect(orchestrator.getTask('d')!.status).toBe('failed');
-    expect(result.cancelled).toContain('c');
-    expect(result.cancelled).toContain('d');
-    expect(result.cancelled).not.toContain('b');
+    expect(result.cancelled).toContain(sid(orchestrator, 0, 'c'));
+    expect(result.cancelled).toContain(sid(orchestrator, 0, 'd'));
+    expect(result.cancelled).not.toContain(sid(orchestrator, 0, 'b'));
   });
 
   it('publishes deltas for each cancelled task', () => {
@@ -226,16 +227,19 @@ describe('cancelTask', () => {
     publishedDeltas = [];
     orchestrator.cancelTask('a');
 
-    // Should have deltas for a, b, c (3 user tasks)
+    const sa = sid(orchestrator, 0, 'a');
+    const sb = sid(orchestrator, 0, 'b');
+    const sc = sid(orchestrator, 0, 'c');
+
     const cancelDeltas = publishedDeltas
       .filter((d): d is Extract<TaskDelta, { type: 'updated' }> => d.type === 'updated')
-      .filter((d) => d.taskId === 'a' || d.taskId === 'b' || d.taskId === 'c');
+      .filter((d) => d.taskId === sa || d.taskId === sb || d.taskId === sc);
     expect(cancelDeltas).toHaveLength(3);
 
     const deltaIds = cancelDeltas.map((d) => d.taskId);
-    expect(deltaIds).toContain('a');
-    expect(deltaIds).toContain('b');
-    expect(deltaIds).toContain('c');
+    expect(deltaIds).toContain(sa);
+    expect(deltaIds).toContain(sb);
+    expect(deltaIds).toContain(sc);
   });
 });
 
@@ -269,7 +273,7 @@ describe('getQueueStatus', () => {
 
     // Task 'a' should be running (no deps), 'b' and 'c' are blocked
     expect(status.running.length).toBeGreaterThanOrEqual(1);
-    const runningA = status.running.find((r) => r.taskId === 'a');
+    const runningA = status.running.find((r) => r.taskId === sid(orchestrator, 0, 'a'));
     expect(runningA).toBeDefined();
     expect(runningA!.description).toBe('Task A');
 
