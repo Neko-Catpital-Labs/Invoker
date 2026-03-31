@@ -70,15 +70,15 @@ ensure_cursor_cli() {
 }
 
 link_cursor_skills() {
-  local canonical="$REPO_ROOT/.claude/plugins/invoker/skills/plan-to-invoker"
+  local canonical="$REPO_ROOT/.claude/skills/plan-to-invoker"
   if [ ! -f "$canonical/SKILL.md" ]; then
     fail "expected skill at $canonical/SKILL.md"
   fi
 
   mkdir -p "$REPO_ROOT/.cursor/skills"
   cd "$REPO_ROOT/.cursor/skills"
-  ln -sfn ../../.claude/plugins/invoker/skills/plan-to-invoker plan-to-invoker
-  log "Cursor skill linked at .cursor/skills/plan-to-invoker -> .claude/plugins/invoker/skills/plan-to-invoker"
+  ln -sfn ../../.claude/skills/plan-to-invoker plan-to-invoker
+  log "Cursor skill linked at .cursor/skills/plan-to-invoker -> .claude/skills/plan-to-invoker"
 }
 
 check_required_commands

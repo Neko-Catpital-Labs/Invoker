@@ -4,7 +4,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-SKILL_DIR="$REPO_ROOT/.claude/plugins/invoker/skills/plan-to-invoker"
+SKILL_DIR="$REPO_ROOT/.claude/skills/plan-to-invoker"
 SKILL_MD="$SKILL_DIR/SKILL.md"
 PLAYBOOK="$SKILL_DIR/playbooks/verify-then-build.md"
 CURSOR_LINK="$REPO_ROOT/.cursor/skills/plan-to-invoker"
@@ -33,7 +33,7 @@ if [[ -e "$CURSOR_LINK" ]]; then
   fi
   resolved="$(cd "$(dirname "$CURSOR_LINK")" && cd "$(readlink plan-to-invoker)" && pwd)"
   case "$resolved" in
-    *"/.claude/plugins/invoker/skills/plan-to-invoker") ;;
+    *"/.claude/skills/plan-to-invoker") ;;
     *) fail "symlink $CURSOR_LINK should resolve to .claude/plugins/.../plan-to-invoker (got: $resolved)" ;;
   esac
 fi
