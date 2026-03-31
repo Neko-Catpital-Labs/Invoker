@@ -24,6 +24,7 @@ export interface ClaudeExecutionAgentConfig {
 export class ClaudeExecutionAgent implements ExecutionAgent {
   readonly name = 'claude';
   readonly stdinMode = 'ignore' as const;
+  readonly linuxTerminalTail = 'exec_bash' as const;
 
   private readonly command: string;
   private readonly configDir: string;
@@ -44,6 +45,13 @@ export class ClaudeExecutionAgent implements ExecutionAgent {
       args: ['--session-id', sessionId, '--dangerously-skip-permissions', '-p', fullPrompt],
       sessionId,
       fullPrompt,
+    };
+  }
+
+  buildFixCommand(prompt: string): AgentCommandSpec {
+    return {
+      cmd: this.command,
+      args: ['-p', prompt, '--dangerously-skip-permissions'],
     };
   }
 

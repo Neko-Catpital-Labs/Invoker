@@ -325,6 +325,9 @@ export class SQLiteAdapter implements PersistenceAdapter {
       'ALTER TABLE tasks ADD COLUMN agent_session_id TEXT',
       'ALTER TABLE attempts ADD COLUMN agent_session_id TEXT',
       'ALTER TABLE workflows ADD COLUMN review_provider TEXT',
+      // execution_agent / agent_name: interchangeable agent support
+      'ALTER TABLE tasks ADD COLUMN execution_agent TEXT',
+      'ALTER TABLE tasks ADD COLUMN agent_name TEXT',
     ];
     for (const sql of migrations) {
       try { this.db.run(sql); } catch { /* Column already exists */ }
@@ -439,7 +442,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
         utilization, pending_fix_error,
         review_url, review_id, review_status, review_provider_id,
         is_fixing_with_ai,
-        remote_target_id
+        remote_target_id,
+        execution_agent, agent_name
       ) VALUES (
         ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?, ?,
@@ -455,7 +459,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
         ?, ?,
         ?, ?, ?, ?,
         ?,
-        ?
+        ?,
+        ?, ?
       )
     `, [
       task.id, workflowId, task.description, task.status,
@@ -494,6 +499,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
       exec.reviewProviderId ?? null,
       exec.isFixingWithAI ? 1 : 0,
       cfg.remoteTargetId ?? null,
+      cfg.executionAgent ?? null,
+      exec.agentName ?? null,
     ]);
   }
 
@@ -525,6 +532,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         featureBranch: 'feature_branch',
         familiarType: 'familiar_type',
         remoteTargetId: 'remote_target_id',
+        executionAgent: 'execution_agent',
       };
       const configBoolMap: Record<string, string> = {
         pivot: 'pivot',
@@ -575,6 +583,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         reviewStatus: 'review_status',
         reviewProviderId: 'review_provider_id',
         selectedAttemptId: 'selected_attempt_id',
+        agentName: 'agent_name',
       };
       const execDateMap: Record<string, string> = {
         startedAt: 'started_at',
@@ -816,6 +825,14 @@ export class SQLiteAdapter implements PersistenceAdapter {
       [taskId],
     );
     return (row?.branch as string) ?? null;
+  }
+
+  getAgentName(taskId: string): string | null {
+    const row = this.queryOne(
+      'SELECT agent_name FROM tasks WHERE id = ?',
+      [taskId],
+    );
+    return (row?.agent_name as string) ?? null;
   }
 
   getRemoteTargetId(taskId: string): string | null {
@@ -1129,6 +1146,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         testPlan: row.test_plan ?? undefined,
         reproCommand: row.repro_command ?? undefined,
         utilization: row.utilization ?? undefined,
+        executionAgent: row.execution_agent ?? undefined,
       },
       execution: {
         blockedBy: row.blocked_by ?? undefined,
@@ -1160,6 +1178,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         reviewStatus: row.review_status ?? undefined,
         reviewProviderId: row.review_provider_id ?? undefined,
         selectedAttemptId: row.selected_attempt_id ?? undefined,
+        agentName: row.agent_name ?? undefined,
       },
     };
   }

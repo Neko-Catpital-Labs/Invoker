@@ -110,6 +110,10 @@ export interface PersistenceAdapter {
   loadAttempt(attemptId: string): Attempt | undefined;
   updateAttempt(attemptId: string, changes: Partial<Pick<Attempt, 'status' | 'startedAt' | 'completedAt' | 'exitCode' | 'error' | 'lastHeartbeatAt' | 'branch' | 'commit' | 'summary' | 'workspacePath' | 'agentSessionId' | 'containerId' | 'mergeConflict'>>): void;
 
+  // Agent queries
+  /** Read the execution agent name for a task (e.g. 'claude', 'codex'). */
+  getAgentName?(taskId: string): string | null;
+
   // Lifecycle
   close(): void;
 }

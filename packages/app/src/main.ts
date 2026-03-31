@@ -1110,7 +1110,7 @@ function setupGuiMode(): void {
       );
     });
 
-    ipcMain.handle('invoker:resolve-conflict', async (_event, taskId: string) => {
+    ipcMain.handle('invoker:resolve-conflict', async (_event, taskId: string, _agentName?: string) => {
       console.log(`[ipc] resolve-conflict: "${taskId}"`);
       try {
         await resolveConflictWithClaudeAction(taskId, {
@@ -1124,7 +1124,7 @@ function setupGuiMode(): void {
       }
     });
 
-    ipcMain.handle('invoker:fix-with-claude', async (_event, taskId: string) => {
+    ipcMain.handle('invoker:fix-with-claude', async (_event, taskId: string, _agentName?: string) => {
       console.log(`[ipc] fix-with-claude: "${taskId}"`);
       const { savedError } = orchestrator.beginConflictResolution(taskId);
       try {

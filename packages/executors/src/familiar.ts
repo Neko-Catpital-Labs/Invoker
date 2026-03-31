@@ -20,6 +20,8 @@ export interface TerminalSpec {
   command?: string;
   /** Arguments for the command. */
   args?: string[];
+  /** Tail command for Linux terminal launch (e.g. 'exec_bash' or 'pause'). */
+  linuxTerminalTail?: 'exec_bash' | 'pause';
 }
 
 export interface PersistedTaskMeta {

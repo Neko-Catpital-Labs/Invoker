@@ -35,12 +35,11 @@ import {
 import { normalizeBranchForGithubCli } from './github-branch-ref.js';
 import {
   resolveConflictWithClaudeImpl,
-  resolveConflictWithCodexImpl,
   fixWithClaudeImpl,
-  fixWithCodexImpl,
   spawnClaudeFixImpl,
-  spawnCodexFixImpl,
+  spawnAgentFixViaRegistry,
 } from './conflict-resolver.js';
+import { DEFAULT_EXECUTION_AGENT } from './agent.js';
 
 /** Keeps `lastHeartbeatAt` fresh while `familiar.start()` is awaited (SSH remote setup/provision can take minutes). Matches BaseFamiliar default heartbeat cadence. */
 const PRE_START_HEARTBEAT_INTERVAL_MS = 30_000;
@@ -279,7 +278,7 @@ export class TaskExecutor {
         description: task.description,
         command: task.config.command,
         prompt: task.config.prompt,
-        executionAgent: task.config.executionAgent?.trim() || 'claude',
+        executionAgent: task.config.executionAgent?.trim() || DEFAULT_EXECUTION_AGENT,
         workspacePath: this.cwd,
         repoUrl,
         featureBranch: task.config.featureBranch,
@@ -836,7 +835,7 @@ export class TaskExecutor {
   }
 
   async resolveConflictWithCodex(taskId: string): Promise<void> {
-    return resolveConflictWithCodexImpl(this, taskId);
+    return resolveConflictWithClaudeImpl(this, taskId);
   }
 
   /**
@@ -848,7 +847,7 @@ export class TaskExecutor {
   }
 
   async fixWithCodex(taskId: string, taskOutput: string): Promise<void> {
-    return fixWithCodexImpl(this, taskId, taskOutput);
+    return fixWithClaudeImpl(this, taskId, taskOutput);
   }
 
   resumeMergeGatePolling(): void {
@@ -972,9 +971,16 @@ export class TaskExecutor {
   spawnAgentFix(
     prompt: string,
     cwd: string,
-    agentName: string = 'claude',
+    agentName: string = DEFAULT_EXECUTION_AGENT,
   ): Promise<{ stdout: string; sessionId: string }> {
-    if (agentName === 'codex') return spawnCodexFixImpl(prompt, cwd);
+    // Use registry-based fix if agent supports buildFixCommand
+    if (this.executionAgentRegistry) {
+      const agent = this.executionAgentRegistry.get(agentName);
+      if (agent?.buildFixCommand) {
+        return spawnAgentFixViaRegistry(prompt, cwd, agent);
+      }
+    }
+    // Legacy fallback for Claude
     return spawnClaudeFixImpl(prompt, cwd);
   }
 

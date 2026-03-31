@@ -133,6 +133,7 @@ export interface PlanDefinition {
     autoFix?: boolean;
     dockerImage?: string;
     remoteTargetId?: string;
+    executionAgent?: string;
   }>;
 }
 
@@ -184,6 +185,7 @@ export interface TaskReplacementDef {
   dependencies?: string[];
   familiarType?: string;
   autoFix?: boolean;
+  executionAgent?: string;
 }
 
 /** A single routing rule that maps a task command to a familiarType and remoteTargetId. */
@@ -430,6 +432,7 @@ export class Orchestrator {
           dockerImage: taskDef.dockerImage,
           remoteTargetId: effectiveRemoteTargetId,
           autoFix: taskDef.autoFix,
+          executionAgent: taskDef.executionAgent,
         },
       );
 
@@ -1223,6 +1226,7 @@ export class Orchestrator {
         prompt: rt.prompt,
         familiarType: rt.familiarType ?? task.config.familiarType,
         autoFix: rt.autoFix,
+        executionAgent: rt.executionAgent ?? task.config.executionAgent,
       });
       this.createAndSync(newTask);
       this.messageBus.publish(TASK_DELTA_CHANNEL, { type: 'created', task: newTask });

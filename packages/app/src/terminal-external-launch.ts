@@ -50,15 +50,15 @@ export function buildMacOSOsascriptArgs(
  * Inner script passed to `bash -c` for Linux x-terminal-emulator (includes optional suffix).
  */
 export function buildLinuxXTerminalBashScript(
-  spec: { cwd?: string; command?: string; args?: string[] },
+  spec: { cwd?: string; command?: string; args?: string[]; linuxTerminalTail?: 'exec_bash' | 'pause' },
   defaultCwd: string,
 ): string {
   const base = buildTerminalShellCommand(spec, defaultCwd);
   if (!spec.command) {
     return base;
   }
-  const isClaudeSession = spec.command === 'claude';
-  const suffix = isClaudeSession
+  const tail = spec.linuxTerminalTail ?? (spec.command === 'claude' || spec.command === 'codex' ? 'exec_bash' : 'pause');
+  const suffix = tail === 'exec_bash'
     ? '; exec bash'
     : '; echo ""; echo "Exit code: $?"; echo "Press Enter to close..."; read';
   return base + suffix;

@@ -204,6 +204,48 @@ tasks:
     expect(plan.tasks[1].autoFix).toBeUndefined();
   });
 
+  it('parses executionAgent from task definitions', () => {
+    const yaml = `
+name: Agent Test
+repoUrl: git@github.com:test/repo.git
+tasks:
+  - id: codex-task
+    description: "Task using codex"
+    command: "npm test"
+    executionAgent: codex
+  - id: claude-task
+    description: "Task using claude"
+    prompt: "Fix the bug"
+    executionAgent: claude
+  - id: default-task
+    description: "No agent specified"
+    command: "echo hi"
+`;
+    const plan = parsePlan(yaml);
+    expect(plan.tasks[0].executionAgent).toBe('codex');
+    expect(plan.tasks[1].executionAgent).toBe('claude');
+    expect(plan.tasks[2].executionAgent).toBeUndefined();
+  });
+
+  it('trims whitespace from executionAgent and treats empty as undefined', () => {
+    const yaml = `
+name: Agent Trim Test
+repoUrl: git@github.com:test/repo.git
+tasks:
+  - id: padded
+    description: "Padded agent"
+    command: "echo hi"
+    executionAgent: "  codex  "
+  - id: empty
+    description: "Empty agent"
+    command: "echo hi"
+    executionAgent: ""
+`;
+    const plan = parsePlan(yaml);
+    expect(plan.tasks[0].executionAgent).toBe('codex');
+    expect(plan.tasks[1].executionAgent).toBeUndefined();
+  });
+
   describe('onFinish parsing', () => {
     it('parses plan with onFinish: merge', () => {
       const yaml = `

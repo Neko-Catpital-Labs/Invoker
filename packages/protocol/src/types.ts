@@ -43,6 +43,8 @@ export interface WorkRequestInputs {
   salt?: string;
   /** Workflow base branch — worktrees are created from this ref instead of HEAD. */
   baseBranch?: string;
+  /** Name of the execution agent to use (e.g. 'claude', 'codex'). Defaults to 'claude'. */
+  executionAgent?: string;
 }
 
 export interface WorkRequest {
