@@ -4,14 +4,24 @@
 # Talks to the HTTP API server on localhost:4100 (or INVOKER_API_PORT).
 #
 # Usage:
-#   ./invoker-ctl health                    Check if Invoker is running
-#   ./invoker-ctl status                    Show workflow status summary
-#   ./invoker-ctl tasks [status]            List tasks (optionally filter by status)
-#   ./invoker-ctl heartbeat <taskId>        Check heartbeat for a specific task
-#   ./invoker-ctl cancel <taskId>           Cancel a running task
-#   ./invoker-ctl restart <taskId>          Restart a failed task
-#   ./invoker-ctl approve <taskId>          Approve a task awaiting approval
-#   ./invoker-ctl reject <taskId> [reason]  Reject a task
+#   ./invoker-ctl health                           Check if Invoker is running
+#   ./invoker-ctl status                           Show workflow status summary
+#   ./invoker-ctl workflows                        List all workflows with IDs
+#   ./invoker-ctl tasks [status]                   List tasks (optionally filter by status)
+#   ./invoker-ctl queue                            Show scheduler queue status
+#   ./invoker-ctl heartbeat <taskId>               Check heartbeat for a specific task
+#   ./invoker-ctl audit <taskId>                   Show audit event log for a task
+#   ./invoker-ctl output <taskId>                  Show captured output for a task
+#   ./invoker-ctl cancel <taskId>                  Cancel a running task
+#   ./invoker-ctl restart <taskId>                 Restart a failed task
+#   ./invoker-ctl restart-workflow <workflowId>    Restart entire workflow (bump generation)
+#   ./invoker-ctl approve <taskId>                 Approve a task awaiting approval
+#   ./invoker-ctl reject <taskId> [reason]         Reject a task
+#   ./invoker-ctl input <taskId> <text>            Provide input to a task awaiting input
+#   ./invoker-ctl edit <taskId> <command>          Edit a task's command
+#   ./invoker-ctl edit-type <taskId> <type>        Change a task's familiar type
+#   ./invoker-ctl delete-workflow <workflowId>     Delete a workflow
+#   ./invoker-ctl set-merge-mode <id> <mode>       Set workflow merge mode
 
 set -euo pipefail
 
@@ -48,12 +58,63 @@ case "${1:-}" in
     fi
     ;;
 
+  workflows)
+    curl -sf "$BASE/api/workflows" | fmt '.[] | {id, name, status, createdAt, updatedAt, generation}'
+    ;;
+
+  queue)
+    curl -sf "$BASE/api/queue" | fmt '.'
+    ;;
+
+  restart-workflow)
+    if [ -z "${2:-}" ]; then
+      echo "Usage: invoker-ctl restart-workflow <workflowId>" >&2
+      exit 1
+    fi
+    curl -sf -X POST "$BASE/api/workflows/$2/restart" | fmt '.'
+    ;;
+
+  delete-workflow)
+    if [ -z "${2:-}" ]; then
+      echo "Usage: invoker-ctl delete-workflow <workflowId>" >&2
+      exit 1
+    fi
+    curl -sf -X DELETE "$BASE/api/workflows/$2" | fmt '.'
+    ;;
+
+  set-merge-mode)
+    if [ -z "${2:-}" ] || [ -z "${3:-}" ]; then
+      echo "Usage: invoker-ctl set-merge-mode <workflowId> <mode>" >&2
+      echo "  mode: manual | automatic | github | external_review" >&2
+      exit 1
+    fi
+    curl -sf -X POST -H 'Content-Type: application/json' \
+      -d "{\"mode\":\"$3\"}" \
+      "$BASE/api/workflows/$2/merge-mode" | fmt '.'
+    ;;
+
   heartbeat)
     if [ -z "${2:-}" ]; then
       echo "Usage: invoker-ctl heartbeat <taskId>" >&2
       exit 1
     fi
     curl -sf "$BASE/api/tasks/$2" | fmt '{id, status, startedAt, lastHeartbeatAt, secondsSinceHeartbeat}'
+    ;;
+
+  audit)
+    if [ -z "${2:-}" ]; then
+      echo "Usage: invoker-ctl audit <taskId>" >&2
+      exit 1
+    fi
+    curl -sf "$BASE/api/tasks/$2/events" | fmt '.'
+    ;;
+
+  output)
+    if [ -z "${2:-}" ]; then
+      echo "Usage: invoker-ctl output <taskId>" >&2
+      exit 1
+    fi
+    curl -sf "$BASE/api/tasks/$2/output" | fmt '.output'
     ;;
 
   cancel)
@@ -96,27 +157,78 @@ case "${1:-}" in
     fi
     ;;
 
+  input)
+    if [ -z "${2:-}" ] || [ -z "${3:-}" ]; then
+      echo "Usage: invoker-ctl input <taskId> <text>" >&2
+      exit 1
+    fi
+    TASK_ID="$2"
+    shift 2
+    TEXT="$*"
+    curl -sf -X POST -H 'Content-Type: application/json' \
+      -d "{\"text\":\"$TEXT\"}" \
+      "$BASE/api/tasks/$TASK_ID/input" | fmt '.'
+    ;;
+
+  edit)
+    if [ -z "${2:-}" ] || [ -z "${3:-}" ]; then
+      echo "Usage: invoker-ctl edit <taskId> <command>" >&2
+      exit 1
+    fi
+    TASK_ID="$2"
+    shift 2
+    CMD="$*"
+    curl -sf -X POST -H 'Content-Type: application/json' \
+      -d "{\"command\":\"$CMD\"}" \
+      "$BASE/api/tasks/$TASK_ID/edit" | fmt '.'
+    ;;
+
+  edit-type)
+    if [ -z "${2:-}" ] || [ -z "${3:-}" ]; then
+      echo "Usage: invoker-ctl edit-type <taskId> <familiarType>" >&2
+      exit 1
+    fi
+    curl -sf -X POST -H 'Content-Type: application/json' \
+      -d "{\"familiarType\":\"$3\"}" \
+      "$BASE/api/tasks/$2/edit-type" | fmt '.'
+    ;;
+
   --help|-h|"")
     cat <<'EOF'
 invoker-ctl — CLI for querying and controlling a running Invoker instance.
 
 Usage:
-  invoker-ctl health                    Check if Invoker is running
-  invoker-ctl status                    Show workflow status summary
-  invoker-ctl tasks [status]            List tasks (optionally filter by status)
-  invoker-ctl heartbeat <taskId>        Check heartbeat for a specific task
-  invoker-ctl cancel <taskId>           Cancel a running task
-  invoker-ctl restart <taskId>          Restart a failed task
-  invoker-ctl approve <taskId>          Approve a task awaiting approval
-  invoker-ctl reject <taskId> [reason]  Reject a task
+  invoker-ctl health                           Check if Invoker is running
+  invoker-ctl status                           Show workflow status summary
+  invoker-ctl workflows                        List all workflows with IDs
+  invoker-ctl tasks [status]                   List tasks (optionally filter by status)
+  invoker-ctl queue                            Show scheduler queue status
+  invoker-ctl heartbeat <taskId>               Check heartbeat for a specific task
+  invoker-ctl audit <taskId>                   Show audit event log for a task
+  invoker-ctl output <taskId>                  Show captured output for a task
+  invoker-ctl cancel <taskId>                  Cancel a running task
+  invoker-ctl restart <taskId>                 Restart a failed task
+  invoker-ctl restart-workflow <workflowId>    Restart an entire workflow (bump generation)
+  invoker-ctl approve <taskId>                 Approve a task awaiting approval
+  invoker-ctl reject <taskId> [reason]         Reject a task
+  invoker-ctl input <taskId> <text>            Provide input to a task awaiting input
+  invoker-ctl edit <taskId> <command>          Edit a task's command
+  invoker-ctl edit-type <taskId> <type>        Change a task's familiar type
+  invoker-ctl delete-workflow <workflowId>     Delete a workflow
+  invoker-ctl set-merge-mode <id> <mode>       Set merge mode (manual|automatic|github)
 
 Environment:
   INVOKER_API_PORT    API port (default: 4100)
 
 Examples:
-  invoker-ctl tasks running             List all running tasks with heartbeat info
-  invoker-ctl heartbeat add-config      Check if add-config task is alive
-  invoker-ctl cancel add-config         Kill a stalled task
+  invoker-ctl workflows                       List all workflows
+  invoker-ctl restart-workflow abc123          Restart workflow abc123
+  invoker-ctl tasks running                   List all running tasks with heartbeat info
+  invoker-ctl heartbeat add-config            Check if add-config task is alive
+  invoker-ctl cancel add-config               Kill a stalled task
+  invoker-ctl input my-task "yes"             Send input to a waiting task
+  invoker-ctl edit my-task "npm run build"    Change task command
+  invoker-ctl set-merge-mode wf-1 automatic   Set merge mode to automatic
 EOF
     ;;
 

@@ -5,22 +5,41 @@
  * configurable via INVOKER_API_PORT env var.
  *
  * Read endpoints:
- *   GET /api/health
- *   GET /api/status
- *   GET /api/tasks          ?status=running
- *   GET /api/tasks/:id
+ *   GET  /api/health
+ *   GET  /api/status
+ *   GET  /api/tasks                ?status=running
+ *   GET  /api/tasks/:id
+ *   GET  /api/tasks/:id/events     Audit event log
+ *   GET  /api/tasks/:id/output     Captured stdout/stderr
+ *   GET  /api/workflows            List all workflows
+ *   GET  /api/queue                Scheduler queue status
  *
  * Write endpoints:
- *   POST /api/tasks/:id/cancel
- *   POST /api/tasks/:id/restart
- *   POST /api/tasks/:id/approve
- *   POST /api/tasks/:id/reject   body: { reason? }
+ *   POST   /api/tasks/:id/cancel
+ *   POST   /api/tasks/:id/restart
+ *   POST   /api/tasks/:id/approve
+ *   POST   /api/tasks/:id/reject       body: { reason? }
+ *   POST   /api/tasks/:id/input        body: { text }
+ *   POST   /api/tasks/:id/edit         body: { command }
+ *   POST   /api/tasks/:id/edit-type    body: { familiarType, remoteTargetId? }
+ *   POST   /api/workflows/:id/restart
+ *   POST   /api/workflows/:id/merge-mode  body: { mode }
+ *   DELETE /api/workflows/:id
  */
 
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from 'node:http';
 import type { Orchestrator } from '@invoker/core';
 import type { SQLiteAdapter } from '@invoker/persistence';
 import type { FamiliarRegistry, TaskExecutor } from '@invoker/executors';
+import {
+  restartWorkflow as sharedRestartWorkflow,
+  restartTask as sharedRestartTask,
+  rejectTask as sharedRejectTask,
+  provideInput as sharedProvideInput,
+  editTaskCommand as sharedEditTaskCommand,
+  editTaskType as sharedEditTaskType,
+  setWorkflowMergeMode as sharedSetWorkflowMergeMode,
+} from './workflow-actions.js';
 
 export interface ApiServerDeps {
   orchestrator: Orchestrator;
@@ -132,11 +151,9 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
       if (method === 'POST' && cancelMatch) {
         const taskId = decodeURIComponent(cancelMatch[1]);
         try {
-          if (!cancelTask) {
-            json(res, 501, { error: 'Cancel not available' });
-            return;
-          }
-          const result = await cancelTask(taskId);
+          const result = cancelTask
+            ? await cancelTask(taskId)
+            : orchestrator.cancelTask(taskId);
           json(res, 200, { ok: true, ...result });
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
@@ -152,7 +169,7 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
         const taskId = decodeURIComponent(restartMatch[1]);
         try {
           await killRunningTask?.(taskId);
-          const started = orchestrator.restartTask(taskId);
+          const started = sharedRestartTask(taskId, { orchestrator });
           const runnable = started.filter(t => t.status === 'running');
           await taskExecutor.executeTasks(runnable);
           json(res, 200, { ok: true, taskId, action: 'restarted', tasksStarted: runnable.length });
@@ -196,13 +213,30 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
               reason = parsed.reason;
             } catch { /* not JSON, ignore */ }
           }
-          const task = orchestrator.getTask(taskId);
-          if (task?.execution.pendingFixError !== undefined) {
-            orchestrator.revertConflictResolution(taskId, task.execution.pendingFixError);
-          } else {
-            orchestrator.reject(taskId, reason);
-          }
+          sharedRejectTask(taskId, { orchestrator }, reason);
           json(res, 200, { ok: true, taskId, action: 'rejected', reason });
+        } catch (err) {
+          json(res, 400, { error: err instanceof Error ? err.message : String(err) });
+        }
+        return;
+      }
+
+      // GET /api/workflows
+      if (method === 'GET' && path === '/api/workflows') {
+        const workflows = persistence.listWorkflows();
+        json(res, 200, workflows);
+        return;
+      }
+
+      // POST /api/workflows/:id/restart
+      const wfRestartMatch = path.match(/^\/api\/workflows\/([^/]+)\/restart$/);
+      if (method === 'POST' && wfRestartMatch) {
+        const workflowId = decodeURIComponent(wfRestartMatch[1]);
+        try {
+          const started = sharedRestartWorkflow(workflowId, { persistence, orchestrator });
+          const runnable = started.filter(t => t.status === 'running');
+          await taskExecutor.executeTasks(runnable);
+          json(res, 200, { ok: true, workflowId, action: 'restarted', tasksStarted: runnable.length });
         } catch (err) {
           json(res, 400, { error: err instanceof Error ? err.message : String(err) });
         }
@@ -213,6 +247,117 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
       if (method === 'GET' && path === '/api/queue') {
         const queueStatus = orchestrator.getQueueStatus();
         json(res, 200, queueStatus);
+        return;
+      }
+
+      // GET /api/tasks/:id/events
+      const eventsMatch = path.match(/^\/api\/tasks\/([^/]+)\/events$/);
+      if (method === 'GET' && eventsMatch) {
+        const taskId = decodeURIComponent(eventsMatch[1]);
+        const events = persistence.getEvents(taskId);
+        json(res, 200, events);
+        return;
+      }
+
+      // GET /api/tasks/:id/output
+      const outputMatch = path.match(/^\/api\/tasks\/([^/]+)\/output$/);
+      if (method === 'GET' && outputMatch) {
+        const taskId = decodeURIComponent(outputMatch[1]);
+        const output = persistence.getTaskOutput(taskId);
+        json(res, 200, { taskId, output });
+        return;
+      }
+
+      // POST /api/tasks/:id/input
+      const inputMatch = path.match(/^\/api\/tasks\/([^/]+)\/input$/);
+      if (method === 'POST' && inputMatch) {
+        const taskId = decodeURIComponent(inputMatch[1]);
+        try {
+          const body = await readBody(req);
+          const { text } = JSON.parse(body);
+          if (!text) {
+            json(res, 400, { error: 'Missing "text" in request body' });
+            return;
+          }
+          sharedProvideInput(taskId, text, { orchestrator });
+          json(res, 200, { ok: true, taskId, action: 'input_provided' });
+        } catch (err) {
+          json(res, 400, { error: err instanceof Error ? err.message : String(err) });
+        }
+        return;
+      }
+
+      // POST /api/tasks/:id/edit
+      const editMatch = path.match(/^\/api\/tasks\/([^/]+)\/edit$/);
+      if (method === 'POST' && editMatch) {
+        const taskId = decodeURIComponent(editMatch[1]);
+        try {
+          const body = await readBody(req);
+          const { command } = JSON.parse(body);
+          if (!command) {
+            json(res, 400, { error: 'Missing "command" in request body' });
+            return;
+          }
+          const started = sharedEditTaskCommand(taskId, command, { orchestrator });
+          const runnable = started.filter(t => t.status === 'running');
+          await taskExecutor.executeTasks(runnable);
+          json(res, 200, { ok: true, taskId, action: 'command_edited', tasksStarted: runnable.length });
+        } catch (err) {
+          json(res, 400, { error: err instanceof Error ? err.message : String(err) });
+        }
+        return;
+      }
+
+      // POST /api/tasks/:id/edit-type
+      const editTypeMatch = path.match(/^\/api\/tasks\/([^/]+)\/edit-type$/);
+      if (method === 'POST' && editTypeMatch) {
+        const taskId = decodeURIComponent(editTypeMatch[1]);
+        try {
+          const body = await readBody(req);
+          const { familiarType, remoteTargetId } = JSON.parse(body);
+          if (!familiarType) {
+            json(res, 400, { error: 'Missing "familiarType" in request body' });
+            return;
+          }
+          const started = sharedEditTaskType(taskId, familiarType, { orchestrator }, remoteTargetId);
+          const runnable = started.filter(t => t.status === 'running');
+          await taskExecutor.executeTasks(runnable);
+          json(res, 200, { ok: true, taskId, action: 'type_edited', tasksStarted: runnable.length });
+        } catch (err) {
+          json(res, 400, { error: err instanceof Error ? err.message : String(err) });
+        }
+        return;
+      }
+
+      // DELETE /api/workflows/:id
+      const wfDeleteMatch = path.match(/^\/api\/workflows\/([^/]+)$/);
+      if (method === 'DELETE' && wfDeleteMatch) {
+        const workflowId = decodeURIComponent(wfDeleteMatch[1]);
+        try {
+          orchestrator.deleteWorkflow(workflowId);
+          json(res, 200, { ok: true, workflowId, action: 'deleted' });
+        } catch (err) {
+          json(res, 400, { error: err instanceof Error ? err.message : String(err) });
+        }
+        return;
+      }
+
+      // POST /api/workflows/:id/merge-mode
+      const wfMergeModeMatch = path.match(/^\/api\/workflows\/([^/]+)\/merge-mode$/);
+      if (method === 'POST' && wfMergeModeMatch) {
+        const workflowId = decodeURIComponent(wfMergeModeMatch[1]);
+        try {
+          const body = await readBody(req);
+          const { mode } = JSON.parse(body);
+          if (!mode) {
+            json(res, 400, { error: 'Missing "mode" in request body' });
+            return;
+          }
+          await sharedSetWorkflowMergeMode(workflowId, mode, { orchestrator, persistence, taskExecutor });
+          json(res, 200, { ok: true, workflowId, action: 'merge_mode_set', mode });
+        } catch (err) {
+          json(res, 400, { error: err instanceof Error ? err.message : String(err) });
+        }
         return;
       }
 

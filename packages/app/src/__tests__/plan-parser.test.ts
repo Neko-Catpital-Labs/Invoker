@@ -250,7 +250,12 @@ tasks:
       expect(plan.featureBranch).toBe('plan/simple-plan');
     });
 
-    it('auto-detects baseBranch when omitted', () => {
+    it('auto-detects baseBranch when omitted', async () => {
+      // Mock loadConfig to return empty config so local ~/.invoker/config.json
+      // doesn't short-circuit the remote branch detection.
+      const configMod = await import('../config.js');
+      const loadConfigSpy = vi.spyOn(configMod, 'loadConfig').mockReturnValue({});
+
       const mockExecSync = vi.mocked(execSync);
       mockExecSync.mockImplementation(((cmd: string) => {
         if (typeof cmd === 'string' && cmd.includes('ls-remote')) {
@@ -271,6 +276,7 @@ tasks:
       const plan = parsePlan(yaml);
       expect(plan.baseBranch).toBe('develop');
       mockExecSync.mockRestore();
+      loadConfigSpy.mockRestore();
     });
 
     it('explicit baseBranch overrides auto-detection', () => {
