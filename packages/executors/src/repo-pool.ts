@@ -62,7 +62,11 @@ export class RepoPool {
   async refreshMirrorForRebase(repoUrl: string, baseBranch: string): Promise<string> {
     const dir = this.cloneDir(repoUrl);
     if (existsSync(dir)) {
-      await this.execGit(['fetch', '--all'], dir);
+      try {
+        await this.execGit(['fetch', '--all', '--prune'], dir);
+      } catch (err) {
+        console.warn(`[RepoPool] refreshMirrorForRebase fetch failed: ${err}`);
+      }
       try {
         const branch = (await this.execGit(['rev-parse', '--abbrev-ref', 'HEAD'], dir)).trim();
         if (branch !== 'HEAD') {
@@ -143,7 +147,11 @@ export class RepoPool {
     const dir = this.cloneDir(repoUrl);
     if (existsSync(dir)) {
       if (remoteFetchForPool.enabled) {
-        await this.execGit(['fetch', '--all'], dir);
+        try {
+          await this.execGit(['fetch', '--all', '--prune'], dir);
+        } catch (err) {
+          console.warn(`[RepoPool] doEnsureClone fetch failed: ${err}`);
+        }
         // Advance local HEAD branch to match origin so rev-parse returns the fresh ref
         try {
           const branch = (await this.execGit(['rev-parse', '--abbrev-ref', 'HEAD'], dir)).trim();

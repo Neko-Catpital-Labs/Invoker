@@ -230,7 +230,7 @@ H="${h}"
 CLONE="$HOME/.invoker/repos/$H"
 mkdir -p "$(dirname "$CLONE")"
 if [ ! -d "$CLONE/.git" ]; then git clone "$REPO" "$CLONE"; fi
-git -C "$CLONE" fetch --all
+git -C "$CLONE" fetch --all --prune || true
 git -C "$CLONE" rev-parse "$BASE"
 `;
     const baseHead = (await this.execRemoteCapture(script1)).trim();

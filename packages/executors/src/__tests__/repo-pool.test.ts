@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -168,6 +168,87 @@ describe('RepoPool', () => {
     expect(head2).toBe(head1);  // Same HEAD, no extra commits
 
     await wt2.release();
+  });
+
+  describe('fetch resilience (concurrent ref-lock race)', () => {
+    afterEach(() => { vi.restoreAllMocks(); });
+
+    function spyFetchToFail(target: RepoPool) {
+      const orig = (target as any).execGit.bind(target);
+      vi.spyOn(target as any, 'execGit').mockImplementation(
+        (...params: unknown[]) => {
+          const args = params[0] as string[];
+          const cwd = params[1] as string;
+          if (args[0] === 'fetch' && args.includes('--all')) {
+            return Promise.reject(new Error('cannot lock ref: is at X but expected Y'));
+          }
+          return orig(args, cwd);
+        },
+      );
+    }
+
+    it('ensureClone succeeds when fetch --all fails', async () => {
+      await pool.ensureClone(localRepoUrl);
+      spyFetchToFail(pool);
+
+      const path = await pool.ensureClone(localRepoUrl);
+      expect(path).toBeDefined();
+      expect(existsSync(path)).toBe(true);
+    });
+
+    it('refreshMirrorForRebase succeeds when fetch --all fails', async () => {
+      await pool.ensureClone(localRepoUrl);
+      spyFetchToFail(pool);
+
+      const dir = await pool.refreshMirrorForRebase(localRepoUrl, 'master');
+      expect(dir).toBeDefined();
+      expect(existsSync(dir)).toBe(true);
+    });
+
+    it('concurrent fetches from separate pools sharing cacheDir both succeed', async () => {
+      // Setup: bare repo so multiple clones can fetch concurrently
+      const bareDir = mkdtempSync(join(tmpdir(), 'repo-pool-bare-'));
+      const sourceDir = mkdtempSync(join(tmpdir(), 'repo-pool-src-'));
+      try {
+        execSync('git init --bare', { cwd: bareDir });
+        execSync(`git clone ${bareDir} .`, { cwd: sourceDir });
+        execSync('git config user.email "t@t.com" && git config user.name "T"', { cwd: sourceDir });
+        execSync('git commit --allow-empty -m "init" && git push origin master', { cwd: sourceDir });
+        for (let i = 0; i < 15; i++) {
+          execSync(`git checkout -b experiment/b-${i} master`, { cwd: sourceDir });
+          execSync(`git commit --allow-empty -m "b${i}" && git push origin experiment/b-${i}`, { cwd: sourceDir });
+        }
+        execSync('git checkout master', { cwd: sourceDir });
+
+        // Initial clone via pool
+        await pool.ensureClone(bareDir);
+
+        // Force-push all branches to create stale tracking refs
+        for (let i = 0; i < 15; i++) {
+          execSync(`git checkout experiment/b-${i}`, { cwd: sourceDir });
+          execSync(`git commit --allow-empty -m "rewrite ${i}" && git push --force origin experiment/b-${i}`, { cwd: sourceDir });
+        }
+
+        // Two separate pools share cacheDir — their fetches race on the same .git dir
+        const pool2 = new RepoPool({ cacheDir: tmpDir });
+        const pool3 = new RepoPool({ cacheDir: tmpDir });
+
+        const [r1, r2] = await Promise.all([
+          pool2.ensureClone(bareDir),
+          pool3.ensureClone(bareDir),
+        ]);
+
+        expect(r1).toBe(r2);
+        const sha = execSync('git rev-parse origin/master', { cwd: r1 }).toString().trim();
+        expect(sha).toBeTruthy();
+
+        await pool2.destroyAll();
+        await pool3.destroyAll();
+      } finally {
+        rmSync(bareDir, { recursive: true, force: true });
+        rmSync(sourceDir, { recursive: true, force: true });
+      }
+    });
   });
 
   it('ensureClone skips network refresh when remoteFetchForPool.enabled is false', async () => {
