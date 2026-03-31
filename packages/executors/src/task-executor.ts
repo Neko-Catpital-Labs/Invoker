@@ -17,6 +17,7 @@ import type { WorkRequest, WorkResponse, ActionType } from '@invoker/protocol';
 import type { Familiar, FamiliarHandle } from './familiar.js';
 import { RESTART_TO_BRANCH_TRACE } from './exec-trace.js';
 import type { FamiliarRegistry } from './registry.js';
+import type { AgentRegistry } from './agent-registry.js';
 import type { MergeGateProvider } from './merge-gate-provider.js';
 import type { ReviewProviderRegistry } from './review-provider-registry.js';
 import { DockerFamiliar } from './docker-familiar.js';
@@ -34,8 +35,11 @@ import {
 import { normalizeBranchForGithubCli } from './github-branch-ref.js';
 import {
   resolveConflictWithClaudeImpl,
+  resolveConflictWithCodexImpl,
   fixWithClaudeImpl,
+  fixWithCodexImpl,
   spawnClaudeFixImpl,
+  spawnCodexFixImpl,
 } from './conflict-resolver.js';
 
 /** Keeps `lastHeartbeatAt` fresh while `familiar.start()` is awaited (SSH remote setup/provision can take minutes). Matches BaseFamiliar default heartbeat cadence. */
@@ -80,6 +84,8 @@ export interface TaskExecutorConfig {
     imageName?: string;
     repoInImage?: boolean;
   };
+  /** Shared execution agents (Claude, Codex). Passed into lazily constructed familiars. */
+  executionAgentRegistry?: AgentRegistry;
 }
 
 // ── TaskExecutor ──────────────────────────────────────────
@@ -97,6 +103,7 @@ export class TaskExecutor {
   private activePrPollers = new Map<string, ReturnType<typeof setInterval>>();
   private getRemoteTargets: () => Record<string, { host: string; user: string; sshKeyPath: string; port?: number }>;
   private dockerConfig: { imageName?: string; repoInImage?: boolean };
+  private executionAgentRegistry?: AgentRegistry;
 
   /** Config default branch (e.g. master) for workflows without baseBranch. */
   getDefaultBranchHint(): string | undefined {
@@ -157,6 +164,7 @@ export class TaskExecutor {
     this.reviewProviderRegistry = config.reviewProviderRegistry;
     this.getRemoteTargets = config.remoteTargetsProvider ?? (() => ({}));
     this.dockerConfig = config.dockerConfig ?? {};
+    this.executionAgentRegistry = config.executionAgentRegistry;
   }
 
   /**
@@ -271,6 +279,7 @@ export class TaskExecutor {
         description: task.description,
         command: task.config.command,
         prompt: task.config.prompt,
+        executionAgent: task.config.executionAgent?.trim() || 'claude',
         workspacePath: this.cwd,
         repoUrl,
         featureBranch: task.config.featureBranch,
@@ -319,6 +328,7 @@ export class TaskExecutor {
         execution: {
           workspacePath: handle.workspacePath ?? this.cwd,
           agentSessionId: handle.agentSessionId ?? undefined,
+          agentName: handle.agentName ?? undefined,
           containerId: handle.containerId ?? undefined,
           branch: handle.branch ?? undefined,
         },
@@ -415,6 +425,7 @@ export class TaskExecutor {
           workspaceDir: this.cwd,
           imageName: task.config.dockerImage ?? this.dockerConfig.imageName,
           repoInImage: this.dockerConfig.repoInImage,
+          agentRegistry: this.executionAgentRegistry,
         });
         this.familiarRegistry.register(`docker:${task.id}`, docker);
         console.log(`[trace] TaskExecutor.selectFamiliar: task=${task.id} effectiveType=docker → docker (per-task)`);
@@ -428,6 +439,7 @@ export class TaskExecutor {
           worktreeBaseDir: resolve(invokerHome, 'worktrees'),
           cacheDir: resolve(invokerHome, 'repos'),
           maxWorktrees: this.maxWorktreesPerRepo,
+          agentRegistry: this.executionAgentRegistry,
         });
         this.familiarRegistry.register('worktree', worktree);
         console.log(`[trace] TaskExecutor.selectFamiliar: task=${task.id} effectiveType=worktree → worktree (lazy registered)`);
@@ -453,6 +465,7 @@ export class TaskExecutor {
           user: target.user,
           sshKeyPath: target.sshKeyPath,
           port: target.port,
+          agentRegistry: this.executionAgentRegistry,
         });
         console.log(`[trace] TaskExecutor.selectFamiliar: task=${task.id} effectiveType=ssh remoteTarget=${targetId} → ssh (per-task)`);
         return ssh;
@@ -664,7 +677,12 @@ export class TaskExecutor {
     mkdirSync(resolve(homedir(), '.invoker', 'merge-clones'), { recursive: true });
     // Resolve ref to SHA in the host repo — branch names may not resolve in the
     // --no-checkout clone (git interprets them as paths and rejects --detach).
-    const refSha = (await this.execGitReadonly(['rev-parse', ref])).trim();
+    let refSha: string;
+    try {
+      refSha = (await this.execGitReadonly(['rev-parse', ref])).trim();
+    } catch {
+      refSha = (await this.execGitReadonly(['rev-parse', `origin/${ref}`])).trim();
+    }
     // Clone with hard-linked objects from host repo — near-instant, fully isolated refs
     await this.execGitReadonly(['clone', '--local', '--no-checkout', this.cwd, clonePath]);
     // Detach HEAD so the fetch can overwrite all branch refs (including the default branch)
@@ -817,12 +835,20 @@ export class TaskExecutor {
     return resolveConflictWithClaudeImpl(this, taskId);
   }
 
+  async resolveConflictWithCodex(taskId: string): Promise<void> {
+    return resolveConflictWithCodexImpl(this, taskId);
+  }
+
   /**
    * Fix a failed command task by spawning Claude with the error output.
    * Claude's output is captured and appended to the task's output stream for auditing.
    */
   async fixWithClaude(taskId: string, taskOutput: string): Promise<void> {
     return fixWithClaudeImpl(this, taskId, taskOutput);
+  }
+
+  async fixWithCodex(taskId: string, taskOutput: string): Promise<void> {
+    return fixWithCodexImpl(this, taskId, taskOutput);
   }
 
   resumeMergeGatePolling(): void {
@@ -943,7 +969,12 @@ export class TaskExecutor {
     }
   }
 
-  spawnAgentFix(prompt: string, cwd: string): Promise<{ stdout: string; sessionId: string }> {
+  spawnAgentFix(
+    prompt: string,
+    cwd: string,
+    agentName: string = 'claude',
+  ): Promise<{ stdout: string; sessionId: string }> {
+    if (agentName === 'codex') return spawnCodexFixImpl(prompt, cwd);
     return spawnClaudeFixImpl(prompt, cwd);
   }
 
