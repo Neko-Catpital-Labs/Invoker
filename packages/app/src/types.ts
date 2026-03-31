@@ -85,7 +85,9 @@ export interface InvokerAPI {
   restartTask: (taskId: string) => Promise<void>;
   editTaskCommand: (taskId: string, newCommand: string) => Promise<void>;
   editTaskType: (taskId: string, familiarType: string, remoteTargetId?: string) => Promise<void>;
+  editTaskAgent: (taskId: string, agentName: string) => Promise<void>;
   getRemoteTargets: () => Promise<string[]>;
+  getExecutionAgents: () => Promise<string[]>;
   replaceTask: (taskId: string, replacementTasks: TaskReplacementDef[]) => Promise<TaskState[]>;
   onTaskDelta: (cb: (delta: TaskDelta) => void) => () => void;
   onTaskOutput: (cb: (data: TaskOutputData) => void) => () => void;

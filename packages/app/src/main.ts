@@ -66,6 +66,7 @@ import {
   DockerFamiliar, WorktreeFamiliar, SshFamiliar, GitHubMergeGateProvider, ReviewProviderRegistry,
   RESTART_TO_BRANCH_TRACE,
   remoteFetchForPool,
+  registerBuiltinAgents,
   type Familiar, type FamiliarHandle, type PersistedTaskMeta,
 } from '@invoker/executors';
 import type { TaskOutputData } from './types.js';
@@ -81,6 +82,7 @@ import {
   resolveConflictWithClaudeAction,
   selectExperiments as sharedSelectExperiments,
   setWorkflowMergeMode,
+  editTaskAgent as sharedEditTaskAgent,
 } from './workflow-actions.js';
 import { spawn, execSync } from 'node:child_process';
 import {
@@ -370,6 +372,7 @@ if (isHeadless) {
 // ══════════════════════════════════════════════════════════════
 
 function setupGuiMode(): void {
+  const agentRegistry = registerBuiltinAgents();
   let mainWindow: BrowserWindow | null = null;
   let taskExecutor: TaskExecutor;
   let apiServer: ApiServer | null = null;
@@ -393,6 +396,7 @@ function setupGuiMode(): void {
       orchestrator,
       persistence,
       familiarRegistry,
+      executionAgentRegistry: agentRegistry,
       cwd: repoRoot,
       defaultBranch: invokerConfig.defaultBranch,
       dockerConfig: invokerConfig.docker,
@@ -1167,8 +1171,24 @@ function setupGuiMode(): void {
       }
     });
 
+    ipcMain.handle('invoker:edit-task-agent', async (_event, taskId: string, agentName: string) => {
+      console.log(`[ipc] edit-task-agent: "${taskId}" → "${agentName}"`);
+      try {
+        const started = sharedEditTaskAgent(taskId, agentName, { orchestrator });
+        const runnable = started.filter(t => t.status === 'running');
+        await taskExecutor.executeTasks(runnable);
+      } catch (err) {
+        console.error(`[ipc] edit-task-agent failed: ${err}`);
+        throw err;
+      }
+    });
+
     ipcMain.handle('invoker:get-remote-targets', () => {
       return Object.keys(loadConfig().remoteTargets ?? {});
+    });
+
+    ipcMain.handle('invoker:get-execution-agents', () => {
+      return agentRegistry.listExecution().map(a => a.name);
     });
 
     ipcMain.handle('invoker:replace-task', async (_event, taskId: string, replacementTasks: unknown[]) => {

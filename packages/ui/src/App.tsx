@@ -50,10 +50,12 @@ export function App() {
   const [viewMode, setViewMode] = useState<'dag' | 'history' | 'timeline' | 'queue'>('dag');
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; task: TaskState } | null>(null);
   const [remoteTargets, setRemoteTargets] = useState<string[]>([]);
+  const [executionAgents, setExecutionAgents] = useState<string[]>([]);
   const [statusFilters, setStatusFilters] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     window.invoker?.getRemoteTargets?.().then(setRemoteTargets).catch(() => {});
+    window.invoker?.getExecutionAgents?.().then(setExecutionAgents).catch(() => {});
   }, []);
 
   const handleStatusClick = useCallback((filterKey: string) => {
@@ -367,6 +369,19 @@ export function App() {
     [invoker],
   );
 
+  // ── Edit task execution agent ────────────────────────────
+  const handleEditAgent = useCallback(
+    async (taskId: string, agentName: string) => {
+      if (!invoker) return;
+      try {
+        await invoker.editTaskAgent(taskId, agentName);
+      } catch (err) {
+        console.error('Failed to edit task agent:', err);
+      }
+    },
+    [invoker],
+  );
+
   // ── Modal triggers ────────────────────────────────────────
   const openInputModal = useCallback((task: TaskState) => {
     setModal({ type: 'input', task });
@@ -444,6 +459,7 @@ export function App() {
               mergeMode={selectedTask?.config.workflowId ? workflows.get(selectedTask.config.workflowId)?.mergeMode : undefined}
               onFinish={selectedTask?.config.workflowId ? workflows.get(selectedTask.config.workflowId)?.onFinish : undefined}
               remoteTargets={remoteTargets}
+              executionAgents={executionAgents}
               onProvideInput={openInputModal}
               onApprove={openApprovalModal}
               onReject={(task) => {
@@ -452,6 +468,7 @@ export function App() {
               onSelectExperiment={openExperimentModal}
               onEditCommand={handleEditCommand}
               onEditType={handleEditType}
+              onEditAgent={handleEditAgent}
               onSetMergeBranch={invoker?.setMergeBranch}
               onSetMergeMode={invoker?.setMergeMode}
             />

@@ -30,7 +30,10 @@ const api: InvokerAPI = {
     ipcRenderer.invoke('invoker:edit-task-command', taskId, newCommand),
   editTaskType: (taskId, familiarType, remoteTargetId?) =>
     ipcRenderer.invoke('invoker:edit-task-type', taskId, familiarType, remoteTargetId),
+  editTaskAgent: (taskId, agentName) =>
+    ipcRenderer.invoke('invoker:edit-task-agent', taskId, agentName),
   getRemoteTargets: () => ipcRenderer.invoke('invoker:get-remote-targets'),
+  getExecutionAgents: () => ipcRenderer.invoke('invoker:get-execution-agents'),
   replaceTask: (taskId, replacementTasks) =>
     ipcRenderer.invoke('invoker:replace-task', taskId, replacementTasks),
   onTaskDelta: (cb) => {
