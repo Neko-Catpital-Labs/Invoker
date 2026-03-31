@@ -110,4 +110,29 @@ describe('Visual proof snapshots', () => {
 
     expect(container).toMatchSnapshot();
   });
+
+  it('task-panel-agent-selector', async () => {
+    const alpha = makeUITask({
+      id: 'task-alpha',
+      description: 'Agent selector task',
+      status: 'pending',
+      prompt: 'Write tests for the agent selector',
+      config: { prompt: 'Write tests for the agent selector', executionAgent: 'claude' } as any,
+    });
+
+    const { container } = render(<App />);
+    act(() => mock.setTasks([alpha]));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId('rf__node-task-alpha'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('execution-agent-select')).toBeInTheDocument();
+    });
+
+    expect(container).toMatchSnapshot();
+  });
 });

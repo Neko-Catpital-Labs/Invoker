@@ -892,6 +892,302 @@ exports[`Visual proof snapshots > task-panel 1`] = `
 </div>
 `;
 
+exports[`Visual proof snapshots > task-panel-agent-selector 1`] = `
+<div>
+  <div
+    class="h-screen flex flex-col bg-gray-900 text-gray-100"
+  >
+    <div
+      class="h-12 bg-gray-800 border-b border-gray-700 flex items-center px-4 gap-3 shrink-0"
+    >
+      <label
+        class="px-3 py-1.5 bg-gray-600 hover:bg-gray-500 text-white rounded text-xs font-medium transition-colors cursor-pointer"
+      >
+        Open File
+        <input
+          accept=".json,.yaml,.yml"
+          class="hidden"
+          type="file"
+        />
+      </label>
+      <div
+        class="flex rounded overflow-hidden border border-gray-600"
+      >
+        <button
+          class="px-3 py-1 text-xs font-medium transition-colors bg-indigo-600 text-white"
+        >
+          DAG
+        </button>
+        <button
+          class="px-3 py-1 text-xs font-medium transition-colors bg-gray-700 hover:bg-gray-600 text-gray-300"
+        >
+          Timeline
+        </button>
+        <button
+          class="px-3 py-1 text-xs font-medium transition-colors bg-gray-700 hover:bg-gray-600 text-gray-300"
+        >
+          History
+        </button>
+        <button
+          class="px-3 py-1 text-xs font-medium transition-colors bg-gray-700 hover:bg-gray-600 text-gray-300"
+        >
+          Queue
+        </button>
+      </div>
+      <div
+        class="flex-1"
+      />
+      <button
+        class="px-3 py-1.5 bg-blue-700 hover:bg-blue-600 text-white rounded text-xs font-medium transition-colors"
+        title="Force refresh task graph from main process"
+      >
+        Refresh
+      </button>
+      <button
+        class="px-3 py-1.5 bg-gray-600 hover:bg-gray-500 text-white rounded text-xs font-medium transition-colors"
+      >
+        Clear
+      </button>
+      <button
+        class="px-3 py-1.5 bg-red-700 hover:bg-red-600 text-white rounded text-xs font-medium transition-colors"
+      >
+        Delete DB
+      </button>
+    </div>
+    <div
+      class="flex-1 flex overflow-hidden"
+    >
+      <div
+        class="w-3/5 border-r border-gray-700"
+      >
+        <div
+          class="h-full"
+        >
+          <div
+            class="h-full w-full"
+            style="min-height: 300px;"
+          >
+            <div
+              class="react-flow"
+              data-testid="mock-react-flow"
+            >
+              <div
+                class="react-flow__node"
+                data-testid="rf__node-task-alpha"
+              >
+                <div
+                  class="rounded-lg border-2 px-3 py-2 w-[260px] transition-opacity duration-200 bg-gray-200 border-gray-400 "
+                >
+                  <div
+                    class="font-mono text-xs opacity-60 truncate text-gray-700"
+                  >
+                    task-alpha
+                  </div>
+                  <div
+                    class="text-sm font-medium truncate mt-1 text-gray-700 "
+                  >
+                    Agent selector task
+                  </div>
+                  <div
+                    class="flex items-center gap-1.5 mt-1"
+                  >
+                    <span
+                      class="w-2 h-2 rounded-full bg-gray-400 "
+                    />
+                    <span
+                      class="text-xs uppercase text-gray-700"
+                    >
+                      PENDING
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div
+        class="w-2/5 flex flex-col"
+      >
+        <div
+          class="flex-1 overflow-hidden bg-gray-800"
+        >
+          <div
+            class="h-full overflow-y-auto p-4 space-y-4"
+          >
+            <div>
+              <h2
+                class="text-lg font-semibold text-gray-100 truncate"
+              >
+                Agent selector task
+              </h2>
+              <p
+                class="text-xs font-mono text-gray-400 mt-1"
+              >
+                task-alpha
+              </p>
+            </div>
+            <div
+              class="flex items-center gap-2"
+            >
+              <span
+                class="inline-flex items-center gap-1.5 px-2 py-1 rounded text-xs font-medium bg-gray-200 text-gray-700"
+              >
+                <span
+                  class="w-2 h-2 rounded-full bg-gray-400 "
+                />
+                PENDING
+              </span>
+            </div>
+            <div
+              class="flex items-center justify-between"
+            >
+              <span
+                class="text-sm text-gray-400"
+              >
+                Executor
+              </span>
+              <select
+                class="bg-gray-700 text-gray-200 text-xs rounded px-2 py-1 border border-gray-600 focus:outline-none focus:border-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                data-testid="executor-type-select"
+              >
+                <option
+                  value="worktree"
+                >
+                  Worktree
+                </option>
+                <option
+                  value="docker"
+                >
+                  Docker
+                </option>
+              </select>
+            </div>
+            <div>
+              <div
+                class="flex items-center justify-between"
+              >
+                <div
+                  class="flex items-center justify-between w-full"
+                >
+                  <span
+                    class="text-sm text-gray-400"
+                  >
+                    Agent
+                  </span>
+                  <select
+                    class="bg-gray-700 text-gray-200 text-xs rounded px-2 py-1 border border-gray-600 focus:outline-none focus:border-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                    data-testid="execution-agent-select"
+                  >
+                    <option
+                      value="claude"
+                    >
+                      Claude
+                       Task
+                    </option>
+                    <option
+                      value="codex"
+                    >
+                      Codex
+                       Task
+                    </option>
+                  </select>
+                </div>
+              </div>
+              <div
+                class="mt-2 rounded p-3 text-xs select-text bg-blue-900/20 border border-blue-800 cursor-text"
+                data-testid="command-display"
+              >
+                <p
+                  class="text-gray-300 whitespace-pre-wrap"
+                >
+                  Write tests for the agent selector
+                </p>
+              </div>
+            </div>
+            <div
+              class="space-y-1 text-sm"
+            >
+              <div
+                class="flex justify-between"
+              >
+                <span
+                  class="text-gray-400"
+                >
+                  Created
+                </span>
+                <span
+                  class="text-gray-200"
+                >
+                  12:00:00 AM
+                </span>
+              </div>
+            </div>
+            <div
+              class="space-y-2 pt-2"
+            />
+          </div>
+        </div>
+      </div>
+    </div>
+    <div
+      class="flex items-center gap-6 px-4 py-2 bg-gray-800 border-t border-gray-700 text-sm"
+    >
+      <span
+        class="text-gray-400"
+      >
+        Total: 
+        <span
+          class="text-gray-100 font-medium"
+        >
+          1
+        </span>
+      </span>
+      <span
+        class="text-green-400 cursor-pointer hover:brightness-125 select-none"
+      >
+        Completed: 
+        <span
+          class="font-medium"
+        >
+          0
+        </span>
+      </span>
+      <span
+        class="text-blue-400 cursor-pointer hover:brightness-125 select-none"
+      >
+        Running: 
+        <span
+          class="font-medium"
+        >
+          0
+        </span>
+      </span>
+      <span
+        class="text-red-400 cursor-pointer hover:brightness-125 select-none"
+      >
+        Failed: 
+        <span
+          class="font-medium"
+        >
+          0
+        </span>
+      </span>
+      <span
+        class="text-gray-400 cursor-pointer hover:brightness-125 select-none"
+      >
+        Pending: 
+        <span
+          class="font-medium"
+        >
+          1
+        </span>
+      </span>
+    </div>
+  </div>
+</div>
+`;
+
 exports[`Visual proof snapshots > task-running 1`] = `
 <div>
   <div

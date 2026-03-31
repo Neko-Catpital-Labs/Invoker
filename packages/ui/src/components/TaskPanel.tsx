@@ -23,16 +23,22 @@ function formatElapsed(dateVal: Date | string | undefined): string {
   return `${Math.floor(ms / 3_600_000)}h ago`;
 }
 
+function capitalize(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
 interface TaskPanelProps {
   task: TaskState | null;
   baseBranch?: string;
   remoteTargets?: string[];
+  executionAgents?: string[];
   onProvideInput: (task: TaskState) => void;
   onApprove: (task: TaskState) => void;
   onReject: (task: TaskState) => void;
   onSelectExperiment: (task: TaskState) => void;
   onEditCommand?: (taskId: string, newCommand: string) => void;
   onEditType?: (taskId: string, familiarType: string, remoteTargetId?: string) => void;
+  onEditAgent?: (taskId: string, agentName: string) => void;
   onSetMergeBranch?: (workflowId: string, baseBranch: string) => Promise<void>;
   mergeMode?: string;
   onSetMergeMode?: (workflowId: string, mergeMode: string) => Promise<void>;
@@ -105,12 +111,14 @@ export function TaskPanel({
   task,
   baseBranch,
   remoteTargets,
+  executionAgents,
   onProvideInput,
   onApprove,
   onReject,
   onSelectExperiment,
   onEditCommand,
   onEditType,
+  onEditAgent,
   onSetMergeBranch,
   mergeMode,
   onSetMergeMode,
@@ -285,13 +293,32 @@ export function TaskPanel({
       {(task.config.prompt || task.config.command) && (
         <div>
           <div className="flex items-center justify-between">
-            <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
-              task.config.prompt
-                ? 'bg-blue-900/40 text-blue-300'
-                : 'bg-gray-700 text-gray-300'
-            }`}>
-              {task.config.prompt ? 'Claude Task' : 'Command'}
-            </span>
+            {task.config.prompt && onEditAgent ? (
+              <div className="flex items-center justify-between w-full">
+                <span className="text-sm text-gray-400">Agent</span>
+                <select
+                  value={task.config.executionAgent ?? 'claude'}
+                  onChange={(e) => onEditAgent(task.id, e.target.value)}
+                  disabled={task.status === 'running'}
+                  className="bg-gray-700 text-gray-200 text-xs rounded px-2 py-1 border border-gray-600 focus:outline-none focus:border-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                  data-testid="execution-agent-select"
+                >
+                  {(executionAgents ?? []).map(name => (
+                    <option key={name} value={name}>{capitalize(name)} Task</option>
+                  ))}
+                </select>
+              </div>
+            ) : (
+              <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
+                task.config.prompt
+                  ? 'bg-blue-900/40 text-blue-300'
+                  : 'bg-gray-700 text-gray-300'
+              }`}>
+                {task.config.prompt
+                  ? capitalize(task.config.executionAgent ?? 'claude') + ' Task'
+                  : 'Command'}
+              </span>
+            )}
           </div>
 
           {isEditingCommand && task.config.command !== undefined ? (
