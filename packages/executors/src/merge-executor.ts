@@ -425,6 +425,9 @@ export async function executeMergeNodeImpl(
       branch: featureBranch ?? undefined,
       workspacePath: gateWorkspacePath,
       ...(reviewUrl ? { reviewUrl } : {}),
+      ...(response.status === 'failed' && response.outputs.error
+        ? { error: response.outputs.error }
+        : {}),
     },
   });
   host.callbacks.onComplete?.(task.id, response);
