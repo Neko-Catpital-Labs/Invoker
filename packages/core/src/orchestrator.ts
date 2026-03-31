@@ -1169,6 +1169,25 @@ export class Orchestrator {
   }
 
   /**
+   * Change a task's execution agent (e.g. 'claude' → 'codex') and restart it.
+   */
+  editTaskAgent(taskId: string, agentName: string): TaskState[] {
+    this.refreshFromDb();
+    const task = this.stateGetTask(taskId);
+    if (!task) throw new Error(`Task ${taskId} not found`);
+    if (task.config.isMergeNode) throw new Error(`Cannot change execution agent of merge node ${taskId}`);
+    if (task.status === 'running' || task.status === 'fixing_with_ai') throw new Error(`Cannot edit running task ${taskId}`);
+
+    const agentChanges: TaskStateChanges = { config: { executionAgent: agentName } };
+    this.writeAndSync(taskId, agentChanges);
+    const agentDelta: TaskDelta = { type: 'updated', taskId, changes: agentChanges };
+    this.persistence.logEvent?.(taskId, 'task.updated', agentChanges);
+    this.messageBus.publish(TASK_DELTA_CHANNEL, agentDelta);
+
+    return this.restartTask(taskId);
+  }
+
+  /**
    * Replace a broken/failed task with a new subgraph.
    *
    * Marks the broken task as stale, creates replacement tasks,

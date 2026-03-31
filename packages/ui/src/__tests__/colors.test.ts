@@ -58,4 +58,15 @@ describe('getStatusColor', () => {
     const defaultColors = getStatusColor('pending');
     expect(colors.bg).toBe(defaultColors.bg);
   });
+
+  it('fixing_with_ai, needs_input, and awaiting_approval have pairwise distinct colors', () => {
+    const fixingWithAI = getStatusColor('fixing_with_ai');
+    const needsInput = getStatusColor('needs_input');
+    const awaitingApproval = getStatusColor('awaiting_approval');
+
+    // Background colors must be pairwise unequal
+    expect(fixingWithAI.bg).not.toBe(needsInput.bg);
+    expect(needsInput.bg).not.toBe(awaitingApproval.bg);
+    expect(fixingWithAI.bg).not.toBe(awaitingApproval.bg);
+  });
 });

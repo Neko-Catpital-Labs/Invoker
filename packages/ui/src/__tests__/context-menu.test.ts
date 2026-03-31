@@ -138,59 +138,42 @@ describe('ContextMenu visibility logic', () => {
     });
   });
 
-  describe('Fix with Claude visibility', () => {
-    it('is visible for failed task with command and callback', () => {
+  describe('Fix with... visibility', () => {
+    it('is visible for failed task when onFix callback provided', () => {
       const task = makeTask({ status: 'failed' }) as TaskState;
-      (task as any).config.command = 'npm test';
-      const onFixWithClaude = vi.fn();
-      const hasMergeConflict = task.status === 'failed' && !!task.execution.mergeConflict;
-      const canFixWithClaude = task.status === 'failed' && !hasMergeConflict && !!onFixWithClaude;
-      expect(canFixWithClaude).toBe(true);
+      const onFix = vi.fn();
+      const canFix = task.status === 'failed' && !!onFix;
+      expect(canFix).toBe(true);
     });
 
-    it('is visible for failed prompt-only task (no command)', () => {
-      const task = makeTask({ status: 'failed' });
-      const onFixWithClaude = vi.fn();
-      const hasMergeConflict = task.status === 'failed' && !!task.execution.mergeConflict;
-      const canFixWithClaude = task.status === 'failed' && !hasMergeConflict && !!onFixWithClaude;
-      expect(canFixWithClaude).toBe(true);
+    it('is visible for failed task with merge conflict (unified button covers both)', () => {
+      const task = makeTask({ status: 'failed', execution: { mergeConflict: { failedBranch: 'b', conflictFiles: ['f'] } } } as any);
+      const onFix = vi.fn();
+      const canFix = task.status === 'failed' && !!onFix;
+      expect(canFix).toBe(true);
     });
 
     it('is visible for failed merge gate node', () => {
       const task = makeTask({ status: 'failed', isMergeNode: true, workflowId: 'wf-1' });
-      const onFixWithClaude = vi.fn();
-      const hasMergeConflict = task.status === 'failed' && !!task.execution.mergeConflict;
-      const canFixWithClaude = task.status === 'failed' && !hasMergeConflict && !!onFixWithClaude;
-      expect(canFixWithClaude).toBe(true);
-    });
-
-    it('is hidden when task has merge conflict', () => {
-      const task = makeTask({ status: 'failed', execution: { mergeConflict: { failedBranch: 'b', conflictFiles: ['f'] } } } as any);
-      (task as any).config.command = 'npm test';
-      const onFixWithClaude = vi.fn();
-      const hasMergeConflict = task.status === 'failed' && !!task.execution.mergeConflict;
-      const canFixWithClaude = task.status === 'failed' && !hasMergeConflict && !!onFixWithClaude;
-      expect(canFixWithClaude).toBe(false);
+      const onFix = vi.fn();
+      const canFix = task.status === 'failed' && !!onFix;
+      expect(canFix).toBe(true);
     });
 
     it('is hidden for non-failed statuses', () => {
-      const onFixWithClaude = vi.fn();
+      const onFix = vi.fn();
       for (const status of ['pending', 'running', 'completed', 'blocked'] as const) {
         const task = makeTask({ status });
-        (task as any).config.command = 'npm test';
-        const hasMergeConflict = task.status === 'failed' && !!task.execution.mergeConflict;
-        const canFixWithClaude = task.status === 'failed' && !hasMergeConflict && !!onFixWithClaude;
-        expect(canFixWithClaude).toBe(false);
+        const canFix = task.status === 'failed' && !!onFix;
+        expect(canFix).toBe(false);
       }
     });
 
-    it('is hidden when onFixWithClaude callback is not provided', () => {
+    it('is hidden when onFix callback is not provided', () => {
       const task = makeTask({ status: 'failed' });
-      (task as any).config.command = 'npm test';
-      const onFixWithClaude = undefined;
-      const hasMergeConflict = task.status === 'failed' && !!task.execution.mergeConflict;
-      const canFixWithClaude = task.status === 'failed' && !hasMergeConflict && !!onFixWithClaude;
-      expect(canFixWithClaude).toBe(false);
+      const onFix = undefined;
+      const canFix = task.status === 'failed' && !!onFix;
+      expect(canFix).toBe(false);
     });
   });
 

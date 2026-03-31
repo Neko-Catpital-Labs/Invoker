@@ -174,34 +174,28 @@ export function App() {
     }
   }, [refreshTasks]);
 
-  const handleResolveConflict = useCallback(async (taskId: string) => {
-    setContextMenu(null);
-    try {
-      await window.invoker?.resolveConflict(taskId);
-      refreshTasks();
-    } catch (err) {
-      console.error('Resolve conflict failed:', err);
-    }
-  }, [refreshTasks]);
-
-  const handleFixWithClaude = useCallback(async (taskId: string) => {
+  const handleFix = useCallback(async (taskId: string, agentName: string) => {
     setContextMenu(null);
     const task = tasks.get(taskId);
     if (task?.config.familiarType === 'docker') {
       const proceed = window.confirm(
-        'Note: Claude CLI\'s interactive TUI has known freeze issues inside Docker containers ' +
-        '(see github.com/anthropics/claude-code #20572, #24068). The automated fix will run ' +
-        'Claude in non-interactive pipe mode which is unaffected.\n\n' +
-        'However, double-clicking to resume the Claude session interactively may freeze.\n\n' +
-        'Proceed with Fix with Claude?',
+        'Note: AI CLI tools have known freeze issues inside Docker containers. ' +
+        'The automated fix will run in non-interactive pipe mode which is unaffected.\n\n' +
+        'However, double-clicking to resume the session interactively may freeze.\n\n' +
+        `Proceed with Fix with ${agentName}?`,
       );
       if (!proceed) return;
     }
     try {
-      await window.invoker?.fixWithClaude(taskId);
+      const hasMergeConflict = !!task?.execution.mergeConflict;
+      if (hasMergeConflict) {
+        await window.invoker?.resolveConflict(taskId, agentName);
+      } else {
+        await window.invoker?.fixWithClaude(taskId, agentName);
+      }
       refreshTasks();
     } catch (err) {
-      console.error('Fix with Claude failed:', err);
+      console.error('Fix failed:', err);
     }
   }, [tasks, refreshTasks]);
 
@@ -515,8 +509,7 @@ export function App() {
           onRebaseAndRetry={handleRebaseAndRetry}
           onRestartWorkflow={handleRestartWorkflow}
           onDeleteWorkflow={handleDeleteWorkflow}
-          onResolveConflict={handleResolveConflict}
-          onFixWithClaude={handleFixWithClaude}
+          onFix={handleFix}
           onCancel={handleCancelTask}
           onClose={closeContextMenu}
         />

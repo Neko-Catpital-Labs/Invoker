@@ -109,6 +109,16 @@ export const TEST_PLAN = {
       command: 'sleep 3 && echo hello-beta',
       dependencies: ['task-alpha'],
     },
+    {
+      id: 'task-gamma',
+      description: 'Reconciliation task for testing',
+      command: 'sleep 2 && echo hello-gamma',
+      dependencies: ['task-beta'],
+      experimentVariants: [
+        { id: 'variant-a', description: 'Variant A', command: 'echo A' },
+        { id: 'variant-b', description: 'Variant B', command: 'echo B' },
+      ],
+    },
   ],
 };
 

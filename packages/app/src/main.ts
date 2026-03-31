@@ -19,6 +19,8 @@
  *   electron dist/main.js --headless fix <taskId>
  *   electron dist/main.js --headless resolve-conflict <taskId>
  *   electron dist/main.js --headless edit <taskId> <newCommand>
+ *   electron dist/main.js --headless edit-executor <taskId> <familiarType>
+ *   electron dist/main.js --headless edit-agent <taskId> <claude|codex>
  *   electron dist/main.js --headless cancel <taskId>
  *   electron dist/main.js --headless set-merge-mode <workflowId> <mode>
  *   electron dist/main.js --headless queue

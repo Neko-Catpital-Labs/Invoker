@@ -122,7 +122,7 @@ export function StatusBar({ tasks, activeFilters, onStatusClick, onStatusDoubleC
       </span>
       {needsInput > 0 && (
         <span
-          className={`text-amber-400 ${filterClass('needs_input')}`}
+          className={`text-cyan-400 ${filterClass('needs_input')}`}
           onClick={() => handleClick('needs_input')}
           onDoubleClick={() => handleDoubleClick('needs_input')}
         >
@@ -158,7 +158,7 @@ export function StatusBar({ tasks, activeFilters, onStatusClick, onStatusDoubleC
       )}
       {fixApproval > 0 && (
         <span
-          className={`text-amber-500 ${filterClass('fix_approval')}`}
+          className={`text-fuchsia-400 ${filterClass('fix_approval')}`}
           onClick={() => handleClick('fix_approval')}
           onDoubleClick={() => handleDoubleClick('fix_approval')}
         >

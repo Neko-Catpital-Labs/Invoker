@@ -22,21 +22,19 @@ interface ContextMenuProps {
   onRebaseAndRetry?: (taskId: string) => void;
   onRestartWorkflow?: (workflowId: string) => void;
   onDeleteWorkflow?: (workflowId: string) => void;
-  onResolveConflict?: (taskId: string) => void;
-  onFixWithClaude?: (taskId: string) => void;
+  onFix?: (taskId: string, agentName: string) => void;
   onCancel?: (taskId: string) => void;
   onClose: () => void;
 }
 
-export function ContextMenu({ x, y, task, onRestart, onReplace, onOpenTerminal, onRebaseAndRetry, onRestartWorkflow, onDeleteWorkflow, onResolveConflict, onFixWithClaude, onCancel, onClose }: ContextMenuProps) {
+export function ContextMenu({ x, y, task, onRestart, onReplace, onOpenTerminal, onRebaseAndRetry, onRestartWorkflow, onDeleteWorkflow, onFix, onCancel, onClose }: ContextMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
   const canRestart = true;
   const canReplace = task.status === 'failed' || task.status === 'blocked';
   const canRebaseAndRetry = !!task.config.workflowId && !!onRebaseAndRetry;
   const canRestartWorkflow = !!task.config.workflowId && !!onRestartWorkflow;
   const canDeleteWorkflow = !!task.config.workflowId && !!onDeleteWorkflow;
-  const hasMergeConflict = task.status === 'failed' && !!task.execution.mergeConflict;
-  const canFixWithClaude = task.status === 'failed' && !hasMergeConflict && !!onFixWithClaude;
+  const canFix = task.status === 'failed' && !!onFix;
   const canCancel = task.status !== 'completed' && task.status !== 'stale' && !!onCancel;
   const canOpenTerminal = !isExperimentSpawnPivotTask(task);
 
@@ -100,25 +98,20 @@ export function ContextMenu({ x, y, task, onRestart, onReplace, onOpenTerminal, 
       >
         Open Terminal
       </button>
-      {canFixWithClaude && (
+      {canFix && (
         <>
           <div className="border-t border-gray-600 my-1" />
           <button
             className="w-full text-left px-3 py-1.5 text-sm text-blue-300 hover:bg-gray-700"
-            onClick={() => onFixWithClaude!(task.id)}
+            onClick={() => onFix!(task.id, 'claude')}
           >
             Fix with Claude
           </button>
-        </>
-      )}
-      {hasMergeConflict && onResolveConflict && (
-        <>
-          <div className="border-t border-gray-600 my-1" />
           <button
             className="w-full text-left px-3 py-1.5 text-sm text-blue-300 hover:bg-gray-700"
-            onClick={() => onResolveConflict(task.id)}
+            onClick={() => onFix!(task.id, 'codex')}
           >
-            Resolve with Claude
+            Fix with Codex
           </button>
         </>
       )}

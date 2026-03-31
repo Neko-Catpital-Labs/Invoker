@@ -181,4 +181,40 @@ test.describe('Visual proof capture', () => {
     await expect(page.getByTestId('merge-branch-label')).toBeVisible();
     await captureScreenshot(page, 'merge-gate-node-text-black');
   });
+
+  test('interactive-status-hues — fixing-with-ai, needs-input, awaiting-approval', async ({ page }) => {
+    await loadPlan(page, TEST_PLAN);
+    const now = new Date();
+    await injectTaskStates(page, [
+      {
+        taskId: 'task-alpha',
+        changes: {
+          status: 'running',
+          execution: { isFixingWithAI: true, startedAt: now },
+        },
+      },
+      {
+        taskId: 'task-gamma',
+        changes: {
+          status: 'needs_input',
+          config: { isReconciliation: true },
+          execution: { startedAt: now },
+        },
+      },
+      {
+        taskId: 'task-beta',
+        changes: {
+          status: 'awaiting_approval',
+          execution: { startedAt: now },
+        },
+      },
+    ]);
+
+    // DOM assertions for the three status labels
+    await expect(page.locator('[data-testid="rf__node-task-alpha"]').getByText('FIXING WITH AI')).toBeVisible();
+    await expect(page.locator('[data-testid="rf__node-task-gamma"]').getByText('SELECT')).toBeVisible();
+    await expect(page.locator('[data-testid="rf__node-task-beta"]').getByText('APPROVE')).toBeVisible();
+
+    await captureScreenshot(page, 'interactive-status-hues');
+  });
 });

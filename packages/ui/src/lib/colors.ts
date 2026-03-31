@@ -51,10 +51,10 @@ const STATUS_COLOR_MAP: Record<string, StatusColors> = {
     dot: 'bg-gray-600',
   },
   needs_input: {
-    bg: 'bg-amber-400',
-    border: 'border-amber-500',
-    text: 'text-amber-950',
-    dot: 'bg-amber-600',
+    bg: 'bg-cyan-400',
+    border: 'border-cyan-500',
+    text: 'text-cyan-950',
+    dot: 'bg-cyan-600',
   },
   awaiting_approval: {
     bg: 'bg-purple-400',
@@ -63,10 +63,10 @@ const STATUS_COLOR_MAP: Record<string, StatusColors> = {
     dot: 'bg-purple-600',
   },
   fix_approval: {
-    bg: 'bg-amber-500',
-    border: 'border-amber-600',
-    text: 'text-amber-950',
-    dot: 'bg-amber-700',
+    bg: 'bg-fuchsia-400',
+    border: 'border-fuchsia-500',
+    text: 'text-fuchsia-950',
+    dot: 'bg-fuchsia-600',
   },
   stale: {
     bg: 'bg-gray-300',
@@ -106,10 +106,10 @@ export function getStatusInlineColors(status: string): {
     completed: { bg: '#4ade80', border: '#22c55e', text: '#052e16' },
     failed: { bg: '#f87171', border: '#ef4444', text: '#450a0a' },
     blocked: { bg: '#9ca3af', border: '#6b7280', text: '#1f2937' },
-    needs_input: { bg: '#fbbf24', border: '#f59e0b', text: '#451a03' },
+    needs_input: { bg: '#22d3ee', border: '#06b6d4', text: '#083344' },
     awaiting_approval: { bg: '#c084fc', border: '#a855f7', text: '#3b0764' },
     fixing_with_ai: { bg: '#fb923c', border: '#f97316', text: '#431407' },
-    fix_approval: { bg: '#f59e0b', border: '#d97706', text: '#451a03' },
+    fix_approval: { bg: '#e879f9', border: '#d946ef', text: '#4a044e' },
     stale: { bg: '#d1d5db', border: '#9ca3af', text: '#6b7280' },
   };
 

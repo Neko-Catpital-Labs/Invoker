@@ -36,6 +36,7 @@ import {
   restartWorkflow as sharedRestartWorkflow,
   editTaskCommand as sharedEditTaskCommand,
   editTaskType as sharedEditTaskType,
+  editTaskAgent as sharedEditTaskAgent,
   selectExperiment as sharedSelectExperiment,
   setWorkflowMergeMode,
 } from './workflow-actions.js';
@@ -167,8 +168,12 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
     case 'edit':
       await headlessEdit(args[1], args.slice(2).join(' '), deps);
       break;
+    case 'edit-executor':
     case 'edit-type':
-      await headlessEditType(args[1], args[2], deps);
+      await headlessEditExecutor(args[1], args[2], deps);
+      break;
+    case 'edit-agent':
+      await headlessEditAgent(args[1], args[2], deps);
       break;
     case 'audit':
       await headlessAudit(args[1], deps);
@@ -230,6 +235,8 @@ ${BOLD}Usage:${RESET}
   electron dist/main.js --headless fix <taskId> [claude|codex]   Fix a failed task (default: claude)
   electron dist/main.js --headless resolve-conflict <taskId> [claude|codex]  Resolve merge conflict + restart (default: claude)
   electron dist/main.js --headless edit <id> <cmd>    Edit task command and re-run
+  electron dist/main.js --headless edit-executor <id> <type>  Change executor type (worktree|docker|ssh)
+  electron dist/main.js --headless edit-agent <id> <agent>    Change execution agent (claude|codex)
   electron dist/main.js --headless task-status <taskId>     Print raw task status
   electron dist/main.js --headless cancel <taskId>         Cancel task + all downstream
   electron dist/main.js --headless open-terminal <taskId>  Open OS terminal for a task
@@ -504,12 +511,24 @@ async function headlessEdit(taskId: string, newCommand: string, deps: HeadlessDe
   await waitForCompletion(deps.orchestrator, undefined, undefined);
 }
 
-async function headlessEditType(taskId: string, familiarType: string, deps: HeadlessDeps): Promise<void> {
-  if (!taskId || !familiarType) throw new Error('Missing arguments. Usage: --headless edit-type <taskId> <familiarType>');
+async function headlessEditExecutor(taskId: string, familiarType: string, deps: HeadlessDeps): Promise<void> {
+  if (!taskId || !familiarType) throw new Error('Missing arguments. Usage: --headless edit-executor <taskId> <familiarType>');
   taskId = restoreWorkflowForTask(taskId, deps).resolvedTaskId;
 
   const started = sharedEditTaskType(taskId, familiarType, deps);
-  console.log(`Edited task "${taskId}" familiarType → "${familiarType}"`);
+  console.log(`Edited task "${taskId}" executor → "${familiarType}"`);
+
+  const taskExecutor = createHeadlessExecutor(deps);
+  await taskExecutor.executeTasks(started);
+  await waitForCompletion(deps.orchestrator, undefined, undefined);
+}
+
+async function headlessEditAgent(taskId: string, agentName: string, deps: HeadlessDeps): Promise<void> {
+  if (!taskId || !agentName) throw new Error('Missing arguments. Usage: --headless edit-agent <taskId> <claude|codex>');
+  taskId = restoreWorkflowForTask(taskId, deps).resolvedTaskId;
+
+  const started = sharedEditTaskAgent(taskId, agentName, deps);
+  console.log(`Edited task "${taskId}" agent → "${agentName}"`);
 
   const taskExecutor = createHeadlessExecutor(deps);
   await taskExecutor.executeTasks(started);
