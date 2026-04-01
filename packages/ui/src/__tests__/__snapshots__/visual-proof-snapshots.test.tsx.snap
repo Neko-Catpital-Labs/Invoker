@@ -84,7 +84,7 @@ exports[`Visual proof snapshots > dag-loaded 1`] = `
                 data-testid="rf__node-task-alpha"
               >
                 <div
-                  class="rounded-lg border-2 px-3 py-2 w-[260px] transition-opacity duration-200 bg-gray-200 border-gray-400 "
+                  class="rounded-lg border-2 px-3 py-2 w-[260px] transition-opacity duration-75 bg-gray-200 border-gray-400 "
                 >
                   <div
                     class="font-mono text-xs opacity-60 truncate text-gray-700"
@@ -115,7 +115,7 @@ exports[`Visual proof snapshots > dag-loaded 1`] = `
                 data-testid="rf__node-task-beta"
               >
                 <div
-                  class="rounded-lg border-2 px-3 py-2 w-[260px] transition-opacity duration-200 bg-gray-200 border-gray-400 "
+                  class="rounded-lg border-2 px-3 py-2 w-[260px] transition-opacity duration-75 bg-gray-200 border-gray-400 "
                 >
                   <div
                     class="font-mono text-xs opacity-60 truncate text-gray-700"
@@ -451,7 +451,7 @@ exports[`Visual proof snapshots > task-complete 1`] = `
                 data-testid="rf__node-task-alpha"
               >
                 <div
-                  class="rounded-lg border-2 px-3 py-2 w-[260px] transition-opacity duration-200 bg-green-400 border-green-500 "
+                  class="rounded-lg border-2 px-3 py-2 w-[260px] transition-opacity duration-75 bg-green-400 border-green-500 "
                 >
                   <div
                     class="font-mono text-xs opacity-60 truncate text-green-950"
@@ -482,7 +482,7 @@ exports[`Visual proof snapshots > task-complete 1`] = `
                 data-testid="rf__node-task-beta"
               >
                 <div
-                  class="rounded-lg border-2 px-3 py-2 w-[260px] transition-opacity duration-200 bg-green-400 border-green-500 "
+                  class="rounded-lg border-2 px-3 py-2 w-[260px] transition-opacity duration-75 bg-green-400 border-green-500 "
                 >
                   <div
                     class="font-mono text-xs opacity-60 truncate text-green-950"
@@ -670,7 +670,7 @@ exports[`Visual proof snapshots > task-panel 1`] = `
                 data-testid="rf__node-task-alpha"
               >
                 <div
-                  class="rounded-lg border-2 px-3 py-2 w-[260px] transition-opacity duration-200 bg-gray-200 border-gray-400 "
+                  class="rounded-lg border-2 px-3 py-2 w-[260px] transition-opacity duration-75 bg-gray-200 border-gray-400 "
                 >
                   <div
                     class="font-mono text-xs opacity-60 truncate text-gray-700"
@@ -701,7 +701,7 @@ exports[`Visual proof snapshots > task-panel 1`] = `
                 data-testid="rf__node-task-beta"
               >
                 <div
-                  class="rounded-lg border-2 px-3 py-2 w-[260px] transition-opacity duration-200 bg-gray-200 border-gray-400 "
+                  class="rounded-lg border-2 px-3 py-2 w-[260px] transition-opacity duration-75 bg-gray-200 border-gray-400 "
                 >
                   <div
                     class="font-mono text-xs opacity-60 truncate text-gray-700"
@@ -976,7 +976,7 @@ exports[`Visual proof snapshots > task-panel-agent-selector 1`] = `
                 data-testid="rf__node-task-alpha"
               >
                 <div
-                  class="rounded-lg border-2 px-3 py-2 w-[260px] transition-opacity duration-200 bg-gray-200 border-gray-400 "
+                  class="rounded-lg border-2 px-3 py-2 w-[260px] transition-opacity duration-75 bg-gray-200 border-gray-400 "
                 >
                   <div
                     class="font-mono text-xs opacity-60 truncate text-gray-700"
@@ -1272,7 +1272,7 @@ exports[`Visual proof snapshots > task-running 1`] = `
                 data-testid="rf__node-task-alpha"
               >
                 <div
-                  class="rounded-lg border-2 px-3 py-2 w-[260px] transition-opacity duration-200 bg-blue-400 border-blue-500 "
+                  class="rounded-lg border-2 px-3 py-2 w-[260px] transition-opacity duration-75 bg-blue-400 border-blue-500 "
                 >
                   <div
                     class="font-mono text-xs opacity-60 truncate text-blue-950"
@@ -1303,7 +1303,7 @@ exports[`Visual proof snapshots > task-running 1`] = `
                 data-testid="rf__node-task-beta"
               >
                 <div
-                  class="rounded-lg border-2 px-3 py-2 w-[260px] transition-opacity duration-200 bg-gray-200 border-gray-400 "
+                  class="rounded-lg border-2 px-3 py-2 w-[260px] transition-opacity duration-75 bg-gray-200 border-gray-400 "
                 >
                   <div
                     class="font-mono text-xs opacity-60 truncate text-gray-700"

@@ -218,6 +218,40 @@ test.describe('Visual proof capture', () => {
     await captureScreenshot(page, 'interactive-status-hues');
   });
 
+  test('status filter dims non-matching nodes', async ({ page }) => {
+    await loadPlan(page, TEST_PLAN);
+    const now = new Date();
+    const earlier = new Date(Date.now() - 5000);
+    await injectTaskStates(page, [
+      {
+        taskId: 'task-alpha',
+        changes: {
+          status: 'completed',
+          execution: { startedAt: earlier, completedAt: now },
+        },
+      },
+      // task-beta remains pending (no changes)
+    ]);
+
+    // Click the "Pending:" status label to filter
+    await page.getByText(/Pending:/).click();
+
+    // Wait for the 200ms debounce to complete and DOM to update
+    await page.waitForTimeout(250);
+
+    // Assert that the completed node (task-alpha) is dimmed via opacity-20 class
+    const completedNodeCard = page.locator('[data-testid="rf__node-task-alpha"] > div.rounded-lg');
+    await expect(completedNodeCard).toBeVisible();
+    await expect(completedNodeCard).toHaveClass(/opacity-20/);
+
+    // Assert that the pending node (task-beta) is NOT dimmed
+    const pendingNodeCard = page.locator('[data-testid="rf__node-task-beta"] > div.rounded-lg');
+    await expect(pendingNodeCard).toBeVisible();
+    await expect(pendingNodeCard).not.toHaveClass(/opacity-20/);
+
+    await captureScreenshot(page, 'status-filter-dimmed-dag');
+  });
+
   test('approve-fix modal — no Fix Context panel', async ({ page }) => {
     await loadPlan(page, TEST_PLAN);
     await injectTaskStates(page, [
