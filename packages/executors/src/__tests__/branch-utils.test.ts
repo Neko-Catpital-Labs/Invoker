@@ -380,19 +380,14 @@ describe('bashMergeUpstreams', () => {
     expect(stdout).toContain('SKIPPED=master');
   });
 
-  it('exits 30 for missing ref', async () => {
+  it('skips missing refs gracefully (exit 0)', async () => {
     const script = bashMergeUpstreams({
       worktreeDir: wtDir,
       upstreamBranches: ['nonexistent-branch'],
     });
-    try {
-      await runBashLocal(script);
-      expect.fail('should have thrown');
-    } catch (err: any) {
-      expect(err.exitCode).toBe(30);
-      const mergeErr = parseMergeError(30, err.stderr);
-      expect(mergeErr.failedBranch).toBe('nonexistent-branch');
-    }
+    // Should succeed (exit 0) and skip the missing branch
+    const stdout = await runBashLocal(script);
+    expect(stdout).toContain('SKIPPED_MISSING_REF=nonexistent-branch');
   });
 
   it('exits 31 on merge conflict and aborts cleanly', async () => {

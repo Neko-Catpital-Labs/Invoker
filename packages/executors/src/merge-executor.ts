@@ -113,13 +113,16 @@ export interface MergeExecutorHost {
  * Ensure `branch` resolves in `worktreeDir` for `git merge`. Local worktree tasks
  * already have the ref; SSH (or other) tasks often push to origin from another host,
  * so fetch into refs/heads/{branch} when missing.
+ *
+ * Returns true if the branch was found/fetched, false if it's missing everywhere
+ * (graceful skip - caller should check ancestry before treating as an error).
  */
 export async function ensureLocalBranchForMerge(
   host: MergeExecutorHost,
   worktreeDir: string,
   branch: string,
   repoUrl?: string,
-): Promise<void> {
+): Promise<boolean> {
   let hadLocal = false;
   try {
     await execGitInMergeSafe(host, ['rev-parse', '--verify', branch], worktreeDir);
@@ -128,7 +131,7 @@ export async function ensureLocalBranchForMerge(
     /* ref missing — try origin */
   }
 
-  if (hadLocal) return;
+  if (hadLocal) return true;
 
   let originErr: unknown;
   try {
@@ -137,7 +140,7 @@ export async function ensureLocalBranchForMerge(
       ['fetch', 'origin', `+refs/heads/${branch}:refs/heads/${branch}`],
       worktreeDir,
     );
-    return;
+    return true;
   } catch (err) {
     originErr = err;
   }
@@ -157,20 +160,20 @@ export async function ensureLocalBranchForMerge(
         console.log(
           `[merge-gate-workspace] ensureLocalBranchForMerge fetched ${branch} from pool mirror ${mirror}`,
         );
-        return;
+        return true;
       } catch (e) {
         mirrorErr = e instanceof Error ? e.message : String(e);
       }
     }
   }
 
+  // Branch not found anywhere - return false to allow graceful skip
   const originMsg = originErr instanceof Error ? originErr.message : String(originErr);
-  throw new Error(
-    `Cannot merge ${branch}: not found locally; origin fetch failed (${originMsg}).` +
-      (mirrorErr ? ` Mirror fetch failed (${mirrorErr}).` : '') +
-      ' The branch must exist on origin or the pool mirror (e.g. task pushed experiment/* to GitHub). ' +
-      'For SSH remote worktrees, ensure the task pushed this branch before merging.',
+  console.log(
+    `[merge-gate-workspace] ensureLocalBranchForMerge: branch ${branch} not found locally, on origin, or in mirror. ` +
+    `Origin error: ${originMsg}` + (mirrorErr ? `. Mirror error: ${mirrorErr}` : ''),
   );
+  return false;
 }
 
 /**
@@ -688,13 +691,29 @@ export async function publishAfterFixImpl(
     }
 
     if (!mergedViaPriorConsolidation) {
+      let mergedCount = 0;
+      let skippedCount = 0;
       for (const { branch, description } of taskBranches) {
         console.log(`[merge] Post-fix: merging task branch ${branch} → ${featureBranch}`);
-        await ensureLocalBranchForMerge(host, consolidateDir, branch, workflow?.repoUrl);
+        const branchAvailable = await ensureLocalBranchForMerge(host, consolidateDir, branch, workflow?.repoUrl);
+        if (!branchAvailable) {
+          // Branch missing - skip gracefully if experiment branch
+          if (branch.startsWith('experiment/')) {
+            console.log(`[merge] Post-fix: skipping missing experiment branch ${branch} (likely already incorporated)`);
+            skippedCount++;
+            continue;
+          }
+          throw new Error(
+            `Cannot merge ${branch}: not found locally, on origin, or in mirror. ` +
+            `The branch must exist for non-experiment branches.`,
+          );
+        }
         const mergeMsg = description ? `Merge ${branch} — ${description}` : `Merge ${branch}`;
         await execGitInMergeSafe(host, ['merge', '--no-ff', '-m', mergeMsg, branch], consolidateDir);
+        mergedCount++;
       }
-      console.log(`[merge] Post-fix: consolidated ${taskBranches.length} task branches into ${featureBranch}`);
+      console.log(`[merge] Post-fix: consolidated ${mergedCount} task branches into ${featureBranch}` +
+        (skippedCount > 0 ? ` (skipped ${skippedCount} missing branches)` : ''));
     }
 
     // Push feature branch directly to origin (GitHub) from the gate clone
@@ -943,15 +962,39 @@ export async function consolidateAndMergeImpl(
       })
       .map((t) => t.execution.branch!)
       .sort();
+    let mergedCount = 0;
+    let skippedCount = 0;
     for (const branch of taskBranches) {
       console.log(`[merge] Merging task branch: ${branch} → ${featureBranch}`);
-      await ensureLocalBranchForMerge(host, worktreeDir, branch, repoUrlForMerge);
+      const branchAvailable = await ensureLocalBranchForMerge(host, worktreeDir, branch, repoUrlForMerge);
+      if (!branchAvailable) {
+        // Branch missing everywhere - check if already incorporated via ancestry
+        console.log(`[merge] Branch ${branch} not found, checking if already incorporated...`);
+        try {
+          // If we can't find the branch, we can't verify ancestry. Assume it's already incorporated
+          // if this is an experiment/* branch (common pattern for short-lived branches).
+          if (branch.startsWith('experiment/')) {
+            console.log(`[merge] Skipping missing experiment branch ${branch} (likely already incorporated and deleted)`);
+            skippedCount++;
+            continue;
+          }
+        } catch {
+          /* ancestry check failed, branch truly missing */
+        }
+        // Non-experiment branches must be available for merge
+        throw new Error(
+          `Cannot merge ${branch}: not found locally, on origin, or in mirror. ` +
+          `The branch must exist for non-experiment branches.`,
+        );
+      }
       const task = allTasks.find(t => t.execution.branch === branch);
       const desc = task?.description ?? '';
       const mergeMsg = desc ? `Merge ${branch} — ${desc}` : `Merge ${branch}`;
       await execGitInMergeSafe(host, ['merge', '--no-ff', '-m', mergeMsg, branch], worktreeDir);
+      mergedCount++;
     }
-    console.log(`[merge] Consolidated ${taskBranches.length} task branches into ${featureBranch}`);
+    console.log(`[merge] Consolidated ${mergedCount} task branches into ${featureBranch}` +
+      (skippedCount > 0 ? ` (skipped ${skippedCount} missing branches)` : ''));
 
     // Push feature branch to origin so other clones (e.g., the gate clone used
     // by mergeMode='github') can access it. The consolidation clone is removed

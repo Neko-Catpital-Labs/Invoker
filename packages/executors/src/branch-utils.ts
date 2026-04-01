@@ -96,9 +96,11 @@ export interface MergeUpstreamsOpts {
 /**
  * Generate a bash script that merges upstream dependency branches into the
  * working directory. Skips branches already in HEAD's ancestry by default.
+ * Skips missing branches gracefully (exit 0) when they don't exist locally or on origin.
  *
- * Exit codes: 0=success, 30=missing ref, 31=merge conflict.
+ * Exit codes: 0=success (includes skipped branches), 31=merge conflict.
  * On conflict, stderr contains MERGE_CONFLICT_BRANCH=<branch> and MERGE_CONFLICT_FILES.
+ * On skipped missing refs, stdout contains SKIPPED_MISSING_REF=<branch>.
  */
 export function bashMergeUpstreams(opts: MergeUpstreamsOpts): string {
   const { worktreeDir, upstreamBranches, skipAncestors = true } = opts;
@@ -116,8 +118,9 @@ for upBranch in ${branches}; do
   elif git -C "$WT_DIR" rev-parse --verify "origin/$upBranch" >/dev/null 2>&1; then
     upRef="origin/$upBranch"
   else
-    echo "MISSING_REF=$upBranch" >&2
-    exit 30
+    # Branch doesn't exist locally or on origin - skip gracefully
+    echo "SKIPPED_MISSING_REF=$upBranch"
+    continue
   fi
 ${skipAncestors ? `  if git -C "$WT_DIR" merge-base --is-ancestor "$upRef" HEAD 2>/dev/null; then
     echo "SKIPPED=$upBranch"
