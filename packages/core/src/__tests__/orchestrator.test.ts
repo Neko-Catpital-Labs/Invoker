@@ -408,7 +408,7 @@ describe('Orchestrator', () => {
     // ── executor routing rules ───────────────────────────────
 
     describe('executor routing rules', () => {
-      it('applies matching pattern rule: sets familiarType ssh and remoteTargetId', () => {
+      it('validates matching pattern rule: task must declare required familiarType and remoteTargetId', () => {
         const routedOrchestrator = new Orchestrator({
           persistence: new InMemoryPersistence(),
           messageBus: new InMemoryBus(),
@@ -420,7 +420,7 @@ describe('Orchestrator', () => {
 
         routedOrchestrator.loadPlan({
           name: 'routing-test',
-          tasks: [{ id: 't1', description: 'Deploy task', command: 'deploy --env prod' }],
+          tasks: [{ id: 't1', description: 'Deploy task', command: 'deploy --env prod', familiarType: 'ssh', remoteTargetId: 'prod-server' }],
         });
 
         const task = routedOrchestrator.getTask('t1');
@@ -428,7 +428,7 @@ describe('Orchestrator', () => {
         expect(task!.config.remoteTargetId).toBe('prod-server');
       });
 
-      it('explicit task familiarType worktree overrides matching rule', () => {
+      it('throws when task familiarType does not match routing rule', () => {
         const routedOrchestrator = new Orchestrator({
           persistence: new InMemoryPersistence(),
           messageBus: new InMemoryBus(),
@@ -438,17 +438,15 @@ describe('Orchestrator', () => {
           ],
         });
 
-        routedOrchestrator.loadPlan({
-          name: 'override-test',
-          tasks: [{ id: 't1', description: 'Deploy task', command: 'deploy --env prod', familiarType: 'worktree' }],
-        });
-
-        const task = routedOrchestrator.getTask('t1');
-        expect(task!.config.familiarType).toBe('worktree');
-        expect(task!.config.remoteTargetId).toBeUndefined();
+        expect(() => {
+          routedOrchestrator.loadPlan({
+            name: 'mismatch-test',
+            tasks: [{ id: 't1', description: 'Deploy task', command: 'deploy --env prod', familiarType: 'worktree', remoteTargetId: 'prod-server' }],
+          });
+        }).toThrow('requires familiarType="ssh"');
       });
 
-      it('prompt-only task (no command) does not get routing from rules', () => {
+      it('prompt-only task (no command) ignores routing rules', () => {
         const routedOrchestrator = new Orchestrator({
           persistence: new InMemoryPersistence(),
           messageBus: new InMemoryBus(),
@@ -468,7 +466,7 @@ describe('Orchestrator', () => {
         expect(task!.config.remoteTargetId).toBeUndefined();
       });
 
-      it('applies regex rule matching pnpm test: sets familiarType ssh and remoteTargetId ci-box', () => {
+      it('validates regex rule matching pnpm test', () => {
         const routedOrchestrator = new Orchestrator({
           persistence: new InMemoryPersistence(),
           messageBus: new InMemoryBus(),
@@ -480,7 +478,7 @@ describe('Orchestrator', () => {
 
         routedOrchestrator.loadPlan({
           name: 'test-routing',
-          tasks: [{ id: 't1', description: 'Run tests', command: 'pnpm test' }],
+          tasks: [{ id: 't1', description: 'Run tests', command: 'pnpm test', familiarType: 'ssh', remoteTargetId: 'ci-box' }],
         });
 
         const task = routedOrchestrator.getTask('t1');
@@ -488,7 +486,7 @@ describe('Orchestrator', () => {
         expect(task!.config.remoteTargetId).toBe('ci-box');
       });
 
-      it('applies pattern rule matching test command: sets familiarType ssh and remoteTargetId ci-box', () => {
+      it('validates pattern rule matching test command', () => {
         const routedOrchestrator = new Orchestrator({
           persistence: new InMemoryPersistence(),
           messageBus: new InMemoryBus(),
@@ -500,7 +498,7 @@ describe('Orchestrator', () => {
 
         routedOrchestrator.loadPlan({
           name: 'test-routing-pattern',
-          tasks: [{ id: 't1', description: 'Run tests', command: 'pnpm test --coverage' }],
+          tasks: [{ id: 't1', description: 'Run tests', command: 'pnpm test --coverage', familiarType: 'ssh', remoteTargetId: 'ci-box' }],
         });
 
         const task = routedOrchestrator.getTask('t1');
@@ -508,7 +506,7 @@ describe('Orchestrator', () => {
         expect(task!.config.remoteTargetId).toBe('ci-box');
       });
 
-      it('explicit task familiarType overrides test routing rule', () => {
+      it('throws when task familiarType does not match regex rule', () => {
         const routedOrchestrator = new Orchestrator({
           persistence: new InMemoryPersistence(),
           messageBus: new InMemoryBus(),
@@ -518,17 +516,15 @@ describe('Orchestrator', () => {
           ],
         });
 
-        routedOrchestrator.loadPlan({
-          name: 'test-override',
-          tasks: [{ id: 't1', description: 'Run tests locally', command: 'pnpm test', familiarType: 'worktree' }],
-        });
-
-        const task = routedOrchestrator.getTask('t1');
-        expect(task!.config.familiarType).toBe('worktree');
-        expect(task!.config.remoteTargetId).toBeUndefined();
+        expect(() => {
+          routedOrchestrator.loadPlan({
+            name: 'test-mismatch',
+            tasks: [{ id: 't1', description: 'Run tests locally', command: 'pnpm test', familiarType: 'worktree', remoteTargetId: 'ci-box' }],
+          });
+        }).toThrow('requires familiarType="ssh"');
       });
 
-      it('explicit task remoteTargetId overrides test routing rule', () => {
+      it('throws when task remoteTargetId does not match routing rule', () => {
         const routedOrchestrator = new Orchestrator({
           persistence: new InMemoryPersistence(),
           messageBus: new InMemoryBus(),
@@ -538,14 +534,48 @@ describe('Orchestrator', () => {
           ],
         });
 
-        routedOrchestrator.loadPlan({
-          name: 'test-remote-override',
-          tasks: [{ id: 't1', description: 'Run tests on staging', command: 'pnpm test', remoteTargetId: 'staging-box' }],
+        expect(() => {
+          routedOrchestrator.loadPlan({
+            name: 'remote-mismatch',
+            tasks: [{ id: 't1', description: 'Run tests on staging', command: 'pnpm test', familiarType: 'ssh', remoteTargetId: 'staging-box' }],
+          });
+        }).toThrow('requires remoteTargetId="ci-box"');
+      });
+
+      it('throws when task familiarType is missing for matching rule', () => {
+        const routedOrchestrator = new Orchestrator({
+          persistence: new InMemoryPersistence(),
+          messageBus: new InMemoryBus(),
+          maxConcurrency: 3,
+          executorRoutingRules: [
+            { pattern: 'deploy', familiarType: 'ssh', remoteTargetId: 'prod-server' },
+          ],
         });
 
-        const task = routedOrchestrator.getTask('t1');
-        expect(task!.config.familiarType).toBe('worktree');
-        expect(task!.config.remoteTargetId).toBe('staging-box');
+        expect(() => {
+          routedOrchestrator.loadPlan({
+            name: 'missing-familiarType',
+            tasks: [{ id: 't1', description: 'Deploy task', command: 'deploy --env prod', remoteTargetId: 'prod-server' }],
+          });
+        }).toThrow('requires familiarType="ssh"');
+      });
+
+      it('throws when task remoteTargetId is missing for matching rule', () => {
+        const routedOrchestrator = new Orchestrator({
+          persistence: new InMemoryPersistence(),
+          messageBus: new InMemoryBus(),
+          maxConcurrency: 3,
+          executorRoutingRules: [
+            { pattern: 'deploy', familiarType: 'ssh', remoteTargetId: 'prod-server' },
+          ],
+        });
+
+        expect(() => {
+          routedOrchestrator.loadPlan({
+            name: 'missing-remoteTargetId',
+            tasks: [{ id: 't1', description: 'Deploy task', command: 'deploy --env prod', familiarType: 'ssh' }],
+          });
+        }).toThrow('requires remoteTargetId="prod-server"');
       });
 
       it('merge node always has familiarType merge regardless of routing rules', () => {
@@ -560,7 +590,7 @@ describe('Orchestrator', () => {
 
         routedOrchestrator.loadPlan({
           name: 'merge-routing-test',
-          tasks: [{ id: 't1', description: 'Deploy task', command: 'deploy --env prod' }],
+          tasks: [{ id: 't1', description: 'Deploy task', command: 'deploy --env prod', familiarType: 'ssh', remoteTargetId: 'prod-server' }],
         });
 
         const mergeNode = routedOrchestrator.getAllTasks().find((t) => t.config.isMergeNode);

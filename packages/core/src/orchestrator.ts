@@ -188,46 +188,81 @@ export interface TaskReplacementDef {
   executionAgent?: string;
 }
 
-/** A single routing rule that maps a task command to a familiarType and remoteTargetId. */
+/**
+ * A single routing rule that validates task execution environment against command patterns.
+ * When a rule matches a task command, the orchestrator validates that the task's
+ * familiarType and remoteTargetId conform to the rule's requirements.
+ */
 export interface ExecutorRoutingRule {
   /** Substring to match against the task command. */
   pattern?: string;
   /** Regular expression matched against the task command; compiled with new RegExp(regex). */
   regex?: string;
-  /** Familiar type to assign (e.g. "ssh", "docker", "worktree"). */
+  /** Required familiar type for matching commands (e.g. "ssh", "docker", "worktree"). */
   familiarType: string;
-  /** Remote target ID to assign; must correspond to an entry in remoteTargets. */
+  /** Required remote target ID for matching commands; must correspond to an entry in remoteTargets. */
   remoteTargetId: string;
 }
 
 /**
- * Resolve which familiarType and remoteTargetId to apply to a task.
- *
- * Returns `{}` (no override) when:
- *   - The plan already sets `familiarType` OR `remoteTargetId` on the task.
- *   - No rule matches the command.
- *
- * Otherwise returns the familiarType and remoteTargetId from the first matching rule.
+ * Finds the first executor routing rule that matches the given command.
  * A rule matches when `pattern` is a substring of `command`, `regex` compiles and tests
  * true against `command`, or both (either is sufficient).
+ * Returns the matching rule or undefined if no rule matches.
  */
-export function resolveExecutorRouting(
+export function findMatchingExecutorRoutingRule(
   command: string,
-  planFamiliarType: string | undefined,
-  planRemoteTargetId: string | undefined,
   rules: ExecutorRoutingRule[],
-): { familiarType?: string; remoteTargetId?: string } {
-  if (planFamiliarType !== undefined || planRemoteTargetId !== undefined) {
-    return {};
-  }
+): ExecutorRoutingRule | undefined {
   for (const rule of rules) {
     const patternMatch = rule.pattern !== undefined && command.includes(rule.pattern);
     const regexMatch = rule.regex !== undefined && new RegExp(rule.regex).test(command);
     if (patternMatch || regexMatch) {
-      return { familiarType: rule.familiarType, remoteTargetId: rule.remoteTargetId };
+      return rule;
     }
   }
-  return {};
+  return undefined;
+}
+
+/**
+ * Validates that a task's routing conforms to executor routing rules.
+ * Returns immediately if the task has no command or no rules are configured.
+ * When a rule matches the task command, throws if the task's familiarType or remoteTargetId
+ * do not match the rule's requirements.
+ */
+export function assertExecutorRoutingConforms(
+  taskId: string,
+  command: string | undefined,
+  planFamiliarType: string | undefined,
+  planRemoteTargetId: string | undefined,
+  rules: ExecutorRoutingRule[],
+): void {
+  if (!command || rules.length === 0) {
+    return;
+  }
+
+  const matchingRule = findMatchingExecutorRoutingRule(command, rules);
+  if (!matchingRule) {
+    return;
+  }
+
+  // Normalize both plan and rule familiarType the same way createTaskState does
+  const normalizedPlanType = normalizeFamiliarType(planFamiliarType) ?? 'worktree';
+  const normalizedRuleType = normalizeFamiliarType(matchingRule.familiarType) ?? matchingRule.familiarType;
+
+  if (normalizedPlanType !== normalizedRuleType) {
+    throw new Error(
+      `Task "${taskId}" with command "${command}" requires familiarType="${normalizedRuleType}" ` +
+      `but plan declares familiarType="${normalizedPlanType}"`
+    );
+  }
+
+  if (planRemoteTargetId !== matchingRule.remoteTargetId) {
+    throw new Error(
+      `Task "${taskId}" with command "${command}" requires remoteTargetId="${matchingRule.remoteTargetId}" ` +
+      `but plan declares remoteTargetId="${planRemoteTargetId ?? '(undefined)'}"`
+    );
+  }
 }
 
 export interface OrchestratorConfig {
@@ -237,6 +272,11 @@ export interface OrchestratorConfig {
   maxUtilization?: number;
   utilizationRules?: UtilizationRule[];
   defaultUtilization?: number;
+  /**
+   * Rules that validate task execution environment against command patterns.
+   * When loading a plan, the orchestrator validates that tasks with commands matching
+   * a rule have the required familiarType and remoteTargetId specified in the plan.
+   */
   executorRoutingRules?: ExecutorRoutingRule[];
 }
 
@@ -403,11 +443,15 @@ export class Orchestrator {
     }
 
     for (const taskDef of plan.tasks) {
-      const routing = taskDef.command && this.executorRoutingRules.length > 0
-        ? resolveExecutorRouting(taskDef.command, taskDef.familiarType, taskDef.remoteTargetId, this.executorRoutingRules)
-        : {};
-      const effectiveFamiliarType = routing.familiarType ?? taskDef.familiarType;
-      const effectiveRemoteTargetId = routing.remoteTargetId ?? taskDef.remoteTargetId;
+      // Validate executor routing conformance for tasks with commands
+      assertExecutorRoutingConforms(
+        taskDef.id,
+        taskDef.command,
+        taskDef.familiarType,
+        taskDef.remoteTargetId,
+        this.executorRoutingRules,
+      );
+
       const scopedId = localToScoped.get(taskDef.id)!;
       const scopedDeps = (taskDef.dependencies ?? []).map((dep) => {
         const s = localToScoped.get(dep);
@@ -428,9 +472,9 @@ export class Orchestrator {
           experimentVariants: taskDef.experimentVariants,
           requiresManualApproval: taskDef.requiresManualApproval,
           featureBranch: taskDef.featureBranch,
-          familiarType: normalizeFamiliarType(effectiveFamiliarType) ?? 'worktree',
+          familiarType: normalizeFamiliarType(taskDef.familiarType) ?? 'worktree',
           dockerImage: taskDef.dockerImage,
-          remoteTargetId: effectiveRemoteTargetId,
+          remoteTargetId: taskDef.remoteTargetId,
           autoFix: taskDef.autoFix,
           executionAgent: taskDef.executionAgent,
         },

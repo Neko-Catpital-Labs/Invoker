@@ -67,16 +67,19 @@ export interface InvokerConfig {
     port?: number;
   }>;
   /**
-   * Pattern-based rules that assign a familiarType and remoteTargetId to tasks
-   * based on their command string. First matching rule wins.
+   * Pattern-based rules that enforce task execution environment conformance.
+   * When a rule matches a task command, the orchestrator validates that the task's
+   * familiarType and remoteTargetId explicitly declared in the plan YAML match the
+   * rule's requirements. Rules do NOT fill in omitted fields — they enforce conformance.
+   * First matching rule wins.
    *
    * Each rule may specify:
    *   - `pattern`: substring matched against the task command (like utilizationRules)
    *   - `regex`: compiled with `new RegExp(regex)` and tested against the command
    *
    * If both `pattern` and `regex` are present, a rule matches if either matches.
-   * Explicit per-task `familiarType` or `remoteTargetId` set in plan YAML always
-   * takes precedence and will not be overridden.
+   * Tasks with commands matching a rule MUST explicitly declare the required familiarType
+   * and remoteTargetId in the plan YAML, or plan loading will fail with a validation error.
    * Only applies to tasks that have a command (not prompt-only tasks).
    */
   executorRoutingRules?: Array<{
@@ -84,9 +87,9 @@ export interface InvokerConfig {
     pattern?: string;
     /** Regular expression matched against the task command; compiled with new RegExp(regex). */
     regex?: string;
-    /** Familiar type to assign (e.g. "ssh", "docker", "worktree"). */
+    /** Required familiar type for matching commands (e.g. "ssh", "docker", "worktree"). */
     familiarType: string;
-    /** Remote target ID to assign; must correspond to an entry in remoteTargets. */
+    /** Required remote target ID for matching commands; must correspond to an entry in remoteTargets. */
     remoteTargetId: string;
   }>;
 }
@@ -108,37 +111,3 @@ export function loadConfig(): InvokerConfig {
   return readJsonSafe(join(homedir(), '.invoker', 'config.json'));
 }
 
-/** A single executor routing rule from InvokerConfig.executorRoutingRules. */
-export type ExecutorRoutingRule = NonNullable<InvokerConfig['executorRoutingRules']>[number];
-
-/**
- * Resolve which familiarType and remoteTargetId to apply to a task, given the
- * configured executorRoutingRules.
- *
- * Returns `{}` (no override) when:
- *   - The plan already sets `familiarType` OR `remoteTargetId` on the task
- *     (explicit YAML wins — the caller must not override these).
- *   - No rule matches the command.
- *
- * Otherwise returns the familiarType and remoteTargetId from the first matching
- * rule. A rule matches when `pattern` is a substring of `command`, `regex`
- * compiles and tests true against `command`, or both (either is sufficient).
- */
-export function resolveExecutorRouting(
-  command: string,
-  planFamiliarType: string | undefined,
-  planRemoteTargetId: string | undefined,
-  rules: ExecutorRoutingRule[],
-): { familiarType?: string; remoteTargetId?: string } {
-  if (planFamiliarType !== undefined || planRemoteTargetId !== undefined) {
-    return {};
-  }
-  for (const rule of rules) {
-    const patternMatch = rule.pattern !== undefined && command.includes(rule.pattern);
-    const regexMatch = rule.regex !== undefined && new RegExp(rule.regex).test(command);
-    if (patternMatch || regexMatch) {
-      return { familiarType: rule.familiarType, remoteTargetId: rule.remoteTargetId };
-    }
-  }
-  return {};
-}

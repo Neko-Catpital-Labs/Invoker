@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { loadConfig, resolveExecutorRouting } from '../config.js';
+import { loadConfig } from '../config.js';
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -110,94 +110,5 @@ describe('loadConfig', () => {
     );
     const config = loadConfig();
     expect(config.imageStorage).toEqual(imageStorage);
-  });
-});
-
-describe('resolveExecutorRouting', () => {
-  const rule = { pattern: 'deploy', familiarType: 'ssh', remoteTargetId: 'prod' };
-
-  it('returns {} when no rules', () => {
-    expect(resolveExecutorRouting('pnpm deploy', undefined, undefined, [])).toEqual({});
-  });
-
-  it('matches by pattern substring', () => {
-    expect(resolveExecutorRouting('pnpm deploy:prod', undefined, undefined, [rule]))
-      .toEqual({ familiarType: 'ssh', remoteTargetId: 'prod' });
-  });
-
-  it('returns {} when pattern does not match', () => {
-    expect(resolveExecutorRouting('pnpm test', undefined, undefined, [rule])).toEqual({});
-  });
-
-  it('matches by regex', () => {
-    const regexRule = { regex: '^pnpm (build|deploy)', familiarType: 'ssh', remoteTargetId: 'prod' };
-    expect(resolveExecutorRouting('pnpm deploy:staging', undefined, undefined, [regexRule]))
-      .toEqual({ familiarType: 'ssh', remoteTargetId: 'prod' });
-  });
-
-  it('returns {} when regex does not match', () => {
-    const regexRule = { regex: '^pnpm deploy$', familiarType: 'ssh', remoteTargetId: 'prod' };
-    expect(resolveExecutorRouting('pnpm test', undefined, undefined, [regexRule])).toEqual({});
-  });
-
-  it('matches if either pattern or regex matches (both present)', () => {
-    const bothRule = { pattern: 'deploy', regex: 'nope', familiarType: 'ssh', remoteTargetId: 'prod' };
-    expect(resolveExecutorRouting('pnpm deploy', undefined, undefined, [bothRule]))
-      .toEqual({ familiarType: 'ssh', remoteTargetId: 'prod' });
-    const bothRule2 = { pattern: 'nope', regex: 'deploy', familiarType: 'ssh', remoteTargetId: 'prod' };
-    expect(resolveExecutorRouting('pnpm deploy', undefined, undefined, [bothRule2]))
-      .toEqual({ familiarType: 'ssh', remoteTargetId: 'prod' });
-  });
-
-  it('returns {} when planFamiliarType is already set (YAML wins)', () => {
-    expect(resolveExecutorRouting('pnpm deploy', 'worktree', undefined, [rule])).toEqual({});
-  });
-
-  it('returns {} when planRemoteTargetId is already set (YAML wins)', () => {
-    expect(resolveExecutorRouting('pnpm deploy', undefined, 'staging', [rule])).toEqual({});
-  });
-
-  it('returns {} when both planFamiliarType and planRemoteTargetId are set', () => {
-    expect(resolveExecutorRouting('pnpm deploy', 'docker', 'prod', [rule])).toEqual({});
-  });
-
-  it('matches test command by pattern substring', () => {
-    const testRule = { pattern: 'pnpm test', familiarType: 'ssh', remoteTargetId: 'ci-box' };
-    expect(resolveExecutorRouting('pnpm test --coverage', undefined, undefined, [testRule]))
-      .toEqual({ familiarType: 'ssh', remoteTargetId: 'ci-box' });
-  });
-
-  it('matches test command by regex', () => {
-    const testRule = { regex: '^pnpm test', familiarType: 'ssh', remoteTargetId: 'ci-box' };
-    expect(resolveExecutorRouting('pnpm test', undefined, undefined, [testRule]))
-      .toEqual({ familiarType: 'ssh', remoteTargetId: 'ci-box' });
-  });
-
-  it('does not match test rule against non-test command', () => {
-    const testRule = { regex: '^pnpm test', familiarType: 'ssh', remoteTargetId: 'ci-box' };
-    expect(resolveExecutorRouting('pnpm build', undefined, undefined, [testRule])).toEqual({});
-  });
-
-  it('YAML familiarType wins over test routing rule', () => {
-    const testRule = { pattern: 'pnpm test', familiarType: 'ssh', remoteTargetId: 'ci-box' };
-    expect(resolveExecutorRouting('pnpm test', 'worktree', undefined, [testRule])).toEqual({});
-  });
-
-  it('first matching rule wins', () => {
-    const rules = [
-      { pattern: 'deploy', familiarType: 'ssh', remoteTargetId: 'prod' },
-      { pattern: 'deploy', familiarType: 'docker', remoteTargetId: 'staging' },
-    ];
-    expect(resolveExecutorRouting('pnpm deploy', undefined, undefined, rules))
-      .toEqual({ familiarType: 'ssh', remoteTargetId: 'prod' });
-  });
-
-  it('skips non-matching rules and returns first match', () => {
-    const rules = [
-      { pattern: 'build', familiarType: 'docker', remoteTargetId: 'ci' },
-      { pattern: 'deploy', familiarType: 'ssh', remoteTargetId: 'prod' },
-    ];
-    expect(resolveExecutorRouting('pnpm deploy', undefined, undefined, rules))
-      .toEqual({ familiarType: 'ssh', remoteTargetId: 'prod' });
   });
 });
