@@ -847,12 +847,12 @@ export class TaskExecutor {
    * Fix a failed command task by spawning Claude with the error output.
    * Claude's output is captured and appended to the task's output stream for auditing.
    */
-  async fixWithClaude(taskId: string, taskOutput: string): Promise<void> {
-    return fixWithClaudeImpl(this, taskId, taskOutput);
+  async fixWithClaude(taskId: string, taskOutput: string, agentName?: string): Promise<void> {
+    return fixWithClaudeImpl(this, taskId, taskOutput, agentName);
   }
 
   async fixWithCodex(taskId: string, taskOutput: string): Promise<void> {
-    return fixWithClaudeImpl(this, taskId, taskOutput);
+    return fixWithClaudeImpl(this, taskId, taskOutput, 'codex');
   }
 
   resumeMergeGatePolling(): void {

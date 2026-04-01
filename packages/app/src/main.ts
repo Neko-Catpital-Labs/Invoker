@@ -342,6 +342,7 @@ if (isHeadless) {
         orchestrator, persistence, familiarRegistry, messageBus,
         repoRoot, invokerConfig, initServices, wireSlackBot,
         waitForApproval,
+        executionAgentRegistry: registerBuiltinAgents(),
       });
     } catch (err) {
       console.error(`${RED}Error:${RESET} ${err instanceof Error ? err.message : String(err)}`);
@@ -1130,17 +1131,17 @@ function setupGuiMode(): void {
       }
     });
 
-    ipcMain.handle('invoker:fix-with-claude', async (_event, taskId: string, _agentName?: string) => {
-      console.log(`[ipc] fix-with-claude: "${taskId}"`);
+    ipcMain.handle('invoker:fix-with-claude', async (_event, taskId: string, agentName?: string) => {
+      console.log(`[ipc] fix-with-claude: "${taskId}" agent=${agentName ?? 'claude'}`);
       const { savedError } = orchestrator.beginConflictResolution(taskId);
       try {
         const output = persistence.getTaskOutput(taskId);
-        await taskExecutor.fixWithClaude(taskId, output);
+        await taskExecutor.fixWithClaude(taskId, output, agentName);
         orchestrator.setFixAwaitingApproval(taskId, savedError);
       } catch (err) {
         console.error(`[ipc] fix-with-claude failed: ${err}`);
         const msg = err instanceof Error ? err.message : String(err);
-        persistence.appendTaskOutput(taskId, `\n[Fix with Claude] Failed: ${msg}`);
+        persistence.appendTaskOutput(taskId, `\n[Fix with ${agentName ?? 'Claude'}] Failed: ${msg}`);
         orchestrator.revertConflictResolution(taskId, savedError, msg);
         throw err;
       }
