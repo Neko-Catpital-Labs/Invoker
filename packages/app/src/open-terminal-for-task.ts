@@ -25,7 +25,7 @@ export interface OpenTerminalPersistence {
   getTaskStatus(taskId: string): string | null;
   getFamiliarType(taskId: string): string | null;
   getAgentSessionId(taskId: string): string | null;
-  getAgentName?(taskId: string): string | null;
+  getExecutionAgent?(taskId: string): string | null;
   getContainerId(taskId: string): string | null;
   getWorkspacePath(taskId: string): string | null;
   getBranch(taskId: string): string | null;
@@ -67,7 +67,7 @@ export async function openExternalTerminalForTask(
     taskId,
     familiarType: persistence.getFamiliarType(taskId) ?? 'worktree',
     agentSessionId: persistence.getAgentSessionId(taskId) ?? undefined,
-    agentName: persistence.getAgentName?.(taskId) ?? undefined,
+    executionAgent: persistence.getExecutionAgent?.(taskId) ?? undefined,
     containerId: persistence.getContainerId(taskId) ?? undefined,
     workspacePath: persistence.getWorkspacePath(taskId) ?? undefined,
     branch: persistence.getBranch(taskId) ?? undefined,

@@ -89,7 +89,6 @@ export interface TaskExecution {
     readonly failedBranch: string;
     readonly conflictFiles: readonly string[];
   };
-  readonly agentName?: string;
 }
 
 // ── Task State ──────────────────────────────────────────────

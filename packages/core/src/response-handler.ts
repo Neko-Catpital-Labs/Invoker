@@ -35,7 +35,6 @@ export type ParsedResponse =
       summary?: string;
       commitHash?: string;
       agentSessionId?: string;
-      agentName?: string;
       branch?: string;
     }
   | {
@@ -84,7 +83,6 @@ export class ResponseHandler {
           summary: outputs.summary,
           commitHash: outputs.commitHash,
           agentSessionId: outputs.agentSessionId,
-          agentName: outputs.agentName,
           branch: outputs.branch,
         };
 

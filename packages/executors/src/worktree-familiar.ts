@@ -43,8 +43,6 @@ interface WorktreeEntry extends BaseEntry {
   poolSoftRelease?: () => void;
   /** Agent session ID for resuming sessions. */
   agentSessionId?: string;
-  /** Name of the ExecutionAgent that produced this session. */
-  agentName?: string;
 }
 
 /**
@@ -240,13 +238,14 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
       throw err;
     }
 
-    const { cmd, args, agentSessionId, agentName } = this.buildCommandAndArgs(request, {
+    const { cmd, args, agentSessionId } = this.buildCommandAndArgs(request, {
       claudeCommand: this.claudeCommand,
       agentRegistry: this.agentRegistry,
     });
 
-    const stdinMode = this.agentRegistry && agentName
-      ? this.agentRegistry.getOrThrow(agentName).stdinMode
+    const executionAgent = request.inputs.executionAgent ?? 'claude';
+    const stdinMode = this.agentRegistry && executionAgent
+      ? this.agentRegistry.getOrThrow(executionAgent).stdinMode
       : (request.actionType === 'claude' ? 'ignore' : 'pipe');
     const child = spawn(cmd, args, {
       stdio: [stdinMode, 'pipe', 'pipe'],
@@ -284,7 +283,6 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
       poolRelease: acquired.release,
       poolSoftRelease: acquired.softRelease,
       agentSessionId,
-      agentName,
     };
 
     this.registerEntry(handle, entry);
@@ -292,9 +290,6 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
     handle.branch = acquired.branch;
     if (agentSessionId) {
       handle.agentSessionId = agentSessionId;
-    }
-    if (agentName) {
-      handle.agentName = agentName;
     }
 
     child.stdout?.on('data', (chunk: Buffer) => {
@@ -310,7 +305,6 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
         signal,
         branch,
         agentSessionId: entry.agentSessionId,
-        agentName: entry.agentName,
       });
       entry.poolSoftRelease?.();
       this.entries.delete(executionId);
@@ -363,8 +357,9 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
     const entry = this.entries.get(handle.executionId);
     if (!entry) return null;
     if (entry.agentSessionId) {
+      const agentName = entry.request.inputs.executionAgent ?? 'claude';
       const resume = this.agentRegistry
-        ? this.agentRegistry.getOrThrow(entry.agentName ?? 'claude').buildResumeArgs(entry.agentSessionId)
+        ? this.agentRegistry.getOrThrow(agentName).buildResumeArgs(entry.agentSessionId)
         : { cmd: 'claude', args: ['--resume', entry.agentSessionId, '--dangerously-skip-permissions'] };
       return { command: resume.cmd, args: resume.args, cwd: entry.worktreeDir };
     }
@@ -391,7 +386,7 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
     }
     if (meta.agentSessionId) {
       const resume = this.agentRegistry
-        ? this.agentRegistry.getOrThrow(meta.agentName ?? 'claude').buildResumeArgs(meta.agentSessionId)
+        ? this.agentRegistry.getOrThrow(meta.executionAgent ?? 'claude').buildResumeArgs(meta.agentSessionId)
         : { cmd: 'claude', args: ['--resume', meta.agentSessionId, '--dangerously-skip-permissions'] };
       const spec = {
         command: resume.cmd,

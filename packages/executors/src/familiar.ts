@@ -6,8 +6,6 @@ export interface FamiliarHandle {
   executionId: string;
   taskId: string;
   agentSessionId?: string;
-  /** Name of the ExecutionAgent that produced this session (e.g. 'claude'). */
-  agentName?: string;
   containerId?: string;
   workspacePath?: string;
   branch?: string;
@@ -28,8 +26,8 @@ export interface PersistedTaskMeta {
   taskId: string;
   familiarType: string;
   agentSessionId?: string;
-  /** Name of the ExecutionAgent that produced this session (e.g. 'claude'). */
-  agentName?: string;
+  /** Configured execution agent name (e.g. 'claude', 'codex'). Used for session resume. */
+  executionAgent?: string;
   containerId?: string;
   workspacePath?: string;
   branch?: string;

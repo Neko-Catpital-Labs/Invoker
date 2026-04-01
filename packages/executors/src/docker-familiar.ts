@@ -32,8 +32,6 @@ interface ContainerEntry extends BaseEntry {
   containerId: string;
   process: ChildProcess | null;
   agentSessionId?: string;
-  /** Name of the ExecutionAgent that produced this session. */
-  agentName?: string;
   branch?: string;
 }
 
@@ -264,7 +262,7 @@ export class DockerFamiliar extends BaseFamiliar<ContainerEntry> {
     log(`${TAG} Container created: ${container.id.slice(0, 12)} image=${containerImage}`);
 
     // Determine task command and Claude session before entry registration
-    const { cmd, args: cmdArgs, agentSessionId, agentName } = this.buildCommandAndArgs(request, {
+    const { cmd, args: cmdArgs, agentSessionId } = this.buildCommandAndArgs(request, {
       agentRegistry: this.agentRegistry,
     });
 
@@ -273,7 +271,6 @@ export class DockerFamiliar extends BaseFamiliar<ContainerEntry> {
       process: null,
       request,
       agentSessionId,
-      agentName,
       outputListeners: new Set(),
       outputBuffer: [],
       completeListeners: new Set(),
@@ -295,9 +292,6 @@ export class DockerFamiliar extends BaseFamiliar<ContainerEntry> {
     handle.containerId = container.id;
     if (agentSessionId) {
       handle.agentSessionId = agentSessionId;
-    }
-    if (agentName) {
-      handle.agentName = agentName;
     }
 
     // -- Start container (idle process) --
@@ -402,7 +396,6 @@ export class DockerFamiliar extends BaseFamiliar<ContainerEntry> {
           signal,
           branch: handle.branch,
           agentSessionId: entry.agentSessionId,
-          agentName: entry.agentName,
         });
 
         // Stop the idle container after git finalize completes
@@ -485,8 +478,9 @@ export class DockerFamiliar extends BaseFamiliar<ContainerEntry> {
       // Docker containers (see github.com/anthropics/claude-code/issues/20572,
       // #24068, #25286). The --resume terminal may hang after the trust prompt.
       // The automated -p (pipe) execution path is unaffected.
+      const agentName = entry.request.inputs.executionAgent ?? 'claude';
       const resume = this.agentRegistry
-        ? this.agentRegistry.getOrThrow(entry.agentName ?? 'claude').buildResumeArgs(entry.agentSessionId)
+        ? this.agentRegistry.getOrThrow(agentName).buildResumeArgs(entry.agentSessionId)
         : { cmd: 'claude', args: ['--resume', entry.agentSessionId, '--dangerously-skip-permissions'] };
       const resumeCmd = [resume.cmd, ...resume.args].join(' ');
       console.log(`${TAG} getTerminalSpec() -> docker start + exec ${resumeCmd}`);
@@ -514,7 +508,7 @@ export class DockerFamiliar extends BaseFamiliar<ContainerEntry> {
       // Docker containers (see github.com/anthropics/claude-code/issues/20572,
       // #24068, #25286). The --resume terminal may hang after the trust prompt.
       const resume = this.agentRegistry
-        ? this.agentRegistry.getOrThrow(meta.agentName ?? 'claude').buildResumeArgs(meta.agentSessionId)
+        ? this.agentRegistry.getOrThrow(meta.executionAgent ?? 'claude').buildResumeArgs(meta.agentSessionId)
         : { cmd: 'claude', args: ['--resume', meta.agentSessionId, '--dangerously-skip-permissions'] };
       const resumeCmd = [resume.cmd, ...resume.args].join(' ');
       console.log(`[DockerFamiliar] getRestoredTerminalSpec task="${meta.taskId}" → docker exec ${resumeCmd}`);

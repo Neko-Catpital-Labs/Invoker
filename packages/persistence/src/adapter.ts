@@ -111,8 +111,8 @@ export interface PersistenceAdapter {
   updateAttempt(attemptId: string, changes: Partial<Pick<Attempt, 'status' | 'startedAt' | 'completedAt' | 'exitCode' | 'error' | 'lastHeartbeatAt' | 'branch' | 'commit' | 'summary' | 'workspacePath' | 'agentSessionId' | 'containerId' | 'mergeConflict'>>): void;
 
   // Agent queries
-  /** Read the execution agent name for a task (e.g. 'claude', 'codex'). */
-  getAgentName?(taskId: string): string | null;
+  /** Read the configured execution agent name for a task (e.g. 'claude', 'codex'). */
+  getExecutionAgent?(taskId: string): string | null;
 
   // Lifecycle
   close(): void;

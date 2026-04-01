@@ -443,7 +443,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         review_url, review_id, review_status, review_provider_id,
         is_fixing_with_ai,
         remote_target_id,
-        execution_agent, agent_name
+        execution_agent
       ) VALUES (
         ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?, ?,
@@ -460,7 +460,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         ?, ?, ?, ?,
         ?,
         ?,
-        ?, ?
+        ?
       )
     `, [
       task.id, workflowId, task.description, task.status,
@@ -500,7 +500,6 @@ export class SQLiteAdapter implements PersistenceAdapter {
       exec.isFixingWithAI ? 1 : 0,
       cfg.remoteTargetId ?? null,
       cfg.executionAgent ?? null,
-      exec.agentName ?? null,
     ]);
   }
 
@@ -579,7 +578,6 @@ export class SQLiteAdapter implements PersistenceAdapter {
         reviewStatus: 'review_status',
         reviewProviderId: 'review_provider_id',
         selectedAttemptId: 'selected_attempt_id',
-        agentName: 'agent_name',
       };
       const execDateMap: Record<string, string> = {
         startedAt: 'started_at',
@@ -823,12 +821,12 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return (row?.branch as string) ?? null;
   }
 
-  getAgentName(taskId: string): string | null {
+  getExecutionAgent(taskId: string): string | null {
     const row = this.queryOne(
-      'SELECT agent_name FROM tasks WHERE id = ?',
+      'SELECT execution_agent FROM tasks WHERE id = ?',
       [taskId],
     );
-    return (row?.agent_name as string) ?? null;
+    return (row?.execution_agent as string) ?? null;
   }
 
   getRemoteTargetId(taskId: string): string | null {
@@ -1173,7 +1171,6 @@ export class SQLiteAdapter implements PersistenceAdapter {
         reviewStatus: row.review_status ?? undefined,
         reviewProviderId: row.review_provider_id ?? undefined,
         selectedAttemptId: row.selected_attempt_id ?? undefined,
-        agentName: row.agent_name ?? undefined,
       },
     };
   }

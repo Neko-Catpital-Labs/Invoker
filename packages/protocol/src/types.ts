@@ -75,8 +75,6 @@ export interface WorkResponseOutputs {
   summary?: string;
   commitHash?: string;
   agentSessionId?: string;
-  /** Name of the ExecutionAgent that produced this session (e.g. 'claude'). */
-  agentName?: string;
   /** Branch the familiar used — persisted at completion to close the write-once gap. */
   branch?: string;
 }

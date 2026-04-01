@@ -332,7 +332,6 @@ export class TaskExecutor {
             );
           })(),
           agentSessionId: handle.agentSessionId ?? undefined,
-          agentName: handle.agentName ?? undefined,
           containerId: handle.containerId ?? undefined,
           branch: handle.branch ?? undefined,
         },

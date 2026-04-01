@@ -571,7 +571,7 @@ export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar
   protected buildCommandAndArgs(
     request: WorkRequest,
     opts?: { claudeCommand?: string; agentRegistry?: AgentRegistry },
-  ): { cmd: string; args: string[]; agentSessionId?: string; agentName?: string; fullPrompt?: string } {
+  ): { cmd: string; args: string[]; agentSessionId?: string; fullPrompt?: string } {
     if (request.actionType === 'command') {
       const command = request.inputs.command;
       if (!command) throw new Error('WorkRequest with actionType "command" must have inputs.command');
@@ -583,12 +583,12 @@ export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar
         const agent = opts.agentRegistry.getOrThrow(agentName);
         const fullPrompt = this.buildFullPrompt(request);
         const spec = agent.buildCommand(fullPrompt);
-        return { cmd: spec.cmd, args: spec.args, agentSessionId: spec.sessionId, agentName: agent.name, fullPrompt: spec.fullPrompt };
+        return { cmd: spec.cmd, args: spec.args, agentSessionId: spec.sessionId, fullPrompt: spec.fullPrompt };
       }
       // Fallback: use legacy prepareClaudeSession
       const claudeCommand = opts?.claudeCommand ?? 'claude';
       const session = this.prepareClaudeSession(request);
-      return { cmd: claudeCommand, args: session.cliArgs, agentSessionId: session.sessionId, agentName: 'claude', fullPrompt: session.fullPrompt };
+      return { cmd: claudeCommand, args: session.cliArgs, agentSessionId: session.sessionId, fullPrompt: session.fullPrompt };
     }
     return { cmd: '/bin/bash', args: ['-c', 'echo "Unsupported action type"'] };
   }
@@ -625,7 +625,6 @@ export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar
       branch?: string;
       originalBranch?: string;
       agentSessionId?: string;
-      agentName?: string;
     },
   ): Promise<void> {
     const entry = this.entries.get(executionId);
@@ -681,7 +680,6 @@ export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar
         exitCode: status === 'failed' && exitCode === 0 ? 1 : exitCode,
         commitHash,
         agentSessionId: opts?.agentSessionId,
-        agentName: opts?.agentName,
         branch: opts?.branch,
         ...(error ? { error } : {}),
         ...(opts?.branch ? { summary: `branch=${opts.branch} commit=${commitHash ?? 'unknown'}` } : {}),
