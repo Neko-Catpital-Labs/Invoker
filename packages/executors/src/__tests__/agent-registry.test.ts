@@ -96,4 +96,29 @@ describe('AgentRegistry', () => {
 
     expect(reg.get('claude')).toBe(second);
   });
+
+  it('co-registers a session driver with an execution agent', () => {
+    const reg = new AgentRegistry();
+    const agent = makeExecAgent('codex');
+    const mockDriver = {
+      processOutput: () => '',
+      loadSession: () => null,
+      parseSession: () => [],
+    };
+    reg.registerExecution(agent, mockDriver);
+
+    expect(reg.getSessionDriver('codex')).toBe(mockDriver);
+  });
+
+  it('returns undefined for agents registered without a driver', () => {
+    const reg = new AgentRegistry();
+    reg.registerExecution(makeExecAgent('claude'));
+
+    expect(reg.getSessionDriver('claude')).toBeUndefined();
+  });
+
+  it('returns undefined for nonexistent agent drivers', () => {
+    const reg = new AgentRegistry();
+    expect(reg.getSessionDriver('nonexistent')).toBeUndefined();
+  });
 });

@@ -43,7 +43,7 @@ export function ApprovalModal({
     if (!task.execution.agentSessionId) return;
     setSessionLoading(true);
     window.invoker
-      .getClaudeSession(task.execution.agentSessionId)
+      .getAgentSession(task.execution.agentSessionId)
       .then((msgs) => {
         setSessionMessages(msgs);
         setSessionLoading(false);

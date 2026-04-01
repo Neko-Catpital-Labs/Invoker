@@ -11,6 +11,7 @@ import type { InvokerAPI } from './types.js';
 
 const api: InvokerAPI = {
   getClaudeSession: (sessionId) => ipcRenderer.invoke('invoker:get-claude-session', sessionId),
+  getAgentSession: (sessionId, agentName) => ipcRenderer.invoke('invoker:get-agent-session', sessionId, agentName),
   loadPlan: (plan) => ipcRenderer.invoke('invoker:load-plan', plan),
   start: () => ipcRenderer.invoke('invoker:start'),
   stop: () => ipcRenderer.invoke('invoker:stop'),

@@ -16,7 +16,8 @@ const CONTAINER_CWD = '/app';
 
 export interface DockerFamiliarConfig {
   imageName?: string;
-  workspaceDir: string;
+  /** @deprecated No longer used — repoUrl comes from WorkRequest.inputs.repoUrl. */
+  workspaceDir?: string;
   callbackPort?: number;
   claudeConfigDir?: string;
   sshDir?: string;
@@ -52,7 +53,6 @@ export class DockerFamiliar extends BaseFamiliar<ContainerEntry> {
   readonly type = 'docker';
 
   private readonly imageName: string;
-  private readonly workspaceDir: string;
   private readonly callbackPort: number;
   private readonly claudeConfigDir: string;
   private readonly sshDir: string;
@@ -70,7 +70,6 @@ export class DockerFamiliar extends BaseFamiliar<ContainerEntry> {
   constructor(config: DockerFamiliarConfig) {
     super();
     this.imageName = config.imageName ?? 'invoker-agent:latest';
-    this.workspaceDir = config.workspaceDir;
     this.callbackPort = config.callbackPort ?? 4000;
     this.claudeConfigDir = config.claudeConfigDir ?? join(homedir(), '.claude');
     this.sshDir = config.sshDir ?? join(homedir(), '.ssh');
@@ -157,16 +156,10 @@ export class DockerFamiliar extends BaseFamiliar<ContainerEntry> {
 
   private async resolveRepoUrl(request: WorkRequest): Promise<string> {
     if (request.inputs.repoUrl) return request.inputs.repoUrl;
-    try {
-      return await this.execGitSimple(['remote', 'get-url', 'origin'], this.workspaceDir);
-    } catch {
-      throw new Error(
-        `Docker task "${request.actionId}" requires a repoUrl but none was provided and ` +
-        `"git remote get-url origin" failed in ${this.workspaceDir}. ` +
-        `Either add repoUrl to your plan YAML, set docker.repoInImage in .invoker.json, ` +
-        `or ensure the repo has an origin remote.`,
-      );
-    }
+    throw new Error(
+      `Docker task "${request.actionId}" requires a repoUrl but none was provided. ` +
+      `Add repoUrl to your plan YAML or set docker.repoInImage in .invoker.json.`,
+    );
   }
 
   // ---------------------------------------------------------------------------

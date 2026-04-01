@@ -6,13 +6,22 @@
  */
 
 import type { ExecutionAgent, PlanningAgent } from './agent.js';
+import type { SessionDriver } from './session-driver.js';
 
 export class AgentRegistry {
   private executionAgents = new Map<string, ExecutionAgent>();
   private planningAgents = new Map<string, PlanningAgent>();
+  private sessionDrivers = new Map<string, SessionDriver>();
 
-  registerExecution(agent: ExecutionAgent): void {
+  registerExecution(agent: ExecutionAgent, sessionDriver?: SessionDriver): void {
     this.executionAgents.set(agent.name, agent);
+    if (sessionDriver) {
+      this.sessionDrivers.set(agent.name, sessionDriver);
+    }
+  }
+
+  getSessionDriver(agentName: string): SessionDriver | undefined {
+    return this.sessionDrivers.get(agentName);
   }
 
   registerPlanning(agent: PlanningAgent): void {

@@ -39,7 +39,6 @@ if [ -f "$E2E_FIXTURE_DIR/gh-marker.sh" ]; then
   chmod +x "$E2E_FIXTURE_DIR/gh-marker.sh" 2>/dev/null || true
 fi
 export PATH="$STUB_DIR:$PATH"
-export INVOKER_CLAUDE_FIX_COMMAND="$STUB_DIR/claude"
 export NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--max-old-space-size=512"
 unset ELECTRON_RUN_AS_NODE
 

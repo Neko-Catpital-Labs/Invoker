@@ -43,6 +43,9 @@ interface WorktreeEntry extends BaseEntry {
   poolSoftRelease?: () => void;
   /** Agent session ID for resuming sessions. */
   agentSessionId?: string;
+  /** Name of the ExecutionAgent that produced this session. */
+  agentName?: string;
+  rawStdout?: string;
 }
 
 /**
@@ -292,8 +295,14 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
       handle.agentSessionId = agentSessionId;
     }
 
+    const driver = this.agentRegistry?.getSessionDriver(executionAgent);
     child.stdout?.on('data', (chunk: Buffer) => {
-      this.emitOutput(executionId, chunk.toString());
+      const text = chunk.toString();
+      if (driver) {
+        entry.rawStdout = (entry.rawStdout ?? '') + text;
+      } else {
+        this.emitOutput(executionId, text);
+      }
     });
     child.stderr?.on('data', (chunk: Buffer) => {
       this.emitOutput(executionId, chunk.toString());
@@ -301,6 +310,10 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
 
     child.on('close', async (code, signal) => {
       const exitCode = code ?? (signal ? 1 : 0);
+      if (driver && entry.rawStdout) {
+        const readable = driver.processOutput(entry.agentSessionId ?? '', entry.rawStdout);
+        if (readable) this.emitOutput(executionId, readable);
+      }
       await this.handleProcessExit(executionId, request, acquired.worktreePath, exitCode, {
         signal,
         branch,

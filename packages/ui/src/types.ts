@@ -204,6 +204,7 @@ export interface ClaudeMessage {
 
 export interface InvokerAPI {
   getClaudeSession: (sessionId: string) => Promise<ClaudeMessage[] | null>;
+  getAgentSession: (sessionId: string, agentName?: string) => Promise<ClaudeMessage[] | null>;
   loadPlan: (planText: string) => Promise<void>;
   start: () => Promise<TaskState[]>;
   stop: () => Promise<void>;

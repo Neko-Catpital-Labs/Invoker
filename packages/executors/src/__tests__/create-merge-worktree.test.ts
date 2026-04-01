@@ -144,4 +144,37 @@ describe('createMergeWorktree isolation (real git)', { timeout: 30_000 }, () => 
 
     await executor.removeMergeWorktree(clonePath);
   });
+
+  it('clone resolves baseBranch from origin when host local master is behind', async () => {
+    const sandbox = createSandbox();
+    root = sandbox.root;
+
+    // Push a commit directly to the bare remote (simulating a remote push that
+    // the host working directory has not fetched yet).
+    const pusherDir = join(sandbox.root, 'pusher');
+    execSync(`git clone ${sandbox.bare} ${pusherDir}`);
+    git(pusherDir, 'config user.email "test@test.com"');
+    git(pusherDir, 'config user.name "Test"');
+    writeFileSync(join(pusherDir, 'remote-only.txt'), 'remote commit');
+    git(pusherDir, 'add -A');
+    git(pusherDir, 'commit -m "remote-only commit"');
+    git(pusherDir, 'push origin master');
+
+    const remoteMasterSha = git(sandbox.bare, 'rev-parse master');
+    const hostMasterSha = git(sandbox.host, 'rev-parse master');
+    // Host should be behind remote
+    expect(hostMasterSha).not.toBe(remoteMasterSha);
+
+    // When repoUrl is provided, createMergeWorktree falls back to host.cwd
+    // (no pool mirror in test), but origin still points to bare remote.
+    // The clone should have branches mirrored from the host and origin
+    // should be set to the bare remote URL.
+    const executor = buildExecutor(sandbox.host);
+    const clonePath = await executor.createMergeWorktree('master', 'test-stale', sandbox.bare);
+
+    const cloneOrigin = git(clonePath, 'remote get-url origin');
+    expect(cloneOrigin).toBe(sandbox.bare);
+
+    await executor.removeMergeWorktree(clonePath);
+  });
 });

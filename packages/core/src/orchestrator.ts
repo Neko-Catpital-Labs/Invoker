@@ -374,6 +374,7 @@ export class Orchestrator {
     const workflowId = `wf-${Date.now()}-${++workflowCounter}`;
     const localToScoped = buildPlanLocalToScopedIdMap(workflowId, plan.tasks);
 
+    // ── Conflict check (read-only) ──────────────────────────
     if (!opts?.allowGraphMutation) {
       const newScopedIds = new Set(plan.tasks.map((t) => localToScoped.get(t.id)!));
       const existingTasks = this.stateMachine.getAllTasks();
@@ -404,24 +405,9 @@ export class Orchestrator {
       }
     }
 
-    this.activeWorkflowIds.add(workflowId);
-
-    this.persistence.saveWorkflow({
-      id: workflowId,
-      name: plan.name,
-      description: plan.description,
-      visualProof: plan.visualProof,
-      status: 'running',
-      repoUrl: plan.repoUrl,
-      onFinish: plan.onFinish,
-      baseBranch: plan.baseBranch,
-      featureBranch: plan.featureBranch,
-      mergeMode: plan.mergeMode,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
-
-    const deltas: TaskDelta[] = [];
+    // ── Pass 1: validate all tasks, build TaskState objects ──
+    // No DB writes, no in-memory mutations. If anything throws,
+    // zero side effects occur.
     const dependedOn = new Set<string>();
     for (const taskDef of plan.tasks) {
       for (const dep of taskDef.dependencies ?? []) {
@@ -429,6 +415,7 @@ export class Orchestrator {
       }
     }
 
+    const validatedTasks: TaskState[] = [];
     for (const taskDef of plan.tasks) {
       // Validate executor routing conformance for tasks with commands
       assertExecutorRoutingConforms(
@@ -466,13 +453,10 @@ export class Orchestrator {
           executionAgent: taskDef.executionAgent,
         },
       );
-
-      this.createAndSync(task);
-      const delta: TaskDelta = { type: 'created', task };
-      deltas.push(delta);
+      validatedTasks.push(task);
     }
 
-    // Create terminal merge node depending on all leaf tasks
+    // Build merge node TaskState (still in validation pass — no writes yet)
     const leafIds = plan.tasks
       .filter((t) => !dependedOn.has(t.id))
       .map((t) => localToScoped.get(t.id)!);
@@ -483,6 +467,31 @@ export class Orchestrator {
       leafIds,
       { workflowId, isMergeNode: true, familiarType: 'merge' },
     );
+
+    // ── Pass 2: all validation passed — persist everything ──
+    this.activeWorkflowIds.add(workflowId);
+
+    this.persistence.saveWorkflow({
+      id: workflowId,
+      name: plan.name,
+      description: plan.description,
+      visualProof: plan.visualProof,
+      status: 'running',
+      repoUrl: plan.repoUrl,
+      onFinish: plan.onFinish,
+      baseBranch: plan.baseBranch,
+      featureBranch: plan.featureBranch,
+      mergeMode: plan.mergeMode,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+
+    const deltas: TaskDelta[] = [];
+    for (const task of validatedTasks) {
+      this.createAndSync(task);
+      deltas.push({ type: 'created', task });
+    }
+
     this.createAndSync(mergeTask);
     deltas.push({ type: 'created', task: mergeTask });
 

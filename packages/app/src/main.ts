@@ -928,6 +928,52 @@ function setupGuiMode(): void {
       }
     });
 
+    ipcMain.handle('invoker:get-agent-session', async (_event, sessionId: string, agentName?: string) => {
+      console.log(`[ipc] get-agent-session: "${sessionId}" agent="${agentName ?? 'claude'}"`);
+      try {
+        // Use session driver if available for this agent
+        const driver = agentRegistry?.getSessionDriver(agentName ?? '');
+        if (driver) {
+          const raw = driver.loadSession(sessionId);
+          if (!raw) return null;
+          return driver.parseSession(raw);
+        }
+        // Default: Claude session lookup (same logic as get-claude-session)
+        const claudeProjectsDir = path.join(homedir(), '.claude', 'projects');
+        if (existsSync(claudeProjectsDir)) {
+          const projectDirs = readdirSync(claudeProjectsDir, { withFileTypes: true })
+            .filter(d => d.isDirectory())
+            .map(d => d.name);
+          for (const dir of projectDirs) {
+            const candidate = path.join(claudeProjectsDir, dir, `${sessionId}.jsonl`);
+            if (existsSync(candidate)) {
+              return parseClaudeSessionJsonl(readFileSync(candidate, 'utf-8'));
+            }
+          }
+        }
+        // SSH fallback
+        const allTasks = orchestrator.getAllTasks();
+        const sshTask = allTasks.find(
+          t => t.execution.agentSessionId === sessionId
+            && t.config.familiarType === 'ssh'
+            && t.config.remoteTargetId,
+        );
+        if (sshTask) {
+          const targetId = sshTask.config.remoteTargetId!;
+          const targets = loadConfig().remoteTargets ?? {};
+          const target = targets[targetId];
+          if (target) {
+            const raw = await fetchRemoteClaudeSession(sessionId, target);
+            if (raw) return parseClaudeSessionJsonl(raw);
+          }
+        }
+        return null;
+      } catch (err) {
+        console.error(`[ipc] get-agent-session failed:`, err);
+        return null;
+      }
+    });
+
     ipcMain.handle('invoker:provide-input', (_event, taskId: string, input: string) => {
       orchestrator.provideInput(taskId, input);
     });

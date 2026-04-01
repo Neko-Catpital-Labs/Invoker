@@ -16,15 +16,19 @@ function makeTask(overrides: Partial<TaskState> = {}): TaskState {
   };
 }
 
-// Mock window.invoker.getClaudeSession
+// Mock window.invoker session fetchers
 const mockGetClaudeSession = vi.fn();
+const mockGetAgentSession = vi.fn();
 
 beforeEach(() => {
   mockGetClaudeSession.mockReset();
+  mockGetAgentSession.mockReset();
   // Default: resolve with null (no session found)
   mockGetClaudeSession.mockResolvedValue(null);
+  mockGetAgentSession.mockResolvedValue(null);
   (window as any).invoker = {
     getClaudeSession: mockGetClaudeSession,
+    getAgentSession: mockGetAgentSession,
   };
 });
 
@@ -199,7 +203,7 @@ describe('ApprovalModal', () => {
   // ── Context info blocks ──────────────────────────────
 
   it('renders only session block for fix approval with session ID and loads messages', async () => {
-    mockGetClaudeSession.mockResolvedValue([
+    mockGetAgentSession.mockResolvedValue([
       { role: 'user', content: 'Fix the test', timestamp: '' },
     ]);
 
@@ -337,7 +341,7 @@ describe('ApprovalModal', () => {
 
   it('shows loading state while fetching session conversation', () => {
     // Never resolve to keep loading state visible
-    mockGetClaudeSession.mockReturnValue(new Promise(() => {}));
+    mockGetAgentSession.mockReturnValue(new Promise(() => {}));
 
     render(
       <ApprovalModal
@@ -354,7 +358,7 @@ describe('ApprovalModal', () => {
   });
 
   it('renders conversation messages after loading', async () => {
-    mockGetClaudeSession.mockResolvedValue([
+    mockGetAgentSession.mockResolvedValue([
       { role: 'user', content: 'Please fix the failing test', timestamp: '2025-01-01T00:00:00Z' },
       { role: 'assistant', content: 'I found the issue and fixed it.', timestamp: '2025-01-01T00:00:01Z' },
     ]);
@@ -381,7 +385,7 @@ describe('ApprovalModal', () => {
   });
 
   it('renders error state when session fetch fails', async () => {
-    mockGetClaudeSession.mockRejectedValue(new Error('File not found'));
+    mockGetAgentSession.mockRejectedValue(new Error('File not found'));
 
     render(
       <ApprovalModal
@@ -410,7 +414,7 @@ describe('ApprovalModal', () => {
         onClose={vi.fn()}
       />,
     );
-    expect(mockGetClaudeSession).not.toHaveBeenCalled();
+    expect(mockGetAgentSession).not.toHaveBeenCalled();
   });
 
   // ── Approve callback ──────────────────────────────────────

@@ -178,6 +178,9 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
     case 'audit':
       await headlessAudit(args[1], deps);
       break;
+    case 'session':
+      await headlessSession(args[1], deps);
+      break;
     case 'cancel':
       await headlessCancel(args[1], deps);
       break;
@@ -242,6 +245,7 @@ ${BOLD}Usage:${RESET}
   electron dist/main.js --headless open-terminal <taskId>  Open OS terminal for a task
   electron dist/main.js --headless queue                   Show queue status
   electron dist/main.js --headless audit <taskId>          Print event history
+  electron dist/main.js --headless session <taskId>        Print agent session messages
   electron dist/main.js --headless delete-workflow <id>    Delete a single workflow by ID
   electron dist/main.js --headless set-merge-mode <workflowId> <mode>  manual | automatic | github | external_review
   electron dist/main.js --headless slack                   Start Slack bot (long-running)
@@ -548,6 +552,64 @@ async function headlessAudit(taskId: string | undefined, deps: Pick<HeadlessDeps
   if (!taskId) throw new Error('Usage: --headless audit <taskId>');
   const events = deps.persistence.getEvents(taskId);
   console.log(formatEventLog(events));
+}
+
+async function headlessSession(taskId: string | undefined, deps: Pick<HeadlessDeps, 'orchestrator' | 'persistence' | 'executionAgentRegistry'>): Promise<void> {
+  if (!taskId) throw new Error('Usage: --headless session <taskId>');
+  taskId = restoreWorkflowForTask(taskId, deps).resolvedTaskId;
+  const task = deps.orchestrator.getTask(taskId);
+  if (!task) throw new Error(`Task "${taskId}" not found`);
+
+  const sessionId = task.execution.agentSessionId;
+  if (!sessionId) {
+    console.log(`No agent session for task "${taskId}"`);
+    return;
+  }
+
+  const agentName = task.execution.agentName ?? 'claude';
+  console.log(`agent=${agentName} sessionId=${sessionId}`);
+
+  // Use session driver if available for this agent
+  const driver = deps.executionAgentRegistry?.getSessionDriver(agentName);
+  if (driver) {
+    const raw = driver.loadSession(sessionId);
+    if (!raw) {
+      console.log('Session file not found');
+      return;
+    }
+    const messages = driver.parseSession(raw);
+    for (const msg of messages) {
+      console.log(`[${msg.role}] ${msg.content}`);
+    }
+    return;
+  }
+
+  // Claude session: search ~/.claude/projects/
+  const { readFileSync, readdirSync, existsSync } = await import('node:fs');
+  const { join } = await import('node:path');
+  const { homedir } = await import('node:os');
+  const claudeProjectsDir = join(homedir(), '.claude', 'projects');
+  if (existsSync(claudeProjectsDir)) {
+    const projectDirs = readdirSync(claudeProjectsDir, { withFileTypes: true })
+      .filter(d => d.isDirectory())
+      .map(d => d.name);
+    for (const dir of projectDirs) {
+      const candidate = join(claudeProjectsDir, dir, `${sessionId}.jsonl`);
+      if (existsSync(candidate)) {
+        const raw = readFileSync(candidate, 'utf-8');
+        // Output raw lines for now
+        const lines = raw.split('\n').filter(l => l.trim());
+        for (const line of lines) {
+          try {
+            const entry = JSON.parse(line);
+            if (entry.role) console.log(`[${entry.role}] ${entry.message ?? ''}`);
+          } catch { /* skip */ }
+        }
+        return;
+      }
+    }
+  }
+  console.log('Session file not found');
 }
 
 async function headlessCancel(taskId: string, deps: HeadlessDeps): Promise<void> {

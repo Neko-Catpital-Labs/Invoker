@@ -29,7 +29,7 @@ export class CodexExecutionAgent implements ExecutionAgent {
 
   buildCommand(fullPrompt: string): AgentCommandSpec {
     const sessionId = randomUUID();
-    const args = ['exec'];
+    const args = ['exec', '--json'];
     if (this.fullAuto) args.push('--full-auto');
     args.push(fullPrompt);
     return { cmd: this.command, args, sessionId, fullPrompt };
@@ -44,7 +44,7 @@ export class CodexExecutionAgent implements ExecutionAgent {
 
   buildFixCommand(prompt: string): AgentCommandSpec {
     const sessionId = randomUUID();
-    const args = ['exec'];
+    const args = ['exec', '--json'];
     if (this.fullAuto) args.push('--full-auto');
     args.push(prompt);
     return { cmd: this.command, args, sessionId };

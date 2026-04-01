@@ -598,6 +598,102 @@ describe('Orchestrator', () => {
         expect(mergeNode!.config.familiarType).toBe('merge');
       });
     });
+
+    // ── atomicity ───────────────────────────────────────────
+
+    describe('atomicity', () => {
+      it('rolls back when a dependency references a nonexistent task', () => {
+        expect(() =>
+          orchestrator.loadPlan({
+            name: 'bad-dep-plan',
+            tasks: [
+              { id: 'good', description: 'Valid task' },
+              { id: 'bad', description: 'Bad dep', dependencies: ['nonexistent'] },
+            ],
+          }),
+        ).toThrow('depends on unknown task id');
+
+        // Zero persistence side effects
+        expect(persistence.tasks.size).toBe(0);
+        expect(persistence.workflows.size).toBe(0);
+        expect(publishedDeltas.length).toBe(0);
+        expect(orchestrator.getAllTasks()).toHaveLength(0);
+      });
+
+      it('rolls back when routing rule fails on second task', () => {
+        const routedOrchestrator = new Orchestrator({
+          persistence,
+          messageBus: bus,
+          maxConcurrency: 3,
+          executorRoutingRules: [
+            { pattern: 'deploy', familiarType: 'ssh', remoteTargetId: 'prod-server' },
+          ],
+        });
+
+        expect(() =>
+          routedOrchestrator.loadPlan({
+            name: 'routing-fail-plan',
+            tasks: [
+              { id: 'ok', description: 'Valid task', command: 'echo hi' },
+              { id: 'bad', description: 'Misrouted', command: 'deploy prod', familiarType: 'worktree' },
+            ],
+          }),
+        ).toThrow('requires familiarType');
+
+        expect(persistence.tasks.size).toBe(0);
+        expect(persistence.workflows.size).toBe(0);
+        expect(publishedDeltas.length).toBe(0);
+      });
+
+      it('rolls back when unknown familiarType appears on second task', () => {
+        expect(() =>
+          orchestrator.loadPlan({
+            name: 'unknown-type-plan',
+            tasks: [
+              { id: 'ok', description: 'Valid task' },
+              { id: 'bad', description: 'Kubernetes task', familiarType: 'kubernetes' },
+            ],
+          }),
+        ).toThrow('Unknown familiarType "kubernetes"');
+
+        expect(persistence.tasks.size).toBe(0);
+        expect(persistence.workflows.size).toBe(0);
+        expect(publishedDeltas.length).toBe(0);
+        expect(orchestrator.getAllTasks()).toHaveLength(0);
+      });
+
+      it('recovers: failed plan followed by valid plan loads correctly', () => {
+        // First plan fails
+        expect(() =>
+          orchestrator.loadPlan({
+            name: 'bad-plan',
+            tasks: [
+              { id: 'ok', description: 'Valid' },
+              { id: 'bad', description: 'Bad dep', dependencies: ['ghost'] },
+            ],
+          }),
+        ).toThrow();
+
+        // Second plan succeeds
+        orchestrator.loadPlan({
+          name: 'good-plan',
+          tasks: [
+            { id: 'a', description: 'Task A' },
+            { id: 'b', description: 'Task B', dependencies: ['a'] },
+          ],
+        });
+
+        const tasks = orchestrator.getAllTasks();
+        // 2 tasks + 1 merge node
+        expect(tasks).toHaveLength(3);
+        expect(persistence.workflows.size).toBe(1);
+        // 2 tasks + 1 merge node
+        expect(persistence.tasks.size).toBe(3);
+
+        const mergeNode = tasks.find((t) => t.config.isMergeNode);
+        expect(mergeNode).toBeDefined();
+      });
+    });
   });
 
   // ── startExecution ──────────────────────────────────────

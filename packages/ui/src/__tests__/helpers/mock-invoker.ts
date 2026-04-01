@@ -105,6 +105,7 @@ export function createMockInvoker(
       queued: [],
     })),
     getClaudeSession: vi.fn(async () => null),
+    getAgentSession: vi.fn(async () => null),
   };
 
   function setTasks(tasks: TaskState[], workflows?: WorkflowMeta[]) {

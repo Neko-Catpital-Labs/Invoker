@@ -1292,7 +1292,7 @@ describe('merge gate commit topology (real git)', () => {
 
     const plan: PlanDefinition = {
       name: 'Hook E2E Plan',
-      repoUrl: `file://${tmpDir}`,
+      repoUrl: `file://${bareDir}`,
       onFinish: 'merge',
       mergeMode: 'manual',
       baseBranch: 'master',
@@ -1326,11 +1326,14 @@ describe('merge gate commit topology (real git)', () => {
     const masterBeforeApprove = execSync('git rev-parse master', { cwd: tmpDir }).toString().trim();
     expect(masterBeforeApprove).toBe(masterHead);
 
-    // Feature branch is ephemeral (created in a merge clone that's deleted).
-    // Recreate it in tmpDir so approveMerge's createMergeWorktree can pick it up.
+    // The test's persistence.updateTask uses short IDs ('task-a') which don't
+    // match the orchestrator's prefixed IDs ('wf-XXXX/task-a'), so consolidation
+    // merges 0 task branches. Recreate feat/hook-e2e with the real merges and
+    // push to origin so approveMerge's merge worktree picks it up correctly.
     execSync('git checkout -b feat/hook-e2e master', { cwd: tmpDir });
     execSync('git merge --no-ff experiment/task-a -m "Merge experiment/task-a"', { cwd: tmpDir });
     execSync('git merge --no-ff experiment/task-b -m "Merge experiment/task-b"', { cwd: tmpDir });
+    execSync('git push --force origin feat/hook-e2e', { cwd: tmpDir });
     execSync('git checkout master', { cwd: tmpDir });
 
     // Approve via orchestrator — hook should fire and do the squash merge

@@ -36,7 +36,6 @@ import { normalizeBranchForGithubCli } from './github-branch-ref.js';
 import {
   resolveConflictWithClaudeImpl,
   fixWithClaudeImpl,
-  spawnClaudeFixImpl,
   spawnAgentFixViaRegistry,
 } from './conflict-resolver.js';
 import { DEFAULT_EXECUTION_AGENT } from './agent.js';
@@ -279,7 +278,6 @@ export class TaskExecutor {
         command: task.config.command,
         prompt: task.config.prompt,
         executionAgent: task.config.executionAgent?.trim() || DEFAULT_EXECUTION_AGENT,
-        workspacePath: this.cwd,
         repoUrl,
         featureBranch: task.config.featureBranch,
         upstreamContext: upstreamContext.length > 0 ? upstreamContext : undefined,
@@ -425,7 +423,6 @@ export class TaskExecutor {
       // Per-task Docker instance (each task gets its own container + execGitSimple routing)
       if (effectiveType === 'docker') {
         const docker = new DockerFamiliar({
-          workspaceDir: this.cwd,
           imageName: task.config.dockerImage ?? this.dockerConfig.imageName,
           repoInImage: this.dockerConfig.repoInImage,
           agentRegistry: this.executionAgentRegistry,
@@ -516,12 +513,12 @@ export class TaskExecutor {
     return buildMergeSummaryImpl(this, workflowId);
   }
 
-  async runVisualProofCapture(baseBranch: string, featureBranch: string, slug: string): Promise<string | undefined> {
+  async runVisualProofCapture(baseBranch: string, featureBranch: string, slug: string, repoUrl?: string): Promise<string | undefined> {
     try {
       const scriptPath = resolve(this.cwd, 'scripts/ui-visual-proof.sh');
       const outputDir = resolve(this.cwd, 'packages/app/e2e/visual-proof');
 
-      const wtDir = await this.createMergeWorktree(baseBranch, 'vp-' + slug);
+      const wtDir = await this.createMergeWorktree(baseBranch, 'vp-' + slug, repoUrl);
 
       const runCapture = (label: string): Promise<string> => {
         return new Promise((resolveP, reject) => {
@@ -546,7 +543,7 @@ export class TaskExecutor {
 
       try {
         await runCapture('before');
-        const featureSha = (await this.execGitReadonly(['rev-parse', featureBranch])).trim();
+        const featureSha = (await this.execGitIn(['rev-parse', featureBranch], wtDir)).trim();
         await this.execGitIn(['checkout', '-f', '--detach', featureSha], wtDir);
         await runCapture('after');
       } finally {
@@ -675,29 +672,46 @@ export class TaskExecutor {
     });
   }
 
-  /** @internal */ async createMergeWorktree(ref: string, label: string): Promise<string> {
+  /** @internal */ async createMergeWorktree(ref: string, label: string, repoUrl?: string): Promise<string> {
     const clonePath = resolve(homedir(), '.invoker', 'merge-clones', `${label}-${Date.now()}`);
     mkdirSync(resolve(homedir(), '.invoker', 'merge-clones'), { recursive: true });
-    // Resolve ref to SHA in the host repo — branch names may not resolve in the
-    // --no-checkout clone (git interprets them as paths and rejects --detach).
-    let refSha: string;
-    try {
-      refSha = (await this.execGitReadonly(['rev-parse', ref])).trim();
-    } catch {
-      refSha = (await this.execGitReadonly(['rev-parse', `origin/${ref}`])).trim();
+
+    // Determine clone source: prefer pool mirror (has latest remote refs), fall back to host repo
+    let cloneSource: string = this.cwd;
+    let originUrl: string | undefined;
+    if (repoUrl) {
+      const mirrorPath = await this.ensureRepoMirrorPath(repoUrl);
+      if (mirrorPath) {
+        cloneSource = mirrorPath;
+        originUrl = repoUrl;
+      } else {
+        console.warn(`[createMergeWorktree] Pool mirror unavailable for ${repoUrl}, falling back to host repo`);
+      }
     }
-    // Clone with hard-linked objects from host repo — near-instant, fully isolated refs
-    await this.execGitReadonly(['clone', '--local', '--no-checkout', this.cwd, clonePath]);
+
+    // Clone with hard-linked objects — near-instant, fully isolated refs
+    await this.execGitReadonly(['clone', '--local', '--no-checkout', cloneSource, clonePath]);
     // Detach HEAD so the fetch can overwrite all branch refs (including the default branch)
     const headSha = (await this.execGitIn(['rev-parse', 'HEAD'], clonePath)).trim();
     await this.execGitIn(['update-ref', '--no-deref', 'HEAD', headSha], clonePath);
-    // Mirror all host branches as local refs so bare branch names resolve.
-    // At this point origin still points to host.cwd, so this is a fast local fetch.
+    // Mirror all branches as local refs so bare branch names resolve.
     await this.execGitIn(['fetch', 'origin', '+refs/heads/*:refs/heads/*'], clonePath);
-    // Reconfigure origin to the real GitHub remote so subsequent push/fetch
-    // operations go directly to GitHub, bypassing the user's working directory.
-    const realOrigin = (await this.execGitReadonly(['remote', 'get-url', 'origin'])).trim();
-    await this.execGitIn(['remote', 'set-url', 'origin', realOrigin], clonePath);
+
+    // Reconfigure origin to the real remote URL (GitHub) so subsequent push/fetch
+    // operations go directly to GitHub, bypassing any intermediate clone.
+    if (!originUrl) {
+      // Fallback: read origin from the host repo (old behavior)
+      originUrl = (await this.execGitReadonly(['remote', 'get-url', 'origin'])).trim();
+    }
+    await this.execGitIn(['remote', 'set-url', 'origin', originUrl], clonePath);
+
+    // Resolve ref in the clone (not in host repo — the clone has mirrored branches)
+    let refSha: string;
+    try {
+      refSha = (await this.execGitIn(['rev-parse', ref], clonePath)).trim();
+    } catch {
+      refSha = (await this.execGitIn(['rev-parse', `origin/${ref}`], clonePath)).trim();
+    }
     await this.execGitIn(['checkout', '--detach', refSha], clonePath);
     return clonePath;
   }
@@ -791,12 +805,13 @@ export class TaskExecutor {
       ?? this.defaultBranch
       ?? await this.detectDefaultBranch();
 
-    const worktreeDir = await this.createMergeWorktree(baseBranch, 'recon-' + reconTaskId);
     const reconWorkflowId = reconTask?.config.workflowId;
     const reconRepoUrl =
       reconWorkflowId !== undefined && reconWorkflowId !== ''
         ? this.persistence.loadWorkflow(reconWorkflowId)?.repoUrl
         : undefined;
+
+    const worktreeDir = await this.createMergeWorktree(baseBranch, 'recon-' + reconTaskId, reconRepoUrl);
 
     try {
       try {
@@ -977,15 +992,15 @@ export class TaskExecutor {
     cwd: string,
     agentName: string = DEFAULT_EXECUTION_AGENT,
   ): Promise<{ stdout: string; sessionId: string }> {
-    // Use registry-based fix if agent supports buildFixCommand
-    if (this.executionAgentRegistry) {
-      const agent = this.executionAgentRegistry.get(agentName);
-      if (agent?.buildFixCommand) {
-        return spawnAgentFixViaRegistry(prompt, cwd, agent);
-      }
+    if (!this.executionAgentRegistry) {
+      throw new Error('executionAgentRegistry is required for spawnAgentFix');
     }
-    // Legacy fallback for Claude
-    return spawnClaudeFixImpl(prompt, cwd);
+    const agent = this.executionAgentRegistry.getOrThrow(agentName);
+    if (!agent.buildFixCommand) {
+      throw new Error(`Agent "${agentName}" does not support fix commands`);
+    }
+    const driver = this.executionAgentRegistry.getSessionDriver(agentName);
+    return spawnAgentFixViaRegistry(prompt, cwd, agent, driver);
   }
 
   getRemoteTargetConfig(targetId: string): { host: string; user: string; sshKeyPath: string; port?: number } | undefined {
@@ -1069,13 +1084,22 @@ export class TaskExecutor {
   ): Promise<Array<{taskId: string; description: string; summary?: string; commitHash?: string; commitMessage?: string}>> {
     const context: Array<{taskId: string; description: string; summary?: string; commitHash?: string; commitMessage?: string}> = [];
 
+    // Resolve pool mirror for gitLogMessage so commits are found in the right repo
+    let mirrorCwd: string | undefined;
+    if (task.config.workflowId) {
+      const wf = this.persistence.loadWorkflow?.(task.config.workflowId);
+      if (wf?.repoUrl) {
+        mirrorCwd = await this.ensureRepoMirrorPath(wf.repoUrl) ?? undefined;
+      }
+    }
+
     for (const depId of task.dependencies) {
       const dep = this.orchestrator.getTask(depId);
       if (dep && dep.status === 'completed') {
         let commitMessage: string | undefined;
         if (dep.execution.commit) {
           try {
-            commitMessage = await this.gitLogMessage(dep.execution.commit);
+            commitMessage = await this.gitLogMessage(dep.execution.commit, mirrorCwd);
           } catch {
             // Not in a git repo or commit not found
           }
@@ -1106,7 +1130,8 @@ export class TaskExecutor {
       .filter((t) => t.config.workflowId === workflowId && t.status === 'completed' && t.execution.branch && !t.config.isMergeNode)
       .map((t) => t.execution.branch!);
 
-    const worktreeDir = await this.createMergeWorktree(baseBranch, 'rebase-' + workflowId);
+    const rebaseRepoUrl = this.persistence.loadWorkflow?.(workflowId)?.repoUrl;
+    const worktreeDir = await this.createMergeWorktree(baseBranch, 'rebase-' + workflowId, rebaseRepoUrl);
 
     const rebasedBranches: string[] = [];
     const errors: string[] = [];
@@ -1138,10 +1163,10 @@ export class TaskExecutor {
     }
   }
 
-  /** @internal */ gitLogMessage(commitHash: string): Promise<string> {
+  /** @internal */ gitLogMessage(commitHash: string, cwd?: string): Promise<string> {
     return new Promise((resolvePromise, reject) => {
       const child = spawn('git', ['log', '-1', '--format=%B', commitHash], {
-        cwd: this.cwd,
+        cwd: cwd ?? this.cwd,
         stdio: ['ignore', 'pipe', 'pipe'],
       });
       let stdout = '';
@@ -1156,11 +1181,11 @@ export class TaskExecutor {
     });
   }
 
-  /** @internal */ gitDiffStat(branch: string): Promise<string> {
+  /** @internal */ gitDiffStat(branch: string, cwd?: string): Promise<string> {
     return new Promise((resolvePromise, reject) => {
       const baseBranch = this.defaultBranch ?? 'master';
       const child = spawn('git', ['diff', '--stat', `${baseBranch}...${branch}`], {
-        cwd: this.cwd,
+        cwd: cwd ?? this.cwd,
         stdio: ['ignore', 'pipe', 'pipe'],
       });
       let stdout = '';

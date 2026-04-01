@@ -33,7 +33,6 @@ invoker_e2e_init() {
   ln -sf "$INVOKER_E2E_ROOT/fixtures/codex-marker.sh" "$stubdir/codex"
   chmod +x "$INVOKER_E2E_ROOT/fixtures/codex-marker.sh" 2>/dev/null || true
   export PATH="$stubdir:$PATH"
-  export INVOKER_CLAUDE_FIX_COMMAND="$INVOKER_E2E_ROOT/fixtures/claude-marker.sh"
 }
 
 invoker_e2e_cleanup() {

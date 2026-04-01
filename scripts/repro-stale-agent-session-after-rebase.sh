@@ -41,7 +41,6 @@ STUB_DIR="$(mktemp -d "${TMPDIR:-/tmp}/invoker-repro-stub.XXXXXX")"
 ln -sf "$E2E_FIXTURES/claude-marker.sh" "$STUB_DIR/claude"
 chmod +x "$E2E_FIXTURES/claude-marker.sh" 2>/dev/null || true
 export PATH="$STUB_DIR:$PATH"
-export INVOKER_CLAUDE_FIX_COMMAND="$E2E_FIXTURES/claude-marker.sh"
 
 WF_ID=""
 REBASE_PID=""

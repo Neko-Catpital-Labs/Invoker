@@ -1,0 +1,17 @@
+/**
+ * SessionDriver — post-execution session processing, separate from ExecutionAgent.
+ *
+ * Agents say what to run. Drivers handle what happens to the output after exit.
+ * Co-registered alongside the agent via AgentRegistry.registerExecution().
+ */
+
+import type { AgentMessage } from './codex-session.js';
+
+export interface SessionDriver {
+  /** Post-exit: store raw stdout and return human-readable text for callers. */
+  processOutput(sessionId: string, rawStdout: string): string;
+  /** Load stored session content by ID for viewing. */
+  loadSession(sessionId: string): string | null;
+  /** Parse stored session content into displayable messages. */
+  parseSession(raw: string): AgentMessage[];
+}

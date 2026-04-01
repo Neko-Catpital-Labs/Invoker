@@ -6,6 +6,7 @@ import { bashPreserveOrReset, bashMergeUpstreams, parsePreserveResult, parseMerg
 import { RESTART_TO_BRANCH_TRACE } from './exec-trace.js';
 import type { AgentRegistry } from './agent-registry.js';
 
+
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
 const DEFAULT_MAX_DURATION_MS = 4 * 60 * 60 * 1000; // 4 hours
 
@@ -672,6 +673,8 @@ export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar
       error = pushError;
     }
 
+    const agentSessionId = opts?.agentSessionId;
+
     const response: WorkResponse = {
       requestId: request.requestId,
       actionId: request.actionId,
@@ -679,7 +682,8 @@ export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar
       outputs: {
         exitCode: status === 'failed' && exitCode === 0 ? 1 : exitCode,
         commitHash,
-        agentSessionId: opts?.agentSessionId,
+        agentSessionId,
+        agentName: opts?.agentName,
         branch: opts?.branch,
         ...(error ? { error } : {}),
         ...(opts?.branch ? { summary: `branch=${opts.branch} commit=${commitHash ?? 'unknown'}` } : {}),

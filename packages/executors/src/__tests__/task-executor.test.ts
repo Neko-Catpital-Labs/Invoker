@@ -139,16 +139,16 @@ describe('TaskExecutor', () => {
         status: 'completed',
         execution: { branch: 'experiment/dep-with-branch' },
       }));
-      tasks.set('dep-local', makeTask({
-        id: 'dep-local',
+      tasks.set('dep-worktree', makeTask({
+        id: 'dep-worktree',
         status: 'completed',
-        config: { familiarType: 'local' },
+        config: { familiarType: 'worktree' },
       }));
 
       const executor = createExecutorWithTasks(tasks);
       const task = makeTask({
         id: 'child',
-        dependencies: ['dep-with-branch', 'dep-local'],
+        dependencies: ['dep-with-branch', 'dep-worktree'],
       });
 
       const branches = executor.collectUpstreamBranches(task);
@@ -463,13 +463,13 @@ describe('TaskExecutor', () => {
       );
     });
 
-    it('rejects completed local dep with no branch (no type exceptions)', async () => {
+    it('rejects completed worktree dep with no branch (no type exceptions)', async () => {
       const handleWorkerResponse = vi.fn();
       const tasks = new Map<string, TaskState>();
-      tasks.set('dep-local', makeTask({
-        id: 'dep-local',
+      tasks.set('dep-worktree', makeTask({
+        id: 'dep-worktree',
         status: 'completed',
-        config: { familiarType: 'local' },
+        config: { familiarType: 'worktree' },
       }));
 
       const executor = new TaskExecutor({
@@ -489,7 +489,7 @@ describe('TaskExecutor', () => {
       const child = makeTask({
         id: 'child-task',
         status: 'running',
-        dependencies: ['dep-local'],
+        dependencies: ['dep-worktree'],
         config: { command: 'echo test' },
       });
 
@@ -639,13 +639,13 @@ describe('TaskExecutor', () => {
       );
     });
 
-    it('rejects completed local dep with no branch (no type exceptions)', async () => {
+    it('rejects completed worktree dep with no branch (no type exceptions)', async () => {
       const handleWorkerResponse = vi.fn();
       const tasks = new Map<string, TaskState>();
-      tasks.set('dep-local', makeTask({
-        id: 'dep-local',
+      tasks.set('dep-worktree', makeTask({
+        id: 'dep-worktree',
         status: 'completed',
-        config: { familiarType: 'local' },
+        config: { familiarType: 'worktree' },
       }));
 
       const executor = new TaskExecutor({
@@ -665,7 +665,7 @@ describe('TaskExecutor', () => {
       const child = makeTask({
         id: 'child-task',
         status: 'running',
-        dependencies: ['dep-local'],
+        dependencies: ['dep-worktree'],
         config: { command: 'echo test' },
       });
 
@@ -3535,7 +3535,7 @@ describe('TaskExecutor', () => {
       );
 
       expect((executor as any).runVisualProofCapture).toHaveBeenCalledWith(
-        'master', 'plan/test', expect.any(String),
+        'master', 'plan/test', expect.any(String), undefined,
       );
     });
 
@@ -3910,7 +3910,7 @@ describe('TaskExecutor', () => {
       });
       (executor as any).spawnAgentFix = async () => ({ stdout: 'Fixed it', sessionId: 'sess-abc-123' });
       await executor.fixWithClaude('fix-task', 'error output');
-      expect(updateTask).toHaveBeenCalledWith('fix-task', { execution: { agentSessionId: 'sess-abc-123' } });
+      expect(updateTask).toHaveBeenCalledWith('fix-task', { execution: { agentSessionId: 'sess-abc-123', agentName: 'claude' } });
     });
 
     it('does not perform any git checkout', async () => {

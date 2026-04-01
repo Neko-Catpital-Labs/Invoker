@@ -8,6 +8,7 @@ describe('CodexExecutionAgent', () => {
     expect(spec.cmd).toBe('codex');
     expect(spec.args).toContain('exec');
     expect(spec.args).toContain('--full-auto');
+    expect(spec.args).toContain('--json');
     expect(spec.args).toContain('test prompt');
   });
 
@@ -21,6 +22,7 @@ describe('CodexExecutionAgent', () => {
     const agent = new CodexExecutionAgent({ fullAuto: false });
     const spec = agent.buildCommand('prompt');
     expect(spec.args).not.toContain('--full-auto');
+    expect(spec.args).toContain('--json');
     expect(spec.args).toContain('exec');
     expect(spec.args).toContain('prompt');
   });
@@ -47,6 +49,7 @@ describe('CodexExecutionAgent', () => {
     expect(spec.cmd).toBe('codex');
     expect(spec.args).toContain('exec');
     expect(spec.args).toContain('--full-auto');
+    expect(spec.args).toContain('--json');
     expect(spec.args).toContain('fix the bug');
     expect(spec.sessionId).toBeDefined();
   });
@@ -55,7 +58,7 @@ describe('CodexExecutionAgent', () => {
     const agent = new CodexExecutionAgent({ fullAuto: false });
     const spec = agent.buildFixCommand('fix the bug');
     expect(spec.args).not.toContain('--full-auto');
-    expect(spec.args).toEqual(['exec', 'fix the bug']);
+    expect(spec.args).toEqual(['exec', '--json', 'fix the bug']);
     expect(spec.sessionId).toBeDefined();
   });
 

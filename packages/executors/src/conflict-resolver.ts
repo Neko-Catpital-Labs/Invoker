@@ -13,6 +13,7 @@ import type { Orchestrator } from '@invoker/core';
 import type { SQLiteAdapter } from '@invoker/persistence';
 import { cleanElectronEnv } from './process-utils.js';
 import type { ExecutionAgent } from './agent.js';
+import type { SessionDriver } from './session-driver.js';
 
 // ── Host interface ───────────────────────────────────────
 
@@ -34,7 +35,7 @@ export interface ConflictResolverHost {
 
   execGitReadonly(args: string[], cwd?: string): Promise<string>;
   execGitIn(args: string[], dir: string): Promise<string>;
-  createMergeWorktree(ref: string, label: string): Promise<string>;
+  createMergeWorktree(ref: string, label: string, repoUrl?: string): Promise<string>;
   removeMergeWorktree(dir: string): Promise<void>;
   spawnAgentFix(prompt: string, cwd: string, agentName?: string): Promise<{ stdout: string; sessionId: string }>;
   getRemoteTargetConfig?(targetId: string): RemoteTargetConfig | undefined;
@@ -290,40 +291,24 @@ export async function fixWithClaudeImpl(
   const cwd = workspacePath;
 
   const agentLabel = agentName ?? 'claude';
-  const { stdout: output, sessionId } = await host.spawnAgentFix(prompt, cwd, agentName);
-  if (output) {
-    host.persistence.appendTaskOutput(taskId, `\n[Fix with ${agentLabel}] Output:\n${output}`);
+  try {
+    const { stdout: output, sessionId } = await host.spawnAgentFix(prompt, cwd, agentName);
+    if (output) {
+      host.persistence.appendTaskOutput(taskId, `\n[Fix with ${agentLabel}] Output:\n${output}`);
+    }
+    host.persistence.updateTask(taskId, { execution: { agentSessionId: sessionId, agentName: agentLabel } });
+    console.log(`[fixWithClaude] Successfully applied fix for ${taskId} via ${agentLabel} (session=${sessionId})`);
+  } catch (err: any) {
+    // Persist session ID even on failure so the session can be audited
+    const failedSessionId = err?.sessionId as string | undefined;
+    if (failedSessionId) {
+      host.persistence.updateTask(taskId, { execution: { agentSessionId: failedSessionId, agentName: agentLabel } });
+      console.log(`[fixWithClaude] Fix failed for ${taskId} via ${agentLabel}, session persisted (session=${failedSessionId})`);
+    }
+    throw err;
   }
-  host.persistence.updateTask(taskId, { execution: { agentSessionId: sessionId } });
-  console.log(`[fixWithClaude] Successfully applied fix for ${taskId} via ${agentLabel} (session=${sessionId})`);
 }
 
-/**
- * Spawn Claude subprocess for local fixes.
- */
-export function spawnClaudeFixImpl(
-  prompt: string,
-  cwd: string,
-): Promise<{ stdout: string; sessionId: string }> {
-  const cmd = process.env.INVOKER_CLAUDE_FIX_COMMAND ?? 'claude';
-  const sessionId = randomUUID();
-  return new Promise<{ stdout: string; sessionId: string }>((resolve, reject) => {
-    const child = spawn(cmd, ['--session-id', sessionId, '-p', prompt, '--dangerously-skip-permissions'], {
-      cwd,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env: cleanElectronEnv(),
-    });
-    let stdout = '';
-    let stderr = '';
-    child.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
-    child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
-    child.on('close', (code) => {
-      if (code === 0) resolve({ stdout, sessionId });
-      else reject(new Error(`Claude exited with code ${code}: ${stderr.trim()}`));
-    });
-    child.on('error', (err) => reject(err));
-  });
-}
 
 /**
  * Spawn Claude on a remote SSH host for fixing SSH-executed tasks.
@@ -383,6 +368,7 @@ export function spawnAgentFixViaRegistry(
   prompt: string,
   cwd: string,
   agent: ExecutionAgent,
+  driver?: SessionDriver,
 ): Promise<{ stdout: string; sessionId: string }> {
   const spec = agent.buildFixCommand?.(prompt);
   if (!spec) throw new Error(`Agent "${agent.name}" does not support fix commands`);
@@ -398,8 +384,15 @@ export function spawnAgentFixViaRegistry(
     child.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
     child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
     child.on('close', (code) => {
-      if (code === 0) resolve({ stdout, sessionId });
-      else reject(new Error(`${agent.name} fix exited with code ${code}: ${stderr.trim()}`));
+      const displayStdout = driver ? driver.processOutput(sessionId, stdout) : stdout;
+      if (code === 0) {
+        resolve({ stdout: displayStdout, sessionId });
+      } else {
+        reject(Object.assign(
+          new Error(`${agent.name} fix exited with code ${code}: ${stderr.trim()}`),
+          { sessionId },
+        ));
+      }
     });
     child.on('error', (err) => reject(err));
   });
