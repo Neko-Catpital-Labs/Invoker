@@ -27,7 +27,6 @@ export function ApprovalModal({
 }: ApprovalModalProps) {
   const isFixApproval = Boolean(task.execution.pendingFixError);
   const isMergeNode = Boolean(task.config.isMergeNode);
-  console.log(`[ApprovalModal] render: taskId=${task.id} isFixApproval=${isFixApproval} agentSessionId=${task.execution.agentSessionId}`);
 
   const defaultReason = [
     task.execution.agentSessionId && `Claude session: ${task.execution.agentSessionId}`,
@@ -113,7 +112,7 @@ export function ApprovalModal({
               <p className="text-xs text-gray-500 mb-2 font-mono">{task.execution.agentSessionId}</p>
               {sessionLoading && <p className="text-xs text-gray-500" data-testid="session-loading">Loading conversation...</p>}
               {sessionMessages && (
-                <div className="max-h-[40vh] overflow-y-auto space-y-2" data-testid="session-messages">
+                <div className="space-y-2" data-testid="session-messages">
                   {sessionMessages.map((msg, i) => (
                     <div key={i} className="text-xs">
                       <span className={msg.role === 'user' ? 'text-blue-400' : 'text-green-400'}>
@@ -125,16 +124,6 @@ export function ApprovalModal({
                 </div>
               )}
               {sessionError && <p className="text-xs text-red-400" data-testid="session-error">Could not load session</p>}
-            </div>
-          )}
-
-          {isFixApproval && (
-            <div className="bg-gray-700/50 rounded p-3" data-testid="fix-context">
-              <h3 className="text-sm font-medium text-gray-300 mb-1">Fix Context</h3>
-              <p className="text-xs text-gray-400 whitespace-pre-wrap max-h-[20vh] overflow-y-auto">
-                <span className="text-gray-500">Error: </span>
-                {task.execution.pendingFixError}
-              </p>
             </div>
           )}
 

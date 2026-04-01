@@ -198,7 +198,7 @@ describe('ApprovalModal', () => {
 
   // ── Context info blocks ──────────────────────────────
 
-  it('renders both session and fix context blocks for fix approval with session ID', async () => {
+  it('renders only session block for fix approval with session ID and loads messages', async () => {
     mockGetClaudeSession.mockResolvedValue([
       { role: 'user', content: 'Fix the test', timestamp: '' },
     ]);
@@ -220,12 +220,17 @@ describe('ApprovalModal', () => {
     expect(sessionBlock).toBeInTheDocument();
     expect(sessionBlock).toHaveTextContent('sess-abc-123');
 
-    const fixBlock = screen.getByTestId('fix-context');
-    expect(fixBlock).toBeInTheDocument();
-    expect(fixBlock).toHaveTextContent('Test failed: expected 1 but got 2');
+    // Wait for session messages to load
+    await waitFor(() => {
+      expect(screen.getByTestId('session-messages')).toBeInTheDocument();
+    });
+    expect(screen.getByText('Fix the test')).toBeInTheDocument();
+
+    // Fix context block should not exist
+    expect(screen.queryByTestId('fix-context')).not.toBeInTheDocument();
   });
 
-  it('renders fix context with only error when no session ID', () => {
+  it('renders no context blocks for fix approval with only error when no session ID', () => {
     render(
       <ApprovalModal
         task={makeTask({
@@ -236,10 +241,13 @@ describe('ApprovalModal', () => {
         onClose={vi.fn()}
       />,
     );
+    // No session block
     expect(screen.queryByTestId('claude-session-context')).not.toBeInTheDocument();
-    const fixBlock = screen.getByTestId('fix-context');
-    expect(fixBlock).toBeInTheDocument();
-    expect(fixBlock).toHaveTextContent('Exit code 1');
+    // No fix context block
+    expect(screen.queryByTestId('fix-context')).not.toBeInTheDocument();
+    // But should still show the heading and button
+    expect(screen.getByText('Approve AI Fix')).toBeInTheDocument();
+    expect(screen.getByText('Approve Fix')).toBeInTheDocument();
   });
 
   it('renders session block for generic approval with agentSessionId', () => {

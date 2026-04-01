@@ -217,4 +217,32 @@ test.describe('Visual proof capture', () => {
 
     await captureScreenshot(page, 'interactive-status-hues');
   });
+
+  test('approve-fix modal — no Fix Context panel', async ({ page }) => {
+    await loadPlan(page, TEST_PLAN);
+    await injectTaskStates(page, [
+      {
+        taskId: 'task-beta',
+        changes: {
+          status: 'awaiting_approval',
+          execution: { pendingFixError: 'Visual proof error line' },
+        },
+      },
+    ]);
+
+    // Click the task-beta node to open task panel
+    await page.locator('[data-testid="rf__node-task-beta"]').click();
+    await expect(page.getByRole('heading', { name: 'Second test task depending on alpha' })).toBeVisible();
+
+    // Click Approve Fix button to open the modal
+    await page.getByRole('button', { name: 'Approve Fix' }).click();
+
+    // Assert modal is visible
+    await expect(page.getByRole('heading', { name: 'Approve AI Fix' })).toBeVisible();
+
+    // Assert the old Fix Context section is gone
+    await expect(page.getByText('Fix Context')).not.toBeVisible();
+
+    await captureScreenshot(page, 'approve-fix-modal-simplified');
+  });
 });
