@@ -228,6 +228,28 @@ describe.skipIf(!DOCKER_OK)('DockerFamiliar (real Docker)', () => {
     expect(existsSync(join(workDir, 'created-by-docker.txt'))).toBe(true);
   }, 60_000);
 
+  it('writes to ~/.cache inside container as host UID without EACCES', async () => {
+    setup();
+
+    // Regression: repro-docker-homedir.sh — container runs as host UID but
+    // /home/invoker is owned by UID 1000, causing EACCES on ~/.cache writes.
+    const request = makeRequest({
+      actionType: 'command',
+      inputs: { command: 'mkdir -p ~/.cache/test-dir && echo HOMEDIR_OK' },
+    });
+
+    const handle = await familiar.start(request);
+    const output: string[] = [];
+    familiar.onOutput(handle, (data) => output.push(data));
+
+    const response = await waitForComplete(familiar, handle);
+    const combined = output.join('');
+
+    expect(response.status).toBe('completed');
+    expect(response.outputs.exitCode).toBe(0);
+    expect(combined).toContain('HOMEDIR_OK');
+  }, 60_000);
+
   it('runs multiple containers concurrently', async () => {
     setup();
 

@@ -120,11 +120,11 @@ describe('rebase-and-retry: pool mirror cleanup before restart', { timeout: 120_
       },
       setTaskAwaitingApproval: () => {},
       restartWorkflow: (_workflowId: string): TaskState[] => {
-        // Mimic Orchestrator.restartWorkflow: reset execution state
+        // Mimic Orchestrator.restartWorkflow: reset ALL execution state
+        // Must match the real resetChanges in orchestrator.ts (lines 977-996)
         for (const t of tasks) {
           (t as any).status = 'pending';
           (t as any).execution = {
-            ...t.execution,
             startedAt: undefined,
             completedAt: undefined,
             error: undefined,
@@ -132,6 +132,13 @@ describe('rebase-and-retry: pool mirror cleanup before restart', { timeout: 120_
             commit: undefined,
             branch: undefined,
             workspacePath: undefined,
+            lastHeartbeatAt: undefined,
+            reviewUrl: undefined,
+            reviewId: undefined,
+            reviewStatus: undefined,
+            reviewProviderId: undefined,
+            agentSessionId: undefined,
+            containerId: undefined,
           };
         }
         return tasks;
@@ -221,6 +228,11 @@ describe('rebase-and-retry: pool mirror cleanup before restart', { timeout: 120_
       taskExecutor: executor,
     };
     await rebaseAndRetry('task-a', deps);
+
+    // Verify stale execution metadata is cleared (regression: repro-stale-agent-session-after-rebase.sh)
+    expect(task.execution.agentSessionId).toBeUndefined();
+    expect(task.execution.containerId).toBeUndefined();
+    expect(task.status).toBe('pending');
 
     expect(branchExists(clonePath(), branchFirst)).toBe(false);
 
