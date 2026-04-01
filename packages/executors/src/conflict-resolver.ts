@@ -248,6 +248,7 @@ export async function fixWithClaudeImpl(
   host: ConflictResolverHost,
   taskId: string,
   taskOutput: string,
+  agentName?: string,
 ): Promise<void> {
   const task = host.orchestrator.getTask(taskId);
   if (!task) throw new Error(`Task ${taskId} not found`);
@@ -264,6 +265,7 @@ export async function fixWithClaudeImpl(
     if (!target) {
       throw new Error(`No remote target config for "${task.config.remoteTargetId}" — cannot fix on remote`);
     }
+    // TODO: thread agentName for remote fixes
     const { stdout: output, sessionId } = await spawnRemoteClaudeFixImpl(prompt, workspacePath, target);
     if (output) {
       host.persistence.appendTaskOutput(taskId, `\n[Fix with Claude (remote)] Output:\n${output}`);
@@ -282,12 +284,13 @@ export async function fixWithClaudeImpl(
   }
   const cwd = workspacePath;
 
-  const { stdout: output, sessionId } = await host.spawnAgentFix(prompt, cwd);
+  const agentLabel = agentName ?? 'claude';
+  const { stdout: output, sessionId } = await host.spawnAgentFix(prompt, cwd, agentName);
   if (output) {
-    host.persistence.appendTaskOutput(taskId, `\n[Fix with Claude] Output:\n${output}`);
+    host.persistence.appendTaskOutput(taskId, `\n[Fix with ${agentLabel}] Output:\n${output}`);
   }
   host.persistence.updateTask(taskId, { execution: { agentSessionId: sessionId } });
-  console.log(`[fixWithClaude] Successfully applied fix for ${taskId} (session=${sessionId})`);
+  console.log(`[fixWithClaude] Successfully applied fix for ${taskId} via ${agentLabel} (session=${sessionId})`);
 }
 
 /**
