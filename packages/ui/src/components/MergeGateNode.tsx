@@ -107,7 +107,7 @@ export function MergeGateNode({ data }: MergeGateNodeProps) {
   const approveLabel = pendingFixError ? 'Approve Fix' : mergeApproveLabel;
 
   return (
-    <div className={`rounded-lg border-2 border-dashed px-3 py-2 w-[200px] transition-opacity duration-200 ${colors.bg} ${colors.border} ${dimmed ? 'opacity-20 pointer-events-none' : ''}`}>
+    <div className={`rounded-lg border-2 border-dashed px-3 py-2 w-[200px] transition-opacity duration-75 ${colors.bg} ${colors.border} ${dimmed ? 'opacity-20 pointer-events-none' : ''}`}>
       <Handle type="target" position={Position.Left} className="!bg-gray-500" />
 
       <div className={`flex items-center gap-1.5 ${colors.text}`}>

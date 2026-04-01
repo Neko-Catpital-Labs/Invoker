@@ -6,7 +6,7 @@
  * Status labels are clickable to filter DAG nodes by status.
  */
 
-import { useRef, useCallback } from 'react';
+import { useRef, useCallback, useEffect } from 'react';
 import type { TaskState } from '../types.js';
 
 interface StatusBarProps {
@@ -70,7 +70,9 @@ export function StatusBar({ tasks, activeFilters, onStatusClick, onStatusDoubleC
 
   const handleClick = useCallback((key: string) => {
     if (clickTimer.current) clearTimeout(clickTimer.current);
-    clickTimer.current = setTimeout(() => onStatusClick?.(key), 250);
+    // 200ms delay balances responsiveness with OS double-click detection (typically 200-500ms).
+    // Lower values risk single-click firing before double-click completes on slower systems.
+    clickTimer.current = setTimeout(() => onStatusClick?.(key), 200);
   }, [onStatusClick]);
 
   const handleDoubleClick = useCallback((key: string) => {
@@ -78,11 +80,17 @@ export function StatusBar({ tasks, activeFilters, onStatusClick, onStatusDoubleC
     onStatusDoubleClick?.(key);
   }, [onStatusDoubleClick]);
 
+  useEffect(() => {
+    return () => {
+      if (clickTimer.current) clearTimeout(clickTimer.current);
+    };
+  }, []);
+
   const hasFilters = activeFilters && activeFilters.size > 0;
   const filterClass = (key: string) => {
     if (!hasFilters) return 'cursor-pointer hover:brightness-125 select-none';
     const isActive = activeFilters!.has(key);
-    return `cursor-pointer select-none transition-opacity duration-200 ${
+    return `cursor-pointer select-none transition-opacity duration-75 ${
       isActive ? 'brightness-125 underline underline-offset-4' : 'opacity-40'
     }`;
   };
