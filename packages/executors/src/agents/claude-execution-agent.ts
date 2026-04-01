@@ -49,9 +49,11 @@ export class ClaudeExecutionAgent implements ExecutionAgent {
   }
 
   buildFixCommand(prompt: string): AgentCommandSpec {
+    const sessionId = randomUUID();
     return {
       cmd: this.command,
-      args: ['-p', prompt, '--dangerously-skip-permissions'],
+      args: ['--session-id', sessionId, '-p', prompt, '--dangerously-skip-permissions'],
+      sessionId,
     };
   }
 

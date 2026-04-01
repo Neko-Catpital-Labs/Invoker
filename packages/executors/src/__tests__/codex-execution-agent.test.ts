@@ -48,6 +48,7 @@ describe('CodexExecutionAgent', () => {
     expect(spec.args).toContain('exec');
     expect(spec.args).toContain('--full-auto');
     expect(spec.args).toContain('fix the bug');
+    expect(spec.sessionId).toBeDefined();
   });
 
   it('buildFixCommand omits --full-auto when disabled', () => {
@@ -55,6 +56,16 @@ describe('CodexExecutionAgent', () => {
     const spec = agent.buildFixCommand('fix the bug');
     expect(spec.args).not.toContain('--full-auto');
     expect(spec.args).toEqual(['exec', 'fix the bug']);
+    expect(spec.sessionId).toBeDefined();
+  });
+
+  it('buildFixCommand generates unique session IDs', () => {
+    const agent = new CodexExecutionAgent();
+    const ids = new Set<string>();
+    for (let i = 0; i < 5; i++) {
+      ids.add(agent.buildFixCommand('p').sessionId!);
+    }
+    expect(ids.size).toBe(5);
   });
 
   it('has correct readonly properties', () => {
