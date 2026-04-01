@@ -8,7 +8,6 @@
 import { execSync } from 'node:child_process';
 import { parse as parseYaml } from 'yaml';
 import type { PlanDefinition } from '@invoker/core';
-import { UTILIZATION_MAX } from '@invoker/core';
 import { loadConfig } from './config.js';
 import { normalizeMergeModeForPersistence } from './merge-mode.js';
 
@@ -57,7 +56,6 @@ export interface RawPlanTask {
   dockerImage?: string;
   remoteTargetId?: string;
   autoFix?: boolean;
-  utilization?: number | 'max';
   executionAgent?: string;
 }
 
@@ -219,7 +217,6 @@ export function parsePlan(yamlContent: string): PlanDefinition {
       dockerImage: task.dockerImage,
       remoteTargetId: task.remoteTargetId,
       autoFix: task.autoFix,
-      utilization: task.utilization === 'max' ? UTILIZATION_MAX : task.utilization,
       executionAgent: task.executionAgent?.trim() || undefined,
     };
   });

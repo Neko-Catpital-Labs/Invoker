@@ -2,7 +2,7 @@
  * QueueView — Displays scheduler queue status with cancel capability.
  *
  * Shows three sections:
- * - Running tasks (from scheduler, with utilization)
+ * - Running tasks (from scheduler)
  * - Queued tasks (from scheduler, with priority)
  * - Pending tasks (from task state map, not yet scheduled)
  *
@@ -20,10 +20,10 @@ interface QueueViewProps {
 }
 
 interface QueueStatus {
-  maxUtilization: number;
-  runningUtilization: number;
-  running: Array<{ taskId: string; utilization: number; description: string }>;
-  queued: Array<{ taskId: string; priority: number; utilization: number; description: string }>;
+  maxConcurrency: number;
+  runningCount: number;
+  running: Array<{ taskId: string; description: string }>;
+  queued: Array<{ taskId: string; priority: number; description: string }>;
 }
 
 export function QueueView({ tasks, onTaskClick, onCancel, selectedTaskId }: QueueViewProps) {
@@ -62,25 +62,12 @@ export function QueueView({ tasks, onTaskClick, onCancel, selectedTaskId }: Queu
     (t) => t.status === 'pending' || t.status === 'blocked',
   );
 
-  const utilizationPct =
-    queueStatus && queueStatus.maxUtilization > 0
-      ? Math.round((queueStatus.runningUtilization / queueStatus.maxUtilization) * 100)
-      : 0;
-
   return (
     <div className="h-full overflow-y-auto bg-gray-900 p-4 flex flex-col gap-4">
-      {/* Section A: Utilization Bar */}
+      {/* Section A: Concurrency Status */}
       {queueStatus && (
-        <div>
-          <div className="text-xs text-gray-400 mb-1">
-            Utilization: {queueStatus.runningUtilization} / {queueStatus.maxUtilization}
-          </div>
-          <div className="w-full h-3 bg-gray-700 rounded overflow-hidden">
-            <div
-              className="h-full bg-blue-500 transition-all"
-              style={{ width: `${utilizationPct}%` }}
-            />
-          </div>
+        <div className="text-xs text-gray-400 mb-1">
+          Running {queueStatus.runningCount} / {queueStatus.maxConcurrency}
         </div>
       )}
 
@@ -103,9 +90,6 @@ export function QueueView({ tasks, onTaskClick, onCancel, selectedTaskId }: Queu
                 <span className="text-sm font-bold text-gray-100 truncate block">{job.taskId}</span>
                 <span className="text-xs text-gray-400 truncate block">{job.description}</span>
               </div>
-              <span className="text-xs bg-yellow-900 text-yellow-300 px-2 py-0.5 rounded ml-2 shrink-0">
-                util: {job.utilization}
-              </span>
               <button
                 onClick={(e) => {
                   e.stopPropagation();
@@ -144,9 +128,6 @@ export function QueueView({ tasks, onTaskClick, onCancel, selectedTaskId }: Queu
               </div>
               <span className="text-xs bg-cyan-900 text-cyan-300 px-2 py-0.5 rounded ml-2 shrink-0">
                 pri: {job.priority}
-              </span>
-              <span className="text-xs bg-gray-700 text-gray-300 px-2 py-0.5 rounded ml-1 shrink-0">
-                util: {job.utilization}
               </span>
               <button
                 onClick={(e) => {

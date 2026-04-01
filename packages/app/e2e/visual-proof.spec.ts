@@ -245,4 +245,14 @@ test.describe('Visual proof capture', () => {
 
     await captureScreenshot(page, 'approve-fix-modal-simplified');
   });
+
+  test('queue view concurrency display', async ({ page }) => {
+    await loadPlan(page, TEST_PLAN);
+    const now = new Date();
+    await injectTaskStates(page, [
+      { taskId: 'task-alpha', changes: { status: 'running', execution: { startedAt: now } } },
+    ]);
+    // Navigate to queue tab if there is one, or verify queue section is visible
+    await captureScreenshot(page, 'queue-view-concurrency');
+  });
 });

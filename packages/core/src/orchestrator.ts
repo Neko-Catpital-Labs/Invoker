@@ -19,8 +19,6 @@ import { TaskStateMachine } from './state-machine.js';
 import { ResponseHandler } from './response-handler.js';
 import type { ParsedResponse } from './response-handler.js';
 import { TaskScheduler } from './scheduler.js';
-import { ResourceEstimator } from './resource-estimator.js';
-import type { UtilizationRule } from './resource-estimator.js';
 import type { TaskState, TaskDelta, TaskStateChanges, Attempt } from './task-types.js';
 import { createTaskState, createAttempt } from './task-types.js';
 import type { WorkResponse } from '@invoker/protocol';
@@ -269,9 +267,6 @@ export interface OrchestratorConfig {
   persistence: OrchestratorPersistence;
   messageBus: OrchestratorMessageBus;
   maxConcurrency?: number;
-  maxUtilization?: number;
-  utilizationRules?: UtilizationRule[];
-  defaultUtilization?: number;
   /**
    * Rules that validate task execution environment against command patterns.
    * When loading a plan, the orchestrator validates that tasks with commands matching
@@ -289,7 +284,6 @@ export class Orchestrator {
   private readonly persistence: OrchestratorPersistence;
   private readonly messageBus: OrchestratorMessageBus;
   private readonly maxConcurrency: number;
-  private readonly estimator: ResourceEstimator;
   private readonly executorRoutingRules: ExecutorRoutingRule[];
 
   private activeWorkflowIds = new Set<string>();
@@ -303,14 +297,7 @@ export class Orchestrator {
 
     this.stateMachine = new TaskStateMachine(new ActionGraph());
     this.responseHandler = new ResponseHandler();
-    this.estimator = new ResourceEstimator(
-      config.utilizationRules ?? [],
-      config.defaultUtilization ?? 50,
-    );
-
-    const defaultUtil = config.defaultUtilization ?? 50;
-    const maxUtil = config.maxUtilization ?? (config.maxConcurrency ? config.maxConcurrency * defaultUtil : 100);
-    this.scheduler = new TaskScheduler(maxUtil);
+    this.scheduler = new TaskScheduler(this.maxConcurrency);
   }
 
   // ── DB Sync Helpers ────────────────────────────────────────
@@ -517,8 +504,7 @@ export class Orchestrator {
     const started: TaskState[] = [];
 
     for (const task of readyTasks) {
-      const utilization = this.estimator.estimateUtilization(task);
-      this.scheduler.enqueue({ taskId: task.id, priority: 0, utilization });
+      this.scheduler.enqueue({ taskId: task.id, priority: 0 });
     }
 
     return this.drainScheduler();
@@ -840,7 +826,7 @@ export class Orchestrator {
 
     const readyTaskIds = this.stateMachine.findNewlyReadyTasks(reconId);
     const schedulerStatus = this.scheduler.getStatus();
-    console.log(`[orchestrator] selectExperiment "${reconId}": ${readyTaskIds.length} newly ready: [${readyTaskIds.join(', ')}], scheduler: util=${schedulerStatus.runningUtilization}/${schedulerStatus.maxUtilization} running=${schedulerStatus.runningCount} queued=${schedulerStatus.queueLength}`);
+    console.log(`[orchestrator] selectExperiment "${reconId}": ${readyTaskIds.length} newly ready: [${readyTaskIds.join(', ')}], scheduler: running=${schedulerStatus.runningCount}/${schedulerStatus.maxConcurrency} queued=${schedulerStatus.queueLength}`);
     const started = this.autoStartReadyTasks(readyTaskIds);
     this.checkWorkflowCompletion();
     return started;
@@ -887,7 +873,7 @@ export class Orchestrator {
 
     const readyTaskIds = this.stateMachine.findNewlyReadyTasks(reconId);
     const schedulerStatus = this.scheduler.getStatus();
-    console.log(`[orchestrator] selectExperiments "${reconId}": ${readyTaskIds.length} newly ready: [${readyTaskIds.join(', ')}], scheduler: util=${schedulerStatus.runningUtilization}/${schedulerStatus.maxUtilization} running=${schedulerStatus.runningCount} queued=${schedulerStatus.queueLength}`);
+    console.log(`[orchestrator] selectExperiments "${reconId}": ${readyTaskIds.length} newly ready: [${readyTaskIds.join(', ')}], scheduler: running=${schedulerStatus.runningCount}/${schedulerStatus.maxConcurrency} queued=${schedulerStatus.queueLength}`);
     const started = this.autoStartReadyTasks(readyTaskIds);
     this.checkWorkflowCompletion();
     return started;
@@ -1597,18 +1583,18 @@ export class Orchestrator {
    * Get detailed queue status with task metadata for display.
    */
   getQueueStatus(): {
-    maxUtilization: number;
-    runningUtilization: number;
-    running: Array<{ taskId: string; utilization: number; description: string }>;
-    queued: Array<{ taskId: string; priority: number; utilization: number; description: string }>;
+    maxConcurrency: number;
+    runningCount: number;
+    running: Array<{ taskId: string; description: string }>;
+    queued: Array<{ taskId: string; priority: number; description: string }>;
   } {
     const status = this.scheduler.getStatus();
     const runningJobs = this.scheduler.getRunningJobs();
     const queuedJobs = this.scheduler.getQueuedJobs();
 
     return {
-      maxUtilization: status.maxUtilization,
-      runningUtilization: status.runningUtilization,
+      maxConcurrency: status.maxConcurrency,
+      runningCount: status.runningCount,
       running: runningJobs.map(j => ({
         ...j,
         description: this.stateGetTask(j.taskId)?.description ?? '',
@@ -1616,7 +1602,6 @@ export class Orchestrator {
       queued: queuedJobs.map(j => ({
         taskId: j.taskId,
         priority: j.priority,
-        utilization: j.utilization ?? 50,
         description: this.stateGetTask(j.taskId)?.description ?? '',
       })),
     };
@@ -1968,14 +1953,13 @@ export class Orchestrator {
         this.writeAndSync(taskId, { status: 'pending' });
       }
 
-      const utilization = this.estimator.estimateUtilization(task);
-      this.scheduler.enqueue({ taskId, priority: 0, utilization });
+      this.scheduler.enqueue({ taskId, priority: 0 });
     }
 
     return this.drainScheduler();
   }
 
-  /** Drain the scheduler queue, starting tasks that fit the resource budget. */
+  /** Drain the scheduler queue, starting tasks that fit the concurrency limit. */
   private drainScheduler(): TaskState[] {
     for (const runningId of this.scheduler.getRunningTaskIds()) {
       const task = this.stateGetTask(runningId);

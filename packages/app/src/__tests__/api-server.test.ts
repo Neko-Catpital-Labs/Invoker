@@ -91,9 +91,9 @@ function createMocks() {
       cancelTask: vi.fn(() => ({ cancelled: ['task-1'], runningCancelled: ['task-1'] })),
       deleteWorkflow: vi.fn(),
       getQueueStatus: vi.fn(() => ({
-        maxUtilization: 4,
-        runningUtilization: 1,
-        running: [{ taskId: 'task-1', utilization: 1, description: 'test' }],
+        maxConcurrency: 4,
+        runningCount: 1,
+        running: [{ taskId: 'task-1', description: 'test' }],
         queued: [],
       })),
     },
@@ -164,8 +164,8 @@ beforeEach(() => {
   mocks.orchestrator.editTaskType.mockReturnValue([makeTask()]);
   mocks.orchestrator.cancelTask.mockReturnValue({ cancelled: ['task-1'], runningCancelled: ['task-1'] });
   mocks.orchestrator.getQueueStatus.mockReturnValue({
-    maxUtilization: 4, runningUtilization: 1,
-    running: [{ taskId: 'task-1', utilization: 1, description: 'test' }], queued: [],
+    maxConcurrency: 4, runningCount: 1,
+    running: [{ taskId: 'task-1', description: 'test' }], queued: [],
   });
   mocks.persistence.listWorkflows.mockReturnValue([{ id: 'wf-1', name: 'test', generation: 1 }]);
   mocks.persistence.loadWorkflow.mockReturnValue({ id: 'wf-1', generation: 1 });
@@ -247,7 +247,7 @@ describe('GET /api/queue', () => {
   it('returns queue status', async () => {
     const res = await request(port, 'GET', '/api/queue');
     expect(res.status).toBe(200);
-    expect(res.body.maxUtilization).toBe(4);
+    expect(res.body.maxConcurrency).toBe(4);
     expect(res.body.running).toHaveLength(1);
     expect(mocks.orchestrator.getQueueStatus).toHaveBeenCalled();
   });

@@ -12,14 +12,6 @@ import { homedir } from 'node:os';
 export interface InvokerConfig {
   defaultBranch?: string;
   /**
-   * Pattern-based rules mapping command substrings to utilization values.
-   * Utilization is 0-100 (percentage of executor capacity) or "max" (exclusive).
-   * First matching rule wins. Checked after per-task config.utilization.
-   */
-  utilizationRules?: Array<{ pattern: string; utilization: number | 'max' }>;
-  /** Default utilization when no rule matches. Default: 50 */
-  defaultUtilization?: number;
-  /**
    * When true, skip relaunching orphaned running tasks on GUI startup.
    * Useful when you want to inspect state before tasks resume automatically.
    * Default: false
@@ -36,7 +28,7 @@ export interface InvokerConfig {
   planningTimeoutSeconds?: number;
   /** Interval for heartbeat messages posted to Slack during planning in seconds. Default: 120 (2 minutes). Set to 0 to disable. */
   planningHeartbeatIntervalSeconds?: number;
-  /** Maximum number of tasks that can run concurrently. Overrides utilization-based scheduling. Default: 3 (from Orchestrator). */
+  /** Maximum number of tasks that can run concurrently. Default: 3. */
   maxConcurrency?: number;
   /** Browser executable for opening external URLs (e.g. "firefox"). Default: Chrome. */
   browser?: string;

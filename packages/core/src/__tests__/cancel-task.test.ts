@@ -277,7 +277,7 @@ describe('getQueueStatus', () => {
     expect(runningA).toBeDefined();
     expect(runningA!.description).toBe('Task A');
 
-    expect(typeof status.maxUtilization).toBe('number');
-    expect(typeof status.runningUtilization).toBe('number');
+    expect(typeof status.maxConcurrency).toBe('number');
+    expect(typeof status.runningCount).toBe('number');
   });
 });

@@ -491,7 +491,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       exec.startedAt?.toISOString() ?? null,
       exec.completedAt?.toISOString() ?? null,
       exec.lastHeartbeatAt?.toISOString() ?? null,
-      cfg.utilization ?? null,
+      null,
       exec.pendingFixError ?? null,
       exec.reviewUrl ?? null,
       exec.reviewId ?? null,
@@ -553,10 +553,6 @@ export class SQLiteAdapter implements PersistenceAdapter {
           setClauses.push(`${col} = ?`);
           values.push((changes.config as any)[key] ? 1 : 0);
         }
-      }
-      if ('utilization' in changes.config) {
-        setClauses.push('utilization = ?');
-        values.push(changes.config.utilization ?? null);
       }
       if ('experimentVariants' in changes.config) {
         setClauses.push('experiment_variants = ?');
@@ -1145,7 +1141,6 @@ export class SQLiteAdapter implements PersistenceAdapter {
         approach: row.approach ?? undefined,
         testPlan: row.test_plan ?? undefined,
         reproCommand: row.repro_command ?? undefined,
-        utilization: row.utilization ?? undefined,
         executionAgent: row.execution_agent ?? undefined,
       },
       execution: {

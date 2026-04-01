@@ -49,14 +49,13 @@ if (process.platform === 'linux') {
   app.commandLine.appendSwitch('disable-software-rasterizer');
 }
 
-import { Orchestrator, UTILIZATION_MAX } from '@invoker/core';
+import { Orchestrator } from '@invoker/core';
 import type {
   PlanDefinition,
   TaskDelta,
   TaskReplacementDef,
   TaskState,
   TaskStateChanges,
-  UtilizationRule,
 } from '@invoker/core';
 import { SQLiteAdapter, ConversationRepository } from '@invoker/persistence';
 import { IpcBus, Channels } from '@invoker/transport';
@@ -128,14 +127,6 @@ let orchestrator: Orchestrator;
 const repoRoot = path.resolve(__dirname, '..', '..', '..');
 const invokerConfig: InvokerConfig = loadConfig();
 
-function resolveUtilizationRules(config: InvokerConfig): UtilizationRule[] {
-  if (!config.utilizationRules) return [];
-  return config.utilizationRules.map((r) => ({
-    pattern: r.pattern,
-    utilization: r.utilization === 'max' ? UTILIZATION_MAX : r.utilization,
-  }));
-}
-
 /** Single root for DB, repos cache, and worktrees (must stay consistent). */
 function resolveInvokerHomeRoot(): string {
   return (
@@ -163,8 +154,6 @@ async function initServices(): Promise<void> {
   orchestrator = new Orchestrator({
     persistence, messageBus,
     maxConcurrency: invokerConfig.maxConcurrency,
-    utilizationRules: resolveUtilizationRules(invokerConfig),
-    defaultUtilization: invokerConfig.defaultUtilization,
     executorRoutingRules: invokerConfig.executorRoutingRules ?? [],
   });
 
@@ -761,8 +750,6 @@ function setupGuiMode(): void {
       orchestrator = new Orchestrator({
     persistence, messageBus,
     maxConcurrency: invokerConfig.maxConcurrency,
-    utilizationRules: resolveUtilizationRules(invokerConfig),
-    defaultUtilization: invokerConfig.defaultUtilization,
     executorRoutingRules: invokerConfig.executorRoutingRules ?? [],
   });
       rebuildTaskExecutor();

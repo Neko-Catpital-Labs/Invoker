@@ -135,12 +135,12 @@ export interface InvokerAPI {
   // Cancel task with DAG cascade
   cancelTask: (taskId: string) => Promise<{ cancelled: string[]; runningCancelled: string[] }>;
 
-  // Queue status with utilization details
+  // Queue status with concurrency details
   getQueueStatus: () => Promise<{
-    maxUtilization: number;
-    runningUtilization: number;
-    running: Array<{ taskId: string; utilization: number; description: string }>;
-    queued: Array<{ taskId: string; priority: number; utilization: number; description: string }>;
+    maxConcurrency: number;
+    runningCount: number;
+    running: Array<{ taskId: string; description: string }>;
+    queued: Array<{ taskId: string; priority: number; description: string }>;
   }>;
 
   /** Test-only (NODE_ENV=test): persist task updates and push deltas without running the executor. */

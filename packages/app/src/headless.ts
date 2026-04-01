@@ -240,7 +240,7 @@ ${BOLD}Usage:${RESET}
   electron dist/main.js --headless task-status <taskId>     Print raw task status
   electron dist/main.js --headless cancel <taskId>         Cancel task + all downstream
   electron dist/main.js --headless open-terminal <taskId>  Open OS terminal for a task
-  electron dist/main.js --headless queue                   Show queue status & utilization
+  electron dist/main.js --headless queue                   Show queue status
   electron dist/main.js --headless audit <taskId>          Print event history
   electron dist/main.js --headless delete-workflow <id>    Delete a single workflow by ID
   electron dist/main.js --headless set-merge-mode <workflowId> <mode>  manual | automatic | github | external_review

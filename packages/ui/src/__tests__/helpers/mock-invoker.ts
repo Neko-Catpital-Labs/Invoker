@@ -99,8 +99,8 @@ export function createMockInvoker(
     checkPrStatuses: vi.fn(async () => {}),
     cancelTask: vi.fn(async () => ({ cancelled: [], runningCancelled: [] })),
     getQueueStatus: vi.fn(async () => ({
-      maxUtilization: 0,
-      runningUtilization: 0,
+      maxConcurrency: 0,
+      runningCount: 0,
       running: [],
       queued: [],
     })),

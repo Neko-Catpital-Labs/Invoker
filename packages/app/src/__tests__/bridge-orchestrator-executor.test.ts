@@ -1378,7 +1378,7 @@ describe('Flow: scheduler health across experiment lifecycle', () => {
 
     // Inject a leaked scheduler slot by manually adding a fake running task
     const scheduler = (h.orchestrator as any).scheduler;
-    scheduler.enqueue({ taskId: 'phantom-leaked', priority: 1, utilization: 50 });
+    scheduler.enqueue({ taskId: 'phantom-leaked', priority: 1 });
     scheduler.dequeue(); // moves phantom to running set
     expect(scheduler.isRunning('phantom-leaked')).toBe(true);
 

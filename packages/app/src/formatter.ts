@@ -131,35 +131,31 @@ export function formatEventLog(events: TaskEvent[]): string {
 }
 
 /**
- * Format queue status showing utilization and running/queued tasks.
+ * Format queue status showing concurrency and running/queued tasks.
  *
  * Example output:
  * ```
- * Utilization: 75/100 (75%)
+ * Concurrency: 2 / 3 running
  *
  * Running (2):
- *   ● task-a — Run tests [util: 50]
- *   ● task-b — Build frontend [util: 25]
+ *   ● task-a — Run tests
+ *   ● task-b — Build frontend
  *
  * Queued (1):
- *   ○ task-c — Deploy staging [util: 50, pri: 0]
+ *   ○ task-c — Deploy staging [pri: 0]
  * ```
  */
 export function formatQueueStatus(status: {
-  maxUtilization: number;
-  runningUtilization: number;
-  running: Array<{ taskId: string; utilization: number; description: string }>;
-  queued: Array<{ taskId: string; priority: number; utilization: number; description: string }>;
+  maxConcurrency: number;
+  runningCount: number;
+  running: Array<{ taskId: string; description: string }>;
+  queued: Array<{ taskId: string; priority: number; description: string }>;
 }): string {
-  const utilizationPct = status.maxUtilization > 0
-    ? Math.round((status.runningUtilization / status.maxUtilization) * 100)
-    : 0;
-
   const lines: string[] = [];
 
-  // Utilization header
+  // Concurrency header
   lines.push(
-    `${BOLD}Utilization:${RESET} ${status.runningUtilization}/${status.maxUtilization} (${utilizationPct}%)`,
+    `${BOLD}Concurrency:${RESET} ${status.runningCount} / ${status.maxConcurrency} running`,
   );
   lines.push('');
 
@@ -170,7 +166,7 @@ export function formatQueueStatus(status: {
   } else {
     for (const task of status.running) {
       lines.push(
-        `${YELLOW}  ● ${BOLD}${task.taskId}${RESET}${YELLOW} — ${task.description} ${DIM}[util: ${task.utilization}]${RESET}`,
+        `${YELLOW}  ● ${BOLD}${task.taskId}${RESET}${YELLOW} — ${task.description}${RESET}`,
       );
     }
   }
@@ -183,7 +179,7 @@ export function formatQueueStatus(status: {
   } else {
     for (const task of status.queued) {
       lines.push(
-        `${CYAN}  ○ ${BOLD}${task.taskId}${RESET}${CYAN} — ${task.description} ${DIM}[util: ${task.utilization}, pri: ${task.priority}]${RESET}`,
+        `${CYAN}  ○ ${BOLD}${task.taskId}${RESET}${CYAN} — ${task.description} ${DIM}[pri: ${task.priority}]${RESET}`,
       );
     }
   }
