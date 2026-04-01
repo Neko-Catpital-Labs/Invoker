@@ -49,6 +49,7 @@ export interface ConflictResolverHost {
 export async function resolveConflictWithClaudeImpl(
   host: ConflictResolverHost,
   taskId: string,
+  savedError?: string,
 ): Promise<void> {
   const task = host.orchestrator.getTask(taskId);
   if (!task) throw new Error(`Task ${taskId} not found`);
@@ -56,7 +57,7 @@ export async function resolveConflictWithClaudeImpl(
     throw new Error(`Task ${taskId} is not in a resolvable state (status: ${task.status})`);
   }
 
-  const errorStr = task.execution.error;
+  const errorStr = savedError ?? task.execution.error;
   if (!errorStr) throw new Error(`Task ${taskId} has no error information`);
 
   let conflictInfo: { failedBranch: string; conflictFiles: string[] };
@@ -249,6 +250,7 @@ export async function fixWithClaudeImpl(
   taskId: string,
   taskOutput: string,
   agentName?: string,
+  savedError?: string,
 ): Promise<void> {
   const task = host.orchestrator.getTask(taskId);
   if (!task) throw new Error(`Task ${taskId} not found`);
@@ -256,7 +258,10 @@ export async function fixWithClaudeImpl(
     throw new Error(`Task ${taskId} is not in a fixable state (status: ${task.status})`);
   }
 
-  const prompt = buildFixPrompt(task, taskOutput);
+  const taskForPrompt = savedError
+    ? { ...task, execution: { ...task.execution, error: savedError } }
+    : task;
+  const prompt = buildFixPrompt(taskForPrompt, taskOutput);
   const workspacePath = task.execution.workspacePath;
 
   // SSH tasks: run Claude on the remote host

@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { buildFixPrompt } from '../conflict-resolver.js';
+import { buildFixPrompt, resolveConflictWithClaudeImpl } from '../conflict-resolver.js';
+import type { ConflictResolverHost } from '../conflict-resolver.js';
+import type { Orchestrator } from '@invoker/core';
 
 describe('buildFixPrompt', () => {
   it('generates command-focused prompt when task has a command', () => {
@@ -74,5 +76,54 @@ describe('buildFixPrompt', () => {
     const prompt = buildFixPrompt(task, '');
     expect(prompt).toContain('merge operation failed');
     expect(prompt).toContain('Unknown error');
+  });
+});
+
+describe('resolveConflictWithClaudeImpl — savedError param', () => {
+  function makeHost(task: Record<string, any>): ConflictResolverHost {
+    return {
+      orchestrator: {
+        getTask: () => task,
+        getAllTasks: () => [],
+      } as unknown as Orchestrator,
+      persistence: {} as any,
+      cwd: '/tmp',
+      execGitReadonly: async () => '',
+      execGitIn: async () => '',
+      createMergeWorktree: async () => '/tmp/wt',
+      removeMergeWorktree: async () => {},
+      spawnAgentFix: async () => ({ stdout: '', sessionId: '' }),
+    };
+  }
+
+  it('throws "no error information" when error was cleared and no savedError provided', async () => {
+    const task = {
+      id: 'task-1',
+      status: 'fixing_with_ai',
+      execution: { error: undefined },
+      config: {},
+    };
+    await expect(
+      resolveConflictWithClaudeImpl(makeHost(task), 'task-1'),
+    ).rejects.toThrow('no error information');
+  });
+
+  it('uses savedError to proceed past error check when task.execution.error is cleared', async () => {
+    const conflictError = JSON.stringify({
+      type: 'merge_conflict',
+      failedBranch: 'invoker/dep-1',
+      conflictFiles: ['src/index.ts'],
+    });
+    const task = {
+      id: 'task-1',
+      status: 'fixing_with_ai',
+      execution: { error: undefined, branch: 'invoker/task-1', workspacePath: '/tmp/ws' },
+      config: {},
+    };
+    // With savedError the function should NOT throw "no error information".
+    // Mocked git ops succeed, so it resolves cleanly.
+    await expect(
+      resolveConflictWithClaudeImpl(makeHost(task), 'task-1', conflictError),
+    ).resolves.toBeUndefined();
   });
 });

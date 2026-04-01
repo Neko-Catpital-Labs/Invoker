@@ -191,7 +191,7 @@ export async function resolveConflictWithClaudeAction(
   const { orchestrator, persistence, taskExecutor } = deps;
   const { savedError } = orchestrator.beginConflictResolution(taskId);
   try {
-    await taskExecutor.resolveConflictWithClaude(taskId);
+    await taskExecutor.resolveConflictWithClaude(taskId, savedError);
     const started = orchestrator.restartTask(taskId);
     const runnable = started.filter((t) => t.status === 'running');
     await taskExecutor.executeTasks(runnable);

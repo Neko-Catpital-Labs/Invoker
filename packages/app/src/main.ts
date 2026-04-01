@@ -1136,7 +1136,7 @@ function setupGuiMode(): void {
       const { savedError } = orchestrator.beginConflictResolution(taskId);
       try {
         const output = persistence.getTaskOutput(taskId);
-        await taskExecutor.fixWithClaude(taskId, output, agentName);
+        await taskExecutor.fixWithClaude(taskId, output, agentName, savedError);
         orchestrator.setFixAwaitingApproval(taskId, savedError);
       } catch (err) {
         console.error(`[ipc] fix-with-claude failed: ${err}`);

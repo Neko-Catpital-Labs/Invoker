@@ -53,7 +53,7 @@ describe('resolveConflictWithClaudeAction', () => {
     });
 
     expect(orchestrator.beginConflictResolution).toHaveBeenCalledWith('task-a');
-    expect(taskExecutor.resolveConflictWithClaude).toHaveBeenCalledWith('task-a');
+    expect(taskExecutor.resolveConflictWithClaude).toHaveBeenCalledWith('task-a', 'saved-err');
     expect(orchestrator.restartTask).toHaveBeenCalledWith('task-a');
     expect(taskExecutor.executeTasks).toHaveBeenCalledWith(
       expect.arrayContaining([expect.objectContaining({ id: 'task-a', status: 'running' })]),

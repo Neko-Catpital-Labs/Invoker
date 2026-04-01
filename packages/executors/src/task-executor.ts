@@ -835,24 +835,24 @@ export class TaskExecutor {
    * Resolve a merge conflict by re-creating the merge state and spawning Claude to fix it.
    * After resolution, the task is restarted so it can proceed normally.
    */
-  async resolveConflictWithClaude(taskId: string): Promise<void> {
-    return resolveConflictWithClaudeImpl(this, taskId);
+  async resolveConflictWithClaude(taskId: string, savedError?: string): Promise<void> {
+    return resolveConflictWithClaudeImpl(this, taskId, savedError);
   }
 
-  async resolveConflictWithCodex(taskId: string): Promise<void> {
-    return resolveConflictWithClaudeImpl(this, taskId);
+  async resolveConflictWithCodex(taskId: string, savedError?: string): Promise<void> {
+    return resolveConflictWithClaudeImpl(this, taskId, savedError);
   }
 
   /**
    * Fix a failed command task by spawning Claude with the error output.
    * Claude's output is captured and appended to the task's output stream for auditing.
    */
-  async fixWithClaude(taskId: string, taskOutput: string, agentName?: string): Promise<void> {
-    return fixWithClaudeImpl(this, taskId, taskOutput, agentName);
+  async fixWithClaude(taskId: string, taskOutput: string, agentName?: string, savedError?: string): Promise<void> {
+    return fixWithClaudeImpl(this, taskId, taskOutput, agentName, savedError);
   }
 
-  async fixWithCodex(taskId: string, taskOutput: string): Promise<void> {
-    return fixWithClaudeImpl(this, taskId, taskOutput, 'codex');
+  async fixWithCodex(taskId: string, taskOutput: string, savedError?: string): Promise<void> {
+    return fixWithClaudeImpl(this, taskId, taskOutput, 'codex', savedError);
   }
 
   resumeMergeGatePolling(): void {

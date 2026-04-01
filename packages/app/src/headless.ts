@@ -441,7 +441,7 @@ async function headlessFix(taskId: string, deps: HeadlessDeps, agentArg?: string
   const agent = (agentArg ?? 'claude').toLowerCase();
   try {
     const output = deps.persistence.getTaskOutput(taskId);
-    await te.fixWithClaude(taskId, output, agent);
+    await te.fixWithClaude(taskId, output, agent, savedError);
     deps.orchestrator.setFixAwaitingApproval(taskId, savedError);
     console.log(`Fix applied for task: ${taskId} (${agent}). Use 'approve ${taskId}' or 'reject ${taskId}' to finalize.`);
   } catch (err) {
