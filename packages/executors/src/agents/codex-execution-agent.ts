@@ -43,9 +43,10 @@ export class CodexExecutionAgent implements ExecutionAgent {
   }
 
   buildFixCommand(prompt: string): AgentCommandSpec {
+    const sessionId = randomUUID();
     const args = ['exec'];
     if (this.fullAuto) args.push('--full-auto');
     args.push(prompt);
-    return { cmd: this.command, args };
+    return { cmd: this.command, args, sessionId };
   }
 }

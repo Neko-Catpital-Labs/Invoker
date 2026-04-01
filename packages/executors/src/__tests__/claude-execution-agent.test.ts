@@ -53,6 +53,52 @@ describe('ClaudeExecutionAgent', () => {
     });
   });
 
+  describe('buildFixCommand', () => {
+    it('returns claude command with session ID, prompt, and dangerously-skip-permissions', () => {
+      const agent = new ClaudeExecutionAgent();
+      const spec = agent.buildFixCommand('Fix the bug');
+
+      expect(spec.cmd).toBe('claude');
+      expect(spec.args).toContain('--session-id');
+      expect(spec.args).toContain('-p');
+      expect(spec.args).toContain('Fix the bug');
+      expect(spec.args).toContain('--dangerously-skip-permissions');
+      expect(spec.sessionId).toBeDefined();
+    });
+
+    it('generates unique session IDs per call', () => {
+      const agent = new ClaudeExecutionAgent();
+      const spec1 = agent.buildFixCommand('prompt 1');
+      const spec2 = agent.buildFixCommand('prompt 2');
+
+      expect(spec1.sessionId).not.toBe(spec2.sessionId);
+    });
+
+    it('uses custom command from config', () => {
+      const agent = new ClaudeExecutionAgent({ command: '/usr/local/bin/claude' });
+      const spec = agent.buildFixCommand('test');
+
+      expect(spec.cmd).toBe('/usr/local/bin/claude');
+    });
+
+    it('places --session-id and its value at the start of args', () => {
+      const agent = new ClaudeExecutionAgent();
+      const spec = agent.buildFixCommand('my prompt');
+
+      expect(spec.args[0]).toBe('--session-id');
+      expect(spec.args[1]).toBe(spec.sessionId);
+    });
+
+    it('stored sessionId matches the CLI --session-id value', () => {
+      const agent = new ClaudeExecutionAgent();
+      const spec = agent.buildFixCommand('my prompt');
+
+      const idx = spec.args.indexOf('--session-id');
+      expect(idx).toBeGreaterThanOrEqual(0);
+      expect(spec.args[idx + 1]).toBe(spec.sessionId);
+    });
+  });
+
   describe('buildResumeArgs', () => {
     it('returns claude resume command with session ID', () => {
       const agent = new ClaudeExecutionAgent();

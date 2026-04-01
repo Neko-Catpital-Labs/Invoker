@@ -166,11 +166,21 @@ describe('Agent × Familiar matrix', () => {
 
     // 7. buildFixCommand (if applicable)
     if (agentDef.hasBuildFixCommand) {
-      it('buildFixCommand returns correct cmd and args', () => {
+      it('buildFixCommand returns correct cmd, args, and sessionId', () => {
         const spec = agent.buildFixCommand?.('Fix the failing test');
         expect(spec).toBeDefined();
         expect(spec!.cmd).toBe(agentDef.expectedCmdPrefix);
         expect(spec!.args.length).toBeGreaterThan(0);
+        expect(typeof spec!.sessionId).toBe('string');
+        expect(spec!.sessionId!.length).toBeGreaterThan(0);
+      });
+
+      it('buildFixCommand generates unique session IDs', () => {
+        const ids = new Set<string>();
+        for (let i = 0; i < 5; i++) {
+          ids.add(agent.buildFixCommand!(`fix ${i}`).sessionId!);
+        }
+        expect(ids.size).toBe(5);
       });
     }
 
