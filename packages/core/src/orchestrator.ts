@@ -1592,6 +1592,7 @@ export class Orchestrator {
       completedAt: Date;
       commit?: string;
       agentSessionId?: string;
+      branch?: string;
     } = {
       exitCode: parsed.exitCode,
       completedAt: new Date(),
@@ -1601,6 +1602,9 @@ export class Orchestrator {
     }
     if (parsed.agentSessionId !== undefined) {
       execution.agentSessionId = parsed.agentSessionId;
+    }
+    if (parsed.branch !== undefined) {
+      execution.branch = parsed.branch;
     }
 
     const changes: TaskStateChanges = {

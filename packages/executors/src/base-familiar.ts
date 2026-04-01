@@ -682,6 +682,7 @@ export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar
         commitHash,
         agentSessionId: opts?.agentSessionId,
         agentName: opts?.agentName,
+        branch: opts?.branch,
         ...(error ? { error } : {}),
         ...(opts?.branch ? { summary: `branch=${opts.branch} commit=${commitHash ?? 'unknown'}` } : {}),
       },

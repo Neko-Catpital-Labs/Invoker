@@ -3698,7 +3698,7 @@ describe('TaskExecutor', () => {
       });
 
       let mergeCount = 0;
-      (executor as any).execGitReadonly = async (args: string[], cwd?: string) => {
+      (executor as any).execGitReadonly = async (args: string[]) => {
         if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
         if (args[0] === 'merge' && args[1] === '--no-ff') {
           mergeCount++;
@@ -3931,7 +3931,7 @@ describe('TaskExecutor', () => {
         cwd: '/tmp/repo',
       });
       const gitCalls: string[][] = [];
-      (executor as any).execGitReadonly = async (args: string[], cwd?: string) => {
+      (executor as any).execGitReadonly = async (args: string[]) => {
         gitCalls.push([...args]);
         return '';
       };
@@ -3979,7 +3979,7 @@ describe('TaskExecutor', () => {
       });
 
       const mergeMsgs: string[] = [];
-      (executor as any).execGitReadonly = async (args: string[], cwd?: string) => {
+      (executor as any).execGitReadonly = async (args: string[]) => {
         if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
         if (args[0] === 'merge' && args[1] === '--no-ff') {
           const mIdx = args.indexOf('-m');
@@ -4043,7 +4043,7 @@ describe('TaskExecutor', () => {
       });
 
       const mergeMsgs: string[] = [];
-      (executor as any).execGitReadonly = async (args: string[], cwd?: string) => {
+      (executor as any).execGitReadonly = async (args: string[]) => {
         if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
         if (args[0] === 'rev-parse' && args[1] === 'HEAD') return 'merged-hash';
         if (args[0] === 'merge' && args[1] === '--no-ff') {
@@ -4225,7 +4225,7 @@ describe('TaskExecutor', () => {
 
       const mergeMsgs: string[] = [];
       const gitCwds: (string | undefined)[] = [];
-      (executor as any).execGitReadonly = async (args: string[], cwd?: string) => {
+      (executor as any).execGitReadonly = async (args: string[]) => {
         gitCwds.push(undefined);
         if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
         if (args[0] === 'merge') {

@@ -36,6 +36,7 @@ export type ParsedResponse =
       commitHash?: string;
       agentSessionId?: string;
       agentName?: string;
+      branch?: string;
     }
   | {
       type: 'failed';
@@ -84,6 +85,7 @@ export class ResponseHandler {
           commitHash: outputs.commitHash,
           agentSessionId: outputs.agentSessionId,
           agentName: outputs.agentName,
+          branch: outputs.branch,
         };
 
       case 'failed':
