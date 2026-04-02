@@ -1004,6 +1004,10 @@ export class TaskExecutor {
     return spawnAgentFixViaRegistry(prompt, cwd, agent, driver);
   }
 
+  get agentRegistry(): AgentRegistry | undefined {
+    return this.executionAgentRegistry;
+  }
+
   getRemoteTargetConfig(targetId: string): { host: string; user: string; sshKeyPath: string; port?: number } | undefined {
     return this.getRemoteTargets()[targetId];
   }

@@ -14,6 +14,7 @@ import type { SQLiteAdapter } from '@invoker/persistence';
 import { cleanElectronEnv } from './process-utils.js';
 import type { ExecutionAgent } from './agent.js';
 import type { SessionDriver } from './session-driver.js';
+import type { AgentRegistry } from './agent-registry.js';
 
 // ── Host interface ───────────────────────────────────────
 
@@ -32,6 +33,7 @@ export interface ConflictResolverHost {
   readonly orchestrator: Orchestrator;
   readonly persistence: SQLiteAdapter;
   readonly cwd: string;
+  readonly agentRegistry?: AgentRegistry;
 
   execGitReadonly(args: string[], cwd?: string): Promise<string>;
   execGitIn(args: string[], dir: string): Promise<string>;
@@ -131,6 +133,38 @@ export async function resolveConflictImpl(
   }
 }
 
+/** Shell-quote a string for safe inclusion in a remote SSH command. */
+function shellQuote(s: string): string {
+  return "'" + s.replace(/'/g, "'\\''") + "'";
+}
+
+/**
+ * Build the shell command to run an agent on a remote host.
+ * Uses the agent registry when available; falls back to claude CLI.
+ */
+function buildRemoteAgentCommand(
+  prompt: string,
+  agentRegistry?: AgentRegistry,
+  agentName?: string,
+): { shellCommand: string; sessionId: string } {
+  const name = agentName ?? 'claude';
+  if (agentRegistry) {
+    const agent = agentRegistry.get(name);
+    if (agent?.buildFixCommand) {
+      const spec = agent.buildFixCommand(prompt);
+      const sessionId = spec.sessionId ?? randomUUID();
+      const cmd = `${spec.cmd} ${spec.args.map(a => shellQuote(a)).join(' ')}`;
+      return { shellCommand: cmd, sessionId };
+    }
+  }
+  // Fallback: claude-compatible CLI (for backwards compat without registry)
+  const sessionId = randomUUID();
+  return {
+    shellCommand: `claude --session-id ${shellQuote(sessionId)} -p ${shellQuote(prompt)} --dangerously-skip-permissions`,
+    sessionId,
+  };
+}
+
 async function resolveConflictRemote(
   host: ConflictResolverHost,
   task: ReturnType<Orchestrator['getTask']> & {},
@@ -158,8 +192,8 @@ async function resolveConflictRemote(
     ? `Merge upstream ${conflictInfo.failedBranch} — ${depTask.description}`
     : `Merge upstream ${conflictInfo.failedBranch}`;
 
-  const sessionId = randomUUID();
-  const promptB64 = Buffer.from(prompt).toString('base64');
+  const { shellCommand: agentCmd } = buildRemoteAgentCommand(prompt, host.agentRegistry, agentName);
+  const agentCmdB64 = Buffer.from(agentCmd).toString('base64');
   const mergeMsgB64 = Buffer.from(conflictMergeMsg).toString('base64');
 
   const script = `set -euo pipefail
@@ -172,9 +206,7 @@ if git merge --no-edit -m "$MERGE_MSG" "${conflictInfo.failedBranch}" 2>/dev/nul
   echo "[resolveConflict] Merge succeeded without conflict on retry"
 else
   echo "[resolveConflict] Conflict reproduced, spawning agent to resolve..."
-  PROMPT=$(echo "${promptB64}" | base64 -d)
-  # TODO: full remote registry support — for now use agentName or default to claude
-  ${agentName ?? 'claude'} --session-id "${sessionId}" -p "$PROMPT" --dangerously-skip-permissions
+  eval "$(echo "${agentCmdB64}" | base64 -d)"
 fi
 `;
 
@@ -261,8 +293,8 @@ export async function fixWithAgentImpl(
     if (!target) {
       throw new Error(`No remote target config for "${task.config.remoteTargetId}" — cannot fix on remote`);
     }
-    const remoteAgentBin = agentName ?? 'claude'; // TODO: full remote registry support
-    const { stdout: output, sessionId } = await spawnRemoteAgentFixImpl(prompt, workspacePath, target, agentName);
+    const remoteAgentBin = agentName ?? 'claude';
+    const { stdout: output, sessionId } = await spawnRemoteAgentFixImpl(prompt, workspacePath, target, agentName, host.agentRegistry);
     if (output) {
       host.persistence.appendTaskOutput(taskId, `\n[Fix with ${remoteAgentBin} (remote)] Output:\n${output}`);
     }
@@ -308,17 +340,16 @@ export function spawnRemoteAgentFixImpl(
   remoteCwd: string,
   target: RemoteTargetConfig,
   agentName?: string,
+  agentRegistry?: AgentRegistry,
 ): Promise<{ stdout: string; sessionId: string }> {
-  const sessionId = randomUUID();
-  const promptB64 = Buffer.from(prompt).toString('base64');
+  const { shellCommand: agentCmd, sessionId } = buildRemoteAgentCommand(prompt, agentRegistry, agentName);
+  const agentCmdB64 = Buffer.from(agentCmd).toString('base64');
 
   const script = `set -euo pipefail
 WT="${remoteCwd}"
 if [[ "$WT" == '~' ]]; then WT="$HOME"; elif [[ "\${WT:0:2}" == '~/' ]]; then WT="$HOME/\${WT:2}"; fi
 cd "$WT"
-PROMPT=$(echo "${promptB64}" | base64 -d)
-  # TODO: full remote registry support — for now use agentName or default to claude
-  ${agentName ?? 'claude'} --session-id "${sessionId}" -p "$PROMPT" --dangerously-skip-permissions
+eval "$(echo "${agentCmdB64}" | base64 -d)"
 `;
 
   const sshArgs = [
