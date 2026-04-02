@@ -24,6 +24,13 @@ export interface AcquiredWorktree {
   softRelease: () => void;
 }
 
+export class ResourceLimitError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ResourceLimitError';
+  }
+}
+
 export class RepoPool {
   private readonly cacheDir: string;
   private readonly maxWorktrees: number;
@@ -182,7 +189,7 @@ export class RepoPool {
     const clonePath = await this.ensureClone(repoUrl);
     const active = this.activeWorktrees.get(repoUrl) ?? new Set();
     if (active.size >= this.maxWorktrees) {
-      throw new Error(`Worktree limit reached for ${repoUrl}: ${active.size}/${this.maxWorktrees}`);
+      throw new ResourceLimitError(`Worktree limit reached for ${repoUrl}: ${active.size}/${this.maxWorktrees}`);
     }
     const sanitized = branch.replace(/\//g, '-');
     const worktreePath = this.worktreeBaseDir

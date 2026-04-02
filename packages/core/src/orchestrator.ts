@@ -287,6 +287,7 @@ export class Orchestrator {
   private readonly executorRoutingRules: ExecutorRoutingRule[];
 
   private activeWorkflowIds = new Set<string>();
+  private deferredTaskIds = new Set<string>();
   private beforeApproveHook?: (task: TaskState) => Promise<void>;
 
   constructor(config: OrchestratorConfig) {
@@ -990,6 +991,7 @@ export class Orchestrator {
     }
 
     this.scheduler.completeJob(id);
+    this.deferredTaskIds.delete(id);
 
     const readyTasks = this.stateMachine.getReadyTasks();
     const isReady = readyTasks.some((t) => t.id === id);
@@ -1617,7 +1619,8 @@ export class Orchestrator {
 
       const wasRunning = t.status === 'running' || t.status === 'fixing_with_ai';
 
-      // Free scheduler slot
+      // Free scheduler slot and deferred set
+      this.deferredTaskIds.delete(id);
       if (wasRunning) {
         this.scheduler.completeJob(id);
         runningCancelled.push(id);
@@ -1644,6 +1647,50 @@ export class Orchestrator {
 
     this.checkWorkflowCompletion();
     return { cancelled, runningCancelled };
+  }
+
+  /**
+   * Defer a running task back to pending when a resource limit is hit.
+   * The task is re-enqueued when another task completes and frees a slot.
+   */
+  deferTask(taskId: string): void {
+    this.refreshFromDb();
+    const task = this.stateGetTask(taskId);
+    if (!task) return;
+    const id = task.id;
+
+    // Transition running → pending
+    const changes: TaskStateChanges = {
+      status: 'pending',
+      execution: { startedAt: undefined, lastHeartbeatAt: undefined },
+    };
+    this.writeAndSync(id, changes);
+    const delta: TaskDelta = { type: 'updated', taskId: id, changes };
+    this.persistence.logEvent?.(id, 'task.deferred', changes);
+    this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
+
+    // Free the scheduler slot
+    this.scheduler.completeJob(id);
+
+    // Supersede current attempt (best-effort, same pattern as restartTask)
+    try {
+      const attempts = this.persistence.loadAttempts(id);
+      const current = attempts[attempts.length - 1];
+      if (current && (current.status === 'running' || current.status === 'pending')) {
+        this.persistence.updateAttempt(current.id, { status: 'superseded' });
+      }
+      const newAttempt = createAttempt(id, {
+        snapshotCommit: current?.commit,
+        supersedesAttemptId: current?.id,
+      });
+      this.persistence.saveAttempt(newAttempt);
+    } catch { /* best effort */ }
+
+    // Park in deferred set — re-enqueued when a task completes
+    this.deferredTaskIds.add(id);
+
+    // Let other ready tasks fill the freed slot
+    this.drainScheduler();
   }
 
   /**
@@ -1740,6 +1787,19 @@ export class Orchestrator {
     const readyTaskIds = this.stateMachine.findNewlyReadyTasks(taskId);
     console.log(`[orchestrator] handleCompleted "${taskId}": ${readyTaskIds.length} newly ready: [${readyTaskIds.join(', ')}]`);
     const started = this.autoStartReadyTasks(readyTaskIds);
+
+    // Re-enqueue deferred tasks now that a slot freed up
+    if (this.deferredTaskIds.size > 0) {
+      for (const id of this.deferredTaskIds) {
+        const t = this.stateGetTask(id);
+        if (t && t.status === 'pending') {
+          this.scheduler.enqueue({ taskId: id, priority: 0 });
+        }
+      }
+      this.deferredTaskIds.clear();
+      started.push(...this.drainScheduler());
+    }
+
     this.checkWorkflowCompletion();
     return started;
   }
@@ -1794,6 +1854,19 @@ export class Orchestrator {
       `[orchestrator] handleFailed "${taskId}": ${readyTaskIds.length} newly ready: [${readyTaskIds.join(', ')}]`,
     );
     const started = this.autoStartReadyTasks(readyTaskIds);
+
+    // Re-enqueue deferred tasks now that a slot freed up
+    if (this.deferredTaskIds.size > 0) {
+      for (const id of this.deferredTaskIds) {
+        const t = this.stateGetTask(id);
+        if (t && t.status === 'pending') {
+          this.scheduler.enqueue({ taskId: id, priority: 0 });
+        }
+      }
+      this.deferredTaskIds.clear();
+      started.push(...this.drainScheduler());
+    }
+
     this.checkWorkflowCompletion();
     return started;
   }

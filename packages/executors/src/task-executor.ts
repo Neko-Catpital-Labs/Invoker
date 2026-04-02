@@ -16,6 +16,7 @@ import type { SQLiteAdapter } from '@invoker/persistence';
 import type { WorkRequest, WorkResponse, ActionType } from '@invoker/protocol';
 import type { Familiar, FamiliarHandle } from './familiar.js';
 import { RESTART_TO_BRANCH_TRACE } from './exec-trace.js';
+import { ResourceLimitError } from './repo-pool.js';
 import type { FamiliarRegistry } from './registry.js';
 import type { AgentRegistry } from './agent-registry.js';
 import type { MergeGateProvider } from './merge-gate-provider.js';
@@ -194,6 +195,14 @@ export class TaskExecutor {
     try {
       await this.executeTaskInner(task);
     } catch (err) {
+      // Resource limit: defer the task instead of failing it
+      const cause = err instanceof Error ? err.cause : undefined;
+      if (cause instanceof ResourceLimitError) {
+        console.log(`[TaskExecutor] executeTask deferred for task=${task.id}: ${cause.message}`);
+        this.orchestrator.deferTask(task.id);
+        return;
+      }
+
       console.error(`[TaskExecutor] executeTask failed for task=${task.id}:`, err);
       const response: WorkResponse = {
         requestId: `err-${task.id}`,
