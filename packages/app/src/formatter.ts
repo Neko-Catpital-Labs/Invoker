@@ -5,7 +5,7 @@
  */
 
 import type { TaskState, TaskStatus } from '@invoker/core';
-import type { TaskEvent } from '@invoker/persistence';
+import type { TaskEvent, Workflow } from '@invoker/persistence';
 
 // ── ANSI Color Codes ─────────────────────────────────────────
 
@@ -186,4 +186,108 @@ export function formatQueueStatus(status: {
   lines.push('');
 
   return lines.join('\n');
+}
+
+// ── Output Format Type ──────────────────────────────────────
+
+export type OutputFormat = 'text' | 'label' | 'json' | 'jsonl';
+
+// ── Serializers ─────────────────────────────────────────────
+
+/**
+ * Convert a Workflow to a plain JSON-safe object.
+ * All Date-like fields are kept as ISO strings (already strings from DB).
+ */
+export function serializeWorkflow(wf: Workflow): Record<string, unknown> {
+  return {
+    id: wf.id,
+    name: wf.name,
+    status: wf.status,
+    createdAt: wf.createdAt,
+    updatedAt: wf.updatedAt,
+    ...(wf.description != null && { description: wf.description }),
+    ...(wf.visualProof != null && { visualProof: wf.visualProof }),
+    ...(wf.planFile != null && { planFile: wf.planFile }),
+    ...(wf.repoUrl != null && { repoUrl: wf.repoUrl }),
+    ...(wf.branch != null && { branch: wf.branch }),
+    ...(wf.onFinish != null && { onFinish: wf.onFinish }),
+    ...(wf.baseBranch != null && { baseBranch: wf.baseBranch }),
+    ...(wf.featureBranch != null && { featureBranch: wf.featureBranch }),
+    ...(wf.mergeMode != null && { mergeMode: wf.mergeMode }),
+    ...(wf.reviewProvider != null && { reviewProvider: wf.reviewProvider }),
+    ...(wf.generation != null && { generation: wf.generation }),
+  };
+}
+
+/**
+ * Convert a TaskState to a plain JSON-safe object with config/execution subsets.
+ * Dates are converted to ISO strings.
+ */
+export function serializeTask(task: TaskState): Record<string, unknown> {
+  const config: Record<string, unknown> = {};
+  if (task.config.workflowId != null) config.workflowId = task.config.workflowId;
+  if (task.config.command != null) config.command = task.config.command;
+  if (task.config.prompt != null) config.prompt = task.config.prompt;
+  if (task.config.familiarType != null) config.familiarType = task.config.familiarType;
+  if (task.config.isMergeNode != null) config.isMergeNode = task.config.isMergeNode;
+  if (task.config.executionAgent != null) config.executionAgent = task.config.executionAgent;
+  if (task.config.featureBranch != null) config.featureBranch = task.config.featureBranch;
+  if (task.config.autoFix != null) config.autoFix = task.config.autoFix;
+
+  const execution: Record<string, unknown> = {};
+  if (task.execution.branch != null) execution.branch = task.execution.branch;
+  if (task.execution.commit != null) execution.commit = task.execution.commit;
+  if (task.execution.error != null) execution.error = task.execution.error;
+  if (task.execution.exitCode != null) execution.exitCode = task.execution.exitCode;
+  if (task.execution.reviewUrl != null) execution.reviewUrl = task.execution.reviewUrl;
+  if (task.execution.agentSessionId != null) execution.agentSessionId = task.execution.agentSessionId;
+  if (task.execution.agentName != null) execution.agentName = task.execution.agentName;
+  if (task.execution.startedAt != null) execution.startedAt = task.execution.startedAt instanceof Date ? task.execution.startedAt.toISOString() : task.execution.startedAt;
+  if (task.execution.completedAt != null) execution.completedAt = task.execution.completedAt instanceof Date ? task.execution.completedAt.toISOString() : task.execution.completedAt;
+
+  return {
+    id: task.id,
+    description: task.description,
+    status: task.status,
+    dependencies: [...task.dependencies],
+    createdAt: task.createdAt instanceof Date ? task.createdAt.toISOString() : task.createdAt,
+    config,
+    execution,
+  };
+}
+
+/**
+ * Convert a TaskEvent to a plain JSON-safe object.
+ */
+export function serializeEvent(event: TaskEvent): Record<string, unknown> {
+  return {
+    id: event.id,
+    taskId: event.taskId,
+    eventType: event.eventType,
+    ...(event.payload != null && { payload: event.payload }),
+    createdAt: event.createdAt,
+  };
+}
+
+// ── Format Emitters ─────────────────────────────────────────
+
+/**
+ * One ID per line, no decoration. For piping to xargs/while-read.
+ */
+export function formatAsLabel(items: Array<{ id: string }>): string {
+  return items.map(item => item.id).join('\n');
+}
+
+/**
+ * Compact JSON array.
+ */
+export function formatAsJson(data: unknown): string {
+  return JSON.stringify(data);
+}
+
+/**
+ * One JSON object per line (NDJSON). For streaming and large result sets.
+ */
+export function formatAsJsonl(items: unknown[]): string {
+  return items.map(item => JSON.stringify(item)).join('\n');
 }

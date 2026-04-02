@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Rebase and retry all workflows.
 #
-# Queries the Invoker DB for all workflows, picks a non-merge task from each,
-# and runs --headless rebase-and-retry to refresh the pool and restart.
+# Uses the headless CLI to query workflows and tasks (no direct sqlite3 dependency).
+# Picks a non-merge task from each workflow, then runs rebase-and-retry.
 #
 # Usage:
 #   bash scripts/rebase-retry-all.sh              # all workflows
@@ -12,7 +12,6 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-DB="${INVOKER_DB_DIR:-$HOME/.invoker}/invoker.db"
 ELECTRON="$REPO_ROOT/packages/app/node_modules/.bin/electron"
 MAIN="$REPO_ROOT/packages/app/dist/main.js"
 
@@ -27,12 +26,6 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# Validate DB exists
-if [[ ! -f "$DB" ]]; then
-  echo "Error: Invoker DB not found at $DB"
-  exit 1
-fi
-
 # Electron sandbox detection (same as submit-plan.sh)
 unset ELECTRON_RUN_AS_NODE
 SANDBOX_FLAG=""
@@ -45,32 +38,40 @@ if [ "$(uname)" = "Linux" ]; then
   export LIBGL_ALWAYS_SOFTWARE=1
 fi
 
-# Build SQL query
-SQL="SELECT w.id, w.name, w.status, t.id AS task_id
-     FROM workflows w
-     JOIN tasks t ON t.workflow_id = w.id AND t.is_merge_node = 0
-     WHERE t.rowid = (
-       SELECT MIN(t2.rowid)
-       FROM tasks t2
-       WHERE t2.workflow_id = w.id AND t2.is_merge_node = 0
-     )"
+# Helper: run a headless CLI command (stderr warnings to /dev/null)
+headless() {
+  # shellcheck disable=SC2086
+  "$ELECTRON" "$MAIN" $SANDBOX_FLAG --headless "$@" 2>/dev/null
+}
 
+# Helper: extract workflow IDs from label output.
+# Electron prints init logs to stdout before the query runs; filter to only
+# lines matching the "wf-<digits>-<digits>" ID pattern.
+headless_workflow_ids() {
+  headless "$@" | grep -E '^wf-[0-9]+-[0-9]+$' || true
+}
+
+# Helper: extract task IDs from label output.
+# Task IDs contain "/" (e.g. wf-123/task-a).
+headless_task_ids() {
+  headless "$@" | grep '/' || true
+}
+
+# Query workflow IDs via CLI
+QUERY_ARGS=(query workflows --output label)
 if [[ -n "$STATUS_FILTER" ]]; then
-  SQL="$SQL AND w.status = '$STATUS_FILTER'"
+  QUERY_ARGS+=(--status "$STATUS_FILTER")
 fi
 
-SQL="$SQL ORDER BY w.created_at DESC;"
+WORKFLOWS=$(headless_workflow_ids "${QUERY_ARGS[@]}")
 
-# Query workflows + first task ID
-ROWS=$(sqlite3 -separator '|' "$DB" "$SQL")
-
-if [[ -z "$ROWS" ]]; then
+if [[ -z "$WORKFLOWS" ]]; then
   echo "No workflows found."
   exit 0
 fi
 
-# Count
-TOTAL=$(echo "$ROWS" | wc -l | tr -d ' ')
+# Count workflows
+TOTAL=$(echo "$WORKFLOWS" | wc -l | tr -d ' ')
 echo "Found $TOTAL workflow(s) to rebase-and-retry."
 echo ""
 
@@ -79,9 +80,21 @@ FAILED=0
 SUCCEEDED=0
 SKIPPED=0
 
-while IFS='|' read -r WF_ID WF_NAME WF_STATUS TASK_ID; do
+while IFS= read -r WF_ID; do
+  [[ -z "$WF_ID" ]] && continue
   IDX=$((IDX + 1))
-  echo "[$IDX/$TOTAL] $WF_ID — $WF_NAME [$WF_STATUS]"
+
+  # Get first non-merge task ID for this workflow
+  TASK_ID=$(headless_task_ids query tasks --workflow "$WF_ID" --no-merge --output label | head -1)
+
+  if [[ -z "$TASK_ID" ]]; then
+    echo "[$IDX/$TOTAL] $WF_ID — no non-merge task found, skipping"
+    SKIPPED=$((SKIPPED + 1))
+    echo ""
+    continue
+  fi
+
+  echo "[$IDX/$TOTAL] $WF_ID"
   echo "         task: $TASK_ID"
 
   if $DRY_RUN; then
@@ -91,7 +104,7 @@ while IFS='|' read -r WF_ID WF_NAME WF_STATUS TASK_ID; do
     continue
   fi
 
-  if "$ELECTRON" "$MAIN" $SANDBOX_FLAG --headless rebase-and-retry "$TASK_ID" 2>&1; then
+  if headless rebase-and-retry "$TASK_ID" 2>&1; then
     echo "         OK"
     SUCCEEDED=$((SUCCEEDED + 1))
   else
@@ -99,7 +112,7 @@ while IFS='|' read -r WF_ID WF_NAME WF_STATUS TASK_ID; do
     FAILED=$((FAILED + 1))
   fi
   echo ""
-done <<< "$ROWS"
+done <<< "$WORKFLOWS"
 
 echo "---"
 if $DRY_RUN; then
