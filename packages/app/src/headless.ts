@@ -31,7 +31,7 @@ import { startApiServer } from './api-server.js';
 import {
   rebaseAndRetry,
   rejectTask,
-  resolveConflictWithClaudeAction,
+  resolveConflictAction,
   restartTask as sharedRestartTask,
   recreateWorkflow as sharedRecreateWorkflow,
   retryWorkflow as sharedRetryWorkflow,
@@ -711,7 +711,7 @@ async function headlessFix(taskId: string, deps: HeadlessDeps, agentArg?: string
   const agent = (agentArg ?? 'claude').toLowerCase();
   try {
     const output = deps.persistence.getTaskOutput(taskId);
-    await te.fixWithClaude(taskId, output, agent, savedError);
+    await te.fixWithAgent(taskId, output, agent, savedError);
     deps.orchestrator.setFixAwaitingApproval(taskId, savedError);
     console.log(`Fix applied for task: ${taskId} (${agent}). Use 'approve ${taskId}' or 'reject ${taskId}' to finalize.`);
   } catch (err) {
@@ -727,9 +727,8 @@ async function headlessResolveConflict(taskId: string, deps: HeadlessDeps, agent
   taskId = restoreWorkflowForTask(taskId, deps).resolvedTaskId;
 
   const te = createHeadlessExecutor(deps);
-  const agent = (agentArg ?? 'claude').toLowerCase() === 'codex' ? 'codex' : 'claude';
-  // Both agents use the same resolve action — the actual agent is determined by the task's executionAgent config
-  await resolveConflictWithClaudeAction(taskId, { ...deps, taskExecutor: te });
+  const agent = (agentArg ?? 'claude').toLowerCase();
+  await resolveConflictAction(taskId, { ...deps, taskExecutor: te }, agent);
   const wfId = deps.orchestrator.getTask(taskId)?.config.workflowId;
   await waitForCompletion(deps.orchestrator, wfId, undefined);
   console.log(`Resolve-conflict finished for task: ${taskId} (${agent})`);

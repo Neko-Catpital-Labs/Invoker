@@ -202,7 +202,7 @@ export function App() {
       if (hasMergeConflict) {
         await window.invoker?.resolveConflict(taskId, agentName);
       } else {
-        await window.invoker?.fixWithClaude(taskId, agentName);
+        await window.invoker?.fixWithAgent(taskId, agentName);
       }
       refreshTasks();
     } catch (err) {

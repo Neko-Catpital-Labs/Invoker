@@ -834,3 +834,170 @@ describe('getRestoredTerminalSpec dispatches codex vs claude session resume', ()
     });
   });
 });
+
+/**
+ * Integration: fixWithAgentImpl persistence writes → OpenTerminalPersistence reads → terminal spec.
+ *
+ * The previous tests use hand-crafted PersistedTaskMeta. These tests simulate the
+ * full persistence round-trip: fixWithAgentImpl writes agentName + agentSessionId,
+ * OpenTerminalPersistence reads them, PersistedTaskMeta is constructed exactly as
+ * openExternalTerminalForTask does, and getRestoredTerminalSpec dispatches correctly.
+ */
+describe('fix-with-agent → open-terminal produces correct agent resume command', () => {
+  let registerBuiltinAgents: typeof import('@invoker/executors').registerBuiltinAgents;
+
+  beforeEach(async () => {
+    ({ registerBuiltinAgents } = await import('@invoker/executors'));
+  });
+
+  afterEach(() => {
+    vi.mocked(existsSync).mockReset();
+  });
+
+  /**
+   * Simulates the persistence layer that fixWithAgentImpl writes to and
+   * openExternalTerminalForTask reads from. Mirrors how SQLiteAdapter stores
+   * agentName and agentSessionId, then exposes them via getExecutionAgent /
+   * getAgentSessionId.
+   */
+  function createMockPersistence() {
+    const store = new Map<string, {
+      status: string;
+      familiarType: string;
+      agentSessionId?: string;
+      agentName?: string;
+      workspacePath?: string;
+    }>();
+    return {
+      store,
+      // Write side — what fixWithAgentImpl calls
+      updateTask(taskId: string, changes: { execution: { agentSessionId: string; agentName: string } }) {
+        const existing = store.get(taskId) ?? { status: 'failed', familiarType: 'worktree' };
+        store.set(taskId, {
+          ...existing,
+          agentSessionId: changes.execution.agentSessionId,
+          agentName: changes.execution.agentName,
+        });
+      },
+      // Read side — what openExternalTerminalForTask calls
+      getTaskStatus(taskId: string) { return store.get(taskId)?.status ?? null; },
+      getFamiliarType(taskId: string) { return store.get(taskId)?.familiarType ?? null; },
+      getAgentSessionId(taskId: string) { return store.get(taskId)?.agentSessionId ?? null; },
+      getExecutionAgent(taskId: string) { return store.get(taskId)?.agentName ?? null; },
+      getContainerId() { return null; },
+      getWorkspacePath(taskId: string) { return store.get(taskId)?.workspacePath ?? null; },
+      getBranch() { return null; },
+    };
+  }
+
+  it('fix with codex → terminal launches codex, not claude', () => {
+    vi.mocked(existsSync).mockReturnValue(true);
+    const agentRegistry = registerBuiltinAgents();
+    const wt = new WorktreeFamiliar({
+      worktreeBaseDir: '/tmp/wt',
+      cacheDir: '/tmp/cache',
+      agentRegistry,
+    });
+
+    const persistence = createMockPersistence();
+
+    // 1. Simulate initial task state (before fix)
+    persistence.store.set('task-codex-fix', {
+      status: 'failed',
+      familiarType: 'worktree',
+      workspacePath: '/tmp/workspace',
+    });
+
+    // 2. Simulate fixWithAgentImpl writing agentName + sessionId
+    persistence.updateTask('task-codex-fix', {
+      execution: { agentSessionId: 'codex-sess-42', agentName: 'codex' },
+    });
+
+    // 3. Build PersistedTaskMeta exactly as openExternalTerminalForTask does (line 66-74)
+    const meta: PersistedTaskMeta = {
+      taskId: 'task-codex-fix',
+      familiarType: persistence.getFamiliarType('task-codex-fix') ?? 'worktree',
+      agentSessionId: persistence.getAgentSessionId('task-codex-fix') ?? undefined,
+      executionAgent: persistence.getExecutionAgent('task-codex-fix') ?? undefined,
+      workspacePath: persistence.getWorkspacePath('task-codex-fix') ?? undefined,
+    };
+
+    // 4. Verify PersistedTaskMeta was populated from persistence
+    expect(meta.executionAgent).toBe('codex');
+    expect(meta.agentSessionId).toBe('codex-sess-42');
+
+    // 5. Get terminal spec — should be codex, not claude
+    const spec = wt.getRestoredTerminalSpec(meta);
+    expect(spec.command).toBe('codex');
+    expect(spec.args).toContain('exec');
+    expect(spec.args).toContain('resume');
+    expect(spec.args).toContain('codex-sess-42');
+    expect(spec.command).not.toBe('claude');
+  });
+
+  it('fix with claude → terminal launches claude', () => {
+    vi.mocked(existsSync).mockReturnValue(true);
+    const agentRegistry = registerBuiltinAgents();
+    const wt = new WorktreeFamiliar({
+      worktreeBaseDir: '/tmp/wt',
+      cacheDir: '/tmp/cache',
+      agentRegistry,
+    });
+
+    const persistence = createMockPersistence();
+    persistence.store.set('task-claude-fix', {
+      status: 'failed',
+      familiarType: 'worktree',
+      workspacePath: '/tmp/workspace',
+    });
+    persistence.updateTask('task-claude-fix', {
+      execution: { agentSessionId: 'claude-sess-99', agentName: 'claude' },
+    });
+
+    const meta: PersistedTaskMeta = {
+      taskId: 'task-claude-fix',
+      familiarType: persistence.getFamiliarType('task-claude-fix') ?? 'worktree',
+      agentSessionId: persistence.getAgentSessionId('task-claude-fix') ?? undefined,
+      executionAgent: persistence.getExecutionAgent('task-claude-fix') ?? undefined,
+      workspacePath: persistence.getWorkspacePath('task-claude-fix') ?? undefined,
+    };
+
+    expect(meta.executionAgent).toBe('claude');
+    const spec = wt.getRestoredTerminalSpec(meta);
+    expect(spec.command).toBe('claude');
+    expect(spec.args).toContain('--resume');
+    expect(spec.args).toContain('claude-sess-99');
+  });
+
+  it('fix with no agent specified → terminal defaults to claude', () => {
+    vi.mocked(existsSync).mockReturnValue(true);
+    const agentRegistry = registerBuiltinAgents();
+    const wt = new WorktreeFamiliar({
+      worktreeBaseDir: '/tmp/wt',
+      cacheDir: '/tmp/cache',
+      agentRegistry,
+    });
+
+    const persistence = createMockPersistence();
+    persistence.store.set('task-noagent', {
+      status: 'failed',
+      familiarType: 'worktree',
+      workspacePath: '/tmp/workspace',
+      agentSessionId: 'sess-default',
+      // agentName intentionally NOT set
+    });
+
+    const meta: PersistedTaskMeta = {
+      taskId: 'task-noagent',
+      familiarType: persistence.getFamiliarType('task-noagent') ?? 'worktree',
+      agentSessionId: persistence.getAgentSessionId('task-noagent') ?? undefined,
+      executionAgent: persistence.getExecutionAgent('task-noagent') ?? undefined,
+      workspacePath: persistence.getWorkspacePath('task-noagent') ?? undefined,
+    };
+
+    // executionAgent is undefined → defaults to claude
+    expect(meta.executionAgent).toBeUndefined();
+    const spec = wt.getRestoredTerminalSpec(meta);
+    expect(spec.command).toBe('claude');
+  });
+});

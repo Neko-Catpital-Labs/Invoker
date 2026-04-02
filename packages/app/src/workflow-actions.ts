@@ -191,14 +191,15 @@ export async function setWorkflowMergeMode(
   }
 }
 
-export async function resolveConflictWithClaudeAction(
+export async function resolveConflictAction(
   taskId: string,
   deps: Pick<ActionDeps, 'orchestrator' | 'persistence'> & { taskExecutor: TaskExecutor },
+  agentName?: string,
 ): Promise<void> {
   const { orchestrator, persistence, taskExecutor } = deps;
   const { savedError } = orchestrator.beginConflictResolution(taskId);
   try {
-    await taskExecutor.resolveConflictWithClaude(taskId, savedError);
+    await taskExecutor.resolveConflict(taskId, savedError, agentName);
     const started = orchestrator.restartTask(taskId);
     const runnable = started.filter((t) => t.status === 'running');
     await taskExecutor.executeTasks(runnable);

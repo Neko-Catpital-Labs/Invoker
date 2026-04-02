@@ -96,9 +96,9 @@ describe('ApprovalModal', () => {
     expect(screen.getByRole('textbox')).toHaveValue('Claude session: sess-generic-456');
   });
 
-  // ── Fix-with-Claude approval (pendingFixError set) ─────────
+  // ── Fix-with-agent approval (pendingFixError set) ─────────
 
-  it('renders "Approve AI Fix" heading for fix-with-claude approval', () => {
+  it('renders "Approve AI Fix" heading for fix-with-agent approval', () => {
     render(
       <ApprovalModal
         task={makeTask({

@@ -250,7 +250,7 @@ export interface InvokerAPI {
   setMergeBranch: (workflowId: string, baseBranch: string) => Promise<void>;
   approveMerge: (workflowId: string) => Promise<void>;
   resolveConflict: (taskId: string, agentName?: string) => Promise<void>;
-  fixWithClaude: (taskId: string, agentName?: string) => Promise<void>;
+  fixWithAgent: (taskId: string, agentName?: string) => Promise<void>;
   setMergeMode: (workflowId: string, mergeMode: string) => Promise<void>;
   checkPrStatuses: () => Promise<void>;
 

@@ -1,17 +1,17 @@
 /**
- * E2E: Fix with Claude — rendered state transition.
+ * E2E: Fix with Agent — rendered state transition.
  *
  * Verifies that the DAG node correctly transitions from "FIXING WITH AI"
- * (orange) to "APPROVE FIX" (amber) after the fixWithClaude IPC completes.
+ * (orange) to "APPROVE FIX" (amber) after the fixWithAgent IPC completes.
  *
  * The underlying bug: when the setFixAwaitingApproval delta is missed by the
  * renderer (e.g. webContents.send silently fails for an unresponsive window),
  * the node stays stuck on "FIXING WITH AI" until a full app restart. The fix
- * adds a refreshTasks() call after the fixWithClaude IPC resolves as a safety
+ * adds a refreshTasks() call after the fixWithAgent IPC resolves as a safety
  * net, and uses isFixingWithAI: false (instead of undefined) so the value
  * survives IPC serialization.
  *
- * This test exercises the actual fixWithClaude IPC handler (not mock injections)
+ * This test exercises the actual fixWithAgent IPC handler (not mock injections)
  * to verify the end-to-end rendered state transition.
  */
 
@@ -42,8 +42,8 @@ const PLAN = {
   ],
 };
 
-test.describe('Fix with Claude - rendered state transition', () => {
-  test('rendered node transitions to APPROVE FIX after fixWithClaude IPC', async ({ page }) => {
+test.describe('Fix with Agent - rendered state transition', () => {
+  test('rendered node transitions to APPROVE FIX after fixWithAgent IPC', async ({ page }) => {
     await loadPlan(page, PLAN);
 
     // Inject pre-states: pass completed, fail failed
@@ -61,11 +61,11 @@ test.describe('Fix with Claude - rendered state transition', () => {
     const node = page.locator('[data-testid="rf__node-task-fail"]');
     await expect(node.locator('text=FAILED')).toBeVisible({ timeout: 3000 });
 
-    // Trigger fixWithClaude via the real IPC handler.
+    // Trigger fixWithAgent via the real IPC handler.
     // Flow: beginConflictResolution (isFixingWithAI=true) →
     //   spawn INVOKER_CLAUDE_FIX_COMMAND (/bin/true) →
     //   setFixAwaitingApproval (status=awaiting_approval)
-    await page.evaluate((id) => window.invoker.fixWithClaude(id), 'task-fail');
+    await page.evaluate((id) => window.invoker.fixWithAgent(id), 'task-fail');
 
     // DB should reflect awaiting_approval
     const result = await page.evaluate(() => window.invoker.getTasks());
