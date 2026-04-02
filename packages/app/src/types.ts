@@ -110,8 +110,11 @@ export interface InvokerAPI {
   getAllCompletedTasks: () => Promise<Array<TaskState & { workflowName: string }>>;
   cleanupWorktrees: () => Promise<{ removed: string[]; errors: string[] }>;
 
-  // Restart entire workflow with generation bump (fresh branch hashes)
-  restartWorkflow: (workflowId: string) => Promise<void>;
+  // Recreate entire workflow with generation bump (fresh branch hashes)
+  recreateWorkflow: (workflowId: string) => Promise<void>;
+
+  // Incremental retry: keep completed tasks, rerun failed/stuck
+  retryWorkflow: (workflowId: string) => Promise<void>;
 
   // Rebase & Retry for merge gates
   rebaseAndRetry: (mergeTaskId: string) => Promise<{

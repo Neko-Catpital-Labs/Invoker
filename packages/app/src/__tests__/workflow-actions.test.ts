@@ -9,8 +9,8 @@ import type { Orchestrator } from '@invoker/core';
 import type { SQLiteAdapter } from '@invoker/persistence';
 import type { TaskExecutor } from '@invoker/executors';
 import {
-  bumpGenerationAndRestart,
-  restartWorkflow,
+  bumpGenerationAndRecreate,
+  recreateWorkflow,
   restartTask,
   approveTask,
   rejectTask,
@@ -42,8 +42,8 @@ function makeRunningTask(overrides: Record<string, unknown> = {}) {
 
 // ── Tests ────────────────────────────────────────────────────
 
-describe('bumpGenerationAndRestart', () => {
-  let orchestrator: { restartWorkflow: ReturnType<typeof vi.fn> };
+describe('bumpGenerationAndRecreate', () => {
+  let orchestrator: { recreateWorkflow: ReturnType<typeof vi.fn> };
   let persistence: {
     loadWorkflow: ReturnType<typeof vi.fn>;
     updateWorkflow: ReturnType<typeof vi.fn>;
@@ -51,7 +51,7 @@ describe('bumpGenerationAndRestart', () => {
 
   beforeEach(() => {
     orchestrator = {
-      restartWorkflow: vi.fn(() => [makeRunningTask()]),
+      recreateWorkflow: vi.fn(() => [makeRunningTask()]),
     };
     persistence = {
       loadWorkflow: vi.fn(() => ({ id: 'wf-1', generation: 2 })),
@@ -59,15 +59,15 @@ describe('bumpGenerationAndRestart', () => {
     };
   });
 
-  it('loads workflow, bumps generation, calls orchestrator.restartWorkflow', () => {
-    const result = bumpGenerationAndRestart('wf-1', {
+  it('loads workflow, bumps generation, calls orchestrator.recreateWorkflow', () => {
+    const result = bumpGenerationAndRecreate('wf-1', {
       persistence: persistence as unknown as SQLiteAdapter,
       orchestrator: orchestrator as unknown as Orchestrator,
     });
 
     expect(persistence.loadWorkflow).toHaveBeenCalledWith('wf-1');
     expect(persistence.updateWorkflow).toHaveBeenCalledWith('wf-1', { generation: 3 });
-    expect(orchestrator.restartWorkflow).toHaveBeenCalledWith('wf-1');
+    expect(orchestrator.recreateWorkflow).toHaveBeenCalledWith('wf-1');
     expect(result).toHaveLength(1);
     expect(result[0].status).toBe('running');
   });
@@ -75,7 +75,7 @@ describe('bumpGenerationAndRestart', () => {
   it('throws when workflow not found', () => {
     persistence.loadWorkflow.mockReturnValue(undefined);
     expect(() =>
-      bumpGenerationAndRestart('missing', {
+      bumpGenerationAndRecreate('missing', {
         persistence: persistence as unknown as SQLiteAdapter,
         orchestrator: orchestrator as unknown as Orchestrator,
       }),
@@ -84,7 +84,7 @@ describe('bumpGenerationAndRestart', () => {
 
   it('handles undefined generation (defaults to 0 + 1 = 1)', () => {
     persistence.loadWorkflow.mockReturnValue({ id: 'wf-1' });
-    bumpGenerationAndRestart('wf-1', {
+    bumpGenerationAndRecreate('wf-1', {
       persistence: persistence as unknown as SQLiteAdapter,
       orchestrator: orchestrator as unknown as Orchestrator,
     });
@@ -92,21 +92,21 @@ describe('bumpGenerationAndRestart', () => {
   });
 });
 
-describe('restartWorkflow', () => {
-  it('delegates to bumpGenerationAndRestart', () => {
-    const orchestrator = { restartWorkflow: vi.fn(() => [makeRunningTask()]) };
+describe('recreateWorkflow', () => {
+  it('delegates to bumpGenerationAndRecreate', () => {
+    const orchestrator = { recreateWorkflow: vi.fn(() => [makeRunningTask()]) };
     const persistence = {
       loadWorkflow: vi.fn(() => ({ id: 'wf-1', generation: 0 })),
       updateWorkflow: vi.fn(),
     };
 
-    const result = restartWorkflow('wf-1', {
+    const result = recreateWorkflow('wf-1', {
       persistence: persistence as unknown as SQLiteAdapter,
       orchestrator: orchestrator as unknown as Orchestrator,
     });
 
     expect(persistence.updateWorkflow).toHaveBeenCalledWith('wf-1', { generation: 1 });
-    expect(orchestrator.restartWorkflow).toHaveBeenCalledWith('wf-1');
+    expect(orchestrator.recreateWorkflow).toHaveBeenCalledWith('wf-1');
     expect(result).toHaveLength(1);
   });
 });

@@ -33,7 +33,8 @@ import {
   rejectTask,
   resolveConflictWithClaudeAction,
   restartTask as sharedRestartTask,
-  restartWorkflow as sharedRestartWorkflow,
+  recreateWorkflow as sharedRecreateWorkflow,
+  retryWorkflow as sharedRetryWorkflow,
   editTaskCommand as sharedEditTaskCommand,
   editTaskType as sharedEditTaskType,
   editTaskAgent as sharedEditTaskAgent,
@@ -42,7 +43,7 @@ import {
 } from './workflow-actions.js';
 import { openExternalTerminalForTask } from './open-terminal-for-task.js';
 
-export { bumpGenerationAndRestart } from './workflow-actions.js';
+export { bumpGenerationAndRecreate } from './workflow-actions.js';
 
 // ── HeadlessDeps interface ───────────────────────────────────
 
@@ -356,13 +357,35 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
     case 'resume':
       await headlessResume(args[1], deps, deps.waitForApproval);
       break;
-    case 'restart':
-      await headlessRestart(args[1], deps);
+    case 'restart': {
+      const id = args[1];
+      if (id?.startsWith('wf-') && !id.includes('/')) {
+        // Workflow ID → incremental retry
+        await headlessRetryWorkflow(id, deps);
+      } else {
+        // Task ID → single task restart (existing behavior)
+        await headlessRestart(id, deps);
+      }
       break;
+    }
+    case 'recreate':
+      await headlessRecreateWorkflow(args[1], deps);
+      break;
+    case 'rebase':
+      await headlessRebaseAndRetry(args[1], deps);
+      break;
+
+    // Deprecated aliases
     case 'restart-workflow':
-      await headlessRestartWorkflow(args[1], deps);
+      warnDeprecated('restart-workflow', 'recreate');
+      await headlessRecreateWorkflow(args[1], deps);
+      break;
+    case 'clean-restart':
+      warnDeprecated('clean-restart', 'recreate');
+      await headlessRecreateWorkflow(args[1], deps);
       break;
     case 'rebase-and-retry':
+      warnDeprecated('rebase-and-retry', 'rebase');
       await headlessRebaseAndRetry(args[1], deps);
       break;
     case 'fix':
@@ -480,9 +503,10 @@ ${BOLD}Query${RESET} (read-only, all support --output text|label|json|jsonl):
 ${BOLD}Execute:${RESET}
   run <plan.yaml>                                     Load and execute plan
   resume <id>                                         Resume incomplete workflow
-  restart <taskId>                                    Restart a failed/stuck task
-  restart-workflow <workflowId>                       Bump generation + rerun (no pool fetch)
-  rebase-and-retry <taskId>                           Refresh pool base + rerun workflow
+  restart <taskId>                                    Restart a single failed/stuck task
+  restart <workflowId>                                Retry workflow: rerun failed, keep completed
+  recreate <workflowId>                                Recreate workflow: wipe all state, new generation
+  rebase <taskId>                                     Refresh pool base + nuclear restart
   fix <taskId> [claude|codex]                         Fix a failed task (default: claude)
   resolve-conflict <taskId> [claude|codex]            Resolve merge conflict + restart
 
@@ -510,7 +534,9 @@ ${BOLD}Deprecated${RESET} (use new names above):
   queue → query queue           audit → query audit         session → query session
   edit → set command            edit-executor → set executor
   edit-agent → set agent        set-merge-mode → set merge-mode
-  delete-workflow → delete
+  delete-workflow → delete      restart-workflow → recreate
+  clean-restart → recreate
+  rebase-and-retry → rebase
 
 ${BOLD}Options:${RESET}
   --wait-for-approval    Keep running until PR approval (use with 'run' or 'resume')
@@ -724,13 +750,32 @@ async function headlessRebaseAndRetry(taskId: string, deps: HeadlessDeps): Promi
   await waitForCompletion(deps.orchestrator, deps.orchestrator.getTask(taskId)?.config.workflowId, undefined);
 }
 
-async function headlessRestartWorkflow(workflowId: string, deps: HeadlessDeps): Promise<void> {
+async function headlessRecreateWorkflow(workflowId: string, deps: HeadlessDeps): Promise<void> {
   if (!workflowId) {
-    throw new Error('Missing arguments. Usage: --headless restart-workflow <workflowId>');
+    throw new Error('Missing arguments. Usage: --headless recreate <workflowId>');
   }
-  const started = sharedRestartWorkflow(workflowId, { persistence: deps.persistence, orchestrator: deps.orchestrator });
+  const started = sharedRecreateWorkflow(workflowId, { persistence: deps.persistence, orchestrator: deps.orchestrator });
   const runnable = started.filter(t => t.status === 'running');
-  console.log(`Restart-workflow "${workflowId}" — ${runnable.length} task(s) to execute (pool fetch skipped)`);
+  console.log(`Recreate workflow "${workflowId}" — ${runnable.length} task(s) to execute (pool fetch skipped)`);
+  if (runnable.length === 0) return;
+
+  const te = createHeadlessExecutor(deps);
+  remoteFetchForPool.enabled = false;
+  try {
+    await te.executeTasks(runnable);
+  } finally {
+    remoteFetchForPool.enabled = true;
+  }
+  await waitForCompletion(deps.orchestrator, workflowId, undefined);
+}
+
+async function headlessRetryWorkflow(workflowId: string, deps: HeadlessDeps): Promise<void> {
+  if (!workflowId) {
+    throw new Error('Missing arguments. Usage: --headless restart <workflowId>');
+  }
+  const started = sharedRetryWorkflow(workflowId, { orchestrator: deps.orchestrator });
+  const runnable = started.filter(t => t.status === 'running');
+  console.log(`Retry workflow "${workflowId}" — ${runnable.length} task(s) to re-execute (completed tasks preserved)`);
   if (runnable.length === 0) return;
 
   const te = createHeadlessExecutor(deps);

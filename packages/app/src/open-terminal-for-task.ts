@@ -76,7 +76,7 @@ export async function openExternalTerminalForTask(
   if (meta.agentSessionId) {
     console.log(
       '[agent-session-trace] open-terminal: building resume spec with persisted agentSessionId — ' +
-        'if restartWorkflow left a stale UUID (downstream still pending), claude --resume may report no conversation',
+        'if recreateWorkflow left a stale UUID (downstream still pending), claude --resume may report no conversation',
     );
   }
 

@@ -32,7 +32,7 @@ import type { Orchestrator } from '@invoker/core';
 import type { SQLiteAdapter } from '@invoker/persistence';
 import type { FamiliarRegistry, TaskExecutor } from '@invoker/executors';
 import {
-  restartWorkflow as sharedRestartWorkflow,
+  recreateWorkflow as sharedRecreateWorkflow,
   restartTask as sharedRestartTask,
   rejectTask as sharedRejectTask,
   provideInput as sharedProvideInput,
@@ -233,7 +233,7 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
       if (method === 'POST' && wfRestartMatch) {
         const workflowId = decodeURIComponent(wfRestartMatch[1]);
         try {
-          const started = sharedRestartWorkflow(workflowId, { persistence, orchestrator });
+          const started = sharedRecreateWorkflow(workflowId, { persistence, orchestrator });
           const runnable = started.filter(t => t.status === 'running');
           await taskExecutor.executeTasks(runnable);
           json(res, 200, { ok: true, workflowId, action: 'restarted', tasksStarted: runnable.length });

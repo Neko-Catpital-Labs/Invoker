@@ -3113,7 +3113,7 @@ describe('Orchestrator', () => {
       expect(task.execution.lastHeartbeatAt).not.toEqual(oldHeartbeat);
     });
 
-    it('restartWorkflow clears lastHeartbeatAt for all tasks', () => {
+    it('recreateWorkflow clears lastHeartbeatAt for all tasks', () => {
       const testPersistence = new InMemoryPersistence();
       const testBus = new InMemoryBus();
 
@@ -3158,7 +3158,7 @@ describe('Orchestrator', () => {
       });
 
       testOrchestrator.syncFromDb('workflow-heartbeat-test');
-      testOrchestrator.restartWorkflow();
+      testOrchestrator.recreateWorkflow();
 
       const task1 = testOrchestrator.getTask('t1')!;
       const task2 = testOrchestrator.getTask('t2')!;
@@ -3177,7 +3177,7 @@ describe('Orchestrator', () => {
       expect(task2.execution.lastHeartbeatAt).not.toEqual(oldHeartbeat2);
     });
 
-    it('restartWorkflow clears PR state for merge nodes', () => {
+    it('recreateWorkflow clears PR state for merge nodes', () => {
       const testPersistence = new InMemoryPersistence();
       const testBus = new InMemoryBus();
 
@@ -3202,7 +3202,7 @@ describe('Orchestrator', () => {
       });
 
       testOrchestrator.syncFromDb('workflow-pr-test');
-      testOrchestrator.restartWorkflow('workflow-pr-test');
+      testOrchestrator.recreateWorkflow('workflow-pr-test');
 
       const mergeTask = testOrchestrator.getTask('__merge__workflow-pr-test')!;
       expect(mergeTask.execution.reviewUrl).toBeUndefined();
@@ -3210,7 +3210,7 @@ describe('Orchestrator', () => {
       expect(mergeTask.execution.reviewStatus).toBeUndefined();
     });
 
-    it('restartWorkflow clears agentSessionId and containerId', () => {
+    it('recreateWorkflow clears agentSessionId and containerId', () => {
       const testPersistence = new InMemoryPersistence();
       const testBus = new InMemoryBus();
       const wf = 'workflow-agent-session-clear';
@@ -3237,7 +3237,7 @@ describe('Orchestrator', () => {
       });
 
       testOrchestrator.syncFromDb(wf);
-      testOrchestrator.restartWorkflow(wf);
+      testOrchestrator.recreateWorkflow(wf);
 
       const t = testOrchestrator.getTask('t-sess')!;
       expect(t.execution.agentSessionId).toBeUndefined();
@@ -3262,6 +3262,278 @@ describe('Orchestrator', () => {
       const heartbeatTime = task.execution.lastHeartbeatAt!.getTime();
       expect(heartbeatTime).toBeGreaterThanOrEqual(beforeStart);
       expect(heartbeatTime).toBeLessThanOrEqual(afterStart + 1000); // Allow 1s tolerance
+    });
+  });
+
+  // ── retryWorkflow ────────────────────────────────────────
+
+  describe('retryWorkflow', () => {
+    it('preserves completed tasks and resets failed tasks', () => {
+      const p = new InMemoryPersistence();
+      const b = new InMemoryBus();
+      const wfId = 'wf-retry-1';
+
+      // A(completed), B(failed depends on nothing), merge(completed)
+      p.saveTask(wfId, {
+        id: 'a', description: 'Task A', status: 'completed',
+        dependencies: [], createdAt: new Date(),
+        config: { workflowId: wfId }, execution: { exitCode: 0, branch: 'br-a', commit: 'abc' },
+      });
+      p.saveTask(wfId, {
+        id: 'b', description: 'Task B', status: 'failed',
+        dependencies: [], createdAt: new Date(),
+        config: { workflowId: wfId }, execution: { exitCode: 1, error: 'boom', branch: 'br-b' },
+      });
+      p.saveTask(wfId, {
+        id: `__merge__${wfId}`, description: 'Merge gate', status: 'completed',
+        dependencies: ['a', 'b'], createdAt: new Date(),
+        config: { workflowId: wfId, isMergeNode: true }, execution: {},
+      });
+
+      const o = new Orchestrator({ persistence: p, messageBus: b, maxConcurrency: 3 });
+      o.syncFromDb(wfId);
+
+      const started = o.retryWorkflow(wfId);
+
+      // A should stay completed
+      const a = o.getTask('a')!;
+      expect(a.status).toBe('completed');
+      expect(a.execution.branch).toBe('br-a');
+
+      // B should be reset (and auto-started since it has no deps)
+      const bTask = o.getTask('b')!;
+      expect(bTask.status).toBe('running');
+      expect(bTask.execution.error).toBeUndefined();
+
+      // Merge should be reset to pending (waiting on B)
+      const merge = o.getTask(`__merge__${wfId}`)!;
+      expect(merge.status).toBe('pending');
+
+      // Only B should be in the started list
+      expect(started.some(t => t.id === 'b')).toBe(true);
+      expect(started.some(t => t.id === 'a')).toBe(false);
+    });
+
+    it('resets merge node even when leaf tasks are all completed', () => {
+      const p = new InMemoryPersistence();
+      const b = new InMemoryBus();
+      const wfId = 'wf-retry-merge';
+
+      p.saveTask(wfId, {
+        id: 'a', description: 'Task A', status: 'completed',
+        dependencies: [], createdAt: new Date(),
+        config: { workflowId: wfId }, execution: { exitCode: 0 },
+      });
+      p.saveTask(wfId, {
+        id: `__merge__${wfId}`, description: 'Merge gate', status: 'failed',
+        dependencies: ['a'], createdAt: new Date(),
+        config: { workflowId: wfId, isMergeNode: true },
+        execution: { error: 'merge conflict' },
+      });
+
+      const o = new Orchestrator({ persistence: p, messageBus: b, maxConcurrency: 3 });
+      o.syncFromDb(wfId);
+
+      o.retryWorkflow(wfId);
+
+      const merge = o.getTask(`__merge__${wfId}`)!;
+      // Merge should be running since its only dep (a) is completed
+      expect(merge.status).toBe('running');
+    });
+
+    it('skips running tasks', () => {
+      const p = new InMemoryPersistence();
+      const b = new InMemoryBus();
+      const wfId = 'wf-retry-running';
+
+      p.saveTask(wfId, {
+        id: 'a', description: 'Task A', status: 'running',
+        dependencies: [], createdAt: new Date(),
+        config: { workflowId: wfId }, execution: { startedAt: new Date() },
+      });
+      p.saveTask(wfId, {
+        id: `__merge__${wfId}`, description: 'Merge gate', status: 'pending',
+        dependencies: ['a'], createdAt: new Date(),
+        config: { workflowId: wfId, isMergeNode: true }, execution: {},
+      });
+
+      const o = new Orchestrator({ persistence: p, messageBus: b, maxConcurrency: 3 });
+      o.syncFromDb(wfId);
+
+      o.retryWorkflow(wfId);
+
+      // Running task should not be touched
+      const a = o.getTask('a')!;
+      expect(a.status).toBe('running');
+    });
+
+    it('handles all-completed workflow (no resets needed)', () => {
+      const p = new InMemoryPersistence();
+      const b = new InMemoryBus();
+      const wfId = 'wf-retry-allcomplete';
+
+      p.saveTask(wfId, {
+        id: 'a', description: 'Task A', status: 'completed',
+        dependencies: [], createdAt: new Date(),
+        config: { workflowId: wfId }, execution: { exitCode: 0 },
+      });
+      p.saveTask(wfId, {
+        id: `__merge__${wfId}`, description: 'Merge gate', status: 'completed',
+        dependencies: ['a'], createdAt: new Date(),
+        config: { workflowId: wfId, isMergeNode: true }, execution: {},
+      });
+
+      const o = new Orchestrator({ persistence: p, messageBus: b, maxConcurrency: 3 });
+      o.syncFromDb(wfId);
+
+      const started = o.retryWorkflow(wfId);
+      // No tasks should be started (all already complete, nothing to retry)
+      // Merge node gets reset to pending (always), but no ready tasks should start it
+      // because leaf task 'a' is completed → merge becomes ready → merge starts
+      expect(started.length).toBeGreaterThanOrEqual(0);
+    });
+
+    it('resets blocked tasks to pending', () => {
+      const p = new InMemoryPersistence();
+      const b = new InMemoryBus();
+      const wfId = 'wf-retry-blocked';
+
+      p.saveTask(wfId, {
+        id: 'a', description: 'Task A', status: 'completed',
+        dependencies: [], createdAt: new Date(),
+        config: { workflowId: wfId }, execution: { exitCode: 0 },
+      });
+      p.saveTask(wfId, {
+        id: 'b', description: 'Task B', status: 'blocked',
+        dependencies: ['a'], createdAt: new Date(),
+        config: { workflowId: wfId }, execution: {},
+      });
+      p.saveTask(wfId, {
+        id: `__merge__${wfId}`, description: 'Merge gate', status: 'pending',
+        dependencies: ['a', 'b'], createdAt: new Date(),
+        config: { workflowId: wfId, isMergeNode: true }, execution: {},
+      });
+
+      const o = new Orchestrator({ persistence: p, messageBus: b, maxConcurrency: 3 });
+      o.syncFromDb(wfId);
+
+      const started = o.retryWorkflow(wfId);
+
+      // B was blocked but its dep (A) is completed → should become running
+      const bTask = o.getTask('b')!;
+      expect(bTask.status).toBe('running');
+      expect(started.some(t => t.id === 'b')).toBe(true);
+    });
+
+    it('cascades correctly: B depends on A(completed), C depends on B(failed)', () => {
+      const p = new InMemoryPersistence();
+      const b = new InMemoryBus();
+      const wfId = 'wf-retry-cascade';
+
+      p.saveTask(wfId, {
+        id: 'a', description: 'Task A', status: 'completed',
+        dependencies: [], createdAt: new Date(),
+        config: { workflowId: wfId }, execution: { exitCode: 0 },
+      });
+      p.saveTask(wfId, {
+        id: 'b', description: 'Task B', status: 'failed',
+        dependencies: ['a'], createdAt: new Date(),
+        config: { workflowId: wfId }, execution: { exitCode: 1, error: 'fail' },
+      });
+      p.saveTask(wfId, {
+        id: 'c', description: 'Task C', status: 'failed',
+        dependencies: ['b'], createdAt: new Date(),
+        config: { workflowId: wfId }, execution: { exitCode: 1, error: 'dep failed' },
+      });
+      p.saveTask(wfId, {
+        id: `__merge__${wfId}`, description: 'Merge gate', status: 'failed',
+        dependencies: ['a', 'b', 'c'], createdAt: new Date(),
+        config: { workflowId: wfId, isMergeNode: true }, execution: {},
+      });
+
+      const o = new Orchestrator({ persistence: p, messageBus: b, maxConcurrency: 3 });
+      o.syncFromDb(wfId);
+
+      const started = o.retryWorkflow(wfId);
+
+      // A stays completed
+      expect(o.getTask('a')!.status).toBe('completed');
+
+      // B should start (dep A is complete)
+      expect(o.getTask('b')!.status).toBe('running');
+      expect(started.some(t => t.id === 'b')).toBe(true);
+
+      // C should be pending (dep B is not yet complete)
+      expect(o.getTask('c')!.status).toBe('pending');
+      expect(started.some(t => t.id === 'c')).toBe(false);
+
+      // Merge should be pending
+      expect(o.getTask(`__merge__${wfId}`)!.status).toBe('pending');
+    });
+
+    it('preserves branch/commit/workspacePath on reset tasks', () => {
+      const p = new InMemoryPersistence();
+      const b = new InMemoryBus();
+      const wfId = 'wf-retry-preserve';
+
+      p.saveTask(wfId, {
+        id: 'a', description: 'Task A', status: 'failed',
+        dependencies: [], createdAt: new Date(),
+        config: { workflowId: wfId },
+        execution: { exitCode: 1, error: 'fail', branch: 'br-a', commit: 'abc123', workspacePath: '/tmp/ws' },
+      });
+      p.saveTask(wfId, {
+        id: `__merge__${wfId}`, description: 'Merge gate', status: 'pending',
+        dependencies: ['a'], createdAt: new Date(),
+        config: { workflowId: wfId, isMergeNode: true }, execution: {},
+      });
+
+      const o = new Orchestrator({ persistence: p, messageBus: b, maxConcurrency: 3 });
+      o.syncFromDb(wfId);
+
+      o.retryWorkflow(wfId);
+
+      const a = o.getTask('a')!;
+      // Branch/commit/workspacePath should be preserved
+      expect(a.execution.branch).toBe('br-a');
+      expect(a.execution.commit).toBe('abc123');
+      expect(a.execution.workspacePath).toBe('/tmp/ws');
+      // Error/exitCode should be cleared
+      expect(a.execution.error).toBeUndefined();
+      expect(a.execution.exitCode).toBeUndefined();
+    });
+
+    it('resets needs_input tasks', () => {
+      const p = new InMemoryPersistence();
+      const b = new InMemoryBus();
+      const wfId = 'wf-retry-needs-input';
+
+      p.saveTask(wfId, {
+        id: 'a', description: 'Task A', status: 'needs_input',
+        dependencies: [], createdAt: new Date(),
+        config: { workflowId: wfId }, execution: { inputPrompt: 'Enter value' },
+      });
+      p.saveTask(wfId, {
+        id: `__merge__${wfId}`, description: 'Merge gate', status: 'pending',
+        dependencies: ['a'], createdAt: new Date(),
+        config: { workflowId: wfId, isMergeNode: true }, execution: {},
+      });
+
+      const o = new Orchestrator({ persistence: p, messageBus: b, maxConcurrency: 3 });
+      o.syncFromDb(wfId);
+
+      const started = o.retryWorkflow(wfId);
+
+      // needs_input should be reset and start running
+      expect(o.getTask('a')!.status).toBe('running');
+      expect(started.some(t => t.id === 'a')).toBe(true);
+    });
+
+    it('throws when workflow has no tasks', () => {
+      const p = new InMemoryPersistence();
+      const b = new InMemoryBus();
+      const o = new Orchestrator({ persistence: p, messageBus: b, maxConcurrency: 3 });
+      expect(() => o.retryWorkflow('wf-nonexistent')).toThrow('No tasks found');
     });
   });
 

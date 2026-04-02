@@ -94,46 +94,46 @@ describe('ContextMenu visibility logic', () => {
     });
   });
 
-  describe('Restart Workflow visibility', () => {
+  describe('Recreate Workflow visibility', () => {
     it('is visible for any node with a workflowId', () => {
       const task = makeTask({ id: 'regular-task', workflowId: 'wf-1' });
-      const onRestartWorkflow = vi.fn();
+      const onRecreateWorkflow = vi.fn();
 
-      const canRestartWorkflow = !!task.config.workflowId && !!onRestartWorkflow;
-      expect(canRestartWorkflow).toBe(true);
+      const canRecreateWorkflow = !!task.config.workflowId && !!onRecreateWorkflow;
+      expect(canRecreateWorkflow).toBe(true);
     });
 
     it('is visible for merge nodes with a workflowId', () => {
       const task = makeTask({ id: '__merge__wf-1', isMergeNode: true, workflowId: 'wf-1' });
-      const onRestartWorkflow = vi.fn();
+      const onRecreateWorkflow = vi.fn();
 
-      const canRestartWorkflow = !!task.config.workflowId && !!onRestartWorkflow;
-      expect(canRestartWorkflow).toBe(true);
+      const canRecreateWorkflow = !!task.config.workflowId && !!onRecreateWorkflow;
+      expect(canRecreateWorkflow).toBe(true);
     });
 
     it('is hidden when task has no workflowId', () => {
       const task = makeTask({ id: 'orphan-task' });
-      const onRestartWorkflow = vi.fn();
+      const onRecreateWorkflow = vi.fn();
 
-      const canRestartWorkflow = !!task.config.workflowId && !!onRestartWorkflow;
-      expect(canRestartWorkflow).toBe(false);
+      const canRecreateWorkflow = !!task.config.workflowId && !!onRecreateWorkflow;
+      expect(canRecreateWorkflow).toBe(false);
     });
 
-    it('is hidden when onRestartWorkflow callback is not provided', () => {
+    it('is hidden when onRecreateWorkflow callback is not provided', () => {
       const task = makeTask({ id: 'task-1', workflowId: 'wf-1' });
-      const onRestartWorkflow = undefined;
+      const onRecreateWorkflow = undefined;
 
-      const canRestartWorkflow = !!task.config.workflowId && !!onRestartWorkflow;
-      expect(canRestartWorkflow).toBe(false);
+      const canRecreateWorkflow = !!task.config.workflowId && !!onRecreateWorkflow;
+      expect(canRecreateWorkflow).toBe(false);
     });
 
     it('is visible regardless of task status', () => {
-      const onRestartWorkflow = vi.fn();
+      const onRecreateWorkflow = vi.fn();
 
       for (const status of ['pending', 'running', 'completed', 'failed'] as const) {
         const task = makeTask({ id: 'task-1', status, workflowId: 'wf-1' });
-        const canRestartWorkflow = !!task.config.workflowId && !!onRestartWorkflow;
-        expect(canRestartWorkflow).toBe(true);
+        const canRecreateWorkflow = !!task.config.workflowId && !!onRecreateWorkflow;
+        expect(canRecreateWorkflow).toBe(true);
       }
     });
   });

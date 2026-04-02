@@ -14,7 +14,7 @@
 #   ./invoker-ctl output <taskId>                  Show captured output for a task
 #   ./invoker-ctl cancel <taskId>                  Cancel a running task
 #   ./invoker-ctl restart <taskId>                 Restart a failed task
-#   ./invoker-ctl restart-workflow <workflowId>    Restart entire workflow (bump generation)
+#   ./invoker-ctl recreate-workflow <workflowId>    Recreate entire workflow (bump generation)
 #   ./invoker-ctl approve <taskId>                 Approve a task awaiting approval
 #   ./invoker-ctl reject <taskId> [reason]         Reject a task
 #   ./invoker-ctl input <taskId> <text>            Provide input to a task awaiting input
@@ -66,9 +66,9 @@ case "${1:-}" in
     curl -sf "$BASE/api/queue" | fmt '.'
     ;;
 
-  restart-workflow)
+  recreate-workflow)
     if [ -z "${2:-}" ]; then
-      echo "Usage: invoker-ctl restart-workflow <workflowId>" >&2
+      echo "Usage: invoker-ctl recreate-workflow <workflowId>" >&2
       exit 1
     fi
     curl -sf -X POST "$BASE/api/workflows/$2/restart" | fmt '.'
@@ -208,7 +208,7 @@ Usage:
   invoker-ctl output <taskId>                  Show captured output for a task
   invoker-ctl cancel <taskId>                  Cancel a running task
   invoker-ctl restart <taskId>                 Restart a failed task
-  invoker-ctl restart-workflow <workflowId>    Restart an entire workflow (bump generation)
+  invoker-ctl recreate-workflow <workflowId>    Recreate an entire workflow (bump generation)
   invoker-ctl approve <taskId>                 Approve a task awaiting approval
   invoker-ctl reject <taskId> [reason]         Reject a task
   invoker-ctl input <taskId> <text>            Provide input to a task awaiting input
@@ -222,7 +222,7 @@ Environment:
 
 Examples:
   invoker-ctl workflows                       List all workflows
-  invoker-ctl restart-workflow abc123          Restart workflow abc123
+  invoker-ctl recreate-workflow abc123          Recreate workflow abc123
   invoker-ctl tasks running                   List all running tasks with heartbeat info
   invoker-ctl heartbeat add-config            Check if add-config task is alive
   invoker-ctl cancel add-config               Kill a stalled task

@@ -19,7 +19,7 @@ import { execSync } from 'node:child_process';
 import type { WorkResponse } from '@invoker/protocol';
 import type { TaskState } from '@invoker/core';
 import { TaskExecutor, FamiliarRegistry, WorktreeFamiliar } from '@invoker/executors';
-import { rebaseAndRetry, bumpGenerationAndRestart } from '../workflow-actions.js';
+import { rebaseAndRetry, bumpGenerationAndRecreate } from '../workflow-actions.js';
 
 function createTempRepo(): string {
   const dir = mkdtempSync(join(tmpdir(), 'rebase-retry-'));
@@ -119,8 +119,8 @@ describe('rebase-and-retry: pool mirror cleanup before restart', { timeout: 120_
         return [];
       },
       setTaskAwaitingApproval: () => {},
-      restartWorkflow: (_workflowId: string): TaskState[] => {
-        // Mimic Orchestrator.restartWorkflow: reset ALL execution state
+      recreateWorkflow: (_workflowId: string): TaskState[] => {
+        // Mimic Orchestrator.recreateWorkflow: reset ALL execution state
         // Must match the real resetChanges in orchestrator.ts (lines 977-996)
         for (const t of tasks) {
           (t as any).status = 'pending';
@@ -255,7 +255,7 @@ describe('rebase-and-retry: pool mirror cleanup before restart', { timeout: 120_
 
     const commitY = addCommitToMaster(tmpDir, 'new-feature.txt', 'commit Y: new feature');
 
-    bumpGenerationAndRestart('wf-test', {
+    bumpGenerationAndRecreate('wf-test', {
       orchestrator: orchestrator as any,
       persistence: persistence as any,
     });

@@ -137,7 +137,7 @@ describe('Flow 1: rebase-and-retry', () => {
     expect(result.errors.length).toBeGreaterThan(0);
 
     // Reset entire DAG
-    const workflowStarted = h.orchestrator.restartWorkflow(mergeTask.config.workflowId!);
+    const workflowStarted = h.orchestrator.recreateWorkflow(mergeTask.config.workflowId!);
 
     // All non-merge tasks should be pending or running (re-started)
     const nonMergeTasks = h.getAllTasks().filter(t => !t.config.isMergeNode);
@@ -268,7 +268,7 @@ describe('Flow 1b: rebase-and-retry from any node', () => {
     expect(result.success).toBe(false);
 
     // Conflict: reset entire DAG
-    const workflowStarted = h.orchestrator.restartWorkflow(leafTask.config.workflowId!);
+    const workflowStarted = h.orchestrator.recreateWorkflow(leafTask.config.workflowId!);
 
     // All non-merge tasks should be pending or running
     const nonMergeTasks = h.getAllTasks().filter(t => !t.config.isMergeNode);
@@ -630,7 +630,7 @@ describe('Flow 6: content-addressable branch names', () => {
     h = createTestHarness();
   });
 
-  it('restartWorkflow clears branch and workspacePath fields', () => {
+  it('recreateWorkflow clears branch and workspacePath fields', () => {
     h.loadAndStart(PARALLEL_PLAN);
 
     h.completeTask('A');
@@ -652,7 +652,7 @@ describe('Flow 6: content-addressable branch names', () => {
     const mergeId = h.getAllTasks().find(t => t.config.isMergeNode)!.id;
     const mergeTask = h.getTask(mergeId)!;
 
-    h.orchestrator.restartWorkflow(mergeTask.config.workflowId!);
+    h.orchestrator.recreateWorkflow(mergeTask.config.workflowId!);
 
     // branch and workspacePath should be cleared on all tasks
     for (const t of h.getAllTasks().filter(t => !t.config.isMergeNode)) {
@@ -661,7 +661,7 @@ describe('Flow 6: content-addressable branch names', () => {
     }
   });
 
-  it('restartWorkflow resets tasks so re-execution gets fresh branches', () => {
+  it('recreateWorkflow resets tasks so re-execution gets fresh branches', () => {
     h.loadAndStart(LINEAR_PLAN);
 
     h.completeTask('A');
@@ -673,7 +673,7 @@ describe('Flow 6: content-addressable branch names', () => {
     const mergeId = h.getAllTasks().find(t => t.config.isMergeNode)!.id;
     const mergeTask = h.getTask(mergeId)!;
 
-    h.orchestrator.restartWorkflow(mergeTask.config.workflowId!);
+    h.orchestrator.recreateWorkflow(mergeTask.config.workflowId!);
 
     // After restart, A should be running with no branch (WorktreeFamiliar will assign a new one)
     const a = h.getTask('A')!;
@@ -713,7 +713,7 @@ describe('Flow 6: content-addressable branch names', () => {
     expect(result.success).toBe(false);
 
     // Reset entire DAG
-    h.orchestrator.restartWorkflow(mergeTask.config.workflowId!);
+    h.orchestrator.recreateWorkflow(mergeTask.config.workflowId!);
 
     // All tasks should have their branch cleared
     for (const t of h.getAllTasks().filter(t => !t.config.isMergeNode)) {
@@ -825,7 +825,7 @@ describe('Flow 8: restart workflow with generation salt', () => {
     h = createTestHarness();
   });
 
-  it('generation bump persists and restartWorkflow clears branches', () => {
+  it('generation bump persists and recreateWorkflow clears branches', () => {
     h.loadAndStart(PARALLEL_PLAN);
 
     h.completeTask('A');
@@ -851,7 +851,7 @@ describe('Flow 8: restart workflow with generation salt', () => {
     expect((wf1 as any).generation).toBe(1);
 
     // Restart workflow clears all branches
-    h.orchestrator.restartWorkflow(wfId);
+    h.orchestrator.recreateWorkflow(wfId);
 
     for (const t of h.getAllTasks().filter(t => !t.config.isMergeNode)) {
       expect(t.execution?.branch).toBeUndefined();
@@ -863,7 +863,7 @@ describe('Flow 8: restart workflow with generation salt', () => {
     expect(['pending', 'running']).toContain(h.getTask('B')!.status);
   });
 
-  it('restartWorkflow clears old branch fields so executor gets fresh ones', () => {
+  it('recreateWorkflow clears old branch fields so executor gets fresh ones', () => {
     h.loadAndStart(PARALLEL_PLAN);
 
     h.completeTask('A');
@@ -884,7 +884,7 @@ describe('Flow 8: restart workflow with generation salt', () => {
 
     // Bump generation and restart
     h.persistence.updateWorkflow(wfId, { generation: 2 });
-    h.orchestrator.restartWorkflow(wfId);
+    h.orchestrator.recreateWorkflow(wfId);
 
     for (const t of h.getAllTasks().filter(t => !t.config.isMergeNode)) {
       expect(t.execution?.branch).toBeUndefined();

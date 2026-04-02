@@ -152,12 +152,21 @@ export function App() {
     }
   }, []);
 
-  const handleRestartWorkflow = useCallback(async (workflowId: string) => {
+  const handleRetryWorkflow = useCallback(async (workflowId: string) => {
     setContextMenu(null);
     try {
-      await window.invoker?.restartWorkflow(workflowId);
+      await window.invoker?.retryWorkflow(workflowId);
     } catch (err) {
-      console.error('Restart Workflow failed:', err);
+      console.error('Retry Workflow failed:', err);
+    }
+  }, []);
+
+  const handleRecreateWorkflow = useCallback(async (workflowId: string) => {
+    setContextMenu(null);
+    try {
+      await window.invoker?.recreateWorkflow(workflowId);
+    } catch (err) {
+      console.error('Recreate Workflow failed:', err);
     }
   }, []);
 
@@ -524,7 +533,8 @@ export function App() {
           onReplace={handleReplaceTask}
           onOpenTerminal={handleOpenTerminal}
           onRebaseAndRetry={handleRebaseAndRetry}
-          onRestartWorkflow={handleRestartWorkflow}
+          onRetryWorkflow={handleRetryWorkflow}
+          onRecreateWorkflow={handleRecreateWorkflow}
           onDeleteWorkflow={handleDeleteWorkflow}
           onFix={handleFix}
           onCancel={handleCancelTask}

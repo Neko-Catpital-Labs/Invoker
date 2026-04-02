@@ -463,7 +463,7 @@ describe('POST /api/tasks/:id/edit-type', () => {
 
 describe('POST /api/workflows/:id/restart', () => {
   it('restarts workflow via shared function', async () => {
-    mocks.orchestrator.restartWorkflow = vi.fn(() => [makeTask()]);
+    mocks.orchestrator.recreateWorkflow = vi.fn(() => [makeTask()]);
     const res = await request(port, 'POST', '/api/workflows/wf-1/restart');
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);

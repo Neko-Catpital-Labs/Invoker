@@ -77,7 +77,8 @@ import { runHeadless, tryDelegateRun, tryDelegateResume } from './headless.js';
 import {
   rebaseAndRetry,
   rejectTask,
-  restartWorkflow as sharedRestartWorkflow,
+  recreateWorkflow as sharedRecreateWorkflow,
+  retryWorkflow as sharedRetryWorkflow,
   resolveConflictWithClaudeAction,
   selectExperiments as sharedSelectExperiments,
   setWorkflowMergeMode,
@@ -1045,10 +1046,10 @@ function setupGuiMode(): void {
       return orchestrator.getQueueStatus();
     });
 
-    ipcMain.handle('invoker:restart-workflow', async (_event, workflowId: string) => {
-      console.log(`[ipc] restart-workflow: "${workflowId}"`);
+    ipcMain.handle('invoker:recreate-workflow', async (_event, workflowId: string) => {
+      console.log(`[ipc] recreate-workflow: "${workflowId}"`);
       try {
-        const started = sharedRestartWorkflow(workflowId, { persistence, orchestrator });
+        const started = sharedRecreateWorkflow(workflowId, { persistence, orchestrator });
         const runnable = started.filter(t => t.status === 'running');
         remoteFetchForPool.enabled = false;
         try {
@@ -1057,7 +1058,24 @@ function setupGuiMode(): void {
           remoteFetchForPool.enabled = true;
         }
       } catch (err) {
-        console.error(`[ipc] restart-workflow failed: ${err}`);
+        console.error(`[ipc] recreate-workflow failed: ${err}`);
+        throw err;
+      }
+    });
+
+    ipcMain.handle('invoker:retry-workflow', async (_event, workflowId: string) => {
+      console.log(`[ipc] retry-workflow: "${workflowId}"`);
+      try {
+        const started = sharedRetryWorkflow(workflowId, { orchestrator });
+        const runnable = started.filter(t => t.status === 'running');
+        remoteFetchForPool.enabled = false;
+        try {
+          await taskExecutor.executeTasks(runnable);
+        } finally {
+          remoteFetchForPool.enabled = true;
+        }
+      } catch (err) {
+        console.error(`[ipc] retry-workflow failed: ${err}`);
         throw err;
       }
     });
@@ -1355,6 +1373,7 @@ function setupGuiMode(): void {
         containerId: persistence.getContainerId(taskId) ?? undefined,
         workspacePath: persistence.getWorkspacePath(taskId) ?? undefined,
         branch: persistence.getBranch(taskId) ?? undefined,
+        executionAgent: persistence.getExecutionAgent?.(taskId) ?? undefined,
       };
       console.log(`[open-terminal] task="${taskId}" meta=${JSON.stringify(meta)}`);
 
@@ -1363,7 +1382,7 @@ function setupGuiMode(): void {
       if (!familiar) {
         console.log(`[open-terminal] task="${taskId}" familiar type="${meta.familiarType}" not registered, lazy-registering`);
         if (meta.familiarType === 'docker') {
-          const docker = new DockerFamiliar({ workspaceDir: repoRoot });
+          const docker = new DockerFamiliar({ workspaceDir: repoRoot, agentRegistry });
           familiarRegistry.register('docker', docker);
           familiar = docker;
         } else if (meta.familiarType === 'worktree') {
@@ -1372,6 +1391,7 @@ function setupGuiMode(): void {
             worktreeBaseDir: path.resolve(invokerHome, 'worktrees'),
             cacheDir: path.resolve(invokerHome, 'repos'),
             maxWorktrees: 5,
+            agentRegistry,
           });
           familiarRegistry.register('worktree', worktree);
           familiar = worktree;
@@ -1379,7 +1399,7 @@ function setupGuiMode(): void {
           const targetId = persistence.getRemoteTargetId?.(taskId);
           const target = targetId ? loadConfig().remoteTargets?.[targetId] : undefined;
           if (target) {
-            familiar = new SshFamiliar(target);
+            familiar = new SshFamiliar({ ...target, agentRegistry });
           } else {
             familiar = familiarRegistry.getDefault();
           }

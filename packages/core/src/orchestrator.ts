@@ -1002,10 +1002,68 @@ export class Orchestrator {
   }
 
   /**
+   * Incremental retry: reset only failed/stuck tasks to pending, preserve completed.
+   * Merge nodes are always reset (they depend on all leaf tasks).
+   * After reset, startExecution() finds newly-ready tasks via getReadyNodes().
+   */
+  retryWorkflow(workflowId: string): TaskState[] {
+    this.refreshFromDb();
+
+    const allTasks = this.stateMachine.getAllTasks().filter(
+      (t) => t.config.workflowId === workflowId,
+    );
+    if (allTasks.length === 0) throw new Error(`No tasks found for workflow ${workflowId}`);
+
+    const retryStatuses = new Set(['failed', 'needs_input', 'blocked', 'stale']);
+
+    const resetChanges: TaskStateChanges = {
+      status: 'pending',
+      config: { summary: undefined },
+      execution: {
+        startedAt: undefined,
+        completedAt: undefined,
+        error: undefined,
+        exitCode: undefined,
+        // Preserve branch/commit/workspacePath — they contain valid work context
+        // Only clear error-related and timing fields
+      },
+    };
+
+    let resetCount = 0;
+    for (const task of allTasks) {
+      if (task.config.isMergeNode) {
+        // Always reset merge node — it needs to re-evaluate after retried tasks complete
+        if (task.status !== 'pending') {
+          this.writeAndSync(task.id, resetChanges);
+          this.persistence.logEvent?.(task.id, 'task.pending', resetChanges);
+          this.messageBus.publish(TASK_DELTA_CHANNEL, { type: 'updated', taskId: task.id, changes: resetChanges });
+          this.scheduler.completeJob(task.id);
+          resetCount++;
+        }
+        continue;
+      }
+
+      if (!retryStatuses.has(task.status)) continue; // Skip completed/running tasks
+
+      this.writeAndSync(task.id, resetChanges);
+      this.persistence.logEvent?.(task.id, 'task.pending', resetChanges);
+      this.messageBus.publish(TASK_DELTA_CHANNEL, { type: 'updated', taskId: task.id, changes: resetChanges });
+      this.scheduler.completeJob(task.id);
+      resetCount++;
+    }
+
+    console.log(
+      `[orchestrator] retryWorkflow: reset ${resetCount}/${allTasks.length} tasks for ${workflowId} (preserved completed)`,
+    );
+
+    return this.startExecution();
+  }
+
+  /**
    * Reset ALL tasks in a workflow to pending and auto-start ready ones.
    * Used when a rebase conflicts and the entire DAG needs to re-execute.
    */
-  restartWorkflow(workflowId: string): TaskState[] {
+  recreateWorkflow(workflowId: string): TaskState[] {
     this.refreshFromDb();
 
     const allTasks = this.stateMachine.getAllTasks().filter(
@@ -1034,16 +1092,16 @@ export class Orchestrator {
       },
     };
 
-    console.log(`[orchestrator] restartWorkflow: resetting ${allTasks.length} tasks for workflow ${workflowId}`);
+    console.log(`[orchestrator] recreateWorkflow: resetting ${allTasks.length} tasks for workflow ${workflowId}`);
     console.log(
-      '[agent-session-trace] restartWorkflow: resetChanges.execution clears agentSessionId/containerId (DB NULL before next run)',
+      '[agent-session-trace] recreateWorkflow: resetChanges.execution clears agentSessionId/containerId (DB NULL before next run)',
     );
     for (const task of allTasks) {
       const prevSess = task.execution.agentSessionId ?? null;
       const prevCt = task.execution.containerId ?? null;
       if (task.config.isMergeNode) {
         console.log(
-          `[merge-gate-workspace] restartWorkflow mergeNode=${task.id} ` +
+          `[merge-gate-workspace] recreateWorkflow mergeNode=${task.id} ` +
             `will clear workspace_path (was ${task.execution.workspacePath ?? 'NULL'})`,
         );
         mergeTrace('GATE_WS_RESTART_WORKFLOW_MERGE', {
@@ -1053,11 +1111,11 @@ export class Orchestrator {
       }
       console.log(`[orchestrator]   reset "${task.id}" (was ${task.status}, branch=${task.execution.branch ?? 'none'}, commit=${task.execution.commit?.slice(0, 7) ?? 'none'})`);
       console.log(
-        `[agent-session-trace] restartWorkflow: before writeAndSync task="${task.id}" agentSessionId=${prevSess ?? 'null'} containerId=${prevCt ?? 'null'}`,
+        `[agent-session-trace] recreateWorkflow: before writeAndSync task="${task.id}" agentSessionId=${prevSess ?? 'null'} containerId=${prevCt ?? 'null'}`,
       );
       const after = this.writeAndSync(task.id, resetChanges);
       console.log(
-        `[agent-session-trace] restartWorkflow: after writeAndSync task="${task.id}" agentSessionId=${after.execution.agentSessionId ?? 'null'} containerId=${after.execution.containerId ?? 'null'}`,
+        `[agent-session-trace] recreateWorkflow: after writeAndSync task="${task.id}" agentSessionId=${after.execution.agentSessionId ?? 'null'} containerId=${after.execution.containerId ?? 'null'}`,
       );
       const delta: TaskDelta = { type: 'updated', taskId: task.id, changes: resetChanges };
       this.persistence.logEvent?.(task.id, 'task.pending', resetChanges);

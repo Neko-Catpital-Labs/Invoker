@@ -20,19 +20,21 @@ interface ContextMenuProps {
   onReplace: (taskId: string) => void;
   onOpenTerminal: (taskId: string) => void;
   onRebaseAndRetry?: (taskId: string) => void;
-  onRestartWorkflow?: (workflowId: string) => void;
+  onRetryWorkflow?: (workflowId: string) => void;
+  onRecreateWorkflow?: (workflowId: string) => void;
   onDeleteWorkflow?: (workflowId: string) => void;
   onFix?: (taskId: string, agentName: string) => void;
   onCancel?: (taskId: string) => void;
   onClose: () => void;
 }
 
-export function ContextMenu({ x, y, task, onRestart, onReplace, onOpenTerminal, onRebaseAndRetry, onRestartWorkflow, onDeleteWorkflow, onFix, onCancel, onClose }: ContextMenuProps) {
+export function ContextMenu({ x, y, task, onRestart, onReplace, onOpenTerminal, onRebaseAndRetry, onRetryWorkflow, onRecreateWorkflow, onDeleteWorkflow, onFix, onCancel, onClose }: ContextMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
   const canRestart = true;
   const canReplace = task.status === 'failed' || task.status === 'blocked';
   const canRebaseAndRetry = !!task.config.workflowId && !!onRebaseAndRetry;
-  const canRestartWorkflow = !!task.config.workflowId && !!onRestartWorkflow;
+  const canRetryWorkflow = !!task.config.workflowId && !!onRetryWorkflow;
+  const canRecreateWorkflow = !!task.config.workflowId && !!onRecreateWorkflow;
   const canDeleteWorkflow = !!task.config.workflowId && !!onDeleteWorkflow;
   const canFix = task.status === 'failed' && !!onFix;
   const canCancel = task.status !== 'completed' && task.status !== 'stale' && !!onCancel;
@@ -126,14 +128,25 @@ export function ContextMenu({ x, y, task, onRestart, onReplace, onOpenTerminal, 
           </button>
         </>
       )}
-      {canRestartWorkflow && (
+      {canRetryWorkflow && (
         <>
           <div className="border-t border-gray-600 my-1" />
           <button
-            className="w-full text-left px-3 py-1.5 text-sm text-red-300 hover:bg-gray-700"
-            onClick={() => onRestartWorkflow!(task.config.workflowId!)}
+            className="w-full text-left px-3 py-1.5 text-sm text-yellow-300 hover:bg-gray-700"
+            onClick={() => onRetryWorkflow!(task.config.workflowId!)}
           >
-            Restart Workflow
+            Retry Workflow (keep completed)
+          </button>
+        </>
+      )}
+      {canRecreateWorkflow && (
+        <>
+          {!canRetryWorkflow && <div className="border-t border-gray-600 my-1" />}
+          <button
+            className="w-full text-left px-3 py-1.5 text-sm text-red-300 hover:bg-gray-700"
+            onClick={() => onRecreateWorkflow!(task.config.workflowId!)}
+          >
+            Recreate Workflow
           </button>
         </>
       )}

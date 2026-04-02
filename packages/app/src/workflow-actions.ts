@@ -25,7 +25,7 @@ export interface ActionDeps {
 
 // ── Actions ──────────────────────────────────────────────────
 
-export function bumpGenerationAndRestart(
+export function bumpGenerationAndRecreate(
   workflowId: string,
   deps: Pick<ActionDeps, 'persistence' | 'orchestrator'>,
 ): TaskState[] {
@@ -35,8 +35,8 @@ export function bumpGenerationAndRestart(
   const nextGen = (workflow.generation ?? 0) + 1;
   persistence.updateWorkflow(workflowId, { generation: nextGen });
   console.log(`[workflow] bumped generation to ${nextGen} for ${workflowId}`);
-  console.log(`[agent-session-trace] bumpGenerationAndRestart: calling restartWorkflow(${workflowId})`);
-  return orchestrator.restartWorkflow(workflowId);
+  console.log(`[agent-session-trace] bumpGenerationAndRecreate: calling recreateWorkflow(${workflowId})`);
+  return orchestrator.recreateWorkflow(workflowId);
 }
 
 export async function approveTask(
@@ -79,11 +79,18 @@ export function restartTask(
   return deps.orchestrator.restartTask(taskId);
 }
 
-export function restartWorkflow(
+export function retryWorkflow(
+  workflowId: string,
+  deps: Pick<ActionDeps, 'orchestrator'>,
+): TaskState[] {
+  return deps.orchestrator.retryWorkflow(workflowId);
+}
+
+export function recreateWorkflow(
   workflowId: string,
   deps: Pick<ActionDeps, 'persistence' | 'orchestrator'>,
 ): TaskState[] {
-  return bumpGenerationAndRestart(workflowId, deps);
+  return bumpGenerationAndRecreate(workflowId, deps);
 }
 
 /**
@@ -103,13 +110,13 @@ export async function rebaseAndRetry(
 
   const workflow = deps.persistence.loadWorkflow(workflowId);
   console.log(
-    `[agent-session-trace] rebaseAndRetry: taskId=${taskId} workflowId=${workflowId} → pool prep (if taskExecutor+repoUrl) → bumpGenerationAndRestart → restartWorkflow`,
+    `[agent-session-trace] rebaseAndRetry: taskId=${taskId} workflowId=${workflowId} → pool prep (if taskExecutor+repoUrl) → bumpGenerationAndRecreate → recreateWorkflow`,
   );
   if (deps.taskExecutor && workflow?.repoUrl) {
     await deps.taskExecutor.preparePoolForRebaseRetry(workflowId, workflow.repoUrl, workflow.baseBranch);
   }
 
-  return bumpGenerationAndRestart(workflowId, deps);
+  return bumpGenerationAndRecreate(workflowId, deps);
 }
 
 export function editTaskCommand(

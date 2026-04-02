@@ -73,6 +73,7 @@ export interface TaskExecution {
   readonly branch?: string;
   readonly commit?: string;
   readonly agentSessionId?: string;
+  readonly agentName?: string;
   readonly workspacePath?: string;
   readonly containerId?: string;
   readonly experiments?: readonly string[];
@@ -239,7 +240,8 @@ export interface InvokerAPI {
   deleteAllWorkflows: () => Promise<void>;
   deleteWorkflow: (workflowId: string) => Promise<void>;
   cleanupWorktrees: () => Promise<{ removed: string[]; errors: string[] }>;
-  restartWorkflow: (workflowId: string) => Promise<void>;
+  recreateWorkflow: (workflowId: string) => Promise<void>;
+  retryWorkflow: (workflowId: string) => Promise<void>;
   rebaseAndRetry: (mergeTaskId: string) => Promise<{
     success: boolean;
     rebasedBranches: string[];
