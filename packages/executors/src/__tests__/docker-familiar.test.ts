@@ -331,7 +331,7 @@ describe('DockerFamiliar', () => {
   describe('claude action type', () => {
     it('sets agentSessionId on handle', async () => {
       const request = makeRequest({
-        actionType: 'claude',
+        actionType: 'ai_task',
         inputs: { prompt: 'test', repoUrl: 'https://github.com/test/repo.git' },
       });
       const handle = await familiar.start(request);
@@ -354,7 +354,7 @@ describe('DockerFamiliar', () => {
       });
 
       await familiarWithKey.start(makeRequest({
-        actionType: 'claude',
+        actionType: 'ai_task',
         inputs: { prompt: 'test', repoUrl: 'https://github.com/test/repo.git' },
       }));
 
@@ -365,7 +365,7 @@ describe('DockerFamiliar', () => {
 
     it('getTerminalSpec returns docker start + exec claude --resume for claude tasks', async () => {
       const request = makeRequest({
-        actionType: 'claude',
+        actionType: 'ai_task',
         inputs: { prompt: 'test', repoUrl: 'https://github.com/test/repo.git' },
       });
       const handle = await familiar.start(request);

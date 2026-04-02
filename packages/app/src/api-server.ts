@@ -22,6 +22,7 @@
  *   POST   /api/tasks/:id/input        body: { text }
  *   POST   /api/tasks/:id/edit         body: { command }
  *   POST   /api/tasks/:id/edit-type    body: { familiarType, remoteTargetId? }
+ *   POST   /api/tasks/:id/edit-agent   body: { agent }
  *   POST   /api/workflows/:id/restart
  *   POST   /api/workflows/:id/merge-mode  body: { mode }
  *   DELETE /api/workflows/:id
@@ -38,6 +39,7 @@ import {
   provideInput as sharedProvideInput,
   editTaskCommand as sharedEditTaskCommand,
   editTaskType as sharedEditTaskType,
+  editTaskAgent as sharedEditTaskAgent,
   setWorkflowMergeMode as sharedSetWorkflowMergeMode,
 } from './workflow-actions.js';
 
@@ -323,6 +325,27 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
           const runnable = started.filter(t => t.status === 'running');
           await taskExecutor.executeTasks(runnable);
           json(res, 200, { ok: true, taskId, action: 'type_edited', tasksStarted: runnable.length });
+        } catch (err) {
+          json(res, 400, { error: err instanceof Error ? err.message : String(err) });
+        }
+        return;
+      }
+
+      // POST /api/tasks/:id/edit-agent
+      const editAgentMatch = path.match(/^\/api\/tasks\/([^/]+)\/edit-agent$/);
+      if (method === 'POST' && editAgentMatch) {
+        const taskId = decodeURIComponent(editAgentMatch[1]);
+        try {
+          const body = await readBody(req);
+          const { agent } = JSON.parse(body);
+          if (!agent) {
+            json(res, 400, { error: 'Missing "agent" in request body' });
+            return;
+          }
+          const started = sharedEditTaskAgent(taskId, agent, { orchestrator });
+          const runnable = started.filter(t => t.status === 'running');
+          await taskExecutor.executeTasks(runnable);
+          json(res, 200, { ok: true, taskId, action: 'agent_edited', tasksStarted: runnable.length });
         } catch (err) {
           json(res, 400, { error: err instanceof Error ? err.message : String(err) });
         }

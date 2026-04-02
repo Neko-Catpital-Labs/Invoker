@@ -139,7 +139,7 @@ function executeTaskViaFamiliar(
   const request: WorkRequest = {
     requestId: randomUUID(),
     actionId: task.id,
-    actionType: task.config.command ? 'command' : 'claude',
+    actionType: task.config.command ? 'command' : 'ai_task',
     inputs: {
       command: task.config.command,
       prompt: task.config.prompt,
@@ -671,5 +671,166 @@ describe('SshFamiliar getRestoredTerminalSpec', () => {
     expect(spec.command).toBe('ssh');
     expect(spec.args).toContain('BatchMode=yes');
     expect(spec.args).not.toContain('-t');
+  });
+});
+
+// ── Codex vs Claude session resume ───────────────────────────
+// Proves that getRestoredTerminalSpec with agentRegistry and
+// executionAgent='codex' opens a codex session, not claude.
+
+describe('getRestoredTerminalSpec dispatches codex vs claude session resume', () => {
+  // Lazy import to avoid circular dep issues at module level
+  let registerBuiltinAgents: typeof import('@invoker/executors').registerBuiltinAgents;
+
+  beforeEach(async () => {
+    ({ registerBuiltinAgents } = await import('@invoker/executors'));
+  });
+
+  afterEach(() => {
+    vi.mocked(existsSync).mockReset();
+  });
+
+  describe('WorktreeFamiliar', () => {
+    it('resumes with codex when executionAgent is "codex"', () => {
+      const agentRegistry = registerBuiltinAgents();
+      const wt = new WorktreeFamiliar({
+        worktreeBaseDir: '/tmp/wt',
+        cacheDir: '/tmp/cache',
+        agentRegistry,
+      });
+      vi.mocked(existsSync).mockReturnValue(true);
+      const meta: PersistedTaskMeta = {
+        taskId: 'task-codex',
+        familiarType: 'worktree',
+        agentSessionId: 'codex-sess-123',
+        workspacePath: '/tmp/workspace',
+        executionAgent: 'codex',
+      };
+      const spec = wt.getRestoredTerminalSpec(meta);
+      expect(spec.command).toBe('codex');
+      expect(spec.args).toContain('exec');
+      expect(spec.args).toContain('resume');
+      expect(spec.args).toContain('codex-sess-123');
+      // Must NOT be claude
+      expect(spec.command).not.toBe('claude');
+      expect(spec.args).not.toContain('--resume');
+      expect(spec.args).not.toContain('--dangerously-skip-permissions');
+    });
+
+    it('resumes with claude when executionAgent is "claude"', () => {
+      const agentRegistry = registerBuiltinAgents();
+      const wt = new WorktreeFamiliar({
+        worktreeBaseDir: '/tmp/wt',
+        cacheDir: '/tmp/cache',
+        agentRegistry,
+      });
+      vi.mocked(existsSync).mockReturnValue(true);
+      const meta: PersistedTaskMeta = {
+        taskId: 'task-claude',
+        familiarType: 'worktree',
+        agentSessionId: 'claude-sess-456',
+        workspacePath: '/tmp/workspace',
+        executionAgent: 'claude',
+      };
+      const spec = wt.getRestoredTerminalSpec(meta);
+      expect(spec.command).toBe('claude');
+      expect(spec.args).toContain('--resume');
+      expect(spec.args).toContain('claude-sess-456');
+      expect(spec.args).toContain('--dangerously-skip-permissions');
+    });
+
+    it('defaults to claude when executionAgent is undefined', () => {
+      const agentRegistry = registerBuiltinAgents();
+      const wt = new WorktreeFamiliar({
+        worktreeBaseDir: '/tmp/wt',
+        cacheDir: '/tmp/cache',
+        agentRegistry,
+      });
+      vi.mocked(existsSync).mockReturnValue(true);
+      const meta: PersistedTaskMeta = {
+        taskId: 'task-default',
+        familiarType: 'worktree',
+        agentSessionId: 'default-sess-789',
+        workspacePath: '/tmp/workspace',
+        // executionAgent intentionally omitted
+      };
+      const spec = wt.getRestoredTerminalSpec(meta);
+      expect(spec.command).toBe('claude');
+    });
+  });
+
+  describe('SshFamiliar', () => {
+    it('resumes with codex on remote when executionAgent is "codex"', () => {
+      const agentRegistry = registerBuiltinAgents();
+      const ssh = new SshFamiliar({
+        host: 'droplet.example',
+        user: 'root',
+        sshKeyPath: '/home/me/.ssh/id_rsa',
+        agentRegistry,
+      });
+      const meta: PersistedTaskMeta = {
+        taskId: 'remote-codex',
+        familiarType: 'ssh',
+        agentSessionId: 'codex-remote-sess',
+        workspacePath: '~/.invoker/worktrees/abc/experiment-remote-codex',
+        branch: 'experiment/remote-codex',
+        executionAgent: 'codex',
+      };
+      const spec = ssh.getRestoredTerminalSpec(meta);
+      expect(spec.command).toBe('ssh');
+      const innerCmd = spec.args![spec.args!.length - 1];
+      expect(innerCmd).toContain('codex');
+      expect(innerCmd).toContain('exec');
+      expect(innerCmd).toContain('resume');
+      expect(innerCmd).toContain('codex-remote-sess');
+      // Must NOT be claude --resume
+      expect(innerCmd).not.toContain('claude --resume');
+    });
+
+    it('resumes with claude on remote when executionAgent is "claude"', () => {
+      const agentRegistry = registerBuiltinAgents();
+      const ssh = new SshFamiliar({
+        host: 'droplet.example',
+        user: 'root',
+        sshKeyPath: '/home/me/.ssh/id_rsa',
+        agentRegistry,
+      });
+      const meta: PersistedTaskMeta = {
+        taskId: 'remote-claude',
+        familiarType: 'ssh',
+        agentSessionId: 'claude-remote-sess',
+        workspacePath: '~/.invoker/worktrees/abc/experiment-remote-claude',
+        branch: 'experiment/remote-claude',
+        executionAgent: 'claude',
+      };
+      const spec = ssh.getRestoredTerminalSpec(meta);
+      expect(spec.command).toBe('ssh');
+      const innerCmd = spec.args![spec.args!.length - 1];
+      expect(innerCmd).toContain('claude');
+      expect(innerCmd).toContain('--resume');
+      expect(innerCmd).not.toContain('codex');
+    });
+  });
+
+  describe('DockerFamiliar', () => {
+    it('resumes with codex inside container when executionAgent is "codex"', () => {
+      const agentRegistry = registerBuiltinAgents();
+      const docker = new DockerFamiliar({ workspaceDir: '/tmp', agentRegistry });
+      const meta: PersistedTaskMeta = {
+        taskId: 'docker-codex',
+        familiarType: 'docker',
+        agentSessionId: 'codex-docker-sess',
+        containerId: 'container-xyz',
+        executionAgent: 'codex',
+      };
+      const spec = docker.getRestoredTerminalSpec(meta);
+      expect(spec.command).toBe('bash');
+      const scriptArg = spec.args![1];
+      expect(scriptArg).toContain('codex');
+      expect(scriptArg).toContain('exec');
+      expect(scriptArg).toContain('resume');
+      expect(scriptArg).toContain('codex-docker-sess');
+      expect(scriptArg).not.toContain('claude --resume');
+    });
   });
 });

@@ -88,6 +88,7 @@ function createMocks() {
       restartTask: vi.fn(() => [makeTask()]),
       editTaskCommand: vi.fn(() => [makeTask()]),
       editTaskType: vi.fn(() => [makeTask()]),
+      editTaskAgent: vi.fn(() => [makeTask()]),
       cancelTask: vi.fn(() => ({ cancelled: ['task-1'], runningCancelled: ['task-1'] })),
       deleteWorkflow: vi.fn(),
       getQueueStatus: vi.fn(() => ({
@@ -458,6 +459,22 @@ describe('POST /api/tasks/:id/edit-type', () => {
     const res = await request(port, 'POST', '/api/tasks/task-1/edit-type', {});
     expect(res.status).toBe(400);
     expect(res.body.error).toContain('Missing "familiarType"');
+  });
+});
+
+describe('POST /api/tasks/:id/edit-agent', () => {
+  it('edits task agent', async () => {
+    const res = await request(port, 'POST', '/api/tasks/task-1/edit-agent', { agent: 'codex' });
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.action).toBe('agent_edited');
+    expect(mocks.orchestrator.editTaskAgent).toHaveBeenCalledWith('task-1', 'codex');
+  });
+
+  it('returns 400 when agent is missing', async () => {
+    const res = await request(port, 'POST', '/api/tasks/task-1/edit-agent', {});
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('Missing "agent"');
   });
 });
 

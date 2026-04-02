@@ -764,7 +764,7 @@ describe('WorktreeFamiliar', () => {
       const { taskProcess } = setupSpawnMock();
 
       const request = makeRequest({
-        actionType: 'claude',
+        actionType: 'ai_task',
         inputs: { prompt: 'test prompt' },
       });
       const handle = await claudeFamiliar.start(request);
@@ -801,7 +801,7 @@ describe('WorktreeFamiliar', () => {
       const { taskProcess } = setupSpawnMock();
 
       const request = makeRequest({
-        actionType: 'claude',
+        actionType: 'ai_task',
         inputs: {
           prompt: 'do the thing',
           upstreamContext: [
@@ -833,7 +833,7 @@ describe('WorktreeFamiliar', () => {
       const { taskProcess } = setupSpawnMock();
 
       const request = makeRequest({
-        actionType: 'claude',
+        actionType: 'ai_task',
         inputs: { prompt: 'test' },
       });
       const handle = await claudeFamiliar.start(request);
@@ -859,7 +859,7 @@ describe('WorktreeFamiliar', () => {
       const { taskProcess } = setupSpawnMock();
 
       const request = makeRequest({
-        actionType: 'claude',
+        actionType: 'ai_task',
         inputs: { prompt: 'test' },
       });
       const handle = await claudeFamiliar.start(request);
@@ -896,7 +896,7 @@ describe('WorktreeFamiliar', () => {
       const { taskProcess } = setupSpawnMock();
 
       const request = makeRequest({
-        actionType: 'claude',
+        actionType: 'ai_task',
         inputs: { prompt: 'test' },
       });
       await claudeFamiliar.start(request);

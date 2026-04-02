@@ -249,7 +249,7 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
     const executionAgent = request.inputs.executionAgent ?? 'claude';
     const stdinMode = this.agentRegistry && executionAgent
       ? this.agentRegistry.getOrThrow(executionAgent).stdinMode
-      : (request.actionType === 'claude' ? 'ignore' : 'pipe');
+      : (request.actionType === 'ai_task' ? 'ignore' : 'pipe');
     const child = spawn(cmd, args, {
       stdio: [stdinMode, 'pipe', 'pipe'],
       cwd: acquired.worktreePath,

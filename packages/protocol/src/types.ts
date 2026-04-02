@@ -8,7 +8,7 @@
 
 // ── Action Types ────────────────────────────────────────────
 
-export type ActionType = 'command' | 'claude' | 'reconciliation';
+export type ActionType = 'command' | 'ai_task' | 'reconciliation';
 
 // ── Work Request ────────────────────────────────────────────
 
@@ -75,6 +75,8 @@ export interface WorkResponseOutputs {
   summary?: string;
   commitHash?: string;
   agentSessionId?: string;
+  /** Name of the ExecutionAgent that produced this session. */
+  agentName?: string;
   /** Branch the familiar used — persisted at completion to close the write-once gap. */
   branch?: string;
 }
