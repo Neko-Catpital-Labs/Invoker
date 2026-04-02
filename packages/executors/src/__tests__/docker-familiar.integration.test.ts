@@ -463,7 +463,7 @@ describe.skipIf(!DOCKER_OK || !HAS_API_KEY)('DockerFamiliar Claude E2E (real Doc
     setup();
 
     const request = makeRequest({
-      actionType: 'claude',
+      actionType: 'ai_task',
       inputs: { prompt: 'Say exactly "hello" and nothing else.' },
     });
 
@@ -477,7 +477,7 @@ describe.skipIf(!DOCKER_OK || !HAS_API_KEY)('DockerFamiliar Claude E2E (real Doc
     setup();
 
     const request = makeRequest({
-      actionType: 'claude',
+      actionType: 'ai_task',
       inputs: { prompt: 'Say exactly "hello" and nothing else.' },
     });
 
@@ -493,7 +493,7 @@ describe.skipIf(!DOCKER_OK || !HAS_API_KEY)('DockerFamiliar Claude E2E (real Doc
     setup();
 
     const request = makeRequest({
-      actionType: 'claude',
+      actionType: 'ai_task',
       inputs: { prompt: 'Say exactly "hello" and nothing else.' },
     });
 

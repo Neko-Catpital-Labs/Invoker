@@ -578,7 +578,7 @@ export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar
       if (!command) throw new Error('WorkRequest with actionType "command" must have inputs.command');
       return { cmd: '/bin/bash', args: ['-c', command] };
     }
-    if (request.actionType === 'claude') {
+    if (request.actionType === 'ai_task') {
       if (opts?.agentRegistry) {
         const agentName = request.inputs.executionAgent ?? 'claude';
         const agent = opts.agentRegistry.getOrThrow(agentName);
@@ -626,6 +626,7 @@ export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar
       branch?: string;
       originalBranch?: string;
       agentSessionId?: string;
+      agentName?: string;
     },
   ): Promise<void> {
     const entry = this.entries.get(executionId);

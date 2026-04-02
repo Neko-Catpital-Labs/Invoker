@@ -11,7 +11,7 @@ function makeRequest(actionId: string, inputs: Partial<WorkRequestInputs> = {}):
   return {
     requestId: 'test-req',
     actionId,
-    actionType: inputs.prompt ? 'claude' : 'command',
+    actionType: inputs.prompt ? 'ai_task' : 'command',
     inputs: { ...inputs },
     callbackUrl: '',
     timestamps: { createdAt: new Date().toISOString() },
@@ -2104,9 +2104,9 @@ describe('BaseFamiliar.buildCommandAndArgs', () => {
     expect(() => familiar.testBuildCommandAndArgs(req)).toThrow('must have inputs.command');
   });
 
-  it('returns claude CLI for actionType=claude', () => {
+  it('returns claude CLI for actionType=ai_task', () => {
     const req = makeRequest('act', { prompt: 'Do something' });
-    req.actionType = 'claude';
+    req.actionType = 'ai_task';
     const result = familiar.testBuildCommandAndArgs(req, 'my-claude');
     expect(result.cmd).toBe('my-claude');
     expect(result.agentSessionId).toBeDefined();

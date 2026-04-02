@@ -20,6 +20,7 @@
 #   ./invoker-ctl input <taskId> <text>            Provide input to a task awaiting input
 #   ./invoker-ctl edit <taskId> <command>          Edit a task's command
 #   ./invoker-ctl edit-type <taskId> <type>        Change a task's familiar type
+#   ./invoker-ctl edit-agent <taskId> <agent>      Change a task's execution agent
 #   ./invoker-ctl delete-workflow <workflowId>     Delete a workflow
 #   ./invoker-ctl set-merge-mode <id> <mode>       Set workflow merge mode
 
@@ -193,6 +194,16 @@ case "${1:-}" in
       "$BASE/api/tasks/$2/edit-type" | fmt '.'
     ;;
 
+  edit-agent)
+    if [ -z "${2:-}" ] || [ -z "${3:-}" ]; then
+      echo "Usage: invoker-ctl edit-agent <taskId> <claude|codex>" >&2
+      exit 1
+    fi
+    curl -sf -X POST -H 'Content-Type: application/json' \
+      -d "{\"agent\":\"$3\"}" \
+      "$BASE/api/tasks/$2/edit-agent" | fmt '.'
+    ;;
+
   --help|-h|"")
     cat <<'EOF'
 invoker-ctl — CLI for querying and controlling a running Invoker instance.
@@ -214,6 +225,7 @@ Usage:
   invoker-ctl input <taskId> <text>            Provide input to a task awaiting input
   invoker-ctl edit <taskId> <command>          Edit a task's command
   invoker-ctl edit-type <taskId> <type>        Change a task's familiar type
+  invoker-ctl edit-agent <taskId> <agent>      Change a task's execution agent (claude|codex)
   invoker-ctl delete-workflow <workflowId>     Delete a workflow
   invoker-ctl set-merge-mode <id> <mode>       Set merge mode (manual|automatic|github)
 

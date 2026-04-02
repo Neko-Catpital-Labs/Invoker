@@ -490,7 +490,7 @@ export class TaskExecutor {
   determineActionType(task: TaskState): ActionType {
     if (task.config.isReconciliation) return 'reconciliation';
     if (task.config.command) return 'command';
-    if (task.config.prompt) return 'claude';
+    if (task.config.prompt) return 'ai_task';
     return 'command';
   }
 

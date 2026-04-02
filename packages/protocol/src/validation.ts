@@ -25,7 +25,7 @@ export function validateWorkRequest(req: unknown): ValidationResult {
     return { valid: false, error: 'actionId is required and must be a non-empty string' };
   }
 
-  const validTypes = ['command', 'claude', 'reconciliation'];
+  const validTypes = ['command', 'ai_task', 'reconciliation'];
   if (!validTypes.includes(r.actionType as string)) {
     return { valid: false, error: `actionType must be one of: ${validTypes.join(', ')}` };
   }

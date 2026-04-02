@@ -181,7 +181,7 @@ fi`;
       const command = request.inputs.command;
       if (!command) throw new Error('WorkRequest with actionType "command" must have inputs.command');
       payload = command;
-    } else if (request.actionType === 'claude') {
+    } else if (request.actionType === 'ai_task') {
       if (this.agentRegistry) {
         const requestedAgent = request.inputs.executionAgent ?? 'claude';
         const agent = this.agentRegistry.getOrThrow(requestedAgent);
