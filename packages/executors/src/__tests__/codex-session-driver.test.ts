@@ -52,6 +52,21 @@ describe('CodexSessionDriver', () => {
     expect(driver.loadSession('nonexistent')).toBeNull();
   });
 
+  it('extractSessionId returns real codex thread ID from JSONL', () => {
+    const driver = new CodexSessionDriver();
+    const jsonl = [
+      JSON.stringify({ type: 'thread.started', thread_id: '019d5086-675d-7823-b866-ac320c5d689f' }),
+      JSON.stringify({ type: 'event_msg', payload: { type: 'user_message', message: 'Hello' } }),
+    ].join('\n');
+
+    expect(driver.extractSessionId(jsonl)).toBe('019d5086-675d-7823-b866-ac320c5d689f');
+  });
+
+  it('extractSessionId returns undefined when no thread.started', () => {
+    const driver = new CodexSessionDriver();
+    expect(driver.extractSessionId(sampleJsonl)).toBeUndefined();
+  });
+
   it('parseSession delegates to parseCodexSessionJsonl', () => {
     const driver = new CodexSessionDriver();
     const messages = driver.parseSession(sampleJsonl);

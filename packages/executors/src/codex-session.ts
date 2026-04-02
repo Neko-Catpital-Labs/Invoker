@@ -64,11 +64,25 @@ export function parseCodexSessionJsonl(raw: string): AgentMessage[] {
 }
 
 /**
- * Convert raw Codex JSONL to human-readable text.
+ * Extract the real Codex thread ID from raw JSONL output.
  *
- * Extracts user_message and assistant output_text entries,
- * formats as `[user] ...` and `[assistant] ...` lines.
+ * Codex CLI (v0.117+) emits `{"type":"thread.started","thread_id":"<uuid>"}` as the
+ * first JSONL line. This thread ID is required for `codex exec resume`.
  */
+export function extractCodexSessionId(raw: string): string | undefined {
+  for (const line of raw.split('\n')) {
+    if (!line.trim()) continue;
+    try {
+      const entry = JSON.parse(line);
+      // Current format (codex-cli 0.117+): {"type":"thread.started","thread_id":"..."}
+      if (entry.type === 'thread.started' && entry.thread_id) {
+        return entry.thread_id;
+      }
+    } catch { /* skip */ }
+  }
+  return undefined;
+}
+
 export function toReadableText(raw: string): string {
   const messages = parseCodexSessionJsonl(raw);
   return messages.map(m => `[${m.role}] ${m.content}`).join('\n');

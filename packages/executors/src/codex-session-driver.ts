@@ -11,13 +11,17 @@ import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import type { SessionDriver } from './session-driver.js';
-import { parseCodexSessionJsonl, toReadableText } from './codex-session.js';
+import { parseCodexSessionJsonl, toReadableText, extractCodexSessionId } from './codex-session.js';
 import type { AgentMessage } from './codex-session.js';
 
 export class CodexSessionDriver implements SessionDriver {
   private getStorageDir(): string {
     const base = process.env.INVOKER_DB_DIR || join(homedir(), '.invoker');
     return join(base, 'agent-sessions');
+  }
+
+  extractSessionId(rawStdout: string): string | undefined {
+    return extractCodexSessionId(rawStdout);
   }
 
   processOutput(sessionId: string, rawStdout: string): string {
