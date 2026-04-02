@@ -87,8 +87,8 @@ const api: InvokerAPI = {
     ipcRenderer.invoke('invoker:approve-merge', workflowId),
   resolveConflict: (taskId: string, agentName?: string) =>
     ipcRenderer.invoke('invoker:resolve-conflict', taskId, agentName),
-  fixWithClaude: (taskId: string, agentName?: string) =>
-    ipcRenderer.invoke('invoker:fix-with-claude', taskId, agentName),
+  fixWithAgent: (taskId: string, agentName?: string) =>
+    ipcRenderer.invoke('invoker:fix-with-agent', taskId, agentName),
   setMergeMode: (workflowId: string, mergeMode: string) =>
     ipcRenderer.invoke('invoker:set-merge-mode', workflowId, mergeMode),
   checkPrStatuses: () => ipcRenderer.invoke('invoker:check-pr-statuses'),

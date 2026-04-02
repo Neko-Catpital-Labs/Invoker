@@ -1,6 +1,6 @@
 /**
  * Ensures GUI `invoker:resolve-conflict` and `--headless resolve-conflict` share
- * `resolveConflictWithClaudeAction` (same call order and failure handling).
+ * `resolveConflictAction` with correct call order and failure handling.
  *
  * Repro / guard: before this action existed only in main.ts IPC; headless had no equivalent.
  */
@@ -8,9 +8,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Orchestrator } from '@invoker/core';
 import type { TaskExecutor } from '@invoker/executors';
 import type { SQLiteAdapter } from '@invoker/persistence';
-import { resolveConflictWithClaudeAction } from '../workflow-actions.js';
+import { resolveConflictAction } from '../workflow-actions.js';
 
-describe('resolveConflictWithClaudeAction', () => {
+describe('resolveConflictAction', () => {
   let orchestrator: {
     beginConflictResolution: ReturnType<typeof vi.fn>;
     restartTask: ReturnType<typeof vi.fn>;
@@ -18,7 +18,7 @@ describe('resolveConflictWithClaudeAction', () => {
   };
   let persistence: { appendTaskOutput: ReturnType<typeof vi.fn> };
   let taskExecutor: {
-    resolveConflictWithClaude: ReturnType<typeof vi.fn>;
+    resolveConflict: ReturnType<typeof vi.fn>;
     executeTasks: ReturnType<typeof vi.fn>;
   };
 
@@ -40,20 +40,20 @@ describe('resolveConflictWithClaudeAction', () => {
     };
     persistence = { appendTaskOutput: vi.fn() };
     taskExecutor = {
-      resolveConflictWithClaude: vi.fn().mockResolvedValue(undefined),
+      resolveConflict: vi.fn().mockResolvedValue(undefined),
       executeTasks: vi.fn().mockResolvedValue(undefined),
     };
   });
 
-  it('runs beginConflictResolution → resolveConflictWithClaude → restartTask → executeTasks', async () => {
-    await resolveConflictWithClaudeAction('task-a', {
+  it('runs beginConflictResolution → resolveConflict → restartTask → executeTasks', async () => {
+    await resolveConflictAction('task-a', {
       orchestrator: orchestrator as unknown as Orchestrator,
       persistence: persistence as unknown as SQLiteAdapter,
       taskExecutor: taskExecutor as unknown as TaskExecutor,
     });
 
     expect(orchestrator.beginConflictResolution).toHaveBeenCalledWith('task-a');
-    expect(taskExecutor.resolveConflictWithClaude).toHaveBeenCalledWith('task-a', 'saved-err');
+    expect(taskExecutor.resolveConflict).toHaveBeenCalledWith('task-a', 'saved-err', undefined);
     expect(orchestrator.restartTask).toHaveBeenCalledWith('task-a');
     expect(taskExecutor.executeTasks).toHaveBeenCalledWith(
       expect.arrayContaining([expect.objectContaining({ id: 'task-a', status: 'running' })]),
@@ -63,10 +63,10 @@ describe('resolveConflictWithClaudeAction', () => {
   });
 
   it('on failure appends output and reverts conflict resolution (does not restart)', async () => {
-    taskExecutor.resolveConflictWithClaude.mockRejectedValue(new Error('claude failed'));
+    taskExecutor.resolveConflict.mockRejectedValue(new Error('claude failed'));
 
     await expect(
-      resolveConflictWithClaudeAction('task-a', {
+      resolveConflictAction('task-a', {
         orchestrator: orchestrator as unknown as Orchestrator,
         persistence: persistence as unknown as SQLiteAdapter,
         taskExecutor: taskExecutor as unknown as TaskExecutor,

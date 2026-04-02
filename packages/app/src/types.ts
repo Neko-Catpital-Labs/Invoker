@@ -131,7 +131,7 @@ export interface InvokerAPI {
 
   // Resolve merge conflict with Claude and restart task
   resolveConflict: (taskId: string, agentName?: string) => Promise<void>;
-  fixWithClaude: (taskId: string, agentName?: string) => Promise<void>;
+  fixWithAgent: (taskId: string, agentName?: string) => Promise<void>;
   setMergeMode: (workflowId: string, mergeMode: string) => Promise<void>;
   checkPrStatuses: () => Promise<void>;
   checkPrStatus: () => Promise<void>;

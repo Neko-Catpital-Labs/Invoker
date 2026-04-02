@@ -1049,4 +1049,109 @@ describe('SQLiteAdapter', () => {
       rmSync(tmpDir, { recursive: true, force: true });
     });
   });
+
+  describe('getExecutionAgent — agent_name vs execution_agent', () => {
+    it('returns execution_agent when agent_name is not set', () => {
+      adapter.saveWorkflow(testWorkflow);
+      const task = makeTask('t-agent-1', {
+        config: { workflowId: 'wf-1', executionAgent: 'codex' },
+      });
+      adapter.saveTask('wf-1', task);
+
+      expect(adapter.getExecutionAgent('t-agent-1')).toBe('codex');
+    });
+
+    it('returns agent_name (from fix flow) over execution_agent (from config)', () => {
+      adapter.saveWorkflow(testWorkflow);
+      // Task created with executionAgent: 'claude' in config
+      const task = makeTask('t-agent-2', {
+        config: { workflowId: 'wf-1', executionAgent: 'claude' },
+      });
+      adapter.saveTask('wf-1', task);
+
+      // Fix with codex sets execution.agentName
+      adapter.updateTask('t-agent-2', {
+        execution: { agentName: 'codex' },
+      });
+
+      // getExecutionAgent should return 'codex' (agent_name) not 'claude' (execution_agent)
+      expect(adapter.getExecutionAgent('t-agent-2')).toBe('codex');
+    });
+
+    it('returns agent_name when execution_agent is null', () => {
+      adapter.saveWorkflow(testWorkflow);
+      // Task created without executionAgent in config
+      const task = makeTask('t-agent-3', {
+        config: { workflowId: 'wf-1' },
+      });
+      adapter.saveTask('wf-1', task);
+
+      // Fix with codex
+      adapter.updateTask('t-agent-3', {
+        execution: { agentName: 'codex', agentSessionId: 'sess-123' },
+      });
+
+      expect(adapter.getExecutionAgent('t-agent-3')).toBe('codex');
+    });
+
+    it('returns null when neither agent_name nor execution_agent is set', () => {
+      adapter.saveWorkflow(testWorkflow);
+      const task = makeTask('t-agent-4', {
+        config: { workflowId: 'wf-1' },
+      });
+      adapter.saveTask('wf-1', task);
+
+      expect(adapter.getExecutionAgent('t-agent-4')).toBeNull();
+    });
+  });
+
+  describe('end-to-end: fix-with-codex → open-terminal reads codex', () => {
+    it('simulates headless fix codex flow and verifies getExecutionAgent returns codex', () => {
+      adapter.saveWorkflow(testWorkflow);
+      // 1. Task created with default config (no executionAgent set — like most plans)
+      const task = makeTask('t-fix-e2e', {
+        status: 'failed',
+        config: { workflowId: 'wf-1', command: 'pnpm test' },
+        execution: { error: 'test failed', workspacePath: '/tmp/worktree-abc', branch: 'experiment/abc' },
+      });
+      adapter.saveTask('wf-1', task);
+
+      // 2. fixWithAgentImpl persists agentSessionId + agentName (codex)
+      adapter.updateTask('t-fix-e2e', {
+        execution: { agentSessionId: 'sess-codex-999', agentName: 'codex' },
+      });
+
+      // 3. open-terminal reads getExecutionAgent — must return 'codex'
+      expect(adapter.getExecutionAgent('t-fix-e2e')).toBe('codex');
+
+      // 4. Also verify agentSessionId survived the same updateTask call
+      expect(adapter.getAgentSessionId('t-fix-e2e')).toBe('sess-codex-999');
+    });
+
+    it('setFixAwaitingApproval does not clobber agent_name', () => {
+      adapter.saveWorkflow(testWorkflow);
+      const task = makeTask('t-fix-approve', {
+        status: 'fixing_with_ai',
+        config: { workflowId: 'wf-1', command: 'pnpm test' },
+        execution: { workspacePath: '/tmp/worktree-xyz' },
+      });
+      adapter.saveTask('wf-1', task);
+
+      // fixWithAgentImpl writes agentName + agentSessionId
+      adapter.updateTask('t-fix-approve', {
+        execution: { agentSessionId: 'sess-codex-approve', agentName: 'codex' },
+      });
+
+      // setFixAwaitingApproval writes status + pendingFixError + isFixingWithAI + agentSessionId
+      // (but NOT agentName — it must survive)
+      adapter.updateTask('t-fix-approve', {
+        status: 'awaiting_approval' as any,
+        execution: { pendingFixError: 'original error', isFixingWithAI: false, agentSessionId: 'sess-codex-approve' },
+      });
+
+      // agent_name must still be 'codex' after the status transition
+      expect(adapter.getExecutionAgent('t-fix-approve')).toBe('codex');
+      expect(adapter.getAgentSessionId('t-fix-approve')).toBe('sess-codex-approve');
+    });
+  });
 });

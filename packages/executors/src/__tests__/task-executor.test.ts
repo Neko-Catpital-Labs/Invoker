@@ -3726,7 +3726,7 @@ describe('TaskExecutor', () => {
     });
   });
 
-  describe('resolveConflictWithClaude', () => {
+  describe('resolveConflict', () => {
     it('throws for non-failed task', async () => {
       const tasks = new Map<string, TaskState>();
       tasks.set('running-task', makeTask({
@@ -3742,7 +3742,7 @@ describe('TaskExecutor', () => {
         cwd: '/tmp',
       });
 
-      await expect(executor.resolveConflictWithClaude('running-task'))
+      await expect(executor.resolveConflict('running-task'))
         .rejects.toThrow('no error information');
     });
 
@@ -3762,7 +3762,7 @@ describe('TaskExecutor', () => {
         cwd: '/tmp',
       });
 
-      await expect(executor.resolveConflictWithClaude('failed-task'))
+      await expect(executor.resolveConflict('failed-task'))
         .rejects.toThrow('does not have merge conflict information');
     });
 
@@ -3775,7 +3775,7 @@ describe('TaskExecutor', () => {
         cwd: '/tmp',
       });
 
-      await expect(executor.resolveConflictWithClaude('nonexistent'))
+      await expect(executor.resolveConflict('nonexistent'))
         .rejects.toThrow('not found');
     });
 
@@ -3825,7 +3825,7 @@ describe('TaskExecutor', () => {
       (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
       (executor as any).removeMergeWorktree = async () => {};
 
-      await executor.resolveConflictWithClaude('conflict-task');
+      await executor.resolveConflict('conflict-task');
 
       // Should have checked out the task branch
       const checkoutCall = gitCalls.find(c => c[0] === 'checkout' && c[1] === 'invoker/conflict-task');
@@ -3840,7 +3840,7 @@ describe('TaskExecutor', () => {
     });
   });
 
-  describe('fixWithClaude', () => {
+  describe('fixWithAgent', () => {
     it('throws for nonexistent task', async () => {
       const orchestrator = { getTask: () => undefined };
       const executor = new TaskExecutor({
@@ -3849,7 +3849,7 @@ describe('TaskExecutor', () => {
         familiarRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
         cwd: '/tmp',
       });
-      await expect(executor.fixWithClaude('nonexistent', 'output')).rejects.toThrow('not found');
+      await expect(executor.fixWithAgent('nonexistent', 'output')).rejects.toThrow('not found');
     });
 
     it('throws for non-failed/non-running task', async () => {
@@ -3866,7 +3866,7 @@ describe('TaskExecutor', () => {
         familiarRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
         cwd: '/tmp',
       });
-      await expect(executor.fixWithClaude('pending-task', 'output')).rejects.toThrow('not in a fixable state');
+      await expect(executor.fixWithAgent('pending-task', 'output')).rejects.toThrow('not in a fixable state');
     });
 
     it('appends Claude output to task output', async () => {
@@ -3887,7 +3887,7 @@ describe('TaskExecutor', () => {
         cwd: '/tmp',
       });
       (executor as any).spawnAgentFix = async () => ({ stdout: 'Fixed the import', sessionId: 'test-session-123' });
-      await executor.fixWithClaude('fix-task', 'error output here');
+      await executor.fixWithAgent('fix-task', 'error output here');
       expect(appendTaskOutput).toHaveBeenCalledWith('fix-task', expect.stringContaining('Fixed the import'));
     });
 
@@ -3909,7 +3909,7 @@ describe('TaskExecutor', () => {
         cwd: '/tmp',
       });
       (executor as any).spawnAgentFix = async () => ({ stdout: 'Fixed it', sessionId: 'sess-abc-123' });
-      await executor.fixWithClaude('fix-task', 'error output');
+      await executor.fixWithAgent('fix-task', 'error output');
       expect(updateTask).toHaveBeenCalledWith('fix-task', { execution: { agentSessionId: 'sess-abc-123', agentName: 'claude' } });
     });
 
@@ -3942,7 +3942,7 @@ describe('TaskExecutor', () => {
       (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
       (executor as any).removeMergeWorktree = async () => {};
       (executor as any).spawnAgentFix = async () => ({ stdout: '', sessionId: 'sess-xyz' });
-      await executor.fixWithClaude('fix-task', 'error output');
+      await executor.fixWithAgent('fix-task', 'error output');
       expect(gitCalls.find(c => c[0] === 'checkout')).toBeUndefined();
     });
   });
@@ -4186,7 +4186,7 @@ describe('TaskExecutor', () => {
       expect(createCall?.[createCall.indexOf('--head') + 1]).toBe('plan/experiment');
     });
 
-    it('resolveConflictWithClaude includes dep description in merge -m', async () => {
+    it('resolveConflict includes dep description in merge -m', async () => {
       const tasks = new Map<string, TaskState>();
       tasks.set('dep-task', makeTask({
         id: 'dep-task',
@@ -4246,7 +4246,7 @@ describe('TaskExecutor', () => {
       (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
       (executor as any).removeMergeWorktree = async () => {};
 
-      await executor.resolveConflictWithClaude('conflict-task');
+      await executor.resolveConflict('conflict-task');
 
       expect(mergeMsgs).toHaveLength(1);
       expect(mergeMsgs[0]).toContain('invoker/dep-task');
@@ -4256,7 +4256,7 @@ describe('TaskExecutor', () => {
       expect(gitCwds.every(c => c === '/tmp/workspace')).toBe(true);
     });
 
-    it('resolveConflictWithClaude throws when workspacePath is undefined', async () => {
+    it('resolveConflict throws when workspacePath is undefined', async () => {
       // Create a task without workspacePath
       const conflictError = JSON.stringify({
         type: 'merge_conflict',
@@ -4287,7 +4287,7 @@ describe('TaskExecutor', () => {
         cwd: '/tmp',
       });
 
-      await expect(executor.resolveConflictWithClaude('conflict-task'))
+      await expect(executor.resolveConflict('conflict-task'))
         .rejects.toThrow('no workspacePath');
     });
   });

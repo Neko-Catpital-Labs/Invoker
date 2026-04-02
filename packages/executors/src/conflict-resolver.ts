@@ -44,13 +44,14 @@ export interface ConflictResolverHost {
 // ── Extracted functions ──────────────────────────────────
 
 /**
- * Resolve a merge conflict by re-creating the merge state and spawning Claude to fix it.
+ * Resolve a merge conflict by re-creating the merge state and spawning an agent to fix it.
  * After resolution, the task is restarted so it can proceed normally.
  */
-export async function resolveConflictWithClaudeImpl(
+export async function resolveConflictImpl(
   host: ConflictResolverHost,
   taskId: string,
   savedError?: string,
+  agentName?: string,
 ): Promise<void> {
   const task = host.orchestrator.getTask(taskId);
   if (!task) throw new Error(`Task ${taskId} not found`);
@@ -82,7 +83,7 @@ export async function resolveConflictWithClaudeImpl(
     if (!target) {
       throw new Error(`No remote target config for "${task.config.remoteTargetId}" — cannot resolve conflict on remote`);
     }
-    await resolveConflictRemote(host, task, taskBranch, conflictInfo, rawCwd, target);
+    await resolveConflictRemote(host, task, taskBranch, conflictInfo, rawCwd, target, agentName);
     return;
   }
 
@@ -104,7 +105,7 @@ export async function resolveConflictWithClaudeImpl(
       await host.execGitIn(['merge', '--no-edit', '-m', conflictMergeMsg, conflictInfo.failedBranch], cwd);
       console.log(`[resolveConflict] Merge succeeded without conflict on retry for ${taskId}`);
     } catch {
-      console.log(`[resolveConflict] Conflict reproduced for ${taskId}, spawning Claude to resolve...`);
+      console.log(`[resolveConflict] Conflict reproduced for ${taskId}, spawning agent to resolve...`);
 
       const conflictFilesList = conflictInfo.conflictFiles.join(', ');
       const prompt = [
@@ -119,20 +120,7 @@ export async function resolveConflictWithClaudeImpl(
         `5. Completing the merge with 'git commit --no-edit'`,
       ].join('\n');
 
-      await new Promise<void>((resolve, reject) => {
-        const child = spawn('claude', ['-p', prompt, '--dangerously-skip-permissions'], {
-          cwd,
-          stdio: ['ignore', 'pipe', 'pipe'],
-          env: cleanElectronEnv(),
-        });
-        let stderr = '';
-        child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
-        child.on('close', (code) => {
-          if (code === 0) resolve();
-          else reject(new Error(`Claude exited with code ${code}: ${stderr.trim()}`));
-        });
-        child.on('error', (err) => reject(err));
-      });
+      await host.spawnAgentFix(prompt, cwd, agentName);
     }
 
     console.log(`[resolveConflict] Successfully resolved conflict for ${taskId}`);
@@ -150,6 +138,7 @@ async function resolveConflictRemote(
   conflictInfo: { failedBranch: string; conflictFiles: string[] },
   remoteCwd: string,
   target: RemoteTargetConfig,
+  agentName?: string,
 ): Promise<void> {
   const conflictFilesList = conflictInfo.conflictFiles.join(', ');
   const prompt = [
@@ -182,9 +171,10 @@ MERGE_MSG=$(echo "${mergeMsgB64}" | base64 -d)
 if git merge --no-edit -m "$MERGE_MSG" "${conflictInfo.failedBranch}" 2>/dev/null; then
   echo "[resolveConflict] Merge succeeded without conflict on retry"
 else
-  echo "[resolveConflict] Conflict reproduced, spawning Claude to resolve..."
+  echo "[resolveConflict] Conflict reproduced, spawning agent to resolve..."
   PROMPT=$(echo "${promptB64}" | base64 -d)
-  claude --session-id "${sessionId}" -p "$PROMPT" --dangerously-skip-permissions
+  # TODO: full remote registry support — for now use agentName or default to claude
+  ${agentName ?? 'claude'} --session-id "${sessionId}" -p "$PROMPT" --dangerously-skip-permissions
 fi
 `;
 
@@ -193,7 +183,7 @@ fi
 }
 
 /**
- * Build the Claude fix prompt based on task type.
+ * Build the agent fix prompt based on task type.
  */
 export function buildFixPrompt(
   task: { description: string; config: { command?: string; isMergeNode?: boolean; prompt?: string }; execution: { error?: string } },
@@ -243,10 +233,10 @@ export function buildFixPrompt(
 }
 
 /**
- * Fix a failed command task by spawning Claude with the error output.
- * For SSH tasks, Claude runs on the remote host in the remote worktree.
+ * Fix a failed command task by spawning an agent with the error output.
+ * For SSH tasks, the agent runs on the remote host in the remote worktree.
  */
-export async function fixWithClaudeImpl(
+export async function fixWithAgentImpl(
   host: ConflictResolverHost,
   taskId: string,
   taskOutput: string,
@@ -265,25 +255,25 @@ export async function fixWithClaudeImpl(
   const prompt = buildFixPrompt(taskForPrompt, taskOutput);
   const workspacePath = task.execution.workspacePath;
 
-  // SSH tasks: run Claude on the remote host
+  // SSH tasks: run agent on the remote host
   if (task.config.familiarType === 'ssh' && task.config.remoteTargetId && workspacePath && !existsSync(workspacePath)) {
     const target = host.getRemoteTargetConfig?.(task.config.remoteTargetId);
     if (!target) {
       throw new Error(`No remote target config for "${task.config.remoteTargetId}" — cannot fix on remote`);
     }
-    // TODO: thread agentName for remote fixes
-    const { stdout: output, sessionId } = await spawnRemoteClaudeFixImpl(prompt, workspacePath, target);
+    const remoteAgentBin = agentName ?? 'claude'; // TODO: full remote registry support
+    const { stdout: output, sessionId } = await spawnRemoteAgentFixImpl(prompt, workspacePath, target, agentName);
     if (output) {
-      host.persistence.appendTaskOutput(taskId, `\n[Fix with Claude (remote)] Output:\n${output}`);
+      host.persistence.appendTaskOutput(taskId, `\n[Fix with ${remoteAgentBin} (remote)] Output:\n${output}`);
     }
-    host.persistence.updateTask(taskId, { execution: { agentSessionId: sessionId } });
-    console.log(`[fixWithClaude] Successfully applied remote fix for ${taskId} (session=${sessionId})`);
+    host.persistence.updateTask(taskId, { execution: { agentSessionId: sessionId, agentName: remoteAgentBin } });
+    console.log(`[fixWithAgent] Successfully applied remote fix for ${taskId} via ${remoteAgentBin} (session=${sessionId})`);
     return;
   }
 
   if (!workspacePath || !existsSync(workspacePath)) {
     throw new Error(
-      `fixWithClaude: task "${taskId}" has no valid workspace ` +
+      `fixWithAgent: task "${taskId}" has no valid workspace ` +
       `(workspacePath=${workspacePath ?? 'undefined'}). ` +
       `All tasks must have a managed workspace; refusing to fall back to host repo.`,
     );
@@ -297,13 +287,13 @@ export async function fixWithClaudeImpl(
       host.persistence.appendTaskOutput(taskId, `\n[Fix with ${agentLabel}] Output:\n${output}`);
     }
     host.persistence.updateTask(taskId, { execution: { agentSessionId: sessionId, agentName: agentLabel } });
-    console.log(`[fixWithClaude] Successfully applied fix for ${taskId} via ${agentLabel} (session=${sessionId})`);
+    console.log(`[fixWithAgent] Successfully applied fix for ${taskId} via ${agentLabel} (session=${sessionId})`);
   } catch (err: any) {
     // Persist session ID even on failure so the session can be audited
     const failedSessionId = err?.sessionId as string | undefined;
     if (failedSessionId) {
       host.persistence.updateTask(taskId, { execution: { agentSessionId: failedSessionId, agentName: agentLabel } });
-      console.log(`[fixWithClaude] Fix failed for ${taskId} via ${agentLabel}, session persisted (session=${failedSessionId})`);
+      console.log(`[fixWithAgent] Fix failed for ${taskId} via ${agentLabel}, session persisted (session=${failedSessionId})`);
     }
     throw err;
   }
@@ -311,12 +301,13 @@ export async function fixWithClaudeImpl(
 
 
 /**
- * Spawn Claude on a remote SSH host for fixing SSH-executed tasks.
+ * Spawn an agent on a remote SSH host for fixing SSH-executed tasks.
  */
-export function spawnRemoteClaudeFixImpl(
+export function spawnRemoteAgentFixImpl(
   prompt: string,
   remoteCwd: string,
   target: RemoteTargetConfig,
+  agentName?: string,
 ): Promise<{ stdout: string; sessionId: string }> {
   const sessionId = randomUUID();
   const promptB64 = Buffer.from(prompt).toString('base64');
@@ -326,7 +317,8 @@ WT="${remoteCwd}"
 if [[ "$WT" == '~' ]]; then WT="$HOME"; elif [[ "\${WT:0:2}" == '~/' ]]; then WT="$HOME/\${WT:2}"; fi
 cd "$WT"
 PROMPT=$(echo "${promptB64}" | base64 -d)
-claude --session-id "${sessionId}" -p "$PROMPT" --dangerously-skip-permissions
+  # TODO: full remote registry support — for now use agentName or default to claude
+  ${agentName ?? 'claude'} --session-id "${sessionId}" -p "$PROMPT" --dangerously-skip-permissions
 `;
 
   const sshArgs = [
@@ -352,7 +344,7 @@ claude --session-id "${sessionId}" -p "$PROMPT" --dangerously-skip-permissions
     child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
     child.on('close', (code) => {
       if (code === 0) resolve({ stdout, sessionId });
-      else reject(new Error(`Remote Claude fix failed (exit ${code}): ${stderr.trim()}`));
+      else reject(new Error(`Remote agent fix failed (exit ${code}): ${stderr.trim()}`));
     });
     child.on('error', (err) => reject(err));
   });

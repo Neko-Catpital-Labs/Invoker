@@ -1,7 +1,10 @@
-import { describe, it, expect } from 'vitest';
-import { buildFixPrompt, resolveConflictWithClaudeImpl } from '../conflict-resolver.js';
+import { describe, it, expect, vi } from 'vitest';
+import { buildFixPrompt, resolveConflictImpl, fixWithAgentImpl } from '../conflict-resolver.js';
 import type { ConflictResolverHost } from '../conflict-resolver.js';
 import type { Orchestrator } from '@invoker/core';
+import { registerBuiltinAgents } from '../agents/index.js';
+import { CodexExecutionAgent } from '../agents/codex-execution-agent.js';
+import { ClaudeExecutionAgent } from '../agents/claude-execution-agent.js';
 
 describe('buildFixPrompt', () => {
   it('generates command-focused prompt when task has a command', () => {
@@ -79,7 +82,7 @@ describe('buildFixPrompt', () => {
   });
 });
 
-describe('resolveConflictWithClaudeImpl — savedError param', () => {
+describe('resolveConflictImpl', () => {
   function makeHost(task: Record<string, any>): ConflictResolverHost {
     return {
       orchestrator: {
@@ -104,7 +107,7 @@ describe('resolveConflictWithClaudeImpl — savedError param', () => {
       config: {},
     };
     await expect(
-      resolveConflictWithClaudeImpl(makeHost(task), 'task-1'),
+      resolveConflictImpl(makeHost(task), 'task-1'),
     ).rejects.toThrow('no error information');
   });
 
@@ -123,7 +126,238 @@ describe('resolveConflictWithClaudeImpl — savedError param', () => {
     // With savedError the function should NOT throw "no error information".
     // Mocked git ops succeed, so it resolves cleanly.
     await expect(
-      resolveConflictWithClaudeImpl(makeHost(task), 'task-1', conflictError),
+      resolveConflictImpl(makeHost(task), 'task-1', conflictError),
     ).resolves.toBeUndefined();
+  });
+
+  it('threads agentName="codex" to spawnAgentFix when merge fails', async () => {
+    const spawnAgentFix = vi.fn<(prompt: string, cwd: string, agentName?: string) => Promise<{ stdout: string; sessionId: string }>>(
+      async () => ({ stdout: '', sessionId: 'sess-conflict-codex' }),
+    );
+    const conflictError = JSON.stringify({
+      type: 'merge_conflict',
+      failedBranch: 'invoker/dep-1',
+      conflictFiles: ['src/index.ts'],
+    });
+    const task = {
+      id: 'task-conflict',
+      status: 'failed' as const,
+      execution: { error: conflictError, branch: 'invoker/task-conflict', workspacePath: '/tmp/ws' },
+      config: {},
+    };
+    const host: ConflictResolverHost = {
+      orchestrator: {
+        getTask: () => task,
+        getAllTasks: () => [],
+      } as unknown as Orchestrator,
+      persistence: {} as any,
+      cwd: '/tmp',
+      execGitReadonly: async () => '',
+      execGitIn: async (args: string[]) => {
+        // Checkout succeeds, merge fails to trigger agent spawn
+        if (args[0] === 'merge') throw new Error('merge conflict');
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        return '';
+      },
+      createMergeWorktree: async () => '/tmp/wt',
+      removeMergeWorktree: async () => {},
+      spawnAgentFix,
+    };
+
+    await resolveConflictImpl(host, 'task-conflict', undefined, 'codex');
+
+    expect(spawnAgentFix).toHaveBeenCalledTimes(1);
+    expect(spawnAgentFix.mock.calls[0][2]).toBe('codex');
+  });
+
+  it('threads agentName="claude" to spawnAgentFix by default', async () => {
+    const spawnAgentFix = vi.fn<(prompt: string, cwd: string, agentName?: string) => Promise<{ stdout: string; sessionId: string }>>(
+      async () => ({ stdout: '', sessionId: 'sess-conflict-claude' }),
+    );
+    const conflictError = JSON.stringify({
+      type: 'merge_conflict',
+      failedBranch: 'invoker/dep-1',
+      conflictFiles: ['src/index.ts'],
+    });
+    const task = {
+      id: 'task-conflict-2',
+      status: 'failed' as const,
+      execution: { error: conflictError, branch: 'invoker/task-conflict-2', workspacePath: '/tmp/ws' },
+      config: {},
+    };
+    const host: ConflictResolverHost = {
+      orchestrator: {
+        getTask: () => task,
+        getAllTasks: () => [],
+      } as unknown as Orchestrator,
+      persistence: {} as any,
+      cwd: '/tmp',
+      execGitReadonly: async () => '',
+      execGitIn: async (args: string[]) => {
+        if (args[0] === 'merge') throw new Error('merge conflict');
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        return '';
+      },
+      createMergeWorktree: async () => '/tmp/wt',
+      removeMergeWorktree: async () => {},
+      spawnAgentFix,
+    };
+
+    await resolveConflictImpl(host, 'task-conflict-2', undefined, 'claude');
+
+    expect(spawnAgentFix).toHaveBeenCalledTimes(1);
+    expect(spawnAgentFix.mock.calls[0][2]).toBe('claude');
+  });
+});
+
+describe('agent dispatch — codex vs claude', () => {
+  describe('CodexExecutionAgent.buildFixCommand', () => {
+    it('produces codex exec command, NOT claude', () => {
+      const agent = new CodexExecutionAgent();
+      const spec = agent.buildFixCommand('fix the bug');
+      expect(spec.cmd).toBe('codex');
+      expect(spec.args).toContain('exec');
+      expect(spec.args).toContain('--json');
+      expect(spec.args).toContain('--full-auto');
+      expect(spec.args).toContain('fix the bug');
+      // Must NOT contain claude flags
+      expect(spec.args).not.toContain('--dangerously-skip-permissions');
+      expect(spec.args).not.toContain('-p');
+      expect(spec.args).not.toContain('--session-id');
+    });
+  });
+
+  describe('ClaudeExecutionAgent.buildFixCommand', () => {
+    it('produces claude command, NOT codex', () => {
+      const agent = new ClaudeExecutionAgent();
+      const spec = agent.buildFixCommand('fix the bug');
+      expect(spec.cmd).toBe('claude');
+      expect(spec.args).toContain('-p');
+      expect(spec.args).toContain('--dangerously-skip-permissions');
+      expect(spec.args).toContain('--session-id');
+      // Must NOT contain codex flags
+      expect(spec.args).not.toContain('exec');
+      expect(spec.args).not.toContain('--json');
+      expect(spec.args).not.toContain('--full-auto');
+    });
+  });
+
+  describe('registry lookup dispatches correct agent', () => {
+    it('resolves "codex" to CodexExecutionAgent', () => {
+      const registry = registerBuiltinAgents();
+      const agent = registry.getOrThrow('codex');
+      expect(agent).toBeInstanceOf(CodexExecutionAgent);
+      expect(agent.name).toBe('codex');
+    });
+
+    it('resolves "claude" to ClaudeExecutionAgent', () => {
+      const registry = registerBuiltinAgents();
+      const agent = registry.getOrThrow('claude');
+      expect(agent).toBeInstanceOf(ClaudeExecutionAgent);
+      expect(agent.name).toBe('claude');
+    });
+
+    it('codex agent from registry builds codex command', () => {
+      const registry = registerBuiltinAgents();
+      const agent = registry.getOrThrow('codex');
+      const spec = agent.buildFixCommand!('fix the bug');
+      expect(spec.cmd).toBe('codex');
+      expect(spec.args).toContain('exec');
+    });
+
+    it('claude agent from registry builds claude command', () => {
+      const registry = registerBuiltinAgents();
+      const agent = registry.getOrThrow('claude');
+      const spec = agent.buildFixCommand!('fix the bug');
+      expect(spec.cmd).toBe('claude');
+      expect(spec.args).toContain('-p');
+    });
+  });
+
+  describe('fixWithAgentImpl dispatches via spawnAgentFix', () => {
+    it('passes agentName="codex" through to spawnAgentFix', async () => {
+      const spawnAgentFix = vi.fn<(prompt: string, cwd: string, agentName?: string) => Promise<{ stdout: string; sessionId: string }>>(async () => ({ stdout: 'fixed', sessionId: 'sess-1' }));
+      const host: ConflictResolverHost = {
+        orchestrator: {
+          getTask: () => ({
+            id: 'task-1',
+            status: 'failed',
+            config: { command: 'pnpm test' },
+            execution: { error: 'test failed', workspacePath: '/tmp' },
+          }),
+          getAllTasks: () => [],
+        } as unknown as Orchestrator,
+        persistence: { appendTaskOutput: vi.fn(), updateTask: vi.fn() } as any,
+        cwd: '/tmp',
+        execGitReadonly: async () => '',
+        execGitIn: async () => '',
+        createMergeWorktree: async () => '/tmp/wt',
+        removeMergeWorktree: async () => {},
+        spawnAgentFix,
+      };
+
+      await fixWithAgentImpl(host, 'task-1', 'error output', 'codex');
+
+      // spawnAgentFix must receive 'codex' — not undefined or 'claude'
+      expect(spawnAgentFix).toHaveBeenCalledTimes(1);
+      expect(spawnAgentFix.mock.calls[0][2]).toBe('codex');
+    });
+
+    it('passes agentName="claude" through to spawnAgentFix', async () => {
+      const spawnAgentFix = vi.fn<(prompt: string, cwd: string, agentName?: string) => Promise<{ stdout: string; sessionId: string }>>(async () => ({ stdout: 'fixed', sessionId: 'sess-2' }));
+      const host: ConflictResolverHost = {
+        orchestrator: {
+          getTask: () => ({
+            id: 'task-2',
+            status: 'failed',
+            config: { command: 'pnpm test' },
+            execution: { error: 'test failed', workspacePath: '/tmp' },
+          }),
+          getAllTasks: () => [],
+        } as unknown as Orchestrator,
+        persistence: { appendTaskOutput: vi.fn(), updateTask: vi.fn() } as any,
+        cwd: '/tmp',
+        execGitReadonly: async () => '',
+        execGitIn: async () => '',
+        createMergeWorktree: async () => '/tmp/wt',
+        removeMergeWorktree: async () => {},
+        spawnAgentFix,
+      };
+
+      await fixWithAgentImpl(host, 'task-2', 'error output', 'claude');
+
+      expect(spawnAgentFix).toHaveBeenCalledTimes(1);
+      expect(spawnAgentFix.mock.calls[0][2]).toBe('claude');
+    });
+
+    it('records agentName in persistence for codex fixes', async () => {
+      const updateTask = vi.fn();
+      const spawnAgentFix = vi.fn<(prompt: string, cwd: string, agentName?: string) => Promise<{ stdout: string; sessionId: string }>>(async () => ({ stdout: 'fixed', sessionId: 'sess-codex' }));
+      const host: ConflictResolverHost = {
+        orchestrator: {
+          getTask: () => ({
+            id: 'task-3',
+            status: 'failed',
+            config: { command: 'pnpm test' },
+            execution: { error: 'test failed', workspacePath: '/tmp' },
+          }),
+          getAllTasks: () => [],
+        } as unknown as Orchestrator,
+        persistence: { appendTaskOutput: vi.fn(), updateTask } as any,
+        cwd: '/tmp',
+        execGitReadonly: async () => '',
+        execGitIn: async () => '',
+        createMergeWorktree: async () => '/tmp/wt',
+        removeMergeWorktree: async () => {},
+        spawnAgentFix,
+      };
+
+      await fixWithAgentImpl(host, 'task-3', 'error output', 'codex');
+
+      // agentName should be persisted as 'codex', not 'claude'
+      expect(updateTask).toHaveBeenCalledWith('task-3', {
+        execution: { agentSessionId: 'sess-codex', agentName: 'codex' },
+      });
+    });
   });
 });

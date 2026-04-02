@@ -35,8 +35,8 @@ import {
 } from './merge-executor.js';
 import { normalizeBranchForGithubCli } from './github-branch-ref.js';
 import {
-  resolveConflictWithClaudeImpl,
-  fixWithClaudeImpl,
+  resolveConflictImpl,
+  fixWithAgentImpl,
   spawnAgentFixViaRegistry,
 } from './conflict-resolver.js';
 import { DEFAULT_EXECUTION_AGENT } from './agent.js';
@@ -855,27 +855,19 @@ export class TaskExecutor {
   }
 
   /**
-   * Resolve a merge conflict by re-creating the merge state and spawning Claude to fix it.
+   * Resolve a merge conflict by re-creating the merge state and spawning an agent to fix it.
    * After resolution, the task is restarted so it can proceed normally.
    */
-  async resolveConflictWithClaude(taskId: string, savedError?: string): Promise<void> {
-    return resolveConflictWithClaudeImpl(this, taskId, savedError);
-  }
-
-  async resolveConflictWithCodex(taskId: string, savedError?: string): Promise<void> {
-    return resolveConflictWithClaudeImpl(this, taskId, savedError);
+  async resolveConflict(taskId: string, savedError?: string, agentName?: string): Promise<void> {
+    return resolveConflictImpl(this, taskId, savedError, agentName);
   }
 
   /**
-   * Fix a failed command task by spawning Claude with the error output.
-   * Claude's output is captured and appended to the task's output stream for auditing.
+   * Fix a failed task by spawning an agent with the error output.
+   * The agent's output is captured and appended to the task's output stream for auditing.
    */
-  async fixWithClaude(taskId: string, taskOutput: string, agentName?: string, savedError?: string): Promise<void> {
-    return fixWithClaudeImpl(this, taskId, taskOutput, agentName, savedError);
-  }
-
-  async fixWithCodex(taskId: string, taskOutput: string, savedError?: string): Promise<void> {
-    return fixWithClaudeImpl(this, taskId, taskOutput, 'codex', savedError);
+  async fixWithAgent(taskId: string, taskOutput: string, agentName?: string, savedError?: string): Promise<void> {
+    return fixWithAgentImpl(this, taskId, taskOutput, agentName, savedError);
   }
 
   resumeMergeGatePolling(): void {
@@ -1193,7 +1185,7 @@ export class TaskExecutor {
   /** @internal */ gitDiffStat(branch: string, cwd?: string): Promise<string> {
     return new Promise((resolvePromise, reject) => {
       const baseBranch = this.defaultBranch ?? 'master';
-      const child = spawn('git', ['diff', '--stat', `${baseBranch}...${branch}`], {
+      const child = spawn('git', ['diff', '--stat', '--stat-count=20', `${baseBranch}...${branch}`], {
         cwd: cwd ?? this.cwd,
         stdio: ['ignore', 'pipe', 'pipe'],
       });

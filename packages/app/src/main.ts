@@ -79,7 +79,7 @@ import {
   rejectTask,
   recreateWorkflow as sharedRecreateWorkflow,
   retryWorkflow as sharedRetryWorkflow,
-  resolveConflictWithClaudeAction,
+  resolveConflictAction,
   selectExperiments as sharedSelectExperiments,
   setWorkflowMergeMode,
   editTaskAgent as sharedEditTaskAgent,
@@ -159,12 +159,15 @@ async function initServices(): Promise<void> {
   });
 
   orchestrator.syncAllFromDb();
+  const initLog = isHeadless
+    ? (...args: unknown[]) => { process.stderr.write(args.join(' ') + '\n'); }
+    : console.log;
   const workflows = persistence.listWorkflows();
   for (const wf of workflows) {
     const tasks = persistence.loadTasks(wf.id);
-    console.log(`[init] DB workflow "${wf.id}" (${wf.name}): ${tasks.length} tasks`);
+    initLog(`[init] DB workflow "${wf.id}" (${wf.name}): ${tasks.length} tasks`);
   }
-  console.log(`[init] Orchestrator graph has ${orchestrator.getAllTasks().length} tasks across ${workflows.length} workflows`);
+  initLog(`[init] Orchestrator graph has ${orchestrator.getAllTasks().length} tasks across ${workflows.length} workflows`);
 }
 
 // ── Load @invoker/surfaces at runtime ────────────────────────
@@ -1168,29 +1171,29 @@ function setupGuiMode(): void {
       );
     });
 
-    ipcMain.handle('invoker:resolve-conflict', async (_event, taskId: string, _agentName?: string) => {
-      console.log(`[ipc] resolve-conflict: "${taskId}"`);
+    ipcMain.handle('invoker:resolve-conflict', async (_event, taskId: string, agentName?: string) => {
+      console.log(`[ipc] resolve-conflict: "${taskId}" agent=${agentName ?? 'claude'}`);
       try {
-        await resolveConflictWithClaudeAction(taskId, {
+        await resolveConflictAction(taskId, {
           orchestrator,
           persistence,
           taskExecutor,
-        });
+        }, agentName);
       } catch (err) {
         console.error(`[ipc] resolve-conflict failed: ${err}`);
         throw err;
       }
     });
 
-    ipcMain.handle('invoker:fix-with-claude', async (_event, taskId: string, agentName?: string) => {
-      console.log(`[ipc] fix-with-claude: "${taskId}" agent=${agentName ?? 'claude'}`);
+    ipcMain.handle('invoker:fix-with-agent', async (_event, taskId: string, agentName?: string) => {
+      console.log(`[ipc] fix-with-agent: "${taskId}" agent=${agentName ?? 'claude'}`);
       const { savedError } = orchestrator.beginConflictResolution(taskId);
       try {
         const output = persistence.getTaskOutput(taskId);
-        await taskExecutor.fixWithClaude(taskId, output, agentName, savedError);
+        await taskExecutor.fixWithAgent(taskId, output, agentName, savedError);
         orchestrator.setFixAwaitingApproval(taskId, savedError);
       } catch (err) {
-        console.error(`[ipc] fix-with-claude failed: ${err}`);
+        console.error(`[ipc] fix-with-agent failed: ${err}`);
         const msg = err instanceof Error ? err.message : String(err);
         persistence.appendTaskOutput(taskId, `\n[Fix with ${agentName ?? 'Claude'}] Failed: ${msg}`);
         orchestrator.revertConflictResolution(taskId, savedError, msg);
@@ -1398,6 +1401,7 @@ function setupGuiMode(): void {
         } else if (meta.familiarType === 'ssh') {
           const targetId = persistence.getRemoteTargetId?.(taskId);
           const target = targetId ? loadConfig().remoteTargets?.[targetId] : undefined;
+          console.log(`[open-terminal] task="${taskId}" SSH familiar with targetId="${targetId ?? 'none'}" target=${JSON.stringify(target)}`);
           if (target) {
             familiar = new SshFamiliar({ ...target, agentRegistry });
           } else {
