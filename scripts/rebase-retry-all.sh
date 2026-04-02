@@ -12,8 +12,17 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-ELECTRON="$REPO_ROOT/packages/app/node_modules/.bin/electron"
-MAIN="$REPO_ROOT/packages/app/dist/main.js"
+
+# Auto-build if dist is missing
+if [[ ! -f "$REPO_ROOT/packages/app/dist/main.js" ]]; then
+  echo "dist/ not found — building..."
+  (cd "$REPO_ROOT" && pnpm --filter @invoker/app build)
+fi
+
+# Helper: run a headless CLI command via run.sh
+headless() {
+  "$REPO_ROOT/run.sh" --headless "$@" 2>/dev/null
+}
 
 # Parse args
 DRY_RUN=false
@@ -26,44 +35,13 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# Electron sandbox detection (same as submit-plan.sh)
-unset ELECTRON_RUN_AS_NODE
-SANDBOX_FLAG=""
-if [ "$(uname)" = "Linux" ]; then
-  SANDBOX_BIN="$REPO_ROOT/node_modules/.pnpm/electron@*/node_modules/electron/dist/chrome-sandbox"
-  # shellcheck disable=SC2086
-  if ! stat -c '%U:%a' $SANDBOX_BIN 2>/dev/null | grep -q '^root:4755$'; then
-    SANDBOX_FLAG="--no-sandbox"
-  fi
-  export LIBGL_ALWAYS_SOFTWARE=1
-fi
-
-# Helper: run a headless CLI command (stderr warnings to /dev/null)
-headless() {
-  # shellcheck disable=SC2086
-  "$ELECTRON" "$MAIN" $SANDBOX_FLAG --headless "$@" 2>/dev/null
-}
-
-# Helper: extract workflow IDs from label output.
-# Electron prints init logs to stdout before the query runs; filter to only
-# lines matching the "wf-<digits>-<digits>" ID pattern.
-headless_workflow_ids() {
-  headless "$@" | grep -E '^wf-[0-9]+-[0-9]+$' || true
-}
-
-# Helper: extract task IDs from label output.
-# Task IDs contain "/" (e.g. wf-123/task-a).
-headless_task_ids() {
-  headless "$@" | grep '/' || true
-}
-
-# Query workflow IDs via CLI
+# Query workflow IDs via CLI (stdout is clean — no init logs)
 QUERY_ARGS=(query workflows --output label)
 if [[ -n "$STATUS_FILTER" ]]; then
   QUERY_ARGS+=(--status "$STATUS_FILTER")
 fi
 
-WORKFLOWS=$(headless_workflow_ids "${QUERY_ARGS[@]}")
+WORKFLOWS=$(headless "${QUERY_ARGS[@]}")
 
 if [[ -z "$WORKFLOWS" ]]; then
   echo "No workflows found."
@@ -85,7 +63,7 @@ while IFS= read -r WF_ID; do
   IDX=$((IDX + 1))
 
   # Get first non-merge task ID for this workflow
-  TASK_ID=$(headless_task_ids query tasks --workflow "$WF_ID" --no-merge --output label | head -1)
+  TASK_ID=$(headless query tasks --workflow "$WF_ID" --no-merge --output label | head -1)
 
   if [[ -z "$TASK_ID" ]]; then
     echo "[$IDX/$TOTAL] $WF_ID — no non-merge task found, skipping"
@@ -104,7 +82,7 @@ while IFS= read -r WF_ID; do
     continue
   fi
 
-  if headless rebase-and-retry "$TASK_ID" 2>&1; then
+  if "$REPO_ROOT/run.sh" --headless rebase-and-retry "$TASK_ID" 2>&1; then
     echo "         OK"
     SUCCEEDED=$((SUCCEEDED + 1))
   else

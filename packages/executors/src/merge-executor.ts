@@ -901,7 +901,12 @@ export async function buildMergeSummaryImpl(
     lines.push('');
   }
 
-  return lines.join('\n');
+  const MAX_BODY_LENGTH = 60_000;
+  let result = lines.join('\n');
+  if (result.length > MAX_BODY_LENGTH) {
+    result = result.slice(0, MAX_BODY_LENGTH) + '\n\n---\n*(Summary truncated — exceeded GitHub PR body limit)*';
+  }
+  return result;
 }
 
 export async function consolidateAndMergeImpl(

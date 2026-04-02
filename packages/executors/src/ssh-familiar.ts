@@ -582,6 +582,8 @@ git push -u origin "$BR"
   }
 
   getRestoredTerminalSpec(meta: PersistedTaskMeta): TerminalSpec {
+    console.log(`[SshFamiliar] getRestoredTerminalSpec: meta=${JSON.stringify(meta)}`);
+    // meta.executionAgent missing
     const isRemotePath = meta.workspacePath?.startsWith('~') || meta.workspacePath?.startsWith('/home/' + this.user + '/');
     if (meta.workspacePath && isRemotePath) {
       const base = this.buildSshArgsInteractive();
@@ -611,6 +613,7 @@ git push -u origin "$BR"
 
   private buildRemoteTerminalInner(workspacePath: string, branch?: string, agentSessionId?: string, executionAgent?: string): string {
     const cdPart = SshFamiliar.sshInteractiveCdFragment(workspacePath);
+    console.log(`[SshFamiliar] Building remote terminal inner command. workspacePath=${workspacePath} branch=${branch} agentSessionId=${agentSessionId} executionAgent=${executionAgent}`);
     if (agentSessionId) {
       let resumeCmd: string;
       if (this.agentRegistry) {

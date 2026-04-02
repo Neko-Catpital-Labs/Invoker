@@ -578,6 +578,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         reviewStatus: 'review_status',
         reviewProviderId: 'review_provider_id',
         selectedAttemptId: 'selected_attempt_id',
+        agentName: 'agent_name',
       };
       const execDateMap: Record<string, string> = {
         startedAt: 'started_at',
@@ -823,10 +824,10 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
   getExecutionAgent(taskId: string): string | null {
     const row = this.queryOne(
-      'SELECT execution_agent FROM tasks WHERE id = ?',
+      'SELECT COALESCE(agent_name, execution_agent) AS agent FROM tasks WHERE id = ?',
       [taskId],
     );
-    return (row?.execution_agent as string) ?? null;
+    return (row?.agent as string) ?? null;
   }
 
   getRemoteTargetId(taskId: string): string | null {
