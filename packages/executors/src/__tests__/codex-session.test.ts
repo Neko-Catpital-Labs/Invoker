@@ -5,7 +5,7 @@ import { describe, it, expect } from 'vitest';
 // override the sessions directory. We'll test parseCodexSessionJsonl
 // directly since it's a pure function.
 
-import { parseCodexSessionJsonl, toReadableText } from '../codex-session.js';
+import { parseCodexSessionJsonl, toReadableText, extractCodexSessionId } from '../codex-session.js';
 
 // ── parseCodexSessionJsonl ───────────────────────────────────
 
@@ -120,6 +120,49 @@ describe('parseCodexSessionJsonl', () => {
   it('returns empty array for empty input', () => {
     expect(parseCodexSessionJsonl('')).toEqual([]);
     expect(parseCodexSessionJsonl('\n\n')).toEqual([]);
+  });
+});
+
+// ── extractCodexSessionId ───────────────────────────────────
+
+describe('extractCodexSessionId', () => {
+  it('returns thread_id from thread.started line (codex 0.117+ format)', () => {
+    const jsonl = [
+      JSON.stringify({ type: 'thread.started', thread_id: '019d5086-675d-7823-b866-ac320c5d689f' }),
+      JSON.stringify({ type: 'turn.started' }),
+      JSON.stringify({ type: 'event_msg', payload: { type: 'user_message', message: 'Hello' } }),
+    ].join('\n');
+
+    expect(extractCodexSessionId(jsonl)).toBe('019d5086-675d-7823-b866-ac320c5d689f');
+  });
+
+  it('returns undefined when no thread.started present', () => {
+    const jsonl = [
+      JSON.stringify({ type: 'turn.started' }),
+      JSON.stringify({ type: 'event_msg', payload: { type: 'user_message', message: 'Hello' } }),
+    ].join('\n');
+
+    expect(extractCodexSessionId(jsonl)).toBeUndefined();
+  });
+
+  it('returns undefined for thread.started without thread_id', () => {
+    const jsonl = JSON.stringify({ type: 'thread.started' });
+    expect(extractCodexSessionId(jsonl)).toBeUndefined();
+  });
+
+  it('handles malformed lines gracefully', () => {
+    const jsonl = [
+      'not json',
+      '',
+      JSON.stringify({ type: 'thread.started', thread_id: 'real-thread-id' }),
+    ].join('\n');
+
+    expect(extractCodexSessionId(jsonl)).toBe('real-thread-id');
+  });
+
+  it('returns undefined for empty input', () => {
+    expect(extractCodexSessionId('')).toBeUndefined();
+    expect(extractCodexSessionId('\n\n')).toBeUndefined();
   });
 });
 

@@ -504,6 +504,17 @@ git push -u origin "$BR"
           }
         }
 
+        // Replace local UUID with real backend session/thread ID for resume
+        if (entry.agentSessionId && this.agentRegistry) {
+          const agentName = request.inputs.executionAgent ?? 'claude';
+          const driver = this.agentRegistry.getSessionDriver(agentName);
+          const rawOutput = e?.outputBuffer.join('') ?? '';
+          const realId = driver?.extractSessionId?.(rawOutput);
+          if (realId) {
+            entry.agentSessionId = realId;
+          }
+        }
+
         const finalExitCode = status === 'failed' && exitCode === 0 ? 1 : exitCode;
         const response: WorkResponse = {
           requestId: request.requestId,

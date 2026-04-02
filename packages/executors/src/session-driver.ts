@@ -14,4 +14,6 @@ export interface SessionDriver {
   loadSession(sessionId: string): string | null;
   /** Parse stored session content into displayable messages. */
   parseSession(raw: string): AgentMessage[];
+  /** Extract the real backend session/thread ID from raw stdout (e.g. codex thread ID for resume). */
+  extractSessionId?(rawStdout: string): string | undefined;
 }

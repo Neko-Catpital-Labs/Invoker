@@ -36,11 +36,11 @@ describe('CodexExecutionAgent', () => {
     expect(ids.size).toBe(5);
   });
 
-  it('buildResumeArgs uses exec resume <sessionId>', () => {
+  it('buildResumeArgs uses interactive resume <sessionId>', () => {
     const agent = new CodexExecutionAgent({ command: 'codex-cli' });
     const resume = agent.buildResumeArgs('sess-123');
     expect(resume.cmd).toBe('codex-cli');
-    expect(resume.args).toEqual(['exec', 'resume', 'sess-123']);
+    expect(resume.args).toEqual(['resume', 'sess-123']);
   });
 
   it('buildFixCommand includes --full-auto when enabled', () => {

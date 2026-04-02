@@ -38,7 +38,7 @@ export class CodexExecutionAgent implements ExecutionAgent {
   buildResumeArgs(sessionId: string): { cmd: string; args: string[] } {
     return {
       cmd: this.command,
-      args: ['exec', 'resume', sessionId],
+      args: ['resume', sessionId],
     };
   }
 

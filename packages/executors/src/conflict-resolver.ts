@@ -374,7 +374,11 @@ eval "$(echo "${agentCmdB64}" | base64 -d)"
     child.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
     child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
     child.on('close', (code) => {
-      if (code === 0) resolve({ stdout, sessionId });
+      // Replace local UUID with real backend session/thread ID for resume
+      const driver = agentRegistry?.getSessionDriver(agentName ?? 'claude');
+      const realId = driver?.extractSessionId?.(stdout);
+      const effectiveSessionId = realId ?? sessionId;
+      if (code === 0) resolve({ stdout, sessionId: effectiveSessionId });
       else reject(new Error(`Remote agent fix failed (exit ${code}): ${stderr.trim()}`));
     });
     child.on('error', (err) => reject(err));
@@ -408,12 +412,15 @@ export function spawnAgentFixViaRegistry(
     child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
     child.on('close', (code) => {
       const displayStdout = driver ? driver.processOutput(sessionId, stdout) : stdout;
+      // Replace local UUID with real backend session/thread ID for resume
+      const realId = driver?.extractSessionId?.(stdout);
+      const effectiveSessionId = realId ?? sessionId;
       if (code === 0) {
-        resolve({ stdout: displayStdout, sessionId });
+        resolve({ stdout: displayStdout, sessionId: effectiveSessionId });
       } else {
         reject(Object.assign(
           new Error(`${agent.name} fix exited with code ${code}: ${stderr.trim()}`),
-          { sessionId },
+          { sessionId: effectiveSessionId },
         ));
       }
     });
