@@ -3,9 +3,15 @@ import {
   formatTaskStatus,
   formatWorkflowStatus,
   formatEventLog,
+  serializeWorkflow,
+  serializeTask,
+  serializeEvent,
+  formatAsLabel,
+  formatAsJson,
+  formatAsJsonl,
 } from '../formatter.js';
 import type { TaskState } from '@invoker/core';
-import type { TaskEvent } from '@invoker/persistence';
+import type { TaskEvent, Workflow } from '@invoker/persistence';
 
 // ── ANSI Code Constants ──────────────────────────────────────
 
@@ -144,5 +150,220 @@ describe('formatEventLog', () => {
   it('handles empty events', () => {
     const output = formatEventLog([]);
     expect(output).toContain('No events recorded');
+  });
+});
+
+// ── serializeWorkflow ───────────────────────────────────────
+
+describe('serializeWorkflow', () => {
+  const baseWorkflow: Workflow = {
+    id: 'wf-123',
+    name: 'Test Plan',
+    status: 'running',
+    createdAt: '2025-06-01T10:00:00Z',
+    updatedAt: '2025-06-01T11:00:00Z',
+  };
+
+  it('returns plain object with required fields', () => {
+    const result = serializeWorkflow(baseWorkflow);
+    expect(result.id).toBe('wf-123');
+    expect(result.name).toBe('Test Plan');
+    expect(result.status).toBe('running');
+    expect(result.createdAt).toBe('2025-06-01T10:00:00Z');
+    expect(result.updatedAt).toBe('2025-06-01T11:00:00Z');
+  });
+
+  it('includes optional fields when present', () => {
+    const wf: Workflow = {
+      ...baseWorkflow,
+      description: 'A test workflow',
+      onFinish: 'pull_request',
+      mergeMode: 'github' as Workflow['mergeMode'],
+      baseBranch: 'master',
+      featureBranch: 'feature/test',
+      generation: 2,
+    };
+    const result = serializeWorkflow(wf);
+    expect(result.description).toBe('A test workflow');
+    expect(result.onFinish).toBe('pull_request');
+    expect(result.mergeMode).toBe('github');
+    expect(result.baseBranch).toBe('master');
+    expect(result.featureBranch).toBe('feature/test');
+    expect(result.generation).toBe(2);
+  });
+
+  it('omits undefined optional fields', () => {
+    const result = serializeWorkflow(baseWorkflow);
+    expect(result).not.toHaveProperty('description');
+    expect(result).not.toHaveProperty('mergeMode');
+    expect(result).not.toHaveProperty('generation');
+  });
+
+  it('produces valid JSON with no ANSI codes', () => {
+    const json = JSON.stringify(serializeWorkflow(baseWorkflow));
+    expect(json).not.toContain('\x1b');
+    expect(() => JSON.parse(json)).not.toThrow();
+  });
+});
+
+// ── serializeTask ───────────────────────────────────────────
+
+describe('serializeTask', () => {
+  it('returns plain object with required fields', () => {
+    const task = makeTask({ id: 'wf-1/task-a', description: 'Run tests', status: 'completed' });
+    const result = serializeTask(task);
+    expect(result.id).toBe('wf-1/task-a');
+    expect(result.description).toBe('Run tests');
+    expect(result.status).toBe('completed');
+    expect(result.dependencies).toEqual([]);
+  });
+
+  it('includes config subset when present', () => {
+    const task = makeTask({
+      config: {
+        workflowId: 'wf-1',
+        command: 'echo hi',
+        familiarType: 'worktree',
+        isMergeNode: false,
+        executionAgent: 'claude',
+      } as TaskState['config'],
+    });
+    const result = serializeTask(task);
+    const config = result.config as Record<string, unknown>;
+    expect(config.workflowId).toBe('wf-1');
+    expect(config.command).toBe('echo hi');
+    expect(config.familiarType).toBe('worktree');
+    expect(config.isMergeNode).toBe(false);
+    expect(config.executionAgent).toBe('claude');
+  });
+
+  it('includes execution subset when present', () => {
+    const task = makeTask({
+      execution: {
+        branch: 'feature/test',
+        commit: 'abc123',
+        exitCode: 0,
+        error: undefined,
+      } as TaskState['execution'],
+    });
+    const result = serializeTask(task);
+    const execution = result.execution as Record<string, unknown>;
+    expect(execution.branch).toBe('feature/test');
+    expect(execution.commit).toBe('abc123');
+    expect(execution.exitCode).toBe(0);
+    expect(execution).not.toHaveProperty('error');
+  });
+
+  it('converts Date fields to ISO strings', () => {
+    const task = makeTask({
+      createdAt: new Date('2025-06-01T10:00:00Z'),
+      execution: {
+        startedAt: new Date('2025-06-01T10:01:00Z'),
+        completedAt: new Date('2025-06-01T10:05:00Z'),
+      } as TaskState['execution'],
+    });
+    const result = serializeTask(task);
+    expect(result.createdAt).toBe('2025-06-01T10:00:00.000Z');
+    const execution = result.execution as Record<string, unknown>;
+    expect(execution.startedAt).toBe('2025-06-01T10:01:00.000Z');
+    expect(execution.completedAt).toBe('2025-06-01T10:05:00.000Z');
+  });
+
+  it('produces valid JSON', () => {
+    const task = makeTask({ id: 'wf-1/task-a' });
+    const json = JSON.stringify(serializeTask(task));
+    expect(() => JSON.parse(json)).not.toThrow();
+    expect(json).not.toContain('\x1b');
+  });
+});
+
+// ── serializeEvent ──────────────────────────────────────────
+
+describe('serializeEvent', () => {
+  it('returns plain object with all fields', () => {
+    const event: TaskEvent = {
+      id: 1,
+      taskId: 'task-1',
+      eventType: 'started',
+      payload: '{"info":"test"}',
+      createdAt: '2025-01-01T00:00:00',
+    };
+    const result = serializeEvent(event);
+    expect(result.id).toBe(1);
+    expect(result.taskId).toBe('task-1');
+    expect(result.eventType).toBe('started');
+    expect(result.payload).toBe('{"info":"test"}');
+    expect(result.createdAt).toBe('2025-01-01T00:00:00');
+  });
+
+  it('omits payload when undefined', () => {
+    const event: TaskEvent = {
+      id: 2,
+      taskId: 'task-2',
+      eventType: 'completed',
+      createdAt: '2025-01-01T00:01:00',
+    };
+    const result = serializeEvent(event);
+    expect(result).not.toHaveProperty('payload');
+  });
+});
+
+// ── formatAsLabel ───────────────────────────────────────────
+
+describe('formatAsLabel', () => {
+  it('outputs one ID per line', () => {
+    const items = [{ id: 'wf-1' }, { id: 'wf-2' }, { id: 'wf-3' }];
+    const output = formatAsLabel(items);
+    expect(output).toBe('wf-1\nwf-2\nwf-3');
+  });
+
+  it('returns empty string for empty array', () => {
+    expect(formatAsLabel([])).toBe('');
+  });
+
+  it('returns single ID with no trailing newline', () => {
+    expect(formatAsLabel([{ id: 'only-one' }])).toBe('only-one');
+  });
+});
+
+// ── formatAsJson ────────────────────────────────────────────
+
+describe('formatAsJson', () => {
+  it('produces valid JSON for array input', () => {
+    const data = [{ id: 'a' }, { id: 'b' }];
+    const output = formatAsJson(data);
+    expect(() => JSON.parse(output)).not.toThrow();
+    expect(JSON.parse(output)).toEqual(data);
+  });
+
+  it('produces valid JSON for single object', () => {
+    const data = { id: 'a', name: 'test' };
+    const output = formatAsJson(data);
+    expect(JSON.parse(output)).toEqual(data);
+  });
+});
+
+// ── formatAsJsonl ───────────────────────────────────────────
+
+describe('formatAsJsonl', () => {
+  it('outputs one JSON object per line', () => {
+    const items = [{ id: 'a' }, { id: 'b' }];
+    const output = formatAsJsonl(items);
+    const lines = output.split('\n');
+    expect(lines).toHaveLength(2);
+    expect(JSON.parse(lines[0])).toEqual({ id: 'a' });
+    expect(JSON.parse(lines[1])).toEqual({ id: 'b' });
+  });
+
+  it('each line is independently parseable', () => {
+    const items = [{ x: 1 }, { x: 2 }, { x: 3 }];
+    const lines = formatAsJsonl(items).split('\n');
+    for (const line of lines) {
+      expect(() => JSON.parse(line)).not.toThrow();
+    }
+  });
+
+  it('returns empty string for empty array', () => {
+    expect(formatAsJsonl([])).toBe('');
   });
 });

@@ -10,7 +10,7 @@
  */
 
 import { Orchestrator } from '@invoker/core';
-import type { TaskDelta, TaskState, TaskStateChanges } from '@invoker/core';
+import type { TaskDelta, TaskState } from '@invoker/core';
 import { SQLiteAdapter } from '@invoker/persistence';
 import { resolve as resolvePath } from 'node:path';
 import { Channels } from '@invoker/transport';
@@ -68,6 +68,7 @@ export interface HeadlessDeps {
 const RESET = '\x1b[0m';
 const BOLD = '\x1b[1m';
 const RED = '\x1b[31m';
+const YELLOW = '\x1b[33m';
 
 // ── Shared Helpers ───────────────────────────────────────────
 
@@ -120,24 +121,258 @@ function wireHeadlessApproveHook(deps: HeadlessDeps, te: TaskExecutor): void {
   });
 }
 
+// ── Deprecation Warning ─────────────────────────────────────
+
+function warnDeprecated(oldCmd: string, newCmd: string): void {
+  process.stderr.write(
+    `${YELLOW}[deprecated]${RESET} "${oldCmd}" is deprecated. Use "${newCmd}" instead.\n`,
+  );
+}
+
+// ── Query Flag Parsing ──────────────────────────────────────
+
+export interface QueryFlags {
+  output: 'text' | 'label' | 'json' | 'jsonl';
+  status?: string;
+  workflow?: string;
+  noMerge?: boolean;
+  positional: string[];
+}
+
+export function parseQueryFlags(args: string[]): QueryFlags {
+  const flags: QueryFlags = { output: 'text', positional: [] };
+  let i = 0;
+  while (i < args.length) {
+    const arg = args[i];
+    if (arg === '--output' && i + 1 < args.length) {
+      const val = args[i + 1] as QueryFlags['output'];
+      if (!['text', 'label', 'json', 'jsonl'].includes(val)) {
+        throw new Error(`Invalid --output format: "${val}". Must be text|label|json|jsonl.`);
+      }
+      flags.output = val;
+      i += 2;
+    } else if (arg === '--status' && i + 1 < args.length) {
+      flags.status = args[i + 1];
+      i += 2;
+    } else if (arg === '--workflow' && i + 1 < args.length) {
+      flags.workflow = args[i + 1];
+      i += 2;
+    } else if (arg === '--no-merge') {
+      flags.noMerge = true;
+      i += 1;
+    } else if (arg.startsWith('--')) {
+      throw new Error(`Unknown query flag: "${arg}"`);
+    } else {
+      flags.positional.push(arg);
+      i += 1;
+    }
+  }
+  return flags;
+}
+
+// ── Query Router ────────────────────────────────────────────
+
+async function headlessQuery(args: string[], deps: HeadlessDeps): Promise<void> {
+  const subCommand = args[0];
+  if (!subCommand) {
+    throw new Error('Missing query sub-command. Usage: --headless query <workflows|tasks|task|queue|audit|session>');
+  }
+  const flags = parseQueryFlags(args.slice(1));
+
+  const {
+    formatWorkflowList, formatTaskStatus, formatWorkflowStatus,
+    formatEventLog, formatQueueStatus,
+    serializeWorkflow, serializeTask, serializeEvent,
+    formatAsLabel, formatAsJson, formatAsJsonl,
+  } = await import('./formatter.js');
+
+  switch (subCommand) {
+    case 'workflows': {
+      let workflows = deps.persistence.listWorkflows();
+      if (flags.status) {
+        workflows = workflows.filter(wf => wf.status === flags.status);
+      }
+      switch (flags.output) {
+        case 'label': console.log(formatAsLabel(workflows)); break;
+        case 'json':  console.log(formatAsJson(workflows.map(serializeWorkflow))); break;
+        case 'jsonl': console.log(formatAsJsonl(workflows.map(serializeWorkflow))); break;
+        default:      console.log(formatWorkflowList(workflows)); break;
+      }
+      break;
+    }
+    case 'tasks': {
+      const { orchestrator, persistence } = deps;
+      const workflows = persistence.listWorkflows();
+      if (workflows.length === 0) {
+        console.log('No workflows found. Run a plan first.');
+        return;
+      }
+
+      // Load tasks from specific workflow or latest
+      const targetWorkflows = flags.workflow
+        ? workflows.filter(wf => wf.id === flags.workflow)
+        : [workflows[0]];
+
+      if (targetWorkflows.length === 0) {
+        throw new Error(`Workflow "${flags.workflow}" not found.`);
+      }
+
+      let allTasks: import('@invoker/core').TaskState[] = [];
+      for (const wf of targetWorkflows) {
+        orchestrator.resumeWorkflow(wf.id);
+        // Filter by workflow ID — the orchestrator may have loaded other workflows during init
+        allTasks.push(...orchestrator.getAllTasks().filter(t => t.config.workflowId === wf.id));
+      }
+
+      // Apply filters
+      if (flags.status) {
+        allTasks = allTasks.filter(t => t.status === flags.status);
+      }
+      if (flags.noMerge) {
+        allTasks = allTasks.filter(t => !t.config.isMergeNode);
+      }
+
+      switch (flags.output) {
+        case 'label': console.log(formatAsLabel(allTasks)); break;
+        case 'json':  console.log(formatAsJson(allTasks.map(serializeTask))); break;
+        case 'jsonl': console.log(formatAsJsonl(allTasks.map(serializeTask))); break;
+        default: {
+          for (const task of allTasks) console.log(formatTaskStatus(task));
+          const status = orchestrator.getWorkflowStatus();
+          console.log(`\n${formatWorkflowStatus(status)}`);
+          break;
+        }
+      }
+      break;
+    }
+    case 'task': {
+      const taskId = flags.positional[0];
+      if (!taskId) throw new Error('Usage: --headless query task <taskId>');
+      const resolved = restoreWorkflowForTask(taskId, deps).resolvedTaskId;
+      const task = deps.orchestrator.getTask(resolved);
+      if (!task) throw new Error(`Task "${taskId}" not found`);
+
+      switch (flags.output) {
+        case 'label': console.log(task.id); break;
+        case 'json':  console.log(formatAsJson(serializeTask(task))); break;
+        case 'jsonl': console.log(formatAsJsonl([serializeTask(task)])); break;
+        default:      console.log(task.status); break;
+      }
+      break;
+    }
+    case 'queue': {
+      const workflows = deps.persistence.listWorkflows();
+      if (workflows.length > 0) {
+        deps.orchestrator.resumeWorkflow(workflows[0].id);
+      }
+      const status = deps.orchestrator.getQueueStatus();
+
+      switch (flags.output) {
+        case 'label': {
+          const ids = [...status.running.map(t => t.taskId), ...status.queued.map(t => t.taskId)];
+          console.log(ids.join('\n'));
+          break;
+        }
+        case 'json':  console.log(formatAsJson(status)); break;
+        case 'jsonl': {
+          for (const t of status.running) console.log(JSON.stringify({ ...t, state: 'running' }));
+          for (const t of status.queued) console.log(JSON.stringify({ ...t, state: 'queued' }));
+          break;
+        }
+        default: console.log(formatQueueStatus(status)); break;
+      }
+      break;
+    }
+    case 'audit': {
+      const taskId = flags.positional[0];
+      if (!taskId) throw new Error('Usage: --headless query audit <taskId>');
+      const events = deps.persistence.getEvents(taskId);
+
+      switch (flags.output) {
+        case 'label': console.log(events.map(e => `${e.taskId}:${e.eventType}`).join('\n')); break;
+        case 'json':  console.log(formatAsJson(events.map(serializeEvent))); break;
+        case 'jsonl': console.log(formatAsJsonl(events.map(serializeEvent))); break;
+        default:      console.log(formatEventLog(events)); break;
+      }
+      break;
+    }
+    case 'session': {
+      const taskId = flags.positional[0];
+      if (!taskId) throw new Error('Usage: --headless query session <taskId>');
+      // For non-text output, we'd need structured session data.
+      // For now, session only supports text output; other formats fall through to text.
+      await headlessSession(taskId, deps);
+      break;
+    }
+    default:
+      throw new Error(`Unknown query sub-command: "${subCommand}". Use: workflows, tasks, task, queue, audit, session`);
+  }
+}
+
+// ── Set Router ──────────────────────────────────────────────
+
+async function headlessSet(args: string[], deps: HeadlessDeps): Promise<void> {
+  const subCommand = args[0];
+  if (!subCommand) {
+    throw new Error('Missing set sub-command. Usage: --headless set <command|executor|agent|merge-mode>');
+  }
+
+  switch (subCommand) {
+    case 'command':
+      await headlessEdit(args[1], args.slice(2).join(' '), deps);
+      break;
+    case 'executor':
+      await headlessEditExecutor(args[1], args[2], deps);
+      break;
+    case 'agent':
+      await headlessEditAgent(args[1], args[2], deps);
+      break;
+    case 'merge-mode':
+      await headlessSetMergeMode(args[1], args[2], deps);
+      break;
+    default:
+      throw new Error(`Unknown set sub-command: "${subCommand}". Use: command, executor, agent, merge-mode`);
+  }
+}
+
 // ── Headless Command Router ──────────────────────────────────
 
 export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<void> {
   const command = args[0];
 
   switch (command) {
+    // ── New grouped commands ──
+    case 'query':
+      await headlessQuery(args.slice(1), deps);
+      break;
+    case 'set':
+      await headlessSet(args.slice(1), deps);
+      break;
+
+    // ── Execute (unchanged) ──
     case 'run':
       await headlessRun(args[1], deps, deps.waitForApproval);
-      break;
-    case 'list':
-      await headlessList(deps);
       break;
     case 'resume':
       await headlessResume(args[1], deps, deps.waitForApproval);
       break;
-    case 'status':
-      await headlessStatus(deps);
+    case 'restart':
+      await headlessRestart(args[1], deps);
       break;
+    case 'restart-workflow':
+      await headlessRestartWorkflow(args[1], deps);
+      break;
+    case 'rebase-and-retry':
+      await headlessRebaseAndRetry(args[1], deps);
+      break;
+    case 'fix':
+      await headlessFix(args[1], deps, args[2]);
+      break;
+    case 'resolve-conflict':
+      await headlessResolveConflict(args[1], deps, args[2]);
+      break;
+
+    // ── Respond (unchanged) ──
     case 'approve':
       await headlessApprove(args[1], deps);
       break;
@@ -150,65 +385,74 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
     case 'select':
       await headlessSelect(args[1], args[2], deps);
       break;
-    case 'restart':
-      await headlessRestart(args[1], deps);
-      break;
-    case 'restart-workflow':
-      await headlessRestartWorkflow(args[1], deps);
-      break;
-    case 'fix':
-      await headlessFix(args[1], deps, args[2]);
-      break;
-    case 'resolve-conflict':
-      await headlessResolveConflict(args[1], deps, args[2]);
-      break;
-    case 'rebase-and-retry':
-      await headlessRebaseAndRetry(args[1], deps);
-      break;
-    case 'edit':
-      await headlessEdit(args[1], args.slice(2).join(' '), deps);
-      break;
-    case 'edit-executor':
-    case 'edit-type':
-      await headlessEditExecutor(args[1], args[2], deps);
-      break;
-    case 'edit-agent':
-      await headlessEditAgent(args[1], args[2], deps);
-      break;
-    case 'audit':
-      await headlessAudit(args[1], deps);
-      break;
-    case 'session':
-      await headlessSession(args[1], deps);
-      break;
+
+    // ── Lifecycle (unchanged) ──
     case 'cancel':
       await headlessCancel(args[1], deps);
       break;
-    case 'open-terminal':
-      await headlessOpenTerminal(args[1], deps);
-      break;
-    case 'task-status':
-      headlessTaskStatus(args[1], deps);
-      break;
-    case 'queue':
-      await headlessQueue(deps);
-      break;
-    case 'query-select':
-      await headlessQuerySelect(args[1], deps);
-      break;
+    case 'delete':
     case 'delete-workflow':
       await headlessDeleteWorkflow(args[1], deps);
-      break;
-    case 'set-merge-mode':
-      await headlessSetMergeMode(args[1], args[2], deps);
       break;
     case 'delete-all':
       deps.orchestrator.deleteAllWorkflows();
       console.log('All workflows deleted.');
       break;
+    case 'open-terminal':
+      await headlessOpenTerminal(args[1], deps);
+      break;
     case 'slack':
       await headlessSlack(deps);
       break;
+    case 'query-select':
+      await headlessQuerySelect(args[1], deps);
+      break;
+
+    // ── Deprecated aliases → query ──
+    case 'list':
+      warnDeprecated('list', 'query workflows');
+      await headlessQuery(['workflows', ...args.slice(1)], deps);
+      break;
+    case 'status':
+      warnDeprecated('status', 'query tasks');
+      await headlessQuery(['tasks', ...args.slice(1)], deps);
+      break;
+    case 'task-status':
+      warnDeprecated('task-status', 'query task');
+      await headlessQuery(['task', ...args.slice(1)], deps);
+      break;
+    case 'queue':
+      warnDeprecated('queue', 'query queue');
+      await headlessQuery(['queue', ...args.slice(1)], deps);
+      break;
+    case 'audit':
+      warnDeprecated('audit', 'query audit');
+      await headlessQuery(['audit', ...args.slice(1)], deps);
+      break;
+    case 'session':
+      warnDeprecated('session', 'query session');
+      await headlessQuery(['session', ...args.slice(1)], deps);
+      break;
+
+    // ── Deprecated aliases → set ──
+    case 'edit':
+      warnDeprecated('edit', 'set command');
+      await headlessSet(['command', ...args.slice(1)], deps);
+      break;
+    case 'edit-executor':
+    case 'edit-type':
+      warnDeprecated(command, 'set executor');
+      await headlessSet(['executor', ...args.slice(1)], deps);
+      break;
+    case 'edit-agent':
+      warnDeprecated('edit-agent', 'set agent');
+      await headlessSet(['agent', ...args.slice(1)], deps);
+      break;
+    case 'set-merge-mode':
+      warnDeprecated('set-merge-mode', 'set merge-mode');
+      await headlessSet(['merge-mode', ...args.slice(1)], deps);
+      break;
+
     case '--help':
     case '-h':
     case undefined:
@@ -222,33 +466,51 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
 function printHeadlessUsage(): void {
   console.log(`${BOLD}invoker${RESET} — Headless workflow runner (Electron)
 
-${BOLD}Usage:${RESET}
-  ./submit-plan.sh <plan.yaml>                        Run a plan (recommended)
-  electron dist/main.js --headless run <plan.yaml>    Load and execute plan
-  electron dist/main.js --headless list               List all saved workflows
-  electron dist/main.js --headless resume <id>        Resume incomplete workflow
-  electron dist/main.js --headless status             Show current task states
-  electron dist/main.js --headless approve <taskId>   Approve a task
-  electron dist/main.js --headless reject <id> [why]  Reject a task
-  electron dist/main.js --headless input <id> <text>  Provide input to task
-  electron dist/main.js --headless select <id> <exp>  Select winning experiment
-  electron dist/main.js --headless restart <id>       Restart a failed/stuck task
-  electron dist/main.js --headless restart-workflow <workflowId>  Bump generation + rerun (no pool fetch)
-  electron dist/main.js --headless rebase-and-retry <taskId>  Refresh pool base + rerun workflow
-  electron dist/main.js --headless fix <taskId> [claude|codex]   Fix a failed task (default: claude)
-  electron dist/main.js --headless resolve-conflict <taskId> [claude|codex]  Resolve merge conflict + restart (default: claude)
-  electron dist/main.js --headless edit <id> <cmd>    Edit task command and re-run
-  electron dist/main.js --headless edit-executor <id> <type>  Change executor type (worktree|docker|ssh)
-  electron dist/main.js --headless edit-agent <id> <agent>    Change execution agent (claude|codex)
-  electron dist/main.js --headless task-status <taskId>     Print raw task status
-  electron dist/main.js --headless cancel <taskId>         Cancel task + all downstream
-  electron dist/main.js --headless open-terminal <taskId>  Open OS terminal for a task
-  electron dist/main.js --headless queue                   Show queue status
-  electron dist/main.js --headless audit <taskId>          Print event history
-  electron dist/main.js --headless session <taskId>        Print agent session messages
-  electron dist/main.js --headless delete-workflow <id>    Delete a single workflow by ID
-  electron dist/main.js --headless set-merge-mode <workflowId> <mode>  manual | automatic | github | external_review
-  electron dist/main.js --headless slack                   Start Slack bot (long-running)
+${BOLD}Usage:${RESET}  electron dist/main.js --headless <command> [args...]
+
+${BOLD}Query${RESET} (read-only, all support --output text|label|json|jsonl):
+  query workflows [--status S] [--output F]          List all saved workflows
+  query tasks [--workflow <id>] [--status S]          Show task states (latest workflow)
+    [--no-merge] [--output F]
+  query task <taskId> [--output F]                    Print single task status
+  query queue [--output F]                            Show queue status
+  query audit <taskId> [--output F]                   Print event history
+  query session <taskId>                              Print agent session messages
+
+${BOLD}Execute:${RESET}
+  run <plan.yaml>                                     Load and execute plan
+  resume <id>                                         Resume incomplete workflow
+  restart <taskId>                                    Restart a failed/stuck task
+  restart-workflow <workflowId>                       Bump generation + rerun (no pool fetch)
+  rebase-and-retry <taskId>                           Refresh pool base + rerun workflow
+  fix <taskId> [claude|codex]                         Fix a failed task (default: claude)
+  resolve-conflict <taskId> [claude|codex]            Resolve merge conflict + restart
+
+${BOLD}Respond:${RESET}
+  approve <taskId>                                    Approve a task
+  reject <taskId> [reason]                            Reject a task
+  input <taskId> <text>                               Provide input to task
+  select <taskId> <experimentId>                      Select winning experiment
+
+${BOLD}Configure:${RESET}
+  set command <taskId> <cmd>                          Edit task command and re-run
+  set executor <taskId> <type>                        Change executor type (worktree|docker|ssh)
+  set agent <taskId> <agent>                          Change execution agent (claude|codex)
+  set merge-mode <workflowId> <mode>                  manual | automatic | github | external_review
+
+${BOLD}Lifecycle:${RESET}
+  cancel <taskId>                                     Cancel task + all downstream
+  delete <workflowId>                                 Delete a single workflow
+  delete-all                                          Delete all workflows
+  open-terminal <taskId>                              Open OS terminal for a task
+  slack                                               Start Slack bot (long-running)
+
+${BOLD}Deprecated${RESET} (use new names above):
+  list → query workflows       status → query tasks       task-status → query task
+  queue → query queue           audit → query audit         session → query session
+  edit → set command            edit-executor → set executor
+  edit-agent → set agent        set-merge-mode → set merge-mode
+  delete-workflow → delete
 
 ${BOLD}Options:${RESET}
   --wait-for-approval    Keep running until PR approval (use with 'run' or 'resume')
@@ -356,28 +618,6 @@ async function headlessResume(workflowId: string, deps: HeadlessDeps, waitForApp
   console.log(`\n${formatWorkflowStatus(status)}`);
 
   if (status.failed > 0) process.exitCode = 1;
-}
-
-async function headlessList(deps: Pick<HeadlessDeps, 'persistence'>): Promise<void> {
-  const { formatWorkflowList } = await import('./formatter.js');
-  const workflows = deps.persistence.listWorkflows();
-  console.log(formatWorkflowList(workflows));
-}
-
-async function headlessStatus(deps: Pick<HeadlessDeps, 'orchestrator' | 'persistence'>): Promise<void> {
-  const { orchestrator, persistence } = deps;
-  const { formatTaskStatus, formatWorkflowStatus } = await import('./formatter.js');
-  const workflows = persistence.listWorkflows();
-  if (workflows.length === 0) {
-    console.log('No workflows found. Run a plan first.');
-    return;
-  }
-  const latest = workflows[0];
-  orchestrator.resumeWorkflow(latest.id);
-  const tasks = orchestrator.getAllTasks();
-  for (const task of tasks) console.log(formatTaskStatus(task));
-  const status = orchestrator.getWorkflowStatus();
-  console.log(`\n${formatWorkflowStatus(status)}`);
 }
 
 async function headlessApprove(taskId: string, deps: HeadlessDeps): Promise<void> {
@@ -547,13 +787,6 @@ async function headlessQuerySelect(taskId: string, deps: Pick<HeadlessDeps, 'per
     : `No experiment selected for ${taskId}`);
 }
 
-async function headlessAudit(taskId: string | undefined, deps: Pick<HeadlessDeps, 'persistence'>): Promise<void> {
-  const { formatEventLog } = await import('./formatter.js');
-  if (!taskId) throw new Error('Usage: --headless audit <taskId>');
-  const events = deps.persistence.getEvents(taskId);
-  console.log(formatEventLog(events));
-}
-
 async function headlessSession(taskId: string | undefined, deps: Pick<HeadlessDeps, 'orchestrator' | 'persistence' | 'executionAgentRegistry'>): Promise<void> {
   if (!taskId) throw new Error('Usage: --headless session <taskId>');
   taskId = restoreWorkflowForTask(taskId, deps).resolvedTaskId;
@@ -640,14 +873,6 @@ async function headlessOpenTerminal(taskId: string, deps: HeadlessDeps): Promise
   }
 }
 
-function headlessTaskStatus(taskId: string, deps: Pick<HeadlessDeps, 'orchestrator' | 'persistence'>): void {
-  if (!taskId) throw new Error('Missing taskId. Usage: --headless task-status <taskId>');
-  taskId = restoreWorkflowForTask(taskId, deps).resolvedTaskId;
-  const task = deps.orchestrator.getTask(taskId);
-  if (!task) throw new Error(`Task "${taskId}" not found`);
-  console.log(task.status);
-}
-
 async function headlessDeleteWorkflow(workflowId: string, deps: Pick<HeadlessDeps, 'orchestrator'>): Promise<void> {
   if (!workflowId) throw new Error('Missing workflowId. Usage: --headless delete-workflow <workflowId>');
   deps.orchestrator.deleteWorkflow(workflowId);
@@ -673,16 +898,6 @@ async function headlessSetMergeMode(
   });
   const wf = deps.persistence.loadWorkflow(workflowId);
   console.log(`Merge mode updated for ${workflowId}: ${wf?.mergeMode ?? '?'}`);
-}
-
-async function headlessQueue(deps: HeadlessDeps): Promise<void> {
-  const { formatQueueStatus } = await import('./formatter.js');
-  const workflows = deps.persistence.listWorkflows();
-  if (workflows.length > 0) {
-    deps.orchestrator.resumeWorkflow(workflows[0].id);
-  }
-  const status = deps.orchestrator.getQueueStatus();
-  console.log(formatQueueStatus(status));
 }
 
 async function headlessSlack(deps: HeadlessDeps): Promise<void> {
