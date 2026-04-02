@@ -4621,4 +4621,177 @@ describe('Orchestrator', () => {
       expect(orchestrator.getTask(mergeId)!.status).toBe('running');
     });
   });
+
+  describe('deferTask', () => {
+    it('transitions a running task back to pending', () => {
+      orchestrator.loadPlan({
+        name: 'defer-test',
+        tasks: [{ id: 'task-a', description: 'Task A' }],
+      });
+      const started = orchestrator.startExecution();
+      expect(started.length).toBe(1);
+      expect(orchestrator.getTask('task-a')!.status).toBe('running');
+
+      orchestrator.deferTask('task-a');
+
+      const task = orchestrator.getTask('task-a')!;
+      expect(task.status).toBe('pending');
+      expect(task.execution.startedAt).toBeUndefined();
+      expect(task.execution.lastHeartbeatAt).toBeUndefined();
+    });
+
+    it('frees the scheduler slot so other tasks can run', () => {
+      orchestrator.loadPlan({
+        name: 'defer-slot-test',
+        tasks: [
+          { id: 'task-a', description: 'Task A' },
+          { id: 'task-b', description: 'Task B' },
+          { id: 'task-c', description: 'Task C' },
+          { id: 'task-d', description: 'Task D' },
+        ],
+      });
+      // maxConcurrency=3, so 3 start, 1 stays in queue
+      const started = orchestrator.startExecution();
+      expect(started.length).toBe(3);
+
+      // Defer task-a → frees a slot → task-d should drain from queue
+      orchestrator.deferTask(started[0].id);
+
+      // task-d should now be running (scheduler drained)
+      const allTasks = orchestrator.getAllTasks().filter(t => !t.config.isMergeNode);
+      const running = allTasks.filter(t => t.status === 'running');
+      // 2 still running + 1 newly started from drain = 3 running
+      expect(running.length).toBe(3);
+    });
+
+    it('re-enqueues deferred task when another task completes', () => {
+      orchestrator.loadPlan({
+        name: 'defer-reenqueue-test',
+        tasks: [
+          { id: 'task-a', description: 'Task A' },
+          { id: 'task-b', description: 'Task B' },
+        ],
+      });
+      const started = orchestrator.startExecution();
+      expect(started.length).toBe(2);
+
+      // Defer task-a
+      orchestrator.deferTask(started[0].id);
+      expect(orchestrator.getTask('task-a')!.status).toBe('pending');
+
+      // Complete task-b → should re-enqueue task-a
+      const newlyStarted = orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 'task-b', status: 'completed', outputs: { exitCode: 0 } }),
+      );
+
+      // task-a should be running again (re-enqueued and started)
+      expect(orchestrator.getTask('task-a')!.status).toBe('running');
+    });
+
+    it('re-enqueues deferred task when another task fails', () => {
+      orchestrator.loadPlan({
+        name: 'defer-fail-reenqueue',
+        tasks: [
+          { id: 'task-a', description: 'Task A' },
+          { id: 'task-b', description: 'Task B' },
+        ],
+      });
+      orchestrator.startExecution();
+
+      // Defer task-a
+      orchestrator.deferTask('task-a');
+
+      // Fail task-b → should re-enqueue task-a
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 'task-b', status: 'failed', outputs: { exitCode: 1, error: 'boom' } }),
+      );
+
+      expect(orchestrator.getTask('task-a')!.status).toBe('running');
+    });
+
+    it('publishes task.deferred event', () => {
+      orchestrator.loadPlan({
+        name: 'defer-event-test',
+        tasks: [{ id: 'task-a', description: 'Task A' }],
+      });
+      orchestrator.startExecution();
+
+      orchestrator.deferTask('task-a');
+
+      const deferredEvent = persistence.events.find(
+        e => e.eventType === 'task.deferred',
+      );
+      expect(deferredEvent).toBeDefined();
+    });
+
+    it('clears deferred set on restartTask', () => {
+      orchestrator.loadPlan({
+        name: 'defer-restart-test',
+        tasks: [
+          { id: 'task-a', description: 'Task A' },
+          { id: 'task-b', description: 'Task B' },
+        ],
+      });
+      orchestrator.startExecution();
+
+      orchestrator.deferTask('task-a');
+      // Restart task-a clears it from deferredTaskIds
+      orchestrator.restartTask('task-a');
+
+      // Complete task-b — no deferred tasks should re-enqueue
+      // (task-a was already restarted independently)
+      const beforeStatus = orchestrator.getTask('task-a')!.status;
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 'task-b', status: 'completed', outputs: { exitCode: 0 } }),
+      );
+      // task-a status should not have changed from what restartTask set it to
+      // (it was already running from restart, not re-enqueued from deferred)
+      expect(orchestrator.getTask('task-a')!.status).toBe(beforeStatus);
+    });
+
+    it('clears deferred set on cancelTask', () => {
+      orchestrator.loadPlan({
+        name: 'defer-cancel-test',
+        tasks: [
+          { id: 'task-a', description: 'Task A' },
+          { id: 'task-b', description: 'Task B' },
+        ],
+      });
+      orchestrator.startExecution();
+
+      orchestrator.deferTask('task-a');
+      orchestrator.cancelTask('task-a');
+
+      // task-a is now failed, not in deferred set
+      expect(orchestrator.getTask('task-a')!.status).toBe('failed');
+
+      // Complete task-b — no deferred tasks should re-enqueue
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 'task-b', status: 'completed', outputs: { exitCode: 0 } }),
+      );
+      // task-a stays failed
+      expect(orchestrator.getTask('task-a')!.status).toBe('failed');
+    });
+
+    it('does not re-enqueue deferred task if it was cancelled between defer and completion', () => {
+      orchestrator.loadPlan({
+        name: 'defer-cancel-race',
+        tasks: [
+          { id: 'task-a', description: 'Task A' },
+          { id: 'task-b', description: 'Task B' },
+        ],
+      });
+      orchestrator.startExecution();
+
+      // Defer task-a, then cancel it
+      orchestrator.deferTask('task-a');
+      orchestrator.cancelTask('task-a');
+
+      // Complete task-b — task-a should stay failed
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 'task-b', status: 'completed', outputs: { exitCode: 0 } }),
+      );
+      expect(orchestrator.getTask('task-a')!.status).toBe('failed');
+    });
+  });
 });

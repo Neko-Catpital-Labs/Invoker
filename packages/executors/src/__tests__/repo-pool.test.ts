@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execSync } from 'node:child_process';
-import { RepoPool } from '../repo-pool.js';
+import { RepoPool, ResourceLimitError } from '../repo-pool.js';
 import { remoteFetchForPool } from '../remote-fetch-policy.js';
 
 /**
@@ -68,6 +68,13 @@ describe('RepoPool', () => {
     await limitedPool.acquireWorktree(localRepoUrl, 'branch-1');
     await limitedPool.acquireWorktree(localRepoUrl, 'branch-2');
     await expect(limitedPool.acquireWorktree(localRepoUrl, 'branch-3')).rejects.toThrow('Worktree limit reached');
+    // Verify the thrown error is a ResourceLimitError
+    try {
+      await limitedPool.acquireWorktree(localRepoUrl, 'branch-3');
+    } catch (err) {
+      expect(err).toBeInstanceOf(ResourceLimitError);
+      expect((err as ResourceLimitError).name).toBe('ResourceLimitError');
+    }
     await limitedPool.destroyAll();
   });
 
