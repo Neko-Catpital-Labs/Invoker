@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Bootstrap local Invoker prerequisites and Cursor skills symlink.
+# Bootstrap local Invoker prerequisites and skill symlinks for Cursor + Codex.
 # Safe to run repeatedly (replaces stale symlinks). Supports macOS/Linux/WSL.
 set -euo pipefail
 
@@ -66,7 +66,9 @@ ensure_cursor_cli() {
     fi
   fi
 
-  fail "Cursor CLI not found. Install Cursor, then verify with 'cursor --version', or set CURSOR_COMMAND to an absolute CLI path."
+  log "Cursor CLI not found. Continuing setup so Codex/Claude skills still work."
+  log "Optional: install Cursor, then verify with 'cursor --version', or set CURSOR_COMMAND to an absolute CLI path."
+  return 0
 }
 
 link_cursor_skills() {
@@ -77,11 +79,23 @@ link_cursor_skills() {
 
   mkdir -p "$REPO_ROOT/.cursor/skills"
   cd "$REPO_ROOT/.cursor/skills"
-  ln -sfn ../../.claude/skills/plan-to-invoker plan-to-invoker
-  log "Cursor skill linked at .cursor/skills/plan-to-invoker -> .claude/skills/plan-to-invoker"
+  ln -sfn ../../skills/plan-to-invoker plan-to-invoker
+  log "Cursor skill linked at .cursor/skills/plan-to-invoker -> skills/plan-to-invoker"
+}
+
+link_codex_skills() {
+  local canonical="$REPO_ROOT/.claude/skills/plan-to-invoker"
+  if [ ! -f "$canonical/SKILL.md" ]; then
+    fail "expected skill at $canonical/SKILL.md"
+  fi
+
+  mkdir -p "$HOME/.codex/skills"
+  ln -sfn "$canonical" "$HOME/.codex/skills/plan-to-invoker"
+  log "Codex skill linked at ~/.codex/skills/plan-to-invoker -> .claude/skills/plan-to-invoker"
 }
 
 check_required_commands
 ensure_cursor_cli
 link_cursor_skills
+link_codex_skills
 log "Setup complete."

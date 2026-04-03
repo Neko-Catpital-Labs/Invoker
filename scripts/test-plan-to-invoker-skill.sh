@@ -8,6 +8,7 @@ SKILL_DIR="$REPO_ROOT/.claude/skills/plan-to-invoker"
 SKILL_MD="$SKILL_DIR/SKILL.md"
 PLAYBOOK="$SKILL_DIR/playbooks/verify-then-build.md"
 CURSOR_LINK="$REPO_ROOT/.cursor/skills/plan-to-invoker"
+CODEX_LINK="$HOME/.codex/skills/plan-to-invoker"
 
 fail() {
   echo "FAIL: $*" >&2
@@ -35,6 +36,18 @@ if [[ -e "$CURSOR_LINK" ]]; then
   case "$resolved" in
     *"/.claude/skills/plan-to-invoker"|*"/skills/plan-to-invoker") ;;
     *) fail "symlink $CURSOR_LINK should resolve to .claude/skills/... or skills/... plan-to-invoker (got: $resolved)" ;;
+  esac
+fi
+
+# Codex skill symlink points at canonical copy (optional but catches drift)
+if [[ -e "$CODEX_LINK" ]]; then
+  if [[ ! -L "$CODEX_LINK" ]]; then
+    fail "~/.codex/skills/plan-to-invoker should be a symlink to the canonical skill"
+  fi
+  resolved="$(cd "$(dirname "$CODEX_LINK")" && cd "$(readlink plan-to-invoker)" && pwd)"
+  case "$resolved" in
+    *"/.claude/skills/plan-to-invoker"|*"/skills/plan-to-invoker") ;;
+    *) fail "symlink $CODEX_LINK should resolve to .claude/skills/... or skills/... plan-to-invoker (got: $resolved)" ;;
   esac
 fi
 
