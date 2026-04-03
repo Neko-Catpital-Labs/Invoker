@@ -16,7 +16,7 @@ const api: InvokerAPI = {
   start: () => ipcRenderer.invoke('invoker:start'),
   stop: () => ipcRenderer.invoke('invoker:stop'),
   clear: () => ipcRenderer.invoke('invoker:clear'),
-  getTasks: () => ipcRenderer.invoke('invoker:get-tasks'),
+  getTasks: (forceRefresh?: boolean) => ipcRenderer.invoke('invoker:get-tasks', forceRefresh),
   getStatus: () => ipcRenderer.invoke('invoker:get-status'),
   provideInput: (taskId, input) =>
     ipcRenderer.invoke('invoker:provide-input', taskId, input),

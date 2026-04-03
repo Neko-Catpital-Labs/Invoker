@@ -381,6 +381,9 @@ eval "$(echo "${agentCmdB64}" | base64 -d)"
       const driver = agentRegistry?.getSessionDriver(agentName ?? 'claude');
       const realId = driver?.extractSessionId?.(stdout);
       const effectiveSessionId = realId ?? sessionId;
+      if (driver) {
+        driver.processOutput(effectiveSessionId, stdout);
+      }
       if (code === 0) resolve({ stdout, sessionId: effectiveSessionId });
       else reject(new Error(`Remote agent fix failed (exit ${code}): ${stderr.trim()}`));
     });
@@ -416,10 +419,11 @@ export function spawnAgentFixViaRegistry(
     child.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
     child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
     child.on('close', (code) => {
-      const displayStdout = driver ? driver.processOutput(sessionId, stdout) : stdout;
-      // Replace local UUID with real backend session/thread ID for resume
+      // Extract real backend session/thread ID BEFORE writing the file,
+      // so processOutput stores under the real ID (not the local UUID).
       const realId = driver?.extractSessionId?.(stdout);
       const effectiveSessionId = realId ?? sessionId;
+      const displayStdout = driver ? driver.processOutput(effectiveSessionId, stdout) : stdout;
       if (code === 0) {
         resolve({ stdout: displayStdout, sessionId: effectiveSessionId });
       } else {

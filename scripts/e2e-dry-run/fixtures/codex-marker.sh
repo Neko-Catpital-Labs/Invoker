@@ -27,6 +27,8 @@ fi
 # Output JSONL to stdout (simulates codex exec --json)
 TS_ISO=$(date -u +%Y-%m-%dT%H:%M:%S.000Z)
 CWD="$(pwd)"
+# Emit thread.started first (matches real Codex CLI v0.117+ behavior)
+printf '%s\n' "{\"type\":\"thread.started\",\"thread_id\":\"${SESSION_ID}\"}"
 printf '%s\n' "{\"timestamp\":\"${TS_ISO}\",\"type\":\"session_meta\",\"payload\":{\"id\":\"${SESSION_ID}\",\"cwd\":\"${CWD}\"}}"
 printf '%s\n' "{\"timestamp\":\"${TS_ISO}\",\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"e2e-turn\"}}"
 printf '%s\n' "{\"timestamp\":\"${TS_ISO}\",\"type\":\"event_msg\",\"payload\":{\"type\":\"user_message\",\"message\":\"Fix the build error in this workspace\"}}"

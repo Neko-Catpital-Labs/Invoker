@@ -831,6 +831,49 @@ async function headlessQuerySelect(taskId: string, deps: Pick<HeadlessDeps, 'per
     : `No experiment selected for ${taskId}`);
 }
 
+/**
+ * Resolve an agent session by ID via registered SessionDriver.
+ * Shared by IPC handler (main.ts) and headless CLI (below).
+ *
+ * Flow: driver.loadSession() → driver.fetchRemoteSession() → driver.parseSession().
+ * Each agent owns its own session resolution logic.
+ */
+export async function resolveAgentSession(
+  sessionId: string,
+  agentName: string,
+  registry?: AgentRegistry,
+  allTasks?: import('@invoker/core').TaskState[],
+): Promise<import('@invoker/executors').AgentMessage[] | null> {
+  const driver = registry?.getSessionDriver(agentName);
+  if (!driver) return null;
+
+  // 1. Try local
+  const raw = driver.loadSession(sessionId);
+  if (raw) return driver.parseSession(raw);
+
+  // 2. Try remote (SSH tasks)
+  if (driver.fetchRemoteSession && allTasks) {
+    const sshTask = allTasks.find(
+      t => t.execution.agentSessionId === sessionId
+        && t.config.familiarType === 'ssh',
+    );
+    if (sshTask) {
+      const { loadConfig } = await import('./config.js');
+      const targets = loadConfig().remoteTargets ?? {};
+      const targetId = sshTask.config.remoteTargetId;
+      const target = targetId
+        ? targets[targetId]
+        : Object.values(targets)[0];
+      if (target) {
+        const remoteRaw = await driver.fetchRemoteSession(sessionId, target);
+        if (remoteRaw) return driver.parseSession(remoteRaw);
+      }
+    }
+  }
+
+  return null;
+}
+
 async function headlessSession(taskId: string | undefined, deps: Pick<HeadlessDeps, 'orchestrator' | 'persistence' | 'executionAgentRegistry'>): Promise<void> {
   if (!taskId) throw new Error('Usage: --headless session <taskId>');
   taskId = restoreWorkflowForTask(taskId, deps).resolvedTaskId;
@@ -846,47 +889,15 @@ async function headlessSession(taskId: string | undefined, deps: Pick<HeadlessDe
   const agentName = task.execution.agentName ?? 'claude';
   console.log(`agent=${agentName} sessionId=${sessionId}`);
 
-  // Use session driver if available for this agent
-  const driver = deps.executionAgentRegistry?.getSessionDriver(agentName);
-  if (driver) {
-    const raw = driver.loadSession(sessionId);
-    if (!raw) {
-      console.log('Session file not found');
-      return;
-    }
-    const messages = driver.parseSession(raw);
-    for (const msg of messages) {
-      console.log(`[${msg.role}] ${msg.content}`);
-    }
+  const allTasks = deps.orchestrator.getAllTasks();
+  const messages = await resolveAgentSession(sessionId, agentName, deps.executionAgentRegistry, allTasks);
+  if (!messages) {
+    console.log('Session file not found');
     return;
   }
-
-  // Claude session: search ~/.claude/projects/
-  const { readFileSync, readdirSync, existsSync } = await import('node:fs');
-  const { join } = await import('node:path');
-  const { homedir } = await import('node:os');
-  const claudeProjectsDir = join(homedir(), '.claude', 'projects');
-  if (existsSync(claudeProjectsDir)) {
-    const projectDirs = readdirSync(claudeProjectsDir, { withFileTypes: true })
-      .filter(d => d.isDirectory())
-      .map(d => d.name);
-    for (const dir of projectDirs) {
-      const candidate = join(claudeProjectsDir, dir, `${sessionId}.jsonl`);
-      if (existsSync(candidate)) {
-        const raw = readFileSync(candidate, 'utf-8');
-        // Output raw lines for now
-        const lines = raw.split('\n').filter(l => l.trim());
-        for (const line of lines) {
-          try {
-            const entry = JSON.parse(line);
-            if (entry.role) console.log(`[${entry.role}] ${entry.message ?? ''}`);
-          } catch { /* skip */ }
-        }
-        return;
-      }
-    }
+  for (const msg of messages) {
+    console.log(`[${msg.role}] ${msg.content}`);
   }
-  console.log('Session file not found');
 }
 
 async function headlessCancel(taskId: string, deps: HeadlessDeps): Promise<void> {

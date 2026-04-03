@@ -14,7 +14,7 @@ export interface UseTasksResult {
   tasks: Map<string, TaskState>;
   workflows: Map<string, WorkflowMeta>;
   clearTasks: () => void;
-  refreshTasks: () => void;
+  refreshTasks: (forceRefresh?: boolean) => void;
 }
 
 export function useTasks(): UseTasksResult {
@@ -25,10 +25,10 @@ export function useTasks(): UseTasksResult {
   /** Bumps on each refresh so stale getTasks IPC (e.g. mount snapshot before loadPlan) cannot wipe newer state. */
   const getTasksGenerationRef = useRef(0);
 
-  const fetchAll = useCallback(() => {
+  const fetchAll = useCallback((forceRefresh = false) => {
     if (typeof window === 'undefined' || !window.invoker) return;
     const gen = ++getTasksGenerationRef.current;
-    window.invoker.getTasks().then((result) => {
+    window.invoker.getTasks(forceRefresh).then((result) => {
       if (gen !== getTasksGenerationRef.current) {
         return;
       }

@@ -75,4 +75,35 @@ describe('CodexSessionDriver', () => {
     expect(messages[0]).toEqual({ role: 'user', content: 'Fix the bug', timestamp: 'ts1' });
     expect(messages[1]).toEqual({ role: 'assistant', content: 'I fixed the bug.', timestamp: 'ts2' });
   });
+
+  it('loadSession finds file when processOutput uses extracted real ID (fixed flow)', () => {
+    const driver = new CodexSessionDriver();
+    const jsonl = [
+      JSON.stringify({ type: 'thread.started', thread_id: 'real-thread-id' }),
+      JSON.stringify({ type: 'event_msg', payload: { type: 'user_message', message: 'Fix it' } }),
+    ].join('\n');
+
+    // Simulate the FIXED flow: extract real ID first, then write under it
+    const realId = driver.extractSessionId(jsonl) ?? 'local-uuid';
+    driver.processOutput(realId, jsonl);
+
+    // loadSession with real ID should find the file
+    expect(driver.loadSession('real-thread-id')).toBe(jsonl);
+  });
+
+  it('loadSession FAILS when processOutput uses local UUID but load uses real ID (documents the bug)', () => {
+    const driver = new CodexSessionDriver();
+    const jsonl = [
+      JSON.stringify({ type: 'thread.started', thread_id: 'real-thread-id' }),
+      JSON.stringify({ type: 'event_msg', payload: { type: 'user_message', message: 'Fix it' } }),
+    ].join('\n');
+
+    // Simulate the OLD buggy flow: write with local UUID first
+    driver.processOutput('local-uuid', jsonl);
+
+    // Load with real ID — file not found (this documents the bug)
+    expect(driver.loadSession('real-thread-id')).toBeNull();
+    // But loading with local UUID works
+    expect(driver.loadSession('local-uuid')).toBe(jsonl);
+  });
 });

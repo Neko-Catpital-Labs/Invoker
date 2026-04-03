@@ -7,6 +7,13 @@
 
 import type { AgentMessage } from './codex-session.js';
 
+export interface RemoteTarget {
+  host: string;
+  user: string;
+  sshKeyPath: string;
+  port?: number;
+}
+
 export interface SessionDriver {
   /** Post-exit: store raw stdout and return human-readable text for callers. */
   processOutput(sessionId: string, rawStdout: string): string;
@@ -16,4 +23,6 @@ export interface SessionDriver {
   parseSession(raw: string): AgentMessage[];
   /** Extract the real backend session/thread ID from raw stdout (e.g. codex thread ID for resume). */
   extractSessionId?(rawStdout: string): string | undefined;
+  /** Fetch session from a remote SSH host. Returns raw content or null. */
+  fetchRemoteSession?(sessionId: string, target: RemoteTarget): Promise<string | null>;
 }
