@@ -6,7 +6,7 @@ describe('CodexExecutionAgent', () => {
     const agent = new CodexExecutionAgent();
     const spec = agent.buildCommand('test prompt');
     expect(spec.cmd).toBe('codex');
-    expect(spec.args).toEqual(['exec', '--json', '--full-auto', '-a', 'never', 'test prompt']);
+    expect(spec.args).toEqual(['exec', '--json', '--full-auto', 'test prompt']);
   });
 
   it('respects custom command', () => {
@@ -24,18 +24,18 @@ describe('CodexExecutionAgent', () => {
     expect(ids.size).toBe(5);
   });
 
-  it('buildResumeArgs uses interactive resume with --full-auto', () => {
+  it('buildResumeArgs uses interactive resume', () => {
     const agent = new CodexExecutionAgent({ command: 'codex-cli' });
     const resume = agent.buildResumeArgs('sess-123');
     expect(resume.cmd).toBe('codex-cli');
-    expect(resume.args).toEqual(['resume', 'sess-123', '--full-auto', '-a', 'never']);
+    expect(resume.args).toEqual(['resume', 'sess-123']);
   });
 
   it('buildFixCommand includes --full-auto', () => {
     const agent = new CodexExecutionAgent();
     const spec = agent.buildFixCommand('fix the bug');
     expect(spec.cmd).toBe('codex');
-    expect(spec.args).toEqual(['exec', '--json', '--full-auto', '-a', 'never', 'fix the bug']);
+    expect(spec.args).toEqual(['exec', '--json', '--full-auto', 'fix the bug']);
     expect(spec.sessionId).toBeDefined();
   });
 
