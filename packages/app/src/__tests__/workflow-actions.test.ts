@@ -11,6 +11,7 @@ import type { TaskExecutor } from '@invoker/executors';
 import {
   bumpGenerationAndRecreate,
   recreateWorkflow,
+  recreateTask,
   restartTask,
   approveTask,
   rejectTask,
@@ -108,6 +109,65 @@ describe('recreateWorkflow', () => {
     expect(persistence.updateWorkflow).toHaveBeenCalledWith('wf-1', { generation: 1 });
     expect(orchestrator.recreateWorkflow).toHaveBeenCalledWith('wf-1');
     expect(result).toHaveLength(1);
+  });
+});
+
+describe('recreateTask', () => {
+  it('resolves workflowId from task and recreates workflow', () => {
+    const orchestrator = {
+      getTask: vi.fn(() => makeTask({ id: 'task-a', config: { workflowId: 'wf-1' } })),
+      recreateWorkflow: vi.fn(() => [makeRunningTask()]),
+    };
+    const persistence = {
+      loadWorkflow: vi.fn(() => ({ id: 'wf-1', generation: 3 })),
+      updateWorkflow: vi.fn(),
+    };
+
+    const result = recreateTask('task-a', {
+      persistence: persistence as unknown as SQLiteAdapter,
+      orchestrator: orchestrator as unknown as Orchestrator,
+    });
+
+    expect(orchestrator.getTask).toHaveBeenCalledWith('task-a');
+    expect(persistence.updateWorkflow).toHaveBeenCalledWith('wf-1', { generation: 4 });
+    expect(orchestrator.recreateWorkflow).toHaveBeenCalledWith('wf-1');
+    expect(result).toHaveLength(1);
+  });
+
+  it('throws when task does not exist', () => {
+    const orchestrator = {
+      getTask: vi.fn(() => undefined),
+      recreateWorkflow: vi.fn(),
+    };
+    const persistence = {
+      loadWorkflow: vi.fn(),
+      updateWorkflow: vi.fn(),
+    };
+
+    expect(() =>
+      recreateTask('missing-task', {
+        persistence: persistence as unknown as SQLiteAdapter,
+        orchestrator: orchestrator as unknown as Orchestrator,
+      }),
+    ).toThrow('Task missing-task not found');
+  });
+
+  it('throws when task has no workflowId', () => {
+    const orchestrator = {
+      getTask: vi.fn(() => makeTask({ id: 'orphan-task', config: {} })),
+      recreateWorkflow: vi.fn(),
+    };
+    const persistence = {
+      loadWorkflow: vi.fn(),
+      updateWorkflow: vi.fn(),
+    };
+
+    expect(() =>
+      recreateTask('orphan-task', {
+        persistence: persistence as unknown as SQLiteAdapter,
+        orchestrator: orchestrator as unknown as Orchestrator,
+      }),
+    ).toThrow('Task orphan-task has no workflowId');
   });
 });
 

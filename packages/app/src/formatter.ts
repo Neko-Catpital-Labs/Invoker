@@ -241,7 +241,9 @@ export function serializeTask(task: TaskState): Record<string, unknown> {
   if (task.execution.exitCode != null) execution.exitCode = task.execution.exitCode;
   if (task.execution.reviewUrl != null) execution.reviewUrl = task.execution.reviewUrl;
   if (task.execution.agentSessionId != null) execution.agentSessionId = task.execution.agentSessionId;
+  if (task.execution.lastAgentSessionId != null) execution.lastAgentSessionId = task.execution.lastAgentSessionId;
   if (task.execution.agentName != null) execution.agentName = task.execution.agentName;
+  if (task.execution.lastAgentName != null) execution.lastAgentName = task.execution.lastAgentName;
   if (task.execution.startedAt != null) execution.startedAt = task.execution.startedAt instanceof Date ? task.execution.startedAt.toISOString() : task.execution.startedAt;
   if (task.execution.completedAt != null) execution.completedAt = task.execution.completedAt instanceof Date ? task.execution.completedAt.toISOString() : task.execution.completedAt;
 

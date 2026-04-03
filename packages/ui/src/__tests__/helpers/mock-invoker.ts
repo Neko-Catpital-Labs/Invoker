@@ -90,6 +90,7 @@ export function createMockInvoker(
     deleteWorkflow: vi.fn(async () => {}),
     cleanupWorktrees: vi.fn(async () => ({ removed: [], errors: [] })),
     recreateWorkflow: vi.fn(async () => {}),
+    recreateTask: vi.fn(async () => {}),
     retryWorkflow: vi.fn(async () => {}),
     rebaseAndRetry: vi.fn(async () => ({ success: true, rebasedBranches: [], errors: [] })),
     setMergeBranch: vi.fn(async () => {}),

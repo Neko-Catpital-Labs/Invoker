@@ -61,7 +61,9 @@ export interface TaskExecution {
   readonly branch?: string;
   readonly commit?: string;
   readonly agentSessionId?: string;
+  readonly lastAgentSessionId?: string;
   readonly agentName?: string;
+  readonly lastAgentName?: string;
   readonly workspacePath?: string;
   readonly containerId?: string;
   readonly experiments?: readonly string[];

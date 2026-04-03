@@ -356,7 +356,12 @@ describe('agent dispatch — codex vs claude', () => {
 
       // agentName should be persisted as 'codex', not 'claude'
       expect(updateTask).toHaveBeenCalledWith('task-3', {
-        execution: { agentSessionId: 'sess-codex', agentName: 'codex' },
+        execution: {
+          agentSessionId: 'sess-codex',
+          lastAgentSessionId: 'sess-codex',
+          agentName: 'codex',
+          lastAgentName: 'codex',
+        },
       });
     });
   });

@@ -112,6 +112,7 @@ export interface InvokerAPI {
 
   // Recreate entire workflow with generation bump (fresh branch hashes)
   recreateWorkflow: (workflowId: string) => Promise<void>;
+  recreateTask: (taskId: string) => Promise<void>;
 
   // Incremental retry: keep completed tasks, rerun failed/stuck
   retryWorkflow: (workflowId: string) => Promise<void>;

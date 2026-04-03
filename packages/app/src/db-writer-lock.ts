@@ -9,6 +9,10 @@ export interface DbWriterLock {
 const WRITER_LOCK_FILE = 'invoker.db.writer.lock';
 
 export function acquireDbWriterLock(rootDir: string): DbWriterLock | null {
+  // Temporary rollback default: locking is opt-in while we redesign persistence semantics.
+  if (process.env.INVOKER_ENABLE_DB_WRITER_LOCK !== '1') {
+    return null;
+  }
   if (process.env.INVOKER_DISABLE_DB_WRITER_LOCK === '1') {
     return null;
   }

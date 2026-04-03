@@ -624,10 +624,31 @@ export class Orchestrator {
 
     this.scheduler.completeJob(id);
 
+    const additionalExecution = additionalChanges?.execution;
+    const keepAgentSessionId = additionalExecution && 'agentSessionId' in additionalExecution
+      ? additionalExecution.agentSessionId
+      : task.execution.agentSessionId;
+    const keepLastAgentSessionId = additionalExecution && 'lastAgentSessionId' in additionalExecution
+      ? additionalExecution.lastAgentSessionId
+      : task.execution.lastAgentSessionId;
+    const keepAgentName = additionalExecution && 'agentName' in additionalExecution
+      ? additionalExecution.agentName
+      : task.execution.agentName;
+    const keepLastAgentName = additionalExecution && 'lastAgentName' in additionalExecution
+      ? additionalExecution.lastAgentName
+      : task.execution.lastAgentName;
+
     const changes: TaskStateChanges = {
       status: 'awaiting_approval',
       config: additionalChanges?.config,
-      execution: { ...additionalChanges?.execution, completedAt: new Date() },
+      execution: {
+        ...additionalExecution,
+        ...(keepAgentSessionId !== undefined ? { agentSessionId: keepAgentSessionId } : {}),
+        ...(keepLastAgentSessionId !== undefined ? { lastAgentSessionId: keepLastAgentSessionId } : {}),
+        ...(keepAgentName !== undefined ? { agentName: keepAgentName } : {}),
+        ...(keepLastAgentName !== undefined ? { lastAgentName: keepLastAgentName } : {}),
+        completedAt: new Date(),
+      },
     };
     if (task.config.isMergeNode && changes.execution && 'workspacePath' in changes.execution) {
       mergeTrace('GATE_WS_SET_TASK_AWAITING_APPROVAL', {
@@ -669,7 +690,13 @@ export class Orchestrator {
 
     const changes: TaskStateChanges = {
       status: 'awaiting_approval',
-      execution: { pendingFixError: originalError, isFixingWithAI: false, agentSessionId: task.execution.agentSessionId },
+      execution: {
+        pendingFixError: originalError,
+        isFixingWithAI: false,
+        agentSessionId: task.execution.agentSessionId,
+        lastAgentSessionId: task.execution.lastAgentSessionId ?? task.execution.agentSessionId,
+        lastAgentName: task.execution.lastAgentName ?? task.execution.agentName,
+      },
     };
     console.log(`[setFixAwaitingApproval] delta.changes.execution=`, JSON.stringify(changes.execution));
     this.writeAndSync(tid, changes);
@@ -1735,6 +1762,8 @@ export class Orchestrator {
       completedAt: Date;
       commit?: string;
       agentSessionId?: string;
+      lastAgentSessionId?: string;
+      lastAgentName?: string;
       branch?: string;
     } = {
       exitCode: parsed.exitCode,
@@ -1745,6 +1774,8 @@ export class Orchestrator {
     }
     if (parsed.agentSessionId !== undefined) {
       execution.agentSessionId = parsed.agentSessionId;
+      execution.lastAgentSessionId = parsed.agentSessionId;
+      execution.lastAgentName = task?.execution.agentName ?? task?.execution.lastAgentName;
     }
     if (parsed.branch !== undefined) {
       execution.branch = parsed.branch;
