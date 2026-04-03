@@ -211,19 +211,25 @@ async function headlessQuery(args: string[], deps: HeadlessDeps): Promise<void> 
         return;
       }
 
+      // Support both:
+      //   query tasks --workflow <id>
+      //   query tasks <workflowId>
+      const workflowFilter = flags.workflow ?? flags.positional[0];
+
       // Load tasks from specific workflow or latest
-      const targetWorkflows = flags.workflow
-        ? workflows.filter(wf => wf.id === flags.workflow)
+      const targetWorkflows = workflowFilter
+        ? workflows.filter(wf => wf.id === workflowFilter)
         : [workflows[0]];
 
       if (targetWorkflows.length === 0) {
-        throw new Error(`Workflow "${flags.workflow}" not found.`);
+        throw new Error(`Workflow "${workflowFilter}" not found.`);
       }
 
       let allTasks: import('@invoker/core').TaskState[] = [];
       for (const wf of targetWorkflows) {
-        orchestrator.resumeWorkflow(wf.id);
-        // Filter by workflow ID — the orchestrator may have loaded other workflows during init
+        // Query must stay read-only: sync graph from DB without starting/restarting tasks.
+        orchestrator.syncFromDb(wf.id);
+        // Filter by workflow ID — the orchestrator may have loaded other workflows during init.
         allTasks.push(...orchestrator.getAllTasks().filter(t => t.config.workflowId === wf.id));
       }
 
@@ -501,7 +507,8 @@ ${BOLD}Usage:${RESET}  electron dist/main.js --headless <command> [args...]
 
 ${BOLD}Query${RESET} (read-only, all support --output text|label|json|jsonl):
   query workflows [--status S] [--output F]          List all saved workflows
-  query tasks [--workflow <id>] [--status S]          Show task states (latest workflow)
+  query tasks [--workflow <id>|<workflowId>] [--status S]
+                                                      Show task states (latest workflow by default)
     [--no-merge] [--output F]
   query task <taskId> [--output F]                    Print single task status
   query queue [--output F]                            Show queue status
@@ -1075,7 +1082,8 @@ function restoreWorkflowForTask(
     const tasks = persistence.loadTasks(wf.id);
     const match = tasks.find(t => t.id === taskId || t.id.endsWith('/' + taskId));
     if (match) {
-      orchestrator.resumeWorkflow(wf.id);
+      // Keep lookup read-only: load graph state from DB without starting tasks.
+      orchestrator.syncFromDb(wf.id);
       return { workflowId: wf.id, resolvedTaskId: match.id };
     }
   }
