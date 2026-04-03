@@ -58,24 +58,24 @@ export function App() {
     window.invoker?.getExecutionAgents?.().then(setExecutionAgents).catch(() => {});
   }, []);
 
-  const handleStatusClick = useCallback((filterKey: string) => {
+  const handleStatusClick = useCallback((filterKey: string, event: React.MouseEvent) => {
     setStatusFilters(prev => {
-      const next = new Set(prev);
-      if (next.has(filterKey)) {
-        next.delete(filterKey);
+      if (event.ctrlKey || event.metaKey) {
+        // Toggle: add if absent, remove if present
+        const next = new Set(prev);
+        if (next.has(filterKey)) {
+          next.delete(filterKey);
+        } else {
+          next.add(filterKey);
+        }
+        return next;
       } else {
-        next.add(filterKey);
+        // Isolate: if already the sole filter, clear all; otherwise set to this filter only
+        if (prev.size === 1 && prev.has(filterKey)) {
+          return new Set<string>();
+        }
+        return new Set([filterKey]);
       }
-      return next;
-    });
-  }, []);
-
-  const handleStatusDoubleClick = useCallback((filterKey: string) => {
-    setStatusFilters(prev => {
-      if (prev.size === 1 && prev.has(filterKey)) {
-        return new Set<string>();
-      }
-      return new Set([filterKey]);
     });
   }, []);
 
@@ -508,7 +508,7 @@ export function App() {
       </div>
 
       {/* Status bar */}
-      <StatusBar tasks={tasks} onSystemLog={() => setSelectedTaskId('__system__')} activeFilters={statusFilters} onStatusClick={handleStatusClick} onStatusDoubleClick={handleStatusDoubleClick} />
+      <StatusBar tasks={tasks} activeFilters={statusFilters} onStatusClick={handleStatusClick} />
 
       {/* Modals */}
       {modal.type === 'input' && (

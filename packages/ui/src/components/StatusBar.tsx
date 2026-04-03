@@ -6,17 +6,15 @@
  * Status labels are clickable to filter DAG nodes by status.
  */
 
-import { useRef, useCallback, useEffect } from 'react';
 import type { TaskState } from '../types.js';
 
 interface StatusBarProps {
   tasks: Map<string, TaskState>;
   activeFilters?: Set<string>;
-  onStatusClick?: (filterKey: string) => void;
-  onStatusDoubleClick?: (filterKey: string) => void;
+  onStatusClick?: (filterKey: string, event: React.MouseEvent) => void;
 }
 
-export function StatusBar({ tasks, activeFilters, onStatusClick, onStatusDoubleClick }: StatusBarProps) {
+export function StatusBar({ tasks, activeFilters, onStatusClick }: StatusBarProps) {
   let completed = 0;
   let running = 0;
   let failed = 0;
@@ -66,26 +64,6 @@ export function StatusBar({ tasks, activeFilters, onStatusClick, onStatusDoubleC
 
   const total = tasks.size;
 
-  const clickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const handleClick = useCallback((key: string) => {
-    if (clickTimer.current) clearTimeout(clickTimer.current);
-    // 200ms delay balances responsiveness with OS double-click detection (typically 200-500ms).
-    // Lower values risk single-click firing before double-click completes on slower systems.
-    clickTimer.current = setTimeout(() => onStatusClick?.(key), 200);
-  }, [onStatusClick]);
-
-  const handleDoubleClick = useCallback((key: string) => {
-    if (clickTimer.current) clearTimeout(clickTimer.current);
-    onStatusDoubleClick?.(key);
-  }, [onStatusDoubleClick]);
-
-  useEffect(() => {
-    return () => {
-      if (clickTimer.current) clearTimeout(clickTimer.current);
-    };
-  }, []);
-
   const hasFilters = activeFilters && activeFilters.size > 0;
   const filterClass = (key: string) => {
     if (!hasFilters) return 'cursor-pointer hover:brightness-125 select-none';
@@ -102,37 +80,32 @@ export function StatusBar({ tasks, activeFilters, onStatusClick, onStatusDoubleC
       </span>
       <span
         className={`text-green-400 ${filterClass('completed')}`}
-        onClick={() => handleClick('completed')}
-        onDoubleClick={() => handleDoubleClick('completed')}
+        onClick={(e) => onStatusClick?.('completed', e)}
       >
         Completed: <span className="font-medium">{completed}</span>
       </span>
       <span
         className={`text-blue-400 ${filterClass('running')}`}
-        onClick={() => handleClick('running')}
-        onDoubleClick={() => handleDoubleClick('running')}
+        onClick={(e) => onStatusClick?.('running', e)}
       >
         Running: <span className="font-medium">{running}</span>
       </span>
       <span
         className={`text-red-400 ${filterClass('failed')}`}
-        onClick={() => handleClick('failed')}
-        onDoubleClick={() => handleDoubleClick('failed')}
+        onClick={(e) => onStatusClick?.('failed', e)}
       >
         Failed: <span className="font-medium">{failed}</span>
       </span>
       <span
         className={`text-gray-400 ${filterClass('pending')}`}
-        onClick={() => handleClick('pending')}
-        onDoubleClick={() => handleDoubleClick('pending')}
+        onClick={(e) => onStatusClick?.('pending', e)}
       >
         Pending: <span className="font-medium">{pending}</span>
       </span>
       {needsInput > 0 && (
         <span
           className={`text-cyan-400 ${filterClass('needs_input')}`}
-          onClick={() => handleClick('needs_input')}
-          onDoubleClick={() => handleDoubleClick('needs_input')}
+          onClick={(e) => onStatusClick?.('needs_input', e)}
         >
           Input: <span className="font-medium">{needsInput}</span>
         </span>
@@ -140,8 +113,7 @@ export function StatusBar({ tasks, activeFilters, onStatusClick, onStatusDoubleC
       {awaitingApproval > 0 && (
         <span
           className={`text-purple-400 ${filterClass('awaiting_approval')}`}
-          onClick={() => handleClick('awaiting_approval')}
-          onDoubleClick={() => handleDoubleClick('awaiting_approval')}
+          onClick={(e) => onStatusClick?.('awaiting_approval', e)}
         >
           Approval: <span className="font-medium">{awaitingApproval}</span>
         </span>
@@ -149,8 +121,7 @@ export function StatusBar({ tasks, activeFilters, onStatusClick, onStatusDoubleC
       {blocked > 0 && (
         <span
           className={`text-gray-500 ${filterClass('blocked')}`}
-          onClick={() => handleClick('blocked')}
-          onDoubleClick={() => handleDoubleClick('blocked')}
+          onClick={(e) => onStatusClick?.('blocked', e)}
         >
           Blocked: <span className="font-medium">{blocked}</span>
         </span>
@@ -158,8 +129,7 @@ export function StatusBar({ tasks, activeFilters, onStatusClick, onStatusDoubleC
       {fixing > 0 && (
         <span
           className={`text-orange-400 ${filterClass('fixing_with_ai')}`}
-          onClick={() => handleClick('fixing_with_ai')}
-          onDoubleClick={() => handleDoubleClick('fixing_with_ai')}
+          onClick={(e) => onStatusClick?.('fixing_with_ai', e)}
         >
           Fixing: <span className="font-medium">{fixing}</span>
         </span>
@@ -167,8 +137,7 @@ export function StatusBar({ tasks, activeFilters, onStatusClick, onStatusDoubleC
       {fixApproval > 0 && (
         <span
           className={`text-fuchsia-400 ${filterClass('fix_approval')}`}
-          onClick={() => handleClick('fix_approval')}
-          onDoubleClick={() => handleDoubleClick('fix_approval')}
+          onClick={(e) => onStatusClick?.('fix_approval', e)}
         >
           Fix Approval: <span className="font-medium">{fixApproval}</span>
         </span>
