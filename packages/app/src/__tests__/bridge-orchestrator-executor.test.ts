@@ -400,9 +400,9 @@ describe('Flow 4: edit/fork mutations', () => {
     expect(a.status === 'pending' || a.status === 'running').toBe(true);
     expect(a.config.command).toBe('echo new-a');
 
-    // B and C stay completed (no fork, no stale)
-    expect(h.getTask('B')!.status).toBe('completed');
-    expect(h.getTask('C')!.status).toBe('completed');
+    // B and C are invalidated (no fork, no stale clones)
+    expect(h.getTask('B')!.status).toBe('pending');
+    expect(h.getTask('C')!.status).toBe('pending');
 
     // No v2 nodes exist
     expect(h.getAllTasks().find((t) => t.id.endsWith('/B-v2'))).toBeUndefined();
@@ -424,8 +424,8 @@ describe('Flow 4: edit/fork mutations', () => {
 
     // B should still be the original (not forked), no B-v2 created
     expect(h.getAllTasks().find((t) => t.id.endsWith('/B-v2'))).toBeUndefined();
-    // B stays completed since editTaskType doesn't fork downstream
-    expect(h.getTask('B')!.status).toBe('completed');
+    // B is invalidated since editTaskType restarts in-place and resets downstream
+    expect(h.getTask('B')!.status).toBe('pending');
   });
 
   it('replaceTask creates subgraph and wires dependencies', () => {

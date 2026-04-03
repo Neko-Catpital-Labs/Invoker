@@ -2070,6 +2070,52 @@ describe('Orchestrator', () => {
     });
   });
 
+  // ── editTaskAgent ──────────────────────────────────────
+
+  describe('editTaskAgent', () => {
+    it('changes executionAgent and restarts the task', () => {
+      orchestrator.loadPlan({
+        name: 'edit-agent-test',
+        tasks: [{ id: 't1', description: 'Task 1', command: 'echo hello', executionAgent: 'claude' }],
+      });
+      orchestrator.startExecution();
+
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 't1', status: 'failed', outputs: { exitCode: 1, error: 'fail' } }),
+      );
+      const started = orchestrator.editTaskAgent('t1', 'codex');
+
+      const task = orchestrator.getTask('t1');
+      expect(task?.config.executionAgent).toBe('codex');
+      expect(task?.status).toBe('running');
+      expect(started).toHaveLength(1);
+      expect(started[0].id).toBe(sid(orchestrator, 0, 't1'));
+    });
+
+    it('invalidates downstream dependents', () => {
+      orchestrator.loadPlan({
+        name: 'edit-agent-no-invalidate',
+        tasks: [
+          { id: 'parent', description: 'Parent', command: 'echo parent', executionAgent: 'claude' },
+          { id: 'child', description: 'Child', command: 'echo child', dependencies: ['parent'] },
+        ],
+      });
+      orchestrator.startExecution();
+
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 'parent', status: 'completed', outputs: { exitCode: 0 } }),
+      );
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 'child', status: 'completed', outputs: { exitCode: 0 } }),
+      );
+
+      orchestrator.editTaskAgent('parent', 'codex');
+
+      expect(orchestrator.getTask('parent')?.status).toBe('running');
+      expect(orchestrator.getTask('child')?.status).toBe('pending');
+    });
+  });
+
   // ── Scheduler queue drain ──────────────────────────────
 
   describe('scheduler queue drain', () => {

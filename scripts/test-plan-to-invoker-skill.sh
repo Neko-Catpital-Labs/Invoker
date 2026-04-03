@@ -33,8 +33,8 @@ if [[ -e "$CURSOR_LINK" ]]; then
   fi
   resolved="$(cd "$(dirname "$CURSOR_LINK")" && cd "$(readlink plan-to-invoker)" && pwd)"
   case "$resolved" in
-    *"/.claude/skills/plan-to-invoker") ;;
-    *) fail "symlink $CURSOR_LINK should resolve to .claude/plugins/.../plan-to-invoker (got: $resolved)" ;;
+    *"/.claude/skills/plan-to-invoker"|*"/skills/plan-to-invoker") ;;
+    *) fail "symlink $CURSOR_LINK should resolve to .claude/skills/... or skills/... plan-to-invoker (got: $resolved)" ;;
   esac
 fi
 

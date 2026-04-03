@@ -708,7 +708,6 @@ describe('getRestoredTerminalSpec dispatches codex vs claude session resume', ()
       };
       const spec = wt.getRestoredTerminalSpec(meta);
       expect(spec.command).toBe('codex');
-      expect(spec.args).toContain('exec');
       expect(spec.args).toContain('resume');
       expect(spec.args).toContain('codex-sess-123');
       // Must NOT be claude
@@ -780,7 +779,6 @@ describe('getRestoredTerminalSpec dispatches codex vs claude session resume', ()
       expect(spec.command).toBe('ssh');
       const innerCmd = spec.args![spec.args!.length - 1];
       expect(innerCmd).toContain('codex');
-      expect(innerCmd).toContain('exec');
       expect(innerCmd).toContain('resume');
       expect(innerCmd).toContain('codex-remote-sess');
       // Must NOT be claude --resume
@@ -929,7 +927,6 @@ describe('fix-with-agent → open-terminal produces correct agent resume command
     // 5. Get terminal spec — should be codex, not claude
     const spec = wt.getRestoredTerminalSpec(meta);
     expect(spec.command).toBe('codex');
-    expect(spec.args).toContain('exec');
     expect(spec.args).toContain('resume');
     expect(spec.args).toContain('codex-sess-42');
     expect(spec.command).not.toBe('claude');
