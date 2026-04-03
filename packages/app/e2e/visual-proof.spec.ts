@@ -236,8 +236,8 @@ test.describe('Visual proof capture', () => {
     // Click the "Pending:" status label to filter
     await page.getByText(/Pending:/).click();
 
-    // Wait for the 200ms debounce to complete and DOM to update
-    await page.waitForTimeout(250);
+    // No debounce — effect is immediate, but allow React render
+    await page.waitForTimeout(100);
 
     // Assert that the completed node (task-alpha) is dimmed via opacity-20 class
     const completedNodeCard = page.locator('[data-testid="rf__node-task-alpha"] > div.rounded-lg');
@@ -250,6 +250,53 @@ test.describe('Visual proof capture', () => {
     await expect(pendingNodeCard).not.toHaveClass(/opacity-20/);
 
     await captureScreenshot(page, 'status-filter-dimmed-dag');
+  });
+
+  test('status bar click-to-isolate and ctrl-click-toggle', async ({ page }) => {
+    await loadPlan(page, TEST_PLAN);
+    const now = new Date();
+    const earlier = new Date(Date.now() - 5000);
+    await injectTaskStates(page, [
+      {
+        taskId: 'task-alpha',
+        changes: {
+          status: 'completed',
+          execution: { startedAt: earlier, completedAt: now },
+        },
+      },
+      // task-beta stays pending
+    ]);
+
+    // 1. Click "Pending:" to isolate — completed node should dim
+    await page.getByText(/Pending:/).click();
+    // No debounce — effect is immediate, but allow React render
+    await page.waitForTimeout(100);
+
+    const completedCard = page.locator('[data-testid="rf__node-task-alpha"] > div.rounded-lg');
+    await expect(completedCard).toHaveClass(/opacity-20/);
+    await captureScreenshot(page, 'statusbar-click-isolate-pending');
+
+    // 2. Ctrl-click "Completed:" to add it to the active set
+    await page.getByText(/Completed:/).click({ modifiers: ['ControlOrMeta'] });
+    await page.waitForTimeout(100);
+
+    // Now both pending and completed are active — neither should be dimmed
+    await expect(completedCard).not.toHaveClass(/opacity-20/);
+    const pendingCard = page.locator('[data-testid="rf__node-task-beta"] > div.rounded-lg');
+    await expect(pendingCard).not.toHaveClass(/opacity-20/);
+    await captureScreenshot(page, 'statusbar-ctrl-click-toggle-both');
+
+    // 3. Click sole active filter to clear — click "Completed:" (plain click = isolate to completed)
+    //    then click it again (sole active = clear all)
+    await page.getByText(/Completed:/).click();
+    await page.waitForTimeout(100);
+    await page.getByText(/Completed:/).click();
+    await page.waitForTimeout(100);
+
+    // All filters cleared — nothing dimmed
+    await expect(completedCard).not.toHaveClass(/opacity-20/);
+    await expect(pendingCard).not.toHaveClass(/opacity-20/);
+    await captureScreenshot(page, 'statusbar-clear-all-filters');
   });
 
   test('approve-fix modal — no Fix Context panel', async ({ page }) => {
