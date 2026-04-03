@@ -41,6 +41,11 @@ import { buildPlanLocalToScopedIdMap, scopePlanTaskId } from './task-id-scope.js
 
 const TASK_DELTA_CHANNEL = 'task.delta';
 let workflowCounter = 0;
+const FIX_FAILURE_PREFIX_RE = /^\[Fix with (?:Claude|Agent) failed\] [^\n]*\n\n/;
+
+function stripFixFailureWrapper(errorText: string): string {
+  return errorText.replace(FIX_FAILURE_PREFIX_RE, '');
+}
 
 // ── Errors ──────────────────────────────────────────────────
 
@@ -1300,16 +1305,17 @@ export class Orchestrator {
     }
     const id = task.id;
 
+    const normalizedSavedError = stripFixFailureWrapper(savedError);
     let mergeConflict: { failedBranch: string; conflictFiles: string[] } | undefined;
     try {
-      const obj = JSON.parse(savedError);
+      const obj = JSON.parse(normalizedSavedError);
       if (obj?.type === 'merge_conflict') {
         mergeConflict = { failedBranch: obj.failedBranch, conflictFiles: obj.conflictFiles };
       }
     } catch { /* not JSON — normal error string */ }
 
     const displayError = fixError
-      ? `[Fix with Claude failed] ${fixError}\n\n${savedError}`
+      ? `[Fix with Agent failed] ${fixError}\n\n${normalizedSavedError}`
       : savedError;
     const changes: TaskStateChanges = {
       status: 'failed',

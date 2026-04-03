@@ -44,6 +44,13 @@ import { DEFAULT_EXECUTION_AGENT } from './agent.js';
 /** Keeps `lastHeartbeatAt` fresh while `familiar.start()` is awaited (SSH remote setup/provision can take minutes). Matches BaseFamiliar default heartbeat cadence. */
 const PRE_START_HEARTBEAT_INTERVAL_MS = 30_000;
 
+type StartupFailureMetadata = {
+  workspacePath?: string;
+  branch?: string;
+  agentSessionId?: string;
+  containerId?: string;
+};
+
 // ── Callbacks ─────────────────────────────────────────────
 
 export interface TaskExecutorCallbacks {
@@ -318,6 +325,21 @@ export class TaskExecutor {
     try {
       handle = await familiar.start(request);
     } catch (err) {
+      const meta = err as StartupFailureMetadata;
+      if (meta.workspacePath || meta.branch || meta.agentSessionId || meta.containerId) {
+        const execution: Record<string, string> = {};
+        if (meta.workspacePath) execution.workspacePath = meta.workspacePath;
+        if (meta.branch) execution.branch = meta.branch;
+        if (meta.agentSessionId) {
+          execution.agentSessionId = meta.agentSessionId;
+          execution.lastAgentSessionId = meta.agentSessionId;
+        }
+        if (meta.containerId) execution.containerId = meta.containerId;
+        this.persistence.updateTask(task.id, {
+          config: { familiarType: familiar.type },
+          execution: execution as any,
+        });
+      }
       throw new Error(
         `Familiar startup failed (${familiar.type}): ${err instanceof Error ? err.message : String(err)}`,
         { cause: err },
