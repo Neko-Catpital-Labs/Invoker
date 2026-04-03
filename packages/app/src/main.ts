@@ -74,6 +74,7 @@ import { backupPlan } from './plan-backup.js';
 // applyPlanDefinitionDefaults removed — parsePlan() applies defaults internally
 import { startApiServer, type ApiServer } from './api-server.js';
 import { runHeadless, tryDelegateRun, tryDelegateResume, resolveAgentSession } from './headless.js';
+import { acquireDbWriterLock, releaseDbWriterLock, type DbWriterLock } from './db-writer-lock.js';
 import {
   rebaseAndRetry,
   rejectTask,
@@ -123,6 +124,7 @@ let messageBus: MessageBus;
 let persistence: SQLiteAdapter;
 let familiarRegistry: FamiliarRegistry;
 let orchestrator: Orchestrator;
+let dbWriterLock: DbWriterLock | null = null;
 
 // Repo root: 3 levels up from packages/app/dist/
 const repoRoot = path.resolve(__dirname, '..', '..', '..');
@@ -138,11 +140,28 @@ function resolveInvokerHomeRoot(): string {
   );
 }
 
-async function initServices(): Promise<void> {
+interface InitServicesOptions {
+  readOnly?: boolean;
+  acquireWriterLock?: boolean;
+}
+
+function isHeadlessReadOnlyCommand(args: string[]): boolean {
+  const command = args[0];
+  if (!command || command === '--help' || command === '-h') return true;
+  if (command === 'query') return true;
+  return ['list', 'status', 'task-status', 'queue', 'audit', 'session'].includes(command);
+}
+
+async function initServices(options?: InitServicesOptions): Promise<void> {
   messageBus = new IpcBus();
   const invokerHomeRoot = resolveInvokerHomeRoot();
   mkdirSync(invokerHomeRoot, { recursive: true });
-  persistence = await SQLiteAdapter.create(path.join(invokerHomeRoot, 'invoker.db'));
+  if (options?.acquireWriterLock) {
+    dbWriterLock = acquireDbWriterLock(invokerHomeRoot);
+  }
+  persistence = await SQLiteAdapter.create(path.join(invokerHomeRoot, 'invoker.db'), {
+    readOnly: options?.readOnly === true,
+  });
   familiarRegistry = new FamiliarRegistry();
   familiarRegistry.register(
     'worktree',
@@ -292,6 +311,7 @@ const RED = '\x1b[31m';
 if (isHeadless) {
   app.whenReady().then(async () => {
     const command = cliArgs[0];
+    const readOnlyMode = isHeadlessReadOnlyCommand(cliArgs);
 
     // Try delegation for 'run' and 'resume' commands (skip when IPC would hit a non-GUI peer — e.g. e2e / CI).
     if (
@@ -328,9 +348,10 @@ if (isHeadless) {
       }
     }
 
-    // Standalone mode: initialize services and run headless
-    await initServices();
+    let exitCode = 0;
     try {
+      // Standalone mode: initialize services and run headless
+      await initServices({ readOnly: readOnlyMode, acquireWriterLock: !readOnlyMode });
       await runHeadless(cliArgs, {
         orchestrator, persistence, familiarRegistry, messageBus,
         repoRoot, invokerConfig, initServices, wireSlackBot,
@@ -339,11 +360,14 @@ if (isHeadless) {
       });
     } catch (err) {
       console.error(`${RED}Error:${RESET} ${err instanceof Error ? err.message : String(err)}`);
-      process.exit(1);
+      exitCode = 1;
+    } finally {
+      if (persistence) persistence.close();
+      if (messageBus) messageBus.disconnect();
+      releaseDbWriterLock(dbWriterLock);
+      dbWriterLock = null;
     }
-    persistence.close();
-    messageBus.disconnect();
-    process.exit(0);
+    process.exit(exitCode);
   });
 } else {
   // ══════════════════════════════════════════════════════════════
@@ -535,7 +559,13 @@ function setupGuiMode(): void {
   }
 
   app.whenReady().then(async () => {
-    await initServices();
+    try {
+      await initServices({ acquireWriterLock: true });
+    } catch (err) {
+      console.error(`${RED}Error:${RESET} ${err instanceof Error ? err.message : String(err)}`);
+      app.quit();
+      return;
+    }
 
     rebuildTaskExecutor();
 
@@ -1396,6 +1426,8 @@ function setupGuiMode(): void {
     }
     persistence.close();
     messageBus.disconnect();
+    releaseDbWriterLock(dbWriterLock);
+    dbWriterLock = null;
   });
 
   // ── Slack Bot (embedded in GUI process) ──────────────────

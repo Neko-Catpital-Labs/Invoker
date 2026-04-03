@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { SQLiteAdapter } from '../sqlite-adapter.js';
@@ -1180,6 +1180,51 @@ describe('SQLiteAdapter', () => {
       // agent_name must still be 'codex' after the status transition
       expect(adapter.getExecutionAgent('t-fix-approve')).toBe('codex');
       expect(adapter.getAgentSessionId('t-fix-approve')).toBe('sess-codex-approve');
+    });
+  });
+
+  describe('read-only / flush safety', () => {
+    it('does not rewrite db file when closed without writes', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-readonly-'));
+      const dbPath = join(dir, 'invoker.db');
+      try {
+        const writer = await SQLiteAdapter.create(dbPath);
+        writer.saveWorkflow(testWorkflow);
+        writer.saveTask(testWorkflow.id, makeTask('t-read-only'));
+        writer.close();
+
+        const before = statSync(dbPath).mtimeMs;
+        await new Promise((resolve) => setTimeout(resolve, 20));
+
+        const reader = await SQLiteAdapter.create(dbPath, { readOnly: true });
+        const loaded = reader.loadTasks(testWorkflow.id);
+        expect(loaded).toHaveLength(1);
+        reader.close();
+
+        const after = statSync(dbPath).mtimeMs;
+        expect(after).toBe(before);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('throws if a read-only adapter attempts to write', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-readonly-write-'));
+      const dbPath = join(dir, 'invoker.db');
+      try {
+        const writer = await SQLiteAdapter.create(dbPath);
+        writer.saveWorkflow(testWorkflow);
+        writer.saveTask(testWorkflow.id, makeTask('t-read-only-write'));
+        writer.close();
+
+        const reader = await SQLiteAdapter.create(dbPath, { readOnly: true });
+        expect(() =>
+          reader.updateTask('t-read-only-write', { status: 'failed' }),
+        ).toThrow(/read-only/i);
+        reader.close();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
     });
   });
 });

@@ -37,11 +37,14 @@ export class SQLiteAdapter implements PersistenceAdapter {
   private db: SqlJsDatabase;
   private dbPath: string | null;
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
+  private readOnly: boolean;
+  private dirty = false;
 
   /** Use SQLiteAdapter.create() instead. */
-  private constructor(db: SqlJsDatabase, dbPath: string | null) {
+  private constructor(db: SqlJsDatabase, dbPath: string | null, options?: { readOnly?: boolean }) {
     this.db = db;
     this.dbPath = dbPath;
+    this.readOnly = options?.readOnly === true;
     this.db.run('PRAGMA foreign_keys = ON');
     this.initSchema();
     this.migrate();
@@ -51,8 +54,9 @@ export class SQLiteAdapter implements PersistenceAdapter {
    * Async factory — loads WASM once, opens or creates the database.
    * If the on-disk file is corrupted, backs it up and starts fresh.
    * @param dbPath File path or ':memory:' (default).
+   * @param options readOnly=true opens DB for read operations without schema mutation/flush.
    */
-  static async create(dbPath: string = ':memory:'): Promise<SQLiteAdapter> {
+  static async create(dbPath: string = ':memory:', options?: { readOnly?: boolean }): Promise<SQLiteAdapter> {
     if (!sqlJsPromise) {
       sqlJsPromise = initSqlJs();
     }
@@ -64,7 +68,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       const buffer = readFileSync(dbPath);
       try {
         const db = new SQL.Database(buffer);
-        return new SQLiteAdapter(db, dbPath);
+        return new SQLiteAdapter(db, dbPath, options);
       } catch (err) {
         const backupPath = `${dbPath}.corrupt-${Date.now()}`;
         console.error(
@@ -76,7 +80,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
     }
 
     const db = new SQL.Database();
-    return new SQLiteAdapter(db, isFile ? dbPath : null);
+    return new SQLiteAdapter(db, isFile ? dbPath : null, options);
   }
 
   // ── sql.js Helpers ───────────────────────────────────────
@@ -106,18 +110,27 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return rows;
   }
 
+  private ensureWritable(): void {
+    if (this.readOnly) {
+      throw new Error('SQLiteAdapter is read-only in this process');
+    }
+  }
+
   /** Run an INSERT/UPDATE/DELETE and schedule a flush. */
   private execRun(sql: string, params: unknown[] = []): void {
+    this.ensureWritable();
     this.db.run(sql, params as any[]);
+    this.dirty = true;
     this.scheduleFlush();
   }
 
   /** Flush DB to disk (no-op for :memory:). */
   private flush(): void {
-    if (!this.dbPath) return;
+    if (!this.dbPath || !this.dirty) return;
     const dir = dirname(this.dbPath);
     mkdirSync(dir, { recursive: true });
     writeFileSync(this.dbPath, Buffer.from(this.db.export()));
+    this.dirty = false;
   }
 
   /** Debounced flush — coalesces rapid writes into a single I/O. */
@@ -337,7 +350,9 @@ export class SQLiteAdapter implements PersistenceAdapter {
     try { this.db.run('DROP INDEX IF EXISTS idx_attempts_node'); } catch { /* already gone */ }
     try { this.db.run('CREATE INDEX IF NOT EXISTS idx_attempts_node_created ON attempts(node_id, created_at)'); } catch { /* already exists */ }
 
-    this.migrateTestCommands();
+    if (!this.readOnly) {
+      this.migrateTestCommands();
+    }
   }
 
   /**
@@ -692,15 +707,18 @@ export class SQLiteAdapter implements PersistenceAdapter {
   }
 
   deleteAllWorkflows(): void {
+    this.ensureWritable();
     this.db.run('DELETE FROM events');
     this.db.run('DELETE FROM task_output');
     this.db.run('DELETE FROM attempts');
     this.db.run('DELETE FROM tasks');
     this.db.run('DELETE FROM workflows');
+    this.dirty = true;
     this.scheduleFlush();
   }
 
   deleteWorkflow(workflowId: string): void {
+    this.ensureWritable();
     this.db.run('BEGIN');
     try {
       // Delete events first (FK constraint: events -> tasks)
@@ -735,6 +753,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       this.db.run('ROLLBACK');
       throw err;
     }
+    this.dirty = true;
     this.scheduleFlush();
   }
 
