@@ -262,7 +262,7 @@ describe('State × Topology Matrix', () => {
       expect(orchestrator.getTask('D')!.status).toBe('pending');
     });
 
-    it('all complete → restart B → D stays completed (no auto-invalidation)', () => {
+    it('all complete → restart B → D is invalidated to pending', () => {
       orchestrator.loadPlan(diamondPlan());
       orchestrator.startExecution();
 
@@ -274,10 +274,10 @@ describe('State × Topology Matrix', () => {
       orchestrator.restartTask('B');
 
       expect(orchestrator.getTask('B')!.status).toBe('running');
-      expect(orchestrator.getTask('D')!.status).toBe('completed');
+      expect(orchestrator.getTask('D')!.status).toBe('pending');
     });
 
-    it('all complete → editTaskCommand on A → A restarts with new command, downstream unchanged', () => {
+    it('all complete → editTaskCommand on A → A restarts and downstream is invalidated', () => {
       orchestrator.loadPlan(diamondPlan());
       orchestrator.startExecution();
 
@@ -292,10 +292,10 @@ describe('State × Topology Matrix', () => {
       expect(orchestrator.getTask('A')!.status).toBe('running');
       expect(orchestrator.getTask('A')!.config.command).toBe('echo A-v2');
 
-      // Downstream tasks stay completed (no fork, no stale)
-      expect(orchestrator.getTask('B')!.status).toBe('completed');
-      expect(orchestrator.getTask('C')!.status).toBe('completed');
-      expect(orchestrator.getTask('D')!.status).toBe('completed');
+      // Downstream tasks are invalidated to pending (no fork, no stale clones)
+      expect(orchestrator.getTask('B')!.status).toBe('pending');
+      expect(orchestrator.getTask('C')!.status).toBe('pending');
+      expect(orchestrator.getTask('D')!.status).toBe('pending');
 
       // No clones created
       const allTasks = orchestrator.getAllTasks();
@@ -509,7 +509,7 @@ describe('State × Topology Matrix', () => {
   });
 
   describe('edit in fork topology', () => {
-    it('edit completed root A → A restarts with new command, B and C unchanged', () => {
+    it('edit completed root A → A restarts with new command, B and C invalidated', () => {
       orchestrator.loadPlan(forkPlan());
       orchestrator.startExecution();
 
@@ -523,9 +523,9 @@ describe('State × Topology Matrix', () => {
       expect(orchestrator.getTask('A')!.status).toBe('running');
       expect(orchestrator.getTask('A')!.config.command).toBe('echo A-v2');
 
-      // Downstream stays completed (no fork, no stale)
-      expect(orchestrator.getTask('B')!.status).toBe('completed');
-      expect(orchestrator.getTask('C')!.status).toBe('completed');
+      // Downstream is invalidated to pending (no fork, no stale clones)
+      expect(orchestrator.getTask('B')!.status).toBe('pending');
+      expect(orchestrator.getTask('C')!.status).toBe('pending');
 
       // No clones created
       const allTasks = orchestrator.getAllTasks();

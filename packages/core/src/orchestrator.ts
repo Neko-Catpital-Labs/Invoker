@@ -365,6 +365,80 @@ export class Orchestrator {
     return task;
   }
 
+  /**
+   * Return the root task IDs plus all transitive downstream dependents.
+   * The returned list is de-duplicated and preserves first-seen order.
+   */
+  private collectSubgraphTaskIds(rootTaskIds: string[]): string[] {
+    const allTasks = this.stateMachine.getAllTasks();
+    const taskMap = new Map(allTasks.map((t) => [t.id, t]));
+    const seen = new Set<string>();
+    const ids: string[] = [];
+
+    for (const rootId of rootTaskIds) {
+      if (!taskMap.has(rootId)) continue;
+      if (!seen.has(rootId)) {
+        seen.add(rootId);
+        ids.push(rootId);
+      }
+      const descendantIds = getTransitiveDependents(rootId, taskMap, () => false);
+      for (const id of descendantIds) {
+        if (seen.has(id)) continue;
+        seen.add(id);
+        ids.push(id);
+      }
+    }
+
+    return ids;
+  }
+
+  /**
+   * Reset root tasks and all downstream dependents to pending using the
+   * provided reset payload. Returns the affected IDs and currently-ready IDs.
+   */
+  private resetSubgraphToPending(
+    rootTaskIds: string[],
+    resetChanges: TaskStateChanges,
+    opts?: { forceResetIds?: Set<string> },
+  ): { affectedIds: string[]; readyIds: string[] } {
+    const forceResetIds = opts?.forceResetIds ?? new Set<string>();
+    const affectedIds = this.collectSubgraphTaskIds(rootTaskIds);
+    const affectedSet = new Set(affectedIds);
+
+    for (const id of affectedIds) {
+      const current = this.stateGetTask(id);
+      if (!current) continue;
+
+      const shouldReset = forceResetIds.has(id) || current.status !== 'pending';
+      this.deferredTaskIds.delete(id);
+      if (!shouldReset) {
+        this.scheduler.removeJob(id);
+        continue;
+      }
+
+      this.writeAndSync(id, resetChanges);
+      this.persistence.logEvent?.(id, 'task.pending', resetChanges);
+      this.messageBus.publish(TASK_DELTA_CHANNEL, {
+        type: 'updated',
+        taskId: id,
+        changes: resetChanges,
+      });
+
+      const wasRunning = current.status === 'running' || current.status === 'fixing_with_ai';
+      if (wasRunning) {
+        this.scheduler.completeJob(id);
+      } else {
+        this.scheduler.removeJob(id);
+      }
+    }
+
+    const readyIds = this.stateMachine
+      .getReadyTasks()
+      .map((t) => t.id)
+      .filter((id) => affectedSet.has(id));
+    return { affectedIds, readyIds };
+  }
+
   // ── Commands ──────────────────────────────────────────────
 
   /**
@@ -940,13 +1014,6 @@ export class Orchestrator {
       });
     }
 
-    const completedDownstream = this.stateMachine.getAllTasks().filter(
-      t => t.status === 'completed' && t.dependencies.includes(id),
-    );
-    if (completedDownstream.length > 0 && prevStatus === 'completed') {
-      console.warn(`[orchestrator] restartTask "${id}": ${completedDownstream.length} downstream task(s) are completed and will NOT be invalidated: [${completedDownstream.map(t => t.id).join(', ')}]`);
-    }
-
     // Supersede current selected attempt and create a new one (best-effort)
     try {
       const attempts = this.persistence.loadAttempts(id);
@@ -981,7 +1048,10 @@ export class Orchestrator {
       `[agent-session-trace] restartTask: before writeAndSync task="${id}" agentSessionId=${t0.execution.agentSessionId ?? 'null'} ` +
         '(reset clears agentSessionId/containerId; branch/workspacePath unchanged)',
     );
-    const afterRt = this.writeAndSync(id, resetChanges);
+    const { affectedIds } = this.resetSubgraphToPending([id], resetChanges, {
+      forceResetIds: new Set([id]),
+    });
+    const afterRt = this.stateGetTask(id)!;
     console.log(
       `[agent-session-trace] restartTask: after writeAndSync task="${id}" agentSessionId=${afterRt.execution.agentSessionId ?? 'null'}`,
     );
@@ -995,30 +1065,11 @@ export class Orchestrator {
         workspacePathAfter: afterRt.execution.workspacePath ?? null,
       });
     }
-    const resetDelta: TaskDelta = { type: 'updated', taskId: id, changes: resetChanges };
-    this.persistence.logEvent?.(id, 'task.pending', resetChanges);
-    this.messageBus.publish(TASK_DELTA_CHANNEL, resetDelta);
-
-    // Reset any reconciliation task that was already in needs_input but now
-    // has a dependency that is no longer terminal (because we just restarted it).
-    for (const recon of this.stateMachine.getAllTasks()) {
-      if (!recon.config.isReconciliation) continue;
-      if (recon.status !== 'needs_input') continue;
-      if (!recon.dependencies.includes(id)) continue;
-
-      const reconReset: TaskStateChanges = {
-        status: 'pending',
-        execution: { experimentResults: undefined },
-      };
-      this.writeAndSync(recon.id, reconReset);
-      const reconDelta: TaskDelta = { type: 'updated', taskId: recon.id, changes: reconReset };
-      this.persistence.logEvent?.(recon.id, 'task.pending', reconReset);
-      this.messageBus.publish(TASK_DELTA_CHANNEL, reconDelta);
-      console.log(`[orchestrator] restartTask "${id}": reset reconciliation "${recon.id}" back to pending`);
+    if (affectedIds.length > 1) {
+      console.log(
+        `[orchestrator] restartTask "${id}": invalidated ${affectedIds.length - 1} downstream task(s)`,
+      );
     }
-
-    this.scheduler.completeJob(id);
-    this.deferredTaskIds.delete(id);
 
     const readyTasks = this.stateMachine.getReadyTasks();
     const isReady = readyTasks.some((t) => t.id === id);
@@ -1058,31 +1109,14 @@ export class Orchestrator {
       },
     };
 
-    let resetCount = 0;
-    for (const task of allTasks) {
-      if (task.config.isMergeNode) {
-        // Always reset merge node — it needs to re-evaluate after retried tasks complete
-        if (task.status !== 'pending') {
-          this.writeAndSync(task.id, resetChanges);
-          this.persistence.logEvent?.(task.id, 'task.pending', resetChanges);
-          this.messageBus.publish(TASK_DELTA_CHANNEL, { type: 'updated', taskId: task.id, changes: resetChanges });
-          this.scheduler.completeJob(task.id);
-          resetCount++;
-        }
-        continue;
-      }
-
-      if (!retryStatuses.has(task.status)) continue; // Skip completed/running tasks
-
-      this.writeAndSync(task.id, resetChanges);
-      this.persistence.logEvent?.(task.id, 'task.pending', resetChanges);
-      this.messageBus.publish(TASK_DELTA_CHANNEL, { type: 'updated', taskId: task.id, changes: resetChanges });
-      this.scheduler.completeJob(task.id);
-      resetCount++;
-    }
+    const retryRootIds = allTasks
+      .filter((task) => retryStatuses.has(task.status))
+      .map((task) => task.id);
+    const { affectedIds } = this.resetSubgraphToPending(retryRootIds, resetChanges);
 
     console.log(
-      `[orchestrator] retryWorkflow: reset ${resetCount}/${allTasks.length} tasks for ${workflowId} (preserved completed)`,
+      `[orchestrator] retryWorkflow: reset ${affectedIds.length}/${allTasks.length} tasks for ${workflowId} ` +
+        `(roots=${retryRootIds.length}, preserved completed outside invalidated subgraphs)`,
     );
 
     return this.startExecution();
