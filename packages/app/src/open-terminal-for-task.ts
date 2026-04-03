@@ -10,6 +10,7 @@ import {
   WorktreeFamiliar,
   SshFamiliar,
   type FamiliarRegistry,
+  type AgentRegistry,
   type PersistedTaskMeta,
 } from '@invoker/executors';
 import { loadConfig } from './config.js';
@@ -25,20 +26,104 @@ export interface OpenTerminalPersistence {
   getTaskStatus(taskId: string): string | null;
   getFamiliarType(taskId: string): string | null;
   getAgentSessionId(taskId: string): string | null;
+  getLastAgentSessionId?(taskId: string): string | null;
   getExecutionAgent?(taskId: string): string | null;
   getContainerId(taskId: string): string | null;
   getWorkspacePath(taskId: string): string | null;
   getBranch(taskId: string): string | null;
   getRemoteTargetId?(taskId: string): string | null;
+  loadAttempts?(taskId: string): Array<{ id: string; agentSessionId?: string }>;
+  updateTask?(taskId: string, changes: { execution?: { agentSessionId?: string; lastAgentSessionId?: string } }): void;
+  updateAttempt?(attemptId: string, changes: { agentSessionId?: string }): void;
 }
 
 export interface OpenExternalTerminalForTaskOptions {
   taskId: string;
   persistence: OpenTerminalPersistence;
   familiarRegistry: FamiliarRegistry;
+  executionAgentRegistry?: AgentRegistry;
   repoRoot: string;
   /** Shown when task status is `running` (GUI vs headless wording). */
   runningTaskReason?: string;
+}
+
+/**
+ * Codex session repair for open-terminal:
+ * - validates the persisted sessionId via SessionDriver.loadSession()
+ * - recovers from attempt history / lastAgentSessionId when possible
+ * - clears sessionId (cwd-only fallback) when unrecoverable
+ */
+export function repairCodexResumeSessionMeta(
+  meta: PersistedTaskMeta,
+  persistence: OpenTerminalPersistence,
+  executionAgentRegistry?: AgentRegistry,
+): PersistedTaskMeta {
+  const executionAgent = meta.executionAgent ?? 'claude';
+  const originalSessionId = meta.agentSessionId;
+  if (executionAgent !== 'codex' || !originalSessionId) return meta;
+
+  const driver = executionAgentRegistry?.getSessionDriver('codex');
+  if (!driver) return meta;
+
+  const hasSavedSession = (sid: string): boolean => {
+    try {
+      return !!driver.loadSession(sid);
+    } catch {
+      return false;
+    }
+  };
+
+  if (hasSavedSession(originalSessionId)) return meta;
+
+  const attemptsNewestFirst = [...(persistence.loadAttempts?.(meta.taskId) ?? [])].reverse();
+  const seen = new Set<string>([originalSessionId]);
+  const candidates: string[] = [];
+
+  for (const a of attemptsNewestFirst) {
+    const sid = a.agentSessionId;
+    if (sid && !seen.has(sid)) {
+      seen.add(sid);
+      candidates.push(sid);
+    }
+  }
+
+  const lastAgentSid = persistence.getLastAgentSessionId?.(meta.taskId);
+  if (lastAgentSid && !seen.has(lastAgentSid)) {
+    seen.add(lastAgentSid);
+    candidates.push(lastAgentSid);
+  }
+
+  let recoveredSessionId: string | undefined;
+  for (const sid of candidates) {
+    if (hasSavedSession(sid)) {
+      recoveredSessionId = sid;
+      break;
+    }
+  }
+
+  if (!recoveredSessionId) {
+    console.warn(
+      `[open-terminal][codex-session-repair] task="${meta.taskId}" stale sessionId="${originalSessionId}" has no saved Codex session; opening cwd shell without resume`,
+    );
+    return { ...meta, agentSessionId: undefined };
+  }
+
+  console.log(
+    `[open-terminal][codex-session-repair] task="${meta.taskId}" repaired stale codex sessionId old="${originalSessionId}" new="${recoveredSessionId}"`,
+  );
+  persistence.updateTask?.(meta.taskId, {
+    execution: { agentSessionId: recoveredSessionId, lastAgentSessionId: recoveredSessionId },
+  });
+
+  const currentAttempt = attemptsNewestFirst[0];
+  if (
+    currentAttempt?.id &&
+    (!currentAttempt.agentSessionId || currentAttempt.agentSessionId === originalSessionId)
+  ) {
+    persistence.updateAttempt?.(currentAttempt.id, { agentSessionId: recoveredSessionId });
+  }
+
+  return { ...meta, agentSessionId: recoveredSessionId };
 }
 
 /**
@@ -72,35 +157,44 @@ export async function openExternalTerminalForTask(
     workspacePath: persistence.getWorkspacePath(taskId) ?? undefined,
     branch: persistence.getBranch(taskId) ?? undefined,
   };
-  console.log(`[open-terminal] meta from DB: familiarType=${meta.familiarType} workspacePath=${meta.workspacePath ?? 'undefined'} branch=${meta.branch ?? 'undefined'} agentSessionId=${meta.agentSessionId ?? 'undefined'} containerId=${meta.containerId ?? 'undefined'}`);
-  if (meta.agentSessionId) {
+  const repairedMeta = repairCodexResumeSessionMeta(meta, persistence, opts.executionAgentRegistry);
+  console.log(
+    `[open-terminal] meta from DB: familiarType=${repairedMeta.familiarType} workspacePath=${repairedMeta.workspacePath ?? 'undefined'} branch=${repairedMeta.branch ?? 'undefined'} agentSessionId=${repairedMeta.agentSessionId ?? 'undefined'} executionAgent=${repairedMeta.executionAgent ?? 'undefined'} containerId=${repairedMeta.containerId ?? 'undefined'}`,
+  );
+  if (repairedMeta.agentSessionId) {
     console.log(
       '[agent-session-trace] open-terminal: building resume spec with persisted agentSessionId — ' +
         'if recreateWorkflow left a stale UUID (downstream still pending), claude --resume may report no conversation',
     );
   }
 
-  let familiar = familiarRegistry.get(meta.familiarType);
-  console.log(`[open-terminal] familiarRegistry.get("${meta.familiarType}") → ${familiar ? familiar.type : 'null (will lazy-create)'}`);
+  let familiar = familiarRegistry.get(repairedMeta.familiarType);
+  console.log(`[open-terminal] familiarRegistry.get("${repairedMeta.familiarType}") → ${familiar ? familiar.type : 'null (will lazy-create)'}`);
 
   if (!familiar) {
-    if (meta.familiarType === 'docker') {
-      const docker = new DockerFamiliar({ workspaceDir: repoRoot });
+    if (repairedMeta.familiarType === 'docker') {
+      const docker = new DockerFamiliar({
+        workspaceDir: repoRoot,
+        agentRegistry: opts.executionAgentRegistry,
+      });
       familiarRegistry.register('docker', docker);
       familiar = docker;
-    } else if (meta.familiarType === 'worktree') {
+    } else if (repairedMeta.familiarType === 'worktree') {
       const invokerHome = path.resolve(homedir(), '.invoker');
       const worktree = new WorktreeFamiliar({
         worktreeBaseDir: path.resolve(invokerHome, 'worktrees'),
         cacheDir: path.resolve(invokerHome, 'repos'),
         maxWorktrees: 5,
+        agentRegistry: opts.executionAgentRegistry,
       });
       familiarRegistry.register('worktree', worktree);
       familiar = worktree;
-    } else if (meta.familiarType === 'ssh') {
+    } else if (repairedMeta.familiarType === 'ssh') {
       const targetId = persistence.getRemoteTargetId?.(taskId);
       const target = targetId ? loadConfig().remoteTargets?.[targetId] : undefined;
-      familiar = target ? new SshFamiliar(target) : familiarRegistry.getDefault();
+      familiar = target
+        ? new SshFamiliar({ ...target, agentRegistry: opts.executionAgentRegistry })
+        : familiarRegistry.getDefault();
     } else {
       familiar = familiarRegistry.getDefault();
     }
@@ -109,7 +203,7 @@ export async function openExternalTerminalForTask(
   let spec: { cwd?: string; command?: string; args?: string[] };
   try {
     console.log(`[open-terminal] calling familiar.getRestoredTerminalSpec(meta) for task=${taskId}`);
-    spec = familiar.getRestoredTerminalSpec(meta);
+    spec = familiar.getRestoredTerminalSpec(repairedMeta);
     console.log(`[open-terminal] getRestoredTerminalSpec returned: cwd=${spec.cwd ?? 'undefined'} command=${spec.command ?? 'undefined'} args=${JSON.stringify(spec.args ?? [])}`);
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);

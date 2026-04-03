@@ -341,6 +341,9 @@ export class SQLiteAdapter implements PersistenceAdapter {
       // execution_agent / agent_name: interchangeable agent support
       'ALTER TABLE tasks ADD COLUMN execution_agent TEXT',
       'ALTER TABLE tasks ADD COLUMN agent_name TEXT',
+      // durable audit pointers for most-recent agent session/name
+      'ALTER TABLE tasks ADD COLUMN last_agent_session_id TEXT',
+      'ALTER TABLE tasks ADD COLUMN last_agent_name TEXT',
     ];
     for (const sql of migrations) {
       try { this.db.run(sql); } catch { /* Column already exists */ }
@@ -452,6 +455,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         repo_url, feature_branch,
         is_merge_node, auto_fix, max_fix_attempts,
         familiar_type, agent_session_id, workspace_path, container_id,
+        last_agent_session_id, last_agent_name,
         action_request_id, experiments,
         created_at, started_at, completed_at, last_heartbeat_at,
         utilization, pending_fix_error,
@@ -470,6 +474,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         ?, ?,
         ?, ?, ?,
         ?, ?, ?, ?,
+        ?, ?,
         ?, ?,
         ?, ?, ?, ?,
         ?, ?,
@@ -502,6 +507,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
       exec.agentSessionId ?? null,
       exec.workspacePath ?? null,
       exec.containerId ?? null,
+      exec.lastAgentSessionId ?? null,
+      exec.lastAgentName ?? null,
       exec.actionRequestId ?? null,
       exec.experiments ? JSON.stringify(exec.experiments) : null,
       task.createdAt.toISOString(),
@@ -587,6 +594,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         branch: 'branch',
         commit: 'commit_hash',
         agentSessionId: 'agent_session_id',
+        lastAgentSessionId: 'last_agent_session_id',
         workspacePath: 'workspace_path',
         containerId: 'container_id',
         selectedExperiment: 'selected_experiment',
@@ -597,6 +605,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         reviewProviderId: 'review_provider_id',
         selectedAttemptId: 'selected_attempt_id',
         agentName: 'agent_name',
+        lastAgentName: 'last_agent_name',
       };
       const execDateMap: Record<string, string> = {
         startedAt: 'started_at',
@@ -800,10 +809,19 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
   getAgentSessionId(taskId: string): string | null {
     const row = this.queryOne(
-      'SELECT agent_session_id FROM tasks WHERE id = ?',
+      'SELECT agent_session_id, last_agent_session_id FROM tasks WHERE id = ?',
       [taskId],
     );
-    const val = (row?.agent_session_id as string) ?? null;
+    const val = ((row?.agent_session_id as string) ?? (row?.last_agent_session_id as string) ?? null);
+    return val === 'none' ? null : val;
+  }
+
+  getLastAgentSessionId(taskId: string): string | null {
+    const row = this.queryOne(
+      'SELECT last_agent_session_id FROM tasks WHERE id = ?',
+      [taskId],
+    );
+    const val = (row?.last_agent_session_id as string) ?? null;
     return val === 'none' ? null : val;
   }
 
@@ -1176,7 +1194,9 @@ export class SQLiteAdapter implements PersistenceAdapter {
         branch: row.branch ?? undefined,
         commit: row.commit_hash ?? undefined,
         agentSessionId: row.agent_session_id || undefined,
+        lastAgentSessionId: row.last_agent_session_id || undefined,
         agentName: row.agent_name ?? undefined,
+        lastAgentName: row.last_agent_name ?? undefined,
         workspacePath: row.workspace_path ?? undefined,
         containerId: row.container_id ?? undefined,
         experiments: row.experiments ? JSON.parse(row.experiments) : undefined,

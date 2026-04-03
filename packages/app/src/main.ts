@@ -66,19 +66,20 @@ import {
   RESTART_TO_BRANCH_TRACE,
   remoteFetchForPool,
   registerBuiltinAgents,
-  type Familiar, type FamiliarHandle, type PersistedTaskMeta,
+  type Familiar, type FamiliarHandle,
 } from '@invoker/executors';
 import type { TaskOutputData } from './types.js';
 import { loadConfig, type InvokerConfig } from './config.js';
 import { backupPlan } from './plan-backup.js';
 // applyPlanDefinitionDefaults removed — parsePlan() applies defaults internally
 import { startApiServer, type ApiServer } from './api-server.js';
-import { runHeadless, tryDelegateRun, tryDelegateResume, resolveAgentSession } from './headless.js';
+import { runHeadless, tryDelegateRun, tryDelegateResume, tryDelegateExec, resolveAgentSession } from './headless.js';
 import { acquireDbWriterLock, releaseDbWriterLock, type DbWriterLock } from './db-writer-lock.js';
 import {
   rebaseAndRetry,
   rejectTask,
   recreateWorkflow as sharedRecreateWorkflow,
+  recreateTask as sharedRecreateTask,
   retryWorkflow as sharedRetryWorkflow,
   resolveConflictAction,
   selectExperiments as sharedSelectExperiments,
@@ -86,11 +87,7 @@ import {
   editTaskAgent as sharedEditTaskAgent,
 } from './workflow-actions.js';
 import { spawn, execSync } from 'node:child_process';
-import {
-  buildLinuxXTerminalBashScript,
-  buildMacOSOsascriptArgs,
-  spawnDetachedTerminal,
-} from './terminal-external-launch.js';
+import { openExternalTerminalForTask } from './open-terminal-for-task.js';
 import { createRequire } from 'node:module';
 
 // ── Detect headless mode ─────────────────────────────────────
@@ -143,6 +140,7 @@ function resolveInvokerHomeRoot(): string {
 interface InitServicesOptions {
   readOnly?: boolean;
   acquireWriterLock?: boolean;
+  executionAgentRegistry?: import('@invoker/executors').AgentRegistry;
 }
 
 function isHeadlessReadOnlyCommand(args: string[]): boolean {
@@ -150,6 +148,34 @@ function isHeadlessReadOnlyCommand(args: string[]): boolean {
   if (!command || command === '--help' || command === '-h') return true;
   if (command === 'query') return true;
   return ['list', 'status', 'task-status', 'queue', 'audit', 'session'].includes(command);
+}
+
+function isHeadlessMutatingCommand(args: string[]): boolean {
+  const command = args[0];
+  if (!command || command === '--help' || command === '-h') return false;
+  if (command === 'query') return false;
+
+  if (command === 'set') {
+    const sub = args[1];
+    return ['command', 'executor', 'agent', 'merge-mode'].includes(sub ?? '');
+  }
+
+  if (['list', 'status', 'task-status', 'queue', 'audit', 'session', 'query-select'].includes(command)) {
+    return false;
+  }
+
+  if (['open-terminal', 'slack'].includes(command)) {
+    return false;
+  }
+
+  return [
+    'run', 'resume', 'restart', 'recreate', 'recreate-task', 'rebase', 'fix', 'resolve-conflict',
+    'restart-workflow', 'clean-restart', 'rebase-and-retry',
+    'approve', 'reject', 'input', 'select',
+    'cancel',
+    'delete', 'delete-workflow', 'delete-all',
+    'edit', 'edit-executor', 'edit-type', 'edit-agent', 'set-merge-mode',
+  ].includes(command);
 }
 
 async function initServices(options?: InitServicesOptions): Promise<void> {
@@ -169,6 +195,7 @@ async function initServices(options?: InitServicesOptions): Promise<void> {
       worktreeBaseDir: path.resolve(invokerHomeRoot, 'worktrees'),
       cacheDir: path.resolve(invokerHomeRoot, 'repos'),
       maxWorktrees: 5,
+      agentRegistry: options?.executionAgentRegistry,
     }),
   );
   orchestrator = new Orchestrator({
@@ -310,12 +337,14 @@ const RED = '\x1b[31m';
 
 if (isHeadless) {
   app.whenReady().then(async () => {
+    const agentRegistry = registerBuiltinAgents();
     const command = cliArgs[0];
     const readOnlyMode = isHeadlessReadOnlyCommand(cliArgs);
+    const mutatingMode = isHeadlessMutatingCommand(cliArgs);
 
-    // Try delegation for 'run' and 'resume' commands (skip when IPC would hit a non-GUI peer — e.g. e2e / CI).
+    // Try delegation for mutating commands (skip when IPC would hit a non-GUI peer — e.g. e2e / CI).
     if (
-      (command === 'run' || command === 'resume')
+      mutatingMode
       && process.env.INVOKER_HEADLESS_STANDALONE !== '1'
     ) {
       const delegationBus = new IpcBus();
@@ -331,6 +360,8 @@ if (isHeadless) {
           const workflowId = cliArgs[1];
           if (!workflowId) throw new Error('Missing workflowId. Usage: --headless resume <id>');
           delegated = await tryDelegateResume(workflowId, delegationBus, waitForApproval);
+        } else {
+          delegated = await tryDelegateExec(cliArgs, delegationBus, waitForApproval);
         }
 
         if (delegated) {
@@ -351,12 +382,12 @@ if (isHeadless) {
     let exitCode = 0;
     try {
       // Standalone mode: initialize services and run headless
-      await initServices({ readOnly: readOnlyMode, acquireWriterLock: !readOnlyMode });
+      await initServices({ readOnly: readOnlyMode, executionAgentRegistry: agentRegistry });
       await runHeadless(cliArgs, {
         orchestrator, persistence, familiarRegistry, messageBus,
         repoRoot, invokerConfig, initServices, wireSlackBot,
         waitForApproval,
-        executionAgentRegistry: registerBuiltinAgents(),
+        executionAgentRegistry: agentRegistry,
       });
     } catch (err) {
       console.error(`${RED}Error:${RESET} ${err instanceof Error ? err.message : String(err)}`);
@@ -368,6 +399,9 @@ if (isHeadless) {
       dbWriterLock = null;
     }
     process.exit(exitCode);
+  }).catch((err) => {
+    console.error(`${RED}Error:${RESET} ${err instanceof Error ? err.message : String(err)}`);
+    process.exit(1);
   });
 } else {
   // ══════════════════════════════════════════════════════════════
@@ -560,7 +594,7 @@ function setupGuiMode(): void {
 
   app.whenReady().then(async () => {
     try {
-      await initServices({ acquireWriterLock: true });
+      await initServices({ executionAgentRegistry: agentRegistry });
     } catch (err) {
       console.error(`${RED}Error:${RESET} ${err instanceof Error ? err.message : String(err)}`);
       app.quit();
@@ -612,6 +646,21 @@ function setupGuiMode(): void {
       taskExecutor.resumeMergeGatePolling();
       const tasks = orchestrator.getAllTasks().filter(t => t.config.workflowId === workflowId);
       return { workflowId, tasks };
+    });
+
+    messageBus.onRequest('headless.exec', async (req: unknown) => {
+      const { args, waitForApproval: delegatedWait } = req as { args: string[]; waitForApproval?: boolean };
+      if (!Array.isArray(args) || args.length === 0) {
+        throw new Error('Missing delegated headless command arguments');
+      }
+      console.log(`[ipc-delegate] headless.exec: "${args.join(' ')}"`);
+      await runHeadless(args, {
+        orchestrator, persistence, familiarRegistry, messageBus,
+        repoRoot, invokerConfig, initServices, wireSlackBot,
+        waitForApproval: delegatedWait,
+        executionAgentRegistry: registerBuiltinAgents(),
+      });
+      return { ok: true };
     });
 
     let startupAutoRunBlocked = !!invokerConfig.disableAutoRunOnStartup;
@@ -986,6 +1035,23 @@ function setupGuiMode(): void {
       }
     });
 
+    ipcMain.handle('invoker:recreate-task', async (_event, taskId: string) => {
+      console.log(`[ipc] recreate-task: "${taskId}"`);
+      try {
+        const started = sharedRecreateTask(taskId, { persistence, orchestrator });
+        const runnable = started.filter(t => t.status === 'running');
+        remoteFetchForPool.enabled = false;
+        try {
+          await taskExecutor.executeTasks(runnable);
+        } finally {
+          remoteFetchForPool.enabled = true;
+        }
+      } catch (err) {
+        console.error(`[ipc] recreate-task failed: ${err}`);
+        throw err;
+      }
+    });
+
     ipcMain.handle('invoker:retry-workflow', async (_event, workflowId: string) => {
       console.log(`[ipc] retry-workflow: "${workflowId}"`);
       try {
@@ -1278,120 +1344,15 @@ function setupGuiMode(): void {
     // ── External terminal launcher ──────────────────────────────
     ipcMain.handle('invoker:open-terminal', async (_event, taskId: string): Promise<{ opened: boolean; reason?: string }> => {
       console.log(`[open-terminal] invoked for task="${taskId}"`);
-      const taskStatus = persistence.getTaskStatus(taskId);
-      console.log(`[open-terminal] task="${taskId}" status="${taskStatus}"`);
-      if (taskStatus === 'running' || taskStatus === 'fixing_with_ai') {
-        console.log(`[open-terminal] BLOCKED task="${taskId}" — still in progress (${taskStatus})`);
-        return {
-          opened: false,
-          reason:
-            'Task is still running or being fixed with AI. View output in the terminal panel below.',
-        };
-      }
-
-      const meta: PersistedTaskMeta = {
+      return openExternalTerminalForTask({
         taskId,
-        familiarType: persistence.getFamiliarType(taskId) ?? 'worktree',
-        agentSessionId: persistence.getAgentSessionId(taskId) ?? undefined,
-        containerId: persistence.getContainerId(taskId) ?? undefined,
-        workspacePath: persistence.getWorkspacePath(taskId) ?? undefined,
-        branch: persistence.getBranch(taskId) ?? undefined,
-        executionAgent: persistence.getExecutionAgent?.(taskId) ?? undefined,
-      };
-      console.log(`[open-terminal] task="${taskId}" meta=${JSON.stringify(meta)}`);
-
-      // Resolve the familiar, lazy-registering if needed
-      let familiar = familiarRegistry.get(meta.familiarType);
-      if (!familiar) {
-        console.log(`[open-terminal] task="${taskId}" familiar type="${meta.familiarType}" not registered, lazy-registering`);
-        if (meta.familiarType === 'docker') {
-          const docker = new DockerFamiliar({ workspaceDir: repoRoot, agentRegistry });
-          familiarRegistry.register('docker', docker);
-          familiar = docker;
-        } else if (meta.familiarType === 'worktree') {
-          const invokerHome = path.resolve(homedir(), '.invoker');
-          const worktree = new WorktreeFamiliar({
-            worktreeBaseDir: path.resolve(invokerHome, 'worktrees'),
-            cacheDir: path.resolve(invokerHome, 'repos'),
-            maxWorktrees: 5,
-            agentRegistry,
-          });
-          familiarRegistry.register('worktree', worktree);
-          familiar = worktree;
-        } else if (meta.familiarType === 'ssh') {
-          const targetId = persistence.getRemoteTargetId?.(taskId);
-          const target = targetId ? loadConfig().remoteTargets?.[targetId] : undefined;
-          console.log(`[open-terminal] task="${taskId}" SSH familiar with targetId="${targetId ?? 'none'}" target=${JSON.stringify(target)}`);
-          if (target) {
-            familiar = new SshFamiliar({ ...target, agentRegistry });
-          } else {
-            familiar = familiarRegistry.getDefault();
-          }
-        } else {
-          familiar = familiarRegistry.getDefault();
-        }
-      }
-      console.log(`[open-terminal] task="${taskId}" resolved familiar type="${familiar.type}"`);
-
-      let spec: { cwd?: string; command?: string; args?: string[] };
-      try {
-        spec = familiar.getRestoredTerminalSpec(meta);
-        console.log(`[open-terminal] task="${taskId}" getRestoredTerminalSpec returned: ${JSON.stringify(spec)}`);
-      } catch (err) {
-        const reason = err instanceof Error ? err.message : String(err);
-        console.log(`[open-terminal] task="${taskId}" getRestoredTerminalSpec THREW: ${reason}`);
-        return { opened: false, reason };
-      }
-
-      const cwd = spec.cwd ?? repoRoot;
-      console.log(`[open-terminal] task="${taskId}" final cwd="${cwd}" spec=${JSON.stringify(spec)}`);
-
-      const onTerminalClose = () => {
-        if (!cwd || cwd === repoRoot) return;
-        try {
-          const { execSync } = require('node:child_process');
-          execSync('git diff HEAD --quiet', { cwd, stdio: 'ignore' });
-          console.log(`[dirty-detect] task="${taskId}" — no changes detected`);
-        } catch {
-          console.log(`[dirty-detect] task="${taskId}" — changes detected (downstream staleness derived from attempt lineage)`);
-        }
-      };
-
-      if (process.platform === 'linux') {
-        const cleanEnv: Record<string, string> = {};
-        const keep = ['HOME', 'DISPLAY', 'DBUS_SESSION_BUS_ADDRESS', 'XAUTHORITY',
-          'SHELL', 'USER', 'TERM', 'WAYLAND_DISPLAY', 'XDG_RUNTIME_DIR', 'LANG',
-          'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'ANTHROPIC_API_KEY', 'CLAUDE_API_KEY'];
-        for (const k of keep) {
-          if (process.env[k]) cleanEnv[k] = process.env[k]!;
-        }
-        cleanEnv.PATH = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin';
-        if (!cleanEnv.TERM) cleanEnv.TERM = 'xterm-256color';
-
-        const bashScript = buildLinuxXTerminalBashScript(spec, cwd);
-        const termArgs = ['-e', 'bash', '-c', bashScript];
-
-        console.log(`[open-terminal] spawning x-terminal-emulator with args: ${JSON.stringify(termArgs)}`);
-        const linuxResult = await spawnDetachedTerminal('x-terminal-emulator', termArgs, { env: cleanEnv }, onTerminalClose);
-        console.log(`[open-terminal] task="${taskId}" result=${JSON.stringify(linuxResult)}`);
-        return linuxResult;
-      }
-
-      if (process.platform === 'darwin') {
-        if (spec.command) {
-          const osaArgs = buildMacOSOsascriptArgs(spec, cwd);
-          console.log(`[open-terminal] spawning osascript with args: ${JSON.stringify(osaArgs)}`);
-          const osaResult = await spawnDetachedTerminal('osascript', osaArgs, {}, onTerminalClose);
-          console.log(`[open-terminal] task="${taskId}" result=${JSON.stringify(osaResult)}`);
-          return osaResult;
-        }
-        console.log(`[open-terminal] spawning open -a Terminal cwd="${cwd}"`);
-        const openResult = await spawnDetachedTerminal('open', ['-a', 'Terminal', cwd], {}, onTerminalClose);
-        console.log(`[open-terminal] task="${taskId}" result=${JSON.stringify(openResult)}`);
-        return openResult;
-      }
-
-      return { opened: false, reason: `External terminal is not supported on platform: ${process.platform}` };
+        persistence,
+        familiarRegistry,
+        executionAgentRegistry: agentRegistry,
+        repoRoot,
+        runningTaskReason:
+          'Task is still running or being fixed with AI. View output in the terminal panel below.',
+      });
     });
 
     createWindow();
@@ -1401,6 +1362,9 @@ function setupGuiMode(): void {
         createWindow();
       }
     });
+  }).catch((err) => {
+    console.error(`${RED}Error:${RESET} ${err instanceof Error ? err.message : String(err)}`);
+    app.quit();
   });
 
   app.on('window-all-closed', () => {
@@ -1413,19 +1377,23 @@ function setupGuiMode(): void {
     if (apiServer) await apiServer.close().catch(() => {});
     if (dbPollInterval) clearInterval(dbPollInterval);
     if (activityPollInterval) clearInterval(activityPollInterval);
-    await Promise.all(familiarRegistry.getAll().map(f => f.destroyAll()));
-    for (const task of orchestrator.getAllTasks()) {
-      if (task.status === 'running' || task.status === 'fixing_with_ai') {
-        orchestrator.handleWorkerResponse({
-          requestId: `quit-${task.id}`,
-          actionId: task.id,
-          status: 'failed',
-          outputs: { exitCode: 1, error: 'Application quit' },
-        });
+    if (familiarRegistry) {
+      await Promise.all(familiarRegistry.getAll().map(f => f.destroyAll()));
+    }
+    if (orchestrator) {
+      for (const task of orchestrator.getAllTasks()) {
+        if (task.status === 'running' || task.status === 'fixing_with_ai') {
+          orchestrator.handleWorkerResponse({
+            requestId: `quit-${task.id}`,
+            actionId: task.id,
+            status: 'failed',
+            outputs: { exitCode: 1, error: 'Application quit' },
+          });
+        }
       }
     }
-    persistence.close();
-    messageBus.disconnect();
+    if (persistence) persistence.close();
+    if (messageBus) messageBus.disconnect();
     releaseDbWriterLock(dbWriterLock);
     dbWriterLock = null;
   });
