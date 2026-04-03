@@ -361,6 +361,9 @@ eval "$(echo "${agentCmdB64}" | base64 -d)"
     'bash', '-s',
   ];
 
+  console.log(`[spawnAgentFix] remote agent command: ${agentCmd}`);
+  console.log(`[spawnAgentFix] ssh: ssh ${sshArgs.join(' ')}`);
+  console.log(`[spawnAgentFix] remote cwd: ${remoteCwd}`);
   return new Promise<{ stdout: string; sessionId: string }>((resolve, reject) => {
     const child = spawn('ssh', sshArgs, {
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -400,6 +403,8 @@ export function spawnAgentFixViaRegistry(
   const spec = agent.buildFixCommand?.(prompt);
   if (!spec) throw new Error(`Agent "${agent.name}" does not support fix commands`);
   const sessionId = spec.sessionId ?? randomUUID();
+  console.log(`[spawnAgentFix] cmd: ${spec.cmd} ${spec.args.map(a => JSON.stringify(a)).join(' ')}`);
+  console.log(`[spawnAgentFix] cwd: ${cwd}`);
   return new Promise<{ stdout: string; sessionId: string }>((resolve, reject) => {
     const child = spawn(spec.cmd, spec.args, {
       cwd,
