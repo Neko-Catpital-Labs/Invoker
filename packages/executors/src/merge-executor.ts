@@ -694,6 +694,14 @@ export async function publishAfterFixImpl(
       let mergedCount = 0;
       let skippedCount = 0;
       for (const { branch, description } of taskBranches) {
+        // Skip branches already merged into HEAD (e.g., resolved by AI fix)
+        try {
+          await execGitInMergeSafe(host, ['merge-base', '--is-ancestor', branch, 'HEAD'], consolidateDir);
+          console.log(`[merge] Post-fix: ${branch} already merged, skipping`);
+          skippedCount++;
+          continue;
+        } catch { /* not an ancestor — needs merging */ }
+
         console.log(`[merge] Post-fix: merging task branch ${branch} → ${featureBranch}`);
         const branchAvailable = await ensureLocalBranchForMerge(host, consolidateDir, branch, workflow?.repoUrl);
         if (!branchAvailable) {
@@ -777,6 +785,9 @@ export async function publishAfterFixImpl(
     });
     mergeTrace('PUBLISH_AFTER_FIX_DONE', { taskId: task.id });
   } catch (err) {
+    // Clean up any in-progress merge in the gate clone
+    try { await execGitInMergeSafe(host, ['merge', '--abort'], gateWorkspacePath!); } catch { /* no merge in progress */ }
+
     const errorMsg = err instanceof Error ? err.message : String(err);
     mergeTrace('PUBLISH_AFTER_FIX_FAILED', { taskId: task.id, error: errorMsg });
     console.error(`[merge] Post-fix PR prep failed for ${task.id}: ${errorMsg}`);

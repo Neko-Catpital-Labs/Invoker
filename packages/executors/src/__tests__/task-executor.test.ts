@@ -4416,6 +4416,8 @@ describe('TaskExecutor', () => {
         gitCalls.push({ args: [...args], dir });
         if (args[0] === 'rev-parse' && args[1] === 'HEAD') return 'abc123deadbeef';
         if (args[0] === 'rev-parse' && args[1] === '--verify') return '';
+        // merge-base --is-ancestor exits non-zero when branch is NOT an ancestor of HEAD
+        if (args[0] === 'merge-base' && args[1] === '--is-ancestor') throw new Error('not ancestor');
         return '';
       };
       (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
@@ -4557,6 +4559,7 @@ describe('TaskExecutor', () => {
       (executor as any).execGitIn = async (args: string[], dir: string) => {
         _gitCalls.push({ args: [...args], dir });
         if (args[0] === 'rev-parse' && args[1] === 'HEAD') return 'abc123deadbeef';
+        if (args[0] === 'merge-base' && args[1] === '--is-ancestor') throw new Error('not ancestor');
         if (args[0] === 'merge') throw new Error('CONFLICT (content): Merge conflict in shared.ts');
         return '';
       };
