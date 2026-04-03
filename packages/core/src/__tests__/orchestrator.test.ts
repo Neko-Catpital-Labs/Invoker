@@ -1894,7 +1894,7 @@ describe('Orchestrator', () => {
       expect(started[0].id).toBe(sid(orchestrator, 0, 't1'));
     });
 
-    it('restarts task with new command, downstream stays unchanged', () => {
+    it('restarts task with new command and invalidates downstream dependents', () => {
       orchestrator.loadPlan({
         name: 'edit-fork-test',
         tasks: [
@@ -1919,8 +1919,8 @@ describe('Orchestrator', () => {
 
       expect(orchestrator.getTask('parent')?.config.command).toBe('echo updated');
       expect(orchestrator.getTask('parent')?.status).toBe('running');
-      // Child stays completed - no fork, no stale
-      expect(orchestrator.getTask('child')?.status).toBe('completed');
+      // Child is invalidated to pending (no fork, no stale clone)
+      expect(orchestrator.getTask('child')?.status).toBe('pending');
       // No new tasks created (no -v2 clones)
       expect(orchestrator.getAllTasks().length).toBe(taskCountBefore);
     });
@@ -1976,7 +1976,7 @@ describe('Orchestrator', () => {
       expect(started).toHaveLength(1);
     });
 
-    it('does not fork dirty subtree', () => {
+    it('does not fork dirty subtree and invalidates downstream dependents', () => {
       orchestrator.loadPlan({
         name: 'edit-type-no-fork',
         tasks: [
@@ -1998,7 +1998,7 @@ describe('Orchestrator', () => {
       const taskCountAfter = orchestrator.getAllTasks().length;
 
       expect(taskCountAfter).toBe(taskCountBefore);
-      expect(orchestrator.getTask('child')?.status).toBe('completed');
+      expect(orchestrator.getTask('child')?.status).toBe('pending');
     });
 
     it('throws when trying to edit a running task', () => {
@@ -2432,7 +2432,7 @@ describe('Orchestrator', () => {
       expect(orchestrator.getTask('C')!.status).toBe('pending');
     });
 
-    it('warns about completed downstream tasks that will not be invalidated on restart', () => {
+    it('invalidates completed downstream tasks on restart without warning', () => {
       orchestrator.loadPlan({
         name: 'completed-downstream-test',
         tasks: [
@@ -2451,16 +2451,9 @@ describe('Orchestrator', () => {
       expect(orchestrator.getTask('A')!.status).toBe('completed');
       expect(orchestrator.getTask('B')!.status).toBe('completed');
 
-      warnSpy.mockClear();
       orchestrator.restartTask('A');
-
-      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('restartTask "'));
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('will NOT be invalidated'),
-      );
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('B'),
-      );
+      expect(orchestrator.getTask('B')!.status).toBe('pending');
+      expect(warnSpy).not.toHaveBeenCalled();
     });
 
     it('restarting one failed root leaves fan-in pending when other root still failed', () => {
@@ -3582,6 +3575,43 @@ describe('Orchestrator', () => {
       expect(started.some(t => t.id === 'c')).toBe(false);
 
       // Merge should be pending
+      expect(o.getTask(`__merge__${wfId}`)!.status).toBe('pending');
+    });
+
+    it('invalidates completed downstream dependents of retried roots', () => {
+      const p = new InMemoryPersistence();
+      const b = new InMemoryBus();
+      const wfId = 'wf-retry-invalidate-downstream';
+
+      p.saveTask(wfId, {
+        id: 'a', description: 'Task A', status: 'completed',
+        dependencies: [], createdAt: new Date(),
+        config: { workflowId: wfId }, execution: { exitCode: 0 },
+      });
+      p.saveTask(wfId, {
+        id: 'b', description: 'Task B', status: 'failed',
+        dependencies: ['a'], createdAt: new Date(),
+        config: { workflowId: wfId }, execution: { exitCode: 1, error: 'boom' },
+      });
+      p.saveTask(wfId, {
+        id: 'c', description: 'Task C', status: 'completed',
+        dependencies: ['b'], createdAt: new Date(),
+        config: { workflowId: wfId }, execution: { exitCode: 0 },
+      });
+      p.saveTask(wfId, {
+        id: `__merge__${wfId}`, description: 'Merge gate', status: 'completed',
+        dependencies: ['c'], createdAt: new Date(),
+        config: { workflowId: wfId, isMergeNode: true }, execution: { exitCode: 0 },
+      });
+
+      const o = new Orchestrator({ persistence: p, messageBus: b, maxConcurrency: 3 });
+      o.syncFromDb(wfId);
+
+      o.retryWorkflow(wfId);
+
+      expect(o.getTask('a')!.status).toBe('completed');
+      expect(o.getTask('b')!.status).toBe('running');
+      expect(o.getTask('c')!.status).toBe('pending');
       expect(o.getTask(`__merge__${wfId}`)!.status).toBe('pending');
     });
 
