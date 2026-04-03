@@ -29,13 +29,13 @@ describe('TopBar controls (component)', () => {
     mock.cleanup();
   });
 
-  it('Refresh button calls getTasks', async () => {
+  it('Refresh button calls getTasks with forceRefresh=true', async () => {
     render(<App />);
     fireEvent.click(screen.getByText('Refresh'));
 
     await waitFor(() => {
-      // getTasks is called on mount and again on refresh
       expect(mock.api.getTasks).toHaveBeenCalled();
+      expect(mock.api.getTasks).toHaveBeenLastCalledWith(true);
     });
   });
 

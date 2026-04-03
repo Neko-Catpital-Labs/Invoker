@@ -311,13 +311,14 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
     child.on('close', async (code, signal) => {
       const exitCode = code ?? (signal ? 1 : 0);
       if (driver && entry.rawStdout) {
-        const readable = driver.processOutput(entry.agentSessionId ?? '', entry.rawStdout);
-        if (readable) this.emitOutput(executionId, readable);
-        // Replace local UUID with real backend session/thread ID for resume
+        // Extract real backend session/thread ID BEFORE writing the file,
+        // so processOutput stores under the real ID (not the local UUID).
         const realId = driver.extractSessionId?.(entry.rawStdout);
         if (realId) {
           entry.agentSessionId = realId;
         }
+        const readable = driver.processOutput(entry.agentSessionId ?? '', entry.rawStdout);
+        if (readable) this.emitOutput(executionId, readable);
       }
       await this.handleProcessExit(executionId, request, acquired.worktreePath, exitCode, {
         signal,

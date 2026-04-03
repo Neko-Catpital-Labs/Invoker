@@ -210,7 +210,7 @@ export interface InvokerAPI {
   start: () => Promise<TaskState[]>;
   stop: () => Promise<void>;
   clear: () => Promise<void>;
-  getTasks: () => Promise<{ tasks: TaskState[]; workflows: WorkflowMeta[] }>;
+  getTasks: (forceRefresh?: boolean) => Promise<{ tasks: TaskState[]; workflows: WorkflowMeta[] }>;
   getStatus: () => Promise<WorkflowStatus>;
   provideInput: (taskId: string, input: string) => Promise<void>;
   approve: (taskId: string) => Promise<void>;

@@ -44,7 +44,7 @@ export function createMockInvoker(
     // Defer resolution one microtask so snapshot is read after synchronous setTasks()
     // in tests (useTasks fetchAll races mount vs setTasks; real IPC resolves later too).
     getTasks: vi.fn(
-      () =>
+      (_forceRefresh?: boolean) =>
         new Promise<{ tasks: TaskState[]; workflows: WorkflowMeta[] }>((resolve) => {
           queueMicrotask(() => {
             resolve({

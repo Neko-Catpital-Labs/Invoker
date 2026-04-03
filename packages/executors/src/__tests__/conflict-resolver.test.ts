@@ -431,6 +431,7 @@ describe('remote agent dispatch via registry', () => {
     expect(spawnRemoteAgentFixImpl.length).toBeGreaterThanOrEqual(3);
   });
 
+
   it('codex agent buildFixCommand generates correct remote shell command shape', () => {
     const registry = registerBuiltinAgents();
     const agent = registry.getOrThrow('codex');

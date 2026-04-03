@@ -504,7 +504,8 @@ git push -u origin "$BR"
           }
         }
 
-        // Replace local UUID with real backend session/thread ID for resume
+        // Replace local UUID with real backend session/thread ID for resume,
+        // then store session locally via driver (matches worktree-familiar pattern).
         if (entry.agentSessionId && this.agentRegistry) {
           const agentName = request.inputs.executionAgent ?? 'claude';
           const driver = this.agentRegistry.getSessionDriver(agentName);
@@ -512,6 +513,9 @@ git push -u origin "$BR"
           const realId = driver?.extractSessionId?.(rawOutput);
           if (realId) {
             entry.agentSessionId = realId;
+          }
+          if (driver) {
+            driver.processOutput(entry.agentSessionId!, rawOutput);
           }
         }
 

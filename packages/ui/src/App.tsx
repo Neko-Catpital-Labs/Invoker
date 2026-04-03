@@ -228,7 +228,7 @@ export function App() {
   }, []);
 
   const handleRefresh = useCallback(() => {
-    refreshTasks();
+    refreshTasks(true);
     window.invoker?.checkPrStatuses?.();
   }, [refreshTasks]);
 

@@ -113,4 +113,24 @@ describe('useTasks', () => {
     expect(result.current.tasks.size).toBe(1);
     expect(result.current.tasks.get('t1')?.id).toBe('t1');
   });
+
+  it('passes forceRefresh flag to getTasks when requested', async () => {
+    const getTasks = vi.fn().mockResolvedValue({ tasks: [], workflows: [] });
+    (window as unknown as { invoker: Record<string, unknown> }).invoker = {
+      getTasks,
+      onTaskDelta: vi.fn(() => () => {}),
+      onWorkflowsChanged: vi.fn(() => () => {}),
+    };
+
+    const { result } = renderHook(() => useTasks());
+
+    await act(async () => {
+      result.current.refreshTasks(true);
+    });
+
+    await waitFor(() => {
+      expect(getTasks).toHaveBeenCalled();
+      expect(getTasks).toHaveBeenLastCalledWith(true);
+    });
+  });
 });
