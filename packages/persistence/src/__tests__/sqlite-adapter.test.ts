@@ -262,6 +262,34 @@ describe('SQLiteAdapter', () => {
     });
   });
 
+  describe('agentName persistence', () => {
+    it('round-trips agentName through save and load', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t1', { execution: { agentName: 'codex' } }));
+
+      const loaded = adapter.loadTasks('wf-1');
+      expect(loaded[0].execution.agentName).toBe('codex');
+    });
+
+    it('persists agentName via updateTask', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t1'));
+
+      adapter.updateTask('t1', { execution: { agentName: 'codex' } });
+
+      const loaded = adapter.loadTasks('wf-1');
+      expect(loaded[0].execution.agentName).toBe('codex');
+    });
+
+    it('returns undefined when agentName is not set', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t1'));
+
+      const loaded = adapter.loadTasks('wf-1');
+      expect(loaded[0].execution.agentName).toBeUndefined();
+    });
+  });
+
   describe('saveTask null defaults', () => {
     it('stores SQL NULL (not string literals) for missing optional fields', () => {
       adapter.saveWorkflow(testWorkflow);

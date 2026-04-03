@@ -443,7 +443,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
         review_url, review_id, review_status, review_provider_id,
         is_fixing_with_ai,
         remote_target_id,
-        execution_agent
+        execution_agent,
+        agent_name
       ) VALUES (
         ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?, ?,
@@ -458,6 +459,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         ?, ?, ?, ?,
         ?, ?,
         ?, ?, ?, ?,
+        ?,
         ?,
         ?,
         ?
@@ -500,6 +502,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       exec.isFixingWithAI ? 1 : 0,
       cfg.remoteTargetId ?? null,
       cfg.executionAgent ?? null,
+      exec.agentName ?? null,
     ]);
   }
 
@@ -1154,6 +1157,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         branch: row.branch ?? undefined,
         commit: row.commit_hash ?? undefined,
         agentSessionId: row.agent_session_id || undefined,
+        agentName: row.agent_name ?? undefined,
         workspacePath: row.workspace_path ?? undefined,
         containerId: row.container_id ?? undefined,
         experiments: row.experiments ? JSON.parse(row.experiments) : undefined,

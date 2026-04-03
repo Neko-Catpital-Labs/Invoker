@@ -405,6 +405,46 @@ describe('ApprovalModal', () => {
     expect(screen.getByTestId('session-error')).toHaveTextContent('Could not load session');
   });
 
+  it('uses agent name in heading, label, reason pre-fill, and session fetch', async () => {
+    mockGetAgentSession.mockResolvedValue([
+      { role: 'user', content: 'Fix the bug', timestamp: '' },
+      { role: 'assistant', content: 'Done.', timestamp: '' },
+    ]);
+
+    render(
+      <ApprovalModal
+        task={makeTask({
+          execution: {
+            agentSessionId: 'sess-codex-789',
+            agentName: 'codex',
+            pendingFixError: 'Test failed',
+          },
+        })}
+        onApprove={vi.fn()}
+        onReject={vi.fn()}
+        onClose={vi.fn()}
+        initialAction="reject"
+      />,
+    );
+
+    // Heading uses "Codex Session"
+    expect(screen.getByText('Codex Session')).toBeInTheDocument();
+
+    // Assistant label uses "Codex:"
+    await waitFor(() => {
+      expect(screen.getByTestId('session-messages')).toBeInTheDocument();
+    });
+    expect(screen.getByText('Codex:')).toBeInTheDocument();
+
+    // Rejection reason pre-fill uses "Codex session:"
+    expect(screen.getByRole('textbox')).toHaveValue(
+      'Codex session: sess-codex-789\nOriginal error: Test failed',
+    );
+
+    // getAgentSession called with agentName
+    expect(mockGetAgentSession).toHaveBeenCalledWith('sess-codex-789', 'codex');
+  });
+
   it('does not fetch session when no agentSessionId', () => {
     render(
       <ApprovalModal

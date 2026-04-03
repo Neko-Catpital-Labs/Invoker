@@ -28,8 +28,12 @@ export function ApprovalModal({
   const isFixApproval = Boolean(task.execution.pendingFixError);
   const isMergeNode = Boolean(task.config.isMergeNode);
 
+  const agentLabel = task.execution.agentName
+    ? task.execution.agentName.charAt(0).toUpperCase() + task.execution.agentName.slice(1)
+    : 'Claude';
+
   const defaultReason = [
-    task.execution.agentSessionId && `Claude session: ${task.execution.agentSessionId}`,
+    task.execution.agentSessionId && `${agentLabel} session: ${task.execution.agentSessionId}`,
     isFixApproval && `Original error: ${task.execution.pendingFixError}`,
   ].filter(Boolean).join('\n');
 
@@ -43,7 +47,7 @@ export function ApprovalModal({
     if (!task.execution.agentSessionId) return;
     setSessionLoading(true);
     window.invoker
-      .getAgentSession(task.execution.agentSessionId)
+      .getAgentSession(task.execution.agentSessionId, task.execution.agentName)
       .then((msgs) => {
         setSessionMessages(msgs);
         setSessionLoading(false);
@@ -108,7 +112,7 @@ export function ApprovalModal({
         <div className="flex-1 overflow-y-auto min-h-0 px-6 py-4 space-y-4">
           {task.execution.agentSessionId && (
             <div className="bg-gray-700/50 rounded p-3" data-testid="claude-session-context">
-              <h3 className="text-sm font-medium text-gray-300 mb-2">Claude Session</h3>
+              <h3 className="text-sm font-medium text-gray-300 mb-2">{agentLabel} Session</h3>
               <p className="text-xs text-gray-500 mb-2 font-mono">{task.execution.agentSessionId}</p>
               {sessionLoading && <p className="text-xs text-gray-500" data-testid="session-loading">Loading conversation...</p>}
               {sessionMessages && (
@@ -116,7 +120,7 @@ export function ApprovalModal({
                   {sessionMessages.map((msg, i) => (
                     <div key={i} className="text-xs">
                       <span className={msg.role === 'user' ? 'text-blue-400' : 'text-green-400'}>
-                        {msg.role === 'user' ? 'Human' : 'Claude'}:
+                        {msg.role === 'user' ? 'Human' : agentLabel}:
                       </span>
                       <pre className="text-gray-300 whitespace-pre-wrap mt-0.5">{msg.content}</pre>
                     </div>
