@@ -2,6 +2,11 @@
  * CodexExecutionAgent — ExecutionAgent implementation for OpenAI Codex CLI.
  *
  * Agents provide command specs; familiars own the spawn lifecycle.
+ *
+ * Known issue: `codex exec --json` exits 0 when the agent turn completes,
+ * NOT when the task succeeds. Codex can fail to verify its fix (e.g. EPERM
+ * blocking test execution) and still exit 0. Callers that check only the
+ * exit code will treat an unverified fix as successful.
  */
 
 import { randomUUID } from 'node:crypto';
