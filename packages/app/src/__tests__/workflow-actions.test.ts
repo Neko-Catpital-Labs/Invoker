@@ -12,6 +12,7 @@ import {
   bumpGenerationAndRecreate,
   recreateWorkflow,
   recreateTask,
+  cancelWorkflow,
   restartTask,
   approveTask,
   rejectTask,
@@ -149,6 +150,21 @@ describe('recreateTask', () => {
         orchestrator: orchestrator as unknown as Orchestrator,
       }),
     ).toThrow('Task missing-task not found');
+  });
+});
+
+describe('cancelWorkflow', () => {
+  it('delegates to orchestrator.cancelWorkflow', () => {
+    const orchestrator = {
+      cancelWorkflow: vi.fn(() => ({ cancelled: ['task-a'], runningCancelled: ['task-a'] })),
+    };
+
+    const result = cancelWorkflow('wf-1', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+    });
+
+    expect(orchestrator.cancelWorkflow).toHaveBeenCalledWith('wf-1');
+    expect(result).toEqual({ cancelled: ['task-a'], runningCancelled: ['task-a'] });
   });
 });
 

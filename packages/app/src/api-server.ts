@@ -24,6 +24,7 @@
  *   POST   /api/tasks/:id/edit-type    body: { familiarType, remoteTargetId? }
  *   POST   /api/tasks/:id/edit-agent   body: { agent }
  *   POST   /api/workflows/:id/restart
+ *   POST   /api/workflows/:id/cancel
  *   POST   /api/workflows/:id/merge-mode  body: { mode }
  *   DELETE /api/workflows/:id
  */
@@ -34,6 +35,7 @@ import type { SQLiteAdapter } from '@invoker/persistence';
 import type { FamiliarRegistry, TaskExecutor } from '@invoker/executors';
 import {
   recreateWorkflow as sharedRecreateWorkflow,
+  cancelWorkflow as sharedCancelWorkflow,
   restartTask as sharedRestartTask,
   rejectTask as sharedRejectTask,
   provideInput as sharedProvideInput,
@@ -50,6 +52,7 @@ export interface ApiServerDeps {
   taskExecutor: TaskExecutor;
   killRunningTask?: (taskId: string) => Promise<void>;
   cancelTask?: (taskId: string) => Promise<{ cancelled: string[]; runningCancelled: string[] }>;
+  cancelWorkflow?: (workflowId: string) => Promise<{ cancelled: string[]; runningCancelled: string[] }>;
 }
 
 export interface ApiServer {
@@ -104,7 +107,15 @@ function serializeTask(task: any): any {
 }
 
 export function startApiServer(deps: ApiServerDeps): ApiServer {
-  const { orchestrator, persistence, familiarRegistry, taskExecutor, killRunningTask, cancelTask } = deps;
+  const {
+    orchestrator,
+    persistence,
+    familiarRegistry,
+    taskExecutor,
+    killRunningTask,
+    cancelTask,
+    cancelWorkflow,
+  } = deps;
   const port = parseInt(process.env.INVOKER_API_PORT ?? '4100', 10);
 
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
@@ -241,6 +252,23 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
           json(res, 200, { ok: true, workflowId, action: 'restarted', tasksStarted: runnable.length });
         } catch (err) {
           json(res, 400, { error: err instanceof Error ? err.message : String(err) });
+        }
+        return;
+      }
+
+      // POST /api/workflows/:id/cancel
+      const wfCancelMatch = path.match(/^\/api\/workflows\/([^/]+)\/cancel$/);
+      if (method === 'POST' && wfCancelMatch) {
+        const workflowId = decodeURIComponent(wfCancelMatch[1]);
+        try {
+          const result = cancelWorkflow
+            ? await cancelWorkflow(workflowId)
+            : sharedCancelWorkflow(workflowId, { orchestrator });
+          json(res, 200, { ok: true, ...result });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          const statusCode = message.includes('not found') ? 404 : 400;
+          json(res, statusCode, { error: message });
         }
         return;
       }

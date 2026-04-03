@@ -259,6 +259,7 @@ export interface InvokerAPI {
 
   // Cancel task with DAG cascade
   cancelTask: (taskId: string) => Promise<{ cancelled: string[]; runningCancelled: string[] }>;
+  cancelWorkflow: (workflowId: string) => Promise<{ cancelled: string[]; runningCancelled: string[] }>;
 
   // Queue status
   getQueueStatus: () => Promise<{

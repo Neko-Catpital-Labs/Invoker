@@ -1776,6 +1776,63 @@ export class Orchestrator {
   }
 
   /**
+   * Cancel all active tasks in a workflow.
+   * Terminal tasks (completed/stale) are preserved as-is.
+   */
+  cancelWorkflow(workflowId: string): { cancelled: string[]; runningCancelled: string[] } {
+    this.refreshFromDb();
+
+    const allTasks = this.stateMachine.getAllTasks().filter(
+      (t) => t.config.workflowId === workflowId,
+    );
+    if (allTasks.length === 0) {
+      throw new Error(`No tasks found for workflow ${workflowId}`);
+    }
+
+    const cancellable = new Set([
+      'pending',
+      'running',
+      'fixing_with_ai',
+      'blocked',
+      'needs_input',
+      'awaiting_approval',
+    ]);
+
+    const cancelled: string[] = [];
+    const runningCancelled: string[] = [];
+
+    for (const task of allTasks) {
+      if (!cancellable.has(task.status)) continue;
+
+      const id = task.id;
+      const wasRunning = task.status === 'running' || task.status === 'fixing_with_ai';
+
+      this.deferredTaskIds.delete(id);
+      if (wasRunning) {
+        this.scheduler.completeJob(id);
+        runningCancelled.push(id);
+      } else {
+        this.scheduler.removeJob(id);
+      }
+
+      const changes: TaskStateChanges = {
+        status: 'failed',
+        execution: {
+          error: 'Cancelled by user (workflow)',
+          completedAt: new Date(),
+        },
+      };
+      this.writeAndSync(id, changes);
+      this.persistence.logEvent?.(id, 'task.cancelled', changes);
+      this.messageBus.publish(TASK_DELTA_CHANNEL, { type: 'updated', taskId: id, changes });
+      cancelled.push(id);
+    }
+
+    this.checkWorkflowCompletion();
+    return { cancelled, runningCancelled };
+  }
+
+  /**
    * Defer a running task back to pending when a resource limit is hit.
    * The task is re-enqueued when another task completes and frees a slot.
    */

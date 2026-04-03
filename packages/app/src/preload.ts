@@ -97,6 +97,8 @@ const api: InvokerAPI = {
   checkPrStatus: () => ipcRenderer.invoke('invoker:check-pr-status'),
   cancelTask: (taskId: string) =>
     ipcRenderer.invoke('invoker:cancel-task', taskId),
+  cancelWorkflow: (workflowId: string) =>
+    ipcRenderer.invoke('invoker:cancel-workflow', workflowId),
   getQueueStatus: () => ipcRenderer.invoke('invoker:get-queue-status'),
 };
 

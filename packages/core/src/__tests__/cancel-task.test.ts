@@ -243,6 +243,64 @@ describe('cancelTask', () => {
   });
 });
 
+describe('cancelWorkflow', () => {
+  let orchestrator: Orchestrator;
+  let persistence: InMemoryPersistence;
+  let bus: InMemoryBus;
+
+  beforeEach(() => {
+    persistence = new InMemoryPersistence();
+    bus = new InMemoryBus();
+
+    orchestrator = new Orchestrator({
+      persistence,
+      messageBus: bus,
+      maxConcurrency: 3,
+    });
+  });
+
+  it('cancels active tasks but keeps completed tasks unchanged', () => {
+    orchestrator.loadPlan(simplePlan());
+    orchestrator.startExecution();
+    orchestrator.handleWorkerResponse(
+      makeResponse({ actionId: 'a', status: 'completed', outputs: { exitCode: 0 } }),
+    );
+    const wfId = orchestrator.getTask('a')!.config.workflowId!;
+
+    const result = orchestrator.cancelWorkflow(wfId);
+
+    expect(orchestrator.getTask('a')!.status).toBe('completed');
+    expect(orchestrator.getTask('b')!.status).toBe('failed');
+    expect(orchestrator.getTask('c')!.status).toBe('failed');
+    expect(result.cancelled).not.toContain(sid(orchestrator, 0, 'a'));
+    expect(result.cancelled).toContain(sid(orchestrator, 0, 'b'));
+    expect(result.cancelled).toContain(sid(orchestrator, 0, 'c'));
+  });
+
+  it('returns running tasks in runningCancelled', () => {
+    orchestrator.loadPlan(simplePlan());
+    orchestrator.startExecution();
+    const wfId = orchestrator.getTask('a')!.config.workflowId!;
+
+    const result = orchestrator.cancelWorkflow(wfId);
+
+    expect(result.runningCancelled).toContain(sid(orchestrator, 0, 'a'));
+    expect(orchestrator.getTask('a')!.execution.error).toBe('Cancelled by user (workflow)');
+  });
+
+  it('throws for unknown workflow id', () => {
+    orchestrator.loadPlan(simplePlan());
+    expect(() => orchestrator.cancelWorkflow('wf-missing')).toThrow('No tasks found for workflow wf-missing');
+  });
+
+  it('marks workflow failed after cancellation settles', () => {
+    orchestrator.loadPlan(simplePlan());
+    const wfId = orchestrator.getTask('a')!.config.workflowId!;
+    orchestrator.cancelWorkflow(wfId);
+    expect(persistence.workflows.get(wfId)?.status).toBe('failed');
+  });
+});
+
 describe('getQueueStatus', () => {
   let orchestrator: Orchestrator;
   let persistence: InMemoryPersistence;

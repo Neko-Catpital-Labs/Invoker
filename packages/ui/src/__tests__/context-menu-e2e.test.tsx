@@ -155,4 +155,22 @@ describe('Context menu (component)', () => {
       expect(screen.queryByText('Restart Task')).not.toBeInTheDocument();
     });
   });
+
+  it('shows and triggers Cancel Workflow', async () => {
+    await setupAndRightClick();
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+    await waitFor(() => {
+      expect(screen.getByText('Cancel Workflow')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByText('Cancel Workflow'));
+
+    await waitFor(() => {
+      expect(mock.api.cancelWorkflow).toHaveBeenCalledWith('wf-1');
+      expect(screen.queryByText('Restart Task')).not.toBeInTheDocument();
+    });
+
+    confirmSpy.mockRestore();
+  });
 });

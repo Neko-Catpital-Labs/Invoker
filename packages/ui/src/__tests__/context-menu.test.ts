@@ -220,4 +220,30 @@ describe('ContextMenu visibility logic', () => {
       }
     });
   });
+
+  describe('Cancel Workflow visibility', () => {
+    it('is visible for any node with a workflowId', () => {
+      const task = makeTask({ id: 'regular-task', workflowId: 'wf-1' });
+      const onCancelWorkflow = vi.fn();
+
+      const canCancelWorkflow = !!task.config.workflowId && !!onCancelWorkflow;
+      expect(canCancelWorkflow).toBe(true);
+    });
+
+    it('is hidden when task has no workflowId', () => {
+      const task = makeTask({ id: 'orphan-task' });
+      const onCancelWorkflow = vi.fn();
+
+      const canCancelWorkflow = !!task.config.workflowId && !!onCancelWorkflow;
+      expect(canCancelWorkflow).toBe(false);
+    });
+
+    it('is hidden when onCancelWorkflow callback is not provided', () => {
+      const task = makeTask({ id: 'task-1', workflowId: 'wf-1' });
+      const onCancelWorkflow = undefined;
+
+      const canCancelWorkflow = !!task.config.workflowId && !!onCancelWorkflow;
+      expect(canCancelWorkflow).toBe(false);
+    });
+  });
 });

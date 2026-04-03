@@ -100,6 +100,7 @@ export function createMockInvoker(
     setMergeMode: vi.fn(async () => {}),
     checkPrStatuses: vi.fn(async () => {}),
     cancelTask: vi.fn(async () => ({ cancelled: [], runningCancelled: [] })),
+    cancelWorkflow: vi.fn(async () => ({ cancelled: [], runningCancelled: [] })),
     getQueueStatus: vi.fn(async () => ({
       maxConcurrency: 0,
       runningCount: 0,

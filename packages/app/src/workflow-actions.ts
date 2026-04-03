@@ -100,6 +100,13 @@ export function recreateTask(
   return deps.orchestrator.recreateTask(taskId);
 }
 
+export function cancelWorkflow(
+  workflowId: string,
+  deps: Pick<ActionDeps, 'orchestrator'>,
+): { cancelled: string[]; runningCancelled: string[] } {
+  return deps.orchestrator.cancelWorkflow(workflowId);
+}
+
 /**
  * Rebase-and-retry: refresh the pool mirror / origin base, remove managed
  * experiment/invoker branches in that mirror, bump generation, and restart the DAG.

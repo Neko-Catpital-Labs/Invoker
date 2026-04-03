@@ -72,6 +72,7 @@ let mocks: {
   familiarRegistry: Record<string, ReturnType<typeof vi.fn>>;
   taskExecutor: Record<string, ReturnType<typeof vi.fn>>;
   cancelTask: ReturnType<typeof vi.fn>;
+  cancelWorkflow: ReturnType<typeof vi.fn>;
   killRunningTask: ReturnType<typeof vi.fn>;
 };
 
@@ -112,6 +113,7 @@ function createMocks() {
       publishAfterFix: vi.fn().mockResolvedValue(undefined),
     },
     cancelTask: vi.fn().mockResolvedValue({ cancelled: ['task-1'], runningCancelled: ['task-1'] }),
+    cancelWorkflow: vi.fn().mockResolvedValue({ cancelled: ['task-1'], runningCancelled: ['task-1'] }),
     killRunningTask: vi.fn().mockResolvedValue(undefined),
   };
 }
@@ -126,6 +128,7 @@ beforeAll(async () => {
     familiarRegistry: mocks.familiarRegistry as any,
     taskExecutor: mocks.taskExecutor as any,
     cancelTask: mocks.cancelTask,
+    cancelWorkflow: mocks.cancelWorkflow,
     killRunningTask: mocks.killRunningTask,
   });
   // Wait for the server to start listening
@@ -153,6 +156,7 @@ beforeEach(() => {
     }
   }
   mocks.cancelTask.mockClear();
+  mocks.cancelWorkflow.mockClear();
   mocks.killRunningTask.mockClear();
 
   // Re-apply default return values after clear
@@ -174,6 +178,7 @@ beforeEach(() => {
   mocks.persistence.getEvents.mockReturnValue([{ taskId: 'task-1', eventType: 'started', timestamp: '2024-01-01' }]);
   mocks.persistence.getTaskOutput.mockReturnValue('hello world output');
   mocks.cancelTask.mockResolvedValue({ cancelled: ['task-1'], runningCancelled: ['task-1'] });
+  mocks.cancelWorkflow.mockResolvedValue({ cancelled: ['task-1'], runningCancelled: ['task-1'] });
   mocks.killRunningTask.mockResolvedValue(undefined);
   mocks.taskExecutor.executeTasks.mockResolvedValue(undefined);
   mocks.taskExecutor.publishAfterFix.mockResolvedValue(undefined);
@@ -306,6 +311,45 @@ describe('POST /api/tasks/:id/cancel', () => {
       expect(res.status).toBe(200);
       expect(res.body.ok).toBe(true);
       expect(noCancelMocks.orchestrator.cancelTask).toHaveBeenCalledWith('task-1');
+    } finally {
+      await noCancelApi.close();
+    }
+  });
+});
+
+describe('POST /api/workflows/:id/cancel', () => {
+  it('cancels workflow via cancelWorkflow callback', async () => {
+    const res = await request(port, 'POST', '/api/workflows/wf-1/cancel');
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(mocks.cancelWorkflow).toHaveBeenCalledWith('wf-1');
+  });
+
+  it('falls back to shared cancelWorkflow when callback not provided', async () => {
+    const noCancelMocks = createMocks();
+    noCancelMocks.orchestrator.cancelWorkflow = vi.fn(() => ({
+      cancelled: ['task-1'],
+      runningCancelled: ['task-1'],
+    }));
+    const noCancelApi = startApiServer({
+      orchestrator: noCancelMocks.orchestrator as any,
+      persistence: noCancelMocks.persistence as any,
+      familiarRegistry: noCancelMocks.familiarRegistry as any,
+      taskExecutor: noCancelMocks.taskExecutor as any,
+      killRunningTask: noCancelMocks.killRunningTask,
+      // no cancelWorkflow
+    });
+    await new Promise<void>((resolve) => {
+      if (noCancelApi.server.listening) resolve();
+      else noCancelApi.server.on('listening', resolve);
+    });
+    const noCancelPort = (noCancelApi.server.address() as any).port;
+
+    try {
+      const res = await request(noCancelPort, 'POST', '/api/workflows/wf-1/cancel');
+      expect(res.status).toBe(200);
+      expect(res.body.ok).toBe(true);
+      expect(noCancelMocks.orchestrator.cancelWorkflow).toHaveBeenCalledWith('wf-1');
     } finally {
       await noCancelApi.close();
     }

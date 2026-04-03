@@ -35,6 +35,7 @@ import {
   restartTask as sharedRestartTask,
   recreateWorkflow as sharedRecreateWorkflow,
   recreateTask as sharedRecreateTask,
+  cancelWorkflow as sharedCancelWorkflow,
   retryWorkflow as sharedRetryWorkflow,
   editTaskCommand as sharedEditTaskCommand,
   editTaskType as sharedEditTaskType,
@@ -417,6 +418,9 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
     case 'cancel':
       await headlessCancel(args[1], deps);
       break;
+    case 'cancel-workflow':
+      await headlessCancelWorkflow(args[1], deps);
+      break;
     case 'delete':
     case 'delete-workflow':
       await headlessDeleteWorkflow(args[1], deps);
@@ -529,6 +533,7 @@ ${BOLD}Configure:${RESET}
 
 ${BOLD}Lifecycle:${RESET}
   cancel <taskId>                                     Cancel task + all downstream
+  cancel-workflow <workflowId>                        Cancel all active tasks in a workflow
   delete <workflowId>                                 Delete a single workflow
   delete-all                                          Delete all workflows
   open-terminal <taskId>                              Open OS terminal for a task
@@ -958,6 +963,15 @@ async function headlessCancel(taskId: string, deps: HeadlessDeps): Promise<void>
 
   const result = deps.orchestrator.cancelTask(taskId);
   console.log(`Cancelled ${result.cancelled.length} task(s): [${result.cancelled.join(', ')}]`);
+  if (result.runningCancelled.length > 0) {
+    console.log(`Killed running: [${result.runningCancelled.join(', ')}]`);
+  }
+}
+
+async function headlessCancelWorkflow(workflowId: string, deps: HeadlessDeps): Promise<void> {
+  if (!workflowId) throw new Error('Missing workflowId. Usage: --headless cancel-workflow <workflowId>');
+  const result = sharedCancelWorkflow(workflowId, { orchestrator: deps.orchestrator });
+  console.log(`Cancelled ${result.cancelled.length} task(s) in workflow "${workflowId}": [${result.cancelled.join(', ')}]`);
   if (result.runningCancelled.length > 0) {
     console.log(`Killed running: [${result.runningCancelled.join(', ')}]`);
   }

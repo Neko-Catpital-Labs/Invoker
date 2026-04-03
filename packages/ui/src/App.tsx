@@ -232,6 +232,19 @@ export function App() {
     }
   }, []);
 
+  const handleCancelWorkflow = useCallback(async (workflowId: string) => {
+    setContextMenu(null);
+    const confirmed = window.confirm(
+      `Cancel workflow "${workflowId}"? This cancels all active tasks in this workflow.`
+    );
+    if (!confirmed) return;
+    try {
+      await window.invoker?.cancelWorkflow(workflowId);
+    } catch (err) {
+      console.error('Failed to cancel workflow:', err);
+    }
+  }, []);
+
   const closeContextMenu = useCallback(() => {
     setContextMenu(null);
   }, []);
@@ -548,6 +561,7 @@ export function App() {
           onDeleteWorkflow={handleDeleteWorkflow}
           onFix={handleFix}
           onCancel={handleCancelTask}
+          onCancelWorkflow={handleCancelWorkflow}
           onClose={closeContextMenu}
         />
       )}

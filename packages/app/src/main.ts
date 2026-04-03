@@ -80,6 +80,7 @@ import {
   rejectTask,
   recreateWorkflow as sharedRecreateWorkflow,
   recreateTask as sharedRecreateTask,
+  cancelWorkflow as sharedCancelWorkflow,
   retryWorkflow as sharedRetryWorkflow,
   resolveConflictAction,
   selectExperiments as sharedSelectExperiments,
@@ -518,6 +519,15 @@ function setupGuiMode(): void {
     return result;
   }
 
+  /** Cancel all active tasks in a workflow and kill any running processes. */
+  async function performCancelWorkflow(workflowId: string): Promise<{ cancelled: string[]; runningCancelled: string[] }> {
+    const result = sharedCancelWorkflow(workflowId, { orchestrator });
+    for (const id of result.runningCancelled) {
+      await killRunningTask(id);
+    }
+    return result;
+  }
+
   function relaunchOrphansAndStartReady(logPrefix: string): TaskState[] {
     const orphanRestarted: TaskState[] = [];
     for (const task of orchestrator.getAllTasks()) {
@@ -682,6 +692,8 @@ function setupGuiMode(): void {
       familiarRegistry,
       taskExecutor,
       killRunningTask,
+      cancelTask: performCancelTask,
+      cancelWorkflow: performCancelWorkflow,
     });
 
     const dbPath = path.join(resolveInvokerHomeRoot(), 'invoker.db');
@@ -1010,6 +1022,16 @@ function setupGuiMode(): void {
         return await performCancelTask(taskId);
       } catch (err) {
         console.error(`[ipc] cancel-task failed: ${err}`);
+        throw err;
+      }
+    });
+
+    ipcMain.handle('invoker:cancel-workflow', async (_event, workflowId: string) => {
+      console.log(`[ipc] cancel-workflow: "${workflowId}"`);
+      try {
+        return await performCancelWorkflow(workflowId);
+      } catch (err) {
+        console.error(`[ipc] cancel-workflow failed: ${err}`);
         throw err;
       }
     });
