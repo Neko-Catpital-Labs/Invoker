@@ -224,6 +224,7 @@ describe('ApprovalModal', () => {
         onClose={vi.fn()}
       />,
     );
+    // Should render only the Claude session block
     const sessionBlock = screen.getByTestId('claude-session-context');
     expect(sessionBlock).toBeInTheDocument();
     expect(sessionBlock).toHaveTextContent('sess-abc-123');
@@ -238,7 +239,7 @@ describe('ApprovalModal', () => {
     expect(screen.queryByTestId('fix-context')).not.toBeInTheDocument();
   });
 
-  it('renders no context blocks for fix approval with only error when no session ID', () => {
+  it('shows no context blocks for fix approval with only error when no session ID', () => {
     render(
       <ApprovalModal
         task={makeTask({
@@ -249,11 +250,11 @@ describe('ApprovalModal', () => {
         onClose={vi.fn()}
       />,
     );
-    // No session block
+    // No session block (no agentSessionId)
     expect(screen.queryByTestId('claude-session-context')).not.toBeInTheDocument();
-    // No fix context block
+    // No fix context block (removed in simplification)
     expect(screen.queryByTestId('fix-context')).not.toBeInTheDocument();
-    // But should still show the heading and button
+    // But should still show the heading and button for fix approval
     expect(screen.getByText('Approve AI Fix')).toBeInTheDocument();
     expect(screen.getByText('Approve Fix')).toBeInTheDocument();
   });
