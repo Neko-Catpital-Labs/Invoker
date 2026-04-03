@@ -1,100 +1,110 @@
 #!/usr/bin/env bash
-# Rebase and retry all workflows.
-#
-# Uses the headless CLI to query workflows and tasks (no direct sqlite3 dependency).
-# Picks a non-merge task from each workflow, then runs rebase-and-retry.
-#
-# Usage:
-#   bash scripts/rebase-retry-all.sh              # all workflows
-#   bash scripts/rebase-retry-all.sh --status running   # only running workflows
-#   bash scripts/rebase-retry-all.sh --status failed    # only failed workflows
-#   bash scripts/rebase-retry-all.sh --dry-run          # show what would run
 set -euo pipefail
 
+# Detect repo root
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
-# Auto-build if dist is missing
-if [[ ! -f "$REPO_ROOT/packages/app/dist/main.js" ]]; then
-  echo "dist/ not found — building..."
-  (cd "$REPO_ROOT" && pnpm --filter @invoker/app build)
-fi
+# Set Electron paths
+ELECTRON="$REPO_ROOT/packages/app/node_modules/.bin/electron"
+MAIN="$REPO_ROOT/packages/app/dist/main.js"
 
-# Helper: run a headless CLI command via run.sh
-headless() {
-  "$REPO_ROOT/run.sh" --headless "$@" 2>/dev/null
-}
-
-# Parse args
+# Parse arguments
 DRY_RUN=false
 STATUS_FILTER=""
+
 while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --dry-run) DRY_RUN=true; shift ;;
-    --status) STATUS_FILTER="$2"; shift 2 ;;
-    *) echo "Unknown arg: $1"; exit 1 ;;
+  case $1 in
+    --dry-run)
+      DRY_RUN=true
+      shift
+      ;;
+    --status)
+      STATUS_FILTER="$2"
+      shift 2
+      ;;
+    *)
+      echo "Unknown option: $1" >&2
+      echo "Usage: $0 [--dry-run] [--status <filter>]" >&2
+      exit 1
+      ;;
   esac
 done
 
-# Query workflow IDs via CLI (stdout is clean — no init logs)
-QUERY_ARGS=(query workflows --output label)
-if [[ -n "$STATUS_FILTER" ]]; then
-  QUERY_ARGS+=(--status "$STATUS_FILTER")
+# Handle Linux Electron sandbox detection
+unset ELECTRON_RUN_AS_NODE
+SANDBOX_FLAG=""
+if [ "$(uname)" = "Linux" ]; then
+  SANDBOX_BIN="$REPO_ROOT/node_modules/.pnpm/electron@*/node_modules/electron/dist/chrome-sandbox"
+  if ! stat -c '%U:%a' $SANDBOX_BIN 2>/dev/null | grep -q '^root:4755$'; then
+    SANDBOX_FLAG="--no-sandbox"
+  fi
+  export LIBGL_ALWAYS_SOFTWARE=1
 fi
 
-WORKFLOWS=$(headless "${QUERY_ARGS[@]}")
+# Helper functions
+headless() {
+  "$ELECTRON" "$MAIN" $SANDBOX_FLAG --headless "$@" 2>/dev/null
+}
 
-if [[ -z "$WORKFLOWS" ]]; then
-  echo "No workflows found."
+headless_workflow_ids() {
+  headless "$@" | grep -E '^wf-[0-9]+-[0-9]+$' || true
+}
+
+headless_task_ids() {
+  headless "$@" | grep '/' || true
+}
+
+# Query workflow IDs
+QUERY_CMD="query workflows --output label"
+if [ -n "$STATUS_FILTER" ]; then
+  QUERY_CMD="$QUERY_CMD --status $STATUS_FILTER"
+fi
+
+echo "Querying workflows..." >&2
+WORKFLOW_IDS=$(headless_workflow_ids $QUERY_CMD)
+
+if [ -z "$WORKFLOW_IDS" ]; then
+  echo "No workflows found." >&2
   exit 0
 fi
 
-# Count workflows
-TOTAL=$(echo "$WORKFLOWS" | wc -l | tr -d ' ')
-echo "Found $TOTAL workflow(s) to rebase-and-retry."
-echo ""
-
-IDX=0
-FAILED=0
+# Initialize counters
 SUCCEEDED=0
+FAILED=0
 SKIPPED=0
 
+# Process each workflow
 while IFS= read -r WF_ID; do
-  [[ -z "$WF_ID" ]] && continue
-  IDX=$((IDX + 1))
+  echo "Processing workflow: $WF_ID" >&2
 
-  # Get first non-merge task ID for this workflow
-  TASK_ID=$(headless query tasks --workflow "$WF_ID" --no-merge --output label | head -1)
+  # Get first non-merge task
+  TASK_ID=$(headless_task_ids query tasks --workflow "$WF_ID" --no-merge --output label | head -1)
 
-  if [[ -z "$TASK_ID" ]]; then
-    echo "[$IDX/$TOTAL] $WF_ID — no non-merge task found, skipping"
-    SKIPPED=$((SKIPPED + 1))
-    echo ""
-    continue
-  fi
-
-  echo "[$IDX/$TOTAL] $WF_ID"
-  echo "         task: $TASK_ID"
-
-  if $DRY_RUN; then
-    echo "         (dry-run) would run: rebase-and-retry $TASK_ID"
-    echo ""
+  if [ -z "$TASK_ID" ]; then
+    echo "  No non-merge tasks found, skipping" >&2
     SKIPPED=$((SKIPPED + 1))
     continue
   fi
 
-  if "$REPO_ROOT/run.sh" --headless rebase-and-retry "$TASK_ID" 2>&1; then
-    echo "         OK"
+  if [ "$DRY_RUN" = true ]; then
+    echo "  [DRY RUN] Would rebase-and-retry: $TASK_ID" >&2
     SUCCEEDED=$((SUCCEEDED + 1))
   else
-    echo "         FAILED (exit $?)"
-    FAILED=$((FAILED + 1))
+    echo "  Rebasing and retrying: $TASK_ID" >&2
+    if headless rebase-and-retry "$TASK_ID"; then
+      echo "  ✓ Success" >&2
+      SUCCEEDED=$((SUCCEEDED + 1))
+    else
+      echo "  ✗ Failed" >&2
+      FAILED=$((FAILED + 1))
+    fi
   fi
-  echo ""
-done <<< "$WORKFLOWS"
+done <<< "$WORKFLOW_IDS"
 
-echo "---"
-if $DRY_RUN; then
-  echo "Dry run complete. $TOTAL workflow(s) would be retried."
-else
-  echo "Done. $SUCCEEDED succeeded, $FAILED failed, $SKIPPED skipped."
-fi
+# Print summary
+echo "" >&2
+echo "Summary:" >&2
+echo "  Succeeded: $SUCCEEDED" >&2
+echo "  Failed: $FAILED" >&2
+echo "  Skipped: $SKIPPED" >&2
+echo "  Total: $((SUCCEEDED + FAILED + SKIPPED))" >&2
