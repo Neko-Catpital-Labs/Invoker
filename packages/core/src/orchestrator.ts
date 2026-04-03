@@ -1089,6 +1089,71 @@ export class Orchestrator {
   }
 
   /**
+   * Task-scoped recreate: reset the target task and all downstream dependents
+   * to pending with recreate-style execution clearing, then auto-start newly
+   * ready tasks within that affected subgraph.
+   */
+  recreateTask(taskId: string): TaskState[] {
+    this.refreshFromDb();
+    const task = this.stateGetTask(taskId);
+    if (!task) throw new Error(`Task ${taskId} not found`);
+
+    const rootId = task.id;
+    const allTasks = this.stateMachine.getAllTasks();
+    const taskMap = new Map(allTasks.map((t) => [t.id, t]));
+    const descendantIds = getTransitiveDependents(rootId, taskMap, () => false);
+    const toResetIds = [rootId, ...descendantIds];
+    const toResetSet = new Set(toResetIds);
+
+    const resetChanges: TaskStateChanges = {
+      status: 'pending',
+      config: { summary: undefined },
+      execution: {
+        startedAt: undefined,
+        completedAt: undefined,
+        error: undefined,
+        exitCode: undefined,
+        commit: undefined,
+        branch: undefined,
+        workspacePath: undefined,
+        lastHeartbeatAt: undefined,
+        reviewUrl: undefined,
+        reviewId: undefined,
+        reviewStatus: undefined,
+        reviewProviderId: undefined,
+        agentSessionId: undefined,
+        containerId: undefined,
+      },
+    };
+
+    console.log(
+      `[orchestrator] recreateTask: resetting ${toResetIds.length} task(s) rooted at ${rootId}`,
+    );
+
+    for (const id of toResetIds) {
+      const current = this.stateGetTask(id);
+      if (!current) continue;
+      this.writeAndSync(id, resetChanges);
+      this.persistence.logEvent?.(id, 'task.pending', resetChanges);
+      this.messageBus.publish(TASK_DELTA_CHANNEL, { type: 'updated', taskId: id, changes: resetChanges });
+
+      const wasRunning = current.status === 'running' || current.status === 'fixing_with_ai';
+      this.deferredTaskIds.delete(id);
+      if (wasRunning) {
+        this.scheduler.completeJob(id);
+      } else {
+        this.scheduler.removeJob(id);
+      }
+    }
+
+    const readyIds = this.stateMachine
+      .getReadyTasks()
+      .map((t) => t.id)
+      .filter((id) => toResetSet.has(id));
+    return this.autoStartReadyTasks(readyIds);
+  }
+
+  /**
    * Reset ALL tasks in a workflow to pending and auto-start ready ones.
    * Used when a rebase conflicts and the entire DAG needs to re-execute.
    */

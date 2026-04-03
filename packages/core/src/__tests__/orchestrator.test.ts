@@ -3278,6 +3278,86 @@ describe('Orchestrator', () => {
       expect(t.execution.lastAgentName).toBe('codex');
     });
 
+    it('recreateTask resets only target + downstream, leaves unrelated tasks unchanged', () => {
+      const testPersistence = new InMemoryPersistence();
+      const testBus = new InMemoryBus();
+      const wf = 'wf-recreate-task-scope';
+
+      testPersistence.saveTask(wf, {
+        id: 'A',
+        description: 'Root',
+        status: 'completed',
+        dependencies: [],
+        createdAt: new Date(),
+        config: { workflowId: wf },
+        execution: { branch: 'br-a', commit: 'a1', workspacePath: '/tmp/a', exitCode: 0 },
+      });
+      testPersistence.saveTask(wf, {
+        id: 'B',
+        description: 'Target',
+        status: 'completed',
+        dependencies: ['A'],
+        createdAt: new Date(),
+        config: { workflowId: wf },
+        execution: { branch: 'br-b', commit: 'b1', workspacePath: '/tmp/b', exitCode: 0 },
+      });
+      testPersistence.saveTask(wf, {
+        id: 'C',
+        description: 'Downstream',
+        status: 'completed',
+        dependencies: ['B'],
+        createdAt: new Date(),
+        config: { workflowId: wf },
+        execution: { branch: 'br-c', commit: 'c1', workspacePath: '/tmp/c', exitCode: 0 },
+      });
+      testPersistence.saveTask(wf, {
+        id: '__merge__wf-recreate-task-scope',
+        description: 'Merge gate',
+        status: 'completed',
+        dependencies: ['C'],
+        createdAt: new Date(),
+        config: { workflowId: wf, isMergeNode: true },
+        execution: { branch: 'br-merge', commit: 'm1', workspacePath: '/tmp/m', exitCode: 0 },
+      });
+      testPersistence.saveTask(wf, {
+        id: 'X',
+        description: 'Unrelated root',
+        status: 'completed',
+        dependencies: [],
+        createdAt: new Date(),
+        config: { workflowId: wf },
+        execution: { branch: 'br-x', commit: 'x1', workspacePath: '/tmp/x', exitCode: 0 },
+      });
+
+      const testOrchestrator = new Orchestrator({
+        persistence: testPersistence,
+        messageBus: testBus,
+        maxConcurrency: 3,
+      });
+
+      testOrchestrator.syncFromDb(wf);
+      testOrchestrator.recreateTask('B');
+
+      const b = testOrchestrator.getTask('B')!;
+      const c = testOrchestrator.getTask('C')!;
+      const merge = testOrchestrator.getTask('__merge__wf-recreate-task-scope')!;
+      const x = testOrchestrator.getTask('X')!;
+
+      expect(b.status === 'running' || b.status === 'pending').toBe(true);
+      expect(c.status).toBe('pending');
+      expect(merge.status).toBe('pending');
+      expect(x.status).toBe('completed');
+
+      expect(b.execution.branch).toBeUndefined();
+      expect(b.execution.workspacePath).toBeUndefined();
+      expect(c.execution.branch).toBeUndefined();
+      expect(c.execution.workspacePath).toBeUndefined();
+      expect(merge.execution.branch).toBeUndefined();
+      expect(merge.execution.workspacePath).toBeUndefined();
+      expect(x.execution.branch).toBe('br-x');
+      expect(x.execution.workspacePath).toBe('/tmp/x');
+    });
+
     it('drainScheduler sets lastHeartbeatAt when starting a task', () => {
       orchestrator.loadPlan({
         name: 'heartbeat-start-test',

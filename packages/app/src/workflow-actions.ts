@@ -97,15 +97,7 @@ export function recreateTask(
   taskId: string,
   deps: Pick<ActionDeps, 'persistence' | 'orchestrator'>,
 ): TaskState[] {
-  const task = deps.orchestrator.getTask(taskId);
-  if (!task) {
-    throw new Error(`Task ${taskId} not found`);
-  }
-  const workflowId = task.config.workflowId;
-  if (!workflowId) {
-    throw new Error(`Task ${taskId} has no workflowId`);
-  }
-  return recreateWorkflow(workflowId, deps);
+  return deps.orchestrator.recreateTask(taskId);
 }
 
 /**

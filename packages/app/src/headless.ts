@@ -510,7 +510,7 @@ ${BOLD}Execute:${RESET}
   restart <taskId>                                    Restart a single failed/stuck task
   restart <workflowId>                                Retry workflow: rerun failed, keep completed
   recreate <workflowId>                                Recreate workflow: wipe all state, new generation
-  recreate-task <taskId>                               Recreate owning workflow inferred from task
+  recreate-task <taskId>                               Recreate task + downstream (task-scoped reset)
   rebase <taskId>                                     Refresh pool base + nuclear restart
   fix <taskId> [claude|codex]                         Fix a failed task (default: claude)
   resolve-conflict <taskId> [claude|codex]            Resolve merge conflict + restart
@@ -782,7 +782,7 @@ async function headlessRecreateTask(taskId: string, deps: HeadlessDeps): Promise
   const started = sharedRecreateTask(taskId, { persistence: deps.persistence, orchestrator: deps.orchestrator });
   const runnable = started.filter(t => t.status === 'running');
   const workflowId = deps.orchestrator.getTask(taskId)?.config.workflowId;
-  console.log(`Recreate task "${taskId}" (workflow reset) — ${runnable.length} task(s) to execute (pool fetch skipped)`);
+  console.log(`Recreate task "${taskId}" (+ downstream) — ${runnable.length} task(s) to execute (pool fetch skipped)`);
   if (runnable.length === 0) return;
 
   const te = createHeadlessExecutor(deps);
