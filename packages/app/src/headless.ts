@@ -34,6 +34,7 @@ import {
   resolveConflictAction,
   restartTask as sharedRestartTask,
   recreateWorkflow as sharedRecreateWorkflow,
+  recreateTask as sharedRecreateTask,
   retryWorkflow as sharedRetryWorkflow,
   editTaskCommand as sharedEditTaskCommand,
   editTaskType as sharedEditTaskType,
@@ -371,6 +372,9 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
     case 'recreate':
       await headlessRecreateWorkflow(args[1], deps);
       break;
+    case 'recreate-task':
+      await headlessRecreateTask(args[1], deps);
+      break;
     case 'rebase':
       await headlessRebaseAndRetry(args[1], deps);
       break;
@@ -506,6 +510,7 @@ ${BOLD}Execute:${RESET}
   restart <taskId>                                    Restart a single failed/stuck task
   restart <workflowId>                                Retry workflow: rerun failed, keep completed
   recreate <workflowId>                                Recreate workflow: wipe all state, new generation
+  recreate-task <taskId>                               Recreate owning workflow inferred from task
   rebase <taskId>                                     Refresh pool base + nuclear restart
   fix <taskId> [claude|codex]                         Fix a failed task (default: claude)
   resolve-conflict <taskId> [claude|codex]            Resolve merge conflict + restart
@@ -768,6 +773,28 @@ async function headlessRecreateWorkflow(workflowId: string, deps: HeadlessDeps):
   await waitForCompletion(deps.orchestrator, workflowId, undefined);
 }
 
+async function headlessRecreateTask(taskId: string, deps: HeadlessDeps): Promise<void> {
+  if (!taskId) {
+    throw new Error('Missing arguments. Usage: --headless recreate-task <taskId>');
+  }
+  taskId = restoreWorkflowForTask(taskId, deps).resolvedTaskId;
+
+  const started = sharedRecreateTask(taskId, { persistence: deps.persistence, orchestrator: deps.orchestrator });
+  const runnable = started.filter(t => t.status === 'running');
+  const workflowId = deps.orchestrator.getTask(taskId)?.config.workflowId;
+  console.log(`Recreate task "${taskId}" (workflow reset) — ${runnable.length} task(s) to execute (pool fetch skipped)`);
+  if (runnable.length === 0) return;
+
+  const te = createHeadlessExecutor(deps);
+  remoteFetchForPool.enabled = false;
+  try {
+    await te.executeTasks(runnable);
+  } finally {
+    remoteFetchForPool.enabled = true;
+  }
+  await waitForCompletion(deps.orchestrator, workflowId, undefined);
+}
+
 async function headlessRetryWorkflow(workflowId: string, deps: HeadlessDeps): Promise<void> {
   if (!workflowId) {
     throw new Error('Missing arguments. Usage: --headless restart <workflowId>');
@@ -880,13 +907,38 @@ async function headlessSession(taskId: string | undefined, deps: Pick<HeadlessDe
   const task = deps.orchestrator.getTask(taskId);
   if (!task) throw new Error(`Task "${taskId}" not found`);
 
-  const sessionId = task.execution.agentSessionId;
+  let sessionId = task.execution.agentSessionId ?? task.execution.lastAgentSessionId;
+  let agentName = task.execution.agentName ?? task.execution.lastAgentName ?? 'claude';
+
+  // Fallback: if current execution dropped agentSessionId, recover the most
+  // recent session from task event payloads.
+  if (!sessionId) {
+    const events = deps.persistence.getEvents(taskId) ?? [];
+    for (let i = events.length - 1; i >= 0; i -= 1) {
+      const payload = events[i].payload;
+      if (!payload) continue;
+      try {
+        const parsed = JSON.parse(payload);
+        const exec = parsed?.execution;
+        if (exec?.agentSessionId) {
+          sessionId = String(exec.agentSessionId);
+          if (exec.agentName) {
+            agentName = String(exec.agentName);
+          }
+          console.log(`Recovered agent session from event log: ${sessionId}`);
+          break;
+        }
+      } catch {
+        // Ignore malformed payload JSON
+      }
+    }
+  }
+
   if (!sessionId) {
     console.log(`No agent session for task "${taskId}"`);
     return;
   }
 
-  const agentName = task.execution.agentName ?? 'claude';
   console.log(`agent=${agentName} sessionId=${sessionId}`);
 
   const allTasks = deps.orchestrator.getAllTasks();
@@ -917,6 +969,7 @@ async function headlessOpenTerminal(taskId: string, deps: HeadlessDeps): Promise
     taskId,
     persistence: deps.persistence,
     familiarRegistry: deps.familiarRegistry,
+    executionAgentRegistry: deps.executionAgentRegistry,
     repoRoot: deps.repoRoot,
     runningTaskReason: 'Task is still running. View output in logs.',
   });
@@ -1059,6 +1112,33 @@ export async function tryDelegateRun(planPath: string, messageBus: MessageBus, w
  */
 export async function tryDelegateResume(workflowId: string, messageBus: MessageBus, waitForApproval?: boolean): Promise<boolean> {
   return tryDelegate('headless.resume', { workflowId }, messageBus, waitForApproval);
+}
+
+/**
+ * Try to delegate a mutating headless command to a GUI process.
+ * Returns true if delegated, false if no GUI is available.
+ */
+export async function tryDelegateExec(args: string[], messageBus: MessageBus, waitForApproval?: boolean): Promise<boolean> {
+  const DELEGATION_TIMEOUT = Symbol('delegation-timeout');
+  const timeoutPromise = new Promise<typeof DELEGATION_TIMEOUT>((_, reject) => {
+    setTimeout(() => reject(DELEGATION_TIMEOUT), 5000);
+  });
+
+  try {
+    await Promise.race([
+      messageBus.request('headless.exec', { args, waitForApproval }),
+      timeoutPromise,
+    ]);
+    return true;
+  } catch (err) {
+    if (err === DELEGATION_TIMEOUT) {
+      return false;
+    }
+    if (err instanceof Error && err.message.includes('No request handler registered for channel')) {
+      return false;
+    }
+    throw err;
+  }
 }
 
 /**

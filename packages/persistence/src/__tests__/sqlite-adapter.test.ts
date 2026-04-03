@@ -260,6 +260,29 @@ describe('SQLiteAdapter', () => {
       const loaded = adapter.loadTasks('wf-1');
       expect(loaded[0].execution.agentSessionId).toBeUndefined();
     });
+
+    it('round-trips lastAgentSessionId and lastAgentName through save/load', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask(
+        'wf-1',
+        makeTask('t1', { execution: { lastAgentSessionId: 'sess-last-1', lastAgentName: 'codex' } }),
+      );
+
+      const loaded = adapter.loadTasks('wf-1');
+      expect(loaded[0].execution.lastAgentSessionId).toBe('sess-last-1');
+      expect(loaded[0].execution.lastAgentName).toBe('codex');
+    });
+
+    it('persists lastAgentSessionId and lastAgentName via updateTask', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t1'));
+
+      adapter.updateTask('t1', { execution: { lastAgentSessionId: 'sess-last-2', lastAgentName: 'claude' } });
+
+      const loaded = adapter.loadTasks('wf-1');
+      expect(loaded[0].execution.lastAgentSessionId).toBe('sess-last-2');
+      expect(loaded[0].execution.lastAgentName).toBe('claude');
+    });
   });
 
   describe('agentName persistence', () => {
@@ -383,6 +406,13 @@ describe('SQLiteAdapter', () => {
       adapter.saveTask('wf-1', makeTask('t1'));
 
       expect(adapter.getAgentSessionId('t1')).toBeNull();
+    });
+
+    it('falls back to lastAgentSessionId when agentSessionId is absent', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t1', { execution: { lastAgentSessionId: 'sess-last-lookup' } }));
+
+      expect(adapter.getAgentSessionId('t1')).toBe('sess-last-lookup');
     });
 
     it('returns null for non-existent task', () => {

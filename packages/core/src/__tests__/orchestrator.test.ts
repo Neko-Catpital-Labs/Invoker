@@ -942,6 +942,36 @@ describe('Orchestrator', () => {
       expect(delta!.type === 'updated' && delta!.changes.config?.familiarType).toBe('worktree');
       expect(delta!.type === 'updated' && delta!.changes.execution?.reviewUrl).toBe('https://github.com/owner/repo/pull/1');
     });
+
+    it('preserves existing agent session metadata when not provided in additionalChanges', () => {
+      orchestrator.loadPlan({
+        name: 'awaiting-agent-preserve-test',
+        tasks: [
+          { id: 'a1', description: 'Task' },
+        ],
+      });
+      orchestrator.startExecution();
+      persistence.updateTask('a1', {
+        execution: {
+          agentSessionId: 'sess-merge-fix-1',
+          agentName: 'codex',
+        },
+      });
+
+      orchestrator.setTaskAwaitingApproval('a1', {
+        execution: {
+          branch: 'plan/feature',
+          workspacePath: '/tmp/wt',
+        },
+      });
+
+      const task = orchestrator.getTask('a1')!;
+      expect(task.status).toBe('awaiting_approval');
+      expect(task.execution.agentSessionId).toBe('sess-merge-fix-1');
+      expect(task.execution.agentName).toBe('codex');
+      expect(task.execution.branch).toBe('plan/feature');
+      expect(task.execution.workspacePath).toBe('/tmp/wt');
+    });
   });
 
   // ── approve / reject ───────────────────────────────────
@@ -3210,7 +3240,7 @@ describe('Orchestrator', () => {
       expect(mergeTask.execution.reviewStatus).toBeUndefined();
     });
 
-    it('recreateWorkflow clears agentSessionId and containerId', () => {
+    it('recreateWorkflow clears agentSessionId/containerId but keeps durable lastAgentSessionId', () => {
       const testPersistence = new InMemoryPersistence();
       const testBus = new InMemoryBus();
       const wf = 'workflow-agent-session-clear';
@@ -3224,6 +3254,8 @@ describe('Orchestrator', () => {
         config: { workflowId: wf },
         execution: {
           agentSessionId: 'stale-session-uuid',
+          lastAgentSessionId: 'stale-session-uuid',
+          lastAgentName: 'codex',
           containerId: 'stale-container-id',
           commit: 'abc123',
           exitCode: 0,
@@ -3242,6 +3274,8 @@ describe('Orchestrator', () => {
       const t = testOrchestrator.getTask('t-sess')!;
       expect(t.execution.agentSessionId).toBeUndefined();
       expect(t.execution.containerId).toBeUndefined();
+      expect(t.execution.lastAgentSessionId).toBe('stale-session-uuid');
+      expect(t.execution.lastAgentName).toBe('codex');
     });
 
     it('drainScheduler sets lastHeartbeatAt when starting a task', () => {
@@ -4296,7 +4330,14 @@ describe('Orchestrator', () => {
     it('setFixAwaitingApproval delta includes agentSessionId from DB', () => {
       orchestrator.beginConflictResolution('f2');
       // Simulate conflict-resolver persisting sessionId directly to DB
-      persistence.updateTask('f2', { execution: { agentSessionId: 'sess-fix-1' } });
+      persistence.updateTask('f2', {
+        execution: {
+          agentSessionId: 'sess-fix-1',
+          lastAgentSessionId: 'sess-fix-1',
+          agentName: 'codex',
+          lastAgentName: 'codex',
+        },
+      });
       publishedDeltas = [];
 
       orchestrator.setFixAwaitingApproval('f2', 'test failed: expected 1 to be 2');
@@ -4306,7 +4347,11 @@ describe('Orchestrator', () => {
       );
       expect(delta).toBeDefined();
       expect((delta as any).changes.execution.agentSessionId).toBe('sess-fix-1');
+      expect((delta as any).changes.execution.lastAgentSessionId).toBe('sess-fix-1');
+      expect((delta as any).changes.execution.lastAgentName).toBe('codex');
       expect(orchestrator.getTask('f2')!.execution.agentSessionId).toBe('sess-fix-1');
+      expect(orchestrator.getTask('f2')!.execution.lastAgentSessionId).toBe('sess-fix-1');
+      expect(orchestrator.getTask('f2')!.execution.lastAgentName).toBe('codex');
     });
 
     it('pendingFixError is readable via getTask', () => {

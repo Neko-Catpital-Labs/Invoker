@@ -47,6 +47,28 @@ describe('parseCodexSessionJsonl', () => {
     });
   });
 
+  it('extracts user messages from response_item input_text entries', () => {
+    const jsonl = [
+      JSON.stringify({
+        timestamp: '2026-03-31T10:00:01Z',
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          role: 'user',
+          content: [{ type: 'input_text', text: 'Please fix lint failures.' }],
+        },
+      }),
+    ].join('\n');
+
+    const msgs = parseCodexSessionJsonl(jsonl);
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0]).toEqual({
+      role: 'user',
+      content: 'Please fix lint failures.',
+      timestamp: '2026-03-31T10:00:01Z',
+    });
+  });
+
   it('joins multiple output_text blocks with newline', () => {
     const jsonl = JSON.stringify({
       timestamp: '2026-03-31T10:00:02Z',
@@ -98,10 +120,87 @@ describe('parseCodexSessionJsonl', () => {
     ];
 
     const msgs = parseCodexSessionJsonl(lines.join('\n'));
-    expect(msgs).toHaveLength(3);
-    expect(msgs[0]).toEqual({ role: 'user', content: 'Fix the merge conflict', timestamp: 'ts4' });
-    expect(msgs[1]).toEqual({ role: 'assistant', content: 'Looking at the conflicted files.', timestamp: 'ts5' });
-    expect(msgs[2]).toEqual({ role: 'assistant', content: 'Fixed the conflict.', timestamp: 'ts8' });
+    expect(msgs).toHaveLength(4);
+    expect(msgs[0]).toEqual({ role: 'user', content: 'env', timestamp: 'ts3' });
+    expect(msgs[1]).toEqual({ role: 'user', content: 'Fix the merge conflict', timestamp: 'ts4' });
+    expect(msgs[2]).toEqual({ role: 'assistant', content: 'Looking at the conflicted files.', timestamp: 'ts5' });
+    expect(msgs[3]).toEqual({ role: 'assistant', content: 'Fixed the conflict.', timestamp: 'ts8' });
+  });
+
+  it('extracts assistant messages from item.completed agent_message format', () => {
+    const lines = [
+      JSON.stringify({ type: 'thread.started', thread_id: '019d5193-197f-79a2-8e37-3551f55b67e7' }),
+      JSON.stringify({ type: 'turn.started' }),
+      JSON.stringify({
+        type: 'item.completed',
+        item: {
+          id: 'item_0',
+          type: 'agent_message',
+          text: 'I will inspect the repository state first.',
+        },
+      }),
+      JSON.stringify({
+        type: 'item.completed',
+        item: {
+          id: 'item_1',
+          type: 'agent_message',
+          text: 'The merge itself succeeded; PR creation failed with 422.',
+        },
+      }),
+    ];
+
+    const msgs = parseCodexSessionJsonl(lines.join('\n'));
+    expect(msgs).toHaveLength(2);
+    expect(msgs[0]).toEqual({
+      role: 'assistant',
+      content: 'I will inspect the repository state first.',
+      timestamp: '',
+    });
+    expect(msgs[1]).toEqual({
+      role: 'assistant',
+      content: 'The merge itself succeeded; PR creation failed with 422.',
+      timestamp: '',
+    });
+  });
+
+  it('normalizes mixed newer and legacy formats in encounter order', () => {
+    const lines = [
+      JSON.stringify({ type: 'thread.started', thread_id: '019d5193-197f-79a2-8e37-3551f55b67e7' }),
+      JSON.stringify({
+        timestamp: 'ts1',
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          role: 'user',
+          content: [{ type: 'input_text', text: 'Fix test failures.' }],
+        },
+      }),
+      JSON.stringify({
+        timestamp: 'ts2',
+        type: 'item.completed',
+        item: {
+          id: 'item_0',
+          type: 'agent_message',
+          text: 'I am inspecting the failing test first.',
+        },
+      }),
+      JSON.stringify({
+        timestamp: 'ts3',
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          role: 'assistant',
+          content: [{ type: 'output_text', text: 'Updated assertions and reran tests.' }],
+        },
+      }),
+    ];
+
+    const msgs = parseCodexSessionJsonl(lines.join('\n'));
+    expect(msgs).toEqual([
+      { role: 'user', content: 'Fix test failures.', timestamp: 'ts1' },
+      { role: 'assistant', content: 'I am inspecting the failing test first.', timestamp: 'ts2' },
+      { role: 'assistant', content: 'Updated assertions and reran tests.', timestamp: 'ts3' },
+    ]);
   });
 
   it('skips malformed lines gracefully', () => {

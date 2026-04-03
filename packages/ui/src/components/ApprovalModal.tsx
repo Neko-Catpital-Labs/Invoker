@@ -25,29 +25,98 @@ export function ApprovalModal({
   initialAction = 'approve',
   onFinish,
 }: ApprovalModalProps) {
+  const extractSessionFromEvents = (
+    events: Array<{ payload?: string }>,
+  ): { sessionId?: string; agentName?: string } => {
+    for (let i = events.length - 1; i >= 0; i -= 1) {
+      const raw = events[i]?.payload;
+      if (!raw) continue;
+      try {
+        const parsed = JSON.parse(raw);
+        const exec = parsed?.execution;
+        if (exec?.agentSessionId) {
+          return {
+            sessionId: String(exec.agentSessionId),
+            agentName: typeof exec.agentName === 'string' ? exec.agentName : undefined,
+          };
+        }
+      } catch {
+        // Ignore malformed event payloads
+      }
+    }
+    return {};
+  };
+
+  const extractSessionIdFromError = (err?: string): string | undefined => {
+    if (!err) return undefined;
+    const m = err.match(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i);
+    return m?.[0];
+  };
+
   const isFixApproval = Boolean(task.execution.pendingFixError);
   const isMergeNode = Boolean(task.config.isMergeNode);
+  const fallbackSessionId = extractSessionIdFromError(task.execution.pendingFixError);
+  const [eventSessionId, setEventSessionId] = useState<string | undefined>(undefined);
+  const [eventAgentName, setEventAgentName] = useState<string | undefined>(undefined);
+  const sessionId = task.execution.agentSessionId
+    ?? task.execution.lastAgentSessionId
+    ?? fallbackSessionId
+    ?? eventSessionId;
+  const effectiveAgentName = task.execution.agentName
+    ?? task.execution.lastAgentName
+    ?? eventAgentName;
 
-  const agentLabel = task.execution.agentName
-    ? task.execution.agentName.charAt(0).toUpperCase() + task.execution.agentName.slice(1)
+  const agentLabel = effectiveAgentName
+    ? effectiveAgentName.charAt(0).toUpperCase() + effectiveAgentName.slice(1)
     : 'Claude';
 
   const defaultReason = [
-    task.execution.agentSessionId && `${agentLabel} session: ${task.execution.agentSessionId}`,
+    sessionId && `${agentLabel} session: ${sessionId}`,
     isFixApproval && `Original error: ${task.execution.pendingFixError}`,
   ].filter(Boolean).join('\n');
 
   const [reason, setReason] = useState(defaultReason);
+  const [reasonTouched, setReasonTouched] = useState(false);
   const [showRejectInput, setShowRejectInput] = useState(initialAction === 'reject');
   const [sessionMessages, setSessionMessages] = useState<ClaudeMessage[] | null>(null);
   const [sessionLoading, setSessionLoading] = useState(false);
   const [sessionError, setSessionError] = useState(false);
 
   useEffect(() => {
-    if (!task.execution.agentSessionId) return;
-    setSessionLoading(true);
+    if (task.execution.agentSessionId || task.execution.lastAgentSessionId || fallbackSessionId) return;
+    let cancelled = false;
     window.invoker
-      .getAgentSession(task.execution.agentSessionId, task.execution.agentName)
+      .getEvents(task.id)
+      .then((events) => {
+        if (cancelled) return;
+        const recovered = extractSessionFromEvents(events as Array<{ payload?: string }>);
+        if (recovered.sessionId) {
+          setEventSessionId(recovered.sessionId);
+        }
+        if (recovered.agentName) {
+          setEventAgentName(recovered.agentName);
+        }
+      })
+      .catch(() => {
+        // Best-effort fallback only
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [task.id, task.execution.agentSessionId, task.execution.lastAgentSessionId, fallbackSessionId]);
+
+  useEffect(() => {
+    if (!reasonTouched) {
+      setReason(defaultReason);
+    }
+  }, [defaultReason, reasonTouched]);
+
+  useEffect(() => {
+    if (!sessionId) return;
+    setSessionLoading(true);
+    setSessionError(false);
+    window.invoker
+      .getAgentSession(sessionId, effectiveAgentName)
       .then((msgs) => {
         setSessionMessages(msgs);
         setSessionLoading(false);
@@ -56,7 +125,7 @@ export function ApprovalModal({
         setSessionError(true);
         setSessionLoading(false);
       });
-  }, [task.execution.agentSessionId]);
+  }, [sessionId, effectiveAgentName]);
 
   const handleApprove = () => {
     onApprove(task.id);
@@ -110,10 +179,10 @@ export function ApprovalModal({
 
         {/* Scrollable content */}
         <div className="flex-1 overflow-y-auto min-h-0 px-6 py-4 space-y-4">
-          {task.execution.agentSessionId && (
+          {sessionId && (
             <div className="bg-gray-700/50 rounded p-3" data-testid="claude-session-context">
               <h3 className="text-sm font-medium text-gray-300 mb-2">{agentLabel} Session</h3>
-              <p className="text-xs text-gray-500 mb-2 font-mono">{task.execution.agentSessionId}</p>
+              <p className="text-xs text-gray-500 mb-2 font-mono">{sessionId}</p>
               {sessionLoading && <p className="text-xs text-gray-500" data-testid="session-loading">Loading conversation...</p>}
               {sessionMessages && (
                 <div className="space-y-2" data-testid="session-messages">
@@ -147,7 +216,10 @@ export function ApprovalModal({
               </label>
               <textarea
                 value={reason}
-                onChange={(e) => setReason(e.target.value)}
+                onChange={(e) => {
+                  setReasonTouched(true);
+                  setReason(e.target.value);
+                }}
                 className="w-full bg-gray-700 border border-gray-600 rounded p-2 text-sm text-gray-100 placeholder-gray-500 focus:outline-none focus:border-gray-500"
                 rows={3}
                 placeholder="Why is this being rejected?"

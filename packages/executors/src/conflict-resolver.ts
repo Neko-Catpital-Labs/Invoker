@@ -298,7 +298,14 @@ export async function fixWithAgentImpl(
     if (output) {
       host.persistence.appendTaskOutput(taskId, `\n[Fix with ${remoteAgentBin} (remote)] Output:\n${output}`);
     }
-    host.persistence.updateTask(taskId, { execution: { agentSessionId: sessionId, agentName: remoteAgentBin } });
+    host.persistence.updateTask(taskId, {
+      execution: {
+        agentSessionId: sessionId,
+        lastAgentSessionId: sessionId,
+        agentName: remoteAgentBin,
+        lastAgentName: remoteAgentBin,
+      },
+    });
     console.log(`[fixWithAgent] Successfully applied remote fix for ${taskId} via ${remoteAgentBin} (session=${sessionId})`);
     return;
   }
@@ -318,13 +325,27 @@ export async function fixWithAgentImpl(
     if (output) {
       host.persistence.appendTaskOutput(taskId, `\n[Fix with ${agentLabel}] Output:\n${output}`);
     }
-    host.persistence.updateTask(taskId, { execution: { agentSessionId: sessionId, agentName: agentLabel } });
+    host.persistence.updateTask(taskId, {
+      execution: {
+        agentSessionId: sessionId,
+        lastAgentSessionId: sessionId,
+        agentName: agentLabel,
+        lastAgentName: agentLabel,
+      },
+    });
     console.log(`[fixWithAgent] Successfully applied fix for ${taskId} via ${agentLabel} (session=${sessionId})`);
   } catch (err: any) {
     // Persist session ID even on failure so the session can be audited
     const failedSessionId = err?.sessionId as string | undefined;
     if (failedSessionId) {
-      host.persistence.updateTask(taskId, { execution: { agentSessionId: failedSessionId, agentName: agentLabel } });
+      host.persistence.updateTask(taskId, {
+        execution: {
+          agentSessionId: failedSessionId,
+          lastAgentSessionId: failedSessionId,
+          agentName: agentLabel,
+          lastAgentName: agentLabel,
+        },
+      });
       console.log(`[fixWithAgent] Fix failed for ${taskId} via ${agentLabel}, session persisted (session=${failedSessionId})`);
     }
     throw err;

@@ -82,37 +82,60 @@ echo "==> Step 6: verify session content"
 FIRST_SESSION=$(echo "$SESSION_FILES" | head -1)
 echo "   Reading: $FIRST_SESSION"
 
-# Check session_meta on first line
+# Check first line type (current Codex starts with thread.started)
 FIRST_LINE=$(head -1 "$FIRST_SESSION")
 META_TYPE=$(echo "$FIRST_LINE" | python3 -c "import sys,json; print(json.loads(sys.stdin.read())['type'])" 2>/dev/null || echo "")
-if [ "$META_TYPE" != "session_meta" ]; then
-  echo "FAIL: first line is not session_meta (type=$META_TYPE)"
+if [ "$META_TYPE" != "thread.started" ] && [ "$META_TYPE" != "session_meta" ]; then
+  echo "FAIL: first line type is neither thread.started nor session_meta (type=$META_TYPE)"
   exit 1
 fi
-echo "   OK: session_meta on first line"
+echo "   OK: first line type = $META_TYPE"
 
-SESSION_UUID=$(echo "$FIRST_LINE" | python3 -c "import sys,json; print(json.loads(sys.stdin.read())['payload']['id'])" 2>/dev/null || echo "")
+SESSION_UUID=$(python3 - <<PYEOF
+import json
+path = "$FIRST_SESSION"
+session_id = ""
+with open(path, "r", encoding="utf-8") as f:
+    for line in f:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entry = json.loads(line)
+        except Exception:
+            continue
+        if entry.get("type") == "thread.started" and entry.get("thread_id"):
+            session_id = entry["thread_id"]
+            break
+        if entry.get("type") == "session_meta":
+            payload = entry.get("payload") or {}
+            if payload.get("id"):
+                session_id = payload["id"]
+                break
+print(session_id)
+PYEOF
+)
 echo "   Session UUID: $SESSION_UUID"
 
 # Check user message exists
-USER_MSG_COUNT=$(grep -c '"user_message"' "$FIRST_SESSION" || echo 0)
+USER_MSG_COUNT=$(grep -E -c '"user_message"|"role":"user"' "$FIRST_SESSION" || echo 0)
 if [ "$USER_MSG_COUNT" -lt 1 ]; then
   echo "FAIL: no user_message entries in session"
   exit 1
 fi
 echo "   OK: found $USER_MSG_COUNT user message(s)"
 
-# Check assistant message exists
-ASSISTANT_MSG_COUNT=$(grep -c '"output_text"' "$FIRST_SESSION" || echo 0)
+# Check assistant message exists (legacy output_text or newer agent_message)
+ASSISTANT_MSG_COUNT=$(grep -E -c '"output_text"|"type":"agent_message"' "$FIRST_SESSION" || echo 0)
 if [ "$ASSISTANT_MSG_COUNT" -lt 1 ]; then
-  echo "FAIL: no assistant (output_text) entries in session"
+  echo "FAIL: no assistant entries in session"
   exit 1
 fi
 echo "   OK: found $ASSISTANT_MSG_COUNT assistant message(s)"
 
 # ── Step 7: Verify headless session command can retrieve it ──
-echo "==> Step 7: verify --headless session retrieval"
-SESSION_OUTPUT=$(invoker_e2e_run_headless session e2e-g119-task 2>/dev/null || true)
+echo "==> Step 7: verify --headless query session retrieval"
+SESSION_OUTPUT=$(invoker_e2e_run_headless query session e2e-g119-task --output text 2>/dev/null || true)
 echo "   Raw output:"
 echo "$SESSION_OUTPUT" | while read -r line; do echo "       $line"; done
 

@@ -3910,7 +3910,14 @@ describe('TaskExecutor', () => {
       });
       (executor as any).spawnAgentFix = async () => ({ stdout: 'Fixed it', sessionId: 'sess-abc-123' });
       await executor.fixWithAgent('fix-task', 'error output');
-      expect(updateTask).toHaveBeenCalledWith('fix-task', { execution: { agentSessionId: 'sess-abc-123', agentName: 'claude' } });
+      expect(updateTask).toHaveBeenCalledWith('fix-task', {
+        execution: {
+          agentSessionId: 'sess-abc-123',
+          lastAgentSessionId: 'sess-abc-123',
+          agentName: 'claude',
+          lastAgentName: 'claude',
+        },
+      });
     });
 
     it('does not perform any git checkout', async () => {

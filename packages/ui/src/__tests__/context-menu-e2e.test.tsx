@@ -140,4 +140,19 @@ describe('Context menu (component)', () => {
       expect(screen.getByText('Rebase & Retry')).toBeInTheDocument();
     });
   });
+
+  it('shows and triggers Recreate from Task', async () => {
+    await setupAndRightClick();
+
+    await waitFor(() => {
+      expect(screen.getByText('Recreate from Task')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByText('Recreate from Task'));
+
+    await waitFor(() => {
+      expect(mock.api.recreateTask).toHaveBeenCalledWith('task-alpha');
+      expect(screen.queryByText('Restart Task')).not.toBeInTheDocument();
+    });
+  });
 });

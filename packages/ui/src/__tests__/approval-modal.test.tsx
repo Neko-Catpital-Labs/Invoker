@@ -19,16 +19,20 @@ function makeTask(overrides: Partial<TaskState> = {}): TaskState {
 // Mock window.invoker session fetchers
 const mockGetClaudeSession = vi.fn();
 const mockGetAgentSession = vi.fn();
+const mockGetEvents = vi.fn();
 
 beforeEach(() => {
   mockGetClaudeSession.mockReset();
   mockGetAgentSession.mockReset();
+  mockGetEvents.mockReset();
   // Default: resolve with null (no session found)
   mockGetClaudeSession.mockResolvedValue(null);
   mockGetAgentSession.mockResolvedValue(null);
+  mockGetEvents.mockResolvedValue([]);
   (window as any).invoker = {
     getClaudeSession: mockGetClaudeSession,
     getAgentSession: mockGetAgentSession,
+    getEvents: mockGetEvents,
   };
 });
 
@@ -445,6 +449,38 @@ describe('ApprovalModal', () => {
     expect(mockGetAgentSession).toHaveBeenCalledWith('sess-codex-789', 'codex');
   });
 
+  it('falls back to session UUID parsed from pendingFixError when agentSessionId is missing', async () => {
+    mockGetAgentSession.mockResolvedValue([
+      { role: 'assistant', content: 'Investigating...', timestamp: '' },
+    ]);
+
+    render(
+      <ApprovalModal
+        task={makeTask({
+          execution: {
+            agentName: 'codex',
+            pendingFixError: 'Post-fix PR prep failed (session=019d5193-197f-79a2-8e37-3551f55b67e7)',
+          },
+        })}
+        onApprove={vi.fn()}
+        onReject={vi.fn()}
+        onClose={vi.fn()}
+        initialAction="reject"
+      />,
+    );
+
+    expect(screen.getByText('Codex Session')).toBeInTheDocument();
+    expect(screen.getByText('019d5193-197f-79a2-8e37-3551f55b67e7')).toBeInTheDocument();
+    expect(screen.getByRole('textbox')).toHaveValue(
+      'Codex session: 019d5193-197f-79a2-8e37-3551f55b67e7\nOriginal error: Post-fix PR prep failed (session=019d5193-197f-79a2-8e37-3551f55b67e7)',
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('session-messages')).toBeInTheDocument();
+    });
+    expect(mockGetAgentSession).toHaveBeenCalledWith('019d5193-197f-79a2-8e37-3551f55b67e7', 'codex');
+  });
+
   it('does not fetch session when no agentSessionId', () => {
     render(
       <ApprovalModal
@@ -455,6 +491,63 @@ describe('ApprovalModal', () => {
       />,
     );
     expect(mockGetAgentSession).not.toHaveBeenCalled();
+  });
+
+  it('uses lastAgentSessionId when agentSessionId is missing', async () => {
+    mockGetAgentSession.mockResolvedValue([
+      { role: 'assistant', content: 'Recovered durable session.', timestamp: '' },
+    ]);
+
+    render(
+      <ApprovalModal
+        task={makeTask({
+          execution: { lastAgentSessionId: 'sess-last-456', lastAgentName: 'codex' },
+        })}
+        onApprove={vi.fn()}
+        onReject={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mockGetAgentSession).toHaveBeenCalledWith('sess-last-456', 'codex');
+    });
+    expect(mockGetEvents).not.toHaveBeenCalled();
+  });
+
+  it('falls back to latest agentSessionId from task events when execution has none', async () => {
+    mockGetEvents.mockResolvedValue([
+      {
+        id: 1,
+        taskId: 'task-1',
+        eventType: 'task.awaiting_approval',
+        payload: JSON.stringify({
+          status: 'awaiting_approval',
+          execution: { agentSessionId: 'sess-from-events-123', agentName: 'codex' },
+        }),
+        createdAt: '2026-04-03 00:00:00',
+      },
+    ]);
+    mockGetAgentSession.mockResolvedValue([
+      { role: 'assistant', content: 'Recovered from event history.', timestamp: '' },
+    ]);
+
+    render(
+      <ApprovalModal
+        task={makeTask({ execution: {} })}
+        onApprove={vi.fn()}
+        onReject={vi.fn()}
+        onClose={vi.fn()}
+        initialAction="reject"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mockGetAgentSession).toHaveBeenCalledWith('sess-from-events-123', 'codex');
+    });
+
+    expect(screen.getByText('sess-from-events-123')).toBeInTheDocument();
+    expect(screen.getByText('Codex Session')).toBeInTheDocument();
   });
 
   // ── Approve callback ──────────────────────────────────────

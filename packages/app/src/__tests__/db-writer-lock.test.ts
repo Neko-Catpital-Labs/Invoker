@@ -6,6 +6,8 @@ import { acquireDbWriterLock, releaseDbWriterLock } from '../db-writer-lock.js';
 
 describe('db writer lock', () => {
   it('prevents a second writer lock for the same DB root', () => {
+    const prev = process.env.INVOKER_ENABLE_DB_WRITER_LOCK;
+    process.env.INVOKER_ENABLE_DB_WRITER_LOCK = '1';
     const dir = mkdtempSync(join(tmpdir(), 'invoker-lock-'));
     try {
       const first = acquireDbWriterLock(dir);
@@ -19,6 +21,8 @@ describe('db writer lock', () => {
       expect(second).not.toBeNull();
       releaseDbWriterLock(second);
     } finally {
+      if (prev === undefined) delete process.env.INVOKER_ENABLE_DB_WRITER_LOCK;
+      else process.env.INVOKER_ENABLE_DB_WRITER_LOCK = prev;
       rmSync(dir, { recursive: true, force: true });
     }
   });

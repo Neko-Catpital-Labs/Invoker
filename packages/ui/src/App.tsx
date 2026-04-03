@@ -170,6 +170,15 @@ export function App() {
     }
   }, []);
 
+  const handleRecreateTask = useCallback(async (taskId: string) => {
+    setContextMenu(null);
+    try {
+      await window.invoker?.recreateTask(taskId);
+    } catch (err) {
+      console.error('Recreate from Task failed:', err);
+    }
+  }, []);
+
   const handleDeleteWorkflow = useCallback(async (workflowId: string) => {
     setContextMenu(null);
     const confirmed = window.confirm(
@@ -534,6 +543,7 @@ export function App() {
           onOpenTerminal={handleOpenTerminal}
           onRebaseAndRetry={handleRebaseAndRetry}
           onRetryWorkflow={handleRetryWorkflow}
+          onRecreateTask={handleRecreateTask}
           onRecreateWorkflow={handleRecreateWorkflow}
           onDeleteWorkflow={handleDeleteWorkflow}
           onFix={handleFix}

@@ -28,6 +28,31 @@ export function parseCodexSessionJsonl(raw: string): AgentMessage[] {
       const entry = JSON.parse(line);
       const ts: string = entry.timestamp ?? '';
       const payload = entry.payload;
+      const push = (role: 'user' | 'assistant', content: string): void => {
+        if (!content) return;
+        messages.push({ role, content, timestamp: ts });
+      };
+
+      // Newer Codex format (e.g. 0.117+): item.completed / agent_message
+      // Example:
+      // {"type":"item.completed","item":{"type":"agent_message","text":"..."}}
+      if (entry.type === 'item.completed' && entry.item) {
+        const item = entry.item;
+        if (item.type === 'agent_message' && typeof item.text === 'string') {
+          push('assistant', item.text);
+          continue;
+        }
+        if (item.type === 'user_message') {
+          const userText = typeof item.text === 'string'
+            ? item.text
+            : typeof item.message === 'string'
+              ? item.message
+              : '';
+          push('user', userText);
+          continue;
+        }
+      }
+
       if (!payload) continue;
 
       // User messages
@@ -35,9 +60,22 @@ export function parseCodexSessionJsonl(raw: string): AgentMessage[] {
         const content = typeof payload.message === 'string'
           ? payload.message
           : JSON.stringify(payload.message);
-        if (content) {
-          messages.push({ role: 'user', content, timestamp: ts });
-        }
+        push('user', content);
+        continue;
+      }
+
+      // User messages (response_item user blocks)
+      if (
+        entry.type === 'response_item'
+        && payload.type === 'message'
+        && payload.role === 'user'
+      ) {
+        const blocks = Array.isArray(payload.content) ? payload.content : [];
+        const text = blocks
+          .filter((b: any) => typeof b === 'string' || b?.type === 'input_text')
+          .map((b: any) => typeof b === 'string' ? b : b.text ?? '')
+          .join('\n');
+        push('user', text);
         continue;
       }
 
@@ -52,9 +90,7 @@ export function parseCodexSessionJsonl(raw: string): AgentMessage[] {
           .filter((b: any) => typeof b === 'string' || b?.type === 'output_text')
           .map((b: any) => typeof b === 'string' ? b : b.text ?? '')
           .join('\n');
-        if (text) {
-          messages.push({ role: 'assistant', content: text, timestamp: ts });
-        }
+        push('assistant', text);
       }
     } catch {
       // Skip malformed lines

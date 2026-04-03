@@ -77,6 +77,8 @@ const api: InvokerAPI = {
   },
   recreateWorkflow: (workflowId: string) =>
     ipcRenderer.invoke('invoker:recreate-workflow', workflowId),
+  recreateTask: (taskId: string) =>
+    ipcRenderer.invoke('invoker:recreate-task', taskId),
   retryWorkflow: (workflowId: string) =>
     ipcRenderer.invoke('invoker:retry-workflow', workflowId),
   rebaseAndRetry: (mergeTaskId: string) =>
