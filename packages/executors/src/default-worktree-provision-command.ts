@@ -3,7 +3,11 @@
  * Kept in one place so WorktreeFamiliar, SshFamiliar, and docs stay aligned.
  */
 export const DEFAULT_WORKTREE_PROVISION_COMMAND =
-  'NODE_ENV=development pnpm install --frozen-lockfile && ( \
+  'if [ ! -f package.json ] && [ ! -f pnpm-workspace.yaml ]; then \
+    echo "[provision] No package.json/pnpm-workspace.yaml found; skipping pnpm install"; \
+    exit 0; \
+  fi; \
+  NODE_ENV=development pnpm install --frozen-lockfile && ( \
   [ ! -f pnpm-workspace.yaml ] || ( \
     echo "[provision] pnpm config production (debug): $(pnpm config get production 2>/dev/null || echo unknown)" && \
     ( [ -f packages/transport/node_modules/@types/node/package.json ] && echo "[provision] @types/node linked under packages/transport" ) || \
