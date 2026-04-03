@@ -417,6 +417,61 @@ describe('TaskExecutor', () => {
         }),
       );
     });
+
+    it('persists startup metadata from familiar errors before failing task', async () => {
+      const handleWorkerResponse = vi.fn();
+      const updateTask = vi.fn();
+      const orchestrator = {
+        getTask: () => undefined,
+        handleWorkerResponse,
+      };
+      const startupErr: any = new Error('merge conflict');
+      startupErr.workspacePath = '~/.invoker/worktrees/repo/task-1';
+      startupErr.branch = 'experiment/task-1-abc12345';
+      startupErr.agentSessionId = 'sess-start-1';
+      const throwingFamiliar = {
+        type: 'ssh',
+        start: async () => { throw startupErr; },
+        onOutput: () => () => {},
+        onComplete: () => () => {},
+      };
+      const registry = {
+        getDefault: () => throwingFamiliar,
+        get: () => throwingFamiliar,
+        getAll: () => [throwingFamiliar],
+      };
+
+      const executor = new TaskExecutor({
+        orchestrator: orchestrator as any,
+        persistence: { updateTask } as any,
+        familiarRegistry: registry as any,
+        cwd: '/tmp',
+      });
+
+      const task = makeTask({
+        id: 'failing-start',
+        status: 'running',
+        config: { command: 'echo hi', familiarType: 'ssh' as any },
+      });
+      await executor.executeTask(task);
+
+      expect(updateTask).toHaveBeenCalledWith('failing-start', {
+        config: { familiarType: 'ssh' },
+        execution: {
+          workspacePath: '~/.invoker/worktrees/repo/task-1',
+          branch: 'experiment/task-1-abc12345',
+          agentSessionId: 'sess-start-1',
+          lastAgentSessionId: 'sess-start-1',
+        },
+      });
+      expect(handleWorkerResponse).toHaveBeenCalledWith(
+        expect.objectContaining({
+          outputs: expect.objectContaining({
+            error: expect.stringContaining('Familiar startup failed (ssh): merge conflict'),
+          }),
+        }),
+      );
+    });
   });
 
   describe('upstream branch metadata guard', () => {

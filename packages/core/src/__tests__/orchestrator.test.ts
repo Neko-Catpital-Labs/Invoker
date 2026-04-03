@@ -4416,6 +4416,26 @@ describe('Orchestrator', () => {
       expect(failedDeltas).toHaveLength(1);
     });
 
+    it('revertConflictResolution uses agent-agnostic fix failure prefix', () => {
+      const { savedError } = orchestrator.beginConflictResolution('t2');
+      orchestrator.revertConflictResolution('t2', savedError, 'startup failed');
+      const task = orchestrator.getTask('t2')!;
+      expect(task.execution.error).toContain('[Fix with Agent failed] startup failed');
+    });
+
+    it('revertConflictResolution does not duplicate an existing fix failure wrapper', () => {
+      const wrappedSavedError =
+        '[Fix with Claude failed] first attempt failed\n\n' + mergeConflictError;
+      orchestrator.revertConflictResolution('t2', wrappedSavedError, 'second attempt failed');
+      const task = orchestrator.getTask('t2')!;
+      expect(task.execution.error).toContain('[Fix with Agent failed] second attempt failed');
+      expect(task.execution.error).not.toContain('first attempt failed');
+      expect(task.execution.mergeConflict).toEqual({
+        failedBranch: 'experiment/upstream-branch-abc123',
+        conflictFiles: ['src/App.tsx', 'src/utils.ts'],
+      });
+    });
+
     it('throws if task is not failed', () => {
       expect(() => orchestrator.beginConflictResolution('t1')).toThrow(
         'is not failed',

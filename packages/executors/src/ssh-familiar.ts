@@ -215,9 +215,11 @@ fi`;
       .map(c => c.commitHash)
       .filter((x): x is string => !!x);
     const salt = request.inputs.salt ?? '';
+    handle.agentSessionId = agentSessionId;
 
-    // Step 1: Clone/fetch on remote + resolve baseHead
-    const script1 = `set -euo pipefail
+    try {
+      // Step 1: Clone/fetch on remote + resolve baseHead
+      const script1 = `set -euo pipefail
 REPO=$(echo ${SshFamiliar.b64(repoUrl)} | base64 -d)
 BASE=$(echo ${SshFamiliar.b64(baseRef)} | base64 -d)
 H="${h}"
@@ -227,55 +229,55 @@ if [ ! -d "$CLONE/.git" ]; then git clone "$REPO" "$CLONE"; fi
 git -C "$CLONE" fetch --all --prune || true
 git -C "$CLONE" rev-parse "$BASE"
 `;
-    const baseHead = (await this.execRemoteCapture(script1)).trim();
-    const hash8 = computeBranchHash(
-      request.actionId,
-      request.inputs.command,
-      request.inputs.prompt,
-      upstreamCommits,
-      baseHead,
-      salt,
-    );
-    const experimentBranch = `experiment/${request.actionId}-${hash8}`;
-    const san = experimentBranch.replace(/\//g, '-');
-    const remoteClone = `$HOME/.invoker/repos/${h}`;
-    const canonicalRemoteWt = `$HOME/.invoker/worktrees/${h}/${san}`;
+      const baseHead = (await this.execRemoteCapture(script1)).trim();
+      const hash8 = computeBranchHash(
+        request.actionId,
+        request.inputs.command,
+        request.inputs.prompt,
+        upstreamCommits,
+        baseHead,
+        salt,
+      );
+      const experimentBranch = `experiment/${request.actionId}-${hash8}`;
+      const san = experimentBranch.replace(/\//g, '-');
+      const remoteClone = `$HOME/.invoker/repos/${h}`;
+      const canonicalRemoteWt = `$HOME/.invoker/worktrees/${h}/${san}`;
 
-    handle.branch = experimentBranch;
+      handle.branch = experimentBranch;
 
-    const remoteHome = (await this.execRemoteCapture('printf %s "$HOME"')).trim();
-    const porcelainScript = `set -euo pipefail
+      const remoteHome = (await this.execRemoteCapture('printf %s "$HOME"')).trim();
+      const porcelainScript = `set -euo pipefail
 H="${h}"
 CLONE="$HOME/.invoker/repos/$H"
 git -C "$CLONE" worktree list --porcelain
 `;
-    const porcelain = await this.execRemoteCapture(porcelainScript);
-    const managedPrefix = normalize(`${remoteHome}/.invoker/worktrees/${h}`);
-    const reuseAbs = findManagedWorktreeForBranch(porcelain, experimentBranch, [managedPrefix]);
+      const porcelain = await this.execRemoteCapture(porcelainScript);
+      const managedPrefix = normalize(`${remoteHome}/.invoker/worktrees/${h}`);
+      const reuseAbs = findManagedWorktreeForBranch(porcelain, experimentBranch, [managedPrefix]);
 
-    let remoteWt = canonicalRemoteWt;
-    let skippedRemotePreserve = false;
+      let remoteWt = canonicalRemoteWt;
+      let skippedRemotePreserve = false;
 
-    if (reuseAbs) {
-      const wtQ = SshFamiliar.shellPosixSingleQuote(reuseAbs);
-      const headScript = `set -euo pipefail
+      if (reuseAbs) {
+        const wtQ = SshFamiliar.shellPosixSingleQuote(reuseAbs);
+        const headScript = `set -euo pipefail
 git -C ${wtQ} rev-parse --abbrev-ref HEAD
 `;
-      try {
-        const head = (await this.execRemoteCapture(headScript)).trim();
-        if (abbrevRefMatchesBranch(head, experimentBranch)) {
-          skippedRemotePreserve = true;
-          remoteWt = reuseAbs;
-          handle.workspacePath =
-            reuseAbs.startsWith(`${remoteHome}/`) ? `~${reuseAbs.slice(remoteHome.length)}` : reuseAbs;
+        try {
+          const head = (await this.execRemoteCapture(headScript)).trim();
+          if (abbrevRefMatchesBranch(head, experimentBranch)) {
+            skippedRemotePreserve = true;
+            remoteWt = reuseAbs;
+            handle.workspacePath =
+              reuseAbs.startsWith(`${remoteHome}/`) ? `~${reuseAbs.slice(remoteHome.length)}` : reuseAbs;
+          }
+        } catch {
+          /* fall through to fresh setup */
         }
-      } catch {
-        /* fall through to fresh setup */
       }
-    }
 
-    if (!skippedRemotePreserve) {
-      const cleanupScript = `set -euo pipefail
+      if (!skippedRemotePreserve) {
+        const cleanupScript = `set -euo pipefail
 CLONE="${remoteClone}"
 WT="${canonicalRemoteWt}"
 mkdir -p "$(dirname "$WT")"
@@ -287,38 +289,38 @@ if [ -e "$WT" ]; then
   git -C "$CLONE" worktree prune 2>/dev/null || true
 fi
 `;
-      await this.execRemoteCapture(cleanupScript);
-      remoteWt = canonicalRemoteWt;
-      handle.workspacePath = `~/.invoker/worktrees/${h}/${san}`;
-    }
+        await this.execRemoteCapture(cleanupScript);
+        remoteWt = canonicalRemoteWt;
+        handle.workspacePath = `~/.invoker/worktrees/${h}/${san}`;
+      }
 
-    if (skippedRemotePreserve) {
-      await this.mergeRequestUpstreamBranches(request, remoteWt, baseRef);
-      handle.branch = experimentBranch;
-    } else {
-      await this.setupTaskBranch(remoteClone, request, handle, {
-        branchName: experimentBranch,
-        base: baseRef,
-        worktreeDir: remoteWt,
-      });
-    }
+      if (skippedRemotePreserve) {
+        await this.mergeRequestUpstreamBranches(request, remoteWt, baseRef);
+        handle.branch = experimentBranch;
+      } else {
+        await this.setupTaskBranch(remoteClone, request, handle, {
+          branchName: experimentBranch,
+          base: baseRef,
+          worktreeDir: remoteWt,
+        });
+      }
 
-    // Step 4: No-command tasks complete immediately
-    if (!request.inputs.command && !request.inputs.prompt) {
-      await this.handleProcessExit(executionId, request, remoteWt, 0, {
-        branch: experimentBranch,
-      });
-      return handle;
-    }
+      // Step 4: No-command tasks complete immediately
+      if (!request.inputs.command && !request.inputs.prompt) {
+        await this.handleProcessExit(executionId, request, remoteWt, 0, {
+          branch: experimentBranch,
+        });
+        return handle;
+      }
 
-    // Step 5: Provision + run payload in a single SSH session
-    const provB64 = SshFamiliar.b64(DEFAULT_WORKTREE_PROVISION_COMMAND);
-    const payloadB64 = SshFamiliar.b64(payload);
-    const wtLine =
-      remoteWt.startsWith('/')
-        ? `WT=${SshFamiliar.shellPosixSingleQuote(remoteWt)}`
-        : `WT="${remoteWt}"`;
-    const runScript = `set -euo pipefail
+      // Step 5: Provision + run payload in a single SSH session
+      const provB64 = SshFamiliar.b64(DEFAULT_WORKTREE_PROVISION_COMMAND);
+      const payloadB64 = SshFamiliar.b64(payload);
+      const wtLine =
+        remoteWt.startsWith('/')
+          ? `WT=${SshFamiliar.shellPosixSingleQuote(remoteWt)}`
+          : `WT="${remoteWt}"`;
+      const runScript = `set -euo pipefail
 ${wtLine}
 cd "$WT"
 echo "[SshFamiliar] Provisioning remote worktree (pnpm install + electron native rebuild)..."
@@ -327,10 +329,22 @@ echo "[SshFamiliar] Running task payload..."
 echo ${payloadB64} | base64 -d | bash -se
 `;
 
-    return this.spawnSshRemoteStdin(executionId, request, handle, runScript, agentSessionId, {
-      worktreePath: handle.workspacePath!,
-      branch: experimentBranch,
-    });
+      return this.spawnSshRemoteStdin(executionId, request, handle, runScript, agentSessionId, {
+        worktreePath: handle.workspacePath!,
+        branch: experimentBranch,
+      });
+    } catch (err) {
+      throw this.withStartupMetadata(err, handle);
+    }
+  }
+
+  private withStartupMetadata(err: unknown, handle: FamiliarHandle): Error {
+    const wrapped = err instanceof Error ? err : new Error(String(err));
+    if (handle.workspacePath) (wrapped as any).workspacePath = handle.workspacePath;
+    if (handle.branch) (wrapped as any).branch = handle.branch;
+    if (handle.agentSessionId) (wrapped as any).agentSessionId = handle.agentSessionId;
+    if (handle.containerId) (wrapped as any).containerId = handle.containerId;
+    return wrapped;
   }
 
   /**

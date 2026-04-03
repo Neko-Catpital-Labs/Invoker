@@ -314,7 +314,8 @@ export async function fixWithAgentImpl(
     throw new Error(
       `fixWithAgent: task "${taskId}" has no valid workspace ` +
       `(workspacePath=${workspacePath ?? 'undefined'}). ` +
-      `All tasks must have a managed workspace; refusing to fall back to host repo.`,
+      `All tasks must have a managed workspace; refusing to fall back to host repo. ` +
+      `If startup failed before metadata persistence, retry the task once to rehydrate workspace metadata.`,
     );
   }
   const cwd = workspacePath;
