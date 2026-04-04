@@ -35,7 +35,15 @@ resolve_abs() {
 
 parse_plan_name() {
   local p="$1"
-  awk -F': *' '/^name:/{v=$2; gsub(/^"|"$/, "", v); print v; exit}' "$p"
+  awk '
+    /^name:[[:space:]]*/ {
+      line=$0
+      sub(/^name:[[:space:]]*/, "", line)
+      gsub(/^"|"$/, "", line)
+      print line
+      exit
+    }
+  ' "$p"
 }
 
 resolve_persisted_workflow_id() {
@@ -44,10 +52,58 @@ resolve_persisted_workflow_id() {
   for _ in $(seq 1 30); do
     wf_id="$(
       ./run.sh --headless query workflows --output json 2>/dev/null \
+        | extract_json_stream \
         | jq -r --arg n "$workflow_name" '[.[] | select(.name == $n)] | sort_by(.createdAt) | last | .id // empty'
     )"
     if [[ -n "$wf_id" ]]; then
       printf '%s' "$wf_id"
+      return 0
+    fi
+    sleep 0.2
+  done
+  return 1
+}
+
+extract_json_stream() {
+  awk '
+    BEGIN { started = 0 }
+    {
+      if (!started) {
+        if ($0 ~ /^[[:space:]]*[\[{]/ && $0 !~ /^\[init\]/ && $0 !~ /^\[deprecated\]/) {
+          started = 1
+          print
+        }
+      } else {
+        print
+      }
+    }
+  '
+}
+
+resolve_workflow_feature_branch() {
+  local workflow_id="$1"
+  local feature_branch=""
+  for _ in $(seq 1 30); do
+    feature_branch="$(
+      ./run.sh --headless query workflows --output json 2>/dev/null \
+        | extract_json_stream \
+        | jq -r --arg id "$workflow_id" '.[] | select(.id == $id) | .featureBranch // empty' \
+        | head -1
+    )"
+    if [[ -n "$feature_branch" ]]; then
+      printf '%s' "$feature_branch"
+      return 0
+    fi
+    sleep 0.2
+  done
+  return 1
+}
+
+wait_for_external_merge_gate() {
+  local workflow_id="$1"
+  local merge_id="__merge__${workflow_id}"
+  for _ in $(seq 1 60); do
+    if ./run.sh --headless query tasks --output json 2>/dev/null | extract_json_stream | jq -e --arg id "$merge_id" '.[] | select(.id == $id)' >/dev/null; then
       return 0
     fi
     sleep 0.2
@@ -67,9 +123,12 @@ for p in "$@"; do
 done
 
 declare -a CHAIN_WORKFLOW_IDS=()
+declare -a CHAIN_BASE_BRANCHES=()
+declare -a CHAIN_FEATURE_BRANCHES=()
 declare -a RENDERED_PLANS=()
 
 prev_wf_id=""
+prev_wf_feature_branch=""
 
 for i in "${!INPUT_PLANS[@]}"; do
   plan="${INPUT_PLANS[$i]}"
@@ -89,10 +148,97 @@ for i in "${!INPUT_PLANS[@]}"; do
       echo "Template plan is missing __UPSTREAM_WORKFLOW_ID__: $plan" >&2
       exit 1
     fi
+    if [[ -z "$prev_wf_feature_branch" ]]; then
+      echo "Internal error: missing previous workflow feature branch before rendering chain step $((i+1))." >&2
+      exit 1
+    fi
+    if ! wait_for_external_merge_gate "$prev_wf_id"; then
+      echo "Upstream merge gate not found yet: __merge__${prev_wf_id}" >&2
+      exit 1
+    fi
+    if ! rg -q "^baseBranch:" "$plan"; then
+      echo "Template plan is missing top-level baseBranch: $plan" >&2
+      exit 1
+    fi
     submit_plan="$(mktemp "/tmp/invoker-chain-step$((i+1)).XXXXXX.yaml")"
     sed "s/__UPSTREAM_WORKFLOW_ID__/$prev_wf_id/g" "$plan" > "$submit_plan"
     if ! rg -q "$prev_wf_id" "$submit_plan"; then
       echo "Rendered plan did not include upstream id '$prev_wf_id': $submit_plan" >&2
+      exit 1
+    fi
+    # Enforce merge-gate dependency for the upstream workflow entry.
+    awk -v upid="$prev_wf_id" '
+      BEGIN {
+        in_ext=0
+        dep_is_upstream=0
+        dep_had_taskid=0
+        dep_had_required=0
+        dep_indent=""
+      }
+      function flush_dep() {
+        if (!in_ext || !dep_is_upstream) return
+        if (!dep_had_taskid) print dep_indent "  taskId: \"__merge__\""
+        if (!dep_had_required) print dep_indent "  requiredStatus: completed"
+      }
+      {
+        line=$0
+        if (line ~ /^[^[:space:]]/ && line !~ /^externalDependencies:[[:space:]]*$/) {
+          flush_dep()
+          in_ext=0
+          dep_is_upstream=0
+          dep_had_taskid=0
+          dep_had_required=0
+          dep_indent=""
+          print line
+          next
+        }
+        if (line ~ /^[[:space:]]*externalDependencies:[[:space:]]*$/) {
+          flush_dep()
+          in_ext=1
+          dep_is_upstream=0
+          dep_had_taskid=0
+          dep_had_required=0
+          dep_indent=""
+          print line
+          next
+        }
+        if (in_ext && line ~ /^[[:space:]]*-[[:space:]]*workflowId:[[:space:]]*/) {
+          flush_dep()
+          dep_indent=substr(line, 1, index(line, "-")-1)
+          dep_is_upstream=(line ~ ("workflowId:[[:space:]]*\"" upid "\"([[:space:]]|$)"))
+          dep_had_taskid=0
+          dep_had_required=0
+          print line
+          next
+        }
+        if (in_ext && dep_is_upstream && line ~ /^[[:space:]]*taskId:[[:space:]]*/) {
+          print dep_indent "  taskId: \"__merge__\""
+          dep_had_taskid=1
+          next
+        }
+        if (in_ext && dep_is_upstream && line ~ /^[[:space:]]*requiredStatus:[[:space:]]*/) {
+          print dep_indent "  requiredStatus: completed"
+          dep_had_required=1
+          next
+        }
+        print line
+      }
+      END {
+        flush_dep()
+      }
+    ' "$submit_plan" > "${submit_plan}.tmp"
+    mv "${submit_plan}.tmp" "$submit_plan"
+    if ! rg -q "workflowId:[[:space:]]*\"${prev_wf_id}\"([[:space:]]|$)" "$submit_plan"; then
+      echo "Rendered plan missing upstream workflow dependency '${prev_wf_id}': $submit_plan" >&2
+      exit 1
+    fi
+    if ! rg -q "taskId:[[:space:]]*\"__merge__\"" "$submit_plan"; then
+      echo "Rendered plan missing enforced merge-gate taskId '__merge__': $submit_plan" >&2
+      exit 1
+    fi
+    sed -E -i "s|^baseBranch:.*$|baseBranch: ${prev_wf_feature_branch}|" "$submit_plan"
+    if ! rg -q "^baseBranch:[[:space:]]*${prev_wf_feature_branch}$" "$submit_plan"; then
+      echo "Rendered plan baseBranch did not update to upstream feature branch '${prev_wf_feature_branch}': $submit_plan" >&2
       exit 1
     fi
     RENDERED_PLANS+=("$submit_plan")
@@ -117,13 +263,26 @@ for i in "${!INPUT_PLANS[@]}"; do
   fi
 
   CHAIN_WORKFLOW_IDS+=("$persisted_id")
+  wf_base_branch="$(
+    ./run.sh --headless query workflows --output json 2>/dev/null \
+      | extract_json_stream \
+      | jq -r --arg id "$persisted_id" '.[] | select(.id == $id) | .baseBranch // empty' | head -1
+  )"
+  CHAIN_BASE_BRANCHES+=("${wf_base_branch:-<unset>}")
+  wf_feature_branch="$(resolve_workflow_feature_branch "$persisted_id" || true)"
+  if [[ -z "${wf_feature_branch:-}" ]]; then
+    echo "Failed to resolve featureBranch for workflow: $persisted_id (name: $plan_name)" >&2
+    exit 1
+  fi
+  CHAIN_FEATURE_BRANCHES+=("$wf_feature_branch")
+  prev_wf_feature_branch="$wf_feature_branch"
   prev_wf_id="$persisted_id"
 done
 
 echo
 echo "Workflow chain submitted."
 for i in "${!CHAIN_WORKFLOW_IDS[@]}"; do
-  echo "WF$((i+1))=${CHAIN_WORKFLOW_IDS[$i]}"
+  echo "WF$((i+1))=${CHAIN_WORKFLOW_IDS[$i]} base=${CHAIN_BASE_BRANCHES[$i]} feature=${CHAIN_FEATURE_BRANCHES[$i]}"
 done
 for p in "${RENDERED_PLANS[@]}"; do
   echo "RENDERED_PLAN=$p"
