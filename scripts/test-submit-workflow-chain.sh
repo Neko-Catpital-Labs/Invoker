@@ -141,10 +141,23 @@ rp3="$(printf '%s\n' "$out" | sed -n 's/^RENDERED_PLAN=//p' | sed -n '2p')"
 
 grep -q "workflowId: \"$wf1\"" "$rp2"
 grep -q 'taskId: "__merge__"' "$rp2"
+grep -q '^ *gatePolicy: review_ready$' "$rp2"
 grep -q '^baseBranch: feature/a$' "$rp2"
 
 grep -q "workflowId: \"$wf2\"" "$rp3"
 grep -q 'taskId: "__merge__"' "$rp3"
+grep -q '^ *gatePolicy: review_ready$' "$rp3"
 grep -q '^baseBranch: feature/b$' "$rp3"
 
-echo "PASS: submit-workflow-chain enforces merge-gate deps and branch chaining"
+out_rr="$(
+  cd "$TMP_DIR"
+  ./scripts/submit-workflow-chain.sh --gate-policy review_ready ./plans/a.yaml ./plans/b.yaml ./plans/c.yaml
+)"
+
+rp2_rr="$(printf '%s\n' "$out_rr" | sed -n 's/^RENDERED_PLAN=//p' | sed -n '1p')"
+rp3_rr="$(printf '%s\n' "$out_rr" | sed -n 's/^RENDERED_PLAN=//p' | sed -n '2p')"
+[[ -f "$rp2_rr" && -f "$rp3_rr" ]] || { echo "missing rendered plans for review_ready"; echo "$out_rr"; exit 1; }
+grep -q '^ *gatePolicy: review_ready$' "$rp2_rr"
+grep -q '^ *gatePolicy: review_ready$' "$rp3_rr"
+
+echo "PASS: submit-workflow-chain enforces merge-gate deps, branch chaining, and gate policy"

@@ -55,15 +55,20 @@ function buildEdgeLabel(source: TaskState, target: TaskState): string {
 }
 
 function resolveExternalDependencyTaskId(
-  dep: { workflowId: string; taskId: string },
+  dep: { workflowId: string; taskId?: string },
   tasks: Map<string, TaskState>,
 ): string | undefined {
-  if (dep.taskId.includes('/')) {
-    return tasks.has(dep.taskId) ? dep.taskId : undefined;
+  const taskId = dep.taskId?.trim() || '__merge__';
+  if (taskId === '__merge__') {
+    const mergeGateId = `__merge__${dep.workflowId}`;
+    return tasks.has(mergeGateId) ? mergeGateId : undefined;
   }
-  const scoped = `${dep.workflowId}/${dep.taskId}`;
+  if (taskId.includes('/')) {
+    return tasks.has(taskId) ? taskId : undefined;
+  }
+  const scoped = `${dep.workflowId}/${taskId}`;
   if (tasks.has(scoped)) return scoped;
-  if (tasks.has(dep.taskId)) return dep.taskId;
+  if (tasks.has(taskId)) return taskId;
   return undefined;
 }
 

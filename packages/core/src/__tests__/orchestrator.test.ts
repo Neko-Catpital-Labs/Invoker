@@ -800,6 +800,138 @@ describe('Orchestrator', () => {
       expect(orchestrator.getTask(sid(orchestrator, 1, 'leaf-b'))!.status).toBe('running');
     });
 
+    it('workflow-level external dependency (no taskId) waits for upstream merge gate', () => {
+      orchestrator.loadPlan({
+        name: 'prereq-workflow',
+        tasks: [{ id: 'verify-control-plane-regression', description: 'Prereq task' }],
+      });
+      const prereqTaskId = sid(orchestrator, 0, 'verify-control-plane-regression');
+      const prereqWfId = prereqTaskId.split('/')[0]!;
+      const prereqMergeId = `__merge__${prereqWfId}`;
+
+      orchestrator.loadPlan({
+        name: 'workflow-gated',
+        tasks: [
+          {
+            id: 'leaf-a',
+            description: 'leaf waits for upstream merge gate',
+            externalDependencies: [{ workflowId: prereqWfId, gatePolicy: 'approved' }],
+          },
+        ],
+      });
+
+      const startedInitially = orchestrator.startExecution();
+      expect(startedInitially.map((t) => t.id)).toContain(prereqTaskId);
+      expect(startedInitially.map((t) => t.id)).not.toContain(sid(orchestrator, 1, 'leaf-a'));
+      expect(orchestrator.getTask(sid(orchestrator, 1, 'leaf-a'))!.status).toBe('pending');
+
+      const afterPrereqTask = orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: prereqTaskId, status: 'completed' }),
+      );
+      expect(afterPrereqTask.map((t) => t.id)).toContain(prereqMergeId);
+      expect(afterPrereqTask.map((t) => t.id)).not.toContain(sid(orchestrator, 1, 'leaf-a'));
+      expect(orchestrator.getTask(sid(orchestrator, 1, 'leaf-a'))!.status).toBe('pending');
+
+      const afterMergeGate = orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: prereqMergeId, status: 'completed' }),
+      );
+      expect(afterMergeGate.map((t) => t.id)).toContain(sid(orchestrator, 1, 'leaf-a'));
+      expect(orchestrator.getTask(sid(orchestrator, 1, 'leaf-a'))!.status).toBe('running');
+    });
+
+    it('workflow-level external dependency defaults to review_ready and starts on awaiting_approval', () => {
+      orchestrator.loadPlan({
+        name: 'prereq-workflow',
+        tasks: [{ id: 'verify-control-plane-regression', description: 'Prereq task' }],
+      });
+      const prereqTaskId = sid(orchestrator, 0, 'verify-control-plane-regression');
+      const prereqWfId = prereqTaskId.split('/')[0]!;
+      const prereqMergeId = `__merge__${prereqWfId}`;
+
+      orchestrator.loadPlan({
+        name: 'workflow-gated-default-review-ready',
+        tasks: [
+          {
+            id: 'leaf-a',
+            description: 'leaf waits for upstream merge gate review-ready by default',
+            externalDependencies: [{ workflowId: prereqWfId }],
+          },
+        ],
+      });
+
+      orchestrator.startExecution();
+      orchestrator.handleWorkerResponse(makeResponse({ actionId: prereqTaskId, status: 'completed' }));
+      orchestrator.setTaskAwaitingApproval(prereqMergeId);
+
+      const afterMergeAwaitingApproval = orchestrator.startExecution();
+      expect(afterMergeAwaitingApproval.map((t) => t.id)).toContain(sid(orchestrator, 1, 'leaf-a'));
+      expect(orchestrator.getTask(sid(orchestrator, 1, 'leaf-a'))!.status).toBe('running');
+    });
+
+    it('review_ready merge-gate dependency starts downstream when upstream is awaiting_approval', () => {
+      orchestrator.loadPlan({
+        name: 'prereq-workflow',
+        tasks: [{ id: 'verify-control-plane-regression', description: 'Prereq task' }],
+      });
+      const prereqTaskId = sid(orchestrator, 0, 'verify-control-plane-regression');
+      const prereqWfId = prereqTaskId.split('/')[0]!;
+      const prereqMergeId = `__merge__${prereqWfId}`;
+
+      orchestrator.loadPlan({
+        name: 'workflow-gated-review-ready',
+        tasks: [
+          {
+            id: 'leaf-a',
+            description: 'leaf waits for upstream merge gate review-ready',
+            externalDependencies: [{ workflowId: prereqWfId, gatePolicy: 'review_ready' }],
+          },
+        ],
+      });
+
+      const startedInitially = orchestrator.startExecution();
+      expect(startedInitially.map((t) => t.id)).toContain(prereqTaskId);
+      expect(startedInitially.map((t) => t.id)).not.toContain(sid(orchestrator, 1, 'leaf-a'));
+
+      const afterPrereqTask = orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: prereqTaskId, status: 'completed' }),
+      );
+      expect(afterPrereqTask.map((t) => t.id)).toContain(prereqMergeId);
+      expect(afterPrereqTask.map((t) => t.id)).not.toContain(sid(orchestrator, 1, 'leaf-a'));
+
+      orchestrator.setTaskAwaitingApproval(prereqMergeId);
+      const afterMergeAwaitingApproval = orchestrator.startExecution();
+      expect(afterMergeAwaitingApproval.map((t) => t.id)).toContain(sid(orchestrator, 1, 'leaf-a'));
+      expect(orchestrator.getTask(sid(orchestrator, 1, 'leaf-a'))!.status).toBe('running');
+    });
+
+    it('approved merge-gate dependency keeps downstream pending when upstream is awaiting_approval', () => {
+      orchestrator.loadPlan({
+        name: 'prereq-workflow',
+        tasks: [{ id: 'verify-control-plane-regression', description: 'Prereq task' }],
+      });
+      const prereqTaskId = sid(orchestrator, 0, 'verify-control-plane-regression');
+      const prereqWfId = prereqTaskId.split('/')[0]!;
+      const prereqMergeId = `__merge__${prereqWfId}`;
+
+      orchestrator.loadPlan({
+        name: 'workflow-gated-approved',
+        tasks: [
+          {
+            id: 'leaf-a',
+            description: 'leaf waits for upstream merge gate completion',
+            externalDependencies: [{ workflowId: prereqWfId, gatePolicy: 'approved' }],
+          },
+        ],
+      });
+
+      orchestrator.startExecution();
+      orchestrator.handleWorkerResponse(makeResponse({ actionId: prereqTaskId, status: 'completed' }));
+      orchestrator.setTaskAwaitingApproval(prereqMergeId);
+      const afterMergeAwaitingApproval = orchestrator.startExecution();
+      expect(afterMergeAwaitingApproval.map((t) => t.id)).not.toContain(sid(orchestrator, 1, 'leaf-a'));
+      expect(orchestrator.getTask(sid(orchestrator, 1, 'leaf-a'))!.status).toBe('pending');
+    });
+
     it('persists status changes to DB', () => {
       orchestrator.loadPlan({
         name: 'test-plan',

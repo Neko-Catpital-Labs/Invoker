@@ -54,4 +54,28 @@ describe('plan-base-remote', () => {
     const resolved = (await resolvePlanBaseRevision(runGit, sha)).trim();
     expect(resolved).toBe(sha);
   });
+
+  it('resolvePlanBaseRevision falls back to local refs/heads/<branch> when origin tracking is missing', async () => {
+    const runGit = runGitFactory(mirror);
+    await runGit(['checkout', '-b', 'feature/local-only']);
+    writeFileSync(join(mirror, 'local.txt'), 'local');
+    await runGit(['add', '-A']);
+    await runGit(['commit', '-m', 'local-only']);
+    const localHead = (await runGit(['rev-parse', 'feature/local-only'])).trim();
+
+    const resolved = (await resolvePlanBaseRevision(runGit, 'feature/local-only')).trim();
+    expect(resolved).toBe(localHead);
+  });
+
+  it('resolvePlanBaseRevision can self-sync missing origin tracking refs for new remote branches', async () => {
+    const runGit = runGitFactory(mirror);
+
+    execSync('git checkout -b feature/new-remote', { cwd: upstream });
+    writeFileSync(join(upstream, 'remote.txt'), 'remote');
+    execSync('git add -A && git commit -m "new remote branch"', { cwd: upstream });
+    const upstreamHead = execSync('git rev-parse feature/new-remote', { cwd: upstream }).toString().trim();
+
+    const resolved = (await resolvePlanBaseRevision(runGit, 'feature/new-remote')).trim();
+    expect(resolved).toBe(upstreamHead);
+  });
 });

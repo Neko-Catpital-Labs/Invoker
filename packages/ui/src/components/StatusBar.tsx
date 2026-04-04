@@ -20,6 +20,7 @@ export function StatusBar({ tasks, activeFilters, onStatusClick }: StatusBarProp
   let failed = 0;
   let pending = 0;
   let needsInput = 0;
+  let reviewReady = 0;
   let awaitingApproval = 0;
   let blocked = 0;
   let fixing = 0;
@@ -55,6 +56,9 @@ export function StatusBar({ tasks, activeFilters, onStatusClick }: StatusBarProp
         } else {
           awaitingApproval++;
         }
+        break;
+      case 'review_ready':
+        reviewReady++;
         break;
       case 'blocked':
         blocked++;
@@ -109,6 +113,14 @@ export function StatusBar({ tasks, activeFilters, onStatusClick }: StatusBarProp
           onClick={(e) => onStatusClick?.('needs_input', e)}
         >
           Input: <span className="font-medium">{needsInput}</span>
+        </span>
+      )}
+      {reviewReady > 0 && (
+        <span
+          className={`text-sky-300/70 ${filterClass('review_ready')}`}
+          onClick={(e) => onStatusClick?.('review_ready', e)}
+        >
+          Review Ready: <span className="font-medium">{reviewReady}</span>
         </span>
       )}
       {awaitingApproval > 0 && (

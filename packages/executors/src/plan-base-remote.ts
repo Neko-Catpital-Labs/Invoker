@@ -13,7 +13,20 @@ export type GitExec = (args: string[]) => Promise<string>;
  */
 export async function syncPlanBaseRemote(runGit: GitExec, baseBranch: string): Promise<void> {
   const spec = `refs/heads/${baseBranch}:refs/remotes/origin/${baseBranch}`;
-  await runGit(['fetch', 'origin', spec]);
+  try {
+    await runGit(['fetch', 'origin', spec]);
+  } catch (err) {
+    // Branch may not exist on origin yet (for stacked workflows). Callers can
+    // still resolve local refs/heads/<branch> when available.
+    const msg = err instanceof Error ? err.message : String(err);
+    const missingRemoteRef =
+      msg.includes("couldn't find remote ref")
+      || msg.includes('fatal: invalid refspec')
+      || msg.includes('fatal: couldn\'t find remote ref');
+    if (!missingRemoteRef) {
+      throw err;
+    }
+  }
 }
 
 function isFullSha(ref: string): boolean {
@@ -39,6 +52,14 @@ export function shouldResolveViaOriginTracking(ref: string): boolean {
  * For short branch names, uses origin/<branch> (caller should syncPlanBaseRemote first).
  */
 export async function resolvePlanBaseRevision(runGit: GitExec, baseRef: string): Promise<string> {
+  const tryResolve = async (refExpr: string): Promise<string | undefined> => {
+    try {
+      return (await runGit(['rev-parse', '--verify', refExpr])).trim();
+    } catch {
+      return undefined;
+    }
+  };
+
   const r = baseRef.trim() || 'HEAD';
   if (r === 'HEAD') {
     return (await runGit(['rev-parse', 'HEAD'])).trim();
@@ -53,7 +74,28 @@ export async function resolvePlanBaseRevision(runGit: GitExec, baseRef: string):
     return (await runGit(['rev-parse', '--verify', `${r}^{commit}`])).trim();
   }
   if (shouldResolveViaOriginTracking(r)) {
-    return (await runGit(['rev-parse', '--verify', `origin/${r}^{commit}`])).trim();
+    const originExpr = `origin/${r}^{commit}`;
+    const localExpr = `refs/heads/${r}^{commit}`;
+
+    const originResolved = await tryResolve(originExpr);
+    if (originResolved) return originResolved;
+
+    // Common stacked-diff case: branch exists locally in the mirror but has no
+    // tracking ref yet (or was created before fetch).
+    const localResolved = await tryResolve(localExpr);
+    if (localResolved) return localResolved;
+
+    // Last chance: fetch the branch into origin/<branch>, then retry both.
+    await syncPlanBaseRemote(runGit, r);
+    const originAfterSync = await tryResolve(originExpr);
+    if (originAfterSync) return originAfterSync;
+    const localAfterSync = await tryResolve(localExpr);
+    if (localAfterSync) return localAfterSync;
+
+    throw new Error(
+      `Unable to resolve base ref "${r}" as ${originExpr} or ${localExpr}. ` +
+      `Ensure the branch exists locally or on origin.`,
+    );
   }
   return (await runGit(['rev-parse', '--verify', `${r}^{commit}`])).trim();
 }

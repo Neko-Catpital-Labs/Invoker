@@ -10,7 +10,7 @@ import { normalize, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { pathToFileURL } from 'node:url';
 
-import type { Orchestrator, TaskState } from '@invoker/core';
+import type { Orchestrator, TaskState, TaskStateChanges } from '@invoker/core';
 import type { SQLiteAdapter } from '@invoker/persistence';
 import type { WorkResponse } from '@invoker/protocol';
 import type { TaskExecutorCallbacks } from './task-executor.js';
@@ -42,6 +42,39 @@ function canonicalMergeMode(mode: string | undefined): 'manual' | 'automatic' | 
   if (m === 'github' || m === 'external_review') return 'external_review';
   if (m === 'automatic') return 'automatic';
   return 'manual';
+}
+
+/**
+ * Merge gates can move to awaiting_approval before final completion.
+ * Start any newly-ready downstream tasks (e.g., cross-workflow review_ready deps).
+ */
+async function startReviewReadyDependents(host: MergeExecutorHost): Promise<void> {
+  const orchestrator = host.orchestrator as unknown as {
+    startExecution?: () => TaskState[];
+  };
+  if (typeof orchestrator.startExecution !== 'function') {
+    return;
+  }
+  const newlyStarted = orchestrator.startExecution();
+  if (newlyStarted.length > 0) {
+    await host.executeTasks(newlyStarted);
+  }
+}
+
+function setMergeGateReviewReady(
+  host: MergeExecutorHost,
+  taskId: string,
+  changes: TaskStateChanges,
+): void {
+  const orchestrator = host.orchestrator as unknown as {
+    setTaskReviewReady?: (id: string, c?: TaskStateChanges) => void;
+    setTaskAwaitingApproval?: (id: string, c?: TaskStateChanges) => void;
+  };
+  if (typeof orchestrator.setTaskReviewReady === 'function') {
+    orchestrator.setTaskReviewReady(taskId, changes);
+    return;
+  }
+  orchestrator.setTaskAwaitingApproval?.(taskId, changes);
 }
 
 // ── Host-cwd safety guard ─────────────────────────────────
@@ -287,7 +320,7 @@ export async function executeMergeNodeImpl(
       if (mergeMode === 'manual') {
         mergeTrace('GATE_WS_PATH_MANUAL_AWAIT', { taskId: task.id, gateWorkspacePath: gateWorkspacePath ?? null });
         console.log(
-          `[merge-gate-workspace] setTaskAwaitingApproval path=manual branch consolidate ` +
+          `[merge-gate-workspace] setTaskReviewReady path=manual branch consolidate ` +
             `task=${task.id} gateWorkspacePath=${gateWorkspacePath ?? 'NULL'}`,
         );
         const manualResponse: WorkResponse = {
@@ -297,10 +330,11 @@ export async function executeMergeNodeImpl(
           outputs: { exitCode: 0 },
         };
         host.callbacks.onComplete?.(task.id, manualResponse);
-        host.orchestrator.setTaskAwaitingApproval(task.id, {
+        setMergeGateReviewReady(host, task.id, {
           config: { familiarType: 'worktree', summary },
           execution: { branch: featureBranch ?? undefined, workspacePath: gateWorkspacePath },
         });
+        await startReviewReadyDependents(host);
         return;
       }
       if (mergeMode === 'external_review') {
@@ -348,10 +382,10 @@ export async function executeMergeNodeImpl(
           reviewUrl: result.url,
         });
         console.log(
-          `[merge-gate-workspace] setTaskAwaitingApproval path=external_review ` +
+          `[merge-gate-workspace] setTaskReviewReady path=external_review ` +
             `task=${task.id} gateWorkspacePath=${gateWorkspacePath ?? 'NULL'}`,
         );
-        host.orchestrator.setTaskAwaitingApproval(task.id, {
+        setMergeGateReviewReady(host, task.id, {
           config: { familiarType: 'worktree', summary },
           execution: {
             branch: featureBranch,
@@ -361,6 +395,7 @@ export async function executeMergeNodeImpl(
             reviewStatus: 'Awaiting review',
           },
         });
+        await startReviewReadyDependents(host);
         host.startPrPolling(task.id, result.identifier, workflowId!);
         return;
       }
@@ -389,7 +424,7 @@ export async function executeMergeNodeImpl(
         mergeMode,
       });
       console.log(
-        `[merge-gate-workspace] setTaskAwaitingApproval path=no_consolidate_branch ` +
+        `[merge-gate-workspace] setTaskReviewReady path=no_consolidate_branch ` +
           `task=${task.id} gateWorkspacePath=${gateWorkspacePath ?? 'NULL'} mergeMode=${mergeMode}`,
       );
       const gateResponse: WorkResponse = {
@@ -399,10 +434,11 @@ export async function executeMergeNodeImpl(
         outputs: { exitCode: 0 },
       };
       host.callbacks.onComplete?.(task.id, gateResponse);
-      host.orchestrator.setTaskAwaitingApproval(task.id, {
+      setMergeGateReviewReady(host, task.id, {
         config: { familiarType: 'worktree', summary },
         execution: { branch: featureBranch ?? undefined, workspacePath: gateWorkspacePath },
       });
+      await startReviewReadyDependents(host);
       return;
     }
     response = {
@@ -440,10 +476,10 @@ export async function executeMergeNodeImpl(
       gateWorkspacePath: gateWorkspacePath ?? null,
     });
     console.log(
-      `[merge-gate-workspace] setTaskAwaitingApproval path=manual_post_success ` +
+      `[merge-gate-workspace] setTaskReviewReady path=manual_post_success ` +
         `task=${task.id} gateWorkspacePath=${gateWorkspacePath ?? 'NULL'}`,
     );
-    host.orchestrator.setTaskAwaitingApproval(task.id, {
+    setMergeGateReviewReady(host, task.id, {
       config: { familiarType: 'worktree', summary },
       execution: {
         branch: featureBranch ?? undefined,
@@ -451,6 +487,7 @@ export async function executeMergeNodeImpl(
         ...(reviewUrl ? { reviewUrl } : {}),
       },
     });
+    await startReviewReadyDependents(host);
   } else {
     const newlyStarted = host.orchestrator.handleWorkerResponse(response) ?? [];
     if (newlyStarted.length > 0) {
@@ -597,10 +634,11 @@ export async function publishAfterFixImpl(
         `[merge-gate-workspace] publishAfterFix early return (no featureBranch) task=${task.id} ` +
           `will persist workspacePath=${gateWorkspacePath ?? 'NULL'}`,
       );
-      host.orchestrator.setTaskAwaitingApproval(task.id, {
+      setMergeGateReviewReady(host, task.id, {
         config: { familiarType: 'worktree', summary },
         execution: { workspacePath: gateWorkspacePath },
       });
+      await startReviewReadyDependents(host);
       return;
     }
 
@@ -752,7 +790,7 @@ export async function publishAfterFixImpl(
 
 
 
-      host.orchestrator.setTaskAwaitingApproval(task.id, {
+      setMergeGateReviewReady(host, task.id, {
         config: { familiarType: 'worktree', summary },
         execution: {
           branch: featureBranch,
@@ -762,6 +800,7 @@ export async function publishAfterFixImpl(
           reviewStatus: 'Awaiting review',
         },
       });
+      await startReviewReadyDependents(host);
       host.startPrPolling(task.id, result.identifier, workflowId!);
       return;
     }
@@ -776,13 +815,14 @@ export async function publishAfterFixImpl(
       });
     }
 
-    host.orchestrator.setTaskAwaitingApproval(task.id, {
+    setMergeGateReviewReady(host, task.id, {
       config: { familiarType: 'worktree', summary },
       execution: {
         branch: featureBranch,
         workspacePath: gateWorkspacePath,
       },
     });
+    await startReviewReadyDependents(host);
     mergeTrace('PUBLISH_AFTER_FIX_DONE', { taskId: task.id });
   } catch (err) {
     // Clean up any in-progress merge in the gate clone

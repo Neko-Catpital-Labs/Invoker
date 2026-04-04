@@ -5,7 +5,7 @@
 #   workflow-3 depends on workflow-2 merge gate, etc.
 #
 # Usage:
-#   ./scripts/submit-workflow-chain.sh <workflow1.yaml> <workflow2.template.yaml> [workflow3.template.yaml ...]
+#   ./scripts/submit-workflow-chain.sh [--gate-policy approved|review_ready] <workflow1.yaml> <workflow2.template.yaml> [workflow3.template.yaml ...]
 #
 # For every plan after the first, include "__UPSTREAM_WORKFLOW_ID__" where the
 # previous workflow ID should be injected.
@@ -14,11 +14,23 @@
 #   externalDependencies:
 #     - workflowId: "__UPSTREAM_WORKFLOW_ID__"
 #       requiredStatus: completed
+#       gatePolicy: review_ready
 #
 set -euo pipefail
 
+GATE_POLICY="review_ready"
+if [[ "${1:-}" == "--gate-policy" ]]; then
+  GATE_POLICY="${2:-}"
+  shift 2
+fi
+
+if [[ "$GATE_POLICY" != "approved" && "$GATE_POLICY" != "review_ready" ]]; then
+  echo "Invalid --gate-policy '$GATE_POLICY' (expected approved|review_ready)" >&2
+  exit 1
+fi
+
 if [[ $# -lt 2 ]]; then
-  echo "Usage: $0 <workflow1.yaml> <workflow2.template.yaml> [workflow3.template.yaml ...]" >&2
+  echo "Usage: $0 [--gate-policy approved|review_ready] <workflow1.yaml> <workflow2.template.yaml> [workflow3.template.yaml ...]" >&2
   exit 1
 fi
 
@@ -31,6 +43,22 @@ fi
 resolve_abs() {
   local p="$1"
   cd "$(dirname "$p")" && pwd
+}
+
+extract_json_stream() {
+  awk '
+    BEGIN { started = 0 }
+    {
+      if (!started) {
+        if ($0 ~ /^[[:space:]]*[\[{]/ && $0 !~ /^\[init\]/ && $0 !~ /^\[deprecated\]/) {
+          started = 1
+          print
+        }
+      } else {
+        print
+      }
+    }
+  '
 }
 
 parse_plan_name() {
@@ -62,22 +90,6 @@ resolve_persisted_workflow_id() {
     sleep 0.2
   done
   return 1
-}
-
-extract_json_stream() {
-  awk '
-    BEGIN { started = 0 }
-    {
-      if (!started) {
-        if ($0 ~ /^[[:space:]]*[\[{]/ && $0 !~ /^\[init\]/ && $0 !~ /^\[deprecated\]/) {
-          started = 1
-          print
-        }
-      } else {
-        print
-      }
-    }
-  '
 }
 
 resolve_workflow_feature_branch() {
@@ -160,14 +172,16 @@ for i in "${!INPUT_PLANS[@]}"; do
       echo "Template plan is missing top-level baseBranch: $plan" >&2
       exit 1
     fi
+
     submit_plan="$(mktemp "/tmp/invoker-chain-step$((i+1)).XXXXXX.yaml")"
     sed "s/__UPSTREAM_WORKFLOW_ID__/$prev_wf_id/g" "$plan" > "$submit_plan"
     if ! rg -q "$prev_wf_id" "$submit_plan"; then
       echo "Rendered plan did not include upstream id '$prev_wf_id': $submit_plan" >&2
       exit 1
     fi
-    # Enforce merge-gate dependency for the upstream workflow entry.
-    awk -v upid="$prev_wf_id" '
+
+    # Enforce merge-gate dependency and policy for the upstream workflow entry.
+    awk -v upid="$prev_wf_id" -v gate_policy="$GATE_POLICY" '
       BEGIN {
         in_ext=0
         dep_is_upstream=0
@@ -218,6 +232,7 @@ for i in "${!INPUT_PLANS[@]}"; do
         }
         if (in_ext && dep_is_upstream && line ~ /^[[:space:]]*requiredStatus:[[:space:]]*/) {
           print dep_indent "  requiredStatus: completed"
+          print dep_indent "  gatePolicy: " gate_policy
           dep_had_required=1
           next
         }
@@ -228,6 +243,7 @@ for i in "${!INPUT_PLANS[@]}"; do
       }
     ' "$submit_plan" > "${submit_plan}.tmp"
     mv "${submit_plan}.tmp" "$submit_plan"
+
     if ! rg -q "workflowId:[[:space:]]*\"${prev_wf_id}\"([[:space:]]|$)" "$submit_plan"; then
       echo "Rendered plan missing upstream workflow dependency '${prev_wf_id}': $submit_plan" >&2
       exit 1
@@ -236,6 +252,11 @@ for i in "${!INPUT_PLANS[@]}"; do
       echo "Rendered plan missing enforced merge-gate taskId '__merge__': $submit_plan" >&2
       exit 1
     fi
+    if ! rg -q "^\s*gatePolicy:[[:space:]]*${GATE_POLICY}$" "$submit_plan"; then
+      echo "Rendered plan missing enforced gatePolicy '${GATE_POLICY}': $submit_plan" >&2
+      exit 1
+    fi
+
     sed -E -i "s|^baseBranch:.*$|baseBranch: ${prev_wf_feature_branch}|" "$submit_plan"
     if ! rg -q "^baseBranch:[[:space:]]*${prev_wf_feature_branch}$" "$submit_plan"; then
       echo "Rendered plan baseBranch did not update to upstream feature branch '${prev_wf_feature_branch}': $submit_plan" >&2
@@ -269,6 +290,7 @@ for i in "${!INPUT_PLANS[@]}"; do
       | jq -r --arg id "$persisted_id" '.[] | select(.id == $id) | .baseBranch // empty' | head -1
   )"
   CHAIN_BASE_BRANCHES+=("${wf_base_branch:-<unset>}")
+
   wf_feature_branch="$(resolve_workflow_feature_branch "$persisted_id" || true)"
   if [[ -z "${wf_feature_branch:-}" ]]; then
     echo "Failed to resolve featureBranch for workflow: $persisted_id (name: $plan_name)" >&2
@@ -281,6 +303,7 @@ done
 
 echo
 echo "Workflow chain submitted."
+echo "GATE_POLICY=${GATE_POLICY}"
 for i in "${!CHAIN_WORKFLOW_IDS[@]}"; do
   echo "WF$((i+1))=${CHAIN_WORKFLOW_IDS[$i]} base=${CHAIN_BASE_BRANCHES[$i]} feature=${CHAIN_FEATURE_BRANCHES[$i]}"
 done

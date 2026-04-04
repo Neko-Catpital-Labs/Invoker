@@ -132,6 +132,7 @@ export interface PlanDefinition {
       workflowId: string;
       taskId: string;
       requiredStatus?: 'completed';
+      gatePolicy?: 'approved' | 'review_ready';
     }>;
     pivot?: boolean;
     experimentVariants?: Array<{ id: string; description: string; prompt?: string; command?: string }>;
@@ -524,6 +525,7 @@ export class Orchestrator {
           workflowId: dep.workflowId,
           taskId: dep.taskId,
           requiredStatus: dep.requiredStatus ?? 'completed',
+          gatePolicy: dep.gatePolicy ?? 'review_ready',
         })) ?? [];
       const task = createTaskState(
         scopedId,
@@ -553,8 +555,9 @@ export class Orchestrator {
     for (const taskDef of plan.tasks) {
       for (const dep of taskDef.externalDependencies ?? []) {
         if (!this.findExternalDependencyTask(dep.workflowId, dep.taskId)) {
+          const depDisplayId = this.externalDependencyDisplayId(dep.workflowId, dep.taskId);
           missingExternalDeps.push(
-            `task "${taskDef.id}" references missing external dependency "${dep.workflowId}/${dep.taskId}"`,
+            `task "${taskDef.id}" references missing external dependency "${depDisplayId}"`,
           );
         }
       }
@@ -722,12 +725,12 @@ export class Orchestrator {
     this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
   }
 
-  /**
-   * Transition a running task directly to awaiting_approval.
-   * Used by the merge gate in manual mode after successful consolidation.
-   * Does NOT trigger checkWorkflowCompletion (the workflow stays open).
-   */
-  setTaskAwaitingApproval(taskId: string, additionalChanges?: TaskStateChanges): void {
+  private setTaskApprovalStatus(
+    taskId: string,
+    status: 'awaiting_approval' | 'review_ready',
+    eventName: 'task.awaiting_approval' | 'task.review_ready',
+    additionalChanges?: TaskStateChanges,
+  ): void {
     this.refreshFromDb();
     const task = this.stateGetTask(taskId);
     if (!task) return;
@@ -750,7 +753,7 @@ export class Orchestrator {
       : task.execution.lastAgentName;
 
     const changes: TaskStateChanges = {
-      status: 'awaiting_approval',
+      status,
       config: additionalChanges?.config,
       execution: {
         ...additionalExecution,
@@ -762,19 +765,35 @@ export class Orchestrator {
       },
     };
     if (task.config.isMergeNode && changes.execution && 'workspacePath' in changes.execution) {
-      mergeTrace('GATE_WS_SET_TASK_AWAITING_APPROVAL', {
+      mergeTrace(status === 'review_ready' ? 'GATE_WS_SET_TASK_REVIEW_READY' : 'GATE_WS_SET_TASK_AWAITING_APPROVAL', {
         taskId: id,
         workspacePath: changes.execution.workspacePath ?? null,
       });
       console.log(
-        `[merge-gate-workspace] setTaskAwaitingApproval mergeNode=${id} ` +
+        `[merge-gate-workspace] setTask${status === 'review_ready' ? 'ReviewReady' : 'AwaitingApproval'} mergeNode=${id} ` +
           `execution.workspacePath=${changes.execution.workspacePath ?? 'NULL'}`,
       );
     }
     this.writeAndSync(id, changes);
     const delta: TaskDelta = { type: 'updated', taskId: id, changes };
-    this.persistence.logEvent?.(id, 'task.awaiting_approval', changes);
+    this.persistence.logEvent?.(id, eventName, changes);
     this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
+  }
+
+  /**
+   * Transition a running task directly to awaiting_approval.
+   * Used for non-merge manual approvals and fix-approval flows.
+   */
+  setTaskAwaitingApproval(taskId: string, additionalChanges?: TaskStateChanges): void {
+    this.setTaskApprovalStatus(taskId, 'awaiting_approval', 'task.awaiting_approval', additionalChanges);
+  }
+
+  /**
+   * Transition a running merge gate directly to review_ready.
+   * Used by merge-gate execution when output is ready for human review.
+   */
+  setTaskReviewReady(taskId: string, additionalChanges?: TaskStateChanges): void {
+    this.setTaskApprovalStatus(taskId, 'review_ready', 'task.review_ready', additionalChanges);
   }
 
   setFixAwaitingApproval(taskId: string, originalError: string): void {
@@ -829,7 +848,8 @@ export class Orchestrator {
     this.refreshFromDb();
     const task = this.stateGetTask(taskId);
     mergeTrace('APPROVE_TASK_LOOKUP', { taskId, found: !!task, status: task?.status, isMergeNode: !!task?.config.isMergeNode, hasHook: !!this.beforeApproveHook });
-    if (!task || task.status !== 'awaiting_approval') {
+    const isApprovalState = task?.status === 'awaiting_approval' || task?.status === 'review_ready';
+    if (!task || !isApprovalState) {
       mergeTrace('APPROVE_SKIPPED_NOT_AWAITING', {
         taskId,
         found: !!task,
@@ -838,7 +858,7 @@ export class Orchestrator {
       });
       console.log(
         `[orchestrator.approve] skipped taskId=${taskId} ` +
-          (!task ? '(task not found)' : `(status=${task.status}, expected awaiting_approval)`),
+          (!task ? '(task not found)' : `(status=${task.status}, expected awaiting_approval|review_ready)`),
       );
       return [];
     }
@@ -929,7 +949,7 @@ export class Orchestrator {
   reject(taskId: string, reason?: string): void {
     this.refreshFromDb();
     const task = this.stateGetTask(taskId);
-    if (!task || task.status !== 'awaiting_approval') return;
+    if (!task || (task.status !== 'awaiting_approval' && task.status !== 'review_ready')) return;
 
     const changes: TaskStateChanges = {
       status: 'failed',
@@ -1835,6 +1855,7 @@ export class Orchestrator {
       'fixing_with_ai',
       'blocked',
       'needs_input',
+      'review_ready',
       'awaiting_approval',
     ]);
 
@@ -2291,6 +2312,7 @@ export class Orchestrator {
           t.status === 'completed' ||
           t.status === 'failed' ||
           t.status === 'needs_input' ||
+          t.status === 'review_ready' ||
           t.status === 'awaiting_approval' ||
           t.status === 'blocked' ||
           t.status === 'stale',
@@ -2298,7 +2320,7 @@ export class Orchestrator {
       if (!settled) continue;
 
       const hasPendingInput = tasks.some(
-        (t) => t.status === 'needs_input' || t.status === 'awaiting_approval',
+        (t) => t.status === 'needs_input' || t.status === 'awaiting_approval' || t.status === 'review_ready',
       );
       if (hasPendingInput) continue;
 
@@ -2379,13 +2401,24 @@ export class Orchestrator {
     });
   }
 
-  private findExternalDependencyTask(workflowId: string, taskId: string): TaskState | undefined {
-    const tasks = this.persistence.loadTasks(workflowId);
-    if (taskId.includes('/')) {
-      return tasks.find((t) => t.id === taskId);
+  private externalDependencyDisplayId(workflowId: string, taskId?: string): string {
+    const normalizedTaskId = taskId?.trim() || '__merge__';
+    if (normalizedTaskId.includes('/')) return normalizedTaskId;
+    if (normalizedTaskId === '__merge__') return `__merge__${workflowId}`;
+    return `${workflowId}/${normalizedTaskId}`;
+  }
+
+  private findExternalDependencyTask(workflowId: string, taskId?: string): TaskState | undefined {
+    const normalizedTaskId = taskId?.trim() || '__merge__';
+    if (normalizedTaskId === '__merge__') {
+      return this.getMergeNode(workflowId);
     }
-    const scopedId = scopePlanTaskId(workflowId, taskId);
-    return tasks.find((t) => t.id === scopedId || t.id === taskId);
+    const tasks = this.persistence.loadTasks(workflowId);
+    if (normalizedTaskId.includes('/')) {
+      return tasks.find((t) => t.id === normalizedTaskId);
+    }
+    const scopedId = scopePlanTaskId(workflowId, normalizedTaskId);
+    return tasks.find((t) => t.id === scopedId || t.id === normalizedTaskId);
   }
 
   private getExternalDependencyBlocker(task: TaskState): string | undefined {
@@ -2394,12 +2427,23 @@ export class Orchestrator {
 
     for (const dep of deps) {
       const prerequisite = this.findExternalDependencyTask(dep.workflowId, dep.taskId);
+      const depDisplayId = this.externalDependencyDisplayId(dep.workflowId, dep.taskId);
       if (!prerequisite) {
-        return `missing prerequisite ${dep.workflowId}/${dep.taskId}`;
+        return `missing prerequisite ${depDisplayId}`;
       }
       const required = dep.requiredStatus ?? 'completed';
-      if (prerequisite.status !== required) {
-        return `waiting on ${dep.workflowId}/${dep.taskId} (${prerequisite.status})`;
+      const gatePolicy = dep.gatePolicy ?? 'review_ready';
+      const isMergeGateDep = (dep.taskId?.trim() || '__merge__') === '__merge__';
+      const satisfied =
+        prerequisite.status === required
+        || (
+          gatePolicy === 'review_ready'
+          && isMergeGateDep
+          && required === 'completed'
+          && (prerequisite.status === 'review_ready' || prerequisite.status === 'awaiting_approval')
+        );
+      if (!satisfied) {
+        return `waiting on ${depDisplayId} (${prerequisite.status})`;
       }
     }
     return undefined;

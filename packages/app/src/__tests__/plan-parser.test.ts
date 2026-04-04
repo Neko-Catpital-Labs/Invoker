@@ -121,7 +121,48 @@ tasks:
 `;
     const plan = parsePlan(yaml);
     expect(plan.tasks[0].externalDependencies).toEqual([
-      { workflowId: 'wf-123', taskId: 'verify-control-plane-regression', requiredStatus: 'completed' },
+      {
+        workflowId: 'wf-123',
+        taskId: 'verify-control-plane-regression',
+        requiredStatus: 'completed',
+        gatePolicy: 'review_ready',
+      },
+    ]);
+  });
+
+  it('defaults externalDependencies without taskId to upstream merge gate', () => {
+    const yaml = `
+name: External Dependency By Workflow
+repoUrl: git@github.com:test/repo.git
+tasks:
+  - id: gated
+    description: Wait for prior workflow merge gate
+    command: echo "go"
+    externalDependencies:
+      - workflowId: wf-123
+`;
+    const plan = parsePlan(yaml);
+    expect(plan.tasks[0].externalDependencies).toEqual([
+      { workflowId: 'wf-123', taskId: '__merge__', requiredStatus: 'completed', gatePolicy: 'review_ready' },
+    ]);
+  });
+
+  it('parses externalDependencies.gatePolicy review_ready', () => {
+    const yaml = `
+name: External Dependency Review Ready
+repoUrl: git@github.com:test/repo.git
+tasks:
+  - id: gated
+    description: Wait for prior workflow merge gate to be review-ready
+    command: echo "go"
+    externalDependencies:
+      - workflowId: wf-123
+        taskId: __merge__
+        gatePolicy: review_ready
+`;
+    const plan = parsePlan(yaml);
+    expect(plan.tasks[0].externalDependencies).toEqual([
+      { workflowId: 'wf-123', taskId: '__merge__', requiredStatus: 'completed', gatePolicy: 'review_ready' },
     ]);
   });
 
@@ -140,6 +181,23 @@ tasks:
 `;
     expect(() => parsePlan(yaml)).toThrow(PlanParseError);
     expect(() => parsePlan(yaml)).toThrow('"requiredStatus" must be "completed"');
+  });
+
+  it('rejects invalid externalDependencies.gatePolicy', () => {
+    const yaml = `
+name: Bad External Dependency Gate Policy
+repoUrl: git@github.com:test/repo.git
+tasks:
+  - id: gated
+    description: Wait
+    command: echo "go"
+    externalDependencies:
+      - workflowId: wf-123
+        taskId: __merge__
+        gatePolicy: whenever
+`;
+    expect(() => parsePlan(yaml)).toThrow(PlanParseError);
+    expect(() => parsePlan(yaml)).toThrow('"gatePolicy" must be "approved" or "review_ready"');
   });
 
   it('rejects plan without name', () => {

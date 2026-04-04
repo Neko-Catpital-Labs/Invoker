@@ -197,7 +197,7 @@ export async function setWorkflowMergeMode(
   const mergeTask = tasks.find((t) => t.config.isMergeNode);
   if (
     mergeTask &&
-    (mergeTask.status === 'completed' || mergeTask.status === 'awaiting_approval')
+    (mergeTask.status === 'completed' || mergeTask.status === 'awaiting_approval' || mergeTask.status === 'review_ready')
   ) {
     const started = deps.orchestrator.restartTask(mergeTask.id);
     const runnable = started.filter((t) => t.status === 'running');

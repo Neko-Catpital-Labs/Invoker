@@ -1132,7 +1132,7 @@ async function waitForCompletion(orchestrator: Orchestrator, workflowId?: string
     }
     const settledStatuses = waitForApproval
       ? ['completed', 'failed', 'needs_input', 'blocked', 'stale']
-      : ['completed', 'failed', 'needs_input', 'awaiting_approval', 'blocked', 'stale'];
+      : ['completed', 'failed', 'needs_input', 'awaiting_approval', 'review_ready', 'blocked', 'stale'];
     const allSettled = tasks.every((t) => settledStatuses.includes(t.status));
     if (allSettled) return;
     // Also settle if nothing is running and at least one task awaits human action.
@@ -1346,7 +1346,7 @@ async function waitForDelegatedSettlement(
     const taskArray = Array.from(tasks.values()).filter(t => t.config.workflowId === workflowId);
     const settledStatuses = waitForApproval
       ? ['completed', 'failed', 'needs_input', 'blocked', 'stale']
-      : ['completed', 'failed', 'needs_input', 'awaiting_approval', 'blocked', 'stale'];
+      : ['completed', 'failed', 'needs_input', 'awaiting_approval', 'review_ready', 'blocked', 'stale'];
     const allSettled = taskArray.every((t) => settledStatuses.includes(t.status));
     if (allSettled) return;
     await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
