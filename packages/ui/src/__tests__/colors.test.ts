@@ -40,10 +40,13 @@ describe('getStatusColor', () => {
     const completed = getStatusColor('completed');
     const failed = getStatusColor('failed');
 
-    // These three should have different bg colors
-    expect(running.bg).not.toBe(completed.bg);
-    expect(completed.bg).not.toBe(failed.bg);
-    expect(running.bg).not.toBe(failed.bg);
+    // In dark card mode, background can be shared; accents must still be distinct
+    expect(running.border).not.toBe(completed.border);
+    expect(completed.border).not.toBe(failed.border);
+    expect(running.border).not.toBe(failed.border);
+    expect(running.dot).not.toBe(completed.dot);
+    expect(completed.dot).not.toBe(failed.dot);
+    expect(running.dot).not.toBe(failed.dot);
   });
 
   it('returns default for unknown status', () => {

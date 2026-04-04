@@ -53,6 +53,7 @@ export function ContextMenu({
   const menuRef = useRef<HTMLDivElement>(null);
   const [focusedIndex, setFocusedIndex] = useState(0);
   const [position, setPosition] = useState({ left: x, top: y });
+  const [showMore, setShowMore] = useState(false);
 
   // Generate menu items
   const items = getMenuItems(task, { agents: ['claude', 'codex'] });
@@ -70,21 +71,13 @@ export function ContextMenu({
     return true;
   });
 
-  // Preserve the "Danger" section label even when the original separator carrier
-  // (e.g., cancel-task) is filtered out due missing handlers.
-  const hasDangerSeparator = availableItems.some((item) => item.separator === 'danger');
-  if (!hasDangerSeparator) {
-    const firstDangerIdx = availableItems.findIndex((item) => item.variant === 'danger');
-    if (firstDangerIdx >= 0) {
-      availableItems[firstDangerIdx] = {
-        ...availableItems[firstDangerIdx],
-        separator: 'danger',
-      };
-    }
-  }
+  const safeItems = availableItems.filter((item) => item.variant !== 'danger');
+  const dangerItems = availableItems.filter((item) => item.variant === 'danger');
+  const hasMoreButton = dangerItems.length > 0 && !showMore;
+  const renderedItems: MenuItem[] = showMore ? [...safeItems, ...dangerItems] : safeItems;
 
   // Find first enabled item index
-  const firstEnabledIndex = availableItems.findIndex((item) => item.enabled);
+  const firstEnabledIndex = renderedItems.findIndex((item) => item.enabled);
 
   // Auto-focus first enabled item on mount
   useEffect(() => {
@@ -142,7 +135,7 @@ export function ContextMenu({
 
   // Keyboard navigation
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    const enabledIndices = availableItems
+    const enabledIndices = renderedItems
       .map((item, idx) => (item.enabled ? idx : -1))
       .filter((idx) => idx >= 0);
 
@@ -158,7 +151,7 @@ export function ContextMenu({
       setFocusedIndex(enabledIndices[prevPos]);
     } else if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
-      const item = availableItems[focusedIndex];
+      const item = renderedItems[focusedIndex];
       if (item?.enabled) {
         handleItemClick(item);
       }
@@ -243,7 +236,7 @@ export function ContextMenu({
       onKeyDown={handleKeyDown}
       tabIndex={-1}
     >
-      {availableItems.map((item, idx) => {
+      {renderedItems.map((item, idx) => {
         const isFocused = idx === focusedIndex;
         const tooltip = !item.enabled && item.id === 'open-terminal'
           ? EXPERIMENT_SPAWN_PIVOT_OPEN_TERMINAL_MESSAGE
@@ -251,6 +244,7 @@ export function ContextMenu({
 
         return (
           <div key={item.id}>
+            {item.separator === 'task' && renderSeparator('Task')}
             {item.separator === 'workflow' && renderSeparator('Workflow')}
             {item.separator === 'danger' && renderSeparator('Danger')}
             <button
@@ -270,6 +264,18 @@ export function ContextMenu({
           </div>
         );
       })}
+      {hasMoreButton && (
+        <div>
+          <div className="border-t border-gray-600 my-1" />
+          <button
+            role="menuitem"
+            className="w-full text-left px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700"
+            onClick={() => setShowMore(true)}
+          >
+            More
+          </button>
+        </div>
+      )}
     </div>
   );
 }

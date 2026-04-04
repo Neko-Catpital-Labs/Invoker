@@ -79,29 +79,21 @@ exports[`Visual proof snapshots > dag-loaded 1`] = `
                 data-testid="rf__node-task-alpha"
               >
                 <div
-                  class="rounded-lg border-2 px-3 py-2 w-[260px] transition-opacity duration-75 bg-gray-200 border-gray-400 "
+                  class="relative w-[264px] rounded-2xl border px-5 py-4 transition-opacity duration-75 shadow-[0_6px_24px_rgba(0,0,0,0.28)] bg-slate-800/95 border-white/10 "
+                  title="task-alpha"
                 >
+                  <span
+                    class="absolute left-0 top-0 bottom-0 w-1.5 rounded-l-2xl bg-slate-400 "
+                  />
                   <div
-                    class="font-mono text-xs opacity-60 truncate text-gray-700"
-                  >
-                    task-alpha
-                  </div>
-                  <div
-                    class="text-sm font-medium truncate mt-1 text-gray-700 "
+                    class="text-2xl font-medium truncate pl-3 text-slate-100 "
                   >
                     First test task
                   </div>
                   <div
-                    class="flex items-center gap-1.5 mt-1"
+                    class="mt-1 pl-3 text-sm uppercase tracking-wide text-slate-100 opacity-75"
                   >
-                    <span
-                      class="w-2 h-2 rounded-full bg-gray-400 "
-                    />
-                    <span
-                      class="text-xs uppercase text-gray-700"
-                    >
-                      PENDING
-                    </span>
+                    PENDING
                   </div>
                 </div>
               </div>
@@ -110,29 +102,21 @@ exports[`Visual proof snapshots > dag-loaded 1`] = `
                 data-testid="rf__node-task-beta"
               >
                 <div
-                  class="rounded-lg border-2 px-3 py-2 w-[260px] transition-opacity duration-75 bg-gray-200 border-gray-400 "
+                  class="relative w-[264px] rounded-2xl border px-5 py-4 transition-opacity duration-75 shadow-[0_6px_24px_rgba(0,0,0,0.28)] bg-slate-800/95 border-white/10 "
+                  title="task-beta"
                 >
+                  <span
+                    class="absolute left-0 top-0 bottom-0 w-1.5 rounded-l-2xl bg-slate-400 "
+                  />
                   <div
-                    class="font-mono text-xs opacity-60 truncate text-gray-700"
-                  >
-                    task-beta
-                  </div>
-                  <div
-                    class="text-sm font-medium truncate mt-1 text-gray-700 "
+                    class="text-2xl font-medium truncate pl-3 text-slate-100 "
                   >
                     Second test task
                   </div>
                   <div
-                    class="flex items-center gap-1.5 mt-1"
+                    class="mt-1 pl-3 text-sm uppercase tracking-wide text-slate-100 opacity-75"
                   >
-                    <span
-                      class="w-2 h-2 rounded-full bg-gray-400 "
-                    />
-                    <span
-                      class="text-xs uppercase text-gray-700"
-                    >
-                      PENDING
-                    </span>
+                    PENDING
                   </div>
                 </div>
               </div>
@@ -436,29 +420,21 @@ exports[`Visual proof snapshots > task-complete 1`] = `
                 data-testid="rf__node-task-alpha"
               >
                 <div
-                  class="rounded-lg border-2 px-3 py-2 w-[260px] transition-opacity duration-75 bg-green-400 border-green-500 "
+                  class="relative w-[264px] rounded-2xl border px-5 py-4 transition-opacity duration-75 shadow-[0_6px_24px_rgba(0,0,0,0.28)] bg-slate-800/95 border-green-500/30 "
+                  title="task-alpha"
                 >
+                  <span
+                    class="absolute left-0 top-0 bottom-0 w-1.5 rounded-l-2xl bg-green-500 "
+                  />
                   <div
-                    class="font-mono text-xs opacity-60 truncate text-green-950"
-                  >
-                    task-alpha
-                  </div>
-                  <div
-                    class="text-sm font-medium truncate mt-1 text-green-950 "
+                    class="text-2xl font-medium truncate pl-3 text-slate-100 "
                   >
                     First test task
                   </div>
                   <div
-                    class="flex items-center gap-1.5 mt-1"
+                    class="mt-1 pl-3 text-sm uppercase tracking-wide text-slate-100 opacity-75"
                   >
-                    <span
-                      class="w-2 h-2 rounded-full bg-green-600 "
-                    />
-                    <span
-                      class="text-xs uppercase text-green-950"
-                    >
-                      COMPLETED
-                    </span>
+                    COMPLETED
                   </div>
                 </div>
               </div>
@@ -467,29 +443,21 @@ exports[`Visual proof snapshots > task-complete 1`] = `
                 data-testid="rf__node-task-beta"
               >
                 <div
-                  class="rounded-lg border-2 px-3 py-2 w-[260px] transition-opacity duration-75 bg-green-400 border-green-500 "
+                  class="relative w-[264px] rounded-2xl border px-5 py-4 transition-opacity duration-75 shadow-[0_6px_24px_rgba(0,0,0,0.28)] bg-slate-800/95 border-green-500/30 "
+                  title="task-beta"
                 >
+                  <span
+                    class="absolute left-0 top-0 bottom-0 w-1.5 rounded-l-2xl bg-green-500 "
+                  />
                   <div
-                    class="font-mono text-xs opacity-60 truncate text-green-950"
-                  >
-                    task-beta
-                  </div>
-                  <div
-                    class="text-sm font-medium truncate mt-1 text-green-950 "
+                    class="text-2xl font-medium truncate pl-3 text-slate-100 "
                   >
                     Second test task
                   </div>
                   <div
-                    class="flex items-center gap-1.5 mt-1"
+                    class="mt-1 pl-3 text-sm uppercase tracking-wide text-slate-100 opacity-75"
                   >
-                    <span
-                      class="w-2 h-2 rounded-full bg-green-600 "
-                    />
-                    <span
-                      class="text-xs uppercase text-green-950"
-                    >
-                      COMPLETED
-                    </span>
+                    COMPLETED
                   </div>
                 </div>
               </div>
@@ -650,29 +618,21 @@ exports[`Visual proof snapshots > task-panel 1`] = `
                 data-testid="rf__node-task-alpha"
               >
                 <div
-                  class="rounded-lg border-2 px-3 py-2 w-[260px] transition-opacity duration-75 bg-gray-200 border-gray-400 "
+                  class="relative w-[264px] rounded-2xl border px-5 py-4 transition-opacity duration-75 shadow-[0_6px_24px_rgba(0,0,0,0.28)] bg-slate-800/95 border-white/10 "
+                  title="task-alpha"
                 >
+                  <span
+                    class="absolute left-0 top-0 bottom-0 w-1.5 rounded-l-2xl bg-slate-400 "
+                  />
                   <div
-                    class="font-mono text-xs opacity-60 truncate text-gray-700"
-                  >
-                    task-alpha
-                  </div>
-                  <div
-                    class="text-sm font-medium truncate mt-1 text-gray-700 "
+                    class="text-2xl font-medium truncate pl-3 text-slate-100 "
                   >
                     First test task
                   </div>
                   <div
-                    class="flex items-center gap-1.5 mt-1"
+                    class="mt-1 pl-3 text-sm uppercase tracking-wide text-slate-100 opacity-75"
                   >
-                    <span
-                      class="w-2 h-2 rounded-full bg-gray-400 "
-                    />
-                    <span
-                      class="text-xs uppercase text-gray-700"
-                    >
-                      PENDING
-                    </span>
+                    PENDING
                   </div>
                 </div>
               </div>
@@ -681,29 +641,21 @@ exports[`Visual proof snapshots > task-panel 1`] = `
                 data-testid="rf__node-task-beta"
               >
                 <div
-                  class="rounded-lg border-2 px-3 py-2 w-[260px] transition-opacity duration-75 bg-gray-200 border-gray-400 "
+                  class="relative w-[264px] rounded-2xl border px-5 py-4 transition-opacity duration-75 shadow-[0_6px_24px_rgba(0,0,0,0.28)] bg-slate-800/95 border-white/10 "
+                  title="task-beta"
                 >
+                  <span
+                    class="absolute left-0 top-0 bottom-0 w-1.5 rounded-l-2xl bg-slate-400 "
+                  />
                   <div
-                    class="font-mono text-xs opacity-60 truncate text-gray-700"
-                  >
-                    task-beta
-                  </div>
-                  <div
-                    class="text-sm font-medium truncate mt-1 text-gray-700 "
+                    class="text-2xl font-medium truncate pl-3 text-slate-100 "
                   >
                     Second test task
                   </div>
                   <div
-                    class="flex items-center gap-1.5 mt-1"
+                    class="mt-1 pl-3 text-sm uppercase tracking-wide text-slate-100 opacity-75"
                   >
-                    <span
-                      class="w-2 h-2 rounded-full bg-gray-400 "
-                    />
-                    <span
-                      class="text-xs uppercase text-gray-700"
-                    >
-                      PENDING
-                    </span>
+                    PENDING
                   </div>
                 </div>
               </div>
@@ -736,10 +688,10 @@ exports[`Visual proof snapshots > task-panel 1`] = `
               class="flex items-center gap-2"
             >
               <span
-                class="inline-flex items-center gap-1.5 px-2 py-1 rounded text-xs font-medium bg-gray-200 text-gray-700"
+                class="inline-flex items-center gap-1.5 px-2 py-1 rounded text-xs font-medium bg-slate-800/95 text-slate-100"
               >
                 <span
-                  class="w-2 h-2 rounded-full bg-gray-400 "
+                  class="w-2 h-2 rounded-full bg-slate-400 "
                 />
                 PENDING
               </span>
@@ -972,29 +924,21 @@ exports[`Visual proof snapshots > task-panel-agent-selector 1`] = `
                 data-testid="rf__node-task-alpha"
               >
                 <div
-                  class="rounded-lg border-2 px-3 py-2 w-[260px] transition-opacity duration-75 bg-gray-200 border-gray-400 "
+                  class="relative w-[264px] rounded-2xl border px-5 py-4 transition-opacity duration-75 shadow-[0_6px_24px_rgba(0,0,0,0.28)] bg-slate-800/95 border-white/10 "
+                  title="task-alpha"
                 >
+                  <span
+                    class="absolute left-0 top-0 bottom-0 w-1.5 rounded-l-2xl bg-slate-400 "
+                  />
                   <div
-                    class="font-mono text-xs opacity-60 truncate text-gray-700"
-                  >
-                    task-alpha
-                  </div>
-                  <div
-                    class="text-sm font-medium truncate mt-1 text-gray-700 "
+                    class="text-2xl font-medium truncate pl-3 text-slate-100 "
                   >
                     Agent selector task
                   </div>
                   <div
-                    class="flex items-center gap-1.5 mt-1"
+                    class="mt-1 pl-3 text-sm uppercase tracking-wide text-slate-100 opacity-75"
                   >
-                    <span
-                      class="w-2 h-2 rounded-full bg-gray-400 "
-                    />
-                    <span
-                      class="text-xs uppercase text-gray-700"
-                    >
-                      PENDING
-                    </span>
+                    PENDING
                   </div>
                 </div>
               </div>
@@ -1027,10 +971,10 @@ exports[`Visual proof snapshots > task-panel-agent-selector 1`] = `
               class="flex items-center gap-2"
             >
               <span
-                class="inline-flex items-center gap-1.5 px-2 py-1 rounded text-xs font-medium bg-gray-200 text-gray-700"
+                class="inline-flex items-center gap-1.5 px-2 py-1 rounded text-xs font-medium bg-slate-800/95 text-slate-100"
               >
                 <span
-                  class="w-2 h-2 rounded-full bg-gray-400 "
+                  class="w-2 h-2 rounded-full bg-slate-400 "
                 />
                 PENDING
               </span>
@@ -1289,29 +1233,21 @@ exports[`Visual proof snapshots > task-running 1`] = `
                 data-testid="rf__node-task-alpha"
               >
                 <div
-                  class="rounded-lg border-2 px-3 py-2 w-[260px] transition-opacity duration-75 bg-blue-400 border-blue-500 "
+                  class="relative w-[264px] rounded-2xl border px-5 py-4 transition-opacity duration-75 shadow-[0_6px_24px_rgba(0,0,0,0.28)] bg-slate-800/95 border-blue-400/25 "
+                  title="task-alpha"
                 >
+                  <span
+                    class="absolute left-0 top-0 bottom-0 w-1.5 rounded-l-2xl bg-blue-400 animate-pulse"
+                  />
                   <div
-                    class="font-mono text-xs opacity-60 truncate text-blue-950"
-                  >
-                    task-alpha
-                  </div>
-                  <div
-                    class="text-sm font-medium truncate mt-1 text-blue-950 "
+                    class="text-2xl font-medium truncate pl-3 text-slate-100 "
                   >
                     First test task
                   </div>
                   <div
-                    class="flex items-center gap-1.5 mt-1"
+                    class="mt-1 pl-3 text-sm uppercase tracking-wide text-slate-100 opacity-75"
                   >
-                    <span
-                      class="w-2 h-2 rounded-full bg-blue-600 animate-pulse"
-                    />
-                    <span
-                      class="text-xs uppercase text-blue-950"
-                    >
-                      RUNNING
-                    </span>
+                    RUNNING
                   </div>
                 </div>
               </div>
@@ -1320,29 +1256,21 @@ exports[`Visual proof snapshots > task-running 1`] = `
                 data-testid="rf__node-task-beta"
               >
                 <div
-                  class="rounded-lg border-2 px-3 py-2 w-[260px] transition-opacity duration-75 bg-gray-200 border-gray-400 "
+                  class="relative w-[264px] rounded-2xl border px-5 py-4 transition-opacity duration-75 shadow-[0_6px_24px_rgba(0,0,0,0.28)] bg-slate-800/95 border-white/10 "
+                  title="task-beta"
                 >
+                  <span
+                    class="absolute left-0 top-0 bottom-0 w-1.5 rounded-l-2xl bg-slate-400 "
+                  />
                   <div
-                    class="font-mono text-xs opacity-60 truncate text-gray-700"
-                  >
-                    task-beta
-                  </div>
-                  <div
-                    class="text-sm font-medium truncate mt-1 text-gray-700 "
+                    class="text-2xl font-medium truncate pl-3 text-slate-100 "
                   >
                     Second test task
                   </div>
                   <div
-                    class="flex items-center gap-1.5 mt-1"
+                    class="mt-1 pl-3 text-sm uppercase tracking-wide text-slate-100 opacity-75"
                   >
-                    <span
-                      class="w-2 h-2 rounded-full bg-gray-400 "
-                    />
-                    <span
-                      class="text-xs uppercase text-gray-700"
-                    >
-                      PENDING
-                    </span>
+                    PENDING
                   </div>
                 </div>
               </div>

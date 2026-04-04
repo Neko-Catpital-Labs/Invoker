@@ -1,11 +1,12 @@
 /**
  * Context menu item ordering and configuration.
  *
- * Status-adaptive ordering per docs/invoker-apple-reskin-research.md section 4.2:
- * - failed: "Fix with Claude" first (primary), then other fix agents, Restart, Replace
- * - running: "Open Terminal" first (primary)
- * - pending: "Restart Task" first (primary)
- * - completed/stale: "Open Terminal" first, then "Restart Task"
+ * Design:
+ * - Failed tasks: fix actions first.
+ * - Task actions are grouped in a dedicated "Task" section.
+ * - Workflow actions are grouped in a "Workflow" section.
+ * - Dangerous actions are grouped in a "Danger" section (UI can collapse behind "More").
+ * - No "Replace with..." action.
  */
 
 import type { TaskState } from '../types.js';
@@ -18,7 +19,7 @@ export interface MenuItem {
   action: string; // handler key, e.g. 'onRestart', 'onFix'
   agentName?: string; // for fix items
   variant?: 'default' | 'primary' | 'warning' | 'danger';
-  separator?: 'workflow' | 'danger'; // labeled separator BEFORE this item
+  separator?: 'task' | 'workflow' | 'danger'; // labeled separator BEFORE this item
 }
 
 export interface GetMenuItemsOptions {
@@ -37,59 +38,34 @@ export function getMenuItems(
   const items: MenuItem[] = [];
 
   const canRestart = task.status !== 'running';
-  const canReplace = task.status === 'failed' || task.status === 'blocked';
   const canOpenTerminal = !isExperimentSpawnPivotTask(task);
   const canFix = task.status === 'failed';
   const canCancel = task.status !== 'completed' && task.status !== 'stale';
   const hasWorkflow = !!task.config.workflowId;
 
-  // ── Task-level items (status-adaptive ordering) ───────────────
-
-  if (task.status === 'failed') {
-    // Failed: Fix first (primary), then Restart, Replace, Open Terminal
-    if (canFix) {
-      agents.forEach((agentName, idx) => {
-        items.push({
-          id: `fix-${agentName}`,
-          label: `Fix with ${agentName.charAt(0).toUpperCase() + agentName.slice(1)}`,
-          enabled: true,
-          action: 'onFix',
-          agentName,
-          variant: idx === 0 ? 'primary' : 'default',
-        });
-      });
-    }
-
-    items.push({
-      id: 'restart',
-      label: 'Restart Task',
-      enabled: canRestart,
-      action: 'onRestart',
-    });
-
-    if (canReplace) {
+  // ── Fix actions (top, only for failed) ────────────────────────
+  if (canFix) {
+    agents.forEach((agentName, idx) => {
       items.push({
-        id: 'replace',
-        label: 'Replace with...',
+        id: `fix-${agentName}`,
+        label: `Fix with ${agentName.charAt(0).toUpperCase() + agentName.slice(1)}`,
         enabled: true,
-        action: 'onReplace',
+        action: 'onFix',
+        agentName,
+        variant: idx === 0 ? 'primary' : 'default',
       });
-    }
-
-    items.push({
-      id: 'open-terminal',
-      label: 'Open Terminal',
-      enabled: canOpenTerminal,
-      action: 'onOpenTerminal',
     });
-  } else if (task.status === 'running') {
-    // Running: Open Terminal first (primary), then Restart
+  }
+
+  // ── Task actions (grouped) ────────────────────────────────────
+  if (task.status === 'running') {
     items.push({
       id: 'open-terminal',
       label: 'Open Terminal',
       enabled: canOpenTerminal,
       action: 'onOpenTerminal',
-      variant: 'primary',
+      variant: !canFix ? 'primary' : 'default',
+      separator: 'task',
     });
 
     items.push({
@@ -98,33 +74,15 @@ export function getMenuItems(
       enabled: canRestart,
       action: 'onRestart',
     });
-
-    if (canReplace) {
-      items.push({
-        id: 'replace',
-        label: 'Replace with...',
-        enabled: true,
-        action: 'onReplace',
-      });
-    }
   } else if (task.status === 'pending') {
-    // Pending: Restart first (primary), then Replace, Open Terminal
     items.push({
       id: 'restart',
       label: 'Restart Task',
       enabled: canRestart,
       action: 'onRestart',
-      variant: 'primary',
+      variant: !canFix ? 'primary' : 'default',
+      separator: 'task',
     });
-
-    if (canReplace) {
-      items.push({
-        id: 'replace',
-        label: 'Replace with...',
-        enabled: true,
-        action: 'onReplace',
-      });
-    }
 
     items.push({
       id: 'open-terminal',
@@ -133,12 +91,14 @@ export function getMenuItems(
       action: 'onOpenTerminal',
     });
   } else {
-    // completed/stale: Open Terminal first, then Restart
+    // failed/completed/stale/blocked/etc: open terminal then restart
     items.push({
       id: 'open-terminal',
       label: 'Open Terminal',
       enabled: canOpenTerminal,
       action: 'onOpenTerminal',
+      variant: !canFix ? 'primary' : 'default',
+      separator: 'task',
     });
 
     items.push({
@@ -147,23 +107,13 @@ export function getMenuItems(
       enabled: canRestart,
       action: 'onRestart',
     });
-
-    if (canReplace) {
-      items.push({
-        id: 'replace',
-        label: 'Replace with...',
-        enabled: true,
-        action: 'onReplace',
-      });
-    }
   }
 
-  // ── Workflow-level items (grouped with labeled separator) ─────
-
+  // ── Workflow-level items (grouped) ───────────────────────────
   if (hasWorkflow) {
     items.push({
       id: 'rebase-retry',
-      label: 'Rebase & Retry',
+      label: 'Retry with Rebase',
       enabled: true,
       action: 'onRebaseAndRetry',
       variant: 'warning',
@@ -172,19 +122,18 @@ export function getMenuItems(
 
     items.push({
       id: 'retry-workflow',
-      label: 'Retry Workflow (keep completed)',
+      label: 'Retry',
       enabled: true,
       action: 'onRetryWorkflow',
       variant: 'warning',
     });
   }
 
-  // ── Danger items (grouped with labeled separator) ─────────────
-
+  // ── Danger items (grouped; UI may hide behind More) ──────────
   if (canCancel) {
     items.push({
       id: 'cancel-task',
-      label: 'Cancel Task (+ dependents)',
+      label: 'Cancel Task',
       enabled: true,
       action: 'onCancel',
       variant: 'danger',

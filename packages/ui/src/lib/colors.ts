@@ -15,72 +15,72 @@ export interface StatusColors {
 
 const STATUS_COLOR_MAP: Record<string, StatusColors> = {
   pending: {
-    bg: 'bg-gray-200',
-    border: 'border-gray-400',
-    text: 'text-gray-700',
-    dot: 'bg-gray-400',
+    bg: 'bg-slate-800/95',
+    border: 'border-white/10',
+    text: 'text-slate-100',
+    dot: 'bg-slate-400',
   },
   running: {
-    bg: 'bg-blue-400',
-    border: 'border-blue-500',
-    text: 'text-blue-950',
-    dot: 'bg-blue-600',
+    bg: 'bg-slate-800/95',
+    border: 'border-blue-400/25',
+    text: 'text-slate-100',
+    dot: 'bg-blue-400',
   },
   fixing_with_ai: {
-    bg: 'bg-orange-400',
-    border: 'border-orange-500',
-    text: 'text-orange-950',
-    dot: 'bg-orange-600',
+    bg: 'bg-slate-800/95',
+    border: 'border-sky-400/20',
+    text: 'text-slate-100',
+    dot: 'bg-sky-400',
   },
   completed: {
-    bg: 'bg-green-400',
-    border: 'border-green-500',
-    text: 'text-green-950',
-    dot: 'bg-green-600',
+    bg: 'bg-slate-800/95',
+    border: 'border-green-500/30',
+    text: 'text-slate-100',
+    dot: 'bg-green-500',
   },
   failed: {
-    bg: 'bg-red-400',
-    border: 'border-red-500',
-    text: 'text-red-950',
-    dot: 'bg-red-600',
+    bg: 'bg-red-500/20',
+    border: 'border-red-500/55',
+    text: 'text-red-100',
+    dot: 'bg-red-500',
   },
   blocked: {
-    bg: 'bg-gray-400',
-    border: 'border-gray-500',
-    text: 'text-gray-800',
-    dot: 'bg-gray-600',
+    bg: 'bg-slate-800/95',
+    border: 'border-slate-500/30',
+    text: 'text-slate-300',
+    dot: 'bg-slate-500',
   },
   needs_input: {
-    bg: 'bg-cyan-400',
-    border: 'border-cyan-500',
-    text: 'text-cyan-950',
-    dot: 'bg-cyan-600',
+    bg: 'bg-orange-950/30',
+    border: 'border-orange-400/25',
+    text: 'text-orange-100',
+    dot: 'bg-orange-400',
   },
   awaiting_approval: {
-    bg: 'bg-purple-400',
-    border: 'border-purple-500',
-    text: 'text-purple-950',
-    dot: 'bg-purple-600',
+    bg: 'bg-purple-500/20',
+    border: 'border-purple-500/55',
+    text: 'text-purple-100',
+    dot: 'bg-purple-400',
   },
   fix_approval: {
-    bg: 'bg-fuchsia-400',
-    border: 'border-fuchsia-500',
-    text: 'text-fuchsia-950',
-    dot: 'bg-fuchsia-600',
+    bg: 'bg-fuchsia-500/20',
+    border: 'border-fuchsia-500/55',
+    text: 'text-fuchsia-100',
+    dot: 'bg-fuchsia-500',
   },
   stale: {
-    bg: 'bg-gray-300',
-    border: 'border-gray-400',
-    text: 'text-gray-500',
-    dot: 'bg-gray-400',
+    bg: 'bg-slate-900/80',
+    border: 'border-white/5',
+    text: 'text-slate-500',
+    dot: 'bg-slate-600',
   },
 };
 
 const DEFAULT_COLORS: StatusColors = {
-  bg: 'bg-gray-200',
-  border: 'border-gray-400',
-  text: 'text-gray-700',
-  dot: 'bg-gray-400',
+  bg: 'bg-slate-800/95',
+  border: 'border-white/10',
+  text: 'text-slate-100',
+  dot: 'bg-slate-400',
 };
 
 /**
@@ -101,19 +101,19 @@ export function getStatusInlineColors(status: string): {
   text: string;
 } {
   const map: Record<string, { bg: string; border: string; text: string }> = {
-    pending: { bg: '#e5e7eb', border: '#9ca3af', text: '#374151' },
-    running: { bg: '#60a5fa', border: '#3b82f6', text: '#172554' },
-    completed: { bg: '#4ade80', border: '#22c55e', text: '#052e16' },
-    failed: { bg: '#f87171', border: '#ef4444', text: '#450a0a' },
-    blocked: { bg: '#9ca3af', border: '#6b7280', text: '#1f2937' },
-    needs_input: { bg: '#22d3ee', border: '#06b6d4', text: '#083344' },
-    awaiting_approval: { bg: '#c084fc', border: '#a855f7', text: '#3b0764' },
-    fixing_with_ai: { bg: '#fb923c', border: '#f97316', text: '#431407' },
-    fix_approval: { bg: '#e879f9', border: '#d946ef', text: '#4a044e' },
-    stale: { bg: '#d1d5db', border: '#9ca3af', text: '#6b7280' },
+    pending: { bg: '#4b5563', border: '#3f4859', text: '#f8fafc' },
+    running: { bg: '#60a5fa', border: '#2f5f8f', text: '#ecfeff' },
+    completed: { bg: '#22c55e', border: '#1f7a45', text: '#ecfeff' },
+    failed: { bg: '#f87171', border: '#ef4444', text: '#fee2e2' },
+    blocked: { bg: '#64748b', border: '#475569', text: '#e2e8f0' },
+    needs_input: { bg: '#fb923c', border: '#9a4f0a', text: '#ffedd5' },
+    awaiting_approval: { bg: '#c084fc', border: '#a855f7', text: '#ede9fe' },
+    fixing_with_ai: { bg: '#7dd3fc', border: '#2c6f90', text: '#e0f2fe' },
+    fix_approval: { bg: '#e879f9', border: '#d946ef', text: '#fae8ff' },
+    stale: { bg: '#475569', border: '#374151', text: '#94a3b8' },
   };
 
-  return map[status] ?? { bg: '#e5e7eb', border: '#9ca3af', text: '#374151' };
+  return map[status] ?? { bg: '#4b5563', border: '#3f4859', text: '#f8fafc' };
 }
 
 /**
@@ -139,39 +139,41 @@ export interface EdgeStyle {
 export function getEdgeStyle(sourceStatus: string, targetStatus: string): EdgeStyle {
   if (sourceStatus === 'stale' || targetStatus === 'stale') {
     return {
-      stroke: '#9ca3af',
+      stroke: '#50596b',
       strokeWidth: 1,
       strokeDasharray: '4 4',
-      hoverStroke: '#9ca3af',
+      hoverStroke: '#64748b',
       hoverWidth: 1.5,
     };
   }
 
-  const sourceColors = getStatusInlineColors(sourceStatus);
-
   // Base defaults
   const base: EdgeStyle = {
-    stroke: sourceColors.border,
-    strokeWidth: 2,
-    hoverStroke: sourceColors.bg,
-    hoverWidth: 3,
+    stroke: '#3b4454',
+    strokeWidth: 1.8,
+    hoverStroke: '#55607a',
+    hoverWidth: 2.4,
   };
 
   // Completed → * : thicker, solid, indicating fulfilled dependency
   if (sourceStatus === 'completed') {
-    return { ...base, strokeWidth: 2.5, hoverWidth: 4 };
+    return { ...base, stroke: '#2f855a', hoverStroke: '#34d399', strokeWidth: 2.2, hoverWidth: 3 };
   }
 
   // Pending/blocked → * : dashed to show unfulfilled path
   if (sourceStatus === 'pending' || sourceStatus === 'blocked') {
-    return { ...base, strokeDasharray: '6 4' };
+    return { ...base, strokeDasharray: '5 4' };
   }
 
   // Failed → * : dotted to highlight broken dependency
   if (sourceStatus === 'failed') {
-    return { ...base, strokeDasharray: '3 3', strokeWidth: 2.5, hoverWidth: 4 };
+    return { ...base, stroke: '#9f2d2d', hoverStroke: '#f87171', strokeDasharray: '3 4', strokeWidth: 2.1, hoverWidth: 3 };
   }
 
   // Running → * : normal solid (animation handled separately)
+  if (sourceStatus === 'running' || sourceStatus === 'fixing_with_ai') {
+    return { ...base, stroke: '#3f6f8f', hoverStroke: '#7dd3fc' };
+  }
+
   return base;
 }

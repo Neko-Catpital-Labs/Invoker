@@ -2077,6 +2077,57 @@ describe('BaseFamiliar.handleProcessExit push semantics', () => {
     expect(response?.outputs.exitCode).toBe(1);
     expect(response?.outputs.error).toBe('push denied');
   });
+
+  it('marks codex ai_task as failed when semantic sandbox denial appears in output despite exit 0', async () => {
+    execSync('git checkout -b invoker/semantic-fail', { cwd: cloneDir });
+
+    const req = makeRequest('task-semantic-fail', {
+      description: 'semantic fail',
+      prompt: 'Implement the feature',
+      executionAgent: 'codex',
+    });
+    req.actionType = 'ai_task';
+    const entry = familiar.registerTestEntry('e-semantic', req);
+    entry.outputBuffer.push(
+      'ERROR codex_core::tools::router: Codex(Sandbox(Denied ... ))\n' +
+      'bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted\n',
+    );
+
+    let response: WorkResponse | undefined;
+    entry.completeListeners.add((r) => { response = r; });
+
+    await familiar.testHandleProcessExit('e-semantic', req, cloneDir, 0, { branch: 'invoker/semantic-fail' });
+
+    expect(response?.status).toBe('failed');
+    expect(response?.outputs.exitCode).toBe(86);
+    expect(response?.outputs.error).toContain('sandbox/tool denial');
+
+    const msg = execSync('git log -1 --format=%B', { cwd: cloneDir }).toString();
+    expect(msg).toContain('Exit code: 86');
+  });
+
+  it('does not force semantic failure for non-codex agents', async () => {
+    execSync('git checkout -b invoker/non-codex', { cwd: cloneDir });
+
+    const req = makeRequest('task-non-codex', {
+      description: 'non codex',
+      prompt: 'Implement the feature',
+      executionAgent: 'claude',
+    });
+    req.actionType = 'ai_task';
+    const entry = familiar.registerTestEntry('e-non-codex', req);
+    entry.outputBuffer.push(
+      'bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted\n',
+    );
+
+    let response: WorkResponse | undefined;
+    entry.completeListeners.add((r) => { response = r; });
+
+    await familiar.testHandleProcessExit('e-non-codex', req, cloneDir, 0, { branch: 'invoker/non-codex' });
+
+    expect(response?.status).toBe('completed');
+    expect(response?.outputs.exitCode).toBe(0);
+  });
 });
 
 // ── buildCommandAndArgs ─────────────────────────────────

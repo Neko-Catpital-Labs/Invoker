@@ -79,12 +79,12 @@ describe('Plan loading (component)', () => {
     });
   });
 
-  it('node shows task ID', async () => {
+  it('node preserves task ID as node metadata (title)', async () => {
     render(<App />);
     act(() => mock.setTasks([alpha, beta]));
 
     await waitFor(() => {
-      expect(screen.getByText('task-alpha')).toBeInTheDocument();
+      expect(screen.getByTitle('task-alpha')).toBeInTheDocument();
     });
   });
 });

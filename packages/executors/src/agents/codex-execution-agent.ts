@@ -15,8 +15,16 @@ import type { ExecutionAgent, AgentCommandSpec } from '../agent.js';
 export interface CodexExecutionAgentConfig {
   /** Command to invoke the Codex CLI. Default: 'codex'. */
   command?: string;
-  /** Run in full-auto mode (no interactive prompts). Default: true. */
+  /**
+   * Run in full-auto mode (sandboxed workspace-write + on-request approvals).
+   * Ignored when bypassApprovalsAndSandbox is true.
+   */
   fullAuto?: boolean;
+  /**
+   * Run without Codex sandbox/approval gating.
+   * Default: true (Invoker already isolates work in managed workspaces).
+   */
+  bypassApprovalsAndSandbox?: boolean;
 }
 
 export class CodexExecutionAgent implements ExecutionAgent {
@@ -26,16 +34,19 @@ export class CodexExecutionAgent implements ExecutionAgent {
 
   private readonly command: string;
   private readonly fullAuto: boolean;
+  private readonly bypassApprovalsAndSandbox: boolean;
 
   constructor(config: CodexExecutionAgentConfig = {}) {
     this.command = config.command ?? 'codex';
+    this.bypassApprovalsAndSandbox = config.bypassApprovalsAndSandbox ?? true;
     this.fullAuto = config.fullAuto ?? true;
   }
 
   buildCommand(fullPrompt: string): AgentCommandSpec {
     const sessionId = randomUUID();
     const args = ['exec', '--json'];
-    if (this.fullAuto) args.push('--full-auto');
+    if (this.bypassApprovalsAndSandbox) args.push('--dangerously-bypass-approvals-and-sandbox');
+    else if (this.fullAuto) args.push('--full-auto');
     args.push(fullPrompt);
     return { cmd: this.command, args, sessionId, fullPrompt };
   }
@@ -50,7 +61,8 @@ export class CodexExecutionAgent implements ExecutionAgent {
   buildFixCommand(prompt: string): AgentCommandSpec {
     const sessionId = randomUUID();
     const args = ['exec', '--json'];
-    if (this.fullAuto) args.push('--full-auto');
+    if (this.bypassApprovalsAndSandbox) args.push('--dangerously-bypass-approvals-and-sandbox');
+    else if (this.fullAuto) args.push('--full-auto');
     args.push(prompt);
     return { cmd: this.command, args, sessionId };
   }

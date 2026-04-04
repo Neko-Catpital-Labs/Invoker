@@ -41,6 +41,12 @@ export interface SetupBranchOptions {
   worktreeDir?: string;
 }
 
+export interface SemanticFailure {
+  code: string;
+  message: string;
+  syntheticExitCode?: number;
+}
+
 export class MergeConflictError extends Error {
   constructor(
     public readonly failedBranch: string,
@@ -631,27 +637,38 @@ export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar
   ): Promise<void> {
     const entry = this.entries.get(executionId);
     if (entry) entry.completed = true;
+    const bufferedOutput = entry?.outputBuffer.join('') ?? '';
+    const semanticFailure = this.detectSemanticFailure(request, bufferedOutput, exitCode);
+    const effectiveExitCode = (exitCode === 0 && semanticFailure)
+      ? (semanticFailure.syntheticExitCode ?? 86)
+      : exitCode;
 
     const signalInfo = opts?.signal ? ` signal=${opts.signal}` : '';
     this.emitOutput(executionId,
-      `[${this.type}] Process exited: actionId=${request.actionId} exitCode=${exitCode}${signalInfo}\n`);
+      `[${this.type}] Process exited: actionId=${request.actionId} exitCode=${effectiveExitCode}${signalInfo}\n`);
+    if (semanticFailure) {
+      this.emitOutput(
+        executionId,
+        `[${this.type}] Semantic failure detected (${semanticFailure.code}): ${semanticFailure.message}\n`,
+      );
+    }
 
     let commitHash: string | undefined;
-    let status: 'completed' | 'failed' = exitCode === 0 ? 'completed' : 'failed';
+    let status: 'completed' | 'failed' = effectiveExitCode === 0 ? 'completed' : 'failed';
     try {
-      const hash = await this.recordTaskResult(cwd, request, exitCode);
+      const hash = await this.recordTaskResult(cwd, request, effectiveExitCode);
       commitHash = hash ?? undefined;
     } catch (err) {
       this.emitOutput(executionId,
         `[${this.type}] recordTaskResult error: ${err}\n`);
-      if (exitCode === 0) status = 'failed';
+      if (effectiveExitCode === 0) status = 'failed';
     }
 
     let pushError: string | undefined;
     if (opts?.branch) {
       pushError = await this.pushBranchToRemote(cwd, opts.branch, executionId);
     }
-    if (exitCode === 0 && pushError !== undefined && opts?.branch) {
+    if (effectiveExitCode === 0 && pushError !== undefined && opts?.branch) {
       status = 'failed';
     }
 
@@ -662,7 +679,7 @@ export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar
     // When the command fails, capture the tail of the output buffer so the
     // UI error section shows what went wrong (not just "Exit code: N").
     let error: string | undefined;
-    if (exitCode !== 0 && entry) {
+    if (effectiveExitCode !== 0 && entry) {
       const allOutput = entry.outputBuffer.join('');
       const lines = allOutput.split('\n');
       const tail = lines.slice(-50).join('\n').trim();
@@ -670,7 +687,10 @@ export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar
         error = tail.length > 3000 ? tail.slice(-3000) : tail;
       }
     }
-    if (status === 'failed' && exitCode === 0 && pushError) {
+    if (semanticFailure) {
+      error = semanticFailure.message;
+    }
+    if (status === 'failed' && effectiveExitCode === 0 && pushError) {
       error = pushError;
     }
 
@@ -681,7 +701,7 @@ export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar
       actionId: request.actionId,
       status,
       outputs: {
-        exitCode: status === 'failed' && exitCode === 0 ? 1 : exitCode,
+        exitCode: status === 'failed' && effectiveExitCode === 0 ? 1 : effectiveExitCode,
         commitHash,
         agentSessionId,
         agentName: opts?.agentName,
@@ -691,6 +711,34 @@ export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar
       },
     };
     this.emitComplete(executionId, response);
+  }
+
+  /**
+   * Detect semantic failures where the agent process exits 0 but output shows
+   * tooling/sandbox denial that prevented real execution.
+   */
+  protected detectSemanticFailure(
+    request: WorkRequest,
+    output: string,
+    exitCode: number,
+  ): SemanticFailure | undefined {
+    if (exitCode !== 0) return undefined;
+    if (request.actionType !== 'ai_task') return undefined;
+    if ((request.inputs.executionAgent ?? 'claude') !== 'codex') return undefined;
+    const haystack = output.toLowerCase();
+    const codexSandboxDenied =
+      haystack.includes('codex(sandbox(denied') ||
+      /exectoolcalloutput\s*\{\s*exit_code:\s*[1-9]/i.test(output) ||
+      /bwrap:.*operation not permitted/i.test(output) ||
+      /failed rtm_newaddr/i.test(output);
+    if (!codexSandboxDenied) return undefined;
+    return {
+      code: 'agent_runtime_denied',
+      syntheticExitCode: 86,
+      message:
+        'Codex reported sandbox/tool denial while process exited 0; treating task as failed ' +
+        '(e.g., "Operation not permitted", sandbox denied, or non-zero exec tool call).',
+    };
   }
 
   protected buildResultCommitMessage(request: WorkRequest, exitCode: number): string {

@@ -10,7 +10,7 @@
  * Used as a custom node type in @xyflow/react.
  */
 
-import { useState, useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { Handle, Position } from '@xyflow/react';
 import type { TaskState } from '../types.js';
 import { getStatusColor, getEffectiveVisualStatus } from '../lib/colors.js';
@@ -53,7 +53,6 @@ function useHeartbeatAge(task: TaskState): number | null {
 
 export function TaskNode({ data }: TaskNodeProps) {
   const { task } = data;
-  const externalDeps = task.config.externalDependencies ?? [];
   const dimmed = data.dimmed ?? false;
   const visualStatus = getEffectiveVisualStatus(task.status, task.execution);
   const colors = getStatusColor(visualStatus);
@@ -84,41 +83,38 @@ export function TaskNode({ data }: TaskNodeProps) {
     } else if (heartbeatAge > HEARTBEAT_WARN_MS) {
       dotClass = 'bg-yellow-500 animate-pulse';
     } else {
-      dotClass = 'bg-green-500 animate-pulse';
+      dotClass = 'bg-blue-400 animate-pulse';
     }
   }
 
   return (
     <div
-      className={`rounded-lg border-2 px-3 py-2 w-[260px] transition-opacity duration-75 ${colors.bg} ${colors.border} ${dimmed ? 'opacity-20 pointer-events-none' : isStale ? 'opacity-50' : ''}`}
+      className={`relative w-[264px] rounded-2xl border px-5 py-4 transition-opacity duration-75 shadow-[0_6px_24px_rgba(0,0,0,0.28)] ${colors.bg} ${colors.border} ${dimmed ? 'opacity-20 pointer-events-none' : isStale ? 'opacity-50' : ''}`}
+      title={task.id}
     >
-      <Handle type="target" position={Position.Left} className="!bg-gray-500" />
+      <Handle
+        type="target"
+        position={Position.Left}
+        className="!w-2 !h-2 !bg-slate-500/90 !border !border-slate-900"
+      />
 
-      <div className={`font-mono text-xs opacity-60 truncate ${colors.text}`}>
-        {task.config.isReconciliation && <span className="mr-1">[R]</span>}
-        {task.id.length > 20 ? task.id.slice(0, 20) + '...' : task.id}
-      </div>
+      <span className={`absolute left-0 top-0 bottom-0 w-1.5 rounded-l-2xl ${dotClass}`} />
 
-      <div className={`text-sm font-medium truncate mt-1 ${colors.text} ${isStale ? 'line-through' : ''}`}>
-        {task.description.length > 35
-          ? task.description.slice(0, 35) + '...'
+      <div className={`text-2xl font-medium truncate pl-3 ${colors.text} ${isStale ? 'line-through' : ''}`}>
+        {task.description.length > 34
+          ? `${task.description.slice(0, 34)}...`
           : task.description}
       </div>
 
-      {externalDeps.length > 0 && (
-        <div className="mt-1">
-          <span className="inline-flex items-center rounded bg-sky-900/40 border border-sky-700/60 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-sky-300">
-            XWF Gate x{externalDeps.length}
-          </span>
-        </div>
-      )}
-
-      <div className="flex items-center gap-1.5 mt-1">
-        <span className={`w-2 h-2 rounded-full ${dotClass}`} />
-        <span className={`text-xs uppercase ${colors.text}`}>{statusLabel}</span>
+      <div className={`mt-1 pl-3 text-sm uppercase tracking-wide ${colors.text} opacity-75`}>
+        {statusLabel}
       </div>
 
-      <Handle type="source" position={Position.Right} className="!bg-gray-500" />
+      <Handle
+        type="source"
+        position={Position.Right}
+        className="!w-2 !h-2 !bg-slate-500/90 !border !border-slate-900"
+      />
     </div>
   );
 }

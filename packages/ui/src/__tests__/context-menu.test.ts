@@ -187,30 +187,16 @@ describe('ContextMenu getMenuItems', () => {
   });
 
   describe('Replace visibility', () => {
-    it('allows replace for failed tasks', () => {
+    it('does not include replace action for failed tasks', () => {
       const task = makeTask({ status: 'failed' });
       const items = getMenuItems(task);
-
-      const replaceItem = items.find((item) => item.id === 'replace');
-      expect(replaceItem).toBeDefined();
-      expect(replaceItem?.enabled).toBe(true);
+      expect(items.find((item) => item.id === 'replace')).toBeUndefined();
     });
 
-    it('allows replace for blocked tasks', () => {
+    it('does not include replace action for blocked tasks', () => {
       const task = makeTask({ status: 'blocked' });
       const items = getMenuItems(task);
-
-      const replaceItem = items.find((item) => item.id === 'replace');
-      expect(replaceItem).toBeDefined();
-      expect(replaceItem?.enabled).toBe(true);
-    });
-
-    it('disallows replace for running tasks', () => {
-      const task = makeTask({ status: 'running' });
-      const items = getMenuItems(task);
-
-      const replaceItem = items.find((item) => item.id === 'replace');
-      expect(replaceItem).toBeUndefined();
+      expect(items.find((item) => item.id === 'replace')).toBeUndefined();
     });
   });
 

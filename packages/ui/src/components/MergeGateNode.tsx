@@ -1,9 +1,8 @@
 /**
  * MergeGateNode — Synthetic terminal node showing the merge/PR gate.
  *
- * Visually distinct from TaskNode: smaller, different accent.
- * Status reflects whether all tasks passed (merge proceeds) or any failed (merge blocked).
- * Branch display is read-only; editing happens in TaskPanel.
+ * Styled to match TaskNode cards so DAG visuals stay consistent.
+ * Keeps dashed border to distinguish gate semantics.
  */
 
 import { useState } from 'react';
@@ -18,15 +17,8 @@ interface MergeGateNodeData {
   /** Plan title only (no "… gate for" prefix). */
   label: string;
   gateKind: MergeGateKind;
-  /** When false, omit Manual/Automatic/Review row (used for external_review — primary already says Review). */
-  showMergeModeRow?: boolean;
-  baseBranch?: string;
-  featureBranch?: string;
   mergeMode?: 'manual' | 'automatic' | 'external_review';
   workflowId?: string;
-  reviewUrl?: string;
-  reviewStatus?: string;
-  summary?: string;
   /** Set when merge gate was fixed with Claude — first approve clears this (orchestrator). */
   pendingFixError?: string;
   dimmed?: boolean;
@@ -46,18 +38,11 @@ const PRIMARY_LABEL: Record<MergeGateKind, string> = {
 
 export function MergeGateNode({ data }: MergeGateNodeProps) {
   const {
-    taskId,
     status,
     label,
     gateKind,
-    showMergeModeRow = true,
-    baseBranch,
-    featureBranch,
     mergeMode = 'manual',
     workflowId,
-    reviewUrl,
-    reviewStatus,
-    summary,
     pendingFixError,
     dimmed: dataDimmed,
   } = data;
@@ -71,8 +56,6 @@ export function MergeGateNode({ data }: MergeGateNodeProps) {
 
   /** mergeMode wins over gateKind so we never show "Pull request" + "Review" when workflow is external_review mode. */
   const effectiveGateKind: MergeGateKind = mergeMode === 'external_review' ? 'external_review' : gateKind;
-  const shouldShowMergeModeRow =
-    showMergeModeRow && mergeMode !== 'external_review' && effectiveGateKind !== 'external_review';
 
   const handleApproveMerge = () => {
     if (workflowId && window.invoker?.approveMerge) {
@@ -99,7 +82,7 @@ export function MergeGateNode({ data }: MergeGateNodeProps) {
   const statusLabel =
     visualStatus === 'completed' ? 'COMPLETED' :
     visualStatus === 'fix_approval' ? 'APPROVE FIX' :
-    visualStatus === 'awaiting_approval' ? 'NEEDS APPROVAL' :
+    visualStatus === 'awaiting_approval' ? 'APPROVE' :
     visualStatus === 'running' ? 'RUNNING' :
     visualStatus === 'failed' ? 'BLOCKED' :
     'WAITING';
@@ -110,82 +93,36 @@ export function MergeGateNode({ data }: MergeGateNodeProps) {
 
   return (
     <div
-      className={`rounded-lg border-2 border-dashed px-3 py-2 w-[200px] transition-opacity duration-75 ${colors.bg} ${colors.border} ${dimmed ? 'opacity-20 pointer-events-none' : ''}`}
+      className={`relative w-[264px] rounded-2xl border border-dashed px-5 py-4 transition-opacity duration-75 shadow-[0_6px_24px_rgba(0,0,0,0.28)] ${colors.bg} ${colors.border} ${dimmed ? 'opacity-20 pointer-events-none' : ''}`}
+      title={label}
     >
-      <Handle type="target" position={Position.Left} className="!bg-gray-500" />
+      <Handle
+        type="target"
+        position={Position.Left}
+        className="!w-2 !h-2 !bg-slate-500/90 !border !border-slate-900"
+      />
 
-      <div className={`flex items-center gap-1.5 ${colors.text}`}>
+      <span
+        className={`absolute left-0 top-0 bottom-0 w-1.5 rounded-l-2xl ${colors.dot} ${visualStatus === 'pending' ? 'animate-pulse' : ''}`}
+      />
+
+      <div className={`flex items-center gap-2 pl-3 ${colors.text}`}>
         {icon}
-        <span className="font-mono text-xs font-semibold" data-testid="merge-gate-primary-label">
+        <span className="font-mono text-sm font-semibold" data-testid="merge-gate-primary-label">
           {PRIMARY_LABEL[effectiveGateKind]}
         </span>
       </div>
 
-      <div
-        className={`text-xs mt-1 text-black truncate`}
-        title={typeof label === 'string' ? label : undefined}
-      >
+      <div className={`text-2xl font-medium truncate mt-1 pl-3 ${colors.text}`}>
         {label}
       </div>
 
-      <div className="flex items-center gap-1 mt-1">
-        <svg className="w-3 h-3 text-black shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M7 7v10m0-10a2 2 0 11-4 0 2 2 0 014 0zm10 10a2 2 0 104 0 2 2 0 00-4 0zm0 0V7a4 4 0 00-4-4H9" />
-        </svg>
-        <span className="text-xs font-mono text-black truncate" title={featureBranch ?? 'current'}>
-          {featureBranch ?? 'current'}
-        </span>
-      </div>
-
-      <div className="flex items-center gap-1 mt-1" data-testid="merge-branch-display">
-        <svg className="w-3 h-3 text-black shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M13 7l5 5m0 0l-5 5m5-5H6" />
-        </svg>
-        <span
-          data-testid="merge-branch-label"
-          className="text-xs font-mono text-black truncate"
-          title={baseBranch ?? 'default'}
-        >
-          {baseBranch ?? 'default'}
-        </span>
-      </div>
-
-      {shouldShowMergeModeRow && (
-        <div className="flex items-center gap-1 mt-1" data-testid="merge-mode-display">
-          {mergeMode === 'manual' ? (
-            <svg className="w-3 h-3 text-yellow-500 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-            </svg>
-          ) : (
-            <svg className="w-3 h-3 text-green-500 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-          )}
-          <span
-            data-testid="merge-mode-label"
-            className={`text-xs font-mono ${mergeMode === 'manual' ? 'text-yellow-500' : 'text-green-500'}`}
-          >
-            {mergeMode === 'manual' ? 'Manual' : 'Automatic'}
-          </span>
-        </div>
-      )}
-
-      <div className="flex items-center gap-1.5 mt-1">
+      <div className="flex items-center gap-1.5 mt-1 pl-3">
         <span
           className={`w-2 h-2 rounded-full ${colors.dot} ${visualStatus === 'pending' ? 'animate-pulse' : ''}`}
         />
-        <span className={`text-xs uppercase ${colors.text}`}>{statusLabel}</span>
+        <span className={`text-sm uppercase tracking-wide ${colors.text}`}>{statusLabel}</span>
       </div>
-
-      {summary && (
-        <div
-          className="mt-1 text-xs text-black line-clamp-2 cursor-help"
-          title={summary}
-          data-testid="merge-summary-preview"
-        >
-          {summary.length > 120 ? summary.slice(0, 120) + '...' : summary}
-        </div>
-      )}
 
       {mergeMode === 'manual' && status === 'awaiting_approval' && (
         <button
@@ -206,6 +143,12 @@ export function MergeGateNode({ data }: MergeGateNodeProps) {
           {error}
         </div>
       )}
+
+      <Handle
+        type="source"
+        position={Position.Right}
+        className="!w-2 !h-2 !bg-slate-500/90 !border !border-slate-900"
+      />
     </div>
   );
 }

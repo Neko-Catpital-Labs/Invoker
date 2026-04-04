@@ -68,13 +68,13 @@ describe('Merge gate branch selector (component)', () => {
     });
   });
 
-  it('merge gate node shows branch label via MergeGateNode', async () => {
+  it('merge gate node shows primary merge-gate label', async () => {
     render(<App />);
     act(() => mock.setTasks([taskA, mergeNode], workflows));
 
     await waitFor(() => {
-      expect(screen.getByTestId('merge-branch-label')).toBeInTheDocument();
-      expect(screen.getByTestId('merge-branch-label')).toHaveTextContent('master');
+      expect(screen.getByTestId('merge-gate-primary-label')).toBeInTheDocument();
+      expect(screen.getByTestId('merge-gate-primary-label')).toHaveTextContent('Workflow');
     });
   });
 

@@ -2,10 +2,16 @@ import { describe, it, expect } from 'vitest';
 import { CodexExecutionAgent } from '../agents/codex-execution-agent.js';
 
 describe('CodexExecutionAgent', () => {
-  it('uses default command "codex" with --full-auto', () => {
+  it('uses default command "codex" with sandbox/approval bypass', () => {
     const agent = new CodexExecutionAgent();
     const spec = agent.buildCommand('test prompt');
     expect(spec.cmd).toBe('codex');
+    expect(spec.args).toEqual(['exec', '--json', '--dangerously-bypass-approvals-and-sandbox', 'test prompt']);
+  });
+
+  it('supports explicit sandboxed full-auto mode when bypass is disabled', () => {
+    const agent = new CodexExecutionAgent({ bypassApprovalsAndSandbox: false, fullAuto: true });
+    const spec = agent.buildCommand('test prompt');
     expect(spec.args).toEqual(['exec', '--json', '--full-auto', 'test prompt']);
   });
 
@@ -31,11 +37,11 @@ describe('CodexExecutionAgent', () => {
     expect(resume.args).toEqual(['resume', 'sess-123']);
   });
 
-  it('buildFixCommand includes --full-auto', () => {
+  it('buildFixCommand uses sandbox/approval bypass by default', () => {
     const agent = new CodexExecutionAgent();
     const spec = agent.buildFixCommand('fix the bug');
     expect(spec.cmd).toBe('codex');
-    expect(spec.args).toEqual(['exec', '--json', '--full-auto', 'fix the bug']);
+    expect(spec.args).toEqual(['exec', '--json', '--dangerously-bypass-approvals-and-sandbox', 'fix the bug']);
     expect(spec.sessionId).toBeDefined();
   });
 

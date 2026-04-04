@@ -218,7 +218,7 @@ describe('agent dispatch — codex vs claude', () => {
       expect(spec.cmd).toBe('codex');
       expect(spec.args).toContain('exec');
       expect(spec.args).toContain('--json');
-      expect(spec.args).toContain('--full-auto');
+      expect(spec.args).toContain('--dangerously-bypass-approvals-and-sandbox');
       expect(spec.args).toContain('fix the bug');
       // Must NOT contain claude flags
       expect(spec.args).not.toContain('--dangerously-skip-permissions');
@@ -446,7 +446,7 @@ describe('remote agent dispatch via registry', () => {
     // Verify the pieces are correct
     expect(spec.cmd).toBe('codex');
     expect(spec.args).toContain('exec');
-    expect(spec.args).toContain('--full-auto');
+    expect(spec.args).toContain('--dangerously-bypass-approvals-and-sandbox');
     expect(spec.args).toContain('fix the merge conflict');
     // Must NOT contain claude-specific flags
     expect(spec.args).not.toContain('--session-id');

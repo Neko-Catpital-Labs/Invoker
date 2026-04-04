@@ -133,11 +133,11 @@ describe('Context menu (component)', () => {
     });
   });
 
-  it('Rebase & Retry is visible for tasks with workflowId', async () => {
+  it('Retry with Rebase is visible for tasks with workflowId', async () => {
     await setupAndRightClick();
 
     await waitFor(() => {
-      expect(screen.getByText('Rebase & Retry')).toBeInTheDocument();
+      expect(screen.getByText('Retry with Rebase')).toBeInTheDocument();
     });
   });
 
@@ -145,8 +145,10 @@ describe('Context menu (component)', () => {
     await setupAndRightClick();
 
     await waitFor(() => {
-      expect(screen.getByText('Recreate from Task')).toBeInTheDocument();
+      expect(screen.getByText('More')).toBeInTheDocument();
     });
+    fireEvent.click(screen.getByText('More'));
+    await waitFor(() => expect(screen.getByText('Recreate from Task')).toBeInTheDocument());
 
     fireEvent.click(screen.getByText('Recreate from Task'));
 
@@ -161,8 +163,10 @@ describe('Context menu (component)', () => {
     const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
 
     await waitFor(() => {
-      expect(screen.getByText('Cancel Workflow')).toBeInTheDocument();
+      expect(screen.getByText('More')).toBeInTheDocument();
     });
+    fireEvent.click(screen.getByText('More'));
+    await waitFor(() => expect(screen.getByText('Cancel Workflow')).toBeInTheDocument());
 
     fireEvent.click(screen.getByText('Cancel Workflow'));
 
