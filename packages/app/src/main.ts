@@ -108,6 +108,13 @@ if (waitForApproval) {
   cliArgs = [...cliArgs.slice(0, waitForApprovalIndex), ...cliArgs.slice(waitForApprovalIndex + 1)];
 }
 
+// Parse --no-track / --do-not-track flag
+const noTrackIndex = cliArgs.findIndex((arg) => arg === '--no-track' || arg === '--do-not-track');
+const noTrack = noTrackIndex !== -1;
+if (noTrack) {
+  cliArgs = [...cliArgs.slice(0, noTrackIndex), ...cliArgs.slice(noTrackIndex + 1)];
+}
+
 // Set app name early so Electron uses "invoker" as WM_CLASS (X11) and app_id (Wayland).
 // --class tells Chromium to set WM_CLASS explicitly, preventing GNOME from
 // grouping Invoker with other Electron apps (e.g. Slack).
@@ -356,13 +363,13 @@ if (isHeadless) {
         if (command === 'run') {
           const planPath = cliArgs[1];
           if (!planPath) throw new Error('Missing plan file. Usage: --headless run <plan.yaml>');
-          delegated = await tryDelegateRun(planPath, delegationBus, waitForApproval);
+          delegated = await tryDelegateRun(planPath, delegationBus, waitForApproval, noTrack);
         } else if (command === 'resume') {
           const workflowId = cliArgs[1];
           if (!workflowId) throw new Error('Missing workflowId. Usage: --headless resume <id>');
-          delegated = await tryDelegateResume(workflowId, delegationBus, waitForApproval);
+          delegated = await tryDelegateResume(workflowId, delegationBus, waitForApproval, noTrack);
         } else {
-          delegated = await tryDelegateExec(cliArgs, delegationBus, waitForApproval);
+          delegated = await tryDelegateExec(cliArgs, delegationBus, waitForApproval, noTrack);
         }
 
         if (delegated) {
@@ -388,6 +395,7 @@ if (isHeadless) {
         orchestrator, persistence, familiarRegistry, messageBus,
         repoRoot, invokerConfig, initServices, wireSlackBot,
         waitForApproval,
+        noTrack,
         executionAgentRegistry: agentRegistry,
       });
     } catch (err) {
@@ -659,7 +667,8 @@ function setupGuiMode(): void {
     });
 
     messageBus.onRequest('headless.exec', async (req: unknown) => {
-      const { args, waitForApproval: delegatedWait } = req as { args: string[]; waitForApproval?: boolean };
+      const { args, waitForApproval: delegatedWait, noTrack: delegatedNoTrack } =
+        req as { args: string[]; waitForApproval?: boolean; noTrack?: boolean };
       if (!Array.isArray(args) || args.length === 0) {
         throw new Error('Missing delegated headless command arguments');
       }
@@ -668,6 +677,7 @@ function setupGuiMode(): void {
         orchestrator, persistence, familiarRegistry, messageBus,
         repoRoot, invokerConfig, initServices, wireSlackBot,
         waitForApproval: delegatedWait,
+        noTrack: delegatedNoTrack,
         executionAgentRegistry: registerBuiltinAgents(),
       });
       return { ok: true };
