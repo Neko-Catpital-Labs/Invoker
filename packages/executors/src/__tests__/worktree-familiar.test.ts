@@ -545,6 +545,38 @@ describe('WorktreeFamiliar', () => {
     expect(spec).toBeNull();
   });
 
+  it('retains worktree and annotates startup error metadata when provisioning fails', async () => {
+    setupSpawnMock();
+
+    const release = vi.fn().mockResolvedValue(undefined);
+    const softRelease = vi.fn();
+    const branch = 'experiment/action-1-abc12345';
+    const worktreePath = '/fake/worktrees/experiment-action-1-abc12345';
+    const pool = {
+      ensureClone: vi.fn().mockResolvedValue('/fake/cache/clone'),
+      acquireWorktree: vi.fn().mockResolvedValue({
+        clonePath: '/fake/cache/clone',
+        worktreePath,
+        branch,
+        release,
+        softRelease,
+      }),
+      destroyAll: vi.fn().mockResolvedValue(undefined),
+      getClonePath: vi.fn().mockReturnValue('/fake/cache/clone'),
+    };
+    (familiar as any).pool = pool;
+    vi.spyOn(familiar as any, 'provisionWorktree').mockRejectedValue(new Error('lockfile mismatch'));
+
+    const err = await familiar.start(makeRequest()).catch((e: unknown) => e as Error & { workspacePath?: string; branch?: string });
+
+    expect(err).toBeInstanceOf(Error);
+    expect(err.message).toContain('lockfile mismatch');
+    expect(err.workspacePath).toBe(worktreePath);
+    expect(err.branch).toBe(branch);
+    expect(softRelease).toHaveBeenCalledTimes(1);
+    expect(release).not.toHaveBeenCalled();
+  });
+
   // ── Upstream branch merging ────────────────────────────────────
 
   describe('upstream branch merging', () => {

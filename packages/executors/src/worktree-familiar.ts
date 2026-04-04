@@ -237,8 +237,13 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
     try {
       await this.provisionWorktree(acquired.worktreePath);
     } catch (err) {
-      await acquired.release();
-      throw err;
+      // Keep the failed workspace on disk for post-failure debugging/fix flows.
+      // Only free the in-memory pool slot so retries are not blocked.
+      acquired.softRelease();
+      const startupErr = err instanceof Error ? err : new Error(String(err));
+      (startupErr as Error & { workspacePath?: string; branch?: string }).workspacePath = acquired.worktreePath;
+      (startupErr as Error & { workspacePath?: string; branch?: string }).branch = acquired.branch;
+      throw startupErr;
     }
 
     const { cmd, args, agentSessionId } = this.buildCommandAndArgs(request, {
