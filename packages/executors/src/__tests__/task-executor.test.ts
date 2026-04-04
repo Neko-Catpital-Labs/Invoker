@@ -298,6 +298,41 @@ describe('TaskExecutor', () => {
         'experiment/dep-b',
       ]);
     });
+
+    it('includes completed external dependency branches', () => {
+      const externalTasks = new Map<string, TaskState>();
+      externalTasks.set('wf-ext/gate-task', makeTask({
+        id: 'wf-ext/gate-task',
+        status: 'completed',
+        execution: { branch: 'experiment/wf-ext/gate-task-abc123' },
+      }));
+
+      const orchestrator = {
+        getTask: (id: string) => externalTasks.get(id),
+      };
+      const persistence = {
+        loadTasks: (workflowId: string) => workflowId === 'wf-ext'
+          ? [externalTasks.get('wf-ext/gate-task')!]
+          : [],
+      };
+
+      const executor = new TaskExecutor({
+        orchestrator: orchestrator as any,
+        persistence: persistence as any,
+        familiarRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+      });
+
+      const task = makeTask({
+        id: 'wf-local/downstream',
+        config: {
+          workflowId: 'wf-local',
+          externalDependencies: [{ workflowId: 'wf-ext', taskId: 'gate-task', requiredStatus: 'completed' }],
+        },
+      });
+
+      expect(executor.collectUpstreamBranches(task)).toEqual(['experiment/wf-ext/gate-task-abc123']);
+    });
   });
 
   describe('executeTask error handling', () => {
@@ -515,6 +550,117 @@ describe('TaskExecutor', () => {
             error: expect.stringContaining('completed without branch metadata'),
           }),
         }),
+      );
+    });
+
+    it('fails task when a completed external dependency has no branch metadata', async () => {
+      const externalTasks = new Map<string, TaskState>();
+      externalTasks.set('wf-ext/verify', makeTask({
+        id: 'wf-ext/verify',
+        status: 'completed',
+      }));
+
+      const handleWorkerResponse = vi.fn();
+      const executor = new TaskExecutor({
+        orchestrator: {
+          getTask: (id: string) => externalTasks.get(id),
+          handleWorkerResponse,
+        } as any,
+        persistence: {
+          loadTasks: (workflowId: string) => workflowId === 'wf-ext'
+            ? [externalTasks.get('wf-ext/verify')!]
+            : [],
+          updateTask: vi.fn(),
+        } as any,
+        familiarRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+      });
+
+      const child = makeTask({
+        id: 'wf-local/child-task',
+        status: 'running',
+        config: {
+          command: 'echo test',
+          externalDependencies: [{ workflowId: 'wf-ext', taskId: 'verify', requiredStatus: 'completed' }],
+        },
+      });
+
+      await executor.executeTask(child);
+
+      expect(handleWorkerResponse).toHaveBeenCalledWith(
+        expect.objectContaining({
+          actionId: 'wf-local/child-task',
+          status: 'failed',
+          outputs: expect.objectContaining({
+            error: expect.stringContaining('external dependency "wf-ext/verify" completed without branch metadata'),
+          }),
+        }),
+      );
+    });
+
+    it('passes external dependency branches through WorkRequest upstreamBranches', async () => {
+      let capturedRequest: any;
+      const externalTasks = new Map<string, TaskState>();
+      externalTasks.set('wf-ext/verify', makeTask({
+        id: 'wf-ext/verify',
+        status: 'completed',
+        description: 'external verify',
+        execution: {
+          branch: 'experiment/wf-ext/verify-abc123',
+          commit: 'abc123',
+        },
+      }));
+
+      const capturingFamiliar = {
+        type: 'worktree',
+        start: async (req: any) => {
+          capturedRequest = req;
+          return { executionId: 'exec-1', taskId: 'wf-local/child-task' };
+        },
+        onOutput: () => () => {},
+        onComplete: (_h: any, cb: any) => {
+          cb({ requestId: 'r', actionId: 'wf-local/child-task', status: 'completed', outputs: { exitCode: 0 } });
+          return () => {};
+        },
+        onHeartbeat: () => () => {},
+      };
+
+      const executor = new TaskExecutor({
+        orchestrator: {
+          getTask: (id: string) => externalTasks.get(id),
+          handleWorkerResponse: vi.fn(),
+        } as any,
+        persistence: {
+          loadTasks: (workflowId: string) => workflowId === 'wf-ext'
+            ? [externalTasks.get('wf-ext/verify')!]
+            : [],
+          updateTask: vi.fn(),
+        } as any,
+        familiarRegistry: {
+          getDefault: () => capturingFamiliar,
+          get: () => capturingFamiliar,
+          getAll: () => [capturingFamiliar],
+        } as any,
+        cwd: '/tmp',
+      });
+
+      const child = makeTask({
+        id: 'wf-local/child-task',
+        status: 'running',
+        config: {
+          command: 'echo test',
+          externalDependencies: [{ workflowId: 'wf-ext', taskId: 'verify', requiredStatus: 'completed' }],
+        },
+      });
+
+      await executor.executeTask(child);
+
+      expect(capturedRequest).toBeDefined();
+      expect(capturedRequest.inputs.upstreamBranches).toEqual(['experiment/wf-ext/verify-abc123']);
+      expect(capturedRequest.inputs.upstreamContext).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ taskId: 'wf-ext/verify' }),
+        ]),
       );
     });
 

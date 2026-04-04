@@ -11,6 +11,7 @@ import { resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 
+import { scopePlanTaskId } from '@invoker/core';
 import type { Orchestrator, TaskState, ExperimentVariant } from '@invoker/core';
 import type { SQLiteAdapter } from '@invoker/persistence';
 import type { WorkRequest, WorkResponse, ActionType } from '@invoker/protocol';
@@ -262,7 +263,7 @@ export class TaskExecutor {
     const upstreamBranches = this.collectUpstreamBranches(task);
     const alternatives = this.buildAlternatives(task);
 
-    // Guard: every completed dependency must have branch metadata.
+    // Guard: every completed dependency (local or external) must have branch metadata.
     // Without it the downstream worktree would run against bare base branch,
     // silently dropping all upstream implementation changes.
     // Skip for merge nodes: they collect branches from the full workflow, not just direct deps.
@@ -272,6 +273,15 @@ export class TaskExecutor {
         if (dep && dep.status === 'completed' && !dep.execution.branch) {
           throw new Error(
             `Task "${task.id}": dependency "${depId}" completed without branch metadata` +
+            ` — upstream changes would be silently dropped. The plan may need to be restarted.`,
+          );
+        }
+      }
+      for (const depRef of task.config.externalDependencies ?? []) {
+        const dep = this.resolveExternalDependencyTask(depRef.workflowId, depRef.taskId);
+        if (dep && dep.status === 'completed' && !dep.execution.branch) {
+          throw new Error(
+            `Task "${task.id}": external dependency "${depRef.workflowId}/${depRef.taskId}" completed without branch metadata` +
             ` — upstream changes would be silently dropped. The plan may need to be restarted.`,
           );
         }
@@ -1060,6 +1070,16 @@ export class TaskExecutor {
         }
       }
     }
+    for (const depRef of task.config.externalDependencies ?? []) {
+      const dep = this.resolveExternalDependencyTask(depRef.workflowId, depRef.taskId);
+      if (dep && dep.status === 'completed' && dep.execution.branch) {
+        const b = dep.execution.branch;
+        if (!seen.has(b)) {
+          seen.add(b);
+          branches.push(b);
+        }
+      }
+    }
 
     let planBase: string | undefined;
     if (task.config.workflowId && this.persistence.loadWorkflow) {
@@ -1112,6 +1132,7 @@ export class TaskExecutor {
     task: TaskState,
   ): Promise<Array<{taskId: string; description: string; summary?: string; commitHash?: string; commitMessage?: string}>> {
     const context: Array<{taskId: string; description: string; summary?: string; commitHash?: string; commitMessage?: string}> = [];
+    const seenTaskIds = new Set<string>();
 
     // Resolve pool mirror for gitLogMessage so commits are found in the right repo
     let mirrorCwd: string | undefined;
@@ -1122,28 +1143,53 @@ export class TaskExecutor {
       }
     }
 
+    const pushDepContext = async (dep: TaskState): Promise<void> => {
+      if (dep.status !== 'completed' || seenTaskIds.has(dep.id)) return;
+      seenTaskIds.add(dep.id);
+      let commitMessage: string | undefined;
+      if (dep.execution.commit) {
+        try {
+          commitMessage = await this.gitLogMessage(dep.execution.commit, mirrorCwd);
+        } catch {
+          // Not in a git repo or commit not found
+        }
+      }
+      context.push({
+        taskId: dep.id,
+        description: dep.description,
+        summary: dep.config.summary,
+        commitHash: dep.execution.commit,
+        commitMessage,
+      });
+    };
+
     for (const depId of task.dependencies) {
       const dep = this.orchestrator.getTask(depId);
-      if (dep && dep.status === 'completed') {
-        let commitMessage: string | undefined;
-        if (dep.execution.commit) {
-          try {
-            commitMessage = await this.gitLogMessage(dep.execution.commit, mirrorCwd);
-          } catch {
-            // Not in a git repo or commit not found
-          }
-        }
-        context.push({
-          taskId: dep.id,
-          description: dep.description,
-          summary: dep.config.summary,
-          commitHash: dep.execution.commit,
-          commitMessage,
-        });
-      }
+      if (dep) await pushDepContext(dep);
+    }
+    for (const depRef of task.config.externalDependencies ?? []) {
+      const dep = this.resolveExternalDependencyTask(depRef.workflowId, depRef.taskId);
+      if (dep) await pushDepContext(dep);
     }
 
     return context;
+  }
+
+  private resolveExternalDependencyTask(workflowId: string, taskId: string): TaskState | undefined {
+    if (taskId.includes('/')) {
+      const byDirectId = this.orchestrator.getTask(taskId);
+      if (byDirectId) return byDirectId;
+    }
+
+    const scopedId = scopePlanTaskId(workflowId, taskId);
+    const byScopedId = this.orchestrator.getTask(scopedId);
+    if (byScopedId) return byScopedId;
+
+    const byRawId = this.orchestrator.getTask(taskId);
+    if (byRawId) return byRawId;
+
+    const wfTasks = this.persistence.loadTasks?.(workflowId) ?? [];
+    return wfTasks.find((t) => t.id === scopedId || t.id === taskId);
   }
 
   /**
