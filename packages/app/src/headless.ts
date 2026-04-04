@@ -64,6 +64,7 @@ export interface HeadlessDeps {
     onPlanLoaded?: () => void;
   }) => Promise<any>;
   waitForApproval?: boolean;
+  noTrack?: boolean;
 }
 
 // ── ANSI Helpers ─────────────────────────────────────────────
@@ -360,10 +361,10 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
 
     // ── Execute (unchanged) ──
     case 'run':
-      await headlessRun(args[1], deps, deps.waitForApproval);
+      await headlessRun(args[1], deps, deps.waitForApproval, deps.noTrack);
       break;
     case 'resume':
-      await headlessResume(args[1], deps, deps.waitForApproval);
+      await headlessResume(args[1], deps, deps.waitForApproval, deps.noTrack);
       break;
     case 'restart': {
       const id = args[1];
@@ -557,12 +558,19 @@ ${BOLD}Deprecated${RESET} (use new names above):
 
 ${BOLD}Options:${RESET}
   --wait-for-approval    Keep running until PR approval (use with 'run' or 'resume')
+  --no-track             Submit and return immediately after printing Workflow ID
+  --do-not-track         Alias for --no-track
 `);
 }
 
 // ── Headless Commands ────────────────────────────────────────
 
-async function headlessRun(planPath: string, deps: HeadlessDeps, waitForApproval?: boolean): Promise<void> {
+async function headlessRun(
+  planPath: string,
+  deps: HeadlessDeps,
+  waitForApproval?: boolean,
+  noTrack?: boolean,
+): Promise<void> {
   const { orchestrator, messageBus, repoRoot, invokerConfig } = deps;
   if (!planPath) throw new Error('Missing plan file. Usage: --headless run <plan.yaml>');
 
@@ -600,6 +608,12 @@ async function headlessRun(planPath: string, deps: HeadlessDeps, waitForApproval
   const started = orchestrator.startExecution();
   await taskExecutor.executeTasks(started);
 
+  if (noTrack) {
+    console.log('[headless] --no-track enabled: submission accepted; exiting without tracking.');
+    await api.close().catch(() => {});
+    return;
+  }
+
   await waitForCompletion(orchestrator, currentWorkflowId, waitForApproval);
 
   await api.close().catch(() => {});
@@ -617,7 +631,12 @@ async function headlessRun(planPath: string, deps: HeadlessDeps, waitForApproval
   if (status.failed > 0) process.exitCode = 1;
 }
 
-async function headlessResume(workflowId: string, deps: HeadlessDeps, waitForApproval?: boolean): Promise<void> {
+async function headlessResume(
+  workflowId: string,
+  deps: HeadlessDeps,
+  waitForApproval?: boolean,
+  noTrack?: boolean,
+): Promise<void> {
   const { orchestrator, messageBus } = deps;
   if (!workflowId) throw new Error('Missing workflowId. Usage: --headless resume <id>');
 
@@ -653,6 +672,13 @@ async function headlessResume(workflowId: string, deps: HeadlessDeps, waitForApp
 
   const started = orchestrator.startExecution();
   await taskExecutor.executeTasks([...orphanRestarted, ...started]);
+
+  if (noTrack) {
+    console.log('[headless] --no-track enabled: resume accepted; exiting without tracking.');
+    await api.close().catch(() => {});
+    return;
+  }
+
   await waitForCompletion(orchestrator, undefined, waitForApproval);
 
   await api.close().catch(() => {});
@@ -1125,22 +1151,37 @@ async function waitForCompletion(orchestrator: Orchestrator, workflowId?: string
 /**
  * Try to delegate 'run' command to a GUI process. Returns true if delegated, false if no GUI available.
  */
-export async function tryDelegateRun(planPath: string, messageBus: MessageBus, waitForApproval?: boolean): Promise<boolean> {
-  return tryDelegate('headless.run', { planPath: resolvePath(planPath) }, messageBus, waitForApproval);
+export async function tryDelegateRun(
+  planPath: string,
+  messageBus: MessageBus,
+  waitForApproval?: boolean,
+  noTrack?: boolean,
+): Promise<boolean> {
+  return tryDelegate('headless.run', { planPath: resolvePath(planPath) }, messageBus, waitForApproval, noTrack);
 }
 
 /**
  * Try to delegate 'resume' command to a GUI process. Returns true if delegated, false if no GUI available.
  */
-export async function tryDelegateResume(workflowId: string, messageBus: MessageBus, waitForApproval?: boolean): Promise<boolean> {
-  return tryDelegate('headless.resume', { workflowId }, messageBus, waitForApproval);
+export async function tryDelegateResume(
+  workflowId: string,
+  messageBus: MessageBus,
+  waitForApproval?: boolean,
+  noTrack?: boolean,
+): Promise<boolean> {
+  return tryDelegate('headless.resume', { workflowId }, messageBus, waitForApproval, noTrack);
 }
 
 /**
  * Try to delegate a mutating headless command to a GUI process.
  * Returns true if delegated, false if no GUI is available.
  */
-export async function tryDelegateExec(args: string[], messageBus: MessageBus, waitForApproval?: boolean): Promise<boolean> {
+export async function tryDelegateExec(
+  args: string[],
+  messageBus: MessageBus,
+  waitForApproval?: boolean,
+  noTrack?: boolean,
+): Promise<boolean> {
   const DELEGATION_TIMEOUT = Symbol('delegation-timeout');
   const timeoutPromise = new Promise<typeof DELEGATION_TIMEOUT>((_, reject) => {
     setTimeout(() => reject(DELEGATION_TIMEOUT), 5000);
@@ -1148,7 +1189,7 @@ export async function tryDelegateExec(args: string[], messageBus: MessageBus, wa
 
   try {
     await Promise.race([
-      messageBus.request('headless.exec', { args, waitForApproval }),
+      messageBus.request('headless.exec', { args, waitForApproval, noTrack }),
       timeoutPromise,
     ]);
     return true;
@@ -1172,6 +1213,7 @@ async function tryDelegate(
   payload: unknown,
   messageBus: MessageBus,
   waitForApproval?: boolean,
+  noTrack?: boolean,
 ): Promise<boolean> {
   const { formatTaskStatus } = await import('./formatter.js');
 
@@ -1231,6 +1273,10 @@ async function tryDelegate(
         // No GUI available, fall back to standalone
         return false;
       }
+      if (err instanceof Error && err.message.includes('No request handler registered for channel')) {
+        // Connected peer is not a GUI process (or handler not yet wired); fall back to standalone.
+        return false;
+      }
       // Real error, rethrow
       throw err;
     }
@@ -1238,6 +1284,11 @@ async function tryDelegate(
     // Delegation successful
     targetWorkflowId = response.workflowId;
     console.log(`Delegated to GUI — workflow: ${targetWorkflowId}`);
+
+    if (noTrack) {
+      console.log('[headless] --no-track enabled: delegated submission accepted; exiting without tracking.');
+      return true;
+    }
 
     // Seed local map from response tasks (for tasks not yet received via delta)
     for (const task of response.tasks) {
