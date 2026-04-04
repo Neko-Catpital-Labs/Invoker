@@ -787,8 +787,8 @@ describe('TaskPanel double-click editing', () => {
           onSelectExperiment={mockOnSelectExperiment}
         />,
       );
-      expect(screen.getByText('Approve Fix')).toBeInTheDocument();
-      expect(screen.getByText('Reject Fix')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Approve Fix' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Reject Fix' })).toBeInTheDocument();
       expect(screen.queryByText('Approve Merge')).not.toBeInTheDocument();
     });
 

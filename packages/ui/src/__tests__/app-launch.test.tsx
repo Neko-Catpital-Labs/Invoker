@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { vi } from 'vitest';
 import { createMockInvoker, type MockInvoker } from './helpers/mock-invoker.js';
 
@@ -36,12 +36,29 @@ describe('App launch (component)', () => {
     expect(screen.getByText('Load a plan to get started')).toBeInTheDocument();
   });
 
-  it('renders Open File, Refresh, Clear, and Delete DB buttons', () => {
+  it('renders Open File and utility dropdown with Refresh, Clear Session, and Delete DB', () => {
     render(<App />);
+
+    // Open File is always visible
     expect(screen.getByText('Open File')).toBeInTheDocument();
+
+    // Refresh, Clear, Delete DB are now inside the dropdown
+    expect(screen.queryByText('Refresh')).not.toBeInTheDocument();
+    expect(screen.queryByText('Clear Session')).not.toBeInTheDocument();
+    expect(screen.queryByText('Delete Workflow History (DB)')).not.toBeInTheDocument();
+
+    // Click the ellipsis button to open the dropdown
+    const utilityButton = screen.getByLabelText('Utility menu');
+    fireEvent.click(utilityButton);
+
+    // Now the items should be visible
     expect(screen.getByText('Refresh')).toBeInTheDocument();
-    expect(screen.getByText('Clear')).toBeInTheDocument();
-    expect(screen.getByText('Delete DB')).toBeInTheDocument();
+    expect(screen.getByText('Clear Session')).toBeInTheDocument();
+    expect(screen.getByText('Delete Workflow History (DB)')).toBeInTheDocument();
+
+    // Also check for disabled placeholder items
+    expect(screen.getByText('Export Logs...')).toBeInTheDocument();
+    expect(screen.getByText('Settings...')).toBeInTheDocument();
   });
 
   it('does not show Start or Stop before a plan is loaded', () => {

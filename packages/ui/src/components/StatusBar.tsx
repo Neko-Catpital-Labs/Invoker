@@ -66,10 +66,11 @@ export function StatusBar({ tasks, activeFilters, onStatusClick }: StatusBarProp
 
   const hasFilters = activeFilters && activeFilters.size > 0;
   const filterClass = (key: string) => {
-    if (!hasFilters) return 'cursor-pointer hover:brightness-125 select-none';
+    const baseClasses = 'px-2 py-0.5 text-xs rounded-full cursor-pointer select-none transition-opacity duration-75';
+    if (!hasFilters) return `${baseClasses} hover:brightness-125`;
     const isActive = activeFilters!.has(key);
-    return `cursor-pointer select-none transition-opacity duration-75 ${
-      isActive ? 'brightness-125 underline underline-offset-4' : 'opacity-40'
+    return `${baseClasses} ${
+      isActive ? 'ring-1 ring-current' : 'opacity-60'
     }`;
   };
 
@@ -79,32 +80,32 @@ export function StatusBar({ tasks, activeFilters, onStatusClick }: StatusBarProp
         Total: <span className="text-gray-100 font-medium">{total}</span>
       </span>
       <span
-        className={`text-green-400 ${filterClass('completed')}`}
+        className={`text-green-300/70 ${filterClass('completed')}`}
         onClick={(e) => onStatusClick?.('completed', e)}
       >
         Completed: <span className="font-medium">{completed}</span>
       </span>
       <span
-        className={`text-blue-400 ${filterClass('running')}`}
+        className={`text-blue-300/70 ${filterClass('running')}`}
         onClick={(e) => onStatusClick?.('running', e)}
       >
         Running: <span className="font-medium">{running}</span>
       </span>
       <span
-        className={`text-red-400 ${filterClass('failed')}`}
+        className={`text-red-300/70 ${filterClass('failed')}`}
         onClick={(e) => onStatusClick?.('failed', e)}
       >
         Failed: <span className="font-medium">{failed}</span>
       </span>
       <span
-        className={`text-gray-400 ${filterClass('pending')}`}
+        className={`text-gray-300/70 ${filterClass('pending')}`}
         onClick={(e) => onStatusClick?.('pending', e)}
       >
         Pending: <span className="font-medium">{pending}</span>
       </span>
       {needsInput > 0 && (
         <span
-          className={`text-cyan-400 ${filterClass('needs_input')}`}
+          className={`text-cyan-300/70 ${filterClass('needs_input')}`}
           onClick={(e) => onStatusClick?.('needs_input', e)}
         >
           Input: <span className="font-medium">{needsInput}</span>
@@ -112,7 +113,7 @@ export function StatusBar({ tasks, activeFilters, onStatusClick }: StatusBarProp
       )}
       {awaitingApproval > 0 && (
         <span
-          className={`text-purple-400 ${filterClass('awaiting_approval')}`}
+          className={`text-purple-300/70 ${filterClass('awaiting_approval')}`}
           onClick={(e) => onStatusClick?.('awaiting_approval', e)}
         >
           Approval: <span className="font-medium">{awaitingApproval}</span>
@@ -120,7 +121,7 @@ export function StatusBar({ tasks, activeFilters, onStatusClick }: StatusBarProp
       )}
       {blocked > 0 && (
         <span
-          className={`text-gray-500 ${filterClass('blocked')}`}
+          className={`text-gray-400/70 ${filterClass('blocked')}`}
           onClick={(e) => onStatusClick?.('blocked', e)}
         >
           Blocked: <span className="font-medium">{blocked}</span>
@@ -128,7 +129,7 @@ export function StatusBar({ tasks, activeFilters, onStatusClick }: StatusBarProp
       )}
       {fixing > 0 && (
         <span
-          className={`text-orange-400 ${filterClass('fixing_with_ai')}`}
+          className={`text-orange-300/70 ${filterClass('fixing_with_ai')}`}
           onClick={(e) => onStatusClick?.('fixing_with_ai', e)}
         >
           Fixing: <span className="font-medium">{fixing}</span>
@@ -136,7 +137,7 @@ export function StatusBar({ tasks, activeFilters, onStatusClick }: StatusBarProp
       )}
       {fixApproval > 0 && (
         <span
-          className={`text-fuchsia-400 ${filterClass('fix_approval')}`}
+          className={`text-fuchsia-300/70 ${filterClass('fix_approval')}`}
           onClick={(e) => onStatusClick?.('fix_approval', e)}
         >
           Fix Approval: <span className="font-medium">{fixApproval}</span>

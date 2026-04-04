@@ -34,8 +34,7 @@ describe('Visual proof snapshots', () => {
     const { container } = render(<App />);
     expect(screen.getByText('Load a plan to get started')).toBeInTheDocument();
     expect(screen.getByText('Open File')).toBeInTheDocument();
-    expect(screen.getByText('Refresh')).toBeInTheDocument();
-    expect(screen.getByText('Clear')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Utility menu' })).toBeInTheDocument();
     expect(container).toMatchSnapshot();
   });
 

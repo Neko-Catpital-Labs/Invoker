@@ -88,7 +88,9 @@ export function TaskNode({ data }: TaskNodeProps) {
   }
 
   return (
-    <div className={`rounded-lg border-2 px-3 py-2 w-[260px] transition-opacity duration-75 ${colors.bg} ${colors.border} ${dimmed ? 'opacity-20 pointer-events-none' : isStale ? 'opacity-50' : ''}`}>
+    <div
+      className={`rounded-lg border-2 px-3 py-2 w-[260px] transition-opacity duration-75 ${colors.bg} ${colors.border} ${dimmed ? 'opacity-20 pointer-events-none' : isStale ? 'opacity-50' : ''}`}
+    >
       <Handle type="target" position={Position.Left} className="!bg-gray-500" />
 
       <div className={`font-mono text-xs opacity-60 truncate ${colors.text}`}>

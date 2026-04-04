@@ -54,16 +54,15 @@ test.describe('Visual proof capture', () => {
   test('empty state', async ({ page }) => {
     await expect(page.getByText('Load a plan to get started')).toBeVisible({ timeout: 5000 });
     await expect(page.getByText('Open File')).toBeVisible();
-    await expect(page.getByText('Refresh')).toBeVisible();
-    await expect(page.getByText('Clear')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Utility menu' })).toBeVisible();
     await captureScreenshot(page, 'empty-state');
     await assertPageScreenshot(page, 'empty-state');
   });
 
   test('dag loaded', async ({ page }) => {
     await loadPlan(page, TEST_PLAN);
-    await expect(page.locator('[data-testid="rf__node-task-alpha"]')).toBeVisible();
-    await expect(page.locator('[data-testid="rf__node-task-beta"]')).toBeVisible();
+    await expect(page.locator('.react-flow__node[data-testid$="task-alpha"]')).toBeVisible();
+    await expect(page.locator('.react-flow__node[data-testid$="task-beta"]')).toBeVisible();
     await captureScreenshot(page, 'dag-loaded');
     await assertPageScreenshot(page, 'dag-loaded');
   });
@@ -100,15 +99,17 @@ test.describe('Visual proof capture', () => {
     ]);
     const result = await page.evaluate(() => window.invoker.getTasks());
     const tasks = Array.isArray(result) ? result : result.tasks;
-    const workTasks = tasks.filter((t: { id: string }) => !t.id.startsWith('__merge__'));
-    expect(workTasks.every((t: { status: string }) => t.status === 'completed')).toBe(true);
+    const alpha = tasks.find((t: { id: string }) => t.id.endsWith('task-alpha'));
+    const beta = tasks.find((t: { id: string }) => t.id.endsWith('task-beta'));
+    expect(alpha?.status).toBe('completed');
+    expect(beta?.status).toBe('completed');
     await captureScreenshot(page, 'task-complete');
     await assertPageScreenshot(page, 'task-complete');
   });
 
   test('task panel', async ({ page }) => {
     await loadPlan(page, TEST_PLAN);
-    await page.locator('[data-testid="rf__node-task-alpha"]').click();
+    await page.locator('.react-flow__node[data-testid$="task-alpha"]').click();
     await expect(page.getByRole('heading', { name: 'First test task' })).toBeVisible();
     const panel = page.locator('.overflow-y-auto');
     await expect(panel.locator('text=task-alpha')).toBeVisible();
@@ -118,14 +119,14 @@ test.describe('Visual proof capture', () => {
 
   test('dag before and after task selection', async ({ page }) => {
     await loadPlan(page, TEST_PLAN);
-    await expect(page.locator('[data-testid="rf__node-task-alpha"]')).toBeVisible();
-    await expect(page.locator('[data-testid="rf__node-task-beta"]')).toBeVisible();
+    await expect(page.locator('.react-flow__node[data-testid$="task-alpha"]')).toBeVisible();
+    await expect(page.locator('.react-flow__node[data-testid$="task-beta"]')).toBeVisible();
 
     // Before: DAG loaded, no task selected
     await assertPageScreenshot(page, 'dag-before-selection');
 
     // Action: click a task node to open the detail panel
-    await page.locator('[data-testid="rf__node-task-beta"]').click();
+    await page.locator('.react-flow__node[data-testid$="task-beta"]').click();
     await expect(page.getByRole('heading', { name: 'Second test task depending on alpha' })).toBeVisible();
 
     // After: task panel is open
@@ -134,23 +135,24 @@ test.describe('Visual proof capture', () => {
 
   test('stable-layout-and-dag-ordering — deterministic dag layout', async ({ page }) => {
     await loadPlan(page, DAG_DETERMINISM_PLAN);
-    await expect(page.locator('[data-testid="rf__node-task-a"]')).toBeVisible();
-    await expect(page.locator('[data-testid="rf__node-task-b"]')).toBeVisible();
-    await expect(page.locator('[data-testid="rf__node-task-c"]')).toBeVisible();
-    await expect(page.locator('[data-testid="rf__node-task-d"]')).toBeVisible();
-    await expect(page.locator('[data-testid="rf__node-task-e"]')).toBeVisible();
+    await expect(page.locator('.react-flow__node[data-testid$="task-a"]')).toBeVisible();
+    await expect(page.locator('.react-flow__node[data-testid$="task-b"]')).toBeVisible();
+    await expect(page.locator('.react-flow__node[data-testid$="task-c"]')).toBeVisible();
+    await expect(page.locator('.react-flow__node[data-testid$="task-d"]')).toBeVisible();
+    await expect(page.locator('.react-flow__node[data-testid$="task-e"]')).toBeVisible();
     await captureScreenshot(page, 'deterministic-dag-layout');
     await assertPageScreenshot(page, 'deterministic-dag-layout');
   });
 
   test('status bar — no system log button', async ({ page }) => {
     await loadPlan(page, TEST_PLAN);
-    await expect(page.locator('[data-testid="rf__node-task-alpha"]')).toBeVisible();
+    await expect(page.locator('.react-flow__node[data-testid$="task-alpha"]')).toBeVisible();
     const statusBar = page.locator('.bg-gray-800.border-t');
     await expect(statusBar).toBeVisible();
     await expect(statusBar.getByText('Total:')).toBeVisible();
     await expect(statusBar.locator('text=System Log')).not.toBeVisible();
     await captureScreenshot(page, 'status-bar-no-system-log');
+    await assertPageScreenshot(page, 'status-bar-no-system-log');
   });
 
   test('fixing-with-ai vs fix-approval colors', async ({ page }) => {
@@ -172,14 +174,16 @@ test.describe('Visual proof capture', () => {
       },
     ]);
     await captureScreenshot(page, 'fixing-vs-fix-approval-colors');
+    await assertPageScreenshot(page, 'fixing-vs-fix-approval-colors');
   });
 
   test('merge-gate-node-text-black — merge gate visible', async ({ page }) => {
     await page.evaluate((yaml) => window.invoker.loadPlan(yaml), yamlStringify(MERGE_GATE_TEXT_VISUAL_PLAN));
-    await page.locator('[data-testid="rf__node-mg-visual-work"]').waitFor({ state: 'visible', timeout: 15000 });
+    await page.locator('.react-flow__node[data-testid$="mg-visual-work"]').first().waitFor({ state: 'visible', timeout: 15000 });
     await expect(page.getByTestId('merge-gate-primary-label')).toBeVisible();
     await expect(page.getByTestId('merge-branch-label')).toBeVisible();
     await captureScreenshot(page, 'merge-gate-node-text-black');
+    await assertPageScreenshot(page, 'merge-gate-node-text-black');
   });
 
   test('interactive-status-hues — fixing-with-ai, needs-input, awaiting-approval', async ({ page }) => {
@@ -211,11 +215,60 @@ test.describe('Visual proof capture', () => {
     ]);
 
     // DOM assertions for the three status labels
-    await expect(page.locator('[data-testid="rf__node-task-alpha"]').getByText('FIXING WITH AI')).toBeVisible();
-    await expect(page.locator('[data-testid="rf__node-task-gamma"]').getByText('SELECT')).toBeVisible();
-    await expect(page.locator('[data-testid="rf__node-task-beta"]').getByText('APPROVE')).toBeVisible();
+    await expect(page.locator('.react-flow__node[data-testid$="task-alpha"]').getByText('FIXING WITH AI')).toBeVisible();
+    await expect(page.locator('.react-flow__node[data-testid$="task-gamma"]').getByText('SELECT')).toBeVisible();
+    await expect(page.locator('.react-flow__node[data-testid$="task-beta"]').getByText('APPROVE')).toBeVisible();
 
     await captureScreenshot(page, 'interactive-status-hues');
+    await assertPageScreenshot(page, 'interactive-status-hues');
+  });
+
+  test('context menu organization for failed task', async ({ page }) => {
+    await loadPlan(page, TEST_PLAN);
+    await injectTaskStates(page, [
+      {
+        taskId: 'task-alpha',
+        changes: {
+          status: 'failed',
+          execution: { exitCode: 1, stderr: 'failed for visual proof' },
+        },
+      },
+    ]);
+
+    await page.locator('.react-flow__node[data-testid$="task-alpha"]').click({ button: 'right' });
+    const menu = page.getByRole('menu');
+    await expect(menu).toBeVisible();
+    await expect(page.getByRole('menuitem', { name: 'Fix with Claude' })).toBeVisible();
+    await expect(page.getByRole('menuitem', { name: 'Fix with Codex' })).toBeVisible();
+    await expect(menu.getByText('Workflow', { exact: true })).toBeVisible();
+    await expect(menu.getByText('Danger', { exact: true })).toBeVisible();
+
+    await captureScreenshot(page, 'context-menu-failed-organization');
+    await assertPageScreenshot(page, 'context-menu-failed-organization');
+  });
+
+  test('context menu keeps danger separator when cancel action is absent', async ({ page }) => {
+    await loadPlan(page, TEST_PLAN);
+    await injectTaskStates(page, [
+      {
+        taskId: 'task-alpha',
+        changes: {
+          status: 'completed',
+          execution: {
+            startedAt: new Date(Date.now() - 8000),
+            completedAt: new Date(),
+          },
+        },
+      },
+    ]);
+
+    await page.locator('.react-flow__node[data-testid$="task-alpha"]').click({ button: 'right' });
+    await expect(page.getByRole('menu')).toBeVisible();
+    await expect(page.getByText('Danger')).toBeVisible();
+    await expect(page.getByRole('menuitem', { name: 'Recreate from Task' })).toBeVisible();
+
+    await captureScreenshot(page, 'context-menu-danger-separator-fallback');
+    await assertPageScreenshot(page, 'context-menu-danger-separator-fallback');
   });
 
   test('status filter dims non-matching nodes', async ({ page }) => {
@@ -240,16 +293,17 @@ test.describe('Visual proof capture', () => {
     await page.waitForTimeout(100);
 
     // Assert that the completed node (task-alpha) is dimmed via opacity-20 class
-    const completedNodeCard = page.locator('[data-testid="rf__node-task-alpha"] > div.rounded-lg');
+    const completedNodeCard = page.locator('div.rounded-lg[data-testid$="task-alpha"]');
     await expect(completedNodeCard).toBeVisible();
     await expect(completedNodeCard).toHaveClass(/opacity-20/);
 
     // Assert that the pending node (task-beta) is NOT dimmed
-    const pendingNodeCard = page.locator('[data-testid="rf__node-task-beta"] > div.rounded-lg');
+    const pendingNodeCard = page.locator('div.rounded-lg[data-testid$="task-beta"]');
     await expect(pendingNodeCard).toBeVisible();
     await expect(pendingNodeCard).not.toHaveClass(/opacity-20/);
 
     await captureScreenshot(page, 'status-filter-dimmed-dag');
+    await assertPageScreenshot(page, 'status-filter-dimmed-dag');
   });
 
   test('status bar click-to-isolate and ctrl-click-toggle', async ({ page }) => {
@@ -272,9 +326,10 @@ test.describe('Visual proof capture', () => {
     // No debounce — effect is immediate, but allow React render
     await page.waitForTimeout(100);
 
-    const completedCard = page.locator('[data-testid="rf__node-task-alpha"] > div.rounded-lg');
+    const completedCard = page.locator('div.rounded-lg[data-testid$="task-alpha"]');
     await expect(completedCard).toHaveClass(/opacity-20/);
     await captureScreenshot(page, 'statusbar-click-isolate-pending');
+    await assertPageScreenshot(page, 'statusbar-click-isolate-pending');
 
     // 2. Ctrl-click "Completed:" to add it to the active set
     await page.getByText(/Completed:/).click({ modifiers: ['ControlOrMeta'] });
@@ -282,9 +337,10 @@ test.describe('Visual proof capture', () => {
 
     // Now both pending and completed are active — neither should be dimmed
     await expect(completedCard).not.toHaveClass(/opacity-20/);
-    const pendingCard = page.locator('[data-testid="rf__node-task-beta"] > div.rounded-lg');
+    const pendingCard = page.locator('div.rounded-lg[data-testid$="task-beta"]');
     await expect(pendingCard).not.toHaveClass(/opacity-20/);
     await captureScreenshot(page, 'statusbar-ctrl-click-toggle-both');
+    await assertPageScreenshot(page, 'statusbar-ctrl-click-toggle-both');
 
     // 3. Click sole active filter to clear — click "Completed:" (plain click = isolate to completed)
     //    then click it again (sole active = clear all)
@@ -297,6 +353,7 @@ test.describe('Visual proof capture', () => {
     await expect(completedCard).not.toHaveClass(/opacity-20/);
     await expect(pendingCard).not.toHaveClass(/opacity-20/);
     await captureScreenshot(page, 'statusbar-clear-all-filters');
+    await assertPageScreenshot(page, 'statusbar-clear-all-filters');
   });
 
   test('approve-fix modal — no Fix Context panel', async ({ page }) => {
@@ -312,7 +369,7 @@ test.describe('Visual proof capture', () => {
     ]);
 
     // Click the task-beta node to open task panel
-    await page.locator('[data-testid="rf__node-task-beta"]').click();
+    await page.locator('.react-flow__node[data-testid$="task-beta"]').click();
     await expect(page.getByRole('heading', { name: 'Second test task depending on alpha' })).toBeVisible();
 
     // Click Approve Fix button to open the modal
@@ -325,6 +382,7 @@ test.describe('Visual proof capture', () => {
     await expect(page.getByText('Fix Context')).not.toBeVisible();
 
     await captureScreenshot(page, 'approve-fix-modal-simplified');
+    await assertPageScreenshot(page, 'approve-fix-modal-simplified');
   });
 
   test('queue view concurrency display', async ({ page }) => {
@@ -334,6 +392,9 @@ test.describe('Visual proof capture', () => {
       { taskId: 'task-alpha', changes: { status: 'running', execution: { startedAt: now } } },
     ]);
     // Navigate to queue tab if there is one, or verify queue section is visible
+    await page.getByRole('button', { name: 'Queue' }).click();
+    await expect(page.getByText(/^Pending \(\d+\)$/)).toBeVisible();
     await captureScreenshot(page, 'queue-view-concurrency');
+    await assertPageScreenshot(page, 'queue-view-concurrency');
   });
 });

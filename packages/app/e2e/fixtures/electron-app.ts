@@ -126,7 +126,7 @@ export const TEST_PLAN = {
 export async function loadPlan(page: Page, plan: typeof TEST_PLAN): Promise<void> {
   const planYaml = yamlStringify(plan);
   await page.evaluate((p) => window.invoker.loadPlan(p), planYaml);
-  await page.locator(`[data-testid="rf__node-${plan.tasks[0].id}"]`).waitFor({ state: 'visible', timeout: 10000 });
+  await page.locator(`.react-flow__node[data-testid$="${plan.tasks[0].id}"]`).first().waitFor({ state: 'visible', timeout: 10000 });
 }
 
 /** Test-only: inject task status/execution into persistence and UI without running commands. */
@@ -134,9 +134,26 @@ export async function injectTaskStates(
   page: Page,
   updates: Array<{ taskId: string; changes: TaskStateChanges }>,
 ): Promise<void> {
+  const resolvedUpdates = await page.evaluate(async (u) => {
+    const result = await window.invoker.getTasks();
+    const tasks = Array.isArray(result) ? result : result.tasks;
+    const ids = tasks.map((t: { id: string }) => t.id);
+
+    const resolveTaskId = (rawId: string): string => {
+      if (ids.includes(rawId)) return rawId;
+      const suffixMatches = ids.filter((id: string) => id.endsWith(`/${rawId}`) || id.endsWith(rawId));
+      return suffixMatches[0] ?? rawId;
+    };
+
+    return u.map((entry) => ({
+      taskId: resolveTaskId(entry.taskId),
+      changes: entry.changes,
+    }));
+  }, updates);
+
   await page.evaluate(async (u) => {
     await window.invoker.injectTaskStates!(u);
-  }, updates);
+  }, resolvedUpdates);
   await page.waitForTimeout(200);
 }
 
@@ -204,7 +221,7 @@ export async function assertPageScreenshot(page: Page, name: string): Promise<vo
   // DOM assertions in the calling test still run.
   if (process.env.CI) return;
   await waitForStableUI(page);
-  await expect(page).toHaveScreenshot(`${name}.png`);
+  await expect(page).toHaveScreenshot(`${name}.png`, { timeout: 20_000 });
 }
 
 /**

@@ -31,7 +31,8 @@ describe('TopBar controls (component)', () => {
 
   it('Refresh button calls getTasks with forceRefresh=true', async () => {
     render(<App />);
-    fireEvent.click(screen.getByText('Refresh'));
+    fireEvent.click(screen.getByRole('button', { name: 'Utility menu' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Refresh' }));
 
     await waitFor(() => {
       expect(mock.api.getTasks).toHaveBeenCalled();
@@ -41,7 +42,8 @@ describe('TopBar controls (component)', () => {
 
   it('Clear button calls clear', async () => {
     render(<App />);
-    fireEvent.click(screen.getByText('Clear'));
+    fireEvent.click(screen.getByRole('button', { name: 'Utility menu' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Clear Session' }));
 
     await waitFor(() => {
       expect(mock.api.clear).toHaveBeenCalled();

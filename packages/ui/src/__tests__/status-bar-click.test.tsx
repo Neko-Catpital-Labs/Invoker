@@ -256,14 +256,15 @@ describe('StatusBar click behavior', () => {
 
       // Query the clickable spans directly by their stable color classes
       // (getByText can return the container div instead of the span)
-      const completedSpan = container.querySelector('.text-green-400');
-      const runningSpan = container.querySelector('.text-blue-400');
+      const completedSpan = container.querySelector('.text-green-300\\/70');
+      const runningSpan = container.querySelector('.text-blue-300\\/70');
 
-      // Active filter should have special styling (underline on the clickable span)
-      expect(completedSpan?.className).toContain('underline');
+      // Active filter should have ring styling
+      expect(completedSpan?.className).toContain('ring-1');
+      expect(completedSpan?.className).toContain('ring-current');
 
       // Inactive filter should be dimmed
-      expect(runningSpan?.className).toContain('opacity-40');
+      expect(runningSpan?.className).toContain('opacity-60');
     });
   });
 });

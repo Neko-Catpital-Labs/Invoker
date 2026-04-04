@@ -106,6 +106,7 @@ function TaskDAGInner({ tasks, workflows, onTaskClick, onTaskDoubleClick, onTask
             type: 'mergeGateNode',
             position: { x: pos.x, y: pos.y + yOffset },
             data: {
+              taskId: task.id,
               status: task.status,
               label: mergeGatePlanTitle(task.description),
               gateKind,

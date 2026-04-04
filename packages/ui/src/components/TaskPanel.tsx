@@ -126,6 +126,7 @@ export function TaskPanel({
   const [isEditingCommand, setIsEditingCommand] = useState(false);
   const [editCommandValue, setEditCommandValue] = useState('');
   const [branchValue, setBranchValue] = useState(baseBranch ?? '');
+  const [showAdvanced, setShowAdvanced] = useState(true);
 
   useEffect(() => {
     setIsEditingCommand(false);
@@ -217,24 +218,6 @@ export function TaskPanel({
         </div>
       )}
 
-      {/* Merge mode selector (merge gates only) */}
-      {task.config.isMergeNode && onSetMergeMode && task.config.workflowId && (
-        <div className="flex items-center justify-between">
-          <span className="text-sm text-gray-400">Merge Mode</span>
-          <select
-            value={mergeMode === 'external_review' ? 'github' : (mergeMode ?? 'manual')}
-            onChange={(e) => onSetMergeMode(task.config.workflowId!, e.target.value)}
-            disabled={task.status === 'running' || task.status === 'fixing_with_ai'}
-            className="bg-gray-700 text-gray-200 text-xs rounded px-2 py-1 border border-gray-600 focus:outline-none focus:border-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
-            data-testid="merge-mode-select"
-          >
-            <option value="manual">Manual</option>
-            <option value="automatic">Automatic</option>
-            <option value="github">GitHub</option>
-          </select>
-        </div>
-      )}
-
       {/* Review link (merge gates only) */}
       {task.config.isMergeNode && task.execution?.reviewUrl && (
         <div className="flex items-center justify-between">
@@ -260,32 +243,90 @@ export function TaskPanel({
         </div>
       )}
 
-      {/* Executor type selector */}
-      {onEditType && !task.config.isMergeNode && (
-        <div className="flex items-center justify-between">
-          <span className="text-sm text-gray-400">Executor</span>
-          <select
-            value={executorSelectValue}
-            onChange={(e) => {
-              const val = e.target.value;
-              if (val.startsWith('ssh:')) {
-                onEditType(task.id, 'ssh', val.slice(4));
-              } else {
-                onEditType(task.id, val);
-              }
-            }}
-            disabled={task.status === 'running'}
-            className="bg-gray-700 text-gray-200 text-xs rounded px-2 py-1 border border-gray-600 focus:outline-none focus:border-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
-            data-testid="executor-type-select"
+      {/* Advanced section (collapsed by default) */}
+      {(
+        (onEditType && !task.config.isMergeNode) ||
+        (task.config.prompt && onEditAgent) ||
+        (task.config.isMergeNode && onSetMergeMode && task.config.workflowId)
+      ) && (
+        <div className="border-t border-gray-700 pt-3">
+          <button
+            onClick={() => setShowAdvanced(!showAdvanced)}
+            className="flex items-center gap-2 text-sm text-gray-300 hover:text-gray-100 transition-colors w-full"
+            data-testid="advanced-toggle"
           >
-            <option value="worktree">Worktree</option>
-            <option value="docker">Docker</option>
-            {remoteTargets?.map((targetId) => (
-              <option key={targetId} value={`ssh:${targetId}`}>
-                SSH: {targetId}
-              </option>
-            ))}
-          </select>
+            <span className="text-gray-500">{showAdvanced ? '▼' : '▶'}</span>
+            <span>Advanced</span>
+          </button>
+
+          {showAdvanced && (
+            <div className="mt-3 space-y-3">
+              {/* Executor type selector (for non-merge tasks) */}
+              {onEditType && !task.config.isMergeNode && (
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-gray-400">Run on</span>
+                  <select
+                    value={executorSelectValue}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      if (val.startsWith('ssh:')) {
+                        onEditType(task.id, 'ssh', val.slice(4));
+                      } else {
+                        onEditType(task.id, val);
+                      }
+                    }}
+                    disabled={task.status === 'running'}
+                    className="bg-gray-700 text-gray-200 text-xs rounded px-2 py-1 border border-gray-600 focus:outline-none focus:border-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                    data-testid="executor-type-select"
+                  >
+                    <option value="worktree">Worktree</option>
+                    <option value="docker">Docker</option>
+                    {remoteTargets?.map((targetId) => (
+                      <option key={targetId} value={`ssh:${targetId}`}>
+                        SSH: {targetId}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              {/* Agent selector (for prompt tasks) */}
+              {task.config.prompt && onEditAgent && (
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-gray-400">Agent</span>
+                  <select
+                    value={task.config.executionAgent ?? 'claude'}
+                    onChange={(e) => onEditAgent(task.id, e.target.value)}
+                    disabled={task.status === 'running'}
+                    className="bg-gray-700 text-gray-200 text-xs rounded px-2 py-1 border border-gray-600 focus:outline-none focus:border-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                    data-testid="execution-agent-select"
+                  >
+                    {(executionAgents ?? []).map(name => (
+                      <option key={name} value={name}>{capitalize(name)} Task</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              {/* Merge mode selector (merge gates only) */}
+              {task.config.isMergeNode && onSetMergeMode && task.config.workflowId && (
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-gray-400">Merge mode</span>
+                  <select
+                    value={mergeMode === 'external_review' ? 'github' : (mergeMode ?? 'manual')}
+                    onChange={(e) => onSetMergeMode(task.config.workflowId!, e.target.value)}
+                    disabled={task.status === 'running' || task.status === 'fixing_with_ai'}
+                    className="bg-gray-700 text-gray-200 text-xs rounded px-2 py-1 border border-gray-600 focus:outline-none focus:border-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                    data-testid="merge-mode-select"
+                  >
+                    <option value="manual">Manual</option>
+                    <option value="automatic">Automatic</option>
+                    <option value="github">GitHub</option>
+                  </select>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
 
@@ -293,32 +334,15 @@ export function TaskPanel({
       {(task.config.prompt || task.config.command) && (
         <div>
           <div className="flex items-center justify-between">
-            {task.config.prompt && onEditAgent ? (
-              <div className="flex items-center justify-between w-full">
-                <span className="text-sm text-gray-400">Agent</span>
-                <select
-                  value={task.config.executionAgent ?? 'claude'}
-                  onChange={(e) => onEditAgent(task.id, e.target.value)}
-                  disabled={task.status === 'running'}
-                  className="bg-gray-700 text-gray-200 text-xs rounded px-2 py-1 border border-gray-600 focus:outline-none focus:border-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
-                  data-testid="execution-agent-select"
-                >
-                  {(executionAgents ?? []).map(name => (
-                    <option key={name} value={name}>{capitalize(name)} Task</option>
-                  ))}
-                </select>
-              </div>
-            ) : (
-              <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
-                task.config.prompt
-                  ? 'bg-blue-900/40 text-blue-300'
-                  : 'bg-gray-700 text-gray-300'
-              }`}>
-                {task.config.prompt
-                  ? capitalize(task.config.executionAgent ?? 'claude') + ' Task'
-                  : 'Command'}
-              </span>
-            )}
+            <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
+              task.config.prompt
+                ? 'bg-blue-900/40 text-blue-300'
+                : 'bg-gray-700 text-gray-300'
+            }`}>
+              {task.config.prompt
+                ? capitalize(task.config.executionAgent ?? 'claude') + ' Task'
+                : 'Command'}
+            </span>
           </div>
 
           {isEditingCommand && task.config.command !== undefined ? (
