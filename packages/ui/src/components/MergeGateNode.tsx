@@ -85,7 +85,7 @@ export function MergeGateNode({ data }: MergeGateNodeProps) {
     visualStatus === 'awaiting_approval' ? 'APPROVE' :
     visualStatus === 'running' ? 'RUNNING' :
     visualStatus === 'failed' ? 'BLOCKED' :
-    'WAITING';
+    'PENDING';
 
   const mergeApproveLabel = effectiveGateKind === 'pull_request' ? 'Approve & Create PR'
     : effectiveGateKind === 'merge' ? 'Approve & Merge' : 'Approve';
@@ -103,7 +103,7 @@ export function MergeGateNode({ data }: MergeGateNodeProps) {
       />
 
       <span
-        className={`absolute left-0 top-0 bottom-0 w-1.5 rounded-l-2xl ${colors.dot} ${visualStatus === 'pending' ? 'animate-pulse' : ''}`}
+        className={`absolute left-0 top-0 bottom-0 w-1.5 rounded-l-2xl ${colors.dot} ${visualStatus === 'pending' ? 'pulse-strong' : ''}`}
       />
 
       <div className={`flex items-center gap-2 pl-3 ${colors.text}`}>
@@ -119,7 +119,7 @@ export function MergeGateNode({ data }: MergeGateNodeProps) {
 
       <div className="flex items-center gap-1.5 mt-1 pl-3">
         <span
-          className={`w-2 h-2 rounded-full ${colors.dot} ${visualStatus === 'pending' ? 'animate-pulse' : ''}`}
+          className={`w-2 h-2 rounded-full ${colors.dot} ${visualStatus === 'pending' ? 'pulse-strong' : ''}`}
         />
         <span className={`text-sm uppercase tracking-wide ${colors.text}`}>{statusLabel}</span>
       </div>

@@ -25,6 +25,26 @@
   }
 }
 
+/* Stronger pulse for DAG node status rails/dots */
+@keyframes pulse-strong {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+    filter: brightness(1);
+  }
+  50% {
+    opacity: 0.75;
+    transform: scale(1.08);
+    filter: brightness(1.35);
+  }
+}
+
+.pulse-strong {
+  animation: pulse-strong 1s ease-in-out infinite;
+  will-change: transform, opacity, filter;
+}
+
 /* Hover cursor on edge group */
 .bundled-edge-group {
   cursor: pointer;

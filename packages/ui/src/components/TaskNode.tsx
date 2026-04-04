@@ -48,7 +48,7 @@ export function TaskNode({ data }: TaskNodeProps) {
             : task.status.toUpperCase();
 
   const isStale = task.status === 'stale';
-  const dotClass = `${colors.dot} ${isAnimated ? 'animate-pulse' : ''}`;
+  const dotClass = `${colors.dot} ${isAnimated ? 'pulse-strong' : ''}`;
 
   return (
     <div
