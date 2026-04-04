@@ -1,6 +1,6 @@
 # workflow-chain-submit
 
-Submit a two-workflow chain headlessly, where workflow 2 is gated on workflow 1's merge gate.
+Submit a workflow chain headlessly, where each workflow is gated on the previous workflow's merge gate.
 
 ## When to use
 
@@ -15,9 +15,10 @@ Submit a two-workflow chain headlessly, where workflow 2 is gated on workflow 1'
 ## Required inputs
 
 1. `workflow1.yaml` (full first workflow plan)
-2. `workflow2.template.yaml` (second workflow template with placeholder)
+2. `workflow2.template.yaml` (template with placeholder)
+3. Optional more templates: `workflow3.template.yaml ... workflowN.template.yaml`
 
-`workflow2.template.yaml` must contain:
+Each template after the first must contain:
 
 ```yaml
 externalDependencies:
@@ -28,19 +29,17 @@ externalDependencies:
 ## Command
 
 ```bash
-./scripts/submit-workflow-chain.sh <workflow1.yaml> <workflow2.template.yaml>
+./scripts/submit-workflow-chain.sh <workflow1.yaml> <workflow2.template.yaml> [workflow3.template.yaml ...]
 ```
 
 ## Output
 
 The script prints:
 
-- `WF1=<workflow-id>` (persisted ID for workflow 1)
-- `WF2=<workflow-id>` (workflow 2 ID when available)
-- `PLAN2_RENDERED=<temp-yaml-path>` (rendered second plan path)
+- `WF1=<workflow-id>` ... `WFN=<workflow-id>` (persisted IDs in chain order)
+- `RENDERED_PLAN=<temp-yaml-path>` for each rendered template
 
 ## Notes
 
 - Uses `--no-track` so submissions return without waiting for full execution.
-- Resolves workflow 1 ID from persisted workflows by `name` to avoid transient ID races.
-
+- Resolves each submitted workflow ID from persisted workflows by `name` to avoid transient ID races.
