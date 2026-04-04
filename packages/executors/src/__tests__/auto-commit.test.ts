@@ -1319,8 +1319,8 @@ describe('merge gate commit topology (real git)', () => {
     expect(mergeNode).toBeDefined();
     await executor.executeTasks([orchestrator.getTask(mergeNode.id)!]);
 
-    // After consolidation, merge node should be awaiting_approval (manual mode)
-    expect(orchestrator.getTask(mergeNode.id)!.status).toBe('awaiting_approval');
+    // After consolidation, merge node should be review_ready (manual mode)
+    expect(orchestrator.getTask(mergeNode.id)!.status).toBe('review_ready');
 
     // Master should NOT have moved yet
     const masterBeforeApprove = execSync('git rev-parse master', { cwd: tmpDir }).toString().trim();

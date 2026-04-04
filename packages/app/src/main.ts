@@ -1182,7 +1182,7 @@ function setupGuiMode(): void {
     ipcMain.handle('invoker:check-pr-status', async () => {
       const tasks = orchestrator.getAllTasks();
       const awaitingMergeGates = tasks.filter(
-        t => t.config.isMergeNode && t.status === 'awaiting_approval'
+        t => t.config.isMergeNode && (t.status === 'review_ready' || t.status === 'awaiting_approval')
       );
       await Promise.all(
         awaitingMergeGates.map(t => taskExecutor.checkPrApprovalNow(t.id))

@@ -30,6 +30,7 @@ externalDependencies:
 
 ```bash
 ./scripts/submit-workflow-chain.sh <workflow1.yaml> <workflow2.template.yaml> [workflow3.template.yaml ...]
+./scripts/submit-workflow-chain.sh --gate-policy review_ready <workflow1.yaml> <workflow2.template.yaml> [workflow3.template.yaml ...]
 ```
 
 ## Output
@@ -43,3 +44,6 @@ The script prints:
 
 - Uses `--no-track` so submissions return without waiting for full execution.
 - Resolves each submitted workflow ID from persisted workflows by `name` to avoid transient ID races.
+- `--gate-policy approved|review_ready` controls cross-workflow merge-gate readiness:
+  - `review_ready` (default): downstream can start once upstream merge gate is `review_ready`, `awaiting_approval`, or `completed`.
+  - `approved`: downstream waits for upstream merge gate `completed`.

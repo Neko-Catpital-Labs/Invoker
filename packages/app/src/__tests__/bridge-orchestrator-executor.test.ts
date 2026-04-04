@@ -935,7 +935,7 @@ describe('Flow 9: manual merge mode', () => {
     h = createTestHarness();
   });
 
-  it('merge node enters awaiting_approval after consolidation in manual mode', async () => {
+  it('merge node enters review_ready after consolidation in manual mode', async () => {
     h.loadAndStart(MANUAL_MERGE_PLAN);
 
     h.completeTask('A');
@@ -947,8 +947,8 @@ describe('Flow 9: manual merge mode', () => {
 
     await h.executor.executeTasks([mergeTask]);
 
-    // Merge node should be awaiting_approval (not completed)
-    expect(h.getTask(mergeId)!.status).toBe('awaiting_approval');
+    // Merge node should be review_ready (not completed)
+    expect(h.getTask(mergeId)!.status).toBe('review_ready');
 
     // Verify git calls: consolidation happened but final merge did not
     const consolidateBranch = h.git.calls.find(c =>
@@ -963,7 +963,7 @@ describe('Flow 9: manual merge mode', () => {
     expect(squashCall).toBeUndefined();
   });
 
-  it('approve transitions merge node from awaiting_approval to completed', async () => {
+  it('approve transitions merge node from review_ready to completed', async () => {
     h.loadAndStart(MANUAL_MERGE_PLAN);
 
     h.completeTask('A');
@@ -973,7 +973,7 @@ describe('Flow 9: manual merge mode', () => {
     const mergeTask = h.getTask(mergeId)!;
 
     await h.executor.executeTasks([mergeTask]);
-    expect(h.getTask(mergeId)!.status).toBe('awaiting_approval');
+    expect(h.getTask(mergeId)!.status).toBe('review_ready');
 
     // Clear git history from consolidation phase
     h.git.reset();
@@ -1064,7 +1064,7 @@ describe('Flow 9c: set-merge-mode github alias', () => {
     const mergeId = h.getAllTasks().find((t) => t.config.isMergeNode)!.id;
     const wfId = h.getTask(mergeId)!.config.workflowId!;
     await h.executor.executeTasks([h.getTask(mergeId)!]);
-    expect(h.getTask(mergeId)!.status).toBe('awaiting_approval');
+    expect(h.getTask(mergeId)!.status).toBe('review_ready');
 
     await setWorkflowMergeMode(wfId, 'github', {
       orchestrator: h.orchestrator,
@@ -1073,7 +1073,7 @@ describe('Flow 9c: set-merge-mode github alias', () => {
     });
 
     expect(h.persistence.loadWorkflow(wfId)!.mergeMode).toBe('external_review');
-    expect(h.getTask(mergeId)!.status).toBe('awaiting_approval');
+    expect(h.getTask(mergeId)!.status).toBe('review_ready');
     expect(h.getTask(mergeId)!.execution.reviewUrl).toBe('https://github.com/owner/repo/pull/99');
   });
 });
@@ -1100,7 +1100,7 @@ describe('Flow 9b: beforeApproveHook fires for merge nodes', () => {
 
     const mergeId = orch.getAllTasks().find(t => t.config.isMergeNode)!.id;
     await exec.executeTasks([orch.getTask(mergeId)!]);
-    expect(orch.getTask(mergeId)!.status).toBe('awaiting_approval');
+    expect(orch.getTask(mergeId)!.status).toBe('review_ready');
     git.reset();
 
     await orch.approve(mergeId);
@@ -1119,7 +1119,7 @@ describe('Flow 9b: beforeApproveHook fires for merge nodes', () => {
 
     const mergeId = h.getAllTasks().find(t => t.config.isMergeNode)!.id;
     await h.executor.executeTasks([h.getTask(mergeId)!]);
-    expect(h.getTask(mergeId)!.status).toBe('awaiting_approval');
+    expect(h.getTask(mergeId)!.status).toBe('review_ready');
     h.git.reset();
 
     await h.orchestrator.approve(mergeId);

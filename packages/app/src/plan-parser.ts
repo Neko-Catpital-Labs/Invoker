@@ -52,6 +52,7 @@ export interface RawPlanTask {
     workflowId?: string;
     taskId?: string;
     requiredStatus?: string;
+    gatePolicy?: string;
   }>;
   pivot?: boolean;
   experimentVariants?: RawExperimentVariant[];
@@ -206,9 +207,9 @@ export function parsePlan(yamlContent: string): PlanDefinition {
           `Task "${task.id}" externalDependencies[${depIndex}] must have a string "workflowId"`,
         );
       }
-      if (!dep.taskId || typeof dep.taskId !== 'string') {
+      if (dep.taskId !== undefined && typeof dep.taskId !== 'string') {
         throw new PlanParseError(
-          `Task "${task.id}" externalDependencies[${depIndex}] must have a string "taskId"`,
+          `Task "${task.id}" externalDependencies[${depIndex}] "taskId" must be a string when provided`,
         );
       }
       if (dep.requiredStatus !== undefined && dep.requiredStatus !== 'completed') {
@@ -216,10 +217,17 @@ export function parsePlan(yamlContent: string): PlanDefinition {
           `Task "${task.id}" externalDependencies[${depIndex}] "requiredStatus" must be "completed"`,
         );
       }
+      if (dep.gatePolicy !== undefined && dep.gatePolicy !== 'approved' && dep.gatePolicy !== 'review_ready') {
+        throw new PlanParseError(
+          `Task "${task.id}" externalDependencies[${depIndex}] "gatePolicy" must be "approved" or "review_ready"`,
+        );
+      }
+      const taskId = dep.taskId?.trim() || '__merge__';
       return {
         workflowId: dep.workflowId,
-        taskId: dep.taskId,
+        taskId,
         requiredStatus: 'completed' as const,
+        gatePolicy: (dep.gatePolicy ?? 'review_ready') as 'approved' | 'review_ready',
       };
     });
 

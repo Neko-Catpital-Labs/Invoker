@@ -510,7 +510,7 @@ export function TaskPanel({
           </button>
         )}
 
-        {task.status === 'awaiting_approval' && (
+        {(task.status === 'awaiting_approval' || task.status === 'review_ready') && (
           <div className="flex gap-2">
             <button
               onClick={() => onApprove(task)}

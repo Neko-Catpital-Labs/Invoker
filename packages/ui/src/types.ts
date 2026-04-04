@@ -15,6 +15,7 @@ export type TaskStatus =
   | 'failed'
   | 'needs_input'
   | 'blocked'
+  | 'review_ready'
   | 'awaiting_approval'
   | 'stale';
 
@@ -35,8 +36,10 @@ export interface ExperimentResultEntry {
 
 export interface ExternalDependency {
   readonly workflowId: string;
-  readonly taskId: string;
+  /** Optional task selector within the external workflow. Omit to depend on that workflow's merge gate. */
+  readonly taskId?: string;
   readonly requiredStatus: 'completed';
+  readonly gatePolicy?: 'approved' | 'review_ready';
 }
 
 // ── Task Config (plan-time / static fields) ────────────────

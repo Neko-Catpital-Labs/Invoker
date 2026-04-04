@@ -30,6 +30,7 @@ export function sortTasksForTimeline(tasks: TaskState[]): TaskState[] {
   const statusOrder: Record<string, number> = {
     running: 0,
     needs_input: 1,
+    review_ready: 2,
     awaiting_approval: 2,
     failed: 3,
     completed: 4,

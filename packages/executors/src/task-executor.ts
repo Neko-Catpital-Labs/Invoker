@@ -909,7 +909,7 @@ export class TaskExecutor {
     for (const task of this.orchestrator.getAllTasks()) {
       if (
         task.config.isMergeNode &&
-        task.status === 'awaiting_approval' &&
+        (task.status === 'review_ready' || task.status === 'awaiting_approval') &&
         task.execution.reviewId &&
         !this.activePrPollers.has(task.id)
       ) {
@@ -924,7 +924,7 @@ export class TaskExecutor {
     for (const task of this.orchestrator.getAllTasks()) {
       if (
         task.config.isMergeNode &&
-        task.status === 'awaiting_approval' &&
+        (task.status === 'review_ready' || task.status === 'awaiting_approval') &&
         task.execution.reviewId
       ) {
         try {
@@ -972,7 +972,7 @@ export class TaskExecutor {
         } else if (status.rejected) {
           console.log(`[merge-gate] PR ${reviewId} rejected: ${status.statusText}`);
           this.stopPrPolling(taskId);
-          // Leave in awaiting_approval — user can retry
+          // Leave in review_ready/awaiting_approval — user can retry
         }
       } catch (err) {
         console.error(`[merge-gate] PR poll error for ${taskId}:`, err);
@@ -1175,21 +1175,26 @@ export class TaskExecutor {
     return context;
   }
 
-  private resolveExternalDependencyTask(workflowId: string, taskId: string): TaskState | undefined {
-    if (taskId.includes('/')) {
-      const byDirectId = this.orchestrator.getTask(taskId);
+  private resolveExternalDependencyTask(workflowId: string, taskId?: string): TaskState | undefined {
+    const normalizedTaskId = taskId?.trim() || '__merge__';
+    if (normalizedTaskId === '__merge__') {
+      return this.orchestrator.getTask(`__merge__${workflowId}`);
+    }
+
+    if (normalizedTaskId.includes('/')) {
+      const byDirectId = this.orchestrator.getTask(normalizedTaskId);
       if (byDirectId) return byDirectId;
     }
 
-    const scopedId = scopePlanTaskId(workflowId, taskId);
+    const scopedId = scopePlanTaskId(workflowId, normalizedTaskId);
     const byScopedId = this.orchestrator.getTask(scopedId);
     if (byScopedId) return byScopedId;
 
-    const byRawId = this.orchestrator.getTask(taskId);
+    const byRawId = this.orchestrator.getTask(normalizedTaskId);
     if (byRawId) return byRawId;
 
     const wfTasks = this.persistence.loadTasks?.(workflowId) ?? [];
-    return wfTasks.find((t) => t.id === scopedId || t.id === taskId);
+    return wfTasks.find((t) => t.id === scopedId || t.id === normalizedTaskId);
   }
 
   /**
