@@ -27,10 +27,10 @@ const STATUS_COLOR_MAP: Record<string, StatusColors> = {
     dot: 'bg-blue-400',
   },
   fixing_with_ai: {
-    bg: 'bg-slate-800/95',
-    border: 'border-sky-400/20',
-    text: 'text-slate-100',
-    dot: 'bg-sky-400',
+    bg: 'bg-orange-900/35',
+    border: 'border-orange-400/25',
+    text: 'text-orange-100',
+    dot: 'bg-orange-400',
   },
   completed: {
     bg: 'bg-slate-800/95',
@@ -108,7 +108,7 @@ export function getStatusInlineColors(status: string): {
     blocked: { bg: '#64748b', border: '#475569', text: '#e2e8f0' },
     needs_input: { bg: '#fb923c', border: '#9a4f0a', text: '#ffedd5' },
     awaiting_approval: { bg: '#c084fc', border: '#a855f7', text: '#ede9fe' },
-    fixing_with_ai: { bg: '#7dd3fc', border: '#2c6f90', text: '#e0f2fe' },
+    fixing_with_ai: { bg: '#fb923c', border: '#9a4f0a', text: '#ffedd5' },
     fix_approval: { bg: '#e879f9', border: '#d946ef', text: '#fae8ff' },
     stale: { bg: '#475569', border: '#374151', text: '#94a3b8' },
   };
