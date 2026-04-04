@@ -96,6 +96,28 @@ describe('createMergeWorktree isolation (real git)', { timeout: 30_000 }, () => 
     await executor.removeMergeWorktree(clonePath);
   });
 
+  it('resolves origin/<branch> input when branch exists only as local host branch', async () => {
+    const sandbox = createSandbox();
+    root = sandbox.root;
+
+    // Local-only feature branch on host (not pushed to origin)
+    git(sandbox.host, 'checkout -b feature/local-only');
+    writeFileSync(join(sandbox.host, 'local-only.txt'), 'local-only');
+    git(sandbox.host, 'add -A');
+    git(sandbox.host, 'commit -m "local only branch"');
+    git(sandbox.host, 'checkout master');
+
+    const expectedSha = git(sandbox.host, 'rev-parse feature/local-only');
+
+    const executor = buildExecutor(sandbox.host);
+    const clonePath = await executor.createMergeWorktree('origin/feature/local-only', 'test-origin-prefix-local-only');
+
+    const headSha = git(clonePath, 'rev-parse HEAD');
+    expect(headSha).toBe(expectedSha);
+
+    await executor.removeMergeWorktree(clonePath);
+  });
+
   it('clone HEAD is detached at the requested ref', async () => {
     const sandbox = createSandbox();
     root = sandbox.root;

@@ -748,12 +748,52 @@ export class TaskExecutor {
     }
     await this.execGitIn(['remote', 'set-url', 'origin', originUrl], clonePath);
 
-    // Resolve ref in the clone (not in host repo — the clone has mirrored branches)
-    let refSha: string;
-    try {
-      refSha = (await this.execGitIn(['rev-parse', ref], clonePath)).trim();
-    } catch {
-      refSha = (await this.execGitIn(['rev-parse', `origin/${ref}`], clonePath)).trim();
+    // Resolve ref in the clone (not in host repo — the clone has mirrored branches).
+    // Accept both "feature/x" and "origin/feature/x" forms, and tolerate missing
+    // origin tracking refs for local-only stacked branches.
+    const tryResolve = async (expr: string): Promise<string | undefined> => {
+      try {
+        return (await this.execGitIn(['rev-parse', '--verify', `${expr}^{commit}`], clonePath)).trim();
+      } catch {
+        return undefined;
+      }
+    };
+
+    const normalizedRef = ref.trim();
+    const strippedOriginRef = normalizedRef.startsWith('origin/') ? normalizedRef.slice('origin/'.length) : normalizedRef;
+    const candidates = [
+      normalizedRef,
+      strippedOriginRef,
+      `refs/heads/${strippedOriginRef}`,
+      `refs/remotes/origin/${strippedOriginRef}`,
+      `origin/${strippedOriginRef}`,
+    ];
+
+    let refSha: string | undefined;
+    for (const candidate of candidates) {
+      refSha = await tryResolve(candidate);
+      if (refSha) break;
+    }
+
+    if (!refSha) {
+      // Last chance: fetch only the requested branch from origin, then retry.
+      // This can happen if clone source had stale refs at submit time.
+      try {
+        await this.execGitIn(['fetch', 'origin', `+refs/heads/${strippedOriginRef}:refs/remotes/origin/${strippedOriginRef}`], clonePath);
+      } catch {
+        // Best-effort; keep error message from final resolve below.
+      }
+      for (const candidate of candidates) {
+        refSha = await tryResolve(candidate);
+        if (refSha) break;
+      }
+    }
+
+    if (!refSha) {
+      throw new Error(
+        `Unable to resolve merge worktree ref "${ref}" in clone ${clonePath}. ` +
+        `Tried: ${candidates.join(', ')}`,
+      );
     }
     await this.execGitIn(['checkout', '--detach', refSha], clonePath);
     return clonePath;

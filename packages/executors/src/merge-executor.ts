@@ -985,13 +985,26 @@ export async function consolidateAndMergeImpl(
 
     // Create feature branch in worktree
     try {
-      await execGitInMergeSafe(host, ['checkout', '-b', featureBranch, baseBranch], worktreeDir);
-      console.log(`[merge] Created ${featureBranch} from ${baseBranch}`);
+      // createMergeWorktree() already checks out detached HEAD at baseBranch/ref,
+      // so branch creation should be relative to current HEAD (not by name lookup).
+      await execGitInMergeSafe(host, ['checkout', '-b', featureBranch], worktreeDir);
+      console.log(`[merge] Created ${featureBranch} from current base HEAD (${baseBranch})`);
     } catch {
       console.log(`[merge] WARNING: Deleting existing ${featureBranch} to recreate from ${baseBranch}`);
-      await execGitInMergeSafe(host, ['branch', '-D', featureBranch], worktreeDir);
-      await execGitInMergeSafe(host, ['checkout', '-b', featureBranch, baseBranch], worktreeDir);
-      console.log(`[merge] Recreated ${featureBranch} from ${baseBranch}`);
+      try {
+        await execGitInMergeSafe(host, ['branch', '-D', featureBranch], worktreeDir);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        const missingBranch =
+          msg.includes(`branch '${featureBranch}' not found`)
+          || msg.includes(`branch \"${featureBranch}\" not found`)
+          || msg.includes('not found');
+        if (!missingBranch) {
+          throw err;
+        }
+      }
+      await execGitInMergeSafe(host, ['checkout', '-b', featureBranch], worktreeDir);
+      console.log(`[merge] Recreated ${featureBranch} from current base HEAD (${baseBranch})`);
     }
 
     const allTasks = host.orchestrator.getAllTasks();

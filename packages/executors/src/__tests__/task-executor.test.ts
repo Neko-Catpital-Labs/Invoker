@@ -3327,6 +3327,56 @@ describe('TaskExecutor', () => {
   });
 
   describe('consolidateAndMerge', () => {
+    it('does not fail when branch -D reports feature branch missing during recreate', async () => {
+      const tasks = new Map<string, TaskState>();
+      tasks.set('A', makeTask({
+        id: 'A',
+        status: 'completed',
+        config: { workflowId: 'wf-1' },
+        execution: { branch: 'invoker/A' },
+      }));
+      tasks.set('__merge__wf-1', makeTask({
+        id: '__merge__wf-1',
+        status: 'running',
+        dependencies: ['A'],
+        config: { workflowId: 'wf-1', isMergeNode: true },
+      }));
+
+      const orchestrator = {
+        getTask: (id: string) => tasks.get(id),
+        getAllTasks: () => Array.from(tasks.values()),
+        handleWorkerResponse: vi.fn(),
+        setTaskAwaitingApproval: vi.fn(),
+      };
+
+      const mockFamiliar = createAutoCompleteFamiliar();
+      const executor = new TaskExecutor({
+        orchestrator: orchestrator as any,
+        persistence: { loadWorkflow: () => ({ onFinish: 'none', mergeMode: 'manual', baseBranch: 'master', featureBranch: 'feature/wf-1', name: 'Test' }), updateTask: vi.fn() } as any,
+        familiarRegistry: { getDefault: () => mockFamiliar, get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+      });
+
+      let checkoutCreateCalls = 0;
+      (executor as any).execGitIn = async (args: string[], _dir: string) => {
+        if (args[0] === 'checkout' && args[1] === '-b') {
+          checkoutCreateCalls += 1;
+          if (checkoutCreateCalls === 1) {
+            throw new Error('git checkout -b feature/wf-1 master failed (code 1): simulated create failure');
+          }
+          return '';
+        }
+        if (args[0] === 'branch' && args[1] === '-D') {
+          throw new Error("git branch -D feature/wf-1 failed (code 1): error: branch 'feature/wf-1' not found");
+        }
+        return '';
+      };
+      (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
+      (executor as any).removeMergeWorktree = async () => {};
+
+      await expect(executor.executeTask(tasks.get('__merge__wf-1')!)).resolves.toBeUndefined();
+    });
+
     it('merges the full linear chain when merge gate depends only on the tip task', async () => {
       const tasks = new Map<string, TaskState>();
       tasks.set('A', makeTask({ id: 'A', status: 'completed', config: { workflowId: 'wf-1' }, execution: { branch: 'invoker/A' } }));
