@@ -10,13 +10,9 @@
  * Used as a custom node type in @xyflow/react.
  */
 
-import { useEffect, useState } from 'react';
 import { Handle, Position } from '@xyflow/react';
 import type { TaskState } from '../types.js';
 import { getStatusColor, getEffectiveVisualStatus } from '../lib/colors.js';
-
-const HEARTBEAT_WARN_MS = 60_000;
-const HEARTBEAT_STALE_MS = 90_000;
 
 interface TaskNodeData {
   task: TaskState;
@@ -29,34 +25,11 @@ interface TaskNodeProps {
   data: TaskNodeData;
 }
 
-function useHeartbeatAge(task: TaskState): number | null {
-  const [age, setAge] = useState<number | null>(null);
-
-  useEffect(() => {
-    if (task.status !== 'running' || !task.execution.lastHeartbeatAt) {
-      setAge(null);
-      return;
-    }
-    const compute = () => {
-      const hb = task.execution.lastHeartbeatAt instanceof Date
-        ? task.execution.lastHeartbeatAt
-        : new Date(task.execution.lastHeartbeatAt as unknown as string);
-      setAge(Date.now() - hb.getTime());
-    };
-    compute();
-    const timer = setInterval(compute, 10_000);
-    return () => clearInterval(timer);
-  }, [task.status, task.execution.lastHeartbeatAt]);
-
-  return age;
-}
-
 export function TaskNode({ data }: TaskNodeProps) {
   const { task } = data;
   const dimmed = data.dimmed ?? false;
   const visualStatus = getEffectiveVisualStatus(task.status, task.execution);
   const colors = getStatusColor(visualStatus);
-  const heartbeatAge = useHeartbeatAge(task);
 
   const isAnimated =
     task.status === 'running' ||
@@ -75,17 +48,7 @@ export function TaskNode({ data }: TaskNodeProps) {
             : task.status.toUpperCase();
 
   const isStale = task.status === 'stale';
-
-  let dotClass = `${colors.dot} ${isAnimated ? 'animate-pulse' : ''}`;
-  if (task.status === 'running' && heartbeatAge !== null) {
-    if (heartbeatAge > HEARTBEAT_STALE_MS) {
-      dotClass = 'bg-red-600';
-    } else if (heartbeatAge > HEARTBEAT_WARN_MS) {
-      dotClass = 'bg-yellow-500 animate-pulse';
-    } else {
-      dotClass = 'bg-blue-400 animate-pulse';
-    }
-  }
+  const dotClass = `${colors.dot} ${isAnimated ? 'animate-pulse' : ''}`;
 
   return (
     <div
