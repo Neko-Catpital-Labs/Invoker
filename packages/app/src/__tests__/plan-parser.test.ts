@@ -107,6 +107,41 @@ tasks:
     expect(plan.tasks[2].dependencies).toEqual(['first', 'second']);
   });
 
+  it('parses externalDependencies with default requiredStatus', () => {
+    const yaml = `
+name: External Dependency Plan
+repoUrl: git@github.com:test/repo.git
+tasks:
+  - id: gated
+    description: Wait for prior workflow task
+    command: echo "go"
+    externalDependencies:
+      - workflowId: wf-123
+        taskId: verify-control-plane-regression
+`;
+    const plan = parsePlan(yaml);
+    expect(plan.tasks[0].externalDependencies).toEqual([
+      { workflowId: 'wf-123', taskId: 'verify-control-plane-regression', requiredStatus: 'completed' },
+    ]);
+  });
+
+  it('rejects invalid externalDependencies.requiredStatus', () => {
+    const yaml = `
+name: Bad External Dependency Plan
+repoUrl: git@github.com:test/repo.git
+tasks:
+  - id: gated
+    description: Wait
+    command: echo "go"
+    externalDependencies:
+      - workflowId: wf-123
+        taskId: verify-control-plane-regression
+        requiredStatus: running
+`;
+    expect(() => parsePlan(yaml)).toThrow(PlanParseError);
+    expect(() => parsePlan(yaml)).toThrow('"requiredStatus" must be "completed"');
+  });
+
   it('rejects plan without name', () => {
     const yaml = `
 tasks:

@@ -128,6 +128,11 @@ export interface PlanDefinition {
     command?: string;
     prompt?: string;
     dependencies?: string[];
+    externalDependencies?: Array<{
+      workflowId: string;
+      taskId: string;
+      requiredStatus?: 'completed';
+    }>;
     pivot?: boolean;
     experimentVariants?: Array<{ id: string; description: string; prompt?: string; command?: string }>;
     requiresManualApproval?: boolean;
@@ -514,6 +519,12 @@ export class Orchestrator {
         }
         return s;
       });
+      const externalDependencies =
+        taskDef.externalDependencies?.map((dep) => ({
+          workflowId: dep.workflowId,
+          taskId: dep.taskId,
+          requiredStatus: dep.requiredStatus ?? 'completed',
+        })) ?? [];
       const task = createTaskState(
         scopedId,
         taskDef.description,
@@ -531,9 +542,28 @@ export class Orchestrator {
           remoteTargetId: taskDef.remoteTargetId,
           autoFix: taskDef.autoFix,
           executionAgent: taskDef.executionAgent,
+          externalDependencies,
         },
       );
       validatedTasks.push(task);
+    }
+
+    // Validate cross-workflow prerequisites exist before writing anything.
+    const missingExternalDeps: string[] = [];
+    for (const taskDef of plan.tasks) {
+      for (const dep of taskDef.externalDependencies ?? []) {
+        if (!this.findExternalDependencyTask(dep.workflowId, dep.taskId)) {
+          missingExternalDeps.push(
+            `task "${taskDef.id}" references missing external dependency "${dep.workflowId}/${dep.taskId}"`,
+          );
+        }
+      }
+    }
+    if (missingExternalDeps.length > 0) {
+      throw new Error(
+        `Plan submission blocked due to missing cross-workflow prerequisites:\n` +
+          missingExternalDeps.map((s) => `- ${s}`).join('\n'),
+      );
     }
 
     // Build merge node TaskState (still in validation pass — no writes yet)
@@ -589,11 +619,13 @@ export class Orchestrator {
   startExecution(): TaskState[] {
     this.refreshFromDb();
 
-    const readyTasks = this.stateMachine.getReadyTasks();
+    const readyTasks = this.stateMachine
+      .getReadyTasks()
+      .filter((task) => this.getExternalDependencyBlocker(task) === undefined);
     const started: TaskState[] = [];
 
     for (const task of readyTasks) {
-      this.scheduler.enqueue({ taskId: task.id, priority: 0 });
+      this.enqueueIfNotScheduled(task.id);
     }
 
     return this.drainScheduler();
@@ -884,6 +916,8 @@ export class Orchestrator {
     const readyTaskIds = this.stateMachine.findNewlyReadyTasks(task.id);
     mergeTrace('APPROVE_READY_TASKS', { taskId: task.id, readyTaskIds });
     const started = this.autoStartReadyTasks(readyTaskIds);
+    started.push(...this.autoStartUnblockedTasks());
+    started.push(...this.autoStartExternallyUnblockedReadyTasks());
     mergeTrace('APPROVE_STARTED', { taskId: task.id, startedIds: started.map(t => t.id), startedStatuses: started.map(t => t.status) });
     this.checkWorkflowCompletion();
     return started;
@@ -1980,6 +2014,8 @@ export class Orchestrator {
     const readyTaskIds = this.stateMachine.findNewlyReadyTasks(taskId);
     console.log(`[orchestrator] handleCompleted "${taskId}": ${readyTaskIds.length} newly ready: [${readyTaskIds.join(', ')}]`);
     const started = this.autoStartReadyTasks(readyTaskIds);
+    started.push(...this.autoStartUnblockedTasks());
+    started.push(...this.autoStartExternallyUnblockedReadyTasks());
 
     // Re-enqueue deferred tasks now that a slot freed up
     if (this.deferredTaskIds.size > 0) {
@@ -2047,6 +2083,8 @@ export class Orchestrator {
       `[orchestrator] handleFailed "${taskId}": ${readyTaskIds.length} newly ready: [${readyTaskIds.join(', ')}]`,
     );
     const started = this.autoStartReadyTasks(readyTaskIds);
+    started.push(...this.autoStartUnblockedTasks());
+    started.push(...this.autoStartExternallyUnblockedReadyTasks());
 
     // Re-enqueue deferred tasks now that a slot freed up
     if (this.deferredTaskIds.size > 0) {
@@ -2279,6 +2317,7 @@ export class Orchestrator {
     for (const taskId of taskIds) {
       const task = this.stateGetTask(taskId);
       if (!task) continue;
+      if (this.getExternalDependencyBlocker(task) !== undefined) continue;
 
       // Unblock: if a blocked task's deps are all complete, it's genuinely ready
       if (task.status === 'blocked') {
@@ -2286,10 +2325,84 @@ export class Orchestrator {
         this.writeAndSync(taskId, { status: 'pending' });
       }
 
-      this.scheduler.enqueue({ taskId, priority: 0 });
+      this.enqueueIfNotScheduled(taskId);
     }
 
     return this.drainScheduler();
+  }
+
+  private enqueueIfNotScheduled(taskId: string): void {
+    if (this.scheduler.isRunning(taskId)) {
+      const task = this.stateGetTask(taskId);
+      if (task?.status === 'running' || task?.status === 'fixing_with_ai') {
+        return;
+      }
+      // Recover from stale scheduler slot (e.g. process death/sync drift).
+      this.scheduler.completeJob(taskId);
+    }
+    if (this.scheduler.getQueuedJobs().some((job) => job.taskId === taskId)) return;
+    this.scheduler.enqueue({ taskId, priority: 0 });
+  }
+
+  private autoStartExternallyUnblockedReadyTasks(): TaskState[] {
+    const readyTasks = this.stateMachine
+      .getReadyTasks()
+      .filter((task) => (task.config.externalDependencies?.length ?? 0) > 0)
+      .filter((task) => this.getExternalDependencyBlocker(task) === undefined);
+
+    for (const task of readyTasks) {
+      this.enqueueIfNotScheduled(task.id);
+    }
+    return this.drainScheduler();
+  }
+
+  private autoStartUnblockedTasks(): TaskState[] {
+    for (const task of this.stateMachine.getAllTasks()) {
+      if (task.status !== 'blocked') continue;
+      if (!this.areLocalDependenciesSatisfied(task)) continue;
+      if (this.getExternalDependencyBlocker(task) !== undefined) continue;
+
+      this.writeAndSync(task.id, { status: 'pending' });
+      this.enqueueIfNotScheduled(task.id);
+    }
+    return this.drainScheduler();
+  }
+
+  private areLocalDependenciesSatisfied(task: TaskState): boolean {
+    return task.dependencies.every((depId) => {
+      const dep = this.stateGetTask(depId);
+      if (!dep) return false;
+      if (task.config?.isReconciliation) {
+        return dep.status === 'completed' || dep.status === 'failed' || dep.status === 'stale';
+      }
+      return dep.status === 'completed' || dep.status === 'stale';
+    });
+  }
+
+  private findExternalDependencyTask(workflowId: string, taskId: string): TaskState | undefined {
+    const tasks = this.persistence.loadTasks(workflowId);
+    if (taskId.includes('/')) {
+      return tasks.find((t) => t.id === taskId);
+    }
+    const scopedId = scopePlanTaskId(workflowId, taskId);
+    return tasks.find((t) => t.id === scopedId || t.id === taskId);
+  }
+
+  private getExternalDependencyBlocker(task: TaskState): string | undefined {
+    const deps = task.config.externalDependencies;
+    if (!deps || deps.length === 0) return undefined;
+
+    for (const dep of deps) {
+      const prerequisite = this.findExternalDependencyTask(dep.workflowId, dep.taskId);
+      if (!prerequisite) {
+        return `missing prerequisite ${dep.workflowId}/${dep.taskId}`;
+      }
+      const required = dep.requiredStatus ?? 'completed';
+      if (prerequisite.status !== required) {
+        return `waiting on ${dep.workflowId}/${dep.taskId} (${prerequisite.status})`;
+      }
+    }
+    return undefined;
   }
 
   /** Drain the scheduler queue, starting tasks that fit the concurrency limit. */

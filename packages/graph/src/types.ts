@@ -44,6 +44,14 @@ export interface TaskConfig {
   readonly reproCommand?: string;
   /** Name of the execution agent to use (e.g. 'claude', 'codex'). Defaults to 'claude'. */
   readonly executionAgent?: string;
+  /** Cross-workflow prerequisites for this task. */
+  readonly externalDependencies?: readonly ExternalDependency[];
+}
+
+export interface ExternalDependency {
+  readonly workflowId: string;
+  readonly taskId: string;
+  readonly requiredStatus: 'completed';
 }
 
 // ── Task Execution (runtime state) ─────────────────────────

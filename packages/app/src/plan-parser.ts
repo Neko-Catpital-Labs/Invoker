@@ -48,6 +48,11 @@ export interface RawPlanTask {
   command?: string;
   prompt?: string;
   dependencies?: string[];
+  externalDependencies?: Array<{
+    workflowId?: string;
+    taskId?: string;
+    requiredStatus?: string;
+  }>;
   pivot?: boolean;
   experimentVariants?: RawExperimentVariant[];
   requiresManualApproval?: boolean;
@@ -195,6 +200,29 @@ export function parsePlan(yamlContent: string): PlanDefinition {
       );
     }
 
+    const externalDependencies = task.externalDependencies?.map((dep, depIndex) => {
+      if (!dep.workflowId || typeof dep.workflowId !== 'string') {
+        throw new PlanParseError(
+          `Task "${task.id}" externalDependencies[${depIndex}] must have a string "workflowId"`,
+        );
+      }
+      if (!dep.taskId || typeof dep.taskId !== 'string') {
+        throw new PlanParseError(
+          `Task "${task.id}" externalDependencies[${depIndex}] must have a string "taskId"`,
+        );
+      }
+      if (dep.requiredStatus !== undefined && dep.requiredStatus !== 'completed') {
+        throw new PlanParseError(
+          `Task "${task.id}" externalDependencies[${depIndex}] "requiredStatus" must be "completed"`,
+        );
+      }
+      return {
+        workflowId: dep.workflowId,
+        taskId: dep.taskId,
+        requiredStatus: 'completed' as const,
+      };
+    });
+
     // Parse experiment variants if present
     const experimentVariants = task.experimentVariants?.map((v) => ({
       id: v.id ?? '',
@@ -209,6 +237,7 @@ export function parsePlan(yamlContent: string): PlanDefinition {
       command: task.command,
       prompt: task.prompt,
       dependencies: task.dependencies ?? [],
+      externalDependencies,
       pivot: task.pivot,
       experimentVariants,
       requiresManualApproval: task.requiresManualApproval,

@@ -33,6 +33,12 @@ export interface ExperimentResultEntry {
   readonly exitCode?: number;
 }
 
+export interface ExternalDependency {
+  readonly workflowId: string;
+  readonly taskId: string;
+  readonly requiredStatus: 'completed';
+}
+
 // ── Task Config (plan-time / static fields) ────────────────
 
 export interface TaskConfig {
@@ -57,6 +63,7 @@ export interface TaskConfig {
   readonly approach?: string;
   readonly testPlan?: string;
   readonly reproCommand?: string;
+  readonly externalDependencies?: readonly ExternalDependency[];
 }
 
 // ── Task Execution (runtime fields) ────────────────────────

@@ -418,6 +418,23 @@ export function TaskPanel({
         </div>
       )}
 
+      {/* Cross-workflow dependencies */}
+      {(task.config.externalDependencies?.length ?? 0) > 0 && (
+        <div>
+          <h3 className="text-sm font-medium text-sky-300 mb-1">Cross-Workflow Gates</h3>
+          <div className="flex flex-col gap-1">
+            {(task.config.externalDependencies ?? []).map((dep, idx) => (
+              <span
+                key={`${dep.workflowId}/${dep.taskId}/${idx}`}
+                className="text-xs bg-sky-900/30 border border-sky-800 text-sky-200 px-2 py-1 rounded font-mono"
+              >
+                {dep.workflowId}/{dep.taskId} ({dep.requiredStatus})
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Error / Exit Code */}
       {(task.execution.error || (task.execution.exitCode !== undefined && task.execution.exitCode !== 0)) && (
         <div className="bg-red-900/30 border border-red-700 rounded p-3">

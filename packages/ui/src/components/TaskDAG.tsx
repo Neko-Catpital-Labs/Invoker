@@ -48,10 +48,26 @@ const nodeTypes = { taskNode: TaskNode, mergeGateNode: MergeGateNode };
 const edgeTypes = { bundled: BundledEdge };
 
 /** Short label for edge hover tooltip showing the dependency relationship. */
-function buildEdgeLabel(source: TaskState, target: TaskState): string {
+function buildEdgeLabel(source: TaskState, target: TaskState, kind: 'local' | 'external'): string {
   const srcId = source.id.length > 12 ? source.id.slice(0, 12) + '..' : source.id;
   const tgtId = target.id.length > 12 ? target.id.slice(0, 12) + '..' : target.id;
+  if (kind === 'external') {
+    return `external: ${srcId} → ${tgtId}`;
+  }
   return `${srcId} → ${tgtId}`;
+}
+
+function resolveExternalDependencyTaskId(
+  dep: { workflowId: string; taskId: string },
+  tasks: Map<string, TaskState>,
+): string | undefined {
+  if (dep.taskId.includes('/')) {
+    return tasks.has(dep.taskId) ? dep.taskId : undefined;
+  }
+  const scoped = `${dep.workflowId}/${dep.taskId}`;
+  if (tasks.has(scoped)) return scoped;
+  if (tasks.has(dep.taskId)) return dep.taskId;
+  return undefined;
 }
 
 function TaskDAGInner({ tasks, workflows, onTaskClick, onTaskDoubleClick, onTaskContextMenu, statusFilters }: TaskDAGProps) {
@@ -69,7 +85,7 @@ function TaskDAGInner({ tasks, workflows, onTaskClick, onTaskDoubleClick, onTask
     const workflowGroups = groupTasksByWorkflow(taskArray);
 
     const allNodes: Node[] = [];
-    const allRawEdges: { source: string; target: string }[] = [];
+    const allRawEdges: Array<{ source: string; target: string; kind: 'local' | 'external' }> = [];
     const gateStatuses = new Map<string, ReturnType<typeof computeMergeGateStatus>>();
 
     let yOffset = 0;
@@ -138,8 +154,14 @@ function TaskDAGInner({ tasks, workflows, onTaskClick, onTaskDoubleClick, onTask
       for (const task of wfTasks) {
         for (const depId of task.dependencies) {
           if (tasks.has(depId)) {
-            allRawEdges.push({ source: depId, target: task.id });
+            allRawEdges.push({ source: depId, target: task.id, kind: 'local' });
           }
+        }
+
+        for (const dep of task.config.externalDependencies ?? []) {
+          const sourceId = resolveExternalDependencyTaskId(dep, tasks);
+          if (!sourceId || sourceId === task.id) continue;
+          allRawEdges.push({ source: sourceId, target: task.id, kind: 'external' });
         }
       }
 
@@ -188,31 +210,30 @@ function TaskDAGInner({ tasks, workflows, onTaskClick, onTaskDoubleClick, onTask
       const targetStatus = targetTask?.status ?? gateStatuses.get(e.target) ?? 'pending';
       const edgeStyle = getEdgeStyle(sourceStatus, targetStatus);
 
-      const srcIsMerge = tasks.get(e.source)?.config.isMergeNode || isMergeGateId(e.source);
-      const tgtIsMerge = tasks.get(e.target)?.config.isMergeNode || isMergeGateId(e.target);
-      const srcLabel = srcIsMerge ? 'Merge' : e.source;
-      const tgtLabel = tgtIsMerge ? 'Merge' : e.target;
-      const truncSrc = srcLabel.length > 12 ? srcLabel.slice(0, 12) + '..' : srcLabel;
-      const truncTgt = tgtLabel.length > 12 ? tgtLabel.slice(0, 12) + '..' : tgtLabel;
-      const label = `${truncSrc} → ${truncTgt}`;
+      const label =
+        sourceTask && targetTask
+          ? buildEdgeLabel(sourceTask, targetTask, e.kind)
+          : `${e.source} → ${e.target}`;
 
       const edgeDimmed = dimmedNodeIds.has(e.source) || dimmedNodeIds.has(e.target);
+      const isExternal = e.kind === 'external';
+      const strokeColor = isExternal ? '#0ea5e9' : edgeStyle.stroke;
 
       return {
-        id: `${e.source}->${e.target}`,
+        id: `${e.kind}:${e.source}->${e.target}`,
         source: e.source,
         target: e.target,
         type: 'bundled',
-        animated: sourceStatus === 'running' && targetStatus !== 'stale',
+        animated: sourceStatus === 'running' && targetStatus !== 'stale' && !isExternal,
         style: {
-          stroke: edgeStyle.stroke,
-          strokeWidth: edgeStyle.strokeWidth,
-          strokeDasharray: edgeStyle.strokeDasharray,
+          stroke: strokeColor,
+          strokeWidth: isExternal ? Math.max(1.5, edgeStyle.strokeWidth - 0.5) : edgeStyle.strokeWidth,
+          strokeDasharray: isExternal ? '5 4' : edgeStyle.strokeDasharray,
           opacity: edgeDimmed ? 0.15 : 1,
         },
         markerEnd: {
           type: MarkerType.ArrowClosed,
-          color: edgeStyle.stroke,
+          color: strokeColor,
           width: 16,
           height: 16,
         },
@@ -222,7 +243,7 @@ function TaskDAGInner({ tasks, workflows, onTaskClick, onTaskDoubleClick, onTask
           sourceStatus,
           targetStatus,
           label,
-          hoverStroke: edgeStyle.hoverStroke,
+          hoverStroke: isExternal ? '#38bdf8' : edgeStyle.hoverStroke,
           hoverWidth: edgeStyle.hoverWidth,
         },
       };

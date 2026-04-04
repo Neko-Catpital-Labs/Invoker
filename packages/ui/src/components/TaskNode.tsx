@@ -53,6 +53,7 @@ function useHeartbeatAge(task: TaskState): number | null {
 
 export function TaskNode({ data }: TaskNodeProps) {
   const { task } = data;
+  const externalDeps = task.config.externalDependencies ?? [];
   const dimmed = data.dimmed ?? false;
   const visualStatus = getEffectiveVisualStatus(task.status, task.execution);
   const colors = getStatusColor(visualStatus);
@@ -103,6 +104,14 @@ export function TaskNode({ data }: TaskNodeProps) {
           ? task.description.slice(0, 35) + '...'
           : task.description}
       </div>
+
+      {externalDeps.length > 0 && (
+        <div className="mt-1">
+          <span className="inline-flex items-center rounded bg-sky-900/40 border border-sky-700/60 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-sky-300">
+            XWF Gate x{externalDeps.length}
+          </span>
+        </div>
+      )}
 
       <div className="flex items-center gap-1.5 mt-1">
         <span className={`w-2 h-2 rounded-full ${dotClass}`} />

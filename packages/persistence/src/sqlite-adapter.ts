@@ -168,6 +168,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         exit_code INTEGER,
         error TEXT,
         input_prompt TEXT,
+        external_dependencies TEXT,
 
         -- Context
         summary TEXT,
@@ -344,6 +345,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       // durable audit pointers for most-recent agent session/name
       'ALTER TABLE tasks ADD COLUMN last_agent_session_id TEXT',
       'ALTER TABLE tasks ADD COLUMN last_agent_name TEXT',
+      'ALTER TABLE tasks ADD COLUMN external_dependencies TEXT',
     ];
     for (const sql of migrations) {
       try { this.db.run(sql); } catch { /* Column already exists */ }
@@ -447,7 +449,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
     this.execRun(`
       INSERT OR REPLACE INTO tasks (
         id, workflow_id, description, status, blocked_by, dependencies,
-        command, prompt, experiment_prompt, exit_code, error, input_prompt,
+        command, prompt, experiment_prompt, exit_code, error, input_prompt, external_dependencies,
         summary, problem, approach, test_plan, repro_command,
         branch, commit_hash, parent_task,
         pivot, experiment_variants, is_reconciliation, selected_experiment,
@@ -466,7 +468,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         agent_name
       ) VALUES (
         ?, ?, ?, ?, ?, ?,
-        ?, ?, ?, ?, ?, ?,
+        ?, ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?,
         ?, ?, ?,
         ?, ?, ?, ?,
@@ -490,6 +492,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       JSON.stringify(task.dependencies),
       cfg.command ?? null, cfg.prompt ?? null, cfg.experimentPrompt ?? null,
       exec.exitCode ?? null, exec.error ?? null, exec.inputPrompt ?? null,
+      cfg.externalDependencies ? JSON.stringify(cfg.externalDependencies) : null,
       cfg.summary ?? null, cfg.problem ?? null, cfg.approach ?? null,
       cfg.testPlan ?? null, cfg.reproCommand ?? null,
       exec.branch ?? null, exec.commit ?? null, cfg.parentTask ?? null,
@@ -581,6 +584,10 @@ export class SQLiteAdapter implements PersistenceAdapter {
       if ('experimentVariants' in changes.config) {
         setClauses.push('experiment_variants = ?');
         values.push(changes.config.experimentVariants ? JSON.stringify(changes.config.experimentVariants) : null);
+      }
+      if ('externalDependencies' in changes.config) {
+        setClauses.push('external_dependencies = ?');
+        values.push(changes.config.externalDependencies ? JSON.stringify(changes.config.externalDependencies) : null);
       }
     }
 
@@ -1165,6 +1172,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         parentTask: row.parent_task ?? undefined,
         command: row.command ?? undefined,
         prompt: row.prompt ?? undefined,
+        externalDependencies: row.external_dependencies ? JSON.parse(row.external_dependencies) : undefined,
         experimentPrompt: row.experiment_prompt ?? undefined,
         pivot: row.pivot === 1 ? true : undefined,
         experimentVariants: row.experiment_variants ? JSON.parse(row.experiment_variants) : undefined,

@@ -645,6 +645,27 @@ describe('Orchestrator', () => {
         expect(publishedDeltas.length).toBe(0);
       });
 
+      it('rolls back when an external dependency task is missing', () => {
+        expect(() =>
+          orchestrator.loadPlan({
+            name: 'bad-external-dep-plan',
+            tasks: [
+              {
+                id: 'gated',
+                description: 'Gated task',
+                externalDependencies: [
+                  { workflowId: 'wf-missing', taskId: 'verify-control-plane-regression' },
+                ],
+              },
+            ],
+          }),
+        ).toThrow('missing cross-workflow prerequisites');
+
+        expect(persistence.tasks.size).toBe(0);
+        expect(persistence.workflows.size).toBe(0);
+        expect(publishedDeltas.length).toBe(0);
+      });
+
       it('rolls back when unknown familiarType appears on second task', () => {
         expect(() =>
           orchestrator.loadPlan({
@@ -738,6 +759,45 @@ describe('Orchestrator', () => {
       expect(started[0].id).toBe(sid(orchestrator, 0, 't1'));
       expect(orchestrator.getTask('t2')!.status).toBe('pending');
       expect(orchestrator.getTask('t3')!.status).toBe('pending');
+    });
+
+    it('repro: leaf tasks remain pending until external prerequisite completes, then all start', () => {
+      orchestrator.loadPlan({
+        name: 'prereq-workflow',
+        tasks: [{ id: 'verify-control-plane-regression', description: 'Prereq task' }],
+      });
+      const prereqWfId = sid(orchestrator, 0, 'verify-control-plane-regression').split('/')[0]!;
+
+      orchestrator.loadPlan({
+        name: 'gated-workflow',
+        tasks: [
+          {
+            id: 'leaf-a',
+            description: 'leaf waits for external',
+            externalDependencies: [{ workflowId: prereqWfId, taskId: 'verify-control-plane-regression' }],
+          },
+          {
+            id: 'leaf-b',
+            description: 'second leaf waits for external',
+            externalDependencies: [{ workflowId: prereqWfId, taskId: 'verify-control-plane-regression' }],
+          },
+        ],
+      });
+
+      const startedInitially = orchestrator.startExecution();
+      expect(startedInitially.map((t) => t.id)).toContain(sid(orchestrator, 0, 'verify-control-plane-regression'));
+      expect(startedInitially.map((t) => t.id)).not.toContain(sid(orchestrator, 1, 'leaf-a'));
+      expect(startedInitially.map((t) => t.id)).not.toContain(sid(orchestrator, 1, 'leaf-b'));
+      expect(orchestrator.getTask(sid(orchestrator, 1, 'leaf-a'))!.status).toBe('pending');
+      expect(orchestrator.getTask(sid(orchestrator, 1, 'leaf-b'))!.status).toBe('pending');
+
+      const startedAfterCompletion = orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: sid(orchestrator, 0, 'verify-control-plane-regression'), status: 'completed' }),
+      );
+      expect(startedAfterCompletion.map((t) => t.id)).toContain(sid(orchestrator, 1, 'leaf-a'));
+      expect(startedAfterCompletion.map((t) => t.id)).toContain(sid(orchestrator, 1, 'leaf-b'));
+      expect(orchestrator.getTask(sid(orchestrator, 1, 'leaf-a'))!.status).toBe('running');
+      expect(orchestrator.getTask(sid(orchestrator, 1, 'leaf-b'))!.status).toBe('running');
     });
 
     it('persists status changes to DB', () => {
