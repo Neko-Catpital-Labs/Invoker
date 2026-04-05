@@ -5,6 +5,10 @@ set -e
 REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
 cd "$REPO_ROOT"
 
+# Ensure workspace dependencies are linked before building.
+# This is typically a no-op when the workspace is already up to date.
+pnpm install --frozen-lockfile
+
 # Unset ELECTRON_RUN_AS_NODE so Electron loads its full API.
 unset ELECTRON_RUN_AS_NODE
 
