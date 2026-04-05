@@ -1080,7 +1080,7 @@ describe('SQLiteAdapter', () => {
       const tmpDir = mkdtempSync(join(tmpdir(), 'invoker-test-'));
       const dbPath = join(tmpDir, 'migrate.db');
 
-      const db1 = await SQLiteAdapter.create(dbPath);
+      const db1 = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
       db1.saveWorkflow(testWorkflow);
       db1.saveTask('wf-1', makeTask('t-bad1', {
         config: { command: 'pnpm test packages/protocol/src/__tests__/validation.test.ts' },
@@ -1093,7 +1093,7 @@ describe('SQLiteAdapter', () => {
       }));
       db1.close();
 
-      const db2 = await SQLiteAdapter.create(dbPath);
+      const db2 = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
       const tasks = db2.loadTasks('wf-1');
       const bad1 = tasks.find(t => t.id === 't-bad1')!;
       const bad2 = tasks.find(t => t.id === 't-bad2')!;
@@ -1218,7 +1218,7 @@ describe('SQLiteAdapter', () => {
       const dir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-readonly-'));
       const dbPath = join(dir, 'invoker.db');
       try {
-        const writer = await SQLiteAdapter.create(dbPath);
+        const writer = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
         writer.saveWorkflow(testWorkflow);
         writer.saveTask(testWorkflow.id, makeTask('t-read-only'));
         writer.close();
@@ -1242,7 +1242,7 @@ describe('SQLiteAdapter', () => {
       const dir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-readonly-write-'));
       const dbPath = join(dir, 'invoker.db');
       try {
-        const writer = await SQLiteAdapter.create(dbPath);
+        const writer = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
         writer.saveWorkflow(testWorkflow);
         writer.saveTask(testWorkflow.id, makeTask('t-read-only-write'));
         writer.close();
@@ -1255,6 +1255,72 @@ describe('SQLiteAdapter', () => {
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }
+    });
+  });
+
+  describe('owner-only writable initialization', () => {
+    it('allows writable init with ownerCapability=true for file-backed DB', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-owner-'));
+      const dbPath = join(dir, 'invoker.db');
+      try {
+        const db = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        db.saveWorkflow(testWorkflow);
+        db.saveTask(testWorkflow.id, makeTask('t-owner-write'));
+        db.close();
+
+        // Verify write succeeded
+        const db2 = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        const tasks = db2.loadTasks(testWorkflow.id);
+        expect(tasks).toHaveLength(1);
+        expect(tasks[0].id).toBe('t-owner-write');
+        db2.close();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('rejects writable init without ownerCapability for file-backed DB', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-non-owner-'));
+      const dbPath = join(dir, 'invoker.db');
+      try {
+        await expect(
+          SQLiteAdapter.create(dbPath),
+        ).rejects.toThrow(/owner capability/i);
+
+        await expect(
+          SQLiteAdapter.create(dbPath, { readOnly: false }),
+        ).rejects.toThrow(/owner capability/i);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('allows read-only init without ownerCapability', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-readonly-no-cap-'));
+      const dbPath = join(dir, 'invoker.db');
+      try {
+        // Create DB with owner capability
+        const writer = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        writer.saveWorkflow(testWorkflow);
+        writer.close();
+
+        // Open read-only without owner capability — should succeed
+        const reader = await SQLiteAdapter.create(dbPath, { readOnly: true });
+        const workflows = reader.listWorkflows();
+        expect(workflows).toHaveLength(1);
+        reader.close();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('allows writable init for in-memory DB without ownerCapability', async () => {
+      // In-memory DBs bypass owner check (no persistent state to guard)
+      const db = await SQLiteAdapter.create(':memory:');
+      db.saveWorkflow(testWorkflow);
+      const workflows = db.listWorkflows();
+      expect(workflows).toHaveLength(1);
+      db.close();
     });
   });
 });

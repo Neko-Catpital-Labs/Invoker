@@ -55,14 +55,25 @@ export class SQLiteAdapter implements PersistenceAdapter {
    * If the on-disk file is corrupted, backs it up and starts fresh.
    * @param dbPath File path or ':memory:' (default).
    * @param options readOnly=true opens DB for read operations without schema mutation/flush.
+   *                ownerCapability=true is required to open DB in writable mode for file-backed databases.
    */
-  static async create(dbPath: string = ':memory:', options?: { readOnly?: boolean }): Promise<SQLiteAdapter> {
+  static async create(dbPath: string = ':memory:', options?: { readOnly?: boolean; ownerCapability?: boolean }): Promise<SQLiteAdapter> {
     if (!sqlJsPromise) {
       sqlJsPromise = initSqlJs();
     }
     const SQL = await sqlJsPromise;
 
     const isFile = dbPath !== ':memory:';
+    const requestWritable = options?.readOnly !== true;
+
+    // Enforce owner-only writable initialization for file-backed databases
+    if (isFile && requestWritable && !options?.ownerCapability) {
+      throw new Error(
+        'Writable persistence initialization requires owner capability. ' +
+        'Non-owner processes must delegate mutations via IPC (headless.run, headless.resume, headless.exec) ' +
+        'or open the database in read-only mode.',
+      );
+    }
 
     if (isFile && existsSync(dbPath)) {
       const buffer = readFileSync(dbPath);
