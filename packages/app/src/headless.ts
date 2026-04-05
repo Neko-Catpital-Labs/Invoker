@@ -11,7 +11,7 @@
 
 import { Orchestrator } from '@invoker/core';
 import type { TaskDelta, TaskState } from '@invoker/core';
-import { SQLiteAdapter } from '@invoker/persistence';
+import type { SQLiteAdapter } from '@invoker/persistence';
 import { resolve as resolvePath } from 'node:path';
 import { Channels } from '@invoker/transport';
 import type { MessageBus } from '@invoker/transport';

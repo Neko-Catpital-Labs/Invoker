@@ -70,11 +70,11 @@ import {
 } from '@invoker/executors';
 import type { TaskOutputData } from './types.js';
 import { loadConfig, type InvokerConfig } from './config.js';
+import { isHeadlessMutatingCommand, isHeadlessReadOnlyCommand } from './headless-command-classification.js';
 import { backupPlan } from './plan-backup.js';
 // applyPlanDefinitionDefaults removed — parsePlan() applies defaults internally
 import { startApiServer, type ApiServer } from './api-server.js';
 import { runHeadless, tryDelegateRun, tryDelegateResume, tryDelegateExec, resolveAgentSession } from './headless.js';
-import { acquireDbWriterLock, releaseDbWriterLock, type DbWriterLock } from './db-writer-lock.js';
 import {
   rebaseAndRetry,
   rejectTask,
@@ -129,7 +129,6 @@ let messageBus: MessageBus;
 let persistence: SQLiteAdapter;
 let familiarRegistry: FamiliarRegistry;
 let orchestrator: Orchestrator;
-let dbWriterLock: DbWriterLock | null = null;
 
 // Repo root: 3 levels up from packages/app/dist/
 const repoRoot = path.resolve(__dirname, '..', '..', '..');
@@ -147,54 +146,17 @@ function resolveInvokerHomeRoot(): string {
 
 interface InitServicesOptions {
   readOnly?: boolean;
-  acquireWriterLock?: boolean;
   executionAgentRegistry?: import('@invoker/executors').AgentRegistry;
-}
-
-function isHeadlessReadOnlyCommand(args: string[]): boolean {
-  const command = args[0];
-  if (!command || command === '--help' || command === '-h') return true;
-  if (command === 'query') return true;
-  return ['list', 'status', 'task-status', 'queue', 'audit', 'session'].includes(command);
-}
-
-function isHeadlessMutatingCommand(args: string[]): boolean {
-  const command = args[0];
-  if (!command || command === '--help' || command === '-h') return false;
-  if (command === 'query') return false;
-
-  if (command === 'set') {
-    const sub = args[1];
-    return ['command', 'executor', 'agent', 'merge-mode'].includes(sub ?? '');
-  }
-
-  if (['list', 'status', 'task-status', 'queue', 'audit', 'session', 'query-select'].includes(command)) {
-    return false;
-  }
-
-  if (['open-terminal', 'slack'].includes(command)) {
-    return false;
-  }
-
-  return [
-    'run', 'resume', 'restart', 'recreate', 'recreate-task', 'rebase', 'fix', 'resolve-conflict',
-    'restart-workflow', 'clean-restart', 'rebase-and-retry',
-    'approve', 'reject', 'input', 'select',
-    'cancel',
-    'delete', 'delete-workflow', 'delete-all',
-    'edit', 'edit-executor', 'edit-type', 'edit-agent', 'set-merge-mode',
-  ].includes(command);
 }
 
 async function initServices(options?: InitServicesOptions): Promise<void> {
   messageBus = new IpcBus();
   const invokerHomeRoot = resolveInvokerHomeRoot();
   mkdirSync(invokerHomeRoot, { recursive: true });
-  if (options?.acquireWriterLock) {
-    dbWriterLock = acquireDbWriterLock(invokerHomeRoot);
-  }
+  const readOnly = options?.readOnly === true;
   persistence = await SQLiteAdapter.create(path.join(invokerHomeRoot, 'invoker.db'), {
-    readOnly: options?.readOnly === true,
+    readOnly,
+    ownerCapability: !readOnly, // writable mode requires owner capability
   });
   familiarRegistry = new FamiliarRegistry();
   familiarRegistry.register(
@@ -349,12 +311,11 @@ if (isHeadless) {
     const command = cliArgs[0];
     const readOnlyMode = isHeadlessReadOnlyCommand(cliArgs);
     const mutatingMode = isHeadlessMutatingCommand(cliArgs);
+    const standaloneMode = process.env.INVOKER_HEADLESS_STANDALONE === '1';
 
-    // Try delegation for mutating commands (skip when IPC would hit a non-GUI peer — e.g. e2e / CI).
-    if (
-      mutatingMode
-      && process.env.INVOKER_HEADLESS_STANDALONE !== '1'
-    ) {
+    // Try delegation for mutating commands first.
+    // If no owner is available, standalone mode may still run locally.
+    if (mutatingMode) {
       const delegationBus = new IpcBus();
       try {
         await delegationBus.ready();
@@ -378,8 +339,18 @@ if (isHeadless) {
           process.exit(process.exitCode ?? 0);
         }
 
-        // No GUI available, fall through to standalone
+        // Delegation failed: no owner handler available.
         delegationBus.disconnect();
+        if (!standaloneMode) {
+          console.error(
+            `${RED}Error:${RESET} Mutation command "${command}" requires an owner process (GUI or standalone headless).\n` +
+            `\n${BOLD}Options:${RESET}\n` +
+            `  1. Start the GUI process first: ${BOLD}electron dist/main.js${RESET}\n` +
+            `  2. Run in standalone mode: ${BOLD}INVOKER_HEADLESS_STANDALONE=1 electron dist/main.js --headless ${cliArgs.join(' ')}${RESET}\n` +
+            `\nStandalone mode opens a writable database. Only use it when no other process is accessing the database.`
+          );
+          process.exit(1);
+        }
       } catch (err) {
         console.error(`${RED}Delegation error:${RESET} ${err instanceof Error ? err.message : String(err)}`);
         delegationBus.disconnect();
@@ -390,22 +361,43 @@ if (isHeadless) {
     let exitCode = 0;
     try {
       // Standalone mode: initialize services and run headless
-      await initServices({ readOnly: readOnlyMode, executionAgentRegistry: agentRegistry });
-      await runHeadless(cliArgs, {
+      await initServices({
+        readOnly: readOnlyMode,
+        executionAgentRegistry: agentRegistry,
+      });
+
+      const headlessDeps = {
         orchestrator, persistence, familiarRegistry, messageBus,
         repoRoot, invokerConfig, initServices, wireSlackBot,
         waitForApproval,
         noTrack,
         executionAgentRegistry: agentRegistry,
-      });
+      };
+
+      // In standalone owner mode, serve delegated mutation requests from peer headless processes.
+      if (standaloneMode && messageBus) {
+        messageBus.onRequest('headless.exec', async (req: unknown) => {
+          const { args, waitForApproval: delegatedWait, noTrack: delegatedNoTrack } =
+            req as { args: string[]; waitForApproval?: boolean; noTrack?: boolean };
+          if (!Array.isArray(args) || args.length === 0) {
+            throw new Error('Missing delegated headless command arguments');
+          }
+          await runHeadless(args, {
+            ...headlessDeps,
+            waitForApproval: delegatedWait,
+            noTrack: delegatedNoTrack,
+          });
+          return { ok: true };
+        });
+      }
+
+      await runHeadless(cliArgs, headlessDeps);
     } catch (err) {
       console.error(`${RED}Error:${RESET} ${err instanceof Error ? err.message : String(err)}`);
       exitCode = 1;
     } finally {
       if (persistence) persistence.close();
       if (messageBus) messageBus.disconnect();
-      releaseDbWriterLock(dbWriterLock);
-      dbWriterLock = null;
     }
     process.exit(exitCode);
   }).catch((err) => {
@@ -1426,8 +1418,6 @@ function setupGuiMode(): void {
     }
     if (persistence) persistence.close();
     if (messageBus) messageBus.disconnect();
-    releaseDbWriterLock(dbWriterLock);
-    dbWriterLock = null;
   });
 
   // ── Slack Bot (embedded in GUI process) ──────────────────
