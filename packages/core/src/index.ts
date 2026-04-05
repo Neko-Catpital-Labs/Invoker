@@ -6,3 +6,4 @@ export * from './response-handler.js';
 export * from './scheduler.js';
 export * from './orchestrator.js';
 export * from './task-id-scope.js';
+export * from './fallback-policy.js';

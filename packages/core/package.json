@@ -18,7 +18,8 @@
   },
   "dependencies": {
     "@invoker/graph": "workspace:*",
-    "@invoker/protocol": "workspace:*"
+    "@invoker/protocol": "workspace:*",
+    "neverthrow": "^8.2.0"
   },
   "devDependencies": {
     "@types/node": "^25.3.3",
