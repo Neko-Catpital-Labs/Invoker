@@ -33,6 +33,7 @@ import {
   buildMacOSOsascriptArgs,
   buildTerminalShellCommand,
 } from '../terminal-external-launch.js';
+import { openExternalTerminalForTask } from '../open-terminal-for-task.js';
 
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>();
@@ -996,5 +997,188 @@ describe('fix-with-agent → open-terminal produces correct agent resume command
     expect(meta.executionAgent).toBeUndefined();
     const spec = wt.getRestoredTerminalSpec(meta);
     expect(spec.command).toBe('claude');
+  });
+
+  it('openExternalTerminalForTask: refuses fallback when managed workspace has no workspacePath', async () => {
+    const { openExternalTerminalForTask } = await import('../open-terminal-for-task.js');
+
+    // Mock persistence that returns no workspacePath for a worktree familiar
+    const mockPersistence = {
+      getTaskStatus: (_taskId: string) => 'failed',
+      getFamiliarType: (_taskId: string) => 'worktree',
+      getAgentSessionId: (_taskId: string) => null,
+      getContainerId: (_taskId: string) => null,
+      getWorkspacePath: (_taskId: string) => null, // Missing workspace!
+      getBranch: (_taskId: string) => 'invoker/test',
+    };
+
+    const registry = new FamiliarRegistry();
+    const result = await openExternalTerminalForTask({
+      taskId: 'missing-workspace',
+      persistence: mockPersistence,
+      familiarRegistry: registry,
+      repoRoot: '/repo',
+    });
+
+    expect(result.opened).toBe(false);
+    expect(result.reason).toContain('workspace metadata is missing');
+    expect(result.reason).toContain('worktree');
+    expect(result.reason).toContain('Recovery options');
+    expect(result.reason).toContain('Recreate the task');
+  });
+
+  it('openExternalTerminalForTask: allows docker familiar with workspacePath', async () => {
+    const { openExternalTerminalForTask } = await import('../open-terminal-for-task.js');
+
+    // Docker is not in the managed list, but let's verify the invariant doesn't block it
+    const mockPersistence = {
+      getTaskStatus: (_taskId: string) => 'failed',
+      getFamiliarType: (_taskId: string) => 'docker',
+      getAgentSessionId: (_taskId: string) => null,
+      getContainerId: (_taskId: string) => 'abc123',
+      getWorkspacePath: (_taskId: string) => '/workspace', // Has workspace
+      getBranch: (_taskId: string) => 'invoker/test',
+    };
+
+    const registry = new FamiliarRegistry();
+    // This should proceed to getRestoredTerminalSpec, which may throw for other reasons
+    // but NOT because of the workspace invariant
+    const result = await openExternalTerminalForTask({
+      taskId: 'docker-with-workspace',
+      persistence: mockPersistence,
+      familiarRegistry: registry,
+      repoRoot: '/repo',
+    });
+
+    // Even if it fails, the error should not be about missing workspace metadata
+    if (!result.opened && result.reason) {
+      expect(result.reason).not.toContain('workspace metadata is missing');
+    }
+  });
+});
+
+// ── Fail-fast workspace invariant tests ──────────────────────
+
+describe('openExternalTerminalForTask fail-fast workspace invariant', () => {
+  afterEach(() => {
+    vi.mocked(existsSync).mockReset();
+  });
+
+  it('refuses host-repo fallback when worktree task has no workspace path', async () => {
+    const mockPersistence = {
+      getTaskStatus: vi.fn(() => 'completed'),
+      getFamiliarType: vi.fn(() => 'worktree'),
+      getAgentSessionId: vi.fn(() => null),
+      getContainerId: vi.fn(() => null),
+      getWorkspacePath: vi.fn(() => null),  // Missing workspace path!
+      getBranch: vi.fn(() => null),
+    };
+
+    const familiar = new WorktreeFamiliar({ cacheDir: '/tmp/cache', worktreeBaseDir: '/tmp/wt' });
+    const registry = new FamiliarRegistry();
+    registry.register('worktree', familiar);
+
+    const result = await openExternalTerminalForTask({
+      taskId: 'task-no-workspace',
+      persistence: mockPersistence as any,
+      familiarRegistry: registry,
+      repoRoot: '/repo',
+    });
+
+    expect(result.opened).toBe(false);
+    expect(result.reason).toContain('workspace metadata is missing');
+    expect(result.reason).toContain('Familiar type "worktree" requires a managed workspace');
+    expect(result.reason).toContain('Recreate the task');
+    expect(result.reason).toContain('Refusing to fall back to host repo');
+  });
+
+  it('refuses host-repo fallback when ssh task has no workspace path', async () => {
+    const mockPersistence = {
+      getTaskStatus: vi.fn(() => 'completed'),
+      getFamiliarType: vi.fn(() => 'ssh'),
+      getAgentSessionId: vi.fn(() => null),
+      getContainerId: vi.fn(() => null),
+      getWorkspacePath: vi.fn(() => null),  // Missing workspace path!
+      getBranch: vi.fn(() => null),
+      getRemoteTargetId: vi.fn(() => null),
+    };
+
+    const ssh = new SshFamiliar({ host: 'h', user: 'u', sshKeyPath: '/k' });
+    const registry = new FamiliarRegistry();
+    registry.register('ssh', ssh);
+
+    const result = await openExternalTerminalForTask({
+      taskId: 'task-ssh-no-workspace',
+      persistence: mockPersistence as any,
+      familiarRegistry: registry,
+      repoRoot: '/repo',
+    });
+
+    expect(result.opened).toBe(false);
+    expect(result.reason).toContain('workspace metadata is missing');
+    expect(result.reason).toContain('Familiar type "ssh" requires a managed workspace');
+  });
+
+  it('refuses host-repo fallback when docker task has no workspace path', async () => {
+    const mockPersistence = {
+      getTaskStatus: vi.fn(() => 'completed'),
+      getFamiliarType: vi.fn(() => 'docker'),
+      getAgentSessionId: vi.fn(() => null),
+      getContainerId: vi.fn(() => 'container-abc'),  // Has container ID
+      getWorkspacePath: vi.fn(() => null),  // But missing workspace path!
+      getBranch: vi.fn(() => null),
+    };
+
+    const docker = new DockerFamiliar({ workspaceDir: '/tmp' });
+    const registry = new FamiliarRegistry();
+    registry.register('docker', docker);
+
+    const result = await openExternalTerminalForTask({
+      taskId: 'task-docker-no-workspace',
+      persistence: mockPersistence as any,
+      familiarRegistry: registry,
+      repoRoot: '/repo',
+    });
+
+    expect(result.opened).toBe(false);
+    expect(result.reason).toContain('workspace metadata is missing');
+    expect(result.reason).toContain('Familiar type "docker" requires a managed workspace');
+  });
+
+  it('allows host-repo fallback for non-managed familiar types', async () => {
+    vi.mocked(existsSync).mockReturnValue(true);
+
+    const mockPersistence = {
+      getTaskStatus: vi.fn(() => 'completed'),
+      getFamiliarType: vi.fn(() => 'local'),  // Non-managed type
+      getAgentSessionId: vi.fn(() => null),
+      getContainerId: vi.fn(() => null),
+      getWorkspacePath: vi.fn(() => null),
+      getBranch: vi.fn(() => null),
+    };
+
+    // Create a minimal familiar for testing
+    const mockFamiliar = {
+      type: 'local',
+      getRestoredTerminalSpec: vi.fn(() => ({ cwd: undefined })),
+    };
+
+    const registry = new FamiliarRegistry();
+    registry.register('local', mockFamiliar as any);
+
+    const result = await openExternalTerminalForTask({
+      taskId: 'task-local-no-workspace',
+      persistence: mockPersistence as any,
+      familiarRegistry: registry,
+      repoRoot: '/repo',
+    });
+
+    // For non-managed types, fallback to repoRoot is allowed.
+    // External terminal launch can still fail in headless CI, so only assert
+    // that we did not trip the managed-workspace invariant.
+    if (!result.opened && result.reason) {
+      expect(result.reason).not.toContain('workspace metadata is missing');
+      expect(result.reason).not.toContain('requires a managed workspace');
+    }
   });
 });

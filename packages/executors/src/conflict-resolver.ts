@@ -76,7 +76,11 @@ export async function resolveConflictImpl(
   const taskBranch = task.execution.branch ?? `invoker/${taskId}`;
   const rawCwd = task.execution.workspacePath;
   if (!rawCwd) {
-    throw new Error(`Task ${taskId} has no workspacePath — cannot resolve conflict outside a worktree`);
+    throw new Error(
+      `resolveConflict: task "${taskId}" has no workspacePath. ` +
+      `All tasks must have a managed workspace; refusing to fall back to host repo. ` +
+      `Recovery: Recreate the task or recreate the workflow.`,
+    );
   }
 
   // SSH tasks: run conflict resolution on the remote host
@@ -87,6 +91,15 @@ export async function resolveConflictImpl(
     }
     await resolveConflictRemote(host, task, taskBranch, conflictInfo, rawCwd, target, agentName);
     return;
+  }
+
+  // For local tasks (worktree, docker), require workspace path exists on disk
+  if (task.config.familiarType !== 'ssh' && !existsSync(rawCwd)) {
+    throw new Error(
+      `resolveConflict: task "${taskId}" workspace does not exist on disk: ${rawCwd}. ` +
+      `Refusing to run git operations without a valid workspace. ` +
+      `Recovery: Recreate the task or recreate the workflow.`,
+    );
   }
 
   const cwd = rawCwd;
@@ -310,12 +323,21 @@ export async function fixWithAgentImpl(
     return;
   }
 
-  if (!workspacePath || !existsSync(workspacePath)) {
+  // Local tasks: require valid workspace before running agent
+  if (!workspacePath) {
     throw new Error(
       `fixWithAgent: task "${taskId}" has no valid workspace ` +
       `(workspacePath=${workspacePath ?? 'undefined'}). ` +
       `All tasks must have a managed workspace; refusing to fall back to host repo. ` +
-      `If startup failed before metadata persistence, retry the task once to rehydrate workspace metadata.`,
+      `Recovery: Recreate the task or recreate the workflow.`,
+    );
+  }
+  if (!existsSync(workspacePath)) {
+    throw new Error(
+      `fixWithAgent: task "${taskId}" has no valid workspace ` +
+      `(workspacePath=${workspacePath ?? 'undefined'}). ` +
+      `All tasks must have a managed workspace; refusing to fall back to host repo. ` +
+      `Recovery: Recreate the task or recreate the workflow.`,
     );
   }
   const cwd = workspacePath;

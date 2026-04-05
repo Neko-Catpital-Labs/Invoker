@@ -1,4 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { TaskExecutor } from '../task-executor.js';
 import { collectTransitiveNonMergeTaskIds } from '../merge-executor.js';
 import type { TaskState } from '@invoker/core';
@@ -76,6 +79,20 @@ function createExecutorWithTasks(tasks: Map<string, TaskState>): TaskExecutor {
     cwd: '/tmp',
   });
 }
+
+const tempWorkspaces: string[] = [];
+function createTempWorkspace(): string {
+  const dir = mkdtempSync(join(tmpdir(), 'invoker-task-executor-test-'));
+  tempWorkspaces.push(dir);
+  return dir;
+}
+
+afterEach(() => {
+  while (tempWorkspaces.length > 0) {
+    const dir = tempWorkspaces.pop();
+    if (dir) rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 describe('TaskExecutor', () => {
   describe('collectTransitiveNonMergeTaskIds', () => {
@@ -4031,6 +4048,7 @@ describe('TaskExecutor', () => {
     });
 
     it('re-creates merge state and runs git operations', async () => {
+      const workspacePath = createTempWorkspace();
       const conflictError = JSON.stringify({
         type: 'merge_conflict',
         failedBranch: 'invoker/dep-task',
@@ -4044,7 +4062,7 @@ describe('TaskExecutor', () => {
         execution: {
           error: conflictError,
           branch: 'invoker/conflict-task',
-          workspacePath: '/tmp/workspace',
+          workspacePath,
         },
       }));
 
@@ -4087,7 +4105,7 @@ describe('TaskExecutor', () => {
       expect(mergeCall).toBeDefined();
 
       // All git calls should use the task's workspacePath
-      expect(gitCwds.every(c => c === '/tmp/workspace')).toBe(true);
+      expect(gitCwds.every(c => c === workspacePath)).toBe(true);
     });
   });
 
@@ -4445,6 +4463,7 @@ describe('TaskExecutor', () => {
     });
 
     it('resolveConflict includes dep description in merge -m', async () => {
+      const workspacePath = createTempWorkspace();
       const tasks = new Map<string, TaskState>();
       tasks.set('dep-task', makeTask({
         id: 'dep-task',
@@ -4465,7 +4484,7 @@ describe('TaskExecutor', () => {
         execution: {
           error: conflictError,
           branch: 'invoker/conflict-task',
-          workspacePath: '/tmp/workspace',
+          workspacePath,
         },
       }));
 
@@ -4511,7 +4530,7 @@ describe('TaskExecutor', () => {
       expect(mergeMsgs[0]).toContain('Add typing indicator support');
 
       // All git calls should use the task's workspacePath
-      expect(gitCwds.every(c => c === '/tmp/workspace')).toBe(true);
+      expect(gitCwds.every(c => c === workspacePath)).toBe(true);
     });
 
     it('resolveConflict throws when workspacePath is undefined', async () => {

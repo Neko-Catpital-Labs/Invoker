@@ -200,6 +200,27 @@ export async function openExternalTerminalForTask(
     }
   }
 
+  // Managed-workspace familiars (worktree, ssh, docker) MUST have a resolved workspacePath.
+  // Refuse fallback to repoRoot host cwd to prevent silent data loss when workspace metadata is missing.
+  const managedFamiliarTypes = ['worktree', 'ssh', 'docker'];
+  const hostWorkspaceFamiliarTypes = ['worktree', 'ssh'];
+  const isManagedFamiliar = managedFamiliarTypes.includes(repairedMeta.familiarType);
+  if (isManagedFamiliar && !repairedMeta.workspacePath) {
+    const errorMsg = [
+      `Cannot open terminal for task "${taskId}": workspace metadata is missing.`,
+      `Familiar type "${repairedMeta.familiarType}" requires a managed workspace but workspacePath is not set.`,
+      `This typically means the task failed during startup before workspace metadata was persisted.`,
+      ``,
+      `Recovery options:`,
+      `  1. Recreate the task (may require recreating the workflow if cross-workflow dependencies exist)`,
+      `  2. Check task logs to diagnose the startup failure`,
+      ``,
+      `Refusing to fall back to host repo to prevent accidental mutation of the main repository.`,
+    ].join('\n');
+    console.log(`[open-terminal] managed workspace invariant violation: ${errorMsg}`);
+    return { opened: false, reason: errorMsg };
+  }
+
   let spec: { cwd?: string; command?: string; args?: string[] };
   try {
     console.log(`[open-terminal] calling familiar.getRestoredTerminalSpec(meta) for task=${taskId}`);
@@ -208,6 +229,18 @@ export async function openExternalTerminalForTask(
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
     console.log(`[open-terminal] getRestoredTerminalSpec threw: ${reason}`);
+    return { opened: false, reason };
+  }
+
+  // Fail-fast workspace invariant: managed familiars must have resolved workspace path
+  if (hostWorkspaceFamiliarTypes.includes(repairedMeta.familiarType) && !spec.cwd) {
+    const reason = [
+      `Task "${taskId}" has no workspace path (familiar=${repairedMeta.familiarType}).`,
+      `This task requires a managed workspace but workspace metadata is missing.`,
+      `Recovery: Retry the task using "Recreate Task" or recreate the entire workflow.`,
+      `Refusing to fall back to host repo to prevent unintended mutations.`,
+    ].join(' ');
+    console.log(`[open-terminal] fail-fast: ${reason}`);
     return { opened: false, reason };
   }
 
