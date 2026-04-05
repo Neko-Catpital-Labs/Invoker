@@ -1,10 +1,30 @@
-import { describe, it, expect, vi } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { buildFixPrompt, resolveConflictImpl, fixWithAgentImpl, spawnRemoteAgentFixImpl } from '../conflict-resolver.js';
 import type { ConflictResolverHost } from '../conflict-resolver.js';
 import type { Orchestrator } from '@invoker/core';
 import { registerBuiltinAgents } from '../agents/index.js';
 import { CodexExecutionAgent } from '../agents/codex-execution-agent.js';
 import { ClaudeExecutionAgent } from '../agents/claude-execution-agent.js';
+
+const tempDirs: string[] = [];
+function createTempWorkspace(): string {
+  const dir = mkdtempSync(join(tmpdir(), 'invoker-conflict-resolver-test-'));
+  tempDirs.push(dir);
+  return dir;
+}
+function nonExistentWorkspacePath(): string {
+  return join(tmpdir(), `invoker-missing-workspace-${randomUUID()}`);
+}
+afterEach(() => {
+  while (tempDirs.length > 0) {
+    const dir = tempDirs.pop();
+    if (dir) rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 describe('buildFixPrompt', () => {
   it('generates command-focused prompt when task has a command', () => {
@@ -120,7 +140,7 @@ describe('resolveConflictImpl', () => {
     const task = {
       id: 'task-1',
       status: 'fixing_with_ai',
-      execution: { error: undefined, branch: 'invoker/task-1', workspacePath: '/tmp/ws' },
+      execution: { error: undefined, branch: 'invoker/task-1', workspacePath: createTempWorkspace() },
       config: {},
     };
     // With savedError the function should NOT throw "no error information".
@@ -142,7 +162,7 @@ describe('resolveConflictImpl', () => {
     const task = {
       id: 'task-conflict',
       status: 'failed' as const,
-      execution: { error: conflictError, branch: 'invoker/task-conflict', workspacePath: '/tmp/ws' },
+      execution: { error: conflictError, branch: 'invoker/task-conflict', workspacePath: createTempWorkspace() },
       config: {},
     };
     const host: ConflictResolverHost = {
@@ -182,7 +202,7 @@ describe('resolveConflictImpl', () => {
     const task = {
       id: 'task-conflict-2',
       status: 'failed' as const,
-      execution: { error: conflictError, branch: 'invoker/task-conflict-2', workspacePath: '/tmp/ws' },
+      execution: { error: conflictError, branch: 'invoker/task-conflict-2', workspacePath: createTempWorkspace() },
       config: {},
     };
     const host: ConflictResolverHost = {
@@ -283,7 +303,7 @@ describe('agent dispatch — codex vs claude', () => {
             id: 'task-1',
             status: 'failed',
             config: { command: 'pnpm test' },
-            execution: { error: 'test failed', workspacePath: '/tmp' },
+            execution: { error: 'test failed', workspacePath: createTempWorkspace() },
           }),
           getAllTasks: () => [],
         } as unknown as Orchestrator,
@@ -311,7 +331,7 @@ describe('agent dispatch — codex vs claude', () => {
             id: 'task-2',
             status: 'failed',
             config: { command: 'pnpm test' },
-            execution: { error: 'test failed', workspacePath: '/tmp' },
+            execution: { error: 'test failed', workspacePath: createTempWorkspace() },
           }),
           getAllTasks: () => [],
         } as unknown as Orchestrator,
@@ -339,7 +359,7 @@ describe('agent dispatch — codex vs claude', () => {
             id: 'task-3',
             status: 'failed',
             config: { command: 'pnpm test' },
-            execution: { error: 'test failed', workspacePath: '/tmp' },
+            execution: { error: 'test failed', workspacePath: createTempWorkspace() },
           }),
           getAllTasks: () => [],
         } as unknown as Orchestrator,
@@ -465,5 +485,182 @@ describe('remote agent dispatch via registry', () => {
     // Must NOT contain codex-specific flags
     expect(spec.args).not.toContain('exec');
     expect(spec.args).not.toContain('--full-auto');
+  });
+});
+
+// ── Fail-fast workspace invariant tests ──────────────────────
+
+describe('conflict-resolver fail-fast workspace invariant', () => {
+  function makeHost(task: Record<string, any>): ConflictResolverHost {
+    return {
+      orchestrator: {
+        getTask: () => task,
+        getAllTasks: () => [],
+      } as unknown as Orchestrator,
+      persistence: {} as any,
+      cwd: '/tmp',
+      execGitReadonly: async () => '',
+      execGitIn: async () => '',
+      createMergeWorktree: async () => '/tmp/wt',
+      removeMergeWorktree: async () => {},
+      spawnAgentFix: async () => ({ stdout: '', sessionId: '' }),
+    };
+  }
+
+  describe('resolveConflictImpl', () => {
+    it('throws when task has no workspacePath', async () => {
+      const conflictError = JSON.stringify({
+        type: 'merge_conflict',
+        failedBranch: 'invoker/dep-1',
+        conflictFiles: ['src/index.ts'],
+      });
+      const task = {
+        id: 'task-no-workspace',
+        status: 'failed' as const,
+        execution: {
+          error: conflictError,
+          branch: 'invoker/task-no-workspace',
+          workspacePath: undefined,  // Missing!
+        },
+        config: { familiarType: 'worktree' },
+      };
+
+      await expect(
+        resolveConflictImpl(makeHost(task), 'task-no-workspace'),
+      ).rejects.toThrow(/has no workspacePath/);
+      await expect(
+        resolveConflictImpl(makeHost(task), 'task-no-workspace'),
+      ).rejects.toThrow(/Recreate the task or recreate the workflow/);
+    });
+
+    it('throws when local task workspace does not exist on disk', async () => {
+      const conflictError = JSON.stringify({
+        type: 'merge_conflict',
+        failedBranch: 'invoker/dep-1',
+        conflictFiles: ['src/index.ts'],
+      });
+      const task = {
+        id: 'task-workspace-gone',
+        status: 'failed' as const,
+        execution: {
+          error: conflictError,
+          branch: 'invoker/task-workspace-gone',
+          workspacePath: nonExistentWorkspacePath(),
+        },
+        config: { familiarType: 'worktree' },
+      };
+
+      await expect(
+        resolveConflictImpl(makeHost(task), 'task-workspace-gone'),
+      ).rejects.toThrow(/workspace does not exist on disk/);
+      await expect(
+        resolveConflictImpl(makeHost(task), 'task-workspace-gone'),
+      ).rejects.toThrow(/Refusing to run git operations without a valid workspace/);
+    });
+
+    it('allows remote SSH tasks with non-existent local path', async () => {
+      const conflictError = JSON.stringify({
+        type: 'merge_conflict',
+        failedBranch: 'invoker/dep-1',
+        conflictFiles: ['src/index.ts'],
+      });
+      const task = {
+        id: 'task-ssh',
+        status: 'failed' as const,
+        execution: {
+          error: conflictError,
+          branch: 'invoker/task-ssh',
+          workspacePath: '~/worktrees/remote',  // Remote path
+        },
+        config: {
+          familiarType: 'ssh' as const,
+          remoteTargetId: 'remote-1',
+        },
+      };
+
+      const host: ConflictResolverHost = {
+        ...makeHost(task),
+        getRemoteTargetConfig: () => ({
+          host: 'remote.example',
+          user: 'user',
+          sshKeyPath: '/key',
+        }),
+      };
+
+      // Should not throw - SSH tasks can have remote paths
+      // Will fail later due to missing mocks, but should pass the workspace check
+      await expect(
+        resolveConflictImpl(host, 'task-ssh'),
+      ).rejects.not.toThrow(/workspace does not exist on disk/);
+    });
+  });
+
+  describe('fixWithAgentImpl', () => {
+    it('throws when task has no workspacePath', async () => {
+      const task = {
+        id: 'task-no-workspace',
+        status: 'failed' as const,
+        execution: {
+          error: 'Test failed',
+          workspacePath: undefined,  // Missing!
+        },
+        config: { command: 'npm test' },
+      };
+
+      await expect(
+        fixWithAgentImpl(makeHost(task), 'task-no-workspace', 'error output'),
+      ).rejects.toThrow(/has no valid workspace/);
+      await expect(
+        fixWithAgentImpl(makeHost(task), 'task-no-workspace', 'error output'),
+      ).rejects.toThrow(/Recreate the task or recreate the workflow/);
+    });
+
+    it('throws when local task workspace does not exist on disk', async () => {
+      const task = {
+        id: 'task-workspace-gone',
+        status: 'failed' as const,
+        execution: {
+          error: 'Test failed',
+          workspacePath: nonExistentWorkspacePath(),
+        },
+        config: { command: 'npm test' },
+      };
+
+      await expect(
+        fixWithAgentImpl(makeHost(task), 'task-workspace-gone', 'error output'),
+      ).rejects.toThrow(/has no valid workspace/);
+    });
+
+    it('allows remote SSH tasks with non-existent local path', async () => {
+      const task = {
+        id: 'task-ssh',
+        status: 'failed' as const,
+        execution: {
+          error: 'Test failed',
+          workspacePath: '~/worktrees/remote',  // Remote path
+        },
+        config: {
+          command: 'npm test',
+          familiarType: 'ssh' as const,
+          remoteTargetId: 'remote-1',
+        },
+      };
+
+      const host: ConflictResolverHost = {
+        ...makeHost(task),
+        getRemoteTargetConfig: () => ({
+          host: 'remote.example',
+          user: 'user',
+          sshKeyPath: '/key',
+        }),
+        agentRegistry: registerBuiltinAgents(),
+      };
+
+      // Should not throw workspace check - SSH tasks can have remote paths
+      // This path will still fail in unit tests because no SSH target exists.
+      await expect(
+        fixWithAgentImpl(host, 'task-ssh', 'error output'),
+      ).rejects.not.toThrow(/has no valid workspace/);
+    });
   });
 });

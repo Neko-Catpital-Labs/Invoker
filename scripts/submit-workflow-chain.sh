@@ -74,6 +74,16 @@ parse_plan_name() {
   ' "$p"
 }
 
+matches_pattern() {
+  local pattern="$1"
+  local file="$2"
+  if command -v rg >/dev/null 2>&1; then
+    rg -q "$pattern" "$file"
+  else
+    grep -E -q "$pattern" "$file"
+  fi
+}
+
 resolve_persisted_workflow_id() {
   local workflow_name="$1"
   local wf_id=""
@@ -156,7 +166,7 @@ for i in "${!INPUT_PLANS[@]}"; do
       echo "Internal error: missing previous workflow id before rendering chain step $((i+1))." >&2
       exit 1
     fi
-    if ! rg -q "__UPSTREAM_WORKFLOW_ID__" "$plan"; then
+    if ! matches_pattern "__UPSTREAM_WORKFLOW_ID__" "$plan"; then
       echo "Template plan is missing __UPSTREAM_WORKFLOW_ID__: $plan" >&2
       exit 1
     fi
@@ -168,14 +178,14 @@ for i in "${!INPUT_PLANS[@]}"; do
       echo "Upstream merge gate not found yet: __merge__${prev_wf_id}" >&2
       exit 1
     fi
-    if ! rg -q "^baseBranch:" "$plan"; then
+    if ! matches_pattern "^baseBranch:" "$plan"; then
       echo "Template plan is missing top-level baseBranch: $plan" >&2
       exit 1
     fi
 
     submit_plan="$(mktemp "/tmp/invoker-chain-step$((i+1)).XXXXXX.yaml")"
     sed "s/__UPSTREAM_WORKFLOW_ID__/$prev_wf_id/g" "$plan" > "$submit_plan"
-    if ! rg -q "$prev_wf_id" "$submit_plan"; then
+    if ! matches_pattern "$prev_wf_id" "$submit_plan"; then
       echo "Rendered plan did not include upstream id '$prev_wf_id': $submit_plan" >&2
       exit 1
     fi
@@ -244,21 +254,21 @@ for i in "${!INPUT_PLANS[@]}"; do
     ' "$submit_plan" > "${submit_plan}.tmp"
     mv "${submit_plan}.tmp" "$submit_plan"
 
-    if ! rg -q "workflowId:[[:space:]]*\"${prev_wf_id}\"([[:space:]]|$)" "$submit_plan"; then
+    if ! matches_pattern "workflowId:[[:space:]]*\"${prev_wf_id}\"([[:space:]]|$)" "$submit_plan"; then
       echo "Rendered plan missing upstream workflow dependency '${prev_wf_id}': $submit_plan" >&2
       exit 1
     fi
-    if ! rg -q "taskId:[[:space:]]*\"__merge__\"" "$submit_plan"; then
+    if ! matches_pattern "taskId:[[:space:]]*\"__merge__\"" "$submit_plan"; then
       echo "Rendered plan missing enforced merge-gate taskId '__merge__': $submit_plan" >&2
       exit 1
     fi
-    if ! rg -q "^\s*gatePolicy:[[:space:]]*${GATE_POLICY}$" "$submit_plan"; then
+    if ! matches_pattern "^[[:space:]]*gatePolicy:[[:space:]]*${GATE_POLICY}$" "$submit_plan"; then
       echo "Rendered plan missing enforced gatePolicy '${GATE_POLICY}': $submit_plan" >&2
       exit 1
     fi
 
     sed -E -i "s|^baseBranch:.*$|baseBranch: ${prev_wf_feature_branch}|" "$submit_plan"
-    if ! rg -q "^baseBranch:[[:space:]]*${prev_wf_feature_branch}$" "$submit_plan"; then
+    if ! matches_pattern "^baseBranch:[[:space:]]*${prev_wf_feature_branch}$" "$submit_plan"; then
       echo "Rendered plan baseBranch did not update to upstream feature branch '${prev_wf_feature_branch}': $submit_plan" >&2
       exit 1
     fi
