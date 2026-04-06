@@ -4,8 +4,7 @@
     "outDir": "dist",
     "rootDir": "src",
     "module": "ESNext",
-    "moduleResolution": "bundler",
-    "composite": true
+    "moduleResolution": "bundler"
   },
   "include": [
     "src"
