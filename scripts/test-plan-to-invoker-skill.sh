@@ -80,3 +80,15 @@ if [[ -f "$VALIDATOR_TEST_SCRIPT" ]]; then
 else
   fail "Validator test script not found: $VALIDATOR_TEST_SCRIPT"
 fi
+
+# Run fixture tests
+echo ""
+echo "Running plan-to-invoker fixture tests..."
+FIXTURES_TEST_SCRIPT="$REPO_ROOT/skills/plan-to-invoker/scripts/test-fixtures.sh"
+if [[ -f "$FIXTURES_TEST_SCRIPT" ]]; then
+  if ! bash "$FIXTURES_TEST_SCRIPT"; then
+    fail "Plan-to-invoker fixture tests failed"
+  fi
+else
+  fail "Fixtures test script not found: $FIXTURES_TEST_SCRIPT"
+fi
