@@ -47,6 +47,29 @@ function stripFixFailureWrapper(errorText: string): string {
   return errorText.replace(FIX_FAILURE_PREFIX_RE, '');
 }
 
+function tryParseJsonObject(value: string | undefined): Record<string, unknown> | undefined {
+  if (!value) return undefined;
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function parseMergeConflictError(
+  value: string | undefined,
+): { failedBranch: string; conflictFiles: string[] } | undefined {
+  const obj = tryParseJsonObject(value);
+  if (obj?.type !== 'merge_conflict') return undefined;
+
+  const failedBranch = typeof obj.failedBranch === 'string' ? obj.failedBranch : '';
+  const conflictFiles = Array.isArray(obj.conflictFiles)
+    ? obj.conflictFiles.filter((file): file is string => typeof file === 'string')
+    : [];
+  return { failedBranch, conflictFiles };
+}
+
 // ── Errors ──────────────────────────────────────────────────
 
 export class PlanConflictError extends Error {
@@ -899,6 +922,23 @@ export class Orchestrator {
       return [updated];
     }
 
+    if (
+      !task.config.isMergeNode &&
+      task.execution.pendingFixError !== undefined &&
+      parseMergeConflictError(task.execution.pendingFixError) !== undefined
+    ) {
+      const now = new Date();
+      const fixClearChanges: TaskStateChanges = {
+        status: 'running',
+        execution: { pendingFixError: undefined, startedAt: now, lastHeartbeatAt: now },
+      };
+      this.writeAndSync(taskId, fixClearChanges);
+      const fixDelta: TaskDelta = { type: 'updated', taskId, changes: fixClearChanges };
+      this.persistence.logEvent?.(taskId, 'task.running', fixClearChanges);
+      this.messageBus.publish(TASK_DELTA_CHANNEL, fixDelta);
+      return [this.stateGetTask(taskId)!];
+    }
+
     if (this.beforeApproveHook) {
       mergeTrace('APPROVE_HOOK_FIRING', { taskId, workflowId: task.config.workflowId });
       await this.beforeApproveHook(task);
@@ -1360,13 +1400,7 @@ export class Orchestrator {
     const id = task.id;
 
     const normalizedSavedError = stripFixFailureWrapper(savedError);
-    let mergeConflict: { failedBranch: string; conflictFiles: string[] } | undefined;
-    try {
-      const obj = JSON.parse(normalizedSavedError);
-      if (obj?.type === 'merge_conflict') {
-        mergeConflict = { failedBranch: obj.failedBranch, conflictFiles: obj.conflictFiles };
-      }
-    } catch { /* not JSON — normal error string */ }
+    const mergeConflict = parseMergeConflictError(normalizedSavedError);
 
     const displayError = fixError
       ? `[Fix with Agent failed] ${fixError}\n\n${normalizedSavedError}`
@@ -2058,15 +2092,7 @@ export class Orchestrator {
     taskId: string,
     parsed: Extract<ParsedResponse, { type: 'failed' }>,
   ): TaskState[] {
-    let mergeConflict: { failedBranch: string; conflictFiles: string[] } | undefined;
-    if (parsed.error) {
-      try {
-        const obj = JSON.parse(parsed.error);
-        if (obj?.type === 'merge_conflict') {
-          mergeConflict = { failedBranch: obj.failedBranch, conflictFiles: obj.conflictFiles };
-        }
-      } catch { /* not JSON — normal error string */ }
-    }
+    const mergeConflict = parseMergeConflictError(parsed.error);
 
     const changes: TaskStateChanges = {
       status: 'failed',

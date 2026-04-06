@@ -4749,6 +4749,50 @@ describe('Orchestrator', () => {
       expect(task.status).toBe('failed');
       expect(task.execution.error).toBe('test failed: expected 1 to be 2');
     });
+
+    it('non-merge merge_conflict JSON pendingFixError approve transitions failed -> fixing_with_ai -> awaiting_approval -> running and clears pendingFixError', async () => {
+      const mergeConflictError = JSON.stringify({
+        type: 'merge_conflict',
+        failedBranch: 'experiment/non-merge-branch-abc123',
+        conflictFiles: ['src/non-merge.ts'],
+      });
+
+      persistence.updateTask('f2', { execution: { error: mergeConflictError } });
+      expect(orchestrator.getTask('f2')!.config.isMergeNode).toBeFalsy();
+      expect(orchestrator.getTask('f2')!.status).toBe('failed');
+
+      const { savedError } = orchestrator.beginConflictResolution('f2');
+      expect(savedError).toBe(mergeConflictError);
+      expect(orchestrator.getTask('f2')!.status).toBe('fixing_with_ai');
+
+      orchestrator.setFixAwaitingApproval('f2', mergeConflictError);
+      expect(orchestrator.getTask('f2')!.status).toBe('awaiting_approval');
+      expect(orchestrator.getTask('f2')!.execution.pendingFixError).toBe(mergeConflictError);
+
+      await orchestrator.approve('f2');
+      const task = orchestrator.getTask('f2')!;
+      expect(task.status).toBe('running');
+      expect(task.status).not.toBe('completed');
+      expect(task.execution.pendingFixError).toBeUndefined();
+    });
+
+    it('non-merge plain-text pendingFixError approve transitions failed -> fixing_with_ai -> awaiting_approval -> completed', async () => {
+      const plainTextError = 'test failed: expected 1 to be 2';
+
+      expect(orchestrator.getTask('f2')!.config.isMergeNode).toBeFalsy();
+      expect(orchestrator.getTask('f2')!.status).toBe('failed');
+
+      const { savedError } = orchestrator.beginConflictResolution('f2');
+      expect(savedError).toBe(plainTextError);
+      expect(orchestrator.getTask('f2')!.status).toBe('fixing_with_ai');
+
+      orchestrator.setFixAwaitingApproval('f2', plainTextError);
+      expect(orchestrator.getTask('f2')!.status).toBe('awaiting_approval');
+      expect(orchestrator.getTask('f2')!.execution.pendingFixError).toBe(plainTextError);
+
+      await orchestrator.approve('f2');
+      expect(orchestrator.getTask('f2')!.status).toBe('completed');
+    });
   });
 
   describe('merge gate two-step approve (pendingFixError)', () => {
