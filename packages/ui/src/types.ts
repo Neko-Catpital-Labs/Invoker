@@ -266,6 +266,8 @@ export interface InvokerAPI {
   fixWithAgent: (taskId: string, agentName?: string) => Promise<void>;
   setMergeMode: (workflowId: string, mergeMode: string) => Promise<void>;
   checkPrStatuses: () => Promise<void>;
+  checkPrStatus?: () => Promise<void>;
+  getAllCompletedTasks: () => Promise<Array<TaskState & { workflowName: string }>>;
 
   // Cancel task with DAG cascade
   cancelTask: (taskId: string) => Promise<{ cancelled: string[]; runningCancelled: string[] }>;

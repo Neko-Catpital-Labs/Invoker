@@ -16,9 +16,9 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execSync } from 'node:child_process';
-import type { WorkResponse } from '@invoker/protocol';
-import type { TaskState } from '@invoker/core';
-import { TaskExecutor, FamiliarRegistry, WorktreeFamiliar } from '@invoker/executors';
+import type { WorkResponse } from '@invoker/contracts';
+import type { TaskState } from '@invoker/workflow-core';
+import { TaskExecutor, FamiliarRegistry, WorktreeFamiliar } from '@invoker/execution-engine';
 import { rebaseAndRetry, bumpGenerationAndRecreate } from '../workflow-actions.js';
 
 function createTempRepo(): string {

@@ -4,7 +4,7 @@
  * Pure functions. No Slack SDK dependency. Easy to test.
  */
 
-import type { TaskDelta } from '@invoker/core';
+import type { TaskDelta } from '@invoker/workflow-core';
 import type { SurfaceEvent, WorkflowStatus } from '../surface.js';
 
 // ── Status Display ──────────────────────────────────────────

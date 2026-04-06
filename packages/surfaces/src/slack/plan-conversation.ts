@@ -12,7 +12,7 @@
 
 import { spawn } from 'node:child_process';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
-import type { ConversationRepository } from '@invoker/persistence';
+import type { ConversationRepository } from '@invoker/data-store';
 import type { LogFn } from '../surface.js';
 
 // ── Types ───────────────────────────────────────────────────

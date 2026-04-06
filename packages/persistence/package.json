@@ -7,16 +7,17 @@
   "exports": {
     ".": {
       "import": "./src/index.ts",
+      "require": "./src/index.ts",
       "types": "./src/index.ts"
     }
   },
   "scripts": {
     "build": "tsup src/index.ts --format esm --dts",
-    "test": "vitest run",
+    "test": "echo 'compat package: tests moved to @invoker/data-store'",
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@invoker/core": "workspace:*",
+    "@invoker/workflow-core": "workspace:*",
     "sql.js": "^1.12.0"
   },
   "devDependencies": {

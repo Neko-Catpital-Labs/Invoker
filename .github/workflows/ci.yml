@@ -54,5 +54,14 @@ jobs:
       - name: Install Playwright system dependencies (Electron E2E)
         run: pnpm --filter @invoker/app exec playwright install --with-deps
 
+      - name: Check package dependencies (depcruise)
+        run: pnpm run check:deps
+
+      - name: Check TypeScript types (tsc -b)
+        run: pnpm run check:types
+
+      - name: Check owner boundaries
+        run: bash scripts/check-owner-boundary.sh
+
       - name: Run full test matrix (test:all)
         run: pnpm run test:all

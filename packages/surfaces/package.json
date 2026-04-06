@@ -10,10 +10,9 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@invoker/core": "workspace:*",
-    "@invoker/executors": "workspace:*",
-    "@invoker/persistence": "workspace:*",
-    "@invoker/protocol": "workspace:*",
+    "@invoker/workflow-core": "workspace:*",
+    "@invoker/data-store": "workspace:*",
+    "@invoker/contracts": "workspace:*",
     "@invoker/transport": "workspace:*",
     "@slack/bolt": "^4.6.0",
     "yaml": "^2.7.0"

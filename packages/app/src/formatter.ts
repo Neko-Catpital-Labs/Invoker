@@ -4,8 +4,8 @@
  * No external dependencies. Uses raw ANSI escape codes for coloring.
  */
 
-import type { TaskState, TaskStatus } from '@invoker/core';
-import type { TaskEvent, Workflow } from '@invoker/persistence';
+import type { TaskState, TaskStatus } from '@invoker/workflow-core';
+import type { TaskEvent, Workflow } from '@invoker/data-store';
 
 // ── ANSI Color Codes ─────────────────────────────────────────
 

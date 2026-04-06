@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { SlackSurface } from '../slack/slack-surface.js';
-import { SQLiteAdapter, ConversationRepository } from '@invoker/persistence';
+import { SQLiteAdapter, ConversationRepository } from '@invoker/data-store';
 import type { SurfaceCommand } from '../surface.js';
 
 // ── Mock @slack/bolt ────────────────────────────────────────

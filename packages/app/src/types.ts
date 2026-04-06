@@ -5,7 +5,7 @@
  * The renderer uses these types; the main process implements them via ipcMain.handle.
  */
 
-import type { TaskState, TaskDelta, TaskStateChanges } from '@invoker/core';
+import type { TaskState, TaskDelta, TaskStateChanges } from '@invoker/workflow-core';
 
 
 // ── Task Replacement ────────────────────────────────────────

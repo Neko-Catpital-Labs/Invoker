@@ -5,9 +5,9 @@
  * Repro / guard: before this action existed only in main.ts IPC; headless had no equivalent.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { Orchestrator } from '@invoker/core';
-import type { TaskExecutor } from '@invoker/executors';
-import type { SQLiteAdapter } from '@invoker/persistence';
+import type { Orchestrator } from '@invoker/workflow-core';
+import type { TaskExecutor } from '@invoker/execution-engine';
+import type { SQLiteAdapter } from '@invoker/data-store';
 import { resolveConflictAction } from '../workflow-actions.js';
 
 describe('resolveConflictAction', () => {

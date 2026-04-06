@@ -6,6 +6,7 @@ dist/
 .DS_Store
 coverage/
 .claude/worktrees/
+*.tsbuildinfo
 
 packages/app/e2e/visual-proof/
 packages/app/e2e/test-results/

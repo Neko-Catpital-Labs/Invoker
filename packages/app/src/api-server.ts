@@ -30,9 +30,9 @@
  */
 
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from 'node:http';
-import type { Orchestrator } from '@invoker/core';
-import type { SQLiteAdapter } from '@invoker/persistence';
-import type { FamiliarRegistry, TaskExecutor } from '@invoker/executors';
+import type { Orchestrator } from '@invoker/workflow-core';
+import type { SQLiteAdapter } from '@invoker/data-store';
+import type { FamiliarRegistry, TaskExecutor } from '@invoker/execution-engine';
 import {
   recreateWorkflow as sharedRecreateWorkflow,
   cancelWorkflow as sharedCancelWorkflow,

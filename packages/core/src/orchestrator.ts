@@ -21,7 +21,7 @@ import type { ParsedResponse } from './response-handler.js';
 import { TaskScheduler } from './scheduler.js';
 import type { TaskState, TaskDelta, TaskStateChanges, Attempt } from './task-types.js';
 import { createTaskState, createAttempt } from './task-types.js';
-import type { WorkResponse } from '@invoker/protocol';
+import type { WorkResponse } from '@invoker/contracts';
 import { normalizeFamiliarType } from '@invoker/graph';
 
 const MERGE_TRACE_LOG = resolve(homedir(), '.invoker', 'merge-trace.log');

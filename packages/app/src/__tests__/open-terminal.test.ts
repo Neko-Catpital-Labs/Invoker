@@ -20,14 +20,14 @@ import {
   type TaskState,
   type OrchestratorPersistence,
   type OrchestratorMessageBus,
-} from '@invoker/core';
-import type { TaskStateChanges } from '@invoker/graph';
+} from '@invoker/workflow-core';
+import type { TaskStateChanges } from '@invoker/workflow-graph';
 import {
   DockerFamiliar, WorktreeFamiliar, FamiliarRegistry, SshFamiliar,
   BaseFamiliar,
   type FamiliarHandle, type TerminalSpec, type PersistedTaskMeta,
-} from '@invoker/executors';
-import type { WorkResponse, WorkRequest } from '@invoker/protocol';
+} from '@invoker/execution-engine';
+import type { WorkResponse, WorkRequest } from '@invoker/contracts';
 import {
   buildLinuxXTerminalBashScript,
   buildMacOSOsascriptArgs,
@@ -681,10 +681,10 @@ describe('SshFamiliar getRestoredTerminalSpec', () => {
 
 describe('getRestoredTerminalSpec dispatches codex vs claude session resume', () => {
   // Lazy import to avoid circular dep issues at module level
-  let registerBuiltinAgents: typeof import('@invoker/executors').registerBuiltinAgents;
+  let registerBuiltinAgents: typeof import('@invoker/execution-engine').registerBuiltinAgents;
 
   beforeEach(async () => {
-    ({ registerBuiltinAgents } = await import('@invoker/executors'));
+    ({ registerBuiltinAgents } = await import('@invoker/execution-engine'));
   });
 
   afterEach(() => {
@@ -843,10 +843,10 @@ describe('getRestoredTerminalSpec dispatches codex vs claude session resume', ()
  * openExternalTerminalForTask does, and getRestoredTerminalSpec dispatches correctly.
  */
 describe('fix-with-agent → open-terminal produces correct agent resume command', () => {
-  let registerBuiltinAgents: typeof import('@invoker/executors').registerBuiltinAgents;
+  let registerBuiltinAgents: typeof import('@invoker/execution-engine').registerBuiltinAgents;
 
   beforeEach(async () => {
-    ({ registerBuiltinAgents } = await import('@invoker/executors'));
+    ({ registerBuiltinAgents } = await import('@invoker/execution-engine'));
   });
 
   afterEach(() => {

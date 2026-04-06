@@ -1,9 +1,3 @@
-export * from '@invoker/graph';
-export * from './task-types.js';
-export * from './state-machine.js';
-export * from './dag.js';
-export * from './response-handler.js';
-export * from './scheduler.js';
-export * from './orchestrator.js';
-export * from './task-id-scope.js';
-export * from './fallback-policy.js';
+// Compatibility facade - re-export everything from @invoker/workflow-core
+// This package is deprecated. Use @invoker/workflow-core instead.
+export * from '@invoker/workflow-core';

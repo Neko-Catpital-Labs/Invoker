@@ -6,10 +6,10 @@
  * waitForCompletion().
  */
 
-import type { Orchestrator } from '@invoker/core';
-import type { TaskState } from '@invoker/core';
-import type { SQLiteAdapter } from '@invoker/persistence';
-import type { TaskExecutor } from '@invoker/executors';
+import type { Orchestrator } from '@invoker/workflow-core';
+import type { TaskState } from '@invoker/workflow-core';
+import type { SQLiteAdapter } from '@invoker/data-store';
+import type { TaskExecutor } from '@invoker/execution-engine';
 import { normalizeMergeModeForPersistence } from './merge-mode.js';
 
 // ── Deps interfaces ──────────────────────────────────────────

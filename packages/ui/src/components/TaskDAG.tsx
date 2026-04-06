@@ -33,6 +33,7 @@ import {
   sortedWorkflowGroups,
   resolveMergeGateKind,
   mergeGatePlanTitle,
+  computeMergeGateStatus,
 } from '../lib/merge-gate.js';
 
 interface TaskDAGProps {

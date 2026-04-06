@@ -34,7 +34,6 @@ import './main-process-file-log.js';
 import { app, BrowserWindow, ipcMain, nativeImage, shell } from 'electron';
 import * as path from 'node:path';
 import { mkdirSync } from 'node:fs';
-import { homedir } from 'node:os';
 
 // Prevent desktop-wide freezes on Linux (Chromium GPU + X11/Wayland compositors).
 // Defense-in-depth: API-level disable, command-line flags, and env var (LIBGL_ALWAYS_SOFTWARE).
@@ -49,15 +48,15 @@ if (process.platform === 'linux') {
   app.commandLine.appendSwitch('disable-software-rasterizer');
 }
 
-import { Orchestrator } from '@invoker/core';
+import { Orchestrator } from '@invoker/workflow-core';
 import type {
   PlanDefinition,
   TaskDelta,
   TaskReplacementDef,
   TaskState,
   TaskStateChanges,
-} from '@invoker/core';
-import { SQLiteAdapter, ConversationRepository } from '@invoker/persistence';
+} from '@invoker/workflow-core';
+import { SQLiteAdapter, ConversationRepository } from '@invoker/data-store';
 import { IpcBus, Channels } from '@invoker/transport';
 import type { MessageBus } from '@invoker/transport';
 import {
@@ -67,9 +66,14 @@ import {
   remoteFetchForPool,
   registerBuiltinAgents,
   type Familiar, type FamiliarHandle,
-} from '@invoker/executors';
+} from '@invoker/execution-engine';
 import type { TaskOutputData } from './types.js';
 import { loadConfig, type InvokerConfig } from './config.js';
+import {
+  createDeleteAllSnapshot,
+  createHourlySnapshot,
+  resolveInvokerHomeRoot,
+} from './delete-all-snapshot.js';
 import { isHeadlessMutatingCommand, isHeadlessReadOnlyCommand } from './headless-command-classification.js';
 import { backupPlan } from './plan-backup.js';
 // applyPlanDefinitionDefaults removed — parsePlan() applies defaults internally
@@ -129,24 +133,22 @@ let messageBus: MessageBus;
 let persistence: SQLiteAdapter;
 let familiarRegistry: FamiliarRegistry;
 let orchestrator: Orchestrator;
+let hourlyBackupInterval: ReturnType<typeof setInterval> | null = null;
 
 // Repo root: 3 levels up from packages/app/dist/
 const repoRoot = path.resolve(__dirname, '..', '..', '..');
 const invokerConfig: InvokerConfig = loadConfig();
 
-/** Single root for DB, repos cache, and worktrees (must stay consistent). */
-function resolveInvokerHomeRoot(): string {
-  return (
-    process.env.INVOKER_DB_DIR
-    ?? (process.env.NODE_ENV === 'test'
-      ? path.join(homedir(), '.invoker', 'test')
-      : path.join(homedir(), '.invoker'))
+function assertDeleteAllEnabled(): void {
+  if (process.env.INVOKER_ALLOW_DELETE_ALL === '1') return;
+  throw new Error(
+    'delete-all is disabled by default. Set INVOKER_ALLOW_DELETE_ALL=1 to enable it explicitly.',
   );
 }
 
 interface InitServicesOptions {
   readOnly?: boolean;
-  executionAgentRegistry?: import('@invoker/executors').AgentRegistry;
+  executionAgentRegistry?: import('@invoker/execution-engine').AgentRegistry;
 }
 
 async function initServices(options?: InitServicesOptions): Promise<void> {
@@ -158,6 +160,27 @@ async function initServices(options?: InitServicesOptions): Promise<void> {
     readOnly,
     ownerCapability: !readOnly, // writable mode requires owner capability
   });
+  if (!readOnly && !hourlyBackupInterval) {
+    const hourlyMs = Number(process.env.INVOKER_HOURLY_BACKUP_MS ?? 60 * 60 * 1000);
+    if (Number.isFinite(hourlyMs) && hourlyMs > 0) {
+      hourlyBackupInterval = setInterval(() => {
+        try {
+          const snapshot = createHourlySnapshot(invokerHomeRoot);
+          if (snapshot) {
+            console.log(`[backup] hourly snapshot: ${snapshot}`);
+          } else {
+            console.log('[backup] hourly snapshot skipped: DB file does not exist yet');
+          }
+        } catch (err) {
+          console.error(
+            `[backup] hourly snapshot failed: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      }, hourlyMs);
+      hourlyBackupInterval.unref?.();
+      console.log(`[backup] hourly snapshots enabled (interval=${hourlyMs}ms)`);
+    }
+  }
   familiarRegistry = new FamiliarRegistry();
   familiarRegistry.register(
     'worktree',
@@ -857,6 +880,13 @@ function setupGuiMode(): void {
 
     ipcMain.handle('invoker:delete-all-workflows', () => {
       console.log('[ipc] delete-all-workflows');
+      assertDeleteAllEnabled();
+      const snapshot = createDeleteAllSnapshot(resolveInvokerHomeRoot());
+      if (snapshot) {
+        console.log(`[ipc] delete-all-workflows snapshot: ${snapshot}`);
+      } else {
+        console.log('[ipc] delete-all-workflows snapshot skipped: DB file does not exist yet');
+      }
       orchestrator.deleteAllWorkflows();
       taskHandles.clear();
       lastKnownTaskStates.clear();
@@ -1314,10 +1344,10 @@ function setupGuiMode(): void {
             if (task.status === 'running') {
               if (task.execution?.isFixingWithAI) continue;
               const heartbeatTime = task.execution?.lastHeartbeatAt
-                ? new Date(task.execution.lastHeartbeatAt as string | number).getTime()
+                ? new Date(task.execution.lastHeartbeatAt as unknown as string | number).getTime()
                 : null;
               const startedTime = task.execution?.startedAt
-                ? new Date(task.execution.startedAt as string | number).getTime()
+                ? new Date(task.execution.startedAt as unknown as string | number).getTime()
                 : null;
               const referenceTime = heartbeatTime ?? startedTime;
 
@@ -1401,6 +1431,10 @@ function setupGuiMode(): void {
     if (apiServer) await apiServer.close().catch(() => {});
     if (dbPollInterval) clearInterval(dbPollInterval);
     if (activityPollInterval) clearInterval(activityPollInterval);
+    if (hourlyBackupInterval) {
+      clearInterval(hourlyBackupInterval);
+      hourlyBackupInterval = null;
+    }
     if (familiarRegistry) {
       await Promise.all(familiarRegistry.getAll().map(f => f.destroyAll()));
     }

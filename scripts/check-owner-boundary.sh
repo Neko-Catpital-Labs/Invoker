@@ -13,15 +13,20 @@ if command -v rg >/dev/null 2>&1; then
   create_violations="$(rg -n "SQLiteAdapter\\.create\\(" packages \
     --glob '!**/__tests__/**' \
     --glob '!**/*.test.ts' \
+    --glob '!**/*.d.ts' \
+    --glob '!**/dist/**' \
     --glob '!**/node_modules/**' \
     --glob '!packages/app/src/main.ts' \
-    --glob '!packages/persistence/src/sqlite-adapter.ts' || true)"
+    --glob '!packages/persistence/src/sqlite-adapter.ts' \
+    --glob '!packages/data-store/src/sqlite-adapter.ts' || true)"
 
   # 2) Runtime value-imports of SQLiteAdapter must stay owner-only.
   # type-only imports are allowed outside owner modules.
-  value_import_violations="$(rg -n "import\\s+\\{[^}]*\\bSQLiteAdapter\\b[^}]*\\}\\s+from\\s+'@invoker/persistence'" packages \
+  value_import_violations="$(rg -n "import\\s+\\{[^}]*\\bSQLiteAdapter\\b[^}]*\\}\\s+from\\s+'@invoker/(persistence|data-store)'" packages \
     --glob '!**/__tests__/**' \
     --glob '!**/*.test.ts' \
+    --glob '!**/*.d.ts' \
+    --glob '!**/dist/**' \
     --glob '!**/node_modules/**' \
     --glob '!packages/app/src/main.ts' || true)"
 
@@ -34,14 +39,19 @@ else
   # Fallback for environments without ripgrep.
   create_violations="$(grep -RInE "SQLiteAdapter\\.create\\(" packages \
     --exclude-dir="__tests__" \
+    --exclude-dir="dist" \
     --exclude-dir="node_modules" \
+    --exclude="*.d.ts" \
     --exclude="*.test.ts" \
     | grep -v '^packages/app/src/main.ts:' \
-    | grep -v '^packages/persistence/src/sqlite-adapter.ts:' || true)"
+    | grep -v '^packages/persistence/src/sqlite-adapter.ts:' \
+    | grep -v '^packages/data-store/src/sqlite-adapter.ts:' || true)"
 
-  value_import_violations="$(grep -RInE "import[[:space:]]+\\{[^}]*SQLiteAdapter[^}]*\\}[[:space:]]+from[[:space:]]+'@invoker/persistence'" packages \
+  value_import_violations="$(grep -RInE "import[[:space:]]+\\{[^}]*SQLiteAdapter[^}]*\\}[[:space:]]+from[[:space:]]+'@invoker/(persistence|data-store)'" packages \
     --exclude-dir="__tests__" \
+    --exclude-dir="dist" \
     --exclude-dir="node_modules" \
+    --exclude="*.d.ts" \
     --exclude="*.test.ts" \
     | grep -v '^packages/app/src/main.ts:' || true)"
 

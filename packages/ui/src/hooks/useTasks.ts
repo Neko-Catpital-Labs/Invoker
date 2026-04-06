@@ -46,7 +46,7 @@ export function useTasks(): UseTasksResult {
         return wfMap;
       });
     });
-    window.invoker.checkPrStatus?.();
+    window.invoker.checkPrStatuses?.();
   }, []);
 
   useEffect(() => {

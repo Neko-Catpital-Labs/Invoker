@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import type { PersistedTaskMeta } from '@invoker/executors';
+import type { PersistedTaskMeta } from '@invoker/execution-engine';
 import { repairCodexResumeSessionMeta, type OpenTerminalPersistence } from '../open-terminal-for-task.js';
 
 describe('repairCodexResumeSessionMeta', () => {

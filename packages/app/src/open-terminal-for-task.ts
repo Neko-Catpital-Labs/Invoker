@@ -12,7 +12,7 @@ import {
   type FamiliarRegistry,
   type AgentRegistry,
   type PersistedTaskMeta,
-} from '@invoker/executors';
+} from '@invoker/execution-engine';
 import { loadConfig } from './config.js';
 import {
   buildLinuxXTerminalBashScript,

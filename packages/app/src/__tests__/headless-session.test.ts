@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { resolveAgentSession } from '../headless.js';
-import type { AgentRegistry } from '@invoker/executors';
-import type { TaskState } from '@invoker/core';
+import type { AgentRegistry } from '@invoker/execution-engine';
+import type { TaskState } from '@invoker/workflow-core';
 
 /**
  * Mock config module so resolveAgentSession can import loadConfig().

@@ -7,9 +7,9 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import { createTestHarness, type TestHarness, InMemoryBus, InMemoryPersistence, MockGit } from '@invoker/test-utils';
-import { Orchestrator, type PlanDefinition, type TaskState } from '@invoker/core';
-import { TaskExecutor, FamiliarRegistry, type MergeGateProvider } from '@invoker/executors';
+import { createTestHarness, type TestHarness, InMemoryBus, InMemoryPersistence, MockGit } from '@invoker/test-kit';
+import { Orchestrator, type PlanDefinition, type TaskState } from '@invoker/workflow-core';
+import { TaskExecutor, FamiliarRegistry, type MergeGateProvider } from '@invoker/execution-engine';
 import { setWorkflowMergeMode } from '../workflow-actions.js';
 
 // ── Shared Plans ────────────────────────────────────────────

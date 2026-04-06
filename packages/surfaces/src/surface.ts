@@ -6,7 +6,7 @@
  * wires surfaces to the Orchestrator and TaskExecutor.
  */
 
-import type { TaskDelta } from '@invoker/core';
+import type { TaskDelta } from '@invoker/workflow-core';
 
 // ── Commands (Surface → Orchestrator) ──────────────────────
 

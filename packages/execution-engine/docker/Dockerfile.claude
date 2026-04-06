@@ -1,0 +1,35 @@
+FROM node:22-slim
+
+RUN apt-get update && apt-get install -y \
+  curl jq git \
+  python3 make g++ \
+  && rm -rf /var/lib/apt/lists/*
+
+# Enable pnpm via corepack (for monorepo support)
+RUN corepack enable && corepack prepare pnpm@latest --activate
+
+# Install Claude Code CLI
+RUN npm install -g @anthropic-ai/claude-code
+
+# Create non-root user (claude CLI refuses --dangerously-skip-permissions as root)
+RUN useradd -m -s /bin/bash invoker \
+    && mkdir -p /app && chown invoker:invoker /app
+
+COPY invoker-agent.sh /usr/local/bin/invoker-agent.sh
+RUN chmod +x /usr/local/bin/invoker-agent.sh
+
+USER invoker
+
+# Claude CLI expects ~/.claude.json; host file is mounted into .claude/ dir
+RUN ln -s /home/invoker/.claude/.claude.json /home/invoker/.claude.json
+
+RUN git config --global --add safe.directory '*' \
+    && git config --global user.name "Invoker Agent" \
+    && git config --global user.email "invoker@local"
+
+WORKDIR /app
+
+# Use CMD instead of ENTRYPOINT so callers can override the command.
+# Legacy mode (no Cmd override): runs the agent script which reads request.json.
+# Direct mode (Cmd override): runs claude or shell commands directly.
+CMD ["/usr/local/bin/invoker-agent.sh"]

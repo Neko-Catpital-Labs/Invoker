@@ -17,12 +17,17 @@
     "test:all:destructive": "env INVOKER_TEST_ALL_EXTENDED=1 INVOKER_TEST_ALL_DANGEROUS=1 bash scripts/run-all-tests.sh",
     "setup": "bash scripts/setup-agent-skills.sh",
     "build": "pnpm -r build",
+    "build:tsc": "tsc -b tsconfig.build.json",
+    "build:tsc:clean": "tsc -b tsconfig.build.json --clean",
     "clean": "pnpm -r clean",
     "setup:cursor-skills": "bash scripts/setup-agent-skills.sh",
     "setup:codex-skills": "bash scripts/setup-agent-skills.sh",
     "setup:agent-skills": "bash scripts/setup-agent-skills.sh",
     "dev": "pnpm --filter @invoker/ui build && pnpm --filter @invoker/app build && pnpm --filter @invoker/app start",
-    "dev:hot": "concurrently \"pnpm --filter @invoker/ui dev\" \"sleep 3 && VITE_DEV_SERVER_URL=http://localhost:5173 pnpm --filter @invoker/app build && VITE_DEV_SERVER_URL=http://localhost:5173 pnpm --filter @invoker/app start\""
+    "dev:hot": "concurrently \"pnpm --filter @invoker/ui dev\" \"sleep 3 && VITE_DEV_SERVER_URL=http://localhost:5173 pnpm --filter @invoker/app build && VITE_DEV_SERVER_URL=http://localhost:5173 pnpm --filter @invoker/app start\"",
+    "check:deps": "depcruise packages --config .dependency-cruiser.js",
+    "check:types": "tsc -b tsconfig.build.json",
+    "check:all": "pnpm run check:deps && pnpm run check:types && bash scripts/check-owner-boundary.sh"
   },
   "engines": {
     "node": ">=22 <23"
@@ -56,7 +61,8 @@
     }
   },
   "devDependencies": {
-    "aws4": "^1.13.2"
+    "aws4": "^1.13.2",
+    "dependency-cruiser": "^17.3.10"
   },
   "packageManager": "pnpm@10.31.0+sha512.e3927388bfaa8078ceb79b748ffc1e8274e84d75163e67bc22e06c0d3aed43dd153151cbf11d7f8301ff4acb98c68bdc5cadf6989532801ffafe3b3e4a63c268"
 }

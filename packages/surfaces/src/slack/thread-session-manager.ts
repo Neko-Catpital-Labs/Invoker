@@ -14,7 +14,7 @@
  */
 
 import { PlanConversation } from './plan-conversation.js';
-import type { ConversationRepository } from '@invoker/persistence';
+import type { ConversationRepository } from '@invoker/data-store';
 import type { LogFn } from '../surface.js';
 
 // ── Types ───────────────────────────────────────────────────────

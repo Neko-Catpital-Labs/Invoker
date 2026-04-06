@@ -1,6 +1,6 @@
-import { FamiliarRegistry, WorktreeFamiliar, DockerFamiliar } from '@invoker/executors';
-import type { Familiar, FamiliarHandle } from '@invoker/executors';
-import type { TaskState } from '@invoker/core';
+import { FamiliarRegistry, WorktreeFamiliar, DockerFamiliar } from '@invoker/execution-engine';
+import type { Familiar, FamiliarHandle } from '@invoker/execution-engine';
+import type { TaskState } from '@invoker/workflow-core';
 
 // Reproduce the selectFamiliar logic from main.ts
 function selectFamiliar(registry: FamiliarRegistry, task: TaskState): Familiar {

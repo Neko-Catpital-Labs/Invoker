@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { runHeadless } from '../headless.js';
 import type { HeadlessDeps } from '../headless.js';
-import { Orchestrator } from '@invoker/core';
-import { SQLiteAdapter } from '@invoker/persistence';
+import { Orchestrator } from '@invoker/workflow-core';
+import { SQLiteAdapter } from '@invoker/data-store';
 import type { MessageBus } from '@invoker/transport';
 import { LocalBus } from '@invoker/transport';
 

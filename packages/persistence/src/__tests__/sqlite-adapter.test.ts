@@ -4,8 +4,8 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { SQLiteAdapter } from '../sqlite-adapter.js';
 import type { Workflow, Conversation } from '../adapter.js';
-import { createAttempt } from '@invoker/core';
-import type { TaskState, TaskStateChanges } from '@invoker/core';
+import { createAttempt } from '@invoker/workflow-core';
+import type { TaskState, TaskStateChanges } from '@invoker/workflow-core';
 
 describe('SQLiteAdapter', () => {
   let adapter: SQLiteAdapter;

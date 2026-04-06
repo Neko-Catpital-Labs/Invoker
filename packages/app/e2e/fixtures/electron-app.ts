@@ -6,7 +6,7 @@
  * Set INVOKER_E2E_KEEP_TMP=1 to skip deleting the temp INVOKER_DB_DIR after each test (debugging).
  */
 
-import type { TaskStateChanges } from '@invoker/core';
+import type { TaskStateChanges } from '@invoker/workflow-core';
 import { test as base, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test';
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';

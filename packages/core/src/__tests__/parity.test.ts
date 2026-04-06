@@ -21,7 +21,7 @@ import type {
   OrchestratorMessageBus,
 } from '../orchestrator.js';
 import type { TaskState, TaskDelta, TaskStateChanges, Attempt } from '../task-types.js';
-import type { WorkResponse } from '@invoker/protocol';
+import type { WorkResponse } from '@invoker/contracts';
 
 // ── In-Memory Test Doubles ──────────────────────────────────
 

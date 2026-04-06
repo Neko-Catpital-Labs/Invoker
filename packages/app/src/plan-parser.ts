@@ -7,7 +7,7 @@
 
 import { execSync } from 'node:child_process';
 import { parse as parseYaml } from 'yaml';
-import type { PlanDefinition } from '@invoker/core';
+import type { PlanDefinition } from '@invoker/workflow-core';
 import { loadConfig } from './config.js';
 import { normalizeMergeModeForPersistence } from './merge-mode.js';
 

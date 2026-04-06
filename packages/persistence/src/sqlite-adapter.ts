@@ -8,8 +8,8 @@
 import initSqlJs, { type Database as SqlJsDatabase } from 'sql.js';
 import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync } from 'node:fs';
 import { dirname } from 'node:path';
-import type { TaskState, TaskStateChanges, Attempt, TaskStatus } from '@invoker/core';
-import { normalizeFamiliarType } from '@invoker/core';
+import type { TaskState, TaskStateChanges, Attempt, TaskStatus } from '@invoker/workflow-core';
+import { normalizeFamiliarType } from '@invoker/workflow-core';
 import type { PersistenceAdapter, Workflow, TaskEvent, ActivityLogEntry, Conversation, ConversationMessage } from './adapter.js';
 
 /**

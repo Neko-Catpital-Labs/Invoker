@@ -16,9 +16,9 @@ import {
   type PlanDefinition,
   type TaskState,
   type OrchestratorMessageBus,
-} from '@invoker/core';
-import type { WorkResponse } from '@invoker/protocol';
-import { InMemoryPersistence } from '@invoker/test-utils';
+} from '@invoker/workflow-core';
+import type { WorkResponse } from '@invoker/contracts';
+import { InMemoryPersistence } from '@invoker/test-kit';
 
 class InMemoryBus implements OrchestratorMessageBus {
   publish(): void {}

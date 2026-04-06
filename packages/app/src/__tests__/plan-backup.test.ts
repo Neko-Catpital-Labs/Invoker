@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { mkdirSync, readFileSync, rmSync, existsSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { backupPlan } from '../plan-backup.js';
-import type { PlanDefinition } from '@invoker/core';
+import type { PlanDefinition } from '@invoker/workflow-core';
 
 const backupDir = join(homedir(), '.invoker', 'plans');
 

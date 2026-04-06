@@ -8,11 +8,11 @@ export default defineConfig({
   // Bundle workspace deps (their package.json point to .ts source, won't load at runtime).
   // sql.js/dockerode stay external — resolved from node_modules.
   noExternal: [
-    '@invoker/core',
-    '@invoker/protocol',
-    '@invoker/persistence',
+    '@invoker/workflow-core',
+    '@invoker/contracts',
+    '@invoker/data-store',
     '@invoker/transport',
-    '@invoker/executors',
+    '@invoker/execution-engine',
     'yaml',
   ],
   external: ['@slack/bolt', 'sql.js', 'dockerode'],

@@ -1,0 +1,19 @@
+{
+  "files": [],
+  "references": [
+    { "path": "packages/contracts" },
+    { "path": "packages/data-store" },
+    { "path": "packages/execution-engine" },
+    { "path": "packages/runtime-adapters" },
+    { "path": "packages/runtime-domain" },
+    { "path": "packages/runtime-service" },
+    { "path": "packages/shell" },
+    { "path": "packages/test-kit" },
+    { "path": "packages/transport" },
+    { "path": "packages/ui" },
+    { "path": "packages/workflow-core" },
+    { "path": "packages/workflow-graph" },
+    { "path": "packages/surfaces" },
+    { "path": "packages/app" }
+  ]
+}

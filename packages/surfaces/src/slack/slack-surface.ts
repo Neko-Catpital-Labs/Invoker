@@ -14,7 +14,7 @@ import { splitForSlack, sanitizeSlashCommands } from './slack-message-helpers.js
 import type { SlackMessage } from './slack-formatter.js';
 import { PlanConversation } from './plan-conversation.js';
 import { SessionManager, SessionIdentifier } from './thread-session-manager.js';
-import type { ConversationRepository } from '@invoker/persistence';
+import type { ConversationRepository } from '@invoker/data-store';
 
 // ── Config ──────────────────────────────────────────────────
 

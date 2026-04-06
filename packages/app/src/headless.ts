@@ -9,9 +9,10 @@
  * This file handles CLI parsing, TaskExecutor lifecycle, and output formatting.
  */
 
-import { Orchestrator } from '@invoker/core';
-import type { TaskDelta, TaskState } from '@invoker/core';
-import type { SQLiteAdapter } from '@invoker/persistence';
+import { Orchestrator } from '@invoker/workflow-core';
+import type { TaskDelta, TaskState } from '@invoker/workflow-core';
+import type { SQLiteAdapter } from '@invoker/data-store';
+import { createDeleteAllSnapshot } from './delete-all-snapshot.js';
 import { resolve as resolvePath } from 'node:path';
 import { Channels } from '@invoker/transport';
 import type { MessageBus } from '@invoker/transport';
@@ -24,7 +25,7 @@ import {
   registerBuiltinAgents,
   assertPlanExecutionAgentsRegistered,
   type AgentRegistry,
-} from '@invoker/executors';
+} from '@invoker/execution-engine';
 import { loadConfig, type InvokerConfig } from './config.js';
 import { backupPlan } from './plan-backup.js';
 import { startApiServer } from './api-server.js';
@@ -133,6 +134,13 @@ function warnDeprecated(oldCmd: string, newCmd: string): void {
   );
 }
 
+function assertDeleteAllEnabled(): void {
+  if (process.env.INVOKER_ALLOW_DELETE_ALL === '1') return;
+  throw new Error(
+    'delete-all is disabled by default. Set INVOKER_ALLOW_DELETE_ALL=1 to enable it explicitly.',
+  );
+}
+
 // ── Query Flag Parsing ──────────────────────────────────────
 
 export interface QueryFlags {
@@ -226,7 +234,7 @@ async function headlessQuery(args: string[], deps: HeadlessDeps): Promise<void> 
         throw new Error(`Workflow "${workflowFilter}" not found.`);
       }
 
-      let allTasks: import('@invoker/core').TaskState[] = [];
+      let allTasks: import('@invoker/workflow-core').TaskState[] = [];
       for (const wf of targetWorkflows) {
         // Query must stay read-only: sync graph from DB without starting/restarting tasks.
         orchestrator.syncFromDb(wf.id);
@@ -433,6 +441,15 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
       await headlessDeleteWorkflow(args[1], deps);
       break;
     case 'delete-all':
+      assertDeleteAllEnabled();
+      {
+        const snapshot = createDeleteAllSnapshot();
+        if (snapshot) {
+          process.stderr.write(`[headless] delete-all snapshot: ${snapshot}\n`);
+        } else {
+          process.stderr.write('[headless] delete-all snapshot skipped: DB file does not exist yet\n');
+        }
+      }
       deps.orchestrator.deleteAllWorkflows();
       console.log('All workflows deleted.');
       break;
@@ -543,7 +560,7 @@ ${BOLD}Lifecycle:${RESET}
   cancel <taskId>                                     Cancel task + all downstream
   cancel-workflow <workflowId>                        Cancel all active tasks in a workflow
   delete <workflowId>                                 Delete a single workflow
-  delete-all                                          Delete all workflows
+  delete-all                                          Delete all workflows (requires INVOKER_ALLOW_DELETE_ALL=1)
   open-terminal <taskId>                              Open OS terminal for a task
   slack                                               Start Slack bot (long-running)
 
@@ -930,8 +947,8 @@ export async function resolveAgentSession(
   sessionId: string,
   agentName: string,
   registry?: AgentRegistry,
-  allTasks?: import('@invoker/core').TaskState[],
-): Promise<import('@invoker/executors').AgentMessage[] | null> {
+  allTasks?: import('@invoker/workflow-core').TaskState[],
+): Promise<import('@invoker/execution-engine').AgentMessage[] | null> {
   const driver = registry?.getSessionDriver(agentName);
   if (!driver) return null;
 

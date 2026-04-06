@@ -21,6 +21,9 @@ export NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--max-old-space-size=512"
 invoker_e2e_init() {
   # Avoid headless→GUI IPC delegation when ~/.invoker/ipc-transport.sock is held by a non-GUI process.
   export INVOKER_HEADLESS_STANDALONE=1
+  # Safety rail in app/headless: delete-all requires explicit opt-in.
+  # E2E suites use isolated temp DB dirs, so enabling here is safe.
+  export INVOKER_ALLOW_DELETE_ALL=1
   # Isolate each e2e run from other local Invoker instances/tests to avoid API port collisions.
   export INVOKER_API_PORT="${INVOKER_API_PORT:-$((4300 + (RANDOM % 1000)))}"
   export INVOKER_DB_DIR="$(mktemp -d "${TMPDIR:-/tmp}/invoker-e2e-db.XXXXXX")"
@@ -49,10 +52,8 @@ invoker_e2e_cleanup() {
 }
 
 invoker_e2e_ensure_app_built() {
-  if [ ! -f "$INVOKER_E2E_REPO_ROOT/packages/app/dist/main.js" ]; then
-    echo "==> e2e-dry-run: building @invoker/app (dist missing)"
-    (cd "$INVOKER_E2E_REPO_ROOT" && pnpm --filter @invoker/app build)
-  fi
+  echo "==> e2e-dry-run: building @invoker/app"
+  (cd "$INVOKER_E2E_REPO_ROOT" && pnpm --filter @invoker/app build)
 }
 
 # Run a headless Electron command with a timeout. Kills the process if it exceeds

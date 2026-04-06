@@ -6,7 +6,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { stringify as stringifyYaml } from 'yaml';
-import type { PlanDefinition } from '@invoker/core';
+import type { PlanDefinition } from '@invoker/workflow-core';
 
 let backupCounter = 0;
 

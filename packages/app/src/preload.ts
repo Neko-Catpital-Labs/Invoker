@@ -6,7 +6,7 @@
  */
 
 import { contextBridge, ipcRenderer } from 'electron';
-import type { TaskStateChanges } from '@invoker/core';
+import type { TaskStateChanges } from '@invoker/workflow-core';
 import type { InvokerAPI } from './types.js';
 
 const api: InvokerAPI = {

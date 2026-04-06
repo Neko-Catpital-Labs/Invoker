@@ -10,8 +10,8 @@ import {
   formatAsJson,
   formatAsJsonl,
 } from '../formatter.js';
-import type { TaskState } from '@invoker/core';
-import type { TaskEvent, Workflow } from '@invoker/persistence';
+import type { TaskState } from '@invoker/workflow-core';
+import type { TaskEvent, Workflow } from '@invoker/data-store';
 
 // ── ANSI Code Constants ──────────────────────────────────────
 

@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { PlanConversation, extractYamlPlan } from '../slack/plan-conversation.js';
-import { SQLiteAdapter } from '@invoker/persistence';
-import { ConversationRepository } from '@invoker/persistence';
-import type { PlanDefinition } from '@invoker/core';
+import { SQLiteAdapter } from '@invoker/data-store';
+import { ConversationRepository } from '@invoker/data-store';
+import type { PlanDefinition } from '@invoker/workflow-core';
 import * as child_process from 'node:child_process';
 import { EventEmitter } from 'node:events';
 

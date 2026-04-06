@@ -5,9 +5,9 @@
  * following the pattern from resolve-conflict-action.test.ts.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { Orchestrator } from '@invoker/core';
-import type { SQLiteAdapter } from '@invoker/persistence';
-import type { TaskExecutor } from '@invoker/executors';
+import type { Orchestrator } from '@invoker/workflow-core';
+import type { SQLiteAdapter } from '@invoker/data-store';
+import type { TaskExecutor } from '@invoker/execution-engine';
 import {
   bumpGenerationAndRecreate,
   recreateWorkflow,
