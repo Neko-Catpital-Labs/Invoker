@@ -8,34 +8,56 @@ Capture before/after UI screenshots and video for Invoker plans that modify the 
 - User asks for visual proof, before/after screenshots, or UI regression screenshots
 - Reviewing a UI change and wanting to see what changed visually
 
-## Architecture
+## Subcommands
 
-### Capture script
+The script `scripts/ui-visual-proof.sh` provides four explicit subcommands:
 
-`scripts/ui-visual-proof.sh` captures screenshots and video for the **current working tree state**. It does not handle git checkouts or before/after orchestration — the caller does that.
+### capture-before
+
+Capture "before" screenshots to `packages/app/e2e/visual-proof/before/`.
 
 ```bash
-scripts/ui-visual-proof.sh [--label <name>] [--output-dir <dir>] [--spec <file>] [--skip-build]
+bash scripts/ui-visual-proof.sh capture-before
 ```
 
-| Option | Default | Description |
-|--------|---------|-------------|
-| `--label` | `capture` | Subdirectory name under output-dir |
-| `--output-dir` | `packages/app/e2e/visual-proof` | Base directory for captures |
-| `--spec` | `visual-proof.spec.ts` | Playwright spec file to run |
-| `--skip-build` | false | Skip `pnpm build` (when already built) |
+Builds UI and app, runs Playwright tests, saves screenshots and video. Fails fast if build fails.
 
-Output structure:
+### capture-after
 
+Capture "after" screenshots to `packages/app/e2e/visual-proof/after/`.
+
+```bash
+bash scripts/ui-visual-proof.sh capture-after
 ```
-<output-dir>/<label>/
-  ├── empty-state.png
-  ├── dag-loaded.png
-  ├── task-running.png
-  ├── task-complete.png
-  ├── task-panel.png
-  └── walkthrough.webm
+
+Same build and capture process as `capture-before`, outputs to `after/` directory.
+
+### compare
+
+Generate diff images and side-by-side video comparison.
+
+```bash
+bash scripts/ui-visual-proof.sh compare
 ```
+
+Requires:
+- `before/` and `after/` directories exist with matching `.png` files
+- `ffmpeg` installed (for video comparison)
+- Optional: ImageMagick `compare` (for per-image pixel diffs)
+
+Outputs to `packages/app/e2e/visual-proof/diff/`.
+
+### embed
+
+Generate markdown with base64-encoded before/after images.
+
+```bash
+bash scripts/ui-visual-proof.sh embed
+```
+
+Requires `before/` and `after/` directories. Outputs to `packages/app/e2e/visual-proof/EMBED.md`.
+
+## Architecture
 
 ### Playwright spec
 
@@ -44,54 +66,15 @@ Output structure:
 2. Waits for the UI to reach the desired state
 3. Calls `captureScreenshot(page, 'state-name')` which saves a PNG when `CAPTURE_MODE` is set
 
-### How captureScreenshot works
-
-Defined in `packages/app/e2e/fixtures/electron-app.ts`:
-- No-op unless `CAPTURE_MODE` env var is set
-- Waits for animations to settle (`waitForStableUI`)
-- Saves full-page screenshot to `packages/app/e2e/visual-proof/<CAPTURE_MODE>/<name>.png`
-
-### Video capture
-
-Playwright's built-in video recording is enabled via `CAPTURE_VIDEO=1` env var in `packages/app/playwright.config.ts`. The script copies the `.webm` file from `packages/app/e2e/test-results/` to the output directory.
-
-### Prerequisites
-
-- **Linux**: Requires `xvfb-run` (headless X server for Electron)
-- **Built app**: The script builds by default; use `--skip-build` to skip
-
-## Workflows
-
-### Manual before/after comparison
-
-```bash
-# 1. Capture baseline on the base branch
-git checkout main
-bash scripts/ui-visual-proof.sh --label before
-
-# 2. Capture after on the feature branch
-git checkout feat/my-ui-change
-bash scripts/ui-visual-proof.sh --label after
-
-# 3. Compare screenshots in packages/app/e2e/visual-proof/{before,after}/
-```
+`captureScreenshot` is defined in `packages/app/e2e/fixtures/electron-app.ts`. It's a no-op unless `CAPTURE_MODE` env var is set.
 
 ### Automatic (merge gate)
 
-When `visualProof: true` is set on a plan, the merge gate in `TaskExecutor.runVisualProofCapture()` (in `packages/executors/src/task-executor.ts`) automatically:
-1. Checks out the base branch → runs the capture script with `--label before`
-2. Checks out the feature branch → runs the capture script with `--label after`
-3. Uploads assets to R2 via `scripts/upload-pr-images.mjs`
-4. Generates markdown with before/after image tables
-5. Embeds the markdown in the PR body
+When `visualProof: true` is set on a plan, the merge gate in `TaskExecutor.runVisualProofCapture()` (in `packages/executors/src/task-executor.ts`) runs the capture subcommands and uploads assets to R2 via `scripts/upload-pr-images.mjs`
 
 ### Adding new visual proof states
 
-To capture a new UI state (e.g. approval modal, merge gate):
-
-1. Edit `packages/app/e2e/visual-proof.spec.ts`
-2. Add a new test case that sets up the state and calls `captureScreenshot(page, 'my-state')`
-3. The capture script will automatically include it
+Edit `packages/app/e2e/visual-proof.spec.ts` and add a test case that calls `captureScreenshot(page, 'my-state')`. The capture subcommands will automatically include it.
 
 Example:
 
@@ -101,9 +84,7 @@ test('approval modal', async ({ page }) => {
   await startPlan(page);
   await waitForTaskStatus(page, 'task-1', 'awaiting_approval', 30000);
   await page.locator('[data-testid="rf__node-task-1"]').click();
-  // Open approval modal via task panel
   await page.getByText('Approve').click();
-  await expect(page.getByText('Manual Approval Required')).toBeVisible();
   await captureScreenshot(page, 'approval-modal');
 });
 ```
@@ -126,14 +107,11 @@ UI-change plans must include explicit visual proof tasks, not just the `visualPr
 
 ### Before (Phase 1b-visual)
 
-During plan verification (Phase 1b), the agent captures "before" screenshots on the **base branch**:
+During plan verification (Phase 1b), capture "before" screenshots on the **base branch**:
 
 ```bash
-git checkout master   # or whatever the base branch is
-bash scripts/ui-visual-proof.sh --label before
+bash scripts/ui-visual-proof.sh capture-before
 ```
-
-This produces `packages/app/e2e/visual-proof/before/*.png`. These screenshots persist across the plan execution.
 
 ### Plan tasks (implementation YAML)
 
@@ -142,77 +120,29 @@ The implementation plan must include two visual-proof-related tasks:
 1. **E2E test case task** (`prompt`): Adds a plan-specific test to `visual-proof.spec.ts` that
    captures the exact UI state being changed. Runs in parallel with implementation tasks.
 
-2. **Capture task** (`command`): Builds and captures "after" screenshots. Depends on all
+2. **Capture task** (`command`): Captures "after" screenshots. Depends on all
    implementation tasks + the E2E test case task:
+   ```bash
+   bash scripts/ui-visual-proof.sh capture-after
    ```
-   pnpm --filter @invoker/ui build && pnpm --filter @invoker/app build && bash scripts/ui-visual-proof.sh --label after
-   ```
-
-### After (merge gate)
-
-The merge gate's `runVisualProofCapture()` also runs the capture script automatically (separate
-from the plan tasks). Both the plan-task screenshots and the merge-gate screenshots are available.
 
 ## Writing plan-specific E2E test cases
 
 Each UI plan should add a test case to `packages/app/e2e/visual-proof.spec.ts` that targets
-the exact UI state being changed. This ensures the before/after screenshots show the relevant
-change, not just generic UI states.
+the exact UI state being changed.
 
 ### Pattern
 
 ```typescript
 test('<plan-slug> — <state description>', async ({ page }) => {
-  // 1. Set up the app state via IPC bridge
   await loadPlan(page, MY_PLAN);
   await startPlan(page);
-
-  // 2. Wait for the specific state
   await waitForTaskStatus(page, 'task-id', 'awaiting_approval', 30000);
-
-  // 3. Navigate to the UI being tested
   await page.locator('[data-testid="rf__node-task-id"]').click();
   await page.getByText('Approve').click();
-
-  // 4. Assert the state is correct
-  await expect(page.getByText('Expected Label')).toBeVisible();
-
-  // 5. Capture
   await captureScreenshot(page, '<plan-slug>-<state>');
 });
 ```
-
-### Setting up specific app states
-
-Use `loadPlan()` with a custom plan constant. Define it at the top of the spec file or inline:
-
-```typescript
-const APPROVAL_PLAN = {
-  name: 'Approval test',
-  onFinish: 'none' as const,
-  tasks: [
-    {
-      id: 'task-needs-approval',
-      description: 'Task requiring manual approval',
-      command: 'echo done',
-      dependencies: [],
-      requiresManualApproval: true,
-    },
-  ],
-};
-```
-
-For fix-approval states, you can use `window.invoker` to directly manipulate task state
-after loading (e.g. calling internal APIs to set `pendingFixError`).
-
-### Naming convention
-
-Screenshot names: `<plan-slug>-<state>.png`
-
-Examples:
-- `fix-approval-labels-modal.png`
-- `merge-gate-github-pr.png`
-- `modal-overflow-scrolled.png`
 
 ### Available helpers
 
