@@ -419,6 +419,33 @@ describe('bashMergeUpstreams', () => {
     expect(status).toBe('');
   });
 
+  it('auto-resolves tsbuildinfo-only merge conflicts and continues', async () => {
+    // Create upstream branch touching only a generated artifact path.
+    gitExec('git checkout -b conflict-buildinfo', repoDir);
+    const generated = join(repoDir, 'packages', 'protocol');
+    execSync(`mkdir -p "${generated}"`);
+    writeFileSync(join(generated, 'tsconfig.tsbuildinfo'), 'upstream-generated');
+    gitExec('git add -A && git commit -m "upstream generated artifact"', repoDir);
+    gitExec('git checkout master', repoDir);
+
+    // Create conflicting local version in worktree.
+    const wtGenerated = join(wtDir, 'packages', 'protocol');
+    execSync(`mkdir -p "${wtGenerated}"`);
+    writeFileSync(join(wtGenerated, 'tsconfig.tsbuildinfo'), 'worktree-generated');
+    gitExec('git add -A && git commit -m "worktree generated artifact"', wtDir);
+
+    const script = bashMergeUpstreams({
+      worktreeDir: wtDir,
+      upstreamBranches: ['conflict-buildinfo'],
+    });
+    const stdout = await runBashLocal(script);
+
+    expect(stdout).toContain('AUTO_RESOLVED_GENERATED_CONFLICTS=conflict-buildinfo');
+    // We intentionally keep the current branch's generated artifact.
+    expect(readFileSync(join(wtGenerated, 'tsconfig.tsbuildinfo'), 'utf-8')).toBe('worktree-generated');
+    expect(gitExec('git status --porcelain', wtDir)).toBe('');
+  });
+
   it('merges multiple branches in order', async () => {
     // Create two upstream branches
     gitExec('git checkout -b upstream-x', repoDir);
@@ -439,6 +466,30 @@ describe('bashMergeUpstreams', () => {
 
     expect(readFileSync(join(wtDir, 'x.txt'), 'utf-8')).toBe('x');
     expect(readFileSync(join(wtDir, 'y.txt'), 'utf-8')).toBe('y');
+  });
+
+  it('resets dirty worktree state before merge to avoid false merge_conflict', async () => {
+    // Upstream branch introduces a new tracked file.
+    gitExec('git checkout -b upstream-clean-merge', repoDir);
+    writeFileSync(join(repoDir, 'fresh.txt'), 'from-upstream');
+    gitExec('git add -A && git commit -m "add fresh file"', repoDir);
+    gitExec('git checkout master', repoDir);
+
+    // Dirty the worktree with tracked + untracked files that would block merge.
+    writeFileSync(join(wtDir, 'initial.txt'), 'local-dirty-change');
+    writeFileSync(join(wtDir, 'scratch.tmp'), 'untracked-junk');
+    // Stage tracked change so merge would definitely complain without cleanup.
+    gitExec('git add initial.txt', wtDir);
+
+    const script = bashMergeUpstreams({
+      worktreeDir: wtDir,
+      upstreamBranches: ['upstream-clean-merge'],
+    });
+    await runBashLocal(script);
+
+    expect(readFileSync(join(wtDir, 'fresh.txt'), 'utf-8')).toBe('from-upstream');
+    // Dirty tracked+untracked state should be removed by pre-merge cleanup.
+    expect(gitExec('git status --porcelain', wtDir)).toBe('');
   });
 });
 

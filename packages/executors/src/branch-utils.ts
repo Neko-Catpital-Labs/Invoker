@@ -111,6 +111,11 @@ export function bashMergeUpstreams(opts: MergeUpstreamsOpts): string {
 
   return `set -euo pipefail
 WT_DIR=${q(worktreeDir)}
+# Reused worktrees can retain dirty tracked/untracked files from interrupted runs.
+# Normalize to HEAD so upstream merges are deterministic and not blocked by
+# "local changes would be overwritten by merge".
+git -C "$WT_DIR" reset --hard HEAD >/dev/null 2>&1 || true
+git -C "$WT_DIR" clean -fd >/dev/null 2>&1 || true
 for upBranch in ${branches}; do
   # Resolve: try bare name first, then origin/ prefix
   if git -C "$WT_DIR" rev-parse --verify "$upBranch" >/dev/null 2>&1; then
@@ -127,6 +132,35 @@ ${skipAncestors ? `  if git -C "$WT_DIR" merge-base --is-ancestor "$upRef" HEAD 
     continue
   fi` : ''}
   if ! git -C "$WT_DIR" merge --no-edit -m "Invoker: merge $upBranch" "$upRef" 2>&1; then
+    conflictFiles=$(git -C "$WT_DIR" diff --name-only --diff-filter=U 2>/dev/null || true)
+    hadConflicts=0
+    nonGeneratedConflict=0
+    if [ -n "$conflictFiles" ]; then
+      hadConflicts=1
+    fi
+    while IFS= read -r f; do
+      [ -z "$f" ] && continue
+      case "$f" in
+        *.tsbuildinfo)
+          # Deterministic generated artifact: keep current branch version.
+          git -C "$WT_DIR" checkout --ours -- "$f" 2>/dev/null || true
+          git -C "$WT_DIR" add -- "$f" 2>/dev/null || true
+          ;;
+        *)
+          nonGeneratedConflict=1
+          ;;
+      esac
+    done <<EOF
+$conflictFiles
+EOF
+    if [ "$hadConflicts" -eq 1 ] && [ "$nonGeneratedConflict" -eq 0 ]; then
+      # All conflicts were generated files; finish merge automatically.
+      if [ -z "$(git -C "$WT_DIR" diff --name-only --diff-filter=U 2>/dev/null)" ] && \
+         git -C "$WT_DIR" commit --no-edit >/dev/null 2>&1; then
+        echo "AUTO_RESOLVED_GENERATED_CONFLICTS=$upBranch"
+        continue
+      fi
+    fi
     echo "MERGE_CONFLICT_BRANCH=$upBranch" >&2
     git -C "$WT_DIR" diff --name-only --diff-filter=U 2>/dev/null | while IFS= read -r f; do
       [ -n "$f" ] && echo "MERGE_CONFLICT_FILE=$f" >&2
