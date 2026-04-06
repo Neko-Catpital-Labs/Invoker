@@ -68,3 +68,15 @@ must_contain "$PLAYBOOK" "pnpm test" "Playbook must document pnpm test for behav
 must_contain "$PLAYBOOK" "Invoker is mandatory" "Playbook must warn when Invoker verification is mandatory"
 
 echo "OK: plan-to-invoker skill contract checks passed"
+
+# Run validator regression tests
+echo ""
+echo "Running plan validator regression tests..."
+VALIDATOR_TEST_SCRIPT="$REPO_ROOT/skills/plan-to-invoker/scripts/test-validate-plan.sh"
+if [[ -f "$VALIDATOR_TEST_SCRIPT" ]]; then
+  if ! bash "$VALIDATOR_TEST_SCRIPT"; then
+    fail "Plan validator regression tests failed"
+  fi
+else
+  fail "Validator test script not found: $VALIDATOR_TEST_SCRIPT"
+fi
