@@ -5,6 +5,20 @@ set -e
 REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
 cd "$REPO_ROOT"
 
+# Hard safety guard: never allow headless delete-all to target the default
+# production DB unless explicitly overridden.
+if [ "${1:-}" = "--headless" ] && [ "${2:-}" = "delete-all" ]; then
+  DB_ROOT="${INVOKER_DB_DIR:-$HOME/.invoker}"
+  PROD_ROOT="$HOME/.invoker"
+
+  if [ "${INVOKER_ALLOW_PRODUCTION_DELETE_ALL:-0}" != "1" ] && [ "$DB_ROOT" = "$PROD_ROOT" ]; then
+    echo "ERROR: Refusing to run 'delete-all' against production DB root: $DB_ROOT" >&2
+    echo "Set INVOKER_DB_DIR to an isolated temp directory for tests." >&2
+    echo "Override only if intentional: INVOKER_ALLOW_PRODUCTION_DELETE_ALL=1" >&2
+    exit 64
+  fi
+fi
+
 # Ensure workspace dependencies are linked before building.
 # This is typically a no-op when the workspace is already up to date.
 pnpm install --frozen-lockfile
