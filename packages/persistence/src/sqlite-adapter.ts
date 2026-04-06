@@ -178,6 +178,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         prompt TEXT,
         exit_code INTEGER,
         error TEXT,
+        merge_conflict TEXT,
         input_prompt TEXT,
         external_dependencies TEXT,
 
@@ -336,6 +337,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       'ALTER TABLE tasks ADD COLUMN selected_experiments TEXT',
       'ALTER TABLE tasks ADD COLUMN utilization INTEGER',
       'ALTER TABLE tasks ADD COLUMN pending_fix_error TEXT',
+      'ALTER TABLE tasks ADD COLUMN merge_conflict TEXT',
       'ALTER TABLE workflows ADD COLUMN merge_mode TEXT',
       'ALTER TABLE tasks ADD COLUMN review_url TEXT',
       'ALTER TABLE tasks ADD COLUMN review_id TEXT',
@@ -461,6 +463,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       INSERT OR REPLACE INTO tasks (
         id, workflow_id, description, status, blocked_by, dependencies,
         command, prompt, experiment_prompt, exit_code, error, input_prompt, external_dependencies,
+        merge_conflict,
         summary, problem, approach, test_plan, repro_command,
         branch, commit_hash, parent_task,
         pivot, experiment_variants, is_reconciliation, selected_experiment,
@@ -479,7 +482,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         agent_name
       ) VALUES (
         ?, ?, ?, ?, ?, ?,
-        ?, ?, ?, ?, ?, ?, ?,
+        ?, ?, ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?,
         ?, ?, ?,
         ?, ?, ?, ?,
@@ -504,6 +507,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       cfg.command ?? null, cfg.prompt ?? null, cfg.experimentPrompt ?? null,
       exec.exitCode ?? null, exec.error ?? null, exec.inputPrompt ?? null,
       cfg.externalDependencies ? JSON.stringify(cfg.externalDependencies) : null,
+      exec.mergeConflict ? JSON.stringify(exec.mergeConflict) : null,
       cfg.summary ?? null, cfg.problem ?? null, cfg.approach ?? null,
       cfg.testPlan ?? null, cfg.reproCommand ?? null,
       exec.branch ?? null, exec.commit ?? null, cfg.parentTask ?? null,
@@ -634,6 +638,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         experiments: 'experiments',
         selectedExperiments: 'selected_experiments',
         experimentResults: 'experiment_results',
+        mergeConflict: 'merge_conflict',
       };
 
       for (const [key, col] of Object.entries(execMap)) {
@@ -1206,6 +1211,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         inputPrompt: row.input_prompt ?? undefined,
         exitCode: row.exit_code ?? undefined,
         error: row.error ?? undefined,
+        mergeConflict: row.merge_conflict ? JSON.parse(row.merge_conflict) : undefined,
         startedAt: row.started_at ? new Date(row.started_at) : undefined,
         completedAt: row.completed_at ? new Date(row.completed_at) : undefined,
         lastHeartbeatAt: row.last_heartbeat_at ? new Date(row.last_heartbeat_at) : undefined,

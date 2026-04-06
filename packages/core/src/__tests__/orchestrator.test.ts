@@ -4776,7 +4776,7 @@ describe('Orchestrator', () => {
       expect(task.execution.pendingFixError).toBeUndefined();
     });
 
-    it('non-merge plain-text pendingFixError approve transitions failed -> fixing_with_ai -> awaiting_approval -> completed', async () => {
+    it('non-merge plain-text pendingFixError approve transitions failed -> fixing_with_ai -> awaiting_approval -> running and clears pendingFixError', async () => {
       const plainTextError = 'test failed: expected 1 to be 2';
 
       expect(orchestrator.getTask('f2')!.config.isMergeNode).toBeFalsy();
@@ -4791,7 +4791,44 @@ describe('Orchestrator', () => {
       expect(orchestrator.getTask('f2')!.execution.pendingFixError).toBe(plainTextError);
 
       await orchestrator.approve('f2');
-      expect(orchestrator.getTask('f2')!.status).toBe('completed');
+      const task = orchestrator.getTask('f2')!;
+      expect(task.status).toBe('running');
+      expect(task.status).not.toBe('completed');
+      expect(task.execution.pendingFixError).toBeUndefined();
+    });
+
+    it('repro: non-merge fix approval executes the restartTask codepath', async () => {
+      const mergeConflictError = JSON.stringify({
+        type: 'merge_conflict',
+        failedBranch: 'experiment/repro-branch',
+        conflictFiles: ['packages/test-utils/package.json', 'pnpm-lock.yaml'],
+      });
+
+      persistence.updateTask('f2', {
+        execution: {
+          error: mergeConflictError,
+          mergeConflict: {
+            failedBranch: 'experiment/repro-branch',
+            conflictFiles: ['packages/test-utils/package.json', 'pnpm-lock.yaml'],
+          },
+        },
+      });
+
+      orchestrator.beginConflictResolution('f2');
+      orchestrator.setFixAwaitingApproval('f2', mergeConflictError);
+      expect(orchestrator.getTask('f2')!.status).toBe('awaiting_approval');
+
+      const restartSpy = vi.spyOn(orchestrator, 'restartTask');
+      const started = await orchestrator.approve('f2');
+
+      expect(restartSpy).toHaveBeenCalledTimes(1);
+      expect(restartSpy).toHaveBeenCalledWith('f2');
+      expect(started.some((t) => t.id === sid(orchestrator, 0, 'f2') && t.status === 'running')).toBe(true);
+
+      const task = orchestrator.getTask('f2')!;
+      expect(task.status).toBe('running');
+      expect(task.execution.pendingFixError).toBeUndefined();
+      expect(task.execution.mergeConflict).toBeUndefined();
     });
   });
 

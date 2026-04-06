@@ -76,6 +76,12 @@ export interface RawPlan {
   reviewProvider?: string;
   repoUrl?: string;
   familiarType?: string;
+  externalDependencies?: Array<{
+    workflowId?: string;
+    taskId?: string;
+    requiredStatus?: string;
+    gatePolicy?: string;
+  }>;
   tasks?: RawPlanTask[];
 }
 
@@ -124,6 +130,66 @@ export class PlanParseError extends Error {
     super(message);
     this.name = 'PlanParseError';
   }
+}
+
+type ParsedExternalDependency = {
+  workflowId: string;
+  taskId: string;
+  requiredStatus: 'completed';
+  gatePolicy: 'approved' | 'review_ready';
+};
+
+function parseExternalDependencies(
+  ownerLabel: string,
+  deps?: Array<{ workflowId?: string; taskId?: string; requiredStatus?: string; gatePolicy?: string }>,
+): ParsedExternalDependency[] | undefined {
+  if (!deps) return undefined;
+  return deps.map((dep, depIndex) => {
+    if (!dep.workflowId || typeof dep.workflowId !== 'string') {
+      throw new PlanParseError(
+        `${ownerLabel} externalDependencies[${depIndex}] must have a string "workflowId"`,
+      );
+    }
+    if (dep.taskId !== undefined && typeof dep.taskId !== 'string') {
+      throw new PlanParseError(
+        `${ownerLabel} externalDependencies[${depIndex}] "taskId" must be a string when provided`,
+      );
+    }
+    if (dep.requiredStatus !== undefined && dep.requiredStatus !== 'completed') {
+      throw new PlanParseError(
+        `${ownerLabel} externalDependencies[${depIndex}] "requiredStatus" must be "completed"`,
+      );
+    }
+    if (dep.gatePolicy !== undefined && dep.gatePolicy !== 'approved' && dep.gatePolicy !== 'review_ready') {
+      throw new PlanParseError(
+        `${ownerLabel} externalDependencies[${depIndex}] "gatePolicy" must be "approved" or "review_ready"`,
+      );
+    }
+    const taskId = dep.taskId?.trim() || '__merge__';
+    return {
+      workflowId: dep.workflowId,
+      taskId,
+      requiredStatus: 'completed' as const,
+      gatePolicy: (dep.gatePolicy ?? 'review_ready') as 'approved' | 'review_ready',
+    };
+  });
+}
+
+function mergeExternalDependencies(
+  inheritedDeps: ParsedExternalDependency[] | undefined,
+  taskDeps: ParsedExternalDependency[] | undefined,
+): ParsedExternalDependency[] | undefined {
+  if (!inheritedDeps && !taskDeps) return undefined;
+  const merged = new Map<string, ParsedExternalDependency>();
+  for (const dep of inheritedDeps ?? []) {
+    merged.set(`${dep.workflowId}::${dep.taskId}`, dep);
+  }
+  for (const dep of taskDeps ?? []) {
+    // Task-level declarations override inherited workflow-level defaults.
+    merged.set(`${dep.workflowId}::${dep.taskId}`, dep);
+  }
+  const values = [...merged.values()];
+  return values.length > 0 ? values : undefined;
 }
 
 /**
@@ -184,6 +250,7 @@ export function parsePlan(yamlContent: string): PlanDefinition {
   }
 
   const defaultFamiliarType = raw.familiarType;
+  const topLevelExternalDependencies = parseExternalDependencies('Plan', raw.externalDependencies);
 
   const tasks = raw.tasks.map((task, index) => {
     if (!task.id || typeof task.id !== 'string') {
@@ -201,35 +268,12 @@ export function parsePlan(yamlContent: string): PlanDefinition {
       );
     }
 
-    const externalDependencies = task.externalDependencies?.map((dep, depIndex) => {
-      if (!dep.workflowId || typeof dep.workflowId !== 'string') {
-        throw new PlanParseError(
-          `Task "${task.id}" externalDependencies[${depIndex}] must have a string "workflowId"`,
-        );
-      }
-      if (dep.taskId !== undefined && typeof dep.taskId !== 'string') {
-        throw new PlanParseError(
-          `Task "${task.id}" externalDependencies[${depIndex}] "taskId" must be a string when provided`,
-        );
-      }
-      if (dep.requiredStatus !== undefined && dep.requiredStatus !== 'completed') {
-        throw new PlanParseError(
-          `Task "${task.id}" externalDependencies[${depIndex}] "requiredStatus" must be "completed"`,
-        );
-      }
-      if (dep.gatePolicy !== undefined && dep.gatePolicy !== 'approved' && dep.gatePolicy !== 'review_ready') {
-        throw new PlanParseError(
-          `Task "${task.id}" externalDependencies[${depIndex}] "gatePolicy" must be "approved" or "review_ready"`,
-        );
-      }
-      const taskId = dep.taskId?.trim() || '__merge__';
-      return {
-        workflowId: dep.workflowId,
-        taskId,
-        requiredStatus: 'completed' as const,
-        gatePolicy: (dep.gatePolicy ?? 'review_ready') as 'approved' | 'review_ready',
-      };
-    });
+    const taskExternalDependencies = parseExternalDependencies(`Task "${task.id}"`, task.externalDependencies);
+    const isRootTask = (task.dependencies?.length ?? 0) === 0;
+    const externalDependencies = mergeExternalDependencies(
+      isRootTask ? topLevelExternalDependencies : undefined,
+      taskExternalDependencies,
+    );
 
     // Parse experiment variants if present
     const experimentVariants = task.experimentVariants?.map((v) => ({

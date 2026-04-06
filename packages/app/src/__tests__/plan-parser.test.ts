@@ -166,6 +166,75 @@ tasks:
     ]);
   });
 
+  it('parses top-level externalDependencies and applies them to root tasks', () => {
+    const yaml = `
+name: Workflow Chain Step
+repoUrl: git@github.com:test/repo.git
+externalDependencies:
+  - workflowId: wf-123
+    taskId: __merge__
+tasks:
+  - id: root-a
+    description: Root A
+    command: echo "a"
+  - id: root-b
+    description: Root B
+    command: echo "b"
+  - id: child
+    description: Child
+    command: echo "c"
+    dependencies: [root-a]
+`;
+    const plan = parsePlan(yaml);
+    expect(plan.tasks[0].externalDependencies).toEqual([
+      { workflowId: 'wf-123', taskId: '__merge__', requiredStatus: 'completed', gatePolicy: 'review_ready' },
+    ]);
+    expect(plan.tasks[1].externalDependencies).toEqual([
+      { workflowId: 'wf-123', taskId: '__merge__', requiredStatus: 'completed', gatePolicy: 'review_ready' },
+    ]);
+    expect(plan.tasks[2].externalDependencies).toBeUndefined();
+  });
+
+  it('lets task-level externalDependencies override inherited top-level dependency by workflow+task', () => {
+    const yaml = `
+name: Workflow Chain Override
+repoUrl: git@github.com:test/repo.git
+externalDependencies:
+  - workflowId: wf-123
+    taskId: __merge__
+    gatePolicy: review_ready
+tasks:
+  - id: root
+    description: Root
+    command: echo "go"
+    externalDependencies:
+      - workflowId: wf-123
+        taskId: __merge__
+        gatePolicy: approved
+`;
+    const plan = parsePlan(yaml);
+    expect(plan.tasks[0].externalDependencies).toEqual([
+      { workflowId: 'wf-123', taskId: '__merge__', requiredStatus: 'completed', gatePolicy: 'approved' },
+    ]);
+  });
+
+  it('rejects invalid top-level externalDependencies.gatePolicy', () => {
+    const yaml = `
+name: Bad Top-Level External Dependency Gate Policy
+repoUrl: git@github.com:test/repo.git
+externalDependencies:
+  - workflowId: wf-123
+    taskId: __merge__
+    gatePolicy: whenever
+tasks:
+  - id: gated
+    description: Wait
+    command: echo "go"
+`;
+    expect(() => parsePlan(yaml)).toThrow(PlanParseError);
+    expect(() => parsePlan(yaml)).toThrow('"gatePolicy" must be "approved" or "review_ready"');
+  });
+
   it('rejects invalid externalDependencies.requiredStatus', () => {
     const yaml = `
 name: Bad External Dependency Plan

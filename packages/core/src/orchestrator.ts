@@ -922,21 +922,10 @@ export class Orchestrator {
       return [updated];
     }
 
-    if (
-      !task.config.isMergeNode &&
-      task.execution.pendingFixError !== undefined &&
-      parseMergeConflictError(task.execution.pendingFixError) !== undefined
-    ) {
-      const now = new Date();
-      const fixClearChanges: TaskStateChanges = {
-        status: 'running',
-        execution: { pendingFixError: undefined, startedAt: now, lastHeartbeatAt: now },
-      };
-      this.writeAndSync(taskId, fixClearChanges);
-      const fixDelta: TaskDelta = { type: 'updated', taskId, changes: fixClearChanges };
-      this.persistence.logEvent?.(taskId, 'task.running', fixClearChanges);
-      this.messageBus.publish(TASK_DELTA_CHANNEL, fixDelta);
-      return [this.stateGetTask(taskId)!];
+    if (!task.config.isMergeNode && task.execution.pendingFixError !== undefined) {
+      // Make post-fix approval use the same restart pipeline as explicit retries.
+      // This guarantees identical task reset semantics and scheduler behavior.
+      return this.restartTask(taskId);
     }
 
     if (this.beforeApproveHook) {
@@ -1134,6 +1123,8 @@ export class Orchestrator {
         startedAt: undefined,
         completedAt: undefined,
         error: undefined,
+        pendingFixError: undefined,
+        mergeConflict: undefined,
         exitCode: undefined,
         commit: undefined,
         lastHeartbeatAt: undefined,

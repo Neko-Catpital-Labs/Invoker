@@ -337,6 +337,56 @@ describe('SQLiteAdapter', () => {
   });
 
   describe('pendingFixError persistence', () => {
+    it('round-trips mergeConflict through save and load', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t1', {
+        execution: {
+          mergeConflict: {
+            failedBranch: 'experiment/dep-branch',
+            conflictFiles: ['packages/test-utils/package.json', 'pnpm-lock.yaml'],
+          },
+        },
+      }));
+      const loaded = adapter.loadTasks('wf-1');
+      expect(loaded[0].execution.mergeConflict).toEqual({
+        failedBranch: 'experiment/dep-branch',
+        conflictFiles: ['packages/test-utils/package.json', 'pnpm-lock.yaml'],
+      });
+    });
+
+    it('persists mergeConflict via updateTask', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t1'));
+      adapter.updateTask('t1', {
+        execution: {
+          mergeConflict: {
+            failedBranch: 'experiment/dep-2',
+            conflictFiles: ['packages/app/tsconfig.json'],
+          },
+        },
+      });
+      const loaded = adapter.loadTasks('wf-1');
+      expect(loaded[0].execution.mergeConflict).toEqual({
+        failedBranch: 'experiment/dep-2',
+        conflictFiles: ['packages/app/tsconfig.json'],
+      });
+    });
+
+    it('clears mergeConflict via updateTask', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t1', {
+        execution: {
+          mergeConflict: {
+            failedBranch: 'experiment/dep-3',
+            conflictFiles: ['pnpm-lock.yaml'],
+          },
+        },
+      }));
+      adapter.updateTask('t1', { execution: { mergeConflict: undefined } });
+      const loaded = adapter.loadTasks('wf-1');
+      expect(loaded[0].execution.mergeConflict).toBeUndefined();
+    });
+
     it('round-trips pendingFixError through save and load', () => {
       adapter.saveWorkflow(testWorkflow);
       adapter.saveTask('wf-1', makeTask('t1', { execution: { pendingFixError: 'build failed' } }));
