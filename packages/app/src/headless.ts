@@ -752,9 +752,32 @@ async function headlessFix(taskId: string, deps: HeadlessDeps, agentArg?: string
   const te = createHeadlessExecutor(deps);
   const { savedError } = deps.orchestrator.beginConflictResolution(taskId);
   const agent = (agentArg ?? 'claude').toLowerCase();
+  const isMergeConflictError = (() => {
+    const candidates = [
+      savedError,
+      savedError.trim(),
+      savedError.split('\n\n').at(-1)?.trim() ?? '',
+    ];
+    for (const candidate of candidates) {
+      if (!candidate) continue;
+      try {
+        const parsed = JSON.parse(candidate) as { type?: unknown };
+        if (parsed?.type === 'merge_conflict') return true;
+      } catch {
+        // ignore parse errors; this helper is best-effort
+      }
+    }
+    return false;
+  })();
   try {
     const output = deps.persistence.getTaskOutput(taskId);
-    await te.fixWithAgent(taskId, output, agent, savedError);
+    if (isMergeConflictError) {
+      // For merge_conflict failures, run the deterministic conflict resolver first,
+      // then gate rerun behind explicit approve/reject like normal fix flow.
+      await te.resolveConflict(taskId, savedError, agent);
+    } else {
+      await te.fixWithAgent(taskId, output, agent, savedError);
+    }
     deps.orchestrator.setFixAwaitingApproval(taskId, savedError);
     console.log(`Fix applied for task: ${taskId} (${agent}). Use 'approve ${taskId}' or 'reject ${taskId}' to finalize.`);
   } catch (err) {

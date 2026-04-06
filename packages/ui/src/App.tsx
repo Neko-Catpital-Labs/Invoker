@@ -38,6 +38,19 @@ type ModalState =
   | { type: 'experiment'; task: TaskState }
   | { type: 'replace'; task: TaskState };
 
+export function hasMergeConflictExecution(task: TaskState | undefined): boolean {
+  if (!task) return false;
+  if (task.execution.mergeConflict) return true;
+  const rawError = task.execution.error;
+  if (typeof rawError !== 'string') return false;
+  try {
+    const parsed = JSON.parse(rawError) as { type?: unknown };
+    return parsed?.type === 'merge_conflict';
+  } catch {
+    return false;
+  }
+}
+
 export function App() {
   const { tasks, workflows, clearTasks, refreshTasks } = useTasks();
   const invoker = useInvoker();
@@ -207,7 +220,7 @@ export function App() {
       if (!proceed) return;
     }
     try {
-      const hasMergeConflict = !!task?.execution.mergeConflict;
+      const hasMergeConflict = hasMergeConflictExecution(task);
       if (hasMergeConflict) {
         await window.invoker?.resolveConflict(taskId, agentName);
       } else {

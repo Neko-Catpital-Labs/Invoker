@@ -923,9 +923,12 @@ export class Orchestrator {
     }
 
     if (!task.config.isMergeNode && task.execution.pendingFixError !== undefined) {
-      // Make post-fix approval use the same restart pipeline as explicit retries.
-      // This guarantees identical task reset semantics and scheduler behavior.
-      return this.restartTask(taskId);
+      const normalizedPendingFixError = stripFixFailureWrapper(task.execution.pendingFixError);
+      const isMergeConflictFix = parseMergeConflictError(normalizedPendingFixError) !== undefined;
+      if (isMergeConflictFix) {
+        // Non-merge merge-conflict fixes must re-run the task to validate the fix.
+        return this.restartTask(taskId);
+      }
     }
 
     if (this.beforeApproveHook) {

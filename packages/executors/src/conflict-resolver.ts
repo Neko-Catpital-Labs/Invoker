@@ -7,7 +7,9 @@
 
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 
 import type { Orchestrator } from '@invoker/core';
 import type { SQLiteAdapter } from '@invoker/persistence';
@@ -41,6 +43,57 @@ export interface ConflictResolverHost {
   removeMergeWorktree(dir: string): Promise<void>;
   spawnAgentFix(prompt: string, cwd: string, agentName?: string): Promise<{ stdout: string; sessionId: string }>;
   getRemoteTargetConfig?(targetId: string): RemoteTargetConfig | undefined;
+}
+
+const DEFAULT_MAX_INLINE_PROMPT_BYTES = 64 * 1024;
+const MAX_INLINE_PROMPT_BYTES = (() => {
+  const raw = process.env.INVOKER_MAX_INLINE_AGENT_PROMPT_BYTES;
+  if (!raw) return DEFAULT_MAX_INLINE_PROMPT_BYTES;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_MAX_INLINE_PROMPT_BYTES;
+})();
+
+function promptByteLength(prompt: string): number {
+  return Buffer.byteLength(prompt, 'utf8');
+}
+
+function buildPromptFileBootstrap(promptPath: string): string {
+  return [
+    `The full task instructions are in this file: ${promptPath}`,
+    `Read the file completely, then execute those instructions in this workspace.`,
+    `Do not ask for the file contents.`,
+  ].join('\n');
+}
+
+function materializeLocalPrompt(prompt: string): { effectivePrompt: string; cleanup: () => void } {
+  if (promptByteLength(prompt) <= MAX_INLINE_PROMPT_BYTES) {
+    return { effectivePrompt: prompt, cleanup: () => {} };
+  }
+  const dir = mkdtempSync(join(tmpdir(), 'invoker-agent-prompt-'));
+  const promptPath = join(dir, 'prompt.md');
+  writeFileSync(promptPath, prompt, 'utf8');
+  return {
+    effectivePrompt: buildPromptFileBootstrap(promptPath),
+    cleanup: () => {
+      try {
+        rmSync(dir, { recursive: true, force: true });
+      } catch {
+        /* best effort */
+      }
+    },
+  };
+}
+
+function materializeRemotePrompt(prompt: string): { effectivePrompt: string; remotePromptFilePath?: string; promptB64?: string } {
+  if (promptByteLength(prompt) <= MAX_INLINE_PROMPT_BYTES) {
+    return { effectivePrompt: prompt };
+  }
+  const remotePromptFilePath = `/tmp/invoker-agent-prompt-${randomUUID()}.md`;
+  return {
+    effectivePrompt: buildPromptFileBootstrap(remotePromptFilePath),
+    remotePromptFilePath,
+    promptB64: Buffer.from(prompt, 'utf8').toString('base64'),
+  };
 }
 
 // ── Extracted functions ──────────────────────────────────
@@ -386,13 +439,26 @@ export function spawnRemoteAgentFixImpl(
   agentName?: string,
   agentRegistry?: AgentRegistry,
 ): Promise<{ stdout: string; sessionId: string }> {
-  const { shellCommand: agentCmd, sessionId } = buildRemoteAgentCommand(prompt, agentRegistry, agentName);
+  const promptTransport = materializeRemotePrompt(prompt);
+  const { shellCommand: agentCmd, sessionId } = buildRemoteAgentCommand(
+    promptTransport.effectivePrompt,
+    agentRegistry,
+    agentName,
+  );
   const agentCmdB64 = Buffer.from(agentCmd).toString('base64');
+  const promptWrite = promptTransport.remotePromptFilePath && promptTransport.promptB64
+    ? [
+        `PROMPT_FILE=${shellQuote(promptTransport.remotePromptFilePath)}`,
+        `printf '%s' ${shellQuote(promptTransport.promptB64)} | base64 -d > "$PROMPT_FILE"`,
+        `trap 'rm -f "$PROMPT_FILE"' EXIT`,
+      ].join('\n') + '\n'
+    : '';
 
-  const script = `set -euo pipefail
+const script = `set -euo pipefail
 WT="${remoteCwd}"
 if [[ "$WT" == '~' ]]; then WT="$HOME"; elif [[ "\${WT:0:2}" == '~/' ]]; then WT="$HOME/\${WT:2}"; fi
 cd "$WT"
+${promptWrite}
 eval "$(echo "${agentCmdB64}" | base64 -d)"
 `;
 
@@ -447,8 +513,12 @@ export function spawnAgentFixViaRegistry(
   agent: ExecutionAgent,
   driver?: SessionDriver,
 ): Promise<{ stdout: string; sessionId: string }> {
-  const spec = agent.buildFixCommand?.(prompt);
-  if (!spec) throw new Error(`Agent "${agent.name}" does not support fix commands`);
+  const promptTransport = materializeLocalPrompt(prompt);
+  const spec = agent.buildFixCommand?.(promptTransport.effectivePrompt);
+  if (!spec) {
+    promptTransport.cleanup();
+    throw new Error(`Agent "${agent.name}" does not support fix commands`);
+  }
   const sessionId = spec.sessionId ?? randomUUID();
   console.log(`[spawnAgentFix] cmd: ${spec.cmd} ${spec.args.map(a => JSON.stringify(a)).join(' ')}`);
   console.log(`[spawnAgentFix] cwd: ${cwd}`);
@@ -469,15 +539,20 @@ export function spawnAgentFixViaRegistry(
       const effectiveSessionId = realId ?? sessionId;
       const displayStdout = driver ? driver.processOutput(effectiveSessionId, stdout) : stdout;
       if (code === 0) {
+        promptTransport.cleanup();
         resolve({ stdout: displayStdout, sessionId: effectiveSessionId });
       } else {
+        promptTransport.cleanup();
         reject(Object.assign(
           new Error(`${agent.name} fix exited with code ${code}: ${stderr.trim()}`),
           { sessionId: effectiveSessionId },
         ));
       }
     });
-    child.on('error', (err) => reject(err));
+    child.on('error', (err) => {
+      promptTransport.cleanup();
+      reject(err);
+    });
   });
 }
 

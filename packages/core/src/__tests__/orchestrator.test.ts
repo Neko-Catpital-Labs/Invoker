@@ -4776,7 +4776,7 @@ describe('Orchestrator', () => {
       expect(task.execution.pendingFixError).toBeUndefined();
     });
 
-    it('non-merge plain-text pendingFixError approve transitions failed -> fixing_with_ai -> awaiting_approval -> running and clears pendingFixError', async () => {
+    it('non-merge plain-text pendingFixError approve transitions failed -> fixing_with_ai -> awaiting_approval -> completed', async () => {
       const plainTextError = 'test failed: expected 1 to be 2';
 
       expect(orchestrator.getTask('f2')!.config.isMergeNode).toBeFalsy();
@@ -4792,9 +4792,9 @@ describe('Orchestrator', () => {
 
       await orchestrator.approve('f2');
       const task = orchestrator.getTask('f2')!;
-      expect(task.status).toBe('running');
-      expect(task.status).not.toBe('completed');
-      expect(task.execution.pendingFixError).toBeUndefined();
+      expect(task.status).toBe('completed');
+      expect(task.status).not.toBe('running');
+      expect(task.execution.pendingFixError).toBe(plainTextError);
     });
 
     it('repro: non-merge fix approval executes the restartTask codepath', async () => {

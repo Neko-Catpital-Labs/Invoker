@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { SshFamiliar } from '../ssh-familiar.js';
 import type { WorkRequest } from '@invoker/protocol';
 
@@ -54,5 +54,49 @@ describe('SshFamiliar pre-flight validation', () => {
     const handle = await ssh.start(req);
     expect(handle).toBeDefined();
     expect(handle.executionId).toBeDefined();
+  });
+
+  it('falls back to a resolvable base ref when requested baseBranch is missing on remote', async () => {
+    const ssh = new SshFamiliar({
+      host: 'localhost',
+      user: 'root',
+      sshKeyPath: '/dev/null',
+    }) as any;
+
+    vi.spyOn(ssh, 'execRemoteCapture').mockImplementation(async (script: string) => {
+      if (script.includes('__INVOKER_BASE_REF__=')) {
+        return [
+          "__INVOKER_BASE_WARNING__=Requested base 'plan/nonexistent' not found; falling back to 'origin/master'.",
+          '__INVOKER_BASE_REF__=origin/master',
+          '__INVOKER_BASE_HEAD__=0123456789abcdef0123456789abcdef01234567',
+          '',
+        ].join('\n');
+      }
+      if (script.includes('printf %s "$HOME"')) return '/home/root';
+      if (script.includes('worktree list --porcelain')) return '';
+      return '';
+    });
+
+    const setupTaskBranchSpy = vi.spyOn(ssh, 'setupTaskBranch').mockResolvedValue(undefined);
+    vi.spyOn(ssh, 'spawnSshRemoteStdin').mockImplementation(async (_executionId: string, _request: any, handle: any) => handle);
+
+    const req = makeRequest({
+      actionType: 'command',
+      inputs: {
+        command: 'echo hello',
+        description: 'test',
+        repoUrl: 'git@github.com:owner/repo.git',
+        baseBranch: 'plan/nonexistent',
+      },
+    });
+
+    const handle = await ssh.start(req);
+    expect(handle.workspacePath).toContain('/.invoker/worktrees/');
+    expect(setupTaskBranchSpy).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.any(Object),
+      expect.any(Object),
+      expect.objectContaining({ base: 'origin/master' }),
+    );
   });
 });

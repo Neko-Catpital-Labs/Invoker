@@ -227,9 +227,30 @@ CLONE="$HOME/.invoker/repos/$H"
 mkdir -p "$(dirname "$CLONE")"
 if [ ! -d "$CLONE/.git" ]; then git clone "$REPO" "$CLONE"; fi
 git -C "$CLONE" fetch --all --prune || true
-git -C "$CLONE" rev-parse "$BASE"
+RESOLVED_BASE="$BASE"
+if git -C "$CLONE" rev-parse --verify "$RESOLVED_BASE^{commit}" >/dev/null 2>&1; then
+  :
+elif git -C "$CLONE" rev-parse --verify "origin/$BASE^{commit}" >/dev/null 2>&1; then
+  RESOLVED_BASE="origin/$BASE"
+else
+  ORIGIN_HEAD=$(git -C "$CLONE" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)
+  if [ -n "$ORIGIN_HEAD" ] && git -C "$CLONE" rev-parse --verify "$ORIGIN_HEAD^{commit}" >/dev/null 2>&1; then
+    RESOLVED_BASE="$ORIGIN_HEAD"
+    printf "__INVOKER_BASE_WARNING__=Requested base '%s' not found; falling back to '%s'.\n" "$BASE" "$RESOLVED_BASE"
+  else
+    echo "Requested base '$BASE' does not exist and origin/HEAD is unavailable." >&2
+    exit 128
+  fi
+fi
+BASE_HEAD=$(git -C "$CLONE" rev-parse "$RESOLVED_BASE")
+printf "__INVOKER_BASE_REF__=%s\n" "$RESOLVED_BASE"
+printf "__INVOKER_BASE_HEAD__=%s\n" "$BASE_HEAD"
 `;
-      const baseHead = (await this.execRemoteCapture(script1)).trim();
+      const bootstrapOut = await this.execRemoteCapture(script1);
+      const { resolvedBaseRef, baseHead, warning } = this.parseBootstrapOutput(bootstrapOut);
+      if (warning) {
+        this.emitOutput(executionId, `[SshFamiliar] ${warning}\n`);
+      }
       const hash8 = computeBranchHash(
         request.actionId,
         request.inputs.command,
@@ -295,12 +316,12 @@ fi
       }
 
       if (skippedRemotePreserve) {
-        await this.mergeRequestUpstreamBranches(request, remoteWt, baseRef);
+        await this.mergeRequestUpstreamBranches(request, remoteWt, resolvedBaseRef);
         handle.branch = experimentBranch;
       } else {
         await this.setupTaskBranch(remoteClone, request, handle, {
           branchName: experimentBranch,
-          base: baseRef,
+          base: resolvedBaseRef,
           worktreeDir: remoteWt,
         });
       }
@@ -345,6 +366,21 @@ echo ${payloadB64} | base64 -d | bash -se
     if (handle.agentSessionId) (wrapped as any).agentSessionId = handle.agentSessionId;
     if (handle.containerId) (wrapped as any).containerId = handle.containerId;
     return wrapped;
+  }
+
+  private parseBootstrapOutput(stdout: string): { resolvedBaseRef: string; baseHead: string; warning?: string } {
+    const lines = stdout.split('\n');
+    const refLine = [...lines].reverse().find((line) => line.startsWith('__INVOKER_BASE_REF__='));
+    const headLine = [...lines].reverse().find((line) => line.startsWith('__INVOKER_BASE_HEAD__='));
+    const warningLine = [...lines].reverse().find((line) => line.startsWith('__INVOKER_BASE_WARNING__='));
+
+    const resolvedBaseRef = refLine?.slice('__INVOKER_BASE_REF__='.length).trim();
+    const baseHead = headLine?.slice('__INVOKER_BASE_HEAD__='.length).trim();
+    const warning = warningLine?.slice('__INVOKER_BASE_WARNING__='.length).trim();
+    if (!resolvedBaseRef || !baseHead) {
+      throw new Error(`SSH bootstrap output missing base markers. Output: ${stdout.slice(0, 500)}`);
+    }
+    return { resolvedBaseRef, baseHead, warning: warning || undefined };
   }
 
   /**
