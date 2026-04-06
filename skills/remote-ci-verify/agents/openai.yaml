@@ -1,0 +1,4 @@
+interface:
+  display_name: "Remote CI Verify"
+  short_description: "Run CI-equivalent checks on an SSH target"
+  default_prompt: "Use this skill to push the current branch and run CI-equivalent test-all on an available remote SSH machine."

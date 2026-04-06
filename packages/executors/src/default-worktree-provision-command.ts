@@ -7,7 +7,11 @@ export const DEFAULT_WORKTREE_PROVISION_COMMAND =
     echo "[provision] No package.json/pnpm-workspace.yaml found; skipping pnpm install"; \
     exit 0; \
   fi; \
-  NODE_ENV=development pnpm install --frozen-lockfile && ( \
+  if ! NODE_ENV=development pnpm install --frozen-lockfile; then \
+    echo "[provision] frozen-lockfile install failed; refreshing lockfile and retrying"; \
+    NODE_ENV=development pnpm install --lockfile-only; \
+    NODE_ENV=development pnpm install --frozen-lockfile; \
+  fi && ( \
   [ ! -f pnpm-workspace.yaml ] || ( \
     echo "[provision] pnpm config production (debug): $(pnpm config get production 2>/dev/null || echo unknown)" && \
     ( [ -f packages/transport/node_modules/@types/node/package.json ] && echo "[provision] @types/node linked under packages/transport" ) || \

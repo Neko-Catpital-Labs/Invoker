@@ -8,6 +8,11 @@
   2. **Debug and report** -- Investigate and report: (a) the root cause — why the code is in the buggy state, and (b) the test gap — how the bug escaped existing tests (missing coverage, wrong assumptions, untested edge case, etc.).
   3. **Plan the fix** -- Only after completing steps 1 and 2, create the implementation plan. The plan must include a verification step that re-runs the reproduction case to confirm the fix.
 
+## SQLite Command Policy
+
+- If you are considering direct SQLite commands, use the corresponding headless command instead.
+- If no corresponding headless command exists, stop and prompt the user with a concrete plan to add that headless command functionality before proceeding.
+
 ## Testing Architecture
 
 All packages use standard `vitest run` via `pnpm test`. The persistence layer uses `sql.js` (WASM-based SQLite), so tests run under system Node with no native SQLite addon or Electron test runtime.

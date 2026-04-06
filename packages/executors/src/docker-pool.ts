@@ -65,7 +65,7 @@ export class DockerPool {
     const cloneAndProvision = [
       `git clone ${repoUrl} /app`,
       'cd /app',
-      '[ -f pnpm-lock.yaml ] && NODE_ENV=development pnpm install --frozen-lockfile || true',
+      '[ -f pnpm-lock.yaml ] && (NODE_ENV=development pnpm install --frozen-lockfile || (NODE_ENV=development pnpm install --lockfile-only && NODE_ENV=development pnpm install --frozen-lockfile)) || true',
       'chmod -R a+rwX /app /opt/corepack 2>/dev/null || true',
     ].join(' && ');
 
