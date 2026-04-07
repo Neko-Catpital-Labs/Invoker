@@ -82,6 +82,8 @@ class TestFamiliar extends BaseFamiliar<BaseEntry> {
       request,
       outputListeners: new Set(),
       outputBuffer: [],
+      outputBufferBytes: 0,
+      evictedChunkCount: 0,
       completeListeners: new Set(),
       heartbeatListeners: new Set(),
       completed: false,

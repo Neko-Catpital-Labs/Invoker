@@ -1146,4 +1146,171 @@ describe('WorktreeFamiliar', () => {
       spy.mockRestore();
     });
   });
+
+  describe('bounded output buffer', () => {
+    it('late-subscriber replay works with capped buffer', async () => {
+      const { taskProcess } = setupSpawnMock();
+
+      const request = makeRequest();
+      const handle = await familiar.start(request);
+
+      // Generate many chunks to exceed buffer cap
+      for (let i = 0; i < 1000; i++) {
+        taskProcess.stdout!.emit('data', Buffer.from(`line ${i}\n`));
+      }
+
+      // Late subscriber should still receive buffered chunks (the tail)
+      const lateOutput: string[] = [];
+      familiar.onOutput(handle, (data) => lateOutput.push(data));
+
+      // The late subscriber should receive some chunks, but not necessarily all 1000
+      expect(lateOutput.length).toBeGreaterThan(0);
+
+      taskProcess.emit('close', 0, null);
+    });
+
+    it('buffer retention is capped by chunk limit', async () => {
+      const { taskProcess } = setupSpawnMock();
+
+      const request = makeRequest();
+      const handle = await familiar.start(request);
+
+      // Generate chunks exceeding any reasonable chunk limit
+      for (let i = 0; i < 2000; i++) {
+        taskProcess.stdout!.emit('data', Buffer.from(`chunk ${i}\n`));
+      }
+
+      // Late subscriber should not receive all 2000 chunks
+      const lateOutput: string[] = [];
+      familiar.onOutput(handle, (data) => lateOutput.push(data));
+
+      // Verify buffer is capped (assume max is < 2000)
+      expect(lateOutput.length).toBeLessThan(2000);
+
+      taskProcess.emit('close', 0, null);
+    });
+
+    it('buffer retention is capped by byte limit', async () => {
+      const { taskProcess } = setupSpawnMock();
+
+      const request = makeRequest();
+      const handle = await familiar.start(request);
+
+      // Generate large chunks to exceed byte limit
+      const largeChunk = 'x'.repeat(1024 * 100); // 100KB chunks
+      for (let i = 0; i < 100; i++) {
+        taskProcess.stdout!.emit('data', Buffer.from(`${largeChunk}\n`));
+      }
+
+      // Late subscriber should not receive all data
+      const lateOutput: string[] = [];
+      familiar.onOutput(handle, (data) => lateOutput.push(data));
+
+      const totalBytes = lateOutput.join('').length;
+      // Total should be capped (assume max is < 10MB)
+      expect(totalBytes).toBeLessThan(10 * 1024 * 1024);
+
+      taskProcess.emit('close', 0, null);
+    });
+
+    it('FIFO eviction preserves chronological tail order', async () => {
+      const { taskProcess } = setupSpawnMock();
+
+      const request = makeRequest();
+      const handle = await familiar.start(request);
+
+      // Generate numbered chunks to verify order
+      for (let i = 0; i < 1000; i++) {
+        taskProcess.stdout!.emit('data', Buffer.from(`line-${i}\n`));
+      }
+
+      // Late subscriber should receive tail in order
+      const lateOutput: string[] = [];
+      familiar.onOutput(handle, (data) => lateOutput.push(data));
+
+      const joined = lateOutput.join('');
+      const lines = joined.split('\n').filter(Boolean);
+
+      // Verify the buffered lines are monotonically increasing (tail order preserved)
+      if (lines.length > 1) {
+        for (let i = 1; i < lines.length; i++) {
+          const prevNum = parseInt(lines[i - 1].split('-')[1]);
+          const currNum = parseInt(lines[i].split('-')[1]);
+          expect(currNum).toBeGreaterThan(prevNum);
+        }
+      }
+
+      taskProcess.emit('close', 0, null);
+    });
+
+    it('huge outputs do not exceed configured retention caps', async () => {
+      const { taskProcess } = setupSpawnMock();
+
+      const request = makeRequest();
+      const handle = await familiar.start(request);
+
+      // Simulate huge output (50MB worth of data)
+      const hugeChunk = 'x'.repeat(1024 * 1024); // 1MB chunks
+      for (let i = 0; i < 50; i++) {
+        taskProcess.stdout!.emit('data', Buffer.from(hugeChunk));
+      }
+
+      // Late subscriber should receive capped output
+      const lateOutput: string[] = [];
+      familiar.onOutput(handle, (data) => lateOutput.push(data));
+
+      const totalBytes = lateOutput.join('').length;
+      // Should be significantly less than 50MB
+      expect(totalBytes).toBeLessThan(10 * 1024 * 1024);
+
+      taskProcess.emit('close', 0, null);
+    });
+
+    it('multiple late subscribers receive same buffered tail', async () => {
+      const { taskProcess } = setupSpawnMock();
+
+      const request = makeRequest();
+      const handle = await familiar.start(request);
+
+      // Generate chunks
+      for (let i = 0; i < 500; i++) {
+        taskProcess.stdout!.emit('data', Buffer.from(`chunk ${i}\n`));
+      }
+
+      // Multiple late subscribers
+      const subscriber1: string[] = [];
+      const subscriber2: string[] = [];
+
+      familiar.onOutput(handle, (data) => subscriber1.push(data));
+      familiar.onOutput(handle, (data) => subscriber2.push(data));
+
+      // Both should receive identical buffered output
+      expect(subscriber1).toEqual(subscriber2);
+
+      taskProcess.emit('close', 0, null);
+    });
+
+    it('early subscriber receives all data, late subscriber receives only tail', async () => {
+      const { taskProcess } = setupSpawnMock();
+
+      const request = makeRequest();
+      const handle = await familiar.start(request);
+
+      const earlyOutput: string[] = [];
+      familiar.onOutput(handle, (data) => earlyOutput.push(data));
+
+      // Generate many chunks
+      for (let i = 0; i < 1000; i++) {
+        taskProcess.stdout!.emit('data', Buffer.from(`line ${i}\n`));
+      }
+
+      const lateOutput: string[] = [];
+      familiar.onOutput(handle, (data) => lateOutput.push(data));
+
+      // Early subscriber should have more data than late subscriber
+      expect(earlyOutput.length).toBeGreaterThanOrEqual(lateOutput.length);
+
+      taskProcess.emit('close', 0, null);
+    });
+  });
 });

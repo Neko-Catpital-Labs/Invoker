@@ -135,6 +135,8 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
         branch: acquired.branch,
         outputListeners: new Set(),
         outputBuffer: [],
+        outputBufferBytes: 0,
+        evictedChunkCount: 0,
         completeListeners: new Set(),
         heartbeatListeners: new Set(),
         completed: false,
@@ -187,6 +189,7 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
           const entry: WorktreeEntry = {
             process: null, request, worktreeDir: acquired.worktreePath, branch,
             outputListeners: new Set(), outputBuffer: [],
+            outputBufferBytes: 0, evictedChunkCount: 0,
             completeListeners: new Set(), heartbeatListeners: new Set(),
             completed: true,
             poolRelease: acquired.release,
@@ -221,6 +224,7 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
       const entry: WorktreeEntry = {
         process: null, request, worktreeDir: acquired.worktreePath, branch,
         outputListeners: new Set(), outputBuffer: [],
+        outputBufferBytes: 0, evictedChunkCount: 0,
         completeListeners: new Set(), heartbeatListeners: new Set(),
         completed: false,
         poolRelease: acquired.release,
@@ -285,6 +289,8 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
       branch: acquired.branch,
       outputListeners: new Set(),
       outputBuffer: [],
+      outputBufferBytes: 0,
+      evictedChunkCount: 0,
       completeListeners: new Set(),
       heartbeatListeners: new Set(),
       completed: false,
