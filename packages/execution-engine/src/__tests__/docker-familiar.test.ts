@@ -142,9 +142,19 @@ describe('DockerFamiliar', () => {
       return undefined;
     });
 
+    // Stub handleProcessExit so we don't need real git, but still route through
+    // emitComplete so the BaseFamiliar centralized cleanup (entries.delete) runs.
     handleProcessExitSpy = vi.spyOn(
       BaseFamiliar.prototype as any, 'handleProcessExit',
-    ).mockResolvedValue(undefined);
+    ).mockImplementation(async function (this: any, executionId: string, request: WorkRequest, _cwd: string, exitCode: number) {
+      const response: WorkResponse = {
+        requestId: request.requestId,
+        actionId: request.actionId,
+        status: exitCode === 0 ? 'completed' : 'failed',
+        outputs: { exitCode },
+      };
+      this.emitComplete(executionId, response);
+    });
 
     familiar = new DockerFamiliar({
       workspaceDir: '/tmp',
@@ -284,7 +294,7 @@ describe('DockerFamiliar', () => {
     taskChild.emit('close', 0, null);
 
     // Allow async handler to run
-    await new Promise((r) => setTimeout(r, 50));
+    await new Promise((r) => setTimeout(r, 250));
 
     expect(handleProcessExitSpy).toHaveBeenCalledWith(
       expect.any(String),
@@ -302,7 +312,7 @@ describe('DockerFamiliar', () => {
     const taskChild = taskChildren[taskChildren.length - 1];
     taskChild.emit('close', 0, null);
 
-    await new Promise((r) => setTimeout(r, 50));
+    await new Promise((r) => setTimeout(r, 250));
 
     expect(mc.container.stop).toHaveBeenCalledWith({ t: 5 });
   });
@@ -313,7 +323,7 @@ describe('DockerFamiliar', () => {
     const taskChild = taskChildren[taskChildren.length - 1];
     taskChild.emit('close', 1, null);
 
-    await new Promise((r) => setTimeout(r, 50));
+    await new Promise((r) => setTimeout(r, 250));
 
     expect(handleProcessExitSpy).toHaveBeenCalledWith(
       expect.any(String),
@@ -518,6 +528,123 @@ describe('DockerFamiliar', () => {
       await expect(f.start(request)).rejects.toThrow(
         'Docker daemon is not reachable',
       );
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Entry lifecycle regression tests
+  // -------------------------------------------------------------------------
+
+  describe('Entry lifecycle', () => {
+    it('decreases entries.size after terminal close', async () => {
+      await familiar.start(makeRequest({ requestId: 'req-lifecycle', actionId: 'act-lifecycle' }));
+
+      expect((familiar as any).entries.size).toBe(1);
+
+      const taskChild = taskChildren[taskChildren.length - 1];
+      taskChild.emit('close', 0, null);
+
+      await new Promise((r) => setTimeout(r, 250));
+
+      expect((familiar as any).entries.size).toBe(0);
+    });
+
+    it('removes entry state on spawn error', async () => {
+      const { spawn: spawnMock } = await import('node:child_process');
+
+      // Make the next spawn (docker exec) emit error immediately.
+      // Build the child directly via createMockChildProcess instead of
+      // calling getMockImplementation(), which does not return the impl set
+      // via the vi.fn(impl) constructor used by the module-scope vi.mock.
+      (spawnMock as any).mockImplementationOnce((..._args: any[]) => {
+        const child = createMockChildProcess();
+        taskChildren.push(child);
+        setImmediate(() => child.emit('error', new Error('spawn ENOENT')));
+        return child;
+      });
+
+      await familiar.start(makeRequest({ requestId: 'req-spawn-err', actionId: 'act-spawn-err' }));
+
+      await new Promise((r) => setTimeout(r, 250));
+
+      expect((familiar as any).entries.size).toBe(0);
+    });
+
+    it('does not leak listeners or timers on spawn error', async () => {
+      const { spawn: spawnMock } = await import('node:child_process');
+
+      (spawnMock as any).mockImplementationOnce((..._args: any[]) => {
+        const child = createMockChildProcess();
+        taskChildren.push(child);
+        setImmediate(() => child.emit('error', new Error('spawn ENOENT')));
+        return child;
+      });
+
+      const handle = await familiar.start(makeRequest({ requestId: 'req-leak', actionId: 'act-leak' }));
+
+      await new Promise((r) => setTimeout(r, 250));
+
+      const entry = (familiar as any).entries.get(handle.executionId);
+      expect(entry).toBeUndefined();
+    });
+
+    it('destroyAll remains idempotent after completion', async () => {
+      await familiar.start(makeRequest({ requestId: 'req-destroy-comp', actionId: 'act-destroy-comp' }));
+
+      const taskChild = taskChildren[taskChildren.length - 1];
+      taskChild.emit('close', 0, null);
+
+      await new Promise((r) => setTimeout(r, 250));
+
+      await familiar.destroyAll();
+      expect((familiar as any).entries.size).toBe(0);
+
+      await expect(familiar.destroyAll()).resolves.toBeUndefined();
+    });
+
+    it('destroyAll remains idempotent after failure', async () => {
+      await familiar.start(makeRequest({ requestId: 'req-destroy-fail', actionId: 'act-destroy-fail' }));
+
+      const taskChild = taskChildren[taskChildren.length - 1];
+      taskChild.emit('close', 1, null);
+
+      await new Promise((r) => setTimeout(r, 250));
+
+      await familiar.destroyAll();
+      expect((familiar as any).entries.size).toBe(0);
+
+      await expect(familiar.destroyAll()).resolves.toBeUndefined();
+    });
+
+    it('getRestoredTerminalSpec still returns a valid spec after entry cleanup', async () => {
+      const handle = await familiar.start(
+        makeRequest({ requestId: 'req-restore', actionId: 'act-restore' }),
+      );
+
+      const taskChild = taskChildren[taskChildren.length - 1];
+      taskChild.emit('close', 0, null);
+
+      await new Promise((r) => setTimeout(r, 250));
+
+      // Entry has been cleaned up by the centralized BaseFamiliar.emitComplete teardown.
+      expect((familiar as any).entries.size).toBe(0);
+
+      // Revisit path uses persisted metadata (containerId), NOT the entries map.
+      const meta: PersistedTaskMeta = {
+        taskId: handle.taskId,
+        familiarType: familiar.type,
+        containerId: handle.containerId,
+        branch: handle.branch,
+        executionAgent: 'claude',
+      };
+
+      const spec = familiar.getRestoredTerminalSpec(meta);
+      expect(spec).toBeTruthy();
+      expect(spec.command).toBe('bash');
+      expect(spec.args).toBeTruthy();
+      expect(spec.args!.length).toBeGreaterThan(0);
+      // The restored spec must reference the persisted container ID.
+      expect(spec.args!.some((a: string) => a.includes(handle.containerId!))).toBe(true);
     });
   });
 });

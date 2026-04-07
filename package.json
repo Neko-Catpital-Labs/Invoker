@@ -26,7 +26,7 @@
     "dev": "pnpm --filter @invoker/ui build && pnpm --filter @invoker/app build && pnpm --filter @invoker/app start",
     "dev:hot": "concurrently \"pnpm --filter @invoker/ui dev\" \"sleep 3 && VITE_DEV_SERVER_URL=http://localhost:5173 pnpm --filter @invoker/app build && VITE_DEV_SERVER_URL=http://localhost:5173 pnpm --filter @invoker/app start\"",
     "check:deps": "depcruise packages --config .dependency-cruiser.js",
-    "check:types": "tsc -b tsconfig.build.json",
+    "check:types": "tsc -p tsconfig.typecheck.json",
     "check:all": "pnpm run check:deps && pnpm run check:types && bash scripts/check-owner-boundary.sh"
   },
   "engines": {

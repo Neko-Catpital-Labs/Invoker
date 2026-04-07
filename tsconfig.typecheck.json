@@ -1,0 +1,35 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "composite": false,
+    "incremental": false,
+    "noEmit": true,
+    "rootDir": ".",
+    "outDir": "./dist-typecheck"
+  },
+  "include": [
+    "packages/app/src/**/*.ts",
+    "packages/app/src/**/*.tsx",
+    "packages/contracts/src/**/*.ts",
+    "packages/data-store/src/**/*.ts",
+    "packages/execution-engine/src/**/*.ts",
+    "packages/runtime-adapters/src/**/*.ts",
+    "packages/runtime-domain/src/**/*.ts",
+    "packages/runtime-service/src/**/*.ts",
+    "packages/shell/src/**/*.ts",
+    "packages/surfaces/src/**/*.ts",
+    "packages/test-kit/src/**/*.ts",
+    "packages/transport/src/**/*.ts",
+    "packages/workflow-core/src/**/*.ts",
+    "packages/workflow-graph/src/**/*.ts"
+  ],
+  "exclude": [
+    "**/node_modules",
+    "**/dist",
+    "**/__tests__/**",
+    "**/*.test.ts",
+    "**/*.test.tsx",
+    "**/*.spec.ts",
+    "**/*.spec.tsx"
+  ]
+}
