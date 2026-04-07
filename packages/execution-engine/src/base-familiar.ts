@@ -9,6 +9,8 @@ import type { AgentRegistry } from './agent-registry.js';
 
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
 const DEFAULT_MAX_DURATION_MS = 4 * 60 * 60 * 1000; // 4 hours
+const DEFAULT_MAX_BUFFER_CHUNKS = 1000;
+const DEFAULT_MAX_BUFFER_BYTES = 5 * 1024 * 1024; // 5MB
 
 export interface BaseEntry {
   request: WorkRequest;
@@ -18,6 +20,10 @@ export interface BaseEntry {
   completed: boolean;
   /** Buffered output chunks for replay when new listeners are added. */
   outputBuffer: string[];
+  /** Total bytes currently buffered for eviction tracking. */
+  outputBufferBytes: number;
+  /** Count of chunks evicted due to buffer cap enforcement. */
+  evictedChunkCount: number;
   /** Stored completion response for replay when listeners register after completion. */
   completionResponse?: WorkResponse;
   /** Heartbeat timer handle for orphan detection. */
@@ -64,10 +70,19 @@ export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar
   protected entries = new Map<string, TEntry>();
   protected heartbeatIntervalMs: number;
   protected maxDurationMs: number;
+  protected maxBufferChunks: number;
+  protected maxBufferBytes: number;
 
-  constructor(heartbeatIntervalMs?: number, maxDurationMs?: number) {
+  constructor(
+    heartbeatIntervalMs?: number,
+    maxDurationMs?: number,
+    maxBufferChunks?: number,
+    maxBufferBytes?: number,
+  ) {
     this.heartbeatIntervalMs = heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
     this.maxDurationMs = maxDurationMs ?? DEFAULT_MAX_DURATION_MS;
+    this.maxBufferChunks = maxBufferChunks ?? DEFAULT_MAX_BUFFER_CHUNKS;
+    this.maxBufferBytes = maxBufferBytes ?? DEFAULT_MAX_BUFFER_BYTES;
   }
 
   protected createHandle(request: WorkRequest): FamiliarHandle {
@@ -85,9 +100,36 @@ export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar
   protected emitOutput(executionId: string, data: string): void {
     const entry = this.entries.get(executionId);
     if (!entry) return;
-    entry.outputBuffer.push(data);
+
+    // Emit to live listeners immediately
     for (const cb of entry.outputListeners) {
       cb(data);
+    }
+
+    // Add to buffer
+    entry.outputBuffer.push(data);
+    entry.outputBufferBytes += data.length;
+
+    // Enforce buffer limits via FIFO eviction
+    while (
+      (entry.outputBuffer.length > this.maxBufferChunks ||
+        entry.outputBufferBytes > this.maxBufferBytes) &&
+      entry.outputBuffer.length > 0
+    ) {
+      const evicted = entry.outputBuffer.shift();
+      if (evicted) {
+        entry.outputBufferBytes -= evicted.length;
+        entry.evictedChunkCount++;
+      }
+    }
+
+    // Log truncation signal when eviction threshold crossed
+    if (entry.evictedChunkCount > 0 && entry.evictedChunkCount % 100 === 1) {
+      console.warn(
+        `[${this.type}] Output buffer eviction: actionId=${entry.request.actionId} ` +
+          `evictedChunks=${entry.evictedChunkCount} bufferedChunks=${entry.outputBuffer.length} ` +
+          `bufferedBytes=${entry.outputBufferBytes}`,
+      );
     }
   }
 

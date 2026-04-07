@@ -266,6 +266,8 @@ export class DockerFamiliar extends BaseFamiliar<ContainerEntry> {
       agentSessionId,
       outputListeners: new Set(),
       outputBuffer: [],
+      outputBufferBytes: 0,
+      evictedChunkCount: 0,
       completeListeners: new Set(),
       heartbeatListeners: new Set(),
       completed: false,
