@@ -158,6 +158,15 @@ describe('validateWorkResponse', () => {
       expect(result.error).toBe('outputs is required and must be an object');
     });
 
+    // Regression: arrays pass `typeof === 'object'`. Without the Array.isArray(r.outputs)
+    // guard, `outputs: []` would reach the orchestrator's completed branch where
+    // `outputs.exitCode ?? 0` silently produces an apparently-successful task state.
+    it('rejects array outputs (silent-corruption guard)', () => {
+      const result = validateWorkResponse({ requestId: 'r', actionId: 'a', status: 'completed', outputs: [] });
+      expect(result.valid).toBe(false);
+      expect(result.error).toBe('outputs is required and must be an object');
+    });
+
     it('rejects spawn_experiments with missing dagMutation', () => {
       const result = validateWorkResponse({ requestId: 'r', actionId: 'a', status: 'spawn_experiments', outputs: {} });
       expect(result.valid).toBe(false);

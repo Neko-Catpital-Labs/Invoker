@@ -306,6 +306,19 @@ describe('ResponseHandler (pure parser)', () => {
       }
     });
 
+    // Regression: if the Array.isArray(r.outputs) guard is removed, the `completed`
+    // branch would run `outputs.exitCode ?? 0` and emit a `{ type: 'completed' }`
+    // envelope for a payload whose outputs were never a valid object. This test
+    // locks in both the error path AND the absence of the success path.
+    it('normalizes array outputs into canonical failure envelope and does NOT emit completed', () => {
+      const result = handler.parseResponse({ requestId: 'r', actionId: 'a', status: 'completed', outputs: [] } as any);
+      expect('error' in result).toBe(true);
+      expect('type' in result).toBe(false);
+      if ('error' in result) {
+        expect(result.error).toBe('outputs is required and must be an object');
+      }
+    });
+
     it('normalizes spawn_experiments without dagMutation into canonical failure envelope', () => {
       const result = handler.parseResponse({ requestId: 'r', actionId: 'a', status: 'spawn_experiments', outputs: {} } as any);
       expect('error' in result).toBe(true);
