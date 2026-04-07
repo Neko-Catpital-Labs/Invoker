@@ -19,7 +19,8 @@
     "composite": true,
     "sourceMap": true,
     "outDir": "dist",
-    "rootDir": "src"
+    "rootDir": "src",
+    "composite": true
   },
   "exclude": [
     "**/__tests__/**",

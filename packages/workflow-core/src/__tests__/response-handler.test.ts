@@ -181,6 +181,240 @@ describe('ResponseHandler (pure parser)', () => {
     });
   });
 
+  // ── malformed payload normalization ────────────────────
+
+  describe('malformed payload normalization', () => {
+    it('normalizes null payload into canonical failure envelope', () => {
+      const result = handler.parseResponse(null as any);
+      expect('error' in result).toBe(true);
+      if ('error' in result) {
+        expect(result.error).toBe('WorkResponse must be an object');
+        expect(typeof result.error).toBe('string');
+      }
+    });
+
+    it('normalizes undefined payload into canonical failure envelope', () => {
+      const result = handler.parseResponse(undefined as any);
+      expect('error' in result).toBe(true);
+      if ('error' in result) {
+        expect(result.error).toBe('WorkResponse must be an object');
+      }
+    });
+
+    it('normalizes string payload into canonical failure envelope', () => {
+      const result = handler.parseResponse('not-an-object' as any);
+      expect('error' in result).toBe(true);
+      if ('error' in result) {
+        expect(result.error).toBe('WorkResponse must be an object');
+      }
+    });
+
+    it('normalizes number payload into canonical failure envelope', () => {
+      const result = handler.parseResponse(123 as any);
+      expect('error' in result).toBe(true);
+      if ('error' in result) {
+        expect(result.error).toBe('WorkResponse must be an object');
+      }
+    });
+
+    it('normalizes array payload into canonical failure envelope', () => {
+      const result = handler.parseResponse([{ status: 'completed' }] as any);
+      expect('error' in result).toBe(true);
+      if ('error' in result) {
+        expect(result.error).toBe('WorkResponse must be an object');
+      }
+    });
+
+    it('normalizes missing requestId into canonical failure envelope', () => {
+      const result = handler.parseResponse({ actionId: 'a', status: 'completed', outputs: {} } as any);
+      expect('error' in result).toBe(true);
+      if ('error' in result) {
+        expect(result.error).toContain('requestId');
+        expect(result.error).toContain('required');
+      }
+    });
+
+    it('normalizes empty requestId into canonical failure envelope', () => {
+      const result = handler.parseResponse({ requestId: '', actionId: 'a', status: 'completed', outputs: {} } as any);
+      expect('error' in result).toBe(true);
+      if ('error' in result) {
+        expect(result.error).toContain('requestId');
+        expect(result.error).toContain('non-empty string');
+      }
+    });
+
+    it('normalizes missing actionId into canonical failure envelope', () => {
+      const result = handler.parseResponse({ requestId: 'r', status: 'completed', outputs: {} } as any);
+      expect('error' in result).toBe(true);
+      if ('error' in result) {
+        expect(result.error).toContain('actionId');
+        expect(result.error).toContain('required');
+      }
+    });
+
+    it('normalizes empty actionId into canonical failure envelope', () => {
+      const result = handler.parseResponse({ requestId: 'r', actionId: '', status: 'completed', outputs: {} } as any);
+      expect('error' in result).toBe(true);
+      if ('error' in result) {
+        expect(result.error).toContain('actionId');
+        expect(result.error).toContain('non-empty string');
+      }
+    });
+
+    it('normalizes unknown status into canonical failure envelope with stable error', () => {
+      const result = handler.parseResponse({ requestId: 'r', actionId: 'a', status: 'unknown_status', outputs: {} } as any);
+      expect('error' in result).toBe(true);
+      if ('error' in result) {
+        expect(result.error).toContain('status must be one of:');
+        expect(result.error).toContain('completed');
+        expect(result.error).toContain('failed');
+        expect(result.error).toContain('needs_input');
+        expect(result.error).toContain('spawn_experiments');
+        expect(result.error).toContain('select_experiment');
+      }
+    });
+
+    it('normalizes typo status into canonical failure envelope', () => {
+      const result = handler.parseResponse({ requestId: 'r', actionId: 'a', status: 'complted', outputs: {} } as any);
+      expect('error' in result).toBe(true);
+      if ('error' in result) {
+        expect(result.error).toContain('status must be one of:');
+      }
+    });
+
+    it('normalizes missing outputs field into canonical failure envelope', () => {
+      const result = handler.parseResponse({ requestId: 'r', actionId: 'a', status: 'completed' } as any);
+      expect('error' in result).toBe(true);
+      if ('error' in result) {
+        expect(result.error).toBe('outputs is required and must be an object');
+      }
+    });
+
+    it('normalizes null outputs into canonical failure envelope', () => {
+      const result = handler.parseResponse({ requestId: 'r', actionId: 'a', status: 'completed', outputs: null } as any);
+      expect('error' in result).toBe(true);
+      if ('error' in result) {
+        expect(result.error).toBe('outputs is required and must be an object');
+      }
+    });
+
+    it('normalizes non-object outputs into canonical failure envelope', () => {
+      const result = handler.parseResponse({ requestId: 'r', actionId: 'a', status: 'completed', outputs: 'string' } as any);
+      expect('error' in result).toBe(true);
+      if ('error' in result) {
+        expect(result.error).toBe('outputs is required and must be an object');
+      }
+    });
+
+    it('normalizes spawn_experiments without dagMutation into canonical failure envelope', () => {
+      const result = handler.parseResponse({ requestId: 'r', actionId: 'a', status: 'spawn_experiments', outputs: {} } as any);
+      expect('error' in result).toBe(true);
+      if ('error' in result) {
+        expect(result.error).toBe('spawn_experiments status requires dagMutation.spawnExperiments');
+      }
+    });
+
+    it('normalizes spawn_experiments with null dagMutation into canonical failure envelope', () => {
+      const result = handler.parseResponse({ requestId: 'r', actionId: 'a', status: 'spawn_experiments', outputs: {}, dagMutation: null } as any);
+      expect('error' in result).toBe(true);
+      if ('error' in result) {
+        expect(result.error).toBe('spawn_experiments status requires dagMutation.spawnExperiments');
+      }
+    });
+
+    it('normalizes spawn_experiments with empty dagMutation into canonical failure envelope', () => {
+      const result = handler.parseResponse({ requestId: 'r', actionId: 'a', status: 'spawn_experiments', outputs: {}, dagMutation: {} } as any);
+      expect('error' in result).toBe(true);
+      if ('error' in result) {
+        expect(result.error).toBe('spawn_experiments status requires dagMutation.spawnExperiments');
+      }
+    });
+
+    it('normalizes select_experiment without dagMutation into canonical failure envelope', () => {
+      const result = handler.parseResponse({ requestId: 'r', actionId: 'a', status: 'select_experiment', outputs: {} } as any);
+      expect('error' in result).toBe(true);
+      if ('error' in result) {
+        expect(result.error).toBe('select_experiment status requires dagMutation.selectExperiment');
+      }
+    });
+
+    it('normalizes select_experiment with null dagMutation into canonical failure envelope', () => {
+      const result = handler.parseResponse({ requestId: 'r', actionId: 'a', status: 'select_experiment', outputs: {}, dagMutation: null } as any);
+      expect('error' in result).toBe(true);
+      if ('error' in result) {
+        expect(result.error).toBe('select_experiment status requires dagMutation.selectExperiment');
+      }
+    });
+
+    it('normalizes select_experiment with empty dagMutation into canonical failure envelope', () => {
+      const result = handler.parseResponse({ requestId: 'r', actionId: 'a', status: 'select_experiment', outputs: {}, dagMutation: {} } as any);
+      expect('error' in result).toBe(true);
+      if ('error' in result) {
+        expect(result.error).toBe('select_experiment status requires dagMutation.selectExperiment');
+      }
+    });
+
+    it('ensures all failure envelopes have consistent structure (error: string)', () => {
+      const malformedInputs = [
+        null,
+        undefined,
+        'string',
+        42,
+        [],
+        {},
+        { requestId: 'r' },
+        { requestId: 'r', actionId: 'a' },
+        { requestId: 'r', actionId: 'a', status: 'unknown' },
+        { requestId: 'r', actionId: 'a', status: 'completed' },
+        { requestId: 'r', actionId: 'a', status: 'spawn_experiments', outputs: {} },
+        { requestId: 'r', actionId: 'a', status: 'select_experiment', outputs: {} },
+      ];
+
+      malformedInputs.forEach((input) => {
+        const result = handler.parseResponse(input as any);
+        expect('error' in result).toBe(true);
+        if ('error' in result) {
+          expect(typeof result.error).toBe('string');
+          expect(result.error.length).toBeGreaterThan(0);
+          expect(Object.keys(result)).toEqual(['error']);
+        }
+      });
+    });
+
+    it('ensures canonical envelopes are deterministic and stable', () => {
+      const input = { requestId: 'r', actionId: 'a', status: 'unknown_status', outputs: {} };
+      const result1 = handler.parseResponse(input as any);
+      const result2 = handler.parseResponse(input as any);
+
+      expect(result1).toEqual(result2);
+      expect('error' in result1 && 'error' in result2).toBe(true);
+      if ('error' in result1 && 'error' in result2) {
+        expect(result1.error).toBe(result2.error);
+      }
+    });
+
+    it('verifies error messages are suitable for orchestrator consumption', () => {
+      // Orchestrator needs clear, actionable error messages
+      const cases = [
+        { input: null, expectedSubstring: 'must be an object' },
+        { input: { requestId: 'r' }, expectedSubstring: 'actionId' },
+        { input: { requestId: 'r', actionId: 'a' }, expectedSubstring: 'status' },
+        { input: { requestId: 'r', actionId: 'a', status: 'completed' }, expectedSubstring: 'outputs' },
+        { input: { requestId: 'r', actionId: 'a', status: 'spawn_experiments', outputs: {} }, expectedSubstring: 'spawnExperiments' },
+      ];
+
+      cases.forEach(({ input, expectedSubstring }) => {
+        const result = handler.parseResponse(input as any);
+        expect('error' in result).toBe(true);
+        if ('error' in result) {
+          expect(result.error).toContain(expectedSubstring);
+          // Error should be clear and not overly verbose
+          expect(result.error.length).toBeLessThan(200);
+        }
+      });
+    });
+  });
+
   // ── no state mutation ──────────────────────────────────
 
   describe('purity', () => {

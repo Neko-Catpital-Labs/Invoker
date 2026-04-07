@@ -77,4 +77,121 @@ describe('validateWorkResponse', () => {
     expect(result.valid).toBe(false);
     expect(result.error).toContain('selectExperiment');
   });
+
+  describe('malformed payload normalization', () => {
+    it('rejects null payload with deterministic error', () => {
+      const result = validateWorkResponse(null);
+      expect(result.valid).toBe(false);
+      expect(result.error).toBe('WorkResponse must be an object');
+    });
+
+    it('rejects undefined payload with deterministic error', () => {
+      const result = validateWorkResponse(undefined);
+      expect(result.valid).toBe(false);
+      expect(result.error).toBe('WorkResponse must be an object');
+    });
+
+    it('rejects string payload with deterministic error', () => {
+      const result = validateWorkResponse('malformed');
+      expect(result.valid).toBe(false);
+      expect(result.error).toBe('WorkResponse must be an object');
+    });
+
+    it('rejects number payload with deterministic error', () => {
+      const result = validateWorkResponse(42);
+      expect(result.valid).toBe(false);
+      expect(result.error).toBe('WorkResponse must be an object');
+    });
+
+    it('rejects array payload with deterministic error', () => {
+      const result = validateWorkResponse([{ status: 'completed' }]);
+      expect(result.valid).toBe(false);
+      expect(result.error).toBe('WorkResponse must be an object');
+    });
+
+    it('rejects empty requestId', () => {
+      const result = validateWorkResponse({ requestId: '', actionId: 'a', status: 'completed', outputs: {} });
+      expect(result.valid).toBe(false);
+      expect(result.error).toContain('requestId');
+      expect(result.error).toContain('non-empty string');
+    });
+
+    it('rejects missing actionId', () => {
+      const result = validateWorkResponse({ requestId: 'r', status: 'completed', outputs: {} });
+      expect(result.valid).toBe(false);
+      expect(result.error).toContain('actionId');
+    });
+
+    it('rejects empty actionId', () => {
+      const result = validateWorkResponse({ requestId: 'r', actionId: '', status: 'completed', outputs: {} });
+      expect(result.valid).toBe(false);
+      expect(result.error).toContain('actionId');
+      expect(result.error).toContain('non-empty string');
+    });
+
+    it('rejects unknown status with stable error listing valid statuses', () => {
+      const result = validateWorkResponse({ requestId: 'r', actionId: 'a', status: 'unknown_status', outputs: {} });
+      expect(result.valid).toBe(false);
+      expect(result.error).toContain('status must be one of:');
+      expect(result.error).toContain('completed');
+      expect(result.error).toContain('failed');
+      expect(result.error).toContain('needs_input');
+      expect(result.error).toContain('spawn_experiments');
+      expect(result.error).toContain('select_experiment');
+    });
+
+    it('rejects missing outputs field', () => {
+      const result = validateWorkResponse({ requestId: 'r', actionId: 'a', status: 'completed' });
+      expect(result.valid).toBe(false);
+      expect(result.error).toBe('outputs is required and must be an object');
+    });
+
+    it('rejects null outputs', () => {
+      const result = validateWorkResponse({ requestId: 'r', actionId: 'a', status: 'completed', outputs: null });
+      expect(result.valid).toBe(false);
+      expect(result.error).toBe('outputs is required and must be an object');
+    });
+
+    it('rejects non-object outputs', () => {
+      const result = validateWorkResponse({ requestId: 'r', actionId: 'a', status: 'completed', outputs: 'not-an-object' });
+      expect(result.valid).toBe(false);
+      expect(result.error).toBe('outputs is required and must be an object');
+    });
+
+    it('rejects spawn_experiments with missing dagMutation', () => {
+      const result = validateWorkResponse({ requestId: 'r', actionId: 'a', status: 'spawn_experiments', outputs: {} });
+      expect(result.valid).toBe(false);
+      expect(result.error).toBe('spawn_experiments status requires dagMutation.spawnExperiments');
+    });
+
+    it('rejects spawn_experiments with null dagMutation', () => {
+      const result = validateWorkResponse({ requestId: 'r', actionId: 'a', status: 'spawn_experiments', outputs: {}, dagMutation: null });
+      expect(result.valid).toBe(false);
+      expect(result.error).toBe('spawn_experiments status requires dagMutation.spawnExperiments');
+    });
+
+    it('rejects spawn_experiments with empty dagMutation', () => {
+      const result = validateWorkResponse({ requestId: 'r', actionId: 'a', status: 'spawn_experiments', outputs: {}, dagMutation: {} });
+      expect(result.valid).toBe(false);
+      expect(result.error).toBe('spawn_experiments status requires dagMutation.spawnExperiments');
+    });
+
+    it('rejects select_experiment with missing dagMutation', () => {
+      const result = validateWorkResponse({ requestId: 'r', actionId: 'a', status: 'select_experiment', outputs: {} });
+      expect(result.valid).toBe(false);
+      expect(result.error).toBe('select_experiment status requires dagMutation.selectExperiment');
+    });
+
+    it('rejects select_experiment with null dagMutation', () => {
+      const result = validateWorkResponse({ requestId: 'r', actionId: 'a', status: 'select_experiment', outputs: {}, dagMutation: null });
+      expect(result.valid).toBe(false);
+      expect(result.error).toBe('select_experiment status requires dagMutation.selectExperiment');
+    });
+
+    it('rejects select_experiment with empty dagMutation', () => {
+      const result = validateWorkResponse({ requestId: 'r', actionId: 'a', status: 'select_experiment', outputs: {}, dagMutation: {} });
+      expect(result.valid).toBe(false);
+      expect(result.error).toBe('select_experiment status requires dagMutation.selectExperiment');
+    });
+  });
 });
