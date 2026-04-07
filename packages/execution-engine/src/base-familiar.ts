@@ -209,6 +209,11 @@ export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar
         this.emitOutput(executionId,
           `[${this.type}] Process exceeded max duration of ${Math.round(this.maxDurationMs / 1000)}s, sending SIGTERM\n`);
         try { child.kill('SIGTERM'); } catch { /* already dead */ }
+        // Stop the heartbeat after issuing SIGTERM. The child's close handler
+        // will fire completion. Without this, the heartbeat would keep ticking
+        // and re-issue SIGTERM until the process actually exits.
+        clearInterval(entry.heartbeatTimer);
+        entry.heartbeatTimer = undefined;
         return;
       }
 

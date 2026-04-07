@@ -31,6 +31,10 @@ export interface WorktreeFamiliarConfig {
   claudeCommand?: string;
   /** Agent registry for pluggable AI agents. When set, overrides claudeCommand. */
   agentRegistry?: import('./agent-registry.js').AgentRegistry;
+  /** Heartbeat interval in milliseconds. Default: 30000. */
+  heartbeatIntervalMs?: number;
+  /** Maximum task duration in milliseconds. Default: 4 hours. */
+  maxDurationMs?: number;
 }
 
 interface WorktreeEntry extends BaseEntry {
@@ -63,7 +67,7 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
   private pool: RepoPool;
 
   constructor(config: WorktreeFamiliarConfig) {
-    super();
+    super(config.heartbeatIntervalMs, config.maxDurationMs);
     this.claudeCommand = config.claudeCommand ?? 'claude';
     this.agentRegistry = config.agentRegistry;
     this.worktreeBaseDir =

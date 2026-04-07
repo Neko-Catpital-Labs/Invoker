@@ -78,6 +78,10 @@ function createMockProcess(): ChildProcess & EventEmitter {
   (proc as any).stdin = stdinMock as unknown as Writable;
   (proc as any).pid = 12345;
   (proc as any).killed = false;
+  // Match real Node.js: exitCode is null until the process exits.
+  // Without this, `child.exitCode !== null` (undefined !== null) trips the heartbeat
+  // orphan detector on the first tick of any test that doesn't set exitCode explicitly.
+  (proc as any).exitCode = null;
   proc.kill = vi.fn().mockReturnValue(true);
 
   return proc;
@@ -1311,6 +1315,249 @@ describe('WorktreeFamiliar', () => {
       expect(earlyOutput.length).toBeGreaterThanOrEqual(lateOutput.length);
 
       taskProcess.emit('close', 0, null);
+    });
+  });
+
+  describe('orphan entry GC and diagnostics', () => {
+    let familiar: WorktreeFamiliar;
+
+    beforeEach(() => {
+      familiar = new WorktreeFamiliar({
+        cacheDir: '/tmp/fake-cache',
+        worktreeBaseDir: '/tmp/fake-worktrees',
+        heartbeatIntervalMs: 100, // Fast heartbeat for testing
+      });
+      mockPool(familiar);
+      vi.mocked(mkdirSync).mockReturnValue(undefined);
+    });
+
+    it('orphan entries are reclaimed when process exits but close handler fails', async () => {
+      vi.useFakeTimers();
+      try {
+        const { taskProcess } = setupSpawnMock();
+        const outputLines: string[] = [];
+        const responses: WorkResponse[] = [];
+
+        const request = makeRequest();
+        const handle = await familiar.start(request);
+
+        familiar.onOutput(handle, (data) => { outputLines.push(data); });
+        familiar.onComplete(handle, (response) => { responses.push(response); });
+
+        // Simulate process exiting but close handler not firing
+        (taskProcess as any).exitCode = 0;
+        (taskProcess as any).killed = false;
+
+        // Advance past heartbeat interval
+        await vi.advanceTimersByTimeAsync(150);
+
+        // Heartbeat should detect orphaned process
+        const orphanOutput = outputLines.find(line => line.includes('Heartbeat detected orphaned process'));
+        expect(orphanOutput).toBeDefined();
+        expect(orphanOutput).toContain('actionId=action-1');
+
+        // Should emit completion with recovery message
+        expect(responses).toHaveLength(1);
+        expect(responses[0].status).toBe('failed');
+        expect(responses[0].outputs.error).toContain('heartbeat recovery');
+
+        await vi.runAllTimersAsync();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('diagnostic output includes process state when orphan detected', async () => {
+      vi.useFakeTimers();
+      try {
+        const { taskProcess } = setupSpawnMock();
+        const outputLines: string[] = [];
+
+        const request = makeRequest();
+        const handle = await familiar.start(request);
+
+        familiar.onOutput(handle, (data) => { outputLines.push(data); });
+
+        // Simulate orphaned process with specific exit code
+        (taskProcess as any).exitCode = 42;
+        (taskProcess as any).killed = false;
+
+        await vi.advanceTimersByTimeAsync(150);
+
+        const diagnosticOutput = outputLines.find(line => line.includes('Heartbeat detected orphaned process'));
+        expect(diagnosticOutput).toBeDefined();
+        expect(diagnosticOutput).toContain('exitCode=42');
+        expect(diagnosticOutput).toContain('actionId=action-1');
+
+        await vi.runAllTimersAsync();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('live entries remain untouched when heartbeats are active', async () => {
+      vi.useFakeTimers();
+      try {
+        const { taskProcess } = setupSpawnMock();
+        const outputLines: string[] = [];
+        const responses: WorkResponse[] = [];
+
+        const request = makeRequest();
+        const handle = await familiar.start(request);
+
+        familiar.onOutput(handle, (data) => { outputLines.push(data); });
+        familiar.onComplete(handle, (response) => { responses.push(response); });
+
+        // Process is still running (not orphaned)
+        (taskProcess as any).exitCode = null;
+        (taskProcess as any).killed = false;
+
+        // Advance through multiple heartbeat intervals
+        for (let i = 0; i < 5; i++) {
+          await vi.advanceTimersByTimeAsync(150);
+        }
+
+        // No orphan detection should occur
+        const orphanOutput = outputLines.find(line => line.includes('Heartbeat detected orphaned process'));
+        expect(orphanOutput).toBeUndefined();
+
+        // No completion should be emitted
+        expect(responses).toHaveLength(0);
+
+        // Now complete normally
+        taskProcess.emit('close', 0, null);
+        await vi.runAllTimersAsync();
+
+        // Should complete normally
+        expect(responses).toHaveLength(1);
+        expect(responses[0].status).toBe('completed');
+
+        await vi.runAllTimersAsync();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('heartbeat stops after completion to prevent duplicate events', async () => {
+      vi.useFakeTimers();
+      try {
+        const { taskProcess } = setupSpawnMock();
+        const outputLines: string[] = [];
+        const responses: WorkResponse[] = [];
+
+        const request = makeRequest();
+        const handle = await familiar.start(request);
+
+        familiar.onOutput(handle, (data) => { outputLines.push(data); });
+        familiar.onComplete(handle, (response) => { responses.push(response); });
+
+        // Complete the task
+        taskProcess.stdout!.emit('data', Buffer.from('done\n'));
+        taskProcess.emit('close', 0, null);
+        await vi.runAllTimersAsync();
+
+        expect(responses).toHaveLength(1);
+        expect(responses[0].status).toBe('completed');
+
+        const initialOutputCount = outputLines.length;
+
+        // Advance time significantly past heartbeat interval
+        await vi.advanceTimersByTimeAsync(1000);
+
+        // No additional output should be generated (heartbeat stopped)
+        expect(outputLines.length).toBe(initialOutputCount);
+        expect(responses).toHaveLength(1); // Still only one completion
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('max duration timeout kills process when exceeded', async () => {
+      vi.useFakeTimers();
+      try {
+        const familiarWithTimeout = new WorktreeFamiliar({
+          cacheDir: '/tmp/fake-cache',
+          worktreeBaseDir: '/tmp/fake-worktrees',
+          heartbeatIntervalMs: 100,
+          maxDurationMs: 500, // 500ms max duration
+        });
+        mockPool(familiarWithTimeout);
+
+        const { taskProcess } = setupSpawnMock();
+        const outputLines: string[] = [];
+
+        const request = makeRequest();
+        const handle = await familiarWithTimeout.start(request);
+
+        familiarWithTimeout.onOutput(handle, (data) => { outputLines.push(data); });
+
+        // Process is running but takes too long
+        (taskProcess as any).exitCode = null;
+        (taskProcess as any).killed = false;
+
+        // Advance past max duration
+        await vi.advanceTimersByTimeAsync(600);
+
+        // Should emit timeout warning
+        const timeoutOutput = outputLines.find(line => line.includes('exceeded max duration'));
+        expect(timeoutOutput).toBeDefined();
+        expect(taskProcess.kill).toHaveBeenCalledWith('SIGTERM');
+
+        await vi.runAllTimersAsync();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('concurrent entries maintain independent heartbeats', async () => {
+      vi.useFakeTimers();
+      try {
+        const outputMap: Map<string, string[]> = new Map();
+        const responseMap: Map<string, WorkResponse[]> = new Map();
+
+        // Start three concurrent tasks
+        const requests = [
+          makeRequest({ actionId: 'task-1' }),
+          makeRequest({ actionId: 'task-2' }),
+          makeRequest({ actionId: 'task-3' }),
+        ];
+
+        const handles: Array<Awaited<ReturnType<typeof familiar.start>>> = [];
+        const taskProcesses: Array<ChildProcess & EventEmitter> = [];
+        for (const request of requests) {
+          // Reset spawn mock for each task
+          const { taskProcess } = setupSpawnMock();
+          taskProcesses.push(taskProcess);
+          const handle = await familiar.start(request);
+          handles.push(handle);
+          outputMap.set(request.actionId, []);
+          responseMap.set(request.actionId, []);
+          familiar.onOutput(handle, (data) => {
+            outputMap.get(request.actionId)!.push(data);
+          });
+          familiar.onComplete(handle, (response) => {
+            responseMap.get(request.actionId)!.push(response);
+          });
+        }
+
+        // Advance through heartbeat intervals
+        await vi.advanceTimersByTimeAsync(500);
+
+        // All three tasks should remain independent (no interference)
+        expect(responseMap.get('task-1')).toHaveLength(0);
+        expect(responseMap.get('task-2')).toHaveLength(0);
+        expect(responseMap.get('task-3')).toHaveLength(0);
+
+        // Close each task process so heartbeat intervals stop and the test
+        // doesn't hang on runAllTimersAsync (which would otherwise loop on
+        // the still-running setInterval heartbeats forever).
+        for (const tp of taskProcesses) {
+          tp.emit('close', 0, null);
+        }
+        await vi.runAllTimersAsync();
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 });

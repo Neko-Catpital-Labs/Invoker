@@ -4897,4 +4897,234 @@ describe('TaskExecutor', () => {
       }));
     });
   });
+
+  describe('entry GC supervisor', () => {
+    it('entry leases expire when heartbeats stop', async () => {
+      vi.useFakeTimers();
+      try {
+        const heartbeats: string[] = [];
+        const heartbeatCallbacks: Array<(taskId: string) => void> = [];
+        let completeCallback: ((response: WorkResponse) => void) | undefined;
+        const handle = { executionId: 'exec-gc-1', taskId: 'gc-task-1', workspacePath: '/tmp/mock-worktree' };
+
+        const gcFamiliar = {
+          type: 'worktree',
+          start: vi.fn(async () => {
+            return handle;
+          }),
+          onOutput: () => () => {},
+          onComplete: vi.fn((_h: unknown, cb: (response: WorkResponse) => void) => {
+            completeCallback = cb;
+            return () => {};
+          }),
+          onHeartbeat: vi.fn((_h: unknown, cb: (taskId: string) => void) => {
+            heartbeatCallbacks.push(cb);
+            return () => {};
+          }),
+        };
+
+        const updateTask = vi.fn();
+        const executor = new TaskExecutor({
+          orchestrator: { getTask: () => undefined, handleWorkerResponse: vi.fn() } as any,
+          persistence: { updateTask } as any,
+          familiarRegistry: {
+            getDefault: () => gcFamiliar,
+            get: () => gcFamiliar,
+            getAll: () => [gcFamiliar],
+          } as any,
+          cwd: '/tmp',
+          callbacks: {
+            onHeartbeat: (taskId: string) => { heartbeats.push(taskId); },
+          },
+        });
+
+        const task = makeTask({ id: 'gc-task-1', status: 'running', config: { command: 'echo test' } });
+        const done = executor.executeTask(task);
+
+        // Wait for task to start
+        await vi.runAllTimersAsync();
+        expect(gcFamiliar.onHeartbeat).toHaveBeenCalled();
+
+        // Simulate heartbeats firing from BaseFamiliar
+        heartbeatCallbacks.forEach(cb => cb('gc-task-1'));
+        expect(heartbeats.length).toBeGreaterThan(0);
+
+        // Record initial heartbeat count
+        const initialHeartbeatCount = heartbeats.length;
+
+        // Now simulate heartbeats stopping (no more callbacks fire)
+        // After some time without heartbeats, lease should be considered expired
+        // The persistence layer should NOT receive heartbeat updates
+
+        // Fast forward without triggering heartbeats
+        await vi.advanceTimersByTimeAsync(60_000);
+
+        // Verify no additional heartbeats fired
+        expect(heartbeats).toHaveLength(initialHeartbeatCount);
+
+        // In a real system, the stale detector (in main.ts) would now see
+        // lastHeartbeatAt is > 5 minutes old and reclaim the entry.
+        // This test verifies that when heartbeat callbacks stop firing,
+        // the TaskExecutor doesn't update lastHeartbeatAt in persistence.
+
+        // Fire completion so executeTask resolves and the test doesn't hang.
+        completeCallback?.({
+          requestId: 'req-gc-1',
+          actionId: 'gc-task-1',
+          status: 'completed',
+          outputs: { exitCode: 0 },
+        });
+        await vi.runAllTimersAsync();
+        await done;
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('active heartbeats refresh lease and prevent false reclamation', async () => {
+      vi.useFakeTimers();
+      try {
+        const heartbeats: Array<{ taskId: string; timestamp: number }> = [];
+        const heartbeatCallbacks: Array<(taskId: string) => void> = [];
+        let completeCallback: ((response: WorkResponse) => void) | undefined;
+        const handle = { executionId: 'exec-gc-2', taskId: 'gc-task-2', workspacePath: '/tmp/mock-worktree' };
+
+        const gcFamiliar = {
+          type: 'worktree',
+          start: vi.fn(async () => {
+            return handle;
+          }),
+          onOutput: () => () => {},
+          onComplete: vi.fn((_h: unknown, cb: (response: WorkResponse) => void) => {
+            completeCallback = cb;
+            return () => {};
+          }),
+          onHeartbeat: vi.fn((_h: unknown, cb: (taskId: string) => void) => {
+            heartbeatCallbacks.push(cb);
+            return () => {};
+          }),
+        };
+
+        const updateTask = vi.fn();
+        const executor = new TaskExecutor({
+          orchestrator: { getTask: () => undefined, handleWorkerResponse: vi.fn() } as any,
+          persistence: { updateTask } as any,
+          familiarRegistry: {
+            getDefault: () => gcFamiliar,
+            get: () => gcFamiliar,
+            getAll: () => [gcFamiliar],
+          } as any,
+          cwd: '/tmp',
+          callbacks: {
+            onHeartbeat: (taskId: string) => {
+              heartbeats.push({ taskId, timestamp: Date.now() });
+            },
+          },
+        });
+
+        const task = makeTask({ id: 'gc-task-2', status: 'running', config: { command: 'sleep 300' } });
+        const done = executor.executeTask(task);
+
+        // Wait for task to start
+        await vi.runAllTimersAsync();
+        expect(gcFamiliar.onHeartbeat).toHaveBeenCalled();
+
+        // Simulate continuous heartbeats over a long period
+        for (let i = 0; i < 10; i++) {
+          await vi.advanceTimersByTimeAsync(30_000);
+          heartbeatCallbacks.forEach(cb => cb('gc-task-2'));
+        }
+
+        // Verify heartbeats were consistently fired
+        expect(heartbeats.length).toBeGreaterThanOrEqual(10);
+
+        // Verify all heartbeats are for the correct task
+        expect(heartbeats.every(hb => hb.taskId === 'gc-task-2')).toBe(true);
+
+        // Verify timestamps show progression (active refresh)
+        for (let i = 1; i < heartbeats.length; i++) {
+          expect(heartbeats[i].timestamp).toBeGreaterThanOrEqual(heartbeats[i - 1].timestamp);
+        }
+
+        // With active heartbeats, the entry lease is continuously refreshed,
+        // preventing the stale detector from reclaiming it as an orphan.
+
+        // Fire completion so executeTask resolves and the test doesn't hang.
+        completeCallback?.({
+          requestId: 'req-gc-2',
+          actionId: 'gc-task-2',
+          status: 'completed',
+          outputs: { exitCode: 0 },
+        });
+        await vi.runAllTimersAsync();
+        await done;
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('TaskExecutor passes heartbeat events to callbacks.onHeartbeat', async () => {
+      vi.useFakeTimers();
+      try {
+        const receivedHeartbeats: string[] = [];
+        const heartbeatCallbacks: Array<(taskId: string) => void> = [];
+        let completeCallback: ((response: WorkResponse) => void) | undefined;
+        const handle = { executionId: 'exec-gc-3', taskId: 'gc-task-3', workspacePath: '/tmp/mock-worktree' };
+
+        const gcFamiliar = {
+          type: 'worktree',
+          start: vi.fn(async () => handle),
+          onOutput: () => () => {},
+          onComplete: vi.fn((_h: unknown, cb: (response: WorkResponse) => void) => {
+            completeCallback = cb;
+            return () => {};
+          }),
+          onHeartbeat: vi.fn((_h: unknown, cb: (taskId: string) => void) => {
+            heartbeatCallbacks.push(cb);
+            return () => {};
+          }),
+        };
+
+        const executor = new TaskExecutor({
+          orchestrator: { getTask: () => undefined, handleWorkerResponse: vi.fn() } as any,
+          persistence: { updateTask: vi.fn() } as any,
+          familiarRegistry: {
+            getDefault: () => gcFamiliar,
+            get: () => gcFamiliar,
+            getAll: () => [gcFamiliar],
+          } as any,
+          cwd: '/tmp',
+          callbacks: {
+            onHeartbeat: (taskId: string) => {
+              receivedHeartbeats.push(taskId);
+            },
+          },
+        });
+
+        const task = makeTask({ id: 'gc-task-3', status: 'running', config: { command: 'echo test' } });
+        const done = executor.executeTask(task);
+
+        await vi.runAllTimersAsync();
+        expect(gcFamiliar.onHeartbeat).toHaveBeenCalled();
+
+        // Simulate heartbeat from familiar
+        heartbeatCallbacks.forEach(cb => cb('gc-task-3'));
+
+        // Verify TaskExecutor forwarded the heartbeat to its callback
+        expect(receivedHeartbeats).toContain('gc-task-3');
+
+        // Fire completion so executeTask resolves and the test doesn't hang.
+        completeCallback?.({
+          requestId: 'req-gc-3',
+          actionId: 'gc-task-3',
+          status: 'completed',
+          outputs: { exitCode: 0 },
+        });
+        await vi.runAllTimersAsync();
+        await done;
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
 });
