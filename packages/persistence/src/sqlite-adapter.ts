@@ -33,18 +33,26 @@ function rewritePnpmTestCommand(cmd: string): string {
 /** Cached sql.js init promise — WASM is loaded only once per process. */
 let sqlJsPromise: ReturnType<typeof initSqlJs> | null = null;
 
+export interface OutputChunk {
+  offset: number;
+  data: string;
+}
+
 export class SQLiteAdapter implements PersistenceAdapter {
   private db: SqlJsDatabase;
   private dbPath: string | null;
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private readOnly: boolean;
   private dirty = false;
+  private outputTailLimit: number;
+  private outputTailCache = new Map<string, OutputChunk[]>();
 
   /** Use SQLiteAdapter.create() instead. */
-  private constructor(db: SqlJsDatabase, dbPath: string | null, options?: { readOnly?: boolean }) {
+  private constructor(db: SqlJsDatabase, dbPath: string | null, options?: { readOnly?: boolean; outputTailLimit?: number }) {
     this.db = db;
     this.dbPath = dbPath;
     this.readOnly = options?.readOnly === true;
+    this.outputTailLimit = options?.outputTailLimit ?? 100;
     this.db.run('PRAGMA foreign_keys = ON');
     this.initSchema();
     this.migrate();
@@ -56,8 +64,9 @@ export class SQLiteAdapter implements PersistenceAdapter {
    * @param dbPath File path or ':memory:' (default).
    * @param options readOnly=true opens DB for read operations without schema mutation/flush.
    *                ownerCapability=true is required to open DB in writable mode for file-backed databases.
+   *                outputTailLimit=100 sets the in-memory tail cache size for output chunks.
    */
-  static async create(dbPath: string = ':memory:', options?: { readOnly?: boolean; ownerCapability?: boolean }): Promise<SQLiteAdapter> {
+  static async create(dbPath: string = ':memory:', options?: { readOnly?: boolean; ownerCapability?: boolean; outputTailLimit?: number }): Promise<SQLiteAdapter> {
     if (!sqlJsPromise) {
       sqlJsPromise = initSqlJs();
     }
@@ -313,6 +322,18 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
       CREATE INDEX IF NOT EXISTS idx_attempts_node_created
         ON attempts(node_id, created_at);
+
+      CREATE TABLE IF NOT EXISTS output_spool (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        task_id TEXT NOT NULL,
+        offset INTEGER NOT NULL,
+        data TEXT NOT NULL,
+        created_at TEXT DEFAULT (datetime('now')),
+        FOREIGN KEY (task_id) REFERENCES tasks(id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_output_spool_task_offset
+        ON output_spool(task_id, offset);
     `);
   }
 
@@ -1035,6 +1056,92 @@ export class SQLiteAdapter implements PersistenceAdapter {
       [taskId],
     ) as Array<{ data: string }>;
     return rows.map((r) => r.data).join('');
+  }
+
+  // ── Output Spool ────────────────────────────────────────
+
+  appendOutputChunk(taskId: string, data: string): void {
+    this.ensureWritable();
+
+    // Get current max offset for this task
+    const row = this.queryOne(
+      'SELECT COALESCE(MAX(offset), -1) AS max_offset FROM output_spool WHERE task_id = ?',
+      [taskId],
+    ) as { max_offset: number } | undefined;
+
+    const currentMaxOffset = row?.max_offset ?? -1;
+    const nextOffset = currentMaxOffset === -1 ? 0 : currentMaxOffset + this.getLastChunkLength(taskId, currentMaxOffset);
+
+    // Insert new chunk
+    this.execRun(
+      'INSERT INTO output_spool (task_id, offset, data) VALUES (?, ?, ?)',
+      [taskId, nextOffset, data],
+    );
+
+    // Update in-memory tail cache
+    const tail = this.outputTailCache.get(taskId) ?? [];
+    tail.push({ offset: nextOffset, data });
+
+    // Keep only the last N chunks in memory
+    if (tail.length > this.outputTailLimit) {
+      tail.shift();
+    }
+    this.outputTailCache.set(taskId, tail);
+  }
+
+  private getLastChunkLength(taskId: string, offset: number): number {
+    const row = this.queryOne(
+      'SELECT data FROM output_spool WHERE task_id = ? AND offset = ?',
+      [taskId, offset],
+    ) as { data: string } | undefined;
+
+    if (!row) return 0;
+    return Buffer.byteLength(row.data, 'utf8');
+  }
+
+  getOutputChunks(taskId: string): OutputChunk[] {
+    const rows = this.queryAll(
+      'SELECT offset, data FROM output_spool WHERE task_id = ? ORDER BY offset ASC',
+      [taskId],
+    ) as Array<{ offset: number; data: string }>;
+
+    return rows.map(r => ({ offset: r.offset, data: r.data }));
+  }
+
+  replayOutputFrom(taskId: string, fromOffset: number): OutputChunk[] {
+    const rows = this.queryAll(
+      'SELECT offset, data FROM output_spool WHERE task_id = ? AND offset >= ? ORDER BY offset ASC',
+      [taskId, fromOffset],
+    ) as Array<{ offset: number; data: string }>;
+
+    return rows.map(r => ({ offset: r.offset, data: r.data }));
+  }
+
+  getOutputTail(taskId: string): OutputChunk[] {
+    // Return from cache if available
+    const cached = this.outputTailCache.get(taskId);
+    if (cached && cached.length > 0) {
+      return cached;
+    }
+
+    // Otherwise fetch the tail from storage
+    const rows = this.queryAll(
+      `SELECT offset, data FROM output_spool
+       WHERE task_id = ?
+       ORDER BY offset DESC
+       LIMIT ?`,
+      [taskId, this.outputTailLimit],
+    ) as Array<{ offset: number; data: string }>;
+
+    // Reverse to get ascending order
+    const chunks = rows.reverse().map(r => ({ offset: r.offset, data: r.data }));
+
+    // Populate cache
+    if (chunks.length > 0) {
+      this.outputTailCache.set(taskId, chunks);
+    }
+
+    return chunks;
   }
 
   // ── Attempts ────────────────────────────────────────────

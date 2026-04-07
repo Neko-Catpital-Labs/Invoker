@@ -5,8 +5,7 @@
     "rootDir": "src",
     "types": [
       "node"
-    ],
-    "composite": false
+    ]
   },
   "include": [
     "src/**/*.ts"

@@ -1373,4 +1373,324 @@ describe('SQLiteAdapter', () => {
       db.close();
     });
   });
+
+  // ── Output Spool Regression Tests ──────────────────────
+
+  describe('output spool: monotonic offsets', () => {
+    it('appends chunks with strictly increasing offset values', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t-offset'));
+
+      // Append multiple chunks
+      adapter.appendOutputChunk('t-offset', 'chunk 1\n');
+      adapter.appendOutputChunk('t-offset', 'chunk 2\n');
+      adapter.appendOutputChunk('t-offset', 'chunk 3\n');
+
+      // Retrieve chunks with their offsets
+      const chunks = adapter.getOutputChunks('t-offset');
+      expect(chunks).toHaveLength(3);
+      expect(chunks[0].offset).toBe(0);
+      expect(chunks[1].offset).toBe(8);  // 'chunk 1\n'.length
+      expect(chunks[2].offset).toBe(16); // cumulative: 8 + 'chunk 2\n'.length
+      expect(chunks[0].data).toBe('chunk 1\n');
+      expect(chunks[1].data).toBe('chunk 2\n');
+      expect(chunks[2].data).toBe('chunk 3\n');
+    });
+
+    it('maintains monotonic offsets across multiple append calls', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t-monotonic'));
+
+      const chunks = ['a', 'bb', 'ccc', 'dddd'];
+      for (const chunk of chunks) {
+        adapter.appendOutputChunk('t-monotonic', chunk);
+      }
+
+      const stored = adapter.getOutputChunks('t-monotonic');
+      expect(stored).toHaveLength(4);
+
+      // Verify offsets are strictly increasing and match cumulative byte length
+      let expectedOffset = 0;
+      for (let i = 0; i < stored.length; i++) {
+        expect(stored[i].offset).toBe(expectedOffset);
+        expectedOffset += Buffer.byteLength(chunks[i], 'utf8');
+      }
+    });
+
+    it('handles concurrent chunk appends without offset collision', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t-concurrent'));
+
+      // Simulate rapid concurrent appends
+      const appendCount = 50;
+      for (let i = 0; i < appendCount; i++) {
+        adapter.appendOutputChunk('t-concurrent', `line ${i}\n`);
+      }
+
+      const chunks = adapter.getOutputChunks('t-concurrent');
+      expect(chunks).toHaveLength(appendCount);
+
+      // Verify all offsets are unique and monotonically increasing
+      const offsets = chunks.map(c => c.offset);
+      const uniqueOffsets = new Set(offsets);
+      expect(uniqueOffsets.size).toBe(appendCount);
+
+      for (let i = 1; i < offsets.length; i++) {
+        expect(offsets[i]).toBeGreaterThan(offsets[i - 1]);
+      }
+    });
+  });
+
+  describe('output spool: replay from offset', () => {
+    it('allows late subscriber to replay all output from offset 0', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t-replay'));
+
+      adapter.appendOutputChunk('t-replay', 'early output\n');
+      adapter.appendOutputChunk('t-replay', 'middle output\n');
+      adapter.appendOutputChunk('t-replay', 'late output\n');
+
+      // Late subscriber starts from beginning
+      const chunks = adapter.replayOutputFrom('t-replay', 0);
+      expect(chunks).toHaveLength(3);
+      expect(chunks[0].data).toBe('early output\n');
+      expect(chunks[1].data).toBe('middle output\n');
+      expect(chunks[2].data).toBe('late output\n');
+    });
+
+    it('replays only chunks after specified offset', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t-partial-replay'));
+
+      adapter.appendOutputChunk('t-partial-replay', 'chunk 1\n'); // offset 0
+      adapter.appendOutputChunk('t-partial-replay', 'chunk 2\n'); // offset 8
+      adapter.appendOutputChunk('t-partial-replay', 'chunk 3\n'); // offset 16
+
+      // Subscriber already has offset 0-7, wants chunks from offset 8 onward
+      const chunks = adapter.replayOutputFrom('t-partial-replay', 8);
+      expect(chunks).toHaveLength(2);
+      expect(chunks[0].offset).toBe(8);
+      expect(chunks[0].data).toBe('chunk 2\n');
+      expect(chunks[1].offset).toBe(16);
+      expect(chunks[1].data).toBe('chunk 3\n');
+    });
+
+    it('returns empty array when offset is beyond all chunks', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t-future-offset'));
+
+      adapter.appendOutputChunk('t-future-offset', 'only chunk\n'); // offset 0, length 11
+
+      const chunks = adapter.replayOutputFrom('t-future-offset', 999);
+      expect(chunks).toEqual([]);
+    });
+
+    it('prevents duplicate chunk delivery across offset boundaries', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t-no-dup'));
+
+      adapter.appendOutputChunk('t-no-dup', 'A');
+      adapter.appendOutputChunk('t-no-dup', 'B');
+      adapter.appendOutputChunk('t-no-dup', 'C');
+
+      // First subscriber reads from 0
+      const batch1 = adapter.replayOutputFrom('t-no-dup', 0);
+      expect(batch1.map(c => c.data)).toEqual(['A', 'B', 'C']);
+
+      // Second subscriber reads from offset after 'A' (offset 1)
+      const batch2 = adapter.replayOutputFrom('t-no-dup', 1);
+      expect(batch2.map(c => c.data)).toEqual(['B', 'C']);
+
+      // Verify no overlap: batch1's last chunk offset + length <= batch2's first chunk offset
+      const lastOffset1 = batch1[batch1.length - 1].offset;
+      const firstOffset2 = batch2[0].offset;
+      expect(firstOffset2).toBeGreaterThanOrEqual(lastOffset1);
+    });
+  });
+
+  describe('output spool: in-memory cache with tail limit', () => {
+    it('retains only recent tail in memory after exceeding limit', () => {
+      const tailLimit = 3;
+      const dir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-tail-'));
+      const dbPath = join(dir, 'invoker.db');
+
+      try {
+        const db = await SQLiteAdapter.create(dbPath, { ownerCapability: true, outputTailLimit: tailLimit });
+        db.saveWorkflow(testWorkflow);
+        db.saveTask('wf-1', makeTask('t-tail'));
+
+        // Append more chunks than the tail limit
+        for (let i = 0; i < 10; i++) {
+          db.appendOutputChunk('t-tail', `line ${i}\n`);
+        }
+
+        // In-memory tail should contain only last 3 chunks
+        const tail = db.getOutputTail('t-tail');
+        expect(tail).toHaveLength(tailLimit);
+        expect(tail[0].data).toBe('line 7\n');
+        expect(tail[1].data).toBe('line 8\n');
+        expect(tail[2].data).toBe('line 9\n');
+
+        db.close();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('retrieves full history from spool storage beyond in-memory tail', () => {
+      const tailLimit = 2;
+      const dir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-full-'));
+      const dbPath = join(dir, 'invoker.db');
+
+      try {
+        const db = await SQLiteAdapter.create(dbPath, { ownerCapability: true, outputTailLimit: tailLimit });
+        db.saveWorkflow(testWorkflow);
+        db.saveTask('wf-1', makeTask('t-full'));
+
+        // Append 5 chunks
+        for (let i = 0; i < 5; i++) {
+          db.appendOutputChunk('t-full', `chunk ${i}\n`);
+        }
+
+        // Tail has only last 2
+        const tail = db.getOutputTail('t-full');
+        expect(tail).toHaveLength(tailLimit);
+
+        // But full replay retrieves all 5 from storage
+        const allChunks = db.replayOutputFrom('t-full', 0);
+        expect(allChunks).toHaveLength(5);
+        expect(allChunks[0].data).toBe('chunk 0\n');
+        expect(allChunks[4].data).toBe('chunk 4\n');
+
+        db.close();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('serves tail from memory without disk access when within limit', () => {
+      const tailLimit = 5;
+      const dir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-mem-'));
+      const dbPath = join(dir, 'invoker.db');
+
+      try {
+        const db = await SQLiteAdapter.create(dbPath, { ownerCapability: true, outputTailLimit: tailLimit });
+        db.saveWorkflow(testWorkflow);
+        db.saveTask('wf-1', makeTask('t-mem'));
+
+        // Append 3 chunks (within tail limit)
+        db.appendOutputChunk('t-mem', 'A\n');
+        db.appendOutputChunk('t-mem', 'B\n');
+        db.appendOutputChunk('t-mem', 'C\n');
+
+        const tail = db.getOutputTail('t-mem');
+        expect(tail).toHaveLength(3);
+        expect(tail.map(c => c.data)).toEqual(['A\n', 'B\n', 'C\n']);
+
+        db.close();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('configures tail limit at adapter creation time', async () => {
+      const customLimit = 10;
+      const dir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-config-'));
+      const dbPath = join(dir, 'invoker.db');
+
+      try {
+        const db = await SQLiteAdapter.create(dbPath, { ownerCapability: true, outputTailLimit: customLimit });
+        db.saveWorkflow(testWorkflow);
+        db.saveTask('wf-1', makeTask('t-config'));
+
+        // Append 15 chunks
+        for (let i = 0; i < 15; i++) {
+          db.appendOutputChunk('t-config', `x${i}\n`);
+        }
+
+        const tail = db.getOutputTail('t-config');
+        expect(tail).toHaveLength(customLimit);
+        expect(tail[0].data).toBe('x5\n'); // Last 10: x5 through x14
+
+        db.close();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('defaults tail limit to reasonable value when not specified', async () => {
+      const db = await SQLiteAdapter.create(':memory:');
+      db.saveWorkflow(testWorkflow);
+      db.saveTask('wf-1', makeTask('t-default'));
+
+      // Append many chunks to trigger tail eviction
+      for (let i = 0; i < 200; i++) {
+        db.appendOutputChunk('t-default', `line ${i}\n`);
+      }
+
+      const tail = db.getOutputTail('t-default');
+      // Default tail limit should be reasonable (e.g., 100)
+      expect(tail.length).toBeLessThanOrEqual(100);
+      expect(tail.length).toBeGreaterThan(0);
+
+      db.close();
+    });
+  });
+
+  describe('output spool: durability and persistence', () => {
+    it('persists chunks to disk and survives adapter restart', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-persist-'));
+      const dbPath = join(dir, 'invoker.db');
+
+      try {
+        const db1 = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        db1.saveWorkflow(testWorkflow);
+        db1.saveTask('wf-1', makeTask('t-persist'));
+
+        db1.appendOutputChunk('t-persist', 'persistent chunk 1\n');
+        db1.appendOutputChunk('t-persist', 'persistent chunk 2\n');
+        db1.close();
+
+        // Reopen DB
+        const db2 = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        const chunks = db2.replayOutputFrom('t-persist', 0);
+        expect(chunks).toHaveLength(2);
+        expect(chunks[0].data).toBe('persistent chunk 1\n');
+        expect(chunks[1].data).toBe('persistent chunk 2\n');
+
+        db2.close();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('maintains offset consistency across restarts', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-offset-persist-'));
+      const dbPath = join(dir, 'invoker.db');
+
+      try {
+        const db1 = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        db1.saveWorkflow(testWorkflow);
+        db1.saveTask('wf-1', makeTask('t-offset-persist'));
+
+        db1.appendOutputChunk('t-offset-persist', 'AAA');
+        const chunks1 = db1.getOutputChunks('t-offset-persist');
+        const lastOffset = chunks1[chunks1.length - 1].offset + Buffer.byteLength(chunks1[chunks1.length - 1].data, 'utf8');
+        db1.close();
+
+        // Reopen and append more
+        const db2 = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        db2.appendOutputChunk('t-offset-persist', 'BBB');
+        const chunks2 = db2.getOutputChunks('t-offset-persist');
+
+        expect(chunks2).toHaveLength(2);
+        expect(chunks2[1].offset).toBe(lastOffset);
+        expect(chunks2[1].data).toBe('BBB');
+
+        db2.close();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+  });
 });

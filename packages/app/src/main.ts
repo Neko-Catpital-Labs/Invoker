@@ -490,6 +490,7 @@ function setupGuiMode(): void {
           messageBus.publish(Channels.TASK_OUTPUT, outputData);
           try {
             persistence.appendTaskOutput(taskId, data);
+            persistence.appendOutputChunk(taskId, data);
           } catch (err) {
             console.error(`[output] Failed to persist output for ${taskId}:`, err);
           }
@@ -964,6 +965,14 @@ function setupGuiMode(): void {
     ipcMain.handle('invoker:get-events', (_event, taskId: string) => persistence.getEvents(taskId));
     ipcMain.handle('invoker:get-status', () => orchestrator.getWorkflowStatus());
     ipcMain.handle('invoker:get-task-output', (_event, taskId: string) => persistence.getTaskOutput(taskId));
+
+    ipcMain.handle('invoker:get-output-chunks', (_event, taskId: string) => persistence.getOutputChunks(taskId));
+
+    ipcMain.handle('invoker:replay-output-from', (_event, taskId: string, fromOffset: number) =>
+      persistence.replayOutputFrom(taskId, fromOffset)
+    );
+
+    ipcMain.handle('invoker:get-output-tail', (_event, taskId: string) => persistence.getOutputTail(taskId));
 
     ipcMain.handle('invoker:get-all-completed-tasks', () => {
       return persistence.loadAllCompletedTasks();
