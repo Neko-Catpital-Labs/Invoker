@@ -65,6 +65,22 @@ export interface InvokerConfig {
     sshKeyPath: string;
     /** SSH port. Default: 22. */
     port?: number;
+    /**
+     * When true, use managed workspace mode: clone/fetch repo, create/reset worktrees,
+     * and provision per-task workspaces. When false (default), BYO mode: user provides
+     * pre-cloned repo path and handles all git/setup operations.
+     */
+    managedWorkspaces?: boolean;
+    /**
+     * Remote invoker home directory (e.g., ~/.invoker). Only used in managed mode.
+     * Default: ~/.invoker
+     */
+    remoteInvokerHome?: string;
+    /**
+     * Optional provision command to run in the worktree after creation (e.g., pnpm install).
+     * Only used in managed mode. Default: pnpm install --frozen-lockfile
+     */
+    provisionCommand?: string;
   }>;
   /**
    * Pattern-based rules that enforce task execution environment conformance.

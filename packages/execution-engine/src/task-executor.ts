@@ -85,6 +85,9 @@ export interface TaskExecutorConfig {
     user: string;
     sshKeyPath: string;
     port?: number;
+    managedWorkspaces?: boolean;
+    remoteInvokerHome?: string;
+    provisionCommand?: string;
   }>;
   /** Docker execution environment configuration from .invoker.json. */
   dockerConfig?: {
@@ -108,9 +111,11 @@ export class TaskExecutor {
   /** @internal */ mergeGateProvider?: MergeGateProvider;
   /** @internal */ reviewProviderRegistry?: ReviewProviderRegistry;
   private activePrPollers = new Map<string, ReturnType<typeof setInterval>>();
-  private getRemoteTargets: () => Record<string, { host: string; user: string; sshKeyPath: string; port?: number }>;
+  private getRemoteTargets: () => Record<string, { host: string; user: string; sshKeyPath: string; port?: number; managedWorkspaces?: boolean; remoteInvokerHome?: string; provisionCommand?: string }>;
   private dockerConfig: { imageName?: string; secretsFile?: string };
   private executionAgentRegistry?: AgentRegistry;
+  /** Cache for SSH familiars, keyed by remoteTargetId. One instance per target for correct git locking. */
+  private sshFamiliarCache = new Map<string, SshFamiliar>();
 
   /** Config default branch (e.g. master) for workflows without baseBranch. */
   getDefaultBranchHint(): string | undefined {
@@ -361,20 +366,23 @@ export class TaskExecutor {
 
     // Persist execution metadata immediately at task start — all fields explicit
     {
+      // Fail-fast: workspacePath must be provided by all familiars
+      if (!handle.workspacePath) {
+        throw new Error(
+          `Familiar "${familiar.type}" did not provide workspacePath for task "${task.id}". ` +
+          `All familiars must set workspacePath; refusing to fall back to host repo.`,
+        );
+      }
+
       const changes = {
         config: { familiarType: familiar.type },
         execution: {
-          workspacePath: handle.workspacePath ?? (() => {
-            throw new Error(
-              `Familiar "${familiar.type}" did not provide workspacePath for task "${task.id}". ` +
-              `All familiars must set workspacePath; refusing to fall back to host repo.`,
-            );
-          })(),
+          workspacePath: handle.workspacePath,
+          branch: handle.branch ?? undefined,  // Explicit undefined when branch is not applicable (e.g., BYO mode)
           agentSessionId: handle.agentSessionId ?? undefined,
           lastAgentSessionId: handle.agentSessionId ?? undefined,
           lastAgentName: task.execution.agentName ?? undefined,
           containerId: handle.containerId ?? undefined,
-          branch: handle.branch ?? undefined,
         },
       };
       this.persistence.updateTask(task.id, changes);
@@ -384,11 +392,11 @@ export class TaskExecutor {
       if (task.config.isMergeNode) {
         console.log(
           `[merge-gate-workspace] persistStartMetadata mergeNode=${task.id} ` +
-            `familiar workspacePath=${changes.execution.workspacePath ?? 'NULL'} ` +
+            `familiar workspacePath=${changes.execution.workspacePath} ` +
             '(gate clone path is written later in executeMergeNode)',
         );
       }
-      console.log(`[trace] TaskExecutor: persisted metadata for task=${task.id}`);
+      console.log(`[trace] TaskExecutor: persisted metadata for task=${task.id} workspacePath=${handle.workspacePath} branch=${handle.branch ?? 'null'}`);
     }
 
     // Notify consumer about the spawned handle
@@ -489,12 +497,17 @@ export class TaskExecutor {
         return worktree;
       }
 
-      // Lazy registration for SSH — resolve remoteTargetId from config
+      // Lazy registration for SSH — resolve remoteTargetId from config and cache by targetId.
+      // The cache is config-aware: if the underlying remote target config changes (e.g. via
+      // remoteTargetsProvider returning new values), we replace the cached familiar so the
+      // new config takes effect immediately.
       if (effectiveType === 'ssh') {
         const targetId = task.config.remoteTargetId;
         if (!targetId) {
           throw new Error(`Task ${task.id} has familiarType=ssh but no remoteTargetId`);
         }
+
+        // Always re-read targets so dynamic provider updates are picked up.
         const remoteTargets = this.getRemoteTargets();
         const target = remoteTargets[targetId];
         if (!target) {
@@ -503,14 +516,46 @@ export class TaskExecutor {
             `entry exists in remoteTargets config. Available: [${Object.keys(remoteTargets).join(', ')}]`,
           );
         }
+
+        // Build a config fingerprint so cache invalidates when target config changes.
+        const configFingerprint = JSON.stringify({
+          host: target.host,
+          user: target.user,
+          sshKeyPath: target.sshKeyPath,
+          port: target.port,
+          managedWorkspaces: target.managedWorkspaces,
+          remoteInvokerHome: target.remoteInvokerHome,
+          provisionCommand: target.provisionCommand,
+        });
+        const cacheKey = `${targetId}|${configFingerprint}`;
+
+        // Return cached familiar if it exists for this target+config combo
+        const cached = this.sshFamiliarCache.get(cacheKey);
+        if (cached) {
+          console.log(`[trace] TaskExecutor.selectFamiliar: task=${task.id} effectiveType=ssh remoteTarget=${targetId} → ssh (cached)`);
+          return cached;
+        }
+
+        // Drop any stale entries for this targetId so we don't accumulate dead caches.
+        for (const key of this.sshFamiliarCache.keys()) {
+          if (key.startsWith(`${targetId}|`)) {
+            this.sshFamiliarCache.delete(key);
+          }
+        }
+
         const ssh = new SshFamiliar({
           host: target.host,
           user: target.user,
           sshKeyPath: target.sshKeyPath,
           port: target.port,
           agentRegistry: this.executionAgentRegistry,
+          managedWorkspaces: target.managedWorkspaces,
+          remoteInvokerHome: target.remoteInvokerHome,
+          provisionCommand: target.provisionCommand,
         });
-        console.log(`[trace] TaskExecutor.selectFamiliar: task=${task.id} effectiveType=ssh remoteTarget=${targetId} → ssh (per-task)`);
+
+        this.sshFamiliarCache.set(cacheKey, ssh);
+        console.log(`[trace] TaskExecutor.selectFamiliar: task=${task.id} effectiveType=ssh remoteTarget=${targetId} → ssh (new, cached)`);
         return ssh;
       }
     }
@@ -1084,6 +1129,14 @@ export class TaskExecutor {
 
   getRemoteTargetConfig(targetId: string): { host: string; user: string; sshKeyPath: string; port?: number } | undefined {
     return this.getRemoteTargets()[targetId];
+  }
+
+  /**
+   * Clear the SSH familiar cache. Useful for testing or when remote target configs change.
+   * Does not call destroyAll() — cleanup happens via familiar lifecycle methods.
+   */
+  clearSshFamiliarCache(): void {
+    this.sshFamiliarCache.clear();
   }
 
   // ── Private Helpers ──────────────────────────────────────

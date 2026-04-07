@@ -496,7 +496,7 @@ describe('getRestoredTerminalSpec routing', () => {
   });
 
   describe('DockerFamiliar', () => {
-    const docker = new DockerFamiliar({ workspaceDir: '/tmp' });
+    const docker = new DockerFamiliar({});
 
     it('returns docker exec spec with session resume', () => {
       const meta: PersistedTaskMeta = {
@@ -674,12 +674,182 @@ describe('SshFamiliar getRestoredTerminalSpec', () => {
     expect(spec.args!.join(' ')).not.toContain('BatchMode');
   });
 
-  it('falls back to non-interactive ssh args when workspacePath is missing', () => {
+  it('returns non-interactive ssh spec when workspacePath is missing', () => {
     const ssh = new SshFamiliar({ host: 'h', user: 'u', sshKeyPath: '/k' });
     const spec = ssh.getRestoredTerminalSpec({ taskId: 't', familiarType: 'ssh' });
+
+    // When workspacePath is missing, SshFamiliar returns a non-interactive BatchMode spec
+    // (not an error - the error is enforced by openExternalTerminalForTask's invariant check)
     expect(spec.command).toBe('ssh');
     expect(spec.args).toContain('BatchMode=yes');
     expect(spec.args).not.toContain('-t');
+    expect(spec.cwd).toBeUndefined();
+  });
+
+  it('deterministic: SSH managed workspace invariant catches missing workspacePath before getRestoredTerminalSpec', async () => {
+    // This test verifies the fail-fast invariant at line 208 of open-terminal-for-task.ts
+    const mockPersistence = {
+      getTaskStatus: vi.fn(() => 'completed'),
+      getFamiliarType: vi.fn(() => 'ssh'),
+      getAgentSessionId: vi.fn(() => null),
+      getContainerId: vi.fn(() => null),
+      getWorkspacePath: vi.fn(() => null),  // Missing workspace path - invariant violation!
+      getBranch: vi.fn(() => 'experiment/test-branch'),
+      getRemoteTargetId: vi.fn(() => null),
+    };
+
+    const ssh = new SshFamiliar({ host: 'h', user: 'u', sshKeyPath: '/k' });
+    const registry = new FamiliarRegistry();
+    registry.register('ssh', ssh);
+
+    const result = await openExternalTerminalForTask({
+      taskId: 'task-ssh-no-workspace',
+      persistence: mockPersistence as any,
+      familiarRegistry: registry,
+      repoRoot: '/repo',
+    });
+
+    // Must fail with deterministic error text
+    expect(result.opened).toBe(false);
+    expect(result.reason).toContain('workspace metadata is missing');
+    expect(result.reason).toContain('Familiar type "ssh" requires a managed workspace');
+    expect(result.reason).toContain('workspacePath is not set');
+    expect(result.reason).toContain('Recreate the task');
+    expect(result.reason).toContain('Refusing to fall back to host repo');
+
+    // Verify no real SSH call attempted
+    expect(mockPersistence.getWorkspacePath).toHaveBeenCalledWith('task-ssh-no-workspace');
+    expect(mockPersistence.getFamiliarType).toHaveBeenCalledWith('task-ssh-no-workspace');
+  });
+
+  it('deterministic: SSH success path scaffolding when workspacePath is present', async () => {
+    // This test verifies the success path with complete metadata
+    const mockPersistence = {
+      getTaskStatus: vi.fn(() => 'completed'),
+      getFamiliarType: vi.fn(() => 'ssh'),
+      getAgentSessionId: vi.fn(() => 'ssh-sess-123'),
+      getContainerId: vi.fn(() => null),
+      getWorkspacePath: vi.fn(() => '~/.invoker/worktrees/abc/experiment-ssh-task'),  // Has workspace!
+      getBranch: vi.fn(() => 'experiment/ssh-task'),
+      getRemoteTargetId: vi.fn(() => null),
+      getExecutionAgent: vi.fn(() => 'claude'),
+    };
+
+    const ssh = new SshFamiliar({
+      host: 'droplet.example',
+      user: 'ubuntu',
+      sshKeyPath: '/home/user/.ssh/id_rsa',
+      port: 2222,
+    });
+    const registry = new FamiliarRegistry();
+    registry.register('ssh', ssh);
+
+    const result = await openExternalTerminalForTask({
+      taskId: 'task-ssh-with-workspace',
+      persistence: mockPersistence as any,
+      familiarRegistry: registry,
+      repoRoot: '/repo',
+    });
+
+    // In headless CI, external terminal launch will fail with "not supported" or similar
+    // But the key assertion is: we should NOT fail with the workspace invariant error
+    if (!result.opened && result.reason) {
+      expect(result.reason).not.toContain('workspace metadata is missing');
+      expect(result.reason).not.toContain('requires a managed workspace');
+      expect(result.reason).not.toContain('workspacePath is not set');
+    }
+
+    // Verify persistence was queried correctly
+    expect(mockPersistence.getWorkspacePath).toHaveBeenCalledWith('task-ssh-with-workspace');
+    expect(mockPersistence.getBranch).toHaveBeenCalledWith('task-ssh-with-workspace');
+  });
+
+  it('SSH managed success regression: spawns ssh -t with correct workspace and branch when metadata is complete', async () => {
+    // Regression guard: SSH with complete metadata should proceed through full open-terminal
+    // flow and attempt to spawn ssh -t (even if platform spawn fails in CI).
+    // This test mocks spawnDetachedTerminal to verify it receives the correct SSH command.
+
+    // Mock the spawn layer
+    const mockSpawnDetached = vi.fn(
+      async (_cmd: string, _args: string[], _opts: any, _onClose: () => void) =>
+        ({ opened: true } as const)
+    );
+    const { openExternalTerminalForTask: originalOpen } = await import('../open-terminal-for-task.js');
+    const terminalLaunch = await import('../terminal-external-launch.js');
+    vi.spyOn(terminalLaunch, 'spawnDetachedTerminal').mockImplementation(mockSpawnDetached as any);
+
+    const mockPersistence = {
+      getTaskStatus: vi.fn(() => 'completed'),
+      getFamiliarType: vi.fn(() => 'ssh'),
+      getAgentSessionId: vi.fn(() => 'ssh-sess-abc'),
+      getContainerId: vi.fn(() => null),
+      getWorkspacePath: vi.fn(() => '~/.invoker/worktrees/xyz/experiment-ssh-managed-deadbeef'),
+      getBranch: vi.fn(() => 'experiment/ssh-managed-deadbeef'),
+      getRemoteTargetId: vi.fn(() => null),
+      getExecutionAgent: vi.fn(() => 'claude'),
+    };
+
+    const ssh = new SshFamiliar({
+      host: 'remote.dev',
+      user: 'deployer',
+      sshKeyPath: '/home/me/.ssh/deploy_key',
+      port: 2222,
+    });
+    const registry = new FamiliarRegistry();
+    registry.register('ssh', ssh);
+
+    const result = await originalOpen({
+      taskId: 'ssh-managed-task',
+      persistence: mockPersistence as any,
+      familiarRegistry: registry,
+      repoRoot: '/local/repo',
+    });
+
+    // Key assertion: terminal opened successfully (spawn was called)
+    expect(result.opened).toBe(true);
+    expect(result.reason).toBeUndefined();
+
+    // Verify spawnDetachedTerminal was called with ssh command
+    expect(mockSpawnDetached).toHaveBeenCalledTimes(1);
+    const callArgs = mockSpawnDetached.mock.calls[0];
+    expect(callArgs).toBeDefined();
+    expect(callArgs.length).toBeGreaterThanOrEqual(2);
+    const command = callArgs[0];
+    const args = callArgs[1];
+
+    if (process.platform === 'linux') {
+      // Linux spawns x-terminal-emulator which internally runs ssh
+      expect(command).toBe('x-terminal-emulator');
+      expect(args).toContain('-e');
+      expect(args).toContain('bash');
+      expect(args).toContain('-c');
+      // The bash script should contain the SSH command
+      const bashScriptIndex = args.indexOf('-c');
+      expect(bashScriptIndex).toBeGreaterThanOrEqual(0);
+      const bashScript = args[bashScriptIndex + 1];
+      expect(bashScript).toContain('ssh');
+      expect(bashScript).toContain('remote.dev');
+      expect(bashScript).toContain('experiment/ssh-managed-deadbeef');
+    } else if (process.platform === 'darwin') {
+      // macOS spawns osascript
+      expect(command).toBe('osascript');
+      const scriptContent = args.join(' ');
+      expect(scriptContent).toContain('ssh');
+      expect(scriptContent).toContain('remote.dev');
+    }
+
+    // Verify no workspace invariant error
+    expect(mockPersistence.getWorkspacePath).toHaveBeenCalledWith('ssh-managed-task');
+    expect(mockPersistence.getBranch).toHaveBeenCalledWith('ssh-managed-task');
+
+    // Reset only the per-test spy. Do not call vi.restoreAllMocks() — it would
+    // wipe the module-level vi.mock for spawnDetachedTerminal that subsequent
+    // tests rely on, causing "vi.mocked(spawnDetachedTerminal).mockClear is
+    // not a function" failures in the fail-fast invariant describe block.
+    vi.mocked(terminalLaunch.spawnDetachedTerminal).mockReset();
+    vi.mocked(terminalLaunch.spawnDetachedTerminal).mockImplementation(
+      async () => ({ opened: true } as const),
+    );
   });
 });
 
@@ -822,7 +992,7 @@ describe('getRestoredTerminalSpec dispatches codex vs claude session resume', ()
   describe('DockerFamiliar', () => {
     it('resumes with codex inside container when executionAgent is "codex"', () => {
       const agentRegistry = registerBuiltinAgents();
-      const docker = new DockerFamiliar({ workspaceDir: '/tmp', agentRegistry });
+      const docker = new DockerFamiliar({ agentRegistry });
       const meta: PersistedTaskMeta = {
         taskId: 'docker-codex',
         familiarType: 'docker',
@@ -1138,7 +1308,7 @@ describe('openExternalTerminalForTask fail-fast workspace invariant', () => {
       getBranch: vi.fn(() => null),
     };
 
-    const docker = new DockerFamiliar({ workspaceDir: '/tmp' });
+    const docker = new DockerFamiliar({});
     const registry = new FamiliarRegistry();
     registry.register('docker', docker);
 

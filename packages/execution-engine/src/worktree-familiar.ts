@@ -16,6 +16,7 @@ import {
   shouldResolveViaOriginTracking,
 } from './plan-base-remote.js';
 import { remoteFetchForPool } from './remote-fetch-policy.js';
+import { sanitizeBranchForPath } from './git-utils.js';
 
 // Re-export for backward compatibility
 export { computeBranchHash } from './branch-utils.js';
@@ -454,7 +455,7 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
   private findWorktreeByBranch(branch: string): string | undefined {
     try {
       // The pool creates worktrees at {worktreeBaseDir}/{urlHash}/{sanitizedBranch}
-      const sanitized = branch.replace(/\//g, '-');
+      const sanitized = sanitizeBranchForPath(branch);
       const { readdirSync } = require('node:fs') as typeof import('node:fs');
       for (const sub of readdirSync(this.worktreeBaseDir, { withFileTypes: true })) {
         if (sub.isDirectory()) {

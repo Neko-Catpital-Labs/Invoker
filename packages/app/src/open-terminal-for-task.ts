@@ -201,8 +201,11 @@ export async function openExternalTerminalForTask(
 
   // Managed-workspace familiars (worktree, ssh, docker) MUST have a resolved workspacePath.
   // Refuse fallback to repoRoot host cwd to prevent silent data loss when workspace metadata is missing.
+  // SSH is excluded from hostWorkspaceFamiliarTypes because its workspace is remote — its
+  // getRestoredTerminalSpec returns { command, args } without a local cwd by design. The first
+  // workspace-metadata check below already enforces that SSH tasks have repairedMeta.workspacePath.
   const managedFamiliarTypes = ['worktree', 'ssh', 'docker'];
-  const hostWorkspaceFamiliarTypes = ['worktree', 'ssh'];
+  const hostWorkspaceFamiliarTypes = ['worktree'];
   const isManagedFamiliar = managedFamiliarTypes.includes(repairedMeta.familiarType);
   if (isManagedFamiliar && !repairedMeta.workspacePath) {
     const errorMsg = [

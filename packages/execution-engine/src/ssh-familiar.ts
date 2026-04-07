@@ -1,5 +1,4 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { createHash } from 'node:crypto';
 import { accessSync, constants } from 'node:fs';
 import { normalize } from 'node:path';
 import type { WorkRequest, WorkResponse } from '@invoker/contracts';
@@ -10,6 +9,19 @@ import { computeBranchHash } from './branch-utils.js';
 import { findManagedWorktreeForBranch, abbrevRefMatchesBranch } from './worktree-discovery.js';
 import { DEFAULT_WORKTREE_PROVISION_COMMAND } from './default-worktree-provision-command.js';
 import type { AgentRegistry } from './agent-registry.js';
+import { computeRepoUrlHash, sanitizeBranchForPath } from './git-utils.js';
+import {
+  shellPosixSingleQuote as sshGitShellQuote,
+  base64Encode as sshGitB64,
+  sshInteractiveCdFragment,
+  buildMirrorCloneScript,
+  parseBootstrapOutput,
+  buildWorktreeListScript,
+  buildWorktreeHeadScript,
+  buildWorktreeCleanupScript,
+  buildRecordAndPushScript,
+  parseRecordAndPushOutput,
+} from './ssh-git-exec.js';
 
 export interface SshFamiliarConfig {
   host: string;
@@ -20,6 +32,22 @@ export interface SshFamiliarConfig {
   port?: number;
   /** Agent registry for pluggable agent command building. */
   agentRegistry?: AgentRegistry;
+  /**
+   * When true, use managed workspace mode: clone/fetch repo, create/reset worktrees,
+   * and provision per-task workspaces. When false (default), BYO mode: user provides
+   * pre-cloned repo path and handles all git/setup operations.
+   */
+  managedWorkspaces?: boolean;
+  /**
+   * Remote invoker home directory (e.g., ~/.invoker). Only used in managed mode.
+   * Default: ~/.invoker
+   */
+  remoteInvokerHome?: string;
+  /**
+   * Optional provision command to run in the worktree after creation (e.g., pnpm install).
+   * Only used in managed mode. Default: pnpm install --frozen-lockfile
+   */
+  provisionCommand?: string;
 }
 
 interface SshEntry extends BaseEntry {
@@ -43,6 +71,9 @@ export class SshFamiliar extends BaseFamiliar<SshEntry> {
   private readonly sshKeyPath: string;
   private readonly port: number;
   private readonly agentRegistry?: AgentRegistry;
+  private readonly managedWorkspaces: boolean;
+  private readonly remoteInvokerHome: string;
+  private readonly provisionCommand: string;
 
   constructor(config: SshFamiliarConfig) {
     super();
@@ -51,15 +82,11 @@ export class SshFamiliar extends BaseFamiliar<SshEntry> {
     this.sshKeyPath = config.sshKeyPath;
     this.port = config.port ?? 22;
     this.agentRegistry = config.agentRegistry;
+    this.managedWorkspaces = config.managedWorkspaces ?? false;
+    this.remoteInvokerHome = config.remoteInvokerHome ?? '~/.invoker';
+    this.provisionCommand = config.provisionCommand ?? DEFAULT_WORKTREE_PROVISION_COMMAND;
   }
 
-  private static urlHash(repoUrl: string): string {
-    return createHash('sha256').update(repoUrl).digest('hex').slice(0, 12);
-  }
-
-  private static b64(s: string): string {
-    return Buffer.from(s, 'utf8').toString('base64');
-  }
 
   private buildSshArgs(): string[] {
     return [
@@ -81,33 +108,8 @@ export class SshFamiliar extends BaseFamiliar<SshEntry> {
     ];
   }
 
-  /** POSIX single-quote escaping for `bash -lc '…'` remote command lines. */
-  private static shellPosixSingleQuote(s: string): string {
-    return `'${s.replace(/'/g, `'\\''`)}'`;
-  }
 
-  /**
-   * Bash fragment: after `WT=$(echo … | base64 -d)`.
-   * Expands a leading ~ so `cd "$WT"` works. Do NOT use `case ~/*)` — bash tilde-expands
-   * case patterns, so `~/*` becomes `/root/*` and never matches literal `~/.invoker/…`.
-   */
-  private static bashNormalizeWtFromDecodedVar(): string {
-    return `if [[ "$WT" == '~' ]]; then
-  WT="$HOME"
-elif [[ "\${WT:0:2}" == '~/' ]]; then
-  WT="$HOME/\${WT:2}"
-fi`;
-  }
 
-  /** `bash -lc` inner fragment: cd into remote path; ~ must become $HOME (quotes prevent ~ expansion). */
-  private static sshInteractiveCdFragment(workspacePath: string): string {
-    if (workspacePath === '~') return 'cd "$HOME"';
-    if (workspacePath.startsWith('~/')) {
-      const rest = workspacePath.slice(2).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-      return `cd "$HOME/${rest}"`;
-    }
-    return `cd ${SshFamiliar.shellPosixSingleQuote(workspacePath)}`;
-  }
 
   private async execRemoteCapture(script: string): Promise<string> {
     return new Promise((resolve, reject) => {
@@ -168,14 +170,6 @@ fi`;
       );
     }
 
-    const repoUrl = request.inputs.repoUrl;
-    if (!repoUrl) {
-      throw new Error(
-        `SSH task "${request.actionId}" requires repoUrl. ` +
-        `Add a top-level "repoUrl" to your plan YAML (e.g. repoUrl: git@github.com:user/repo.git).`,
-      );
-    }
-
     let payload: string;
     let agentSessionId: string | undefined;
 
@@ -200,10 +194,94 @@ fi`;
       payload = 'echo "Unsupported action type"';
     }
 
-    return this.startRemoteWorktree(request, handle, repoUrl, payload, agentSessionId);
+    try {
+      if (this.managedWorkspaces) {
+        const repoUrl = request.inputs.repoUrl;
+        if (!repoUrl) {
+          throw new Error(
+            `SSH managed workspace task "${request.actionId}" requires repoUrl. ` +
+            `Add a top-level "repoUrl" to your plan YAML (e.g. repoUrl: git@github.com:user/repo.git).`,
+          );
+        }
+        return await this.startManagedWorkspace(request, handle, repoUrl, payload, agentSessionId);
+      } else {
+        return await this.startBYOWorkspace(request, handle, payload, agentSessionId);
+      }
+    } catch (err) {
+      throw this.withStartupMetadata(err, handle);
+    }
   }
 
-  private async startRemoteWorktree(
+  /**
+   * BYO (Bring Your Own) mode: user provides pre-cloned workspace path.
+   * No clone, fetch, worktree, or provision operations. Simply run command in provided directory.
+   */
+  private async startBYOWorkspace(
+    request: WorkRequest,
+    handle: FamiliarHandle,
+    payload: string,
+    agentSessionId?: string,
+  ): Promise<FamiliarHandle> {
+    const executionId = handle.executionId;
+    const workspacePath = request.inputs.workspacePath;
+
+    if (!workspacePath) {
+      throw new Error(
+        `SSH BYO mode task "${request.actionId}" requires workspacePath in task inputs. ` +
+        `Either provide workspacePath, or enable managedWorkspaces in your SSH target config.`,
+      );
+    }
+
+    handle.workspacePath = workspacePath;
+    handle.agentSessionId = agentSessionId;
+
+    // No-command tasks complete immediately
+    if (!request.inputs.command && !request.inputs.prompt) {
+      const response: WorkResponse = {
+        requestId: request.requestId,
+        actionId: request.actionId,
+        status: 'completed',
+        outputs: { exitCode: 0 },
+      };
+      const entry: SshEntry = {
+        process: null,
+        request,
+        outputListeners: new Set(),
+        outputBuffer: [],
+        outputBufferBytes: 0,
+        evictedChunkCount: 0,
+        completeListeners: new Set(),
+        heartbeatListeners: new Set(),
+        completed: true,
+        agentSessionId,
+      };
+      this.registerEntry(handle, entry);
+      this.emitComplete(executionId, response);
+      return handle;
+    }
+
+    // Run payload in user-provided directory
+    const payloadB64 = sshGitB64(payload);
+    const wtB64 = sshGitB64(workspacePath);
+    const runScript = `set -euo pipefail
+WT=$(echo ${wtB64} | base64 -d)
+if [[ "$WT" == '~' ]]; then
+  WT="$HOME"
+elif [[ "\${WT:0:2}" == '~/' ]]; then
+  WT="$HOME/\${WT:2}"
+fi
+cd "$WT"
+echo "[SshFamiliar BYO] Running task in user-provided workspace: $WT"
+echo ${payloadB64} | base64 -d | bash -se
+`;
+
+    return this.spawnSshRemoteStdin(executionId, request, handle, runScript, agentSessionId, undefined);
+  }
+
+  /**
+   * Managed workspace mode: clone, fetch, create worktrees, provision, then execute.
+   */
+  private async startManagedWorkspace(
     request: WorkRequest,
     handle: FamiliarHandle,
     repoUrl: string,
@@ -211,7 +289,7 @@ fi`;
     agentSessionId?: string,
   ): Promise<FamiliarHandle> {
     const executionId = handle.executionId;
-    const h = SshFamiliar.urlHash(repoUrl);
+    const h = computeRepoUrlHash(repoUrl);
     const baseRef = request.inputs.baseBranch ?? 'HEAD';
     const upstreamCommits = (request.inputs.upstreamContext ?? [])
       .map(c => c.commitHash)
@@ -219,146 +297,119 @@ fi`;
     const salt = request.inputs.salt ?? '';
     handle.agentSessionId = agentSessionId;
 
-    try {
-      // Step 1: Clone/fetch on remote + resolve baseHead
-      const script1 = `set -euo pipefail
-REPO=$(echo ${SshFamiliar.b64(repoUrl)} | base64 -d)
-BASE=$(echo ${SshFamiliar.b64(baseRef)} | base64 -d)
-H="${h}"
-CLONE="$HOME/.invoker/repos/$H"
-mkdir -p "$(dirname "$CLONE")"
-if [ ! -d "$CLONE/.git" ]; then git clone "$REPO" "$CLONE"; fi
-git -C "$CLONE" fetch --all --prune || true
-RESOLVED_BASE="$BASE"
-if git -C "$CLONE" rev-parse --verify "$RESOLVED_BASE^{commit}" >/dev/null 2>&1; then
-  :
-elif git -C "$CLONE" rev-parse --verify "origin/$BASE^{commit}" >/dev/null 2>&1; then
-  RESOLVED_BASE="origin/$BASE"
-else
-  ORIGIN_HEAD=$(git -C "$CLONE" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)
-  if [ -n "$ORIGIN_HEAD" ] && git -C "$CLONE" rev-parse --verify "$ORIGIN_HEAD^{commit}" >/dev/null 2>&1; then
-    RESOLVED_BASE="$ORIGIN_HEAD"
-    printf "__INVOKER_BASE_WARNING__=Requested base '%s' not found; falling back to '%s'.\n" "$BASE" "$RESOLVED_BASE"
-  else
-    echo "Requested base '$BASE' does not exist and origin/HEAD is unavailable." >&2
-    exit 128
-  fi
-fi
-BASE_HEAD=$(git -C "$CLONE" rev-parse "$RESOLVED_BASE")
-printf "__INVOKER_BASE_REF__=%s\n" "$RESOLVED_BASE"
-printf "__INVOKER_BASE_HEAD__=%s\n" "$BASE_HEAD"
-`;
-      const bootstrapOut = await this.execRemoteCapture(script1);
-      const { resolvedBaseRef, baseHead, warning } = this.parseBootstrapOutput(bootstrapOut);
-      if (warning) {
-        this.emitOutput(executionId, `[SshFamiliar] ${warning}\n`);
-      }
-      const hash8 = computeBranchHash(
-        request.actionId,
-        request.inputs.command,
-        request.inputs.prompt,
-        upstreamCommits,
-        baseHead,
-        salt,
-      );
-      const experimentBranch = `experiment/${request.actionId}-${hash8}`;
-      const san = experimentBranch.replace(/\//g, '-');
-      const remoteClone = `$HOME/.invoker/repos/${h}`;
-      const canonicalRemoteWt = `$HOME/.invoker/worktrees/${h}/${san}`;
+    // Use configured remoteInvokerHome (default ~/.invoker)
+    const invokerHome = this.remoteInvokerHome;
 
-      handle.branch = experimentBranch;
+    // Step 1: Clone/fetch on remote + resolve baseHead
+    const script1 = buildMirrorCloneScript({
+      repoUrl,
+      repoHash: h,
+      baseRef,
+      invokerHome,
+    });
+    const bootstrapOut = await this.execRemoteCapture(script1);
+    const { resolvedBaseRef, baseHead, warning } = parseBootstrapOutput(bootstrapOut);
+    if (warning) {
+      this.emitOutput(executionId, `[SshFamiliar] ${warning}\n`);
+    }
+    const hash8 = computeBranchHash(
+      request.actionId,
+      request.inputs.command,
+      request.inputs.prompt,
+      upstreamCommits,
+      baseHead,
+      salt,
+    );
+    const experimentBranch = `experiment/${request.actionId}-${hash8}`;
+    const san = sanitizeBranchForPath(experimentBranch);
+    const remoteClone = `${invokerHome}/repos/${h}`;
+    const canonicalRemoteWt = `${invokerHome}/worktrees/${h}/${san}`;
 
-      const remoteHome = (await this.execRemoteCapture('printf %s "$HOME"')).trim();
-      const porcelainScript = `set -euo pipefail
-H="${h}"
-CLONE="$HOME/.invoker/repos/$H"
-git -C "$CLONE" worktree list --porcelain
-`;
-      const porcelain = await this.execRemoteCapture(porcelainScript);
-      const managedPrefix = normalize(`${remoteHome}/.invoker/worktrees/${h}`);
-      const reuseAbs = findManagedWorktreeForBranch(porcelain, experimentBranch, [managedPrefix]);
+    // Set metadata on handle IMMEDIATELY so withStartupMetadata can persist on error
+    handle.branch = experimentBranch;
+    handle.workspacePath = `${invokerHome}/worktrees/${h}/${san}`;
 
-      let remoteWt = canonicalRemoteWt;
-      let skippedRemotePreserve = false;
+    const remoteHome = (await this.execRemoteCapture('printf %s "$HOME"')).trim();
+    const porcelainScript = buildWorktreeListScript({ repoHash: h, invokerHome });
+    const porcelain = await this.execRemoteCapture(porcelainScript);
 
-      if (reuseAbs) {
-        const wtQ = SshFamiliar.shellPosixSingleQuote(reuseAbs);
-        const headScript = `set -euo pipefail
-git -C ${wtQ} rev-parse --abbrev-ref HEAD
-`;
-        try {
-          const head = (await this.execRemoteCapture(headScript)).trim();
-          if (abbrevRefMatchesBranch(head, experimentBranch)) {
-            skippedRemotePreserve = true;
-            remoteWt = reuseAbs;
-            handle.workspacePath =
-              reuseAbs.startsWith(`${remoteHome}/`) ? `~${reuseAbs.slice(remoteHome.length)}` : reuseAbs;
-          }
-        } catch {
-          /* fall through to fresh setup */
+    // Expand ~ in invokerHome for path matching
+    const expandedInvokerHome = invokerHome === '~'
+      ? remoteHome
+      : invokerHome.startsWith('~/')
+      ? remoteHome + invokerHome.slice(1)
+      : invokerHome;
+    const managedPrefix = normalize(`${expandedInvokerHome}/worktrees/${h}`);
+    const reuseAbs = findManagedWorktreeForBranch(porcelain, experimentBranch, [managedPrefix]);
+
+    let remoteWt = canonicalRemoteWt;
+    let skippedRemotePreserve = false;
+
+    if (reuseAbs) {
+      const headScript = buildWorktreeHeadScript(reuseAbs);
+      try {
+        const head = (await this.execRemoteCapture(headScript)).trim();
+        if (abbrevRefMatchesBranch(head, experimentBranch)) {
+          skippedRemotePreserve = true;
+          remoteWt = reuseAbs;
+          // Update handle.workspacePath to reused path (may differ from canonical if tilde-expanded)
+          handle.workspacePath =
+            reuseAbs.startsWith(`${remoteHome}/`) ? `~${reuseAbs.slice(remoteHome.length)}` : reuseAbs;
         }
+      } catch {
+        /* fall through to fresh setup */
       }
+    }
 
-      if (!skippedRemotePreserve) {
-        const cleanupScript = `set -euo pipefail
-CLONE="${remoteClone}"
-WT="${canonicalRemoteWt}"
-mkdir -p "$(dirname "$WT")"
-git -C "$CLONE" worktree prune 2>/dev/null || true
-if [ -e "$WT" ]; then
-  echo "[SshFamiliar] Removing stale worktree path: $WT"
-  git -C "$CLONE" worktree remove --force "$WT" 2>/dev/null || true
-  rm -rf "$WT"
-  git -C "$CLONE" worktree prune 2>/dev/null || true
-fi
-`;
-        await this.execRemoteCapture(cleanupScript);
-        remoteWt = canonicalRemoteWt;
-        handle.workspacePath = `~/.invoker/worktrees/${h}/${san}`;
-      }
+    if (!skippedRemotePreserve) {
+      const cleanupScript = buildWorktreeCleanupScript({
+        remoteClone,
+        canonicalRemoteWt,
+      });
+      await this.execRemoteCapture(cleanupScript);
+      remoteWt = canonicalRemoteWt;
+      // handle.workspacePath already set to canonical path above; no update needed
+    }
 
-      if (skippedRemotePreserve) {
-        await this.mergeRequestUpstreamBranches(request, remoteWt, resolvedBaseRef);
-        handle.branch = experimentBranch;
-      } else {
-        await this.setupTaskBranch(remoteClone, request, handle, {
-          branchName: experimentBranch,
-          base: resolvedBaseRef,
-          worktreeDir: remoteWt,
-        });
-      }
+    if (skippedRemotePreserve) {
+      await this.mergeRequestUpstreamBranches(request, remoteWt, resolvedBaseRef);
+      // handle.branch already set above; no update needed
+    } else {
+      await this.setupTaskBranch(remoteClone, request, handle, {
+        branchName: experimentBranch,
+        base: resolvedBaseRef,
+        worktreeDir: remoteWt,
+      });
+    }
 
-      // Step 4: No-command tasks complete immediately
-      if (!request.inputs.command && !request.inputs.prompt) {
-        await this.handleProcessExit(executionId, request, remoteWt, 0, {
-          branch: experimentBranch,
-        });
-        return handle;
-      }
+    // Step 4: No-command tasks complete immediately
+    if (!request.inputs.command && !request.inputs.prompt) {
+      await this.handleProcessExit(executionId, request, remoteWt, 0, {
+        branch: experimentBranch,
+      });
+      return handle;
+    }
 
-      // Step 5: Provision + run payload in a single SSH session
-      const provB64 = SshFamiliar.b64(DEFAULT_WORKTREE_PROVISION_COMMAND);
-      const payloadB64 = SshFamiliar.b64(payload);
-      const wtLine =
-        remoteWt.startsWith('/')
-          ? `WT=${SshFamiliar.shellPosixSingleQuote(remoteWt)}`
-          : `WT="${remoteWt}"`;
-      const runScript = `set -euo pipefail
+    // Step 5: Provision + run payload in a single SSH session
+    const provB64 = sshGitB64(this.provisionCommand);
+    const payloadB64 = sshGitB64(payload);
+    const wtLine =
+      remoteWt.startsWith('/')
+        ? `WT=${sshGitShellQuote(remoteWt)}`
+        : `WT="${remoteWt}"`;
+    const runScript = `set -euo pipefail
 ${wtLine}
 cd "$WT"
-echo "[SshFamiliar] Provisioning remote worktree (pnpm install + electron native rebuild)..."
+echo "[SshFamiliar] Provisioning remote worktree with: ${this.provisionCommand.slice(0, 50)}..."
 eval "$(echo ${provB64} | base64 -d)"
 echo "[SshFamiliar] Running task payload..."
 echo ${payloadB64} | base64 -d | bash -se
 `;
 
-      return this.spawnSshRemoteStdin(executionId, request, handle, runScript, agentSessionId, {
-        worktreePath: handle.workspacePath!,
-        branch: experimentBranch,
-      });
-    } catch (err) {
-      throw this.withStartupMetadata(err, handle);
-    }
+    return this.spawnSshRemoteStdin(executionId, request, handle, runScript, agentSessionId, {
+      worktreePath: handle.workspacePath!,
+      branch: experimentBranch,
+    });
   }
 
   private withStartupMetadata(err: unknown, handle: FamiliarHandle): Error {
@@ -370,85 +421,37 @@ echo ${payloadB64} | base64 -d | bash -se
     return wrapped;
   }
 
-  private parseBootstrapOutput(stdout: string): { resolvedBaseRef: string; baseHead: string; warning?: string } {
-    const lines = stdout.split('\n');
-    const refLine = [...lines].reverse().find((line) => line.startsWith('__INVOKER_BASE_REF__='));
-    const headLine = [...lines].reverse().find((line) => line.startsWith('__INVOKER_BASE_HEAD__='));
-    const warningLine = [...lines].reverse().find((line) => line.startsWith('__INVOKER_BASE_WARNING__='));
-
-    const resolvedBaseRef = refLine?.slice('__INVOKER_BASE_REF__='.length).trim();
-    const baseHead = headLine?.slice('__INVOKER_BASE_HEAD__='.length).trim();
-    const warning = warningLine?.slice('__INVOKER_BASE_WARNING__='.length).trim();
-    if (!resolvedBaseRef || !baseHead) {
-      throw new Error(`SSH bootstrap output missing base markers. Output: ${stdout.slice(0, 500)}`);
-    }
-    return { resolvedBaseRef, baseHead, warning: warning || undefined };
-  }
 
   /**
    * On the remote host: commit task result (same semantics as local recordTaskResult) then push branch.
    * Returns commit hash on success; `error` if commit or push failed.
    */
   private async remoteGitRecordAndPush(
-    executionId: string,
+    _executionId: string,
     request: WorkRequest,
     worktreePath: string,
     branch: string,
     commandExitCode: number,
   ): Promise<{ commitHash?: string; error?: string }> {
-    const wtB = SshFamiliar.b64(worktreePath);
-    const brB = SshFamiliar.b64(branch);
     const msgChanges = this.buildCommitMessage(request);
     const msgEmpty = this.buildResultCommitMessage(request, commandExitCode);
-    const chB = SshFamiliar.b64(msgChanges);
-    const emB = SshFamiliar.b64(msgEmpty);
 
-    const recordScript = `set -euo pipefail
-WT=$(echo ${wtB} | base64 -d)
-${SshFamiliar.bashNormalizeWtFromDecodedVar()}
-cd "$WT"
-git add -A
-M=$(mktemp)
-trap 'rm -f "$M"' EXIT
-if git diff --cached --quiet; then
-  echo ${emB} | base64 -d > "$M"
-  git commit --allow-empty -F "$M"
-else
-  echo ${chB} | base64 -d > "$M"
-  git commit -F "$M"
-fi
-git rev-parse HEAD
-`;
-
-    let hash: string;
-    try {
-      const out = (await this.execRemoteCapture(recordScript)).trim();
-      const lines = out.split('\n').map((l) => l.trim()).filter(Boolean);
-      hash = lines[lines.length - 1] ?? '';
-      if (!/^[0-9a-f]{7,40}$/i.test(hash)) {
-        return { error: `remote commit: unexpected output (last line: ${hash.slice(0, 80)})` };
-      }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      return { error: `remote commit: ${msg}` };
-    }
-
-    const pushScript = `set -euo pipefail
-WT=$(echo ${wtB} | base64 -d)
-${SshFamiliar.bashNormalizeWtFromDecodedVar()}
-BR=$(echo ${brB} | base64 -d)
-cd "$WT"
-git push -u origin "$BR"
-`;
+    const recordScript = buildRecordAndPushScript({
+      worktreePath,
+      branch,
+      commitMessageChanges: msgChanges,
+      commitMessageEmpty: msgEmpty,
+    });
 
     try {
-      await this.execRemoteCapture(pushScript);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      return { commitHash: hash, error: `remote push: ${msg}` };
+      const stdout = await this.execRemoteCapture(recordScript);
+      return parseRecordAndPushOutput(stdout, 0, '');
+    } catch (err: any) {
+      const exitCode = err.exitCode ?? 1;
+      const stderr = err.stderr ?? err.message ?? '';
+      const stdout = err.stdout ?? '';
+      return parseRecordAndPushOutput(stdout, exitCode, stderr);
     }
-
-    return { commitHash: hash };
   }
 
   /** Run a bash script on the remote (fed to `bash -s` on stdin). */
@@ -681,22 +684,22 @@ git push -u origin "$BR"
   }
 
   private buildRemoteTerminalInner(workspacePath: string, branch?: string, agentSessionId?: string, executionAgent?: string): string {
-    const cdPart = SshFamiliar.sshInteractiveCdFragment(workspacePath);
+    const cdPart = sshInteractiveCdFragment(workspacePath);
     console.log(`[SshFamiliar] Building remote terminal inner command. workspacePath=${workspacePath} branch=${branch} agentSessionId=${agentSessionId} executionAgent=${executionAgent}`);
     if (agentSessionId) {
       let resumeCmd: string;
       if (this.agentRegistry) {
         const resume = this.agentRegistry.getOrThrow(executionAgent ?? 'claude').buildResumeArgs(agentSessionId);
-        resumeCmd = [resume.cmd, ...resume.args.map(a => SshFamiliar.shellPosixSingleQuote(a))].join(' ');
+        resumeCmd = [resume.cmd, ...resume.args.map(a => sshGitShellQuote(a))].join(' ');
       } else {
-        resumeCmd = `claude --resume ${SshFamiliar.shellPosixSingleQuote(agentSessionId)} --dangerously-skip-permissions`;
+        resumeCmd = `claude --resume ${sshGitShellQuote(agentSessionId)} --dangerously-skip-permissions`;
       }
       return branch
-        ? `${cdPart} && git checkout ${SshFamiliar.shellPosixSingleQuote(branch)} 2>/dev/null; ${resumeCmd}`
+        ? `${cdPart} && git checkout ${sshGitShellQuote(branch)} 2>/dev/null; ${resumeCmd}`
         : `${cdPart} && ${resumeCmd}`;
     }
     return branch
-      ? `${cdPart} && git checkout ${SshFamiliar.shellPosixSingleQuote(branch)} 2>/dev/null; exec bash -l`
+      ? `${cdPart} && git checkout ${sshGitShellQuote(branch)} 2>/dev/null; exec bash -l`
       : `${cdPart} && exec bash -l`;
   }
 

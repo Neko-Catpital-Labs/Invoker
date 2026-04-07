@@ -8,7 +8,7 @@ function selectFamiliar(registry: FamiliarRegistry, task: TaskState): Familiar {
     const registered = registry.get(task.config.familiarType);
     if (registered) return registered;
     if (task.config.familiarType === 'docker') {
-      const docker = new DockerFamiliar({ workspaceDir: '/tmp' });
+      const docker = new DockerFamiliar({});
       registry.register('docker', docker);
       return docker;
     }

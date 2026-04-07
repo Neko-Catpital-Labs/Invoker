@@ -3919,7 +3919,7 @@ describe('TaskExecutor', () => {
 
       const calls: string[][] = [];
       let mergeCount = 0;
-      (executor as any).execGitReadonly = async (args: string[], cwd?: string) => {
+      (executor as any).execGitReadonly = async (args: string[], _cwd?: string) => {
         calls.push([...args]);
         if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
         if (args[0] === 'merge') {
@@ -4895,6 +4895,423 @@ describe('TaskExecutor', () => {
           error: expect.stringContaining('requires a gate workspace'),
         }),
       }));
+    });
+  });
+
+  describe('SSH Familiar Caching', () => {
+    it('caches SSH familiars by remoteTargetId and reuses them', () => {
+      const remoteTargets = {
+        'remote-a': {
+          host: 'dev.example.com',
+          user: 'deployer',
+          sshKeyPath: '/home/user/.ssh/id_rsa',
+          managedWorkspaces: true,
+        },
+        'remote-b': {
+          host: 'staging.example.com',
+          user: 'deployer',
+          sshKeyPath: '/home/user/.ssh/id_rsa',
+          managedWorkspaces: true,
+        },
+      };
+
+      const executor = new TaskExecutor({
+        orchestrator: { getTask: () => null, getAllTasks: () => [] } as any,
+        persistence: {} as any,
+        familiarRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+        remoteTargetsProvider: () => remoteTargets,
+      });
+
+      const task1 = makeTask({
+        id: 'task-1',
+        config: { familiarType: 'ssh', remoteTargetId: 'remote-a' },
+      });
+      const task2 = makeTask({
+        id: 'task-2',
+        config: { familiarType: 'ssh', remoteTargetId: 'remote-a' },
+      });
+      const task3 = makeTask({
+        id: 'task-3',
+        config: { familiarType: 'ssh', remoteTargetId: 'remote-b' },
+      });
+
+      const familiar1 = executor.selectFamiliar(task1);
+      const familiar2 = executor.selectFamiliar(task2);
+      const familiar3 = executor.selectFamiliar(task3);
+
+      // task1 and task2 share the same remoteTargetId → same familiar instance
+      expect(familiar1).toBe(familiar2);
+      // task3 has a different remoteTargetId → different familiar instance
+      expect(familiar1).not.toBe(familiar3);
+      expect(familiar2).not.toBe(familiar3);
+    });
+
+    it('does not cache non-SSH familiars', () => {
+      const executor = new TaskExecutor({
+        orchestrator: { getTask: () => null, getAllTasks: () => [] } as any,
+        persistence: {} as any,
+        familiarRegistry: {
+          getDefault: () => ({ type: 'worktree' }),
+          get: (type: string) => type === 'worktree' ? null : null,
+          getAll: () => [],
+          register: vi.fn(),
+        } as any,
+        cwd: '/tmp',
+      });
+
+      const task1 = makeTask({
+        id: 'task-1',
+        config: { familiarType: 'worktree' },
+      });
+      const task2 = makeTask({
+        id: 'task-2',
+        config: { familiarType: 'worktree' },
+      });
+
+      const familiar1 = executor.selectFamiliar(task1);
+      const familiar2 = executor.selectFamiliar(task2);
+
+      // Worktree familiars are created fresh each time (lazy registration creates new instances)
+      // Both should be worktree type but may be different instances
+      expect(familiar1.type).toBe('worktree');
+      expect(familiar2.type).toBe('worktree');
+    });
+
+    it('clearSshFamiliarCache removes all cached SSH familiars', () => {
+      const remoteTargets = {
+        'remote-a': {
+          host: 'dev.example.com',
+          user: 'deployer',
+          sshKeyPath: '/home/user/.ssh/id_rsa',
+          managedWorkspaces: true,
+        },
+      };
+
+      const executor = new TaskExecutor({
+        orchestrator: { getTask: () => null, getAllTasks: () => [] } as any,
+        persistence: {} as any,
+        familiarRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+        remoteTargetsProvider: () => remoteTargets,
+      });
+
+      const task1 = makeTask({
+        id: 'task-1',
+        config: { familiarType: 'ssh', remoteTargetId: 'remote-a' },
+      });
+      const task2 = makeTask({
+        id: 'task-2',
+        config: { familiarType: 'ssh', remoteTargetId: 'remote-a' },
+      });
+
+      const familiar1 = executor.selectFamiliar(task1);
+      executor.clearSshFamiliarCache();
+      const familiar2 = executor.selectFamiliar(task2);
+
+      // After clearing cache, a new familiar instance should be created
+      expect(familiar1).not.toBe(familiar2);
+    });
+
+    it('throws when SSH task has no remoteTargetId', () => {
+      const executor = new TaskExecutor({
+        orchestrator: { getTask: () => null, getAllTasks: () => [] } as any,
+        persistence: {} as any,
+        familiarRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+        remoteTargetsProvider: () => ({}),
+      });
+
+      const task = makeTask({
+        id: 'task-missing-target',
+        config: { familiarType: 'ssh' },
+      });
+
+      expect(() => executor.selectFamiliar(task)).toThrow('has familiarType=ssh but no remoteTargetId');
+    });
+
+    it('throws when remoteTargetId does not exist in config', () => {
+      const remoteTargets = {
+        'remote-a': {
+          host: 'dev.example.com',
+          user: 'deployer',
+          sshKeyPath: '/home/user/.ssh/id_rsa',
+        },
+      };
+
+      const executor = new TaskExecutor({
+        orchestrator: { getTask: () => null, getAllTasks: () => [] } as any,
+        persistence: {} as any,
+        familiarRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+        remoteTargetsProvider: () => remoteTargets,
+      });
+
+      const task = makeTask({
+        id: 'task-unknown-target',
+        config: { familiarType: 'ssh', remoteTargetId: 'remote-unknown' },
+      });
+
+      expect(() => executor.selectFamiliar(task)).toThrow('no matching entry exists in remoteTargets config');
+    });
+  });
+
+  describe('metadata persistence hardening', () => {
+    it('fails fast when familiar returns handle without workspacePath', async () => {
+      const badFamiliar = {
+        type: 'bad-familiar',
+        start: vi.fn().mockResolvedValue({
+          executionId: 'exec-1',
+          taskId: 'task-1',
+          // Missing workspacePath!
+          branch: 'experiment/task-1-abc123',
+        }),
+        onComplete: vi.fn(),
+        onOutput: vi.fn(),
+        onHeartbeat: vi.fn(),
+        kill: vi.fn(),
+        destroyAll: vi.fn(),
+      };
+
+      const task = makeTask({
+        id: 'task-1',
+        status: 'pending',
+        config: { command: 'echo test' },
+      });
+
+      const updateSpy = vi.fn();
+      const handleResponseSpy = vi.fn();
+
+      const executor = new TaskExecutor({
+        orchestrator: {
+          getTask: () => task,
+          getAllTasks: () => [task],
+          handleWorkerResponse: handleResponseSpy,
+        } as any,
+        persistence: {
+          updateTask: updateSpy,
+        } as any,
+        familiarRegistry: {
+          getDefault: () => badFamiliar,
+          get: () => badFamiliar,
+          getAll: () => [badFamiliar],
+        } as any,
+        cwd: '/tmp',
+      });
+
+      await executor.executeTask(task);
+
+      // Check that we failed with correct error
+      expect(handleResponseSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          status: 'failed',
+          outputs: expect.objectContaining({
+            error: expect.stringContaining('did not provide workspacePath'),
+          }),
+        }),
+      );
+    });
+
+    it('persists workspacePath and branch from managed SSH familiar start', async () => {
+      const managedSshFamiliar = {
+        type: 'ssh',
+        start: vi.fn().mockResolvedValue({
+          executionId: 'exec-ssh-1',
+          taskId: 'ssh-task-1',
+          workspacePath: '~/.invoker/worktrees/abc123/experiment-ssh-task-1-def456',
+          branch: 'experiment/ssh-task-1-def456',
+          agentSessionId: 'session-123',
+        }),
+        onComplete: vi.fn().mockImplementation((_handle, cb) => {
+          // Auto-complete
+          setTimeout(() => cb({
+            requestId: 'req-1',
+            actionId: 'ssh-task-1',
+            status: 'completed',
+            outputs: { exitCode: 0 },
+          }), 0);
+        }),
+        onOutput: vi.fn(),
+        onHeartbeat: vi.fn(),
+        kill: vi.fn(),
+        destroyAll: vi.fn(),
+      };
+
+      const task = makeTask({
+        id: 'ssh-task-1',
+        status: 'pending',
+        config: {
+          command: 'echo test',
+          familiarType: 'ssh',
+          remoteTargetId: 'remote-1',
+        },
+      });
+
+      const updateSpy = vi.fn();
+
+      const executor = new TaskExecutor({
+        orchestrator: {
+          getTask: () => task,
+          getAllTasks: () => [task],
+          handleWorkerResponse: vi.fn(),
+        } as any,
+        persistence: {
+          updateTask: updateSpy,
+        } as any,
+        familiarRegistry: {
+          getDefault: () => managedSshFamiliar,
+          get: () => managedSshFamiliar,
+          getAll: () => [managedSshFamiliar],
+        } as any,
+        cwd: '/tmp',
+      });
+
+      await executor.executeTask(task);
+
+      // Check that metadata was persisted immediately after start
+      expect(updateSpy).toHaveBeenCalledWith('ssh-task-1', {
+        config: { familiarType: 'ssh' },
+        execution: {
+          workspacePath: '~/.invoker/worktrees/abc123/experiment-ssh-task-1-def456',
+          branch: 'experiment/ssh-task-1-def456',
+          agentSessionId: 'session-123',
+          lastAgentSessionId: 'session-123',
+          lastAgentName: undefined,
+          containerId: undefined,
+        },
+      });
+    });
+
+    it('persists metadata on error path when familiar.start throws', async () => {
+      const failingFamiliar = {
+        type: 'ssh',
+        start: vi.fn().mockRejectedValue(Object.assign(
+          new Error('SSH connection failed'),
+          {
+            workspacePath: '~/.invoker/worktrees/abc123/task-failed-xyz',
+            branch: 'experiment/task-failed-xyz',
+            agentSessionId: 'session-fail-1',
+          }
+        )),
+        onComplete: vi.fn(),
+        onOutput: vi.fn(),
+        onHeartbeat: vi.fn(),
+        kill: vi.fn(),
+        destroyAll: vi.fn(),
+      };
+
+      const task = makeTask({
+        id: 'task-failed',
+        status: 'pending',
+        config: { command: 'echo test', familiarType: 'ssh' },
+      });
+
+      const updateSpy = vi.fn();
+      const handleResponseSpy = vi.fn();
+
+      const executor = new TaskExecutor({
+        orchestrator: {
+          getTask: () => task,
+          getAllTasks: () => [task],
+          handleWorkerResponse: handleResponseSpy,
+        } as any,
+        persistence: {
+          updateTask: updateSpy,
+        } as any,
+        familiarRegistry: {
+          getDefault: () => failingFamiliar,
+          get: () => failingFamiliar,
+          getAll: () => [failingFamiliar],
+        } as any,
+        cwd: '/tmp',
+      });
+
+      await executor.executeTask(task);
+
+      // Check that metadata was persisted despite error
+      expect(updateSpy).toHaveBeenCalledWith('task-failed', {
+        config: { familiarType: 'ssh' },
+        execution: {
+          workspacePath: '~/.invoker/worktrees/abc123/task-failed-xyz',
+          branch: 'experiment/task-failed-xyz',
+          agentSessionId: 'session-fail-1',
+          lastAgentSessionId: 'session-fail-1',
+        },
+      });
+
+      // Check that the task ultimately failed
+      expect(handleResponseSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          status: 'failed',
+          outputs: expect.objectContaining({
+            error: expect.stringContaining('Familiar startup failed'),
+          }),
+        }),
+      );
+    });
+
+    it('allows BYO mode familiar with workspacePath but no branch', async () => {
+      const byoFamiliar = {
+        type: 'ssh',
+        start: vi.fn().mockResolvedValue({
+          executionId: 'exec-byo-1',
+          taskId: 'byo-task-1',
+          workspacePath: '/remote/user-provided/workspace',
+          // BYO mode: no branch field
+        }),
+        onComplete: vi.fn().mockImplementation((_handle, cb) => {
+          setTimeout(() => cb({
+            requestId: 'req-byo-1',
+            actionId: 'byo-task-1',
+            status: 'completed',
+            outputs: { exitCode: 0 },
+          }), 0);
+        }),
+        onOutput: vi.fn(),
+        onHeartbeat: vi.fn(),
+        kill: vi.fn(),
+        destroyAll: vi.fn(),
+      };
+
+      const task = makeTask({
+        id: 'byo-task-1',
+        status: 'pending',
+        config: { command: 'pwd', familiarType: 'ssh' },
+      });
+
+      const updateSpy = vi.fn();
+
+      const executor = new TaskExecutor({
+        orchestrator: {
+          getTask: () => task,
+          getAllTasks: () => [task],
+          handleWorkerResponse: vi.fn(),
+        } as any,
+        persistence: {
+          updateTask: updateSpy,
+        } as any,
+        familiarRegistry: {
+          getDefault: () => byoFamiliar,
+          get: () => byoFamiliar,
+          getAll: () => [byoFamiliar],
+        } as any,
+        cwd: '/tmp',
+      });
+
+      await executor.executeTask(task);
+
+      // Check that metadata was persisted with workspacePath and branch=undefined
+      expect(updateSpy).toHaveBeenCalledWith('byo-task-1', {
+        config: { familiarType: 'ssh' },
+        execution: {
+          workspacePath: '/remote/user-provided/workspace',
+          branch: undefined,
+          agentSessionId: undefined,
+          lastAgentSessionId: undefined,
+          lastAgentName: undefined,
+          containerId: undefined,
+        },
+      });
     });
   });
 

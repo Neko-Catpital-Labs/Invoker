@@ -1,5 +1,4 @@
 import { spawn } from 'node:child_process';
-import { createHash } from 'node:crypto';
 import { mkdirSync, existsSync, rmSync } from 'node:fs';
 import { normalize } from 'node:path';
 import { bashPreserveOrReset, runBashLocal } from './branch-utils.js';
@@ -7,6 +6,7 @@ import { RESTART_TO_BRANCH_TRACE } from './exec-trace.js';
 import { findManagedWorktreeForBranch, abbrevRefMatchesBranch } from './worktree-discovery.js';
 import { syncPlanBaseRemote, isInvokerManagedPoolBranch } from './plan-base-remote.js';
 import { remoteFetchForPool } from './remote-fetch-policy.js';
+import { computeRepoUrlHash, sanitizeBranchForPath } from './git-utils.js';
 
 export interface RepoPoolConfig {
   cacheDir: string;
@@ -46,12 +46,8 @@ export class RepoPool {
     this.worktreeBaseDir = config.worktreeBaseDir;
   }
 
-  private urlHash(repoUrl: string): string {
-    return createHash('sha256').update(repoUrl).digest('hex').slice(0, 12);
-  }
-
   private cloneDir(repoUrl: string): string {
-    return `${this.cacheDir}/${this.urlHash(repoUrl)}`;
+    return `${this.cacheDir}/${computeRepoUrlHash(repoUrl)}`;
   }
 
   /** Deterministic external worktree path for a branch (requires worktreeBaseDir). */
@@ -59,8 +55,8 @@ export class RepoPool {
     if (!this.worktreeBaseDir) {
       throw new Error('RepoPool.externalWorktreePath requires worktreeBaseDir');
     }
-    const sanitized = branch.replace(/\//g, '-');
-    return `${this.worktreeBaseDir}/${this.urlHash(repoUrl)}/${sanitized}`;
+    const sanitized = sanitizeBranchForPath(branch);
+    return `${this.worktreeBaseDir}/${computeRepoUrlHash(repoUrl)}/${sanitized}`;
   }
 
   /**
@@ -97,8 +93,8 @@ export class RepoPool {
     if (!existsSync(dir) || !this.worktreeBaseDir) return;
     for (const branch of branches) {
       if (!isInvokerManagedPoolBranch(branch)) continue;
-      const sanitized = branch.replace(/\//g, '-');
-      const wtPath = `${this.worktreeBaseDir}/${this.urlHash(repoUrl)}/${sanitized}`;
+      const sanitized = sanitizeBranchForPath(branch);
+      const wtPath = `${this.worktreeBaseDir}/${computeRepoUrlHash(repoUrl)}/${sanitized}`;
       try {
         await this.execGit(['worktree', 'remove', '--force', wtPath], dir);
       } catch {
@@ -191,15 +187,16 @@ export class RepoPool {
     if (active.size >= this.maxWorktrees) {
       throw new ResourceLimitError(`Worktree limit reached for ${repoUrl}: ${active.size}/${this.maxWorktrees}`);
     }
-    const sanitized = branch.replace(/\//g, '-');
+    const sanitized = sanitizeBranchForPath(branch);
+    const urlHash = computeRepoUrlHash(repoUrl);
     const worktreePath = this.worktreeBaseDir
-      ? `${this.worktreeBaseDir}/${this.urlHash(repoUrl)}/${sanitized}`
+      ? `${this.worktreeBaseDir}/${urlHash}/${sanitized}`
       : `${clonePath}/worktrees/${sanitized}`;
     const worktreeParent = worktreePath.substring(0, worktreePath.lastIndexOf('/'));
     const managedPrefixes = [
       normalize(
         this.worktreeBaseDir
-          ? `${this.worktreeBaseDir}/${this.urlHash(repoUrl)}`
+          ? `${this.worktreeBaseDir}/${urlHash}`
           : `${clonePath}/worktrees`,
       ),
     ];

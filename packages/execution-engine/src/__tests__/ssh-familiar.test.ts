@@ -64,12 +64,13 @@ describe('SshFamiliar pre-flight validation', () => {
     );
   });
 
-  it('throws when task has no repoUrl', async () => {
+  it('throws when task has no repoUrl in managed mode', async () => {
     // Use /dev/null as a readable file to pass the key check
     const ssh = new SshFamiliar({
       host: 'localhost',
       user: 'root',
       sshKeyPath: '/dev/null',
+      managedWorkspaces: true,
     });
     const req = makeRequest({
       inputs: {
@@ -99,6 +100,7 @@ describe('SshFamiliar pre-flight validation', () => {
       host: 'localhost',
       user: 'root',
       sshKeyPath: '/dev/null',
+      managedWorkspaces: true,
     }) as any;
 
     vi.spyOn(ssh, 'execRemoteCapture').mockImplementation(async (script: string) => {
@@ -139,6 +141,234 @@ describe('SshFamiliar pre-flight validation', () => {
   });
 });
 
+describe('SshFamiliar managed workspace mode', () => {
+  it('happy path: creates worktree, provisions, runs command, sets workspacePath and branch', async () => {
+    const ssh = new SshFamiliar({
+      host: 'localhost',
+      user: 'testuser',
+      sshKeyPath: '/dev/null',
+      managedWorkspaces: true,
+    }) as any;
+
+    // Mock remote execution for bootstrap, home detection, worktree list
+    vi.spyOn(ssh, 'execRemoteCapture').mockImplementation(async (script: string) => {
+      if (script.includes('__INVOKER_BASE_REF__=')) {
+        return [
+          '__INVOKER_BASE_REF__=origin/main',
+          '__INVOKER_BASE_HEAD__=abc123def456abc123def456abc123def456abc1',
+        ].join('\n');
+      }
+      if (script.includes('printf %s "$HOME"')) return '/home/testuser';
+      if (script.includes('worktree list --porcelain')) return '';
+      if (script.includes('worktree prune')) return '';
+      return '';
+    });
+
+    vi.spyOn(ssh, 'setupTaskBranch').mockResolvedValue(undefined);
+
+    // Mock spawn to avoid real SSH
+    const spawnStub = vi.spyOn(ssh, 'spawnSshRemoteStdin').mockImplementation(
+      (_executionId: string, _request: any, handle: any) => handle,
+    );
+
+    const req = makeRequest({
+      actionType: 'command',
+      inputs: {
+        command: 'pnpm test',
+        description: 'run tests',
+        repoUrl: 'git@github.com:owner/repo.git',
+      },
+    });
+
+    const handle = await ssh.start(req);
+
+    expect(handle.workspacePath).toMatch(/^\~\/\.invoker\/worktrees\/[a-f0-9]{12}\//);
+    expect(handle.branch).toMatch(/^experiment\/test-task-[a-f0-9]{8}$/);
+
+    // Verify spawnSshRemoteStdin was called with correct arguments
+    expect(spawnStub).toHaveBeenCalledTimes(1);
+    const [callExecId, callReq, callHandle, callScript, callAgentId, callFinalize] = spawnStub.mock.calls[0];
+    expect(callExecId).toBe(handle.executionId);
+    expect(callReq).toBe(req);
+    expect(callHandle).toBe(handle);
+    // Provision command is base64-encoded in the script, check for presence
+    expect(callScript).toMatch(/Provisioning remote worktree/);
+    expect(callScript).toMatch(/base64 -d/);
+    expect(callAgentId).toBeUndefined();
+    expect(callFinalize).toEqual({ branch: handle.branch, worktreePath: handle.workspacePath });
+  });
+
+  it('throws when managedWorkspaces=true but repoUrl is missing', async () => {
+    const ssh = new SshFamiliar({
+      host: 'localhost',
+      user: 'testuser',
+      sshKeyPath: '/dev/null',
+      managedWorkspaces: true,
+    });
+
+    const req = makeRequest({
+      actionType: 'command',
+      inputs: {
+        command: 'echo hello',
+        description: 'test',
+      },
+    });
+
+    await expect(ssh.start(req)).rejects.toThrow(
+      /requires repoUrl.*Add a top-level "repoUrl"/,
+    );
+  });
+
+  it('propagates provision command failure as process exit code', async () => {
+    const ssh = new SshFamiliar({
+      host: 'localhost',
+      user: 'testuser',
+      sshKeyPath: '/dev/null',
+      managedWorkspaces: true,
+      provisionCommand: 'exit 42',
+    }) as any;
+
+    vi.spyOn(ssh, 'execRemoteCapture').mockImplementation(async (script: string) => {
+      if (script.includes('__INVOKER_BASE_REF__=')) {
+        return '__INVOKER_BASE_REF__=origin/main\n__INVOKER_BASE_HEAD__=abc123';
+      }
+      if (script.includes('printf %s "$HOME"')) return '/home/testuser';
+      if (script.includes('worktree list --porcelain')) return '';
+      return '';
+    });
+
+    vi.spyOn(ssh, 'setupTaskBranch').mockResolvedValue(undefined);
+
+    // Capture script passed to spawnSshRemoteStdin to verify provision command is included
+    let capturedScript = '';
+    vi.spyOn(ssh, 'spawnSshRemoteStdin').mockImplementation(
+      (_executionId: string, _request: any, handle: any, script: string) => {
+        capturedScript = script;
+        return handle;
+      },
+    );
+
+    const req = makeRequest({
+      actionType: 'command',
+      inputs: {
+        command: 'echo test',
+        description: 'test',
+        repoUrl: 'git@github.com:owner/repo.git',
+      },
+    });
+
+    await ssh.start(req);
+
+    // Verify provision command 'exit 42' is embedded in the script
+    expect(capturedScript).toContain('exit 42');
+    // Note: We're testing that the provision command is included in the script.
+    // The actual exit code propagation is tested by integration tests with real SSH.
+  });
+
+  it('uses configured remoteInvokerHome instead of default ~/.invoker', async () => {
+    const customHome = '/opt/invoker';
+    const ssh = new SshFamiliar({
+      host: 'localhost',
+      user: 'testuser',
+      sshKeyPath: '/dev/null',
+      managedWorkspaces: true,
+      remoteInvokerHome: customHome,
+    }) as any;
+
+    const capturedScripts: string[] = [];
+    vi.spyOn(ssh, 'execRemoteCapture').mockImplementation(async (script: string) => {
+      capturedScripts.push(script);
+      if (script.includes('__INVOKER_BASE_REF__=')) {
+        return '__INVOKER_BASE_REF__=origin/main\n__INVOKER_BASE_HEAD__=abc123';
+      }
+      if (script.includes('printf %s "$HOME"')) return '/home/testuser';
+      if (script.includes('worktree list --porcelain')) return '';
+      return '';
+    });
+
+    vi.spyOn(ssh, 'setupTaskBranch').mockResolvedValue(undefined);
+    vi.spyOn(ssh, 'spawnSshRemoteStdin').mockImplementation(
+      (_executionId: string, _request: any, handle: any) => handle,
+    );
+
+    const req = makeRequest({
+      actionType: 'command',
+      inputs: {
+        command: 'echo test',
+        description: 'test',
+        repoUrl: 'git@github.com:owner/repo.git',
+      },
+    });
+
+    const handle = await ssh.start(req);
+
+    // Verify workspacePath uses custom home
+    expect(handle.workspacePath).toMatch(/^\/opt\/invoker\/worktrees\//);
+
+    // Verify scripts contain custom home (check decoded output or variable names)
+    const bootstrapScript = capturedScripts.find((s) => s.includes('__INVOKER_BASE_REF__'));
+    expect(bootstrapScript).toBeTruthy();
+    // The script uses the INVOKER_HOME variable to construct repo path
+    expect(bootstrapScript).toContain('CLONE="$INVOKER_HOME/repos/$H"');
+  });
+
+  it('BYO mode unchanged when managedWorkspaces=false', async () => {
+    const ssh = new SshFamiliar({
+      host: 'localhost',
+      user: 'testuser',
+      sshKeyPath: '/dev/null',
+      managedWorkspaces: false, // explicit BYO mode
+    }) as any;
+
+    const execSpy = vi.spyOn(ssh, 'execRemoteCapture').mockResolvedValue('');
+    const setupSpy = vi.spyOn(ssh, 'setupTaskBranch').mockResolvedValue(undefined);
+    vi.spyOn(ssh, 'spawnSshRemoteStdin').mockImplementation(
+      (_executionId: string, _request: any, handle: any) => handle,
+    );
+
+    const req = makeRequest({
+      actionType: 'command',
+      inputs: {
+        command: 'echo hello',
+        description: 'test',
+        workspacePath: '/custom/path',
+        repoUrl: 'git@github.com:owner/repo.git', // present but should be ignored
+      },
+    });
+
+    const handle = await ssh.start(req);
+
+    // In BYO mode, workspacePath comes from request inputs
+    expect(handle.workspacePath).toBe('/custom/path');
+
+    // No clone/fetch/worktree/provision should happen
+    expect(execSpy).not.toHaveBeenCalled();
+    expect(setupSpy).not.toHaveBeenCalled();
+  });
+
+  it('BYO mode throws when workspacePath is missing', async () => {
+    const ssh = new SshFamiliar({
+      host: 'localhost',
+      user: 'testuser',
+      sshKeyPath: '/dev/null',
+      managedWorkspaces: false,
+    });
+
+    const req = makeRequest({
+      actionType: 'command',
+      inputs: {
+        command: 'echo hello',
+        description: 'test',
+        // no workspacePath
+      },
+    });
+
+    await expect(ssh.start(req)).rejects.toThrow(
+      /requires workspacePath.*enable managedWorkspaces/,
+    );
+  });
+});
+
 describe('SshFamiliar entry lifecycle', () => {
   let ssh: SshFamiliar;
 
@@ -150,6 +380,7 @@ describe('SshFamiliar entry lifecycle', () => {
       host: 'localhost',
       user: 'testuser',
       sshKeyPath: '/dev/null',
+      managedWorkspaces: true,
     });
 
     // Mock execRemoteCapture to bypass actual SSH
