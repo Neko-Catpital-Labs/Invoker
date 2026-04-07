@@ -19,6 +19,10 @@ INVOKER_E2E_TIMEOUT="${INVOKER_E2E_TIMEOUT:-300}"
 export NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--max-old-space-size=512"
 
 invoker_e2e_init() {
+  # Preserve caller PATH so cleanup can fully restore shell state.
+  if [ -z "${INVOKER_E2E_ORIGINAL_PATH:-}" ]; then
+    export INVOKER_E2E_ORIGINAL_PATH="$PATH"
+  fi
   # Avoid headless→GUI IPC delegation when ~/.invoker/ipc-transport.sock is held by a non-GUI process.
   export INVOKER_HEADLESS_STANDALONE=1
   # Safety rail in app/headless: delete-all requires explicit opt-in.
@@ -49,6 +53,12 @@ invoker_e2e_cleanup() {
   # Clean up worktrees created during the test.
   git -C "$INVOKER_E2E_REPO_ROOT" worktree prune 2>/dev/null || true
   rm -rf "${INVOKER_DB_DIR:-}" "${INVOKER_E2E_MARKER_ROOT:-}" "${INVOKER_E2E_STUB_DIR:-}" 2>/dev/null || true
+
+  # Restore original PATH so claude/gh/codex stubs never leak into user shells.
+  if [ -n "${INVOKER_E2E_ORIGINAL_PATH:-}" ]; then
+    export PATH="$INVOKER_E2E_ORIGINAL_PATH"
+    unset INVOKER_E2E_ORIGINAL_PATH
+  fi
 }
 
 invoker_e2e_ensure_app_built() {
