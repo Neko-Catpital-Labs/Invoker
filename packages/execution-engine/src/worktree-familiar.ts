@@ -337,7 +337,6 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
         agentSessionId: entry.agentSessionId,
       });
       entry.poolSoftRelease?.();
-      this.entries.delete(executionId);
     });
 
     this.startHeartbeat(executionId, child);

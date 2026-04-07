@@ -154,6 +154,15 @@ export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar
     for (const cb of entry.completeListeners) {
       cb(response);
     }
+    // Reconciliation tasks keep their entry alive so the orchestrator can
+    // re-emit on input. All other terminal completions release the entry,
+    // but defer the delete so late subscribers that register onComplete
+    // synchronously after start() returns can still replay completionResponse.
+    if (response.status !== 'needs_input') {
+      setImmediate(() => {
+        this.entries.delete(executionId);
+      });
+    }
   }
 
   /**
