@@ -219,7 +219,6 @@ module.exports = {
         '^vitest\\.shared\\.ts$',
         '^packages/core/',
         '^packages/persistence/',
-        '^packages/executors/',
         '^packages/graph/',
         '^packages/protocol/',
         'node_modules',

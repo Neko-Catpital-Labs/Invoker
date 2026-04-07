@@ -66,6 +66,10 @@ vi.mock('dockerode', () => {
   return { default: MockDocker };
 });
 
+vi.mock('../secrets-loader.js', () => ({
+  loadSecretsFile: vi.fn(() => []),
+}));
+
 vi.mock('node:fs', async (importOriginal) => {
   const actual = (await importOriginal()) as any;
   return {
@@ -96,13 +100,13 @@ vi.mock('node:child_process', async (importOriginal) => {
 
 describe('DockerFamiliar', () => {
   let DockerFamiliar: typeof import('../docker-familiar.js').DockerFamiliar;
+  let loadSecretsFile: ReturnType<typeof vi.fn>;
   let familiar: InstanceType<typeof DockerFamiliar>;
 
   // Spies on BaseFamiliar lifecycle methods
   let syncFromRemoteSpy: ReturnType<typeof vi.spyOn>;
   let setupTaskBranchSpy: ReturnType<typeof vi.spyOn>;
   let handleProcessExitSpy: ReturnType<typeof vi.spyOn>;
-  let execRemoteCaptureSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(async () => {
     mockState.containers = [];
@@ -125,8 +129,13 @@ describe('DockerFamiliar', () => {
     const mod = await import('../docker-familiar.js');
     DockerFamiliar = mod.DockerFamiliar;
 
-    // Mock execRemoteCapture to bypass docker exec CLI for git config
-    execRemoteCaptureSpy = vi.spyOn(
+    const secretsMod = await import('../secrets-loader.js');
+    loadSecretsFile = secretsMod.loadSecretsFile as unknown as ReturnType<typeof vi.fn>;
+    loadSecretsFile.mockReset();
+    loadSecretsFile.mockReturnValue([]);
+
+    // Mock execRemoteCapture to bypass docker exec CLI for any runBash calls
+    vi.spyOn(
       DockerFamiliar.prototype as any, 'execRemoteCapture',
     ).mockResolvedValue('');
 
@@ -137,16 +146,22 @@ describe('DockerFamiliar', () => {
 
     setupTaskBranchSpy = vi.spyOn(
       BaseFamiliar.prototype as any, 'setupTaskBranch',
-    ).mockImplementation(async (_cwd: string, _request: WorkRequest, handle: FamiliarHandle, opts?: any) => {
-      handle.branch = opts?.branchName ?? `experiment/${_request.actionId}-00000000`;
+    ).mockImplementation((async (...args: unknown[]) => {
+      const request = args[1] as WorkRequest;
+      const handle = args[2] as FamiliarHandle;
+      const opts = args[3] as { branchName?: string } | undefined;
+      handle.branch = opts?.branchName ?? `experiment/${request.actionId}-00000000`;
       return undefined;
-    });
+    }) as any);
 
     // Stub handleProcessExit so we don't need real git, but still route through
     // emitComplete so the BaseFamiliar centralized cleanup (entries.delete) runs.
     handleProcessExitSpy = vi.spyOn(
       BaseFamiliar.prototype as any, 'handleProcessExit',
-    ).mockImplementation(async function (this: any, executionId: string, request: WorkRequest, _cwd: string, exitCode: number) {
+    ).mockImplementation((async function (this: any, ...args: unknown[]) {
+      const executionId = args[0] as string;
+      const request = args[1] as WorkRequest;
+      const exitCode = args[3] as number;
       const response: WorkResponse = {
         requestId: request.requestId,
         actionId: request.actionId,
@@ -154,14 +169,11 @@ describe('DockerFamiliar', () => {
         outputs: { exitCode },
       };
       this.emitComplete(executionId, response);
-    });
+    }) as any);
 
     familiar = new DockerFamiliar({
-      workspaceDir: '/tmp',
       callbackPort: 4000,
-      claudeConfigDir: '/tmp',
-      sshDir: '/tmp',
-      repoInImage: true,
+      imageName: 'invoker-agent:latest',
     });
   });
 
@@ -182,24 +194,6 @@ describe('DockerFamiliar', () => {
     expect(createArgs.Entrypoint).toEqual([]);
   });
 
-  it('does NOT bind-mount workspaceDir into container', async () => {
-    await familiar.start(makeRequest());
-
-    const createArgs = mockState.createContainer!.mock.calls[0][0];
-    const binds: string[] = createArgs.HostConfig.Binds;
-    const appBinds = binds.filter((b: string) => b.endsWith(':/app') || b.includes(':/app:'));
-    expect(appBinds).toHaveLength(0);
-  });
-
-  it('mounts SSH keys at both /root/.ssh and /home/invoker/.ssh', async () => {
-    await familiar.start(makeRequest());
-
-    const createArgs = mockState.createContainer!.mock.calls[0][0];
-    const binds: string[] = createArgs.HostConfig.Binds;
-    expect(binds).toContainEqual(expect.stringContaining(':/home/invoker/.ssh:ro'));
-    expect(binds).toContainEqual(expect.stringContaining(':/root/.ssh:ro'));
-  });
-
   it('does NOT include GIT_SSH_COMMAND in container env', async () => {
     await familiar.start(makeRequest());
 
@@ -209,29 +203,18 @@ describe('DockerFamiliar', () => {
     expect(sshEnv).toBeUndefined();
   });
 
-  it('still mounts .claude directory', async () => {
+  it('uses the configured image directly', async () => {
     await familiar.start(makeRequest());
 
+    expect(mockState.createContainer).toHaveBeenCalledTimes(1);
+
     const createArgs = mockState.createContainer!.mock.calls[0][0];
-    const binds: string[] = createArgs.HostConfig.Binds;
-    const claudeBind = binds.find((b: string) => b.includes('.claude'));
-    expect(claudeBind).toBeDefined();
+    expect(createArgs.Image).toBe('invoker-agent:latest');
   });
 
   // -------------------------------------------------------------------------
   // Git lifecycle delegation to BaseFamiliar
   // -------------------------------------------------------------------------
-
-  it('calls execRemoteCapture for one-time git config', async () => {
-    await familiar.start(makeRequest());
-
-    expect(execRemoteCaptureSpy).toHaveBeenCalledWith(
-      expect.stringContaining('git config --global core.sshCommand'),
-    );
-    expect(execRemoteCaptureSpy).toHaveBeenCalledWith(
-      expect.stringContaining('git config --global user.email'),
-    );
-  });
 
   it('calls syncFromRemote with /app', async () => {
     await familiar.start(makeRequest());
@@ -261,7 +244,7 @@ describe('DockerFamiliar', () => {
   // Task execution via docker exec CLI
   // -------------------------------------------------------------------------
 
-  it('spawns task command via docker exec as host user', async () => {
+  it('spawns task command via docker exec without --user override', async () => {
     const { spawn } = await import('node:child_process');
     await familiar.start(makeRequest());
 
@@ -277,6 +260,8 @@ describe('DockerFamiliar', () => {
     const dockerArgs: string[] = lastCall[1];
     expect(dockerArgs).toContain('exec');
     expect(dockerArgs).toContain('-i');
+    // No --user override — image declares its own user
+    expect(dockerArgs).not.toContain('--user');
     // Should contain the task command somewhere
     const bashArg = dockerArgs[dockerArgs.length - 1];
     expect(bashArg).toContain('echo hello');
@@ -354,25 +339,6 @@ describe('DockerFamiliar', () => {
       expect(handle.agentSessionId).toBeUndefined();
     });
 
-    it('passes ANTHROPIC_API_KEY to container environment', async () => {
-      const familiarWithKey = new DockerFamiliar({
-        workspaceDir: '/tmp',
-        claudeConfigDir: '/tmp',
-        sshDir: '/tmp',
-        repoInImage: true,
-        anthropicApiKey: 'sk-test-key-123',
-      });
-
-      await familiarWithKey.start(makeRequest({
-        actionType: 'ai_task',
-        inputs: { prompt: 'test', repoUrl: 'https://github.com/test/repo.git' },
-      }));
-
-      const createArgs = mockState.createContainer!.mock.calls[0][0];
-      const env: string[] = createArgs.Env;
-      expect(env).toContainEqual('ANTHROPIC_API_KEY=sk-test-key-123');
-    });
-
     it('getTerminalSpec returns docker start + exec claude --resume for claude tasks', async () => {
       const request = makeRequest({
         actionType: 'ai_task',
@@ -417,60 +383,6 @@ describe('DockerFamiliar', () => {
   it('getTerminalSpec returns null for unknown handle', () => {
     const spec = familiar.getTerminalSpec({ executionId: 'nonexistent', taskId: 'x' });
     expect(spec).toBeNull();
-  });
-
-  // -------------------------------------------------------------------------
-  // repoInImage modes
-  // -------------------------------------------------------------------------
-
-  describe('repoInImage: false (default, uses DockerPool)', () => {
-    it('calls DockerPool to create cached image when repoInImage is false', async () => {
-      let callCount = 0;
-      const origCreate = mockState.createContainer!;
-      mockState.createContainer = vi.fn().mockImplementation((...args: any[]) => {
-        callCount++;
-        if (callCount === 1) {
-          const mc = createMockContainer('container-clone');
-          mockState.containers.push(mc);
-          (mc.container as any).wait = vi.fn().mockResolvedValue({ StatusCode: 0 });
-          (mc.container as any).commit = vi.fn().mockResolvedValue(undefined);
-          return Promise.resolve(mc.container);
-        }
-        return origCreate(...args);
-      });
-
-      const poolFamiliar = new DockerFamiliar({
-        workspaceDir: '/tmp',
-        claudeConfigDir: '/tmp',
-        sshDir: '/tmp',
-        repoInImage: false,
-      });
-
-      await poolFamiliar.start(makeRequest({
-        inputs: { command: 'echo test', repoUrl: 'https://github.com/test/repo.git' },
-      }));
-
-      // 2 containers: clone (DockerPool) + task
-      expect(mockState.createContainer).toHaveBeenCalledTimes(2);
-
-      const cloneArgs = mockState.createContainer!.mock.calls[0][0];
-      expect(cloneArgs.Entrypoint).toEqual(['/bin/sh']);
-      expect(cloneArgs.Cmd[1]).toContain('git clone https://github.com/test/repo.git /app');
-
-      const taskArgs = mockState.createContainer!.mock.calls[1][0];
-      expect(taskArgs.Cmd).toEqual(['tail', '-f', '/dev/null']);
-    });
-  });
-
-  describe('repoInImage: true (skip DockerPool)', () => {
-    it('uses image directly without calling DockerPool', async () => {
-      await familiar.start(makeRequest());
-
-      expect(mockState.createContainer).toHaveBeenCalledTimes(1);
-
-      const createArgs = mockState.createContainer!.mock.calls[0][0];
-      expect(createArgs.Image).toBe('invoker-agent:latest');
-    });
   });
 
   // -------------------------------------------------------------------------
@@ -523,11 +435,90 @@ describe('DockerFamiliar', () => {
         new Error('connect ENOENT /var/run/docker.sock'),
       );
 
-      const f = new DockerFamiliar({ workspaceDir: '/tmp', repoInImage: true });
+      const f = new DockerFamiliar({ imageName: 'invoker-agent:latest' });
       const request = makeRequest();
       await expect(f.start(request)).rejects.toThrow(
         'Docker daemon is not reachable',
       );
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Env surface: INVOKER_* + secrets file
+  // -------------------------------------------------------------------------
+
+  describe('env surface', () => {
+    it('includes INVOKER_CALLBACK_URL, INVOKER_REQUEST_ID, INVOKER_ACTION_ID', async () => {
+      await familiar.start(makeRequest({
+        requestId: 'req-123',
+        actionId: 'act-456',
+      }));
+
+      const createArgs = mockState.createContainer!.mock.calls[0][0];
+      const env: string[] = createArgs.Env;
+
+      expect(env).toContainEqual(expect.stringMatching(/^INVOKER_CALLBACK_URL=/));
+      expect(env).toContainEqual('INVOKER_REQUEST_ID=req-123');
+      expect(env).toContainEqual('INVOKER_ACTION_ID=act-456');
+    });
+
+    it('appends entries loaded from secretsFile', async () => {
+      loadSecretsFile.mockReturnValue([
+        'ANTHROPIC_API_KEY=sk-x',
+        'GIT_HTTPS_TOKEN=ghp-y',
+      ]);
+
+      const f = new DockerFamiliar({
+        imageName: 'invoker-agent:latest',
+        secretsFile: '/tmp/fake-secrets.env',
+      });
+      await f.start(makeRequest());
+
+      const createArgs = mockState.createContainer!.mock.calls[0][0];
+      const env: string[] = createArgs.Env;
+
+      expect(env).toContainEqual('ANTHROPIC_API_KEY=sk-x');
+      expect(env).toContainEqual('GIT_HTTPS_TOKEN=ghp-y');
+      expect(loadSecretsFile).toHaveBeenCalledWith('/tmp/fake-secrets.env');
+    });
+
+    it('omits secretsFile entries when file does not exist', async () => {
+      loadSecretsFile.mockReturnValue([]);
+
+      await familiar.start(makeRequest({ requestId: 'r', actionId: 'a' }));
+
+      const createArgs = mockState.createContainer!.mock.calls[0][0];
+      const env: string[] = createArgs.Env;
+
+      // Only the three INVOKER_* entries remain
+      expect(env).toHaveLength(3);
+      expect(env.every((e) => e.startsWith('INVOKER_'))).toBe(true);
+    });
+
+    it('does not set User on the container (image declares its own user)', async () => {
+      await familiar.start(makeRequest());
+
+      const createArgs = mockState.createContainer!.mock.calls[0][0];
+      expect(createArgs.User).toBeUndefined();
+    });
+
+    it('does not bind mount host paths', async () => {
+      await familiar.start(makeRequest());
+
+      const createArgs = mockState.createContainer!.mock.calls[0][0];
+      const binds = createArgs.HostConfig.Binds;
+      // Either undefined or an empty array is acceptable
+      expect(binds === undefined || binds.length === 0).toBe(true);
+    });
+
+    it('does not inject HOME or COREPACK_HOME', async () => {
+      await familiar.start(makeRequest());
+
+      const createArgs = mockState.createContainer!.mock.calls[0][0];
+      const env: string[] = createArgs.Env;
+
+      expect(env.find((e) => e.startsWith('HOME='))).toBeUndefined();
+      expect(env.find((e) => e.startsWith('COREPACK_HOME='))).toBeUndefined();
     });
   });
 

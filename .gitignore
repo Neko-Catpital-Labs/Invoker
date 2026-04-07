@@ -12,3 +12,7 @@ packages/app/e2e/visual-proof/
 packages/app/e2e/test-results/
 packages/app/test-results/
 packages/app/test-results/
+
+# Generated Docker base image scratch dir produced by
+# scripts/build-agent-base-image.sh in case it is ever expanded locally.
+/docker/agent-base/

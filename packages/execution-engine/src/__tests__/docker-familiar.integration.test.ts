@@ -1,9 +1,10 @@
 import { describe, it, expect, afterEach, beforeAll } from 'vitest';
 import { execSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { WorkRequest, WorkResponse } from '@invoker/contracts';
+import type { FamiliarHandle } from '../familiar.js';
 import { DockerFamiliar } from '../docker-familiar.js';
 
 // ---------------------------------------------------------------------------
@@ -25,8 +26,6 @@ const DOCKER_OK = dockerAvailable();
 // Helpers
 // ---------------------------------------------------------------------------
 
-const TEST_REPO_URL = 'https://github.com/EdbertChan/test-playground.git';
-
 function makeRequest(overrides: Partial<WorkRequest> = {}): WorkRequest {
   return {
     requestId: `req-${Date.now()}`,
@@ -41,7 +40,7 @@ function makeRequest(overrides: Partial<WorkRequest> = {}): WorkRequest {
 
 function waitForComplete(
   familiar: DockerFamiliar,
-  handle: ReturnType<Awaited<ReturnType<DockerFamiliar['start']>>>,
+  handle: FamiliarHandle,
   timeoutMs = 60_000,
 ): Promise<WorkResponse> {
   return new Promise((resolve, reject) => {
@@ -65,12 +64,12 @@ describe.skipIf(!DOCKER_OK)('DockerFamiliar (real Docker)', () => {
   let familiar: DockerFamiliar;
 
   beforeAll(() => {
-    // Ensure image is built
+    // Ensure base image is built
     try {
-      execSync('docker image inspect invoker-agent:latest', { stdio: 'ignore' });
+      execSync('docker image inspect invoker/agent-base:latest', { stdio: 'ignore' });
     } catch {
       throw new Error(
-        'invoker-agent:latest not found. Run: pnpm --filter @invoker/execution-engine run docker:build',
+        'invoker/agent-base:latest not found. Run: bash scripts/build-agent-base-image.sh',
       );
     }
   });
@@ -109,11 +108,7 @@ describe.skipIf(!DOCKER_OK)('DockerFamiliar (real Docker)', () => {
       },
     });
 
-    familiar = new DockerFamiliar({
-      workspaceDir: workDir,
-      claudeConfigDir: '/nonexistent-path-to-skip-mount',
-      sshDir: '/nonexistent-path-to-skip-mount',
-    });
+    familiar = new DockerFamiliar({});
   }
 
   // -------------------------------------------------------------------------
@@ -211,28 +206,12 @@ describe.skipIf(!DOCKER_OK)('DockerFamiliar (real Docker)', () => {
     expect(bashCmd).toContain('/bin/bash');
   }, 30_000);
 
-  it('creates files visible in bind-mounted workspace', async () => {
+  it('writes to ~/.cache inside container under image-declared user', async () => {
     setup();
 
-    const request = makeRequest({
-      actionType: 'command',
-      inputs: { command: 'echo "new content" > created-by-docker.txt' },
-    });
-
-    const handle = await familiar.start(request);
-    const response = await waitForComplete(familiar, handle);
-
-    expect(response.status).toBe('completed');
-
-    // With direct Cmd execution (no entrypoint), the file should exist in the workspace
-    expect(existsSync(join(workDir, 'created-by-docker.txt'))).toBe(true);
-  }, 60_000);
-
-  it('writes to ~/.cache inside container as host UID without EACCES', async () => {
-    setup();
-
-    // Regression: repro-docker-homedir.sh — container runs as host UID but
-    // /home/invoker is owned by UID 1000, causing EACCES on ~/.cache writes.
+    // The base image declares user `invoker` with HOME=/home/invoker.
+    // With no User override and no bind mounts, ~/.cache should be writable
+    // by the image's declared user.
     const request = makeRequest({
       actionType: 'command',
       inputs: { command: 'mkdir -p ~/.cache/test-dir && echo HOMEDIR_OK' },
@@ -268,12 +247,7 @@ describe.skipIf(!DOCKER_OK)('DockerFamiliar (real Docker)', () => {
       }),
     ];
 
-    // Start both — note: they share workspaceDir so the second start
-    // overwrites request.json. This is a known limitation for concurrent
-    // tasks in a single DockerFamiliar with the same workspaceDir.
-    // In production, each task gets its own workspace. Here we test
-    // that multiple containers can run without crashing.
-    const handles = [];
+    const handles: FamiliarHandle[] = [];
     for (const req of requests) {
       handles.push(await familiar.start(req));
     }
@@ -282,145 +256,9 @@ describe.skipIf(!DOCKER_OK)('DockerFamiliar (real Docker)', () => {
       handles.map((h) => waitForComplete(familiar, h)),
     );
 
-    // Both should complete — with direct Cmd execution, there's no
-    // request.json conflict so both containers run independently.
     for (const r of responses) {
       expect(['completed', 'failed']).toContain(r.status);
     }
-  }, 120_000);
-});
-
-// ---------------------------------------------------------------------------
-// DockerPool integration tests — cached image from test-playground
-// ---------------------------------------------------------------------------
-
-describe.skipIf(!DOCKER_OK)('DockerFamiliar + DockerPool (real Docker, real repo)', () => {
-  let workDir: string;
-  let familiar: DockerFamiliar;
-
-  beforeAll(() => {
-    try {
-      execSync('docker image inspect invoker-agent:latest', { stdio: 'ignore' });
-    } catch {
-      throw new Error(
-        'invoker-agent:latest not found. Run: pnpm --filter @invoker/execution-engine run docker:build',
-      );
-    }
-  });
-
-  afterEach(async () => {
-    if (familiar) {
-      await familiar.destroyAll();
-    }
-    if (workDir && existsSync(workDir)) {
-      // Container runs as root, creating root-owned files in bind-mounted dir.
-      // Use a Docker container to clean up since host user can't delete them.
-      try {
-        execSync(
-          `docker run --rm -v "${workDir}:/cleanup" alpine sh -c "rm -rf /cleanup/.[!.]* /cleanup/*"`,
-          { stdio: 'ignore' },
-        );
-      } catch { /* best effort */ }
-      rmSync(workDir, { recursive: true, force: true });
-    }
-  });
-
-  function setup() {
-    workDir = mkdtempSync(join(tmpdir(), 'invoker-docker-pool-test-'));
-    mkdirSync(join(workDir, '.invoker'), { recursive: true });
-
-    familiar = new DockerFamiliar({
-      workspaceDir: workDir,
-      cacheImages: true,
-      claudeConfigDir: '/nonexistent-path-to-skip-mount',
-      sshDir: '/nonexistent-path-to-skip-mount',
-    });
-  }
-
-  it('creates cached image from test-playground and runs a command', async () => {
-    setup();
-
-    const request = makeRequest({
-      actionType: 'command',
-      inputs: {
-        repoUrl: TEST_REPO_URL,
-        command: 'ls -la /app && cat /app/README.md',
-      },
-    });
-
-    const handle = await familiar.start(request);
-    const output: string[] = [];
-    familiar.onOutput(handle, (data) => output.push(data));
-
-    const response = await waitForComplete(familiar, handle);
-
-    expect(response.status).toBe('completed');
-    expect(response.outputs.exitCode).toBe(0);
-
-    // The output should contain content from the test-playground repo
-    const combined = output.join('');
-    expect(combined).toContain('README');
-  }, 120_000);
-
-  it('reuses cached image on second task for same repo', async () => {
-    setup();
-
-    // First task — triggers image build
-    const req1 = makeRequest({
-      requestId: 'req-pool-1',
-      actionId: 'act-pool-1',
-      actionType: 'command',
-      inputs: {
-        repoUrl: TEST_REPO_URL,
-        command: 'echo first-run',
-      },
-    });
-
-    const h1 = await familiar.start(req1);
-    await waitForComplete(familiar, h1);
-
-    // Second task — should reuse cached image (faster)
-    const startTime = Date.now();
-    const req2 = makeRequest({
-      requestId: 'req-pool-2',
-      actionId: 'act-pool-2',
-      actionType: 'command',
-      inputs: {
-        repoUrl: TEST_REPO_URL,
-        command: 'echo second-run',
-      },
-    });
-
-    const h2 = await familiar.start(req2);
-    const response = await waitForComplete(familiar, h2);
-    const elapsed = Date.now() - startTime;
-
-    expect(response.status).toBe('completed');
-    // Second run should be noticeably faster (no git clone)
-    // We don't assert on exact timing but log it for visibility
-    console.log(`Second run (cached image) took ${elapsed}ms`);
-  }, 180_000);
-
-  it('cached container has the repo contents at /app', async () => {
-    setup();
-
-    const request = makeRequest({
-      actionType: 'command',
-      inputs: {
-        repoUrl: TEST_REPO_URL,
-        command: 'test -f /app/README.md && echo "REPO_PRESENT" || echo "REPO_MISSING"',
-      },
-    });
-
-    const handle = await familiar.start(request);
-    const output: string[] = [];
-    familiar.onOutput(handle, (data) => output.push(data));
-
-    const response = await waitForComplete(familiar, handle);
-    const combined = output.join('');
-
-    expect(response.status).toBe('completed');
-    expect(combined).toContain('REPO_PRESENT');
   }, 120_000);
 });
 
@@ -452,10 +290,7 @@ describe.skipIf(!DOCKER_OK || !HAS_API_KEY)('DockerFamiliar Claude E2E (real Doc
   function setup() {
     workDir = mkdtempSync(join(tmpdir(), 'invoker-docker-claude-test-'));
     familiar = new DockerFamiliar({
-      workspaceDir: workDir,
-      anthropicApiKey: process.env.ANTHROPIC_API_KEY,
-      claudeConfigDir: '/nonexistent-path-to-skip-mount',
-      sshDir: '/nonexistent-path-to-skip-mount',
+      secretsFile: process.env.INVOKER_TEST_SECRETS_FILE,
     });
   }
 

@@ -89,7 +89,7 @@ export interface TaskExecutorConfig {
   /** Docker execution environment configuration from .invoker.json. */
   dockerConfig?: {
     imageName?: string;
-    repoInImage?: boolean;
+    secretsFile?: string;
   };
   /** Shared execution agents (Claude, Codex). Passed into lazily constructed familiars. */
   executionAgentRegistry?: AgentRegistry;
@@ -109,7 +109,7 @@ export class TaskExecutor {
   /** @internal */ reviewProviderRegistry?: ReviewProviderRegistry;
   private activePrPollers = new Map<string, ReturnType<typeof setInterval>>();
   private getRemoteTargets: () => Record<string, { host: string; user: string; sshKeyPath: string; port?: number }>;
-  private dockerConfig: { imageName?: string; repoInImage?: boolean };
+  private dockerConfig: { imageName?: string; secretsFile?: string };
   private executionAgentRegistry?: AgentRegistry;
 
   /** Config default branch (e.g. master) for workflows without baseBranch. */
@@ -467,7 +467,7 @@ export class TaskExecutor {
       if (effectiveType === 'docker') {
         const docker = new DockerFamiliar({
           imageName: task.config.dockerImage ?? this.dockerConfig.imageName,
-          repoInImage: this.dockerConfig.repoInImage,
+          secretsFile: this.dockerConfig.secretsFile,
           agentRegistry: this.executionAgentRegistry,
         });
         this.familiarRegistry.register(`docker:${task.id}`, docker);

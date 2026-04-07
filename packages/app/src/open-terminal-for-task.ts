@@ -174,7 +174,6 @@ export async function openExternalTerminalForTask(
   if (!familiar) {
     if (repairedMeta.familiarType === 'docker') {
       const docker = new DockerFamiliar({
-        workspaceDir: repoRoot,
         agentRegistry: opts.executionAgentRegistry,
       });
       familiarRegistry.register('docker', docker);

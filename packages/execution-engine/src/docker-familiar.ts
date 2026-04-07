@@ -1,11 +1,8 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { existsSync } from 'node:fs';
-import { join } from 'node:path';
-import { homedir } from 'node:os';
 import type { WorkRequest, WorkResponse } from '@invoker/contracts';
 import type { FamiliarHandle, PersistedTaskMeta, TerminalSpec } from './familiar.js';
 import { BaseFamiliar, type BaseEntry } from './base-familiar.js';
-import { DockerPool } from './docker-pool.js';
+import { loadSecretsFile } from './secrets-loader.js';
 import { killProcessGroup, cleanElectronEnv, SIGKILL_TIMEOUT_MS } from './process-utils.js';
 import { computeBranchHash } from './branch-utils.js';
 import type { AgentRegistry } from './agent-registry.js';
@@ -16,15 +13,9 @@ const CONTAINER_CWD = '/app';
 
 export interface DockerFamiliarConfig {
   imageName?: string;
-  /** @deprecated No longer used — repoUrl comes from WorkRequest.inputs.repoUrl. */
-  workspaceDir?: string;
   callbackPort?: number;
-  claudeConfigDir?: string;
-  sshDir?: string;
-  /** When true, the image already contains the repo — skip DockerPool clone. */
-  repoInImage?: boolean;
-  /** ANTHROPIC_API_KEY to pass into the container. Falls back to process.env.ANTHROPIC_API_KEY. */
-  anthropicApiKey?: string;
+  /** Path to a dotenv-style file whose entries are appended to the container env. */
+  secretsFile?: string;
   /** Agent registry for pluggable agent command building. */
   agentRegistry?: AgentRegistry;
 }
@@ -43,8 +34,16 @@ function shellEscape(s: string): string {
 /**
  * Familiar that runs tasks inside Docker containers.
  *
+ * The container image is treated as a static artifact: it declares its own
+ * user, HOME, installed tools, and repo contents. DockerFamiliar owns only
+ * container lifecycle — no bind mounts, no user overrides, no HOME injection.
+ *
+ * Secrets come from an optional host file (`secretsFile`) whose entries are
+ * appended to the container env alongside task-identity fields
+ * (`INVOKER_CALLBACK_URL`, `INVOKER_REQUEST_ID`, `INVOKER_ACTION_ID`).
+ *
  * Git lifecycle is handled by overriding `execGitSimple` to route through
- * `docker exec` CLI, so all BaseFamiliar git methods (syncFromRemote,
+ * `docker exec`, so all BaseFamiliar git methods (syncFromRemote,
  * setupTaskBranch, handleProcessExit) work inside the container with zero
  * duplication. The container runs an idle process (`tail -f /dev/null`)
  * and all operations happen via `docker exec`.
@@ -54,11 +53,7 @@ export class DockerFamiliar extends BaseFamiliar<ContainerEntry> {
 
   private readonly imageName: string;
   private readonly callbackPort: number;
-  private readonly claudeConfigDir: string;
-  private readonly sshDir: string;
-  private readonly anthropicApiKey: string;
-  private readonly repoInImage: boolean;
-  private readonly pool: DockerPool;
+  private readonly secretsFile: string | undefined;
   private readonly agentRegistry?: AgentRegistry;
 
   /** Lazily-resolved dockerode instance. Null until first use. */
@@ -69,13 +64,9 @@ export class DockerFamiliar extends BaseFamiliar<ContainerEntry> {
 
   constructor(config: DockerFamiliarConfig) {
     super();
-    this.imageName = config.imageName ?? 'invoker-agent:latest';
+    this.imageName = config.imageName ?? 'invoker/agent-base:latest';
     this.callbackPort = config.callbackPort ?? 4000;
-    this.claudeConfigDir = config.claudeConfigDir ?? join(homedir(), '.claude');
-    this.sshDir = config.sshDir ?? join(homedir(), '.ssh');
-    this.anthropicApiKey = config.anthropicApiKey ?? process.env.ANTHROPIC_API_KEY ?? '';
-    this.repoInImage = config.repoInImage ?? false;
-    this.pool = new DockerPool({ baseImage: this.imageName, sshDir: this.sshDir });
+    this.secretsFile = config.secretsFile;
     this.agentRegistry = config.agentRegistry;
   }
 
@@ -85,8 +76,8 @@ export class DockerFamiliar extends BaseFamiliar<ContainerEntry> {
 
   /**
    * When a container is active, route git commands through `docker exec`
-   * running as root. Falls back to local git for pre-container operations
-   * (e.g. resolveRepoUrl on the host).
+   * running as the image's declared user. Falls back to local git for
+   * pre-container operations (e.g. resolveRepoUrl on the host).
    */
   protected override execGitSimple(args: string[], cwd: string): Promise<string> {
     if (!this.activeContainerId) return super.execGitSimple(args, cwd);
@@ -100,8 +91,8 @@ export class DockerFamiliar extends BaseFamiliar<ContainerEntry> {
   }
 
   /**
-   * Run a bash script inside the active container as root via CLI.
-   * Uses `docker exec --user 0:0` so SSH keys at /root/.ssh are accessible.
+   * Run a bash script inside the active container via CLI. Inherits the
+   * image's declared user.
    */
   private execRemoteCapture(script: string): Promise<string> {
     const containerId = this.activeContainerId;
@@ -110,7 +101,7 @@ export class DockerFamiliar extends BaseFamiliar<ContainerEntry> {
     }
     return new Promise((resolve, reject) => {
       const child = spawn('docker', [
-        'exec', '-i', '--user', '0:0', containerId, 'bash', '-s',
+        'exec', '-i', containerId, 'bash', '-s',
       ], { stdio: ['pipe', 'pipe', 'pipe'] });
       child.stdin!.write(script);
       child.stdin!.end();
@@ -151,18 +142,6 @@ export class DockerFamiliar extends BaseFamiliar<ContainerEntry> {
   }
 
   // ---------------------------------------------------------------------------
-  // Repo URL resolution
-  // ---------------------------------------------------------------------------
-
-  private async resolveRepoUrl(request: WorkRequest): Promise<string> {
-    if (request.inputs.repoUrl) return request.inputs.repoUrl;
-    throw new Error(
-      `Docker task "${request.actionId}" requires a repoUrl but none was provided. ` +
-      `Add repoUrl to your plan YAML or set docker.repoInImage in .invoker.json.`,
-    );
-  }
-
-  // ---------------------------------------------------------------------------
   // Familiar interface
   // ---------------------------------------------------------------------------
 
@@ -183,53 +162,33 @@ export class DockerFamiliar extends BaseFamiliar<ContainerEntry> {
     const handle = this.createHandle(request);
     const executionId = handle.executionId;
 
-    // Resolve container image (before container creation)
-    let containerImage = this.imageName;
-    if (!this.repoInImage) {
-      const repoUrl = await this.resolveRepoUrl(request);
-      try {
-        containerImage = await this.pool.ensureImage(docker, repoUrl);
-      } catch (err) {
-        const errMsg = err instanceof Error ? err.message : String(err);
-        for (const msg of earlyLogs) {
-          this.emitOutput(executionId, msg + '\n');
-        }
-        this.emitOutput(executionId, `${TAG} Image provisioning failed: ${errMsg}\n`);
-        throw new Error(`Docker image provisioning failed: ${errMsg}`);
-      }
-    }
-    log(`${TAG} image=${containerImage} repoInImage=${this.repoInImage}`);
-
-    // Volume mounts — never mount workspaceDir
-    const binds: string[] = [];
-    if (existsSync(this.claudeConfigDir)) {
-      binds.push(`${this.claudeConfigDir}:/home/invoker/.claude`);
-      const claudeJsonPath = join(homedir(), '.claude.json');
-      if (existsSync(claudeJsonPath)) {
-        binds.push(`${claudeJsonPath}:/home/invoker/.claude/.claude.json:ro`);
-      }
-    }
-    if (existsSync(this.sshDir)) {
-      binds.push(`${this.sshDir}:/home/invoker/.ssh:ro`);
-      binds.push(`${this.sshDir}:/root/.ssh:ro`);
-    }
+    log(`${TAG} image=${this.imageName}`);
 
     const callbackUrl = `http://host.docker.internal:${this.callbackPort}/api/worker/response`;
 
+    const env: string[] = [
+      `INVOKER_CALLBACK_URL=${callbackUrl}`,
+      `INVOKER_REQUEST_ID=${request.requestId}`,
+      `INVOKER_ACTION_ID=${request.actionId}`,
+    ];
+
+    // Append secrets from host file (no-op when file absent or path unset).
+    try {
+      env.push(...loadSecretsFile(this.secretsFile));
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      for (const msg of earlyLogs) {
+        this.emitOutput(executionId, msg + '\n');
+      }
+      this.emitOutput(executionId, `${TAG} Failed to load secrets: ${errMsg}\n`);
+      throw new Error(`Failed to load secrets file: ${errMsg}`);
+    }
+
     const containerConfig: Record<string, unknown> = {
-      Image: containerImage,
+      Image: this.imageName,
       Tty: true,
-      User: `${process.getuid?.() ?? 1000}:${process.getgid?.() ?? 1000}`,
-      Env: [
-        `ANTHROPIC_API_KEY=${this.anthropicApiKey}`,
-        `INVOKER_CALLBACK_URL=${callbackUrl}`,
-        `INVOKER_REQUEST_ID=${request.requestId}`,
-        `INVOKER_ACTION_ID=${request.actionId}`,
-        `HOME=/home/invoker`,
-        `COREPACK_HOME=/opt/corepack`,
-      ],
+      Env: env,
       HostConfig: {
-        Binds: binds,
         NetworkMode: 'host',
         ...(process.platform === 'linux' ? {
           ExtraHosts: ['host.docker.internal:host-gateway'],
@@ -252,7 +211,7 @@ export class DockerFamiliar extends BaseFamiliar<ContainerEntry> {
       this.emitOutput(executionId, `${TAG} Container creation failed: ${errMsg}\n`);
       throw new Error(`Docker container creation failed: ${errMsg}`);
     }
-    log(`${TAG} Container created: ${container.id.slice(0, 12)} image=${containerImage}`);
+    log(`${TAG} Container created: ${container.id.slice(0, 12)} image=${this.imageName}`);
 
     // Determine task command and Claude session before entry registration
     const { cmd, args: cmdArgs, agentSessionId } = this.buildCommandAndArgs(request, {
@@ -301,17 +260,6 @@ export class DockerFamiliar extends BaseFamiliar<ContainerEntry> {
     this.activeContainerId = container.id;
     emit(`${TAG} Container started`);
 
-    // -- One-time git config inside the container (as root) --
-    try {
-      await this.execRemoteCapture(
-        'git config --global core.sshCommand "ssh -o StrictHostKeyChecking=accept-new -F /dev/null" && ' +
-        'git config --global user.email "invoker@localhost" && ' +
-        'git config --global user.name "Invoker"',
-      );
-    } catch (err) {
-      emit(`${TAG} git config failed: ${err instanceof Error ? err.message : String(err)}`);
-    }
-
     // -- Git setup (reuses BaseFamiliar methods via overridden execGitSimple + runBash) --
     await this.syncFromRemote(CONTAINER_CWD, executionId);
 
@@ -349,10 +297,8 @@ export class DockerFamiliar extends BaseFamiliar<ContainerEntry> {
 
     // -- Spawn task command via docker exec CLI --
     const taskCmd = `cd ${shellEscape(CONTAINER_CWD)} && exec ${cmd} ${cmdArgs.map(a => shellEscape(a)).join(' ')}`;
-    const uid = process.getuid?.() ?? 1000;
-    const gid = process.getgid?.() ?? 1000;
     const child = spawn('docker', [
-      'exec', '-i', '--user', `${uid}:${gid}`, container.id, 'bash', '-c', taskCmd,
+      'exec', '-i', container.id, 'bash', '-c', taskCmd,
     ], {
       stdio: ['pipe', 'pipe', 'pipe'],
       detached: true,
@@ -548,7 +494,5 @@ export class DockerFamiliar extends BaseFamiliar<ContainerEntry> {
 
     await Promise.all(killPromises);
     this.entries.clear();
-
-    await this.pool.destroyAll(docker);
   }
 }

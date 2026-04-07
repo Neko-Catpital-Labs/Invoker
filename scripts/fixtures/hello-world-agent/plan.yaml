@@ -1,0 +1,14 @@
+name: "E2E Hello World (Docker static image)"
+description: |
+  Single-task Invoker plan used by scripts/e2e-docker-hello-world.sh to
+  exercise the full DockerFamiliar pipeline against a fixture image. Uses
+  ai_task (prompt) instead of a shell command so the script also covers
+  the Claude CLI + secrets.env injection path.
+
+onFinish: none
+
+tasks:
+  - id: hello
+    description: "Ask Claude to print Hello, world!"
+    familiarType: docker
+    prompt: 'Respond with the literal string: Hello, world!'

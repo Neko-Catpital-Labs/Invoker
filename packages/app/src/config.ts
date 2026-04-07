@@ -5,8 +5,8 @@
  * Override with INVOKER_REPO_CONFIG_PATH env var (for tests).
  */
 
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 
 export interface InvokerConfig {
@@ -44,10 +44,18 @@ export interface InvokerConfig {
   };
   /** Docker execution environment configuration. */
   docker?: {
-    /** Docker image to use for container tasks. Default: 'invoker-agent:latest'. */
+    /** Docker image to use for container tasks. Default: 'invoker/agent-base:latest'. */
     imageName?: string;
-    /** If true, the image already contains the repo — skip cloning. Default: false. */
-    repoInImage?: boolean;
+    /**
+     * Path to a `KEY=value` secrets file (chmod 600/400) that is loaded and
+     * forwarded to the container as additional environment variables. The
+     * file's keys are appended to the container's `Env` array verbatim.
+     *
+     * Default fallback: `~/.config/invoker/secrets.env` (used only when the
+     * file actually exists). When unset and the default is missing, no extra
+     * secrets are forwarded.
+     */
+    secretsFile?: string;
   };
   /** Named remote SSH targets for running tasks on remote machines via SSH key auth. */
   remoteTargets?: Record<string, {
@@ -101,5 +109,24 @@ export function loadConfig(): InvokerConfig {
     return readJsonSafe(process.env.INVOKER_REPO_CONFIG_PATH);
   }
   return readJsonSafe(join(homedir(), '.invoker', 'config.json'));
+}
+
+/**
+ * Resolve the secrets file path for Docker tasks.
+ *
+ * Returns the explicit `docker.secretsFile` from config (with `~` expansion)
+ * if set; otherwise returns `~/.config/invoker/secrets.env` if that file
+ * exists; otherwise returns `undefined` (no secrets forwarded).
+ */
+export function resolveSecretsFilePath(config: InvokerConfig): string | undefined {
+  const explicit = config.docker?.secretsFile;
+  if (explicit) {
+    if (explicit === '~') return homedir();
+    if (explicit.startsWith('~/')) return resolve(homedir(), explicit.slice(2));
+    return explicit;
+  }
+  const fallback = join(homedir(), '.config', 'invoker', 'secrets.env');
+  if (existsSync(fallback)) return fallback;
+  return undefined;
 }
 

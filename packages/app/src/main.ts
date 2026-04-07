@@ -68,7 +68,7 @@ import {
   type Familiar, type FamiliarHandle,
 } from '@invoker/execution-engine';
 import type { TaskOutputData } from './types.js';
-import { loadConfig, type InvokerConfig } from './config.js';
+import { loadConfig, resolveSecretsFilePath, type InvokerConfig } from './config.js';
 import {
   createDeleteAllSnapshot,
   createHourlySnapshot,
@@ -475,7 +475,10 @@ function setupGuiMode(): void {
       executionAgentRegistry: agentRegistry,
       cwd: repoRoot,
       defaultBranch: invokerConfig.defaultBranch,
-      dockerConfig: invokerConfig.docker,
+      dockerConfig: {
+        imageName: invokerConfig.docker?.imageName,
+        secretsFile: resolveSecretsFilePath(invokerConfig),
+      },
       remoteTargetsProvider: () => loadConfig().remoteTargets ?? {},
       mergeGateProvider: new GitHubMergeGateProvider(),
       reviewProviderRegistry: (() => {

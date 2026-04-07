@@ -13,7 +13,7 @@
   },
   "scripts": {
     "build": "tsup src/index.ts --format esm --dts",
-    "docker:build": "docker build -t invoker-agent:latest -f docker/Dockerfile.claude docker/",
+    "docker:build": "bash ../../scripts/build-agent-base-image.sh",
     "test": "vitest run",
     "test:watch": "vitest",
     "clean": "rm -rf dist"

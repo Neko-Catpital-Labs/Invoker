@@ -26,7 +26,7 @@ import {
   assertPlanExecutionAgentsRegistered,
   type AgentRegistry,
 } from '@invoker/execution-engine';
-import { loadConfig, type InvokerConfig } from './config.js';
+import { loadConfig, resolveSecretsFilePath, type InvokerConfig } from './config.js';
 import { backupPlan } from './plan-backup.js';
 import { startApiServer } from './api-server.js';
 import {
@@ -92,7 +92,10 @@ function createHeadlessExecutor(
     familiarRegistry: deps.familiarRegistry,
     cwd: deps.repoRoot,
     defaultBranch: deps.invokerConfig.defaultBranch,
-    dockerConfig: deps.invokerConfig.docker,
+    dockerConfig: {
+      imageName: deps.invokerConfig.docker?.imageName,
+      secretsFile: resolveSecretsFilePath(deps.invokerConfig),
+    },
     remoteTargetsProvider: () => loadConfig().remoteTargets ?? {},
     mergeGateProvider: new GitHubMergeGateProvider(),
     reviewProviderRegistry: (() => {
