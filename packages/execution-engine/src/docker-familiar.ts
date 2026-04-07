@@ -11,6 +11,57 @@ const CONTAINER_STOP_TIMEOUT_S = 5;
 const TAG = '[DockerFamiliar]';
 const CONTAINER_CWD = '/app';
 
+/**
+ * Secret-bearing environment variable keys that must be redacted from logs.
+ * Centralized list ensures consistent redaction across all docker familiar logging.
+ */
+const SECRET_ENV_KEYS = [
+  'ANTHROPIC_API_KEY',
+  'OPENAI_API_KEY',
+  'GITHUB_TOKEN',
+  'GH_TOKEN',
+  'GITLAB_TOKEN',
+  'NPM_TOKEN',
+  'AWS_SECRET_ACCESS_KEY',
+  'AZURE_CLIENT_SECRET',
+];
+
+/**
+ * Redact secret-bearing environment variables from a container config object for safe logging.
+ * Returns a deep copy with Env array filtered to show only non-secret keys or redacted placeholders.
+ *
+ * @param config - The raw container config object (may contain secrets in Env array)
+ * @returns A loggable copy with secrets redacted
+ */
+function redactContainerConfig(config: Record<string, unknown>): Record<string, unknown> {
+  // Deep clone to avoid mutating the original config
+  const safeConfig: Record<string, unknown> = {};
+
+  for (const [key, value] of Object.entries(config)) {
+    if (key === 'Env' && Array.isArray(value)) {
+      // Redact secret environment variables
+      safeConfig.Env = value.map((envVar: string) => {
+        const [envKey] = envVar.split('=', 1);
+        if (SECRET_ENV_KEYS.includes(envKey)) {
+          return `${envKey}=***REDACTED***`;
+        }
+        return envVar;
+      });
+    } else if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+      // Deep copy nested objects (like HostConfig)
+      safeConfig[key] = { ...(value as Record<string, unknown>) };
+    } else if (Array.isArray(value)) {
+      // Shallow copy arrays (non-Env arrays don't contain secrets)
+      safeConfig[key] = [...value];
+    } else {
+      // Primitive values can be copied directly
+      safeConfig[key] = value;
+    }
+  }
+
+  return safeConfig;
+}
+
 export interface DockerFamiliarConfig {
   imageName?: string;
   callbackPort?: number;
@@ -199,7 +250,7 @@ export class DockerFamiliar extends BaseFamiliar<ContainerEntry> {
       Entrypoint: [],
     };
 
-    console.log(`${TAG} Container config:`, JSON.stringify(containerConfig, null, 2));
+    console.log(`${TAG} Container config:`, JSON.stringify(redactContainerConfig(containerConfig), null, 2));
     let container;
     try {
       container = await docker.createContainer(containerConfig);

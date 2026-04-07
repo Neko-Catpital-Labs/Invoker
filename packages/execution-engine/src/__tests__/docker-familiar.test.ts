@@ -492,7 +492,7 @@ describe('DockerFamiliar', () => {
 
       // Only the three INVOKER_* entries remain
       expect(env).toHaveLength(3);
-      expect(env.every((e) => e.startsWith('INVOKER_'))).toBe(true);
+      expect(env.every((e: string) => e.startsWith('INVOKER_'))).toBe(true);
     });
 
     it('does not set User on the container (image declares its own user)', async () => {
@@ -517,10 +517,173 @@ describe('DockerFamiliar', () => {
       const createArgs = mockState.createContainer!.mock.calls[0][0];
       const env: string[] = createArgs.Env;
 
-      expect(env.find((e) => e.startsWith('HOME='))).toBeUndefined();
-      expect(env.find((e) => e.startsWith('COREPACK_HOME='))).toBeUndefined();
+      expect(env.find((e: string) => e.startsWith('HOME='))).toBeUndefined();
+      expect(env.find((e: string) => e.startsWith('COREPACK_HOME='))).toBeUndefined();
     });
   });
+
+  // -------------------------------------------------------------------------
+  // Secret redaction in container-config logs (regression tests)
+  // -------------------------------------------------------------------------
+  //
+  // The DockerFamiliar logs the full container config via JSON.stringify when
+  // starting a container. Secrets loaded from secretsFile end up in the Env
+  // array, so the log must redact known secret-bearing keys before emission.
+  // These tests prove the regression is closed: secrets must never appear in
+  // console.log output, regardless of which SECRET_ENV_KEYS are present.
+
+  describe('Secret redaction in container-config logs', () => {
+    let consoleLogSpy: ReturnType<typeof vi.spyOn>;
+
+    beforeEach(() => {
+      consoleLogSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+      consoleLogSpy.mockRestore();
+    });
+
+    it('MUST NOT log literal ANTHROPIC_API_KEY value in container config', async () => {
+      loadSecretsFile.mockReturnValue([
+        'ANTHROPIC_API_KEY=sk-ant-api03-secret-test-key-12345',
+      ]);
+
+      const familiarWithKey = new DockerFamiliar({
+        imageName: 'invoker-agent:latest',
+        secretsFile: '/tmp/fake-secrets.env',
+      });
+
+      await familiarWithKey.start(makeRequest());
+
+      // Verify the API key was placed into container config Env
+      const createArgs = mockState.createContainer!.mock.calls[0][0];
+      const env: string[] = createArgs.Env;
+      expect(env).toContainEqual('ANTHROPIC_API_KEY=sk-ant-api03-secret-test-key-12345');
+
+      // CRITICAL: Verify the literal key never appears in any console.log output
+      const allLogs = consoleLogSpy.mock.calls.map((call: unknown[]) => call.join(' ')).join('\n');
+      expect(allLogs).not.toContain('sk-ant-api03-secret-test-key-12345');
+      expect(allLogs).not.toMatch(/ANTHROPIC_API_KEY=sk-ant-/);
+    });
+
+    it('MUST NOT log token-like environment variable values', async () => {
+      loadSecretsFile.mockReturnValue([
+        'ANTHROPIC_API_KEY=sk-ant-token-abc123xyz',
+      ]);
+
+      const familiarWithTokens = new DockerFamiliar({
+        imageName: 'invoker-agent:latest',
+        secretsFile: '/tmp/fake-secrets.env',
+      });
+
+      await familiarWithTokens.start(makeRequest());
+
+      const allLogs = consoleLogSpy.mock.calls.map((call: unknown[]) => call.join(' ')).join('\n');
+
+      // Verify token patterns are not leaked
+      expect(allLogs).not.toContain('sk-ant-token-abc123xyz');
+      expect(allLogs).not.toMatch(/sk-ant-[\w-]+/);
+    });
+
+    it('MUST preserve non-sensitive container diagnostics in logs', async () => {
+      await familiar.start(makeRequest());
+
+      const allLogs = consoleLogSpy.mock.calls.map((call: unknown[]) => call.join(' ')).join('\n');
+
+      // Verify essential diagnostics remain visible
+      expect(allLogs).toContain('[DockerFamiliar]');
+      expect(allLogs).toContain('Container config:');
+      expect(allLogs).toContain('image=');
+      expect(allLogs).toContain('Container created:');
+    });
+
+    it('MUST redact secrets even when logged via JSON.stringify', async () => {
+      loadSecretsFile.mockReturnValue([
+        'ANTHROPIC_API_KEY=sk-ant-ultra-secret-production-key',
+      ]);
+
+      const familiarWithSecret = new DockerFamiliar({
+        imageName: 'invoker-agent:latest',
+        secretsFile: '/tmp/fake-secrets.env',
+      });
+
+      await familiarWithSecret.start(makeRequest());
+
+      // The implementation does `JSON.stringify(redactContainerConfig(containerConfig), null, 2)`.
+      // Even when serializing the full config object, the secret value MUST NOT appear in logs.
+      const allLogs = consoleLogSpy.mock.calls.map((call: unknown[]) => call.join(' ')).join('\n');
+
+      expect(allLogs).not.toContain('sk-ant-ultra-secret-production-key');
+      expect(allLogs).not.toMatch(/"ANTHROPIC_API_KEY":\s*"sk-ant-/);
+      expect(allLogs).not.toMatch(/ANTHROPIC_API_KEY=sk-ant-[\w-]+/);
+    });
+
+    it('NEGATIVE ASSERTION: the containerConfig log path MUST NOT emit literal secrets', async () => {
+      // Regression barrier: docker-familiar.ts start() logs containerConfig via
+      // JSON.stringify. Without redaction, it WOULD emit the literal
+      // ANTHROPIC_API_KEY value. This test locks that hole shut.
+
+      loadSecretsFile.mockReturnValue([
+        'ANTHROPIC_API_KEY=sk-ant-regression-test-key-99999',
+      ]);
+
+      const familiarWithKey = new DockerFamiliar({
+        imageName: 'invoker-agent:latest',
+        secretsFile: '/tmp/fake-secrets.env',
+      });
+
+      await familiarWithKey.start(makeRequest());
+
+      // Find the specific "Container config:" log line
+      const configLogCall = consoleLogSpy.mock.calls.find((call: unknown[]) =>
+        call.some((arg: unknown) => typeof arg === 'string' && arg.includes('Container config:'))
+      );
+
+      expect(configLogCall).toBeDefined();
+
+      const configLogOutput = (configLogCall as unknown[]).join(' ');
+
+      // Explicit negative assertion: the config log MUST NOT contain the literal secret
+      expect(configLogOutput).not.toContain('sk-ant-regression-test-key-99999');
+
+      // It also MUST NOT contain the env var assignment with the secret
+      expect(configLogOutput).not.toMatch(/ANTHROPIC_API_KEY=sk-ant-/);
+
+      // But it SHOULD indicate that the key exists (redacted)
+      expect(configLogOutput).toMatch(/ANTHROPIC_API_KEY.*REDACTED|ANTHROPIC_API_KEY.*\*\*\*|"Env".*\[/);
+    });
+
+    it('MUST redact multiple SECRET_ENV_KEYS in the same container env', async () => {
+      loadSecretsFile.mockReturnValue([
+        'ANTHROPIC_API_KEY=sk-ant-multi-secret-test',
+        'OPENAI_API_KEY=sk-openai-multi-secret',
+        'GITHUB_TOKEN=ghp_multi_github_token_value',
+        'AWS_SECRET_ACCESS_KEY=aws-multi-secret-access',
+      ]);
+
+      const familiarWithKey = new DockerFamiliar({
+        imageName: 'invoker-agent:latest',
+        secretsFile: '/tmp/fake-secrets.env',
+      });
+
+      await familiarWithKey.start(makeRequest());
+
+      const allLogs = consoleLogSpy.mock.calls.map((call: unknown[]) => call.join(' ')).join('\n');
+
+      // Each secret value must be absent from logs
+      expect(allLogs).not.toContain('sk-ant-multi-secret-test');
+      expect(allLogs).not.toContain('sk-openai-multi-secret');
+      expect(allLogs).not.toContain('ghp_multi_github_token_value');
+      expect(allLogs).not.toContain('aws-multi-secret-access');
+
+      // Each secret key must appear in redacted form
+      expect(allLogs).toContain('ANTHROPIC_API_KEY=***REDACTED***');
+      expect(allLogs).toContain('OPENAI_API_KEY=***REDACTED***');
+      expect(allLogs).toContain('GITHUB_TOKEN=***REDACTED***');
+      expect(allLogs).toContain('AWS_SECRET_ACCESS_KEY=***REDACTED***');
+    });
+  });
+
 
   // -------------------------------------------------------------------------
   // Entry lifecycle regression tests
