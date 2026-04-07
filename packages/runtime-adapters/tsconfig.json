@@ -2,12 +2,15 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "outDir": "dist",
-    "rootDir": "src"
+    "rootDir": "src",
+    "composite": false
   },
   "include": [
     "src/**/*.ts"
   ],
   "references": [
-    { "path": "../runtime-domain" }
+    {
+      "path": "../runtime-domain"
+    }
   ]
 }

@@ -4,17 +4,30 @@
     "outDir": "dist",
     "rootDir": "src",
     "module": "ESNext",
-    "moduleResolution": "bundler"
+    "moduleResolution": "bundler",
+    "composite": false
   },
   "include": [
     "src"
   ],
   "references": [
-    { "path": "../workflow-core" },
-    { "path": "../execution-engine" },
-    { "path": "../data-store" },
-    { "path": "../contracts" },
-    { "path": "../surfaces" },
-    { "path": "../transport" }
+    {
+      "path": "../workflow-core"
+    },
+    {
+      "path": "../execution-engine"
+    },
+    {
+      "path": "../data-store"
+    },
+    {
+      "path": "../contracts"
+    },
+    {
+      "path": "../surfaces"
+    },
+    {
+      "path": "../transport"
+    }
   ]
 }

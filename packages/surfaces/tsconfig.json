@@ -2,16 +2,27 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "outDir": "dist",
-    "rootDir": "src"
+    "rootDir": "src",
+    "composite": false
   },
   "include": [
     "src/**/*.ts"
   ],
   "references": [
-    { "path": "../workflow-core" },
-    { "path": "../execution-engine" },
-    { "path": "../persistence" },
-    { "path": "../protocol" },
-    { "path": "../transport" }
+    {
+      "path": "../workflow-core"
+    },
+    {
+      "path": "../execution-engine"
+    },
+    {
+      "path": "../persistence"
+    },
+    {
+      "path": "../protocol"
+    },
+    {
+      "path": "../transport"
+    }
   ]
 }

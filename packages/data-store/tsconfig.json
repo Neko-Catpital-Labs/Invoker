@@ -2,13 +2,18 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "outDir": "dist",
-    "rootDir": "src"
+    "rootDir": "src",
+    "composite": false
   },
   "include": [
     "src/**/*.ts"
   ],
   "references": [
-    { "path": "../contracts" },
-    { "path": "../workflow-core" }
+    {
+      "path": "../contracts"
+    },
+    {
+      "path": "../workflow-core"
+    }
   ]
 }
