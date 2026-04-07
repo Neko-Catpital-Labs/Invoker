@@ -28,10 +28,18 @@ import {
   type FamiliarHandle, type TerminalSpec, type PersistedTaskMeta,
 } from '@invoker/execution-engine';
 import type { WorkResponse, WorkRequest } from '@invoker/contracts';
+vi.mock('../terminal-external-launch.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../terminal-external-launch.js')>();
+  return {
+    ...actual,
+    spawnDetachedTerminal: vi.fn(async () => ({ opened: true })),
+  };
+});
 import {
   buildLinuxXTerminalBashScript,
   buildMacOSOsascriptArgs,
   buildTerminalShellCommand,
+  spawnDetachedTerminal,
 } from '../terminal-external-launch.js';
 import { openExternalTerminalForTask } from '../open-terminal-for-task.js';
 
@@ -1062,6 +1070,7 @@ describe('fix-with-agent → open-terminal produces correct agent resume command
 describe('openExternalTerminalForTask fail-fast workspace invariant', () => {
   afterEach(() => {
     vi.mocked(existsSync).mockReset();
+    vi.mocked(spawnDetachedTerminal).mockClear();
   });
 
   it('refuses host-repo fallback when worktree task has no workspace path', async () => {
@@ -1172,6 +1181,8 @@ describe('openExternalTerminalForTask fail-fast workspace invariant', () => {
       familiarRegistry: registry,
       repoRoot: '/repo',
     });
+
+    expect(spawnDetachedTerminal).toHaveBeenCalledTimes(1);
 
     // For non-managed types, fallback to repoRoot is allowed.
     // External terminal launch can still fail in headless CI, so only assert
