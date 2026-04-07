@@ -121,6 +121,11 @@ export interface OrchestratorPersistence {
   loadAttempts(nodeId: string): Attempt[];
   loadAttempt(attemptId: string): Attempt | undefined;
   updateAttempt(attemptId: string, changes: Partial<Pick<Attempt, 'status' | 'startedAt' | 'completedAt' | 'exitCode' | 'error' | 'lastHeartbeatAt' | 'branch' | 'commit' | 'summary' | 'workspacePath' | 'agentSessionId' | 'containerId' | 'mergeConflict'>>): void;
+  failTaskAndAttempt?(
+    taskId: string,
+    taskChanges: TaskStateChanges,
+    attemptPatch: Partial<Pick<Attempt, 'status' | 'exitCode' | 'error' | 'completedAt'>>
+  ): void;
   /** Load a workflow by ID (needed for SSH validation in editTaskType). */
   loadWorkflow?(workflowId: string): { repoUrl?: string; baseBranch?: string } | undefined;
   /** Delete a single workflow and its tasks from the DB. */
@@ -689,12 +694,31 @@ export class Orchestrator {
     const parsed = this.responseHandler.parseResponse(response);
     if (!('type' in parsed)) {
       const parseErr = 'error' in parsed ? (parsed as { error: string }).error : 'unknown';
+      const task = this.stateGetTask(response.actionId);
+
+      if (!task) {
+        console.warn(
+          `[worker-response] PROTOCOL_FAILURE_UNKNOWN_TASK actionId=${response.actionId} parseError=${parseErr}`,
+        );
+        this.scheduler.completeJob(response.actionId);
+        return [];
+      }
+
+      const canonicalTaskId = task.id;
       console.warn(
-        `[worker-response] NO_ORCH_WRITE actionId=${response.actionId} parseError=${parseErr} ` +
-          `responseStatus=${String(response.status)} — DB task row is unchanged; UI/orchestrator may diverge`,
+        `[worker-response] PROTOCOL_FAILURE taskId=${canonicalTaskId} parseError=${parseErr}`,
       );
-      this.scheduler.completeJob(this.stateGetTask(response.actionId)?.id ?? response.actionId);
-      return [];
+      this.scheduler.completeJob(canonicalTaskId);
+      return this.finalizeFailedTask(
+        canonicalTaskId,
+        {
+          exitCode: 1,
+          error: 'Protocol error: ' + parseErr,
+          protocolErrorCode: 'MALFORMED_RESPONSE',
+          protocolErrorMessage: parseErr,
+        },
+        'task.protocol_failure',
+      );
     }
 
     const taskId = parsed.taskId;
@@ -2088,46 +2112,76 @@ export class Orchestrator {
     return started;
   }
 
-  private handleFailed(
+  /**
+   * Marks a task as failed, writes to DB atomically (task + attempt), logs event,
+   * publishes delta, checks for newly ready tasks, and returns newly started tasks.
+   */
+  private finalizeFailedTask(
     taskId: string,
-    parsed: Extract<ParsedResponse, { type: 'failed' }>,
+    executionFields: {
+      exitCode?: number;
+      error?: string;
+      protocolErrorCode?: string;
+      protocolErrorMessage?: string;
+      mergeConflict?: { failedBranch: string; conflictFiles: string[] };
+    },
+    eventName: string,
   ): TaskState[] {
-    const mergeConflict = parseMergeConflictError(parsed.error);
+    const existing = this.stateGetTask(taskId);
+    if (!existing) {
+      throw new Error(`finalizeFailedTask: task ${taskId} not found in graph`);
+    }
 
     const changes: TaskStateChanges = {
       status: 'failed',
       execution: {
-        exitCode: parsed.exitCode,
-        error: parsed.error,
-        mergeConflict,
+        ...executionFields,
         completedAt: new Date(),
       },
     };
-    this.writeAndSync(taskId, changes);
-    const delta: TaskDelta = { type: 'updated', taskId, changes };
-    this.persistence.logEvent?.(taskId, 'task.failed', changes);
-    this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
 
-    // Dual-write: update latest Attempt to failed (best-effort)
-    try {
-      const attempts = this.persistence.loadAttempts(taskId);
-      const latest = attempts[attempts.length - 1];
-      if (latest && latest.status === 'running') {
-        this.persistence.updateAttempt(latest.id, {
-          status: 'failed',
-          exitCode: parsed.exitCode,
-          error: parsed.error,
-          mergeConflict,
-          completedAt: new Date(),
-        });
-      }
-    } catch { /* best effort */ }
+    // Use atomic write for task + attempt if available, otherwise fall back to dual-write
+    if (this.persistence.failTaskAndAttempt) {
+      this.persistence.failTaskAndAttempt(taskId, changes, {
+        status: 'failed',
+        exitCode: executionFields.exitCode,
+        error: executionFields.error,
+        completedAt: new Date(),
+      });
+    } else {
+      // Fallback: separate task update + attempt update (dual-write, best-effort)
+      this.persistence.updateTask(taskId, changes);
+      try {
+        const attempts = this.persistence.loadAttempts(taskId);
+        const latest = attempts[attempts.length - 1];
+        if (latest && latest.status === 'running') {
+          this.persistence.updateAttempt(latest.id, {
+            status: 'failed',
+            exitCode: executionFields.exitCode,
+            error: executionFields.error,
+            completedAt: new Date(),
+          });
+        }
+      } catch { /* best effort */ }
+    }
+
+    // Sync to in-memory state (same pattern as writeAndSync)
+    const updated: TaskState = {
+      ...existing,
+      status: 'failed',
+      execution: { ...existing.execution, ...changes.execution },
+    };
+    this.stateMachine.restoreTask(updated);
+
+    const delta: TaskDelta = { type: 'updated', taskId, changes };
+    this.persistence.logEvent?.(taskId, eventName, changes);
+    this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
 
     this.checkExperimentCompletion(taskId);
 
     const readyTaskIds = this.stateMachine.findNewlyReadyTasks(taskId);
     console.log(
-      `[orchestrator] handleFailed "${taskId}": ${readyTaskIds.length} newly ready: [${readyTaskIds.join(', ')}]`,
+      `[orchestrator] finalizeFailedTask "${taskId}" (${eventName}): ${readyTaskIds.length} newly ready: [${readyTaskIds.join(', ')}]`,
     );
     const started = this.autoStartReadyTasks(readyTaskIds);
     started.push(...this.autoStartUnblockedTasks());
@@ -2147,6 +2201,22 @@ export class Orchestrator {
 
     this.checkWorkflowCompletion();
     return started;
+  }
+
+  private handleFailed(
+    taskId: string,
+    parsed: Extract<ParsedResponse, { type: 'failed' }>,
+  ): TaskState[] {
+    const mergeConflict = parseMergeConflictError(parsed.error);
+    return this.finalizeFailedTask(
+      taskId,
+      {
+        exitCode: parsed.exitCode,
+        error: parsed.error,
+        mergeConflict,
+      },
+      'task.failed',
+    );
   }
 
   private handleNeedsInput(

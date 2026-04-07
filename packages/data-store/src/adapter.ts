@@ -110,6 +110,16 @@ export interface PersistenceAdapter {
   loadAttempt(attemptId: string): Attempt | undefined;
   updateAttempt(attemptId: string, changes: Partial<Pick<Attempt, 'status' | 'startedAt' | 'completedAt' | 'exitCode' | 'error' | 'lastHeartbeatAt' | 'branch' | 'commit' | 'summary' | 'workspacePath' | 'agentSessionId' | 'containerId' | 'mergeConflict'>>): void;
 
+  /**
+   * Atomically update a task's state and fail its running attempt (if any).
+   * Wraps both updates in a transaction to prevent partial writes.
+   */
+  failTaskAndAttempt(
+    taskId: string,
+    taskChanges: TaskStateChanges,
+    attemptPatch: Partial<Pick<Attempt, 'status' | 'exitCode' | 'error' | 'completedAt'>>
+  ): void;
+
   // Agent queries
   /** Read the configured execution agent name for a task (e.g. 'claude', 'codex'). */
   getExecutionAgent?(taskId: string): string | null;

@@ -186,6 +186,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
         prompt TEXT,
         exit_code INTEGER,
         error TEXT,
+        protocol_error_code TEXT,
+        protocol_error_message TEXT,
         input_prompt TEXT,
         external_dependencies TEXT,
 
@@ -480,7 +482,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
     this.execRun(`
       INSERT OR REPLACE INTO tasks (
         id, workflow_id, description, status, blocked_by, dependencies,
-        command, prompt, experiment_prompt, exit_code, error, input_prompt, external_dependencies,
+        command, prompt, experiment_prompt, exit_code, error, protocol_error_code, protocol_error_message, input_prompt, external_dependencies,
         summary, problem, approach, test_plan, repro_command,
         branch, commit_hash, parent_task,
         pivot, experiment_variants, is_reconciliation, selected_experiment,
@@ -499,7 +501,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         agent_name
       ) VALUES (
         ?, ?, ?, ?, ?, ?,
-        ?, ?, ?, ?, ?, ?, ?,
+        ?, ?, ?, ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?,
         ?, ?, ?,
         ?, ?, ?, ?,
@@ -522,7 +524,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       exec.blockedBy ?? null,
       JSON.stringify(task.dependencies),
       cfg.command ?? null, cfg.prompt ?? null, cfg.experimentPrompt ?? null,
-      exec.exitCode ?? null, exec.error ?? null, exec.inputPrompt ?? null,
+      exec.exitCode ?? null, exec.error ?? null, exec.protocolErrorCode ?? null, exec.protocolErrorMessage ?? null, exec.inputPrompt ?? null,
       cfg.externalDependencies ? JSON.stringify(cfg.externalDependencies) : null,
       cfg.summary ?? null, cfg.problem ?? null, cfg.approach ?? null,
       cfg.testPlan ?? null, cfg.reproCommand ?? null,
@@ -628,6 +630,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
         inputPrompt: 'input_prompt',
         exitCode: 'exit_code',
         error: 'error',
+        protocolErrorCode: 'protocol_error_code',
+        protocolErrorMessage: 'protocol_error_message',
         actionRequestId: 'action_request_id',
         branch: 'branch',
         commit: 'commit_hash',
@@ -1215,6 +1219,37 @@ export class SQLiteAdapter implements PersistenceAdapter {
     this.execRun(`UPDATE attempts SET ${setClauses.join(', ')} WHERE id = ?`, values);
   }
 
+  failTaskAndAttempt(
+    taskId: string,
+    taskChanges: TaskStateChanges,
+    attemptPatch: Partial<Pick<Attempt, 'status' | 'exitCode' | 'error' | 'completedAt'>>
+  ): void {
+    this.ensureWritable();
+    this.db.run('BEGIN');
+    try {
+      // Update task state
+      this.updateTask(taskId, taskChanges);
+
+      // Load the latest attempt for this task
+      const row = this.queryOne(
+        'SELECT id, status FROM attempts WHERE node_id = ? ORDER BY created_at DESC LIMIT 1',
+        [taskId],
+      ) as { id: string; status: string } | undefined;
+
+      // If there's a running attempt, update it with the failure details
+      if (row && row.status === 'running') {
+        this.updateAttempt(row.id, attemptPatch);
+      }
+
+      this.db.run('COMMIT');
+    } catch (err) {
+      this.db.run('ROLLBACK');
+      throw err;
+    }
+    this.dirty = true;
+    this.scheduleFlush();
+  }
+
   // ── Activity Log ─────────────────────────────────────
 
   writeActivityLog(source: string, level: string, message: string): void {
@@ -1312,6 +1347,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
         inputPrompt: row.input_prompt ?? undefined,
         exitCode: row.exit_code ?? undefined,
         error: row.error ?? undefined,
+        protocolErrorCode: row.protocol_error_code ?? undefined,
+        protocolErrorMessage: row.protocol_error_message ?? undefined,
         startedAt: row.started_at ? new Date(row.started_at) : undefined,
         completedAt: row.completed_at ? new Date(row.completed_at) : undefined,
         lastHeartbeatAt: row.last_heartbeat_at ? new Date(row.last_heartbeat_at) : undefined,
