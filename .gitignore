@@ -16,3 +16,6 @@ packages/app/test-results/
 # Generated Docker base image scratch dir produced by
 # scripts/build-agent-base-image.sh in case it is ever expanded locally.
 /docker/agent-base/
+.claude/debug/
+.claude/todos/
+.cursor/debug-*.log
