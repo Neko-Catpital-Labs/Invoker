@@ -1204,7 +1204,24 @@ export class Orchestrator {
     const isReady = readyTasks.some((t) => t.id === id);
     console.log(`[orchestrator] restartTask "${id}": ready=${isReady}`);
     if (isReady) {
-      return this.autoStartReadyTasks([id]);
+      const started = this.autoStartReadyTasks([id]);
+      if (started.some((t) => t.id === id)) return started;
+
+      const current = this.stateGetTask(id);
+      if (current) {
+        const blocker = this.getExternalDependencyBlocker(current);
+        if (blocker !== undefined) {
+          const blockedChanges: TaskStateChanges = {
+            status: 'blocked',
+            execution: { blockedBy: blocker },
+          };
+          this.writeAndSync(id, blockedChanges);
+          const blockedDelta: TaskDelta = { type: 'updated', taskId: id, changes: blockedChanges };
+          this.persistence.logEvent?.(id, 'task.blocked', blockedChanges);
+          this.messageBus.publish(TASK_DELTA_CHANNEL, blockedDelta);
+          return [this.stateGetTask(id)!];
+        }
+      }
     }
 
     return [this.stateGetTask(id)!];
@@ -1785,7 +1802,11 @@ export class Orchestrator {
       }
     }
 
-    // 5. Publish removal deltas — drives UI cache cleanup via messageBus subscriber
+    // 5. Any surviving tasks that depended on this workflow externally can no
+    // longer make progress; mark them blocked with an explicit reason.
+    this.blockTasksMissingDeletedExternalWorkflow(workflowId);
+
+    // 6. Publish removal deltas — drives UI cache cleanup via messageBus subscriber
     for (const task of affectedTasks) {
       const delta: TaskDelta = { type: 'removed', taskId: task.id };
       this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
@@ -2609,6 +2630,28 @@ export class Orchestrator {
       }
     }
     return undefined;
+  }
+
+  private blockTasksMissingDeletedExternalWorkflow(deletedWorkflowId: string): void {
+    const tasks = this.stateMachine.getAllTasks();
+    for (const task of tasks) {
+      if (task.status !== 'pending' && task.status !== 'blocked') continue;
+      const deps = task.config.externalDependencies ?? [];
+      if (!deps.some((dep) => dep.workflowId === deletedWorkflowId)) continue;
+
+      const blocker = this.getExternalDependencyBlocker(task);
+      if (blocker === undefined) continue;
+
+      const changes: TaskStateChanges = {
+        status: 'blocked',
+        execution: { blockedBy: blocker },
+      };
+      this.writeAndSync(task.id, changes);
+      this.scheduler.removeJob(task.id);
+      const delta: TaskDelta = { type: 'updated', taskId: task.id, changes };
+      this.persistence.logEvent?.(task.id, 'task.blocked', changes);
+      this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
+    }
   }
 
   /** Drain the scheduler queue, starting tasks that fit the concurrency limit. */

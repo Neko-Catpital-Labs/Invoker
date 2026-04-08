@@ -1004,6 +1004,41 @@ describe('Orchestrator', () => {
       expect(deps.find((d) => d.workflowId === wfB)!.gatePolicy).toBe('review_ready');
     });
 
+    it('repro: deleting upstream workflow blocks downstream external dependency on restart', () => {
+      orchestrator.loadPlan({
+        name: 'upstream-workflow',
+        tasks: [{ id: 'verify', description: 'upstream prerequisite' }],
+      });
+      const upstreamTaskId = sid(orchestrator, 0, 'verify');
+      const upstreamWfId = upstreamTaskId.split('/')[0]!;
+
+      orchestrator.loadPlan({
+        name: 'downstream-workflow',
+        tasks: [
+          {
+            id: 'wait-for-upstream',
+            description: 'downstream waits on upstream merge gate',
+            externalDependencies: [{ workflowId: upstreamWfId, gatePolicy: 'approved' }],
+          },
+        ],
+      });
+      const downstreamTaskId = sid(orchestrator, 1, 'wait-for-upstream');
+
+      orchestrator.startExecution();
+      expect(orchestrator.getTask(downstreamTaskId)!.status).toBe('pending');
+      expect(orchestrator.getTask(downstreamTaskId)!.config.externalDependencies).toHaveLength(1);
+
+      // Repro condition: upstream workflow is deleted after downstream was created.
+      orchestrator.deleteWorkflow(upstreamWfId);
+      expect(orchestrator.getTask(downstreamTaskId)).toBeDefined();
+
+      const restarted = orchestrator.restartTask(downstreamTaskId);
+      expect(restarted.map((t) => t.id)).toContain(downstreamTaskId);
+      expect(orchestrator.getTask(downstreamTaskId)!.status).toBe('blocked');
+      expect(orchestrator.getTask(downstreamTaskId)!.execution.blockedBy).toContain('missing prerequisite');
+      expect(orchestrator.getTask(downstreamTaskId)!.config.externalDependencies).toHaveLength(1);
+    });
+
     it('persists status changes to DB', () => {
       orchestrator.loadPlan({
         name: 'test-plan',
@@ -5019,6 +5054,35 @@ describe('Orchestrator', () => {
       // Should not throw — scheduler slots are freed
       orchestrator.deleteWorkflow(wfId);
       expect(orchestrator.getAllTasks()).toHaveLength(0);
+    });
+
+    it('blocks downstream tasks whose external dependency points at deleted workflow', () => {
+      orchestrator.loadPlan({
+        name: 'upstream-delete-target',
+        tasks: [{ id: 'verify', description: 'upstream prerequisite' }],
+      });
+      const upstreamTaskId = sid(orchestrator, 0, 'verify');
+      const upstreamWfId = upstreamTaskId.split('/')[0]!;
+
+      orchestrator.loadPlan({
+        name: 'downstream-external-dependent',
+        tasks: [
+          {
+            id: 'wait-for-upstream',
+            description: 'waits for upstream merge gate',
+            externalDependencies: [{ workflowId: upstreamWfId, gatePolicy: 'approved' }],
+          },
+        ],
+      });
+      const downstreamTaskId = sid(orchestrator, 1, 'wait-for-upstream');
+      orchestrator.startExecution();
+      expect(orchestrator.getTask(downstreamTaskId)!.status).toBe('pending');
+
+      orchestrator.deleteWorkflow(upstreamWfId);
+
+      const downstream = orchestrator.getTask(downstreamTaskId)!;
+      expect(downstream.status).toBe('blocked');
+      expect(downstream.execution.blockedBy).toContain(`missing prerequisite __merge__${upstreamWfId}`);
     });
   });
 
