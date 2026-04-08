@@ -23,6 +23,7 @@
  *   POST   /api/tasks/:id/edit         body: { command }
  *   POST   /api/tasks/:id/edit-type    body: { familiarType, remoteTargetId? }
  *   POST   /api/tasks/:id/edit-agent   body: { agent }
+ *   POST   /api/tasks/:id/gate-policy  body: { updates: [{ workflowId, taskId?, gatePolicy }] }
  *   POST   /api/workflows/:id/restart
  *   POST   /api/workflows/:id/cancel
  *   POST   /api/workflows/:id/merge-mode  body: { mode }
@@ -42,6 +43,7 @@ import {
   editTaskCommand as sharedEditTaskCommand,
   editTaskType as sharedEditTaskType,
   editTaskAgent as sharedEditTaskAgent,
+  setTaskExternalGatePolicies as sharedSetTaskExternalGatePolicies,
   setWorkflowMergeMode as sharedSetWorkflowMergeMode,
 } from './workflow-actions.js';
 
@@ -374,6 +376,28 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
           const runnable = started.filter(t => t.status === 'running');
           await taskExecutor.executeTasks(runnable);
           json(res, 200, { ok: true, taskId, action: 'agent_edited', tasksStarted: runnable.length });
+        } catch (err) {
+          json(res, 400, { error: err instanceof Error ? err.message : String(err) });
+        }
+        return;
+      }
+
+      // POST /api/tasks/:id/gate-policy
+      const gatePolicyMatch = path.match(/^\/api\/tasks\/([^/]+)\/gate-policy$/);
+      if (method === 'POST' && gatePolicyMatch) {
+        const taskId = decodeURIComponent(gatePolicyMatch[1]);
+        try {
+          const body = await readBody(req);
+          const parsed = JSON.parse(body);
+          const updates = Array.isArray(parsed?.updates) ? parsed.updates : [];
+          if (updates.length === 0) {
+            json(res, 400, { error: 'Missing non-empty "updates" array in request body' });
+            return;
+          }
+          const started = sharedSetTaskExternalGatePolicies(taskId, updates, { orchestrator });
+          const runnable = started.filter((t) => t.status === 'running');
+          if (runnable.length > 0) await taskExecutor.executeTasks(runnable);
+          json(res, 200, { ok: true, taskId, action: 'gate_policy_updated', tasksStarted: runnable.length });
         } catch (err) {
           json(res, 400, { error: err instanceof Error ? err.message : String(err) });
         }

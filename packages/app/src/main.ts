@@ -90,6 +90,7 @@ import {
   selectExperiments as sharedSelectExperiments,
   setWorkflowMergeMode,
   editTaskAgent as sharedEditTaskAgent,
+  setTaskExternalGatePolicies as sharedSetTaskExternalGatePolicies,
 } from './workflow-actions.js';
 import { spawn, execSync } from 'node:child_process';
 import { openExternalTerminalForTask } from './open-terminal-for-task.js';
@@ -1338,6 +1339,25 @@ function setupGuiMode(): void {
         throw err;
       }
     });
+
+    ipcMain.handle(
+      'invoker:set-task-external-gate-policies',
+      async (
+        _event,
+        taskId: string,
+        updates: Array<{ workflowId: string; taskId?: string; gatePolicy: 'approved' | 'review_ready' }>,
+      ) => {
+        console.log(`[ipc] set-task-external-gate-policies: "${taskId}" updates=${updates.length}`);
+        try {
+          const started = sharedSetTaskExternalGatePolicies(taskId, updates, { orchestrator });
+          const runnable = started.filter((t) => t.status === 'running');
+          if (runnable.length > 0) await taskExecutor.executeTasks(runnable);
+        } catch (err) {
+          console.error(`[ipc] set-task-external-gate-policies failed: ${err}`);
+          throw err;
+        }
+      },
+    );
 
     ipcMain.handle('invoker:get-remote-targets', () => {
       return Object.keys(loadConfig().remoteTargets ?? {});

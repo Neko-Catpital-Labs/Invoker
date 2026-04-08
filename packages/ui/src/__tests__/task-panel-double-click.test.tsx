@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { TaskPanel } from '../components/TaskPanel.js';
 import type { TaskState } from '../types.js';
 
@@ -1064,6 +1064,74 @@ describe('TaskPanel double-click editing', () => {
       const select = screen.getByTestId('execution-agent-select');
       const options = select.querySelectorAll('option');
       expect(options).toHaveLength(0);
+    });
+  });
+
+  describe('External gate policy in side panel', () => {
+    it('renders external gates with resolved status', () => {
+      const task = makeTask({
+        status: 'pending',
+        config: {
+          externalDependencies: [
+            { workflowId: 'wf-1', taskId: '__merge__', requiredStatus: 'completed', gatePolicy: 'approved' },
+          ],
+        },
+      });
+      const allTasks = new Map<string, TaskState>([
+        ['__merge__wf-1', makeTask({ id: '__merge__wf-1', status: 'review_ready' })],
+      ]);
+
+      render(
+        <TaskPanel
+          task={task}
+          allTasks={allTasks}
+          onProvideInput={mockOnProvideInput}
+          onApprove={mockOnApprove}
+          onReject={mockOnReject}
+          onSelectExperiment={mockOnSelectExperiment}
+        />,
+      );
+
+      expect(screen.getByText('External Gates')).toBeInTheDocument();
+      expect(screen.getByText('Status: review_ready')).toBeInTheDocument();
+      expect(screen.getByText('approved')).toBeInTheDocument();
+    });
+
+    it('edits and applies gate policy updates from side panel', async () => {
+      const task = makeTask({
+        status: 'pending',
+        config: {
+          externalDependencies: [
+            { workflowId: 'wf-1', taskId: '__merge__', requiredStatus: 'completed', gatePolicy: 'approved' },
+          ],
+        },
+      });
+      const onSetExternalGatePolicies = vi.fn(async () => {});
+      const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+      render(
+        <TaskPanel
+          task={task}
+          onProvideInput={mockOnProvideInput}
+          onApprove={mockOnApprove}
+          onReject={mockOnReject}
+          onSelectExperiment={mockOnSelectExperiment}
+          onSetExternalGatePolicies={onSetExternalGatePolicies}
+        />,
+      );
+
+      fireEvent.click(screen.getByTestId('gate-policy-edit-btn'));
+      fireEvent.change(screen.getByTestId('gate-policy-select-0'), { target: { value: 'review_ready' } });
+      fireEvent.click(screen.getByTestId('gate-policy-apply-btn'));
+
+      expect(confirmSpy).toHaveBeenCalled();
+      await waitFor(() =>
+        expect(onSetExternalGatePolicies).toHaveBeenCalledWith(
+          'test-task-1',
+          [{ workflowId: 'wf-1', taskId: '__merge__', gatePolicy: 'review_ready' }],
+        ),
+      );
+      confirmSpy.mockRestore();
     });
   });
 });

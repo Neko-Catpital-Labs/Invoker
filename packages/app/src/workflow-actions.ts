@@ -6,7 +6,7 @@
  * waitForCompletion().
  */
 
-import type { Orchestrator } from '@invoker/workflow-core';
+import type { Orchestrator, ExternalGatePolicyUpdate } from '@invoker/workflow-core';
 import type { TaskState } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import type { TaskExecutor } from '@invoker/execution-engine';
@@ -156,6 +156,14 @@ export function editTaskAgent(
   deps: Pick<ActionDeps, 'orchestrator'>,
 ): TaskState[] {
   return deps.orchestrator.editTaskAgent(taskId, agentName);
+}
+
+export function setTaskExternalGatePolicies(
+  taskId: string,
+  updates: ExternalGatePolicyUpdate[],
+  deps: Pick<ActionDeps, 'orchestrator'>,
+): TaskState[] {
+  return deps.orchestrator.setTaskExternalGatePolicies(taskId, updates);
 }
 
 export function selectExperiment(

@@ -932,6 +932,78 @@ describe('Orchestrator', () => {
       expect(orchestrator.getTask(sid(orchestrator, 1, 'leaf-a'))!.status).toBe('pending');
     });
 
+    it('setTaskExternalGatePolicies can unblock pending task immediately', () => {
+      orchestrator.loadPlan({
+        name: 'prereq-workflow',
+        tasks: [{ id: 'verify-control-plane-regression', description: 'Prereq task' }],
+      });
+      const prereqTaskId = sid(orchestrator, 0, 'verify-control-plane-regression');
+      const prereqWfId = prereqTaskId.split('/')[0]!;
+      const prereqMergeId = `__merge__${prereqWfId}`;
+
+      orchestrator.loadPlan({
+        name: 'workflow-gated-approved',
+        tasks: [
+          {
+            id: 'leaf-a',
+            description: 'leaf waits for upstream merge gate completion',
+            externalDependencies: [{ workflowId: prereqWfId, gatePolicy: 'approved' }],
+          },
+        ],
+      });
+      const leafId = sid(orchestrator, 1, 'leaf-a');
+
+      orchestrator.startExecution();
+      orchestrator.handleWorkerResponse(makeResponse({ actionId: prereqTaskId, status: 'completed' }));
+      orchestrator.setTaskAwaitingApproval(prereqMergeId);
+
+      expect(orchestrator.getTask(leafId)!.status).toBe('pending');
+
+      const started = orchestrator.setTaskExternalGatePolicies(leafId, [
+        { workflowId: prereqWfId, gatePolicy: 'review_ready' },
+      ]);
+
+      expect(orchestrator.getTask(leafId)!.config.externalDependencies?.[0]?.gatePolicy).toBe('review_ready');
+      expect(started.map((t) => t.id)).toContain(leafId);
+      expect(orchestrator.getTask(leafId)!.status).toBe('running');
+    });
+
+    it('setTaskExternalGatePolicies applies targeted updates only', () => {
+      orchestrator.loadPlan({
+        name: 'upstream-a',
+        tasks: [{ id: 'done', description: 'done' }],
+      });
+      orchestrator.loadPlan({
+        name: 'upstream-b',
+        tasks: [{ id: 'done', description: 'done' }],
+      });
+      const wfA = sid(orchestrator, 0, 'done').split('/')[0]!;
+      const wfB = sid(orchestrator, 1, 'done').split('/')[0]!;
+
+      orchestrator.loadPlan({
+        name: 'multi-dependency-gated',
+        tasks: [
+          {
+            id: 'leaf-a',
+            description: 'leaf waits for two external merge gates',
+            externalDependencies: [
+              { workflowId: wfA, gatePolicy: 'approved' },
+              { workflowId: wfB, gatePolicy: 'approved' },
+            ],
+          },
+        ],
+      });
+
+      const leafId = sid(orchestrator, 2, 'leaf-a');
+      orchestrator.setTaskExternalGatePolicies(leafId, [
+        { workflowId: wfB, gatePolicy: 'review_ready' },
+      ]);
+
+      const deps = orchestrator.getTask(leafId)!.config.externalDependencies!;
+      expect(deps.find((d) => d.workflowId === wfA)!.gatePolicy).toBe('approved');
+      expect(deps.find((d) => d.workflowId === wfB)!.gatePolicy).toBe('review_ready');
+    });
+
     it('persists status changes to DB', () => {
       orchestrator.loadPlan({
         name: 'test-plan',

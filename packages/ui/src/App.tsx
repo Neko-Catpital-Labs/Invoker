@@ -11,7 +11,7 @@
 
 import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import yaml from 'js-yaml';
-import type { TaskState, TaskReplacementDef } from './types.js';
+import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate } from './types.js';
 import { useTasks } from './hooks/useTasks.js';
 import { useInvoker } from './hooks/useInvoker.js';
 import { TaskDAG } from './components/TaskDAG.js';
@@ -475,6 +475,18 @@ export function App() {
     [invoker],
   );
 
+  const handleSetExternalGatePolicies = useCallback(
+    async (taskId: string, updates: ExternalGatePolicyUpdate[]) => {
+      if (!invoker) return;
+      try {
+        await invoker.setTaskExternalGatePolicies(taskId, updates);
+      } catch (err) {
+        console.error('Failed to set external gate policies:', err);
+      }
+    },
+    [invoker],
+  );
+
   // ── Modal triggers ────────────────────────────────────────
   const openInputModal = useCallback((task: TaskState) => {
     setModal({ type: 'input', task });
@@ -548,6 +560,7 @@ export function App() {
           <div className="flex-1 overflow-hidden bg-gray-800">
             <TaskPanel
               task={selectedTask}
+              allTasks={tasks}
               baseBranch={selectedTask?.config.workflowId ? workflows.get(selectedTask.config.workflowId)?.baseBranch : undefined}
               mergeMode={selectedTask?.config.workflowId ? workflows.get(selectedTask.config.workflowId)?.mergeMode : undefined}
               remoteTargets={remoteTargets}
@@ -561,6 +574,7 @@ export function App() {
               onEditCommand={handleEditCommand}
               onEditType={handleEditType}
               onEditAgent={handleEditAgent}
+              onSetExternalGatePolicies={handleSetExternalGatePolicies}
               onSetMergeBranch={invoker?.setMergeBranch}
               onSetMergeMode={invoker?.setMergeMode}
             />

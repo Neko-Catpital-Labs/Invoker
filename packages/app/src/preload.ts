@@ -33,6 +33,8 @@ const api: InvokerAPI = {
     ipcRenderer.invoke('invoker:edit-task-type', taskId, familiarType, remoteTargetId),
   editTaskAgent: (taskId, agentName) =>
     ipcRenderer.invoke('invoker:edit-task-agent', taskId, agentName),
+  setTaskExternalGatePolicies: (taskId, updates) =>
+    ipcRenderer.invoke('invoker:set-task-external-gate-policies', taskId, updates),
   getRemoteTargets: () => ipcRenderer.invoke('invoker:get-remote-targets'),
   getExecutionAgents: () => ipcRenderer.invoke('invoker:get-execution-agents'),
   replaceTask: (taskId, replacementTasks) =>

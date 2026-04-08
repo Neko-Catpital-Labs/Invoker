@@ -20,7 +20,7 @@ export function isHeadlessMutatingCommand(args: string[]): boolean {
 
   if (command === 'set') {
     const sub = args[1];
-    return ['command', 'executor', 'agent', 'merge-mode'].includes(sub ?? '');
+    return ['command', 'executor', 'agent', 'merge-mode', 'gate-policy'].includes(sub ?? '');
   }
 
   if (['list', 'status', 'task-status', 'queue', 'audit', 'session', 'query-select'].includes(command)) {
