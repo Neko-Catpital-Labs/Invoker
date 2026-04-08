@@ -68,6 +68,12 @@ export interface ClaudeMessage {
   timestamp: string;
 }
 
+export interface ExternalGatePolicyUpdate {
+  workflowId: string;
+  taskId?: string;
+  gatePolicy: 'approved' | 'review_ready';
+}
+
 // ── IPC Bridge API ───────────────────────────────────────────
 
 export interface InvokerAPI {
@@ -87,6 +93,7 @@ export interface InvokerAPI {
   editTaskCommand: (taskId: string, newCommand: string) => Promise<void>;
   editTaskType: (taskId: string, familiarType: string, remoteTargetId?: string) => Promise<void>;
   editTaskAgent: (taskId: string, agentName: string) => Promise<void>;
+  setTaskExternalGatePolicies: (taskId: string, updates: ExternalGatePolicyUpdate[]) => Promise<void>;
   getRemoteTargets: () => Promise<string[]>;
   getExecutionAgents: () => Promise<string[]>;
   replaceTask: (taskId: string, replacementTasks: TaskReplacementDef[]) => Promise<TaskState[]>;

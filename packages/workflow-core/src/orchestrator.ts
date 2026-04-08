@@ -225,6 +225,12 @@ export interface TaskReplacementDef {
   executionAgent?: string;
 }
 
+export interface ExternalGatePolicyUpdate {
+  workflowId: string;
+  taskId?: string;
+  gatePolicy: 'approved' | 'review_ready';
+}
+
 /**
  * A single routing rule that validates task execution environment against command patterns.
  * When a rule matches a task command, the orchestrator validates that the task's
@@ -1528,6 +1534,66 @@ export class Orchestrator {
     this.messageBus.publish(TASK_DELTA_CHANNEL, agentDelta);
 
     return this.restartTask(taskId);
+  }
+
+  /**
+   * Update gate policy on one or more external dependencies for a task, then
+   * immediately re-evaluate ready tasks that were blocked by external deps.
+   */
+  setTaskExternalGatePolicies(taskId: string, updates: ExternalGatePolicyUpdate[]): TaskState[] {
+    this.refreshFromDb();
+    const task = this.stateGetTask(taskId);
+    if (!task) throw new Error(`Task ${taskId} not found`);
+    if (task.status === 'running' || task.status === 'fixing_with_ai') {
+      throw new Error(`Cannot edit running task ${taskId}`);
+    }
+
+    const deps = task.config.externalDependencies;
+    if (!deps || deps.length === 0) {
+      throw new Error(`Task ${taskId} has no external dependencies`);
+    }
+    if (!updates.length) return [];
+
+    const keyOf = (workflowId: string, depTaskId?: string): string => {
+      const normalizedTaskId = depTaskId?.trim() || '__merge__';
+      return `${workflowId}::${normalizedTaskId}`;
+    };
+
+    const byKey = new Map<string, ExternalGatePolicyUpdate>();
+    for (const update of updates) {
+      if (update.gatePolicy !== 'approved' && update.gatePolicy !== 'review_ready') {
+        throw new Error(`Invalid gatePolicy "${String(update.gatePolicy)}" for task ${taskId}`);
+      }
+      byKey.set(keyOf(update.workflowId, update.taskId), update);
+    }
+
+    let changed = 0;
+    const nextDeps = deps.map((dep) => {
+      const update = byKey.get(keyOf(dep.workflowId, dep.taskId));
+      if (!update) return dep;
+      const current = dep.gatePolicy ?? 'review_ready';
+      if (current === update.gatePolicy) return dep;
+      changed += 1;
+      return { ...dep, gatePolicy: update.gatePolicy };
+    });
+
+    if (changed === 0) return [];
+
+    const policyChanges: TaskStateChanges = {
+      config: { externalDependencies: nextDeps },
+    };
+    this.writeAndSync(taskId, policyChanges);
+    const policyDelta: TaskDelta = { type: 'updated', taskId, changes: policyChanges };
+    this.persistence.logEvent?.(taskId, 'task.external_dependency_policy_updated', {
+      updates,
+      changed,
+    });
+    this.messageBus.publish(TASK_DELTA_CHANNEL, policyDelta);
+
+    // Re-evaluate and auto-start anything newly unblocked by this policy change.
+    const started = this.autoStartExternallyUnblockedReadyTasks();
+    this.checkWorkflowCompletion();
+    return started;
   }
 
   /**

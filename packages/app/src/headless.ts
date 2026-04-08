@@ -41,6 +41,7 @@ import {
   editTaskCommand as sharedEditTaskCommand,
   editTaskType as sharedEditTaskType,
   editTaskAgent as sharedEditTaskAgent,
+  setTaskExternalGatePolicies as sharedSetTaskExternalGatePolicies,
   selectExperiment as sharedSelectExperiment,
   setWorkflowMergeMode,
 } from './workflow-actions.js';
@@ -335,7 +336,7 @@ async function headlessQuery(args: string[], deps: HeadlessDeps): Promise<void> 
 async function headlessSet(args: string[], deps: HeadlessDeps): Promise<void> {
   const subCommand = args[0];
   if (!subCommand) {
-    throw new Error('Missing set sub-command. Usage: --headless set <command|executor|agent|merge-mode>');
+    throw new Error('Missing set sub-command. Usage: --headless set <command|executor|agent|merge-mode|gate-policy>');
   }
 
   switch (subCommand) {
@@ -351,8 +352,11 @@ async function headlessSet(args: string[], deps: HeadlessDeps): Promise<void> {
     case 'merge-mode':
       await headlessSetMergeMode(args[1], args[2], deps);
       break;
+    case 'gate-policy':
+      await headlessSetGatePolicy(args.slice(1), deps);
+      break;
     default:
-      throw new Error(`Unknown set sub-command: "${subCommand}". Use: command, executor, agent, merge-mode`);
+      throw new Error(`Unknown set sub-command: "${subCommand}". Use: command, executor, agent, merge-mode, gate-policy`);
   }
 }
 
@@ -558,6 +562,8 @@ ${BOLD}Configure:${RESET}
   set executor <taskId> <type>                        Change executor type (worktree|docker|ssh)
   set agent <taskId> <agent>                          Change execution agent (claude|codex)
   set merge-mode <workflowId> <mode>                  manual | automatic | github | external_review
+  set gate-policy <taskId> <wfId> [depTaskId] <policy>
+                                                      policy: approved | review_ready
 
 ${BOLD}Lifecycle:${RESET}
   cancel <taskId>                                     Cancel task + all downstream
@@ -1096,6 +1102,36 @@ async function headlessSetMergeMode(
   });
   const wf = deps.persistence.loadWorkflow(workflowId);
   console.log(`Merge mode updated for ${workflowId}: ${wf?.mergeMode ?? '?'}`);
+}
+
+async function headlessSetGatePolicy(args: string[], deps: HeadlessDeps): Promise<void> {
+  const [taskIdRaw, workflowId, arg3, arg4] = args;
+  if (!taskIdRaw || !workflowId || !arg3) {
+    throw new Error(
+      'Missing arguments. Usage: --headless set gate-policy <taskId> <workflowId> [depTaskId] <approved|review_ready>',
+    );
+  }
+  const taskId = restoreWorkflowForTask(taskIdRaw, deps).resolvedTaskId;
+  const hasDepTaskId = arg4 !== undefined;
+  const depTaskId = hasDepTaskId ? arg3 : '__merge__';
+  const gatePolicy = (hasDepTaskId ? arg4 : arg3) as 'approved' | 'review_ready';
+  if (gatePolicy !== 'approved' && gatePolicy !== 'review_ready') {
+    throw new Error(`Invalid gate policy "${String(gatePolicy)}". Expected approved|review_ready`);
+  }
+
+  const started = sharedSetTaskExternalGatePolicies(
+    taskId,
+    [{ workflowId, taskId: depTaskId, gatePolicy }],
+    deps,
+  );
+  const runnable = started.filter((t) => t.status === 'running');
+  if (runnable.length > 0) {
+    const taskExecutor = createHeadlessExecutor(deps);
+    await taskExecutor.executeTasks(runnable);
+  }
+  console.log(
+    `Updated gate policy for ${taskId}: ${workflowId}/${depTaskId} -> ${gatePolicy} (${runnable.length} task(s) started)`,
+  );
 }
 
 async function headlessSlack(deps: HeadlessDeps): Promise<void> {

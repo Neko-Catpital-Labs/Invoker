@@ -9,7 +9,7 @@
  */
 
 import { useState, useEffect } from 'react';
-import type { TaskState } from '../types.js';
+import type { TaskState, ExternalDependency, ExternalGatePolicyUpdate } from '../types.js';
 import { getStatusColor, getEffectiveVisualStatus } from '../lib/colors.js';
 import { mergeGatePanelHeading } from '../lib/merge-gate.js';
 
@@ -27,8 +27,36 @@ function capitalize(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
+function normalizeExternalDepTaskId(dep: Pick<ExternalDependency, 'taskId'>): string {
+  return dep.taskId?.trim() || '__merge__';
+}
+
+function externalDepDisplayId(dep: ExternalDependency): string {
+  const normalizedTaskId = normalizeExternalDepTaskId(dep);
+  if (normalizedTaskId === '__merge__') return `__merge__${dep.workflowId}`;
+  if (normalizedTaskId.includes('/')) return normalizedTaskId;
+  return `${dep.workflowId}/${normalizedTaskId}`;
+}
+
+function externalDepKey(dep: ExternalDependency): string {
+  return `${dep.workflowId}::${normalizeExternalDepTaskId(dep)}`;
+}
+
+function resolveExternalDepStatus(dep: ExternalDependency, allTasks?: Map<string, TaskState>): string {
+  if (!allTasks) return 'unknown';
+  const normalizedTaskId = normalizeExternalDepTaskId(dep);
+  if (normalizedTaskId === '__merge__') {
+    return allTasks.get(`__merge__${dep.workflowId}`)?.status ?? 'missing';
+  }
+  if (normalizedTaskId.includes('/')) {
+    return allTasks.get(normalizedTaskId)?.status ?? 'missing';
+  }
+  return allTasks.get(`${dep.workflowId}/${normalizedTaskId}`)?.status ?? allTasks.get(normalizedTaskId)?.status ?? 'missing';
+}
+
 interface TaskPanelProps {
   task: TaskState | null;
+  allTasks?: Map<string, TaskState>;
   baseBranch?: string;
   remoteTargets?: string[];
   executionAgents?: string[];
@@ -39,6 +67,7 @@ interface TaskPanelProps {
   onEditCommand?: (taskId: string, newCommand: string) => void;
   onEditType?: (taskId: string, familiarType: string, remoteTargetId?: string) => void;
   onEditAgent?: (taskId: string, agentName: string) => void;
+  onSetExternalGatePolicies?: (taskId: string, updates: ExternalGatePolicyUpdate[]) => Promise<void>;
   onSetMergeBranch?: (workflowId: string, baseBranch: string) => Promise<void>;
   mergeMode?: string;
   onSetMergeMode?: (workflowId: string, mergeMode: string) => Promise<void>;
@@ -109,6 +138,7 @@ function HeartbeatTimingSection({ task, formatDate: fmtDate }: { task: TaskState
 
 export function TaskPanel({
   task,
+  allTasks,
   baseBranch,
   remoteTargets,
   executionAgents,
@@ -119,6 +149,7 @@ export function TaskPanel({
   onEditCommand,
   onEditType,
   onEditAgent,
+  onSetExternalGatePolicies,
   onSetMergeBranch,
   mergeMode,
   onSetMergeMode,
@@ -127,11 +158,21 @@ export function TaskPanel({
   const [editCommandValue, setEditCommandValue] = useState('');
   const [branchValue, setBranchValue] = useState(baseBranch ?? '');
   const [showAdvanced, setShowAdvanced] = useState(true);
+  const [isEditingGatePolicies, setIsEditingGatePolicies] = useState(false);
+  const [isSavingGatePolicies, setIsSavingGatePolicies] = useState(false);
+  const [gatePolicyDraft, setGatePolicyDraft] = useState<Record<string, 'approved' | 'review_ready'>>({});
 
   useEffect(() => {
     setIsEditingCommand(false);
     setEditCommandValue(task?.config.command ?? '');
     setBranchValue(baseBranch ?? '');
+    setIsEditingGatePolicies(false);
+    setIsSavingGatePolicies(false);
+    const nextDraft: Record<string, 'approved' | 'review_ready'> = {};
+    for (const dep of task?.config.externalDependencies ?? []) {
+      nextDraft[externalDepKey(dep)] = dep.gatePolicy ?? 'review_ready';
+    }
+    setGatePolicyDraft(nextDraft);
   }, [task?.id, baseBranch]);
 
   if (!task) {
@@ -162,6 +203,51 @@ export function TaskPanel({
 
   const mergeGateDisplayTitle = mergeGatePanelHeading(task, mergeMode);
   const isFixApproval = Boolean(task.execution.pendingFixError);
+  const externalDeps = task.config.externalDependencies ?? [];
+  const canEditGatePolicies = Boolean(
+    onSetExternalGatePolicies
+    && externalDeps.length > 0
+    && task.status !== 'running'
+    && task.status !== 'fixing_with_ai',
+  );
+  const changedGatePolicyCount = externalDeps.filter((dep) => {
+    const key = externalDepKey(dep);
+    const draft = gatePolicyDraft[key] ?? dep.gatePolicy ?? 'review_ready';
+    const current = dep.gatePolicy ?? 'review_ready';
+    return draft !== current;
+  }).length;
+
+  const handleSaveGatePolicies = async () => {
+    if (!onSetExternalGatePolicies || changedGatePolicyCount === 0) {
+      setIsEditingGatePolicies(false);
+      return;
+    }
+    const updates: ExternalGatePolicyUpdate[] = externalDeps
+      .filter((dep) => {
+        const key = externalDepKey(dep);
+        const draft = gatePolicyDraft[key] ?? dep.gatePolicy ?? 'review_ready';
+        const current = dep.gatePolicy ?? 'review_ready';
+        return draft !== current;
+      })
+      .map((dep) => ({
+        workflowId: dep.workflowId,
+        taskId: dep.taskId,
+        gatePolicy: gatePolicyDraft[externalDepKey(dep)] ?? dep.gatePolicy ?? 'review_ready',
+      }));
+
+    const confirmed = window.confirm(
+      `Apply gate policy changes to ${updates.length} external dependenc${updates.length === 1 ? 'y' : 'ies'}? This re-evaluates the task immediately.`,
+    );
+    if (!confirmed) return;
+
+    try {
+      setIsSavingGatePolicies(true);
+      await onSetExternalGatePolicies(task.id, updates);
+      setIsEditingGatePolicies(false);
+    } finally {
+      setIsSavingGatePolicies(false);
+    }
+  };
 
   return (
     <div className="h-full overflow-y-auto p-4 space-y-4">
@@ -444,6 +530,100 @@ export function TaskPanel({
         <div className="bg-gray-700/50 border border-gray-600 rounded p-3">
           <h3 className="text-sm font-medium text-gray-400 mb-1">Blocked By</h3>
           <p className="text-xs text-gray-300">{task.execution.blockedBy}</p>
+        </div>
+      )}
+
+      {/* External dependencies + gate policy */}
+      {externalDeps.length > 0 && (
+        <div className="space-y-3 border border-gray-700 rounded p-3">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-medium text-gray-200">External Gates</h3>
+            {canEditGatePolicies && !isEditingGatePolicies && (
+              <button
+                onClick={() => setIsEditingGatePolicies(true)}
+                className="text-xs text-blue-400 hover:text-blue-300"
+                data-testid="gate-policy-edit-btn"
+              >
+                Edit
+              </button>
+            )}
+          </div>
+
+          <div className="space-y-2">
+            {externalDeps.map((dep, index) => {
+              const key = externalDepKey(dep);
+              const currentPolicy = dep.gatePolicy ?? 'review_ready';
+              const draftPolicy = gatePolicyDraft[key] ?? currentPolicy;
+              const externalStatus = resolveExternalDepStatus(dep, allTasks);
+              return (
+                <div key={`${key}-${index}`} className="rounded border border-gray-700 bg-gray-800/40 p-2">
+                  <div className="text-xs font-mono text-gray-300 break-all">{externalDepDisplayId(dep)}</div>
+                  <div className="mt-1 flex items-center justify-between gap-2">
+                    <span className="text-xs text-gray-400">Status: {externalStatus}</span>
+                    {isEditingGatePolicies ? (
+                      <select
+                        value={draftPolicy}
+                        onChange={(e) => {
+                          const next = e.target.value as 'approved' | 'review_ready';
+                          setGatePolicyDraft((prev) => ({ ...prev, [key]: next }));
+                        }}
+                        className="bg-gray-700 text-gray-200 text-xs rounded px-2 py-1 border border-gray-600 focus:outline-none focus:border-blue-500"
+                        data-testid={`gate-policy-select-${index}`}
+                      >
+                        <option value="approved">approved</option>
+                        <option value="review_ready">review_ready</option>
+                      </select>
+                    ) : (
+                      <span
+                        className={`text-xs px-2 py-0.5 rounded ${
+                          currentPolicy === 'approved'
+                            ? 'bg-gray-700 text-gray-200'
+                            : 'bg-cyan-900/30 text-cyan-300'
+                        }`}
+                      >
+                        {currentPolicy}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {isEditingGatePolicies && (
+            <div className="space-y-2">
+              <div className="text-xs text-gray-400" data-testid="gate-policy-impact-text">
+                {changedGatePolicyCount > 0
+                  ? `${changedGatePolicyCount} change${changedGatePolicyCount === 1 ? '' : 's'} pending. Apply to re-evaluate immediately.`
+                  : 'No changes yet.'}
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={handleSaveGatePolicies}
+                  disabled={isSavingGatePolicies || changedGatePolicyCount === 0}
+                  className="flex-1 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:bg-blue-900/40 disabled:text-gray-400 text-white rounded text-xs font-medium transition-colors"
+                  data-testid="gate-policy-apply-btn"
+                >
+                  {isSavingGatePolicies ? 'Applying...' : 'Apply & Re-evaluate'}
+                </button>
+                <button
+                  onClick={() => {
+                    const resetDraft: Record<string, 'approved' | 'review_ready'> = {};
+                    for (const dep of externalDeps) {
+                      resetDraft[externalDepKey(dep)] = dep.gatePolicy ?? 'review_ready';
+                    }
+                    setGatePolicyDraft(resetDraft);
+                    setIsEditingGatePolicies(false);
+                  }}
+                  disabled={isSavingGatePolicies}
+                  className="flex-1 px-3 py-1.5 bg-gray-600 hover:bg-gray-500 disabled:opacity-50 text-white rounded text-xs font-medium transition-colors"
+                  data-testid="gate-policy-cancel-btn"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

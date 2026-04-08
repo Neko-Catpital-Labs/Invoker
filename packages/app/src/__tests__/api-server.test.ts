@@ -90,6 +90,7 @@ function createMocks() {
       editTaskCommand: vi.fn(() => [makeTask()]),
       editTaskType: vi.fn(() => [makeTask()]),
       editTaskAgent: vi.fn(() => [makeTask()]),
+      setTaskExternalGatePolicies: vi.fn(() => [makeTask()]),
       cancelTask: vi.fn(() => ({ cancelled: ['task-1'], runningCancelled: ['task-1'] })),
       deleteWorkflow: vi.fn(),
       getQueueStatus: vi.fn(() => ({
@@ -167,6 +168,7 @@ beforeEach(() => {
   mocks.orchestrator.restartTask.mockReturnValue([makeTask()]);
   mocks.orchestrator.editTaskCommand.mockReturnValue([makeTask()]);
   mocks.orchestrator.editTaskType.mockReturnValue([makeTask()]);
+  mocks.orchestrator.setTaskExternalGatePolicies.mockReturnValue([makeTask()]);
   mocks.orchestrator.cancelTask.mockReturnValue({ cancelled: ['task-1'], runningCancelled: ['task-1'] });
   mocks.orchestrator.getQueueStatus.mockReturnValue({
     maxConcurrency: 4, runningCount: 1,
@@ -519,6 +521,30 @@ describe('POST /api/tasks/:id/edit-agent', () => {
     const res = await request(port, 'POST', '/api/tasks/task-1/edit-agent', {});
     expect(res.status).toBe(400);
     expect(res.body.error).toContain('Missing "agent"');
+  });
+});
+
+describe('POST /api/tasks/:id/gate-policy', () => {
+  it('updates gate policy and executes started tasks', async () => {
+    const res = await request(port, 'POST', '/api/tasks/task-1/gate-policy', {
+      updates: [
+        { workflowId: 'wf-upstream', taskId: '__merge__', gatePolicy: 'review_ready' },
+      ],
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.action).toBe('gate_policy_updated');
+    expect(mocks.orchestrator.setTaskExternalGatePolicies).toHaveBeenCalledWith(
+      'task-1',
+      [{ workflowId: 'wf-upstream', taskId: '__merge__', gatePolicy: 'review_ready' }],
+    );
+    expect(mocks.taskExecutor.executeTasks).toHaveBeenCalled();
+  });
+
+  it('returns 400 when updates are missing', async () => {
+    const res = await request(port, 'POST', '/api/tasks/task-1/gate-policy', {});
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('Missing non-empty "updates" array');
   });
 });
 

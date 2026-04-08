@@ -42,6 +42,12 @@ export interface ExternalDependency {
   readonly gatePolicy?: 'approved' | 'review_ready';
 }
 
+export interface ExternalGatePolicyUpdate {
+  workflowId: string;
+  taskId?: string;
+  gatePolicy: 'approved' | 'review_ready';
+}
+
 // ── Task Config (plan-time / static fields) ────────────────
 
 export interface TaskConfig {
@@ -232,6 +238,7 @@ export interface InvokerAPI {
   editTaskCommand: (taskId: string, newCommand: string) => Promise<void>;
   editTaskType: (taskId: string, familiarType: string, remoteTargetId?: string) => Promise<void>;
   editTaskAgent: (taskId: string, agentName: string) => Promise<void>;
+  setTaskExternalGatePolicies: (taskId: string, updates: ExternalGatePolicyUpdate[]) => Promise<void>;
   getRemoteTargets: () => Promise<string[]>;
   getExecutionAgents: () => Promise<string[]>;
   replaceTask: (taskId: string, replacementTasks: TaskReplacementDef[]) => Promise<TaskState[]>;
