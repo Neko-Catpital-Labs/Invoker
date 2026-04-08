@@ -280,6 +280,8 @@ export interface InvokerAPI {
     running: Array<{ taskId: string; description: string }>;
     queued: Array<{ taskId: string; priority: number; description: string }>;
   }>;
+  reportUiPerf: (metric: string, data?: Record<string, unknown>) => Promise<void>;
+  getUiPerfStats: () => Promise<Record<string, unknown>>;
 }
 
 // ── Augment global Window ───────────────────────────────────

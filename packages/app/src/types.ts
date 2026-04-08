@@ -148,6 +148,8 @@ export interface InvokerAPI {
     running: Array<{ taskId: string; description: string }>;
     queued: Array<{ taskId: string; priority: number; description: string }>;
   }>;
+  reportUiPerf: (metric: string, data?: Record<string, unknown>) => Promise<void>;
+  getUiPerfStats: () => Promise<Record<string, unknown>>;
 
   /** Test-only (NODE_ENV=test): persist task updates and push deltas without running the executor. */
   injectTaskStates?: (updates: Array<{ taskId: string; changes: TaskStateChanges }>) => Promise<void>;

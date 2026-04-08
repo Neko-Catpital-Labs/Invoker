@@ -9,7 +9,7 @@
  * - Modals overlay when needed
  */
 
-import { useState, useCallback, useMemo, useEffect } from 'react';
+import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import yaml from 'js-yaml';
 import type { TaskState, TaskReplacementDef } from './types.js';
 import { useTasks } from './hooks/useTasks.js';
@@ -65,10 +65,59 @@ export function App() {
   const [remoteTargets, setRemoteTargets] = useState<string[]>([]);
   const [executionAgents, setExecutionAgents] = useState<string[]>([]);
   const [statusFilters, setStatusFilters] = useState<Set<string>>(new Set());
+  const uiPerfThrottleRef = useRef<Record<string, number>>({});
 
   useEffect(() => {
     window.invoker?.getRemoteTargets?.().then(setRemoteTargets).catch(() => {});
     window.invoker?.getExecutionAgents?.().then(setExecutionAgents).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.invoker) return;
+
+    const shouldEmit = (key: string, minIntervalMs: number): boolean => {
+      const now = Date.now();
+      const prev = uiPerfThrottleRef.current[key] ?? 0;
+      if (now - prev < minIntervalMs) return false;
+      uiPerfThrottleRef.current[key] = now;
+      return true;
+    };
+
+    // Track renderer event loop lag.
+    let expected = performance.now() + 1000;
+    const lagInterval = setInterval(() => {
+      const now = performance.now();
+      const lagMs = Math.max(0, now - expected);
+      expected += 1000;
+      if (lagMs >= 250 && shouldEmit('event_loop_lag', 5000)) {
+        void window.invoker.reportUiPerf('renderer_event_loop_lag', { lagMs: Math.round(lagMs) });
+      }
+    }, 1000);
+
+    // Track long tasks if supported by Chromium.
+    let perfObserver: PerformanceObserver | null = null;
+    if ('PerformanceObserver' in window) {
+      try {
+        perfObserver = new PerformanceObserver((list) => {
+          for (const entry of list.getEntries()) {
+            if (entry.duration >= 200 && shouldEmit('long_task', 3000)) {
+              void window.invoker.reportUiPerf('renderer_long_task', {
+                durationMs: Math.round(entry.duration),
+                name: entry.name,
+              });
+            }
+          }
+        });
+        perfObserver.observe({ entryTypes: ['longtask'] });
+      } catch {
+        // Browser might not support longtask in this context.
+      }
+    }
+
+    return () => {
+      clearInterval(lagInterval);
+      perfObserver?.disconnect();
+    };
   }, []);
 
   const handleStatusClick = useCallback((filterKey: string, event: React.MouseEvent) => {

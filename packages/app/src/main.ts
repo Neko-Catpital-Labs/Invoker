@@ -455,9 +455,19 @@ function setupGuiMode(): void {
   const taskHandles = new Map<string, { handle: FamiliarHandle; familiar: Familiar }>();
   let dbPollInterval: ReturnType<typeof setInterval> | null = null;
   let activityPollInterval: ReturnType<typeof setInterval> | null = null;
+  let uiPerfLogInterval: ReturnType<typeof setInterval> | null = null;
   const lastKnownTaskStates = new Map<string, string>();
   let lastKnownWorkflowCount = 0;
   let lastActivityLogId = 0;
+  const uiPerfStats = {
+    mainDeltaToUi: 0,
+    dbPollCreated: 0,
+    dbPollUpdatedAsCreated: 0,
+    dbPollUpdatedAsUpdated: 0,
+    rendererReports: 0,
+    maxRendererEventLoopLagMs: 0,
+    maxRendererLongTaskMs: 0,
+  };
 
   // Focus existing window when a second instance is launched
   app.on('second-instance', () => {
@@ -738,6 +748,7 @@ function setupGuiMode(): void {
     // Forward deltas to renderer and keep snapshot cache in sync so
     // the db-poll doesn't re-emit deltas the messageBus already delivered.
     messageBus.subscribe(Channels.TASK_DELTA, (delta: unknown) => {
+      uiPerfStats.mainDeltaToUi += 1;
       console.log(`[delta→ui]`, JSON.stringify(delta));
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('invoker:task-delta', delta);
@@ -762,6 +773,19 @@ function setupGuiMode(): void {
         lastKnownTaskStates.delete(d.taskId);
       }
     });
+
+    uiPerfLogInterval = setInterval(() => {
+      const snapshot = {
+        ts: new Date().toISOString(),
+        metric: 'main_delta_flow',
+        ...uiPerfStats,
+      };
+      try {
+        persistence.writeActivityLog('ui-perf-main', 'info', JSON.stringify(snapshot));
+      } catch {
+        // DB might be locked
+      }
+    }, 10000);
 
     messageBus.subscribe(Channels.TASK_OUTPUT, (data: unknown) => {
       if (mainWindow && !mainWindow.isDestroyed()) {
@@ -1084,6 +1108,31 @@ function setupGuiMode(): void {
       return orchestrator.getQueueStatus();
     });
 
+    ipcMain.handle('invoker:report-ui-perf', (_event, metric: string, data?: Record<string, unknown>) => {
+      const payload = {
+        ts: new Date().toISOString(),
+        metric,
+        ...(data ?? {}),
+      };
+      if (metric === 'renderer_event_loop_lag' && typeof data?.lagMs === 'number') {
+        uiPerfStats.maxRendererEventLoopLagMs = Math.max(uiPerfStats.maxRendererEventLoopLagMs, data.lagMs);
+      }
+      if (metric === 'renderer_long_task' && typeof data?.durationMs === 'number') {
+        uiPerfStats.maxRendererLongTaskMs = Math.max(uiPerfStats.maxRendererLongTaskMs, data.durationMs);
+      }
+      uiPerfStats.rendererReports += 1;
+      try {
+        persistence.writeActivityLog('ui-perf', 'info', JSON.stringify(payload));
+      } catch {
+        // DB might be locked
+      }
+    });
+
+    ipcMain.handle('invoker:get-ui-perf-stats', () => ({
+      ...uiPerfStats,
+      ts: new Date().toISOString(),
+    }));
+
     ipcMain.handle('invoker:recreate-workflow', async (_event, workflowId: string) => {
       console.log(`[ipc] recreate-workflow: "${workflowId}"`);
       try {
@@ -1343,12 +1392,14 @@ function setupGuiMode(): void {
               console.log(`[db-poll] ${msg}`);
               try { persistence.writeActivityLog('db-poll', 'info', msg); } catch { /* db locked */ }
               lastKnownTaskStates.set(task.id, snapshot);
+              uiPerfStats.dbPollCreated += 1;
               mainWindow.webContents.send('invoker:task-delta', { type: 'created', task });
             } else if (prev !== snapshot) {
               const msg = `Task updated: ${task.id} (${task.status})`;
               console.log(`[db-poll] ${msg}`);
               try { persistence.writeActivityLog('db-poll', 'info', msg); } catch { /* db locked */ }
               lastKnownTaskStates.set(task.id, snapshot);
+              uiPerfStats.dbPollUpdatedAsCreated += 1;
               mainWindow.webContents.send('invoker:task-delta', { type: 'created', task });
             }
 
@@ -1443,6 +1494,7 @@ function setupGuiMode(): void {
     if (apiServer) await apiServer.close().catch(() => {});
     if (dbPollInterval) clearInterval(dbPollInterval);
     if (activityPollInterval) clearInterval(activityPollInterval);
+    if (uiPerfLogInterval) clearInterval(uiPerfLogInterval);
     if (hourlyBackupInterval) {
       clearInterval(hourlyBackupInterval);
       hourlyBackupInterval = null;

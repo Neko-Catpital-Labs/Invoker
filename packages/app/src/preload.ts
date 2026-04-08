@@ -100,6 +100,9 @@ const api: InvokerAPI = {
   cancelWorkflow: (workflowId: string) =>
     ipcRenderer.invoke('invoker:cancel-workflow', workflowId),
   getQueueStatus: () => ipcRenderer.invoke('invoker:get-queue-status'),
+  reportUiPerf: (metric: string, data?: Record<string, unknown>) =>
+    ipcRenderer.invoke('invoker:report-ui-perf', metric, data),
+  getUiPerfStats: () => ipcRenderer.invoke('invoker:get-ui-perf-stats'),
 };
 
 if (process.env.NODE_ENV === 'test') {

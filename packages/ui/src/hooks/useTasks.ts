@@ -22,6 +22,12 @@ export function useTasks(): UseTasksResult {
   const [workflows, setWorkflows] = useState<Map<string, WorkflowMeta>>(new Map());
   const workflowsRef = useRef(workflows);
   workflowsRef.current = workflows;
+  const deltaPerfRef = useRef({
+    received: 0,
+    applyCount: 0,
+    applyTotalMs: 0,
+    applyMaxMs: 0,
+  });
   /** Bumps on each refresh so stale getTasks IPC (e.g. mount snapshot before loadPlan) cannot wipe newer state. */
   const getTasksGenerationRef = useRef(0);
 
@@ -55,6 +61,7 @@ export function useTasks(): UseTasksResult {
     fetchAll();
 
     const unsub = window.invoker.onTaskDelta((delta) => {
+      deltaPerfRef.current.received += 1;
       if (delta.type === 'created') {
         console.log(
           `[useTasks:task-delta] created id=${delta.task.id} status=${delta.task.status}`,
@@ -71,12 +78,17 @@ export function useTasks(): UseTasksResult {
       }
 
       setTasks((prev) => {
+        const t0 = performance.now();
         if (delta.type === 'updated' && !prev.has(delta.taskId)) {
           console.warn(
             `[useTasks:task-delta] updated for taskId=${delta.taskId} not in local map before merge (stale snapshot?)`,
           );
         }
         const next = applyDelta(prev, delta);
+        const dt = performance.now() - t0;
+        deltaPerfRef.current.applyCount += 1;
+        deltaPerfRef.current.applyTotalMs += dt;
+        deltaPerfRef.current.applyMaxMs = Math.max(deltaPerfRef.current.applyMaxMs, dt);
         return next;
       });
 
@@ -102,6 +114,22 @@ export function useTasks(): UseTasksResult {
       unsubWf?.();
     };
   }, [fetchAll]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.invoker) return;
+    const interval = setInterval(() => {
+      const stats = deltaPerfRef.current;
+      if (stats.received === 0) return;
+      void window.invoker.reportUiPerf('ui_delta_apply', {
+        received: stats.received,
+        applyCount: stats.applyCount,
+        applyAvgMs: stats.applyCount > 0 ? stats.applyTotalMs / stats.applyCount : 0,
+        applyMaxMs: stats.applyMaxMs,
+      });
+      deltaPerfRef.current = { received: 0, applyCount: 0, applyTotalMs: 0, applyMaxMs: 0 };
+    }, 5000);
+    return () => clearInterval(interval);
+  }, []);
 
   const clearTasks = useCallback(() => {
     setTasks(new Map());
