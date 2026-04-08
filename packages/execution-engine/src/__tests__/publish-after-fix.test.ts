@@ -250,4 +250,77 @@ describe('publishAfterFixImpl integration (real git)', () => {
     const isAncestor = gitSilent(`merge-base --is-ancestor ${fixCommit} ${featureSha}`, sandbox.hostDir);
     expect(isAncestor).toBe('');
   });
+
+  /**
+   * Regression coverage for deleted repro repro-post-fix-merge-conflict (scenario 14):
+   * After Claude resolves a merge conflict by merging the task branch into the gate,
+   * the post-fix consolidate loop must NOT try to re-merge that task branch (which
+   * would either be a no-op or, worse, fail with a synthetic conflict). The ancestor
+   * check at merge-executor.ts:737 is what guards this — if the task branch is already
+   * an ancestor of HEAD, skip it.
+   */
+  it('skips task branches already merged into HEAD by the AI fix (no re-merge)', async () => {
+    const sandbox = createSandbox();
+    root = sandbox.root;
+
+    // Simulate Claude's fix: merge invoker/t1 into the gate clone's master,
+    // then add the actual fix commit on top. After this, invoker/t1 IS an
+    // ancestor of HEAD, so publishAfterFixImpl must skip it.
+    git('fetch origin invoker/t1:invoker/t1', sandbox.gateDir);
+    gitExec(['merge', '--no-ff', '-m', 'Merge invoker/t1 (claude resolution)', 'invoker/t1'], sandbox.gateDir);
+    writeFileSync(join(sandbox.gateDir, 'extra-fix.txt'), 'additional claude tweak');
+    git('add -A', sandbox.gateDir);
+    git('commit -m "claude post-merge tweak"', sandbox.gateDir);
+
+    // Sanity: invoker/t1 is now an ancestor of gate HEAD.
+    expect(() => git('merge-base --is-ancestor invoker/t1 HEAD', sandbox.gateDir)).not.toThrow();
+
+    const headBeforePublish = git('rev-parse HEAD', sandbox.gateDir);
+
+    const mergeTask: TaskState = {
+      id: '__merge__wf-int',
+      description: 'Merge gate',
+      status: 'running',
+      dependencies: ['t1'],
+      createdAt: new Date(),
+      config: { isMergeNode: true, workflowId: 'wf-int' } as any,
+      execution: {} as any,
+    };
+
+    const taskT1: TaskState = {
+      id: 't1',
+      description: 'Task 1',
+      status: 'completed',
+      dependencies: [],
+      createdAt: new Date(),
+      config: { workflowId: 'wf-int' } as any,
+      execution: { branch: 'invoker/t1' } as any,
+    };
+
+    const host = makeHost(sandbox.hostDir, sandbox.gateDir, [mergeTask, taskT1]);
+    await publishAfterFixImpl(host, mergeTask);
+
+    // Should NOT have failed (no error response).
+    expect(host.orchestrator.handleWorkerResponse).not.toHaveBeenCalled();
+
+    // Feature branch on origin must contain both Claude's tweak and the task branch's file.
+    git('fetch origin', sandbox.hostDir);
+    git('checkout plan/feature', sandbox.hostDir);
+    expect(existsSync(join(sandbox.hostDir, 't1.txt'))).toBe(true);
+    expect(existsSync(join(sandbox.hostDir, 'extra-fix.txt'))).toBe(true);
+
+    // The published feature branch must reach the gate's pre-publish HEAD,
+    // proving the AI fix's resolution was preserved (and not re-merged on top).
+    const featureSha = git('rev-parse plan/feature', sandbox.hostDir);
+    const isAncestor = gitSilent(`merge-base --is-ancestor ${headBeforePublish} ${featureSha}`, sandbox.hostDir);
+    expect(isAncestor).toBe('');
+
+    // The merge gate must reach awaiting_approval state.
+    expect(host.orchestrator.setTaskAwaitingApproval).toHaveBeenCalledWith(
+      '__merge__wf-int',
+      expect.objectContaining({
+        execution: expect.objectContaining({ branch: 'plan/feature' }),
+      }),
+    );
+  });
 });

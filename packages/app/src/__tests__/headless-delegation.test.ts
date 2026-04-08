@@ -226,6 +226,67 @@ describe('headless delegation enforcement', () => {
       });
     });
 
+    /**
+     * Regression coverage for deleted repro repro-no-track-immediate-return (scenario 2):
+     * The --no-track flag must short-circuit before waitForCompletion(), so the headless
+     * process exits immediately after submitting/resuming a workflow even when tasks are
+     * still running. waitForCompletion otherwise polls every 100ms for up to 30 minutes.
+     *
+     * Strategy: stub orchestrator.getAllTasks to return a perpetually-running task.
+     * Without --no-track, headlessResume would call waitForCompletion which would loop
+     * until vitest's default 5s test timeout fires. With --no-track, the function must
+     * return promptly.
+     */
+    describe('--no-track immediate return', () => {
+      beforeEach(() => {
+        (mockDeps.persistence as any).readOnly = false;
+        mockDeps.orchestrator.loadPlan = vi.fn();
+        mockDeps.orchestrator.startExecution = vi.fn(() => []);
+        mockDeps.orchestrator.resumeWorkflow = vi.fn(() => []);
+        mockDeps.orchestrator.syncFromDb = vi.fn();
+        mockDeps.orchestrator.restartTask = vi.fn(() => []);
+        mockDeps.orchestrator.setBeforeApproveHook = vi.fn();
+        mockDeps.orchestrator.provideInput = vi.fn();
+        mockDeps.orchestrator.approve = vi.fn(async () => []);
+        mockDeps.orchestrator.getWorkflowStatus = vi.fn(() => 'running' as any);
+        mockDeps.orchestrator.getAllTasks = vi.fn(() => [
+          {
+            id: 'wf-1/task-1',
+            status: 'running',
+            config: { workflowId: 'wf-1' },
+            execution: {},
+          } as any,
+        ]);
+        mockDeps.persistence.loadWorkflow = vi.fn(() => ({
+          id: 'wf-1',
+          name: 'test-workflow',
+          generation: 0,
+          status: 'running' as const,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }));
+      });
+
+      it('headless resume with deps.noTrack=true returns without polling for completion', async () => {
+        // If --no-track regresses, waitForCompletion will loop forever on the
+        // perpetually-running task and vitest will time out the whole test.
+        const depsWithNoTrack: HeadlessDeps = { ...mockDeps, noTrack: true } as HeadlessDeps;
+        await runHeadless(['resume', 'wf-1'], depsWithNoTrack);
+        expect(mockDeps.orchestrator.syncFromDb).toHaveBeenCalledWith('wf-1');
+      });
+
+      it('headless resume completes quickly enough that the noTrack short-circuit is observable', async () => {
+        // Sanity check: prove the noTrack path returns in well under 1s. If the
+        // function ever falls back to waitForCompletion (100ms polls), this would
+        // fail because at minimum one poll iteration would be observed.
+        const depsWithNoTrack: HeadlessDeps = { ...mockDeps, noTrack: true } as HeadlessDeps;
+        const start = Date.now();
+        await runHeadless(['resume', 'wf-1'], depsWithNoTrack);
+        const elapsed = Date.now() - start;
+        expect(elapsed).toBeLessThan(1000);
+      });
+    });
+
     describe('query commands work in both modes', () => {
       it('allows query workflows in both read-only and owner mode', async () => {
         // Read-only mode
