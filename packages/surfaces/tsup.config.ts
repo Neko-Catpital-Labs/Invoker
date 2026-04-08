@@ -3,7 +3,8 @@ import { defineConfig } from 'tsup';
 export default defineConfig({
   entry: ['src/index.ts'],
   format: ['cjs'],
-  dts: true,
+  dts: { resolve: false, compilerOptions: { composite: false } },
+  tsconfig: 'tsconfig.tsup.json',
   clean: true,
   // Bundle workspace deps (their package.json point to .ts source, won't load at runtime).
   // sql.js/dockerode stay external — resolved from node_modules.
