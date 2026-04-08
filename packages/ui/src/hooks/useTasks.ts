@@ -9,6 +9,10 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import type { TaskState, WorkflowMeta } from '../types.js';
 import { applyDelta } from '../lib/delta.js';
+import {
+  createTaskDeltaPipeline,
+  type TaskDeltaPipeline,
+} from '../lib/task-delta-pipeline.js';
 
 export interface UseTasksResult {
   tasks: Map<string, TaskState>;
@@ -22,6 +26,7 @@ export function useTasks(): UseTasksResult {
   const [workflows, setWorkflows] = useState<Map<string, WorkflowMeta>>(new Map());
   const workflowsRef = useRef(workflows);
   workflowsRef.current = workflows;
+  const deltaPipelineRef = useRef<TaskDeltaPipeline | null>(null);
   const deltaPerfRef = useRef({
     received: 0,
     applyCount: 0,
@@ -60,6 +65,44 @@ export function useTasks(): UseTasksResult {
 
     fetchAll();
 
+    deltaPipelineRef.current = createTaskDeltaPipeline({
+      flushMs: 100,
+      onBatch: (batch) => {
+        let shouldRefreshWorkflows = false;
+
+        setTasks((prev) => {
+          const t0 = performance.now();
+          let next = prev;
+
+          for (const delta of batch) {
+            if (delta.type === 'updated' && !next.has(delta.taskId)) {
+              console.warn(
+                `[useTasks:task-delta] updated for taskId=${delta.taskId} not in local map before merge (stale snapshot?)`,
+              );
+            }
+            next = applyDelta(next, delta);
+            if (
+              delta.type === 'created' &&
+              delta.task?.config.workflowId &&
+              !workflowsRef.current.has(delta.task.config.workflowId)
+            ) {
+              shouldRefreshWorkflows = true;
+            }
+          }
+
+          const dt = performance.now() - t0;
+          deltaPerfRef.current.applyCount += batch.length;
+          deltaPerfRef.current.applyTotalMs += dt;
+          deltaPerfRef.current.applyMaxMs = Math.max(deltaPerfRef.current.applyMaxMs, dt);
+          return next;
+        });
+
+        if (shouldRefreshWorkflows) {
+          fetchAll();
+        }
+      },
+    });
+
     const unsub = window.invoker.onTaskDelta((delta) => {
       deltaPerfRef.current.received += 1;
       if (delta.type === 'created') {
@@ -77,26 +120,7 @@ export function useTasks(): UseTasksResult {
         );
       }
 
-      setTasks((prev) => {
-        const t0 = performance.now();
-        if (delta.type === 'updated' && !prev.has(delta.taskId)) {
-          console.warn(
-            `[useTasks:task-delta] updated for taskId=${delta.taskId} not in local map before merge (stale snapshot?)`,
-          );
-        }
-        const next = applyDelta(prev, delta);
-        const dt = performance.now() - t0;
-        deltaPerfRef.current.applyCount += 1;
-        deltaPerfRef.current.applyTotalMs += dt;
-        deltaPerfRef.current.applyMaxMs = Math.max(deltaPerfRef.current.applyMaxMs, dt);
-        return next;
-      });
-
-      if (delta.type === 'created' && delta.task?.config.workflowId) {
-        if (!workflowsRef.current.has(delta.task.config.workflowId)) {
-          fetchAll();
-        }
-      }
+      deltaPipelineRef.current?.push(delta);
     });
 
     const unsubWf = window.invoker.onWorkflowsChanged?.((wfList: any[]) => {
@@ -110,6 +134,8 @@ export function useTasks(): UseTasksResult {
     });
 
     return () => {
+      deltaPipelineRef.current?.dispose();
+      deltaPipelineRef.current = null;
       unsub();
       unsubWf?.();
     };
