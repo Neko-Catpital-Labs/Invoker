@@ -130,6 +130,10 @@ export class SshFamiliar extends BaseFamiliar<SshEntry> {
           const error = new Error(`SSH remote script failed (${code}): ${err.trim() || out.trim()}`);
           (error as any).exitCode = code;
           (error as any).stderr = err;
+          // Preserve stdout so callers can recover state captured before failure
+          // (e.g. remoteGitRecordAndPush reads err.stdout to extract a commit hash
+          // made just before `git push` failed).
+          (error as any).stdout = out;
           reject(error);
         }
       });
@@ -393,12 +397,14 @@ echo ${payloadB64} | base64 -d | bash -se
     // Step 5: Provision + run payload in a single SSH session
     const provB64 = sshGitB64(this.provisionCommand);
     const payloadB64 = sshGitB64(payload);
-    const wtLine =
-      remoteWt.startsWith('/')
-        ? `WT=${sshGitShellQuote(remoteWt)}`
-        : `WT="${remoteWt}"`;
+    const wtB64 = sshGitB64(remoteWt);
     const runScript = `set -euo pipefail
-${wtLine}
+WT=$(echo ${wtB64} | base64 -d)
+if [[ "$WT" == '~' ]]; then
+  WT="$HOME"
+elif [[ "\${WT:0:2}" == '~/' ]]; then
+  WT="$HOME/\${WT:2}"
+fi
 cd "$WT"
 echo "[SshFamiliar] Provisioning remote worktree with: ${this.provisionCommand.slice(0, 50)}..."
 eval "$(echo ${provB64} | base64 -d)"

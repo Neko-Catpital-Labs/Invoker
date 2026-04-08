@@ -7,6 +7,7 @@ dist/
 coverage/
 .claude/worktrees/
 *.tsbuildinfo
+tsup.config.bundled_*.mjs
 
 packages/app/e2e/visual-proof/
 packages/app/e2e/test-results/

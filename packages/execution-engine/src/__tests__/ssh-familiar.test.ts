@@ -504,6 +504,146 @@ describe('SshFamiliar entry lifecycle', () => {
     await expect(ssh.destroyAll()).resolves.toBeUndefined();
   });
 
+  it('preserves stdout on execRemoteCapture error (Bug #4)', async () => {
+    const ssh2 = new SshFamiliar({
+      host: 'localhost',
+      user: 'testuser',
+      sshKeyPath: '/dev/null',
+    }) as any;
+
+    // Invoke the private execRemoteCapture via its protected `runBash` wrapper.
+    // Do NOT mock execRemoteCapture — we want it to use the real implementation
+    // backed by the module-level `spawn` mock so we can drive the error path.
+    const pending = ssh2.runBash('echo COMMIT=abc123 && exit 1', '/tmp').catch((e: any) => e);
+
+    // Let start() wire up listeners on the mock process.
+    await new Promise((r) => setImmediate(r));
+
+    const proc = spawnedProcesses[spawnedProcesses.length - 1];
+    expect(proc).toBeDefined();
+
+    // Simulate a remote script that writes a commit hash to stdout and then
+    // fails on `git push`, emitting stderr and a non-zero exit code.
+    (proc.stdout as any).emit('data', Buffer.from('COMMIT_HASH=abc123def456\n'));
+    (proc.stderr as any).emit('data', Buffer.from('fatal: unable to access remote\n'));
+    proc.emit('close', 1, null);
+
+    const err = await pending;
+    expect(err).toBeInstanceOf(Error);
+    expect(err.exitCode).toBe(1);
+    expect(err.stderr).toContain('unable to access remote');
+    // Bug #4 fix: stdout is now attached to the error so callers
+    // (e.g. remoteGitRecordAndPush) can recover the commit hash.
+    expect(err.stdout).toBe('COMMIT_HASH=abc123def456\n');
+  });
+
+  it('managed mode with remoteInvokerHome="~/.invoker" uses base64-decode + tilde-normalize (Bug #1 variant)', async () => {
+    const ssh2 = new SshFamiliar({
+      host: 'localhost',
+      user: 'testuser',
+      sshKeyPath: '/dev/null',
+      managedWorkspaces: true,
+      remoteInvokerHome: '~/.invoker',
+    }) as any;
+
+    vi.spyOn(ssh2, 'execRemoteCapture').mockImplementation(async (script: string) => {
+      if (script.includes('__INVOKER_BASE_REF__=')) {
+        return '__INVOKER_BASE_REF__=origin/main\n__INVOKER_BASE_HEAD__=abc123def456abc123def456abc123def456abc1';
+      }
+      if (script.includes('printf %s "$HOME"')) return '/home/testuser';
+      if (script.includes('worktree list --porcelain')) return '';
+      return '';
+    });
+    vi.spyOn(ssh2, 'setupTaskBranch').mockResolvedValue(undefined);
+
+    const req = makeRequest({
+      actionType: 'command',
+      inputs: {
+        command: 'echo test',
+        description: 'test',
+        repoUrl: 'git@github.com:owner/repo.git',
+      },
+    });
+
+    await ssh2.start(req);
+
+    // The real spawnSshRemoteStdin ran and wrote its bash script to the mocked
+    // child process's stdin. Grab it and verify the fix.
+    const proc = spawnedProcesses[spawnedProcesses.length - 1];
+    expect(proc).toBeDefined();
+    const writeMock = (proc.stdin as any).write as ReturnType<typeof vi.fn>;
+    expect(writeMock).toHaveBeenCalled();
+    const script = writeMock.mock.calls[0]![0] as string;
+
+    // Bug #1 fix: base64-decode + tilde-normalize block replaces the old
+    // buggy `WT="~/.invoker/..."` literal (which bash would NOT expand).
+    expect(script).toContain('WT=$(echo ');
+    expect(script).toContain('| base64 -d)');
+    expect(script).toContain(`if [[ "$WT" == '~' ]]; then`);
+    expect(script).toContain('WT="$HOME"');
+    expect(script).not.toContain('WT="~/.invoker/');
+
+    // Prove the decoded path is the tilde-prefixed canonical worktree path.
+    const match = script.match(/WT=\$\(echo (\S+) \| base64 -d\)/);
+    expect(match).toBeTruthy();
+    const decoded = Buffer.from(match![1]!, 'base64').toString('utf-8');
+    expect(decoded).toMatch(/^~\/\.invoker\/worktrees\/[a-f0-9]{12}\//);
+
+    // Let the mock process finish so heartbeat and entry state clean up.
+    proc.emit('close', 0, null);
+    await new Promise((r) => setTimeout(r, 50));
+  });
+
+  it('managed mode with absolute remoteInvokerHome still uses base64-decode (normalize is a no-op)', async () => {
+    const ssh2 = new SshFamiliar({
+      host: 'localhost',
+      user: 'testuser',
+      sshKeyPath: '/dev/null',
+      managedWorkspaces: true,
+      remoteInvokerHome: '/opt/invoker',
+    }) as any;
+
+    vi.spyOn(ssh2, 'execRemoteCapture').mockImplementation(async (script: string) => {
+      if (script.includes('__INVOKER_BASE_REF__=')) {
+        return '__INVOKER_BASE_REF__=origin/main\n__INVOKER_BASE_HEAD__=abc123def456abc123def456abc123def456abc1';
+      }
+      if (script.includes('printf %s "$HOME"')) return '/home/testuser';
+      if (script.includes('worktree list --porcelain')) return '';
+      return '';
+    });
+    vi.spyOn(ssh2, 'setupTaskBranch').mockResolvedValue(undefined);
+
+    const req = makeRequest({
+      actionType: 'command',
+      inputs: {
+        command: 'echo test',
+        description: 'test',
+        repoUrl: 'git@github.com:owner/repo.git',
+      },
+    });
+
+    await ssh2.start(req);
+
+    const proc = spawnedProcesses[spawnedProcesses.length - 1];
+    expect(proc).toBeDefined();
+    const writeMock = (proc.stdin as any).write as ReturnType<typeof vi.fn>;
+    const script = writeMock.mock.calls[0]![0] as string;
+
+    // Same base64-decode pattern regardless of absolute vs tilde path.
+    expect(script).toContain('WT=$(echo ');
+    expect(script).toContain('| base64 -d)');
+
+    // Decoded path starts with /opt/invoker; the normalize block is a no-op
+    // because $WT does not begin with '~'.
+    const match = script.match(/WT=\$\(echo (\S+) \| base64 -d\)/);
+    expect(match).toBeTruthy();
+    const decoded = Buffer.from(match![1]!, 'base64').toString('utf-8');
+    expect(decoded).toMatch(/^\/opt\/invoker\/worktrees\/[a-f0-9]{12}\//);
+
+    proc.emit('close', 0, null);
+    await new Promise((r) => setTimeout(r, 50));
+  });
+
   it('getRestoredTerminalSpec still returns a valid spec after entry cleanup', async () => {
     const request = makeRequest({
       inputs: {
