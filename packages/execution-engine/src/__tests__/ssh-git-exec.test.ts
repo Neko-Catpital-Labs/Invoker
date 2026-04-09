@@ -91,7 +91,9 @@ describe('buildMirrorCloneScript', () => {
     expect(script).toContain('INVOKER_HOME=$(echo');
     expect(script).toContain('CLONE="$INVOKER_HOME/repos/$H"');
     expect(script).toContain('if [ ! -d "$CLONE/.git" ]; then git clone "$REPO" "$CLONE"; fi');
-    expect(script).toContain('git -C "$CLONE" fetch --all --prune || true');
+    expect(script).toContain('if ! git -C "$CLONE" fetch --all --prune; then');
+    expect(script).toContain('__INVOKER_FETCH_FAILED__=1');
+    expect(script).toContain('__INVOKER_FETCH_SUCCESS__=1');
     expect(script).toContain('__INVOKER_BASE_REF__');
     expect(script).toContain('__INVOKER_BASE_HEAD__');
   });
@@ -127,6 +129,7 @@ describe('buildMirrorCloneScript', () => {
 describe('parseBootstrapOutput', () => {
   it('parses successful output with resolved ref and head', () => {
     const stdout = `some output
+__INVOKER_FETCH_SUCCESS__=1
 __INVOKER_BASE_REF__=origin/main
 __INVOKER_BASE_HEAD__=abcdef1234567890abcdef1234567890abcdef12
 `;
@@ -134,10 +137,12 @@ __INVOKER_BASE_HEAD__=abcdef1234567890abcdef1234567890abcdef12
     expect(result.resolvedBaseRef).toBe('origin/main');
     expect(result.baseHead).toBe('abcdef1234567890abcdef1234567890abcdef12');
     expect(result.warning).toBeUndefined();
+    expect(result.fetchSuccess).toBe(true);
   });
 
   it('parses output with fallback warning', () => {
-    const stdout = `__INVOKER_BASE_WARNING__=Requested base 'nonexistent' not found; falling back to 'origin/master'.
+    const stdout = `__INVOKER_FETCH_SUCCESS__=1
+__INVOKER_BASE_WARNING__=Requested base 'nonexistent' not found; falling back to 'origin/master'.
 __INVOKER_BASE_REF__=origin/master
 __INVOKER_BASE_HEAD__=1234567890abcdef1234567890abcdef12345678
 `;
@@ -145,6 +150,7 @@ __INVOKER_BASE_HEAD__=1234567890abcdef1234567890abcdef12345678
     expect(result.resolvedBaseRef).toBe('origin/master');
     expect(result.baseHead).toBe('1234567890abcdef1234567890abcdef12345678');
     expect(result.warning).toBe("Requested base 'nonexistent' not found; falling back to 'origin/master'.");
+    expect(result.fetchSuccess).toBe(true);
   });
 
   it('throws when base ref marker is missing', () => {
@@ -158,7 +164,8 @@ __INVOKER_BASE_HEAD__=1234567890abcdef1234567890abcdef12345678
   });
 
   it('uses last occurrence of markers when duplicated', () => {
-    const stdout = `__INVOKER_BASE_REF__=old
+    const stdout = `__INVOKER_FETCH_SUCCESS__=1
+__INVOKER_BASE_REF__=old
 __INVOKER_BASE_HEAD__=old123
 __INVOKER_BASE_REF__=new
 __INVOKER_BASE_HEAD__=new456
@@ -166,6 +173,31 @@ __INVOKER_BASE_HEAD__=new456
     const result = parseBootstrapOutput(stdout);
     expect(result.resolvedBaseRef).toBe('new');
     expect(result.baseHead).toBe('new456');
+    expect(result.fetchSuccess).toBe(true);
+  });
+
+  it('parses fetch failure output', () => {
+    const stdout = `[WARNING] Git fetch failed for /home/user/.invoker/repos/abc123
+[WARNING] Continuing with existing refs. Tasks may use stale commits.
+__INVOKER_FETCH_FAILED__=1
+__INVOKER_BASE_REF__=origin/main
+__INVOKER_BASE_HEAD__=abcdef1234567890abcdef1234567890abcdef12
+`;
+    const result = parseBootstrapOutput(stdout);
+    expect(result.resolvedBaseRef).toBe('origin/main');
+    expect(result.baseHead).toBe('abcdef1234567890abcdef1234567890abcdef12');
+    expect(result.fetchSuccess).toBe(false);
+    expect(result.warning).toBeUndefined();
+  });
+
+  it('defaults to fetch failure when no fetch status markers present', () => {
+    const stdout = `__INVOKER_BASE_REF__=origin/main
+__INVOKER_BASE_HEAD__=abcdef1234567890abcdef1234567890abcdef12
+`;
+    const result = parseBootstrapOutput(stdout);
+    expect(result.resolvedBaseRef).toBe('origin/main');
+    expect(result.baseHead).toBe('abcdef1234567890abcdef1234567890abcdef12');
+    expect(result.fetchSuccess).toBe(false);
   });
 });
 

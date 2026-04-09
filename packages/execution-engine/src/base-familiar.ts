@@ -5,6 +5,7 @@ import type { Familiar, FamiliarHandle, PersistedTaskMeta, TerminalSpec, Unsubsc
 import { bashPreserveOrReset, bashMergeUpstreams, parsePreserveResult, parseMergeError } from './branch-utils.js';
 import { RESTART_TO_BRANCH_TRACE } from './exec-trace.js';
 import type { AgentRegistry } from './agent-registry.js';
+import { checkStaleness } from './git-staleness-detector.js';
 
 
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
@@ -596,15 +597,88 @@ export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar
 
   /**
    * Fetch from remote before starting a task.
-   * Errors are logged but non-fatal so tasks can still run against local state.
+   *
+   * Fetch failures are **fatal**: the task stops immediately and reports the
+   * underlying git error. This prevents silent execution against stale refs,
+   * which caused merge conflicts and lost work in earlier versions.
+   *
+   * **When fetch fails:**
+   * - Emits a `[Git Fetch] Status: FAILED` line to task output
+   * - Throws an error so the task fails fast with a non-zero exit code
+   *
+   * **When fetch succeeds:**
+   * - Checks staleness of current branch vs. its remote tracking branch
+   * - Emits `0 commits behind` when up to date
+   * - Emits the commit count when behind
+   * - Emits a loud warning when more than 100 commits behind
+   * - Continues task regardless of staleness (staleness is informational only)
+   *
+   * @param cwd - Repository working directory
+   * @param executionId - Optional execution ID for emitting output to task stream
+   * @throws Error if `git fetch origin` fails for any reason
    */
   protected async syncFromRemote(cwd: string, executionId?: string): Promise<void> {
+    const fetchStartTime = Date.now();
+
     try {
       await this.execGitSimple(['fetch', 'origin'], cwd);
     } catch (err) {
-      const msg = `[${this.type}] syncFromRemote failed: ${err}\n`;
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      const msg = `[Git Fetch] Status: FAILED | Error: ${errorMsg} | Aborting task\n`;
       console.warn(msg);
       if (executionId) this.emitOutput(executionId, msg);
+      throw new Error(`Git fetch failed: ${errorMsg}`);
+    }
+
+    const fetchDuration = Math.round((Date.now() - fetchStartTime) / 1000);
+    const durationText = fetchDuration === 1 ? '1 second' : `${fetchDuration} seconds`;
+
+    // Check staleness after successful fetch
+    let stalenessText = '';
+    let stalenessCommits = 0;
+    try {
+      const currentBranch = await this.execGitSimple(['branch', '--show-current'], cwd);
+      const branch = currentBranch.trim();
+
+      if (branch) {
+        const remoteBranch = `origin/${branch}`;
+        try {
+          await this.execGitSimple(['rev-parse', '--verify', remoteBranch], cwd);
+
+          const stalenessCheck = await checkStaleness(
+            cwd,
+            branch,
+            remoteBranch,
+            (args, cwdPath) => this.execGitSimple(args, cwdPath)
+          );
+
+          if (stalenessCheck.warning) {
+            stalenessText = stalenessCheck.warning;
+          } else if (stalenessCheck.isStale) {
+            stalenessCommits = stalenessCheck.commitsBehind;
+            stalenessText = `${stalenessCommits} commits behind ${remoteBranch}`;
+          } else {
+            stalenessText = `0 commits behind ${remoteBranch}`;
+          }
+        } catch {
+          // Remote branch doesn't exist
+          stalenessText = 'no remote tracking branch';
+        }
+      } else {
+        stalenessText = 'detached HEAD';
+      }
+    } catch {
+      stalenessText = 'staleness check failed';
+    }
+
+    const msg = `[Git Fetch] Status: success | Last fetch: ${durationText} ago | Staleness: ${stalenessText}\n`;
+    console.log(msg);
+    if (executionId) this.emitOutput(executionId, msg);
+
+    if (stalenessCommits > 100) {
+      const loudMsg = `[Git Fetch] WARNING: Local is ${stalenessCommits} commits behind origin\n`;
+      console.warn(loudMsg);
+      if (executionId) this.emitOutput(executionId, loudMsg);
     }
   }
 

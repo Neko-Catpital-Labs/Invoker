@@ -66,6 +66,7 @@ export interface GitMirrorCloneOpts {
  * Generate bash script for mirror clone + fetch + base ref resolution.
  *
  * On success, outputs to stdout:
+ *   __INVOKER_FETCH_SUCCESS__=1 (or __INVOKER_FETCH_FAILED__=1)
  *   __INVOKER_BASE_REF__=<resolved-ref>
  *   __INVOKER_BASE_HEAD__=<sha>
  *
@@ -73,6 +74,10 @@ export interface GitMirrorCloneOpts {
  *   __INVOKER_BASE_WARNING__=Requested base '<ref>' not found; falling back to '<fallback>'.
  *   __INVOKER_BASE_REF__=<fallback>
  *   __INVOKER_BASE_HEAD__=<sha>
+ *
+ * On fetch failure, continues with existing refs and outputs:
+ *   __INVOKER_FETCH_FAILED__=1
+ *   [WARNING] messages to stderr
  *
  * Exits 128 if base ref and fallback both missing.
  */
@@ -95,7 +100,13 @@ fi
 CLONE="$INVOKER_HOME/repos/$H"
 mkdir -p "$(dirname "$CLONE")"
 if [ ! -d "$CLONE/.git" ]; then git clone "$REPO" "$CLONE"; fi
-git -C "$CLONE" fetch --all --prune || true
+if ! git -C "$CLONE" fetch --all --prune; then
+  echo "[WARNING] Git fetch failed for $CLONE" >&2
+  echo "[WARNING] Continuing with existing refs. Tasks may use stale commits." >&2
+  echo "__INVOKER_FETCH_FAILED__=1"
+else
+  echo "__INVOKER_FETCH_SUCCESS__=1"
+fi
 RESOLVED_BASE="$BASE"
 if git -C "$CLONE" rev-parse --verify "$RESOLVED_BASE^{commit}" >/dev/null 2>&1; then
   :
@@ -121,6 +132,7 @@ export interface BootstrapOutput {
   resolvedBaseRef: string;
   baseHead: string;
   warning?: string;
+  fetchSuccess: boolean;
 }
 
 /**
@@ -132,16 +144,19 @@ export function parseBootstrapOutput(stdout: string): BootstrapOutput {
   const refLine = [...lines].reverse().find((line) => line.startsWith('__INVOKER_BASE_REF__='));
   const headLine = [...lines].reverse().find((line) => line.startsWith('__INVOKER_BASE_HEAD__='));
   const warningLine = [...lines].reverse().find((line) => line.startsWith('__INVOKER_BASE_WARNING__='));
+  const fetchSuccessLine = [...lines].reverse().find((line) => line.startsWith('__INVOKER_FETCH_SUCCESS__='));
+  const fetchFailedLine = [...lines].reverse().find((line) => line.startsWith('__INVOKER_FETCH_FAILED__='));
 
   const resolvedBaseRef = refLine?.slice('__INVOKER_BASE_REF__='.length).trim();
   const baseHead = headLine?.slice('__INVOKER_BASE_HEAD__='.length).trim();
   const warning = warningLine?.slice('__INVOKER_BASE_WARNING__='.length).trim();
+  const fetchSuccess = !!fetchSuccessLine && !fetchFailedLine;
 
   if (!resolvedBaseRef || !baseHead) {
     throw new Error(`SSH bootstrap output missing base markers. Output: ${stdout.slice(0, 500)}`);
   }
 
-  return { resolvedBaseRef, baseHead, warning: warning || undefined };
+  return { resolvedBaseRef, baseHead, warning: warning || undefined, fetchSuccess };
 }
 
 export interface GitWorktreeListOpts {

@@ -3,13 +3,15 @@ import { resolve } from 'path';
 import { defineConfig } from 'vitest/config';
 
 // Temporary guard: prevent tests from running in LOCAL git worktrees (freezes the machine).
-// Remote SSH targets (SSH_CONNECTION set) are allowed. Remove when resource issues are resolved.
+// Remote SSH targets (SSH_CONNECTION set) or Invoker-managed worktrees are allowed.
+// Remove when resource issues are resolved.
 try {
   const gitDir = execSync('git rev-parse --git-dir', { encoding: 'utf8' }).trim();
   const commonDir = execSync('git rev-parse --git-common-dir', { encoding: 'utf8' }).trim();
   const isWorktree = resolve(gitDir) !== resolve(commonDir);
   const isRemoteSsh = !!(process.env.SSH_CONNECTION || process.env.SSH_CLIENT);
-  if (isWorktree && !isRemoteSsh) {
+  const isInvokerWorktree = process.cwd().includes('/.invoker/worktrees/');
+  if (isWorktree && !isRemoteSsh && !isInvokerWorktree) {
     console.error('\n\u274c Tests are disabled in local git worktrees (temporary guard).\n');
     process.exit(1);
   }

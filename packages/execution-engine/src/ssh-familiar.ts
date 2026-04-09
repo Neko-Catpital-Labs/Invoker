@@ -312,9 +312,14 @@ echo ${payloadB64} | base64 -d | bash -se
       invokerHome,
     });
     const bootstrapOut = await this.execRemoteCapture(script1);
-    const { resolvedBaseRef, baseHead, warning } = parseBootstrapOutput(bootstrapOut);
+    const { resolvedBaseRef, baseHead, warning, fetchSuccess } = parseBootstrapOutput(bootstrapOut);
     if (warning) {
       this.emitOutput(executionId, `[SshFamiliar] ${warning}\n`);
+    }
+    if (!fetchSuccess) {
+      const msg = `[WARNING] Git fetch failed for remote mirror clone\n` +
+        `[WARNING] Continuing with existing refs. Tasks may use stale commits.\n`;
+      this.emitOutput(executionId, msg);
     }
     const hash8 = computeBranchHash(
       request.actionId,

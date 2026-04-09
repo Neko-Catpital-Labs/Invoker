@@ -369,6 +369,84 @@ describe('SshFamiliar managed workspace mode', () => {
   });
 });
 
+describe('SshFamiliar fetch failure handling', () => {
+  beforeEach(() => {
+    spawnedProcesses = [];
+    vi.clearAllMocks();
+  });
+
+  it('emits warning when bootstrap fetch fails and continues execution', async () => {
+    const ssh = new SshFamiliar({
+      host: 'localhost',
+      user: 'testuser',
+      sshKeyPath: '/dev/null',
+      managedWorkspaces: true,
+    }) as any;
+
+    // Capture warnings emitted via emitOutput
+    const emittedOutputs: string[] = [];
+    vi.spyOn(ssh, 'emitOutput').mockImplementation((executionId: string, data: string) => {
+      emittedOutputs.push(data);
+      // Also call through to the original to populate outputBuffer after entry is created
+      const entry = ssh.entries.get(executionId);
+      if (entry) {
+        entry.outputBuffer.push(data);
+        entry.outputBufferBytes += data.length;
+      }
+    });
+
+    // Mock execRemoteCapture to simulate fetch failure in bootstrap
+    vi.spyOn(ssh, 'execRemoteCapture').mockImplementation(async (script: string) => {
+      if (script.includes('__INVOKER_BASE_REF__=')) {
+        // Simulate fetch failure by returning FETCH_FAILED marker
+        return [
+          '[WARNING] Git fetch failed for /home/testuser/.invoker/repos/abc123',
+          '[WARNING] Continuing with existing refs. Tasks may use stale commits.',
+          '__INVOKER_FETCH_FAILED__=1',
+          '__INVOKER_BASE_REF__=origin/master',
+          '__INVOKER_BASE_HEAD__=abc123def456abc123def456abc123def456abc123',
+        ].join('\n');
+      }
+      if (script.includes('printf %s "$HOME"')) return '/home/testuser';
+      if (script.includes('worktree list --porcelain')) return '';
+      return '';
+    });
+
+    vi.spyOn(ssh, 'setupTaskBranch').mockResolvedValue(undefined);
+
+    const req = makeRequest({
+      actionType: 'command',
+      inputs: {
+        command: 'echo test',
+        description: 'test',
+        repoUrl: 'git@github.com:owner/repo.git',
+      },
+    });
+
+    const handle = await ssh.start(req);
+
+    // Verify task started successfully despite fetch failure
+    expect(handle.executionId).toBeDefined();
+    expect(handle.workspacePath).toBeDefined();
+    expect(handle.branch).toBeDefined();
+
+    // Verify warning was emitted (captured via spy before entry existed)
+    const allOutput = emittedOutputs.join('');
+    expect(allOutput).toContain('[WARNING] Git fetch failed for remote mirror clone');
+    expect(allOutput).toContain('Continuing with existing refs');
+    expect(allOutput).toContain('Tasks may use stale commits');
+
+    // Verify entry was created
+    const entry = ssh.entries.get(handle.executionId);
+    expect(entry).toBeDefined();
+
+    // Clean up: emit close event to allow proper teardown
+    const sshProcess = spawnedProcesses[spawnedProcesses.length - 1];
+    sshProcess.emit('close', 0, null);
+    await new Promise((r) => setTimeout(r, 50));
+  });
+});
+
 describe('SshFamiliar entry lifecycle', () => {
   let ssh: SshFamiliar;
 
@@ -387,6 +465,7 @@ describe('SshFamiliar entry lifecycle', () => {
     vi.spyOn(ssh as any, 'execRemoteCapture').mockImplementation(async (script: string) => {
       if (script.includes('__INVOKER_BASE_REF__=')) {
         return [
+          '__INVOKER_FETCH_SUCCESS__=1',
           '__INVOKER_BASE_REF__=origin/master',
           '__INVOKER_BASE_HEAD__=abc123def456abc123def456abc123def456abc123',
           '',

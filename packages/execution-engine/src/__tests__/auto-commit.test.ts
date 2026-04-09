@@ -1973,16 +1973,16 @@ describe('BaseFamiliar.syncFromRemote', () => {
     expect(afterCount).toBe('2');
   });
 
-  it('does not throw when not in a git repo', async () => {
+  it('throws when not in a git repo', async () => {
     const noGit = mkdtempSync(join(tmpdir(), 'sync-nogit-'));
-    await expect(familiar.testSyncFromRemote(noGit)).resolves.toBeUndefined();
+    await expect(familiar.testSyncFromRemote(noGit)).rejects.toThrow('Git fetch failed');
     rmSync(noGit, { recursive: true, force: true });
   });
 
-  it('does not throw when remote is unreachable', async () => {
+  it('throws when remote is unreachable', async () => {
     // Point origin to a nonexistent path
     execSync('git remote set-url origin /nonexistent/repo', { cwd: cloneDir });
-    await expect(familiar.testSyncFromRemote(cloneDir)).resolves.toBeUndefined();
+    await expect(familiar.testSyncFromRemote(cloneDir)).rejects.toThrow('Git fetch failed');
   });
 });
 
