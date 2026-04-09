@@ -5,7 +5,7 @@
 #   workflow-3 depends on workflow-2 merge gate, etc.
 #
 # Usage:
-#   ./scripts/submit-workflow-chain.sh [--gate-policy approved|review_ready] <workflow1.yaml> <workflow2.template.yaml> [workflow3.template.yaml ...]
+#   ./scripts/submit-workflow-chain.sh [--gate-policy completed|review_ready] <workflow1.yaml> <workflow2.template.yaml> [workflow3.template.yaml ...]
 #
 # For every plan after the first, include "__UPSTREAM_WORKFLOW_ID__" where the
 # previous workflow ID should be injected.
@@ -24,13 +24,13 @@ if [[ "${1:-}" == "--gate-policy" ]]; then
   shift 2
 fi
 
-if [[ "$GATE_POLICY" != "approved" && "$GATE_POLICY" != "review_ready" ]]; then
-  echo "Invalid --gate-policy '$GATE_POLICY' (expected approved|review_ready)" >&2
+if [[ "$GATE_POLICY" != "completed" && "$GATE_POLICY" != "review_ready" ]]; then
+  echo "Invalid --gate-policy '$GATE_POLICY' (expected completed|review_ready)" >&2
   exit 1
 fi
 
 if [[ $# -lt 2 ]]; then
-  echo "Usage: $0 [--gate-policy approved|review_ready] <workflow1.yaml> <workflow2.template.yaml> [workflow3.template.yaml ...]" >&2
+  echo "Usage: $0 [--gate-policy completed|review_ready] <workflow1.yaml> <workflow2.template.yaml> [workflow3.template.yaml ...]" >&2
   exit 1
 fi
 

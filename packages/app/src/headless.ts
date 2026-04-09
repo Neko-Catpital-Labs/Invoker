@@ -563,7 +563,7 @@ ${BOLD}Configure:${RESET}
   set agent <taskId> <agent>                          Change execution agent (claude|codex)
   set merge-mode <workflowId> <mode>                  manual | automatic | github | external_review
   set gate-policy <taskId> <wfId> [depTaskId] <policy>
-                                                      policy: approved | review_ready
+                                                      policy: completed | review_ready
 
 ${BOLD}Lifecycle:${RESET}
   cancel <taskId>                                     Cancel task + all downstream
@@ -1106,15 +1106,15 @@ async function headlessSetGatePolicy(args: string[], deps: HeadlessDeps): Promis
   const [taskIdRaw, workflowId, arg3, arg4] = args;
   if (!taskIdRaw || !workflowId || !arg3) {
     throw new Error(
-      'Missing arguments. Usage: --headless set gate-policy <taskId> <workflowId> [depTaskId] <approved|review_ready>',
+      'Missing arguments. Usage: --headless set gate-policy <taskId> <workflowId> [depTaskId] <completed|review_ready>',
     );
   }
   const taskId = restoreWorkflowForTask(taskIdRaw, deps).resolvedTaskId;
   const hasDepTaskId = arg4 !== undefined;
   const depTaskId = hasDepTaskId ? arg3 : '__merge__';
-  const gatePolicy = (hasDepTaskId ? arg4 : arg3) as 'approved' | 'review_ready';
-  if (gatePolicy !== 'approved' && gatePolicy !== 'review_ready') {
-    throw new Error(`Invalid gate policy "${String(gatePolicy)}". Expected approved|review_ready`);
+  const gatePolicy = (hasDepTaskId ? arg4 : arg3) as 'completed' | 'review_ready';
+  if (gatePolicy !== 'completed' && gatePolicy !== 'review_ready') {
+    throw new Error(`Invalid gate policy "${String(gatePolicy)}". Expected completed|review_ready`);
   }
 
   const started = sharedSetTaskExternalGatePolicies(

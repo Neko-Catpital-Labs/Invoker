@@ -218,11 +218,11 @@ tasks:
     externalDependencies:
       - workflowId: wf-123
         taskId: __merge__
-        gatePolicy: approved
+        gatePolicy: completed
 `;
     const plan = parsePlan(yaml);
     expect(plan.tasks[0].externalDependencies).toEqual([
-      { workflowId: 'wf-123', taskId: '__merge__', requiredStatus: 'completed', gatePolicy: 'approved' },
+      { workflowId: 'wf-123', taskId: '__merge__', requiredStatus: 'completed', gatePolicy: 'completed' },
     ]);
   });
 
@@ -240,7 +240,7 @@ tasks:
     command: echo "go"
 `;
     expect(() => parsePlan(yaml)).toThrow(PlanParseError);
-    expect(() => parsePlan(yaml)).toThrow('"gatePolicy" must be "approved" or "review_ready"');
+    expect(() => parsePlan(yaml)).toThrow('"gatePolicy" must be "completed" or "review_ready"');
   });
 
   it('rejects invalid externalDependencies.requiredStatus', () => {
@@ -274,7 +274,24 @@ tasks:
         gatePolicy: whenever
 `;
     expect(() => parsePlan(yaml)).toThrow(PlanParseError);
-    expect(() => parsePlan(yaml)).toThrow('"gatePolicy" must be "approved" or "review_ready"');
+    expect(() => parsePlan(yaml)).toThrow('"gatePolicy" must be "completed" or "review_ready"');
+  });
+
+  it('rejects deprecated "approved" gatePolicy value', () => {
+    const yaml = `
+name: Deprecated Approved Gate Policy
+repoUrl: git@github.com:test/repo.git
+tasks:
+  - id: gated
+    description: Wait
+    command: echo "go"
+    externalDependencies:
+      - workflowId: wf-123
+        taskId: __merge__
+        gatePolicy: approved
+`;
+    expect(() => parsePlan(yaml)).toThrow(PlanParseError);
+    expect(() => parsePlan(yaml)).toThrow("gatePolicy value 'approved' is no longer supported. Use 'completed' instead.");
   });
 
   it('rejects plan without name', () => {

@@ -184,3 +184,23 @@ export function getEdgeStyle(sourceStatus: string, targetStatus: string): EdgeSt
 
   return base;
 }
+
+/**
+ * Formats a TaskStatus into Title Case for display in the UI.
+ * Unknown statuses fall back to the raw string.
+ */
+export function formatStatusLabel(status: TaskStatus): string {
+  const labelMap: Record<TaskStatus, string> = {
+    pending: 'Pending',
+    running: 'Running',
+    review_ready: 'Review Ready',
+    awaiting_approval: 'Awaiting Approval',
+    completed: 'Completed',
+    failed: 'Failed',
+    blocked: 'Blocked',
+    stale: 'Stale',
+    needs_input: 'Needs Input',
+    fixing_with_ai: 'Fixing With AI',
+  };
+  return labelMap[status] ?? status;
+}

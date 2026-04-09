@@ -54,8 +54,8 @@ export interface ExternalDependency {
   /** Optional task selector within the external workflow. Omit to depend on that workflow's merge gate. */
   readonly taskId?: string;
   readonly requiredStatus: 'completed';
-  /** review_ready (default): merge gate review_ready/awaiting_approval/completed. approved: wait for completed. */
-  readonly gatePolicy?: 'approved' | 'review_ready';
+  /** review_ready (default): merge gate review_ready/awaiting_approval/completed count as satisfied. completed: strict — only 'completed' satisfies. */
+  readonly gatePolicy?: 'completed' | 'review_ready';
 }
 
 // ── Task Execution (runtime state) ─────────────────────────

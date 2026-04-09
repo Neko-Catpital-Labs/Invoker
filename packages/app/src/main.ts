@@ -1345,7 +1345,7 @@ function setupGuiMode(): void {
       async (
         _event,
         taskId: string,
-        updates: Array<{ workflowId: string; taskId?: string; gatePolicy: 'approved' | 'review_ready' }>,
+        updates: Array<{ workflowId: string; taskId?: string; gatePolicy: 'completed' | 'review_ready' }>,
       ) => {
         console.log(`[ipc] set-task-external-gate-policies: "${taskId}" updates=${updates.length}`);
         try {

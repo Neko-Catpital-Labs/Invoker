@@ -815,7 +815,7 @@ describe('Orchestrator', () => {
           {
             id: 'leaf-a',
             description: 'leaf waits for upstream merge gate',
-            externalDependencies: [{ workflowId: prereqWfId, gatePolicy: 'approved' }],
+            externalDependencies: [{ workflowId: prereqWfId, gatePolicy: 'completed' }],
           },
         ],
       });
@@ -919,7 +919,7 @@ describe('Orchestrator', () => {
           {
             id: 'leaf-a',
             description: 'leaf waits for upstream merge gate completion',
-            externalDependencies: [{ workflowId: prereqWfId, gatePolicy: 'approved' }],
+            externalDependencies: [{ workflowId: prereqWfId, gatePolicy: 'completed' }],
           },
         ],
       });

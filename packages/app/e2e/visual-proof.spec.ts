@@ -397,4 +397,155 @@ test.describe('Visual proof capture', () => {
     await captureScreenshot(page, 'queue-view-concurrency');
     await assertPageScreenshot(page, 'queue-view-concurrency');
   });
+
+  test('gate-policy-side-panel — blocked task with satisfied and offender gates', async ({ page }) => {
+    // First, load three prerequisite workflows (all with merge gates via onFinish: pull_request)
+    const prereq1Plan = {
+      name: 'Prereq Workflow 1',
+      repoUrl: E2E_REPO_URL,
+      onFinish: 'pull_request' as const,
+      mergeMode: 'github',
+      tasks: [
+        { id: 'prereq-task-1', description: 'First prerequisite task', command: 'echo prereq1', dependencies: [] as string[] },
+      ],
+    };
+    const prereq2Plan = {
+      name: 'Prereq Workflow 2',
+      repoUrl: E2E_REPO_URL,
+      onFinish: 'pull_request' as const,
+      mergeMode: 'github',
+      tasks: [
+        { id: 'prereq-task-2', description: 'Second prerequisite task', command: 'echo prereq2', dependencies: [] as string[] },
+      ],
+    };
+    const prereq3Plan = {
+      name: 'Prereq Workflow 3',
+      repoUrl: E2E_REPO_URL,
+      onFinish: 'pull_request' as const,
+      mergeMode: 'github',
+      tasks: [
+        { id: 'prereq-task-3', description: 'Third prerequisite task', command: 'echo prereq3', dependencies: [] as string[] },
+      ],
+    };
+
+    await page.evaluate((p) => window.invoker.loadPlan(p), yamlStringify(prereq1Plan));
+    await page.evaluate((p) => window.invoker.loadPlan(p), yamlStringify(prereq2Plan));
+    await page.evaluate((p) => window.invoker.loadPlan(p), yamlStringify(prereq3Plan));
+
+    // Get the workflow IDs from the loaded plans
+    const workflowIds = await page.evaluate(() => {
+      const result = window.invoker.getTasks();
+      const tasks = Array.isArray(result) ? result : result.tasks;
+      // Extract unique workflow IDs from task IDs (format: workflowId/taskId)
+      const wfIdSet = new Set<string>();
+      tasks.forEach((t: { id: string }) => {
+        const wfId = t.id.split('/')[0];
+        if (wfId) wfIdSet.add(wfId);
+      });
+      const wfIds = Array.from(wfIdSet).sort();
+      return wfIds;
+    });
+
+    const [wf1, wf2, wf3] = workflowIds;
+
+    // Now load the main plan with external dependencies
+    const gatePolicyPlan = {
+      name: 'Gate Policy Visual Test',
+      repoUrl: E2E_REPO_URL,
+      onFinish: 'none' as const,
+      tasks: [
+        {
+          id: 'gated-task',
+          description: 'Task with multiple external gates',
+          command: 'echo gated',
+          dependencies: [] as string[],
+          externalDependencies: [
+            { workflowId: wf1!, gatePolicy: 'completed' as const },
+            { workflowId: wf2!, gatePolicy: 'completed' as const },
+            { workflowId: wf3!, gatePolicy: 'completed' as const },
+          ],
+        },
+      ],
+    };
+
+    await page.evaluate((p) => window.invoker.loadPlan(p), yamlStringify(gatePolicyPlan));
+    await page.locator('.react-flow__node[data-testid$="gated-task"]').first().waitFor({ state: 'visible', timeout: 10000 });
+
+    // Set up the gate states:
+    // - wf1 merge gate: completed (satisfied)
+    // - wf2 merge gate: review_ready (offender, because gatePolicy is 'completed')
+    // - wf3 merge gate: completed (satisfied)
+    const merge1Id = `__merge__${wf1}`;
+    const merge2Id = `__merge__${wf2}`;
+    const merge3Id = `__merge__${wf3}`;
+
+    await injectTaskStates(page, [
+      {
+        taskId: `${wf1}/prereq-task-1`,
+        changes: { status: 'completed', execution: { startedAt: new Date(), completedAt: new Date() } },
+      },
+      {
+        taskId: merge1Id,
+        changes: { status: 'completed', execution: { startedAt: new Date(), completedAt: new Date() } },
+      },
+      {
+        taskId: `${wf2}/prereq-task-2`,
+        changes: { status: 'completed', execution: { startedAt: new Date(), completedAt: new Date() } },
+      },
+      {
+        taskId: merge2Id,
+        changes: { status: 'review_ready', execution: { startedAt: new Date() } },
+      },
+      {
+        taskId: `${wf3}/prereq-task-3`,
+        changes: { status: 'completed', execution: { startedAt: new Date(), completedAt: new Date() } },
+      },
+      {
+        taskId: merge3Id,
+        changes: { status: 'completed', execution: { startedAt: new Date(), completedAt: new Date() } },
+      },
+    ]);
+
+    // The gated-task should now be blocked
+    const gatedTaskId = await page.evaluate(() => {
+      const result = window.invoker.getTasks();
+      const tasks = Array.isArray(result) ? result : result.tasks;
+      const gated = tasks.find((t: { id: string }) => t.id.endsWith('gated-task'));
+      return gated?.id;
+    });
+
+    // Verify the task is blocked
+    await page.evaluate(async (id) => {
+      const result = await window.invoker.getTasks();
+      const tasks = Array.isArray(result) ? result : result.tasks;
+      const task = tasks.find((t: { id: string }) => t.id === id);
+      if (task?.status !== 'blocked') {
+        throw new Error(`Expected gated-task to be blocked, got ${task?.status}`);
+      }
+    }, gatedTaskId);
+
+    // Click the blocked task node to open the side panel
+    await page.locator('.react-flow__node[data-testid$="gated-task"]').click();
+    await expect(page.getByRole('heading', { name: 'Task with multiple external gates' })).toBeVisible();
+
+    // Scroll to the Gate Policy section
+    await page.getByText('Gate Policy').scrollIntoViewIfNeeded();
+    await expect(page.getByText('Gate Policy')).toBeVisible();
+
+    // Click the disclosure button to expand satisfied gates (text contains "satisfied gate")
+    const disclosureButton = page.locator('button').filter({ hasText: /satisfied gate/ });
+    await expect(disclosureButton).toBeVisible();
+    await disclosureButton.click();
+    await page.waitForTimeout(200); // Allow animation to complete
+
+    // Capture first screenshot with expanded satisfied gates
+    await captureScreenshot(page, 'redesign-gate-policy-ui-blocked-expanded');
+
+    // Click the Edit button
+    await page.getByTestId('gate-policy-edit-btn').click();
+    await page.waitForTimeout(200); // Allow UI to update
+
+    // Capture second screenshot in edit mode
+    await captureScreenshot(page, 'redesign-gate-policy-ui-edit-mode');
+  });
 });

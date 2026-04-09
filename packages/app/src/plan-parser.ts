@@ -136,7 +136,7 @@ type ParsedExternalDependency = {
   workflowId: string;
   taskId: string;
   requiredStatus: 'completed';
-  gatePolicy: 'approved' | 'review_ready';
+  gatePolicy: 'completed' | 'review_ready';
 };
 
 function parseExternalDependencies(
@@ -160,9 +160,14 @@ function parseExternalDependencies(
         `${ownerLabel} externalDependencies[${depIndex}] "requiredStatus" must be "completed"`,
       );
     }
-    if (dep.gatePolicy !== undefined && dep.gatePolicy !== 'approved' && dep.gatePolicy !== 'review_ready') {
+    if (dep.gatePolicy !== undefined && dep.gatePolicy !== 'completed' && dep.gatePolicy !== 'review_ready') {
+      if (dep.gatePolicy === 'approved') {
+        throw new PlanParseError(
+          `gatePolicy value 'approved' is no longer supported. Use 'completed' instead.`,
+        );
+      }
       throw new PlanParseError(
-        `${ownerLabel} externalDependencies[${depIndex}] "gatePolicy" must be "approved" or "review_ready"`,
+        `${ownerLabel} externalDependencies[${depIndex}] "gatePolicy" must be "completed" or "review_ready"`,
       );
     }
     const taskId = dep.taskId?.trim() || '__merge__';
@@ -170,7 +175,7 @@ function parseExternalDependencies(
       workflowId: dep.workflowId,
       taskId,
       requiredStatus: 'completed' as const,
-      gatePolicy: (dep.gatePolicy ?? 'review_ready') as 'approved' | 'review_ready',
+      gatePolicy: (dep.gatePolicy ?? 'review_ready') as 'completed' | 'review_ready',
     };
   });
 }

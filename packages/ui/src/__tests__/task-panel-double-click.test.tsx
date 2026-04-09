@@ -1067,13 +1067,13 @@ describe('TaskPanel double-click editing', () => {
     });
   });
 
-  describe('External gate policy in side panel', () => {
+  describe('Gate Policy in side panel', () => {
     it('renders external gates with resolved status', () => {
       const task = makeTask({
         status: 'pending',
         config: {
           externalDependencies: [
-            { workflowId: 'wf-1', taskId: '__merge__', requiredStatus: 'completed', gatePolicy: 'approved' },
+            { workflowId: 'wf-1', taskId: '__merge__', requiredStatus: 'completed', gatePolicy: 'completed' },
           ],
         },
       });
@@ -1092,9 +1092,11 @@ describe('TaskPanel double-click editing', () => {
         />,
       );
 
-      expect(screen.getByText('External Gates')).toBeInTheDocument();
-      expect(screen.getByText('Status: review_ready')).toBeInTheDocument();
-      expect(screen.getByText('approved')).toBeInTheDocument();
+      expect(screen.getByText('Gate Policy')).toBeInTheDocument();
+      expect(screen.getByText('Currently')).toBeInTheDocument();
+      expect(screen.getByText('Review Ready')).toBeInTheDocument();
+      expect(screen.getByText('Unblock at')).toBeInTheDocument();
+      expect(screen.getByText('Completed')).toBeInTheDocument();
     });
 
     it('edits and applies gate policy updates from side panel', async () => {
@@ -1102,7 +1104,7 @@ describe('TaskPanel double-click editing', () => {
         status: 'pending',
         config: {
           externalDependencies: [
-            { workflowId: 'wf-1', taskId: '__merge__', requiredStatus: 'completed', gatePolicy: 'approved' },
+            { workflowId: 'wf-1', taskId: '__merge__', requiredStatus: 'completed', gatePolicy: 'completed' },
           ],
         },
       });
@@ -1134,22 +1136,131 @@ describe('TaskPanel double-click editing', () => {
       confirmSpy.mockRestore();
     });
 
-    it('groups external gates by workflow and applies policy to all deps in that workflow', async () => {
+    it('shows green summary and zero offender cards when all gates are satisfied', () => {
       const task = makeTask({
         status: 'pending',
         config: {
           externalDependencies: [
-            { workflowId: 'wf-upstream', taskId: 'lint', requiredStatus: 'completed', gatePolicy: 'approved' },
-            { workflowId: 'wf-upstream', taskId: 'test', requiredStatus: 'completed', gatePolicy: 'approved' },
+            { workflowId: 'wf-1', taskId: '__merge__', requiredStatus: 'completed', gatePolicy: 'completed' },
           ],
         },
       });
-      const onSetExternalGatePolicies = vi.fn(async () => {});
-      const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+      const allTasks = new Map<string, TaskState>([
+        ['__merge__wf-1', makeTask({ id: '__merge__wf-1', status: 'completed' })],
+      ]);
 
       render(
         <TaskPanel
           task={task}
+          allTasks={allTasks}
+          onProvideInput={mockOnProvideInput}
+          onApprove={mockOnApprove}
+          onReject={mockOnReject}
+          onSelectExperiment={mockOnSelectExperiment}
+        />,
+      );
+
+      expect(screen.getByText('Gate Policy')).toBeInTheDocument();
+      expect(screen.getByText(/All 1 gate satisfied/)).toBeInTheDocument();
+      expect(screen.queryByTestId(/gate-policy-offender/)).not.toBeInTheDocument();
+      expect(screen.getByText(/1 satisfied gate/)).toBeInTheDocument();
+    });
+
+    it('shows amber summary and one offender card when one gate is blocking', () => {
+      const task = makeTask({
+        status: 'pending',
+        config: {
+          externalDependencies: [
+            { workflowId: 'wf-1', taskId: '__merge__', requiredStatus: 'completed', gatePolicy: 'completed' },
+          ],
+        },
+      });
+      const allTasks = new Map<string, TaskState>([
+        ['__merge__wf-1', makeTask({ id: '__merge__wf-1', status: 'review_ready' })],
+      ]);
+
+      render(
+        <TaskPanel
+          task={task}
+          allTasks={allTasks}
+          onProvideInput={mockOnProvideInput}
+          onApprove={mockOnApprove}
+          onReject={mockOnReject}
+          onSelectExperiment={mockOnSelectExperiment}
+        />,
+      );
+
+      expect(screen.getByText(/1 gate blocking/)).toBeInTheDocument();
+      const offenderRow = screen.getByTestId(/gate-policy-offender/);
+      expect(offenderRow).toBeInTheDocument();
+      const workflowName = offenderRow.querySelector('.text-red-300');
+      expect(workflowName).toBeInTheDocument();
+      expect(screen.getByText('Currently')).toBeInTheDocument();
+      expect(screen.getByText('Review Ready')).toBeInTheDocument();
+      expect(screen.getByText('Unblock at')).toBeInTheDocument();
+      expect(screen.getByText('Completed')).toBeInTheDocument();
+    });
+
+    it('collapses satisfied gates by default in view mode and expands on click', () => {
+      const task = makeTask({
+        status: 'pending',
+        config: {
+          externalDependencies: [
+            { workflowId: 'wf-1', taskId: '__merge__', requiredStatus: 'completed', gatePolicy: 'completed' },
+            { workflowId: 'wf-2', taskId: '__merge__', requiredStatus: 'completed', gatePolicy: 'completed' },
+            { workflowId: 'wf-3', taskId: '__merge__', requiredStatus: 'completed', gatePolicy: 'completed' },
+          ],
+        },
+      });
+      const allTasks = new Map<string, TaskState>([
+        ['__merge__wf-1', makeTask({ id: '__merge__wf-1', status: 'review_ready' })],
+        ['__merge__wf-2', makeTask({ id: '__merge__wf-2', status: 'completed' })],
+        ['__merge__wf-3', makeTask({ id: '__merge__wf-3', status: 'completed' })],
+      ]);
+
+      render(
+        <TaskPanel
+          task={task}
+          allTasks={allTasks}
+          onProvideInput={mockOnProvideInput}
+          onApprove={mockOnApprove}
+          onReject={mockOnReject}
+          onSelectExperiment={mockOnSelectExperiment}
+        />,
+      );
+
+      // Initially satisfied rows should not be visible
+      expect(screen.queryByText('__merge__wf-2')).not.toBeInTheDocument();
+      expect(screen.queryByText('__merge__wf-3')).not.toBeInTheDocument();
+
+      // Click disclosure to expand
+      fireEvent.click(screen.getByText(/2 satisfied gates/));
+
+      // Now satisfied rows should be visible
+      expect(screen.getByText('__merge__wf-2')).toBeInTheDocument();
+      expect(screen.getByText('__merge__wf-3')).toBeInTheDocument();
+    });
+
+    it('auto-expands satisfied gates when entering edit mode', () => {
+      const task = makeTask({
+        status: 'pending',
+        config: {
+          externalDependencies: [
+            { workflowId: 'wf-1', taskId: '__merge__', requiredStatus: 'completed', gatePolicy: 'completed' },
+            { workflowId: 'wf-2', taskId: '__merge__', requiredStatus: 'completed', gatePolicy: 'completed' },
+          ],
+        },
+      });
+      const allTasks = new Map<string, TaskState>([
+        ['__merge__wf-1', makeTask({ id: '__merge__wf-1', status: 'review_ready' })],
+        ['__merge__wf-2', makeTask({ id: '__merge__wf-2', status: 'completed' })],
+      ]);
+      const onSetExternalGatePolicies = vi.fn(async () => {});
+
+      render(
+        <TaskPanel
+          task={task}
+          allTasks={allTasks}
           onProvideInput={mockOnProvideInput}
           onApprove={mockOnApprove}
           onReject={mockOnReject}
@@ -1158,23 +1269,85 @@ describe('TaskPanel double-click editing', () => {
         />,
       );
 
-      expect(screen.getByText('wf-upstream')).toBeInTheDocument();
-      expect(screen.getByText('(2 gates)')).toBeInTheDocument();
+      // Initially satisfied row should not be visible
+      expect(screen.queryByText('__merge__wf-2')).not.toBeInTheDocument();
 
+      // Click Edit
       fireEvent.click(screen.getByTestId('gate-policy-edit-btn'));
-      fireEvent.change(screen.getByTestId('gate-policy-select-0'), { target: { value: 'review_ready' } });
-      fireEvent.click(screen.getByTestId('gate-policy-apply-btn'));
 
-      await waitFor(() =>
-        expect(onSetExternalGatePolicies).toHaveBeenCalledWith(
-          'test-task-1',
-          [
-            { workflowId: 'wf-upstream', taskId: 'lint', gatePolicy: 'review_ready' },
-            { workflowId: 'wf-upstream', taskId: 'test', gatePolicy: 'review_ready' },
+      // Satisfied row should now be visible without clicking disclosure
+      expect(screen.getByText('__merge__wf-2')).toBeInTheDocument();
+    });
+
+    it('classifies a mixed-policy group as an offender', () => {
+      const task = makeTask({
+        status: 'pending',
+        config: {
+          externalDependencies: [
+            { workflowId: 'wf-1', taskId: 'task-a', requiredStatus: 'completed', gatePolicy: 'completed' },
+            { workflowId: 'wf-1', taskId: 'task-b', requiredStatus: 'completed', gatePolicy: 'review_ready' },
           ],
-        ),
+        },
+      });
+      const allTasks = new Map<string, TaskState>([
+        ['wf-1/task-a', makeTask({ id: 'wf-1/task-a', status: 'completed' })],
+        ['wf-1/task-b', makeTask({ id: 'wf-1/task-b', status: 'completed' })],
+      ]);
+
+      render(
+        <TaskPanel
+          task={task}
+          allTasks={allTasks}
+          onProvideInput={mockOnProvideInput}
+          onApprove={mockOnApprove}
+          onReject={mockOnReject}
+          onSelectExperiment={mockOnSelectExperiment}
+        />,
       );
-      confirmSpy.mockRestore();
+
+      const offenderRows = screen.getAllByTestId(/gate-policy-offender/);
+      expect(offenderRows.length).toBeGreaterThan(0);
+      expect(screen.getAllByText(/Mixed thresholds/).length).toBeGreaterThan(0);
+      const workflowName = offenderRows[0].querySelector('.text-red-300');
+      expect(workflowName).toBeInTheDocument();
+    });
+
+    it('lowering an offender threshold to match upstream shows the "would unblock now" impact line', async () => {
+      const task = makeTask({
+        status: 'pending',
+        config: {
+          externalDependencies: [
+            { workflowId: 'wf-1', taskId: '__merge__', requiredStatus: 'completed', gatePolicy: 'completed' },
+          ],
+        },
+      });
+      const allTasks = new Map<string, TaskState>([
+        ['__merge__wf-1', makeTask({ id: '__merge__wf-1', status: 'review_ready' })],
+      ]);
+      const onSetExternalGatePolicies = vi.fn(async () => {});
+
+      render(
+        <TaskPanel
+          task={task}
+          allTasks={allTasks}
+          onProvideInput={mockOnProvideInput}
+          onApprove={mockOnApprove}
+          onReject={mockOnReject}
+          onSelectExperiment={mockOnSelectExperiment}
+          onSetExternalGatePolicies={onSetExternalGatePolicies}
+        />,
+      );
+
+      // Click Edit
+      fireEvent.click(screen.getByTestId('gate-policy-edit-btn'));
+
+      // Change picker to review_ready
+      fireEvent.change(screen.getByTestId('gate-policy-select-0'), { target: { value: 'review_ready' } });
+
+      // Check for impact text
+      await waitFor(() => {
+        expect(screen.getByText(/would unblock now/)).toBeInTheDocument();
+      });
     });
   });
 });

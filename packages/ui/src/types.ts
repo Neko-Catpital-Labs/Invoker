@@ -39,13 +39,13 @@ export interface ExternalDependency {
   /** Optional task selector within the external workflow. Omit to depend on that workflow's merge gate. */
   readonly taskId?: string;
   readonly requiredStatus: 'completed';
-  readonly gatePolicy?: 'approved' | 'review_ready';
+  readonly gatePolicy?: 'completed' | 'review_ready';
 }
 
 export interface ExternalGatePolicyUpdate {
   workflowId: string;
   taskId?: string;
-  gatePolicy: 'approved' | 'review_ready';
+  gatePolicy: 'completed' | 'review_ready';
 }
 
 // ── Task Config (plan-time / static fields) ────────────────

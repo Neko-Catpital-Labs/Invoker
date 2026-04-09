@@ -392,6 +392,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
     if (!this.readOnly) {
       this.migrateTestCommands();
+      this.migrateGatePolicyApprovedToCompleted();
     }
   }
 
@@ -410,6 +411,47 @@ export class SQLiteAdapter implements PersistenceAdapter {
         const fixed = rewritePnpmTestCommand(row.command);
         if (fixed !== row.command) {
           this.execRun('UPDATE tasks SET command = ? WHERE id = ?', [fixed, row.id]);
+        }
+      }
+    } catch {
+      // Table may not exist yet on first run
+    }
+  }
+
+  /**
+   * Rewrite `gatePolicy: 'approved'` to `gatePolicy: 'completed'` in
+   * external_dependencies JSON column.
+   * Idempotent: subsequent runs find zero matches and do nothing.
+   */
+  private migrateGatePolicyApprovedToCompleted(): void {
+    try {
+      const rows = this.queryAll(
+        `SELECT id, external_dependencies FROM tasks WHERE external_dependencies LIKE '%"gatePolicy":"approved"%'`,
+      ) as Array<{ id: string; external_dependencies: string }>;
+
+      for (const row of rows) {
+        try {
+          const deps = JSON.parse(row.external_dependencies) as Array<{
+            workflowId: string;
+            taskId?: string;
+            requiredStatus: string;
+            gatePolicy?: string;
+          }>;
+
+          let modified = false;
+          for (const dep of deps) {
+            if (dep.gatePolicy === 'approved') {
+              dep.gatePolicy = 'completed';
+              modified = true;
+            }
+          }
+
+          if (modified) {
+            const updated = JSON.stringify(deps);
+            this.execRun('UPDATE tasks SET external_dependencies = ? WHERE id = ?', [updated, row.id]);
+          }
+        } catch {
+          // Skip malformed JSON rows
         }
       }
     } catch {

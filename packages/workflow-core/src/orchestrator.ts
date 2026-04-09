@@ -19,7 +19,7 @@ import { TaskStateMachine } from './state-machine.js';
 import { ResponseHandler } from './response-handler.js';
 import type { ParsedResponse } from './response-handler.js';
 import { TaskScheduler } from './scheduler.js';
-import type { TaskState, TaskDelta, TaskStateChanges, Attempt } from '@invoker/workflow-graph';
+import type { TaskState, TaskDelta, TaskStateChanges, Attempt, ExternalDependency } from '@invoker/workflow-graph';
 import { createTaskState, createAttempt } from '@invoker/workflow-graph';
 import type { WorkResponse } from '@invoker/contracts';
 import { normalizeExecutorType } from '@invoker/workflow-graph';
@@ -160,7 +160,7 @@ export interface PlanDefinition {
       workflowId: string;
       taskId: string;
       requiredStatus?: 'completed';
-      gatePolicy?: 'approved' | 'review_ready';
+      gatePolicy?: 'completed' | 'review_ready';
     }>;
     pivot?: boolean;
     experimentVariants?: Array<{ id: string; description: string; prompt?: string; command?: string }>;
@@ -228,7 +228,7 @@ export interface TaskReplacementDef {
 export interface ExternalGatePolicyUpdate {
   workflowId: string;
   taskId?: string;
-  gatePolicy: 'approved' | 'review_ready';
+  gatePolicy: 'completed' | 'review_ready';
 }
 
 /**
@@ -1578,14 +1578,14 @@ export class Orchestrator {
 
     const byKey = new Map<string, ExternalGatePolicyUpdate>();
     for (const update of updates) {
-      if (update.gatePolicy !== 'approved' && update.gatePolicy !== 'review_ready') {
+      if (update.gatePolicy !== 'completed' && update.gatePolicy !== 'review_ready') {
         throw new Error(`Invalid gatePolicy "${String(update.gatePolicy)}" for task ${taskId}`);
       }
       byKey.set(keyOf(update.workflowId, update.taskId), update);
     }
 
     let changed = 0;
-    const nextDeps = deps.map((dep) => {
+    const nextDeps = deps.map((dep): ExternalDependency => {
       const update = byKey.get(keyOf(dep.workflowId, dep.taskId));
       if (!update) return dep;
       const current = dep.gatePolicy ?? 'review_ready';

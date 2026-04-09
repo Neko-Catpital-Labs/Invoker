@@ -71,7 +71,7 @@ export interface ClaudeMessage {
 export interface ExternalGatePolicyUpdate {
   workflowId: string;
   taskId?: string;
-  gatePolicy: 'approved' | 'review_ready';
+  gatePolicy: 'completed' | 'review_ready';
 }
 
 // ── IPC Bridge API ───────────────────────────────────────────

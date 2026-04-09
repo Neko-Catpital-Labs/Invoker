@@ -155,7 +155,7 @@ export interface PlanDefinition {
       workflowId: string;
       taskId: string;
       requiredStatus?: 'completed';
-      gatePolicy?: 'approved' | 'review_ready';
+      gatePolicy?: 'completed' | 'review_ready';
     }>;
     pivot?: boolean;
     experimentVariants?: Array<{ id: string; description: string; prompt?: string; command?: string }>;
