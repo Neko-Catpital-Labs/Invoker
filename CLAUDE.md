@@ -2,6 +2,12 @@
 
 ## Planning Rules
 
+### Slash commands and agent skills
+
+- **Precedence:** When a Cursor slash command or an **attached skill** says to follow a skill (e.g. `/plan-to-invoker`), that workflow **overrides** a bare “implement this” sentence in the same message. Complete the skill steps (including `bash skills/plan-to-invoker/scripts/skill-doctor.sh <plan-file>` and user confirmation) before editing product code for that request.
+- **Bootstrap after clone:** Run `bash scripts/setup-agent-skills.sh` so `.cursor/skills/plan-to-invoker` exists (and Codex symlink if used). Optional: `bash scripts/test-plan-to-invoker-skill.sh` when changing skill layout.
+- **Repo rule:** See `.cursor/rules/skill-command-precedence.mdc` for the always-on summary.
+
 - Every step in a plan MUST be testable. Each implementation step must have a corresponding verification with a concrete, executable command that produces a clear pass/fail exit code (e.g. `pnpm test`, `git diff --name-only`). Do not use AI prompts for test tasks — use commands only.
 - Bug fix plans MUST follow a three-phase approach before any implementation:
   1. **Reproduce** -- Find or write a concrete reproduction case (a failing test or a command that demonstrates the bug). Report back the exact repro steps and observed vs. expected behavior. Do not proceed until the bug is reliably reproducible.
