@@ -1133,5 +1133,48 @@ describe('TaskPanel double-click editing', () => {
       );
       confirmSpy.mockRestore();
     });
+
+    it('groups external gates by workflow and applies policy to all deps in that workflow', async () => {
+      const task = makeTask({
+        status: 'pending',
+        config: {
+          externalDependencies: [
+            { workflowId: 'wf-upstream', taskId: 'lint', requiredStatus: 'completed', gatePolicy: 'approved' },
+            { workflowId: 'wf-upstream', taskId: 'test', requiredStatus: 'completed', gatePolicy: 'approved' },
+          ],
+        },
+      });
+      const onSetExternalGatePolicies = vi.fn(async () => {});
+      const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+      render(
+        <TaskPanel
+          task={task}
+          onProvideInput={mockOnProvideInput}
+          onApprove={mockOnApprove}
+          onReject={mockOnReject}
+          onSelectExperiment={mockOnSelectExperiment}
+          onSetExternalGatePolicies={onSetExternalGatePolicies}
+        />,
+      );
+
+      expect(screen.getByText('wf-upstream')).toBeInTheDocument();
+      expect(screen.getByText('(2 gates)')).toBeInTheDocument();
+
+      fireEvent.click(screen.getByTestId('gate-policy-edit-btn'));
+      fireEvent.change(screen.getByTestId('gate-policy-select-0'), { target: { value: 'review_ready' } });
+      fireEvent.click(screen.getByTestId('gate-policy-apply-btn'));
+
+      await waitFor(() =>
+        expect(onSetExternalGatePolicies).toHaveBeenCalledWith(
+          'test-task-1',
+          [
+            { workflowId: 'wf-upstream', taskId: 'lint', gatePolicy: 'review_ready' },
+            { workflowId: 'wf-upstream', taskId: 'test', gatePolicy: 'review_ready' },
+          ],
+        ),
+      );
+      confirmSpy.mockRestore();
+    });
   });
 });

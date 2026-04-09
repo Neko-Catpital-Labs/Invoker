@@ -821,9 +821,7 @@ async function headlessResolveConflict(taskId: string, deps: HeadlessDeps, agent
   const te = createHeadlessExecutor(deps);
   const agent = (agentArg ?? 'claude').toLowerCase();
   await resolveConflictAction(taskId, { ...deps, taskExecutor: te }, agent);
-  const wfId = deps.orchestrator.getTask(taskId)?.config.workflowId;
-  await waitForCompletion(deps.orchestrator, wfId, undefined);
-  console.log(`Resolve-conflict finished for task: ${taskId} (${agent})`);
+  console.log(`Conflict resolved for task: ${taskId} (${agent}). Use 'approve ${taskId}' or 'reject ${taskId}' to finalize.`);
 }
 
 async function headlessRebaseAndRetry(taskId: string, deps: HeadlessDeps): Promise<void> {

@@ -15,6 +15,7 @@
 #   ./invoker-ctl cancel <taskId>                  Cancel a running task
 #   ./invoker-ctl restart <taskId>                 Restart a failed task
 #   ./invoker-ctl recreate-workflow <workflowId>    Recreate entire workflow (bump generation)
+#   ./invoker-ctl resolve-conflict <taskId> [agent] Resolve merge conflict (→ awaiting_approval)
 #   ./invoker-ctl approve <taskId>                 Approve a task awaiting approval
 #   ./invoker-ctl reject <taskId> [reason]         Reject a task
 #   ./invoker-ctl input <taskId> <text>            Provide input to a task awaiting input
@@ -134,6 +135,18 @@ case "${1:-}" in
     curl -sf -X POST "$BASE/api/tasks/$2/restart" | fmt '.'
     ;;
 
+  resolve-conflict)
+    if [ -z "${2:-}" ]; then
+      echo "Usage: invoker-ctl resolve-conflict <taskId> [claude|codex]" >&2
+      exit 1
+    fi
+    TASK_ID="$2"
+    AGENT="${3:-claude}"
+    curl -sf -X POST -H 'Content-Type: application/json' \
+      -d "{\"agent\":\"$AGENT\"}" \
+      "$BASE/api/tasks/$TASK_ID/resolve-conflict" | fmt '.'
+    ;;
+
   approve)
     if [ -z "${2:-}" ]; then
       echo "Usage: invoker-ctl approve <taskId>" >&2
@@ -220,6 +233,7 @@ Usage:
   invoker-ctl cancel <taskId>                  Cancel a running task
   invoker-ctl restart <taskId>                 Restart a failed task
   invoker-ctl recreate-workflow <workflowId>    Recreate an entire workflow (bump generation)
+  invoker-ctl resolve-conflict <taskId> [agent] Resolve merge conflict (→ awaiting_approval)
   invoker-ctl approve <taskId>                 Approve a task awaiting approval
   invoker-ctl reject <taskId> [reason]         Reject a task
   invoker-ctl input <taskId> <text>            Provide input to a task awaiting input

@@ -337,9 +337,9 @@ if (isHeadless) {
     const mutatingMode = isHeadlessMutatingCommand(cliArgs);
     const standaloneMode = process.env.INVOKER_HEADLESS_STANDALONE === '1';
 
-    // Try delegation for mutating commands first.
-    // If no owner is available, standalone mode may still run locally.
-    if (mutatingMode) {
+    // Try delegation for mutating commands first (owner mode).
+    // In standalone mode we skip delegation and run locally.
+    if (mutatingMode && !standaloneMode) {
       const delegationBus = new IpcBus();
       try {
         await delegationBus.ready();

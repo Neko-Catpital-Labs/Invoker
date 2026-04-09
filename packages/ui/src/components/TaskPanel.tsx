@@ -31,15 +31,8 @@ function normalizeExternalDepTaskId(dep: Pick<ExternalDependency, 'taskId'>): st
   return dep.taskId?.trim() || '__merge__';
 }
 
-function externalDepDisplayId(dep: ExternalDependency): string {
-  const normalizedTaskId = normalizeExternalDepTaskId(dep);
-  if (normalizedTaskId === '__merge__') return `__merge__${dep.workflowId}`;
-  if (normalizedTaskId.includes('/')) return normalizedTaskId;
-  return `${dep.workflowId}/${normalizedTaskId}`;
-}
-
-function externalDepKey(dep: ExternalDependency): string {
-  return `${dep.workflowId}::${normalizeExternalDepTaskId(dep)}`;
+function workflowDepKey(workflowId: string): string {
+  return workflowId;
 }
 
 function resolveExternalDepStatus(dep: ExternalDependency, allTasks?: Map<string, TaskState>): string {
@@ -169,8 +162,11 @@ export function TaskPanel({
     setIsEditingGatePolicies(false);
     setIsSavingGatePolicies(false);
     const nextDraft: Record<string, 'approved' | 'review_ready'> = {};
-    for (const dep of task?.config.externalDependencies ?? []) {
-      nextDraft[externalDepKey(dep)] = dep.gatePolicy ?? 'review_ready';
+    const externalDeps = task?.config.externalDependencies ?? [];
+    for (const dep of externalDeps) {
+      const wfKey = workflowDepKey(dep.workflowId);
+      if (nextDraft[wfKey]) continue;
+      nextDraft[wfKey] = dep.gatePolicy ?? 'review_ready';
     }
     setGatePolicyDraft(nextDraft);
   }, [task?.id, baseBranch]);
@@ -204,36 +200,66 @@ export function TaskPanel({
   const mergeGateDisplayTitle = mergeGatePanelHeading(task, mergeMode);
   const isFixApproval = Boolean(task.execution.pendingFixError);
   const externalDeps = task.config.externalDependencies ?? [];
+  const depsByWorkflow = new Map<string, ExternalDependency[]>();
+  for (const dep of externalDeps) {
+    const group = depsByWorkflow.get(dep.workflowId);
+    if (group) {
+      group.push(dep);
+    } else {
+      depsByWorkflow.set(dep.workflowId, [dep]);
+    }
+  }
+  const workflowExternalDeps = [...depsByWorkflow.entries()].map(([workflowId, deps]) => {
+    const policySet = new Set(deps.map((d) => d.gatePolicy ?? 'review_ready'));
+    const currentPolicy =
+      policySet.size === 1 ? (deps[0].gatePolicy ?? 'review_ready') : 'mixed';
+    const statuses = deps.map((d) => resolveExternalDepStatus(d, allTasks));
+    const statusSet = new Set(statuses);
+    const statusSummary = statusSet.size === 1
+      ? statuses[0]
+      : `${statusSet.size} statuses: ${[...statusSet].join(', ')}`;
+    return {
+      workflowId,
+      deps,
+      currentPolicy,
+      statusSummary,
+    };
+  });
   const canEditGatePolicies = Boolean(
     onSetExternalGatePolicies
     && externalDeps.length > 0
     && task.status !== 'running'
     && task.status !== 'fixing_with_ai',
   );
-  const changedGatePolicyCount = externalDeps.filter((dep) => {
-    const key = externalDepKey(dep);
-    const draft = gatePolicyDraft[key] ?? dep.gatePolicy ?? 'review_ready';
-    const current = dep.gatePolicy ?? 'review_ready';
-    return draft !== current;
+  const changedWorkflowPolicyCount = workflowExternalDeps.filter((group) => {
+    if (group.currentPolicy === 'mixed') return true;
+    const draft = gatePolicyDraft[workflowDepKey(group.workflowId)] ?? group.currentPolicy;
+    return draft !== group.currentPolicy;
   }).length;
+  const pendingPolicyUpdateCount = workflowExternalDeps.reduce((sum, group) => {
+    if (group.currentPolicy === 'mixed') return sum + group.deps.length;
+    const draft = gatePolicyDraft[workflowDepKey(group.workflowId)] ?? group.currentPolicy;
+    return draft !== group.currentPolicy ? sum + group.deps.length : sum;
+  }, 0);
 
   const handleSaveGatePolicies = async () => {
-    if (!onSetExternalGatePolicies || changedGatePolicyCount === 0) {
+    if (!onSetExternalGatePolicies || pendingPolicyUpdateCount === 0) {
       setIsEditingGatePolicies(false);
       return;
     }
-    const updates: ExternalGatePolicyUpdate[] = externalDeps
-      .filter((dep) => {
-        const key = externalDepKey(dep);
-        const draft = gatePolicyDraft[key] ?? dep.gatePolicy ?? 'review_ready';
-        const current = dep.gatePolicy ?? 'review_ready';
-        return draft !== current;
-      })
-      .map((dep) => ({
-        workflowId: dep.workflowId,
-        taskId: dep.taskId,
-        gatePolicy: gatePolicyDraft[externalDepKey(dep)] ?? dep.gatePolicy ?? 'review_ready',
-      }));
+    const updates: ExternalGatePolicyUpdate[] = [];
+    for (const group of workflowExternalDeps) {
+      const draft = gatePolicyDraft[workflowDepKey(group.workflowId)] ?? 'review_ready';
+      const shouldApplyToGroup = group.currentPolicy === 'mixed' || draft !== group.currentPolicy;
+      if (!shouldApplyToGroup) continue;
+      for (const dep of group.deps) {
+        updates.push({
+          workflowId: dep.workflowId,
+          taskId: dep.taskId,
+          gatePolicy: draft,
+        });
+      }
+    }
 
     const confirmed = window.confirm(
       `Apply gate policy changes to ${updates.length} external dependenc${updates.length === 1 ? 'y' : 'ies'}? This re-evaluates the task immediately.`,
@@ -550,16 +576,18 @@ export function TaskPanel({
           </div>
 
           <div className="space-y-2">
-            {externalDeps.map((dep, index) => {
-              const key = externalDepKey(dep);
-              const currentPolicy = dep.gatePolicy ?? 'review_ready';
-              const draftPolicy = gatePolicyDraft[key] ?? currentPolicy;
-              const externalStatus = resolveExternalDepStatus(dep, allTasks);
+            {workflowExternalDeps.map((group, index) => {
+              const key = workflowDepKey(group.workflowId);
+              const currentPolicy = group.currentPolicy;
+              const draftPolicy = gatePolicyDraft[key] ?? (currentPolicy === 'mixed' ? 'review_ready' : currentPolicy);
               return (
                 <div key={`${key}-${index}`} className="rounded border border-gray-700 bg-gray-800/40 p-2">
-                  <div className="text-xs font-mono text-gray-300 break-all">{externalDepDisplayId(dep)}</div>
+                  <div className="text-xs font-mono text-gray-300 break-all">
+                    {group.workflowId}
+                    <span className="text-gray-500 ml-2">({group.deps.length} gate{group.deps.length === 1 ? '' : 's'})</span>
+                  </div>
                   <div className="mt-1 flex items-center justify-between gap-2">
-                    <span className="text-xs text-gray-400">Status: {externalStatus}</span>
+                    <span className="text-xs text-gray-400">Status: {group.statusSummary}</span>
                     {isEditingGatePolicies ? (
                       <select
                         value={draftPolicy}
@@ -578,7 +606,9 @@ export function TaskPanel({
                         className={`text-xs px-2 py-0.5 rounded ${
                           currentPolicy === 'approved'
                             ? 'bg-gray-700 text-gray-200'
-                            : 'bg-cyan-900/30 text-cyan-300'
+                            : currentPolicy === 'review_ready'
+                              ? 'bg-cyan-900/30 text-cyan-300'
+                              : 'bg-amber-900/30 text-amber-300'
                         }`}
                       >
                         {currentPolicy}
@@ -593,14 +623,14 @@ export function TaskPanel({
           {isEditingGatePolicies && (
             <div className="space-y-2">
               <div className="text-xs text-gray-400" data-testid="gate-policy-impact-text">
-                {changedGatePolicyCount > 0
-                  ? `${changedGatePolicyCount} change${changedGatePolicyCount === 1 ? '' : 's'} pending. Apply to re-evaluate immediately.`
+                {pendingPolicyUpdateCount > 0
+                  ? `${pendingPolicyUpdateCount} dependency update${pendingPolicyUpdateCount === 1 ? '' : 's'} pending across ${changedWorkflowPolicyCount} workflow${changedWorkflowPolicyCount === 1 ? '' : 's'}. Apply to re-evaluate immediately.`
                   : 'No changes yet.'}
               </div>
               <div className="flex gap-2">
                 <button
                   onClick={handleSaveGatePolicies}
-                  disabled={isSavingGatePolicies || changedGatePolicyCount === 0}
+                  disabled={isSavingGatePolicies || pendingPolicyUpdateCount === 0}
                   className="flex-1 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:bg-blue-900/40 disabled:text-gray-400 text-white rounded text-xs font-medium transition-colors"
                   data-testid="gate-policy-apply-btn"
                 >
@@ -609,8 +639,9 @@ export function TaskPanel({
                 <button
                   onClick={() => {
                     const resetDraft: Record<string, 'approved' | 'review_ready'> = {};
-                    for (const dep of externalDeps) {
-                      resetDraft[externalDepKey(dep)] = dep.gatePolicy ?? 'review_ready';
+                    for (const group of workflowExternalDeps) {
+                      resetDraft[workflowDepKey(group.workflowId)] =
+                        group.currentPolicy === 'mixed' ? 'review_ready' : group.currentPolicy;
                     }
                     setGatePolicyDraft(resetDraft);
                     setIsEditingGatePolicies(false);

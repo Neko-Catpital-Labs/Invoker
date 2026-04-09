@@ -17,6 +17,7 @@
  * Write endpoints:
  *   POST   /api/tasks/:id/cancel
  *   POST   /api/tasks/:id/restart
+ *   POST   /api/tasks/:id/resolve-conflict  body: { agent? }
  *   POST   /api/tasks/:id/approve
  *   POST   /api/tasks/:id/reject       body: { reason? }
  *   POST   /api/tasks/:id/input        body: { text }
@@ -45,6 +46,7 @@ import {
   editTaskAgent as sharedEditTaskAgent,
   setTaskExternalGatePolicies as sharedSetTaskExternalGatePolicies,
   setWorkflowMergeMode as sharedSetWorkflowMergeMode,
+  resolveConflictAction,
 } from './workflow-actions.js';
 
 export interface ApiServerDeps {
@@ -188,6 +190,27 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
           const runnable = started.filter(t => t.status === 'running');
           await taskExecutor.executeTasks(runnable);
           json(res, 200, { ok: true, taskId, action: 'restarted', tasksStarted: runnable.length });
+        } catch (err) {
+          json(res, 400, { error: err instanceof Error ? err.message : String(err) });
+        }
+        return;
+      }
+
+      // POST /api/tasks/:id/resolve-conflict   body: { agent? }
+      const resolveConflictMatch = path.match(/^\/api\/tasks\/([^/]+)\/resolve-conflict$/);
+      if (method === 'POST' && resolveConflictMatch) {
+        const taskId = decodeURIComponent(resolveConflictMatch[1]);
+        try {
+          let agent: string | undefined;
+          const body = await readBody(req);
+          if (body) {
+            try {
+              const parsed = JSON.parse(body);
+              agent = parsed.agent;
+            } catch { /* not JSON, ignore */ }
+          }
+          await resolveConflictAction(taskId, { orchestrator, persistence, taskExecutor }, agent);
+          json(res, 200, { ok: true, taskId, action: 'resolve_conflict', status: 'awaiting_approval' });
         } catch (err) {
           json(res, 400, { error: err instanceof Error ? err.message : String(err) });
         }

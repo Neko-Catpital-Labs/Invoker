@@ -222,9 +222,7 @@ export async function resolveConflictAction(
   const { savedError } = orchestrator.beginConflictResolution(taskId);
   try {
     await taskExecutor.resolveConflict(taskId, savedError, agentName);
-    const started = orchestrator.restartTask(taskId);
-    const runnable = started.filter((t) => t.status === 'running');
-    await taskExecutor.executeTasks(runnable);
+    orchestrator.setFixAwaitingApproval(taskId, savedError);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     persistence.appendTaskOutput(taskId, `\n[Resolve Conflict] Failed: ${msg}`);

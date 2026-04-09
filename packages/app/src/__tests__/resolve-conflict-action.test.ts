@@ -13,39 +13,27 @@ import { resolveConflictAction } from '../workflow-actions.js';
 describe('resolveConflictAction', () => {
   let orchestrator: {
     beginConflictResolution: ReturnType<typeof vi.fn>;
-    restartTask: ReturnType<typeof vi.fn>;
+    setFixAwaitingApproval: ReturnType<typeof vi.fn>;
     revertConflictResolution: ReturnType<typeof vi.fn>;
   };
   let persistence: { appendTaskOutput: ReturnType<typeof vi.fn> };
   let taskExecutor: {
     resolveConflict: ReturnType<typeof vi.fn>;
-    executeTasks: ReturnType<typeof vi.fn>;
   };
 
   beforeEach(() => {
     orchestrator = {
       beginConflictResolution: vi.fn(() => ({ savedError: 'saved-err' })),
-      restartTask: vi.fn(() => [
-        {
-          id: 'task-a',
-          status: 'running' as const,
-          description: 'x',
-          dependencies: [],
-          createdAt: new Date(),
-          config: {},
-          execution: {},
-        },
-      ]),
+      setFixAwaitingApproval: vi.fn(),
       revertConflictResolution: vi.fn(),
     };
     persistence = { appendTaskOutput: vi.fn() };
     taskExecutor = {
       resolveConflict: vi.fn().mockResolvedValue(undefined),
-      executeTasks: vi.fn().mockResolvedValue(undefined),
     };
   });
 
-  it('runs beginConflictResolution → resolveConflict → restartTask → executeTasks', async () => {
+  it('runs beginConflictResolution → resolveConflict → setFixAwaitingApproval', async () => {
     await resolveConflictAction('task-a', {
       orchestrator: orchestrator as unknown as Orchestrator,
       persistence: persistence as unknown as SQLiteAdapter,
@@ -54,15 +42,12 @@ describe('resolveConflictAction', () => {
 
     expect(orchestrator.beginConflictResolution).toHaveBeenCalledWith('task-a');
     expect(taskExecutor.resolveConflict).toHaveBeenCalledWith('task-a', 'saved-err', undefined);
-    expect(orchestrator.restartTask).toHaveBeenCalledWith('task-a');
-    expect(taskExecutor.executeTasks).toHaveBeenCalledWith(
-      expect.arrayContaining([expect.objectContaining({ id: 'task-a', status: 'running' })]),
-    );
+    expect(orchestrator.setFixAwaitingApproval).toHaveBeenCalledWith('task-a', 'saved-err');
     expect(orchestrator.revertConflictResolution).not.toHaveBeenCalled();
     expect(persistence.appendTaskOutput).not.toHaveBeenCalled();
   });
 
-  it('on failure appends output and reverts conflict resolution (does not restart)', async () => {
+  it('on failure appends output and reverts conflict resolution (does not set awaiting approval)', async () => {
     taskExecutor.resolveConflict.mockRejectedValue(new Error('claude failed'));
 
     await expect(
@@ -82,7 +67,6 @@ describe('resolveConflictAction', () => {
       'saved-err',
       'claude failed',
     );
-    expect(orchestrator.restartTask).not.toHaveBeenCalled();
-    expect(taskExecutor.executeTasks).not.toHaveBeenCalled();
+    expect(orchestrator.setFixAwaitingApproval).not.toHaveBeenCalled();
   });
 });
