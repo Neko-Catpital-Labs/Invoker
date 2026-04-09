@@ -58,7 +58,7 @@ export interface RawPlanTask {
   experimentVariants?: RawExperimentVariant[];
   requiresManualApproval?: boolean;
   featureBranch?: string;
-  familiarType?: string;
+  executorType?: string;
   dockerImage?: string;
   remoteTargetId?: string;
   autoFix?: boolean;
@@ -75,7 +75,7 @@ export interface RawPlan {
   mergeMode?: string;
   reviewProvider?: string;
   repoUrl?: string;
-  familiarType?: string;
+  executorType?: string;
   externalDependencies?: Array<{
     workflowId?: string;
     taskId?: string;
@@ -249,7 +249,7 @@ export function parsePlan(yamlContent: string): PlanDefinition {
     );
   }
 
-  const defaultFamiliarType = raw.familiarType;
+  const defaultExecutorType = raw.executorType;
   const topLevelExternalDependencies = parseExternalDependencies('Plan', raw.externalDependencies);
 
   const tasks = raw.tasks.map((task, index) => {
@@ -294,7 +294,7 @@ export function parsePlan(yamlContent: string): PlanDefinition {
       experimentVariants,
       requiresManualApproval: task.requiresManualApproval,
       featureBranch: task.featureBranch,
-      familiarType: task.familiarType ?? defaultFamiliarType,
+      executorType: task.executorType ?? defaultExecutorType,
       dockerImage: task.dockerImage,
       remoteTargetId: task.remoteTargetId,
       autoFix: task.autoFix,

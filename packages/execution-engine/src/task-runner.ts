@@ -1,5 +1,5 @@
 /**
- * TaskExecutor — Shared task execution logic for CLI and Electron.
+ * TaskRunner — Shared task execution logic for CLI and Electron.
  *
  * Extracted from CLI Runner to eliminate duplication between
  * the CLI runner and Electron app execution paths.
@@ -15,17 +15,17 @@ import { scopePlanTaskId } from '@invoker/workflow-core';
 import type { Orchestrator, TaskState, ExperimentVariant } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import type { WorkRequest, WorkResponse, ActionType } from '@invoker/contracts';
-import type { Familiar, FamiliarHandle } from './familiar.js';
+import type { Executor, ExecutorHandle } from './executor.js';
 import { RESTART_TO_BRANCH_TRACE } from './exec-trace.js';
 import { ResourceLimitError } from './repo-pool.js';
-import type { FamiliarRegistry } from './registry.js';
+import type { ExecutorRegistry } from './registry.js';
 import type { AgentRegistry } from './agent-registry.js';
 import type { MergeGateProvider } from './merge-gate-provider.js';
 import type { ReviewProviderRegistry } from './review-provider-registry.js';
-import { DockerFamiliar } from './docker-familiar.js';
-import { WorktreeFamiliar } from './worktree-familiar.js';
+import { DockerExecutor } from './docker-executor.js';
+import { WorktreeExecutor } from './worktree-executor.js';
 import { isInvokerManagedPoolBranch } from './plan-base-remote.js';
-import { SshFamiliar } from './ssh-familiar.js';
+import { SshExecutor } from './ssh-executor.js';
 import {
   executeMergeNodeImpl,
   approveMergeImpl,
@@ -33,7 +33,7 @@ import {
   buildMergeSummaryImpl,
   consolidateAndMergeImpl,
   ensureLocalBranchForMerge,
-} from './merge-executor.js';
+} from './merge-runner.js';
 import { normalizeBranchForGithubCli } from './github-branch-ref.js';
 import {
   resolveConflictImpl,
@@ -54,26 +54,26 @@ type StartupFailureMetadata = {
 
 // ── Callbacks ─────────────────────────────────────────────
 
-export interface TaskExecutorCallbacks {
+export interface TaskRunnerCallbacks {
   onOutput?: (taskId: string, data: string) => void;
-  onSpawned?: (taskId: string, handle: FamiliarHandle, familiar: Familiar) => void;
+  onSpawned?: (taskId: string, handle: ExecutorHandle, familiar: Executor) => void;
   onComplete?: (taskId: string, response: WorkResponse) => void;
   onHeartbeat?: (taskId: string) => void;
 }
 
 // ── Config ────────────────────────────────────────────────
 
-export interface TaskExecutorConfig {
+export interface TaskRunnerConfig {
   orchestrator: Orchestrator;
   persistence: SQLiteAdapter;
-  familiarRegistry: FamiliarRegistry;
+  executorRegistry: ExecutorRegistry;
   /** Repo root / working directory for git commands and task execution. */
   cwd: string;
-  /** Max worktrees per repo for WorktreeFamiliar. Default: 3. */
+  /** Max worktrees per repo for WorktreeExecutor. Default: 3. */
   maxWorktreesPerRepo?: number;
   /** Default branch from config (e.g. "master"). Falls back to git heuristic if unset. */
   defaultBranch?: string;
-  callbacks?: TaskExecutorCallbacks;
+  callbacks?: TaskRunnerCallbacks;
   mergeGateProvider?: MergeGateProvider;
   reviewProviderRegistry?: ReviewProviderRegistry;
   /**
@@ -98,24 +98,24 @@ export interface TaskExecutorConfig {
   executionAgentRegistry?: AgentRegistry;
 }
 
-// ── TaskExecutor ──────────────────────────────────────────
+// ── TaskRunner ──────────────────────────────────────────
 
-export class TaskExecutor {
+export class TaskRunner {
   /** @internal */ orchestrator: Orchestrator;
   /** @internal */ persistence: SQLiteAdapter;
-  private familiarRegistry: FamiliarRegistry;
+  private executorRegistry: ExecutorRegistry;
   /** @internal */ cwd: string;
   private maxWorktreesPerRepo: number;
   /** @internal */ defaultBranch: string | undefined;
-  /** @internal */ callbacks: TaskExecutorCallbacks;
+  /** @internal */ callbacks: TaskRunnerCallbacks;
   /** @internal */ mergeGateProvider?: MergeGateProvider;
   /** @internal */ reviewProviderRegistry?: ReviewProviderRegistry;
   private activePrPollers = new Map<string, ReturnType<typeof setInterval>>();
   private getRemoteTargets: () => Record<string, { host: string; user: string; sshKeyPath: string; port?: number; managedWorkspaces?: boolean; remoteInvokerHome?: string; provisionCommand?: string }>;
   private dockerConfig: { imageName?: string; secretsFile?: string };
   private executionAgentRegistry?: AgentRegistry;
-  /** Cache for SSH familiars, keyed by remoteTargetId. One instance per target for correct git locking. */
-  private sshFamiliarCache = new Map<string, SshFamiliar>();
+  /** Cache for SSH executors, keyed by remoteTargetId. One instance per target for correct git locking. */
+  private sshFamiliarCache = new Map<string, SshExecutor>();
 
   /** Config default branch (e.g. master) for workflows without baseBranch. */
   getDefaultBranchHint(): string | undefined {
@@ -131,8 +131,8 @@ export class TaskExecutor {
     baseBranchHint: string | undefined,
   ): Promise<void> {
     if (!repoUrl) return;
-    const familiar = this.familiarRegistry.get('worktree');
-    if (!(familiar instanceof WorktreeFamiliar)) return;
+    const familiar = this.executorRegistry.get('worktree');
+    if (!(familiar instanceof WorktreeExecutor)) return;
     const pool = familiar.getRepoPool();
     const baseBranch = baseBranchHint?.trim() || this.defaultBranch || 'master';
     await pool.refreshMirrorForRebase(repoUrl, baseBranch);
@@ -146,8 +146,8 @@ export class TaskExecutor {
   /** @internal */ async ensureRepoMirrorPath(repoUrl: string): Promise<string | undefined> {
     const trimmed = repoUrl.trim();
     if (!trimmed) return undefined;
-    const familiar = this.familiarRegistry.get('worktree');
-    if (!(familiar instanceof WorktreeFamiliar)) return undefined;
+    const familiar = this.executorRegistry.get('worktree');
+    if (!(familiar instanceof WorktreeExecutor)) return undefined;
     try {
       return await familiar.getRepoPool().ensureClone(trimmed);
     } catch (err) {
@@ -164,10 +164,10 @@ export class TaskExecutor {
       .filter((b) => isInvokerManagedPoolBranch(b));
   }
 
-  constructor(config: TaskExecutorConfig) {
+  constructor(config: TaskRunnerConfig) {
     this.orchestrator = config.orchestrator;
     this.persistence = config.persistence;
-    this.familiarRegistry = config.familiarRegistry;
+    this.executorRegistry = config.executorRegistry;
     this.cwd = config.cwd;
     this.maxWorktreesPerRepo = config.maxWorktreesPerRepo ?? 5;
     this.defaultBranch = config.defaultBranch;
@@ -185,7 +185,7 @@ export class TaskExecutor {
   async executeTasks(tasks: TaskState[]): Promise<void> {
     if (tasks.length > 0) {
       console.log(
-        `${RESTART_TO_BRANCH_TRACE} TaskExecutor.executeTasks count=${tasks.length} ids=${tasks.map((t) => t.id).join(', ')}`,
+        `${RESTART_TO_BRANCH_TRACE} TaskRunner.executeTasks count=${tasks.length} ids=${tasks.map((t) => t.id).join(', ')}`,
       );
     }
     await Promise.all(tasks.map((task) => this.executeTask(task)));
@@ -203,7 +203,7 @@ export class TaskExecutor {
    */
   async executeTask(task: TaskState): Promise<void> {
     console.log(
-      `${RESTART_TO_BRANCH_TRACE} TaskExecutor.executeTask BEGIN taskId=${task.id} isMergeNode=${Boolean(task.config.isMergeNode)} status=${task.status}`,
+      `${RESTART_TO_BRANCH_TRACE} TaskRunner.executeTask BEGIN taskId=${task.id} isMergeNode=${Boolean(task.config.isMergeNode)} status=${task.status}`,
     );
     try {
       await this.executeTaskInner(task);
@@ -211,12 +211,12 @@ export class TaskExecutor {
       // Resource limit: defer the task instead of failing it
       const cause = err instanceof Error ? err.cause : undefined;
       if (cause instanceof ResourceLimitError) {
-        console.log(`[TaskExecutor] executeTask deferred for task=${task.id}: ${cause.message}`);
+        console.log(`[TaskRunner] executeTask deferred for task=${task.id}: ${cause.message}`);
         this.orchestrator.deferTask(task.id);
         return;
       }
 
-      console.error(`[TaskExecutor] executeTask failed for task=${task.id}:`, err);
+      console.error(`[TaskRunner] executeTask failed for task=${task.id}:`, err);
       const response: WorkResponse = {
         requestId: `err-${task.id}`,
         actionId: task.id,
@@ -327,16 +327,16 @@ export class TaskExecutor {
       `${RESTART_TO_BRANCH_TRACE} executeTaskInner taskId=${task.id} WorkRequest built actionType=${request.actionType} repoUrl=${request.inputs.repoUrl ?? '(none)'} upstreamBranches=${JSON.stringify(request.inputs.upstreamBranches ?? [])}`,
     );
 
-    const familiar = this.selectFamiliar(task);
+    const familiar = this.selectExecutor(task);
     console.log(
-      `${RESTART_TO_BRANCH_TRACE} executeTaskInner taskId=${task.id} selectFamiliar → type=${familiar.type} calling familiar.start()`,
+      `${RESTART_TO_BRANCH_TRACE} executeTaskInner taskId=${task.id} selectExecutor → type=${familiar.type} calling familiar.start()`,
     );
-    console.log(`[trace] TaskExecutor: task=${task.id} calling familiar.start() type=${familiar.type}`);
+    console.log(`[trace] TaskRunner: task=${task.id} calling familiar.start() type=${familiar.type}`);
     const startT0 = Date.now();
     const preStartHeartbeatTimer = setInterval(() => {
       this.callbacks.onHeartbeat?.(task.id);
     }, PRE_START_HEARTBEAT_INTERVAL_MS);
-    let handle: FamiliarHandle;
+    let handle: ExecutorHandle;
     try {
       handle = await familiar.start(request);
     } catch (err) {
@@ -351,7 +351,7 @@ export class TaskExecutor {
         }
         if (meta.containerId) execution.containerId = meta.containerId;
         this.persistence.updateTask(task.id, {
-          config: { familiarType: familiar.type },
+          config: { executorType: familiar.type },
           execution: execution as any,
         });
       }
@@ -362,7 +362,7 @@ export class TaskExecutor {
     } finally {
       clearInterval(preStartHeartbeatTimer);
     }
-    console.log(`[trace] TaskExecutor: task=${task.id} familiar.start() returned after ${Date.now() - startT0}ms familiar=${familiar.type} sessionId=${handle.agentSessionId ?? 'none'} workspace=${handle.workspacePath ?? 'default'}`);
+    console.log(`[trace] TaskRunner: task=${task.id} familiar.start() returned after ${Date.now() - startT0}ms familiar=${familiar.type} sessionId=${handle.agentSessionId ?? 'none'} workspace=${handle.workspacePath ?? 'default'}`);
 
     // Persist execution metadata immediately at task start — all fields explicit
     {
@@ -375,7 +375,7 @@ export class TaskExecutor {
       }
 
       const changes = {
-        config: { familiarType: familiar.type },
+        config: { executorType: familiar.type },
         execution: {
           workspacePath: handle.workspacePath,
           branch: handle.branch ?? undefined,  // Explicit undefined when branch is not applicable (e.g., BYO mode)
@@ -387,7 +387,7 @@ export class TaskExecutor {
       };
       this.persistence.updateTask(task.id, changes);
       console.log(
-        `[agent-session-trace] TaskExecutor.persistStartMetadata task=${task.id} agentSessionId=${handle.agentSessionId ?? 'null'}`,
+        `[agent-session-trace] TaskRunner.persistStartMetadata task=${task.id} agentSessionId=${handle.agentSessionId ?? 'null'}`,
       );
       if (task.config.isMergeNode) {
         console.log(
@@ -396,7 +396,7 @@ export class TaskExecutor {
             '(gate clone path is written later in executeMergeNode)',
         );
       }
-      console.log(`[trace] TaskExecutor: persisted metadata for task=${task.id} workspacePath=${handle.workspacePath} branch=${handle.branch ?? 'null'}`);
+      console.log(`[trace] TaskRunner: persisted metadata for task=${task.id} workspacePath=${handle.workspacePath} branch=${handle.branch ?? 'null'}`);
     }
 
     // Notify consumer about the spawned handle
@@ -437,7 +437,7 @@ export class TaskExecutor {
             this.executeTasks(newlyStarted);
           }
         } catch (err) {
-          console.error(`[TaskExecutor] onComplete handler failed for task=${task.id}:`, err);
+          console.error(`[TaskRunner] onComplete handler failed for task=${task.id}:`, err);
           const errResponse: WorkResponse = {
             requestId: response.requestId,
             actionId: task.id,
@@ -457,54 +457,54 @@ export class TaskExecutor {
   }
 
   /**
-   * Select the familiar to use for a given task.
-   * Uses task.familiarType to look up in the registry; falls back to default.
-   * Merge gate tasks use the default (worktree) familiar when selected explicitly.
+   * Select the executor to use for a given task.
+   * Uses task.executorType to look up in the registry; falls back to default.
+   * Merge gate tasks use the default (worktree) executor when selected explicitly.
    */
-  selectFamiliar(task: TaskState): Familiar {
-    const effectiveType = task.config.familiarType;
+  selectExecutor(task: TaskState): Executor {
+    const effectiveType = task.config.executorType;
 
     if (effectiveType) {
-      const registered = this.familiarRegistry.get(effectiveType);
+      const registered = this.executorRegistry.get(effectiveType);
       if (registered) {
-        console.log(`[trace] TaskExecutor.selectFamiliar: task=${task.id} effectiveType=${effectiveType} → ${registered.type}`);
+        console.log(`[trace] TaskRunner.selectExecutor: task=${task.id} effectiveType=${effectiveType} → ${registered.type}`);
         return registered;
       }
 
       // Per-task Docker instance (each task gets its own container + execGitSimple routing)
       if (effectiveType === 'docker') {
-        const docker = new DockerFamiliar({
+        const docker = new DockerExecutor({
           imageName: task.config.dockerImage ?? this.dockerConfig.imageName,
           secretsFile: this.dockerConfig.secretsFile,
           agentRegistry: this.executionAgentRegistry,
         });
-        this.familiarRegistry.register(`docker:${task.id}`, docker);
-        console.log(`[trace] TaskExecutor.selectFamiliar: task=${task.id} effectiveType=docker → docker (per-task)`);
+        this.executorRegistry.register(`docker:${task.id}`, docker);
+        console.log(`[trace] TaskRunner.selectExecutor: task=${task.id} effectiveType=docker → docker (per-task)`);
         return docker;
       }
 
       // Lazy registration for Worktree
       if (effectiveType === 'worktree') {
         const invokerHome = resolve(homedir(), '.invoker');
-        const worktree = new WorktreeFamiliar({
+        const worktree = new WorktreeExecutor({
           worktreeBaseDir: resolve(invokerHome, 'worktrees'),
           cacheDir: resolve(invokerHome, 'repos'),
           maxWorktrees: this.maxWorktreesPerRepo,
           agentRegistry: this.executionAgentRegistry,
         });
-        this.familiarRegistry.register('worktree', worktree);
-        console.log(`[trace] TaskExecutor.selectFamiliar: task=${task.id} effectiveType=worktree → worktree (lazy registered)`);
+        this.executorRegistry.register('worktree', worktree);
+        console.log(`[trace] TaskRunner.selectExecutor: task=${task.id} effectiveType=worktree → worktree (lazy registered)`);
         return worktree;
       }
 
       // Lazy registration for SSH — resolve remoteTargetId from config and cache by targetId.
       // The cache is config-aware: if the underlying remote target config changes (e.g. via
-      // remoteTargetsProvider returning new values), we replace the cached familiar so the
+      // remoteTargetsProvider returning new values), we replace the cached executor so the
       // new config takes effect immediately.
       if (effectiveType === 'ssh') {
         const targetId = task.config.remoteTargetId;
         if (!targetId) {
-          throw new Error(`Task ${task.id} has familiarType=ssh but no remoteTargetId`);
+          throw new Error(`Task ${task.id} has executorType=ssh but no remoteTargetId`);
         }
 
         // Always re-read targets so dynamic provider updates are picked up.
@@ -529,10 +529,10 @@ export class TaskExecutor {
         });
         const cacheKey = `${targetId}|${configFingerprint}`;
 
-        // Return cached familiar if it exists for this target+config combo
+        // Return cached executor if it exists for this target+config combo
         const cached = this.sshFamiliarCache.get(cacheKey);
         if (cached) {
-          console.log(`[trace] TaskExecutor.selectFamiliar: task=${task.id} effectiveType=ssh remoteTarget=${targetId} → ssh (cached)`);
+          console.log(`[trace] TaskRunner.selectExecutor: task=${task.id} effectiveType=ssh remoteTarget=${targetId} → ssh (cached)`);
           return cached;
         }
 
@@ -543,7 +543,7 @@ export class TaskExecutor {
           }
         }
 
-        const ssh = new SshFamiliar({
+        const ssh = new SshExecutor({
           host: target.host,
           user: target.user,
           sshKeyPath: target.sshKeyPath,
@@ -555,20 +555,20 @@ export class TaskExecutor {
         });
 
         this.sshFamiliarCache.set(cacheKey, ssh);
-        console.log(`[trace] TaskExecutor.selectFamiliar: task=${task.id} effectiveType=ssh remoteTarget=${targetId} → ssh (new, cached)`);
+        console.log(`[trace] TaskRunner.selectExecutor: task=${task.id} effectiveType=ssh remoteTarget=${targetId} → ssh (new, cached)`);
         return ssh;
       }
     }
 
     if (task.config.isMergeNode) {
-      const mergeGateFamiliar = this.familiarRegistry.getDefault();
-      console.log(`[trace] TaskExecutor.selectFamiliar: task=${task.id} isMergeNode=true → ${mergeGateFamiliar.type} (merge gate)`);
-      return mergeGateFamiliar;
+      const mergeGateExecutor = this.executorRegistry.getDefault();
+      console.log(`[trace] TaskRunner.selectExecutor: task=${task.id} isMergeNode=true → ${mergeGateExecutor.type} (merge gate)`);
+      return mergeGateExecutor;
     }
 
-    const defaultFamiliar = this.familiarRegistry.getDefault();
-    console.log(`[trace] TaskExecutor.selectFamiliar: task=${task.id} effectiveType=${effectiveType ?? 'none'} → ${defaultFamiliar.type} (default)`);
-    return defaultFamiliar;
+    const defaultExecutor = this.executorRegistry.getDefault();
+    console.log(`[trace] TaskRunner.selectExecutor: task=${task.id} effectiveType=${effectiveType ?? 'none'} → ${defaultExecutor.type} (default)`);
+    return defaultExecutor;
   }
 
   /**
@@ -585,7 +585,7 @@ export class TaskExecutor {
   // ── Merge Node Execution ─────────────────────────────────
 
   private async executeMergeNode(task: TaskState): Promise<void> {
-    console.log(`${RESTART_TO_BRANCH_TRACE} TaskExecutor.executeMergeNode taskId=${task.id} → merge-executor.executeMergeNodeImpl`);
+    console.log(`${RESTART_TO_BRANCH_TRACE} TaskRunner.executeMergeNode taskId=${task.id} → merge-executor.executeMergeNodeImpl`);
     return executeMergeNodeImpl(this, task);
   }
 
@@ -848,7 +848,7 @@ export class TaskExecutor {
     try {
       rmSync(dir, { recursive: true, force: true });
     } catch (err) {
-      console.warn(`[TaskExecutor] removeMergeWorktree failed (best-effort): ${err instanceof Error ? err.message : String(err)}`);
+      console.warn(`[TaskRunner] removeMergeWorktree failed (best-effort): ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -1143,7 +1143,7 @@ export class TaskExecutor {
 
   /**
    * Branch names from completed direct dependencies, for every executor that merges
-   * upstream work (`setupTaskBranch`, WorktreeFamiliar merge loop, SshFamiliar remote merges).
+   * upstream work (`setupTaskBranch`, WorktreeExecutor merge loop, SshExecutor remote merges).
    *
    * For **fan-in** (two or more upstream branches), prepends the workflow plan base
    * (`loadWorkflow(...).baseBranch` or `defaultBranch`) when it is not already listed,

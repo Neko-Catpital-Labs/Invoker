@@ -9,7 +9,7 @@
 import type { Orchestrator, ExternalGatePolicyUpdate } from '@invoker/workflow-core';
 import type { TaskState } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
-import type { TaskExecutor } from '@invoker/execution-engine';
+import type { TaskRunner } from '@invoker/execution-engine';
 import { normalizeMergeModeForPersistence } from './merge-mode.js';
 
 // ── Deps interfaces ──────────────────────────────────────────
@@ -20,7 +20,7 @@ export interface ActionDeps {
   /** @deprecated Pool cleanup uses the workflow mirror; repoRoot branch deletion is no longer used. */
   repoRoot?: string;
   /** When set, rebase-and-refreshes the pool mirror and removes managed branches before bumping generation. */
-  taskExecutor?: TaskExecutor;
+  taskExecutor?: TaskRunner;
 }
 
 // ── Actions ──────────────────────────────────────────────────
@@ -143,11 +143,11 @@ export function editTaskCommand(
 
 export function editTaskType(
   taskId: string,
-  familiarType: string,
+  executorType: string,
   deps: Pick<ActionDeps, 'orchestrator'>,
   remoteTargetId?: string,
 ): TaskState[] {
-  return deps.orchestrator.editTaskType(taskId, familiarType, remoteTargetId);
+  return deps.orchestrator.editTaskType(taskId, executorType, remoteTargetId);
 }
 
 export function editTaskAgent(
@@ -177,7 +177,7 @@ export function selectExperiment(
 export async function selectExperiments(
   taskId: string,
   ids: string[],
-  deps: Pick<ActionDeps, 'orchestrator'> & { taskExecutor: TaskExecutor },
+  deps: Pick<ActionDeps, 'orchestrator'> & { taskExecutor: TaskRunner },
 ): Promise<TaskState[]> {
   if (ids.length === 1) {
     return deps.orchestrator.selectExperiment(taskId, ids[0]);
@@ -197,7 +197,7 @@ export async function selectExperiments(
 export async function setWorkflowMergeMode(
   workflowId: string,
   mergeMode: string,
-  deps: Pick<ActionDeps, 'orchestrator' | 'persistence'> & { taskExecutor: TaskExecutor },
+  deps: Pick<ActionDeps, 'orchestrator' | 'persistence'> & { taskExecutor: TaskRunner },
 ): Promise<void> {
   const normalized = normalizeMergeModeForPersistence(mergeMode);
   deps.persistence.updateWorkflow(workflowId, { mergeMode: normalized });
@@ -215,7 +215,7 @@ export async function setWorkflowMergeMode(
 
 export async function resolveConflictAction(
   taskId: string,
-  deps: Pick<ActionDeps, 'orchestrator' | 'persistence'> & { taskExecutor: TaskExecutor },
+  deps: Pick<ActionDeps, 'orchestrator' | 'persistence'> & { taskExecutor: TaskRunner },
   agentName?: string,
 ): Promise<void> {
   const { orchestrator, persistence, taskExecutor } = deps;

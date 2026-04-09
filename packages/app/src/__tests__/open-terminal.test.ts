@@ -1,5 +1,5 @@
 /**
- * Integration test — Orchestrator + WorktreeFamiliar + open-terminal handler.
+ * Integration test — Orchestrator + WorktreeExecutor + open-terminal handler.
  *
  * Exercises the same wiring as main.ts without Electron:
  * 1. Load a plan, start execution, run tasks to completion.
@@ -23,9 +23,9 @@ import {
 } from '@invoker/workflow-core';
 import type { TaskStateChanges } from '@invoker/workflow-graph';
 import {
-  DockerFamiliar, WorktreeFamiliar, FamiliarRegistry, SshFamiliar,
-  BaseFamiliar,
-  type FamiliarHandle, type TerminalSpec, type PersistedTaskMeta,
+  DockerExecutor, WorktreeExecutor, ExecutorRegistry, SshExecutor,
+  BaseExecutor,
+  type ExecutorHandle, type TerminalSpec, type PersistedTaskMeta,
 } from '@invoker/execution-engine';
 import type { WorkResponse, WorkRequest } from '@invoker/contracts';
 vi.mock('../terminal-external-launch.js', async (importOriginal) => {
@@ -139,10 +139,10 @@ function openExternalTerminal(spec: TerminalSpec | null): void {
   }
 }
 
-const taskHandles = new Map<string, FamiliarHandle>();
+const taskHandles = new Map<string, ExecutorHandle>();
 
 function executeTaskViaFamiliar(
-  familiar: WorktreeFamiliar,
+  executor: WorktreeExecutor,
   task: TaskState,
 ): Promise<WorkResponse> {
   const request: WorkRequest = {
@@ -162,9 +162,9 @@ function executeTaskViaFamiliar(
 
   return new Promise<WorkResponse>(async (resolve, reject) => {
     try {
-      const handle = await familiar.start(request);
+      const handle = await executor.start(request);
       taskHandles.set(task.id, handle);
-      familiar.onComplete(handle, resolve);
+      executor.onComplete(handle, resolve);
     } catch (err) {
       reject(err);
     }
@@ -175,13 +175,13 @@ function executeTaskViaFamiliar(
 
 describe('open-terminal integration', () => {
   let orchestrator: Orchestrator;
-  let familiar: WorktreeFamiliar;
+  let executor: WorktreeExecutor;
   let mockWorktreeDir: string;
 
   beforeEach(() => {
     const persistence = new InMemoryPersistence();
     const bus = new InMemoryBus();
-    familiar = new WorktreeFamiliar({
+    executor = new WorktreeExecutor({
       cacheDir: join(tmpdir(), `open-term-cache-${randomUUID()}`),
       worktreeBaseDir: join(tmpdir(), `open-term-wt-${randomUUID()}`),
     });
@@ -194,7 +194,7 @@ describe('open-terminal integration', () => {
     mkdirSync(mockWorktreeDir, { recursive: true });
 
     // Mock the pool to return our temp directory
-    Object.defineProperty(familiar, 'pool', {
+    Object.defineProperty(executor, 'pool', {
       value: {
         ensureClone: vi.fn().mockResolvedValue(mockWorktreeDir),
         acquireWorktree: vi.fn().mockResolvedValue({
@@ -207,8 +207,8 @@ describe('open-terminal integration', () => {
       configurable: true,
     });
 
-    // Prevent WorktreeFamiliar.start() from running real git on the repo.
-    vi.spyOn(BaseFamiliar.prototype as any, 'execGitSimple')
+    // Prevent WorktreeExecutor.start() from running real git on the repo.
+    vi.spyOn(BaseExecutor.prototype as any, 'execGitSimple')
       .mockImplementation(async (...a: any[]) => {
         const args = a[0] as string[];
         if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
@@ -222,15 +222,15 @@ describe('open-terminal integration', () => {
         }
         return '';
       });
-    vi.spyOn(BaseFamiliar.prototype as any, 'syncFromRemote').mockResolvedValue(undefined);
-    vi.spyOn(BaseFamiliar.prototype as any, 'setupTaskBranch').mockResolvedValue(undefined);
-    vi.spyOn(BaseFamiliar.prototype as any, 'pushBranchToRemote').mockResolvedValue(undefined);
-    vi.spyOn(BaseFamiliar.prototype as any, 'recordTaskResult').mockResolvedValue(undefined);
-    vi.spyOn(WorktreeFamiliar.prototype as any, 'provisionWorktree').mockResolvedValue(undefined);
+    vi.spyOn(BaseExecutor.prototype as any, 'syncFromRemote').mockResolvedValue(undefined);
+    vi.spyOn(BaseExecutor.prototype as any, 'setupTaskBranch').mockResolvedValue(undefined);
+    vi.spyOn(BaseExecutor.prototype as any, 'pushBranchToRemote').mockResolvedValue(undefined);
+    vi.spyOn(BaseExecutor.prototype as any, 'recordTaskResult').mockResolvedValue(undefined);
+    vi.spyOn(WorktreeExecutor.prototype as any, 'provisionWorktree').mockResolvedValue(undefined);
   });
 
   afterEach(async () => {
-    await familiar.destroyAll();
+    await executor.destroyAll();
     vi.restoreAllMocks();
     // Clean up temp directory
     try {
@@ -255,13 +255,13 @@ describe('open-terminal integration', () => {
     expect(started[0].id.endsWith('/greet')).toBe(true);
 
     // Execute greet
-    const resp1 = await executeTaskViaFamiliar(familiar, started[0]);
+    const resp1 = await executeTaskViaFamiliar(executor, started[0]);
     orchestrator.handleWorkerResponse(resp1);
     expect(orchestrator.getTask('greet')!.status).toBe('completed');
 
     // Verify getTerminalSpec returns cwd (worktree dir, not repo root)
     const handle = taskHandles.get(started[0].id)!;
-    const spec = familiar.getTerminalSpec(handle);
+    const spec = executor.getTerminalSpec(handle);
     expect(spec?.cwd).toBeDefined();
     expect(spec).toEqual(expect.objectContaining({ cwd: expect.any(String) }));
 
@@ -398,7 +398,7 @@ describe('terminal-external-launch', () => {
 });
 
 // ── Per-executor getRestoredTerminalSpec tests ────────────────
-// Verifies that each familiar type correctly builds a TerminalSpec
+// Verifies that each executor type correctly builds a TerminalSpec
 // from persisted DB metadata via getRestoredTerminalSpec().
 
 describe('getRestoredTerminalSpec routing', () => {
@@ -406,14 +406,14 @@ describe('getRestoredTerminalSpec routing', () => {
     vi.mocked(existsSync).mockReset();
   });
 
-  describe('WorktreeFamiliar', () => {
-    const wt = new WorktreeFamiliar({ worktreeBaseDir: '/tmp/wt', cacheDir: '/tmp/cache' });
+  describe('WorktreeExecutor', () => {
+    const wt = new WorktreeExecutor({ worktreeBaseDir: '/tmp/wt', cacheDir: '/tmp/cache' });
 
     it('returns claude --resume spec with cwd when session is set', () => {
       vi.mocked(existsSync).mockReturnValue(true);
       const meta: PersistedTaskMeta = {
         taskId: 'task-1',
-        familiarType: 'worktree',
+        executorType: 'worktree',
         agentSessionId: 'abc-123-session',
         workspacePath: '/home/user/repo',
       };
@@ -428,7 +428,7 @@ describe('getRestoredTerminalSpec routing', () => {
       vi.mocked(existsSync).mockReturnValue(true);
       const meta: PersistedTaskMeta = {
         taskId: 'task-cmd',
-        familiarType: 'worktree',
+        executorType: 'worktree',
         workspacePath: '/home/user/repo',
       };
       const spec = wt.getRestoredTerminalSpec(meta);
@@ -439,7 +439,7 @@ describe('getRestoredTerminalSpec routing', () => {
     it('returns spec with undefined cwd when workspace_path is not set', () => {
       const meta: PersistedTaskMeta = {
         taskId: 'task-unknown',
-        familiarType: 'worktree',
+        executorType: 'worktree',
       };
       const spec = wt.getRestoredTerminalSpec(meta);
       expect(spec.cwd).toBeUndefined();
@@ -449,7 +449,7 @@ describe('getRestoredTerminalSpec routing', () => {
       vi.mocked(existsSync).mockReturnValue(false);
       const meta: PersistedTaskMeta = {
         taskId: 'task-missing',
-        familiarType: 'worktree',
+        executorType: 'worktree',
         workspacePath: '/tmp/gone',
       };
       expect(() => wt.getRestoredTerminalSpec(meta)).toThrow(/no longer exists.*cleaned up/);
@@ -459,7 +459,7 @@ describe('getRestoredTerminalSpec routing', () => {
       vi.mocked(existsSync).mockReturnValue(true);
       const meta: PersistedTaskMeta = {
         taskId: 'task-wt',
-        familiarType: 'worktree',
+        executorType: 'worktree',
         workspacePath: '/home/user/.invoker/worktrees/wt-abc',
       };
       const spec = wt.getRestoredTerminalSpec(meta);
@@ -470,7 +470,7 @@ describe('getRestoredTerminalSpec routing', () => {
       vi.mocked(existsSync).mockReturnValue(true);
       const meta: PersistedTaskMeta = {
         taskId: 'pivot-reconciliation',
-        familiarType: 'worktree',
+        executorType: 'worktree',
         workspacePath: '/home/user/.invoker/worktrees/ab12/experiment-pivot-reconciliation-deadbeef',
         branch: 'experiment/pivot-reconciliation-deadbeef',
       };
@@ -488,20 +488,20 @@ describe('getRestoredTerminalSpec routing', () => {
       vi.mocked(existsSync).mockReturnValue(false);
       const meta: PersistedTaskMeta = {
         taskId: 'task-wt-gone',
-        familiarType: 'worktree',
+        executorType: 'worktree',
         workspacePath: '/home/user/.invoker/worktrees/deleted-wt',
       };
       expect(() => wt.getRestoredTerminalSpec(meta)).toThrow(/no longer exists.*cleaned up/);
     });
   });
 
-  describe('DockerFamiliar', () => {
-    const docker = new DockerFamiliar({});
+  describe('DockerExecutor', () => {
+    const docker = new DockerExecutor({});
 
     it('returns docker exec spec with session resume', () => {
       const meta: PersistedTaskMeta = {
         taskId: 'task-docker',
-        familiarType: 'docker',
+        executorType: 'docker',
         agentSessionId: 'docker-session-1',
         containerId: 'container-abc',
       };
@@ -514,7 +514,7 @@ describe('getRestoredTerminalSpec routing', () => {
     it('returns docker exec spec without session (bash fallback)', () => {
       const meta: PersistedTaskMeta = {
         taskId: 'task-docker-cmd',
-        familiarType: 'docker',
+        executorType: 'docker',
         containerId: 'container-xyz',
       };
       const spec = docker.getRestoredTerminalSpec(meta);
@@ -526,7 +526,7 @@ describe('getRestoredTerminalSpec routing', () => {
     it('throws when no container ID provided', () => {
       const meta: PersistedTaskMeta = {
         taskId: 'task-no-cid',
-        familiarType: 'docker',
+        executorType: 'docker',
       };
       expect(() => docker.getRestoredTerminalSpec(meta)).toThrow(/No container ID/);
     });
@@ -540,53 +540,53 @@ describe('merge gate open-terminal', () => {
     vi.mocked(existsSync).mockReset();
   });
 
-  it('resolves merge gate fallback to default worktree familiar', () => {
-    const registry = new FamiliarRegistry();
-    const worktree = new WorktreeFamiliar({ cacheDir: join(tmpdir(), 'cache'), worktreeBaseDir: join(tmpdir(), 'merge-gate-wt') });
+  it('resolves merge gate fallback to default worktree executor', () => {
+    const registry = new ExecutorRegistry();
+    const worktree = new WorktreeExecutor({ cacheDir: join(tmpdir(), 'cache'), worktreeBaseDir: join(tmpdir(), 'merge-gate-wt') });
     registry.register('worktree', worktree);
 
     const meta: PersistedTaskMeta = {
       taskId: '__merge__wf-123',
-      familiarType: 'merge',
+      executorType: 'merge',
       workspacePath: process.cwd(),
     };
 
-    let familiar = registry.get(meta.familiarType);
-    if (!familiar) {
-      if (meta.familiarType === 'docker') {
+    let executor = registry.get(meta.executorType);
+    if (!executor) {
+      if (meta.executorType === 'docker') {
         /* lazy-register docker */
-      } else if (meta.familiarType === 'worktree') {
+      } else if (meta.executorType === 'worktree') {
         /* lazy-register worktree */
       } else {
-        familiar = registry.getDefault();
+        executor = registry.getDefault();
       }
     }
 
-    expect(familiar).toBe(worktree);
-    expect(familiar!.type).toBe('worktree');
+    expect(executor).toBe(worktree);
+    expect(executor!.type).toBe('worktree');
   });
 
   it('opens terminal with git checkout for merge gate with branch when workspacePath is a worktree', () => {
     const wtBase = join(tmpdir(), 'merge-gate-wt-b');
-    const registry = new FamiliarRegistry();
-    const worktree = new WorktreeFamiliar({ cacheDir: join(tmpdir(), 'cache'), worktreeBaseDir: wtBase });
+    const registry = new ExecutorRegistry();
+    const worktree = new WorktreeExecutor({ cacheDir: join(tmpdir(), 'cache'), worktreeBaseDir: wtBase });
     registry.register('worktree', worktree);
 
     const worktreePath = join(wtBase, 'gate-wt');
     const meta: PersistedTaskMeta = {
       taskId: '__merge__wf-123',
-      familiarType: 'merge',
+      executorType: 'merge',
       workspacePath: worktreePath,
       branch: 'plan/my-workflow',
     };
 
-    let familiar: any = registry.get(meta.familiarType);
-    if (!familiar) {
-      familiar = registry.getDefault();
+    let executor: any = registry.get(meta.executorType);
+    if (!executor) {
+      executor = registry.getDefault();
     }
 
     vi.mocked(existsSync).mockReturnValue(true);
-    const spec = familiar.getRestoredTerminalSpec(meta);
+    const spec = executor.getRestoredTerminalSpec(meta);
     expect(spec.cwd).toBe(worktreePath);
     expect(spec.command).toBe('bash');
     expect(spec.args).toContain('-c');
@@ -596,25 +596,25 @@ describe('merge gate open-terminal', () => {
 
   it('opens terminal with git checkout for merge gate with branch when workspacePath is a worktree', () => {
     const wtBase = join(tmpdir(), 'merge-gate-wt-d');
-    const registry = new FamiliarRegistry();
-    const worktree = new WorktreeFamiliar({ cacheDir: join(tmpdir(), 'cache'), worktreeBaseDir: wtBase });
+    const registry = new ExecutorRegistry();
+    const worktree = new WorktreeExecutor({ cacheDir: join(tmpdir(), 'cache'), worktreeBaseDir: wtBase });
     registry.register('worktree', worktree);
 
     const worktreePath = join(wtBase, 'existing-wt');
     const meta: PersistedTaskMeta = {
       taskId: '__merge__wf-456',
-      familiarType: 'merge',
+      executorType: 'merge',
       workspacePath: worktreePath,
       branch: 'plan/my-workflow',
     };
 
-    let familiar: any = registry.get(meta.familiarType);
-    if (!familiar) {
-      familiar = registry.getDefault();
+    let executor: any = registry.get(meta.executorType);
+    if (!executor) {
+      executor = registry.getDefault();
     }
 
     vi.mocked(existsSync).mockReturnValue(true);
-    const spec = familiar.getRestoredTerminalSpec(meta);
+    const spec = executor.getRestoredTerminalSpec(meta);
     expect(spec.cwd).toBe(worktreePath);
     expect(spec.command).toBe('bash');
     expect(spec.args).toContain('-c');
@@ -623,31 +623,31 @@ describe('merge gate open-terminal', () => {
   });
 
   it('opens terminal with cwd only for merge gate without branch', () => {
-    const registry = new FamiliarRegistry();
-    const worktree = new WorktreeFamiliar({ cacheDir: join(tmpdir(), 'cache'), worktreeBaseDir: join(tmpdir(), 'merge-gate-wt-c') });
+    const registry = new ExecutorRegistry();
+    const worktree = new WorktreeExecutor({ cacheDir: join(tmpdir(), 'cache'), worktreeBaseDir: join(tmpdir(), 'merge-gate-wt-c') });
     registry.register('worktree', worktree);
 
     const meta: PersistedTaskMeta = {
       taskId: '__merge__wf-123',
-      familiarType: 'merge',
+      executorType: 'merge',
       workspacePath: process.cwd(),
     };
 
-    let familiar: any = registry.get(meta.familiarType);
-    if (!familiar) {
-      familiar = registry.getDefault();
+    let executor: any = registry.get(meta.executorType);
+    if (!executor) {
+      executor = registry.getDefault();
     }
 
     vi.mocked(existsSync).mockReturnValue(true);
-    const spec = familiar.getRestoredTerminalSpec(meta);
+    const spec = executor.getRestoredTerminalSpec(meta);
     expect(spec.cwd).toBe(process.cwd());
     expect(spec.command).toBeUndefined();
   });
 });
 
-describe('SshFamiliar getRestoredTerminalSpec', () => {
+describe('SshExecutor getRestoredTerminalSpec', () => {
   it('uses ssh -t bash -lc with cd and git checkout when workspacePath and branch are set', () => {
-    const ssh = new SshFamiliar({
+    const ssh = new SshExecutor({
       host: 'droplet.example',
       user: 'root',
       sshKeyPath: '/home/me/.ssh/id_rsa',
@@ -655,7 +655,7 @@ describe('SshFamiliar getRestoredTerminalSpec', () => {
     });
     const meta: PersistedTaskMeta = {
       taskId: 'remote-task',
-      familiarType: 'ssh',
+      executorType: 'ssh',
       workspacePath: '~/.invoker/worktrees/abc123/experiment-remote-task-deadbeef',
       branch: 'experiment/remote-task-deadbeef',
     };
@@ -675,10 +675,10 @@ describe('SshFamiliar getRestoredTerminalSpec', () => {
   });
 
   it('returns non-interactive ssh spec when workspacePath is missing', () => {
-    const ssh = new SshFamiliar({ host: 'h', user: 'u', sshKeyPath: '/k' });
-    const spec = ssh.getRestoredTerminalSpec({ taskId: 't', familiarType: 'ssh' });
+    const ssh = new SshExecutor({ host: 'h', user: 'u', sshKeyPath: '/k' });
+    const spec = ssh.getRestoredTerminalSpec({ taskId: 't', executorType: 'ssh' });
 
-    // When workspacePath is missing, SshFamiliar returns a non-interactive BatchMode spec
+    // When workspacePath is missing, SshExecutor returns a non-interactive BatchMode spec
     // (not an error - the error is enforced by openExternalTerminalForTask's invariant check)
     expect(spec.command).toBe('ssh');
     expect(spec.args).toContain('BatchMode=yes');
@@ -690,7 +690,7 @@ describe('SshFamiliar getRestoredTerminalSpec', () => {
     // This test verifies the fail-fast invariant at line 208 of open-terminal-for-task.ts
     const mockPersistence = {
       getTaskStatus: vi.fn(() => 'completed'),
-      getFamiliarType: vi.fn(() => 'ssh'),
+      getExecutorType: vi.fn(() => 'ssh'),
       getAgentSessionId: vi.fn(() => null),
       getContainerId: vi.fn(() => null),
       getWorkspacePath: vi.fn(() => null),  // Missing workspace path - invariant violation!
@@ -698,35 +698,35 @@ describe('SshFamiliar getRestoredTerminalSpec', () => {
       getRemoteTargetId: vi.fn(() => null),
     };
 
-    const ssh = new SshFamiliar({ host: 'h', user: 'u', sshKeyPath: '/k' });
-    const registry = new FamiliarRegistry();
+    const ssh = new SshExecutor({ host: 'h', user: 'u', sshKeyPath: '/k' });
+    const registry = new ExecutorRegistry();
     registry.register('ssh', ssh);
 
     const result = await openExternalTerminalForTask({
       taskId: 'task-ssh-no-workspace',
       persistence: mockPersistence as any,
-      familiarRegistry: registry,
+      executorRegistry: registry,
       repoRoot: '/repo',
     });
 
     // Must fail with deterministic error text
     expect(result.opened).toBe(false);
     expect(result.reason).toContain('workspace metadata is missing');
-    expect(result.reason).toContain('Familiar type "ssh" requires a managed workspace');
+    expect(result.reason).toContain('Executor type "ssh" requires a managed workspace');
     expect(result.reason).toContain('workspacePath is not set');
     expect(result.reason).toContain('Recreate the task');
     expect(result.reason).toContain('Refusing to fall back to host repo');
 
     // Verify no real SSH call attempted
     expect(mockPersistence.getWorkspacePath).toHaveBeenCalledWith('task-ssh-no-workspace');
-    expect(mockPersistence.getFamiliarType).toHaveBeenCalledWith('task-ssh-no-workspace');
+    expect(mockPersistence.getExecutorType).toHaveBeenCalledWith('task-ssh-no-workspace');
   });
 
   it('deterministic: SSH success path scaffolding when workspacePath is present', async () => {
     // This test verifies the success path with complete metadata
     const mockPersistence = {
       getTaskStatus: vi.fn(() => 'completed'),
-      getFamiliarType: vi.fn(() => 'ssh'),
+      getExecutorType: vi.fn(() => 'ssh'),
       getAgentSessionId: vi.fn(() => 'ssh-sess-123'),
       getContainerId: vi.fn(() => null),
       getWorkspacePath: vi.fn(() => '~/.invoker/worktrees/abc/experiment-ssh-task'),  // Has workspace!
@@ -735,19 +735,19 @@ describe('SshFamiliar getRestoredTerminalSpec', () => {
       getExecutionAgent: vi.fn(() => 'claude'),
     };
 
-    const ssh = new SshFamiliar({
+    const ssh = new SshExecutor({
       host: 'droplet.example',
       user: 'ubuntu',
       sshKeyPath: '/home/user/.ssh/id_rsa',
       port: 2222,
     });
-    const registry = new FamiliarRegistry();
+    const registry = new ExecutorRegistry();
     registry.register('ssh', ssh);
 
     const result = await openExternalTerminalForTask({
       taskId: 'task-ssh-with-workspace',
       persistence: mockPersistence as any,
-      familiarRegistry: registry,
+      executorRegistry: registry,
       repoRoot: '/repo',
     });
 
@@ -780,7 +780,7 @@ describe('SshFamiliar getRestoredTerminalSpec', () => {
 
     const mockPersistence = {
       getTaskStatus: vi.fn(() => 'completed'),
-      getFamiliarType: vi.fn(() => 'ssh'),
+      getExecutorType: vi.fn(() => 'ssh'),
       getAgentSessionId: vi.fn(() => 'ssh-sess-abc'),
       getContainerId: vi.fn(() => null),
       getWorkspacePath: vi.fn(() => '~/.invoker/worktrees/xyz/experiment-ssh-managed-deadbeef'),
@@ -789,19 +789,19 @@ describe('SshFamiliar getRestoredTerminalSpec', () => {
       getExecutionAgent: vi.fn(() => 'claude'),
     };
 
-    const ssh = new SshFamiliar({
+    const ssh = new SshExecutor({
       host: 'remote.dev',
       user: 'deployer',
       sshKeyPath: '/home/me/.ssh/deploy_key',
       port: 2222,
     });
-    const registry = new FamiliarRegistry();
+    const registry = new ExecutorRegistry();
     registry.register('ssh', ssh);
 
     const result = await originalOpen({
       taskId: 'ssh-managed-task',
       persistence: mockPersistence as any,
-      familiarRegistry: registry,
+      executorRegistry: registry,
       repoRoot: '/local/repo',
     });
 
@@ -869,10 +869,10 @@ describe('getRestoredTerminalSpec dispatches codex vs claude session resume', ()
     vi.mocked(existsSync).mockReset();
   });
 
-  describe('WorktreeFamiliar', () => {
+  describe('WorktreeExecutor', () => {
     it('resumes with codex when executionAgent is "codex"', () => {
       const agentRegistry = registerBuiltinAgents();
-      const wt = new WorktreeFamiliar({
+      const wt = new WorktreeExecutor({
         worktreeBaseDir: '/tmp/wt',
         cacheDir: '/tmp/cache',
         agentRegistry,
@@ -880,7 +880,7 @@ describe('getRestoredTerminalSpec dispatches codex vs claude session resume', ()
       vi.mocked(existsSync).mockReturnValue(true);
       const meta: PersistedTaskMeta = {
         taskId: 'task-codex',
-        familiarType: 'worktree',
+        executorType: 'worktree',
         agentSessionId: 'codex-sess-123',
         workspacePath: '/tmp/workspace',
         executionAgent: 'codex',
@@ -897,7 +897,7 @@ describe('getRestoredTerminalSpec dispatches codex vs claude session resume', ()
 
     it('resumes with claude when executionAgent is "claude"', () => {
       const agentRegistry = registerBuiltinAgents();
-      const wt = new WorktreeFamiliar({
+      const wt = new WorktreeExecutor({
         worktreeBaseDir: '/tmp/wt',
         cacheDir: '/tmp/cache',
         agentRegistry,
@@ -905,7 +905,7 @@ describe('getRestoredTerminalSpec dispatches codex vs claude session resume', ()
       vi.mocked(existsSync).mockReturnValue(true);
       const meta: PersistedTaskMeta = {
         taskId: 'task-claude',
-        familiarType: 'worktree',
+        executorType: 'worktree',
         agentSessionId: 'claude-sess-456',
         workspacePath: '/tmp/workspace',
         executionAgent: 'claude',
@@ -919,7 +919,7 @@ describe('getRestoredTerminalSpec dispatches codex vs claude session resume', ()
 
     it('defaults to claude when executionAgent is undefined', () => {
       const agentRegistry = registerBuiltinAgents();
-      const wt = new WorktreeFamiliar({
+      const wt = new WorktreeExecutor({
         worktreeBaseDir: '/tmp/wt',
         cacheDir: '/tmp/cache',
         agentRegistry,
@@ -927,7 +927,7 @@ describe('getRestoredTerminalSpec dispatches codex vs claude session resume', ()
       vi.mocked(existsSync).mockReturnValue(true);
       const meta: PersistedTaskMeta = {
         taskId: 'task-default',
-        familiarType: 'worktree',
+        executorType: 'worktree',
         agentSessionId: 'default-sess-789',
         workspacePath: '/tmp/workspace',
         // executionAgent intentionally omitted
@@ -937,10 +937,10 @@ describe('getRestoredTerminalSpec dispatches codex vs claude session resume', ()
     });
   });
 
-  describe('SshFamiliar', () => {
+  describe('SshExecutor', () => {
     it('resumes with codex on remote when executionAgent is "codex"', () => {
       const agentRegistry = registerBuiltinAgents();
-      const ssh = new SshFamiliar({
+      const ssh = new SshExecutor({
         host: 'droplet.example',
         user: 'root',
         sshKeyPath: '/home/me/.ssh/id_rsa',
@@ -948,7 +948,7 @@ describe('getRestoredTerminalSpec dispatches codex vs claude session resume', ()
       });
       const meta: PersistedTaskMeta = {
         taskId: 'remote-codex',
-        familiarType: 'ssh',
+        executorType: 'ssh',
         agentSessionId: 'codex-remote-sess',
         workspacePath: '~/.invoker/worktrees/abc/experiment-remote-codex',
         branch: 'experiment/remote-codex',
@@ -966,7 +966,7 @@ describe('getRestoredTerminalSpec dispatches codex vs claude session resume', ()
 
     it('resumes with claude on remote when executionAgent is "claude"', () => {
       const agentRegistry = registerBuiltinAgents();
-      const ssh = new SshFamiliar({
+      const ssh = new SshExecutor({
         host: 'droplet.example',
         user: 'root',
         sshKeyPath: '/home/me/.ssh/id_rsa',
@@ -974,7 +974,7 @@ describe('getRestoredTerminalSpec dispatches codex vs claude session resume', ()
       });
       const meta: PersistedTaskMeta = {
         taskId: 'remote-claude',
-        familiarType: 'ssh',
+        executorType: 'ssh',
         agentSessionId: 'claude-remote-sess',
         workspacePath: '~/.invoker/worktrees/abc/experiment-remote-claude',
         branch: 'experiment/remote-claude',
@@ -989,13 +989,13 @@ describe('getRestoredTerminalSpec dispatches codex vs claude session resume', ()
     });
   });
 
-  describe('DockerFamiliar', () => {
+  describe('DockerExecutor', () => {
     it('resumes with codex inside container when executionAgent is "codex"', () => {
       const agentRegistry = registerBuiltinAgents();
-      const docker = new DockerFamiliar({ agentRegistry });
+      const docker = new DockerExecutor({ agentRegistry });
       const meta: PersistedTaskMeta = {
         taskId: 'docker-codex',
-        familiarType: 'docker',
+        executorType: 'docker',
         agentSessionId: 'codex-docker-sess',
         containerId: 'container-xyz',
         executionAgent: 'codex',
@@ -1040,7 +1040,7 @@ describe('fix-with-agent → open-terminal produces correct agent resume command
   function createMockPersistence() {
     const store = new Map<string, {
       status: string;
-      familiarType: string;
+      executorType: string;
       agentSessionId?: string;
       agentName?: string;
       workspacePath?: string;
@@ -1049,7 +1049,7 @@ describe('fix-with-agent → open-terminal produces correct agent resume command
       store,
       // Write side — what fixWithAgentImpl calls
       updateTask(taskId: string, changes: { execution: { agentSessionId: string; agentName: string } }) {
-        const existing = store.get(taskId) ?? { status: 'failed', familiarType: 'worktree' };
+        const existing = store.get(taskId) ?? { status: 'failed', executorType: 'worktree' };
         store.set(taskId, {
           ...existing,
           agentSessionId: changes.execution.agentSessionId,
@@ -1058,7 +1058,7 @@ describe('fix-with-agent → open-terminal produces correct agent resume command
       },
       // Read side — what openExternalTerminalForTask calls
       getTaskStatus(taskId: string) { return store.get(taskId)?.status ?? null; },
-      getFamiliarType(taskId: string) { return store.get(taskId)?.familiarType ?? null; },
+      getExecutorType(taskId: string) { return store.get(taskId)?.executorType ?? null; },
       getAgentSessionId(taskId: string) { return store.get(taskId)?.agentSessionId ?? null; },
       getExecutionAgent(taskId: string) { return store.get(taskId)?.agentName ?? null; },
       getContainerId() { return null; },
@@ -1070,7 +1070,7 @@ describe('fix-with-agent → open-terminal produces correct agent resume command
   it('fix with codex → terminal launches codex, not claude', () => {
     vi.mocked(existsSync).mockReturnValue(true);
     const agentRegistry = registerBuiltinAgents();
-    const wt = new WorktreeFamiliar({
+    const wt = new WorktreeExecutor({
       worktreeBaseDir: '/tmp/wt',
       cacheDir: '/tmp/cache',
       agentRegistry,
@@ -1081,7 +1081,7 @@ describe('fix-with-agent → open-terminal produces correct agent resume command
     // 1. Simulate initial task state (before fix)
     persistence.store.set('task-codex-fix', {
       status: 'failed',
-      familiarType: 'worktree',
+      executorType: 'worktree',
       workspacePath: '/tmp/workspace',
     });
 
@@ -1093,7 +1093,7 @@ describe('fix-with-agent → open-terminal produces correct agent resume command
     // 3. Build PersistedTaskMeta exactly as openExternalTerminalForTask does (line 66-74)
     const meta: PersistedTaskMeta = {
       taskId: 'task-codex-fix',
-      familiarType: persistence.getFamiliarType('task-codex-fix') ?? 'worktree',
+      executorType: persistence.getExecutorType('task-codex-fix') ?? 'worktree',
       agentSessionId: persistence.getAgentSessionId('task-codex-fix') ?? undefined,
       executionAgent: persistence.getExecutionAgent('task-codex-fix') ?? undefined,
       workspacePath: persistence.getWorkspacePath('task-codex-fix') ?? undefined,
@@ -1114,7 +1114,7 @@ describe('fix-with-agent → open-terminal produces correct agent resume command
   it('fix with claude → terminal launches claude', () => {
     vi.mocked(existsSync).mockReturnValue(true);
     const agentRegistry = registerBuiltinAgents();
-    const wt = new WorktreeFamiliar({
+    const wt = new WorktreeExecutor({
       worktreeBaseDir: '/tmp/wt',
       cacheDir: '/tmp/cache',
       agentRegistry,
@@ -1123,7 +1123,7 @@ describe('fix-with-agent → open-terminal produces correct agent resume command
     const persistence = createMockPersistence();
     persistence.store.set('task-claude-fix', {
       status: 'failed',
-      familiarType: 'worktree',
+      executorType: 'worktree',
       workspacePath: '/tmp/workspace',
     });
     persistence.updateTask('task-claude-fix', {
@@ -1132,7 +1132,7 @@ describe('fix-with-agent → open-terminal produces correct agent resume command
 
     const meta: PersistedTaskMeta = {
       taskId: 'task-claude-fix',
-      familiarType: persistence.getFamiliarType('task-claude-fix') ?? 'worktree',
+      executorType: persistence.getExecutorType('task-claude-fix') ?? 'worktree',
       agentSessionId: persistence.getAgentSessionId('task-claude-fix') ?? undefined,
       executionAgent: persistence.getExecutionAgent('task-claude-fix') ?? undefined,
       workspacePath: persistence.getWorkspacePath('task-claude-fix') ?? undefined,
@@ -1148,7 +1148,7 @@ describe('fix-with-agent → open-terminal produces correct agent resume command
   it('fix with no agent specified → terminal defaults to claude', () => {
     vi.mocked(existsSync).mockReturnValue(true);
     const agentRegistry = registerBuiltinAgents();
-    const wt = new WorktreeFamiliar({
+    const wt = new WorktreeExecutor({
       worktreeBaseDir: '/tmp/wt',
       cacheDir: '/tmp/cache',
       agentRegistry,
@@ -1157,7 +1157,7 @@ describe('fix-with-agent → open-terminal produces correct agent resume command
     const persistence = createMockPersistence();
     persistence.store.set('task-noagent', {
       status: 'failed',
-      familiarType: 'worktree',
+      executorType: 'worktree',
       workspacePath: '/tmp/workspace',
       agentSessionId: 'sess-default',
       // agentName intentionally NOT set
@@ -1165,7 +1165,7 @@ describe('fix-with-agent → open-terminal produces correct agent resume command
 
     const meta: PersistedTaskMeta = {
       taskId: 'task-noagent',
-      familiarType: persistence.getFamiliarType('task-noagent') ?? 'worktree',
+      executorType: persistence.getExecutorType('task-noagent') ?? 'worktree',
       agentSessionId: persistence.getAgentSessionId('task-noagent') ?? undefined,
       executionAgent: persistence.getExecutionAgent('task-noagent') ?? undefined,
       workspacePath: persistence.getWorkspacePath('task-noagent') ?? undefined,
@@ -1180,21 +1180,21 @@ describe('fix-with-agent → open-terminal produces correct agent resume command
   it('openExternalTerminalForTask: refuses fallback when managed workspace has no workspacePath', async () => {
     const { openExternalTerminalForTask } = await import('../open-terminal-for-task.js');
 
-    // Mock persistence that returns no workspacePath for a worktree familiar
+    // Mock persistence that returns no workspacePath for a worktree executor
     const mockPersistence = {
       getTaskStatus: (_taskId: string) => 'failed',
-      getFamiliarType: (_taskId: string) => 'worktree',
+      getExecutorType: (_taskId: string) => 'worktree',
       getAgentSessionId: (_taskId: string) => null,
       getContainerId: (_taskId: string) => null,
       getWorkspacePath: (_taskId: string) => null, // Missing workspace!
       getBranch: (_taskId: string) => 'invoker/test',
     };
 
-    const registry = new FamiliarRegistry();
+    const registry = new ExecutorRegistry();
     const result = await openExternalTerminalForTask({
       taskId: 'missing-workspace',
       persistence: mockPersistence,
-      familiarRegistry: registry,
+      executorRegistry: registry,
       repoRoot: '/repo',
     });
 
@@ -1205,26 +1205,26 @@ describe('fix-with-agent → open-terminal produces correct agent resume command
     expect(result.reason).toContain('Recreate the task');
   });
 
-  it('openExternalTerminalForTask: allows docker familiar with workspacePath', async () => {
+  it('openExternalTerminalForTask: allows docker executor with workspacePath', async () => {
     const { openExternalTerminalForTask } = await import('../open-terminal-for-task.js');
 
     // Docker is not in the managed list, but let's verify the invariant doesn't block it
     const mockPersistence = {
       getTaskStatus: (_taskId: string) => 'failed',
-      getFamiliarType: (_taskId: string) => 'docker',
+      getExecutorType: (_taskId: string) => 'docker',
       getAgentSessionId: (_taskId: string) => null,
       getContainerId: (_taskId: string) => 'abc123',
       getWorkspacePath: (_taskId: string) => '/workspace', // Has workspace
       getBranch: (_taskId: string) => 'invoker/test',
     };
 
-    const registry = new FamiliarRegistry();
+    const registry = new ExecutorRegistry();
     // This should proceed to getRestoredTerminalSpec, which may throw for other reasons
     // but NOT because of the workspace invariant
     const result = await openExternalTerminalForTask({
       taskId: 'docker-with-workspace',
       persistence: mockPersistence,
-      familiarRegistry: registry,
+      executorRegistry: registry,
       repoRoot: '/repo',
     });
 
@@ -1246,27 +1246,27 @@ describe('openExternalTerminalForTask fail-fast workspace invariant', () => {
   it('refuses host-repo fallback when worktree task has no workspace path', async () => {
     const mockPersistence = {
       getTaskStatus: vi.fn(() => 'completed'),
-      getFamiliarType: vi.fn(() => 'worktree'),
+      getExecutorType: vi.fn(() => 'worktree'),
       getAgentSessionId: vi.fn(() => null),
       getContainerId: vi.fn(() => null),
       getWorkspacePath: vi.fn(() => null),  // Missing workspace path!
       getBranch: vi.fn(() => null),
     };
 
-    const familiar = new WorktreeFamiliar({ cacheDir: '/tmp/cache', worktreeBaseDir: '/tmp/wt' });
-    const registry = new FamiliarRegistry();
-    registry.register('worktree', familiar);
+    const executor = new WorktreeExecutor({ cacheDir: '/tmp/cache', worktreeBaseDir: '/tmp/wt' });
+    const registry = new ExecutorRegistry();
+    registry.register('worktree', executor);
 
     const result = await openExternalTerminalForTask({
       taskId: 'task-no-workspace',
       persistence: mockPersistence as any,
-      familiarRegistry: registry,
+      executorRegistry: registry,
       repoRoot: '/repo',
     });
 
     expect(result.opened).toBe(false);
     expect(result.reason).toContain('workspace metadata is missing');
-    expect(result.reason).toContain('Familiar type "worktree" requires a managed workspace');
+    expect(result.reason).toContain('Executor type "worktree" requires a managed workspace');
     expect(result.reason).toContain('Recreate the task');
     expect(result.reason).toContain('Refusing to fall back to host repo');
   });
@@ -1274,7 +1274,7 @@ describe('openExternalTerminalForTask fail-fast workspace invariant', () => {
   it('refuses host-repo fallback when ssh task has no workspace path', async () => {
     const mockPersistence = {
       getTaskStatus: vi.fn(() => 'completed'),
-      getFamiliarType: vi.fn(() => 'ssh'),
+      getExecutorType: vi.fn(() => 'ssh'),
       getAgentSessionId: vi.fn(() => null),
       getContainerId: vi.fn(() => null),
       getWorkspacePath: vi.fn(() => null),  // Missing workspace path!
@@ -1282,73 +1282,73 @@ describe('openExternalTerminalForTask fail-fast workspace invariant', () => {
       getRemoteTargetId: vi.fn(() => null),
     };
 
-    const ssh = new SshFamiliar({ host: 'h', user: 'u', sshKeyPath: '/k' });
-    const registry = new FamiliarRegistry();
+    const ssh = new SshExecutor({ host: 'h', user: 'u', sshKeyPath: '/k' });
+    const registry = new ExecutorRegistry();
     registry.register('ssh', ssh);
 
     const result = await openExternalTerminalForTask({
       taskId: 'task-ssh-no-workspace',
       persistence: mockPersistence as any,
-      familiarRegistry: registry,
+      executorRegistry: registry,
       repoRoot: '/repo',
     });
 
     expect(result.opened).toBe(false);
     expect(result.reason).toContain('workspace metadata is missing');
-    expect(result.reason).toContain('Familiar type "ssh" requires a managed workspace');
+    expect(result.reason).toContain('Executor type "ssh" requires a managed workspace');
   });
 
   it('refuses host-repo fallback when docker task has no workspace path', async () => {
     const mockPersistence = {
       getTaskStatus: vi.fn(() => 'completed'),
-      getFamiliarType: vi.fn(() => 'docker'),
+      getExecutorType: vi.fn(() => 'docker'),
       getAgentSessionId: vi.fn(() => null),
       getContainerId: vi.fn(() => 'container-abc'),  // Has container ID
       getWorkspacePath: vi.fn(() => null),  // But missing workspace path!
       getBranch: vi.fn(() => null),
     };
 
-    const docker = new DockerFamiliar({});
-    const registry = new FamiliarRegistry();
+    const docker = new DockerExecutor({});
+    const registry = new ExecutorRegistry();
     registry.register('docker', docker);
 
     const result = await openExternalTerminalForTask({
       taskId: 'task-docker-no-workspace',
       persistence: mockPersistence as any,
-      familiarRegistry: registry,
+      executorRegistry: registry,
       repoRoot: '/repo',
     });
 
     expect(result.opened).toBe(false);
     expect(result.reason).toContain('workspace metadata is missing');
-    expect(result.reason).toContain('Familiar type "docker" requires a managed workspace');
+    expect(result.reason).toContain('Executor type "docker" requires a managed workspace');
   });
 
-  it('allows host-repo fallback for non-managed familiar types', async () => {
+  it('allows host-repo fallback for non-managed executor types', async () => {
     vi.mocked(existsSync).mockReturnValue(true);
 
     const mockPersistence = {
       getTaskStatus: vi.fn(() => 'completed'),
-      getFamiliarType: vi.fn(() => 'local'),  // Non-managed type
+      getExecutorType: vi.fn(() => 'local'),  // Non-managed type
       getAgentSessionId: vi.fn(() => null),
       getContainerId: vi.fn(() => null),
       getWorkspacePath: vi.fn(() => null),
       getBranch: vi.fn(() => null),
     };
 
-    // Create a minimal familiar for testing
+    // Create a minimal executor for testing
     const mockFamiliar = {
       type: 'local',
       getRestoredTerminalSpec: vi.fn(() => ({ cwd: undefined })),
     };
 
-    const registry = new FamiliarRegistry();
+    const registry = new ExecutorRegistry();
     registry.register('local', mockFamiliar as any);
 
     const result = await openExternalTerminalForTask({
       taskId: 'task-local-no-workspace',
       persistence: mockPersistence as any,
-      familiarRegistry: registry,
+      executorRegistry: registry,
       repoRoot: '/repo',
     });
 

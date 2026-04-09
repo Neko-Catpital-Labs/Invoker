@@ -21,7 +21,7 @@ function makeSshTask(overrides: Partial<TaskState['config']> = {}): TaskState {
     status: 'completed',
     dependencies: [],
     config: {
-      familiarType: 'ssh',
+      executorType: 'ssh',
       ...overrides,
     },
     execution: {

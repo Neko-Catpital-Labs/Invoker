@@ -22,7 +22,7 @@ import { TaskScheduler } from './scheduler.js';
 import type { TaskState, TaskDelta, TaskStateChanges, Attempt } from '@invoker/workflow-graph';
 import { createTaskState, createAttempt } from '@invoker/workflow-graph';
 import type { WorkResponse } from '@invoker/contracts';
-import { normalizeFamiliarType } from '@invoker/workflow-graph';
+import { normalizeExecutorType } from '@invoker/workflow-graph';
 
 const MERGE_TRACE_LOG = resolve(homedir(), '.invoker', 'merge-trace.log');
 function mergeTrace(tag: string, data: Record<string, unknown>): void {
@@ -166,7 +166,7 @@ export interface PlanDefinition {
     experimentVariants?: Array<{ id: string; description: string; prompt?: string; command?: string }>;
     requiresManualApproval?: boolean;
     featureBranch?: string;
-    familiarType?: string;
+    executorType?: string;
     autoFix?: boolean;
     dockerImage?: string;
     remoteTargetId?: string;
@@ -199,7 +199,7 @@ export interface GraphMutationNodeDef {
   experimentPrompt?: string;
   prompt?: string;
   command?: string;
-  familiarType?: string;
+  executorType?: string;
   isReconciliation?: boolean;
   requiresManualApproval?: boolean;
   autoFix?: boolean;
@@ -220,7 +220,7 @@ export interface TaskReplacementDef {
   command?: string;
   prompt?: string;
   dependencies?: string[];
-  familiarType?: string;
+  executorType?: string;
   autoFix?: boolean;
   executionAgent?: string;
 }
@@ -234,7 +234,7 @@ export interface ExternalGatePolicyUpdate {
 /**
  * A single routing rule that validates task execution environment against command patterns.
  * When a rule matches a task command, the orchestrator validates that the task's
- * familiarType and remoteTargetId conform to the rule's requirements.
+ * executorType and remoteTargetId conform to the rule's requirements.
  */
 export interface ExecutorRoutingRule {
   /** Substring to match against the task command. */
@@ -242,7 +242,7 @@ export interface ExecutorRoutingRule {
   /** Regular expression matched against the task command; compiled with new RegExp(regex). */
   regex?: string;
   /** Required familiar type for matching commands (e.g. "ssh", "docker", "worktree"). */
-  familiarType: string;
+  executorType: string;
   /** Required remote target ID for matching commands; must correspond to an entry in remoteTargets. */
   remoteTargetId: string;
 }
@@ -270,7 +270,7 @@ export function findMatchingExecutorRoutingRule(
 /**
  * Validates that a task's routing conforms to executor routing rules.
  * Returns immediately if the task has no command or no rules are configured.
- * When a rule matches the task command, throws if the task's familiarType or remoteTargetId
+ * When a rule matches the task command, throws if the task's executorType or remoteTargetId
  * do not match the rule's requirements.
  */
 export function assertExecutorRoutingConforms(
@@ -289,14 +289,14 @@ export function assertExecutorRoutingConforms(
     return;
   }
 
-  // Normalize both plan and rule familiarType the same way createTaskState does
-  const normalizedPlanType = normalizeFamiliarType(planFamiliarType) ?? 'worktree';
-  const normalizedRuleType = normalizeFamiliarType(matchingRule.familiarType) ?? matchingRule.familiarType;
+  // Normalize both plan and rule executorType the same way createTaskState does
+  const normalizedPlanType = normalizeExecutorType(planFamiliarType) ?? 'worktree';
+  const normalizedRuleType = normalizeExecutorType(matchingRule.executorType) ?? matchingRule.executorType;
 
   if (normalizedPlanType !== normalizedRuleType) {
     throw new Error(
-      `Task "${taskId}" with command "${command}" requires familiarType="${normalizedRuleType}" ` +
-      `but plan declares familiarType="${normalizedPlanType}"`
+      `Task "${taskId}" with command "${command}" requires executorType="${normalizedRuleType}" ` +
+      `but plan declares executorType="${normalizedPlanType}"`
     );
   }
 
@@ -315,7 +315,7 @@ export interface OrchestratorConfig {
   /**
    * Rules that validate task execution environment against command patterns.
    * When loading a plan, the orchestrator validates that tasks with commands matching
-   * a rule have the required familiarType and remoteTargetId specified in the plan.
+   * a rule have the required executorType and remoteTargetId specified in the plan.
    */
   executorRoutingRules?: ExecutorRoutingRule[];
 }
@@ -541,7 +541,7 @@ export class Orchestrator {
       assertExecutorRoutingConforms(
         taskDef.id,
         taskDef.command,
-        taskDef.familiarType,
+        taskDef.executorType,
         taskDef.remoteTargetId,
         this.executorRoutingRules,
       );
@@ -573,7 +573,7 @@ export class Orchestrator {
           experimentVariants: taskDef.experimentVariants,
           requiresManualApproval: taskDef.requiresManualApproval,
           featureBranch: taskDef.featureBranch,
-          familiarType: normalizeFamiliarType(taskDef.familiarType) ?? 'worktree',
+          executorType: normalizeExecutorType(taskDef.executorType) ?? 'worktree',
           dockerImage: taskDef.dockerImage,
           remoteTargetId: taskDef.remoteTargetId,
           autoFix: taskDef.autoFix,
@@ -612,7 +612,7 @@ export class Orchestrator {
       mergeNodeId,
       descriptionForMergeNode(plan),
       leafIds,
-      { workflowId, isMergeNode: true, familiarType: 'merge' },
+      { workflowId, isMergeNode: true, executorType: 'merge' },
     );
 
     // ── Pass 2: all validation passed — persist everything ──
@@ -1496,17 +1496,17 @@ export class Orchestrator {
   }
 
   /**
-   * Change a task's executor type (familiarType) and restart it.
+   * Change a task's executor type (executorType) and restart it.
    * Does NOT fork the dirty subtree.
    */
-  editTaskType(taskId: string, familiarType: string, remoteTargetId?: string): TaskState[] {
+  editTaskType(taskId: string, executorType: string, remoteTargetId?: string): TaskState[] {
     this.refreshFromDb();
     const task = this.stateGetTask(taskId);
     if (!task) throw new Error(`Task ${taskId} not found`);
     if (task.config.isMergeNode) throw new Error(`Cannot change executor type of merge node ${taskId}`);
     if (task.status === 'running' || task.status === 'fixing_with_ai') throw new Error(`Cannot edit running task ${taskId}`);
 
-    const effectiveType = normalizeFamiliarType(familiarType) ?? familiarType;
+    const effectiveType = normalizeExecutorType(executorType) ?? executorType;
 
     // SSH requires repoUrl on the workflow to clone onto the remote host
     if (effectiveType === 'ssh' && task.config.workflowId && this.persistence.loadWorkflow) {
@@ -1519,7 +1519,7 @@ export class Orchestrator {
       }
     }
 
-    const configPatch: Record<string, unknown> = { familiarType: effectiveType };
+    const configPatch: Record<string, unknown> = { executorType: effectiveType };
     if (effectiveType === 'ssh') {
       configPatch.remoteTargetId = remoteTargetId;
     } else {
@@ -1669,7 +1669,7 @@ export class Orchestrator {
         workflowId: wfId,
         command: rt.command,
         prompt: rt.prompt,
-        familiarType: rt.familiarType ?? task.config.familiarType,
+        executorType: rt.executorType ?? task.config.executorType,
         autoFix: rt.autoFix,
         executionAgent: rt.executionAgent ?? task.config.executionAgent,
       });
@@ -2342,7 +2342,7 @@ export class Orchestrator {
       experimentPrompt: v.prompt,
       prompt: v.prompt,
       command: v.command,
-      familiarType: parentTask?.config.familiarType,
+      executorType: parentTask?.config.executorType,
     }));
 
     const reconciliationId = `${taskId}-reconciliation`;
@@ -2436,7 +2436,7 @@ export class Orchestrator {
         });
 
         // Persist results only; reconciliation stays pending until the scheduler runs it.
-        // TaskExecutor then acquires a worktree and emits `needs_input` (open-terminal cwd).
+        // TaskRunner then acquires a worktree and emits `needs_input` (open-terminal cwd).
         const reconChanges: TaskStateChanges = {
           execution: { experimentResults },
         };

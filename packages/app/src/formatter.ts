@@ -230,7 +230,7 @@ export function serializeTask(task: TaskState): Record<string, unknown> {
   if (task.config.workflowId != null) config.workflowId = task.config.workflowId;
   if (task.config.command != null) config.command = task.config.command;
   if (task.config.prompt != null) config.prompt = task.config.prompt;
-  if (task.config.familiarType != null) config.familiarType = task.config.familiarType;
+  if (task.config.executorType != null) config.executorType = task.config.executorType;
   if (task.config.isMergeNode != null) config.isMergeNode = task.config.isMergeNode;
   if (task.config.executionAgent != null) config.executionAgent = task.config.executionAgent;
   if (task.config.featureBranch != null) config.featureBranch = task.config.featureBranch;

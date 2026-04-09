@@ -150,7 +150,7 @@ describe('CLI Permission Flags — Claude vs Cursor Equivalence', () => {
     });
 
     it('should validate buildClaudeArgs includes permission flag', () => {
-      // This validates the BaseFamiliar implementation at base-familiar.ts:298
+      // This validates the BaseExecutor implementation at base-executor.ts:298
       const expectedArgs = ['--session-id', 'test-session', '--dangerously-skip-permissions', '-p', 'test prompt'];
 
       // Simulate buildClaudeArgs logic
@@ -164,7 +164,7 @@ describe('CLI Permission Flags — Claude vs Cursor Equivalence', () => {
     });
 
     it('should include permission flag in resume operations', () => {
-      // This validates resume behavior from worktree-familiar.ts (resume flags)
+      // This validates resume behavior from worktree-executor.ts (resume flags)
       const expectedResumeArgs = ['--resume', 'session-id', '--dangerously-skip-permissions'];
 
       const sessionId = 'session-id';
@@ -371,7 +371,7 @@ describe('CLI Permission Flags — Claude vs Cursor Equivalence', () => {
 
   describe('Safety Flag Position and Syntax', () => {
     it('should validate --dangerously-skip-permissions comes after --session-id', () => {
-      // Per base-familiar.ts:298, flag order is:
+      // Per base-executor.ts:298, flag order is:
       // ['--session-id', sessionId, '--dangerously-skip-permissions', '-p', prompt]
       const args = ['--session-id', 'test', '--dangerously-skip-permissions', '-p', 'prompt'];
 
@@ -384,7 +384,7 @@ describe('CLI Permission Flags — Claude vs Cursor Equivalence', () => {
     });
 
     it('should validate --resume includes permission flag', () => {
-      // Per worktree-familiar resume handling
+      // Per worktree-executor resume handling
       const args = ['--resume', 'session-id', '--dangerously-skip-permissions'];
 
       expect(args[0]).toBe('--resume');
@@ -410,7 +410,7 @@ describe('CLI Permission Flags — Claude vs Cursor Equivalence', () => {
     });
 
     it('should validate docker exec includes permission flag', () => {
-      // Per packages/executors/src/docker-familiar.ts:296
+      // Per packages/executors/src/docker-executor.ts:296
       const dockerCommand = 'docker exec -it container-id claude --resume session-id --dangerously-skip-permissions';
 
       expect(dockerCommand).toContain('--dangerously-skip-permissions');
@@ -479,25 +479,25 @@ describe('CLI Permission Flags — Claude vs Cursor Equivalence', () => {
 
   describe('Integration with Invoker Executors', () => {
     it('should validate worktree resume includes permission flag', () => {
-      // WorktreeFamiliar uses --dangerously-skip-permissions in resume
+      // WorktreeExecutor uses --dangerously-skip-permissions in resume
       const resumeArgs = ['--resume', 'session-id', '--dangerously-skip-permissions'];
       expect(resumeArgs).toContain('--dangerously-skip-permissions');
     });
 
-    it('should validate WorktreeFamiliar includes permission flag', () => {
-      // WorktreeFamiliar.ts:496 uses --dangerously-skip-permissions in resume
+    it('should validate WorktreeExecutor includes permission flag', () => {
+      // WorktreeExecutor.ts:496 uses --dangerously-skip-permissions in resume
       const resumeArgs = ['--resume', 'session-id', '--dangerously-skip-permissions'];
       expect(resumeArgs).toContain('--dangerously-skip-permissions');
     });
 
-    it('should validate DockerFamiliar includes permission flag', () => {
-      // DockerFamiliar.ts:296 uses --dangerously-skip-permissions in docker exec
+    it('should validate DockerExecutor includes permission flag', () => {
+      // DockerExecutor.ts:296 uses --dangerously-skip-permissions in docker exec
       const dockerExecCommand = 'docker exec -it cid claude --resume session-id --dangerously-skip-permissions';
       expect(dockerExecCommand).toContain('--dangerously-skip-permissions');
     });
 
-    it('should validate BaseFamiliar.buildClaudeArgs signature', () => {
-      // BaseFamiliar.ts:297-299 defines the buildClaudeArgs method
+    it('should validate BaseExecutor.buildClaudeArgs signature', () => {
+      // BaseExecutor.ts:297-299 defines the buildClaudeArgs method
       const buildClaudeArgs = (sessionId: string, fullPrompt: string): string[] => {
         return ['--session-id', sessionId, '--dangerously-skip-permissions', '-p', fullPrompt];
       };

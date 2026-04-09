@@ -3,9 +3,9 @@ import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'no
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execSync } from 'node:child_process';
-import { BaseFamiliar, type BaseEntry, MergeConflictError, type SetupBranchOptions } from '../base-familiar.js';
+import { BaseExecutor, type BaseEntry, MergeConflictError, type SetupBranchOptions } from '../base-executor.js';
 import type { WorkRequest, WorkRequestInputs, WorkResponse } from '@invoker/contracts';
-import type { FamiliarHandle, TerminalSpec } from '../familiar.js';
+import type { ExecutorHandle, TerminalSpec } from '../executor.js';
 
 function makeRequest(actionId: string, inputs: Partial<WorkRequestInputs> = {}): WorkRequest {
   return {
@@ -19,15 +19,15 @@ function makeRequest(actionId: string, inputs: Partial<WorkRequestInputs> = {}):
 }
 
 // Concrete implementation for testing
-class TestFamiliar extends BaseFamiliar<BaseEntry> {
+class TestExecutor extends BaseExecutor<BaseEntry> {
   readonly type = 'test';
 
-  async start(_request: WorkRequest): Promise<FamiliarHandle> {
+  async start(_request: WorkRequest): Promise<ExecutorHandle> {
     throw new Error('Not implemented');
   }
-  async kill(_handle: FamiliarHandle): Promise<void> {}
-  sendInput(_handle: FamiliarHandle, _input: string): void {}
-  getTerminalSpec(_handle: FamiliarHandle): TerminalSpec | null { return null; }
+  async kill(_handle: ExecutorHandle): Promise<void> {}
+  sendInput(_handle: ExecutorHandle, _input: string): void {}
+  getTerminalSpec(_handle: ExecutorHandle): TerminalSpec | null { return null; }
   getRestoredTerminalSpec(): TerminalSpec { throw new Error('Not implemented'); }
   async destroyAll(): Promise<void> { this.entries.clear(); }
 
@@ -39,7 +39,7 @@ class TestFamiliar extends BaseFamiliar<BaseEntry> {
     return this.ensureFeatureBranch(cwd, branchName);
   }
 
-  async testSetupTaskBranch(cwd: string, request: WorkRequest, handle: FamiliarHandle, opts?: SetupBranchOptions): Promise<string | undefined> {
+  async testSetupTaskBranch(cwd: string, request: WorkRequest, handle: ExecutorHandle, opts?: SetupBranchOptions): Promise<string | undefined> {
     return this.setupTaskBranch(cwd, request, handle, opts);
   }
 
@@ -103,12 +103,12 @@ function createTempRepo(): string {
   return dir;
 }
 
-describe('BaseFamiliar.autoCommit', () => {
-  let familiar: TestFamiliar;
+describe('BaseExecutor.autoCommit', () => {
+  let executor: TestExecutor;
   let tmpDir: string;
 
   beforeEach(() => {
-    familiar = new TestFamiliar();
+    executor = new TestExecutor();
     tmpDir = createTempRepo();
   });
 
@@ -118,7 +118,7 @@ describe('BaseFamiliar.autoCommit', () => {
 
   it('commits changes and returns hash', async () => {
     writeFileSync(join(tmpDir, 'new-file.txt'), 'new content');
-    const hash = await familiar.testAutoCommit(tmpDir, makeRequest('test-action'));
+    const hash = await executor.testAutoCommit(tmpDir, makeRequest('test-action'));
 
     expect(hash).toBeDefined();
     expect(hash).not.toBeNull();
@@ -129,24 +129,24 @@ describe('BaseFamiliar.autoCommit', () => {
   });
 
   it('returns null when no changes', async () => {
-    const hash = await familiar.testAutoCommit(tmpDir, makeRequest('test-action'));
+    const hash = await executor.testAutoCommit(tmpDir, makeRequest('test-action'));
     expect(hash).toBeNull();
   });
 
   it('returns null for non-git directories', async () => {
     const nonGitDir = mkdtempSync(join(tmpdir(), 'non-git-'));
-    const hash = await familiar.testAutoCommit(nonGitDir, makeRequest('test-action'));
+    const hash = await executor.testAutoCommit(nonGitDir, makeRequest('test-action'));
     expect(hash).toBeNull();
     rmSync(nonGitDir, { recursive: true, force: true });
   });
 });
 
-describe('BaseFamiliar.ensureFeatureBranch', () => {
-  let familiar: TestFamiliar;
+describe('BaseExecutor.ensureFeatureBranch', () => {
+  let executor: TestExecutor;
   let tmpDir: string;
 
   beforeEach(() => {
-    familiar = new TestFamiliar();
+    executor = new TestExecutor();
     tmpDir = createTempRepo();
   });
 
@@ -155,18 +155,18 @@ describe('BaseFamiliar.ensureFeatureBranch', () => {
   });
 
   it('creates a feature branch from current HEAD', async () => {
-    await familiar.testEnsureFeatureBranch(tmpDir, 'task/step-1');
+    await executor.testEnsureFeatureBranch(tmpDir, 'task/step-1');
 
     const branch = execSync('git branch --show-current', { cwd: tmpDir }).toString().trim();
     expect(branch).toBe('task/step-1');
   });
 
   it('checks out existing branch without error', async () => {
-    await familiar.testEnsureFeatureBranch(tmpDir, 'task/step-1');
+    await executor.testEnsureFeatureBranch(tmpDir, 'task/step-1');
     // Switch away
     execSync('git checkout -b other', { cwd: tmpDir });
     // Switch back to existing branch
-    await familiar.testEnsureFeatureBranch(tmpDir, 'task/step-1');
+    await executor.testEnsureFeatureBranch(tmpDir, 'task/step-1');
 
     const branch = execSync('git branch --show-current', { cwd: tmpDir }).toString().trim();
     expect(branch).toBe('task/step-1');
@@ -174,14 +174,14 @@ describe('BaseFamiliar.ensureFeatureBranch', () => {
 
   it('creates chained branches: step2 branches off step1', async () => {
     // Create step1 branch and commit
-    await familiar.testEnsureFeatureBranch(tmpDir, 'task/step-1');
+    await executor.testEnsureFeatureBranch(tmpDir, 'task/step-1');
     writeFileSync(join(tmpDir, 'step1.txt'), 'step1');
-    await familiar.testAutoCommit(tmpDir, makeRequest('step-1'));
+    await executor.testAutoCommit(tmpDir, makeRequest('step-1'));
 
     // Create step2 branch (from current HEAD = task/step-1)
-    await familiar.testEnsureFeatureBranch(tmpDir, 'task/step-2');
+    await executor.testEnsureFeatureBranch(tmpDir, 'task/step-2');
     writeFileSync(join(tmpDir, 'step2.txt'), 'step2');
-    await familiar.testAutoCommit(tmpDir, makeRequest('step-2'));
+    await executor.testAutoCommit(tmpDir, makeRequest('step-2'));
 
     const branch = execSync('git branch --show-current', { cwd: tmpDir }).toString().trim();
     expect(branch).toBe('task/step-2');
@@ -194,9 +194,9 @@ describe('BaseFamiliar.ensureFeatureBranch', () => {
 
   it('three-task chain has correct branch parentage', async () => {
     for (const step of ['step-1', 'step-2', 'step-3']) {
-      await familiar.testEnsureFeatureBranch(tmpDir, `task/${step}`);
+      await executor.testEnsureFeatureBranch(tmpDir, `task/${step}`);
       writeFileSync(join(tmpDir, `${step}.txt`), step);
-      await familiar.testAutoCommit(tmpDir, makeRequest(step));
+      await executor.testAutoCommit(tmpDir, makeRequest(step));
     }
 
     const step1 = execSync('git rev-parse task/step-1', { cwd: tmpDir }).toString().trim();
@@ -218,7 +218,7 @@ describe('BaseFamiliar.ensureFeatureBranch', () => {
   it('silently skips non-git directories', async () => {
     const nonGitDir = mkdtempSync(join(tmpdir(), 'non-git-'));
     // Should not throw
-    await familiar.testEnsureFeatureBranch(nonGitDir, 'task/test');
+    await executor.testEnsureFeatureBranch(nonGitDir, 'task/test');
     rmSync(nonGitDir, { recursive: true, force: true });
   });
 });
@@ -245,11 +245,11 @@ function getCommitSubject(cwd: string, ref = 'HEAD'): string {
 // ── A. autoCommit with meta ─────────────────────────────────
 
 describe('autoCommit with meta', () => {
-  let familiar: TestFamiliar;
+  let executor: TestExecutor;
   let tmpDir: string;
 
   beforeEach(() => {
-    familiar = new TestFamiliar();
+    executor = new TestExecutor();
     tmpDir = createTempRepo();
   });
 
@@ -259,7 +259,7 @@ describe('autoCommit with meta', () => {
 
   it('includes description in commit headline', async () => {
     writeFileSync(join(tmpDir, 'file.txt'), 'content');
-    await familiar.testAutoCommit(tmpDir, makeRequest('task-1', {
+    await executor.testAutoCommit(tmpDir, makeRequest('task-1', {
       description: 'Implement auth middleware',
     }));
 
@@ -269,7 +269,7 @@ describe('autoCommit with meta', () => {
 
   it('includes Context section with upstream DAG deps and hashes', async () => {
     writeFileSync(join(tmpDir, 'file.txt'), 'content');
-    await familiar.testAutoCommit(tmpDir, makeRequest('task-2', {
+    await executor.testAutoCommit(tmpDir, makeRequest('task-2', {
       upstreamContext: [
         { taskId: 'task-1', description: 'Setup database', commitHash: 'abc1234567890' },
       ],
@@ -282,7 +282,7 @@ describe('autoCommit with meta', () => {
 
   it('includes Context section without hash when commitHash missing', async () => {
     writeFileSync(join(tmpDir, 'file.txt'), 'content');
-    await familiar.testAutoCommit(tmpDir, makeRequest('task-2', {
+    await executor.testAutoCommit(tmpDir, makeRequest('task-2', {
       upstreamContext: [
         { taskId: 'task-1', description: 'Setup database' },
       ],
@@ -295,7 +295,7 @@ describe('autoCommit with meta', () => {
 
   it('includes Alternatives Considered section with experiment data', async () => {
     writeFileSync(join(tmpDir, 'file.txt'), 'content');
-    await familiar.testAutoCommit(tmpDir, makeRequest('task-3', {
+    await executor.testAutoCommit(tmpDir, makeRequest('task-3', {
       description: 'Implement auth',
       prompt: 'Add auth middleware',
       alternatives: [
@@ -334,7 +334,7 @@ describe('autoCommit with meta', () => {
 
   it('includes Solution section from description', async () => {
     writeFileSync(join(tmpDir, 'file.txt'), 'content');
-    await familiar.testAutoCommit(tmpDir, makeRequest('task-1', {
+    await executor.testAutoCommit(tmpDir, makeRequest('task-1', {
       description: 'Implement auth middleware',
       prompt: 'Add auth',
     }));
@@ -346,7 +346,7 @@ describe('autoCommit with meta', () => {
 
   it('omits sections when data is empty', async () => {
     writeFileSync(join(tmpDir, 'file.txt'), 'content');
-    await familiar.testAutoCommit(tmpDir, makeRequest('task-1'));
+    await executor.testAutoCommit(tmpDir, makeRequest('task-1'));
 
     const body = getCommitBody(tmpDir);
     expect(body).toBe('invoker: task-1');
@@ -357,7 +357,7 @@ describe('autoCommit with meta', () => {
 
   it('all three sections appear in correct order', async () => {
     writeFileSync(join(tmpDir, 'file.txt'), 'content');
-    await familiar.testAutoCommit(tmpDir, makeRequest('task-5', {
+    await executor.testAutoCommit(tmpDir, makeRequest('task-5', {
       description: 'Add login page',
       prompt: 'Create login page',
       upstreamContext: [
@@ -383,11 +383,11 @@ describe('autoCommit with meta', () => {
 // ── B. Commit context propagation ───────────────────────────
 
 describe('commit context propagation', () => {
-  let familiar: TestFamiliar;
+  let executor: TestExecutor;
   let tmpDir: string;
 
   beforeEach(() => {
-    familiar = new TestFamiliar();
+    executor = new TestExecutor();
     tmpDir = createTempRepo();
   });
 
@@ -398,14 +398,14 @@ describe('commit context propagation', () => {
   it('downstream task reads upstream commit message in context', async () => {
     // Task A commits
     writeFileSync(join(tmpDir, 'a.txt'), 'task-a work');
-    await familiar.testAutoCommit(tmpDir, makeRequest('task-a', {
+    await executor.testAutoCommit(tmpDir, makeRequest('task-a', {
       description: 'Implement auth',
     }));
     const commitA = getCommitBody(tmpDir);
 
     // Task B uses A's commit message as upstream context
     writeFileSync(join(tmpDir, 'b.txt'), 'task-b work');
-    await familiar.testAutoCommit(tmpDir, makeRequest('task-b', {
+    await executor.testAutoCommit(tmpDir, makeRequest('task-b', {
       description: 'Add login page',
       upstreamContext: [
         { taskId: 'task-a', description: 'Implement auth', commitMessage: commitA },
@@ -420,7 +420,7 @@ describe('commit context propagation', () => {
   it('fan-out: two downstream tasks both read same upstream commit', async () => {
     // Task A commits
     writeFileSync(join(tmpDir, 'a.txt'), 'task-a work');
-    await familiar.testAutoCommit(tmpDir, makeRequest('task-a', {
+    await executor.testAutoCommit(tmpDir, makeRequest('task-a', {
       description: 'Shared setup',
     }));
     const hashA = execSync('git rev-parse HEAD', { cwd: tmpDir }).toString().trim();
@@ -429,7 +429,7 @@ describe('commit context propagation', () => {
     // Task B branches from A
     execSync('git checkout -b task-b', { cwd: tmpDir });
     writeFileSync(join(tmpDir, 'b.txt'), 'task-b work');
-    await familiar.testAutoCommit(tmpDir, makeRequest('task-b', {
+    await executor.testAutoCommit(tmpDir, makeRequest('task-b', {
       description: 'Feature B',
       upstreamContext: [
         { taskId: 'task-a', description: 'Shared setup', commitMessage: commitA },
@@ -440,7 +440,7 @@ describe('commit context propagation', () => {
     execSync(`git checkout ${hashA}`, { cwd: tmpDir });
     execSync('git checkout -b task-c', { cwd: tmpDir });
     writeFileSync(join(tmpDir, 'c.txt'), 'task-c work');
-    await familiar.testAutoCommit(tmpDir, makeRequest('task-c', {
+    await executor.testAutoCommit(tmpDir, makeRequest('task-c', {
       description: 'Feature C',
       upstreamContext: [
         { taskId: 'task-a', description: 'Shared setup', commitMessage: commitA },
@@ -461,13 +461,13 @@ describe('commit context propagation', () => {
   it('chain: A → B → C, C sees both A and B in upstream context', async () => {
     // Task A
     writeFileSync(join(tmpDir, 'a.txt'), 'a');
-    await familiar.testAutoCommit(tmpDir, makeRequest('task-a', { description: 'Step A' }));
+    await executor.testAutoCommit(tmpDir, makeRequest('task-a', { description: 'Step A' }));
     const hashA = execSync('git rev-parse HEAD', { cwd: tmpDir }).toString().trim();
     const commitA = getCommitBody(tmpDir);
 
     // Task B
     writeFileSync(join(tmpDir, 'b.txt'), 'b');
-    await familiar.testAutoCommit(tmpDir, makeRequest('task-b', {
+    await executor.testAutoCommit(tmpDir, makeRequest('task-b', {
       description: 'Step B',
       upstreamContext: [
         { taskId: 'task-a', description: 'Step A', commitMessage: commitA },
@@ -478,7 +478,7 @@ describe('commit context propagation', () => {
 
     // Task C with both A and B in upstream context
     writeFileSync(join(tmpDir, 'c.txt'), 'c');
-    await familiar.testAutoCommit(tmpDir, makeRequest('task-c', {
+    await executor.testAutoCommit(tmpDir, makeRequest('task-c', {
       description: 'Step C',
       upstreamContext: [
         { taskId: 'task-a', description: 'Step A', commitMessage: commitA },
@@ -499,11 +499,11 @@ describe('commit context propagation', () => {
 // ── C. Diamond dependency merge ─────────────────────────────
 
 describe('diamond dependency merge', () => {
-  let familiar: TestFamiliar;
+  let executor: TestExecutor;
   let tmpDir: string;
 
   beforeEach(() => {
-    familiar = new TestFamiliar();
+    executor = new TestExecutor();
     tmpDir = createTempRepo();
   });
 
@@ -518,14 +518,14 @@ describe('diamond dependency merge', () => {
     // B: branch from A with unique file
     execSync('git checkout -b task-b', { cwd: tmpDir });
     writeFileSync(join(tmpDir, 'b.txt'), 'b-work');
-    await familiar.testAutoCommit(tmpDir, makeRequest('task-b', { description: 'Feature B' }));
+    await executor.testAutoCommit(tmpDir, makeRequest('task-b', { description: 'Feature B' }));
     const hashB = execSync('git rev-parse HEAD', { cwd: tmpDir }).toString().trim();
 
     // C: branch from A with unique file
     execSync(`git checkout ${hashA}`, { cwd: tmpDir });
     execSync('git checkout -b task-c', { cwd: tmpDir });
     writeFileSync(join(tmpDir, 'c.txt'), 'c-work');
-    await familiar.testAutoCommit(tmpDir, makeRequest('task-c', { description: 'Feature C' }));
+    await executor.testAutoCommit(tmpDir, makeRequest('task-c', { description: 'Feature C' }));
     const hashC = execSync('git rev-parse HEAD', { cwd: tmpDir }).toString().trim();
 
     // D: merge B then C (simulating worktree merge strategy)
@@ -534,7 +534,7 @@ describe('diamond dependency merge', () => {
     execSync(`git merge -m "Merge upstream task-b" task-b`, { cwd: tmpDir });
     execSync(`git merge -m "Merge upstream task-c" task-c`, { cwd: tmpDir });
     writeFileSync(join(tmpDir, 'd.txt'), 'd-work');
-    await familiar.testAutoCommit(tmpDir, makeRequest('task-d', {
+    await executor.testAutoCommit(tmpDir, makeRequest('task-d', {
       description: 'Combine B and C',
       upstreamContext: [
         { taskId: 'task-b', description: 'Feature B', commitMessage: getCommitBody(tmpDir, hashB) },
@@ -627,13 +627,13 @@ describe('diamond dependency merge', () => {
 
     execSync('git checkout -b task-b', { cwd: tmpDir });
     writeFileSync(join(tmpDir, 'b.txt'), 'b');
-    await familiar.testAutoCommit(tmpDir, makeRequest('task-b', { description: 'Implement B' }));
+    await executor.testAutoCommit(tmpDir, makeRequest('task-b', { description: 'Implement B' }));
     const hashB = execSync('git rev-parse HEAD', { cwd: tmpDir }).toString().trim();
 
     execSync(`git checkout ${hashA}`, { cwd: tmpDir });
     execSync('git checkout -b task-c', { cwd: tmpDir });
     writeFileSync(join(tmpDir, 'c.txt'), 'c');
-    await familiar.testAutoCommit(tmpDir, makeRequest('task-c', { description: 'Implement C' }));
+    await executor.testAutoCommit(tmpDir, makeRequest('task-c', { description: 'Implement C' }));
     const hashC = execSync('git rev-parse HEAD', { cwd: tmpDir }).toString().trim();
 
     execSync(`git checkout ${hashA}`, { cwd: tmpDir });
@@ -641,7 +641,7 @@ describe('diamond dependency merge', () => {
     execSync(`git merge -m "Merge upstream task-b" task-b`, { cwd: tmpDir });
     execSync(`git merge -m "Merge upstream task-c" task-c`, { cwd: tmpDir });
     writeFileSync(join(tmpDir, 'd.txt'), 'd');
-    await familiar.testAutoCommit(tmpDir, makeRequest('task-d', {
+    await executor.testAutoCommit(tmpDir, makeRequest('task-d', {
       description: 'Combine results',
       upstreamContext: [
         { taskId: 'task-b', description: 'Implement B', commitMessage: getCommitBody(tmpDir, hashB) },
@@ -843,8 +843,8 @@ describe('diamond dependency merge', () => {
 
 // ── Merge gate commit topology ─────────────────────────────────
 
-import { TaskExecutor, FamiliarRegistry } from '../index.js';
-import { WorktreeFamiliar } from '../worktree-familiar.js';
+import { TaskRunner, ExecutorRegistry } from '../index.js';
+import { WorktreeExecutor } from '../worktree-executor.js';
 import { Orchestrator, type TaskState, type TaskStateChanges, type PlanDefinition, type OrchestratorPersistence, type OrchestratorMessageBus } from '@invoker/workflow-core';
 
 class TestPersistence implements OrchestratorPersistence {
@@ -931,7 +931,7 @@ describe('merge gate commit topology (real git)', () => {
   function createExecutor(
     tasks: TaskState[],
     workflow: Record<string, unknown>,
-  ): TaskExecutor {
+  ): TaskRunner {
     const orchestrator = {
       getTask: (id: string) => tasks.find(t => t.id === id),
       getAllTasks: () => tasks,
@@ -943,11 +943,11 @@ describe('merge gate commit topology (real git)', () => {
       updateTask: () => {},
       getWorkspacePath: () => null,
     };
-    const registry = new FamiliarRegistry();
-    return new TaskExecutor({
+    const registry = new ExecutorRegistry();
+    return new TaskRunner({
       orchestrator: orchestrator as any,
       persistence: persistence as any,
-      familiarRegistry: registry,
+      executorRegistry: registry,
       cwd: tmpDir,
     });
   }
@@ -1271,17 +1271,17 @@ describe('merge gate commit topology (real git)', () => {
     execSync('git push origin experiment/task-a', { cwd: tmpDir });
     execSync('git push origin experiment/task-b', { cwd: tmpDir });
 
-    // Set up real Orchestrator + TaskExecutor with hook wired
+    // Set up real Orchestrator + TaskRunner with hook wired
     const persistence = new TestPersistence();
     const bus = new TestBus();
     const orchestrator = new Orchestrator({ persistence, messageBus: bus, maxConcurrency: 10 });
-    const registry = new FamiliarRegistry();
-    const wtFamiliar = new WorktreeFamiliar({ cacheDir: join(tmpDir, 'cache') });
+    const registry = new ExecutorRegistry();
+    const wtFamiliar = new WorktreeExecutor({ cacheDir: join(tmpDir, 'cache') });
     registry.register('worktree', wtFamiliar);
-    const executor = new TaskExecutor({
+    const executor = new TaskRunner({
       orchestrator,
       persistence: persistence as any,
-      familiarRegistry: registry,
+      executorRegistry: registry,
       cwd: tmpDir,
       defaultBranch: 'master',
     });
@@ -1418,7 +1418,7 @@ describe('mergeExperimentBranches (real git)', () => {
     } as TaskState;
   }
 
-  function createMergeExecutor(tasks: TaskState[]): TaskExecutor {
+  function createMergeExecutor(tasks: TaskState[]): TaskRunner {
     const orchestrator = {
       getTask: (id: string) => tasks.find(t => t.id === id),
       getAllTasks: () => tasks,
@@ -1427,11 +1427,11 @@ describe('mergeExperimentBranches (real git)', () => {
       loadWorkflow: () => null,
       updateTask: () => {},
     };
-    const registry = new FamiliarRegistry();
-    return new TaskExecutor({
+    const registry = new ExecutorRegistry();
+    return new TaskRunner({
       orchestrator: orchestrator as any,
       persistence: persistence as any,
-      familiarRegistry: registry,
+      executorRegistry: registry,
       cwd: tmpDir,
       defaultBranch: 'master',
     });
@@ -1529,12 +1529,12 @@ describe('mergeExperimentBranches (real git)', () => {
 
 // ── setupTaskBranch ─────────────────────────────────────────
 
-describe('BaseFamiliar.setupTaskBranch', () => {
-  let familiar: TestFamiliar;
+describe('BaseExecutor.setupTaskBranch', () => {
+  let executor: TestExecutor;
   let tmpDir: string;
 
   beforeEach(() => {
-    familiar = new TestFamiliar();
+    executor = new TestExecutor();
     tmpDir = createTempRepo();
   });
 
@@ -1543,9 +1543,9 @@ describe('BaseFamiliar.setupTaskBranch', () => {
   });
 
   it('creates branch from baseBranch when no upstreams', async () => {
-    const handle: FamiliarHandle = { executionId: 'e1', taskId: 'task-a' };
+    const handle: ExecutorHandle = { executionId: 'e1', taskId: 'task-a' };
     const request = makeRequest('task-a', { baseBranch: 'master' });
-    const original = await familiar.testSetupTaskBranch(tmpDir, request, handle);
+    const original = await executor.testSetupTaskBranch(tmpDir, request, handle);
 
     expect(original).toBe('master');
     expect(handle.branch).toBe('invoker/task-a');
@@ -1562,12 +1562,12 @@ describe('BaseFamiliar.setupTaskBranch', () => {
     const hashA = execSync('git rev-parse HEAD', { cwd: tmpDir }).toString().trim();
     execSync('git checkout master', { cwd: tmpDir });
 
-    const handle: FamiliarHandle = { executionId: 'e2', taskId: 'task-b' };
+    const handle: ExecutorHandle = { executionId: 'e2', taskId: 'task-b' };
     const request = makeRequest('task-b', {
       baseBranch: 'master',
       upstreamBranches: ['invoker/task-a'],
     });
-    const original = await familiar.testSetupTaskBranch(tmpDir, request, handle);
+    const original = await executor.testSetupTaskBranch(tmpDir, request, handle);
 
     expect(original).toBe('master');
     expect(handle.branch).toBe('invoker/task-b');
@@ -1594,12 +1594,12 @@ describe('BaseFamiliar.setupTaskBranch', () => {
 
     execSync('git checkout master', { cwd: tmpDir });
 
-    const handle: FamiliarHandle = { executionId: 'e3', taskId: 'task-c' };
+    const handle: ExecutorHandle = { executionId: 'e3', taskId: 'task-c' };
     const request = makeRequest('task-c', {
       baseBranch: 'master',
       upstreamBranches: ['invoker/task-a', 'invoker/task-b'],
     });
-    await familiar.testSetupTaskBranch(tmpDir, request, handle);
+    await executor.testSetupTaskBranch(tmpDir, request, handle);
 
     expect(handle.branch).toBe('invoker/task-c');
     expect(isAncestor(tmpDir, hashA, 'HEAD')).toBe(true);
@@ -1610,9 +1610,9 @@ describe('BaseFamiliar.setupTaskBranch', () => {
 
   it('returns undefined for non-git directories', async () => {
     const nonGitDir = mkdtempSync(join(tmpdir(), 'non-git-'));
-    const handle: FamiliarHandle = { executionId: 'e4', taskId: 'task-x' };
+    const handle: ExecutorHandle = { executionId: 'e4', taskId: 'task-x' };
     const request = makeRequest('task-x');
-    const original = await familiar.testSetupTaskBranch(nonGitDir, request, handle);
+    const original = await executor.testSetupTaskBranch(nonGitDir, request, handle);
 
     expect(original).toBeUndefined();
     expect(handle.branch).toBeUndefined();
@@ -1621,27 +1621,27 @@ describe('BaseFamiliar.setupTaskBranch', () => {
 
   it('A->B->C chain: each branch carries transitive history', async () => {
     // A: branch from master, commit
-    const handleA: FamiliarHandle = { executionId: 'e-a', taskId: 'task-a' };
-    await familiar.testSetupTaskBranch(tmpDir, makeRequest('task-a', { baseBranch: 'master' }), handleA);
+    const handleA: ExecutorHandle = { executionId: 'e-a', taskId: 'task-a' };
+    await executor.testSetupTaskBranch(tmpDir, makeRequest('task-a', { baseBranch: 'master' }), handleA);
     writeFileSync(join(tmpDir, 'a.txt'), 'a');
     execSync('git add -A && git commit -m "task-a"', { cwd: tmpDir });
     const hashA = execSync('git rev-parse HEAD', { cwd: tmpDir }).toString().trim();
-    await familiar.testRestoreBranch(tmpDir, 'master');
+    await executor.testRestoreBranch(tmpDir, 'master');
 
     // B: branch from A
-    const handleB: FamiliarHandle = { executionId: 'e-b', taskId: 'task-b' };
-    await familiar.testSetupTaskBranch(tmpDir, makeRequest('task-b', {
+    const handleB: ExecutorHandle = { executionId: 'e-b', taskId: 'task-b' };
+    await executor.testSetupTaskBranch(tmpDir, makeRequest('task-b', {
       baseBranch: 'master',
       upstreamBranches: ['invoker/task-a'],
     }), handleB);
     writeFileSync(join(tmpDir, 'b.txt'), 'b');
     execSync('git add -A && git commit -m "task-b"', { cwd: tmpDir });
     const hashB = execSync('git rev-parse HEAD', { cwd: tmpDir }).toString().trim();
-    await familiar.testRestoreBranch(tmpDir, 'master');
+    await executor.testRestoreBranch(tmpDir, 'master');
 
     // C: branch from B
-    const handleC: FamiliarHandle = { executionId: 'e-c', taskId: 'task-c' };
-    await familiar.testSetupTaskBranch(tmpDir, makeRequest('task-c', {
+    const handleC: ExecutorHandle = { executionId: 'e-c', taskId: 'task-c' };
+    await executor.testSetupTaskBranch(tmpDir, makeRequest('task-c', {
       baseBranch: 'master',
       upstreamBranches: ['invoker/task-b'],
     }), handleC);
@@ -1668,13 +1668,13 @@ describe('BaseFamiliar.setupTaskBranch', () => {
 
       execSync('git checkout master', { cwd: tmpDir });
 
-      const handle: FamiliarHandle = { executionId: 'e-conflict', taskId: 'task-conflict' };
+      const handle: ExecutorHandle = { executionId: 'e-conflict', taskId: 'task-conflict' };
       const request = makeRequest('task-conflict', {
         baseBranch: 'master',
         upstreamBranches: ['invoker/branch-a', 'invoker/branch-b'],
       });
 
-      await expect(familiar.testSetupTaskBranch(tmpDir, request, handle))
+      await expect(executor.testSetupTaskBranch(tmpDir, request, handle))
         .rejects.toThrow('Merge conflict merging');
     });
 
@@ -1692,13 +1692,13 @@ describe('BaseFamiliar.setupTaskBranch', () => {
 
       execSync('git checkout master', { cwd: tmpDir });
 
-      const handle: FamiliarHandle = { executionId: 'e-conflict2', taskId: 'task-conflict2' };
+      const handle: ExecutorHandle = { executionId: 'e-conflict2', taskId: 'task-conflict2' };
       const request = makeRequest('task-conflict2', {
         baseBranch: 'master',
         upstreamBranches: ['invoker/branch-c', 'invoker/branch-d'],
       });
 
-      await expect(familiar.testSetupTaskBranch(tmpDir, request, handle))
+      await expect(executor.testSetupTaskBranch(tmpDir, request, handle))
         .rejects.toThrow('Merge conflict merging');
 
       const status = execSync('git status --porcelain', { cwd: tmpDir }).toString().trim();
@@ -1719,13 +1719,13 @@ describe('BaseFamiliar.setupTaskBranch', () => {
 
       execSync('git checkout master', { cwd: tmpDir });
 
-      const handle: FamiliarHandle = { executionId: 'e-recover', taskId: 'task-recover' };
+      const handle: ExecutorHandle = { executionId: 'e-recover', taskId: 'task-recover' };
       const request = makeRequest('task-recover', {
         baseBranch: 'master',
         upstreamBranches: ['invoker/branch-b1', 'invoker/branch-c1'],
       });
 
-      await expect(familiar.testSetupTaskBranch(tmpDir, request, handle))
+      await expect(executor.testSetupTaskBranch(tmpDir, request, handle))
         .rejects.toThrow('Merge conflict merging');
 
       execSync('git checkout invoker/branch-c1', { cwd: tmpDir });
@@ -1737,8 +1737,8 @@ describe('BaseFamiliar.setupTaskBranch', () => {
 
       execSync('git branch -D invoker/task-recover', { cwd: tmpDir });
 
-      const handle2: FamiliarHandle = { executionId: 'e-recover2', taskId: 'task-recover' };
-      const original = await familiar.testSetupTaskBranch(tmpDir, request, handle2);
+      const handle2: ExecutorHandle = { executionId: 'e-recover2', taskId: 'task-recover' };
+      const original = await executor.testSetupTaskBranch(tmpDir, request, handle2);
 
       expect(original).toBe('master');
       expect(handle2.branch).toBe('invoker/task-recover');
@@ -1762,13 +1762,13 @@ describe('BaseFamiliar.setupTaskBranch', () => {
 
       execSync('git checkout master', { cwd: tmpDir });
 
-      const handle: FamiliarHandle = { executionId: 'e-detail', taskId: 'task-detail' };
+      const handle: ExecutorHandle = { executionId: 'e-detail', taskId: 'task-detail' };
       const request = makeRequest('task-detail', {
         baseBranch: 'master',
         upstreamBranches: ['invoker/branch-x', 'invoker/branch-y'],
       });
 
-      await expect(familiar.testSetupTaskBranch(tmpDir, request, handle))
+      await expect(executor.testSetupTaskBranch(tmpDir, request, handle))
         .rejects.toThrow(/invoker\/branch-y/);
     });
   });
@@ -1776,12 +1776,12 @@ describe('BaseFamiliar.setupTaskBranch', () => {
 
 // ── recordTaskResult ────────────────────────────────────────
 
-describe('BaseFamiliar.recordTaskResult', () => {
-  let familiar: TestFamiliar;
+describe('BaseExecutor.recordTaskResult', () => {
+  let executor: TestExecutor;
   let tmpDir: string;
 
   beforeEach(() => {
-    familiar = new TestFamiliar();
+    executor = new TestExecutor();
     tmpDir = createTempRepo();
   });
 
@@ -1791,7 +1791,7 @@ describe('BaseFamiliar.recordTaskResult', () => {
 
   it('commits file changes via autoCommit', async () => {
     writeFileSync(join(tmpDir, 'new.txt'), 'content');
-    const hash = await familiar.testRecordTaskResult(tmpDir, makeRequest('task-1', {
+    const hash = await executor.testRecordTaskResult(tmpDir, makeRequest('task-1', {
       description: 'Add new file',
     }), 0);
 
@@ -1802,7 +1802,7 @@ describe('BaseFamiliar.recordTaskResult', () => {
   });
 
   it('creates empty commit when no file changes (command task)', async () => {
-    const hash = await familiar.testRecordTaskResult(tmpDir, makeRequest('task-1', {
+    const hash = await executor.testRecordTaskResult(tmpDir, makeRequest('task-1', {
       command: 'pnpm build && pnpm test',
       description: 'Build and test',
     }), 0);
@@ -1815,7 +1815,7 @@ describe('BaseFamiliar.recordTaskResult', () => {
   });
 
   it('records non-zero exit code in empty commit', async () => {
-    const hash = await familiar.testRecordTaskResult(tmpDir, makeRequest('task-1', {
+    const hash = await executor.testRecordTaskResult(tmpDir, makeRequest('task-1', {
       command: 'false',
     }), 1);
 
@@ -1826,14 +1826,14 @@ describe('BaseFamiliar.recordTaskResult', () => {
 
   it('returns null for non-git directories', async () => {
     const nonGitDir = mkdtempSync(join(tmpdir(), 'non-git-'));
-    const hash = await familiar.testRecordTaskResult(nonGitDir, makeRequest('task-1'), 0);
+    const hash = await executor.testRecordTaskResult(nonGitDir, makeRequest('task-1'), 0);
     expect(hash).toBeNull();
     rmSync(nonGitDir, { recursive: true, force: true });
   });
 
   it('prefers autoCommit over empty commit when changes exist', async () => {
     writeFileSync(join(tmpDir, 'file.txt'), 'data');
-    await familiar.testRecordTaskResult(tmpDir, makeRequest('task-1', {
+    await executor.testRecordTaskResult(tmpDir, makeRequest('task-1', {
       description: 'Changed files',
       command: 'do stuff',
     }), 0);
@@ -1847,12 +1847,12 @@ describe('BaseFamiliar.recordTaskResult', () => {
 
 // ── restoreBranch ───────────────────────────────────────────
 
-describe('BaseFamiliar.restoreBranch', () => {
-  let familiar: TestFamiliar;
+describe('BaseExecutor.restoreBranch', () => {
+  let executor: TestExecutor;
   let tmpDir: string;
 
   beforeEach(() => {
-    familiar = new TestFamiliar();
+    executor = new TestExecutor();
     tmpDir = createTempRepo();
   });
 
@@ -1862,14 +1862,14 @@ describe('BaseFamiliar.restoreBranch', () => {
 
   it('restores original branch', async () => {
     execSync('git checkout -b some-branch', { cwd: tmpDir });
-    await familiar.testRestoreBranch(tmpDir, 'master');
+    await executor.testRestoreBranch(tmpDir, 'master');
     const branch = execSync('git branch --show-current', { cwd: tmpDir }).toString().trim();
     expect(branch).toBe('master');
   });
 
   it('no-op when originalBranch is undefined', async () => {
     const before = execSync('git branch --show-current', { cwd: tmpDir }).toString().trim();
-    await familiar.testRestoreBranch(tmpDir, undefined);
+    await executor.testRestoreBranch(tmpDir, undefined);
     const after = execSync('git branch --show-current', { cwd: tmpDir }).toString().trim();
     expect(after).toBe(before);
   });
@@ -1878,11 +1878,11 @@ describe('BaseFamiliar.restoreBranch', () => {
 // ── Branch lifecycle integration ────────────────────────
 
 describe('Branch lifecycle: ensureFeatureBranch -> setupTaskBranch -> restoreBranch', () => {
-  let familiar: TestFamiliar;
+  let executor: TestExecutor;
   let tmpDir: string;
 
   beforeEach(() => {
-    familiar = new TestFamiliar();
+    executor = new TestExecutor();
     tmpDir = createTempRepo();
   });
 
@@ -1894,19 +1894,19 @@ describe('Branch lifecycle: ensureFeatureBranch -> setupTaskBranch -> restoreBra
     const startBranch = execSync('git branch --show-current', { cwd: tmpDir }).toString().trim();
     expect(startBranch).toBe('master');
 
-    await familiar.testEnsureFeatureBranch(tmpDir, 'plan/my-feature');
+    await executor.testEnsureFeatureBranch(tmpDir, 'plan/my-feature');
     const afterEnsure = execSync('git branch --show-current', { cwd: tmpDir }).toString().trim();
     expect(afterEnsure).toBe('plan/my-feature');
 
-    const handle = { executionId: 'test-exec', taskId: 'test-task' } as FamiliarHandle;
+    const handle = { executionId: 'test-exec', taskId: 'test-task' } as ExecutorHandle;
     const req = makeRequest('test-task', { baseBranch: 'plan/my-feature' });
-    const setupOriginal = await familiar.testSetupTaskBranch(tmpDir, req, handle);
+    const setupOriginal = await executor.testSetupTaskBranch(tmpDir, req, handle);
     expect(setupOriginal).toBe('plan/my-feature');
 
     const taskBranch = execSync('git branch --show-current', { cwd: tmpDir }).toString().trim();
     expect(taskBranch).toBe('invoker/test-task');
 
-    await familiar.testRestoreBranch(tmpDir, startBranch);
+    await executor.testRestoreBranch(tmpDir, startBranch);
     const finalBranch = execSync('git branch --show-current', { cwd: tmpDir }).toString().trim();
     expect(finalBranch).toBe('master');
   });
@@ -1915,12 +1915,12 @@ describe('Branch lifecycle: ensureFeatureBranch -> setupTaskBranch -> restoreBra
     const startBranch = execSync('git branch --show-current', { cwd: tmpDir }).toString().trim();
     expect(startBranch).toBe('master');
 
-    const handle = { executionId: 'test-exec', taskId: 'test-task' } as FamiliarHandle;
+    const handle = { executionId: 'test-exec', taskId: 'test-task' } as ExecutorHandle;
     const req = makeRequest('test-task');
-    const setupOriginal = await familiar.testSetupTaskBranch(tmpDir, req, handle);
+    const setupOriginal = await executor.testSetupTaskBranch(tmpDir, req, handle);
     expect(setupOriginal).toBe('master');
 
-    await familiar.testRestoreBranch(tmpDir, setupOriginal);
+    await executor.testRestoreBranch(tmpDir, setupOriginal);
     const finalBranch = execSync('git branch --show-current', { cwd: tmpDir }).toString().trim();
     expect(finalBranch).toBe('master');
   });
@@ -1928,13 +1928,13 @@ describe('Branch lifecycle: ensureFeatureBranch -> setupTaskBranch -> restoreBra
 
 // ── Sync hooks ──────────────────────────────────────────
 
-describe('BaseFamiliar.syncFromRemote', () => {
-  let familiar: TestFamiliar;
+describe('BaseExecutor.syncFromRemote', () => {
+  let executor: TestExecutor;
   let originDir: string;
   let cloneDir: string;
 
   beforeEach(() => {
-    familiar = new TestFamiliar();
+    executor = new TestExecutor();
     // Create a bare origin and a clone
     originDir = mkdtempSync(join(tmpdir(), 'sync-origin-'));
     execSync('git init --bare -b master', { cwd: originDir });
@@ -1966,7 +1966,7 @@ describe('BaseFamiliar.syncFromRemote', () => {
     const beforeCount = execSync('git rev-list --count HEAD', { cwd: cloneDir }).toString().trim();
     expect(beforeCount).toBe('1');
 
-    await familiar.testSyncFromRemote(cloneDir);
+    await executor.testSyncFromRemote(cloneDir);
 
     // After sync, origin/master has 2 commits
     const afterCount = execSync('git rev-list --count origin/master', { cwd: cloneDir }).toString().trim();
@@ -1975,24 +1975,24 @@ describe('BaseFamiliar.syncFromRemote', () => {
 
   it('throws when not in a git repo', async () => {
     const noGit = mkdtempSync(join(tmpdir(), 'sync-nogit-'));
-    await expect(familiar.testSyncFromRemote(noGit)).rejects.toThrow('Git fetch failed');
+    await expect(executor.testSyncFromRemote(noGit)).rejects.toThrow('Git fetch failed');
     rmSync(noGit, { recursive: true, force: true });
   });
 
   it('throws when remote is unreachable', async () => {
     // Point origin to a nonexistent path
     execSync('git remote set-url origin /nonexistent/repo', { cwd: cloneDir });
-    await expect(familiar.testSyncFromRemote(cloneDir)).rejects.toThrow('Git fetch failed');
+    await expect(executor.testSyncFromRemote(cloneDir)).rejects.toThrow('Git fetch failed');
   });
 });
 
-describe('BaseFamiliar.pushBranchToRemote', () => {
-  let familiar: TestFamiliar;
+describe('BaseExecutor.pushBranchToRemote', () => {
+  let executor: TestExecutor;
   let originDir: string;
   let cloneDir: string;
 
   beforeEach(() => {
-    familiar = new TestFamiliar();
+    executor = new TestExecutor();
     originDir = mkdtempSync(join(tmpdir(), 'push-origin-'));
     execSync('git init --bare -b master', { cwd: originDir });
     cloneDir = mkdtempSync(join(tmpdir(), 'push-clone-'));
@@ -2014,7 +2014,7 @@ describe('BaseFamiliar.pushBranchToRemote', () => {
     writeFileSync(join(cloneDir, 'task.txt'), 'task result');
     execSync('git add -A && git commit -m "task commit"', { cwd: cloneDir });
 
-    const pushErr = await familiar.testPushBranchToRemote(cloneDir, 'invoker/task-push');
+    const pushErr = await executor.testPushBranchToRemote(cloneDir, 'invoker/task-push');
     expect(pushErr).toBeUndefined();
 
     // Verify the branch exists on the bare remote
@@ -2023,7 +2023,7 @@ describe('BaseFamiliar.pushBranchToRemote', () => {
   });
 
   it('returns an error message when branch does not exist on remote', async () => {
-    const err = await familiar.testPushBranchToRemote(cloneDir, 'nonexistent-branch');
+    const err = await executor.testPushBranchToRemote(cloneDir, 'nonexistent-branch');
     expect(err).toBeDefined();
     expect(typeof err).toBe('string');
   });
@@ -2031,19 +2031,19 @@ describe('BaseFamiliar.pushBranchToRemote', () => {
   it('returns an error message when remote is unreachable', async () => {
     execSync('git checkout -b invoker/task-nopush', { cwd: cloneDir });
     execSync('git remote set-url origin /nonexistent/repo', { cwd: cloneDir });
-    const err = await familiar.testPushBranchToRemote(cloneDir, 'invoker/task-nopush');
+    const err = await executor.testPushBranchToRemote(cloneDir, 'invoker/task-nopush');
     expect(err).toBeDefined();
     expect(typeof err).toBe('string');
   });
 });
 
-describe('BaseFamiliar.handleProcessExit push semantics', () => {
-  let familiar: TestFamiliar;
+describe('BaseExecutor.handleProcessExit push semantics', () => {
+  let executor: TestExecutor;
   let originDir: string;
   let cloneDir: string;
 
   beforeEach(() => {
-    familiar = new TestFamiliar();
+    executor = new TestExecutor();
     originDir = mkdtempSync(join(tmpdir(), 'hpe-origin-'));
     execSync('git init --bare -b master', { cwd: originDir });
     cloneDir = mkdtempSync(join(tmpdir(), 'hpe-clone-'));
@@ -2067,13 +2067,13 @@ describe('BaseFamiliar.handleProcessExit push semantics', () => {
     execSync('git add -A && git commit -m task', { cwd: cloneDir });
 
     const req = makeRequest('task-1', { description: 'x' });
-    const entry = familiar.registerTestEntry('e1', req);
+    const entry = executor.registerTestEntry('e1', req);
     let response: WorkResponse | undefined;
     entry.completeListeners.add((r) => { response = r; });
 
-    vi.spyOn(BaseFamiliar.prototype as any, 'pushBranchToRemote').mockResolvedValue('push denied');
+    vi.spyOn(BaseExecutor.prototype as any, 'pushBranchToRemote').mockResolvedValue('push denied');
 
-    await familiar.testHandleProcessExit('e1', req, cloneDir, 0, { branch: 'invoker/b' });
+    await executor.testHandleProcessExit('e1', req, cloneDir, 0, { branch: 'invoker/b' });
 
     expect(response?.status).toBe('failed');
     expect(response?.outputs.exitCode).toBe(1);
@@ -2089,7 +2089,7 @@ describe('BaseFamiliar.handleProcessExit push semantics', () => {
       executionAgent: 'codex',
     });
     req.actionType = 'ai_task';
-    const entry = familiar.registerTestEntry('e-semantic', req);
+    const entry = executor.registerTestEntry('e-semantic', req);
     entry.outputBuffer.push(
       'ERROR codex_core::tools::router: Codex(Sandbox(Denied ... ))\n' +
       'bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted\n',
@@ -2098,7 +2098,7 @@ describe('BaseFamiliar.handleProcessExit push semantics', () => {
     let response: WorkResponse | undefined;
     entry.completeListeners.add((r) => { response = r; });
 
-    await familiar.testHandleProcessExit('e-semantic', req, cloneDir, 0, { branch: 'invoker/semantic-fail' });
+    await executor.testHandleProcessExit('e-semantic', req, cloneDir, 0, { branch: 'invoker/semantic-fail' });
 
     expect(response?.status).toBe('failed');
     expect(response?.outputs.exitCode).toBe(86);
@@ -2117,7 +2117,7 @@ describe('BaseFamiliar.handleProcessExit push semantics', () => {
       executionAgent: 'claude',
     });
     req.actionType = 'ai_task';
-    const entry = familiar.registerTestEntry('e-non-codex', req);
+    const entry = executor.registerTestEntry('e-non-codex', req);
     entry.outputBuffer.push(
       'bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted\n',
     );
@@ -2125,7 +2125,7 @@ describe('BaseFamiliar.handleProcessExit push semantics', () => {
     let response: WorkResponse | undefined;
     entry.completeListeners.add((r) => { response = r; });
 
-    await familiar.testHandleProcessExit('e-non-codex', req, cloneDir, 0, { branch: 'invoker/non-codex' });
+    await executor.testHandleProcessExit('e-non-codex', req, cloneDir, 0, { branch: 'invoker/non-codex' });
 
     expect(response?.status).toBe('completed');
     expect(response?.outputs.exitCode).toBe(0);
@@ -2134,17 +2134,17 @@ describe('BaseFamiliar.handleProcessExit push semantics', () => {
 
 // ── buildCommandAndArgs ─────────────────────────────────
 
-describe('BaseFamiliar.buildCommandAndArgs', () => {
-  let familiar: TestFamiliar;
+describe('BaseExecutor.buildCommandAndArgs', () => {
+  let executor: TestExecutor;
 
   beforeEach(() => {
-    familiar = new TestFamiliar();
+    executor = new TestExecutor();
   });
 
   it('returns shell command for actionType=command', () => {
     const req = makeRequest('act', { command: 'echo hello' });
     req.actionType = 'command';
-    const result = familiar.testBuildCommandAndArgs(req);
+    const result = executor.testBuildCommandAndArgs(req);
     expect(result.cmd).toBe('/bin/bash');
     expect(result.args).toEqual(['-c', 'echo hello']);
     expect(result.agentSessionId).toBeUndefined();
@@ -2154,13 +2154,13 @@ describe('BaseFamiliar.buildCommandAndArgs', () => {
     const req = makeRequest('act', {});
     req.actionType = 'command';
     req.inputs.command = undefined;
-    expect(() => familiar.testBuildCommandAndArgs(req)).toThrow('must have inputs.command');
+    expect(() => executor.testBuildCommandAndArgs(req)).toThrow('must have inputs.command');
   });
 
   it('returns claude CLI for actionType=ai_task', () => {
     const req = makeRequest('act', { prompt: 'Do something' });
     req.actionType = 'ai_task';
-    const result = familiar.testBuildCommandAndArgs(req, 'my-claude');
+    const result = executor.testBuildCommandAndArgs(req, 'my-claude');
     expect(result.cmd).toBe('my-claude');
     expect(result.agentSessionId).toBeDefined();
     expect(result.args).toContain('--dangerously-skip-permissions');
@@ -2169,7 +2169,7 @@ describe('BaseFamiliar.buildCommandAndArgs', () => {
   it('returns echo stub for unsupported actionType', () => {
     const req = makeRequest('act', {});
     req.actionType = 'reconciliation';
-    const result = familiar.testBuildCommandAndArgs(req);
+    const result = executor.testBuildCommandAndArgs(req);
     expect(result.cmd).toBe('/bin/bash');
     expect(result.args[1]).toContain('Unsupported');
   });
@@ -2177,21 +2177,21 @@ describe('BaseFamiliar.buildCommandAndArgs', () => {
 
 // ── scheduleReconciliationResponse ──────────────────────
 
-describe('BaseFamiliar.scheduleReconciliationResponse', () => {
-  let familiar: TestFamiliar;
+describe('BaseExecutor.scheduleReconciliationResponse', () => {
+  let executor: TestExecutor;
 
   beforeEach(() => {
-    familiar = new TestFamiliar();
+    executor = new TestExecutor();
   });
 
   it('emits needs_input response asynchronously', async () => {
     const req = makeRequest('recon-task', {});
-    const entry = familiar.registerTestEntry('exec-1', req);
+    const entry = executor.registerTestEntry('exec-1', req);
 
     let receivedResponse: WorkResponse | undefined;
     entry.completeListeners.add((r) => { receivedResponse = r; });
 
-    familiar.testScheduleReconciliationResponse('exec-1');
+    executor.testScheduleReconciliationResponse('exec-1');
 
     // Should not fire synchronously
     expect(receivedResponse).toBeUndefined();
@@ -2208,14 +2208,14 @@ describe('BaseFamiliar.scheduleReconciliationResponse', () => {
 
 // ── N-dependency merge conflict tests ──────────────────────
 
-describe('BaseFamiliar.setupTaskBranch n-dependency conflicts', () => {
+describe('BaseExecutor.setupTaskBranch n-dependency conflicts', () => {
   let tmpDir: string;
-  let familiar: TestFamiliar;
+  let executor: TestExecutor;
 
   beforeEach(() => {
     tmpDir = mkdtempSync(join(tmpdir(), 'ndep-'));
     execSync('git init -b master && git commit --allow-empty -m "init"', { cwd: tmpDir });
-    familiar = new TestFamiliar();
+    executor = new TestExecutor();
   });
 
   afterEach(() => {
@@ -2247,9 +2247,9 @@ describe('BaseFamiliar.setupTaskBranch n-dependency conflicts', () => {
     const request = makeRequest('ndep-task', {
       upstreamBranches: ['branch-b1', 'branch-b2', 'branch-b3'],
     });
-    const handle: FamiliarHandle = { executionId: 'e1', taskId: 'ndep-task' };
+    const handle: ExecutorHandle = { executionId: 'e1', taskId: 'ndep-task' };
 
-    const err = await familiar.testSetupTaskBranch(tmpDir, request, handle).catch(e => e);
+    const err = await executor.testSetupTaskBranch(tmpDir, request, handle).catch(e => e);
     expect(err).toBeInstanceOf(MergeConflictError);
     expect((err as MergeConflictError).failedBranch).toBe('branch-b3');
     expect((err as MergeConflictError).conflictFiles).toContain('file-a.txt');
@@ -2279,9 +2279,9 @@ describe('BaseFamiliar.setupTaskBranch n-dependency conflicts', () => {
     const request = makeRequest('ndep-task2', {
       upstreamBranches: ['branch-c1', 'branch-c2', 'branch-c3'],
     });
-    const handle: FamiliarHandle = { executionId: 'e2', taskId: 'ndep-task2' };
+    const handle: ExecutorHandle = { executionId: 'e2', taskId: 'ndep-task2' };
 
-    const err = await familiar.testSetupTaskBranch(tmpDir, request, handle).catch(e => e);
+    const err = await executor.testSetupTaskBranch(tmpDir, request, handle).catch(e => e);
     expect(err).toBeInstanceOf(MergeConflictError);
     expect((err as MergeConflictError).failedBranch).toBe('branch-c2');
   });
@@ -2301,9 +2301,9 @@ describe('BaseFamiliar.setupTaskBranch n-dependency conflicts', () => {
     const request = makeRequest('ndep-ok', {
       upstreamBranches: ['branch-ok-1', 'branch-ok-2', 'branch-ok-3', 'branch-ok-4'],
     });
-    const handle: FamiliarHandle = { executionId: 'e3', taskId: 'ndep-ok' };
+    const handle: ExecutorHandle = { executionId: 'e3', taskId: 'ndep-ok' };
 
-    const result = await familiar.testSetupTaskBranch(tmpDir, request, handle);
+    const result = await executor.testSetupTaskBranch(tmpDir, request, handle);
     expect(result).toBe('master');
     expect(handle.branch).toBe('invoker/ndep-ok');
 
@@ -2330,9 +2330,9 @@ describe('BaseFamiliar.setupTaskBranch n-dependency conflicts', () => {
     const request = makeRequest('clean-task', {
       upstreamBranches: ['branch-clean-1', 'branch-clean-2'],
     });
-    const handle: FamiliarHandle = { executionId: 'e4', taskId: 'clean-task' };
+    const handle: ExecutorHandle = { executionId: 'e4', taskId: 'clean-task' };
 
-    await expect(familiar.testSetupTaskBranch(tmpDir, request, handle))
+    await expect(executor.testSetupTaskBranch(tmpDir, request, handle))
       .rejects.toThrow();
 
     const status = execSync('git status --porcelain', { cwd: tmpDir }).toString().trim();
@@ -2345,14 +2345,14 @@ describe('BaseFamiliar.setupTaskBranch n-dependency conflicts', () => {
 
 // ── Branch reset tests ──────────────────────────────────────
 
-describe('BaseFamiliar.setupTaskBranch branch reset', () => {
+describe('BaseExecutor.setupTaskBranch branch reset', () => {
   let tmpDir: string;
-  let familiar: TestFamiliar;
+  let executor: TestExecutor;
 
   beforeEach(() => {
     tmpDir = mkdtempSync(join(tmpdir(), 'reset-'));
     execSync('git init -b master && git commit --allow-empty -m "init"', { cwd: tmpDir });
-    familiar = new TestFamiliar();
+    executor = new TestExecutor();
   });
 
   afterEach(() => {
@@ -2362,8 +2362,8 @@ describe('BaseFamiliar.setupTaskBranch branch reset', () => {
   it('preserves existing branch and merges new base on restart', async () => {
     // First run: create branch from master
     const request = makeRequest('reset-task', { baseBranch: 'master' });
-    const handle1: FamiliarHandle = { executionId: 'e1', taskId: 'reset-task' };
-    await familiar.testSetupTaskBranch(tmpDir, request, handle1);
+    const handle1: ExecutorHandle = { executionId: 'e1', taskId: 'reset-task' };
+    await executor.testSetupTaskBranch(tmpDir, request, handle1);
 
     // Make a commit on the task branch
     writeFileSync(join(tmpDir, 'old-work.txt'), 'stale');
@@ -2377,8 +2377,8 @@ describe('BaseFamiliar.setupTaskBranch branch reset', () => {
     const newMasterHead = execSync('git rev-parse HEAD', { cwd: tmpDir }).toString().trim();
 
     // Second run: same actionId but base has moved
-    const handle2: FamiliarHandle = { executionId: 'e2', taskId: 'reset-task' };
-    await familiar.testSetupTaskBranch(tmpDir, request, handle2);
+    const handle2: ExecutorHandle = { executionId: 'e2', taskId: 'reset-task' };
+    await executor.testSetupTaskBranch(tmpDir, request, handle2);
 
     const currentHead = execSync('git rev-parse HEAD', { cwd: tmpDir }).toString().trim();
     // Should preserve old work and merge new base (creates merge commit)
@@ -2415,14 +2415,14 @@ describe('BaseFamiliar.setupTaskBranch branch reset', () => {
     });
 
     // First attempt fails
-    const handle1: FamiliarHandle = { executionId: 'e1', taskId: 'refail-task' };
-    await expect(familiar.testSetupTaskBranch(tmpDir, request, handle1))
+    const handle1: ExecutorHandle = { executionId: 'e1', taskId: 'refail-task' };
+    await expect(executor.testSetupTaskBranch(tmpDir, request, handle1))
       .rejects.toBeInstanceOf(MergeConflictError);
 
     // Second attempt (restart) also fails with same conflict
     execSync('git checkout master', { cwd: tmpDir });
-    const handle2: FamiliarHandle = { executionId: 'e2', taskId: 'refail-task' };
-    await expect(familiar.testSetupTaskBranch(tmpDir, request, handle2))
+    const handle2: ExecutorHandle = { executionId: 'e2', taskId: 'refail-task' };
+    await expect(executor.testSetupTaskBranch(tmpDir, request, handle2))
       .rejects.toBeInstanceOf(MergeConflictError);
   });
 
@@ -2444,9 +2444,9 @@ describe('BaseFamiliar.setupTaskBranch branch reset', () => {
     const request = makeRequest('ncommit-task', {
       upstreamBranches: ['up-1', 'up-2'],
     });
-    const handle: FamiliarHandle = { executionId: 'e1', taskId: 'ncommit-task' };
+    const handle: ExecutorHandle = { executionId: 'e1', taskId: 'ncommit-task' };
 
-    await expect(familiar.testSetupTaskBranch(tmpDir, request, handle))
+    await expect(executor.testSetupTaskBranch(tmpDir, request, handle))
       .rejects.toThrow();
 
     // The task branch should be at up-1's HEAD (the base), no new commits
@@ -2460,7 +2460,7 @@ describe('BaseFamiliar.setupTaskBranch branch reset', () => {
     writeFileSync(join(tmpDir, 'output.txt'), 'partial results');
 
     const request = makeRequest('fail-task', { description: 'failing task' });
-    const hash = await familiar.testRecordTaskResult(tmpDir, request, 1);
+    const hash = await executor.testRecordTaskResult(tmpDir, request, 1);
 
     expect(hash).toBeDefined();
     expect(hash).not.toBeNull();
@@ -2488,10 +2488,10 @@ describe('BaseFamiliar.setupTaskBranch branch reset', () => {
     const request = makeRequest('mc-task', {
       upstreamBranches: ['mc-branch-1', 'mc-branch-2'],
     });
-    const handle: FamiliarHandle = { executionId: 'e1', taskId: 'mc-task' };
+    const handle: ExecutorHandle = { executionId: 'e1', taskId: 'mc-task' };
 
     try {
-      await familiar.testSetupTaskBranch(tmpDir, request, handle);
+      await executor.testSetupTaskBranch(tmpDir, request, handle);
       expect.fail('Should have thrown MergeConflictError');
     } catch (err) {
       expect(err).toBeInstanceOf(MergeConflictError);
@@ -2506,9 +2506,9 @@ describe('BaseFamiliar.setupTaskBranch branch reset', () => {
 
 // ── setupTaskBranch worktree mode tests ────────────────────
 
-describe('BaseFamiliar.setupTaskBranch worktree mode', () => {
+describe('BaseExecutor.setupTaskBranch worktree mode', () => {
   let tmpDir: string;
-  let familiar: TestFamiliar;
+  let executor: TestExecutor;
 
   beforeEach(() => {
     tmpDir = mkdtempSync(join(tmpdir(), 'wt-setup-'));
@@ -2524,15 +2524,15 @@ describe('BaseFamiliar.setupTaskBranch worktree mode', () => {
   });
 
   it('preserves branch with commits ahead via worktree add (no -B) + merge', async () => {
-    familiar = new TestFamiliar();
+    executor = new TestExecutor();
     const branch = 'experiment/wt-preserve';
     const worktreeDir1 = join(tmpDir, 'wt1');
     const worktreeDir2 = join(tmpDir, 'wt2');
 
     // First run: create the branch in a worktree
     const request = makeRequest('wt-preserve', { baseBranch: 'master' });
-    const handle1: FamiliarHandle = { executionId: 'e1', taskId: 'wt-preserve' };
-    await familiar.testSetupTaskBranch(tmpDir, request, handle1, {
+    const handle1: ExecutorHandle = { executionId: 'e1', taskId: 'wt-preserve' };
+    await executor.testSetupTaskBranch(tmpDir, request, handle1, {
       branchName: branch,
       base: 'master',
       worktreeDir: worktreeDir1,
@@ -2551,8 +2551,8 @@ describe('BaseFamiliar.setupTaskBranch worktree mode', () => {
     execSync('git add -A && git commit -m "advance master"', { cwd: tmpDir });
 
     // Second run: setupTaskBranch should preserve the fix and merge new base
-    const handle2: FamiliarHandle = { executionId: 'e2', taskId: 'wt-preserve' };
-    await familiar.testSetupTaskBranch(tmpDir, request, handle2, {
+    const handle2: ExecutorHandle = { executionId: 'e2', taskId: 'wt-preserve' };
+    await executor.testSetupTaskBranch(tmpDir, request, handle2, {
       branchName: branch,
       base: 'master',
       worktreeDir: worktreeDir2,
@@ -2568,15 +2568,15 @@ describe('BaseFamiliar.setupTaskBranch worktree mode', () => {
   });
 
   it('force-creates via worktree add -B when branch has 0 commits ahead', async () => {
-    familiar = new TestFamiliar();
+    executor = new TestExecutor();
     const branch = 'experiment/wt-clean';
     const worktreeDir1 = join(tmpDir, 'wt1');
     const worktreeDir2 = join(tmpDir, 'wt2');
 
     // First run: create branch (no extra commits)
     const request = makeRequest('wt-clean', { baseBranch: 'master' });
-    const handle1: FamiliarHandle = { executionId: 'e1', taskId: 'wt-clean' };
-    await familiar.testSetupTaskBranch(tmpDir, request, handle1, {
+    const handle1: ExecutorHandle = { executionId: 'e1', taskId: 'wt-clean' };
+    await executor.testSetupTaskBranch(tmpDir, request, handle1, {
       branchName: branch,
       base: 'master',
       worktreeDir: worktreeDir1,
@@ -2592,8 +2592,8 @@ describe('BaseFamiliar.setupTaskBranch worktree mode', () => {
     const newMasterHead = execSync('git rev-parse master', { cwd: tmpDir }).toString().trim();
 
     // Second run: no commits ahead → force-reset
-    const handle2: FamiliarHandle = { executionId: 'e2', taskId: 'wt-clean' };
-    await familiar.testSetupTaskBranch(tmpDir, request, handle2, {
+    const handle2: ExecutorHandle = { executionId: 'e2', taskId: 'wt-clean' };
+    await executor.testSetupTaskBranch(tmpDir, request, handle2, {
       branchName: branch,
       base: 'master',
       worktreeDir: worktreeDir2,
@@ -2608,15 +2608,15 @@ describe('BaseFamiliar.setupTaskBranch worktree mode', () => {
   });
 
   it('force-creates via worktree add -B when branch does not exist', async () => {
-    familiar = new TestFamiliar();
+    executor = new TestExecutor();
     const branch = 'experiment/wt-new';
     const worktreeDir = join(tmpDir, 'wt-new');
 
     const masterHead = execSync('git rev-parse master', { cwd: tmpDir }).toString().trim();
 
     const request = makeRequest('wt-new', { baseBranch: 'master' });
-    const handle: FamiliarHandle = { executionId: 'e1', taskId: 'wt-new' };
-    await familiar.testSetupTaskBranch(tmpDir, request, handle, {
+    const handle: ExecutorHandle = { executionId: 'e1', taskId: 'wt-new' };
+    await executor.testSetupTaskBranch(tmpDir, request, handle, {
       branchName: branch,
       base: 'master',
       worktreeDir,
@@ -2636,13 +2636,13 @@ describe('BaseFamiliar.setupTaskBranch worktree mode', () => {
   });
 
   it('returns undefined (no originalBranch) in worktree mode', async () => {
-    familiar = new TestFamiliar();
+    executor = new TestExecutor();
     const branch = 'experiment/wt-no-orig';
     const worktreeDir = join(tmpDir, 'wt-no-orig');
 
     const request = makeRequest('wt-no-orig', { baseBranch: 'master' });
-    const handle: FamiliarHandle = { executionId: 'e1', taskId: 'wt-no-orig' };
-    const result = await familiar.testSetupTaskBranch(tmpDir, request, handle, {
+    const handle: ExecutorHandle = { executionId: 'e1', taskId: 'wt-no-orig' };
+    const result = await executor.testSetupTaskBranch(tmpDir, request, handle, {
       branchName: branch,
       base: 'master',
       worktreeDir,

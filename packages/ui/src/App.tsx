@@ -259,7 +259,7 @@ export function App() {
   const handleFix = useCallback(async (taskId: string, agentName: string) => {
     setContextMenu(null);
     const task = tasks.get(taskId);
-    if (task?.config.familiarType === 'docker') {
+    if (task?.config.executorType === 'docker') {
       const proceed = window.confirm(
         'Note: AI CLI tools have known freeze issues inside Docker containers. ' +
         'The automated fix will run in non-interactive pipe mode which is unaffected.\n\n' +
@@ -451,10 +451,10 @@ export function App() {
 
   // ── Edit task executor type ───────────────────────────────
   const handleEditType = useCallback(
-    async (taskId: string, familiarType: string, remoteTargetId?: string) => {
+    async (taskId: string, executorType: string, remoteTargetId?: string) => {
       if (!invoker) return;
       try {
-        await invoker.editTaskType(taskId, familiarType, remoteTargetId);
+        await invoker.editTaskType(taskId, executorType, remoteTargetId);
       } catch (err) {
         console.error('Failed to edit task type:', err);
       }

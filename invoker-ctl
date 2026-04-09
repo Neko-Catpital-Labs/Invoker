@@ -20,7 +20,7 @@
 #   ./invoker-ctl reject <taskId> [reason]         Reject a task
 #   ./invoker-ctl input <taskId> <text>            Provide input to a task awaiting input
 #   ./invoker-ctl edit <taskId> <command>          Edit a task's command
-#   ./invoker-ctl edit-type <taskId> <type>        Change a task's familiar type
+#   ./invoker-ctl edit-type <taskId> <type>        Change a task's executor type
 #   ./invoker-ctl edit-agent <taskId> <agent>      Change a task's execution agent
 #   ./invoker-ctl delete-workflow <workflowId>     Delete a workflow
 #   ./invoker-ctl set-merge-mode <id> <mode>       Set workflow merge mode
@@ -199,11 +199,11 @@ case "${1:-}" in
 
   edit-type)
     if [ -z "${2:-}" ] || [ -z "${3:-}" ]; then
-      echo "Usage: invoker-ctl edit-type <taskId> <familiarType>" >&2
+      echo "Usage: invoker-ctl edit-type <taskId> <executorType>" >&2
       exit 1
     fi
     curl -sf -X POST -H 'Content-Type: application/json' \
-      -d "{\"familiarType\":\"$3\"}" \
+      -d "{\"executorType\":\"$3\"}" \
       "$BASE/api/tasks/$2/edit-type" | fmt '.'
     ;;
 
@@ -238,7 +238,7 @@ Usage:
   invoker-ctl reject <taskId> [reason]         Reject a task
   invoker-ctl input <taskId> <text>            Provide input to a task awaiting input
   invoker-ctl edit <taskId> <command>          Edit a task's command
-  invoker-ctl edit-type <taskId> <type>        Change a task's familiar type
+  invoker-ctl edit-type <taskId> <type>        Change a task's executor type
   invoker-ctl edit-agent <taskId> <agent>      Change a task's execution agent (claude|codex)
   invoker-ctl delete-workflow <workflowId>     Delete a workflow
   invoker-ctl set-merge-mode <id> <mode>       Set merge mode (manual|automatic|github)

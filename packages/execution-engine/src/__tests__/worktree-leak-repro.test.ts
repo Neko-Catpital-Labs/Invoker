@@ -4,7 +4,7 @@ import type { ChildProcess } from 'node:child_process';
 import type { WorkRequest } from '@invoker/contracts';
 import type { Writable } from 'node:stream';
 
-// Mock child_process before importing WorktreeFamiliar
+// Mock child_process before importing WorktreeExecutor
 vi.mock('node:child_process', () => ({
   spawn: vi.fn(),
 }));
@@ -16,8 +16,8 @@ vi.mock('node:fs', async (importOriginal) => {
 
 // Must import after mock setup
 import { spawn } from 'node:child_process';
-import { WorktreeFamiliar } from '../worktree-familiar.js';
-import { BaseFamiliar } from '../base-familiar.js';
+import { WorktreeExecutor } from '../worktree-executor.js';
+import { BaseExecutor } from '../base-executor.js';
 
 const mockedSpawn = vi.mocked(spawn);
 
@@ -35,9 +35,9 @@ function makeRequest(overrides: Partial<WorkRequest> = {}): WorkRequest {
 }
 
 /**
- * Mock the RepoPool on a WorktreeFamiliar instance.
+ * Mock the RepoPool on a WorktreeExecutor instance.
  */
-function mockPool(fam: WorktreeFamiliar) {
+function mockPool(fam: WorktreeExecutor) {
   const pool = {
     ensureClone: vi.fn().mockResolvedValue('/fake/cache/clone'),
     acquireWorktree: vi.fn().mockImplementation((_repoUrl: string, branch: string) => {
@@ -137,18 +137,18 @@ function setupSpawnMock(): {
 }
 
 describe('BUG REPRO: worktree lifecycle leaks', () => {
-  let familiar: WorktreeFamiliar;
+  let executor: WorktreeExecutor;
 
   beforeEach(() => {
     vi.clearAllMocks();
-    familiar = new WorktreeFamiliar({
+    executor = new WorktreeExecutor({
       cacheDir: '/fake/cache',
       worktreeBaseDir: '/fake/worktrees',
     });
-    mockPool(familiar);
+    mockPool(executor);
 
     // Mock runBash so upstream merge scripts work without real bash
-    vi.spyOn(BaseFamiliar.prototype as any, 'runBash').mockImplementation(
+    vi.spyOn(BaseExecutor.prototype as any, 'runBash').mockImplementation(
       async (script: string) => {
         if (script.includes('PRESERVED=')) {
           return 'PRESERVED=0\nBASE_SHA=abc123def456\n';
@@ -162,11 +162,11 @@ describe('BUG REPRO: worktree lifecycle leaks', () => {
     const { taskProcess } = setupSpawnMock();
 
     const request = makeRequest();
-    const handle = await familiar.start(request);
+    const handle = await executor.start(request);
 
     // Register onComplete listener
     const responsePromise = new Promise((resolve) => {
-      familiar.onComplete(handle, (res) => resolve(res));
+      executor.onComplete(handle, (res) => resolve(res));
     });
 
     // Complete task successfully
@@ -192,11 +192,11 @@ describe('BUG REPRO: worktree lifecycle leaks', () => {
     const { taskProcess } = setupSpawnMock();
 
     const request = makeRequest();
-    const handle = await familiar.start(request);
+    const handle = await executor.start(request);
 
     // Register onComplete listener
     const responsePromise = new Promise((resolve) => {
-      familiar.onComplete(handle, (res) => resolve(res));
+      executor.onComplete(handle, (res) => resolve(res));
     });
 
     // Complete task successfully
@@ -207,7 +207,7 @@ describe('BUG REPRO: worktree lifecycle leaks', () => {
     await new Promise((r) => setTimeout(r, 100));
 
     // This WILL FAIL (size is 1) because entries are never deleted
-    expect((familiar as any).entries.size).toBe(0);
+    expect((executor as any).entries.size).toBe(0);
   });
 
   it('should call pool.ensureClone (which fetches) before branching when baseBranch is set', async () => {
@@ -216,10 +216,10 @@ describe('BUG REPRO: worktree lifecycle leaks', () => {
     const request = makeRequest({
       inputs: { command: 'echo hello', baseBranch: 'main' },
     });
-    await familiar.start(request);
+    await executor.start(request);
 
     // pool.ensureClone handles fetching internally (git fetch --all on existing clones)
-    const pool = (familiar as any).pool;
+    const pool = (executor as any).pool;
     expect(pool.ensureClone).toHaveBeenCalledWith('git@github.com:test/repo.git');
 
     // Cleanup

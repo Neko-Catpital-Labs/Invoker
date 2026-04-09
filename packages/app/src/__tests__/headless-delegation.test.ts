@@ -22,7 +22,7 @@ describe('headless delegation enforcement', () => {
         listWorkflows: vi.fn(() => []),
         loadTasks: vi.fn(() => []),
       } as unknown as SQLiteAdapter,
-      familiarRegistry: {} as any,
+      executorRegistry: {} as any,
       messageBus: new LocalBus() as MessageBus,
       repoRoot: '/fake/repo',
       invokerConfig: {} as any,

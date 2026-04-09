@@ -3,8 +3,8 @@ import { existsSync, unlinkSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { homedir } from 'node:os';
 import type { WorkRequest, WorkResponse } from '@invoker/contracts';
-import type { FamiliarHandle, PersistedTaskMeta, TerminalSpec } from './familiar.js';
-import { BaseFamiliar, type BaseEntry } from './base-familiar.js';
+import type { ExecutorHandle, PersistedTaskMeta, TerminalSpec } from './executor.js';
+import { BaseExecutor, type BaseEntry } from './base-executor.js';
 import { RepoPool } from './repo-pool.js';
 import { killProcessGroup, cleanElectronEnv, SIGKILL_TIMEOUT_MS } from './process-utils.js';
 import { DEFAULT_WORKTREE_PROVISION_COMMAND } from './default-worktree-provision-command.js';
@@ -21,7 +21,7 @@ import { sanitizeBranchForPath } from './git-utils.js';
 // Re-export for backward compatibility
 export { computeBranchHash } from './branch-utils.js';
 
-export interface WorktreeFamiliarConfig {
+export interface WorktreeExecutorConfig {
   /** Directory where worktrees are created. */
   worktreeBaseDir?: string;
   /** Directory for RepoPool clone cache. Required. */
@@ -54,12 +54,12 @@ interface WorktreeEntry extends BaseEntry {
 }
 
 /**
- * Familiar implementation that runs tasks inside git worktrees.
+ * Executor implementation that runs tasks inside git worktrees.
  *
  * Each experiment gets its own worktree directory and branch, providing
  * filesystem-level isolation without the overhead of Docker containers.
  */
-export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
+export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
   readonly type = 'worktree';
 
   private readonly worktreeBaseDir: string;
@@ -67,7 +67,7 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
   private readonly agentRegistry?: import('./agent-registry.js').AgentRegistry;
   private pool: RepoPool;
 
-  constructor(config: WorktreeFamiliarConfig) {
+  constructor(config: WorktreeExecutorConfig) {
     super(config.heartbeatIntervalMs, config.maxDurationMs);
     this.claudeCommand = config.claudeCommand ?? 'claude';
     this.agentRegistry = config.agentRegistry;
@@ -85,22 +85,22 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
     return this.pool;
   }
 
-  async start(request: WorkRequest): Promise<FamiliarHandle> {
+  async start(request: WorkRequest): Promise<ExecutorHandle> {
     const repoUrl = request.inputs.repoUrl;
     if (!repoUrl) {
       throw new Error(
-        `WorktreeFamiliar.start(): missing repoUrl for task "${request.actionId}". ` +
+        `WorktreeExecutor.start(): missing repoUrl for task "${request.actionId}". ` +
         `Plans must declare a repoUrl.`,
       );
     }
     console.log(
-      `${RESTART_TO_BRANCH_TRACE} WorktreeFamiliar.start() actionId=${request.actionId} repoUrl=${repoUrl}`,
+      `${RESTART_TO_BRANCH_TRACE} WorktreeExecutor.start() actionId=${request.actionId} repoUrl=${repoUrl}`,
     );
     await this.ensureGitAvailable();
     const handle = this.createHandle(request);
     const executionId = handle.executionId;
     const t0 = Date.now();
-    const log = (step: string) => console.log(`[WorktreeFamiliar] start task=${request.actionId} step=${step} elapsed=${Date.now() - t0}ms`);
+    const log = (step: string) => console.log(`[WorktreeExecutor] start task=${request.actionId} step=${step} elapsed=${Date.now() - t0}ms`);
 
     const clonePath = await this.pool.ensureClone(repoUrl);
     const baseRef = request.inputs.baseBranch ?? 'HEAD';
@@ -123,12 +123,12 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
       request.inputs.salt,
     );
     const branch = `experiment/${request.actionId}-${hash}`;
-    console.log(`[WorktreeFamiliar] branch=${branch} hash=${hash}`);
+    console.log(`[WorktreeExecutor] branch=${branch} hash=${hash}`);
 
     // -- Reconciliation: real pool worktree at plan base (no upstream merges), then needs_input --
     if (request.actionType === 'reconciliation') {
       console.log(
-        `${RESTART_TO_BRANCH_TRACE} WorktreeFamiliar.start() actionId=${request.actionId} reconciliation → acquireWorktree (skip upstream merge)`,
+        `${RESTART_TO_BRANCH_TRACE} WorktreeExecutor.start() actionId=${request.actionId} reconciliation → acquireWorktree (skip upstream merge)`,
       );
       const acquired = await this.pool.acquireWorktree(repoUrl, branch, baseHead, request.actionId);
       this.cleanStaleLocks(acquired.worktreePath);
@@ -170,7 +170,7 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
 
     // -- Always use RepoPool --
     console.log(
-      `${RESTART_TO_BRANCH_TRACE} WorktreeFamiliar.start() actionId=${request.actionId} → RepoPool path`,
+      `${RESTART_TO_BRANCH_TRACE} WorktreeExecutor.start() actionId=${request.actionId} → RepoPool path`,
     );
     const acquired = await this.pool.acquireWorktree(repoUrl, branch, baseHead, request.actionId);
 
@@ -273,7 +273,7 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
 
     // Register error handler IMMEDIATELY to catch synchronous spawn failures
     child.on('error', (err) => {
-      console.log(`[WorktreeFamiliar] child process spawn error: ${err.message}`);
+      console.log(`[WorktreeExecutor] child process spawn error: ${err.message}`);
       const response: WorkResponse = {
         requestId: request.requestId,
         actionId: request.actionId,
@@ -349,7 +349,7 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
     return handle;
   }
 
-  async kill(handle: FamiliarHandle): Promise<void> {
+  async kill(handle: ExecutorHandle): Promise<void> {
     const entry = this.entries.get(handle.executionId);
     if (!entry || entry.completed) return;
 
@@ -381,13 +381,13 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
     entry.poolSoftRelease?.();
   }
 
-  sendInput(handle: FamiliarHandle, input: string): void {
+  sendInput(handle: ExecutorHandle, input: string): void {
     const entry = this.entries.get(handle.executionId);
     if (!entry || entry.completed) return;
     entry.process?.stdin?.write(input);
   }
 
-  getTerminalSpec(handle: FamiliarHandle): TerminalSpec | null {
+  getTerminalSpec(handle: ExecutorHandle): TerminalSpec | null {
     const entry = this.entries.get(handle.executionId);
     if (!entry) return null;
     if (entry.agentSessionId) {
@@ -401,13 +401,13 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
   }
 
   getRestoredTerminalSpec(meta: PersistedTaskMeta): TerminalSpec {
-    console.log(`[WorktreeFamiliar] getRestoredTerminalSpec task="${meta.taskId}" workspacePath="${meta.workspacePath ?? 'none'}" sessionId="${meta.agentSessionId ?? 'none'}"`);
+    console.log(`[WorktreeExecutor] getRestoredTerminalSpec task="${meta.taskId}" workspacePath="${meta.workspacePath ?? 'none'}" sessionId="${meta.agentSessionId ?? 'none'}"`);
     if (meta.workspacePath && !existsSync(meta.workspacePath)) {
-      console.log(`[WorktreeFamiliar] getRestoredTerminalSpec task="${meta.taskId}" — worktree path does NOT exist: ${meta.workspacePath}`);
+      console.log(`[WorktreeExecutor] getRestoredTerminalSpec task="${meta.taskId}" — worktree path does NOT exist: ${meta.workspacePath}`);
       // Fall back to finding the worktree by branch via git worktree list
       const recovered = meta.branch ? this.findWorktreeByBranch(meta.branch) : undefined;
       if (recovered) {
-        console.log(`[WorktreeFamiliar] getRestoredTerminalSpec task="${meta.taskId}" — recovered worktree by branch: ${recovered}`);
+        console.log(`[WorktreeExecutor] getRestoredTerminalSpec task="${meta.taskId}" — recovered worktree by branch: ${recovered}`);
         meta = { ...meta, workspacePath: recovered };
       } else {
         throw new Error(
@@ -416,7 +416,7 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
       }
     }
     if (meta.workspacePath) {
-      console.log(`[WorktreeFamiliar] getRestoredTerminalSpec task="${meta.taskId}" — worktree path exists: ${meta.workspacePath}`);
+      console.log(`[WorktreeExecutor] getRestoredTerminalSpec task="${meta.taskId}" — worktree path exists: ${meta.workspacePath}`);
     }
     if (meta.agentSessionId) {
       const resume = this.agentRegistry
@@ -428,9 +428,9 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
         cwd: meta.workspacePath,
       };
       console.log(
-        `[agent-session-trace] WorktreeFamiliar.getRestoredTerminalSpec: task="${meta.taskId}" resume with agentSessionId=${meta.agentSessionId}`,
+        `[agent-session-trace] WorktreeExecutor.getRestoredTerminalSpec: task="${meta.taskId}" resume with agentSessionId=${meta.agentSessionId}`,
       );
-      console.log(`[WorktreeFamiliar] getRestoredTerminalSpec task="${meta.taskId}" → agent --resume spec, cwd="${spec.cwd}"`);
+      console.log(`[WorktreeExecutor] getRestoredTerminalSpec task="${meta.taskId}" → agent --resume spec, cwd="${spec.cwd}"`);
       return spec;
     }
     if (meta.branch) {
@@ -440,10 +440,10 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
         args: ['-c', `git checkout '${meta.branch}' 2>/dev/null; exec bash`],
         cwd: meta.workspacePath,
       };
-      console.log(`[WorktreeFamiliar] getRestoredTerminalSpec task="${meta.taskId}" → checkout branch spec, branch="${meta.branch}" cwd="${spec.cwd}"`);
+      console.log(`[WorktreeExecutor] getRestoredTerminalSpec task="${meta.taskId}" → checkout branch spec, branch="${meta.branch}" cwd="${spec.cwd}"`);
       return spec;
     }
-    console.log(`[WorktreeFamiliar] getRestoredTerminalSpec task="${meta.taskId}" → cwd-only spec, cwd="${meta.workspacePath}"`);
+    console.log(`[WorktreeExecutor] getRestoredTerminalSpec task="${meta.taskId}" → cwd-only spec, cwd="${meta.workspacePath}"`);
     return { cwd: meta.workspacePath };
   }
 
@@ -464,7 +464,7 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
         }
       }
     } catch (err) {
-      console.warn(`[WorktreeFamiliar] findWorktreeByBranch failed: ${err}`);
+      console.warn(`[WorktreeExecutor] findWorktreeByBranch failed: ${err}`);
     }
     return undefined;
   }
@@ -512,14 +512,14 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
     for (const lockFile of lockFiles) {
       const lockPath = join(gitDir, lockFile);
       if (existsSync(lockPath)) {
-        console.warn(`[WorktreeFamiliar] Removing stale git lock: ${lockPath}`);
+        console.warn(`[WorktreeExecutor] Removing stale git lock: ${lockPath}`);
         try { unlinkSync(lockPath); } catch { /* race: already removed */ }
       }
     }
   }
 
   private provisionWorktree(dir: string, executionId?: string): Promise<void> {
-    console.log(`[WorktreeFamiliar] provisionWorktree begin dir=${dir}`);
+    console.log(`[WorktreeExecutor] provisionWorktree begin dir=${dir}`);
     const t0 = Date.now();
     return new Promise((resolve, reject) => {
       const cmd = `set -euo pipefail; ${DEFAULT_WORKTREE_PROVISION_COMMAND}`;
@@ -528,27 +528,27 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
         env: cleanElectronEnv(),
         stdio: ['ignore', 'pipe', 'pipe'],
       });
-      console.log(`[WorktreeFamiliar] provisionWorktree spawned pid=${child.pid}`);
+      console.log(`[WorktreeExecutor] provisionWorktree spawned pid=${child.pid}`);
       let stdout = '';
       let stderr = '';
       child.stdout?.on('data', (d: Buffer) => {
         const text = d.toString();
         stdout += text;
-        console.log(`[WorktreeFamiliar] provision stdout: ${text.trimEnd()}`);
+        console.log(`[WorktreeExecutor] provision stdout: ${text.trimEnd()}`);
         if (executionId) this.emitOutput(executionId, text);
       });
       child.stderr?.on('data', (d: Buffer) => {
         const text = d.toString();
         stderr += text;
-        console.log(`[WorktreeFamiliar] provision stderr: ${text.trimEnd()}`);
+        console.log(`[WorktreeExecutor] provision stderr: ${text.trimEnd()}`);
         if (executionId) this.emitOutput(executionId, text);
       });
       child.on('error', (err) => {
-        console.log(`[WorktreeFamiliar] provisionWorktree error: ${err.message}`);
+        console.log(`[WorktreeExecutor] provisionWorktree error: ${err.message}`);
         reject(new Error(`Failed to spawn provisioning process: ${err.message}`));
       });
       child.on('close', (code) => {
-        console.log(`[WorktreeFamiliar] provisionWorktree finished dir=${dir} code=${code} elapsed=${Date.now() - t0}ms`);
+        console.log(`[WorktreeExecutor] provisionWorktree finished dir=${dir} code=${code} elapsed=${Date.now() - t0}ms`);
         if (code === 0) resolve();
         else {
           const combined = [stderr.trim(), stdout.trim()].filter(Boolean).join('\n');

@@ -11,7 +11,7 @@ describe('repairCodexResumeSessionMeta', () => {
 
     const persistence: OpenTerminalPersistence = {
       getTaskStatus: () => 'completed',
-      getFamiliarType: () => 'worktree',
+      getExecutorType: () => 'worktree',
       getAgentSessionId: () => stale,
       getContainerId: () => null,
       getWorkspacePath: () => '/tmp/wt',
@@ -35,7 +35,7 @@ describe('repairCodexResumeSessionMeta', () => {
 
     const meta: PersistedTaskMeta = {
       taskId: 'wf-1/task-a',
-      familiarType: 'worktree',
+      executorType: 'worktree',
       agentSessionId: stale,
       executionAgent: 'codex',
       workspacePath: '/tmp/wt',
@@ -57,7 +57,7 @@ describe('repairCodexResumeSessionMeta', () => {
 
     const persistence: OpenTerminalPersistence = {
       getTaskStatus: () => 'completed',
-      getFamiliarType: () => 'worktree',
+      getExecutorType: () => 'worktree',
       getAgentSessionId: () => stale,
       getContainerId: () => null,
       getWorkspacePath: () => '/tmp/wt',
@@ -78,7 +78,7 @@ describe('repairCodexResumeSessionMeta', () => {
 
     const meta: PersistedTaskMeta = {
       taskId: 'wf-1/task-a',
-      familiarType: 'worktree',
+      executorType: 'worktree',
       agentSessionId: stale,
       executionAgent: 'codex',
       workspacePath: '/tmp/wt',
@@ -95,7 +95,7 @@ describe('repairCodexResumeSessionMeta', () => {
     const valid = 'real-thread';
     const persistence: OpenTerminalPersistence = {
       getTaskStatus: () => 'completed',
-      getFamiliarType: () => 'worktree',
+      getExecutorType: () => 'worktree',
       getAgentSessionId: () => valid,
       getContainerId: () => null,
       getWorkspacePath: () => '/tmp/wt',
@@ -111,7 +111,7 @@ describe('repairCodexResumeSessionMeta', () => {
 
     const meta: PersistedTaskMeta = {
       taskId: 'wf-1/task-a',
-      familiarType: 'worktree',
+      executorType: 'worktree',
       agentSessionId: valid,
       executionAgent: 'codex',
       workspacePath: '/tmp/wt',

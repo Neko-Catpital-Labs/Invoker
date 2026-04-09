@@ -85,7 +85,7 @@ export interface InvokerConfig {
   /**
    * Pattern-based rules that enforce task execution environment conformance.
    * When a rule matches a task command, the orchestrator validates that the task's
-   * familiarType and remoteTargetId explicitly declared in the plan YAML match the
+   * executorType and remoteTargetId explicitly declared in the plan YAML match the
    * rule's requirements. Rules do NOT fill in omitted fields — they enforce conformance.
    * First matching rule wins.
    *
@@ -94,7 +94,7 @@ export interface InvokerConfig {
    *   - `regex`: compiled with `new RegExp(regex)` and tested against the command
    *
    * If both `pattern` and `regex` are present, a rule matches if either matches.
-   * Tasks with commands matching a rule MUST explicitly declare the required familiarType
+   * Tasks with commands matching a rule MUST explicitly declare the required executorType
    * and remoteTargetId in the plan YAML, or plan loading will fail with a validation error.
    * Only applies to tasks that have a command (not prompt-only tasks).
    */
@@ -103,8 +103,8 @@ export interface InvokerConfig {
     pattern?: string;
     /** Regular expression matched against the task command; compiled with new RegExp(regex). */
     regex?: string;
-    /** Required familiar type for matching commands (e.g. "ssh", "docker", "worktree"). */
-    familiarType: string;
+    /** Required executor type for matching commands (e.g. "ssh", "docker", "worktree"). */
+    executorType: string;
     /** Required remote target ID for matching commands; must correspond to an entry in remoteTargets. */
     remoteTargetId: string;
   }>;
@@ -121,10 +121,22 @@ function readJsonSafe(path: string): InvokerConfig {
 }
 
 export function loadConfig(): InvokerConfig {
+  const validateLegacyRoutingRules = (parsed: InvokerConfig): InvokerConfig => {
+    const rules = parsed.executorRoutingRules;
+    if (Array.isArray(rules)) {
+      for (const rule of rules) {
+        if (rule && typeof rule === 'object' && Object.prototype.hasOwnProperty.call(rule, 'familiarType')) {
+          throw new Error(`Legacy config field 'familiarType' detected in ~/.invoker/config.json executorRoutingRules. Rename to 'executorType' — no back-compat is provided.`);
+        }
+      }
+    }
+    return parsed;
+  };
+
   if (process.env.INVOKER_REPO_CONFIG_PATH) {
-    return readJsonSafe(process.env.INVOKER_REPO_CONFIG_PATH);
+    return validateLegacyRoutingRules(readJsonSafe(process.env.INVOKER_REPO_CONFIG_PATH));
   }
-  return readJsonSafe(join(homedir(), '.invoker', 'config.json'));
+  return validateLegacyRoutingRules(readJsonSafe(join(homedir(), '.invoker', 'config.json')));
 }
 
 /**
@@ -145,4 +157,3 @@ export function resolveSecretsFilePath(config: InvokerConfig): string | undefine
   if (existsSync(fallback)) return fallback;
   return undefined;
 }
-

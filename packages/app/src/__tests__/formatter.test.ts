@@ -223,7 +223,7 @@ describe('serializeTask', () => {
       config: {
         workflowId: 'wf-1',
         command: 'echo hi',
-        familiarType: 'worktree',
+        executorType: 'worktree',
         isMergeNode: false,
         executionAgent: 'claude',
       } as TaskState['config'],
@@ -232,7 +232,7 @@ describe('serializeTask', () => {
     const config = result.config as Record<string, unknown>;
     expect(config.workflowId).toBe('wf-1');
     expect(config.command).toBe('echo hi');
-    expect(config.familiarType).toBe('worktree');
+    expect(config.executorType).toBe('worktree');
     expect(config.isMergeNode).toBe(false);
     expect(config.executionAgent).toBe('claude');
   });

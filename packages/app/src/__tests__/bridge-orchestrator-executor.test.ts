@@ -1,7 +1,7 @@
 /**
- * Bridge tests: Orchestrator + TaskExecutor integration.
+ * Bridge tests: Orchestrator + TaskRunner integration.
  *
- * These tests wire a real Orchestrator with a real TaskExecutor,
+ * These tests wire a real Orchestrator with a real TaskRunner,
  * using InMemoryPersistence and MockGit. They verify the critical
  * cross-boundary flows that individual component tests miss.
  */
@@ -9,7 +9,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { createTestHarness, type TestHarness, InMemoryBus, InMemoryPersistence, MockGit } from '@invoker/test-kit';
 import { Orchestrator, type PlanDefinition, type TaskState } from '@invoker/workflow-core';
-import { TaskExecutor, FamiliarRegistry, type MergeGateProvider } from '@invoker/execution-engine';
+import { TaskRunner, ExecutorRegistry, type MergeGateProvider } from '@invoker/execution-engine';
 import { setWorkflowMergeMode } from '../workflow-actions.js';
 
 // ── Shared Plans ────────────────────────────────────────────
@@ -419,7 +419,7 @@ describe('Flow 4: edit/fork mutations', () => {
 
     // A restarted
     const a = h.getTask('A')!;
-    expect(a.config.familiarType).toBe('worktree');
+    expect(a.config.executorType).toBe('worktree');
     expect(a.status === 'pending' || a.status === 'running').toBe(true);
 
     // B should still be the original (not forked), no B-v2 created
@@ -539,7 +539,7 @@ describe('Flow 5: dagMutation via spawn_experiments', () => {
       await h.executor.executeTasks([reconTask!]);
     }
     reconTask = h.getTask(reconTask!.id)!;
-    // WorktreeFamiliar emits needs_input; harness MockFamiliar auto-completes → awaiting_approval (recon has requiresManualApproval)
+    // WorktreeExecutor emits needs_input; harness MockFamiliar auto-completes → awaiting_approval (recon has requiresManualApproval)
     expect(['needs_input', 'awaiting_approval']).toContain(reconTask.status);
 
     // Select experiment v1 via selectExperiment
@@ -637,7 +637,7 @@ describe('Flow 6: content-addressable branch names', () => {
     h.completeTask('B');
     h.completeTask('C');
 
-    // Simulate branch + workspacePath being set (as WorktreeFamiliar would do)
+    // Simulate branch + workspacePath being set (as WorktreeExecutor would do)
     h.persistence.updateTask('A', {
       execution: { branch: 'experiment/A-abc12345', workspacePath: '/tmp/worktrees/exec-A' },
     });
@@ -675,7 +675,7 @@ describe('Flow 6: content-addressable branch names', () => {
 
     h.orchestrator.recreateWorkflow(mergeTask.config.workflowId!);
 
-    // After restart, A should be running with no branch (WorktreeFamiliar will assign a new one)
+    // After restart, A should be running with no branch (WorktreeExecutor will assign a new one)
     const a = h.getTask('A')!;
     expect(a.status === 'pending' || a.status === 'running').toBe(true);
     expect(a.execution?.branch).toBeUndefined();
@@ -721,7 +721,7 @@ describe('Flow 6: content-addressable branch names', () => {
       expect(t.execution?.workspacePath).toBeUndefined();
     }
 
-    // Root tasks should be re-started and ready for WorktreeFamiliar
+    // Root tasks should be re-started and ready for WorktreeExecutor
     // to assign new content-addressable branches
     expect(h.getTask('A')!.status === 'pending' || h.getTask('A')!.status === 'running').toBe(true);
     expect(h.getTask('B')!.status === 'pending' || h.getTask('B')!.status === 'running').toBe(true);
@@ -1085,11 +1085,11 @@ describe('Flow 9b: beforeApproveHook fires for merge nodes', () => {
     const persistence = new InMemoryPersistence();
     const bus = new InMemoryBus();
     const orch = new Orchestrator({ persistence, messageBus: bus, maxConcurrency: 10 });
-    const reg = new FamiliarRegistry();
-    // Merge nodes now route through the familiar pipeline; register a mock
+    const reg = new ExecutorRegistry();
+    // Merge nodes now route through the executor pipeline; register a mock
     // that auto-completes so executeMergeNode can handle the finish step.
     reg.register('worktree', { type: 'worktree', start: async (req: any) => { const h = { executionId: `e-${req.actionId}`, taskId: req.actionId, workspacePath: '/tmp/mock', branch: `experiment/${req.actionId}-mock` }; setTimeout(() => (h as any)._cb?.({ requestId: req.requestId, actionId: req.actionId, status: 'completed', outputs: { exitCode: 0 } }), 0); return h; }, onComplete: (_h: any, cb: any) => { _h._cb = cb; return () => {}; }, onOutput: () => () => {}, onHeartbeat: () => () => {}, sendInput: () => {}, kill: async () => {}, getTerminalSpec: () => null, getRestoredTerminalSpec: () => { throw new Error('not impl'); }, destroyAll: async () => {} } as any);
-    const exec = new TaskExecutor({ orchestrator: orch, persistence: persistence as any, familiarRegistry: reg, cwd: '/tmp/test' });
+    const exec = new TaskRunner({ orchestrator: orch, persistence: persistence as any, executorRegistry: reg, cwd: '/tmp/test' });
     const git = new MockGit();
     git.install(exec);
 

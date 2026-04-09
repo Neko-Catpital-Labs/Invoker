@@ -6,7 +6,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Orchestrator } from '@invoker/workflow-core';
-import type { TaskExecutor } from '@invoker/execution-engine';
+import type { TaskRunner } from '@invoker/execution-engine';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import { resolveConflictAction } from '../workflow-actions.js';
 
@@ -37,7 +37,7 @@ describe('resolveConflictAction', () => {
     await resolveConflictAction('task-a', {
       orchestrator: orchestrator as unknown as Orchestrator,
       persistence: persistence as unknown as SQLiteAdapter,
-      taskExecutor: taskExecutor as unknown as TaskExecutor,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
     });
 
     expect(orchestrator.beginConflictResolution).toHaveBeenCalledWith('task-a');
@@ -54,7 +54,7 @@ describe('resolveConflictAction', () => {
       resolveConflictAction('task-a', {
         orchestrator: orchestrator as unknown as Orchestrator,
         persistence: persistence as unknown as SQLiteAdapter,
-        taskExecutor: taskExecutor as unknown as TaskExecutor,
+        taskExecutor: taskExecutor as unknown as TaskRunner,
       }),
     ).rejects.toThrow('claude failed');
 

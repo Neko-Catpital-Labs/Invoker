@@ -9,7 +9,7 @@ import initSqlJs, { type Database as SqlJsDatabase } from 'sql.js';
 import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { TaskState, TaskStateChanges, Attempt, TaskStatus } from '@invoker/workflow-core';
-import { normalizeFamiliarType } from '@invoker/workflow-core';
+import { normalizeExecutorType } from '@invoker/workflow-core';
 import type { PersistenceAdapter, Workflow, TaskEvent, ActivityLogEntry, Conversation, ConversationMessage } from './adapter.js';
 
 /**
@@ -342,7 +342,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
     const migrations = [
       'ALTER TABLE tasks ADD COLUMN claude_session_id TEXT',
       'ALTER TABLE tasks ADD COLUMN workspace_path TEXT',
-      'ALTER TABLE tasks ADD COLUMN familiar_type TEXT',
+      'ALTER TABLE tasks ADD COLUMN executor_type TEXT',
+      'ALTER TABLE tasks RENAME COLUMN familiar_type TO executor_type',
       'ALTER TABLE tasks ADD COLUMN container_id TEXT',
       'ALTER TABLE tasks ADD COLUMN is_merge_node INTEGER DEFAULT 0',
       'ALTER TABLE workflows ADD COLUMN on_finish TEXT',
@@ -491,7 +492,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         selected_experiments, experiment_results, requires_manual_approval,
         repo_url, feature_branch,
         is_merge_node, auto_fix, max_fix_attempts,
-        familiar_type, agent_session_id, workspace_path, container_id,
+        executor_type, agent_session_id, workspace_path, container_id,
         last_agent_session_id, last_agent_name,
         action_request_id, experiments,
         created_at, started_at, completed_at, last_heartbeat_at,
@@ -542,7 +543,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       null, cfg.featureBranch ?? null,
       cfg.isMergeNode ? 1 : 0,
       cfg.autoFix ? 1 : 0, null,
-      cfg.familiarType ?? null,
+      cfg.executorType ?? null,
       exec.agentSessionId ?? null,
       exec.workspacePath ?? null,
       exec.containerId ?? null,
@@ -593,7 +594,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         testPlan: 'test_plan',
         reproCommand: 'repro_command',
         featureBranch: 'feature_branch',
-        familiarType: 'familiar_type',
+        executorType: 'executor_type',
         remoteTargetId: 'remote_target_id',
         executionAgent: 'execution_agent',
       };
@@ -869,14 +870,14 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return val === 'none' ? null : val;
   }
 
-  getFamiliarType(taskId: string): string | null {
+  getExecutorType(taskId: string): string | null {
     const row = this.queryOne(
-      'SELECT familiar_type FROM tasks WHERE id = ?',
+      'SELECT executor_type FROM tasks WHERE id = ?',
       [taskId],
     );
-    const raw = (row?.familiar_type as string) ?? null;
+    const raw = (row?.executor_type as string) ?? null;
     if (raw === null) return null;
-    return normalizeFamiliarType(raw) ?? raw;
+    return normalizeExecutorType(raw) ?? raw;
   }
 
   getTaskStatus(taskId: string): string | null {
@@ -1302,7 +1303,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         isReconciliation: row.is_reconciliation === 1 ? true : undefined,
         requiresManualApproval: row.requires_manual_approval === 1 ? true : undefined,
         featureBranch: row.feature_branch ?? undefined,
-        familiarType: normalizeFamiliarType(row.familiar_type ?? undefined),
+        executorType: normalizeExecutorType(row.executor_type ?? undefined),
         remoteTargetId: row.remote_target_id ?? undefined,
         autoFix: row.auto_fix === 1 ? true : undefined,
         isMergeNode: row.is_merge_node === 1 ? true : undefined,

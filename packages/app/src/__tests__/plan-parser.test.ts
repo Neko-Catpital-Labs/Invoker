@@ -1,11 +1,19 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { parsePlan, PlanParseError, detectDefaultBranch, applyPlanDefinitionDefaults } from '../plan-parser.js';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 
 vi.mock('node:child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:child_process')>();
   return { ...actual, execSync: vi.fn(actual.execSync) };
 });
 import { execSync } from 'node:child_process';
+
+const isolatedConfigPath = join(tmpdir(), `invoker-plan-parser-config-${process.pid}.json`);
+
+beforeEach(() => {
+  process.env.INVOKER_REPO_CONFIG_PATH = isolatedConfigPath;
+});
 
 describe('applyPlanDefinitionDefaults', () => {
   it('fills baseBranch, featureBranch, onFinish when omitted (GUI yaml.load shape)', () => {

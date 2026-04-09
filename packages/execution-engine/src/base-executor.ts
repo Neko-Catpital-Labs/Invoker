@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { spawn, type ChildProcess } from 'node:child_process';
 import type { WorkRequest, WorkResponse } from '@invoker/contracts';
-import type { Familiar, FamiliarHandle, PersistedTaskMeta, TerminalSpec, Unsubscribe } from './familiar.js';
+import type { Executor, ExecutorHandle, PersistedTaskMeta, TerminalSpec, Unsubscribe } from './executor.js';
 import { bashPreserveOrReset, bashMergeUpstreams, parsePreserveResult, parseMergeError } from './branch-utils.js';
 import { RESTART_TO_BRANCH_TRACE } from './exec-trace.js';
 import type { AgentRegistry } from './agent-registry.js';
@@ -66,7 +66,7 @@ export class MergeConflictError extends Error {
   }
 }
 
-export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar {
+export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor {
   abstract readonly type: string;
   protected entries = new Map<string, TEntry>();
   protected heartbeatIntervalMs: number;
@@ -86,15 +86,15 @@ export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar
     this.maxBufferBytes = maxBufferBytes ?? DEFAULT_MAX_BUFFER_BYTES;
   }
 
-  protected createHandle(request: WorkRequest): FamiliarHandle {
+  protected createHandle(request: WorkRequest): ExecutorHandle {
     return { executionId: randomUUID(), taskId: request.actionId };
   }
 
-  protected registerEntry(handle: FamiliarHandle, entry: TEntry): void {
+  protected registerEntry(handle: ExecutorHandle, entry: TEntry): void {
     this.entries.set(handle.executionId, entry);
   }
 
-  protected getEntry(handle: FamiliarHandle): TEntry | undefined {
+  protected getEntry(handle: ExecutorHandle): TEntry | undefined {
     return this.entries.get(handle.executionId);
   }
 
@@ -222,7 +222,7 @@ export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar
     }, this.heartbeatIntervalMs);
   }
 
-  onOutput(handle: FamiliarHandle, cb: (data: string) => void): Unsubscribe {
+  onOutput(handle: ExecutorHandle, cb: (data: string) => void): Unsubscribe {
     const entry = this.entries.get(handle.executionId);
     if (!entry) return () => {};
     // Replay buffered output so late subscribers don't miss early data
@@ -233,7 +233,7 @@ export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar
     return () => { entry.outputListeners.delete(cb); };
   }
 
-  onComplete(handle: FamiliarHandle, cb: (response: WorkResponse) => void): Unsubscribe {
+  onComplete(handle: ExecutorHandle, cb: (response: WorkResponse) => void): Unsubscribe {
     const entry = this.entries.get(handle.executionId);
     if (!entry) return () => {};
     // Replay if already completed
@@ -244,7 +244,7 @@ export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar
     return () => { entry.completeListeners.delete(cb); };
   }
 
-  onHeartbeat(handle: FamiliarHandle, cb: (taskId: string) => void): Unsubscribe {
+  onHeartbeat(handle: ExecutorHandle, cb: (taskId: string) => void): Unsubscribe {
     const entry = this.entries.get(handle.executionId);
     if (!entry) return () => {};
     entry.heartbeatListeners.add(cb);
@@ -345,14 +345,14 @@ export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar
 
   /** @internal — exposed for testing only */
   static resetGitAvailableCheck(): void {
-    BaseFamiliar.gitAvailableChecked = false;
+    BaseExecutor.gitAvailableChecked = false;
   }
 
   protected async ensureGitAvailable(): Promise<void> {
-    if (BaseFamiliar.gitAvailableChecked) return;
+    if (BaseExecutor.gitAvailableChecked) return;
     try {
       await this.execGitSimple(['--version'], process.cwd());
-      BaseFamiliar.gitAvailableChecked = true;
+      BaseExecutor.gitAvailableChecked = true;
     } catch (err) {
       throw new Error(
         `git is not available on PATH. Install git and ensure it is in your shell PATH.\n` +
@@ -402,7 +402,7 @@ export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar
   /**
    * Execute a bash script and return its stdout.
    * Default implementation spawns bash locally. Subclasses override for their
-   * transport (e.g., DockerFamiliar routes through docker exec, SshFamiliar
+   * transport (e.g., DockerExecutor routes through docker exec, SshExecutor
    * routes through SSH).
    */
   protected runBash(script: string, cwd: string): Promise<string> {
@@ -491,7 +491,7 @@ export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar
   protected async setupTaskBranch(
     cwd: string,
     request: WorkRequest,
-    handle: FamiliarHandle,
+    handle: ExecutorHandle,
     opts?: SetupBranchOptions,
   ): Promise<string | undefined> {
     try {
@@ -916,10 +916,10 @@ export abstract class BaseFamiliar<TEntry extends BaseEntry> implements Familiar
   }
 
   // Abstract methods that subclasses must implement
-  abstract start(request: WorkRequest): Promise<FamiliarHandle>;
-  abstract kill(handle: FamiliarHandle): Promise<void>;
-  abstract sendInput(handle: FamiliarHandle, input: string): void;
-  abstract getTerminalSpec(handle: FamiliarHandle): TerminalSpec | null;
+  abstract start(request: WorkRequest): Promise<ExecutorHandle>;
+  abstract kill(handle: ExecutorHandle): Promise<void>;
+  abstract sendInput(handle: ExecutorHandle, input: string): void;
+  abstract getTerminalSpec(handle: ExecutorHandle): TerminalSpec | null;
   abstract getRestoredTerminalSpec(meta: PersistedTaskMeta): TerminalSpec;
   abstract destroyAll(): Promise<void>;
 }

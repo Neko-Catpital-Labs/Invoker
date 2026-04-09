@@ -3,7 +3,7 @@
  *
  * A Surface receives orchestrator events (outbound) and emits commands (inbound).
  * Each platform implements this interface. The host process (Electron main.ts)
- * wires surfaces to the Orchestrator and TaskExecutor.
+ * wires surfaces to the Orchestrator and TaskRunner.
  */
 
 import type { TaskDelta } from '@invoker/workflow-core';

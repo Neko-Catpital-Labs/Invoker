@@ -2,7 +2,7 @@ import type { WorkRequest, WorkResponse } from '@invoker/contracts';
 
 export type Unsubscribe = () => void;
 
-export interface FamiliarHandle {
+export interface ExecutorHandle {
   executionId: string;
   taskId: string;
   agentSessionId?: string;
@@ -24,7 +24,7 @@ export interface TerminalSpec {
 
 export interface PersistedTaskMeta {
   taskId: string;
-  familiarType: string;
+  executorType: string;
   agentSessionId?: string;
   /** Configured execution agent name (e.g. 'claude', 'codex'). Used for session resume. */
   executionAgent?: string;
@@ -33,15 +33,15 @@ export interface PersistedTaskMeta {
   branch?: string;
 }
 
-export interface Familiar {
+export interface Executor {
   readonly type: string;
-  start(request: WorkRequest): Promise<FamiliarHandle>;
-  kill(handle: FamiliarHandle): Promise<void>;
-  sendInput(handle: FamiliarHandle, input: string): void;
-  onOutput(handle: FamiliarHandle, cb: (data: string) => void): Unsubscribe;
-  onComplete(handle: FamiliarHandle, cb: (response: WorkResponse) => void): Unsubscribe;
-  onHeartbeat(handle: FamiliarHandle, cb: (taskId: string) => void): Unsubscribe;
-  getTerminalSpec(handle: FamiliarHandle): TerminalSpec | null;
+  start(request: WorkRequest): Promise<ExecutorHandle>;
+  kill(handle: ExecutorHandle): Promise<void>;
+  sendInput(handle: ExecutorHandle, input: string): void;
+  onOutput(handle: ExecutorHandle, cb: (data: string) => void): Unsubscribe;
+  onComplete(handle: ExecutorHandle, cb: (response: WorkResponse) => void): Unsubscribe;
+  onHeartbeat(handle: ExecutorHandle, cb: (taskId: string) => void): Unsubscribe;
+  getTerminalSpec(handle: ExecutorHandle): TerminalSpec | null;
   /**
    * Reconstruct a TerminalSpec from persisted DB metadata (no in-memory handle required).
    * Throws if the workspace path no longer exists on disk.

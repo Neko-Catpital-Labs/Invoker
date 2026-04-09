@@ -5,11 +5,11 @@ import { tmpdir } from 'node:os';
 import { CodexSessionDriver } from '../codex-session-driver.js';
 
 /**
- * Demonstrates the SSH familiar session storage gap:
- * SSH familiar extracts the session ID but did NOT call processOutput(),
+ * Demonstrates the SSH executor session storage gap:
+ * SSH executor extracts the session ID but did NOT call processOutput(),
  * so loadSession() returns null for remote sessions.
  *
- * The fix adds a processOutput() call in the SSH familiar's close handler.
+ * The fix adds a processOutput() call in the SSH executor's close handler.
  */
 describe('SSH session gap (Codex over SSH)', () => {
   let tmpDir: string;
@@ -36,7 +36,7 @@ describe('SSH session gap (Codex over SSH)', () => {
   it('OLD flow: extractSessionId without processOutput → loadSession returns null', () => {
     const driver = new CodexSessionDriver();
 
-    // SSH familiar extracts the real ID...
+    // SSH executor extracts the real ID...
     const realId = driver.extractSessionId(codexJsonl);
     expect(realId).toBe('real-codex-thread-id');
 
@@ -47,7 +47,7 @@ describe('SSH session gap (Codex over SSH)', () => {
   it('FIXED flow: extractSessionId + processOutput → loadSession succeeds', () => {
     const driver = new CodexSessionDriver();
 
-    // SSH familiar extracts the real ID...
+    // SSH executor extracts the real ID...
     const realId = driver.extractSessionId(codexJsonl);
     expect(realId).toBe('real-codex-thread-id');
 

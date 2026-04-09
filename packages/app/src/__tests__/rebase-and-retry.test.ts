@@ -8,7 +8,7 @@
  * Also verifies RepoPool.doEnsureClone fast-forwards after fetch when
  * re-running without explicit pool cleanup (second scenario).
  *
- * Pattern: sandbox git repo + real WorktreeFamiliar + real TaskExecutor
+ * Pattern: sandbox git repo + real WorktreeExecutor + real TaskRunner
  * (follows branch-chain.test.ts).
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -18,7 +18,7 @@ import { tmpdir } from 'node:os';
 import { execSync } from 'node:child_process';
 import type { WorkResponse } from '@invoker/contracts';
 import type { TaskState } from '@invoker/workflow-core';
-import { TaskExecutor, FamiliarRegistry, WorktreeFamiliar } from '@invoker/execution-engine';
+import { TaskRunner, ExecutorRegistry, WorktreeExecutor } from '@invoker/execution-engine';
 import { rebaseAndRetry, bumpGenerationAndRecreate } from '../workflow-actions.js';
 
 function createTempRepo(): string {
@@ -55,9 +55,9 @@ function getSha(cwd: string, ref: string): string {
   return execSync(`git rev-parse ${ref}`, { cwd }).toString().trim();
 }
 
-function mirrorClonePath(registry: FamiliarRegistry, repoUrl: string): string {
+function mirrorClonePath(registry: ExecutorRegistry, repoUrl: string): string {
   const wt = registry.get('worktree');
-  if (!(wt instanceof WorktreeFamiliar)) throw new Error('expected WorktreeFamiliar');
+  if (!(wt instanceof WorktreeExecutor)) throw new Error('expected WorktreeExecutor');
   return wt.getRepoPool().getClonePath(repoUrl);
 }
 
@@ -97,7 +97,7 @@ describe('rebase-and-retry: pool mirror cleanup before restart', { timeout: 120_
       description: 'Test task',
       config: {
         command: 'echo hello',
-        familiarType: 'worktree',
+        executorType: 'worktree',
         workflowId: 'wf-test',
       },
     });
@@ -170,20 +170,20 @@ describe('rebase-and-retry: pool mirror cleanup before restart', { timeout: 120_
       },
     };
 
-    const registry = new FamiliarRegistry();
+    const registry = new ExecutorRegistry();
     registry.register(
       'worktree',
-      new WorktreeFamiliar({
+      new WorktreeExecutor({
         cacheDir: join(tmpDir, 'rebase-retry-cache'),
         worktreeBaseDir: join(tmpDir, 'rebase-retry-wt'),
         claudeCommand: '/bin/echo',
       }),
     );
 
-    const executor = new TaskExecutor({
+    const executor = new TaskRunner({
       orchestrator: orchestrator as any,
       persistence: persistence as any,
-      familiarRegistry: registry,
+      executorRegistry: registry,
       cwd: tmpDir,
       defaultBranch: 'master',
     });
@@ -192,7 +192,7 @@ describe('rebase-and-retry: pool mirror cleanup before restart', { timeout: 120_
   }
 
   async function executeTask(
-    executor: TaskExecutor,
+    executor: TaskRunner,
     task: TaskState,
   ): Promise<void> {
     (task as any).status = 'running';

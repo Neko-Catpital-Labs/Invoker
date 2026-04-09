@@ -77,7 +77,7 @@ export interface WorkResponseOutputs {
   agentSessionId?: string;
   /** Name of the ExecutionAgent that produced this session. */
   agentName?: string;
-  /** Branch the familiar used — persisted at completion to close the write-once gap. */
+  /** Branch the executor used — persisted at completion to close the write-once gap. */
   branch?: string;
 }
 

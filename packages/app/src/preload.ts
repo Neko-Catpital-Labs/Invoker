@@ -29,8 +29,8 @@ const api: InvokerAPI = {
     ipcRenderer.invoke('invoker:restart-task', taskId),
   editTaskCommand: (taskId, newCommand) =>
     ipcRenderer.invoke('invoker:edit-task-command', taskId, newCommand),
-  editTaskType: (taskId, familiarType, remoteTargetId?) =>
-    ipcRenderer.invoke('invoker:edit-task-type', taskId, familiarType, remoteTargetId),
+  editTaskType: (taskId, executorType, remoteTargetId?) =>
+    ipcRenderer.invoke('invoker:edit-task-type', taskId, executorType, remoteTargetId),
   editTaskAgent: (taskId, agentName) =>
     ipcRenderer.invoke('invoker:edit-task-agent', taskId, agentName),
   setTaskExternalGatePolicies: (taskId, updates) =>

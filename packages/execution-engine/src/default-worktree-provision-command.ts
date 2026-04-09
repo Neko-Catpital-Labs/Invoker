@@ -1,6 +1,6 @@
 /**
  * Default shell command for provisioning a worktree after clone (local or remote).
- * Kept in one place so WorktreeFamiliar, SshFamiliar, and docs stay aligned.
+ * Kept in one place so WorktreeExecutor, SshExecutor, and docs stay aligned.
  */
 export const DEFAULT_WORKTREE_PROVISION_COMMAND =
   'if [ ! -f package.json ] && [ ! -f pnpm-workspace.yaml ]; then \

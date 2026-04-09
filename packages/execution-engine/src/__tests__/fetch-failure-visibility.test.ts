@@ -12,9 +12,9 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execSync } from 'node:child_process';
-import { BaseFamiliar, type BaseEntry } from '../base-familiar.js';
+import { BaseExecutor, type BaseEntry } from '../base-executor.js';
 import type { WorkRequest, WorkRequestInputs } from '@invoker/contracts';
-import type { FamiliarHandle, TerminalSpec } from '../familiar.js';
+import type { ExecutorHandle, TerminalSpec } from '../executor.js';
 
 function makeRequest(actionId: string, inputs: Partial<WorkRequestInputs> = {}): WorkRequest {
   return {
@@ -28,15 +28,15 @@ function makeRequest(actionId: string, inputs: Partial<WorkRequestInputs> = {}):
 }
 
 // Concrete implementation for testing
-class TestFamiliar extends BaseFamiliar<BaseEntry> {
+class TestExecutor extends BaseExecutor<BaseEntry> {
   readonly type = 'test';
 
-  async start(_request: WorkRequest): Promise<FamiliarHandle> {
+  async start(_request: WorkRequest): Promise<ExecutorHandle> {
     throw new Error('Not implemented');
   }
-  async kill(_handle: FamiliarHandle): Promise<void> {}
-  sendInput(_handle: FamiliarHandle, _input: string): void {}
-  getTerminalSpec(_handle: FamiliarHandle): TerminalSpec | null { return null; }
+  async kill(_handle: ExecutorHandle): Promise<void> {}
+  sendInput(_handle: ExecutorHandle, _input: string): void {}
+  getTerminalSpec(_handle: ExecutorHandle): TerminalSpec | null { return null; }
   getRestoredTerminalSpec(): TerminalSpec { throw new Error('Not implemented'); }
   async destroyAll(): Promise<void> { this.entries.clear(); }
 
@@ -89,11 +89,11 @@ function createRemote(localRepo: string): string {
 
 describe('syncFromRemote - fetch failure handling', () => {
   describe('fetch failure (strict by default)', () => {
-    let familiar: TestFamiliar;
+    let executor: TestExecutor;
     let tmpDir: string;
 
     beforeEach(() => {
-      familiar = new TestFamiliar();
+      executor = new TestExecutor();
       tmpDir = createTempRepo();
     });
 
@@ -104,10 +104,10 @@ describe('syncFromRemote - fetch failure handling', () => {
 
     it('throws and aborts when fetch fails', async () => {
       const executionId = 'test-exec-1';
-      familiar.registerTestEntry(executionId, makeRequest('test-action'));
+      executor.registerTestEntry(executionId, makeRequest('test-action'));
 
       // Mock execGitSimple to fail on fetch
-      const execGitSpy = vi.spyOn(familiar as any, 'execGitSimple');
+      const execGitSpy = vi.spyOn(executor as any, 'execGitSimple');
       execGitSpy.mockImplementation(async (...params: unknown[]) => {
         const args = params[0] as string[];
         if (args[0] === 'fetch') {
@@ -117,11 +117,11 @@ describe('syncFromRemote - fetch failure handling', () => {
         return execSync(`git ${args.join(' ')}`, { cwd: tmpDir, encoding: 'utf8' });
       });
 
-      await expect(familiar.testSyncFromRemote(tmpDir, executionId))
+      await expect(executor.testSyncFromRemote(tmpDir, executionId))
         .rejects.toThrow('Git fetch failed: Connection timed out');
 
       // Verify failure was emitted to task output before throwing
-      const output = familiar.getOutputBuffer(executionId).join('');
+      const output = executor.getOutputBuffer(executionId).join('');
       expect(output).toContain('[Git Fetch] Status: FAILED');
       expect(output).toContain('Connection timed out');
       expect(output).toContain('Aborting task');
@@ -130,11 +130,11 @@ describe('syncFromRemote - fetch failure handling', () => {
     it('includes fetch status in task output on success', async () => {
       const remoteRepo = createRemote(tmpDir);
       const executionId = 'test-exec-2';
-      familiar.registerTestEntry(executionId, makeRequest('test-action'));
+      executor.registerTestEntry(executionId, makeRequest('test-action'));
 
-      await familiar.testSyncFromRemote(tmpDir, executionId);
+      await executor.testSyncFromRemote(tmpDir, executionId);
 
-      const output = familiar.getOutputBuffer(executionId).join('');
+      const output = executor.getOutputBuffer(executionId).join('');
       expect(output).toContain('[Git Fetch] Status: success');
       expect(output).toContain('0 commits behind origin/master');
 
@@ -144,10 +144,10 @@ describe('syncFromRemote - fetch failure handling', () => {
 
     it('does not check staleness when fetch fails', async () => {
       const executionId = 'test-exec-3';
-      familiar.registerTestEntry(executionId, makeRequest('test-action'));
+      executor.registerTestEntry(executionId, makeRequest('test-action'));
 
       // Mock execGitSimple to fail on fetch
-      const execGitSpy = vi.spyOn(familiar as any, 'execGitSimple');
+      const execGitSpy = vi.spyOn(executor as any, 'execGitSimple');
       execGitSpy.mockImplementation(async (...params: unknown[]) => {
         const args = params[0] as string[];
         if (args[0] === 'fetch') {
@@ -156,10 +156,10 @@ describe('syncFromRemote - fetch failure handling', () => {
         return execSync(`git ${args.join(' ')}`, { cwd: tmpDir, encoding: 'utf8' });
       });
 
-      await expect(familiar.testSyncFromRemote(tmpDir, executionId))
+      await expect(executor.testSyncFromRemote(tmpDir, executionId))
         .rejects.toThrow('Git fetch failed: Network error');
 
-      const output = familiar.getOutputBuffer(executionId).join('');
+      const output = executor.getOutputBuffer(executionId).join('');
       expect(output).toContain('[Git Fetch] Status: FAILED');
       // Should not contain staleness messages
       expect(output).not.toContain('commits behind');
@@ -167,9 +167,9 @@ describe('syncFromRemote - fetch failure handling', () => {
 
     it('propagates the underlying git error verbatim', async () => {
       const executionId = 'test-exec-ssh';
-      familiar.registerTestEntry(executionId, makeRequest('test-action'));
+      executor.registerTestEntry(executionId, makeRequest('test-action'));
 
-      const execGitSpy = vi.spyOn(familiar as any, 'execGitSimple');
+      const execGitSpy = vi.spyOn(executor as any, 'execGitSimple');
       execGitSpy.mockImplementation(async (...params: unknown[]) => {
         const args = params[0] as string[];
         if (args[0] === 'fetch') {
@@ -178,22 +178,22 @@ describe('syncFromRemote - fetch failure handling', () => {
         return execSync(`git ${args.join(' ')}`, { cwd: tmpDir, encoding: 'utf8' });
       });
 
-      await expect(familiar.testSyncFromRemote(tmpDir, executionId))
+      await expect(executor.testSyncFromRemote(tmpDir, executionId))
         .rejects.toThrow('Git fetch failed: SSH authentication failed');
 
-      const output = familiar.getOutputBuffer(executionId).join('');
+      const output = executor.getOutputBuffer(executionId).join('');
       expect(output).toContain('[Git Fetch] Status: FAILED');
       expect(output).toContain('SSH authentication failed');
     });
   });
 
   describe('staleness detection after successful fetch', () => {
-    let familiar: TestFamiliar;
+    let executor: TestExecutor;
     let tmpDir: string;
     let remoteRepo: string;
 
     beforeEach(() => {
-      familiar = new TestFamiliar();
+      executor = new TestExecutor();
       tmpDir = createTempRepo();
       remoteRepo = createRemote(tmpDir);
     });
@@ -218,11 +218,11 @@ describe('syncFromRemote - fetch failure handling', () => {
       execSync('git push', { cwd: secondClone });
 
       const executionId = 'test-exec-staleness-1';
-      familiar.registerTestEntry(executionId, makeRequest('test-action'));
+      executor.registerTestEntry(executionId, makeRequest('test-action'));
 
-      await familiar.testSyncFromRemote(tmpDir, executionId);
+      await executor.testSyncFromRemote(tmpDir, executionId);
 
-      const output = familiar.getOutputBuffer(executionId).join('');
+      const output = executor.getOutputBuffer(executionId).join('');
       expect(output).toContain('[Git Fetch] Status: success');
       expect(output).toContain('5 commits behind origin/master');
 
@@ -245,11 +245,11 @@ describe('syncFromRemote - fetch failure handling', () => {
       execSync('git push', { cwd: secondClone });
 
       const executionId = 'test-exec-staleness-loud';
-      familiar.registerTestEntry(executionId, makeRequest('test-action'));
+      executor.registerTestEntry(executionId, makeRequest('test-action'));
 
-      await familiar.testSyncFromRemote(tmpDir, executionId);
+      await executor.testSyncFromRemote(tmpDir, executionId);
 
-      const output = familiar.getOutputBuffer(executionId).join('');
+      const output = executor.getOutputBuffer(executionId).join('');
       expect(output).toContain('101 commits behind origin/master');
       expect(output).toContain('[Git Fetch] WARNING: Local is 101 commits behind origin');
 
@@ -259,11 +259,11 @@ describe('syncFromRemote - fetch failure handling', () => {
 
     it('reports up to date when local matches remote', async () => {
       const executionId = 'test-exec-staleness-uptodate';
-      familiar.registerTestEntry(executionId, makeRequest('test-action'));
+      executor.registerTestEntry(executionId, makeRequest('test-action'));
 
-      await familiar.testSyncFromRemote(tmpDir, executionId);
+      await executor.testSyncFromRemote(tmpDir, executionId);
 
-      const output = familiar.getOutputBuffer(executionId).join('');
+      const output = executor.getOutputBuffer(executionId).join('');
       expect(output).toContain('[Git Fetch] Status: success');
       expect(output).toContain('0 commits behind origin/master');
     });
@@ -273,11 +273,11 @@ describe('syncFromRemote - fetch failure handling', () => {
       execSync('git checkout -b feature-branch', { cwd: tmpDir });
 
       const executionId = 'test-exec-new-branch';
-      familiar.registerTestEntry(executionId, makeRequest('test-action'));
+      executor.registerTestEntry(executionId, makeRequest('test-action'));
 
-      await familiar.testSyncFromRemote(tmpDir, executionId);
+      await executor.testSyncFromRemote(tmpDir, executionId);
 
-      const output = familiar.getOutputBuffer(executionId).join('');
+      const output = executor.getOutputBuffer(executionId).join('');
       expect(output).toContain('[Git Fetch] Status: success');
       expect(output).toContain('no remote tracking branch');
     });

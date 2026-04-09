@@ -1,14 +1,14 @@
-import { FamiliarRegistry, WorktreeFamiliar, DockerFamiliar } from '@invoker/execution-engine';
-import type { Familiar, FamiliarHandle } from '@invoker/execution-engine';
+import { ExecutorRegistry, WorktreeExecutor, DockerExecutor } from '@invoker/execution-engine';
+import type { Executor, ExecutorHandle } from '@invoker/execution-engine';
 import type { TaskState } from '@invoker/workflow-core';
 
-// Reproduce the selectFamiliar logic from main.ts
-function selectFamiliar(registry: FamiliarRegistry, task: TaskState): Familiar {
-  if (task.config.familiarType) {
-    const registered = registry.get(task.config.familiarType);
+// Reproduce the selectExecutor logic from main.ts
+function selectExecutor(registry: ExecutorRegistry, task: TaskState): Executor {
+  if (task.config.executorType) {
+    const registered = registry.get(task.config.executorType);
     if (registered) return registered;
-    if (task.config.familiarType === 'docker') {
-      const docker = new DockerFamiliar({});
+    if (task.config.executorType === 'docker') {
+      const docker = new DockerExecutor({});
       registry.register('docker', docker);
       return docker;
     }
@@ -16,51 +16,51 @@ function selectFamiliar(registry: FamiliarRegistry, task: TaskState): Familiar {
   return registry.getDefault();
 }
 
-describe('Terminal routing via selectFamiliar', () => {
-  let registry: FamiliarRegistry;
+describe('Terminal routing via selectExecutor', () => {
+  let registry: ExecutorRegistry;
 
   beforeEach(() => {
-    registry = new FamiliarRegistry();
-    registry.register('worktree', new WorktreeFamiliar({ cacheDir: '/tmp/cache' }));
+    registry = new ExecutorRegistry();
+    registry.register('worktree', new WorktreeExecutor({ cacheDir: '/tmp/cache' }));
   });
 
-  it('returns worktree familiar when no familiarType specified', () => {
-    const task = { config: { familiarType: undefined }, execution: {} } as TaskState;
-    const familiar = selectFamiliar(registry, task);
-    expect(familiar.type).toBe('worktree');
+  it('returns worktree executor when no executorType specified', () => {
+    const task = { config: { executorType: undefined }, execution: {} } as TaskState;
+    const executor = selectExecutor(registry, task);
+    expect(executor.type).toBe('worktree');
   });
 
-  it('returns worktree familiar for familiarType "worktree"', () => {
-    const task = { config: { familiarType: 'worktree' }, execution: {} } as TaskState;
-    const familiar = selectFamiliar(registry, task);
-    expect(familiar.type).toBe('worktree');
+  it('returns worktree executor for executorType "worktree"', () => {
+    const task = { config: { executorType: 'worktree' }, execution: {} } as TaskState;
+    const executor = selectExecutor(registry, task);
+    expect(executor.type).toBe('worktree');
   });
 
-  it('lazily creates and returns docker familiar for familiarType "docker"', () => {
-    const task = { config: { familiarType: 'docker' }, execution: {} } as TaskState;
-    const familiar = selectFamiliar(registry, task);
-    expect(familiar.type).toBe('docker');
+  it('lazily creates and returns docker executor for executorType "docker"', () => {
+    const task = { config: { executorType: 'docker' }, execution: {} } as TaskState;
+    const executor = selectExecutor(registry, task);
+    expect(executor.type).toBe('docker');
     // Second call returns same instance
-    const same = selectFamiliar(registry, task);
-    expect(same).toBe(familiar);
+    const same = selectExecutor(registry, task);
+    expect(same).toBe(executor);
   });
 
-  it('per-task handle map routes getTerminalSpec to correct familiar', () => {
-    const taskHandles = new Map<string, { handle: FamiliarHandle; familiar: Familiar }>();
+  it('per-task handle map routes getTerminalSpec to correct executor', () => {
+    const taskHandles = new Map<string, { handle: ExecutorHandle; executor: Executor }>();
 
     const worktreeFamiliar = registry.getDefault();
-    const dockerTask = { config: { familiarType: 'docker' }, execution: {} } as TaskState;
-    const dockerFamiliar = selectFamiliar(registry, dockerTask);
+    const dockerTask = { config: { executorType: 'docker' }, execution: {} } as TaskState;
+    const dockerFamiliar = selectExecutor(registry, dockerTask);
 
     const worktreeHandle = { executionId: 'worktree-1', taskId: 'task-worktree' };
     const dockerHandle = { executionId: 'docker-1', taskId: 'task-docker' };
-    taskHandles.set('task-worktree', { handle: worktreeHandle, familiar: worktreeFamiliar });
-    taskHandles.set('task-docker', { handle: dockerHandle, familiar: dockerFamiliar });
+    taskHandles.set('task-worktree', { handle: worktreeHandle, executor: worktreeFamiliar });
+    taskHandles.set('task-docker', { handle: dockerHandle, executor: dockerFamiliar });
 
     const worktreeEntry = taskHandles.get('task-worktree')!;
-    expect(worktreeEntry.familiar.type).toBe('worktree');
+    expect(worktreeEntry.executor.type).toBe('worktree');
 
     const dockerEntry = taskHandles.get('task-docker')!;
-    expect(dockerEntry.familiar.type).toBe('docker');
+    expect(dockerEntry.executor.type).toBe('docker');
   });
 });

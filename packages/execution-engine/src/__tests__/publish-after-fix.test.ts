@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execSync, execFileSync } from 'node:child_process';
 import type { TaskState } from '@invoker/workflow-core';
-import { publishAfterFixImpl, type MergeExecutorHost } from '../merge-executor.js';
+import { publishAfterFixImpl, type MergeRunnerHost } from '../merge-runner.js';
 
 /** Shell-based git for simple setup commands (no special chars in args). */
 function git(args: string, cwd: string): string {
@@ -70,7 +70,7 @@ function createSandbox() {
   return { root, originDir, hostDir, gateDir };
 }
 
-function makeHost(hostDir: string, gateDir: string, allTasks: TaskState[]): MergeExecutorHost {
+function makeHost(hostDir: string, gateDir: string, allTasks: TaskState[]): MergeRunnerHost {
   return {
     cwd: hostDir,
     defaultBranch: 'master',

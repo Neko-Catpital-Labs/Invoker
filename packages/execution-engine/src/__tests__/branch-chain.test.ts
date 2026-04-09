@@ -5,7 +5,7 @@
  * commit, carries transitive history, and provides correct upstream context
  * to downstream tasks for worktree execution and either action type (command/prompt).
  *
- * These tests run against real git repos in temp dirs, real TaskExecutor,
+ * These tests run against real git repos in temp dirs, real TaskRunner,
  * and real collectUpstreamBranches / buildUpstreamContext.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -15,7 +15,7 @@ import { tmpdir } from 'node:os';
 import { execSync } from 'node:child_process';
 import type { WorkResponse } from '@invoker/contracts';
 import type { TaskState } from '@invoker/workflow-core';
-import { TaskExecutor, FamiliarRegistry, WorktreeFamiliar } from '../index.js';
+import { TaskRunner, ExecutorRegistry, WorktreeExecutor } from '../index.js';
 
 function createTempRepo(): string {
   const dir = mkdtempSync(join(tmpdir(), 'branch-chain-'));
@@ -27,7 +27,7 @@ function createTempRepo(): string {
     join(dir, '.gitignore'),
     ['node_modules/', '.pnpm/', '.pnpm-store/', 'pnpm-debug.log*'].join('\n') + '\n',
   );
-  // WorktreeFamiliar runs pnpm install in the worktree — minimal manifest so provisioning succeeds.
+  // WorktreeExecutor runs pnpm install in the worktree — minimal manifest so provisioning succeeds.
   writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'branch-chain-test', version: '1.0.0', private: true }, null, 2));
   execSync('pnpm install', { cwd: dir, stdio: 'pipe' });
   writeFileSync(join(dir, 'initial.txt'), 'initial');
@@ -53,7 +53,7 @@ function branchExists(cwd: string, branch: string): boolean {
   }
 }
 
-type TaskType = { familiar: 'worktree'; action: 'command' | 'claude' };
+type TaskType = { executor: 'worktree'; action: 'command' | 'claude' };
 
 interface ChainConfig {
   a: TaskType;
@@ -62,7 +62,7 @@ interface ChainConfig {
 }
 
 function taskLabel(t: TaskType): string {
-  return `${t.familiar}-${t.action}`;
+  return `${t.executor}-${t.action}`;
 }
 
 describe('A→B→C branch chain', { timeout: 120_000 }, () => {
@@ -97,7 +97,7 @@ describe('A→B→C branch chain', { timeout: 120_000 }, () => {
 
   function buildChain(config: ChainConfig): {
     tasks: TaskState[];
-    executor: TaskExecutor;
+    executor: TaskRunner;
     responses: Map<string, WorkResponse>;
   } {
     const taskA = makeTaskState({
@@ -106,7 +106,7 @@ describe('A→B→C branch chain', { timeout: 120_000 }, () => {
       config: {
         command: config.a.action === 'command' ? 'echo task-a-done' : undefined,
         prompt: config.a.action === 'claude' ? 'Do step A' : undefined,
-        familiarType: config.a.familiar,
+        executorType: config.a.executor,
         workflowId: 'wf-test',
       },
     });
@@ -117,7 +117,7 @@ describe('A→B→C branch chain', { timeout: 120_000 }, () => {
       config: {
         command: config.b.action === 'command' ? 'echo task-b-done' : undefined,
         prompt: config.b.action === 'claude' ? 'Do step B' : undefined,
-        familiarType: config.b.familiar,
+        executorType: config.b.executor,
         workflowId: 'wf-test',
       },
     });
@@ -128,7 +128,7 @@ describe('A→B→C branch chain', { timeout: 120_000 }, () => {
       config: {
         command: config.c.action === 'command' ? 'echo task-c-done' : undefined,
         prompt: config.c.action === 'claude' ? 'Do step C' : undefined,
-        familiarType: config.c.familiar,
+        executorType: config.c.executor,
         workflowId: 'wf-test',
       },
     });
@@ -167,18 +167,18 @@ describe('A→B→C branch chain', { timeout: 120_000 }, () => {
       },
     };
 
-    const registry = new FamiliarRegistry();
-    const worktreeFamiliar = new WorktreeFamiliar({
+    const registry = new ExecutorRegistry();
+    const worktreeFamiliar = new WorktreeExecutor({
       cacheDir: join(tmpDir, 'branch-chain-cache'),
       worktreeBaseDir: join(tmpDir, 'branch-chain-wt'),
       claudeCommand: '/bin/echo',
     });
     registry.register('worktree', worktreeFamiliar);
 
-    const executor = new TaskExecutor({
+    const executor = new TaskRunner({
       orchestrator: orchestrator as any,
       persistence: persistence as any,
-      familiarRegistry: registry,
+      executorRegistry: registry,
       cwd: tmpDir,
       defaultBranch: 'master',
     });
@@ -187,7 +187,7 @@ describe('A→B→C branch chain', { timeout: 120_000 }, () => {
   }
 
   async function executeTask(
-    executor: TaskExecutor,
+    executor: TaskRunner,
     tasks: TaskState[],
     taskId: string,
   ): Promise<void> {
@@ -196,7 +196,7 @@ describe('A→B→C branch chain', { timeout: 120_000 }, () => {
     await (executor as any).executeTaskInner(task);
   }
 
-  const worktreeCmd: TaskType = { familiar: 'worktree', action: 'command' };
+  const worktreeCmd: TaskType = { executor: 'worktree', action: 'command' };
 
   describe('all-worktree-command chain', () => {
     it('every task has a branch', async () => {
@@ -328,32 +328,32 @@ describe('A→B→C branch chain', { timeout: 120_000 }, () => {
       const taskA = makeTaskState({
         id: 'task-a',
         description: 'Step A',
-        config: { command: 'echo a > diamond1-a.txt', familiarType: 'worktree', workflowId: 'wf-test' },
+        config: { command: 'echo a > diamond1-a.txt', executorType: 'worktree', workflowId: 'wf-test' },
       });
       const taskB = makeTaskState({
         id: 'task-b',
         description: 'Step B',
         dependencies: ['task-a'],
-        config: { command: 'echo b > diamond1-b.txt', familiarType: 'worktree', workflowId: 'wf-test' },
+        config: { command: 'echo b > diamond1-b.txt', executorType: 'worktree', workflowId: 'wf-test' },
       });
       const taskC = makeTaskState({
         id: 'task-c',
         description: 'Step C',
         dependencies: ['task-a'],
-        config: { command: 'echo c > diamond1-c.txt', familiarType: 'worktree', workflowId: 'wf-test' },
+        config: { command: 'echo c > diamond1-c.txt', executorType: 'worktree', workflowId: 'wf-test' },
       });
       const taskD = makeTaskState({
         id: 'task-d',
         description: 'Step D',
         dependencies: ['task-b', 'task-c'],
-        config: { command: 'echo d > diamond1-d.txt', familiarType: 'worktree', workflowId: 'wf-test' },
+        config: { command: 'echo d > diamond1-d.txt', executorType: 'worktree', workflowId: 'wf-test' },
       });
 
       const tasks = [taskA, taskB, taskC, taskD];
-      const registry = new FamiliarRegistry();
+      const registry = new ExecutorRegistry();
       registry.register(
         'worktree',
-        new WorktreeFamiliar({
+        new WorktreeExecutor({
           cacheDir: join(tmpDir, 'branch-chain-cache'),
           worktreeBaseDir: join(tmpDir, 'branch-chain-wt'),
           claudeCommand: '/bin/echo',
@@ -379,10 +379,10 @@ describe('A→B→C branch chain', { timeout: 120_000 }, () => {
         },
       };
 
-      const executor = new TaskExecutor({
+      const executor = new TaskRunner({
         orchestrator: orchestrator as any,
         persistence: persistence as any,
-        familiarRegistry: registry,
+        executorRegistry: registry,
         cwd: tmpDir,
         defaultBranch: 'master',
       });
@@ -421,32 +421,32 @@ describe('A→B→C branch chain', { timeout: 120_000 }, () => {
       const taskA = makeTaskState({
         id: 'task-a',
         description: 'Step A',
-        config: { command: 'echo a > diamond2-a.txt', familiarType: 'worktree', workflowId: 'wf-test' },
+        config: { command: 'echo a > diamond2-a.txt', executorType: 'worktree', workflowId: 'wf-test' },
       });
       const taskB = makeTaskState({
         id: 'task-b',
         description: 'Step B',
         dependencies: ['task-a'],
-        config: { command: 'echo b > diamond2-b.txt', familiarType: 'worktree', workflowId: 'wf-test' },
+        config: { command: 'echo b > diamond2-b.txt', executorType: 'worktree', workflowId: 'wf-test' },
       });
       const taskC = makeTaskState({
         id: 'task-c',
         description: 'Step C',
         dependencies: ['task-a'],
-        config: { command: 'echo c > diamond2-c.txt', familiarType: 'worktree', workflowId: 'wf-test' },
+        config: { command: 'echo c > diamond2-c.txt', executorType: 'worktree', workflowId: 'wf-test' },
       });
       const taskD = makeTaskState({
         id: 'task-d',
         description: 'Step D',
         dependencies: ['task-b', 'task-c'],
-        config: { command: 'echo d > diamond2-d.txt', familiarType: 'worktree', workflowId: 'wf-test' },
+        config: { command: 'echo d > diamond2-d.txt', executorType: 'worktree', workflowId: 'wf-test' },
       });
 
       const tasks = [taskA, taskB, taskC, taskD];
-      const registry = new FamiliarRegistry();
+      const registry = new ExecutorRegistry();
       registry.register(
         'worktree',
-        new WorktreeFamiliar({
+        new WorktreeExecutor({
           cacheDir: join(tmpDir, 'branch-chain-cache'),
           worktreeBaseDir: join(tmpDir, 'branch-chain-wt'),
           claudeCommand: '/bin/echo',
@@ -472,10 +472,10 @@ describe('A→B→C branch chain', { timeout: 120_000 }, () => {
         },
       };
 
-      const executor = new TaskExecutor({
+      const executor = new TaskRunner({
         orchestrator: orchestrator as any,
         persistence: persistence as any,
-        familiarRegistry: registry,
+        executorRegistry: registry,
         cwd: tmpDir,
         defaultBranch: 'master',
       });
@@ -501,25 +501,25 @@ describe('A→B→C branch chain', { timeout: 120_000 }, () => {
       const taskA = makeTaskState({
         id: 'task-a',
         description: 'Step A',
-        config: { command: 'echo a > fanin-a.txt', familiarType: 'worktree', workflowId: 'wf-test' },
+        config: { command: 'echo a > fanin-a.txt', executorType: 'worktree', workflowId: 'wf-test' },
       });
       const taskB = makeTaskState({
         id: 'task-b',
         description: 'Step B',
-        config: { command: 'echo b > fanin-b.txt', familiarType: 'worktree', workflowId: 'wf-test' },
+        config: { command: 'echo b > fanin-b.txt', executorType: 'worktree', workflowId: 'wf-test' },
       });
       const taskC = makeTaskState({
         id: 'task-c',
         description: 'Step C',
         dependencies: ['task-a', 'task-b'],
-        config: { command: 'echo c > fanin-c.txt', familiarType: 'worktree', workflowId: 'wf-test' },
+        config: { command: 'echo c > fanin-c.txt', executorType: 'worktree', workflowId: 'wf-test' },
       });
 
       const tasks = [taskA, taskB, taskC];
-      const registry = new FamiliarRegistry();
+      const registry = new ExecutorRegistry();
       registry.register(
         'worktree',
-        new WorktreeFamiliar({
+        new WorktreeExecutor({
           cacheDir: join(tmpDir, 'branch-chain-cache'),
           worktreeBaseDir: join(tmpDir, 'branch-chain-wt'),
           claudeCommand: '/bin/echo',
@@ -545,10 +545,10 @@ describe('A→B→C branch chain', { timeout: 120_000 }, () => {
         },
       };
 
-      const executor = new TaskExecutor({
+      const executor = new TaskRunner({
         orchestrator: orchestrator as any,
         persistence: persistence as any,
-        familiarRegistry: registry,
+        executorRegistry: registry,
         cwd: tmpDir,
         defaultBranch: 'master',
       });

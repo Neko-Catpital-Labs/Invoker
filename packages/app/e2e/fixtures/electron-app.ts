@@ -88,7 +88,7 @@ export { expect };
  *  Commands sleep briefly so the "running" state is visible long enough to capture. */
 /**
  * Local bare repo created by global-setup.ts. All E2E plans use this so
- * WorktreeFamiliar can clone without hitting the network.
+ * WorktreeExecutor can clone without hitting the network.
  */
 export const E2E_REPO_URL = 'file:///tmp/invoker-e2e-repo.git';
 

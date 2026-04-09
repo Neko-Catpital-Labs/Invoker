@@ -2,10 +2,10 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 import type { ChildProcess } from 'node:child_process';
 import type { WorkRequest, WorkResponse } from '@invoker/contracts';
-import type { PersistedTaskMeta } from '../familiar.js';
+import type { PersistedTaskMeta } from '../executor.js';
 import type { Writable, Readable } from 'node:stream';
 
-// Mock child_process before importing WorktreeFamiliar
+// Mock child_process before importing WorktreeExecutor
 vi.mock('node:child_process', () => ({
   spawn: vi.fn(),
 }));
@@ -18,8 +18,8 @@ vi.mock('node:fs', async (importOriginal) => {
 // Must import after mock setup
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync } from 'node:fs';
-import { WorktreeFamiliar, computeBranchHash } from '../worktree-familiar.js';
-import { BaseFamiliar } from '../base-familiar.js';
+import { WorktreeExecutor, computeBranchHash } from '../worktree-executor.js';
+import { BaseExecutor } from '../base-executor.js';
 
 const mockedSpawn = vi.mocked(spawn);
 
@@ -37,10 +37,10 @@ function makeRequest(overrides: Partial<WorkRequest> = {}): WorkRequest {
 }
 
 /**
- * Mock the RepoPool on a WorktreeFamiliar instance so that
+ * Mock the RepoPool on a WorktreeExecutor instance so that
  * pool.ensureClone / pool.acquireWorktree bypass real git.
  */
-function mockPool(fam: WorktreeFamiliar) {
+function mockPool(fam: WorktreeExecutor) {
   const pool = {
     ensureClone: vi.fn().mockResolvedValue('/fake/cache/clone'),
     acquireWorktree: vi.fn().mockImplementation((_repoUrl: string, branch: string) => {
@@ -201,21 +201,21 @@ describe('computeBranchHash', () => {
   });
 });
 
-describe('WorktreeFamiliar', () => {
-  let familiar: WorktreeFamiliar;
+describe('WorktreeExecutor', () => {
+  let executor: WorktreeExecutor;
 
   beforeEach(() => {
     vi.clearAllMocks();
-    familiar = new WorktreeFamiliar({
+    executor = new WorktreeExecutor({
       cacheDir: '/fake/cache',
       worktreeBaseDir: '/fake/worktrees',
     });
-    mockPool(familiar);
+    mockPool(executor);
 
     // Mock runBash so upstream merge scripts work with the spawn-level git mocks.
     // The bash scripts would normally call git commands inside a single bash process,
     // but in tests we need them to flow through the mocked spawn('git', ...).
-    vi.spyOn(BaseFamiliar.prototype as any, 'runBash').mockImplementation(
+    vi.spyOn(BaseExecutor.prototype as any, 'runBash').mockImplementation(
       async (script: string, _cwd: string) => {
         // Simulate bashPreserveOrReset: always force-create (not preserved)
         if (script.includes('PRESERVED=')) {
@@ -231,7 +231,7 @@ describe('WorktreeFamiliar', () => {
               .filter(b => b !== _cwd && !b.startsWith('/'));
             for (const b of branches) {
               try {
-                await (familiar as any).execGitSimple(
+                await (executor as any).execGitSimple(
                   ['merge', '--no-edit', '-m', `Invoker: merge ${b}`, b], _cwd,
                 );
               } catch (err: any) {
@@ -257,14 +257,14 @@ describe('WorktreeFamiliar', () => {
     const { taskProcess } = setupSpawnMock();
 
     const request = makeRequest();
-    const handle = await familiar.start(request);
+    const handle = await executor.start(request);
 
     expect(handle).toBeDefined();
     expect(handle.executionId).toBeDefined();
     expect(handle.taskId).toBe('action-1');
 
     // Verify pool.acquireWorktree was called with the correct branch
-    const pool = (familiar as any).pool;
+    const pool = (executor as any).pool;
     expect(pool.acquireWorktree).toHaveBeenCalledTimes(1);
     const [calledUrl, calledBranch] = pool.acquireWorktree.mock.calls[0];
     expect(calledUrl).toBe('git@github.com:test/repo.git');
@@ -281,7 +281,7 @@ describe('WorktreeFamiliar', () => {
     const { taskProcess } = setupSpawnMock();
 
     const request = makeRequest({ inputs: { command: 'make test' } });
-    await familiar.start(request);
+    await executor.start(request);
 
     // Find the task spawn call (non-git, non-pnpm-install)
     const taskCall = mockedSpawn.mock.calls.find(
@@ -302,7 +302,7 @@ describe('WorktreeFamiliar', () => {
     const { taskProcess } = setupSpawnMock();
 
     const request = makeRequest();
-    await familiar.start(request);
+    await executor.start(request);
 
     const pnpmCall = mockedSpawn.mock.calls.find(
       ([cmd, args]) => cmd === '/bin/bash' && (args as string[])?.[1]?.includes('pnpm install'),
@@ -326,10 +326,10 @@ describe('WorktreeFamiliar', () => {
     const { taskProcess } = setupSpawnMock();
 
     const request = makeRequest();
-    const handle = await familiar.start(request);
+    const handle = await executor.start(request);
 
     const responsePromise = new Promise<WorkResponse>((resolve) => {
-      familiar.onComplete(handle, (res) => resolve(res));
+      executor.onComplete(handle, (res) => resolve(res));
     });
 
     // Emit stdout then close the task process
@@ -350,11 +350,11 @@ describe('WorktreeFamiliar', () => {
     const { taskProcess } = setupSpawnMock();
 
     const request = makeRequest({ inputs: { command: 'sleep 60' } });
-    const handle = await familiar.start(request);
+    const handle = await executor.start(request);
 
     // Register onComplete before kill so close event is handled
     const responsePromise = new Promise<WorkResponse>((resolve) => {
-      familiar.onComplete(handle, (res) => resolve(res));
+      executor.onComplete(handle, (res) => resolve(res));
     });
 
     // When kill sends SIGTERM, simulate process exit
@@ -365,7 +365,7 @@ describe('WorktreeFamiliar', () => {
       return true;
     });
 
-    await familiar.kill(handle);
+    await executor.kill(handle);
 
     // Worktrees are intentionally preserved so users can inspect task output
     const removeCalls = mockedSpawn.mock.calls.filter(
@@ -409,10 +409,10 @@ describe('WorktreeFamiliar', () => {
       return tp as any;
     });
 
-    const handle1 = await familiar.start(
+    const handle1 = await executor.start(
       makeRequest({ requestId: 'req-1', actionId: 'action-1', inputs: { command: 'sleep 60' } }),
     );
-    const handle2 = await familiar.start(
+    const handle2 = await executor.start(
       makeRequest({ requestId: 'req-2', actionId: 'action-2', inputs: { command: 'sleep 60' } }),
     );
 
@@ -429,7 +429,7 @@ describe('WorktreeFamiliar', () => {
       return true;
     });
 
-    await familiar.destroyAll();
+    await executor.destroyAll();
 
     // Worktrees are intentionally preserved so users can inspect task output
     const removeCalls = mockedSpawn.mock.calls.filter(
@@ -447,22 +447,22 @@ describe('WorktreeFamiliar', () => {
     setupSpawnMock();
 
     // Mock pool.acquireWorktree to reject
-    (familiar as any).pool.acquireWorktree.mockRejectedValue(
+    (executor as any).pool.acquireWorktree.mockRejectedValue(
       new Error('bash exited with code 128: fatal: not a git repository'),
     );
 
     const request = makeRequest();
-    await expect(familiar.start(request)).rejects.toThrow('not a git repository');
+    await expect(executor.start(request)).rejects.toThrow('not a git repository');
   });
 
   it('onOutput relays stdout and stderr from task process', async () => {
     const { taskProcess } = setupSpawnMock();
 
     const request = makeRequest();
-    const handle = await familiar.start(request);
+    const handle = await executor.start(request);
 
     const output: string[] = [];
-    familiar.onOutput(handle, (data) => output.push(data));
+    executor.onOutput(handle, (data) => output.push(data));
 
     taskProcess.stdout!.emit('data', Buffer.from('stdout line\n'));
     taskProcess.stderr!.emit('data', Buffer.from('stderr line\n'));
@@ -482,16 +482,16 @@ describe('WorktreeFamiliar', () => {
       inputs: {},
     });
 
-    const handle = await familiar.start(request);
+    const handle = await executor.start(request);
 
     const response = await new Promise<WorkResponse>((resolve) => {
-      familiar.onComplete(handle, (res) => resolve(res));
+      executor.onComplete(handle, (res) => resolve(res));
     });
 
     expect(response.status).toBe('needs_input');
     expect(response.outputs.summary).toBe('Select winning experiment');
 
-    const pool = (familiar as any).pool;
+    const pool = (executor as any).pool;
     expect(pool.acquireWorktree).toHaveBeenCalledTimes(1);
     expect(handle.workspacePath).toMatch(/^\/fake\/worktrees\//);
     expect(handle.branch).toMatch(/^experiment\/action-1-[0-9a-f]{8}$/);
@@ -507,9 +507,9 @@ describe('WorktreeFamiliar', () => {
     const { taskProcess } = setupSpawnMock();
 
     const request = makeRequest({ inputs: { command: 'cat' } });
-    const handle = await familiar.start(request);
+    const handle = await executor.start(request);
 
-    familiar.sendInput(handle, 'hello\n');
+    executor.sendInput(handle, 'hello\n');
     expect((taskProcess.stdin as any).write).toHaveBeenCalledWith('hello\n');
 
     // Cleanup
@@ -520,8 +520,8 @@ describe('WorktreeFamiliar', () => {
     const { taskProcess } = setupSpawnMock();
 
     const request = makeRequest();
-    const handle = await familiar.start(request);
-    const spec = familiar.getTerminalSpec(handle);
+    const handle = await executor.start(request);
+    const spec = executor.getTerminalSpec(handle);
 
     expect(spec).toBeDefined();
     expect(spec!.cwd).toMatch(/^\/fake\/worktrees\//);
@@ -535,7 +535,7 @@ describe('WorktreeFamiliar', () => {
     const { taskProcess } = setupSpawnMock();
 
     const request = makeRequest();
-    const handle = await familiar.start(request);
+    const handle = await executor.start(request);
 
     expect(handle.workspacePath).toBeDefined();
     expect(handle.workspacePath).toMatch(/^\/fake\/worktrees\//);
@@ -545,7 +545,7 @@ describe('WorktreeFamiliar', () => {
   });
 
   it('getTerminalSpec returns null for unknown handle', () => {
-    const spec = familiar.getTerminalSpec({ executionId: 'nonexistent', taskId: 'x' });
+    const spec = executor.getTerminalSpec({ executionId: 'nonexistent', taskId: 'x' });
     expect(spec).toBeNull();
   });
 
@@ -568,10 +568,10 @@ describe('WorktreeFamiliar', () => {
       destroyAll: vi.fn().mockResolvedValue(undefined),
       getClonePath: vi.fn().mockReturnValue('/fake/cache/clone'),
     };
-    (familiar as any).pool = pool;
-    vi.spyOn(familiar as any, 'provisionWorktree').mockRejectedValue(new Error('lockfile mismatch'));
+    (executor as any).pool = pool;
+    vi.spyOn(executor as any, 'provisionWorktree').mockRejectedValue(new Error('lockfile mismatch'));
 
-    const err = await familiar.start(makeRequest()).catch((e: unknown) => e as Error & { workspacePath?: string; branch?: string });
+    const err = await executor.start(makeRequest()).catch((e: unknown) => e as Error & { workspacePath?: string; branch?: string });
 
     expect(err).toBeInstanceOf(Error);
     expect(err.message).toContain('lockfile mismatch');
@@ -593,10 +593,10 @@ describe('WorktreeFamiliar', () => {
           upstreamBranches: ['experiment/dep-1', 'experiment/dep-2'],
         },
       });
-      await familiar.start(request);
+      await executor.start(request);
 
       // setupTaskBranch uses runBash for merging. Verify the merge script contains both branches.
-      const runBashMock = vi.mocked((BaseFamiliar.prototype as any).runBash);
+      const runBashMock = vi.mocked((BaseExecutor.prototype as any).runBash);
       const mergeCall = runBashMock.mock.calls.find(
         (call) => call[0].includes('Invoker: merge'),
       );
@@ -613,10 +613,10 @@ describe('WorktreeFamiliar', () => {
       const request = makeRequest({
         inputs: { command: 'echo hello', upstreamBranches: [] },
       });
-      await familiar.start(request);
+      await executor.start(request);
 
       // No merge script should be called
-      const runBashMock = vi.mocked((BaseFamiliar.prototype as any).runBash);
+      const runBashMock = vi.mocked((BaseExecutor.prototype as any).runBash);
       const mergeCall = runBashMock.mock.calls.find(
         (call) => call[0].includes('Invoker: merge'),
       );
@@ -629,9 +629,9 @@ describe('WorktreeFamiliar', () => {
       const { taskProcess } = setupSpawnMock();
 
       const request = makeRequest({ inputs: { command: 'echo hello' } });
-      await familiar.start(request);
+      await executor.start(request);
 
-      const runBashMock = vi.mocked((BaseFamiliar.prototype as any).runBash);
+      const runBashMock = vi.mocked((BaseExecutor.prototype as any).runBash);
       const mergeCall = runBashMock.mock.calls.find(
         (call) => call[0].includes('Invoker: merge'),
       );
@@ -649,9 +649,9 @@ describe('WorktreeFamiliar', () => {
           upstreamBranches: ['experiment/dep-task-abc123'],
         },
       });
-      await familiar.start(request);
+      await executor.start(request);
 
-      const runBashMock = vi.mocked((BaseFamiliar.prototype as any).runBash);
+      const runBashMock = vi.mocked((BaseExecutor.prototype as any).runBash);
       const mergeCall = runBashMock.mock.calls.find(
         (call) => call[0].includes('Invoker: merge'),
       );
@@ -670,9 +670,9 @@ describe('WorktreeFamiliar', () => {
           upstreamBranches: ['experiment/fork1-add-api-hash1', 'experiment/fork2-caching-hash2'],
         },
       });
-      await familiar.start(request);
+      await executor.start(request);
 
-      const runBashMock = vi.mocked((BaseFamiliar.prototype as any).runBash);
+      const runBashMock = vi.mocked((BaseExecutor.prototype as any).runBash);
       const mergeCall = runBashMock.mock.calls.find(
         (call) => call[0].includes('Invoker: merge'),
       );
@@ -686,7 +686,7 @@ describe('WorktreeFamiliar', () => {
     it('fails the task start when merge conflicts occur', async () => {
       setupSpawnMock();
 
-      vi.mocked((BaseFamiliar.prototype as any).runBash).mockImplementation(
+      vi.mocked((BaseExecutor.prototype as any).runBash).mockImplementation(
         async (script: string) => {
           if (script.includes('PRESERVED=')) {
             return 'PRESERVED=0\nBASE_SHA=abc123\n';
@@ -708,11 +708,11 @@ describe('WorktreeFamiliar', () => {
         },
       });
 
-      const handle = await familiar.start(request);
+      const handle = await executor.start(request);
       expect(handle).toBeDefined();
 
       const response = await new Promise<WorkResponse>((resolve) => {
-        familiar.onComplete(handle, resolve);
+        executor.onComplete(handle, resolve);
       });
       expect(response.status).toBe('failed');
       expect(response.outputs?.exitCode).toBe(1);
@@ -725,7 +725,7 @@ describe('WorktreeFamiliar', () => {
     it('error message includes conflict file details', async () => {
       setupSpawnMock();
 
-      vi.mocked((BaseFamiliar.prototype as any).runBash).mockImplementation(
+      vi.mocked((BaseExecutor.prototype as any).runBash).mockImplementation(
         async (script: string) => {
           if (script.includes('PRESERVED=')) {
             return 'PRESERVED=0\nBASE_SHA=abc123\n';
@@ -747,9 +747,9 @@ describe('WorktreeFamiliar', () => {
         },
       });
 
-      const handle = await familiar.start(request);
+      const handle = await executor.start(request);
       const response = await new Promise<WorkResponse>((resolve) => {
-        familiar.onComplete(handle, resolve);
+        executor.onComplete(handle, resolve);
       });
       expect(response.status).toBe('failed');
       const errObj = JSON.parse(response.outputs!.error!);
@@ -760,7 +760,7 @@ describe('WorktreeFamiliar', () => {
     it('gives clear error when upstream branch does not exist', async () => {
       setupSpawnMock();
 
-      vi.mocked((BaseFamiliar.prototype as any).runBash).mockImplementation(
+      vi.mocked((BaseExecutor.prototype as any).runBash).mockImplementation(
         async (script: string) => {
           if (script.includes('PRESERVED=')) {
             return 'PRESERVED=0\nBASE_SHA=abc123\n';
@@ -782,7 +782,7 @@ describe('WorktreeFamiliar', () => {
         },
       });
 
-      await expect(familiar.start(request)).rejects.toThrow();
+      await expect(executor.start(request)).rejects.toThrow();
     });
   });
 
@@ -790,12 +790,12 @@ describe('WorktreeFamiliar', () => {
 
   describe('claude action type', () => {
     it('spawns claude CLI with session ID instead of echo stub', async () => {
-      const claudeFamiliar = new WorktreeFamiliar({
+      const claudeExecutor = new WorktreeExecutor({
         cacheDir: '/fake/cache',
         worktreeBaseDir: '/fake/worktrees',
         claudeCommand: '/bin/echo',
       });
-      mockPool(claudeFamiliar);
+      mockPool(claudeExecutor);
 
       const { taskProcess } = setupSpawnMock();
 
@@ -803,7 +803,7 @@ describe('WorktreeFamiliar', () => {
         actionType: 'ai_task',
         inputs: { prompt: 'test prompt' },
       });
-      const handle = await claudeFamiliar.start(request);
+      const handle = await claudeExecutor.start(request);
 
       // Verify the command is the claude command, not /bin/bash echo
       const taskCall = mockedSpawn.mock.calls.find(
@@ -827,12 +827,12 @@ describe('WorktreeFamiliar', () => {
     });
 
     it('prepends upstream context to prompt', async () => {
-      const claudeFamiliar = new WorktreeFamiliar({
+      const claudeExecutor = new WorktreeExecutor({
         cacheDir: '/fake/cache',
         worktreeBaseDir: '/fake/worktrees',
         claudeCommand: '/bin/echo',
       });
-      mockPool(claudeFamiliar);
+      mockPool(claudeExecutor);
 
       const { taskProcess } = setupSpawnMock();
 
@@ -845,7 +845,7 @@ describe('WorktreeFamiliar', () => {
           ],
         },
       });
-      await claudeFamiliar.start(request);
+      await claudeExecutor.start(request);
 
       const taskCall = mockedSpawn.mock.calls.find(
         ([cmd, args]) => cmd !== 'git' && !(cmd === '/bin/bash' && (args as string[])?.[1]?.includes('pnpm install')),
@@ -859,12 +859,12 @@ describe('WorktreeFamiliar', () => {
     });
 
     it('includes agentSessionId in completion response outputs', async () => {
-      const claudeFamiliar = new WorktreeFamiliar({
+      const claudeExecutor = new WorktreeExecutor({
         cacheDir: '/fake/cache',
         worktreeBaseDir: '/fake/worktrees',
         claudeCommand: '/bin/echo',
       });
-      mockPool(claudeFamiliar);
+      mockPool(claudeExecutor);
 
       const { taskProcess } = setupSpawnMock();
 
@@ -872,10 +872,10 @@ describe('WorktreeFamiliar', () => {
         actionType: 'ai_task',
         inputs: { prompt: 'test' },
       });
-      const handle = await claudeFamiliar.start(request);
+      const handle = await claudeExecutor.start(request);
 
       const responsePromise = new Promise<WorkResponse>((resolve) => {
-        claudeFamiliar.onComplete(handle, (res) => resolve(res));
+        claudeExecutor.onComplete(handle, (res) => resolve(res));
       });
 
       taskProcess.emit('close', 0, null);
@@ -885,12 +885,12 @@ describe('WorktreeFamiliar', () => {
     });
 
     it('getTerminalSpec returns claude --resume for claude tasks', async () => {
-      const claudeFamiliar = new WorktreeFamiliar({
+      const claudeExecutor = new WorktreeExecutor({
         cacheDir: '/fake/cache',
         worktreeBaseDir: '/fake/worktrees',
         claudeCommand: '/bin/echo',
       });
-      mockPool(claudeFamiliar);
+      mockPool(claudeExecutor);
 
       const { taskProcess } = setupSpawnMock();
 
@@ -898,8 +898,8 @@ describe('WorktreeFamiliar', () => {
         actionType: 'ai_task',
         inputs: { prompt: 'test' },
       });
-      const handle = await claudeFamiliar.start(request);
-      const spec = claudeFamiliar.getTerminalSpec(handle);
+      const handle = await claudeExecutor.start(request);
+      const spec = claudeExecutor.getTerminalSpec(handle);
 
       expect(spec).toBeDefined();
       expect(spec!.command).toBe('claude');
@@ -914,7 +914,7 @@ describe('WorktreeFamiliar', () => {
       const { taskProcess } = setupSpawnMock();
 
       const request = makeRequest({ inputs: { command: 'echo hello' } });
-      const handle = await familiar.start(request);
+      const handle = await executor.start(request);
 
       expect(handle.agentSessionId).toBeUndefined();
 
@@ -922,12 +922,12 @@ describe('WorktreeFamiliar', () => {
     });
 
     it('uses ignore for stdin when actionType is claude', async () => {
-      const claudeFamiliar = new WorktreeFamiliar({
+      const claudeExecutor = new WorktreeExecutor({
         cacheDir: '/fake/cache',
         worktreeBaseDir: '/fake/worktrees',
         claudeCommand: '/bin/echo',
       });
-      mockPool(claudeFamiliar);
+      mockPool(claudeExecutor);
 
       const { taskProcess } = setupSpawnMock();
 
@@ -935,7 +935,7 @@ describe('WorktreeFamiliar', () => {
         actionType: 'ai_task',
         inputs: { prompt: 'test' },
       });
-      await claudeFamiliar.start(request);
+      await claudeExecutor.start(request);
 
       const taskCall = mockedSpawn.mock.calls.find(
         (call) => call[0] !== 'git',
@@ -954,7 +954,7 @@ describe('WorktreeFamiliar', () => {
       const request = makeRequest({
         inputs: { command: 'echo hello', baseBranch: 'master' },
       });
-      await familiar.start(request);
+      await executor.start(request);
 
       // Short branch names resolve via origin/<branch> after fetch (plan base on remote tip)
       const gitCalls = mockedSpawn.mock.calls.filter((call) => call[0] === 'git');
@@ -970,7 +970,7 @@ describe('WorktreeFamiliar', () => {
       expect(revParseCall).toBeDefined();
 
       // pool.acquireWorktree should have been called with the branch
-      const pool = (familiar as any).pool;
+      const pool = (executor as any).pool;
       expect(pool.acquireWorktree).toHaveBeenCalledTimes(1);
 
       taskProcess.emit('close', 0, null);
@@ -982,7 +982,7 @@ describe('WorktreeFamiliar', () => {
       const request = makeRequest({
         inputs: { command: 'echo hello' },
       });
-      await familiar.start(request);
+      await executor.start(request);
 
       // rev-parse should target HEAD (default)
       const gitCalls = mockedSpawn.mock.calls.filter((call) => call[0] === 'git');
@@ -992,7 +992,7 @@ describe('WorktreeFamiliar', () => {
       expect(revParseCall).toBeDefined();
 
       // pool.acquireWorktree should have been called
-      const pool = (familiar as any).pool;
+      const pool = (executor as any).pool;
       expect(pool.acquireWorktree).toHaveBeenCalledTimes(1);
 
       taskProcess.emit('close', 0, null);
@@ -1010,10 +1010,10 @@ describe('WorktreeFamiliar', () => {
       const { taskProcess } = setupSpawnMock();
 
       const request = makeRequest();
-      const handle = await familiar.start(request);
+      const handle = await executor.start(request);
       expect(handle).toBeDefined();
 
-      const pool = (familiar as any).pool;
+      const pool = (executor as any).pool;
       expect(pool.acquireWorktree).toHaveBeenCalledTimes(1);
       const [, calledBranch] = pool.acquireWorktree.mock.calls[0];
       expect(calledBranch).toMatch(/^experiment\/action-1-[0-9a-f]{8}$/);
@@ -1024,19 +1024,19 @@ describe('WorktreeFamiliar', () => {
     it('still fails if pool.acquireWorktree rejects', async () => {
       setupSpawnMock();
 
-      (familiar as any).pool.acquireWorktree.mockRejectedValue(
+      (executor as any).pool.acquireWorktree.mockRejectedValue(
         new Error("bash exited with code 128: fatal: branch is already used by worktree at '/old/worktree'"),
       );
 
       const request = makeRequest();
-      await expect(familiar.start(request)).rejects.toThrow(/already used by worktree/);
+      await expect(executor.start(request)).rejects.toThrow(/already used by worktree/);
     });
 
     it('start succeeds when pool.acquireWorktree succeeds (no conflict)', async () => {
       const { taskProcess } = setupSpawnMock();
 
       const request = makeRequest();
-      const handle = await familiar.start(request);
+      const handle = await executor.start(request);
       expect(handle).toBeDefined();
       expect(handle.workspacePath).toMatch(/^\/fake\/worktrees\//);
 
@@ -1047,7 +1047,7 @@ describe('WorktreeFamiliar', () => {
   describe('getRestoredTerminalSpec', () => {
     const baseMeta: PersistedTaskMeta = {
       taskId: 'task-wt-1',
-      familiarType: 'worktree',
+      executorType: 'worktree',
     };
 
     afterEach(() => {
@@ -1056,7 +1056,7 @@ describe('WorktreeFamiliar', () => {
 
     it('returns cwd spec when worktree exists', () => {
       vi.mocked(existsSync).mockReturnValue(true);
-      const spec = familiar.getRestoredTerminalSpec({
+      const spec = executor.getRestoredTerminalSpec({
         ...baseMeta,
         workspacePath: '/home/user/.invoker/worktrees/wt-abc',
       });
@@ -1065,7 +1065,7 @@ describe('WorktreeFamiliar', () => {
 
     it('returns claude --resume spec with cwd when session exists', () => {
       vi.mocked(existsSync).mockReturnValue(true);
-      const spec = familiar.getRestoredTerminalSpec({
+      const spec = executor.getRestoredTerminalSpec({
         ...baseMeta,
         workspacePath: '/home/user/.invoker/worktrees/wt-abc',
         agentSessionId: 'session-wt-1',
@@ -1080,7 +1080,7 @@ describe('WorktreeFamiliar', () => {
     it('throws when worktree path no longer exists', () => {
       vi.mocked(existsSync).mockReturnValue(false);
       expect(() =>
-        familiar.getRestoredTerminalSpec({
+        executor.getRestoredTerminalSpec({
           ...baseMeta,
           workspacePath: '/home/user/.invoker/worktrees/deleted-wt',
         }),
@@ -1089,7 +1089,7 @@ describe('WorktreeFamiliar', () => {
 
     it('returns git checkout when workspacePath and branch are set', () => {
       vi.mocked(existsSync).mockReturnValue(true);
-      const spec = familiar.getRestoredTerminalSpec({
+      const spec = executor.getRestoredTerminalSpec({
         ...baseMeta,
         workspacePath: '/fake/repo',
         branch: 'plan/my-workflow',
@@ -1102,7 +1102,7 @@ describe('WorktreeFamiliar', () => {
 
     it('returns git checkout when workspacePath is a worktree path and branch is set', () => {
       vi.mocked(existsSync).mockReturnValue(true);
-      const spec = familiar.getRestoredTerminalSpec({
+      const spec = executor.getRestoredTerminalSpec({
         ...baseMeta,
         workspacePath: '/fake/worktrees/wt-abc',
         branch: 'plan/my-workflow',
@@ -1114,25 +1114,25 @@ describe('WorktreeFamiliar', () => {
     });
 
     it('returns spec with undefined cwd when no workspace path', () => {
-      const spec = familiar.getRestoredTerminalSpec(baseMeta);
+      const spec = executor.getRestoredTerminalSpec(baseMeta);
       expect(spec).toEqual({ cwd: undefined });
     });
   });
 
   describe('git availability pre-flight check', () => {
     beforeEach(() => {
-      BaseFamiliar.resetGitAvailableCheck();
+      BaseExecutor.resetGitAvailableCheck();
     });
 
     it('throws when git is not available', async () => {
       const spy = vi.spyOn(
-        BaseFamiliar.prototype as any,
+        BaseExecutor.prototype as any,
         'execGitSimple',
       ).mockRejectedValueOnce(
         new Error('Failed to spawn git: spawn git ENOENT'),
       );
 
-      const familiar = new WorktreeFamiliar({
+      const executor = new WorktreeExecutor({
         cacheDir: '/tmp/fake-cache',
         worktreeBaseDir: '/tmp/fake-worktrees',
       });
@@ -1144,7 +1144,7 @@ describe('WorktreeFamiliar', () => {
         callbackUrl: '',
         timestamps: { createdAt: new Date().toISOString() },
       };
-      await expect(familiar.start(request)).rejects.toThrow(
+      await expect(executor.start(request)).rejects.toThrow(
         'git is not available on PATH',
       );
       spy.mockRestore();
@@ -1156,7 +1156,7 @@ describe('WorktreeFamiliar', () => {
       const { taskProcess } = setupSpawnMock();
 
       const request = makeRequest();
-      const handle = await familiar.start(request);
+      const handle = await executor.start(request);
 
       // Generate many chunks to exceed buffer cap
       for (let i = 0; i < 1000; i++) {
@@ -1165,7 +1165,7 @@ describe('WorktreeFamiliar', () => {
 
       // Late subscriber should still receive buffered chunks (the tail)
       const lateOutput: string[] = [];
-      familiar.onOutput(handle, (data) => lateOutput.push(data));
+      executor.onOutput(handle, (data) => lateOutput.push(data));
 
       // The late subscriber should receive some chunks, but not necessarily all 1000
       expect(lateOutput.length).toBeGreaterThan(0);
@@ -1177,7 +1177,7 @@ describe('WorktreeFamiliar', () => {
       const { taskProcess } = setupSpawnMock();
 
       const request = makeRequest();
-      const handle = await familiar.start(request);
+      const handle = await executor.start(request);
 
       // Generate chunks exceeding any reasonable chunk limit
       for (let i = 0; i < 2000; i++) {
@@ -1186,7 +1186,7 @@ describe('WorktreeFamiliar', () => {
 
       // Late subscriber should not receive all 2000 chunks
       const lateOutput: string[] = [];
-      familiar.onOutput(handle, (data) => lateOutput.push(data));
+      executor.onOutput(handle, (data) => lateOutput.push(data));
 
       // Verify buffer is capped (assume max is < 2000)
       expect(lateOutput.length).toBeLessThan(2000);
@@ -1198,7 +1198,7 @@ describe('WorktreeFamiliar', () => {
       const { taskProcess } = setupSpawnMock();
 
       const request = makeRequest();
-      const handle = await familiar.start(request);
+      const handle = await executor.start(request);
 
       // Generate large chunks to exceed byte limit
       const largeChunk = 'x'.repeat(1024 * 100); // 100KB chunks
@@ -1208,7 +1208,7 @@ describe('WorktreeFamiliar', () => {
 
       // Late subscriber should not receive all data
       const lateOutput: string[] = [];
-      familiar.onOutput(handle, (data) => lateOutput.push(data));
+      executor.onOutput(handle, (data) => lateOutput.push(data));
 
       const totalBytes = lateOutput.join('').length;
       // Total should be capped (assume max is < 10MB)
@@ -1221,7 +1221,7 @@ describe('WorktreeFamiliar', () => {
       const { taskProcess } = setupSpawnMock();
 
       const request = makeRequest();
-      const handle = await familiar.start(request);
+      const handle = await executor.start(request);
 
       // Generate numbered chunks to verify order
       for (let i = 0; i < 1000; i++) {
@@ -1230,7 +1230,7 @@ describe('WorktreeFamiliar', () => {
 
       // Late subscriber should receive tail in order
       const lateOutput: string[] = [];
-      familiar.onOutput(handle, (data) => lateOutput.push(data));
+      executor.onOutput(handle, (data) => lateOutput.push(data));
 
       const joined = lateOutput.join('');
       const lines = joined.split('\n').filter(Boolean);
@@ -1251,7 +1251,7 @@ describe('WorktreeFamiliar', () => {
       const { taskProcess } = setupSpawnMock();
 
       const request = makeRequest();
-      const handle = await familiar.start(request);
+      const handle = await executor.start(request);
 
       // Simulate huge output (50MB worth of data)
       const hugeChunk = 'x'.repeat(1024 * 1024); // 1MB chunks
@@ -1261,7 +1261,7 @@ describe('WorktreeFamiliar', () => {
 
       // Late subscriber should receive capped output
       const lateOutput: string[] = [];
-      familiar.onOutput(handle, (data) => lateOutput.push(data));
+      executor.onOutput(handle, (data) => lateOutput.push(data));
 
       const totalBytes = lateOutput.join('').length;
       // Should be significantly less than 50MB
@@ -1274,7 +1274,7 @@ describe('WorktreeFamiliar', () => {
       const { taskProcess } = setupSpawnMock();
 
       const request = makeRequest();
-      const handle = await familiar.start(request);
+      const handle = await executor.start(request);
 
       // Generate chunks
       for (let i = 0; i < 500; i++) {
@@ -1285,8 +1285,8 @@ describe('WorktreeFamiliar', () => {
       const subscriber1: string[] = [];
       const subscriber2: string[] = [];
 
-      familiar.onOutput(handle, (data) => subscriber1.push(data));
-      familiar.onOutput(handle, (data) => subscriber2.push(data));
+      executor.onOutput(handle, (data) => subscriber1.push(data));
+      executor.onOutput(handle, (data) => subscriber2.push(data));
 
       // Both should receive identical buffered output
       expect(subscriber1).toEqual(subscriber2);
@@ -1298,10 +1298,10 @@ describe('WorktreeFamiliar', () => {
       const { taskProcess } = setupSpawnMock();
 
       const request = makeRequest();
-      const handle = await familiar.start(request);
+      const handle = await executor.start(request);
 
       const earlyOutput: string[] = [];
-      familiar.onOutput(handle, (data) => earlyOutput.push(data));
+      executor.onOutput(handle, (data) => earlyOutput.push(data));
 
       // Generate many chunks
       for (let i = 0; i < 1000; i++) {
@@ -1309,7 +1309,7 @@ describe('WorktreeFamiliar', () => {
       }
 
       const lateOutput: string[] = [];
-      familiar.onOutput(handle, (data) => lateOutput.push(data));
+      executor.onOutput(handle, (data) => lateOutput.push(data));
 
       // Early subscriber should have more data than late subscriber
       expect(earlyOutput.length).toBeGreaterThanOrEqual(lateOutput.length);
@@ -1319,15 +1319,15 @@ describe('WorktreeFamiliar', () => {
   });
 
   describe('orphan entry GC and diagnostics', () => {
-    let familiar: WorktreeFamiliar;
+    let executor: WorktreeExecutor;
 
     beforeEach(() => {
-      familiar = new WorktreeFamiliar({
+      executor = new WorktreeExecutor({
         cacheDir: '/tmp/fake-cache',
         worktreeBaseDir: '/tmp/fake-worktrees',
         heartbeatIntervalMs: 100, // Fast heartbeat for testing
       });
-      mockPool(familiar);
+      mockPool(executor);
       vi.mocked(mkdirSync).mockReturnValue(undefined);
     });
 
@@ -1339,10 +1339,10 @@ describe('WorktreeFamiliar', () => {
         const responses: WorkResponse[] = [];
 
         const request = makeRequest();
-        const handle = await familiar.start(request);
+        const handle = await executor.start(request);
 
-        familiar.onOutput(handle, (data) => { outputLines.push(data); });
-        familiar.onComplete(handle, (response) => { responses.push(response); });
+        executor.onOutput(handle, (data) => { outputLines.push(data); });
+        executor.onComplete(handle, (response) => { responses.push(response); });
 
         // Simulate process exiting but close handler not firing
         (taskProcess as any).exitCode = 0;
@@ -1374,9 +1374,9 @@ describe('WorktreeFamiliar', () => {
         const outputLines: string[] = [];
 
         const request = makeRequest();
-        const handle = await familiar.start(request);
+        const handle = await executor.start(request);
 
-        familiar.onOutput(handle, (data) => { outputLines.push(data); });
+        executor.onOutput(handle, (data) => { outputLines.push(data); });
 
         // Simulate orphaned process with specific exit code
         (taskProcess as any).exitCode = 42;
@@ -1403,10 +1403,10 @@ describe('WorktreeFamiliar', () => {
         const responses: WorkResponse[] = [];
 
         const request = makeRequest();
-        const handle = await familiar.start(request);
+        const handle = await executor.start(request);
 
-        familiar.onOutput(handle, (data) => { outputLines.push(data); });
-        familiar.onComplete(handle, (response) => { responses.push(response); });
+        executor.onOutput(handle, (data) => { outputLines.push(data); });
+        executor.onComplete(handle, (response) => { responses.push(response); });
 
         // Process is still running (not orphaned)
         (taskProcess as any).exitCode = null;
@@ -1446,10 +1446,10 @@ describe('WorktreeFamiliar', () => {
         const responses: WorkResponse[] = [];
 
         const request = makeRequest();
-        const handle = await familiar.start(request);
+        const handle = await executor.start(request);
 
-        familiar.onOutput(handle, (data) => { outputLines.push(data); });
-        familiar.onComplete(handle, (response) => { responses.push(response); });
+        executor.onOutput(handle, (data) => { outputLines.push(data); });
+        executor.onComplete(handle, (response) => { responses.push(response); });
 
         // Complete the task
         taskProcess.stdout!.emit('data', Buffer.from('done\n'));
@@ -1475,7 +1475,7 @@ describe('WorktreeFamiliar', () => {
     it('max duration timeout kills process when exceeded', async () => {
       vi.useFakeTimers();
       try {
-        const familiarWithTimeout = new WorktreeFamiliar({
+        const familiarWithTimeout = new WorktreeExecutor({
           cacheDir: '/tmp/fake-cache',
           worktreeBaseDir: '/tmp/fake-worktrees',
           heartbeatIntervalMs: 100,
@@ -1522,20 +1522,20 @@ describe('WorktreeFamiliar', () => {
           makeRequest({ actionId: 'task-3' }),
         ];
 
-        const handles: Array<Awaited<ReturnType<typeof familiar.start>>> = [];
+        const handles: Array<Awaited<ReturnType<typeof executor.start>>> = [];
         const taskProcesses: Array<ChildProcess & EventEmitter> = [];
         for (const request of requests) {
           // Reset spawn mock for each task
           const { taskProcess } = setupSpawnMock();
           taskProcesses.push(taskProcess);
-          const handle = await familiar.start(request);
+          const handle = await executor.start(request);
           handles.push(handle);
           outputMap.set(request.actionId, []);
           responseMap.set(request.actionId, []);
-          familiar.onOutput(handle, (data) => {
+          executor.onOutput(handle, (data) => {
             outputMap.get(request.actionId)!.push(data);
           });
-          familiar.onComplete(handle, (response) => {
+          executor.onComplete(handle, (response) => {
             responseMap.get(request.actionId)!.push(response);
           });
         }

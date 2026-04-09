@@ -226,21 +226,41 @@ export class RepoPool {
       }
     }
 
-    // Fallback: reuse worktree for same actionId but different hash (preserves conflict resolutions)
+    // Fallback: reuse worktree for same actionId but different hash (preserves conflict resolutions).
+    // Only reuse when the new `base` is an ancestor of the existing worktree's HEAD — this means
+    // the worktree already contains the caller's base revision and only the experiment commits are
+    // "extra" (e.g. conflict resolution). If `base` has advanced beyond what the worktree contains
+    // (e.g. master moved forward and rebaseAndRetry/bumpGeneration wants a fresh branch from the
+    // new base), skip reuse and fall through to fresh creation.
     if (!reusedExisting && actionId) {
       const actionIdHit = findManagedWorktreeByActionId(porcelain, actionId, managedPrefixes);
       if (actionIdHit && existsSync(actionIdHit.path)) {
-        try {
-          await this.execGit(['branch', '-m', actionIdHit.branch, branch], actionIdHit.path);
-          const head = (await this.execGit(['rev-parse', '--abbrev-ref', 'HEAD'], actionIdHit.path)).trim();
-          if (abbrevRefMatchesBranch(head, branch)) {
-            effectivePath = actionIdHit.path;
-            reusedExisting = true;
-            console.log(
-              `${RESTART_TO_BRANCH_TRACE} RepoPool.doAcquireWorktree reuse by actionId: renamed ${actionIdHit.branch} → ${branch} path=${effectivePath}`,
-            );
+        let baseIsAncestorOfHead = true;
+        if (base) {
+          try {
+            await this.execGit(['merge-base', '--is-ancestor', base, 'HEAD'], actionIdHit.path);
+            // exit 0 → base is ancestor of HEAD → worktree is up-to-date with caller's base
+          } catch {
+            baseIsAncestorOfHead = false;
           }
-        } catch { /* fall through to create fresh */ }
+        }
+        if (baseIsAncestorOfHead) {
+          try {
+            await this.execGit(['branch', '-m', actionIdHit.branch, branch], actionIdHit.path);
+            const head = (await this.execGit(['rev-parse', '--abbrev-ref', 'HEAD'], actionIdHit.path)).trim();
+            if (abbrevRefMatchesBranch(head, branch)) {
+              effectivePath = actionIdHit.path;
+              reusedExisting = true;
+              console.log(
+                `${RESTART_TO_BRANCH_TRACE} RepoPool.doAcquireWorktree reuse by actionId: renamed ${actionIdHit.branch} → ${branch} path=${effectivePath}`,
+              );
+            }
+          } catch { /* fall through to create fresh */ }
+        } else {
+          console.log(
+            `${RESTART_TO_BRANCH_TRACE} RepoPool.doAcquireWorktree skip actionId reuse: base=${base?.slice(0, 8) ?? 'unset'} is not ancestor of HEAD at ${actionIdHit.path} (base advanced → fresh branch)`,
+          );
+        }
       }
     }
 

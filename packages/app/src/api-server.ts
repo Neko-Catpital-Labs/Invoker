@@ -22,7 +22,7 @@
  *   POST   /api/tasks/:id/reject       body: { reason? }
  *   POST   /api/tasks/:id/input        body: { text }
  *   POST   /api/tasks/:id/edit         body: { command }
- *   POST   /api/tasks/:id/edit-type    body: { familiarType, remoteTargetId? }
+ *   POST   /api/tasks/:id/edit-type    body: { executorType, remoteTargetId? }
  *   POST   /api/tasks/:id/edit-agent   body: { agent }
  *   POST   /api/tasks/:id/gate-policy  body: { updates: [{ workflowId, taskId?, gatePolicy }] }
  *   POST   /api/workflows/:id/restart
@@ -34,7 +34,7 @@
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from 'node:http';
 import type { Orchestrator } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
-import type { FamiliarRegistry, TaskExecutor } from '@invoker/execution-engine';
+import type { ExecutorRegistry, TaskRunner } from '@invoker/execution-engine';
 import {
   recreateWorkflow as sharedRecreateWorkflow,
   cancelWorkflow as sharedCancelWorkflow,
@@ -52,8 +52,8 @@ import {
 export interface ApiServerDeps {
   orchestrator: Orchestrator;
   persistence: SQLiteAdapter;
-  familiarRegistry: FamiliarRegistry;
-  taskExecutor: TaskExecutor;
+  executorRegistry: ExecutorRegistry;
+  taskExecutor: TaskRunner;
   killRunningTask?: (taskId: string) => Promise<void>;
   cancelTask?: (taskId: string) => Promise<{ cancelled: string[]; runningCancelled: string[] }>;
   cancelWorkflow?: (workflowId: string) => Promise<{ cancelled: string[]; runningCancelled: string[] }>;
@@ -114,7 +114,7 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
   const {
     orchestrator,
     persistence,
-    familiarRegistry,
+    executorRegistry,
     taskExecutor,
     killRunningTask,
     cancelTask,
@@ -369,12 +369,12 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
         const taskId = decodeURIComponent(editTypeMatch[1]);
         try {
           const body = await readBody(req);
-          const { familiarType, remoteTargetId } = JSON.parse(body);
-          if (!familiarType) {
-            json(res, 400, { error: 'Missing "familiarType" in request body' });
+          const { executorType, remoteTargetId } = JSON.parse(body);
+          if (!executorType) {
+            json(res, 400, { error: 'Missing "executorType" in request body' });
             return;
           }
-          const started = sharedEditTaskType(taskId, familiarType, { orchestrator }, remoteTargetId);
+          const started = sharedEditTaskType(taskId, executorType, { orchestrator }, remoteTargetId);
           const runnable = started.filter(t => t.status === 'running');
           await taskExecutor.executeTasks(runnable);
           json(res, 200, { ok: true, taskId, action: 'type_edited', tasksStarted: runnable.length });

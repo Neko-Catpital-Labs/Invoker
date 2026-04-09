@@ -5,14 +5,14 @@
  * the real GitHub remote (not the host working directory), and that branches
  * are mirrored correctly.  Covers gaps 2-5 from repro-host-cwd-safety.sh.
  *
- * Pattern: bare remote + working clone + TaskExecutor with real git.
+ * Pattern: bare remote + working clone + TaskRunner with real git.
  */
 import { describe, it, expect, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execSync } from 'node:child_process';
-import { TaskExecutor, FamiliarRegistry } from '../index.js';
+import { TaskRunner, ExecutorRegistry } from '../index.js';
 
 function git(cwd: string, args: string): string {
   return execSync(`git ${args}`, { cwd, stdio: ['ignore', 'pipe', 'pipe'] }).toString().trim();
@@ -46,11 +46,11 @@ describe('createMergeWorktree isolation (real git)', { timeout: 30_000 }, () => 
   });
 
   function buildExecutor(cwd: string) {
-    const registry = new FamiliarRegistry();
-    return new TaskExecutor({
+    const registry = new ExecutorRegistry();
+    return new TaskRunner({
       orchestrator: { getAllTasks: () => [] } as any,
       persistence: { updateTask: () => {} } as any,
-      familiarRegistry: registry,
+      executorRegistry: registry,
       cwd,
       defaultBranch: 'master',
     });

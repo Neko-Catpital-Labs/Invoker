@@ -1,7 +1,7 @@
 /**
- * Conflict resolution logic, extracted from TaskExecutor.
+ * Conflict resolution logic, extracted from TaskRunner.
  *
- * Each function takes a ConflictResolverHost (a subset of TaskExecutor's
+ * Each function takes a ConflictResolverHost (a subset of TaskRunner's
  * capabilities) as its first parameter, avoiding circular imports.
  */
 
@@ -28,8 +28,8 @@ export interface RemoteTargetConfig {
 }
 
 /**
- * Subset of TaskExecutor that conflict resolution functions need.
- * Defined here (not by importing TaskExecutor) to avoid circular deps.
+ * Subset of TaskRunner that conflict resolution functions need.
+ * Defined here (not by importing TaskRunner) to avoid circular deps.
  */
 export interface ConflictResolverHost {
   readonly orchestrator: Orchestrator;
@@ -137,7 +137,7 @@ export async function resolveConflictImpl(
   }
 
   // SSH tasks: run conflict resolution on the remote host
-  if (task.config.familiarType === 'ssh' && task.config.remoteTargetId && !existsSync(rawCwd)) {
+  if (task.config.executorType === 'ssh' && task.config.remoteTargetId && !existsSync(rawCwd)) {
     const target = host.getRemoteTargetConfig?.(task.config.remoteTargetId);
     if (!target) {
       throw new Error(`No remote target config for "${task.config.remoteTargetId}" — cannot resolve conflict on remote`);
@@ -147,7 +147,7 @@ export async function resolveConflictImpl(
   }
 
   // For local tasks (worktree, docker), require workspace path exists on disk
-  if (task.config.familiarType !== 'ssh' && !existsSync(rawCwd)) {
+  if (task.config.executorType !== 'ssh' && !existsSync(rawCwd)) {
     throw new Error(
       `resolveConflict: task "${taskId}" workspace does not exist on disk: ${rawCwd}. ` +
       `Refusing to run git operations without a valid workspace. ` +
@@ -354,7 +354,7 @@ export async function fixWithAgentImpl(
   const workspacePath = task.execution.workspacePath;
 
   // SSH tasks: run agent on the remote host
-  if (task.config.familiarType === 'ssh' && task.config.remoteTargetId && workspacePath && !existsSync(workspacePath)) {
+  if (task.config.executorType === 'ssh' && task.config.remoteTargetId && workspacePath && !existsSync(workspacePath)) {
     const target = host.getRemoteTargetConfig?.(task.config.remoteTargetId);
     if (!target) {
       throw new Error(`No remote target config for "${task.config.remoteTargetId}" — cannot fix on remote`);

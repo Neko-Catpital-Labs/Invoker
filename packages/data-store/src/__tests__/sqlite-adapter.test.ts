@@ -321,18 +321,65 @@ describe('SQLiteAdapter', () => {
       const loaded = adapter.loadTasks('wf-1');
       const task = loaded[0];
 
-      expect(task.config.familiarType).toBeUndefined();
+      expect(task.config.executorType).toBeUndefined();
       expect(task.execution.agentSessionId).toBeUndefined();
       expect(task.execution.workspacePath).toBeUndefined();
       expect(task.execution.containerId).toBeUndefined();
     });
 
-    it('does not store string "pending" as default for familiarType', () => {
+    it('does not store string "pending" as default for executorType', () => {
       adapter.saveWorkflow(testWorkflow);
       adapter.saveTask('wf-1', makeTask('t1'));
 
       const loaded = adapter.loadTasks('wf-1');
-      expect(loaded[0].config.familiarType).not.toBe('pending');
+      expect(loaded[0].config.executorType).not.toBe('pending');
+    });
+
+    it('migrates familiar_type column to executor_type', async () => {
+      // Create a fresh in-memory adapter to simulate an old DB schema
+      const migratedAdapter = await SQLiteAdapter.create(':memory:');
+
+      // Manually insert a row with the old schema column name
+      migratedAdapter['db'].run(`
+        INSERT INTO workflows (id, name, status, created_at, updated_at)
+        VALUES ('wf-migration', 'Migration Test', 'running', datetime('now'), datetime('now'))
+      `);
+
+      // Manually add the old column and insert a task with it
+      try {
+        migratedAdapter['db'].run('ALTER TABLE tasks ADD COLUMN familiar_type TEXT');
+      } catch {
+        // Column might already exist from migration
+      }
+
+      migratedAdapter['db'].run(`
+        INSERT INTO tasks (
+          id, workflow_id, description, status, dependencies, familiar_type, created_at
+        ) VALUES (
+          't-migrate', 'wf-migration', 'Test migration', 'pending', '[]', 'ssh', datetime('now')
+        )
+      `);
+
+      // Force re-run migration by creating a new adapter with the same DB
+      const exported = migratedAdapter['db'].export();
+      migratedAdapter.close();
+
+      const SQL = await (await import('sql.js')).default();
+      const db = new SQL.Database(exported);
+      const freshAdapter = new (SQLiteAdapter as any)(db, null);
+
+      // Verify getExecutorType returns the migrated value
+      expect(freshAdapter.getExecutorType('t-migrate')).toBe('ssh');
+
+      // Verify executor_type column exists
+      const tableInfo = freshAdapter['queryAll']('PRAGMA table_info(tasks)') as Array<{ name: string }>;
+      const columnNames = tableInfo.map(c => c.name);
+
+      expect(columnNames).toContain('executor_type');
+      // Note: familiar_type column may remain (SQLite < 3.35 doesn't support DROP COLUMN)
+      // but the data is migrated to executor_type, which is what matters
+
+      freshAdapter.close();
     });
   });
 

@@ -117,7 +117,7 @@ exit 0
     expect(result.sessionId).not.toBe(localUuid);
   });
 
-  it('simulates WorktreeFamiliar close handler: driver.extractSessionId replaces entry.agentSessionId', () => {
+  it('simulates WorktreeExecutor close handler: driver.extractSessionId replaces entry.agentSessionId', () => {
     const driver = new CodexSessionDriver();
     const rawStdout = execSync(fakeCodexPath).toString();
 
@@ -127,7 +127,7 @@ exit 0
       rawStdout,
     };
 
-    // This is exactly what the worktree-familiar close handler does:
+    // This is exactly what the worktree-executor close handler does:
     // if (driver && entry.rawStdout) {
     //   const readable = driver.processOutput(entry.agentSessionId ?? '', entry.rawStdout);
     //   const realId = driver.extractSessionId?.(entry.rawStdout);

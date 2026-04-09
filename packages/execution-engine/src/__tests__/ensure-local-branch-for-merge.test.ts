@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execSync, execFileSync } from 'node:child_process';
-import { ensureLocalBranchForMerge, type MergeExecutorHost } from '../merge-executor.js';
+import { ensureLocalBranchForMerge, type MergeRunnerHost } from '../merge-runner.js';
 
 function gitExec(args: string[], cwd: string): string {
   return execFileSync('git', args, { cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
@@ -52,7 +52,7 @@ describe('ensureLocalBranchForMerge pool mirror fallback', () => {
   });
 
   it('fetches branch from pool mirror when origin lacks ref', async () => {
-    const host: MergeExecutorHost = {
+    const host: MergeRunnerHost = {
       cwd: hostDir,
       persistence: {} as any,
       orchestrator: {} as any,

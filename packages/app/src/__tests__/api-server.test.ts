@@ -69,7 +69,7 @@ let port: number;
 let mocks: {
   orchestrator: Record<string, ReturnType<typeof vi.fn>>;
   persistence: Record<string, ReturnType<typeof vi.fn>>;
-  familiarRegistry: Record<string, ReturnType<typeof vi.fn>>;
+  executorRegistry: Record<string, ReturnType<typeof vi.fn>>;
   taskExecutor: Record<string, ReturnType<typeof vi.fn>>;
   cancelTask: ReturnType<typeof vi.fn>;
   cancelWorkflow: ReturnType<typeof vi.fn>;
@@ -108,7 +108,7 @@ function createMocks() {
       getEvents: vi.fn(() => [{ taskId: 'task-1', eventType: 'started', timestamp: '2024-01-01' }]),
       getTaskOutput: vi.fn(() => 'hello world output'),
     },
-    familiarRegistry: {},
+    executorRegistry: {},
     taskExecutor: {
       executeTasks: vi.fn().mockResolvedValue(undefined),
       publishAfterFix: vi.fn().mockResolvedValue(undefined),
@@ -126,7 +126,7 @@ beforeAll(async () => {
   api = startApiServer({
     orchestrator: mocks.orchestrator as any,
     persistence: mocks.persistence as any,
-    familiarRegistry: mocks.familiarRegistry as any,
+    executorRegistry: mocks.executorRegistry as any,
     taskExecutor: mocks.taskExecutor as any,
     cancelTask: mocks.cancelTask,
     cancelWorkflow: mocks.cancelWorkflow,
@@ -297,7 +297,7 @@ describe('POST /api/tasks/:id/cancel', () => {
     const noCancelApi = startApiServer({
       orchestrator: noCancelMocks.orchestrator as any,
       persistence: noCancelMocks.persistence as any,
-      familiarRegistry: noCancelMocks.familiarRegistry as any,
+      executorRegistry: noCancelMocks.executorRegistry as any,
       taskExecutor: noCancelMocks.taskExecutor as any,
       killRunningTask: noCancelMocks.killRunningTask,
       // no cancelTask
@@ -336,7 +336,7 @@ describe('POST /api/workflows/:id/cancel', () => {
     const noCancelApi = startApiServer({
       orchestrator: noCancelMocks.orchestrator as any,
       persistence: noCancelMocks.persistence as any,
-      familiarRegistry: noCancelMocks.familiarRegistry as any,
+      executorRegistry: noCancelMocks.executorRegistry as any,
       taskExecutor: noCancelMocks.taskExecutor as any,
       killRunningTask: noCancelMocks.killRunningTask,
       // no cancelWorkflow
@@ -485,7 +485,7 @@ describe('POST /api/tasks/:id/edit', () => {
 
 describe('POST /api/tasks/:id/edit-type', () => {
   it('edits task type', async () => {
-    const res = await request(port, 'POST', '/api/tasks/task-1/edit-type', { familiarType: 'docker' });
+    const res = await request(port, 'POST', '/api/tasks/task-1/edit-type', { executorType: 'docker' });
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
     expect(res.body.action).toBe('type_edited');
@@ -494,17 +494,17 @@ describe('POST /api/tasks/:id/edit-type', () => {
 
   it('passes remoteTargetId when provided', async () => {
     const res = await request(port, 'POST', '/api/tasks/task-1/edit-type', {
-      familiarType: 'ssh',
+      executorType: 'ssh',
       remoteTargetId: 'remote-1',
     });
     expect(res.status).toBe(200);
     expect(mocks.orchestrator.editTaskType).toHaveBeenCalledWith('task-1', 'ssh', 'remote-1');
   });
 
-  it('returns 400 when familiarType is missing', async () => {
+  it('returns 400 when executorType is missing', async () => {
     const res = await request(port, 'POST', '/api/tasks/task-1/edit-type', {});
     expect(res.status).toBe(400);
-    expect(res.body.error).toContain('Missing "familiarType"');
+    expect(res.body.error).toContain('Missing "executorType"');
   });
 });
 

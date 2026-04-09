@@ -1,8 +1,8 @@
 /**
- * Parametric test matrix: Agent × Familiar interaction.
+ * Parametric test matrix: Agent × Executor interaction.
  *
  * Tests that ExecutionAgent implementations produce correct command specs
- * when used through BaseFamiliar.buildCommandAndArgs(), and that the
+ * when used through BaseExecutor.buildCommandAndArgs(), and that the
  * AgentRegistry lookup works for all agent types.
  *
  * Does NOT spawn real processes or require git — exercises the command-building
@@ -100,7 +100,7 @@ const agents = [
 
 // ── Matrix tests ─────────────────────────────────────────────
 
-describe('Agent × Familiar matrix', () => {
+describe('Agent × Executor matrix', () => {
   describe.each(agents)('$label', (agentDef) => {
     let agent: ExecutionAgent;
     let registry: AgentRegistry;

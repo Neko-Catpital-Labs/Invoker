@@ -2,8 +2,8 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { accessSync, constants } from 'node:fs';
 import { normalize } from 'node:path';
 import type { WorkRequest, WorkResponse } from '@invoker/contracts';
-import type { FamiliarHandle, PersistedTaskMeta, TerminalSpec } from './familiar.js';
-import { BaseFamiliar, type BaseEntry } from './base-familiar.js';
+import type { ExecutorHandle, PersistedTaskMeta, TerminalSpec } from './executor.js';
+import { BaseExecutor, type BaseEntry } from './base-executor.js';
 import { killProcessGroup, cleanElectronEnv, SIGKILL_TIMEOUT_MS } from './process-utils.js';
 import { computeBranchHash } from './branch-utils.js';
 import { findManagedWorktreeForBranch, abbrevRefMatchesBranch } from './worktree-discovery.js';
@@ -23,7 +23,7 @@ import {
   parseRecordAndPushOutput,
 } from './ssh-git-exec.js';
 
-export interface SshFamiliarConfig {
+export interface SshExecutorConfig {
   host: string;
   user: string;
   /** Path to SSH identity file (private key). */
@@ -60,10 +60,10 @@ interface SshEntry extends BaseEntry {
  *
  * Requires `repoUrl` on the work request. Clones / worktrees on the remote
  * under ~/.invoker (mirroring local RepoPool layout), provisions with the same
- * command as WorktreeFamiliar, then runs the task (command or Claude) in that
+ * command as WorktreeExecutor, then runs the task (command or Claude) in that
  * directory. Always produces a branch and commits on completion.
  */
-export class SshFamiliar extends BaseFamiliar<SshEntry> {
+export class SshExecutor extends BaseExecutor<SshEntry> {
   readonly type = 'ssh';
 
   private readonly host: string;
@@ -75,7 +75,7 @@ export class SshFamiliar extends BaseFamiliar<SshEntry> {
   private readonly remoteInvokerHome: string;
   private readonly provisionCommand: string;
 
-  constructor(config: SshFamiliarConfig) {
+  constructor(config: SshExecutorConfig) {
     super();
     this.host = config.host;
     this.user = config.user;
@@ -144,7 +144,7 @@ export class SshFamiliar extends BaseFamiliar<SshEntry> {
     return this.execRemoteCapture(script);
   }
 
-  async start(request: WorkRequest): Promise<FamiliarHandle> {
+  async start(request: WorkRequest): Promise<ExecutorHandle> {
     const handle = this.createHandle(request);
     const executionId = handle.executionId;
 
@@ -222,10 +222,10 @@ export class SshFamiliar extends BaseFamiliar<SshEntry> {
    */
   private async startBYOWorkspace(
     request: WorkRequest,
-    handle: FamiliarHandle,
+    handle: ExecutorHandle,
     payload: string,
     agentSessionId?: string,
-  ): Promise<FamiliarHandle> {
+  ): Promise<ExecutorHandle> {
     const executionId = handle.executionId;
     const workspacePath = request.inputs.workspacePath;
 
@@ -275,7 +275,7 @@ elif [[ "\${WT:0:2}" == '~/' ]]; then
   WT="$HOME/\${WT:2}"
 fi
 cd "$WT"
-echo "[SshFamiliar BYO] Running task in user-provided workspace: $WT"
+echo "[SshExecutor BYO] Running task in user-provided workspace: $WT"
 echo ${payloadB64} | base64 -d | bash -se
 `;
 
@@ -287,11 +287,11 @@ echo ${payloadB64} | base64 -d | bash -se
    */
   private async startManagedWorkspace(
     request: WorkRequest,
-    handle: FamiliarHandle,
+    handle: ExecutorHandle,
     repoUrl: string,
     payload: string,
     agentSessionId?: string,
-  ): Promise<FamiliarHandle> {
+  ): Promise<ExecutorHandle> {
     const executionId = handle.executionId;
     const h = computeRepoUrlHash(repoUrl);
     const baseRef = request.inputs.baseBranch ?? 'HEAD';
@@ -314,7 +314,7 @@ echo ${payloadB64} | base64 -d | bash -se
     const bootstrapOut = await this.execRemoteCapture(script1);
     const { resolvedBaseRef, baseHead, warning, fetchSuccess } = parseBootstrapOutput(bootstrapOut);
     if (warning) {
-      this.emitOutput(executionId, `[SshFamiliar] ${warning}\n`);
+      this.emitOutput(executionId, `[SshExecutor] ${warning}\n`);
     }
     if (!fetchSuccess) {
       const msg = `[WARNING] Git fetch failed for remote mirror clone\n` +
@@ -411,9 +411,9 @@ elif [[ "\${WT:0:2}" == '~/' ]]; then
   WT="$HOME/\${WT:2}"
 fi
 cd "$WT"
-echo "[SshFamiliar] Provisioning remote worktree with: ${this.provisionCommand.slice(0, 50)}..."
+echo "[SshExecutor] Provisioning remote worktree with: ${this.provisionCommand.slice(0, 50)}..."
 eval "$(echo ${provB64} | base64 -d)"
-echo "[SshFamiliar] Running task payload..."
+echo "[SshExecutor] Running task payload..."
 echo ${payloadB64} | base64 -d | bash -se
 `;
 
@@ -423,7 +423,7 @@ echo ${payloadB64} | base64 -d | bash -se
     });
   }
 
-  private withStartupMetadata(err: unknown, handle: FamiliarHandle): Error {
+  private withStartupMetadata(err: unknown, handle: ExecutorHandle): Error {
     const wrapped = err instanceof Error ? err : new Error(String(err));
     if (handle.workspacePath) (wrapped as any).workspacePath = handle.workspacePath;
     if (handle.branch) (wrapped as any).branch = handle.branch;
@@ -469,11 +469,11 @@ echo ${payloadB64} | base64 -d | bash -se
   private spawnSshRemoteStdin(
     executionId: string,
     request: WorkRequest,
-    handle: FamiliarHandle,
+    handle: ExecutorHandle,
     bashScript: string,
     agentSessionId: string | undefined,
     finalizeRemote: { worktreePath: string; branch: string } | undefined,
-  ): FamiliarHandle {
+  ): ExecutorHandle {
     const child = spawn('ssh', [...this.buildSshArgs(), 'bash', '-s'], {
       stdio: ['pipe', 'pipe', 'pipe'],
       detached: true,
@@ -545,7 +545,7 @@ echo ${payloadB64} | base64 -d | bash -se
         let commitHash: string | undefined;
 
         if (finalizeRemote) {
-          this.emitOutput(executionId, '[SshFamiliar] Recording task result and pushing branch on remote...\n');
+          this.emitOutput(executionId, '[SshExecutor] Recording task result and pushing branch on remote...\n');
           const fin = await this.remoteGitRecordAndPush(
             executionId,
             request,
@@ -555,7 +555,7 @@ echo ${payloadB64} | base64 -d | bash -se
           );
           if (fin.commitHash) commitHash = fin.commitHash;
           if (fin.error) {
-            this.emitOutput(executionId, `[SshFamiliar] ${fin.error}\n`);
+            this.emitOutput(executionId, `[SshExecutor] ${fin.error}\n`);
             if (exitCode === 0) status = 'failed';
             mappedError = fin.error;
           }
@@ -610,7 +610,7 @@ echo ${payloadB64} | base64 -d | bash -se
     return handle;
   }
 
-  async kill(handle: FamiliarHandle): Promise<void> {
+  async kill(handle: ExecutorHandle): Promise<void> {
     const entry = this.entries.get(handle.executionId);
     if (!entry || entry.completed || !entry.process) return;
 
@@ -638,13 +638,13 @@ echo ${payloadB64} | base64 -d | bash -se
     });
   }
 
-  sendInput(handle: FamiliarHandle, input: string): void {
+  sendInput(handle: ExecutorHandle, input: string): void {
     const entry = this.entries.get(handle.executionId);
     if (!entry || entry.completed) return;
     entry.process?.stdin?.write(input);
   }
 
-  getTerminalSpec(handle: FamiliarHandle): TerminalSpec | null {
+  getTerminalSpec(handle: ExecutorHandle): TerminalSpec | null {
     const entry = this.entries.get(handle.executionId);
     if (!entry) return null;
     if (handle.workspacePath) {
@@ -665,7 +665,7 @@ echo ${payloadB64} | base64 -d | bash -se
   }
 
   getRestoredTerminalSpec(meta: PersistedTaskMeta): TerminalSpec {
-    console.log(`[SshFamiliar] getRestoredTerminalSpec: meta=${JSON.stringify(meta)}`);
+    console.log(`[SshExecutor] getRestoredTerminalSpec: meta=${JSON.stringify(meta)}`);
     // meta.executionAgent missing
     const isRemotePath = meta.workspacePath?.startsWith('~') || meta.workspacePath?.startsWith('/home/' + this.user + '/');
     if (meta.workspacePath && isRemotePath) {
@@ -696,7 +696,7 @@ echo ${payloadB64} | base64 -d | bash -se
 
   private buildRemoteTerminalInner(workspacePath: string, branch?: string, agentSessionId?: string, executionAgent?: string): string {
     const cdPart = sshInteractiveCdFragment(workspacePath);
-    console.log(`[SshFamiliar] Building remote terminal inner command. workspacePath=${workspacePath} branch=${branch} agentSessionId=${agentSessionId} executionAgent=${executionAgent}`);
+    console.log(`[SshExecutor] Building remote terminal inner command. workspacePath=${workspacePath} branch=${branch} agentSessionId=${agentSessionId} executionAgent=${executionAgent}`);
     if (agentSessionId) {
       let resumeCmd: string;
       if (this.agentRegistry) {

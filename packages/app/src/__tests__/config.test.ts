@@ -111,4 +111,18 @@ describe('loadConfig', () => {
     const config = loadConfig();
     expect(config.imageStorage).toEqual(imageStorage);
   });
+
+  it('throws when legacy executorRoutingRules key is present', () => {
+    writeFileSync(
+      join(fakeHome, '.invoker', 'config.json'),
+      JSON.stringify({
+        executorRoutingRules: [
+          { pattern: 'deploy', familiarType: 'ssh', remoteTargetId: 'prod' },
+        ],
+      }),
+    );
+    expect(() => loadConfig()).toThrow(
+      `Legacy config field 'familiarType' detected in ~/.invoker/config.json executorRoutingRules. Rename to 'executorType' — no back-compat is provided.`,
+    );
+  });
 });

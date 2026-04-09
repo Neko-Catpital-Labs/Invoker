@@ -101,7 +101,7 @@ describe('createTaskState', () => {
       isReconciliation: true,
       requiresManualApproval: true,
       featureBranch: 'feat/clone',
-      familiarType: 'worktree',
+      executorType: 'worktree',
       autoFix: true,
       isMergeNode: false,
       summary: 'summary text',

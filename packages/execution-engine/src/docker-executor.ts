@@ -1,14 +1,14 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import type { WorkRequest, WorkResponse } from '@invoker/contracts';
-import type { FamiliarHandle, PersistedTaskMeta, TerminalSpec } from './familiar.js';
-import { BaseFamiliar, type BaseEntry } from './base-familiar.js';
+import type { ExecutorHandle, PersistedTaskMeta, TerminalSpec } from './executor.js';
+import { BaseExecutor, type BaseEntry } from './base-executor.js';
 import { loadSecretsFile } from './secrets-loader.js';
 import { killProcessGroup, cleanElectronEnv, SIGKILL_TIMEOUT_MS } from './process-utils.js';
 import { computeBranchHash } from './branch-utils.js';
 import type { AgentRegistry } from './agent-registry.js';
 
 const CONTAINER_STOP_TIMEOUT_S = 5;
-const TAG = '[DockerFamiliar]';
+const TAG = '[DockerExecutor]';
 const CONTAINER_CWD = '/app';
 
 /**
@@ -62,7 +62,7 @@ function redactContainerConfig(config: Record<string, unknown>): Record<string, 
   return safeConfig;
 }
 
-export interface DockerFamiliarConfig {
+export interface DockerExecutorConfig {
   imageName?: string;
   callbackPort?: number;
   /** Path to a dotenv-style file whose entries are appended to the container env. */
@@ -86,7 +86,7 @@ function shellEscape(s: string): string {
  * Familiar that runs tasks inside Docker containers.
  *
  * The container image is treated as a static artifact: it declares its own
- * user, HOME, installed tools, and repo contents. DockerFamiliar owns only
+ * user, HOME, installed tools, and repo contents. DockerExecutor owns only
  * container lifecycle — no bind mounts, no user overrides, no HOME injection.
  *
  * Secrets come from an optional host file (`secretsFile`) whose entries are
@@ -94,12 +94,12 @@ function shellEscape(s: string): string {
  * (`INVOKER_CALLBACK_URL`, `INVOKER_REQUEST_ID`, `INVOKER_ACTION_ID`).
  *
  * Git lifecycle is handled by overriding `execGitSimple` to route through
- * `docker exec`, so all BaseFamiliar git methods (syncFromRemote,
+ * `docker exec`, so all BaseExecutor git methods (syncFromRemote,
  * setupTaskBranch, handleProcessExit) work inside the container with zero
  * duplication. The container runs an idle process (`tail -f /dev/null`)
  * and all operations happen via `docker exec`.
  */
-export class DockerFamiliar extends BaseFamiliar<ContainerEntry> {
+export class DockerExecutor extends BaseExecutor<ContainerEntry> {
   readonly type = 'docker';
 
   private readonly imageName: string;
@@ -113,7 +113,7 @@ export class DockerFamiliar extends BaseFamiliar<ContainerEntry> {
   /** Container ID for the current task (set after container.start()). */
   private activeContainerId: string | null = null;
 
-  constructor(config: DockerFamiliarConfig) {
+  constructor(config: DockerExecutorConfig) {
     super();
     this.imageName = config.imageName ?? 'invoker/agent-base:latest';
     this.callbackPort = config.callbackPort ?? 4000;
@@ -184,7 +184,7 @@ export class DockerFamiliar extends BaseFamiliar<ContainerEntry> {
       Docker = mod.default ?? mod;
     } catch {
       throw new Error(
-        "DockerFamiliar requires 'dockerode' package. Install with: pnpm add dockerode",
+        "DockerExecutor requires 'dockerode' package. Install with: pnpm add dockerode",
       );
     }
 
@@ -196,7 +196,7 @@ export class DockerFamiliar extends BaseFamiliar<ContainerEntry> {
   // Familiar interface
   // ---------------------------------------------------------------------------
 
-  async start(request: WorkRequest): Promise<FamiliarHandle> {
+  async start(request: WorkRequest): Promise<ExecutorHandle> {
     const earlyLogs: string[] = [];
     const log = (msg: string) => { console.log(msg); earlyLogs.push(msg); };
 
@@ -311,7 +311,7 @@ export class DockerFamiliar extends BaseFamiliar<ContainerEntry> {
     this.activeContainerId = container.id;
     emit(`${TAG} Container started`);
 
-    // -- Git setup (reuses BaseFamiliar methods via overridden execGitSimple + runBash) --
+    // -- Git setup (reuses BaseExecutor methods via overridden execGitSimple + runBash) --
     await this.syncFromRemote(CONTAINER_CWD, executionId);
 
     const baseRef = request.inputs.baseBranch ?? 'HEAD';
@@ -404,7 +404,7 @@ export class DockerFamiliar extends BaseFamiliar<ContainerEntry> {
     return handle;
   }
 
-  async kill(handle: FamiliarHandle): Promise<void> {
+  async kill(handle: ExecutorHandle): Promise<void> {
     const entry = this.entries.get(handle.executionId);
     if (!entry || entry.completed) return;
 
@@ -454,13 +454,13 @@ export class DockerFamiliar extends BaseFamiliar<ContainerEntry> {
     }
   }
 
-  sendInput(handle: FamiliarHandle, input: string): void {
+  sendInput(handle: ExecutorHandle, input: string): void {
     const entry = this.entries.get(handle.executionId);
     if (!entry || entry.completed) return;
     entry.process?.stdin?.write(input);
   }
 
-  getTerminalSpec(handle: FamiliarHandle): TerminalSpec | null {
+  getTerminalSpec(handle: ExecutorHandle): TerminalSpec | null {
     const entry = this.entries.get(handle.executionId);
     console.log(`${TAG} getTerminalSpec() handle=${handle.executionId} hasEntry=${!!entry} agentSessionId=${entry?.agentSessionId} containerId=${entry?.containerId?.slice(0, 12)}`);
     if (!entry) return null;
@@ -489,9 +489,9 @@ export class DockerFamiliar extends BaseFamiliar<ContainerEntry> {
   }
 
   getRestoredTerminalSpec(meta: PersistedTaskMeta): TerminalSpec {
-    console.log(`[DockerFamiliar] getRestoredTerminalSpec task="${meta.taskId}" containerId="${meta.containerId ?? 'none'}" sessionId="${meta.agentSessionId ?? 'none'}"`);
+    console.log(`[DockerExecutor] getRestoredTerminalSpec task="${meta.taskId}" containerId="${meta.containerId ?? 'none'}" sessionId="${meta.agentSessionId ?? 'none'}"`);
     if (!meta.containerId) {
-      console.log(`[DockerFamiliar] getRestoredTerminalSpec task="${meta.taskId}" — no container ID`);
+      console.log(`[DockerExecutor] getRestoredTerminalSpec task="${meta.taskId}" — no container ID`);
       throw new Error(`No container ID found for task ${meta.taskId}`);
     }
     const cid = meta.containerId;
@@ -503,13 +503,13 @@ export class DockerFamiliar extends BaseFamiliar<ContainerEntry> {
         ? this.agentRegistry.getOrThrow(meta.executionAgent ?? 'claude').buildResumeArgs(meta.agentSessionId)
         : { cmd: 'claude', args: ['--resume', meta.agentSessionId, '--dangerously-skip-permissions'] };
       const resumeCmd = [resume.cmd, ...resume.args].join(' ');
-      console.log(`[DockerFamiliar] getRestoredTerminalSpec task="${meta.taskId}" → docker exec ${resumeCmd}`);
+      console.log(`[DockerExecutor] getRestoredTerminalSpec task="${meta.taskId}" → docker exec ${resumeCmd}`);
       return {
         command: 'bash',
         args: ['-c', `docker start ${cid} >/dev/null 2>&1; docker exec -it ${cid} ${resumeCmd}`],
       };
     }
-    console.log(`[DockerFamiliar] getRestoredTerminalSpec task="${meta.taskId}" → docker exec /bin/bash`);
+    console.log(`[DockerExecutor] getRestoredTerminalSpec task="${meta.taskId}" → docker exec /bin/bash`);
     return {
       command: 'bash',
       args: ['-c', `docker start ${cid} >/dev/null 2>&1; docker exec -it ${cid} /bin/bash`],

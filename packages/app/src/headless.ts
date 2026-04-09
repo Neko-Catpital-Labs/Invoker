@@ -6,7 +6,7 @@
  * accessing module-level variables directly.
  *
  * Business logic (orchestrator mutations) lives in workflow-actions.ts.
- * This file handles CLI parsing, TaskExecutor lifecycle, and output formatting.
+ * This file handles CLI parsing, TaskRunner lifecycle, and output formatting.
  */
 
 import { Orchestrator } from '@invoker/workflow-core';
@@ -17,8 +17,8 @@ import { resolve as resolvePath } from 'node:path';
 import { Channels } from '@invoker/transport';
 import type { MessageBus } from '@invoker/transport';
 import {
-  FamiliarRegistry,
-  TaskExecutor,
+  ExecutorRegistry,
+  TaskRunner,
   GitHubMergeGateProvider,
   ReviewProviderRegistry,
   remoteFetchForPool,
@@ -54,14 +54,14 @@ export { bumpGenerationAndRecreate } from './workflow-actions.js';
 export interface HeadlessDeps {
   orchestrator: Orchestrator;
   persistence: SQLiteAdapter;
-  familiarRegistry: FamiliarRegistry;
+  executorRegistry: ExecutorRegistry;
   messageBus: MessageBus;
   repoRoot: string;
   invokerConfig: InvokerConfig;
   initServices: () => Promise<void>;
   executionAgentRegistry?: AgentRegistry;
   wireSlackBot: (deps: {
-    executor: TaskExecutor;
+    executor: TaskRunner;
     logFn: (source: string, level: string, message: string) => void;
     onPlanLoaded?: () => void;
   }) => Promise<any>;
@@ -85,12 +85,12 @@ function headlessHeartbeat(taskId: string, deps: Pick<HeadlessDeps, 'persistence
 
 function createHeadlessExecutor(
   deps: HeadlessDeps,
-  callbackOverrides?: Partial<ConstructorParameters<typeof TaskExecutor>[0]['callbacks']>,
-): TaskExecutor {
-  return new TaskExecutor({
+  callbackOverrides?: Partial<ConstructorParameters<typeof TaskRunner>[0]['callbacks']>,
+): TaskRunner {
+  return new TaskRunner({
     orchestrator: deps.orchestrator,
     persistence: deps.persistence,
-    familiarRegistry: deps.familiarRegistry,
+    executorRegistry: deps.executorRegistry,
     cwd: deps.repoRoot,
     defaultBranch: deps.invokerConfig.defaultBranch,
     dockerConfig: {
@@ -120,7 +120,7 @@ function createHeadlessExecutor(
   });
 }
 
-function wireHeadlessApproveHook(deps: HeadlessDeps, te: TaskExecutor): void {
+function wireHeadlessApproveHook(deps: HeadlessDeps, te: TaskRunner): void {
   deps.orchestrator.setBeforeApproveHook(async (task) => {
     if (task.config.isMergeNode && task.config.workflowId) {
       const workflow = deps.persistence.loadWorkflow(task.config.workflowId);
@@ -624,7 +624,7 @@ async function headlessRun(
   const taskExecutor = createHeadlessExecutor(deps);
   wireHeadlessApproveHook(deps, taskExecutor);
 
-  const api = startApiServer({ orchestrator, persistence: deps.persistence, familiarRegistry: deps.familiarRegistry, taskExecutor });
+  const api = startApiServer({ orchestrator, persistence: deps.persistence, executorRegistry: deps.executorRegistry, taskExecutor });
 
   const wfIdsBefore = new Set(orchestrator.getWorkflowIds());
   orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
@@ -682,7 +682,7 @@ async function headlessResume(
   const taskExecutor = createHeadlessExecutor(deps);
   wireHeadlessApproveHook(deps, taskExecutor);
 
-  const api = startApiServer({ orchestrator, persistence: deps.persistence, familiarRegistry: deps.familiarRegistry, taskExecutor });
+  const api = startApiServer({ orchestrator, persistence: deps.persistence, executorRegistry: deps.executorRegistry, taskExecutor });
 
   orchestrator.syncFromDb(workflowId);
 
@@ -911,12 +911,12 @@ async function headlessEdit(taskId: string, newCommand: string, deps: HeadlessDe
   await waitForCompletion(deps.orchestrator, undefined, undefined);
 }
 
-async function headlessEditExecutor(taskId: string, familiarType: string, deps: HeadlessDeps): Promise<void> {
-  if (!taskId || !familiarType) throw new Error('Missing arguments. Usage: --headless edit-executor <taskId> <familiarType>');
+async function headlessEditExecutor(taskId: string, executorType: string, deps: HeadlessDeps): Promise<void> {
+  if (!taskId || !executorType) throw new Error('Missing arguments. Usage: --headless edit-executor <taskId> <executorType>');
   taskId = restoreWorkflowForTask(taskId, deps).resolvedTaskId;
 
-  const started = sharedEditTaskType(taskId, familiarType, deps);
-  console.log(`Edited task "${taskId}" executor → "${familiarType}"`);
+  const started = sharedEditTaskType(taskId, executorType, deps);
+  console.log(`Edited task "${taskId}" executor → "${executorType}"`);
 
   const taskExecutor = createHeadlessExecutor(deps);
   await taskExecutor.executeTasks(started);
@@ -967,7 +967,7 @@ export async function resolveAgentSession(
   if (driver.fetchRemoteSession && allTasks) {
     const sshTask = allTasks.find(
       t => t.execution.agentSessionId === sessionId
-        && t.config.familiarType === 'ssh',
+        && t.config.executorType === 'ssh',
     );
     if (sshTask) {
       const { loadConfig } = await import('./config.js');
@@ -1062,7 +1062,7 @@ async function headlessOpenTerminal(taskId: string, deps: HeadlessDeps): Promise
   const result = await openExternalTerminalForTask({
     taskId,
     persistence: deps.persistence,
-    familiarRegistry: deps.familiarRegistry,
+    executorRegistry: deps.executorRegistry,
     executionAgentRegistry: deps.executionAgentRegistry,
     repoRoot: deps.repoRoot,
     runningTaskReason: 'Task is still running. View output in logs.',
@@ -1150,7 +1150,7 @@ async function headlessSlack(deps: HeadlessDeps): Promise<void> {
   });
   wireHeadlessApproveHook(deps, taskExecutor);
 
-  const api = startApiServer({ orchestrator, persistence, familiarRegistry: deps.familiarRegistry, taskExecutor });
+  const api = startApiServer({ orchestrator, persistence, executorRegistry: deps.executorRegistry, taskExecutor });
 
   const slack = await wireSlackBot({
     executor: taskExecutor,
@@ -1158,7 +1158,7 @@ async function headlessSlack(deps: HeadlessDeps): Promise<void> {
     onPlanLoaded: () => {},
   });
 
-  logFn('slack', 'info', 'Slack bot is running (headless, using TaskExecutor). Press Ctrl+C to stop.');
+  logFn('slack', 'info', 'Slack bot is running (headless, using TaskRunner). Press Ctrl+C to stop.');
 
   // Stay alive until SIGINT/SIGTERM
   await new Promise<void>((resolve) => {

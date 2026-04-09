@@ -58,7 +58,7 @@ interface TaskPanelProps {
   onReject: (task: TaskState) => void;
   onSelectExperiment: (task: TaskState) => void;
   onEditCommand?: (taskId: string, newCommand: string) => void;
-  onEditType?: (taskId: string, familiarType: string, remoteTargetId?: string) => void;
+  onEditType?: (taskId: string, executorType: string, remoteTargetId?: string) => void;
   onEditAgent?: (taskId: string, agentName: string) => void;
   onSetExternalGatePolicies?: (taskId: string, updates: ExternalGatePolicyUpdate[]) => Promise<void>;
   onSetMergeBranch?: (workflowId: string, baseBranch: string) => Promise<void>;
@@ -73,15 +73,15 @@ function formatDate(date?: Date | string): string {
 }
 
 /**
- * Display value when task.config.familiarType is unset: matches orchestrator
+ * Display value when task.config.executorType is unset: matches orchestrator
  * loadPlan default worktree. SSH tasks encode the remote target ID as
  * "ssh:<targetId>" for the compound select. Merge nodes hide the selector.
  */
 function effectiveExecutorSelectValue(task: TaskState): string {
-  if (task.config.familiarType === 'ssh' && task.config.remoteTargetId) {
+  if (task.config.executorType === 'ssh' && task.config.remoteTargetId) {
     return `ssh:${task.config.remoteTargetId}`;
   }
-  if (task.config.familiarType) return task.config.familiarType;
+  if (task.config.executorType) return task.config.executorType;
   return 'worktree';
 }
 

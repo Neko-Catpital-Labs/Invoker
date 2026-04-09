@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'node:events';
 import type { ChildProcess } from 'node:child_process';
-import { SshFamiliar } from '../ssh-familiar.js';
+import { SshExecutor } from '../ssh-executor.js';
 import type { WorkRequest } from '@invoker/contracts';
-import type { PersistedTaskMeta } from '../familiar.js';
+import type { PersistedTaskMeta } from '../executor.js';
 
 function makeRequest(overrides: Partial<WorkRequest> = {}): WorkRequest {
   return {
@@ -52,9 +52,9 @@ vi.mock('node:child_process', async (importOriginal) => {
   };
 });
 
-describe('SshFamiliar pre-flight validation', () => {
+describe('SshExecutor pre-flight validation', () => {
   it('throws when SSH key file does not exist', async () => {
-    const ssh = new SshFamiliar({
+    const ssh = new SshExecutor({
       host: 'localhost',
       user: 'root',
       sshKeyPath: '/nonexistent/path/id_ed25519',
@@ -66,7 +66,7 @@ describe('SshFamiliar pre-flight validation', () => {
 
   it('throws when task has no repoUrl in managed mode', async () => {
     // Use /dev/null as a readable file to pass the key check
-    const ssh = new SshFamiliar({
+    const ssh = new SshExecutor({
       host: 'localhost',
       user: 'root',
       sshKeyPath: '/dev/null',
@@ -84,7 +84,7 @@ describe('SshFamiliar pre-flight validation', () => {
   });
 
   it('does not throw for reconciliation requests', async () => {
-    const ssh = new SshFamiliar({
+    const ssh = new SshExecutor({
       host: 'localhost',
       user: 'root',
       sshKeyPath: '/nonexistent/path/id_ed25519',
@@ -96,7 +96,7 @@ describe('SshFamiliar pre-flight validation', () => {
   });
 
   it('falls back to a resolvable base ref when requested baseBranch is missing on remote', async () => {
-    const ssh = new SshFamiliar({
+    const ssh = new SshExecutor({
       host: 'localhost',
       user: 'root',
       sshKeyPath: '/dev/null',
@@ -141,9 +141,9 @@ describe('SshFamiliar pre-flight validation', () => {
   });
 });
 
-describe('SshFamiliar managed workspace mode', () => {
+describe('SshExecutor managed workspace mode', () => {
   it('happy path: creates worktree, provisions, runs command, sets workspacePath and branch', async () => {
-    const ssh = new SshFamiliar({
+    const ssh = new SshExecutor({
       host: 'localhost',
       user: 'testuser',
       sshKeyPath: '/dev/null',
@@ -199,7 +199,7 @@ describe('SshFamiliar managed workspace mode', () => {
   });
 
   it('throws when managedWorkspaces=true but repoUrl is missing', async () => {
-    const ssh = new SshFamiliar({
+    const ssh = new SshExecutor({
       host: 'localhost',
       user: 'testuser',
       sshKeyPath: '/dev/null',
@@ -220,7 +220,7 @@ describe('SshFamiliar managed workspace mode', () => {
   });
 
   it('propagates provision command failure as process exit code', async () => {
-    const ssh = new SshFamiliar({
+    const ssh = new SshExecutor({
       host: 'localhost',
       user: 'testuser',
       sshKeyPath: '/dev/null',
@@ -267,7 +267,7 @@ describe('SshFamiliar managed workspace mode', () => {
 
   it('uses configured remoteInvokerHome instead of default ~/.invoker', async () => {
     const customHome = '/opt/invoker';
-    const ssh = new SshFamiliar({
+    const ssh = new SshExecutor({
       host: 'localhost',
       user: 'testuser',
       sshKeyPath: '/dev/null',
@@ -313,7 +313,7 @@ describe('SshFamiliar managed workspace mode', () => {
   });
 
   it('BYO mode unchanged when managedWorkspaces=false', async () => {
-    const ssh = new SshFamiliar({
+    const ssh = new SshExecutor({
       host: 'localhost',
       user: 'testuser',
       sshKeyPath: '/dev/null',
@@ -347,7 +347,7 @@ describe('SshFamiliar managed workspace mode', () => {
   });
 
   it('BYO mode throws when workspacePath is missing', async () => {
-    const ssh = new SshFamiliar({
+    const ssh = new SshExecutor({
       host: 'localhost',
       user: 'testuser',
       sshKeyPath: '/dev/null',
@@ -369,14 +369,14 @@ describe('SshFamiliar managed workspace mode', () => {
   });
 });
 
-describe('SshFamiliar fetch failure handling', () => {
+describe('SshExecutor fetch failure handling', () => {
   beforeEach(() => {
     spawnedProcesses = [];
     vi.clearAllMocks();
   });
 
   it('emits warning when bootstrap fetch fails and continues execution', async () => {
-    const ssh = new SshFamiliar({
+    const ssh = new SshExecutor({
       host: 'localhost',
       user: 'testuser',
       sshKeyPath: '/dev/null',
@@ -447,14 +447,14 @@ describe('SshFamiliar fetch failure handling', () => {
   });
 });
 
-describe('SshFamiliar entry lifecycle', () => {
-  let ssh: SshFamiliar;
+describe('SshExecutor entry lifecycle', () => {
+  let ssh: SshExecutor;
 
   beforeEach(() => {
     spawnedProcesses = [];
     vi.clearAllMocks();
 
-    ssh = new SshFamiliar({
+    ssh = new SshExecutor({
       host: 'localhost',
       user: 'testuser',
       sshKeyPath: '/dev/null',
@@ -584,7 +584,7 @@ describe('SshFamiliar entry lifecycle', () => {
   });
 
   it('preserves stdout on execRemoteCapture error (Bug #4)', async () => {
-    const ssh2 = new SshFamiliar({
+    const ssh2 = new SshExecutor({
       host: 'localhost',
       user: 'testuser',
       sshKeyPath: '/dev/null',
@@ -617,7 +617,7 @@ describe('SshFamiliar entry lifecycle', () => {
   });
 
   it('managed mode with remoteInvokerHome="~/.invoker" uses base64-decode + tilde-normalize (Bug #1 variant)', async () => {
-    const ssh2 = new SshFamiliar({
+    const ssh2 = new SshExecutor({
       host: 'localhost',
       user: 'testuser',
       sshKeyPath: '/dev/null',
@@ -674,7 +674,7 @@ describe('SshFamiliar entry lifecycle', () => {
   });
 
   it('managed mode with absolute remoteInvokerHome still uses base64-decode (normalize is a no-op)', async () => {
-    const ssh2 = new SshFamiliar({
+    const ssh2 = new SshExecutor({
       host: 'localhost',
       user: 'testuser',
       sshKeyPath: '/dev/null',
@@ -738,13 +738,13 @@ describe('SshFamiliar entry lifecycle', () => {
 
     await new Promise((r) => setTimeout(r, 50));
 
-    // Entry has been cleaned up by the centralized BaseFamiliar.emitComplete teardown.
+    // Entry has been cleaned up by the centralized BaseExecutor.emitComplete teardown.
     expect((ssh as any).entries.size).toBe(0);
 
     // Revisit path uses persisted metadata, NOT the entries map.
     const meta: PersistedTaskMeta = {
       taskId: handle.taskId,
-      familiarType: ssh.type,
+      executorType: ssh.type,
       // Remote-style path so getRestoredTerminalSpec hits the isRemotePath branch.
       workspacePath: handle.workspacePath ?? '/home/testuser/.invoker/worktrees/test',
       branch: handle.branch,

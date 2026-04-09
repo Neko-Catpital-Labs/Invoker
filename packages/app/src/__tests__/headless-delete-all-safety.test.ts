@@ -20,7 +20,7 @@ function makeDeps() {
       listWorkflows: vi.fn(() => []),
       loadTasks: vi.fn(() => []),
     },
-    familiarRegistry: {},
+    executorRegistry: {},
     messageBus: new LocalBus() as MessageBus,
     repoRoot: '/fake/repo',
     invokerConfig: {},

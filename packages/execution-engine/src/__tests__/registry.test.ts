@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { FamiliarRegistry } from '../registry.js';
-import type { Familiar } from '../familiar.js';
+import { ExecutorRegistry } from '../registry.js';
+import type { Familiar } from '../executor.js';
 
-const stubFamiliar = (type: string): Familiar => ({
+const stubExecutor = (type: string): Executor => ({
   type,
   start: async () => ({ executionId: '', taskId: '' }),
   kill: async () => {},
@@ -13,31 +13,31 @@ const stubFamiliar = (type: string): Familiar => ({
   destroyAll: async () => {},
 });
 
-describe('FamiliarRegistry', () => {
-  let registry: FamiliarRegistry;
+describe('ExecutorRegistry', () => {
+  let registry: ExecutorRegistry;
 
   beforeEach(() => {
-    registry = new FamiliarRegistry();
+    registry = new ExecutorRegistry();
   });
 
-  it('register + get returns familiar', () => {
-    const familiar = stubFamiliar('worktree');
-    registry.register('worktree', familiar);
+  it('register + get returns executor', () => {
+    const executor = stubExecutor('worktree');
+    registry.register('worktree', executor);
 
     const result = registry.get('worktree');
-    expect(result).toBe(familiar);
+    expect(result).toBe(executor);
   });
 
-  it('getDefault returns worktree familiar', () => {
-    const worktree = stubFamiliar('worktree');
+  it('getDefault returns worktree executor', () => {
+    const worktree = stubExecutor('worktree');
     registry.register('worktree', worktree);
 
     const result = registry.getDefault();
     expect(result).toBe(worktree);
   });
 
-  it('getDefault throws when worktree familiar not registered', () => {
-    expect(() => registry.getDefault()).toThrow('No "worktree" familiar registered. Register one before calling getDefault().');
+  it('getDefault throws when worktree executor not registered', () => {
+    expect(() => registry.getDefault()).toThrow('No "worktree" executor registered. Register one before calling getDefault().');
   });
 
   it('get returns undefined for unknown type', () => {
@@ -46,8 +46,8 @@ describe('FamiliarRegistry', () => {
   });
 
   it('getAll returns all registered familiars', () => {
-    const worktree = stubFamiliar('worktree');
-    const docker = stubFamiliar('docker');
+    const worktree = stubExecutor('worktree');
+    const docker = stubExecutor('docker');
 
     registry.register('worktree', worktree);
     registry.register('docker', docker);

@@ -2,7 +2,7 @@
  * Playwright global setup: create a local bare repo for E2E tests.
  *
  * All E2E plans use file:///tmp/invoker-e2e-repo.git as their repoUrl
- * so WorktreeFamiliar can clone without a network.
+ * so WorktreeExecutor can clone without a network.
  */
 import { execSync } from 'child_process';
 import { existsSync, rmSync } from 'fs';

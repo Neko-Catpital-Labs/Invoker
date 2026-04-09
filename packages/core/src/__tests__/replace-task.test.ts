@@ -388,11 +388,11 @@ describe('replaceTask', () => {
     expect(result.errors).toEqual([]);
   });
 
-  it('replacement inherits familiarType from broken task when not specified', () => {
+  it('replacement inherits executorType from broken task when not specified', () => {
     orchestrator.loadPlan({
       name: 'test',
       tasks: [
-        { id: 'X', description: 'X', command: 'echo X', familiarType: 'worktree' },
+        { id: 'X', description: 'X', command: 'echo X', executorType: 'worktree' },
       ],
     });
     orchestrator.startExecution();
@@ -402,23 +402,23 @@ describe('replaceTask', () => {
       { id: 'fix', description: 'Fix', command: 'echo fix' },
     ]);
 
-    expect(orchestrator.getTask('fix')!.config.familiarType).toBe('worktree');
+    expect(orchestrator.getTask('fix')!.config.executorType).toBe('worktree');
   });
 
-  it('replacement can override familiarType', () => {
+  it('replacement can override executorType', () => {
     orchestrator.loadPlan({
       name: 'test',
       tasks: [
-        { id: 'X', description: 'X', command: 'echo X', familiarType: 'worktree' },
+        { id: 'X', description: 'X', command: 'echo X', executorType: 'worktree' },
       ],
     });
     orchestrator.startExecution();
     failTask(orchestrator, 'X');
 
     orchestrator.replaceTask('X', [
-      { id: 'fix', description: 'Fix', command: 'echo fix', familiarType: 'docker' },
+      { id: 'fix', description: 'Fix', command: 'echo fix', executorType: 'docker' },
     ]);
 
-    expect(orchestrator.getTask('fix')!.config.familiarType).toBe('docker');
+    expect(orchestrator.getTask('fix')!.config.executorType).toBe('docker');
   });
 });

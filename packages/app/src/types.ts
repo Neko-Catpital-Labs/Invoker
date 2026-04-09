@@ -16,7 +16,7 @@ export interface TaskReplacementDef {
   command?: string;
   prompt?: string;
   dependencies?: string[];
-  familiarType?: string;
+  executorType?: string;
   autoFix?: boolean;
   executionAgent?: string;
 }
@@ -91,7 +91,7 @@ export interface InvokerAPI {
   selectExperiment: (taskId: string, experimentId: string | string[]) => Promise<void>;
   restartTask: (taskId: string) => Promise<void>;
   editTaskCommand: (taskId: string, newCommand: string) => Promise<void>;
-  editTaskType: (taskId: string, familiarType: string, remoteTargetId?: string) => Promise<void>;
+  editTaskType: (taskId: string, executorType: string, remoteTargetId?: string) => Promise<void>;
   editTaskAgent: (taskId: string, agentName: string) => Promise<void>;
   setTaskExternalGatePolicies: (taskId: string, updates: ExternalGatePolicyUpdate[]) => Promise<void>;
   getRemoteTargets: () => Promise<string[]>;

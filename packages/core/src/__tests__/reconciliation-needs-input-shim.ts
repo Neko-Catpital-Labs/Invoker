@@ -1,5 +1,5 @@
 /**
- * Production path: TaskExecutor runs reconciliation, acquires a worktree, then the worker
+ * Production path: TaskRunner runs reconciliation, acquires a worktree, then the worker
  * emits `needs_input`. Orchestrator-only tests have no executor — call this after all
  * experiment tasks have settled so reconciliation reaches `needs_input` like production.
  */

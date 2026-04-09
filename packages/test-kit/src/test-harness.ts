@@ -1,22 +1,22 @@
 import { Orchestrator, type PlanDefinition, type TaskState } from '@invoker/workflow-core';
-import { TaskExecutor, FamiliarRegistry, type MergeGateProvider } from '@invoker/execution-engine';
+import { TaskRunner, ExecutorRegistry, type MergeGateProvider } from '@invoker/execution-engine';
 import type { WorkRequest, WorkResponse } from '@invoker/contracts';
-import type { Familiar, FamiliarHandle, PersistedTaskMeta, TerminalSpec } from '@invoker/execution-engine';
+import type { Executor, ExecutorHandle, PersistedTaskMeta, TerminalSpec } from '@invoker/execution-engine';
 import { InMemoryPersistence } from './in-memory-persistence.js';
 import { InMemoryBus } from './in-memory-bus.js';
 import { MockGit } from './mock-git.js';
 
 /**
- * A minimal familiar that auto-completes on start().
+ * A minimal executor that auto-completes on start().
  * Used by the test harness so merge nodes (which now route through the
- * familiar pipeline) can complete without real git or child processes.
+ * executor pipeline) can complete without real git or child processes.
  */
-class MockFamiliar implements Familiar {
+class MockExecutor implements Executor {
   readonly type = 'worktree';
   private completeCallbacks = new Map<string, (response: WorkResponse) => void>();
 
-  async start(request: WorkRequest): Promise<FamiliarHandle> {
-    const handle: FamiliarHandle = {
+  async start(request: WorkRequest): Promise<ExecutorHandle> {
+    const handle: ExecutorHandle = {
       executionId: `mock-exec-${request.actionId}-${Date.now()}`,
       taskId: request.actionId,
       workspacePath: '/tmp/mock-worktree',
@@ -36,7 +36,7 @@ class MockFamiliar implements Familiar {
     return handle;
   }
 
-  onComplete(handle: FamiliarHandle, callback: (response: WorkResponse) => void) {
+  onComplete(handle: ExecutorHandle, callback: (response: WorkResponse) => void) {
     this.completeCallbacks.set(handle.executionId, callback);
     return () => { this.completeCallbacks.delete(handle.executionId); };
   }
@@ -54,7 +54,7 @@ class MockFamiliar implements Familiar {
 
 export interface TestHarness {
   orchestrator: Orchestrator;
-  executor: TaskExecutor;
+  executor: TaskRunner;
   persistence: InMemoryPersistence;
   bus: InMemoryBus;
   git: MockGit;
@@ -62,7 +62,7 @@ export interface TestHarness {
   /** Load a plan and start execution. Returns started tasks. */
   loadAndStart(plan: PlanDefinition, opts?: { allowGraphMutation?: boolean }): TaskState[];
 
-  /** Simulate a task completing (as if a familiar finished). Returns newly started tasks. */
+  /** Simulate a task completing (as if an executor finished). Returns newly started tasks. */
   completeTask(taskId: string, extras?: Partial<WorkResponse['outputs']>): TaskState[];
 
   /** Simulate a task failing. Returns newly started tasks (usually none). */
@@ -76,9 +76,9 @@ export interface TestHarness {
 }
 
 /**
- * Create a fully wired Orchestrator + TaskExecutor test harness.
+ * Create a fully wired Orchestrator + TaskRunner test harness.
  *
- * Uses InMemoryPersistence, InMemoryBus, MockGit, and a stub FamiliarRegistry.
+ * Uses InMemoryPersistence, InMemoryBus, MockGit, and a stub ExecutorRegistry.
  * No Electron, no real git, no real child processes.
  */
 export function createTestHarness(opts?: {
@@ -93,13 +93,13 @@ export function createTestHarness(opts?: {
     maxConcurrency: opts?.maxConcurrency ?? 10,
   });
 
-  const familiarRegistry = new FamiliarRegistry();
-  familiarRegistry.register('worktree', new MockFamiliar());
+  const executorRegistry = new ExecutorRegistry();
+  executorRegistry.register('worktree', new MockExecutor());
 
-  const executor = new TaskExecutor({
+  const executor = new TaskRunner({
     orchestrator,
     persistence: persistence as any,
-    familiarRegistry,
+    executorRegistry,
     cwd: '/tmp/test-harness',
     mergeGateProvider: opts?.mergeGateProvider,
   });

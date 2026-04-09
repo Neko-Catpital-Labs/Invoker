@@ -7,7 +7,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Orchestrator } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
-import type { TaskExecutor } from '@invoker/execution-engine';
+import type { TaskRunner } from '@invoker/execution-engine';
 import {
   bumpGenerationAndRecreate,
   recreateWorkflow,
@@ -326,7 +326,7 @@ describe('setWorkflowMergeMode', () => {
     await setWorkflowMergeMode('wf-1', 'github', {
       orchestrator: orchestrator as unknown as Orchestrator,
       persistence: persistence as unknown as SQLiteAdapter,
-      taskExecutor: taskExecutor as unknown as TaskExecutor,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
     });
 
     expect(persistence.updateWorkflow).toHaveBeenCalledWith('wf-1', { mergeMode: 'external_review' });
@@ -336,7 +336,7 @@ describe('setWorkflowMergeMode', () => {
     await setWorkflowMergeMode('wf-1', 'automatic', {
       orchestrator: orchestrator as unknown as Orchestrator,
       persistence: persistence as unknown as SQLiteAdapter,
-      taskExecutor: taskExecutor as unknown as TaskExecutor,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
     });
 
     expect(orchestrator.restartTask).toHaveBeenCalledWith('merge-task');
@@ -351,7 +351,7 @@ describe('setWorkflowMergeMode', () => {
     await setWorkflowMergeMode('wf-1', 'manual', {
       orchestrator: orchestrator as unknown as Orchestrator,
       persistence: persistence as unknown as SQLiteAdapter,
-      taskExecutor: taskExecutor as unknown as TaskExecutor,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
     });
 
     expect(orchestrator.restartTask).toHaveBeenCalledWith('merge-task');
@@ -365,7 +365,7 @@ describe('setWorkflowMergeMode', () => {
     await setWorkflowMergeMode('wf-1', 'manual', {
       orchestrator: orchestrator as unknown as Orchestrator,
       persistence: persistence as unknown as SQLiteAdapter,
-      taskExecutor: taskExecutor as unknown as TaskExecutor,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
     });
 
     expect(orchestrator.restartTask).not.toHaveBeenCalled();
@@ -378,7 +378,7 @@ describe('setWorkflowMergeMode', () => {
     await setWorkflowMergeMode('wf-1', 'manual', {
       orchestrator: orchestrator as unknown as Orchestrator,
       persistence: persistence as unknown as SQLiteAdapter,
-      taskExecutor: taskExecutor as unknown as TaskExecutor,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
     });
 
     expect(orchestrator.restartTask).not.toHaveBeenCalled();
@@ -389,7 +389,7 @@ describe('setWorkflowMergeMode', () => {
       setWorkflowMergeMode('wf-1', 'invalid', {
         orchestrator: orchestrator as unknown as Orchestrator,
         persistence: persistence as unknown as SQLiteAdapter,
-        taskExecutor: taskExecutor as unknown as TaskExecutor,
+        taskExecutor: taskExecutor as unknown as TaskRunner,
       }),
     ).rejects.toThrow('Invalid mergeMode');
   });

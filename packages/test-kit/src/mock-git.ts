@@ -1,4 +1,4 @@
-import type { TaskExecutor } from '@invoker/execution-engine';
+import type { TaskRunner } from '@invoker/execution-engine';
 
 interface ScriptedResponse {
   match: (args: string[]) => boolean;
@@ -69,8 +69,8 @@ export class MockGit {
     return this;
   }
 
-  /** Replace execGitReadonly, execGitIn, and worktree methods on a TaskExecutor instance. */
-  install(executor: TaskExecutor): void {
+  /** Replace execGitReadonly, execGitIn, and worktree methods on a TaskRunner instance. */
+  install(executor: TaskRunner): void {
     (executor as any).execGitReadonly = async (args: string[]) => {
       this.calls.push([...args]);
       return this.resolve(args);

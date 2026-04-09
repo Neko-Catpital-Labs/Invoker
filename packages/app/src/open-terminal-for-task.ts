@@ -6,10 +6,10 @@ import * as path from 'node:path';
 import { execSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import {
-  DockerFamiliar,
-  WorktreeFamiliar,
-  SshFamiliar,
-  type FamiliarRegistry,
+  DockerExecutor,
+  WorktreeExecutor,
+  SshExecutor,
+  type ExecutorRegistry,
   type AgentRegistry,
   type PersistedTaskMeta,
 } from '@invoker/execution-engine';
@@ -24,7 +24,7 @@ import {
 /** Persistence methods required to resolve terminal cwd / command for a task. */
 export interface OpenTerminalPersistence {
   getTaskStatus(taskId: string): string | null;
-  getFamiliarType(taskId: string): string | null;
+  getExecutorType(taskId: string): string | null;
   getAgentSessionId(taskId: string): string | null;
   getLastAgentSessionId?(taskId: string): string | null;
   getExecutionAgent?(taskId: string): string | null;
@@ -40,7 +40,7 @@ export interface OpenTerminalPersistence {
 export interface OpenExternalTerminalForTaskOptions {
   taskId: string;
   persistence: OpenTerminalPersistence;
-  familiarRegistry: FamiliarRegistry;
+  executorRegistry: ExecutorRegistry;
   executionAgentRegistry?: AgentRegistry;
   repoRoot: string;
   /** Shown when task status is `running` (GUI vs headless wording). */
@@ -132,7 +132,7 @@ export function repairCodexResumeSessionMeta(
 export async function openExternalTerminalForTask(
   opts: OpenExternalTerminalForTaskOptions,
 ): Promise<OpenTerminalResult> {
-  const { taskId, persistence, familiarRegistry, repoRoot, runningTaskReason } = opts;
+  const { taskId, persistence, executorRegistry, repoRoot, runningTaskReason } = opts;
 
   const taskStatus = persistence.getTaskStatus(taskId);
   console.log(`[open-terminal] taskId=${taskId} taskStatus=${taskStatus ?? 'null'}`);
@@ -150,7 +150,7 @@ export async function openExternalTerminalForTask(
 
   const meta: PersistedTaskMeta = {
     taskId,
-    familiarType: persistence.getFamiliarType(taskId) ?? 'worktree',
+    executorType: persistence.getExecutorType(taskId) ?? 'worktree',
     agentSessionId: persistence.getAgentSessionId(taskId) ?? undefined,
     executionAgent: persistence.getExecutionAgent?.(taskId) ?? undefined,
     containerId: persistence.getContainerId(taskId) ?? undefined,
@@ -159,7 +159,7 @@ export async function openExternalTerminalForTask(
   };
   const repairedMeta = repairCodexResumeSessionMeta(meta, persistence, opts.executionAgentRegistry);
   console.log(
-    `[open-terminal] meta from DB: familiarType=${repairedMeta.familiarType} workspacePath=${repairedMeta.workspacePath ?? 'undefined'} branch=${repairedMeta.branch ?? 'undefined'} agentSessionId=${repairedMeta.agentSessionId ?? 'undefined'} executionAgent=${repairedMeta.executionAgent ?? 'undefined'} containerId=${repairedMeta.containerId ?? 'undefined'}`,
+    `[open-terminal] meta from DB: executorType=${repairedMeta.executorType} workspacePath=${repairedMeta.workspacePath ?? 'undefined'} branch=${repairedMeta.branch ?? 'undefined'} agentSessionId=${repairedMeta.agentSessionId ?? 'undefined'} executionAgent=${repairedMeta.executionAgent ?? 'undefined'} containerId=${repairedMeta.containerId ?? 'undefined'}`,
   );
   if (repairedMeta.agentSessionId) {
     console.log(
@@ -168,34 +168,34 @@ export async function openExternalTerminalForTask(
     );
   }
 
-  let familiar = familiarRegistry.get(repairedMeta.familiarType);
-  console.log(`[open-terminal] familiarRegistry.get("${repairedMeta.familiarType}") → ${familiar ? familiar.type : 'null (will lazy-create)'}`);
+  let familiar = executorRegistry.get(repairedMeta.executorType);
+  console.log(`[open-terminal] executorRegistry.get("${repairedMeta.executorType}") → ${familiar ? familiar.type : 'null (will lazy-create)'}`);
 
   if (!familiar) {
-    if (repairedMeta.familiarType === 'docker') {
-      const docker = new DockerFamiliar({
+    if (repairedMeta.executorType === 'docker') {
+      const docker = new DockerExecutor({
         agentRegistry: opts.executionAgentRegistry,
       });
-      familiarRegistry.register('docker', docker);
+      executorRegistry.register('docker', docker);
       familiar = docker;
-    } else if (repairedMeta.familiarType === 'worktree') {
+    } else if (repairedMeta.executorType === 'worktree') {
       const invokerHome = path.resolve(homedir(), '.invoker');
-      const worktree = new WorktreeFamiliar({
+      const worktree = new WorktreeExecutor({
         worktreeBaseDir: path.resolve(invokerHome, 'worktrees'),
         cacheDir: path.resolve(invokerHome, 'repos'),
         maxWorktrees: 5,
         agentRegistry: opts.executionAgentRegistry,
       });
-      familiarRegistry.register('worktree', worktree);
+      executorRegistry.register('worktree', worktree);
       familiar = worktree;
-    } else if (repairedMeta.familiarType === 'ssh') {
+    } else if (repairedMeta.executorType === 'ssh') {
       const targetId = persistence.getRemoteTargetId?.(taskId);
       const target = targetId ? loadConfig().remoteTargets?.[targetId] : undefined;
       familiar = target
-        ? new SshFamiliar({ ...target, agentRegistry: opts.executionAgentRegistry })
-        : familiarRegistry.getDefault();
+        ? new SshExecutor({ ...target, agentRegistry: opts.executionAgentRegistry })
+        : executorRegistry.getDefault();
     } else {
-      familiar = familiarRegistry.getDefault();
+      familiar = executorRegistry.getDefault();
     }
   }
 
@@ -206,11 +206,11 @@ export async function openExternalTerminalForTask(
   // workspace-metadata check below already enforces that SSH tasks have repairedMeta.workspacePath.
   const managedFamiliarTypes = ['worktree', 'ssh', 'docker'];
   const hostWorkspaceFamiliarTypes = ['worktree'];
-  const isManagedFamiliar = managedFamiliarTypes.includes(repairedMeta.familiarType);
+  const isManagedFamiliar = managedFamiliarTypes.includes(repairedMeta.executorType);
   if (isManagedFamiliar && !repairedMeta.workspacePath) {
     const errorMsg = [
       `Cannot open terminal for task "${taskId}": workspace metadata is missing.`,
-      `Familiar type "${repairedMeta.familiarType}" requires a managed workspace but workspacePath is not set.`,
+      `Executor type "${repairedMeta.executorType}" requires a managed workspace but workspacePath is not set.`,
       `This typically means the task failed during startup before workspace metadata was persisted.`,
       ``,
       `Recovery options:`,
@@ -235,9 +235,9 @@ export async function openExternalTerminalForTask(
   }
 
   // Fail-fast workspace invariant: managed familiars must have resolved workspace path
-  if (hostWorkspaceFamiliarTypes.includes(repairedMeta.familiarType) && !spec.cwd) {
+  if (hostWorkspaceFamiliarTypes.includes(repairedMeta.executorType) && !spec.cwd) {
     const reason = [
-      `Task "${taskId}" has no workspace path (familiar=${repairedMeta.familiarType}).`,
+      `Task "${taskId}" has no workspace path (familiar=${repairedMeta.executorType}).`,
       `This task requires a managed workspace but workspace metadata is missing.`,
       `Recovery: Retry the task using "Recreate Task" or recreate the entire workflow.`,
       `Refusing to fall back to host repo to prevent unintended mutations.`,

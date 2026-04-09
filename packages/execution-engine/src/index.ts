@@ -6,16 +6,16 @@ export {
   shouldResolveViaOriginTracking,
   isInvokerManagedPoolBranch,
 } from './plan-base-remote.js';
-export * from './familiar.js';
-export * from './base-familiar.js';
+export * from './executor.js';
+export * from './base-executor.js';
 export * from './process-utils.js';
-export * from './docker-familiar.js';
-export * from './worktree-familiar.js';
-export * from './ssh-familiar.js';
+export * from './docker-executor.js';
+export * from './worktree-executor.js';
+export * from './ssh-executor.js';
 export * from './repo-pool.js';
 export * from './registry.js';
-export * from './task-executor.js';
-export * from './merge-executor.js';
+export * from './task-runner.js';
+export * from './merge-runner.js';
 export * from './conflict-resolver.js';
 export * from './merge-gate-provider.js';
 export * from './github-merge-gate-provider.js';

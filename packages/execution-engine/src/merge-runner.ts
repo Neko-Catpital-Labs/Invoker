@@ -1,7 +1,7 @@
 /**
- * Merge node execution logic, extracted from TaskExecutor.
+ * Merge node execution logic, extracted from TaskRunner.
  *
- * Each function takes a MergeExecutorHost (a subset of TaskExecutor's
+ * Each function takes a MergeRunnerHost (a subset of TaskRunner's
  * capabilities) as its first parameter, avoiding circular imports.
  */
 
@@ -13,7 +13,7 @@ import { pathToFileURL } from 'node:url';
 import type { Orchestrator, TaskState, TaskStateChanges } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import type { WorkResponse } from '@invoker/contracts';
-import type { TaskExecutorCallbacks } from './task-executor.js';
+import type { TaskRunnerCallbacks } from './task-runner.js';
 import type { MergeGateProvider } from './merge-gate-provider.js';
 import type { ReviewProviderRegistry } from './review-provider-registry.js';
 
@@ -24,7 +24,7 @@ export const MERGE_TRACE_LOG = resolve(homedir(), '.invoker', 'merge-trace.log')
 export function mergeTrace(tag: string, data: Record<string, unknown>): void {
   try {
     mkdirSync(resolve(homedir(), '.invoker'), { recursive: true });
-    appendFileSync(MERGE_TRACE_LOG, `${new Date().toISOString()} [merge-trace:executor] ${tag} ${JSON.stringify(data)}\n`);
+    appendFileSync(MERGE_TRACE_LOG, `${new Date().toISOString()} [merge-trace:runner] ${tag} ${JSON.stringify(data)}\n`);
   } catch { /* best effort */ }
 }
 
@@ -48,7 +48,7 @@ function canonicalMergeMode(mode: string | undefined): 'manual' | 'automatic' | 
  * Merge gates can move to awaiting_approval before final completion.
  * Start any newly-ready downstream tasks (e.g., cross-workflow review_ready deps).
  */
-async function startReviewReadyDependents(host: MergeExecutorHost): Promise<void> {
+async function startReviewReadyDependents(host: MergeRunnerHost): Promise<void> {
   const orchestrator = host.orchestrator as unknown as {
     startExecution?: () => TaskState[];
   };
@@ -62,7 +62,7 @@ async function startReviewReadyDependents(host: MergeExecutorHost): Promise<void
 }
 
 function setMergeGateReviewReady(
-  host: MergeExecutorHost,
+  host: MergeRunnerHost,
   taskId: string,
   changes: TaskStateChanges,
 ): void {
@@ -81,17 +81,17 @@ function setMergeGateReviewReady(
 
 /**
  * Wrapper around host.execGitIn that throws if the target directory is the
- * user's main working directory (host.cwd). All merge-executor git operations
+ * user's main working directory (host.cwd). All merge-runner git operations
  * must target a managed merge clone, never the host repo.
  */
 async function execGitInMergeSafe(
-  host: MergeExecutorHost,
+  host: MergeRunnerHost,
   args: string[],
   dir: string,
 ): Promise<string> {
   if (normalize(resolve(dir)) === normalize(resolve(host.cwd))) {
     throw new Error(
-      `SAFETY: merge-executor must not run git in host repo (${host.cwd}). ` +
+      `SAFETY: merge-runner must not run git in host repo (${host.cwd}). ` +
       `All merge git operations must use a managed merge clone. ` +
       `git args: [${args.join(', ')}]\n${new Error().stack}`,
     );
@@ -102,14 +102,14 @@ async function execGitInMergeSafe(
 // ── Host interface ───────────────────────────────────────
 
 /**
- * Subset of TaskExecutor that merge functions need.
- * Defined here (not by importing TaskExecutor) to avoid circular deps.
+ * Subset of TaskRunner that merge functions need.
+ * Defined here (not by importing TaskRunner) to avoid circular deps.
  */
-export interface MergeExecutorHost {
+export interface MergeRunnerHost {
   readonly persistence: SQLiteAdapter;
   readonly orchestrator: Orchestrator;
   readonly defaultBranch: string | undefined;
-  readonly callbacks: TaskExecutorCallbacks;
+  readonly callbacks: TaskRunnerCallbacks;
   readonly cwd: string;
   readonly mergeGateProvider?: MergeGateProvider;
   readonly reviewProviderRegistry?: ReviewProviderRegistry;
@@ -151,7 +151,7 @@ export interface MergeExecutorHost {
  * (graceful skip - caller should check ancestry before treating as an error).
  */
 export async function ensureLocalBranchForMerge(
-  host: MergeExecutorHost,
+  host: MergeRunnerHost,
   worktreeDir: string,
   branch: string,
   repoUrl?: string,
@@ -249,7 +249,7 @@ function findLeafTaskIdsInWorkflow(allTasks: TaskState[], workflowId: string): s
 // ── Extracted functions ──────────────────────────────────
 
 export async function executeMergeNodeImpl(
-  host: MergeExecutorHost,
+  host: MergeRunnerHost,
   task: TaskState,
 ): Promise<void> {
   const workflowId = task.config.workflowId;
@@ -331,7 +331,7 @@ export async function executeMergeNodeImpl(
         };
         host.callbacks.onComplete?.(task.id, manualResponse);
         setMergeGateReviewReady(host, task.id, {
-          config: { familiarType: 'worktree', summary },
+          config: { executorType: 'worktree', summary },
           execution: { branch: featureBranch ?? undefined, workspacePath: gateWorkspacePath },
         });
         await startReviewReadyDependents(host);
@@ -386,7 +386,7 @@ export async function executeMergeNodeImpl(
             `task=${task.id} gateWorkspacePath=${gateWorkspacePath ?? 'NULL'}`,
         );
         setMergeGateReviewReady(host, task.id, {
-          config: { familiarType: 'worktree', summary },
+          config: { executorType: 'worktree', summary },
           execution: {
             branch: featureBranch,
             workspacePath: gateWorkspacePath,
@@ -435,7 +435,7 @@ export async function executeMergeNodeImpl(
       };
       host.callbacks.onComplete?.(task.id, gateResponse);
       setMergeGateReviewReady(host, task.id, {
-        config: { familiarType: 'worktree', summary },
+        config: { executorType: 'worktree', summary },
         execution: { branch: featureBranch ?? undefined, workspacePath: gateWorkspacePath },
       });
       await startReviewReadyDependents(host);
@@ -459,7 +459,7 @@ export async function executeMergeNodeImpl(
       `gateWorkspacePath=${gateWorkspacePath ?? 'NULL'} response=${response.status}`,
   );
   host.persistence.updateTask(task.id, {
-    config: { familiarType: 'worktree', summary },
+    config: { executorType: 'worktree', summary },
     execution: {
       branch: featureBranch ?? undefined,
       workspacePath: gateWorkspacePath,
@@ -480,7 +480,7 @@ export async function executeMergeNodeImpl(
         `task=${task.id} gateWorkspacePath=${gateWorkspacePath ?? 'NULL'}`,
     );
     setMergeGateReviewReady(host, task.id, {
-      config: { familiarType: 'worktree', summary },
+      config: { executorType: 'worktree', summary },
       execution: {
         branch: featureBranch ?? undefined,
         workspacePath: gateWorkspacePath,
@@ -497,7 +497,7 @@ export async function executeMergeNodeImpl(
 }
 
 export async function approveMergeImpl(
-  host: MergeExecutorHost,
+  host: MergeRunnerHost,
   workflowId: string,
 ): Promise<void> {
   mergeTrace('APPROVE_MERGE_ENTER', { workflowId });
@@ -593,7 +593,7 @@ export async function approveMergeImpl(
  * On failure: sets failed with the error.
  */
 export async function publishAfterFixImpl(
-  host: MergeExecutorHost,
+  host: MergeRunnerHost,
   task: TaskState,
 ): Promise<void> {
   const workflowId = task.config.workflowId;
@@ -635,7 +635,7 @@ export async function publishAfterFixImpl(
           `will persist workspacePath=${gateWorkspacePath ?? 'NULL'}`,
       );
       setMergeGateReviewReady(host, task.id, {
-        config: { familiarType: 'worktree', summary },
+        config: { executorType: 'worktree', summary },
         execution: { workspacePath: gateWorkspacePath },
       });
       await startReviewReadyDependents(host);
@@ -791,7 +791,7 @@ export async function publishAfterFixImpl(
 
 
       setMergeGateReviewReady(host, task.id, {
-        config: { familiarType: 'worktree', summary },
+        config: { executorType: 'worktree', summary },
         execution: {
           branch: featureBranch,
           workspacePath: gateWorkspacePath,
@@ -816,7 +816,7 @@ export async function publishAfterFixImpl(
     }
 
     setMergeGateReviewReady(host, task.id, {
-      config: { familiarType: 'worktree', summary },
+      config: { executorType: 'worktree', summary },
       execution: {
         branch: featureBranch,
         workspacePath: gateWorkspacePath,
@@ -842,7 +842,7 @@ export async function publishAfterFixImpl(
 }
 
 export async function buildMergeSummaryImpl(
-  host: MergeExecutorHost,
+  host: MergeRunnerHost,
   workflowId: string,
 ): Promise<string> {
   const allTasks = host.orchestrator.getAllTasks();
@@ -961,7 +961,7 @@ export async function buildMergeSummaryImpl(
 }
 
 export async function consolidateAndMergeImpl(
-  host: MergeExecutorHost,
+  host: MergeRunnerHost,
   onFinish: string,
   baseBranch: string,
   featureBranch: string,

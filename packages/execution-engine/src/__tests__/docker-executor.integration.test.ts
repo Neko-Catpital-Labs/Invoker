@@ -4,8 +4,8 @@ import { mkdirSync, mkdtempSync, rmSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { WorkRequest, WorkResponse } from '@invoker/contracts';
-import type { FamiliarHandle } from '../familiar.js';
-import { DockerFamiliar } from '../docker-familiar.js';
+import type { ExecutorHandle } from '../executor.js';
+import { DockerExecutor } from '../docker-executor.js';
 
 // ---------------------------------------------------------------------------
 // Skip entire suite when Docker is unavailable
@@ -39,8 +39,8 @@ function makeRequest(overrides: Partial<WorkRequest> = {}): WorkRequest {
 }
 
 function waitForComplete(
-  familiar: DockerFamiliar,
-  handle: FamiliarHandle,
+  executor: DockerExecutor,
+  handle: ExecutorHandle,
   timeoutMs = 60_000,
 ): Promise<WorkResponse> {
   return new Promise((resolve, reject) => {
@@ -48,7 +48,7 @@ function waitForComplete(
       () => reject(new Error(`Timed out after ${timeoutMs}ms`)),
       timeoutMs,
     );
-    familiar.onComplete(handle, (response) => {
+    executor.onComplete(handle, (response) => {
       clearTimeout(timer);
       resolve(response);
     });
@@ -59,9 +59,9 @@ function waitForComplete(
 // Tests
 // ---------------------------------------------------------------------------
 
-describe.skipIf(!DOCKER_OK)('DockerFamiliar (real Docker)', () => {
+describe.skipIf(!DOCKER_OK)('DockerExecutor (real Docker)', () => {
   let workDir: string;
-  let familiar: DockerFamiliar;
+  let executor: DockerExecutor;
 
   beforeAll(() => {
     // Ensure base image is built
@@ -75,8 +75,8 @@ describe.skipIf(!DOCKER_OK)('DockerFamiliar (real Docker)', () => {
   });
 
   afterEach(async () => {
-    if (familiar) {
-      await familiar.destroyAll();
+    if (executor) {
+      await executor.destroyAll();
     }
     if (workDir && existsSync(workDir)) {
       // Container runs as root, creating root-owned files in bind-mounted dir.
@@ -108,7 +108,7 @@ describe.skipIf(!DOCKER_OK)('DockerFamiliar (real Docker)', () => {
       },
     });
 
-    familiar = new DockerFamiliar({});
+    executor = new DockerExecutor({});
   }
 
   // -------------------------------------------------------------------------
@@ -121,8 +121,8 @@ describe.skipIf(!DOCKER_OK)('DockerFamiliar (real Docker)', () => {
       inputs: { command: 'echo hello-from-docker' },
     });
 
-    const handle = await familiar.start(request);
-    const response = await waitForComplete(familiar, handle);
+    const handle = await executor.start(request);
+    const response = await waitForComplete(executor, handle);
 
     expect(response.status).toBe('completed');
     expect(response.outputs.exitCode).toBe(0);
@@ -138,11 +138,11 @@ describe.skipIf(!DOCKER_OK)('DockerFamiliar (real Docker)', () => {
       inputs: { command: 'echo MARKER_OUTPUT_12345' },
     });
 
-    const handle = await familiar.start(request);
+    const handle = await executor.start(request);
     const output: string[] = [];
-    familiar.onOutput(handle, (data) => output.push(data));
+    executor.onOutput(handle, (data) => output.push(data));
 
-    await waitForComplete(familiar, handle);
+    await waitForComplete(executor, handle);
 
     const combined = output.join('');
     expect(combined).toContain('MARKER_OUTPUT_12345');
@@ -156,8 +156,8 @@ describe.skipIf(!DOCKER_OK)('DockerFamiliar (real Docker)', () => {
       inputs: { command: 'exit 42' },
     });
 
-    const handle = await familiar.start(request);
-    const response = await waitForComplete(familiar, handle);
+    const handle = await executor.start(request);
+    const response = await waitForComplete(executor, handle);
 
     // The agent script exits with the command's exit code
     expect(response.status).toBe('failed');
@@ -172,17 +172,17 @@ describe.skipIf(!DOCKER_OK)('DockerFamiliar (real Docker)', () => {
       inputs: { command: 'sleep 300' },
     });
 
-    const handle = await familiar.start(request);
+    const handle = await executor.start(request);
 
     // Give it a moment to start
     await new Promise((r) => setTimeout(r, 2_000));
 
-    await familiar.kill(handle);
+    await executor.kill(handle);
 
     // After kill, the container should be gone
     // Verify by checking that getTerminalSpec still returns the entry
     // (it's tracked internally even after kill)
-    const spec = familiar.getTerminalSpec(handle);
+    const spec = executor.getTerminalSpec(handle);
     expect(spec).toBeDefined();
   }, 30_000);
 
@@ -194,9 +194,9 @@ describe.skipIf(!DOCKER_OK)('DockerFamiliar (real Docker)', () => {
       inputs: { command: 'sleep 10' },
     });
 
-    const handle = await familiar.start(request);
+    const handle = await executor.start(request);
 
-    const spec = familiar.getTerminalSpec(handle);
+    const spec = executor.getTerminalSpec(handle);
     expect(spec).not.toBeNull();
     expect(spec!.command).toBe('bash');
     expect(spec!.args![0]).toBe('-c');
@@ -217,11 +217,11 @@ describe.skipIf(!DOCKER_OK)('DockerFamiliar (real Docker)', () => {
       inputs: { command: 'mkdir -p ~/.cache/test-dir && echo HOMEDIR_OK' },
     });
 
-    const handle = await familiar.start(request);
+    const handle = await executor.start(request);
     const output: string[] = [];
-    familiar.onOutput(handle, (data) => output.push(data));
+    executor.onOutput(handle, (data) => output.push(data));
 
-    const response = await waitForComplete(familiar, handle);
+    const response = await waitForComplete(executor, handle);
     const combined = output.join('');
 
     expect(response.status).toBe('completed');
@@ -247,13 +247,13 @@ describe.skipIf(!DOCKER_OK)('DockerFamiliar (real Docker)', () => {
       }),
     ];
 
-    const handles: FamiliarHandle[] = [];
+    const handles: ExecutorHandle[] = [];
     for (const req of requests) {
-      handles.push(await familiar.start(req));
+      handles.push(await executor.start(req));
     }
 
     const responses = await Promise.all(
-      handles.map((h) => waitForComplete(familiar, h)),
+      handles.map((h) => waitForComplete(executor, h)),
     );
 
     for (const r of responses) {
@@ -268,13 +268,13 @@ describe.skipIf(!DOCKER_OK)('DockerFamiliar (real Docker)', () => {
 
 const HAS_API_KEY = !!process.env.ANTHROPIC_API_KEY;
 
-describe.skipIf(!DOCKER_OK || !HAS_API_KEY)('DockerFamiliar Claude E2E (real Docker + Claude CLI)', () => {
+describe.skipIf(!DOCKER_OK || !HAS_API_KEY)('DockerExecutor Claude E2E (real Docker + Claude CLI)', () => {
   let workDir: string;
-  let familiar: DockerFamiliar;
+  let executor: DockerExecutor;
 
   afterEach(async () => {
-    if (familiar) {
-      await familiar.destroyAll();
+    if (executor) {
+      await executor.destroyAll();
     }
     if (workDir && existsSync(workDir)) {
       try {
@@ -289,7 +289,7 @@ describe.skipIf(!DOCKER_OK || !HAS_API_KEY)('DockerFamiliar Claude E2E (real Doc
 
   function setup() {
     workDir = mkdtempSync(join(tmpdir(), 'invoker-docker-claude-test-'));
-    familiar = new DockerFamiliar({
+    executor = new DockerExecutor({
       secretsFile: process.env.INVOKER_TEST_SECRETS_FILE,
     });
   }
@@ -302,7 +302,7 @@ describe.skipIf(!DOCKER_OK || !HAS_API_KEY)('DockerFamiliar Claude E2E (real Doc
       inputs: { prompt: 'Say exactly "hello" and nothing else.' },
     });
 
-    const handle = await familiar.start(request);
+    const handle = await executor.start(request);
 
     expect(handle.agentSessionId).toBeDefined();
     expect(handle.agentSessionId).toMatch(/^[0-9a-f-]+$/);
@@ -316,8 +316,8 @@ describe.skipIf(!DOCKER_OK || !HAS_API_KEY)('DockerFamiliar Claude E2E (real Doc
       inputs: { prompt: 'Say exactly "hello" and nothing else.' },
     });
 
-    const handle = await familiar.start(request);
-    const response = await waitForComplete(familiar, handle, 120_000);
+    const handle = await executor.start(request);
+    const response = await waitForComplete(executor, handle, 120_000);
 
     expect(response.status).toBe('completed');
     expect(response.outputs.agentSessionId).toBe(handle.agentSessionId);
@@ -332,8 +332,8 @@ describe.skipIf(!DOCKER_OK || !HAS_API_KEY)('DockerFamiliar Claude E2E (real Doc
       inputs: { prompt: 'Say exactly "hello" and nothing else.' },
     });
 
-    const handle = await familiar.start(request);
-    const spec = familiar.getTerminalSpec(handle);
+    const handle = await executor.start(request);
+    const spec = executor.getTerminalSpec(handle);
 
     expect(spec).toBeDefined();
     expect(spec!.command).toBe('bash');

@@ -19,7 +19,7 @@
  *   electron dist/main.js --headless fix <taskId>
  *   electron dist/main.js --headless resolve-conflict <taskId>
  *   electron dist/main.js --headless edit <taskId> <newCommand>
- *   electron dist/main.js --headless edit-executor <taskId> <familiarType>
+ *   electron dist/main.js --headless edit-executor <taskId> <executorType>
  *   electron dist/main.js --headless edit-agent <taskId> <claude|codex>
  *   electron dist/main.js --headless cancel <taskId>
  *   electron dist/main.js --headless set-merge-mode <workflowId> <mode>
@@ -60,12 +60,12 @@ import { SQLiteAdapter, ConversationRepository } from '@invoker/data-store';
 import { IpcBus, Channels } from '@invoker/transport';
 import type { MessageBus } from '@invoker/transport';
 import {
-  FamiliarRegistry, TaskExecutor,
-  DockerFamiliar, WorktreeFamiliar, SshFamiliar, GitHubMergeGateProvider, ReviewProviderRegistry,
+  ExecutorRegistry, TaskRunner,
+  DockerExecutor, WorktreeExecutor, SshExecutor, GitHubMergeGateProvider, ReviewProviderRegistry,
   RESTART_TO_BRANCH_TRACE,
   remoteFetchForPool,
   registerBuiltinAgents,
-  type Familiar, type FamiliarHandle,
+  type Executor, type ExecutorHandle,
 } from '@invoker/execution-engine';
 import type { TaskOutputData } from './types.js';
 import { loadConfig, resolveSecretsFilePath, type InvokerConfig } from './config.js';
@@ -132,7 +132,7 @@ if (process.platform === 'linux') {
 
 let messageBus: MessageBus;
 let persistence: SQLiteAdapter;
-let familiarRegistry: FamiliarRegistry;
+let executorRegistry: ExecutorRegistry;
 let orchestrator: Orchestrator;
 let hourlyBackupInterval: ReturnType<typeof setInterval> | null = null;
 
@@ -182,10 +182,10 @@ async function initServices(options?: InitServicesOptions): Promise<void> {
       console.log(`[backup] hourly snapshots enabled (interval=${hourlyMs}ms)`);
     }
   }
-  familiarRegistry = new FamiliarRegistry();
-  familiarRegistry.register(
+  executorRegistry = new ExecutorRegistry();
+  executorRegistry.register(
     'worktree',
-    new WorktreeFamiliar({
+    new WorktreeExecutor({
       worktreeBaseDir: path.resolve(invokerHomeRoot, 'worktrees'),
       cacheDir: path.resolve(invokerHomeRoot, 'repos'),
       maxWorktrees: 5,
@@ -220,7 +220,7 @@ function loadSurfaces(): any {
 // ── Shared Slack Bot Wiring ──────────────────────────────────
 
 interface SlackBotDeps {
-  executor: TaskExecutor;
+  executor: TaskRunner;
   logFn: (source: string, level: string, message: string) => void;
   onStartPlan?: () => void;
   onPlanLoaded?: (plan: PlanDefinition) => void;
@@ -391,7 +391,7 @@ if (isHeadless) {
       });
 
       const headlessDeps = {
-        orchestrator, persistence, familiarRegistry, messageBus,
+        orchestrator, persistence, executorRegistry, messageBus,
         repoRoot, invokerConfig, initServices, wireSlackBot,
         waitForApproval,
         noTrack,
@@ -451,9 +451,9 @@ if (isHeadless) {
 function setupGuiMode(): void {
   const agentRegistry = registerBuiltinAgents();
   let mainWindow: BrowserWindow | null = null;
-  let taskExecutor: TaskExecutor;
+  let taskExecutor: TaskRunner;
   let apiServer: ApiServer | null = null;
-  const taskHandles = new Map<string, { handle: FamiliarHandle; familiar: Familiar }>();
+  const taskHandles = new Map<string, { handle: ExecutorHandle; executor: Executor }>();
   let dbPollInterval: ReturnType<typeof setInterval> | null = null;
   let activityPollInterval: ReturnType<typeof setInterval> | null = null;
   let uiPerfLogInterval: ReturnType<typeof setInterval> | null = null;
@@ -478,11 +478,11 @@ function setupGuiMode(): void {
     }
   });
 
-  function rebuildTaskExecutor(): void {
-    taskExecutor = new TaskExecutor({
+  function rebuildTaskRunner(): void {
+    taskExecutor = new TaskRunner({
       orchestrator,
       persistence,
-      familiarRegistry,
+      executorRegistry,
       executionAgentRegistry: agentRegistry,
       cwd: repoRoot,
       defaultBranch: invokerConfig.defaultBranch,
@@ -509,9 +509,9 @@ function setupGuiMode(): void {
             console.error(`[output] Failed to persist output for ${taskId}:`, err);
           }
         },
-        onSpawned: (taskId, handle, familiar) => {
+        onSpawned: (taskId, handle, executor) => {
           console.log(`[exec] Task "${taskId}" spawned (handle: ${handle.executionId})`);
-          taskHandles.set(taskId, { handle, familiar });
+          taskHandles.set(taskId, { handle, executor });
         },
         onComplete: (taskId) => {
           console.log(`[exec] Task "${taskId}" completed`);
@@ -544,7 +544,7 @@ function setupGuiMode(): void {
     const entry = taskHandles.get(taskId);
     if (!entry) return;
     console.log(`[kill] Killing running task "${taskId}" before restart`);
-    await entry.familiar.kill(entry.handle);
+    await entry.executor.kill(entry.handle);
     taskHandles.delete(taskId);
   }
 
@@ -649,7 +649,7 @@ function setupGuiMode(): void {
       return;
     }
 
-    rebuildTaskExecutor();
+    rebuildTaskRunner();
 
     // ── IPC Delegation Handlers — headless → GUI ────────────────
     // Headless processes delegate write-heavy commands to the GUI process via IpcBus.
@@ -704,7 +704,7 @@ function setupGuiMode(): void {
       }
       console.log(`[ipc-delegate] headless.exec: "${args.join(' ')}"`);
       await runHeadless(args, {
-        orchestrator, persistence, familiarRegistry, messageBus,
+        orchestrator, persistence, executorRegistry, messageBus,
         repoRoot, invokerConfig, initServices, wireSlackBot,
         waitForApproval: delegatedWait,
         noTrack: delegatedNoTrack,
@@ -729,7 +729,7 @@ function setupGuiMode(): void {
     apiServer = startApiServer({
       orchestrator,
       persistence,
-      familiarRegistry,
+      executorRegistry,
       taskExecutor,
       killRunningTask,
       cancelTask: performCancelTask,
@@ -854,7 +854,7 @@ function setupGuiMode(): void {
 
     ipcMain.handle('invoker:stop', async () => {
       console.log(`[ipc] stop — destroying all familiars`);
-      await Promise.all(familiarRegistry.getAll().map(f => f.destroyAll()));
+      await Promise.all(executorRegistry.getAll().map(f => f.destroyAll()));
       const allTasks = orchestrator.getAllTasks();
       for (const task of allTasks) {
         if (task.status === 'running' || task.status === 'fixing_with_ai') {
@@ -875,7 +875,7 @@ function setupGuiMode(): void {
       const workflows = persistence.listWorkflows();
       const currentWorkflowId = workflows.length > 0 ? workflows[0].id : null;
 
-      await Promise.all(familiarRegistry.getAll().map(f => f.destroyAll()));
+      await Promise.all(executorRegistry.getAll().map(f => f.destroyAll()));
       const allTasks = orchestrator.getAllTasks();
       for (const task of allTasks) {
         if (task.status === 'running' || task.status === 'fixing_with_ai') {
@@ -901,7 +901,7 @@ function setupGuiMode(): void {
     maxConcurrency: invokerConfig.maxConcurrency,
     executorRoutingRules: invokerConfig.executorRoutingRules ?? [],
   });
-      rebuildTaskExecutor();
+      rebuildTaskRunner();
       taskHandles.clear();
     });
 
@@ -1316,10 +1316,10 @@ function setupGuiMode(): void {
       }
     });
 
-    ipcMain.handle('invoker:edit-task-type', async (_event, taskId: string, familiarType: string, remoteTargetId?: string) => {
-      console.log(`[ipc] edit-task-type: "${taskId}" → "${familiarType}" remoteTargetId=${remoteTargetId ?? 'none'}`);
+    ipcMain.handle('invoker:edit-task-type', async (_event, taskId: string, executorType: string, remoteTargetId?: string) => {
+      console.log(`[ipc] edit-task-type: "${taskId}" → "${executorType}" remoteTargetId=${remoteTargetId ?? 'none'}`);
       try {
-        const started = orchestrator.editTaskType(taskId, familiarType, remoteTargetId);
+        const started = orchestrator.editTaskType(taskId, executorType, remoteTargetId);
         const runnable = started.filter(t => t.status === 'running');
         await taskExecutor.executeTasks(runnable);
       } catch (err) {
@@ -1484,7 +1484,7 @@ function setupGuiMode(): void {
       return openExternalTerminalForTask({
         taskId,
         persistence,
-        familiarRegistry,
+        executorRegistry,
         executionAgentRegistry: agentRegistry,
         repoRoot,
         runningTaskReason:
@@ -1519,8 +1519,8 @@ function setupGuiMode(): void {
       clearInterval(hourlyBackupInterval);
       hourlyBackupInterval = null;
     }
-    if (familiarRegistry) {
-      await Promise.all(familiarRegistry.getAll().map(f => f.destroyAll()));
+    if (executorRegistry) {
+      await Promise.all(executorRegistry.getAll().map(f => f.destroyAll()));
     }
     if (orchestrator) {
       for (const task of orchestrator.getAllTasks()) {
@@ -1540,8 +1540,8 @@ function setupGuiMode(): void {
 
   // ── Slack Bot (embedded in GUI process) ──────────────────
   async function startSlackBot(
-    executor: TaskExecutor,
-    handles: Map<string, { handle: FamiliarHandle; familiar: Familiar }>,
+    executor: TaskRunner,
+    handles: Map<string, { handle: ExecutorHandle; executor: Executor }>,
   ): Promise<void> {
     const logFn = (source: string, level: string, message: string) => {
       const prefix = level === 'error' ? `${RED}[${source}]${RESET}` : `[${source}]`;

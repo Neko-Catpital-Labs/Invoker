@@ -412,7 +412,7 @@ describe('remote agent dispatch via registry', () => {
         workspacePath: '~/worktrees/task-remote-codex',
       },
       config: {
-        familiarType: 'ssh' as const,
+        executorType: 'ssh' as const,
         remoteTargetId: 'remote_do_1',
       },
     };
@@ -522,7 +522,7 @@ describe('conflict-resolver fail-fast workspace invariant', () => {
           branch: 'invoker/task-no-workspace',
           workspacePath: undefined,  // Missing!
         },
-        config: { familiarType: 'worktree' },
+        config: { executorType: 'worktree' },
       };
 
       await expect(
@@ -547,7 +547,7 @@ describe('conflict-resolver fail-fast workspace invariant', () => {
           branch: 'invoker/task-workspace-gone',
           workspacePath: nonExistentWorkspacePath(),
         },
-        config: { familiarType: 'worktree' },
+        config: { executorType: 'worktree' },
       };
 
       await expect(
@@ -573,7 +573,7 @@ describe('conflict-resolver fail-fast workspace invariant', () => {
           workspacePath: '~/worktrees/remote',  // Remote path
         },
         config: {
-          familiarType: 'ssh' as const,
+          executorType: 'ssh' as const,
           remoteTargetId: 'remote-1',
         },
       };
@@ -641,7 +641,7 @@ describe('conflict-resolver fail-fast workspace invariant', () => {
         },
         config: {
           command: 'npm test',
-          familiarType: 'ssh' as const,
+          executorType: 'ssh' as const,
           remoteTargetId: 'remote-1',
         },
       };

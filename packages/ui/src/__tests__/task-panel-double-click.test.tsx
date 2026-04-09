@@ -622,7 +622,7 @@ describe('TaskPanel double-click editing', () => {
       expect(screen.getByTestId('executor-type-select')).toBeInTheDocument();
     });
 
-    it('defaults executor select to worktree for prompt-only task when familiarType unset (orchestrator default)', () => {
+    it('defaults executor select to worktree for prompt-only task when executorType unset (orchestrator default)', () => {
       const task = makeTask({
         prompt: 'Write a test',
         status: 'pending',
@@ -642,7 +642,7 @@ describe('TaskPanel double-click editing', () => {
       expect(screen.getByTestId('executor-type-select')).toHaveValue('worktree');
     });
 
-    it('defaults executor select to worktree for command task when familiarType unset (orchestrator default)', () => {
+    it('defaults executor select to worktree for command task when executorType unset (orchestrator default)', () => {
       const task = makeTask({
         command: 'echo test',
         status: 'pending',
@@ -706,11 +706,11 @@ describe('TaskPanel double-click editing', () => {
       expect(options).toHaveLength(2);
     });
 
-    it('selects SSH target when task has familiarType=ssh and remoteTargetId', () => {
+    it('selects SSH target when task has executorType=ssh and remoteTargetId', () => {
       const task = makeTask({
         command: 'echo test',
         status: 'pending',
-        config: { command: 'echo test', familiarType: 'ssh', remoteTargetId: 'do-droplet' } as TaskState['config'],
+        config: { command: 'echo test', executorType: 'ssh', remoteTargetId: 'do-droplet' } as TaskState['config'],
       });
       render(
         <TaskPanel

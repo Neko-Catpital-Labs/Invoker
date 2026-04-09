@@ -31,8 +31,8 @@ function parseYamlTasks(yaml: string): TaskReplacementDef[] {
       current.command = line.slice('command:'.length).trim();
     } else if (current && line.startsWith('prompt:')) {
       current.prompt = line.slice('prompt:'.length).trim();
-    } else if (current && line.startsWith('familiarType:')) {
-      current.familiarType = line.slice('familiarType:'.length).trim();
+    } else if (current && line.startsWith('executorType:')) {
+      current.executorType = line.slice('executorType:'.length).trim();
     } else if (current && line.startsWith('dependencies:')) {
       const depsStr = line.slice('dependencies:'.length).trim();
       if (depsStr.startsWith('[') && depsStr.endsWith(']')) {
