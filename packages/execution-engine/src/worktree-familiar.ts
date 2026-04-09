@@ -130,7 +130,7 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
       console.log(
         `${RESTART_TO_BRANCH_TRACE} WorktreeFamiliar.start() actionId=${request.actionId} reconciliation → acquireWorktree (skip upstream merge)`,
       );
-      const acquired = await this.pool.acquireWorktree(repoUrl, branch, baseHead);
+      const acquired = await this.pool.acquireWorktree(repoUrl, branch, baseHead, request.actionId);
       this.cleanStaleLocks(acquired.worktreePath);
 
       const entry: WorktreeEntry = {
@@ -172,7 +172,7 @@ export class WorktreeFamiliar extends BaseFamiliar<WorktreeEntry> {
     console.log(
       `${RESTART_TO_BRANCH_TRACE} WorktreeFamiliar.start() actionId=${request.actionId} → RepoPool path`,
     );
-    const acquired = await this.pool.acquireWorktree(repoUrl, branch, baseHead);
+    const acquired = await this.pool.acquireWorktree(repoUrl, branch, baseHead, request.actionId);
 
     this.cleanStaleLocks(acquired.worktreePath);
 

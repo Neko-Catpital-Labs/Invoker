@@ -63,6 +63,25 @@ export function findManagedWorktreeForBranch(
   return undefined;
 }
 
+/**
+ * First Invoker-managed worktree whose branch starts with `experiment/{actionId}-`
+ * (same task, possibly different hash). Returns the worktree path and branch name.
+ */
+export function findManagedWorktreeByActionId(
+  porcelain: string,
+  actionId: string,
+  managedPathPrefixes: string[],
+): { path: string; branch: string } | undefined {
+  const prefix = `experiment/${actionId}-`;
+  const entries = parseGitWorktreePorcelain(porcelain);
+  for (const e of entries) {
+    if (!e.branch?.startsWith(prefix)) continue;
+    if (!pathIsUnderManagedPrefixes(e.path, managedPathPrefixes)) continue;
+    return { path: e.path, branch: e.branch };
+  }
+  return undefined;
+}
+
 /** True if `git rev-parse --abbrev-ref HEAD` output matches the logical branch name. */
 export function abbrevRefMatchesBranch(abbrevRef: string, branch: string): boolean {
   const t = abbrevRef.trim();

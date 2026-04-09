@@ -3,7 +3,7 @@ import { mkdirSync, existsSync, rmSync } from 'node:fs';
 import { normalize } from 'node:path';
 import { bashPreserveOrReset, runBashLocal } from './branch-utils.js';
 import { RESTART_TO_BRANCH_TRACE } from './exec-trace.js';
-import { findManagedWorktreeForBranch, abbrevRefMatchesBranch } from './worktree-discovery.js';
+import { findManagedWorktreeForBranch, findManagedWorktreeByActionId, abbrevRefMatchesBranch } from './worktree-discovery.js';
 import { syncPlanBaseRemote, isInvokerManagedPoolBranch } from './plan-base-remote.js';
 import { remoteFetchForPool } from './remote-fetch-policy.js';
 import { computeRepoUrlHash, sanitizeBranchForPath } from './git-utils.js';
@@ -170,15 +170,15 @@ export class RepoPool {
     return dir;
   }
 
-  async acquireWorktree(repoUrl: string, branch: string, base?: string): Promise<AcquiredWorktree> {
+  async acquireWorktree(repoUrl: string, branch: string, base?: string, actionId?: string): Promise<AcquiredWorktree> {
     // Serialize per-repo to prevent concurrent git worktree operations
     const prev = this.repoChains.get(repoUrl) ?? Promise.resolve();
-    const next = prev.then(() => this.doAcquireWorktree(repoUrl, branch, base));
+    const next = prev.then(() => this.doAcquireWorktree(repoUrl, branch, base, actionId));
     this.repoChains.set(repoUrl, next.catch(() => {}));
     return next;
   }
 
-  private async doAcquireWorktree(repoUrl: string, branch: string, base?: string): Promise<AcquiredWorktree> {
+  private async doAcquireWorktree(repoUrl: string, branch: string, base?: string, actionId?: string): Promise<AcquiredWorktree> {
     console.log(
       `${RESTART_TO_BRANCH_TRACE} RepoPool.doAcquireWorktree branch=${branch} (bashPreserveOrReset here; BaseFamiliar.setupTaskBranch is not used for this path)`,
     );
@@ -223,6 +223,24 @@ export class RepoPool {
         }
       } catch {
         /* fall through to create */
+      }
+    }
+
+    // Fallback: reuse worktree for same actionId but different hash (preserves conflict resolutions)
+    if (!reusedExisting && actionId) {
+      const actionIdHit = findManagedWorktreeByActionId(porcelain, actionId, managedPrefixes);
+      if (actionIdHit && existsSync(actionIdHit.path)) {
+        try {
+          await this.execGit(['branch', '-m', actionIdHit.branch, branch], actionIdHit.path);
+          const head = (await this.execGit(['rev-parse', '--abbrev-ref', 'HEAD'], actionIdHit.path)).trim();
+          if (abbrevRefMatchesBranch(head, branch)) {
+            effectivePath = actionIdHit.path;
+            reusedExisting = true;
+            console.log(
+              `${RESTART_TO_BRANCH_TRACE} RepoPool.doAcquireWorktree reuse by actionId: renamed ${actionIdHit.branch} → ${branch} path=${effectivePath}`,
+            );
+          }
+        } catch { /* fall through to create fresh */ }
       }
     }
 
