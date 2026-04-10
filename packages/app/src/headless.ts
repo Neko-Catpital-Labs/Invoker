@@ -9,8 +9,7 @@
  * This file handles CLI parsing, TaskRunner lifecycle, and output formatting.
  */
 
-import { Orchestrator, CommandService } from '@invoker/workflow-core';
-import type { TaskDelta, TaskState } from '@invoker/workflow-core';
+import type { Orchestrator, CommandService, TaskDelta, TaskState } from '@invoker/workflow-core';
 import { makeEnvelope } from '@invoker/contracts';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import { createDeleteAllSnapshot } from './delete-all-snapshot.js';
@@ -33,16 +32,8 @@ import { startApiServer } from './api-server.js';
 import {
   rebaseAndRetry,
   resolveConflictAction,
-  restartTask as sharedRestartTask,
   recreateWorkflow as sharedRecreateWorkflow,
   recreateTask as sharedRecreateTask,
-  cancelWorkflow as sharedCancelWorkflow,
-  retryWorkflow as sharedRetryWorkflow,
-  editTaskCommand as sharedEditTaskCommand,
-  editTaskType as sharedEditTaskType,
-  editTaskAgent as sharedEditTaskAgent,
-  setTaskExternalGatePolicies as sharedSetTaskExternalGatePolicies,
-  selectExperiment as sharedSelectExperiment,
   setWorkflowMergeMode,
 } from './workflow-actions.js';
 import { openExternalTerminalForTask } from './open-terminal-for-task.js';
@@ -56,6 +47,7 @@ export interface HeadlessDeps {
   persistence: SQLiteAdapter;
   executorRegistry: ExecutorRegistry;
   messageBus: MessageBus;
+  commandService: CommandService;
   repoRoot: string;
   invokerConfig: InvokerConfig;
   initServices: () => Promise<void>;
@@ -427,10 +419,10 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
       await headlessApprove(args[1], deps);
       break;
     case 'reject':
-      headlessReject(args[1], deps, args.slice(2).join(' ') || undefined);
+      await headlessReject(args[1], deps, args.slice(2).join(' ') || undefined);
       break;
     case 'input':
-      headlessInput(args[1], args.slice(2).join(' '), deps);
+      await headlessInput(args[1], args.slice(2).join(' '), deps);
       break;
     case 'select':
       await headlessSelect(args[1], args[2], deps);
@@ -720,9 +712,8 @@ async function headlessApprove(taskId: string, deps: HeadlessDeps): Promise<void
   taskId = restoreWorkflowForTask(taskId, deps).resolvedTaskId;
   const te = createHeadlessExecutor(deps);
   wireHeadlessApproveHook(deps, te);
-  const cs = new CommandService(deps.orchestrator);
   const envelope = makeEnvelope('approve', 'headless', 'task', { taskId });
-  const result = await cs.approve(envelope);
+  const result = await deps.commandService.approve(envelope);
   if (!result.ok) throw new Error(result.error.message);
   const started = result.data;
   const postFixMerge = started.filter(t => t.status === 'running' && t.config.isMergeNode && t.id === taskId);
@@ -734,27 +725,30 @@ async function headlessApprove(taskId: string, deps: HeadlessDeps): Promise<void
   console.log(`Approved task: ${taskId}`);
 }
 
-function headlessReject(taskId: string, deps: Pick<HeadlessDeps, 'orchestrator' | 'persistence'>, reason?: string): void {
+async function headlessReject(taskId: string, deps: Pick<HeadlessDeps, 'commandService' | 'orchestrator' | 'persistence'>, reason?: string): Promise<void> {
   if (!taskId) throw new Error('Missing taskId.');
   taskId = restoreWorkflowForTask(taskId, deps).resolvedTaskId;
-  const cs = new CommandService(deps.orchestrator);
   const envelope = makeEnvelope('reject', 'headless', 'task', { taskId, reason });
-  const result = cs.reject(envelope);
+  const result = await deps.commandService.reject(envelope);
   if (!result.ok) throw new Error(result.error.message);
   console.log(`Rejected task: ${taskId}${reason ? ` (reason: ${reason})` : ''}`);
 }
 
-function headlessInput(taskId: string, text: string, deps: Pick<HeadlessDeps, 'orchestrator' | 'persistence'>): void {
+async function headlessInput(taskId: string, text: string, deps: Pick<HeadlessDeps, 'commandService' | 'orchestrator' | 'persistence'>): Promise<void> {
   if (!taskId || !text) throw new Error('Missing arguments. Usage: --headless input <taskId> <text>');
   taskId = restoreWorkflowForTask(taskId, deps).resolvedTaskId;
-  deps.orchestrator.provideInput(taskId, text);
+  const envelope = makeEnvelope('provide-input', 'headless', 'task', { taskId, input: text });
+  const result = await deps.commandService.provideInput(envelope);
+  if (!result.ok) throw new Error(result.error.message);
   console.log(`Input provided to task: ${taskId}`);
 }
 
 async function headlessSelect(taskId: string, experimentId: string, deps: HeadlessDeps): Promise<void> {
   if (!taskId || !experimentId) throw new Error('Missing arguments. Usage: --headless select <taskId> <expId>');
   const { workflowId, resolvedTaskId } = restoreWorkflowForTask(taskId, deps);
-  sharedSelectExperiment(resolvedTaskId, experimentId, deps);
+  const envelope = makeEnvelope('select-experiment', 'headless', 'task', { taskId: resolvedTaskId, experimentId });
+  const result = await deps.commandService.selectExperiment(envelope);
+  if (!result.ok) throw new Error(result.error.message);
   console.log(`Selected experiment ${experimentId} for task: ${resolvedTaskId}`);
 
   const taskExecutor = createHeadlessExecutor(deps);
@@ -767,8 +761,10 @@ async function headlessRestart(taskId: string, deps: HeadlessDeps): Promise<void
   if (!taskId) throw new Error('Missing arguments. Usage: --headless restart <taskId>');
   taskId = restoreWorkflowForTask(taskId, deps).resolvedTaskId;
 
-  const started = sharedRestartTask(taskId, deps);
-  const runnable = started.filter(t => t.status === 'running');
+  const envelope = makeEnvelope('restart-task', 'headless', 'task', { taskId });
+  const result = await deps.commandService.restartTask(envelope);
+  if (!result.ok) throw new Error(result.error.message);
+  const runnable = result.data.filter(t => t.status === 'running');
   console.log(`Restarted task "${taskId}" — ${runnable.length} task(s) to execute`);
 
   if (runnable.length === 0) return;
@@ -891,8 +887,10 @@ async function headlessRetryWorkflow(workflowId: string, deps: HeadlessDeps): Pr
   if (!workflowId) {
     throw new Error('Missing arguments. Usage: --headless restart <workflowId>');
   }
-  const started = sharedRetryWorkflow(workflowId, { orchestrator: deps.orchestrator });
-  const runnable = started.filter(t => t.status === 'running');
+  const envelope = makeEnvelope('retry-workflow', 'headless', 'workflow', { workflowId });
+  const result = await deps.commandService.retryWorkflow(envelope);
+  if (!result.ok) throw new Error(result.error.message);
+  const runnable = result.data.filter(t => t.status === 'running');
   console.log(`Retry workflow "${workflowId}" — ${runnable.length} task(s) to re-execute (completed tasks preserved)`);
   if (runnable.length === 0) return;
 
@@ -910,11 +908,13 @@ async function headlessEdit(taskId: string, newCommand: string, deps: HeadlessDe
   if (!taskId || !newCommand) throw new Error('Missing arguments. Usage: --headless edit <taskId> <newCommand>');
   taskId = restoreWorkflowForTask(taskId, deps).resolvedTaskId;
 
-  const started = sharedEditTaskCommand(taskId, newCommand, deps);
+  const envelope = makeEnvelope('edit-task-command', 'headless', 'task', { taskId, newCommand });
+  const result = await deps.commandService.editTaskCommand(envelope);
+  if (!result.ok) throw new Error(result.error.message);
   console.log(`Edited task "${taskId}" command → "${newCommand}"`);
 
   const taskExecutor = createHeadlessExecutor(deps);
-  await taskExecutor.executeTasks(started);
+  await taskExecutor.executeTasks(result.data);
   await waitForCompletion(deps.orchestrator, undefined, undefined);
 }
 
@@ -922,11 +922,13 @@ async function headlessEditExecutor(taskId: string, executorType: string, deps: 
   if (!taskId || !executorType) throw new Error('Missing arguments. Usage: --headless edit-executor <taskId> <executorType>');
   taskId = restoreWorkflowForTask(taskId, deps).resolvedTaskId;
 
-  const started = sharedEditTaskType(taskId, executorType, deps);
+  const envelope = makeEnvelope('edit-task-type', 'headless', 'task', { taskId, executorType });
+  const result = await deps.commandService.editTaskType(envelope);
+  if (!result.ok) throw new Error(result.error.message);
   console.log(`Edited task "${taskId}" executor → "${executorType}"`);
 
   const taskExecutor = createHeadlessExecutor(deps);
-  await taskExecutor.executeTasks(started);
+  await taskExecutor.executeTasks(result.data);
   await waitForCompletion(deps.orchestrator, undefined, undefined);
 }
 
@@ -934,11 +936,13 @@ async function headlessEditAgent(taskId: string, agentName: string, deps: Headle
   if (!taskId || !agentName) throw new Error('Missing arguments. Usage: --headless edit-agent <taskId> <claude|codex>');
   taskId = restoreWorkflowForTask(taskId, deps).resolvedTaskId;
 
-  const started = sharedEditTaskAgent(taskId, agentName, deps);
+  const envelope = makeEnvelope('edit-task-agent', 'headless', 'task', { taskId, agentName });
+  const result = await deps.commandService.editTaskAgent(envelope);
+  if (!result.ok) throw new Error(result.error.message);
   console.log(`Edited task "${taskId}" agent → "${agentName}"`);
 
   const taskExecutor = createHeadlessExecutor(deps);
-  await taskExecutor.executeTasks(started);
+  await taskExecutor.executeTasks(result.data);
   await waitForCompletion(deps.orchestrator, undefined, undefined);
 }
 
@@ -1048,19 +1052,23 @@ async function headlessCancel(taskId: string, deps: HeadlessDeps): Promise<void>
   if (!taskId) throw new Error('Missing taskId. Usage: --headless cancel <taskId>');
   taskId = restoreWorkflowForTask(taskId, deps).resolvedTaskId;
 
-  const result = deps.orchestrator.cancelTask(taskId);
-  console.log(`Cancelled ${result.cancelled.length} task(s): [${result.cancelled.join(', ')}]`);
-  if (result.runningCancelled.length > 0) {
-    console.log(`Killed running: [${result.runningCancelled.join(', ')}]`);
+  const envelope = makeEnvelope('cancel-task', 'headless', 'task', { taskId });
+  const cmdResult = await deps.commandService.cancelTask(envelope);
+  if (!cmdResult.ok) throw new Error(cmdResult.error.message);
+  console.log(`Cancelled ${cmdResult.data.cancelled.length} task(s): [${cmdResult.data.cancelled.join(', ')}]`);
+  if (cmdResult.data.runningCancelled.length > 0) {
+    console.log(`Killed running: [${cmdResult.data.runningCancelled.join(', ')}]`);
   }
 }
 
 async function headlessCancelWorkflow(workflowId: string, deps: HeadlessDeps): Promise<void> {
   if (!workflowId) throw new Error('Missing workflowId. Usage: --headless cancel-workflow <workflowId>');
-  const result = sharedCancelWorkflow(workflowId, { orchestrator: deps.orchestrator });
-  console.log(`Cancelled ${result.cancelled.length} task(s) in workflow "${workflowId}": [${result.cancelled.join(', ')}]`);
-  if (result.runningCancelled.length > 0) {
-    console.log(`Killed running: [${result.runningCancelled.join(', ')}]`);
+  const envelope = makeEnvelope('cancel-workflow', 'headless', 'workflow', { workflowId });
+  const cmdResult = await deps.commandService.cancelWorkflow(envelope);
+  if (!cmdResult.ok) throw new Error(cmdResult.error.message);
+  console.log(`Cancelled ${cmdResult.data.cancelled.length} task(s) in workflow "${workflowId}": [${cmdResult.data.cancelled.join(', ')}]`);
+  if (cmdResult.data.runningCancelled.length > 0) {
+    console.log(`Killed running: [${cmdResult.data.runningCancelled.join(', ')}]`);
   }
 }
 
@@ -1082,9 +1090,11 @@ async function headlessOpenTerminal(taskId: string, deps: HeadlessDeps): Promise
   }
 }
 
-async function headlessDeleteWorkflow(workflowId: string, deps: Pick<HeadlessDeps, 'orchestrator'>): Promise<void> {
+async function headlessDeleteWorkflow(workflowId: string, deps: Pick<HeadlessDeps, 'commandService'>): Promise<void> {
   if (!workflowId) throw new Error('Missing workflowId. Usage: --headless delete-workflow <workflowId>');
-  deps.orchestrator.deleteWorkflow(workflowId);
+  const envelope = makeEnvelope('delete-workflow', 'headless', 'workflow', { workflowId });
+  const result = await deps.commandService.deleteWorkflow(envelope);
+  if (!result.ok) throw new Error(result.error.message);
   console.log(`Deleted workflow: ${workflowId}`);
 }
 
@@ -1124,12 +1134,13 @@ async function headlessSetGatePolicy(args: string[], deps: HeadlessDeps): Promis
     throw new Error(`Invalid gate policy "${String(gatePolicy)}". Expected completed|review_ready`);
   }
 
-  const started = sharedSetTaskExternalGatePolicies(
+  const envelope = makeEnvelope('set-gate-policies', 'headless', 'task', {
     taskId,
-    [{ workflowId, taskId: depTaskId, gatePolicy }],
-    deps,
-  );
-  const runnable = started.filter((t) => t.status === 'running');
+    updates: [{ workflowId, taskId: depTaskId, gatePolicy }],
+  });
+  const result = await deps.commandService.setTaskExternalGatePolicies(envelope);
+  if (!result.ok) throw new Error(result.error.message);
+  const runnable = result.data.filter((t) => t.status === 'running');
   if (runnable.length > 0) {
     const taskExecutor = createHeadlessExecutor(deps);
     await taskExecutor.executeTasks(runnable);

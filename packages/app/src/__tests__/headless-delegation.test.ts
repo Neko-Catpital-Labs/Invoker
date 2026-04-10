@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { runHeadless } from '../headless.js';
 import type { HeadlessDeps } from '../headless.js';
-import { Orchestrator } from '@invoker/workflow-core';
+import { Orchestrator, CommandService } from '@invoker/workflow-core';
 import { SQLiteAdapter } from '@invoker/data-store';
 import type { MessageBus } from '@invoker/transport';
 import { LocalBus } from '@invoker/transport';
@@ -22,6 +22,7 @@ describe('headless delegation enforcement', () => {
         listWorkflows: vi.fn(() => []),
         loadTasks: vi.fn(() => []),
       } as unknown as SQLiteAdapter,
+      commandService: {} as CommandService,
       executorRegistry: {} as any,
       messageBus: new LocalBus() as MessageBus,
       repoRoot: '/fake/repo',
@@ -166,6 +167,9 @@ describe('headless delegation enforcement', () => {
         mockDeps.orchestrator.approve = vi.fn(async () => []);
         mockDeps.orchestrator.setBeforeApproveHook = vi.fn();
         mockDeps.orchestrator.provideInput = vi.fn();
+        // CommandService mocks (headless now routes through commandService)
+        mockDeps.commandService.restartTask = vi.fn(async () => ({ ok: true as const, data: [] }));
+        mockDeps.commandService.approve = vi.fn(async () => ({ ok: true as const, data: [] }));
         mockDeps.persistence.loadWorkflow = vi.fn(() => ({
           id: 'wf-1',
           name: 'test-workflow',
@@ -216,13 +220,13 @@ describe('headless delegation enforcement', () => {
           } as any,
         ]);
 
-        // restart command
+        // restart command (now routed through commandService)
         await runHeadless(['restart', 'wf-1/task-1'], mockDeps);
-        expect(mockDeps.orchestrator.restartTask).toHaveBeenCalled();
+        expect(mockDeps.commandService.restartTask).toHaveBeenCalled();
 
-        // approve command
+        // approve command (now routed through commandService)
         await runHeadless(['approve', 'wf-1/task-1'], mockDeps);
-        expect(mockDeps.orchestrator.approve).toHaveBeenCalled();
+        expect(mockDeps.commandService.approve).toHaveBeenCalled();
       });
     });
 
