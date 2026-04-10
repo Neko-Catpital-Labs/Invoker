@@ -20,3 +20,7 @@ packages/app/test-results/
 .claude/debug/
 .claude/todos/
 .cursor/debug-*.log
+
+# Never commit npm debug logs (including mistaken literal ~/ paths)
+**/.npm/_logs/
+~/.npm/
