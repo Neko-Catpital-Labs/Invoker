@@ -81,7 +81,7 @@ function createTempRepo(): string {
  */
 function createRemote(localRepo: string): string {
   const remote = mkdtempSync(join(tmpdir(), 'fetch-failure-remote-'));
-  execSync('git init --bare', { cwd: remote });
+  execSync('git init --bare -b master', { cwd: remote });
   execSync(`git remote add origin ${remote}`, { cwd: localRepo });
   execSync('git push -u origin master', { cwd: localRepo });
   return remote;
@@ -207,6 +207,7 @@ describe('syncFromRemote - fetch failure handling', () => {
       // Create a second clone and push commits ahead
       const secondClone = mkdtempSync(join(tmpdir(), 'fetch-failure-clone-'));
       execSync(`git clone ${remoteRepo} ${secondClone}`, { cwd: tmpdir() });
+      execSync('git checkout -B master origin/master', { cwd: secondClone });
       execSync('git config user.email "test@test.com"', { cwd: secondClone });
       execSync('git config user.name "Test"', { cwd: secondClone });
 
@@ -234,6 +235,7 @@ describe('syncFromRemote - fetch failure handling', () => {
       // Create a second clone and push many commits ahead
       const secondClone = mkdtempSync(join(tmpdir(), 'fetch-failure-clone-'));
       execSync(`git clone ${remoteRepo} ${secondClone}`, { cwd: tmpdir() });
+      execSync('git checkout -B master origin/master', { cwd: secondClone });
       execSync('git config user.email "test@test.com"', { cwd: secondClone });
       execSync('git config user.name "Test"', { cwd: secondClone });
 

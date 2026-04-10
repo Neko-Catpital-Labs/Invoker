@@ -37,7 +37,7 @@ function createTempRepo(): string {
  */
 function createRemote(localRepo: string): string {
   const remote = mkdtempSync(join(tmpdir(), 'git-staleness-remote-'));
-  execSync('git init --bare', { cwd: remote });
+  execSync('git init --bare -b master', { cwd: remote });
   execSync(`git remote add origin ${remote}`, { cwd: localRepo });
   execSync('git push -u origin master', { cwd: localRepo });
   return remote;
@@ -82,6 +82,7 @@ describe('checkStaleness', () => {
     // Create a second clone that will push ahead
     const secondClone = mkdtempSync(join(tmpdir(), 'git-staleness-clone-'));
     execSync(`git clone ${remoteRepo} ${secondClone}`, { cwd: tmpdir() });
+    execSync('git checkout -B master origin/master', { cwd: secondClone });
     execSync('git config user.email "test@test.com"', { cwd: secondClone });
     execSync('git config user.name "Test"', { cwd: secondClone });
 
@@ -113,6 +114,7 @@ describe('checkStaleness', () => {
     // Create a second clone that will push ahead
     const secondClone = mkdtempSync(join(tmpdir(), 'git-staleness-clone-'));
     execSync(`git clone ${remoteRepo} ${secondClone}`, { cwd: tmpdir() });
+    execSync('git checkout -B master origin/master', { cwd: secondClone });
     execSync('git config user.email "test@test.com"', { cwd: secondClone });
     execSync('git config user.name "Test"', { cwd: secondClone });
 
@@ -224,6 +226,7 @@ describe('checkStaleness', () => {
     // Create divergence: local has commit A, remote has commit B
     const secondClone = mkdtempSync(join(tmpdir(), 'git-staleness-clone-'));
     execSync(`git clone ${remoteRepo} ${secondClone}`, { cwd: tmpdir() });
+    execSync('git checkout -B master origin/master', { cwd: secondClone });
     execSync('git config user.email "test@test.com"', { cwd: secondClone });
     execSync('git config user.name "Test"', { cwd: secondClone });
 

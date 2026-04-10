@@ -1,3 +1,4 @@
+import { realpathSync } from 'node:fs';
 import { normalize, sep } from 'node:path';
 
 export interface GitWorktreePorcelainEntry {
@@ -37,11 +38,20 @@ export function parseGitWorktreePorcelain(porcelain: string): GitWorktreePorcela
   return result;
 }
 
+/** Resolve to a stable path for prefix checks and returned paths (macOS: /var vs /private/var). */
+export function canonicalPathForComparison(p: string): string {
+  try {
+    return normalize(realpathSync(p));
+  } catch {
+    return normalize(p);
+  }
+}
+
 /** True if `worktreePath` is exactly `prefix` or a descendant (Invoker-owned tree). */
 export function pathIsUnderManagedPrefixes(worktreePath: string, managedPathPrefixes: string[]): boolean {
-  const nw = normalize(worktreePath);
+  const nw = canonicalPathForComparison(worktreePath);
   return managedPathPrefixes.some((p) => {
-    const np = normalize(p);
+    const np = canonicalPathForComparison(p);
     return nw === np || nw.startsWith(np + sep);
   });
 }

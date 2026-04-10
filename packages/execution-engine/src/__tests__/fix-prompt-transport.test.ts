@@ -94,7 +94,7 @@ describe('fix prompt transport for oversized prompts', () => {
     expect(result.sessionId).toBe('local-sess');
     expect(captured.prompt).toBeDefined();
     expect(captured.prompt).toContain('The full task instructions are in this file:');
-    expect(captured.prompt).toContain('/tmp/invoker-agent-prompt-');
+    expect(captured.prompt).toContain('invoker-agent-prompt-');
     expect(captured.prompt).not.toContain(hugePrompt.slice(0, 200));
   });
 

@@ -10,17 +10,21 @@ export function shellSingleQuoteForPOSIX(s: string): string {
   return `'${s.replace(/'/g, `'\\''`)}'`;
 }
 
+export type InteractiveExecShell = 'bash' | 'zsh';
+
 /**
- * Full shell line: `cd '<cwd>' && ...` plus either `exec bash` or `command` with args properly quoted.
+ * Full shell line: `cd '<cwd>' && ...` plus either `exec bash` / `exec zsh` or `command` with args properly quoted.
  */
 export function buildTerminalShellCommand(
   spec: { cwd?: string; command?: string; args?: string[] },
   defaultCwd: string,
+  options?: { interactiveExec?: InteractiveExecShell },
 ): string {
   const cwd = spec.cwd ?? defaultCwd;
   const cd = `cd ${shellSingleQuoteForPOSIX(cwd)}`;
   if (!spec.command) {
-    return `${cd} && exec bash`;
+    const execSh = options?.interactiveExec === 'zsh' ? 'exec zsh' : 'exec bash';
+    return `${cd} && ${execSh}`;
   }
   const argv = [spec.command, ...(spec.args ?? [])];
   return `${cd} && ${argv.map(shellSingleQuoteForPOSIX).join(' ')}`;
@@ -36,7 +40,7 @@ export function buildMacOSOsascriptArgs(
   spec: { cwd?: string; command?: string; args?: string[] },
   defaultCwd: string,
 ): string[] {
-  const shellCmd = buildTerminalShellCommand(spec, defaultCwd);
+  const shellCmd = buildTerminalShellCommand(spec, defaultCwd, { interactiveExec: 'zsh' });
   const escaped = appleScriptEscapeForDoubleQuotedString(shellCmd);
   return [
     '-e', 'tell application "Terminal"',

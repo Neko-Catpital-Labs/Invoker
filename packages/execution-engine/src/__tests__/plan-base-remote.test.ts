@@ -23,6 +23,7 @@ describe('plan-base-remote', () => {
     execSync('git config user.name "T"', { cwd: upstream });
     writeFileSync(join(upstream, 'a.txt'), 'a');
     execSync('git add -A && git commit -m "first"', { cwd: upstream });
+    execSync('git branch -M master', { cwd: upstream });
 
     execSync(`git clone "${upstream}" mirror-work`, { cwd: mirrorParent });
     mirror = join(mirrorParent, 'mirror-work');

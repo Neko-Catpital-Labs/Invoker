@@ -49,6 +49,9 @@ vi.mock('node:fs', async (importOriginal) => {
 });
 import { existsSync } from 'node:fs';
 
+/** Host shell for worktree branch-checkout terminal specs (see WorktreeExecutor.getRestoredTerminalSpec). */
+const worktreeCheckoutShell = process.platform === 'darwin' ? 'zsh' : 'bash';
+
 
 
 // ── Lightweight in-memory mocks ─────────────────────────────
@@ -359,16 +362,27 @@ describe('open-terminal integration', () => {
 
 describe('terminal-external-launch', () => {
   it('joins argv with POSIX quotes so bash -c script stays one argument', () => {
+    const sh = worktreeCheckoutShell;
     const spec = {
-      command: 'bash' as const,
-      args: ['-c', `git checkout 'feature/x' 2>/dev/null; exec bash`],
+      command: sh,
+      args: ['-c', `git checkout 'feature/x' 2>/dev/null; exec ${sh}`],
       cwd: '/tmp/wt',
     };
     const line = buildTerminalShellCommand(spec, '/fallback');
     expect(line).toContain(`cd '/tmp/wt'`);
-    expect(line).toMatch(/'bash' '-c' '/);
+    expect(line).toMatch(new RegExp(`'${sh}' '-c' '`));
     expect(line).toContain('git checkout');
     expect(line).toContain('feature/x');
+  });
+
+  it('cwd-only uses exec zsh when interactiveExec is zsh', () => {
+    const line = buildTerminalShellCommand({ cwd: '/x' }, '/fallback', { interactiveExec: 'zsh' });
+    expect(line).toBe(`cd '/x' && exec zsh`);
+  });
+
+  it('cwd-only defaults to exec bash', () => {
+    const line = buildTerminalShellCommand({ cwd: '/x' }, '/fallback');
+    expect(line).toBe(`cd '/x' && exec bash`);
   });
 
   it('uses backslash-quote idiom for embedded single quotes (no double quotes in output)', () => {
@@ -476,8 +490,9 @@ describe('getRestoredTerminalSpec routing', () => {
       };
       const spec = wt.getRestoredTerminalSpec(meta);
       expect(spec.cwd).toBe(meta.workspacePath);
-      expect(spec.command).toBe('bash');
+      expect(spec.command).toBe(worktreeCheckoutShell);
       expect(spec.args![1]).toContain("git checkout 'experiment/pivot-reconciliation-deadbeef'");
+      expect(spec.args![1]).toContain(`exec ${worktreeCheckoutShell}`);
       // Regression guard: cwd must be the isolated worktree, never the monorepo root
       // (repro-reconciliation-open-terminal-cwd.sh)
       expect(spec.cwd).not.toBe(process.cwd());
@@ -588,9 +603,10 @@ describe('merge gate open-terminal', () => {
     vi.mocked(existsSync).mockReturnValue(true);
     const spec = executor.getRestoredTerminalSpec(meta);
     expect(spec.cwd).toBe(worktreePath);
-    expect(spec.command).toBe('bash');
+    expect(spec.command).toBe(worktreeCheckoutShell);
     expect(spec.args).toContain('-c');
     expect(spec.args![1]).toContain("git checkout 'plan/my-workflow'");
+    expect(spec.args![1]).toContain(`exec ${worktreeCheckoutShell}`);
     expect(spec.args![1]).not.toContain('worktree add');
   });
 
@@ -616,9 +632,10 @@ describe('merge gate open-terminal', () => {
     vi.mocked(existsSync).mockReturnValue(true);
     const spec = executor.getRestoredTerminalSpec(meta);
     expect(spec.cwd).toBe(worktreePath);
-    expect(spec.command).toBe('bash');
+    expect(spec.command).toBe(worktreeCheckoutShell);
     expect(spec.args).toContain('-c');
     expect(spec.args![1]).toContain("git checkout 'plan/my-workflow'");
+    expect(spec.args![1]).toContain(`exec ${worktreeCheckoutShell}`);
     expect(spec.args![1]).not.toContain('worktree add');
   });
 

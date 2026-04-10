@@ -1089,27 +1089,31 @@ describe('WorktreeExecutor', () => {
 
     it('returns git checkout when workspacePath and branch are set', () => {
       vi.mocked(existsSync).mockReturnValue(true);
+      const sh = process.platform === 'darwin' ? 'zsh' : 'bash';
       const spec = executor.getRestoredTerminalSpec({
         ...baseMeta,
         workspacePath: '/fake/repo',
         branch: 'plan/my-workflow',
       });
-      expect(spec.command).toBe('bash');
+      expect(spec.command).toBe(sh);
       expect(spec.cwd).toBe('/fake/repo');
       expect(spec.args![1]).toContain("git checkout 'plan/my-workflow'");
+      expect(spec.args![1]).toContain(`exec ${sh}`);
       expect(spec.args![1]).not.toContain('worktree add');
     });
 
     it('returns git checkout when workspacePath is a worktree path and branch is set', () => {
       vi.mocked(existsSync).mockReturnValue(true);
+      const sh = process.platform === 'darwin' ? 'zsh' : 'bash';
       const spec = executor.getRestoredTerminalSpec({
         ...baseMeta,
         workspacePath: '/fake/worktrees/wt-abc',
         branch: 'plan/my-workflow',
       });
-      expect(spec.command).toBe('bash');
+      expect(spec.command).toBe(sh);
       expect(spec.cwd).toBe('/fake/worktrees/wt-abc');
       expect(spec.args![1]).toContain("git checkout 'plan/my-workflow'");
+      expect(spec.args![1]).toContain(`exec ${sh}`);
       expect(spec.args![1]).not.toContain('worktree add');
     });
 

@@ -3,7 +3,12 @@ import { mkdirSync, existsSync, rmSync } from 'node:fs';
 import { normalize } from 'node:path';
 import { bashPreserveOrReset, runBashLocal } from './branch-utils.js';
 import { RESTART_TO_BRANCH_TRACE } from './exec-trace.js';
-import { findManagedWorktreeForBranch, findManagedWorktreeByActionId, abbrevRefMatchesBranch } from './worktree-discovery.js';
+import {
+  abbrevRefMatchesBranch,
+  canonicalPathForComparison,
+  findManagedWorktreeByActionId,
+  findManagedWorktreeForBranch,
+} from './worktree-discovery.js';
 import { syncPlanBaseRemote, isInvokerManagedPoolBranch } from './plan-base-remote.js';
 import { remoteFetchForPool } from './remote-fetch-policy.js';
 import { computeRepoUrlHash, sanitizeBranchForPath } from './git-utils.js';
@@ -279,6 +284,7 @@ export class RepoPool {
       mkdirSync(worktreeParent, { recursive: true });
     }
 
+    effectivePath = canonicalPathForComparison(effectivePath);
     active.add(effectivePath);
     this.activeWorktrees.set(repoUrl, active);
 

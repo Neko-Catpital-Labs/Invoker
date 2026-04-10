@@ -23,7 +23,7 @@ function createSandbox() {
 
   // 1. Bare remote (simulates GitHub)
   const bare = join(root, 'bare.git');
-  execSync(`git init --bare ${bare}`);
+  execSync(`git init --bare -b master ${bare}`);
 
   // 2. Working clone (simulates host repo)
   const host = join(root, 'host');
@@ -33,6 +33,7 @@ function createSandbox() {
   writeFileSync(join(host, 'init.txt'), 'init');
   git(host, 'add -A');
   git(host, 'commit -m "initial"');
+  git(host, 'branch -M master');
   git(host, 'push origin master');
 
   return { root, bare, host };
@@ -175,11 +176,13 @@ describe('createMergeWorktree isolation (real git)', { timeout: 30_000 }, () => 
     // the host working directory has not fetched yet).
     const pusherDir = join(sandbox.root, 'pusher');
     execSync(`git clone ${sandbox.bare} ${pusherDir}`);
+    git(pusherDir, 'checkout -B master origin/master');
     git(pusherDir, 'config user.email "test@test.com"');
     git(pusherDir, 'config user.name "Test"');
     writeFileSync(join(pusherDir, 'remote-only.txt'), 'remote commit');
     git(pusherDir, 'add -A');
     git(pusherDir, 'commit -m "remote-only commit"');
+    git(pusherDir, 'branch -M master');
     git(pusherDir, 'push origin master');
 
     const remoteMasterSha = git(sandbox.bare, 'rev-parse master');

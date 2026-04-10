@@ -17,6 +17,7 @@ function createTempRepo(): string {
   execSync('git config user.name "Test"', { cwd: dir });
   writeFileSync(join(dir, 'README.md'), '# Test Repo\n');
   execSync('git add -A && git commit -m "initial"', { cwd: dir });
+  execSync('git branch -M master', { cwd: dir });
   return dir;
 }
 
@@ -217,10 +218,12 @@ describe('RepoPool', () => {
       const bareDir = mkdtempSync(join(tmpdir(), 'repo-pool-bare-'));
       const sourceDir = mkdtempSync(join(tmpdir(), 'repo-pool-src-'));
       try {
-        execSync('git init --bare', { cwd: bareDir });
+        execSync('git init --bare -b master', { cwd: bareDir });
         execSync(`git clone ${bareDir} .`, { cwd: sourceDir });
         execSync('git config user.email "t@t.com" && git config user.name "T"', { cwd: sourceDir });
-        execSync('git commit --allow-empty -m "init" && git push origin master', { cwd: sourceDir });
+        execSync('git commit --allow-empty -m "init"', { cwd: sourceDir });
+        execSync('git branch -M master', { cwd: sourceDir });
+        execSync('git push -u origin master', { cwd: sourceDir });
         for (let i = 0; i < 15; i++) {
           execSync(`git checkout -b experiment/b-${i} master`, { cwd: sourceDir });
           execSync(`git commit --allow-empty -m "b${i}" && git push origin experiment/b-${i}`, { cwd: sourceDir });

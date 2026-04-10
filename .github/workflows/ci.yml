@@ -5,8 +5,8 @@ name: CI
 on:
   push:
     branches: [master, main]
+  # No `branches:` filter — stacked PRs target other fix/* bases; those must still run CI.
   pull_request:
-    branches: [master, main]
   workflow_dispatch:
 
 concurrency:

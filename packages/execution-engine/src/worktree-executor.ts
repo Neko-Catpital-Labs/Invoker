@@ -435,9 +435,10 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
     }
     if (meta.branch) {
       // workspacePath is already a worktree — just checkout the branch there.
+      const sh = process.platform === 'darwin' ? 'zsh' : 'bash';
       const spec = {
-        command: 'bash',
-        args: ['-c', `git checkout '${meta.branch}' 2>/dev/null; exec bash`],
+        command: sh,
+        args: ['-c', `git checkout '${meta.branch}' 2>/dev/null; exec ${sh}`],
         cwd: meta.workspacePath,
       };
       console.log(`[WorktreeExecutor] getRestoredTerminalSpec task="${meta.taskId}" → checkout branch spec, branch="${meta.branch}" cwd="${spec.cwd}"`);

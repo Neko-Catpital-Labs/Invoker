@@ -32,7 +32,7 @@ describe('worktree reuse after conflict resolution (real git)', { timeout: 30_00
 
     // --- Setup bare remote ---
     const bare = join(root, 'bare.git');
-    execSync(`git init --bare ${bare}`);
+    execSync(`git init --bare -b master ${bare}`);
 
     // --- Setup host clone with base commit ---
     const host = join(root, 'host');
@@ -42,6 +42,7 @@ describe('worktree reuse after conflict resolution (real git)', { timeout: 30_00
     writeFileSync(join(host, 'shared.txt'), 'base content\n');
     git(host, 'add -A');
     git(host, 'commit -m "base commit"');
+    git(host, 'branch -M master');
     git(host, 'push origin master');
 
     // --- Create upstream branch that conflicts on shared.txt ---
@@ -137,7 +138,7 @@ describe('worktree reuse after conflict resolution (real git)', { timeout: 30_00
     root = mkdtempSync(join(tmpdir(), 'wt-reuse-noop-'));
 
     const bare = join(root, 'bare.git');
-    execSync(`git init --bare ${bare}`);
+    execSync(`git init --bare -b master ${bare}`);
 
     const host = join(root, 'host');
     execSync(`git clone ${bare} ${host}`);
@@ -146,6 +147,7 @@ describe('worktree reuse after conflict resolution (real git)', { timeout: 30_00
     writeFileSync(join(host, 'init.txt'), 'init');
     git(host, 'add -A');
     git(host, 'commit -m "initial"');
+    git(host, 'branch -M master');
     git(host, 'push origin master');
 
     const baseSha = git(host, 'rev-parse master');

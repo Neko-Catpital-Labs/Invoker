@@ -13,5 +13,6 @@ export {
   buildMacOSOsascriptArgs,
   buildLinuxXTerminalBashScript,
   spawnDetachedTerminal,
+  type InteractiveExecShell,
   type OpenTerminalResult,
 } from './terminal-launch.js';

@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
+import { canonicalPathForComparison } from './worktree-discovery.js';
 
 export interface CleanupManagedWorktreesResult {
   removed: string[];
@@ -48,14 +49,19 @@ export async function cleanupManagedWorktrees(opts: {
       for (const name of readdirSync(wtRoot)) {
         const wtPath = join(wtRoot, name);
         if (!statSync(wtPath).isDirectory()) continue;
-        console.log(`[cleanup] removing external worktree: ${wtPath} (git worktree remove --force from ${clonePath})`);
+        const canonicalWt = canonicalPathForComparison(wtPath);
+        console.log(
+          `[cleanup] removing external worktree: ${canonicalWt} (git worktree remove --force from ${clonePath})`,
+        );
         try {
-          await execGit(['worktree', 'remove', '--force', wtPath], clonePath);
-          console.log(`[cleanup] removed worktree: ${wtPath}`);
-          removed.push(wtPath);
+          await execGit(['worktree', 'remove', '--force', canonicalWt], clonePath);
+          console.log(`[cleanup] removed worktree: ${canonicalWt}`);
+          removed.push(canonicalWt);
         } catch (e) {
-          console.warn(`[cleanup] failed to remove worktree ${wtPath}: ${e instanceof Error ? e.message : String(e)}`);
-          errors.push(`${wtPath}: ${e instanceof Error ? e.message : String(e)}`);
+          console.warn(
+            `[cleanup] failed to remove worktree ${canonicalWt}: ${e instanceof Error ? e.message : String(e)}`,
+          );
+          errors.push(`${canonicalWt}: ${e instanceof Error ? e.message : String(e)}`);
         }
       }
     }
@@ -73,14 +79,17 @@ export async function cleanupManagedWorktrees(opts: {
       for (const name of readdirSync(embedded)) {
         const wtPath = join(embedded, name);
         if (!statSync(wtPath).isDirectory()) continue;
-        console.log(`[cleanup] removing embedded worktree: ${wtPath} (from ${clonePath})`);
+        const canonicalWt = canonicalPathForComparison(wtPath);
+        console.log(`[cleanup] removing embedded worktree: ${canonicalWt} (from ${clonePath})`);
         try {
-          await execGit(['worktree', 'remove', '--force', wtPath], clonePath);
-          console.log(`[cleanup] removed embedded worktree: ${wtPath}`);
-          removed.push(wtPath);
+          await execGit(['worktree', 'remove', '--force', canonicalWt], clonePath);
+          console.log(`[cleanup] removed embedded worktree: ${canonicalWt}`);
+          removed.push(canonicalWt);
         } catch (e) {
-          console.warn(`[cleanup] failed to remove embedded worktree ${wtPath}: ${e instanceof Error ? e.message : String(e)}`);
-          errors.push(`${wtPath}: ${e instanceof Error ? e.message : String(e)}`);
+          console.warn(
+            `[cleanup] failed to remove embedded worktree ${canonicalWt}: ${e instanceof Error ? e.message : String(e)}`,
+          );
+          errors.push(`${canonicalWt}: ${e instanceof Error ? e.message : String(e)}`);
         }
       }
     }
