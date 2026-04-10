@@ -12,8 +12,8 @@ describe('schema divergence', () => {
     adapters.length = 0;
   });
 
-  it.fails('data-store and persistence tasks tables have identical column sets', async () => {
-    // C1a repro — do not delete
+  it('data-store and persistence tasks tables have identical column sets', async () => {
+    // C1a repro — now passing after Arch-02 collapsed persistence into data-store reexport
 
     const dataStoreAdapter = await DataStoreSQLiteAdapter.create(':memory:');
     adapters.push(dataStoreAdapter);

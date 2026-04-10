@@ -187,6 +187,9 @@ importers:
 
   packages/persistence:
     dependencies:
+      '@invoker/data-store':
+        specifier: workspace:*
+        version: link:../data-store
       '@invoker/workflow-core':
         specifier: workspace:*
         version: link:../workflow-core

@@ -17,6 +17,7 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
+    "@invoker/data-store": "workspace:*",
     "@invoker/workflow-core": "workspace:*",
     "sql.js": "^1.12.0"
   },
