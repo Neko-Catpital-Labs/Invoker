@@ -1,11 +1,8 @@
 /**
- * Parity Test Suite
+ * Orchestrator integration tests
  *
- * Proves invoker-v2 has full feature parity with v1 AND is architecturally better.
- *
- * Part 1 (tests 1–10): Feature parity — every v1 capability works in invoker-v2.
- * Part 2 (tests 11–16): Architectural superiority — immutability, DB-as-source-of-truth,
- *   injectable persistence, and performance at scale.
+ * Part 1 (tests 1–10): Core workflow and task behaviors end-to-end through the orchestrator.
+ * Part 2 (tests 11–16): Persistence, immutability, and scheduling characteristics under load.
  *
  * All mutations go through the Orchestrator (which writes to DB first).
  */
