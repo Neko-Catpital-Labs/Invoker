@@ -217,10 +217,6 @@ module.exports = {
     exclude: {
       path: [
         '^vitest\\.shared\\.ts$',
-        '^packages/core/',
-        '^packages/persistence/',
-        '^packages/graph/',
-        '^packages/protocol/',
         'node_modules',
         '__tests__',
         '\\.test\\.(ts|tsx|js|jsx)$',
