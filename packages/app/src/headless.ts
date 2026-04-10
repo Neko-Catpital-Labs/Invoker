@@ -9,8 +9,9 @@
  * This file handles CLI parsing, TaskRunner lifecycle, and output formatting.
  */
 
-import type { Orchestrator, CommandService, TaskDelta, TaskState } from '@invoker/workflow-core';
+import type { Logger } from '@invoker/contracts';
 import { makeEnvelope } from '@invoker/contracts';
+import type { Orchestrator, CommandService, TaskDelta, TaskState } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import { createDeleteAllSnapshot } from './delete-all-snapshot.js';
 import { resolve as resolvePath } from 'node:path';
@@ -43,6 +44,7 @@ export { bumpGenerationAndRecreate } from './workflow-actions.js';
 // ── HeadlessDeps interface ───────────────────────────────────
 
 export interface HeadlessDeps {
+  logger: Logger;
   orchestrator: Orchestrator;
   persistence: SQLiteAdapter;
   executorRegistry: ExecutorRegistry;
@@ -65,7 +67,6 @@ export interface HeadlessDeps {
 
 const RESET = '\x1b[0m';
 const BOLD = '\x1b[1m';
-const RED = '\x1b[31m';
 const YELLOW = '\x1b[33m';
 
 // ── Shared Helpers ───────────────────────────────────────────
@@ -103,7 +104,7 @@ function createHeadlessExecutor(
         try {
           deps.persistence.appendTaskOutput(taskId, data);
         } catch (err) {
-          console.error(`[output] Failed to persist output for ${taskId}:`, err);
+          deps.logger.error(`Failed to persist output for ${taskId}: ${err}`, { module: 'output' });
         }
       },
       onHeartbeat: (taskId) => headlessHeartbeat(taskId, deps),
@@ -201,10 +202,10 @@ async function headlessQuery(args: string[], deps: HeadlessDeps): Promise<void> 
         workflows = workflows.filter(wf => wf.status === flags.status);
       }
       switch (flags.output) {
-        case 'label': console.log(formatAsLabel(workflows)); break;
-        case 'json':  console.log(formatAsJson(workflows.map(serializeWorkflow))); break;
-        case 'jsonl': console.log(formatAsJsonl(workflows.map(serializeWorkflow))); break;
-        default:      console.log(formatWorkflowList(workflows)); break;
+        case 'label': process.stdout.write(formatAsLabel(workflows) + '\n'); break;
+        case 'json':  process.stdout.write(formatAsJson(workflows.map(serializeWorkflow)) + '\n'); break;
+        case 'jsonl': process.stdout.write(formatAsJsonl(workflows.map(serializeWorkflow)) + '\n'); break;
+        default:      process.stdout.write(formatWorkflowList(workflows) + '\n'); break;
       }
       break;
     }
@@ -212,7 +213,7 @@ async function headlessQuery(args: string[], deps: HeadlessDeps): Promise<void> 
       const { orchestrator, persistence } = deps;
       const workflows = persistence.listWorkflows();
       if (workflows.length === 0) {
-        console.log('No workflows found. Run a plan first.');
+        process.stdout.write('No workflows found. Run a plan first.\n');
         return;
       }
 
@@ -247,13 +248,13 @@ async function headlessQuery(args: string[], deps: HeadlessDeps): Promise<void> 
       }
 
       switch (flags.output) {
-        case 'label': console.log(formatAsLabel(allTasks)); break;
-        case 'json':  console.log(formatAsJson(allTasks.map(serializeTask))); break;
-        case 'jsonl': console.log(formatAsJsonl(allTasks.map(serializeTask))); break;
+        case 'label': process.stdout.write(formatAsLabel(allTasks) + '\n'); break;
+        case 'json':  process.stdout.write(formatAsJson(allTasks.map(serializeTask)) + '\n'); break;
+        case 'jsonl': process.stdout.write(formatAsJsonl(allTasks.map(serializeTask)) + '\n'); break;
         default: {
-          for (const task of allTasks) console.log(formatTaskStatus(task));
+          for (const task of allTasks) process.stdout.write(formatTaskStatus(task) + '\n');
           const status = orchestrator.getWorkflowStatus();
-          console.log(`\n${formatWorkflowStatus(status)}`);
+          process.stdout.write(`\n${formatWorkflowStatus(status)}\n`);
           break;
         }
       }
@@ -267,10 +268,10 @@ async function headlessQuery(args: string[], deps: HeadlessDeps): Promise<void> 
       if (!task) throw new Error(`Task "${taskId}" not found`);
 
       switch (flags.output) {
-        case 'label': console.log(task.id); break;
-        case 'json':  console.log(formatAsJson(serializeTask(task))); break;
-        case 'jsonl': console.log(formatAsJsonl([serializeTask(task)])); break;
-        default:      console.log(task.status); break;
+        case 'label': process.stdout.write(task.id + '\n'); break;
+        case 'json':  process.stdout.write(formatAsJson(serializeTask(task)) + '\n'); break;
+        case 'jsonl': process.stdout.write(formatAsJsonl([serializeTask(task)]) + '\n'); break;
+        default:      process.stdout.write(task.status + '\n'); break;
       }
       break;
     }
@@ -284,16 +285,16 @@ async function headlessQuery(args: string[], deps: HeadlessDeps): Promise<void> 
       switch (flags.output) {
         case 'label': {
           const ids = [...status.running.map(t => t.taskId), ...status.queued.map(t => t.taskId)];
-          console.log(ids.join('\n'));
+          process.stdout.write(ids.join('\n') + '\n');
           break;
         }
-        case 'json':  console.log(formatAsJson(status)); break;
+        case 'json':  process.stdout.write(formatAsJson(status) + '\n'); break;
         case 'jsonl': {
-          for (const t of status.running) console.log(JSON.stringify({ ...t, state: 'running' }));
-          for (const t of status.queued) console.log(JSON.stringify({ ...t, state: 'queued' }));
+          for (const t of status.running) process.stdout.write(JSON.stringify({ ...t, state: 'running' }) + '\n');
+          for (const t of status.queued) process.stdout.write(JSON.stringify({ ...t, state: 'queued' }) + '\n');
           break;
         }
-        default: console.log(formatQueueStatus(status)); break;
+        default: process.stdout.write(formatQueueStatus(status) + '\n'); break;
       }
       break;
     }
@@ -303,10 +304,10 @@ async function headlessQuery(args: string[], deps: HeadlessDeps): Promise<void> 
       const events = deps.persistence.getEvents(taskId);
 
       switch (flags.output) {
-        case 'label': console.log(events.map(e => `${e.taskId}:${e.eventType}`).join('\n')); break;
-        case 'json':  console.log(formatAsJson(events.map(serializeEvent))); break;
-        case 'jsonl': console.log(formatAsJsonl(events.map(serializeEvent))); break;
-        default:      console.log(formatEventLog(events)); break;
+        case 'label': process.stdout.write(events.map(e => `${e.taskId}:${e.eventType}`).join('\n') + '\n'); break;
+        case 'json':  process.stdout.write(formatAsJson(events.map(serializeEvent)) + '\n'); break;
+        case 'jsonl': process.stdout.write(formatAsJsonl(events.map(serializeEvent)) + '\n'); break;
+        default:      process.stdout.write(formatEventLog(events) + '\n'); break;
       }
       break;
     }
@@ -450,7 +451,7 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
         }
       }
       deps.orchestrator.deleteAllWorkflows();
-      console.log('All workflows deleted.');
+      process.stdout.write('All workflows deleted.\n');
       break;
     case 'open-terminal':
       await headlessOpenTerminal(args[1], deps);
@@ -518,7 +519,7 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
 }
 
 function printHeadlessUsage(): void {
-  console.log(`${BOLD}invoker${RESET} — Headless workflow runner (Electron)
+  process.stdout.write(`${BOLD}invoker${RESET} — Headless workflow runner (Electron)
 
 ${BOLD}Usage:${RESET}  electron dist/main.js --headless <command> [args...]
 
@@ -600,34 +601,34 @@ async function headlessRun(
   const plan = await parsePlanFile(planPath);
   const execRegistry = deps.executionAgentRegistry ?? registerBuiltinAgents();
   assertPlanExecutionAgentsRegistered(plan, execRegistry);
-  backupPlan(plan, yamlSource);
-  console.log(`${BOLD}Loading plan: ${plan.name}${RESET}`);
-  console.log(`Tasks: ${plan.tasks.length}\n`);
+  backupPlan(plan, yamlSource, deps.logger);
+  process.stdout.write(`${BOLD}Loading plan: ${plan.name}${RESET}\n`);
+  process.stdout.write(`Tasks: ${plan.tasks.length}\n\n`);
 
   messageBus.subscribe<TaskDelta>(Channels.TASK_DELTA, (delta) => {
     if (delta.type === 'updated') {
       const task = orchestrator.getTask(delta.taskId);
-      if (task) console.log(formatTaskStatus(task));
+      if (task) process.stdout.write(formatTaskStatus(task) + '\n');
     } else if (delta.type === 'created') {
-      console.log(formatTaskStatus(delta.task));
+      process.stdout.write(formatTaskStatus(delta.task) + '\n');
     }
   });
 
   const taskExecutor = createHeadlessExecutor(deps);
   wireHeadlessApproveHook(deps, taskExecutor);
 
-  const api = startApiServer({ orchestrator, persistence: deps.persistence, executorRegistry: deps.executorRegistry, taskExecutor });
+  const api = startApiServer({ logger: deps.logger, orchestrator, persistence: deps.persistence, executorRegistry: deps.executorRegistry, taskExecutor });
 
   const wfIdsBefore = new Set(orchestrator.getWorkflowIds());
   orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
   const currentWorkflowId = orchestrator.getWorkflowIds().find((id) => !wfIdsBefore.has(id));
-  if (currentWorkflowId) console.log(`Workflow ID: ${currentWorkflowId}`);
+  if (currentWorkflowId) process.stdout.write(`Workflow ID: ${currentWorkflowId}\n`);
 
   const started = orchestrator.startExecution();
   await taskExecutor.executeTasks(started);
 
   if (noTrack) {
-    console.log('[headless] --no-track enabled: submission accepted; exiting without tracking.');
+    process.stdout.write('[headless] --no-track enabled: submission accepted; exiting without tracking.\n');
     await api.close().catch(() => {});
     return;
   }
@@ -637,13 +638,13 @@ async function headlessRun(
   await api.close().catch(() => {});
 
   const status = orchestrator.getWorkflowStatus(currentWorkflowId);
-  console.log(`\n${formatWorkflowStatus(status)}`);
+  process.stdout.write(`\n${formatWorkflowStatus(status)}\n`);
 
   const mergeTask = orchestrator.getAllTasks().find(
     t => t.config.workflowId === currentWorkflowId && t.config.isMergeNode,
   );
   if (mergeTask?.execution?.reviewUrl) {
-    console.log(`\nPull Request: ${mergeTask.execution.reviewUrl}`);
+    process.stdout.write(`\nPull Request: ${mergeTask.execution.reviewUrl}\n`);
   }
 
   if (status.failed > 0) process.exitCode = 1;
@@ -660,21 +661,21 @@ async function headlessResume(
 
   const { formatTaskStatus, formatWorkflowStatus } = await import('./formatter.js');
 
-  console.log(`${BOLD}Resuming workflow: ${workflowId}${RESET}\n`);
+  process.stdout.write(`${BOLD}Resuming workflow: ${workflowId}${RESET}\n\n`);
 
   messageBus.subscribe<TaskDelta>(Channels.TASK_DELTA, (delta) => {
     if (delta.type === 'updated') {
       const task = orchestrator.getTask(delta.taskId);
-      if (task) console.log(formatTaskStatus(task));
+      if (task) process.stdout.write(formatTaskStatus(task) + '\n');
     } else if (delta.type === 'created') {
-      console.log(formatTaskStatus(delta.task));
+      process.stdout.write(formatTaskStatus(delta.task) + '\n');
     }
   });
 
   const taskExecutor = createHeadlessExecutor(deps);
   wireHeadlessApproveHook(deps, taskExecutor);
 
-  const api = startApiServer({ orchestrator, persistence: deps.persistence, executorRegistry: deps.executorRegistry, taskExecutor });
+  const api = startApiServer({ logger: deps.logger, orchestrator, persistence: deps.persistence, executorRegistry: deps.executorRegistry, taskExecutor });
 
   orchestrator.syncFromDb(workflowId);
 
@@ -682,7 +683,7 @@ async function headlessResume(
   const orphanRestarted: TaskState[] = [];
   for (const task of orchestrator.getAllTasks()) {
     if (task.status === 'running' || task.status === 'fixing_with_ai') {
-      console.log(`[headless] relaunching orphaned in-flight task "${task.id}" (${task.status})`);
+      deps.logger.info(`relaunching orphaned in-flight task "${task.id}" (${task.status})`, { module: 'headless' });
       const restarted = orchestrator.restartTask(task.id);
       orphanRestarted.push(...restarted.filter(t => t.status === 'running'));
     }
@@ -692,7 +693,7 @@ async function headlessResume(
   await taskExecutor.executeTasks([...orphanRestarted, ...started]);
 
   if (noTrack) {
-    console.log('[headless] --no-track enabled: resume accepted; exiting without tracking.');
+    process.stdout.write('[headless] --no-track enabled: resume accepted; exiting without tracking.\n');
     await api.close().catch(() => {});
     return;
   }
@@ -702,7 +703,7 @@ async function headlessResume(
   await api.close().catch(() => {});
 
   const status = orchestrator.getWorkflowStatus();
-  console.log(`\n${formatWorkflowStatus(status)}`);
+  process.stdout.write(`\n${formatWorkflowStatus(status)}\n`);
 
   if (status.failed > 0) process.exitCode = 1;
 }
@@ -722,7 +723,7 @@ async function headlessApprove(taskId: string, deps: HeadlessDeps): Promise<void
   }
   const runnable = started.filter(t => t.status === 'running' && !(t.config.isMergeNode && t.id === taskId));
   if (runnable.length > 0) await te.executeTasks(runnable);
-  console.log(`Approved task: ${taskId}`);
+  process.stdout.write(`Approved task: ${taskId}\n`);
 }
 
 async function headlessReject(taskId: string, deps: Pick<HeadlessDeps, 'commandService' | 'orchestrator' | 'persistence'>, reason?: string): Promise<void> {
@@ -731,7 +732,7 @@ async function headlessReject(taskId: string, deps: Pick<HeadlessDeps, 'commandS
   const envelope = makeEnvelope('reject', 'headless', 'task', { taskId, reason });
   const result = await deps.commandService.reject(envelope);
   if (!result.ok) throw new Error(result.error.message);
-  console.log(`Rejected task: ${taskId}${reason ? ` (reason: ${reason})` : ''}`);
+  process.stdout.write(`Rejected task: ${taskId}${reason ? ` (reason: ${reason})` : ''}\n`);
 }
 
 async function headlessInput(taskId: string, text: string, deps: Pick<HeadlessDeps, 'commandService' | 'orchestrator' | 'persistence'>): Promise<void> {
@@ -740,7 +741,7 @@ async function headlessInput(taskId: string, text: string, deps: Pick<HeadlessDe
   const envelope = makeEnvelope('provide-input', 'headless', 'task', { taskId, input: text });
   const result = await deps.commandService.provideInput(envelope);
   if (!result.ok) throw new Error(result.error.message);
-  console.log(`Input provided to task: ${taskId}`);
+  process.stdout.write(`Input provided to task: ${taskId}\n`);
 }
 
 async function headlessSelect(taskId: string, experimentId: string, deps: HeadlessDeps): Promise<void> {
@@ -749,7 +750,7 @@ async function headlessSelect(taskId: string, experimentId: string, deps: Headle
   const envelope = makeEnvelope('select-experiment', 'headless', 'task', { taskId: resolvedTaskId, experimentId });
   const result = await deps.commandService.selectExperiment(envelope);
   if (!result.ok) throw new Error(result.error.message);
-  console.log(`Selected experiment ${experimentId} for task: ${resolvedTaskId}`);
+  process.stdout.write(`Selected experiment ${experimentId} for task: ${resolvedTaskId}\n`);
 
   const taskExecutor = createHeadlessExecutor(deps);
   const started = deps.orchestrator.resumeWorkflow(workflowId);
@@ -765,7 +766,7 @@ async function headlessRestart(taskId: string, deps: HeadlessDeps): Promise<void
   const result = await deps.commandService.restartTask(envelope);
   if (!result.ok) throw new Error(result.error.message);
   const runnable = result.data.filter(t => t.status === 'running');
-  console.log(`Restarted task "${taskId}" — ${runnable.length} task(s) to execute`);
+  process.stdout.write(`Restarted task "${taskId}" — ${runnable.length} task(s) to execute\n`);
 
   if (runnable.length === 0) return;
 
@@ -808,7 +809,7 @@ async function headlessFix(taskId: string, deps: HeadlessDeps, agentArg?: string
       await te.fixWithAgent(taskId, output, agent, savedError);
     }
     deps.orchestrator.setFixAwaitingApproval(taskId, savedError);
-    console.log(`Fix applied for task: ${taskId} (${agent}). Use 'approve ${taskId}' or 'reject ${taskId}' to finalize.`);
+    process.stdout.write(`Fix applied for task: ${taskId} (${agent}). Use 'approve ${taskId}' or 'reject ${taskId}' to finalize.\n`);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     deps.persistence.appendTaskOutput(taskId, `\n[Fix with AI] Failed: ${msg}`);
@@ -824,7 +825,7 @@ async function headlessResolveConflict(taskId: string, deps: HeadlessDeps, agent
   const te = createHeadlessExecutor(deps);
   const agent = (agentArg ?? 'claude').toLowerCase();
   await resolveConflictAction(taskId, { ...deps, taskExecutor: te }, agent);
-  console.log(`Conflict resolved for task: ${taskId} (${agent}). Use 'approve ${taskId}' or 'reject ${taskId}' to finalize.`);
+  process.stdout.write(`Conflict resolved for task: ${taskId} (${agent}). Use 'approve ${taskId}' or 'reject ${taskId}' to finalize.\n`);
 }
 
 async function headlessRebaseAndRetry(taskId: string, deps: HeadlessDeps): Promise<void> {
@@ -834,7 +835,7 @@ async function headlessRebaseAndRetry(taskId: string, deps: HeadlessDeps): Promi
   const te = createHeadlessExecutor(deps);
   const started = await rebaseAndRetry(taskId, { ...deps, taskExecutor: te });
   const runnable = started.filter(t => t.status === 'running');
-  console.log(`Rebase-and-retry: resetting workflow from current HEAD (${runnable.length} task(s))`);
+  process.stdout.write(`Rebase-and-retry: resetting workflow from current HEAD (${runnable.length} task(s))\n`);
 
   if (runnable.length === 0) return;
 
@@ -848,7 +849,7 @@ async function headlessRecreateWorkflow(workflowId: string, deps: HeadlessDeps):
   }
   const started = sharedRecreateWorkflow(workflowId, { persistence: deps.persistence, orchestrator: deps.orchestrator });
   const runnable = started.filter(t => t.status === 'running');
-  console.log(`Recreate workflow "${workflowId}" — ${runnable.length} task(s) to execute (pool fetch skipped)`);
+  process.stdout.write(`Recreate workflow "${workflowId}" — ${runnable.length} task(s) to execute (pool fetch skipped)\n`);
   if (runnable.length === 0) return;
 
   const te = createHeadlessExecutor(deps);
@@ -870,7 +871,7 @@ async function headlessRecreateTask(taskId: string, deps: HeadlessDeps): Promise
   const started = sharedRecreateTask(taskId, { persistence: deps.persistence, orchestrator: deps.orchestrator });
   const runnable = started.filter(t => t.status === 'running');
   const workflowId = deps.orchestrator.getTask(taskId)?.config.workflowId;
-  console.log(`Recreate task "${taskId}" (+ downstream) — ${runnable.length} task(s) to execute (pool fetch skipped)`);
+  process.stdout.write(`Recreate task "${taskId}" (+ downstream) — ${runnable.length} task(s) to execute (pool fetch skipped)\n`);
   if (runnable.length === 0) return;
 
   const te = createHeadlessExecutor(deps);
@@ -891,7 +892,7 @@ async function headlessRetryWorkflow(workflowId: string, deps: HeadlessDeps): Pr
   const result = await deps.commandService.retryWorkflow(envelope);
   if (!result.ok) throw new Error(result.error.message);
   const runnable = result.data.filter(t => t.status === 'running');
-  console.log(`Retry workflow "${workflowId}" — ${runnable.length} task(s) to re-execute (completed tasks preserved)`);
+  process.stdout.write(`Retry workflow "${workflowId}" — ${runnable.length} task(s) to re-execute (completed tasks preserved)\n`);
   if (runnable.length === 0) return;
 
   const te = createHeadlessExecutor(deps);
@@ -911,7 +912,7 @@ async function headlessEdit(taskId: string, newCommand: string, deps: HeadlessDe
   const envelope = makeEnvelope('edit-task-command', 'headless', 'task', { taskId, newCommand });
   const result = await deps.commandService.editTaskCommand(envelope);
   if (!result.ok) throw new Error(result.error.message);
-  console.log(`Edited task "${taskId}" command → "${newCommand}"`);
+  process.stdout.write(`Edited task "${taskId}" command → "${newCommand}"\n`);
 
   const taskExecutor = createHeadlessExecutor(deps);
   await taskExecutor.executeTasks(result.data);
@@ -925,7 +926,7 @@ async function headlessEditExecutor(taskId: string, executorType: string, deps: 
   const envelope = makeEnvelope('edit-task-type', 'headless', 'task', { taskId, executorType });
   const result = await deps.commandService.editTaskType(envelope);
   if (!result.ok) throw new Error(result.error.message);
-  console.log(`Edited task "${taskId}" executor → "${executorType}"`);
+  process.stdout.write(`Edited task "${taskId}" executor → "${executorType}"\n`);
 
   const taskExecutor = createHeadlessExecutor(deps);
   await taskExecutor.executeTasks(result.data);
@@ -939,7 +940,7 @@ async function headlessEditAgent(taskId: string, agentName: string, deps: Headle
   const envelope = makeEnvelope('edit-task-agent', 'headless', 'task', { taskId, agentName });
   const result = await deps.commandService.editTaskAgent(envelope);
   if (!result.ok) throw new Error(result.error.message);
-  console.log(`Edited task "${taskId}" agent → "${agentName}"`);
+  process.stdout.write(`Edited task "${taskId}" agent → "${agentName}"\n`);
 
   const taskExecutor = createHeadlessExecutor(deps);
   await taskExecutor.executeTasks(result.data);
@@ -949,9 +950,9 @@ async function headlessEditAgent(taskId: string, agentName: string, deps: Headle
 async function headlessQuerySelect(taskId: string, deps: Pick<HeadlessDeps, 'persistence'>): Promise<void> {
   if (!taskId) throw new Error('Missing taskId.');
   const selected = deps.persistence.getSelectedExperiment(taskId);
-  console.log(selected
+  process.stdout.write((selected
     ? `Selected experiment for ${taskId}: ${selected}`
-    : `No experiment selected for ${taskId}`);
+    : `No experiment selected for ${taskId}`) + '\n');
 }
 
 /**
@@ -1021,7 +1022,7 @@ async function headlessSession(taskId: string | undefined, deps: Pick<HeadlessDe
           if (exec.agentName) {
             agentName = String(exec.agentName);
           }
-          console.log(`Recovered agent session from event log: ${sessionId}`);
+          process.stdout.write(`Recovered agent session from event log: ${sessionId}\n`);
           break;
         }
       } catch {
@@ -1031,20 +1032,20 @@ async function headlessSession(taskId: string | undefined, deps: Pick<HeadlessDe
   }
 
   if (!sessionId) {
-    console.log(`No agent session for task "${taskId}"`);
+    process.stdout.write(`No agent session for task "${taskId}"\n`);
     return;
   }
 
-  console.log(`agent=${agentName} sessionId=${sessionId}`);
+  process.stdout.write(`agent=${agentName} sessionId=${sessionId}\n`);
 
   const allTasks = deps.orchestrator.getAllTasks();
   const messages = await resolveAgentSession(sessionId, agentName, deps.executionAgentRegistry, allTasks);
   if (!messages) {
-    console.log('Session file not found');
+    process.stdout.write('Session file not found\n');
     return;
   }
   for (const msg of messages) {
-    console.log(`[${msg.role}] ${msg.content}`);
+    process.stdout.write(`[${msg.role}] ${msg.content}\n`);
   }
 }
 
@@ -1055,9 +1056,9 @@ async function headlessCancel(taskId: string, deps: HeadlessDeps): Promise<void>
   const envelope = makeEnvelope('cancel-task', 'headless', 'task', { taskId });
   const cmdResult = await deps.commandService.cancelTask(envelope);
   if (!cmdResult.ok) throw new Error(cmdResult.error.message);
-  console.log(`Cancelled ${cmdResult.data.cancelled.length} task(s): [${cmdResult.data.cancelled.join(', ')}]`);
+  process.stdout.write(`Cancelled ${cmdResult.data.cancelled.length} task(s): [${cmdResult.data.cancelled.join(', ')}]\n`);
   if (cmdResult.data.runningCancelled.length > 0) {
-    console.log(`Killed running: [${cmdResult.data.runningCancelled.join(', ')}]`);
+    process.stdout.write(`Killed running: [${cmdResult.data.runningCancelled.join(', ')}]\n`);
   }
 }
 
@@ -1066,9 +1067,9 @@ async function headlessCancelWorkflow(workflowId: string, deps: HeadlessDeps): P
   const envelope = makeEnvelope('cancel-workflow', 'headless', 'workflow', { workflowId });
   const cmdResult = await deps.commandService.cancelWorkflow(envelope);
   if (!cmdResult.ok) throw new Error(cmdResult.error.message);
-  console.log(`Cancelled ${cmdResult.data.cancelled.length} task(s) in workflow "${workflowId}": [${cmdResult.data.cancelled.join(', ')}]`);
+  process.stdout.write(`Cancelled ${cmdResult.data.cancelled.length} task(s) in workflow "${workflowId}": [${cmdResult.data.cancelled.join(', ')}]\n`);
   if (cmdResult.data.runningCancelled.length > 0) {
-    console.log(`Killed running: [${cmdResult.data.runningCancelled.join(', ')}]`);
+    process.stdout.write(`Killed running: [${cmdResult.data.runningCancelled.join(', ')}]\n`);
   }
 }
 
@@ -1080,12 +1081,13 @@ async function headlessOpenTerminal(taskId: string, deps: HeadlessDeps): Promise
     executorRegistry: deps.executorRegistry,
     executionAgentRegistry: deps.executionAgentRegistry,
     repoRoot: deps.repoRoot,
+    logger: deps.logger,
     runningTaskReason: 'Task is still running. View output in logs.',
   });
   if (result.opened) {
-    console.log(`Opened terminal for task: ${taskId}`);
+    process.stdout.write(`Opened terminal for task: ${taskId}\n`);
   } else {
-    console.error(`Could not open terminal: ${result.reason}`);
+    process.stderr.write(`Could not open terminal: ${result.reason}\n`);
     process.exitCode = 1;
   }
 }
@@ -1095,7 +1097,7 @@ async function headlessDeleteWorkflow(workflowId: string, deps: Pick<HeadlessDep
   const envelope = makeEnvelope('delete-workflow', 'headless', 'workflow', { workflowId });
   const result = await deps.commandService.deleteWorkflow(envelope);
   if (!result.ok) throw new Error(result.error.message);
-  console.log(`Deleted workflow: ${workflowId}`);
+  process.stdout.write(`Deleted workflow: ${workflowId}\n`);
 }
 
 async function headlessSetMergeMode(
@@ -1116,7 +1118,7 @@ async function headlessSetMergeMode(
     taskExecutor,
   });
   const wf = deps.persistence.loadWorkflow(workflowId);
-  console.log(`Merge mode updated for ${workflowId}: ${wf?.mergeMode ?? '?'}`);
+  process.stdout.write(`Merge mode updated for ${workflowId}: ${wf?.mergeMode ?? '?'}\n`);
 }
 
 async function headlessSetGatePolicy(args: string[], deps: HeadlessDeps): Promise<void> {
@@ -1145,8 +1147,8 @@ async function headlessSetGatePolicy(args: string[], deps: HeadlessDeps): Promis
     const taskExecutor = createHeadlessExecutor(deps);
     await taskExecutor.executeTasks(runnable);
   }
-  console.log(
-    `Updated gate policy for ${taskId}: ${workflowId}/${depTaskId} -> ${gatePolicy} (${runnable.length} task(s) started)`,
+  process.stdout.write(
+    `Updated gate policy for ${taskId}: ${workflowId}/${depTaskId} -> ${gatePolicy} (${runnable.length} task(s) started)\n`,
   );
 }
 
@@ -1154,8 +1156,8 @@ async function headlessSlack(deps: HeadlessDeps): Promise<void> {
   const { orchestrator, persistence, initServices, wireSlackBot } = deps;
 
   const logFn = (source: string, level: string, message: string) => {
-    const prefix = level === 'error' ? `${RED}[${source}]${RESET}` : `[${source}]`;
-    console.log(`${prefix} ${message}`);
+    const logMethod = level === 'error' ? 'error' : level === 'warn' ? 'warn' : 'info';
+    deps.logger[logMethod](message, { module: source });
     persistence.writeActivityLog(source, level, message);
   };
 
@@ -1168,7 +1170,7 @@ async function headlessSlack(deps: HeadlessDeps): Promise<void> {
   });
   wireHeadlessApproveHook(deps, taskExecutor);
 
-  const api = startApiServer({ orchestrator, persistence, executorRegistry: deps.executorRegistry, taskExecutor });
+  const api = startApiServer({ logger: deps.logger, orchestrator, persistence, executorRegistry: deps.executorRegistry, taskExecutor });
 
   const slack = await wireSlackBot({
     executor: taskExecutor,
@@ -1217,7 +1219,7 @@ async function waitForCompletion(orchestrator: Orchestrator, workflowId?: string
   const start = Date.now();
 
   if (waitForApproval) {
-    console.log('[headless] Waiting for PR approval (--wait-for-approval)...');
+    process.stdout.write('[headless] Waiting for PR approval (--wait-for-approval)...\n');
   }
 
   while (Date.now() - start < maxWaitMs) {
@@ -1322,7 +1324,7 @@ async function tryDelegate(
       const task = delta.task;
       if (!targetWorkflowId || task.config.workflowId === targetWorkflowId) {
         tasks.set(task.id, task);
-        console.log(formatTaskStatus(task));
+        process.stdout.write(formatTaskStatus(task) + '\n');
       }
     } else if (delta.type === 'updated') {
       const existing = tasks.get(delta.taskId);
@@ -1336,7 +1338,7 @@ async function tryDelegate(
           execution: { ...existing.execution, ...execChanges },
         };
         tasks.set(delta.taskId, updated);
-        console.log(formatTaskStatus(updated));
+        process.stdout.write(formatTaskStatus(updated) + '\n');
       }
     } else if (delta.type === 'removed') {
       tasks.delete(delta.taskId);
@@ -1378,10 +1380,10 @@ async function tryDelegate(
 
     // Delegation successful
     targetWorkflowId = response.workflowId;
-    console.log(`Delegated to GUI — workflow: ${targetWorkflowId}`);
+    process.stdout.write(`Delegated to GUI — workflow: ${targetWorkflowId}\n`);
 
     if (noTrack) {
-      console.log('[headless] --no-track enabled: delegated submission accepted; exiting without tracking.');
+      process.stdout.write('[headless] --no-track enabled: delegated submission accepted; exiting without tracking.\n');
       return true;
     }
 
@@ -1399,12 +1401,12 @@ async function tryDelegate(
     const taskArray = Array.from(tasks.values());
     const completedCount = taskArray.filter(t => t.status === 'completed').length;
     const failedCount = taskArray.filter(t => t.status === 'failed').length;
-    console.log(`\n${BOLD}Summary:${RESET} ${completedCount} completed, ${failedCount} failed`);
+    process.stdout.write(`\n${BOLD}Summary:${RESET} ${completedCount} completed, ${failedCount} failed\n`);
 
     // Check for PR URL
     const mergeTask = taskArray.find(t => t.config.isMergeNode);
     if (mergeTask?.execution?.reviewUrl) {
-      console.log(`\nPull Request: ${mergeTask.execution.reviewUrl}`);
+      process.stdout.write(`\nPull Request: ${mergeTask.execution.reviewUrl}\n`);
     }
 
     // Set exit code if any tasks failed
@@ -1434,7 +1436,7 @@ async function waitForDelegatedSettlement(
   const start = Date.now();
 
   if (waitForApproval) {
-    console.log('[headless] Waiting for PR approval (--wait-for-approval)...');
+    process.stdout.write('[headless] Waiting for PR approval (--wait-for-approval)...\n');
   }
 
   while (Date.now() - start < maxWaitMs) {

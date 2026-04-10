@@ -15,7 +15,15 @@ describe('headless delegation enforcement', () => {
   let mockDeps: HeadlessDeps;
 
   beforeEach(() => {
+    const noopLogger = {
+      debug: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      child: vi.fn(() => noopLogger),
+    };
     mockDeps = {
+      logger: noopLogger as any,
       orchestrator: {} as Orchestrator,
       persistence: {
         readOnly: false,
