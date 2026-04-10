@@ -564,6 +564,96 @@ tasks:
     });
   });
 
+  describe('executor type validation', () => {
+    it('rejects executorType docker without dockerImage', () => {
+      const yaml = `
+name: Docker No Image
+repoUrl: git@github.com:test/repo.git
+tasks:
+  - id: build
+    description: Build in Docker
+    command: echo build
+    executorType: docker
+`;
+      expect(() => parsePlan(yaml)).toThrow(PlanParseError);
+      expect(() => parsePlan(yaml)).toThrow('executorType "docker" but is missing required field "dockerImage"');
+    });
+
+    it('rejects executorType ssh without remoteTargetId', () => {
+      const yaml = `
+name: SSH No Target
+repoUrl: git@github.com:test/repo.git
+tasks:
+  - id: deploy
+    description: Deploy via SSH
+    command: echo deploy
+    executorType: ssh
+`;
+      expect(() => parsePlan(yaml)).toThrow(PlanParseError);
+      expect(() => parsePlan(yaml)).toThrow('executorType "ssh" but is missing required field "remoteTargetId"');
+    });
+
+    it('accepts executorType docker with dockerImage', () => {
+      const yaml = `
+name: Docker With Image
+repoUrl: git@github.com:test/repo.git
+tasks:
+  - id: build
+    description: Build in Docker
+    command: echo build
+    executorType: docker
+    dockerImage: node:20
+`;
+      const plan = parsePlan(yaml);
+      expect(plan.tasks[0].executorType).toBe('docker');
+      expect(plan.tasks[0].dockerImage).toBe('node:20');
+    });
+
+    it('accepts executorType ssh with remoteTargetId', () => {
+      const yaml = `
+name: SSH With Target
+repoUrl: git@github.com:test/repo.git
+tasks:
+  - id: deploy
+    description: Deploy via SSH
+    command: echo deploy
+    executorType: ssh
+    remoteTargetId: prod-server-1
+`;
+      const plan = parsePlan(yaml);
+      expect(plan.tasks[0].executorType).toBe('ssh');
+      expect(plan.tasks[0].remoteTargetId).toBe('prod-server-1');
+    });
+
+    it('accepts worktree executorType without docker or ssh fields', () => {
+      const yaml = `
+name: Worktree Plan
+repoUrl: git@github.com:test/repo.git
+tasks:
+  - id: build
+    description: Build locally
+    command: echo build
+    executorType: worktree
+`;
+      const plan = parsePlan(yaml);
+      expect(plan.tasks[0].executorType).toBe('worktree');
+    });
+
+    it('rejects docker executorType inherited from plan level without dockerImage', () => {
+      const yaml = `
+name: Plan-Level Docker
+repoUrl: git@github.com:test/repo.git
+executorType: docker
+tasks:
+  - id: build
+    description: Build
+    command: echo build
+`;
+      expect(() => parsePlan(yaml)).toThrow(PlanParseError);
+      expect(() => parsePlan(yaml)).toThrow('executorType "docker" but is missing required field "dockerImage"');
+    });
+  });
+
   it('parses executorType without any warning', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const yaml = `
@@ -575,6 +665,7 @@ tasks:
     description: Build the project
     command: echo "build"
     executorType: docker
+    dockerImage: node:20
 `;
     const plan = parsePlan(yaml);
     expect(plan.tasks[0].executorType).toBe('docker');

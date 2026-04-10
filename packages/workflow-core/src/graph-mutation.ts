@@ -11,7 +11,7 @@
  * the validity functions in @invoker/graph.
  */
 
-import type { TaskState, TaskDelta, TaskStateChanges } from '@invoker/workflow-graph';
+import type { TaskState, TaskDelta, TaskStateChanges, TaskConfig } from '@invoker/workflow-graph';
 import type { GraphMutation, OrchestratorPersistence, OrchestratorMessageBus } from './orchestrator.js';
 import { createTaskState } from '@invoker/workflow-graph';
 import { findLeafTaskIds } from '@invoker/workflow-graph';
@@ -111,12 +111,14 @@ export function applyGraphMutationImpl(host: GraphMutationHost, mutation: GraphM
   const baseChanges: TaskStateChanges = mutation.sourceDisposition === 'complete'
     ? { status: 'completed' as const, execution: { completedAt: new Date() } }
     : { status: 'stale' as const };
-  const sourceChanges: TaskStateChanges = {
+  // Spreading two Partial<TaskConfig> values widens beyond what TS can assign
+  // back to the discriminated union, but the runtime value is correct.
+  const sourceChanges = {
     ...baseChanges,
     ...mutation.sourceChanges,
     config: { ...baseChanges.config, ...mutation.sourceChanges?.config },
     execution: { ...baseChanges.execution, ...mutation.sourceChanges?.execution },
-  };
+  } as TaskStateChanges;
   host.writeAndSync(mutation.sourceNodeId, sourceChanges);
   const sourceDelta: TaskDelta = {
     type: 'updated',
@@ -133,18 +135,33 @@ export function applyGraphMutationImpl(host: GraphMutationHost, mutation: GraphM
 
   // 3. Create new nodes
   for (const nodeDef of mutation.newNodes) {
-    const task = createTaskState(nodeDef.id, nodeDef.description, nodeDef.dependencies, {
+    const nodeBase = {
       workflowId: nodeDef.workflowId,
       parentTask: nodeDef.parentTask,
       experimentPrompt: nodeDef.experimentPrompt,
       prompt: nodeDef.prompt,
       command: nodeDef.command,
-      executorType: nodeDef.executorType,
       isReconciliation: nodeDef.isReconciliation,
       requiresManualApproval: nodeDef.requiresManualApproval,
       autoFix: nodeDef.autoFix,
       isMergeNode: nodeDef.isMergeNode,
-    });
+    } as const;
+    let nodeConfig: TaskConfig;
+    switch (nodeDef.executorType) {
+      case 'merge':
+        nodeConfig = { ...nodeBase, executorType: 'merge' };
+        break;
+      case 'docker':
+        nodeConfig = { ...nodeBase, executorType: 'docker' };
+        break;
+      case 'ssh':
+        nodeConfig = { ...nodeBase, executorType: 'ssh' };
+        break;
+      default:
+        nodeConfig = { ...nodeBase, executorType: nodeDef.executorType };
+        break;
+    }
+    const task = createTaskState(nodeDef.id, nodeDef.description, nodeDef.dependencies, nodeConfig);
     host.createAndSync(task);
     const delta: TaskDelta = { type: 'created', task };
     host.persistence.logEvent?.(task.id, 'task.created');

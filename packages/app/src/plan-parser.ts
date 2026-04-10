@@ -288,6 +288,19 @@ export function parsePlan(yamlContent: string): PlanDefinition {
       command: v.command,
     }));
 
+    const resolvedExecutorType = task.executorType ?? defaultExecutorType;
+
+    if (resolvedExecutorType === 'docker' && !task.dockerImage) {
+      throw new PlanParseError(
+        `Task "${task.id}" has executorType "docker" but is missing required field "dockerImage"`,
+      );
+    }
+    if (resolvedExecutorType === 'ssh' && !task.remoteTargetId) {
+      throw new PlanParseError(
+        `Task "${task.id}" has executorType "ssh" but is missing required field "remoteTargetId"`,
+      );
+    }
+
     return {
       id: task.id,
       description: task.description,
@@ -299,7 +312,7 @@ export function parsePlan(yamlContent: string): PlanDefinition {
       experimentVariants,
       requiresManualApproval: task.requiresManualApproval,
       featureBranch: task.featureBranch,
-      executorType: task.executorType ?? defaultExecutorType,
+      executorType: resolvedExecutorType,
       dockerImage: task.dockerImage,
       remoteTargetId: task.remoteTargetId,
       autoFix: task.autoFix,

@@ -19,7 +19,8 @@ import { TaskStateMachine } from './state-machine.js';
 import { ResponseHandler } from './response-handler.js';
 import type { ParsedResponse } from './response-handler.js';
 import { TaskScheduler } from './scheduler.js';
-import type { TaskState, TaskDelta, TaskStateChanges, Attempt, ExternalDependency } from '@invoker/workflow-graph';
+import type { TaskState, TaskDelta, TaskStateChanges, TaskConfig, Attempt, ExternalDependency } from '@invoker/workflow-graph';
+import type { ExecutorType } from '@invoker/workflow-graph';
 import { createTaskState, createAttempt } from '@invoker/workflow-graph';
 import type { WorkResponse } from '@invoker/contracts';
 import { normalizeExecutorType } from '@invoker/workflow-graph';
@@ -200,7 +201,7 @@ export interface GraphMutationNodeDef {
   experimentPrompt?: string;
   prompt?: string;
   command?: string;
-  executorType?: string;
+  executorType?: ExecutorType;
   isReconciliation?: boolean;
   requiresManualApproval?: boolean;
   autoFix?: boolean;
@@ -221,7 +222,7 @@ export interface TaskReplacementDef {
   command?: string;
   prompt?: string;
   dependencies?: string[];
-  executorType?: string;
+  executorType?: ExecutorType;
   autoFix?: boolean;
   executionAgent?: string;
 }
@@ -414,7 +415,9 @@ export class Orchestrator {
       ...existing,
       ...(changes.status !== undefined ? { status: changes.status } : {}),
       ...(changes.dependencies !== undefined ? { dependencies: changes.dependencies } : {}),
-      config: { ...existing.config, ...changes.config },
+      // Type assertion: spread widens the discriminated union but the runtime
+      // value preserves the correct executorType discriminant from existing.config.
+      config: { ...existing.config, ...changes.config } as TaskConfig,
       execution: { ...existing.execution, ...changes.execution },
     };
     if (process.env.NODE_ENV !== 'test') {
@@ -596,25 +599,36 @@ export class Orchestrator {
           requiredStatus: dep.requiredStatus ?? 'completed',
           gatePolicy: dep.gatePolicy ?? 'review_ready',
         })) ?? [];
+      const baseConfig = {
+        workflowId,
+        command: taskDef.command,
+        prompt: taskDef.prompt,
+        pivot: taskDef.pivot,
+        experimentVariants: taskDef.experimentVariants,
+        requiresManualApproval: taskDef.requiresManualApproval,
+        featureBranch: taskDef.featureBranch,
+        autoFix: taskDef.autoFix,
+        executionAgent: taskDef.executionAgent,
+        externalDependencies,
+      } as const;
+      const executorType = normalizeExecutorType(taskDef.executorType) ?? 'worktree';
+      let taskConfig: TaskConfig;
+      switch (executorType) {
+        case 'docker':
+          taskConfig = { ...baseConfig, executorType, dockerImage: taskDef.dockerImage, remoteTargetId: taskDef.remoteTargetId };
+          break;
+        case 'ssh':
+          taskConfig = { ...baseConfig, executorType, remoteTargetId: taskDef.remoteTargetId };
+          break;
+        default:
+          taskConfig = { ...baseConfig, executorType: 'worktree' as const, remoteTargetId: taskDef.remoteTargetId };
+          break;
+      }
       const task = createTaskState(
         scopedId,
         taskDef.description,
         scopedDeps,
-        {
-          workflowId,
-          command: taskDef.command,
-          prompt: taskDef.prompt,
-          pivot: taskDef.pivot,
-          experimentVariants: taskDef.experimentVariants,
-          requiresManualApproval: taskDef.requiresManualApproval,
-          featureBranch: taskDef.featureBranch,
-          executorType: normalizeExecutorType(taskDef.executorType) ?? 'worktree',
-          dockerImage: taskDef.dockerImage,
-          remoteTargetId: taskDef.remoteTargetId,
-          autoFix: taskDef.autoFix,
-          executionAgent: taskDef.executionAgent,
-          externalDependencies,
-        },
+        taskConfig,
       );
       validatedTasks.push(task);
     }
@@ -1700,14 +1714,35 @@ export class Orchestrator {
       const deps = hasInternalDeps
         ? rt.dependencies!.map((d) => scopeLocal(d))
         : [...task.dependencies];
-      const newTask = createTaskState(scopedId, rt.description, deps, {
+      const rtExecutorType = normalizeExecutorType(rt.executorType) ?? task.config.executorType ?? 'worktree';
+      const rtBase = {
         workflowId: wfId,
         command: rt.command,
         prompt: rt.prompt,
-        executorType: rt.executorType ?? task.config.executorType,
         autoFix: rt.autoFix,
         executionAgent: rt.executionAgent ?? task.config.executionAgent,
-      });
+      } as const;
+      // Replacement tasks inherit executor config from the parent task.
+      // The switch narrows the config so TS accepts the correct variant.
+      let rtConfig: TaskConfig;
+      switch (rtExecutorType) {
+        case 'docker':
+          rtConfig = {
+            ...rtBase, executorType: 'docker',
+            dockerImage: task.config.executorType === 'docker' ? task.config.dockerImage : undefined,
+          };
+          break;
+        case 'ssh':
+          rtConfig = {
+            ...rtBase, executorType: 'ssh',
+            remoteTargetId: task.config.executorType === 'ssh' ? task.config.remoteTargetId : undefined,
+          };
+          break;
+        default:
+          rtConfig = { ...rtBase, executorType: 'worktree' as const };
+          break;
+      }
+      const newTask = createTaskState(scopedId, rt.description, deps, rtConfig);
       this.createAndSync(newTask);
       this.messageBus.publish(TASK_DELTA_CHANNEL, { type: 'created', task: newTask });
     }
