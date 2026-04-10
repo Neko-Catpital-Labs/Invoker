@@ -184,15 +184,15 @@ module.exports = {
     {
       name: 'layer-4-deps',
       comment:
-        'Layer 4 packages (executors, test-kit, app) can only depend on Layers 0, 1, 2, and 3.',
+        'Layer 4 packages (test-kit, app) can only depend on Layers 0, 1, 2, and 3.',
       severity: 'error',
       from: {
-        path: '^packages/(executors|test-kit|app)/',
+        path: '^packages/(test-kit|app)/',
       },
       to: {
         path: '^packages/',
         pathNot: [
-          '^packages/(executors|test-kit|app)/',
+          '^packages/(test-kit|app)/',
           '^packages/(execution-engine|surfaces)/',
           '^packages/(data-store|persistence|core)/',
           '^packages/(workflow-core|protocol|runtime-adapters|graph)/',

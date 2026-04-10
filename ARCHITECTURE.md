@@ -34,7 +34,6 @@ These packages form the foundation and have no dependencies on other workspace p
 
 ## Layer 4: Application & Testing (Depends on Layers 0-3)
 
-- **executors** → execution-engine
 - **test-kit** → contracts, execution-engine, workflow-core
 - **app** → contracts, data-store, execution-engine, surfaces, transport, workflow-core
 
