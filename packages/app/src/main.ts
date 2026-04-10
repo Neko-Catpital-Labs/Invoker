@@ -84,13 +84,9 @@ import {
   rebaseAndRetry,
   recreateWorkflow as sharedRecreateWorkflow,
   recreateTask as sharedRecreateTask,
-  cancelWorkflow as sharedCancelWorkflow,
-  retryWorkflow as sharedRetryWorkflow,
   resolveConflictAction,
   selectExperiments as sharedSelectExperiments,
   setWorkflowMergeMode,
-  editTaskAgent as sharedEditTaskAgent,
-  setTaskExternalGatePolicies as sharedSetTaskExternalGatePolicies,
 } from './workflow-actions.js';
 import { spawn, execSync } from 'node:child_process';
 import { openExternalTerminalForTask } from './open-terminal-for-task.js';
@@ -301,7 +297,7 @@ async function wireSlackBot(deps: SlackBotDeps): Promise<any> {
       }
       case 'reject': {
         const env = makeEnvelope('reject', 'surface', 'task', { taskId: command.taskId as string, reason: command.reason as string | undefined });
-        const rejectResult = commandService.reject(env);
+        const rejectResult = await commandService.reject(env);
         if (!rejectResult.ok) throw new Error(rejectResult.error.message);
         break;
       }
@@ -409,6 +405,7 @@ if (isHeadless) {
       const headlessDeps = {
         orchestrator, persistence, executorRegistry, messageBus,
         repoRoot, invokerConfig, initServices, wireSlackBot,
+        commandService,
         waitForApproval,
         noTrack,
         executionAgentRegistry: agentRegistry,
@@ -567,20 +564,24 @@ function setupGuiMode(): void {
 
   /** Cancel a task and cascade-kill all downstream DAG dependents. Shared by IPC, headless, and API. */
   async function performCancelTask(taskId: string): Promise<{ cancelled: string[]; runningCancelled: string[] }> {
-    const result = orchestrator.cancelTask(taskId);
-    for (const id of result.runningCancelled) {
+    const envelope = makeEnvelope('cancel-task', 'ui', 'task', { taskId });
+    const cmdResult = await commandService.cancelTask(envelope);
+    if (!cmdResult.ok) throw new Error(cmdResult.error.message);
+    for (const id of cmdResult.data.runningCancelled) {
       await killRunningTask(id);
     }
-    return result;
+    return cmdResult.data;
   }
 
   /** Cancel all active tasks in a workflow and kill any running processes. */
   async function performCancelWorkflow(workflowId: string): Promise<{ cancelled: string[]; runningCancelled: string[] }> {
-    const result = sharedCancelWorkflow(workflowId, { orchestrator });
-    for (const id of result.runningCancelled) {
+    const envelope = makeEnvelope('cancel-workflow', 'ui', 'workflow', { workflowId });
+    const cmdResult = await commandService.cancelWorkflow(envelope);
+    if (!cmdResult.ok) throw new Error(cmdResult.error.message);
+    for (const id of cmdResult.data.runningCancelled) {
       await killRunningTask(id);
     }
-    return result;
+    return cmdResult.data;
   }
 
   function relaunchOrphansAndStartReady(logPrefix: string): TaskState[] {
@@ -722,6 +723,7 @@ function setupGuiMode(): void {
       console.log(`[ipc-delegate] headless.exec: "${args.join(' ')}"`);
       await runHeadless(args, {
         orchestrator, persistence, executorRegistry, messageBus,
+        commandService,
         repoRoot, invokerConfig, initServices, wireSlackBot,
         waitForApproval: delegatedWait,
         noTrack: delegatedNoTrack,
@@ -958,10 +960,10 @@ function setupGuiMode(): void {
           await killRunningTask(task.id);
         }
 
-        // Single call: DB delete + memory clear + scheduler cleanup + removal deltas
-        // The 'removed' deltas flow through the messageBus subscriber which handles
-        // lastKnownTaskStates.delete() and IPC forwarding to the renderer.
-        orchestrator.deleteWorkflow(workflowId);
+        // Serialized via CommandService: DB delete + memory clear + scheduler cleanup + removal deltas
+        const envelope = makeEnvelope('delete-workflow', 'ui', 'workflow', { workflowId });
+        const result = await commandService.deleteWorkflow(envelope);
+        if (!result.ok) throw new Error(result.error.message);
 
         // Update workflow count and send workflows-changed
         const workflows = persistence.listWorkflows();
@@ -1047,8 +1049,10 @@ function setupGuiMode(): void {
       }
     });
 
-    ipcMain.handle('invoker:provide-input', (_event, taskId: string, input: string) => {
-      orchestrator.provideInput(taskId, input);
+    ipcMain.handle('invoker:provide-input', async (_event, taskId: string, input: string) => {
+      const envelope = makeEnvelope('provide-input', 'ui', 'task', { taskId, input });
+      const result = await commandService.provideInput(envelope);
+      if (!result.ok) throw new Error(result.error.message);
     });
 
     ipcMain.handle('invoker:approve', async (_event, taskId: string) => {
@@ -1072,9 +1076,9 @@ function setupGuiMode(): void {
       if (runnable.length > 0) await taskExecutor.executeTasks(runnable);
     });
 
-    ipcMain.handle('invoker:reject', (_event, taskId: string, reason?: string) => {
+    ipcMain.handle('invoker:reject', async (_event, taskId: string, reason?: string) => {
       const envelope = makeEnvelope('reject', 'ui', 'task', { taskId, reason });
-      const result = commandService.reject(envelope);
+      const result = await commandService.reject(envelope);
       if (!result.ok) throw new Error(result.error.message);
     });
 
@@ -1082,8 +1086,18 @@ function setupGuiMode(): void {
       const ids = Array.isArray(experimentId) ? experimentId : [experimentId];
       console.log(`[ipc] select-experiment: "${taskId}" experimentIds=${JSON.stringify(ids)}`);
       try {
-        const newlyStarted = await sharedSelectExperiments(taskId, ids, { orchestrator, taskExecutor });
-        await taskExecutor.executeTasks(newlyStarted);
+        if (ids.length === 1) {
+          // Single-select: serialized via CommandService
+          const envelope = makeEnvelope('select-experiment', 'ui', 'task', { taskId, experimentId: ids[0] });
+          const result = await commandService.selectExperiment(envelope);
+          if (!result.ok) throw new Error(result.error.message);
+          const runnable = result.data.filter(t => t.status === 'running');
+          await taskExecutor.executeTasks(runnable);
+        } else {
+          // Multi-select: needs taskExecutor for branch merge, stays in workflow-actions
+          const newlyStarted = await sharedSelectExperiments(taskId, ids, { orchestrator, taskExecutor });
+          await taskExecutor.executeTasks(newlyStarted);
+        }
       } catch (err) {
         console.error(`[ipc] select-experiment failed: ${err}`);
         throw err;
@@ -1094,9 +1108,12 @@ function setupGuiMode(): void {
       console.log(`[ipc] restart-task: "${taskId}"`);
       try {
         await killRunningTask(taskId);
-        const started = orchestrator.restartTask(taskId);
+        const envelope = makeEnvelope('restart-task', 'ui', 'task', { taskId });
+        const result = await commandService.restartTask(envelope);
+        if (!result.ok) throw new Error(result.error.message);
+        const started = result.data;
         console.log(
-          `${RESTART_TO_BRANCH_TRACE} ipc invoker:restart-task after orchestrator.restartTask: count=${started.length} [${started.map((t) => `${t.id}(${t.status})`).join(', ')}]`,
+          `${RESTART_TO_BRANCH_TRACE} ipc invoker:restart-task after commandService.restartTask: count=${started.length} [${started.map((t) => `${t.id}(${t.status})`).join(', ')}]`,
         );
         const runnable = started.filter(t => t.status === 'running');
         console.log(
@@ -1195,8 +1212,10 @@ function setupGuiMode(): void {
     ipcMain.handle('invoker:retry-workflow', async (_event, workflowId: string) => {
       console.log(`[ipc] retry-workflow: "${workflowId}"`);
       try {
-        const started = sharedRetryWorkflow(workflowId, { orchestrator });
-        const runnable = started.filter(t => t.status === 'running');
+        const envelope = makeEnvelope('retry-workflow', 'ui', 'workflow', { workflowId });
+        const result = await commandService.retryWorkflow(envelope);
+        if (!result.ok) throw new Error(result.error.message);
+        const runnable = result.data.filter(t => t.status === 'running');
         remoteFetchForPool.enabled = false;
         try {
           await taskExecutor.executeTasks(runnable);
@@ -1334,8 +1353,10 @@ function setupGuiMode(): void {
     ipcMain.handle('invoker:edit-task-command', async (_event, taskId: string, newCommand: string) => {
       console.log(`[ipc] edit-task-command: "${taskId}" → "${newCommand}"`);
       try {
-        const started = orchestrator.editTaskCommand(taskId, newCommand);
-        const runnable = started.filter(t => t.status === 'running');
+        const envelope = makeEnvelope('edit-task-command', 'ui', 'task', { taskId, newCommand });
+        const result = await commandService.editTaskCommand(envelope);
+        if (!result.ok) throw new Error(result.error.message);
+        const runnable = result.data.filter(t => t.status === 'running');
         await taskExecutor.executeTasks(runnable);
       } catch (err) {
         console.error(`[ipc] edit-task-command failed: ${err}`);
@@ -1346,8 +1367,10 @@ function setupGuiMode(): void {
     ipcMain.handle('invoker:edit-task-type', async (_event, taskId: string, executorType: string, remoteTargetId?: string) => {
       console.log(`[ipc] edit-task-type: "${taskId}" → "${executorType}" remoteTargetId=${remoteTargetId ?? 'none'}`);
       try {
-        const started = orchestrator.editTaskType(taskId, executorType, remoteTargetId);
-        const runnable = started.filter(t => t.status === 'running');
+        const envelope = makeEnvelope('edit-task-type', 'ui', 'task', { taskId, executorType, remoteTargetId });
+        const result = await commandService.editTaskType(envelope);
+        if (!result.ok) throw new Error(result.error.message);
+        const runnable = result.data.filter(t => t.status === 'running');
         await taskExecutor.executeTasks(runnable);
       } catch (err) {
         console.error(`[ipc] edit-task-type failed: ${err}`);
@@ -1358,8 +1381,10 @@ function setupGuiMode(): void {
     ipcMain.handle('invoker:edit-task-agent', async (_event, taskId: string, agentName: string) => {
       console.log(`[ipc] edit-task-agent: "${taskId}" → "${agentName}"`);
       try {
-        const started = sharedEditTaskAgent(taskId, agentName, { orchestrator });
-        const runnable = started.filter(t => t.status === 'running');
+        const envelope = makeEnvelope('edit-task-agent', 'ui', 'task', { taskId, agentName });
+        const result = await commandService.editTaskAgent(envelope);
+        if (!result.ok) throw new Error(result.error.message);
+        const runnable = result.data.filter(t => t.status === 'running');
         await taskExecutor.executeTasks(runnable);
       } catch (err) {
         console.error(`[ipc] edit-task-agent failed: ${err}`);
@@ -1376,8 +1401,10 @@ function setupGuiMode(): void {
       ) => {
         console.log(`[ipc] set-task-external-gate-policies: "${taskId}" updates=${updates.length}`);
         try {
-          const started = sharedSetTaskExternalGatePolicies(taskId, updates, { orchestrator });
-          const runnable = started.filter((t) => t.status === 'running');
+          const envelope = makeEnvelope('set-gate-policies', 'ui', 'task', { taskId, updates });
+          const result = await commandService.setTaskExternalGatePolicies(envelope);
+          if (!result.ok) throw new Error(result.error.message);
+          const runnable = result.data.filter((t) => t.status === 'running');
           if (runnable.length > 0) await taskExecutor.executeTasks(runnable);
         } catch (err) {
           console.error(`[ipc] set-task-external-gate-policies failed: ${err}`);
@@ -1397,10 +1424,15 @@ function setupGuiMode(): void {
     ipcMain.handle('invoker:replace-task', async (_event, taskId: string, replacementTasks: unknown[]) => {
       console.log(`[ipc] replace-task: "${taskId}" with ${replacementTasks.length} replacement(s)`);
       try {
-        const started = orchestrator.replaceTask(taskId, replacementTasks as TaskReplacementDef[]);
-        const runnable = started.filter((t: { status: string }) => t.status === 'running');
+        const envelope = makeEnvelope('replace-task', 'ui', 'task', {
+          taskId,
+          replacementTasks: replacementTasks as TaskReplacementDef[],
+        });
+        const result = await commandService.replaceTask(envelope);
+        if (!result.ok) throw new Error(result.error.message);
+        const runnable = result.data.filter((t) => t.status === 'running');
         await taskExecutor.executeTasks(runnable);
-        return started;
+        return result.data;
       } catch (err) {
         console.error(`[ipc] replace-task failed: ${err}`);
         throw err;

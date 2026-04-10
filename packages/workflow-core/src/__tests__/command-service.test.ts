@@ -25,6 +25,18 @@ function stubOrchestrator(overrides: Partial<Orchestrator> = {}): Orchestrator {
     reject: vi.fn(),
     getTask: vi.fn().mockReturnValue(undefined),
     revertConflictResolution: vi.fn(),
+    provideInput: vi.fn(),
+    restartTask: vi.fn().mockReturnValue([]),
+    selectExperiment: vi.fn().mockReturnValue([]),
+    editTaskCommand: vi.fn().mockReturnValue([]),
+    editTaskType: vi.fn().mockReturnValue([]),
+    editTaskAgent: vi.fn().mockReturnValue([]),
+    setTaskExternalGatePolicies: vi.fn().mockReturnValue([]),
+    replaceTask: vi.fn().mockReturnValue([]),
+    cancelTask: vi.fn().mockReturnValue({ cancelled: [], runningCancelled: [] }),
+    cancelWorkflow: vi.fn().mockReturnValue({ cancelled: [], runningCancelled: [] }),
+    deleteWorkflow: vi.fn(),
+    retryWorkflow: vi.fn().mockReturnValue([]),
     ...overrides,
   } as unknown as Orchestrator;
 }
@@ -37,13 +49,13 @@ describe('CommandService', () => {
 
   beforeEach(() => {
     orchestrator = stubOrchestrator();
-    service = new CommandService(orchestrator, { ttlMs: 5 * 60 * 1000 });
+    service = new CommandService(orchestrator);
   });
 
   // ── approve ─────────────────────────────────────────────
 
   describe('approve', () => {
-    it('delegates to orchestrator.approve on first call', async () => {
+    it('delegates to orchestrator.approve', async () => {
       const envelope = makeEnvelope({ taskId: 't-1' });
       const result = await service.approve(envelope);
 
@@ -52,16 +64,7 @@ describe('CommandService', () => {
       expect(orchestrator.approve).toHaveBeenCalledTimes(1);
     });
 
-    it('returns cached result on duplicate idempotencyKey', async () => {
-      const envelope = makeEnvelope({ taskId: 't-1' }, 'dup-key');
-      await service.approve(envelope);
-      const second = await service.approve(envelope);
-
-      expect(second).toEqual({ ok: true, data: [] });
-      expect(orchestrator.approve).toHaveBeenCalledTimes(1);
-    });
-
-    it('allows different idempotencyKeys to call orchestrator', async () => {
+    it('calls orchestrator on each invocation', async () => {
       await service.approve(makeEnvelope({ taskId: 't-1' }, 'key-a'));
       await service.approve(makeEnvelope({ taskId: 't-2' }, 'key-b'));
 
@@ -81,68 +84,26 @@ describe('CommandService', () => {
         error: { code: 'APPROVE_FAILED', message: 'boom' },
       });
     });
-
-    it('caches error results too (no retry on same key)', async () => {
-      orchestrator = stubOrchestrator({
-        approve: vi.fn().mockRejectedValue(new Error('boom')),
-      });
-      service = new CommandService(orchestrator);
-
-      await service.approve(makeEnvelope({ taskId: 't-1' }, 'err-key'));
-      const second = await service.approve(
-        makeEnvelope({ taskId: 't-1' }, 'err-key'),
-      );
-
-      expect(second.ok).toBe(false);
-      expect(orchestrator.approve).toHaveBeenCalledTimes(1);
-    });
-  });
-
-  // ── dedup regression ───────────────────────────────
-
-  describe('idempotency-key dedup regression', () => {
-    it('caches by idempotencyKey and invokes orchestrator once per unique key', async () => {
-      const spyApprove = vi.fn().mockResolvedValue([{ id: 't-1' }] as unknown as TaskState[]);
-      orchestrator = stubOrchestrator({ approve: spyApprove });
-      service = new CommandService(orchestrator);
-
-      const envelope = makeEnvelope({ taskId: 't-1' }, 'dedup-key');
-
-      // First call — orchestrator invoked.
-      const first = await service.approve(envelope);
-      expect(first).toEqual({ ok: true, data: [{ id: 't-1' }] });
-      expect(spyApprove).toHaveBeenCalledTimes(1);
-
-      // Second call, same key — cached, orchestrator NOT re-invoked.
-      const second = await service.approve(envelope);
-      expect(second).toEqual({ ok: true, data: [{ id: 't-1' }] });
-      expect(spyApprove).toHaveBeenCalledTimes(1);
-
-      // Third call, different key — orchestrator invoked again.
-      const differentEnvelope = makeEnvelope({ taskId: 't-2' }, 'other-key');
-      await service.approve(differentEnvelope);
-      expect(spyApprove).toHaveBeenCalledTimes(2);
-    });
   });
 
   // ── reject ──────────────────────────────────────────────
 
   describe('reject', () => {
-    it('delegates to orchestrator.reject when no pendingFixError', () => {
+    it('delegates to orchestrator.reject when no pendingFixError', async () => {
       const envelope = makeEnvelope({ taskId: 't-1', reason: 'bad' });
-      const result = service.reject(envelope);
+      const result = await service.reject(envelope);
 
       expect(result).toEqual({ ok: true, data: undefined });
       expect(orchestrator.reject).toHaveBeenCalledWith('t-1', 'bad');
       expect(orchestrator.revertConflictResolution).not.toHaveBeenCalled();
     });
 
-    it('calls revertConflictResolution when pendingFixError exists', () => {
+    it('calls revertConflictResolution when pendingFixError exists', async () => {
       (orchestrator.getTask as ReturnType<typeof vi.fn>).mockReturnValue({
         execution: { pendingFixError: 'merge conflict' },
       });
       const envelope = makeEnvelope({ taskId: 't-1', reason: 'bad' });
-      const result = service.reject(envelope);
+      const result = await service.reject(envelope);
 
       expect(result).toEqual({ ok: true, data: undefined });
       expect(orchestrator.revertConflictResolution).toHaveBeenCalledWith(
@@ -151,106 +112,265 @@ describe('CommandService', () => {
       );
       expect(orchestrator.reject).not.toHaveBeenCalled();
     });
+  });
 
-    it('returns cached result on duplicate idempotencyKey', () => {
-      const envelope = makeEnvelope(
-        { taskId: 't-1', reason: 'bad' },
-        'dup-reject',
-      );
-      service.reject(envelope);
-      const second = service.reject(envelope);
+  // ── provideInput ─────────────────────────────────────────
 
-      expect(second).toEqual({ ok: true, data: undefined });
-      expect(orchestrator.reject).toHaveBeenCalledTimes(1);
+  describe('provideInput', () => {
+    it('delegates to orchestrator.provideInput', async () => {
+      const envelope = makeEnvelope({ taskId: 't-1', input: 'hello' });
+      const result = await service.provideInput(envelope);
+
+      expect(result).toEqual({ ok: true, data: undefined });
+      expect(orchestrator.provideInput).toHaveBeenCalledWith('t-1', 'hello');
+    });
+
+    it('returns error on exception', async () => {
+      (orchestrator.provideInput as ReturnType<typeof vi.fn>).mockImplementation(() => {
+        throw new Error('task not found');
+      });
+      const result = await service.provideInput(makeEnvelope({ taskId: 'bad', input: 'x' }));
+      expect(result).toEqual({ ok: false, error: { code: 'PROVIDE_INPUT_FAILED', message: 'task not found' } });
     });
   });
 
-  // ── TOCTOU race protection ──────────────────────────────
+  // ── restartTask ──────────────────────────────────────────
 
-  describe('concurrent approve coalescing', () => {
-    it('coalesces concurrent calls with the same key into one orchestrator invocation', async () => {
-      let resolveApprove!: (val: TaskState[]) => void;
-      const slowApprove = vi.fn().mockImplementation(
-        () => new Promise<TaskState[]>((resolve) => { resolveApprove = resolve; }),
-      );
-      orchestrator = stubOrchestrator({ approve: slowApprove });
-      service = new CommandService(orchestrator);
+  describe('restartTask', () => {
+    it('delegates to orchestrator.restartTask', async () => {
+      const result = await service.restartTask(makeEnvelope({ taskId: 't-1' }));
+      expect(result).toEqual({ ok: true, data: [] });
+      expect(orchestrator.restartTask).toHaveBeenCalledWith('t-1');
+    });
 
-      const envelope = makeEnvelope({ taskId: 't-1' }, 'race-key');
-      const p1 = service.approve(envelope);
-      const p2 = service.approve(envelope);
-
-      // Resolve the single in-flight call.
-      resolveApprove([]);
-
-      const [r1, r2] = await Promise.all([p1, p2]);
-      expect(r1).toEqual({ ok: true, data: [] });
-      expect(r2).toEqual({ ok: true, data: [] });
-      expect(slowApprove).toHaveBeenCalledTimes(1);
+    it('returns error on exception', async () => {
+      (orchestrator.restartTask as ReturnType<typeof vi.fn>).mockImplementation(() => {
+        throw new Error('not failed');
+      });
+      const result = await service.restartTask(makeEnvelope({ taskId: 't-1' }));
+      expect(result).toEqual({ ok: false, error: { code: 'RESTART_TASK_FAILED', message: 'not failed' } });
     });
   });
 
-  // ── TTL expiry ──────────────────────────────────────────
+  // ── selectExperiment ─────────────────────────────────────
 
-  describe('TTL expiry', () => {
-    it('evicts expired entries and re-invokes orchestrator', async () => {
-      service = new CommandService(orchestrator, { ttlMs: 100 });
+  describe('selectExperiment', () => {
+    it('delegates to orchestrator.selectExperiment', async () => {
+      const result = await service.selectExperiment(makeEnvelope({ taskId: 't-1', experimentId: 'exp-1' }));
+      expect(result).toEqual({ ok: true, data: [] });
+      expect(orchestrator.selectExperiment).toHaveBeenCalledWith('t-1', 'exp-1');
+    });
 
-      await service.approve(makeEnvelope({ taskId: 't-1' }, 'ttl-key'));
-      expect(orchestrator.approve).toHaveBeenCalledTimes(1);
-
-      // Fast-forward past TTL.
-      vi.useFakeTimers();
-      vi.advanceTimersByTime(200);
-
-      await service.approve(makeEnvelope({ taskId: 't-1' }, 'ttl-key'));
-      expect(orchestrator.approve).toHaveBeenCalledTimes(2);
-
-      vi.useRealTimers();
+    it('returns error on exception', async () => {
+      (orchestrator.selectExperiment as ReturnType<typeof vi.fn>).mockImplementation(() => {
+        throw new Error('experiment not found');
+      });
+      const result = await service.selectExperiment(makeEnvelope({ taskId: 't-1', experimentId: 'bad' }));
+      expect(result).toEqual({ ok: false, error: { code: 'SELECT_EXPERIMENT_FAILED', message: 'experiment not found' } });
     });
   });
 
-  // ── LRU eviction ────────────────────────────────────────
+  // ── editTaskCommand ──────────────────────────────────────
 
-  describe('LRU eviction', () => {
-    it('evicts oldest entry when cache reaches maxSize', async () => {
-      service = new CommandService(orchestrator, {
-        ttlMs: 60_000,
-        maxSize: 2,
+  describe('editTaskCommand', () => {
+    it('delegates to orchestrator.editTaskCommand', async () => {
+      const result = await service.editTaskCommand(makeEnvelope({ taskId: 't-1', newCommand: 'echo hi' }));
+      expect(result).toEqual({ ok: true, data: [] });
+      expect(orchestrator.editTaskCommand).toHaveBeenCalledWith('t-1', 'echo hi');
+    });
+
+    it('returns error on exception', async () => {
+      (orchestrator.editTaskCommand as ReturnType<typeof vi.fn>).mockImplementation(() => {
+        throw new Error('Cannot edit running task');
+      });
+      const result = await service.editTaskCommand(makeEnvelope({ taskId: 't-1', newCommand: 'x' }));
+      expect(result).toEqual({ ok: false, error: { code: 'EDIT_TASK_COMMAND_FAILED', message: 'Cannot edit running task' } });
+    });
+  });
+
+  // ── editTaskType ─────────────────────────────────────────
+
+  describe('editTaskType', () => {
+    it('delegates to orchestrator.editTaskType', async () => {
+      const result = await service.editTaskType(makeEnvelope({ taskId: 't-1', executorType: 'docker' }));
+      expect(result).toEqual({ ok: true, data: [] });
+      expect(orchestrator.editTaskType).toHaveBeenCalledWith('t-1', 'docker', undefined);
+    });
+
+    it('passes remoteTargetId when provided', async () => {
+      const result = await service.editTaskType(makeEnvelope({ taskId: 't-1', executorType: 'ssh', remoteTargetId: 'host-1' }));
+      expect(result).toEqual({ ok: true, data: [] });
+      expect(orchestrator.editTaskType).toHaveBeenCalledWith('t-1', 'ssh', 'host-1');
+    });
+
+    it('returns error on exception', async () => {
+      (orchestrator.editTaskType as ReturnType<typeof vi.fn>).mockImplementation(() => {
+        throw new Error('Cannot edit merge node');
+      });
+      const result = await service.editTaskType(makeEnvelope({ taskId: 't-1', executorType: 'bad' }));
+      expect(result).toEqual({ ok: false, error: { code: 'EDIT_TASK_TYPE_FAILED', message: 'Cannot edit merge node' } });
+    });
+  });
+
+  // ── editTaskAgent ────────────────────────────────────────
+
+  describe('editTaskAgent', () => {
+    it('delegates to orchestrator.editTaskAgent', async () => {
+      const result = await service.editTaskAgent(makeEnvelope({ taskId: 't-1', agentName: 'codex' }));
+      expect(result).toEqual({ ok: true, data: [] });
+      expect(orchestrator.editTaskAgent).toHaveBeenCalledWith('t-1', 'codex');
+    });
+
+    it('returns error on exception', async () => {
+      (orchestrator.editTaskAgent as ReturnType<typeof vi.fn>).mockImplementation(() => {
+        throw new Error('boom');
+      });
+      const result = await service.editTaskAgent(makeEnvelope({ taskId: 't-1', agentName: 'x' }));
+      expect(result).toEqual({ ok: false, error: { code: 'EDIT_TASK_AGENT_FAILED', message: 'boom' } });
+    });
+  });
+
+  // ── setTaskExternalGatePolicies ──────────────────────────
+
+  describe('setTaskExternalGatePolicies', () => {
+    it('delegates to orchestrator.setTaskExternalGatePolicies', async () => {
+      const updates = [{ workflowId: 'wf-1', taskId: '__merge__', gatePolicy: 'review_ready' as const }];
+      const result = await service.setTaskExternalGatePolicies(makeEnvelope({ taskId: 't-1', updates }));
+      expect(result).toEqual({ ok: true, data: [] });
+      expect(orchestrator.setTaskExternalGatePolicies).toHaveBeenCalledWith('t-1', updates);
+    });
+
+    it('returns error on exception', async () => {
+      (orchestrator.setTaskExternalGatePolicies as ReturnType<typeof vi.fn>).mockImplementation(() => {
+        throw new Error('bad update');
+      });
+      const result = await service.setTaskExternalGatePolicies(makeEnvelope({ taskId: 't-1', updates: [] }));
+      expect(result).toEqual({ ok: false, error: { code: 'SET_GATE_POLICIES_FAILED', message: 'bad update' } });
+    });
+  });
+
+  // ── replaceTask ──────────────────────────────────────────
+
+  describe('replaceTask', () => {
+    it('delegates to orchestrator.replaceTask', async () => {
+      const replacementTasks = [{ command: 'echo hi' }] as any;
+      const result = await service.replaceTask(makeEnvelope({ taskId: 't-1', replacementTasks }));
+      expect(result).toEqual({ ok: true, data: [] });
+      expect(orchestrator.replaceTask).toHaveBeenCalledWith('t-1', replacementTasks);
+    });
+
+    it('returns error on exception', async () => {
+      (orchestrator.replaceTask as ReturnType<typeof vi.fn>).mockImplementation(() => {
+        throw new Error('cannot replace');
+      });
+      const result = await service.replaceTask(makeEnvelope({ taskId: 't-1', replacementTasks: [] }));
+      expect(result).toEqual({ ok: false, error: { code: 'REPLACE_TASK_FAILED', message: 'cannot replace' } });
+    });
+  });
+
+  // ── cancelTask ───────────────────────────────────────────
+
+  describe('cancelTask', () => {
+    it('delegates to orchestrator.cancelTask', async () => {
+      const result = await service.cancelTask(makeEnvelope({ taskId: 't-1' }));
+      expect(result).toEqual({ ok: true, data: { cancelled: [], runningCancelled: [] } });
+      expect(orchestrator.cancelTask).toHaveBeenCalledWith('t-1');
+    });
+
+    it('returns error on exception', async () => {
+      (orchestrator.cancelTask as ReturnType<typeof vi.fn>).mockImplementation(() => {
+        throw new Error('not found');
+      });
+      const result = await service.cancelTask(makeEnvelope({ taskId: 'bad' }));
+      expect(result).toEqual({ ok: false, error: { code: 'CANCEL_TASK_FAILED', message: 'not found' } });
+    });
+  });
+
+  // ── cancelWorkflow ───────────────────────────────────────
+
+  describe('cancelWorkflow', () => {
+    it('delegates to orchestrator.cancelWorkflow', async () => {
+      const envelope = makeEnvelope({ workflowId: 'wf-1' });
+      const result = await service.cancelWorkflow(envelope);
+      expect(result).toEqual({ ok: true, data: { cancelled: [], runningCancelled: [] } });
+      expect(orchestrator.cancelWorkflow).toHaveBeenCalledWith('wf-1');
+    });
+
+    it('returns error on exception', async () => {
+      (orchestrator.cancelWorkflow as ReturnType<typeof vi.fn>).mockImplementation(() => {
+        throw new Error('wf not found');
+      });
+      const result = await service.cancelWorkflow(makeEnvelope({ workflowId: 'bad' }));
+      expect(result).toEqual({ ok: false, error: { code: 'CANCEL_WORKFLOW_FAILED', message: 'wf not found' } });
+    });
+  });
+
+  // ── deleteWorkflow ───────────────────────────────────────
+
+  describe('deleteWorkflow', () => {
+    it('delegates to orchestrator.deleteWorkflow', async () => {
+      const result = await service.deleteWorkflow(makeEnvelope({ workflowId: 'wf-1' }));
+      expect(result).toEqual({ ok: true, data: undefined });
+      expect(orchestrator.deleteWorkflow).toHaveBeenCalledWith('wf-1');
+    });
+
+    it('returns error on exception', async () => {
+      (orchestrator.deleteWorkflow as ReturnType<typeof vi.fn>).mockImplementation(() => {
+        throw new Error('wf not found');
+      });
+      const result = await service.deleteWorkflow(makeEnvelope({ workflowId: 'bad' }));
+      expect(result).toEqual({ ok: false, error: { code: 'DELETE_WORKFLOW_FAILED', message: 'wf not found' } });
+    });
+  });
+
+  // ── retryWorkflow ────────────────────────────────────────
+
+  describe('retryWorkflow', () => {
+    it('delegates to orchestrator.retryWorkflow', async () => {
+      const result = await service.retryWorkflow(makeEnvelope({ workflowId: 'wf-1' }));
+      expect(result).toEqual({ ok: true, data: [] });
+      expect(orchestrator.retryWorkflow).toHaveBeenCalledWith('wf-1');
+    });
+
+    it('returns error on exception', async () => {
+      (orchestrator.retryWorkflow as ReturnType<typeof vi.fn>).mockImplementation(() => {
+        throw new Error('wf not found');
+      });
+      const result = await service.retryWorkflow(makeEnvelope({ workflowId: 'bad' }));
+      expect(result).toEqual({ ok: false, error: { code: 'RETRY_WORKFLOW_FAILED', message: 'wf not found' } });
+    });
+  });
+
+  // ── Mutex serialization ──────────────────────────────────
+
+  describe('mutex serialization', () => {
+    it('serializes concurrent calls so they do not interleave', async () => {
+      const order: string[] = [];
+      let resolveFirst!: () => void;
+      const firstPromise = new Promise<void>(r => { resolveFirst = r; });
+
+      (orchestrator.restartTask as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+        order.push('restart-start');
+        await firstPromise;
+        order.push('restart-end');
+        return [];
+      });
+      (orchestrator.editTaskCommand as ReturnType<typeof vi.fn>).mockImplementation(() => {
+        order.push('edit-start');
+        order.push('edit-end');
+        return [];
       });
 
-      await service.approve(makeEnvelope({ taskId: 't-1' }, 'a'));
-      await service.approve(makeEnvelope({ taskId: 't-2' }, 'b'));
-      // Cache is full (a, b). Adding c evicts a.
-      await service.approve(makeEnvelope({ taskId: 't-3' }, 'c'));
-      expect(orchestrator.approve).toHaveBeenCalledTimes(3);
+      const p1 = service.restartTask(makeEnvelope({ taskId: 't-1' }, 'k1'));
+      const p2 = service.editTaskCommand(makeEnvelope({ taskId: 't-2', newCommand: 'x' }, 'k2'));
 
-      // 'a' was evicted, so it re-invokes orchestrator.
-      await service.approve(makeEnvelope({ taskId: 't-1' }, 'a'));
-      expect(orchestrator.approve).toHaveBeenCalledTimes(4);
+      // Let the first call complete
+      resolveFirst();
 
-      // 'c' is still cached.
-      await service.approve(makeEnvelope({ taskId: 't-3' }, 'c'));
-      expect(orchestrator.approve).toHaveBeenCalledTimes(4);
-    });
-  });
+      await Promise.all([p1, p2]);
 
-  // ── Instance isolation ──────────────────────────────────
-
-  describe('instance isolation', () => {
-    it('separate instances have independent caches', async () => {
-      const orch1 = stubOrchestrator();
-      const orch2 = stubOrchestrator();
-      const svc1 = new CommandService(orch1);
-      const svc2 = new CommandService(orch2);
-
-      const envelope = makeEnvelope({ taskId: 't-1' }, 'shared-key');
-      await svc1.approve(envelope);
-      await svc2.approve(envelope);
-
-      // Each service called its own orchestrator.
-      expect(orch1.approve).toHaveBeenCalledTimes(1);
-      expect(orch2.approve).toHaveBeenCalledTimes(1);
+      // Restart must fully complete before edit begins
+      expect(order).toEqual(['restart-start', 'restart-end', 'edit-start', 'edit-end']);
     });
   });
 });
