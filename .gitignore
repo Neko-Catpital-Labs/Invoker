@@ -24,3 +24,7 @@ packages/app/test-results/
 # Never commit npm debug logs (including mistaken literal ~/ paths)
 **/.npm/_logs/
 ~/.npm/
+
+# Local Claude / scratch (never ship)
+.claude.json.backup
+tmp/plans/
