@@ -74,6 +74,10 @@ importers:
         version: 3.2.4(@types/node@25.3.3)(jiti@1.21.7)(jsdom@25.0.1)(yaml@2.8.2)
 
   packages/contracts:
+    dependencies:
+      '@invoker/workflow-graph':
+        specifier: workspace:*
+        version: link:../workflow-graph
     devDependencies:
       '@types/node':
         specifier: ^25.3.3
@@ -360,6 +364,9 @@ importers:
 
   packages/ui:
     dependencies:
+      '@invoker/contracts':
+        specifier: workspace:*
+        version: link:../contracts
       '@xyflow/react':
         specifier: ^12.0.0
         version: 12.10.1(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)

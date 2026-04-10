@@ -9,6 +9,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@invoker/contracts": "workspace:*",
     "@xyflow/react": "^12.0.0",
     "js-yaml": "^4.1.1",
     "react": "^19.0.0",

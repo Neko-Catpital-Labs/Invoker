@@ -24,7 +24,7 @@ export type TaskStatus =
 export interface ExperimentVariant {
   readonly id: string;
   readonly description: string;
-  readonly prompt: string;
+  readonly prompt?: string;
 }
 
 export interface ExperimentResultEntry {
@@ -148,7 +148,7 @@ export interface WorkflowMeta {
   baseBranch?: string;
   featureBranch?: string;
   onFinish?: string;
-  mergeMode?: 'manual' | 'automatic' | 'external_review';
+  mergeMode?: string;
   reviewProvider?: string;
 }
 
@@ -214,82 +214,11 @@ export interface TaskReplacementDef {
 }
 
 // ── IPC Bridge API ──────────────────────────────────────────
+// InvokerAPI is derived from the IPC channel registry in @invoker/contracts.
 
-export interface ClaudeMessage {
-  role: 'user' | 'assistant';
-  content: string;
-  timestamp: string;
-}
+export type { InvokerAPI, ClaudeMessage } from '@invoker/contracts';
 
-export interface InvokerAPI {
-  getClaudeSession: (sessionId: string) => Promise<ClaudeMessage[] | null>;
-  getAgentSession: (sessionId: string, agentName?: string) => Promise<ClaudeMessage[] | null>;
-  loadPlan: (planText: string) => Promise<void>;
-  start: () => Promise<TaskState[]>;
-  stop: () => Promise<void>;
-  clear: () => Promise<void>;
-  getTasks: (forceRefresh?: boolean) => Promise<{ tasks: TaskState[]; workflows: WorkflowMeta[] }>;
-  getStatus: () => Promise<WorkflowStatus>;
-  provideInput: (taskId: string, input: string) => Promise<void>;
-  approve: (taskId: string) => Promise<void>;
-  reject: (taskId: string, reason?: string) => Promise<void>;
-  selectExperiment: (taskId: string, experimentId: string | string[]) => Promise<void>;
-  restartTask: (taskId: string) => Promise<void>;
-  editTaskCommand: (taskId: string, newCommand: string) => Promise<void>;
-  editTaskType: (taskId: string, executorType: string, remoteTargetId?: string) => Promise<void>;
-  editTaskAgent: (taskId: string, agentName: string) => Promise<void>;
-  setTaskExternalGatePolicies: (taskId: string, updates: ExternalGatePolicyUpdate[]) => Promise<void>;
-  getRemoteTargets: () => Promise<string[]>;
-  getExecutionAgents: () => Promise<string[]>;
-  replaceTask: (taskId: string, replacementTasks: TaskReplacementDef[]) => Promise<TaskState[]>;
-  onTaskDelta: (cb: (delta: TaskDelta) => void) => () => void;
-  onTaskOutput: (cb: (data: TaskOutputData) => void) => () => void;
-  onActivityLog: (cb: (entries: ActivityLogEntry[]) => void) => () => void;
-  getActivityLogs: () => Promise<ActivityLogEntry[]>;
-  getEvents: (taskId: string) => Promise<Array<{ id: number; taskId: string; eventType: string; payload?: string; createdAt: string }>>;
-
-  // External terminal launcher
-  openTerminal: (taskId: string) => Promise<{ opened: boolean; reason?: string }>;
-
-  // Workflow management
-  resumeWorkflow: () => Promise<{ workflow: { id: string; name: string; status: string }; taskCount: number; startedCount: number } | null>;
-  listWorkflows: () => Promise<Array<{ id: string; name: string; status: string; createdAt: string; updatedAt: string }>>;
-  loadWorkflow: (workflowId: string) => Promise<{ workflow: unknown; tasks: unknown[] }>;
-  onWorkflowsChanged: (cb: (workflows: unknown[]) => void) => () => void;
-  deleteAllWorkflows: () => Promise<void>;
-  deleteWorkflow: (workflowId: string) => Promise<void>;
-  cleanupWorktrees: () => Promise<{ removed: string[]; errors: string[] }>;
-  recreateWorkflow: (workflowId: string) => Promise<void>;
-  recreateTask: (taskId: string) => Promise<void>;
-  retryWorkflow: (workflowId: string) => Promise<void>;
-  rebaseAndRetry: (mergeTaskId: string) => Promise<{
-    success: boolean;
-    rebasedBranches: string[];
-    errors: string[];
-  }>;
-  setMergeBranch: (workflowId: string, baseBranch: string) => Promise<void>;
-  approveMerge: (workflowId: string) => Promise<void>;
-  resolveConflict: (taskId: string, agentName?: string) => Promise<void>;
-  fixWithAgent: (taskId: string, agentName?: string) => Promise<void>;
-  setMergeMode: (workflowId: string, mergeMode: string) => Promise<void>;
-  checkPrStatuses: () => Promise<void>;
-  checkPrStatus?: () => Promise<void>;
-  getAllCompletedTasks: () => Promise<Array<TaskState & { workflowName: string }>>;
-
-  // Cancel task with DAG cascade
-  cancelTask: (taskId: string) => Promise<{ cancelled: string[]; runningCancelled: string[] }>;
-  cancelWorkflow: (workflowId: string) => Promise<{ cancelled: string[]; runningCancelled: string[] }>;
-
-  // Queue status
-  getQueueStatus: () => Promise<{
-    maxConcurrency: number;
-    runningCount: number;
-    running: Array<{ taskId: string; description: string }>;
-    queued: Array<{ taskId: string; priority: number; description: string }>;
-  }>;
-  reportUiPerf: (metric: string, data?: Record<string, unknown>) => Promise<void>;
-  getUiPerfStats: () => Promise<Record<string, unknown>>;
-}
+import type { InvokerAPI } from '@invoker/contracts';
 
 // ── Augment global Window ───────────────────────────────────
 
