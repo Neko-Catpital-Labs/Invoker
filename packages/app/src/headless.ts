@@ -11,7 +11,7 @@
 
 import type { Logger } from '@invoker/contracts';
 import { makeEnvelope } from '@invoker/contracts';
-import type { Orchestrator, CommandService, TaskDelta, TaskState } from '@invoker/workflow-core';
+import type { Orchestrator, CommandService, TaskDelta, TaskState, TaskConfig } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import { createDeleteAllSnapshot } from './delete-all-snapshot.js';
 import { resolve as resolvePath } from 'node:path';
@@ -1334,7 +1334,7 @@ async function tryDelegate(
         const updated: TaskState = {
           ...existing,
           ...topLevel,
-          config: { ...existing.config, ...cfgChanges },
+          config: { ...existing.config, ...cfgChanges } as TaskConfig,
           execution: { ...existing.execution, ...execChanges },
         };
         tasks.set(delta.taskId, updated);

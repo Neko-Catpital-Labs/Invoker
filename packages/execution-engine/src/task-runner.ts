@@ -12,7 +12,7 @@ import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 
 import { scopePlanTaskId } from '@invoker/workflow-core';
-import type { Orchestrator, TaskState, ExperimentVariant } from '@invoker/workflow-core';
+import type { Orchestrator, TaskState, ExperimentVariant, ExecutorType } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import type { WorkRequest, WorkResponse, ActionType } from '@invoker/contracts';
 import type { Executor, ExecutorHandle } from './executor.js';
@@ -351,7 +351,7 @@ export class TaskRunner {
         }
         if (meta.containerId) execution.containerId = meta.containerId;
         this.persistence.updateTask(task.id, {
-          config: { executorType: executor.type },
+          config: { executorType: executor.type as ExecutorType },
           execution: execution as any,
         });
       }
@@ -375,7 +375,7 @@ export class TaskRunner {
       }
 
       const changes = {
-        config: { executorType: executor.type },
+        config: { executorType: executor.type as ExecutorType },
         execution: {
           workspacePath: handle.workspacePath,
           branch: handle.branch ?? undefined,  // Explicit undefined when branch is not applicable (e.g., BYO mode)
@@ -474,7 +474,7 @@ export class TaskRunner {
       // Per-task Docker instance (each task gets its own container + execGitSimple routing)
       if (effectiveType === 'docker') {
         const docker = new DockerExecutor({
-          imageName: task.config.dockerImage ?? this.dockerConfig.imageName,
+          imageName: task.config.dockerImage || this.dockerConfig.imageName,
           secretsFile: this.dockerConfig.secretsFile,
           agentRegistry: this.executionAgentRegistry,
         });

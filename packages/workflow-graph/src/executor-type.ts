@@ -1,4 +1,7 @@
-export const SUPPORTED_EXECUTOR_TYPES = new Set([
+/** All executor types accepted at runtime (includes internal 'merge'). */
+export type ExecutorType = 'worktree' | 'docker' | 'ssh' | 'merge';
+
+export const SUPPORTED_EXECUTOR_TYPES = new Set<ExecutorType>([
   'worktree', 'docker', 'ssh',
   'merge',  // internal: merge-node only
 ]);
@@ -6,13 +9,13 @@ export const SUPPORTED_EXECUTOR_TYPES = new Set([
 /**
  * Normalizes executorType values. Throws for unknown types.
  */
-export function normalizeExecutorType(executorType: string | undefined): string | undefined {
+export function normalizeExecutorType(executorType: string | undefined): ExecutorType | undefined {
   if (executorType === undefined) return undefined;
-  if (!SUPPORTED_EXECUTOR_TYPES.has(executorType)) {
+  if (!SUPPORTED_EXECUTOR_TYPES.has(executorType as ExecutorType)) {
     throw new Error(
       `Unknown executorType "${executorType}". ` +
       `Supported values: ${[...SUPPORTED_EXECUTOR_TYPES].filter(t => t !== 'merge').join(', ')}`
     );
   }
-  return executorType;
+  return executorType as ExecutorType;
 }

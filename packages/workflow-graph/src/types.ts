@@ -22,7 +22,7 @@ export type TaskStatus =
 // ── Task Config (definition / spec) ────────────────────────
 // Copied wholesale when cloning/forking: clone.config = original.config
 
-export interface TaskConfig {
+export interface BaseTaskConfig {
   readonly workflowId?: string;
   readonly parentTask?: string;
   readonly command?: string;
@@ -33,9 +33,6 @@ export interface TaskConfig {
   readonly isReconciliation?: boolean;
   readonly requiresManualApproval?: boolean;
   readonly featureBranch?: string;
-  readonly executorType?: string;
-  readonly dockerImage?: string;
-  readonly remoteTargetId?: string;
   readonly autoFix?: boolean;
   readonly isMergeNode?: boolean;
   readonly summary?: string;
@@ -47,7 +44,32 @@ export interface TaskConfig {
   readonly executionAgent?: string;
   /** Cross-workflow prerequisites for this task. */
   readonly externalDependencies?: readonly ExternalDependency[];
+  /** Remote target identifier for executor routing. Primarily used by SSH executors but can be set on any task via routing rules. */
+  readonly remoteTargetId?: string;
 }
+
+export interface WorktreeTaskConfig extends BaseTaskConfig {
+  readonly executorType?: 'worktree';
+  readonly dockerImage?: never;
+}
+
+export interface DockerTaskConfig extends BaseTaskConfig {
+  readonly executorType: 'docker';
+  readonly dockerImage?: string;
+}
+
+export interface SshTaskConfig extends BaseTaskConfig {
+  readonly executorType: 'ssh';
+  readonly dockerImage?: never;
+}
+
+/** Internal-only config for merge gate nodes. */
+export interface MergeTaskConfig extends BaseTaskConfig {
+  readonly executorType: 'merge';
+  readonly dockerImage?: never;
+}
+
+export type TaskConfig = WorktreeTaskConfig | DockerTaskConfig | SshTaskConfig | MergeTaskConfig;
 
 export interface ExternalDependency {
   readonly workflowId: string;
@@ -141,7 +163,7 @@ export type TaskDelta =
 
 // ── Task Create Options (alias for TaskConfig) ──────────────
 
-export type TaskCreateOptions = Partial<TaskConfig>;
+export type TaskCreateOptions = TaskConfig;
 
 // ── Helper to create a new TaskState ────────────────────────
 
