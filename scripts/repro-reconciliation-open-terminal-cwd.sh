@@ -146,6 +146,6 @@ fi
 
 echo ""
 echo "PASS: reconciliation open-terminal cwd is a pool worktree path"
-grep -E 'WorktreeFamiliar|getRestoredTerminalSpec|effective cwd' "$TMP/open.log" | tail -5 || true
+grep -E 'WorktreeExecutor|getRestoredTerminalSpec|effective cwd' "$TMP/open.log" | tail -5 || true
 
 exit 0

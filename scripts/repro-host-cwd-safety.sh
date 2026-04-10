@@ -95,9 +95,9 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Gap 2 — worktree-familiar + base-familiar: autoCommit in host cwd
+# Gap 2 — worktree-executor + base-executor: autoCommit in host cwd
 # ---------------------------------------------------------------------------
-echo "==> Gap 2: worktree-familiar (autoCommit stages host WIP)"
+echo "==> Gap 2: worktree-executor (autoCommit stages host WIP)"
 
 git -C "$INVOKER_REPO" checkout -b experiment/host-wip >/dev/null 2>&1
 echo "accidental WIP" > "$INVOKER_REPO/wip-file.txt"
@@ -167,9 +167,9 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Gap 6 — worktree-familiar: HEAD divergence between host and pool
+# Gap 6 — worktree-executor: HEAD divergence between host and pool
 # ---------------------------------------------------------------------------
-echo "==> Gap 6: worktree-familiar (HEAD SHA differs between host and pool)"
+echo "==> Gap 6: worktree-executor (HEAD SHA differs between host and pool)"
 
 INVOKER_HEAD="$(git -C "$INVOKER_REPO" rev-parse HEAD)"
 POOL_HEAD="$(git -C "$POOL_CLONE" rev-parse HEAD)"

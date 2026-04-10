@@ -173,7 +173,7 @@ invoker_e2e_ssh_init() {
 # Combined: prune worktrees + cleanup path + cleanup keys + base cleanup.
 # --------------------------------------------------------------------------- #
 invoker_e2e_ssh_full_cleanup() {
-  # Prune worktrees (both local and those created by SSH familiar on localhost).
+  # Prune worktrees (both local and those created by SSH executor on localhost).
   git -C "$INVOKER_E2E_REPO_ROOT" worktree prune 2>/dev/null || true
   # Clean up bashrc PATH injection.
   invoker_e2e_ssh_cleanup_path

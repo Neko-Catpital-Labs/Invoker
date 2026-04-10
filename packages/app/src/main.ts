@@ -870,7 +870,7 @@ function setupGuiMode(): void {
     });
 
     ipcMain.handle('invoker:stop', async () => {
-      console.log(`[ipc] stop — destroying all familiars`);
+      console.log(`[ipc] stop — destroying all executors`);
       await Promise.all(executorRegistry.getAll().map(f => f.destroyAll()));
       const allTasks = orchestrator.getAllTasks();
       for (const task of allTasks) {

@@ -1,0 +1,29 @@
+name: "Repro: Check packages exist in worktree"
+description: Verify packages directories exist after worktree creation and provision
+onFinish: none
+mergeMode: manual
+baseBranch: master
+repoUrl: git@github.com:EdbertChan/Invoker.git
+familiarType: worktree
+
+tasks:
+  - id: verify-packages-exist
+    description: "List packages directory and verify data-store exists"
+    command: |
+      echo "=== Current directory ==="
+      pwd
+      echo "=== Git HEAD ==="
+      git log --oneline -1
+      echo "=== Packages directory ==="
+      ls -la packages/ | head -15
+      echo "=== Check if packages/data-store exists ==="
+      if [ -d packages/data-store ]; then
+        echo "✓ packages/data-store EXISTS"
+        ls -la packages/data-store/ | head -10
+      else
+        echo "✗ packages/data-store MISSING"
+        exit 1
+      fi
+      echo "=== Trying the original grep ==="
+      grep -rn 'SQLiteAdapter' packages/data-store --include='*.ts' | head -3 || echo "Grep failed with exit code: $?"
+    dependencies: []

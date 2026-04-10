@@ -2,7 +2,7 @@
  * AgentRegistry — Registry for pluggable AI agents.
  *
  * Maps agent names to ExecutionAgent / PlanningAgent instances.
- * Familiars look up agents by name (e.g. 'claude') at task execution time.
+ * Executors look up agents by name (e.g. 'claude') at task execution time.
  */
 
 import type { ExecutionAgent, PlanningAgent } from './agent.js';

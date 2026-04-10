@@ -6,7 +6,7 @@
 # without falling back to host repo (which would risk data loss).
 #
 # Target failure eliminated by upstream:
-#   "Task ... has no workspace path (familiar=ssh). This task requires
+#   "Task ... has no workspace path (executor=ssh). This task requires
 #   a managed workspace but workspace metadata is missing"
 #
 # Requirements: sqlite3, git, built app (dist/main.js), configured SSH target.
@@ -125,7 +125,7 @@ tasks:
   - id: ssh-managed-task
     description: "SSH task with managed workspace"
     command: "echo 'SSH managed workspace test'; pwd"
-    familiarType: ssh
+    executorType: ssh
     remoteTargetId: ${REMOTE_TARGET_ID}
 EOF
 
@@ -234,7 +234,7 @@ if grep -qi "workspace metadata is missing\|missing-managed-workspace-metadata\|
   echo "      The task has persisted workspacePath=$WORKSPACE_PATH but open-terminal"
   echo "      still cannot resolve it correctly."
   echo ""
-  grep -i "workspace\|metadata\|missing\|familiar" "$OPEN_LOG" | head -10 || true
+  grep -i "workspace\|metadata\|missing\|executor" "$OPEN_LOG" | head -10 || true
   exit 1
 fi
 
@@ -265,7 +265,7 @@ echo "✓ open-terminal did not report missing workspace metadata"
 echo "✓ Deterministic behavior verified"
 echo ""
 echo "The target failure from the plan has been eliminated:"
-echo '  "Task ... has no workspace path (familiar=ssh). This task requires'
+echo '  "Task ... has no workspace path (executor=ssh). This task requires'
 echo '   a managed workspace but workspace metadata is missing"'
 echo ""
 

@@ -378,33 +378,10 @@ export class SQLiteAdapter implements PersistenceAdapter {
       'ALTER TABLE tasks ADD COLUMN last_agent_session_id TEXT',
       'ALTER TABLE tasks ADD COLUMN last_agent_name TEXT',
       'ALTER TABLE tasks ADD COLUMN external_dependencies TEXT',
+      'ALTER TABLE tasks ADD COLUMN executor_type TEXT',
     ];
     for (const sql of migrations) {
       try { this.db.run(sql); } catch { /* Column already exists */ }
-    }
-
-    // Migrate familiar_type → executor_type (idempotent rename-or-add)
-    try {
-      const tableInfo = this.queryAll('PRAGMA table_info(tasks)') as Array<{ name: string }>;
-      const columnNames = tableInfo.map(c => c.name);
-      const hasFamiliarType = columnNames.includes('familiar_type');
-      const hasExecutorType = columnNames.includes('executor_type');
-
-      if (hasFamiliarType && hasExecutorType) {
-        // Both columns exist (partial migration): copy data and drop old column
-        this.db.run('UPDATE tasks SET executor_type = familiar_type WHERE familiar_type IS NOT NULL AND executor_type IS NULL');
-        // SQLite doesn't support DROP COLUMN directly, so we'd need a full table rebuild
-        // For now, just leave familiar_type - it will be ignored by the app
-      } else if (hasFamiliarType && !hasExecutorType) {
-        // Old schema: rename familiar_type to executor_type
-        this.db.run('ALTER TABLE tasks RENAME COLUMN familiar_type TO executor_type');
-      } else if (!hasFamiliarType && !hasExecutorType) {
-        // New schema missing executor_type: add it
-        this.db.run('ALTER TABLE tasks ADD COLUMN executor_type TEXT');
-      }
-      // else: hasExecutorType && !hasFamiliarType (already migrated, do nothing)
-    } catch {
-      // Migration already complete or failed
     }
 
     // Replace old attempt_number index with created_at index
@@ -769,7 +746,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
           console.log(
             `[merge-gate-workspace] sqlite.updateTask mergeNode task=${taskId} ` +
               `workspace_path ${row.prevPath ?? 'NULL'} → ${nextWs ?? 'NULL'} ` +
-              '(caller sets familiar worktree path and/or gate clone path)',
+              '(caller sets executor worktree path and/or gate clone path)',
           );
         }
       } catch {

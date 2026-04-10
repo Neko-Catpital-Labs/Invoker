@@ -532,14 +532,14 @@ describe('Flow 5: dagMutation via spawn_experiments', () => {
       h.completeTask(id);
     }
 
-    // Reconciliation is auto-started as running; drive the executor so MockFamiliar emits needs_input
+    // Reconciliation is auto-started as running; drive the executor so MockExecutor emits needs_input
     let reconTask = h.getAllTasks().find(t => t.id.includes('reconciliation'));
     expect(reconTask).toBeDefined();
     if (reconTask!.status === 'running') {
       await h.executor.executeTasks([reconTask!]);
     }
     reconTask = h.getTask(reconTask!.id)!;
-    // WorktreeExecutor emits needs_input; harness MockFamiliar auto-completes → awaiting_approval (recon has requiresManualApproval)
+    // WorktreeExecutor emits needs_input; harness MockExecutor auto-completes → awaiting_approval (recon has requiresManualApproval)
     expect(['needs_input', 'awaiting_approval']).toContain(reconTask.status);
 
     // Select experiment v1 via selectExperiment

@@ -13,7 +13,7 @@ import { EventEmitter } from 'events';
  * For merge nodes (no command/prompt), this simulates the executor's
  * handleProcessExit(0) path which immediately completes.
  */
-function createAutoCompleteFamiliar() {
+function createAutoCompleteExecutor() {
   let completeCallback: ((response: WorkResponse) => void) | undefined;
   return {
     type: 'worktree',
@@ -359,16 +359,16 @@ describe('TaskRunner', () => {
         getTask: () => undefined,
         handleWorkerResponse,
       };
-      const throwingFamiliar = {
+      const throwingExecutor = {
         type: 'worktree',
         start: async () => { throw new Error('worktree creation failed'); },
         onOutput: () => () => {},
         onComplete: () => () => {},
       };
       const registry = {
-        getDefault: () => throwingFamiliar,
-        get: () => throwingFamiliar,
-        getAll: () => [throwingFamiliar],
+        getDefault: () => throwingExecutor,
+        get: () => throwingExecutor,
+        getAll: () => [throwingExecutor],
       };
       const onComplete = vi.fn();
 
@@ -398,16 +398,16 @@ describe('TaskRunner', () => {
         getTask: () => undefined,
         handleWorkerResponse,
       };
-      const throwingFamiliar = {
+      const throwingExecutor = {
         type: 'worktree',
         start: async () => { throw new Error('bad key'); },
         onOutput: () => () => {},
         onComplete: () => () => {},
       };
       const registry = {
-        getDefault: () => throwingFamiliar,
-        get: () => throwingFamiliar,
-        getAll: () => [throwingFamiliar],
+        getDefault: () => throwingExecutor,
+        get: () => throwingExecutor,
+        getAll: () => [throwingExecutor],
       };
       const onComplete = vi.fn();
 
@@ -425,7 +425,7 @@ describe('TaskRunner', () => {
       expect(handleWorkerResponse).toHaveBeenCalledWith(
         expect.objectContaining({
           outputs: expect.objectContaining({
-            error: expect.stringContaining('Familiar startup failed (worktree): bad key'),
+            error: expect.stringContaining('Executor startup failed (worktree): bad key'),
           }),
         }),
       );
@@ -437,16 +437,16 @@ describe('TaskRunner', () => {
         getTask: () => undefined,
         handleWorkerResponse,
       };
-      const throwingFamiliar = {
+      const throwingExecutor = {
         type: 'worktree',
         start: async () => { throw new Error('bad key'); },
         onOutput: () => () => {},
         onComplete: () => () => {},
       };
       const registry = {
-        getDefault: () => throwingFamiliar,
-        get: () => throwingFamiliar,
-        getAll: () => [throwingFamiliar],
+        getDefault: () => throwingExecutor,
+        get: () => throwingExecutor,
+        getAll: () => [throwingExecutor],
       };
       const onComplete = vi.fn();
 
@@ -481,16 +481,16 @@ describe('TaskRunner', () => {
       startupErr.workspacePath = '~/.invoker/worktrees/repo/task-1';
       startupErr.branch = 'experiment/task-1-abc12345';
       startupErr.agentSessionId = 'sess-start-1';
-      const throwingFamiliar = {
+      const throwingExecutor = {
         type: 'ssh',
         start: async () => { throw startupErr; },
         onOutput: () => () => {},
         onComplete: () => () => {},
       };
       const registry = {
-        getDefault: () => throwingFamiliar,
-        get: () => throwingFamiliar,
-        getAll: () => [throwingFamiliar],
+        getDefault: () => throwingExecutor,
+        get: () => throwingExecutor,
+        getAll: () => [throwingExecutor],
       };
 
       const executor = new TaskRunner({
@@ -519,7 +519,7 @@ describe('TaskRunner', () => {
       expect(handleWorkerResponse).toHaveBeenCalledWith(
         expect.objectContaining({
           outputs: expect.objectContaining({
-            error: expect.stringContaining('Familiar startup failed (ssh): merge conflict'),
+            error: expect.stringContaining('Executor startup failed (ssh): merge conflict'),
           }),
         }),
       );
@@ -628,7 +628,7 @@ describe('TaskRunner', () => {
         },
       }));
 
-      const capturingFamiliar = {
+      const capturingExecutor = {
         type: 'worktree',
         start: async (req: any) => {
           capturedRequest = req;
@@ -654,9 +654,9 @@ describe('TaskRunner', () => {
           updateTask: vi.fn(),
         } as any,
         executorRegistry: {
-          getDefault: () => capturingFamiliar,
-          get: () => capturingFamiliar,
-          getAll: () => [capturingFamiliar],
+          getDefault: () => capturingExecutor,
+          get: () => capturingExecutor,
+          getAll: () => [capturingExecutor],
         } as any,
         cwd: '/tmp',
       });
@@ -733,7 +733,7 @@ describe('TaskRunner', () => {
         execution: { branch: 'experiment/dep-a-abc123' },
       }));
 
-      const capturingFamiliar = {
+      const capturingExecutor = {
         type: 'worktree',
         start: async (req: any) => {
           capturedRequest = req;
@@ -754,9 +754,9 @@ describe('TaskRunner', () => {
         } as any,
         persistence: { updateTask: vi.fn() } as any,
         executorRegistry: {
-          getDefault: () => capturingFamiliar,
-          get: () => capturingFamiliar,
-          getAll: () => [capturingFamiliar],
+          getDefault: () => capturingExecutor,
+          get: () => capturingExecutor,
+          getAll: () => [capturingExecutor],
         } as any,
         cwd: '/tmp',
       });
@@ -909,7 +909,7 @@ describe('TaskRunner', () => {
         execution: { branch: 'experiment/dep-a-abc123' },
       }));
 
-      const capturingFamiliar = {
+      const capturingExecutor = {
         type: 'worktree',
         start: async (req: any) => {
           capturedRequest = req;
@@ -930,9 +930,9 @@ describe('TaskRunner', () => {
         } as any,
         persistence: { updateTask: vi.fn() } as any,
         executorRegistry: {
-          getDefault: () => capturingFamiliar,
-          get: () => capturingFamiliar,
-          getAll: () => [capturingFamiliar],
+          getDefault: () => capturingExecutor,
+          get: () => capturingExecutor,
+          getAll: () => [capturingExecutor],
         } as any,
         cwd: '/tmp',
       });
@@ -995,7 +995,7 @@ describe('TaskRunner', () => {
       try {
         const heartbeats: string[] = [];
         const handle = { executionId: 'exec-slow', taskId: 'slow-start' };
-        const slowFamiliar = {
+        const slowExecutor = {
           type: 'worktree',
           start: vi.fn(async () => {
             await new Promise<void>((r) => { setTimeout(r, 65_000); });
@@ -1012,9 +1012,9 @@ describe('TaskRunner', () => {
           orchestrator: { getTask: () => undefined, handleWorkerResponse: vi.fn() } as any,
           persistence: { updateTask: vi.fn() } as any,
           executorRegistry: {
-            getDefault: () => slowFamiliar,
-            get: () => slowFamiliar,
-            getAll: () => [slowFamiliar],
+            getDefault: () => slowExecutor,
+            get: () => slowExecutor,
+            getAll: () => [slowExecutor],
           } as any,
           cwd: '/tmp',
           callbacks: {
@@ -1028,7 +1028,7 @@ describe('TaskRunner', () => {
         await vi.advanceTimersByTimeAsync(35_000);
         await done;
         expect(heartbeats).toEqual(['slow-start', 'slow-start']);
-        expect(slowFamiliar.start).toHaveBeenCalledTimes(1);
+        expect(slowExecutor.start).toHaveBeenCalledTimes(1);
       } finally {
         vi.useRealTimers();
       }
@@ -1038,7 +1038,7 @@ describe('TaskRunner', () => {
   describe('baseBranch in WorkRequest', () => {
     it('includes workflow baseBranch in request inputs', async () => {
       let capturedRequest: any;
-      const capturingFamiliar = {
+      const capturingExecutor = {
         type: 'worktree',
         start: async (req: any) => {
           capturedRequest = req;
@@ -1049,9 +1049,9 @@ describe('TaskRunner', () => {
         onHeartbeat: () => () => {},
       };
       const registry = {
-        getDefault: () => capturingFamiliar,
-        get: () => capturingFamiliar,
-        getAll: () => [capturingFamiliar],
+        getDefault: () => capturingExecutor,
+        get: () => capturingExecutor,
+        getAll: () => [capturingExecutor],
       };
       const persistence = {
         updateTask: vi.fn(),
@@ -1082,7 +1082,7 @@ describe('TaskRunner', () => {
 
     it('uses defaultBranch when workflow has no baseBranch', async () => {
       let capturedRequest: any;
-      const capturingFamiliar = {
+      const capturingExecutor = {
         type: 'worktree',
         start: async (req: any) => {
           capturedRequest = req;
@@ -1093,9 +1093,9 @@ describe('TaskRunner', () => {
         onHeartbeat: () => () => {},
       };
       const registry = {
-        getDefault: () => capturingFamiliar,
-        get: () => capturingFamiliar,
-        getAll: () => [capturingFamiliar],
+        getDefault: () => capturingExecutor,
+        get: () => capturingExecutor,
+        getAll: () => [capturingExecutor],
       };
       const persistence = {
         updateTask: vi.fn(),
@@ -1127,7 +1127,7 @@ describe('TaskRunner', () => {
 
     it('omits baseBranch when neither workflow nor defaultBranch is set', async () => {
       let capturedRequest: any;
-      const capturingFamiliar = {
+      const capturingExecutor = {
         type: 'worktree',
         start: async (req: any) => {
           capturedRequest = req;
@@ -1138,9 +1138,9 @@ describe('TaskRunner', () => {
         onHeartbeat: () => () => {},
       };
       const registry = {
-        getDefault: () => capturingFamiliar,
-        get: () => capturingFamiliar,
-        getAll: () => [capturingFamiliar],
+        getDefault: () => capturingExecutor,
+        get: () => capturingExecutor,
+        getAll: () => [capturingExecutor],
       };
       const persistence = {
         updateTask: vi.fn(),
@@ -3366,11 +3366,11 @@ describe('TaskRunner', () => {
         setTaskAwaitingApproval: vi.fn(),
       };
 
-      const mockFamiliar = createAutoCompleteFamiliar();
+      const mockExecutor = createAutoCompleteExecutor();
       const executor = new TaskRunner({
         orchestrator: orchestrator as any,
         persistence: { loadWorkflow: () => ({ onFinish: 'none', mergeMode: 'manual', baseBranch: 'master', featureBranch: 'feature/wf-1', name: 'Test' }), updateTask: vi.fn() } as any,
-        executorRegistry: { getDefault: () => mockFamiliar, get: () => null, getAll: () => [] } as any,
+        executorRegistry: { getDefault: () => mockExecutor, get: () => null, getAll: () => [] } as any,
         cwd: '/tmp',
       });
 
@@ -3414,11 +3414,11 @@ describe('TaskRunner', () => {
         setTaskAwaitingApproval: vi.fn(),
       };
 
-      const mockFamiliar = createAutoCompleteFamiliar();
+      const mockExecutor = createAutoCompleteExecutor();
       const executor = new TaskRunner({
         orchestrator: orchestrator as any,
         persistence: { loadWorkflow: () => ({ onFinish: 'merge', mergeMode: 'automatic', baseBranch: 'master', featureBranch: 'feature/wf-1', name: 'Test' }), updateTask: vi.fn() } as any,
-        executorRegistry: { getDefault: () => mockFamiliar, get: () => null, getAll: () => [] } as any,
+        executorRegistry: { getDefault: () => mockExecutor, get: () => null, getAll: () => [] } as any,
         cwd: '/tmp',
       });
 
@@ -3479,7 +3479,7 @@ describe('TaskRunner', () => {
         setTaskAwaitingApproval: vi.fn(),
       };
 
-      const mockFamiliar = createAutoCompleteFamiliar();
+      const mockExecutor = createAutoCompleteExecutor();
       const executor = new TaskRunner({
         orchestrator: orchestrator as any,
         persistence: {
@@ -3492,7 +3492,7 @@ describe('TaskRunner', () => {
           }),
           updateTask: vi.fn(),
         } as any,
-        executorRegistry: { getDefault: () => mockFamiliar, get: () => null, getAll: () => [] } as any,
+        executorRegistry: { getDefault: () => mockExecutor, get: () => null, getAll: () => [] } as any,
         cwd: '/tmp',
       });
 
@@ -3554,7 +3554,7 @@ describe('TaskRunner', () => {
         setTaskAwaitingApproval: vi.fn(),
       };
 
-      const mockFamiliar = createAutoCompleteFamiliar();
+      const mockExecutor = createAutoCompleteExecutor();
       const executor = new TaskRunner({
         orchestrator: orchestrator as any,
         persistence: {
@@ -3567,7 +3567,7 @@ describe('TaskRunner', () => {
           }),
           updateTask: vi.fn(),
         } as any,
-        executorRegistry: { getDefault: () => mockFamiliar, get: () => null, getAll: () => [] } as any,
+        executorRegistry: { getDefault: () => mockExecutor, get: () => null, getAll: () => [] } as any,
         cwd: '/tmp',
       });
 
@@ -3626,7 +3626,7 @@ describe('TaskRunner', () => {
       const executor = new TaskRunner({
         orchestrator: orchestrator as any,
         persistence: { loadWorkflow: () => ({ onFinish: 'merge', mergeMode: 'automatic', baseBranch: 'master', featureBranch: 'feature/wf-2', name: 'Test' }), updateTask: vi.fn() } as any,
-        executorRegistry: { getDefault: () => createAutoCompleteFamiliar(), get: () => null, getAll: () => [] } as any,
+        executorRegistry: { getDefault: () => createAutoCompleteExecutor(), get: () => null, getAll: () => [] } as any,
         cwd: '/tmp',
       });
 
@@ -3688,7 +3688,7 @@ describe('TaskRunner', () => {
       const executor = new TaskRunner({
         orchestrator: orchestrator as any,
         persistence: { loadWorkflow: () => ({ onFinish: 'merge', mergeMode: 'automatic', baseBranch: 'master', featureBranch: 'feature/wf-3', name: 'Test' }), updateTask: vi.fn() } as any,
-        executorRegistry: { getDefault: () => createAutoCompleteFamiliar(), get: () => null, getAll: () => [] } as any,
+        executorRegistry: { getDefault: () => createAutoCompleteExecutor(), get: () => null, getAll: () => [] } as any,
         cwd: '/tmp',
       });
 
@@ -4250,7 +4250,7 @@ describe('TaskRunner', () => {
       const executor = new TaskRunner({
         orchestrator: orchestrator as any,
         persistence: { loadWorkflow: () => ({ onFinish: 'merge', mergeMode: 'automatic', baseBranch: 'master', featureBranch: 'feature/wf-msg', name: 'Test' }), updateTask: vi.fn() } as any,
-        executorRegistry: { getDefault: () => createAutoCompleteFamiliar(), get: () => null, getAll: () => [] } as any,
+        executorRegistry: { getDefault: () => createAutoCompleteExecutor(), get: () => null, getAll: () => [] } as any,
         cwd: '/tmp',
       });
 
@@ -4592,12 +4592,12 @@ describe('TaskRunner', () => {
         config: { executorType: 'ssh', remoteTargetId: 'do-droplet' },
       });
 
-      const familiar1 = executor.selectExecutor(task);
-      expect(familiar1.type).toBe('ssh');
-      expect((familiar1 as any).sshKeyPath).toBe('/old/key');
+      const executor1 = executor.selectExecutor(task);
+      expect(executor1.type).toBe('ssh');
+      expect((executor1 as any).sshKeyPath).toBe('/old/key');
 
-      const familiar2 = executor.selectExecutor(task);
-      expect((familiar2 as any).sshKeyPath).toBe('/new/key');
+      const executor2 = executor.selectExecutor(task);
+      expect((executor2 as any).sshKeyPath).toBe('/new/key');
 
       expect(provider).toHaveBeenCalledTimes(2);
     });
@@ -4936,15 +4936,15 @@ describe('TaskRunner', () => {
         config: { executorType: 'ssh', remoteTargetId: 'remote-b' },
       });
 
-      const familiar1 = executor.selectExecutor(task1);
-      const familiar2 = executor.selectExecutor(task2);
-      const familiar3 = executor.selectExecutor(task3);
+      const executor1 = executor.selectExecutor(task1);
+      const executor2 = executor.selectExecutor(task2);
+      const executor3 = executor.selectExecutor(task3);
 
       // task1 and task2 share the same remoteTargetId → same executor instance
-      expect(familiar1).toBe(familiar2);
+      expect(executor1).toBe(executor2);
       // task3 has a different remoteTargetId → different executor instance
-      expect(familiar1).not.toBe(familiar3);
-      expect(familiar2).not.toBe(familiar3);
+      expect(executor1).not.toBe(executor3);
+      expect(executor2).not.toBe(executor3);
     });
 
     it('does not cache non-SSH executors', () => {
@@ -4969,16 +4969,16 @@ describe('TaskRunner', () => {
         config: { executorType: 'worktree' },
       });
 
-      const familiar1 = executor.selectExecutor(task1);
-      const familiar2 = executor.selectExecutor(task2);
+      const executor1 = executor.selectExecutor(task1);
+      const executor2 = executor.selectExecutor(task2);
 
-      // Worktree familiars are created fresh each time (lazy registration creates new instances)
+      // Worktree executors are created fresh each time (lazy registration creates new instances)
       // Both should be worktree type but may be different instances
-      expect(familiar1.type).toBe('worktree');
-      expect(familiar2.type).toBe('worktree');
+      expect(executor1.type).toBe('worktree');
+      expect(executor2.type).toBe('worktree');
     });
 
-    it('clearSshFamiliarCache removes all cached SSH executors', () => {
+    it('clearSshExecutorCache removes all cached SSH executors', () => {
       const remoteTargets = {
         'remote-a': {
           host: 'dev.example.com',
@@ -5005,12 +5005,12 @@ describe('TaskRunner', () => {
         config: { executorType: 'ssh', remoteTargetId: 'remote-a' },
       });
 
-      const familiar1 = executor.selectExecutor(task1);
-      executor.clearSshFamiliarCache();
-      const familiar2 = executor.selectExecutor(task2);
+      const executor1 = executor.selectExecutor(task1);
+      executor.clearSshExecutorCache();
+      const executor2 = executor.selectExecutor(task2);
 
       // After clearing cache, a new executor instance should be created
-      expect(familiar1).not.toBe(familiar2);
+      expect(executor1).not.toBe(executor2);
     });
 
     it('throws when SSH task has no remoteTargetId', () => {
@@ -5058,7 +5058,7 @@ describe('TaskRunner', () => {
 
   describe('metadata persistence hardening', () => {
     it('fails fast when executor returns handle without workspacePath', async () => {
-      const badFamiliar = {
+      const badExecutor = {
         type: 'bad-executor',
         start: vi.fn().mockResolvedValue({
           executionId: 'exec-1',
@@ -5092,9 +5092,9 @@ describe('TaskRunner', () => {
           updateTask: updateSpy,
         } as any,
         executorRegistry: {
-          getDefault: () => badFamiliar,
-          get: () => badFamiliar,
-          getAll: () => [badFamiliar],
+          getDefault: () => badExecutor,
+          get: () => badExecutor,
+          getAll: () => [badExecutor],
         } as any,
         cwd: '/tmp',
       });
@@ -5113,7 +5113,7 @@ describe('TaskRunner', () => {
     });
 
     it('persists workspacePath and branch from managed SSH executor start', async () => {
-      const managedSshFamiliar = {
+      const managedSshExecutor = {
         type: 'ssh',
         start: vi.fn().mockResolvedValue({
           executionId: 'exec-ssh-1',
@@ -5159,9 +5159,9 @@ describe('TaskRunner', () => {
           updateTask: updateSpy,
         } as any,
         executorRegistry: {
-          getDefault: () => managedSshFamiliar,
-          get: () => managedSshFamiliar,
-          getAll: () => [managedSshFamiliar],
+          getDefault: () => managedSshExecutor,
+          get: () => managedSshExecutor,
+          getAll: () => [managedSshExecutor],
         } as any,
         cwd: '/tmp',
       });
@@ -5183,7 +5183,7 @@ describe('TaskRunner', () => {
     });
 
     it('persists metadata on error path when executor.start throws', async () => {
-      const failingFamiliar = {
+      const failingExecutor = {
         type: 'ssh',
         start: vi.fn().mockRejectedValue(Object.assign(
           new Error('SSH connection failed'),
@@ -5219,9 +5219,9 @@ describe('TaskRunner', () => {
           updateTask: updateSpy,
         } as any,
         executorRegistry: {
-          getDefault: () => failingFamiliar,
-          get: () => failingFamiliar,
-          getAll: () => [failingFamiliar],
+          getDefault: () => failingExecutor,
+          get: () => failingExecutor,
+          getAll: () => [failingExecutor],
         } as any,
         cwd: '/tmp',
       });
@@ -5244,14 +5244,14 @@ describe('TaskRunner', () => {
         expect.objectContaining({
           status: 'failed',
           outputs: expect.objectContaining({
-            error: expect.stringContaining('Familiar startup failed'),
+            error: expect.stringContaining('Executor startup failed'),
           }),
         }),
       );
     });
 
     it('allows BYO mode executor with workspacePath but no branch', async () => {
-      const byoFamiliar = {
+      const byoExecutor = {
         type: 'ssh',
         start: vi.fn().mockResolvedValue({
           executionId: 'exec-byo-1',
@@ -5291,9 +5291,9 @@ describe('TaskRunner', () => {
           updateTask: updateSpy,
         } as any,
         executorRegistry: {
-          getDefault: () => byoFamiliar,
-          get: () => byoFamiliar,
-          getAll: () => [byoFamiliar],
+          getDefault: () => byoExecutor,
+          get: () => byoExecutor,
+          getAll: () => [byoExecutor],
         } as any,
         cwd: '/tmp',
       });
@@ -5324,7 +5324,7 @@ describe('TaskRunner', () => {
         let completeCallback: ((response: WorkResponse) => void) | undefined;
         const handle = { executionId: 'exec-gc-1', taskId: 'gc-task-1', workspacePath: '/tmp/mock-worktree' };
 
-        const gcFamiliar = {
+        const gcExecutor = {
           type: 'worktree',
           start: vi.fn(async () => {
             return handle;
@@ -5345,9 +5345,9 @@ describe('TaskRunner', () => {
           orchestrator: { getTask: () => undefined, handleWorkerResponse: vi.fn() } as any,
           persistence: { updateTask } as any,
           executorRegistry: {
-            getDefault: () => gcFamiliar,
-            get: () => gcFamiliar,
-            getAll: () => [gcFamiliar],
+            getDefault: () => gcExecutor,
+            get: () => gcExecutor,
+            getAll: () => [gcExecutor],
           } as any,
           cwd: '/tmp',
           callbacks: {
@@ -5360,7 +5360,7 @@ describe('TaskRunner', () => {
 
         // Wait for task to start
         await vi.runAllTimersAsync();
-        expect(gcFamiliar.onHeartbeat).toHaveBeenCalled();
+        expect(gcExecutor.onHeartbeat).toHaveBeenCalled();
 
         // Simulate heartbeats firing from BaseExecutor
         heartbeatCallbacks.forEach(cb => cb('gc-task-1'));
@@ -5406,7 +5406,7 @@ describe('TaskRunner', () => {
         let completeCallback: ((response: WorkResponse) => void) | undefined;
         const handle = { executionId: 'exec-gc-2', taskId: 'gc-task-2', workspacePath: '/tmp/mock-worktree' };
 
-        const gcFamiliar = {
+        const gcExecutor = {
           type: 'worktree',
           start: vi.fn(async () => {
             return handle;
@@ -5427,9 +5427,9 @@ describe('TaskRunner', () => {
           orchestrator: { getTask: () => undefined, handleWorkerResponse: vi.fn() } as any,
           persistence: { updateTask } as any,
           executorRegistry: {
-            getDefault: () => gcFamiliar,
-            get: () => gcFamiliar,
-            getAll: () => [gcFamiliar],
+            getDefault: () => gcExecutor,
+            get: () => gcExecutor,
+            getAll: () => [gcExecutor],
           } as any,
           cwd: '/tmp',
           callbacks: {
@@ -5444,7 +5444,7 @@ describe('TaskRunner', () => {
 
         // Wait for task to start
         await vi.runAllTimersAsync();
-        expect(gcFamiliar.onHeartbeat).toHaveBeenCalled();
+        expect(gcExecutor.onHeartbeat).toHaveBeenCalled();
 
         // Simulate continuous heartbeats over a long period
         for (let i = 0; i < 10; i++) {
@@ -5488,7 +5488,7 @@ describe('TaskRunner', () => {
         let completeCallback: ((response: WorkResponse) => void) | undefined;
         const handle = { executionId: 'exec-gc-3', taskId: 'gc-task-3', workspacePath: '/tmp/mock-worktree' };
 
-        const gcFamiliar = {
+        const gcExecutor = {
           type: 'worktree',
           start: vi.fn(async () => handle),
           onOutput: () => () => {},
@@ -5506,9 +5506,9 @@ describe('TaskRunner', () => {
           orchestrator: { getTask: () => undefined, handleWorkerResponse: vi.fn() } as any,
           persistence: { updateTask: vi.fn() } as any,
           executorRegistry: {
-            getDefault: () => gcFamiliar,
-            get: () => gcFamiliar,
-            getAll: () => [gcFamiliar],
+            getDefault: () => gcExecutor,
+            get: () => gcExecutor,
+            getAll: () => [gcExecutor],
           } as any,
           cwd: '/tmp',
           callbacks: {
@@ -5522,7 +5522,7 @@ describe('TaskRunner', () => {
         const done = executor.executeTask(task);
 
         await vi.runAllTimersAsync();
-        expect(gcFamiliar.onHeartbeat).toHaveBeenCalled();
+        expect(gcExecutor.onHeartbeat).toHaveBeenCalled();
 
         // Simulate heartbeat from executor
         heartbeatCallbacks.forEach(cb => cb('gc-task-3'));

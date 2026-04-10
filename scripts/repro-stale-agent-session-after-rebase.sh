@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Regression guard: after rebase-and-retry, pending downstream tasks must NOT keep
 # the previous run's agent_session_id (orchestrator restart clears it to NULL before
-# the next familiar.start()). A stale UUID is what the GUI can pass to
+# the next executor.start()). A stale UUID is what the GUI can pass to
 # `claude --resume`, which then errors with:
 #   No conversation found with session ID: …
 #

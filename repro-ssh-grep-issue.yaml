@@ -1,0 +1,27 @@
+name: "Repro: SSH grep directory issue"
+description: Minimal repro for packages/data-store grep failure
+onFinish: commit
+mergeMode: manual
+baseBranch: master
+repoUrl: git@github.com:EdbertChan/Invoker.git
+familiarType: worktree
+
+tasks:
+  - id: test-local-worktree-grep
+    description: "Test grep in worktree familiar (baseline)"
+    command: "ls -la packages/ && grep -rn 'SQLiteAdapter' packages/data-store --include='*.ts' | head -3"
+    dependencies: []
+
+  - id: debug-provision-pwd
+    description: "Debug: check if provision preserves working directory"
+    command: |
+      echo "=== Before provision simulation ==="
+      pwd
+      ls -la packages/ | head -5
+      echo "=== After eval (simulating provision) ==="
+      eval "echo '[provision] pnpm install (simulated)'"
+      pwd
+      ls -la packages/ | head -5
+      echo "=== After piping to bash -se ==="
+      echo 'pwd && ls -la packages/ | head -5' | bash -se
+    dependencies: []

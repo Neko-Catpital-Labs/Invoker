@@ -180,7 +180,7 @@ export class RepoPool {
 
   private async doAcquireWorktree(repoUrl: string, branch: string, base?: string, actionId?: string): Promise<AcquiredWorktree> {
     console.log(
-      `${RESTART_TO_BRANCH_TRACE} RepoPool.doAcquireWorktree branch=${branch} (bashPreserveOrReset here; BaseFamiliar.setupTaskBranch is not used for this path)`,
+      `${RESTART_TO_BRANCH_TRACE} RepoPool.doAcquireWorktree branch=${branch} (bashPreserveOrReset here; BaseExecutor.setupTaskBranch is not used for this path)`,
     );
     const clonePath = await this.ensureClone(repoUrl);
     const active = this.activeWorktrees.get(repoUrl) ?? new Set();

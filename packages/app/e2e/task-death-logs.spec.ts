@@ -101,7 +101,7 @@ test.describe('Task death logs', () => {
         changes: {
           status: 'failed',
           execution: {
-            error: 'Familiar startup failed (worktree): git not found',
+            error: 'Executor startup failed (worktree): git not found',
             exitCode: 1,
             completedAt: new Date(),
           },
@@ -112,7 +112,7 @@ test.describe('Task death logs', () => {
     await page.locator('[data-testid="rf__node-silent-fail"]').click();
 
     await expect(
-      page.locator('text=Familiar startup failed (worktree): git not found'),
+      page.locator('text=Executor startup failed (worktree): git not found'),
     ).toBeVisible({ timeout: 3000 });
     await expect(
       page.locator('text=Exit code: 1'),

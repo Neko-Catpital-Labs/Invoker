@@ -42,7 +42,7 @@ import {
 } from './conflict-resolver.js';
 import { DEFAULT_EXECUTION_AGENT } from './agent.js';
 
-/** Keeps `lastHeartbeatAt` fresh while `familiar.start()` is awaited (SSH remote setup/provision can take minutes). Matches BaseFamiliar default heartbeat cadence. */
+/** Keeps `lastHeartbeatAt` fresh while `executor.start()` is awaited (SSH remote setup/provision can take minutes). Matches BaseExecutor default heartbeat cadence. */
 const PRE_START_HEARTBEAT_INTERVAL_MS = 30_000;
 
 type StartupFailureMetadata = {
@@ -56,7 +56,7 @@ type StartupFailureMetadata = {
 
 export interface TaskRunnerCallbacks {
   onOutput?: (taskId: string, data: string) => void;
-  onSpawned?: (taskId: string, handle: ExecutorHandle, familiar: Executor) => void;
+  onSpawned?: (taskId: string, handle: ExecutorHandle, executor: Executor) => void;
   onComplete?: (taskId: string, response: WorkResponse) => void;
   onHeartbeat?: (taskId: string) => void;
 }
@@ -94,7 +94,7 @@ export interface TaskRunnerConfig {
     imageName?: string;
     secretsFile?: string;
   };
-  /** Shared execution agents (Claude, Codex). Passed into lazily constructed familiars. */
+  /** Shared execution agents (Claude, Codex). Passed into lazily constructed executors. */
   executionAgentRegistry?: AgentRegistry;
 }
 
@@ -115,7 +115,7 @@ export class TaskRunner {
   private dockerConfig: { imageName?: string; secretsFile?: string };
   private executionAgentRegistry?: AgentRegistry;
   /** Cache for SSH executors, keyed by remoteTargetId. One instance per target for correct git locking. */
-  private sshFamiliarCache = new Map<string, SshExecutor>();
+  private sshExecutorCache = new Map<string, SshExecutor>();
 
   /** Config default branch (e.g. master) for workflows without baseBranch. */
   getDefaultBranchHint(): string | undefined {
@@ -131,9 +131,9 @@ export class TaskRunner {
     baseBranchHint: string | undefined,
   ): Promise<void> {
     if (!repoUrl) return;
-    const familiar = this.executorRegistry.get('worktree');
-    if (!(familiar instanceof WorktreeExecutor)) return;
-    const pool = familiar.getRepoPool();
+    const executor = this.executorRegistry.get('worktree');
+    if (!(executor instanceof WorktreeExecutor)) return;
+    const pool = executor.getRepoPool();
     const baseBranch = baseBranchHint?.trim() || this.defaultBranch || 'master';
     await pool.refreshMirrorForRebase(repoUrl, baseBranch);
     const branches = this.collectManagedWorkflowBranches(workflowId);
@@ -146,10 +146,10 @@ export class TaskRunner {
   /** @internal */ async ensureRepoMirrorPath(repoUrl: string): Promise<string | undefined> {
     const trimmed = repoUrl.trim();
     if (!trimmed) return undefined;
-    const familiar = this.executorRegistry.get('worktree');
-    if (!(familiar instanceof WorktreeExecutor)) return undefined;
+    const executor = this.executorRegistry.get('worktree');
+    if (!(executor instanceof WorktreeExecutor)) return undefined;
     try {
-      return await familiar.getRepoPool().ensureClone(trimmed);
+      return await executor.getRepoPool().ensureClone(trimmed);
     } catch (err) {
       console.warn(`[merge] ensureRepoMirrorPath failed for ${trimmed}: ${err}`);
       return undefined;
@@ -192,12 +192,12 @@ export class TaskRunner {
   }
 
   /**
-   * Execute a single task through the familiar pipeline.
+   * Execute a single task through the executor pipeline.
    *
    * 1. Pivot tasks with variants → synthesize spawn_experiments response
    * 2. Build upstream context from completed dependencies
    * 3. Build WorkRequest with workspacePath
-   * 4. Start familiar → persist agentSessionId + workspacePath immediately
+   * 4. Start executor → persist agentSessionId + workspacePath immediately
    * 5. Wire output/completion callbacks
    * 6. On completion → feed response to orchestrator → auto-execute newly ready tasks
    */
@@ -233,7 +233,7 @@ export class TaskRunner {
 
   private async executeTaskInner(task: TaskState): Promise<void> {
     // Pivot tasks with experimentVariants: synthesize a spawn_experiments
-    // response instead of running through the familiar.
+    // response instead of running through the executor.
     if (task.config.pivot && task.config.experimentVariants && task.config.experimentVariants.length > 0) {
       const response: WorkResponse = {
         requestId: `req-${task.id}`,
@@ -327,18 +327,18 @@ export class TaskRunner {
       `${RESTART_TO_BRANCH_TRACE} executeTaskInner taskId=${task.id} WorkRequest built actionType=${request.actionType} repoUrl=${request.inputs.repoUrl ?? '(none)'} upstreamBranches=${JSON.stringify(request.inputs.upstreamBranches ?? [])}`,
     );
 
-    const familiar = this.selectExecutor(task);
+    const executor = this.selectExecutor(task);
     console.log(
-      `${RESTART_TO_BRANCH_TRACE} executeTaskInner taskId=${task.id} selectExecutor → type=${familiar.type} calling familiar.start()`,
+      `${RESTART_TO_BRANCH_TRACE} executeTaskInner taskId=${task.id} selectExecutor → type=${executor.type} calling executor.start()`,
     );
-    console.log(`[trace] TaskRunner: task=${task.id} calling familiar.start() type=${familiar.type}`);
+    console.log(`[trace] TaskRunner: task=${task.id} calling executor.start() type=${executor.type}`);
     const startT0 = Date.now();
     const preStartHeartbeatTimer = setInterval(() => {
       this.callbacks.onHeartbeat?.(task.id);
     }, PRE_START_HEARTBEAT_INTERVAL_MS);
     let handle: ExecutorHandle;
     try {
-      handle = await familiar.start(request);
+      handle = await executor.start(request);
     } catch (err) {
       const meta = err as StartupFailureMetadata;
       if (meta.workspacePath || meta.branch || meta.agentSessionId || meta.containerId) {
@@ -351,31 +351,31 @@ export class TaskRunner {
         }
         if (meta.containerId) execution.containerId = meta.containerId;
         this.persistence.updateTask(task.id, {
-          config: { executorType: familiar.type },
+          config: { executorType: executor.type },
           execution: execution as any,
         });
       }
       throw new Error(
-        `Familiar startup failed (${familiar.type}): ${err instanceof Error ? err.message : String(err)}`,
+        `Executor startup failed (${executor.type}): ${err instanceof Error ? err.message : String(err)}`,
         { cause: err },
       );
     } finally {
       clearInterval(preStartHeartbeatTimer);
     }
-    console.log(`[trace] TaskRunner: task=${task.id} familiar.start() returned after ${Date.now() - startT0}ms familiar=${familiar.type} sessionId=${handle.agentSessionId ?? 'none'} workspace=${handle.workspacePath ?? 'default'}`);
+    console.log(`[trace] TaskRunner: task=${task.id} executor.start() returned after ${Date.now() - startT0}ms executor=${executor.type} sessionId=${handle.agentSessionId ?? 'none'} workspace=${handle.workspacePath ?? 'default'}`);
 
     // Persist execution metadata immediately at task start — all fields explicit
     {
-      // Fail-fast: workspacePath must be provided by all familiars
+      // Fail-fast: workspacePath must be provided by all executors
       if (!handle.workspacePath) {
         throw new Error(
-          `Familiar "${familiar.type}" did not provide workspacePath for task "${task.id}". ` +
-          `All familiars must set workspacePath; refusing to fall back to host repo.`,
+          `Executor "${executor.type}" did not provide workspacePath for task "${task.id}". ` +
+          `All executors must set workspacePath; refusing to fall back to host repo.`,
         );
       }
 
       const changes = {
-        config: { executorType: familiar.type },
+        config: { executorType: executor.type },
         execution: {
           workspacePath: handle.workspacePath,
           branch: handle.branch ?? undefined,  // Explicit undefined when branch is not applicable (e.g., BYO mode)
@@ -392,7 +392,7 @@ export class TaskRunner {
       if (task.config.isMergeNode) {
         console.log(
           `[merge-gate-workspace] persistStartMetadata mergeNode=${task.id} ` +
-            `familiar workspacePath=${changes.execution.workspacePath} ` +
+            `executor workspacePath=${changes.execution.workspacePath} ` +
             '(gate clone path is written later in executeMergeNode)',
         );
       }
@@ -400,29 +400,29 @@ export class TaskRunner {
     }
 
     // Notify consumer about the spawned handle
-    this.callbacks.onSpawned?.(task.id, handle, familiar);
+    this.callbacks.onSpawned?.(task.id, handle, executor);
 
     // Wire output
-    familiar.onOutput(handle, (data) => {
+    executor.onOutput(handle, (data) => {
       this.callbacks.onOutput?.(task.id, data);
     });
 
     // Wire heartbeat
-    familiar.onHeartbeat(handle, () => {
+    executor.onHeartbeat(handle, () => {
       this.callbacks.onHeartbeat?.(task.id);
     });
 
     // Wait for completion and feed response to orchestrator
     return new Promise<void>((resolvePromise) => {
-      familiar.onComplete(handle, async (response: WorkResponse) => {
+      executor.onComplete(handle, async (response: WorkResponse) => {
         try {
           console.log(
             `${RESTART_TO_BRANCH_TRACE} resolvePromise | task.config.isMergeNode = ${task.config.isMergeNode}`,
           );
-          // Merge nodes: run consolidation/finish logic after familiar completes
+          // Merge nodes: run consolidation/finish logic after executor completes
           if (task.config.isMergeNode) {
             console.log(
-              `${RESTART_TO_BRANCH_TRACE} familiar.onComplete taskId=${task.id} isMergeNode → executeMergeNode (consolidate / gate)`,
+              `${RESTART_TO_BRANCH_TRACE} executor.onComplete taskId=${task.id} isMergeNode → executeMergeNode (consolidate / gate)`,
             );
             await this.executeMergeNode(task);
             resolvePromise();
@@ -530,16 +530,16 @@ export class TaskRunner {
         const cacheKey = `${targetId}|${configFingerprint}`;
 
         // Return cached executor if it exists for this target+config combo
-        const cached = this.sshFamiliarCache.get(cacheKey);
+        const cached = this.sshExecutorCache.get(cacheKey);
         if (cached) {
           console.log(`[trace] TaskRunner.selectExecutor: task=${task.id} effectiveType=ssh remoteTarget=${targetId} → ssh (cached)`);
           return cached;
         }
 
         // Drop any stale entries for this targetId so we don't accumulate dead caches.
-        for (const key of this.sshFamiliarCache.keys()) {
+        for (const key of this.sshExecutorCache.keys()) {
           if (key.startsWith(`${targetId}|`)) {
-            this.sshFamiliarCache.delete(key);
+            this.sshExecutorCache.delete(key);
           }
         }
 
@@ -554,7 +554,7 @@ export class TaskRunner {
           provisionCommand: target.provisionCommand,
         });
 
-        this.sshFamiliarCache.set(cacheKey, ssh);
+        this.sshExecutorCache.set(cacheKey, ssh);
         console.log(`[trace] TaskRunner.selectExecutor: task=${task.id} effectiveType=ssh remoteTarget=${targetId} → ssh (new, cached)`);
         return ssh;
       }
@@ -1132,11 +1132,11 @@ export class TaskRunner {
   }
 
   /**
-   * Clear the SSH familiar cache. Useful for testing or when remote target configs change.
-   * Does not call destroyAll() — cleanup happens via familiar lifecycle methods.
+   * Clear the SSH executor cache. Useful for testing or when remote target configs change.
+   * Does not call destroyAll() — cleanup happens via executor lifecycle methods.
    */
-  clearSshFamiliarCache(): void {
-    this.sshFamiliarCache.clear();
+  clearSshExecutorCache(): void {
+    this.sshExecutorCache.clear();
   }
 
   // ── Private Helpers ──────────────────────────────────────

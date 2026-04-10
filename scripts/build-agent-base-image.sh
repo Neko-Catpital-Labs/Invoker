@@ -3,7 +3,7 @@
 # build-agent-base-image.sh — generate the invoker/agent-base Docker image.
 #
 # This script is the SINGLE source of truth for the base image used by
-# DockerFamiliar. The Dockerfile content lives inline as a heredoc rather
+# DockerExecutor. The Dockerfile content lives inline as a heredoc rather
 # than as a committed file, because:
 #   - the base image is not consumed directly by users (they FROM it),
 #   - keeping it in one script makes the layer ownership obvious,
@@ -53,8 +53,8 @@ RUN git config --global --add safe.directory '*' \
     && git config --global user.name "Invoker Agent" \
     && git config --global user.email "invoker@local"
 
-# Default command keeps the container alive when DockerFamiliar starts it.
-# DockerFamiliar overrides Cmd to the same value; this default makes
+# Default command keeps the container alive when DockerExecutor starts it.
+# DockerExecutor overrides Cmd to the same value; this default makes
 # `docker run invoker/agent-base:latest` behave reasonably as well.
 CMD ["tail", "-f", "/dev/null"]
 DOCKERFILE

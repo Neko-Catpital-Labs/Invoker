@@ -68,7 +68,7 @@ describe('TaskPanel error display', () => {
 
   it('shows multiline error with stack trace', () => {
     const errorMsg =
-      'Familiar startup failed (ssh): bad key\n    at SshExecutor.start (ssh-executor.ts:42)';
+      'Executor startup failed (ssh): bad key\n    at SshExecutor.start (ssh-executor.ts:42)';
     const task = makeTask({
       execution: { error: errorMsg, exitCode: 1 },
     });

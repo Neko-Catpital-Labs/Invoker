@@ -1,0 +1,39 @@
+name: "Repro: SSH packages check"
+description: Debug why packages directories missing in SSH familiar worktree
+onFinish: none
+mergeMode: manual
+baseBranch: master
+repoUrl: git@github.com:EdbertChan/Invoker.git
+familiarType: ssh
+
+tasks:
+  - id: debug-remote-worktree
+    description: "Check remote worktree state and package directories"
+    remoteTargetId: remote_digital_ocean_1
+    command: |
+      echo "=== PWD and git info ==="
+      pwd
+      git log --oneline -1
+      git status --short
+      echo ""
+      echo "=== Check if packages exists ==="
+      if [ -d packages ]; then
+        echo "✓ packages/ directory EXISTS"
+        ls -la packages/ | head -20
+      else
+        echo "✗ packages/ directory MISSING"
+        echo "Top-level files:"
+        ls -la | head -20
+        exit 1
+      fi
+      echo ""
+      echo "=== Check specific package dirs ==="
+      for pkg in app data-store persistence; do
+        if [ -d "packages/$pkg" ]; then
+          echo "✓ packages/$pkg EXISTS"
+          ls "packages/$pkg" | head -5
+        else
+          echo "✗ packages/$pkg MISSING"
+        fi
+      done
+    dependencies: []

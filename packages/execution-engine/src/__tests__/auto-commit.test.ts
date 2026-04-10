@@ -1276,8 +1276,8 @@ describe('merge gate commit topology (real git)', () => {
     const bus = new TestBus();
     const orchestrator = new Orchestrator({ persistence, messageBus: bus, maxConcurrency: 10 });
     const registry = new ExecutorRegistry();
-    const wtFamiliar = new WorktreeExecutor({ cacheDir: join(tmpDir, 'cache') });
-    registry.register('worktree', wtFamiliar);
+    const wtExecutor = new WorktreeExecutor({ cacheDir: join(tmpDir, 'cache') });
+    registry.register('worktree', wtExecutor);
     const executor = new TaskRunner({
       orchestrator,
       persistence: persistence as any,

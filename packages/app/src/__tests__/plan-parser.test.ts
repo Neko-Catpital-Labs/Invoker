@@ -564,6 +564,24 @@ tasks:
     });
   });
 
+  it('parses executorType without any warning', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const yaml = `
+name: Executor Type Plan
+repoUrl: git@github.com:test/repo.git
+executorType: worktree
+tasks:
+  - id: build
+    description: Build the project
+    command: echo "build"
+    executorType: docker
+`;
+    const plan = parsePlan(yaml);
+    expect(plan.tasks[0].executorType).toBe('docker');
+    expect(warnSpy).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
   it('parses description field from plan YAML', () => {
     const yaml = [
       'name: "Test Plan"',

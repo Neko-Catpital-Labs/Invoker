@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { ExecutorRegistry } from '../registry.js';
-import type { Familiar } from '../executor.js';
+import type { Executor } from '../executor.js';
 
 const stubExecutor = (type: string): Executor => ({
   type,
@@ -45,7 +45,7 @@ describe('ExecutorRegistry', () => {
     expect(result).toBeUndefined();
   });
 
-  it('getAll returns all registered familiars', () => {
+  it('getAll returns all registered executors', () => {
     const worktree = stubExecutor('worktree');
     const docker = stubExecutor('docker');
 
@@ -58,7 +58,7 @@ describe('ExecutorRegistry', () => {
     expect(all).toContain(docker);
   });
 
-  it('getAll returns empty array when no familiars registered', () => {
+  it('getAll returns empty array when no executors registered', () => {
     const all = registry.getAll();
     expect(all).toEqual([]);
   });

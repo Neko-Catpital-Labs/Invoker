@@ -168,12 +168,12 @@ describe('A→B→C branch chain', { timeout: 120_000 }, () => {
     };
 
     const registry = new ExecutorRegistry();
-    const worktreeFamiliar = new WorktreeExecutor({
+    const worktreeExecutor = new WorktreeExecutor({
       cacheDir: join(tmpDir, 'branch-chain-cache'),
       worktreeBaseDir: join(tmpDir, 'branch-chain-wt'),
       claudeCommand: '/bin/echo',
     });
-    registry.register('worktree', worktreeFamiliar);
+    registry.register('worktree', worktreeExecutor);
 
     const executor = new TaskRunner({
       orchestrator: orchestrator as any,

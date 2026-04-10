@@ -13,7 +13,7 @@ const CONTAINER_CWD = '/app';
 
 /**
  * Secret-bearing environment variable keys that must be redacted from logs.
- * Centralized list ensures consistent redaction across all docker familiar logging.
+ * Centralized list ensures consistent redaction across all docker executor logging.
  */
 const SECRET_ENV_KEYS = [
   'ANTHROPIC_API_KEY',
@@ -83,7 +83,7 @@ function shellEscape(s: string): string {
 }
 
 /**
- * Familiar that runs tasks inside Docker containers.
+ * Executor that runs tasks inside Docker containers.
  *
  * The container image is treated as a static artifact: it declares its own
  * user, HOME, installed tools, and repo contents. DockerExecutor owns only
@@ -193,7 +193,7 @@ export class DockerExecutor extends BaseExecutor<ContainerEntry> {
   }
 
   // ---------------------------------------------------------------------------
-  // Familiar interface
+  // Executor interface
   // ---------------------------------------------------------------------------
 
   async start(request: WorkRequest): Promise<ExecutorHandle> {

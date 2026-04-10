@@ -1,6 +1,6 @@
 import type { TaskState } from './types.js';
 
-/** Plan YAML pivot + experimentVariants: executor never runs familiar on this node — no Claude session to resume. */
+/** Plan YAML pivot + experimentVariants: executor never runs on this node — no Claude session to resume. */
 export function isExperimentSpawnPivotTask(task: TaskState): boolean {
   const v = task.config.experimentVariants;
   return Boolean(task.config.pivot && v && v.length > 0);

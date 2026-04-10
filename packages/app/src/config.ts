@@ -121,22 +121,10 @@ function readJsonSafe(path: string): InvokerConfig {
 }
 
 export function loadConfig(): InvokerConfig {
-  const validateLegacyRoutingRules = (parsed: InvokerConfig): InvokerConfig => {
-    const rules = parsed.executorRoutingRules;
-    if (Array.isArray(rules)) {
-      for (const rule of rules) {
-        if (rule && typeof rule === 'object' && Object.prototype.hasOwnProperty.call(rule, 'familiarType')) {
-          throw new Error(`Legacy config field 'familiarType' detected in ~/.invoker/config.json executorRoutingRules. Rename to 'executorType' — no back-compat is provided.`);
-        }
-      }
-    }
-    return parsed;
-  };
-
   if (process.env.INVOKER_REPO_CONFIG_PATH) {
-    return validateLegacyRoutingRules(readJsonSafe(process.env.INVOKER_REPO_CONFIG_PATH));
+    return readJsonSafe(process.env.INVOKER_REPO_CONFIG_PATH);
   }
-  return validateLegacyRoutingRules(readJsonSafe(join(homedir(), '.invoker', 'config.json')));
+  return readJsonSafe(join(homedir(), '.invoker', 'config.json'));
 }
 
 /**

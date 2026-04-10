@@ -1,9 +1,9 @@
 /**
  * ExecutionAgent / PlanningAgent — Pluggable AI agent interfaces.
  *
- * Familiars own the spawn lifecycle (stdio, exit handling, worktree/container setup).
+ * Executors own the spawn lifecycle (stdio, exit handling, worktree/container setup).
  * Agents only provide command specs. This keeps the abstraction thin:
- * agents say *what* to run, familiars decide *how* to run it.
+ * agents say *what* to run, executors decide *how* to run it.
  */
 
 // ── Execution Agent ──────────────────────────────────────────

@@ -48,14 +48,14 @@ describe('Terminal routing via selectExecutor', () => {
   it('per-task handle map routes getTerminalSpec to correct executor', () => {
     const taskHandles = new Map<string, { handle: ExecutorHandle; executor: Executor }>();
 
-    const worktreeFamiliar = registry.getDefault();
+    const worktreeExecutor = registry.getDefault();
     const dockerTask = { config: { executorType: 'docker' }, execution: {} } as TaskState;
-    const dockerFamiliar = selectExecutor(registry, dockerTask);
+    const dockerExecutor = selectExecutor(registry, dockerTask);
 
     const worktreeHandle = { executionId: 'worktree-1', taskId: 'task-worktree' };
     const dockerHandle = { executionId: 'docker-1', taskId: 'task-docker' };
-    taskHandles.set('task-worktree', { handle: worktreeHandle, executor: worktreeFamiliar });
-    taskHandles.set('task-docker', { handle: dockerHandle, executor: dockerFamiliar });
+    taskHandles.set('task-worktree', { handle: worktreeHandle, executor: worktreeExecutor });
+    taskHandles.set('task-docker', { handle: dockerHandle, executor: dockerExecutor });
 
     const worktreeEntry = taskHandles.get('task-worktree')!;
     expect(worktreeEntry.executor.type).toBe('worktree');

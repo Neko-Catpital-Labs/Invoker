@@ -43,7 +43,7 @@ command: "cd packages/surfaces && pnpm test"
 
 ### Worktree provisioning
 
-Git worktrees created by `WorktreeFamiliar` run `pnpm install --frozen-lockfile` to provision dependencies. No rebuild step needed.
+Git worktrees created by `WorktreeExecutor` run `pnpm install --frozen-lockfile` to provision dependencies. No rebuild step needed.
 
 Verify worktree provisioning end-to-end:
 
@@ -51,11 +51,11 @@ Verify worktree provisioning end-to-end:
 bash scripts/test-worktree-provisioning.sh
 ```
 
-### Familiar tests and git safety
+### Executor tests and git safety
 
-Tests that create real `WorktreeFamiliar`/`DockerFamiliar` and call `.start()` run real git via `BaseFamiliar.execGitSimple()`. To prevent repo mutation:
+Tests that create real `WorktreeExecutor`/`DockerExecutor` and call `.start()` run real git via `BaseExecutor.execGitSimple()`. To prevent repo mutation:
 
-1. **Mock git lifecycle** (for tests that don't need real git): spy on `execGitSimple`, `syncFromRemote`, `setupTaskBranch`, `recordTaskResult`, `restoreBranch`, `pushBranchToRemote`. See spies in `open-terminal.test.ts` or integration tests that mock `BaseFamiliar.prototype.execGitSimple`.
+1. **Mock git lifecycle** (for tests that don't need real git): spy on `execGitSimple`, `syncFromRemote`, `setupTaskBranch`, `recordTaskResult`, `restoreBranch`, `pushBranchToRemote`. See spies in `open-terminal.test.ts` or integration tests that mock `BaseExecutor.prototype.execGitSimple`.
 2. **Use a sandbox repo** (for tests that validate git behavior): `mkdtempSync` + `git init`. See `auto-commit.test.ts`, `branch-chain.test.ts`.
 
 ## File Editing Discipline

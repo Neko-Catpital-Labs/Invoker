@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 #
 # e2e-docker-hello-world.sh — end-to-end smoke test for the static-image
-# DockerFamiliar architecture.
+# DockerExecutor architecture.
 #
 # What it exercises:
 #   1. scripts/build-agent-base-image.sh produces invoker/agent-base:latest
 #   2. A downstream fixture image (FROM invoker/agent-base:latest) builds
-#   3. DockerFamiliar can create a container from the fixture image
-#   4. DockerFamiliar forwards a host secrets.env file into the container
+#   3. DockerExecutor can create a container from the fixture image
+#   4. DockerExecutor forwards a host secrets.env file into the container
 #      so the Claude CLI can authenticate with ANTHROPIC_API_KEY
 #   5. A single ai_task plan completes end-to-end
 #

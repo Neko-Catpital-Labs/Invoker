@@ -1475,21 +1475,21 @@ describe('WorktreeExecutor', () => {
     it('max duration timeout kills process when exceeded', async () => {
       vi.useFakeTimers();
       try {
-        const familiarWithTimeout = new WorktreeExecutor({
+        const executorWithTimeout = new WorktreeExecutor({
           cacheDir: '/tmp/fake-cache',
           worktreeBaseDir: '/tmp/fake-worktrees',
           heartbeatIntervalMs: 100,
           maxDurationMs: 500, // 500ms max duration
         });
-        mockPool(familiarWithTimeout);
+        mockPool(executorWithTimeout);
 
         const { taskProcess } = setupSpawnMock();
         const outputLines: string[] = [];
 
         const request = makeRequest();
-        const handle = await familiarWithTimeout.start(request);
+        const handle = await executorWithTimeout.start(request);
 
-        familiarWithTimeout.onOutput(handle, (data) => { outputLines.push(data); });
+        executorWithTimeout.onOutput(handle, (data) => { outputLines.push(data); });
 
         // Process is running but takes too long
         (taskProcess as any).exitCode = null;

@@ -3,8 +3,8 @@ import type { Executor } from './executor.js';
 export class ExecutorRegistry {
   private executors = new Map<string, Executor>();
 
-  register(type: string, familiar: Executor): void {
-    this.executors.set(type, familiar);
+  register(type: string, executor: Executor): void {
+    this.executors.set(type, executor);
   }
 
   get(type: string): Executor | undefined {

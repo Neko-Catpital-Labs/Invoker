@@ -548,12 +548,12 @@ describe('DockerExecutor', () => {
         'ANTHROPIC_API_KEY=sk-ant-api03-secret-test-key-12345',
       ]);
 
-      const familiarWithKey = new DockerExecutor({
+      const executorWithKey = new DockerExecutor({
         imageName: 'invoker-agent:latest',
         secretsFile: '/tmp/fake-secrets.env',
       });
 
-      await familiarWithKey.start(makeRequest());
+      await executorWithKey.start(makeRequest());
 
       // Verify the API key was placed into container config Env
       const createArgs = mockState.createContainer!.mock.calls[0][0];
@@ -571,12 +571,12 @@ describe('DockerExecutor', () => {
         'ANTHROPIC_API_KEY=sk-ant-token-abc123xyz',
       ]);
 
-      const familiarWithTokens = new DockerExecutor({
+      const executorWithTokens = new DockerExecutor({
         imageName: 'invoker-agent:latest',
         secretsFile: '/tmp/fake-secrets.env',
       });
 
-      await familiarWithTokens.start(makeRequest());
+      await executorWithTokens.start(makeRequest());
 
       const allLogs = consoleLogSpy.mock.calls.map((call: unknown[]) => call.join(' ')).join('\n');
 
@@ -602,12 +602,12 @@ describe('DockerExecutor', () => {
         'ANTHROPIC_API_KEY=sk-ant-ultra-secret-production-key',
       ]);
 
-      const familiarWithSecret = new DockerExecutor({
+      const executorWithSecret = new DockerExecutor({
         imageName: 'invoker-agent:latest',
         secretsFile: '/tmp/fake-secrets.env',
       });
 
-      await familiarWithSecret.start(makeRequest());
+      await executorWithSecret.start(makeRequest());
 
       // The implementation does `JSON.stringify(redactContainerConfig(containerConfig), null, 2)`.
       // Even when serializing the full config object, the secret value MUST NOT appear in logs.
@@ -627,12 +627,12 @@ describe('DockerExecutor', () => {
         'ANTHROPIC_API_KEY=sk-ant-regression-test-key-99999',
       ]);
 
-      const familiarWithKey = new DockerExecutor({
+      const executorWithKey = new DockerExecutor({
         imageName: 'invoker-agent:latest',
         secretsFile: '/tmp/fake-secrets.env',
       });
 
-      await familiarWithKey.start(makeRequest());
+      await executorWithKey.start(makeRequest());
 
       // Find the specific "Container config:" log line
       const configLogCall = consoleLogSpy.mock.calls.find((call: unknown[]) =>
@@ -661,12 +661,12 @@ describe('DockerExecutor', () => {
         'AWS_SECRET_ACCESS_KEY=aws-multi-secret-access',
       ]);
 
-      const familiarWithKey = new DockerExecutor({
+      const executorWithKey = new DockerExecutor({
         imageName: 'invoker-agent:latest',
         secretsFile: '/tmp/fake-secrets.env',
       });
 
-      await familiarWithKey.start(makeRequest());
+      await executorWithKey.start(makeRequest());
 
       const allLogs = consoleLogSpy.mock.calls.map((call: unknown[]) => call.join(' ')).join('\n');
 

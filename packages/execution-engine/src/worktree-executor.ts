@@ -80,7 +80,7 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
     });
   }
 
-  /** Pool mirror used for this familiar (rebase-and-retry / tests). */
+  /** Pool mirror used for this executor (rebase-and-retry / tests). */
   getRepoPool(): RepoPool {
     return this.pool;
   }

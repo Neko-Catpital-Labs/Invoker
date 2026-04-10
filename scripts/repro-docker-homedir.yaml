@@ -3,5 +3,5 @@ onFinish: none
 tasks:
   - id: homedir-write
     description: "Write to ~/.cache inside Docker as host UID"
-    familiarType: docker
+    executorType: docker
     command: "mkdir -p ~/.cache/node/corepack/v1 && echo HOMEDIR_OK"

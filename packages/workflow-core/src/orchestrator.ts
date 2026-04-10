@@ -242,7 +242,7 @@ export interface ExecutorRoutingRule {
   pattern?: string;
   /** Regular expression matched against the task command; compiled with new RegExp(regex). */
   regex?: string;
-  /** Required familiar type for matching commands (e.g. "ssh", "docker", "worktree"). */
+  /** Required executor type for matching commands (e.g. "ssh", "docker", "worktree"). */
   executorType: string;
   /** Required remote target ID for matching commands; must correspond to an entry in remoteTargets. */
   remoteTargetId: string;
@@ -277,7 +277,7 @@ export function findMatchingExecutorRoutingRule(
 export function assertExecutorRoutingConforms(
   taskId: string,
   command: string | undefined,
-  planFamiliarType: string | undefined,
+  planExecutorType: string | undefined,
   planRemoteTargetId: string | undefined,
   rules: ExecutorRoutingRule[],
 ): void {
@@ -291,7 +291,7 @@ export function assertExecutorRoutingConforms(
   }
 
   // Normalize both plan and rule executorType the same way createTaskState does
-  const normalizedPlanType = normalizeExecutorType(planFamiliarType) ?? 'worktree';
+  const normalizedPlanType = normalizeExecutorType(planExecutorType) ?? 'worktree';
   const normalizedRuleType = normalizeExecutorType(matchingRule.executorType) ?? matchingRule.executorType;
 
   if (normalizedPlanType !== normalizedRuleType) {

@@ -168,16 +168,16 @@ export async function openExternalTerminalForTask(
     );
   }
 
-  let familiar = executorRegistry.get(repairedMeta.executorType);
-  console.log(`[open-terminal] executorRegistry.get("${repairedMeta.executorType}") → ${familiar ? familiar.type : 'null (will lazy-create)'}`);
+  let executor = executorRegistry.get(repairedMeta.executorType);
+  console.log(`[open-terminal] executorRegistry.get("${repairedMeta.executorType}") → ${executor ? executor.type : 'null (will lazy-create)'}`);
 
-  if (!familiar) {
+  if (!executor) {
     if (repairedMeta.executorType === 'docker') {
       const docker = new DockerExecutor({
         agentRegistry: opts.executionAgentRegistry,
       });
       executorRegistry.register('docker', docker);
-      familiar = docker;
+      executor = docker;
     } else if (repairedMeta.executorType === 'worktree') {
       const invokerHome = path.resolve(homedir(), '.invoker');
       const worktree = new WorktreeExecutor({
@@ -187,27 +187,27 @@ export async function openExternalTerminalForTask(
         agentRegistry: opts.executionAgentRegistry,
       });
       executorRegistry.register('worktree', worktree);
-      familiar = worktree;
+      executor = worktree;
     } else if (repairedMeta.executorType === 'ssh') {
       const targetId = persistence.getRemoteTargetId?.(taskId);
       const target = targetId ? loadConfig().remoteTargets?.[targetId] : undefined;
-      familiar = target
+      executor = target
         ? new SshExecutor({ ...target, agentRegistry: opts.executionAgentRegistry })
         : executorRegistry.getDefault();
     } else {
-      familiar = executorRegistry.getDefault();
+      executor = executorRegistry.getDefault();
     }
   }
 
-  // Managed-workspace familiars (worktree, ssh, docker) MUST have a resolved workspacePath.
+  // Managed-workspace executors (worktree, ssh, docker) MUST have a resolved workspacePath.
   // Refuse fallback to repoRoot host cwd to prevent silent data loss when workspace metadata is missing.
-  // SSH is excluded from hostWorkspaceFamiliarTypes because its workspace is remote — its
+  // SSH is excluded from hostWorkspaceExecutorTypes because its workspace is remote — its
   // getRestoredTerminalSpec returns { command, args } without a local cwd by design. The first
   // workspace-metadata check below already enforces that SSH tasks have repairedMeta.workspacePath.
-  const managedFamiliarTypes = ['worktree', 'ssh', 'docker'];
-  const hostWorkspaceFamiliarTypes = ['worktree'];
-  const isManagedFamiliar = managedFamiliarTypes.includes(repairedMeta.executorType);
-  if (isManagedFamiliar && !repairedMeta.workspacePath) {
+  const managedExecutorTypes = ['worktree', 'ssh', 'docker'];
+  const hostWorkspaceExecutorTypes = ['worktree'];
+  const isManagedExecutor = managedExecutorTypes.includes(repairedMeta.executorType);
+  if (isManagedExecutor && !repairedMeta.workspacePath) {
     const errorMsg = [
       `Cannot open terminal for task "${taskId}": workspace metadata is missing.`,
       `Executor type "${repairedMeta.executorType}" requires a managed workspace but workspacePath is not set.`,
@@ -225,8 +225,8 @@ export async function openExternalTerminalForTask(
 
   let spec: { cwd?: string; command?: string; args?: string[] };
   try {
-    console.log(`[open-terminal] calling familiar.getRestoredTerminalSpec(meta) for task=${taskId}`);
-    spec = familiar.getRestoredTerminalSpec(repairedMeta);
+    console.log(`[open-terminal] calling executor.getRestoredTerminalSpec(meta) for task=${taskId}`);
+    spec = executor.getRestoredTerminalSpec(repairedMeta);
     console.log(`[open-terminal] getRestoredTerminalSpec returned: cwd=${spec.cwd ?? 'undefined'} command=${spec.command ?? 'undefined'} args=${JSON.stringify(spec.args ?? [])}`);
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
@@ -234,10 +234,10 @@ export async function openExternalTerminalForTask(
     return { opened: false, reason };
   }
 
-  // Fail-fast workspace invariant: managed familiars must have resolved workspace path
-  if (hostWorkspaceFamiliarTypes.includes(repairedMeta.executorType) && !spec.cwd) {
+  // Fail-fast workspace invariant: managed executors must have resolved workspace path
+  if (hostWorkspaceExecutorTypes.includes(repairedMeta.executorType) && !spec.cwd) {
     const reason = [
-      `Task "${taskId}" has no workspace path (familiar=${repairedMeta.executorType}).`,
+      `Task "${taskId}" has no workspace path (executor=${repairedMeta.executorType}).`,
       `This task requires a managed workspace but workspace metadata is missing.`,
       `Recovery: Retry the task using "Recreate Task" or recreate the entire workflow.`,
       `Refusing to fall back to host repo to prevent unintended mutations.`,

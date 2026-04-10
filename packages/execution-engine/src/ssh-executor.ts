@@ -56,7 +56,7 @@ interface SshEntry extends BaseEntry {
 }
 
 /**
- * Familiar that executes tasks on a remote machine via SSH key-based auth.
+ * Executor that executes tasks on a remote machine via SSH key-based auth.
  *
  * Requires `repoUrl` on the work request. Clones / worktrees on the remote
  * under ~/.invoker (mirroring local RepoPool layout), provisions with the same
@@ -573,7 +573,7 @@ echo ${payloadB64} | base64 -d | bash -se
         }
 
         // Replace local UUID with real backend session/thread ID for resume,
-        // then store session locally via driver (matches worktree-familiar pattern).
+        // then store session locally via driver (matches worktree-executor pattern).
         if (entry.agentSessionId && this.agentRegistry) {
           const agentName = request.inputs.executionAgent ?? 'claude';
           const driver = this.agentRegistry.getSessionDriver(agentName);

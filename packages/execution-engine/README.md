@@ -20,7 +20,7 @@ This created risks:
 
 ### Current Behavior: Fetch Failures Abort the Task
 
-Every familiar (worktree, docker, ssh) runs `git fetch origin` before starting a task. If that fetch fails for any reason, the task aborts immediately with a clear error. There is no lenient mode.
+Every executor (worktree, docker, ssh) runs `git fetch origin` before starting a task. If that fetch fails for any reason, the task aborts immediately with a clear error. There is no lenient mode.
 
 When `git fetch origin` fails:
 1. A status line is emitted to the task output stream:
@@ -40,12 +40,12 @@ When `git fetch origin` succeeds:
 
 ### Configuration
 
-No configuration is required. Familiars accept only transport settings:
+No configuration is required. Executors accept only transport settings:
 
 ```typescript
-import { WorktreeFamiliar } from '@invoker/execution-engine';
+import { WorktreeExecutor } from '@invoker/execution-engine';
 
-const familiar = new WorktreeFamiliar({
+const executor = new WorktreeExecutor({
   cacheDir: '/path/to/cache',
 });
 ```

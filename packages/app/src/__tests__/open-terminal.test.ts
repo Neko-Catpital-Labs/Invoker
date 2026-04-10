@@ -141,7 +141,7 @@ function openExternalTerminal(spec: TerminalSpec | null): void {
 
 const taskHandles = new Map<string, ExecutorHandle>();
 
-function executeTaskViaFamiliar(
+function executeTaskViaExecutor(
   executor: WorktreeExecutor,
   task: TaskState,
 ): Promise<WorkResponse> {
@@ -255,7 +255,7 @@ describe('open-terminal integration', () => {
     expect(started[0].id.endsWith('/greet')).toBe(true);
 
     // Execute greet
-    const resp1 = await executeTaskViaFamiliar(executor, started[0]);
+    const resp1 = await executeTaskViaExecutor(executor, started[0]);
     orchestrator.handleWorkerResponse(resp1);
     expect(orchestrator.getTask('greet')!.status).toBe('completed');
 
@@ -1337,13 +1337,13 @@ describe('openExternalTerminalForTask fail-fast workspace invariant', () => {
     };
 
     // Create a minimal executor for testing
-    const mockFamiliar = {
+    const mockExecutor = {
       type: 'local',
       getRestoredTerminalSpec: vi.fn(() => ({ cwd: undefined })),
     };
 
     const registry = new ExecutorRegistry();
-    registry.register('local', mockFamiliar as any);
+    registry.register('local', mockExecutor as any);
 
     const result = await openExternalTerminalForTask({
       taskId: 'task-local-no-workspace',

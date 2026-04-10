@@ -1,8 +1,8 @@
 /**
  * ClaudeExecutionAgent — ExecutionAgent implementation for Anthropic's Claude CLI.
  *
- * Extracted from BaseFamiliar.buildClaudeArgs() / prepareClaudeSession().
- * Agents provide command specs; familiars own the spawn lifecycle.
+ * Extracted from BaseExecutor.buildClaudeArgs() / prepareClaudeSession().
+ * Agents provide command specs; executors own the spawn lifecycle.
  */
 
 import { randomUUID } from 'node:crypto';

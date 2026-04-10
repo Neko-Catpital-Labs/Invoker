@@ -281,7 +281,7 @@ describe('Orchestrator', () => {
 
     it('passes executorType when specified', () => {
       orchestrator.loadPlan({
-        name: 'familiar-type-test',
+        name: 'executor-type-test',
         tasks: [
           { id: 't1', description: 'Worktree task', executorType: 'worktree' },
           { id: 't2', description: 'Default task' },

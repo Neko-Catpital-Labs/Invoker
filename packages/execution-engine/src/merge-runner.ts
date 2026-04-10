@@ -127,7 +127,7 @@ export interface MergeRunnerHost {
   executeTasks(tasks: TaskState[]): Promise<void>;
   buildMergeSummary(workflowId: string): Promise<string>;
   runVisualProofCapture?(baseBranch: string, featureBranch: string, slug: string, repoUrl?: string): Promise<string | undefined>;
-  /** Pool mirror path for `repoUrl`, when worktree familiar + repo pool are available. */
+  /** Pool mirror path for `repoUrl`, when worktree executor + repo pool are available. */
   ensureRepoMirrorPath?(repoUrl: string): Promise<string | undefined>;
   consolidateAndMerge(
     onFinish: string,

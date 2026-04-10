@@ -503,7 +503,7 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
       const mergeCwd = opts?.worktreeDir ?? cwd;
 
       console.log(
-        `${RESTART_TO_BRANCH_TRACE} [setupTaskBranch] enter familiar=${this.type} actionId=${request.actionId}\n` +
+        `${RESTART_TO_BRANCH_TRACE} [setupTaskBranch] enter executor=${this.type} actionId=${request.actionId}\n` +
           `  cwd=${cwd}\n` +
           `  opts.branchName=${opts?.branchName ?? '(default)'}\n` +
           `  opts.base=${opts?.base ?? '(unset)'}\n` +
@@ -546,7 +546,7 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.log(
-        `${RESTART_TO_BRANCH_TRACE} [setupTaskBranch] catch familiar=${this.type} actionId=${request.actionId} ` +
+        `${RESTART_TO_BRANCH_TRACE} [setupTaskBranch] catch executor=${this.type} actionId=${request.actionId} ` +
           `MergeConflictError=${err instanceof MergeConflictError} worktreeDir=${Boolean(opts?.worktreeDir)} ` +
           `error=${msg}`,
       );
@@ -750,7 +750,7 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
 
   /**
    * Shared close/exit handler: record result, push to remote, restore branch, emit completion.
-   * Used by all familiars to avoid duplicating the exit path logic.
+   * Used by all executors to avoid duplicating the exit path logic.
    */
   protected async handleProcessExit(
     executionId: string,
