@@ -6,3 +6,4 @@ export * from './orchestrator.js';
 export * from './task-id-scope.js';
 export * from './fallback-policy.js';
 export * from './graph-mutation.js';
+export * from './command-service.js';

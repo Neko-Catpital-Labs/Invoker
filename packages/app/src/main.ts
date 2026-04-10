@@ -48,7 +48,7 @@ if (process.platform === 'linux') {
   app.commandLine.appendSwitch('disable-software-rasterizer');
 }
 
-import { Orchestrator } from '@invoker/workflow-core';
+import { Orchestrator, CommandService } from '@invoker/workflow-core';
 import type {
   PlanDefinition,
   TaskDelta,
@@ -56,6 +56,7 @@ import type {
   TaskState,
   TaskStateChanges,
 } from '@invoker/workflow-core';
+import { makeEnvelope } from '@invoker/contracts';
 import { SQLiteAdapter, ConversationRepository } from '@invoker/data-store';
 import { IpcBus, Channels } from '@invoker/transport';
 import type { MessageBus } from '@invoker/transport';
@@ -81,7 +82,6 @@ import { startApiServer, type ApiServer } from './api-server.js';
 import { runHeadless, tryDelegateRun, tryDelegateResume, tryDelegateExec, resolveAgentSession } from './headless.js';
 import {
   rebaseAndRetry,
-  rejectTask,
   recreateWorkflow as sharedRecreateWorkflow,
   recreateTask as sharedRecreateTask,
   cancelWorkflow as sharedCancelWorkflow,
@@ -135,6 +135,7 @@ let messageBus: MessageBus;
 let persistence: SQLiteAdapter;
 let executorRegistry: ExecutorRegistry;
 let orchestrator: Orchestrator;
+let commandService: CommandService;
 let hourlyBackupInterval: ReturnType<typeof setInterval> | null = null;
 let writerLock: DbWriterLockResult | null = null;
 
@@ -203,6 +204,7 @@ async function initServices(options?: InitServicesOptions): Promise<void> {
     maxConcurrency: invokerConfig.maxConcurrency,
     executorRoutingRules: invokerConfig.executorRoutingRules ?? [],
   });
+  commandService = new CommandService(orchestrator);
 
   orchestrator.syncAllFromDb();
   const initLog = isHeadless
@@ -281,7 +283,10 @@ async function wireSlackBot(deps: SlackBotDeps): Promise<any> {
     deps.logFn('trace', 'info', `slackBot: command received — type=${command.type}`);
     switch (command.type) {
       case 'approve': {
-        const approveStarted = await orchestrator.approve(command.taskId);
+        const env = makeEnvelope('approve', 'surface', 'task', { taskId: command.taskId as string });
+        const approveResult = await commandService.approve(env);
+        if (!approveResult.ok) throw new Error(approveResult.error.message);
+        const approveStarted = approveResult.data;
         const pfm = approveStarted.filter(t => t.status === 'running' && t.config.isMergeNode && t.id === command.taskId);
         for (const task of pfm) {
           deps.executor.publishAfterFix(task).catch(err => {
@@ -292,9 +297,12 @@ async function wireSlackBot(deps: SlackBotDeps): Promise<any> {
         if (runnable.length > 0) await deps.executor.executeTasks(runnable);
         break;
       }
-      case 'reject':
-        rejectTask(command.taskId, { orchestrator }, command.reason);
+      case 'reject': {
+        const env = makeEnvelope('reject', 'surface', 'task', { taskId: command.taskId as string, reason: command.reason as string | undefined });
+        const rejectResult = commandService.reject(env);
+        if (!rejectResult.ok) throw new Error(rejectResult.error.message);
         break;
+      }
       case 'select_experiment': {
         const started = orchestrator.selectExperiment(command.taskId, command.experimentId);
         await deps.executor.executeTasks(started);
@@ -908,6 +916,7 @@ function setupGuiMode(): void {
     maxConcurrency: invokerConfig.maxConcurrency,
     executorRoutingRules: invokerConfig.executorRoutingRules ?? [],
   });
+      commandService = new CommandService(orchestrator);
       rebuildTaskRunner();
       taskHandles.clear();
     });
@@ -1041,8 +1050,11 @@ function setupGuiMode(): void {
 
     ipcMain.handle('invoker:approve', async (_event, taskId: string) => {
       console.log(`[ipc] approve: "${taskId}"`);
-      const started = await orchestrator.approve(taskId);
-      console.log(`[ipc] approve: orchestrator returned ${started.length} started tasks: [${started.map(t => `${t.id}(${t.status})`).join(', ')}]`);
+      const envelope = makeEnvelope('approve', 'ui', 'task', { taskId });
+      const result = await commandService.approve(envelope);
+      if (!result.ok) throw new Error(result.error.message);
+      const started = result.data;
+      console.log(`[ipc] approve: commandService returned ${started.length} started tasks: [${started.map(t => `${t.id}(${t.status})`).join(', ')}]`);
 
       const postFixMerge = started.filter(t => t.status === 'running' && t.config.isMergeNode && t.id === taskId);
       for (const task of postFixMerge) {
@@ -1058,7 +1070,9 @@ function setupGuiMode(): void {
     });
 
     ipcMain.handle('invoker:reject', (_event, taskId: string, reason?: string) => {
-      rejectTask(taskId, { orchestrator }, reason);
+      const envelope = makeEnvelope('reject', 'ui', 'task', { taskId, reason });
+      const result = commandService.reject(envelope);
+      if (!result.ok) throw new Error(result.error.message);
     });
 
     ipcMain.handle('invoker:select-experiment', async (_event, taskId: string, experimentId: string | string[]) => {
@@ -1250,7 +1264,10 @@ function setupGuiMode(): void {
       try {
         const mergeTask = orchestrator.getMergeNode(workflowId);
         if (!mergeTask) throw new Error(`No merge node for workflow ${workflowId}`);
-        const started = await orchestrator.approve(mergeTask.id);
+        const envelope = makeEnvelope('approve', 'ui', 'workflow', { taskId: mergeTask.id });
+        const result = await commandService.approve(envelope);
+        if (!result.ok) throw new Error(result.error.message);
+        const started = result.data;
         const postFixMerge = started.filter(t => t.status === 'running' && t.config.isMergeNode && t.id === mergeTask.id);
         for (const task of postFixMerge) {
           taskExecutor.publishAfterFix(task).catch(err => {

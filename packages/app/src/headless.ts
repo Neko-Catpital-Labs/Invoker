@@ -9,8 +9,9 @@
  * This file handles CLI parsing, TaskRunner lifecycle, and output formatting.
  */
 
-import { Orchestrator } from '@invoker/workflow-core';
+import { Orchestrator, CommandService } from '@invoker/workflow-core';
 import type { TaskDelta, TaskState } from '@invoker/workflow-core';
+import { makeEnvelope } from '@invoker/contracts';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import { createDeleteAllSnapshot } from './delete-all-snapshot.js';
 import { resolve as resolvePath } from 'node:path';
@@ -31,7 +32,6 @@ import { backupPlan } from './plan-backup.js';
 import { startApiServer } from './api-server.js';
 import {
   rebaseAndRetry,
-  rejectTask,
   resolveConflictAction,
   restartTask as sharedRestartTask,
   recreateWorkflow as sharedRecreateWorkflow,
@@ -720,7 +720,11 @@ async function headlessApprove(taskId: string, deps: HeadlessDeps): Promise<void
   taskId = restoreWorkflowForTask(taskId, deps).resolvedTaskId;
   const te = createHeadlessExecutor(deps);
   wireHeadlessApproveHook(deps, te);
-  const started = await deps.orchestrator.approve(taskId);
+  const cs = new CommandService(deps.orchestrator);
+  const envelope = makeEnvelope('approve', 'headless', 'task', { taskId });
+  const result = await cs.approve(envelope);
+  if (!result.ok) throw new Error(result.error.message);
+  const started = result.data;
   const postFixMerge = started.filter(t => t.status === 'running' && t.config.isMergeNode && t.id === taskId);
   for (const task of postFixMerge) {
     await te.publishAfterFix(task);
@@ -733,7 +737,10 @@ async function headlessApprove(taskId: string, deps: HeadlessDeps): Promise<void
 function headlessReject(taskId: string, deps: Pick<HeadlessDeps, 'orchestrator' | 'persistence'>, reason?: string): void {
   if (!taskId) throw new Error('Missing taskId.');
   taskId = restoreWorkflowForTask(taskId, deps).resolvedTaskId;
-  rejectTask(taskId, deps, reason);
+  const cs = new CommandService(deps.orchestrator);
+  const envelope = makeEnvelope('reject', 'headless', 'task', { taskId, reason });
+  const result = cs.reject(envelope);
+  if (!result.ok) throw new Error(result.error.message);
   console.log(`Rejected task: ${taskId}${reason ? ` (reason: ${reason})` : ''}`);
 }
 
