@@ -32,6 +32,7 @@
  */
 
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from 'node:http';
+import type { Logger } from '@invoker/contracts';
 import type { Orchestrator } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import type { ExecutorRegistry, TaskRunner } from '@invoker/execution-engine';
@@ -50,6 +51,7 @@ import {
 } from './workflow-actions.js';
 
 export interface ApiServerDeps {
+  logger?: Logger;
   orchestrator: Orchestrator;
   persistence: SQLiteAdapter;
   executorRegistry: ExecutorRegistry;
@@ -112,6 +114,7 @@ function serializeTask(task: any): any {
 
 export function startApiServer(deps: ApiServerDeps): ApiServer {
   const {
+    logger: apiLogger,
     orchestrator,
     persistence,
     executorRegistry,
@@ -226,7 +229,7 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
           const postFixMerge = started.filter(t => t.status === 'running' && t.config.isMergeNode && t.id === taskId);
           for (const task of postFixMerge) {
             taskExecutor.publishAfterFix(task).catch(err => {
-              console.error(`[api] approve: publishAfterFix failed for "${task.id}":`, err);
+              apiLogger?.error(`approve: publishAfterFix failed for "${task.id}": ${err}`, { module: 'api' });
             });
           }
           const runnable = started.filter(t => t.status === 'running' && !(t.config.isMergeNode && t.id === taskId));
@@ -461,20 +464,20 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
 
       json(res, 404, { error: 'Not found' });
     } catch (err) {
-      console.error('[api-server] Unhandled error:', err);
+      apiLogger?.error(`Unhandled error: ${err}`, { module: 'api-server' });
       json(res, 500, { error: 'Internal server error' });
     }
   });
 
   server.listen(port, '127.0.0.1', () => {
-    console.log(`[api-server] Listening on http://127.0.0.1:${port}`);
+    apiLogger?.info(`Listening on http://127.0.0.1:${port}`, { module: 'api-server' });
   });
 
   server.on('error', (err: NodeJS.ErrnoException) => {
     if (err.code === 'EADDRINUSE') {
-      console.warn(`[api-server] Port ${port} in use, API server not started`);
+      apiLogger?.warn(`Port ${port} in use, API server not started`, { module: 'api-server' });
     } else {
-      console.error('[api-server] Server error:', err);
+      apiLogger?.error(`Server error: ${err}`, { module: 'api-server' });
     }
   });
 

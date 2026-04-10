@@ -103,8 +103,8 @@ export function spawnDetachedTerminal(
     }
     child.once('spawn', () => {
       child.on('close', (code) => {
-        if (stderr) console.log(`[spawn-terminal] ${command} stderr: ${stderr.trim()}`);
-        if (code && code !== 0) console.log(`[spawn-terminal] ${command} exited with code ${code}`);
+        if (stderr) process.stderr.write(`[spawn-terminal] ${command} stderr: ${stderr.trim()}\n`);
+        if (code && code !== 0) process.stderr.write(`[spawn-terminal] ${command} exited with code ${code}\n`);
         onClose();
       });
       child.unref();

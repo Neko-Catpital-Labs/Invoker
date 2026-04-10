@@ -2,6 +2,7 @@
  * Shared logic for opening an external OS terminal for a persisted task (GUI IPC + headless CLI).
  */
 
+import type { Logger } from '@invoker/contracts';
 import * as path from 'node:path';
 import { execSync } from 'node:child_process';
 import { homedir } from 'node:os';
@@ -45,6 +46,7 @@ export interface OpenExternalTerminalForTaskOptions {
   repoRoot: string;
   /** Shown when task status is `running` (GUI vs headless wording). */
   runningTaskReason?: string;
+  logger?: Logger;
 }
 
 /**
@@ -102,15 +104,11 @@ export function repairCodexResumeSessionMeta(
   }
 
   if (!recoveredSessionId) {
-    console.warn(
-      `[open-terminal][codex-session-repair] task="${meta.taskId}" stale sessionId="${originalSessionId}" has no saved Codex session; opening cwd shell without resume`,
-    );
+    // codex session repair: stale sessionId, opening cwd shell without resume
     return { ...meta, agentSessionId: undefined };
   }
 
-  console.log(
-    `[open-terminal][codex-session-repair] task="${meta.taskId}" repaired stale codex sessionId old="${originalSessionId}" new="${recoveredSessionId}"`,
-  );
+  // codex session repair: repaired stale sessionId
   persistence.updateTask?.(meta.taskId, {
     execution: { agentSessionId: recoveredSessionId, lastAgentSessionId: recoveredSessionId },
   });
@@ -132,10 +130,10 @@ export function repairCodexResumeSessionMeta(
 export async function openExternalTerminalForTask(
   opts: OpenExternalTerminalForTaskOptions,
 ): Promise<OpenTerminalResult> {
-  const { taskId, persistence, executorRegistry, repoRoot, runningTaskReason } = opts;
+  const { taskId, persistence, executorRegistry, repoRoot, runningTaskReason, logger: termLogger } = opts;
 
   const taskStatus = persistence.getTaskStatus(taskId);
-  console.log(`[open-terminal] taskId=${taskId} taskStatus=${taskStatus ?? 'null'}`);
+  termLogger?.info(`taskId=${taskId} taskStatus=${taskStatus ?? 'null'}`);
   if (taskStatus == null) {
     return { opened: false, reason: `Task "${taskId}" not found.` };
   }
@@ -158,18 +156,19 @@ export async function openExternalTerminalForTask(
     branch: persistence.getBranch(taskId) ?? undefined,
   };
   const repairedMeta = repairCodexResumeSessionMeta(meta, persistence, opts.executionAgentRegistry);
-  console.log(
-    `[open-terminal] meta from DB: executorType=${repairedMeta.executorType} workspacePath=${repairedMeta.workspacePath ?? 'undefined'} branch=${repairedMeta.branch ?? 'undefined'} agentSessionId=${repairedMeta.agentSessionId ?? 'undefined'} executionAgent=${repairedMeta.executionAgent ?? 'undefined'} containerId=${repairedMeta.containerId ?? 'undefined'}`,
+  termLogger?.info(
+    `meta from DB: executorType=${repairedMeta.executorType} workspacePath=${repairedMeta.workspacePath ?? 'undefined'} branch=${repairedMeta.branch ?? 'undefined'} agentSessionId=${repairedMeta.agentSessionId ?? 'undefined'} executionAgent=${repairedMeta.executionAgent ?? 'undefined'} containerId=${repairedMeta.containerId ?? 'undefined'}`,
   );
   if (repairedMeta.agentSessionId) {
-    console.log(
-      '[agent-session-trace] open-terminal: building resume spec with persisted agentSessionId — ' +
+    termLogger?.info(
+      'building resume spec with persisted agentSessionId — ' +
         'if recreateWorkflow left a stale UUID (downstream still pending), claude --resume may report no conversation',
+      { module: 'agent-session-trace' },
     );
   }
 
   let executor = executorRegistry.get(repairedMeta.executorType);
-  console.log(`[open-terminal] executorRegistry.get("${repairedMeta.executorType}") → ${executor ? executor.type : 'null (will lazy-create)'}`);
+  termLogger?.info(`executorRegistry.get("${repairedMeta.executorType}") → ${executor ? executor.type : 'null (will lazy-create)'}`);
 
   if (!executor) {
     if (repairedMeta.executorType === 'docker') {
@@ -219,18 +218,18 @@ export async function openExternalTerminalForTask(
       ``,
       `Refusing to fall back to host repo to prevent accidental mutation of the main repository.`,
     ].join('\n');
-    console.log(`[open-terminal] managed workspace invariant violation: ${errorMsg}`);
+    termLogger?.info(`managed workspace invariant violation: ${errorMsg}`);
     return { opened: false, reason: errorMsg };
   }
 
   let spec: { cwd?: string; command?: string; args?: string[] };
   try {
-    console.log(`[open-terminal] calling executor.getRestoredTerminalSpec(meta) for task=${taskId}`);
+    termLogger?.info(`calling executor.getRestoredTerminalSpec(meta) for task=${taskId}`);
     spec = executor.getRestoredTerminalSpec(repairedMeta);
-    console.log(`[open-terminal] getRestoredTerminalSpec returned: cwd=${spec.cwd ?? 'undefined'} command=${spec.command ?? 'undefined'} args=${JSON.stringify(spec.args ?? [])}`);
+    termLogger?.info(`getRestoredTerminalSpec returned: cwd=${spec.cwd ?? 'undefined'} command=${spec.command ?? 'undefined'} args=${JSON.stringify(spec.args ?? [])}`);
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
-    console.log(`[open-terminal] getRestoredTerminalSpec threw: ${reason}`);
+    termLogger?.info(`getRestoredTerminalSpec threw: ${reason}`);
     return { opened: false, reason };
   }
 
@@ -242,12 +241,12 @@ export async function openExternalTerminalForTask(
       `Recovery: Retry the task using "Recreate Task" or recreate the entire workflow.`,
       `Refusing to fall back to host repo to prevent unintended mutations.`,
     ].join(' ');
-    console.log(`[open-terminal] fail-fast: ${reason}`);
+    termLogger?.info(`fail-fast: ${reason}`);
     return { opened: false, reason };
   }
 
   const cwd = spec.cwd ?? repoRoot;
-  console.log(`[open-terminal] effective cwd=${cwd} (repoRoot=${repoRoot})`);
+  termLogger?.info(`effective cwd=${cwd} (repoRoot=${repoRoot})`);
 
   const onTerminalClose = () => {
     if (!cwd || cwd === repoRoot) return;

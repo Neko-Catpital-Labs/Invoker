@@ -29,8 +29,6 @@
  * Using the same Electron binary for both modes provides a consistent runtime.
  */
 
-import './main-process-file-log.js';
-
 import { app, BrowserWindow, ipcMain, nativeImage, shell } from 'electron';
 import * as path from 'node:path';
 import { mkdirSync } from 'node:fs';
@@ -68,6 +66,8 @@ import {
   registerBuiltinAgents,
   type Executor, type ExecutorHandle,
 } from '@invoker/execution-engine';
+import type { Logger } from '@invoker/contracts';
+import { FileAndDbLogger } from './logger.js';
 import type { TaskOutputData } from './types.js';
 import { loadConfig, resolveSecretsFilePath, type InvokerConfig } from './config.js';
 import {
@@ -135,6 +135,10 @@ let commandService: CommandService;
 let hourlyBackupInterval: ReturnType<typeof setInterval> | null = null;
 let writerLock: DbWriterLockResult | null = null;
 
+// Root logger: created early in initServices() once persistence is available.
+// Before initServices(), use the pre-init logger (file-only, no DB).
+let logger: Logger = new FileAndDbLogger({ module: 'main' });
+
 // Repo root: 3 levels up from packages/app/dist/
 const repoRoot = path.resolve(__dirname, '..', '..', '..');
 const invokerConfig: InvokerConfig = loadConfig();
@@ -164,6 +168,8 @@ async function initServices(options?: InitServicesOptions): Promise<void> {
     readOnly,
     ownerCapability: !readOnly, // writable mode requires owner capability
   });
+  // Upgrade root logger with DB persistence now that SQLiteAdapter is ready.
+  logger = new FileAndDbLogger({ module: 'main' }, { persistence });
   if (!readOnly && !hourlyBackupInterval) {
     const hourlyMs = Number(process.env.INVOKER_HOURLY_BACKUP_MS ?? 60 * 60 * 1000);
     if (Number.isFinite(hourlyMs) && hourlyMs > 0) {
@@ -171,18 +177,19 @@ async function initServices(options?: InitServicesOptions): Promise<void> {
         try {
           const snapshot = createHourlySnapshot(invokerHomeRoot);
           if (snapshot) {
-            console.log(`[backup] hourly snapshot: ${snapshot}`);
+            logger.info(`hourly snapshot: ${snapshot}`, { module: 'backup' });
           } else {
-            console.log('[backup] hourly snapshot skipped: DB file does not exist yet');
+            logger.info('hourly snapshot skipped: DB file does not exist yet', { module: 'backup' });
           }
         } catch (err) {
-          console.error(
-            `[backup] hourly snapshot failed: ${err instanceof Error ? err.message : String(err)}`,
+          logger.error(
+            `hourly snapshot failed: ${err instanceof Error ? err.message : String(err)}`,
+            { module: 'backup' },
           );
         }
       }, hourlyMs);
       hourlyBackupInterval.unref?.();
-      console.log(`[backup] hourly snapshots enabled (interval=${hourlyMs}ms)`);
+      logger.info(`hourly snapshots enabled (interval=${hourlyMs}ms)`, { module: 'backup' });
     }
   }
   executorRegistry = new ExecutorRegistry();
@@ -207,7 +214,7 @@ async function initServices(options?: InitServicesOptions): Promise<void> {
   orchestrator.syncAllFromDb();
   const initLog = isHeadless
     ? (...args: unknown[]) => { process.stderr.write(args.join(' ') + '\n'); }
-    : console.log;
+    : (msg: string) => { logger.info(msg, { module: 'init' }); };
   const workflows = persistence.listWorkflows();
   for (const wf of workflows) {
     const tasks = persistence.loadTasks(wf.id);
@@ -247,10 +254,11 @@ async function wireSlackBot(deps: SlackBotDeps): Promise<any> {
   }
 
   const surfaces = loadSurfaces();
+  const repoLogger = logger.child({ module: 'conversation-repo' });
   const conversationRepo = new ConversationRepository(persistence, {
-    info: (msg) => { console.log(`[conversation-repo] ${msg}`); try { persistence.writeActivityLog('conversation-repo', 'info', msg); } catch { /* db locked */ } },
-    warn: (msg) => { console.warn(`[conversation-repo] ${msg}`); try { persistence.writeActivityLog('conversation-repo', 'warn', msg); } catch { /* db locked */ } },
-    error: (msg) => { console.error(`[conversation-repo] ${msg}`); try { persistence.writeActivityLog('conversation-repo', 'error', msg); } catch { /* db locked */ } },
+    info: (msg) => { repoLogger.info(msg); },
+    warn: (msg) => { repoLogger.warn(msg); },
+    error: (msg) => { repoLogger.error(msg); },
   });
   let repoUrl = process.env.INVOKER_REPO_URL;
   if (!repoUrl) {
@@ -288,7 +296,7 @@ async function wireSlackBot(deps: SlackBotDeps): Promise<any> {
         const pfm = approveStarted.filter(t => t.status === 'running' && t.config.isMergeNode && t.id === command.taskId);
         for (const task of pfm) {
           deps.executor.publishAfterFix(task).catch(err => {
-            console.error(`[slack] approve: publishAfterFix failed for "${task.id}":`, err);
+            logger.error(`approve: publishAfterFix failed for "${task.id}": ${err}`, { module: 'slack' });
           });
         }
         const runnable = approveStarted.filter(t => t.status === 'running' && !(t.config.isMergeNode && t.id === command.taskId));
@@ -318,7 +326,7 @@ async function wireSlackBot(deps: SlackBotDeps): Promise<any> {
         deps.logFn('trace', 'info', `slackBot: loading plan "${plan.name}" (${plan.tasks.length} tasks)`);
         deps.onStartPlan?.();
         deps.onPlanLoaded?.(plan);
-        backupPlan(plan);
+        backupPlan(plan, undefined, logger);
         orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
         const started = orchestrator.startExecution();
         deps.logFn('trace', 'info', `slackBot: startExecution returned ${started.length} tasks: [${started.map((t: any) => t.id).join(', ')}]`);
@@ -378,17 +386,17 @@ if (isHeadless) {
         // Delegation failed: no owner handler available.
         delegationBus.disconnect();
         if (!standaloneMode) {
-          console.error(
+          process.stderr.write(
             `${RED}Error:${RESET} Mutation command "${command}" requires an owner process (GUI or standalone headless).\n` +
             `\n${BOLD}Options:${RESET}\n` +
             `  1. Start the GUI process first: ${BOLD}electron dist/main.js${RESET}\n` +
             `  2. Run in standalone mode: ${BOLD}INVOKER_HEADLESS_STANDALONE=1 electron dist/main.js --headless ${cliArgs.join(' ')}${RESET}\n` +
-            `\nStandalone mode opens a writable database. Only use it when no other process is accessing the database.`
+            `\nStandalone mode opens a writable database. Only use it when no other process is accessing the database.\n`
           );
           process.exit(1);
         }
       } catch (err) {
-        console.error(`${RED}Delegation error:${RESET} ${err instanceof Error ? err.message : String(err)}`);
+        process.stderr.write(`${RED}Delegation error:${RESET} ${err instanceof Error ? err.message : String(err)}\n`);
         delegationBus.disconnect();
         process.exit(1);
       }
@@ -403,6 +411,7 @@ if (isHeadless) {
       });
 
       const headlessDeps = {
+        logger,
         orchestrator, persistence, executorRegistry, messageBus,
         repoRoot, invokerConfig, initServices, wireSlackBot,
         commandService,
@@ -430,7 +439,7 @@ if (isHeadless) {
 
       await runHeadless(cliArgs, headlessDeps);
     } catch (err) {
-      console.error(`${RED}Error:${RESET} ${err instanceof Error ? err.message : String(err)}`);
+      process.stderr.write(`${RED}Error:${RESET} ${err instanceof Error ? err.message : String(err)}\n`);
       exitCode = 1;
     } finally {
       if (persistence) persistence.close();
@@ -439,7 +448,7 @@ if (isHeadless) {
     }
     process.exit(exitCode);
   }).catch((err) => {
-    console.error(`${RED}Error:${RESET} ${err instanceof Error ? err.message : String(err)}`);
+    process.stderr.write(`${RED}Error:${RESET} ${err instanceof Error ? err.message : String(err)}\n`);
     process.exit(1);
   });
 } else {
@@ -513,22 +522,22 @@ function setupGuiMode(): void {
       })(),
       callbacks: {
         onOutput: (taskId, data) => {
-          console.log(`[output] ${taskId}: ${data.trimEnd()}`);
+          logger.info(`${taskId}: ${data.trimEnd()}`, { module: 'output' });
           const outputData: TaskOutputData = { taskId, data };
           messageBus.publish(Channels.TASK_OUTPUT, outputData);
           try {
             persistence.appendTaskOutput(taskId, data);
             persistence.appendOutputChunk(taskId, data);
           } catch (err) {
-            console.error(`[output] Failed to persist output for ${taskId}:`, err);
+            logger.error(`Failed to persist output for ${taskId}: ${err}`, { module: 'output' });
           }
         },
         onSpawned: (taskId, handle, executor) => {
-          console.log(`[exec] Task "${taskId}" spawned (handle: ${handle.executionId})`);
+          logger.info(`Task "${taskId}" spawned (handle: ${handle.executionId})`, { module: 'exec' });
           taskHandles.set(taskId, { handle, executor });
         },
         onComplete: (taskId) => {
-          console.log(`[exec] Task "${taskId}" completed`);
+          logger.info(`Task "${taskId}" completed`, { module: 'exec' });
         },
         onHeartbeat: (taskId) => {
           const now = new Date();
@@ -557,7 +566,7 @@ function setupGuiMode(): void {
   async function killRunningTask(taskId: string): Promise<void> {
     const entry = taskHandles.get(taskId);
     if (!entry) return;
-    console.log(`[kill] Killing running task "${taskId}" before restart`);
+    logger.info(`Killing running task "${taskId}" before restart`, { module: 'kill' });
     await entry.executor.kill(entry.handle);
     taskHandles.delete(taskId);
   }
@@ -588,7 +597,7 @@ function setupGuiMode(): void {
     const orphanRestarted: TaskState[] = [];
     for (const task of orchestrator.getAllTasks()) {
       if (task.status === 'running' || task.status === 'fixing_with_ai') {
-        console.log(`[${logPrefix}] relaunching orphaned in-flight task "${task.id}" (${task.status})`);
+        logger.info(`relaunching orphaned in-flight task "${task.id}" (${task.status})`, { module: logPrefix });
         const started = orchestrator.restartTask(task.id);
         orphanRestarted.push(...started.filter(t => t.status === 'running'));
       }
@@ -597,7 +606,7 @@ function setupGuiMode(): void {
     const readyStarted = orchestrator.startExecution();
     const allStarted = [...orphanRestarted, ...readyStarted];
     if (allStarted.length > 0) {
-      console.log(`[${logPrefix}] started ${allStarted.length} tasks (${orphanRestarted.length} orphans relaunched, ${readyStarted.length} ready): [${allStarted.map(t => t.id).join(', ')}]`);
+      logger.info(`started ${allStarted.length} tasks (${orphanRestarted.length} orphans relaunched, ${readyStarted.length} ready): [${allStarted.map(t => t.id).join(', ')}]`, { module: logPrefix });
     }
     return allStarted;
   }
@@ -662,7 +671,7 @@ function setupGuiMode(): void {
     try {
       await initServices({ executionAgentRegistry: agentRegistry });
     } catch (err) {
-      console.error(`${RED}Error:${RESET} ${err instanceof Error ? err.message : String(err)}`);
+      process.stderr.write(`${RED}Error:${RESET} ${err instanceof Error ? err.message : String(err)}\n`);
       app.quit();
       return;
     }
@@ -673,16 +682,16 @@ function setupGuiMode(): void {
     // Headless processes delegate write-heavy commands to the GUI process via IpcBus.
     messageBus.onRequest('headless.run', async (req: unknown) => {
       const { planPath } = req as { planPath: string };
-      console.log(`[ipc-delegate] headless.run: "${planPath}"`);
+      logger.info(`headless.run: "${planPath}"`, { module: 'ipc-delegate' });
       const { parsePlanFile } = await import('./plan-parser.js');
       const plan = await parsePlanFile(planPath);
       taskHandles.clear();
-      backupPlan(plan);
+      backupPlan(plan, undefined, logger);
       const wfIdsBefore = new Set(orchestrator.getWorkflowIds());
       orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
       const workflowId = orchestrator.getWorkflowIds().find(id => !wfIdsBefore.has(id))!;
       const started = orchestrator.startExecution();
-      console.log(`[ipc-delegate] started ${started.length} tasks for workflow "${workflowId}"`);
+      logger.info(`started ${started.length} tasks for workflow "${workflowId}"`, { module: 'ipc-delegate' });
       await taskExecutor.executeTasks(started);
       const tasks = orchestrator.getAllTasks().filter(t => t.config.workflowId === workflowId);
       return { workflowId, tasks };
@@ -690,7 +699,7 @@ function setupGuiMode(): void {
 
     messageBus.onRequest('headless.resume', async (req: unknown) => {
       const { workflowId } = req as { workflowId: string };
-      console.log(`[ipc-delegate] headless.resume: "${workflowId}"`);
+      logger.info(`headless.resume: "${workflowId}"`, { module: 'ipc-delegate' });
       orchestrator.syncFromDb(workflowId);
 
       const orphanRestarted: TaskState[] = [];
@@ -699,7 +708,7 @@ function setupGuiMode(): void {
           (task.status === 'running' || task.status === 'fixing_with_ai') &&
           task.config.workflowId === workflowId
         ) {
-          console.log(`[ipc-delegate] relaunching orphaned in-flight task "${task.id}" (${task.status})`);
+          logger.info(`relaunching orphaned in-flight task "${task.id}" (${task.status})`, { module: 'ipc-delegate' });
           const started = orchestrator.restartTask(task.id);
           orphanRestarted.push(...started.filter(t => t.status === 'running'));
         }
@@ -707,7 +716,7 @@ function setupGuiMode(): void {
 
       const started = orchestrator.startExecution();
       const allStarted = [...orphanRestarted, ...started];
-      console.log(`[ipc-delegate] started ${allStarted.length} tasks (${orphanRestarted.length} orphans relaunched, ${started.length} ready)`);
+      logger.info(`started ${allStarted.length} tasks (${orphanRestarted.length} orphans relaunched, ${started.length} ready)`, { module: 'ipc-delegate' });
       await taskExecutor.executeTasks(allStarted);
       taskExecutor.resumeMergeGatePolling();
       const tasks = orchestrator.getAllTasks().filter(t => t.config.workflowId === workflowId);
@@ -720,8 +729,9 @@ function setupGuiMode(): void {
       if (!Array.isArray(args) || args.length === 0) {
         throw new Error('Missing delegated headless command arguments');
       }
-      console.log(`[ipc-delegate] headless.exec: "${args.join(' ')}"`);
+      logger.info(`headless.exec: "${args.join(' ')}"`, { module: 'ipc-delegate' });
       await runHeadless(args, {
+        logger,
         orchestrator, persistence, executorRegistry, messageBus,
         commandService,
         repoRoot, invokerConfig, initServices, wireSlackBot,
@@ -736,7 +746,7 @@ function setupGuiMode(): void {
 
     // Relaunch orphaned running tasks and start any pending-but-ready tasks.
     if (invokerConfig.disableAutoRunOnStartup) {
-      console.log('[init] auto-run on startup disabled by config — skipping orphan relaunch');
+      logger.info('auto-run on startup disabled by config — skipping orphan relaunch', { module: 'init' });
     } else {
       const allStarted = relaunchOrphansAndStartReady('init');
       if (allStarted.length > 0) {
@@ -746,6 +756,7 @@ function setupGuiMode(): void {
     }
 
     apiServer = startApiServer({
+      logger,
       orchestrator,
       persistence,
       executorRegistry,
@@ -756,20 +767,20 @@ function setupGuiMode(): void {
     });
 
     const dbPath = path.join(resolveInvokerHomeRoot(), 'invoker.db');
-    console.log(`[init] Database: ${dbPath}`);
-    console.log(`[init] Repo root: ${repoRoot}`);
-    console.log(`[init] Config: disableAutoRunOnStartup=${invokerConfig.disableAutoRunOnStartup ?? false}`);
+    logger.info(`Database: ${dbPath}`, { module: 'init' });
+    logger.info(`Repo root: ${repoRoot}`, { module: 'init' });
+    logger.info(`Config: disableAutoRunOnStartup=${invokerConfig.disableAutoRunOnStartup ?? false}`, { module: 'init' });
 
     // ── Start Slack bot if env vars are configured ───
     startSlackBot(taskExecutor, taskHandles).catch((err) => {
-      console.log(`[slack] Not started: ${err instanceof Error ? err.message : String(err)}`);
+      logger.info(`Not started: ${err instanceof Error ? err.message : String(err)}`, { module: 'slack' });
     });
 
     // Forward deltas to renderer and keep snapshot cache in sync so
     // the db-poll doesn't re-emit deltas the messageBus already delivered.
     messageBus.subscribe(Channels.TASK_DELTA, (delta: unknown) => {
       uiPerfStats.mainDeltaToUi += 1;
-      console.log(`[delta→ui]`, JSON.stringify(delta));
+      logger.debug(`delta→ui: ${JSON.stringify(delta)}`, { module: 'ui' });
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('invoker:task-delta', delta);
       }
@@ -817,9 +828,9 @@ function setupGuiMode(): void {
     ipcMain.handle('invoker:load-plan', async (_event, planText: string) => {
       const { parsePlan } = await import('./plan-parser.js');
       const plan = parsePlan(planText);
-      console.log(`[ipc] load-plan: "${plan.name}" (${plan.tasks.length} tasks)`);
+      logger.info(`load-plan: "${plan.name}" (${plan.tasks.length} tasks)`, { module: 'ipc' });
       taskHandles.clear();
-      backupPlan(plan);
+      backupPlan(plan, undefined, logger);
       orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
     });
 
@@ -841,9 +852,9 @@ function setupGuiMode(): void {
     }
 
     ipcMain.handle('invoker:start', async () => {
-      console.log(`[ipc] start`);
+      logger.info('start', { module: 'ipc' });
       const started = orchestrator.startExecution();
-      console.log(`[ipc] startExecution returned ${started.length} tasks:`, started.map(t => t.id));
+      logger.info(`startExecution returned ${started.length} tasks: [${started.map(t => t.id).join(', ')}]`, { module: 'ipc' });
       await taskExecutor.executeTasks(started);
       return started;
     });
@@ -852,7 +863,7 @@ function setupGuiMode(): void {
       startupAutoRunBlocked = false;
       const workflows = persistence.listWorkflows();
       if (workflows.length === 0) {
-        console.log(`[ipc] resume-workflow: no workflows found`);
+        logger.info('resume-workflow: no workflows found', { module: 'ipc' });
         return null;
       }
       orchestrator.syncAllFromDb();
@@ -865,19 +876,19 @@ function setupGuiMode(): void {
           mainWindow.webContents.send('invoker:task-delta', { type: 'created', task });
         }
       }
-      console.log(`[ipc] resume-workflow: ${tasks.length} tasks loaded across ${workflows.length} workflows, ${allStarted.length} started`);
+      logger.info(`resume-workflow: ${tasks.length} tasks loaded across ${workflows.length} workflows, ${allStarted.length} started`, { module: 'ipc' });
       await taskExecutor.executeTasks(allStarted);
       taskExecutor.resumeMergeGatePolling();
       return { workflow: workflows[0], taskCount: tasks.length, startedCount: allStarted.length };
     });
 
     ipcMain.handle('invoker:stop', async () => {
-      console.log(`[ipc] stop — destroying all executors`);
+      logger.info('stop — destroying all executors', { module: 'ipc' });
       await Promise.all(executorRegistry.getAll().map(f => f.destroyAll()));
       const allTasks = orchestrator.getAllTasks();
       for (const task of allTasks) {
         if (task.status === 'running' || task.status === 'fixing_with_ai') {
-          console.log(`[ipc] stop — failing in-flight task "${task.id}" (${task.status})`);
+          logger.info(`stop — failing in-flight task "${task.id}" (${task.status})`, { module: 'ipc' });
           orchestrator.handleWorkerResponse({
             requestId: `stop-${task.id}`,
             actionId: task.id,
@@ -889,7 +900,7 @@ function setupGuiMode(): void {
     });
 
     ipcMain.handle('invoker:clear', async () => {
-      console.log(`[ipc] clear — stopping all tasks and resetting DAG`);
+      logger.info('clear — stopping all tasks and resetting DAG', { module: 'ipc' });
       // Capture current workflow before destroying state
       const workflows = persistence.listWorkflows();
       const currentWorkflowId = workflows.length > 0 ? workflows[0].id : null;
@@ -929,13 +940,13 @@ function setupGuiMode(): void {
     ipcMain.handle('invoker:list-workflows', () => persistence.listWorkflows());
 
     ipcMain.handle('invoker:delete-all-workflows', () => {
-      console.log('[ipc] delete-all-workflows');
+      logger.info('delete-all-workflows', { module: 'ipc' });
       assertDeleteAllEnabled();
       const snapshot = createDeleteAllSnapshot(resolveInvokerHomeRoot());
       if (snapshot) {
-        console.log(`[ipc] delete-all-workflows snapshot: ${snapshot}`);
+        logger.info(`delete-all-workflows snapshot: ${snapshot}`, { module: 'ipc' });
       } else {
-        console.log('[ipc] delete-all-workflows snapshot skipped: DB file does not exist yet');
+        logger.info('delete-all-workflows snapshot skipped: DB file does not exist yet', { module: 'ipc' });
       }
       orchestrator.deleteAllWorkflows();
       taskHandles.clear();
@@ -947,7 +958,7 @@ function setupGuiMode(): void {
     });
 
     ipcMain.handle('invoker:delete-workflow', async (_event, workflowId: string) => {
-      console.log(`[ipc] delete-workflow: "${workflowId}"`);
+      logger.info(`delete-workflow: "${workflowId}"`, { module: 'ipc' });
       try {
         // Kill all running tasks belonging to the workflow (process management is outside orchestrator scope)
         const allTasks = orchestrator.getAllTasks();
@@ -972,18 +983,18 @@ function setupGuiMode(): void {
           mainWindow.webContents.send('invoker:workflows-changed', workflows);
         }
       } catch (err) {
-        console.error(`[ipc] delete-workflow failed: ${err}`);
+        logger.error(`delete-workflow failed: ${err}`, { module: 'ipc' });
         throw err;
       }
     });
 
     ipcMain.handle('invoker:load-workflow', (_event, workflowId: string) => {
-      console.log(`[ipc] load-workflow: "${workflowId}"`);
+      logger.info(`load-workflow: "${workflowId}"`, { module: 'ipc' });
       // Sync orchestrator so mutations (restart, approve, etc.) work on this workflow
       orchestrator.syncFromDb(workflowId);
       const tasks = persistence.loadTasks(workflowId);
       const workflow = persistence.loadWorkflow(workflowId);
-      console.log(`[ipc] load-workflow: found ${tasks.length} tasks for "${workflow?.name ?? workflowId}"`);
+      logger.info(`load-workflow: found ${tasks.length} tasks for "${workflow?.name ?? workflowId}"`, { module: 'ipc' });
       for (const task of tasks) {
         lastKnownTaskStates.set(task.id, JSON.stringify(task));
         if (mainWindow && !mainWindow.isDestroyed()) {
@@ -1006,8 +1017,9 @@ function setupGuiMode(): void {
         }
         lastKnownWorkflowCount = workflows.length;
       }
-      console.log(
-        `[ipc] get-tasks(forceRefresh=${forceRefresh ? 'true' : 'false'}) returning ${tasks.length} tasks, ${workflows.length} workflows`,
+      logger.info(
+        `get-tasks(forceRefresh=${forceRefresh ? 'true' : 'false'}) returning ${tasks.length} tasks, ${workflows.length} workflows`,
+        { module: 'ipc' },
       );
       return { tasks, workflows };
     });
@@ -1028,23 +1040,23 @@ function setupGuiMode(): void {
     });
 
     ipcMain.handle('invoker:get-claude-session', async (_event, sessionId: string) => {
-      console.log(`[ipc] get-claude-session: "${sessionId}"`);
+      logger.info(`get-claude-session: "${sessionId}"`, { module: 'ipc' });
       try {
         const allTasks = orchestrator.getAllTasks();
         return await resolveAgentSession(sessionId, 'claude', agentRegistry, allTasks);
       } catch (err) {
-        console.error(`[ipc] get-claude-session failed:`, err);
+        logger.error(`get-claude-session failed: ${err}`, { module: 'ipc' });
         return null;
       }
     });
 
     ipcMain.handle('invoker:get-agent-session', async (_event, sessionId: string, agentName?: string) => {
-      console.log(`[ipc] get-agent-session: "${sessionId}" agent="${agentName ?? 'claude'}"`);
+      logger.info(`get-agent-session: "${sessionId}" agent="${agentName ?? 'claude'}"`, { module: 'ipc' });
       try {
         const allTasks = orchestrator.getAllTasks();
         return await resolveAgentSession(sessionId, agentName ?? 'claude', agentRegistry, allTasks);
       } catch (err) {
-        console.error(`[ipc] get-agent-session failed:`, err);
+        logger.error(`get-agent-session failed: ${err}`, { module: 'ipc' });
         return null;
       }
     });
@@ -1056,23 +1068,23 @@ function setupGuiMode(): void {
     });
 
     ipcMain.handle('invoker:approve', async (_event, taskId: string) => {
-      console.log(`[ipc] approve: "${taskId}"`);
+      logger.info(`approve: "${taskId}"`, { module: 'ipc' });
       const envelope = makeEnvelope('approve', 'ui', 'task', { taskId });
       const result = await commandService.approve(envelope);
       if (!result.ok) throw new Error(result.error.message);
       const started = result.data;
-      console.log(`[ipc] approve: commandService returned ${started.length} started tasks: [${started.map(t => `${t.id}(${t.status})`).join(', ')}]`);
+      logger.info(`approve: commandService returned ${started.length} started tasks: [${started.map(t => `${t.id}(${t.status})`).join(', ')}]`, { module: 'ipc' });
 
       const postFixMerge = started.filter(t => t.status === 'running' && t.config.isMergeNode && t.id === taskId);
       for (const task of postFixMerge) {
-        console.log(`[ipc] approve: post-fix PR prep for merge gate "${task.id}"`);
+        logger.info(`approve: post-fix PR prep for merge gate "${task.id}"`, { module: 'ipc' });
         taskExecutor.publishAfterFix(task).catch(err => {
-          console.error(`[ipc] approve: publishAfterFix failed for "${task.id}":`, err);
+          logger.error(`approve: publishAfterFix failed for "${task.id}": ${err}`, { module: 'ipc' });
         });
       }
 
       const runnable = started.filter(t => t.status === 'running' && !(t.config.isMergeNode && t.id === taskId));
-      console.log(`[ipc] approve: ${runnable.length} runnable after filter: [${runnable.map(t => t.id).join(', ')}]`);
+      logger.info(`approve: ${runnable.length} runnable after filter: [${runnable.map(t => t.id).join(', ')}]`, { module: 'ipc' });
       if (runnable.length > 0) await taskExecutor.executeTasks(runnable);
     });
 
@@ -1084,7 +1096,7 @@ function setupGuiMode(): void {
 
     ipcMain.handle('invoker:select-experiment', async (_event, taskId: string, experimentId: string | string[]) => {
       const ids = Array.isArray(experimentId) ? experimentId : [experimentId];
-      console.log(`[ipc] select-experiment: "${taskId}" experimentIds=${JSON.stringify(ids)}`);
+      logger.info(`select-experiment: "${taskId}" experimentIds=${JSON.stringify(ids)}`, { module: 'ipc' });
       try {
         if (ids.length === 1) {
           // Single-select: serialized via CommandService
@@ -1099,49 +1111,51 @@ function setupGuiMode(): void {
           await taskExecutor.executeTasks(newlyStarted);
         }
       } catch (err) {
-        console.error(`[ipc] select-experiment failed: ${err}`);
+        logger.error(`select-experiment failed: ${err}`, { module: 'ipc' });
         throw err;
       }
     });
 
     ipcMain.handle('invoker:restart-task', async (_event, taskId: string) => {
-      console.log(`[ipc] restart-task: "${taskId}"`);
+      logger.info(`restart-task: "${taskId}"`, { module: 'ipc' });
       try {
         await killRunningTask(taskId);
         const envelope = makeEnvelope('restart-task', 'ui', 'task', { taskId });
         const result = await commandService.restartTask(envelope);
         if (!result.ok) throw new Error(result.error.message);
         const started = result.data;
-        console.log(
+        logger.info(
           `${RESTART_TO_BRANCH_TRACE} ipc invoker:restart-task after commandService.restartTask: count=${started.length} [${started.map((t) => `${t.id}(${t.status})`).join(', ')}]`,
+          { module: 'ipc' },
         );
         const runnable = started.filter(t => t.status === 'running');
-        console.log(
+        logger.info(
           `${RESTART_TO_BRANCH_TRACE} ipc invoker:restart-task runnable=${runnable.length} [${runnable.map((t) => t.id).join(', ') || '(none)'}] → taskExecutor.executeTasks`,
+          { module: 'ipc' },
         );
         await taskExecutor.executeTasks(runnable);
       } catch (err) {
-        console.error(`[ipc] restart-task failed: ${err}`);
+        logger.error(`restart-task failed: ${err}`, { module: 'ipc' });
         throw err;
       }
     });
 
     ipcMain.handle('invoker:cancel-task', async (_event, taskId: string) => {
-      console.log(`[ipc] cancel-task: "${taskId}"`);
+      logger.info(`cancel-task: "${taskId}"`, { module: 'ipc' });
       try {
         return await performCancelTask(taskId);
       } catch (err) {
-        console.error(`[ipc] cancel-task failed: ${err}`);
+        logger.error(`cancel-task failed: ${err}`, { module: 'ipc' });
         throw err;
       }
     });
 
     ipcMain.handle('invoker:cancel-workflow', async (_event, workflowId: string) => {
-      console.log(`[ipc] cancel-workflow: "${workflowId}"`);
+      logger.info(`cancel-workflow: "${workflowId}"`, { module: 'ipc' });
       try {
         return await performCancelWorkflow(workflowId);
       } catch (err) {
-        console.error(`[ipc] cancel-workflow failed: ${err}`);
+        logger.error(`cancel-workflow failed: ${err}`, { module: 'ipc' });
         throw err;
       }
     });
@@ -1176,7 +1190,7 @@ function setupGuiMode(): void {
     }));
 
     ipcMain.handle('invoker:recreate-workflow', async (_event, workflowId: string) => {
-      console.log(`[ipc] recreate-workflow: "${workflowId}"`);
+      logger.info(`recreate-workflow: "${workflowId}"`, { module: 'ipc' });
       try {
         const started = sharedRecreateWorkflow(workflowId, { persistence, orchestrator });
         const runnable = started.filter(t => t.status === 'running');
@@ -1187,13 +1201,13 @@ function setupGuiMode(): void {
           remoteFetchForPool.enabled = true;
         }
       } catch (err) {
-        console.error(`[ipc] recreate-workflow failed: ${err}`);
+        logger.error(`recreate-workflow failed: ${err}`, { module: 'ipc' });
         throw err;
       }
     });
 
     ipcMain.handle('invoker:recreate-task', async (_event, taskId: string) => {
-      console.log(`[ipc] recreate-task: "${taskId}"`);
+      logger.info(`recreate-task: "${taskId}"`, { module: 'ipc' });
       try {
         const started = sharedRecreateTask(taskId, { persistence, orchestrator });
         const runnable = started.filter(t => t.status === 'running');
@@ -1204,13 +1218,13 @@ function setupGuiMode(): void {
           remoteFetchForPool.enabled = true;
         }
       } catch (err) {
-        console.error(`[ipc] recreate-task failed: ${err}`);
+        logger.error(`recreate-task failed: ${err}`, { module: 'ipc' });
         throw err;
       }
     });
 
     ipcMain.handle('invoker:retry-workflow', async (_event, workflowId: string) => {
-      console.log(`[ipc] retry-workflow: "${workflowId}"`);
+      logger.info(`retry-workflow: "${workflowId}"`, { module: 'ipc' });
       try {
         const envelope = makeEnvelope('retry-workflow', 'ui', 'workflow', { workflowId });
         const result = await commandService.retryWorkflow(envelope);
@@ -1223,13 +1237,13 @@ function setupGuiMode(): void {
           remoteFetchForPool.enabled = true;
         }
       } catch (err) {
-        console.error(`[ipc] retry-workflow failed: ${err}`);
+        logger.error(`retry-workflow failed: ${err}`, { module: 'ipc' });
         throw err;
       }
     });
 
     ipcMain.handle('invoker:rebase-and-retry', async (_event, taskId: string) => {
-      console.log(`[ipc] rebase-and-retry: "${taskId}"`);
+      logger.info(`rebase-and-retry: "${taskId}"`, { module: 'ipc' });
       try {
         const started = await rebaseAndRetry(taskId, {
           orchestrator,
@@ -1240,13 +1254,13 @@ function setupGuiMode(): void {
         const runnable = started.filter(t => t.status === 'running');
         await taskExecutor.executeTasks(runnable);
       } catch (err) {
-        console.error(`[ipc] rebase-and-retry failed: ${err}`);
+        logger.error(`rebase-and-retry failed: ${err}`, { module: 'ipc' });
         throw err;
       }
     });
 
     ipcMain.handle('invoker:set-merge-branch', async (_event, workflowId: string, baseBranch: string) => {
-      console.log(`[ipc] set-merge-branch: workflow="${workflowId}" → "${baseBranch}"`);
+      logger.info(`set-merge-branch: workflow="${workflowId}" → "${baseBranch}"`, { module: 'ipc' });
       try {
         persistence.updateWorkflow(workflowId, { baseBranch });
 
@@ -1258,13 +1272,13 @@ function setupGuiMode(): void {
           await taskExecutor.executeTasks(runnable);
         }
       } catch (err) {
-        console.error(`[ipc] set-merge-branch failed: ${err}`);
+        logger.error(`set-merge-branch failed: ${err}`, { module: 'ipc' });
         throw err;
       }
     });
 
     ipcMain.handle('invoker:set-merge-mode', async (_event, workflowId: string, mergeMode: string) => {
-      console.log(`[ipc] set-merge-mode: workflow="${workflowId}" → "${mergeMode}"`);
+      logger.info(`set-merge-mode: workflow="${workflowId}" → "${mergeMode}"`, { module: 'ipc' });
       try {
         await setWorkflowMergeMode(workflowId, mergeMode, {
           orchestrator,
@@ -1272,7 +1286,7 @@ function setupGuiMode(): void {
           taskExecutor,
         });
       } catch (err) {
-        console.error(`[ipc] set-merge-mode failed: ${err}`);
+        logger.error(`set-merge-mode failed: ${err}`, { module: 'ipc' });
         throw err;
       }
       const workflows = persistence.listWorkflows();
@@ -1282,7 +1296,7 @@ function setupGuiMode(): void {
     });
 
     ipcMain.handle('invoker:approve-merge', async (_event, workflowId: string) => {
-      console.log(`[ipc] approve-merge: "${workflowId}"`);
+      logger.info(`approve-merge: "${workflowId}"`, { module: 'ipc' });
       try {
         const mergeTask = orchestrator.getMergeNode(workflowId);
         if (!mergeTask) throw new Error(`No merge node for workflow ${workflowId}`);
@@ -1293,19 +1307,19 @@ function setupGuiMode(): void {
         const postFixMerge = started.filter(t => t.status === 'running' && t.config.isMergeNode && t.id === mergeTask.id);
         for (const task of postFixMerge) {
           taskExecutor.publishAfterFix(task).catch(err => {
-            console.error(`[ipc] approve-merge: publishAfterFix failed for "${task.id}":`, err);
+            logger.error(`approve-merge: publishAfterFix failed for "${task.id}": ${err}`, { module: 'ipc' });
           });
         }
         const runnable = started.filter(t => t.status === 'running' && !(t.config.isMergeNode && t.id === mergeTask.id));
         if (runnable.length > 0) await taskExecutor.executeTasks(runnable);
       } catch (err) {
-        console.error(`[ipc] approve-merge failed: ${err}`);
+        logger.error(`approve-merge failed: ${err}`, { module: 'ipc' });
         throw err;
       }
     });
 
     ipcMain.handle('invoker:check-pr-statuses', async () => {
-      console.log(`[ipc] check-pr-statuses`);
+      logger.info('check-pr-statuses', { module: 'ipc' });
       await taskExecutor.checkMergeGateStatuses();
     });
 
@@ -1320,7 +1334,7 @@ function setupGuiMode(): void {
     });
 
     ipcMain.handle('invoker:resolve-conflict', async (_event, taskId: string, agentName?: string) => {
-      console.log(`[ipc] resolve-conflict: "${taskId}" agent=${agentName ?? 'claude'}`);
+      logger.info(`resolve-conflict: "${taskId}" agent=${agentName ?? 'claude'}`, { module: 'ipc' });
       try {
         await resolveConflictAction(taskId, {
           orchestrator,
@@ -1328,20 +1342,20 @@ function setupGuiMode(): void {
           taskExecutor,
         }, agentName);
       } catch (err) {
-        console.error(`[ipc] resolve-conflict failed: ${err}`);
+        logger.error(`resolve-conflict failed: ${err}`, { module: 'ipc' });
         throw err;
       }
     });
 
     ipcMain.handle('invoker:fix-with-agent', async (_event, taskId: string, agentName?: string) => {
-      console.log(`[ipc] fix-with-agent: "${taskId}" agent=${agentName ?? 'claude'}`);
+      logger.info(`fix-with-agent: "${taskId}" agent=${agentName ?? 'claude'}`, { module: 'ipc' });
       const { savedError } = orchestrator.beginConflictResolution(taskId);
       try {
         const output = persistence.getTaskOutput(taskId);
         await taskExecutor.fixWithAgent(taskId, output, agentName, savedError);
         orchestrator.setFixAwaitingApproval(taskId, savedError);
       } catch (err) {
-        console.error(`[ipc] fix-with-agent failed: ${err}`);
+        logger.error(`fix-with-agent failed: ${err}`, { module: 'ipc' });
         const msg = err instanceof Error ? err.message : String(err);
         persistence.appendTaskOutput(taskId, `\n[Fix with ${agentName ?? 'Claude'}] Failed: ${msg}`);
         orchestrator.revertConflictResolution(taskId, savedError, msg);
@@ -1351,7 +1365,7 @@ function setupGuiMode(): void {
 
 
     ipcMain.handle('invoker:edit-task-command', async (_event, taskId: string, newCommand: string) => {
-      console.log(`[ipc] edit-task-command: "${taskId}" → "${newCommand}"`);
+      logger.info(`edit-task-command: "${taskId}" → "${newCommand}"`, { module: 'ipc' });
       try {
         const envelope = makeEnvelope('edit-task-command', 'ui', 'task', { taskId, newCommand });
         const result = await commandService.editTaskCommand(envelope);
@@ -1359,13 +1373,13 @@ function setupGuiMode(): void {
         const runnable = result.data.filter(t => t.status === 'running');
         await taskExecutor.executeTasks(runnable);
       } catch (err) {
-        console.error(`[ipc] edit-task-command failed: ${err}`);
+        logger.error(`edit-task-command failed: ${err}`, { module: 'ipc' });
         throw err;
       }
     });
 
     ipcMain.handle('invoker:edit-task-type', async (_event, taskId: string, executorType: string, remoteTargetId?: string) => {
-      console.log(`[ipc] edit-task-type: "${taskId}" → "${executorType}" remoteTargetId=${remoteTargetId ?? 'none'}`);
+      logger.info(`edit-task-type: "${taskId}" → "${executorType}" remoteTargetId=${remoteTargetId ?? 'none'}`, { module: 'ipc' });
       try {
         const envelope = makeEnvelope('edit-task-type', 'ui', 'task', { taskId, executorType, remoteTargetId });
         const result = await commandService.editTaskType(envelope);
@@ -1373,13 +1387,13 @@ function setupGuiMode(): void {
         const runnable = result.data.filter(t => t.status === 'running');
         await taskExecutor.executeTasks(runnable);
       } catch (err) {
-        console.error(`[ipc] edit-task-type failed: ${err}`);
+        logger.error(`edit-task-type failed: ${err}`, { module: 'ipc' });
         throw err;
       }
     });
 
     ipcMain.handle('invoker:edit-task-agent', async (_event, taskId: string, agentName: string) => {
-      console.log(`[ipc] edit-task-agent: "${taskId}" → "${agentName}"`);
+      logger.info(`edit-task-agent: "${taskId}" → "${agentName}"`, { module: 'ipc' });
       try {
         const envelope = makeEnvelope('edit-task-agent', 'ui', 'task', { taskId, agentName });
         const result = await commandService.editTaskAgent(envelope);
@@ -1387,7 +1401,7 @@ function setupGuiMode(): void {
         const runnable = result.data.filter(t => t.status === 'running');
         await taskExecutor.executeTasks(runnable);
       } catch (err) {
-        console.error(`[ipc] edit-task-agent failed: ${err}`);
+        logger.error(`edit-task-agent failed: ${err}`, { module: 'ipc' });
         throw err;
       }
     });
@@ -1399,7 +1413,7 @@ function setupGuiMode(): void {
         taskId: string,
         updates: Array<{ workflowId: string; taskId?: string; gatePolicy: 'completed' | 'review_ready' }>,
       ) => {
-        console.log(`[ipc] set-task-external-gate-policies: "${taskId}" updates=${updates.length}`);
+        logger.info(`set-task-external-gate-policies: "${taskId}" updates=${updates.length}`, { module: 'ipc' });
         try {
           const envelope = makeEnvelope('set-gate-policies', 'ui', 'task', { taskId, updates });
           const result = await commandService.setTaskExternalGatePolicies(envelope);
@@ -1407,7 +1421,7 @@ function setupGuiMode(): void {
           const runnable = result.data.filter((t) => t.status === 'running');
           if (runnable.length > 0) await taskExecutor.executeTasks(runnable);
         } catch (err) {
-          console.error(`[ipc] set-task-external-gate-policies failed: ${err}`);
+          logger.error(`set-task-external-gate-policies failed: ${err}`, { module: 'ipc' });
           throw err;
         }
       },
@@ -1422,7 +1436,7 @@ function setupGuiMode(): void {
     });
 
     ipcMain.handle('invoker:replace-task', async (_event, taskId: string, replacementTasks: unknown[]) => {
-      console.log(`[ipc] replace-task: "${taskId}" with ${replacementTasks.length} replacement(s)`);
+      logger.info(`replace-task: "${taskId}" with ${replacementTasks.length} replacement(s)`, { module: 'ipc' });
       try {
         const envelope = makeEnvelope('replace-task', 'ui', 'task', {
           taskId,
@@ -1434,7 +1448,7 @@ function setupGuiMode(): void {
         await taskExecutor.executeTasks(runnable);
         return result.data;
       } catch (err) {
-        console.error(`[ipc] replace-task failed: ${err}`);
+        logger.error(`replace-task failed: ${err}`, { module: 'ipc' });
         throw err;
       }
     });
@@ -1447,13 +1461,13 @@ function setupGuiMode(): void {
 
         if (workflows.length !== lastKnownWorkflowCount) {
           const msg = `Workflow count changed: ${lastKnownWorkflowCount} → ${workflows.length}`;
-          console.log(`[db-poll] ${msg}`);
+          logger.info(msg, { module: 'db-poll' });
           try { persistence.writeActivityLog('db-poll', 'info', msg); } catch { /* db locked */ }
           lastKnownWorkflowCount = workflows.length;
           mainWindow.webContents.send('invoker:workflows-changed', workflows);
 
           orchestrator.syncAllFromDb();
-          console.log(`[db-poll] Synced orchestrator for all ${workflows.length} workflows`);
+          logger.info(`Synced orchestrator for all ${workflows.length} workflows`, { module: 'db-poll' });
           lastKnownTaskStates.clear();
         }
 
@@ -1468,14 +1482,14 @@ function setupGuiMode(): void {
             const prev = lastKnownTaskStates.get(task.id);
             if (!prev) {
               const msg = `New task: ${task.id} (${task.status})`;
-              console.log(`[db-poll] ${msg}`);
+              logger.info(msg, { module: 'db-poll' });
               try { persistence.writeActivityLog('db-poll', 'info', msg); } catch { /* db locked */ }
               lastKnownTaskStates.set(task.id, snapshot);
               uiPerfStats.dbPollCreated += 1;
               mainWindow.webContents.send('invoker:task-delta', { type: 'created', task });
             } else if (prev !== snapshot) {
               const msg = `Task updated: ${task.id} (${task.status})`;
-              console.log(`[db-poll] ${msg}`);
+              logger.info(msg, { module: 'db-poll' });
               try { persistence.writeActivityLog('db-poll', 'info', msg); } catch { /* db locked */ }
               lastKnownTaskStates.set(task.id, snapshot);
               uiPerfStats.dbPollUpdatedAsCreated += 1;
@@ -1495,12 +1509,12 @@ function setupGuiMode(): void {
 
               if (referenceTime && (now - referenceTime) > STALE_HEARTBEAT_MS) {
                 if (startupAutoRunBlocked) {
-                  console.log(`[db-poll] Stale running task "${task.id}": auto-run blocked by config, skipping restart`);
+                  logger.info(`Stale running task "${task.id}": auto-run blocked by config, skipping restart`, { module: 'db-poll' });
                   continue;
                 }
                 const ageSeconds = Math.round((now - referenceTime) / 1000);
                 const source = heartbeatTime ? 'last heartbeat' : 'started';
-                console.warn(`[db-poll] Stale running task "${task.id}": ${source} ${ageSeconds}s ago, restarting`);
+                logger.warn(`Stale running task "${task.id}": ${source} ${ageSeconds}s ago, restarting`, { module: 'db-poll' });
                 try { persistence.writeActivityLog('db-poll', 'warn', `Stale running task "${task.id}": ${source} ${ageSeconds}s ago, restarting`); } catch { /* db locked */ }
                 try {
                   await killRunningTask(task.id);
@@ -1508,7 +1522,7 @@ function setupGuiMode(): void {
                   const runnable = restarted.filter(t => t.status === 'running');
                   await taskExecutor.executeTasks(runnable);
                 } catch (err) {
-                  console.error(`[db-poll] Failed to restart stale task "${task.id}":`, err);
+                  logger.error(`Failed to restart stale task "${task.id}": ${err}`, { module: 'db-poll' });
                 }
               }
             }
@@ -1539,13 +1553,14 @@ function setupGuiMode(): void {
 
     // ── External terminal launcher ──────────────────────────────
     ipcMain.handle('invoker:open-terminal', async (_event, taskId: string): Promise<{ opened: boolean; reason?: string }> => {
-      console.log(`[open-terminal] invoked for task="${taskId}"`);
+      logger.info(`invoked for task="${taskId}"`, { module: 'open-terminal' });
       return openExternalTerminalForTask({
         taskId,
         persistence,
         executorRegistry,
         executionAgentRegistry: agentRegistry,
         repoRoot,
+        logger,
         runningTaskReason:
           'Task is still running or being fixed with AI. View output in the terminal panel below.',
       });
@@ -1559,7 +1574,7 @@ function setupGuiMode(): void {
       }
     });
   }).catch((err) => {
-    console.error(`${RED}Error:${RESET} ${err instanceof Error ? err.message : String(err)}`);
+    process.stderr.write(`${RED}Error:${RESET} ${err instanceof Error ? err.message : String(err)}\n`);
     app.quit();
   });
 
@@ -1604,8 +1619,8 @@ function setupGuiMode(): void {
     handles: Map<string, { handle: ExecutorHandle; executor: Executor }>,
   ): Promise<void> {
     const logFn = (source: string, level: string, message: string) => {
-      const prefix = level === 'error' ? `${RED}[${source}]${RESET}` : `[${source}]`;
-      console.log(`${prefix} ${message}`);
+      const logMethod = level === 'error' ? 'error' : level === 'warn' ? 'warn' : 'info';
+      logger[logMethod](message, { module: source });
       try { persistence.writeActivityLog(source, level, message); } catch { /* db locked */ }
     };
 

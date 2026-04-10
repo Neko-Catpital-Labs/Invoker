@@ -6,6 +6,7 @@
  * waitForCompletion().
  */
 
+import type { Logger } from '@invoker/contracts';
 import type { Orchestrator, ExternalGatePolicyUpdate } from '@invoker/workflow-core';
 import type { TaskState } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
@@ -15,6 +16,7 @@ import { normalizeMergeModeForPersistence } from './merge-mode.js';
 // ── Deps interfaces ──────────────────────────────────────────
 
 export interface ActionDeps {
+  logger?: Logger;
   orchestrator: Orchestrator;
   persistence: SQLiteAdapter;
   /** @deprecated Pool cleanup uses the workflow mirror; repoRoot branch deletion is no longer used. */
@@ -27,15 +29,15 @@ export interface ActionDeps {
 
 export function bumpGenerationAndRecreate(
   workflowId: string,
-  deps: Pick<ActionDeps, 'persistence' | 'orchestrator'>,
+  deps: Pick<ActionDeps, 'logger' | 'persistence' | 'orchestrator'>,
 ): TaskState[] {
   const { persistence, orchestrator } = deps;
   const workflow = persistence.loadWorkflow(workflowId);
   if (!workflow) throw new Error(`Workflow ${workflowId} not found`);
   const nextGen = (workflow.generation ?? 0) + 1;
   persistence.updateWorkflow(workflowId, { generation: nextGen });
-  console.log(`[workflow] bumped generation to ${nextGen} for ${workflowId}`);
-  console.log(`[agent-session-trace] bumpGenerationAndRecreate: calling recreateWorkflow(${workflowId})`);
+  deps.logger?.info(`bumped generation to ${nextGen} for ${workflowId}`, { module: 'workflow' });
+  deps.logger?.info(`bumpGenerationAndRecreate: calling recreateWorkflow(${workflowId})`, { module: 'agent-session-trace' });
   return orchestrator.recreateWorkflow(workflowId);
 }
 
@@ -88,7 +90,7 @@ export function retryWorkflow(
 
 export function recreateWorkflow(
   workflowId: string,
-  deps: Pick<ActionDeps, 'persistence' | 'orchestrator'>,
+  deps: Pick<ActionDeps, 'logger' | 'persistence' | 'orchestrator'>,
 ): TaskState[] {
   return bumpGenerationAndRecreate(workflowId, deps);
 }
@@ -123,8 +125,9 @@ export async function rebaseAndRetry(
   const workflowId = task.config.workflowId;
 
   const workflow = deps.persistence.loadWorkflow(workflowId);
-  console.log(
-    `[agent-session-trace] rebaseAndRetry: taskId=${taskId} workflowId=${workflowId} → pool prep (if taskExecutor+repoUrl) → bumpGenerationAndRecreate → recreateWorkflow`,
+  deps.logger?.info(
+    `rebaseAndRetry: taskId=${taskId} workflowId=${workflowId} → pool prep (if taskExecutor+repoUrl) → bumpGenerationAndRecreate → recreateWorkflow`,
+    { module: 'agent-session-trace' },
   );
   if (deps.taskExecutor && workflow?.repoUrl) {
     await deps.taskExecutor.preparePoolForRebaseRetry(workflowId, workflow.repoUrl, workflow.baseBranch);
