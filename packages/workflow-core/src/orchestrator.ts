@@ -36,6 +36,7 @@ import { ActionGraph } from '@invoker/workflow-graph';
 import { reconcileMergeLeavesImpl, applyGraphMutationImpl } from './graph-mutation.js';
 import type { GraphMutationHost } from './graph-mutation.js';
 import { buildPlanLocalToScopedIdMap, scopePlanTaskId } from './task-id-scope.js';
+import type { TaskRepository } from './task-repository.js';
 
 // ── Channel Constants ───────────────────────────────────────
 
@@ -308,9 +309,41 @@ export function assertExecutorRoutingConforms(
   }
 }
 
+/**
+ * Adapt an OrchestratorPersistence into the TaskRepository port.
+ * Only the three write methods used by the orchestrator are bridged.
+ */
+export function taskRepositoryFromPersistence(p: OrchestratorPersistence): TaskRepository {
+  return {
+    saveWorkflow: (wf) => p.saveWorkflow(wf),
+    updateWorkflow: (id, c) => p.updateWorkflow?.(id, c),
+    deleteWorkflow: (id) => p.deleteWorkflow?.(id),
+    deleteAllWorkflows: () => p.deleteAllWorkflows?.(),
+    saveTask: (wfId, t) => p.saveTask(wfId, t),
+    updateTask: (id, c) => p.updateTask(id, c),
+    logEvent: (id, et, pl) => p.logEvent?.(id, et, pl),
+    saveAttempt: (a) => p.saveAttempt(a),
+    updateAttempt: (id, c) => p.updateAttempt(id, c),
+    failTaskAndAttempt: (tId, tc, ap) => {
+      if (p.failTaskAndAttempt) {
+        p.failTaskAndAttempt(tId, tc, ap);
+      } else {
+        p.updateTask(tId, tc);
+        const attempts = p.loadAttempts(tId);
+        const latest = attempts[attempts.length - 1];
+        if (latest) {
+          p.updateAttempt(latest.id, ap);
+        }
+      }
+    },
+  };
+}
+
 export interface OrchestratorConfig {
   persistence: OrchestratorPersistence;
   messageBus: OrchestratorMessageBus;
+  /** Optional; defaults to an adapter wrapping `persistence`. */
+  taskRepository?: TaskRepository;
   maxConcurrency?: number;
   /**
    * Rules that validate task execution environment against command patterns.
@@ -328,6 +361,7 @@ export class Orchestrator {
   private readonly scheduler: TaskScheduler;
   private readonly persistence: OrchestratorPersistence;
   private readonly messageBus: OrchestratorMessageBus;
+  private readonly taskRepository: TaskRepository;
   private readonly maxConcurrency: number;
   private readonly executorRoutingRules: ExecutorRoutingRule[];
 
@@ -339,6 +373,7 @@ export class Orchestrator {
     this.maxConcurrency = config.maxConcurrency ?? 3;
     this.persistence = config.persistence;
     this.messageBus = config.messageBus;
+    this.taskRepository = config.taskRepository ?? taskRepositoryFromPersistence(config.persistence);
     this.executorRoutingRules = config.executorRoutingRules ?? [];
 
     this.stateMachine = new TaskStateMachine(new ActionGraph());
@@ -374,7 +409,7 @@ export class Orchestrator {
       throw new Error(`writeAndSync: task ${taskId} not found in graph`);
     }
     const id = existing.id;
-    this.persistence.updateTask(id, changes);
+    this.taskRepository.updateTask(id, changes);
     const updated: TaskState = {
       ...existing,
       ...(changes.status !== undefined ? { status: changes.status } : {}),
@@ -1148,13 +1183,13 @@ export class Orchestrator {
       const attempts = this.persistence.loadAttempts(id);
       const current = attempts[attempts.length - 1];
       if (current && (current.status === 'running' || current.status === 'pending')) {
-        this.persistence.updateAttempt(current.id, { status: 'superseded' });
+        this.taskRepository.updateAttempt(current.id, { status: 'superseded' });
       }
       const newAttempt = createAttempt(id, {
         snapshotCommit: current?.commit,
         supersedesAttemptId: current?.id,
       });
-      this.persistence.saveAttempt(newAttempt);
+      this.taskRepository.saveAttempt(newAttempt);
     } catch { /* best effort */ }
 
     const resetChanges: TaskStateChanges = {
@@ -1483,13 +1518,13 @@ export class Orchestrator {
       const attempts = this.persistence.loadAttempts(taskId);
       const current = attempts[attempts.length - 1];
       if (current && (current.status === 'running' || current.status === 'pending')) {
-        this.persistence.updateAttempt(current.id, { status: 'superseded' });
+        this.taskRepository.updateAttempt(current.id, { status: 'superseded' });
       }
       const freshAttempt = createAttempt(taskId, {
         commandOverride: newCommand,
         supersedesAttemptId: current?.id,
       });
-      this.persistence.saveAttempt(freshAttempt);
+      this.taskRepository.saveAttempt(freshAttempt);
     } catch { /* best effort */ }
 
     return this.restartTask(taskId);
@@ -2066,13 +2101,13 @@ export class Orchestrator {
       const attempts = this.persistence.loadAttempts(id);
       const current = attempts[attempts.length - 1];
       if (current && (current.status === 'running' || current.status === 'pending')) {
-        this.persistence.updateAttempt(current.id, { status: 'superseded' });
+        this.taskRepository.updateAttempt(current.id, { status: 'superseded' });
       }
       const newAttempt = createAttempt(id, {
         snapshotCommit: current?.commit,
         supersedesAttemptId: current?.id,
       });
-      this.persistence.saveAttempt(newAttempt);
+      this.taskRepository.saveAttempt(newAttempt);
     } catch { /* best effort */ }
 
     // Park in deferred set — re-enqueued when a task completes
@@ -2159,7 +2194,7 @@ export class Orchestrator {
       const attempts = this.persistence.loadAttempts(taskId);
       const latest = attempts[attempts.length - 1];
       if (latest && latest.status === 'running') {
-        this.persistence.updateAttempt(latest.id, {
+        this.taskRepository.updateAttempt(latest.id, {
           status: 'completed',
           exitCode: parsed.exitCode,
           completedAt: new Date(),
@@ -2227,30 +2262,13 @@ export class Orchestrator {
       },
     };
 
-    // Use atomic write for task + attempt if available, otherwise fall back to dual-write
-    if (this.persistence.failTaskAndAttempt) {
-      this.persistence.failTaskAndAttempt(taskId, changes, {
-        status: 'failed',
-        exitCode: executionFields.exitCode,
-        error: executionFields.error,
-        completedAt: new Date(),
-      });
-    } else {
-      // Fallback: separate task update + attempt update (dual-write, best-effort)
-      this.persistence.updateTask(taskId, changes);
-      try {
-        const attempts = this.persistence.loadAttempts(taskId);
-        const latest = attempts[attempts.length - 1];
-        if (latest && latest.status === 'running') {
-          this.persistence.updateAttempt(latest.id, {
-            status: 'failed',
-            exitCode: executionFields.exitCode,
-            error: executionFields.error,
-            completedAt: new Date(),
-          });
-        }
-      } catch { /* best effort */ }
-    }
+    // Atomic write for task + attempt via repository
+    this.taskRepository.failTaskAndAttempt(taskId, changes, {
+      status: 'failed',
+      exitCode: executionFields.exitCode,
+      error: executionFields.error,
+      completedAt: new Date(),
+    });
 
     // Sync to in-memory state (same pattern as writeAndSync)
     const updated: TaskState = {
@@ -2698,7 +2716,7 @@ export class Orchestrator {
           startedAt: now,
           upstreamAttemptIds,
         });
-        this.persistence.saveAttempt(attempt);
+        this.taskRepository.saveAttempt(attempt);
       } catch { /* best effort — never break existing flow */ }
 
       job = this.scheduler.dequeue();
