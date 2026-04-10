@@ -37,6 +37,8 @@ These packages form the foundation and have no dependencies on other workspace p
 - **test-kit** → contracts, execution-engine, workflow-core
 - **app** → contracts, data-store, execution-engine, surfaces, transport, workflow-core
 
+**test-kit** is a `private: true` utility package that provides shared test harnesses, in-memory persistence stubs, mock git helpers, and an in-memory message bus. It imports from contracts (Layer 0), workflow-core (Layer 1), and execution-engine (Layer 3). Because its highest dependency is Layer 3, Layer 4 is the correct placement with no risk of dependency cycles. test-kit is never published or deployed — it exists solely to reduce boilerplate across package test suites.
+
 ## Dependency Rules
 
 ### Allowed
