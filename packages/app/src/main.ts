@@ -57,7 +57,7 @@ import type {
   TaskStateChanges,
 } from '@invoker/workflow-core';
 import { makeEnvelope } from '@invoker/contracts';
-import { SQLiteAdapter, ConversationRepository } from '@invoker/data-store';
+import { SQLiteAdapter, ConversationRepository, SqliteTaskRepository } from '@invoker/data-store';
 import { IpcBus, Channels } from '@invoker/transport';
 import type { MessageBus } from '@invoker/transport';
 import {
@@ -199,8 +199,10 @@ async function initServices(options?: InitServicesOptions): Promise<void> {
       agentRegistry: options?.executionAgentRegistry,
     }),
   );
+  const taskRepository = new SqliteTaskRepository(persistence);
   orchestrator = new Orchestrator({
     persistence, messageBus,
+    taskRepository,
     maxConcurrency: invokerConfig.maxConcurrency,
     executorRoutingRules: invokerConfig.executorRoutingRules ?? [],
   });
@@ -913,6 +915,7 @@ function setupGuiMode(): void {
 
       orchestrator = new Orchestrator({
     persistence, messageBus,
+    taskRepository: new SqliteTaskRepository(persistence),
     maxConcurrency: invokerConfig.maxConcurrency,
     executorRoutingRules: invokerConfig.executorRoutingRules ?? [],
   });
