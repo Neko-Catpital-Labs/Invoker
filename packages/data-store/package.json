@@ -23,6 +23,7 @@
     "sql.js": "^1.12.0"
   },
   "devDependencies": {
+    "@invoker/persistence": "workspace:*",
     "@types/node": "^25.3.3",
     "@types/sql.js": "^1.4.0",
     "tsup": "^8.0.0",

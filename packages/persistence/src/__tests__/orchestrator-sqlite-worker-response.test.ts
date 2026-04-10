@@ -56,7 +56,7 @@ describe('Orchestrator + SQLite worker response persistence', () => {
     };
   }
 
-  it('invalid WorkResponse leaves SQLite status unchanged (repro stuck running)', () => {
+  it('invalid WorkResponse persists failed status (was: stuck running)', () => {
     adapter.saveTask(wf.id, baseTask('task-invalid'));
     orchestrator.syncFromDb(wf.id);
 
@@ -76,7 +76,7 @@ describe('Orchestrator + SQLite worker response persistence', () => {
     orchestrator.handleWorkerResponse(badResponse);
 
     const row = adapter.loadTasks(wf.id).find((t) => t.id === 'task-invalid')!;
-    expect(row.status).toBe('running');
+    expect(row.status).toBe('failed');
   });
 
   it('valid failed response persists failed + exitCode to SQLite', () => {

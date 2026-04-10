@@ -119,6 +119,9 @@ importers:
         specifier: ^1.12.0
         version: 1.14.1
     devDependencies:
+      '@invoker/persistence':
+        specifier: workspace:*
+        version: link:../persistence
       '@types/node':
         specifier: ^25.3.3
         version: 25.3.3
