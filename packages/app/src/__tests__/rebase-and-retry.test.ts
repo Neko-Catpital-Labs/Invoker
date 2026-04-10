@@ -30,6 +30,8 @@ function createTempRepo(): string {
   execSync('pnpm install', { cwd: dir, stdio: 'pipe' });
   writeFileSync(join(dir, 'initial.txt'), 'initial');
   execSync('git add -A && git commit -m "initial commit X"', { cwd: dir });
+  // Default branch is often `main` (init.defaultBranch); this harness expects `master`.
+  execSync('git branch -M master', { cwd: dir });
   return dir;
 }
 
