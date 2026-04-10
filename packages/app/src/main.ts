@@ -95,6 +95,7 @@ import {
 import { spawn, execSync } from 'node:child_process';
 import { openExternalTerminalForTask } from './open-terminal-for-task.js';
 import { createRequire } from 'node:module';
+import { acquireDbWriterLock, type DbWriterLockResult } from './db-writer-lock.js';
 
 // ── Detect headless mode ─────────────────────────────────────
 
@@ -135,6 +136,7 @@ let persistence: SQLiteAdapter;
 let executorRegistry: ExecutorRegistry;
 let orchestrator: Orchestrator;
 let hourlyBackupInterval: ReturnType<typeof setInterval> | null = null;
+let writerLock: DbWriterLockResult | null = null;
 
 // Repo root: 3 levels up from packages/app/dist/
 const repoRoot = path.resolve(__dirname, '..', '..', '..');
@@ -157,7 +159,11 @@ async function initServices(options?: InitServicesOptions): Promise<void> {
   const invokerHomeRoot = resolveInvokerHomeRoot();
   mkdirSync(invokerHomeRoot, { recursive: true });
   const readOnly = options?.readOnly === true;
-  persistence = await SQLiteAdapter.create(path.join(invokerHomeRoot, 'invoker.db'), {
+  const dbPath = path.join(invokerHomeRoot, 'invoker.db');
+  if (!readOnly) {
+    writerLock = acquireDbWriterLock(dbPath);
+  }
+  persistence = await SQLiteAdapter.create(dbPath, {
     readOnly,
     ownerCapability: !readOnly, // writable mode requires owner capability
   });
@@ -421,6 +427,7 @@ if (isHeadless) {
       exitCode = 1;
     } finally {
       if (persistence) persistence.close();
+      if (writerLock) writerLock.release();
       if (messageBus) messageBus.disconnect();
     }
     process.exit(exitCode);
@@ -1535,6 +1542,7 @@ function setupGuiMode(): void {
       }
     }
     if (persistence) persistence.close();
+    if (writerLock) writerLock.release();
     if (messageBus) messageBus.disconnect();
   });
 

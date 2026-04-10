@@ -28,6 +28,10 @@ invoker_e2e_init() {
   # Safety rail in app/headless: delete-all requires explicit opt-in.
   # E2E suites use isolated temp DB dirs, so enabling here is safe.
   export INVOKER_ALLOW_DELETE_ALL=1
+  # E2E tests run multiple standalone processes against the same DB (e.g.
+  # submit-plan in background + cancel command). The writer lock would block
+  # the second process. In production, IPC delegation handles this.
+  export INVOKER_UNSAFE_DISABLE_DB_WRITER_LOCK=1
   # Isolate each e2e run from other local Invoker instances/tests to avoid API port collisions.
   export INVOKER_API_PORT="${INVOKER_API_PORT:-$((4300 + (RANDOM % 1000)))}"
   export INVOKER_DB_DIR="$(mktemp -d "${TMPDIR:-/tmp}/invoker-e2e-db.XXXXXX")"
