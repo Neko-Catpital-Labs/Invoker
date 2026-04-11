@@ -148,7 +148,9 @@ export class SQLiteAdapter implements PersistenceAdapter {
     if (!this.dbPath || !this.dirty) return;
     const dir = dirname(this.dbPath);
     mkdirSync(dir, { recursive: true });
-    writeFileSync(this.dbPath, Buffer.from(this.db.export()));
+    const tmpPath = `${this.dbPath}.tmp`;
+    writeFileSync(tmpPath, Buffer.from(this.db.export()));
+    renameSync(tmpPath, this.dbPath);
     this.dirty = false;
   }
 
@@ -381,12 +383,19 @@ export class SQLiteAdapter implements PersistenceAdapter {
       'ALTER TABLE tasks ADD COLUMN executor_type TEXT',
     ];
     for (const sql of migrations) {
-      try { this.db.run(sql); } catch { /* Column already exists */ }
+      try {
+        this.db.run(sql);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (!msg.includes('duplicate column name')) {
+          throw err;
+        }
+      }
     }
 
     // Replace old attempt_number index with created_at index
-    try { this.db.run('DROP INDEX IF EXISTS idx_attempts_node'); } catch { /* already gone */ }
-    try { this.db.run('CREATE INDEX IF NOT EXISTS idx_attempts_node_created ON attempts(node_id, created_at)'); } catch { /* already exists */ }
+    this.db.run('DROP INDEX IF EXISTS idx_attempts_node');
+    this.db.run('CREATE INDEX IF NOT EXISTS idx_attempts_node_created ON attempts(node_id, created_at)');
 
     if (!this.readOnly) {
       this.migrateTestCommands();
@@ -801,11 +810,18 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
   deleteAllWorkflows(): void {
     this.ensureWritable();
-    this.db.run('DELETE FROM events');
-    this.db.run('DELETE FROM task_output');
-    this.db.run('DELETE FROM attempts');
-    this.db.run('DELETE FROM tasks');
-    this.db.run('DELETE FROM workflows');
+    this.db.run('BEGIN');
+    try {
+      this.db.run('DELETE FROM events');
+      this.db.run('DELETE FROM task_output');
+      this.db.run('DELETE FROM attempts');
+      this.db.run('DELETE FROM tasks');
+      this.db.run('DELETE FROM workflows');
+      this.db.run('COMMIT');
+    } catch (err) {
+      this.db.run('ROLLBACK');
+      throw err;
+    }
     this.dirty = true;
     this.scheduleFlush();
   }
@@ -1036,6 +1052,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
   }
 
   deleteConversationsOlderThan(cutoffIso: string): number {
+    this.ensureWritable();
     // Delete messages first (FK constraint)
     this.db.run(`
       DELETE FROM conversation_messages WHERE thread_ts IN (
@@ -1047,6 +1064,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       [cutoffIso],
     );
     const changes = this.db.getRowsModified();
+    this.dirty = true;
     this.scheduleFlush();
     return changes;
   }

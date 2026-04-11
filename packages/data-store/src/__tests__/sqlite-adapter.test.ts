@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, statSync } from 'node:fs';
+import { mkdtempSync, rmSync, statSync, existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { SQLiteAdapter } from '../sqlite-adapter.js';
@@ -1642,6 +1642,307 @@ describe('SQLiteAdapter', () => {
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }
+    });
+  });
+
+  // ── Data Integrity Hardening Tests ──────────────────────
+
+  describe('atomic flush (write-to-temp + rename)', () => {
+    it('does not leave a .tmp file after successful flush', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-atomic-'));
+      const dbPath = join(dir, 'invoker.db');
+
+      try {
+        const db = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        db.saveWorkflow(testWorkflow);
+        db.close(); // close triggers flush
+
+        // The .tmp file should not persist after a successful flush
+        expect(existsSync(`${dbPath}.tmp`)).toBe(false);
+        // The main DB file should exist
+        expect(existsSync(dbPath)).toBe(true);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('persists data correctly through atomic flush cycle', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-atomic-roundtrip-'));
+      const dbPath = join(dir, 'invoker.db');
+
+      try {
+        const db1 = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        db1.saveWorkflow(testWorkflow);
+        db1.saveTask('wf-1', makeTask('t-atomic'));
+        db1.close();
+
+        // Reopen and verify data survived the atomic write
+        const db2 = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        const tasks = db2.loadTasks('wf-1');
+        expect(tasks).toHaveLength(1);
+        expect(tasks[0].id).toBe('t-atomic');
+        db2.close();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('no stale .tmp files left in directory after multiple flushes', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-atomic-multi-'));
+      const dbPath = join(dir, 'invoker.db');
+
+      try {
+        const db = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+
+        // Perform multiple writes that each trigger a flush on close
+        db.saveWorkflow(testWorkflow);
+        db.saveTask('wf-1', makeTask('t1'));
+        db.saveTask('wf-1', makeTask('t2'));
+        db.close();
+
+        const files = readdirSync(dir);
+        const tmpFiles = files.filter(f => f.endsWith('.tmp'));
+        expect(tmpFiles).toEqual([]);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+  });
+
+  describe('migration error handling', () => {
+    it('swallows "duplicate column name" errors (idempotent migration)', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-migrate-dup-'));
+      const dbPath = join(dir, 'invoker.db');
+
+      try {
+        // First open creates schema + runs migrations
+        const db1 = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        db1.saveWorkflow(testWorkflow);
+        db1.close();
+
+        // Second open re-runs migrations — "duplicate column" errors should be swallowed
+        const db2 = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        const wf = db2.loadWorkflow('wf-1');
+        expect(wf).toBeDefined();
+        expect(wf!.name).toBe('Test Workflow');
+        db2.close();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('rethrows unexpected migration errors', async () => {
+      // Create an in-memory adapter and spy on db.run to inject a non-duplicate-column error
+      const db = await SQLiteAdapter.create(':memory:');
+
+      // The migrations already ran during create(). To test the error path,
+      // we access the private db and migrate method via prototype manipulation.
+      // Instead, we verify the behavior by checking that the adapter correctly
+      // distinguishes error types.
+      const origRun = (db as any).db.run.bind((db as any).db);
+      let callCount = 0;
+
+      // Spy on db.run: on the first ALTER TABLE call after re-patching, throw a non-duplicate error
+      (db as any).db.run = function(sql: string, ...args: any[]) {
+        callCount++;
+        if (typeof sql === 'string' && sql.includes('ALTER TABLE') && sql.includes('ADD COLUMN')) {
+          throw new Error('disk I/O error');
+        }
+        return origRun(sql, ...args);
+      };
+
+      // Calling migrate() should now rethrow the unexpected error
+      expect(() => (db as any).migrate()).toThrow('disk I/O error');
+
+      // Restore and clean up
+      (db as any).db.run = origRun;
+      db.close();
+    });
+
+    it('does not rethrow duplicate column name errors during migration', async () => {
+      const db = await SQLiteAdapter.create(':memory:');
+
+      const origRun = (db as any).db.run.bind((db as any).db);
+
+      (db as any).db.run = function(sql: string, ...args: any[]) {
+        if (typeof sql === 'string' && sql.includes('ALTER TABLE') && sql.includes('ADD COLUMN')) {
+          throw new Error('duplicate column name: some_col');
+        }
+        return origRun(sql, ...args);
+      };
+
+      // Should NOT throw — duplicate column errors are expected and swallowed
+      expect(() => (db as any).migrate()).not.toThrow();
+
+      (db as any).db.run = origRun;
+      db.close();
+    });
+  });
+
+  describe('deleteAllWorkflows transactional atomicity', () => {
+    it('rolls back all deletes if one fails mid-transaction', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t1'));
+      adapter.logEvent('t1', 'started');
+
+      // Spy on db.run to fail on the 'DELETE FROM tasks' step
+      const origRun = (adapter as any).db.run.bind((adapter as any).db);
+      let deleteCount = 0;
+
+      (adapter as any).db.run = function(sql: string, ...args: any[]) {
+        if (sql === 'DELETE FROM tasks') {
+          deleteCount++;
+          throw new Error('simulated disk failure');
+        }
+        return origRun(sql, ...args);
+      };
+
+      // deleteAllWorkflows should throw due to the simulated failure
+      expect(() => adapter.deleteAllWorkflows()).toThrow('simulated disk failure');
+
+      // Restore db.run
+      (adapter as any).db.run = origRun;
+
+      // Because of ROLLBACK, the data that was deleted before the failure
+      // (events, task_output, attempts) should still be present
+      expect(adapter.listWorkflows()).toHaveLength(1);
+      expect(adapter.loadTasks('wf-1')).toHaveLength(1);
+      expect(adapter.getEvents('t1')).toHaveLength(1);
+    });
+
+    it('commits all deletes atomically on success', () => {
+      adapter.saveWorkflow({
+        ...testWorkflow, id: 'wf-1', name: 'First',
+        createdAt: '2024-01-01T00:00:00Z', updatedAt: '2024-01-01T00:00:00Z',
+      });
+      adapter.saveWorkflow({
+        ...testWorkflow, id: 'wf-2', name: 'Second',
+        createdAt: '2024-01-02T00:00:00Z', updatedAt: '2024-01-02T00:00:00Z',
+      });
+      adapter.saveTask('wf-1', makeTask('t1'));
+      adapter.saveTask('wf-2', makeTask('t2'));
+      adapter.logEvent('t1', 'started');
+      adapter.appendTaskOutput('t1', 'output');
+
+      adapter.deleteAllWorkflows();
+
+      // All tables should be empty
+      expect(adapter.listWorkflows()).toEqual([]);
+      expect(adapter.loadTasks('wf-1')).toEqual([]);
+      expect(adapter.loadTasks('wf-2')).toEqual([]);
+      expect(adapter.getEvents('t1')).toEqual([]);
+      expect(adapter.getTaskOutput('t1')).toBe('');
+    });
+  });
+
+  describe('deleteConversationsOlderThan dirty flag and persistence', () => {
+    it('persists conversation deletes to disk after close', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-conv-dirty-'));
+      const dbPath = join(dir, 'invoker.db');
+
+      try {
+        // Create DB with an old conversation
+        const db1 = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        const old = new Date();
+        old.setDate(old.getDate() - 10);
+
+        db1.saveConversation({
+          threadTs: 'ts-old',
+          channelId: 'C1',
+          userId: 'U1',
+          extractedPlan: null,
+          planSubmitted: false,
+          createdAt: old.toISOString(),
+          updatedAt: old.toISOString(),
+        });
+        db1.appendMessage('ts-old', 'user', '"old message"');
+
+        // Also save a recent conversation to verify it survives
+        db1.saveConversation({
+          threadTs: 'ts-new',
+          channelId: 'C2',
+          userId: 'U2',
+          extractedPlan: null,
+          planSubmitted: false,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        });
+        db1.close();
+
+        // Reopen, delete old conversations, close
+        const db2 = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        const cutoff = new Date();
+        cutoff.setDate(cutoff.getDate() - 7);
+        const deleted = db2.deleteConversationsOlderThan(cutoff.toISOString());
+        expect(deleted).toBe(1);
+        db2.close();
+
+        // Reopen and verify the delete was persisted to disk
+        const db3 = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        expect(db3.loadConversation('ts-old')).toBeUndefined();
+        expect(db3.loadMessages('ts-old')).toEqual([]);
+        // Recent conversation should survive
+        expect(db3.loadConversation('ts-new')).toBeDefined();
+        db3.close();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('rejects deleteConversationsOlderThan on read-only adapter', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-conv-readonly-'));
+      const dbPath = join(dir, 'invoker.db');
+
+      try {
+        const writer = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        const old = new Date();
+        old.setDate(old.getDate() - 10);
+        writer.saveConversation({
+          threadTs: 'ts-old',
+          channelId: 'C1',
+          userId: 'U1',
+          extractedPlan: null,
+          planSubmitted: false,
+          createdAt: old.toISOString(),
+          updatedAt: old.toISOString(),
+        });
+        writer.close();
+
+        const reader = await SQLiteAdapter.create(dbPath, { readOnly: true });
+        const cutoff = new Date();
+        cutoff.setDate(cutoff.getDate() - 7);
+        expect(() => reader.deleteConversationsOlderThan(cutoff.toISOString())).toThrow(/read-only/i);
+        reader.close();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('sets dirty flag so scheduled flush actually writes', async () => {
+      // Use in-memory adapter to verify the dirty flag is set
+      // by checking the internal state after deleteConversationsOlderThan
+      const old = new Date();
+      old.setDate(old.getDate() - 10);
+
+      adapter.saveConversation({
+        threadTs: 'ts-old',
+        channelId: 'C1',
+        userId: 'U1',
+        extractedPlan: null,
+        planSubmitted: false,
+        createdAt: old.toISOString(),
+        updatedAt: old.toISOString(),
+      });
+
+      // Reset dirty flag to false (simulating a clean state after flush)
+      (adapter as any).dirty = false;
+
+      const cutoff = new Date();
+      cutoff.setDate(cutoff.getDate() - 7);
+      adapter.deleteConversationsOlderThan(cutoff.toISOString());
+
+      // dirty flag should now be true
+      expect((adapter as any).dirty).toBe(true);
     });
   });
 });
