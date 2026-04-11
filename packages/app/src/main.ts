@@ -92,6 +92,7 @@ import { spawn, execSync } from 'node:child_process';
 import { openExternalTerminalForTask } from './open-terminal-for-task.js';
 import { createRequire } from 'node:module';
 import { acquireDbWriterLock, type DbWriterLockResult } from './db-writer-lock.js';
+import { applyDelta } from './delta-merge.js';
 
 // ── Detect headless mode ─────────────────────────────────────
 
@@ -793,25 +794,7 @@ function setupGuiMode(): void {
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('invoker:task-delta', delta);
       }
-      const d = delta as TaskDelta;
-      if (d.type === 'created') {
-        lastKnownTaskStates.set(d.task.id, JSON.stringify(d.task));
-      } else if (d.type === 'updated') {
-        const existing = lastKnownTaskStates.get(d.taskId);
-        if (existing) {
-          const prev = JSON.parse(existing);
-          const { config: cfgChanges, execution: execChanges, ...topLevel } = d.changes;
-          const task = {
-            ...prev,
-            ...topLevel,
-            config: { ...prev.config, ...cfgChanges },
-            execution: { ...prev.execution, ...execChanges },
-          };
-          lastKnownTaskStates.set(d.taskId, JSON.stringify(task));
-        }
-      } else if (d.type === 'removed') {
-        lastKnownTaskStates.delete(d.taskId);
-      }
+      applyDelta(delta as TaskDelta, lastKnownTaskStates, orchestrator);
     });
 
     uiPerfLogInterval = setInterval(() => {
