@@ -237,6 +237,8 @@ export class TaskRunner {
       }
 
       console.error(`[TaskRunner] executeTask failed for task=${task.id}:`, err);
+      // Clean up per-task Docker executor on startup/execution failure
+      await this.cleanupPerTaskDockerExecutor(task);
       const response: WorkResponse = {
         requestId: `err-${task.id}`,
         actionId: task.id,
@@ -473,6 +475,9 @@ export class TaskRunner {
             };
             this.callbacks.onComplete?.(task.id, errResponse);
             this.orchestrator.handleWorkerResponse(errResponse);
+          } finally {
+            // Clean up per-task Docker executor to avoid resource leaks
+            await this.cleanupPerTaskDockerExecutor(task);
           }
         };
 
@@ -1160,11 +1165,31 @@ export class TaskRunner {
   }
 
   /**
-   * Clear the SSH executor cache. Useful for testing or when remote target configs change.
-   * Does not call destroyAll() — cleanup happens via executor lifecycle methods.
+   * Destroy all cached SSH executors and clear the cache.
+   * Useful for testing or when remote target configs change.
    */
-  clearSshExecutorCache(): void {
+  async clearSshExecutorCache(): Promise<void> {
+    const destroyPromises = Array.from(this.sshExecutorCache.values()).map(
+      executor => executor.destroyAll().catch(() => {})
+    );
+    await Promise.all(destroyPromises);
     this.sshExecutorCache.clear();
+  }
+
+  /**
+   * Destroy and deregister a per-task Docker executor if one was created for this task.
+   */
+  private async cleanupPerTaskDockerExecutor(task: TaskState): Promise<void> {
+    if (task.config.executorType !== 'docker') return;
+    const dockerKey = `docker:${task.id}`;
+    const dockerExec = this.executorRegistry.get(dockerKey);
+    if (!dockerExec) return;
+    try {
+      await dockerExec.destroyAll();
+    } catch (err) {
+      console.warn(`[TaskRunner] cleanupPerTaskDockerExecutor destroyAll failed for ${dockerKey}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    this.executorRegistry.deregister(dockerKey);
   }
 
   // ── Private Helpers ──────────────────────────────────────

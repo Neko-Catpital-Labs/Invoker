@@ -1576,33 +1576,48 @@ function setupGuiMode(): void {
     }
   });
 
-  app.on('before-quit', async () => {
-    if (apiServer) await apiServer.close().catch(() => {});
-    if (dbPollInterval) clearInterval(dbPollInterval);
-    if (activityPollInterval) clearInterval(activityPollInterval);
-    if (uiPerfLogInterval) clearInterval(uiPerfLogInterval);
-    if (hourlyBackupInterval) {
-      clearInterval(hourlyBackupInterval);
-      hourlyBackupInterval = null;
-    }
-    if (executorRegistry) {
-      await Promise.all(executorRegistry.getAll().map(f => f.destroyAll()));
-    }
-    if (orchestrator) {
-      for (const task of orchestrator.getAllTasks()) {
-        if (task.status === 'running' || task.status === 'fixing_with_ai') {
-          orchestrator.handleWorkerResponse({
-            requestId: `quit-${task.id}`,
-            actionId: task.id,
-            status: 'failed',
-            outputs: { exitCode: 1, error: 'Application quit' },
-          });
+  let isQuitting = false;
+  app.on('before-quit', async (event) => {
+    if (isQuitting) return;
+    isQuitting = true;
+    event.preventDefault();
+
+    const safetyTimer = setTimeout(() => {
+      console.error('[quit] Cleanup timed out after 10s, forcing exit');
+      process.exit(1);
+    }, 10_000);
+
+    try {
+      if (apiServer) await apiServer.close().catch(() => {});
+      if (dbPollInterval) clearInterval(dbPollInterval);
+      if (activityPollInterval) clearInterval(activityPollInterval);
+      if (uiPerfLogInterval) clearInterval(uiPerfLogInterval);
+      if (hourlyBackupInterval) {
+        clearInterval(hourlyBackupInterval);
+        hourlyBackupInterval = null;
+      }
+      if (executorRegistry) {
+        await Promise.all(executorRegistry.getAll().map(f => f.destroyAll()));
+      }
+      if (orchestrator) {
+        for (const task of orchestrator.getAllTasks()) {
+          if (task.status === 'running' || task.status === 'fixing_with_ai') {
+            orchestrator.handleWorkerResponse({
+              requestId: `quit-${task.id}`,
+              actionId: task.id,
+              status: 'failed',
+              outputs: { exitCode: 1, error: 'Application quit' },
+            });
+          }
         }
       }
+      if (persistence) persistence.close();
+      if (writerLock) writerLock.release();
+      if (messageBus) messageBus.disconnect();
+    } finally {
+      clearTimeout(safetyTimer);
+      app.exit(0);
     }
-    if (persistence) persistence.close();
-    if (writerLock) writerLock.release();
-    if (messageBus) messageBus.disconnect();
   });
 
   // ── Slack Bot (embedded in GUI process) ──────────────────
