@@ -86,7 +86,7 @@ chmod +x "$TMP_DIR/run.sh"
 
 cat > "$TMP_DIR/plans/a.yaml" <<'EOF'
 name: "A"
-repoUrl: git@github.com:EdbertChan/Invoker.git
+repoUrl: git@github.com:example-org/acme-repo.git
 baseBranch: master
 featureBranch: feature/a
 tasks:
@@ -97,7 +97,7 @@ EOF
 
 cat > "$TMP_DIR/plans/b.yaml" <<'EOF'
 name: "B"
-repoUrl: git@github.com:EdbertChan/Invoker.git
+repoUrl: git@github.com:example-org/acme-repo.git
 baseBranch: master
 featureBranch: feature/b
 tasks:
@@ -112,7 +112,7 @@ EOF
 
 cat > "$TMP_DIR/plans/c.yaml" <<'EOF'
 name: "C"
-repoUrl: git@github.com:EdbertChan/Invoker.git
+repoUrl: git@github.com:example-org/acme-repo.git
 baseBranch: master
 featureBranch: feature/c
 tasks:

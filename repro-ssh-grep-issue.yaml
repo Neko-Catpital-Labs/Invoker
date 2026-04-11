@@ -3,7 +3,7 @@ description: Minimal repro for packages/data-store grep failure
 onFinish: commit
 mergeMode: manual
 baseBranch: master
-repoUrl: git@github.com:EdbertChan/Invoker.git
+repoUrl: git@github.com:example-org/acme-repo.git
 familiarType: worktree
 
 tasks:

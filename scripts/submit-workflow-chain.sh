@@ -183,7 +183,10 @@ for i in "${!INPUT_PLANS[@]}"; do
       exit 1
     fi
 
-    submit_plan="$(mktemp "/tmp/invoker-chain-step$((i+1)).XXXXXX.yaml")"
+    # Template must end in XXXXXX (portable mktemp; suffix .yaml breaks macOS/BSD).
+    _chain_tmp="$(mktemp "${TMPDIR:-/tmp}/invoker-chain-step$((i+1)).XXXXXX")"
+    submit_plan="${_chain_tmp}.yaml"
+    rm -f "$_chain_tmp"
     sed "s/__UPSTREAM_WORKFLOW_ID__/$prev_wf_id/g" "$plan" > "$submit_plan"
     if ! matches_pattern "$prev_wf_id" "$submit_plan"; then
       echo "Rendered plan did not include upstream id '$prev_wf_id': $submit_plan" >&2
@@ -267,7 +270,9 @@ for i in "${!INPUT_PLANS[@]}"; do
       exit 1
     fi
 
-    sed -E -i "s|^baseBranch:.*$|baseBranch: ${prev_wf_feature_branch}|" "$submit_plan"
+    # Avoid sed -i (BSD vs GNU differs); write via temp file.
+    sed -E "s|^baseBranch:.*$|baseBranch: ${prev_wf_feature_branch}|" "$submit_plan" > "${submit_plan}.tmp"
+    mv "${submit_plan}.tmp" "$submit_plan"
     if ! matches_pattern "^baseBranch:[[:space:]]*${prev_wf_feature_branch}$" "$submit_plan"; then
       echo "Rendered plan baseBranch did not update to upstream feature branch '${prev_wf_feature_branch}': $submit_plan" >&2
       exit 1
@@ -276,7 +281,9 @@ for i in "${!INPUT_PLANS[@]}"; do
   fi
 
   echo "Submitting workflow $((i+1)) (no track): $submit_plan"
-  out_file="$(mktemp "/tmp/invoker-chain-step$((i+1)).XXXXXX.log")"
+  _chain_out="$(mktemp "${TMPDIR:-/tmp}/invoker-chain-out$((i+1)).XXXXXX")"
+  out_file="${_chain_out}.log"
+  rm -f "$_chain_out"
   ./run.sh --headless run "$submit_plan" --no-track >"$out_file" 2>&1 || true
 
   printed_id="$(awk '/Workflow ID:/{print $3}' "$out_file" | tail -1)"

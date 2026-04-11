@@ -29,7 +29,7 @@ import {
 } from '@invoker/execution-engine';
 import { loadConfig, resolveSecretsFilePath, type InvokerConfig } from './config.js';
 import { backupPlan } from './plan-backup.js';
-import { startApiServer } from './api-server.js';
+import { startApiServer, type ApiServerDeps } from './api-server.js';
 import {
   rebaseAndRetry,
   resolveConflictAction,
@@ -74,6 +74,33 @@ const YELLOW = '\x1b[33m';
 function headlessHeartbeat(taskId: string, deps: Pick<HeadlessDeps, 'persistence'>): void {
   const now = new Date();
   try { deps.persistence.updateTask(taskId, { execution: { lastHeartbeatAt: now } }); } catch { /* db locked */ }
+}
+
+function buildHeadlessApiCancelHooks(
+  deps: HeadlessDeps,
+  taskExecutor: TaskRunner,
+): Pick<ApiServerDeps, 'cancelTask' | 'cancelWorkflow' | 'killRunningTask'> {
+  return {
+    killRunningTask: (taskId: string) => taskExecutor.killActiveExecution(taskId),
+    cancelTask: async (taskId: string) => {
+      const envelope = makeEnvelope('cancel-task', 'headless', 'task', { taskId });
+      const cmdResult = await deps.commandService.cancelTask(envelope);
+      if (!cmdResult.ok) throw new Error(cmdResult.error.message);
+      for (const id of cmdResult.data.runningCancelled) {
+        await taskExecutor.killActiveExecution(id);
+      }
+      return cmdResult.data;
+    },
+    cancelWorkflow: async (workflowId: string) => {
+      const envelope = makeEnvelope('cancel-workflow', 'headless', 'workflow', { workflowId });
+      const cmdResult = await deps.commandService.cancelWorkflow(envelope);
+      if (!cmdResult.ok) throw new Error(cmdResult.error.message);
+      for (const id of cmdResult.data.runningCancelled) {
+        await taskExecutor.killActiveExecution(id);
+      }
+      return cmdResult.data;
+    },
+  };
 }
 
 function createHeadlessExecutor(
@@ -617,7 +644,14 @@ async function headlessRun(
   const taskExecutor = createHeadlessExecutor(deps);
   wireHeadlessApproveHook(deps, taskExecutor);
 
-  const api = startApiServer({ logger: deps.logger, orchestrator, persistence: deps.persistence, executorRegistry: deps.executorRegistry, taskExecutor });
+  const api = startApiServer({
+    logger: deps.logger,
+    orchestrator,
+    persistence: deps.persistence,
+    executorRegistry: deps.executorRegistry,
+    taskExecutor,
+    ...buildHeadlessApiCancelHooks(deps, taskExecutor),
+  });
 
   const wfIdsBefore = new Set(orchestrator.getWorkflowIds());
   orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
@@ -675,7 +709,14 @@ async function headlessResume(
   const taskExecutor = createHeadlessExecutor(deps);
   wireHeadlessApproveHook(deps, taskExecutor);
 
-  const api = startApiServer({ logger: deps.logger, orchestrator, persistence: deps.persistence, executorRegistry: deps.executorRegistry, taskExecutor });
+  const api = startApiServer({
+    logger: deps.logger,
+    orchestrator,
+    persistence: deps.persistence,
+    executorRegistry: deps.executorRegistry,
+    taskExecutor,
+    ...buildHeadlessApiCancelHooks(deps, taskExecutor),
+  });
 
   orchestrator.syncFromDb(workflowId);
 
@@ -1053,6 +1094,31 @@ async function headlessCancel(taskId: string, deps: HeadlessDeps): Promise<void>
   if (!taskId) throw new Error('Missing taskId. Usage: --headless cancel <taskId>');
   taskId = restoreWorkflowForTask(taskId, deps).resolvedTaskId;
 
+  // Peer submit-plan / headless run holds the TaskRunner in another process; hit its local API so
+  // cancel also kills the executor child (DB-only cancel would let the command keep running).
+  const port = process.env.INVOKER_API_PORT;
+  if (port) {
+    const url = `http://127.0.0.1:${port}/api/tasks/${encodeURIComponent(taskId)}/cancel`;
+    try {
+      const ac = new AbortController();
+      const timer = setTimeout(() => ac.abort(), 10_000);
+      const res = await fetch(url, { method: 'POST', signal: ac.signal });
+      clearTimeout(timer);
+      if (res.ok) {
+        const data = (await res.json()) as { cancelled?: string[]; runningCancelled?: string[] };
+        const cancelled = data.cancelled ?? [];
+        const runningCancelled = data.runningCancelled ?? [];
+        process.stdout.write(`Cancelled ${cancelled.length} task(s): [${cancelled.join(', ')}]\n`);
+        if (runningCancelled.length > 0) {
+          process.stdout.write(`Killed running: [${runningCancelled.join(', ')}]\n`);
+        }
+        return;
+      }
+    } catch {
+      /* API unreachable — fall back to DB-only cancel */
+    }
+  }
+
   const envelope = makeEnvelope('cancel-task', 'headless', 'task', { taskId });
   const cmdResult = await deps.commandService.cancelTask(envelope);
   if (!cmdResult.ok) throw new Error(cmdResult.error.message);
@@ -1064,6 +1130,32 @@ async function headlessCancel(taskId: string, deps: HeadlessDeps): Promise<void>
 
 async function headlessCancelWorkflow(workflowId: string, deps: HeadlessDeps): Promise<void> {
   if (!workflowId) throw new Error('Missing workflowId. Usage: --headless cancel-workflow <workflowId>');
+
+  const port = process.env.INVOKER_API_PORT;
+  if (port) {
+    const url = `http://127.0.0.1:${port}/api/workflows/${encodeURIComponent(workflowId)}/cancel`;
+    try {
+      const ac = new AbortController();
+      const timer = setTimeout(() => ac.abort(), 10_000);
+      const res = await fetch(url, { method: 'POST', signal: ac.signal });
+      clearTimeout(timer);
+      if (res.ok) {
+        const data = (await res.json()) as { cancelled?: string[]; runningCancelled?: string[] };
+        const cancelled = data.cancelled ?? [];
+        const runningCancelled = data.runningCancelled ?? [];
+        process.stdout.write(
+          `Cancelled ${cancelled.length} task(s) in workflow "${workflowId}": [${cancelled.join(', ')}]\n`,
+        );
+        if (runningCancelled.length > 0) {
+          process.stdout.write(`Killed running: [${runningCancelled.join(', ')}]\n`);
+        }
+        return;
+      }
+    } catch {
+      /* fall back */
+    }
+  }
+
   const envelope = makeEnvelope('cancel-workflow', 'headless', 'workflow', { workflowId });
   const cmdResult = await deps.commandService.cancelWorkflow(envelope);
   if (!cmdResult.ok) throw new Error(cmdResult.error.message);
@@ -1170,7 +1262,14 @@ async function headlessSlack(deps: HeadlessDeps): Promise<void> {
   });
   wireHeadlessApproveHook(deps, taskExecutor);
 
-  const api = startApiServer({ logger: deps.logger, orchestrator, persistence, executorRegistry: deps.executorRegistry, taskExecutor });
+  const api = startApiServer({
+    logger: deps.logger,
+    orchestrator,
+    persistence,
+    executorRegistry: deps.executorRegistry,
+    taskExecutor,
+    ...buildHeadlessApiCancelHooks(deps, taskExecutor),
+  });
 
   const slack = await wireSlackBot({
     executor: taskExecutor,

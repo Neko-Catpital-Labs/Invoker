@@ -9,7 +9,7 @@
 
 set -euo pipefail
 
-REPO="EdbertChan/Invoker"
+REPO="example-org/acme-repo"
 OUTPUT_DIR="/tmp/pr-diagram-test"
 mkdir -p "$OUTPUT_DIR"
 

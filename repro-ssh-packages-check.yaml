@@ -3,7 +3,7 @@ description: Debug why packages directories missing in SSH familiar worktree
 onFinish: none
 mergeMode: manual
 baseBranch: master
-repoUrl: git@github.com:EdbertChan/Invoker.git
+repoUrl: git@github.com:example-org/acme-repo.git
 familiarType: ssh
 
 tasks:

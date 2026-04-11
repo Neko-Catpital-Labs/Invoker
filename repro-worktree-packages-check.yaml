@@ -3,7 +3,7 @@ description: Verify packages directories exist after worktree creation and provi
 onFinish: none
 mergeMode: manual
 baseBranch: master
-repoUrl: git@github.com:EdbertChan/Invoker.git
+repoUrl: git@github.com:example-org/acme-repo.git
 familiarType: worktree
 
 tasks:

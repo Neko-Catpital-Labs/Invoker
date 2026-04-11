@@ -37,7 +37,7 @@ const DAG_DETERMINISM_PLAN = {
 /** Minimal plan that produces a merge gate in the DAG. */
 const MERGE_GATE_TEXT_VISUAL_PLAN = {
   name: 'Merge gate text visual proof',
-  repoUrl: 'git@github.com:EdbertChan/Invoker.git',
+  repoUrl: E2E_REPO_URL,
   onFinish: 'pull_request' as const,
   mergeMode: 'github',
   tasks: [
