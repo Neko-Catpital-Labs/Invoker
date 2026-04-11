@@ -7,10 +7,11 @@ queue_rules:
     merge_method: squash
     batch_size: 5
     checks_timeout: 120min
-    # Gate entry: PR must target master and pass CI.
+    # Gate entry: PR must target master, pass CI, and be labeled ready.
     queue_conditions:
       - base=master
       - check-success=test-all
+      - label=ready-to-merge
       - -draft
     # Gate merge: CI must pass again on the rebased code.
     merge_conditions:
