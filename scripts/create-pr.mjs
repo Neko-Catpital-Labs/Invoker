@@ -199,6 +199,14 @@ async function injectImages(body, dryRun) {
 // ── Git + GitHub helpers ────────────────────────────────────────────────────
 
 function getRepoNwo() {
+  // Prefer 'upstream' remote (fork workflow: PRs target upstream, not the fork)
+  try {
+    const url = execSync('git remote get-url upstream', { encoding: 'utf-8' }).trim();
+    const match = url.match(/github\.com[:/]([^/]+\/[^/.]+)/);
+    if (match) return match[1];
+  } catch {
+    // No upstream remote; fall back to gh default
+  }
   return execSync('gh repo view --json nameWithOwner -q .nameWithOwner', { encoding: 'utf-8' }).trim();
 }
 

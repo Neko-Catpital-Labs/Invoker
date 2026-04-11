@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { tryDelegateExec } from '../headless.js';
+import { tryDelegateExec, tryDelegateRun, tryDelegateResume } from '../headless.js';
 import { LocalBus } from '@invoker/transport';
 import type { MessageBus } from '@invoker/transport';
 
@@ -191,6 +191,54 @@ describe('headless→owner delegation', () => {
         const delegated = await tryDelegateExec(['approve', `task-${i}`], messageBus);
         expect(delegated).toBe(false);
       }
+    });
+  });
+
+  describe('tryDelegateRun / tryDelegateResume', () => {
+    it('succeeds when GUI handler returns immediately (fire-and-forget execution)', async () => {
+      // Simulate GUI handler that returns response immediately without awaiting
+      // task execution — the fix for the 5s delegation timeout bug.
+      messageBus.onRequest('headless.run', async (req: { planPath: string }) => {
+        expect(req.planPath).toContain('plan.yaml');
+        // Return immediately (tasks execute in background via fire-and-forget)
+        return {
+          workflowId: 'wf-test-123',
+          tasks: [
+            { id: 'wf-test-123/task-1', status: 'running', config: { workflowId: 'wf-test-123' }, execution: {} },
+          ],
+        };
+      });
+
+      // With noTrack=true, delegation returns after receiving the response
+      // without waiting for task settlement.
+      const delegated = await tryDelegateRun('/path/to/plan.yaml', messageBus, false, true);
+      expect(delegated).toBe(true);
+    });
+
+    it('times out when GUI handler blocks on task execution (pre-fix behavior)', async () => {
+      // Simulate the old bug: handler awaits executeTasks which never resolves
+      messageBus.onRequest('headless.run', async () => {
+        return new Promise(() => {}); // Never resolves — simulates await executeTasks()
+      });
+
+      const delegated = await tryDelegateRun('/path/to/plan.yaml', messageBus, false, true);
+      // Delegation fails because the 5s timeout fires before the handler responds
+      expect(delegated).toBe(false);
+    }, 10_000);
+
+    it('resume handler returns immediately with fire-and-forget execution', async () => {
+      messageBus.onRequest('headless.resume', async (req: { workflowId: string }) => {
+        expect(req.workflowId).toBe('wf-existing');
+        return {
+          workflowId: 'wf-existing',
+          tasks: [
+            { id: 'wf-existing/task-1', status: 'running', config: { workflowId: 'wf-existing' }, execution: {} },
+          ],
+        };
+      });
+
+      const delegated = await tryDelegateResume('wf-existing', messageBus, false, true);
+      expect(delegated).toBe(true);
     });
   });
 });

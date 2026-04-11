@@ -37,5 +37,8 @@ if [ "$(uname)" = "Linux" ]; then
   export LIBGL_ALWAYS_SOFTWARE=1
 fi
 
+# Sync fork with upstream if plan targets EdbertChan/Invoker.
+bash "$REPO_ROOT/scripts/sync-fork-upstream.sh" "$PLAN_FILE" || true
+
 echo "==> Submitting plan: $PLAN_FILE"
 ./packages/app/node_modules/.bin/electron packages/app/dist/main.js $SANDBOX_FLAG --headless run "$PLAN_FILE"
