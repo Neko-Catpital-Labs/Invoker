@@ -1,6 +1,2 @@
-/**
- * @deprecated This package is deprecated. Use @invoker/contracts instead.
- * This file re-exports from @invoker/contracts for backward compatibility.
- */
-
+/** @deprecated Use @invoker/contracts instead. This package is a compatibility shim. */
 export * from '@invoker/contracts';

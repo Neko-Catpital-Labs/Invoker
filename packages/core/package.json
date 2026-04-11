@@ -1,6 +1,7 @@
 {
   "name": "@invoker/core",
   "version": "0.1.0",
+  "deprecated": "Use @invoker/workflow-core instead",
   "type": "module",
   "main": "src/index.ts",
   "types": "src/index.ts",

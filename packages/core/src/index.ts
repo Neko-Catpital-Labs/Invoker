@@ -1,3 +1,2 @@
-// Compatibility facade - re-export everything from @invoker/workflow-core
-// This package is deprecated. Use @invoker/workflow-core instead.
+/** @deprecated Use @invoker/workflow-core instead. This package is a compatibility shim. */
 export * from '@invoker/workflow-core';

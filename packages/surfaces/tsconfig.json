@@ -9,19 +9,16 @@
   ],
   "references": [
     {
-      "path": "../workflow-core"
+      "path": "../contracts"
     },
     {
-      "path": "../execution-engine"
-    },
-    {
-      "path": "../persistence"
-    },
-    {
-      "path": "../protocol"
+      "path": "../data-store"
     },
     {
       "path": "../transport"
+    },
+    {
+      "path": "../workflow-core"
     }
   ]
 }

@@ -13,7 +13,6 @@ export default defineConfig({
     '@invoker/contracts',
     '@invoker/data-store',
     '@invoker/transport',
-    '@invoker/execution-engine',
     'yaml',
   ],
   external: ['@slack/bolt', 'sql.js', 'dockerode'],
