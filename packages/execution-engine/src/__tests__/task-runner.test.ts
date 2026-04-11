@@ -4978,7 +4978,7 @@ describe('TaskRunner', () => {
       expect(executor2.type).toBe('worktree');
     });
 
-    it('clearSshExecutorCache removes all cached SSH executors', () => {
+    it('clearSshExecutorCache removes all cached SSH executors', async () => {
       const remoteTargets = {
         'remote-a': {
           host: 'dev.example.com',
@@ -5006,7 +5006,7 @@ describe('TaskRunner', () => {
       });
 
       const executor1 = executor.selectExecutor(task1);
-      executor.clearSshExecutorCache();
+      await executor.clearSshExecutorCache();
       const executor2 = executor.selectExecutor(task2);
 
       // After clearing cache, a new executor instance should be created

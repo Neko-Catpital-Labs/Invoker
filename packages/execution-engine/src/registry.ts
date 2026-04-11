@@ -19,6 +19,10 @@ export class ExecutorRegistry {
     return worktree;
   }
 
+  deregister(type: string): void {
+    this.executors.delete(type);
+  }
+
   getAll(): Executor[] {
     return Array.from(this.executors.values());
   }
