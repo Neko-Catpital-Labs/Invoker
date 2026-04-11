@@ -693,7 +693,11 @@ function setupGuiMode(): void {
       const workflowId = orchestrator.getWorkflowIds().find(id => !wfIdsBefore.has(id))!;
       const started = orchestrator.startExecution();
       logger.info(`started ${started.length} tasks for workflow "${workflowId}"`, { module: 'ipc-delegate' });
-      await taskExecutor.executeTasks(started);
+      // Fire-and-forget: return immediately so the headless CLI gets the response
+      // before the 5s delegation timeout.  The CLI tracks completion via task deltas.
+      taskExecutor.executeTasks(started).catch(err => {
+        logger.error(`headless.run: executeTasks failed for "${workflowId}": ${err}`, { module: 'ipc-delegate' });
+      });
       const tasks = orchestrator.getAllTasks().filter(t => t.config.workflowId === workflowId);
       return { workflowId, tasks };
     });
@@ -718,7 +722,11 @@ function setupGuiMode(): void {
       const started = orchestrator.startExecution();
       const allStarted = [...orphanRestarted, ...started];
       logger.info(`started ${allStarted.length} tasks (${orphanRestarted.length} orphans relaunched, ${started.length} ready)`, { module: 'ipc-delegate' });
-      await taskExecutor.executeTasks(allStarted);
+      // Fire-and-forget: return immediately so the headless CLI gets the response
+      // before the 5s delegation timeout.  The CLI tracks completion via task deltas.
+      taskExecutor.executeTasks(allStarted).catch(err => {
+        logger.error(`headless.resume: executeTasks failed for "${workflowId}": ${err}`, { module: 'ipc-delegate' });
+      });
       taskExecutor.resumeMergeGatePolling();
       const tasks = orchestrator.getAllTasks().filter(t => t.config.workflowId === workflowId);
       return { workflowId, tasks };

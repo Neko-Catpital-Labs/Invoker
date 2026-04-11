@@ -149,6 +149,12 @@ declare -a CHAIN_BASE_BRANCHES=()
 declare -a CHAIN_FEATURE_BRANCHES=()
 declare -a RENDERED_PLANS=()
 
+# Sync fork with upstream if any plan in the chain targets EdbertChan/Invoker.
+for p in "${INPUT_PLANS[@]}"; do
+  bash "$REPO_ROOT/scripts/sync-fork-upstream.sh" "$p" || true
+  break  # only need to sync once; first plan determines the repo
+done
+
 prev_wf_id=""
 prev_wf_feature_branch=""
 
