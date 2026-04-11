@@ -120,6 +120,9 @@ export class TaskRunner {
   /** In-flight executions (for cancel/kill from API or peer headless process). */
   private activeExecutions = new Map<string, { handle: ExecutorHandle; executor: Executor }>();
 
+  /** Serializes async onComplete handlers so orchestrator mutations never overlap. */
+  private completionChain: Promise<void> = Promise.resolve();
+
   /** Config default branch (e.g. master) for workflows without baseBranch. */
   getDefaultBranchHint(): string | undefined {
     return this.defaultBranch;
@@ -430,46 +433,52 @@ export class TaskRunner {
       this.callbacks.onHeartbeat?.(task.id);
     });
 
-    // Wait for completion and feed response to orchestrator
+    // Wait for completion and feed response to orchestrator.
+    // The callback is serialized through completionChain so that concurrent
+    // onComplete firings never overlap inside orchestrator mutations.
     return new Promise<void>((resolvePromise) => {
       executor.onComplete(handle, async (response: WorkResponse) => {
-        this.activeExecutions.delete(task.id);
-        try {
-          console.log(
-            `${RESTART_TO_BRANCH_TRACE} resolvePromise | task.config.isMergeNode = ${task.config.isMergeNode}`,
-          );
-          // Merge nodes: run consolidation/finish logic after executor completes
-          if (task.config.isMergeNode) {
+        const work = async () => {
+          this.activeExecutions.delete(task.id);
+          try {
             console.log(
-              `${RESTART_TO_BRANCH_TRACE} executor.onComplete taskId=${task.id} isMergeNode → executeMergeNode (consolidate / gate)`,
+              `${RESTART_TO_BRANCH_TRACE} resolvePromise | task.config.isMergeNode = ${task.config.isMergeNode}`,
             );
-            await this.executeMergeNode(task);
-            resolvePromise();
-            return;
+            // Merge nodes: run consolidation/finish logic after executor completes
+            if (task.config.isMergeNode) {
+              console.log(
+                `${RESTART_TO_BRANCH_TRACE} executor.onComplete taskId=${task.id} isMergeNode → executeMergeNode (consolidate / gate)`,
+              );
+              await this.executeMergeNode(task);
+              return;
+            }
+
+            this.callbacks.onComplete?.(task.id, response);
+
+            const newlyStarted = this.orchestrator.handleWorkerResponse(response) ?? [];
+
+            if (newlyStarted.length > 0) {
+              this.executeTasks(newlyStarted);
+            }
+          } catch (err) {
+            console.error(`[TaskRunner] onComplete handler failed for task=${task.id}:`, err);
+            const errResponse: WorkResponse = {
+              requestId: response.requestId,
+              actionId: task.id,
+              status: 'failed',
+              outputs: {
+                exitCode: 1,
+                error: err instanceof Error ? (err.stack ?? err.message) : String(err),
+              },
+            };
+            this.callbacks.onComplete?.(task.id, errResponse);
+            this.orchestrator.handleWorkerResponse(errResponse);
           }
+        };
 
-          this.callbacks.onComplete?.(task.id, response);
-
-          const newlyStarted = this.orchestrator.handleWorkerResponse(response) ?? [];
-
-          if (newlyStarted.length > 0) {
-            this.executeTasks(newlyStarted);
-          }
-        } catch (err) {
-          console.error(`[TaskRunner] onComplete handler failed for task=${task.id}:`, err);
-          const errResponse: WorkResponse = {
-            requestId: response.requestId,
-            actionId: task.id,
-            status: 'failed',
-            outputs: {
-              exitCode: 1,
-              error: err instanceof Error ? (err.stack ?? err.message) : String(err),
-            },
-          };
-          this.callbacks.onComplete?.(task.id, errResponse);
-          this.orchestrator.handleWorkerResponse(errResponse);
-        }
-
+        const prev = this.completionChain;
+        this.completionChain = prev.then(work, work);
+        await this.completionChain;
         resolvePromise();
       });
     });

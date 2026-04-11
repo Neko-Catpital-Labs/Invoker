@@ -261,6 +261,144 @@ describe('RepoPool', () => {
     });
   });
 
+  describe('repoChains serialization', () => {
+    function createDeferred<T>() {
+      let resolve!: (value: T) => void;
+      let reject!: (reason?: any) => void;
+      const promise = new Promise<T>((res, rej) => {
+        resolve = res;
+        reject = rej;
+      });
+      return { promise, resolve, reject };
+    }
+
+    async function flush() {
+      for (let i = 0; i < 10; i++) await Promise.resolve();
+    }
+
+    afterEach(() => { vi.restoreAllMocks(); });
+
+    it('serializes concurrent refreshMirrorForRebase calls on same repo', async () => {
+      const log: string[] = [];
+      const deferred1 = createDeferred<string>();
+      const deferred2 = createDeferred<string>();
+      let callCount = 0;
+
+      vi.spyOn(pool as any, 'doRefreshMirrorForRebase').mockImplementation(async () => {
+        const n = ++callCount;
+        log.push(`enter-${n}`);
+        const result = n === 1 ? await deferred1.promise : await deferred2.promise;
+        log.push(`exit-${n}`);
+        return result;
+      });
+
+      const p1 = pool.refreshMirrorForRebase('repo-a', 'master');
+      const p2 = pool.refreshMirrorForRebase('repo-a', 'master');
+
+      await flush();
+      expect(log).toEqual(['enter-1']);
+
+      deferred1.resolve('/fake/path');
+      await flush();
+      expect(log).toEqual(['enter-1', 'exit-1', 'enter-2']);
+
+      deferred2.resolve('/fake/path');
+      await Promise.all([p1, p2]);
+      expect(log).toEqual(['enter-1', 'exit-1', 'enter-2', 'exit-2']);
+    });
+
+    it('serializes concurrent removeManagedBranchesInMirror calls on same repo', async () => {
+      const log: string[] = [];
+      const deferred1 = createDeferred<void>();
+      const deferred2 = createDeferred<void>();
+      let callCount = 0;
+
+      vi.spyOn(pool as any, 'doRemoveManagedBranchesInMirror').mockImplementation(async () => {
+        const n = ++callCount;
+        log.push(`enter-${n}`);
+        if (n === 1) await deferred1.promise;
+        else await deferred2.promise;
+        log.push(`exit-${n}`);
+      });
+
+      const p1 = pool.removeManagedBranchesInMirror('repo-a', ['b1']);
+      const p2 = pool.removeManagedBranchesInMirror('repo-a', ['b2']);
+
+      await flush();
+      expect(log).toEqual(['enter-1']);
+
+      deferred1.resolve();
+      await flush();
+      expect(log).toEqual(['enter-1', 'exit-1', 'enter-2']);
+
+      deferred2.resolve();
+      await Promise.all([p1, p2]);
+      expect(log).toEqual(['enter-1', 'exit-1', 'enter-2', 'exit-2']);
+    });
+
+    it('serializes cross-method calls (refreshMirror + acquireWorktree) on same repo', async () => {
+      const log: string[] = [];
+      const deferred1 = createDeferred<string>();
+      const deferred2 = createDeferred<any>();
+
+      vi.spyOn(pool as any, 'doRefreshMirrorForRebase').mockImplementation(async () => {
+        log.push('enter-refresh');
+        const result = await deferred1.promise;
+        log.push('exit-refresh');
+        return result;
+      });
+
+      vi.spyOn(pool as any, 'doAcquireWorktree').mockImplementation(async () => {
+        log.push('enter-acquire');
+        const result = await deferred2.promise;
+        log.push('exit-acquire');
+        return result;
+      });
+
+      const p1 = pool.refreshMirrorForRebase('repo-a', 'master');
+      const p2 = pool.acquireWorktree('repo-a', 'branch-1');
+
+      await flush();
+      expect(log).toEqual(['enter-refresh']);
+
+      deferred1.resolve('/fake/path');
+      await flush();
+      expect(log).toEqual(['enter-refresh', 'exit-refresh', 'enter-acquire']);
+
+      const fakeWorktree = { clonePath: '/fake', worktreePath: '/fake/wt', branch: 'branch-1', release: async () => {}, softRelease: () => {} };
+      deferred2.resolve(fakeWorktree);
+      await Promise.all([p1, p2]);
+      expect(log).toEqual(['enter-refresh', 'exit-refresh', 'enter-acquire', 'exit-acquire']);
+    });
+
+    it('allows parallel execution for different repoUrls', async () => {
+      const log: string[] = [];
+      const deferred1 = createDeferred<string>();
+      const deferred2 = createDeferred<string>();
+      let callCount = 0;
+
+      vi.spyOn(pool as any, 'doRefreshMirrorForRebase').mockImplementation(async () => {
+        const n = ++callCount;
+        log.push(`enter-${n}`);
+        const result = n === 1 ? await deferred1.promise : await deferred2.promise;
+        log.push(`exit-${n}`);
+        return result;
+      });
+
+      const p1 = pool.refreshMirrorForRebase('repo-a', 'master');
+      const p2 = pool.refreshMirrorForRebase('repo-b', 'master');
+
+      await flush();
+      // Both should have entered since different repos have independent chains
+      expect(log).toEqual(['enter-1', 'enter-2']);
+
+      deferred1.resolve('/fake/path-a');
+      deferred2.resolve('/fake/path-b');
+      await Promise.all([p1, p2]);
+      expect(log).toEqual(['enter-1', 'enter-2', 'exit-1', 'exit-2']);
+    });
+  });
+
   it('ensureClone skips network refresh when remoteFetchForPool.enabled is false', async () => {
     await pool.ensureClone(localRepoUrl);
     const clonePath = pool.getClonePath(localRepoUrl);

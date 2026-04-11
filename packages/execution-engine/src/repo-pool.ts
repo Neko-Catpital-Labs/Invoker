@@ -68,6 +68,13 @@ export class RepoPool {
    * Force-fetch mirror and sync origin/<baseBranch> (rebase-and-retry). Ignores remoteFetchForPool.
    */
   async refreshMirrorForRebase(repoUrl: string, baseBranch: string): Promise<string> {
+    const prev = this.repoChains.get(repoUrl) ?? Promise.resolve();
+    const next = prev.then(() => this.doRefreshMirrorForRebase(repoUrl, baseBranch));
+    this.repoChains.set(repoUrl, next.catch(() => {}));
+    return next;
+  }
+
+  private async doRefreshMirrorForRebase(repoUrl: string, baseBranch: string): Promise<string> {
     const dir = this.cloneDir(repoUrl);
     if (existsSync(dir)) {
       try {
@@ -94,6 +101,13 @@ export class RepoPool {
    * Remove Invoker-managed branches (experiment/*, invoker/*) from the mirror and linked worktrees.
    */
   async removeManagedBranchesInMirror(repoUrl: string, branches: string[]): Promise<void> {
+    const prev = this.repoChains.get(repoUrl) ?? Promise.resolve();
+    const next = prev.then(() => this.doRemoveManagedBranchesInMirror(repoUrl, branches));
+    this.repoChains.set(repoUrl, next.catch(() => {}));
+    return next;
+  }
+
+  private async doRemoveManagedBranchesInMirror(repoUrl: string, branches: string[]): Promise<void> {
     const dir = this.cloneDir(repoUrl);
     if (!existsSync(dir) || !this.worktreeBaseDir) return;
     for (const branch of branches) {

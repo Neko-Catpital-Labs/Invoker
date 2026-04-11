@@ -5544,4 +5544,161 @@ describe('TaskRunner', () => {
       }
     });
   });
+
+  describe('completionChain serialization', () => {
+    function createDeferred<T = void>() {
+      let resolve!: (value: T) => void;
+      let reject!: (reason?: any) => void;
+      const promise = new Promise<T>((res, rej) => {
+        resolve = res;
+        reject = rej;
+      });
+      return { promise, resolve, reject };
+    }
+
+    async function flush() {
+      for (let i = 0; i < 10; i++) await Promise.resolve();
+    }
+
+    it('serializes concurrent onComplete handlers for merge-node tasks', async () => {
+      const log: string[] = [];
+      const deferred1 = createDeferred();
+      const deferred2 = createDeferred();
+      let mergeCallCount = 0;
+
+      const completeCallbacks = new Map<string, (response: WorkResponse) => void>();
+      const manualExecutor = {
+        type: 'worktree',
+        start: vi.fn(async (request: any) => ({
+          executionId: `exec-${request.actionId}`,
+          taskId: request.actionId,
+          workspacePath: '/tmp/mock-worktree',
+          branch: `invoker/${request.actionId}`,
+        })),
+        onComplete: vi.fn((handle: any, cb: any) => {
+          completeCallbacks.set(handle.taskId, cb);
+        }),
+        onOutput: vi.fn(),
+        onHeartbeat: vi.fn(),
+        kill: vi.fn(),
+      };
+
+      const runner = new TaskRunner({
+        orchestrator: {
+          getTask: () => undefined,
+          handleWorkerResponse: vi.fn(() => []),
+          getAllTasks: () => [],
+        } as any,
+        persistence: { updateTask: vi.fn() } as any,
+        executorRegistry: {
+          getDefault: () => manualExecutor,
+          get: () => manualExecutor,
+          getAll: () => [manualExecutor],
+        } as any,
+        cwd: '/tmp',
+      });
+
+      vi.spyOn(runner as any, 'executeMergeNode').mockImplementation(async () => {
+        const n = ++mergeCallCount;
+        log.push(`enter-${n}`);
+        if (n === 1) await deferred1.promise;
+        else await deferred2.promise;
+        log.push(`exit-${n}`);
+      });
+
+      const task1 = makeTask({ id: 'merge-1', status: 'running', config: { isMergeNode: true } });
+      const task2 = makeTask({ id: 'merge-2', status: 'running', config: { isMergeNode: true } });
+
+      const done1 = runner.executeTask(task1);
+      const done2 = runner.executeTask(task2);
+      await flush();
+      expect(completeCallbacks.size).toBe(2);
+
+      // Fire both onComplete callbacks simultaneously
+      completeCallbacks.get('merge-1')!({
+        requestId: 'r1', actionId: 'merge-1', status: 'completed', outputs: { exitCode: 0 },
+      });
+      completeCallbacks.get('merge-2')!({
+        requestId: 'r2', actionId: 'merge-2', status: 'completed', outputs: { exitCode: 0 },
+      });
+
+      await flush();
+      expect(log).toEqual(['enter-1']);
+
+      deferred1.resolve(undefined as any);
+      await flush();
+      expect(log).toEqual(['enter-1', 'exit-1', 'enter-2']);
+
+      deferred2.resolve(undefined as any);
+      await Promise.all([done1, done2]);
+      expect(log).toEqual(['enter-1', 'exit-1', 'enter-2', 'exit-2']);
+    });
+
+    it('error in first onComplete handler does not block the second', async () => {
+      let hwrCallCount = 0;
+      const handleWorkerResponse = vi.fn(() => {
+        hwrCallCount++;
+        if (hwrCallCount === 1) throw new Error('boom');
+        return [];
+      });
+      const onCompleteCb = vi.fn();
+
+      const completeCallbacks = new Map<string, (response: WorkResponse) => void>();
+      const manualExecutor = {
+        type: 'worktree',
+        start: vi.fn(async (request: any) => ({
+          executionId: `exec-${request.actionId}`,
+          taskId: request.actionId,
+          workspacePath: '/tmp/mock-worktree',
+          branch: `invoker/${request.actionId}`,
+        })),
+        onComplete: vi.fn((handle: any, cb: any) => {
+          completeCallbacks.set(handle.taskId, cb);
+        }),
+        onOutput: vi.fn(),
+        onHeartbeat: vi.fn(),
+        kill: vi.fn(),
+      };
+
+      const runner = new TaskRunner({
+        orchestrator: {
+          getTask: () => undefined,
+          handleWorkerResponse,
+          getAllTasks: () => [],
+        } as any,
+        persistence: { updateTask: vi.fn() } as any,
+        executorRegistry: {
+          getDefault: () => manualExecutor,
+          get: () => manualExecutor,
+          getAll: () => [manualExecutor],
+        } as any,
+        cwd: '/tmp',
+        callbacks: { onComplete: onCompleteCb },
+      });
+
+      const task1 = makeTask({ id: 'task-err-1', status: 'running', config: { command: 'echo hi' } });
+      const task2 = makeTask({ id: 'task-err-2', status: 'running', config: { command: 'echo hi' } });
+
+      const done1 = runner.executeTask(task1);
+      const done2 = runner.executeTask(task2);
+      await flush();
+
+      // Fire both completions simultaneously
+      completeCallbacks.get('task-err-1')!({
+        requestId: 'r1', actionId: 'task-err-1', status: 'completed', outputs: { exitCode: 0 },
+      });
+      completeCallbacks.get('task-err-2')!({
+        requestId: 'r2', actionId: 'task-err-2', status: 'completed', outputs: { exitCode: 0 },
+      });
+
+      await Promise.all([done1, done2]);
+
+      // Task 1: handleWorkerResponse threw → catch block sent failed re-submission
+      expect(onCompleteCb).toHaveBeenCalledWith('task-err-1', expect.objectContaining({ status: 'failed' }));
+      // Task 2: completes normally despite task-1 error
+      expect(onCompleteCb).toHaveBeenCalledWith('task-err-2', expect.objectContaining({ status: 'completed' }));
+      // handleWorkerResponse called 3 times: 1st (throws), 2nd (catch re-submit for task-1), 3rd (task-2 normal)
+      expect(handleWorkerResponse).toHaveBeenCalledTimes(3);
+    });
+  });
 });
