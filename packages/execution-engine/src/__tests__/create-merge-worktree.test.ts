@@ -3,7 +3,7 @@
  *
  * Proves that createMergeWorktree produces a clone whose origin points to
  * the real GitHub remote (not the host working directory), and that branches
- * are mirrored correctly.  Covers gaps 2-5 from repro-host-cwd-safety.sh.
+ * are mirrored correctly.  Covers gaps 2-5 from scripts/repro/repro-host-cwd-safety.sh.
  *
  * Pattern: bare remote + working clone + TaskRunner with real git.
  */

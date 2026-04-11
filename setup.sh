@@ -85,9 +85,9 @@ else
 fi
 echo ""
 
-# --- xdotool (Linux only, for focus-invoker.sh) ---
+# --- xdotool (Linux only, for scripts/focus-invoker.sh) ---
 if [ "$OS" = "Linux" ]; then
-  echo "==> Checking xdotool (optional, for focus-invoker.sh)..."
+  echo "==> Checking xdotool (optional, for scripts/focus-invoker.sh)..."
   if has xdotool; then
     echo "    OK: xdotool found"
   else
@@ -97,7 +97,7 @@ if [ "$OS" = "Linux" ]; then
     elif has dnf; then
       sudo dnf install -y xdotool
     else
-      echo "    WARNING: Could not install xdotool. focus-invoker.sh won't work without it."
+      echo "    WARNING: Could not install xdotool. scripts/focus-invoker.sh won't work without it."
     fi
   fi
   echo ""

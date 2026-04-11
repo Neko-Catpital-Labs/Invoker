@@ -26,5 +26,5 @@ packages/app/test-results/
 ~/.npm/
 
 # Local Claude / scratch (never ship)
-.claude.json.backup
+.claude.json.backup*
 tmp/plans/

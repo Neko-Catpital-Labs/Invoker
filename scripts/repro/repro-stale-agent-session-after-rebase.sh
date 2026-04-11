@@ -17,7 +17,7 @@
 #
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/../.." && pwd)"
 E2E_FIXTURES="$REPO_ROOT/scripts/e2e-dry-run/fixtures"
 TEST_PLAYGROUND_UPSTREAM="${TEST_PLAYGROUND_UPSTREAM:-https://github.com/example-org/test-playground.git}"
 

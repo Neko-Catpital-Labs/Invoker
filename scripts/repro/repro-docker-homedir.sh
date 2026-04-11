@@ -14,11 +14,11 @@
 #   2 — unexpected result
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$REPO_ROOT"
 
 DB_PATH="$HOME/.invoker/invoker.db"
-PLAN_FILE="$REPO_ROOT/scripts/repro-docker-homedir.yaml"
+PLAN_FILE="$REPO_ROOT/scripts/repro/repro-docker-homedir.yaml"
 TASK_ID="homedir-write"
 
 echo "==> Step 1: Rebuilding Docker image from current Dockerfile"

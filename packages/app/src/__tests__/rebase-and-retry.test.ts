@@ -231,7 +231,7 @@ describe('rebase-and-retry: pool mirror cleanup before restart', { timeout: 120_
     };
     await rebaseAndRetry('task-a', deps);
 
-    // Verify stale execution metadata is cleared (regression: repro-stale-agent-session-after-rebase.sh)
+    // Verify stale execution metadata is cleared (regression: scripts/repro/repro-stale-agent-session-after-rebase.sh)
     expect(task.execution.agentSessionId).toBeUndefined();
     expect(task.execution.containerId).toBeUndefined();
     expect(task.status).toBe('pending');

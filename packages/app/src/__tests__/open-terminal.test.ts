@@ -494,7 +494,7 @@ describe('getRestoredTerminalSpec routing', () => {
       expect(spec.args![1]).toContain("git checkout 'experiment/pivot-reconciliation-deadbeef'");
       expect(spec.args![1]).toContain(`exec ${worktreeCheckoutShell}`);
       // Regression guard: cwd must be the isolated worktree, never the monorepo root
-      // (repro-reconciliation-open-terminal-cwd.sh)
+      // (scripts/repro/repro-reconciliation-open-terminal-cwd.sh)
       expect(spec.cwd).not.toBe(process.cwd());
       expect(spec.cwd).toMatch(/worktrees/);
     });

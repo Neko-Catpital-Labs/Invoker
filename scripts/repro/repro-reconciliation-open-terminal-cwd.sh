@@ -17,7 +17,7 @@
 # Cleanup: temp INVOKER_DB_DIR + git bare repo; trap removes on exit.
 set -euo pipefail
 
-INVOKER_MONO="$(cd "$(dirname "$0")/.." && pwd)"
+INVOKER_MONO="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$INVOKER_MONO"
 
 MAIN_JS="$INVOKER_MONO/packages/app/dist/main.js"
