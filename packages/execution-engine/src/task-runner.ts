@@ -117,6 +117,9 @@ export class TaskRunner {
   /** Cache for SSH executors, keyed by remoteTargetId. One instance per target for correct git locking. */
   private sshExecutorCache = new Map<string, SshExecutor>();
 
+  /** In-flight executions (for cancel/kill from API or peer headless process). */
+  private activeExecutions = new Map<string, { handle: ExecutorHandle; executor: Executor }>();
+
   /** Config default branch (e.g. master) for workflows without baseBranch. */
   getDefaultBranchHint(): string | undefined {
     return this.defaultBranch;
@@ -177,6 +180,20 @@ export class TaskRunner {
     this.getRemoteTargets = config.remoteTargetsProvider ?? (() => ({}));
     this.dockerConfig = config.dockerConfig ?? {};
     this.executionAgentRegistry = config.executionAgentRegistry;
+  }
+
+  /**
+   * Stop the executor child for a task that is currently in-flight (after orchestrator.cancelTask).
+   */
+  async killActiveExecution(taskId: string): Promise<void> {
+    const entry = this.activeExecutions.get(taskId);
+    if (!entry) return;
+    this.activeExecutions.delete(taskId);
+    try {
+      await entry.executor.kill(entry.handle);
+    } catch {
+      /* process may already have exited */
+    }
   }
 
   /**
@@ -400,6 +417,7 @@ export class TaskRunner {
     }
 
     // Notify consumer about the spawned handle
+    this.activeExecutions.set(task.id, { handle, executor });
     this.callbacks.onSpawned?.(task.id, handle, executor);
 
     // Wire output
@@ -415,6 +433,7 @@ export class TaskRunner {
     // Wait for completion and feed response to orchestrator
     return new Promise<void>((resolvePromise) => {
       executor.onComplete(handle, async (response: WorkResponse) => {
+        this.activeExecutions.delete(task.id);
         try {
           console.log(
             `${RESTART_TO_BRANCH_TRACE} resolvePromise | task.config.isMergeNode = ${task.config.isMergeNode}`,

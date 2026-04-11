@@ -70,6 +70,39 @@ invoker_e2e_ensure_app_built() {
   (cd "$INVOKER_E2E_REPO_ROOT" && pnpm --filter @invoker/app build)
 }
 
+# Wall-clock cap: GNU timeout (Linux CI) or gtimeout (Homebrew coreutils). macOS has no timeout(1) by default.
+invoker_e2e_run_with_timeout() {
+  local dur="${INVOKER_E2E_TIMEOUT}s"
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$dur" "$@"
+  elif command -v gtimeout >/dev/null 2>&1; then
+    gtimeout "$dur" "$@"
+  else
+    echo "WARN: timeout(1) not found; running without wall-clock cap: $*" >&2
+    "$@"
+  fi
+}
+
+# Rewrite plan repoUrl to file://<this checkout> so WorktreeExecutor clones locally (no GitHub org coupling).
+invoker_e2e_patch_plan_repo_url() {
+  local src="$1" dest="$2"
+  python3 -c "
+import pathlib, sys
+root = pathlib.Path(sys.argv[1]).resolve()
+src, dest = pathlib.Path(sys.argv[2]), pathlib.Path(sys.argv[3])
+text = src.read_text(encoding='utf-8')
+out = []
+for line in text.splitlines():
+    if line.lstrip().startswith('repoUrl:'):
+        out.append('repoUrl: ' + root.as_uri())
+    else:
+        out.append(line)
+nl = chr(10)
+body = nl.join(out) + (nl if text.endswith('\n') else '')
+dest.write_text(body, encoding='utf-8')
+" "$INVOKER_E2E_REPO_ROOT" "$src" "$dest"
+}
+
 # Run a headless Electron command with a timeout. Kills the process if it exceeds
 # $INVOKER_E2E_TIMEOUT seconds. Usage: invoker_e2e_run_headless <args...>
 invoker_e2e_run_headless() {
@@ -77,7 +110,7 @@ invoker_e2e_run_headless() {
   local max_attempts=2
   local status=0
   while :; do
-    timeout "${INVOKER_E2E_TIMEOUT}s" "$INVOKER_E2E_REPO_ROOT/run.sh" --headless "$@"
+    invoker_e2e_run_with_timeout "$INVOKER_E2E_REPO_ROOT/run.sh" --headless "$@"
     status=$?
     if [ "$status" -eq 0 ]; then
       return 0
@@ -96,27 +129,34 @@ invoker_e2e_run_headless() {
   done
 }
 
-# Submit a plan with timeout protection. Usage: invoker_e2e_submit_plan <yaml>
+# Submit a plan with timeout protection. Usage: invoker_e2e_submit_plan <plan-yaml-path> [extra submit-plan args...]
 invoker_e2e_submit_plan() {
-  local attempt=1
-  local max_attempts=2
-  local status=0
+  local plan_path="$1"
+  shift
+  local patched attempt max_attempts status
+  patched="$(mktemp "${TMPDIR:-/tmp}/invoker-e2e-plan.XXXXXX")"
+  invoker_e2e_patch_plan_repo_url "$plan_path" "$patched"
+  attempt=1
+  max_attempts=2
+  status=0
   while :; do
-    timeout "${INVOKER_E2E_TIMEOUT}s" "$INVOKER_E2E_REPO_ROOT/submit-plan.sh" "$@"
+    invoker_e2e_run_with_timeout "$INVOKER_E2E_REPO_ROOT/submit-plan.sh" "$patched" "$@"
     status=$?
     if [ "$status" -eq 0 ]; then
+      rm -f "$patched"
       return 0
     fi
     case "$status" in
       124|137|143)
         if [ "$attempt" -lt "$max_attempts" ]; then
-          echo "WARN: submit-plan interrupted (exit=$status), retrying once: $*" >&2
+          echo "WARN: submit-plan interrupted (exit=$status), retrying once: $plan_path $*" >&2
           attempt=$((attempt + 1))
           sleep 1
           continue
         fi
         ;;
     esac
+    rm -f "$patched"
     return "$status"
   done
 }
@@ -129,11 +169,32 @@ invoker_e2e_task_status() {
   invoker_e2e_run_headless task-status "$task_id" 2>/dev/null | tail -1
 }
 
+# Poll until task status equals expected (1s interval). Use after cancel/restart
+# where a fixed sleep is flaky under load or without GNU timeout(1) on macOS.
+# Usage: invoker_e2e_wait_task_status <taskId> <expectedStatus> [maxSeconds]
+invoker_e2e_wait_task_status() {
+  local task_id="$1"
+  local expected="$2"
+  local max_secs="${3:-60}"
+  local i=0
+  local st=""
+  while [ "$i" -lt "$max_secs" ]; do
+    st=$(invoker_e2e_task_status "$task_id" 2>/dev/null || true)
+    if [ "$st" = "$expected" ]; then
+      return 0
+    fi
+    i=$((i + 1))
+    sleep 1
+  done
+  echo "TIMEOUT: task $task_id expected status='$expected', last='$st' after ${max_secs}s" >&2
+  return 1
+}
+
 # Extract the __merge__<workflowId> task ID from headless status output.
 # The merge gate task ID starts with "__merge__". Returns the first match.
 invoker_e2e_merge_gate_id() {
   invoker_e2e_run_headless status 2>/dev/null \
-    | grep -oP '__merge__[^[:space:]]+' \
+    | grep -oE '__merge__[^[:space:]]+' \
     | head -1 \
     | sed 's/\x1b\[[0-9;]*m//g'
 }

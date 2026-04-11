@@ -19,7 +19,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/.." && pwd)"
 E2E_FIXTURES="$REPO_ROOT/scripts/e2e-dry-run/fixtures"
-TEST_PLAYGROUND_UPSTREAM="${TEST_PLAYGROUND_UPSTREAM:-https://github.com/EdbertChan/test-playground.git}"
+TEST_PLAYGROUND_UPSTREAM="${TEST_PLAYGROUND_UPSTREAM:-https://github.com/example-org/test-playground.git}"
 
 if ! command -v python3 &>/dev/null; then
   echo "FAIL: python3 is required to read invoker.db between processes."

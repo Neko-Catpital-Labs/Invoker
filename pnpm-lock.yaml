@@ -14,6 +14,9 @@ importers:
       dependency-cruiser:
         specifier: ^17.3.10
         version: 17.3.10
+      typescript:
+        specifier: ~5.9.3
+        version: 5.9.3
 
   packages/app:
     dependencies:

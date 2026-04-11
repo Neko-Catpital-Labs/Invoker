@@ -1,5 +1,6 @@
 # Full matrix: Vitest (all packages) + headless e2e-dry-run + e2e-ssh (skip if no sshd)
 # + Playwright Electron + verify-executor-routing. See scripts/test-suites/README.md.
+# Trigger workflow registration.
 name: CI
 
 on:
