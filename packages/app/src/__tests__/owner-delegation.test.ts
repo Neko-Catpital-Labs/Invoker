@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { tryDelegateExec, tryDelegateRun, tryDelegateResume } from '../headless.js';
+import { delegationTimeoutMs, tryDelegateExec, tryDelegateRun, tryDelegateResume } from '../headless.js';
 import { LocalBus } from '@invoker/transport';
 import type { MessageBus } from '@invoker/transport';
 
@@ -15,6 +15,28 @@ describe('headless→owner delegation', () => {
 
   beforeEach(() => {
     messageBus = new LocalBus();
+  });
+
+  describe('delegation timeout policy', () => {
+    it('uses extended timeout for rebase', () => {
+      expect(delegationTimeoutMs(['rebase', 'wf-1/task-1'])).toBe(60_000);
+    });
+
+    it('uses extended timeout for rebase-and-retry', () => {
+      expect(delegationTimeoutMs(['rebase-and-retry', 'wf-1/task-1'])).toBe(60_000);
+    });
+
+    it('uses extended timeout for restart at workflow scope', () => {
+      expect(delegationTimeoutMs(['restart', 'wf-123'])).toBe(60_000);
+    });
+
+    it('keeps short timeout for restart at task scope', () => {
+      expect(delegationTimeoutMs(['restart', 'wf-123/task-1'])).toBe(5_000);
+    });
+
+    it('keeps short timeout for non-rebase commands', () => {
+      expect(delegationTimeoutMs(['approve', 'wf-123/task-1'])).toBe(5_000);
+    });
   });
 
   describe('successful delegation when owner is present', () => {

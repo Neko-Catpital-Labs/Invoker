@@ -1413,6 +1413,20 @@ export async function tryDelegateResume(
   return tryDelegate('headless.resume', { workflowId }, messageBus, waitForApproval, noTrack);
 }
 
+export function delegationTimeoutMs(args: string[]): number {
+  const command = args[0] ?? '';
+  const target = args[1] ?? '';
+  const isWorkflowId = /^wf-[^/]+$/.test(target);
+
+  if (command === 'rebase' || command === 'rebase-and-retry') {
+    return 60_000;
+  }
+  if (command === 'restart' && isWorkflowId) {
+    return 60_000;
+  }
+  return 5_000;
+}
+
 /**
  * Try to delegate a mutating headless command to a GUI process.
  * Returns true if delegated, false if no GUI is available.
@@ -1424,8 +1438,9 @@ export async function tryDelegateExec(
   noTrack?: boolean,
 ): Promise<boolean> {
   const DELEGATION_TIMEOUT = Symbol('delegation-timeout');
+  const timeoutMs = delegationTimeoutMs(args);
   const timeoutPromise = new Promise<typeof DELEGATION_TIMEOUT>((_, reject) => {
-    setTimeout(() => reject(DELEGATION_TIMEOUT), 5000);
+    setTimeout(() => reject(DELEGATION_TIMEOUT), timeoutMs);
   });
 
   try {
