@@ -22,6 +22,7 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
     // head qualified as "forkOwner:branch" for cross-repo PRs.
     const forkOwner = await this.detectForkOwner(cwd);
     const apiHead = forkOwner ? `${forkOwner}:${ghHead}` : ghHead;
+    console.log(`[merge-gate] createReview: ghBase=${ghBase} apiHead=${apiHead} forkOwner=${forkOwner ?? 'none'} cwd=${cwd}`);
 
     // Push feature branch to origin
     await this.exec('git', ['push', '--force', '-u', 'origin', featureBranch], cwd);
@@ -128,6 +129,7 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
   }
 
   private exec(cmd: string, args: string[], cwd: string): Promise<string> {
+    console.log(`[merge-gate] exec: ${cmd} ${args.join(' ')} (cwd=${cwd})`);
     return new Promise((resolve, reject) => {
       const child = spawn(cmd, args, {
         cwd,
@@ -140,7 +142,12 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
       child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
       child.on('close', (code) => {
         if (code === 0) resolve(stdout.trim());
-        else reject(new Error(`${cmd} ${args.join(' ')} failed (code ${code}): ${stderr.trim()}`));
+        else {
+          console.error(`[merge-gate] exec FAILED (code ${code}): ${cmd} ${args.join(' ')} (cwd=${cwd})`);
+          console.error(`[merge-gate] stdout: ${stdout}`);
+          console.error(`[merge-gate] stderr: ${stderr}`);
+          reject(new Error(`${cmd} ${args.join(' ')} failed (code ${code}): ${stderr.trim()}`));
+        }
       });
     });
   }
