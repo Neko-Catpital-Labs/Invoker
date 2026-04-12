@@ -1945,7 +1945,6 @@ export class Orchestrator {
     const task = this.stateGetTask(taskId);
     if (!task) return false;
     if (task.status !== 'failed') return false;
-    if (task.config.isMergeNode) return false;
     const max = task.config.autoFixRetries ?? 0;
     if (max <= 0) return false;
     return (task.execution.autoFixAttempts ?? 0) < max;
