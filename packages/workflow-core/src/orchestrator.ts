@@ -173,6 +173,7 @@ export interface PlanDefinition {
     dockerImage?: string;
     remoteTargetId?: string;
     executionAgent?: string;
+    autoFixRetries?: number;
   }>;
 }
 
@@ -608,6 +609,7 @@ export class Orchestrator {
         requiresManualApproval: taskDef.requiresManualApproval,
         featureBranch: taskDef.featureBranch,
         autoFix: taskDef.autoFix,
+        autoFixRetries: taskDef.autoFixRetries,
         executionAgent: taskDef.executionAgent,
         externalDependencies,
       } as const;
@@ -1937,6 +1939,16 @@ export class Orchestrator {
 
   getTask(taskId: string): TaskState | undefined {
     return this.stateGetTask(taskId);
+  }
+
+  shouldAutoFix(taskId: string): boolean {
+    const task = this.stateGetTask(taskId);
+    if (!task) return false;
+    if (task.status !== 'failed') return false;
+    if (task.config.isMergeNode) return false;
+    const max = task.config.autoFixRetries ?? 0;
+    if (max <= 0) return false;
+    return (task.execution.autoFixAttempts ?? 0) < max;
   }
 
   getAllTasks(): TaskState[] {

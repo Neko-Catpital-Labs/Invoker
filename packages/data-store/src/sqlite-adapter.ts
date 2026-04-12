@@ -381,6 +381,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       'ALTER TABLE tasks ADD COLUMN last_agent_name TEXT',
       'ALTER TABLE tasks ADD COLUMN external_dependencies TEXT',
       'ALTER TABLE tasks ADD COLUMN executor_type TEXT',
+      'ALTER TABLE tasks ADD COLUMN auto_fix_attempts INTEGER DEFAULT 0',
     ];
     for (const sql of migrations) {
       try {
@@ -589,7 +590,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       cfg.requiresManualApproval ? 1 : 0,
       null, cfg.featureBranch ?? null,
       cfg.isMergeNode ? 1 : 0,
-      cfg.autoFix ? 1 : 0, null,
+      cfg.autoFix ? 1 : 0, cfg.autoFixRetries ?? null,
       cfg.executorType ?? null,
       exec.agentSessionId ?? null,
       exec.workspacePath ?? null,
@@ -644,6 +645,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         executorType: 'executor_type',
         remoteTargetId: 'remote_target_id',
         executionAgent: 'execution_agent',
+        autoFixRetries: 'max_fix_attempts',
       };
       const configBoolMap: Record<string, string> = {
         pivot: 'pivot',
@@ -699,6 +701,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         selectedAttemptId: 'selected_attempt_id',
         agentName: 'agent_name',
         lastAgentName: 'last_agent_name',
+        autoFixAttempts: 'auto_fix_attempts',
       };
       const execDateMap: Record<string, string> = {
         startedAt: 'started_at',
@@ -1394,6 +1397,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         executorType: normalizeExecutorType(row.executor_type ?? undefined),
         remoteTargetId: row.remote_target_id ?? undefined,
         autoFix: row.auto_fix === 1 ? true : undefined,
+        autoFixRetries: row.max_fix_attempts ?? undefined,
         isMergeNode: row.is_merge_node === 1 ? true : undefined,
         summary: row.summary ?? undefined,
         problem: row.problem ?? undefined,
@@ -1437,6 +1441,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         reviewStatus: row.review_status ?? undefined,
         reviewProviderId: row.review_provider_id ?? undefined,
         selectedAttemptId: row.selected_attempt_id ?? undefined,
+        autoFixAttempts: row.auto_fix_attempts ?? undefined,
       },
     };
   }
