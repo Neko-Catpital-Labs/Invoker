@@ -49,6 +49,7 @@ import {
   setWorkflowMergeMode as sharedSetWorkflowMergeMode,
   resolveConflictAction,
 } from './workflow-actions.js';
+import { withCoalescedWorkflowReset } from './workflow-reset-coalescer.js';
 
 export interface ApiServerDeps {
   logger?: Logger;
@@ -274,10 +275,13 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
       if (method === 'POST' && wfRestartMatch) {
         const workflowId = decodeURIComponent(wfRestartMatch[1]);
         try {
-          const started = sharedRecreateWorkflow(workflowId, { persistence, orchestrator });
-          const runnable = started.filter(t => t.status === 'running');
-          await taskExecutor.executeTasks(runnable);
-          json(res, 200, { ok: true, workflowId, action: 'restarted', tasksStarted: runnable.length });
+          const { coalesced, value: tasksStarted } = await withCoalescedWorkflowReset(workflowId, async () => {
+            const started = sharedRecreateWorkflow(workflowId, { persistence, orchestrator });
+            const runnable = started.filter(t => t.status === 'running');
+            await taskExecutor.executeTasks(runnable);
+            return runnable.length;
+          });
+          json(res, 200, { ok: true, workflowId, action: 'restarted', tasksStarted, coalesced });
         } catch (err) {
           json(res, 400, { error: err instanceof Error ? err.message : String(err) });
         }

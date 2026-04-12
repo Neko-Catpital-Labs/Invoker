@@ -38,6 +38,7 @@ import {
   setWorkflowMergeMode,
 } from './workflow-actions.js';
 import { openExternalTerminalForTask } from './open-terminal-for-task.js';
+import { withCoalescedWorkflowReset } from './workflow-reset-coalescer.js';
 
 export { bumpGenerationAndRecreate } from './workflow-actions.js';
 
@@ -902,35 +903,49 @@ async function headlessResolveConflict(taskId: string, deps: HeadlessDeps, agent
 async function headlessRebaseAndRetry(taskId: string, deps: HeadlessDeps): Promise<void> {
   if (!taskId) throw new Error('Missing arguments. Usage: --headless rebase-and-retry <taskId>');
   taskId = restoreWorkflowForTask(taskId, deps).resolvedTaskId;
+  const workflowId = deps.orchestrator.getTask(taskId)?.config.workflowId;
+  if (!workflowId) throw new Error(`Task "${taskId}" has no workflow`);
 
-  const te = createHeadlessExecutor(deps);
-  const started = await rebaseAndRetry(taskId, { ...deps, taskExecutor: te });
-  const runnable = started.filter(t => t.status === 'running');
-  process.stdout.write(`Rebase-and-retry: resetting workflow from current HEAD (${runnable.length} task(s))\n`);
+  const { coalesced, value: tasksStarted } = await withCoalescedWorkflowReset(workflowId, async () => {
+    const te = createHeadlessExecutor(deps);
+    const started = await rebaseAndRetry(taskId, { ...deps, taskExecutor: te });
+    const runnable = started.filter(t => t.status === 'running');
+    if (runnable.length > 0) {
+      await te.executeTasks(runnable);
+      await waitForCompletion(deps.orchestrator, workflowId, undefined);
+    }
+    return runnable.length;
+  });
 
-  if (runnable.length === 0) return;
-
-  await te.executeTasks(runnable);
-  await waitForCompletion(deps.orchestrator, deps.orchestrator.getTask(taskId)?.config.workflowId, undefined);
+  process.stdout.write(`Rebase-and-retry: resetting workflow from current HEAD (${tasksStarted} task(s))\n`);
+  if (coalesced) {
+    process.stdout.write(`Rebase-and-retry for "${workflowId}" coalesced with in-flight workflow reset.\n`);
+  }
 }
 
 async function headlessRecreateWorkflow(workflowId: string, deps: HeadlessDeps): Promise<void> {
   if (!workflowId) {
     throw new Error('Missing arguments. Usage: --headless recreate <workflowId>');
   }
-  const started = sharedRecreateWorkflow(workflowId, { persistence: deps.persistence, orchestrator: deps.orchestrator });
-  const runnable = started.filter(t => t.status === 'running');
-  process.stdout.write(`Recreate workflow "${workflowId}" — ${runnable.length} task(s) to execute (pool fetch skipped)\n`);
-  if (runnable.length === 0) return;
-
-  const te = createHeadlessExecutor(deps);
-  remoteFetchForPool.enabled = false;
-  try {
-    await te.executeTasks(runnable);
-  } finally {
-    remoteFetchForPool.enabled = true;
+  const { coalesced, value: tasksStarted } = await withCoalescedWorkflowReset(workflowId, async () => {
+    const started = sharedRecreateWorkflow(workflowId, { persistence: deps.persistence, orchestrator: deps.orchestrator });
+    const runnable = started.filter(t => t.status === 'running');
+    if (runnable.length > 0) {
+      const te = createHeadlessExecutor(deps);
+      remoteFetchForPool.enabled = false;
+      try {
+        await te.executeTasks(runnable);
+      } finally {
+        remoteFetchForPool.enabled = true;
+      }
+      await waitForCompletion(deps.orchestrator, workflowId, undefined);
+    }
+    return runnable.length;
+  });
+  process.stdout.write(`Recreate workflow "${workflowId}" — ${tasksStarted} task(s) to execute (pool fetch skipped)\n`);
+  if (coalesced) {
+    process.stdout.write(`Recreate for "${workflowId}" coalesced with in-flight workflow reset.\n`);
   }
-  await waitForCompletion(deps.orchestrator, workflowId, undefined);
 }
 
 async function headlessRecreateTask(taskId: string, deps: HeadlessDeps): Promise<void> {

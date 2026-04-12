@@ -559,6 +559,25 @@ describe('POST /api/workflows/:id/restart', () => {
     expect(mocks.persistence.updateWorkflow).toHaveBeenCalled();
   });
 
+  it('coalesces concurrent restart requests for the same workflow', async () => {
+    mocks.orchestrator.recreateWorkflow = vi.fn(() => [makeTask()]);
+    mocks.taskExecutor.executeTasks.mockImplementation(
+      async () => await new Promise<void>((resolve) => setTimeout(resolve, 100)),
+    );
+
+    const [r1, r2] = await Promise.all([
+      request(port, 'POST', '/api/workflows/wf-1/restart'),
+      request(port, 'POST', '/api/workflows/wf-1/restart'),
+    ]);
+
+    expect(r1.status).toBe(200);
+    expect(r2.status).toBe(200);
+    expect([r1.body.coalesced, r2.body.coalesced].sort()).toEqual([false, true]);
+    expect(mocks.persistence.updateWorkflow).toHaveBeenCalledTimes(1);
+    expect(mocks.orchestrator.recreateWorkflow).toHaveBeenCalledTimes(1);
+    expect(mocks.taskExecutor.executeTasks).toHaveBeenCalledTimes(1);
+  });
+
   it('returns 400 on error', async () => {
     mocks.persistence.loadWorkflow.mockReturnValue(undefined);
     const res = await request(port, 'POST', '/api/workflows/missing/restart');
