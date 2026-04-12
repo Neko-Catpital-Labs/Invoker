@@ -1,0 +1,16 @@
+# Anti-Pattern A: Using `npx vitest run`
+# Source: examples.md Section 5
+# Expected error: banned_pattern
+#
+# WRONG: npx vitest run may not resolve correctly in worktrees
+# Running `npx vitest run` may fail in worktrees where `node_modules/.bin` isn't in PATH.
+# Always use `pnpm test`, which resolves vitest through the package.json `test` script reliably.
+
+name: "Anti-pattern: npx vitest run"
+repoUrl: git@github.com:example-org/acme-repo.git
+
+tasks:
+  - id: test-core
+    description: "Run core tests"
+    command: "cd packages/core && npx vitest run"
+    dependencies: []

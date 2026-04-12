@@ -1,0 +1,55 @@
+name: "Plan-to-Invoker Deterministic Step 3: Visual-proof subcommands"
+description: |
+  Convert visual-proof process prose into explicit script subcommands with
+  deterministic inputs/outputs and artifact expectations.
+onFinish: pull_request
+mergeMode: github
+baseBranch: master
+repoUrl: git@github.com:example-org/acme-repo.git
+executorType: worktree
+
+externalDependencies:
+  - workflowId: "__UPSTREAM_WORKFLOW_ID__"
+    requiredStatus: completed
+
+tasks:
+  - id: add-visual-proof-subcommands
+    description: "Add explicit before/after/compare subcommands to visual-proof script"
+    prompt: |
+      Extend `scripts/ui-visual-proof.sh` (or a wrapper in `scripts/`) with deterministic
+      subcommands: `capture-before`, `capture-after`, `compare`, and `embed`. The
+      implementation must validate arguments, must use stable output paths under
+      `packages/app/e2e/visual-proof/`, and must return strict non-zero exit codes on failure.
+      Acceptance criteria:
+      - `bash scripts/ui-visual-proof.sh --help` should document all subcommands.
+      - Missing prerequisites must fail fast with non-zero exit.
+      - `compare` must return non-zero when required artifacts are missing.
+    dependencies: []
+
+  - id: update-visual-proof-skill-doc
+    description: "Reduce markdown-heavy instructions by pointing to subcommand contract"
+    prompt: |
+      Update `skills/visual-proof/SKILL.md` so subcommands in `scripts/ui-visual-proof.sh`
+      are the source of truth for behavior. Keep only minimal rationale and examples, and
+      remove duplicated procedural sections that should be script-enforced.
+      Acceptance criteria:
+      - SKILL.md points to explicit subcommands for capture/compare/embed.
+      - Prose-only workflow descriptions are reduced where deterministic command behavior exists.
+    dependencies:
+      - add-visual-proof-subcommands
+
+  - id: run-visual-proof-e2e
+    description: "Run app E2E suite that includes visual-proof coverage"
+    command: "cd packages/app && pnpm test"
+    executorType: ssh
+    remoteTargetId: remote_digital_ocean_1
+    dependencies:
+      - update-visual-proof-skill-doc
+
+  - id: post-fix-regression
+    description: "Run UI package tests as post-fix regression"
+    command: "cd packages/ui && pnpm test"
+    executorType: ssh
+    remoteTargetId: remote_digital_ocean_1
+    dependencies:
+      - run-visual-proof-e2e

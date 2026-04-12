@@ -1,0 +1,20 @@
+# Edge case: Unrendered template placeholder in externalDependencies
+# Expected errors: unrendered_template_placeholder
+#
+# Plans must not contain __UPSTREAM_WORKFLOW_ID__ — use submit-workflow-chain.sh
+# or replace with a concrete workflow ID before submission.
+
+name: "Unrendered template placeholder"
+description: "Plan with unrendered template placeholder in externalDependencies"
+repoUrl: git@github.com:example-org/acme-repo.git
+baseBranch: master
+
+externalDependencies:
+  - workflowId: "__UPSTREAM_WORKFLOW_ID__"
+    requiredStatus: completed
+
+tasks:
+  - id: task-1
+    description: "A task"
+    command: "echo test"
+    dependencies: []

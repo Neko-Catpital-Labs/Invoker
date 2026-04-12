@@ -1,0 +1,57 @@
+name: "Plan-to-Invoker Deterministic Step 1: Typed plan validator"
+description: |
+  Replace grep-heavy plan validation with a typed validator that parses YAML
+  structurally and returns deterministic pass/fail plus machine-readable errors.
+
+  This reduces policy drift and removes ambiguous markdown interpretation from
+  the critical path.
+onFinish: pull_request
+mergeMode: github
+baseBranch: master
+repoUrl: git@github.com:example-org/acme-repo.git
+executorType: worktree
+
+tasks:
+  - id: implement-typed-plan-validator
+    description: "Implement a Node/TypeScript validator to replace regex-based structural checks"
+    prompt: |
+      Implement a typed validator at `skills/plan-to-invoker/scripts/validate-plan.ts` and
+      wire `skills/plan-to-invoker/scripts/validate-plan.sh` to call it. The implementation
+      must parse YAML structurally (not grep heuristics), must validate required fields,
+      enum constraints from `packages/app/src/plan-parser.ts`, dependency references, and
+      command/prompt exclusivity. Ensure deterministic JSON diagnostics with stable error keys,
+      and ensure non-zero exit on any validation failure.
+      Acceptance criteria:
+      - `bash skills/plan-to-invoker/scripts/validate-plan.sh plans/plan-to-invoker-deterministic-step-1-validator.yaml` should pass.
+      - A negative fixture should fail with stable JSON error keys and non-zero exit code.
+    dependencies: []
+
+  - id: add-validator-tests
+    description: "Add regression tests for valid/invalid plans and deterministic error output"
+    prompt: |
+      Add tests under `skills/plan-to-invoker/scripts/` or repo test locations referenced by
+      `scripts/test-plan-to-invoker-skill.sh`. Include positive and negative fixtures in
+      `plans/` or a fixture directory. Tests must verify missing required fields, invalid enums,
+      broken dependencies, and command+prompt conflict. Ensure tests assert deterministic output
+      shape and stable error keys from the new validator.
+      Acceptance criteria:
+      - `bash scripts/test-plan-to-invoker-skill.sh` should pass.
+      - At least one test must assert exact machine-readable error key content.
+    dependencies:
+      - implement-typed-plan-validator
+
+  - id: run-plan-to-invoker-script-tests
+    description: "Run existing plan-to-invoker script test suite"
+    command: "bash scripts/test-plan-to-invoker-skill.sh"
+    executorType: ssh
+    remoteTargetId: remote_digital_ocean_1
+    dependencies:
+      - add-validator-tests
+
+  - id: post-fix-regression
+    description: "Run app package tests as post-fix regression"
+    command: "cd packages/app && pnpm test"
+    executorType: ssh
+    remoteTargetId: remote_digital_ocean_1
+    dependencies:
+      - run-plan-to-invoker-script-tests

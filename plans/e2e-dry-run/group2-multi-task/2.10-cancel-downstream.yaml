@@ -1,0 +1,16 @@
+# E2E dry-run Group 2.10 — cancel running task, downstream stays pending.
+name: "e2e-dry-run group2 2.10 cancel-downstream"
+repoUrl: git@github.com:example-org/acme-repo.git
+onFinish: none
+mergeMode: manual
+baseBranch: HEAD
+
+tasks:
+  - id: e2e-g2210-taskA
+    description: "E2E 2.10 — long-running task to cancel"
+    command: sleep 60
+    dependencies: []
+  - id: e2e-g2210-taskB
+    description: "E2E 2.10 — downstream depends on A"
+    command: echo downstream-ok
+    dependencies: [e2e-g2210-taskA]

@@ -1,0 +1,27 @@
+# E2E SSH Group 3.3 — worktree → SSH → worktree chain.
+# Task A writes a file in worktree, Task B (SSH) reads A's file and writes its
+# own, Task C (worktree) reads both files. Tests sequential branch propagation
+# through alternating executor types (3 handoffs).
+name: "e2e-ssh group3 3.3 chain-cross"
+repoUrl: git@github.com:example-org/acme-repo.git
+onFinish: none
+mergeMode: manual
+baseBranch: HEAD
+
+tasks:
+  - id: e2e-g333-taskA
+    description: "E2E 3.3 — worktree writes file A"
+    command: echo "from-worktree-A" > e2e-chain-a.txt
+    dependencies: []
+
+  - id: e2e-g333-taskB
+    description: "E2E 3.3 — SSH reads A's file and writes file B"
+    command: grep -q "from-worktree-A" e2e-chain-a.txt && echo "from-ssh-B" > e2e-chain-b.txt
+    dependencies: [e2e-g333-taskA]
+    executorType: ssh
+    remoteTargetId: localhost-e2e
+
+  - id: e2e-g333-taskC
+    description: "E2E 3.3 — worktree reads both files from chain"
+    command: grep -q "from-worktree-A" e2e-chain-a.txt && grep -q "from-ssh-B" e2e-chain-b.txt
+    dependencies: [e2e-g333-taskB]

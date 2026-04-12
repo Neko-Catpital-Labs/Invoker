@@ -1,0 +1,42 @@
+{
+  "comment": "Example Invoker configuration file",
+  "description": "This file can be placed at ~/.invoker/config.json (user-level) or <repo>/.invoker.json (repo-level)",
+
+  "executors": {
+    "worktree": {
+      "comment": "WorktreeExecutor configuration",
+      "cacheDir": "/home/user/.invoker/cache",
+      "worktreeBaseDir": "/home/user/.invoker/worktrees",
+      "maxWorktrees": 5
+    },
+    "docker": {
+      "comment": "DockerExecutor configuration"
+    },
+    "ssh": {
+      "comment": "SshExecutor configuration (global settings)"
+    }
+  },
+
+  "remoteTargets": {
+    "staging-server": {
+      "comment": "SSH target configuration for remote execution",
+      "host": "192.168.1.100",
+      "user": "deploy",
+      "sshKeyPath": "/home/user/.ssh/id_staging",
+      "port": 22
+    }
+  },
+
+  "notes": {
+    "fetch_behavior": "Git fetch failures always abort the task. Fix the underlying network/auth issue and rerun.",
+    "config_locations": [
+      "~/.invoker/config.json - User-level settings (all repos)",
+      "<repo>/.invoker.json - Repo-level settings (override user config)"
+    ],
+    "executor_types": [
+      "worktree - Git worktree isolation (default)",
+      "docker - Docker container execution",
+      "ssh - Remote SSH execution"
+    ]
+  }
+}

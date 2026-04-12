@@ -1,0 +1,12 @@
+# Edge case: Missing required repoUrl field
+# Expected error: missing_required_field (field: repoUrl)
+#
+# The repoUrl field is required for all plans.
+
+name: "Plan without repoUrl"
+
+tasks:
+  - id: test-task
+    description: "A test task"
+    command: "echo test"
+    dependencies: []

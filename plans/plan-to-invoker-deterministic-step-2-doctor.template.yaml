@@ -1,0 +1,57 @@
+name: "Plan-to-Invoker Deterministic Step 2: Skill doctor orchestration"
+description: |
+  Add a single deterministic command that executes all plan-to-invoker checks
+  and prints machine-readable summary output suitable for CI and local usage.
+onFinish: pull_request
+mergeMode: github
+baseBranch: master
+repoUrl: git@github.com:example-org/acme-repo.git
+executorType: worktree
+
+externalDependencies:
+  - workflowId: "__UPSTREAM_WORKFLOW_ID__"
+    requiredStatus: completed
+
+tasks:
+  - id: add-skill-doctor-script
+    description: "Create a single script that runs extract/generate/validate/lint/parse checks"
+    prompt: |
+      Implement `skills/plan-to-invoker/scripts/skill-doctor.sh` as a deterministic entrypoint
+      that orchestrates existing scripts: `extract-assumptions.sh`, `generate-verify-plan.sh`,
+      `validate-plan.sh`, `lint-task-atomicity.sh`, and `parse-results.sh`. It must accept a plan
+      path and mode flags, must emit summarized JSON, must fail with non-zero on any failed
+      sub-check, and must print the failing step id for debugging.
+      Acceptance criteria:
+      - `bash skills/plan-to-invoker/scripts/skill-doctor.sh --help` should print usage.
+      - A forced failing sub-check must return non-zero and identify the failed step.
+      - A successful run must report all executed checks with pass status.
+    dependencies: []
+
+  - id: wire-skill-doctor-into-skill-doc
+    description: "Update SKILL.md to use skill-doctor as primary entrypoint"
+    prompt: |
+      Update `skills/plan-to-invoker/SKILL.md` so the primary command surface is
+      `skills/plan-to-invoker/scripts/skill-doctor.sh`. Keep fallback commands for
+      debugging individual checks, and ensure wording clearly states deterministic
+      pass/fail expectations for every step.
+      Acceptance criteria:
+      - SKILL.md contains a single primary command path and explicit fallback commands.
+      - No duplicated long procedural text remains where script behavior is authoritative.
+    dependencies:
+      - add-skill-doctor-script
+
+  - id: run-script-tests
+    description: "Run plan-to-invoker script tests after doctor integration"
+    command: "bash scripts/test-plan-to-invoker-skill.sh"
+    executorType: ssh
+    remoteTargetId: remote_digital_ocean_1
+    dependencies:
+      - wire-skill-doctor-into-skill-doc
+
+  - id: post-fix-regression
+    description: "Run app package tests as post-fix regression"
+    command: "cd packages/app && pnpm test"
+    executorType: ssh
+    remoteTargetId: remote_digital_ocean_1
+    dependencies:
+      - run-script-tests

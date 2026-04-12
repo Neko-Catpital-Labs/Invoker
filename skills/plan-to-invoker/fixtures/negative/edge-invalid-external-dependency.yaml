@@ -1,0 +1,17 @@
+# Edge case: Invalid externalDependency fields
+# Expected errors: invalid_enum_value for requiredStatus and gatePolicy
+#
+# externalDependencies must have valid enum values for requiredStatus and gatePolicy.
+
+name: "Invalid external dependency"
+repoUrl: git@github.com:example-org/acme-repo.git
+
+tasks:
+  - id: task-with-external-dep
+    description: "Task with invalid external dependency fields"
+    command: "echo test"
+    dependencies: []
+    externalDependencies:
+      - workflowId: some-workflow
+        requiredStatus: invalid_status
+        gatePolicy: invalid_policy

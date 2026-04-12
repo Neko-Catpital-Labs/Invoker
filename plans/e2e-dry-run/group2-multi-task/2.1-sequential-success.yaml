@@ -1,0 +1,16 @@
+# E2E dry-run Group 2.1 — sequential A→B, both succeed.
+name: "e2e-dry-run group2 2.1 sequential success"
+repoUrl: git@github.com:example-org/acme-repo.git
+onFinish: none
+mergeMode: manual
+baseBranch: HEAD
+
+tasks:
+  - id: e2e-g221-taskA
+    description: "E2E 2.1 — first task"
+    command: echo seq-a-ok
+    dependencies: []
+  - id: e2e-g221-taskB
+    description: "E2E 2.1 — second task depends on A"
+    command: echo seq-b-ok
+    dependencies: [e2e-g221-taskA]

@@ -1,0 +1,12 @@
+# Edge case: Task with neither command nor prompt
+# Expected error: missing_command_or_prompt (field: command|prompt)
+#
+# Every task must have either command or prompt (but not both).
+
+name: "Task with neither command nor prompt"
+repoUrl: git@github.com:example-org/acme-repo.git
+
+tasks:
+  - id: no-execution
+    description: "This task has no execution mechanism"
+    dependencies: []

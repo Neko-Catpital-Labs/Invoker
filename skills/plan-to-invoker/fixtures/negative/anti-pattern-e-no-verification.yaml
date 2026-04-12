@@ -1,0 +1,18 @@
+# Anti-Pattern E: Implementation without verification
+# Source: examples.md Section 5
+# Note: This is a policy violation that may not be caught by the typed validator,
+# but represents a critical anti-pattern. AI-generated code may break tests, introduce
+# type errors, or have runtime bugs. Always follow implementation tasks with a command
+# task that runs tests or builds to catch issues before merging.
+#
+# This fixture is valid YAML schema but violates the policy rule:
+# "Every prompt task that modifies code MUST have a corresponding command task that runs tests to verify the change."
+
+name: "Anti-pattern: implementation without verification"
+repoUrl: git@github.com:example-org/acme-repo.git
+
+tasks:
+  - id: add-feature
+    description: "Add new feature"
+    prompt: "Add a new feature to the codebase..."
+    dependencies: []

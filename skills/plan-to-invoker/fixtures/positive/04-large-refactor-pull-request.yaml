@@ -1,0 +1,159 @@
+# Large Refactor with Pull Request
+# Source: examples.md Section 4
+# Description: A complex plan with multiple tasks and a diamond dependency pattern.
+# Uses `onFinish: pull_request` to create a PR instead of auto-merging, allowing for manual review before integration.
+#
+# When to use `pull_request` vs `merge`: Use `pull_request` for large changes, architectural refactors,
+# or any change that benefits from code review before merging.
+#
+# Diamond dependency pattern: A task can depend on multiple predecessors.
+# It only runs when ALL of them complete successfully.
+
+name: "Extract graph package from core"
+description: |
+  Extracts the graph/DAG data structures from @invoker/core into a dedicated
+  @invoker/graph package, reducing core's responsibilities.
+
+  ### Architecture (before)
+
+  ```mermaid
+  graph TD
+    Core["@invoker/core"]
+    SM["StateMachine<br/>(storage + transitions)"]
+    Types["task-types.ts"]
+    DAG["dag.ts"]
+
+    Core --> SM
+    Core --> Types
+    Core --> DAG
+    SM --> Types
+  ```
+
+  ### Architecture (after)
+
+  ```mermaid
+  graph TD
+    Graph["@invoker/graph"]
+    AG["ActionGraph<br/>(storage only)"]
+    Types["types.ts"]
+    DAG["dag.ts"]
+    Core["@invoker/core"]
+    SM["StateMachine<br/>(transitions only)"]
+
+    Graph --> AG
+    Graph --> Types
+    Graph --> DAG
+    Core -->|depends on| Graph
+    Core --> SM
+    SM -->|delegates storage| AG
+  ```
+
+  ActionGraph becomes the storage layer, StateMachine delegates
+  to it for all node CRUD. DAG utilities and type definitions move wholesale.
+
+  Tradeoffs: Adds a cross-package dependency (core -> graph) but reduces core
+  complexity by ~300 lines. All existing tests must pass unchanged.
+onFinish: pull_request
+mergeMode: github
+repoUrl: git@github.com:example-org/acme-repo.git
+baseBranch: master
+featureBranch: refactor/extract-graph-package
+
+tasks:
+  - id: scaffold-package
+    description: "Create packages/graph with package.json and tsconfig"
+    prompt: |
+      Create packages/graph/ directory with:
+      1. package.json (name: "@invoker/graph", minimal dependencies)
+      2. tsconfig.json (copy from packages/core, adjust paths)
+      3. vitest.config.ts (copy from packages/core)
+      4. src/index.ts (empty, with comment)
+      5. src/__tests__/ directory
+
+      Update root tsconfig.json and package.json to include the new package.
+    dependencies: []
+
+  - id: move-types
+    description: "Move type definitions from core to graph"
+    prompt: |
+      1. Copy packages/core/src/task-types.ts to packages/graph/src/types.ts
+      2. Replace core/task-types.ts with re-export facade pointing to graph
+      3. Add @invoker/graph dependency to core/package.json
+      4. Update graph/index.ts to export from types.ts
+    dependencies: [scaffold-package]
+
+  - id: move-dag-utils
+    description: "Move DAG utility functions from core to graph"
+    prompt: |
+      1. Copy packages/core/src/dag.ts to packages/graph/src/dag.ts
+      2. Update import in dag.ts: change './task-types.js' to './types.js'
+      3. Replace core/dag.ts with re-export facade
+      4. Update graph/index.ts to export from dag.ts
+    dependencies: [scaffold-package]
+
+  - id: extract-action-graph
+    description: "Extract ActionGraph class from StateMachine into graph package"
+    prompt: |
+      Create packages/graph/src/action-graph.ts:
+
+      1. Extract storage and query methods from TaskStateMachine
+      2. Define ActionGraph class with:
+         - private nodes: Map<string, TaskState>
+         - getNode(id), getAllNodes(), getReadyNodes()
+         - createNode(...), restoreNode(...)
+         - setNode(id, node), removeNode(id), clear()
+
+      Do NOT modify state-machine.ts yet — that happens in refactor-state-machine.
+    dependencies: [move-types]
+
+  - id: update-graph-index
+    description: "Finalize graph package exports"
+    prompt: |
+      Verify packages/graph/src/index.ts exports:
+      - export * from './types.js';
+      - export * from './dag.js';
+      - export { ActionGraph } from './action-graph.js';
+
+      Run: cd packages/graph && npx tsc --noEmit
+      Fix any TypeScript errors.
+    dependencies: [move-types, move-dag-utils, extract-action-graph]
+
+  - id: refactor-state-machine
+    description: "Update StateMachine to use ActionGraph for storage"
+    prompt: |
+      In packages/core/src/state-machine.ts:
+
+      1. Import ActionGraph from '@invoker/graph'
+      2. Change constructor to accept ActionGraph instance
+      3. Delegate all storage methods to this.graph.*
+      4. Keep state transition methods (startTask, completeTask, etc.) in StateMachine
+
+      This is a pure refactor — all existing tests must pass unchanged.
+    dependencies: [update-graph-index]
+
+  - id: write-graph-tests
+    description: "Add unit tests for graph package"
+    prompt: |
+      Create tests in packages/graph/src/__tests__/:
+
+      1. action-graph.test.ts — test all ActionGraph methods
+      2. dag.test.ts — copy/adapt from core package dag tests
+      3. types.test.ts — test type guards and factory functions
+
+      Run: cd packages/graph && pnpm test
+    dependencies: [extract-action-graph]
+
+  - id: verify-graph-tests
+    description: "Run graph package tests"
+    command: "cd packages/graph && pnpm test 2>&1"
+    dependencies: [write-graph-tests]
+
+  - id: verify-core-tests
+    description: "Run core package tests to verify backward compatibility"
+    command: "cd packages/core && pnpm test 2>&1"
+    dependencies: [refactor-state-machine, verify-graph-tests]
+
+  - id: verify-full-build
+    description: "Build all packages to verify no breakage"
+    command: "pnpm build 2>&1"
+    dependencies: [verify-core-tests]

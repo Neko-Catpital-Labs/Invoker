@@ -1,0 +1,20 @@
+# Edge case: Stacked plan with baseBranch still set to master
+# Expected errors: stacked_basebranch_default
+#
+# Plans with concrete externalDependencies must set baseBranch to the upstream
+# workflow's featureBranch, not master.
+
+name: "Stacked plan with baseBranch master"
+description: "Plan with concrete externalDependencies but baseBranch is master"
+repoUrl: git@github.com:example-org/acme-repo.git
+baseBranch: master
+
+externalDependencies:
+  - workflowId: "wf-123-456"
+    requiredStatus: completed
+
+tasks:
+  - id: task-1
+    description: "A task"
+    command: "echo test"
+    dependencies: []

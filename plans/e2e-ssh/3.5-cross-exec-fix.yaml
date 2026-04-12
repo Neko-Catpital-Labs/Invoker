@@ -1,0 +1,24 @@
+# E2E SSH Group 3.5 — cross-executor fix: SSH B fails, fix+approve → C unblocks.
+name: "e2e-ssh group3 3.5 cross-exec-fix"
+repoUrl: git@github.com:example-org/acme-repo.git
+onFinish: none
+mergeMode: manual
+baseBranch: HEAD
+
+tasks:
+  - id: e2e-g335-taskA
+    description: "E2E 3.5 — worktree task succeeds"
+    command: echo worktree-a-ok
+    dependencies: []
+
+  - id: e2e-g335-taskB
+    description: "E2E 3.5 — SSH task fails (needs fix)"
+    command: exit 1
+    dependencies: []
+    executorType: ssh
+    remoteTargetId: localhost-e2e
+
+  - id: e2e-g335-taskC
+    description: "E2E 3.5 — worktree depends on A and B"
+    command: echo fan-in-ok
+    dependencies: [e2e-g335-taskA, e2e-g335-taskB]

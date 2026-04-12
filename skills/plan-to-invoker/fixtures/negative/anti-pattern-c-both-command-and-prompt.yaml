@@ -1,0 +1,17 @@
+# Anti-Pattern C: Both command and prompt
+# Source: examples.md Section 5
+# Expected error: command_prompt_exclusive
+#
+# WRONG: task must have command OR prompt, not both
+# A task's execution model is either shell command or AI prompt.
+# Mixing them is ambiguous and unsupported by the orchestrator.
+
+name: "Anti-pattern: both command and prompt"
+repoUrl: git@github.com:example-org/acme-repo.git
+
+tasks:
+  - id: do-thing
+    description: "Does a thing"
+    command: "echo hello"
+    prompt: "Do the thing"
+    dependencies: []

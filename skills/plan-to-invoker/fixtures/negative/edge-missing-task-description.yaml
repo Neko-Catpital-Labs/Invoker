@@ -1,0 +1,12 @@
+# Edge case: Task missing required description field
+# Expected error: missing_required_field (field: description)
+#
+# Every task must have a description.
+
+name: "Task without description"
+repoUrl: git@github.com:example-org/acme-repo.git
+
+tasks:
+  - id: no-description
+    command: "echo test"
+    dependencies: []

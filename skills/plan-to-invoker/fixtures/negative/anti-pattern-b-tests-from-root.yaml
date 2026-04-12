@@ -1,0 +1,16 @@
+# Anti-Pattern B: Running tests from repo root
+# Source: examples.md Section 5
+# Expected error: This may not trigger a specific validator error, but demonstrates wrong pattern
+#
+# WRONG: runs pnpm -r test across ALL packages
+# Running `pnpm test <path>` from the monorepo root triggers `pnpm -r test` (recursive across all workspaces),
+# not a targeted test. Always cd into the package directory first.
+
+name: "Anti-pattern: tests from root"
+repoUrl: git@github.com:example-org/acme-repo.git
+
+tasks:
+  - id: test-core
+    description: "Run core tests"
+    command: "pnpm test packages/core/src/__tests__/foo.test.ts"
+    dependencies: []

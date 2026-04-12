@@ -1,0 +1,14 @@
+# Edge case: Invalid mergeMode enum value
+# Expected error: invalid_enum_value (field: mergeMode)
+#
+# mergeMode must be one of: github, manual
+
+name: "Invalid mergeMode enum"
+repoUrl: git@github.com:example-org/acme-repo.git
+mergeMode: invalid_mode
+
+tasks:
+  - id: test-task
+    description: "A test task"
+    command: "echo test"
+    dependencies: []

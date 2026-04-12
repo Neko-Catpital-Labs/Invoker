@@ -1,9 +1,8 @@
-# Temporary merge queue — keeps master always green via rebase + retest.
-# May be replaced by GitHub native merge queue or custom SubmitQueue later.
+# Merge queue — keeps master always green via squash + retest.
+# Requires CI green + ready-to-merge label to enter queue.
 
 queue_rules:
   - name: default
-    autoqueue: true
     merge_method: squash
     batch_size: 5
     checks_timeout: 120min
@@ -16,3 +15,13 @@ queue_rules:
     # Gate merge: CI must pass again on the rebased code.
     merge_conditions:
       - check-success=test-all
+
+pull_request_rules:
+  - name: Auto-queue ready PRs
+    conditions:
+      - base=master
+      - check-success=test-all
+      - label=ready-to-merge
+      - -draft
+    actions:
+      queue:

@@ -1,0 +1,15 @@
+# Anti-Pattern D: Missing dependencies array
+# Source: examples.md Section 5
+# Expected error: missing_required_field (field: dependencies)
+#
+# WRONG: dependencies field is required, even if empty
+# The orchestrator requires the `dependencies` field to build the task DAG.
+# Omitting it causes a schema validation error.
+
+name: "Anti-pattern: missing dependencies"
+repoUrl: git@github.com:example-org/acme-repo.git
+
+tasks:
+  - id: do-thing
+    description: "Does a thing"
+    command: "echo hello"

@@ -1,0 +1,19 @@
+# Edge case: Task depends on non-existent task ID
+# Expected error: invalid_dependency_reference (field: dependencies)
+#
+# All task dependencies must reference valid task IDs.
+
+name: "Invalid dependency reference"
+repoUrl: git@github.com:example-org/acme-repo.git
+
+tasks:
+  - id: task-a
+    description: "First task"
+    command: "echo a"
+    dependencies: []
+
+  - id: task-b
+    description: "Depends on non-existent task"
+    command: "echo b"
+    dependencies:
+      - non-existent-task-id

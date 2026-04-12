@@ -1,0 +1,20 @@
+# E2E dry-run Group 2.5 — fan-in: A succeeds, B fails → C stays pending.
+name: "e2e-dry-run group2 2.5 fan-in partial fail"
+repoUrl: git@github.com:example-org/acme-repo.git
+onFinish: none
+mergeMode: manual
+baseBranch: HEAD
+
+tasks:
+  - id: e2e-g225-taskA
+    description: "E2E 2.5 — parallel branch A succeeds"
+    command: echo fan-a-ok
+    dependencies: []
+  - id: e2e-g225-taskB
+    description: "E2E 2.5 — parallel branch B fails"
+    command: exit 1
+    dependencies: []
+  - id: e2e-g225-taskC
+    description: "E2E 2.5 — fan-in depends on A and B"
+    command: echo fan-in-ok
+    dependencies: [e2e-g225-taskA, e2e-g225-taskB]
