@@ -382,6 +382,7 @@ if (isHeadless) {
           // Successfully delegated to GUI
           delegationBus.disconnect();
           process.exit(process.exitCode ?? 0);
+          return;
         }
 
         // Delegation failed: no owner handler available.
@@ -395,11 +396,13 @@ if (isHeadless) {
             `\nStandalone mode opens a writable database. Only use it when no other process is accessing the database.\n`
           );
           process.exit(1);
+          return;
         }
       } catch (err) {
         process.stderr.write(`${RED}Delegation error:${RESET} ${err instanceof Error ? err.message : String(err)}\n`);
         delegationBus.disconnect();
         process.exit(1);
+        return;
       }
     }
 
