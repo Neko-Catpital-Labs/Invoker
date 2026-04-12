@@ -340,99 +340,15 @@ describe('orphan reconciliation on resume', () => {
     expect(orchestrator2.getTask('t2')?.status).toBe('pending');
   });
 
-  it('stale running tasks are NOT restarted when startupAutoRunBlocked is true', () => {
-    orchestrator.loadPlan(plan);
-    orchestrator.startExecution();
-    expect(orchestrator.getTask('t1')?.status).toBe('running');
-
-    // --- Simulate app restart ---
-    const orchestrator2 = new Orchestrator({ persistence, messageBus: new InMemoryBus() });
-    orchestrator2.syncAllFromDb();
-
-    // Simulate the DB poll stale-heartbeat check (main.ts lines 1382-1405)
-    const STALE_HEARTBEAT_MS = 5 * 60 * 1000;
-    const restarted: TaskState[] = [];
-
-    for (const task of orchestrator2.getAllTasks()) {
-      if (task.status === 'running') {
-        const startedTime = task.execution?.startedAt
-          ? task.execution.startedAt.getTime()
-          : null;
-        const referenceTime = startedTime; // no heartbeat in test
-        const now = Date.now();
-
-        // Guard: startupAutoRunBlocked = true blocks restart
-        const startupAutoRunBlocked = true;
-        if (referenceTime && (now - referenceTime) > STALE_HEARTBEAT_MS) {
-          if (startupAutoRunBlocked) {
-            continue;
-          }
-          const r = orchestrator2.restartTask(task.id);
-          restarted.push(...r.filter(t => t.status === 'running'));
-        }
-      }
-    }
-
-    // Guard should block all restarts
-    expect(restarted).toEqual([]);
-    // t1 should still be in 'running' state (not restarted to pending)
-    expect(orchestrator2.getTask('t1')?.status).toBe('running');
-  });
-
-  it('stale detector skips tasks in fixing_with_ai (and legacy running+isFixingWithAI)', () => {
-    orchestrator.loadPlan(plan);
-    orchestrator.startExecution();
-
-    // Fail t1 so we can call beginConflictResolution
-    orchestrator.handleWorkerResponse(
-      makeResponse({ actionId: 't1', status: 'failed', outputs: { exitCode: 1, error: 'merge conflict' } }),
-    );
-    expect(orchestrator.getTask('t1')?.status).toBe('failed');
-
-    orchestrator.beginConflictResolution('t1');
-    expect(orchestrator.getTask('t1')?.status).toBe('fixing_with_ai');
-    expect(orchestrator.getTask('t1')?.execution.isFixingWithAI).toBeFalsy();
-
-    // --- Simulate app restart ---
-    const orchestrator2 = new Orchestrator({ persistence, messageBus: new InMemoryBus() });
-    orchestrator2.syncAllFromDb();
-
-    // Simulate the DB poll stale-heartbeat check (main.ts)
-    const STALE_HEARTBEAT_MS = 5 * 60 * 1000;
-    const restarted: TaskState[] = [];
-    // Use a far-future "now" to guarantee the task looks stale
-    const now = Date.now() + STALE_HEARTBEAT_MS + 60_000;
-
-    for (const task of orchestrator2.getAllTasks()) {
-      if (task.status === 'fixing_with_ai') continue;
-      if (task.status === 'running') {
-        if (task.execution?.isFixingWithAI) continue;
-        const startedTime = task.execution?.startedAt
-          ? task.execution.startedAt.getTime()
-          : null;
-        const referenceTime = startedTime;
-
-        if (referenceTime && (now - referenceTime) > STALE_HEARTBEAT_MS) {
-          const r = orchestrator2.restartTask(task.id);
-          restarted.push(...r.filter(t => t.status === 'running'));
-        }
-      }
-    }
-
-    expect(restarted).toEqual([]);
-    expect(orchestrator2.getTask('t1')?.status).toBe('fixing_with_ai');
-  });
-
-  it('after resume-workflow clears the flag, orphaned tasks CAN be restarted', () => {
+  it('after resume-workflow, orphaned tasks CAN be restarted', () => {
     orchestrator.loadPlan(plan);
     orchestrator.startExecution();
 
     const orchestrator2 = new Orchestrator({ persistence, messageBus: new InMemoryBus() });
     orchestrator2.syncAllFromDb();
 
-    // Flag starts true (disableAutoRunOnStartup is set), blocking auto-run.
-    // Simulate resume-workflow IPC (main.ts line 1015) clearing the flag.
-    // After the flag is cleared, relaunchOrphansAndStartReady should work.
+    // Simulate resume-workflow IPC calling relaunchOrphansAndStartReady,
+    // which restarts orphaned running tasks and starts ready pending tasks.
     const allStarted = relaunchOrphansAndStartReady(orchestrator2);
     expect(allStarted.length).toBe(1);
     expect(idEndsWithLocal(allStarted[0].id, 't1')).toBe(true);

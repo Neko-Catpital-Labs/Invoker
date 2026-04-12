@@ -1,0 +1,35 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+coverage/
+*.tsbuildinfo
+tsup.config.bundled_*.mjs
+
+# Lock files
+pnpm-lock.yaml
+
+# Binary/generated assets
+*.wasm
+*.ico
+*.icns
+*.png
+
+# Electron packager output
+packages/app/e2e/visual-proof/
+packages/app/e2e/test-results/
+packages/app/test-results/
+
+# Plan files
+plans/
+
+# Scratch/debug
+tmp/
+.claude/debug/
+.claude/todos/
+.claude/worktrees/
+.cursor/debug-*.log
+
+# OS/editor
+.DS_Store
