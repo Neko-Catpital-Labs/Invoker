@@ -233,3 +233,53 @@ export async function resolveConflictAction(
     throw err;
   }
 }
+
+// ── Auto-fix helpers ─────────────────────────────────────────
+
+function isMergeConflictError(error: string): boolean {
+  for (const c of [error, error.trim(), error.split('\n\n').at(-1)?.trim() ?? '']) {
+    if (!c) continue;
+    try { if ((JSON.parse(c) as any)?.type === 'merge_conflict') return true; } catch { /* not JSON */ }
+  }
+  return false;
+}
+
+/**
+ * Automatically fix a failed task with an AI agent and restart it.
+ * Increments autoFixAttempts; respects the max budget from shouldAutoFix().
+ */
+export async function autoFixOnFailure(
+  taskId: string,
+  deps: { orchestrator: Orchestrator; persistence: SQLiteAdapter; taskExecutor: TaskRunner },
+): Promise<void> {
+  const { orchestrator, persistence, taskExecutor } = deps;
+  if (!orchestrator.shouldAutoFix(taskId)) return;
+
+  const task = orchestrator.getTask(taskId);
+  if (!task || task.status !== 'failed') return;
+
+  const attempts = (task.execution.autoFixAttempts ?? 0) + 1;
+  const max = task.config.autoFixRetries ?? 0;
+  console.log(`[auto-fix] "${taskId}" attempt ${attempts}/${max}`);
+
+  // Increment counter FIRST (before any delta can re-trigger)
+  persistence.updateTask(taskId, { execution: { autoFixAttempts: attempts } });
+
+  const { savedError } = orchestrator.beginConflictResolution(taskId);
+  try {
+    const output = persistence.getTaskOutput(taskId);
+    if (isMergeConflictError(savedError)) {
+      await taskExecutor.resolveConflict(taskId, savedError, 'claude');
+    } else {
+      await taskExecutor.fixWithAgent(taskId, output, 'claude', savedError);
+    }
+    // Skip approve flow — directly restart to re-run the task
+    const started = orchestrator.restartTask(taskId);
+    const runnable = started.filter(t => t.status === 'running');
+    if (runnable.length > 0) await taskExecutor.executeTasks(runnable);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    persistence.appendTaskOutput(taskId, `\n[Auto-fix] Agent failed (attempt ${attempts}/${max}): ${msg}`);
+    orchestrator.revertConflictResolution(taskId, savedError, msg);
+  }
+}

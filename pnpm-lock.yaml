@@ -14,9 +14,15 @@ importers:
       dependency-cruiser:
         specifier: ^17.3.10
         version: 17.3.10
+      tsup:
+        specifier: ^8.5.1
+        version: 8.5.1(jiti@1.21.7)(postcss@8.5.8)(typescript@5.9.3)(yaml@2.8.2)
       typescript:
         specifier: ~5.9.3
         version: 5.9.3
+      yaml:
+        specifier: ^2.8.2
+        version: 2.8.2
 
   packages/app:
     dependencies:

@@ -632,6 +632,7 @@ async function headlessRun(
   process.stdout.write(`${BOLD}Loading plan: ${plan.name}${RESET}\n`);
   process.stdout.write(`Tasks: ${plan.tasks.length}\n\n`);
 
+  const autoFixInProgress = new Set<string>();
   messageBus.subscribe<TaskDelta>(Channels.TASK_DELTA, (delta) => {
     if (delta.type === 'updated') {
       const task = orchestrator.getTask(delta.taskId);
@@ -643,6 +644,20 @@ async function headlessRun(
 
   const taskExecutor = createHeadlessExecutor(deps);
   wireHeadlessApproveHook(deps, taskExecutor);
+
+  // Auto-fix subscriber (after taskExecutor is created)
+  messageBus.subscribe<TaskDelta>(Channels.TASK_DELTA, (delta) => {
+    if (delta.type === 'updated' && delta.changes.status === 'failed') {
+      if (!autoFixInProgress.has(delta.taskId) && orchestrator.shouldAutoFix(delta.taskId)) {
+        autoFixInProgress.add(delta.taskId);
+        import('./workflow-actions.js').then(({ autoFixOnFailure }) =>
+          autoFixOnFailure(delta.taskId, { orchestrator, persistence: deps.persistence, taskExecutor })
+            .catch(err => process.stderr.write(`[auto-fix] "${delta.taskId}": ${err}\n`))
+            .finally(() => autoFixInProgress.delete(delta.taskId)),
+        );
+      }
+    }
+  });
 
   const api = startApiServer({
     logger: deps.logger,
@@ -697,6 +712,7 @@ async function headlessResume(
 
   process.stdout.write(`${BOLD}Resuming workflow: ${workflowId}${RESET}\n\n`);
 
+  const autoFixInProgress = new Set<string>();
   messageBus.subscribe<TaskDelta>(Channels.TASK_DELTA, (delta) => {
     if (delta.type === 'updated') {
       const task = orchestrator.getTask(delta.taskId);
@@ -708,6 +724,20 @@ async function headlessResume(
 
   const taskExecutor = createHeadlessExecutor(deps);
   wireHeadlessApproveHook(deps, taskExecutor);
+
+  // Auto-fix subscriber (after taskExecutor is created)
+  messageBus.subscribe<TaskDelta>(Channels.TASK_DELTA, (delta) => {
+    if (delta.type === 'updated' && delta.changes.status === 'failed') {
+      if (!autoFixInProgress.has(delta.taskId) && orchestrator.shouldAutoFix(delta.taskId)) {
+        autoFixInProgress.add(delta.taskId);
+        import('./workflow-actions.js').then(({ autoFixOnFailure }) =>
+          autoFixOnFailure(delta.taskId, { orchestrator, persistence: deps.persistence, taskExecutor })
+            .catch(err => process.stderr.write(`[auto-fix] "${delta.taskId}": ${err}\n`))
+            .finally(() => autoFixInProgress.delete(delta.taskId)),
+        );
+      }
+    }
+  });
 
   const api = startApiServer({
     logger: deps.logger,

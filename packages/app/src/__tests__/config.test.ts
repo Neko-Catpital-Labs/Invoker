@@ -86,6 +86,15 @@ describe('loadConfig', () => {
     expect(config.maxConcurrency).toBe(6);
   });
 
+  it('reads autoFixRetries from user config', () => {
+    writeFileSync(
+      join(fakeHome, '.invoker', 'config.json'),
+      JSON.stringify({ autoFixRetries: 3 }),
+    );
+    const config = loadConfig();
+    expect(config.autoFixRetries).toBe(3);
+  });
+
   it('loadConfig picks up browser field', () => {
     writeFileSync(
       join(fakeHome, '.invoker', 'config.json'),

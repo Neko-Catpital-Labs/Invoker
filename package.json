@@ -63,7 +63,9 @@
   "devDependencies": {
     "aws4": "^1.13.2",
     "dependency-cruiser": "^17.3.10",
-    "typescript": "~5.9.3"
+    "tsup": "^8.5.1",
+    "typescript": "~5.9.3",
+    "yaml": "^2.8.2"
   },
   "packageManager": "pnpm@10.31.0+sha512.e3927388bfaa8078ceb79b748ffc1e8274e84d75163e67bc22e06c0d3aed43dd153151cbf11d7f8301ff4acb98c68bdc5cadf6989532801ffafe3b3e4a63c268"
 }
