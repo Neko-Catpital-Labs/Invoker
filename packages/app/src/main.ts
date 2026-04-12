@@ -755,7 +755,6 @@ function setupGuiMode(): void {
       return { ok: true };
     });
 
-    let startupAutoRunBlocked = !!invokerConfig.disableAutoRunOnStartup;
 
     // Relaunch orphaned running tasks and start any pending-but-ready tasks.
     if (invokerConfig.disableAutoRunOnStartup) {
@@ -855,7 +854,6 @@ function setupGuiMode(): void {
     });
 
     ipcMain.handle('invoker:resume-workflow', async () => {
-      startupAutoRunBlocked = false;
       const workflows = persistence.listWorkflows();
       if (workflows.length === 0) {
         logger.info('resume-workflow: no workflows found', { module: 'ipc' });
@@ -1449,7 +1447,7 @@ function setupGuiMode(): void {
     });
 
     // ── DB Polling — detect external workflow changes ───
-    dbPollInterval = setInterval(async () => {
+    dbPollInterval = setInterval(() => {
       if (!mainWindow || mainWindow.isDestroyed()) return;
       try {
         const workflows = persistence.listWorkflows();
@@ -1465,9 +1463,6 @@ function setupGuiMode(): void {
           logger.info(`Synced orchestrator for all ${workflows.length} workflows`, { module: 'db-poll' });
           lastKnownTaskStates.clear();
         }
-
-        const STALE_HEARTBEAT_MS = 5 * 60 * 1000;
-        const now = Date.now();
 
         for (const wf of workflows) {
           if (wf.status === 'completed' || wf.status === 'failed') continue;
@@ -1489,37 +1484,6 @@ function setupGuiMode(): void {
               lastKnownTaskStates.set(task.id, snapshot);
               uiPerfStats.dbPollUpdatedAsCreated += 1;
               mainWindow.webContents.send('invoker:task-delta', { type: 'created', task });
-            }
-
-            if (task.status === 'fixing_with_ai') continue;
-            if (task.status === 'running') {
-              if (task.execution?.isFixingWithAI) continue;
-              const heartbeatTime = task.execution?.lastHeartbeatAt
-                ? new Date(task.execution.lastHeartbeatAt as unknown as string | number).getTime()
-                : null;
-              const startedTime = task.execution?.startedAt
-                ? new Date(task.execution.startedAt as unknown as string | number).getTime()
-                : null;
-              const referenceTime = heartbeatTime ?? startedTime;
-
-              if (referenceTime && (now - referenceTime) > STALE_HEARTBEAT_MS) {
-                if (startupAutoRunBlocked) {
-                  logger.info(`Stale running task "${task.id}": auto-run blocked by config, skipping restart`, { module: 'db-poll' });
-                  continue;
-                }
-                const ageSeconds = Math.round((now - referenceTime) / 1000);
-                const source = heartbeatTime ? 'last heartbeat' : 'started';
-                logger.warn(`Stale running task "${task.id}": ${source} ${ageSeconds}s ago, restarting`, { module: 'db-poll' });
-                try { persistence.writeActivityLog('db-poll', 'warn', `Stale running task "${task.id}": ${source} ${ageSeconds}s ago, restarting`); } catch { /* db locked */ }
-                try {
-                  await killRunningTask(task.id);
-                  const restarted = orchestrator.restartTask(task.id);
-                  const runnable = restarted.filter(t => t.status === 'running');
-                  await taskExecutor.executeTasks(runnable);
-                } catch (err) {
-                  logger.error(`Failed to restart stale task "${task.id}": ${err}`, { module: 'db-poll' });
-                }
-              }
             }
           }
         }
