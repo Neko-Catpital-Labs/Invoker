@@ -1,0 +1,19 @@
+# Edge case: Cyclic dependency (A -> B -> A)
+# Expected error: This may require cycle detection in the validator
+#
+# Task dependencies must form a DAG (directed acyclic graph).
+# Note: The current validator may not detect this, but it represents an invalid plan.
+
+name: "Cyclic dependency"
+repoUrl: git@github.com:example-org/acme-repo.git
+
+tasks:
+  - id: task-a
+    description: "Task A depends on B"
+    command: "echo a"
+    dependencies: [task-b]
+
+  - id: task-b
+    description: "Task B depends on A (creates cycle)"
+    command: "echo b"
+    dependencies: [task-a]

@@ -1,0 +1,63 @@
+# Negative test fixture with deliberate validation errors
+# This file should fail validation with multiple distinct error types
+
+# Missing: name field (error: missing_required_field, field: name)
+# Missing: repoUrl field (error: missing_required_field, field: repoUrl)
+# Missing: description field when onFinish is pull_request (error: missing_required_field, field: description)
+
+onFinish: pull_request
+mergeMode: invalid_mode  # Invalid enum (error: invalid_enum_value, field: mergeMode)
+baseBranch: master
+
+tasks:
+  # Task with missing id field
+  - description: Task without ID field should fail validation
+    command: echo "missing id"
+    # Error: missing_required_field, field: id
+
+  # Task with both command and prompt (exclusivity violation)
+  - id: task-with-both-command-and-prompt
+    description: This task violates command/prompt exclusivity by having both
+    command: echo "has command"
+    prompt: "Also has prompt"
+    # Error: command_prompt_exclusive, field: command|prompt
+
+  # Task with neither command nor prompt
+  - id: task-with-no-execution
+    description: This task has neither command nor prompt
+    # Error: missing_command_or_prompt, field: command|prompt
+
+  # Task with invalid executorType
+  - id: task-with-invalid-executor-type
+    description: This task has an invalid executorType enum value
+    command: echo "test"
+    executorType: invalid_type
+    # Error: invalid_enum_value, field: executorType
+
+  # Task with banned pattern in command
+  - id: task-with-banned-pattern
+    description: This task uses the banned npx vitest run pattern
+    command: cd packages/app && npx vitest run
+    # Error: banned_pattern, field: command
+
+  # Task with dependency on non-existent task
+  - id: task-with-invalid-dependency
+    description: This task depends on a non-existent task ID
+    command: echo "test"
+    dependencies:
+      - non-existent-task-id
+    # Error: invalid_dependency_reference, field: dependencies
+
+  # Task with missing description
+  - id: task-without-description
+    command: echo "no description"
+    # Error: missing_required_field, field: description
+
+  # Task with invalid externalDependency
+  - id: task-with-invalid-external-dep
+    description: This task has an externalDependency with invalid fields
+    command: echo "test"
+    externalDependencies:
+      - workflowId: some-workflow
+        requiredStatus: invalid_status  # Error: invalid_enum_value
+        gatePolicy: invalid_policy      # Error: invalid_enum_value

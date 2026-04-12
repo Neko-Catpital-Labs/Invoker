@@ -1,0 +1,20 @@
+# E2E SSH Group 3.6 — merge gate with mixed executors (worktree + SSH).
+name: "e2e-ssh group3 3.6 ssh-merge-gate"
+repoUrl: git@github.com:example-org/acme-repo.git
+onFinish: none
+mergeMode: github
+featureBranch: experiment/e2e-g336-ssh-pr
+baseBranch: HEAD
+
+tasks:
+  - id: e2e-g336-taskA
+    description: "E2E 3.6 — worktree task"
+    command: echo worktree-a-ok
+    dependencies: []
+
+  - id: e2e-g336-taskB
+    description: "E2E 3.6 — SSH task"
+    command: echo ssh-b-ok
+    dependencies: []
+    executorType: ssh
+    remoteTargetId: localhost-e2e

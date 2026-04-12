@@ -1,0 +1,18 @@
+{
+  "allowGraphMutation": true,
+  "defaultBranch": "master",
+  "executorRoutingRules": [
+    {
+      "pattern": "verify-routing-ok",
+      "executorType": "worktree",
+      "remoteTargetId": "dummy-target"
+    }
+  ],
+  "remoteTargets": {
+    "dummy-target": {
+      "host": "localhost",
+      "user": "nobody",
+      "sshKeyPath": "/dev/null"
+    }
+  }
+}

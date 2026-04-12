@@ -1,0 +1,21 @@
+# E2E SSH Group 3.1 — worktree task pushes branch, SSH task reads it.
+# Task A writes a marker file in a local worktree. Task B (SSH) verifies the
+# file content was propagated via branch push/fetch/merge.
+name: "e2e-ssh group3 3.1 worktree-to-ssh"
+repoUrl: git@github.com:example-org/acme-repo.git
+onFinish: none
+mergeMode: manual
+baseBranch: HEAD
+
+tasks:
+  - id: e2e-g331-taskA
+    description: "E2E 3.1 — worktree writes marker file"
+    command: echo "marker-from-worktree-A" > e2e-cross-marker.txt
+    dependencies: []
+
+  - id: e2e-g331-taskB
+    description: "E2E 3.1 — SSH reads marker file from A's branch"
+    command: cat e2e-cross-marker.txt && grep -q "marker-from-worktree-A" e2e-cross-marker.txt
+    dependencies: [e2e-g331-taskA]
+    executorType: ssh
+    remoteTargetId: localhost-e2e

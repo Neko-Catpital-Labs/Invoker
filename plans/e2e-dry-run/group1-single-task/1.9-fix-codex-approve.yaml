@@ -1,0 +1,10 @@
+name: "e2e-dry-run group1 1.9 fix-codex-approve"
+repoUrl: git@github.com:example-org/acme-repo.git
+onFinish: none
+baseBranch: HEAD
+
+tasks:
+  - id: e2e-g119-task
+    description: "E2E 1.9 — fix-with-codex then approve"
+    command: exit 1
+    dependencies: []

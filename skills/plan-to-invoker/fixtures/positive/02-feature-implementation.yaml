@@ -1,0 +1,63 @@
+# Feature Implementation Plan
+# Source: examples.md Section 2
+# Description: A plan that adds a feature using prompt tasks for implementation and command tasks for verification.
+# Shows the standard pattern: implement → test → verify.
+#
+# Uses `onFinish: merge` (the default) to automatically merge changes into the base branch after all tasks complete.
+# Critical pattern: Every prompt task that modifies code MUST have a corresponding command task that runs tests to verify the change.
+
+name: "Add date formatting utility"
+description: |
+  Adds a formatDate utility function to the utils package for locale-aware date formatting.
+
+  Supports multiple format strings (YYYY-MM-DD, MM/DD/YYYY, DD MMM YYYY) using Intl.DateTimeFormat.
+
+  Includes comprehensive unit tests and build verification to ensure no breakage.
+onFinish: merge
+mergeMode: github
+repoUrl: git@github.com:example-org/acme-repo.git
+baseBranch: master
+featureBranch: feature/add-date-formatter
+
+tasks:
+  - id: implement-formatter
+    description: "Add formatDate utility function to utils package"
+    prompt: |
+      In packages/utils/src/date.ts (create the file if it doesn't exist):
+
+      1. Export a formatDate(date: Date, format: string) function
+         - Support format strings: "YYYY-MM-DD", "MM/DD/YYYY", "DD MMM YYYY"
+         - Use Intl.DateTimeFormat for locale-aware formatting
+         - Return formatted string
+
+      2. Add JSDoc comments with examples
+
+      3. Update packages/utils/src/index.ts to export the new function:
+         export { formatDate } from './date.js';
+    dependencies: []
+
+  - id: write-tests
+    description: "Add unit tests for formatDate"
+    prompt: |
+      Create packages/utils/src/__tests__/date.test.ts:
+
+      1. Import { describe, it, expect } from 'vitest'
+      2. Import { formatDate } from '../date.js'
+      3. Write tests for:
+         - Formatting with "YYYY-MM-DD" format
+         - Formatting with "MM/DD/YYYY" format
+         - Formatting with "DD MMM YYYY" format
+         - Handling invalid date objects
+
+      Follow the existing test patterns in packages/utils/src/__tests__/
+    dependencies: [implement-formatter]
+
+  - id: verify-tests-pass
+    description: "Run utils package tests"
+    command: "cd packages/utils && pnpm test 2>&1"
+    dependencies: [write-tests]
+
+  - id: verify-build
+    description: "Verify the package builds without errors"
+    command: "cd packages/utils && pnpm build 2>&1"
+    dependencies: [verify-tests-pass]

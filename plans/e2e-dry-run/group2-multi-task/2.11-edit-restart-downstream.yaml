@@ -1,0 +1,16 @@
+# E2E dry-run Group 2.11 — edit command to fix, downstream B completes.
+name: "e2e-dry-run group2 2.11 edit-restart-downstream"
+repoUrl: git@github.com:example-org/acme-repo.git
+onFinish: none
+mergeMode: manual
+baseBranch: HEAD
+
+tasks:
+  - id: e2e-g2211-taskA
+    description: "E2E 2.11 — upstream task fails (edit to fix)"
+    command: exit 1
+    dependencies: []
+  - id: e2e-g2211-taskB
+    description: "E2E 2.11 — downstream depends on A"
+    command: echo downstream-ok
+    dependencies: [e2e-g2211-taskA]

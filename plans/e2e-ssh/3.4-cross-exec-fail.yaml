@@ -1,0 +1,24 @@
+# E2E SSH Group 3.4 — cross-executor failure: SSH B fails, worktree C stays pending.
+name: "e2e-ssh group3 3.4 cross-exec-fail"
+repoUrl: git@github.com:example-org/acme-repo.git
+onFinish: none
+mergeMode: manual
+baseBranch: HEAD
+
+tasks:
+  - id: e2e-g334-taskA
+    description: "E2E 3.4 — worktree task succeeds"
+    command: echo worktree-a-ok
+    dependencies: []
+
+  - id: e2e-g334-taskB
+    description: "E2E 3.4 — SSH task fails"
+    command: exit 1
+    dependencies: []
+    executorType: ssh
+    remoteTargetId: localhost-e2e
+
+  - id: e2e-g334-taskC
+    description: "E2E 3.4 — worktree depends on A and B"
+    command: echo fan-in-ok
+    dependencies: [e2e-g334-taskA, e2e-g334-taskB]

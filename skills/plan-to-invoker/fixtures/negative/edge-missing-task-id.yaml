@@ -1,0 +1,12 @@
+# Edge case: Task missing required id field
+# Expected error: missing_required_field (field: id)
+#
+# Every task must have an id.
+
+name: "Task without id"
+repoUrl: git@github.com:example-org/acme-repo.git
+
+tasks:
+  - description: "Task without ID"
+    command: "echo test"
+    dependencies: []

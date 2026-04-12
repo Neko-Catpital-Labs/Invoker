@@ -1,0 +1,14 @@
+# Edge case: Missing description when onFinish is pull_request
+# Expected error: missing_required_field (field: description)
+#
+# When onFinish is pull_request, the description field is required for the PR body.
+
+name: "PR without description"
+repoUrl: git@github.com:example-org/acme-repo.git
+onFinish: pull_request
+
+tasks:
+  - id: test-task
+    description: "A test task"
+    command: "echo test"
+    dependencies: []

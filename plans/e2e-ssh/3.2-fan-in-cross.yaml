@@ -1,0 +1,26 @@
+# E2E SSH Group 3.2 — cross-executor fan-in: worktree A + SSH B → worktree C.
+# A writes file via worktree, B writes file via SSH, C (worktree) merges both
+# upstream branches and verifies both files exist with correct content.
+name: "e2e-ssh group3 3.2 fan-in-cross"
+repoUrl: git@github.com:example-org/acme-repo.git
+onFinish: none
+mergeMode: manual
+baseBranch: HEAD
+
+tasks:
+  - id: e2e-g332-taskA
+    description: "E2E 3.2 — worktree writes file A"
+    command: echo "content-from-worktree" > e2e-file-a.txt
+    dependencies: []
+
+  - id: e2e-g332-taskB
+    description: "E2E 3.2 — SSH writes file B"
+    command: echo "content-from-ssh" > e2e-file-b.txt
+    dependencies: []
+    executorType: ssh
+    remoteTargetId: localhost-e2e
+
+  - id: e2e-g332-taskC
+    description: "E2E 3.2 — worktree verifies both files exist"
+    command: grep -q "content-from-worktree" e2e-file-a.txt && grep -q "content-from-ssh" e2e-file-b.txt
+    dependencies: [e2e-g332-taskA, e2e-g332-taskB]

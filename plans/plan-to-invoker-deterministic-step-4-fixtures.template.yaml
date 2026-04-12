@@ -1,0 +1,48 @@
+name: "Plan-to-Invoker Deterministic Step 4: Examples to tested fixtures"
+description: |
+  Move long markdown examples into executable/tested fixtures and keep docs
+  minimal. This reduces ambiguity and drift between prose and runtime behavior.
+onFinish: pull_request
+mergeMode: github
+baseBranch: master
+repoUrl: git@github.com:example-org/acme-repo.git
+executorType: worktree
+
+externalDependencies:
+  - workflowId: "__UPSTREAM_WORKFLOW_ID__"
+    requiredStatus: completed
+
+tasks:
+  - id: convert-markdown-examples-to-fixtures
+    description: "Extract plan examples into fixture YAML files used by validation tests"
+    prompt: |
+      Convert examples from skills/plan-to-invoker/references/examples.md into
+      fixture files under a testable fixtures directory.
+      Add positive and negative fixtures for key policy edges.
+      Ensure fixtures are consumed by automated tests, not docs only.
+    dependencies: []
+
+  - id: trim-reference-markdown
+    description: "Shrink long references to concise guidance linking to fixtures and scripts"
+    prompt: |
+      Reduce verbosity in references/examples.md and related docs.
+      Keep short rationale and link to deterministic fixture/test sources.
+      Remove duplicated procedural instructions that are now script-enforced.
+    dependencies:
+      - convert-markdown-examples-to-fixtures
+
+  - id: run-plan-to-invoker-tests
+    description: "Run script + fixture validation tests"
+    command: "bash scripts/test-plan-to-invoker-skill.sh"
+    executorType: ssh
+    remoteTargetId: remote_digital_ocean_1
+    dependencies:
+      - trim-reference-markdown
+
+  - id: post-fix-regression
+    description: "Run app package tests as post-fix regression"
+    command: "cd packages/app && pnpm test"
+    executorType: ssh
+    remoteTargetId: remote_digital_ocean_1
+    dependencies:
+      - run-plan-to-invoker-tests

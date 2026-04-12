@@ -1,0 +1,10 @@
+name: "e2e-dry-run group1 1.3 cancel"
+repoUrl: git@github.com:example-org/acme-repo.git
+onFinish: none
+baseBranch: HEAD
+
+tasks:
+  - id: e2e-g113-task
+    description: "E2E 1.3 — cancel a running task"
+    command: sleep 60
+    dependencies: []

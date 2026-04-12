@@ -1116,6 +1116,7 @@ describe('merge gate commit topology (real git)', () => {
     // Advance master after the task branches were created (diverged base)
     writeFileSync(join(tmpDir, 'diverged.txt'), 'diverged-work');
     execSync('git add -A && git commit -m "diverged master commit"', { cwd: tmpDir });
+    execSync('git push origin master', { cwd: tmpDir });
     const masterHead = execSync('git rev-parse HEAD', { cwd: tmpDir }).toString().trim();
 
     const tasks: TaskState[] = [

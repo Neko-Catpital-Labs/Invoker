@@ -1,0 +1,14 @@
+# Edge case: Invalid executorType enum value (task level)
+# Expected error: invalid_enum_value (field: executorType)
+#
+# executorType must be one of: worktree, ssh, docker
+
+name: "Invalid executorType enum"
+repoUrl: git@github.com:example-org/acme-repo.git
+
+tasks:
+  - id: invalid-executor
+    description: "Task with invalid executorType"
+    command: "echo test"
+    executorType: invalid_type
+    dependencies: []

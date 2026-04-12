@@ -1,0 +1,20 @@
+# Run: bash scripts/verify-executor-routing.sh
+#
+# Asserts executor routing validation: a command task whose executorType and
+# remoteTargetId conform to an executorRoutingRules pattern validates successfully.
+# The routing fixture config is injected via INVOKER_REPO_CONFIG_PATH so the
+# checked-in .invoker.json is never clobbered.
+# repoUrl below is overwritten by the script with file://<this checkout> for a local clone.
+name: "Verify executor routing (headless Invoker)"
+repoUrl: git@github.com:example-org/acme-repo.git
+onFinish: none
+mergeMode: manual
+baseBranch: master
+
+tasks:
+  - id: verify-routing-command
+    description: "Command task — validates that executorType and remoteTargetId conform to executorRoutingRules pattern"
+    command: echo verify-routing-ok
+    executorType: worktree
+    remoteTargetId: dummy-target
+    dependencies: []

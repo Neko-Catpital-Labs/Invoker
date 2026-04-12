@@ -1,0 +1,9 @@
+# Edge case: Empty tasks array
+# Expected error: empty_required_field (field: tasks)
+#
+# Plans must have at least one task.
+
+name: "Plan with empty tasks"
+repoUrl: git@github.com:example-org/acme-repo.git
+
+tasks: []

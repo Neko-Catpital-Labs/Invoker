@@ -1,0 +1,16 @@
+# E2E dry-run Group 2.8 — sequential: A fails, fix, reject → B stays pending.
+name: "e2e-dry-run group2 2.8 fix-reject-downstream"
+repoUrl: git@github.com:example-org/acme-repo.git
+onFinish: none
+mergeMode: manual
+baseBranch: HEAD
+
+tasks:
+  - id: e2e-g228-taskA
+    description: "E2E 2.8 — upstream task fails (fix then reject)"
+    command: exit 1
+    dependencies: []
+  - id: e2e-g228-taskB
+    description: "E2E 2.8 — downstream depends on A"
+    command: echo downstream-ok
+    dependencies: [e2e-g228-taskA]

@@ -1,0 +1,12 @@
+# Edge case: Missing required name field
+# Expected error: missing_required_field (field: name)
+#
+# The name field is required for all plans.
+
+repoUrl: git@github.com:example-org/acme-repo.git
+
+tasks:
+  - id: test-task
+    description: "A test task"
+    command: "echo test"
+    dependencies: []

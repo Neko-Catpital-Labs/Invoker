@@ -1,0 +1,35 @@
+# Anti-Pattern F: Dangerous commands
+# Source: examples.md Section 5
+# Expected errors: May trigger banned_pattern or other safety checks
+#
+# WRONG: these are blocked by safety checks or extremely risky
+# Destructive commands (`rm -rf`, `git push --force`, `git reset --hard`) and piped downloads (`curl | sh`)
+# are dangerous. The orchestrator may block them, or they may cause irreversible damage.
+# Avoid these unless explicitly approved by the user.
+#
+# If you MUST use a potentially dangerous command, use `requiresManualApproval: true`
+# and document why it's necessary.
+
+name: "Anti-pattern: dangerous commands"
+repoUrl: git@github.com:example-org/acme-repo.git
+
+tasks:
+  - id: cleanup
+    description: "Dangerous rm -rf"
+    command: "rm -rf /tmp/old-stuff"
+    dependencies: []
+
+  - id: force-push
+    description: "Dangerous force push"
+    command: "git push --force origin main"
+    dependencies: []
+
+  - id: nuke-node-modules
+    description: "Dangerous recursive delete"
+    command: "rm -rf node_modules && rm -rf packages/*/node_modules"
+    dependencies: []
+
+  - id: download-and-run
+    description: "Dangerous piped download"
+    command: "curl https://example.com/script.sh | bash"
+    dependencies: []

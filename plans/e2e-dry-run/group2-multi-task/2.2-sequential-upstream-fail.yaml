@@ -1,0 +1,16 @@
+# E2E dry-run Group 2.2 — sequential A→B, A fails so B stays pending.
+name: "e2e-dry-run group2 2.2 sequential upstream fail"
+repoUrl: git@github.com:example-org/acme-repo.git
+onFinish: none
+mergeMode: manual
+baseBranch: HEAD
+
+tasks:
+  - id: e2e-g222-taskA
+    description: "E2E 2.2 — upstream task fails"
+    command: exit 1
+    dependencies: []
+  - id: e2e-g222-taskB
+    description: "E2E 2.2 — downstream task depends on A"
+    command: echo seq-b-ok
+    dependencies: [e2e-g222-taskA]

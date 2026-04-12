@@ -1,0 +1,69 @@
+# Multi-Step Refactor with Worktrees
+# Source: examples.md Section 3
+# Description: A plan that performs a multi-step refactor where each task runs in its own isolated git worktree.
+# Uses `executorType: worktree` at the plan level to apply this to all tasks.
+#
+# When to use worktrees: Most implementation work. Each task gets a clean environment,
+# and changes merge back automatically when the task succeeds.
+
+name: "Refactor config validation"
+description: |
+  Extracts validation logic from config.ts into a dedicated validator.ts module with
+  strict TypeScript schema types.
+
+  Pure extraction refactor with no behavior changes. All existing tests must pass.
+
+  Uses worktrees for task isolation.
+onFinish: merge
+mergeMode: github
+repoUrl: git@github.com:example-org/acme-repo.git
+baseBranch: master
+featureBranch: refactor/config-validation
+executorType: worktree
+
+tasks:
+  - id: extract-validator
+    description: "Extract validation logic into separate validator.ts module"
+    prompt: |
+      In packages/config/src/validator.ts (create new file):
+
+      1. Move the validateConfig function from config.ts to validator.ts
+      2. Export the function and any types it uses
+      3. Update config.ts to import from './validator.js'
+
+      Keep all existing behavior identical — this is a pure extraction.
+    dependencies: []
+
+  - id: add-validator-tests
+    description: "Add unit tests for the extracted validator"
+    prompt: |
+      Create packages/config/src/__tests__/validator.test.ts:
+
+      1. Test validateConfig with valid config objects
+      2. Test validateConfig with invalid configs (missing required fields)
+      3. Test validateConfig with malformed values (wrong types)
+
+      Copy test patterns from existing config.test.ts if they exist.
+    dependencies: [extract-validator]
+
+  - id: verify-validator
+    description: "Run validator tests"
+    command: "cd packages/config && pnpm test -- src/__tests__/validator.test.ts 2>&1"
+    dependencies: [add-validator-tests]
+
+  - id: add-schema-types
+    description: "Add TypeScript schema types for config validation"
+    prompt: |
+      In packages/config/src/schema.ts (create new file):
+
+      1. Define ConfigSchema type with strict typing for all config fields
+      2. Add Zod schema definitions (if Zod is available) or plain TS types
+      3. Export all types
+
+      Update validator.ts to use the new schema types.
+    dependencies: [verify-validator]
+
+  - id: verify-all-tests
+    description: "Run full config package test suite"
+    command: "cd packages/config && pnpm test 2>&1"
+    dependencies: [add-schema-types]
