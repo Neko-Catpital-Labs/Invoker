@@ -18,13 +18,18 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
     const ghBase = normalizeBranchForGithubCli(baseBranch);
     const ghHead = normalizeBranchForGithubCli(featureBranch);
 
+    // In fork workflows (origin=fork, upstream=parent), the GitHub API needs
+    // head qualified as "forkOwner:branch" for cross-repo PRs.
+    const forkOwner = await this.detectForkOwner(cwd);
+    const apiHead = forkOwner ? `${forkOwner}:${ghHead}` : ghHead;
+
     // Push feature branch to origin
     await this.exec('git', ['push', '--force', '-u', 'origin', featureBranch], cwd);
 
     // Check for existing open PR on this branch
     const listOutput = await this.exec('gh', [
       'pr', 'list',
-      '--head', ghHead,
+      '--head', apiHead,
       '--base', ghBase,
       '--state', 'open',
       '--json', 'url,number',
@@ -56,7 +61,7 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
     const createArgs = [
       'api', 'repos/{owner}/{repo}/pulls',
       '--method', 'POST', '-f', `base=${ghBase}`,
-      '-f', `head=${ghHead}`, '-f', `title=${title}`,
+      '-f', `head=${apiHead}`, '-f', `title=${title}`,
       '-f', `body=${body ?? ''}`,
     ];
     const stdout = await this.exec('gh', createArgs, cwd);
@@ -105,6 +110,21 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
       statusText,
       url: data.url,
     };
+  }
+
+  /**
+   * Detect fork workflow by checking if both origin and upstream remotes exist.
+   * Returns the fork owner (from origin URL) so head can be qualified as "owner:branch".
+   */
+  private async detectForkOwner(cwd: string): Promise<string | undefined> {
+    try {
+      await this.exec('git', ['remote', 'get-url', 'upstream'], cwd);
+      const originUrl = await this.exec('git', ['remote', 'get-url', 'origin'], cwd);
+      const match = originUrl.match(/github\.com[:/]([^/]+)\//);
+      return match?.[1];
+    } catch {
+      return undefined;
+    }
   }
 
   private exec(cmd: string, args: string[], cwd: string): Promise<string> {

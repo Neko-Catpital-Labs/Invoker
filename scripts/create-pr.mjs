@@ -223,6 +223,76 @@ function getCurrentBranch() {
   return execSync('git branch --show-current', { encoding: 'utf-8' }).trim();
 }
 
+function hasRemote(name) {
+  try {
+    execSync(`git remote get-url ${name}`, { stdio: ['ignore', 'pipe', 'ignore'] });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function revList(range) {
+  try {
+    const out = execSync(`git rev-list ${range}`, { encoding: 'utf-8' }).trim();
+    return out ? out.split('\n').filter(Boolean) : [];
+  } catch {
+    return [];
+  }
+}
+
+function shortOneLine(sha) {
+  try {
+    return execSync(`git show --no-patch --oneline --no-abbrev-commit ${sha}`, { encoding: 'utf-8' }).trim();
+  } catch {
+    return sha;
+  }
+}
+
+function assertCleanPrBase() {
+  if (!hasRemote('upstream')) {
+    throw new Error(
+      [
+        'Missing git remote "upstream".',
+        'Expected upstream to point to Neko-Catpital-Labs/Invoker.',
+        'Run: git remote add upstream https://github.com/Neko-Catpital-Labs/Invoker.git',
+      ].join('\n'),
+    );
+  }
+
+  // Keep the check deterministic against latest refs.
+  execSync('git fetch --quiet upstream master', { stdio: 'ignore' });
+  execSync('git fetch --quiet origin master', { stdio: 'ignore' });
+
+  const originOnly = new Set(revList('upstream/master..origin/master'));
+  if (originOnly.size === 0) return;
+
+  const headOnly = revList('upstream/master..HEAD');
+  const polluted = headOnly.filter((sha) => originOnly.has(sha));
+  if (polluted.length === 0) return;
+
+  const lines = polluted.slice(0, 12).map((sha) => `  - ${shortOneLine(sha)}`);
+  const more = polluted.length > 12 ? `\n  ... and ${polluted.length - 12} more` : '';
+  const currentBranch = getCurrentBranch();
+  throw new Error(
+    [
+      'Refusing to create/update PR: current branch contains commits unique to origin/master.',
+      'This would pollute the PR with fork-only history.',
+      '',
+      'Detected commits:',
+      ...lines,
+      more,
+      '',
+      'Fix by creating a clean PR branch from upstream/master, then cherry-picking intended commits:',
+      `  git switch -c pr/<name> upstream/master`,
+      `  git cherry-pick <commit> [<commit> ...]`,
+      `  git push -u origin pr/<name>`,
+      '',
+      `Current branch: ${currentBranch}`,
+    ].join('\n'),
+  );
+}
+
 async function createPr(nwo, title, base, body, dryRun) {
   const head = getCurrentBranch();
 
@@ -261,6 +331,8 @@ async function updatePr(nwo, prNum, title, body, dryRun) {
 
 async function main() {
   const args = parseArgs();
+
+  assertCleanPrBase();
 
   // Read body
   let body = '';

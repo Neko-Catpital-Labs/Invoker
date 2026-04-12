@@ -53,16 +53,15 @@ if ! git remote get-url upstream >/dev/null 2>&1; then
   git remote add upstream https://github.com/Neko-Catpital-Labs/Invoker.git
 fi
 
-# Fetch upstream master and rebase local fork commits on top.
-# Fork-specific commits always stay on top of upstream/master.
+# Fetch upstream master and merge into local master.
+# Merge (not rebase) so fork-specific commits are never dropped.
 git fetch upstream master
 if git merge-base --is-ancestor upstream/master HEAD; then
   echo "==> Fork already up-to-date with upstream"
-  git push origin master
 else
-  echo "==> Rebasing fork commits onto upstream/master"
-  git rebase upstream/master
-  git push origin master --force-with-lease
+  echo "==> Merging upstream/master into fork"
+  git merge upstream/master --no-edit -m "Merge upstream/master into fork"
 fi
+git push origin master
 
-echo "==> Fork synced: origin/master rebased onto upstream/master"
+echo "==> Fork synced: origin/master merged with upstream/master"

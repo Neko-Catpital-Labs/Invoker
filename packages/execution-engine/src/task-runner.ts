@@ -826,6 +826,31 @@ export class TaskRunner {
     }
     await this.execGitIn(['remote', 'set-url', 'origin', originUrl], clonePath);
 
+    // Refresh the base branch from the real remote. The pool mirror's local
+    // refs/heads/master can go stale after force-pushes or history rewrites,
+    // causing merge conflicts when experiment branches are based on the new
+    // history but the clone got the old master from the pool.
+    const baseRef = ref.trim().replace(/^origin\//, '');
+    try {
+      await this.execGitIn(
+        ['fetch', 'origin', `+refs/heads/${baseRef}:refs/heads/${baseRef}`],
+        clonePath,
+      );
+    } catch {
+      // Non-critical: pool's ref may still be valid
+    }
+
+    // If the host repo has an 'upstream' remote, add it to the clone so gh CLI
+    // detects the fork relationship and targets upstream for PR operations.
+    try {
+      const upstreamUrl = (await this.execGitReadonly(['remote', 'get-url', 'upstream'])).trim();
+      if (upstreamUrl) {
+        await this.execGitIn(['remote', 'add', 'upstream', upstreamUrl], clonePath);
+      }
+    } catch {
+      // No upstream remote on host repo — single-remote workflow
+    }
+
     // Resolve ref in the clone (not in host repo — the clone has mirrored branches).
     // Accept both "feature/x" and "origin/feature/x" forms, and tolerate missing
     // origin tracking refs for local-only stacked branches.
@@ -899,6 +924,21 @@ export class TaskRunner {
     }
   }
 
+  /**
+   * Detect fork workflow by checking if both origin and upstream remotes exist.
+   * Returns the fork owner (from origin URL) so head can be qualified as "owner:branch".
+   */
+  private async detectForkOwner(cwd: string): Promise<string | undefined> {
+    try {
+      await this.execGitIn(['remote', 'get-url', 'upstream'], cwd);
+      const originUrl = (await this.execGitIn(['remote', 'get-url', 'origin'], cwd)).trim();
+      const match = originUrl.match(/github\.com[:/]([^/]+)\//);
+      return match?.[1];
+    } catch {
+      return undefined;
+    }
+  }
+
   /** @internal */ execGh(args: string[], cwd?: string): Promise<string> {
     const effectiveCwd = cwd ?? this.cwd;
     return new Promise((resolvePromise, reject) => {
@@ -920,8 +960,14 @@ export class TaskRunner {
   /** @internal */ async execPr(baseBranch: string, featureBranch: string, title: string, body?: string, cwd?: string): Promise<string> {
     const ghBase = normalizeBranchForGithubCli(baseBranch);
     const ghHead = normalizeBranchForGithubCli(featureBranch);
+
+    // In fork workflows, qualify head as "forkOwner:branch" for cross-repo PRs.
+    const effectiveCwd = cwd ?? this.cwd;
+    const forkOwner = await this.detectForkOwner(effectiveCwd);
+    const qualifiedHead = forkOwner ? `${forkOwner}:${ghHead}` : ghHead;
+
     const listOutput = await this.execGh([
-      'pr', 'list', '--head', ghHead, '--base', ghBase,
+      'pr', 'list', '--head', qualifiedHead, '--base', ghBase,
       '--state', 'open', '--json', 'url,number', '--limit', '1',
     ], cwd);
 
@@ -936,7 +982,7 @@ export class TaskRunner {
 
     return this.execGh([
       'pr', 'create', '--base', ghBase,
-      '--head', ghHead, '--title', title, '--body', body ?? '',
+      '--head', qualifiedHead, '--title', title, '--body', body ?? '',
     ], cwd);
   }
 

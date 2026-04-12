@@ -19,6 +19,21 @@ function mockSpawnResult(stdoutData: string, exitCode: number) {
   return child;
 }
 
+/**
+ * Wrap a callCount-based mock to auto-reject `git remote get-url upstream`
+ * (simulating no upstream remote / non-fork workflow).
+ */
+function wrapNoFork(fn: (callCount: number) => any): (cmd: string, args: string[]) => any {
+  let callCount = 0;
+  return (cmd: string, args: string[]) => {
+    if (cmd === 'git' && args?.[0] === 'remote' && args?.[1] === 'get-url' && args?.[2] === 'upstream') {
+      return mockSpawnResult('', 1);
+    }
+    callCount++;
+    return fn(callCount);
+  };
+}
+
 describe('GitHubMergeGateProvider', () => {
   let provider: GitHubMergeGateProvider;
 
@@ -32,9 +47,7 @@ describe('GitHubMergeGateProvider', () => {
       const { spawn } = await import('node:child_process');
       const spawnMock = vi.mocked(spawn);
 
-      let callCount = 0;
-      spawnMock.mockImplementation((() => {
-        callCount++;
+      spawnMock.mockImplementation(wrapNoFork((callCount) => {
         if (callCount === 1) {
           // git push
           return mockSpawnResult('', 0);
@@ -76,9 +89,7 @@ describe('GitHubMergeGateProvider', () => {
       const { spawn } = await import('node:child_process');
       const spawnMock = vi.mocked(spawn);
 
-      let callCount = 0;
-      spawnMock.mockImplementation((() => {
-        callCount++;
+      spawnMock.mockImplementation(wrapNoFork((callCount) => {
         if (callCount === 1) return mockSpawnResult('', 0);
         if (callCount === 2) return mockSpawnResult('[]', 0);
         return mockSpawnResult('{"html_url":"https://github.com/o/r/pull/99","number":99}', 0);
@@ -121,9 +132,7 @@ describe('GitHubMergeGateProvider', () => {
       const { spawn } = await import('node:child_process');
       const spawnMock = vi.mocked(spawn);
 
-      let callCount = 0;
-      spawnMock.mockImplementation((() => {
-        callCount++;
+      spawnMock.mockImplementation(wrapNoFork((callCount) => {
         if (callCount === 1) {
           // git push
           return mockSpawnResult('', 0);
@@ -165,9 +174,7 @@ describe('GitHubMergeGateProvider', () => {
       const { spawn } = await import('node:child_process');
       const spawnMock = vi.mocked(spawn);
 
-      let callCount = 0;
-      spawnMock.mockImplementation((() => {
-        callCount++;
+      spawnMock.mockImplementation(wrapNoFork((callCount) => {
         if (callCount === 1) return mockSpawnResult('', 0);
         else if (callCount === 2) return mockSpawnResult('[]', 0);
         else return mockSpawnResult('{"html_url":"https://github.com/owner/repo/pull/43","number":43}', 0);
@@ -192,9 +199,7 @@ describe('GitHubMergeGateProvider', () => {
       const { spawn } = await import('node:child_process');
       const spawnMock = vi.mocked(spawn);
 
-      let callCount = 0;
-      spawnMock.mockImplementation((() => {
-        callCount++;
+      spawnMock.mockImplementation(wrapNoFork((callCount) => {
         if (callCount === 1) return mockSpawnResult('', 0);
         else if (callCount === 2) return mockSpawnResult('[]', 0);
         else return mockSpawnResult('{"html_url":"https://github.com/owner/repo/pull/44","number":44}', 0);
@@ -218,9 +223,7 @@ describe('GitHubMergeGateProvider', () => {
       const { spawn } = await import('node:child_process');
       const spawnMock = vi.mocked(spawn);
 
-      let callCount = 0;
-      spawnMock.mockImplementation((() => {
-        callCount++;
+      spawnMock.mockImplementation(wrapNoFork((callCount) => {
         if (callCount === 1) return mockSpawnResult('', 0);
         else if (callCount === 2) return mockSpawnResult('[{"url":"https://github.com/owner/repo/pull/10","number":10}]', 0);
         else return mockSpawnResult('', 0);
@@ -359,15 +362,57 @@ describe('GitHubMergeGateProvider', () => {
     });
   });
 
+  describe('fork workflow', () => {
+    it('qualifies head with fork owner when upstream remote exists', async () => {
+      const { spawn } = await import('node:child_process');
+      const spawnMock = vi.mocked(spawn);
+
+      let callCount = 0;
+      spawnMock.mockImplementation(((cmd: string, args: string[]) => {
+        // detectForkOwner: upstream exists
+        if (cmd === 'git' && args?.[0] === 'remote' && args?.[1] === 'get-url' && args?.[2] === 'upstream') {
+          return mockSpawnResult('https://github.com/Neko-Catpital-Labs/Invoker.git', 0);
+        }
+        // detectForkOwner: origin URL
+        if (cmd === 'git' && args?.[0] === 'remote' && args?.[1] === 'get-url' && args?.[2] === 'origin') {
+          return mockSpawnResult('https://github.com/EdbertChan/Invoker/', 0);
+        }
+        callCount++;
+        if (callCount === 1) return mockSpawnResult('', 0); // git push
+        else if (callCount === 2) return mockSpawnResult('[]', 0); // gh pr list
+        else return mockSpawnResult('{"html_url":"https://github.com/Neko-Catpital-Labs/Invoker/pull/50","number":50}', 0);
+      }) as any);
+
+      const result = await provider.createReview({
+        baseBranch: 'master',
+        featureBranch: 'plan/my-feature',
+        title: 'Fork PR',
+        cwd: '/tmp/repo',
+      });
+
+      expect(result.url).toBe('https://github.com/Neko-Catpital-Labs/Invoker/pull/50');
+
+      // Verify head is qualified with fork owner
+      expect(spawnMock).toHaveBeenCalledWith(
+        'gh',
+        expect.arrayContaining(['--head', 'EdbertChan:plan/my-feature']),
+        expect.anything(),
+      );
+      expect(spawnMock).toHaveBeenCalledWith(
+        'gh',
+        expect.arrayContaining(['-f', 'head=EdbertChan:plan/my-feature']),
+        expect.anything(),
+      );
+    });
+  });
+
   describe('regression guard', () => {
     it('never uses gh pr edit or gh pr create subcommands', async () => {
       const { spawn } = await import('node:child_process');
       const spawnMock = vi.mocked(spawn);
 
       // Scenario 1: create new PR (no existing)
-      let callCount = 0;
-      spawnMock.mockImplementation((() => {
-        callCount++;
+      spawnMock.mockImplementation(wrapNoFork((callCount) => {
         if (callCount === 1) return mockSpawnResult('', 0); // git push
         else if (callCount === 2) return mockSpawnResult('[]', 0); // gh pr list
         else return mockSpawnResult('{"html_url":"https://github.com/owner/repo/pull/99","number":99}', 0);
@@ -381,9 +426,7 @@ describe('GitHubMergeGateProvider', () => {
       });
 
       // Scenario 2: update existing PR
-      callCount = 0;
-      spawnMock.mockImplementation((() => {
-        callCount++;
+      spawnMock.mockImplementation(wrapNoFork((callCount) => {
         if (callCount === 1) return mockSpawnResult('', 0); // git push
         else if (callCount === 2) return mockSpawnResult('[{"url":"https://github.com/owner/repo/pull/5","number":5}]', 0);
         else return mockSpawnResult('', 0); // PATCH
