@@ -436,7 +436,46 @@ export class Orchestrator {
       );
     }
     this.stateMachine.restoreTask(updated);
+    if (changes.status !== undefined && existing.config.workflowId) {
+      this.syncWorkflowStatus(existing.config.workflowId);
+    }
     return updated;
+  }
+
+  private syncWorkflowStatus(workflowId: string): void {
+    if (!this.persistence.updateWorkflow) return;
+
+    const tasks = this.stateMachine.getAllTasks().filter((task) => task.config.workflowId === workflowId);
+    if (tasks.length === 0) return;
+
+    const settled = tasks.every(
+      (task) =>
+        task.status === 'completed' ||
+        task.status === 'failed' ||
+        task.status === 'needs_input' ||
+        task.status === 'review_ready' ||
+        task.status === 'awaiting_approval' ||
+        task.status === 'blocked' ||
+        task.status === 'stale',
+    );
+
+    const hasPendingInput = tasks.some(
+      (task) =>
+        task.status === 'needs_input' ||
+        task.status === 'awaiting_approval' ||
+        task.status === 'review_ready',
+    );
+
+    let status = 'running';
+    if (settled && !hasPendingInput) {
+      const allSucceeded = tasks.every((task) => task.status === 'completed' || task.status === 'stale');
+      status = allSucceeded ? 'completed' : 'failed';
+    }
+
+    this.persistence.updateWorkflow(workflowId, {
+      status,
+      updatedAt: new Date().toISOString(),
+    });
   }
 
   /**
@@ -2561,37 +2600,8 @@ export class Orchestrator {
   }
 
   private checkWorkflowCompletion(): void {
-    if (!this.persistence.updateWorkflow) return;
-
     for (const wfId of this.activeWorkflowIds) {
-      const tasks = this.stateMachine.getAllTasks().filter((t) => t.config.workflowId === wfId);
-      if (tasks.length === 0) continue;
-
-      const settled = tasks.every(
-        (t) =>
-          t.status === 'completed' ||
-          t.status === 'failed' ||
-          t.status === 'needs_input' ||
-          t.status === 'review_ready' ||
-          t.status === 'awaiting_approval' ||
-          t.status === 'blocked' ||
-          t.status === 'stale',
-      );
-      if (!settled) continue;
-
-      const hasPendingInput = tasks.some(
-        (t) => t.status === 'needs_input' || t.status === 'awaiting_approval' || t.status === 'review_ready',
-      );
-      if (hasPendingInput) continue;
-
-      const allSucceeded = tasks.every(
-        (t) => t.status === 'completed' || t.status === 'stale',
-      );
-      const status = allSucceeded ? 'completed' : 'failed';
-      this.persistence.updateWorkflow(wfId, {
-        status,
-        updatedAt: new Date().toISOString(),
-      });
+      this.syncWorkflowStatus(wfId);
     }
   }
 
