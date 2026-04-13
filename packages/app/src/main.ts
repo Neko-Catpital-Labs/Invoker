@@ -79,7 +79,15 @@ import { isHeadlessMutatingCommand, isHeadlessReadOnlyCommand } from './headless
 import { backupPlan } from './plan-backup.js';
 // applyPlanDefinitionDefaults removed — parsePlan() applies defaults internally
 import { startApiServer, type ApiServer } from './api-server.js';
-import { runHeadless, tryDelegateRun, tryDelegateResume, tryDelegateExec, resolveAgentSession } from './headless.js';
+import {
+  runHeadless,
+  tryDelegateRun,
+  tryDelegateResume,
+  tryDelegateExec,
+  resolveAgentSession,
+  createHeadlessExecutor,
+  wireHeadlessApproveHook,
+} from './headless.js';
 import {
   rebaseAndRetry,
   recreateWorkflow as sharedRecreateWorkflow,
@@ -93,6 +101,7 @@ import { openExternalTerminalForTask } from './open-terminal-for-task.js';
 import { createRequire } from 'node:module';
 import { acquireDbWriterLock, type DbWriterLockResult } from './db-writer-lock.js';
 import { applyDelta } from './delta-merge.js';
+import { MutationPipe, createMutationCommand, type MutationCommand } from './mutation-pipe.js';
 
 // ── Detect headless mode ─────────────────────────────────────
 
@@ -135,6 +144,29 @@ let orchestrator: Orchestrator;
 let commandService: CommandService;
 let hourlyBackupInterval: ReturnType<typeof setInterval> | null = null;
 let writerLock: DbWriterLockResult | null = null;
+
+const MUTATION_SUBMIT_CHANNEL = 'mutation.submit';
+const DEFAULT_MUTATION_QUEUE_LIMIT = Number(process.env.INVOKER_MUTATION_QUEUE_LIMIT ?? 100);
+const DEFAULT_MUTATION_HISTORY_LIMIT = Number(process.env.INVOKER_MUTATION_HISTORY_LIMIT ?? 200);
+
+interface GuiMutationPayload {
+  channel: string;
+  args: unknown[];
+}
+
+interface HeadlessRunMutationPayload {
+  planPath: string;
+}
+
+interface HeadlessResumeMutationPayload {
+  workflowId: string;
+}
+
+interface HeadlessExecMutationPayload {
+  args: string[];
+  waitForApproval?: boolean;
+  noTrack?: boolean;
+}
 
 // Root logger: created early in initServices() once persistence is available.
 // Before initServices(), use the pre-init logger (file-only, no DB).
@@ -408,6 +440,7 @@ if (isHeadless) {
     }
 
     let exitCode = 0;
+    let standaloneMutationPipe: MutationPipe<unknown> | null = null;
     try {
       // Standalone mode: initialize services and run headless
       await initServices({
@@ -425,19 +458,183 @@ if (isHeadless) {
         executionAgentRegistry: agentRegistry,
       };
 
+      const createStandaloneTaskExecutor = (): TaskRunner => {
+        const executor = createHeadlessExecutor(headlessDeps);
+        wireHeadlessApproveHook(headlessDeps, executor);
+        return executor;
+      };
+
+      const executeStandaloneGuiMutation = async (payload: GuiMutationPayload): Promise<unknown> => {
+        switch (payload.channel) {
+          case 'invoker:load-plan': {
+            const planText = String(payload.args[0] ?? '');
+            const { parsePlan } = await import('./plan-parser.js');
+            const plan = parsePlan(planText);
+            backupPlan(plan, undefined, logger);
+            orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
+            return undefined;
+          }
+          case 'invoker:start': {
+            const executor = createStandaloneTaskExecutor();
+            const started = orchestrator.startExecution();
+            await executor.executeTasks(started);
+            return started;
+          }
+          case 'invoker:set-merge-branch': {
+            const workflowId = String(payload.args[0]);
+            const baseBranch = String(payload.args[1]);
+            persistence.updateWorkflow(workflowId, { baseBranch });
+            const tasks = persistence.loadTasks(workflowId);
+            const mergeTask = tasks.find((task) => task.config.isMergeNode);
+            if (!mergeTask) return undefined;
+            const started = orchestrator.restartTask(mergeTask.id);
+            const runnable = started.filter((task) => task.status === 'running');
+            if (runnable.length > 0) {
+              const executor = createStandaloneTaskExecutor();
+              await executor.executeTasks(runnable);
+            }
+            return undefined;
+          }
+          case 'invoker:replace-task': {
+            const taskId = String(payload.args[0]);
+            const replacementTasks = payload.args[1] as TaskReplacementDef[];
+            const envelope = makeEnvelope('replace-task', 'ui', 'task', { taskId, replacementTasks });
+            const result = await commandService.replaceTask(envelope);
+            if (!result.ok) throw new Error(result.error.message);
+            const runnable = result.data.filter((task) => task.status === 'running');
+            if (runnable.length > 0) {
+              const executor = createStandaloneTaskExecutor();
+              await executor.executeTasks(runnable);
+            }
+            return result.data;
+          }
+          case 'invoker:check-pr-statuses': {
+            const executor = createStandaloneTaskExecutor();
+            await executor.checkMergeGateStatuses();
+            return undefined;
+          }
+          case 'invoker:check-pr-status': {
+            const executor = createStandaloneTaskExecutor();
+            const tasks = orchestrator.getAllTasks();
+            const awaitingMergeGates = tasks.filter(
+              (task) => task.config.isMergeNode && (task.status === 'review_ready' || task.status === 'awaiting_approval'),
+            );
+            await Promise.all(awaitingMergeGates.map((task) => executor.checkPrApprovalNow(task.id)));
+            return undefined;
+          }
+          case 'invoker:select-experiment': {
+            const taskId = String(payload.args[0]);
+            const experimentId = payload.args[1] as string | string[];
+            const ids = Array.isArray(experimentId) ? experimentId : [experimentId];
+            const executor = createStandaloneTaskExecutor();
+            if (ids.length === 1) {
+              const envelope = makeEnvelope('select-experiment', 'ui', 'task', { taskId, experimentId: ids[0] });
+              const result = await commandService.selectExperiment(envelope);
+              if (!result.ok) throw new Error(result.error.message);
+              const runnable = result.data.filter((task) => task.status === 'running');
+              if (runnable.length > 0) await executor.executeTasks(runnable);
+              return undefined;
+            }
+            const newlyStarted = await sharedSelectExperiments(taskId, ids, { orchestrator, taskExecutor: executor });
+            await executor.executeTasks(newlyStarted);
+            return undefined;
+          }
+          case 'invoker:set-task-external-gate-policies': {
+            const taskId = String(payload.args[0]);
+            const updates = payload.args[1] as Array<{ workflowId: string; taskId?: string; gatePolicy: 'completed' | 'review_ready' }>;
+            const envelope = makeEnvelope('set-gate-policies', 'ui', 'task', { taskId, updates });
+            const result = await commandService.setTaskExternalGatePolicies(envelope);
+            if (!result.ok) throw new Error(result.error.message);
+            const runnable = result.data.filter((task) => task.status === 'running');
+            if (runnable.length > 0) {
+              const executor = createStandaloneTaskExecutor();
+              await executor.executeTasks(runnable);
+            }
+            return undefined;
+          }
+          default:
+            throw new Error(`Unsupported GUI mutation for standalone owner: ${payload.channel}`);
+        }
+      };
+
+      standaloneMutationPipe = standaloneMode && !readOnlyMode
+        ? new MutationPipe({
+          logger,
+          dispatch: async (command) => {
+            switch (command.kind) {
+              case 'gui.ipc':
+                return executeStandaloneGuiMutation(command.payload as GuiMutationPayload);
+              case 'headless.run': {
+                const { planPath } = command.payload as HeadlessRunMutationPayload;
+                await runHeadless(['run', planPath], {
+                  ...headlessDeps,
+                  waitForApproval: false,
+                  noTrack: true,
+                });
+                return { ok: true };
+              }
+              case 'headless.resume': {
+                const { workflowId } = command.payload as HeadlessResumeMutationPayload;
+                await runHeadless(['resume', workflowId], {
+                  ...headlessDeps,
+                  waitForApproval: false,
+                  noTrack: true,
+                });
+                return { ok: true };
+              }
+              case 'headless.exec': {
+                const { args, waitForApproval: delegatedWait, noTrack: delegatedNoTrack } =
+                  command.payload as HeadlessExecMutationPayload;
+                await runHeadless(args, {
+                  ...headlessDeps,
+                  waitForApproval: delegatedWait,
+                  noTrack: delegatedNoTrack,
+                });
+                return { ok: true };
+              }
+              default:
+                throw new Error(`Unsupported standalone mutation kind: ${command.kind}`);
+            }
+          },
+          maxQueuedCommands: DEFAULT_MUTATION_QUEUE_LIMIT,
+          maxRecentCommands: DEFAULT_MUTATION_HISTORY_LIMIT,
+        })
+        : null;
+
       // In standalone owner mode, serve delegated mutation requests from peer headless processes.
       if (standaloneMode && messageBus) {
+        if (standaloneMutationPipe) {
+          messageBus.onRequest(MUTATION_SUBMIT_CHANNEL, async (command: MutationCommand) => {
+            return standaloneMutationPipe.submit(command);
+          });
+          messageBus.onRequest('headless.run', async (req: unknown) => {
+            const { planPath } = req as { planPath: string };
+            return standaloneMutationPipe.submit(createMutationCommand('headless', 'headless.run', { planPath }));
+          });
+          messageBus.onRequest('headless.resume', async (req: unknown) => {
+            const { workflowId } = req as { workflowId: string };
+            return standaloneMutationPipe.submit(createMutationCommand('headless', 'headless.resume', { workflowId }));
+          });
+        }
         messageBus.onRequest('headless.exec', async (req: unknown) => {
           const { args, waitForApproval: delegatedWait, noTrack: delegatedNoTrack } =
             req as { args: string[]; waitForApproval?: boolean; noTrack?: boolean };
           if (!Array.isArray(args) || args.length === 0) {
             throw new Error('Missing delegated headless command arguments');
           }
-          await runHeadless(args, {
-            ...headlessDeps,
-            waitForApproval: delegatedWait,
-            noTrack: delegatedNoTrack,
-          });
+          if (standaloneMutationPipe) {
+            await standaloneMutationPipe.submit(createMutationCommand('headless', 'headless.exec', {
+              args,
+              waitForApproval: delegatedWait,
+              noTrack: delegatedNoTrack,
+            }));
+          } else {
+            await runHeadless(args, {
+              ...headlessDeps,
+              waitForApproval: delegatedWait,
+              noTrack: delegatedNoTrack,
+            });
+          }
           return { ok: true };
         });
       }
@@ -447,6 +644,7 @@ if (isHeadless) {
       process.stderr.write(`${RED}Error:${RESET} ${err instanceof Error ? err.message : String(err)}\n`);
       exitCode = 1;
     } finally {
+      standaloneMutationPipe?.dispose();
       if (persistence) persistence.close();
       if (writerLock) writerLock.release();
       if (messageBus) messageBus.disconnect();
@@ -479,9 +677,11 @@ if (isHeadless) {
 function setupGuiMode(): void {
   const agentRegistry = registerBuiltinAgents();
   let mainWindow: BrowserWindow | null = null;
-  let taskExecutor: TaskRunner;
+  let taskExecutor: TaskRunner | null = null;
   let apiServer: ApiServer | null = null;
+  let mutationPipe: MutationPipe<unknown> | null = null;
   const taskHandles = new Map<string, { handle: ExecutorHandle; executor: Executor }>();
+  const guiMutationHandlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();
   let dbPollInterval: ReturnType<typeof setInterval> | null = null;
   let activityPollInterval: ReturnType<typeof setInterval> | null = null;
   let uiPerfLogInterval: ReturnType<typeof setInterval> | null = null;
@@ -617,6 +817,210 @@ function setupGuiMode(): void {
     return allStarted;
   }
 
+  function requireTaskExecutor(): TaskRunner {
+    if (!taskExecutor) {
+      throw new Error('Mutation execution is unavailable in read-only follower mode');
+    }
+    return taskExecutor;
+  }
+
+  async function executeHeadlessRun(payload: HeadlessRunMutationPayload): Promise<unknown> {
+    const { parsePlanFile } = await import('./plan-parser.js');
+    const plan = await parsePlanFile(payload.planPath);
+    taskHandles.clear();
+    backupPlan(plan, undefined, logger);
+    const wfIdsBefore = new Set(orchestrator.getWorkflowIds());
+    orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
+    const workflowId = orchestrator.getWorkflowIds().find(id => !wfIdsBefore.has(id))!;
+    const started = orchestrator.startExecution();
+    logger.info(`started ${started.length} tasks for workflow "${workflowId}"`, { module: 'ipc-delegate' });
+    requireTaskExecutor().executeTasks(started).catch(err => {
+      logger.error(`headless.run: executeTasks failed for "${workflowId}": ${err}`, { module: 'ipc-delegate' });
+    });
+    const tasks = orchestrator.getAllTasks().filter(t => t.config.workflowId === workflowId);
+    return { workflowId, tasks };
+  }
+
+  async function executeHeadlessResume(payload: HeadlessResumeMutationPayload): Promise<unknown> {
+    const { workflowId } = payload;
+    orchestrator.syncFromDb(workflowId);
+
+    const orphanRestarted: TaskState[] = [];
+    for (const task of orchestrator.getAllTasks()) {
+      if (
+        (task.status === 'running' || task.status === 'fixing_with_ai') &&
+        task.config.workflowId === workflowId
+      ) {
+        logger.info(`relaunching orphaned in-flight task "${task.id}" (${task.status})`, { module: 'ipc-delegate' });
+        const started = orchestrator.restartTask(task.id);
+        orphanRestarted.push(...started.filter(t => t.status === 'running'));
+      }
+    }
+
+    const started = orchestrator.startExecution();
+    const allStarted = [...orphanRestarted, ...started];
+    logger.info(`started ${allStarted.length} tasks (${orphanRestarted.length} orphans relaunched, ${started.length} ready)`, { module: 'ipc-delegate' });
+    requireTaskExecutor().executeTasks(allStarted).catch(err => {
+      logger.error(`headless.resume: executeTasks failed for "${workflowId}": ${err}`, { module: 'ipc-delegate' });
+    });
+    requireTaskExecutor().resumeMergeGatePolling();
+    const tasks = orchestrator.getAllTasks().filter(t => t.config.workflowId === workflowId);
+    return { workflowId, tasks };
+  }
+
+  async function executeHeadlessExec(payload: HeadlessExecMutationPayload): Promise<unknown> {
+    await runHeadless(payload.args, {
+      logger,
+      orchestrator, persistence, executorRegistry, messageBus,
+      commandService,
+      repoRoot, invokerConfig, initServices, wireSlackBot,
+      waitForApproval: payload.waitForApproval,
+      noTrack: payload.noTrack,
+      executionAgentRegistry: registerBuiltinAgents(),
+    });
+    return { ok: true };
+  }
+
+  async function dispatchMutationCommand(command: MutationCommand): Promise<unknown> {
+    switch (command.kind) {
+      case 'gui.ipc': {
+        const payload = command.payload as GuiMutationPayload;
+        const handler = guiMutationHandlers.get(payload.channel);
+        if (!handler) {
+          throw new Error(`No GUI mutation handler registered for ${payload.channel}`);
+        }
+        return handler(...payload.args);
+      }
+      case 'headless.run':
+        return executeHeadlessRun(command.payload as HeadlessRunMutationPayload);
+      case 'headless.resume':
+        return executeHeadlessResume(command.payload as HeadlessResumeMutationPayload);
+      case 'headless.exec':
+        return executeHeadlessExec(command.payload as HeadlessExecMutationPayload);
+      default:
+        throw new Error(`Unknown mutation command kind: ${command.kind}`);
+    }
+  }
+
+  function translateGuiMutationToHeadless(payload: GuiMutationPayload):
+    | { channel: 'headless.run'; request: HeadlessRunMutationPayload }
+    | { channel: 'headless.resume'; request: HeadlessResumeMutationPayload }
+    | { channel: 'headless.exec'; request: HeadlessExecMutationPayload }
+    | null {
+    const [arg0, arg1, arg2] = payload.args;
+    switch (payload.channel) {
+      case 'invoker:stop':
+        return { channel: 'headless.exec', request: { args: ['stop'] } };
+      case 'invoker:clear':
+        return { channel: 'headless.exec', request: { args: ['clear'] } };
+      case 'invoker:resume-workflow': {
+        const workflows = persistence.listWorkflows();
+        const workflowId = workflows[0]?.id;
+        if (!workflowId) return null;
+        return { channel: 'headless.resume', request: { workflowId } };
+      }
+      case 'invoker:delete-all-workflows':
+        return { channel: 'headless.exec', request: { args: ['delete-all'] } };
+      case 'invoker:delete-workflow':
+        return { channel: 'headless.exec', request: { args: ['delete', String(arg0)] } };
+      case 'invoker:provide-input':
+        return { channel: 'headless.exec', request: { args: ['input', String(arg0), String(arg1)] } };
+      case 'invoker:approve':
+        return { channel: 'headless.exec', request: { args: ['approve', String(arg0)] } };
+      case 'invoker:reject':
+        return arg1 === undefined
+          ? { channel: 'headless.exec', request: { args: ['reject', String(arg0)] } }
+          : { channel: 'headless.exec', request: { args: ['reject', String(arg0), String(arg1)] } };
+      case 'invoker:select-experiment':
+        if (Array.isArray(arg1)) return null;
+        return { channel: 'headless.exec', request: { args: ['select', String(arg0), String(arg1)] } };
+      case 'invoker:restart-task':
+        return { channel: 'headless.exec', request: { args: ['restart', String(arg0)] } };
+      case 'invoker:cancel-task':
+        return { channel: 'headless.exec', request: { args: ['cancel', String(arg0)] } };
+      case 'invoker:cancel-workflow':
+        return { channel: 'headless.exec', request: { args: ['cancel-workflow', String(arg0)] } };
+      case 'invoker:recreate-workflow':
+        return { channel: 'headless.exec', request: { args: ['recreate', String(arg0)] } };
+      case 'invoker:recreate-task':
+        return { channel: 'headless.exec', request: { args: ['recreate-task', String(arg0)] } };
+      case 'invoker:retry-workflow':
+        return { channel: 'headless.exec', request: { args: ['restart', String(arg0)] } };
+      case 'invoker:rebase-and-retry':
+        return { channel: 'headless.exec', request: { args: ['rebase', String(arg0)] } };
+      case 'invoker:set-merge-mode':
+        return { channel: 'headless.exec', request: { args: ['set', 'merge-mode', String(arg0), String(arg1)] } };
+      case 'invoker:approve-merge': {
+        const workflowId = String(arg0);
+        const mergeTask = persistence.loadTasks(workflowId).find((task) => task.config.isMergeNode);
+        if (!mergeTask) return null;
+        return { channel: 'headless.exec', request: { args: ['approve', mergeTask.id] } };
+      }
+      case 'invoker:resolve-conflict':
+        return arg1 === undefined
+          ? { channel: 'headless.exec', request: { args: ['resolve-conflict', String(arg0)] } }
+          : { channel: 'headless.exec', request: { args: ['resolve-conflict', String(arg0), String(arg1)] } };
+      case 'invoker:fix-with-agent':
+        return arg1 === undefined
+          ? { channel: 'headless.exec', request: { args: ['fix', String(arg0)] } }
+          : { channel: 'headless.exec', request: { args: ['fix', String(arg0), String(arg1)] } };
+      case 'invoker:edit-task-command':
+        return { channel: 'headless.exec', request: { args: ['set', 'command', String(arg0), String(arg1)] } };
+      case 'invoker:edit-task-type':
+        return { channel: 'headless.exec', request: { args: ['set', 'executor', String(arg0), String(arg1)] } };
+      case 'invoker:edit-task-agent':
+        return { channel: 'headless.exec', request: { args: ['set', 'agent', String(arg0), String(arg1)] } };
+      case 'invoker:set-task-external-gate-policies': {
+        const taskId = String(arg0);
+        const updates = Array.isArray(arg1) ? arg1 as Array<{ workflowId: string; taskId?: string; gatePolicy: 'completed' | 'review_ready' }> : [];
+        if (updates.length !== 1) return null;
+        const update = updates[0];
+        if (!update) return null;
+        const args = ['set', 'gate-policy', taskId, update.workflowId];
+        if (update.taskId) args.push(update.taskId);
+        args.push(update.gatePolicy);
+        return { channel: 'headless.exec', request: { args } };
+      }
+      default:
+        return null;
+    }
+  }
+
+  async function submitMutation<TResult = unknown>(
+    source: 'gui' | 'headless',
+    kind: string,
+    payload: unknown,
+  ): Promise<TResult> {
+    const command = createMutationCommand(source, kind, payload);
+    if (mutationPipe) {
+      return mutationPipe.submit(command) as Promise<TResult>;
+    }
+    if (source === 'gui' && kind === 'gui.ipc') {
+      const translated = translateGuiMutationToHeadless(payload as GuiMutationPayload);
+      if (translated) {
+        return await messageBus.request<typeof translated.request, TResult>(translated.channel, translated.request);
+      }
+    }
+    try {
+      return await messageBus.request<MutationCommand, TResult>(MUTATION_SUBMIT_CHANNEL, command);
+    } catch (err) {
+      if (err instanceof Error && err.message.includes('No request handler registered for channel')) {
+        throw new Error('No mutation owner is available');
+      }
+      throw err;
+    }
+  }
+
+  function registerGuiMutationHandler<TResult = unknown>(
+    channel: string,
+    handler: (...args: unknown[]) => Promise<TResult>,
+  ): void {
+    guiMutationHandlers.set(channel, handler as (...args: unknown[]) => Promise<unknown>);
+    ipcMain.handle(channel, async (_event, ...args: unknown[]) => {
+      return submitMutation<TResult>('gui', 'gui.ipc', { channel, args });
+    });
+  }
+
   function createWindow(): void {
     mainWindow = new BrowserWindow({
       width: 1200,
@@ -675,110 +1079,93 @@ function setupGuiMode(): void {
   }
 
   app.whenReady().then(async () => {
+    let ownerMode = true;
     try {
       await initServices({ executionAgentRegistry: agentRegistry });
     } catch (err) {
-      process.stderr.write(`${RED}Error:${RESET} ${err instanceof Error ? err.message : String(err)}\n`);
-      app.quit();
-      return;
+      const message = err instanceof Error ? err.message : String(err);
+      if (!message.includes('[db-writer-lock]')) {
+        process.stderr.write(`${RED}Error:${RESET} ${message}\n`);
+        app.quit();
+        return;
+      }
+      await initServices({ readOnly: true, executionAgentRegistry: agentRegistry });
+      ownerMode = false;
     }
 
-    rebuildTaskRunner();
+    if (ownerMode) {
+      rebuildTaskRunner();
+      mutationPipe = new MutationPipe({
+        logger,
+        dispatch: dispatchMutationCommand,
+        maxQueuedCommands: DEFAULT_MUTATION_QUEUE_LIMIT,
+        maxRecentCommands: DEFAULT_MUTATION_HISTORY_LIMIT,
+      });
+      messageBus.onRequest(MUTATION_SUBMIT_CHANNEL, async (command: MutationCommand) => {
+        return mutationPipe!.submit(command);
+      });
+    } else {
+      logger.info('GUI launched in follower mode; mutation execution is delegated to the current owner', {
+        module: 'init',
+      });
+    }
 
     // ── IPC Delegation Handlers — headless → GUI ────────────────
     // Headless processes delegate write-heavy commands to the GUI process via IpcBus.
-    messageBus.onRequest('headless.run', async (req: unknown) => {
-      const { planPath } = req as { planPath: string };
-      logger.info(`headless.run: "${planPath}"`, { module: 'ipc-delegate' });
-      const { parsePlanFile } = await import('./plan-parser.js');
-      const plan = await parsePlanFile(planPath);
-      taskHandles.clear();
-      backupPlan(plan, undefined, logger);
-      const wfIdsBefore = new Set(orchestrator.getWorkflowIds());
-      orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
-      const workflowId = orchestrator.getWorkflowIds().find(id => !wfIdsBefore.has(id))!;
-      const started = orchestrator.startExecution();
-      logger.info(`started ${started.length} tasks for workflow "${workflowId}"`, { module: 'ipc-delegate' });
-      // Fire-and-forget: return immediately so the headless CLI gets the response
-      // before the 5s delegation timeout.  The CLI tracks completion via task deltas.
-      taskExecutor.executeTasks(started).catch(err => {
-        logger.error(`headless.run: executeTasks failed for "${workflowId}": ${err}`, { module: 'ipc-delegate' });
+    if (ownerMode) {
+      messageBus.onRequest('headless.run', async (req: unknown) => {
+        const { planPath } = req as { planPath: string };
+        logger.info(`headless.run: "${planPath}"`, { module: 'ipc-delegate' });
+        return submitMutation('headless', 'headless.run', { planPath });
       });
-      const tasks = orchestrator.getAllTasks().filter(t => t.config.workflowId === workflowId);
-      return { workflowId, tasks };
-    });
 
-    messageBus.onRequest('headless.resume', async (req: unknown) => {
-      const { workflowId } = req as { workflowId: string };
-      logger.info(`headless.resume: "${workflowId}"`, { module: 'ipc-delegate' });
-      orchestrator.syncFromDb(workflowId);
+      messageBus.onRequest('headless.resume', async (req: unknown) => {
+        const { workflowId } = req as { workflowId: string };
+        logger.info(`headless.resume: "${workflowId}"`, { module: 'ipc-delegate' });
+        return submitMutation('headless', 'headless.resume', { workflowId });
+      });
 
-      const orphanRestarted: TaskState[] = [];
-      for (const task of orchestrator.getAllTasks()) {
-        if (
-          (task.status === 'running' || task.status === 'fixing_with_ai') &&
-          task.config.workflowId === workflowId
-        ) {
-          logger.info(`relaunching orphaned in-flight task "${task.id}" (${task.status})`, { module: 'ipc-delegate' });
-          const started = orchestrator.restartTask(task.id);
-          orphanRestarted.push(...started.filter(t => t.status === 'running'));
+      messageBus.onRequest('headless.exec', async (req: unknown) => {
+        const { args, waitForApproval: delegatedWait, noTrack: delegatedNoTrack } =
+          req as { args: string[]; waitForApproval?: boolean; noTrack?: boolean };
+        if (!Array.isArray(args) || args.length === 0) {
+          throw new Error('Missing delegated headless command arguments');
         }
-      }
-
-      const started = orchestrator.startExecution();
-      const allStarted = [...orphanRestarted, ...started];
-      logger.info(`started ${allStarted.length} tasks (${orphanRestarted.length} orphans relaunched, ${started.length} ready)`, { module: 'ipc-delegate' });
-      // Fire-and-forget: return immediately so the headless CLI gets the response
-      // before the 5s delegation timeout.  The CLI tracks completion via task deltas.
-      taskExecutor.executeTasks(allStarted).catch(err => {
-        logger.error(`headless.resume: executeTasks failed for "${workflowId}": ${err}`, { module: 'ipc-delegate' });
+        logger.info(`headless.exec: "${args.join(' ')}"`, { module: 'ipc-delegate' });
+        return submitMutation('headless', 'headless.exec', {
+          args,
+          waitForApproval: delegatedWait,
+          noTrack: delegatedNoTrack,
+        });
       });
-      taskExecutor.resumeMergeGatePolling();
-      const tasks = orchestrator.getAllTasks().filter(t => t.config.workflowId === workflowId);
-      return { workflowId, tasks };
-    });
-
-    messageBus.onRequest('headless.exec', async (req: unknown) => {
-      const { args, waitForApproval: delegatedWait, noTrack: delegatedNoTrack } =
-        req as { args: string[]; waitForApproval?: boolean; noTrack?: boolean };
-      if (!Array.isArray(args) || args.length === 0) {
-        throw new Error('Missing delegated headless command arguments');
-      }
-      logger.info(`headless.exec: "${args.join(' ')}"`, { module: 'ipc-delegate' });
-      await runHeadless(args, {
-        logger,
-        orchestrator, persistence, executorRegistry, messageBus,
-        commandService,
-        repoRoot, invokerConfig, initServices, wireSlackBot,
-        waitForApproval: delegatedWait,
-        noTrack: delegatedNoTrack,
-        executionAgentRegistry: registerBuiltinAgents(),
-      });
-      return { ok: true };
-    });
+    }
 
 
     // Relaunch orphaned running tasks and start any pending-but-ready tasks.
-    if (invokerConfig.disableAutoRunOnStartup) {
+    if (!ownerMode) {
+      logger.info('follower mode startup: auto-run and orphan relaunch disabled', { module: 'init' });
+    } else if (invokerConfig.disableAutoRunOnStartup) {
       logger.info('auto-run on startup disabled by config — skipping orphan relaunch', { module: 'init' });
     } else {
       const allStarted = relaunchOrphansAndStartReady('init');
       if (allStarted.length > 0) {
-        taskExecutor.executeTasks(allStarted);
+        requireTaskExecutor().executeTasks(allStarted);
       }
-      taskExecutor.resumeMergeGatePolling();
+      requireTaskExecutor().resumeMergeGatePolling();
     }
 
-    apiServer = startApiServer({
-      logger,
-      orchestrator,
-      persistence,
-      executorRegistry,
-      taskExecutor,
-      killRunningTask,
-      cancelTask: performCancelTask,
-      cancelWorkflow: performCancelWorkflow,
-    });
+    if (ownerMode) {
+      apiServer = startApiServer({
+        logger,
+        orchestrator,
+        persistence,
+        executorRegistry,
+        taskExecutor: requireTaskExecutor(),
+        killRunningTask,
+        cancelTask: performCancelTask,
+        cancelWorkflow: performCancelWorkflow,
+      });
+    }
 
     const dbPath = path.join(resolveInvokerHomeRoot(), 'invoker.db');
     logger.info(`Database: ${dbPath}`, { module: 'init' });
@@ -786,9 +1173,11 @@ function setupGuiMode(): void {
     logger.info(`Config: disableAutoRunOnStartup=${invokerConfig.disableAutoRunOnStartup ?? false}`, { module: 'init' });
 
     // ── Start Slack bot if env vars are configured ───
-    startSlackBot(taskExecutor, taskHandles).catch((err) => {
-      logger.info(`Not started: ${err instanceof Error ? err.message : String(err)}`, { module: 'slack' });
-    });
+    if (ownerMode) {
+      startSlackBot(requireTaskExecutor(), taskHandles).catch((err) => {
+        logger.info(`Not started: ${err instanceof Error ? err.message : String(err)}`, { module: 'slack' });
+      });
+    }
 
     // Forward deltas to renderer and keep snapshot cache in sync so
     // the db-poll doesn't re-emit deltas the messageBus already delivered.
@@ -803,10 +1192,10 @@ function setupGuiMode(): void {
       // Auto-fix: when a task fails and has retries remaining, fix and restart automatically
       const d = delta as TaskDelta;
       if (d.type === 'updated' && d.changes.status === 'failed') {
-        if (!autoFixInProgress.has(d.taskId) && orchestrator.shouldAutoFix(d.taskId)) {
+        if (taskExecutor && !autoFixInProgress.has(d.taskId) && orchestrator.shouldAutoFix(d.taskId)) {
           autoFixInProgress.add(d.taskId);
           import('./workflow-actions.js').then(({ autoFixOnFailure }) =>
-            autoFixOnFailure(d.taskId, { orchestrator, persistence, taskExecutor })
+            autoFixOnFailure(d.taskId, { orchestrator, persistence, taskExecutor: requireTaskExecutor() })
               .catch(err => logger.error(`[auto-fix] "${d.taskId}": ${err}`, { module: 'auto-fix' }))
               .finally(() => autoFixInProgress.delete(d.taskId)),
           );
@@ -834,7 +1223,8 @@ function setupGuiMode(): void {
     });
 
     // Register IPC handlers
-    ipcMain.handle('invoker:load-plan', async (_event, planText: string) => {
+    registerGuiMutationHandler('invoker:load-plan', async (planTextArg: unknown) => {
+      const planText = String(planTextArg);
       const { parsePlan } = await import('./plan-parser.js');
       const plan = parsePlan(planText);
       logger.info(`load-plan: "${plan.name}" (${plan.tasks.length} tasks)`, { module: 'ipc' });
@@ -860,15 +1250,15 @@ function setupGuiMode(): void {
       );
     }
 
-    ipcMain.handle('invoker:start', async () => {
+    registerGuiMutationHandler('invoker:start', async () => {
       logger.info('start', { module: 'ipc' });
       const started = orchestrator.startExecution();
       logger.info(`startExecution returned ${started.length} tasks: [${started.map(t => t.id).join(', ')}]`, { module: 'ipc' });
-      await taskExecutor.executeTasks(started);
+      await requireTaskExecutor().executeTasks(started);
       return started;
     });
 
-    ipcMain.handle('invoker:resume-workflow', async () => {
+    registerGuiMutationHandler('invoker:resume-workflow', async () => {
       const workflows = persistence.listWorkflows();
       if (workflows.length === 0) {
         logger.info('resume-workflow: no workflows found', { module: 'ipc' });
@@ -885,12 +1275,12 @@ function setupGuiMode(): void {
         }
       }
       logger.info(`resume-workflow: ${tasks.length} tasks loaded across ${workflows.length} workflows, ${allStarted.length} started`, { module: 'ipc' });
-      await taskExecutor.executeTasks(allStarted);
-      taskExecutor.resumeMergeGatePolling();
+      await requireTaskExecutor().executeTasks(allStarted);
+      requireTaskExecutor().resumeMergeGatePolling();
       return { workflow: workflows[0], taskCount: tasks.length, startedCount: allStarted.length };
     });
 
-    ipcMain.handle('invoker:stop', async () => {
+    registerGuiMutationHandler('invoker:stop', async () => {
       logger.info('stop — destroying all executors', { module: 'ipc' });
       await Promise.all(executorRegistry.getAll().map(f => f.destroyAll()));
       const allTasks = orchestrator.getAllTasks();
@@ -907,7 +1297,7 @@ function setupGuiMode(): void {
       }
     });
 
-    ipcMain.handle('invoker:clear', async () => {
+    registerGuiMutationHandler('invoker:clear', async () => {
       logger.info('clear — stopping all tasks and resetting DAG', { module: 'ipc' });
       // Capture current workflow before destroying state
       const workflows = persistence.listWorkflows();
@@ -948,7 +1338,7 @@ function setupGuiMode(): void {
 
     ipcMain.handle('invoker:list-workflows', () => persistence.listWorkflows());
 
-    ipcMain.handle('invoker:delete-all-workflows', () => {
+    registerGuiMutationHandler('invoker:delete-all-workflows', async () => {
       logger.info('delete-all-workflows', { module: 'ipc' });
       assertDeleteAllEnabled();
       const snapshot = createDeleteAllSnapshot(resolveInvokerHomeRoot());
@@ -966,7 +1356,8 @@ function setupGuiMode(): void {
       }
     });
 
-    ipcMain.handle('invoker:delete-workflow', async (_event, workflowId: string) => {
+    registerGuiMutationHandler('invoker:delete-workflow', async (workflowIdArg: unknown) => {
+      const workflowId = String(workflowIdArg);
       logger.info(`delete-workflow: "${workflowId}"`, { module: 'ipc' });
       try {
         // Kill all running tasks belonging to the workflow (process management is outside orchestrator scope)
@@ -1070,13 +1461,16 @@ function setupGuiMode(): void {
       }
     });
 
-    ipcMain.handle('invoker:provide-input', async (_event, taskId: string, input: string) => {
+    registerGuiMutationHandler('invoker:provide-input', async (taskIdArg: unknown, inputArg: unknown) => {
+      const taskId = String(taskIdArg);
+      const input = String(inputArg);
       const envelope = makeEnvelope('provide-input', 'ui', 'task', { taskId, input });
       const result = await commandService.provideInput(envelope);
       if (!result.ok) throw new Error(result.error.message);
     });
 
-    ipcMain.handle('invoker:approve', async (_event, taskId: string) => {
+    registerGuiMutationHandler('invoker:approve', async (taskIdArg: unknown) => {
+      const taskId = String(taskIdArg);
       logger.info(`approve: "${taskId}"`, { module: 'ipc' });
       const envelope = makeEnvelope('approve', 'ui', 'task', { taskId });
       const result = await commandService.approve(envelope);
@@ -1087,23 +1481,27 @@ function setupGuiMode(): void {
       const postFixMerge = started.filter(t => t.status === 'running' && t.config.isMergeNode && t.id === taskId);
       for (const task of postFixMerge) {
         logger.info(`approve: post-fix PR prep for merge gate "${task.id}"`, { module: 'ipc' });
-        taskExecutor.publishAfterFix(task).catch(err => {
+        requireTaskExecutor().publishAfterFix(task).catch(err => {
           logger.error(`approve: publishAfterFix failed for "${task.id}": ${err}`, { module: 'ipc' });
         });
       }
 
       const runnable = started.filter(t => t.status === 'running' && !(t.config.isMergeNode && t.id === taskId));
       logger.info(`approve: ${runnable.length} runnable after filter: [${runnable.map(t => t.id).join(', ')}]`, { module: 'ipc' });
-      if (runnable.length > 0) await taskExecutor.executeTasks(runnable);
+      if (runnable.length > 0) await requireTaskExecutor().executeTasks(runnable);
     });
 
-    ipcMain.handle('invoker:reject', async (_event, taskId: string, reason?: string) => {
+    registerGuiMutationHandler('invoker:reject', async (taskIdArg: unknown, reasonArg?: unknown) => {
+      const taskId = String(taskIdArg);
+      const reason = reasonArg === undefined ? undefined : String(reasonArg);
       const envelope = makeEnvelope('reject', 'ui', 'task', { taskId, reason });
       const result = await commandService.reject(envelope);
       if (!result.ok) throw new Error(result.error.message);
     });
 
-    ipcMain.handle('invoker:select-experiment', async (_event, taskId: string, experimentId: string | string[]) => {
+    registerGuiMutationHandler('invoker:select-experiment', async (taskIdArg: unknown, experimentIdArg: unknown) => {
+      const taskId = String(taskIdArg);
+      const experimentId = experimentIdArg as string | string[];
       const ids = Array.isArray(experimentId) ? experimentId : [experimentId];
       logger.info(`select-experiment: "${taskId}" experimentIds=${JSON.stringify(ids)}`, { module: 'ipc' });
       try {
@@ -1113,11 +1511,11 @@ function setupGuiMode(): void {
           const result = await commandService.selectExperiment(envelope);
           if (!result.ok) throw new Error(result.error.message);
           const runnable = result.data.filter(t => t.status === 'running');
-          await taskExecutor.executeTasks(runnable);
+          await requireTaskExecutor().executeTasks(runnable);
         } else {
           // Multi-select: needs taskExecutor for branch merge, stays in workflow-actions
-          const newlyStarted = await sharedSelectExperiments(taskId, ids, { orchestrator, taskExecutor });
-          await taskExecutor.executeTasks(newlyStarted);
+          const newlyStarted = await sharedSelectExperiments(taskId, ids, { orchestrator, taskExecutor: requireTaskExecutor() });
+          await requireTaskExecutor().executeTasks(newlyStarted);
         }
       } catch (err) {
         logger.error(`select-experiment failed: ${err}`, { module: 'ipc' });
@@ -1125,7 +1523,8 @@ function setupGuiMode(): void {
       }
     });
 
-    ipcMain.handle('invoker:restart-task', async (_event, taskId: string) => {
+    registerGuiMutationHandler('invoker:restart-task', async (taskIdArg: unknown) => {
+      const taskId = String(taskIdArg);
       logger.info(`restart-task: "${taskId}"`, { module: 'ipc' });
       try {
         await killRunningTask(taskId);
@@ -1142,14 +1541,15 @@ function setupGuiMode(): void {
           `${RESTART_TO_BRANCH_TRACE} ipc invoker:restart-task runnable=${runnable.length} [${runnable.map((t) => t.id).join(', ') || '(none)'}] → taskExecutor.executeTasks`,
           { module: 'ipc' },
         );
-        await taskExecutor.executeTasks(runnable);
+        await requireTaskExecutor().executeTasks(runnable);
       } catch (err) {
         logger.error(`restart-task failed: ${err}`, { module: 'ipc' });
         throw err;
       }
     });
 
-    ipcMain.handle('invoker:cancel-task', async (_event, taskId: string) => {
+    registerGuiMutationHandler('invoker:cancel-task', async (taskIdArg: unknown) => {
+      const taskId = String(taskIdArg);
       logger.info(`cancel-task: "${taskId}"`, { module: 'ipc' });
       try {
         return await performCancelTask(taskId);
@@ -1159,7 +1559,8 @@ function setupGuiMode(): void {
       }
     });
 
-    ipcMain.handle('invoker:cancel-workflow', async (_event, workflowId: string) => {
+    registerGuiMutationHandler('invoker:cancel-workflow', async (workflowIdArg: unknown) => {
+      const workflowId = String(workflowIdArg);
       logger.info(`cancel-workflow: "${workflowId}"`, { module: 'ipc' });
       try {
         return await performCancelWorkflow(workflowId);
@@ -1198,14 +1599,15 @@ function setupGuiMode(): void {
       ts: new Date().toISOString(),
     }));
 
-    ipcMain.handle('invoker:recreate-workflow', async (_event, workflowId: string) => {
+    registerGuiMutationHandler('invoker:recreate-workflow', async (workflowIdArg: unknown) => {
+      const workflowId = String(workflowIdArg);
       logger.info(`recreate-workflow: "${workflowId}"`, { module: 'ipc' });
       try {
         const started = sharedRecreateWorkflow(workflowId, { persistence, orchestrator });
         const runnable = started.filter(t => t.status === 'running');
         remoteFetchForPool.enabled = false;
         try {
-          await taskExecutor.executeTasks(runnable);
+          await requireTaskExecutor().executeTasks(runnable);
         } finally {
           remoteFetchForPool.enabled = true;
         }
@@ -1215,14 +1617,15 @@ function setupGuiMode(): void {
       }
     });
 
-    ipcMain.handle('invoker:recreate-task', async (_event, taskId: string) => {
+    registerGuiMutationHandler('invoker:recreate-task', async (taskIdArg: unknown) => {
+      const taskId = String(taskIdArg);
       logger.info(`recreate-task: "${taskId}"`, { module: 'ipc' });
       try {
         const started = sharedRecreateTask(taskId, { persistence, orchestrator });
         const runnable = started.filter(t => t.status === 'running');
         remoteFetchForPool.enabled = false;
         try {
-          await taskExecutor.executeTasks(runnable);
+          await requireTaskExecutor().executeTasks(runnable);
         } finally {
           remoteFetchForPool.enabled = true;
         }
@@ -1232,7 +1635,8 @@ function setupGuiMode(): void {
       }
     });
 
-    ipcMain.handle('invoker:retry-workflow', async (_event, workflowId: string) => {
+    registerGuiMutationHandler('invoker:retry-workflow', async (workflowIdArg: unknown) => {
+      const workflowId = String(workflowIdArg);
       logger.info(`retry-workflow: "${workflowId}"`, { module: 'ipc' });
       try {
         const envelope = makeEnvelope('retry-workflow', 'ui', 'workflow', { workflowId });
@@ -1241,7 +1645,7 @@ function setupGuiMode(): void {
         const runnable = result.data.filter(t => t.status === 'running');
         remoteFetchForPool.enabled = false;
         try {
-          await taskExecutor.executeTasks(runnable);
+          await requireTaskExecutor().executeTasks(runnable);
         } finally {
           remoteFetchForPool.enabled = true;
         }
@@ -1251,24 +1655,27 @@ function setupGuiMode(): void {
       }
     });
 
-    ipcMain.handle('invoker:rebase-and-retry', async (_event, taskId: string) => {
+    registerGuiMutationHandler('invoker:rebase-and-retry', async (taskIdArg: unknown) => {
+      const taskId = String(taskIdArg);
       logger.info(`rebase-and-retry: "${taskId}"`, { module: 'ipc' });
       try {
         const started = await rebaseAndRetry(taskId, {
           orchestrator,
           persistence,
           repoRoot,
-          taskExecutor,
+          taskExecutor: requireTaskExecutor(),
         });
         const runnable = started.filter(t => t.status === 'running');
-        await taskExecutor.executeTasks(runnable);
+        await requireTaskExecutor().executeTasks(runnable);
       } catch (err) {
         logger.error(`rebase-and-retry failed: ${err}`, { module: 'ipc' });
         throw err;
       }
     });
 
-    ipcMain.handle('invoker:set-merge-branch', async (_event, workflowId: string, baseBranch: string) => {
+    registerGuiMutationHandler('invoker:set-merge-branch', async (workflowIdArg: unknown, baseBranchArg: unknown) => {
+      const workflowId = String(workflowIdArg);
+      const baseBranch = String(baseBranchArg);
       logger.info(`set-merge-branch: workflow="${workflowId}" → "${baseBranch}"`, { module: 'ipc' });
       try {
         persistence.updateWorkflow(workflowId, { baseBranch });
@@ -1278,7 +1685,7 @@ function setupGuiMode(): void {
         if (mergeTask) {
           const started = orchestrator.restartTask(mergeTask.id);
           const runnable = started.filter(t => t.status === 'running');
-          await taskExecutor.executeTasks(runnable);
+          await requireTaskExecutor().executeTasks(runnable);
         }
       } catch (err) {
         logger.error(`set-merge-branch failed: ${err}`, { module: 'ipc' });
@@ -1286,13 +1693,15 @@ function setupGuiMode(): void {
       }
     });
 
-    ipcMain.handle('invoker:set-merge-mode', async (_event, workflowId: string, mergeMode: string) => {
+    registerGuiMutationHandler('invoker:set-merge-mode', async (workflowIdArg: unknown, mergeModeArg: unknown) => {
+      const workflowId = String(workflowIdArg);
+      const mergeMode = String(mergeModeArg);
       logger.info(`set-merge-mode: workflow="${workflowId}" → "${mergeMode}"`, { module: 'ipc' });
       try {
         await setWorkflowMergeMode(workflowId, mergeMode, {
           orchestrator,
           persistence,
-          taskExecutor,
+          taskExecutor: requireTaskExecutor(),
         });
       } catch (err) {
         logger.error(`set-merge-mode failed: ${err}`, { module: 'ipc' });
@@ -1304,7 +1713,8 @@ function setupGuiMode(): void {
       }
     });
 
-    ipcMain.handle('invoker:approve-merge', async (_event, workflowId: string) => {
+    registerGuiMutationHandler('invoker:approve-merge', async (workflowIdArg: unknown) => {
+      const workflowId = String(workflowIdArg);
       logger.info(`approve-merge: "${workflowId}"`, { module: 'ipc' });
       try {
         const mergeTask = orchestrator.getMergeNode(workflowId);
@@ -1315,40 +1725,42 @@ function setupGuiMode(): void {
         const started = result.data;
         const postFixMerge = started.filter(t => t.status === 'running' && t.config.isMergeNode && t.id === mergeTask.id);
         for (const task of postFixMerge) {
-          taskExecutor.publishAfterFix(task).catch(err => {
+          requireTaskExecutor().publishAfterFix(task).catch(err => {
             logger.error(`approve-merge: publishAfterFix failed for "${task.id}": ${err}`, { module: 'ipc' });
           });
         }
         const runnable = started.filter(t => t.status === 'running' && !(t.config.isMergeNode && t.id === mergeTask.id));
-        if (runnable.length > 0) await taskExecutor.executeTasks(runnable);
+        if (runnable.length > 0) await requireTaskExecutor().executeTasks(runnable);
       } catch (err) {
         logger.error(`approve-merge failed: ${err}`, { module: 'ipc' });
         throw err;
       }
     });
 
-    ipcMain.handle('invoker:check-pr-statuses', async () => {
+    registerGuiMutationHandler('invoker:check-pr-statuses', async () => {
       logger.info('check-pr-statuses', { module: 'ipc' });
-      await taskExecutor.checkMergeGateStatuses();
+      await requireTaskExecutor().checkMergeGateStatuses();
     });
 
-    ipcMain.handle('invoker:check-pr-status', async () => {
+    registerGuiMutationHandler('invoker:check-pr-status', async () => {
       const tasks = orchestrator.getAllTasks();
       const awaitingMergeGates = tasks.filter(
         t => t.config.isMergeNode && (t.status === 'review_ready' || t.status === 'awaiting_approval')
       );
       await Promise.all(
-        awaitingMergeGates.map(t => taskExecutor.checkPrApprovalNow(t.id))
+        awaitingMergeGates.map(t => requireTaskExecutor().checkPrApprovalNow(t.id))
       );
     });
 
-    ipcMain.handle('invoker:resolve-conflict', async (_event, taskId: string, agentName?: string) => {
+    registerGuiMutationHandler('invoker:resolve-conflict', async (taskIdArg: unknown, agentNameArg?: unknown) => {
+      const taskId = String(taskIdArg);
+      const agentName = agentNameArg === undefined ? undefined : String(agentNameArg);
       logger.info(`resolve-conflict: "${taskId}" agent=${agentName ?? 'claude'}`, { module: 'ipc' });
       try {
         await resolveConflictAction(taskId, {
           orchestrator,
           persistence,
-          taskExecutor,
+          taskExecutor: requireTaskExecutor(),
         }, agentName);
       } catch (err) {
         logger.error(`resolve-conflict failed: ${err}`, { module: 'ipc' });
@@ -1356,12 +1768,14 @@ function setupGuiMode(): void {
       }
     });
 
-    ipcMain.handle('invoker:fix-with-agent', async (_event, taskId: string, agentName?: string) => {
+    registerGuiMutationHandler('invoker:fix-with-agent', async (taskIdArg: unknown, agentNameArg?: unknown) => {
+      const taskId = String(taskIdArg);
+      const agentName = agentNameArg === undefined ? undefined : String(agentNameArg);
       logger.info(`fix-with-agent: "${taskId}" agent=${agentName ?? 'claude'}`, { module: 'ipc' });
       const { savedError } = orchestrator.beginConflictResolution(taskId);
       try {
         const output = persistence.getTaskOutput(taskId);
-        await taskExecutor.fixWithAgent(taskId, output, agentName, savedError);
+        await requireTaskExecutor().fixWithAgent(taskId, output, agentName, savedError);
         orchestrator.setFixAwaitingApproval(taskId, savedError);
       } catch (err) {
         logger.error(`fix-with-agent failed: ${err}`, { module: 'ipc' });
@@ -1373,62 +1787,67 @@ function setupGuiMode(): void {
     });
 
 
-    ipcMain.handle('invoker:edit-task-command', async (_event, taskId: string, newCommand: string) => {
+    registerGuiMutationHandler('invoker:edit-task-command', async (taskIdArg: unknown, newCommandArg: unknown) => {
+      const taskId = String(taskIdArg);
+      const newCommand = String(newCommandArg);
       logger.info(`edit-task-command: "${taskId}" → "${newCommand}"`, { module: 'ipc' });
       try {
         const envelope = makeEnvelope('edit-task-command', 'ui', 'task', { taskId, newCommand });
         const result = await commandService.editTaskCommand(envelope);
         if (!result.ok) throw new Error(result.error.message);
         const runnable = result.data.filter(t => t.status === 'running');
-        await taskExecutor.executeTasks(runnable);
+        await requireTaskExecutor().executeTasks(runnable);
       } catch (err) {
         logger.error(`edit-task-command failed: ${err}`, { module: 'ipc' });
         throw err;
       }
     });
 
-    ipcMain.handle('invoker:edit-task-type', async (_event, taskId: string, executorType: string, remoteTargetId?: string) => {
+    registerGuiMutationHandler('invoker:edit-task-type', async (taskIdArg: unknown, executorTypeArg: unknown, remoteTargetIdArg?: unknown) => {
+      const taskId = String(taskIdArg);
+      const executorType = String(executorTypeArg);
+      const remoteTargetId = remoteTargetIdArg === undefined ? undefined : String(remoteTargetIdArg);
       logger.info(`edit-task-type: "${taskId}" → "${executorType}" remoteTargetId=${remoteTargetId ?? 'none'}`, { module: 'ipc' });
       try {
         const envelope = makeEnvelope('edit-task-type', 'ui', 'task', { taskId, executorType, remoteTargetId });
         const result = await commandService.editTaskType(envelope);
         if (!result.ok) throw new Error(result.error.message);
         const runnable = result.data.filter(t => t.status === 'running');
-        await taskExecutor.executeTasks(runnable);
+        await requireTaskExecutor().executeTasks(runnable);
       } catch (err) {
         logger.error(`edit-task-type failed: ${err}`, { module: 'ipc' });
         throw err;
       }
     });
 
-    ipcMain.handle('invoker:edit-task-agent', async (_event, taskId: string, agentName: string) => {
+    registerGuiMutationHandler('invoker:edit-task-agent', async (taskIdArg: unknown, agentNameArg: unknown) => {
+      const taskId = String(taskIdArg);
+      const agentName = String(agentNameArg);
       logger.info(`edit-task-agent: "${taskId}" → "${agentName}"`, { module: 'ipc' });
       try {
         const envelope = makeEnvelope('edit-task-agent', 'ui', 'task', { taskId, agentName });
         const result = await commandService.editTaskAgent(envelope);
         if (!result.ok) throw new Error(result.error.message);
         const runnable = result.data.filter(t => t.status === 'running');
-        await taskExecutor.executeTasks(runnable);
+        await requireTaskExecutor().executeTasks(runnable);
       } catch (err) {
         logger.error(`edit-task-agent failed: ${err}`, { module: 'ipc' });
         throw err;
       }
     });
 
-    ipcMain.handle(
+    registerGuiMutationHandler(
       'invoker:set-task-external-gate-policies',
-      async (
-        _event,
-        taskId: string,
-        updates: Array<{ workflowId: string; taskId?: string; gatePolicy: 'completed' | 'review_ready' }>,
-      ) => {
+      async (taskIdArg: unknown, updatesArg: unknown) => {
+        const taskId = String(taskIdArg);
+        const updates = updatesArg as Array<{ workflowId: string; taskId?: string; gatePolicy: 'completed' | 'review_ready' }>;
         logger.info(`set-task-external-gate-policies: "${taskId}" updates=${updates.length}`, { module: 'ipc' });
         try {
           const envelope = makeEnvelope('set-gate-policies', 'ui', 'task', { taskId, updates });
           const result = await commandService.setTaskExternalGatePolicies(envelope);
           if (!result.ok) throw new Error(result.error.message);
           const runnable = result.data.filter((t) => t.status === 'running');
-          if (runnable.length > 0) await taskExecutor.executeTasks(runnable);
+          if (runnable.length > 0) await requireTaskExecutor().executeTasks(runnable);
         } catch (err) {
           logger.error(`set-task-external-gate-policies failed: ${err}`, { module: 'ipc' });
           throw err;
@@ -1444,7 +1863,9 @@ function setupGuiMode(): void {
       return agentRegistry.listExecution().map(a => a.name);
     });
 
-    ipcMain.handle('invoker:replace-task', async (_event, taskId: string, replacementTasks: unknown[]) => {
+    registerGuiMutationHandler('invoker:replace-task', async (taskIdArg: unknown, replacementTasksArg: unknown) => {
+      const taskId = String(taskIdArg);
+      const replacementTasks = replacementTasksArg as unknown[];
       logger.info(`replace-task: "${taskId}" with ${replacementTasks.length} replacement(s)`, { module: 'ipc' });
       try {
         const envelope = makeEnvelope('replace-task', 'ui', 'task', {
@@ -1454,7 +1875,7 @@ function setupGuiMode(): void {
         const result = await commandService.replaceTask(envelope);
         if (!result.ok) throw new Error(result.error.message);
         const runnable = result.data.filter((t) => t.status === 'running');
-        await taskExecutor.executeTasks(runnable);
+        await requireTaskExecutor().executeTasks(runnable);
         return result.data;
       } catch (err) {
         logger.error(`replace-task failed: ${err}`, { module: 'ipc' });
@@ -1572,6 +1993,7 @@ function setupGuiMode(): void {
 
     try {
       if (apiServer) await apiServer.close().catch(() => {});
+      mutationPipe?.dispose();
       if (dbPollInterval) clearInterval(dbPollInterval);
       if (activityPollInterval) clearInterval(activityPollInterval);
       if (uiPerfLogInterval) clearInterval(uiPerfLogInterval);

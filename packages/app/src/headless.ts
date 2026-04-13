@@ -104,7 +104,7 @@ function buildHeadlessApiCancelHooks(
   };
 }
 
-function createHeadlessExecutor(
+export function createHeadlessExecutor(
   deps: HeadlessDeps,
   callbackOverrides?: Partial<ConstructorParameters<typeof TaskRunner>[0]['callbacks']>,
 ): TaskRunner {
@@ -171,7 +171,7 @@ export function wireHeadlessAutoFix(
   };
 }
 
-function wireHeadlessApproveHook(deps: HeadlessDeps, te: TaskRunner): void {
+export function wireHeadlessApproveHook(deps: HeadlessDeps, te: TaskRunner): void {
   deps.orchestrator.setBeforeApproveHook(async (task) => {
     if (task.config.isMergeNode && task.config.workflowId) {
       const workflow = deps.persistence.loadWorkflow(task.config.workflowId);
