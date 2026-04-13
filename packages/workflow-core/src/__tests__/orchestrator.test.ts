@@ -422,6 +422,55 @@ describe('Orchestrator', () => {
       expect(repro.getTask(midId)?.status).toBe('pending');
     });
 
+    it('ignores a stale completed response after recreateWorkflow clears the selected attempt before rerun', () => {
+      const reproPersistence = new InMemoryPersistence();
+      const reproBus = new InMemoryBus();
+      const repro = new Orchestrator({
+        persistence: reproPersistence,
+        messageBus: reproBus,
+        maxConcurrency: 1,
+      });
+
+      repro.loadPlan({
+        name: 'stale-late-complete-recreate-before-rerun',
+        onFinish: 'none',
+        tasks: [
+          { id: 'prepare', description: 'Prepare', command: 'echo prepare' },
+          { id: 'mid', description: 'Mid', command: 'echo mid', dependencies: ['prepare'] },
+          { id: 'late', description: 'Late', command: 'sleep 5', dependencies: ['mid'] },
+        ],
+      });
+
+      const workflowId = repro.getWorkflowIds()[0]!;
+      const prepareId = sid(repro, 0, 'prepare');
+      const midId = sid(repro, 0, 'mid');
+      const lateId = sid(repro, 0, 'late');
+
+      repro.startExecution();
+      repro.handleWorkerResponse(makeResponse({ actionId: prepareId, status: 'completed', outputs: { exitCode: 0 } }));
+      repro.handleWorkerResponse(makeResponse({ actionId: midId, status: 'completed', outputs: { exitCode: 0 } }));
+      expect(repro.getTask(lateId)?.status).toBe('running');
+
+      const oldLateAttemptId = repro.getTask(lateId)?.execution.selectedAttemptId;
+      expect(oldLateAttemptId).toBeTruthy();
+
+      repro.recreateWorkflow(workflowId);
+      expect(repro.getTask(lateId)?.status).toBe('pending');
+      expect(repro.getTask(lateId)?.execution.selectedAttemptId).toBeUndefined();
+
+      repro.handleWorkerResponse(
+        makeResponse({
+          actionId: lateId,
+          attemptId: oldLateAttemptId,
+          executionGeneration: 0,
+          status: 'completed',
+          outputs: { exitCode: 0 },
+        }),
+      );
+
+      expect(repro.getTask(lateId)?.status).toBe('pending');
+    });
+
     it('ignores a stale failed response after recreateWorkflow resets descendants and does not trigger auto-fix', () => {
       const reproPersistence = new InMemoryPersistence();
       const reproBus = new InMemoryBus();
@@ -3339,7 +3388,7 @@ describe('Orchestrator', () => {
       expect(orchestrator.getTask('C')!.status).toBe('pending');
     });
 
-    it('warns when response arrives for already-terminal task', () => {
+    it('ignores responses when they arrive for a non-executable task', () => {
       orchestrator.loadPlan({
         name: 'terminal-warn-test',
         tasks: [
@@ -3357,8 +3406,9 @@ describe('Orchestrator', () => {
         makeResponse({ actionId: 'A', status: 'completed', outputs: { exitCode: 0 } }),
       );
 
+      expect(orchestrator.getTask('A')!.status).toBe('failed');
       expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('received "completed" for already-"failed" task "A"'),
+        expect.stringContaining('ignoring "completed" for non-executable task "A" (status=failed)'),
       );
     });
 
