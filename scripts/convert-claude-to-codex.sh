@@ -41,20 +41,26 @@ if [ "$(uname)" = "Linux" ]; then
   export LIBGL_ALWAYS_SOFTWARE=1
 fi
 
-# Helper: run a headless CLI command (stderr to /dev/null)
-headless() {
+# Helper: read-only query command (stderr hidden to keep parsing clean)
+headless_query() {
   # shellcheck disable=SC2086
   "$ELECTRON" "$MAIN" $SANDBOX_FLAG --headless "$@" 2>/dev/null
 }
 
+# Helper: mutating command (stderr preserved for debugging real failures)
+headless_mutation() {
+  # shellcheck disable=SC2086
+  INVOKER_HEADLESS_STANDALONE=1 "$ELECTRON" "$MAIN" $SANDBOX_FLAG --headless "$@"
+}
+
 # Helper: extract workflow IDs (filter Electron init noise)
 headless_workflow_ids() {
-  headless "$@" | grep -E '^wf-[0-9]+-[0-9]+$' || true
+  headless_query "$@" | grep -E '^wf-[0-9]+-[0-9]+$' || true
 }
 
 # Helper: extract JSONL objects (filter Electron init noise)
 headless_jsonl() {
-  headless "$@" | grep '^{' || true
+  headless_query "$@" | grep '^{' || true
 }
 
 # Get workflow IDs
@@ -118,7 +124,7 @@ while IFS= read -r WF_ID; do
       echo "         (dry-run) would run: set agent $TASK_ID codex"
       SKIPPED=$((SKIPPED + 1))
     else
-      if headless set agent "$TASK_ID" codex 2>&1; then
+      if headless_mutation set agent "$TASK_ID" codex 2>&1; then
         echo "         OK"
         CONVERTED=$((CONVERTED + 1))
       else

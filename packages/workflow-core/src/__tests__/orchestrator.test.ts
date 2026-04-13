@@ -1827,6 +1827,41 @@ describe('Orchestrator', () => {
   // ── Auto-Fix ────────────────────────────────────────────
 
   describe('auto-fix via synthetic spawn_experiments', () => {
+    it('falls back to default auto-fix retries for legacy failed tasks missing per-task config', () => {
+      const hydratePersistence = new InMemoryPersistence();
+      const hydrateBus = new InMemoryBus();
+
+      hydratePersistence.saveTask('wf-legacy', {
+        id: 't1',
+        description: 'Legacy failed task',
+        status: 'failed',
+        dependencies: [],
+        createdAt: new Date(),
+        config: {},
+        execution: {
+          exitCode: 1,
+          error: 'boom',
+          autoFixAttempts: 2,
+        },
+      });
+
+      const legacyOrchestrator = new Orchestrator({
+        persistence: hydratePersistence,
+        messageBus: hydrateBus,
+        defaultAutoFixRetries: 3,
+      });
+
+      legacyOrchestrator.syncFromDb('wf-legacy');
+
+      expect(legacyOrchestrator.getAutoFixRetryBudget('t1')).toBe(3);
+      expect(legacyOrchestrator.shouldAutoFix('t1')).toBe(true);
+
+      hydratePersistence.updateTask('t1', { execution: { autoFixAttempts: 3 } });
+      legacyOrchestrator.syncFromDb('wf-legacy');
+
+      expect(legacyOrchestrator.shouldAutoFix('t1')).toBe(false);
+    });
+
     it('failed autoFix task spawns fix experiments instead of failing', () => {
       orchestrator.loadPlan({
         name: 'autofix-test',

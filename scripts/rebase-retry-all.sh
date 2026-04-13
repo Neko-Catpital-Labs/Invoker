@@ -66,11 +66,31 @@ fi
 # Helper functions
 # Read-only queries remain quiet; mutating commands run in standalone owner mode
 # and preserve stderr so operational failures are visible.
+run_with_optional_timeout() {
+  local seconds="$1"
+  shift
+  if [ "$seconds" -le 0 ]; then
+    "$@"
+    return $?
+  fi
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$seconds" "$@"
+    return $?
+  fi
+  if command -v gtimeout >/dev/null 2>&1; then
+    gtimeout "$seconds" "$@"
+    return $?
+  fi
+  echo "INFO: timeout(1) not found; running without per-command timeout." >&2
+  "$@"
+}
+
 headless_query() {
   "$ELECTRON" "$MAIN" $SANDBOX_FLAG --headless "$@" 2>/dev/null
 }
 
 headless_mutation() {
+  # shellcheck disable=SC2086
   INVOKER_HEADLESS_STANDALONE=1 "$ELECTRON" "$MAIN" $SANDBOX_FLAG --headless "$@"
 }
 
@@ -111,13 +131,8 @@ resume_stale_workflow() {
 
   while [ "$attempt" -le "$STALE_RECOVERY_RETRIES" ]; do
     set +e
-    if [ "${INVOKER_HEADLESS_STANDALONE:-0}" = "1" ]; then
-      cmd_out="$(env INVOKER_HEADLESS_STANDALONE=1 "$ELECTRON" "$MAIN" $SANDBOX_FLAG --headless resume "$stale_wf" 2>&1)"
-      cmd_status=$?
-    else
-      cmd_out="$("$ELECTRON" "$MAIN" $SANDBOX_FLAG --headless resume "$stale_wf" 2>&1)"
-      cmd_status=$?
-    fi
+    cmd_out="$(headless_mutation resume "$stale_wf" 2>&1)"
+    cmd_status=$?
     set -e
 
     if [ "$cmd_status" -eq 0 ]; then
@@ -158,17 +173,15 @@ if [ -z "$WORKFLOW_IDS" ]; then
   exit 0
 fi
 
-# Standalone mode is single-writer: do not fan out concurrent standalone writers
-# and do not kill a standalone mutation mid-flight (it can strand tasks as running).
-if [ "${INVOKER_HEADLESS_STANDALONE:-0}" = "1" ]; then
-  if [ "$PARALLELISM" -ne 1 ]; then
-    echo "INFO: standalone mode detected, forcing --parallel 1 (single DB writer)." >&2
-    PARALLELISM=1
-  fi
-  if [ "${COMMAND_TIMEOUT_SECONDS:-0}" -gt 0 ]; then
-    echo "INFO: standalone mode detected, disabling per-command timeout to avoid orphaned running tasks." >&2
-    COMMAND_TIMEOUT_SECONDS=0
-  fi
+# This script runs mutations in standalone mode, which is single-writer.
+# Do not fan out concurrent writers and do not timeout-kill the owner process.
+if [ "$PARALLELISM" -ne 1 ]; then
+  echo "INFO: standalone mode detected, forcing --parallel 1 (single DB writer)." >&2
+  PARALLELISM=1
+fi
+if [ "${COMMAND_TIMEOUT_SECONDS:-0}" -gt 0 ]; then
+  echo "INFO: standalone mode detected, disabling per-command timeout to avoid orphaned running tasks." >&2
+  COMMAND_TIMEOUT_SECONDS=0
 fi
 
 if [ "$RECOVER_STALE" = true ]; then
@@ -228,14 +241,14 @@ process_one_workflow() {
   if [ "$COMMAND_TIMEOUT_SECONDS" -gt 0 ]; then
     set +e
     cmd_out="$(
-      timeout "$COMMAND_TIMEOUT_SECONDS" "$ELECTRON" "$MAIN" $SANDBOX_FLAG --headless rebase "$task_id" 2>&1
+      run_with_optional_timeout "$COMMAND_TIMEOUT_SECONDS" env INVOKER_HEADLESS_STANDALONE=1 "$ELECTRON" "$MAIN" $SANDBOX_FLAG --headless rebase "$task_id" 2>&1
     )"
     cmd_status=$?
     set -e
   else
     set +e
     cmd_out="$(
-      "$ELECTRON" "$MAIN" $SANDBOX_FLAG --headless rebase "$task_id" 2>&1
+      headless_mutation rebase "$task_id" 2>&1
     )"
     cmd_status=$?
     set -e

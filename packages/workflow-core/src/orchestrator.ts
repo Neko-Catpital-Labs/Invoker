@@ -347,6 +347,8 @@ export interface OrchestratorConfig {
   /** Optional; defaults to an adapter wrapping `persistence`. */
   taskRepository?: TaskRepository;
   maxConcurrency?: number;
+  /** Default auto-fix retry budget for legacy tasks missing persisted per-task config. */
+  defaultAutoFixRetries?: number;
   /**
    * Rules that validate task execution environment against command patterns.
    * When loading a plan, the orchestrator validates that tasks with commands matching
@@ -366,6 +368,7 @@ export class Orchestrator {
   private readonly taskRepository: TaskRepository;
   private readonly maxConcurrency: number;
   private readonly executorRoutingRules: ExecutorRoutingRule[];
+  private readonly defaultAutoFixRetries: number;
 
   private activeWorkflowIds = new Set<string>();
   private deferredTaskIds = new Set<string>();
@@ -377,6 +380,7 @@ export class Orchestrator {
     this.messageBus = config.messageBus;
     this.taskRepository = config.taskRepository ?? taskRepositoryFromPersistence(config.persistence);
     this.executorRoutingRules = config.executorRoutingRules ?? [];
+    this.defaultAutoFixRetries = Math.min(Math.max(0, Math.floor(config.defaultAutoFixRetries ?? 0)), 10);
 
     this.stateMachine = new TaskStateMachine(new ActionGraph());
     this.responseHandler = new ResponseHandler();
@@ -1941,11 +1945,20 @@ export class Orchestrator {
     return this.stateGetTask(taskId);
   }
 
+  getAutoFixRetryBudget(taskId: string): number {
+    const task = this.stateGetTask(taskId);
+    if (!task) return 0;
+    if (task.config.autoFixRetries !== undefined) {
+      return Math.max(0, task.config.autoFixRetries);
+    }
+    return this.defaultAutoFixRetries;
+  }
+
   shouldAutoFix(taskId: string): boolean {
     const task = this.stateGetTask(taskId);
     if (!task) return false;
     if (task.status !== 'failed') return false;
-    const max = task.config.autoFixRetries ?? 0;
+    const max = this.getAutoFixRetryBudget(taskId);
     if (max <= 0) return false;
     return (task.execution.autoFixAttempts ?? 0) < max;
   }

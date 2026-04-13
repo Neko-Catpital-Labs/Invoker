@@ -259,7 +259,7 @@ export async function autoFixOnFailure(
   if (!task || task.status !== 'failed') return;
 
   const attempts = (task.execution.autoFixAttempts ?? 0) + 1;
-  const max = task.config.autoFixRetries ?? 0;
+  const max = orchestrator.getAutoFixRetryBudget(taskId);
   console.log(`[auto-fix] "${taskId}" attempt ${attempts}/${max}`);
 
   // Increment counter FIRST (before any delta can re-trigger)
