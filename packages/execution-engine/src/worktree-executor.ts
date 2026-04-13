@@ -158,6 +158,7 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
         const response: WorkResponse = {
           requestId: request.requestId,
           actionId: request.actionId,
+          executionGeneration: request.executionGeneration,
           status: 'needs_input',
           outputs: { summary: 'Select winning experiment' },
         };
@@ -206,6 +207,7 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
           const response: WorkResponse = {
             requestId: request.requestId,
             actionId: request.actionId,
+            executionGeneration: request.executionGeneration,
             status: 'failed',
             outputs: {
               exitCode: 1,
@@ -277,6 +279,7 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
       const response: WorkResponse = {
         requestId: request.requestId,
         actionId: request.actionId,
+        executionGeneration: request.executionGeneration,
         status: 'failed',
         outputs: {
           exitCode: 1,

@@ -25,6 +25,10 @@ export function validateWorkRequest(req: unknown): ValidationResult {
     return { valid: false, error: 'actionId is required and must be a non-empty string' };
   }
 
+  if (!Number.isInteger(r.executionGeneration) || (r.executionGeneration as number) < 0) {
+    return { valid: false, error: 'executionGeneration is required and must be a non-negative integer' };
+  }
+
   const validTypes = ['command', 'ai_task', 'reconciliation'];
   if (!validTypes.includes(r.actionType as string)) {
     return { valid: false, error: `actionType must be one of: ${validTypes.join(', ')}` };
@@ -54,6 +58,10 @@ export function validateWorkResponse(res: unknown): ValidationResult {
 
   if (typeof r.actionId !== 'string' || r.actionId.length === 0) {
     return { valid: false, error: 'actionId is required and must be a non-empty string' };
+  }
+
+  if (!Number.isInteger(r.executionGeneration) || (r.executionGeneration as number) < 0) {
+    return { valid: false, error: 'executionGeneration is required and must be a non-negative integer' };
   }
 
   const validStatuses = ['completed', 'failed', 'needs_input', 'spawn_experiments', 'select_experiment'];

@@ -9,6 +9,7 @@ export function reconciliationNeedsInputWorkResponse(reconTaskId: string): WorkR
   return {
     requestId: `req-${reconTaskId}-ni`,
     actionId: reconTaskId,
+    executionGeneration: 0,
     status: 'needs_input',
     outputs: { exitCode: 0, summary: 'Select experiment variant' },
   };

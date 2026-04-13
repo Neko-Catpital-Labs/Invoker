@@ -50,6 +50,7 @@ export interface WorkRequestInputs {
 export interface WorkRequest {
   requestId: string;
   actionId: string;
+  executionGeneration: number;
   actionType: ActionType;
   inputs: WorkRequestInputs;
   callbackUrl: string;
@@ -105,6 +106,7 @@ export interface DagMutation {
 export interface WorkResponse {
   requestId: string;
   actionId: string;
+  executionGeneration: number;
   status: ResponseStatus;
   outputs: WorkResponseOutputs;
   dagMutation?: DagMutation;
@@ -124,6 +126,7 @@ export interface ExperimentResult {
 export function createWorkRequest(
   requestId: string,
   actionId: string,
+  executionGeneration: number,
   actionType: ActionType,
   inputs: WorkRequestInputs,
   callbackUrl: string,
@@ -131,6 +134,7 @@ export function createWorkRequest(
   return {
     requestId,
     actionId,
+    executionGeneration,
     actionType,
     inputs,
     callbackUrl,

@@ -28,6 +28,7 @@ class MockExecutor implements Executor {
         cb({
           requestId: request.requestId,
           actionId: request.actionId,
+          executionGeneration: request.executionGeneration,
           status: 'completed',
           outputs: { exitCode: 0 },
         });
@@ -137,6 +138,7 @@ export function createTestHarness(opts?: {
       const response: WorkResponse = {
         requestId: `complete-${id}`,
         actionId: id,
+        executionGeneration: task.execution.generation ?? 0,
         status: 'completed',
         outputs: { exitCode: 0, ...extras },
       };
@@ -150,6 +152,7 @@ export function createTestHarness(opts?: {
       const response: WorkResponse = {
         requestId: `fail-${id}`,
         actionId: id,
+        executionGeneration: task.execution.generation ?? 0,
         status: 'failed',
         outputs: { exitCode: 1, error: error ?? 'task failed' },
       };

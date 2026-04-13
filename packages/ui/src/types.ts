@@ -79,6 +79,7 @@ export interface TaskConfig {
 // ── Task Execution (runtime fields) ────────────────────────
 
 export interface TaskExecution {
+  readonly generation?: number;
   readonly blockedBy?: string;
   readonly inputPrompt?: string;
   readonly exitCode?: number;

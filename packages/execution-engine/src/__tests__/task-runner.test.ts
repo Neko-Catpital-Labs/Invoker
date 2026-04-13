@@ -30,6 +30,7 @@ function createAutoCompleteExecutor() {
           completeCallback({
             requestId: request.requestId,
             actionId: request.actionId,
+            executionGeneration: request.executionGeneration,
             status: 'completed',
             outputs: { exitCode: 0 },
           });
@@ -95,6 +96,74 @@ afterEach(() => {
 });
 
 describe('TaskRunner', () => {
+  it('sends executionGeneration in work requests and preserves it in responses', async () => {
+    const handleWorkerResponse = vi.fn();
+    let seenRequest: any;
+    let completeCallback: ((response: WorkResponse) => void) | undefined;
+    const executorImpl = {
+      type: 'worktree',
+      start: vi.fn().mockImplementation(async (request: any) => {
+        seenRequest = request;
+        return {
+          executionId: `exec-${request.actionId}`,
+          taskId: request.actionId,
+          workspacePath: '/tmp/mock-worktree',
+          branch: `experiment/${request.actionId}-mock`,
+        };
+      }),
+      onComplete: vi.fn().mockImplementation((_handle: any, cb: any) => {
+        completeCallback = cb;
+        return () => {};
+      }),
+      onOutput: vi.fn().mockReturnValue(() => {}),
+      onHeartbeat: vi.fn().mockReturnValue(() => {}),
+      kill: vi.fn(),
+      destroyAll: vi.fn(),
+    };
+    const registry = {
+      getDefault: () => executorImpl,
+      get: () => executorImpl,
+      getAll: () => [executorImpl],
+    };
+    const orchestrator = {
+      getTask: () => undefined,
+      handleWorkerResponse,
+    };
+
+    const runner = new TaskRunner({
+      orchestrator: orchestrator as any,
+      persistence: { updateTask: vi.fn() } as any,
+      executorRegistry: registry as any,
+      cwd: '/tmp',
+    });
+
+    const task = makeTask({
+      id: 'gen-task',
+      status: 'running',
+      config: { command: 'echo hi' },
+      execution: { generation: 7 },
+    });
+
+    const done = runner.executeTask(task);
+    await vi.waitFor(() => expect(seenRequest?.executionGeneration).toBe(7));
+    completeCallback?.({
+      requestId: seenRequest.requestId,
+      actionId: task.id,
+      executionGeneration: seenRequest.executionGeneration,
+      status: 'completed',
+      outputs: { exitCode: 0 },
+    });
+    await done;
+
+    expect(handleWorkerResponse).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actionId: task.id,
+        executionGeneration: 7,
+        status: 'completed',
+      }),
+    );
+  });
+
   describe('collectTransitiveNonMergeTaskIds', () => {
     it('walks backwards from merge deps to include intermediate tasks', () => {
       const tasks = new Map<string, TaskState>();

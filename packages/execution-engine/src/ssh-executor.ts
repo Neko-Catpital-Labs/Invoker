@@ -245,6 +245,7 @@ export class SshExecutor extends BaseExecutor<SshEntry> {
       const response: WorkResponse = {
         requestId: request.requestId,
         actionId: request.actionId,
+        executionGeneration: request.executionGeneration,
         status: 'completed',
         outputs: { exitCode: 0 },
       };
@@ -504,6 +505,7 @@ echo ${payloadB64} | base64 -d | bash -se
       const response: WorkResponse = {
         requestId: request.requestId,
         actionId: request.actionId,
+        executionGeneration: request.executionGeneration,
         status: 'failed',
         outputs: {
           exitCode: 1,
@@ -592,6 +594,7 @@ echo ${payloadB64} | base64 -d | bash -se
         const response: WorkResponse = {
           requestId: request.requestId,
           actionId: request.actionId,
+          executionGeneration: request.executionGeneration,
           status,
           outputs: {
             exitCode: finalExitCode,

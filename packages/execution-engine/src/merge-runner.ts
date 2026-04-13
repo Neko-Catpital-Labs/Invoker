@@ -359,6 +359,7 @@ export async function executeMergeNodeImpl(
         const manualResponse: WorkResponse = {
           requestId: `merge-${task.id}`,
           actionId: task.id,
+          executionGeneration: task.execution.generation ?? 0,
           status: 'completed',
           outputs: { exitCode: 0 },
         };
@@ -405,6 +406,7 @@ export async function executeMergeNodeImpl(
         const prResponse: WorkResponse = {
           requestId: `merge-${task.id}`,
           actionId: task.id,
+          executionGeneration: task.execution.generation ?? 0,
           status: 'completed',
           outputs: { exitCode: 0 },
         };
@@ -435,6 +437,7 @@ export async function executeMergeNodeImpl(
       response = {
         requestId: `merge-${task.id}`,
         actionId: task.id,
+        executionGeneration: task.execution.generation ?? 0,
         status: 'completed',
         outputs: { exitCode: 0 },
       };
@@ -442,6 +445,7 @@ export async function executeMergeNodeImpl(
       response = {
         requestId: `merge-${task.id}`,
         actionId: task.id,
+        executionGeneration: task.execution.generation ?? 0,
         status: 'failed',
         outputs: {
           exitCode: 1,
@@ -463,6 +467,7 @@ export async function executeMergeNodeImpl(
       const gateResponse: WorkResponse = {
         requestId: `merge-${task.id}`,
         actionId: task.id,
+        executionGeneration: task.execution.generation ?? 0,
         status: 'completed',
         outputs: { exitCode: 0 },
       };
@@ -477,6 +482,7 @@ export async function executeMergeNodeImpl(
     response = {
       requestId: `merge-${task.id}`,
       actionId: task.id,
+      executionGeneration: task.execution.generation ?? 0,
       status: 'completed',
       outputs: { exitCode: 0 },
     };
@@ -867,6 +873,7 @@ export async function publishAfterFixImpl(
     const failedResponse: WorkResponse = {
       requestId: `postfix-${task.id}`,
       actionId: task.id,
+      executionGeneration: task.execution.generation ?? 0,
       status: 'failed',
       outputs: { exitCode: 1, error: `Post-fix PR prep failed: ${errorMsg}` },
     };

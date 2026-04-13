@@ -86,6 +86,7 @@ export interface ExternalDependency {
 // Never copied when cloning. Reset on restart.
 
 export interface TaskExecution {
+  readonly generation?: number;
   readonly blockedBy?: string;
   readonly inputPrompt?: string;
   readonly exitCode?: number;
@@ -183,7 +184,7 @@ export function createTaskState(
     dependencies: [...dependencies],
     createdAt: new Date(),
     config: { ...options },
-    execution: {},
+    execution: { generation: 0 },
   };
 }
 

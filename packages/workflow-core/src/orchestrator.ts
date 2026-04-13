@@ -543,12 +543,13 @@ export class Orchestrator {
         continue;
       }
 
-      this.writeAndSync(id, resetChanges);
-      this.persistence.logEvent?.(id, 'task.pending', resetChanges);
+      const changesWithGeneration = this.withBumpedExecutionGeneration(current, resetChanges);
+      this.writeAndSync(id, changesWithGeneration);
+      this.persistence.logEvent?.(id, 'task.pending', changesWithGeneration);
       this.messageBus.publish(TASK_DELTA_CHANNEL, {
         type: 'updated',
         taskId: id,
-        changes: resetChanges,
+        changes: changesWithGeneration,
       });
 
       const wasRunning = current.status === 'running' || current.status === 'fixing_with_ai';
@@ -564,6 +565,20 @@ export class Orchestrator {
       .map((t) => t.id)
       .filter((id) => affectedSet.has(id));
     return { affectedIds, readyIds };
+  }
+
+  private getExecutionGeneration(task: TaskState | undefined): number {
+    return task?.execution.generation ?? 0;
+  }
+
+  private withBumpedExecutionGeneration(task: TaskState, changes: TaskStateChanges): TaskStateChanges {
+    return {
+      ...changes,
+      execution: {
+        ...changes.execution,
+        generation: this.getExecutionGeneration(task) + 1,
+      },
+    };
   }
 
   // ── Commands ──────────────────────────────────────────────
@@ -774,8 +789,18 @@ export class Orchestrator {
     {
       const earlyTask = this.stateGetTask(response.actionId);
       if (earlyTask?.status === 'stale') {
-        this.scheduler.completeJob(earlyTask.id);
         return [];
+      }
+      if (earlyTask) {
+        const activeGeneration = this.getExecutionGeneration(earlyTask);
+        if (response.executionGeneration !== activeGeneration) {
+          console.warn(
+            `[worker-response] STALE_GENERATION_REJECTED taskId=${earlyTask.id} ` +
+              `responseGeneration=${response.executionGeneration} activeGeneration=${activeGeneration} ` +
+              `workerResponseStatus=${response.status}`,
+          );
+          return [];
+        }
       }
       if (earlyTask && (earlyTask.status === 'failed' || earlyTask.status === 'completed')) {
         console.warn(`[orchestrator] handleWorkerResponse: received "${response.status}" for already-"${earlyTask.status}" task "${response.actionId}"`);
@@ -830,11 +855,11 @@ export class Orchestrator {
     }
 
     const canonicalTaskId = task.id;
-
     if (process.env.NODE_ENV !== 'test') {
       console.log(
         `[worker-response] write path parsedType=${parsed.type} taskId=${canonicalTaskId} ` +
-          `graphStatusBefore=${task.status} workerResponseStatus=${response.status}`,
+          `graphStatusBefore=${task.status} workerResponseStatus=${response.status} ` +
+          `executionGeneration=${response.executionGeneration}`,
       );
     }
 
@@ -1425,9 +1450,10 @@ export class Orchestrator {
     for (const id of toResetIds) {
       const current = this.stateGetTask(id);
       if (!current) continue;
-      this.writeAndSync(id, resetChanges);
-      this.persistence.logEvent?.(id, 'task.pending', resetChanges);
-      this.messageBus.publish(TASK_DELTA_CHANNEL, { type: 'updated', taskId: id, changes: resetChanges });
+      const changesWithGeneration = this.withBumpedExecutionGeneration(current, resetChanges);
+      this.writeAndSync(id, changesWithGeneration);
+      this.persistence.logEvent?.(id, 'task.pending', changesWithGeneration);
+      this.messageBus.publish(TASK_DELTA_CHANNEL, { type: 'updated', taskId: id, changes: changesWithGeneration });
 
       const wasRunning = current.status === 'running' || current.status === 'fixing_with_ai';
       this.deferredTaskIds.delete(id);
@@ -1500,12 +1526,13 @@ export class Orchestrator {
       console.log(
         `[agent-session-trace] recreateWorkflow: before writeAndSync task="${task.id}" agentSessionId=${prevSess ?? 'null'} containerId=${prevCt ?? 'null'}`,
       );
-      const after = this.writeAndSync(task.id, resetChanges);
+      const changesWithGeneration = this.withBumpedExecutionGeneration(task, resetChanges);
+      const after = this.writeAndSync(task.id, changesWithGeneration);
       console.log(
         `[agent-session-trace] recreateWorkflow: after writeAndSync task="${task.id}" agentSessionId=${after.execution.agentSessionId ?? 'null'} containerId=${after.execution.containerId ?? 'null'}`,
       );
-      const delta: TaskDelta = { type: 'updated', taskId: task.id, changes: resetChanges };
-      this.persistence.logEvent?.(task.id, 'task.pending', resetChanges);
+      const delta: TaskDelta = { type: 'updated', taskId: task.id, changes: changesWithGeneration };
+      this.persistence.logEvent?.(task.id, 'task.pending', changesWithGeneration);
       this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
       this.scheduler.completeJob(task.id);
     }
@@ -2607,6 +2634,7 @@ export class Orchestrator {
     return {
       requestId: `autofix-${task.id}`,
       actionId: task.id,
+      executionGeneration: this.getExecutionGeneration(task),
       status: 'spawn_experiments',
       outputs: { exitCode: 0 },
       dagMutation: {
@@ -2785,7 +2813,7 @@ export class Orchestrator {
       const now = new Date();
       const changes: TaskStateChanges = {
         status: 'running',
-        execution: { startedAt: now, lastHeartbeatAt: now },
+        execution: { startedAt: now, lastHeartbeatAt: now, generation: this.getExecutionGeneration(task) },
       };
       const updated = this.writeAndSync(job.taskId, changes);
       started.push(updated);
