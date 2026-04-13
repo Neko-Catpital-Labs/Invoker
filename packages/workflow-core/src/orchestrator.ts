@@ -835,13 +835,15 @@ export class Orchestrator {
       }
       if (earlyTask) {
         const activeAttemptId = earlyTask.execution.selectedAttemptId;
-        if (response.attemptId && activeAttemptId && response.attemptId !== activeAttemptId) {
-          console.warn(
-            `[worker-response] STALE_ATTEMPT_REJECTED taskId=${earlyTask.id} ` +
-              `responseAttemptId=${response.attemptId} activeAttemptId=${activeAttemptId} ` +
-              `workerResponseStatus=${response.status}`,
-          );
-          return [];
+        if (response.attemptId) {
+          if (!activeAttemptId || response.attemptId !== activeAttemptId) {
+            console.warn(
+              `[worker-response] STALE_ATTEMPT_REJECTED taskId=${earlyTask.id} ` +
+                `responseAttemptId=${response.attemptId} activeAttemptId=${activeAttemptId ?? 'none'} ` +
+                `workerResponseStatus=${response.status}`,
+            );
+            return [];
+          }
         }
         const activeGeneration = this.getExecutionGeneration(earlyTask);
         if (!response.attemptId && response.executionGeneration !== activeGeneration) {
@@ -853,8 +855,15 @@ export class Orchestrator {
           return [];
         }
       }
-      if (earlyTask && (earlyTask.status === 'failed' || earlyTask.status === 'completed')) {
-        console.warn(`[orchestrator] handleWorkerResponse: received "${response.status}" for already-"${earlyTask.status}" task "${response.actionId}"`);
+      if (earlyTask) {
+        const executableStatuses = new Set(['running', 'fixing_with_ai']);
+        if (!executableStatuses.has(earlyTask.status)) {
+          console.warn(
+            `[orchestrator] handleWorkerResponse: ignoring "${response.status}" for non-executable ` +
+              `task "${response.actionId}" (status=${earlyTask.status})`,
+          );
+          return [];
+        }
       }
     }
 
