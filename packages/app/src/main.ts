@@ -102,7 +102,7 @@ import { openExternalTerminalForTask } from './open-terminal-for-task.js';
 import { createRequire } from 'node:module';
 import { acquireDbWriterLock, type DbWriterLockResult } from './db-writer-lock.js';
 import { applyDelta } from './delta-merge.js';
-import { MutationPipe, createMutationCommand, type MutationCommand } from './mutation-pipe.js';
+import { MutationPipe, createMutationCommand, type MutationCommand, type MutationCommandScope } from './mutation-pipe.js';
 
 // ── Detect headless mode ─────────────────────────────────────
 
@@ -167,6 +167,127 @@ interface HeadlessExecMutationPayload {
   args: string[];
   waitForApproval?: boolean;
   noTrack?: boolean;
+}
+
+function workflowScope(workflowId: string | undefined): MutationCommandScope {
+  return workflowId ? { type: 'workflow', workflowId } : { type: 'global' };
+}
+
+function workflowIdFromTaskId(taskId: string): string | undefined {
+  if (taskId.startsWith('wf-') && taskId.includes('/')) {
+    return taskId.split('/')[0];
+  }
+  const liveTask = orchestrator?.getTask(taskId);
+  if (liveTask?.config.workflowId) return liveTask.config.workflowId;
+  for (const workflow of persistence?.listWorkflows?.() ?? []) {
+    const match = persistence.loadTasks(workflow.id).find((task) => task.id === taskId);
+    if (match?.config.workflowId) return match.config.workflowId;
+  }
+  return undefined;
+}
+
+function classifyHeadlessExecScope(args: string[]): MutationCommandScope {
+  const command = args[0];
+  const arg1 = args[1];
+  switch (command) {
+    case 'delete-all':
+    case 'stop':
+    case 'clear':
+      return { type: 'global' };
+    case 'delete':
+    case 'delete-workflow':
+    case 'cancel-workflow':
+    case 'recreate':
+      return workflowScope(arg1);
+    case 'restart':
+      if (arg1?.startsWith('wf-') && !arg1.includes('/')) {
+        return workflowScope(arg1);
+      }
+      return workflowScope(arg1 ? workflowIdFromTaskId(arg1) : undefined);
+    case 'recreate-task':
+    case 'approve':
+    case 'reject':
+    case 'input':
+    case 'select':
+    case 'cancel':
+    case 'fix':
+    case 'resolve-conflict':
+      return workflowScope(arg1 ? workflowIdFromTaskId(arg1) : undefined);
+    case 'rebase':
+      return workflowScope(arg1 ? workflowIdFromTaskId(arg1) : undefined);
+    case 'set': {
+      const subCommand = args[1];
+      switch (subCommand) {
+        case 'merge-mode':
+          return workflowScope(args[2]);
+        case 'command':
+        case 'executor':
+        case 'agent':
+        case 'gate-policy':
+          return workflowScope(args[2] ? workflowIdFromTaskId(args[2]) : undefined);
+        default:
+          return { type: 'global' };
+      }
+    }
+    default:
+      return { type: 'global' };
+  }
+}
+
+function classifyGuiMutationScope(payload: GuiMutationPayload): MutationCommandScope {
+  const [arg0] = payload.args;
+  switch (payload.channel) {
+    case 'invoker:delete-all-workflows':
+    case 'invoker:load-plan':
+    case 'invoker:start':
+    case 'invoker:resume-workflow':
+    case 'invoker:stop':
+    case 'invoker:clear':
+    case 'invoker:check-pr-statuses':
+    case 'invoker:check-pr-status':
+      return { type: 'global' };
+    case 'invoker:delete-workflow':
+    case 'invoker:cancel-workflow':
+    case 'invoker:recreate-workflow':
+    case 'invoker:retry-workflow':
+    case 'invoker:set-merge-branch':
+    case 'invoker:set-merge-mode':
+    case 'invoker:approve-merge':
+      return workflowScope(String(arg0));
+    case 'invoker:rebase-and-retry':
+    case 'invoker:recreate-task':
+    case 'invoker:restart-task':
+    case 'invoker:cancel-task':
+    case 'invoker:provide-input':
+    case 'invoker:approve':
+    case 'invoker:reject':
+    case 'invoker:select-experiment':
+    case 'invoker:resolve-conflict':
+    case 'invoker:fix-with-agent':
+    case 'invoker:edit-task-command':
+    case 'invoker:edit-task-type':
+    case 'invoker:edit-task-agent':
+    case 'invoker:set-task-external-gate-policies':
+    case 'invoker:replace-task':
+      return workflowScope(workflowIdFromTaskId(String(arg0)));
+    default:
+      return { type: 'global' };
+  }
+}
+
+function classifyMutationScope(kind: string, payload: unknown): MutationCommandScope {
+  switch (kind) {
+    case 'headless.run':
+      return { type: 'global' };
+    case 'headless.resume':
+      return workflowScope((payload as HeadlessResumeMutationPayload).workflowId);
+    case 'headless.exec':
+      return classifyHeadlessExecScope((payload as HeadlessExecMutationPayload).args);
+    case 'gui.ipc':
+      return classifyGuiMutationScope(payload as GuiMutationPayload);
+    default:
+      return { type: 'global' };
+  }
 }
 
 // Root logger: created early in initServices() once persistence is available.
@@ -610,11 +731,15 @@ if (isHeadless) {
           });
           messageBus.onRequest('headless.run', async (req: unknown) => {
             const { planPath } = req as { planPath: string };
-            return standaloneMutationPipe.submit(createMutationCommand('headless', 'headless.run', { planPath }));
+            return standaloneMutationPipe.submit(
+              createMutationCommand('headless', 'headless.run', { planPath }, classifyMutationScope('headless.run', { planPath })),
+            );
           });
           messageBus.onRequest('headless.resume', async (req: unknown) => {
             const { workflowId } = req as { workflowId: string };
-            return standaloneMutationPipe.submit(createMutationCommand('headless', 'headless.resume', { workflowId }));
+            return standaloneMutationPipe.submit(
+              createMutationCommand('headless', 'headless.resume', { workflowId }, classifyMutationScope('headless.resume', { workflowId })),
+            );
           });
         }
         messageBus.onRequest('headless.exec', async (req: unknown) => {
@@ -624,11 +749,14 @@ if (isHeadless) {
             throw new Error('Missing delegated headless command arguments');
           }
           if (standaloneMutationPipe) {
-            await standaloneMutationPipe.submit(createMutationCommand('headless', 'headless.exec', {
+            const payload = {
               args,
               waitForApproval: delegatedWait,
               noTrack: delegatedNoTrack,
-            }));
+            };
+            await standaloneMutationPipe.submit(
+              createMutationCommand('headless', 'headless.exec', payload, classifyMutationScope('headless.exec', payload)),
+            );
           } else {
             await runHeadless(args, {
               ...headlessDeps,
@@ -992,7 +1120,7 @@ function setupGuiMode(): void {
     kind: string,
     payload: unknown,
   ): Promise<TResult> {
-    const command = createMutationCommand(source, kind, payload);
+    const command = createMutationCommand(source, kind, payload, classifyMutationScope(kind, payload));
     if (mutationPipe) {
       return mutationPipe.submit(command) as Promise<TResult>;
     }

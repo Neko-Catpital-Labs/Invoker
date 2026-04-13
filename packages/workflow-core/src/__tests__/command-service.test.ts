@@ -341,13 +341,17 @@ describe('CommandService', () => {
     });
   });
 
-  // ── Mutex serialization ──────────────────────────────────
+  // ── Scoped serialization ─────────────────────────────────
 
-  describe('mutex serialization', () => {
-    it('serializes concurrent calls so they do not interleave', async () => {
+  describe('scoped serialization', () => {
+    it('serializes concurrent calls for the same workflow so they do not interleave', async () => {
       const order: string[] = [];
       let resolveFirst!: () => void;
       const firstPromise = new Promise<void>(r => { resolveFirst = r; });
+
+      (orchestrator.getTask as ReturnType<typeof vi.fn>).mockImplementation((taskId: string) => ({
+        config: { workflowId: taskId === 't-1' ? 'wf-1' : 'wf-1' },
+      }));
 
       (orchestrator.restartTask as ReturnType<typeof vi.fn>).mockImplementation(async () => {
         order.push('restart-start');
@@ -371,6 +375,43 @@ describe('CommandService', () => {
 
       // Restart must fully complete before edit begins
       expect(order).toEqual(['restart-start', 'restart-end', 'edit-start', 'edit-end']);
+    });
+
+    it('allows concurrent calls for different workflows', async () => {
+      const order: string[] = [];
+      let resolveRestart!: () => void;
+      let resolveEdit!: () => void;
+      const restartGate = new Promise<void>((resolve) => { resolveRestart = resolve; });
+      const editGate = new Promise<void>((resolve) => { resolveEdit = resolve; });
+
+      (orchestrator.getTask as ReturnType<typeof vi.fn>).mockImplementation((taskId: string) => ({
+        config: { workflowId: taskId === 't-1' ? 'wf-1' : 'wf-2' },
+      }));
+
+      (orchestrator.restartTask as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+        order.push('restart-start');
+        await restartGate;
+        order.push('restart-end');
+        return [];
+      });
+      (orchestrator.editTaskCommand as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+        order.push('edit-start');
+        await editGate;
+        order.push('edit-end');
+        return [];
+      });
+
+      const p1 = service.restartTask(makeEnvelope({ taskId: 't-1' }, 'k1'));
+      const p2 = service.editTaskCommand(makeEnvelope({ taskId: 't-2', newCommand: 'x' }, 'k2'));
+
+      await Promise.resolve();
+      expect(order).toEqual(['restart-start', 'edit-start']);
+
+      resolveRestart();
+      resolveEdit();
+
+      await Promise.all([p1, p2]);
+      expect(order).toEqual(['restart-start', 'edit-start', 'restart-end', 'edit-end']);
     });
   });
 });
