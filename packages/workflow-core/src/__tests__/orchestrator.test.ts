@@ -327,9 +327,21 @@ describe('Orchestrator', () => {
       const lateId = sid(repro, 0, 'late');
 
       repro.startExecution();
-      repro.handleWorkerResponse(makeResponse({ actionId: prepareId, status: 'completed', outputs: { exitCode: 0 } }));
-      repro.handleWorkerResponse(makeResponse({ actionId: midId, status: 'completed', outputs: { exitCode: 0 } }));
+      repro.handleWorkerResponse(makeResponse({
+        actionId: prepareId,
+        executionGeneration: repro.getTask(prepareId)?.execution.generation ?? 0,
+        status: 'completed',
+        outputs: { exitCode: 0 },
+      }));
+      repro.handleWorkerResponse(makeResponse({
+        actionId: midId,
+        executionGeneration: repro.getTask(midId)?.execution.generation ?? 0,
+        status: 'completed',
+        outputs: { exitCode: 0 },
+      }));
       expect(repro.getTask(lateId)?.status).toBe('running');
+      const oldLateAttemptId = repro.getTask(lateId)?.execution.selectedAttemptId;
+      expect(oldLateAttemptId).toBeTruthy();
 
       repro.recreateWorkflow(workflowId);
       expect(repro.getTask(prepareId)?.status).toBe('running');
@@ -337,12 +349,35 @@ describe('Orchestrator', () => {
       expect(repro.getTask(lateId)?.status).toBe('pending');
 
       expect(repro.getTask(lateId)?.execution.generation).toBe(1);
+      repro.handleWorkerResponse(makeResponse({
+        actionId: prepareId,
+        executionGeneration: repro.getTask(prepareId)?.execution.generation ?? 0,
+        status: 'completed',
+        outputs: { exitCode: 0 },
+      }));
+      repro.handleWorkerResponse(makeResponse({
+        actionId: midId,
+        executionGeneration: repro.getTask(midId)?.execution.generation ?? 0,
+        status: 'completed',
+        outputs: { exitCode: 0 },
+      }));
+      expect(repro.getTask(lateId)?.status).toBe('running');
+      const newLateAttemptId = repro.getTask(lateId)?.execution.selectedAttemptId;
+      expect(newLateAttemptId).toBeTruthy();
+      expect(newLateAttemptId).not.toBe(oldLateAttemptId);
+
       repro.handleWorkerResponse(
-        makeResponse({ actionId: lateId, executionGeneration: 0, status: 'completed', outputs: { exitCode: 0 } }),
+        makeResponse({
+          actionId: lateId,
+          attemptId: oldLateAttemptId,
+          executionGeneration: repro.getTask(lateId)?.execution.generation ?? 0,
+          status: 'completed',
+          outputs: { exitCode: 0 },
+        }),
       );
 
-      expect(repro.getTask(lateId)?.status).toBe('pending');
-      expect(repro.getTask(midId)?.status).toBe('pending');
+      expect(repro.getTask(lateId)?.status).toBe('running');
+      expect(repro.getTask(midId)?.status).toBe('completed');
     });
 
     it('ignores a stale completed response after restartTask resets descendants', () => {

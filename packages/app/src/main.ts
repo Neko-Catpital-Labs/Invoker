@@ -87,6 +87,7 @@ import {
   resolveAgentSession,
   createHeadlessExecutor,
   wireHeadlessApproveHook,
+  MUTATION_SNAPSHOT_CHANNEL,
 } from './headless.js';
 import {
   rebaseAndRetry,
@@ -102,7 +103,14 @@ import { openExternalTerminalForTask } from './open-terminal-for-task.js';
 import { createRequire } from 'node:module';
 import { acquireDbWriterLock, type DbWriterLockResult } from './db-writer-lock.js';
 import { applyDelta } from './delta-merge.js';
-import { MutationPipe, createMutationCommand, type MutationCommand, type MutationCommandScope } from './mutation-pipe.js';
+import {
+  MutationPipe,
+  createMutationCommand,
+  emptyActiveMutationSnapshot,
+  normalizeActiveMutationSnapshot,
+  type MutationCommand,
+  type MutationCommandScope,
+} from './mutation-pipe.js';
 
 // ── Detect headless mode ─────────────────────────────────────
 
@@ -732,6 +740,9 @@ if (isHeadless) {
           messageBus.onRequest(MUTATION_SUBMIT_CHANNEL, async (command: MutationCommand) => {
             return standaloneMutationPipe.submit(command);
           });
+          messageBus.onRequest(MUTATION_SNAPSHOT_CHANNEL, async () => {
+            return normalizeActiveMutationSnapshot(standaloneMutationPipe.snapshot());
+          });
           messageBus.onRequest('headless.run', async (req: unknown) => {
             const { planPath } = req as { planPath: string };
             return standaloneMutationPipe.submit(
@@ -871,20 +882,37 @@ function setupGuiMode(): void {
           }
         },
         onSpawned: (taskId, handle, executor) => {
-          logger.info(`Task "${taskId}" spawned (handle: ${handle.executionId})`, { module: 'exec' });
+          logger.info(
+            `Task "${taskId}" spawned (handle: ${handle.executionId}, executor: ${executor.type}, workspace: ${handle.workspacePath ?? 'none'}, branch: ${handle.branch ?? 'none'})`,
+            { module: 'exec' },
+          );
           taskHandles.set(taskId, { handle, executor });
         },
-        onComplete: (taskId) => {
-          logger.info(`Task "${taskId}" completed`, { module: 'exec' });
+        onComplete: (taskId, response) => {
+          logger.info(
+            `Task "${taskId}" completion callback received (status: ${response.status}, generation: ${response.executionGeneration}, exitCode: ${response.outputs.exitCode ?? 'none'})`,
+            { module: 'exec' },
+          );
         },
         onHeartbeat: (taskId) => {
           const now = new Date();
+          const task = orchestrator.getTask(taskId);
+          const previousHeartbeat = task?.execution.lastHeartbeatAt instanceof Date
+            ? task.execution.lastHeartbeatAt
+            : task?.execution.lastHeartbeatAt
+              ? new Date(task.execution.lastHeartbeatAt)
+              : undefined;
+          const heartbeatGapMs = previousHeartbeat ? now.getTime() - previousHeartbeat.getTime() : undefined;
           try { persistence.updateTask(taskId, { execution: { lastHeartbeatAt: now } }); } catch { /* db locked */ }
           messageBus.publish(Channels.TASK_DELTA, {
             type: 'updated' as const,
             taskId,
             changes: { execution: { lastHeartbeatAt: now } },
           });
+          logger.info(
+            `Heartbeat for "${taskId}" (status: ${task?.status ?? 'unknown'}, generation: ${task?.execution.generation ?? 'unknown'}, gapMs: ${heartbeatGapMs ?? 'first'})`,
+            { module: 'heartbeat' },
+          );
         },
       },
     });
@@ -935,7 +963,17 @@ function setupGuiMode(): void {
     const orphanRestarted: TaskState[] = [];
     for (const task of orchestrator.getAllTasks()) {
       if (task.status === 'running' || task.status === 'fixing_with_ai') {
-        logger.info(`relaunching orphaned in-flight task "${task.id}" (${task.status})`, { module: logPrefix });
+        const lastHeartbeat = task.execution.lastHeartbeatAt instanceof Date
+          ? task.execution.lastHeartbeatAt.toISOString()
+          : task.execution.lastHeartbeatAt ?? 'none';
+        const startedAt = task.execution.startedAt instanceof Date
+          ? task.execution.startedAt.toISOString()
+          : task.execution.startedAt ?? 'none';
+        logger.info(
+          `relaunching orphaned in-flight task "${task.id}" (${task.status}) ` +
+            `startedAt=${startedAt} lastHeartbeatAt=${lastHeartbeat} generation=${task.execution.generation ?? 0}`,
+          { module: logPrefix },
+        );
         const started = orchestrator.restartTask(task.id);
         orphanRestarted.push(...started.filter(t => t.status === 'running'));
       }
@@ -1235,6 +1273,9 @@ function setupGuiMode(): void {
       });
       messageBus.onRequest(MUTATION_SUBMIT_CHANNEL, async (command: MutationCommand) => {
         return mutationPipe!.submit(command);
+      });
+      messageBus.onRequest(MUTATION_SNAPSHOT_CHANNEL, async () => {
+        return mutationPipe ? normalizeActiveMutationSnapshot(mutationPipe.snapshot()) : emptyActiveMutationSnapshot();
       });
     } else {
       logger.info('GUI launched in follower mode; mutation execution is delegated to the current owner', {

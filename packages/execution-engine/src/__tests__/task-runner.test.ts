@@ -96,7 +96,7 @@ afterEach(() => {
 });
 
 describe('TaskRunner', () => {
-  it('sends executionGeneration in work requests and preserves it in responses', async () => {
+  it('sends attemptId and executionGeneration in work requests and preserves them in responses', async () => {
     const handleWorkerResponse = vi.fn();
     let seenRequest: any;
     let completeCallback: ((response: WorkResponse) => void) | undefined;
@@ -141,14 +141,16 @@ describe('TaskRunner', () => {
       id: 'gen-task',
       status: 'running',
       config: { command: 'echo hi' },
-      execution: { generation: 7 },
+      execution: { generation: 7, selectedAttemptId: 'gen-task-a1' },
     });
 
     const done = runner.executeTask(task);
     await vi.waitFor(() => expect(seenRequest?.executionGeneration).toBe(7));
+    expect(seenRequest?.attemptId).toBe('gen-task-a1');
     completeCallback?.({
       requestId: seenRequest.requestId,
       actionId: task.id,
+      attemptId: seenRequest.attemptId,
       executionGeneration: seenRequest.executionGeneration,
       status: 'completed',
       outputs: { exitCode: 0 },
@@ -158,10 +160,76 @@ describe('TaskRunner', () => {
     expect(handleWorkerResponse).toHaveBeenCalledWith(
       expect.objectContaining({
         actionId: task.id,
+        attemptId: 'gen-task-a1',
         executionGeneration: 7,
         status: 'completed',
       }),
     );
+  });
+
+  it('kills the active execution for a task by resolving its current attempt', async () => {
+    let completeCallback: ((response: WorkResponse) => void) | undefined;
+    const kill = vi.fn();
+    const handle = {
+      executionId: 'exec-kill',
+      taskId: 'kill-task',
+      workspacePath: '/tmp/mock-worktree',
+      branch: 'experiment/kill-task-mock',
+    };
+    const executorImpl = {
+      type: 'worktree',
+      start: vi.fn().mockResolvedValue(handle),
+      onComplete: vi.fn().mockImplementation((_handle: any, cb: any) => {
+        completeCallback = cb;
+        return () => {};
+      }),
+      onOutput: vi.fn().mockReturnValue(() => {}),
+      onHeartbeat: vi.fn().mockReturnValue(() => {}),
+      kill,
+      destroyAll: vi.fn(),
+    };
+    const registry = {
+      getDefault: () => executorImpl,
+      get: () => executorImpl,
+      getAll: () => [executorImpl],
+    };
+    const orchestrator = {
+      getTask: () => undefined,
+      handleWorkerResponse: vi.fn(),
+    };
+    const runner = new TaskRunner({
+      orchestrator: orchestrator as any,
+      persistence: { updateTask: vi.fn() } as any,
+      executorRegistry: registry as any,
+      cwd: '/tmp',
+    });
+
+    const task = makeTask({
+      id: 'kill-task',
+      status: 'running',
+      config: { command: 'echo hi' },
+      execution: { selectedAttemptId: 'kill-task-a1' },
+    });
+
+    const execution = runner.executeTask(task);
+    await vi.waitFor(() => expect(executorImpl.start).toHaveBeenCalledTimes(1));
+
+    await runner.killActiveExecution(task.id);
+    expect(kill).toHaveBeenCalledWith(expect.objectContaining({
+      executionId: 'exec-kill',
+      taskId: 'kill-task',
+      attemptId: 'kill-task-a1',
+    }));
+
+    completeCallback?.({
+      requestId: 'req-kill',
+      actionId: task.id,
+      attemptId: 'kill-task-a1',
+      executionGeneration: 0,
+      status: 'completed',
+      outputs: { exitCode: 0 },
+    });
+    await execution;
   });
 
   describe('collectTransitiveNonMergeTaskIds', () => {

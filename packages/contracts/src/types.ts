@@ -50,6 +50,8 @@ export interface WorkRequestInputs {
 export interface WorkRequest {
   requestId: string;
   actionId: string;
+  /** Stable runtime execution identity for attempt-centric flows. */
+  attemptId?: string;
   executionGeneration: number;
   actionType: ActionType;
   inputs: WorkRequestInputs;
@@ -106,6 +108,8 @@ export interface DagMutation {
 export interface WorkResponse {
   requestId: string;
   actionId: string;
+  /** Stable runtime execution identity for attempt-centric flows. */
+  attemptId?: string;
   executionGeneration: number;
   status: ResponseStatus;
   outputs: WorkResponseOutputs;
@@ -130,10 +134,12 @@ export function createWorkRequest(
   actionType: ActionType,
   inputs: WorkRequestInputs,
   callbackUrl: string,
+  attemptId?: string,
 ): WorkRequest {
   return {
     requestId,
     actionId,
+    ...(attemptId ? { attemptId } : {}),
     executionGeneration,
     actionType,
     inputs,

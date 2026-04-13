@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { runHeadless } from '../headless.js';
+import { MUTATION_SNAPSHOT_CHANNEL, runHeadless } from '../headless.js';
 import type { HeadlessDeps } from '../headless.js';
 import { Orchestrator, CommandService } from '@invoker/workflow-core';
 import { SQLiteAdapter } from '@invoker/data-store';
@@ -151,6 +151,57 @@ describe('headless delegation enforcement', () => {
       await expect(
         runHeadless(['query-select', 'wf-1/task-1'], mockDeps)
       ).resolves.toBeUndefined();
+    });
+
+    it('delegates query mutation-queue to the owner and renders jsonl', async () => {
+      const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+      mockDeps.messageBus.onRequest(MUTATION_SNAPSHOT_CHANNEL, async () => ({
+        globalRunning: {
+          id: 'mut-1',
+          kind: 'headless.run',
+          source: 'headless',
+          workflowId: null,
+          status: 'running',
+          createdAt: '2026-04-13T10:00:00.000Z',
+          startedAt: '2026-04-13T10:00:01.000Z',
+        },
+        workflowRunning: {},
+        globalQueued: [],
+        queuedByWorkflow: {
+          'wf-1': [
+            {
+              id: 'mut-2',
+              kind: 'headless.exec',
+              source: 'gui',
+              workflowId: 'wf-1',
+              status: 'queued',
+              createdAt: '2026-04-13T10:00:02.000Z',
+              startedAt: null,
+            },
+          ],
+        },
+      }));
+
+      await runHeadless(['query', 'mutation-queue', '--output', 'jsonl'], mockDeps);
+
+      const output = stdout.mock.calls.map(([chunk]) => String(chunk)).join('');
+      const lines = output.trim().split('\n').map((line) => JSON.parse(line));
+      expect(lines).toEqual([
+        expect.objectContaining({ id: 'mut-1', group: 'globalRunning' }),
+        expect.objectContaining({ id: 'mut-2', group: 'workflowQueued', workflowId: 'wf-1' }),
+      ]);
+      stdout.mockRestore();
+    });
+
+    it('returns an empty mutation-queue result when no owner exists', async () => {
+      const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+
+      await runHeadless(['query', 'mutation-queue'], mockDeps);
+
+      const output = stdout.mock.calls.map(([chunk]) => String(chunk)).join('');
+      expect(output).toContain('Global Running (0)');
+      expect(output).toContain('Workflow Queued (0)');
+      stdout.mockRestore();
     });
   });
 

@@ -6,6 +6,7 @@
 
 import type { TaskState, TaskStatus } from '@invoker/workflow-core';
 import type { TaskEvent, Workflow } from '@invoker/data-store';
+import type { ActiveMutationCommandSnapshot, ActiveMutationPipeSnapshot } from './mutation-pipe.js';
 
 // ── ANSI Color Codes ─────────────────────────────────────────
 
@@ -188,6 +189,59 @@ export function formatQueueStatus(status: {
   lines.push('');
 
   return lines.join('\n');
+}
+
+function formatMutationScope(command: ActiveMutationCommandSnapshot): string {
+  return command.workflowId ? `workflow:${command.workflowId}` : 'global';
+}
+
+function formatMutationTimestamp(value: string | null): string {
+  return value ?? '-';
+}
+
+function formatMutationCommand(command: ActiveMutationCommandSnapshot): string {
+  return [
+    `${BOLD}${command.id}${RESET}`,
+    `kind=${command.kind}`,
+    `source=${command.source}`,
+    `scope=${formatMutationScope(command)}`,
+    `status=${command.status}`,
+    `createdAt=${formatMutationTimestamp(command.createdAt)}`,
+    `startedAt=${formatMutationTimestamp(command.startedAt)}`,
+  ].join(' ');
+}
+
+function pushMutationGroup(
+  lines: string[],
+  title: string,
+  color: string,
+  items: ActiveMutationCommandSnapshot[],
+): void {
+  lines.push(`${BOLD}${color}${title} (${items.length}):${RESET}`);
+  if (items.length === 0) {
+    lines.push(`${DIM}  (none)${RESET}`);
+  } else {
+    for (const item of items) {
+      lines.push(`  ${formatMutationCommand(item)}`);
+    }
+  }
+  lines.push('');
+}
+
+export function formatMutationQueueStatus(snapshot: ActiveMutationPipeSnapshot): string {
+  const lines: string[] = [];
+
+  pushMutationGroup(
+    lines,
+    'Global Running',
+    YELLOW,
+    snapshot.globalRunning ? [snapshot.globalRunning] : [],
+  );
+  pushMutationGroup(lines, 'Workflow Running', MAGENTA, Object.values(snapshot.workflowRunning));
+  pushMutationGroup(lines, 'Global Queued', CYAN, snapshot.globalQueued);
+  pushMutationGroup(lines, 'Workflow Queued', BLUE, Object.values(snapshot.queuedByWorkflow).flat());
+
+  return lines.join('\n').trimEnd();
 }
 
 // ── Output Format Type ──────────────────────────────────────

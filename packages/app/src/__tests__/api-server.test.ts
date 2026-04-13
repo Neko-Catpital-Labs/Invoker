@@ -559,7 +559,7 @@ describe('POST /api/workflows/:id/restart', () => {
     expect(mocks.persistence.updateWorkflow).toHaveBeenCalled();
   });
 
-  it('coalesces concurrent restart requests for the same workflow', async () => {
+  it('handles concurrent restart requests independently', async () => {
     mocks.orchestrator.recreateWorkflow = vi.fn(() => [makeTask()]);
     mocks.taskExecutor.executeTasks.mockImplementation(
       async () => await new Promise<void>((resolve) => setTimeout(resolve, 100)),
@@ -572,10 +572,11 @@ describe('POST /api/workflows/:id/restart', () => {
 
     expect(r1.status).toBe(200);
     expect(r2.status).toBe(200);
-    expect([r1.body.coalesced, r2.body.coalesced].sort()).toEqual([false, true]);
-    expect(mocks.persistence.updateWorkflow).toHaveBeenCalledTimes(1);
-    expect(mocks.orchestrator.recreateWorkflow).toHaveBeenCalledTimes(1);
-    expect(mocks.taskExecutor.executeTasks).toHaveBeenCalledTimes(1);
+    expect(r1.body.coalesced).toBeUndefined();
+    expect(r2.body.coalesced).toBeUndefined();
+    expect(mocks.persistence.updateWorkflow).toHaveBeenCalledTimes(2);
+    expect(mocks.orchestrator.recreateWorkflow).toHaveBeenCalledTimes(2);
+    expect(mocks.taskExecutor.executeTasks).toHaveBeenCalledTimes(2);
   });
 
   it('returns 400 on error', async () => {

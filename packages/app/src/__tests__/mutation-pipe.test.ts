@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Logger } from '@invoker/contracts';
-import { MutationPipe, createMutationCommand } from '../mutation-pipe.js';
+import {
+  MutationPipe,
+  createMutationCommand,
+  flattenActiveMutationSnapshot,
+  normalizeActiveMutationSnapshot,
+} from '../mutation-pipe.js';
 
 function createLogger(): Logger {
   return {
@@ -188,5 +193,55 @@ describe('MutationPipe', () => {
     await expect(first).resolves.toBe('first');
     await expect(global).resolves.toBe('global');
     await expect(third).resolves.toBe('third');
+  });
+
+  it('normalizes only active commands from running and queued lanes', async () => {
+    const logger = createLogger();
+    let releaseSecond!: () => void;
+    const secondGate = new Promise<void>((resolve) => { releaseSecond = resolve; });
+    const pipe = new MutationPipe<string>({
+      logger,
+      dispatch: async (command) => {
+        if (command.kind === 'workflow-running' || command.kind === 'workflow-running-2') await secondGate;
+        return command.kind;
+      },
+    });
+
+    const workflowRunning = pipe.submit(createMutationCommand('headless', 'workflow-running', {}, { type: 'workflow', workflowId: 'wf-1' }));
+    const secondWorkflowRunning = pipe.submit(createMutationCommand('gui', 'workflow-running-2', {}, { type: 'workflow', workflowId: 'wf-2' }));
+    const globalQueued = pipe.submit(createMutationCommand('gui', 'global-queued', {}, { type: 'global' }));
+    const workflowQueued = pipe.submit(createMutationCommand('headless', 'workflow-queued', {}, { type: 'workflow', workflowId: 'wf-1' }));
+
+    await Promise.resolve();
+
+    const snapshot = normalizeActiveMutationSnapshot(pipe.snapshot());
+    expect(snapshot.globalRunning).toBeNull();
+    expect(snapshot.workflowRunning['wf-1']?.kind).toBe('workflow-running');
+    expect(snapshot.workflowRunning['wf-2']?.kind).toBe('workflow-running-2');
+    expect(snapshot.globalQueued.map((entry) => entry.kind)).toEqual(['global-queued']);
+    expect(snapshot.queuedByWorkflow['wf-1']?.map((entry) => entry.kind)).toEqual(['workflow-queued']);
+
+    const flattened = flattenActiveMutationSnapshot(snapshot);
+    expect(flattened.map((entry) => entry.group)).toEqual([
+      'workflowRunning',
+      'workflowRunning',
+      'globalQueued',
+      'workflowQueued',
+    ]);
+    expect(flattened.every((entry) => entry.createdAt.endsWith('Z'))).toBe(true);
+
+    releaseSecond();
+    await workflowRunning;
+    await secondWorkflowRunning;
+    await globalQueued;
+    await workflowQueued;
+
+    const drained = normalizeActiveMutationSnapshot(pipe.snapshot());
+    expect(drained).toEqual({
+      globalRunning: null,
+      workflowRunning: {},
+      globalQueued: [],
+      queuedByWorkflow: {},
+    });
   });
 });
