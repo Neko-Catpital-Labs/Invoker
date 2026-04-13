@@ -4050,6 +4050,114 @@ describe('Orchestrator', () => {
       expect(o.getTask(`__merge__${wfId}`)!.status).toBe('pending');
     });
 
+    it('invalidates completed descendants when an upstream task is fixing_with_ai', () => {
+      const p = new InMemoryPersistence();
+      const b = new InMemoryBus();
+      const wfId = 'wf-retry-fixing-with-ai-descendants';
+
+      p.saveTask(wfId, {
+        id: 'add-eslint-disable-comments',
+        description: 'upstream completed task',
+        status: 'completed',
+        dependencies: [],
+        createdAt: new Date(),
+        config: { workflowId: wfId },
+        execution: { exitCode: 0, completedAt: new Date() },
+      });
+      p.saveTask(wfId, {
+        id: 'verify-lint-passes',
+        description: 'upstream fixer task',
+        status: 'fixing_with_ai',
+        dependencies: ['add-eslint-disable-comments'],
+        createdAt: new Date(),
+        config: { workflowId: wfId },
+        execution: {
+          startedAt: new Date(),
+          pendingFixError: 'pnpm lint failed',
+          isFixingWithAI: true,
+        },
+      });
+      p.saveTask(wfId, {
+        id: 'verify-check-all',
+        description: 'stale completed descendant',
+        status: 'completed',
+        dependencies: ['verify-lint-passes'],
+        createdAt: new Date(),
+        config: { workflowId: wfId },
+        execution: { exitCode: 0, completedAt: new Date() },
+      });
+      p.saveTask(wfId, {
+        id: `__merge__${wfId}`,
+        description: 'Merge gate',
+        status: 'completed',
+        dependencies: ['verify-check-all'],
+        createdAt: new Date(),
+        config: { workflowId: wfId, isMergeNode: true },
+        execution: { exitCode: 0, completedAt: new Date() },
+      });
+
+      const o = new Orchestrator({ persistence: p, messageBus: b, maxConcurrency: 3 });
+      o.syncFromDb(wfId);
+
+      const started = o.retryWorkflow(wfId);
+
+      expect(o.getTask('add-eslint-disable-comments')!.status).toBe('completed');
+
+      const verifyLint = o.getTask('verify-lint-passes')!;
+      expect(verifyLint.status).toBe('running');
+      expect(verifyLint.execution.pendingFixError).toBeUndefined();
+      expect(verifyLint.execution.isFixingWithAI).toBeFalsy();
+      expect(started.some((t) => t.id === 'verify-lint-passes')).toBe(true);
+
+      expect(o.getTask('verify-check-all')!.status).toBe('pending');
+      expect(o.getTask(`__merge__${wfId}`)!.status).toBe('pending');
+    });
+
+    it('invalidates completed descendants when an upstream task is awaiting_approval', () => {
+      const p = new InMemoryPersistence();
+      const b = new InMemoryBus();
+      const wfId = 'wf-retry-awaiting-approval-descendants';
+
+      p.saveTask(wfId, {
+        id: 'root',
+        description: 'root',
+        status: 'completed',
+        dependencies: [],
+        createdAt: new Date(),
+        config: { workflowId: wfId },
+        execution: { exitCode: 0, completedAt: new Date() },
+      });
+      p.saveTask(wfId, {
+        id: 'needs-approval',
+        description: 'approval task',
+        status: 'awaiting_approval',
+        dependencies: ['root'],
+        createdAt: new Date(),
+        config: { workflowId: wfId },
+        execution: { pendingFixError: 'needs manual approval' },
+      });
+      p.saveTask(wfId, {
+        id: 'descendant',
+        description: 'stale descendant',
+        status: 'completed',
+        dependencies: ['needs-approval'],
+        createdAt: new Date(),
+        config: { workflowId: wfId },
+        execution: { exitCode: 0, completedAt: new Date() },
+      });
+
+      const o = new Orchestrator({ persistence: p, messageBus: b, maxConcurrency: 3 });
+      o.syncFromDb(wfId);
+
+      const started = o.retryWorkflow(wfId);
+
+      expect(o.getTask('root')!.status).toBe('completed');
+      expect(o.getTask('needs-approval')!.status).toBe('running');
+      expect(o.getTask('needs-approval')!.execution.pendingFixError).toBeUndefined();
+      expect(o.getTask('descendant')!.status).toBe('pending');
+      expect(started.some((t) => t.id === 'needs-approval')).toBe(true);
+    });
+
     it('preserves branch/commit/workspacePath on reset tasks', () => {
       const p = new InMemoryPersistence();
       const b = new InMemoryBus();
