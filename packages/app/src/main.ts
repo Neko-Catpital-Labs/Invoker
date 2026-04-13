@@ -1423,6 +1423,7 @@ function setupGuiMode(): void {
           orchestrator.handleWorkerResponse({
             requestId: `stop-${task.id}`,
             actionId: task.id,
+            executionGeneration: task.execution.generation ?? 0,
             status: 'failed',
             outputs: { exitCode: 1, error: 'Stopped by user' },
           });
@@ -1443,6 +1444,7 @@ function setupGuiMode(): void {
           orchestrator.handleWorkerResponse({
             requestId: `clear-${task.id}`,
             actionId: task.id,
+            executionGeneration: task.execution.generation ?? 0,
             status: 'failed',
             outputs: { exitCode: 1, error: 'Cleared by user' },
           });
@@ -2148,6 +2150,7 @@ function setupGuiMode(): void {
             orchestrator.handleWorkerResponse({
               requestId: `quit-${task.id}`,
               actionId: task.id,
+              executionGeneration: task.execution.generation ?? 0,
               status: 'failed',
               outputs: { exitCode: 1, error: 'Application quit' },
             });

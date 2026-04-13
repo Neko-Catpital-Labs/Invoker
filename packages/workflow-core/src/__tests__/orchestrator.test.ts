@@ -158,6 +158,7 @@ function makeResponse(overrides: Partial<WorkResponse>): WorkResponse {
   return {
     requestId: 'req-1',
     actionId: 't1',
+    executionGeneration: 0,
     status: 'completed',
     outputs: { exitCode: 0 },
     ...overrides,
@@ -299,6 +300,184 @@ describe('Orchestrator', () => {
       persistence.updateTask(taskId, { status: 'failed' });
       orchestrator.syncAllFromDb();
       expect(orchestrator.shouldAutoFix(taskId)).toBe(true);
+    });
+
+    it('ignores a stale completed response after recreateWorkflow resets descendants', () => {
+      const reproPersistence = new InMemoryPersistence();
+      const reproBus = new InMemoryBus();
+      const repro = new Orchestrator({
+        persistence: reproPersistence,
+        messageBus: reproBus,
+        maxConcurrency: 1,
+      });
+
+      repro.loadPlan({
+        name: 'stale-late-complete-recreate',
+        onFinish: 'none',
+        tasks: [
+          { id: 'prepare', description: 'Prepare', command: 'echo prepare' },
+          { id: 'mid', description: 'Mid', command: 'echo mid', dependencies: ['prepare'] },
+          { id: 'late', description: 'Late', command: 'sleep 5', dependencies: ['mid'] },
+        ],
+      });
+
+      const workflowId = repro.getWorkflowIds()[0]!;
+      const prepareId = sid(repro, 0, 'prepare');
+      const midId = sid(repro, 0, 'mid');
+      const lateId = sid(repro, 0, 'late');
+
+      repro.startExecution();
+      repro.handleWorkerResponse(makeResponse({ actionId: prepareId, status: 'completed', outputs: { exitCode: 0 } }));
+      repro.handleWorkerResponse(makeResponse({ actionId: midId, status: 'completed', outputs: { exitCode: 0 } }));
+      expect(repro.getTask(lateId)?.status).toBe('running');
+
+      repro.recreateWorkflow(workflowId);
+      expect(repro.getTask(prepareId)?.status).toBe('running');
+      expect(repro.getTask(midId)?.status).toBe('pending');
+      expect(repro.getTask(lateId)?.status).toBe('pending');
+
+      expect(repro.getTask(lateId)?.execution.generation).toBe(1);
+      repro.handleWorkerResponse(
+        makeResponse({ actionId: lateId, executionGeneration: 0, status: 'completed', outputs: { exitCode: 0 } }),
+      );
+
+      expect(repro.getTask(lateId)?.status).toBe('pending');
+      expect(repro.getTask(midId)?.status).toBe('pending');
+    });
+
+    it('ignores a stale completed response after restartTask resets descendants', () => {
+      const reproPersistence = new InMemoryPersistence();
+      const reproBus = new InMemoryBus();
+      const repro = new Orchestrator({
+        persistence: reproPersistence,
+        messageBus: reproBus,
+        maxConcurrency: 1,
+      });
+
+      repro.loadPlan({
+        name: 'stale-late-complete-restart-task',
+        onFinish: 'none',
+        tasks: [
+          { id: 'prepare', description: 'Prepare', command: 'echo prepare' },
+          { id: 'mid', description: 'Mid', command: 'echo mid', dependencies: ['prepare'] },
+          { id: 'late', description: 'Late', command: 'sleep 5', dependencies: ['mid'] },
+        ],
+      });
+
+      const prepareId = sid(repro, 0, 'prepare');
+      const midId = sid(repro, 0, 'mid');
+      const lateId = sid(repro, 0, 'late');
+
+      repro.startExecution();
+      repro.handleWorkerResponse(makeResponse({ actionId: prepareId, status: 'completed', outputs: { exitCode: 0 } }));
+      repro.handleWorkerResponse(makeResponse({ actionId: midId, status: 'completed', outputs: { exitCode: 0 } }));
+      expect(repro.getTask(lateId)?.status).toBe('running');
+
+      repro.restartTask(prepareId);
+      expect(repro.getTask(prepareId)?.status).toBe('running');
+      expect(repro.getTask(midId)?.status).toBe('pending');
+      expect(repro.getTask(lateId)?.status).toBe('pending');
+
+      expect(repro.getTask(lateId)?.execution.generation).toBe(1);
+      repro.handleWorkerResponse(
+        makeResponse({ actionId: lateId, executionGeneration: 0, status: 'completed', outputs: { exitCode: 0 } }),
+      );
+
+      expect(repro.getTask(lateId)?.status).toBe('pending');
+      expect(repro.getTask(midId)?.status).toBe('pending');
+    });
+
+    it('ignores a stale failed response after recreateWorkflow resets descendants and does not trigger auto-fix', () => {
+      const reproPersistence = new InMemoryPersistence();
+      const reproBus = new InMemoryBus();
+      const repro = new Orchestrator({
+        persistence: reproPersistence,
+        messageBus: reproBus,
+        maxConcurrency: 1,
+      });
+
+      repro.loadPlan({
+        name: 'stale-late-failed-recreate',
+        onFinish: 'none',
+        tasks: [
+          { id: 'prepare', description: 'Prepare', command: 'echo prepare' },
+          { id: 'mid', description: 'Mid', command: 'echo mid', dependencies: ['prepare'] },
+          { id: 'late', description: 'Late', command: 'sleep 5', dependencies: ['mid'], autoFix: true },
+        ],
+      });
+
+      const workflowId = repro.getWorkflowIds()[0]!;
+      const prepareId = sid(repro, 0, 'prepare');
+      const midId = sid(repro, 0, 'mid');
+      const lateId = sid(repro, 0, 'late');
+
+      repro.startExecution();
+      repro.handleWorkerResponse(makeResponse({ actionId: prepareId, status: 'completed', outputs: { exitCode: 0 } }));
+      repro.handleWorkerResponse(makeResponse({ actionId: midId, status: 'completed', outputs: { exitCode: 0 } }));
+      expect(repro.getTask(lateId)?.status).toBe('running');
+
+      repro.recreateWorkflow(workflowId);
+      repro.handleWorkerResponse(
+        makeResponse({
+          actionId: lateId,
+          executionGeneration: 0,
+          status: 'failed',
+          outputs: { exitCode: 1, error: 'old failure' },
+        }),
+      );
+
+      expect(repro.getTask(lateId)?.status).toBe('pending');
+      expect(repro.getTask(lateId)?.execution.autoFixAttempts).toBe(0);
+      expect(repro.getAllTasks().some((task) => task.id.includes('late-exp-fix-'))).toBe(false);
+    });
+
+    it('rejects stale completion for one workflow while accepting current completion for another in-flight workflow', () => {
+      const reproPersistence = new InMemoryPersistence();
+      const reproBus = new InMemoryBus();
+      const repro = new Orchestrator({
+        persistence: reproPersistence,
+        messageBus: reproBus,
+        maxConcurrency: 2,
+      });
+
+      repro.loadPlan({
+        name: 'wf-a',
+        onFinish: 'none',
+        tasks: [
+          { id: 'prepare', description: 'Prepare A', command: 'echo prepare-a' },
+          { id: 'late', description: 'Late A', command: 'sleep 5', dependencies: ['prepare'] },
+        ],
+      });
+      repro.loadPlan({
+        name: 'wf-b',
+        onFinish: 'none',
+        tasks: [
+          { id: 'root', description: 'Root B', command: 'echo root-b' },
+        ],
+      });
+
+      repro.startExecution();
+
+      const prepareA = repro.getAllTasks().find((task) => task.description === 'Prepare A')!.id;
+      const lateA = repro.getAllTasks().find((task) => task.description === 'Late A')!.id;
+      const rootB = repro.getAllTasks().find((task) => task.description === 'Root B')!.id;
+      const workflowA = repro.getTask(prepareA)!.config.workflowId!;
+
+      repro.handleWorkerResponse(makeResponse({ actionId: prepareA, status: 'completed', outputs: { exitCode: 0 } }));
+      expect(repro.getTask(lateA)?.status).toBe('running');
+      expect(repro.getTask(rootB)?.status).toBe('running');
+
+      repro.recreateWorkflow(workflowA);
+
+      repro.handleWorkerResponse(
+        makeResponse({ actionId: lateA, executionGeneration: 0, status: 'completed', outputs: { exitCode: 0 } }),
+      );
+      repro.handleWorkerResponse(
+        makeResponse({ actionId: rootB, executionGeneration: 0, status: 'completed', outputs: { exitCode: 0 } }),
+      );
+
+      expect(repro.getTask(lateA)?.status).toBe('pending');
+      expect(repro.getTask(rootB)?.status).toBe('completed');
     });
   });
 
@@ -3032,15 +3211,15 @@ describe('Orchestrator', () => {
 
       // Phase 3: Complete A, B, C — D should become ready after the last one
       orchestrator.handleWorkerResponse(
-        makeResponse({ actionId: 'A', status: 'completed', outputs: { exitCode: 0 } }),
+        makeResponse({ actionId: 'A', executionGeneration: 1, status: 'completed', outputs: { exitCode: 0 } }),
       );
       orchestrator.handleWorkerResponse(
-        makeResponse({ actionId: 'B', status: 'completed', outputs: { exitCode: 0 } }),
+        makeResponse({ actionId: 'B', executionGeneration: 1, status: 'completed', outputs: { exitCode: 0 } }),
       );
 
       logSpy.mockClear();
       orchestrator.handleWorkerResponse(
-        makeResponse({ actionId: 'C', status: 'completed', outputs: { exitCode: 0 } }),
+        makeResponse({ actionId: 'C', executionGeneration: 1, status: 'completed', outputs: { exitCode: 0 } }),
       );
 
       expect(
@@ -3161,7 +3340,7 @@ describe('Orchestrator', () => {
       expect(schedulerBefore.runningCount).toBe(1);
 
       // Response with valid actionId but missing required fields — triggers parse error
-      orchestrator.handleWorkerResponse({ actionId: 'A' } as any);
+      orchestrator.handleWorkerResponse({ actionId: 'A', executionGeneration: 0 } as any);
 
       const schedulerAfter = (orchestrator as any).scheduler.getStatus();
       expect(schedulerAfter.runningCount).toBe(0);
@@ -3219,6 +3398,7 @@ describe('Orchestrator', () => {
       orchestrator.handleWorkerResponse({
         requestId: 'spawn',
         actionId: 'pivot',
+        executionGeneration: 0,
         status: 'spawn_experiments',
         outputs: { exitCode: 0 },
         dagMutation: {
@@ -3311,6 +3491,7 @@ describe('Orchestrator', () => {
       orchestrator.handleWorkerResponse({
         requestId: 'spawn',
         actionId: 'pivot',
+        executionGeneration: 0,
         status: 'spawn_experiments',
         outputs: { exitCode: 0 },
         dagMutation: {
@@ -4336,6 +4517,7 @@ describe('Orchestrator', () => {
       orchestrator.handleWorkerResponse({
         requestId: 'spawn-pivot',
         actionId: 'pivot',
+        executionGeneration: 0,
         status: 'spawn_experiments',
         outputs: { exitCode: 0 },
         dagMutation: {
@@ -4531,6 +4713,7 @@ describe('Orchestrator', () => {
       orchestrator.handleWorkerResponse({
         requestId: 'req-pivot',
         actionId: 'pivot',
+        executionGeneration: 0,
         status: 'spawn_experiments',
         outputs: { exitCode: 0 },
         dagMutation: {
@@ -4593,7 +4776,7 @@ describe('Orchestrator', () => {
 
       orchestrator.restartTask('A');
       orchestrator.handleWorkerResponse(
-        makeResponse({ actionId: 'A', status: 'completed', outputs: { exitCode: 0 } }),
+        makeResponse({ actionId: 'A', executionGeneration: 1, status: 'completed', outputs: { exitCode: 0 } }),
       );
 
       expect(orchestrator.getTask('A')!.status).toBe('completed');

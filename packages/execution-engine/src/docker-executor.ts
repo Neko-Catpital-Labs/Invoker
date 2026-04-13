@@ -363,6 +363,7 @@ export class DockerExecutor extends BaseExecutor<ContainerEntry> {
       const response: WorkResponse = {
         requestId: request.requestId,
         actionId: request.actionId,
+        executionGeneration: request.executionGeneration,
         status: 'failed',
         outputs: {
           exitCode: 1,

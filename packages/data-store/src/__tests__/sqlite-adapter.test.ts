@@ -65,6 +65,19 @@ describe('SQLiteAdapter', () => {
       expect(loaded[0].status).toBe('running');
       expect(loaded[0].execution.startedAt).toBeInstanceOf(Date);
     });
+
+    it('persists execution generation on save and update', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t1', { execution: { generation: 2 } }));
+
+      let loaded = adapter.loadTasks('wf-1');
+      expect(loaded[0].execution.generation).toBe(2);
+
+      adapter.updateTask('t1', { execution: { generation: 5 } });
+
+      loaded = adapter.loadTasks('wf-1');
+      expect(loaded[0].execution.generation).toBe(5);
+    });
   });
 
   describe('saveWorkflow + loadWorkflow', () => {

@@ -242,6 +242,7 @@ export class TaskRunner {
       const response: WorkResponse = {
         requestId: `err-${task.id}`,
         actionId: task.id,
+        executionGeneration: task.execution.generation ?? 0,
         status: 'failed',
         outputs: {
           exitCode: 1,
@@ -260,6 +261,7 @@ export class TaskRunner {
       const response: WorkResponse = {
         requestId: `req-${task.id}`,
         actionId: task.id,
+        executionGeneration: task.execution.generation ?? 0,
         status: 'spawn_experiments',
         outputs: {},
         dagMutation: {
@@ -325,6 +327,7 @@ export class TaskRunner {
     const request: WorkRequest = {
       requestId: randomUUID(),
       actionId: task.id,
+      executionGeneration: task.execution.generation ?? 0,
       actionType: this.determineActionType(task),
       inputs: {
         description: task.description,
@@ -467,6 +470,7 @@ export class TaskRunner {
             const errResponse: WorkResponse = {
               requestId: response.requestId,
               actionId: task.id,
+              executionGeneration: task.execution.generation ?? 0,
               status: 'failed',
               outputs: {
                 exitCode: 1,

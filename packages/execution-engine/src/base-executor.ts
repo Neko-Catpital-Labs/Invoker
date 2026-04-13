@@ -195,6 +195,7 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
         const response: WorkResponse = {
           requestId: entry.request.requestId,
           actionId: entry.request.actionId,
+          executionGeneration: entry.request.executionGeneration,
           status: 'failed',
           outputs: {
             exitCode,
@@ -745,6 +746,7 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
       const response: WorkResponse = {
         requestId: entry.request.requestId,
         actionId: entry.request.actionId,
+        executionGeneration: entry.request.executionGeneration,
         status: 'needs_input',
         outputs: { summary: 'Select winning experiment' },
       };
@@ -833,6 +835,7 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
     const response: WorkResponse = {
       requestId: request.requestId,
       actionId: request.actionId,
+      executionGeneration: request.executionGeneration,
       status,
       outputs: {
         exitCode: status === 'failed' && effectiveExitCode === 0 ? 1 : effectiveExitCode,

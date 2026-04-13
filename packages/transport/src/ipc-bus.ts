@@ -125,7 +125,8 @@ class FrameDecoder {
 // Default socket path
 // ---------------------------------------------------------------------------
 
-export const DEFAULT_SOCKET_PATH = join(homedir(), '.invoker', 'ipc-transport.sock');
+export const DEFAULT_SOCKET_PATH =
+  process.env.INVOKER_IPC_SOCKET || join(homedir(), '.invoker', 'ipc-transport.sock');
 
 export interface IpcBusOptions {
   allowServe?: boolean;

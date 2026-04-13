@@ -5,7 +5,7 @@ import type { WorkResponse } from '../types.js';
 
 describe('validateWorkRequest', () => {
   it('accepts a valid WorkRequest', () => {
-    const req = createWorkRequest('req-1', 'task-1', 'command', { command: 'echo hi' }, 'http://localhost:4000/callback');
+    const req = createWorkRequest('req-1', 'task-1', 0, 'command', { command: 'echo hi' }, 'http://localhost:4000/callback');
     const result = validateWorkRequest(req);
     expect(result.valid).toBe(true);
     expect(result.error).toBeUndefined();
@@ -18,13 +18,13 @@ describe('validateWorkRequest', () => {
   });
 
   it('rejects missing requestId', () => {
-    const result = validateWorkRequest({ actionId: 'a', actionType: 'command', inputs: {}, callbackUrl: 'http://x' });
+    const result = validateWorkRequest({ actionId: 'a', executionGeneration: 0, actionType: 'command', inputs: {}, callbackUrl: 'http://x' });
     expect(result.valid).toBe(false);
     expect(result.error).toContain('requestId');
   });
 
   it('rejects invalid actionType', () => {
-    const result = validateWorkRequest({ requestId: 'r', actionId: 'a', actionType: 'invalid', inputs: {}, callbackUrl: 'http://x' });
+    const result = validateWorkRequest({ requestId: 'r', actionId: 'a', executionGeneration: 0, actionType: 'invalid', inputs: {}, callbackUrl: 'http://x' });
     expect(result.valid).toBe(false);
     expect(result.error).toContain('actionType');
   });
@@ -34,6 +34,7 @@ describe('validateWorkResponse', () => {
   const baseResponse: WorkResponse = {
     requestId: 'req-1',
     actionId: 'task-1',
+    executionGeneration: 0,
     status: 'completed',
     outputs: { exitCode: 0 },
   };

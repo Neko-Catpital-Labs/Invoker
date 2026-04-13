@@ -228,6 +228,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         created_at TEXT DEFAULT (datetime('now')),
         started_at TEXT,
         completed_at TEXT,
+        execution_generation INTEGER DEFAULT 0,
 
         FOREIGN KEY (workflow_id) REFERENCES workflows(id)
       );
@@ -365,6 +366,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       'ALTER TABLE tasks ADD COLUMN review_status TEXT',
       'ALTER TABLE tasks ADD COLUMN review_provider_id TEXT',
       'ALTER TABLE tasks ADD COLUMN is_fixing_with_ai INTEGER DEFAULT 0',
+      'ALTER TABLE tasks ADD COLUMN execution_generation INTEGER DEFAULT 0',
       'ALTER TABLE tasks ADD COLUMN selected_attempt_id TEXT',
       'ALTER TABLE tasks ADD COLUMN remote_target_id TEXT',
       'ALTER TABLE workflows ADD COLUMN description TEXT',
@@ -548,6 +550,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         utilization, pending_fix_error,
         review_url, review_id, review_status, review_provider_id,
         is_fixing_with_ai,
+        execution_generation,
         remote_target_id,
         execution_agent,
         agent_name
@@ -566,6 +569,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         ?, ?, ?, ?,
         ?, ?,
         ?, ?, ?, ?,
+        ?,
         ?,
         ?,
         ?,
@@ -610,6 +614,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       exec.reviewStatus ?? null,
       exec.reviewProviderId ?? null,
       exec.isFixingWithAI ? 1 : 0,
+      exec.generation ?? 0,
       cfg.remoteTargetId ?? null,
       cfg.executionAgent ?? null,
       exec.agentName ?? null,
@@ -698,6 +703,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         reviewId: 'review_id',
         reviewStatus: 'review_status',
         reviewProviderId: 'review_provider_id',
+        generation: 'execution_generation',
         selectedAttemptId: 'selected_attempt_id',
         agentName: 'agent_name',
         lastAgentName: 'last_agent_name',
@@ -1440,6 +1446,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         reviewId: row.review_id ?? undefined,
         reviewStatus: row.review_status ?? undefined,
         reviewProviderId: row.review_provider_id ?? undefined,
+        generation: row.execution_generation ?? 0,
         selectedAttemptId: row.selected_attempt_id ?? undefined,
         autoFixAttempts: row.auto_fix_attempts ?? undefined,
       },
