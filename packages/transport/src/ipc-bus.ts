@@ -153,6 +153,10 @@ export class IpcBus implements MessageBus {
     string,
     { resolve: (v: unknown) => void; reject: (e: Error) => void }
   >();
+  private relayedRequests = new Map<
+    string,
+    { source: Socket; awaiting: Set<Socket>; channel: string }
+  >();
 
   constructor(socketPath: string = DEFAULT_SOCKET_PATH) {
     this.socketPath = socketPath;
@@ -270,7 +274,7 @@ export class IpcBus implements MessageBus {
 
       case 'res':
       case 'err':
-        this.handleResponse(env);
+        this.handleResponse(env, source);
         break;
     }
   }
@@ -290,6 +294,20 @@ export class IpcBus implements MessageBus {
   private async handleRequest(env: ReqEnvelope, source: Socket): Promise<void> {
     const handler = this.requestHandlers.get(env.channel);
     if (!handler) {
+      if (this.server) {
+        const peersToQuery = new Set(
+          [...this.peers].filter((peer) => peer !== source && !peer.destroyed),
+        );
+        if (peersToQuery.size > 0) {
+          this.relayedRequests.set(env.reqId, {
+            source,
+            awaiting: peersToQuery,
+            channel: env.channel,
+          });
+          this.broadcastExcept(env, source);
+          return;
+        }
+      }
       const errEnv: ErrEnvelope = {
         kind: 'err',
         channel: env.channel,
@@ -319,15 +337,37 @@ export class IpcBus implements MessageBus {
     }
   }
 
-  private handleResponse(env: ResEnvelope | ErrEnvelope): void {
+  private handleResponse(env: ResEnvelope | ErrEnvelope, source: Socket): void {
     const pending = this.pendingRequests.get(env.reqId);
-    if (!pending) return;
-    this.pendingRequests.delete(env.reqId);
-    if (env.kind === 'res') {
-      pending.resolve(env.body);
-    } else {
-      pending.reject(new Error(env.message));
+    if (pending) {
+      this.pendingRequests.delete(env.reqId);
+      if (env.kind === 'res') {
+        pending.resolve(env.body);
+      } else {
+        pending.reject(new Error(env.message));
+      }
+      return;
     }
+    this.handleRelayedResponse(env, source);
+  }
+
+  private handleRelayedResponse(env: ResEnvelope | ErrEnvelope, source: Socket): boolean {
+    const relay = this.relayedRequests.get(env.reqId);
+    if (!relay) return false;
+
+    if (env.kind === 'res') {
+      this.relayedRequests.delete(env.reqId);
+      this.sendToSocket(relay.source, env);
+      return true;
+    }
+
+    relay.awaiting.delete(source);
+    const noHandlerError = env.message === `No request handler registered for channel: ${relay.channel}`;
+    if (!noHandlerError || relay.awaiting.size === 0) {
+      this.relayedRequests.delete(env.reqId);
+      this.sendToSocket(relay.source, env);
+    }
+    return true;
   }
 
   // ------------------------------------------------------------------

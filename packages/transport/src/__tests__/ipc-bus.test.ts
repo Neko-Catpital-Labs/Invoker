@@ -231,6 +231,49 @@ describe('IpcBus', () => {
     expect(result).toBe(12);
   });
 
+  it('cross-instance request/reply relays through a server without a handler', async () => {
+    const sock = tempSocketPath();
+
+    const relayServer = createBus(sock);
+    await relayServer.ready();
+
+    const requester = createBus(sock);
+    const owner = createBus(sock);
+    await requester.ready();
+    await owner.ready();
+
+    await sleep(50);
+
+    owner.onRequest<number, number>('triple', (n) => n * 3);
+
+    const result = await requester.request<number, number>('triple', 4);
+    expect(result).toBe(12);
+  });
+
+  it('ignores no-handler responses from other peers when one peer can satisfy the request', async () => {
+    const sock = tempSocketPath();
+
+    const relayServer = createBus(sock);
+    await relayServer.ready();
+
+    const requester = createBus(sock);
+    const idlePeer = createBus(sock);
+    const owner = createBus(sock);
+    await requester.ready();
+    await idlePeer.ready();
+    await owner.ready();
+
+    await sleep(50);
+
+    owner.onRequest<number, number>('delayed-double', async (n) => {
+      await sleep(25);
+      return n * 2;
+    });
+
+    const result = await requester.request<number, number>('delayed-double', 5);
+    expect(result).toBe(10);
+  });
+
   // ---------------------------------------------------------------
   // Server election race
   // ---------------------------------------------------------------
