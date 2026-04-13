@@ -1,0 +1,12 @@
+# E2E dry-run Group 2.14 — standalone rebase retry must not timeout-kill owner.
+name: "e2e-dry-run group2 2.14 standalone timeout deadlock guard"
+repoUrl: git@github.com:example-org/acme-repo.git
+onFinish: none
+mergeMode: manual
+baseBranch: HEAD
+
+tasks:
+  - id: e2e-g2214-taskA
+    description: "E2E 2.14 — long failing task used to trigger standalone timeout kill"
+    command: sleep 3; exit 1
+    dependencies: []
