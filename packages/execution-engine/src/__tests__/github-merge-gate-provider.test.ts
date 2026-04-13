@@ -367,20 +367,32 @@ describe('GitHubMergeGateProvider', () => {
       const { spawn } = await import('node:child_process');
       const spawnMock = vi.mocked(spawn);
 
-      let callCount = 0;
       spawnMock.mockImplementation(((cmd: string, args: string[]) => {
-        // detectForkOwner: upstream exists
         if (cmd === 'git' && args?.[0] === 'remote' && args?.[1] === 'get-url' && args?.[2] === 'upstream') {
           return mockSpawnResult('https://github.com/Neko-Catpital-Labs/Invoker.git', 0);
         }
-        // detectForkOwner: origin URL
         if (cmd === 'git' && args?.[0] === 'remote' && args?.[1] === 'get-url' && args?.[2] === 'origin') {
           return mockSpawnResult('https://github.com/EdbertChan/Invoker/', 0);
         }
-        callCount++;
-        if (callCount === 1) return mockSpawnResult('', 0); // git push
-        else if (callCount === 2) return mockSpawnResult('[]', 0); // gh pr list
-        else return mockSpawnResult('{"html_url":"https://github.com/Neko-Catpital-Labs/Invoker/pull/50","number":50}', 0);
+        if (cmd === 'git' && args?.[0] === 'fetch') {
+          return mockSpawnResult('', 0);
+        }
+        if (cmd === 'git' && args?.[0] === 'rev-list' && args?.[1] === 'upstream/master..origin/master') {
+          return mockSpawnResult('fork-only-sha', 0);
+        }
+        if (cmd === 'git' && args?.[0] === 'rev-list' && args?.[1] === 'upstream/master..HEAD') {
+          return mockSpawnResult('feature-only-sha', 0);
+        }
+        if (cmd === 'git' && args?.[0] === 'push') {
+          return mockSpawnResult('', 0);
+        }
+        if (cmd === 'gh' && args?.[0] === 'pr' && args?.[1] === 'list') {
+          return mockSpawnResult('[]', 0);
+        }
+        if (cmd === 'gh' && args?.[0] === 'api' && args?.[1] === 'repos/{owner}/{repo}/pulls') {
+          return mockSpawnResult('{"html_url":"https://github.com/Neko-Catpital-Labs/Invoker/pull/50","number":50}', 0);
+        }
+        throw new Error(`Unexpected command: ${cmd} ${args.join(' ')}`);
       }) as any);
 
       const result = await provider.createReview({
@@ -403,6 +415,91 @@ describe('GitHubMergeGateProvider', () => {
         expect.arrayContaining(['-f', 'head=EdbertChan:plan/my-feature']),
         expect.anything(),
       );
+    });
+
+    it('auto-repairs a polluted PR branch before pushing to origin', async () => {
+      const { spawn } = await import('node:child_process');
+      const spawnMock = vi.mocked(spawn);
+      const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(1234567890);
+
+      spawnMock.mockImplementation(((cmd: string, args: string[]) => {
+        if (cmd === 'git' && args?.[0] === 'remote' && args?.[1] === 'get-url' && args?.[2] === 'upstream') {
+          return mockSpawnResult('https://github.com/Neko-Catpital-Labs/Invoker.git', 0);
+        }
+        if (cmd === 'git' && args?.[0] === 'remote' && args?.[1] === 'get-url' && args?.[2] === 'origin') {
+          return mockSpawnResult('https://github.com/EdbertChan/Invoker/', 0);
+        }
+        if (cmd === 'git' && args?.[0] === 'fetch') {
+          return mockSpawnResult('', 0);
+        }
+        if (cmd === 'git' && args?.[0] === 'rev-list' && args?.[1] === 'upstream/master..origin/master') {
+          return mockSpawnResult('fork-only-sha\nfork-only-sha-2', 0);
+        }
+        if (cmd === 'git' && args?.[0] === 'rev-list' && args?.[1] === 'upstream/master..HEAD') {
+          return mockSpawnResult('feature-sha\nfork-only-sha', 0);
+        }
+        if (cmd === 'git' && args?.[0] === 'rev-list' && args?.[1] === '--reverse' && args?.[2] === 'origin/master..HEAD') {
+          return mockSpawnResult('feature-sha', 0);
+        }
+        if (cmd === 'git' && args?.[0] === 'branch' && args?.[1] === '--show-current') {
+          return mockSpawnResult('plan/polluted', 0);
+        }
+        if (cmd === 'git' && args?.[0] === 'rev-parse' && args?.[1] === '--verify' && args?.[2] === 'HEAD') {
+          return mockSpawnResult('deadbeefdeadbeefdeadbeefdeadbeefdeadbeef', 0);
+        }
+        if (cmd === 'git' && args?.[0] === 'switch' && args?.[1] === '-C') {
+          return mockSpawnResult('', 0);
+        }
+        if (cmd === 'git' && args?.[0] === 'cherry-pick') {
+          return mockSpawnResult('', 0);
+        }
+        if (cmd === 'git' && args?.[0] === 'push') {
+          return mockSpawnResult('', 0);
+        }
+        if (cmd === 'gh' && args?.[0] === 'pr' && args?.[1] === 'list') {
+          return mockSpawnResult('[]', 0);
+        }
+        if (cmd === 'gh' && args?.[0] === 'api' && args?.[1] === 'repos/{owner}/{repo}/pulls') {
+          return mockSpawnResult('{"html_url":"https://github.com/Neko-Catpital-Labs/Invoker/pull/51","number":51}', 0);
+        }
+        if (cmd === 'git' && args?.[0] === 'switch' && args?.[1] === 'plan/polluted') {
+          return mockSpawnResult('', 0);
+        }
+        if (cmd === 'git' && args?.[0] === 'branch' && args?.[1] === '-D') {
+          return mockSpawnResult('', 0);
+        }
+        throw new Error(`Unexpected command: ${cmd} ${args.join(' ')}`);
+      }) as any);
+
+      const result = await provider.createReview({
+        baseBranch: 'master',
+        featureBranch: 'plan/polluted',
+        title: 'Polluted PR',
+        cwd: '/tmp/repo',
+      });
+
+      expect(result.url).toBe('https://github.com/Neko-Catpital-Labs/Invoker/pull/51');
+      expect(spawnMock).toHaveBeenCalledWith(
+        'git',
+        ['switch', '-C', 'invoker/pr-clean/plan-polluted-1234567890', 'upstream/master'],
+        expect.anything(),
+      );
+      expect(spawnMock).toHaveBeenCalledWith(
+        'git',
+        ['cherry-pick', 'feature-sha'],
+        expect.anything(),
+      );
+      expect(spawnMock).toHaveBeenCalledWith(
+        'git',
+        ['push', '--force', '-u', 'origin', 'invoker/pr-clean/plan-polluted-1234567890:plan/polluted'],
+        expect.anything(),
+      );
+      expect(spawnMock).toHaveBeenCalledWith(
+        'git',
+        ['branch', '-D', 'invoker/pr-clean/plan-polluted-1234567890'],
+        expect.anything(),
+      );
+      nowSpy.mockRestore();
     });
   });
 

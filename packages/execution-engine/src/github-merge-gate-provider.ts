@@ -15,6 +15,7 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
   }): Promise<MergeGateProviderResult> {
     const { baseBranch, featureBranch, title, cwd, body } = opts;
     console.log(`${RESTART_TO_BRANCH_TRACE} GitHubMergeGateProvider.createReview baseBranch=${baseBranch} featureBranch=${featureBranch} title=${title} cwd=${cwd} body=${body}`);
+    const preparedBranch = await this.prepareReviewBranch(cwd, featureBranch);
     const ghBase = normalizeBranchForGithubCli(baseBranch);
     const ghHead = normalizeBranchForGithubCli(featureBranch);
 
@@ -24,52 +25,60 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
     const apiHead = forkOwner ? `${forkOwner}:${ghHead}` : ghHead;
     console.log(`[merge-gate] createReview: ghBase=${ghBase} apiHead=${apiHead} forkOwner=${forkOwner ?? 'none'} cwd=${cwd}`);
 
-    // Push feature branch to origin
-    await this.exec('git', ['push', '--force', '-u', 'origin', featureBranch], cwd);
+    try {
+      // Push feature branch to origin
+      if (preparedBranch.pushSource === featureBranch) {
+        await this.exec('git', ['push', '--force', '-u', 'origin', featureBranch], cwd);
+      } else {
+        await this.exec('git', ['push', '--force', '-u', 'origin', `${preparedBranch.pushSource}:${featureBranch}`], cwd);
+      }
 
-    // Check for existing open PR on this branch
-    const listOutput = await this.exec('gh', [
-      'pr', 'list',
-      '--head', apiHead,
-      '--base', ghBase,
-      '--state', 'open',
-      '--json', 'url,number',
-      '--limit', '1',
-    ], cwd);
-    console.log(`${RESTART_TO_BRANCH_TRACE} GitHubMergeGateProvider.createReview listOutput=${listOutput}`);
+      // Check for existing open PR on this branch
+      const listOutput = await this.exec('gh', [
+        'pr', 'list',
+        '--head', apiHead,
+        '--base', ghBase,
+        '--state', 'open',
+        '--json', 'url,number',
+        '--limit', '1',
+      ], cwd);
+      console.log(`${RESTART_TO_BRANCH_TRACE} GitHubMergeGateProvider.createReview listOutput=${listOutput}`);
 
-    const existing = JSON.parse(listOutput) as { url: string; number: number }[];
-    console.log(`${RESTART_TO_BRANCH_TRACE} GitHubMergeGateProvider.createReview existing=${existing}`);
+      const existing = JSON.parse(listOutput) as { url: string; number: number }[];
+      console.log(`${RESTART_TO_BRANCH_TRACE} GitHubMergeGateProvider.createReview existing=${existing}`);
 
-    if (existing.length > 0) {
-      // Update title (and body if provided) of existing PR via REST API.
-      // gh pr edit uses the deprecated projectCards GraphQL field which
-      // causes exit-code 1 on gh CLI v2.45.0+.
+      if (existing.length > 0) {
+        // Update title (and body if provided) of existing PR via REST API.
+        // gh pr edit uses the deprecated projectCards GraphQL field which
+        // causes exit-code 1 on gh CLI v2.45.0+.
 
-      const apiArgs = [
-        'api', `repos/{owner}/{repo}/pulls/${existing[0].number}`,
-        '--method', 'PATCH', '-f', `title=${title}`,
+        const apiArgs = [
+          'api', `repos/{owner}/{repo}/pulls/${existing[0].number}`,
+          '--method', 'PATCH', '-f', `title=${title}`,
+        ];
+        if (body) apiArgs.push('-f', `body=${body}`);
+        const gh_result = await this.exec('gh', apiArgs, cwd);
+        console.log(`${RESTART_TO_BRANCH_TRACE} GitHubMergeGateProvider.createReview update existing gh_result=${gh_result}`);
+
+        return { url: existing[0].url, identifier: String(existing[0].number) };
+      }
+
+      // No existing PR — create a new one via REST API.
+      // gh pr create may also trigger the deprecated projectCards query.
+      const createArgs = [
+        'api', 'repos/{owner}/{repo}/pulls',
+        '--method', 'POST', '-f', `base=${ghBase}`,
+        '-f', `head=${apiHead}`, '-f', `title=${title}`,
+        '-f', `body=${body ?? ''}`,
       ];
-      if (body) apiArgs.push('-f', `body=${body}`);
-      const gh_result = await this.exec('gh', apiArgs, cwd);
-      console.log(`${RESTART_TO_BRANCH_TRACE} GitHubMergeGateProvider.createReview update existing gh_result=${gh_result}`);
+      const stdout = await this.exec('gh', createArgs, cwd);
+      const pr = JSON.parse(stdout) as { html_url: string; number: number };
 
-      return { url: existing[0].url, identifier: String(existing[0].number) };
+      console.log(`${RESTART_TO_BRANCH_TRACE} GitHubMergeGateProvider.createReview creating stdout=${stdout}`);
+      return { url: pr.html_url, identifier: String(pr.number) };
+    } finally {
+      await preparedBranch.cleanup();
     }
-
-    // No existing PR — create a new one via REST API.
-    // gh pr create may also trigger the deprecated projectCards query.
-    const createArgs = [
-      'api', 'repos/{owner}/{repo}/pulls',
-      '--method', 'POST', '-f', `base=${ghBase}`,
-      '-f', `head=${apiHead}`, '-f', `title=${title}`,
-      '-f', `body=${body ?? ''}`,
-    ];
-    const stdout = await this.exec('gh', createArgs, cwd);
-    const pr = JSON.parse(stdout) as { html_url: string; number: number };
-
-    console.log(`${RESTART_TO_BRANCH_TRACE} GitHubMergeGateProvider.createReview creating stdout=${stdout}`);
-    return { url: pr.html_url, identifier: String(pr.number) };
   }
 
   async checkApproval(opts: {
@@ -125,6 +134,107 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
       return match?.[1];
     } catch {
       return undefined;
+    }
+  }
+
+  private async prepareReviewBranch(cwd: string, featureBranch: string): Promise<{
+    pushSource: string;
+    cleanup: () => Promise<void>;
+  }> {
+    if (!(await this.hasUpstreamRemote(cwd))) {
+      return {
+        pushSource: featureBranch,
+        cleanup: async () => {},
+      };
+    }
+
+    await this.exec('git', ['fetch', '--quiet', 'upstream', 'master'], cwd);
+    await this.exec('git', ['fetch', '--quiet', 'origin', 'master'], cwd);
+
+    const originOnly = new Set(await this.revList('upstream/master..origin/master', cwd));
+    if (originOnly.size === 0) {
+      return {
+        pushSource: featureBranch,
+        cleanup: async () => {},
+      };
+    }
+
+    const headOnly = await this.revList('upstream/master..HEAD', cwd);
+    const polluted = headOnly.filter((sha) => originOnly.has(sha));
+    if (polluted.length === 0) {
+      return {
+        pushSource: featureBranch,
+        cleanup: async () => {},
+      };
+    }
+
+    const intended = await this.revList('origin/master..HEAD', cwd, { reverse: true });
+    if (intended.length === 0) {
+      throw new Error(
+        'Current branch contains fork-only origin/master commits, but there are no feature commits in origin/master..HEAD to auto-repair.',
+      );
+    }
+
+    const currentBranch = await this.exec('git', ['branch', '--show-current'], cwd);
+    const originalHead = await this.exec('git', ['rev-parse', '--verify', 'HEAD'], cwd);
+    const tempBranch = this.buildCleanBranchName(featureBranch);
+    console.warn(`[merge-gate] auto-repairing polluted PR branch ${featureBranch} via ${tempBranch}`);
+
+    try {
+      await this.exec('git', ['switch', '-C', tempBranch, 'upstream/master'], cwd);
+      await this.exec('git', ['cherry-pick', ...intended], cwd);
+    } catch (error) {
+      await this.restoreBranchState(cwd, currentBranch, originalHead);
+      throw error;
+    }
+
+    return {
+      pushSource: tempBranch,
+      cleanup: async () => {
+        await this.restoreBranchState(cwd, currentBranch, originalHead);
+        await this.deleteBranchIfPresent(cwd, tempBranch);
+      },
+    };
+  }
+
+  private async hasUpstreamRemote(cwd: string): Promise<boolean> {
+    try {
+      await this.exec('git', ['remote', 'get-url', 'upstream'], cwd);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private async revList(range: string, cwd: string, opts?: { reverse?: boolean }): Promise<string[]> {
+    const args = ['rev-list'];
+    if (opts?.reverse) args.push('--reverse');
+    args.push(range);
+    const stdout = await this.exec('git', args, cwd);
+    return stdout
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean);
+  }
+
+  private buildCleanBranchName(featureBranch: string): string {
+    const safe = featureBranch.replace(/[^A-Za-z0-9._/-]+/g, '-').replace(/[\\/]+/g, '-');
+    return `invoker/pr-clean/${safe}-${Date.now()}`;
+  }
+
+  private async restoreBranchState(cwd: string, currentBranch: string, originalHead: string): Promise<void> {
+    if (currentBranch.trim() !== '') {
+      await this.exec('git', ['switch', currentBranch], cwd);
+      return;
+    }
+    await this.exec('git', ['switch', '--detach', originalHead], cwd);
+  }
+
+  private async deleteBranchIfPresent(cwd: string, branch: string): Promise<void> {
+    try {
+      await this.exec('git', ['branch', '-D', branch], cwd);
+    } catch {
+      // Cleanup should not mask PR creation success.
     }
   }
 
