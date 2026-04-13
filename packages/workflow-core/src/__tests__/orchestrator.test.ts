@@ -220,6 +220,61 @@ describe('Orchestrator', () => {
     });
   });
 
+  describe('workflow status transitions during retry paths', () => {
+    it('clears stale failed workflow status when a failed task is restarted', () => {
+      orchestrator.loadPlan({
+        name: 'Retry workflow',
+        onFinish: 'none',
+        tasks: [
+          { id: 't1', description: 'First', command: 'exit 1' },
+        ],
+      });
+
+      const workflowId = orchestrator.getWorkflowIds()[0]!;
+      const taskId = orchestrator.getAllTasks().find((task) => task.config.workflowId === workflowId)!.id;
+
+      orchestrator.startExecution();
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: taskId, status: 'failed', outputs: { exitCode: 1, error: 'boom' } }),
+      );
+
+      persistence.workflows.get(workflowId)!.status = 'failed';
+
+      const restarted = orchestrator.restartTask(taskId);
+
+      expect(restarted.some((task) => task.id === taskId && task.status === 'running')).toBe(true);
+      expect(persistence.workflows.get(workflowId)?.status).toBe('running');
+    });
+
+    it('clears stale failed workflow status when a workflow is recreated', () => {
+      orchestrator.loadPlan({
+        name: 'Recreate workflow',
+        onFinish: 'none',
+        tasks: [
+          { id: 't1', description: 'First', command: 'exit 1' },
+          { id: 't2', description: 'Second', command: 'echo 2', dependencies: ['t1'] },
+        ],
+      });
+
+      const workflowId = orchestrator.getWorkflowIds()[0]!;
+      const taskId = orchestrator.getAllTasks().find(
+        (task) => task.config.workflowId === workflowId && task.id.endsWith('/t1'),
+      )!.id;
+
+      orchestrator.startExecution();
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: taskId, status: 'failed', outputs: { exitCode: 1, error: 'boom' } }),
+      );
+
+      persistence.workflows.get(workflowId)!.status = 'failed';
+
+      const restarted = orchestrator.recreateWorkflow(workflowId);
+
+      expect(restarted.some((task) => task.id === taskId && task.status === 'running')).toBe(true);
+      expect(persistence.workflows.get(workflowId)?.status).toBe('running');
+    });
+  });
+
   // ── loadPlan ────────────────────────────────────────────
 
   describe('loadPlan', () => {
