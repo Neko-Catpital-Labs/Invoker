@@ -64,8 +64,8 @@ if [ "$(uname)" = "Linux" ]; then
 fi
 
 # Helper functions
-# Read-only queries remain quiet; mutating commands run in standalone owner mode
-# and preserve stderr so operational failures are visible.
+# Read-only queries remain quiet; mutating commands delegate to the current owner
+# so workflow-scoped mutations can run in parallel lanes.
 run_with_optional_timeout() {
   local seconds="$1"
   shift
@@ -91,7 +91,7 @@ headless_query() {
 
 headless_mutation() {
   # shellcheck disable=SC2086
-  INVOKER_HEADLESS_STANDALONE=1 "$ELECTRON" "$MAIN" $SANDBOX_FLAG --headless "$@"
+  "$ELECTRON" "$MAIN" $SANDBOX_FLAG --headless "$@"
 }
 
 headless_workflow_ids() {
@@ -173,17 +173,6 @@ if [ -z "$WORKFLOW_IDS" ]; then
   exit 0
 fi
 
-# This script runs mutations in standalone mode, which is single-writer.
-# Do not fan out concurrent writers and do not timeout-kill the owner process.
-if [ "$PARALLELISM" -ne 1 ]; then
-  echo "INFO: standalone mode detected, forcing --parallel 1 (single DB writer)." >&2
-  PARALLELISM=1
-fi
-if [ "${COMMAND_TIMEOUT_SECONDS:-0}" -gt 0 ]; then
-  echo "INFO: standalone mode detected, disabling per-command timeout to avoid orphaned running tasks." >&2
-  COMMAND_TIMEOUT_SECONDS=0
-fi
-
 if [ "$RECOVER_STALE" = true ]; then
   STALE_WF_IDS="$(find_stale_workflow_ids)"
   if [ -n "$STALE_WF_IDS" ]; then
@@ -241,7 +230,7 @@ process_one_workflow() {
   if [ "$COMMAND_TIMEOUT_SECONDS" -gt 0 ]; then
     set +e
     cmd_out="$(
-      run_with_optional_timeout "$COMMAND_TIMEOUT_SECONDS" env INVOKER_HEADLESS_STANDALONE=1 "$ELECTRON" "$MAIN" $SANDBOX_FLAG --headless rebase "$task_id" 2>&1
+      run_with_optional_timeout "$COMMAND_TIMEOUT_SECONDS" "$ELECTRON" "$MAIN" $SANDBOX_FLAG --headless rebase "$task_id" 2>&1
     )"
     cmd_status=$?
     set -e

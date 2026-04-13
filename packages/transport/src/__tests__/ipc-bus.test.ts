@@ -250,6 +250,27 @@ describe('IpcBus', () => {
     expect(result).toBe(12);
   });
 
+  it('client-only buses never steal server ownership', async () => {
+    const sock = tempSocketPath();
+
+    const clientOnly = new IpcBus(sock, { allowServe: false });
+    buses.push(clientOnly);
+    await clientOnly.ready();
+
+    const owner = createBus(sock);
+    await owner.ready();
+    owner.onRequest<string, string>('echo', (value) => `owner:${value}`);
+
+    const requester = new IpcBus(sock, { allowServe: false });
+    buses.push(requester);
+    await requester.ready();
+
+    await sleep(50);
+
+    const result = await requester.request<string, string>('echo', 'ok');
+    expect(result).toBe('owner:ok');
+  });
+
   it('ignores no-handler responses from other peers when one peer can satisfy the request', async () => {
     const sock = tempSocketPath();
 

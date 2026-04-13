@@ -50,7 +50,7 @@ headless_query() {
 # Helper: mutating command (stderr preserved for debugging real failures)
 headless_mutation() {
   # shellcheck disable=SC2086
-  INVOKER_HEADLESS_STANDALONE=1 "$ELECTRON" "$MAIN" $SANDBOX_FLAG --headless "$@"
+  "$ELECTRON" "$MAIN" $SANDBOX_FLAG --headless "$@"
 }
 
 # Helper: extract workflow IDs (filter Electron init noise)
@@ -105,6 +105,13 @@ while IFS= read -r WF_ID; do
     # Extract task ID — grab "id":"..." value
     TASK_ID=$(echo "$TASK_JSON" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
     [[ -z "$TASK_ID" ]] && continue
+
+    TASK_STATUS=$(echo "$TASK_JSON" | sed -n 's/.*"status":"\([^"]*\)".*/\1/p')
+    if [[ "$TASK_STATUS" == "running" || "$TASK_STATUS" == "fixing_with_ai" ]]; then
+      echo "[$WF_IDX/$TOTAL_WF] $TASK_ID ($TASK_STATUS; deferred until task is idle)"
+      SKIPPED=$((SKIPPED + 1))
+      continue
+    fi
 
     # Check if task is already codex
     if echo "$TASK_JSON" | grep -q '"executionAgent":"codex"'; then

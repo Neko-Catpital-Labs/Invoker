@@ -127,12 +127,17 @@ class FrameDecoder {
 
 export const DEFAULT_SOCKET_PATH = join(homedir(), '.invoker', 'ipc-transport.sock');
 
+export interface IpcBusOptions {
+  allowServe?: boolean;
+}
+
 // ---------------------------------------------------------------------------
 // IpcBus
 // ---------------------------------------------------------------------------
 
 export class IpcBus implements MessageBus {
   private readonly socketPath: string;
+  private readonly allowServe: boolean;
 
   // Local handler registries (same structure as LocalBus).
   private subscribers = new Map<string, Set<MessageHandler>>();
@@ -158,8 +163,9 @@ export class IpcBus implements MessageBus {
     { source: Socket; awaiting: Set<Socket>; channel: string }
   >();
 
-  constructor(socketPath: string = DEFAULT_SOCKET_PATH) {
+  constructor(socketPath: string = DEFAULT_SOCKET_PATH, options: IpcBusOptions = {}) {
     this.socketPath = socketPath;
+    this.allowServe = options.allowServe ?? true;
     this.readyPromise = new Promise<void>((r) => {
       this.resolveReady = r;
     });
@@ -183,9 +189,17 @@ export class IpcBus implements MessageBus {
 
     sock.on('error', (err: NodeJS.ErrnoException) => {
       if (err.code === 'ECONNREFUSED' || err.code === 'ENOENT') {
+        if (!this.allowServe) {
+          this.resolveReady();
+          return;
+        }
         // No server yet — try to become the server.
         this.tryServe();
       } else {
+        if (!this.allowServe) {
+          this.resolveReady();
+          return;
+        }
         // Unexpected error — still try to serve.
         this.tryServe();
       }

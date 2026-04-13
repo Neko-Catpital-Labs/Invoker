@@ -516,7 +516,10 @@ if (isHeadless) {
     // Try delegation for mutating commands first (owner mode).
     // In standalone mode we skip delegation and run locally.
     if (mutatingMode && !standaloneMode) {
-      const delegationBus = new IpcBus();
+      // Delegating headless commands must never become the IPC server.
+      // Otherwise a transient submitter can steal the transport socket away
+      // from the actual GUI/standalone mutation owner.
+      const delegationBus = new IpcBus(undefined, { allowServe: false });
       try {
         await delegationBus.ready();
 
