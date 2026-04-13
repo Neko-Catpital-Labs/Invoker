@@ -81,8 +81,25 @@ run_with_optional_timeout() {
     gtimeout "$seconds" "$@"
     return $?
   fi
-  echo "INFO: timeout(1) not found; running without per-command timeout." >&2
-  "$@"
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - "$seconds" "$@" <<'PY'
+import subprocess
+import sys
+
+timeout = int(sys.argv[1])
+cmd = sys.argv[2:]
+
+try:
+    completed = subprocess.run(cmd, timeout=timeout, check=False)
+    sys.exit(completed.returncode)
+except subprocess.TimeoutExpired:
+    print(f"Timed out after {timeout}s: {' '.join(cmd)}", file=sys.stderr)
+    sys.exit(124)
+PY
+    return $?
+  fi
+  echo "ERROR: timeout(1), gtimeout, and python3 are unavailable; cannot enforce per-command timeout." >&2
+  return 127
 }
 
 headless_query() {
@@ -131,7 +148,7 @@ resume_stale_workflow() {
 
   while [ "$attempt" -le "$STALE_RECOVERY_RETRIES" ]; do
     set +e
-    cmd_out="$(headless_mutation resume "$stale_wf" 2>&1)"
+    cmd_out="$(headless_mutation --no-track resume "$stale_wf" 2>&1)"
     cmd_status=$?
     set -e
 
@@ -230,14 +247,14 @@ process_one_workflow() {
   if [ "$COMMAND_TIMEOUT_SECONDS" -gt 0 ]; then
     set +e
     cmd_out="$(
-      run_with_optional_timeout "$COMMAND_TIMEOUT_SECONDS" "$ELECTRON" "$MAIN" $SANDBOX_FLAG --headless rebase "$task_id" 2>&1
+      run_with_optional_timeout "$COMMAND_TIMEOUT_SECONDS" "$ELECTRON" "$MAIN" $SANDBOX_FLAG --headless --no-track rebase "$task_id" 2>&1
     )"
     cmd_status=$?
     set -e
   else
     set +e
     cmd_out="$(
-      headless_mutation rebase "$task_id" 2>&1
+      headless_mutation --no-track rebase "$task_id" 2>&1
     )"
     cmd_status=$?
     set -e

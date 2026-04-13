@@ -303,6 +303,58 @@ describe('headless delegation enforcement', () => {
         const elapsed = Date.now() - start;
         expect(elapsed).toBeLessThan(1000);
       });
+
+      it('headless resume only relaunches orphaned tasks in the requested workflow', async () => {
+        mockDeps.orchestrator.getAllTasks = vi.fn(() => [
+          {
+            id: 'wf-1/task-1',
+            status: 'running',
+            config: { workflowId: 'wf-1' },
+            execution: {},
+          } as any,
+          {
+            id: 'wf-2/task-1',
+            status: 'running',
+            config: { workflowId: 'wf-2' },
+            execution: {},
+          } as any,
+        ]);
+
+        const depsWithNoTrack: HeadlessDeps = { ...mockDeps, noTrack: true } as HeadlessDeps;
+        await runHeadless(['resume', 'wf-1'], depsWithNoTrack);
+
+        expect(mockDeps.orchestrator.restartTask).toHaveBeenCalledTimes(1);
+        expect(mockDeps.orchestrator.restartTask).toHaveBeenCalledWith('wf-1/task-1');
+      });
+
+      it('headless set agent with deps.noTrack=true returns without polling all workflows', async () => {
+        mockDeps.commandService.editTaskAgent = vi.fn(async () => ({
+          ok: true as const,
+          data: [],
+        }));
+        mockDeps.persistence.listWorkflows = vi.fn(() => [{
+          id: 'wf-1',
+          name: 'test-workflow',
+          generation: 0,
+          status: 'running' as const,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }]);
+        mockDeps.persistence.loadTasks = vi.fn(() => [{
+          id: 'wf-1/task-1',
+          status: 'pending',
+          config: { workflowId: 'wf-1' },
+          execution: {},
+        } as any]);
+
+        const depsWithNoTrack: HeadlessDeps = { ...mockDeps, noTrack: true } as HeadlessDeps;
+        const start = Date.now();
+        await runHeadless(['set', 'agent', 'wf-1/task-1', 'codex'], depsWithNoTrack);
+        const elapsed = Date.now() - start;
+
+        expect(mockDeps.commandService.editTaskAgent).toHaveBeenCalled();
+        expect(elapsed).toBeLessThan(1000);
+      });
     });
 
     describe('query commands work in both modes', () => {

@@ -764,7 +764,10 @@ async function headlessResume(
   // Relaunch tasks stuck in 'running' from a previous session
   const orphanRestarted: TaskState[] = [];
   for (const task of orchestrator.getAllTasks()) {
-    if (task.status === 'running' || task.status === 'fixing_with_ai') {
+    if (
+      (task.status === 'running' || task.status === 'fixing_with_ai') &&
+      task.config.workflowId === workflowId
+    ) {
       deps.logger.info(`relaunching orphaned in-flight task "${task.id}" (${task.status})`, { module: 'headless' });
       const restarted = orchestrator.restartTask(task.id);
       orphanRestarted.push(...restarted.filter(t => t.status === 'running'));
@@ -780,7 +783,7 @@ async function headlessResume(
     return;
   }
 
-  await waitForCompletion(orchestrator, undefined, waitForApproval, autoFix.isBusy);
+  await waitForCompletion(orchestrator, workflowId, waitForApproval, autoFix.isBusy);
 
   await api.close().catch(() => {});
   autoFix.unsubscribe();
@@ -948,6 +951,11 @@ async function headlessRebaseAndRetry(taskId: string, deps: HeadlessDeps): Promi
   const runnable = started.filter(t => t.status === 'running');
   if (runnable.length > 0) {
     await te.executeTasks(runnable);
+    if (deps.noTrack) {
+      process.stdout.write('[headless] --no-track enabled: rebase accepted; exiting without tracking.\n');
+      autoFix.unsubscribe();
+      return;
+    }
     await waitForCompletion(deps.orchestrator, workflowId, undefined, autoFix.isBusy);
   }
   autoFix.unsubscribe();
@@ -970,6 +978,11 @@ async function headlessRecreateWorkflow(workflowId: string, deps: HeadlessDeps):
       await te.executeTasks(runnable);
     } finally {
       remoteFetchForPool.enabled = true;
+    }
+    if (deps.noTrack) {
+      process.stdout.write('[headless] --no-track enabled: recreate accepted; exiting without tracking.\n');
+      autoFix.unsubscribe();
+      return;
     }
     await waitForCompletion(deps.orchestrator, workflowId, undefined, autoFix.isBusy);
     autoFix.unsubscribe();
@@ -998,6 +1011,11 @@ async function headlessRecreateTask(taskId: string, deps: HeadlessDeps): Promise
   } finally {
     remoteFetchForPool.enabled = true;
   }
+  if (deps.noTrack) {
+    process.stdout.write('[headless] --no-track enabled: recreate-task accepted; exiting without tracking.\n');
+    autoFix.unsubscribe();
+    return;
+  }
   await waitForCompletion(deps.orchestrator, workflowId, undefined, autoFix.isBusy);
   autoFix.unsubscribe();
 }
@@ -1021,13 +1039,19 @@ async function headlessRetryWorkflow(workflowId: string, deps: HeadlessDeps): Pr
   } finally {
     remoteFetchForPool.enabled = true;
   }
+  if (deps.noTrack) {
+    process.stdout.write('[headless] --no-track enabled: restart accepted; exiting without tracking.\n');
+    autoFix.unsubscribe();
+    return;
+  }
   await waitForCompletion(deps.orchestrator, workflowId, undefined, autoFix.isBusy);
   autoFix.unsubscribe();
 }
 
 async function headlessEdit(taskId: string, newCommand: string, deps: HeadlessDeps): Promise<void> {
   if (!taskId || !newCommand) throw new Error('Missing arguments. Usage: --headless edit <taskId> <newCommand>');
-  taskId = restoreWorkflowForTask(taskId, deps).resolvedTaskId;
+  const restored = restoreWorkflowForTask(taskId, deps);
+  taskId = restored.resolvedTaskId;
 
   const envelope = makeEnvelope('edit-task-command', 'headless', 'task', { taskId, newCommand });
   const result = await deps.commandService.editTaskCommand(envelope);
@@ -1037,13 +1061,19 @@ async function headlessEdit(taskId: string, newCommand: string, deps: HeadlessDe
   const taskExecutor = createHeadlessExecutor(deps);
   const autoFix = wireHeadlessAutoFix(deps, taskExecutor);
   await taskExecutor.executeTasks(result.data);
-  await waitForCompletion(deps.orchestrator, undefined, undefined, autoFix.isBusy);
+  if (deps.noTrack) {
+    process.stdout.write('[headless] --no-track enabled: set command accepted; exiting without tracking.\n');
+    autoFix.unsubscribe();
+    return;
+  }
+  await waitForCompletion(deps.orchestrator, restored.workflowId, undefined, autoFix.isBusy);
   autoFix.unsubscribe();
 }
 
 async function headlessEditExecutor(taskId: string, executorType: string, deps: HeadlessDeps): Promise<void> {
   if (!taskId || !executorType) throw new Error('Missing arguments. Usage: --headless edit-executor <taskId> <executorType>');
-  taskId = restoreWorkflowForTask(taskId, deps).resolvedTaskId;
+  const restored = restoreWorkflowForTask(taskId, deps);
+  taskId = restored.resolvedTaskId;
 
   const envelope = makeEnvelope('edit-task-type', 'headless', 'task', { taskId, executorType });
   const result = await deps.commandService.editTaskType(envelope);
@@ -1053,13 +1083,19 @@ async function headlessEditExecutor(taskId: string, executorType: string, deps: 
   const taskExecutor = createHeadlessExecutor(deps);
   const autoFix = wireHeadlessAutoFix(deps, taskExecutor);
   await taskExecutor.executeTasks(result.data);
-  await waitForCompletion(deps.orchestrator, undefined, undefined, autoFix.isBusy);
+  if (deps.noTrack) {
+    process.stdout.write('[headless] --no-track enabled: set executor accepted; exiting without tracking.\n');
+    autoFix.unsubscribe();
+    return;
+  }
+  await waitForCompletion(deps.orchestrator, restored.workflowId, undefined, autoFix.isBusy);
   autoFix.unsubscribe();
 }
 
 async function headlessEditAgent(taskId: string, agentName: string, deps: HeadlessDeps): Promise<void> {
   if (!taskId || !agentName) throw new Error('Missing arguments. Usage: --headless edit-agent <taskId> <claude|codex>');
-  taskId = restoreWorkflowForTask(taskId, deps).resolvedTaskId;
+  const restored = restoreWorkflowForTask(taskId, deps);
+  taskId = restored.resolvedTaskId;
 
   const envelope = makeEnvelope('edit-task-agent', 'headless', 'task', { taskId, agentName });
   const result = await deps.commandService.editTaskAgent(envelope);
@@ -1069,7 +1105,12 @@ async function headlessEditAgent(taskId: string, agentName: string, deps: Headle
   const taskExecutor = createHeadlessExecutor(deps);
   const autoFix = wireHeadlessAutoFix(deps, taskExecutor);
   await taskExecutor.executeTasks(result.data);
-  await waitForCompletion(deps.orchestrator, undefined, undefined, autoFix.isBusy);
+  if (deps.noTrack) {
+    process.stdout.write('[headless] --no-track enabled: set agent accepted; exiting without tracking.\n');
+    autoFix.unsubscribe();
+    return;
+  }
+  await waitForCompletion(deps.orchestrator, restored.workflowId, undefined, autoFix.isBusy);
   autoFix.unsubscribe();
 }
 

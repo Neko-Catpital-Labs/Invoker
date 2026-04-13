@@ -3,7 +3,7 @@
 #
 # Queries each workflow for non-merge tasks, identifies those using Claude
 # (executionAgent == "claude" or unset), and switches them to Codex via
-# --headless set agent. NOTE: set agent restarts the task immediately.
+# --headless --no-track set agent. NOTE: set agent restarts the task immediately.
 #
 # Usage:
 #   bash scripts/convert-claude-to-codex.sh --dry-run          # show what would change
@@ -131,7 +131,7 @@ while IFS= read -r WF_ID; do
       echo "         (dry-run) would run: set agent $TASK_ID codex"
       SKIPPED=$((SKIPPED + 1))
     else
-      if headless_mutation set agent "$TASK_ID" codex 2>&1; then
+      if headless_mutation --no-track set agent "$TASK_ID" codex 2>&1; then
         echo "         OK"
         CONVERTED=$((CONVERTED + 1))
       else

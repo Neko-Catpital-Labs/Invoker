@@ -140,6 +140,25 @@ describe('headless→owner delegation', () => {
         waitForApproval: undefined,
       });
     });
+
+    it('delegates rebase with noTrack so owner can return before workflow settlement', async () => {
+      const ownerHandler = vi.fn(async () => ({ success: true }));
+      messageBus.onRequest('headless.exec', ownerHandler);
+
+      const delegated = await tryDelegateExec(
+        ['rebase', 'wf-1/task-1'],
+        messageBus,
+        undefined,
+        true,
+      );
+
+      expect(delegated).toBe(true);
+      expect(ownerHandler).toHaveBeenCalledWith({
+        args: ['rebase', 'wf-1/task-1'],
+        noTrack: true,
+        waitForApproval: undefined,
+      });
+    });
   });
 
   describe('fallback to standalone when owner is unavailable', () => {
