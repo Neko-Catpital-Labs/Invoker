@@ -6,6 +6,7 @@ import { bashPreserveOrReset, bashMergeUpstreams, parsePreserveResult, parseMerg
 import { RESTART_TO_BRANCH_TRACE } from './exec-trace.js';
 import type { AgentRegistry } from './agent-registry.js';
 import { checkStaleness } from './git-staleness-detector.js';
+import { rewriteLegacyAbsoluteRepoCd } from './command-normalization.js';
 
 
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
@@ -712,7 +713,10 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
     if (request.actionType === 'command') {
       const command = request.inputs.command;
       if (!command) throw new Error('WorkRequest with actionType "command" must have inputs.command');
-      return { cmd: '/bin/bash', args: ['-c', command] };
+      return {
+        cmd: '/bin/bash',
+        args: ['-c', rewriteLegacyAbsoluteRepoCd(command, request.inputs.repoUrl)],
+      };
     }
     if (request.actionType === 'ai_task') {
       if (opts?.agentRegistry) {

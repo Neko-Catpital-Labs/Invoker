@@ -10,6 +10,7 @@ import { findManagedWorktreeForBranch, abbrevRefMatchesBranch } from './worktree
 import { DEFAULT_WORKTREE_PROVISION_COMMAND } from './default-worktree-provision-command.js';
 import type { AgentRegistry } from './agent-registry.js';
 import { computeRepoUrlHash, sanitizeBranchForPath } from './git-utils.js';
+import { rewriteLegacyAbsoluteRepoCd } from './command-normalization.js';
 import {
   shellPosixSingleQuote as sshGitShellQuote,
   base64Encode as sshGitB64,
@@ -180,7 +181,7 @@ export class SshExecutor extends BaseExecutor<SshEntry> {
     if (request.actionType === 'command') {
       const command = request.inputs.command;
       if (!command) throw new Error('WorkRequest with actionType "command" must have inputs.command');
-      payload = command;
+      payload = rewriteLegacyAbsoluteRepoCd(command, request.inputs.repoUrl);
     } else if (request.actionType === 'ai_task') {
       if (this.agentRegistry) {
         const requestedAgent = request.inputs.executionAgent ?? 'claude';
