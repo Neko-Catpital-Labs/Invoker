@@ -37,15 +37,21 @@ if [ "$(uname)" = "Linux" ]; then
   export LIBGL_ALWAYS_SOFTWARE=1
 fi
 
-# Helper: run a headless CLI command (stderr warnings to /dev/null)
-headless() {
+# Helper: read-only query command (stderr hidden to keep parsing clean)
+headless_query() {
   # shellcheck disable=SC2086
   "$ELECTRON" "$MAIN" $SANDBOX_FLAG --headless "$@" 2>/dev/null
 }
 
+# Helper: mutating command delegated to the current owner (GUI or standalone headless)
+headless_mutation() {
+  # shellcheck disable=SC2086
+  "$ELECTRON" "$MAIN" $SANDBOX_FLAG --headless "$@"
+}
+
 # Helper: extract workflow IDs from label output.
 headless_workflow_ids() {
-  headless "$@" | grep -E '^wf-[0-9]+-[0-9]+$' || true
+  headless_query "$@" | grep -E '^wf-[0-9]+-[0-9]+$' || true
 }
 
 # Query workflow IDs via CLI
@@ -82,7 +88,7 @@ while IFS= read -r WF_ID; do
     continue
   fi
 
-  if headless recreate "$WF_ID" 2>&1; then
+  if headless_mutation recreate "$WF_ID" 2>&1; then
     echo "         OK"
     SUCCEEDED=$((SUCCEEDED + 1))
   else

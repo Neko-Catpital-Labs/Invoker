@@ -1474,13 +1474,25 @@ export function delegationTimeoutMs(args: string[]): number {
   const target = args[1] ?? '';
   const isWorkflowId = /^wf-[^/]+$/.test(target);
 
-  if (command === 'rebase' || command === 'rebase-and-retry') {
-    return 60_000;
+  // Delegated mutations resolve only after the owner finishes executing them.
+  // Long-running workflow resets and queued maintenance commands must therefore
+  // wait up to the global 15-minute operational budget instead of timing out
+  // after the old 5-second "owner missing" window.
+  if (
+    command === 'rebase' ||
+    command === 'rebase-and-retry' ||
+    command === 'recreate' ||
+    command === 'restart' ||
+    command === 'set' ||
+    command === 'fix' ||
+    command === 'resolve-conflict'
+  ) {
+    return 900_000;
   }
-  if (command === 'restart' && isWorkflowId) {
-    return 60_000;
+  if (isWorkflowId) {
+    return 900_000;
   }
-  return 5_000;
+  return 15_000;
 }
 
 /**
