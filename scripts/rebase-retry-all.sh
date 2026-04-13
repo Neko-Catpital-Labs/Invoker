@@ -83,7 +83,12 @@ headless_task_ids() {
 }
 
 find_stale_workflow_ids() {
-  headless_query query tasks --output jsonl \
+  local wf_id=""
+  headless_workflow_ids query workflows --output label \
+    | while IFS= read -r wf_id; do
+        [ -z "$wf_id" ] && continue
+        headless_query query tasks --workflow "$wf_id" --output jsonl
+      done \
     | grep '^{' \
     | jq -r --argjson threshold "$STALE_THRESHOLD_SECONDS" '
         select(.status == "running")
@@ -92,7 +97,7 @@ find_stale_workflow_ids() {
             | sub("\\.[0-9]+Z$"; "Z")
             | fromdateiso8601) as $hb
         | select((now - $hb) > $threshold)
-        | ($task.config.workflowId // $task.workflowId // "")
+        | ($task.config.workflowId // $task.workflowId // (($task.id // "") | split("/")[0]) // "")
       ' \
     | grep -E '^wf-[0-9]+-[0-9]+$' \
     | sort -u || true
