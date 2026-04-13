@@ -1334,7 +1334,15 @@ export class Orchestrator {
     );
     if (allTasks.length === 0) throw new Error(`No tasks found for workflow ${workflowId}`);
 
-    const retryStatuses = new Set(['failed', 'needs_input', 'blocked', 'stale']);
+    const retryStatuses = new Set([
+      'failed',
+      'needs_input',
+      'blocked',
+      'stale',
+      'fixing_with_ai',
+      'awaiting_approval',
+      'review_ready',
+    ]);
 
     const resetChanges: TaskStateChanges = {
       status: 'pending',
@@ -1344,6 +1352,8 @@ export class Orchestrator {
         completedAt: undefined,
         error: undefined,
         exitCode: undefined,
+        pendingFixError: undefined,
+        isFixingWithAI: false,
         // Preserve branch/commit/workspacePath — they contain valid work context
         // Only clear error-related and timing fields
       },
@@ -1353,6 +1363,11 @@ export class Orchestrator {
       .filter((task) => retryStatuses.has(task.status))
       .map((task) => task.id);
     const { affectedIds } = this.resetSubgraphToPending(retryRootIds, resetChanges);
+
+    console.log(
+      `[orchestrator] retryWorkflow invalidation: workflow=${workflowId} ` +
+      `roots=[${retryRootIds.join(', ')}] affected=${affectedIds.length}`,
+    );
 
     console.log(
       `[orchestrator] retryWorkflow: reset ${affectedIds.length}/${allTasks.length} tasks for ${workflowId} ` +
