@@ -1255,6 +1255,7 @@ export class Orchestrator {
       status: 'pending',
       config: { summary: undefined },
       execution: {
+        autoFixAttempts: 0,
         startedAt: undefined,
         completedAt: undefined,
         error: undefined,
@@ -1348,6 +1349,7 @@ export class Orchestrator {
       status: 'pending',
       config: { summary: undefined },
       execution: {
+        autoFixAttempts: 0,
         startedAt: undefined,
         completedAt: undefined,
         error: undefined,
@@ -1398,6 +1400,7 @@ export class Orchestrator {
       status: 'pending',
       config: { summary: undefined },
       execution: {
+        autoFixAttempts: 0,
         startedAt: undefined,
         completedAt: undefined,
         error: undefined,
@@ -1458,6 +1461,7 @@ export class Orchestrator {
       status: 'pending',
       config: { summary: undefined },
       execution: {
+        autoFixAttempts: 0,
         startedAt: undefined,
         completedAt: undefined,
         error: undefined,

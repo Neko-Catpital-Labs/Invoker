@@ -273,6 +273,33 @@ describe('Orchestrator', () => {
       expect(restarted.some((task) => task.id === taskId && task.status === 'running')).toBe(true);
       expect(persistence.workflows.get(workflowId)?.status).toBe('running');
     });
+
+    it('resets auto-fix attempts to zero when a workflow is recreated', () => {
+      orchestrator.loadPlan({
+        name: 'Recreate workflow resets auto-fix',
+        onFinish: 'none',
+        tasks: [
+          { id: 't1', description: 'First', command: 'exit 1', autoFix: true, autoFixRetries: 3 },
+          { id: 't2', description: 'Second', command: 'echo 2', dependencies: ['t1'] },
+        ],
+      });
+
+      const workflowId = orchestrator.getWorkflowIds()[0]!;
+      const taskId = orchestrator.getAllTasks().find(
+        (task) => task.config.workflowId === workflowId && task.id.endsWith('/t1'),
+      )!.id;
+
+      persistence.updateTask(taskId, { execution: { autoFixAttempts: 3 } });
+      orchestrator.syncAllFromDb();
+      expect(orchestrator.shouldAutoFix(taskId)).toBe(false);
+
+      orchestrator.recreateWorkflow(workflowId);
+
+      expect(orchestrator.getTask(taskId)?.execution.autoFixAttempts).toBe(0);
+      persistence.updateTask(taskId, { status: 'failed' });
+      orchestrator.syncAllFromDb();
+      expect(orchestrator.shouldAutoFix(taskId)).toBe(true);
+    });
   });
 
   // ── loadPlan ────────────────────────────────────────────
