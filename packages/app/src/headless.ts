@@ -36,6 +36,7 @@ import {
   recreateWorkflow as sharedRecreateWorkflow,
   recreateTask as sharedRecreateTask,
   setWorkflowMergeMode,
+  finalizeAppliedFix,
 } from './workflow-actions.js';
 import { openExternalTerminalForTask } from './open-terminal-for-task.js';
 import { withCoalescedWorkflowReset } from './workflow-reset-coalescer.js';
@@ -687,6 +688,7 @@ async function headlessRun(
     persistence: deps.persistence,
     executorRegistry: deps.executorRegistry,
     taskExecutor,
+    autoApproveAIFixes: deps.invokerConfig.autoApproveAIFixes,
     ...buildHeadlessApiCancelHooks(deps, taskExecutor),
   });
 
@@ -754,6 +756,7 @@ async function headlessResume(
     persistence: deps.persistence,
     executorRegistry: deps.executorRegistry,
     taskExecutor,
+    autoApproveAIFixes: deps.invokerConfig.autoApproveAIFixes,
     ...buildHeadlessApiCancelHooks(deps, taskExecutor),
   });
 
@@ -894,8 +897,16 @@ async function headlessFix(taskId: string, deps: HeadlessDeps, agentArg?: string
     } else {
       await te.fixWithAgent(taskId, output, agent, savedError);
     }
-    deps.orchestrator.setFixAwaitingApproval(taskId, savedError);
-    process.stdout.write(`Fix applied for task: ${taskId} (${agent}). Use 'approve ${taskId}' or 'reject ${taskId}' to finalize.\n`);
+    const result = await finalizeAppliedFix(taskId, savedError, {
+      orchestrator: deps.orchestrator,
+      taskExecutor: te,
+      autoApproveAIFixes: deps.invokerConfig.autoApproveAIFixes,
+    });
+    process.stdout.write(
+      result.autoApproved
+        ? `Fix applied and auto-approved for task: ${taskId} (${agent}).\n`
+        : `Fix applied for task: ${taskId} (${agent}). Use 'approve ${taskId}' or 'reject ${taskId}' to finalize.\n`,
+    );
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     deps.persistence.appendTaskOutput(taskId, `\n[Fix with AI] Failed: ${msg}`);
@@ -913,8 +924,16 @@ async function headlessResolveConflict(taskId: string, deps: HeadlessDeps, agent
   const te = createHeadlessExecutor(deps);
   const autoFix = wireHeadlessAutoFix(deps, te);
   const agent = (agentArg ?? 'claude').toLowerCase();
-  await resolveConflictAction(taskId, { ...deps, taskExecutor: te }, agent);
-  process.stdout.write(`Conflict resolved for task: ${taskId} (${agent}). Use 'approve ${taskId}' or 'reject ${taskId}' to finalize.\n`);
+  await resolveConflictAction(taskId, {
+    ...deps,
+    taskExecutor: te,
+    autoApproveAIFixes: deps.invokerConfig.autoApproveAIFixes,
+  }, agent);
+  process.stdout.write(
+    deps.invokerConfig.autoApproveAIFixes
+      ? `Conflict resolved and auto-approved for task: ${taskId} (${agent}).\n`
+      : `Conflict resolved for task: ${taskId} (${agent}). Use 'approve ${taskId}' or 'reject ${taskId}' to finalize.\n`,
+  );
   autoFix.unsubscribe();
 }
 

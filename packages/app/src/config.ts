@@ -29,6 +29,14 @@ export interface InvokerConfig {
    * Default: 0 (disabled).
    */
   autoFixRetries?: number;
+  /**
+   * When true, successful AI-applied fixes are automatically approved.
+   * This skips the manual "Approve Fix" step for fix-with-agent and
+   * resolve-conflict flows.
+   *
+   * Default: false.
+   */
+  autoApproveAIFixes?: boolean;
   /** Cursor CLI subprocess timeout for plan conversations in seconds. Default: 7200 (2 hours). */
   planningTimeoutSeconds?: number;
   /** Interval for heartbeat messages posted to Slack during planning in seconds. Default: 120 (2 minutes). Set to 0 to disable. */

@@ -730,6 +730,7 @@ export class TaskRunner {
     leafTaskIds?: readonly string[],
     body?: string,
     visualProof?: boolean,
+    baseCheckoutRef?: string,
     mergeNodeTaskId?: string,
   ): Promise<string | undefined> {
     return consolidateAndMergeImpl(
@@ -742,6 +743,7 @@ export class TaskRunner {
       leafTaskIds,
       body,
       visualProof,
+      baseCheckoutRef,
       mergeNodeTaskId,
     );
   }
@@ -826,20 +828,6 @@ export class TaskRunner {
     }
     await this.execGitIn(['remote', 'set-url', 'origin', originUrl], clonePath);
 
-    // Refresh the base branch from the real remote. The pool mirror's local
-    // refs/heads/master can go stale after force-pushes or history rewrites,
-    // causing merge conflicts when experiment branches are based on the new
-    // history but the clone got the old master from the pool.
-    const baseRef = ref.trim().replace(/^origin\//, '');
-    try {
-      await this.execGitIn(
-        ['fetch', 'origin', `+refs/heads/${baseRef}:refs/heads/${baseRef}`],
-        clonePath,
-      );
-    } catch {
-      // Non-critical: pool's ref may still be valid
-    }
-
     // If the host repo has an 'upstream' remote, add it to the clone so gh CLI
     // detects the fork relationship and targets upstream for PR operations.
     try {
@@ -849,6 +837,26 @@ export class TaskRunner {
       }
     } catch {
       // No upstream remote on host repo — single-remote workflow
+    }
+
+    // Refresh the requested base branch from the real remote. The pool mirror's
+    // local refs/heads/* can go stale after force-pushes or history rewrites,
+    // causing merge conflicts when experiment branches are based on the new
+    // history but the clone got the old branch tip from the pool.
+    const normalizedRef = ref.trim();
+    const remoteName = normalizedRef.startsWith('upstream/')
+      ? 'upstream'
+      : normalizedRef.startsWith('origin/')
+        ? 'origin'
+        : 'origin';
+    const baseRef = normalizedRef.replace(/^(origin|upstream)\//, '');
+    try {
+      await this.execGitIn(
+        ['fetch', remoteName, `+refs/heads/${baseRef}:refs/remotes/${remoteName}/${baseRef}`],
+        clonePath,
+      );
+    } catch {
+      // Non-critical: pool's ref may still be valid
     }
 
     // Resolve ref in the clone (not in host repo — the clone has mirrored branches).
@@ -862,15 +870,26 @@ export class TaskRunner {
       }
     };
 
-    const normalizedRef = ref.trim();
-    const strippedOriginRef = normalizedRef.startsWith('origin/') ? normalizedRef.slice('origin/'.length) : normalizedRef;
-    const candidates = [
-      normalizedRef,
-      strippedOriginRef,
-      `refs/heads/${strippedOriginRef}`,
-      `refs/remotes/origin/${strippedOriginRef}`,
-      `origin/${strippedOriginRef}`,
-    ];
+    const strippedRemoteRef = normalizedRef.replace(/^(origin|upstream)\//, '');
+    const candidates = normalizedRef.startsWith('upstream/')
+      ? [
+          normalizedRef,
+          `refs/remotes/upstream/${strippedRemoteRef}`,
+          `upstream/${strippedRemoteRef}`,
+          strippedRemoteRef,
+          `refs/heads/${strippedRemoteRef}`,
+          `refs/remotes/origin/${strippedRemoteRef}`,
+          `origin/${strippedRemoteRef}`,
+        ]
+      : [
+          normalizedRef,
+          strippedRemoteRef,
+          `refs/heads/${strippedRemoteRef}`,
+          `refs/remotes/origin/${strippedRemoteRef}`,
+          `origin/${strippedRemoteRef}`,
+          `refs/remotes/upstream/${strippedRemoteRef}`,
+          `upstream/${strippedRemoteRef}`,
+        ];
 
     let refSha: string | undefined;
     for (const candidate of candidates) {
@@ -882,7 +901,10 @@ export class TaskRunner {
       // Last chance: fetch only the requested branch from origin, then retry.
       // This can happen if clone source had stale refs at submit time.
       try {
-        await this.execGitIn(['fetch', 'origin', `+refs/heads/${strippedOriginRef}:refs/remotes/origin/${strippedOriginRef}`], clonePath);
+        await this.execGitIn(
+          ['fetch', remoteName, `+refs/heads/${strippedRemoteRef}:refs/remotes/${remoteName}/${strippedRemoteRef}`],
+          clonePath,
+        );
       } catch {
         // Best-effort; keep error message from final resolve below.
       }

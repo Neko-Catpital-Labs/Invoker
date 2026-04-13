@@ -16,6 +16,7 @@ import type { WorkResponse } from '@invoker/contracts';
 import type { TaskRunnerCallbacks } from './task-runner.js';
 import type { MergeGateProvider } from './merge-gate-provider.js';
 import type { ReviewProviderRegistry } from './review-provider-registry.js';
+import { normalizeBranchForGithubCli } from './github-branch-ref.js';
 
 // ── Trace logging ────────────────────────────────────────
 
@@ -42,6 +43,22 @@ function canonicalMergeMode(mode: string | undefined): 'manual' | 'automatic' | 
   if (m === 'github' || m === 'external_review') return 'external_review';
   if (m === 'automatic') return 'automatic';
   return 'manual';
+}
+
+async function resolveBaseCheckoutRef(
+  host: MergeRunnerHost,
+  baseBranch: string,
+  preferUpstream: boolean,
+): Promise<string> {
+  const shortBase = normalizeBranchForGithubCli(baseBranch);
+  if (!preferUpstream) return shortBase;
+  try {
+    const upstreamUrl = (await host.execGitReadonly(['remote', 'get-url', 'upstream'])).trim();
+    if (upstreamUrl) return `upstream/${shortBase}`;
+  } catch {
+    /* no upstream remote configured */
+  }
+  return shortBase;
 }
 
 /**
@@ -138,6 +155,7 @@ export interface MergeRunnerHost {
     leafTaskIds?: readonly string[],
     body?: string,
     visualProof?: boolean,
+    baseCheckoutRef?: string,
     mergeNodeTaskId?: string,
   ): Promise<string | undefined>;
 }
@@ -295,7 +313,16 @@ export async function executeMergeNodeImpl(
   // `git checkout <branch>` to switch to featureBranch anyway.
   let gateWorkspacePath: string | undefined;
   if (featureBranch) {
-    gateWorkspacePath = await host.createMergeWorktree(baseBranch, 'gate-' + task.id.replace(/[^a-zA-Z0-9_-]/g, '-'), workflow?.repoUrl);
+    const baseCheckoutRef = await resolveBaseCheckoutRef(
+      host,
+      baseBranch,
+      mergeMode === 'external_review' || onFinish === 'pull_request',
+    );
+    gateWorkspacePath = await host.createMergeWorktree(
+      baseCheckoutRef,
+      'gate-' + task.id.replace(/[^a-zA-Z0-9_-]/g, '-'),
+      workflow?.repoUrl,
+    );
     mergeTrace('GATE_WS_GATE_CLONE_CREATED', { taskId: task.id, gateWorkspacePath });
     console.log(`[merge-gate-workspace] gate clone created task=${task.id} path=${gateWorkspacePath}`);
   } else {
@@ -306,6 +333,11 @@ export async function executeMergeNodeImpl(
   if (featureBranch && (onFinish !== 'none' || mergeMode === 'external_review')) {
     const effectiveOnFinish = mergeMode === 'automatic' ? onFinish : 'none';
     try {
+      const baseCheckoutRef = await resolveBaseCheckoutRef(
+        host,
+        baseBranch,
+        mergeMode === 'external_review' || onFinish === 'pull_request',
+      );
       reviewUrl = await host.consolidateAndMerge(
         effectiveOnFinish,
         baseBranch,
@@ -315,6 +347,7 @@ export async function executeMergeNodeImpl(
         undefined,
         summary,
         visualProof,
+        baseCheckoutRef,
         task.id,
       );
       if (mergeMode === 'manual') {
@@ -970,6 +1003,7 @@ export async function consolidateAndMergeImpl(
   leafTaskIds?: readonly string[],
   body?: string,
   visualProof?: boolean,
+  baseCheckoutRef?: string,
   mergeNodeTaskId?: string,
 ): Promise<string | undefined> {
   const workflowForMerge =
@@ -978,7 +1012,11 @@ export async function consolidateAndMergeImpl(
       : undefined;
   const repoUrlForMerge = workflowForMerge?.repoUrl;
 
-  const worktreeDir = await host.createMergeWorktree(baseBranch, 'consolidate-' + (workflowId ?? 'default'), repoUrlForMerge);
+  const worktreeDir = await host.createMergeWorktree(
+    baseCheckoutRef ?? baseBranch,
+    'consolidate-' + (workflowId ?? 'default'),
+    repoUrlForMerge,
+  );
   console.log(`[merge] consolidateAndMerge: featureBranch=${featureBranch}, baseBranch=${baseBranch}, worktree=${worktreeDir}`);
 
   try {

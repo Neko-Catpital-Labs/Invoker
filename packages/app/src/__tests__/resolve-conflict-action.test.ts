@@ -15,10 +15,13 @@ describe('resolveConflictAction', () => {
     beginConflictResolution: ReturnType<typeof vi.fn>;
     setFixAwaitingApproval: ReturnType<typeof vi.fn>;
     revertConflictResolution: ReturnType<typeof vi.fn>;
+    approve?: ReturnType<typeof vi.fn>;
   };
   let persistence: { appendTaskOutput: ReturnType<typeof vi.fn> };
   let taskExecutor: {
     resolveConflict: ReturnType<typeof vi.fn>;
+    executeTasks?: ReturnType<typeof vi.fn>;
+    publishAfterFix?: ReturnType<typeof vi.fn>;
   };
 
   beforeEach(() => {
@@ -45,6 +48,31 @@ describe('resolveConflictAction', () => {
     expect(orchestrator.setFixAwaitingApproval).toHaveBeenCalledWith('task-a', 'saved-err');
     expect(orchestrator.revertConflictResolution).not.toHaveBeenCalled();
     expect(persistence.appendTaskOutput).not.toHaveBeenCalled();
+  });
+
+  it('auto-approves after conflict resolution when configured', async () => {
+    const approve = vi.fn(async () => [{ id: 'task-a', status: 'completed', config: {}, execution: {} }]);
+    orchestrator = {
+      ...orchestrator,
+      approve,
+    };
+    const taskExecutorWithApprove = {
+      ...taskExecutor,
+      executeTasks: vi.fn(),
+      publishAfterFix: vi.fn(),
+    };
+
+    await resolveConflictAction('task-a', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+      taskExecutor: taskExecutorWithApprove as unknown as TaskRunner,
+      autoApproveAIFixes: true,
+    });
+
+    expect(orchestrator.setFixAwaitingApproval).toHaveBeenCalledWith('task-a', 'saved-err');
+    expect(approve).toHaveBeenCalledWith('task-a');
+    expect(taskExecutorWithApprove.executeTasks).not.toHaveBeenCalled();
+    expect(taskExecutorWithApprove.publishAfterFix).not.toHaveBeenCalled();
   });
 
   it('on failure appends output and reverts conflict resolution (does not set awaiting approval)', async () => {

@@ -21,6 +21,7 @@ import {
   editTaskType,
   selectExperiment,
   setWorkflowMergeMode,
+  finalizeAppliedFix,
 } from '../workflow-actions.js';
 
 // ── Helpers ──────────────────────────────────────────────────
@@ -245,6 +246,77 @@ describe('provideInput', () => {
     });
 
     expect(orchestrator.provideInput).toHaveBeenCalledWith('task-a', 'hello world');
+  });
+});
+
+describe('finalizeAppliedFix', () => {
+  it('leaves task awaiting approval when autoApproveAIFixes is disabled', async () => {
+    const orchestrator = {
+      setFixAwaitingApproval: vi.fn(),
+      approve: vi.fn(),
+    };
+    const taskExecutor = {
+      publishAfterFix: vi.fn(),
+      executeTasks: vi.fn(),
+    };
+
+    const result = await finalizeAppliedFix('task-a', 'saved-error', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+      autoApproveAIFixes: false,
+    });
+
+    expect(result).toEqual({ autoApproved: false, started: [] });
+    expect(orchestrator.setFixAwaitingApproval).toHaveBeenCalledWith('task-a', 'saved-error');
+    expect(orchestrator.approve).not.toHaveBeenCalled();
+  });
+
+  it('auto-approves and executes runnable tasks when enabled', async () => {
+    const started = [
+      makeRunningTask({ id: 'task-a', config: { workflowId: 'wf-1' } }),
+    ];
+    const orchestrator = {
+      setFixAwaitingApproval: vi.fn(),
+      approve: vi.fn().mockResolvedValue(started),
+    };
+    const taskExecutor = {
+      publishAfterFix: vi.fn(),
+      executeTasks: vi.fn(),
+    };
+
+    const result = await finalizeAppliedFix('task-a', 'saved-error', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+      autoApproveAIFixes: true,
+    });
+
+    expect(result).toEqual({ autoApproved: true, started });
+    expect(orchestrator.approve).toHaveBeenCalledWith('task-a');
+    expect(taskExecutor.executeTasks).toHaveBeenCalledWith(started);
+    expect(taskExecutor.publishAfterFix).not.toHaveBeenCalled();
+  });
+
+  it('auto-approves and publishes post-fix merge gates when enabled', async () => {
+    const started = [
+      makeRunningTask({ id: 'merge-a', config: { workflowId: 'wf-1', isMergeNode: true } }),
+    ];
+    const orchestrator = {
+      setFixAwaitingApproval: vi.fn(),
+      approve: vi.fn().mockResolvedValue(started),
+    };
+    const taskExecutor = {
+      publishAfterFix: vi.fn(),
+      executeTasks: vi.fn(),
+    };
+
+    await finalizeAppliedFix('merge-a', 'saved-error', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+      autoApproveAIFixes: true,
+    });
+
+    expect(taskExecutor.publishAfterFix).toHaveBeenCalledWith(started[0]);
+    expect(taskExecutor.executeTasks).not.toHaveBeenCalled();
   });
 });
 

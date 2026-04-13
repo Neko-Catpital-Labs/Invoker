@@ -27,6 +27,9 @@
     }
   },
 
+  "autoFixRetries": 3,
+  "autoApproveAIFixes": true,
+
   "notes": {
     "fetch_behavior": "Git fetch failures always abort the task. Fix the underlying network/auth issue and rerun.",
     "config_locations": [

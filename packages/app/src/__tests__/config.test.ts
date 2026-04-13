@@ -95,6 +95,15 @@ describe('loadConfig', () => {
     expect(config.autoFixRetries).toBe(3);
   });
 
+  it('reads autoApproveAIFixes from user config', () => {
+    writeFileSync(
+      join(fakeHome, '.invoker', 'config.json'),
+      JSON.stringify({ autoApproveAIFixes: true }),
+    );
+    const config = loadConfig();
+    expect(config.autoApproveAIFixes).toBe(true);
+  });
+
   it('loadConfig picks up browser field', () => {
     writeFileSync(
       join(fakeHome, '.invoker', 'config.json'),

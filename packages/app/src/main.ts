@@ -95,6 +95,7 @@ import {
   resolveConflictAction,
   selectExperiments as sharedSelectExperiments,
   setWorkflowMergeMode,
+  finalizeAppliedFix,
 } from './workflow-actions.js';
 import { spawn, execSync } from 'node:child_process';
 import { openExternalTerminalForTask } from './open-terminal-for-task.js';
@@ -1161,6 +1162,7 @@ function setupGuiMode(): void {
         persistence,
         executorRegistry,
         taskExecutor: requireTaskExecutor(),
+        autoApproveAIFixes: invokerConfig.autoApproveAIFixes,
         killRunningTask,
         cancelTask: performCancelTask,
         cancelWorkflow: performCancelWorkflow,
@@ -1761,6 +1763,7 @@ function setupGuiMode(): void {
           orchestrator,
           persistence,
           taskExecutor: requireTaskExecutor(),
+          autoApproveAIFixes: invokerConfig.autoApproveAIFixes,
         }, agentName);
       } catch (err) {
         logger.error(`resolve-conflict failed: ${err}`, { module: 'ipc' });
@@ -1776,7 +1779,11 @@ function setupGuiMode(): void {
       try {
         const output = persistence.getTaskOutput(taskId);
         await requireTaskExecutor().fixWithAgent(taskId, output, agentName, savedError);
-        orchestrator.setFixAwaitingApproval(taskId, savedError);
+        await finalizeAppliedFix(taskId, savedError, {
+          orchestrator,
+          taskExecutor: requireTaskExecutor(),
+          autoApproveAIFixes: invokerConfig.autoApproveAIFixes,
+        });
       } catch (err) {
         logger.error(`fix-with-agent failed: ${err}`, { module: 'ipc' });
         const msg = err instanceof Error ? err.message : String(err);

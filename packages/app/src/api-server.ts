@@ -57,6 +57,7 @@ export interface ApiServerDeps {
   persistence: SQLiteAdapter;
   executorRegistry: ExecutorRegistry;
   taskExecutor: TaskRunner;
+  autoApproveAIFixes?: boolean;
   killRunningTask?: (taskId: string) => Promise<void>;
   cancelTask?: (taskId: string) => Promise<{ cancelled: string[]; runningCancelled: string[] }>;
   cancelWorkflow?: (workflowId: string) => Promise<{ cancelled: string[]; runningCancelled: string[] }>;
@@ -120,6 +121,7 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
     persistence,
     executorRegistry,
     taskExecutor,
+    autoApproveAIFixes,
     killRunningTask,
     cancelTask,
     cancelWorkflow,
@@ -213,8 +215,18 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
               agent = parsed.agent;
             } catch { /* not JSON, ignore */ }
           }
-          await resolveConflictAction(taskId, { orchestrator, persistence, taskExecutor }, agent);
-          json(res, 200, { ok: true, taskId, action: 'resolve_conflict', status: 'awaiting_approval' });
+          await resolveConflictAction(taskId, {
+            orchestrator,
+            persistence,
+            taskExecutor,
+            autoApproveAIFixes,
+          }, agent);
+          json(res, 200, {
+            ok: true,
+            taskId,
+            action: 'resolve_conflict',
+            status: autoApproveAIFixes ? 'auto_approved' : 'awaiting_approval',
+          });
         } catch (err) {
           json(res, 400, { error: err instanceof Error ? err.message : String(err) });
         }

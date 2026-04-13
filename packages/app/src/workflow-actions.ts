@@ -23,6 +23,8 @@ export interface ActionDeps {
   repoRoot?: string;
   /** When set, rebase-and-refreshes the pool mirror and removes managed branches before bumping generation. */
   taskExecutor?: TaskRunner;
+  /** When true, successful AI-applied fixes are approved immediately. */
+  autoApproveAIFixes?: boolean;
 }
 
 // ── Actions ──────────────────────────────────────────────────
@@ -225,13 +227,39 @@ export async function resolveConflictAction(
   const { savedError } = orchestrator.beginConflictResolution(taskId);
   try {
     await taskExecutor.resolveConflict(taskId, savedError, agentName);
-    orchestrator.setFixAwaitingApproval(taskId, savedError);
+    await finalizeAppliedFix(taskId, savedError, deps);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     persistence.appendTaskOutput(taskId, `\n[Resolve Conflict] Failed: ${msg}`);
     orchestrator.revertConflictResolution(taskId, savedError, msg);
     throw err;
   }
+}
+
+export async function finalizeAppliedFix(
+  taskId: string,
+  savedError: string,
+  deps: Pick<ActionDeps, 'orchestrator' | 'autoApproveAIFixes'> & { taskExecutor: TaskRunner },
+): Promise<{ autoApproved: boolean; started: TaskState[] }> {
+  deps.orchestrator.setFixAwaitingApproval(taskId, savedError);
+  if (!deps.autoApproveAIFixes) {
+    return { autoApproved: false, started: [] };
+  }
+
+  const started = await deps.orchestrator.approve(taskId);
+  const postFixMerge = started.filter(
+    (t) => t.status === 'running' && t.config.isMergeNode && t.id === taskId,
+  );
+  for (const task of postFixMerge) {
+    await deps.taskExecutor.publishAfterFix(task);
+  }
+  const runnable = started.filter(
+    (t) => t.status === 'running' && !(t.config.isMergeNode && t.id === taskId),
+  );
+  if (runnable.length > 0) {
+    await deps.taskExecutor.executeTasks(runnable);
+  }
+  return { autoApproved: true, started };
 }
 
 // ── Auto-fix helpers ─────────────────────────────────────────
