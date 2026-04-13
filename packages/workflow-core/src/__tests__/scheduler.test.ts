@@ -6,9 +6,9 @@ describe('TaskScheduler', () => {
     it('adds jobs sorted by priority (high first)', () => {
       const scheduler = new TaskScheduler(3);
 
-      scheduler.enqueue({ taskId: 'low', priority: 1 });
-      scheduler.enqueue({ taskId: 'high', priority: 10 });
-      scheduler.enqueue({ taskId: 'mid', priority: 5 });
+      scheduler.enqueue({ taskId: 'low', attemptId: 'low-a1', priority: 1 });
+      scheduler.enqueue({ taskId: 'high', attemptId: 'high-a1', priority: 10 });
+      scheduler.enqueue({ taskId: 'mid', attemptId: 'mid-a1', priority: 5 });
 
       expect(scheduler.dequeue()!.taskId).toBe('high');
       expect(scheduler.dequeue()!.taskId).toBe('mid');
@@ -20,12 +20,13 @@ describe('TaskScheduler', () => {
     it('returns the highest priority job', () => {
       const scheduler = new TaskScheduler();
 
-      scheduler.enqueue({ taskId: 'a', priority: 3 });
-      scheduler.enqueue({ taskId: 'b', priority: 7 });
+      scheduler.enqueue({ taskId: 'a', attemptId: 'a-a1', priority: 3 });
+      scheduler.enqueue({ taskId: 'b', attemptId: 'b-a1', priority: 7 });
 
       const job = scheduler.dequeue();
       expect(job).not.toBeNull();
       expect(job!.taskId).toBe('b');
+      expect(job!.attemptId).toBe('b-a1');
       expect(job!.priority).toBe(7);
     });
 
@@ -53,15 +54,16 @@ describe('TaskScheduler', () => {
     it('frees capacity, allows next dequeue', () => {
       const scheduler = new TaskScheduler(1);
 
-      scheduler.enqueue({ taskId: 'a', priority: 1 });
-      scheduler.enqueue({ taskId: 'b', priority: 2 });
+      scheduler.enqueue({ taskId: 'a', attemptId: 'a-a1', priority: 1 });
+      scheduler.enqueue({ taskId: 'b', attemptId: 'b-a1', priority: 2 });
 
       const first = scheduler.dequeue();
       expect(first!.taskId).toBe('b');
+      expect(first!.attemptId).toBe('b-a1');
 
       expect(scheduler.dequeue()).toBeNull();
 
-      scheduler.completeJob('b');
+      scheduler.completeJob('b-a1');
 
       const second = scheduler.dequeue();
       expect(second).not.toBeNull();
@@ -111,14 +113,42 @@ describe('TaskScheduler', () => {
     it('returns true for running tasks, false otherwise', () => {
       const scheduler = new TaskScheduler();
 
-      scheduler.enqueue({ taskId: 'x', priority: 5 });
+      scheduler.enqueue({ taskId: 'x', attemptId: 'x-a1', priority: 5 });
       expect(scheduler.isRunning('x')).toBe(false);
 
       scheduler.dequeue();
       expect(scheduler.isRunning('x')).toBe(true);
+      expect(scheduler.isRunning('x-a1')).toBe(true);
 
-      scheduler.completeJob('x');
+      scheduler.completeJob('x-a1');
       expect(scheduler.isRunning('x')).toBe(false);
+    });
+  });
+
+  describe('attemptId support', () => {
+    it('tracks running jobs by attemptId while preserving taskId compatibility', () => {
+      const scheduler = new TaskScheduler(2);
+
+      scheduler.enqueue({ taskId: 'task-a', attemptId: 'task-a-a1', priority: 1 });
+      scheduler.enqueue({ taskId: 'task-a', attemptId: 'task-a-a2', priority: 2 });
+
+      const first = scheduler.dequeue();
+      const second = scheduler.dequeue();
+
+      expect(first).not.toBeNull();
+      expect(second).not.toBeNull();
+      expect(first!.attemptId).toBe('task-a-a2');
+      expect(second!.attemptId).toBe('task-a-a1');
+      expect(scheduler.getRunningAttemptIds().sort()).toEqual(['task-a-a1', 'task-a-a2']);
+      expect(scheduler.getRunningTaskIds()).toEqual(['task-a']);
+      expect(scheduler.isRunning('task-a')).toBe(true);
+      expect(scheduler.isRunning('task-a-a1')).toBe(true);
+
+      scheduler.completeJob('task-a-a2');
+
+      expect(scheduler.getRunningAttemptIds()).toEqual(['task-a-a1']);
+      expect(scheduler.isRunning('task-a-a2')).toBe(false);
+      expect(scheduler.isRunning('task-a')).toBe(true);
     });
   });
 
@@ -158,9 +188,9 @@ describe('TaskScheduler', () => {
     it('getRunningTaskIds returns current running set', () => {
       const scheduler = new TaskScheduler(3);
 
-      scheduler.enqueue({ taskId: 'a', priority: 1 });
-      scheduler.enqueue({ taskId: 'b', priority: 2 });
-      scheduler.enqueue({ taskId: 'c', priority: 3 });
+      scheduler.enqueue({ taskId: 'a', attemptId: 'a-a1', priority: 1 });
+      scheduler.enqueue({ taskId: 'b', attemptId: 'b-a1', priority: 2 });
+      scheduler.enqueue({ taskId: 'c', attemptId: 'c-a1', priority: 3 });
 
       expect(scheduler.getRunningTaskIds()).toEqual([]);
 
@@ -226,8 +256,8 @@ describe('TaskScheduler', () => {
     it('returns shallow copy (mutating the result does not affect internal queue)', () => {
       const scheduler = new TaskScheduler();
 
-      scheduler.enqueue({ taskId: 'a', priority: 1 });
-      scheduler.enqueue({ taskId: 'b', priority: 2 });
+      scheduler.enqueue({ taskId: 'a', attemptId: 'a-a1', priority: 1 });
+      scheduler.enqueue({ taskId: 'b', attemptId: 'b-a1', priority: 2 });
 
       const copy = scheduler.getQueuedJobs();
       copy.splice(0, copy.length); // clear the returned array
@@ -241,8 +271,8 @@ describe('TaskScheduler', () => {
     it('removes a queued job and returns true', () => {
       const scheduler = new TaskScheduler();
 
-      scheduler.enqueue({ taskId: 'a', priority: 1 });
-      scheduler.enqueue({ taskId: 'b', priority: 2 });
+      scheduler.enqueue({ taskId: 'a', attemptId: 'a-a1', priority: 1 });
+      scheduler.enqueue({ taskId: 'b', attemptId: 'b-a1', priority: 2 });
 
       expect(scheduler.removeJob('a')).toBe(true);
       expect(scheduler.getQueuedJobs().map(j => j.taskId)).toEqual(['b']);
@@ -265,9 +295,9 @@ describe('TaskScheduler', () => {
     it('queue state is correct after removal (remaining jobs unaffected)', () => {
       const scheduler = new TaskScheduler(3);
 
-      scheduler.enqueue({ taskId: 'a', priority: 1 });
-      scheduler.enqueue({ taskId: 'b', priority: 5 });
-      scheduler.enqueue({ taskId: 'c', priority: 10 });
+      scheduler.enqueue({ taskId: 'a', attemptId: 'a-a1', priority: 1 });
+      scheduler.enqueue({ taskId: 'b', attemptId: 'b-a1', priority: 5 });
+      scheduler.enqueue({ taskId: 'c', attemptId: 'c-a1', priority: 10 });
 
       scheduler.removeJob('b');
 
@@ -292,8 +322,8 @@ describe('TaskScheduler', () => {
     it('returns running tasks after dequeue', () => {
       const scheduler = new TaskScheduler(3);
 
-      scheduler.enqueue({ taskId: 'a', priority: 1 });
-      scheduler.enqueue({ taskId: 'b', priority: 2 });
+      scheduler.enqueue({ taskId: 'a', attemptId: 'a-a1', priority: 1 });
+      scheduler.enqueue({ taskId: 'b', attemptId: 'b-a1', priority: 2 });
 
       scheduler.dequeue(); // b
       scheduler.dequeue(); // a
@@ -308,8 +338,8 @@ describe('TaskScheduler', () => {
     it('correctly reports tasks after completeJob', () => {
       const scheduler = new TaskScheduler(3);
 
-      scheduler.enqueue({ taskId: 'a', priority: 1 });
-      scheduler.enqueue({ taskId: 'b', priority: 2 });
+      scheduler.enqueue({ taskId: 'a', attemptId: 'a-a1', priority: 1 });
+      scheduler.enqueue({ taskId: 'b', attemptId: 'b-a1', priority: 2 });
 
       scheduler.dequeue(); // b
       scheduler.dequeue(); // a

@@ -39,9 +39,14 @@ import {
   finalizeAppliedFix,
 } from './workflow-actions.js';
 import { openExternalTerminalForTask } from './open-terminal-for-task.js';
-import { withCoalescedWorkflowReset } from './workflow-reset-coalescer.js';
+import {
+  emptyActiveMutationSnapshot,
+  flattenActiveMutationSnapshot,
+  type ActiveMutationPipeSnapshot,
+} from './mutation-pipe.js';
 
 export { bumpGenerationAndRecreate } from './workflow-actions.js';
+export const MUTATION_SNAPSHOT_CHANNEL = 'mutation.snapshot';
 
 // ── HeadlessDeps interface ───────────────────────────────────
 
@@ -248,13 +253,13 @@ export function parseQueryFlags(args: string[]): QueryFlags {
 async function headlessQuery(args: string[], deps: HeadlessDeps): Promise<void> {
   const subCommand = args[0];
   if (!subCommand) {
-    throw new Error('Missing query sub-command. Usage: --headless query <workflows|tasks|task|queue|audit|session>');
+    throw new Error('Missing query sub-command. Usage: --headless query <workflows|tasks|task|queue|mutation-queue|audit|session>');
   }
   const flags = parseQueryFlags(args.slice(1));
 
   const {
     formatWorkflowList, formatTaskStatus, formatWorkflowStatus,
-    formatEventLog, formatQueueStatus,
+    formatEventLog, formatQueueStatus, formatMutationQueueStatus,
     serializeWorkflow, serializeTask, serializeEvent,
     formatAsLabel, formatAsJson, formatAsJsonl,
   } = await import('./formatter.js');
@@ -362,6 +367,26 @@ async function headlessQuery(args: string[], deps: HeadlessDeps): Promise<void> 
       }
       break;
     }
+    case 'mutation-queue': {
+      const snapshot = await requestMutationQueueSnapshot(deps.messageBus);
+      const flattened = flattenActiveMutationSnapshot(snapshot);
+
+      switch (flags.output) {
+        case 'label':
+          process.stdout.write(formatAsLabel(flattened) + '\n');
+          break;
+        case 'json':
+          process.stdout.write(formatAsJson(snapshot) + '\n');
+          break;
+        case 'jsonl':
+          process.stdout.write(formatAsJsonl(flattened) + '\n');
+          break;
+        default:
+          process.stdout.write(formatMutationQueueStatus(snapshot) + '\n');
+          break;
+      }
+      break;
+    }
     case 'audit': {
       const taskId = flags.positional[0];
       if (!taskId) throw new Error('Usage: --headless query audit <taskId>');
@@ -384,7 +409,20 @@ async function headlessQuery(args: string[], deps: HeadlessDeps): Promise<void> 
       break;
     }
     default:
-      throw new Error(`Unknown query sub-command: "${subCommand}". Use: workflows, tasks, task, queue, audit, session`);
+      throw new Error(`Unknown query sub-command: "${subCommand}". Use: workflows, tasks, task, queue, mutation-queue, audit, session`);
+  }
+}
+
+async function requestMutationQueueSnapshot(
+  messageBus: MessageBus,
+): Promise<ActiveMutationPipeSnapshot> {
+  try {
+    return await messageBus.request<unknown, ActiveMutationPipeSnapshot>(MUTATION_SNAPSHOT_CHANNEL, {});
+  } catch (err) {
+    if (err instanceof Error && err.message.includes('No request handler registered for channel')) {
+      return emptyActiveMutationSnapshot();
+    }
+    throw err;
   }
 }
 
@@ -594,6 +632,7 @@ ${BOLD}Query${RESET} (read-only, all support --output text|label|json|jsonl):
     [--no-merge] [--output F]
   query task <taskId> [--output F]                    Print single task status
   query queue [--output F]                            Show queue status
+  query mutation-queue [--output F]                   Show active mutation commands
   query audit <taskId> [--output F]                   Print event history
   query session <taskId>                              Print agent session messages
 
@@ -943,50 +982,40 @@ async function headlessRebaseAndRetry(taskId: string, deps: HeadlessDeps): Promi
   const workflowId = deps.orchestrator.getTask(taskId)?.config.workflowId;
   if (!workflowId) throw new Error(`Task "${taskId}" has no workflow`);
 
-  const { coalesced, value: tasksStarted } = await withCoalescedWorkflowReset(workflowId, async () => {
-    const te = createHeadlessExecutor(deps);
-    const autoFix = wireHeadlessAutoFix(deps, te);
-    const started = await rebaseAndRetry(taskId, { ...deps, taskExecutor: te });
-    const runnable = started.filter(t => t.status === 'running');
-    if (runnable.length > 0) {
-      await te.executeTasks(runnable);
-      await waitForCompletion(deps.orchestrator, workflowId, undefined, autoFix.isBusy);
-    }
-    autoFix.unsubscribe();
-    return runnable.length;
-  });
-
-  process.stdout.write(`Rebase-and-retry: resetting workflow from current HEAD (${tasksStarted} task(s))\n`);
-  if (coalesced) {
-    process.stdout.write(`Rebase-and-retry for "${workflowId}" coalesced with in-flight workflow reset.\n`);
+  const te = createHeadlessExecutor(deps);
+  const autoFix = wireHeadlessAutoFix(deps, te);
+  const started = await rebaseAndRetry(taskId, { ...deps, taskExecutor: te });
+  const runnable = started.filter(t => t.status === 'running');
+  if (runnable.length > 0) {
+    await te.executeTasks(runnable);
+    await waitForCompletion(deps.orchestrator, workflowId, undefined, autoFix.isBusy);
   }
+  autoFix.unsubscribe();
+
+  const tasksStarted = runnable.length;
+  process.stdout.write(`Rebase-and-retry: resetting workflow from current HEAD (${tasksStarted} task(s))\n`);
 }
 
 async function headlessRecreateWorkflow(workflowId: string, deps: HeadlessDeps): Promise<void> {
   if (!workflowId) {
     throw new Error('Missing arguments. Usage: --headless recreate <workflowId>');
   }
-  const { coalesced, value: tasksStarted } = await withCoalescedWorkflowReset(workflowId, async () => {
-    const started = sharedRecreateWorkflow(workflowId, { persistence: deps.persistence, orchestrator: deps.orchestrator });
-    const runnable = started.filter(t => t.status === 'running');
-    if (runnable.length > 0) {
-      const te = createHeadlessExecutor(deps);
-      const autoFix = wireHeadlessAutoFix(deps, te);
-      remoteFetchForPool.enabled = false;
-      try {
-        await te.executeTasks(runnable);
-      } finally {
-        remoteFetchForPool.enabled = true;
-      }
-      await waitForCompletion(deps.orchestrator, workflowId, undefined, autoFix.isBusy);
-      autoFix.unsubscribe();
+  const started = sharedRecreateWorkflow(workflowId, { persistence: deps.persistence, orchestrator: deps.orchestrator });
+  const runnable = started.filter(t => t.status === 'running');
+  if (runnable.length > 0) {
+    const te = createHeadlessExecutor(deps);
+    const autoFix = wireHeadlessAutoFix(deps, te);
+    remoteFetchForPool.enabled = false;
+    try {
+      await te.executeTasks(runnable);
+    } finally {
+      remoteFetchForPool.enabled = true;
     }
-    return runnable.length;
-  });
-  process.stdout.write(`Recreate workflow "${workflowId}" — ${tasksStarted} task(s) to execute (pool fetch skipped)\n`);
-  if (coalesced) {
-    process.stdout.write(`Recreate for "${workflowId}" coalesced with in-flight workflow reset.\n`);
+    await waitForCompletion(deps.orchestrator, workflowId, undefined, autoFix.isBusy);
+    autoFix.unsubscribe();
   }
+  const tasksStarted = runnable.length;
+  process.stdout.write(`Recreate workflow "${workflowId}" — ${tasksStarted} task(s) to execute (pool fetch skipped)\n`);
 }
 
 async function headlessRecreateTask(taskId: string, deps: HeadlessDeps): Promise<void> {

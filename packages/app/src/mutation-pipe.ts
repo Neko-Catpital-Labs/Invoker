@@ -38,6 +38,33 @@ export interface MutationPipeSnapshot {
   maxQueuedPerWorkflow: number;
 }
 
+export interface ActiveMutationCommandSnapshot {
+  id: string;
+  kind: string;
+  source: MutationCommandSource;
+  workflowId: string | null;
+  status: Extract<MutationCommandStatus, 'queued' | 'running'>;
+  createdAt: string;
+  startedAt: string | null;
+}
+
+export interface ActiveMutationPipeSnapshot {
+  globalRunning: ActiveMutationCommandSnapshot | null;
+  workflowRunning: Record<string, ActiveMutationCommandSnapshot>;
+  globalQueued: ActiveMutationCommandSnapshot[];
+  queuedByWorkflow: Record<string, ActiveMutationCommandSnapshot[]>;
+}
+
+export type ActiveMutationSnapshotGroup =
+  | 'globalRunning'
+  | 'workflowRunning'
+  | 'globalQueued'
+  | 'workflowQueued';
+
+export interface FlattenedActiveMutationCommandSnapshot extends ActiveMutationCommandSnapshot {
+  group: ActiveMutationSnapshotGroup;
+}
+
 export interface MutationPipeOptions<TResult = unknown> {
   logger: Logger;
   dispatch: (command: MutationCommand) => Promise<TResult>;
@@ -327,4 +354,83 @@ export function createMutationCommand<TPayload>(
     createdAt: Date.now(),
     scope,
   };
+}
+
+function toIsoTimestamp(value?: number): string | null {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return null;
+  return new Date(value).toISOString();
+}
+
+function normalizeActiveCommand(
+  state: MutationCommandState,
+): ActiveMutationCommandSnapshot | null {
+  if (state.status !== 'queued' && state.status !== 'running') return null;
+  return {
+    id: state.id,
+    kind: state.kind,
+    source: state.source,
+    workflowId: state.scope.type === 'workflow' ? state.scope.workflowId : null,
+    status: state.status,
+    createdAt: toIsoTimestamp(state.createdAt) ?? new Date(0).toISOString(),
+    startedAt: toIsoTimestamp(state.startedAt),
+  };
+}
+
+export function emptyActiveMutationSnapshot(): ActiveMutationPipeSnapshot {
+  return {
+    globalRunning: null,
+    workflowRunning: {},
+    globalQueued: [],
+    queuedByWorkflow: {},
+  };
+}
+
+export function normalizeActiveMutationSnapshot(
+  snapshot: MutationPipeSnapshot,
+): ActiveMutationPipeSnapshot {
+  const workflowRunning: Record<string, ActiveMutationCommandSnapshot> = {};
+  for (const [workflowId, state] of Object.entries(snapshot.workflowRunning)) {
+    const normalized = normalizeActiveCommand(state);
+    if (normalized) workflowRunning[workflowId] = normalized;
+  }
+
+  const queuedByWorkflow: Record<string, ActiveMutationCommandSnapshot[]> = {};
+  for (const [workflowId, states] of Object.entries(snapshot.queuedByWorkflow)) {
+    const normalized = states
+      .map(normalizeActiveCommand)
+      .filter((state): state is ActiveMutationCommandSnapshot => state !== null);
+    if (normalized.length > 0) {
+      queuedByWorkflow[workflowId] = normalized;
+    }
+  }
+
+  return {
+    globalRunning: snapshot.globalRunning ? normalizeActiveCommand(snapshot.globalRunning) : null,
+    workflowRunning,
+    globalQueued: snapshot.globalQueued
+      .map(normalizeActiveCommand)
+      .filter((state): state is ActiveMutationCommandSnapshot => state !== null),
+    queuedByWorkflow,
+  };
+}
+
+export function flattenActiveMutationSnapshot(
+  snapshot: ActiveMutationPipeSnapshot,
+): FlattenedActiveMutationCommandSnapshot[] {
+  const flattened: FlattenedActiveMutationCommandSnapshot[] = [];
+  if (snapshot.globalRunning) {
+    flattened.push({ ...snapshot.globalRunning, group: 'globalRunning' });
+  }
+  for (const state of Object.values(snapshot.workflowRunning)) {
+    flattened.push({ ...state, group: 'workflowRunning' });
+  }
+  for (const state of snapshot.globalQueued) {
+    flattened.push({ ...state, group: 'globalQueued' });
+  }
+  for (const states of Object.values(snapshot.queuedByWorkflow)) {
+    for (const state of states) {
+      flattened.push({ ...state, group: 'workflowQueued' });
+    }
+  }
+  return flattened;
 }

@@ -52,6 +52,13 @@ type StartupFailureMetadata = {
   containerId?: string;
 };
 
+type ActiveExecutionHandle = ExecutorHandle & { attemptId?: string };
+type ActiveExecutionEntry = {
+  handle: ActiveExecutionHandle;
+  executor: Executor;
+  taskId: string;
+};
+
 // ── Callbacks ─────────────────────────────────────────────
 
 export interface TaskRunnerCallbacks {
@@ -117,8 +124,8 @@ export class TaskRunner {
   /** Cache for SSH executors, keyed by remoteTargetId. One instance per target for correct git locking. */
   private sshExecutorCache = new Map<string, SshExecutor>();
 
-  /** In-flight executions (for cancel/kill from API or peer headless process). */
-  private activeExecutions = new Map<string, { handle: ExecutorHandle; executor: Executor }>();
+  /** In-flight executions keyed by attemptId (with taskId retained for external kill resolution). */
+  private activeExecutions = new Map<string, ActiveExecutionEntry>();
 
   /** Serializes async onComplete handlers so orchestrator mutations never overlap. */
   private completionChain: Promise<void> = Promise.resolve();
@@ -189,14 +196,51 @@ export class TaskRunner {
    * Stop the executor child for a task that is currently in-flight (after orchestrator.cancelTask).
    */
   async killActiveExecution(taskId: string): Promise<void> {
-    const entry = this.activeExecutions.get(taskId);
-    if (!entry) return;
-    this.activeExecutions.delete(taskId);
+    const resolved = this.resolveActiveExecution(taskId);
+    if (!resolved) return;
+    this.activeExecutions.delete(resolved.attemptId);
     try {
-      await entry.executor.kill(entry.handle);
+      await resolved.entry.executor.kill(resolved.entry.handle);
     } catch {
       /* process may already have exited */
     }
+  }
+
+  private loadLatestAttemptId(taskId: string): string | undefined {
+    const loadAttempts = this.persistence.loadAttempts?.bind(this.persistence);
+    if (!loadAttempts) return undefined;
+    try {
+      const attempts = loadAttempts(taskId);
+      return attempts[attempts.length - 1]?.id;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private resolveAttemptIdForStart(task: TaskState): string {
+    return task.execution.selectedAttemptId ?? this.loadLatestAttemptId(task.id) ?? task.id;
+  }
+
+  private resolveActiveExecution(taskId: string): { attemptId: string; entry: ActiveExecutionEntry } | undefined {
+    for (const [attemptId, entry] of this.activeExecutions) {
+      if (entry.taskId === taskId || entry.handle.taskId === taskId) {
+        return { attemptId, entry };
+      }
+    }
+
+    const selectedAttemptId = this.orchestrator.getTask(taskId)?.execution.selectedAttemptId;
+    if (selectedAttemptId) {
+      const entry = this.activeExecutions.get(selectedAttemptId);
+      if (entry) return { attemptId: selectedAttemptId, entry };
+    }
+
+    const latestAttemptId = this.loadLatestAttemptId(taskId);
+    if (latestAttemptId) {
+      const entry = this.activeExecutions.get(latestAttemptId);
+      if (entry) return { attemptId: latestAttemptId, entry };
+    }
+
+    return undefined;
   }
 
   /**
@@ -225,8 +269,9 @@ export class TaskRunner {
     console.log(
       `${RESTART_TO_BRANCH_TRACE} TaskRunner.executeTask BEGIN taskId=${task.id} isMergeNode=${Boolean(task.config.isMergeNode)} status=${task.status}`,
     );
+    const attemptId = this.resolveAttemptIdForStart(task);
     try {
-      await this.executeTaskInner(task);
+      await this.executeTaskInner(task, attemptId);
     } catch (err) {
       // Resource limit: defer the task instead of failing it
       const cause = err instanceof Error ? err.cause : undefined;
@@ -242,6 +287,7 @@ export class TaskRunner {
       const response: WorkResponse = {
         requestId: `err-${task.id}`,
         actionId: task.id,
+        attemptId,
         executionGeneration: task.execution.generation ?? 0,
         status: 'failed',
         outputs: {
@@ -254,13 +300,14 @@ export class TaskRunner {
     }
   }
 
-  private async executeTaskInner(task: TaskState): Promise<void> {
+  private async executeTaskInner(task: TaskState, attemptId: string): Promise<void> {
     // Pivot tasks with experimentVariants: synthesize a spawn_experiments
     // response instead of running through the executor.
     if (task.config.pivot && task.config.experimentVariants && task.config.experimentVariants.length > 0) {
       const response: WorkResponse = {
         requestId: `req-${task.id}`,
         actionId: task.id,
+        attemptId,
         executionGeneration: task.execution.generation ?? 0,
         status: 'spawn_experiments',
         outputs: {},
@@ -327,6 +374,7 @@ export class TaskRunner {
     const request: WorkRequest = {
       requestId: randomUUID(),
       actionId: task.id,
+      attemptId,
       executionGeneration: task.execution.generation ?? 0,
       actionType: this.determineActionType(task),
       inputs: {
@@ -351,7 +399,6 @@ export class TaskRunner {
     console.log(
       `${RESTART_TO_BRANCH_TRACE} executeTaskInner taskId=${task.id} WorkRequest built actionType=${request.actionType} repoUrl=${request.inputs.repoUrl ?? '(none)'} upstreamBranches=${JSON.stringify(request.inputs.upstreamBranches ?? [])}`,
     );
-
     const executor = this.selectExecutor(task);
     console.log(
       `${RESTART_TO_BRANCH_TRACE} executeTaskInner taskId=${task.id} selectExecutor → type=${executor.type} calling executor.start()`,
@@ -388,7 +435,6 @@ export class TaskRunner {
       clearInterval(preStartHeartbeatTimer);
     }
     console.log(`[trace] TaskRunner: task=${task.id} executor.start() returned after ${Date.now() - startT0}ms executor=${executor.type} sessionId=${handle.agentSessionId ?? 'none'} workspace=${handle.workspacePath ?? 'default'}`);
-
     // Persist execution metadata immediately at task start — all fields explicit
     {
       // Fail-fast: workspacePath must be provided by all executors
@@ -425,7 +471,9 @@ export class TaskRunner {
     }
 
     // Notify consumer about the spawned handle
-    this.activeExecutions.set(task.id, { handle, executor });
+    const activeHandle = handle as ActiveExecutionHandle;
+    activeHandle.attemptId = attemptId;
+    this.activeExecutions.set(attemptId, { handle: activeHandle, executor, taskId: task.id });
     this.callbacks.onSpawned?.(task.id, handle, executor);
 
     // Wire output
@@ -444,8 +492,13 @@ export class TaskRunner {
     return new Promise<void>((resolvePromise) => {
       executor.onComplete(handle, async (response: WorkResponse) => {
         const work = async () => {
-          this.activeExecutions.delete(task.id);
+          const normalizedResponse = response.attemptId ? response : { ...response, attemptId };
+          this.activeExecutions.delete(normalizedResponse.attemptId ?? attemptId);
           try {
+            console.log(
+              `[task-runner] onComplete taskId=${task.id} responseStatus=${response.status} ` +
+                `responseAttemptId=${normalizedResponse.attemptId ?? attemptId} responseGeneration=${response.executionGeneration} executionId=${handle.executionId}`,
+            );
             console.log(
               `${RESTART_TO_BRANCH_TRACE} resolvePromise | task.config.isMergeNode = ${task.config.isMergeNode}`,
             );
@@ -458,9 +511,9 @@ export class TaskRunner {
               return;
             }
 
-            this.callbacks.onComplete?.(task.id, response);
+            this.callbacks.onComplete?.(task.id, normalizedResponse);
 
-            const newlyStarted = this.orchestrator.handleWorkerResponse(response) ?? [];
+            const newlyStarted = this.orchestrator.handleWorkerResponse(normalizedResponse) ?? [];
 
             if (newlyStarted.length > 0) {
               this.executeTasks(newlyStarted);
@@ -470,6 +523,7 @@ export class TaskRunner {
             const errResponse: WorkResponse = {
               requestId: response.requestId,
               actionId: task.id,
+              attemptId,
               executionGeneration: task.execution.generation ?? 0,
               status: 'failed',
               outputs: {

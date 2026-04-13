@@ -25,6 +25,10 @@ export function validateWorkRequest(req: unknown): ValidationResult {
     return { valid: false, error: 'actionId is required and must be a non-empty string' };
   }
 
+  if (r.attemptId !== undefined && (typeof r.attemptId !== 'string' || r.attemptId.length === 0)) {
+    return { valid: false, error: 'attemptId, if provided, must be a non-empty string' };
+  }
+
   if (!Number.isInteger(r.executionGeneration) || (r.executionGeneration as number) < 0) {
     return { valid: false, error: 'executionGeneration is required and must be a non-negative integer' };
   }
@@ -58,6 +62,10 @@ export function validateWorkResponse(res: unknown): ValidationResult {
 
   if (typeof r.actionId !== 'string' || r.actionId.length === 0) {
     return { valid: false, error: 'actionId is required and must be a non-empty string' };
+  }
+
+  if (r.attemptId !== undefined && (typeof r.attemptId !== 'string' || r.attemptId.length === 0)) {
+    return { valid: false, error: 'attemptId, if provided, must be a non-empty string' };
   }
 
   if (!Number.isInteger(r.executionGeneration) || (r.executionGeneration as number) < 0) {

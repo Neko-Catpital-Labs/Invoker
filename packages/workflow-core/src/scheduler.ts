@@ -7,16 +7,74 @@
 
 export interface TaskJob {
   taskId: string;
+  attemptId?: string;
   priority: number;
+}
+
+interface RunningJob {
+  taskId: string;
+  attemptId: string;
 }
 
 export class TaskScheduler {
   private queue: TaskJob[] = [];
-  private running: Set<string> = new Set();
+  private running: Map<string, RunningJob> = new Map();
+  private runningByTaskId: Map<string, Set<string>> = new Map();
   private maxConcurrency: number;
 
   constructor(maxConcurrency: number = 3) {
     this.maxConcurrency = maxConcurrency;
+  }
+
+  private getJobKey(job: TaskJob): string {
+    return job.attemptId ?? job.taskId;
+  }
+
+  private addRunning(job: TaskJob): void {
+    const attemptId = this.getJobKey(job);
+    const runningJob: RunningJob = {
+      taskId: job.taskId,
+      attemptId,
+    };
+
+    this.running.set(attemptId, runningJob);
+
+    const taskIds = this.runningByTaskId.get(job.taskId) ?? new Set<string>();
+    taskIds.add(attemptId);
+    this.runningByTaskId.set(job.taskId, taskIds);
+  }
+
+  private removeRunningAttempt(attemptId: string): boolean {
+    const runningJob = this.running.get(attemptId);
+    if (!runningJob) {
+      return false;
+    }
+
+    this.running.delete(attemptId);
+    const taskIds = this.runningByTaskId.get(runningJob.taskId);
+    if (taskIds) {
+      taskIds.delete(attemptId);
+      if (taskIds.size === 0) {
+        this.runningByTaskId.delete(runningJob.taskId);
+      }
+    }
+
+    return true;
+  }
+
+  private removeRunningTask(taskId: string): number {
+    const attemptIds = this.runningByTaskId.get(taskId);
+    if (!attemptIds || attemptIds.size === 0) {
+      return 0;
+    }
+
+    let removed = 0;
+    for (const attemptId of attemptIds) {
+      if (this.removeRunningAttempt(attemptId)) {
+        removed += 1;
+      }
+    }
+    return removed;
   }
 
   /** Add a job to the queue, sorted by priority (high first). */
@@ -47,16 +105,23 @@ export class TaskScheduler {
 
     if (this.running.size < this.maxConcurrency) {
       const job = this.queue.shift()!;
-      this.running.add(job.taskId);
-      return job;
+      this.addRunning(job);
+      return {
+        ...job,
+        attemptId: this.getJobKey(job),
+      };
     }
 
     return null;
   }
 
   /** Mark a job as complete, freeing its slot. */
-  completeJob(taskId: string): void {
-    this.running.delete(taskId);
+  completeJob(taskIdOrAttemptId: string): void {
+    if (this.removeRunningAttempt(taskIdOrAttemptId)) {
+      return;
+    }
+
+    this.removeRunningTask(taskIdOrAttemptId);
   }
 
   /** Kill all running jobs and clear the queue. */
@@ -64,6 +129,7 @@ export class TaskScheduler {
     const killedCount = this.running.size;
     const clearedCount = this.queue.length;
     this.running.clear();
+    this.runningByTaskId.clear();
     this.queue = [];
     return { killedCount, clearedCount };
   }
@@ -78,13 +144,29 @@ export class TaskScheduler {
   }
 
   /** Check if a task is currently running. */
-  isRunning(taskId: string): boolean {
-    return this.running.has(taskId);
+  isRunning(taskIdOrAttemptId: string): boolean {
+    return this.running.has(taskIdOrAttemptId) || this.runningByTaskId.has(taskIdOrAttemptId);
+  }
+
+  /** Return all attempt IDs currently in the running set. */
+  getRunningAttemptIds(): string[] {
+    return Array.from(this.running.keys());
   }
 
   /** Return all task IDs currently in the running set. */
   getRunningTaskIds(): string[] {
-    return Array.from(this.running);
+    const taskIds: string[] = [];
+    const seen = new Set<string>();
+
+    for (const runningJob of this.running.values()) {
+      if (seen.has(runningJob.taskId)) {
+        continue;
+      }
+      seen.add(runningJob.taskId);
+      taskIds.push(runningJob.taskId);
+    }
+
+    return taskIds;
   }
 
   /** Return a shallow copy of the internal queue (not-yet-running jobs). */
@@ -93,8 +175,10 @@ export class TaskScheduler {
   }
 
   /** Find and remove a job from the queue by taskId. Returns true if found and removed, false otherwise. */
-  removeJob(taskId: string): boolean {
-    const index = this.queue.findIndex(job => job.taskId === taskId);
+  removeJob(taskIdOrAttemptId: string): boolean {
+    const index = this.queue.findIndex(
+      job => job.attemptId === taskIdOrAttemptId || job.taskId === taskIdOrAttemptId,
+    );
     if (index === -1) {
       return false;
     }
@@ -102,8 +186,8 @@ export class TaskScheduler {
     return true;
   }
 
-  /** Return running tasks (without utilization info). */
-  getRunningJobs(): Array<{ taskId: string }> {
-    return Array.from(this.running).map(taskId => ({ taskId }));
+  /** Return running jobs with both task and attempt identity. */
+  getRunningJobs(): Array<{ taskId: string; attemptId: string }> {
+    return Array.from(this.running.values()).map(({ taskId, attemptId }) => ({ taskId, attemptId }));
   }
 }

@@ -545,6 +545,11 @@ export class Orchestrator {
 
       const changesWithGeneration = this.withBumpedExecutionGeneration(current, resetChanges);
       this.writeAndSync(id, changesWithGeneration);
+      const priorAttemptId = current.execution.selectedAttemptId;
+      if (priorAttemptId) {
+        this.taskRepository.updateAttempt(priorAttemptId, { status: 'superseded' });
+        this.writeAndSync(id, { execution: { selectedAttemptId: undefined } });
+      }
       this.persistence.logEvent?.(id, 'task.pending', changesWithGeneration);
       this.messageBus.publish(TASK_DELTA_CHANNEL, {
         type: 'updated',
@@ -554,9 +559,9 @@ export class Orchestrator {
 
       const wasRunning = current.status === 'running' || current.status === 'fixing_with_ai';
       if (wasRunning) {
-        this.scheduler.completeJob(id);
+        this.scheduler.completeJob(priorAttemptId ?? id);
       } else {
-        this.scheduler.removeJob(id);
+        this.scheduler.removeJob(priorAttemptId ?? id);
       }
     }
 
@@ -579,6 +584,43 @@ export class Orchestrator {
         generation: this.getExecutionGeneration(task) + 1,
       },
     };
+  }
+
+  private getSelectedAttempt(task: TaskState | undefined): Attempt | undefined {
+    const attemptId = task?.execution.selectedAttemptId;
+    if (!attemptId) return undefined;
+    return this.persistence.loadAttempt(attemptId);
+  }
+
+  private ensureCurrentPendingAttempt(task: TaskState): string {
+    const selected = this.getSelectedAttempt(task);
+    if (selected && (selected.status === 'pending' || selected.status === 'running' || selected.status === 'needs_input')) {
+      return selected.id;
+    }
+
+    const attempts = this.persistence.loadAttempts(task.id);
+    const current = attempts[attempts.length - 1];
+    if (current && (current.status === 'pending' || current.status === 'running' || current.status === 'needs_input')) {
+      if (task.execution.selectedAttemptId !== current.id) {
+        this.writeAndSync(task.id, { execution: { selectedAttemptId: current.id } });
+      }
+      return current.id;
+    }
+
+    const upstreamAttemptIds = task.dependencies
+      .map(depId => this.stateGetTask(depId)?.execution.selectedAttemptId)
+      .filter((id): id is string => !!id);
+    const freshAttempt = createAttempt(task.id, {
+      status: 'pending',
+      upstreamAttemptIds,
+      supersedesAttemptId: current?.id,
+    });
+    if (current && current.status !== 'completed' && current.status !== 'failed' && current.status !== 'superseded') {
+      this.taskRepository.updateAttempt(current.id, { status: 'superseded' });
+    }
+    this.taskRepository.saveAttempt(freshAttempt);
+    this.writeAndSync(task.id, { execution: { selectedAttemptId: freshAttempt.id } });
+    return freshAttempt.id;
   }
 
   // ── Commands ──────────────────────────────────────────────
@@ -792,8 +834,17 @@ export class Orchestrator {
         return [];
       }
       if (earlyTask) {
+        const activeAttemptId = earlyTask.execution.selectedAttemptId;
+        if (response.attemptId && activeAttemptId && response.attemptId !== activeAttemptId) {
+          console.warn(
+            `[worker-response] STALE_ATTEMPT_REJECTED taskId=${earlyTask.id} ` +
+              `responseAttemptId=${response.attemptId} activeAttemptId=${activeAttemptId} ` +
+              `workerResponseStatus=${response.status}`,
+          );
+          return [];
+        }
         const activeGeneration = this.getExecutionGeneration(earlyTask);
-        if (response.executionGeneration !== activeGeneration) {
+        if (!response.attemptId && response.executionGeneration !== activeGeneration) {
           console.warn(
             `[worker-response] STALE_GENERATION_REJECTED taskId=${earlyTask.id} ` +
               `responseGeneration=${response.executionGeneration} activeGeneration=${activeGeneration} ` +
@@ -825,7 +876,7 @@ export class Orchestrator {
         console.warn(
           `[worker-response] PROTOCOL_FAILURE_UNKNOWN_TASK actionId=${response.actionId} parseError=${parseErr}`,
         );
-        this.scheduler.completeJob(response.actionId);
+        this.scheduler.completeJob(response.attemptId ?? response.actionId);
         return [];
       }
 
@@ -833,7 +884,7 @@ export class Orchestrator {
       console.warn(
         `[worker-response] PROTOCOL_FAILURE taskId=${canonicalTaskId} parseError=${parseErr}`,
       );
-      this.scheduler.completeJob(canonicalTaskId);
+      this.scheduler.completeJob(response.attemptId ?? canonicalTaskId);
       return this.finalizeFailedTask(
         canonicalTaskId,
         {
@@ -850,7 +901,7 @@ export class Orchestrator {
     const task = this.stateGetTask(taskId);
     if (!task) {
       console.warn(`[worker-response] task not in graph taskId=${taskId} (stale response?)`);
-      this.scheduler.completeJob(this.stateGetTask(taskId)?.id ?? taskId);
+      this.scheduler.completeJob(response.attemptId ?? this.stateGetTask(taskId)?.id ?? taskId);
       return [];
     }
 
@@ -863,7 +914,7 @@ export class Orchestrator {
       );
     }
 
-    this.scheduler.completeJob(canonicalTaskId);
+    this.scheduler.completeJob(response.attemptId ?? canonicalTaskId);
 
     switch (parsed.type) {
       case 'completed':
@@ -892,6 +943,9 @@ export class Orchestrator {
 
     const changes: TaskStateChanges = { status: 'running', execution: { inputPrompt: undefined } };
     this.writeAndSync(id, changes);
+    if (task.execution.selectedAttemptId) {
+      this.taskRepository.updateAttempt(task.execution.selectedAttemptId, { status: 'running' });
+    }
     const delta: TaskDelta = { type: 'updated', taskId: id, changes };
     this.persistence.logEvent?.(id, 'task.running', changes);
     this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
@@ -1452,15 +1506,20 @@ export class Orchestrator {
       if (!current) continue;
       const changesWithGeneration = this.withBumpedExecutionGeneration(current, resetChanges);
       this.writeAndSync(id, changesWithGeneration);
+      const priorAttemptId = current.execution.selectedAttemptId;
+      if (priorAttemptId) {
+        this.taskRepository.updateAttempt(priorAttemptId, { status: 'superseded' });
+        this.writeAndSync(id, { execution: { selectedAttemptId: undefined } });
+      }
       this.persistence.logEvent?.(id, 'task.pending', changesWithGeneration);
       this.messageBus.publish(TASK_DELTA_CHANNEL, { type: 'updated', taskId: id, changes: changesWithGeneration });
 
       const wasRunning = current.status === 'running' || current.status === 'fixing_with_ai';
       this.deferredTaskIds.delete(id);
       if (wasRunning) {
-        this.scheduler.completeJob(id);
+        this.scheduler.completeJob(priorAttemptId ?? id);
       } else {
-        this.scheduler.removeJob(id);
+        this.scheduler.removeJob(priorAttemptId ?? id);
       }
     }
 
@@ -1528,13 +1587,18 @@ export class Orchestrator {
       );
       const changesWithGeneration = this.withBumpedExecutionGeneration(task, resetChanges);
       const after = this.writeAndSync(task.id, changesWithGeneration);
+      const priorAttemptId = task.execution.selectedAttemptId;
+      if (priorAttemptId) {
+        this.taskRepository.updateAttempt(priorAttemptId, { status: 'superseded' });
+        this.writeAndSync(task.id, { execution: { selectedAttemptId: undefined } });
+      }
       console.log(
         `[agent-session-trace] recreateWorkflow: after writeAndSync task="${task.id}" agentSessionId=${after.execution.agentSessionId ?? 'null'} containerId=${after.execution.containerId ?? 'null'}`,
       );
       const delta: TaskDelta = { type: 'updated', taskId: task.id, changes: changesWithGeneration };
       this.persistence.logEvent?.(task.id, 'task.pending', changesWithGeneration);
       this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
-      this.scheduler.completeJob(task.id);
+      this.scheduler.completeJob(priorAttemptId ?? task.id);
     }
 
     return this.startExecution();
@@ -2267,7 +2331,7 @@ export class Orchestrator {
   getQueueStatus(): {
     maxConcurrency: number;
     runningCount: number;
-    running: Array<{ taskId: string; description: string }>;
+    running: Array<{ taskId: string; attemptId?: string; description: string }>;
     queued: Array<{ taskId: string; priority: number; description: string }>;
   } {
     const status = this.scheduler.getStatus();
@@ -2333,21 +2397,18 @@ export class Orchestrator {
     this.persistence.logEvent?.(taskId, eventName, changes);
     this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
 
-    // Dual-write: update latest Attempt to completed, auto-select (best-effort)
+    // Dual-write: update current selected attempt to completed (best-effort)
     try {
-      const attempts = this.persistence.loadAttempts(taskId);
-      const latest = attempts[attempts.length - 1];
-      if (latest && latest.status === 'running') {
-        this.taskRepository.updateAttempt(latest.id, {
+      const currentAttemptId = this.stateGetTask(taskId)?.execution.selectedAttemptId;
+      const currentAttempt = currentAttemptId ? this.persistence.loadAttempt(currentAttemptId) : undefined;
+      if (currentAttempt && currentAttempt.status === 'running') {
+        this.taskRepository.updateAttempt(currentAttempt.id, {
           status: 'completed',
           exitCode: parsed.exitCode,
           completedAt: new Date(),
           ...(parsed.commitHash !== undefined ? { commit: parsed.commitHash } : {}),
           ...(parsed.agentSessionId !== undefined ? { agentSessionId: parsed.agentSessionId } : {}),
         });
-        // Auto-select this attempt
-        const selectChanges: TaskStateChanges = { execution: { selectedAttemptId: latest.id } };
-        this.writeAndSync(taskId, selectChanges);
       }
     } catch { /* best effort */ }
 
@@ -2367,7 +2428,8 @@ export class Orchestrator {
       for (const id of this.deferredTaskIds) {
         const t = this.stateGetTask(id);
         if (t && t.status === 'pending') {
-          this.scheduler.enqueue({ taskId: id, priority: 0 });
+          const attemptId = this.ensureCurrentPendingAttempt(t);
+          this.scheduler.enqueue({ taskId: id, attemptId, priority: 0 });
         }
       }
       this.deferredTaskIds.clear();
@@ -2441,7 +2503,8 @@ export class Orchestrator {
       for (const id of this.deferredTaskIds) {
         const t = this.stateGetTask(id);
         if (t && t.status === 'pending') {
-          this.scheduler.enqueue({ taskId: id, priority: 0 });
+          const attemptId = this.ensureCurrentPendingAttempt(t);
+          this.scheduler.enqueue({ taskId: id, attemptId, priority: 0 });
         }
       }
       this.deferredTaskIds.clear();
@@ -2477,6 +2540,10 @@ export class Orchestrator {
       execution: { inputPrompt: parsed.prompt },
     };
     this.writeAndSync(taskId, changes);
+    const currentAttemptId = this.stateGetTask(taskId)?.execution.selectedAttemptId;
+    if (currentAttemptId) {
+      this.taskRepository.updateAttempt(currentAttemptId, { status: 'needs_input' });
+    }
     const delta: TaskDelta = { type: 'updated', taskId, changes };
     this.persistence.logEvent?.(taskId, 'task.needs_input', changes);
     this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
@@ -2671,16 +2738,19 @@ export class Orchestrator {
   }
 
   private enqueueIfNotScheduled(taskId: string): void {
-    if (this.scheduler.isRunning(taskId)) {
-      const task = this.stateGetTask(taskId);
-      if (task?.status === 'running' || task?.status === 'fixing_with_ai') {
+    const task = this.stateGetTask(taskId);
+    if (!task) return;
+
+    const attemptId = this.ensureCurrentPendingAttempt(task);
+    if (this.scheduler.isRunning(attemptId)) {
+      if (task.status === 'running' || task.status === 'fixing_with_ai') {
         return;
       }
       // Recover from stale scheduler slot (e.g. process death/sync drift).
-      this.scheduler.completeJob(taskId);
+      this.scheduler.completeJob(attemptId);
     }
-    if (this.scheduler.getQueuedJobs().some((job) => job.taskId === taskId)) return;
-    this.scheduler.enqueue({ taskId, priority: 0 });
+    if (this.scheduler.getQueuedJobs().some((job) => job.attemptId === attemptId || job.taskId === taskId)) return;
+    this.scheduler.enqueue({ taskId, attemptId, priority: 0 });
   }
 
   private autoStartExternallyUnblockedReadyTasks(): TaskState[] {
@@ -2790,11 +2860,15 @@ export class Orchestrator {
 
   /** Drain the scheduler queue, starting tasks that fit the concurrency limit. */
   private drainScheduler(): TaskState[] {
-    for (const runningId of this.scheduler.getRunningTaskIds()) {
-      const task = this.stateGetTask(runningId);
-      if (!task || (task.status !== 'running' && task.status !== 'fixing_with_ai')) {
-        console.warn(`[orchestrator] drainScheduler: freeing leaked scheduler slot for "${runningId}" (actual status: ${task?.status ?? 'not found'})`);
-        this.scheduler.completeJob(runningId);
+    for (const runningJob of this.scheduler.getRunningJobs()) {
+      const task = this.stateGetTask(runningJob.taskId);
+      const isCurrentAttempt = task?.execution.selectedAttemptId === runningJob.attemptId;
+      if (!task || !isCurrentAttempt || (task.status !== 'running' && task.status !== 'fixing_with_ai')) {
+        console.warn(
+          `[orchestrator] drainScheduler: freeing leaked scheduler slot for "${runningJob.attemptId}" ` +
+            `(task=${runningJob.taskId} actual status: ${task?.status ?? 'not found'} currentAttempt=${task?.execution.selectedAttemptId ?? 'none'})`,
+        );
+        this.scheduler.completeJob(runningJob.attemptId);
       }
     }
 
@@ -2805,15 +2879,21 @@ export class Orchestrator {
       console.log(`[orchestrator] drainScheduler: dequeued "${job.taskId}" actual status=${task?.status ?? 'NOT_FOUND'}`);
       if (!task || task.status !== 'pending') {
         console.log(`[orchestrator] drainScheduler: SKIPPING "${job.taskId}" — not pending`);
-        this.scheduler.completeJob(job.taskId);
+        this.scheduler.completeJob(job.attemptId ?? job.taskId);
         job = this.scheduler.dequeue();
         continue;
       }
 
       const now = new Date();
+      const attemptId = job.attemptId ?? this.ensureCurrentPendingAttempt(task);
       const changes: TaskStateChanges = {
         status: 'running',
-        execution: { startedAt: now, lastHeartbeatAt: now, generation: this.getExecutionGeneration(task) },
+        execution: {
+          selectedAttemptId: attemptId,
+          startedAt: now,
+          lastHeartbeatAt: now,
+          generation: this.getExecutionGeneration(task),
+        },
       };
       const updated = this.writeAndSync(job.taskId, changes);
       started.push(updated);
@@ -2822,17 +2902,26 @@ export class Orchestrator {
       this.persistence.logEvent?.(job.taskId, 'task.running', changes);
       this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
 
-      // Dual-write: create Attempt record (best-effort)
       try {
-        const upstreamAttemptIds = task.dependencies
-          .map(depId => this.stateGetTask(depId)?.execution.selectedAttemptId)
-          .filter((id): id is string => !!id);
-        const attempt = createAttempt(job.taskId, {
-          status: 'running',
-          startedAt: now,
-          upstreamAttemptIds,
-        });
-        this.taskRepository.saveAttempt(attempt);
+        const existingAttempt = this.persistence.loadAttempt(attemptId);
+        if (existingAttempt) {
+          this.taskRepository.updateAttempt(attemptId, {
+            status: 'running',
+            startedAt: now,
+            lastHeartbeatAt: now,
+          });
+        } else {
+          const upstreamAttemptIds = task.dependencies
+            .map(depId => this.stateGetTask(depId)?.execution.selectedAttemptId)
+            .filter((id): id is string => !!id);
+          const attempt = createAttempt(job.taskId, {
+            status: 'running',
+            startedAt: now,
+            upstreamAttemptIds,
+          });
+          this.taskRepository.saveAttempt(attempt);
+          this.writeAndSync(job.taskId, { execution: { selectedAttemptId: attempt.id } });
+        }
       } catch { /* best effort — never break existing flow */ }
 
       job = this.scheduler.dequeue();

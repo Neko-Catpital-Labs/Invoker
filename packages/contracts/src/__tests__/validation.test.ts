@@ -11,6 +11,12 @@ describe('validateWorkRequest', () => {
     expect(result.error).toBeUndefined();
   });
 
+  it('accepts an optional attemptId on WorkRequest', () => {
+    const req = createWorkRequest('req-1', 'task-1', 0, 'command', { command: 'echo hi' }, 'http://localhost:4000/callback', 'task-1-a1');
+    const result = validateWorkRequest(req);
+    expect(result.valid).toBe(true);
+  });
+
   it('rejects non-object input', () => {
     expect(validateWorkRequest(null).valid).toBe(false);
     expect(validateWorkRequest('string').valid).toBe(false);
@@ -41,6 +47,11 @@ describe('validateWorkResponse', () => {
 
   it('accepts a valid completed response', () => {
     const result = validateWorkResponse(baseResponse);
+    expect(result.valid).toBe(true);
+  });
+
+  it('accepts an optional attemptId on WorkResponse', () => {
+    const result = validateWorkResponse({ ...baseResponse, attemptId: 'task-1-a1' });
     expect(result.valid).toBe(true);
   });
 
@@ -128,6 +139,12 @@ describe('validateWorkResponse', () => {
       expect(result.valid).toBe(false);
       expect(result.error).toContain('actionId');
       expect(result.error).toContain('non-empty string');
+    });
+
+    it('rejects empty attemptId when provided', () => {
+      const result = validateWorkResponse({ requestId: 'r', actionId: 'a', attemptId: '', executionGeneration: 0, status: 'completed', outputs: {} });
+      expect(result.valid).toBe(false);
+      expect(result.error).toContain('attemptId');
     });
 
     it('rejects unknown status with stable error listing valid statuses', () => {
