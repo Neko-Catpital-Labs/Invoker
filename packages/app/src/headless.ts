@@ -141,6 +141,36 @@ function createHeadlessExecutor(
   });
 }
 
+export function wireHeadlessAutoFix(
+  deps: Pick<HeadlessDeps, 'messageBus' | 'orchestrator' | 'persistence'>,
+  taskExecutor: Pick<TaskRunner, 'executeTasks' | 'fixWithAgent' | 'resolveConflict'>,
+  invokeAutoFix: (taskId: string) => Promise<void> = async (taskId) => {
+    const { autoFixOnFailure } = await import('./workflow-actions.js');
+    await autoFixOnFailure(taskId, {
+      orchestrator: deps.orchestrator,
+      persistence: deps.persistence,
+      taskExecutor: taskExecutor as TaskRunner,
+    });
+  },
+  onError: (taskId: string, err: unknown) => void = (taskId, err) => {
+    process.stderr.write(`[auto-fix] "${taskId}": ${err}\n`);
+  },
+): HeadlessAutoFixController {
+  const autoFixInProgress = new Set<string>();
+  const unsubscribe = deps.messageBus.subscribe<TaskDelta>(Channels.TASK_DELTA, (delta) => {
+    if (delta.type !== 'updated' || delta.changes.status !== 'failed') return;
+    if (autoFixInProgress.has(delta.taskId) || !deps.orchestrator.shouldAutoFix(delta.taskId)) return;
+    autoFixInProgress.add(delta.taskId);
+    void invokeAutoFix(delta.taskId)
+      .catch((err) => onError(delta.taskId, err))
+      .finally(() => autoFixInProgress.delete(delta.taskId));
+  });
+  return {
+    unsubscribe,
+    isBusy: () => autoFixInProgress.size > 0,
+  };
+}
+
 function wireHeadlessApproveHook(deps: HeadlessDeps, te: TaskRunner): void {
   deps.orchestrator.setBeforeApproveHook(async (task) => {
     if (task.config.isMergeNode && task.config.workflowId) {
@@ -174,6 +204,11 @@ export interface QueryFlags {
   workflow?: string;
   noMerge?: boolean;
   positional: string[];
+}
+
+export interface HeadlessAutoFixController {
+  unsubscribe: () => void;
+  isBusy: () => boolean;
 }
 
 export function parseQueryFlags(args: string[]): QueryFlags {
@@ -633,7 +668,6 @@ async function headlessRun(
   process.stdout.write(`${BOLD}Loading plan: ${plan.name}${RESET}\n`);
   process.stdout.write(`Tasks: ${plan.tasks.length}\n\n`);
 
-  const autoFixInProgress = new Set<string>();
   messageBus.subscribe<TaskDelta>(Channels.TASK_DELTA, (delta) => {
     if (delta.type === 'updated') {
       const task = orchestrator.getTask(delta.taskId);
@@ -645,20 +679,7 @@ async function headlessRun(
 
   const taskExecutor = createHeadlessExecutor(deps);
   wireHeadlessApproveHook(deps, taskExecutor);
-
-  // Auto-fix subscriber (after taskExecutor is created)
-  messageBus.subscribe<TaskDelta>(Channels.TASK_DELTA, (delta) => {
-    if (delta.type === 'updated' && delta.changes.status === 'failed') {
-      if (!autoFixInProgress.has(delta.taskId) && orchestrator.shouldAutoFix(delta.taskId)) {
-        autoFixInProgress.add(delta.taskId);
-        import('./workflow-actions.js').then(({ autoFixOnFailure }) =>
-          autoFixOnFailure(delta.taskId, { orchestrator, persistence: deps.persistence, taskExecutor })
-            .catch(err => process.stderr.write(`[auto-fix] "${delta.taskId}": ${err}\n`))
-            .finally(() => autoFixInProgress.delete(delta.taskId)),
-        );
-      }
-    }
-  });
+  const autoFix = wireHeadlessAutoFix(deps, taskExecutor);
 
   const api = startApiServer({
     logger: deps.logger,
@@ -683,9 +704,10 @@ async function headlessRun(
     return;
   }
 
-  await waitForCompletion(orchestrator, currentWorkflowId, waitForApproval);
+  await waitForCompletion(orchestrator, currentWorkflowId, waitForApproval, autoFix.isBusy);
 
   await api.close().catch(() => {});
+  autoFix.unsubscribe();
 
   const status = orchestrator.getWorkflowStatus(currentWorkflowId);
   process.stdout.write(`\n${formatWorkflowStatus(status)}\n`);
@@ -713,7 +735,6 @@ async function headlessResume(
 
   process.stdout.write(`${BOLD}Resuming workflow: ${workflowId}${RESET}\n\n`);
 
-  const autoFixInProgress = new Set<string>();
   messageBus.subscribe<TaskDelta>(Channels.TASK_DELTA, (delta) => {
     if (delta.type === 'updated') {
       const task = orchestrator.getTask(delta.taskId);
@@ -725,20 +746,7 @@ async function headlessResume(
 
   const taskExecutor = createHeadlessExecutor(deps);
   wireHeadlessApproveHook(deps, taskExecutor);
-
-  // Auto-fix subscriber (after taskExecutor is created)
-  messageBus.subscribe<TaskDelta>(Channels.TASK_DELTA, (delta) => {
-    if (delta.type === 'updated' && delta.changes.status === 'failed') {
-      if (!autoFixInProgress.has(delta.taskId) && orchestrator.shouldAutoFix(delta.taskId)) {
-        autoFixInProgress.add(delta.taskId);
-        import('./workflow-actions.js').then(({ autoFixOnFailure }) =>
-          autoFixOnFailure(delta.taskId, { orchestrator, persistence: deps.persistence, taskExecutor })
-            .catch(err => process.stderr.write(`[auto-fix] "${delta.taskId}": ${err}\n`))
-            .finally(() => autoFixInProgress.delete(delta.taskId)),
-        );
-      }
-    }
-  });
+  const autoFix = wireHeadlessAutoFix(deps, taskExecutor);
 
   const api = startApiServer({
     logger: deps.logger,
@@ -770,9 +778,10 @@ async function headlessResume(
     return;
   }
 
-  await waitForCompletion(orchestrator, undefined, waitForApproval);
+  await waitForCompletion(orchestrator, undefined, waitForApproval, autoFix.isBusy);
 
   await api.close().catch(() => {});
+  autoFix.unsubscribe();
 
   const status = orchestrator.getWorkflowStatus();
   process.stdout.write(`\n${formatWorkflowStatus(status)}\n`);
@@ -825,9 +834,11 @@ async function headlessSelect(taskId: string, experimentId: string, deps: Headle
   process.stdout.write(`Selected experiment ${experimentId} for task: ${resolvedTaskId}\n`);
 
   const taskExecutor = createHeadlessExecutor(deps);
+  const autoFix = wireHeadlessAutoFix(deps, taskExecutor);
   const started = deps.orchestrator.resumeWorkflow(workflowId);
   await taskExecutor.executeTasks(started);
-  await waitForCompletion(deps.orchestrator, undefined, undefined);
+  await waitForCompletion(deps.orchestrator, undefined, undefined, autoFix.isBusy);
+  autoFix.unsubscribe();
 }
 
 async function headlessRestart(taskId: string, deps: HeadlessDeps): Promise<void> {
@@ -843,8 +854,10 @@ async function headlessRestart(taskId: string, deps: HeadlessDeps): Promise<void
   if (runnable.length === 0) return;
 
   const taskExecutor = createHeadlessExecutor(deps);
+  const autoFix = wireHeadlessAutoFix(deps, taskExecutor);
   await taskExecutor.executeTasks(runnable);
-  await waitForCompletion(deps.orchestrator, undefined, undefined);
+  await waitForCompletion(deps.orchestrator, undefined, undefined, autoFix.isBusy);
+  autoFix.unsubscribe();
 }
 
 async function headlessFix(taskId: string, deps: HeadlessDeps, agentArg?: string): Promise<void> {
@@ -852,6 +865,7 @@ async function headlessFix(taskId: string, deps: HeadlessDeps, agentArg?: string
   taskId = restoreWorkflowForTask(taskId, deps).resolvedTaskId;
 
   const te = createHeadlessExecutor(deps);
+  const autoFix = wireHeadlessAutoFix(deps, te);
   const { savedError } = deps.orchestrator.beginConflictResolution(taskId);
   const agent = (agentArg ?? 'claude').toLowerCase();
   const isMergeConflictError = (() => {
@@ -887,6 +901,8 @@ async function headlessFix(taskId: string, deps: HeadlessDeps, agentArg?: string
     deps.persistence.appendTaskOutput(taskId, `\n[Fix with AI] Failed: ${msg}`);
     deps.orchestrator.revertConflictResolution(taskId, savedError, msg);
     throw err;
+  } finally {
+    autoFix.unsubscribe();
   }
 }
 
@@ -895,9 +911,11 @@ async function headlessResolveConflict(taskId: string, deps: HeadlessDeps, agent
   taskId = restoreWorkflowForTask(taskId, deps).resolvedTaskId;
 
   const te = createHeadlessExecutor(deps);
+  const autoFix = wireHeadlessAutoFix(deps, te);
   const agent = (agentArg ?? 'claude').toLowerCase();
   await resolveConflictAction(taskId, { ...deps, taskExecutor: te }, agent);
   process.stdout.write(`Conflict resolved for task: ${taskId} (${agent}). Use 'approve ${taskId}' or 'reject ${taskId}' to finalize.\n`);
+  autoFix.unsubscribe();
 }
 
 async function headlessRebaseAndRetry(taskId: string, deps: HeadlessDeps): Promise<void> {
@@ -908,12 +926,14 @@ async function headlessRebaseAndRetry(taskId: string, deps: HeadlessDeps): Promi
 
   const { coalesced, value: tasksStarted } = await withCoalescedWorkflowReset(workflowId, async () => {
     const te = createHeadlessExecutor(deps);
+    const autoFix = wireHeadlessAutoFix(deps, te);
     const started = await rebaseAndRetry(taskId, { ...deps, taskExecutor: te });
     const runnable = started.filter(t => t.status === 'running');
     if (runnable.length > 0) {
       await te.executeTasks(runnable);
-      await waitForCompletion(deps.orchestrator, workflowId, undefined);
+      await waitForCompletion(deps.orchestrator, workflowId, undefined, autoFix.isBusy);
     }
+    autoFix.unsubscribe();
     return runnable.length;
   });
 
@@ -932,13 +952,15 @@ async function headlessRecreateWorkflow(workflowId: string, deps: HeadlessDeps):
     const runnable = started.filter(t => t.status === 'running');
     if (runnable.length > 0) {
       const te = createHeadlessExecutor(deps);
+      const autoFix = wireHeadlessAutoFix(deps, te);
       remoteFetchForPool.enabled = false;
       try {
         await te.executeTasks(runnable);
       } finally {
         remoteFetchForPool.enabled = true;
       }
-      await waitForCompletion(deps.orchestrator, workflowId, undefined);
+      await waitForCompletion(deps.orchestrator, workflowId, undefined, autoFix.isBusy);
+      autoFix.unsubscribe();
     }
     return runnable.length;
   });
@@ -961,13 +983,15 @@ async function headlessRecreateTask(taskId: string, deps: HeadlessDeps): Promise
   if (runnable.length === 0) return;
 
   const te = createHeadlessExecutor(deps);
+  const autoFix = wireHeadlessAutoFix(deps, te);
   remoteFetchForPool.enabled = false;
   try {
     await te.executeTasks(runnable);
   } finally {
     remoteFetchForPool.enabled = true;
   }
-  await waitForCompletion(deps.orchestrator, workflowId, undefined);
+  await waitForCompletion(deps.orchestrator, workflowId, undefined, autoFix.isBusy);
+  autoFix.unsubscribe();
 }
 
 async function headlessRetryWorkflow(workflowId: string, deps: HeadlessDeps): Promise<void> {
@@ -982,13 +1006,15 @@ async function headlessRetryWorkflow(workflowId: string, deps: HeadlessDeps): Pr
   if (runnable.length === 0) return;
 
   const te = createHeadlessExecutor(deps);
+  const autoFix = wireHeadlessAutoFix(deps, te);
   remoteFetchForPool.enabled = false;
   try {
     await te.executeTasks(runnable);
   } finally {
     remoteFetchForPool.enabled = true;
   }
-  await waitForCompletion(deps.orchestrator, workflowId, undefined);
+  await waitForCompletion(deps.orchestrator, workflowId, undefined, autoFix.isBusy);
+  autoFix.unsubscribe();
 }
 
 async function headlessEdit(taskId: string, newCommand: string, deps: HeadlessDeps): Promise<void> {
@@ -1001,8 +1027,10 @@ async function headlessEdit(taskId: string, newCommand: string, deps: HeadlessDe
   process.stdout.write(`Edited task "${taskId}" command → "${newCommand}"\n`);
 
   const taskExecutor = createHeadlessExecutor(deps);
+  const autoFix = wireHeadlessAutoFix(deps, taskExecutor);
   await taskExecutor.executeTasks(result.data);
-  await waitForCompletion(deps.orchestrator, undefined, undefined);
+  await waitForCompletion(deps.orchestrator, undefined, undefined, autoFix.isBusy);
+  autoFix.unsubscribe();
 }
 
 async function headlessEditExecutor(taskId: string, executorType: string, deps: HeadlessDeps): Promise<void> {
@@ -1015,8 +1043,10 @@ async function headlessEditExecutor(taskId: string, executorType: string, deps: 
   process.stdout.write(`Edited task "${taskId}" executor → "${executorType}"\n`);
 
   const taskExecutor = createHeadlessExecutor(deps);
+  const autoFix = wireHeadlessAutoFix(deps, taskExecutor);
   await taskExecutor.executeTasks(result.data);
-  await waitForCompletion(deps.orchestrator, undefined, undefined);
+  await waitForCompletion(deps.orchestrator, undefined, undefined, autoFix.isBusy);
+  autoFix.unsubscribe();
 }
 
 async function headlessEditAgent(taskId: string, agentName: string, deps: HeadlessDeps): Promise<void> {
@@ -1029,8 +1059,10 @@ async function headlessEditAgent(taskId: string, agentName: string, deps: Headle
   process.stdout.write(`Edited task "${taskId}" agent → "${agentName}"\n`);
 
   const taskExecutor = createHeadlessExecutor(deps);
+  const autoFix = wireHeadlessAutoFix(deps, taskExecutor);
   await taskExecutor.executeTasks(result.data);
-  await waitForCompletion(deps.orchestrator, undefined, undefined);
+  await waitForCompletion(deps.orchestrator, undefined, undefined, autoFix.isBusy);
+  autoFix.unsubscribe();
 }
 
 async function headlessQuerySelect(taskId: string, deps: Pick<HeadlessDeps, 'persistence'>): Promise<void> {
@@ -1357,7 +1389,12 @@ function restoreWorkflowForTask(
   throw new Error(`Task "${taskId}" not found in any workflow`);
 }
 
-async function waitForCompletion(orchestrator: Orchestrator, workflowId?: string, waitForApproval?: boolean): Promise<void> {
+async function waitForCompletion(
+  orchestrator: Orchestrator,
+  workflowId?: string,
+  waitForApproval?: boolean,
+  hasBackgroundWork?: () => boolean,
+): Promise<void> {
   const maxWaitMs = waitForApproval ? 86_400_000 : 1_800_000; // 24 hours if waiting for approval, else 30 minutes
   const pollIntervalMs = 100;
   const start = Date.now();
@@ -1375,14 +1412,14 @@ async function waitForCompletion(orchestrator: Orchestrator, workflowId?: string
       ? ['completed', 'failed', 'needs_input', 'blocked', 'stale']
       : ['completed', 'failed', 'needs_input', 'awaiting_approval', 'review_ready', 'blocked', 'stale'];
     const allSettled = tasks.every((t) => settledStatuses.includes(t.status));
-    if (allSettled) return;
+    if (allSettled && !hasBackgroundWork?.()) return;
     // Also settle if nothing is running and at least one task awaits human action.
     // Pending merge gates can't progress until their upstream is approved.
     const noneRunning = !tasks.some(
       (t) => t.status === 'running' || t.status === 'fixing_with_ai',
     );
     const hasHumanBlocked = tasks.some((t) => settledStatuses.includes(t.status) && t.status !== 'completed');
-    if (noneRunning && hasHumanBlocked) return;
+    if (noneRunning && hasHumanBlocked && !hasBackgroundWork?.()) return;
     await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
   }
 }
