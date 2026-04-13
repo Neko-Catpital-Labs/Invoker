@@ -208,6 +208,7 @@ async function initServices(options?: InitServicesOptions): Promise<void> {
     persistence, messageBus,
     taskRepository,
     maxConcurrency: invokerConfig.maxConcurrency,
+    defaultAutoFixRetries: invokerConfig.autoFixRetries,
     executorRoutingRules: invokerConfig.executorRoutingRules ?? [],
   });
   commandService = new CommandService(orchestrator);
@@ -937,6 +938,7 @@ function setupGuiMode(): void {
     persistence, messageBus,
     taskRepository: new SqliteTaskRepository(persistence),
     maxConcurrency: invokerConfig.maxConcurrency,
+    defaultAutoFixRetries: invokerConfig.autoFixRetries,
     executorRoutingRules: invokerConfig.executorRoutingRules ?? [],
   });
       commandService = new CommandService(orchestrator);

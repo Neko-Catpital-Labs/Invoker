@@ -5,6 +5,20 @@ set -e
 REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
 cd "$REPO_ROOT"
 
+has_bootstrap_artifacts() {
+  [ -f "$REPO_ROOT/node_modules/.modules.yaml" ] \
+    && [ -x "$REPO_ROOT/packages/app/node_modules/.bin/electron" ]
+}
+
+ensure_workspace_bootstrapped() {
+  if has_bootstrap_artifacts && [ "${INVOKER_FORCE_BOOTSTRAP:-0}" != "1" ]; then
+    return 0
+  fi
+
+  echo "Bootstrapping workspace dependencies..." >&2
+  pnpm install --frozen-lockfile >&2
+}
+
 expand_home_path() {
   case "$1" in
     "~") printf '%s\n' "$HOME" ;;
@@ -53,8 +67,8 @@ if [ "${1:-}" = "--headless" ] && [ "${2:-}" = "delete-all" ]; then
 fi
 
 # Ensure workspace dependencies are linked before building.
-# This is typically a no-op when the workspace is already up to date.
-pnpm install --frozen-lockfile
+# Headless commands must keep stdout clean because scripts parse labels/JSON.
+ensure_workspace_bootstrapped
 
 # Unset ELECTRON_RUN_AS_NODE so Electron loads its full API.
 unset ELECTRON_RUN_AS_NODE
