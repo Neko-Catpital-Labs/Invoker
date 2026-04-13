@@ -56,6 +56,7 @@ describe('headless→owner delegation', () => {
       expect(delegated).toBe(true);
       expect(ownerHandler).toHaveBeenCalledWith({
         args: ['run', '/path/to/plan.yaml'],
+        noTrack: undefined,
         waitForApproval: undefined,
       });
     });
@@ -156,11 +157,11 @@ describe('headless→owner delegation', () => {
         return new Promise(() => {}); // Never resolves
       });
 
-      // Should timeout after 5 seconds and return false
-      const delegated = await tryDelegateExec(['run', '/path/to/plan.yaml'], messageBus);
+      // Should timeout and return false.
+      const delegated = await tryDelegateExec(['approve', 'wf-1/task-1'], messageBus);
 
       expect(delegated).toBe(false);
-    });
+    }, 20_000);
   });
 
   describe('error propagation from owner', () => {

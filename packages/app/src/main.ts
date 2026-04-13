@@ -87,7 +87,6 @@ import {
   resolveAgentSession,
   createHeadlessExecutor,
   wireHeadlessApproveHook,
-  MUTATION_SNAPSHOT_CHANNEL,
 } from './headless.js';
 import {
   rebaseAndRetry,
@@ -103,14 +102,6 @@ import { openExternalTerminalForTask } from './open-terminal-for-task.js';
 import { createRequire } from 'node:module';
 import { acquireDbWriterLock, type DbWriterLockResult } from './db-writer-lock.js';
 import { applyDelta } from './delta-merge.js';
-import {
-  MutationPipe,
-  createMutationCommand,
-  emptyActiveMutationSnapshot,
-  normalizeActiveMutationSnapshot,
-  type MutationCommand,
-  type MutationCommandScope,
-} from './mutation-pipe.js';
 
 // ── Detect headless mode ─────────────────────────────────────
 
@@ -154,10 +145,6 @@ let commandService: CommandService;
 let hourlyBackupInterval: ReturnType<typeof setInterval> | null = null;
 let writerLock: DbWriterLockResult | null = null;
 
-const MUTATION_SUBMIT_CHANNEL = 'mutation.submit';
-const DEFAULT_MUTATION_QUEUE_LIMIT = Number(process.env.INVOKER_MUTATION_QUEUE_LIMIT ?? 100);
-const DEFAULT_MUTATION_HISTORY_LIMIT = Number(process.env.INVOKER_MUTATION_HISTORY_LIMIT ?? 200);
-
 interface GuiMutationPayload {
   channel: string;
   args: unknown[];
@@ -175,127 +162,6 @@ interface HeadlessExecMutationPayload {
   args: string[];
   waitForApproval?: boolean;
   noTrack?: boolean;
-}
-
-function workflowScope(workflowId: string | undefined): MutationCommandScope {
-  return workflowId ? { type: 'workflow', workflowId } : { type: 'global' };
-}
-
-function workflowIdFromTaskId(taskId: string): string | undefined {
-  if (taskId.startsWith('wf-') && taskId.includes('/')) {
-    return taskId.split('/')[0];
-  }
-  const liveTask = orchestrator?.getTask(taskId);
-  if (liveTask?.config.workflowId) return liveTask.config.workflowId;
-  for (const workflow of persistence?.listWorkflows?.() ?? []) {
-    const match = persistence.loadTasks(workflow.id).find((task) => task.id === taskId);
-    if (match?.config.workflowId) return match.config.workflowId;
-  }
-  return undefined;
-}
-
-function classifyHeadlessExecScope(args: string[]): MutationCommandScope {
-  const command = args[0];
-  const arg1 = args[1];
-  switch (command) {
-    case 'delete-all':
-    case 'stop':
-    case 'clear':
-      return { type: 'global' };
-    case 'delete':
-    case 'delete-workflow':
-    case 'cancel-workflow':
-    case 'recreate':
-      return workflowScope(arg1);
-    case 'restart':
-      if (arg1?.startsWith('wf-') && !arg1.includes('/')) {
-        return workflowScope(arg1);
-      }
-      return workflowScope(arg1 ? workflowIdFromTaskId(arg1) : undefined);
-    case 'recreate-task':
-    case 'approve':
-    case 'reject':
-    case 'input':
-    case 'select':
-    case 'cancel':
-    case 'fix':
-    case 'resolve-conflict':
-      return workflowScope(arg1 ? workflowIdFromTaskId(arg1) : undefined);
-    case 'rebase':
-      return workflowScope(arg1 ? workflowIdFromTaskId(arg1) : undefined);
-    case 'set': {
-      const subCommand = args[1];
-      switch (subCommand) {
-        case 'merge-mode':
-          return workflowScope(args[2]);
-        case 'command':
-        case 'executor':
-        case 'agent':
-        case 'gate-policy':
-          return workflowScope(args[2] ? workflowIdFromTaskId(args[2]) : undefined);
-        default:
-          return { type: 'global' };
-      }
-    }
-    default:
-      return { type: 'global' };
-  }
-}
-
-function classifyGuiMutationScope(payload: GuiMutationPayload): MutationCommandScope {
-  const [arg0] = payload.args;
-  switch (payload.channel) {
-    case 'invoker:delete-all-workflows':
-    case 'invoker:load-plan':
-    case 'invoker:start':
-    case 'invoker:resume-workflow':
-    case 'invoker:stop':
-    case 'invoker:clear':
-    case 'invoker:check-pr-statuses':
-    case 'invoker:check-pr-status':
-      return { type: 'global' };
-    case 'invoker:delete-workflow':
-    case 'invoker:cancel-workflow':
-    case 'invoker:recreate-workflow':
-    case 'invoker:retry-workflow':
-    case 'invoker:set-merge-branch':
-    case 'invoker:set-merge-mode':
-    case 'invoker:approve-merge':
-      return workflowScope(String(arg0));
-    case 'invoker:rebase-and-retry':
-    case 'invoker:recreate-task':
-    case 'invoker:restart-task':
-    case 'invoker:cancel-task':
-    case 'invoker:provide-input':
-    case 'invoker:approve':
-    case 'invoker:reject':
-    case 'invoker:select-experiment':
-    case 'invoker:resolve-conflict':
-    case 'invoker:fix-with-agent':
-    case 'invoker:edit-task-command':
-    case 'invoker:edit-task-type':
-    case 'invoker:edit-task-agent':
-    case 'invoker:set-task-external-gate-policies':
-    case 'invoker:replace-task':
-      return workflowScope(workflowIdFromTaskId(String(arg0)));
-    default:
-      return { type: 'global' };
-  }
-}
-
-function classifyMutationScope(kind: string, payload: unknown): MutationCommandScope {
-  switch (kind) {
-    case 'headless.run':
-      return { type: 'global' };
-    case 'headless.resume':
-      return workflowScope((payload as HeadlessResumeMutationPayload).workflowId);
-    case 'headless.exec':
-      return classifyHeadlessExecScope((payload as HeadlessExecMutationPayload).args);
-    case 'gui.ipc':
-      return classifyGuiMutationScope(payload as GuiMutationPayload);
-    default:
-      return { type: 'global' };
-  }
 }
 
 // Root logger: created early in initServices() once persistence is available.
@@ -573,7 +439,6 @@ if (isHeadless) {
     }
 
     let exitCode = 0;
-    let standaloneMutationPipe: MutationPipe<unknown> | null = null;
     try {
       // Standalone mode: initialize services and run headless
       await initServices({
@@ -690,94 +555,37 @@ if (isHeadless) {
         }
       };
 
-      standaloneMutationPipe = standaloneMode && !readOnlyMode
-        ? new MutationPipe({
-          logger,
-          dispatch: async (command) => {
-            switch (command.kind) {
-              case 'gui.ipc':
-                return executeStandaloneGuiMutation(command.payload as GuiMutationPayload);
-              case 'headless.run': {
-                const { planPath } = command.payload as HeadlessRunMutationPayload;
-                await runHeadless(['run', planPath], {
-                  ...headlessDeps,
-                  waitForApproval: false,
-                  noTrack: true,
-                });
-                return { ok: true };
-              }
-              case 'headless.resume': {
-                const { workflowId } = command.payload as HeadlessResumeMutationPayload;
-                await runHeadless(['resume', workflowId], {
-                  ...headlessDeps,
-                  waitForApproval: false,
-                  noTrack: true,
-                });
-                return { ok: true };
-              }
-              case 'headless.exec': {
-                const { args, waitForApproval: delegatedWait, noTrack: delegatedNoTrack } =
-                  command.payload as HeadlessExecMutationPayload;
-                await runHeadless(args, {
-                  ...headlessDeps,
-                  waitForApproval: delegatedWait,
-                  noTrack: delegatedNoTrack,
-                });
-                return { ok: true };
-              }
-              default:
-                throw new Error(`Unsupported standalone mutation kind: ${command.kind}`);
-            }
-          },
-          maxQueuedCommands: DEFAULT_MUTATION_QUEUE_LIMIT,
-          maxRecentCommands: DEFAULT_MUTATION_HISTORY_LIMIT,
-        })
-        : null;
-
-      // In standalone owner mode, serve delegated mutation requests from peer headless processes.
+      // In standalone owner mode, serve delegated requests from peer headless processes.
       if (standaloneMode && messageBus) {
-        if (standaloneMutationPipe) {
-          messageBus.onRequest(MUTATION_SUBMIT_CHANNEL, async (command: MutationCommand) => {
-            return standaloneMutationPipe.submit(command);
+        messageBus.onRequest('headless.run', async (req: unknown) => {
+          const { planPath } = req as { planPath: string };
+          await runHeadless(['run', planPath], {
+            ...headlessDeps,
+            waitForApproval: false,
+            noTrack: true,
           });
-          messageBus.onRequest(MUTATION_SNAPSHOT_CHANNEL, async () => {
-            return normalizeActiveMutationSnapshot(standaloneMutationPipe.snapshot());
+          return { ok: true };
+        });
+        messageBus.onRequest('headless.resume', async (req: unknown) => {
+          const { workflowId } = req as { workflowId: string };
+          await runHeadless(['resume', workflowId], {
+            ...headlessDeps,
+            waitForApproval: false,
+            noTrack: true,
           });
-          messageBus.onRequest('headless.run', async (req: unknown) => {
-            const { planPath } = req as { planPath: string };
-            return standaloneMutationPipe.submit(
-              createMutationCommand('headless', 'headless.run', { planPath }, classifyMutationScope('headless.run', { planPath })),
-            );
-          });
-          messageBus.onRequest('headless.resume', async (req: unknown) => {
-            const { workflowId } = req as { workflowId: string };
-            return standaloneMutationPipe.submit(
-              createMutationCommand('headless', 'headless.resume', { workflowId }, classifyMutationScope('headless.resume', { workflowId })),
-            );
-          });
-        }
+          return { ok: true };
+        });
         messageBus.onRequest('headless.exec', async (req: unknown) => {
           const { args, waitForApproval: delegatedWait, noTrack: delegatedNoTrack } =
             req as { args: string[]; waitForApproval?: boolean; noTrack?: boolean };
           if (!Array.isArray(args) || args.length === 0) {
             throw new Error('Missing delegated headless command arguments');
           }
-          if (standaloneMutationPipe) {
-            const payload = {
-              args,
-              waitForApproval: delegatedWait,
-              noTrack: delegatedNoTrack,
-            };
-            await standaloneMutationPipe.submit(
-              createMutationCommand('headless', 'headless.exec', payload, classifyMutationScope('headless.exec', payload)),
-            );
-          } else {
-            await runHeadless(args, {
-              ...headlessDeps,
-              waitForApproval: delegatedWait,
-              noTrack: delegatedNoTrack,
-            });
-          }
+          await runHeadless(args, {
+            ...headlessDeps,
+            waitForApproval: delegatedWait,
+            noTrack: delegatedNoTrack,
+          });
           return { ok: true };
         });
       }
@@ -787,7 +595,6 @@ if (isHeadless) {
       process.stderr.write(`${RED}Error:${RESET} ${err instanceof Error ? err.message : String(err)}\n`);
       exitCode = 1;
     } finally {
-      standaloneMutationPipe?.dispose();
       if (persistence) persistence.close();
       if (writerLock) writerLock.release();
       if (messageBus) messageBus.disconnect();
@@ -822,7 +629,7 @@ function setupGuiMode(): void {
   let mainWindow: BrowserWindow | null = null;
   let taskExecutor: TaskRunner | null = null;
   let apiServer: ApiServer | null = null;
-  let mutationPipe: MutationPipe<unknown> | null = null;
+  let ownerMode = true;
   const taskHandles = new Map<string, { handle: ExecutorHandle; executor: Executor }>();
   const guiMutationHandlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();
   let dbPollInterval: ReturnType<typeof setInterval> | null = null;
@@ -1051,27 +858,6 @@ function setupGuiMode(): void {
     return { ok: true };
   }
 
-  async function dispatchMutationCommand(command: MutationCommand): Promise<unknown> {
-    switch (command.kind) {
-      case 'gui.ipc': {
-        const payload = command.payload as GuiMutationPayload;
-        const handler = guiMutationHandlers.get(payload.channel);
-        if (!handler) {
-          throw new Error(`No GUI mutation handler registered for ${payload.channel}`);
-        }
-        return handler(...payload.args);
-      }
-      case 'headless.run':
-        return executeHeadlessRun(command.payload as HeadlessRunMutationPayload);
-      case 'headless.resume':
-        return executeHeadlessResume(command.payload as HeadlessResumeMutationPayload);
-      case 'headless.exec':
-        return executeHeadlessExec(command.payload as HeadlessExecMutationPayload);
-      default:
-        throw new Error(`Unknown mutation command kind: ${command.kind}`);
-    }
-  }
-
   function translateGuiMutationToHeadless(payload: GuiMutationPayload):
     | { channel: 'headless.run'; request: HeadlessRunMutationPayload }
     | { channel: 'headless.resume'; request: HeadlessResumeMutationPayload }
@@ -1156,38 +942,27 @@ function setupGuiMode(): void {
     }
   }
 
-  async function submitMutation<TResult = unknown>(
-    source: 'gui' | 'headless',
-    kind: string,
-    payload: unknown,
-  ): Promise<TResult> {
-    const command = createMutationCommand(source, kind, payload, classifyMutationScope(kind, payload));
-    if (mutationPipe) {
-      return mutationPipe.submit(command) as Promise<TResult>;
-    }
-    if (source === 'gui' && kind === 'gui.ipc') {
-      const translated = translateGuiMutationToHeadless(payload as GuiMutationPayload);
-      if (translated) {
-        return await messageBus.request<typeof translated.request, TResult>(translated.channel, translated.request);
-      }
-    }
-    try {
-      return await messageBus.request<MutationCommand, TResult>(MUTATION_SUBMIT_CHANNEL, command);
-    } catch (err) {
-      if (err instanceof Error && err.message.includes('No request handler registered for channel')) {
-        throw new Error('No mutation owner is available');
-      }
-      throw err;
-    }
-  }
-
   function registerGuiMutationHandler<TResult = unknown>(
     channel: string,
     handler: (...args: unknown[]) => Promise<TResult>,
   ): void {
     guiMutationHandlers.set(channel, handler as (...args: unknown[]) => Promise<unknown>);
     ipcMain.handle(channel, async (_event, ...args: unknown[]) => {
-      return submitMutation<TResult>('gui', 'gui.ipc', { channel, args });
+      if (ownerMode) {
+        return handler(...args);
+      }
+      const translated = translateGuiMutationToHeadless({ channel, args });
+      if (!translated) {
+        throw new Error(`No owner delegation route is available for ${channel}`);
+      }
+      try {
+        return await messageBus.request<typeof translated.request, TResult>(translated.channel, translated.request);
+      } catch (err) {
+        if (err instanceof Error && err.message.includes('No request handler registered for channel')) {
+          throw new Error('No mutation owner is available');
+        }
+        throw err;
+      }
     });
   }
 
@@ -1249,7 +1024,7 @@ function setupGuiMode(): void {
   }
 
   app.whenReady().then(async () => {
-    let ownerMode = true;
+    ownerMode = true;
     try {
       await initServices({ executionAgentRegistry: agentRegistry });
     } catch (err) {
@@ -1265,18 +1040,6 @@ function setupGuiMode(): void {
 
     if (ownerMode) {
       rebuildTaskRunner();
-      mutationPipe = new MutationPipe({
-        logger,
-        dispatch: dispatchMutationCommand,
-        maxQueuedCommands: DEFAULT_MUTATION_QUEUE_LIMIT,
-        maxRecentCommands: DEFAULT_MUTATION_HISTORY_LIMIT,
-      });
-      messageBus.onRequest(MUTATION_SUBMIT_CHANNEL, async (command: MutationCommand) => {
-        return mutationPipe!.submit(command);
-      });
-      messageBus.onRequest(MUTATION_SNAPSHOT_CHANNEL, async () => {
-        return mutationPipe ? normalizeActiveMutationSnapshot(mutationPipe.snapshot()) : emptyActiveMutationSnapshot();
-      });
     } else {
       logger.info('GUI launched in follower mode; mutation execution is delegated to the current owner', {
         module: 'init',
@@ -1289,13 +1052,13 @@ function setupGuiMode(): void {
       messageBus.onRequest('headless.run', async (req: unknown) => {
         const { planPath } = req as { planPath: string };
         logger.info(`headless.run: "${planPath}"`, { module: 'ipc-delegate' });
-        return submitMutation('headless', 'headless.run', { planPath });
+        return executeHeadlessRun({ planPath });
       });
 
       messageBus.onRequest('headless.resume', async (req: unknown) => {
         const { workflowId } = req as { workflowId: string };
         logger.info(`headless.resume: "${workflowId}"`, { module: 'ipc-delegate' });
-        return submitMutation('headless', 'headless.resume', { workflowId });
+        return executeHeadlessResume({ workflowId });
       });
 
       messageBus.onRequest('headless.exec', async (req: unknown) => {
@@ -1305,7 +1068,7 @@ function setupGuiMode(): void {
           throw new Error('Missing delegated headless command arguments');
         }
         logger.info(`headless.exec: "${args.join(' ')}"`, { module: 'ipc-delegate' });
-        return submitMutation('headless', 'headless.exec', {
+        return executeHeadlessExec({
           args,
           waitForApproval: delegatedWait,
           noTrack: delegatedNoTrack,

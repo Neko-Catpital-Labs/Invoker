@@ -3,7 +3,6 @@ import {
   formatTaskStatus,
   formatWorkflowStatus,
   formatEventLog,
-  formatMutationQueueStatus,
   serializeWorkflow,
   serializeTask,
   serializeEvent,
@@ -13,7 +12,6 @@ import {
 } from '../formatter.js';
 import type { TaskState } from '@invoker/workflow-core';
 import type { TaskEvent, Workflow } from '@invoker/data-store';
-import type { ActiveMutationPipeSnapshot } from '../mutation-pipe.js';
 
 // ── ANSI Code Constants ──────────────────────────────────────
 
@@ -152,80 +150,6 @@ describe('formatEventLog', () => {
   it('handles empty events', () => {
     const output = formatEventLog([]);
     expect(output).toContain('No events recorded');
-  });
-});
-
-// ── formatMutationQueueStatus ───────────────────────────────
-
-describe('formatMutationQueueStatus', () => {
-  it('groups active mutation commands into the four sections', () => {
-    const snapshot: ActiveMutationPipeSnapshot = {
-      globalRunning: {
-        id: 'mut-1',
-        kind: 'headless.run',
-        source: 'headless',
-        workflowId: null,
-        status: 'running',
-        createdAt: '2026-04-13T10:00:00.000Z',
-        startedAt: '2026-04-13T10:00:01.000Z',
-      },
-      workflowRunning: {
-        'wf-1': {
-          id: 'mut-2',
-          kind: 'headless.exec',
-          source: 'gui',
-          workflowId: 'wf-1',
-          status: 'running',
-          createdAt: '2026-04-13T10:00:02.000Z',
-          startedAt: '2026-04-13T10:00:03.000Z',
-        },
-      },
-      globalQueued: [
-        {
-          id: 'mut-3',
-          kind: 'headless.resume',
-          source: 'headless',
-          workflowId: null,
-          status: 'queued',
-          createdAt: '2026-04-13T10:00:04.000Z',
-          startedAt: null,
-        },
-      ],
-      queuedByWorkflow: {
-        'wf-2': [
-          {
-            id: 'mut-4',
-            kind: 'headless.exec',
-            source: 'headless',
-            workflowId: 'wf-2',
-            status: 'queued',
-            createdAt: '2026-04-13T10:00:05.000Z',
-            startedAt: null,
-          },
-        ],
-      },
-    };
-
-    const output = formatMutationQueueStatus(snapshot);
-    expect(output).toContain('Global Running (1)');
-    expect(output).toContain('Workflow Running (1)');
-    expect(output).toContain('Global Queued (1)');
-    expect(output).toContain('Workflow Queued (1)');
-    expect(output).toContain('mut-1');
-    expect(output).toContain('scope=workflow:wf-1');
-    expect(output).toContain('startedAt=-');
-  });
-
-  it('renders empty sections predictably', () => {
-    const output = formatMutationQueueStatus({
-      globalRunning: null,
-      workflowRunning: {},
-      globalQueued: [],
-      queuedByWorkflow: {},
-    });
-    expect(output).toContain('Global Running (0)');
-    expect(output).toContain('(none)');
-    expect(output).toContain('Workflow Queued (0)');
   });
 });
 

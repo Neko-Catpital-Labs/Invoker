@@ -39,14 +39,8 @@ import {
   finalizeAppliedFix,
 } from './workflow-actions.js';
 import { openExternalTerminalForTask } from './open-terminal-for-task.js';
-import {
-  emptyActiveMutationSnapshot,
-  flattenActiveMutationSnapshot,
-  type ActiveMutationPipeSnapshot,
-} from './mutation-pipe.js';
 
 export { bumpGenerationAndRecreate } from './workflow-actions.js';
-export const MUTATION_SNAPSHOT_CHANNEL = 'mutation.snapshot';
 
 // ── HeadlessDeps interface ───────────────────────────────────
 
@@ -253,13 +247,13 @@ export function parseQueryFlags(args: string[]): QueryFlags {
 async function headlessQuery(args: string[], deps: HeadlessDeps): Promise<void> {
   const subCommand = args[0];
   if (!subCommand) {
-    throw new Error('Missing query sub-command. Usage: --headless query <workflows|tasks|task|queue|mutation-queue|audit|session>');
+    throw new Error('Missing query sub-command. Usage: --headless query <workflows|tasks|task|queue|audit|session>');
   }
   const flags = parseQueryFlags(args.slice(1));
 
   const {
     formatWorkflowList, formatTaskStatus, formatWorkflowStatus,
-    formatEventLog, formatQueueStatus, formatMutationQueueStatus,
+    formatEventLog, formatQueueStatus,
     serializeWorkflow, serializeTask, serializeEvent,
     formatAsLabel, formatAsJson, formatAsJsonl,
   } = await import('./formatter.js');
@@ -367,26 +361,6 @@ async function headlessQuery(args: string[], deps: HeadlessDeps): Promise<void> 
       }
       break;
     }
-    case 'mutation-queue': {
-      const snapshot = await requestMutationQueueSnapshot(deps.messageBus);
-      const flattened = flattenActiveMutationSnapshot(snapshot);
-
-      switch (flags.output) {
-        case 'label':
-          process.stdout.write(formatAsLabel(flattened) + '\n');
-          break;
-        case 'json':
-          process.stdout.write(formatAsJson(snapshot) + '\n');
-          break;
-        case 'jsonl':
-          process.stdout.write(formatAsJsonl(flattened) + '\n');
-          break;
-        default:
-          process.stdout.write(formatMutationQueueStatus(snapshot) + '\n');
-          break;
-      }
-      break;
-    }
     case 'audit': {
       const taskId = flags.positional[0];
       if (!taskId) throw new Error('Usage: --headless query audit <taskId>');
@@ -409,20 +383,7 @@ async function headlessQuery(args: string[], deps: HeadlessDeps): Promise<void> 
       break;
     }
     default:
-      throw new Error(`Unknown query sub-command: "${subCommand}". Use: workflows, tasks, task, queue, mutation-queue, audit, session`);
-  }
-}
-
-async function requestMutationQueueSnapshot(
-  messageBus: MessageBus,
-): Promise<ActiveMutationPipeSnapshot> {
-  try {
-    return await messageBus.request<unknown, ActiveMutationPipeSnapshot>(MUTATION_SNAPSHOT_CHANNEL, {});
-  } catch (err) {
-    if (err instanceof Error && err.message.includes('No request handler registered for channel')) {
-      return emptyActiveMutationSnapshot();
-    }
-    throw err;
+      throw new Error(`Unknown query sub-command: "${subCommand}". Use: workflows, tasks, task, queue, audit, session`);
   }
 }
 
@@ -632,7 +593,6 @@ ${BOLD}Query${RESET} (read-only, all support --output text|label|json|jsonl):
     [--no-merge] [--output F]
   query task <taskId> [--output F]                    Print single task status
   query queue [--output F]                            Show queue status
-  query mutation-queue [--output F]                   Show active mutation commands
   query audit <taskId> [--output F]                   Print event history
   query session <taskId>                              Print agent session messages
 
