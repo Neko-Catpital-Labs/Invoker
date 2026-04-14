@@ -3351,10 +3351,16 @@ describe('Orchestrator', () => {
       );
       expect(orchestrator.getTask('B')!.status).toBe('pending');
 
-      // A completes (late response or restart+complete) → B starts
+      // Restart A, then complete it → B starts
+      orchestrator.restartTask('A');
       logSpy.mockClear();
       orchestrator.handleWorkerResponse(
-        makeResponse({ actionId: 'A', status: 'completed', outputs: { exitCode: 0 } }),
+        makeResponse({
+          actionId: 'A',
+          executionGeneration: orchestrator.getTask('A')?.execution.generation ?? 0,
+          status: 'completed',
+          outputs: { exitCode: 0 },
+        }),
       );
 
       expect(orchestrator.getTask('A')!.status).toBe('completed');
@@ -3379,9 +3385,15 @@ describe('Orchestrator', () => {
       expect(orchestrator.getTask('B')!.status).toBe('pending');
       expect(orchestrator.getTask('C')!.status).toBe('pending');
 
-      // A completes → B starts, C still pending (B not completed yet)
+      // Restart A, then complete it → B starts; C still pending (B not completed yet)
+      orchestrator.restartTask('A');
       orchestrator.handleWorkerResponse(
-        makeResponse({ actionId: 'A', status: 'completed', outputs: { exitCode: 0 } }),
+        makeResponse({
+          actionId: 'A',
+          executionGeneration: orchestrator.getTask('A')?.execution.generation ?? 0,
+          status: 'completed',
+          outputs: { exitCode: 0 },
+        }),
       );
 
       expect(orchestrator.getTask('B')!.status).toBe('running');
@@ -4035,7 +4047,7 @@ describe('Orchestrator', () => {
         id: '__merge__wf-recreate-task-scope',
         description: 'Merge gate',
         status: 'completed',
-        dependencies: ['C'],
+        dependencies: ['C', 'X'],
         createdAt: new Date(),
         config: { workflowId: wf, isMergeNode: true },
         execution: { branch: 'br-merge', commit: 'm1', workspacePath: '/tmp/m', exitCode: 0 },
@@ -4245,7 +4257,7 @@ describe('Orchestrator', () => {
       });
       p.saveTask(wfId, {
         id: `__merge__${wfId}`, description: 'Merge gate', status: 'pending',
-        dependencies: ['a', 'b'], createdAt: new Date(),
+        dependencies: ['b'], createdAt: new Date(),
         config: { workflowId: wfId, isMergeNode: true }, execution: {},
       });
 
@@ -4282,7 +4294,7 @@ describe('Orchestrator', () => {
       });
       p.saveTask(wfId, {
         id: `__merge__${wfId}`, description: 'Merge gate', status: 'failed',
-        dependencies: ['a', 'b', 'c'], createdAt: new Date(),
+        dependencies: ['c'], createdAt: new Date(),
         config: { workflowId: wfId, isMergeNode: true }, execution: {},
       });
 
@@ -5241,18 +5253,20 @@ describe('Orchestrator', () => {
     });
 
     it('revert with non-JSON error preserves plain string without mergeConflict', () => {
+      orchestrator.restartTask('t2');
       orchestrator.handleWorkerResponse(
         makeResponse({
-          actionId: 't1',
+          actionId: 't2',
+          executionGeneration: orchestrator.getTask('t2')?.execution.generation ?? 0,
           status: 'failed',
           outputs: { exitCode: 1, error: 'plain error string' },
         }),
       );
 
-      const { savedError } = orchestrator.beginConflictResolution('t1');
-      orchestrator.revertConflictResolution('t1', savedError);
+      const { savedError } = orchestrator.beginConflictResolution('t2');
+      orchestrator.revertConflictResolution('t2', savedError);
 
-      const task = orchestrator.getTask('t1')!;
+      const task = orchestrator.getTask('t2')!;
       expect(task.status).toBe('failed');
       expect(task.execution.error).toBe('plain error string');
       expect(task.execution.mergeConflict).toBeUndefined();

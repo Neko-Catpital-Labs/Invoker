@@ -360,6 +360,14 @@ export interface OrchestratorConfig {
    * a rule have the required executorType and remoteTargetId specified in the plan.
    */
   executorRoutingRules?: ExecutorRoutingRule[];
+  /**
+   * When true, keep tasks persisted as `pending` until the executor confirms
+   * startup success, then transition to `running`.
+   *
+   * Default false preserves legacy behavior (transition to `running` at
+   * scheduler dequeue time).
+   */
+  deferRunningUntilLaunch?: boolean;
 }
 
 // ── Orchestrator ────────────────────────────────────────────
@@ -374,6 +382,7 @@ export class Orchestrator {
   private readonly maxConcurrency: number;
   private readonly executorRoutingRules: ExecutorRoutingRule[];
   private readonly defaultAutoFixRetries: number;
+  private readonly deferRunningUntilLaunch: boolean;
 
   private activeWorkflowIds = new Set<string>();
   private deferredTaskIds = new Set<string>();
@@ -386,6 +395,7 @@ export class Orchestrator {
     this.taskRepository = config.taskRepository ?? taskRepositoryFromPersistence(config.persistence);
     this.executorRoutingRules = config.executorRoutingRules ?? [];
     this.defaultAutoFixRetries = Math.min(Math.max(0, Math.floor(config.defaultAutoFixRetries ?? 0)), 10);
+    this.deferRunningUntilLaunch = config.deferRunningUntilLaunch ?? false;
 
     this.stateMachine = new TaskStateMachine(new ActionGraph());
     this.responseHandler = new ResponseHandler();
@@ -851,7 +861,11 @@ export class Orchestrator {
           }
         }
         const activeGeneration = this.getExecutionGeneration(earlyTask);
-        if (!response.attemptId && response.executionGeneration !== activeGeneration) {
+        if (
+          !response.attemptId &&
+          response.executionGeneration !== undefined &&
+          response.executionGeneration !== activeGeneration
+        ) {
           console.warn(
             `[worker-response] STALE_GENERATION_REJECTED taskId=${earlyTask.id} ` +
               `responseGeneration=${response.executionGeneration} activeGeneration=${activeGeneration} ` +
@@ -862,7 +876,13 @@ export class Orchestrator {
       }
       if (earlyTask) {
         const executableStatuses = new Set(['running', 'fixing_with_ai']);
-        if (!executableStatuses.has(earlyTask.status)) {
+        const allowPendingStartupFailure =
+          this.deferRunningUntilLaunch &&
+          earlyTask.status === 'pending' &&
+          response.status === 'failed' &&
+          !!response.attemptId &&
+          response.attemptId === earlyTask.execution.selectedAttemptId;
+        if (!executableStatuses.has(earlyTask.status) && !allowPendingStartupFailure) {
           console.warn(
             `[orchestrator] handleWorkerResponse: ignoring "${response.status}" for non-executable ` +
               `task "${response.actionId}" (status=${earlyTask.status})`,
@@ -2765,7 +2785,15 @@ export class Orchestrator {
 
     const attemptId = this.ensureCurrentPendingAttempt(task);
     if (this.scheduler.isRunning(attemptId)) {
-      if (task.status === 'running' || task.status === 'fixing_with_ai') {
+      if (
+        task.status === 'running' ||
+        task.status === 'fixing_with_ai' ||
+        (
+          this.deferRunningUntilLaunch
+          && task.status === 'pending'
+          && task.execution.selectedAttemptId === attemptId
+        )
+      ) {
         return;
       }
       // Recover from stale scheduler slot (e.g. process death/sync drift).
@@ -2885,7 +2913,11 @@ export class Orchestrator {
     for (const runningJob of this.scheduler.getRunningJobs()) {
       const task = this.stateGetTask(runningJob.taskId);
       const isCurrentAttempt = task?.execution.selectedAttemptId === runningJob.attemptId;
-      if (!task || !isCurrentAttempt || (task.status !== 'running' && task.status !== 'fixing_with_ai')) {
+      const isLaunchInProgress =
+        this.deferRunningUntilLaunch
+        && task?.status === 'pending'
+        && isCurrentAttempt;
+      if (!task || !isCurrentAttempt || (!isLaunchInProgress && task.status !== 'running' && task.status !== 'fixing_with_ai')) {
         console.warn(
           `[orchestrator] drainScheduler: freeing leaked scheduler slot for "${runningJob.attemptId}" ` +
             `(task=${runningJob.taskId} actual status: ${task?.status ?? 'not found'} currentAttempt=${task?.execution.selectedAttemptId ?? 'none'})`,
@@ -2908,46 +2940,144 @@ export class Orchestrator {
 
       const now = new Date();
       const attemptId = job.attemptId ?? this.ensureCurrentPendingAttempt(task);
-      const changes: TaskStateChanges = {
-        status: 'running',
-        execution: {
-          selectedAttemptId: attemptId,
-          startedAt: now,
-          lastHeartbeatAt: now,
-          generation: this.getExecutionGeneration(task),
-        },
-      };
-      const updated = this.writeAndSync(job.taskId, changes);
-      started.push(updated);
+      if (task.execution.selectedAttemptId !== attemptId) {
+        this.writeAndSync(job.taskId, { execution: { selectedAttemptId: attemptId } });
+      }
 
-      const delta: TaskDelta = { type: 'updated', taskId: job.taskId, changes };
-      this.persistence.logEvent?.(job.taskId, 'task.running', changes);
-      this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
-
-      try {
-        const existingAttempt = this.persistence.loadAttempt(attemptId);
-        if (existingAttempt) {
-          this.taskRepository.updateAttempt(attemptId, {
-            status: 'running',
+      if (this.deferRunningUntilLaunch) {
+        // Keep persisted status as pending until executor.start() confirms launch.
+        started.push({
+          ...task,
+          status: 'running',
+          execution: {
+            ...task.execution,
+            selectedAttemptId: attemptId,
+            generation: this.getExecutionGeneration(task),
             startedAt: now,
             lastHeartbeatAt: now,
-          });
-        } else {
-          const upstreamAttemptIds = task.dependencies
-            .map(depId => this.stateGetTask(depId)?.execution.selectedAttemptId)
-            .filter((id): id is string => !!id);
-          const attempt = createAttempt(job.taskId, {
-            status: 'running',
+          },
+        });
+      } else {
+        const changes: TaskStateChanges = {
+          status: 'running',
+          execution: {
+            selectedAttemptId: attemptId,
+            generation: this.getExecutionGeneration(task),
             startedAt: now,
-            upstreamAttemptIds,
-          });
-          this.taskRepository.saveAttempt(attempt);
-          this.writeAndSync(job.taskId, { execution: { selectedAttemptId: attempt.id } });
-        }
-      } catch { /* best effort — never break existing flow */ }
+            lastHeartbeatAt: now,
+          },
+        };
+        const updated = this.writeAndSync(job.taskId, changes);
+        this.persistence.logEvent?.(job.taskId, 'task.running', changes);
+        this.messageBus.publish(TASK_DELTA_CHANNEL, {
+          type: 'updated',
+          taskId: job.taskId,
+          changes,
+        });
+        started.push(updated);
+
+        try {
+          const existingAttempt = this.persistence.loadAttempt(attemptId);
+          if (existingAttempt) {
+            this.taskRepository.updateAttempt(attemptId, {
+              status: 'running',
+              startedAt: now,
+              lastHeartbeatAt: now,
+            });
+          } else {
+            const upstreamAttemptIds = task.dependencies
+              .map(depId => this.stateGetTask(depId)?.execution.selectedAttemptId)
+              .filter((id): id is string => !!id);
+            const attempt = createAttempt(job.taskId, {
+              status: 'running',
+              startedAt: now,
+              upstreamAttemptIds,
+            });
+            this.taskRepository.saveAttempt(attempt);
+            this.writeAndSync(job.taskId, { execution: { selectedAttemptId: attempt.id } });
+          }
+        } catch { /* best effort — never break existing flow */ }
+      }
 
       job = this.scheduler.dequeue();
     }
     return started;
+  }
+
+  /**
+   * Transition a dequeued task from pending -> running only after executor
+   * startup has succeeded for the selected attempt.
+   *
+   * Returns false when the attempt is stale or no longer executable; caller
+   * should abort the launched process in that case.
+   */
+  markTaskRunningAfterLaunch(taskId: string, attemptId: string, launchedAt: Date = new Date()): boolean {
+    if (!this.deferRunningUntilLaunch) return true;
+
+    this.refreshFromDb();
+    const task = this.stateGetTask(taskId);
+    if (!task) {
+      this.scheduler.completeJob(attemptId);
+      return false;
+    }
+
+    const selectedAttemptId = task.execution.selectedAttemptId;
+    if (selectedAttemptId && selectedAttemptId !== attemptId) {
+      this.scheduler.completeJob(attemptId);
+      return false;
+    }
+
+    if (task.status === 'running' || task.status === 'fixing_with_ai') {
+      return true;
+    }
+
+    if (task.status !== 'pending') {
+      this.scheduler.completeJob(attemptId);
+      return false;
+    }
+
+    const changes: TaskStateChanges = {
+      status: 'running',
+      execution: {
+        selectedAttemptId: attemptId,
+        startedAt: launchedAt,
+        lastHeartbeatAt: launchedAt,
+        generation: this.getExecutionGeneration(task),
+      },
+    };
+
+    this.writeAndSync(taskId, changes);
+    this.persistence.logEvent?.(taskId, 'task.running', changes);
+    this.messageBus.publish(TASK_DELTA_CHANNEL, {
+      type: 'updated',
+      taskId,
+      changes,
+    });
+
+    try {
+      const existingAttempt = this.persistence.loadAttempt(attemptId);
+      if (existingAttempt) {
+        this.taskRepository.updateAttempt(attemptId, {
+          status: 'running',
+          startedAt: launchedAt,
+          lastHeartbeatAt: launchedAt,
+        });
+      } else {
+        const upstreamAttemptIds = task.dependencies
+          .map(depId => this.stateGetTask(depId)?.execution.selectedAttemptId)
+          .filter((id): id is string => !!id);
+        const attempt = createAttempt(taskId, {
+          status: 'running',
+          startedAt: launchedAt,
+          upstreamAttemptIds,
+        });
+        this.taskRepository.saveAttempt(attempt);
+        this.writeAndSync(taskId, { execution: { selectedAttemptId: attempt.id } });
+      }
+    } catch {
+      // best effort — do not fail launch-state transition due to attempt sync
+    }
+
+    return true;
   }
 }

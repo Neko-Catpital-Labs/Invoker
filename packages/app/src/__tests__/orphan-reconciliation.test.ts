@@ -33,6 +33,7 @@ function makeResponse(overrides: Partial<WorkResponse>): WorkResponse {
   return {
     requestId: 'req-1',
     actionId: 't1',
+    executionGeneration: 0,
     status: 'completed',
     outputs: { exitCode: 0 },
     ...overrides,
@@ -109,7 +110,12 @@ describe('orphan reconciliation on resume', () => {
 
     // Complete t1 → t2 starts running
     orchestrator.handleWorkerResponse(
-      makeResponse({ actionId: 't1', status: 'completed', outputs: { exitCode: 0 } }),
+      makeResponse({
+        actionId: 't1',
+        executionGeneration: orchestrator.getTask('t1')?.execution.generation ?? 0,
+        status: 'completed',
+        outputs: { exitCode: 0 },
+      }),
     );
 
     expect(orchestrator.getTask('t1')?.status).toBe('completed');
@@ -143,14 +149,24 @@ describe('orphan reconciliation on resume', () => {
 
     // Complete t1 → t2 becomes ready and starts
     orchestrator2.handleWorkerResponse(
-      makeResponse({ actionId: 't1', status: 'completed', outputs: { exitCode: 0 } }),
+      makeResponse({
+        actionId: 't1',
+        executionGeneration: orchestrator2.getTask('t1')?.execution.generation ?? 0,
+        status: 'completed',
+        outputs: { exitCode: 0 },
+      }),
     );
     expect(orchestrator2.getTask('t1')?.status).toBe('completed');
     expect(orchestrator2.getTask('t2')?.status).toBe('running');
 
     // Complete t2
     orchestrator2.handleWorkerResponse(
-      makeResponse({ actionId: 't2', status: 'completed', outputs: { exitCode: 0 } }),
+      makeResponse({
+        actionId: 't2',
+        executionGeneration: orchestrator2.getTask('t2')?.execution.generation ?? 0,
+        status: 'completed',
+        outputs: { exitCode: 0 },
+      }),
     );
     expect(orchestrator2.getTask('t2')?.status).toBe('completed');
   });
@@ -231,7 +247,12 @@ describe('orphan reconciliation on resume', () => {
     orchestrator.loadPlan(planA);
     orchestrator.startExecution();
     orchestrator.handleWorkerResponse(
-      makeResponse({ actionId: 'done1', status: 'completed', outputs: { exitCode: 0 } }),
+      makeResponse({
+        actionId: 'done1',
+        executionGeneration: orchestrator.getTask('done1')?.execution.generation ?? 0,
+        status: 'completed',
+        outputs: { exitCode: 0 },
+      }),
     );
     expect(orchestrator.getTask('done1')?.status).toBe('completed');
 
@@ -267,7 +288,12 @@ describe('orphan reconciliation on resume', () => {
     orchestrator.startExecution();
 
     orchestrator.handleWorkerResponse(
-      makeResponse({ actionId: 't1', status: 'completed', outputs: { exitCode: 0 } }),
+      makeResponse({
+        actionId: 't1',
+        executionGeneration: orchestrator.getTask('t1')?.execution.generation ?? 0,
+        status: 'completed',
+        outputs: { exitCode: 0 },
+      }),
     );
     expect(orchestrator.getTask('t2')?.status).toBe('running');
 
@@ -301,7 +327,12 @@ describe('orphan reconciliation on resume', () => {
     orchestrator.startExecution();
 
     orchestrator.handleWorkerResponse(
-      makeResponse({ actionId: 't1', status: 'completed', outputs: { exitCode: 0 } }),
+      makeResponse({
+        actionId: 't1',
+        executionGeneration: orchestrator.getTask('t1')?.execution.generation ?? 0,
+        status: 'completed',
+        outputs: { exitCode: 0 },
+      }),
     );
 
     const orchestrator2 = new Orchestrator({ persistence, messageBus: new InMemoryBus() });

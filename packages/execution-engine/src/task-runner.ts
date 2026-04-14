@@ -435,6 +435,21 @@ export class TaskRunner {
       clearInterval(preStartHeartbeatTimer);
     }
     console.log(`[trace] TaskRunner: task=${task.id} executor.start() returned after ${Date.now() - startT0}ms executor=${executor.type} sessionId=${handle.agentSessionId ?? 'none'} workspace=${handle.workspacePath ?? 'default'}`);
+    const launchAccepted =
+      this.orchestrator.markTaskRunningAfterLaunch?.(task.id, attemptId) ?? true;
+    if (!launchAccepted) {
+      console.warn(
+        `[TaskRunner] launch rejected as stale/non-executable for task=${task.id} attemptId=${attemptId}; killing spawned process`,
+      );
+      try {
+        await executor.kill(handle);
+      } catch (killErr) {
+        console.warn(`[TaskRunner] failed to kill rejected launch for task=${task.id}: ${killErr}`);
+      }
+      await this.cleanupPerTaskDockerExecutor(task);
+      return;
+    }
+
     // Persist execution metadata immediately at task start — all fields explicit
     {
       // Fail-fast: workspacePath must be provided by all executors

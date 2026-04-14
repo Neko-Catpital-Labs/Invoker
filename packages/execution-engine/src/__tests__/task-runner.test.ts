@@ -2544,6 +2544,7 @@ describe('TaskRunner', () => {
         undefined,
         expect.any(String),
         false,
+        expect.any(String),
         '__merge__wf-1',
       );
 
