@@ -44,10 +44,7 @@ export interface GraphMutationHost {
  * Active (non-stale, non-merge) leaf tasks become the merge gate's deps.
  * No-ops if deps are already correct.
  */
-export function reconcileMergeLeavesImpl(host: GraphMutationHost, workflowId: string): void {
-  const mergeNode = host.getMergeNode(workflowId);
-  if (!mergeNode) return;
-
+function getExpectedMergeLeafIds(host: GraphMutationHost, workflowId: string): string[] {
   const allTasks = host.stateMachine.getAllTasks();
   const activeTasks = allTasks.filter(
     (t) =>
@@ -55,7 +52,56 @@ export function reconcileMergeLeavesImpl(host: GraphMutationHost, workflowId: st
       !t.config.isMergeNode &&
       t.status !== 'stale',
   );
-  const leafIds = findLeafTaskIds(activeTasks);
+  return findLeafTaskIds(activeTasks);
+}
+
+export function assertMergeLeavesInvariantImpl(host: GraphMutationHost, workflowId: string): void {
+  const mergeNode = host.getMergeNode(workflowId);
+  if (!mergeNode) return;
+  const leafIds = getExpectedMergeLeafIds(host, workflowId);
+
+  const currentDeps = new Set(mergeNode.dependencies);
+  const newDepsSet = new Set(leafIds);
+  if (
+    currentDeps.size === newDepsSet.size &&
+    [...currentDeps].every((d) => newDepsSet.has(d))
+  ) {
+    return;
+  }
+
+  const missing = leafIds.filter((id) => !currentDeps.has(id));
+  const extra = mergeNode.dependencies.filter((id) => !newDepsSet.has(id));
+  throw new Error(
+    `Merge gate invariant violated for workflow ${workflowId}: ` +
+      `merge node ${mergeNode.id} has detached dependencies. ` +
+      `missing=[${missing.join(', ')}] extra=[${extra.join(', ')}]`,
+  );
+}
+
+export function assertMergeExperimentDependenciesInvariantImpl(
+  host: GraphMutationHost,
+  workflowId: string,
+): void {
+  const allTasks = host.stateMachine.getAllTasks().filter((t) => t.config.workflowId === workflowId);
+  for (const task of allTasks) {
+    const parentTask = task.config.parentTask;
+    if (!parentTask) continue;
+    if (!parentTask.startsWith('__merge__')) continue;
+    if (!task.id.startsWith(`${parentTask}-exp-`)) continue;
+    if (task.dependencies.includes(parentTask)) continue;
+
+    throw new Error(
+      `Merge experiment invariant violated for workflow ${workflowId}: ` +
+        `task ${task.id} is detached from parent merge node ${parentTask}. ` +
+        `dependencies=[${task.dependencies.join(', ')}]`,
+    );
+  }
+}
+
+export function reconcileMergeLeavesImpl(host: GraphMutationHost, workflowId: string): void {
+  const mergeNode = host.getMergeNode(workflowId);
+  if (!mergeNode) return;
+  const leafIds = getExpectedMergeLeafIds(host, workflowId);
 
   const currentDeps = new Set(mergeNode.dependencies);
   const newDepsSet = new Set(leafIds);
