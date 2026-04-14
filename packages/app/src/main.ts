@@ -241,7 +241,16 @@ async function initServices(options?: InitServicesOptions): Promise<void> {
   });
   commandService = new CommandService(orchestrator);
 
-  orchestrator.syncAllFromDb();
+  try {
+    orchestrator.syncAllFromDb();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    logger.error(`workflow invariant violation during startup sync: ${message}`, {
+      module: 'init',
+      error: message,
+    });
+    throw err;
+  }
   const initLog = isHeadless
     ? (...args: unknown[]) => { process.stderr.write(args.join(' ') + '\n'); }
     : (msg: string) => { logger.info(msg, { module: 'init' }); };

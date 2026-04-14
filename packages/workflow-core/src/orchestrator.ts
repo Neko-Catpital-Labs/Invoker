@@ -34,7 +34,12 @@ function mergeTrace(tag: string, data: Record<string, unknown>): void {
 }
 import { getTransitiveDependents } from '@invoker/workflow-graph';
 import { ActionGraph } from '@invoker/workflow-graph';
-import { reconcileMergeLeavesImpl, applyGraphMutationImpl } from './graph-mutation.js';
+import {
+  reconcileMergeLeavesImpl,
+  applyGraphMutationImpl,
+  assertMergeLeavesInvariantImpl,
+  assertMergeExperimentDependenciesInvariantImpl,
+} from './graph-mutation.js';
 import type { GraphMutationHost } from './graph-mutation.js';
 import { buildPlanLocalToScopedIdMap, scopePlanTaskId } from './task-id-scope.js';
 import type { TaskRepository } from './task-repository.js';
@@ -1934,6 +1939,12 @@ export class Orchestrator {
    */
   private reconcileMergeLeaves(workflowId: string): void {
     reconcileMergeLeavesImpl(this as unknown as GraphMutationHost, workflowId);
+    assertMergeLeavesInvariantImpl(this as unknown as GraphMutationHost, workflowId);
+  }
+
+  private assertMergeLeavesInvariant(workflowId: string): void {
+    assertMergeLeavesInvariantImpl(this as unknown as GraphMutationHost, workflowId);
+    assertMergeExperimentDependenciesInvariantImpl(this as unknown as GraphMutationHost, workflowId);
   }
 
   /**
@@ -1944,15 +1955,16 @@ export class Orchestrator {
   syncAllFromDb(): void {
     this.stateMachine.clear();
     this.activeWorkflowIds.clear();
-    const allTasks: TaskState[] = [];
     const workflows = this.persistence.listWorkflows();
     for (const wf of workflows) {
       this.activeWorkflowIds.add(wf.id);
       const tasks = this.persistence.loadTasks(wf.id);
       for (const task of tasks) {
         this.stateMachine.restoreTask(task);
-        allTasks.push(task);
       }
+    }
+    for (const wf of workflows) {
+      this.assertMergeLeavesInvariant(wf.id);
     }
   }
 
@@ -1969,6 +1981,7 @@ export class Orchestrator {
         this.stateMachine.restoreTask(task);
       }
     }
+    this.assertMergeLeavesInvariant(workflowId);
   }
 
   /**

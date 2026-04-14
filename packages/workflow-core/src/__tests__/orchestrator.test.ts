@@ -5647,6 +5647,58 @@ describe('Orchestrator', () => {
   });
 
   describe('blocked task unblocking', () => {
+    it('throws when a persisted merge node has detached dependencies', () => {
+      orchestrator.loadPlan({
+        name: 'merge-repair-test',
+        tasks: [
+          { id: 'task-a', description: 'task A' },
+          { id: 'task-b', description: 'task B', dependencies: ['task-a'] },
+        ],
+      });
+
+      const wfId = orchestrator.getWorkflowIds()[0]!;
+      const mergeId = `__merge__${wfId}`;
+
+      persistence.updateTask(mergeId, {
+        status: 'review_ready',
+        dependencies: ['missing-legacy-leaf'],
+      });
+
+      expect(() => orchestrator.syncAllFromDb()).toThrow(
+        `Merge gate invariant violated for workflow ${wfId}: merge node ${mergeId} has detached dependencies.`,
+      );
+      expect(persistence.getTaskEntry(mergeId)!.task.dependencies).toEqual(['missing-legacy-leaf']);
+      expect(persistence.getTaskEntry(mergeId)!.task.status).toBe('review_ready');
+    });
+
+    it('throws when a persisted merge experiment is detached from its parent merge node', () => {
+      orchestrator.loadPlan({
+        name: 'merge-exp-detach-test',
+        tasks: [{ id: 'task-a', description: 'task A' }],
+      });
+
+      const wfId = orchestrator.getWorkflowIds()[0]!;
+      const mergeId = `__merge__${wfId}`;
+      persistence.saveTask(wfId, {
+        id: `${mergeId}-exp-fix-conservative`,
+        description: 'Experiment: conservative',
+        status: 'stale',
+        dependencies: [],
+        createdAt: new Date(),
+        config: {
+          workflowId: wfId,
+          parentTask: mergeId,
+          executorType: 'merge',
+        },
+        execution: {},
+      } as TaskState);
+
+      expect(() => orchestrator.syncAllFromDb()).toThrow(
+        `Merge experiment invariant violated for workflow ${wfId}: ` +
+          `task ${mergeId}-exp-fix-conservative is detached from parent merge node ${mergeId}.`,
+      );
+    });
+
     it('unblocks a blocked task when all deps complete', () => {
       orchestrator.loadPlan({
         name: 'unblock-test',
