@@ -153,6 +153,9 @@ describe('replaceTask', () => {
     expect(orchestrator.getTask(s('C'))!.status).toBe('stale');
     const mergeNode = orchestrator.getAllTasks().find((t) => t.config.isMergeNode);
     expect(mergeNode!.dependencies).toContain(s('fix'));
+    expect(
+      persistence.loadAttempt(orchestrator.getTask(s('X'))!.execution.selectedAttemptId!)?.status,
+    ).toBe('superseded');
 
     expect(started).toHaveLength(1);
     expect(started[0].id).toBe(s('fix'));

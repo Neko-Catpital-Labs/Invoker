@@ -26,6 +26,15 @@ interface QueueStatus {
   queued: Array<{ taskId: string; priority: number; description: string }>;
 }
 
+function displayTaskId(taskId: string): string {
+  const slash = taskId.lastIndexOf('/');
+  return slash >= 0 ? taskId.slice(slash + 1) : taskId;
+}
+
+function displayDependencies(taskIds: string[]): string {
+  return taskIds.map(displayTaskId).join(', ');
+}
+
 export function QueueView({ tasks, onTaskClick, onCancel, selectedTaskId }: QueueViewProps) {
   const [queueStatus, setQueueStatus] = useState<QueueStatus | null>(null);
 
@@ -87,7 +96,7 @@ export function QueueView({ tasks, onTaskClick, onCancel, selectedTaskId }: Queu
               }`}
             >
               <div className="flex-1 min-w-0">
-                <span className="text-sm font-bold text-gray-100 truncate block">{job.taskId}</span>
+                <span className="text-sm font-bold text-gray-100 truncate block">{displayTaskId(job.taskId)}</span>
                 <span className="text-xs text-gray-400 truncate block">{job.description}</span>
               </div>
               <button
@@ -123,7 +132,7 @@ export function QueueView({ tasks, onTaskClick, onCancel, selectedTaskId }: Queu
               }`}
             >
               <div className="flex-1 min-w-0">
-                <span className="text-sm text-gray-100 truncate block">{job.taskId}</span>
+                <span className="text-sm text-gray-100 truncate block">{displayTaskId(job.taskId)}</span>
                 <span className="text-xs text-gray-400 truncate block">{job.description}</span>
               </div>
               <span className="text-xs bg-cyan-900 text-cyan-300 px-2 py-0.5 rounded ml-2 shrink-0">
@@ -160,11 +169,11 @@ export function QueueView({ tasks, onTaskClick, onCancel, selectedTaskId }: Queu
             }`}
           >
             <div className="flex-1 min-w-0">
-              <span className="text-sm text-gray-100 truncate block">{task.id}</span>
+              <span className="text-sm text-gray-100 truncate block">{displayTaskId(task.id)}</span>
               <span className="text-xs text-gray-400 truncate block">{task.description}</span>
               {task.dependencies.length > 0 && (
                 <span className="text-xs text-gray-500 truncate block">
-                  deps: {task.dependencies.join(', ')}
+                  deps: {displayDependencies(task.dependencies)}
                 </span>
               )}
             </div>

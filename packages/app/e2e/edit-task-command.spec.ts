@@ -106,10 +106,11 @@ test.describe('Edit task command', () => {
     await waitForTaskStatus(page, 'parent-task', 'completed');
     await waitForTaskStatus(page, 'child-task', 'completed');
 
-    const beforeResult = await page.evaluate(() => window.invoker.getTasks());
-    const beforeTasks = Array.isArray(beforeResult) ? beforeResult : beforeResult.tasks;
-    const beforeChild = findTaskByIdSuffix(beforeTasks, 'child-task');
-    const beforeGeneration = beforeChild?.execution?.generation ?? 0;
+    const beforeEditResult = await page.evaluate(() => window.invoker.getTasks());
+    const beforeEditTasks = Array.isArray(beforeEditResult) ? beforeEditResult : beforeEditResult.tasks;
+    const beforeEditChild = findTaskByIdSuffix(beforeEditTasks, 'child-task');
+    expect(beforeEditChild).toBeDefined();
+    const beforeGeneration = beforeEditChild?.execution?.generation ?? 0;
 
     // Click parent task to select it
     await page.locator('.react-flow__node[data-testid$="/parent-task"]').click();
@@ -140,8 +141,9 @@ test.describe('Edit task command', () => {
     const result = await page.evaluate(() => window.invoker.getTasks());
     const tasks = Array.isArray(result) ? result : result.tasks;
     const childTask = findTaskByIdSuffix(tasks, 'child-task');
-    expect(childTask).toBeTruthy();
-    expect((childTask?.execution?.generation ?? 0)).toBeGreaterThan(beforeGeneration);
+    expect(childTask).toBeDefined();
+    expect(childTask?.id).toBe(beforeEditChild.id);
+    expect(childTask?.execution?.generation).toBeGreaterThan(beforeGeneration);
     expect(['pending', 'running', 'completed']).toContain(childTask?.status);
     expect(tasks.find((t: any) => !t.id.endsWith('/child-task') && t.description === 'Child command')).toBeUndefined();
   });

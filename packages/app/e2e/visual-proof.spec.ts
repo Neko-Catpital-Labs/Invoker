@@ -399,7 +399,11 @@ test.describe('Visual proof capture', () => {
     ]);
     // Navigate to queue tab if there is one, or verify queue section is visible
     await page.getByRole('button', { name: 'Queue' }).click();
+    await expect(page.getByText('Running 1 / 3')).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Running (1)' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Queued (0)' })).toBeVisible();
     await expect(page.getByText(/^Pending \(\d+\)$/)).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Pending (3)' })).toBeVisible();
     await captureScreenshot(page, 'queue-view-concurrency');
     await assertPageScreenshot(page, 'queue-view-concurrency');
   });

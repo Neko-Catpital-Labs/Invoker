@@ -456,7 +456,9 @@ describe('Orchestrator', () => {
 
       repro.recreateWorkflow(workflowId);
       expect(repro.getTask(lateId)?.status).toBe('pending');
-      expect(repro.getTask(lateId)?.execution.selectedAttemptId).toBeUndefined();
+      const recreatedLateAttemptId = repro.getTask(lateId)?.execution.selectedAttemptId;
+      expect(recreatedLateAttemptId).toBeTruthy();
+      expect(recreatedLateAttemptId).not.toBe(oldLateAttemptId);
 
       repro.handleWorkerResponse(
         makeResponse({
@@ -1523,6 +1525,8 @@ describe('Orchestrator', () => {
 
       expect(orchestrator.getTask('a1')!.status).toBe('awaiting_approval');
       expect(orchestrator.getTask('a1')!.execution.completedAt).toBeDefined();
+      const attemptId = orchestrator.getTask('a1')!.execution.selectedAttemptId!;
+      expect(persistence.loadAttempt(attemptId)?.status).toBe('needs_input');
 
       const delta = publishedDeltas.find(
         (d) => d.type === 'updated' && d.taskId === sid(orchestrator, 0, 'a1'),
@@ -1615,6 +1619,28 @@ describe('Orchestrator', () => {
       expect(task.execution.agentName).toBe('codex');
       expect(task.execution.branch).toBe('plan/feature');
       expect(task.execution.workspacePath).toBe('/tmp/wt');
+    });
+
+    it('marks the selected attempt as needs_input when worker completion requires approval', () => {
+      orchestrator.loadPlan({
+        name: 'worker-awaiting-approval-test',
+        tasks: [
+          { id: 'a1', description: 'Task', requiresManualApproval: true },
+        ],
+      });
+      orchestrator.startExecution();
+
+      const attemptId = orchestrator.getTask('a1')!.execution.selectedAttemptId!;
+      orchestrator.handleWorkerResponse(
+        makeResponse({
+          actionId: 'a1',
+          status: 'completed',
+          outputs: { exitCode: 0, summary: 'needs review' },
+        }),
+      );
+
+      expect(orchestrator.getTask('a1')!.status).toBe('awaiting_approval');
+      expect(persistence.loadAttempt(attemptId)?.status).toBe('needs_input');
     });
   });
 
@@ -4665,6 +4691,52 @@ describe('Orchestrator', () => {
       expect(persistence.loadAttempt(claimedAttemptId!)?.status).toBe('superseded');
       expect(persistence.loadAttempt(latestAttemptId!)?.status).toBe('running');
     });
+
+    it('retryWorkflow selects a fresh persisted attempt for retried tasks', () => {
+      orchestrator.loadPlan({
+        name: 'retry-attempt-refresh',
+        tasks: [{ id: 't1', description: 'Task 1' }],
+      });
+      orchestrator.startExecution();
+
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 't1', status: 'failed', outputs: { exitCode: 1, error: 'boom' } }),
+      );
+
+      const failedAttemptId = orchestrator.getTask('t1')?.execution.selectedAttemptId;
+      expect(failedAttemptId).toBeTruthy();
+
+      const started = orchestrator.retryWorkflow(orchestrator.getWorkflowIds()[0]!);
+      const retriedTask = orchestrator.getTask('t1');
+      const retriedAttemptId = retriedTask?.execution.selectedAttemptId;
+
+      expect(started.some((task) => task.id === sid(orchestrator, 0, 't1'))).toBe(true);
+      expect(retriedAttemptId).toBeTruthy();
+      expect(retriedAttemptId).not.toBe(failedAttemptId);
+      expect(persistence.loadAttempt(failedAttemptId!)?.status).toBe('failed');
+      expect(persistence.loadAttempt(retriedAttemptId!)?.status).toBe('running');
+    });
+
+    it('recreateWorkflow selects a fresh persisted attempt for recreated tasks', () => {
+      orchestrator.loadPlan({
+        name: 'recreate-attempt-refresh',
+        tasks: [{ id: 't1', description: 'Task 1' }],
+      });
+      orchestrator.startExecution();
+
+      const originalAttemptId = orchestrator.getTask('t1')?.execution.selectedAttemptId;
+      expect(originalAttemptId).toBeTruthy();
+
+      const started = orchestrator.recreateWorkflow(orchestrator.getWorkflowIds()[0]!);
+      const recreatedTask = orchestrator.getTask('t1');
+      const recreatedAttemptId = recreatedTask?.execution.selectedAttemptId;
+
+      expect(started.some((task) => task.id === sid(orchestrator, 0, 't1'))).toBe(true);
+      expect(recreatedAttemptId).toBeTruthy();
+      expect(recreatedAttemptId).not.toBe(originalAttemptId);
+      expect(persistence.loadAttempt(originalAttemptId!)?.status).toBe('superseded');
+      expect(persistence.loadAttempt(recreatedAttemptId!)?.status).toBe('running');
+    });
   });
 
   // ── selectExperiments (multi-select) ────────────────────
@@ -4746,6 +4818,9 @@ describe('Orchestrator', () => {
       expect(recon.execution.selectedExperiments).toEqual([exp1, exp2]);
       expect(recon.execution.branch).toBe('reconciliation/pivot-reconciliation');
       expect(recon.execution.commit).toBe('abc123');
+      expect(
+        persistence.loadAttempt(orchestrator.getTask(reconId)!.execution.selectedAttemptId!)?.status,
+      ).toBe('completed');
     });
 
     it('multi-select unblocks downstream tasks', () => {
@@ -5228,15 +5303,22 @@ describe('Orchestrator', () => {
     });
 
     it('sets task to fixing_with_ai, clears terminal execution fields, and emits delta', () => {
+      const failedAttemptId = orchestrator.getTask('t2')!.execution.selectedAttemptId;
       orchestrator.beginConflictResolution('t2');
 
       const task = orchestrator.getTask('t2')!;
+      const fixAttemptId = task.execution.selectedAttemptId;
       expect(task.status).toBe('fixing_with_ai');
       expect(task.execution.isFixingWithAI).toBeFalsy();
       expect(task.execution.error).toBeUndefined();
       expect(task.execution.exitCode).toBeUndefined();
       expect(task.execution.completedAt).toBeUndefined();
       expect(task.execution.mergeConflict).toBeUndefined();
+      expect(task.execution.generation).toBe(1);
+      expect(fixAttemptId).toBeTruthy();
+      expect(fixAttemptId).not.toBe(failedAttemptId);
+      expect(persistence.loadAttempt(failedAttemptId!)?.status).toBe('failed');
+      expect(persistence.loadAttempt(fixAttemptId!)?.status).toBe('running');
 
       const t2id = sid(orchestrator, 0, 't2');
       const fixDeltas = publishedDeltas.filter(
@@ -5266,6 +5348,7 @@ describe('Orchestrator', () => {
 
     it('revertConflictResolution restores failed state with mergeConflict', () => {
       const { savedError } = orchestrator.beginConflictResolution('t2');
+      const fixAttemptId = orchestrator.getTask('t2')!.execution.selectedAttemptId;
       expect(orchestrator.getTask('t2')!.status).toBe('fixing_with_ai');
 
       publishedDeltas = [];
@@ -5279,6 +5362,7 @@ describe('Orchestrator', () => {
         conflictFiles: ['src/App.tsx', 'src/utils.ts'],
       });
       expect(task.execution.isFixingWithAI).toBeFalsy();
+      expect(persistence.loadAttempt(fixAttemptId!)?.status).toBe('failed');
 
       const failedDeltas = publishedDeltas.filter(
         (d) =>
@@ -5371,11 +5455,13 @@ describe('Orchestrator', () => {
       orchestrator.beginConflictResolution('f2');
       expect(orchestrator.getTask('f2')!.status).toBe('fixing_with_ai');
       expect(orchestrator.getTask('f2')!.execution.isFixingWithAI).toBeFalsy();
+      const fixAttemptId = orchestrator.getTask('f2')!.execution.selectedAttemptId;
       orchestrator.setFixAwaitingApproval('f2', 'test failed: expected 1 to be 2');
       const task = orchestrator.getTask('f2')!;
       expect(task.status).toBe('awaiting_approval');
       expect(task.execution.pendingFixError).toBe('test failed: expected 1 to be 2');
       expect(task.execution.isFixingWithAI).toBeFalsy();
+      expect(persistence.loadAttempt(fixAttemptId!)?.status).toBe('needs_input');
     });
 
     it('setFixAwaitingApproval delta includes agentSessionId from DB', () => {
@@ -5447,6 +5533,7 @@ describe('Orchestrator', () => {
       const { savedError } = orchestrator.beginConflictResolution('f2');
       expect(savedError).toBe(mergeConflictError);
       expect(orchestrator.getTask('f2')!.status).toBe('fixing_with_ai');
+      const fixAttemptId = orchestrator.getTask('f2')!.execution.selectedAttemptId;
 
       orchestrator.setFixAwaitingApproval('f2', mergeConflictError);
       expect(orchestrator.getTask('f2')!.status).toBe('awaiting_approval');
@@ -5457,6 +5544,7 @@ describe('Orchestrator', () => {
       expect(task.status).toBe('running');
       expect(task.status).not.toBe('completed');
       expect(task.execution.pendingFixError).toBeUndefined();
+      expect(persistence.loadAttempt(fixAttemptId!)?.status).toBe('running');
     });
 
     it('non-merge plain-text pendingFixError approve transitions failed -> fixing_with_ai -> awaiting_approval -> completed', async () => {
@@ -5468,6 +5556,7 @@ describe('Orchestrator', () => {
       const { savedError } = orchestrator.beginConflictResolution('f2');
       expect(savedError).toBe(plainTextError);
       expect(orchestrator.getTask('f2')!.status).toBe('fixing_with_ai');
+      const fixAttemptId = orchestrator.getTask('f2')!.execution.selectedAttemptId;
 
       orchestrator.setFixAwaitingApproval('f2', plainTextError);
       expect(orchestrator.getTask('f2')!.status).toBe('awaiting_approval');
@@ -5475,6 +5564,7 @@ describe('Orchestrator', () => {
 
       await orchestrator.approve('f2');
       expect(orchestrator.getTask('f2')!.status).toBe('completed');
+      expect(persistence.loadAttempt(fixAttemptId!)?.status).toBe('completed');
     });
   });
 
@@ -5859,6 +5949,26 @@ describe('Orchestrator', () => {
       expect(task.status).toBe('pending');
       expect(task.execution.startedAt).toBeUndefined();
       expect(task.execution.lastHeartbeatAt).toBeUndefined();
+    });
+
+    it('replaces the selected attempt when deferring a task', () => {
+      orchestrator.loadPlan({
+        name: 'defer-attempt-refresh',
+        tasks: [{ id: 'task-a', description: 'Task A' }],
+      });
+      orchestrator.startExecution();
+
+      const originalAttemptId = orchestrator.getTask('task-a')?.execution.selectedAttemptId;
+      expect(originalAttemptId).toBeTruthy();
+
+      orchestrator.deferTask('task-a');
+
+      const deferredTask = orchestrator.getTask('task-a');
+      const deferredAttemptId = deferredTask?.execution.selectedAttemptId;
+      expect(deferredAttemptId).toBeTruthy();
+      expect(deferredAttemptId).not.toBe(originalAttemptId);
+      expect(persistence.loadAttempt(originalAttemptId!)?.status).toBe('superseded');
+      expect(persistence.loadAttempt(deferredAttemptId!)?.status).toBe('pending');
     });
 
     it('frees the scheduler slot so other tasks can run', () => {
