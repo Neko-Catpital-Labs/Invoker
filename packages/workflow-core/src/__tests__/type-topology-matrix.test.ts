@@ -99,10 +99,17 @@ class InMemoryBus implements OrchestratorMessageBus {
 
 // ── Response helpers ────────────────────────────────────────
 
+let activeOrchestrator: Orchestrator | null = null;
+
+function generationFor(actionId: string): number {
+  return activeOrchestrator?.getTask(actionId)?.execution.generation ?? 0;
+}
+
 function complete(actionId: string, extras?: Partial<WorkResponse['outputs']>): WorkResponse {
   return {
     requestId: `req-${actionId}`,
     actionId,
+    executionGeneration: generationFor(actionId),
     status: 'completed',
     outputs: { exitCode: 0, ...extras },
   };
@@ -112,6 +119,7 @@ function fail(actionId: string, error = 'task failed'): WorkResponse {
   return {
     requestId: `req-${actionId}`,
     actionId,
+    executionGeneration: generationFor(actionId),
     status: 'failed',
     outputs: { exitCode: 1, error },
   };
@@ -124,6 +132,7 @@ function spawnResponse(
   return {
     requestId: `req-${actionId}`,
     actionId,
+    executionGeneration: generationFor(actionId),
     status: 'spawn_experiments',
     outputs: { exitCode: 0 },
     dagMutation: {
@@ -154,6 +163,7 @@ describe('Type × Topology Matrix', () => {
       messageBus: bus,
       maxConcurrency: 10,
     });
+    activeOrchestrator = orchestrator;
   });
 
   // ── Experiment/Reconciliation in topologies ─────────────

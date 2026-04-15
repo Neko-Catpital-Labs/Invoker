@@ -36,11 +36,14 @@ invoker_e2e_init() {
   export INVOKER_API_PORT="${INVOKER_API_PORT:-$((4300 + (RANDOM % 1000)))}"
   export INVOKER_DB_DIR="$(mktemp -d "${TMPDIR:-/tmp}/invoker-e2e-db.XXXXXX")"
   export INVOKER_E2E_MARKER_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/invoker-e2e-marker.XXXXXX")"
+  export INVOKER_REPO_CONFIG_PATH="$(mktemp "${TMPDIR:-/tmp}/invoker-e2e-config.XXXXXX.json")"
+  printf '{\n  "autoFixRetries": 0\n}\n' > "$INVOKER_REPO_CONFIG_PATH"
   local stubdir
   stubdir="$(mktemp -d "${TMPDIR:-/tmp}/invoker-e2e-stub.XXXXXX")"
   export INVOKER_E2E_STUB_DIR="$stubdir"
   ln -sf "$INVOKER_E2E_ROOT/fixtures/claude-marker.sh" "$stubdir/claude"
   chmod +x "$INVOKER_E2E_ROOT/fixtures/claude-marker.sh" 2>/dev/null || true
+  export INVOKER_CLAUDE_FIX_COMMAND="$stubdir/claude"
   ln -sf "$INVOKER_E2E_ROOT/fixtures/gh-marker.sh" "$stubdir/gh"
   chmod +x "$INVOKER_E2E_ROOT/fixtures/gh-marker.sh" 2>/dev/null || true
   ln -sf "$INVOKER_E2E_ROOT/fixtures/codex-marker.sh" "$stubdir/codex"
@@ -57,6 +60,7 @@ invoker_e2e_cleanup() {
   # Clean up worktrees created during the test.
   git -C "$INVOKER_E2E_REPO_ROOT" worktree prune 2>/dev/null || true
   rm -rf "${INVOKER_DB_DIR:-}" "${INVOKER_E2E_MARKER_ROOT:-}" "${INVOKER_E2E_STUB_DIR:-}" 2>/dev/null || true
+  rm -f "${INVOKER_REPO_CONFIG_PATH:-}" 2>/dev/null || true
 
   # Restore original PATH so claude/gh/codex stubs never leak into user shells.
   if [ -n "${INVOKER_E2E_ORIGINAL_PATH:-}" ]; then

@@ -9,7 +9,19 @@
  * - Successful task output is persisted and retrievable
  */
 
-import { test, expect, TEST_PLAN, loadPlan, startPlan, waitForTaskStatus, injectTaskStates, E2E_REPO_URL } from './fixtures/electron-app.js';
+import {
+  test,
+  expect,
+  TEST_PLAN,
+  loadPlan,
+  startPlan,
+  waitForTaskStatus,
+  injectTaskStates,
+  E2E_REPO_URL,
+  resolveTaskId,
+  getTasks,
+  findTaskByIdSuffix,
+} from './fixtures/electron-app.js';
 
 const DEATH_LOG_PLAN = {
   name: 'E2E Death Log Plan',
@@ -44,10 +56,11 @@ test.describe('Task death logs', () => {
     await loadPlan(page, DEATH_LOG_PLAN);
     await startPlan(page);
     await waitForTaskStatus(page, 'task-die', 'failed');
+    const scopedTaskId = await resolveTaskId(page, 'task-die');
 
     const output = await page.evaluate(
       (id: string) => window.invoker.getTaskOutput(id),
-      'task-die',
+      scopedTaskId,
     );
 
     expect(output).toContain('visible output');
@@ -61,9 +74,8 @@ test.describe('Task death logs', () => {
 
     await waitForTaskStatus(page, 'task-die', 'failed', 10000);
 
-    const result = await page.evaluate(() => window.invoker.getTasks());
-    const tasks = Array.isArray(result) ? result : result.tasks;
-    const task = tasks.find((t: any) => t.id === 'task-die');
+    const tasks = await getTasks(page);
+    const task = findTaskByIdSuffix(tasks, 'task-die');
     expect(task?.status).toBe('failed');
   });
 
@@ -72,7 +84,7 @@ test.describe('Task death logs', () => {
     await startPlan(page);
     await waitForTaskStatus(page, 'silent-fail', 'failed');
 
-    await page.locator('[data-testid="rf__node-silent-fail"]').click();
+    await page.locator('.react-flow__node[data-testid$="/silent-fail"]').click();
 
     await expect(page.locator('text=Exit code: 1')).toBeVisible({ timeout: 3000 });
   });
@@ -81,10 +93,11 @@ test.describe('Task death logs', () => {
     await loadPlan(page, TEST_PLAN);
     await startPlan(page);
     await waitForTaskStatus(page, 'task-alpha', 'completed');
+    const scopedTaskId = await resolveTaskId(page, 'task-alpha');
 
     const output = await page.evaluate(
       (id: string) => window.invoker.getTaskOutput(id),
-      'task-alpha',
+      scopedTaskId,
     );
 
     expect(output).toContain('hello-alpha');
@@ -109,7 +122,7 @@ test.describe('Task death logs', () => {
       },
     ]);
 
-    await page.locator('[data-testid="rf__node-silent-fail"]').click();
+    await page.locator('.react-flow__node[data-testid$="/silent-fail"]').click();
 
     await expect(
       page.locator('text=Executor startup failed (worktree): git not found'),

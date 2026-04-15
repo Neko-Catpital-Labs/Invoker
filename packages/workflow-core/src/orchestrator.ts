@@ -562,7 +562,7 @@ export class Orchestrator {
       const shouldReset = forceResetIds.has(id) || current.status !== 'pending';
       this.deferredTaskIds.delete(id);
       if (!shouldReset) {
-        this.scheduler.removeJob(id);
+        this.clearQueuedSchedulerEntries(id, current.execution.selectedAttemptId);
         continue;
       }
 
@@ -580,12 +580,7 @@ export class Orchestrator {
         changes: changesWithGeneration,
       });
 
-      const wasRunning = current.status === 'running' || current.status === 'fixing_with_ai';
-      if (wasRunning) {
-        this.scheduler.completeJob(priorAttemptId ?? id);
-      } else {
-        this.scheduler.removeJob(priorAttemptId ?? id);
-      }
+      this.clearQueuedSchedulerEntries(id, priorAttemptId);
     }
 
     const readyIds = this.stateMachine
@@ -655,6 +650,23 @@ export class Orchestrator {
       }
     }
     return count;
+  }
+
+  private clearQueuedSchedulerEntries(taskId: string, attemptId?: string): void {
+    if (attemptId) {
+      this.scheduler.removeJob(attemptId);
+    }
+    this.scheduler.removeJob(taskId);
+  }
+
+  getPersistedActiveTaskIds(now: number = Date.now()): Set<string> {
+    const active = new Set<string>();
+    for (const task of this.stateMachine.getAllTasks()) {
+      if (this.isTaskExecutionActive(task, this.getSelectedAttempt(task), now)) {
+        active.add(task.id);
+      }
+    }
+    return active;
   }
 
   private ensureCurrentPendingAttempt(task: TaskState): string {
@@ -962,7 +974,6 @@ export class Orchestrator {
         console.warn(
           `[worker-response] PROTOCOL_FAILURE_UNKNOWN_TASK actionId=${response.actionId} parseError=${parseErr}`,
         );
-        this.scheduler.completeJob(response.attemptId ?? response.actionId);
         return [];
       }
 
@@ -970,7 +981,6 @@ export class Orchestrator {
       console.warn(
         `[worker-response] PROTOCOL_FAILURE taskId=${canonicalTaskId} parseError=${parseErr}`,
       );
-      this.scheduler.completeJob(response.attemptId ?? canonicalTaskId);
       return this.finalizeFailedTask(
         canonicalTaskId,
         {
@@ -987,7 +997,6 @@ export class Orchestrator {
     const task = this.stateGetTask(taskId);
     if (!task) {
       console.warn(`[worker-response] task not in graph taskId=${taskId} (stale response?)`);
-      this.scheduler.completeJob(response.attemptId ?? this.stateGetTask(taskId)?.id ?? taskId);
       return [];
     }
 
@@ -999,8 +1008,6 @@ export class Orchestrator {
           `executionGeneration=${response.executionGeneration}`,
       );
     }
-
-    this.scheduler.completeJob(response.attemptId ?? canonicalTaskId);
 
     switch (parsed.type) {
       case 'completed':
@@ -1047,8 +1054,6 @@ export class Orchestrator {
     const task = this.stateGetTask(taskId);
     if (!task) return;
     const id = task.id;
-
-    this.scheduler.completeJob(id);
 
     const additionalExecution = additionalChanges?.execution;
     const keepAgentSessionId = additionalExecution && 'agentSessionId' in additionalExecution
@@ -1127,8 +1132,6 @@ export class Orchestrator {
         workspacePath: task.execution.workspacePath ?? null,
       });
     }
-
-    this.scheduler.completeJob(tid);
 
     const changes: TaskStateChanges = {
       status: 'awaiting_approval',
@@ -1301,12 +1304,6 @@ export class Orchestrator {
     if (!task || !task.config.isReconciliation) return [];
     const reconId = task.id;
 
-    // Reconciliation may still be `running` if selection happens without a prior
-    // `needs_input` worker response (tests); free the scheduler slot either way.
-    if (task.status === 'running' || task.status === 'fixing_with_ai') {
-      this.scheduler.completeJob(reconId);
-    }
-
     const winner = this.stateGetTask(experimentId);
     const winnerId = winner?.id ?? experimentId;
     const changes: TaskStateChanges = {
@@ -1324,8 +1321,7 @@ export class Orchestrator {
     this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
 
     const readyTaskIds = this.stateMachine.findNewlyReadyTasks(reconId);
-    const schedulerStatus = this.scheduler.getStatus();
-    console.log(`[orchestrator] selectExperiment "${reconId}": ${readyTaskIds.length} newly ready: [${readyTaskIds.join(', ')}], scheduler: running=${schedulerStatus.runningCount}/${schedulerStatus.maxConcurrency} queued=${schedulerStatus.queueLength}`);
+    console.log(`[orchestrator] selectExperiment "${reconId}": ${readyTaskIds.length} newly ready: [${readyTaskIds.join(', ')}]`);
     const started = this.autoStartReadyTasks(readyTaskIds);
     this.checkWorkflowCompletion();
     return started;
@@ -1351,10 +1347,6 @@ export class Orchestrator {
     if (!task || !task.config.isReconciliation) return [];
     const reconId = task.id;
 
-    if (task.status === 'running' || task.status === 'fixing_with_ai') {
-      this.scheduler.completeJob(reconId);
-    }
-
     const changes: TaskStateChanges = {
       status: 'completed',
       execution: {
@@ -1371,8 +1363,7 @@ export class Orchestrator {
     this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
 
     const readyTaskIds = this.stateMachine.findNewlyReadyTasks(reconId);
-    const schedulerStatus = this.scheduler.getStatus();
-    console.log(`[orchestrator] selectExperiments "${reconId}": ${readyTaskIds.length} newly ready: [${readyTaskIds.join(', ')}], scheduler: running=${schedulerStatus.runningCount}/${schedulerStatus.maxConcurrency} queued=${schedulerStatus.queueLength}`);
+    console.log(`[orchestrator] selectExperiments "${reconId}": ${readyTaskIds.length} newly ready: [${readyTaskIds.join(', ')}]`);
     const started = this.autoStartReadyTasks(readyTaskIds);
     this.checkWorkflowCompletion();
     return started;
@@ -1406,7 +1397,7 @@ export class Orchestrator {
     try {
       const attempts = this.persistence.loadAttempts(id);
       const current = attempts[attempts.length - 1];
-      if (current && (current.status === 'running' || current.status === 'pending')) {
+      if (current && (current.status === 'running' || current.status === 'pending' || current.status === 'claimed')) {
         this.taskRepository.updateAttempt(current.id, { status: 'superseded' });
       }
       const newAttempt = createAttempt(id, {
@@ -1604,13 +1595,8 @@ export class Orchestrator {
       this.persistence.logEvent?.(id, 'task.pending', changesWithGeneration);
       this.messageBus.publish(TASK_DELTA_CHANNEL, { type: 'updated', taskId: id, changes: changesWithGeneration });
 
-      const wasRunning = current.status === 'running' || current.status === 'fixing_with_ai';
       this.deferredTaskIds.delete(id);
-      if (wasRunning) {
-        this.scheduler.completeJob(priorAttemptId ?? id);
-      } else {
-        this.scheduler.removeJob(priorAttemptId ?? id);
-      }
+      this.clearQueuedSchedulerEntries(id, priorAttemptId);
     }
 
     const readyIds = this.stateMachine
@@ -1688,7 +1674,7 @@ export class Orchestrator {
       const delta: TaskDelta = { type: 'updated', taskId: task.id, changes: changesWithGeneration };
       this.persistence.logEvent?.(task.id, 'task.pending', changesWithGeneration);
       this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
-      this.scheduler.completeJob(priorAttemptId ?? task.id);
+      this.clearQueuedSchedulerEntries(task.id, priorAttemptId);
     }
 
     const readyIds = this.stateMachine
@@ -1999,7 +1985,7 @@ export class Orchestrator {
     // 3. Reconcile merge node deps from actual graph state
     this.reconcileMergeLeaves(wfId);
 
-    this.scheduler.completeJob(task.id);
+    this.clearQueuedSchedulerEntries(task.id, task.execution.selectedAttemptId);
 
     // Auto-start ready replacement root tasks
     const rootIds = replacementTasks
@@ -2115,8 +2101,7 @@ export class Orchestrator {
 
     // 3. Clean scheduler: free slots for all tasks in this workflow
     for (const task of affectedTasks) {
-      this.scheduler.completeJob(task.id);
-      this.scheduler.removeJob(task.id);
+      this.clearQueuedSchedulerEntries(task.id, task.execution.selectedAttemptId);
     }
 
     // 4. Clear memory and reload remaining workflows
@@ -2299,11 +2284,9 @@ export class Orchestrator {
       // Free scheduler slot and deferred set
       this.deferredTaskIds.delete(id);
       if (wasRunning) {
-        this.scheduler.completeJob(id);
         runningCancelled.push(id);
-      } else {
-        this.scheduler.removeJob(id);
       }
+      this.clearQueuedSchedulerEntries(id, t.execution.selectedAttemptId);
 
       // Mark as failed
       const errorMsg =
@@ -2361,11 +2344,9 @@ export class Orchestrator {
 
       this.deferredTaskIds.delete(id);
       if (wasRunning) {
-        this.scheduler.completeJob(id);
         runningCancelled.push(id);
-      } else {
-        this.scheduler.removeJob(id);
       }
+      this.clearQueuedSchedulerEntries(id, task.execution.selectedAttemptId);
 
       const changes: TaskStateChanges = {
         status: 'failed',
@@ -2404,8 +2385,9 @@ export class Orchestrator {
     this.persistence.logEvent?.(id, 'task.deferred', changes);
     this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
 
-    // Free the scheduler slot
-    this.scheduler.completeJob(id);
+    // Remove any queued re-dispatch for this task; persisted attempt state now
+    // owns active-slot truth.
+    this.clearQueuedSchedulerEntries(id, task.execution.selectedAttemptId);
 
     // Supersede current attempt (best-effort, same pattern as restartTask)
     try {
@@ -3116,13 +3098,13 @@ export class Orchestrator {
     this.refreshFromDb();
     const task = this.stateGetTask(taskId);
     if (!task) {
-      this.scheduler.completeJob(attemptId);
+      this.clearQueuedSchedulerEntries(taskId, attemptId);
       return false;
     }
 
     const selectedAttemptId = task.execution.selectedAttemptId;
     if (selectedAttemptId && selectedAttemptId !== attemptId) {
-      this.scheduler.completeJob(attemptId);
+      this.clearQueuedSchedulerEntries(taskId, attemptId);
       return false;
     }
 
@@ -3131,7 +3113,7 @@ export class Orchestrator {
     }
 
     if (task.status !== 'pending') {
-      this.scheduler.completeJob(attemptId);
+      this.clearQueuedSchedulerEntries(taskId, attemptId);
       return false;
     }
 

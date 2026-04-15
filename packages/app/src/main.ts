@@ -572,6 +572,58 @@ if (isHeadless) {
 
       // In standalone owner mode, serve delegated requests from peer headless processes.
       if (standaloneMode && messageBus) {
+        const classifyStandaloneHeadlessExecMutation = (
+          payload: HeadlessExecMutationPayload,
+        ): { workflowId?: string; priority: WorkflowMutationPriority } => {
+          const [command, arg0] = payload.args;
+          if (!command) return { priority: 'normal' };
+
+          const standaloneWorkflowIdForTaskArg = (taskIdArg: unknown): string | undefined => {
+            const taskId = String(taskIdArg);
+            return orchestrator.getTask(taskId)?.config.workflowId;
+          };
+
+          switch (command) {
+            case 'restart':
+              return {
+                workflowId: standaloneWorkflowIdForTaskArg(arg0) ?? (arg0 === undefined ? undefined : String(arg0)),
+                priority: 'high',
+              };
+            case 'recreate':
+            case 'cancel-workflow':
+              return { workflowId: arg0 === undefined ? undefined : String(arg0), priority: 'high' };
+            case 'rebase':
+            case 'cancel':
+            case 'recreate-task':
+              return { workflowId: standaloneWorkflowIdForTaskArg(arg0), priority: 'high' };
+            case 'approve':
+            case 'reject':
+            case 'select':
+            case 'fix':
+            case 'resolve-conflict':
+              return { workflowId: standaloneWorkflowIdForTaskArg(arg0), priority: 'normal' };
+            default:
+              return { priority: 'normal' };
+          }
+        };
+
+        const runStandaloneWorkflowMutation = async <T>(
+          workflowId: string | undefined,
+          priority: WorkflowMutationPriority,
+          channel: string,
+          args: unknown[],
+          op: () => Promise<T>,
+        ): Promise<T> => {
+          if (!workflowId) return op();
+          if (!workflowMutationCoordinator) {
+            throw new Error('Workflow mutation coordinator is unavailable');
+          }
+          if (!workflowMutationDispatcher.has(channel)) {
+            throw new Error(`No workflow mutation dispatcher registered for ${channel}`);
+          }
+          return workflowMutationCoordinator.enqueue<T>(workflowId, priority, channel, args);
+        };
+
         messageBus.onRequest('headless.run', async (req: unknown) => {
           const { planPath } = req as { planPath: string };
           await runHeadless(['run', planPath], {
@@ -601,8 +653,8 @@ if (isHeadless) {
             waitForApproval: delegatedWait,
             noTrack: delegatedNoTrack,
           };
-          const { workflowId, priority } = classifyHeadlessExecMutation(payload);
-          await runWorkflowMutation(workflowId, priority, 'headless.exec', [payload], async () => {
+          const { workflowId, priority } = classifyStandaloneHeadlessExecMutation(payload);
+          await runStandaloneWorkflowMutation(workflowId, priority, 'headless.exec', [payload], async () => {
             await runHeadless(args, {
               ...headlessDeps,
               waitForApproval: delegatedWait,
@@ -754,7 +806,7 @@ function setupGuiMode(): void {
       if (task.config.isMergeNode && task.config.workflowId) {
         const workflow = persistence.loadWorkflow(task.config.workflowId);
         if (workflow?.mergeMode === "external_review") return; // external review is the merge mechanism
-        await taskExecutor.approveMerge(task.config.workflowId);
+        await requireTaskExecutor().approveMerge(task.config.workflowId);
       }
     });
   }
@@ -817,8 +869,13 @@ function setupGuiMode(): void {
 
   function relaunchOrphansAndStartReady(logPrefix: string): TaskState[] {
     const orphanRestarted: TaskState[] = [];
+    const activeTaskIds = orchestrator.getPersistedActiveTaskIds?.() ?? new Set<string>();
     for (const task of orchestrator.getAllTasks()) {
-      if (task.status === 'running' || task.status === 'fixing_with_ai') {
+      const isPersistedOrphan =
+        task.status === 'running'
+        || task.status === 'fixing_with_ai'
+        || (task.status === 'pending' && activeTaskIds.has(task.id));
+      if (isPersistedOrphan) {
         const lastHeartbeat = task.execution.lastHeartbeatAt instanceof Date
           ? task.execution.lastHeartbeatAt.toISOString()
           : task.execution.lastHeartbeatAt ?? 'none';
@@ -826,7 +883,7 @@ function setupGuiMode(): void {
           ? task.execution.startedAt.toISOString()
           : task.execution.startedAt ?? 'none';
         logger.info(
-          `relaunching orphaned in-flight task "${task.id}" (${task.status}) ` +
+          `relaunching orphaned in-flight task "${task.id}" (${task.status}${task.status === 'pending' ? '/claimed' : ''}) ` +
             `startedAt=${startedAt} lastHeartbeatAt=${lastHeartbeat} generation=${task.execution.generation ?? 0}`,
           { module: logPrefix },
         );
@@ -872,12 +929,20 @@ function setupGuiMode(): void {
     orchestrator.syncFromDb(workflowId);
 
     const orphanRestarted: TaskState[] = [];
+    const activeTaskIds = orchestrator.getPersistedActiveTaskIds?.() ?? new Set<string>();
     for (const task of orchestrator.getAllTasks()) {
       if (
-        (task.status === 'running' || task.status === 'fixing_with_ai') &&
+        (
+          task.status === 'running'
+          || task.status === 'fixing_with_ai'
+          || (task.status === 'pending' && activeTaskIds.has(task.id))
+        ) &&
         task.config.workflowId === workflowId
       ) {
-        logger.info(`relaunching orphaned in-flight task "${task.id}" (${task.status})`, { module: 'ipc-delegate' });
+        logger.info(
+          `relaunching orphaned in-flight task "${task.id}" (${task.status}${task.status === 'pending' ? '/claimed' : ''})`,
+          { module: 'ipc-delegate' },
+        );
         const started = orchestrator.restartTask(task.id);
         orphanRestarted.push(...started.filter(t => t.status === 'running'));
       }
@@ -2116,7 +2181,6 @@ function setupGuiMode(): void {
 
     try {
       if (apiServer) await apiServer.close().catch(() => {});
-      mutationPipe?.dispose();
       if (dbPollInterval) clearInterval(dbPollInterval);
       if (activityPollInterval) clearInterval(activityPollInterval);
       if (uiPerfLogInterval) clearInterval(uiPerfLogInterval);

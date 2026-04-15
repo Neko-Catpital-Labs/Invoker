@@ -13,6 +13,8 @@ import type { ExecutionAgent, AgentCommandSpec } from '../agent.js';
 export interface ClaudeExecutionAgentConfig {
   /** Command to invoke the Claude CLI. Default: 'claude'. */
   command?: string;
+  /** Override command used specifically for fix flows. Default: INVOKER_CLAUDE_FIX_COMMAND or `command`. */
+  fixCommand?: string;
   /** Path to the Claude config directory on the host. Default: ~/.claude. */
   configDir?: string;
   /** Home directory inside Docker containers. Default: '/home/invoker'. */
@@ -27,12 +29,14 @@ export class ClaudeExecutionAgent implements ExecutionAgent {
   readonly linuxTerminalTail = 'exec_bash' as const;
 
   private readonly command: string;
+  private readonly fixCommand: string;
   private readonly configDir: string;
   private readonly containerHomePath: string;
   private readonly apiKey: string;
 
   constructor(config: ClaudeExecutionAgentConfig = {}) {
     this.command = config.command ?? 'claude';
+    this.fixCommand = config.fixCommand ?? process.env.INVOKER_CLAUDE_FIX_COMMAND ?? this.command;
     this.configDir = config.configDir ?? join(homedir(), '.claude');
     this.containerHomePath = config.containerHomePath ?? '/home/invoker';
     this.apiKey = config.apiKey ?? process.env.ANTHROPIC_API_KEY ?? '';
@@ -51,7 +55,7 @@ export class ClaudeExecutionAgent implements ExecutionAgent {
   buildFixCommand(prompt: string): AgentCommandSpec {
     const sessionId = randomUUID();
     return {
-      cmd: this.command,
+      cmd: this.fixCommand,
       args: ['--session-id', sessionId, '-p', prompt, '--dangerously-skip-permissions'],
       sessionId,
     };

@@ -81,6 +81,24 @@ describe('ClaudeExecutionAgent', () => {
       expect(spec.cmd).toBe('/usr/local/bin/claude');
     });
 
+    it('prefers fixCommand for fix flows', () => {
+      const agent = new ClaudeExecutionAgent({
+        command: 'claude',
+        fixCommand: '/tmp/claude-fix-stub',
+      });
+      const spec = agent.buildFixCommand('test');
+
+      expect(spec.cmd).toBe('/tmp/claude-fix-stub');
+    });
+
+    it('falls back to INVOKER_CLAUDE_FIX_COMMAND for fix flows', () => {
+      process.env.INVOKER_CLAUDE_FIX_COMMAND = '/tmp/env-claude-fix-stub';
+      const agent = new ClaudeExecutionAgent({ command: 'claude' });
+      const spec = agent.buildFixCommand('test');
+
+      expect(spec.cmd).toBe('/tmp/env-claude-fix-stub');
+    });
+
     it('places --session-id and its value at the start of args', () => {
       const agent = new ClaudeExecutionAgent();
       const spec = agent.buildFixCommand('my prompt');

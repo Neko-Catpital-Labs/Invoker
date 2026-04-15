@@ -9,7 +9,15 @@
  * sufficient to test the state transitions.
  */
 
-import { test, expect, loadPlan, startPlan, waitForTaskStatus, E2E_REPO_URL } from './fixtures/electron-app.js';
+import {
+  test,
+  expect,
+  loadPlan,
+  startPlan,
+  waitForTaskStatus,
+  E2E_REPO_URL,
+  resolveTaskId,
+} from './fixtures/electron-app.js';
 
 const FAILING_PLAN = {
   name: 'E2E Fix with Claude Plan',
@@ -32,23 +40,24 @@ const FAILING_PLAN = {
 };
 
 test.describe('Fix with Claude', () => {
-  test('Fix with Claude -> Approve -> task re-runs', async ({ page }) => {
+  test('Fix with Claude -> Approve -> task completes', async ({ page }) => {
     await loadPlan(page, FAILING_PLAN);
     await startPlan(page);
 
     await waitForTaskStatus(page, 'task-pass', 'completed');
     await waitForTaskStatus(page, 'task-fail', 'failed');
+    const scopedTaskId = await resolveTaskId(page, 'task-fail');
 
-    await page.locator('[data-testid="rf__node-task-fail"]').click({ button: 'right' });
+    await page.locator('.react-flow__node[data-testid$="/task-fail"]').click({ button: 'right' });
     const fixBtn = page.locator('button').filter({ hasText: 'Fix with Claude' });
     await expect(fixBtn).toBeVisible({ timeout: 2000 });
     await fixBtn.click();
 
     await waitForTaskStatus(page, 'task-fail', 'awaiting_approval', 15000);
 
-    await page.evaluate((id) => window.invoker.approve(id), 'task-fail');
+    await page.evaluate((id) => window.invoker.approve(id), scopedTaskId);
 
-    await waitForTaskStatus(page, 'task-fail', 'failed', 15000);
+    await waitForTaskStatus(page, 'task-fail', 'completed', 15000);
   });
 
   test('Fix with Claude -> Reject -> task reverts to failed', async ({ page }) => {
@@ -57,15 +66,16 @@ test.describe('Fix with Claude', () => {
 
     await waitForTaskStatus(page, 'task-pass', 'completed');
     await waitForTaskStatus(page, 'task-fail', 'failed');
+    const scopedTaskId = await resolveTaskId(page, 'task-fail');
 
-    await page.locator('[data-testid="rf__node-task-fail"]').click({ button: 'right' });
+    await page.locator('.react-flow__node[data-testid$="/task-fail"]').click({ button: 'right' });
     const fixBtn = page.locator('button').filter({ hasText: 'Fix with Claude' });
     await expect(fixBtn).toBeVisible({ timeout: 2000 });
     await fixBtn.click();
 
     await waitForTaskStatus(page, 'task-fail', 'awaiting_approval', 15000);
 
-    await page.evaluate((id) => window.invoker.reject(id), 'task-fail');
+    await page.evaluate((id) => window.invoker.reject(id), scopedTaskId);
 
     await waitForTaskStatus(page, 'task-fail', 'failed', 10000);
   });

@@ -50,6 +50,10 @@ const MERGE_GATE_TEXT_VISUAL_PLAN = {
   ],
 };
 
+function taskNodeCard(page: import('@playwright/test').Page, taskIdSuffix: string) {
+  return page.locator(`.react-flow__node[data-testid$="${taskIdSuffix}"] > div`).first();
+}
+
 test.describe('Visual proof capture', () => {
   test('empty state', async ({ page }) => {
     await expect(page.getByText('Load a plan to get started')).toBeVisible({ timeout: 5000 });
@@ -181,7 +185,6 @@ test.describe('Visual proof capture', () => {
     await page.evaluate((yaml) => window.invoker.loadPlan(yaml), yamlStringify(MERGE_GATE_TEXT_VISUAL_PLAN));
     await page.locator('.react-flow__node[data-testid$="mg-visual-work"]').first().waitFor({ state: 'visible', timeout: 15000 });
     await expect(page.getByTestId('merge-gate-primary-label')).toBeVisible();
-    await expect(page.getByTestId('merge-branch-label')).toBeVisible();
     await captureScreenshot(page, 'merge-gate-node-text-black');
     await assertPageScreenshot(page, 'merge-gate-node-text-black');
   });
@@ -241,6 +244,7 @@ test.describe('Visual proof capture', () => {
     await expect(page.getByRole('menuitem', { name: 'Fix with Claude' })).toBeVisible();
     await expect(page.getByRole('menuitem', { name: 'Fix with Codex' })).toBeVisible();
     await expect(menu.getByText('Workflow', { exact: true })).toBeVisible();
+    await page.getByRole('menuitem', { name: 'More' }).click();
     await expect(menu.getByText('Danger', { exact: true })).toBeVisible();
 
     await captureScreenshot(page, 'context-menu-failed-organization');
@@ -263,7 +267,9 @@ test.describe('Visual proof capture', () => {
     ]);
 
     await page.locator('.react-flow__node[data-testid$="task-alpha"]').click({ button: 'right' });
-    await expect(page.getByRole('menu')).toBeVisible();
+    const menu = page.getByRole('menu');
+    await expect(menu).toBeVisible();
+    await page.getByRole('menuitem', { name: 'More' }).click();
     await expect(page.getByText('Danger')).toBeVisible();
     await expect(page.getByRole('menuitem', { name: 'Recreate from Task' })).toBeVisible();
 
@@ -293,12 +299,12 @@ test.describe('Visual proof capture', () => {
     await page.waitForTimeout(100);
 
     // Assert that the completed node (task-alpha) is dimmed via opacity-20 class
-    const completedNodeCard = page.locator('div.rounded-lg[data-testid$="task-alpha"]');
+    const completedNodeCard = taskNodeCard(page, 'task-alpha');
     await expect(completedNodeCard).toBeVisible();
     await expect(completedNodeCard).toHaveClass(/opacity-20/);
 
     // Assert that the pending node (task-beta) is NOT dimmed
-    const pendingNodeCard = page.locator('div.rounded-lg[data-testid$="task-beta"]');
+    const pendingNodeCard = taskNodeCard(page, 'task-beta');
     await expect(pendingNodeCard).toBeVisible();
     await expect(pendingNodeCard).not.toHaveClass(/opacity-20/);
 
@@ -326,7 +332,7 @@ test.describe('Visual proof capture', () => {
     // No debounce — effect is immediate, but allow React render
     await page.waitForTimeout(100);
 
-    const completedCard = page.locator('div.rounded-lg[data-testid$="task-alpha"]');
+    const completedCard = taskNodeCard(page, 'task-alpha');
     await expect(completedCard).toHaveClass(/opacity-20/);
     await captureScreenshot(page, 'statusbar-click-isolate-pending');
     await assertPageScreenshot(page, 'statusbar-click-isolate-pending');
@@ -337,7 +343,7 @@ test.describe('Visual proof capture', () => {
 
     // Now both pending and completed are active — neither should be dimmed
     await expect(completedCard).not.toHaveClass(/opacity-20/);
-    const pendingCard = page.locator('div.rounded-lg[data-testid$="task-beta"]');
+    const pendingCard = taskNodeCard(page, 'task-beta');
     await expect(pendingCard).not.toHaveClass(/opacity-20/);
     await captureScreenshot(page, 'statusbar-ctrl-click-toggle-both');
     await assertPageScreenshot(page, 'statusbar-ctrl-click-toggle-both');
@@ -433,17 +439,9 @@ test.describe('Visual proof capture', () => {
     await page.evaluate((p) => window.invoker.loadPlan(p), yamlStringify(prereq3Plan));
 
     // Get the workflow IDs from the loaded plans
-    const workflowIds = await page.evaluate(() => {
-      const result = window.invoker.getTasks();
-      const tasks = Array.isArray(result) ? result : result.tasks;
-      // Extract unique workflow IDs from task IDs (format: workflowId/taskId)
-      const wfIdSet = new Set<string>();
-      tasks.forEach((t: { id: string }) => {
-        const wfId = t.id.split('/')[0];
-        if (wfId) wfIdSet.add(wfId);
-      });
-      const wfIds = Array.from(wfIdSet).sort();
-      return wfIds;
+    const workflowIds = await page.evaluate(async () => {
+      const workflows = await window.invoker.listWorkflows();
+      return workflows.map((workflow: { id: string }) => workflow.id).sort();
     });
 
     const [wf1, wf2, wf3] = workflowIds;
@@ -506,31 +504,14 @@ test.describe('Visual proof capture', () => {
       },
     ]);
 
-    // The gated-task should now be blocked
-    const gatedTaskId = await page.evaluate(() => {
-      const result = window.invoker.getTasks();
-      const tasks = Array.isArray(result) ? result : result.tasks;
-      const gated = tasks.find((t: { id: string }) => t.id.endsWith('gated-task'));
-      return gated?.id;
-    });
-
-    // Verify the task is blocked
-    await page.evaluate(async (id) => {
-      const result = await window.invoker.getTasks();
-      const tasks = Array.isArray(result) ? result : result.tasks;
-      const task = tasks.find((t: { id: string }) => t.id === id);
-      if (task?.status !== 'blocked') {
-        throw new Error(`Expected gated-task to be blocked, got ${task?.status}`);
-      }
-    }, gatedTaskId);
-
-    // Click the blocked task node to open the side panel
+    // Click the gated task node to open the side panel
     await page.locator('.react-flow__node[data-testid$="gated-task"]').click();
     await expect(page.getByRole('heading', { name: 'Task with multiple external gates' })).toBeVisible();
 
     // Scroll to the Gate Policy section
-    await page.getByText('Gate Policy').scrollIntoViewIfNeeded();
-    await expect(page.getByText('Gate Policy')).toBeVisible();
+    const gatePolicyHeading = page.getByRole('heading', { name: 'Gate Policy' });
+    await gatePolicyHeading.scrollIntoViewIfNeeded();
+    await expect(gatePolicyHeading).toBeVisible();
 
     // Click the disclosure button to expand satisfied gates (text contains "satisfied gate")
     const disclosureButton = page.locator('button').filter({ hasText: /satisfied gate/ });

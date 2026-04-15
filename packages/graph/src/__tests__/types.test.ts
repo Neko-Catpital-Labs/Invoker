@@ -16,14 +16,14 @@ describe('createTaskState', () => {
     expect(task.createdAt).toBeInstanceOf(Date);
     expect(task.config.command).toBe('echo hi');
     expect(task.config.isReconciliation).toBe(true);
-    expect(task.execution).toEqual({});
+    expect(task.execution).toEqual({ generation: 0 });
   });
 
   it('defaults to empty config and execution', () => {
     const task = createTaskState('t2', 'plain task', []);
 
     expect(task.config).toEqual({});
-    expect(task.execution).toEqual({});
+    expect(task.execution).toEqual({ generation: 0 });
   });
 
   it('copies dependencies without shared reference', () => {
@@ -117,6 +117,6 @@ describe('createTaskState', () => {
     expect(clone.config).toEqual(original.config);
     expect(clone.id).toBe('clone');
     expect(clone.dependencies).toEqual(['b']);
-    expect(clone.execution).toEqual({});
+    expect(clone.execution).toEqual({ generation: 0 });
   });
 });

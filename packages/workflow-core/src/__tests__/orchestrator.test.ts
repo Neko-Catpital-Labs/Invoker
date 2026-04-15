@@ -4638,6 +4638,33 @@ describe('Orchestrator', () => {
       expect(queueStatus.running[0]?.taskId).toBe(taskId);
       expect(queueStatus.running[0]?.attemptId).toBe(selectedAttemptId);
     });
+
+    it('restartTask supersedes a claimed selected attempt before relaunching', () => {
+      orchestrator.loadPlan({
+        name: 'restart-claimed-test',
+        tasks: [
+          { id: 't1', description: 'Task 1' },
+        ],
+      });
+
+      const [started] = orchestrator.startExecution();
+      const taskId = started!.id;
+      const claimedAttemptId = orchestrator.getTask(taskId)?.execution.selectedAttemptId;
+      expect(claimedAttemptId).toBeTruthy();
+
+      orchestrator.refreshFromDb();
+      const restarted = orchestrator.restartTask(taskId);
+      const restartedTask = orchestrator.getTask(taskId);
+      const latestAttemptId = restartedTask?.execution.selectedAttemptId;
+
+      expect(restarted).toHaveLength(1);
+      expect(restarted[0]?.id).toBe(taskId);
+      expect(restarted[0]?.status).toBe('running');
+      expect(latestAttemptId).toBeTruthy();
+      expect(latestAttemptId).not.toBe(claimedAttemptId);
+      expect(persistence.loadAttempt(claimedAttemptId!)?.status).toBe('superseded');
+      expect(persistence.loadAttempt(latestAttemptId!)?.status).toBe('running');
+    });
   });
 
   // ── selectExperiments (multi-select) ────────────────────

@@ -13,6 +13,7 @@ describe('ResponseHandler (pure parser)', () => {
     return {
       requestId: 'req-1',
       actionId: 't1',
+      executionGeneration: 0,
       status: 'completed',
       outputs: { exitCode: 0 },
       ...overrides,
@@ -262,7 +263,7 @@ describe('ResponseHandler (pure parser)', () => {
     });
 
     it('normalizes unknown status into canonical failure envelope with stable error', () => {
-      const result = handler.parseResponse({ requestId: 'r', actionId: 'a', status: 'unknown_status', outputs: {} } as any);
+      const result = handler.parseResponse({ requestId: 'r', actionId: 'a', executionGeneration: 0, status: 'unknown_status', outputs: {} } as any);
       expect('error' in result).toBe(true);
       if ('error' in result) {
         expect(result.error).toContain('status must be one of:');
@@ -275,7 +276,7 @@ describe('ResponseHandler (pure parser)', () => {
     });
 
     it('normalizes typo status into canonical failure envelope', () => {
-      const result = handler.parseResponse({ requestId: 'r', actionId: 'a', status: 'complted', outputs: {} } as any);
+      const result = handler.parseResponse({ requestId: 'r', actionId: 'a', executionGeneration: 0, status: 'complted', outputs: {} } as any);
       expect('error' in result).toBe(true);
       if ('error' in result) {
         expect(result.error).toContain('status must be one of:');
@@ -283,7 +284,7 @@ describe('ResponseHandler (pure parser)', () => {
     });
 
     it('normalizes missing outputs field into canonical failure envelope', () => {
-      const result = handler.parseResponse({ requestId: 'r', actionId: 'a', status: 'completed' } as any);
+      const result = handler.parseResponse({ requestId: 'r', actionId: 'a', executionGeneration: 0, status: 'completed' } as any);
       expect('error' in result).toBe(true);
       if ('error' in result) {
         expect(result.error).toBe('outputs is required and must be an object');
@@ -291,7 +292,7 @@ describe('ResponseHandler (pure parser)', () => {
     });
 
     it('normalizes null outputs into canonical failure envelope', () => {
-      const result = handler.parseResponse({ requestId: 'r', actionId: 'a', status: 'completed', outputs: null } as any);
+      const result = handler.parseResponse({ requestId: 'r', actionId: 'a', executionGeneration: 0, status: 'completed', outputs: null } as any);
       expect('error' in result).toBe(true);
       if ('error' in result) {
         expect(result.error).toBe('outputs is required and must be an object');
@@ -299,7 +300,7 @@ describe('ResponseHandler (pure parser)', () => {
     });
 
     it('normalizes non-object outputs into canonical failure envelope', () => {
-      const result = handler.parseResponse({ requestId: 'r', actionId: 'a', status: 'completed', outputs: 'string' } as any);
+      const result = handler.parseResponse({ requestId: 'r', actionId: 'a', executionGeneration: 0, status: 'completed', outputs: 'string' } as any);
       expect('error' in result).toBe(true);
       if ('error' in result) {
         expect(result.error).toBe('outputs is required and must be an object');
@@ -311,7 +312,7 @@ describe('ResponseHandler (pure parser)', () => {
     // envelope for a payload whose outputs were never a valid object. This test
     // locks in both the error path AND the absence of the success path.
     it('normalizes array outputs into canonical failure envelope and does NOT emit completed', () => {
-      const result = handler.parseResponse({ requestId: 'r', actionId: 'a', status: 'completed', outputs: [] } as any);
+      const result = handler.parseResponse({ requestId: 'r', actionId: 'a', executionGeneration: 0, status: 'completed', outputs: [] } as any);
       expect('error' in result).toBe(true);
       expect('type' in result).toBe(false);
       if ('error' in result) {
@@ -320,7 +321,7 @@ describe('ResponseHandler (pure parser)', () => {
     });
 
     it('normalizes spawn_experiments without dagMutation into canonical failure envelope', () => {
-      const result = handler.parseResponse({ requestId: 'r', actionId: 'a', status: 'spawn_experiments', outputs: {} } as any);
+      const result = handler.parseResponse({ requestId: 'r', actionId: 'a', executionGeneration: 0, status: 'spawn_experiments', outputs: {} } as any);
       expect('error' in result).toBe(true);
       if ('error' in result) {
         expect(result.error).toBe('spawn_experiments status requires dagMutation.spawnExperiments');
@@ -328,7 +329,7 @@ describe('ResponseHandler (pure parser)', () => {
     });
 
     it('normalizes spawn_experiments with null dagMutation into canonical failure envelope', () => {
-      const result = handler.parseResponse({ requestId: 'r', actionId: 'a', status: 'spawn_experiments', outputs: {}, dagMutation: null } as any);
+      const result = handler.parseResponse({ requestId: 'r', actionId: 'a', executionGeneration: 0, status: 'spawn_experiments', outputs: {}, dagMutation: null } as any);
       expect('error' in result).toBe(true);
       if ('error' in result) {
         expect(result.error).toBe('spawn_experiments status requires dagMutation.spawnExperiments');
@@ -336,7 +337,7 @@ describe('ResponseHandler (pure parser)', () => {
     });
 
     it('normalizes spawn_experiments with empty dagMutation into canonical failure envelope', () => {
-      const result = handler.parseResponse({ requestId: 'r', actionId: 'a', status: 'spawn_experiments', outputs: {}, dagMutation: {} } as any);
+      const result = handler.parseResponse({ requestId: 'r', actionId: 'a', executionGeneration: 0, status: 'spawn_experiments', outputs: {}, dagMutation: {} } as any);
       expect('error' in result).toBe(true);
       if ('error' in result) {
         expect(result.error).toBe('spawn_experiments status requires dagMutation.spawnExperiments');
@@ -344,7 +345,7 @@ describe('ResponseHandler (pure parser)', () => {
     });
 
     it('normalizes select_experiment without dagMutation into canonical failure envelope', () => {
-      const result = handler.parseResponse({ requestId: 'r', actionId: 'a', status: 'select_experiment', outputs: {} } as any);
+      const result = handler.parseResponse({ requestId: 'r', actionId: 'a', executionGeneration: 0, status: 'select_experiment', outputs: {} } as any);
       expect('error' in result).toBe(true);
       if ('error' in result) {
         expect(result.error).toBe('select_experiment status requires dagMutation.selectExperiment');
@@ -352,7 +353,7 @@ describe('ResponseHandler (pure parser)', () => {
     });
 
     it('normalizes select_experiment with null dagMutation into canonical failure envelope', () => {
-      const result = handler.parseResponse({ requestId: 'r', actionId: 'a', status: 'select_experiment', outputs: {}, dagMutation: null } as any);
+      const result = handler.parseResponse({ requestId: 'r', actionId: 'a', executionGeneration: 0, status: 'select_experiment', outputs: {}, dagMutation: null } as any);
       expect('error' in result).toBe(true);
       if ('error' in result) {
         expect(result.error).toBe('select_experiment status requires dagMutation.selectExperiment');
@@ -360,7 +361,7 @@ describe('ResponseHandler (pure parser)', () => {
     });
 
     it('normalizes select_experiment with empty dagMutation into canonical failure envelope', () => {
-      const result = handler.parseResponse({ requestId: 'r', actionId: 'a', status: 'select_experiment', outputs: {}, dagMutation: {} } as any);
+      const result = handler.parseResponse({ requestId: 'r', actionId: 'a', executionGeneration: 0, status: 'select_experiment', outputs: {}, dagMutation: {} } as any);
       expect('error' in result).toBe(true);
       if ('error' in result) {
         expect(result.error).toBe('select_experiment status requires dagMutation.selectExperiment');
@@ -377,10 +378,10 @@ describe('ResponseHandler (pure parser)', () => {
         {},
         { requestId: 'r' },
         { requestId: 'r', actionId: 'a' },
-        { requestId: 'r', actionId: 'a', status: 'unknown' },
-        { requestId: 'r', actionId: 'a', status: 'completed' },
-        { requestId: 'r', actionId: 'a', status: 'spawn_experiments', outputs: {} },
-        { requestId: 'r', actionId: 'a', status: 'select_experiment', outputs: {} },
+        { requestId: 'r', actionId: 'a', executionGeneration: 0, status: 'unknown' },
+        { requestId: 'r', actionId: 'a', executionGeneration: 0, status: 'completed' },
+        { requestId: 'r', actionId: 'a', executionGeneration: 0, status: 'spawn_experiments', outputs: {} },
+        { requestId: 'r', actionId: 'a', executionGeneration: 0, status: 'select_experiment', outputs: {} },
       ];
 
       malformedInputs.forEach((input) => {
@@ -395,7 +396,7 @@ describe('ResponseHandler (pure parser)', () => {
     });
 
     it('ensures canonical envelopes are deterministic and stable', () => {
-      const input = { requestId: 'r', actionId: 'a', status: 'unknown_status', outputs: {} };
+      const input = { requestId: 'r', actionId: 'a', executionGeneration: 0, status: 'unknown_status', outputs: {} };
       const result1 = handler.parseResponse(input as any);
       const result2 = handler.parseResponse(input as any);
 
@@ -411,9 +412,9 @@ describe('ResponseHandler (pure parser)', () => {
       const cases = [
         { input: null, expectedSubstring: 'must be an object' },
         { input: { requestId: 'r' }, expectedSubstring: 'actionId' },
-        { input: { requestId: 'r', actionId: 'a' }, expectedSubstring: 'status' },
-        { input: { requestId: 'r', actionId: 'a', status: 'completed' }, expectedSubstring: 'outputs' },
-        { input: { requestId: 'r', actionId: 'a', status: 'spawn_experiments', outputs: {} }, expectedSubstring: 'spawnExperiments' },
+        { input: { requestId: 'r', actionId: 'a', executionGeneration: 0 }, expectedSubstring: 'status' },
+        { input: { requestId: 'r', actionId: 'a', executionGeneration: 0, status: 'completed' }, expectedSubstring: 'outputs' },
+        { input: { requestId: 'r', actionId: 'a', executionGeneration: 0, status: 'spawn_experiments', outputs: {} }, expectedSubstring: 'spawnExperiments' },
       ];
 
       cases.forEach(({ input, expectedSubstring }) => {

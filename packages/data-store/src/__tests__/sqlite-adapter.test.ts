@@ -80,6 +80,88 @@ describe('SQLiteAdapter', () => {
     });
   });
 
+  describe('failTaskAndAttempt', () => {
+    it('atomically persists failed task and attempt on file-backed databases', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-fail-'));
+      const dbPath = join(dir, 'invoker.db');
+
+      try {
+        const db = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        db.saveWorkflow(testWorkflow);
+
+        const attempt = createAttempt('t1', {
+          status: 'running',
+          startedAt: new Date(),
+        });
+        db.saveTask('wf-1', makeTask('t1', {
+          status: 'running',
+          execution: {
+            selectedAttemptId: attempt.id,
+            startedAt: new Date(),
+          },
+        }));
+        db.saveAttempt(attempt);
+
+        expect(() => {
+          db.failTaskAndAttempt(
+            't1',
+            {
+              status: 'failed',
+              execution: {
+                exitCode: 1,
+                error: 'boom',
+                completedAt: new Date(),
+              },
+            },
+            {
+              status: 'failed',
+              exitCode: 1,
+              error: 'boom',
+              completedAt: new Date(),
+            },
+          );
+        }).not.toThrow();
+
+        const [task] = db.loadTasks('wf-1');
+        expect(task.status).toBe('failed');
+        expect(task.execution.exitCode).toBe(1);
+        expect(task.execution.error).toBe('boom');
+
+        const [savedAttempt] = db.loadAttempts('t1');
+        expect(savedAttempt.status).toBe('failed');
+        expect(savedAttempt.exitCode).toBe(1);
+        expect(savedAttempt.error).toBe('boom');
+
+        db.close();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+  });
+
+  describe('selected-attempt reconciliation', () => {
+    it('does not override fixing_with_ai with a failed selected attempt', () => {
+      adapter.saveWorkflow(testWorkflow);
+      const attempt = createAttempt('t1', {
+        status: 'failed',
+        exitCode: 1,
+        error: 'boom',
+        completedAt: new Date(),
+      });
+      adapter.saveTask('wf-1', makeTask('t1', {
+        status: 'fixing_with_ai',
+        execution: {
+          selectedAttemptId: attempt.id,
+          startedAt: new Date(),
+        },
+      }));
+      adapter.saveAttempt(attempt);
+
+      const [task] = adapter.loadTasks('wf-1');
+      expect(task.status).toBe('fixing_with_ai');
+    });
+  });
+
   describe('saveWorkflow + loadWorkflow', () => {
     it('round-trips a workflow', () => {
       adapter.saveWorkflow(testWorkflow);

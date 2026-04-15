@@ -36,12 +36,12 @@ fi
 echo "==> case 3.6: merge gate ID=$MERGE_ID"
 
 STM=$(invoker_e2e_task_status "$MERGE_ID")
-if [ "$STM" != "awaiting_approval" ]; then
-  echo "FAIL case 3.6: expected merge gate=awaiting_approval, got '$STM'"
+if [ "$STM" != "review_ready" ]; then
+  echo "FAIL case 3.6: expected merge gate=review_ready, got '$STM'"
   invoker_e2e_run_headless status 2>&1 || true
   exit 1
 fi
-echo "==> case 3.6: confirmed merge gate=awaiting_approval"
+echo "==> case 3.6: confirmed merge gate=review_ready"
 
 # Verify gh stub was called with expected operations.
 GHLOG="$INVOKER_E2E_MARKER_ROOT/gh-calls.log"

@@ -763,12 +763,20 @@ async function headlessResume(
 
   // Relaunch tasks stuck in 'running' from a previous session
   const orphanRestarted: TaskState[] = [];
+  const activeTaskIds = orchestrator.getPersistedActiveTaskIds?.() ?? new Set<string>();
   for (const task of orchestrator.getAllTasks()) {
     if (
-      (task.status === 'running' || task.status === 'fixing_with_ai') &&
+      (
+        task.status === 'running'
+        || task.status === 'fixing_with_ai'
+        || (task.status === 'pending' && activeTaskIds.has(task.id))
+      ) &&
       task.config.workflowId === workflowId
     ) {
-      deps.logger.info(`relaunching orphaned in-flight task "${task.id}" (${task.status})`, { module: 'headless' });
+      deps.logger.info(
+        `relaunching orphaned in-flight task "${task.id}" (${task.status}${task.status === 'pending' ? '/claimed' : ''})`,
+        { module: 'headless' },
+      );
       const restarted = orchestrator.restartTask(task.id);
       orphanRestarted.push(...restarted.filter(t => t.status === 'running'));
     }
