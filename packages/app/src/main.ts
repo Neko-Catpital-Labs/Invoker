@@ -179,6 +179,15 @@ let logger: Logger = new FileAndDbLogger({ module: 'main' });
 const repoRoot = path.resolve(__dirname, '..', '..', '..');
 const invokerConfig: InvokerConfig = loadConfig();
 
+async function maybeDelayWorkflowResumeForTest(): Promise<void> {
+  if (process.env.NODE_ENV !== 'test') return;
+  const raw = process.env.INVOKER_TEST_RESUME_PENDING_DELAY_MS;
+  if (!raw) return;
+  const delayMs = Number(raw);
+  if (!Number.isFinite(delayMs) || delayMs <= 0) return;
+  await new Promise((resolve) => setTimeout(resolve, delayMs));
+}
+
 function assertDeleteAllEnabled(): void {
   if (process.env.INVOKER_ALLOW_DELETE_ALL === '1') return;
   throw new Error(
@@ -263,10 +272,7 @@ async function initServices(options?: InitServicesOptions): Promise<void> {
     ? (...args: unknown[]) => { process.stderr.write(args.join(' ') + '\n'); }
     : (msg: string) => { logger.info(msg, { module: 'init' }); };
   const workflows = persistence.listWorkflows();
-  for (const wf of workflows) {
-    const tasks = persistence.loadTasks(wf.id);
-    initLog(`[init] DB workflow "${wf.id}" (${wf.name}): ${tasks.length} tasks`);
-  }
+  initLog(`[init] Loaded ${workflows.length} workflows from DB`);
   initLog(`[init] Orchestrator graph has ${orchestrator.getAllTasks().length} tasks across ${workflows.length} workflows`);
 }
 
@@ -725,6 +731,8 @@ function setupGuiMode(): void {
   const autoFixInProgress = new Set<string>();
   let lastKnownWorkflowCount = 0;
   let lastActivityLogId = 0;
+  let uiInteractive = false;
+  let deferredStartupTriggered = false;
   const uiPerfStats = {
     mainDeltaToUi: 0,
     dbPollCreated: 0,
@@ -1158,9 +1166,10 @@ function setupGuiMode(): void {
     mainWindow = new BrowserWindow({
       width: 1200,
       height: 800,
-      // Hidden windows in NODE_ENV=test avoid focus stealing; visual assertions
-      // need a visible compositor-backed window for Electron screenshots.
-      show: process.env.NODE_ENV !== 'test' || enableTestCompositor,
+      // Show explicitly after load/timeout rather than relying on Electron's
+      // implicit initial map behavior, which has regressed on some Linux/X11
+      // sessions and leaves the BrowserWindow unmapped.
+      show: false,
       webPreferences: {
         preload: path.join(__dirname, 'preload.js'),
         contextIsolation: true,
@@ -1188,6 +1197,44 @@ function setupGuiMode(): void {
       });
     }
 
+    mainWindow.webContents.on('did-finish-load', () => {
+      logger.info('main window did-finish-load', { module: 'window' });
+    });
+
+    mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
+      logger.error(
+        `main window did-fail-load: code=${errorCode} desc=${errorDescription} url=${validatedURL}`,
+        { module: 'window' },
+      );
+    });
+
+    mainWindow.webContents.on('render-process-gone', (_event, details) => {
+      logger.error(
+        `main window render-process-gone: reason=${details.reason} exitCode=${details.exitCode}`,
+        { module: 'window' },
+      );
+    });
+
+    const shouldShowWindow = process.env.NODE_ENV !== 'test' || enableTestCompositor;
+    if (shouldShowWindow) {
+      let showTriggered = false;
+      const showWindow = (): void => {
+        if (!mainWindow || mainWindow.isDestroyed() || showTriggered) return;
+        showTriggered = true;
+        logger.info('main window show()', { module: 'window' });
+        mainWindow.show();
+        mainWindow.focus();
+        uiInteractive = true;
+        startDeferredStartupWork();
+      };
+
+      mainWindow.once('ready-to-show', showWindow);
+      setTimeout(showWindow, 1500).unref?.();
+    } else {
+      uiInteractive = true;
+      startDeferredStartupWork();
+    }
+
     mainWindow.on('closed', () => { mainWindow = null; });
 
     mainWindow.webContents.setWindowOpenHandler(({ url }) => {
@@ -1210,6 +1257,110 @@ function setupGuiMode(): void {
       }
       return { action: 'deny' as const };
     });
+  }
+
+  function seedUiSnapshotCache(): void {
+    lastKnownWorkflowCount = persistence.listWorkflows().length;
+    lastKnownTaskStates.clear();
+    for (const task of orchestrator.getAllTasks()) {
+      lastKnownTaskStates.set(task.id, JSON.stringify(task));
+    }
+  }
+
+  function startDeferredStartupWork(): void {
+    if (deferredStartupTriggered) return;
+    deferredStartupTriggered = true;
+
+    setTimeout(() => {
+      if (!ownerMode) return;
+
+      apiServer = startApiServer({
+        logger,
+        orchestrator,
+        persistence,
+        executorRegistry,
+        taskExecutor: requireTaskExecutor(),
+        autoApproveAIFixes: invokerConfig.autoApproveAIFixes,
+        killRunningTask,
+        cancelTask: performCancelTask,
+        cancelWorkflow: performCancelWorkflow,
+      });
+
+      if (ownerMode && workflowMutationCoordinator) {
+        void (async () => {
+          try {
+            await maybeDelayWorkflowResumeForTest();
+            await workflowMutationCoordinator.resumePending();
+          } catch (err) {
+            logger.error(
+              `resumePending failed: ${err instanceof Error ? err.stack ?? err.message : String(err)}`,
+              { module: 'init' },
+            );
+          }
+        })();
+      }
+
+      startSlackBot(requireTaskExecutor(), taskHandles).catch((err) => {
+        logger.info(`Not started: ${err instanceof Error ? err.message : String(err)}`, { module: 'slack' });
+      });
+
+      dbPollInterval = setInterval(() => {
+        if (!mainWindow || mainWindow.isDestroyed()) return;
+        try {
+          const workflows = persistence.listWorkflows();
+
+          if (workflows.length !== lastKnownWorkflowCount) {
+            const msg = `Workflow count changed: ${lastKnownWorkflowCount} → ${workflows.length}`;
+            logger.info(msg, { module: 'db-poll' });
+            try { persistence.writeActivityLog('db-poll', 'info', msg); } catch { /* db locked */ }
+            lastKnownWorkflowCount = workflows.length;
+            mainWindow.webContents.send('invoker:workflows-changed', workflows);
+
+            orchestrator.syncAllFromDb();
+            logger.info(`Synced orchestrator for all ${workflows.length} workflows`, { module: 'db-poll' });
+          }
+
+          for (const wf of workflows) {
+            if (wf.status === 'completed' || wf.status === 'failed') continue;
+            const tasks = persistence.loadTasks(wf.id);
+            for (const task of tasks) {
+              const snapshot = JSON.stringify(task);
+              const prev = lastKnownTaskStates.get(task.id);
+              if (!prev) {
+                const msg = `New task: ${task.id} (${task.status})`;
+                logger.info(msg, { module: 'db-poll' });
+                try { persistence.writeActivityLog('db-poll', 'info', msg); } catch { /* db locked */ }
+                lastKnownTaskStates.set(task.id, snapshot);
+                uiPerfStats.dbPollCreated += 1;
+                mainWindow.webContents.send('invoker:task-delta', { type: 'created', task });
+              } else if (prev !== snapshot) {
+                const msg = `Task updated: ${task.id} (${task.status})`;
+                logger.info(msg, { module: 'db-poll' });
+                try { persistence.writeActivityLog('db-poll', 'info', msg); } catch { /* db locked */ }
+                lastKnownTaskStates.set(task.id, snapshot);
+                uiPerfStats.dbPollUpdatedAsCreated += 1;
+                mainWindow.webContents.send('invoker:task-delta', { type: 'created', task });
+              }
+            }
+          }
+        } catch {
+          // DB might be locked — skip this tick
+        }
+      }, 2000);
+
+      activityPollInterval = setInterval(() => {
+        if (!mainWindow || mainWindow.isDestroyed()) return;
+        try {
+          const entries = persistence.getActivityLogs(lastActivityLogId);
+          if (entries.length > 0) {
+            lastActivityLogId = entries[entries.length - 1].id;
+            mainWindow.webContents.send('invoker:activity-log', entries);
+          }
+        } catch {
+          // DB might be locked — skip this tick
+        }
+      }, 2000);
+    }, 0);
   }
 
   app.whenReady().then(async () => {
@@ -1303,38 +1454,17 @@ function setupGuiMode(): void {
       requireTaskExecutor().resumeMergeGatePolling();
     }
 
-    if (ownerMode) {
-      apiServer = startApiServer({
-        logger,
-        orchestrator,
-        persistence,
-        executorRegistry,
-        taskExecutor: requireTaskExecutor(),
-        autoApproveAIFixes: invokerConfig.autoApproveAIFixes,
-        killRunningTask,
-        cancelTask: performCancelTask,
-        cancelWorkflow: performCancelWorkflow,
-      });
-    }
-
     const dbPath = path.join(resolveInvokerHomeRoot(), 'invoker.db');
     logger.info(`Database: ${dbPath}`, { module: 'init' });
     logger.info(`Repo root: ${repoRoot}`, { module: 'init' });
     logger.info(`Config: disableAutoRunOnStartup=${invokerConfig.disableAutoRunOnStartup ?? false}`, { module: 'init' });
-
-    // ── Start Slack bot if env vars are configured ───
-    if (ownerMode) {
-      startSlackBot(requireTaskExecutor(), taskHandles).catch((err) => {
-        logger.info(`Not started: ${err instanceof Error ? err.message : String(err)}`, { module: 'slack' });
-      });
-    }
 
     // Forward deltas to renderer and keep snapshot cache in sync so
     // the db-poll doesn't re-emit deltas the messageBus already delivered.
     messageBus.subscribe(Channels.TASK_DELTA, (delta: unknown) => {
       uiPerfStats.mainDeltaToUi += 1;
       logger.debug(`delta→ui: ${JSON.stringify(delta)}`, { module: 'ui' });
-      if (mainWindow && !mainWindow.isDestroyed()) {
+      if (mainWindow && !mainWindow.isDestroyed() && uiInteractive) {
         mainWindow.webContents.send('invoker:task-delta', delta);
       }
       applyDelta(delta as TaskDelta, lastKnownTaskStates, orchestrator);
@@ -1367,7 +1497,7 @@ function setupGuiMode(): void {
     }, 10000);
 
     messageBus.subscribe(Channels.TASK_OUTPUT, (data: unknown) => {
-      if (mainWindow && !mainWindow.isDestroyed()) {
+      if (mainWindow && !mainWindow.isDestroyed() && uiInteractive) {
         mainWindow.webContents.send('invoker:task-output', data);
       }
     });
@@ -2089,65 +2219,6 @@ function setupGuiMode(): void {
     });
 
     // ── DB Polling — detect external workflow changes ───
-    dbPollInterval = setInterval(() => {
-      if (!mainWindow || mainWindow.isDestroyed()) return;
-      try {
-        const workflows = persistence.listWorkflows();
-
-        if (workflows.length !== lastKnownWorkflowCount) {
-          const msg = `Workflow count changed: ${lastKnownWorkflowCount} → ${workflows.length}`;
-          logger.info(msg, { module: 'db-poll' });
-          try { persistence.writeActivityLog('db-poll', 'info', msg); } catch { /* db locked */ }
-          lastKnownWorkflowCount = workflows.length;
-          mainWindow.webContents.send('invoker:workflows-changed', workflows);
-
-          orchestrator.syncAllFromDb();
-          logger.info(`Synced orchestrator for all ${workflows.length} workflows`, { module: 'db-poll' });
-          lastKnownTaskStates.clear();
-        }
-
-        for (const wf of workflows) {
-          if (wf.status === 'completed' || wf.status === 'failed') continue;
-          const tasks = persistence.loadTasks(wf.id);
-          for (const task of tasks) {
-            const snapshot = JSON.stringify(task);
-            const prev = lastKnownTaskStates.get(task.id);
-            if (!prev) {
-              const msg = `New task: ${task.id} (${task.status})`;
-              logger.info(msg, { module: 'db-poll' });
-              try { persistence.writeActivityLog('db-poll', 'info', msg); } catch { /* db locked */ }
-              lastKnownTaskStates.set(task.id, snapshot);
-              uiPerfStats.dbPollCreated += 1;
-              mainWindow.webContents.send('invoker:task-delta', { type: 'created', task });
-            } else if (prev !== snapshot) {
-              const msg = `Task updated: ${task.id} (${task.status})`;
-              logger.info(msg, { module: 'db-poll' });
-              try { persistence.writeActivityLog('db-poll', 'info', msg); } catch { /* db locked */ }
-              lastKnownTaskStates.set(task.id, snapshot);
-              uiPerfStats.dbPollUpdatedAsCreated += 1;
-              mainWindow.webContents.send('invoker:task-delta', { type: 'created', task });
-            }
-          }
-        }
-      } catch {
-        // DB might be locked — skip this tick
-      }
-    }, 2000);
-
-    // ── Activity Log Polling — detect Slack/external activity ───
-    activityPollInterval = setInterval(() => {
-      if (!mainWindow || mainWindow.isDestroyed()) return;
-      try {
-        const entries = persistence.getActivityLogs(lastActivityLogId);
-        if (entries.length > 0) {
-          lastActivityLogId = entries[entries.length - 1].id;
-          mainWindow.webContents.send('invoker:activity-log', entries);
-        }
-      } catch {
-        // DB might be locked — skip this tick
-      }
-    }, 2000);
-
     ipcMain.handle('invoker:get-activity-logs', () => {
       return persistence.getActivityLogs(0);
     });
@@ -2167,10 +2238,7 @@ function setupGuiMode(): void {
       });
     });
 
-    if (ownerMode && workflowMutationCoordinator) {
-      await workflowMutationCoordinator.resumePending();
-    }
-
+    seedUiSnapshotCache();
     createWindow();
 
     app.on('activate', () => {
