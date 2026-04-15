@@ -10,7 +10,7 @@ import type { TaskStateChanges } from '@invoker/workflow-core';
 import { test as base, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test';
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { stringify as yamlStringify } from 'yaml';
 
@@ -36,8 +36,10 @@ export const test = base.extend<ElectronFixtures>({
     const claudeMarker = path.join(repoRoot, 'scripts', 'e2e-dry-run', 'fixtures', 'claude-marker.sh');
     const stubDir = path.join(testDir, 'claude-stub');
     const markerRoot = path.join(testDir, 'e2e-markers');
+    const configPath = path.join(testDir, 'e2e-config.json');
     await fs.mkdir(stubDir, { recursive: true });
     await fs.mkdir(markerRoot, { recursive: true });
+    writeFileSync(configPath, JSON.stringify({ autoFixRetries: 0 }), 'utf8');
     try {
       await fs.symlink(claudeMarker, path.join(stubDir, 'claude'));
     } catch {
@@ -55,6 +57,8 @@ export const test = base.extend<ElectronFixtures>({
         ...process.env,
         NODE_ENV: 'test',
         INVOKER_DB_DIR: testDir,
+        INVOKER_ALLOW_DELETE_ALL: '1',
+        INVOKER_REPO_CONFIG_PATH: configPath,
         INVOKER_E2E_MARKER_ROOT: markerRoot,
         INVOKER_CLAUDE_FIX_COMMAND: claudeMarker,
         PATH: pathEnv,
@@ -168,6 +172,10 @@ export async function getTasks(page: Page) {
   return Array.isArray(result) ? result : result.tasks;
 }
 
+function matchesTaskId(actualId: string, requestedId: string): boolean {
+  return actualId === requestedId || actualId.endsWith(`/${requestedId}`);
+}
+
 /** Wait for a specific task to reach a given status via polling. */
 export async function waitForTaskStatus(
   page: Page,
@@ -177,9 +185,9 @@ export async function waitForTaskStatus(
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const result = await page.evaluate(() => window.invoker.getTasks());
+    const result = await page.evaluate(() => window.invoker.getTasks(true));
     const tasks = Array.isArray(result) ? result : result.tasks;
-    const task = tasks.find((t: any) => t.id === taskId);
+    const task = tasks.find((t: any) => matchesTaskId(t.id, taskId));
     if (task && task.status === status) return;
     await page.waitForTimeout(300);
   }
@@ -194,9 +202,9 @@ export async function waitForTaskStarted(
 ): Promise<string> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const result = await page.evaluate(() => window.invoker.getTasks());
+    const result = await page.evaluate(() => window.invoker.getTasks(true));
     const tasks = Array.isArray(result) ? result : result.tasks;
-    const task = tasks.find((t: any) => t.id === taskId);
+    const task = tasks.find((t: any) => matchesTaskId(t.id, taskId));
     if (task && task.status !== 'pending') return task.status;
     await page.waitForTimeout(100);
   }

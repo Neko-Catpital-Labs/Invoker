@@ -612,12 +612,54 @@ export class Orchestrator {
   private getSelectedAttempt(task: TaskState | undefined): Attempt | undefined {
     const attemptId = task?.execution.selectedAttemptId;
     if (!attemptId) return undefined;
-    return this.persistence.loadAttempt(attemptId);
+    return this.loadAttemptById(attemptId);
+  }
+
+  private loadAttemptById(attemptId: string | undefined): Attempt | undefined {
+    if (!attemptId) return undefined;
+    const loadAttempt = (this.persistence as Partial<OrchestratorPersistence>).loadAttempt;
+    if (typeof loadAttempt !== 'function') return undefined;
+    return loadAttempt.call(this.persistence, attemptId);
+  }
+
+  private isAttemptLeaseActive(attempt: Attempt | undefined, now: number = Date.now()): boolean {
+    if (!attempt) return false;
+    if (attempt.status !== 'claimed' && attempt.status !== 'running') return false;
+    if (!attempt.leaseExpiresAt) return true;
+    return attempt.leaseExpiresAt.getTime() >= now;
+  }
+
+  private isTaskExecutionActive(
+    task: TaskState,
+    attempt: Attempt | undefined,
+    now: number = Date.now(),
+  ): boolean {
+    if (attempt && this.isAttemptLeaseActive(attempt, now)) {
+      return task.status === 'running'
+        || task.status === 'fixing_with_ai'
+        || (
+          this.deferRunningUntilLaunch
+          && task.status === 'pending'
+          && task.execution.selectedAttemptId === attempt.id
+        );
+    }
+
+    return task.status === 'running' || task.status === 'fixing_with_ai';
+  }
+
+  private countActivePersistedAttempts(now: number = Date.now()): number {
+    let count = 0;
+    for (const task of this.stateMachine.getAllTasks()) {
+      if (this.isTaskExecutionActive(task, this.getSelectedAttempt(task), now)) {
+        count += 1;
+      }
+    }
+    return count;
   }
 
   private ensureCurrentPendingAttempt(task: TaskState): string {
     const selected = this.getSelectedAttempt(task);
-    if (selected && (selected.status === 'pending' || selected.status === 'running' || selected.status === 'needs_input')) {
+    if (selected && (selected.status === 'pending' || selected.status === 'claimed' || selected.status === 'running' || selected.status === 'needs_input')) {
       return selected.id;
     }
 
@@ -625,7 +667,7 @@ export class Orchestrator {
     const attempts =
       typeof loadAttempts === 'function' ? loadAttempts.call(this.persistence, task.id) : [];
     const current = attempts[attempts.length - 1];
-    if (current && (current.status === 'pending' || current.status === 'running' || current.status === 'needs_input')) {
+    if (current && (current.status === 'pending' || current.status === 'claimed' || current.status === 'running' || current.status === 'needs_input')) {
       if (task.execution.selectedAttemptId !== current.id) {
         this.writeAndSync(task.id, { execution: { selectedAttemptId: current.id } });
       }
@@ -2397,25 +2439,21 @@ export class Orchestrator {
   } {
     this.refreshFromDb();
     const tasks = this.stateMachine.getAllTasks();
+    const now = Date.now();
     const activeAttempts = tasks
       .map((task) => {
         const attemptId = task.execution.selectedAttemptId;
-        const attempt = attemptId ? this.persistence.loadAttempt(attemptId) : undefined;
+        const attempt = this.loadAttemptById(attemptId);
         return { task, attemptId, attempt };
       })
-      .filter(({ attempt }) => {
-        if (!attempt) return false;
-        if (attempt.status !== 'claimed' && attempt.status !== 'running') return false;
-        if (!attempt.leaseExpiresAt) return true;
-        return attempt.leaseExpiresAt.getTime() >= Date.now();
-      });
+      .filter(({ task, attempt }) => this.isTaskExecutionActive(task, attempt, now));
     const queuedTasks = this.stateMachine
       .getReadyTasks()
       .filter((task) => task.status === 'pending')
       .filter((task) => this.getExternalDependencyBlocker(task) === undefined)
       .map((task) => {
         const attempt = task.execution.selectedAttemptId
-          ? this.persistence.loadAttempt(task.execution.selectedAttemptId)
+          ? this.loadAttemptById(task.execution.selectedAttemptId)
           : undefined;
         return {
           taskId: task.id,
@@ -2831,24 +2869,17 @@ export class Orchestrator {
     if (!task) return;
 
     const attemptId = this.ensureCurrentPendingAttempt(task);
-    const currentAttempt = this.persistence.loadAttempt(attemptId);
+    const currentAttempt = this.loadAttemptById(attemptId);
     if ((currentAttempt?.queuePriority ?? 0) !== priority) {
       this.taskRepository.updateAttempt(attemptId, { queuePriority: priority });
     }
-    if (this.scheduler.isRunning(attemptId)) {
-      if (
-        task.status === 'running' ||
-        task.status === 'fixing_with_ai' ||
-        (
-          this.deferRunningUntilLaunch
-          && task.status === 'pending'
-          && task.execution.selectedAttemptId === attemptId
-        )
-      ) {
+    if (task.execution.selectedAttemptId === attemptId && this.isAttemptLeaseActive(currentAttempt)) {
+      if (this.isTaskExecutionActive(task, currentAttempt)) {
         return;
       }
-      // Recover from stale scheduler slot (e.g. process death/sync drift).
-      this.scheduler.completeJob(attemptId);
+      try {
+        this.taskRepository.updateAttempt(attemptId, { status: 'superseded' });
+      } catch { /* best effort */ }
     }
     const queuedJob = this.scheduler
       .getQueuedJobs()
@@ -2970,31 +3001,15 @@ export class Orchestrator {
 
   /** Drain the scheduler queue, starting tasks that fit the concurrency limit. */
   private drainScheduler(): TaskState[] {
-    for (const runningJob of this.scheduler.getRunningJobs()) {
-      const task = this.stateGetTask(runningJob.taskId);
-      const isCurrentAttempt = task?.execution.selectedAttemptId === runningJob.attemptId;
-      const isLaunchInProgress =
-        this.deferRunningUntilLaunch
-        && task?.status === 'pending'
-        && isCurrentAttempt;
-      if (!task || !isCurrentAttempt || (!isLaunchInProgress && task.status !== 'running' && task.status !== 'fixing_with_ai')) {
-        console.warn(
-          `[orchestrator] drainScheduler: freeing leaked scheduler slot for "${runningJob.attemptId}" ` +
-            `(task=${runningJob.taskId} actual status: ${task?.status ?? 'not found'} currentAttempt=${task?.execution.selectedAttemptId ?? 'none'})`,
-        );
-        this.scheduler.completeJob(runningJob.attemptId);
-      }
-    }
-
     const started: TaskState[] = [];
-    let job = this.scheduler.dequeue();
-    while (job) {
+    let availableSlots = Math.max(0, this.maxConcurrency - this.countActivePersistedAttempts());
+    let job = availableSlots > 0 ? this.scheduler.takeNext() : null;
+    while (job && availableSlots > 0) {
       const task = this.stateGetTask(job.taskId);
       console.log(`[orchestrator] drainScheduler: dequeued "${job.taskId}" actual status=${task?.status ?? 'NOT_FOUND'}`);
       if (!task || task.status !== 'pending') {
         console.log(`[orchestrator] drainScheduler: SKIPPING "${job.taskId}" — not pending`);
-        this.scheduler.completeJob(job.attemptId ?? job.taskId);
-        job = this.scheduler.dequeue();
+        job = this.scheduler.takeNext();
         continue;
       }
 
@@ -3002,6 +3017,16 @@ export class Orchestrator {
       const attemptId = job.attemptId ?? this.ensureCurrentPendingAttempt(task);
       if (task.execution.selectedAttemptId !== attemptId) {
         this.writeAndSync(job.taskId, { execution: { selectedAttemptId: attemptId } });
+      }
+      const currentAttempt = this.loadAttemptById(attemptId);
+      if (this.isAttemptLeaseActive(currentAttempt, now.getTime())) {
+        if (this.isTaskExecutionActive(task, currentAttempt, now.getTime())) {
+          job = availableSlots > 0 ? this.scheduler.takeNext() : null;
+          continue;
+        }
+        try {
+          this.taskRepository.updateAttempt(attemptId, { status: 'superseded' });
+        } catch { /* best effort */ }
       }
 
       if (this.deferRunningUntilLaunch) {
@@ -3072,7 +3097,8 @@ export class Orchestrator {
         } catch { /* best effort — never break existing flow */ }
       }
 
-      job = this.scheduler.dequeue();
+      availableSlots -= 1;
+      job = availableSlots > 0 ? this.scheduler.takeNext() : null;
     }
     return started;
   }

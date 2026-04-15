@@ -9,6 +9,10 @@
 
 import { test, expect, loadPlan, startPlan, waitForTaskStatus, E2E_REPO_URL } from './fixtures/electron-app.js';
 
+function findTask(tasks: Array<{ id: string; status: string }>, taskId: string) {
+  return tasks.find((t) => t.id === taskId || t.id.endsWith(`/${taskId}`));
+}
+
 const FAILING_PLAN = {
   name: 'E2E Restart Test Plan',
   repoUrl: E2E_REPO_URL,
@@ -41,11 +45,11 @@ test.describe('Restart failed task', () => {
     // Verify task-fail shows as failed
     let result = await page.evaluate(() => window.invoker.getTasks());
     const failedTasks = Array.isArray(result) ? result : result.tasks;
-    const failTask = failedTasks.find((t: any) => t.id === 'task-fail');
+    const failTask = findTask(failedTasks, 'task-fail');
     expect(failTask?.status).toBe('failed');
 
     // Right-click the failed task node to open context menu
-    await page.locator('[data-testid="rf__node-task-fail"]').click({ button: 'right' });
+    await page.locator('.react-flow__node[data-testid$="task-fail"]').click({ button: 'right' });
 
     const restartBtn = page.locator('button').filter({ hasText: 'Restart Task' });
     await expect(restartBtn).toBeVisible({ timeout: 2000 });
@@ -64,7 +68,7 @@ test.describe('Restart failed task', () => {
     // Verify the task was actually restarted by checking startedAt changed
     result = await page.evaluate(() => window.invoker.getTasks());
     const afterTasks = Array.isArray(result) ? result : result.tasks;
-    const afterFail = afterTasks.find((t: any) => t.id === 'task-fail');
+    const afterFail = findTask(afterTasks, 'task-fail');
     expect(afterFail?.status).toBe('failed');
   });
 
@@ -84,15 +88,15 @@ test.describe('Restart failed task', () => {
 
     // Now load a second plan with a failing task
     // This creates a NEW workflow — the orchestrator must re-hydrate
-    await page.evaluate((p) => window.invoker.loadPlan(p), FAILING_PLAN);
-    await page.locator('[data-testid="rf__node-task-pass"]').waitFor({ state: 'visible', timeout: 10000 });
+    await loadPlan(page, FAILING_PLAN);
+    await page.locator('.react-flow__node[data-testid$="task-pass"]').waitFor({ state: 'visible', timeout: 10000 });
     await startPlan(page);
 
     await waitForTaskStatus(page, 'task-pass', 'completed');
     await waitForTaskStatus(page, 'task-fail', 'failed');
 
     // Right-click → Restart should work even though this is a different workflow
-    await page.locator('[data-testid="rf__node-task-fail"]').click({ button: 'right' });
+    await page.locator('.react-flow__node[data-testid$="task-fail"]').click({ button: 'right' });
     const restartBtn = page.locator('button').filter({ hasText: 'Restart Task' });
     await expect(restartBtn).toBeVisible({ timeout: 2000 });
     await restartBtn.click();

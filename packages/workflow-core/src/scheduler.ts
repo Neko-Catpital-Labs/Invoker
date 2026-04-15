@@ -95,6 +95,19 @@ export class TaskScheduler {
   }
 
   /**
+   * Remove and return the next queued job without mutating the running set.
+   *
+   * Orchestrator uses this when persisted attempt leases, not in-memory state,
+   * are the source of truth for occupancy.
+   */
+  takeNext(): TaskJob | null {
+    if (this.queue.length === 0) {
+      return null;
+    }
+    return this.queue.shift() ?? null;
+  }
+
+  /**
    * Remove and return the highest-priority job if under maxConcurrency limit.
    * Returns null if at capacity or queue empty.
    */

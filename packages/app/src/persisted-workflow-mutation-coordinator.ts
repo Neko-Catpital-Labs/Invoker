@@ -1,4 +1,9 @@
-import type { SQLiteAdapter, WorkflowMutationIntent, WorkflowMutationPriority } from '@invoker/data-store';
+import {
+  WORKFLOW_MUTATION_LEASE_MS,
+  type SQLiteAdapter,
+  type WorkflowMutationIntent,
+  type WorkflowMutationPriority,
+} from '@invoker/data-store';
 
 type Deferred<T> = {
   resolve: (value: T) => void;
@@ -8,6 +13,7 @@ type Deferred<T> = {
 export class PersistedWorkflowMutationCoordinator {
   private readonly inFlightPromises = new Map<number, Deferred<unknown>>();
   private readonly drainingWorkflows = new Set<string>();
+  private readonly leaseHeartbeatMs = Math.max(1_000, Math.floor(WORKFLOW_MUTATION_LEASE_MS / 3));
 
   constructor(
     private readonly persistence: SQLiteAdapter,
@@ -30,7 +36,7 @@ export class PersistedWorkflowMutationCoordinator {
   }
 
   async resumePending(): Promise<void> {
-    this.persistence.requeueRunningWorkflowMutationIntents();
+    this.persistence.requeueExpiredWorkflowMutationLeases();
     const workflowIds = new Set(
       this.persistence.listWorkflowMutationIntents(undefined, ['queued']).map((intent) => intent.workflowId),
     );
@@ -43,18 +49,32 @@ export class PersistedWorkflowMutationCoordinator {
     }
     this.drainingWorkflows.add(workflowId);
     try {
+      if (!this.persistence.claimWorkflowMutationLease(workflowId, this.ownerId)) {
+        return;
+      }
       let intent = this.persistence.claimNextWorkflowMutationIntent(workflowId, this.ownerId);
       while (intent) {
-        await this.executeIntent(intent);
+        this.persistence.renewWorkflowMutationLease(workflowId, this.ownerId, {
+          activeIntentId: intent.id,
+          activeMutationKind: intent.channel,
+        });
+        await this.executeIntent(workflowId, intent);
         intent = this.persistence.claimNextWorkflowMutationIntent(workflowId, this.ownerId);
       }
+      this.persistence.releaseWorkflowMutationLease(workflowId, this.ownerId);
     } finally {
       this.drainingWorkflows.delete(workflowId);
     }
   }
 
-  private async executeIntent(intent: WorkflowMutationIntent): Promise<void> {
+  private async executeIntent(workflowId: string, intent: WorkflowMutationIntent): Promise<void> {
     const deferred = this.inFlightPromises.get(intent.id);
+    const leaseHeartbeat = setInterval(() => {
+      this.persistence.renewWorkflowMutationLease(workflowId, this.ownerId, {
+        activeIntentId: intent.id,
+        activeMutationKind: intent.channel,
+      });
+    }, this.leaseHeartbeatMs);
     try {
       const result = await this.dispatch(intent.channel, intent.args);
       this.persistence.completeWorkflowMutationIntent(intent.id);
@@ -64,6 +84,8 @@ export class PersistedWorkflowMutationCoordinator {
       this.persistence.failWorkflowMutationIntent(intent.id, message);
       deferred?.reject(error);
     } finally {
+      clearInterval(leaseHeartbeat);
+      this.persistence.renewWorkflowMutationLease(workflowId, this.ownerId);
       this.inFlightPromises.delete(intent.id);
     }
   }

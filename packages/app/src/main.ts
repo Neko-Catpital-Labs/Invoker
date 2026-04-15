@@ -1364,31 +1364,16 @@ function setupGuiMode(): void {
 
     registerGuiMutationHandler('invoker:clear', async () => {
       logger.info('clear — stopping all tasks and resetting DAG', { module: 'ipc' });
-      // Capture current workflow before destroying state
       const workflows = persistence.listWorkflows();
-      const currentWorkflowId = workflows.length > 0 ? workflows[0].id : null;
 
-      await Promise.all(executorRegistry.getAll().map(f => f.destroyAll()));
-      const allTasks = orchestrator.getAllTasks();
-      for (const task of allTasks) {
-        if (task.status === 'running' || task.status === 'fixing_with_ai') {
-          orchestrator.handleWorkerResponse({
-            requestId: `clear-${task.id}`,
-            actionId: task.id,
-            executionGeneration: task.execution.generation ?? 0,
-            status: 'failed',
-            outputs: { exitCode: 1, error: 'Cleared by user' },
-          });
+      for (const workflow of workflows) {
+        try {
+          await performCancelWorkflow(workflow.id);
+        } catch (err) {
+          logger.error(`clear: failed to cancel workflow "${workflow.id}": ${err}`, { module: 'ipc' });
         }
       }
-
-      // Mark the workflow as failed in the DB so it doesn't stay "running" forever
-      if (currentWorkflowId) {
-        persistence.updateWorkflow(currentWorkflowId, {
-          status: 'failed',
-          updatedAt: new Date().toISOString(),
-        });
-      }
+      await Promise.all(executorRegistry.getAll().map(f => f.destroyAll().catch(() => undefined)));
 
       orchestrator = new Orchestrator({
         persistence,
@@ -1479,9 +1464,20 @@ function setupGuiMode(): void {
       const tasks = orchestrator.getAllTasks();
       const workflows = persistence.listWorkflows();
       if (forceRefresh) {
+        const previousTaskIds = new Set(lastKnownTaskStates.keys());
         lastKnownTaskStates.clear();
         for (const task of tasks) {
           lastKnownTaskStates.set(task.id, JSON.stringify(task));
+          previousTaskIds.delete(task.id);
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('invoker:task-delta', { type: 'created', task });
+          }
+        }
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          for (const removedTaskId of previousTaskIds) {
+            mainWindow.webContents.send('invoker:task-delta', { type: 'removed', taskId: removedTaskId });
+          }
+          mainWindow.webContents.send('invoker:workflows-changed', workflows);
         }
         lastKnownWorkflowCount = workflows.length;
       }

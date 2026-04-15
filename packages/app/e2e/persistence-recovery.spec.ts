@@ -30,7 +30,7 @@ const SLOW_PLAN = {
 test.describe('Persistence recovery', () => {
   test('clear marks workflow as failed in DB', async ({ page }) => {
     // Load and start a slow plan
-    await page.evaluate((p) => window.invoker.loadPlan(p), SLOW_PLAN);
+    await loadPlan(page, SLOW_PLAN);
     await page.evaluate(() => window.invoker.start());
 
     // Wait for the slow task to start running
@@ -38,7 +38,7 @@ test.describe('Persistence recovery', () => {
       async () => {
         const result = await window.invoker.getTasks();
         const tasks = Array.isArray(result) ? result : result.tasks;
-        return tasks.some((t: any) => t.id === 'slow-task' && t.status === 'running');
+        return tasks.some((t: any) => (t.id === 'slow-task' || t.id.endsWith('/slow-task')) && t.status === 'running');
       },
       null,
       { timeout: 10000 },
@@ -103,11 +103,14 @@ test.describe('Persistence recovery', () => {
     );
 
     const tasks = result.tasks as any[];
-    expect(tasks).toHaveLength(3);
-
-    const alpha = tasks.find((t: any) => t.id === 'task-alpha');
-    const beta = tasks.find((t: any) => t.id === 'task-beta');
+    const alpha = tasks.find((t: any) => t.id === 'task-alpha' || t.id.endsWith('/task-alpha'));
+    const beta = tasks.find((t: any) => t.id === 'task-beta' || t.id.endsWith('/task-beta'));
+    const gamma = tasks.find((t: any) => t.id === 'task-gamma' || t.id.endsWith('/task-gamma'));
+    expect(alpha).toBeTruthy();
+    expect(beta).toBeTruthy();
+    expect(gamma).toBeTruthy();
     expect(alpha.status).toBe('completed');
     expect(beta.status).toBe('completed');
+    expect(gamma.status).toBe('failed');
   });
 });

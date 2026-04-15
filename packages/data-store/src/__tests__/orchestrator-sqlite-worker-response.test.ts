@@ -70,6 +70,7 @@ describe('Orchestrator + SQLite worker response persistence', () => {
     const badResponse = {
       requestId: 'req-bad',
       actionId: 'task-invalid',
+      executionGeneration: 0,
       status: 'not_a_real_status',
       outputs: { exitCode: 1, error: 'x' },
     } as unknown as WorkResponse;
@@ -93,6 +94,7 @@ describe('Orchestrator + SQLite worker response persistence', () => {
     const res: WorkResponse = {
       requestId: 'req-fail',
       actionId: 'task-fail',
+      executionGeneration: 0,
       status: 'failed',
       outputs: { exitCode: 1, error: 'command failed' },
     };
@@ -103,6 +105,66 @@ describe('Orchestrator + SQLite worker response persistence', () => {
     expect(row.status).toBe('failed');
     expect(row.execution.exitCode).toBe(1);
     expect(row.execution.error).toContain('command failed');
+  });
+
+  it('valid failed response with selected running attempt persists failed task row too', () => {
+    adapter.saveTask(wf.id, baseTask('task-fail-attempt'));
+    orchestrator.syncFromDb(wf.id);
+    orchestrator.startExecution();
+
+    const runningRow = adapter.loadTasks(wf.id).find((t) => t.id === 'task-fail-attempt')!;
+    expect(runningRow.status).toBe('running');
+    expect(runningRow.execution.selectedAttemptId).toBeTruthy();
+
+    const res: WorkResponse = {
+      requestId: 'req-fail-attempt',
+      actionId: 'task-fail-attempt',
+      attemptId: runningRow.execution.selectedAttemptId,
+      executionGeneration: 0,
+      status: 'failed',
+      outputs: { exitCode: 1, error: 'command failed with attempt' },
+    };
+
+    orchestrator.handleWorkerResponse(res);
+
+    const row = adapter.loadTasks(wf.id).find((t) => t.id === 'task-fail-attempt')!;
+    const attempt = adapter.loadAttempt(runningRow.execution.selectedAttemptId!)!;
+    expect(row.status).toBe('failed');
+    expect(row.execution.exitCode).toBe(1);
+    expect(row.execution.error).toContain('command failed with attempt');
+    expect(attempt.status).toBe('failed');
+    expect(attempt.exitCode).toBe(1);
+  });
+
+  it('loadTasks reconciles a stale running task row from its failed selected attempt', () => {
+    adapter.saveTask(wf.id, baseTask('task-reconcile'));
+    adapter.saveAttempt({
+      id: 'task-reconcile-a1',
+      nodeId: 'task-reconcile',
+      attemptNumber: 0,
+      queuePriority: 0,
+      status: 'failed',
+      upstreamAttemptIds: [],
+      createdAt: new Date(),
+      startedAt: new Date(),
+      completedAt: new Date(),
+      exitCode: 1,
+      error: 'attempt failed first',
+      branch: 'experiment/task-reconcile',
+      workspacePath: '/tmp/mock-workspace',
+    });
+    adapter.updateTask('task-reconcile', {
+      status: 'running',
+      execution: {
+        selectedAttemptId: 'task-reconcile-a1',
+        startedAt: new Date(),
+      },
+    });
+
+    const row = adapter.loadTasks(wf.id).find((t) => t.id === 'task-reconcile')!;
+    expect(row.status).toBe('failed');
+    expect(row.execution.exitCode).toBe(1);
+    expect(row.execution.error).toContain('attempt failed first');
   });
 
   it('beginConflictResolution persists fixing_with_ai and clears error/exit/completed', () => {
@@ -176,6 +238,7 @@ describe('Protocol failure persistence (SQLite roundtrip)', () => {
     const badResponse = {
       requestId: 'req-malformed',
       actionId: 'task-malformed',
+      executionGeneration: 0,
       status: 'this_is_not_a_valid_status',
       outputs: { exitCode: 1, error: 'x' },
     } as unknown as WorkResponse;
@@ -204,6 +267,7 @@ describe('Protocol failure persistence (SQLite roundtrip)', () => {
     const badResponse = {
       requestId: 'req-spawn',
       actionId: 'task-spawn',
+      executionGeneration: 0,
       status: 'spawn_experiments',
       outputs: {},
       // Missing required dagMutation field
@@ -231,6 +295,7 @@ describe('Protocol failure persistence (SQLite roundtrip)', () => {
     const badResponse = {
       requestId: 'req-select',
       actionId: 'task-select',
+      executionGeneration: 0,
       status: 'select_experiment',
       outputs: {},
       // Missing required dagMutation field

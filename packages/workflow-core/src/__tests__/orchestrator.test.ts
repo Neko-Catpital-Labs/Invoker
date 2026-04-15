@@ -3433,14 +3433,14 @@ describe('Orchestrator', () => {
       });
       orchestrator.startExecution();
 
-      const schedulerBefore = (orchestrator as any).scheduler.getStatus();
-      expect(schedulerBefore.runningCount).toBe(1);
+      const queueBefore = orchestrator.getQueueStatus();
+      expect(queueBefore.runningCount).toBe(1);
 
       // Response with valid actionId but missing required fields — triggers parse error
       orchestrator.handleWorkerResponse({ actionId: 'A', executionGeneration: 0 } as any);
 
-      const schedulerAfter = (orchestrator as any).scheduler.getStatus();
-      expect(schedulerAfter.runningCount).toBe(0);
+      const queueAfter = orchestrator.getQueueStatus();
+      expect(queueAfter.runningCount).toBe(0);
     });
   });
 
@@ -3460,7 +3460,7 @@ describe('Orchestrator', () => {
       warnSpy.mockRestore();
     });
 
-    it('scheduler.runningCount matches actual running tasks after handleWorkerResponse', () => {
+    it('queue runningCount matches actual running tasks after handleWorkerResponse', () => {
       orchestrator.loadPlan({
         name: 'scheduler-sync-test',
         tasks: [
@@ -3470,19 +3470,19 @@ describe('Orchestrator', () => {
       });
       orchestrator.startExecution();
 
-      const schedulerBefore = (orchestrator as any).scheduler.getStatus();
+      const schedulerBefore = orchestrator.getQueueStatus();
       expect(schedulerBefore.runningCount).toBe(1);
 
       orchestrator.handleWorkerResponse(
         makeResponse({ actionId: 't1', status: 'completed', outputs: { exitCode: 0 } }),
       );
 
-      const schedulerAfter = (orchestrator as any).scheduler.getStatus();
+      const schedulerAfter = orchestrator.getQueueStatus();
       const runningTasks = orchestrator.getAllTasks().filter(t => t.status === 'running');
       expect(schedulerAfter.runningCount).toBe(runningTasks.length);
     });
 
-    it('scheduler.runningCount matches after selectExperiment completes reconciliation', () => {
+    it('queue runningCount matches after selectExperiment completes reconciliation', () => {
       orchestrator.loadPlan({
         name: 'recon-scheduler-test',
         tasks: [
@@ -3537,12 +3537,12 @@ describe('Orchestrator', () => {
         sid(orchestrator, 0, 'pivot-exp-v1'),
       );
 
-      const scheduler = (orchestrator as any).scheduler;
+      const scheduler = orchestrator.getQueueStatus();
       const runningTasks = orchestrator.getAllTasks().filter(t => t.status === 'running');
-      expect(scheduler.getStatus().runningCount).toBe(runningTasks.length);
+      expect(scheduler.runningCount).toBe(runningTasks.length);
     });
 
-    it('drainScheduler self-heals leaked scheduler slots', () => {
+    it('restartTask supersedes a leaked active attempt before re-running', () => {
       orchestrator.loadPlan({
         name: 'leak-heal-test',
         tasks: [
@@ -3553,29 +3553,23 @@ describe('Orchestrator', () => {
       });
       orchestrator.startExecution();
 
-      const scheduler = (orchestrator as any).scheduler;
-
-      // Simulate a leak: complete t1 in the state machine but NOT in the scheduler
-      persistence.updateTask('t1', { status: 'completed', execution: { completedAt: new Date(), exitCode: 0 } });
+      const t1Scoped = sid(orchestrator, 0, 't1');
+      const staleAttemptId = orchestrator.getTask(t1Scoped)!.execution.selectedAttemptId!;
+      persistence.updateTask(t1Scoped, { status: 'completed', execution: { completedAt: new Date(), exitCode: 0 } });
       const wfId = orchestrator.getWorkflowIds()[0];
       orchestrator.syncFromDb(wfId);
 
-      expect(orchestrator.getTask('t1')!.status).toBe('completed');
-      const t1Scoped = sid(orchestrator, 0, 't1');
-      expect(scheduler.isRunning(t1Scoped)).toBe(true); // Leaked!
+      expect(orchestrator.getTask(t1Scoped)!.status).toBe('completed');
+      expect(persistence.loadAttempt(staleAttemptId)?.status).toBe('running');
 
-      // Completing t2 triggers drainScheduler which should self-heal
-      orchestrator.handleWorkerResponse(
-        makeResponse({ actionId: 't2', status: 'completed', outputs: { exitCode: 0 } }),
-      );
+      const started = orchestrator.restartTask(t1Scoped);
 
-      expect(scheduler.isRunning(t1Scoped)).toBe(false);
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('freeing leaked scheduler slot for'),
-      );
+      expect(started.some(task => task.id === t1Scoped)).toBe(true);
+      expect(orchestrator.getTask(t1Scoped)!.status).toBe('running');
+      expect(persistence.loadAttempt(staleAttemptId)?.status).toBe('superseded');
     });
 
-    it('selectExperiments starts downstream tasks when scheduler has capacity', () => {
+    it('selectExperiments starts downstream tasks when persisted capacity is available', () => {
       orchestrator.loadPlan({
         name: 'multi-select-capacity-test',
         tasks: [
@@ -4564,13 +4558,12 @@ describe('Orchestrator', () => {
         }
       }
 
-      const scheduler = (orchestrator as any).scheduler;
-      const status = scheduler.getStatus();
+      const status = orchestrator.getQueueStatus();
       const stillRunning = orchestrator.getAllTasks().filter(t => t.status === 'running');
       expect(status.runningCount).toBe(stillRunning.length);
     });
 
-    it('scheduler recovers after simulated process death mid-session', () => {
+    it('persisted queue state recovers after simulated process death mid-session', () => {
       orchestrator.loadPlan({
         name: 'death-recovery-test',
         tasks: [
@@ -4592,9 +4585,9 @@ describe('Orchestrator', () => {
       expect(t1.status).toBe('running');
       expect(started.length).toBeGreaterThanOrEqual(1);
 
-      const scheduler = (orchestrator as any).scheduler;
+      const scheduler = orchestrator.getQueueStatus();
       const runningTasks = orchestrator.getAllTasks().filter(t => t.status === 'running');
-      expect(scheduler.getStatus().runningCount).toBe(runningTasks.length);
+      expect(scheduler.runningCount).toBe(runningTasks.length);
     });
 
     it('getQueueStatus derives from persisted task state instead of stale scheduler slots', () => {

@@ -471,6 +471,7 @@ describe('Flow 5: dagMutation via spawn_experiments', () => {
     const response = {
       requestId: 'spawn-A',
       actionId: 'A',
+      executionGeneration: h.getTask('A')?.execution.generation ?? 0,
       status: 'spawn_experiments' as const,
       outputs: { exitCode: 0 },
       dagMutation: {
@@ -511,6 +512,7 @@ describe('Flow 5: dagMutation via spawn_experiments', () => {
     h.orchestrator.handleWorkerResponse({
       requestId: 'spawn-A',
       actionId: 'A',
+      executionGeneration: h.getTask('A')?.execution.generation ?? 0,
       status: 'spawn_experiments' as const,
       outputs: { exitCode: 0 },
       dagMutation: {
@@ -765,6 +767,7 @@ describe('Flow 7: orphan relaunch on restart', () => {
     orchestrator2.handleWorkerResponse({
       requestId: 'complete-A',
       actionId: scopedA,
+      executionGeneration: orchestrator2.getTask(scopedA)?.execution.generation ?? 0,
       status: 'completed',
       outputs: { exitCode: 0 },
     });
@@ -1095,8 +1098,20 @@ describe('Flow 9b: beforeApproveHook fires for merge nodes', () => {
 
     orch.loadPlan(MANUAL_MERGE_PLAN);
     orch.startExecution();
-    orch.handleWorkerResponse({ requestId: 'r1', actionId: 'A', status: 'completed', outputs: { exitCode: 0 } });
-    orch.handleWorkerResponse({ requestId: 'r2', actionId: 'B', status: 'completed', outputs: { exitCode: 0 } });
+    orch.handleWorkerResponse({
+      requestId: 'r1',
+      actionId: 'A',
+      executionGeneration: orch.getTask('A')?.execution.generation ?? 0,
+      status: 'completed',
+      outputs: { exitCode: 0 },
+    });
+    orch.handleWorkerResponse({
+      requestId: 'r2',
+      actionId: 'B',
+      executionGeneration: orch.getTask('B')?.execution.generation ?? 0,
+      status: 'completed',
+      outputs: { exitCode: 0 },
+    });
 
     const mergeId = orch.getAllTasks().find(t => t.config.isMergeNode)!.id;
     await exec.executeTasks([orch.getTask(mergeId)!]);
@@ -1163,6 +1178,7 @@ describe('Flow 10: multi-experiment selection', () => {
     h.orchestrator.handleWorkerResponse({
       requestId: 'spawn-A',
       actionId: 'A',
+      executionGeneration: h.getTask('A')?.execution.generation ?? 0,
       status: 'spawn_experiments' as const,
       outputs: { exitCode: 0 },
       dagMutation: {
@@ -1225,6 +1241,7 @@ describe('Flow 10: multi-experiment selection', () => {
     h.orchestrator.handleWorkerResponse({
       requestId: 'spawn-A',
       actionId: 'A',
+      executionGeneration: h.getTask('A')?.execution.generation ?? 0,
       status: 'spawn_experiments' as const,
       outputs: { exitCode: 0 },
       dagMutation: {
@@ -1297,6 +1314,7 @@ describe('Flow: scheduler health across experiment lifecycle', () => {
     h.orchestrator.handleWorkerResponse({
       requestId: 'spawn-A',
       actionId: 'A',
+      executionGeneration: h.getTask('A')?.execution.generation ?? 0,
       status: 'spawn_experiments' as const,
       outputs: { exitCode: 0 },
       dagMutation: {
@@ -1351,6 +1369,7 @@ describe('Flow: scheduler health across experiment lifecycle', () => {
     h.orchestrator.handleWorkerResponse({
       requestId: 'spawn-A',
       actionId: 'A',
+      executionGeneration: h.getTask('A')?.execution.generation ?? 0,
       status: 'spawn_experiments' as const,
       outputs: { exitCode: 0 },
       dagMutation: {

@@ -1228,6 +1228,24 @@ describe('SQLiteAdapter', () => {
   });
 
   describe('read-only / flush safety', () => {
+    it('persists file-backed writes before close so restart recovery can read them', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-durable-'));
+      const dbPath = join(dir, 'invoker.db');
+      try {
+        const writer = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        writer.saveWorkflow(testWorkflow);
+        writer.saveTask(testWorkflow.id, makeTask('t-durable-before-close'));
+
+        const reader = await SQLiteAdapter.create(dbPath, { readOnly: true });
+        const loaded = reader.loadTasks(testWorkflow.id);
+        expect(loaded.map((task) => task.id)).toContain('t-durable-before-close');
+        reader.close();
+        writer.close();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
     it('does not rewrite db file when closed without writes', async () => {
       const dir = mkdtempSync(join(tmpdir(), 'sqlite-adapter-readonly-'));
       const dbPath = join(dir, 'invoker.db');

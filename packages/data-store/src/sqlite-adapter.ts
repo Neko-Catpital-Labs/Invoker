@@ -40,6 +40,7 @@ export interface OutputChunk {
 
 export type WorkflowMutationPriority = 'high' | 'normal';
 export type WorkflowMutationIntentStatus = 'queued' | 'running' | 'completed' | 'failed';
+export const WORKFLOW_MUTATION_LEASE_MS = 30_000;
 
 export interface WorkflowMutationIntent {
   id: number;
@@ -55,12 +56,23 @@ export interface WorkflowMutationIntent {
   completedAt?: string;
 }
 
+export interface WorkflowMutationLease {
+  workflowId: string;
+  ownerId: string;
+  activeIntentId?: number;
+  activeMutationKind?: string;
+  leasedAt: string;
+  lastHeartbeatAt: string;
+  leaseExpiresAt: string;
+}
+
 export class SQLiteAdapter implements PersistenceAdapter {
   private db: SqlJsDatabase;
   private dbPath: string | null;
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private readOnly: boolean;
   private dirty = false;
+  private flushDelayMs: number;
   private outputTailLimit: number;
   private outputTailCache = new Map<string, OutputChunk[]>();
 
@@ -69,6 +81,9 @@ export class SQLiteAdapter implements PersistenceAdapter {
     this.db = db;
     this.dbPath = dbPath;
     this.readOnly = options?.readOnly === true;
+    this.flushDelayMs = this.dbPath
+      ? Number(process.env.INVOKER_SQLITE_FLUSH_DEBOUNCE_MS ?? 0)
+      : 0;
     this.outputTailLimit = options?.outputTailLimit ?? 100;
     this.db.run('PRAGMA foreign_keys = ON');
     this.initSchema();
@@ -174,11 +189,19 @@ export class SQLiteAdapter implements PersistenceAdapter {
   /** Debounced flush — coalesces rapid writes into a single I/O. */
   private scheduleFlush(): void {
     if (!this.dbPath) return;
+    if (this.flushDelayMs <= 0) {
+      if (this.flushTimer) {
+        clearTimeout(this.flushTimer);
+        this.flushTimer = null;
+      }
+      this.flush();
+      return;
+    }
     if (this.flushTimer) clearTimeout(this.flushTimer);
     this.flushTimer = setTimeout(() => {
       this.flush();
       this.flushTimer = null;
-    }, 1000);
+    }, this.flushDelayMs);
   }
 
   private initSchema(): void {
@@ -363,6 +386,21 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
       CREATE INDEX IF NOT EXISTS idx_workflow_mutation_intents_workflow_status
         ON workflow_mutation_intents(workflow_id, status, priority, id);
+
+      CREATE TABLE IF NOT EXISTS workflow_mutation_leases (
+        workflow_id TEXT PRIMARY KEY,
+        owner_id TEXT NOT NULL,
+        active_intent_id INTEGER,
+        active_mutation_kind TEXT,
+        leased_at TEXT NOT NULL,
+        last_heartbeat_at TEXT NOT NULL,
+        lease_expires_at TEXT NOT NULL,
+        FOREIGN KEY (workflow_id) REFERENCES workflows(id),
+        FOREIGN KEY (active_intent_id) REFERENCES workflow_mutation_intents(id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_workflow_mutation_leases_expiry
+        ON workflow_mutation_leases(lease_expires_at);
 
       CREATE TABLE IF NOT EXISTS output_spool (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -825,7 +863,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
   loadTasks(workflowId: string): TaskState[] {
     const rows = this.queryAll('SELECT * FROM tasks WHERE workflow_id = ?', [workflowId]);
-    return rows.map(this.rowToTask);
+    return rows.map((row) => this.reconcileTaskFromSelectedAttempt(this.rowToTask(row)));
   }
 
   getAllTaskIds(): string[] {
@@ -1499,6 +1537,73 @@ export class SQLiteAdapter implements PersistenceAdapter {
     };
   }
 
+  private reconcileTaskFromSelectedAttempt(task: TaskState): TaskState {
+    const attemptId = task.execution.selectedAttemptId;
+    if (!attemptId) return task;
+
+    const taskIsTerminal =
+      task.status === 'completed' ||
+      task.status === 'failed' ||
+      task.status === 'needs_input' ||
+      task.status === 'awaiting_approval' ||
+      task.status === 'review_ready' ||
+      task.status === 'stale';
+    if (taskIsTerminal) return task;
+
+    const attempt = this.loadAttempt(attemptId);
+    if (!attempt) return task;
+
+    if (attempt.status === 'failed') {
+      return {
+        ...task,
+        status: 'failed',
+        execution: {
+          ...task.execution,
+          exitCode: attempt.exitCode ?? task.execution.exitCode,
+          error: attempt.error ?? task.execution.error,
+          completedAt: attempt.completedAt ?? task.execution.completedAt,
+          lastHeartbeatAt: attempt.lastHeartbeatAt ?? task.execution.lastHeartbeatAt,
+          branch: attempt.branch ?? task.execution.branch,
+          commit: attempt.commit ?? task.execution.commit,
+          workspacePath: attempt.workspacePath ?? task.execution.workspacePath,
+          agentSessionId: attempt.agentSessionId ?? task.execution.agentSessionId,
+          containerId: attempt.containerId ?? task.execution.containerId,
+        },
+      };
+    }
+
+    if (attempt.status === 'completed') {
+      return {
+        ...task,
+        status: 'completed',
+        config: {
+          ...task.config,
+          summary: attempt.summary ?? task.config.summary,
+        },
+        execution: {
+          ...task.execution,
+          exitCode: attempt.exitCode ?? task.execution.exitCode,
+          completedAt: attempt.completedAt ?? task.execution.completedAt,
+          lastHeartbeatAt: attempt.lastHeartbeatAt ?? task.execution.lastHeartbeatAt,
+          branch: attempt.branch ?? task.execution.branch,
+          commit: attempt.commit ?? task.execution.commit,
+          workspacePath: attempt.workspacePath ?? task.execution.workspacePath,
+          agentSessionId: attempt.agentSessionId ?? task.execution.agentSessionId,
+          containerId: attempt.containerId ?? task.execution.containerId,
+        },
+      };
+    }
+
+    if (attempt.status === 'needs_input') {
+      return {
+        ...task,
+        status: 'needs_input',
+      };
+    }
+
+    return task;
+  }
+
   private rowToAttempt(row: any): Attempt {
     return {
       id: row.id,
@@ -1602,6 +1707,124 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return this.rowToWorkflowMutationIntent(claimed);
   }
 
+  claimWorkflowMutationLease(
+    workflowId: string,
+    ownerId: string,
+    options?: { activeIntentId?: number; activeMutationKind?: string },
+  ): boolean {
+    const now = new Date().toISOString();
+    const leaseExpiresAt = new Date(Date.now() + WORKFLOW_MUTATION_LEASE_MS).toISOString();
+    const existing = this.queryOne(
+      'SELECT * FROM workflow_mutation_leases WHERE workflow_id = ?',
+      [workflowId],
+    );
+
+    if (!existing) {
+      this.execRun(
+        `INSERT INTO workflow_mutation_leases (
+          workflow_id, owner_id, active_intent_id, active_mutation_kind, leased_at, last_heartbeat_at, lease_expires_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
+          workflowId,
+          ownerId,
+          options?.activeIntentId ?? null,
+          options?.activeMutationKind ?? null,
+          now,
+          now,
+          leaseExpiresAt,
+        ],
+      );
+      return true;
+    }
+
+    const existingOwnerId = String(existing.owner_id);
+    const existingExpiry = existing.lease_expires_at ? new Date(String(existing.lease_expires_at)).getTime() : 0;
+    const isExpired = existingExpiry < Date.now();
+
+    if (existingOwnerId !== ownerId && !isExpired) {
+      return false;
+    }
+
+    if (isExpired) {
+      this.requeueWorkflowMutationLease(workflowId);
+    }
+
+    this.execRun(
+      `INSERT OR REPLACE INTO workflow_mutation_leases (
+        workflow_id, owner_id, active_intent_id, active_mutation_kind, leased_at, last_heartbeat_at, lease_expires_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [
+        workflowId,
+        ownerId,
+        options?.activeIntentId ?? null,
+        options?.activeMutationKind ?? null,
+        now,
+        now,
+        leaseExpiresAt,
+      ],
+    );
+    return true;
+  }
+
+  renewWorkflowMutationLease(
+    workflowId: string,
+    ownerId: string,
+    options?: { activeIntentId?: number; activeMutationKind?: string },
+  ): boolean {
+    const lease = this.queryOne(
+      'SELECT * FROM workflow_mutation_leases WHERE workflow_id = ?',
+      [workflowId],
+    );
+    if (!lease || String(lease.owner_id) !== ownerId) {
+      return false;
+    }
+
+    const now = new Date().toISOString();
+    const leaseExpiresAt = new Date(Date.now() + WORKFLOW_MUTATION_LEASE_MS).toISOString();
+    this.execRun(
+      `UPDATE workflow_mutation_leases
+         SET active_intent_id = ?,
+             active_mutation_kind = ?,
+             last_heartbeat_at = ?,
+             lease_expires_at = ?
+       WHERE workflow_id = ? AND owner_id = ?`,
+      [
+        options?.activeIntentId ?? null,
+        options?.activeMutationKind ?? null,
+        now,
+        leaseExpiresAt,
+        workflowId,
+        ownerId,
+      ],
+    );
+    return true;
+  }
+
+  releaseWorkflowMutationLease(workflowId: string, ownerId: string): void {
+    this.execRun(
+      'DELETE FROM workflow_mutation_leases WHERE workflow_id = ? AND owner_id = ?',
+      [workflowId, ownerId],
+    );
+  }
+
+  listWorkflowMutationLeases(): WorkflowMutationLease[] {
+    return this.queryAll(
+      'SELECT * FROM workflow_mutation_leases ORDER BY workflow_id ASC',
+    ).map((row) => this.rowToWorkflowMutationLease(row));
+  }
+
+  requeueExpiredWorkflowMutationLeases(now: Date = new Date()): number {
+    const expiredRows = this.queryAll(
+      'SELECT workflow_id FROM workflow_mutation_leases WHERE lease_expires_at < ?',
+      [now.toISOString()],
+    );
+    const workflowIds = expiredRows.map((row) => String(row.workflow_id));
+    for (const workflowId of workflowIds) {
+      this.requeueWorkflowMutationLease(workflowId);
+    }
+    return workflowIds.length;
+  }
+
   completeWorkflowMutationIntent(id: number): void {
     this.execRun(
       `UPDATE workflow_mutation_intents
@@ -1634,5 +1857,32 @@ export class SQLiteAdapter implements PersistenceAdapter {
       startedAt: (row.started_at as string) ?? undefined,
       completedAt: (row.completed_at as string) ?? undefined,
     };
+  }
+
+  private rowToWorkflowMutationLease(row: Record<string, unknown>): WorkflowMutationLease {
+    return {
+      workflowId: String(row.workflow_id),
+      ownerId: String(row.owner_id),
+      activeIntentId: row.active_intent_id === null || row.active_intent_id === undefined
+        ? undefined
+        : Number(row.active_intent_id),
+      activeMutationKind: row.active_mutation_kind ? String(row.active_mutation_kind) : undefined,
+      leasedAt: String(row.leased_at),
+      lastHeartbeatAt: String(row.last_heartbeat_at),
+      leaseExpiresAt: String(row.lease_expires_at),
+    };
+  }
+
+  private requeueWorkflowMutationLease(workflowId: string): void {
+    this.execRun(
+      `UPDATE workflow_mutation_intents
+         SET status = 'queued', owner_id = NULL, started_at = NULL, completed_at = NULL, error = NULL
+       WHERE workflow_id = ? AND status = 'running'`,
+      [workflowId],
+    );
+    this.execRun(
+      'DELETE FROM workflow_mutation_leases WHERE workflow_id = ?',
+      [workflowId],
+    );
   }
 }

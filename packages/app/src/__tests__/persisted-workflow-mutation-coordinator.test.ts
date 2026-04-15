@@ -8,6 +8,14 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
   return { promise, resolve };
 }
 
+async function waitFor(condition: () => boolean, attempts: number = 20): Promise<void> {
+  for (let i = 0; i < attempts; i += 1) {
+    if (condition()) return;
+    await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+}
+
 describe('PersistedWorkflowMutationCoordinator', () => {
   const adapters: SQLiteAdapter[] = [];
 
@@ -90,11 +98,62 @@ describe('PersistedWorkflowMutationCoordinator', () => {
       },
     );
 
+    adapter.requeueExpiredWorkflowMutationLeases(new Date(Date.now() + 60_000));
     await owner2.resumePending();
 
     expect(owner1Order).toEqual(['first']);
     expect(owner2Order).toEqual(['first', 'second']);
     expect(adapter.listWorkflowMutationIntents('wf-1', ['queued', 'running'])).toEqual([]);
     expect(adapter.listWorkflowMutationIntents('wf-1', ['completed'])).toHaveLength(2);
+  });
+
+  it('does not let another owner steal a live workflow lease', async () => {
+    const adapter = await SQLiteAdapter.create(':memory:');
+    adapters.push(adapter);
+    adapter.saveWorkflow({
+      id: 'wf-1',
+      name: 'wf-1',
+      status: 'running',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+
+    const gate = deferred();
+    const owner1Order: string[] = [];
+    const owner1 = new PersistedWorkflowMutationCoordinator(
+      adapter,
+      'owner-1',
+      async (_channel, args) => {
+        owner1Order.push(String(args[0]));
+        if (args[0] === 'first') {
+          await gate.promise;
+        }
+      },
+    );
+
+    void owner1.enqueue<void>('wf-1', 'normal', 'mut', ['first']);
+    await Promise.resolve();
+    adapter.enqueueWorkflowMutationIntent('wf-1', 'mut', ['second'], 'normal');
+    const owner2Order: string[] = [];
+    const owner2 = new PersistedWorkflowMutationCoordinator(
+      adapter,
+      'owner-2',
+      async (_channel, args) => {
+        owner2Order.push(String(args[0]));
+      },
+    );
+    await Promise.resolve();
+    await owner2.resumePending();
+
+    expect(owner1Order).toEqual(['first']);
+    expect(owner2Order).toEqual([]);
+    expect(adapter.listWorkflowMutationLeases()).toHaveLength(1);
+
+    gate.resolve();
+    await waitFor(() => owner1Order.length === 2);
+
+    expect(owner1Order).toEqual(['first', 'second']);
+    expect(owner2Order).toEqual([]);
+    expect(adapter.listWorkflowMutationLeases()).toHaveLength(0);
   });
 });
