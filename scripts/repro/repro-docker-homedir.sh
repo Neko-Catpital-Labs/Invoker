@@ -17,9 +17,21 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$REPO_ROOT"
 
-DB_PATH="$HOME/.invoker/invoker.db"
+TMP_DB_DIR="$(mktemp -d "${TMPDIR:-/tmp}/invoker-repro-docker-home.XXXXXX")"
+TMP_CFG="$(mktemp "${TMPDIR:-/tmp}/invoker-repro-config.XXXXXX.json")"
+DB_PATH="$TMP_DB_DIR/invoker.db"
 PLAN_FILE="$REPO_ROOT/scripts/repro/repro-docker-homedir.yaml"
 TASK_ID="homedir-write"
+
+cleanup() {
+  rm -rf "$TMP_DB_DIR" 2>/dev/null || true
+  rm -f "$TMP_CFG" 2>/dev/null || true
+}
+trap cleanup EXIT
+
+printf '{\n  "autoFixRetries": 0\n}\n' > "$TMP_CFG"
+export INVOKER_DB_DIR="$TMP_DB_DIR"
+export INVOKER_REPO_CONFIG_PATH="$TMP_CFG"
 
 echo "==> Step 1: Rebuilding Docker image from current Dockerfile"
 docker build -t invoker-agent:latest -f packages/executors/docker/Dockerfile.claude packages/executors/docker/

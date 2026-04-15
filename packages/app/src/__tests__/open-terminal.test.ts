@@ -151,6 +151,7 @@ function executeTaskViaExecutor(
   const request: WorkRequest = {
     requestId: randomUUID(),
     actionId: task.id,
+    executionGeneration: task.execution.generation ?? 0,
     actionType: task.config.command ? 'command' : 'ai_task',
     inputs: {
       command: task.config.command,

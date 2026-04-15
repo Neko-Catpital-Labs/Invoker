@@ -1305,7 +1305,7 @@ describe('Flow: scheduler health across experiment lifecycle', () => {
   });
 
   function getSchedulerStatus(orchestrator: any) {
-    return orchestrator.scheduler.getStatus();
+    return orchestrator.getQueueStatus();
   }
 
   it('multi-select experiment -> downstream tasks execute with healthy scheduler', async () => {
@@ -1395,7 +1395,9 @@ describe('Flow: scheduler health across experiment lifecycle', () => {
     }
     (h.orchestrator as any).refreshFromDb();
 
-    // Inject a leaked scheduler slot by manually adding a fake running task
+    // Inject a leaked scheduler slot by manually adding a fake running task.
+    // The persisted queue view should ignore it even if the helper scheduler
+    // still has stale in-memory state.
     const scheduler = (h.orchestrator as any).scheduler;
     scheduler.enqueue({ taskId: 'phantom-leaked', priority: 1 });
     scheduler.dequeue(); // moves phantom to running set
@@ -1409,8 +1411,10 @@ describe('Flow: scheduler health across experiment lifecycle', () => {
       'combined-commit',
     );
 
-    // drainScheduler should have cleaned up the phantom
-    expect(scheduler.isRunning('phantom-leaked')).toBe(false);
+    const queueStatus = h.orchestrator.getQueueStatus();
+    expect(queueStatus.running.some((item: { taskId: string }) => item.taskId === 'phantom-leaked')).toBe(false);
+    const runningTasks = h.getAllTasks().filter(t => t.status === 'running');
+    expect(queueStatus.runningCount).toBe(runningTasks.length);
   });
 
   it('process-dies-silently: orphaned running task does not permanently block scheduler', () => {

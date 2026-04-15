@@ -1,7 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-DB_PATH="${INVOKER_DB_PATH:-$HOME/.invoker/invoker.db}"
+if [[ -n "${INVOKER_DB_PATH:-}" ]]; then
+  DB_PATH="$INVOKER_DB_PATH"
+elif [[ -n "${INVOKER_DB_DIR:-}" ]]; then
+  DB_PATH="${INVOKER_DB_DIR%/}/invoker.db"
+else
+  echo "repro: set INVOKER_DB_PATH or INVOKER_DB_DIR to an isolated test database" >&2
+  exit 2
+fi
 WORKFLOW_ID="${1:-wf-1775936968949-13}"
 
 if [[ ! -f "$DB_PATH" ]]; then

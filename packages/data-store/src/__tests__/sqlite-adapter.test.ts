@@ -1164,6 +1164,7 @@ describe('SQLiteAdapter', () => {
         orchestrator.handleWorkerResponse({
           requestId: 'req-1',
           actionId: 'fk-t1',
+          executionGeneration: orchestrator.getTask('fk-t1')?.execution.generation ?? 0,
           status: 'failed',
           outputs: { exitCode: 1, error: 'boom' },
         });
