@@ -7,10 +7,29 @@
  * for externally-created workflows, causing silent restart failures.
  */
 
+import type { Page } from '@playwright/test';
 import { test, expect, loadPlan, startPlan, waitForTaskStatus, E2E_REPO_URL } from './fixtures/electron-app.js';
 
 function findTask(tasks: Array<{ id: string; status: string }>, taskId: string) {
   return tasks.find((t) => t.id === taskId || t.id.endsWith(`/${taskId}`));
+}
+
+async function openRestartTaskMenu(page: Page, taskSuffix: string) {
+  const node = page.locator(`.react-flow__node[data-testid$="${taskSuffix}"]`);
+  const restartBtn = page.locator('button').filter({ hasText: 'Restart Task' });
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    await node.click({ button: 'right' });
+    await expect(restartBtn).toBeVisible({ timeout: 2000 });
+    if (await restartBtn.isEnabled()) {
+      return restartBtn;
+    }
+    await page.keyboard.press('Escape').catch(() => {});
+    await page.waitForTimeout(250);
+  }
+
+  await expect(restartBtn).toBeEnabled({ timeout: 5000 });
+  return restartBtn;
 }
 
 const FAILING_PLAN = {
@@ -49,11 +68,7 @@ test.describe('Restart failed task', () => {
     expect(failTask?.status).toBe('failed');
 
     // Right-click the failed task node to open context menu
-    await page.locator('.react-flow__node[data-testid$="task-fail"]').click({ button: 'right' });
-
-    const restartBtn = page.locator('button').filter({ hasText: 'Restart Task' });
-    await expect(restartBtn).toBeVisible({ timeout: 2000 });
-    await expect(restartBtn).toBeEnabled();
+    const restartBtn = await openRestartTaskMenu(page, 'task-fail');
     await restartBtn.click();
 
     // Task should transition away from 'failed' — it will re-run and fail again
@@ -96,9 +111,7 @@ test.describe('Restart failed task', () => {
     await waitForTaskStatus(page, 'task-fail', 'failed');
 
     // Right-click → Restart should work even though this is a different workflow
-    await page.locator('.react-flow__node[data-testid$="task-fail"]').click({ button: 'right' });
-    const restartBtn = page.locator('button').filter({ hasText: 'Restart Task' });
-    await expect(restartBtn).toBeVisible({ timeout: 2000 });
+    const restartBtn = await openRestartTaskMenu(page, 'task-fail');
     await restartBtn.click();
 
     // Should restart — will fail again but the restart must not be silently swallowed

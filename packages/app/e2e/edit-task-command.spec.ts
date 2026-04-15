@@ -106,6 +106,11 @@ test.describe('Edit task command', () => {
     await waitForTaskStatus(page, 'parent-task', 'completed');
     await waitForTaskStatus(page, 'child-task', 'completed');
 
+    const beforeResult = await page.evaluate(() => window.invoker.getTasks());
+    const beforeTasks = Array.isArray(beforeResult) ? beforeResult : beforeResult.tasks;
+    const beforeChild = findTaskByIdSuffix(beforeTasks, 'child-task');
+    const beforeGeneration = beforeChild?.execution?.generation ?? 0;
+
     // Click parent task to select it
     await page.locator('.react-flow__node[data-testid$="/parent-task"]').click();
 
@@ -121,11 +126,23 @@ test.describe('Edit task command', () => {
     // Parent should re-run and complete
     await waitForTaskStatus(page, 'parent-task', 'completed', 15000);
 
-    // Original child is invalidated in place; no forked copy is created.
+    await page.waitForFunction(
+      ({ taskId, generation }) => window.invoker.getTasks().then((result) => {
+        const tasks = Array.isArray(result) ? result : result.tasks;
+        const child = tasks.find((t) => t.id === taskId || t.id.endsWith(`/${taskId}`));
+        return Boolean(child && (child.execution?.generation ?? 0) > generation);
+      }),
+      { taskId: 'child-task', generation: beforeGeneration },
+      { timeout: 15000 },
+    );
+
+    // Original child is invalidated and re-executed in place; no forked copy is created.
     const result = await page.evaluate(() => window.invoker.getTasks());
     const tasks = Array.isArray(result) ? result : result.tasks;
     const childTask = findTaskByIdSuffix(tasks, 'child-task');
-    expect(childTask?.status).toBe('pending');
+    expect(childTask).toBeTruthy();
+    expect((childTask?.execution?.generation ?? 0)).toBeGreaterThan(beforeGeneration);
+    expect(['pending', 'running', 'completed']).toContain(childTask?.status);
     expect(tasks.find((t: any) => !t.id.endsWith('/child-task') && t.description === 'Child command')).toBeUndefined();
   });
 });
