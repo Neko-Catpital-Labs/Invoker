@@ -4614,12 +4614,36 @@ describe('Orchestrator', () => {
         status: 'pending',
         execution: { startedAt: undefined, lastHeartbeatAt: undefined },
       });
+      const selectedAttemptId = orchestrator.getTask(sid(orchestrator, 0, 't1'))?.execution.selectedAttemptId;
+      expect(selectedAttemptId).toBeTruthy();
+      persistence.updateAttempt(selectedAttemptId!, {
+        status: 'claimed',
+        leaseExpiresAt: new Date(Date.now() - 60_000),
+      });
 
       const queueStatus = orchestrator.getQueueStatus();
       expect(queueStatus.runningCount).toBe(0);
       expect(queueStatus.running).toEqual([]);
       expect(queueStatus.queued).toHaveLength(1);
       expect(queueStatus.queued[0]?.taskId).toBe(sid(orchestrator, 0, 't1'));
+    });
+
+    it('getQueueStatus counts claimed selected attempts as active before launch completes', () => {
+      orchestrator.loadPlan({
+        name: 'queue-claimed-test',
+        tasks: [
+          { id: 't1', description: 'Task 1' },
+        ],
+      });
+      const [started] = orchestrator.startExecution();
+      const taskId = started!.id;
+      const selectedAttemptId = orchestrator.getTask(taskId)?.execution.selectedAttemptId;
+      expect(selectedAttemptId).toBeTruthy();
+
+      const queueStatus = orchestrator.getQueueStatus();
+      expect(queueStatus.runningCount).toBe(1);
+      expect(queueStatus.running[0]?.taskId).toBe(taskId);
+      expect(queueStatus.running[0]?.attemptId).toBe(selectedAttemptId);
     });
   });
 

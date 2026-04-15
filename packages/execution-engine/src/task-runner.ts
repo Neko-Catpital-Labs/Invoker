@@ -44,6 +44,7 @@ import { DEFAULT_EXECUTION_AGENT } from './agent.js';
 
 /** Keeps `lastHeartbeatAt` fresh while `executor.start()` is awaited (SSH remote setup/provision can take minutes). Matches BaseExecutor default heartbeat cadence. */
 const PRE_START_HEARTBEAT_INTERVAL_MS = 30_000;
+const ATTEMPT_LEASE_MS = 5 * 60 * 1000;
 
 type StartupFailureMetadata = {
   workspacePath?: string;
@@ -58,6 +59,10 @@ type ActiveExecutionEntry = {
   executor: Executor;
   taskId: string;
 };
+
+function nextLeaseExpiry(from: Date): Date {
+  return new Date(from.getTime() + ATTEMPT_LEASE_MS);
+}
 
 // ── Callbacks ─────────────────────────────────────────────
 
@@ -406,6 +411,11 @@ export class TaskRunner {
     console.log(`[trace] TaskRunner: task=${task.id} calling executor.start() type=${executor.type}`);
     const startT0 = Date.now();
     const preStartHeartbeatTimer = setInterval(() => {
+      const now = new Date();
+      this.persistence.updateAttempt?.(attemptId, {
+        lastHeartbeatAt: now,
+        leaseExpiresAt: nextLeaseExpiry(now),
+      } as any);
       this.callbacks.onHeartbeat?.(task.id);
     }, PRE_START_HEARTBEAT_INTERVAL_MS);
     let handle: ExecutorHandle;
@@ -498,6 +508,11 @@ export class TaskRunner {
 
     // Wire heartbeat
     executor.onHeartbeat(handle, () => {
+      const now = new Date();
+      this.persistence.updateAttempt?.(attemptId, {
+        lastHeartbeatAt: now,
+        leaseExpiresAt: nextLeaseExpiry(now),
+      } as any);
       this.callbacks.onHeartbeat?.(task.id);
     });
 

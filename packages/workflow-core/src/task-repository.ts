@@ -40,12 +40,14 @@ export interface WorkflowChanges {
 export type AttemptChanges = Partial<
   Pick<
     Attempt,
+    | 'claimedAt'
     | 'status'
     | 'startedAt'
     | 'completedAt'
     | 'exitCode'
     | 'error'
     | 'lastHeartbeatAt'
+    | 'leaseExpiresAt'
     | 'branch'
     | 'commit'
     | 'summary'

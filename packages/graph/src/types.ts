@@ -165,6 +165,7 @@ export function createTaskState(
 
 export type AttemptStatus =
   | 'pending'
+  | 'claimed'
   | 'running'
   | 'completed'
   | 'failed'
@@ -189,11 +190,13 @@ export interface Attempt {
 
   // ── Execution state ──
   readonly status: AttemptStatus;
+  readonly claimedAt?: Date;
   readonly startedAt?: Date;
   readonly completedAt?: Date;
   readonly exitCode?: number;
   readonly error?: string;
   readonly lastHeartbeatAt?: Date;
+  readonly leaseExpiresAt?: Date;
 
   // ── Output ──
   readonly branch?: string;

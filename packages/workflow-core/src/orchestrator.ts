@@ -49,6 +49,7 @@ import type { TaskRepository } from './task-repository.js';
 const TASK_DELTA_CHANNEL = 'task.delta';
 let workflowCounter = 0;
 const FIX_FAILURE_PREFIX_RE = /^\[Fix with (?:Claude|Agent) failed\] [^\n]*\n\n/;
+const ATTEMPT_LEASE_MS = 5 * 60 * 1000;
 
 function stripFixFailureWrapper(errorText: string): string {
   return errorText.replace(FIX_FAILURE_PREFIX_RE, '');
@@ -75,6 +76,10 @@ function parseMergeConflictError(
     ? obj.conflictFiles.filter((file): file is string => typeof file === 'string')
     : [];
   return { failedBranch, conflictFiles };
+}
+
+function nextLeaseExpiry(from: Date): Date {
+  return new Date(from.getTime() + ATTEMPT_LEASE_MS);
 }
 
 // ── Errors ──────────────────────────────────────────────────
@@ -127,7 +132,7 @@ export interface OrchestratorPersistence {
   saveAttempt(attempt: Attempt): void;
   loadAttempts(nodeId: string): Attempt[];
   loadAttempt(attemptId: string): Attempt | undefined;
-  updateAttempt(attemptId: string, changes: Partial<Pick<Attempt, 'status' | 'startedAt' | 'completedAt' | 'exitCode' | 'error' | 'lastHeartbeatAt' | 'branch' | 'commit' | 'summary' | 'workspacePath' | 'agentSessionId' | 'containerId' | 'mergeConflict'>>): void;
+  updateAttempt(attemptId: string, changes: Partial<Pick<Attempt, 'status' | 'claimedAt' | 'startedAt' | 'completedAt' | 'exitCode' | 'error' | 'lastHeartbeatAt' | 'leaseExpiresAt' | 'branch' | 'commit' | 'summary' | 'workspacePath' | 'agentSessionId' | 'containerId' | 'mergeConflict'>>): void;
   failTaskAndAttempt?(
     taskId: string,
     taskChanges: TaskStateChanges,
@@ -2392,7 +2397,18 @@ export class Orchestrator {
   } {
     this.refreshFromDb();
     const tasks = this.stateMachine.getAllTasks();
-    const runningTasks = tasks.filter((task) => task.status === 'running' || task.status === 'fixing_with_ai');
+    const activeAttempts = tasks
+      .map((task) => {
+        const attemptId = task.execution.selectedAttemptId;
+        const attempt = attemptId ? this.persistence.loadAttempt(attemptId) : undefined;
+        return { task, attemptId, attempt };
+      })
+      .filter(({ attempt }) => {
+        if (!attempt) return false;
+        if (attempt.status !== 'claimed' && attempt.status !== 'running') return false;
+        if (!attempt.leaseExpiresAt) return true;
+        return attempt.leaseExpiresAt.getTime() >= Date.now();
+      });
     const queuedTasks = this.stateMachine
       .getReadyTasks()
       .filter((task) => task.status === 'pending')
@@ -2412,10 +2428,10 @@ export class Orchestrator {
 
     return {
       maxConcurrency: this.maxConcurrency,
-      runningCount: runningTasks.length,
-      running: runningTasks.map((task) => ({
+      runningCount: activeAttempts.length,
+      running: activeAttempts.map(({ task, attemptId }) => ({
         taskId: task.id,
-        attemptId: task.execution.selectedAttemptId,
+        attemptId,
         description: task.description,
       })),
       queued: queuedTasks.map((task) => ({
@@ -2989,6 +3005,14 @@ export class Orchestrator {
       }
 
       if (this.deferRunningUntilLaunch) {
+        try {
+          this.taskRepository.updateAttempt(attemptId, {
+            status: 'claimed',
+            claimedAt: now,
+            lastHeartbeatAt: now,
+            leaseExpiresAt: nextLeaseExpiry(now),
+          });
+        } catch { /* best effort */ }
         // Keep persisted status as pending until executor.start() confirms launch.
         started.push({
           ...task,
@@ -3025,8 +3049,10 @@ export class Orchestrator {
           if (existingAttempt) {
             this.taskRepository.updateAttempt(attemptId, {
               status: 'running',
+              claimedAt: existingAttempt.claimedAt ?? now,
               startedAt: now,
               lastHeartbeatAt: now,
+              leaseExpiresAt: nextLeaseExpiry(now),
             });
           } else {
             const upstreamAttemptIds = task.dependencies
@@ -3034,7 +3060,10 @@ export class Orchestrator {
               .filter((id): id is string => !!id);
             const attempt = createAttempt(job.taskId, {
               status: 'running',
+              claimedAt: now,
               startedAt: now,
+              lastHeartbeatAt: now,
+              leaseExpiresAt: nextLeaseExpiry(now),
               upstreamAttemptIds,
             });
             this.taskRepository.saveAttempt(attempt);
@@ -3103,8 +3132,10 @@ export class Orchestrator {
       if (existingAttempt) {
         this.taskRepository.updateAttempt(attemptId, {
           status: 'running',
+          claimedAt: existingAttempt.claimedAt ?? launchedAt,
           startedAt: launchedAt,
           lastHeartbeatAt: launchedAt,
+          leaseExpiresAt: nextLeaseExpiry(launchedAt),
         });
       } else {
         const upstreamAttemptIds = task.dependencies
@@ -3112,7 +3143,10 @@ export class Orchestrator {
           .filter((id): id is string => !!id);
         const attempt = createAttempt(taskId, {
           status: 'running',
+          claimedAt: launchedAt,
           startedAt: launchedAt,
+          lastHeartbeatAt: launchedAt,
+          leaseExpiresAt: nextLeaseExpiry(launchedAt),
           upstreamAttemptIds,
         });
         this.taskRepository.saveAttempt(attempt);

@@ -317,11 +317,13 @@ export class SQLiteAdapter implements PersistenceAdapter {
         prompt_override TEXT,
 
         -- Execution state
+        claimed_at TEXT,
         started_at TEXT,
         completed_at TEXT,
         exit_code INTEGER,
         error TEXT,
         last_heartbeat_at TEXT,
+        lease_expires_at TEXT,
 
         -- Output
         branch TEXT,
@@ -421,6 +423,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
       'ALTER TABLE tasks ADD COLUMN executor_type TEXT',
       'ALTER TABLE tasks ADD COLUMN auto_fix_attempts INTEGER DEFAULT 0',
       'ALTER TABLE attempts ADD COLUMN queue_priority INTEGER NOT NULL DEFAULT 0',
+      'ALTER TABLE attempts ADD COLUMN claimed_at TEXT',
+      'ALTER TABLE attempts ADD COLUMN lease_expires_at TEXT',
     ];
     for (const sql of migrations) {
       try {
@@ -1256,11 +1260,11 @@ export class SQLiteAdapter implements PersistenceAdapter {
         id, node_id, attempt_number, queue_priority, status,
         snapshot_commit, base_branch, upstream_attempt_ids,
         command_override, prompt_override,
-        started_at, completed_at, exit_code, error, last_heartbeat_at,
+        claimed_at, started_at, completed_at, exit_code, error, last_heartbeat_at, lease_expires_at,
         branch, commit_hash, summary, workspace_path, agent_session_id, container_id,
         supersedes_attempt_id, created_at, merge_conflict
       ) VALUES (
-        ?, ?, ?, ?, ?,
+        ?, ?, ?, ?, ?, ?, ?,
         ?, ?, ?,
         ?, ?,
         ?, ?, ?, ?, ?,
@@ -1272,10 +1276,12 @@ export class SQLiteAdapter implements PersistenceAdapter {
       attempt.snapshotCommit ?? null, attempt.baseBranch ?? null,
       JSON.stringify(attempt.upstreamAttemptIds),
       attempt.commandOverride ?? null, attempt.promptOverride ?? null,
+      attempt.claimedAt?.toISOString() ?? null,
       attempt.startedAt?.toISOString() ?? null,
       attempt.completedAt?.toISOString() ?? null,
       attempt.exitCode ?? null, attempt.error ?? null,
       attempt.lastHeartbeatAt?.toISOString() ?? null,
+      attempt.leaseExpiresAt?.toISOString() ?? null,
       attempt.branch ?? null, attempt.commit ?? null, attempt.summary ?? null,
       attempt.workspacePath ?? null, attempt.agentSessionId ?? null,
       attempt.containerId ?? null,
@@ -1302,16 +1308,18 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return this.rowToAttempt(row);
   }
 
-  updateAttempt(attemptId: string, changes: Partial<Pick<Attempt, 'status' | 'startedAt' | 'completedAt' | 'exitCode' | 'error' | 'lastHeartbeatAt' | 'branch' | 'commit' | 'summary' | 'queuePriority' | 'workspacePath' | 'agentSessionId' | 'containerId' | 'mergeConflict'>>): void {
+  updateAttempt(attemptId: string, changes: Partial<Pick<Attempt, 'status' | 'claimedAt' | 'startedAt' | 'completedAt' | 'exitCode' | 'error' | 'lastHeartbeatAt' | 'leaseExpiresAt' | 'branch' | 'commit' | 'summary' | 'queuePriority' | 'workspacePath' | 'agentSessionId' | 'containerId' | 'mergeConflict'>>): void {
     const setClauses: string[] = [];
     const values: any[] = [];
 
     if (changes.status !== undefined) { setClauses.push('status = ?'); values.push(changes.status); }
+    if (changes.claimedAt !== undefined) { setClauses.push('claimed_at = ?'); values.push(changes.claimedAt instanceof Date ? changes.claimedAt.toISOString() : changes.claimedAt ?? null); }
     if (changes.startedAt !== undefined) { setClauses.push('started_at = ?'); values.push(changes.startedAt instanceof Date ? changes.startedAt.toISOString() : changes.startedAt ?? null); }
     if (changes.completedAt !== undefined) { setClauses.push('completed_at = ?'); values.push(changes.completedAt instanceof Date ? changes.completedAt.toISOString() : changes.completedAt ?? null); }
     if (changes.exitCode !== undefined) { setClauses.push('exit_code = ?'); values.push(changes.exitCode); }
     if (changes.error !== undefined) { setClauses.push('error = ?'); values.push(changes.error); }
     if (changes.lastHeartbeatAt !== undefined) { setClauses.push('last_heartbeat_at = ?'); values.push(changes.lastHeartbeatAt instanceof Date ? changes.lastHeartbeatAt.toISOString() : changes.lastHeartbeatAt ?? null); }
+    if (changes.leaseExpiresAt !== undefined) { setClauses.push('lease_expires_at = ?'); values.push(changes.leaseExpiresAt instanceof Date ? changes.leaseExpiresAt.toISOString() : changes.leaseExpiresAt ?? null); }
     if (changes.branch !== undefined) { setClauses.push('branch = ?'); values.push(changes.branch); }
     if (changes.commit !== undefined) { setClauses.push('commit_hash = ?'); values.push(changes.commit); }
     if (changes.summary !== undefined) { setClauses.push('summary = ?'); values.push(changes.summary); }
@@ -1497,6 +1505,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       nodeId: row.node_id,
       queuePriority: Number(row.queue_priority ?? 0),
       status: row.status,
+      claimedAt: row.claimed_at ? new Date(row.claimed_at) : undefined,
       snapshotCommit: row.snapshot_commit ?? undefined,
       baseBranch: row.base_branch ?? undefined,
       upstreamAttemptIds: JSON.parse(row.upstream_attempt_ids || '[]'),
@@ -1507,6 +1516,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       exitCode: row.exit_code ?? undefined,
       error: row.error ?? undefined,
       lastHeartbeatAt: row.last_heartbeat_at ? new Date(row.last_heartbeat_at) : undefined,
+      leaseExpiresAt: row.lease_expires_at ? new Date(row.lease_expires_at) : undefined,
       branch: row.branch ?? undefined,
       commit: row.commit_hash ?? undefined,
       summary: row.summary ?? undefined,
