@@ -156,4 +156,37 @@ describe('PersistedWorkflowMutationCoordinator', () => {
     expect(owner2Order).toEqual([]);
     expect(adapter.listWorkflowMutationLeases()).toHaveLength(0);
   });
+
+  it('submit returns immediately while persisted work drains in the background', async () => {
+    const adapter = await SQLiteAdapter.create(':memory:');
+    adapters.push(adapter);
+    adapter.saveWorkflow({
+      id: 'wf-1',
+      name: 'wf-1',
+      status: 'running',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+
+    const gate = deferred();
+    const order: string[] = [];
+    const coordinator = new PersistedWorkflowMutationCoordinator(
+      adapter,
+      'owner-1',
+      async (_channel, args) => {
+        order.push(String(args[0]));
+        await gate.promise;
+      },
+    );
+
+    const intentId = coordinator.submit('wf-1', 'high', 'mut', ['burst']);
+    expect(intentId).toBeGreaterThan(0);
+    expect(adapter.listWorkflowMutationIntents('wf-1')[0]?.status).toMatch(/queued|running/);
+
+    await waitFor(() => order.length === 1);
+    expect(order).toEqual(['burst']);
+
+    gate.resolve();
+    await waitFor(() => adapter.listWorkflowMutationIntents('wf-1', ['completed']).length === 1);
+  });
 });

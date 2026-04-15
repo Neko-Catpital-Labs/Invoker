@@ -14,7 +14,6 @@ import { makeEnvelope } from '@invoker/contracts';
 import type { Orchestrator, CommandService, TaskDelta, TaskState, TaskConfig } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import { createDeleteAllSnapshot } from './delete-all-snapshot.js';
-import { resolve as resolvePath } from 'node:path';
 import { Channels } from '@invoker/transport';
 import type { MessageBus } from '@invoker/transport';
 import {
@@ -39,8 +38,20 @@ import {
   finalizeAppliedFix,
 } from './workflow-actions.js';
 import { openExternalTerminalForTask } from './open-terminal-for-task.js';
+import {
+  delegationTimeoutMs,
+  tryDelegateExec,
+  tryDelegateResume,
+  tryDelegateRun,
+} from './headless-delegation.js';
 
 export { bumpGenerationAndRecreate } from './workflow-actions.js';
+export {
+  delegationTimeoutMs,
+  tryDelegateExec,
+  tryDelegateResume,
+  tryDelegateRun,
+} from './headless-delegation.js';
 
 // ── HeadlessDeps interface ───────────────────────────────────
 
@@ -422,6 +433,9 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
   const command = args[0];
 
   switch (command) {
+    case 'owner-serve':
+      await headlessOwnerServe();
+      break;
     // ── New grouped commands ──
     case 'query':
       await headlessQuery(args.slice(1), deps);
@@ -579,6 +593,15 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
     default:
       throw new Error(`Unknown command: ${command}. Run with --help for usage.`);
   }
+}
+
+async function headlessOwnerServe(): Promise<void> {
+  process.stdout.write('[headless] standalone owner ready; waiting for delegated mutations.\n');
+  await new Promise<void>((resolve) => {
+    const finish = () => resolve();
+    process.once('SIGTERM', finish);
+    process.once('SIGINT', finish);
+  });
 }
 
 function printHeadlessUsage(): void {
@@ -1509,235 +1532,3 @@ async function waitForCompletion(
 }
 
 // ── Headless Delegation ──────────────────────────────────────
-
-/**
- * Try to delegate 'run' command to a GUI process. Returns true if delegated, false if no GUI available.
- */
-export async function tryDelegateRun(
-  planPath: string,
-  messageBus: MessageBus,
-  waitForApproval?: boolean,
-  noTrack?: boolean,
-): Promise<boolean> {
-  return tryDelegate('headless.run', { planPath: resolvePath(planPath) }, messageBus, waitForApproval, noTrack);
-}
-
-/**
- * Try to delegate 'resume' command to a GUI process. Returns true if delegated, false if no GUI available.
- */
-export async function tryDelegateResume(
-  workflowId: string,
-  messageBus: MessageBus,
-  waitForApproval?: boolean,
-  noTrack?: boolean,
-): Promise<boolean> {
-  return tryDelegate('headless.resume', { workflowId }, messageBus, waitForApproval, noTrack);
-}
-
-export function delegationTimeoutMs(args: string[]): number {
-  const command = args[0] ?? '';
-  const target = args[1] ?? '';
-  const isWorkflowId = /^wf-[^/]+$/.test(target);
-
-  // Delegated mutations resolve only after the owner finishes executing them.
-  // Long-running workflow resets and queued maintenance commands must therefore
-  // wait up to the global 15-minute operational budget instead of timing out
-  // after the old 5-second "owner missing" window.
-  if (
-    command === 'rebase' ||
-    command === 'rebase-and-retry' ||
-    command === 'recreate' ||
-    command === 'restart' ||
-    command === 'set' ||
-    command === 'fix' ||
-    command === 'resolve-conflict'
-  ) {
-    return 900_000;
-  }
-  if (isWorkflowId) {
-    return 900_000;
-  }
-  return 15_000;
-}
-
-/**
- * Try to delegate a mutating headless command to a GUI process.
- * Returns true if delegated, false if no GUI is available.
- */
-export async function tryDelegateExec(
-  args: string[],
-  messageBus: MessageBus,
-  waitForApproval?: boolean,
-  noTrack?: boolean,
-): Promise<boolean> {
-  const DELEGATION_TIMEOUT = Symbol('delegation-timeout');
-  const timeoutMs = delegationTimeoutMs(args);
-  const timeoutPromise = new Promise<typeof DELEGATION_TIMEOUT>((_, reject) => {
-    setTimeout(() => reject(DELEGATION_TIMEOUT), timeoutMs);
-  });
-
-  try {
-    await Promise.race([
-      messageBus.request('headless.exec', { args, waitForApproval, noTrack }),
-      timeoutPromise,
-    ]);
-    return true;
-  } catch (err) {
-    if (err === DELEGATION_TIMEOUT) {
-      return false;
-    }
-    if (err instanceof Error && err.message.includes('No request handler registered for channel')) {
-      return false;
-    }
-    throw err;
-  }
-}
-
-/**
- * Core delegation logic: send request to GUI, stream updates, wait for completion.
- * Returns true if delegated successfully, false if no GUI is available (fall back to standalone).
- */
-async function tryDelegate(
-  channel: string,
-  payload: unknown,
-  messageBus: MessageBus,
-  waitForApproval?: boolean,
-  noTrack?: boolean,
-): Promise<boolean> {
-  const { formatTaskStatus } = await import('./formatter.js');
-
-  // Local task state tracking
-  const tasks = new Map<string, TaskState>();
-  let targetWorkflowId: string | undefined;
-
-  // Subscribe to task deltas BEFORE sending request (critical to not miss initial 'created' deltas)
-  const deltaUnsub = messageBus.subscribe<TaskDelta>(Channels.TASK_DELTA, (delta) => {
-    if (delta.type === 'created') {
-      const task = delta.task;
-      if (!targetWorkflowId || task.config.workflowId === targetWorkflowId) {
-        tasks.set(task.id, task);
-        process.stdout.write(formatTaskStatus(task) + '\n');
-      }
-    } else if (delta.type === 'updated') {
-      const existing = tasks.get(delta.taskId);
-      if (existing) {
-        // Merge changes into existing task (same pattern as main.ts setupGuiMode)
-        const { config: cfgChanges, execution: execChanges, ...topLevel } = delta.changes;
-        const updated: TaskState = {
-          ...existing,
-          ...topLevel,
-          config: { ...existing.config, ...cfgChanges } as TaskConfig,
-          execution: { ...existing.execution, ...execChanges },
-        };
-        tasks.set(delta.taskId, updated);
-        process.stdout.write(formatTaskStatus(updated) + '\n');
-      }
-    } else if (delta.type === 'removed') {
-      tasks.delete(delta.taskId);
-    }
-  });
-
-  // Subscribe to task output for live streaming
-  const outputUnsub = messageBus.subscribe<{ taskId: string; data: string }>(Channels.TASK_OUTPUT, ({ taskId, data }) => {
-    if (tasks.has(taskId)) {
-      process.stdout.write(`\x1b[2m[${taskId}]\x1b[0m ${data}`);
-    }
-  });
-
-  try {
-    // Send request with timeout (5 seconds) to detect if GUI is available
-    const DELEGATION_TIMEOUT = Symbol('delegation-timeout');
-    const timeoutPromise = new Promise<typeof DELEGATION_TIMEOUT>((_, reject) => {
-      setTimeout(() => reject(DELEGATION_TIMEOUT), 5000);
-    });
-
-    let response: { workflowId: string; tasks: TaskState[] };
-    try {
-      response = await Promise.race([
-        messageBus.request<typeof payload, typeof response>(channel, payload),
-        timeoutPromise,
-      ]) as { workflowId: string; tasks: TaskState[] };
-    } catch (err) {
-      if (err === DELEGATION_TIMEOUT) {
-        // No GUI available, fall back to standalone
-        return false;
-      }
-      if (err instanceof Error && err.message.includes('No request handler registered for channel')) {
-        // Connected peer is not a GUI process (or handler not yet wired); fall back to standalone.
-        return false;
-      }
-      // Real error, rethrow
-      throw err;
-    }
-
-    // Delegation successful
-    targetWorkflowId = response.workflowId;
-    process.stdout.write(`Delegated to GUI — workflow: ${targetWorkflowId}\n`);
-
-    if (noTrack) {
-      process.stdout.write('[headless] --no-track enabled: delegated submission accepted; exiting without tracking.\n');
-      return true;
-    }
-
-    // Seed local map from response tasks (for tasks not yet received via delta)
-    for (const task of response.tasks) {
-      if (!tasks.has(task.id)) {
-        tasks.set(task.id, task);
-      }
-    }
-
-    // Wait for settlement
-    await waitForDelegatedSettlement(tasks, targetWorkflowId, waitForApproval);
-
-    // Print final summary
-    const taskArray = Array.from(tasks.values());
-    const completedCount = taskArray.filter(t => t.status === 'completed').length;
-    const failedCount = taskArray.filter(t => t.status === 'failed').length;
-    process.stdout.write(`\n${BOLD}Summary:${RESET} ${completedCount} completed, ${failedCount} failed\n`);
-
-    // Check for PR URL
-    const mergeTask = taskArray.find(t => t.config.isMergeNode);
-    if (mergeTask?.execution?.reviewUrl) {
-      process.stdout.write(`\nPull Request: ${mergeTask.execution.reviewUrl}\n`);
-    }
-
-    // Set exit code if any tasks failed
-    if (failedCount > 0) {
-      process.exitCode = 1;
-    }
-
-    return true;
-  } finally {
-    // Always unsubscribe
-    deltaUnsub();
-    outputUnsub();
-  }
-}
-
-/**
- * Wait for all tasks in the workflow to reach a settled state.
- * Polls the local task map every 500ms.
- */
-async function waitForDelegatedSettlement(
-  tasks: Map<string, TaskState>,
-  workflowId: string,
-  waitForApproval?: boolean,
-): Promise<void> {
-  const maxWaitMs = waitForApproval ? 86_400_000 : 1_800_000; // 24 hours if waiting for approval, else 30 minutes
-  const pollIntervalMs = 500;
-  const start = Date.now();
-
-  if (waitForApproval) {
-    process.stdout.write('[headless] Waiting for PR approval (--wait-for-approval)...\n');
-  }
-
-  while (Date.now() - start < maxWaitMs) {
-    const taskArray = Array.from(tasks.values()).filter(t => t.config.workflowId === workflowId);
-    const settledStatuses = waitForApproval
-      ? ['completed', 'failed', 'needs_input', 'blocked', 'stale']
-      : ['completed', 'failed', 'needs_input', 'awaiting_approval', 'review_ready', 'blocked', 'stale'];
-    const allSettled = taskArray.every((t) => settledStatuses.includes(t.status));
-    if (allSettled) return;
-    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
-  }
-}

@@ -37,6 +37,7 @@ export const test = base.extend<ElectronFixtures>({
     const stubDir = path.join(testDir, 'claude-stub');
     const markerRoot = path.join(testDir, 'e2e-markers');
     const configPath = path.join(testDir, 'e2e-config.json');
+    const ipcSocketPath = path.join(testDir, 'ipc-transport.sock');
     await fs.mkdir(stubDir, { recursive: true });
     await fs.mkdir(markerRoot, { recursive: true });
     writeFileSync(configPath, JSON.stringify({ autoFixRetries: 0 }), 'utf8');
@@ -57,6 +58,7 @@ export const test = base.extend<ElectronFixtures>({
         ...process.env,
         NODE_ENV: 'test',
         INVOKER_DB_DIR: testDir,
+        INVOKER_IPC_SOCKET: ipcSocketPath,
         INVOKER_ALLOW_DELETE_ALL: '1',
         INVOKER_E2E_ENABLE_COMPOSITOR: '1',
         INVOKER_REPO_CONFIG_PATH: configPath,

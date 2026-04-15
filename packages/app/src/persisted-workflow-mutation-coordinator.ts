@@ -35,6 +35,17 @@ export class PersistedWorkflowMutationCoordinator {
     return result;
   }
 
+  submit(
+    workflowId: string,
+    priority: WorkflowMutationPriority,
+    channel: string,
+    args: unknown[],
+  ): number {
+    const intentId = this.persistence.enqueueWorkflowMutationIntent(workflowId, channel, args, priority);
+    void this.drainWorkflow(workflowId);
+    return intentId;
+  }
+
   async resumePending(): Promise<void> {
     this.persistence.requeueExpiredWorkflowMutationLeases();
     const workflowIds = new Set(

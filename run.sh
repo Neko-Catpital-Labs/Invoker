@@ -76,21 +76,7 @@ unset ELECTRON_RUN_AS_NODE
 # In headless mode (child of running app), skip cleanup and rebuild.
 if [ "$1" = "--headless" ]; then
   shift
-
-  SANDBOX_FLAG=""
-  if [ "$(uname)" = "Linux" ]; then
-    SANDBOX_BIN="$REPO_ROOT/node_modules/.pnpm/electron@*/node_modules/electron/dist/chrome-sandbox"
-    # shellcheck disable=SC2086
-    if ! stat -c '%U:%a' $SANDBOX_BIN 2>/dev/null | grep -q '^root:4755$'; then
-      SANDBOX_FLAG="--no-sandbox"
-    fi
-  fi
-
-  unset ELECTRON_RUN_AS_NODE
-  if [ "$(uname)" = "Linux" ]; then
-    export LIBGL_ALWAYS_SOFTWARE=1
-  fi
-  exec ./packages/app/node_modules/.bin/electron packages/app/dist/main.js $SANDBOX_FLAG --headless "$@"
+  exec node ./packages/app/dist/headless-client.js "$@"
 fi
 
 # Kill any stale Electron/tsup processes from previous runs so we
