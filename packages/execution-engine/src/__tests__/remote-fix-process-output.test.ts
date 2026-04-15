@@ -21,6 +21,24 @@ function mockSpawnChild(stdoutData: string, exitCode: number) {
   return child;
 }
 
+function mockSpawnChildWithStderr(stdoutData: string, stderrData: string, exitCode: number) {
+  const { EventEmitter } = require('events');
+  const stdout = new EventEmitter();
+  const stderr = new EventEmitter();
+  const child = new EventEmitter();
+  (child as any).stdout = stdout;
+  (child as any).stderr = stderr;
+  (child as any).stdin = { write: vi.fn(), end: vi.fn() };
+
+  setTimeout(() => {
+    stdout.emit('data', Buffer.from(stdoutData));
+    stderr.emit('data', Buffer.from(stderrData));
+    child.emit('close', exitCode);
+  }, 0);
+
+  return child;
+}
+
 describe('spawnRemoteAgentFixImpl processOutput', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -83,10 +101,31 @@ describe('spawnRemoteAgentFixImpl processOutput', () => {
         'codex',
         mockRegistry,
       ),
-    ).rejects.toThrow('Remote agent fix failed');
+    ).rejects.toThrow(/SSH remote script failed \(exit=1, phase=remote_agent_fix\)/);
 
     // processOutput should still be called to persist partial session
     expect(mockProcessOutput).toHaveBeenCalledWith('real-thread-456', 'partial output');
+  });
+
+  it('preserves raw stdout and stderr for remote fix failures', async () => {
+    const { spawn } = await import('node:child_process');
+    vi.mocked(spawn).mockReturnValueOnce(
+      mockSpawnChildWithStderr('partial output', 'Welcome to Ubuntu\nreal failure\n', 1) as any,
+    );
+
+    const err = await spawnRemoteAgentFixImpl(
+      'fix the bug',
+      '/home/user/worktree',
+      { host: '1.2.3.4', user: 'invoker', sshKeyPath: '/tmp/key' },
+    ).catch((e) => e as Error);
+
+    expect(err).toBeInstanceOf(Error);
+    expect(err.message).toMatch(/phase=remote_agent_fix/);
+    expect(err.message).toMatch(/STDERR:\nWelcome to Ubuntu\nreal failure/);
+    expect(err.message).toMatch(/STDOUT:\npartial output/);
+    expect((err as any).phase).toBe('remote_agent_fix');
+    expect((err as any).stderr).toBe('Welcome to Ubuntu\nreal failure\n');
+    expect((err as any).stdout).toBe('partial output');
   });
 
   it('uses fallback sessionId when extractSessionId returns undefined', async () => {

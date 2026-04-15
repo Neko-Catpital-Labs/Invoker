@@ -13,6 +13,7 @@ import {
   parseRecordAndPushOutput,
   execRemoteCapture,
   spawnRemoteStdin,
+  createSshRemoteScriptError,
 } from '../ssh-git-exec.js';
 
 describe('shellPosixSingleQuote', () => {
@@ -317,6 +318,25 @@ describe('execRemoteCapture', () => {
     // We can't actually run SSH in unit tests, so we'll verify the structure
     expect(execRemoteCapture).toBeDefined();
     expect(typeof execRemoteCapture).toBe('function');
+  });
+});
+
+describe('createSshRemoteScriptError', () => {
+  it('preserves raw stderr and stdout with phase metadata', () => {
+    const err = createSshRemoteScriptError(
+      254,
+      'stdout detail\n',
+      'Welcome to Ubuntu\nreal failure\n',
+      'bootstrap_clone_fetch',
+    );
+
+    expect(err.message).toContain('SSH remote script failed (exit=254, phase=bootstrap_clone_fetch)');
+    expect(err.message).toContain('STDERR:\nWelcome to Ubuntu\nreal failure\n');
+    expect(err.message).toContain('STDOUT:\nstdout detail\n');
+    expect(err.phase).toBe('bootstrap_clone_fetch');
+    expect(err.exitCode).toBe(254);
+    expect(err.stderr).toBe('Welcome to Ubuntu\nreal failure\n');
+    expect(err.stdout).toBe('stdout detail\n');
   });
 });
 

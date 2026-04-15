@@ -22,6 +22,7 @@ import {
   buildWorktreeCleanupScript,
   buildRecordAndPushScript,
   parseRecordAndPushOutput,
+  createSshRemoteScriptError,
 } from './ssh-git-exec.js';
 
 export interface SshExecutorConfig {
@@ -112,7 +113,7 @@ export class SshExecutor extends BaseExecutor<SshEntry> {
 
 
 
-  private async execRemoteCapture(script: string): Promise<string> {
+  private async execRemoteCapture(script: string, phase?: string): Promise<string> {
     return new Promise((resolve, reject) => {
       const child = spawn('ssh', [...this.buildSshArgs(), 'bash', '-s'], {
         stdio: ['pipe', 'pipe', 'pipe'],
@@ -128,14 +129,7 @@ export class SshExecutor extends BaseExecutor<SshEntry> {
       child.on('close', (code) => {
         if (code === 0) resolve(out);
         else {
-          const error = new Error(`SSH remote script failed (${code}): ${err.trim() || out.trim()}`);
-          (error as any).exitCode = code;
-          (error as any).stderr = err;
-          // Preserve stdout so callers can recover state captured before failure
-          // (e.g. remoteGitRecordAndPush reads err.stdout to extract a commit hash
-          // made just before `git push` failed).
-          (error as any).stdout = out;
-          reject(error);
+          reject(createSshRemoteScriptError(code, out, err, phase));
         }
       });
     });
@@ -313,7 +307,7 @@ echo ${payloadB64} | base64 -d | bash -se
       baseRef,
       invokerHome,
     });
-    const bootstrapOut = await this.execRemoteCapture(script1);
+    const bootstrapOut = await this.execRemoteCapture(script1, 'bootstrap_clone_fetch');
     const { resolvedBaseRef, baseHead, warning, fetchSuccess } = parseBootstrapOutput(bootstrapOut);
     if (warning) {
       this.emitOutput(executionId, `[SshExecutor] ${warning}\n`);
@@ -340,9 +334,9 @@ echo ${payloadB64} | base64 -d | bash -se
     handle.branch = experimentBranch;
     handle.workspacePath = `${invokerHome}/worktrees/${h}/${san}`;
 
-    const remoteHome = (await this.execRemoteCapture('printf %s "$HOME"')).trim();
+    const remoteHome = (await this.execRemoteCapture('printf %s "$HOME"', 'detect_home')).trim();
     const porcelainScript = buildWorktreeListScript({ repoHash: h, invokerHome });
-    const porcelain = await this.execRemoteCapture(porcelainScript);
+    const porcelain = await this.execRemoteCapture(porcelainScript, 'list_worktrees');
 
     // Expand ~ in invokerHome for path matching
     const expandedInvokerHome = invokerHome === '~'
@@ -377,7 +371,7 @@ echo ${payloadB64} | base64 -d | bash -se
         remoteClone,
         canonicalRemoteWt,
       });
-      await this.execRemoteCapture(cleanupScript);
+      await this.execRemoteCapture(cleanupScript, 'cleanup_worktree');
       remoteWt = canonicalRemoteWt;
       // handle.workspacePath already set to canonical path above; no update needed
     }
@@ -386,11 +380,17 @@ echo ${payloadB64} | base64 -d | bash -se
       await this.mergeRequestUpstreamBranches(request, remoteWt, resolvedBaseRef);
       // handle.branch already set above; no update needed
     } else {
-      await this.setupTaskBranch(remoteClone, request, handle, {
-        branchName: experimentBranch,
-        base: resolvedBaseRef,
-        worktreeDir: remoteWt,
-      });
+      try {
+        await this.setupTaskBranch(remoteClone, request, handle, {
+          branchName: experimentBranch,
+          base: resolvedBaseRef,
+          worktreeDir: remoteWt,
+        });
+      } catch (err) {
+        const wrapped = err instanceof Error ? err : new Error(String(err));
+        if (!(wrapped as any).phase) (wrapped as any).phase = 'setup_branch';
+        throw wrapped;
+      }
     }
 
     // Step 4: No-command tasks complete immediately

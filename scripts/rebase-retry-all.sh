@@ -11,7 +11,8 @@ MAIN="$REPO_ROOT/packages/app/dist/main.js"
 # Parse arguments
 DRY_RUN=false
 STATUS_FILTER=""
-PARALLELISM=4
+PARALLELISM=""
+FOLLOW=false
 COMMAND_TIMEOUT_SECONDS=90
 RECOVER_STALE=true
 STALE_THRESHOLD_SECONDS=900
@@ -27,6 +28,10 @@ while [[ $# -gt 0 ]]; do
     --status)
       STATUS_FILTER="$2"
       shift 2
+      ;;
+    --follow)
+      FOLLOW=true
+      shift
       ;;
     --parallel)
       PARALLELISM="$2"
@@ -46,7 +51,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     *)
       echo "Unknown option: $1" >&2
-      echo "Usage: $0 [--dry-run] [--status <filter>] [--parallel <n>] [--timeout <seconds>] [--no-recover-stale] [--stale-threshold <seconds>]" >&2
+      echo "Usage: $0 [--dry-run] [--follow] [--status <filter>] [--parallel <n>] [--timeout <seconds>] [--no-recover-stale] [--stale-threshold <seconds>]" >&2
       exit 1
       ;;
   esac
@@ -190,6 +195,20 @@ if [ -z "$WORKFLOW_IDS" ]; then
   exit 0
 fi
 
+TOTAL_WORKFLOWS=$(printf '%s\n' "$WORKFLOW_IDS" | wc -l | tr -d ' ')
+if [ -z "$PARALLELISM" ]; then
+  PARALLELISM="$TOTAL_WORKFLOWS"
+fi
+if ! [[ "$PARALLELISM" =~ ^[1-9][0-9]*$ ]]; then
+  echo "Invalid --parallel value: $PARALLELISM (expected integer >= 1)" >&2
+  exit 1
+fi
+echo "Found $TOTAL_WORKFLOWS workflow(s); parallelism: $PARALLELISM" >&2
+echo "Follow mode: $FOLLOW" >&2
+if [ "$FOLLOW" = false ]; then
+  echo "Note: fire-and-forget dispatches all workflows immediately; --parallel is enforced with --follow." >&2
+fi
+
 if [ "$RECOVER_STALE" = true ]; then
   STALE_WF_IDS="$(find_stale_workflow_ids)"
   if [ -n "$STALE_WF_IDS" ]; then
@@ -215,97 +234,181 @@ fi
 SUCCEEDED=0
 FAILED=0
 SKIPPED=0
+DISPATCHED=0
+LAUNCH_FAILED=0
 
-process_one_workflow() {
-  local wf_id="$1"
-  local result_file="$2"
-  local task_id=""
+if [ "$FOLLOW" = true ]; then
+  process_one_workflow() {
+    local wf_id="$1"
+    local result_file="$2"
+    local task_id=""
 
-  echo "Processing workflow: $wf_id" >&2
+    echo "Processing workflow: $wf_id" >&2
 
-  # Use first non-merge task as rebase anchor.
-  task_id=$(headless_task_ids query tasks --workflow "$wf_id" --no-merge --output label | head -1)
-  if [ -z "$task_id" ]; then
-    echo "  No non-merge tasks found, skipping" >&2
-    printf "%s\tSKIPPED\n" "$wf_id" >> "$result_file"
-    return 0
-  fi
-
-  if [ "$DRY_RUN" = true ]; then
-    echo "  [DRY RUN] Would rebase task: $task_id" >&2
-    printf "%s\tSUCCEEDED\n" "$wf_id" >> "$result_file"
-    return 0
-  fi
-
-  if [ "$COMMAND_TIMEOUT_SECONDS" -gt 0 ]; then
-    echo "  Rebasing task: $task_id (timeout=${COMMAND_TIMEOUT_SECONDS}s)" >&2
-  else
-    echo "  Rebasing task: $task_id (no timeout)" >&2
-  fi
-  local cmd_out
-  local cmd_status
-  if [ "$COMMAND_TIMEOUT_SECONDS" -gt 0 ]; then
-    set +e
-    cmd_out="$(
-      run_with_optional_timeout "$COMMAND_TIMEOUT_SECONDS" "$ELECTRON" "$MAIN" $SANDBOX_FLAG --headless --no-track rebase "$task_id" 2>&1
-    )"
-    cmd_status=$?
-    set -e
-  else
-    set +e
-    cmd_out="$(
-      headless_mutation --no-track rebase "$task_id" 2>&1
-    )"
-    cmd_status=$?
-    set -e
-  fi
-
-  if [ "$cmd_status" -eq 0 ]; then
-    printf "%s\n" "$cmd_out" >&2
-    echo "  ✓ Success" >&2
-    printf "%s\tSUCCEEDED\n" "$wf_id" >> "$result_file"
-  else
-    printf "%s\n" "$cmd_out" >&2
-    if printf "%s" "$cmd_out" | grep -q "requires an owner process"; then
-      echo "  ✗ Failed (owner process missing; start ./run.sh before parallel mode)" >&2
-    else
-      echo "  ✗ Failed" >&2
+    # Use first non-merge task as rebase anchor.
+    task_id=$(headless_task_ids query tasks --workflow "$wf_id" --no-merge --output label | head -1)
+    if [ -z "$task_id" ]; then
+      echo "  No non-merge tasks found, skipping" >&2
+      printf "%s\tSKIPPED\n" "$wf_id" >> "$result_file"
+      return 0
     fi
-    printf "%s\tFAILED\n" "$wf_id" >> "$result_file"
-  fi
-}
 
-RESULTS_FILE="$(mktemp -t rebase-retry-all-results.XXXXXX)"
-PIDS=()
+    if [ "$DRY_RUN" = true ]; then
+      echo "  [DRY RUN] Would rebase task: $task_id" >&2
+      printf "%s\tSUCCEEDED\n" "$wf_id" >> "$result_file"
+      return 0
+    fi
 
-# Process workflows in parallel with bounded fan-out.
-while IFS= read -r WF_ID; do
-  process_one_workflow "$WF_ID" "$RESULTS_FILE" &
-  PIDS+=("$!")
+    if [ "$COMMAND_TIMEOUT_SECONDS" -gt 0 ]; then
+      echo "  Rebasing task: $task_id (timeout=${COMMAND_TIMEOUT_SECONDS}s)" >&2
+    else
+      echo "  Rebasing task: $task_id (no timeout)" >&2
+    fi
+    local cmd_out
+    local cmd_status
+    if [ "$COMMAND_TIMEOUT_SECONDS" -gt 0 ]; then
+      set +e
+      cmd_out="$(
+        run_with_optional_timeout "$COMMAND_TIMEOUT_SECONDS" "$ELECTRON" "$MAIN" $SANDBOX_FLAG --headless --no-track rebase "$task_id" 2>&1
+      )"
+      cmd_status=$?
+      set -e
+    else
+      set +e
+      cmd_out="$(
+        headless_mutation --no-track rebase "$task_id" 2>&1
+      )"
+      cmd_status=$?
+      set -e
+    fi
 
-  while [ "$(jobs -pr | wc -l | tr -d ' ')" -ge "$PARALLELISM" ]; do
-    sleep 0.2
+    if [ "$cmd_status" -eq 0 ]; then
+      printf "%s\n" "$cmd_out" >&2
+      echo "  ✓ Success" >&2
+      printf "%s\tSUCCEEDED\n" "$wf_id" >> "$result_file"
+    else
+      printf "%s\n" "$cmd_out" >&2
+      if printf "%s" "$cmd_out" | grep -q "requires an owner process"; then
+        echo "  ✗ Failed (owner process missing; start ./run.sh before parallel mode)" >&2
+      else
+        echo "  ✗ Failed" >&2
+      fi
+      printf "%s\tFAILED\n" "$wf_id" >> "$result_file"
+    fi
+  }
+
+  RESULTS_FILE="$(mktemp -t rebase-retry-all-results.XXXXXX)"
+  PIDS=()
+
+  # Process workflows in parallel with bounded fan-out.
+  while IFS= read -r WF_ID; do
+    process_one_workflow "$WF_ID" "$RESULTS_FILE" &
+    PIDS+=("$!")
+
+    while [ "$(jobs -pr | wc -l | tr -d ' ')" -ge "$PARALLELISM" ]; do
+      sleep 0.2
+    done
+  done <<< "$WORKFLOW_IDS"
+
+  for pid in "${PIDS[@]}"; do
+    wait "$pid" || true
   done
-done <<< "$WORKFLOW_IDS"
 
-for pid in "${PIDS[@]}"; do
-  wait "$pid" || true
-done
+  while IFS=$'\t' read -r _wf result; do
+    case "$result" in
+      SUCCEEDED) SUCCEEDED=$((SUCCEEDED + 1)) ;;
+      FAILED) FAILED=$((FAILED + 1)) ;;
+      SKIPPED) SKIPPED=$((SKIPPED + 1)) ;;
+    esac
+  done < "$RESULTS_FILE"
 
-while IFS=$'\t' read -r _wf result; do
-  case "$result" in
-    SUCCEEDED) SUCCEEDED=$((SUCCEEDED + 1)) ;;
-    FAILED) FAILED=$((FAILED + 1)) ;;
-    SKIPPED) SKIPPED=$((SKIPPED + 1)) ;;
-  esac
-done < "$RESULTS_FILE"
+  rm -f "$RESULTS_FILE"
 
-rm -f "$RESULTS_FILE"
+  echo "" >&2
+  echo "Summary:" >&2
+  echo "  Succeeded: $SUCCEEDED" >&2
+  echo "  Failed: $FAILED" >&2
+  echo "  Skipped: $SKIPPED" >&2
+  echo "  Total: $((SUCCEEDED + FAILED + SKIPPED))" >&2
 
-# Print summary
-echo "" >&2
-echo "Summary:" >&2
-echo "  Succeeded: $SUCCEEDED" >&2
-echo "  Failed: $FAILED" >&2
-echo "  Skipped: $SKIPPED" >&2
-echo "  Total: $((SUCCEEDED + FAILED + SKIPPED))" >&2
+  if [ "$FAILED" -ne 0 ]; then
+    exit 1
+  fi
+else
+  LOG_DIR="$(mktemp -d -t rebase-retry-all-logs.XXXXXX)"
+  TIMEOUT_TOOL=""
+  if [ "$COMMAND_TIMEOUT_SECONDS" -gt 0 ]; then
+    if command -v timeout >/dev/null 2>&1; then
+      TIMEOUT_TOOL="timeout"
+    elif command -v gtimeout >/dev/null 2>&1; then
+      TIMEOUT_TOOL="gtimeout"
+    else
+      echo "WARNING: timeout/gtimeout unavailable; fire-and-forget mode will run without per-command timeout." >&2
+    fi
+  fi
+
+  launch_detached() {
+    local log_file="$1"
+    shift
+    if command -v setsid >/dev/null 2>&1; then
+      setsid "$@" >"$log_file" 2>&1 < /dev/null &
+    else
+      nohup "$@" >"$log_file" 2>&1 < /dev/null &
+    fi
+    echo "$!"
+  }
+
+  IDX=0
+  while IFS= read -r WF_ID; do
+    [ -z "$WF_ID" ] && continue
+    IDX=$((IDX + 1))
+    echo "[queue $IDX/$TOTAL_WORKFLOWS] $WF_ID" >&2
+
+    task_id="$(headless_task_ids query tasks --workflow "$WF_ID" --no-merge --output label | head -1)"
+    if [ -z "$task_id" ]; then
+      echo "  No non-merge tasks found, skipping" >&2
+      SKIPPED=$((SKIPPED + 1))
+      continue
+    fi
+
+    if [ "$DRY_RUN" = true ]; then
+      echo "  [DRY RUN] Would dispatch rebase for task: $task_id" >&2
+      DISPATCHED=$((DISPATCHED + 1))
+      continue
+    fi
+
+    log_file="$LOG_DIR/${WF_ID}.log"
+    if [ "$COMMAND_TIMEOUT_SECONDS" -gt 0 ] && [ -n "$TIMEOUT_TOOL" ]; then
+      # shellcheck disable=SC2086
+      pid="$(launch_detached "$log_file" "$TIMEOUT_TOOL" "$COMMAND_TIMEOUT_SECONDS" "$ELECTRON" "$MAIN" $SANDBOX_FLAG --headless --no-track rebase "$task_id")" || pid=""
+    else
+      # shellcheck disable=SC2086
+      pid="$(launch_detached "$log_file" "$ELECTRON" "$MAIN" $SANDBOX_FLAG --headless --no-track rebase "$task_id")" || pid=""
+    fi
+
+    if [ -n "$pid" ]; then
+      echo "  dispatched pid=$pid log=$log_file" >&2
+      DISPATCHED=$((DISPATCHED + 1))
+    else
+      echo "  failed to dispatch" >&2
+      LAUNCH_FAILED=$((LAUNCH_FAILED + 1))
+    fi
+  done <<< "$WORKFLOW_IDS"
+
+  echo "" >&2
+  echo "Summary (fire-and-forget):" >&2
+  if [ "$DRY_RUN" = true ]; then
+    echo "  Would dispatch: $DISPATCHED" >&2
+  else
+    echo "  Dispatched: $DISPATCHED" >&2
+  fi
+  echo "  Launch failed: $LAUNCH_FAILED" >&2
+  echo "  Skipped: $SKIPPED" >&2
+  if [ "$DRY_RUN" = false ]; then
+    echo "  Logs: $LOG_DIR" >&2
+  fi
+
+  if [ "$LAUNCH_FAILED" -ne 0 ]; then
+    exit 1
+  fi
+fi

@@ -4,6 +4,7 @@ import type { ChildProcess } from 'node:child_process';
 import { SshExecutor } from '../ssh-executor.js';
 import type { WorkRequest } from '@invoker/contracts';
 import type { PersistedTaskMeta } from '../executor.js';
+import { createSshRemoteScriptError } from '../ssh-git-exec.js';
 
 function makeRequest(overrides: Partial<WorkRequest> = {}): WorkRequest {
   return {
@@ -217,6 +218,37 @@ describe('SshExecutor managed workspace mode', () => {
     await expect(ssh.start(req)).rejects.toThrow(
       /requires repoUrl.*Add a top-level "repoUrl"/,
     );
+  });
+
+  it('reports startup phase and preserves raw stderr/stdout on bootstrap failure', async () => {
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'testuser',
+      sshKeyPath: '/dev/null',
+      managedWorkspaces: true,
+    }) as any;
+
+    vi.spyOn(ssh, 'execRemoteCapture').mockImplementation(async (_script: string, phase?: string) => {
+      throw createSshRemoteScriptError(
+        254,
+        '__INVOKER_BASE_HEAD__=partial\n',
+        'Welcome to Ubuntu\nreal bootstrap failure\n',
+        phase,
+      );
+    });
+
+    const req = makeRequest({
+      actionType: 'command',
+      inputs: {
+        command: 'echo test',
+        description: 'test',
+        repoUrl: 'git@github.com:owner/repo.git',
+      },
+    });
+
+    await expect(ssh.start(req)).rejects.toThrow(/phase=bootstrap_clone_fetch/);
+    await expect(ssh.start(req)).rejects.toThrow(/STDERR:\nWelcome to Ubuntu\nreal bootstrap failure/);
+    await expect(ssh.start(req)).rejects.toThrow(/STDOUT:\n__INVOKER_BASE_HEAD__=partial/);
   });
 
   it('propagates provision command failure as process exit code', async () => {

@@ -7,6 +7,40 @@
 
 import { spawn, type ChildProcess } from 'node:child_process';
 
+export interface SshRemoteErrorMetadata {
+  exitCode?: number;
+  stdout?: string;
+  stderr?: string;
+  phase?: string;
+}
+
+function formatRawRemoteOutput(stdout: string, stderr: string): string {
+  const sections: string[] = [];
+  if (stderr.length > 0) sections.push(`STDERR:\n${stderr}`);
+  if (stdout.length > 0) sections.push(`STDOUT:\n${stdout}`);
+  return sections.join('\n');
+}
+
+export function createSshRemoteScriptError(
+  code: number | null | undefined,
+  stdout: string,
+  stderr: string,
+  phase?: string,
+): Error & SshRemoteErrorMetadata {
+  const phaseLabel = phase ? `, phase=${phase}` : '';
+  const exitCodeLabel = code ?? 'unknown';
+  const rawOutput = formatRawRemoteOutput(stdout, stderr);
+  const message = rawOutput.length > 0
+    ? `SSH remote script failed (exit=${exitCodeLabel}${phaseLabel})\n${rawOutput}`
+    : `SSH remote script failed (exit=${exitCodeLabel}${phaseLabel})`;
+  const error = new Error(message) as Error & SshRemoteErrorMetadata;
+  error.exitCode = code ?? undefined;
+  error.stdout = stdout;
+  error.stderr = stderr;
+  error.phase = phase;
+  return error;
+}
+
 /**
  * POSIX single-quote escaping for bash -c '…' command lines.
  * Handles embedded single quotes by ending the quoted string, escaping the quote, and resuming.
@@ -298,6 +332,7 @@ export function parseRecordAndPushOutput(
 export interface SshExecOpts {
   sshArgs: string[];
   script: string;
+  phase?: string;
 }
 
 export async function execRemoteCapture(opts: SshExecOpts): Promise<string> {
@@ -318,10 +353,7 @@ export async function execRemoteCapture(opts: SshExecOpts): Promise<string> {
       if (code === 0) {
         resolve(stdout);
       } else {
-        const error = new Error(`SSH remote script failed (${code}): ${stderr.trim() || stdout.trim()}`);
-        (error as any).exitCode = code;
-        (error as any).stderr = stderr;
-        reject(error);
+        reject(createSshRemoteScriptError(code, stdout, stderr, opts.phase));
       }
     });
   });

@@ -17,6 +17,7 @@ import { cleanElectronEnv } from './process-utils.js';
 import type { ExecutionAgent } from './agent.js';
 import type { SessionDriver } from './session-driver.js';
 import type { AgentRegistry } from './agent-registry.js';
+import { createSshRemoteScriptError } from './ssh-git-exec.js';
 
 // ── Host interface ───────────────────────────────────────
 
@@ -276,7 +277,7 @@ else
 fi
 `;
 
-  await execRemoteSsh(target, script);
+  await execRemoteSsh(target, script, 'remote_conflict_fix');
   console.log(`[resolveConflict] Successfully resolved remote conflict for ${task.id}`);
 }
 
@@ -495,7 +496,7 @@ eval "$(echo "${agentCmdB64}" | base64 -d)"
         driver.processOutput(effectiveSessionId, stdout);
       }
       if (code === 0) resolve({ stdout, sessionId: effectiveSessionId });
-      else reject(new Error(`Remote agent fix failed (exit ${code}): ${stderr.trim()}`));
+      else reject(createSshRemoteScriptError(code, stdout, stderr, 'remote_agent_fix'));
     });
     child.on('error', (err) => reject(err));
   });
@@ -556,7 +557,7 @@ export function spawnAgentFixViaRegistry(
   });
 }
 
-function execRemoteSsh(target: RemoteTargetConfig, script: string): Promise<string> {
+function execRemoteSsh(target: RemoteTargetConfig, script: string, phase?: string): Promise<string> {
   const sshArgs = [
     '-i', target.sshKeyPath,
     '-p', String(target.port ?? 22),
@@ -580,7 +581,7 @@ function execRemoteSsh(target: RemoteTargetConfig, script: string): Promise<stri
     child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
     child.on('close', (code) => {
       if (code === 0) resolve(stdout);
-      else reject(new Error(`SSH remote script failed (${code}): ${stderr.trim() || stdout.trim()}`));
+      else reject(createSshRemoteScriptError(code, stdout, stderr, phase));
     });
     child.on('error', (err) => reject(err));
   });
