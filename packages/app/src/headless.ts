@@ -849,6 +849,7 @@ async function headlessSelect(taskId: string, experimentId: string, deps: Headle
 async function headlessRestart(taskId: string, deps: HeadlessDeps): Promise<void> {
   if (!taskId) throw new Error('Missing arguments. Usage: --headless restart <taskId>');
   taskId = restoreWorkflowForTask(taskId, deps).resolvedTaskId;
+  await preemptTaskSubgraph(taskId, deps);
 
   const envelope = makeEnvelope('restart-task', 'headless', 'task', { taskId });
   const result = await deps.commandService.restartTask(envelope);
@@ -944,6 +945,7 @@ async function headlessRebaseAndRetry(taskId: string, deps: HeadlessDeps): Promi
   taskId = restoreWorkflowForTask(taskId, deps).resolvedTaskId;
   const workflowId = deps.orchestrator.getTask(taskId)?.config.workflowId;
   if (!workflowId) throw new Error(`Task "${taskId}" has no workflow`);
+  await preemptWorkflowExecution(workflowId, deps);
 
   const te = createHeadlessExecutor(deps);
   const autoFix = wireHeadlessAutoFix(deps, te);
@@ -968,6 +970,7 @@ async function headlessRecreateWorkflow(workflowId: string, deps: HeadlessDeps):
   if (!workflowId) {
     throw new Error('Missing arguments. Usage: --headless recreate <workflowId>');
   }
+  await preemptWorkflowExecution(workflowId, deps);
   const started = sharedRecreateWorkflow(workflowId, { persistence: deps.persistence, orchestrator: deps.orchestrator });
   const runnable = started.filter(t => t.status === 'running');
   if (runnable.length > 0) {
@@ -996,6 +999,7 @@ async function headlessRecreateTask(taskId: string, deps: HeadlessDeps): Promise
     throw new Error('Missing arguments. Usage: --headless recreate-task <taskId>');
   }
   taskId = restoreWorkflowForTask(taskId, deps).resolvedTaskId;
+  await preemptTaskSubgraph(taskId, deps);
 
   const started = sharedRecreateTask(taskId, { persistence: deps.persistence, orchestrator: deps.orchestrator });
   const runnable = started.filter(t => t.status === 'running');
@@ -1024,6 +1028,7 @@ async function headlessRetryWorkflow(workflowId: string, deps: HeadlessDeps): Pr
   if (!workflowId) {
     throw new Error('Missing arguments. Usage: --headless restart <workflowId>');
   }
+  await preemptWorkflowExecution(workflowId, deps);
   const envelope = makeEnvelope('retry-workflow', 'headless', 'workflow', { workflowId });
   const result = await deps.commandService.retryWorkflow(envelope);
   if (!result.ok) throw new Error(result.error.message);
@@ -1046,6 +1051,28 @@ async function headlessRetryWorkflow(workflowId: string, deps: HeadlessDeps): Pr
   }
   await waitForCompletion(deps.orchestrator, workflowId, undefined, autoFix.isBusy);
   autoFix.unsubscribe();
+}
+
+async function preemptTaskSubgraph(taskId: string, deps: HeadlessDeps): Promise<void> {
+  if (typeof deps.commandService.cancelTask !== 'function') return;
+  const envelope = makeEnvelope('cancel-task', 'headless', 'task', { taskId });
+  const result = await deps.commandService.cancelTask(envelope);
+  if (!result.ok) {
+    const message = result.error.message;
+    if (message.includes('already completed') || message.includes('already stale')) return;
+    throw new Error(message);
+  }
+}
+
+async function preemptWorkflowExecution(workflowId: string, deps: HeadlessDeps): Promise<void> {
+  if (typeof deps.commandService.cancelWorkflow !== 'function') return;
+  const envelope = makeEnvelope('cancel-workflow', 'headless', 'workflow', { workflowId });
+  const result = await deps.commandService.cancelWorkflow(envelope);
+  if (!result.ok) {
+    const message = result.error.message;
+    if (message.includes('No tasks found for workflow')) return;
+    throw new Error(message);
+  }
 }
 
 async function headlessEdit(taskId: string, newCommand: string, deps: HeadlessDeps): Promise<void> {

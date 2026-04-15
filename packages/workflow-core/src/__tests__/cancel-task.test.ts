@@ -99,6 +99,7 @@ function makeResponse(overrides: Partial<WorkResponse>): WorkResponse {
   return {
     requestId: 'req-1',
     actionId: 'a',
+    executionGeneration: 0,
     status: 'completed',
     outputs: { exitCode: 0 },
     ...overrides,
