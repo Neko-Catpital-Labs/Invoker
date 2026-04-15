@@ -9,10 +9,14 @@
 #   bash scripts/sync-fork-upstream.sh <plan.yaml>
 #
 # If the plan's repoUrl matches EdbertChan/Invoker (case-insensitive),
-# fetches upstream/master and pushes it to origin/master so the fork
+# fetches the upstream base branch and pushes it to origin/master so the fork
 # stays in sync. No-ops if the plan targets a different repo.
 #
 set -euo pipefail
+
+UPSTREAM_REMOTE="upstream"
+UPSTREAM_BASE="master"
+UPSTREAM_REF="${UPSTREAM_REMOTE}/${UPSTREAM_BASE}"
 
 if [[ $# -lt 1 ]]; then
   echo "Usage: $0 <plan.yaml>" >&2
@@ -48,20 +52,20 @@ fi
 echo "==> Plan targets EdbertChan/Invoker — syncing fork with upstream"
 
 # Verify upstream remote exists.
-if ! git remote get-url upstream >/dev/null 2>&1; then
+if ! git remote get-url "$UPSTREAM_REMOTE" >/dev/null 2>&1; then
   echo "sync-fork-upstream: 'upstream' remote not configured. Adding it." >&2
-  git remote add upstream https://github.com/Neko-Catpital-Labs/Invoker.git
+  git remote add "$UPSTREAM_REMOTE" https://github.com/Neko-Catpital-Labs/Invoker.git
 fi
 
-# Fetch upstream master and merge into local master.
+# Fetch the upstream base and merge into local master.
 # Merge (not rebase) so fork-specific commits are never dropped.
-git fetch upstream master
-if git merge-base --is-ancestor upstream/master HEAD; then
+git fetch "$UPSTREAM_REMOTE" "$UPSTREAM_BASE"
+if git merge-base --is-ancestor "$UPSTREAM_REF" HEAD; then
   echo "==> Fork already up-to-date with upstream"
 else
-  echo "==> Merging upstream/master into fork"
-  git merge upstream/master --no-edit -m "Merge upstream/master into fork"
+  echo "==> Merging upstream base into fork"
+  git merge "$UPSTREAM_REF" --no-edit -m "Merge upstream base into fork"
 fi
 git push origin master
 
-echo "==> Fork synced: origin/master merged with upstream/master"
+echo "==> Fork synced: origin/master merged with upstream base"

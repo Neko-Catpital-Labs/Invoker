@@ -17,7 +17,7 @@ cd "$INVOKER_E2E_REPO_ROOT"
 unset ELECTRON_RUN_AS_NODE
 
 CFG_FILE="$(mktemp "${TMPDIR:-/tmp}/invoker-repro-config.XXXXXX.json")"
-printf '{\n  "autoFixRetries": 0\n}\n' > "$CFG_FILE"
+printf '{}\n' > "$CFG_FILE"
 export INVOKER_REPO_CONFIG_PATH="$CFG_FILE"
 
 echo "==> repro: delete-all"

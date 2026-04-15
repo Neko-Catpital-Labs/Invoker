@@ -46,7 +46,7 @@ Refactor Invoker so both task execution and workflow-scoped mutation serializati
 
 ## Phase 4: Normalize all mutation and retry flows onto persisted attempts/intents
 
-- Refactor restart/recreate/fix/auto-fix/conflict-resolution flows so they operate only through persisted attempt transitions and persisted workflow mutation intents.
+- Refactor restart/recreate/fix/conflict-resolution flows so they operate only through persisted attempt transitions and persisted workflow mutation intents.
 - Every reset/retry path must:
   - supersede or cancel the prior active attempt in persistence
   - clear its active lease

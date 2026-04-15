@@ -260,14 +260,18 @@ function assertCleanPrBase() {
     );
   }
 
+  const upstreamRemote = 'upstream';
+  const upstreamBase = 'master';
+  const upstreamRef = `${upstreamRemote}/${upstreamBase}`;
+
   // Keep the check deterministic against latest refs.
-  execSync('git fetch --quiet upstream master', { stdio: 'ignore' });
+  execSync(`git fetch --quiet ${upstreamRemote} ${upstreamBase}`, { stdio: 'ignore' });
   execSync('git fetch --quiet origin master', { stdio: 'ignore' });
 
-  const originOnly = new Set(revList('upstream/master..origin/master'));
+  const originOnly = new Set(revList(`${upstreamRef}..origin/master`));
   if (originOnly.size === 0) return;
 
-  const headOnly = revList('upstream/master..HEAD');
+  const headOnly = revList(`${upstreamRef}..HEAD`);
   const polluted = headOnly.filter((sha) => originOnly.has(sha));
   if (polluted.length === 0) return;
 
@@ -283,8 +287,8 @@ function assertCleanPrBase() {
       ...lines,
       more,
       '',
-      'Fix by creating a clean PR branch from upstream/master, then cherry-picking intended commits:',
-      `  git switch -c pr/<name> upstream/master`,
+      'Fix by creating a clean PR branch from the upstream base, then cherry-picking intended commits:',
+      `  git switch -c pr/<name> ${upstreamRef}`,
       `  git cherry-pick <commit> [<commit> ...]`,
       `  git push -u origin pr/<name>`,
       '',

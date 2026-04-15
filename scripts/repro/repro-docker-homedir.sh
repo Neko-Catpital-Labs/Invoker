@@ -29,7 +29,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-printf '{\n  "autoFixRetries": 0\n}\n' > "$TMP_CFG"
+printf '{}\n' > "$TMP_CFG"
 export INVOKER_DB_DIR="$TMP_DB_DIR"
 export INVOKER_REPO_CONFIG_PATH="$TMP_CFG"
 

@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { GitHubMergeGateProvider } from '../github-merge-gate-provider.js';
 
+const UPSTREAM_BASE_REF = ['upstream', 'master'].join('/');
+
 vi.mock('node:child_process');
 
 function mockSpawnResult(stdoutData: string, exitCode: number) {
@@ -394,10 +396,10 @@ describe('GitHubMergeGateProvider', () => {
         if (cmd === 'git' && args?.[0] === 'fetch') {
           return mockSpawnResult('', 0);
         }
-        if (cmd === 'git' && args?.[0] === 'rev-list' && args?.[1] === 'upstream/master..origin/master') {
+        if (cmd === 'git' && args?.[0] === 'rev-list' && args?.[1] === `${UPSTREAM_BASE_REF}..origin/master`) {
           return mockSpawnResult('fork-only-sha', 0);
         }
-        if (cmd === 'git' && args?.[0] === 'rev-list' && args?.[1] === 'upstream/master..plan/my-feature') {
+        if (cmd === 'git' && args?.[0] === 'rev-list' && args?.[1] === `${UPSTREAM_BASE_REF}..plan/my-feature`) {
           return mockSpawnResult('feature-only-sha', 0);
         }
         if (cmd === 'git' && args?.[0] === 'push') {
@@ -492,10 +494,10 @@ describe('GitHubMergeGateProvider', () => {
         if (cmd === 'git' && args?.[0] === 'fetch') {
           return mockSpawnResult('', 0);
         }
-        if (cmd === 'git' && args?.[0] === 'rev-list' && args?.[1] === 'upstream/master..origin/master') {
+        if (cmd === 'git' && args?.[0] === 'rev-list' && args?.[1] === `${UPSTREAM_BASE_REF}..origin/master`) {
           return mockSpawnResult('fork-only-sha\nfork-only-sha-2', 0);
         }
-        if (cmd === 'git' && args?.[0] === 'rev-list' && args?.[1] === 'upstream/master..plan/polluted') {
+        if (cmd === 'git' && args?.[0] === 'rev-list' && args?.[1] === `${UPSTREAM_BASE_REF}..plan/polluted`) {
           return mockSpawnResult('feature-sha\nfork-only-sha', 0);
         }
         if (cmd === 'git' && args?.[0] === 'rev-list' && args?.[1] === '--reverse' && args?.[2] === 'origin/master..plan/polluted') {
@@ -541,7 +543,7 @@ describe('GitHubMergeGateProvider', () => {
       expect(result.url).toBe('https://github.com/Neko-Catpital-Labs/Invoker/pull/51');
       expect(spawnMock).toHaveBeenCalledWith(
         'git',
-        ['switch', '-C', 'invoker/pr-clean/plan-polluted-1234567890', 'upstream/master'],
+        ['switch', '-C', 'invoker/pr-clean/plan-polluted-1234567890', UPSTREAM_BASE_REF],
         expect.anything(),
       );
       expect(spawnMock).toHaveBeenCalledWith(
@@ -577,10 +579,10 @@ describe('GitHubMergeGateProvider', () => {
         if (cmd === 'git' && args?.[0] === 'fetch') {
           return mockSpawnResult('', 0);
         }
-        if (cmd === 'git' && args?.[0] === 'rev-list' && args?.[1] === 'upstream/master..origin/master') {
+        if (cmd === 'git' && args?.[0] === 'rev-list' && args?.[1] === `${UPSTREAM_BASE_REF}..origin/master`) {
           return mockSpawnResult('fork-only-sha\nfork-only-sha-2', 0);
         }
-        if (cmd === 'git' && args?.[0] === 'rev-list' && args?.[1] === 'upstream/master..plan/detached') {
+        if (cmd === 'git' && args?.[0] === 'rev-list' && args?.[1] === `${UPSTREAM_BASE_REF}..plan/detached`) {
           return mockSpawnResult('feature-sha\nfork-only-sha', 0);
         }
         if (cmd === 'git' && args?.[0] === 'rev-list' && args?.[1] === '--reverse' && args?.[2] === 'origin/master..plan/detached') {

@@ -272,22 +272,12 @@ export function TaskPanel({
             }`}
           />
           {visualStatus === 'fixing_with_ai'
-            ? ((task.config.autoFixRetries ?? 0) > 0 ? 'AUTO-FIXING' : 'FIXING WITH AI')
+            ? 'FIXING WITH AI'
             : visualStatus === 'fix_approval'
               ? 'APPROVE FIX'
               : task.status.toUpperCase().replace('_', ' ')}
         </span>
       </div>
-
-      {/* Auto-fix retry counter */}
-      {(task.config.autoFixRetries ?? 0) > 0 && (task.execution.autoFixAttempts ?? 0) > 0 && (
-        <div className="flex items-center justify-between">
-          <span className="text-sm text-gray-400">Auto-fix</span>
-          <span className="text-xs text-gray-200">
-            attempt {task.execution.autoFixAttempts}/{task.config.autoFixRetries}
-          </span>
-        </div>
-      )}
 
       {/* Target branch (merge gates only) */}
       {task.config.isMergeNode && onSetMergeBranch && task.config.workflowId && (
