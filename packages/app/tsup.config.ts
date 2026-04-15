@@ -2,7 +2,7 @@ import { defineConfig } from 'tsup';
 import { cpSync } from 'node:fs';
 
 export default defineConfig({
-  entry: ['src/main.ts', 'src/preload.ts'],
+  entry: ['src/main.ts', 'src/preload.ts', 'src/headless-client.ts'],
   format: ['cjs'],
   outDir: 'dist',
   external: ['electron', 'sql.js', 'dockerode', '@invoker/surfaces', '@slack/bolt', 'dotenv'],

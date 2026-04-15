@@ -635,6 +635,11 @@ if (isHeadless) {
           });
           return { ok: true };
         });
+        messageBus.onRequest('headless.owner-ping', async () => ({
+          ok: true,
+          ownerId: workflowMutationOwnerId,
+          mode: 'standalone',
+        }));
         messageBus.onRequest('headless.resume', async (req: unknown) => {
           const { workflowId } = req as { workflowId: string };
           await runHeadless(['resume', workflowId], {
@@ -656,6 +661,10 @@ if (isHeadless) {
             noTrack: delegatedNoTrack,
           };
           const { workflowId, priority } = classifyStandaloneHeadlessExecMutation(payload);
+          if (delegatedNoTrack && workflowId && workflowMutationCoordinator) {
+            const intentId = workflowMutationCoordinator.submit(workflowId, priority, 'headless.exec', [payload]);
+            return { ok: true, intentId };
+          }
           await runStandaloneWorkflowMutation(workflowId, priority, 'headless.exec', [payload], async () => {
             await runHeadless(args, {
               ...headlessDeps,
@@ -1243,6 +1252,11 @@ function setupGuiMode(): void {
       workflowMutationDispatcher.set('headless.exec', async (payloadArg: unknown) => {
         return executeHeadlessExec(payloadArg as HeadlessExecMutationPayload);
       });
+      messageBus.onRequest('headless.owner-ping', async () => ({
+        ok: true,
+        ownerId: workflowMutationOwnerId,
+        mode: 'gui',
+      }));
       messageBus.onRequest('headless.run', async (req: unknown) => {
         const { planPath } = req as { planPath: string };
         logger.info(`headless.run: "${planPath}"`, { module: 'ipc-delegate' });
@@ -1268,6 +1282,10 @@ function setupGuiMode(): void {
           noTrack: delegatedNoTrack,
         };
         const { workflowId, priority } = classifyHeadlessExecMutation(payload);
+        if (delegatedNoTrack && workflowId && workflowMutationCoordinator) {
+          const intentId = workflowMutationCoordinator.submit(workflowId, priority, 'headless.exec', [payload]);
+          return { ok: true, intentId };
+        }
         return runWorkflowMutation(workflowId, priority, 'headless.exec', [payload], async () => executeHeadlessExec(payload));
       });
     }
