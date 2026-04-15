@@ -33,9 +33,11 @@ import { app, BrowserWindow, ipcMain, nativeImage, shell } from 'electron';
 import * as path from 'node:path';
 import { mkdirSync } from 'node:fs';
 
+const enableTestCompositor = process.env.INVOKER_E2E_ENABLE_COMPOSITOR === '1' || Boolean(process.env.CAPTURE_MODE);
+
 // Prevent desktop-wide freezes on Linux (Chromium GPU + X11/Wayland compositors).
 // Defense-in-depth: API-level disable, command-line flags, and env var (LIBGL_ALWAYS_SOFTWARE).
-if (process.platform === 'linux') {
+if (process.platform === 'linux' && !enableTestCompositor) {
   app.disableHardwareAcceleration();
   app.commandLine.appendSwitch('no-sandbox');
   app.commandLine.appendSwitch('no-zygote');
@@ -241,7 +243,6 @@ async function initServices(options?: InitServicesOptions): Promise<void> {
     persistence, messageBus,
     taskRepository,
     maxConcurrency: invokerConfig.maxConcurrency,
-    defaultAutoFixRetries: invokerConfig.autoFixRetries,
     executorRoutingRules: invokerConfig.executorRoutingRules ?? [],
     deferRunningUntilLaunch: true,
   });
@@ -711,7 +712,6 @@ function setupGuiMode(): void {
   let activityPollInterval: ReturnType<typeof setInterval> | null = null;
   let uiPerfLogInterval: ReturnType<typeof setInterval> | null = null;
   const lastKnownTaskStates = new Map<string, string>();
-  const autoFixInProgress = new Set<string>();
   let lastKnownWorkflowCount = 0;
   let lastActivityLogId = 0;
   const uiPerfStats = {
@@ -1147,8 +1147,9 @@ function setupGuiMode(): void {
     mainWindow = new BrowserWindow({
       width: 1200,
       height: 800,
-      // Hidden windows in NODE_ENV=test avoid focus stealing; visual proof sets CAPTURE_MODE and needs a real compositor path for screenshots.
-      show: process.env.NODE_ENV !== 'test' || Boolean(process.env.CAPTURE_MODE),
+      // Hidden windows in NODE_ENV=test avoid focus stealing; visual assertions
+      // need a visible compositor-backed window for Electron screenshots.
+      show: process.env.NODE_ENV !== 'test' || enableTestCompositor,
       webPreferences: {
         preload: path.join(__dirname, 'preload.js'),
         contextIsolation: true,
@@ -1318,18 +1319,6 @@ function setupGuiMode(): void {
       }
       applyDelta(delta as TaskDelta, lastKnownTaskStates, orchestrator);
 
-      // Auto-fix: when a task fails and has retries remaining, fix and restart automatically
-      const d = delta as TaskDelta;
-      if (d.type === 'updated' && d.changes.status === 'failed') {
-        if (taskExecutor && !autoFixInProgress.has(d.taskId) && orchestrator.shouldAutoFix(d.taskId)) {
-          autoFixInProgress.add(d.taskId);
-          import('./workflow-actions.js').then(({ autoFixOnFailure }) =>
-            autoFixOnFailure(d.taskId, { orchestrator, persistence, taskExecutor: requireTaskExecutor() })
-              .catch(err => logger.error(`[auto-fix] "${d.taskId}": ${err}`, { module: 'auto-fix' }))
-              .finally(() => autoFixInProgress.delete(d.taskId)),
-          );
-        }
-      }
     });
 
     uiPerfLogInterval = setInterval(() => {
@@ -1445,7 +1434,6 @@ function setupGuiMode(): void {
         messageBus,
         taskRepository: new SqliteTaskRepository(persistence),
         maxConcurrency: invokerConfig.maxConcurrency,
-        defaultAutoFixRetries: invokerConfig.autoFixRetries,
         executorRoutingRules: invokerConfig.executorRoutingRules ?? [],
         deferRunningUntilLaunch: true,
       });

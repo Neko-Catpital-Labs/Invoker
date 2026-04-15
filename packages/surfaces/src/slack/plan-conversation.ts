@@ -100,7 +100,6 @@ tasks:
         description: "Approach A"
         prompt: "Try approach A"
     requiresManualApproval: false
-    autoFix: false               # auto-retry with experiments on failure
 \`\`\`
 
 Rules:

@@ -72,7 +72,7 @@ base.describe('Orphan task relaunch on restart', () => {
   base('orphaned running task is relaunched after app restart', async () => {
     const testDir = mkdtempSync(path.join(tmpdir(), 'invoker-e2e-'));
     const configPath = path.join(testDir, 'e2e-config.json');
-    writeFileSync(configPath, JSON.stringify({ autoFixRetries: 0 }), 'utf8');
+    writeFileSync(configPath, JSON.stringify({}), 'utf8');
 
     try {
     // --- Session 1: start a plan, get a task running, then close ---

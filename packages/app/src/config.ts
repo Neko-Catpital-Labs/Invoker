@@ -25,11 +25,6 @@ export interface InvokerConfig {
    */
   allowGraphMutation?: boolean;
   /**
-   * Global retry budget for auto-fix attempts per failed task.
-   * Default: 0 (disabled).
-   */
-  autoFixRetries?: number;
-  /**
    * When true, successful AI-applied fixes are automatically approved.
    * This skips the manual "Approve Fix" step for fix-with-agent and
    * resolve-conflict flows.

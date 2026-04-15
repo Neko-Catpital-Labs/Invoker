@@ -179,11 +179,9 @@ export interface PlanDefinition {
     requiresManualApproval?: boolean;
     featureBranch?: string;
     executorType?: string;
-    autoFix?: boolean;
     dockerImage?: string;
     remoteTargetId?: string;
     executionAgent?: string;
-    autoFixRetries?: number;
   }>;
 }
 
@@ -215,7 +213,6 @@ export interface GraphMutationNodeDef {
   executorType?: ExecutorType;
   isReconciliation?: boolean;
   requiresManualApproval?: boolean;
-  autoFix?: boolean;
   isMergeNode?: boolean;
 }
 
@@ -234,7 +231,6 @@ export interface TaskReplacementDef {
   prompt?: string;
   dependencies?: string[];
   executorType?: ExecutorType;
-  autoFix?: boolean;
   executionAgent?: string;
 }
 
@@ -358,8 +354,6 @@ export interface OrchestratorConfig {
   /** Optional; defaults to an adapter wrapping `persistence`. */
   taskRepository?: TaskRepository;
   maxConcurrency?: number;
-  /** Default auto-fix retry budget for legacy tasks missing persisted per-task config. */
-  defaultAutoFixRetries?: number;
   /**
    * Rules that validate task execution environment against command patterns.
    * When loading a plan, the orchestrator validates that tasks with commands matching
@@ -389,7 +383,6 @@ export class Orchestrator {
   private readonly taskRepository: TaskRepository;
   private readonly maxConcurrency: number;
   private readonly executorRoutingRules: ExecutorRoutingRule[];
-  private readonly defaultAutoFixRetries: number;
   private readonly deferRunningUntilLaunch: boolean;
 
   private activeWorkflowIds = new Set<string>();
@@ -402,7 +395,6 @@ export class Orchestrator {
     this.messageBus = config.messageBus;
     this.taskRepository = config.taskRepository ?? taskRepositoryFromPersistence(config.persistence);
     this.executorRoutingRules = config.executorRoutingRules ?? [];
-    this.defaultAutoFixRetries = Math.min(Math.max(0, Math.floor(config.defaultAutoFixRetries ?? 0)), 10);
     this.deferRunningUntilLaunch = config.deferRunningUntilLaunch ?? false;
 
     this.stateMachine = new TaskStateMachine(new ActionGraph());
@@ -787,8 +779,6 @@ export class Orchestrator {
         experimentVariants: taskDef.experimentVariants,
         requiresManualApproval: taskDef.requiresManualApproval,
         featureBranch: taskDef.featureBranch,
-        autoFix: taskDef.autoFix,
-        autoFixRetries: taskDef.autoFixRetries,
         executionAgent: taskDef.executionAgent,
         externalDependencies,
       } as const;
@@ -953,15 +943,6 @@ export class Orchestrator {
           );
           return [];
         }
-      }
-    }
-
-    // Auto-fix interception
-    if (response.status === 'failed') {
-      const task = this.stateGetTask(response.actionId);
-      if (task?.config.autoFix) {
-        const syntheticResponse = this.buildAutoFixResponse(task, response.outputs);
-        return this.handleWorkerResponse(syntheticResponse);
       }
     }
 
@@ -1411,7 +1392,6 @@ export class Orchestrator {
       status: 'pending',
       config: { summary: undefined },
       execution: {
-        autoFixAttempts: 0,
         startedAt: undefined,
         completedAt: undefined,
         error: undefined,
@@ -1505,7 +1485,6 @@ export class Orchestrator {
       status: 'pending',
       config: { summary: undefined },
       execution: {
-        autoFixAttempts: 0,
         startedAt: undefined,
         completedAt: undefined,
         error: undefined,
@@ -1560,7 +1539,6 @@ export class Orchestrator {
       status: 'pending',
       config: { summary: undefined },
       execution: {
-        autoFixAttempts: 0,
         startedAt: undefined,
         completedAt: undefined,
         error: undefined,
@@ -1622,7 +1600,6 @@ export class Orchestrator {
       status: 'pending',
       config: { summary: undefined },
       execution: {
-        autoFixAttempts: 0,
         startedAt: undefined,
         completedAt: undefined,
         error: undefined,
@@ -1954,7 +1931,6 @@ export class Orchestrator {
         workflowId: wfId,
         command: rt.command,
         prompt: rt.prompt,
-        autoFix: rt.autoFix,
         executionAgent: rt.executionAgent ?? task.config.executionAgent,
       } as const;
       // Replacement tasks inherit executor config from the parent task.
@@ -2179,24 +2155,6 @@ export class Orchestrator {
 
   getTask(taskId: string): TaskState | undefined {
     return this.stateGetTask(taskId);
-  }
-
-  getAutoFixRetryBudget(taskId: string): number {
-    const task = this.stateGetTask(taskId);
-    if (!task) return 0;
-    if (task.config.autoFixRetries !== undefined) {
-      return Math.max(0, task.config.autoFixRetries);
-    }
-    return this.defaultAutoFixRetries;
-  }
-
-  shouldAutoFix(taskId: string): boolean {
-    const task = this.stateGetTask(taskId);
-    if (!task) return false;
-    if (task.status !== 'failed') return false;
-    const max = this.getAutoFixRetryBudget(taskId);
-    if (max <= 0) return false;
-    return (task.execution.autoFixAttempts ?? 0) < max;
   }
 
   getAllTasks(): TaskState[] {
@@ -2784,42 +2742,6 @@ export class Orchestrator {
         this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
       }
     }
-  }
-
-  private buildAutoFixResponse(task: TaskState, outputs: WorkResponse['outputs']): WorkResponse {
-    const errorMsg = outputs.error ?? `Task failed with exit code ${outputs.exitCode ?? 1}`;
-
-    const variants = [
-      {
-        id: 'fix-conservative',
-        description: 'Conservative fix: minimal change to fix the error',
-        prompt: `The following task failed. Apply the MINIMAL change needed to fix this specific error.\n\nOriginal task: ${task.description}\nOriginal prompt: ${task.config.prompt ?? task.config.command ?? 'N/A'}\nError: ${errorMsg}\n\nFix the error with the smallest possible change. Do not refactor or restructure.`,
-      },
-      {
-        id: 'fix-refactor',
-        description: 'Refactor fix: restructure to avoid the error',
-        prompt: `The following task failed. Restructure the approach to avoid this class of error entirely.\n\nOriginal task: ${task.description}\nOriginal prompt: ${task.config.prompt ?? task.config.command ?? 'N/A'}\nError: ${errorMsg}\n\nRefactor the code to fix the error and prevent similar issues.`,
-      },
-      {
-        id: 'fix-alternative',
-        description: 'Alternative fix: try a completely different approach',
-        prompt: `The following task failed. Try a COMPLETELY DIFFERENT implementation approach.\n\nOriginal task: ${task.description}\nOriginal prompt: ${task.config.prompt ?? task.config.command ?? 'N/A'}\nError: ${errorMsg}\n\nIgnore the previous approach and implement this from scratch using a different strategy.`,
-      },
-    ];
-
-    return {
-      requestId: `autofix-${task.id}`,
-      actionId: task.id,
-      executionGeneration: this.getExecutionGeneration(task),
-      status: 'spawn_experiments',
-      outputs: { exitCode: 0 },
-      dagMutation: {
-        spawnExperiments: {
-          description: `Auto-fix experiments for failed task: ${task.description}`,
-          variants,
-        },
-      },
-    };
   }
 
   private checkWorkflowCompletion(): void {

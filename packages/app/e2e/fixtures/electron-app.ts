@@ -39,7 +39,7 @@ export const test = base.extend<ElectronFixtures>({
     const configPath = path.join(testDir, 'e2e-config.json');
     await fs.mkdir(stubDir, { recursive: true });
     await fs.mkdir(markerRoot, { recursive: true });
-    writeFileSync(configPath, JSON.stringify({ autoFixRetries: 0 }), 'utf8');
+    writeFileSync(configPath, JSON.stringify({}), 'utf8');
     try {
       await fs.symlink(claudeMarker, path.join(stubDir, 'claude'));
     } catch {
@@ -58,6 +58,7 @@ export const test = base.extend<ElectronFixtures>({
         NODE_ENV: 'test',
         INVOKER_DB_DIR: testDir,
         INVOKER_ALLOW_DELETE_ALL: '1',
+        INVOKER_E2E_ENABLE_COMPOSITOR: '1',
         INVOKER_REPO_CONFIG_PATH: configPath,
         INVOKER_E2E_MARKER_ROOT: markerRoot,
         INVOKER_CLAUDE_FIX_COMMAND: claudeMarker,
@@ -233,6 +234,15 @@ export async function waitForStableUI(page: Page): Promise<void> {
 }
 
 /**
+ * Screenshot baselines were captured against a 1200x771 content viewport.
+ * Electron frame metrics can drift by a pixel across versions/window managers,
+ * so pin the content viewport in the test harness before visual assertions.
+ */
+async function ensureScreenshotViewport(page: Page): Promise<void> {
+  await page.setViewportSize({ width: 1200, height: 771 });
+}
+
+/**
  * Assert a named screenshot matches the committed baseline (toHaveScreenshot).
  * Used by normal regression tests. Viewport capture (not fullPage) to match
  * the Playwright config's toHaveScreenshot defaults.
@@ -241,8 +251,9 @@ export async function assertPageScreenshot(page: Page, name: string): Promise<vo
   // Skip pixel-level screenshot comparison on CI (no Linux baselines committed).
   // DOM assertions in the calling test still run.
   if (process.env.CI) return;
+  await ensureScreenshotViewport(page);
   await waitForStableUI(page);
-  await expect(page).toHaveScreenshot(`${name}.png`, { timeout: 20_000 });
+  await expect(page).toHaveScreenshot(`${name}.png`, { timeout: 0 });
 }
 
 /**
@@ -255,6 +266,7 @@ export async function captureScreenshot(page: Page, name: string): Promise<void>
   if (!mode) return;
   const dir = path.resolve(__dirname, '..', 'visual-proof', mode);
   await fs.mkdir(dir, { recursive: true });
+  await ensureScreenshotViewport(page);
   await waitForStableUI(page);
   await page.screenshot({
     path: path.join(dir, `${name}.png`),

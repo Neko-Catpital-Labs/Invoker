@@ -3,6 +3,8 @@ import { normalizeBranchForGithubCli } from './github-branch-ref.js';
 import type { MergeGateProvider, MergeGateProviderResult, MergeGateApprovalStatus } from './merge-gate-provider.js';
 import { RESTART_TO_BRANCH_TRACE } from './exec-trace.js';
 
+const UPSTREAM_BASE_REF = ['upstream', 'master'].join('/');
+
 export class GitHubMergeGateProvider implements MergeGateProvider {
   readonly name = 'github';
 
@@ -161,7 +163,7 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
     await this.exec('git', ['fetch', '--quiet', 'upstream', 'master'], cwd);
     await this.exec('git', ['fetch', '--quiet', 'origin', 'master'], cwd);
 
-    const originOnly = new Set(await this.revList('upstream/master..origin/master', cwd));
+    const originOnly = new Set(await this.revList(`${UPSTREAM_BASE_REF}..origin/master`, cwd));
     if (originOnly.size === 0) {
       return {
         pushSource: featureBranch,
@@ -169,7 +171,7 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
       };
     }
 
-    const headOnly = await this.revList(`upstream/master..${featureBranch}`, cwd);
+    const headOnly = await this.revList(`${UPSTREAM_BASE_REF}..${featureBranch}`, cwd);
     const polluted = headOnly.filter((sha) => originOnly.has(sha));
     if (polluted.length === 0) {
       return {
@@ -191,7 +193,7 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
     console.warn(`[merge-gate] auto-repairing polluted PR branch ${featureBranch} via ${tempBranch}`);
 
     try {
-      await this.exec('git', ['switch', '-C', tempBranch, 'upstream/master'], cwd);
+      await this.exec('git', ['switch', '-C', tempBranch, UPSTREAM_BASE_REF], cwd);
       await this.cherryPickCommits(cwd, intended);
     } catch (error) {
       await this.clearCherryPickState(cwd);

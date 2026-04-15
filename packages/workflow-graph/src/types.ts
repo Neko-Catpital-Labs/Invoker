@@ -33,7 +33,6 @@ export interface BaseTaskConfig {
   readonly isReconciliation?: boolean;
   readonly requiresManualApproval?: boolean;
   readonly featureBranch?: string;
-  readonly autoFix?: boolean;
   readonly isMergeNode?: boolean;
   readonly summary?: string;
   readonly problem?: string;
@@ -46,8 +45,6 @@ export interface BaseTaskConfig {
   readonly externalDependencies?: readonly ExternalDependency[];
   /** Remote target identifier for executor routing. Primarily used by SSH executors but can be set on any task via routing rules. */
   readonly remoteTargetId?: string;
-  /** Max auto-fix retries for this task. Overrides plan-level and global defaults. */
-  readonly autoFixRetries?: number;
 }
 
 export interface WorktreeTaskConfig extends BaseTaskConfig {
@@ -120,7 +117,6 @@ export interface TaskExecution {
     readonly conflictFiles: readonly string[];
   };
   readonly selectedAttemptId?: string;
-  readonly autoFixAttempts?: number;
 }
 
 // ── Task State ──────────────────────────────────────────────
