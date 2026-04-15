@@ -243,6 +243,7 @@ async function initServices(options?: InitServicesOptions): Promise<void> {
     persistence, messageBus,
     taskRepository,
     maxConcurrency: invokerConfig.maxConcurrency,
+    defaultAutoFixRetries: invokerConfig.autoFixRetries,
     executorRoutingRules: invokerConfig.executorRoutingRules ?? [],
     deferRunningUntilLaunch: true,
   });
@@ -712,6 +713,7 @@ function setupGuiMode(): void {
   let activityPollInterval: ReturnType<typeof setInterval> | null = null;
   let uiPerfLogInterval: ReturnType<typeof setInterval> | null = null;
   const lastKnownTaskStates = new Map<string, string>();
+  const autoFixInProgress = new Set<string>();
   let lastKnownWorkflowCount = 0;
   let lastActivityLogId = 0;
   const uiPerfStats = {
@@ -1319,6 +1321,18 @@ function setupGuiMode(): void {
       }
       applyDelta(delta as TaskDelta, lastKnownTaskStates, orchestrator);
 
+      // Auto-fix: when a task fails and has retries remaining, fix and restart automatically
+      const d = delta as TaskDelta;
+      if (d.type === 'updated' && d.changes.status === 'failed') {
+        if (taskExecutor && !autoFixInProgress.has(d.taskId) && orchestrator.shouldAutoFix(d.taskId)) {
+          autoFixInProgress.add(d.taskId);
+          import('./workflow-actions.js').then(({ autoFixOnFailure }) =>
+            autoFixOnFailure(d.taskId, { orchestrator, persistence, taskExecutor: requireTaskExecutor() })
+              .catch(err => logger.error(`[auto-fix] "${d.taskId}": ${err}`, { module: 'auto-fix' }))
+              .finally(() => autoFixInProgress.delete(d.taskId)),
+          );
+        }
+      }
     });
 
     uiPerfLogInterval = setInterval(() => {
@@ -1434,6 +1448,7 @@ function setupGuiMode(): void {
         messageBus,
         taskRepository: new SqliteTaskRepository(persistence),
         maxConcurrency: invokerConfig.maxConcurrency,
+        defaultAutoFixRetries: invokerConfig.autoFixRetries,
         executorRoutingRules: invokerConfig.executorRoutingRules ?? [],
         deferRunningUntilLaunch: true,
       });

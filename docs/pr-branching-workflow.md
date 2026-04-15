@@ -6,7 +6,7 @@ Use this workflow to keep pull requests clean when `origin/master` contains fork
 
 - Never push working branches to `upstream`.
 - Push branches to `origin` only.
-- Create PR branches from the upstream base branch, not `origin/master`.
+- Create PR branches from `upstream/master`, not `origin/master`.
 - Open PRs targeting `upstream` repository `master`.
 
 ## Clean PR flow
@@ -32,6 +32,6 @@ node scripts/create-pr.mjs --title "<title>" --base master --body-file <file>
 ## Guardrail behavior
 
 `create-pr.mjs` hard-fails when the current branch contains commits from
-the upstream-vs-origin fork-only range.
+`upstream/master..origin/master`.
 
-When this happens, create a clean branch from the upstream base and cherry-pick only intended commits.
+When this happens, create a clean branch from `upstream/master` and cherry-pick only intended commits.

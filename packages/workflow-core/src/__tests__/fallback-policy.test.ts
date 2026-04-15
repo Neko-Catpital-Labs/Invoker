@@ -9,6 +9,22 @@ import { createTaskState } from '@invoker/workflow-graph';
 
 describe('fallback-policy', () => {
   describe('evaluateFallbackDecision (Result-based API)', () => {
+    it('should return retry decision for autoFix tasks that failed', async () => {
+      const task = createTaskState('task1', 'Test task', [], { autoFix: true });
+      const context: FallbackPolicyContext = {
+        task,
+        exitCode: 1,
+      };
+
+      const result = await evaluateFallbackDecision(context);
+
+      expect(result.isOk()).toBe(true);
+      if (result.isOk()) {
+        expect(result.value.type).toBe('retry');
+        expect(result.value.reason).toBe('Auto-fix enabled');
+      }
+    });
+
     it('should return skip decision for blocked tasks', async () => {
       const task = createTaskState('task1', 'Test task', []);
       const blockedTask = { ...task, status: 'blocked' as const };
@@ -77,7 +93,7 @@ describe('fallback-policy', () => {
 
   describe('applyFallbackDecision (throw-based API)', () => {
     it('should return decision without throwing for valid context', async () => {
-      const task = createTaskState('task1', 'Test task', []);
+      const task = createTaskState('task1', 'Test task', [], { autoFix: true });
       const context: FallbackPolicyContext = {
         task,
         exitCode: 1,
@@ -85,8 +101,8 @@ describe('fallback-policy', () => {
 
       const decision = await applyFallbackDecision(context);
 
-      expect(decision.type).toBe('fail');
-      expect(decision.reason).toBe('Exit code 1');
+      expect(decision.type).toBe('retry');
+      expect(decision.reason).toBe('Auto-fix enabled');
     });
 
     it('should preserve throw semantics on error', async () => {
@@ -107,7 +123,7 @@ describe('fallback-policy', () => {
 
   describe('taskUpdate helper', () => {
     it('should provide applyFallback method on task', async () => {
-      const task = createTaskState('task1', 'Test task', []);
+      const task = createTaskState('task1', 'Test task', [], { autoFix: true });
       const taskWithExecution = {
         ...task,
         execution: { exitCode: 1, error: 'Test error' },
@@ -115,8 +131,8 @@ describe('fallback-policy', () => {
 
       const decision = await taskUpdate(taskWithExecution).applyFallback();
 
-      expect(decision.type).toBe('fail');
-      expect(decision.reason).toBe('Test error');
+      expect(decision.type).toBe('retry');
+      expect(decision.reason).toBe('Auto-fix enabled');
     });
 
     it('should allow context overrides', async () => {

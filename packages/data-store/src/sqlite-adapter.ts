@@ -455,6 +455,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
       'ALTER TABLE workflows ADD COLUMN generation INTEGER DEFAULT 0',
       'ALTER TABLE tasks ADD COLUMN last_heartbeat_at TEXT',
       'ALTER TABLE tasks ADD COLUMN experiment_prompt TEXT',
+      'ALTER TABLE tasks ADD COLUMN auto_fix INTEGER DEFAULT 0',
+      'ALTER TABLE tasks ADD COLUMN max_fix_attempts INTEGER',
       'ALTER TABLE tasks ADD COLUMN action_request_id TEXT',
       'ALTER TABLE tasks ADD COLUMN experiments TEXT',
       'ALTER TABLE tasks ADD COLUMN selected_experiments TEXT',
@@ -483,6 +485,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       'ALTER TABLE tasks ADD COLUMN last_agent_name TEXT',
       'ALTER TABLE tasks ADD COLUMN external_dependencies TEXT',
       'ALTER TABLE tasks ADD COLUMN executor_type TEXT',
+      'ALTER TABLE tasks ADD COLUMN auto_fix_attempts INTEGER DEFAULT 0',
       'ALTER TABLE attempts ADD COLUMN queue_priority INTEGER NOT NULL DEFAULT 0',
       'ALTER TABLE attempts ADD COLUMN claimed_at TEXT',
       'ALTER TABLE attempts ADD COLUMN lease_expires_at TEXT',
@@ -644,7 +647,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         pivot, experiment_variants, is_reconciliation, selected_experiment,
         selected_experiments, experiment_results, requires_manual_approval,
         repo_url, feature_branch,
-        is_merge_node,
+        is_merge_node, auto_fix, max_fix_attempts,
         executor_type, agent_session_id, workspace_path, container_id,
         last_agent_session_id, last_agent_name,
         action_request_id, experiments,
@@ -660,7 +663,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?,
-        ?,
+        ?, ?, ?,
         ?, ?, ?, ?,
         ?, ?, ?,
         ?, ?,
@@ -696,6 +699,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       cfg.requiresManualApproval ? 1 : 0,
       null, cfg.featureBranch ?? null,
       cfg.isMergeNode ? 1 : 0,
+      cfg.autoFix ? 1 : 0, cfg.autoFixRetries ?? null,
       cfg.executorType ?? null,
       exec.agentSessionId ?? null,
       exec.workspacePath ?? null,
@@ -751,12 +755,14 @@ export class SQLiteAdapter implements PersistenceAdapter {
         executorType: 'executor_type',
         remoteTargetId: 'remote_target_id',
         executionAgent: 'execution_agent',
+        autoFixRetries: 'max_fix_attempts',
       };
       const configBoolMap: Record<string, string> = {
         pivot: 'pivot',
         isReconciliation: 'is_reconciliation',
         requiresManualApproval: 'requires_manual_approval',
         isMergeNode: 'is_merge_node',
+        autoFix: 'auto_fix',
       };
 
       for (const [key, col] of Object.entries(configMap)) {
@@ -806,6 +812,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         selectedAttemptId: 'selected_attempt_id',
         agentName: 'agent_name',
         lastAgentName: 'last_agent_name',
+        autoFixAttempts: 'auto_fix_attempts',
       };
       const execDateMap: Record<string, string> = {
         startedAt: 'started_at',
@@ -1479,6 +1486,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
         featureBranch: row.feature_branch ?? undefined,
         executorType: normalizeExecutorType(row.executor_type ?? undefined),
         remoteTargetId: row.remote_target_id ?? undefined,
+        autoFix: row.auto_fix === 1 ? true : undefined,
+        autoFixRetries: row.max_fix_attempts ?? undefined,
         isMergeNode: row.is_merge_node === 1 ? true : undefined,
         summary: row.summary ?? undefined,
         problem: row.problem ?? undefined,
@@ -1523,6 +1532,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         reviewProviderId: row.review_provider_id ?? undefined,
         generation: row.execution_generation ?? 0,
         selectedAttemptId: row.selected_attempt_id ?? undefined,
+        autoFixAttempts: row.auto_fix_attempts ?? undefined,
       },
     };
   }

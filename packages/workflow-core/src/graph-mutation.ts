@@ -189,6 +189,7 @@ export function applyGraphMutationImpl(host: GraphMutationHost, mutation: GraphM
       command: nodeDef.command,
       isReconciliation: nodeDef.isReconciliation,
       requiresManualApproval: nodeDef.requiresManualApproval,
+      autoFix: nodeDef.autoFix,
       isMergeNode: nodeDef.isMergeNode,
     } as const;
     let nodeConfig: TaskConfig;

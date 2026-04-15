@@ -63,9 +63,11 @@ export interface TaskConfig {
   readonly repoUrl?: string;
   readonly featureBranch?: string;
   readonly executorType?: string;
+  readonly autoFix?: boolean;
   readonly remoteTargetId?: string;
   readonly isMergeNode?: boolean;
   readonly executionAgent?: string;
+  readonly autoFixRetries?: number;
   readonly summary?: string;
   readonly problem?: string;
   readonly approach?: string;
@@ -108,6 +110,7 @@ export interface TaskExecution {
     readonly failedBranch: string;
     readonly conflictFiles: readonly string[];
   };
+  readonly autoFixAttempts?: number;
 }
 
 // ── Task State ──────────────────────────────────────────────
@@ -209,6 +212,7 @@ export interface TaskReplacementDef {
   prompt?: string;
   dependencies?: string[];
   executorType?: string;
+  autoFix?: boolean;
   executionAgent?: string;
 }
 

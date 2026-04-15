@@ -8,6 +8,7 @@
 import { execSync } from 'node:child_process';
 import { parse as parseYaml } from 'yaml';
 import type { PlanDefinition } from '@invoker/workflow-core';
+import { loadConfig } from './config.js';
 import { normalizeMergeModeForPersistence } from './merge-mode.js';
 
 /** Empty / whitespace `baseBranch` in YAML (`baseBranch:`) must fall through to config + remote detection like a missing key. */
@@ -217,6 +218,17 @@ export function parsePlan(yamlContent: string): PlanDefinition {
   const hasOwn = (obj: object, key: string): boolean =>
     Object.prototype.hasOwnProperty.call(obj, key);
 
+  if (hasOwn(raw as object, 'autoFix')) {
+    throw new PlanParseError(
+      'Plan-level "autoFix" is no longer supported. Configure "~/.invoker/config.json" with "autoFixRetries" instead.',
+    );
+  }
+  if (hasOwn(raw as object, 'autoFixRetries')) {
+    throw new PlanParseError(
+      'Plan-level "autoFixRetries" is no longer supported. Configure "~/.invoker/config.json" with "autoFixRetries" instead.',
+    );
+  }
+
   // Validate onFinish
   const validOnFinishValues = ['none', 'merge', 'pull_request'] as const;
   if (raw.onFinish !== undefined && !validOnFinishValues.includes(raw.onFinish as any)) {
@@ -258,6 +270,9 @@ export function parsePlan(yamlContent: string): PlanDefinition {
   const defaultExecutorType = raw.executorType;
   const topLevelExternalDependencies = parseExternalDependencies('Plan', raw.externalDependencies);
 
+  const appConfig = loadConfig();
+  const globalAutoFixRetries = Math.min(Math.max(0, Math.floor(appConfig.autoFixRetries ?? 0)), 10);
+
   const tasks = raw.tasks.map((task, index) => {
     if (!task.id || typeof task.id !== 'string') {
       throw new PlanParseError(`Task at index ${index} must have an "id" field`);
@@ -265,6 +280,19 @@ export function parsePlan(yamlContent: string): PlanDefinition {
 
     if (!task.description || typeof task.description !== 'string') {
       throw new PlanParseError(`Task "${task.id}" must have a "description" field`);
+    }
+
+    if (hasOwn(task as object, 'autoFix')) {
+      throw new PlanParseError(
+        `Task "${task.id}" uses "autoFix", which is no longer supported in plan YAML. ` +
+        'Configure "~/.invoker/config.json" with "autoFixRetries" instead.',
+      );
+    }
+    if (hasOwn(task as object, 'autoFixRetries')) {
+      throw new PlanParseError(
+        `Task "${task.id}" uses "autoFixRetries", which is no longer supported in plan YAML. ` +
+        'Configure "~/.invoker/config.json" with "autoFixRetries" instead.',
+      );
     }
 
     if (task.command && /\bnpx vitest run\b/.test(task.command)) {
@@ -316,6 +344,8 @@ export function parsePlan(yamlContent: string): PlanDefinition {
       executorType: resolvedExecutorType,
       dockerImage: task.dockerImage,
       remoteTargetId: task.remoteTargetId,
+      autoFix: globalAutoFixRetries > 0,
+      autoFixRetries: globalAutoFixRetries,
       executionAgent: task.executionAgent?.trim() || undefined,
     };
   });

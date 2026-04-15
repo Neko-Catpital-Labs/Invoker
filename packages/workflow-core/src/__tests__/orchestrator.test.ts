@@ -275,6 +275,33 @@ describe('Orchestrator', () => {
       expect(persistence.workflows.get(workflowId)?.status).toBe('running');
     });
 
+    it('resets auto-fix attempts to zero when a workflow is recreated', () => {
+      orchestrator.loadPlan({
+        name: 'Recreate workflow resets auto-fix',
+        onFinish: 'none',
+        tasks: [
+          { id: 't1', description: 'First', command: 'exit 1', autoFix: true, autoFixRetries: 3 },
+          { id: 't2', description: 'Second', command: 'echo 2', dependencies: ['t1'] },
+        ],
+      });
+
+      const workflowId = orchestrator.getWorkflowIds()[0]!;
+      const taskId = orchestrator.getAllTasks().find(
+        (task) => task.config.workflowId === workflowId && task.id.endsWith('/t1'),
+      )!.id;
+
+      persistence.updateTask(taskId, { execution: { autoFixAttempts: 3 } });
+      orchestrator.syncAllFromDb();
+      expect(orchestrator.shouldAutoFix(taskId)).toBe(false);
+
+      orchestrator.recreateWorkflow(workflowId);
+
+      expect(orchestrator.getTask(taskId)?.execution.autoFixAttempts).toBe(0);
+      persistence.updateTask(taskId, { status: 'failed' });
+      orchestrator.syncAllFromDb();
+      expect(orchestrator.shouldAutoFix(taskId)).toBe(true);
+    });
+
     it('ignores a stale completed response after recreateWorkflow resets descendants', () => {
       const reproPersistence = new InMemoryPersistence();
       const reproBus = new InMemoryBus();
@@ -444,7 +471,7 @@ describe('Orchestrator', () => {
       expect(repro.getTask(lateId)?.status).toBe('pending');
     });
 
-    it('ignores a stale failed response after recreateWorkflow resets descendants', () => {
+    it('ignores a stale failed response after recreateWorkflow resets descendants and does not trigger auto-fix', () => {
       const reproPersistence = new InMemoryPersistence();
       const reproBus = new InMemoryBus();
       const repro = new Orchestrator({
@@ -459,7 +486,7 @@ describe('Orchestrator', () => {
         tasks: [
           { id: 'prepare', description: 'Prepare', command: 'echo prepare' },
           { id: 'mid', description: 'Mid', command: 'echo mid', dependencies: ['prepare'] },
-          { id: 'late', description: 'Late', command: 'sleep 5', dependencies: ['mid'] },
+          { id: 'late', description: 'Late', command: 'sleep 5', dependencies: ['mid'], autoFix: true },
         ],
       });
 
@@ -484,6 +511,8 @@ describe('Orchestrator', () => {
       );
 
       expect(repro.getTask(lateId)?.status).toBe('pending');
+      expect(repro.getTask(lateId)?.execution.autoFixAttempts).toBe(0);
+      expect(repro.getAllTasks().some((task) => task.id.includes('late-exp-fix-'))).toBe(false);
     });
 
     it('rejects stale completion for one workflow while accepting current completion for another in-flight workflow', () => {
@@ -606,6 +635,16 @@ describe('Orchestrator', () => {
 
       expect(orchestrator.getTask('t1')!.config.executorType).toBe('worktree');
       expect(orchestrator.getTask('t2')!.config.executorType).toBe('worktree');
+    });
+
+    it('passes autoFix', () => {
+      orchestrator.loadPlan({
+        name: 'autofix-plan',
+        tasks: [{ id: 't1', description: 'Auto-fix task', autoFix: true }],
+      });
+
+      const task = orchestrator.getTask('t1');
+      expect(task!.config.autoFix).toBe(true);
     });
 
     it('publishes created deltas for each task', () => {
@@ -2127,6 +2166,181 @@ describe('Orchestrator', () => {
 
       expect(started).toHaveLength(0);
       expect(resumeOrchestrator.getTask('t1')!.status).toBe('running');
+    });
+  });
+
+  // ── Auto-Fix ────────────────────────────────────────────
+
+  describe('auto-fix via synthetic spawn_experiments', () => {
+    it('falls back to default auto-fix retries for legacy failed tasks missing per-task config', () => {
+      const hydratePersistence = new InMemoryPersistence();
+      const hydrateBus = new InMemoryBus();
+
+      hydratePersistence.saveTask('wf-legacy', {
+        id: 't1',
+        description: 'Legacy failed task',
+        status: 'failed',
+        dependencies: [],
+        createdAt: new Date(),
+        config: {},
+        execution: {
+          exitCode: 1,
+          error: 'boom',
+          autoFixAttempts: 2,
+        },
+      });
+
+      const legacyOrchestrator = new Orchestrator({
+        persistence: hydratePersistence,
+        messageBus: hydrateBus,
+        defaultAutoFixRetries: 3,
+      });
+
+      legacyOrchestrator.syncFromDb('wf-legacy');
+
+      expect(legacyOrchestrator.getAutoFixRetryBudget('t1')).toBe(3);
+      expect(legacyOrchestrator.shouldAutoFix('t1')).toBe(true);
+
+      hydratePersistence.updateTask('t1', { execution: { autoFixAttempts: 3 } });
+      legacyOrchestrator.syncFromDb('wf-legacy');
+
+      expect(legacyOrchestrator.shouldAutoFix('t1')).toBe(false);
+    });
+
+    it('failed autoFix task spawns fix experiments instead of failing', () => {
+      orchestrator.loadPlan({
+        name: 'autofix-test',
+        tasks: [
+          { id: 't1', description: 'Auto-fix task', autoFix: true },
+          { id: 't2', description: 'Depends on t1', dependencies: ['t1'] },
+        ],
+      });
+      orchestrator.startExecution();
+
+      const started = orchestrator.handleWorkerResponse(
+        makeResponse({
+          actionId: 't1',
+          status: 'failed',
+          outputs: { exitCode: 1, error: 'compilation error' },
+        }),
+      );
+
+      const t1 = orchestrator.getTask('t1');
+      expect(t1!.status).toBe('completed');
+
+      const fixConservative = orchestrator.getTask(sid(orchestrator, 0, 't1-exp-fix-conservative'));
+      const fixRefactor = orchestrator.getTask(sid(orchestrator, 0, 't1-exp-fix-refactor'));
+      const fixAlternative = orchestrator.getTask(sid(orchestrator, 0, 't1-exp-fix-alternative'));
+      expect(fixConservative).toBeDefined();
+      expect(fixRefactor).toBeDefined();
+      expect(fixAlternative).toBeDefined();
+
+      expect(started.length).toBeGreaterThan(0);
+    });
+
+    it('autoFix experiments go through full reconciliation lifecycle', () => {
+      orchestrator.loadPlan({
+        name: 'autofix-recon-test',
+        tasks: [
+          { id: 't1', description: 'Auto-fix task', autoFix: true },
+          { id: 't2', description: 'After fix', dependencies: ['t1'] },
+        ],
+      });
+      orchestrator.startExecution();
+
+      orchestrator.handleWorkerResponse(
+        makeResponse({
+          actionId: 't1',
+          status: 'failed',
+          outputs: { exitCode: 1, error: 'type error' },
+        }),
+      );
+
+      const expCon = sid(orchestrator, 0, 't1-exp-fix-conservative');
+      const expRef = sid(orchestrator, 0, 't1-exp-fix-refactor');
+      const expAlt = sid(orchestrator, 0, 't1-exp-fix-alternative');
+      const reconT1 = rid(orchestrator, 0, 't1');
+
+      orchestrator.handleWorkerResponse(
+        makeResponse({
+          actionId: expCon,
+          status: 'completed',
+          outputs: { exitCode: 0, summary: 'Fixed with minimal change' },
+        }),
+      );
+
+      if (orchestrator.getTask(expRef)!.status === 'pending') {
+        orchestrator.startExecution();
+      }
+
+      orchestrator.handleWorkerResponse(
+        makeResponse({
+          actionId: expRef,
+          status: 'completed',
+          outputs: { exitCode: 0, summary: 'Refactored approach' },
+        }),
+      );
+
+      if (orchestrator.getTask(expAlt)!.status === 'pending') {
+        orchestrator.startExecution();
+      }
+
+      orchestrator.handleWorkerResponse(
+        makeResponse({
+          actionId: expAlt,
+          status: 'completed',
+          outputs: { exitCode: 0, summary: 'Alternative approach' },
+        }),
+      );
+
+      orchestrator.handleWorkerResponse(reconciliationNeedsInputWorkResponse(reconT1));
+
+      const reconTask = orchestrator.getTask(reconT1);
+      expect(reconTask).toBeDefined();
+      expect(reconTask!.status).toBe('needs_input');
+      expect(reconTask!.execution.experimentResults).toHaveLength(3);
+
+      orchestrator.selectExperiment(reconT1, expCon);
+      expect(orchestrator.getTask(reconT1)!.status).toBe('completed');
+    });
+
+    it('non-autoFix failed task still fails normally', () => {
+      orchestrator.loadPlan({
+        name: 'normal-fail-test',
+        tasks: [
+          { id: 't1', description: 'Normal task' },
+          { id: 't2', description: 'Depends on t1', dependencies: ['t1'] },
+        ],
+      });
+      orchestrator.startExecution();
+
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 't1', status: 'failed', outputs: { exitCode: 1, error: 'broke' } }),
+      );
+
+      expect(orchestrator.getTask('t1')!.status).toBe('failed');
+      expect(orchestrator.getTask('t2')!.status).toBe('pending');
+    });
+
+    it('fix experiment prompts include original error message', () => {
+      orchestrator.loadPlan({
+        name: 'autofix-prompt-test',
+        tasks: [{ id: 't1', description: 'Build widgets', autoFix: true, prompt: 'npm run build' }],
+      });
+      orchestrator.startExecution();
+
+      orchestrator.handleWorkerResponse(
+        makeResponse({
+          actionId: 't1',
+          status: 'failed',
+          outputs: { exitCode: 1, error: 'ModuleNotFoundError: xyz' },
+        }),
+      );
+
+      const fixTask = orchestrator.getTask(sid(orchestrator, 0, 't1-exp-fix-conservative'));
+      expect(fixTask).toBeDefined();
+      expect(fixTask!.config.prompt).toContain('ModuleNotFoundError: xyz');
+      expect(fixTask!.config.prompt).toContain('Build widgets');
     });
   });
 

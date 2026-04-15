@@ -2233,7 +2233,7 @@ describe('TaskRunner', () => {
       await (executor as any).executeMergeNode(mergeTask);
 
       expect(createMergeWorktreeSpy).toHaveBeenCalledWith(
-        ['upstream', 'master'].join('/'),
+        'upstream/master',
         expect.stringContaining('gate-__merge__wf-1'),
         undefined,
       );

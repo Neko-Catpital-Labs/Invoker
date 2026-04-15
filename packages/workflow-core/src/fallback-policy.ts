@@ -47,6 +47,11 @@ export function evaluateFallbackDecision(
 ): ResultAsync<FallbackDecision, FallbackPolicyError> {
   return ResultAsync.fromPromise(
     (async () => {
+      // Simple policy: if task has autoFix enabled and failed, retry
+      if (context.task.config.autoFix && context.exitCode !== 0) {
+        return { type: 'retry' as const, reason: 'Auto-fix enabled' };
+      }
+
       // If task is blocked, skip it
       if (context.task.status === 'blocked') {
         return { type: 'skip' as const, reason: 'Task is blocked' };

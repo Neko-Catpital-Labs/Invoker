@@ -245,7 +245,7 @@ describe('createMergeWorktree isolation (real git)', { timeout: 30_000 }, () => 
     expect(upstreamSha).not.toBe(originSha);
 
     const executor = buildExecutor(sandbox.host);
-    const clonePath = await executor.createMergeWorktree(['upstream', 'master'].join('/'), 'test-upstream');
+    const clonePath = await executor.createMergeWorktree('upstream/master', 'test-upstream');
 
     const headSha = git(clonePath, 'rev-parse HEAD');
     expect(headSha).toBe(upstreamSha);

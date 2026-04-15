@@ -26,6 +26,8 @@
       "port": 22
     }
   },
+
+  "autoFixRetries": 3,
   "autoApproveAIFixes": true,
 
   "notes": {

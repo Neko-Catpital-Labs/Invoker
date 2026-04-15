@@ -373,6 +373,107 @@ tasks:
     expect(plan.tasks[0].command).toBeUndefined();
   });
 
+  it('rejects plan-level autoFix', () => {
+    const yaml = `
+name: AutoFix Plan Level
+repoUrl: git@github.com:test/repo.git
+autoFix: true
+tasks:
+  - id: t1
+    description: "Task"
+    command: "echo hi"
+`;
+    expect(() => parsePlan(yaml)).toThrow(PlanParseError);
+    expect(() => parsePlan(yaml)).toThrow('Plan-level "autoFix" is no longer supported');
+  });
+
+  it('rejects plan-level autoFixRetries', () => {
+    const yaml = `
+name: AutoFix Retries Plan Level
+repoUrl: git@github.com:test/repo.git
+autoFixRetries: 3
+tasks:
+  - id: t1
+    description: "Task"
+    command: "echo hi"
+`;
+    expect(() => parsePlan(yaml)).toThrow(PlanParseError);
+    expect(() => parsePlan(yaml)).toThrow('Plan-level "autoFixRetries" is no longer supported');
+  });
+
+  it('rejects task-level autoFix', () => {
+    const yaml = `
+name: AutoFix Task Level
+repoUrl: git@github.com:test/repo.git
+tasks:
+  - id: fix-task
+    description: "A fixable task"
+    command: "npm test"
+    autoFix: true
+`;
+    expect(() => parsePlan(yaml)).toThrow(PlanParseError);
+    expect(() => parsePlan(yaml)).toThrow('uses "autoFix", which is no longer supported');
+  });
+
+  it('rejects task-level autoFixRetries', () => {
+    const yaml = `
+name: AutoFix Retries Task Level
+repoUrl: git@github.com:test/repo.git
+tasks:
+  - id: fix-task
+    description: "A fixable task"
+    command: "npm test"
+    autoFixRetries: 3
+`;
+    expect(() => parsePlan(yaml)).toThrow(PlanParseError);
+    expect(() => parsePlan(yaml)).toThrow('uses "autoFixRetries", which is no longer supported');
+  });
+
+  it('applies auto-fix settings from global config only', async () => {
+    const configMod = await import('../config.js');
+    const loadConfigSpy = vi.spyOn(configMod, 'loadConfig').mockReturnValue({
+      autoFixRetries: 3,
+    });
+
+    const yaml = `
+name: AutoFix Config Only
+repoUrl: git@github.com:test/repo.git
+tasks:
+  - id: t1
+    description: "Task one"
+    command: "echo one"
+  - id: t2
+    description: "Task two"
+    command: "echo two"
+`;
+    const plan = parsePlan(yaml);
+    expect(plan.tasks[0].autoFix).toBe(true);
+    expect(plan.tasks[0].autoFixRetries).toBe(3);
+    expect(plan.tasks[1].autoFix).toBe(true);
+    expect(plan.tasks[1].autoFixRetries).toBe(3);
+    loadConfigSpy.mockRestore();
+  });
+
+  it('disables auto-fix when global autoFixRetries is 0', async () => {
+    const configMod = await import('../config.js');
+    const loadConfigSpy = vi.spyOn(configMod, 'loadConfig').mockReturnValue({
+      autoFixRetries: 0,
+    });
+
+    const yaml = `
+name: AutoFix Disabled
+repoUrl: git@github.com:test/repo.git
+tasks:
+  - id: t1
+    description: "Task one"
+    command: "echo one"
+`;
+    const plan = parsePlan(yaml);
+    expect(plan.tasks[0].autoFix).toBe(false);
+    expect(plan.tasks[0].autoFixRetries).toBe(0);
+    loadConfigSpy.mockRestore();
+  });
+
   it('parses executionAgent from task definitions', () => {
     const yaml = `
 name: Agent Test

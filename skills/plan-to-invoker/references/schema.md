@@ -28,6 +28,7 @@ Source of truth: `packages/app/src/plan-parser.ts` (interfaces + validation, lin
 | `executorType` | `worktree` \| `docker` \| `ssh` | `worktree` | `worktree` for tasks that run in a git worktree (default). `docker` for isolated environments. `ssh` for remote execution via SSH targets. |
 | `remoteTargetId` | string | — | Required when `executorType: ssh`. Must match a key in `~/.invoker/config.json` `remoteTargets`. |
 | `dockerImage` | string | — | Required when `executorType: docker`. |
+| `autoFix` | boolean | `false` | `true` for tasks that should auto-retry with experiments on failure. |
 | `pivot` | boolean | `false` | `true` to spawn experiment variants. Requires `experimentVariants`. |
 | `requiresManualApproval` | boolean | `false` | `true` for destructive or irreversible tasks. |
 
@@ -43,6 +44,7 @@ Source of truth: `packages/app/src/plan-parser.ts` (interfaces + validation, lin
 | Task needs LLM reasoning | `prompt` | instructions with file paths |
 | Task modifies code via LLM | `executorType` | `worktree` |
 | Task is read-only / test | `executorType` | omit (defaults to `worktree`) |
+| Task should auto-retry on failure | `autoFix` | `true` |
 | Every generated plan | `repoUrl` | real remote URL from `git remote get-url origin` (or equivalent) |
 
 ## Implementation plans (convention)

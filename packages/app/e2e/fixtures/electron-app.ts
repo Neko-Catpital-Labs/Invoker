@@ -39,7 +39,7 @@ export const test = base.extend<ElectronFixtures>({
     const configPath = path.join(testDir, 'e2e-config.json');
     await fs.mkdir(stubDir, { recursive: true });
     await fs.mkdir(markerRoot, { recursive: true });
-    writeFileSync(configPath, JSON.stringify({}), 'utf8');
+    writeFileSync(configPath, JSON.stringify({ autoFixRetries: 0 }), 'utf8');
     try {
       await fs.symlink(claudeMarker, path.join(stubDir, 'claude'));
     } catch {

@@ -139,14 +139,15 @@ describe('extractYamlPlan', () => {
 name: "Full"
 onFinish: merge
 baseBranch: develop
-    featureBranch: feature/test
-    mergeMode: automatic
+featureBranch: feature/test
+mergeMode: automatic
 tasks:
   - id: t1
     description: "test"
     prompt: "do it"
     dependencies: []
     pivot: true
+    autoFix: true
     requiresManualApproval: true
 \`\`\``;
     const result = extractYamlPlan(text);
@@ -156,6 +157,7 @@ tasks:
     expect(plan.featureBranch).toBe('feature/test');
     expect(plan.mergeMode).toBe('automatic');
     expect(plan.tasks[0].pivot).toBe(true);
+    expect(plan.tasks[0].autoFix).toBe(true);
     expect(plan.tasks[0].requiresManualApproval).toBe(true);
   });
 

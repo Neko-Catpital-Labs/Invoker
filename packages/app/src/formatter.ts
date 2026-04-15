@@ -234,6 +234,7 @@ export function serializeTask(task: TaskState): Record<string, unknown> {
   if (task.config.isMergeNode != null) config.isMergeNode = task.config.isMergeNode;
   if (task.config.executionAgent != null) config.executionAgent = task.config.executionAgent;
   if (task.config.featureBranch != null) config.featureBranch = task.config.featureBranch;
+  if (task.config.autoFix != null) config.autoFix = task.config.autoFix;
 
   const execution: Record<string, unknown> = {};
   if (task.execution.branch != null) execution.branch = task.execution.branch;
