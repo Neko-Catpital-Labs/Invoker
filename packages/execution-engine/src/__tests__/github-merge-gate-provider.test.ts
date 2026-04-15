@@ -19,6 +19,23 @@ function mockSpawnResult(stdoutData: string, exitCode: number) {
   return child;
 }
 
+function mockSpawnResultDetailed(stdoutData: string, stderrData: string, exitCode: number) {
+  const { EventEmitter } = require('events');
+  const stdout = new EventEmitter();
+  const stderr = new EventEmitter();
+  const child = new EventEmitter();
+  (child as any).stdout = stdout;
+  (child as any).stderr = stderr;
+
+  setTimeout(() => {
+    if (stdoutData) stdout.emit('data', Buffer.from(stdoutData));
+    if (stderrData) stderr.emit('data', Buffer.from(stderrData));
+    child.emit('close', exitCode);
+  }, 0);
+
+  return child;
+}
+
 /**
  * Wrap a callCount-based mock to auto-reject `git remote get-url upstream`
  * (simulating no upstream remote / non-fork workflow).
@@ -380,7 +397,7 @@ describe('GitHubMergeGateProvider', () => {
         if (cmd === 'git' && args?.[0] === 'rev-list' && args?.[1] === 'upstream/master..origin/master') {
           return mockSpawnResult('fork-only-sha', 0);
         }
-        if (cmd === 'git' && args?.[0] === 'rev-list' && args?.[1] === 'upstream/master..HEAD') {
+        if (cmd === 'git' && args?.[0] === 'rev-list' && args?.[1] === 'upstream/master..plan/my-feature') {
           return mockSpawnResult('feature-only-sha', 0);
         }
         if (cmd === 'git' && args?.[0] === 'push') {
@@ -417,6 +434,49 @@ describe('GitHubMergeGateProvider', () => {
       );
     });
 
+    it('skips fork branch repair when origin is a local/file remote', async () => {
+      const { spawn } = await import('node:child_process');
+      const spawnMock = vi.mocked(spawn);
+
+      spawnMock.mockImplementation(((cmd: string, args: string[]) => {
+        if (cmd === 'git' && args?.[0] === 'remote' && args?.[1] === 'get-url' && args?.[2] === 'upstream') {
+          return mockSpawnResult('https://github.com/Neko-Catpital-Labs/Invoker.git', 0);
+        }
+        if (cmd === 'git' && args?.[0] === 'remote' && args?.[1] === 'get-url' && args?.[2] === 'origin') {
+          return mockSpawnResult('file:///tmp/local-checkout', 0);
+        }
+        if (cmd === 'git' && args?.[0] === 'push') {
+          return mockSpawnResult('', 0);
+        }
+        if (cmd === 'gh' && args?.[0] === 'pr' && args?.[1] === 'list') {
+          return mockSpawnResult('[]', 0);
+        }
+        if (cmd === 'gh' && args?.[0] === 'api' && args?.[1] === 'repos/{owner}/{repo}/pulls') {
+          return mockSpawnResult('{"html_url":"https://github.com/Neko-Catpital-Labs/Invoker/pull/53","number":53}', 0);
+        }
+        throw new Error(`Unexpected command: ${cmd} ${args.join(' ')}`);
+      }) as any);
+
+      const result = await provider.createReview({
+        baseBranch: 'master',
+        featureBranch: 'plan/local-origin',
+        title: 'Local origin PR',
+        cwd: '/tmp/repo',
+      });
+
+      expect(result.url).toBe('https://github.com/Neko-Catpital-Labs/Invoker/pull/53');
+      expect(spawnMock).not.toHaveBeenCalledWith(
+        'git',
+        expect.arrayContaining(['fetch', '--quiet', 'upstream', 'master']),
+        expect.anything(),
+      );
+      expect(spawnMock).toHaveBeenCalledWith(
+        'git',
+        ['push', '--force', '-u', 'origin', 'plan/local-origin'],
+        expect.anything(),
+      );
+    });
+
     it('auto-repairs a polluted PR branch before pushing to origin', async () => {
       const { spawn } = await import('node:child_process');
       const spawnMock = vi.mocked(spawn);
@@ -435,10 +495,10 @@ describe('GitHubMergeGateProvider', () => {
         if (cmd === 'git' && args?.[0] === 'rev-list' && args?.[1] === 'upstream/master..origin/master') {
           return mockSpawnResult('fork-only-sha\nfork-only-sha-2', 0);
         }
-        if (cmd === 'git' && args?.[0] === 'rev-list' && args?.[1] === 'upstream/master..HEAD') {
+        if (cmd === 'git' && args?.[0] === 'rev-list' && args?.[1] === 'upstream/master..plan/polluted') {
           return mockSpawnResult('feature-sha\nfork-only-sha', 0);
         }
-        if (cmd === 'git' && args?.[0] === 'rev-list' && args?.[1] === '--reverse' && args?.[2] === 'origin/master..HEAD') {
+        if (cmd === 'git' && args?.[0] === 'rev-list' && args?.[1] === '--reverse' && args?.[2] === 'origin/master..plan/polluted') {
           return mockSpawnResult('feature-sha', 0);
         }
         if (cmd === 'git' && args?.[0] === 'branch' && args?.[1] === '--show-current') {
@@ -497,6 +557,91 @@ describe('GitHubMergeGateProvider', () => {
       expect(spawnMock).toHaveBeenCalledWith(
         'git',
         ['branch', '-D', 'invoker/pr-clean/plan-polluted-1234567890'],
+        expect.anything(),
+      );
+      nowSpy.mockRestore();
+    });
+
+    it('auto-repairs polluted fork branches even when cwd is detached at upstream base', async () => {
+      const { spawn } = await import('node:child_process');
+      const spawnMock = vi.mocked(spawn);
+      const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(1234567891);
+
+      spawnMock.mockImplementation(((cmd: string, args: string[]) => {
+        if (cmd === 'git' && args?.[0] === 'remote' && args?.[1] === 'get-url' && args?.[2] === 'upstream') {
+          return mockSpawnResult('https://github.com/Neko-Catpital-Labs/Invoker.git', 0);
+        }
+        if (cmd === 'git' && args?.[0] === 'remote' && args?.[1] === 'get-url' && args?.[2] === 'origin') {
+          return mockSpawnResult('https://github.com/EdbertChan/Invoker/', 0);
+        }
+        if (cmd === 'git' && args?.[0] === 'fetch') {
+          return mockSpawnResult('', 0);
+        }
+        if (cmd === 'git' && args?.[0] === 'rev-list' && args?.[1] === 'upstream/master..origin/master') {
+          return mockSpawnResult('fork-only-sha\nfork-only-sha-2', 0);
+        }
+        if (cmd === 'git' && args?.[0] === 'rev-list' && args?.[1] === 'upstream/master..plan/detached') {
+          return mockSpawnResult('feature-sha\nfork-only-sha', 0);
+        }
+        if (cmd === 'git' && args?.[0] === 'rev-list' && args?.[1] === '--reverse' && args?.[2] === 'origin/master..plan/detached') {
+          return mockSpawnResult('feature-empty\nfeature-sha', 0);
+        }
+        if (cmd === 'git' && args?.[0] === 'branch' && args?.[1] === '--show-current') {
+          return mockSpawnResult('', 0);
+        }
+        if (cmd === 'git' && args?.[0] === 'rev-parse' && args?.[1] === '--verify' && args?.[2] === 'HEAD') {
+          return mockSpawnResult('deadbeefdeadbeefdeadbeefdeadbeefdeadbeef', 0);
+        }
+        if (cmd === 'git' && args?.[0] === 'switch' && args?.[1] === '-C') {
+          return mockSpawnResult('', 0);
+        }
+        if (cmd === 'git' && args?.[0] === 'cherry-pick' && args?.[1] === 'feature-empty') {
+          return mockSpawnResultDetailed(
+            'On branch invoker/pr-clean/plan-detached-1234567891\nnothing to commit, working tree clean\n',
+            'The previous cherry-pick is now empty, possibly due to conflict resolution.\n',
+            1,
+          );
+        }
+        if (cmd === 'git' && args?.[0] === 'cherry-pick' && args?.[1] === '--skip') {
+          return mockSpawnResult('', 0);
+        }
+        if (cmd === 'git' && args?.[0] === 'cherry-pick') {
+          return mockSpawnResult('', 0);
+        }
+        if (cmd === 'git' && args?.[0] === 'push') {
+          return mockSpawnResult('', 0);
+        }
+        if (cmd === 'gh' && args?.[0] === 'pr' && args?.[1] === 'list') {
+          return mockSpawnResult('[]', 0);
+        }
+        if (cmd === 'gh' && args?.[0] === 'api' && args?.[1] === 'repos/{owner}/{repo}/pulls') {
+          return mockSpawnResult('{"html_url":"https://github.com/Neko-Catpital-Labs/Invoker/pull/52","number":52}', 0);
+        }
+        if (cmd === 'git' && args?.[0] === 'switch' && args?.[1] === '--detach') {
+          return mockSpawnResult('', 0);
+        }
+        if (cmd === 'git' && args?.[0] === 'branch' && args?.[1] === '-D') {
+          return mockSpawnResult('', 0);
+        }
+        throw new Error(`Unexpected command: ${cmd} ${args.join(' ')}`);
+      }) as any);
+
+      const result = await provider.createReview({
+        baseBranch: 'master',
+        featureBranch: 'plan/detached',
+        title: 'Detached polluted PR',
+        cwd: '/tmp/repo',
+      });
+
+      expect(result.url).toBe('https://github.com/Neko-Catpital-Labs/Invoker/pull/52');
+      expect(spawnMock).toHaveBeenCalledWith(
+        'git',
+        ['switch', '--detach', 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef'],
+        expect.anything(),
+      );
+      expect(spawnMock).toHaveBeenCalledWith(
+        'git',
+        ['cherry-pick', '--skip'],
         expect.anything(),
       );
       nowSpy.mockRestore();

@@ -91,6 +91,7 @@ function failTask(orchestrator: Orchestrator, taskId: string): void {
   orchestrator.handleWorkerResponse({
     requestId: `req-${taskId}`,
     actionId: taskId,
+    executionGeneration: orchestrator.getTask(taskId)?.execution.generation ?? 0,
     status: 'failed',
     outputs: { exitCode: 1, error: `${taskId} failed` },
   });
@@ -100,6 +101,7 @@ function completeTask(orchestrator: Orchestrator, taskId: string): void {
   orchestrator.handleWorkerResponse({
     requestId: `req-${taskId}`,
     actionId: taskId,
+    executionGeneration: orchestrator.getTask(taskId)?.execution.generation ?? 0,
     status: 'completed',
     outputs: { exitCode: 0 },
   });

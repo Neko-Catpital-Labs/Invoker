@@ -18,6 +18,7 @@ RECOVER_STALE=true
 STALE_THRESHOLD_SECONDS=900
 STALE_RECOVERY_RETRIES=12
 STALE_RECOVERY_RETRY_DELAY_SECONDS=5
+STANDALONE_MODE="${INVOKER_HEADLESS_STANDALONE:-0}"
 
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -56,6 +57,21 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+if [ "$STANDALONE_MODE" = "1" ]; then
+  if [ "${PARALLELISM:-}" != "1" ]; then
+    echo "standalone mode detected, forcing --parallel 1" >&2
+  fi
+  PARALLELISM="1"
+  if [ "$FOLLOW" = false ]; then
+    echo "standalone mode detected, forcing --follow" >&2
+  fi
+  FOLLOW=true
+  if [ "$COMMAND_TIMEOUT_SECONDS" -gt 0 ]; then
+    echo "standalone mode detected, disabling per-command timeout" >&2
+  fi
+  COMMAND_TIMEOUT_SECONDS=0
+fi
 
 # Handle Linux Electron sandbox detection
 unset ELECTRON_RUN_AS_NODE

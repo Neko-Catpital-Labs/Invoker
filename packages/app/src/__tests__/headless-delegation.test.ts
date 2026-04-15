@@ -85,6 +85,7 @@ describe('headless delegation enforcement', () => {
       mockDeps.orchestrator.startExecution = vi.fn(() => []);
       mockDeps.orchestrator.resumeWorkflow = vi.fn(() => []);
       mockDeps.orchestrator.getAllTasks = vi.fn(() => []);
+      mockDeps.orchestrator.getPersistedActiveTaskIds = vi.fn(() => new Set<string>());
       mockDeps.orchestrator.getWorkflowStatus = vi.fn(() => 'running');
       mockDeps.orchestrator.syncFromDb = vi.fn();
       mockDeps.orchestrator.restartTask = vi.fn(() => []);
@@ -325,6 +326,30 @@ describe('headless delegation enforcement', () => {
 
         expect(mockDeps.orchestrator.restartTask).toHaveBeenCalledTimes(1);
         expect(mockDeps.orchestrator.restartTask).toHaveBeenCalledWith('wf-1/task-1');
+      });
+
+      it('headless resume relaunches pending tasks with persisted claimed attempts', async () => {
+        mockDeps.orchestrator.getPersistedActiveTaskIds = vi.fn(() => new Set(['wf-1/task-claimed']));
+        mockDeps.orchestrator.getAllTasks = vi.fn(() => [
+          {
+            id: 'wf-1/task-claimed',
+            status: 'pending',
+            config: { workflowId: 'wf-1' },
+            execution: {},
+          } as any,
+          {
+            id: 'wf-1/task-ready',
+            status: 'pending',
+            config: { workflowId: 'wf-1' },
+            execution: {},
+          } as any,
+        ]);
+
+        const depsWithNoTrack: HeadlessDeps = { ...mockDeps, noTrack: true } as HeadlessDeps;
+        await runHeadless(['resume', 'wf-1'], depsWithNoTrack);
+
+        expect(mockDeps.orchestrator.restartTask).toHaveBeenCalledTimes(1);
+        expect(mockDeps.orchestrator.restartTask).toHaveBeenCalledWith('wf-1/task-claimed');
       });
 
       it('headless set agent with deps.noTrack=true returns without polling all workflows', async () => {

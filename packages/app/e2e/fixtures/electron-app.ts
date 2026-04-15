@@ -176,6 +176,19 @@ function matchesTaskId(actualId: string, requestedId: string): boolean {
   return actualId === requestedId || actualId.endsWith(`/${requestedId}`);
 }
 
+export function findTaskByIdSuffix(tasks: Array<any>, taskId: string) {
+  return tasks.find((task) => matchesTaskId(task.id, taskId));
+}
+
+export async function resolveTaskId(page: Page, taskId: string): Promise<string> {
+  const tasks = await getTasks(page);
+  const task = findTaskByIdSuffix(tasks, taskId);
+  if (!task) {
+    throw new Error(`Task "${taskId}" not found`);
+  }
+  return task.id;
+}
+
 /** Wait for a specific task to reach a given status via polling. */
 export async function waitForTaskStatus(
   page: Page,

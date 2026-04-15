@@ -220,7 +220,7 @@ export async function setWorkflowMergeMode(
 
 export async function resolveConflictAction(
   taskId: string,
-  deps: Pick<ActionDeps, 'orchestrator' | 'persistence'> & { taskExecutor: TaskRunner },
+  deps: Pick<ActionDeps, 'orchestrator' | 'persistence' | 'autoApproveAIFixes'> & { taskExecutor: TaskRunner },
   agentName?: string,
 ): Promise<void> {
   const { orchestrator, persistence, taskExecutor } = deps;

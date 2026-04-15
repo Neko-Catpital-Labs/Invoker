@@ -17,12 +17,11 @@ echo "==> Running pnpm install --frozen-lockfile"
 pnpm install --frozen-lockfile
 
 echo "==> Checking vitest is available"
-VITEST_BIN=$(node -e "process.stdout.write(require.resolve('vitest/vitest.mjs'))")
-if [ -z "$VITEST_BIN" ]; then
-  echo "FAIL: vitest not found"
+if ! VITEST_VERSION=$(pnpm --dir packages/app exec vitest --version 2>/dev/null); then
+  echo "FAIL: vitest not executable from a workspace package"
   exit 1
 fi
-echo "    OK: vitest found at $VITEST_BIN"
+echo "    OK: $VITEST_VERSION"
 
 echo ""
 echo "==> Worktree provisioning: ALL CHECKS PASSED"

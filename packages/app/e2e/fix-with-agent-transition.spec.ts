@@ -11,20 +11,22 @@
  * net, and uses isFixingWithAI: false (instead of undefined) so the value
  * survives IPC serialization.
  *
- * This test exercises the actual fixWithAgent IPC handler (not mock injections)
- * to verify the end-to-end rendered state transition.
+ * This test exercises the real UI action path to verify the end-to-end
+ * rendered state transition.
  */
 
 import {
   test,
   expect,
   loadPlan,
-  injectTaskStates,
+  startPlan,
+  waitForTaskStatus,
+  E2E_REPO_URL,
 } from './fixtures/electron-app.js';
 
 const PLAN = {
   name: 'E2E Fix Transition Plan',
-  repoUrl: 'https://github.com/test/e2e-fix-transition.git',
+  repoUrl: E2E_REPO_URL,
   onFinish: 'none' as const,
   tasks: [
     {
@@ -45,33 +47,20 @@ const PLAN = {
 test.describe('Fix with Agent - rendered state transition', () => {
   test('rendered node transitions to APPROVE FIX after fixWithAgent IPC', async ({ page }) => {
     await loadPlan(page, PLAN);
+    await startPlan(page);
+    await waitForTaskStatus(page, 'task-pass', 'completed');
+    await waitForTaskStatus(page, 'task-fail', 'failed');
 
-    // Inject pre-states: pass completed, fail failed
-    await injectTaskStates(page, [
-      { taskId: 'task-pass', changes: { status: 'completed' } },
-      {
-        taskId: 'task-fail',
-        changes: {
-          status: 'failed',
-          execution: { error: 'exit code 1' },
-        },
-      },
-    ]);
-
-    const node = page.locator('[data-testid="rf__node-task-fail"]');
+    const node = page.locator('.react-flow__node[data-testid$="/task-fail"]');
     await expect(node.locator('text=FAILED')).toBeVisible({ timeout: 3000 });
 
-    // Trigger fixWithAgent via the real IPC handler.
-    // Flow: beginConflictResolution (isFixingWithAI=true) →
-    //   spawn INVOKER_CLAUDE_FIX_COMMAND (/bin/true) →
-    //   setFixAwaitingApproval (status=awaiting_approval)
-    await page.evaluate((id) => window.invoker.fixWithAgent(id), 'task-fail');
+    await node.click({ button: 'right' });
+    const fixBtn = page.locator('button').filter({ hasText: 'Fix with Claude' });
+    await expect(fixBtn).toBeVisible({ timeout: 2000 });
+    await fixBtn.click();
 
     // DB should reflect awaiting_approval
-    const result = await page.evaluate(() => window.invoker.getTasks());
-    const tasks = Array.isArray(result) ? result : result.tasks;
-    const taskFail = tasks.find((t: any) => t.id === 'task-fail');
-    expect(taskFail?.status).toBe('awaiting_approval');
+    await waitForTaskStatus(page, 'task-fail', 'awaiting_approval', 15000);
 
     // Rendered DOM must show approval state, not "FIXING WITH AI"
     const approveLabel = node.locator('text=/APPROVE/');

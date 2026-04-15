@@ -184,10 +184,10 @@ describe('owner boundary enforcement', () => {
       reader2.close();
     });
 
-    it('reproduces last-writer-wins when two writable adapters bypass owner boundary', async () => {
+    it('reproduces last-write-wins when two writable adapters bypass owner boundary', async () => {
       // This is the historical failure mode that justified lock/CAS work:
       // two writable sql.js handles each hold independent in-memory state and
-      // whichever flushes last can overwrite the other process' writes.
+      // whichever write reaches disk last can overwrite the other process' state.
       const writerA = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
       const writerB = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
 
@@ -206,7 +206,9 @@ describe('owner boundary enforcement', () => {
         updatedAt: new Date().toISOString(),
       });
 
-      // B flushes first (file contains wf-b), then A flushes stale snapshot last.
+      // Immediate file-backed flushes make the second write visible immediately.
+      // The point of the regression is that bypassing the owner boundary still
+      // produces non-serializable last-write-wins behavior.
       writerB.close();
       writerA.close();
 
@@ -214,7 +216,7 @@ describe('owner boundary enforcement', () => {
       const workflows = reader.listWorkflows();
       reader.close();
 
-      expect(workflows.map((w) => w.id).sort()).toEqual(['wf-a']);
+      expect(workflows.map((w) => w.id).sort()).toEqual(['wf-b']);
     });
   });
 

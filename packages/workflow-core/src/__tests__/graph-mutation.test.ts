@@ -98,6 +98,7 @@ function completeTask(orchestrator: Orchestrator, taskId: string): void {
   orchestrator.handleWorkerResponse({
     requestId: `req-${taskId}`,
     actionId: taskId,
+    executionGeneration: 0,
     status: 'completed',
     outputs: { exitCode: 0 },
   });

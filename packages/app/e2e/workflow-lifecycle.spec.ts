@@ -5,7 +5,15 @@
  * task state transitions via IPC.
  */
 
-import { test, expect, TEST_PLAN, loadPlan, startPlan, waitForTaskStatus } from './fixtures/electron-app.js';
+import {
+  test,
+  expect,
+  TEST_PLAN,
+  loadPlan,
+  startPlan,
+  waitForTaskStatus,
+  findTaskByIdSuffix,
+} from './fixtures/electron-app.js';
 
 test.describe('Workflow lifecycle', () => {
   test('starting a plan transitions tasks to running', async ({ page }) => {
@@ -15,7 +23,7 @@ test.describe('Workflow lifecycle', () => {
     // task-alpha should start running (or may have already completed)
     const result = await page.evaluate(() => window.invoker.getTasks());
     const tasks = Array.isArray(result) ? result : result.tasks;
-    const alpha = tasks.find((t: any) => t.id === 'task-alpha');
+    const alpha = findTaskByIdSuffix(tasks, 'task-alpha');
     expect(['running', 'completed']).toContain(alpha?.status);
   });
 
@@ -28,7 +36,14 @@ test.describe('Workflow lifecycle', () => {
 
     const result = await page.evaluate(() => window.invoker.getTasks());
     const tasks = Array.isArray(result) ? result : result.tasks;
-    expect(tasks.every((t: any) => t.status === 'completed')).toBe(true);
+    const alpha = findTaskByIdSuffix(tasks, 'task-alpha');
+    const beta = findTaskByIdSuffix(tasks, 'task-beta');
+    const gamma = findTaskByIdSuffix(tasks, 'task-gamma');
+    const workflowNode = tasks.find((t: any) => t.config?.isMergeNode);
+    expect(alpha?.status).toBe('completed');
+    expect(beta?.status).toBe('completed');
+    expect(gamma?.status).toBe('pending');
+    expect(workflowNode?.status).toBe('pending');
   });
 
   test('workflow status reflects completion', async ({ page }) => {
@@ -39,7 +54,7 @@ test.describe('Workflow lifecycle', () => {
     await waitForTaskStatus(page, 'task-beta', 'completed');
 
     const status = await page.evaluate(() => window.invoker.getStatus());
-    expect(status.completed).toBe(3);
+    expect(status.completed).toBe(2);
     expect(status.running).toBe(0);
   });
 
@@ -48,7 +63,7 @@ test.describe('Workflow lifecycle', () => {
 
     let result = await page.evaluate(() => window.invoker.getTasks());
     let tasks = Array.isArray(result) ? result : result.tasks;
-    expect(tasks.length).toBe(3);
+    expect(tasks.length).toBe(4);
 
     await page.evaluate(() => window.invoker.clear());
 

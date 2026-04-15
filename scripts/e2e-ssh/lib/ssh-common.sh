@@ -124,7 +124,8 @@ invoker_e2e_ssh_write_config() {
       "host": "localhost",
       "user": "$current_user",
       "sshKeyPath": "$INVOKER_E2E_SSH_KEY",
-      "port": 22
+      "port": 22,
+      "managedWorkspaces": true
     }
   }
 }

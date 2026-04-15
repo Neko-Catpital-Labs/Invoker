@@ -75,6 +75,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
   private flushDelayMs: number;
   private outputTailLimit: number;
   private outputTailCache = new Map<string, OutputChunk[]>();
+  private writeTransactionDepth = 0;
 
   /** Use SQLiteAdapter.create() instead. */
   private constructor(db: SqlJsDatabase, dbPath: string | null, options?: { readOnly?: boolean; outputTailLimit?: number }) {
@@ -172,7 +173,32 @@ export class SQLiteAdapter implements PersistenceAdapter {
     this.ensureWritable();
     this.db.run(sql, params as any[]);
     this.dirty = true;
-    this.scheduleFlush();
+    if (this.writeTransactionDepth === 0) {
+      this.scheduleFlush();
+    }
+  }
+
+  private runTransaction<T>(work: () => T): T {
+    this.ensureWritable();
+    this.db.run('BEGIN');
+    this.writeTransactionDepth += 1;
+    try {
+      const result = work();
+      this.writeTransactionDepth -= 1;
+      this.db.run('COMMIT');
+      this.dirty = true;
+      this.scheduleFlush();
+      return result;
+    } catch (err) {
+      this.writeTransactionDepth = Math.max(0, this.writeTransactionDepth - 1);
+      try {
+        this.db.run('ROLLBACK');
+      } catch {
+        // Preserve the original statement failure if SQLite already aborted the
+        // transaction before we reached this cleanup path.
+      }
+      throw err;
+    }
   }
 
   /** Flush DB to disk (no-op for :memory:). */
@@ -897,27 +923,17 @@ export class SQLiteAdapter implements PersistenceAdapter {
   }
 
   deleteAllWorkflows(): void {
-    this.ensureWritable();
-    this.db.run('BEGIN');
-    try {
+    this.runTransaction(() => {
       this.db.run('DELETE FROM events');
       this.db.run('DELETE FROM task_output');
       this.db.run('DELETE FROM attempts');
       this.db.run('DELETE FROM tasks');
       this.db.run('DELETE FROM workflows');
-      this.db.run('COMMIT');
-    } catch (err) {
-      this.db.run('ROLLBACK');
-      throw err;
-    }
-    this.dirty = true;
-    this.scheduleFlush();
+    });
   }
 
   deleteWorkflow(workflowId: string): void {
-    this.ensureWritable();
-    this.db.run('BEGIN');
-    try {
+    this.runTransaction(() => {
       // Delete events first (FK constraint: events -> tasks)
       this.db.run(`
         DELETE FROM events WHERE task_id IN (
@@ -944,14 +960,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
       // Finally delete the workflow
       this.db.run('DELETE FROM workflows WHERE id = ?', [workflowId]);
-
-      this.db.run('COMMIT');
-    } catch (err) {
-      this.db.run('ROLLBACK');
-      throw err;
-    }
-    this.dirty = true;
-    this.scheduleFlush();
+    });
   }
 
   // ── Events ────────────────────────────────────────────
@@ -1377,9 +1386,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
     taskChanges: TaskStateChanges,
     attemptPatch: Partial<Pick<Attempt, 'status' | 'exitCode' | 'error' | 'completedAt'>>
   ): void {
-    this.ensureWritable();
-    this.db.run('BEGIN');
-    try {
+    this.runTransaction(() => {
       // Update task state
       this.updateTask(taskId, taskChanges);
 
@@ -1393,14 +1400,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       if (row && row.status === 'running') {
         this.updateAttempt(row.id, attemptPatch);
       }
-
-      this.db.run('COMMIT');
-    } catch (err) {
-      this.db.run('ROLLBACK');
-      throw err;
-    }
-    this.dirty = true;
-    this.scheduleFlush();
+    });
   }
 
   // ── Activity Log ─────────────────────────────────────
@@ -1544,6 +1544,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
     const taskIsTerminal =
       task.status === 'completed' ||
       task.status === 'failed' ||
+      task.status === 'fixing_with_ai' ||
       task.status === 'needs_input' ||
       task.status === 'awaiting_approval' ||
       task.status === 'review_ready' ||

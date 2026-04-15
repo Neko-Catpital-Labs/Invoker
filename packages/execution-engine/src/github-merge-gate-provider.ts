@@ -148,6 +148,16 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
       };
     }
 
+    // The polluted-branch repair path only makes sense for real GitHub fork
+    // workflows. Local/file origins used by dry-run and similar harnesses can
+    // legitimately diverge from upstream without needing PR branch surgery.
+    if (!(await this.detectForkOwner(cwd))) {
+      return {
+        pushSource: featureBranch,
+        cleanup: async () => {},
+      };
+    }
+
     await this.exec('git', ['fetch', '--quiet', 'upstream', 'master'], cwd);
     await this.exec('git', ['fetch', '--quiet', 'origin', 'master'], cwd);
 
@@ -159,7 +169,7 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
       };
     }
 
-    const headOnly = await this.revList('upstream/master..HEAD', cwd);
+    const headOnly = await this.revList(`upstream/master..${featureBranch}`, cwd);
     const polluted = headOnly.filter((sha) => originOnly.has(sha));
     if (polluted.length === 0) {
       return {
@@ -168,10 +178,10 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
       };
     }
 
-    const intended = await this.revList('origin/master..HEAD', cwd, { reverse: true });
+    const intended = await this.revList(`origin/master..${featureBranch}`, cwd, { reverse: true });
     if (intended.length === 0) {
       throw new Error(
-        'Current branch contains fork-only origin/master commits, but there are no feature commits in origin/master..HEAD to auto-repair.',
+        `Feature branch "${featureBranch}" contains fork-only origin/master commits, but there are no feature commits in origin/master..${featureBranch} to auto-repair.`,
       );
     }
 
@@ -182,8 +192,9 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
 
     try {
       await this.exec('git', ['switch', '-C', tempBranch, 'upstream/master'], cwd);
-      await this.exec('git', ['cherry-pick', ...intended], cwd);
+      await this.cherryPickCommits(cwd, intended);
     } catch (error) {
+      await this.clearCherryPickState(cwd);
       await this.restoreBranchState(cwd, currentBranch, originalHead);
       throw error;
     }
@@ -228,6 +239,38 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
       return;
     }
     await this.exec('git', ['switch', '--detach', originalHead], cwd);
+  }
+
+  private async cherryPickCommits(cwd: string, commits: string[]): Promise<void> {
+    for (const commit of commits) {
+      try {
+        await this.exec('git', ['cherry-pick', commit], cwd);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (
+          message.includes('previous cherry-pick is now empty')
+          || message.includes('nothing to commit')
+        ) {
+          await this.exec('git', ['cherry-pick', '--skip'], cwd);
+          continue;
+        }
+        throw error;
+      }
+    }
+  }
+
+  private async clearCherryPickState(cwd: string): Promise<void> {
+    try {
+      await this.exec('git', ['cherry-pick', '--quit'], cwd);
+      return;
+    } catch {
+      // fall through
+    }
+    try {
+      await this.exec('git', ['cherry-pick', '--abort'], cwd);
+    } catch {
+      // best effort only
+    }
   }
 
   private async deleteBranchIfPresent(cwd: string, branch: string): Promise<void> {

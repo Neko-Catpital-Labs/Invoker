@@ -1,12 +1,16 @@
 /**
  * E2E: Edit a failed task's command via the TaskPanel UI.
  *
- * Verifies that clicking Edit → changing the command → Save & Re-run
+ * Verifies that double-clicking the command → changing it → Save & Re-run
  * causes the task to restart with the new command and downstream tasks
- * are forked (dirty subtree invalidation).
+ * are invalidated in place.
  */
 
 import { test, expect, loadPlan, startPlan, waitForTaskStatus, E2E_REPO_URL } from './fixtures/electron-app.js';
+
+function findTaskByIdSuffix(tasks: Array<any>, taskId: string) {
+  return tasks.find((t) => t.id === taskId || t.id.endsWith(`/${taskId}`));
+}
 
 const EDIT_CMD_PLAN = {
   name: 'E2E Edit Command Plan',
@@ -43,14 +47,14 @@ test.describe('Edit task command', () => {
     await waitForTaskStatus(page, 'task-will-fail', 'failed');
 
     // Click the failed task node to select it
-    await page.locator('[data-testid="rf__node-task-will-fail"]').click();
+    await page.locator('.react-flow__node[data-testid$="/task-will-fail"]').click();
 
-    // TaskPanel should show the Edit button for a command task that is not running
-    const editBtn = page.locator('[data-testid="edit-command-btn"]');
-    await expect(editBtn).toBeVisible({ timeout: 5000 });
-    await editBtn.click();
+    // Double-click the command display to enter edit mode.
+    const commandDisplay = page.locator('[data-testid="command-display"]');
+    await expect(commandDisplay).toBeVisible({ timeout: 5000 });
+    await commandDisplay.dblclick();
 
-    // The textarea should appear with the old command
+    // The textarea should appear with the old command.
     const textarea = page.locator('[data-testid="edit-command-input"]');
     await expect(textarea).toBeVisible({ timeout: 2000 });
     const oldValue = await textarea.inputValue();
@@ -70,12 +74,12 @@ test.describe('Edit task command', () => {
     // Verify command was updated
     const result = await page.evaluate(() => window.invoker.getTasks());
     const tasks = Array.isArray(result) ? result : result.tasks;
-    const editedTask = tasks.find((t: any) => t.id === 'task-will-fail');
-    expect(editedTask?.command).toBe('echo fixed');
+    const editedTask = findTaskByIdSuffix(tasks, 'task-will-fail');
+    expect(editedTask?.config?.command).toBe('echo fixed');
     expect(editedTask?.status).toBe('completed');
   });
 
-  test('editing a completed task with dependents forks the downstream subtree', async ({ page }) => {
+  test('editing a completed task with dependents invalidates the downstream subtree in place', async ({ page }) => {
     const CHAIN_PLAN = {
       name: 'E2E Edit Fork Plan',
       repoUrl: E2E_REPO_URL,
@@ -103,12 +107,11 @@ test.describe('Edit task command', () => {
     await waitForTaskStatus(page, 'child-task', 'completed');
 
     // Click parent task to select it
-    await page.locator('[data-testid="rf__node-parent-task"]').click();
+    await page.locator('.react-flow__node[data-testid$="/parent-task"]').click();
 
-    const editBtn = page.locator('[data-testid="edit-command-btn"]');
-    await expect(editBtn).toBeVisible({ timeout: 5000 });
-    await editBtn.click();
-
+    const commandDisplay = page.locator('[data-testid="command-display"]');
+    await expect(commandDisplay).toBeVisible({ timeout: 5000 });
+    await commandDisplay.dblclick();
     const textarea = page.locator('[data-testid="edit-command-input"]');
     await textarea.fill('echo updated-parent');
 
@@ -118,15 +121,11 @@ test.describe('Edit task command', () => {
     // Parent should re-run and complete
     await waitForTaskStatus(page, 'parent-task', 'completed', 15000);
 
-    // Original child should be stale, a forked copy should exist
+    // Original child is invalidated in place; no forked copy is created.
     const result = await page.evaluate(() => window.invoker.getTasks());
     const tasks = Array.isArray(result) ? result : result.tasks;
-    const childTask = tasks.find((t: any) => t.id === 'child-task');
-    expect(childTask?.status).toBe('stale');
-
-    const forkedChild = tasks.find(
-      (t: any) => t.id !== 'child-task' && t.description === 'Child command',
-    );
-    expect(forkedChild).toBeDefined();
+    const childTask = findTaskByIdSuffix(tasks, 'child-task');
+    expect(childTask?.status).toBe('pending');
+    expect(tasks.find((t: any) => !t.id.endsWith('/child-task') && t.description === 'Child command')).toBeUndefined();
   });
 });

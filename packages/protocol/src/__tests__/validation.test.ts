@@ -44,6 +44,11 @@ describe('validateWorkResponse', () => {
     expect(result.valid).toBe(true);
   });
 
+  it('accepts an optional attemptId on WorkResponse', () => {
+    const result = validateWorkResponse({ ...baseResponse, attemptId: 'task-1-a1' });
+    expect(result.valid).toBe(true);
+  });
+
   it('accepts a valid spawn_experiments response with dagMutation', () => {
     const res: WorkResponse = {
       ...baseResponse,
@@ -111,27 +116,33 @@ describe('validateWorkResponse', () => {
     });
 
     it('rejects empty requestId', () => {
-      const result = validateWorkResponse({ requestId: '', actionId: 'a', status: 'completed', outputs: {} });
+      const result = validateWorkResponse({ requestId: '', actionId: 'a', executionGeneration: 0, status: 'completed', outputs: {} });
       expect(result.valid).toBe(false);
       expect(result.error).toContain('requestId');
       expect(result.error).toContain('non-empty string');
     });
 
     it('rejects missing actionId', () => {
-      const result = validateWorkResponse({ requestId: 'r', status: 'completed', outputs: {} });
+      const result = validateWorkResponse({ requestId: 'r', executionGeneration: 0, status: 'completed', outputs: {} });
       expect(result.valid).toBe(false);
       expect(result.error).toContain('actionId');
     });
 
     it('rejects empty actionId', () => {
-      const result = validateWorkResponse({ requestId: 'r', actionId: '', status: 'completed', outputs: {} });
+      const result = validateWorkResponse({ requestId: 'r', actionId: '', executionGeneration: 0, status: 'completed', outputs: {} });
       expect(result.valid).toBe(false);
       expect(result.error).toContain('actionId');
       expect(result.error).toContain('non-empty string');
     });
 
+    it('rejects empty attemptId when provided', () => {
+      const result = validateWorkResponse({ requestId: 'r', actionId: 'a', attemptId: '', executionGeneration: 0, status: 'completed', outputs: {} });
+      expect(result.valid).toBe(false);
+      expect(result.error).toContain('attemptId');
+    });
+
     it('rejects unknown status with stable error listing valid statuses', () => {
-      const result = validateWorkResponse({ requestId: 'r', actionId: 'a', status: 'unknown_status', outputs: {} });
+      const result = validateWorkResponse({ requestId: 'r', actionId: 'a', executionGeneration: 0, status: 'unknown_status', outputs: {} });
       expect(result.valid).toBe(false);
       expect(result.error).toContain('status must be one of:');
       expect(result.error).toContain('completed');
@@ -142,19 +153,19 @@ describe('validateWorkResponse', () => {
     });
 
     it('rejects missing outputs field', () => {
-      const result = validateWorkResponse({ requestId: 'r', actionId: 'a', status: 'completed' });
+      const result = validateWorkResponse({ requestId: 'r', actionId: 'a', executionGeneration: 0, status: 'completed' });
       expect(result.valid).toBe(false);
       expect(result.error).toBe('outputs is required and must be an object');
     });
 
     it('rejects null outputs', () => {
-      const result = validateWorkResponse({ requestId: 'r', actionId: 'a', status: 'completed', outputs: null });
+      const result = validateWorkResponse({ requestId: 'r', actionId: 'a', executionGeneration: 0, status: 'completed', outputs: null });
       expect(result.valid).toBe(false);
       expect(result.error).toBe('outputs is required and must be an object');
     });
 
     it('rejects non-object outputs', () => {
-      const result = validateWorkResponse({ requestId: 'r', actionId: 'a', status: 'completed', outputs: 'not-an-object' });
+      const result = validateWorkResponse({ requestId: 'r', actionId: 'a', executionGeneration: 0, status: 'completed', outputs: 'not-an-object' });
       expect(result.valid).toBe(false);
       expect(result.error).toBe('outputs is required and must be an object');
     });
@@ -163,43 +174,43 @@ describe('validateWorkResponse', () => {
     // guard, `outputs: []` would reach the orchestrator's completed branch where
     // `outputs.exitCode ?? 0` silently produces an apparently-successful task state.
     it('rejects array outputs (silent-corruption guard)', () => {
-      const result = validateWorkResponse({ requestId: 'r', actionId: 'a', status: 'completed', outputs: [] });
+      const result = validateWorkResponse({ requestId: 'r', actionId: 'a', executionGeneration: 0, status: 'completed', outputs: [] });
       expect(result.valid).toBe(false);
       expect(result.error).toBe('outputs is required and must be an object');
     });
 
     it('rejects spawn_experiments with missing dagMutation', () => {
-      const result = validateWorkResponse({ requestId: 'r', actionId: 'a', status: 'spawn_experiments', outputs: {} });
+      const result = validateWorkResponse({ requestId: 'r', actionId: 'a', executionGeneration: 0, status: 'spawn_experiments', outputs: {} });
       expect(result.valid).toBe(false);
       expect(result.error).toBe('spawn_experiments status requires dagMutation.spawnExperiments');
     });
 
     it('rejects spawn_experiments with null dagMutation', () => {
-      const result = validateWorkResponse({ requestId: 'r', actionId: 'a', status: 'spawn_experiments', outputs: {}, dagMutation: null });
+      const result = validateWorkResponse({ requestId: 'r', actionId: 'a', executionGeneration: 0, status: 'spawn_experiments', outputs: {}, dagMutation: null });
       expect(result.valid).toBe(false);
       expect(result.error).toBe('spawn_experiments status requires dagMutation.spawnExperiments');
     });
 
     it('rejects spawn_experiments with empty dagMutation', () => {
-      const result = validateWorkResponse({ requestId: 'r', actionId: 'a', status: 'spawn_experiments', outputs: {}, dagMutation: {} });
+      const result = validateWorkResponse({ requestId: 'r', actionId: 'a', executionGeneration: 0, status: 'spawn_experiments', outputs: {}, dagMutation: {} });
       expect(result.valid).toBe(false);
       expect(result.error).toBe('spawn_experiments status requires dagMutation.spawnExperiments');
     });
 
     it('rejects select_experiment with missing dagMutation', () => {
-      const result = validateWorkResponse({ requestId: 'r', actionId: 'a', status: 'select_experiment', outputs: {} });
+      const result = validateWorkResponse({ requestId: 'r', actionId: 'a', executionGeneration: 0, status: 'select_experiment', outputs: {} });
       expect(result.valid).toBe(false);
       expect(result.error).toBe('select_experiment status requires dagMutation.selectExperiment');
     });
 
     it('rejects select_experiment with null dagMutation', () => {
-      const result = validateWorkResponse({ requestId: 'r', actionId: 'a', status: 'select_experiment', outputs: {}, dagMutation: null });
+      const result = validateWorkResponse({ requestId: 'r', actionId: 'a', executionGeneration: 0, status: 'select_experiment', outputs: {}, dagMutation: null });
       expect(result.valid).toBe(false);
       expect(result.error).toBe('select_experiment status requires dagMutation.selectExperiment');
     });
 
     it('rejects select_experiment with empty dagMutation', () => {
-      const result = validateWorkResponse({ requestId: 'r', actionId: 'a', status: 'select_experiment', outputs: {}, dagMutation: {} });
+      const result = validateWorkResponse({ requestId: 'r', actionId: 'a', executionGeneration: 0, status: 'select_experiment', outputs: {}, dagMutation: {} });
       expect(result.valid).toBe(false);
       expect(result.error).toBe('select_experiment status requires dagMutation.selectExperiment');
     });
