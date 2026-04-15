@@ -321,6 +321,7 @@ export function assertExecutorRoutingConforms(
  * Only the three write methods used by the orchestrator are bridged.
  */
 export function taskRepositoryFromPersistence(p: OrchestratorPersistence): TaskRepository {
+  const partial = p as Partial<OrchestratorPersistence>;
   return {
     saveWorkflow: (wf) => p.saveWorkflow(wf),
     updateWorkflow: (id, c) => p.updateWorkflow?.(id, c),
@@ -329,17 +330,17 @@ export function taskRepositoryFromPersistence(p: OrchestratorPersistence): TaskR
     saveTask: (wfId, t) => p.saveTask(wfId, t),
     updateTask: (id, c) => p.updateTask(id, c),
     logEvent: (id, et, pl) => p.logEvent?.(id, et, pl),
-    saveAttempt: (a) => p.saveAttempt(a),
-    updateAttempt: (id, c) => p.updateAttempt(id, c),
+    saveAttempt: (a) => partial.saveAttempt?.(a),
+    updateAttempt: (id, c) => partial.updateAttempt?.(id, c),
     failTaskAndAttempt: (tId, tc, ap) => {
       if (p.failTaskAndAttempt) {
         p.failTaskAndAttempt(tId, tc, ap);
       } else {
         p.updateTask(tId, tc);
-        const attempts = p.loadAttempts(tId);
+        const attempts = partial.loadAttempts?.call(p, tId) ?? [];
         const latest = attempts[attempts.length - 1];
         if (latest) {
-          p.updateAttempt(latest.id, ap);
+          partial.updateAttempt?.(latest.id, ap);
         }
       }
     },
@@ -373,6 +374,8 @@ export interface OrchestratorConfig {
 // ── Orchestrator ────────────────────────────────────────────
 
 export class Orchestrator {
+  private static readonly EXPEDITED_PRIORITY = 100;
+
   private readonly stateMachine: TaskStateMachine;
   private readonly responseHandler: ResponseHandler;
   private readonly scheduler: TaskScheduler;
@@ -613,7 +616,9 @@ export class Orchestrator {
       return selected.id;
     }
 
-    const attempts = this.persistence.loadAttempts(task.id);
+    const loadAttempts = (this.persistence as Partial<OrchestratorPersistence>).loadAttempts;
+    const attempts =
+      typeof loadAttempts === 'function' ? loadAttempts.call(this.persistence, task.id) : [];
     const current = attempts[attempts.length - 1];
     if (current && (current.status === 'pending' || current.status === 'running' || current.status === 'needs_input')) {
       if (task.execution.selectedAttemptId !== current.id) {
@@ -1412,7 +1417,7 @@ export class Orchestrator {
     const isReady = readyTasks.some((t) => t.id === id);
     console.log(`[orchestrator] restartTask "${id}": ready=${isReady}`);
     if (isReady) {
-      const started = this.autoStartReadyTasks([id]);
+      const started = this.autoStartReadyTasks([id], Orchestrator.EXPEDITED_PRIORITY);
       if (started.some((t) => t.id === id)) return started;
 
       const current = this.stateGetTask(id);
@@ -1489,7 +1494,11 @@ export class Orchestrator {
         `(roots=${retryRootIds.length}, preserved completed outside invalidated subgraphs)`,
     );
 
-    return this.startExecution();
+    const readyIds = this.stateMachine
+      .getReadyTasks()
+      .map((t) => t.id)
+      .filter((id) => this.stateGetTask(id)?.config.workflowId === workflowId);
+    return this.autoStartReadyTasks(readyIds, Orchestrator.EXPEDITED_PRIORITY);
   }
 
   /**
@@ -1561,7 +1570,7 @@ export class Orchestrator {
       .getReadyTasks()
       .map((t) => t.id)
       .filter((id) => toResetSet.has(id));
-    return this.autoStartReadyTasks(readyIds);
+    return this.autoStartReadyTasks(readyIds, Orchestrator.EXPEDITED_PRIORITY);
   }
 
   /**
@@ -1635,7 +1644,11 @@ export class Orchestrator {
       this.scheduler.completeJob(priorAttemptId ?? task.id);
     }
 
-    return this.startExecution();
+    const readyIds = this.stateMachine
+      .getReadyTasks()
+      .map((t) => t.id)
+      .filter((id) => this.stateGetTask(id)?.config.workflowId === workflowId);
+    return this.autoStartReadyTasks(readyIds, Orchestrator.EXPEDITED_PRIORITY);
   }
 
   /**
@@ -2761,7 +2774,7 @@ export class Orchestrator {
     }
   }
 
-  private autoStartReadyTasks(taskIds: string[]): TaskState[] {
+  private autoStartReadyTasks(taskIds: string[], priority: number = 0): TaskState[] {
     for (const taskId of taskIds) {
       const task = this.stateGetTask(taskId);
       if (!task) continue;
@@ -2773,13 +2786,13 @@ export class Orchestrator {
         this.writeAndSync(taskId, { status: 'pending' });
       }
 
-      this.enqueueIfNotScheduled(taskId);
+      this.enqueueIfNotScheduled(taskId, priority);
     }
 
     return this.drainScheduler();
   }
 
-  private enqueueIfNotScheduled(taskId: string): void {
+  private enqueueIfNotScheduled(taskId: string, priority: number = 0): void {
     const task = this.stateGetTask(taskId);
     if (!task) return;
 
@@ -2799,8 +2812,17 @@ export class Orchestrator {
       // Recover from stale scheduler slot (e.g. process death/sync drift).
       this.scheduler.completeJob(attemptId);
     }
-    if (this.scheduler.getQueuedJobs().some((job) => job.attemptId === attemptId || job.taskId === taskId)) return;
-    this.scheduler.enqueue({ taskId, attemptId, priority: 0 });
+    const queuedJob = this.scheduler
+      .getQueuedJobs()
+      .find((job) => job.attemptId === attemptId || job.taskId === taskId);
+    if (queuedJob) {
+      if (priority > queuedJob.priority) {
+        this.scheduler.removeJob(queuedJob.attemptId ?? queuedJob.taskId);
+        this.scheduler.enqueue({ taskId, attemptId, priority });
+      }
+      return;
+    }
+    this.scheduler.enqueue({ taskId, attemptId, priority });
   }
 
   private autoStartExternallyUnblockedReadyTasks(): TaskState[] {

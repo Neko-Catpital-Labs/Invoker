@@ -789,6 +789,32 @@ function setupGuiMode(): void {
     return cmdResult.data;
   }
 
+  async function preemptTaskSubgraph(taskId: string): Promise<void> {
+    try {
+      await performCancelTask(taskId);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (message.includes('already completed') || message.includes('already stale')) {
+        logger.info(`preemptTaskSubgraph skipped for "${taskId}": ${message}`, { module: 'ipc' });
+        return;
+      }
+      throw err;
+    }
+  }
+
+  async function preemptWorkflowExecution(workflowId: string): Promise<void> {
+    try {
+      await performCancelWorkflow(workflowId);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (message.includes('No tasks found for workflow')) {
+        logger.info(`preemptWorkflowExecution skipped for "${workflowId}": ${message}`, { module: 'ipc' });
+        return;
+      }
+      throw err;
+    }
+  }
+
   function relaunchOrphansAndStartReady(logPrefix: string): TaskState[] {
     const orphanRestarted: TaskState[] = [];
     for (const task of orchestrator.getAllTasks()) {
@@ -1543,11 +1569,15 @@ function setupGuiMode(): void {
       }
     });
 
-    registerGuiMutationHandler('invoker:restart-task', async (taskIdArg: unknown) => {
+    registerWorkflowScopedGuiMutationHandler(
+      'invoker:restart-task',
+      (taskIdArg: unknown) => workflowIdForTaskArg(taskIdArg),
+      'high',
+      async (taskIdArg: unknown) => {
       const taskId = String(taskIdArg);
       logger.info(`restart-task: "${taskId}"`, { module: 'ipc' });
       try {
-        await killRunningTask(taskId);
+        await preemptTaskSubgraph(taskId);
         const envelope = makeEnvelope('restart-task', 'ui', 'task', { taskId });
         const result = await commandService.restartTask(envelope);
         if (!result.ok) throw new Error(result.error.message);
@@ -1566,7 +1596,8 @@ function setupGuiMode(): void {
         logger.error(`restart-task failed: ${err}`, { module: 'ipc' });
         throw err;
       }
-    });
+      },
+    );
 
     registerWorkflowScopedGuiMutationHandler(
       'invoker:cancel-task',
@@ -1637,6 +1668,7 @@ function setupGuiMode(): void {
       const workflowId = String(workflowIdArg);
       logger.info(`recreate-workflow: "${workflowId}"`, { module: 'ipc' });
       try {
+        await preemptWorkflowExecution(workflowId);
         const started = sharedRecreateWorkflow(workflowId, { persistence, orchestrator });
         const runnable = started.filter(t => t.status === 'running');
         remoteFetchForPool.enabled = false;
@@ -1660,6 +1692,7 @@ function setupGuiMode(): void {
       const taskId = String(taskIdArg);
       logger.info(`recreate-task: "${taskId}"`, { module: 'ipc' });
       try {
+        await preemptTaskSubgraph(taskId);
         const started = sharedRecreateTask(taskId, { persistence, orchestrator });
         const runnable = started.filter(t => t.status === 'running');
         remoteFetchForPool.enabled = false;
@@ -1683,6 +1716,7 @@ function setupGuiMode(): void {
       const workflowId = String(workflowIdArg);
       logger.info(`retry-workflow: "${workflowId}"`, { module: 'ipc' });
       try {
+        await preemptWorkflowExecution(workflowId);
         const envelope = makeEnvelope('retry-workflow', 'ui', 'workflow', { workflowId });
         const result = await commandService.retryWorkflow(envelope);
         if (!result.ok) throw new Error(result.error.message);
@@ -1708,6 +1742,8 @@ function setupGuiMode(): void {
       const taskId = String(taskIdArg);
       logger.info(`rebase-and-retry: "${taskId}"`, { module: 'ipc' });
       try {
+        const workflowId = workflowIdForTaskArg(taskIdArg);
+        if (workflowId) await preemptWorkflowExecution(workflowId);
         const started = await rebaseAndRetry(taskId, {
           orchestrator,
           persistence,
