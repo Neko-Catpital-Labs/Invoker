@@ -52,6 +52,34 @@ class InMemoryPersistence implements OrchestratorPersistence {
       .map((e) => e.task);
   }
 
+  saveAttempt(attempt: Attempt): void {
+    const list = this.attempts.get(attempt.nodeId) ?? [];
+    list.push(attempt);
+    this.attempts.set(attempt.nodeId, list);
+  }
+
+  loadAttempts(nodeId: string): Attempt[] {
+    return this.attempts.get(nodeId) ?? [];
+  }
+
+  loadAttempt(attemptId: string): Attempt | undefined {
+    for (const list of this.attempts.values()) {
+      const found = list.find((attempt) => attempt.id === attemptId);
+      if (found) return found;
+    }
+    return undefined;
+  }
+
+  updateAttempt(attemptId: string, changes: Partial<Attempt>): void {
+    for (const list of this.attempts.values()) {
+      const index = list.findIndex((attempt) => attempt.id === attemptId);
+      if (index >= 0) {
+        list[index] = { ...list[index], ...changes };
+        return;
+      }
+    }
+  }
+
   logEvent(taskId: string, eventType: string, payload?: unknown): void {
     this.events.push({ taskId, eventType, payload });
   }
@@ -169,6 +197,9 @@ describe('cancelTask', () => {
     expect(result.cancelled).toContain(sid(orchestrator, 0, 'a'));
     expect(result.cancelled).toContain(sid(orchestrator, 0, 'b'));
     expect(result.cancelled).toContain(sid(orchestrator, 0, 'c'));
+    const attemptA = persistence.loadAttempt(orchestrator.getTask('a')!.execution.selectedAttemptId!);
+    expect(attemptA?.status).toBe('failed');
+    expect(orchestrator.getTask('b')!.execution.selectedAttemptId).toBeUndefined();
   });
 
   it('throws when cancelling a completed task', () => {
@@ -287,6 +318,8 @@ describe('cancelWorkflow', () => {
 
     expect(result.runningCancelled).toContain(sid(orchestrator, 0, 'a'));
     expect(orchestrator.getTask('a')!.execution.error).toBe('Cancelled by user (workflow)');
+    expect(persistence.loadAttempt(orchestrator.getTask('a')!.execution.selectedAttemptId!)?.status).toBe('failed');
+    expect(orchestrator.getTask('b')!.execution.selectedAttemptId).toBeUndefined();
   });
 
   it('throws for unknown workflow id', () => {
