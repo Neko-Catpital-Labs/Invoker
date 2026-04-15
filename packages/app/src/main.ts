@@ -102,6 +102,10 @@ import { openExternalTerminalForTask } from './open-terminal-for-task.js';
 import { createRequire } from 'node:module';
 import { acquireDbWriterLock, type DbWriterLockResult } from './db-writer-lock.js';
 import { applyDelta } from './delta-merge.js';
+import {
+  WorkflowMutationCoordinator,
+  type WorkflowMutationPriority,
+} from './workflow-mutation-coordinator.js';
 
 // ── Detect headless mode ─────────────────────────────────────
 
@@ -142,6 +146,7 @@ let persistence: SQLiteAdapter;
 let executorRegistry: ExecutorRegistry;
 let orchestrator: Orchestrator;
 let commandService: CommandService;
+const workflowMutationCoordinator = new WorkflowMutationCoordinator();
 let hourlyBackupInterval: ReturnType<typeof setInterval> | null = null;
 let writerLock: DbWriterLockResult | null = null;
 
@@ -591,10 +596,18 @@ if (isHeadless) {
           if (!Array.isArray(args) || args.length === 0) {
             throw new Error('Missing delegated headless command arguments');
           }
-          await runHeadless(args, {
-            ...headlessDeps,
+          const payload: HeadlessExecMutationPayload = {
+            args,
             waitForApproval: delegatedWait,
             noTrack: delegatedNoTrack,
+          };
+          const { workflowId, priority } = classifyHeadlessExecMutation(payload);
+          await runWorkflowMutation(workflowId, priority, async () => {
+            await runHeadless(args, {
+              ...headlessDeps,
+              waitForApproval: delegatedWait,
+              noTrack: delegatedNoTrack,
+            });
           });
           return { ok: true };
         });
@@ -868,6 +881,48 @@ function setupGuiMode(): void {
     return { ok: true };
   }
 
+  function workflowIdForTaskArg(taskIdArg: unknown): string | undefined {
+    const taskId = String(taskIdArg);
+    return orchestrator.getTask(taskId)?.config.workflowId;
+  }
+
+  function classifyHeadlessExecMutation(payload: HeadlessExecMutationPayload): {
+    workflowId?: string;
+    priority: WorkflowMutationPriority;
+  } {
+    const [command, arg0] = payload.args;
+    if (!command) return { priority: 'normal' };
+
+    switch (command) {
+      case 'restart':
+        return { workflowId: workflowIdForTaskArg(arg0) ?? (arg0 === undefined ? undefined : String(arg0)), priority: 'high' };
+      case 'recreate':
+      case 'cancel-workflow':
+        return { workflowId: arg0, priority: 'high' };
+      case 'rebase':
+      case 'cancel':
+      case 'recreate-task':
+        return { workflowId: workflowIdForTaskArg(arg0), priority: 'high' };
+      case 'approve':
+      case 'reject':
+      case 'select':
+      case 'fix':
+      case 'resolve-conflict':
+        return { workflowId: workflowIdForTaskArg(arg0), priority: 'normal' };
+      default:
+        return { priority: 'normal' };
+    }
+  }
+
+  async function runWorkflowMutation<T>(
+    workflowId: string | undefined,
+    priority: WorkflowMutationPriority,
+    op: () => Promise<T>,
+  ): Promise<T> {
+    if (!workflowId) return op();
+    return workflowMutationCoordinator.enqueue(workflowId, priority, op);
+  }
+
   function translateGuiMutationToHeadless(payload: GuiMutationPayload):
     | { channel: 'headless.run'; request: HeadlessRunMutationPayload }
     | { channel: 'headless.resume'; request: HeadlessResumeMutationPayload }
@@ -976,6 +1031,18 @@ function setupGuiMode(): void {
     });
   }
 
+  function registerWorkflowScopedGuiMutationHandler<TResult = unknown>(
+    channel: string,
+    resolveWorkflowId: (...args: unknown[]) => string | undefined,
+    priority: WorkflowMutationPriority,
+    handler: (...args: unknown[]) => Promise<TResult>,
+  ): void {
+    registerGuiMutationHandler(channel, async (...args: unknown[]) => {
+      const workflowId = resolveWorkflowId(...args);
+      return runWorkflowMutation(workflowId, priority, () => handler(...args));
+    });
+  }
+
   function createWindow(): void {
     mainWindow = new BrowserWindow({
       width: 1200,
@@ -1078,11 +1145,13 @@ function setupGuiMode(): void {
           throw new Error('Missing delegated headless command arguments');
         }
         logger.info(`headless.exec: "${args.join(' ')}"`, { module: 'ipc-delegate' });
-        return executeHeadlessExec({
+        const payload: HeadlessExecMutationPayload = {
           args,
           waitForApproval: delegatedWait,
           noTrack: delegatedNoTrack,
-        });
+        };
+        const { workflowId, priority } = classifyHeadlessExecMutation(payload);
+        return runWorkflowMutation(workflowId, priority, async () => executeHeadlessExec(payload));
       });
     }
 
@@ -1499,7 +1568,11 @@ function setupGuiMode(): void {
       }
     });
 
-    registerGuiMutationHandler('invoker:cancel-task', async (taskIdArg: unknown) => {
+    registerWorkflowScopedGuiMutationHandler(
+      'invoker:cancel-task',
+      (taskIdArg: unknown) => workflowIdForTaskArg(taskIdArg),
+      'high',
+      async (taskIdArg: unknown) => {
       const taskId = String(taskIdArg);
       logger.info(`cancel-task: "${taskId}"`, { module: 'ipc' });
       try {
@@ -1508,9 +1581,14 @@ function setupGuiMode(): void {
         logger.error(`cancel-task failed: ${err}`, { module: 'ipc' });
         throw err;
       }
-    });
+      },
+    );
 
-    registerGuiMutationHandler('invoker:cancel-workflow', async (workflowIdArg: unknown) => {
+    registerWorkflowScopedGuiMutationHandler(
+      'invoker:cancel-workflow',
+      (workflowIdArg: unknown) => String(workflowIdArg),
+      'high',
+      async (workflowIdArg: unknown) => {
       const workflowId = String(workflowIdArg);
       logger.info(`cancel-workflow: "${workflowId}"`, { module: 'ipc' });
       try {
@@ -1519,7 +1597,8 @@ function setupGuiMode(): void {
         logger.error(`cancel-workflow failed: ${err}`, { module: 'ipc' });
         throw err;
       }
-    });
+      },
+    );
 
     ipcMain.handle('invoker:get-queue-status', () => {
       return orchestrator.getQueueStatus();
@@ -1550,7 +1629,11 @@ function setupGuiMode(): void {
       ts: new Date().toISOString(),
     }));
 
-    registerGuiMutationHandler('invoker:recreate-workflow', async (workflowIdArg: unknown) => {
+    registerWorkflowScopedGuiMutationHandler(
+      'invoker:recreate-workflow',
+      (workflowIdArg: unknown) => String(workflowIdArg),
+      'high',
+      async (workflowIdArg: unknown) => {
       const workflowId = String(workflowIdArg);
       logger.info(`recreate-workflow: "${workflowId}"`, { module: 'ipc' });
       try {
@@ -1566,9 +1649,14 @@ function setupGuiMode(): void {
         logger.error(`recreate-workflow failed: ${err}`, { module: 'ipc' });
         throw err;
       }
-    });
+      },
+    );
 
-    registerGuiMutationHandler('invoker:recreate-task', async (taskIdArg: unknown) => {
+    registerWorkflowScopedGuiMutationHandler(
+      'invoker:recreate-task',
+      (taskIdArg: unknown) => workflowIdForTaskArg(taskIdArg),
+      'high',
+      async (taskIdArg: unknown) => {
       const taskId = String(taskIdArg);
       logger.info(`recreate-task: "${taskId}"`, { module: 'ipc' });
       try {
@@ -1584,9 +1672,14 @@ function setupGuiMode(): void {
         logger.error(`recreate-task failed: ${err}`, { module: 'ipc' });
         throw err;
       }
-    });
+      },
+    );
 
-    registerGuiMutationHandler('invoker:retry-workflow', async (workflowIdArg: unknown) => {
+    registerWorkflowScopedGuiMutationHandler(
+      'invoker:retry-workflow',
+      (workflowIdArg: unknown) => String(workflowIdArg),
+      'high',
+      async (workflowIdArg: unknown) => {
       const workflowId = String(workflowIdArg);
       logger.info(`retry-workflow: "${workflowId}"`, { module: 'ipc' });
       try {
@@ -1604,9 +1697,14 @@ function setupGuiMode(): void {
         logger.error(`retry-workflow failed: ${err}`, { module: 'ipc' });
         throw err;
       }
-    });
+      },
+    );
 
-    registerGuiMutationHandler('invoker:rebase-and-retry', async (taskIdArg: unknown) => {
+    registerWorkflowScopedGuiMutationHandler(
+      'invoker:rebase-and-retry',
+      (taskIdArg: unknown) => workflowIdForTaskArg(taskIdArg),
+      'high',
+      async (taskIdArg: unknown) => {
       const taskId = String(taskIdArg);
       logger.info(`rebase-and-retry: "${taskId}"`, { module: 'ipc' });
       try {
@@ -1622,7 +1720,8 @@ function setupGuiMode(): void {
         logger.error(`rebase-and-retry failed: ${err}`, { module: 'ipc' });
         throw err;
       }
-    });
+      },
+    );
 
     registerGuiMutationHandler('invoker:set-merge-branch', async (workflowIdArg: unknown, baseBranchArg: unknown) => {
       const workflowId = String(workflowIdArg);
@@ -1703,7 +1802,11 @@ function setupGuiMode(): void {
       );
     });
 
-    registerGuiMutationHandler('invoker:resolve-conflict', async (taskIdArg: unknown, agentNameArg?: unknown) => {
+    registerWorkflowScopedGuiMutationHandler(
+      'invoker:resolve-conflict',
+      (taskIdArg: unknown) => workflowIdForTaskArg(taskIdArg),
+      'normal',
+      async (taskIdArg: unknown, agentNameArg?: unknown) => {
       const taskId = String(taskIdArg);
       const agentName = agentNameArg === undefined ? undefined : String(agentNameArg);
       logger.info(`resolve-conflict: "${taskId}" agent=${agentName ?? 'claude'}`, { module: 'ipc' });
@@ -1718,9 +1821,14 @@ function setupGuiMode(): void {
         logger.error(`resolve-conflict failed: ${err}`, { module: 'ipc' });
         throw err;
       }
-    });
+      },
+    );
 
-    registerGuiMutationHandler('invoker:fix-with-agent', async (taskIdArg: unknown, agentNameArg?: unknown) => {
+    registerWorkflowScopedGuiMutationHandler(
+      'invoker:fix-with-agent',
+      (taskIdArg: unknown) => workflowIdForTaskArg(taskIdArg),
+      'normal',
+      async (taskIdArg: unknown, agentNameArg?: unknown) => {
       const taskId = String(taskIdArg);
       const agentName = agentNameArg === undefined ? undefined : String(agentNameArg);
       logger.info(`fix-with-agent: "${taskId}" agent=${agentName ?? 'claude'}`, { module: 'ipc' });
@@ -1740,7 +1848,8 @@ function setupGuiMode(): void {
         orchestrator.revertConflictResolution(taskId, savedError, msg);
         throw err;
       }
-    });
+      },
+    );
 
 
     registerGuiMutationHandler('invoker:edit-task-command', async (taskIdArg: unknown, newCommandArg: unknown) => {
