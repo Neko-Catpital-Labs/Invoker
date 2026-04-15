@@ -2191,6 +2191,7 @@ export class Orchestrator {
     running: number;
     pending: number;
   } {
+    this.refreshFromDb();
     let tasks = this.stateMachine.getAllTasks();
     if (workflowId) {
       tasks = tasks.filter((t) => t.config.workflowId === workflowId);
@@ -2389,21 +2390,38 @@ export class Orchestrator {
     running: Array<{ taskId: string; attemptId?: string; description: string }>;
     queued: Array<{ taskId: string; priority: number; description: string }>;
   } {
-    const status = this.scheduler.getStatus();
-    const runningJobs = this.scheduler.getRunningJobs();
-    const queuedJobs = this.scheduler.getQueuedJobs();
+    this.refreshFromDb();
+    const tasks = this.stateMachine.getAllTasks();
+    const runningTasks = tasks.filter((task) => task.status === 'running' || task.status === 'fixing_with_ai');
+    const queuedTasks = this.stateMachine
+      .getReadyTasks()
+      .filter((task) => task.status === 'pending')
+      .filter((task) => this.getExternalDependencyBlocker(task) === undefined)
+      .map((task) => {
+        const attempt = task.execution.selectedAttemptId
+          ? this.persistence.loadAttempt(task.execution.selectedAttemptId)
+          : undefined;
+        return {
+          taskId: task.id,
+          priority: attempt?.queuePriority ?? 0,
+          description: task.description,
+          createdAt: attempt?.createdAt?.getTime() ?? task.createdAt.getTime(),
+        };
+      })
+      .sort((a, b) => (b.priority - a.priority) || (a.createdAt - b.createdAt));
 
     return {
-      maxConcurrency: status.maxConcurrency,
-      runningCount: status.runningCount,
-      running: runningJobs.map(j => ({
-        ...j,
-        description: this.stateGetTask(j.taskId)?.description ?? '',
+      maxConcurrency: this.maxConcurrency,
+      runningCount: runningTasks.length,
+      running: runningTasks.map((task) => ({
+        taskId: task.id,
+        attemptId: task.execution.selectedAttemptId,
+        description: task.description,
       })),
-      queued: queuedJobs.map(j => ({
-        taskId: j.taskId,
-        priority: j.priority,
-        description: this.stateGetTask(j.taskId)?.description ?? '',
+      queued: queuedTasks.map((task) => ({
+        taskId: task.taskId,
+        priority: task.priority,
+        description: task.description,
       })),
     };
   }
@@ -2797,6 +2815,10 @@ export class Orchestrator {
     if (!task) return;
 
     const attemptId = this.ensureCurrentPendingAttempt(task);
+    const currentAttempt = this.persistence.loadAttempt(attemptId);
+    if ((currentAttempt?.queuePriority ?? 0) !== priority) {
+      this.taskRepository.updateAttempt(attemptId, { queuePriority: priority });
+    }
     if (this.scheduler.isRunning(attemptId)) {
       if (
         task.status === 'running' ||

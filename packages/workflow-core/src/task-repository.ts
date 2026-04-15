@@ -49,6 +49,7 @@ export type AttemptChanges = Partial<
     | 'branch'
     | 'commit'
     | 'summary'
+    | 'queuePriority'
     | 'workspacePath'
     | 'agentSessionId'
     | 'containerId'

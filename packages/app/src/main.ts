@@ -102,10 +102,8 @@ import { openExternalTerminalForTask } from './open-terminal-for-task.js';
 import { createRequire } from 'node:module';
 import { acquireDbWriterLock, type DbWriterLockResult } from './db-writer-lock.js';
 import { applyDelta } from './delta-merge.js';
-import {
-  WorkflowMutationCoordinator,
-  type WorkflowMutationPriority,
-} from './workflow-mutation-coordinator.js';
+import type { WorkflowMutationPriority } from './workflow-mutation-coordinator.js';
+import { PersistedWorkflowMutationCoordinator } from './persisted-workflow-mutation-coordinator.js';
 
 // ── Detect headless mode ─────────────────────────────────────
 
@@ -146,9 +144,11 @@ let persistence: SQLiteAdapter;
 let executorRegistry: ExecutorRegistry;
 let orchestrator: Orchestrator;
 let commandService: CommandService;
-const workflowMutationCoordinator = new WorkflowMutationCoordinator();
+let workflowMutationCoordinator: PersistedWorkflowMutationCoordinator | null = null;
+const workflowMutationDispatcher = new Map<string, (...args: unknown[]) => Promise<unknown>>();
 let hourlyBackupInterval: ReturnType<typeof setInterval> | null = null;
 let writerLock: DbWriterLockResult | null = null;
+const workflowMutationOwnerId = `owner-${process.pid}-${Date.now()}`;
 
 interface GuiMutationPayload {
   channel: string;
@@ -602,7 +602,7 @@ if (isHeadless) {
             noTrack: delegatedNoTrack,
           };
           const { workflowId, priority } = classifyHeadlessExecMutation(payload);
-          await runWorkflowMutation(workflowId, priority, async () => {
+          await runWorkflowMutation(workflowId, priority, 'headless.exec', [payload], async () => {
             await runHeadless(args, {
               ...headlessDeps,
               waitForApproval: delegatedWait,
@@ -943,10 +943,18 @@ function setupGuiMode(): void {
   async function runWorkflowMutation<T>(
     workflowId: string | undefined,
     priority: WorkflowMutationPriority,
+    channel: string,
+    args: unknown[],
     op: () => Promise<T>,
   ): Promise<T> {
     if (!workflowId) return op();
-    return workflowMutationCoordinator.enqueue(workflowId, priority, op);
+    if (!workflowMutationCoordinator) {
+      throw new Error('Workflow mutation coordinator is unavailable');
+    }
+    if (!workflowMutationDispatcher.has(channel)) {
+      throw new Error(`No workflow mutation dispatcher registered for ${channel}`);
+    }
+    return workflowMutationCoordinator.enqueue<T>(workflowId, priority, channel, args);
   }
 
   function translateGuiMutationToHeadless(payload: GuiMutationPayload):
@@ -1063,9 +1071,10 @@ function setupGuiMode(): void {
     priority: WorkflowMutationPriority,
     handler: (...args: unknown[]) => Promise<TResult>,
   ): void {
+    workflowMutationDispatcher.set(channel, (...args: unknown[]) => handler(...args));
     registerGuiMutationHandler(channel, async (...args: unknown[]) => {
       const workflowId = resolveWorkflowId(...args);
-      return runWorkflowMutation(workflowId, priority, () => handler(...args));
+      return runWorkflowMutation(workflowId, priority, channel, args, () => handler(...args));
     });
   }
 
@@ -1143,6 +1152,17 @@ function setupGuiMode(): void {
 
     if (ownerMode) {
       rebuildTaskRunner();
+      workflowMutationCoordinator = new PersistedWorkflowMutationCoordinator(
+        persistence,
+        workflowMutationOwnerId,
+        async (channel: string, args: unknown[]) => {
+          const handler = workflowMutationDispatcher.get(channel);
+          if (!handler) {
+            throw new Error(`No workflow mutation dispatcher registered for ${channel}`);
+          }
+          return handler(...args);
+        },
+      );
     } else {
       logger.info('GUI launched in follower mode; mutation execution is delegated to the current owner', {
         module: 'init',
@@ -1152,6 +1172,9 @@ function setupGuiMode(): void {
     // ── IPC Delegation Handlers — headless → GUI ────────────────
     // Headless processes delegate write-heavy commands to the GUI process via IpcBus.
     if (ownerMode) {
+      workflowMutationDispatcher.set('headless.exec', async (payloadArg: unknown) => {
+        return executeHeadlessExec(payloadArg as HeadlessExecMutationPayload);
+      });
       messageBus.onRequest('headless.run', async (req: unknown) => {
         const { planPath } = req as { planPath: string };
         logger.info(`headless.run: "${planPath}"`, { module: 'ipc-delegate' });
@@ -1177,10 +1200,9 @@ function setupGuiMode(): void {
           noTrack: delegatedNoTrack,
         };
         const { workflowId, priority } = classifyHeadlessExecMutation(payload);
-        return runWorkflowMutation(workflowId, priority, async () => executeHeadlessExec(payload));
+        return runWorkflowMutation(workflowId, priority, 'headless.exec', [payload], async () => executeHeadlessExec(payload));
       });
     }
-
 
     // Relaunch orphaned running tasks and start any pending-but-ready tasks.
     if (!ownerMode) {
@@ -2062,6 +2084,10 @@ function setupGuiMode(): void {
           'Task is still running or being fixed with AI. View output in the terminal panel below.',
       });
     });
+
+    if (ownerMode && workflowMutationCoordinator) {
+      await workflowMutationCoordinator.resumePending();
+    }
 
     createWindow();
 

@@ -203,6 +203,7 @@ export type AttemptStatus =
 export interface Attempt {
   readonly id: string;                      // e.g., "taskA-a3f1c0e2"
   readonly nodeId: string;
+  readonly queuePriority: number;
 
   // ── Input snapshot ──
   readonly snapshotCommit?: string;
@@ -250,6 +251,7 @@ export function createAttempt(
   return {
     id: `${nodeId}-a${shortId}`,
     nodeId,
+    queuePriority: 0,
     status: 'pending',
     upstreamAttemptIds: [],
     createdAt: new Date(),

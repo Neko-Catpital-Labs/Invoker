@@ -38,6 +38,23 @@ export interface OutputChunk {
   data: string;
 }
 
+export type WorkflowMutationPriority = 'high' | 'normal';
+export type WorkflowMutationIntentStatus = 'queued' | 'running' | 'completed' | 'failed';
+
+export interface WorkflowMutationIntent {
+  id: number;
+  workflowId: string;
+  channel: string;
+  args: unknown[];
+  priority: WorkflowMutationPriority;
+  status: WorkflowMutationIntentStatus;
+  ownerId?: string;
+  error?: string;
+  createdAt: string;
+  startedAt?: string;
+  completedAt?: string;
+}
+
 export class SQLiteAdapter implements PersistenceAdapter {
   private db: SqlJsDatabase;
   private dbPath: string | null;
@@ -287,6 +304,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         id TEXT PRIMARY KEY,
         node_id TEXT NOT NULL,
         attempt_number INTEGER NOT NULL,
+        queue_priority INTEGER NOT NULL DEFAULT 0,
         status TEXT DEFAULT 'pending',
 
         -- Input snapshot
@@ -325,6 +343,24 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
       CREATE INDEX IF NOT EXISTS idx_attempts_node_created
         ON attempts(node_id, created_at);
+
+      CREATE TABLE IF NOT EXISTS workflow_mutation_intents (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        workflow_id TEXT NOT NULL,
+        channel TEXT NOT NULL,
+        args_json TEXT NOT NULL,
+        priority TEXT NOT NULL DEFAULT 'normal',
+        status TEXT NOT NULL DEFAULT 'queued',
+        owner_id TEXT,
+        error TEXT,
+        created_at TEXT DEFAULT (datetime('now')),
+        started_at TEXT,
+        completed_at TEXT,
+        FOREIGN KEY (workflow_id) REFERENCES workflows(id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_workflow_mutation_intents_workflow_status
+        ON workflow_mutation_intents(workflow_id, status, priority, id);
 
       CREATE TABLE IF NOT EXISTS output_spool (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -384,6 +420,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       'ALTER TABLE tasks ADD COLUMN external_dependencies TEXT',
       'ALTER TABLE tasks ADD COLUMN executor_type TEXT',
       'ALTER TABLE tasks ADD COLUMN auto_fix_attempts INTEGER DEFAULT 0',
+      'ALTER TABLE attempts ADD COLUMN queue_priority INTEGER NOT NULL DEFAULT 0',
     ];
     for (const sql of migrations) {
       try {
@@ -1216,14 +1253,14 @@ export class SQLiteAdapter implements PersistenceAdapter {
   saveAttempt(attempt: Attempt): void {
     this.execRun(`
       INSERT OR REPLACE INTO attempts (
-        id, node_id, attempt_number, status,
+        id, node_id, attempt_number, queue_priority, status,
         snapshot_commit, base_branch, upstream_attempt_ids,
         command_override, prompt_override,
         started_at, completed_at, exit_code, error, last_heartbeat_at,
         branch, commit_hash, summary, workspace_path, agent_session_id, container_id,
         supersedes_attempt_id, created_at, merge_conflict
       ) VALUES (
-        ?, ?, ?, ?,
+        ?, ?, ?, ?, ?,
         ?, ?, ?,
         ?, ?,
         ?, ?, ?, ?, ?,
@@ -1231,7 +1268,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         ?, ?, ?
       )
     `, [
-      attempt.id, attempt.nodeId, 0, attempt.status,
+      attempt.id, attempt.nodeId, 0, attempt.queuePriority, attempt.status,
       attempt.snapshotCommit ?? null, attempt.baseBranch ?? null,
       JSON.stringify(attempt.upstreamAttemptIds),
       attempt.commandOverride ?? null, attempt.promptOverride ?? null,
@@ -1265,7 +1302,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return this.rowToAttempt(row);
   }
 
-  updateAttempt(attemptId: string, changes: Partial<Pick<Attempt, 'status' | 'startedAt' | 'completedAt' | 'exitCode' | 'error' | 'lastHeartbeatAt' | 'branch' | 'commit' | 'summary' | 'workspacePath' | 'agentSessionId' | 'containerId' | 'mergeConflict'>>): void {
+  updateAttempt(attemptId: string, changes: Partial<Pick<Attempt, 'status' | 'startedAt' | 'completedAt' | 'exitCode' | 'error' | 'lastHeartbeatAt' | 'branch' | 'commit' | 'summary' | 'queuePriority' | 'workspacePath' | 'agentSessionId' | 'containerId' | 'mergeConflict'>>): void {
     const setClauses: string[] = [];
     const values: any[] = [];
 
@@ -1278,6 +1315,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
     if (changes.branch !== undefined) { setClauses.push('branch = ?'); values.push(changes.branch); }
     if (changes.commit !== undefined) { setClauses.push('commit_hash = ?'); values.push(changes.commit); }
     if (changes.summary !== undefined) { setClauses.push('summary = ?'); values.push(changes.summary); }
+    if (changes.queuePriority !== undefined) { setClauses.push('queue_priority = ?'); values.push(changes.queuePriority); }
     if (changes.workspacePath !== undefined) { setClauses.push('workspace_path = ?'); values.push(changes.workspacePath); }
     if (changes.agentSessionId !== undefined) { setClauses.push('agent_session_id = ?'); values.push(changes.agentSessionId); }
     if (changes.containerId !== undefined) { setClauses.push('container_id = ?'); values.push(changes.containerId); }
@@ -1457,6 +1495,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return {
       id: row.id,
       nodeId: row.node_id,
+      queuePriority: Number(row.queue_priority ?? 0),
       status: row.status,
       snapshotCommit: row.snapshot_commit ?? undefined,
       baseBranch: row.base_branch ?? undefined,
@@ -1477,6 +1516,113 @@ export class SQLiteAdapter implements PersistenceAdapter {
       supersedesAttemptId: row.supersedes_attempt_id ?? undefined,
       createdAt: new Date(row.created_at),
       mergeConflict: row.merge_conflict ? JSON.parse(row.merge_conflict) : undefined,
+    };
+  }
+
+  enqueueWorkflowMutationIntent(
+    workflowId: string,
+    channel: string,
+    args: unknown[],
+    priority: WorkflowMutationPriority,
+  ): number {
+    this.execRun(
+      `INSERT INTO workflow_mutation_intents (
+        workflow_id, channel, args_json, priority, status
+      ) VALUES (?, ?, ?, ?, 'queued')`,
+      [workflowId, channel, JSON.stringify(args), priority],
+    );
+    const row = this.queryOne('SELECT last_insert_rowid() AS id');
+    return Number(row?.id ?? 0);
+  }
+
+  listWorkflowMutationIntents(
+    workflowId?: string,
+    statuses?: WorkflowMutationIntentStatus[],
+  ): WorkflowMutationIntent[] {
+    const where: string[] = [];
+    const params: unknown[] = [];
+    if (workflowId) {
+      where.push('workflow_id = ?');
+      params.push(workflowId);
+    }
+    if (statuses && statuses.length > 0) {
+      where.push(`status IN (${statuses.map(() => '?').join(', ')})`);
+      params.push(...statuses);
+    }
+    const rows = this.queryAll(
+      `SELECT * FROM workflow_mutation_intents ${where.length > 0 ? `WHERE ${where.join(' AND ')}` : ''} ` +
+        `ORDER BY CASE priority WHEN 'high' THEN 0 ELSE 1 END ASC, id ASC`,
+      params,
+    );
+    return rows.map((row) => this.rowToWorkflowMutationIntent(row));
+  }
+
+  requeueRunningWorkflowMutationIntents(): number {
+    const running = this.queryOne(
+      `SELECT COUNT(*) AS count FROM workflow_mutation_intents WHERE status = 'running'`,
+    );
+    this.execRun(
+      `UPDATE workflow_mutation_intents
+         SET status = 'queued', owner_id = NULL, started_at = NULL, completed_at = NULL
+       WHERE status = 'running'`,
+    );
+    return Number(running?.count ?? 0);
+  }
+
+  claimNextWorkflowMutationIntent(
+    workflowId: string,
+    ownerId: string,
+  ): WorkflowMutationIntent | undefined {
+    const next = this.queryOne(
+      `SELECT * FROM workflow_mutation_intents
+       WHERE workflow_id = ? AND status = 'queued'
+       ORDER BY CASE priority WHEN 'high' THEN 0 ELSE 1 END ASC, id ASC
+       LIMIT 1`,
+      [workflowId],
+    );
+    if (!next) return undefined;
+    this.execRun(
+      `UPDATE workflow_mutation_intents
+         SET status = 'running', owner_id = ?, started_at = ?, completed_at = NULL, error = NULL
+       WHERE id = ? AND status = 'queued'`,
+      [ownerId, new Date().toISOString(), next.id],
+    );
+    const claimed = this.queryOne('SELECT * FROM workflow_mutation_intents WHERE id = ?', [next.id]);
+    if (!claimed || claimed.status !== 'running') return undefined;
+    return this.rowToWorkflowMutationIntent(claimed);
+  }
+
+  completeWorkflowMutationIntent(id: number): void {
+    this.execRun(
+      `UPDATE workflow_mutation_intents
+         SET status = 'completed', completed_at = ?, error = NULL
+       WHERE id = ?`,
+      [new Date().toISOString(), id],
+    );
+  }
+
+  failWorkflowMutationIntent(id: number, error: string): void {
+    this.execRun(
+      `UPDATE workflow_mutation_intents
+         SET status = 'failed', completed_at = ?, error = ?
+       WHERE id = ?`,
+      [new Date().toISOString(), error, id],
+    );
+  }
+
+  private rowToWorkflowMutationIntent(row: Record<string, unknown>): WorkflowMutationIntent {
+    return {
+      id: Number(row.id),
+      workflowId: String(row.workflow_id),
+      channel: String(row.channel),
+      args: JSON.parse(String(row.args_json ?? '[]')),
+      priority: row.priority === 'high' ? 'high' : 'normal',
+      status: (row.status as WorkflowMutationIntentStatus) ?? 'queued',
+      ownerId: (row.owner_id as string) ?? undefined,
+      error: (row.error as string) ?? undefined,
+      createdAt: String(row.created_at),
+      startedAt: (row.started_at as string) ?? undefined,
+      completedAt: (row.completed_at as string) ?? undefined,
     };
   }
 }

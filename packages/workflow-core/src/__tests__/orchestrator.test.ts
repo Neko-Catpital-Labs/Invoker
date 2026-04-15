@@ -4596,6 +4596,31 @@ describe('Orchestrator', () => {
       const runningTasks = orchestrator.getAllTasks().filter(t => t.status === 'running');
       expect(scheduler.getStatus().runningCount).toBe(runningTasks.length);
     });
+
+    it('getQueueStatus derives from persisted task state instead of stale scheduler slots', () => {
+      orchestrator.loadPlan({
+        name: 'queue-truth-test',
+        tasks: [
+          { id: 't1', description: 'Task 1' },
+        ],
+      });
+      const [started] = orchestrator.startExecution();
+      expect(started?.id).toBe(sid(orchestrator, 0, 't1'));
+
+      const runningTask = orchestrator.getTask('t1');
+      expect(runningTask?.status).toBe('running');
+
+      persistence.updateTask('t1', {
+        status: 'pending',
+        execution: { startedAt: undefined, lastHeartbeatAt: undefined },
+      });
+
+      const queueStatus = orchestrator.getQueueStatus();
+      expect(queueStatus.runningCount).toBe(0);
+      expect(queueStatus.running).toEqual([]);
+      expect(queueStatus.queued).toHaveLength(1);
+      expect(queueStatus.queued[0]?.taskId).toBe(sid(orchestrator, 0, 't1'));
+    });
   });
 
   // ── selectExperiments (multi-select) ────────────────────
