@@ -41,7 +41,7 @@ describe('migrateGatePolicyApprovedToCompleted', () => {
   }
 
   it('migrates gatePolicy from approved to completed', async () => {
-    // Create adapter and seed with legacy data
+    // Create adapter and seed with older data
     let adapter = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
     adapter.saveWorkflow(testWorkflow);
 
@@ -83,7 +83,7 @@ describe('migrateGatePolicyApprovedToCompleted', () => {
   });
 
   it('is idempotent - running migration twice leaves data unchanged', async () => {
-    // Create adapter and seed with legacy data
+    // Create adapter and seed with older data
     let adapter = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
     adapter.saveWorkflow(testWorkflow);
 
@@ -158,7 +158,7 @@ describe('migrateGatePolicyApprovedToCompleted', () => {
   });
 
   it('handles tasks with multiple external dependencies', async () => {
-    // Create adapter and seed with mixed legacy and current data
+    // Create adapter and seed with mixed older and current data
     let adapter = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
     adapter.saveWorkflow(testWorkflow);
 

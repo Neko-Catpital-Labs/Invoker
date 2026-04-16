@@ -398,6 +398,75 @@ describe('Orchestrator', () => {
       expect(repro.getTask(midId)?.status).toBe('completed');
     });
 
+    it('applies a completion signal when attemptId matches the selected attempt', () => {
+      orchestrator.loadPlan({
+        name: 'accept-current-attempt-signal',
+        onFinish: 'none',
+        tasks: [
+          { id: 'A', description: 'Root', command: 'echo A' },
+        ],
+      });
+      orchestrator.startExecution();
+      const taskId = orchestrator.getAllTasks().find((task) => task.id === 'A' || task.id.endsWith('/A'))?.id ?? 'A';
+
+      const activeAttemptId = orchestrator.getTask(taskId)?.execution.selectedAttemptId;
+      expect(activeAttemptId).toBeTruthy();
+
+      orchestrator.handleWorkerResponse(
+        makeResponse({
+          actionId: taskId,
+          attemptId: activeAttemptId,
+          status: 'completed',
+          outputs: { exitCode: 0 },
+        }),
+      );
+
+      expect(orchestrator.getTask(taskId)?.status).toBe('completed');
+      expect(persistence.events.some((event) => event.taskId === taskId && event.eventType === 'task.completed')).toBe(true);
+    });
+
+    it('rejects a completion signal when attemptId is stale', () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        orchestrator.loadPlan({
+          name: 'reject-stale-attempt-signal',
+          onFinish: 'none',
+          tasks: [
+            { id: 'A', description: 'Root', command: 'echo A' },
+          ],
+        });
+        orchestrator.startExecution();
+        const taskId = orchestrator.getAllTasks().find((task) => task.id === 'A' || task.id.endsWith('/A'))?.id ?? 'A';
+
+        const oldAttemptId = orchestrator.getTask(taskId)?.execution.selectedAttemptId;
+        expect(oldAttemptId).toBeTruthy();
+
+        const workflowId = orchestrator.getWorkflowIds()[0]!;
+        orchestrator.recreateWorkflow(workflowId);
+        const currentAttemptId = orchestrator.getTask(taskId)?.execution.selectedAttemptId;
+        expect(currentAttemptId).toBeTruthy();
+        expect(currentAttemptId).not.toBe(oldAttemptId);
+        expect(orchestrator.getTask(taskId)?.status).toBe('running');
+
+        orchestrator.handleWorkerResponse(
+          makeResponse({
+            actionId: taskId,
+            attemptId: oldAttemptId,
+            status: 'completed',
+            outputs: { exitCode: 0 },
+          }),
+        );
+
+        expect(orchestrator.getTask(taskId)?.status).toBe('running');
+        expect(orchestrator.getTask(taskId)?.execution.selectedAttemptId).toBe(currentAttemptId);
+        expect(warnSpy).toHaveBeenCalledWith(
+          expect.stringContaining(`STALE_ATTEMPT_REJECTED taskId=${taskId}`),
+        );
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
     it('ignores a stale completed response after restartTask resets descendants', () => {
       const reproPersistence = new InMemoryPersistence();
       const reproBus = new InMemoryBus();
@@ -2217,13 +2286,13 @@ describe('Orchestrator', () => {
   // ── Auto-Fix ────────────────────────────────────────────
 
   describe('auto-fix via synthetic spawn_experiments', () => {
-    it('falls back to default auto-fix retries for legacy failed tasks missing per-task config', () => {
+    it('falls back to default auto-fix retries for older failed tasks missing per-task config', () => {
       const hydratePersistence = new InMemoryPersistence();
       const hydrateBus = new InMemoryBus();
 
-      hydratePersistence.saveTask('wf-legacy', {
+      hydratePersistence.saveTask('wf-hydrated', {
         id: 't1',
-        description: 'Legacy failed task',
+        description: 'Hydrated failed task',
         status: 'failed',
         dependencies: [],
         createdAt: new Date(),
@@ -2235,21 +2304,21 @@ describe('Orchestrator', () => {
         },
       });
 
-      const legacyOrchestrator = new Orchestrator({
+      const hydratedOrchestrator = new Orchestrator({
         persistence: hydratePersistence,
         messageBus: hydrateBus,
         defaultAutoFixRetries: 3,
       });
 
-      legacyOrchestrator.syncFromDb('wf-legacy');
+      hydratedOrchestrator.syncFromDb('wf-hydrated');
 
-      expect(legacyOrchestrator.getAutoFixRetryBudget('t1')).toBe(3);
-      expect(legacyOrchestrator.shouldAutoFix('t1')).toBe(true);
+      expect(hydratedOrchestrator.getAutoFixRetryBudget('t1')).toBe(3);
+      expect(hydratedOrchestrator.shouldAutoFix('t1')).toBe(true);
 
       hydratePersistence.updateTask('t1', { execution: { autoFixAttempts: 3 } });
-      legacyOrchestrator.syncFromDb('wf-legacy');
+      hydratedOrchestrator.syncFromDb('wf-hydrated');
 
-      expect(legacyOrchestrator.shouldAutoFix('t1')).toBe(false);
+      expect(hydratedOrchestrator.shouldAutoFix('t1')).toBe(false);
     });
 
     it('plain failed tasks stay failed in workflow-core', () => {
@@ -4536,10 +4605,10 @@ describe('Orchestrator', () => {
       expect(started.some((t) => t.id === 'needs-approval')).toBe(true);
     });
 
-    it('does not re-execute persisted auto-fix experiment descendants during retry', () => {
+    it('retries persisted auto-fix experiment descendants like normal tasks', () => {
       const p = new InMemoryPersistence();
       const b = new InMemoryBus();
-      const wfId = 'wf-retry-legacy-autofix-descendants';
+      const wfId = 'wf-retry-exp-autofix-descendants';
 
       p.saveTask(wfId, {
         id: 'root',
@@ -4552,7 +4621,7 @@ describe('Orchestrator', () => {
       });
       p.saveTask(wfId, {
         id: 'root-exp-fix-conservative',
-        description: 'legacy auto-fix child',
+        description: 'auto-fix child',
         status: 'pending',
         dependencies: ['root'],
         createdAt: new Date(),
@@ -4561,7 +4630,7 @@ describe('Orchestrator', () => {
       });
       p.saveTask(wfId, {
         id: 'root-exp-fix-conservative-exp-fix-refactor',
-        description: 'legacy nested auto-fix child',
+        description: 'nested auto-fix child',
         status: 'pending',
         dependencies: ['root-exp-fix-conservative'],
         createdAt: new Date(),
@@ -4575,8 +4644,8 @@ describe('Orchestrator', () => {
       const started = o.retryWorkflow(wfId);
       expect(started.map((task) => task.id)).toEqual(['root']);
       expect(o.getTask('root')!.status).toBe('running');
-      expect(o.getTask('root-exp-fix-conservative')!.status).toBe('stale');
-      expect(o.getTask('root-exp-fix-conservative-exp-fix-refactor')!.status).toBe('stale');
+      expect(o.getTask('root-exp-fix-conservative')!.status).toBe('pending');
+      expect(o.getTask('root-exp-fix-conservative-exp-fix-refactor')!.status).toBe('pending');
 
       o.handleWorkerResponse(
         makeResponse({
@@ -4588,8 +4657,8 @@ describe('Orchestrator', () => {
       );
 
       expect(o.getTask('root')!.status).toBe('completed');
-      expect(o.getTask('root-exp-fix-conservative')!.status).toBe('stale');
-      expect(o.getTask('root-exp-fix-conservative-exp-fix-refactor')!.status).toBe('stale');
+      expect(o.getTask('root-exp-fix-conservative')!.status).toBe('running');
+      expect(o.getTask('root-exp-fix-conservative-exp-fix-refactor')!.status).toBe('pending');
     });
 
     it('preserves branch/commit/workspacePath on reset tasks', () => {
@@ -5943,13 +6012,13 @@ describe('Orchestrator', () => {
 
       persistence.updateTask(mergeId, {
         status: 'review_ready',
-        dependencies: ['missing-legacy-leaf'],
+        dependencies: ['missing-detached-leaf'],
       });
 
       expect(() => orchestrator.syncAllFromDb()).toThrow(
         `Merge gate invariant violated for workflow ${wfId}: merge node ${mergeId} has detached dependencies.`,
       );
-      expect(persistence.getTaskEntry(mergeId)!.task.dependencies).toEqual(['missing-legacy-leaf']);
+      expect(persistence.getTaskEntry(mergeId)!.task.dependencies).toEqual(['missing-detached-leaf']);
       expect(persistence.getTaskEntry(mergeId)!.task.status).toBe('review_ready');
     });
 
@@ -5991,7 +6060,7 @@ describe('Orchestrator', () => {
       });
       orchestrator.startExecution();
 
-      // Manually set gate to blocked (simulating legacy DB state)
+      // Manually set gate to blocked (simulating older DB state)
       persistence.updateTask('gate', { status: 'blocked' });
       orchestrator.syncAllFromDb();
       expect(orchestrator.getTask('gate')!.status).toBe('blocked');
@@ -6026,7 +6095,7 @@ describe('Orchestrator', () => {
       // Merge node exists and is pending
       const mergeId = orchestrator.getAllTasks().find(t => t.config.isMergeNode)!.id;
 
-      // Simulate: set merge node to blocked (legacy DB state)
+      // Simulate: set merge node to blocked (older DB state)
       persistence.updateTask(mergeId, { status: 'blocked' });
       orchestrator.syncAllFromDb();
       expect(orchestrator.getTask(mergeId)!.status).toBe('blocked');

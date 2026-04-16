@@ -37,10 +37,9 @@ function safeGetWorkspacePath(persistence: SQLiteAdapter, taskId: string): strin
     : undefined;
 }
 
-/** DB / UI may still contain legacy `github`; executor always treats it like `external_review`. */
 function canonicalMergeMode(mode: string | undefined): 'manual' | 'automatic' | 'external_review' {
   const m = mode ?? 'manual';
-  if (m === 'github' || m === 'external_review') return 'external_review';
+  if (m === 'external_review') return 'external_review';
   if (m === 'automatic') return 'automatic';
   return 'manual';
 }
@@ -1117,7 +1116,7 @@ export async function consolidateAndMergeImpl(
       (skippedCount > 0 ? ` (skipped ${skippedCount} missing branches)` : ''));
 
     // Push feature branch to origin so other clones (e.g., the gate clone used
-    // by mergeMode='github') can access it. The consolidation clone is removed
+    // by external review providers can access it. The consolidation clone is removed
     // in the finally block, so without this push the branch would be lost.
     await execGitInMergeSafe(host, ['push', '--force', '-u', 'origin', featureBranch], worktreeDir);
 

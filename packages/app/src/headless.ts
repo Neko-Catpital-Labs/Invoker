@@ -38,6 +38,7 @@ import {
   finalizeAppliedFix,
 } from './workflow-actions.js';
 import { openExternalTerminalForTask } from './open-terminal-for-task.js';
+import { executeGlobalTopup } from './global-topup.js';
 import {
   delegationTimeoutMs,
   tryDelegateExec,
@@ -477,6 +478,14 @@ async function headlessSet(args: string[], deps: HeadlessDeps): Promise<void> {
   }
 }
 
+async function headlessMigrateCompatibility(deps: HeadlessDeps): Promise<void> {
+  const report = deps.persistence.runCompatibilityMigration();
+  process.stdout.write(`${BOLD}Compatibility migration complete.${RESET}\n`);
+  process.stdout.write(`  migratedFixingWithAiStatuses: ${report.migratedFixingWithAiStatuses}\n`);
+  process.stdout.write(`  normalizedMergeModes: ${report.normalizedMergeModes}\n`);
+  process.stdout.write(`  staleAutoFixExperimentTasks: ${report.staleAutoFixExperimentTasks}\n`);
+}
+
 // ── Headless Command Router ──────────────────────────────────
 
 export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<void> {
@@ -492,6 +501,9 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
       break;
     case 'set':
       await headlessSet(args.slice(1), deps);
+      break;
+    case 'migrate-compat':
+      await headlessMigrateCompatibility(deps);
       break;
 
     // ── Execute (unchanged) ──
@@ -691,9 +703,10 @@ ${BOLD}Configure:${RESET}
   set command <taskId> <cmd>                          Edit task command and re-run
   set executor <taskId> <type>                        Change executor type (worktree|docker|ssh)
   set agent <taskId> <agent>                          Change execution agent (claude|codex)
-  set merge-mode <workflowId> <mode>                  manual | automatic | github | external_review
+  set merge-mode <workflowId> <mode>                  manual | automatic | external_review
   set gate-policy <taskId> <wfId> [depTaskId] <policy>
                                                       policy: completed | review_ready
+  migrate-compat                                     Normalize persisted compatibility workflow/task state
 
 ${BOLD}Lifecycle:${RESET}
   cancel <taskId>                                     Cancel task + all downstream
@@ -939,11 +952,22 @@ async function headlessRestart(taskId: string, deps: HeadlessDeps): Promise<void
   const runnable = result.data.filter(t => t.status === 'running');
   process.stdout.write(`Restarted task "${taskId}" — ${runnable.length} task(s) to execute\n`);
 
-  if (runnable.length === 0) return;
-
   const taskExecutor = createHeadlessExecutor(deps);
   const autoFix = wireHeadlessAutoFix(deps, taskExecutor);
-  await taskExecutor.executeTasks(runnable);
+  if (runnable.length > 0) {
+    await taskExecutor.executeTasks(runnable);
+  }
+  const topup = await executeGlobalTopup({
+    orchestrator: deps.orchestrator,
+    taskExecutor,
+    logger: deps.logger,
+    context: 'headless.restart-task',
+    alreadyDispatched: runnable,
+  });
+  if (runnable.length + topup.length === 0) {
+    autoFix.unsubscribe();
+    return;
+  }
   await waitForCompletion(deps.orchestrator, undefined, undefined, autoFix.isBusy);
   autoFix.unsubscribe();
 }
@@ -1035,13 +1059,24 @@ async function headlessRebaseAndRetry(taskId: string, deps: HeadlessDeps): Promi
   const runnable = started.filter(t => t.status === 'running');
   if (runnable.length > 0) {
     await te.executeTasks(runnable);
-    if (deps.noTrack) {
-      process.stdout.write('[headless] --no-track enabled: rebase accepted; exiting without tracking.\n');
-      autoFix.unsubscribe();
-      return;
-    }
-    await waitForCompletion(deps.orchestrator, workflowId, undefined, autoFix.isBusy);
   }
+  const topup = await executeGlobalTopup({
+    orchestrator: deps.orchestrator,
+    taskExecutor: te,
+    logger: deps.logger,
+    context: 'headless.rebase-and-retry',
+    alreadyDispatched: runnable,
+  });
+  if (runnable.length + topup.length === 0) {
+    autoFix.unsubscribe();
+    return;
+  }
+  if (deps.noTrack) {
+    process.stdout.write('[headless] --no-track enabled: rebase accepted; exiting without tracking.\n');
+    autoFix.unsubscribe();
+    return;
+  }
+  await waitForCompletion(deps.orchestrator, workflowId, undefined, autoFix.isBusy);
   autoFix.unsubscribe();
 
   const tasksStarted = runnable.length;
@@ -1059,10 +1094,22 @@ async function headlessRecreateWorkflow(workflowId: string, deps: HeadlessDeps):
     const te = createHeadlessExecutor(deps);
     const autoFix = wireHeadlessAutoFix(deps, te);
     remoteFetchForPool.enabled = false;
+    let topup: TaskState[] = [];
     try {
       await te.executeTasks(runnable);
+      topup = await executeGlobalTopup({
+        orchestrator: deps.orchestrator,
+        taskExecutor: te,
+        logger: deps.logger,
+        context: 'headless.recreate-workflow',
+        alreadyDispatched: runnable,
+      });
     } finally {
       remoteFetchForPool.enabled = true;
+    }
+    if (runnable.length + topup.length === 0) {
+      autoFix.unsubscribe();
+      return;
     }
     if (deps.noTrack) {
       process.stdout.write('[headless] --no-track enabled: recreate accepted; exiting without tracking.\n');
@@ -1087,15 +1134,27 @@ async function headlessRecreateTask(taskId: string, deps: HeadlessDeps): Promise
   const runnable = started.filter(t => t.status === 'running');
   const workflowId = deps.orchestrator.getTask(taskId)?.config.workflowId;
   process.stdout.write(`Recreate task "${taskId}" (+ downstream) — ${runnable.length} task(s) to execute (pool fetch skipped)\n`);
-  if (runnable.length === 0) return;
-
   const te = createHeadlessExecutor(deps);
   const autoFix = wireHeadlessAutoFix(deps, te);
   remoteFetchForPool.enabled = false;
+  let topup: TaskState[] = [];
   try {
-    await te.executeTasks(runnable);
+    if (runnable.length > 0) {
+      await te.executeTasks(runnable);
+    }
+    topup = await executeGlobalTopup({
+      orchestrator: deps.orchestrator,
+      taskExecutor: te,
+      logger: deps.logger,
+      context: 'headless.recreate-task',
+      alreadyDispatched: runnable,
+    });
   } finally {
     remoteFetchForPool.enabled = true;
+  }
+  if (runnable.length + topup.length === 0) {
+    autoFix.unsubscribe();
+    return;
   }
   if (deps.noTrack) {
     process.stdout.write('[headless] --no-track enabled: recreate-task accepted; exiting without tracking.\n');
@@ -1138,16 +1197,28 @@ async function headlessRetryWorkflow(workflowId: string, deps: HeadlessDeps): Pr
   deps.logger.info(`headlessRetryWorkflow retry complete workflow="${workflowId}" runnable=${runnable.length}`, {
     module: 'headless',
   });
-  process.stdout.write(`Retry workflow "${workflowId}" — ${runnable.length} task(s) to re-execute (completed tasks preserved)\n`);
-  if (runnable.length === 0) return;
+
+  const runningKey = (task: TaskState): string => {
+    const attemptId = task.execution.selectedAttemptId?.trim();
+    return attemptId ? `attempt:${attemptId}` : `task:${task.id}`;
+  };
+  const scopedKeys = new Set(runnable.map((task) => runningKey(task)));
+  const globalTopup = deps.orchestrator
+    .startExecution()
+    .filter((task) => task.status === 'running')
+    .filter((task) => !scopedKeys.has(runningKey(task)));
+  const dispatchable = [...runnable, ...globalTopup];
+
+  process.stdout.write(`Retry workflow "${workflowId}" — ${dispatchable.length} task(s) to execute (completed tasks preserved)\n`);
+  if (dispatchable.length === 0) return;
 
   if (deps.noTrack) {
     if (deps.deferRunnableTasks) {
-      deps.deferRunnableTasks(runnable, workflowId);
+      deps.deferRunnableTasks(dispatchable, workflowId);
     } else {
       const te = createHeadlessExecutor(deps);
       const launch = setTimeout(() => {
-        void te.executeTasks(runnable).catch((err) => {
+        void te.executeTasks(dispatchable).catch((err) => {
           deps.logger.error(
             `background no-track workflow retry failed for ${workflowId}: ${err instanceof Error ? err.stack ?? err.message : String(err)}`,
             { module: 'headless' },
@@ -1163,10 +1234,22 @@ async function headlessRetryWorkflow(workflowId: string, deps: HeadlessDeps): Pr
   const te = createHeadlessExecutor(deps);
   const autoFix = wireHeadlessAutoFix(deps, te);
   remoteFetchForPool.enabled = false;
+  let topup: TaskState[] = [];
   try {
     await te.executeTasks(runnable);
+    topup = await executeGlobalTopup({
+      orchestrator: deps.orchestrator,
+      taskExecutor: te,
+      logger: deps.logger,
+      context: 'headless.retry-workflow',
+      alreadyDispatched: runnable,
+    });
   } finally {
     remoteFetchForPool.enabled = true;
+  }
+  if (runnable.length + topup.length === 0) {
+    autoFix.unsubscribe();
+    return;
   }
   await waitForCompletion(deps.orchestrator, workflowId, undefined, autoFix.isBusy);
   autoFix.unsubscribe();
@@ -1479,7 +1562,7 @@ async function headlessSetMergeMode(
 ): Promise<void> {
   if (!workflowId || !mergeMode) {
     throw new Error(
-      'Missing arguments. Usage: --headless set-merge-mode <workflowId> <manual|automatic|github|external_review>',
+      'Missing arguments. Usage: --headless set-merge-mode <workflowId> <manual|automatic|external_review>',
     );
   }
   const taskExecutor = createHeadlessExecutor(deps);

@@ -206,6 +206,60 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return this.runTransaction(work);
   }
 
+  runCompatibilityMigration(): {
+    migratedFixingWithAiStatuses: number;
+    normalizedMergeModes: number;
+    staleAutoFixExperimentTasks: number;
+  } {
+    const report = {
+      migratedFixingWithAiStatuses: 0,
+      normalizedMergeModes: 0,
+      staleAutoFixExperimentTasks: 0,
+    };
+    this.runTransaction(() => {
+      this.db.run(
+        `UPDATE tasks
+         SET status = 'fixing_with_ai'
+         WHERE status = 'running' AND is_fixing_with_ai = 1`,
+      );
+      report.migratedFixingWithAiStatuses = this.db.getRowsModified();
+
+      this.db.run(
+        `UPDATE tasks
+         SET is_fixing_with_ai = 0
+         WHERE status = 'fixing_with_ai' AND is_fixing_with_ai != 0`,
+      );
+
+      this.db.run(
+        `UPDATE workflows
+         SET merge_mode = 'external_review'
+         WHERE merge_mode = 'github'`,
+      );
+      report.normalizedMergeModes = this.db.getRowsModified();
+
+      this.db.run(
+        `UPDATE tasks
+         SET status = 'stale',
+             error = 'Stale auto-fix experiment branch; migrated to modern retry model',
+             completed_at = COALESCE(completed_at, datetime('now')),
+             is_fixing_with_ai = 0
+         WHERE status != 'stale'
+           AND (
+             (parent_task IS NOT NULL AND id LIKE '%-exp-fix-%')
+             OR (
+               is_reconciliation = 1
+               AND parent_task IN (
+                 SELECT id FROM tasks
+                 WHERE parent_task IS NOT NULL AND id LIKE '%-exp-fix-%'
+               )
+             )
+           )`,
+      );
+      report.staleAutoFixExperimentTasks = this.db.getRowsModified();
+    });
+    return report;
+  }
+
   /** Flush DB to disk (no-op for :memory:). */
   private flush(): void {
     if (!this.dbPath || !this.dirty) return;
@@ -519,6 +573,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
     if (!this.readOnly) {
       this.migrateTestCommands();
       this.migrateGatePolicyApprovedToCompleted();
+      this.runCompatibilityMigration();
     }
   }
 
@@ -1049,11 +1104,10 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
   getTaskStatus(taskId: string): string | null {
     const row = this.queryOne(
-      'SELECT status, is_fixing_with_ai FROM tasks WHERE id = ?',
+      'SELECT status FROM tasks WHERE id = ?',
       [taskId],
-    ) as { status?: string; is_fixing_with_ai?: number } | undefined;
+    ) as { status?: string } | undefined;
     if (!row?.status) return null;
-    if (row.status === 'running' && row.is_fixing_with_ai) return 'fixing_with_ai';
     return row.status;
   }
 
@@ -1478,11 +1532,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
   }
 
   private rowToTask(row: any): TaskState {
-    const rawStatus = row.status as string;
-    const normalizedStatus: TaskStatus =
-      rawStatus === 'running' && row.is_fixing_with_ai
-        ? 'fixing_with_ai'
-        : (rawStatus as TaskStatus);
+    const normalizedStatus = row.status as TaskStatus;
     return {
       id: row.id,
       description: row.description,
@@ -1535,12 +1585,6 @@ export class SQLiteAdapter implements PersistenceAdapter {
         selectedExperiments: row.selected_experiments ? JSON.parse(row.selected_experiments) : undefined,
         experimentResults: row.experiment_results ? JSON.parse(row.experiment_results) : undefined,
         pendingFixError: row.pending_fix_error ?? undefined,
-        isFixingWithAI:
-          normalizedStatus === 'fixing_with_ai'
-            ? undefined
-            : row.is_fixing_with_ai
-              ? true
-              : undefined,
         reviewUrl: row.review_url ?? undefined,
         reviewId: row.review_id ?? undefined,
         reviewStatus: row.review_status ?? undefined,

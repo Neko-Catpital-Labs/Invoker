@@ -238,8 +238,8 @@ export function parsePlan(yamlContent: string): PlanDefinition {
   }
   const onFinish = (raw.onFinish as (typeof validOnFinishValues)[number]) ?? 'pull_request';
 
-  // Validate mergeMode — accept 'github' for backward compat, normalize to 'external_review'
-  const validMergeModes = ['manual', 'automatic', 'github', 'external_review'] as const;
+  // Validate mergeMode against canonical values only.
+  const validMergeModes = ['manual', 'automatic', 'external_review'] as const;
   if (raw.mergeMode !== undefined && !validMergeModes.includes(raw.mergeMode as any)) {
     throw new PlanParseError(
       `"mergeMode" must be one of: ${validMergeModes.join(', ')}. Got: "${raw.mergeMode}"`,
@@ -250,9 +250,9 @@ export function parsePlan(yamlContent: string): PlanDefinition {
     ? normalizeMergeModeForPersistence(rawMergeMode)
     : undefined;
 
-  // Default reviewProvider to 'github' when mergeMode was 'github' or 'external_review'
+  // Default reviewProvider to 'github' for external-review workflows.
   const reviewProvider = raw.reviewProvider
-    ?? ((rawMergeMode === 'github' || rawMergeMode === 'external_review') ? 'github' : undefined);
+    ?? (rawMergeMode === 'external_review' ? 'github' : undefined);
 
   // Auto-generate featureBranch from plan name when not explicitly specified
   if (!raw.featureBranch) {

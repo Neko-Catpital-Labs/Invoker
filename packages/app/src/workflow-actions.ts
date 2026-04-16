@@ -196,7 +196,7 @@ export async function selectExperiments(
  * Same sequence as GUI `invoker:resolve-conflict` and headless `resolve-conflict`.
  */
 /**
- * Persist merge mode (normalizing `github` → `external_review`) and re-run the merge
+ * Persist merge mode and re-run the merge
  * gate when it was already finished or waiting, matching GUI `invoker:set-merge-mode`.
  */
 export async function setWorkflowMergeMode(

@@ -45,6 +45,7 @@ import { DEFAULT_EXECUTION_AGENT } from './agent.js';
 /** Keeps `lastHeartbeatAt` fresh while `executor.start()` is awaited (SSH remote setup/provision can take minutes). Matches BaseExecutor default heartbeat cadence. */
 const PRE_START_HEARTBEAT_INTERVAL_MS = 30_000;
 const ATTEMPT_LEASE_MS = 5 * 60 * 1000;
+const DEFAULT_EXECUTOR_START_TIMEOUT_MS = 10 * 60 * 1000;
 
 type StartupFailureMetadata = {
   workspacePath?: string;
@@ -62,6 +63,14 @@ type ActiveExecutionEntry = {
 
 function nextLeaseExpiry(from: Date): Date {
   return new Date(from.getTime() + ATTEMPT_LEASE_MS);
+}
+
+function getExecutorStartTimeoutMs(): number {
+  const raw = process.env.INVOKER_EXECUTOR_START_TIMEOUT_MS?.trim();
+  if (!raw) return DEFAULT_EXECUTOR_START_TIMEOUT_MS;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_EXECUTOR_START_TIMEOUT_MS;
+  return parsed;
 }
 
 // ── Callbacks ─────────────────────────────────────────────
@@ -426,6 +435,7 @@ export class TaskRunner {
     );
     traceExecution(`[trace] TaskRunner: task=${task.id} calling executor.start() type=${executor.type}`);
     const startT0 = Date.now();
+    const startTimeoutMs = getExecutorStartTimeoutMs();
     const preStartHeartbeatTimer = setInterval(() => {
       const now = new Date();
       this.persistence.updateAttempt?.(attemptId, {
@@ -434,9 +444,17 @@ export class TaskRunner {
       } as any);
       this.callbacks.onHeartbeat?.(task.id);
     }, PRE_START_HEARTBEAT_INTERVAL_MS);
+    let preStartTimeout: ReturnType<typeof setTimeout> | undefined;
     let handle: ExecutorHandle;
     try {
-      handle = await executor.start(request);
+      handle = await Promise.race<ExecutorHandle>([
+        executor.start(request),
+        new Promise<ExecutorHandle>((_resolve, reject) => {
+          preStartTimeout = setTimeout(() => {
+            reject(new Error(`Executor startup timed out after ${startTimeoutMs}ms (${executor.type})`));
+          }, startTimeoutMs);
+        }),
+      ]);
     } catch (err) {
       const meta = err as StartupFailureMetadata;
       if (meta.workspacePath || meta.branch || meta.agentSessionId || meta.containerId) {
@@ -459,6 +477,7 @@ export class TaskRunner {
       );
     } finally {
       clearInterval(preStartHeartbeatTimer);
+      if (preStartTimeout) clearTimeout(preStartTimeout);
     }
     traceExecution(`[trace] TaskRunner: task=${task.id} executor.start() returned after ${Date.now() - startT0}ms executor=${executor.type} sessionId=${handle.agentSessionId ?? 'none'} workspace=${handle.workspacePath ?? 'default'}`);
     const launchAccepted =

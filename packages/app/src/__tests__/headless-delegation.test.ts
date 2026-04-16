@@ -473,6 +473,83 @@ describe('headless delegation enforcement', () => {
         expect(runnable[0]?.id).toBe('wf-1/task-1');
       });
 
+      it('headless workflow restart includes global top-up tasks when deferring no-track execution', async () => {
+        const deferRunnableTasks = vi.fn();
+        const preemptWorkflowExecution = vi.fn(async () => {});
+        mockDeps.orchestrator.getPersistedActiveTaskIds = vi.fn(() => new Set<string>());
+        mockDeps.commandService.retryWorkflow = vi.fn(async () => ({
+          ok: true,
+          data: [
+            {
+              id: 'wf-1/task-1',
+              status: 'running',
+              config: { workflowId: 'wf-1' },
+              execution: { selectedAttemptId: 'attempt-1' },
+            },
+          ],
+        }));
+        mockDeps.orchestrator.startExecution = vi.fn(() => [
+          {
+            id: 'wf-2/task-9',
+            status: 'running',
+            config: { workflowId: 'wf-2' },
+            execution: { selectedAttemptId: 'attempt-9' },
+          } as any,
+        ]);
+
+        const depsWithNoTrack: HeadlessDeps = {
+          ...mockDeps,
+          noTrack: true,
+          deferRunnableTasks,
+          preemptWorkflowExecution,
+        } as HeadlessDeps;
+
+        await runHeadless(['restart', 'wf-1'], depsWithNoTrack);
+
+        expect(deferRunnableTasks).toHaveBeenCalledTimes(1);
+        const [runnable] = deferRunnableTasks.mock.calls[0] ?? [];
+        expect(runnable).toHaveLength(2);
+        expect(runnable.map((task: any) => task.id)).toEqual(['wf-1/task-1', 'wf-2/task-9']);
+      });
+
+      it('headless workflow restart does not duplicate scoped attempts in global top-up', async () => {
+        const deferRunnableTasks = vi.fn();
+        const preemptWorkflowExecution = vi.fn(async () => {});
+        mockDeps.orchestrator.getPersistedActiveTaskIds = vi.fn(() => new Set<string>());
+        mockDeps.commandService.retryWorkflow = vi.fn(async () => ({
+          ok: true,
+          data: [
+            {
+              id: 'wf-1/task-1',
+              status: 'running',
+              config: { workflowId: 'wf-1' },
+              execution: { selectedAttemptId: 'attempt-1' },
+            },
+          ],
+        }));
+        mockDeps.orchestrator.startExecution = vi.fn(() => [
+          {
+            id: 'wf-1/task-1',
+            status: 'running',
+            config: { workflowId: 'wf-1' },
+            execution: { selectedAttemptId: 'attempt-1' },
+          } as any,
+        ]);
+
+        const depsWithNoTrack: HeadlessDeps = {
+          ...mockDeps,
+          noTrack: true,
+          deferRunnableTasks,
+          preemptWorkflowExecution,
+        } as HeadlessDeps;
+
+        await runHeadless(['restart', 'wf-1'], depsWithNoTrack);
+
+        const [runnable] = deferRunnableTasks.mock.calls[0] ?? [];
+        expect(runnable).toHaveLength(1);
+        expect(runnable[0]?.id).toBe('wf-1/task-1');
+      });
+
       it('headless restart skips preempt when the workflow has no active execution', async () => {
         const preemptWorkflowExecution = vi.fn(async () => {});
         mockDeps.orchestrator.getPersistedActiveTaskIds = vi.fn(() => new Set<string>());
