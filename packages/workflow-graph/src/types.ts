@@ -98,6 +98,9 @@ export interface TaskExecution {
   readonly actionRequestId?: string;
   readonly branch?: string;
   readonly commit?: string;
+  readonly fixedIntegrationSha?: string;
+  readonly fixedIntegrationRecordedAt?: Date;
+  readonly fixedIntegrationSource?: string;
   readonly agentSessionId?: string;
   readonly lastAgentSessionId?: string;
   readonly agentName?: string;

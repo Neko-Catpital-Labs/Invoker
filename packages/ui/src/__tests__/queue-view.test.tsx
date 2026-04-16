@@ -18,7 +18,7 @@ describe('QueueView', () => {
     vi.unstubAllGlobals();
   });
 
-  it('renders queue sub-tabs and switches between running, queued, and pending', async () => {
+  it('renders action queue in running-then-queued order and separates backlog', async () => {
     const runningTask = makeUITask({
       id: 'wf-1/running-task',
       status: 'running',
@@ -48,8 +48,7 @@ describe('QueueView', () => {
       running: [{ taskId: runningTask.id, description: runningTask.description }],
       queued: [{ taskId: queuedTask.id, priority: 0, description: queuedTask.description }],
     }));
-    const getEvents = vi.fn(async () => []);
-    (window as unknown as { invoker: unknown }).invoker = { getQueueStatus, getEvents };
+    (window as unknown as { invoker: unknown }).invoker = { getQueueStatus };
 
     render(
       <QueueView
@@ -61,63 +60,39 @@ describe('QueueView', () => {
     );
 
     await waitFor(() => expect(getQueueStatus).toHaveBeenCalled());
-    expect(screen.getByRole('button', { name: 'Running (1)' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Queued (1)' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Pending (2)' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Action History (0)' })).toBeInTheDocument();
+    expect(screen.getByText('Action Queue (2)')).toBeInTheDocument();
+    expect(screen.getByText('Backlog (Pending/Blocked, not in queue) (1)')).toBeInTheDocument();
+    expect(screen.getByText('#1')).toBeInTheDocument();
+    expect(screen.getByText('#2')).toBeInTheDocument();
     expect(screen.getByText('phase: Executing')).toBeInTheDocument();
-
-    fireEvent.click(screen.getByText('Queued (1)'));
-    expect(screen.getByText('pri: 0')).toBeInTheDocument();
-
-    fireEvent.click(screen.getByText('Pending (2)'));
+    expect(screen.getByText('priority: 0')).toBeInTheDocument();
     expect(screen.getByText('deps: running-task')).toBeInTheDocument();
   });
 
-  it('shows only supported auto-fix enqueue phases in Action History and supports click-through', async () => {
-    const failedTask = makeUITask({
+  it('supports click-through and cancel actions in queue rows', async () => {
+    const runningTask = makeUITask({
       id: 'wf-1/run-all-fixture-tests',
-      status: 'failed',
+      status: 'running',
       description: 'failing task',
+      execution: { phase: 'executing' },
     });
-    const otherTask = makeUITask({
+    const queuedTask = makeUITask({
       id: 'wf-2/another-task',
-      status: 'failed',
+      status: 'pending',
       description: 'another task',
     });
     const tasks = new Map<string, TaskState>([
-      [failedTask.id, failedTask],
-      [otherTask.id, otherTask],
+      [runningTask.id, runningTask],
+      [queuedTask.id, queuedTask],
     ]);
 
     const getQueueStatus = vi.fn(async () => ({
       maxConcurrency: 6,
-      runningCount: 0,
-      running: [],
-      queued: [],
+      runningCount: 1,
+      running: [{ taskId: runningTask.id, description: runningTask.description }],
+      queued: [{ taskId: queuedTask.id, priority: 1, description: queuedTask.description }],
     }));
-    const getEvents = vi.fn(async (taskId: string) => {
-      if (taskId === failedTask.id) {
-        return [
-          {
-            id: 10,
-            taskId,
-            eventType: 'debug.auto-fix',
-            payload: JSON.stringify({ phase: 'schedule-enqueue', status: 'failed', autoFixAttempts: 0 }),
-            createdAt: '2026-04-16 08:33:08',
-          },
-          {
-            id: 11,
-            taskId,
-            eventType: 'debug.auto-fix',
-            payload: JSON.stringify({ phase: 'resolve-conflict-start', agent: 'claude' }),
-            createdAt: '2026-04-16 08:33:09',
-          },
-        ];
-      }
-      return [];
-    });
-    (window as unknown as { invoker: unknown }).invoker = { getQueueStatus, getEvents };
+    (window as unknown as { invoker: unknown }).invoker = { getQueueStatus };
 
     render(
       <QueueView
@@ -128,13 +103,12 @@ describe('QueueView', () => {
       />,
     );
 
-    await waitFor(() => expect(getEvents).toHaveBeenCalled());
-    fireEvent.click(screen.getByText('Action History (1)'));
-    expect(screen.getByText('run-all-fixture-tests')).toBeInTheDocument();
-    expect(screen.getByText('schedule-enqueue')).toBeInTheDocument();
-    expect(screen.getByText('status=failed attempts=0')).toBeInTheDocument();
+    await waitFor(() => expect(getQueueStatus).toHaveBeenCalled());
 
     fireEvent.click(screen.getByText('run-all-fixture-tests'));
-    expect(onTaskClick).toHaveBeenCalledWith(expect.objectContaining({ id: failedTask.id }));
+    expect(onTaskClick).toHaveBeenCalledWith(expect.objectContaining({ id: runningTask.id }));
+
+    fireEvent.click(screen.getAllByText('Cancel')[0]);
+    expect(onCancel).toHaveBeenCalledWith(runningTask.id);
   });
 });

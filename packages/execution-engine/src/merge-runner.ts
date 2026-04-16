@@ -646,6 +646,7 @@ export async function publishAfterFixImpl(
 
   const summary = workflowId ? await host.buildMergeSummary(workflowId) : undefined;
   const gateWorkspacePath = safeGetWorkspacePath(host.persistence, task.id) ?? undefined;
+  const fixedIntegrationSha = task.execution.fixedIntegrationSha?.trim() || undefined;
 
   mergeTrace('PUBLISH_AFTER_FIX_ENTER', {
     taskId: task.id,
@@ -674,7 +675,12 @@ export async function publishAfterFixImpl(
       );
       setMergeGateReviewReady(host, task.id, {
         config: { executorType: 'worktree', summary },
-        execution: { workspacePath: gateWorkspacePath },
+        execution: {
+          workspacePath: gateWorkspacePath,
+          fixedIntegrationSha: undefined,
+          fixedIntegrationRecordedAt: undefined,
+          fixedIntegrationSource: undefined,
+        },
       });
       await startReviewReadyDependents(host);
       return;
@@ -700,6 +706,29 @@ export async function publishAfterFixImpl(
     const headSha = (await execGitInMergeSafe(host, ['rev-parse', 'HEAD'], gateWorkspacePath)).trim();
     await execGitInMergeSafe(host, ['checkout', '--detach', headSha], gateWorkspacePath);
     await execGitInMergeSafe(host, ['fetch', 'origin', '+refs/heads/*:refs/heads/*'], gateWorkspacePath);
+    if (fixedIntegrationSha) {
+      try {
+        await execGitInMergeSafe(host, ['rev-parse', '--verify', `${fixedIntegrationSha}^{commit}`], gateWorkspacePath);
+        await execGitInMergeSafe(host, ['checkout', '--detach', fixedIntegrationSha], gateWorkspacePath);
+        mergeTrace('PUBLISH_AFTER_FIX_USE_FIXED_ANCHOR', {
+          taskId: task.id,
+          fixedIntegrationSha,
+          gateWorkspacePath,
+        });
+      } catch (err) {
+        const error = err instanceof Error ? err.message : String(err);
+        mergeTrace('PUBLISH_AFTER_FIX_ANCHOR_FALLBACK', {
+          taskId: task.id,
+          fixedIntegrationSha,
+          gateWorkspacePath,
+          error,
+        });
+        console.warn(
+          `[merge] Post-fix: failed to use fixedIntegrationSha=${fixedIntegrationSha} ` +
+          `for ${task.id}; falling back to current gate HEAD. Error: ${error}`,
+        );
+      }
+    }
 
     // If consolidateAndMerge already pushed featureBranch, remember its tip before we
     // delete/recreate the local branch name. Merging that one commit graph avoids
@@ -836,6 +865,9 @@ export async function publishAfterFixImpl(
           reviewUrl: result.url,
           reviewId: result.identifier,
           reviewStatus: 'Awaiting review',
+          fixedIntegrationSha: undefined,
+          fixedIntegrationRecordedAt: undefined,
+          fixedIntegrationSource: undefined,
         },
       });
       await startReviewReadyDependents(host);
@@ -858,6 +890,9 @@ export async function publishAfterFixImpl(
       execution: {
         branch: featureBranch,
         workspacePath: gateWorkspacePath,
+        fixedIntegrationSha: undefined,
+        fixedIntegrationRecordedAt: undefined,
+        fixedIntegrationSource: undefined,
       },
     });
     await startReviewReadyDependents(host);

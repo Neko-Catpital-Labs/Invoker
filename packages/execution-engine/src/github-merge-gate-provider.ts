@@ -178,7 +178,13 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
       };
     }
 
-    const intended = await this.revList(`origin/master..${featureBranch}`, cwd, { reverse: true });
+    // Exclude merge commits: `git cherry-pick <merge-sha>` fails without -m,
+    // and the non-merge commits brought in by those merges are already replayed
+    // individually in this list. See commit message for full rationale.
+    const intended = await this.revList(`origin/master..${featureBranch}`, cwd, {
+      reverse: true,
+      noMerges: true,
+    });
     if (intended.length === 0) {
       throw new Error(
         `Feature branch "${featureBranch}" contains fork-only origin/master commits, but there are no feature commits in origin/master..${featureBranch} to auto-repair.`,
@@ -217,9 +223,14 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
     }
   }
 
-  private async revList(range: string, cwd: string, opts?: { reverse?: boolean }): Promise<string[]> {
+  private async revList(
+    range: string,
+    cwd: string,
+    opts?: { reverse?: boolean; noMerges?: boolean },
+  ): Promise<string[]> {
     const args = ['rev-list'];
     if (opts?.reverse) args.push('--reverse');
+    if (opts?.noMerges) args.push('--no-merges');
     args.push(range);
     const stdout = await this.exec('git', args, cwd);
     return stdout

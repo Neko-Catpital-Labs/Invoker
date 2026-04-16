@@ -177,6 +177,54 @@ describe('publishAfterFixImpl integration (real git)', () => {
     }));
   });
 
+  it('uses fixedIntegrationSha anchor when present instead of current gate HEAD', async () => {
+    const sandbox = createSandbox();
+    root = sandbox.root;
+
+    const anchoredFixCommit = git('rev-parse HEAD', sandbox.gateDir);
+    writeFileSync(join(sandbox.gateDir, 'late-change.txt'), 'new gate head after anchor');
+    git('add -A', sandbox.gateDir);
+    git('commit -m "late gate change"', sandbox.gateDir);
+
+    const mergeTask: TaskState = {
+      id: '__merge__wf-int',
+      description: 'Merge gate',
+      status: 'running',
+      dependencies: ['t1'],
+      createdAt: new Date(),
+      config: { isMergeNode: true, workflowId: 'wf-int' } as any,
+      execution: { fixedIntegrationSha: anchoredFixCommit } as any,
+    };
+
+    const taskT1: TaskState = {
+      id: 't1',
+      description: 'Task 1',
+      status: 'completed',
+      dependencies: [],
+      createdAt: new Date(),
+      config: { workflowId: 'wf-int' } as any,
+      execution: { branch: 'invoker/t1' } as any,
+    };
+
+    const host = makeHost(sandbox.hostDir, sandbox.gateDir, [mergeTask, taskT1]);
+    await publishAfterFixImpl(host, mergeTask);
+
+    git('fetch origin', sandbox.hostDir);
+    git('checkout plan/feature', sandbox.hostDir);
+    expect(existsSync(join(sandbox.hostDir, 'fix.txt'))).toBe(true);
+    expect(existsSync(join(sandbox.hostDir, 'late-change.txt'))).toBe(false);
+    expect(host.orchestrator.setTaskAwaitingApproval).toHaveBeenCalledWith(
+      '__merge__wf-int',
+      expect.objectContaining({
+        execution: expect.objectContaining({
+          fixedIntegrationSha: undefined,
+          fixedIntegrationRecordedAt: undefined,
+          fixedIntegrationSource: undefined,
+        }),
+      }),
+    );
+  });
+
   it('fails without detach (regression proof): fetch into checked-out branch is rejected by git', async () => {
     const sandbox = createSandbox();
     root = sandbox.root;

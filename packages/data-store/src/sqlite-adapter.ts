@@ -328,6 +328,9 @@ export class SQLiteAdapter implements PersistenceAdapter {
         -- Git
         branch TEXT,
         commit_hash TEXT,
+        fixed_integration_sha TEXT,
+        fixed_integration_recorded_at TEXT,
+        fixed_integration_source TEXT,
         parent_task TEXT,
 
         -- Experiments
@@ -551,6 +554,9 @@ export class SQLiteAdapter implements PersistenceAdapter {
       'ALTER TABLE tasks ADD COLUMN launch_phase TEXT',
       'ALTER TABLE tasks ADD COLUMN launch_started_at TEXT',
       'ALTER TABLE tasks ADD COLUMN launch_completed_at TEXT',
+      'ALTER TABLE tasks ADD COLUMN fixed_integration_sha TEXT',
+      'ALTER TABLE tasks ADD COLUMN fixed_integration_recorded_at TEXT',
+      'ALTER TABLE tasks ADD COLUMN fixed_integration_source TEXT',
       'ALTER TABLE attempts ADD COLUMN queue_priority INTEGER NOT NULL DEFAULT 0',
       'ALTER TABLE attempts ADD COLUMN claimed_at TEXT',
       'ALTER TABLE attempts ADD COLUMN lease_expires_at TEXT',
@@ -709,7 +715,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         id, workflow_id, description, status, blocked_by, dependencies,
         command, prompt, experiment_prompt, exit_code, error, protocol_error_code, protocol_error_message, input_prompt, external_dependencies,
         summary, problem, approach, test_plan, repro_command,
-        branch, commit_hash, parent_task,
+        branch, commit_hash, fixed_integration_sha, fixed_integration_recorded_at, fixed_integration_source, parent_task,
         pivot, experiment_variants, is_reconciliation, selected_experiment,
         selected_experiments, experiment_results, requires_manual_approval,
         repo_url, feature_branch,
@@ -729,7 +735,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?,
-        ?, ?, ?,
+        ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?,
         ?, ?, ?,
         ?, ?,
@@ -755,7 +761,12 @@ export class SQLiteAdapter implements PersistenceAdapter {
       cfg.externalDependencies ? JSON.stringify(cfg.externalDependencies) : null,
       cfg.summary ?? null, cfg.problem ?? null, cfg.approach ?? null,
       cfg.testPlan ?? null, cfg.reproCommand ?? null,
-      exec.branch ?? null, exec.commit ?? null, cfg.parentTask ?? null,
+      exec.branch ?? null,
+      exec.commit ?? null,
+      exec.fixedIntegrationSha ?? null,
+      exec.fixedIntegrationRecordedAt?.toISOString() ?? null,
+      exec.fixedIntegrationSource ?? null,
+      cfg.parentTask ?? null,
       cfg.pivot ? 1 : 0,
       cfg.experimentVariants ? JSON.stringify(cfg.experimentVariants) : null,
       cfg.isReconciliation ? 1 : 0,
@@ -865,6 +876,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
         actionRequestId: 'action_request_id',
         branch: 'branch',
         commit: 'commit_hash',
+        fixedIntegrationSha: 'fixed_integration_sha',
+        fixedIntegrationSource: 'fixed_integration_source',
         agentSessionId: 'agent_session_id',
         lastAgentSessionId: 'last_agent_session_id',
         workspacePath: 'workspace_path',
@@ -888,6 +901,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         lastHeartbeatAt: 'last_heartbeat_at',
         launchStartedAt: 'launch_started_at',
         launchCompletedAt: 'launch_completed_at',
+        fixedIntegrationRecordedAt: 'fixed_integration_recorded_at',
       };
       const execJsonFields: Record<string, string> = {
         experiments: 'experiments',
@@ -1574,6 +1588,9 @@ export class SQLiteAdapter implements PersistenceAdapter {
         actionRequestId: row.action_request_id ?? undefined,
         branch: row.branch ?? undefined,
         commit: row.commit_hash ?? undefined,
+        fixedIntegrationSha: row.fixed_integration_sha ?? undefined,
+        fixedIntegrationRecordedAt: row.fixed_integration_recorded_at ? new Date(row.fixed_integration_recorded_at) : undefined,
+        fixedIntegrationSource: row.fixed_integration_source ?? undefined,
         agentSessionId: row.agent_session_id || undefined,
         lastAgentSessionId: row.last_agent_session_id || undefined,
         agentName: row.agent_name ?? undefined,
@@ -1711,6 +1728,42 @@ export class SQLiteAdapter implements PersistenceAdapter {
     );
     const row = this.queryOne('SELECT last_insert_rowid() AS id');
     return Number(row?.id ?? 0);
+  }
+
+  evictQueuedWorkflowMutationIntentsBefore(
+    workflowId: string,
+    beforeIntentId: number,
+    reason: string = 'Evicted by workflow reset boundary',
+  ): number[] {
+    const cutoff = Math.floor(beforeIntentId);
+    if (!Number.isFinite(cutoff) || cutoff <= 0) {
+      return [];
+    }
+    const rows = this.queryAll(
+      `SELECT id
+         FROM workflow_mutation_intents
+        WHERE workflow_id = ?
+          AND status = 'queued'
+          AND id < ?`,
+      [workflowId, cutoff],
+    );
+    const evictedIds = rows
+      .map((row) => Number(row.id))
+      .filter((id) => Number.isFinite(id));
+    if (evictedIds.length === 0) {
+      return [];
+    }
+    this.execRun(
+      `UPDATE workflow_mutation_intents
+          SET status = 'failed',
+              completed_at = ?,
+              error = ?
+        WHERE workflow_id = ?
+          AND status = 'queued'
+          AND id < ?`,
+      [new Date().toISOString(), reason, workflowId, cutoff],
+    );
+    return evictedIds;
   }
 
   listWorkflowMutationIntents(

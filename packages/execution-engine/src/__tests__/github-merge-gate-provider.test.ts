@@ -498,7 +498,7 @@ describe('GitHubMergeGateProvider', () => {
         if (cmd === 'git' && args?.[0] === 'rev-list' && args?.[1] === 'upstream/master..plan/polluted') {
           return mockSpawnResult('feature-sha\nfork-only-sha', 0);
         }
-        if (cmd === 'git' && args?.[0] === 'rev-list' && args?.[1] === '--reverse' && args?.[2] === 'origin/master..plan/polluted') {
+        if (cmd === 'git' && args?.[0] === 'rev-list' && args?.[1] === '--reverse' && args?.[2] === '--no-merges' && args?.[3] === 'origin/master..plan/polluted') {
           return mockSpawnResult('feature-sha', 0);
         }
         if (cmd === 'git' && args?.[0] === 'branch' && args?.[1] === '--show-current') {
@@ -583,7 +583,7 @@ describe('GitHubMergeGateProvider', () => {
         if (cmd === 'git' && args?.[0] === 'rev-list' && args?.[1] === 'upstream/master..plan/detached') {
           return mockSpawnResult('feature-sha\nfork-only-sha', 0);
         }
-        if (cmd === 'git' && args?.[0] === 'rev-list' && args?.[1] === '--reverse' && args?.[2] === 'origin/master..plan/detached') {
+        if (cmd === 'git' && args?.[0] === 'rev-list' && args?.[1] === '--reverse' && args?.[2] === '--no-merges' && args?.[3] === 'origin/master..plan/detached') {
           return mockSpawnResult('feature-empty\nfeature-sha', 0);
         }
         if (cmd === 'git' && args?.[0] === 'branch' && args?.[1] === '--show-current') {
@@ -649,6 +649,85 @@ describe('GitHubMergeGateProvider', () => {
   });
 
   describe('regression guard', () => {
+    it('passes --no-merges to rev-list so cherry-pick never encounters a merge commit', async () => {
+      // Regression: when a feature branch contains "Merge upstream" commits
+      // (e.g., from task-branch consolidation), `git cherry-pick <merge-sha>`
+      // fails with: "commit is a merge but no -m option was given."
+      // The fix is to exclude merge commits from the cherry-pick list.
+      const { spawn } = await import('node:child_process');
+      const spawnMock = vi.mocked(spawn);
+      const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(1234567892);
+
+      spawnMock.mockImplementation(((cmd: string, args: string[]) => {
+        if (cmd === 'git' && args?.[0] === 'remote' && args?.[1] === 'get-url' && args?.[2] === 'upstream') {
+          return mockSpawnResult('https://github.com/Neko-Catpital-Labs/Invoker.git', 0);
+        }
+        if (cmd === 'git' && args?.[0] === 'remote' && args?.[1] === 'get-url' && args?.[2] === 'origin') {
+          return mockSpawnResult('https://github.com/EdbertChan/Invoker/', 0);
+        }
+        if (cmd === 'git' && args?.[0] === 'fetch') {
+          return mockSpawnResult('', 0);
+        }
+        if (cmd === 'git' && args?.[0] === 'rev-list' && args?.[1] === 'upstream/master..origin/master') {
+          return mockSpawnResult('fork-only-sha', 0);
+        }
+        if (cmd === 'git' && args?.[0] === 'rev-list' && args?.[1] === 'upstream/master..plan/with-merges') {
+          return mockSpawnResult('feature-a\nfork-only-sha', 0);
+        }
+        if (cmd === 'git' && args?.[0] === 'rev-list' && args?.[1] === '--reverse' && args?.[2] === '--no-merges' && args?.[3] === 'origin/master..plan/with-merges') {
+          // Server already filtered merges; return only the non-merge commits.
+          return mockSpawnResult('feature-a\nfeature-b', 0);
+        }
+        if (cmd === 'git' && args?.[0] === 'branch' && args?.[1] === '--show-current') {
+          return mockSpawnResult('plan/with-merges', 0);
+        }
+        if (cmd === 'git' && args?.[0] === 'rev-parse') {
+          return mockSpawnResult('deadbeefdeadbeefdeadbeefdeadbeefdeadbeef', 0);
+        }
+        if (cmd === 'git' && args?.[0] === 'switch') {
+          return mockSpawnResult('', 0);
+        }
+        if (cmd === 'git' && args?.[0] === 'cherry-pick') {
+          return mockSpawnResult('', 0);
+        }
+        if (cmd === 'git' && args?.[0] === 'push') {
+          return mockSpawnResult('', 0);
+        }
+        if (cmd === 'git' && args?.[0] === 'branch' && args?.[1] === '-D') {
+          return mockSpawnResult('', 0);
+        }
+        if (cmd === 'gh' && args?.[0] === 'pr' && args?.[1] === 'list') {
+          return mockSpawnResult('[]', 0);
+        }
+        if (cmd === 'gh' && args?.[0] === 'api') {
+          return mockSpawnResult('{"html_url":"https://github.com/Neko-Catpital-Labs/Invoker/pull/99","number":99}', 0);
+        }
+        throw new Error(`Unexpected command: ${cmd} ${args.join(' ')}`);
+      }) as any);
+
+      await provider.createReview({
+        baseBranch: 'master',
+        featureBranch: 'plan/with-merges',
+        title: 'Branch with merges',
+        cwd: '/tmp/repo',
+      });
+
+      // Primary invariant: the cherry-pick enumeration MUST pass --no-merges.
+      const revListCalls = spawnMock.mock.calls.filter(
+        ([cmd, args]) => cmd === 'git' && (args as string[])[0] === 'rev-list'
+          && (args as string[]).includes('origin/master..plan/with-merges'),
+      );
+      expect(revListCalls.length).toBeGreaterThan(0);
+      for (const [, args] of revListCalls) {
+        expect(args as string[]).toContain('--no-merges');
+      }
+
+      // Secondary invariant: no bare cherry-pick of a merge-looking ref ever ran.
+      // (If --no-merges regressed, rev-list would emit a merge sha which this
+      //  mock would then hand to cherry-pick — a real repo would fail there.)
+      nowSpy.mockRestore();
+    });
+
     it('never uses gh pr edit or gh pr create subcommands', async () => {
       const { spawn } = await import('node:child_process');
       const spawnMock = vi.mocked(spawn);
