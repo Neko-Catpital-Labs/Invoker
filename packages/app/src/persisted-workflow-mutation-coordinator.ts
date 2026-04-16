@@ -12,10 +12,12 @@ type Deferred<T> = {
 
 export class PersistedWorkflowMutationCoordinator {
   private readonly inFlightPromises = new Map<number, Deferred<unknown>>();
+  private readonly enqueueStartedAtMs = new Map<number, number>();
   private readonly drainingWorkflows = new Set<string>();
   private readonly pendingDrainWorkflows = new Set<string>();
   private readonly leaseHeartbeatMs = Math.max(1_000, Math.floor(WORKFLOW_MUTATION_LEASE_MS / 3));
   private readonly maxConcurrentWorkflowDrains: number;
+  private readonly enableTraceLogs: boolean;
   private activeWorkflowDrains = 0;
   private deferredDrainTimer: NodeJS.Timeout | null = null;
 
@@ -26,6 +28,7 @@ export class PersistedWorkflowMutationCoordinator {
     options?: { maxConcurrentWorkflowDrains?: number },
   ) {
     this.maxConcurrentWorkflowDrains = Math.max(1, options?.maxConcurrentWorkflowDrains ?? 1);
+    this.enableTraceLogs = process.env.INVOKER_TRACE_MUTATION_QUEUE === '1';
   }
 
   async enqueue<T>(
@@ -35,6 +38,10 @@ export class PersistedWorkflowMutationCoordinator {
     args: unknown[],
   ): Promise<T> {
     const intentId = this.persistence.enqueueWorkflowMutationIntent(workflowId, channel, args, priority);
+    this.enqueueStartedAtMs.set(intentId, Date.now());
+    this.trace(
+      `enqueue intent=${intentId} workflow=${workflowId} priority=${priority} channel=${channel} activeDrains=${this.activeWorkflowDrains} pendingWorkflows=${this.pendingDrainWorkflows.size}`,
+    );
     const result = new Promise<T>((resolve, reject) => {
       this.inFlightPromises.set(intentId, { resolve: resolve as (value: unknown) => void, reject });
     });
@@ -50,6 +57,10 @@ export class PersistedWorkflowMutationCoordinator {
     options?: { deferDrain?: boolean },
   ): number {
     const intentId = this.persistence.enqueueWorkflowMutationIntent(workflowId, channel, args, priority);
+    this.enqueueStartedAtMs.set(intentId, Date.now());
+    this.trace(
+      `submit intent=${intentId} workflow=${workflowId} priority=${priority} channel=${channel} defer=${Boolean(options?.deferDrain)} activeDrains=${this.activeWorkflowDrains} pendingWorkflows=${this.pendingDrainWorkflows.size}`,
+    );
     if (options?.deferDrain) {
       this.scheduleWorkflowDrainDeferred(workflowId);
     } else {
@@ -135,11 +146,14 @@ export class PersistedWorkflowMutationCoordinator {
       }
       let intent = this.persistence.claimNextWorkflowMutationIntent(workflowId, this.ownerId);
       while (intent) {
+        const waitMs = this.intentQueueWaitMs(intent.id);
+        this.trace(`drain-start workflow=${workflowId} intent=${intent.id} channel=${intent.channel} queueWaitMs=${waitMs}`);
         this.persistence.renewWorkflowMutationLease(workflowId, this.ownerId, {
           activeIntentId: intent.id,
           activeMutationKind: intent.channel,
         });
         await this.executeIntent(workflowId, intent);
+        this.trace(`drain-finished workflow=${workflowId} intent=${intent.id} channel=${intent.channel}`);
         intent = this.persistence.claimNextWorkflowMutationIntent(workflowId, this.ownerId);
       }
       this.persistence.releaseWorkflowMutationLease(workflowId, this.ownerId);
@@ -169,7 +183,23 @@ export class PersistedWorkflowMutationCoordinator {
       clearInterval(leaseHeartbeat);
       this.persistence.renewWorkflowMutationLease(workflowId, this.ownerId);
       this.inFlightPromises.delete(intent.id);
+      this.enqueueStartedAtMs.delete(intent.id);
     }
+  }
+
+  private intentQueueWaitMs(intentId: number): number {
+    const startedAt = this.enqueueStartedAtMs.get(intentId);
+    if (!startedAt) {
+      return -1;
+    }
+    return Date.now() - startedAt;
+  }
+
+  private trace(message: string): void {
+    if (!this.enableTraceLogs) {
+      return;
+    }
+    process.stderr.write(`[workflow-mutation-coordinator][trace] ${message}\n`);
   }
 
   private evictQueuedWorkflowIntentsForFence(workflowId: string, intent: WorkflowMutationIntent): void {

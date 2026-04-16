@@ -550,16 +550,8 @@ describe('headless delegation enforcement', () => {
         expect(runnable[0]?.id).toBe('wf-1/task-1');
       });
 
-      it('headless retry skips preempt when the workflow has no active execution', async () => {
+      it('headless retry always preempts, even when the workflow has no active execution', async () => {
         const preemptWorkflowExecution = vi.fn(async () => {});
-        mockDeps.orchestrator.getPersistedActiveTaskIds = vi.fn(() => new Set<string>());
-        mockDeps.persistence.loadTasks = vi.fn(() => [{
-          id: 'wf-1/task-1',
-          status: 'failed',
-          config: { workflowId: 'wf-1' },
-          execution: { error: 'Cancelled by user (workflow)' },
-        } as any]);
-
         const depsWithNoTrack: HeadlessDeps = {
           ...mockDeps,
           noTrack: true,
@@ -569,8 +561,89 @@ describe('headless delegation enforcement', () => {
 
         await runHeadless(['retry', 'wf-1'], depsWithNoTrack);
 
-        expect(preemptWorkflowExecution).not.toHaveBeenCalled();
+        expect(preemptWorkflowExecution).toHaveBeenCalledWith('wf-1');
         expect(mockDeps.commandService.retryWorkflow).toHaveBeenCalled();
+      });
+
+      it('headless recreate preempts workflow before recreate mutation', async () => {
+        const preemptWorkflowExecution = vi.fn(async () => ({ cancelled: [], runningCancelled: [] }));
+        mockDeps.orchestrator.recreateWorkflow = vi.fn(() => []);
+        mockDeps.persistence.updateWorkflow = vi.fn();
+
+        const depsWithNoTrack: HeadlessDeps = {
+          ...mockDeps,
+          noTrack: true,
+          preemptWorkflowExecution,
+        } as HeadlessDeps;
+
+        await runHeadless(['recreate', 'wf-1'], depsWithNoTrack);
+
+        expect(preemptWorkflowExecution).toHaveBeenCalledWith('wf-1');
+        expect(mockDeps.orchestrator.recreateWorkflow).toHaveBeenCalledWith('wf-1');
+      });
+
+      it('headless rebase preempts resolved workflow before rebase mutation', async () => {
+        const preemptWorkflowExecution = vi.fn(async () => ({ cancelled: [], runningCancelled: [] }));
+        mockDeps.persistence.listWorkflows = vi.fn(() => [{
+          id: 'wf-1',
+          name: 'wf-1',
+          status: 'running' as const,
+          generation: 0,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }]);
+        mockDeps.persistence.loadTasks = vi.fn(() => [{
+          id: 'wf-1/task-1',
+          status: 'running',
+          config: { workflowId: 'wf-1' },
+          execution: {},
+        } as any]);
+        mockDeps.orchestrator.getTask = vi.fn((id: string) => {
+          if (id === 'wf-1/task-1') {
+            return {
+              id: 'wf-1/task-1',
+              status: 'running',
+              config: { workflowId: 'wf-1' },
+              execution: {},
+            } as any;
+          }
+          return undefined;
+        });
+        mockDeps.persistence.loadWorkflow = vi.fn(() => ({
+          id: 'wf-1',
+          name: 'wf-1',
+          status: 'running' as const,
+          generation: 0,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }));
+
+        const depsWithNoTrack: HeadlessDeps = {
+          ...mockDeps,
+          noTrack: true,
+          preemptWorkflowExecution,
+        } as HeadlessDeps;
+
+        await expect(runHeadless(['rebase', 'task-1'], depsWithNoTrack)).rejects.toThrow();
+        expect(preemptWorkflowExecution).toHaveBeenCalledWith('wf-1');
+      });
+
+      it('headless cancel-workflow prefers preemptWorkflowExecution when available', async () => {
+        const preemptWorkflowExecution = vi.fn(async () => ({ cancelled: ['wf-1/task-1'], runningCancelled: ['wf-1/task-1'] }));
+        mockDeps.commandService.cancelWorkflow = vi.fn(async () => ({
+          ok: true as const,
+          data: { cancelled: ['wf-1/task-1'], runningCancelled: ['wf-1/task-1'] },
+        }));
+
+        const depsWithPreempt: HeadlessDeps = {
+          ...mockDeps,
+          preemptWorkflowExecution,
+        } as HeadlessDeps;
+
+        await runHeadless(['cancel-workflow', 'wf-1'], depsWithPreempt);
+
+        expect(preemptWorkflowExecution).toHaveBeenCalledWith('wf-1');
+        expect(mockDeps.commandService.cancelWorkflow).not.toHaveBeenCalled();
       });
     });
 

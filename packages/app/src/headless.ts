@@ -45,6 +45,7 @@ import {
   tryDelegateResume,
   tryDelegateRun,
 } from './headless-delegation.js';
+import { preemptWorkflowBeforeMutation, type WorkflowCancelResult } from './workflow-preemption.js';
 
 export { bumpGenerationAndRecreate } from './workflow-actions.js';
 export {
@@ -76,7 +77,7 @@ export interface HeadlessDeps {
   resetUiPerfStats?: () => void;
   deferRunnableTasks?: (tasks: TaskState[], workflowId?: string) => void;
   preemptTaskSubgraph?: (taskId: string) => Promise<void>;
-  preemptWorkflowExecution?: (workflowId: string) => Promise<void>;
+  preemptWorkflowExecution?: (workflowId: string) => Promise<WorkflowCancelResult>;
   waitForApproval?: boolean;
   noTrack?: boolean;
 }
@@ -92,16 +93,6 @@ const YELLOW = '\x1b[33m';
 function headlessHeartbeat(taskId: string, deps: Pick<HeadlessDeps, 'persistence'>): void {
   const now = new Date();
   try { deps.persistence.updateTask(taskId, { execution: { lastHeartbeatAt: now } }); } catch { /* db locked */ }
-}
-
-function workflowHasActiveExecution(workflowId: string, deps: Pick<HeadlessDeps, 'persistence' | 'orchestrator'>): boolean {
-  const tasks = deps.persistence.loadTasks(workflowId);
-  const persistedActiveTaskIds = deps.orchestrator.getPersistedActiveTaskIds?.() ?? new Set<string>();
-  return tasks.some((task) =>
-    task.status === 'running'
-    || task.status === 'fixing_with_ai'
-    || (task.status === 'pending' && persistedActiveTaskIds.has(task.id)),
-  );
 }
 
 function buildHeadlessApiCancelHooks(
@@ -1077,7 +1068,11 @@ async function headlessRebaseAndRetry(taskId: string, deps: HeadlessDeps): Promi
   taskId = restoreWorkflowForTask(taskId, deps).resolvedTaskId;
   const workflowId = deps.orchestrator.getTask(taskId)?.config.workflowId;
   if (!workflowId) throw new Error(`Task "${taskId}" has no workflow`);
-  await preemptWorkflowExecution(workflowId, deps);
+  await preemptWorkflowBeforeMutation(workflowId, {
+    preemptWorkflowExecution: (id) => preemptWorkflowExecution(id, deps),
+    logger: deps.logger,
+    context: 'headless.rebase-and-retry',
+  });
 
   const te = createHeadlessExecutor(deps);
   const autoFix = wireHeadlessAutoFix(deps, te);
@@ -1113,7 +1108,11 @@ async function headlessRecreateWorkflow(workflowId: string, deps: HeadlessDeps):
   if (!workflowId) {
     throw new Error('Missing arguments. Usage: --headless recreate <workflowId>');
   }
-  await preemptWorkflowExecution(workflowId, deps);
+  await preemptWorkflowBeforeMutation(workflowId, {
+    preemptWorkflowExecution: (id) => preemptWorkflowExecution(id, deps),
+    logger: deps.logger,
+    context: 'headless.recreate-workflow',
+  });
   const started = sharedRecreateWorkflow(workflowId, { persistence: deps.persistence, orchestrator: deps.orchestrator });
   const runnable = started.filter(t => t.status === 'running');
   if (runnable.length > 0) {
@@ -1198,13 +1197,11 @@ async function headlessRetryWorkflow(workflowId: string, deps: HeadlessDeps): Pr
   deps.logger.info(`headlessRetryWorkflow begin workflow="${workflowId}" noTrack=${deps.noTrack ? 'true' : 'false'}`, {
     module: 'headless',
   });
-  const shouldPreempt = workflowHasActiveExecution(workflowId, deps);
-  if (shouldPreempt) {
-    await preemptWorkflowExecution(workflowId, deps);
-    deps.logger.info(`headlessRetryWorkflow preempt complete workflow="${workflowId}"`, { module: 'headless' });
-  } else {
-    deps.logger.info(`headlessRetryWorkflow preempt skipped workflow="${workflowId}"`, { module: 'headless' });
-  }
+  await preemptWorkflowBeforeMutation(workflowId, {
+    preemptWorkflowExecution: (id) => preemptWorkflowExecution(id, deps),
+    logger: deps.logger,
+    context: 'headless.retry-workflow',
+  });
   const envelope = makeEnvelope('retry-workflow', 'headless', 'workflow', { workflowId });
   const result = await deps.commandService.retryWorkflow(envelope);
   if (!result.ok) throw new Error(result.error.message);
@@ -1323,19 +1320,21 @@ async function preemptTaskSubgraph(taskId: string, deps: HeadlessDeps): Promise<
   }
 }
 
-async function preemptWorkflowExecution(workflowId: string, deps: HeadlessDeps): Promise<void> {
+async function preemptWorkflowExecution(workflowId: string, deps: HeadlessDeps): Promise<WorkflowCancelResult> {
   if (deps.preemptWorkflowExecution) {
-    await deps.preemptWorkflowExecution(workflowId);
-    return;
+    return deps.preemptWorkflowExecution(workflowId);
   }
-  if (typeof deps.commandService.cancelWorkflow !== 'function') return;
+  if (typeof deps.commandService.cancelWorkflow !== 'function') {
+    return { cancelled: [], runningCancelled: [] };
+  }
   const envelope = makeEnvelope('cancel-workflow', 'headless', 'workflow', { workflowId });
   const result = await deps.commandService.cancelWorkflow(envelope);
   if (!result.ok) {
     const message = result.error.message;
-    if (message.includes('No tasks found for workflow')) return;
+    if (message.includes('No tasks found for workflow')) return { cancelled: [], runningCancelled: [] };
     throw new Error(message);
   }
+  return result.data;
 }
 
 async function headlessEdit(taskId: string, newCommand: string, deps: HeadlessDeps): Promise<void> {
@@ -1572,12 +1571,10 @@ async function headlessCancelWorkflow(workflowId: string, deps: HeadlessDeps): P
     }
   }
 
-  const envelope = makeEnvelope('cancel-workflow', 'headless', 'workflow', { workflowId });
-  const cmdResult = await deps.commandService.cancelWorkflow(envelope);
-  if (!cmdResult.ok) throw new Error(cmdResult.error.message);
-  process.stdout.write(`Cancelled ${cmdResult.data.cancelled.length} task(s) in workflow "${workflowId}": [${cmdResult.data.cancelled.join(', ')}]\n`);
-  if (cmdResult.data.runningCancelled.length > 0) {
-    process.stdout.write(`Killed running: [${cmdResult.data.runningCancelled.join(', ')}]\n`);
+  const result = await preemptWorkflowExecution(workflowId, deps);
+  process.stdout.write(`Cancelled ${result.cancelled.length} task(s) in workflow "${workflowId}": [${result.cancelled.join(', ')}]\n`);
+  if (result.runningCancelled.length > 0) {
+    process.stdout.write(`Killed running: [${result.runningCancelled.join(', ')}]\n`);
   }
 }
 

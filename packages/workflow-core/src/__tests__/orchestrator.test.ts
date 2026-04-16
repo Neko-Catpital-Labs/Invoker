@@ -4267,6 +4267,53 @@ describe('Orchestrator', () => {
       expect(started.some(t => t.id === 'a')).toBe(false);
     });
 
+    it('differs from recreate: retry preserves completed roots while recreate resets them', () => {
+      const wfId = 'wf-retry-vs-recreate';
+      const seed = (p: InMemoryPersistence): void => {
+        p.saveTask(wfId, {
+          id: 'a', description: 'Task A', status: 'completed',
+          dependencies: [], createdAt: new Date(),
+          config: { workflowId: wfId }, execution: { exitCode: 0, branch: 'br-a', commit: 'abc' },
+        });
+        p.saveTask(wfId, {
+          id: 'b', description: 'Task B', status: 'failed',
+          dependencies: [], createdAt: new Date(),
+          config: { workflowId: wfId }, execution: { exitCode: 1, error: 'boom', branch: 'br-b' },
+        });
+        p.saveTask(wfId, {
+          id: `__merge__${wfId}`, description: 'Merge gate', status: 'completed',
+          dependencies: ['a', 'b'], createdAt: new Date(),
+          config: { workflowId: wfId, isMergeNode: true }, execution: {},
+        });
+      };
+
+      const retryPersistence = new InMemoryPersistence();
+      const recreatePersistence = new InMemoryPersistence();
+      const retryBus = new InMemoryBus();
+      const recreateBus = new InMemoryBus();
+      seed(retryPersistence);
+      seed(recreatePersistence);
+
+      const retryOrchestrator = new Orchestrator({ persistence: retryPersistence, messageBus: retryBus, maxConcurrency: 3 });
+      const recreateOrchestrator = new Orchestrator({ persistence: recreatePersistence, messageBus: recreateBus, maxConcurrency: 3 });
+      retryOrchestrator.syncFromDb(wfId);
+      recreateOrchestrator.syncFromDb(wfId);
+
+      retryOrchestrator.retryWorkflow(wfId);
+      recreateOrchestrator.recreateWorkflow(wfId);
+
+      const retryA = retryOrchestrator.getTask('a')!;
+      const recreateA = recreateOrchestrator.getTask('a')!;
+
+      expect(retryA.status).toBe('completed');
+      expect(retryA.execution.branch).toBe('br-a');
+      expect(retryA.execution.commit).toBe('abc');
+
+      expect(['running', 'pending']).toContain(recreateA.status);
+      expect(recreateA.execution.branch).toBeUndefined();
+      expect(recreateA.execution.commit).toBeUndefined();
+    });
+
     it('resets merge node even when leaf tasks are all completed', () => {
       const p = new InMemoryPersistence();
       const b = new InMemoryBus();
@@ -4893,6 +4940,52 @@ describe('Orchestrator', () => {
       expect(retriedAttemptId).not.toBe(failedAttemptId);
       expect(persistence.loadAttempt(failedAttemptId!)?.status).toBe('failed');
       expect(persistence.loadAttempt(retriedAttemptId!)?.status).toBe('running');
+    });
+
+    it('rejects stale attempt and generation responses after retry refreshes attempts', () => {
+      orchestrator.loadPlan({
+        name: 'retry-stale-response-rejection',
+        tasks: [{ id: 't1', description: 'Task 1' }],
+      });
+      orchestrator.startExecution();
+
+      const taskId = sid(orchestrator, 0, 't1');
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: taskId, status: 'failed', outputs: { exitCode: 1, error: 'boom' } }),
+      );
+
+      const failedTask = orchestrator.getTask(taskId)!;
+      const staleAttemptId = failedTask.execution.selectedAttemptId!;
+      const staleGeneration = failedTask.execution.generation ?? 0;
+
+      orchestrator.retryWorkflow(orchestrator.getWorkflowIds()[0]!);
+      const activeTask = orchestrator.getTask(taskId)!;
+      const activeAttemptId = activeTask.execution.selectedAttemptId!;
+
+      expect(activeAttemptId).not.toBe(staleAttemptId);
+      expect(activeTask.status).toBe('running');
+
+      const staleAttemptResult = orchestrator.handleWorkerResponse(
+        makeResponse({
+          actionId: taskId,
+          attemptId: staleAttemptId,
+          status: 'completed',
+          outputs: { exitCode: 0 },
+        }),
+      );
+      expect(staleAttemptResult).toEqual([]);
+
+      const staleGenerationResult = orchestrator.handleWorkerResponse(
+        makeResponse({
+          actionId: taskId,
+          executionGeneration: staleGeneration,
+          status: 'completed',
+          outputs: { exitCode: 0 },
+        }),
+      );
+      expect(staleGenerationResult).toEqual([]);
+      expect(orchestrator.getTask(taskId)?.execution.selectedAttemptId).toBe(activeAttemptId);
+      expect(orchestrator.getTask(taskId)?.status).toBe('running');
     });
 
     it('recreateWorkflow selects a fresh persisted attempt for recreated tasks', () => {

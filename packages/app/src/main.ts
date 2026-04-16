@@ -111,6 +111,7 @@ import type { WorkflowMutationPriority } from './workflow-mutation-coordinator.j
 import { PersistedWorkflowMutationCoordinator } from './persisted-workflow-mutation-coordinator.js';
 import { executeGlobalTopup } from './global-topup.js';
 import { computeDeferredLaunchTiming } from './deferred-runnable.js';
+import { preemptWorkflowBeforeMutation, type WorkflowCancelResult } from './workflow-preemption.js';
 
 // ── Detect headless mode ─────────────────────────────────────
 
@@ -157,6 +158,24 @@ let hourlyBackupInterval: ReturnType<typeof setInterval> | null = null;
 let writerLock: DbWriterLockResult | null = null;
 const workflowMutationOwnerId = `owner-${process.pid}-${Date.now()}`;
 const appProcessStartedAt = Date.now();
+const DEFAULT_MAX_CONCURRENT_WORKFLOW_DRAINS = 8;
+
+function resolveMaxConcurrentWorkflowDrains(): number {
+  const raw = process.env.INVOKER_MAX_CONCURRENT_WORKFLOW_DRAINS;
+  if (!raw) {
+    return DEFAULT_MAX_CONCURRENT_WORKFLOW_DRAINS;
+  }
+  const parsed = Number(raw);
+  if (Number.isInteger(parsed) && parsed > 0) {
+    return parsed;
+  }
+  process.stderr.write(
+    `[workflow-mutation-coordinator] ignoring invalid INVOKER_MAX_CONCURRENT_WORKFLOW_DRAINS="${raw}", using default ${DEFAULT_MAX_CONCURRENT_WORKFLOW_DRAINS}\n`,
+  );
+  return DEFAULT_MAX_CONCURRENT_WORKFLOW_DRAINS;
+}
+
+const maxConcurrentWorkflowDrains = resolveMaxConcurrentWorkflowDrains();
 
 interface GuiMutationPayload {
   channel: string;
@@ -1191,16 +1210,17 @@ if (isHeadless) {
     }
   }
 
-  async function preemptWorkflowExecution(workflowId: string): Promise<void> {
+  async function preemptWorkflowExecution(workflowId: string): Promise<WorkflowCancelResult> {
     try {
       logger.info(`preemptWorkflowExecution begin for "${workflowId}"`, { module: 'ipc' });
-      await performCancelWorkflow(workflowId);
+      const result = await performCancelWorkflow(workflowId);
       logger.info(`preemptWorkflowExecution end for "${workflowId}"`, { module: 'ipc' });
+      return result;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       if (message.includes('No tasks found for workflow')) {
         logger.info(`preemptWorkflowExecution skipped for "${workflowId}": ${message}`, { module: 'ipc' });
-        return;
+        return { cancelled: [], runningCancelled: [] };
       }
       throw err;
     }
@@ -2033,6 +2053,7 @@ if (isHeadless) {
           }
           return handler(...args);
         },
+        { maxConcurrentWorkflowDrains },
       );
     } else {
       logger.info('GUI launched in follower mode; mutation execution is delegated to the current owner', {
@@ -2545,7 +2566,11 @@ if (isHeadless) {
       const workflowId = String(workflowIdArg);
       logger.info(`cancel-workflow: "${workflowId}"`, { module: 'ipc' });
       try {
-        return await performCancelWorkflow(workflowId);
+        return await preemptWorkflowBeforeMutation(workflowId, {
+          preemptWorkflowExecution,
+          logger,
+          context: 'ipc.cancel-workflow',
+        });
       } catch (err) {
         logger.error(`cancel-workflow failed: ${err}`, { module: 'ipc' });
         throw err;
@@ -2593,7 +2618,11 @@ if (isHeadless) {
       cancelDeferredWorkflowLaunch(workflowId, 'ipc.recreate-workflow');
       logger.info(`recreate-workflow: "${workflowId}"`, { module: 'ipc' });
       try {
-        await preemptWorkflowExecution(workflowId);
+        await preemptWorkflowBeforeMutation(workflowId, {
+          preemptWorkflowExecution,
+          logger,
+          context: 'ipc.recreate-workflow',
+        });
         const started = sharedRecreateWorkflow(workflowId, { persistence, orchestrator });
         const runnable = started.filter(t => t.status === 'running');
         remoteFetchForPool.enabled = false;
@@ -2656,7 +2685,11 @@ if (isHeadless) {
       cancelDeferredWorkflowLaunch(workflowId, 'ipc.retry-workflow');
       logger.info(`retry-workflow: "${workflowId}"`, { module: 'ipc' });
       try {
-        await preemptWorkflowExecution(workflowId);
+        await preemptWorkflowBeforeMutation(workflowId, {
+          preemptWorkflowExecution,
+          logger,
+          context: 'ipc.retry-workflow',
+        });
         const envelope = makeEnvelope('retry-workflow', 'ui', 'workflow', { workflowId });
         const result = await commandService.retryWorkflow(envelope);
         if (!result.ok) throw new Error(result.error.message);
@@ -2690,7 +2723,13 @@ if (isHeadless) {
       logger.info(`rebase-and-retry: "${taskId}"`, { module: 'ipc' });
       try {
         const workflowId = workflowIdForTaskArg(taskIdArg);
-        if (workflowId) await preemptWorkflowExecution(workflowId);
+        if (workflowId) {
+          await preemptWorkflowBeforeMutation(workflowId, {
+            preemptWorkflowExecution,
+            logger,
+            context: 'ipc.rebase-and-retry',
+          });
+        }
         const started = await rebaseAndRetry(taskId, {
           orchestrator,
           persistence,
