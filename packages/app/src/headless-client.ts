@@ -72,12 +72,23 @@ async function delegateReadOnlyQuery(args: string[], bus: MessageBus): Promise<b
   if (args[0] !== 'query' || args[1] !== 'ui-perf') {
     return false;
   }
-  const owner = await tryPingHeadlessOwner(bus, 3_000);
+  const deadline = Date.now() + 8_000;
+  let owner: { ownerId?: string; mode?: string } | null = null;
+  while (Date.now() < deadline) {
+    owner = await tryPingHeadlessOwner(bus, 2_000);
+    if (owner) break;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
   if (!owner) {
     throw new Error('query ui-perf requires a running shared owner process');
   }
   const reset = args.includes('--reset');
-  const response = await tryDelegateQueryUiPerf(bus, reset, 5_000);
+  let response: Record<string, unknown> | null = null;
+  while (Date.now() < deadline) {
+    response = await tryDelegateQueryUiPerf(bus, reset, 5_000);
+    if (response) break;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
   if (!response) {
     throw new Error('Live owner is present but did not serve ui-perf query');
   }

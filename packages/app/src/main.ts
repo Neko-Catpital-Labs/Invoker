@@ -795,6 +795,7 @@ if (isHeadless) {
   let startupWorkflowId: string | null = null;
   let allWorkflowsHydrated = false;
   let backgroundHydrationStarted = false;
+  let backgroundHydrationScheduled = false;
   let uiInteractive = false;
   let deferredStartupTriggered = false;
   const traceUiDeltaFlow = process.env.INVOKER_TRACE_UI_DELTA === '1';
@@ -1617,42 +1618,92 @@ if (isHeadless) {
   }
 
   function startBackgroundHydration(reason: string): void {
-    if (backgroundHydrationStarted || allWorkflowsHydrated) {
+    if (backgroundHydrationStarted || backgroundHydrationScheduled || allWorkflowsHydrated) {
       return;
     }
-    backgroundHydrationStarted = true;
+    const hydrateDelayMs = Number.parseInt(process.env.INVOKER_BACKGROUND_HYDRATE_DELAY_MS ?? '10000', 10) || 10000;
+    backgroundHydrationScheduled = true;
     setTimeout(() => {
-      try {
-        recordStartupMark('background-hydration.start', { reason, startupWorkflowId });
-        orchestrator.syncAllFromDb();
+      backgroundHydrationScheduled = false;
+      backgroundHydrationStarted = true;
+      const workflows = listWorkflowsByStartupRecency();
+      const remainingWorkflowIds = workflows
+        .map((workflow) => workflow.id)
+        .filter((workflowId) => workflowId !== startupWorkflowId);
+      if (remainingWorkflowIds.length === 0) {
         allWorkflowsHydrated = true;
-        if (ownerMode && !invokerConfig.disableAutoRunOnStartup) {
-          const newlyStarted = relaunchOrphansAndStartReady('background-hydration');
-          if (newlyStarted.length > 0) {
-            requireTaskExecutor().executeTasks(newlyStarted);
-          }
-          requireTaskExecutor().resumeMergeGatePolling();
-        }
-        publishOrchestratorSnapshotToRenderer();
+        backgroundHydrationStarted = false;
         recordStartupMark('background-hydration.end', {
           reason,
-          workflowCount: lastKnownWorkflowCount,
+          workflowCount: workflows.length,
           taskCount: orchestrator.getAllTasks().length,
+        });
+        return;
+      }
+      try {
+        recordStartupMark('background-hydration.start', {
+          reason,
+          startupWorkflowId,
+          remainingWorkflowCount: remainingWorkflowIds.length,
         });
       } catch (err) {
         backgroundHydrationStarted = false;
         logger.error(
-          `background hydration failed: ${err instanceof Error ? err.stack ?? err.message : String(err)}`,
+          `background hydration failed before scheduling: ${err instanceof Error ? err.stack ?? err.message : String(err)}`,
           { module: 'init' },
         );
+        return;
       }
-    }, 0).unref?.();
+
+      const hydrateNext = (index: number): void => {
+        if (index >= remainingWorkflowIds.length) {
+          allWorkflowsHydrated = true;
+          backgroundHydrationStarted = false;
+          if (ownerMode && !invokerConfig.disableAutoRunOnStartup) {
+            const newlyStarted = relaunchOrphansAndStartReady('background-hydration');
+            if (newlyStarted.length > 0) {
+              requireTaskExecutor().executeTasks(newlyStarted);
+            }
+            requireTaskExecutor().resumeMergeGatePolling();
+          }
+          publishOrchestratorSnapshotToRenderer();
+          recordStartupMark('background-hydration.end', {
+            reason,
+            workflowCount: workflows.length,
+            taskCount: orchestrator.getAllTasks().length,
+          });
+          return;
+        }
+
+        const workflowId = remainingWorkflowIds[index];
+        try {
+          orchestrator.hydrateWorkflowFromDb(workflowId);
+          recordStartupMark('background-hydration.workflow', {
+            workflowId,
+            index: index + 1,
+            total: remainingWorkflowIds.length,
+          });
+        } catch (err) {
+          backgroundHydrationStarted = false;
+          logger.error(
+            `background hydration failed for workflow "${workflowId}": ${err instanceof Error ? err.stack ?? err.message : String(err)}`,
+            { module: 'init' },
+          );
+          return;
+        }
+
+        setTimeout(() => hydrateNext(index + 1), 0).unref?.();
+      };
+
+      hydrateNext(0);
+    }, hydrateDelayMs).unref?.();
   }
 
   function startDeferredStartupWork(): void {
     if (deferredStartupTriggered) return;
     deferredStartupTriggered = true;
     recordStartupMark('deferred-startup.begin');
+    const startupPollDelayMs = Number.parseInt(process.env.INVOKER_STARTUP_POLL_DELAY_MS ?? '10000', 10) || 10000;
 
     setTimeout(() => {
       if (!ownerMode) return;
@@ -1703,66 +1754,70 @@ if (isHeadless) {
         logger.info(`Not started: ${err instanceof Error ? err.message : String(err)}`, { module: 'slack' });
       });
 
-      dbPollInterval = setInterval(() => {
-        if (!mainWindow || mainWindow.isDestroyed()) return;
-        try {
-          const workflows = persistence.listWorkflows();
+      setTimeout(() => {
+        dbPollInterval = setInterval(() => {
+          if (!mainWindow || mainWindow.isDestroyed()) return;
+          try {
+            const workflows = persistence.listWorkflows();
 
-          if (workflows.length !== lastKnownWorkflowCount) {
-            const msg = `Workflow count changed: ${lastKnownWorkflowCount} → ${workflows.length}`;
-            logger.info(msg, { module: 'db-poll' });
-            try { persistence.writeActivityLog('db-poll', 'info', msg); } catch { /* db locked */ }
-            lastKnownWorkflowCount = workflows.length;
-            mainWindow.webContents.send('invoker:workflows-changed', workflows);
+            if (workflows.length !== lastKnownWorkflowCount) {
+              const msg = `Workflow count changed: ${lastKnownWorkflowCount} → ${workflows.length}`;
+              logger.info(msg, { module: 'db-poll' });
+              try { persistence.writeActivityLog('db-poll', 'info', msg); } catch { /* db locked */ }
+              lastKnownWorkflowCount = workflows.length;
+              mainWindow.webContents.send('invoker:workflows-changed', workflows);
 
-            orchestrator.syncAllFromDb();
-            logger.info(`Synced orchestrator for all ${workflows.length} workflows`, { module: 'db-poll' });
-          }
-
-          for (const wf of workflows) {
-            if (wf.status === 'completed' || wf.status === 'failed') continue;
-            const tasks = persistence.loadTasks(wf.id);
-            for (const task of tasks) {
-              const snapshot = JSON.stringify(task);
-              const prev = lastKnownTaskStates.get(task.id);
-              if (!prev) {
-                if (traceDbPollPerTask) {
-                  const msg = `New task: ${task.id} (${task.status})`;
-                  logger.info(msg, { module: 'db-poll' });
-                  try { persistence.writeActivityLog('db-poll', 'info', msg); } catch { /* db locked */ }
-                }
-                lastKnownTaskStates.set(task.id, snapshot);
-                uiPerfStats.dbPollCreated += 1;
-                sendTaskDeltaToRenderer({ type: 'created', task });
-              } else if (prev !== snapshot) {
-                if (traceDbPollPerTask) {
-                  const msg = `Task updated: ${task.id} (${task.status})`;
-                  logger.info(msg, { module: 'db-poll' });
-                  try { persistence.writeActivityLog('db-poll', 'info', msg); } catch { /* db locked */ }
-                }
-                lastKnownTaskStates.set(task.id, snapshot);
-                uiPerfStats.dbPollUpdatedAsCreated += 1;
-                sendTaskDeltaToRenderer({ type: 'created', task });
+              if (allWorkflowsHydrated) {
+                orchestrator.syncAllFromDb();
+                logger.info(`Synced orchestrator for all ${workflows.length} workflows`, { module: 'db-poll' });
               }
             }
-          }
-        } catch {
-          // DB might be locked — skip this tick
-        }
-      }, 2000);
 
-      activityPollInterval = setInterval(() => {
-        if (!mainWindow || mainWindow.isDestroyed()) return;
-        try {
-          const entries = persistence.getActivityLogs(lastActivityLogId);
-          if (entries.length > 0) {
-            lastActivityLogId = entries[entries.length - 1].id;
-            mainWindow.webContents.send('invoker:activity-log', entries);
+            for (const wf of workflows) {
+              if (wf.status === 'completed' || wf.status === 'failed') continue;
+              const tasks = persistence.loadTasks(wf.id);
+              for (const task of tasks) {
+                const snapshot = JSON.stringify(task);
+                const prev = lastKnownTaskStates.get(task.id);
+                if (!prev) {
+                  if (traceDbPollPerTask) {
+                    const msg = `New task: ${task.id} (${task.status})`;
+                    logger.info(msg, { module: 'db-poll' });
+                    try { persistence.writeActivityLog('db-poll', 'info', msg); } catch { /* db locked */ }
+                  }
+                  lastKnownTaskStates.set(task.id, snapshot);
+                  uiPerfStats.dbPollCreated += 1;
+                  sendTaskDeltaToRenderer({ type: 'created', task });
+                } else if (prev !== snapshot) {
+                  if (traceDbPollPerTask) {
+                    const msg = `Task updated: ${task.id} (${task.status})`;
+                    logger.info(msg, { module: 'db-poll' });
+                    try { persistence.writeActivityLog('db-poll', 'info', msg); } catch { /* db locked */ }
+                  }
+                  lastKnownTaskStates.set(task.id, snapshot);
+                  uiPerfStats.dbPollUpdatedAsCreated += 1;
+                  sendTaskDeltaToRenderer({ type: 'created', task });
+                }
+              }
+            }
+          } catch {
+            // DB might be locked — skip this tick
           }
-        } catch {
-          // DB might be locked — skip this tick
-        }
-      }, 2000);
+        }, 2000);
+
+        activityPollInterval = setInterval(() => {
+          if (!mainWindow || mainWindow.isDestroyed()) return;
+          try {
+            const entries = persistence.getActivityLogs(lastActivityLogId);
+            if (entries.length > 0) {
+              lastActivityLogId = entries[entries.length - 1].id;
+              mainWindow.webContents.send('invoker:activity-log', entries);
+            }
+          } catch {
+            // DB might be locked — skip this tick
+          }
+        }, 2000);
+      }, startupPollDelayMs).unref?.();
     }, 0);
   }
 

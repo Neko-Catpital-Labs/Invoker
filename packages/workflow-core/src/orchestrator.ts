@@ -2168,6 +2168,16 @@ export class Orchestrator {
   }
 
   /**
+   * Incrementally hydrate a workflow into the existing in-memory graph without
+   * clearing already-loaded workflows. This is used for staged GUI startup so
+   * first render can depend on one workflow and the rest can stream in later.
+   */
+  hydrateWorkflowFromDb(workflowId: string): void {
+    this.refreshWorkflowFromDb(workflowId);
+    this.assertMergeLeavesInvariant(workflowId);
+  }
+
+  /**
    * Resume a previously persisted workflow by restoring tasks
    * and auto-starting ready tasks.
    */
