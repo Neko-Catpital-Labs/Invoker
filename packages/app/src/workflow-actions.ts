@@ -302,13 +302,59 @@ function formatAutoFixDiagnostics(err: unknown): string | undefined {
   return parts.join('\n');
 }
 
+type AutoFixAgentSelection = {
+  selectedAgent: string;
+  selectedAgentSource: 'config' | 'task' | 'default';
+  configuredAutoFixAgent?: string;
+  taskExecutionAgent?: string;
+  fallbackChain: string;
+};
+
+function resolveAutoFixAgent(
+  configuredAutoFixAgent: string | undefined,
+  taskExecutionAgent: string | undefined,
+): AutoFixAgentSelection {
+  const configAgent = configuredAutoFixAgent?.trim() || undefined;
+  const taskAgent = taskExecutionAgent?.trim() || undefined;
+  if (configAgent) {
+    return {
+      selectedAgent: configAgent,
+      selectedAgentSource: 'config',
+      configuredAutoFixAgent: configAgent,
+      taskExecutionAgent: taskAgent,
+      fallbackChain: 'config->task->default',
+    };
+  }
+  if (taskAgent) {
+    return {
+      selectedAgent: taskAgent,
+      selectedAgentSource: 'task',
+      configuredAutoFixAgent: undefined,
+      taskExecutionAgent: taskAgent,
+      fallbackChain: 'config(empty)->task->default',
+    };
+  }
+  return {
+    selectedAgent: 'claude',
+    selectedAgentSource: 'default',
+    configuredAutoFixAgent: undefined,
+    taskExecutionAgent: undefined,
+    fallbackChain: 'config(empty)->task(empty)->default',
+  };
+}
+
 /**
  * Automatically fix a failed task with an AI agent and restart it.
  * Increments autoFixAttempts; respects the max budget from shouldAutoFix().
  */
 export async function autoFixOnFailure(
   taskId: string,
-  deps: { orchestrator: Orchestrator; persistence: SQLiteAdapter; taskExecutor: TaskRunner },
+  deps: {
+    orchestrator: Orchestrator;
+    persistence: SQLiteAdapter;
+    taskExecutor: TaskRunner;
+    getAutoFixAgent?: () => string | undefined;
+  },
 ): Promise<void> {
   const { orchestrator, persistence, taskExecutor } = deps;
   if (!orchestrator.shouldAutoFix(taskId)) return;
@@ -333,27 +379,47 @@ export async function autoFixOnFailure(
   persistence.updateTask(taskId, { execution: { autoFixAttempts: attempts } });
 
   const { savedError } = orchestrator.beginConflictResolution(taskId);
+  const agentSelection = resolveAutoFixAgent(
+    deps.getAutoFixAgent?.(),
+    task.config.executionAgent,
+  );
   persistence.logEvent?.(taskId, 'debug.auto-fix', {
     phase: 'auto-fix-begin-conflict-resolution',
     savedErrorLength: savedError.length,
   });
   try {
     const output = persistence.getTaskOutput(taskId);
+    persistence.logEvent?.(taskId, 'debug.auto-fix', {
+      phase: 'auto-fix-agent-selected',
+      configuredAutoFixAgent: agentSelection.configuredAutoFixAgent ?? null,
+      taskExecutionAgent: agentSelection.taskExecutionAgent ?? null,
+      selectedAgent: agentSelection.selectedAgent,
+      selectedAgentSource: agentSelection.selectedAgentSource,
+      fallbackChain: agentSelection.fallbackChain,
+    });
+    persistence.appendTaskOutput(
+      taskId,
+      `\n[Auto-fix Agent] selected=${agentSelection.selectedAgent} source=${agentSelection.selectedAgentSource} fallback=${agentSelection.fallbackChain}`,
+    );
     const useResolveConflict = isMergeConflictError(savedError);
     const route = useResolveConflict ? 'resolveConflict' : 'fixWithAgent';
     console.log(
-      `[auto-fix-route] task="${taskId}" route=${route} agent=claude`,
+      `[auto-fix-route] task="${taskId}" route=${route} agent=${agentSelection.selectedAgent} source=${agentSelection.selectedAgentSource}`,
     );
     persistence.logEvent?.(taskId, 'debug.auto-fix', {
       phase: 'auto-fix-route-selected',
       route,
-      agent: 'claude',
+      agent: agentSelection.selectedAgent,
+      selectedAgentSource: agentSelection.selectedAgentSource,
+      configuredAutoFixAgent: agentSelection.configuredAutoFixAgent ?? null,
+      taskExecutionAgent: agentSelection.taskExecutionAgent ?? null,
+      fallbackChain: agentSelection.fallbackChain,
       outputLength: output.length,
     });
     if (useResolveConflict) {
-      await taskExecutor.resolveConflict(taskId, savedError, 'claude');
+      await taskExecutor.resolveConflict(taskId, savedError, agentSelection.selectedAgent);
     } else {
-      await taskExecutor.fixWithAgent(taskId, output, 'claude', savedError);
+      await taskExecutor.fixWithAgent(taskId, output, agentSelection.selectedAgent, savedError);
     }
     // Skip approve flow — directly restart to re-run the task
     const started = orchestrator.restartTask(taskId);
@@ -372,6 +438,11 @@ export async function autoFixOnFailure(
       phase: 'auto-fix-route-failed',
       errorType: err instanceof Error ? err.name : typeof err,
       errorMessage: msg,
+      configuredAutoFixAgent: agentSelection.configuredAutoFixAgent ?? null,
+      taskExecutionAgent: agentSelection.taskExecutionAgent ?? null,
+      selectedAgent: agentSelection.selectedAgent,
+      selectedAgentSource: agentSelection.selectedAgentSource,
+      fallbackChain: agentSelection.fallbackChain,
       diagnostics: diagnostics ?? null,
     });
     if (diagnostics) {

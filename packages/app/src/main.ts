@@ -928,95 +928,117 @@ if (isHeadless) {
     uiTaskDeltaFlushTimer.unref?.();
   };
 
+  const buildAutoFixQueueSnapshot = (taskId: string): Record<string, unknown> => ({
+    inProgressCount: autoFixInProgress.size,
+    queuedCount: queuedAutoFixTasks.size,
+    pendingCount: pendingAutoFixTasks.length,
+    inProgressForTask: autoFixInProgress.has(taskId),
+    queuedForTask: queuedAutoFixTasks.has(taskId),
+    pendingForTask: pendingAutoFixTasks.includes(taskId),
+    pendingHead: pendingAutoFixTasks[0] ?? null,
+    pendingPreview: pendingAutoFixTasks.slice(0, 5),
+  });
+
+  const logAutoFixDebug = (
+    taskId: string,
+    phase: string,
+    details: Record<string, unknown> = {},
+  ): void => {
+    const task = orchestrator.getTask(taskId);
+    const payload = {
+      phase,
+      status: task?.status ?? 'missing',
+      autoFixAttempts: task?.execution.autoFixAttempts ?? null,
+      ...buildAutoFixQueueSnapshot(taskId),
+      ...details,
+    };
+    persistence.logEvent?.(taskId, 'debug.auto-fix', payload);
+    logger.info(
+      `[auto-fix-debug] task="${taskId}" phase=${phase} payload=${JSON.stringify(payload)}`,
+      { module: 'auto-fix' },
+    );
+  };
+
   const drainAutoFixQueue = (): void => {
     if (!taskExecutor) {
+      logger.info('[auto-fix-debug] drain skipped: taskExecutor missing', { module: 'auto-fix' });
       return;
     }
+    logger.info(
+      `[auto-fix-debug] drain start inProgress=${autoFixInProgress.size} queued=${queuedAutoFixTasks.size} pending=${pendingAutoFixTasks.length}`,
+      { module: 'auto-fix' },
+    );
     while (autoFixInProgress.size < maxConcurrentAutoFixes && pendingAutoFixTasks.length > 0) {
       const nextTaskId = pendingAutoFixTasks.shift();
       if (!nextTaskId) {
         return;
       }
+      logAutoFixDebug(nextTaskId, 'drain-pop');
       queuedAutoFixTasks.delete(nextTaskId);
-      if (!orchestrator.shouldAutoFix(nextTaskId) || autoFixInProgress.has(nextTaskId)) {
-        if (nextTaskId === 'wf-1775932917566-8/run-all-fixture-tests') {
-          const task = orchestrator.getTask(nextTaskId);
-          const message = `[auto-fix-debug] drain skip task="${nextTaskId}" shouldAutoFix=${orchestrator.shouldAutoFix(nextTaskId)} inProgress=${autoFixInProgress.has(nextTaskId)} status=${task?.status ?? 'missing'} attempts=${task?.execution.autoFixAttempts ?? 'n/a'}`;
-          persistence.logEvent?.(nextTaskId, 'debug.auto-fix', {
-            phase: 'drain-skip',
-            shouldAutoFix: orchestrator.shouldAutoFix(nextTaskId),
-            inProgress: autoFixInProgress.has(nextTaskId),
-            status: task?.status ?? 'missing',
-            autoFixAttempts: task?.execution.autoFixAttempts ?? null,
-          });
-          logger.info(
-            message,
-            { module: 'auto-fix' },
-          );
-        }
+      const shouldAutoFixNow = orchestrator.shouldAutoFix(nextTaskId);
+      const alreadyInProgress = autoFixInProgress.has(nextTaskId);
+      if (!shouldAutoFixNow || alreadyInProgress) {
+        logAutoFixDebug(nextTaskId, 'drain-skip', {
+          reason: !shouldAutoFixNow ? 'shouldAutoFix-false' : 'already-in-progress',
+          shouldAutoFix: shouldAutoFixNow,
+          inProgress: alreadyInProgress,
+        });
         continue;
       }
       autoFixInProgress.add(nextTaskId);
+      logAutoFixDebug(nextTaskId, 'drain-dispatch');
       import('./workflow-actions.js').then(({ autoFixOnFailure }) =>
-        autoFixOnFailure(nextTaskId, { orchestrator, persistence, taskExecutor: requireTaskExecutor() })
-          .catch(err => logger.error(`[auto-fix] "${nextTaskId}": ${err}`, { module: 'auto-fix' }))
+        autoFixOnFailure(nextTaskId, {
+          orchestrator,
+          persistence,
+          taskExecutor: requireTaskExecutor(),
+          getAutoFixAgent: () => loadConfig().autoFixAgent,
+        })
+          .catch((err) => {
+            logAutoFixDebug(nextTaskId, 'drain-dispatch-error', {
+              error: err instanceof Error ? err.stack ?? err.message : String(err),
+            });
+            logger.error(`[auto-fix] "${nextTaskId}": ${err}`, { module: 'auto-fix' });
+          })
           .finally(() => {
             autoFixInProgress.delete(nextTaskId);
+            logAutoFixDebug(nextTaskId, 'drain-dispatch-finished');
             drainAutoFixQueue();
           }),
       );
     }
+    logger.info(
+      `[auto-fix-debug] drain end inProgress=${autoFixInProgress.size} queued=${queuedAutoFixTasks.size} pending=${pendingAutoFixTasks.length}`,
+      { module: 'auto-fix' },
+    );
   };
 
   const scheduleAutoFix = (taskId: string): void => {
+    logAutoFixDebug(taskId, 'schedule-enter');
     if (!taskExecutor) {
-      if (taskId === 'wf-1775932917566-8/run-all-fixture-tests') {
-        persistence.logEvent?.(taskId, 'debug.auto-fix', {
-          phase: 'schedule-skip',
-          reason: 'no-taskExecutor',
-        });
-        logger.info(
-          `[auto-fix-debug] schedule skip task="${taskId}" reason=no-taskExecutor`,
-          { module: 'auto-fix' },
-        );
-      }
+      logAutoFixDebug(taskId, 'schedule-skip', { reason: 'no-taskExecutor' });
       return;
     }
     const shouldAutoFixNow = orchestrator.shouldAutoFix(taskId);
-    if (autoFixInProgress.has(taskId) || queuedAutoFixTasks.has(taskId) || !shouldAutoFixNow) {
-      if (taskId === 'wf-1775932917566-8/run-all-fixture-tests') {
-        const task = orchestrator.getTask(taskId);
-        const message = `[auto-fix-debug] schedule skip task="${taskId}" inProgress=${autoFixInProgress.has(taskId)} queued=${queuedAutoFixTasks.has(taskId)} shouldAutoFix=${shouldAutoFixNow} status=${task?.status ?? 'missing'} attempts=${task?.execution.autoFixAttempts ?? 'n/a'}`;
-        persistence.logEvent?.(taskId, 'debug.auto-fix', {
-          phase: 'schedule-skip',
-          inProgress: autoFixInProgress.has(taskId),
-          queued: queuedAutoFixTasks.has(taskId),
-          shouldAutoFix: shouldAutoFixNow,
-          status: task?.status ?? 'missing',
-          autoFixAttempts: task?.execution.autoFixAttempts ?? null,
-        });
-        logger.info(
-          message,
-          { module: 'auto-fix' },
-        );
-      }
+    const inProgress = autoFixInProgress.has(taskId);
+    const queued = queuedAutoFixTasks.has(taskId);
+    if (inProgress || queued || !shouldAutoFixNow) {
+      logAutoFixDebug(taskId, 'schedule-skip', {
+        reason: !shouldAutoFixNow
+          ? 'shouldAutoFix-false'
+          : inProgress
+            ? 'already-in-progress'
+            : 'already-queued',
+        inProgress,
+        queued,
+        shouldAutoFix: shouldAutoFixNow,
+      });
       return;
     }
-    if (taskId === 'wf-1775932917566-8/run-all-fixture-tests') {
-      const task = orchestrator.getTask(taskId);
-      const message = `[auto-fix-debug] schedule enqueue task="${taskId}" status=${task?.status ?? 'missing'} attempts=${task?.execution.autoFixAttempts ?? 'n/a'}`;
-      persistence.logEvent?.(taskId, 'debug.auto-fix', {
-        phase: 'schedule-enqueue',
-        status: task?.status ?? 'missing',
-        autoFixAttempts: task?.execution.autoFixAttempts ?? null,
-      });
-      logger.info(
-        message,
-        { module: 'auto-fix' },
-      );
-    }
+    logAutoFixDebug(taskId, 'schedule-enqueue');
     queuedAutoFixTasks.add(taskId);
     pendingAutoFixTasks.push(taskId);
+    logAutoFixDebug(taskId, 'schedule-enqueued');
     drainAutoFixQueue();
   };
 
@@ -2108,7 +2130,7 @@ if (isHeadless) {
       const shouldAutoFix = shouldAutoFixFromDelta(d, previousSnapshot, {
         wasExplicitRetry: deltaTaskId ? explicitRetryTaskIds.has(deltaTaskId) : false,
       });
-      if (d.type === 'updated' && d.taskId === 'wf-1775932917566-8/run-all-fixture-tests' && d.changes.status === 'failed') {
+      if (d.type === 'updated' && d.changes.status === 'failed') {
         let previousStatus = 'unknown';
         if (previousSnapshot) {
           try {
@@ -2120,17 +2142,11 @@ if (isHeadless) {
         } else {
           previousStatus = 'none';
         }
-        const payload = {
-          phase: 'delta-failed',
+        logAutoFixDebug(d.taskId, 'delta-failed', {
           previousStatus,
           wasExplicitRetry: explicitRetryTaskIds.has(d.taskId),
           shouldAutoFixFromDelta: shouldAutoFix,
-        };
-        persistence.logEvent?.(d.taskId, 'debug.auto-fix', payload);
-        logger.info(
-          `[auto-fix-debug] delta failed task="${d.taskId}" previousStatus=${previousStatus} wasExplicitRetry=${explicitRetryTaskIds.has(d.taskId)} shouldAutoFixFromDelta=${shouldAutoFix}`,
-          { module: 'auto-fix' },
-        );
+        });
       }
 
       applyDelta(d, lastKnownTaskStates, orchestrator);
@@ -2156,6 +2172,7 @@ if (isHeadless) {
       // visible in the UI without kicking off fix work automatically.
       if (shouldAutoFix) {
         if (deltaTaskId) {
+          logAutoFixDebug(deltaTaskId, 'delta-trigger-schedule');
           scheduleAutoFix(deltaTaskId);
         }
       }
