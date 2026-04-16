@@ -11,6 +11,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import type { TaskState } from '../types.js';
+import { getRunningPhaseLabel } from '../lib/colors.js';
 
 interface QueueViewProps {
   tasks: Map<string, TaskState>;
@@ -31,7 +32,7 @@ function displayTaskId(taskId: string): string {
   return slash >= 0 ? taskId.slice(slash + 1) : taskId;
 }
 
-function displayDependencies(taskIds: string[]): string {
+function displayDependencies(taskIds: readonly string[]): string {
   return taskIds.map(displayTaskId).join(', ');
 }
 
@@ -87,6 +88,7 @@ export function QueueView({ tasks, onTaskClick, onCancel, selectedTaskId }: Queu
         </h3>
         {queueStatus?.running.map((job) => {
           const task = tasks.get(job.taskId);
+          const phaseLabel = task?.status === 'running' ? getRunningPhaseLabel(task.execution.phase) : null;
           return (
             <div
               key={job.taskId}
@@ -98,6 +100,9 @@ export function QueueView({ tasks, onTaskClick, onCancel, selectedTaskId }: Queu
               <div className="flex-1 min-w-0">
                 <span className="text-sm font-bold text-gray-100 truncate block">{displayTaskId(job.taskId)}</span>
                 <span className="text-xs text-gray-400 truncate block">{job.description}</span>
+                {phaseLabel && (
+                  <span className="text-xs text-amber-300 truncate block">phase: {phaseLabel}</span>
+                )}
               </div>
               <button
                 onClick={(e) => {

@@ -79,6 +79,7 @@ export interface TaskConfig {
 // ── Task Execution (runtime fields) ────────────────────────
 
 export interface TaskExecution {
+  readonly phase?: 'launching' | 'executing';
   readonly generation?: number;
   readonly blockedBy?: string;
   readonly inputPrompt?: string;
@@ -87,6 +88,8 @@ export interface TaskExecution {
   readonly startedAt?: Date;
   readonly completedAt?: Date;
   readonly lastHeartbeatAt?: Date;
+  readonly launchStartedAt?: Date;
+  readonly launchCompletedAt?: Date;
   readonly actionRequestId?: string;
   readonly branch?: string;
   readonly commit?: string;

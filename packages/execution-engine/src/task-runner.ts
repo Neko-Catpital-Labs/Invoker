@@ -287,6 +287,22 @@ export class TaskRunner {
       }
 
       console.error(`[TaskRunner] executeTask failed for task=${task.id}:`, err);
+      const launchFailedAt = new Date();
+      try {
+        const latest = this.orchestrator.getTask(task.id);
+        if (latest && (latest.status === 'running' || latest.status === 'fixing_with_ai')) {
+          this.persistence.updateTask(task.id, {
+            execution: {
+              phase: latest.execution.phase ?? 'launching',
+              launchStartedAt: latest.execution.launchStartedAt ?? latest.execution.startedAt ?? launchFailedAt,
+              launchCompletedAt: launchFailedAt,
+              lastHeartbeatAt: launchFailedAt,
+            },
+          });
+        }
+      } catch {
+        // best effort; preserve original startup/execution failure flow
+      }
       // Clean up per-task Docker executor on startup/execution failure
       await this.cleanupPerTaskDockerExecutor(task);
       const response: WorkResponse = {

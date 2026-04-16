@@ -27,6 +27,11 @@ describe('formatTaskUpdated', () => {
     expect(msg.blocks[0].text!.text).toContain(':large_blue_circle:');
   });
 
+  it('formats running status with phase context', () => {
+    const msg = formatTaskUpdated('t1', 'running', { phase: 'launching' });
+    expect(msg.blocks[0].text!.text).toContain('Running (launching)');
+  });
+
   it('formats completed status', () => {
     const msg = formatTaskUpdated('t1', 'completed', { summary: 'All tests pass' });
     expect(msg.text).toContain('Completed');
@@ -153,6 +158,16 @@ describe('formatSurfaceEvent', () => {
     const msg = formatSurfaceEvent(event);
     expect(msg).not.toBeNull();
     expect(msg!.text).toContain('Completed');
+  });
+
+  it('routes execution-only phase updates as running status updates', () => {
+    const event: SurfaceEvent = {
+      type: 'task_delta',
+      delta: { type: 'updated', taskId: 't1', changes: { execution: { phase: 'executing' } } as any },
+    };
+    const msg = formatSurfaceEvent(event);
+    expect(msg).not.toBeNull();
+    expect(msg!.blocks[0].text!.text).toContain('Running (executing)');
   });
 
   it('routes workflow_status events', () => {

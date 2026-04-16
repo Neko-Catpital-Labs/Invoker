@@ -82,6 +82,8 @@ export interface ExternalDependency {
 // ── Task Execution (runtime state) ─────────────────────────
 // Never copied when cloning. Reset on restart.
 
+export type TaskRunPhase = 'launching' | 'executing';
+
 export interface TaskExecution {
   readonly generation?: number;
   readonly blockedBy?: string;
@@ -112,6 +114,9 @@ export interface TaskExecution {
   readonly reviewId?: string;
   readonly reviewStatus?: string;
   readonly reviewProviderId?: string;
+  readonly phase?: TaskRunPhase;
+  readonly launchStartedAt?: Date;
+  readonly launchCompletedAt?: Date;
   readonly mergeConflict?: {
     readonly failedBranch: string;
     readonly conflictFiles: readonly string[];

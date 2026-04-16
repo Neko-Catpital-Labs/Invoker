@@ -26,6 +26,20 @@ describe('auto-fix-gating', () => {
     ).toBe(false);
   });
 
+  it('auto-fixes an explicit retry failure even if the cached snapshot is stale', () => {
+    expect(
+      shouldAutoFixFromDelta(
+        {
+          type: 'updated',
+          taskId: 'task-1',
+          changes: { status: 'failed' },
+        },
+        JSON.stringify({ id: 'task-1', status: 'failed' }),
+        { wasExplicitRetry: true },
+      ),
+    ).toBe(true);
+  });
+
   it('auto-fixes a real running to failed transition', () => {
     expect(
       shouldAutoFixFromDelta(
@@ -84,7 +98,7 @@ describe('auto-fix-gating', () => {
     ).toBe(false);
   });
 
-  it('does not auto-fix tasks explicitly suppressed by delegated no-track execution', () => {
+  it('auto-fixes explicit restarted-task failures when they were running before failing', () => {
     expect(
       shouldAutoFixFromDelta(
         {
@@ -96,8 +110,7 @@ describe('auto-fix-gating', () => {
           },
         },
         JSON.stringify({ status: 'running' }),
-        { suppressedTaskIds: new Set(['wf-1/task-1']) },
       ),
-    ).toBe(false);
+    ).toBe(true);
   });
 });

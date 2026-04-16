@@ -436,6 +436,43 @@ describe('headless delegation enforcement', () => {
         expect(runnable[0]?.id).toBe('wf-1/task-1');
       });
 
+      it('headless restart drops runnable tasks from other workflows before deferring execution', async () => {
+        const deferRunnableTasks = vi.fn();
+        const preemptWorkflowExecution = vi.fn(async () => {});
+        mockDeps.orchestrator.getPersistedActiveTaskIds = vi.fn(() => new Set<string>());
+        mockDeps.commandService.retryWorkflow = vi.fn(async () => ({
+          ok: true,
+          data: [
+            {
+              id: 'wf-1/task-1',
+              status: 'running',
+              config: { workflowId: 'wf-1' },
+              execution: {},
+            },
+            {
+              id: 'wf-2/task-2',
+              status: 'running',
+              config: { workflowId: 'wf-2' },
+              execution: {},
+            },
+          ],
+        }));
+
+        const depsWithNoTrack: HeadlessDeps = {
+          ...mockDeps,
+          noTrack: true,
+          deferRunnableTasks,
+          preemptWorkflowExecution,
+        } as HeadlessDeps;
+
+        await runHeadless(['restart', 'wf-1'], depsWithNoTrack);
+
+        expect(deferRunnableTasks).toHaveBeenCalledTimes(1);
+        const [runnable] = deferRunnableTasks.mock.calls[0] ?? [];
+        expect(runnable).toHaveLength(1);
+        expect(runnable[0]?.id).toBe('wf-1/task-1');
+      });
+
       it('headless restart skips preempt when the workflow has no active execution', async () => {
         const preemptWorkflowExecution = vi.fn(async () => {});
         mockDeps.orchestrator.getPersistedActiveTaskIds = vi.fn(() => new Set<string>());

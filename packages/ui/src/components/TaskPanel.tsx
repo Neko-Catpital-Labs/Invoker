@@ -10,7 +10,12 @@
 
 import { useState, useEffect } from 'react';
 import type { TaskState, ExternalDependency, ExternalGatePolicyUpdate, TaskStatus } from '../types.js';
-import { getStatusColor, getEffectiveVisualStatus, formatStatusLabel } from '../lib/colors.js';
+import {
+  getStatusColor,
+  getEffectiveVisualStatus,
+  formatStatusLabel,
+  getRunningPhaseLabel,
+} from '../lib/colors.js';
 import { mergeGatePanelHeading } from '../lib/merge-gate.js';
 
 function formatElapsed(dateVal: Date | string | undefined): string {
@@ -124,6 +129,24 @@ function HeartbeatTimingSection({ task, formatDate: fmtDate }: { task: TaskState
           <span className="text-gray-200">{fmtDate(task.execution.completedAt)}</span>
         </div>
       )}
+      {task.execution.launchStartedAt && (
+        <div className="flex justify-between">
+          <span className="text-gray-400">Launch started</span>
+          <span className="text-gray-200">{fmtDate(task.execution.launchStartedAt)}</span>
+        </div>
+      )}
+      {task.execution.launchCompletedAt && (
+        <div className="flex justify-between">
+          <span className="text-gray-400">Launch completed</span>
+          <span className="text-gray-200">{fmtDate(task.execution.launchCompletedAt)}</span>
+        </div>
+      )}
+      {task.status === 'running' && task.execution.phase && (
+        <div className="flex justify-between">
+          <span className="text-gray-400">Running phase</span>
+          <span className="text-gray-200">{getRunningPhaseLabel(task.execution.phase)}</span>
+        </div>
+      )}
       {task.status === 'running' && task.execution.lastHeartbeatAt && (
         <div className="flex justify-between">
           <span className="text-gray-400">Last heartbeat</span>
@@ -201,6 +224,9 @@ export function TaskPanel({
 
   const visualStatus = getEffectiveVisualStatus(task.status, task.execution);
   const colors = getStatusColor(visualStatus);
+  const phaseLabel = task.status === 'running'
+    ? getRunningPhaseLabel(task.execution.phase)
+    : null;
   const executorSelectValue = effectiveExecutorSelectValue(task);
 
   const mergeGateDisplayTitle = mergeGatePanelHeading(task, mergeMode);
@@ -275,6 +301,8 @@ export function TaskPanel({
             ? ((task.config.autoFixRetries ?? 0) > 0 ? 'AUTO-FIXING' : 'FIXING WITH AI')
             : visualStatus === 'fix_approval'
               ? 'APPROVE FIX'
+              : phaseLabel
+                ? `RUNNING · ${phaseLabel.toUpperCase()}`
               : task.status.toUpperCase().replace('_', ' ')}
         </span>
       </div>

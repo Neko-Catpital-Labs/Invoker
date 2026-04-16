@@ -8,7 +8,11 @@
 
 import { useState, useEffect } from 'react';
 import type { TaskState } from '../types.js';
-import { getStatusInlineColors, getEffectiveVisualStatus } from '../lib/colors.js';
+import {
+  getStatusInlineColors,
+  getEffectiveVisualStatus,
+  getRunningPhaseLabel,
+} from '../lib/colors.js';
 
 // ── Exported helpers (tested independently) ─────────────────
 
@@ -140,6 +144,9 @@ export function TimelineView({ tasks, onTaskClick, selectedTaskId }: TimelineVie
                   : now - new Date(task.execution.startedAt).getTime(),
               )
             : null;
+          const phaseLabel = task.status === 'running'
+            ? getRunningPhaseLabel(task.execution.phase)
+            : null;
 
           return (
             <button
@@ -156,6 +163,11 @@ export function TimelineView({ tasks, onTaskClick, selectedTaskId }: TimelineVie
                 <div className="w-40 shrink-0 truncate text-xs text-gray-300" title={task.description}>
                   {task.id}
                 </div>
+                {phaseLabel && (
+                  <div className="w-20 shrink-0 text-xs text-amber-300 uppercase">
+                    {phaseLabel}
+                  </div>
+                )}
 
                 {/* Bar area */}
                 <div className="flex-1 h-6 relative bg-gray-800 rounded overflow-hidden">
