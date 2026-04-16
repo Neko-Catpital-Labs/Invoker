@@ -78,7 +78,7 @@ test.describe('Headless thundering herd', () => {
     await page.waitForTimeout(500);
 
     const burst = Array.from(workflowIds).map((workflowId) =>
-      runHeadlessClient(testDir, ['restart', workflowId, '--no-track']),
+      runHeadlessClient(testDir, ['retry', workflowId, '--no-track']),
     );
 
     const startedAt = Date.now();
@@ -108,10 +108,10 @@ test.describe('Headless thundering herd', () => {
     ]);
     expect(ownerServe.stdout.trim()).toBe('');
 
-    const restartElectrons = await execFileAsync('bash', [
+    const retryElectrons = await execFileAsync('bash', [
       '-lc',
-      "pgrep -af '[e]lectron/dist/electron .*packages/app/dist/main.js.*--headless restart ' || true",
+      "pgrep -af '[e]lectron/dist/electron .*packages/app/dist/main.js.*--headless retry ' || true",
     ]);
-    expect(restartElectrons.stdout.trim()).toBe('');
+    expect(retryElectrons.stdout.trim()).toBe('');
   });
 });

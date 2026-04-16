@@ -10,13 +10,13 @@ EXPECT="${REPRO_EXPECTATION:-fixed}"
 for arg in "$@"; do
   case "$arg" in
     --mode=recreate) MODE="recreate" ;;
-    --mode=restart-task) MODE="restart-task" ;;
+    --mode=retry-task) MODE="retry-task" ;;
     --mode=both) MODE="both" ;;
     --keep-temp) KEEP_TEMP=true ;;
     --expect-bug) EXPECT="bug" ;;
     --expect-fixed) EXPECT="fixed" ;;
     *)
-      echo "usage: $0 [--mode=recreate|--mode=restart-task|--mode=both] [--expect-bug|--expect-fixed] [--keep-temp]" >&2
+      echo "usage: $0 [--mode=recreate|--mode=retry-task|--mode=both] [--expect-bug|--expect-fixed] [--keep-temp]" >&2
       exit 2
       ;;
   esac
@@ -218,8 +218,8 @@ EOF
         >"$RESET_STDOUT" 2>"$RESET_STDERR" &
       RESET_WRAPPER_PID=$!
       ;;
-    restart-task)
-      HOME="$HOME_DIR" INVOKER_DB_DIR="$DB_DIR" INVOKER_IPC_SOCKET="$IPC_SOCKET_PATH" NODE_ENV=test "$ELECTRON_BIN" "$MAIN_JS" --headless restart "$PREPARE_ID" \
+    retry-task)
+      HOME="$HOME_DIR" INVOKER_DB_DIR="$DB_DIR" INVOKER_IPC_SOCKET="$IPC_SOCKET_PATH" NODE_ENV=test "$ELECTRON_BIN" "$MAIN_JS" --headless retry-task "$PREPARE_ID" \
         >"$RESET_STDOUT" 2>"$RESET_STDERR" &
       RESET_WRAPPER_PID=$!
       ;;
@@ -332,8 +332,8 @@ case "$MODE" in
   recreate)
     run_mode recreate
     ;;
-  restart-task)
-    run_mode restart-task
+  retry-task)
+    run_mode retry-task
     ;;
   both)
     run_mode recreate
@@ -341,6 +341,6 @@ case "$MODE" in
     TMP_DIR=""
     GUI_WRAPPER_PID=""
     GUI_PID=""
-    run_mode restart-task
+    run_mode retry-task
     ;;
 esac
