@@ -659,13 +659,7 @@ export class Orchestrator {
     now: number = Date.now(),
   ): boolean {
     if (attempt && this.isAttemptLeaseActive(attempt, now)) {
-      return task.status === 'running'
-        || task.status === 'fixing_with_ai'
-        || (
-          this.deferRunningUntilLaunch
-          && task.status === 'pending'
-          && task.execution.selectedAttemptId === attempt.id
-        );
+      return task.status === 'running' || task.status === 'fixing_with_ai';
     }
 
     return task.status === 'running' || task.status === 'fixing_with_ai';
@@ -1026,33 +1020,13 @@ export class Orchestrator {
       }
       if (earlyTask) {
         const executableStatuses = new Set(['running', 'fixing_with_ai']);
-        const allowPendingStartupFailure =
-          this.deferRunningUntilLaunch &&
-          earlyTask.status === 'pending' &&
-          response.status === 'failed' &&
-          !!response.attemptId &&
-          response.attemptId === earlyTask.execution.selectedAttemptId;
-        if (!executableStatuses.has(earlyTask.status) && !allowPendingStartupFailure) {
+        if (!executableStatuses.has(earlyTask.status)) {
           console.warn(
             `[orchestrator] handleWorkerResponse: ignoring "${response.status}" for non-executable ` +
               `task "${response.actionId}" (status=${earlyTask.status})`,
           );
           return [];
         }
-      }
-    }
-
-    // Auto-fix interception
-    if (response.status === 'failed') {
-      const task = this.stateGetTask(response.actionId);
-      const maxAutoFixRetries = task ? this.getAutoFixRetryBudget(task.id) : 0;
-      const canAutoFixFailure =
-        !!task &&
-        maxAutoFixRetries > 0 &&
-        (task.execution.autoFixAttempts ?? 0) < maxAutoFixRetries;
-      if (canAutoFixFailure) {
-        const syntheticResponse = this.buildAutoFixResponse(task, response.outputs);
-        return this.handleWorkerResponse(syntheticResponse);
       }
     }
 
@@ -1642,15 +1616,49 @@ export class Orchestrator {
     };
 
     const retryRootIds = allTasks
+      .filter((task) => !this.isLegacyAutoFixExperimentTask(task))
       .filter((task) => retryStatuses.has(task.status))
       .map((task) => task.id);
     const { affectedIds } = this.resetSubgraphToPending(retryRootIds, resetChanges);
+    const legacyAutoFixParentIds = new Set(
+      allTasks
+        .filter((task) => this.isLegacyAutoFixExperimentTask(task))
+        .map((task) => task.config.parentTask)
+        .filter((parentTask): parentTask is string => typeof parentTask === 'string' && parentTask.length > 0),
+    );
+    const suppressedLegacyIds: string[] = [];
+    const legacyStaleChanges: TaskStateChanges = {
+      status: 'stale',
+      execution: {
+        error: 'Skipped legacy auto-fix branch during retry',
+        completedAt: new Date(),
+        pendingFixError: undefined,
+        isFixingWithAI: false,
+      },
+    };
+    for (const id of affectedIds) {
+      const task = this.stateGetTask(id);
+      if (!task) continue;
+      const parentTask = task.config.parentTask;
+      if (!parentTask || !legacyAutoFixParentIds.has(parentTask)) continue;
+      if (!task.id.includes('-exp-fix-') && !task.config.isReconciliation) continue;
+      if (task.status === 'stale') continue;
+      this.writeAndSync(id, legacyStaleChanges);
+      this.persistence.logEvent?.(id, 'task.stale', legacyStaleChanges);
+      this.messageBus.publish(TASK_DELTA_CHANNEL, { type: 'updated', taskId: id, changes: legacyStaleChanges });
+      suppressedLegacyIds.push(id);
+    }
     const afterResetMs = Date.now();
 
     console.log(
       `[orchestrator] retryWorkflow invalidation: workflow=${workflowId} ` +
       `roots=[${retryRootIds.join(', ')}] affected=${affectedIds.length}`,
     );
+    if (suppressedLegacyIds.length > 0) {
+      console.log(
+        `[orchestrator] retryWorkflow: suppressed ${suppressedLegacyIds.length} legacy auto-fix task(s) for ${workflowId}: ${suppressedLegacyIds.join(', ')}`,
+      );
+    }
 
     console.log(
       `[orchestrator] retryWorkflow: reset ${affectedIds.length}/${allTasks.length} tasks for ${workflowId} ` +
@@ -1660,7 +1668,12 @@ export class Orchestrator {
     const readyIds = this.stateMachine
       .getReadyTasks()
       .map((t) => t.id)
-      .filter((id) => this.stateGetTask(id)?.config.workflowId === workflowId);
+      .filter((id) => {
+        const task = this.stateGetTask(id);
+        return !!task
+          && task.config.workflowId === workflowId
+          && !this.isLegacyAutoFixExperimentTask(task);
+      });
     const started = this.autoStartReadyTasks(readyIds, Orchestrator.EXPEDITED_PRIORITY);
     const retryEndMs = Date.now();
     console.log(
@@ -2337,10 +2350,21 @@ export class Orchestrator {
     return this.defaultAutoFixRetries;
   }
 
+  private isRuntimeAutoFixEligibleTask(task: TaskState): boolean {
+    if (task.config.isReconciliation) return false;
+    if (task.config.parentTask) return false;
+    return true;
+  }
+
+  private isLegacyAutoFixExperimentTask(task: TaskState): boolean {
+    return !!task.config.parentTask && task.id.includes('-exp-fix-');
+  }
+
   shouldAutoFix(taskId: string): boolean {
     const task = this.stateGetTask(taskId);
     if (!task) return false;
     if (task.status !== 'failed') return false;
+    if (!this.isRuntimeAutoFixEligibleTask(task)) return false;
     const max = this.getAutoFixRetryBudget(taskId);
     if (max <= 0) return false;
     return (task.execution.autoFixAttempts ?? 0) < max;
@@ -2931,42 +2955,6 @@ export class Orchestrator {
     }
   }
 
-  private buildAutoFixResponse(task: TaskState, outputs: WorkResponse['outputs']): WorkResponse {
-    const errorMsg = outputs.error ?? `Task failed with exit code ${outputs.exitCode ?? 1}`;
-
-    const variants = [
-      {
-        id: 'fix-conservative',
-        description: 'Conservative fix: minimal change to fix the error',
-        prompt: `The following task failed. Apply the MINIMAL change needed to fix this specific error.\n\nOriginal task: ${task.description}\nOriginal prompt: ${task.config.prompt ?? task.config.command ?? 'N/A'}\nError: ${errorMsg}\n\nFix the error with the smallest possible change. Do not refactor or restructure.`,
-      },
-      {
-        id: 'fix-refactor',
-        description: 'Refactor fix: restructure to avoid the error',
-        prompt: `The following task failed. Restructure the approach to avoid this class of error entirely.\n\nOriginal task: ${task.description}\nOriginal prompt: ${task.config.prompt ?? task.config.command ?? 'N/A'}\nError: ${errorMsg}\n\nRefactor the code to fix the error and prevent similar issues.`,
-      },
-      {
-        id: 'fix-alternative',
-        description: 'Alternative fix: try a completely different approach',
-        prompt: `The following task failed. Try a COMPLETELY DIFFERENT implementation approach.\n\nOriginal task: ${task.description}\nOriginal prompt: ${task.config.prompt ?? task.config.command ?? 'N/A'}\nError: ${errorMsg}\n\nIgnore the previous approach and implement this from scratch using a different strategy.`,
-      },
-    ];
-
-    return {
-      requestId: `autofix-${task.id}`,
-      actionId: task.id,
-      executionGeneration: this.getExecutionGeneration(task),
-      status: 'spawn_experiments',
-      outputs: { exitCode: 0 },
-      dagMutation: {
-        spawnExperiments: {
-          description: `Auto-fix experiments for failed task: ${task.description}`,
-          variants,
-        },
-      },
-    };
-  }
-
   private checkWorkflowCompletion(): void {
     for (const wfId of this.activeWorkflowIds) {
       this.syncWorkflowStatus(wfId);
@@ -3156,73 +3144,68 @@ export class Orchestrator {
         } catch { /* best effort */ }
       }
 
-      if (this.deferRunningUntilLaunch) {
-        try {
-          this.taskRepository.updateAttempt(attemptId, {
-            status: 'claimed',
-            claimedAt: now,
-            lastHeartbeatAt: now,
-            leaseExpiresAt: nextLeaseExpiry(now),
-          });
-        } catch { /* best effort */ }
-        // Keep persisted status as pending until executor.start() confirms launch.
-        started.push({
-          ...task,
-          status: 'running',
-          execution: {
-            ...task.execution,
-            selectedAttemptId: attemptId,
-            generation: this.getExecutionGeneration(task),
-            startedAt: now,
-            lastHeartbeatAt: now,
-          },
-        });
-      } else {
-        const changes: TaskStateChanges = {
-          status: 'running',
-          execution: {
-            selectedAttemptId: attemptId,
-            generation: this.getExecutionGeneration(task),
-            startedAt: now,
-            lastHeartbeatAt: now,
-          },
-        };
-        const updated = this.writeAndSync(job.taskId, changes);
-        this.persistence.logEvent?.(job.taskId, 'task.running', changes);
-        this.messageBus.publish(TASK_DELTA_CHANNEL, {
-          type: 'updated',
-          taskId: job.taskId,
-          changes,
-        });
-        started.push(updated);
+      const changes: TaskStateChanges = {
+        status: 'running',
+        execution: {
+          selectedAttemptId: attemptId,
+          generation: this.getExecutionGeneration(task),
+          startedAt: now,
+          lastHeartbeatAt: now,
+          phase: 'launching',
+          launchStartedAt: now,
+          launchCompletedAt: undefined,
+        },
+      };
+      const updated = this.writeAndSync(job.taskId, changes);
+      this.persistence.logEvent?.(job.taskId, 'task.running', changes);
+      this.messageBus.publish(TASK_DELTA_CHANNEL, {
+        type: 'updated',
+        taskId: job.taskId,
+        changes,
+      });
+      started.push(updated);
 
-        try {
-          const existingAttempt = this.persistence.loadAttempt(attemptId);
-          if (existingAttempt) {
-            this.taskRepository.updateAttempt(attemptId, {
-              status: 'running',
-              claimedAt: existingAttempt.claimedAt ?? now,
-              startedAt: now,
-              lastHeartbeatAt: now,
-              leaseExpiresAt: nextLeaseExpiry(now),
-            });
-          } else {
-            const upstreamAttemptIds = task.dependencies
-              .map(depId => this.stateGetTask(depId)?.execution.selectedAttemptId)
-              .filter((id): id is string => !!id);
-            const attempt = createAttempt(job.taskId, {
-              status: 'running',
-              claimedAt: now,
-              startedAt: now,
-              lastHeartbeatAt: now,
-              leaseExpiresAt: nextLeaseExpiry(now),
-              upstreamAttemptIds,
-            });
-            this.taskRepository.saveAttempt(attempt);
-            this.writeAndSync(job.taskId, { execution: { selectedAttemptId: attempt.id } });
-          }
-        } catch { /* best effort — never break existing flow */ }
-      }
+      try {
+        const existingAttempt = this.persistence.loadAttempt(attemptId);
+        if (existingAttempt) {
+          this.taskRepository.updateAttempt(attemptId, this.deferRunningUntilLaunch
+            ? {
+                status: 'claimed',
+                claimedAt: now,
+                lastHeartbeatAt: now,
+                leaseExpiresAt: nextLeaseExpiry(now),
+              }
+            : {
+                status: 'running',
+                claimedAt: existingAttempt.claimedAt ?? now,
+                startedAt: now,
+                lastHeartbeatAt: now,
+                leaseExpiresAt: nextLeaseExpiry(now),
+              });
+        } else {
+          const upstreamAttemptIds = task.dependencies
+            .map(depId => this.stateGetTask(depId)?.execution.selectedAttemptId)
+            .filter((id): id is string => !!id);
+          const attempt = createAttempt(job.taskId, this.deferRunningUntilLaunch
+            ? {
+                status: 'claimed',
+                claimedAt: now,
+                lastHeartbeatAt: now,
+                leaseExpiresAt: nextLeaseExpiry(now),
+                upstreamAttemptIds,
+              }
+            : {
+                status: 'running',
+                claimedAt: now,
+                startedAt: now,
+                lastHeartbeatAt: now,
+                leaseExpiresAt: nextLeaseExpiry(now),
+                upstreamAttemptIds,
+              });
+          this.taskRepository.saveAttempt(attempt);
+          this.writeAndSync(job.taskId, { execution: { selectedAttemptId: attempt.id } });
+        }
+      } catch { /* best effort — never break existing flow */ }
 
       availableSlots -= 1;
       job = availableSlots > 0 ? this.scheduler.takeNext() : null;
@@ -3231,15 +3214,12 @@ export class Orchestrator {
   }
 
   /**
-   * Transition a dequeued task from pending -> running only after executor
-   * startup has succeeded for the selected attempt.
+   * Mark task launch as fully executing after executor.start() succeeds.
    *
    * Returns false when the attempt is stale or no longer executable; caller
    * should abort the launched process in that case.
    */
   markTaskRunningAfterLaunch(taskId: string, attemptId: string, launchedAt: Date = new Date()): boolean {
-    if (!this.deferRunningUntilLaunch) return true;
-
     this.refreshFromDb();
     const task = this.stateGetTask(taskId);
     if (!task) {
@@ -3253,32 +3233,38 @@ export class Orchestrator {
       return false;
     }
 
-    if (task.status === 'running' || task.status === 'fixing_with_ai') {
-      return true;
-    }
-
-    if (task.status !== 'pending') {
+    if (task.status !== 'running' && task.status !== 'pending' && task.status !== 'fixing_with_ai') {
       this.clearQueuedSchedulerEntries(taskId, attemptId);
       return false;
     }
 
-    const changes: TaskStateChanges = {
-      status: 'running',
-      execution: {
+    if (task.status !== 'fixing_with_ai') {
+      const baseExecution: TaskStateChanges['execution'] = {
         selectedAttemptId: attemptId,
-        startedAt: launchedAt,
         lastHeartbeatAt: launchedAt,
-        generation: this.getExecutionGeneration(task),
-      },
-    };
+        phase: 'executing',
+        launchStartedAt: task.execution.launchStartedAt ?? task.execution.startedAt ?? launchedAt,
+        launchCompletedAt: launchedAt,
+      };
+      const changes: TaskStateChanges = task.status === 'pending'
+        ? {
+            status: 'running',
+            execution: {
+              ...baseExecution,
+              startedAt: launchedAt,
+              generation: this.getExecutionGeneration(task),
+            },
+          }
+        : { execution: baseExecution };
 
-    this.writeAndSync(taskId, changes);
-    this.persistence.logEvent?.(taskId, 'task.running', changes);
-    this.messageBus.publish(TASK_DELTA_CHANNEL, {
-      type: 'updated',
-      taskId,
-      changes,
-    });
+      this.writeAndSync(taskId, changes);
+      this.persistence.logEvent?.(taskId, 'task.running', changes);
+      this.messageBus.publish(TASK_DELTA_CHANNEL, {
+        type: 'updated',
+        taskId,
+        changes,
+      });
+    }
 
     try {
       const existingAttempt = this.persistence.loadAttempt(attemptId);

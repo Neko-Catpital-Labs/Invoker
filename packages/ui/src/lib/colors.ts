@@ -26,6 +26,18 @@ const STATUS_COLOR_MAP: Record<string, StatusColors> = {
     text: 'text-slate-100',
     dot: 'bg-blue-400',
   },
+  running_launching: {
+    bg: 'bg-slate-800/95',
+    border: 'border-amber-400/30',
+    text: 'text-slate-100',
+    dot: 'bg-amber-400',
+  },
+  running_executing: {
+    bg: 'bg-slate-800/95',
+    border: 'border-sky-400/30',
+    text: 'text-slate-100',
+    dot: 'bg-sky-400',
+  },
   fixing_with_ai: {
     bg: 'bg-orange-900/35',
     border: 'border-orange-400/25',
@@ -109,6 +121,8 @@ export function getStatusInlineColors(status: string): {
   const map: Record<string, { bg: string; border: string; text: string }> = {
     pending: { bg: '#4b5563', border: '#3f4859', text: '#f8fafc' },
     running: { bg: '#60a5fa', border: '#2f5f8f', text: '#ecfeff' },
+    running_launching: { bg: '#fbbf24', border: '#a16207', text: '#fffbeb' },
+    running_executing: { bg: '#38bdf8', border: '#0369a1', text: '#ecfeff' },
     completed: { bg: '#22c55e', border: '#1f7a45', text: '#ecfeff' },
     failed: { bg: '#f87171', border: '#ef4444', text: '#fee2e2' },
     blocked: { bg: '#64748b', border: '#475569', text: '#e2e8f0' },
@@ -127,11 +141,22 @@ export function getStatusInlineColors(status: string): {
  * Returns the visual status key for color lookups, accounting for
  * AI-fix and fix-approval substates.
  */
-export function getEffectiveVisualStatus(status: string, execution?: { isFixingWithAI?: boolean; pendingFixError?: string }): string {
+export function getEffectiveVisualStatus(
+  status: string,
+  execution?: { isFixingWithAI?: boolean; pendingFixError?: string; phase?: string },
+): string {
   if (status === 'fixing_with_ai') return 'fixing_with_ai';
   if (status === 'running' && execution?.isFixingWithAI) return 'fixing_with_ai';
+  if (status === 'running' && execution?.phase === 'launching') return 'running_launching';
+  if (status === 'running' && execution?.phase === 'executing') return 'running_executing';
   if (status === 'awaiting_approval' && execution?.pendingFixError) return 'fix_approval';
   return status;
+}
+
+export function getRunningPhaseLabel(phase?: string): string | null {
+  if (phase === 'launching') return 'Launching';
+  if (phase === 'executing') return 'Executing';
+  return null;
 }
 
 /** Edge styling per status — stroke width, dash pattern, and hover color. */

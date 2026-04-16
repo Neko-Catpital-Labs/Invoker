@@ -70,10 +70,15 @@ export function formatTaskCreated(taskId: string, description: string): SlackMes
   };
 }
 
-export function formatTaskUpdated(taskId: string, status: string, extra?: { error?: string; summary?: string; inputPrompt?: string }): SlackMessage {
+export function formatTaskUpdated(
+  taskId: string,
+  status: string,
+  extra?: { error?: string; summary?: string; inputPrompt?: string; phase?: string },
+): SlackMessage {
   const emoji = statusEmoji(status);
   const label = statusLabel(status);
-  let text = `${emoji} *${taskId}*\n_Status: ${label}_`;
+  const phaseSuffix = status === 'running' && extra?.phase ? ` (${extra.phase})` : '';
+  let text = `${emoji} *${taskId}*\n_Status: ${label}${phaseSuffix}_`;
 
   if (extra?.error) {
     text += `\n> :warning: ${extra.error}`;
@@ -219,10 +224,17 @@ export function formatSurfaceEvent(event: SurfaceEvent): SlackMessage | null {
         return formatTaskCreated(delta.task.id, delta.task.description);
       }
       if (delta.type === 'updated') {
-        return formatTaskUpdated(delta.taskId, delta.changes.status as string, {
+        const status =
+          (delta.changes.status as string | undefined)
+          ?? (delta.changes.execution?.phase ? 'running' : undefined);
+        if (!status) {
+          return null;
+        }
+        return formatTaskUpdated(delta.taskId, status, {
           error: delta.changes.execution?.error as string | undefined,
           summary: delta.changes.config?.summary as string | undefined,
           inputPrompt: delta.changes.execution?.inputPrompt as string | undefined,
+          phase: delta.changes.execution?.phase as string | undefined,
         });
       }
       return null;

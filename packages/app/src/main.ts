@@ -785,7 +785,7 @@ if (isHeadless) {
   const autoFixInProgress = new Set<string>();
   const pendingAutoFixTasks: string[] = [];
   const queuedAutoFixTasks = new Set<string>();
-  const suppressedAutoFixTasks = new Set<string>();
+  const explicitRetryTaskIds = new Set<string>();
   const deferredWorkflowLaunches = new Map<string, { timer: ReturnType<typeof setTimeout>; taskIds: string[] }>();
   const pendingOutputBuffers = new Map<string, string[]>();
   const outputFlushTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -846,25 +846,6 @@ if (isHeadless) {
     startupMarks: Object.fromEntries(startupMarks.entries()),
     ts: new Date().toISOString(),
   });
-
-  const clearAutoFixSuppressionIfTerminal = (taskId: string, status?: TaskState['status']): void => {
-    if (!status || !suppressedAutoFixTasks.has(taskId)) {
-      return;
-    }
-    switch (status) {
-      case 'completed':
-      case 'failed':
-      case 'awaiting_approval':
-      case 'review_ready':
-      case 'needs_input':
-      case 'stale':
-      case 'blocked':
-        suppressedAutoFixTasks.delete(taskId);
-        break;
-      default:
-        break;
-    }
-  };
 
   const flushTaskOutput = (taskId: string): void => {
     const timer = outputFlushTimers.get(taskId);
@@ -1221,40 +1202,55 @@ if (isHeadless) {
       preemptTaskSubgraph: (taskId: string) => preemptTaskSubgraph(taskId),
       preemptWorkflowExecution: (workflowId: string) => preemptWorkflowExecution(workflowId),
       deferRunnableTasks: (tasks: TaskState[], workflowId?: string) => {
+        const filteredTasks = workflowId
+          ? tasks.filter((task) => task.config.workflowId === workflowId)
+          : tasks;
+        const droppedTasks = workflowId
+          ? tasks.filter((task) => task.config.workflowId !== workflowId)
+          : [];
+        if (droppedTasks.length > 0) {
+          logger.error(
+            `deferRunnableTasks dropped cross-workflow runnable tasks for workflow="${workflowId}": ${droppedTasks.map((task) => `${task.id}(${task.config.workflowId ?? 'unknown'})`).join(', ')}`,
+            { module: 'ipc-delegate' },
+          );
+        }
+        if (filteredTasks.length === 0) {
+          return;
+        }
         const deferDelayMs = Number.parseInt(process.env.INVOKER_DEFER_RUNNABLE_DELAY_MS ?? '25', 10) || 25;
-        const launchKey = workflowId ?? tasks.map((task) => task.id).sort().join('|');
+        const launchKey = workflowId ?? filteredTasks.map((task) => task.id).sort().join('|');
         const existingLaunch = deferredWorkflowLaunches.get(launchKey);
         if (existingLaunch) {
           clearTimeout(existingLaunch.timer);
           logger.info(
-            `deferRunnableTasks coalesce workflow="${workflowId ?? 'unknown'}" previousCount=${existingLaunch.taskIds.length} nextCount=${tasks.length}`,
+            `deferRunnableTasks coalesce workflow="${workflowId ?? 'unknown'}" previousCount=${existingLaunch.taskIds.length} nextCount=${filteredTasks.length}`,
             { module: 'ipc-delegate' },
           );
         }
         logger.info(
-          `deferRunnableTasks schedule workflow="${workflowId ?? 'unknown'}" count=${tasks.length} delayMs=${deferDelayMs} ids=${tasks.map((task) => task.id).join(',')}`,
+          `deferRunnableTasks schedule workflow="${workflowId ?? 'unknown'}" count=${filteredTasks.length} delayMs=${deferDelayMs} ids=${filteredTasks.map((task) => task.id).join(',')}`,
           { module: 'ipc-delegate' },
         );
         const launch = setTimeout(() => {
           deferredWorkflowLaunches.delete(launchKey);
           logger.info(
-            `deferRunnableTasks start workflow="${workflowId ?? 'unknown'}" count=${tasks.length}`,
+            `deferRunnableTasks start workflow="${workflowId ?? 'unknown'}" count=${filteredTasks.length}`,
             { module: 'ipc-delegate' },
           );
-          for (const task of tasks) {
-            suppressedAutoFixTasks.add(task.id);
+          for (const task of filteredTasks) {
+            explicitRetryTaskIds.add(task.id);
           }
           remoteFetchForPool.enabled = false;
-          void requireTaskExecutor().executeTasks(tasks)
+          void requireTaskExecutor().executeTasks(filteredTasks)
             .then(() => {
               logger.info(
-                `deferRunnableTasks complete workflow="${workflowId ?? 'unknown'}" count=${tasks.length}`,
+                `deferRunnableTasks complete workflow="${workflowId ?? 'unknown'}" count=${filteredTasks.length}`,
                 { module: 'ipc-delegate' },
               );
             })
             .catch((err) => {
               logger.error(
-                `background delegated workflow execution failed for ${workflowId ?? tasks.map((t) => t.id).join(', ')}: ${err instanceof Error ? err.stack ?? err.message : String(err)}`,
+                `background delegated workflow execution failed for ${workflowId ?? filteredTasks.map((t) => t.id).join(', ')}: ${err instanceof Error ? err.stack ?? err.message : String(err)}`,
                 { module: 'ipc-delegate' },
               );
             })
@@ -1263,7 +1259,7 @@ if (isHeadless) {
             });
         }, deferDelayMs);
         launch.unref?.();
-        deferredWorkflowLaunches.set(launchKey, { timer: launch, taskIds: tasks.map((task) => task.id) });
+        deferredWorkflowLaunches.set(launchKey, { timer: launch, taskIds: filteredTasks.map((task) => task.id) });
       },
       executionAgentRegistry: registerBuiltinAgents(),
     });
@@ -1962,14 +1958,25 @@ if (isHeadless) {
         ? lastKnownTaskStates.get(d.taskId)
         : undefined;
       const shouldAutoFix = shouldAutoFixFromDelta(d, previousSnapshot, {
-        suppressedTaskIds: suppressedAutoFixTasks,
+        wasExplicitRetry: explicitRetryTaskIds.has(d.taskId),
       });
 
       applyDelta(d, lastKnownTaskStates, orchestrator);
       if (d.type === 'updated') {
-        clearAutoFixSuppressionIfTerminal(d.taskId, d.changes.status);
+        const nextStatus = d.changes.status;
+        if (
+          nextStatus === 'completed'
+          || nextStatus === 'failed'
+          || nextStatus === 'awaiting_approval'
+          || nextStatus === 'review_ready'
+          || nextStatus === 'needs_input'
+          || nextStatus === 'stale'
+          || nextStatus === 'blocked'
+        ) {
+          explicitRetryTaskIds.delete(d.taskId);
+        }
       } else if (d.type === 'removed') {
-        suppressedAutoFixTasks.delete(d.taskId);
+        explicitRetryTaskIds.delete(d.taskId);
       }
 
       // Auto-fix: only runtime failures that transitioned out of an active state

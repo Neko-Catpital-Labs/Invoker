@@ -62,7 +62,10 @@ export function formatTaskStatus(task: TaskState): string {
   const color = isFixing ? MAGENTA : isFixApproval ? YELLOW : (STATUS_COLORS[task.status] ?? RESET);
   const icon = isFixing ? '🔧' : isFixApproval ? '🔧' : (STATUS_ICONS[task.status] ?? '?');
   const label = isFixing ? 'fixing_with_ai' : isFixApproval ? 'fix_approval' : task.status;
-  return `${color}  ${icon} ${BOLD}${task.id}${RESET}${color} — ${task.description} [${label}]${RESET}`;
+  const phaseSuffix = task.status === 'running' && task.execution.phase
+    ? ` (phase=${task.execution.phase})`
+    : '';
+  return `${color}  ${icon} ${BOLD}${task.id}${RESET}${color} — ${task.description} [${label}]${phaseSuffix}${RESET}`;
 }
 
 /**
@@ -245,8 +248,12 @@ export function serializeTask(task: TaskState): Record<string, unknown> {
   if (task.execution.lastAgentSessionId != null) execution.lastAgentSessionId = task.execution.lastAgentSessionId;
   if (task.execution.agentName != null) execution.agentName = task.execution.agentName;
   if (task.execution.lastAgentName != null) execution.lastAgentName = task.execution.lastAgentName;
+  if (task.execution.phase != null) execution.phase = task.execution.phase;
   if (task.execution.startedAt != null) execution.startedAt = task.execution.startedAt instanceof Date ? task.execution.startedAt.toISOString() : task.execution.startedAt;
   if (task.execution.completedAt != null) execution.completedAt = task.execution.completedAt instanceof Date ? task.execution.completedAt.toISOString() : task.execution.completedAt;
+  if (task.execution.launchStartedAt != null) execution.launchStartedAt = task.execution.launchStartedAt instanceof Date ? task.execution.launchStartedAt.toISOString() : task.execution.launchStartedAt;
+  if (task.execution.launchCompletedAt != null) execution.launchCompletedAt = task.execution.launchCompletedAt instanceof Date ? task.execution.launchCompletedAt.toISOString() : task.execution.launchCompletedAt;
+  if (task.execution.lastHeartbeatAt != null) execution.lastHeartbeatAt = task.execution.lastHeartbeatAt instanceof Date ? task.execution.lastHeartbeatAt.toISOString() : task.execution.lastHeartbeatAt;
 
   return {
     id: task.id,

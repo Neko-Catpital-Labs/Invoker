@@ -12,7 +12,7 @@
 
 import { Handle, Position } from '@xyflow/react';
 import type { TaskState } from '../types.js';
-import { getStatusColor, getEffectiveVisualStatus } from '../lib/colors.js';
+import { getStatusColor, getEffectiveVisualStatus, getRunningPhaseLabel } from '../lib/colors.js';
 
 interface TaskNodeData {
   task: TaskState;
@@ -41,6 +41,8 @@ export function TaskNode({ data }: TaskNodeProps) {
       ? 'FIXING WITH AI'
       : visualStatus === 'fix_approval'
         ? 'APPROVE FIX'
+        : task.status === 'running' && task.execution.phase
+          ? `RUNNING · ${(getRunningPhaseLabel(task.execution.phase) ?? task.execution.phase).toUpperCase()}`
         : task.status === 'awaiting_approval'
           ? 'APPROVE'
           : task.config.isReconciliation && task.status === 'needs_input'

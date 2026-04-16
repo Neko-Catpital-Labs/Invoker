@@ -15,12 +15,9 @@ function parseSnapshotStatus(snapshot?: string): TaskStatus | undefined {
 export function shouldAutoFixFromDelta(
   delta: TaskDelta,
   previousSnapshot?: string,
-  options?: { suppressedTaskIds?: ReadonlySet<string> },
+  options?: { wasExplicitRetry?: boolean },
 ): boolean {
   if (delta.type !== 'updated' || delta.changes.status !== 'failed') {
-    return false;
-  }
-  if (options?.suppressedTaskIds?.has(delta.taskId)) {
     return false;
   }
   const errorText = delta.changes.execution?.error;
@@ -31,6 +28,9 @@ export function shouldAutoFixFromDelta(
     ) {
       return false;
     }
+  }
+  if (options?.wasExplicitRetry) {
+    return true;
   }
   const previousStatus = parseSnapshotStatus(previousSnapshot);
   return previousStatus === 'running' || previousStatus === 'fixing_with_ai';

@@ -1123,7 +1123,18 @@ async function headlessRetryWorkflow(workflowId: string, deps: HeadlessDeps): Pr
   const envelope = makeEnvelope('retry-workflow', 'headless', 'workflow', { workflowId });
   const result = await deps.commandService.retryWorkflow(envelope);
   if (!result.ok) throw new Error(result.error.message);
-  const runnable = result.data.filter(t => t.status === 'running');
+  const runnable = result.data.filter(
+    (t) => t.status === 'running' && t.config.workflowId === workflowId,
+  );
+  const dropped = result.data.filter(
+    (t) => t.status === 'running' && t.config.workflowId !== workflowId,
+  );
+  if (dropped.length > 0) {
+    deps.logger.error(
+      `headlessRetryWorkflow dropped cross-workflow runnable tasks for "${workflowId}": ${dropped.map((task) => `${task.id}(${task.config.workflowId ?? 'unknown'})`).join(', ')}`,
+      { module: 'headless' },
+    );
+  }
   deps.logger.info(`headlessRetryWorkflow retry complete workflow="${workflowId}" runnable=${runnable.length}`, {
     module: 'headless',
   });

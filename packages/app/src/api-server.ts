@@ -100,7 +100,13 @@ function serializeTask(task: any): any {
   if (obj.createdAt instanceof Date) obj.createdAt = obj.createdAt.toISOString();
   if (obj.execution) {
     obj.execution = { ...obj.execution };
-    for (const key of ['startedAt', 'completedAt', 'lastHeartbeatAt']) {
+    for (const key of [
+      'startedAt',
+      'completedAt',
+      'lastHeartbeatAt',
+      'launchStartedAt',
+      'launchCompletedAt',
+    ]) {
       if (obj.execution[key] instanceof Date) obj.execution[key] = obj.execution[key].toISOString();
     }
   }

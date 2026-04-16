@@ -297,6 +297,9 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
         -- Timestamps
         created_at TEXT DEFAULT (datetime('now')),
+        launch_phase TEXT,
+        launch_started_at TEXT,
+        launch_completed_at TEXT,
         started_at TEXT,
         completed_at TEXT,
         execution_generation INTEGER DEFAULT 0,
@@ -491,6 +494,9 @@ export class SQLiteAdapter implements PersistenceAdapter {
       'ALTER TABLE tasks ADD COLUMN external_dependencies TEXT',
       'ALTER TABLE tasks ADD COLUMN executor_type TEXT',
       'ALTER TABLE tasks ADD COLUMN auto_fix_attempts INTEGER DEFAULT 0',
+      'ALTER TABLE tasks ADD COLUMN launch_phase TEXT',
+      'ALTER TABLE tasks ADD COLUMN launch_started_at TEXT',
+      'ALTER TABLE tasks ADD COLUMN launch_completed_at TEXT',
       'ALTER TABLE attempts ADD COLUMN queue_priority INTEGER NOT NULL DEFAULT 0',
       'ALTER TABLE attempts ADD COLUMN claimed_at TEXT',
       'ALTER TABLE attempts ADD COLUMN lease_expires_at TEXT',
@@ -656,7 +662,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         executor_type, agent_session_id, workspace_path, container_id,
         last_agent_session_id, last_agent_name,
         action_request_id, experiments,
-        created_at, started_at, completed_at, last_heartbeat_at,
+        created_at, launch_phase, launch_started_at, launch_completed_at, started_at, completed_at, last_heartbeat_at,
         utilization, pending_fix_error,
         review_url, review_id, review_status, review_provider_id,
         is_fixing_with_ai,
@@ -673,7 +679,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         ?, ?, ?,
         ?, ?,
         ?, ?, ?,
-        ?, ?, ?, ?,
+        ?, ?, ?, ?, ?, ?, ?,
         ?, ?,
         ?, ?,
         ?, ?, ?, ?,
@@ -714,6 +720,9 @@ export class SQLiteAdapter implements PersistenceAdapter {
       exec.actionRequestId ?? null,
       exec.experiments ? JSON.stringify(exec.experiments) : null,
       task.createdAt.toISOString(),
+      exec.phase ?? null,
+      exec.launchStartedAt?.toISOString() ?? null,
+      exec.launchCompletedAt?.toISOString() ?? null,
       exec.startedAt?.toISOString() ?? null,
       exec.completedAt?.toISOString() ?? null,
       exec.lastHeartbeatAt?.toISOString() ?? null,
@@ -811,6 +820,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         reviewId: 'review_id',
         reviewStatus: 'review_status',
         reviewProviderId: 'review_provider_id',
+        phase: 'launch_phase',
         generation: 'execution_generation',
         selectedAttemptId: 'selected_attempt_id',
         agentName: 'agent_name',
@@ -821,6 +831,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
         startedAt: 'started_at',
         completedAt: 'completed_at',
         lastHeartbeatAt: 'last_heartbeat_at',
+        launchStartedAt: 'launch_started_at',
+        launchCompletedAt: 'launch_completed_at',
       };
       const execJsonFields: Record<string, string> = {
         experiments: 'experiments',
@@ -1399,8 +1411,10 @@ export class SQLiteAdapter implements PersistenceAdapter {
         [taskId],
       ) as { id: string; status: string } | undefined;
 
-      // If there's a running attempt, update it with the failure details
-      if (row && row.status === 'running') {
+      // If there's an active attempt, update it with the failure details.
+      // Claimed is included because launch-time failures can happen before
+      // the attempt reaches persisted running state.
+      if (row && (row.status === 'running' || row.status === 'claimed')) {
         this.updateAttempt(row.id, attemptPatch);
       }
     });
@@ -1531,6 +1545,9 @@ export class SQLiteAdapter implements PersistenceAdapter {
         reviewId: row.review_id ?? undefined,
         reviewStatus: row.review_status ?? undefined,
         reviewProviderId: row.review_provider_id ?? undefined,
+        phase: row.launch_phase ?? undefined,
+        launchStartedAt: row.launch_started_at ? new Date(row.launch_started_at) : undefined,
+        launchCompletedAt: row.launch_completed_at ? new Date(row.launch_completed_at) : undefined,
         generation: row.execution_generation ?? 0,
         selectedAttemptId: row.selected_attempt_id ?? undefined,
         autoFixAttempts: row.auto_fix_attempts ?? undefined,

@@ -2252,7 +2252,7 @@ describe('Orchestrator', () => {
       expect(legacyOrchestrator.shouldAutoFix('t1')).toBe(false);
     });
 
-    it('failed autoFix task spawns fix experiments instead of failing', () => {
+    it('plain failed tasks stay failed in workflow-core', () => {
       orchestrator = new Orchestrator({
         persistence,
         messageBus: bus,
@@ -2277,19 +2277,14 @@ describe('Orchestrator', () => {
       );
 
       const t1 = orchestrator.getTask('t1');
-      expect(t1!.status).toBe('completed');
-
-      const fixConservative = orchestrator.getTask(sid(orchestrator, 0, 't1-exp-fix-conservative'));
-      const fixRefactor = orchestrator.getTask(sid(orchestrator, 0, 't1-exp-fix-refactor'));
-      const fixAlternative = orchestrator.getTask(sid(orchestrator, 0, 't1-exp-fix-alternative'));
-      expect(fixConservative).toBeDefined();
-      expect(fixRefactor).toBeDefined();
-      expect(fixAlternative).toBeDefined();
-
-      expect(started.length).toBeGreaterThan(0);
+      expect(t1!.status).toBe('failed');
+      expect(orchestrator.getTask(sid(orchestrator, 0, 't1-exp-fix-conservative'))).toBeUndefined();
+      expect(orchestrator.getTask(sid(orchestrator, 0, 't1-exp-fix-refactor'))).toBeUndefined();
+      expect(orchestrator.getTask(sid(orchestrator, 0, 't1-exp-fix-alternative'))).toBeUndefined();
+      expect(started).toHaveLength(0);
     });
 
-    it('autoFix experiments go through full reconciliation lifecycle', () => {
+    it('failed experiment tasks do not spawn nested fix experiment sets', () => {
       orchestrator = new Orchestrator({
         persistence,
         messageBus: bus,
@@ -2308,57 +2303,36 @@ describe('Orchestrator', () => {
       orchestrator.handleWorkerResponse(
         makeResponse({
           actionId: 't1',
-          status: 'failed',
-          outputs: { exitCode: 1, error: 'type error' },
+          status: 'spawn_experiments',
+          outputs: { exitCode: 0 },
+          dagMutation: {
+            spawnExperiments: {
+              description: 'Auto-fix experiments',
+              variants: [
+                { id: 'fix-conservative', description: 'Conservative fix', prompt: 'fix minimally' },
+                { id: 'fix-refactor', description: 'Refactor fix', prompt: 'refactor' },
+                { id: 'fix-alternative', description: 'Alternative fix', prompt: 'new approach' },
+              ],
+            },
+          },
         }),
       );
 
       const expCon = sid(orchestrator, 0, 't1-exp-fix-conservative');
-      const expRef = sid(orchestrator, 0, 't1-exp-fix-refactor');
-      const expAlt = sid(orchestrator, 0, 't1-exp-fix-alternative');
-      const reconT1 = rid(orchestrator, 0, 't1');
+      expect(orchestrator.getTask(expCon)).toBeDefined();
 
       orchestrator.handleWorkerResponse(
         makeResponse({
           actionId: expCon,
-          status: 'completed',
-          outputs: { exitCode: 0, summary: 'Fixed with minimal change' },
+          status: 'failed',
+          outputs: { exitCode: 1, error: 'experiment failed' },
         }),
       );
 
-      if (orchestrator.getTask(expRef)!.status === 'pending') {
-        orchestrator.startExecution();
-      }
-
-      orchestrator.handleWorkerResponse(
-        makeResponse({
-          actionId: expRef,
-          status: 'completed',
-          outputs: { exitCode: 0, summary: 'Refactored approach' },
-        }),
-      );
-
-      if (orchestrator.getTask(expAlt)!.status === 'pending') {
-        orchestrator.startExecution();
-      }
-
-      orchestrator.handleWorkerResponse(
-        makeResponse({
-          actionId: expAlt,
-          status: 'completed',
-          outputs: { exitCode: 0, summary: 'Alternative approach' },
-        }),
-      );
-
-      orchestrator.handleWorkerResponse(reconciliationNeedsInputWorkResponse(reconT1));
-
-      const reconTask = orchestrator.getTask(reconT1);
-      expect(reconTask).toBeDefined();
-      expect(reconTask!.status).toBe('needs_input');
-      expect(reconTask!.execution.experimentResults).toHaveLength(3);
-
-      orchestrator.selectExperiment(reconT1, expCon);
-      expect(orchestrator.getTask(reconT1)!.status).toBe('completed');
+      expect(orchestrator.getTask(expCon)!.status).toBe('failed');
+      expect(orchestrator.getTask(`${expCon}-exp-fix-conservative`)).toBeUndefined();
+      expect(orchestrator.getTask(`${expCon}-exp-fix-refactor`)).toBeUndefined();
+      expect(orchestrator.getTask(`${expCon}-exp-fix-alternative`)).toBeUndefined();
     });
 
     it('non-autoFix failed task still fails normally', () => {
@@ -2379,32 +2353,6 @@ describe('Orchestrator', () => {
       expect(orchestrator.getTask('t2')!.status).toBe('pending');
     });
 
-    it('fix experiment prompts include original error message', () => {
-      orchestrator = new Orchestrator({
-        persistence,
-        messageBus: bus,
-        maxConcurrency: 3,
-        defaultAutoFixRetries: 3,
-      });
-      orchestrator.loadPlan({
-        name: 'autofix-prompt-test',
-        tasks: [{ id: 't1', description: 'Build widgets', prompt: 'npm run build' }],
-      });
-      orchestrator.startExecution();
-
-      orchestrator.handleWorkerResponse(
-        makeResponse({
-          actionId: 't1',
-          status: 'failed',
-          outputs: { exitCode: 1, error: 'ModuleNotFoundError: xyz' },
-        }),
-      );
-
-      const fixTask = orchestrator.getTask(sid(orchestrator, 0, 't1-exp-fix-conservative'));
-      expect(fixTask).toBeDefined();
-      expect(fixTask!.config.prompt).toContain('ModuleNotFoundError: xyz');
-      expect(fixTask!.config.prompt).toContain('Build widgets');
-    });
   });
 
   // ── Full workflow ──────────────────────────────────────
@@ -4586,6 +4534,62 @@ describe('Orchestrator', () => {
       expect(o.getTask('needs-approval')!.execution.pendingFixError).toBeUndefined();
       expect(o.getTask('descendant')!.status).toBe('pending');
       expect(started.some((t) => t.id === 'needs-approval')).toBe(true);
+    });
+
+    it('does not re-execute persisted auto-fix experiment descendants during retry', () => {
+      const p = new InMemoryPersistence();
+      const b = new InMemoryBus();
+      const wfId = 'wf-retry-legacy-autofix-descendants';
+
+      p.saveTask(wfId, {
+        id: 'root',
+        description: 'root failed task',
+        status: 'failed',
+        dependencies: [],
+        createdAt: new Date(),
+        config: { workflowId: wfId },
+        execution: { exitCode: 1, error: 'boom' },
+      });
+      p.saveTask(wfId, {
+        id: 'root-exp-fix-conservative',
+        description: 'legacy auto-fix child',
+        status: 'pending',
+        dependencies: ['root'],
+        createdAt: new Date(),
+        config: { workflowId: wfId, parentTask: 'root' },
+        execution: {},
+      });
+      p.saveTask(wfId, {
+        id: 'root-exp-fix-conservative-exp-fix-refactor',
+        description: 'legacy nested auto-fix child',
+        status: 'pending',
+        dependencies: ['root-exp-fix-conservative'],
+        createdAt: new Date(),
+        config: { workflowId: wfId, parentTask: 'root-exp-fix-conservative' },
+        execution: {},
+      });
+
+      const o = new Orchestrator({ persistence: p, messageBus: b, maxConcurrency: 3 });
+      o.syncFromDb(wfId);
+
+      const started = o.retryWorkflow(wfId);
+      expect(started.map((task) => task.id)).toEqual(['root']);
+      expect(o.getTask('root')!.status).toBe('running');
+      expect(o.getTask('root-exp-fix-conservative')!.status).toBe('stale');
+      expect(o.getTask('root-exp-fix-conservative-exp-fix-refactor')!.status).toBe('stale');
+
+      o.handleWorkerResponse(
+        makeResponse({
+          actionId: 'root',
+          executionGeneration: o.getTask('root')!.execution.generation ?? 0,
+          status: 'completed',
+          outputs: { exitCode: 0 },
+        }),
+      );
+
+      expect(o.getTask('root')!.status).toBe('completed');
+      expect(o.getTask('root-exp-fix-conservative')!.status).toBe('stale');
+      expect(o.getTask('root-exp-fix-conservative-exp-fix-refactor')!.status).toBe('stale');
     });
 
     it('preserves branch/commit/workspacePath on reset tasks', () => {
