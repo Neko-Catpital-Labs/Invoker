@@ -3,7 +3,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import type { WorkRequest, WorkResponse } from '@invoker/contracts';
 import type { Executor, ExecutorHandle, PersistedTaskMeta, TerminalSpec, Unsubscribe } from './executor.js';
 import { bashPreserveOrReset, bashMergeUpstreams, parsePreserveResult, parseMergeError } from './branch-utils.js';
-import { RESTART_TO_BRANCH_TRACE } from './exec-trace.js';
+import { RESTART_TO_BRANCH_TRACE, traceExecution } from './exec-trace.js';
 import type { AgentRegistry } from './agent-registry.js';
 import { checkStaleness } from './git-staleness-detector.js';
 import { rewriteLegacyAbsoluteRepoCd } from './command-normalization.js';
@@ -366,7 +366,7 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
   protected execGitSimple(args: string[], cwd: string): Promise<string> {
     const stack = new Error().stack;
     const callerFrames = stack?.split('\n').slice(1, 5).map(l => l.trim()).join('\n    ') ?? '(no stack)';
-    console.log(`[git-trace] git ${args.join(' ')}  cwd=${cwd}\n    ${callerFrames}`);
+    traceExecution(`[git-trace] git ${args.join(' ')}  cwd=${cwd}\n    ${callerFrames}`);
     return new Promise((resolve, reject) => {
       const child = spawn('git', args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
       let stdout = '';
@@ -457,12 +457,12 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
     const upstreams = request.inputs.upstreamBranches ?? [];
     const baseFromUpstream = !setupBranchExplicitBase && upstreams.length > 0;
     const upstreamsToMerge = baseFromUpstream ? upstreams.slice(1) : upstreams;
-    console.log(
+    traceExecution(
       `${RESTART_TO_BRANCH_TRACE} [mergeRequestUpstreamBranches] upstreamsToMerge=${JSON.stringify(upstreamsToMerge)} ` +
         `(baseFromUpstream=${baseFromUpstream}) mergeCwd=${mergeCwd}`,
     );
     if (upstreamsToMerge.length === 0) {
-      console.log(`${RESTART_TO_BRANCH_TRACE} [mergeRequestUpstreamBranches] no upstream merges`);
+      traceExecution(`${RESTART_TO_BRANCH_TRACE} [mergeRequestUpstreamBranches] no upstream merges`);
       return;
     }
     const mergeScript = bashMergeUpstreams({
@@ -472,14 +472,14 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
     });
     try {
       await this.runBash(mergeScript, mergeCwd);
-      console.log(
+      traceExecution(
         `${RESTART_TO_BRANCH_TRACE} [mergeRequestUpstreamBranches] merge OK (${upstreamsToMerge.length} branch(es))`,
       );
     } catch (err: any) {
       const exitCode = err.exitCode ?? 1;
       const stderr = err.stderr ?? err.message ?? '';
       const parsed = parseMergeError(exitCode, stderr);
-      console.log(
+      traceExecution(
         `${RESTART_TO_BRANCH_TRACE} [mergeRequestUpstreamBranches] merge FAILED exitCode=${exitCode} ` +
           `parsed.failedBranch=${parsed.failedBranch}`,
       );
@@ -504,7 +504,7 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
       const base = opts?.base ?? upstreams[0] ?? request.inputs.baseBranch ?? 'HEAD';
       const mergeCwd = opts?.worktreeDir ?? cwd;
 
-      console.log(
+      traceExecution(
         `${RESTART_TO_BRANCH_TRACE} [setupTaskBranch] enter executor=${this.type} actionId=${request.actionId}\n` +
           `  cwd=${cwd}\n` +
           `  opts.branchName=${opts?.branchName ?? '(default)'}\n` +
@@ -521,9 +521,9 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
       let originalBranch: string | undefined;
       if (!opts?.worktreeDir) {
         originalBranch = (await this.execGitSimple(['branch', '--show-current'], cwd)).trim();
-        console.log(`${RESTART_TO_BRANCH_TRACE} [setupTaskBranch] originalBranch (repo checkout mode)=${originalBranch}`);
+        traceExecution(`${RESTART_TO_BRANCH_TRACE} [setupTaskBranch] originalBranch (repo checkout mode)=${originalBranch}`);
       } else {
-        console.log(`${RESTART_TO_BRANCH_TRACE} [setupTaskBranch] originalBranch=(skipped, worktree mode)`);
+        traceExecution(`${RESTART_TO_BRANCH_TRACE} [setupTaskBranch] originalBranch=(skipped, worktree mode)`);
       }
 
       const preserveScript = bashPreserveOrReset({
@@ -532,10 +532,10 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
         branch: branchName,
         base,
       });
-      console.log(`${RESTART_TO_BRANCH_TRACE} [setupTaskBranch] preserveScript length=${preserveScript.length} chars`);
+      traceExecution(`${RESTART_TO_BRANCH_TRACE} [setupTaskBranch] preserveScript length=${preserveScript.length} chars`);
       const preserveStdout = await this.runBash(preserveScript, cwd);
       const { preserved, baseSha } = parsePreserveResult(preserveStdout);
-      console.log(
+      traceExecution(
         `${RESTART_TO_BRANCH_TRACE} [setupTaskBranch] preserve done preserved=${preserved} baseSha=${baseSha}\n` +
           `  stdout (trimmed): ${preserveStdout.trim().replace(/\n/g, ' | ')}`,
       );
@@ -543,11 +543,11 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
       await this.mergeRequestUpstreamBranches(request, mergeCwd, opts?.base);
 
       handle.branch = branchName;
-      console.log(`${RESTART_TO_BRANCH_TRACE} [setupTaskBranch] exit OK handle.branch=${branchName}`);
+      traceExecution(`${RESTART_TO_BRANCH_TRACE} [setupTaskBranch] exit OK handle.branch=${branchName}`);
       return originalBranch;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      console.log(
+      traceExecution(
         `${RESTART_TO_BRANCH_TRACE} [setupTaskBranch] catch executor=${this.type} actionId=${request.actionId} ` +
           `MergeConflictError=${err instanceof MergeConflictError} worktreeDir=${Boolean(opts?.worktreeDir)} ` +
           `error=${msg}`,
@@ -674,7 +674,7 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
     }
 
     const msg = `[Git Fetch] Status: success | Last fetch: ${durationText} ago | Staleness: ${stalenessText}\n`;
-    console.log(msg);
+    traceExecution(msg);
     if (executionId) this.emitOutput(executionId, msg);
 
     if (stalenessCommits > 100) {

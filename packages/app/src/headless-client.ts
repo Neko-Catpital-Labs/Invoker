@@ -8,6 +8,7 @@ import { resolveInvokerHomeRoot } from './delete-all-snapshot.js';
 import { isHeadlessMutatingCommand } from './headless-command-classification.js';
 import {
   tryDelegateExec,
+  tryDelegateQueryUiPerf,
   tryDelegateResume,
   tryDelegateRun,
   tryPingHeadlessOwner,
@@ -67,6 +68,23 @@ async function delegateMutation(args: string[], bus: MessageBus, waitForApproval
   return tryDelegateExec(args, bus, waitForApproval, noTrack);
 }
 
+async function delegateReadOnlyQuery(args: string[], bus: MessageBus): Promise<boolean> {
+  if (args[0] !== 'query' || args[1] !== 'ui-perf') {
+    return false;
+  }
+  const owner = await tryPingHeadlessOwner(bus, 3_000);
+  if (!owner) {
+    throw new Error('query ui-perf requires a running shared owner process');
+  }
+  const reset = args.includes('--reset');
+  const response = await tryDelegateQueryUiPerf(bus, reset, 5_000);
+  if (!response) {
+    throw new Error('Live owner is present but did not serve ui-perf query');
+  }
+  process.stdout.write(`${JSON.stringify(response)}\n`);
+  return true;
+}
+
 export interface HeadlessClientDeps {
   messageBus: MessageBus;
   ensureStandaloneOwner: () => Promise<void>;
@@ -116,11 +134,15 @@ export async function runHeadlessClientCommand(
   const standaloneMode = process.env.INVOKER_HEADLESS_STANDALONE === '1';
   const internalOwnerServe = args[0] === 'owner-serve';
 
+  if (!standaloneMode && !internalOwnerServe && await delegateReadOnlyQuery(args, deps.messageBus)) {
+    return process.exitCode ?? 0;
+  }
+
   if (!isHeadlessMutatingCommand(args) || standaloneMode || internalOwnerServe) {
     return deps.runElectronHeadless(argv);
   }
 
-  const owner = await tryPingHeadlessOwner(deps.messageBus, 500);
+  const owner = await tryPingHeadlessOwner(deps.messageBus, 3_000);
   if (owner) {
     if (await delegateMutation(args, deps.messageBus, waitForApproval, noTrack)) {
       return process.exitCode ?? 0;

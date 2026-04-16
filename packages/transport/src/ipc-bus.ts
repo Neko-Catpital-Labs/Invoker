@@ -146,6 +146,7 @@ export class IpcBus implements MessageBus {
 
   // Networking state.
   private server: Server | null = null;
+  private serveRetryScheduled = false;
   /** All connected peer sockets (clients when we are server, or just the
    *  single server socket when we are client). */
   private peers = new Set<Socket>();
@@ -244,9 +245,26 @@ export class IpcBus implements MessageBus {
     });
 
     sock.on('error', () => {
-      // Nothing we can do — resolve ready so callers don't hang forever.
+      if (this.allowServe) {
+        this.scheduleServeRecovery();
+      }
+      // Nothing else we can do synchronously — resolve ready so callers don't hang forever.
       this.resolveReady();
     });
+  }
+
+  private scheduleServeRecovery(): void {
+    if (this.disconnected || !this.allowServe || this.server || this.peers.size > 0 || this.serveRetryScheduled) {
+      return;
+    }
+    this.serveRetryScheduled = true;
+    setTimeout(() => {
+      this.serveRetryScheduled = false;
+      if (this.disconnected || !this.allowServe || this.server || this.peers.size > 0) {
+        return;
+      }
+      this.tryServe();
+    }, 25).unref?.();
   }
 
   // ------------------------------------------------------------------
@@ -261,10 +279,14 @@ export class IpcBus implements MessageBus {
     this.peers.add(sock);
     const decoder = new FrameDecoder((env) => this.handleEnvelope(env, sock));
     sock.on('data', (chunk: Buffer) => decoder.push(chunk));
-    sock.on('close', () => this.peers.delete(sock));
+    sock.on('close', () => {
+      this.peers.delete(sock);
+      this.scheduleServeRecovery();
+    });
     sock.on('error', () => {
       sock.destroy();
       this.peers.delete(sock);
+      this.scheduleServeRecovery();
     });
   }
 

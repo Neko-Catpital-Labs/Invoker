@@ -50,6 +50,8 @@ const TASK_DELTA_CHANNEL = 'task.delta';
 let workflowCounter = 0;
 const FIX_FAILURE_PREFIX_RE = /^\[Fix with (?:Claude|Agent) failed\] [^\n]*\n\n/;
 const ATTEMPT_LEASE_MS = 5 * 60 * 1000;
+const TRACE_PERSIST_SYNC = process.env.INVOKER_TRACE_PERSIST_SYNC === '1';
+const TRACE_WORKER_RESPONSE = process.env.INVOKER_TRACE_WORKER_RESPONSE === '1';
 
 function stripFixFailureWrapper(errorText: string): string {
   return errorText.replace(FIX_FAILURE_PREFIX_RE, '');
@@ -428,6 +430,14 @@ export class Orchestrator {
     }
   }
 
+  private refreshWorkflowFromDb(workflowId: string): void {
+    this.activeWorkflowIds.add(workflowId);
+    const tasks = this.persistence.loadTasks(workflowId);
+    for (const task of tasks) {
+      this.stateMachine.restoreTask(task);
+    }
+  }
+
   /**
    * Write field changes to the DB, then update the in-memory cache
    * to match. Returns the updated task state.
@@ -448,7 +458,7 @@ export class Orchestrator {
       config: { ...existing.config, ...changes.config } as TaskConfig,
       execution: { ...existing.execution, ...changes.execution },
     };
-    if (process.env.NODE_ENV !== 'test') {
+    if (process.env.NODE_ENV !== 'test' && TRACE_PERSIST_SYNC) {
       const ex = updated.execution;
       const execKeys = changes.execution ? Object.keys(changes.execution).join(',') : '';
       console.log(
@@ -1056,7 +1066,7 @@ export class Orchestrator {
     }
 
     const canonicalTaskId = task.id;
-    if (process.env.NODE_ENV !== 'test') {
+    if (process.env.NODE_ENV !== 'test' && TRACE_WORKER_RESPONSE) {
       console.log(
         `[worker-response] write path parsedType=${parsed.type} taskId=${canonicalTaskId} ` +
           `graphStatusBefore=${task.status} workerResponseStatus=${response.status} ` +
@@ -1570,7 +1580,9 @@ export class Orchestrator {
    * After reset, startExecution() finds newly-ready tasks via getReadyNodes().
    */
   retryWorkflow(workflowId: string): TaskState[] {
-    this.refreshFromDb();
+    const retryStartMs = Date.now();
+    this.refreshWorkflowFromDb(workflowId);
+    const afterRefreshMs = Date.now();
 
     const allTasks = this.stateMachine.getAllTasks().filter(
       (t) => t.config.workflowId === workflowId,
@@ -1607,6 +1619,7 @@ export class Orchestrator {
       .filter((task) => retryStatuses.has(task.status))
       .map((task) => task.id);
     const { affectedIds } = this.resetSubgraphToPending(retryRootIds, resetChanges);
+    const afterResetMs = Date.now();
 
     console.log(
       `[orchestrator] retryWorkflow invalidation: workflow=${workflowId} ` +
@@ -1622,7 +1635,14 @@ export class Orchestrator {
       .getReadyTasks()
       .map((t) => t.id)
       .filter((id) => this.stateGetTask(id)?.config.workflowId === workflowId);
-    return this.autoStartReadyTasks(readyIds, Orchestrator.EXPEDITED_PRIORITY);
+    const started = this.autoStartReadyTasks(readyIds, Orchestrator.EXPEDITED_PRIORITY);
+    const retryEndMs = Date.now();
+    console.log(
+      `[orchestrator] retryWorkflow timing workflow=${workflowId} ` +
+        `refreshMs=${afterRefreshMs - retryStartMs} resetMs=${afterResetMs - afterRefreshMs} ` +
+        `enqueueDrainMs=${retryEndMs - afterResetMs} totalMs=${retryEndMs - retryStartMs} started=${started.length}`,
+    );
+    return started;
   }
 
   /**
@@ -2416,7 +2436,7 @@ export class Orchestrator {
    * Terminal tasks (completed/stale) are preserved as-is.
    */
   cancelWorkflow(workflowId: string): { cancelled: string[]; runningCancelled: string[] } {
-    this.refreshFromDb();
+    this.refreshWorkflowFromDb(workflowId);
 
     const allTasks = this.stateMachine.getAllTasks().filter(
       (t) => t.config.workflowId === workflowId,

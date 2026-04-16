@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { mkdirSync, existsSync, rmSync } from 'node:fs';
 import { normalize } from 'node:path';
 import { bashPreserveOrReset, runBashLocal } from './branch-utils.js';
-import { RESTART_TO_BRANCH_TRACE } from './exec-trace.js';
+import { RESTART_TO_BRANCH_TRACE, traceExecution } from './exec-trace.js';
 import {
   abbrevRefMatchesBranch,
   canonicalPathForComparison,
@@ -198,7 +198,7 @@ export class RepoPool {
   }
 
   private async doAcquireWorktree(repoUrl: string, branch: string, base?: string, actionId?: string): Promise<AcquiredWorktree> {
-    console.log(
+    traceExecution(
       `${RESTART_TO_BRANCH_TRACE} RepoPool.doAcquireWorktree branch=${branch} (bashPreserveOrReset here; BaseExecutor.setupTaskBranch is not used for this path)`,
     );
     const clonePath = await this.ensureClone(repoUrl);
@@ -236,7 +236,7 @@ export class RepoPool {
         if (abbrevRefMatchesBranch(head, branch)) {
           effectivePath = reuseCandidate;
           reusedExisting = true;
-          console.log(
+          traceExecution(
             `${RESTART_TO_BRANCH_TRACE} RepoPool.doAcquireWorktree reuse existing worktree path=${effectivePath} branch=${branch}`,
           );
         }
@@ -270,13 +270,13 @@ export class RepoPool {
             if (abbrevRefMatchesBranch(head, branch)) {
               effectivePath = actionIdHit.path;
               reusedExisting = true;
-              console.log(
+              traceExecution(
                 `${RESTART_TO_BRANCH_TRACE} RepoPool.doAcquireWorktree reuse by actionId: renamed ${actionIdHit.branch} → ${branch} path=${effectivePath}`,
               );
             }
           } catch { /* fall through to create fresh */ }
         } else {
-          console.log(
+          traceExecution(
             `${RESTART_TO_BRANCH_TRACE} RepoPool.doAcquireWorktree skip actionId reuse: base=${base?.slice(0, 8) ?? 'unset'} is not ancestor of HEAD at ${actionIdHit.path} (base advanced → fresh branch)`,
           );
         }

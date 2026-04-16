@@ -189,4 +189,58 @@ describe('PersistedWorkflowMutationCoordinator', () => {
     gate.resolve();
     await waitFor(() => adapter.listWorkflowMutationIntents('wf-1', ['completed']).length === 1);
   });
+
+  it('bounds concurrent workflow drains across workflows during resume and burst submission', async () => {
+    const adapter = await SQLiteAdapter.create(':memory:');
+    adapters.push(adapter);
+    for (let index = 1; index <= 4; index += 1) {
+      adapter.saveWorkflow({
+        id: `wf-${index}`,
+        name: `wf-${index}`,
+        status: 'running',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      });
+      adapter.enqueueWorkflowMutationIntent(`wf-${index}`, 'mut', [`job-${index}`], 'normal');
+    }
+
+    const gates = new Map<string, ReturnType<typeof deferred>>();
+    const started: string[] = [];
+    let active = 0;
+    let maxActive = 0;
+    const coordinator = new PersistedWorkflowMutationCoordinator(
+      adapter,
+      'owner-1',
+      async (_channel, args) => {
+        const id = String(args[0]);
+        started.push(id);
+        active += 1;
+        maxActive = Math.max(maxActive, active);
+        const gate = deferred();
+        gates.set(id, gate);
+        await gate.promise;
+        active -= 1;
+      },
+      { maxConcurrentWorkflowDrains: 2 },
+    );
+
+    const resumePromise = coordinator.resumePending();
+    await waitFor(() => started.length === 2);
+    expect(maxActive).toBe(2);
+
+    gates.get('job-1')?.resolve();
+    await waitFor(() => started.length === 3);
+    expect(maxActive).toBe(2);
+
+    gates.get('job-2')?.resolve();
+    await waitFor(() => started.length === 4);
+    expect(maxActive).toBe(2);
+
+    gates.get('job-3')?.resolve();
+    gates.get('job-4')?.resolve();
+    await resumePromise;
+
+    expect(adapter.listWorkflowMutationIntents(undefined, ['completed'])).toHaveLength(4);
+    expect(maxActive).toBe(2);
+  });
 });

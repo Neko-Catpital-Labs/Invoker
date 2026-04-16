@@ -127,6 +127,15 @@ class InMemoryPersistence implements OrchestratorPersistence {
   }
 }
 
+class CountingPersistence extends InMemoryPersistence {
+  loadTasksCalls: string[] = [];
+
+  override loadTasks(workflowId: string): TaskState[] {
+    this.loadTasksCalls.push(workflowId);
+    return super.loadTasks(workflowId);
+  }
+}
+
 // ── In-Memory MessageBus Mock ───────────────────────────────
 
 class InMemoryBus implements OrchestratorMessageBus {
@@ -4135,6 +4144,38 @@ describe('Orchestrator', () => {
   // ── retryWorkflow ────────────────────────────────────────
 
   describe('retryWorkflow', () => {
+    it('refreshes only the targeted workflow before retrying', () => {
+      const persistence = new CountingPersistence();
+      const bus = new InMemoryBus();
+      const o = new Orchestrator({
+        persistence,
+        messageBus: bus,
+        maxConcurrency: 2,
+      });
+
+      o.loadPlan({
+        name: 'wf-a',
+        tasks: [
+          { id: 'a1', prompt: 'a1' },
+          { id: 'a2', dependencies: ['a1'], prompt: 'a2' },
+        ],
+      });
+      o.loadPlan({
+        name: 'wf-b',
+        tasks: [
+          { id: 'b1', prompt: 'b1' },
+        ],
+      });
+
+      persistence.loadTasksCalls = [];
+      const wfA = o.getAllTasks().find((task) => task.id.endsWith('/a1'))!.config.workflowId!;
+      o.retryWorkflow(wfA);
+
+      expect(persistence.loadTasksCalls.filter((id) => id === wfA).length).toBeGreaterThan(0);
+      const wfB = o.getAllTasks().find((task) => task.id.endsWith('/b1'))!.config.workflowId!;
+      expect(persistence.loadTasksCalls).not.toContain(wfB);
+    });
+
     it('preserves completed tasks and resets failed tasks', () => {
       const p = new InMemoryPersistence();
       const b = new InMemoryBus();

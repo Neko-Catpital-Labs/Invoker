@@ -70,7 +70,7 @@ test.describe('Headless thundering herd', () => {
 
     const workflowIds = new Set<string>();
     if (currentWorkflowId) workflowIds.add(currentWorkflowId);
-    for (let i = 0; i < 5; i += 1) {
+    for (let i = 0; i < 8; i += 1) {
       const result = await runHeadlessClient(testDir, ['run', planPath, '--no-track']);
       workflowIds.add(parseWorkflowId(result.stdout));
     }
@@ -88,7 +88,19 @@ test.describe('Headless thundering herd', () => {
     const interactionMs = Date.now() - startedAt;
     expect(interactionMs).toBeLessThan(3000);
 
+    await page.waitForTimeout(1500);
+
+    const secondInteractionStartedAt = Date.now();
+    await page.locator('.react-flow__node[data-testid$="task-alpha"]').click();
+    await expect(panel.locator('[data-testid="command-display"]')).toBeVisible({ timeout: 3000 });
+    const secondInteractionMs = Date.now() - secondInteractionStartedAt;
+    expect(secondInteractionMs).toBeLessThan(3000);
+
     await Promise.all(burst);
+
+    const perf = await page.evaluate(async () => await window.invoker.getUiPerfStats());
+    expect(perf.maxRendererEventLoopLagMs).toBeLessThan(1000);
+    expect(perf.maxRendererLongTaskMs).toBeLessThan(1500);
 
     const ownerServe = await execFileAsync('bash', [
       '-lc',

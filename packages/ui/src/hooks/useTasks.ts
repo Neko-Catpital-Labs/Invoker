@@ -22,6 +22,9 @@ export interface UseTasksResult {
 }
 
 export function useTasks(): UseTasksResult {
+  const traceTaskDeltas =
+    typeof window !== 'undefined' &&
+    window.location.search.includes('traceTaskDeltas=1');
   const [tasks, setTasks] = useState<Map<string, TaskState>>(new Map());
   const [workflows, setWorkflows] = useState<Map<string, WorkflowMeta>>(new Map());
   const workflowsRef = useRef(workflows);
@@ -76,9 +79,11 @@ export function useTasks(): UseTasksResult {
 
           for (const delta of batch) {
             if (delta.type === 'updated' && !next.has(delta.taskId)) {
-              console.warn(
-                `[useTasks:task-delta] updated for taskId=${delta.taskId} not in local map before merge (stale snapshot?)`,
-              );
+              if (traceTaskDeltas) {
+                console.warn(
+                  `[useTasks:task-delta] updated for taskId=${delta.taskId} not in local map before merge (stale snapshot?)`,
+                );
+              }
             }
             next = applyDelta(next, delta);
             if (
@@ -105,19 +110,21 @@ export function useTasks(): UseTasksResult {
 
     const unsub = window.invoker.onTaskDelta((delta) => {
       deltaPerfRef.current.received += 1;
-      if (delta.type === 'created') {
-        console.log(
-          `[useTasks:task-delta] created id=${delta.task.id} status=${delta.task.status}`,
-        );
-      } else if (delta.type === 'removed') {
-        console.log(`[useTasks:task-delta] removed taskId=${delta.taskId}`);
-      } else {
-        const ex = delta.changes.execution;
-        console.log(
-          `[useTasks:task-delta] updated taskId=${delta.taskId} ` +
-            `changes.status=${delta.changes.status ?? '—'} ` +
-            `execPatchKeys=${ex ? Object.keys(ex).join(',') : '—'}`,
-        );
+      if (traceTaskDeltas) {
+        if (delta.type === 'created') {
+          console.log(
+            `[useTasks:task-delta] created id=${delta.task.id} status=${delta.task.status}`,
+          );
+        } else if (delta.type === 'removed') {
+          console.log(`[useTasks:task-delta] removed taskId=${delta.taskId}`);
+        } else {
+          const ex = delta.changes.execution;
+          console.log(
+            `[useTasks:task-delta] updated taskId=${delta.taskId} ` +
+              `changes.status=${delta.changes.status ?? '—'} ` +
+              `execPatchKeys=${ex ? Object.keys(ex).join(',') : '—'}`,
+          );
+        }
       }
 
       deltaPipelineRef.current?.push(delta);

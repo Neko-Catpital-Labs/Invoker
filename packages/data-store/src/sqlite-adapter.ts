@@ -880,7 +880,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
     values.push(taskId);
     const heartbeatOnly =
       setClauses.length === 1 && setClauses[0].trimStart().startsWith('last_heartbeat_at =');
-    if (!heartbeatOnly && process.env.NODE_ENV !== 'test') {
+    if (!heartbeatOnly && process.env.NODE_ENV !== 'test' && process.env.INVOKER_TRACE_PERSIST_SQL === '1') {
       const cols = setClauses.map((c) => c.split(/\s*=\s*/)[0]!.trim()).join(', ');
       console.log(`[persist-sql] taskId=${taskId} columns=[${cols}]`);
     }

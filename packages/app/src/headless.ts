@@ -71,6 +71,11 @@ export interface HeadlessDeps {
     logFn: (source: string, level: string, message: string) => void;
     onPlanLoaded?: () => void;
   }) => Promise<any>;
+  getUiPerfStats?: () => Record<string, unknown>;
+  resetUiPerfStats?: () => void;
+  deferRunnableTasks?: (tasks: TaskState[], workflowId?: string) => void;
+  preemptTaskSubgraph?: (taskId: string) => Promise<void>;
+  preemptWorkflowExecution?: (workflowId: string) => Promise<void>;
   waitForApproval?: boolean;
   noTrack?: boolean;
 }
@@ -86,6 +91,16 @@ const YELLOW = '\x1b[33m';
 function headlessHeartbeat(taskId: string, deps: Pick<HeadlessDeps, 'persistence'>): void {
   const now = new Date();
   try { deps.persistence.updateTask(taskId, { execution: { lastHeartbeatAt: now } }); } catch { /* db locked */ }
+}
+
+function workflowHasActiveExecution(workflowId: string, deps: Pick<HeadlessDeps, 'persistence' | 'orchestrator'>): boolean {
+  const tasks = deps.persistence.loadTasks(workflowId);
+  const persistedActiveTaskIds = deps.orchestrator.getPersistedActiveTaskIds?.() ?? new Set<string>();
+  return tasks.some((task) =>
+    task.status === 'running'
+    || task.status === 'fixing_with_ai'
+    || (task.status === 'pending' && persistedActiveTaskIds.has(task.id)),
+  );
 }
 
 function buildHeadlessApiCancelHooks(
@@ -214,6 +229,7 @@ export interface QueryFlags {
   status?: string;
   workflow?: string;
   noMerge?: boolean;
+  reset?: boolean;
   positional: string[];
 }
 
@@ -243,6 +259,9 @@ export function parseQueryFlags(args: string[]): QueryFlags {
     } else if (arg === '--no-merge') {
       flags.noMerge = true;
       i += 1;
+    } else if (arg === '--reset') {
+      flags.reset = true;
+      i += 1;
     } else if (arg.startsWith('--')) {
       throw new Error(`Unknown query flag: "${arg}"`);
     } else {
@@ -258,7 +277,7 @@ export function parseQueryFlags(args: string[]): QueryFlags {
 async function headlessQuery(args: string[], deps: HeadlessDeps): Promise<void> {
   const subCommand = args[0];
   if (!subCommand) {
-    throw new Error('Missing query sub-command. Usage: --headless query <workflows|tasks|task|queue|audit|session>');
+    throw new Error('Missing query sub-command. Usage: --headless query <workflows|tasks|task|queue|audit|session|ui-perf>');
   }
   const flags = parseQueryFlags(args.slice(1));
 
@@ -393,8 +412,39 @@ async function headlessQuery(args: string[], deps: HeadlessDeps): Promise<void> 
       await headlessSession(taskId, deps);
       break;
     }
+    case 'ui-perf': {
+      if (flags.reset) {
+        deps.resetUiPerfStats?.();
+      }
+      const stats = deps.getUiPerfStats?.() ?? {
+        ownerMode: 'local',
+        ts: new Date().toISOString(),
+        mainDeltaToUi: 0,
+        dbPollCreated: 0,
+        dbPollUpdatedAsCreated: 0,
+        dbPollUpdatedAsUpdated: 0,
+        rendererReports: 0,
+        maxRendererEventLoopLagMs: 0,
+        maxRendererLongTaskMs: 0,
+      };
+      switch (flags.output) {
+        case 'label':
+          process.stdout.write(String((stats as Record<string, unknown>).maxRendererEventLoopLagMs ?? 0) + '\n');
+          break;
+        case 'json':
+          process.stdout.write(formatAsJson(stats) + '\n');
+          break;
+        case 'jsonl':
+          process.stdout.write(formatAsJsonl([stats]) + '\n');
+          break;
+        default:
+          process.stdout.write(`${JSON.stringify(stats, null, 2)}\n`);
+          break;
+      }
+      break;
+    }
     default:
-      throw new Error(`Unknown query sub-command: "${subCommand}". Use: workflows, tasks, task, queue, audit, session`);
+      throw new Error(`Unknown query sub-command: "${subCommand}". Use: workflows, tasks, task, queue, audit, session, ui-perf`);
   }
 }
 
@@ -618,6 +668,7 @@ ${BOLD}Query${RESET} (read-only, all support --output text|label|json|jsonl):
   query queue [--output F]                            Show queue status
   query audit <taskId> [--output F]                   Print event history
   query session <taskId>                              Print agent session messages
+  query ui-perf [--output F] [--reset]               Print live UI perf stats
 
 ${BOLD}Execute:${RESET}
   run <plan.yaml>                                     Load and execute plan
@@ -1059,13 +1110,44 @@ async function headlessRetryWorkflow(workflowId: string, deps: HeadlessDeps): Pr
   if (!workflowId) {
     throw new Error('Missing arguments. Usage: --headless restart <workflowId>');
   }
-  await preemptWorkflowExecution(workflowId, deps);
+  deps.logger.info(`headlessRetryWorkflow begin workflow="${workflowId}" noTrack=${deps.noTrack ? 'true' : 'false'}`, {
+    module: 'headless',
+  });
+  const shouldPreempt = workflowHasActiveExecution(workflowId, deps);
+  if (shouldPreempt) {
+    await preemptWorkflowExecution(workflowId, deps);
+    deps.logger.info(`headlessRetryWorkflow preempt complete workflow="${workflowId}"`, { module: 'headless' });
+  } else {
+    deps.logger.info(`headlessRetryWorkflow preempt skipped workflow="${workflowId}"`, { module: 'headless' });
+  }
   const envelope = makeEnvelope('retry-workflow', 'headless', 'workflow', { workflowId });
   const result = await deps.commandService.retryWorkflow(envelope);
   if (!result.ok) throw new Error(result.error.message);
   const runnable = result.data.filter(t => t.status === 'running');
+  deps.logger.info(`headlessRetryWorkflow retry complete workflow="${workflowId}" runnable=${runnable.length}`, {
+    module: 'headless',
+  });
   process.stdout.write(`Retry workflow "${workflowId}" — ${runnable.length} task(s) to re-execute (completed tasks preserved)\n`);
   if (runnable.length === 0) return;
+
+  if (deps.noTrack) {
+    if (deps.deferRunnableTasks) {
+      deps.deferRunnableTasks(runnable, workflowId);
+    } else {
+      const te = createHeadlessExecutor(deps);
+      const launch = setTimeout(() => {
+        void te.executeTasks(runnable).catch((err) => {
+          deps.logger.error(
+            `background no-track workflow retry failed for ${workflowId}: ${err instanceof Error ? err.stack ?? err.message : String(err)}`,
+            { module: 'headless' },
+          );
+        });
+      }, 25);
+      launch.unref?.();
+    }
+    process.stdout.write('[headless] --no-track enabled: restart accepted; exiting without tracking.\n');
+    return;
+  }
 
   const te = createHeadlessExecutor(deps);
   const autoFix = wireHeadlessAutoFix(deps, te);
@@ -1075,16 +1157,15 @@ async function headlessRetryWorkflow(workflowId: string, deps: HeadlessDeps): Pr
   } finally {
     remoteFetchForPool.enabled = true;
   }
-  if (deps.noTrack) {
-    process.stdout.write('[headless] --no-track enabled: restart accepted; exiting without tracking.\n');
-    autoFix.unsubscribe();
-    return;
-  }
   await waitForCompletion(deps.orchestrator, workflowId, undefined, autoFix.isBusy);
   autoFix.unsubscribe();
 }
 
 async function preemptTaskSubgraph(taskId: string, deps: HeadlessDeps): Promise<void> {
+  if (deps.preemptTaskSubgraph) {
+    await deps.preemptTaskSubgraph(taskId);
+    return;
+  }
   if (typeof deps.commandService.cancelTask !== 'function') return;
   const envelope = makeEnvelope('cancel-task', 'headless', 'task', { taskId });
   const result = await deps.commandService.cancelTask(envelope);
@@ -1096,6 +1177,10 @@ async function preemptTaskSubgraph(taskId: string, deps: HeadlessDeps): Promise<
 }
 
 async function preemptWorkflowExecution(workflowId: string, deps: HeadlessDeps): Promise<void> {
+  if (deps.preemptWorkflowExecution) {
+    await deps.preemptWorkflowExecution(workflowId);
+    return;
+  }
   if (typeof deps.commandService.cancelWorkflow !== 'function') return;
   const envelope = makeEnvelope('cancel-workflow', 'headless', 'workflow', { workflowId });
   const result = await deps.commandService.cancelWorkflow(envelope);
