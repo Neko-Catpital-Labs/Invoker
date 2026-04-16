@@ -939,6 +939,21 @@ if (isHeadless) {
       }
       queuedAutoFixTasks.delete(nextTaskId);
       if (!orchestrator.shouldAutoFix(nextTaskId) || autoFixInProgress.has(nextTaskId)) {
+        if (nextTaskId === 'wf-1775932917566-8/run-all-fixture-tests') {
+          const task = orchestrator.getTask(nextTaskId);
+          const message = `[auto-fix-debug] drain skip task="${nextTaskId}" shouldAutoFix=${orchestrator.shouldAutoFix(nextTaskId)} inProgress=${autoFixInProgress.has(nextTaskId)} status=${task?.status ?? 'missing'} attempts=${task?.execution.autoFixAttempts ?? 'n/a'}`;
+          persistence.logEvent?.(nextTaskId, 'debug.auto-fix', {
+            phase: 'drain-skip',
+            shouldAutoFix: orchestrator.shouldAutoFix(nextTaskId),
+            inProgress: autoFixInProgress.has(nextTaskId),
+            status: task?.status ?? 'missing',
+            autoFixAttempts: task?.execution.autoFixAttempts ?? null,
+          });
+          logger.info(
+            message,
+            { module: 'auto-fix' },
+          );
+        }
         continue;
       }
       autoFixInProgress.add(nextTaskId);
@@ -955,10 +970,50 @@ if (isHeadless) {
 
   const scheduleAutoFix = (taskId: string): void => {
     if (!taskExecutor) {
+      if (taskId === 'wf-1775932917566-8/run-all-fixture-tests') {
+        persistence.logEvent?.(taskId, 'debug.auto-fix', {
+          phase: 'schedule-skip',
+          reason: 'no-taskExecutor',
+        });
+        logger.info(
+          `[auto-fix-debug] schedule skip task="${taskId}" reason=no-taskExecutor`,
+          { module: 'auto-fix' },
+        );
+      }
       return;
     }
-    if (autoFixInProgress.has(taskId) || queuedAutoFixTasks.has(taskId) || !orchestrator.shouldAutoFix(taskId)) {
+    const shouldAutoFixNow = orchestrator.shouldAutoFix(taskId);
+    if (autoFixInProgress.has(taskId) || queuedAutoFixTasks.has(taskId) || !shouldAutoFixNow) {
+      if (taskId === 'wf-1775932917566-8/run-all-fixture-tests') {
+        const task = orchestrator.getTask(taskId);
+        const message = `[auto-fix-debug] schedule skip task="${taskId}" inProgress=${autoFixInProgress.has(taskId)} queued=${queuedAutoFixTasks.has(taskId)} shouldAutoFix=${shouldAutoFixNow} status=${task?.status ?? 'missing'} attempts=${task?.execution.autoFixAttempts ?? 'n/a'}`;
+        persistence.logEvent?.(taskId, 'debug.auto-fix', {
+          phase: 'schedule-skip',
+          inProgress: autoFixInProgress.has(taskId),
+          queued: queuedAutoFixTasks.has(taskId),
+          shouldAutoFix: shouldAutoFixNow,
+          status: task?.status ?? 'missing',
+          autoFixAttempts: task?.execution.autoFixAttempts ?? null,
+        });
+        logger.info(
+          message,
+          { module: 'auto-fix' },
+        );
+      }
       return;
+    }
+    if (taskId === 'wf-1775932917566-8/run-all-fixture-tests') {
+      const task = orchestrator.getTask(taskId);
+      const message = `[auto-fix-debug] schedule enqueue task="${taskId}" status=${task?.status ?? 'missing'} attempts=${task?.execution.autoFixAttempts ?? 'n/a'}`;
+      persistence.logEvent?.(taskId, 'debug.auto-fix', {
+        phase: 'schedule-enqueue',
+        status: task?.status ?? 'missing',
+        autoFixAttempts: task?.execution.autoFixAttempts ?? null,
+      });
+      logger.info(
+        message,
+        { module: 'auto-fix' },
+      );
     }
     queuedAutoFixTasks.add(taskId);
     pendingAutoFixTasks.push(taskId);
@@ -2044,12 +2099,39 @@ if (isHeadless) {
       sendTaskDeltaToRenderer(delta as TaskDelta);
 
       const d = delta as TaskDelta;
-      const previousSnapshot = d.type === 'updated' || d.type === 'removed'
-        ? lastKnownTaskStates.get(d.taskId)
+      const deltaTaskId = d.type === 'updated' || d.type === 'removed'
+        ? d.taskId
+        : undefined;
+      const previousSnapshot = deltaTaskId
+        ? lastKnownTaskStates.get(deltaTaskId)
         : undefined;
       const shouldAutoFix = shouldAutoFixFromDelta(d, previousSnapshot, {
-        wasExplicitRetry: explicitRetryTaskIds.has(d.taskId),
+        wasExplicitRetry: deltaTaskId ? explicitRetryTaskIds.has(deltaTaskId) : false,
       });
+      if (d.type === 'updated' && d.taskId === 'wf-1775932917566-8/run-all-fixture-tests' && d.changes.status === 'failed') {
+        let previousStatus = 'unknown';
+        if (previousSnapshot) {
+          try {
+            const parsed = JSON.parse(previousSnapshot) as { status?: string };
+            previousStatus = parsed.status ?? 'missing';
+          } catch {
+            previousStatus = 'snapshot-parse-failed';
+          }
+        } else {
+          previousStatus = 'none';
+        }
+        const payload = {
+          phase: 'delta-failed',
+          previousStatus,
+          wasExplicitRetry: explicitRetryTaskIds.has(d.taskId),
+          shouldAutoFixFromDelta: shouldAutoFix,
+        };
+        persistence.logEvent?.(d.taskId, 'debug.auto-fix', payload);
+        logger.info(
+          `[auto-fix-debug] delta failed task="${d.taskId}" previousStatus=${previousStatus} wasExplicitRetry=${explicitRetryTaskIds.has(d.taskId)} shouldAutoFixFromDelta=${shouldAutoFix}`,
+          { module: 'auto-fix' },
+        );
+      }
 
       applyDelta(d, lastKnownTaskStates, orchestrator);
       if (d.type === 'updated') {
@@ -2073,7 +2155,9 @@ if (isHeadless) {
       // should trigger repair. Startup replay of already-failed tasks must remain
       // visible in the UI without kicking off fix work automatically.
       if (shouldAutoFix) {
-        scheduleAutoFix(d.taskId);
+        if (deltaTaskId) {
+          scheduleAutoFix(deltaTaskId);
+        }
       }
     });
 
@@ -2719,7 +2803,10 @@ if (isHeadless) {
       async (taskIdArg: unknown, agentNameArg?: unknown) => {
       const taskId = String(taskIdArg);
       const agentName = agentNameArg === undefined ? undefined : String(agentNameArg);
-      logger.info(`resolve-conflict: "${taskId}" agent=${agentName ?? 'claude'}`, { module: 'ipc' });
+      logger.info(
+        `resolve-conflict: "${taskId}" agent=${agentName ?? 'claude'} source=ipc route=resolveConflictAction`,
+        { module: 'ipc' },
+      );
       try {
         await resolveConflictAction(taskId, {
           orchestrator,
@@ -2741,7 +2828,10 @@ if (isHeadless) {
       async (taskIdArg: unknown, agentNameArg?: unknown) => {
       const taskId = String(taskIdArg);
       const agentName = agentNameArg === undefined ? undefined : String(agentNameArg);
-      logger.info(`fix-with-agent: "${taskId}" agent=${agentName ?? 'claude'}`, { module: 'ipc' });
+      logger.info(
+        `fix-with-agent: "${taskId}" agent=${agentName ?? 'claude'} source=ipc route=fixWithAgent`,
+        { module: 'ipc' },
+      );
       const { savedError } = orchestrator.beginConflictResolution(taskId);
       try {
         const output = persistence.getTaskOutput(taskId);

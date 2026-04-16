@@ -322,7 +322,7 @@ describe('finalizeAppliedFix', () => {
 });
 
 describe('autoFixOnFailure', () => {
-  it('drives the original task through fixing_with_ai and completion instead of restart', async () => {
+  it('uses fixWithAgent for non-merge failures and restarts the task directly', async () => {
     const started = [makeRunningTask({ id: 'task-a', status: 'running' })];
     const orchestrator = {
       shouldAutoFix: vi.fn(() => true),
@@ -332,8 +332,7 @@ describe('autoFixOnFailure', () => {
       })),
       getAutoFixRetryBudget: vi.fn(() => 3),
       beginConflictResolution: vi.fn(() => ({ savedError: 'boom' })),
-      setTaskAwaitingApproval: vi.fn(),
-      approve: vi.fn().mockResolvedValue(started),
+      restartTask: vi.fn(() => started),
       revertConflictResolution: vi.fn(),
     };
     const persistence = {
@@ -355,8 +354,50 @@ describe('autoFixOnFailure', () => {
 
     expect(orchestrator.beginConflictResolution).toHaveBeenCalledWith('task-a');
     expect(taskExecutor.fixWithAgent).toHaveBeenCalledWith('task-a', 'test output', 'claude', 'boom');
-    expect(orchestrator.setTaskAwaitingApproval).toHaveBeenCalledWith('task-a');
-    expect(orchestrator.approve).toHaveBeenCalledWith('task-a');
+    expect(taskExecutor.resolveConflict).not.toHaveBeenCalled();
+    expect(orchestrator.restartTask).toHaveBeenCalledWith('task-a');
+    expect(taskExecutor.executeTasks).toHaveBeenCalledWith(started);
+  });
+
+  it('uses resolveConflict for merge-conflict errors and restarts the task directly', async () => {
+    const started = [makeRunningTask({ id: 'task-a', status: 'running' })];
+    const mergeError = JSON.stringify({
+      type: 'merge_conflict',
+      failedBranch: 'experiment/foo',
+      conflictFiles: ['src/foo.ts'],
+    });
+    const orchestrator = {
+      shouldAutoFix: vi.fn(() => true),
+      getTask: vi.fn(() => makeTask({
+        status: 'failed',
+        execution: { autoFixAttempts: 0 },
+      })),
+      getAutoFixRetryBudget: vi.fn(() => 3),
+      beginConflictResolution: vi.fn(() => ({ savedError: mergeError })),
+      restartTask: vi.fn(() => started),
+      revertConflictResolution: vi.fn(),
+    };
+    const persistence = {
+      updateTask: vi.fn(),
+      getTaskOutput: vi.fn(() => 'test output'),
+      appendTaskOutput: vi.fn(),
+    };
+    const taskExecutor = {
+      fixWithAgent: vi.fn().mockResolvedValue(undefined),
+      resolveConflict: vi.fn().mockResolvedValue(undefined),
+      executeTasks: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await autoFixOnFailure('task-a', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+    });
+
+    expect(orchestrator.beginConflictResolution).toHaveBeenCalledWith('task-a');
+    expect(taskExecutor.resolveConflict).toHaveBeenCalledWith('task-a', mergeError, 'claude');
+    expect(taskExecutor.fixWithAgent).not.toHaveBeenCalled();
+    expect(orchestrator.restartTask).toHaveBeenCalledWith('task-a');
     expect(taskExecutor.executeTasks).toHaveBeenCalledWith(started);
   });
 });
