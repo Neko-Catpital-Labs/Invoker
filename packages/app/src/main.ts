@@ -110,6 +110,7 @@ import { ensureSqliteFlushDebounceForOwner } from './sqlite-flush-policy.js';
 import type { WorkflowMutationPriority } from './workflow-mutation-coordinator.js';
 import { PersistedWorkflowMutationCoordinator } from './persisted-workflow-mutation-coordinator.js';
 import { executeGlobalTopup } from './global-topup.js';
+import { computeDeferredLaunchTiming } from './deferred-runnable.js';
 
 // ── Detect headless mode ─────────────────────────────────────
 
@@ -788,7 +789,11 @@ if (isHeadless) {
   const pendingAutoFixTasks: string[] = [];
   const queuedAutoFixTasks = new Set<string>();
   const explicitRetryTaskIds = new Set<string>();
-  const deferredWorkflowLaunches = new Map<string, { timer: ReturnType<typeof setTimeout>; taskIds: string[] }>();
+  const deferredWorkflowLaunches = new Map<string, {
+    timer: ReturnType<typeof setTimeout>;
+    taskIds: string[];
+    firstScheduledAtMs: number;
+  }>();
   const pendingOutputBuffers = new Map<string, string[]>();
   const outputFlushTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const pendingUiTaskDeltas: TaskDelta[] = [];
@@ -1221,30 +1226,46 @@ if (isHeadless) {
       preemptWorkflowExecution: (workflowId: string) => preemptWorkflowExecution(workflowId),
       deferRunnableTasks: (tasks: TaskState[], workflowId?: string) => {
         const filteredTasks = tasks;
-        const droppedTasks = workflowId
+        const crossWorkflowTasks = workflowId
           ? tasks.filter((task) => task.config.workflowId !== workflowId)
           : [];
-        if (droppedTasks.length > 0) {
+        if (crossWorkflowTasks.length > 0) {
           logger.info(
-            `deferRunnableTasks preserving cross-workflow runnable tasks for workflow="${workflowId}": ${droppedTasks.map((task) => `${task.id}(${task.config.workflowId ?? 'unknown'})`).join(', ')}`,
+            `deferRunnableTasks dispatching cross-workflow runnable tasks for workflow="${workflowId}": ${crossWorkflowTasks.map((task) => `${task.id}(${task.config.workflowId ?? 'unknown'})`).join(', ')}`,
             { module: 'ipc-delegate' },
           );
         }
         if (filteredTasks.length === 0) {
           return;
         }
+        // Keep this path timer-based for now: it is a low-blast-radius, mutation-safe
+        // way to decouple no-track command handling from heavy executor startup while
+        // still coalescing rapid restarts. We are considering an RxJS/backpressure
+        // scheduler refactor for richer queue semantics, but that is a broader design
+        // change than this targeted starvation fix.
         const deferDelayMs = Number.parseInt(process.env.INVOKER_DEFER_RUNNABLE_DELAY_MS ?? '25', 10) || 25;
+        const maxCoalesceMs = Number.parseInt(
+          process.env.INVOKER_DEFER_RUNNABLE_MAX_COALESCE_MS ?? String(Math.max(1000, deferDelayMs)),
+          10,
+        ) || Math.max(1000, deferDelayMs);
         const launchKey = workflowId ?? filteredTasks.map((task) => task.id).sort().join('|');
         const existingLaunch = deferredWorkflowLaunches.get(launchKey);
+        const nowMs = Date.now();
+        const timing = computeDeferredLaunchTiming({
+          existingFirstScheduledAtMs: existingLaunch?.firstScheduledAtMs,
+          nowMs,
+          deferDelayMs,
+          maxCoalesceMs,
+        });
         if (existingLaunch) {
           clearTimeout(existingLaunch.timer);
           logger.info(
-            `deferRunnableTasks coalesce workflow="${workflowId ?? 'unknown'}" previousCount=${existingLaunch.taskIds.length} nextCount=${filteredTasks.length}`,
+            `deferRunnableTasks coalesce workflow="${workflowId ?? 'unknown'}" previousCount=${existingLaunch.taskIds.length} nextCount=${filteredTasks.length} delayMs=${timing.delayMs} maxCoalesceMs=${maxCoalesceMs}`,
             { module: 'ipc-delegate' },
           );
         }
         logger.info(
-          `deferRunnableTasks schedule workflow="${workflowId ?? 'unknown'}" count=${filteredTasks.length} delayMs=${deferDelayMs} ids=${filteredTasks.map((task) => task.id).join(',')}`,
+          `deferRunnableTasks schedule workflow="${workflowId ?? 'unknown'}" count=${filteredTasks.length} delayMs=${timing.delayMs} ids=${filteredTasks.map((task) => task.id).join(',')}`,
           { module: 'ipc-delegate' },
         );
         const launch = setTimeout(() => {
@@ -1273,9 +1294,13 @@ if (isHeadless) {
             .finally(() => {
               remoteFetchForPool.enabled = true;
             });
-        }, deferDelayMs);
+        }, timing.delayMs);
         launch.unref?.();
-        deferredWorkflowLaunches.set(launchKey, { timer: launch, taskIds: filteredTasks.map((task) => task.id) });
+        deferredWorkflowLaunches.set(launchKey, {
+          timer: launch,
+          taskIds: filteredTasks.map((task) => task.id),
+          firstScheduledAtMs: timing.firstScheduledAtMs,
+        });
       },
       executionAgentRegistry: registerBuiltinAgents(),
     });

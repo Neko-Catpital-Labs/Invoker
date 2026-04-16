@@ -966,9 +966,14 @@ export class Orchestrator {
   startExecution(): TaskState[] {
     this.refreshFromDb();
 
+    const activeAttempts = this.countActivePersistedAttempts();
     const readyTasks = this.stateMachine
       .getReadyTasks()
       .filter((task) => this.getExternalDependencyBlocker(task) === undefined);
+    console.log(
+      `[orchestrator] startExecution: ready=${readyTasks.length} active=${activeAttempts} maxConcurrency=${this.maxConcurrency} ` +
+        `readyIds=[${readyTasks.map((task) => task.id).join(', ')}]`,
+    );
     const started: TaskState[] = [];
 
     for (const task of readyTasks) {
@@ -3077,7 +3082,11 @@ export class Orchestrator {
   /** Drain the scheduler queue, starting tasks that fit the concurrency limit. */
   private drainScheduler(): TaskState[] {
     const started: TaskState[] = [];
-    let availableSlots = Math.max(0, this.maxConcurrency - this.countActivePersistedAttempts());
+    const activeAttempts = this.countActivePersistedAttempts();
+    let availableSlots = Math.max(0, this.maxConcurrency - activeAttempts);
+    console.log(
+      `[orchestrator] drainScheduler: begin active=${activeAttempts} maxConcurrency=${this.maxConcurrency} availableSlots=${availableSlots}`,
+    );
     let job = availableSlots > 0 ? this.scheduler.takeNext() : null;
     while (job && availableSlots > 0) {
       const task = this.stateGetTask(job.taskId);
@@ -3124,6 +3133,9 @@ export class Orchestrator {
         changes,
       });
       started.push(updated);
+      console.log(
+        `[orchestrator] drainScheduler: started "${job.taskId}" attempt=${attemptId} phase=launching generation=${changes.execution?.generation ?? 'unknown'}`,
+      );
 
       try {
         const existingAttempt = this.persistence.loadAttempt(attemptId);
@@ -3183,17 +3195,24 @@ export class Orchestrator {
     this.refreshFromDb();
     const task = this.stateGetTask(taskId);
     if (!task) {
+      console.log(`[orchestrator] markTaskRunningAfterLaunch: REJECT task="${taskId}" attempt=${attemptId} reason=not_found`);
       this.clearQueuedSchedulerEntries(taskId, attemptId);
       return false;
     }
 
     const selectedAttemptId = task.execution.selectedAttemptId;
     if (selectedAttemptId && selectedAttemptId !== attemptId) {
+      console.log(
+        `[orchestrator] markTaskRunningAfterLaunch: REJECT task="${taskId}" attempt=${attemptId} reason=attempt_mismatch selected=${selectedAttemptId}`,
+      );
       this.clearQueuedSchedulerEntries(taskId, attemptId);
       return false;
     }
 
     if (task.status !== 'running' && task.status !== 'pending' && task.status !== 'fixing_with_ai') {
+      console.log(
+        `[orchestrator] markTaskRunningAfterLaunch: REJECT task="${taskId}" attempt=${attemptId} reason=invalid_status status=${task.status}`,
+      );
       this.clearQueuedSchedulerEntries(taskId, attemptId);
       return false;
     }
@@ -3224,6 +3243,9 @@ export class Orchestrator {
         taskId,
         changes,
       });
+      console.log(
+        `[orchestrator] markTaskRunningAfterLaunch: EXECUTING task="${taskId}" attempt=${attemptId} previousStatus=${task.status}`,
+      );
     }
 
     try {
@@ -3255,6 +3277,7 @@ export class Orchestrator {
       // best effort — do not fail launch-state transition due to attempt sync
     }
 
+    console.log(`[orchestrator] markTaskRunningAfterLaunch: OK task="${taskId}" attempt=${attemptId}`);
     return true;
   }
 }

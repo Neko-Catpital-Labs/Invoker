@@ -1182,15 +1182,28 @@ async function headlessRetryWorkflow(workflowId: string, deps: HeadlessDeps): Pr
   const envelope = makeEnvelope('retry-workflow', 'headless', 'workflow', { workflowId });
   const result = await deps.commandService.retryWorkflow(envelope);
   if (!result.ok) throw new Error(result.error.message);
-  const runnable = result.data.filter(
-    (t) => t.status === 'running' && t.config.workflowId === workflowId,
+  const statusCounts = result.data.reduce<Record<string, number>>((acc, task) => {
+    acc[task.status] = (acc[task.status] ?? 0) + 1;
+    return acc;
+  }, {});
+  deps.logger.info(
+    `headlessRetryWorkflow trace workflow="${workflowId}" retryResult total=${result.data.length} statusCounts=${JSON.stringify(statusCounts)}`,
+    { module: 'headless' },
   );
-  const dropped = result.data.filter(
-    (t) => t.status === 'running' && t.config.workflowId !== workflowId,
-  );
-  if (dropped.length > 0) {
-    deps.logger.error(
-      `headlessRetryWorkflow dropped cross-workflow runnable tasks for "${workflowId}": ${dropped.map((task) => `${task.id}(${task.config.workflowId ?? 'unknown'})`).join(', ')}`,
+  const retryRunningSummary = result.data
+    .filter((task) => task.status === 'running')
+    .map((task) => `${task.id}(${task.config.workflowId ?? 'unknown'})`);
+  if (retryRunningSummary.length > 0) {
+    deps.logger.info(
+      `headlessRetryWorkflow trace workflow="${workflowId}" retryResult running=[${retryRunningSummary.join(', ')}]`,
+      { module: 'headless' },
+    );
+  }
+  const runnable = result.data.filter((t) => t.status === 'running');
+  const crossWorkflow = runnable.filter((t) => t.config.workflowId !== workflowId);
+  if (crossWorkflow.length > 0) {
+    deps.logger.info(
+      `headlessRetryWorkflow dispatching cross-workflow runnable tasks for "${workflowId}": ${crossWorkflow.map((task) => `${task.id}(${task.config.workflowId ?? 'unknown'})`).join(', ')}`,
       { module: 'headless' },
     );
   }
@@ -1207,7 +1220,21 @@ async function headlessRetryWorkflow(workflowId: string, deps: HeadlessDeps): Pr
     .startExecution()
     .filter((task) => task.status === 'running')
     .filter((task) => !scopedKeys.has(runningKey(task)));
+  deps.logger.info(
+    `headlessRetryWorkflow trace workflow="${workflowId}" postStartExecution globalTopup=${globalTopup.length}`,
+    { module: 'headless' },
+  );
+  if (globalTopup.length > 0) {
+    deps.logger.info(
+      `headlessRetryWorkflow trace workflow="${workflowId}" globalTopup running=[${globalTopup.map((task) => `${task.id}(${task.config.workflowId ?? 'unknown'})`).join(', ')}]`,
+      { module: 'headless' },
+    );
+  }
   const dispatchable = [...runnable, ...globalTopup];
+  deps.logger.info(
+    `headlessRetryWorkflow trace workflow="${workflowId}" dispatchable=${dispatchable.length} ids=[${dispatchable.map((task) => `${task.id}(${task.config.workflowId ?? 'unknown'})`).join(', ')}]`,
+    { module: 'headless' },
+  );
 
   process.stdout.write(`Retry workflow "${workflowId}" — ${dispatchable.length} task(s) to execute (completed tasks preserved)\n`);
   if (dispatchable.length === 0) return;

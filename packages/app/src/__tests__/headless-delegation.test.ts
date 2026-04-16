@@ -436,7 +436,7 @@ describe('headless delegation enforcement', () => {
         expect(runnable[0]?.id).toBe('wf-1/task-1');
       });
 
-      it('headless restart drops runnable tasks from other workflows before deferring execution', async () => {
+      it('headless restart dispatches runnable tasks from other workflows in no-track mode', async () => {
         const deferRunnableTasks = vi.fn();
         const preemptWorkflowExecution = vi.fn(async () => {});
         mockDeps.orchestrator.getPersistedActiveTaskIds = vi.fn(() => new Set<string>());
@@ -469,8 +469,8 @@ describe('headless delegation enforcement', () => {
 
         expect(deferRunnableTasks).toHaveBeenCalledTimes(1);
         const [runnable] = deferRunnableTasks.mock.calls[0] ?? [];
-        expect(runnable).toHaveLength(1);
-        expect(runnable[0]?.id).toBe('wf-1/task-1');
+        expect(runnable).toHaveLength(2);
+        expect(runnable.map((task: any) => task.id)).toEqual(['wf-1/task-1', 'wf-2/task-2']);
       });
 
       it('headless workflow restart includes global top-up tasks when deferring no-track execution', async () => {
