@@ -13,7 +13,7 @@ describe('headless-client', () => {
     const runElectronHeadless = vi.fn(async () => 0);
     const ensureStandaloneOwner = vi.fn(async () => {});
 
-    const exitCode = await runHeadlessClientCommand(['restart', 'wf-1', '--no-track'], {
+    const exitCode = await runHeadlessClientCommand(['retry', 'wf-1', '--no-track'], {
       messageBus: bus,
       ensureStandaloneOwner,
       runElectronHeadless,
@@ -21,7 +21,7 @@ describe('headless-client', () => {
 
     expect(exitCode).toBe(0);
     expect(ownerHandler).toHaveBeenCalledWith({
-      args: ['restart', 'wf-1'],
+      args: ['retry', 'wf-1'],
       noTrack: true,
       waitForApproval: false,
     });
@@ -37,7 +37,7 @@ describe('headless-client', () => {
       bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-1', mode: 'standalone' }));
     });
 
-    const exitCode = await runHeadlessClientCommand(['restart', 'wf-2', '--no-track'], {
+    const exitCode = await runHeadlessClientCommand(['retry', 'wf-2', '--no-track'], {
       messageBus: bus,
       ensureStandaloneOwner,
       runElectronHeadless: vi.fn(async () => 0),

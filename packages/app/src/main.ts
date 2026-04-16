@@ -13,8 +13,8 @@
  *   electron dist/main.js --headless reject <taskId> [reason]
  *   electron dist/main.js --headless input <taskId> <text>
  *   electron dist/main.js --headless select <taskId> <expId>
- *   electron dist/main.js --headless restart <taskId>
- *   electron dist/main.js --headless restart-workflow <workflowId>
+ *   electron dist/main.js --headless retry-task <taskId>
+ *   electron dist/main.js --headless retry <workflowId>
  *   electron dist/main.js --headless rebase-and-retry <taskId>
  *   electron dist/main.js --headless fix <taskId>
  *   electron dist/main.js --headless resolve-conflict <taskId>
@@ -105,7 +105,7 @@ import { openExternalTerminalForTask } from './open-terminal-for-task.js';
 import { createRequire } from 'node:module';
 import { acquireDbWriterLock, type DbWriterLockResult } from './db-writer-lock.js';
 import { applyDelta } from './delta-merge.js';
-import { shouldAutoFixFromDelta } from './auto-fix-gating.js';
+import { shouldSkipAutoFixForError } from './auto-fix-gating.js';
 import { ensureSqliteFlushDebounceForOwner } from './sqlite-flush-policy.js';
 import type { WorkflowMutationPriority } from './workflow-mutation-coordinator.js';
 import { PersistedWorkflowMutationCoordinator } from './persisted-workflow-mutation-coordinator.js';
@@ -634,7 +634,7 @@ if (isHeadless) {
           };
 
           switch (command) {
-            case 'restart':
+            case 'retry':
               return {
                 workflowId: standaloneWorkflowIdForTaskArg(arg0) ?? (arg0 === undefined ? undefined : String(arg0)),
                 priority: 'high',
@@ -788,12 +788,21 @@ if (isHeadless) {
   const autoFixInProgress = new Set<string>();
   const pendingAutoFixTasks: string[] = [];
   const queuedAutoFixTasks = new Set<string>();
-  const explicitRetryTaskIds = new Set<string>();
   const deferredWorkflowLaunches = new Map<string, {
     timer: ReturnType<typeof setTimeout>;
     taskIds: string[];
     firstScheduledAtMs: number;
   }>();
+  const cancelDeferredWorkflowLaunch = (workflowId: string, reason: string): void => {
+    const pending = deferredWorkflowLaunches.get(workflowId);
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    deferredWorkflowLaunches.delete(workflowId);
+    logger.info(
+      `cancelled deferred runnable launch workflow="${workflowId}" reason="${reason}" tasks=[${pending.taskIds.join(',')}]`,
+      { module: 'ipc-delegate' },
+    );
+  };
   const pendingOutputBuffers = new Map<string, string[]>();
   const outputFlushTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const pendingUiTaskDeltas: TaskDelta[] = [];
@@ -993,6 +1002,7 @@ if (isHeadless) {
           persistence,
           taskExecutor: requireTaskExecutor(),
           getAutoFixAgent: () => loadConfig().autoFixAgent,
+          getAutoApproveAIFixes: () => loadConfig().autoApproveAIFixes,
         })
           .catch((err) => {
             logAutoFixDebug(nextTaskId, 'drain-dispatch-error', {
@@ -1292,6 +1302,14 @@ if (isHeadless) {
     logger.info(`executeHeadlessExec begin args="${payload.args.join(' ')}" noTrack=${payload.noTrack ? 'true' : 'false'}`, {
       module: 'ipc-delegate',
     });
+    const headlessCommand = String(payload.args[0] ?? '');
+    const headlessTarget = String(payload.args[1] ?? '');
+    if (
+      (headlessCommand === 'recreate' || headlessCommand === 'retry')
+      && /^wf-[^/]+$/.test(headlessTarget)
+    ) {
+      cancelDeferredWorkflowLaunch(headlessTarget, `headless.${headlessCommand}`);
+    }
     await runHeadless(payload.args, {
       logger,
       orchestrator, persistence, executorRegistry, messageBus,
@@ -1351,9 +1369,6 @@ if (isHeadless) {
             `deferRunnableTasks start workflow="${workflowId ?? 'unknown'}" count=${filteredTasks.length}`,
             { module: 'ipc-delegate' },
           );
-          for (const task of filteredTasks) {
-            explicitRetryTaskIds.add(task.id);
-          }
           remoteFetchForPool.enabled = false;
           void requireTaskExecutor().executeTasks(filteredTasks)
             .then(() => {
@@ -1398,7 +1413,7 @@ if (isHeadless) {
     if (!command) return { priority: 'normal' };
 
     switch (command) {
-      case 'restart':
+      case 'retry':
         return { workflowId: workflowIdForTaskArg(arg0) ?? (arg0 === undefined ? undefined : String(arg0)), priority: 'high' };
       case 'recreate':
       case 'cancel-workflow':
@@ -1468,7 +1483,7 @@ if (isHeadless) {
         if (Array.isArray(arg1)) return null;
         return { channel: 'headless.exec', request: { args: ['select', String(arg0), String(arg1)] } };
       case 'invoker:restart-task':
-        return { channel: 'headless.exec', request: { args: ['restart', String(arg0)] } };
+        return { channel: 'headless.exec', request: { args: ['retry-task', String(arg0)] } };
       case 'invoker:cancel-task':
         return { channel: 'headless.exec', request: { args: ['cancel', String(arg0)] } };
       case 'invoker:cancel-workflow':
@@ -1478,7 +1493,7 @@ if (isHeadless) {
       case 'invoker:recreate-task':
         return { channel: 'headless.exec', request: { args: ['recreate-task', String(arg0)] } };
       case 'invoker:retry-workflow':
-        return { channel: 'headless.exec', request: { args: ['restart', String(arg0)] } };
+        return { channel: 'headless.exec', request: { args: ['retry', String(arg0)] } };
       case 'invoker:rebase-and-retry':
         return { channel: 'headless.exec', request: { args: ['rebase', String(arg0)] } };
       case 'invoker:set-merge-mode':
@@ -2124,58 +2139,20 @@ if (isHeadless) {
       const deltaTaskId = d.type === 'updated' || d.type === 'removed'
         ? d.taskId
         : undefined;
-      const previousSnapshot = deltaTaskId
-        ? lastKnownTaskStates.get(deltaTaskId)
-        : undefined;
-      const shouldAutoFix = shouldAutoFixFromDelta(d, previousSnapshot, {
-        wasExplicitRetry: deltaTaskId ? explicitRetryTaskIds.has(deltaTaskId) : false,
-      });
       if (d.type === 'updated' && d.changes.status === 'failed') {
-        let previousStatus = 'unknown';
-        if (previousSnapshot) {
-          try {
-            const parsed = JSON.parse(previousSnapshot) as { status?: string };
-            previousStatus = parsed.status ?? 'missing';
-          } catch {
-            previousStatus = 'snapshot-parse-failed';
-          }
-        } else {
-          previousStatus = 'none';
-        }
+        const cancellationError = shouldSkipAutoFixForError(d.changes.execution?.error);
+        const shouldAutoFixFromOrchestrator = orchestrator.shouldAutoFix(d.taskId);
         logAutoFixDebug(d.taskId, 'delta-failed', {
-          previousStatus,
-          wasExplicitRetry: explicitRetryTaskIds.has(d.taskId),
-          shouldAutoFixFromDelta: shouldAutoFix,
+          shouldSkipForCancellation: cancellationError,
+          shouldAutoFixFromOrchestrator,
         });
-      }
-
-      applyDelta(d, lastKnownTaskStates, orchestrator);
-      if (d.type === 'updated') {
-        const nextStatus = d.changes.status;
-        if (
-          nextStatus === 'completed'
-          || nextStatus === 'failed'
-          || nextStatus === 'awaiting_approval'
-          || nextStatus === 'review_ready'
-          || nextStatus === 'needs_input'
-          || nextStatus === 'stale'
-          || nextStatus === 'blocked'
-        ) {
-          explicitRetryTaskIds.delete(d.taskId);
-        }
-      } else if (d.type === 'removed') {
-        explicitRetryTaskIds.delete(d.taskId);
-      }
-
-      // Auto-fix: only runtime failures that transitioned out of an active state
-      // should trigger repair. Startup replay of already-failed tasks must remain
-      // visible in the UI without kicking off fix work automatically.
-      if (shouldAutoFix) {
-        if (deltaTaskId) {
+        if (!cancellationError && shouldAutoFixFromOrchestrator && deltaTaskId) {
           logAutoFixDebug(deltaTaskId, 'delta-trigger-schedule');
           scheduleAutoFix(deltaTaskId);
         }
       }
+
+      applyDelta(d, lastKnownTaskStates, orchestrator);
     });
 
     uiPerfLogInterval = setInterval(() => {
@@ -2613,6 +2590,7 @@ if (isHeadless) {
       'high',
       async (workflowIdArg: unknown) => {
       const workflowId = String(workflowIdArg);
+      cancelDeferredWorkflowLaunch(workflowId, 'ipc.recreate-workflow');
       logger.info(`recreate-workflow: "${workflowId}"`, { module: 'ipc' });
       try {
         await preemptWorkflowExecution(workflowId);
@@ -2675,6 +2653,7 @@ if (isHeadless) {
       'high',
       async (workflowIdArg: unknown) => {
       const workflowId = String(workflowIdArg);
+      cancelDeferredWorkflowLaunch(workflowId, 'ipc.retry-workflow');
       logger.info(`retry-workflow: "${workflowId}"`, { module: 'ipc' });
       try {
         await preemptWorkflowExecution(workflowId);

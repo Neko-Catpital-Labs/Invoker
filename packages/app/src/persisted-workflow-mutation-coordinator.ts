@@ -157,6 +157,7 @@ export class PersistedWorkflowMutationCoordinator {
       });
     }, this.leaseHeartbeatMs);
     try {
+      this.evictQueuedWorkflowIntentsForFence(workflowId, intent);
       const result = await this.dispatch(intent.channel, intent.args);
       this.persistence.completeWorkflowMutationIntent(intent.id);
       deferred?.resolve(result);
@@ -169,5 +170,45 @@ export class PersistedWorkflowMutationCoordinator {
       this.persistence.renewWorkflowMutationLease(workflowId, this.ownerId);
       this.inFlightPromises.delete(intent.id);
     }
+  }
+
+  private evictQueuedWorkflowIntentsForFence(workflowId: string, intent: WorkflowMutationIntent): void {
+    if (!this.isWorkflowQueueFenceIntent(intent)) {
+      return;
+    }
+    const evictedIds = this.persistence.evictQueuedWorkflowMutationIntentsBefore(
+      workflowId,
+      intent.id,
+      `Evicted by workflow queue fence: ${intent.channel}#${intent.id}`,
+    );
+    if (evictedIds.length > 0) {
+      for (const evictedId of evictedIds) {
+        const deferred = this.inFlightPromises.get(evictedId);
+        if (!deferred) continue;
+        deferred.reject(new Error(`Workflow mutation intent ${evictedId} was evicted by ${intent.channel}#${intent.id}`));
+        this.inFlightPromises.delete(evictedId);
+      }
+      process.stderr.write(
+        `[workflow-mutation-coordinator] evicted ${evictedIds.length} queued intent(s) before fence ${intent.channel}#${intent.id} for ${workflowId}\n`,
+      );
+    }
+  }
+
+  private isWorkflowQueueFenceIntent(intent: WorkflowMutationIntent): boolean {
+    if (intent.channel === 'invoker:retry-workflow' || intent.channel === 'invoker:recreate-workflow') {
+      return true;
+    }
+    if (intent.channel !== 'headless.exec') {
+      return false;
+    }
+    const payload = intent.args[0] as { args?: unknown[] } | undefined;
+    const rawArgs = Array.isArray(payload?.args) ? payload.args : [];
+    const command = typeof rawArgs[0] === 'string' ? rawArgs[0] : '';
+    const target = typeof rawArgs[1] === 'string' ? rawArgs[1] : '';
+    const isWorkflowId = /^wf-[^/]+$/.test(target);
+    if (!isWorkflowId) {
+      return false;
+    }
+    return command === 'recreate' || command === 'retry';
   }
 }

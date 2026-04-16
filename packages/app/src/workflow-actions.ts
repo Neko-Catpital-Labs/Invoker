@@ -310,6 +310,8 @@ type AutoFixAgentSelection = {
   fallbackChain: string;
 };
 
+type AutoFixPostRouteStrategy = 'rerun_task' | 'resume_from_fixed_tip';
+
 function resolveAutoFixAgent(
   configuredAutoFixAgent: string | undefined,
   taskExecutionAgent: string | undefined,
@@ -343,6 +345,50 @@ function resolveAutoFixAgent(
   };
 }
 
+function selectAutoFixPostRouteStrategy(task: TaskState): AutoFixPostRouteStrategy {
+  return task.config.isMergeNode ? 'resume_from_fixed_tip' : 'rerun_task';
+}
+
+async function recordFixedIntegrationAnchor(
+  taskId: string,
+  task: TaskState,
+  deps: {
+    persistence: SQLiteAdapter;
+    taskExecutor: TaskRunner;
+  },
+): Promise<void> {
+  const workspacePath = task.execution.workspacePath?.trim();
+  if (!workspacePath) {
+    deps.persistence.logEvent?.(taskId, 'debug.auto-fix', {
+      phase: 'auto-fix-fixed-anchor-skip',
+      reason: 'missing-workspace-path',
+    });
+    return;
+  }
+  try {
+    const fixedIntegrationSha = (await deps.taskExecutor.execGitIn(['rev-parse', 'HEAD'], workspacePath)).trim();
+    const fixedIntegrationRecordedAt = new Date();
+    deps.persistence.updateTask(taskId, {
+      execution: {
+        fixedIntegrationSha,
+        fixedIntegrationRecordedAt,
+        fixedIntegrationSource: 'auto_fix',
+      },
+    });
+    deps.persistence.logEvent?.(taskId, 'debug.auto-fix', {
+      phase: 'auto-fix-fixed-anchor-recorded',
+      fixedIntegrationSha,
+      workspacePath,
+    });
+  } catch (err) {
+    deps.persistence.logEvent?.(taskId, 'debug.auto-fix', {
+      phase: 'auto-fix-fixed-anchor-failed',
+      workspacePath,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
 /**
  * Automatically fix a failed task with an AI agent and restart it.
  * Increments autoFixAttempts; respects the max budget from shouldAutoFix().
@@ -354,6 +400,7 @@ export async function autoFixOnFailure(
     persistence: SQLiteAdapter;
     taskExecutor: TaskRunner;
     getAutoFixAgent?: () => string | undefined;
+    getAutoApproveAIFixes?: () => boolean | undefined;
   },
 ): Promise<void> {
   const { orchestrator, persistence, taskExecutor } = deps;
@@ -421,7 +468,29 @@ export async function autoFixOnFailure(
     } else {
       await taskExecutor.fixWithAgent(taskId, output, agentSelection.selectedAgent, savedError);
     }
-    // Skip approve flow — directly restart to re-run the task
+    const postRouteStrategy = selectAutoFixPostRouteStrategy(task);
+    persistence.logEvent?.(taskId, 'debug.auto-fix', {
+      phase: 'auto-fix-post-route-strategy-selected',
+      strategy: postRouteStrategy,
+    });
+    if (postRouteStrategy === 'resume_from_fixed_tip') {
+      await recordFixedIntegrationAnchor(taskId, task, {
+        persistence,
+        taskExecutor,
+      });
+      const finalizeResult = await finalizeAppliedFix(taskId, savedError, {
+        orchestrator,
+        taskExecutor,
+        autoApproveAIFixes: deps.getAutoApproveAIFixes?.() ?? true,
+      });
+      persistence.logEvent?.(taskId, 'debug.auto-fix', {
+        phase: 'auto-fix-post-route-finalize',
+        autoApproved: finalizeResult.autoApproved,
+        startedCount: finalizeResult.started.length,
+        startedStatuses: finalizeResult.started.map((t) => t.status),
+      });
+      return;
+    }
     const started = orchestrator.restartTask(taskId);
     const runnable = started.filter(t => t.status === 'running');
     persistence.logEvent?.(taskId, 'debug.auto-fix', {

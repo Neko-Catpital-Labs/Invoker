@@ -2,7 +2,7 @@
 # Retry the unfinished portion of every workflow using headless commands.
 #
 # This preserves completed work. For each workflow, it invokes:
-#   ./run.sh --headless restart <workflowId>
+#   ./run.sh --headless retry <workflowId>
 #
 # Usage:
 #   bash scripts/retry-failed-and-pending-all-workflows.sh
@@ -97,7 +97,7 @@ TOTAL="$(printf '%s\n' "$WORKFLOWS" | wc -l | tr -d ' ')"
 if [[ -z "$PARALLELISM" ]]; then
   PARALLELISM=1
 fi
-echo "Found $TOTAL workflow(s) to retry via headless restart."
+echo "Found $TOTAL workflow(s) to retry via headless retry."
 echo "Parallelism: $PARALLELISM"
 echo "Follow mode: $FOLLOW"
 echo ""
@@ -108,7 +108,7 @@ if $DRY_RUN; then
     [[ -z "$WF_ID" ]] && continue
     IDX=$((IDX + 1))
     echo "[$IDX/$TOTAL] $WF_ID"
-    echo "         (dry-run) would run: ./run.sh --headless restart $WF_ID --no-track"
+    echo "         (dry-run) would run: ./run.sh --headless retry $WF_ID --no-track"
     echo ""
   done <<<"$WORKFLOWS"
 
@@ -127,7 +127,7 @@ else
     local code=0
 
     set +e
-    cmd_out="$("$RUNNER" --headless restart "$wf_id" --no-track 2>&1)"
+    cmd_out="$("$RUNNER" --headless retry "$wf_id" --no-track 2>&1)"
     code=$?
     set -e
 

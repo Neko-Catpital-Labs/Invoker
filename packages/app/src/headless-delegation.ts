@@ -50,7 +50,8 @@ export function delegationTimeoutMs(args: string[]): number {
     command === 'rebase' ||
     command === 'rebase-and-retry' ||
     command === 'recreate' ||
-    command === 'restart' ||
+    command === 'retry' ||
+    command === 'retry-task' ||
     command === 'set' ||
     command === 'fix' ||
     command === 'resolve-conflict'

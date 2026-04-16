@@ -178,6 +178,7 @@ export function wireHeadlessAutoFix(
       persistence: deps.persistence,
       taskExecutor: taskExecutor as TaskRunner,
       getAutoFixAgent: () => loadConfig().autoFixAgent,
+      getAutoApproveAIFixes: () => loadConfig().autoApproveAIFixes,
     });
   },
   onError: (taskId: string, err: unknown) => void = (taskId, err) => {
@@ -552,17 +553,12 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
     case 'resume':
       await headlessResume(args[1], deps, deps.waitForApproval, deps.noTrack);
       break;
-    case 'restart': {
-      const id = args[1];
-      if (id?.startsWith('wf-') && !id.includes('/')) {
-        // Workflow ID → incremental retry
-        await headlessRetryWorkflow(id, deps);
-      } else {
-        // Task ID → single task restart (existing behavior)
-        await headlessRestart(id, deps);
-      }
+    case 'retry':
+      await headlessRetryWorkflow(args[1], deps);
       break;
-    }
+    case 'retry-task':
+      await headlessRestart(args[1], deps);
+      break;
     case 'recreate':
       await headlessRecreateWorkflow(args[1], deps);
       break;
@@ -574,14 +570,6 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
       break;
 
     // Deprecated aliases
-    case 'restart-workflow':
-      warnDeprecated('restart-workflow', 'recreate');
-      await headlessRecreateWorkflow(args[1], deps);
-      break;
-    case 'clean-restart':
-      warnDeprecated('clean-restart', 'recreate');
-      await headlessRecreateWorkflow(args[1], deps);
-      break;
     case 'rebase-and-retry':
       warnDeprecated('rebase-and-retry', 'rebase');
       await headlessRebaseAndRetry(args[1], deps);
@@ -724,8 +712,8 @@ ${BOLD}Query${RESET} (read-only, all support --output text|label|json|jsonl):
 ${BOLD}Execute:${RESET}
   run <plan.yaml>                                     Load and execute plan
   resume <id>                                         Resume incomplete workflow
-  restart <taskId>                                    Restart a single failed/stuck task
-  restart <workflowId>                                Retry workflow: rerun failed, keep completed
+  retry <workflowId>                                  Retry workflow: rerun failed, keep completed
+  retry-task <taskId>                                 Retry a single failed/stuck task
   recreate <workflowId>                                Recreate workflow: wipe all state, new generation
   recreate-task <taskId>                               Recreate task + downstream (task-scoped reset)
   rebase <taskId>                                     Refresh pool base + nuclear restart
@@ -760,8 +748,7 @@ ${BOLD}Deprecated${RESET} (use new names above):
   queue → query queue           audit → query audit         session → query session
   edit → set command            edit-executor → set executor
   edit-agent → set agent        set-merge-mode → set merge-mode
-  delete-workflow → delete      restart-workflow → recreate
-  clean-restart → recreate
+  delete-workflow → delete
   rebase-and-retry → rebase
 
 ${BOLD}Options:${RESET}
@@ -981,7 +968,7 @@ async function headlessSelect(taskId: string, experimentId: string, deps: Headle
 }
 
 async function headlessRestart(taskId: string, deps: HeadlessDeps): Promise<void> {
-  if (!taskId) throw new Error('Missing arguments. Usage: --headless restart <taskId>');
+  if (!taskId) throw new Error('Missing arguments. Usage: --headless retry-task <taskId>');
   taskId = restoreWorkflowForTask(taskId, deps).resolvedTaskId;
   await preemptTaskSubgraph(taskId, deps);
 
@@ -1206,7 +1193,7 @@ async function headlessRecreateTask(taskId: string, deps: HeadlessDeps): Promise
 
 async function headlessRetryWorkflow(workflowId: string, deps: HeadlessDeps): Promise<void> {
   if (!workflowId) {
-    throw new Error('Missing arguments. Usage: --headless restart <workflowId>');
+    throw new Error('Missing arguments. Usage: --headless retry <workflowId>');
   }
   deps.logger.info(`headlessRetryWorkflow begin workflow="${workflowId}" noTrack=${deps.noTrack ? 'true' : 'false'}`, {
     module: 'headless',
@@ -1293,7 +1280,7 @@ async function headlessRetryWorkflow(workflowId: string, deps: HeadlessDeps): Pr
       }, 25);
       launch.unref?.();
     }
-    process.stdout.write('[headless] --no-track enabled: restart accepted; exiting without tracking.\n');
+    process.stdout.write('[headless] --no-track enabled: retry accepted; exiting without tracking.\n');
     return;
   }
 

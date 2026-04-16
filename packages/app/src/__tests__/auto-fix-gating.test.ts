@@ -1,116 +1,28 @@
 import { describe, expect, it } from 'vitest';
 
-import { shouldAutoFixFromDelta } from '../auto-fix-gating.js';
+import { shouldSkipAutoFixForError } from '../auto-fix-gating.js';
 
 describe('auto-fix-gating', () => {
-  it('does not auto-fix replayed failed state from persistence', () => {
-    expect(
-      shouldAutoFixFromDelta(
-        {
-          type: 'updated',
-          taskId: 'task-1',
-          changes: { status: 'failed' },
-        },
-        JSON.stringify({ id: 'task-1', status: 'failed' }),
-      ),
-    ).toBe(false);
+  it('does not skip auto-fix for non-string errors', () => {
+    expect(shouldSkipAutoFixForError(undefined)).toBe(false);
+    expect(shouldSkipAutoFixForError(null)).toBe(false);
+    expect(shouldSkipAutoFixForError(42)).toBe(false);
   });
 
-  it('does not auto-fix a failure without a prior active snapshot', () => {
-    expect(
-      shouldAutoFixFromDelta({
-        type: 'updated',
-        taskId: 'task-1',
-        changes: { status: 'failed' },
-      }),
-    ).toBe(false);
+  it('skips auto-fix for workflow cancellation errors', () => {
+    expect(shouldSkipAutoFixForError('Cancelled by user (workflow)')).toBe(true);
   });
 
-  it('auto-fixes an explicit retry failure even if the cached snapshot is stale', () => {
-    expect(
-      shouldAutoFixFromDelta(
-        {
-          type: 'updated',
-          taskId: 'task-1',
-          changes: { status: 'failed' },
-        },
-        JSON.stringify({ id: 'task-1', status: 'failed' }),
-        { wasExplicitRetry: true },
-      ),
-    ).toBe(true);
+  it('skips auto-fix for downstream cancellation errors', () => {
+    expect(shouldSkipAutoFixForError('Cancelled: upstream task "build" was cancelled')).toBe(true);
   });
 
-  it('auto-fixes a real running to failed transition', () => {
-    expect(
-      shouldAutoFixFromDelta(
-        {
-          type: 'updated',
-          taskId: 'task-1',
-          changes: { status: 'failed' },
-        },
-        JSON.stringify({ id: 'task-1', status: 'running' }),
-      ),
-    ).toBe(true);
-  });
-
-  it('auto-fixes a fixing_with_ai to failed transition', () => {
-    expect(
-      shouldAutoFixFromDelta(
-        {
-          type: 'updated',
-          taskId: 'task-1',
-          changes: { status: 'failed' },
-        },
-        JSON.stringify({ id: 'task-1', status: 'fixing_with_ai' }),
-      ),
-    ).toBe(true);
-  });
-
-  it('does not auto-fix workflow cancellation failures', () => {
-    expect(
-      shouldAutoFixFromDelta(
-        {
-          type: 'updated',
-          taskId: 'task-1',
-          changes: {
-            status: 'failed',
-            execution: { error: 'Cancelled by user (workflow)' },
-          },
-        },
-        JSON.stringify({ id: 'task-1', status: 'running' }),
-      ),
-    ).toBe(false);
-  });
-
-  it('does not auto-fix downstream cancellation failures', () => {
-    expect(
-      shouldAutoFixFromDelta(
-        {
-          type: 'updated',
-          taskId: 'task-1',
-          changes: {
-            status: 'failed',
-            execution: { error: 'Cancelled: upstream task "build" was cancelled' },
-          },
-        },
-        JSON.stringify({ id: 'task-1', status: 'running' }),
-      ),
-    ).toBe(false);
-  });
-
-  it('auto-fixes explicit restarted-task failures when they were running before failing', () => {
-    expect(
-      shouldAutoFixFromDelta(
-        {
-          type: 'updated',
-          taskId: 'wf-1/task-1',
-          changes: {
-            status: 'failed',
-            execution: { error: 'non-zero exit' },
-          },
-        },
-        JSON.stringify({ status: 'running' }),
-      ),
-    ).toBe(true);
+  it('does not skip auto-fix for normal failures', () => {
+    expect(shouldSkipAutoFixForError('non-zero exit')).toBe(false);
+    expect(shouldSkipAutoFixForError('Merge failed: CONFLICT')).toBe(false);
+    expect(shouldSkipAutoFixForError('')).toBe(false);
+    expect(shouldSkipAutoFixForError('cancelled by user')).toBe(false);
+    expect(shouldSkipAutoFixForError('Cancel')).toBe(false);
+    expect(shouldSkipAutoFixForError('Not Cancelled: warning only')).toBe(false);
   });
 });

@@ -26,12 +26,12 @@ describe('headless→owner delegation', () => {
       expect(delegationTimeoutMs(['rebase-and-retry', 'wf-1/task-1'])).toBe(900_000);
     });
 
-    it('uses extended timeout for restart at workflow scope', () => {
-      expect(delegationTimeoutMs(['restart', 'wf-123'])).toBe(900_000);
+    it('uses extended timeout for retry at workflow scope', () => {
+      expect(delegationTimeoutMs(['retry', 'wf-123'])).toBe(900_000);
     });
 
-    it('treats task-scoped restart as long-running maintenance too', () => {
-      expect(delegationTimeoutMs(['restart', 'wf-123/task-1'])).toBe(900_000);
+    it('treats task-scoped retry as long-running maintenance too', () => {
+      expect(delegationTimeoutMs(['retry-task', 'wf-123/task-1'])).toBe(900_000);
     });
 
     it('uses the default short timeout for non-maintenance commands', () => {
@@ -73,15 +73,15 @@ describe('headless→owner delegation', () => {
       });
     });
 
-    it('delegates restart command to owner', async () => {
+    it('delegates retry-task command to owner', async () => {
       const ownerHandler = vi.fn(async () => ({ success: true }));
       messageBus.onRequest('headless.exec', ownerHandler);
 
-      const delegated = await tryDelegateExec(['restart', 'wf-1/task-1'], messageBus);
+      const delegated = await tryDelegateExec(['retry-task', 'wf-1/task-1'], messageBus);
 
       expect(delegated).toBe(true);
       expect(ownerHandler).toHaveBeenCalledWith({
-        args: ['restart', 'wf-1/task-1'],
+        args: ['retry-task', 'wf-1/task-1'],
         waitForApproval: undefined,
       });
     });
@@ -192,7 +192,7 @@ describe('headless→owner delegation', () => {
 
       // Error should propagate to caller (not caught as "no owner")
       await expect(
-        tryDelegateExec(['restart', 'wf-1/nonexistent'], messageBus),
+        tryDelegateExec(['retry-task', 'wf-1/nonexistent'], messageBus),
       ).rejects.toThrow('Owner execution failed: task not found');
     });
 

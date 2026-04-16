@@ -2103,4 +2103,42 @@ describe('SQLiteAdapter', () => {
       expect((adapter as any).dirty).toBe(true);
     });
   });
+
+  describe('workflow mutation intent eviction', () => {
+    it('fails queued intents for a workflow before a fence intent id', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveWorkflow({
+        ...testWorkflow,
+        id: 'wf-2',
+        name: 'Second Workflow',
+      });
+
+      const olderNormal = adapter.enqueueWorkflowMutationIntent('wf-1', 'headless.exec', [{ args: ['set', 'agent', 'wf-1/task-1', 'codex'] }], 'normal');
+      const olderHigh = adapter.enqueueWorkflowMutationIntent('wf-1', 'headless.exec', [{ args: ['approve', 'wf-1/task-1'] }], 'high');
+      const fence = adapter.enqueueWorkflowMutationIntent('wf-1', 'headless.exec', [{ args: ['recreate', 'wf-1'] }], 'high');
+      const newer = adapter.enqueueWorkflowMutationIntent('wf-1', 'headless.exec', [{ args: ['reject', 'wf-1/task-2'] }], 'normal');
+      const otherWorkflow = adapter.enqueueWorkflowMutationIntent('wf-2', 'headless.exec', [{ args: ['restart', 'wf-2'] }], 'normal');
+
+      const evicted = adapter.evictQueuedWorkflowMutationIntentsBefore('wf-1', fence, 'evicted by recreate');
+      expect(evicted).toHaveLength(2);
+      expect(evicted).toEqual(expect.arrayContaining([olderNormal, olderHigh]));
+
+      const intentsWf1 = adapter.listWorkflowMutationIntents('wf-1');
+      const byIdWf1 = new Map(intentsWf1.map((intent) => [intent.id, intent]));
+      expect(byIdWf1.get(olderNormal)?.status).toBe('failed');
+      expect(byIdWf1.get(olderHigh)?.status).toBe('failed');
+      expect(byIdWf1.get(olderNormal)?.error).toContain('evicted by recreate');
+      expect(byIdWf1.get(fence)?.status).toBe('queued');
+      expect(byIdWf1.get(newer)?.status).toBe('queued');
+
+      const intentsWf2 = adapter.listWorkflowMutationIntents('wf-2');
+      expect(intentsWf2.find((intent) => intent.id === otherWorkflow)?.status).toBe('queued');
+    });
+
+    it('returns zero when there are no queued intents to evict', () => {
+      adapter.saveWorkflow(testWorkflow);
+      const fence = adapter.enqueueWorkflowMutationIntent('wf-1', 'headless.exec', [{ args: ['recreate', 'wf-1'] }], 'high');
+      expect(adapter.evictQueuedWorkflowMutationIntentsBefore('wf-1', fence)).toEqual([]);
+    });
+  });
 });
