@@ -68,13 +68,13 @@ if [[ -z "$WORKFLOW_ID" ]]; then
 fi
 
 for i in $(seq 1 "$BURST"); do
-  env "${COMMON_ENV[@]}" ./run.sh --headless --no-track restart "$WORKFLOW_ID" \
-    >"$TMP_DIR/restart-$i.stdout.log" 2>"$TMP_DIR/restart-$i.stderr.log" &
+  env "${COMMON_ENV[@]}" ./run.sh --headless --no-track retry "$WORKFLOW_ID" \
+    >"$TMP_DIR/retry-$i.stdout.log" 2>"$TMP_DIR/retry-$i.stderr.log" &
 done
 wait
 
 OWNER_SERVE_COUNT="$(( $( (pgrep -af '[e]lectron/dist/electron .*packages/app/dist/main.js.*--headless owner-serve' || true) | wc -l | tr -d ' ' ) ))"
-HEADLESS_RESTART_ELECTRONS="$(( $( (pgrep -af "[e]lectron/dist/electron .*packages/app/dist/main.js.*--headless restart ${WORKFLOW_ID}" || true) | wc -l | tr -d ' ' ) ))"
+HEADLESS_RETRY_ELECTRONS="$(( $( (pgrep -af "[e]lectron/dist/electron .*packages/app/dist/main.js.*--headless retry ${WORKFLOW_ID}" || true) | wc -l | tr -d ' ' ) ))"
 
 if [[ "$OWNER_SERVE_COUNT" -gt 1 ]]; then
   echo "repro: expected at most one standalone owner, saw $OWNER_SERVE_COUNT" >&2
@@ -82,13 +82,13 @@ if [[ "$OWNER_SERVE_COUNT" -gt 1 ]]; then
   exit 1
 fi
 
-if [[ "$HEADLESS_RESTART_ELECTRONS" -ne 0 ]]; then
-  echo "repro: expected zero headless restart electron processes, saw $HEADLESS_RESTART_ELECTRONS" >&2
-  pgrep -af "[e]lectron/dist/electron .*packages/app/dist/main.js.*--headless restart ${WORKFLOW_ID}" >&2 || true
+if [[ "$HEADLESS_RETRY_ELECTRONS" -ne 0 ]]; then
+  echo "repro: expected zero headless retry electron processes, saw $HEADLESS_RETRY_ELECTRONS" >&2
+  pgrep -af "[e]lectron/dist/electron .*packages/app/dist/main.js.*--headless retry ${WORKFLOW_ID}" >&2 || true
   exit 1
 fi
 
 echo "repro: confirmed headless burst uses a single shared owner"
 echo "workflow: $WORKFLOW_ID"
 echo "owner-serve-count: $OWNER_SERVE_COUNT"
-echo "headless-restart-electrons: $HEADLESS_RESTART_ELECTRONS"
+echo "headless-retry-electrons: $HEADLESS_RETRY_ELECTRONS"

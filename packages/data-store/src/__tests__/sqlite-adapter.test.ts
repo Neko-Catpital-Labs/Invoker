@@ -2117,7 +2117,7 @@ describe('SQLiteAdapter', () => {
       const olderHigh = adapter.enqueueWorkflowMutationIntent('wf-1', 'headless.exec', [{ args: ['approve', 'wf-1/task-1'] }], 'high');
       const fence = adapter.enqueueWorkflowMutationIntent('wf-1', 'headless.exec', [{ args: ['recreate', 'wf-1'] }], 'high');
       const newer = adapter.enqueueWorkflowMutationIntent('wf-1', 'headless.exec', [{ args: ['reject', 'wf-1/task-2'] }], 'normal');
-      const otherWorkflow = adapter.enqueueWorkflowMutationIntent('wf-2', 'headless.exec', [{ args: ['restart', 'wf-2'] }], 'normal');
+      const otherWorkflow = adapter.enqueueWorkflowMutationIntent('wf-2', 'headless.exec', [{ args: ['retry', 'wf-2'] }], 'normal');
 
       const evicted = adapter.evictQueuedWorkflowMutationIntentsBefore('wf-1', fence, 'evicted by recreate');
       expect(evicted).toHaveLength(2);
