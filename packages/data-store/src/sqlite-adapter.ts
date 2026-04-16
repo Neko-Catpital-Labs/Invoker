@@ -704,7 +704,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       cfg.requiresManualApproval ? 1 : 0,
       null, cfg.featureBranch ?? null,
       cfg.isMergeNode ? 1 : 0,
-      cfg.autoFix ? 1 : 0, cfg.autoFixRetries ?? null,
+      0, null,
       cfg.executorType ?? null,
       exec.agentSessionId ?? null,
       exec.workspacePath ?? null,
@@ -760,14 +760,12 @@ export class SQLiteAdapter implements PersistenceAdapter {
         executorType: 'executor_type',
         remoteTargetId: 'remote_target_id',
         executionAgent: 'execution_agent',
-        autoFixRetries: 'max_fix_attempts',
       };
       const configBoolMap: Record<string, string> = {
         pivot: 'pivot',
         isReconciliation: 'is_reconciliation',
         requiresManualApproval: 'requires_manual_approval',
         isMergeNode: 'is_merge_node',
-        autoFix: 'auto_fix',
       };
 
       for (const [key, col] of Object.entries(configMap)) {
@@ -1491,8 +1489,6 @@ export class SQLiteAdapter implements PersistenceAdapter {
         featureBranch: row.feature_branch ?? undefined,
         executorType: normalizeExecutorType(row.executor_type ?? undefined),
         remoteTargetId: row.remote_target_id ?? undefined,
-        autoFix: row.auto_fix === 1 ? true : undefined,
-        autoFixRetries: row.max_fix_attempts ?? undefined,
         isMergeNode: row.is_merge_node === 1 ? true : undefined,
         summary: row.summary ?? undefined,
         problem: row.problem ?? undefined,

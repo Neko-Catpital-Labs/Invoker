@@ -22,7 +22,6 @@ export interface TaskReplacementDef {
   prompt?: string;
   dependencies?: string[];
   executorType?: string;
-  autoFix?: boolean;
   executionAgent?: string;
 }
 

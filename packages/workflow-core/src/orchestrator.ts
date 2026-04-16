@@ -181,11 +181,9 @@ export interface PlanDefinition {
     requiresManualApproval?: boolean;
     featureBranch?: string;
     executorType?: string;
-    autoFix?: boolean;
     dockerImage?: string;
     remoteTargetId?: string;
     executionAgent?: string;
-    autoFixRetries?: number;
   }>;
 }
 
@@ -217,7 +215,6 @@ export interface GraphMutationNodeDef {
   executorType?: ExecutorType;
   isReconciliation?: boolean;
   requiresManualApproval?: boolean;
-  autoFix?: boolean;
   isMergeNode?: boolean;
 }
 
@@ -236,7 +233,6 @@ export interface TaskReplacementDef {
   prompt?: string;
   dependencies?: string[];
   executorType?: ExecutorType;
-  autoFix?: boolean;
   executionAgent?: string;
 }
 
@@ -879,8 +875,6 @@ export class Orchestrator {
         experimentVariants: taskDef.experimentVariants,
         requiresManualApproval: taskDef.requiresManualApproval,
         featureBranch: taskDef.featureBranch,
-        autoFix: taskDef.autoFix,
-        autoFixRetries: taskDef.autoFixRetries,
         executionAgent: taskDef.executionAgent,
         externalDependencies,
       } as const;
@@ -1051,7 +1045,12 @@ export class Orchestrator {
     // Auto-fix interception
     if (response.status === 'failed') {
       const task = this.stateGetTask(response.actionId);
-      if (task?.config.autoFix) {
+      const maxAutoFixRetries = task ? this.getAutoFixRetryBudget(task.id) : 0;
+      const canAutoFixFailure =
+        !!task &&
+        maxAutoFixRetries > 0 &&
+        (task.execution.autoFixAttempts ?? 0) < maxAutoFixRetries;
+      if (canAutoFixFailure) {
         const syntheticResponse = this.buildAutoFixResponse(task, response.outputs);
         return this.handleWorkerResponse(syntheticResponse);
       }
@@ -2100,7 +2099,6 @@ export class Orchestrator {
         workflowId: wfId,
         command: rt.command,
         prompt: rt.prompt,
-        autoFix: rt.autoFix,
         executionAgent: rt.executionAgent ?? task.config.executionAgent,
       } as const;
       // Replacement tasks inherit executor config from the parent task.
@@ -2336,11 +2334,6 @@ export class Orchestrator {
   }
 
   getAutoFixRetryBudget(taskId: string): number {
-    const task = this.stateGetTask(taskId);
-    if (!task) return 0;
-    if (task.config.autoFixRetries !== undefined) {
-      return Math.max(0, task.config.autoFixRetries);
-    }
     return this.defaultAutoFixRetries;
   }
 
