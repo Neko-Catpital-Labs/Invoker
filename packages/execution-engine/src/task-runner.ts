@@ -16,7 +16,7 @@ import type { Orchestrator, TaskState, ExperimentVariant, ExecutorType } from '@
 import type { SQLiteAdapter } from '@invoker/data-store';
 import type { WorkRequest, WorkResponse, ActionType } from '@invoker/contracts';
 import type { Executor, ExecutorHandle } from './executor.js';
-import { RESTART_TO_BRANCH_TRACE } from './exec-trace.js';
+import { RESTART_TO_BRANCH_TRACE, traceExecution } from './exec-trace.js';
 import { ResourceLimitError } from './repo-pool.js';
 import type { ExecutorRegistry } from './registry.js';
 import type { AgentRegistry } from './agent-registry.js';
@@ -253,7 +253,7 @@ export class TaskRunner {
    */
   async executeTasks(tasks: TaskState[]): Promise<void> {
     if (tasks.length > 0) {
-      console.log(
+      traceExecution(
         `${RESTART_TO_BRANCH_TRACE} TaskRunner.executeTasks count=${tasks.length} ids=${tasks.map((t) => t.id).join(', ')}`,
       );
     }
@@ -271,7 +271,7 @@ export class TaskRunner {
    * 6. On completion → feed response to orchestrator → auto-execute newly ready tasks
    */
   async executeTask(task: TaskState): Promise<void> {
-    console.log(
+    traceExecution(
       `${RESTART_TO_BRANCH_TRACE} TaskRunner.executeTask BEGIN taskId=${task.id} isMergeNode=${Boolean(task.config.isMergeNode)} status=${task.status}`,
     );
     const attemptId = this.resolveAttemptIdForStart(task);
@@ -281,7 +281,7 @@ export class TaskRunner {
       // Resource limit: defer the task instead of failing it
       const cause = err instanceof Error ? err.cause : undefined;
       if (cause instanceof ResourceLimitError) {
-        console.log(`[TaskRunner] executeTask deferred for task=${task.id}: ${cause.message}`);
+        traceExecution(`[TaskRunner] executeTask deferred for task=${task.id}: ${cause.message}`);
         this.orchestrator.deferTask(task.id);
         return;
       }
@@ -335,7 +335,7 @@ export class TaskRunner {
       return;
     }
 
-    console.log(
+    traceExecution(
       `${RESTART_TO_BRANCH_TRACE} executeTaskInner taskId=${task.id} (past pivot check) → gather upstreams + build WorkRequest`,
     );
 
@@ -401,14 +401,14 @@ export class TaskRunner {
       },
     };
 
-    console.log(
+    traceExecution(
       `${RESTART_TO_BRANCH_TRACE} executeTaskInner taskId=${task.id} WorkRequest built actionType=${request.actionType} repoUrl=${request.inputs.repoUrl ?? '(none)'} upstreamBranches=${JSON.stringify(request.inputs.upstreamBranches ?? [])}`,
     );
     const executor = this.selectExecutor(task);
-    console.log(
+    traceExecution(
       `${RESTART_TO_BRANCH_TRACE} executeTaskInner taskId=${task.id} selectExecutor → type=${executor.type} calling executor.start()`,
     );
-    console.log(`[trace] TaskRunner: task=${task.id} calling executor.start() type=${executor.type}`);
+    traceExecution(`[trace] TaskRunner: task=${task.id} calling executor.start() type=${executor.type}`);
     const startT0 = Date.now();
     const preStartHeartbeatTimer = setInterval(() => {
       const now = new Date();
@@ -444,7 +444,7 @@ export class TaskRunner {
     } finally {
       clearInterval(preStartHeartbeatTimer);
     }
-    console.log(`[trace] TaskRunner: task=${task.id} executor.start() returned after ${Date.now() - startT0}ms executor=${executor.type} sessionId=${handle.agentSessionId ?? 'none'} workspace=${handle.workspacePath ?? 'default'}`);
+    traceExecution(`[trace] TaskRunner: task=${task.id} executor.start() returned after ${Date.now() - startT0}ms executor=${executor.type} sessionId=${handle.agentSessionId ?? 'none'} workspace=${handle.workspacePath ?? 'default'}`);
     const launchAccepted =
       this.orchestrator.markTaskRunningAfterLaunch?.(task.id, attemptId) ?? true;
     if (!launchAccepted) {
@@ -482,17 +482,17 @@ export class TaskRunner {
         },
       };
       this.persistence.updateTask(task.id, changes);
-      console.log(
+      traceExecution(
         `[agent-session-trace] TaskRunner.persistStartMetadata task=${task.id} agentSessionId=${handle.agentSessionId ?? 'null'}`,
       );
       if (task.config.isMergeNode) {
-        console.log(
+        traceExecution(
           `[merge-gate-workspace] persistStartMetadata mergeNode=${task.id} ` +
             `executor workspacePath=${changes.execution.workspacePath} ` +
             '(gate clone path is written later in executeMergeNode)',
         );
       }
-      console.log(`[trace] TaskRunner: persisted metadata for task=${task.id} workspacePath=${handle.workspacePath} branch=${handle.branch ?? 'null'}`);
+      traceExecution(`[trace] TaskRunner: persisted metadata for task=${task.id} workspacePath=${handle.workspacePath} branch=${handle.branch ?? 'null'}`);
     }
 
     // Notify consumer about the spawned handle
@@ -525,16 +525,16 @@ export class TaskRunner {
           const normalizedResponse = response.attemptId ? response : { ...response, attemptId };
           this.activeExecutions.delete(normalizedResponse.attemptId ?? attemptId);
           try {
-            console.log(
+            traceExecution(
               `[task-runner] onComplete taskId=${task.id} responseStatus=${response.status} ` +
                 `responseAttemptId=${normalizedResponse.attemptId ?? attemptId} responseGeneration=${response.executionGeneration} executionId=${handle.executionId}`,
             );
-            console.log(
+            traceExecution(
               `${RESTART_TO_BRANCH_TRACE} resolvePromise | task.config.isMergeNode = ${task.config.isMergeNode}`,
             );
             // Merge nodes: run consolidation/finish logic after executor completes
             if (task.config.isMergeNode) {
-              console.log(
+              traceExecution(
                 `${RESTART_TO_BRANCH_TRACE} executor.onComplete taskId=${task.id} isMergeNode → executeMergeNode (consolidate / gate)`,
               );
               await this.executeMergeNode(task);
@@ -588,7 +588,7 @@ export class TaskRunner {
     if (effectiveType) {
       const registered = this.executorRegistry.get(effectiveType);
       if (registered) {
-        console.log(`[trace] TaskRunner.selectExecutor: task=${task.id} effectiveType=${effectiveType} → ${registered.type}`);
+        traceExecution(`[trace] TaskRunner.selectExecutor: task=${task.id} effectiveType=${effectiveType} → ${registered.type}`);
         return registered;
       }
 
@@ -600,7 +600,7 @@ export class TaskRunner {
           agentRegistry: this.executionAgentRegistry,
         });
         this.executorRegistry.register(`docker:${task.id}`, docker);
-        console.log(`[trace] TaskRunner.selectExecutor: task=${task.id} effectiveType=docker → docker (per-task)`);
+        traceExecution(`[trace] TaskRunner.selectExecutor: task=${task.id} effectiveType=docker → docker (per-task)`);
         return docker;
       }
 
@@ -614,7 +614,7 @@ export class TaskRunner {
           agentRegistry: this.executionAgentRegistry,
         });
         this.executorRegistry.register('worktree', worktree);
-        console.log(`[trace] TaskRunner.selectExecutor: task=${task.id} effectiveType=worktree → worktree (lazy registered)`);
+        traceExecution(`[trace] TaskRunner.selectExecutor: task=${task.id} effectiveType=worktree → worktree (lazy registered)`);
         return worktree;
       }
 
@@ -653,7 +653,7 @@ export class TaskRunner {
         // Return cached executor if it exists for this target+config combo
         const cached = this.sshExecutorCache.get(cacheKey);
         if (cached) {
-          console.log(`[trace] TaskRunner.selectExecutor: task=${task.id} effectiveType=ssh remoteTarget=${targetId} → ssh (cached)`);
+          traceExecution(`[trace] TaskRunner.selectExecutor: task=${task.id} effectiveType=ssh remoteTarget=${targetId} → ssh (cached)`);
           return cached;
         }
 
@@ -676,19 +676,19 @@ export class TaskRunner {
         });
 
         this.sshExecutorCache.set(cacheKey, ssh);
-        console.log(`[trace] TaskRunner.selectExecutor: task=${task.id} effectiveType=ssh remoteTarget=${targetId} → ssh (new, cached)`);
+        traceExecution(`[trace] TaskRunner.selectExecutor: task=${task.id} effectiveType=ssh remoteTarget=${targetId} → ssh (new, cached)`);
         return ssh;
       }
     }
 
     if (task.config.isMergeNode) {
       const mergeGateExecutor = this.executorRegistry.getDefault();
-      console.log(`[trace] TaskRunner.selectExecutor: task=${task.id} isMergeNode=true → ${mergeGateExecutor.type} (merge gate)`);
+      traceExecution(`[trace] TaskRunner.selectExecutor: task=${task.id} isMergeNode=true → ${mergeGateExecutor.type} (merge gate)`);
       return mergeGateExecutor;
     }
 
     const defaultExecutor = this.executorRegistry.getDefault();
-    console.log(`[trace] TaskRunner.selectExecutor: task=${task.id} effectiveType=${effectiveType ?? 'none'} → ${defaultExecutor.type} (default)`);
+    traceExecution(`[trace] TaskRunner.selectExecutor: task=${task.id} effectiveType=${effectiveType ?? 'none'} → ${defaultExecutor.type} (default)`);
     return defaultExecutor;
   }
 
@@ -706,7 +706,7 @@ export class TaskRunner {
   // ── Merge Node Execution ─────────────────────────────────
 
   private async executeMergeNode(task: TaskState): Promise<void> {
-    console.log(`${RESTART_TO_BRANCH_TRACE} TaskRunner.executeMergeNode taskId=${task.id} → merge-executor.executeMergeNodeImpl`);
+    traceExecution(`${RESTART_TO_BRANCH_TRACE} TaskRunner.executeMergeNode taskId=${task.id} → merge-executor.executeMergeNodeImpl`);
     return executeMergeNodeImpl(this, task);
   }
 

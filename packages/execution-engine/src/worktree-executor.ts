@@ -9,7 +9,7 @@ import { RepoPool } from './repo-pool.js';
 import { killProcessGroup, cleanElectronEnv, SIGKILL_TIMEOUT_MS } from './process-utils.js';
 import { DEFAULT_WORKTREE_PROVISION_COMMAND } from './default-worktree-provision-command.js';
 import { computeBranchHash, bashMergeUpstreams, parseMergeError } from './branch-utils.js';
-import { RESTART_TO_BRANCH_TRACE } from './exec-trace.js';
+import { RESTART_TO_BRANCH_TRACE, traceExecution } from './exec-trace.js';
 import {
   syncPlanBaseRemote,
   resolvePlanBaseRevision,
@@ -93,14 +93,14 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
         `Plans must declare a repoUrl.`,
       );
     }
-    console.log(
+    traceExecution(
       `${RESTART_TO_BRANCH_TRACE} WorktreeExecutor.start() actionId=${request.actionId} repoUrl=${repoUrl}`,
     );
     await this.ensureGitAvailable();
     const handle = this.createHandle(request);
     const executionId = handle.executionId;
     const t0 = Date.now();
-    const log = (step: string) => console.log(`[WorktreeExecutor] start task=${request.actionId} step=${step} elapsed=${Date.now() - t0}ms`);
+    const log = (step: string) => traceExecution(`[WorktreeExecutor] start task=${request.actionId} step=${step} elapsed=${Date.now() - t0}ms`);
 
     const clonePath = await this.pool.ensureClone(repoUrl);
     const baseRef = request.inputs.baseBranch ?? 'HEAD';
@@ -123,11 +123,11 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
       request.inputs.salt,
     );
     const branch = `experiment/${request.actionId}-${hash}`;
-    console.log(`[WorktreeExecutor] branch=${branch} hash=${hash}`);
+    traceExecution(`[WorktreeExecutor] branch=${branch} hash=${hash}`);
 
     // -- Reconciliation: real pool worktree at plan base (no upstream merges), then needs_input --
     if (request.actionType === 'reconciliation') {
-      console.log(
+      traceExecution(
         `${RESTART_TO_BRANCH_TRACE} WorktreeExecutor.start() actionId=${request.actionId} reconciliation → acquireWorktree (skip upstream merge)`,
       );
       const acquired = await this.pool.acquireWorktree(repoUrl, branch, baseHead, request.actionId);
@@ -170,7 +170,7 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
     }
 
     // -- Always use RepoPool --
-    console.log(
+    traceExecution(
       `${RESTART_TO_BRANCH_TRACE} WorktreeExecutor.start() actionId=${request.actionId} → RepoPool path`,
     );
     const acquired = await this.pool.acquireWorktree(repoUrl, branch, baseHead, request.actionId);
@@ -275,7 +275,7 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
 
     // Register error handler IMMEDIATELY to catch synchronous spawn failures
     child.on('error', (err) => {
-      console.log(`[WorktreeExecutor] child process spawn error: ${err.message}`);
+      traceExecution(`[WorktreeExecutor] child process spawn error: ${err.message}`);
       const response: WorkResponse = {
         requestId: request.requestId,
         actionId: request.actionId,
@@ -404,13 +404,13 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
   }
 
   getRestoredTerminalSpec(meta: PersistedTaskMeta): TerminalSpec {
-    console.log(`[WorktreeExecutor] getRestoredTerminalSpec task="${meta.taskId}" workspacePath="${meta.workspacePath ?? 'none'}" sessionId="${meta.agentSessionId ?? 'none'}"`);
+    traceExecution(`[WorktreeExecutor] getRestoredTerminalSpec task="${meta.taskId}" workspacePath="${meta.workspacePath ?? 'none'}" sessionId="${meta.agentSessionId ?? 'none'}"`);
     if (meta.workspacePath && !existsSync(meta.workspacePath)) {
-      console.log(`[WorktreeExecutor] getRestoredTerminalSpec task="${meta.taskId}" — worktree path does NOT exist: ${meta.workspacePath}`);
+      traceExecution(`[WorktreeExecutor] getRestoredTerminalSpec task="${meta.taskId}" — worktree path does NOT exist: ${meta.workspacePath}`);
       // Fall back to finding the worktree by branch via git worktree list
       const recovered = meta.branch ? this.findWorktreeByBranch(meta.branch) : undefined;
       if (recovered) {
-        console.log(`[WorktreeExecutor] getRestoredTerminalSpec task="${meta.taskId}" — recovered worktree by branch: ${recovered}`);
+        traceExecution(`[WorktreeExecutor] getRestoredTerminalSpec task="${meta.taskId}" — recovered worktree by branch: ${recovered}`);
         meta = { ...meta, workspacePath: recovered };
       } else {
         throw new Error(
@@ -419,7 +419,7 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
       }
     }
     if (meta.workspacePath) {
-      console.log(`[WorktreeExecutor] getRestoredTerminalSpec task="${meta.taskId}" — worktree path exists: ${meta.workspacePath}`);
+      traceExecution(`[WorktreeExecutor] getRestoredTerminalSpec task="${meta.taskId}" — worktree path exists: ${meta.workspacePath}`);
     }
     if (meta.agentSessionId) {
       const resume = this.agentRegistry
@@ -430,10 +430,10 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
         args: resume.args,
         cwd: meta.workspacePath,
       };
-      console.log(
+      traceExecution(
         `[agent-session-trace] WorktreeExecutor.getRestoredTerminalSpec: task="${meta.taskId}" resume with agentSessionId=${meta.agentSessionId}`,
       );
-      console.log(`[WorktreeExecutor] getRestoredTerminalSpec task="${meta.taskId}" → agent --resume spec, cwd="${spec.cwd}"`);
+      traceExecution(`[WorktreeExecutor] getRestoredTerminalSpec task="${meta.taskId}" → agent --resume spec, cwd="${spec.cwd}"`);
       return spec;
     }
     if (meta.branch) {
@@ -444,10 +444,10 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
         args: ['-c', `git checkout '${meta.branch}' 2>/dev/null; exec ${sh}`],
         cwd: meta.workspacePath,
       };
-      console.log(`[WorktreeExecutor] getRestoredTerminalSpec task="${meta.taskId}" → checkout branch spec, branch="${meta.branch}" cwd="${spec.cwd}"`);
+      traceExecution(`[WorktreeExecutor] getRestoredTerminalSpec task="${meta.taskId}" → checkout branch spec, branch="${meta.branch}" cwd="${spec.cwd}"`);
       return spec;
     }
-    console.log(`[WorktreeExecutor] getRestoredTerminalSpec task="${meta.taskId}" → cwd-only spec, cwd="${meta.workspacePath}"`);
+    traceExecution(`[WorktreeExecutor] getRestoredTerminalSpec task="${meta.taskId}" → cwd-only spec, cwd="${meta.workspacePath}"`);
     return { cwd: meta.workspacePath };
   }
 
@@ -523,7 +523,7 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
   }
 
   private provisionWorktree(dir: string, executionId?: string): Promise<void> {
-    console.log(`[WorktreeExecutor] provisionWorktree begin dir=${dir}`);
+    traceExecution(`[WorktreeExecutor] provisionWorktree begin dir=${dir}`);
     const t0 = Date.now();
     return new Promise((resolve, reject) => {
       const cmd = `set -euo pipefail; ${DEFAULT_WORKTREE_PROVISION_COMMAND}`;
@@ -532,27 +532,27 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
         env: cleanElectronEnv(),
         stdio: ['ignore', 'pipe', 'pipe'],
       });
-      console.log(`[WorktreeExecutor] provisionWorktree spawned pid=${child.pid}`);
+      traceExecution(`[WorktreeExecutor] provisionWorktree spawned pid=${child.pid}`);
       let stdout = '';
       let stderr = '';
       child.stdout?.on('data', (d: Buffer) => {
         const text = d.toString();
         stdout += text;
-        console.log(`[WorktreeExecutor] provision stdout: ${text.trimEnd()}`);
+        traceExecution(`[WorktreeExecutor] provision stdout: ${text.trimEnd()}`);
         if (executionId) this.emitOutput(executionId, text);
       });
       child.stderr?.on('data', (d: Buffer) => {
         const text = d.toString();
         stderr += text;
-        console.log(`[WorktreeExecutor] provision stderr: ${text.trimEnd()}`);
+        traceExecution(`[WorktreeExecutor] provision stderr: ${text.trimEnd()}`);
         if (executionId) this.emitOutput(executionId, text);
       });
       child.on('error', (err) => {
-        console.log(`[WorktreeExecutor] provisionWorktree error: ${err.message}`);
+        traceExecution(`[WorktreeExecutor] provisionWorktree error: ${err.message}`);
         reject(new Error(`Failed to spawn provisioning process: ${err.message}`));
       });
       child.on('close', (code) => {
-        console.log(`[WorktreeExecutor] provisionWorktree finished dir=${dir} code=${code} elapsed=${Date.now() - t0}ms`);
+        traceExecution(`[WorktreeExecutor] provisionWorktree finished dir=${dir} code=${code} elapsed=${Date.now() - t0}ms`);
         if (code === 0) resolve();
         else {
           const combined = [stderr.trim(), stdout.trim()].filter(Boolean).join('\n');

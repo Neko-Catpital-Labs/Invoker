@@ -9,7 +9,7 @@
 #   bash scripts/retry-failed-and-pending-all-workflows.sh --dry-run
 #   bash scripts/retry-failed-and-pending-all-workflows.sh --status failed
 #   bash scripts/retry-failed-and-pending-all-workflows.sh --status running
-#   bash scripts/retry-failed-and-pending-all-workflows.sh --parallel 8
+#   bash scripts/retry-failed-and-pending-all-workflows.sh --parallel 2
 #   bash scripts/retry-failed-and-pending-all-workflows.sh --follow
 set -euo pipefail
 
@@ -93,14 +93,11 @@ fi
 
 TOTAL="$(printf '%s\n' "$WORKFLOWS" | wc -l | tr -d ' ')"
 if [[ -z "$PARALLELISM" ]]; then
-  PARALLELISM="$TOTAL"
+  PARALLELISM=1
 fi
 echo "Found $TOTAL workflow(s) to retry via headless restart."
 echo "Parallelism: $PARALLELISM"
 echo "Follow mode: $FOLLOW"
-if ! $FOLLOW; then
-  echo "Note: fire-and-forget dispatches all workflows immediately; --parallel is enforced with --follow."
-fi
 echo ""
 
 if $DRY_RUN; then
@@ -121,39 +118,47 @@ else
   SUCCEEDED=0
   IDX=0
 
+  launch_one_workflow() {
+    local wf_id="$1"
+    local log_file="$2"
+    local cmd_out=""
+    local code=0
+
+    set +e
+    cmd_out="$("$RUNNER" --headless restart "$wf_id" --no-track 2>&1)"
+    code=$?
+    set -e
+
+    printf "%s\n" "$cmd_out" >"$log_file"
+
+    if [[ "$code" -eq 0 ]]; then
+      echo "[$wf_id] OK"
+      return 0
+    fi
+
+    echo "[$wf_id] FAILED (exit $code)"
+    return "$code"
+  }
+
   if $FOLLOW; then
     RESULTS_FILE="$(mktemp -t retry-failed-results.XXXXXX)"
     PIDS=()
-
-    process_one_workflow() {
-      local wf_id="$1"
-      local result_file="$2"
-      local cmd_out=""
-      local code=0
-
-      set +e
-      cmd_out="$("$RUNNER" --headless restart "$wf_id" --no-track 2>&1)"
-      code=$?
-      set -e
-
-      if [[ "$code" -eq 0 ]]; then
-        echo "[$wf_id] OK"
-        printf "%s\n" "$cmd_out"
-        printf "%s\tSUCCEEDED\n" "$wf_id" >> "$result_file"
-      else
-        echo "[$wf_id] FAILED (exit $code)"
-        printf "%s\n" "$cmd_out"
-        printf "%s\tFAILED\n" "$wf_id" >> "$result_file"
-      fi
-      echo ""
-    }
+    LOG_DIR="$(mktemp -d -t retry-failed-logs.XXXXXX)"
 
     while IFS= read -r WF_ID; do
       [[ -z "$WF_ID" ]] && continue
       IDX=$((IDX + 1))
       echo "[queue $IDX/$TOTAL] $WF_ID"
-
-      process_one_workflow "$WF_ID" "$RESULTS_FILE" &
+      log_file="$LOG_DIR/${WF_ID}.log"
+      (
+        if launch_one_workflow "$WF_ID" "$log_file"; then
+          printf "%s\tSUCCEEDED\n" "$WF_ID" >> "$RESULTS_FILE"
+        else
+          printf "%s\tFAILED\n" "$WF_ID" >> "$RESULTS_FILE"
+        fi
+        cat "$log_file"
+        echo ""
+      ) &
       PIDS+=("$!")
 
       while [[ "$(jobs -pr | wc -l | tr -d ' ')" -ge "$PARALLELISM" ]]; do
@@ -176,32 +181,43 @@ else
   else
     LOG_DIR="$(mktemp -d -t retry-failed-logs.XXXXXX)"
     DISPATCHED=0
-    LAUNCH_FAILED=0
-
-    launch_detached() {
-      local log_file="$1"
-      shift
-      if command -v setsid >/dev/null 2>&1; then
-        setsid "$@" >"$log_file" 2>&1 < /dev/null &
-      else
-        nohup "$@" >"$log_file" 2>&1 < /dev/null &
-      fi
-      echo "$!"
-    }
+    PIDS=()
+    RESULT_FILE="$(mktemp -t retry-failed-results.XXXXXX)"
 
     while IFS= read -r WF_ID; do
       [[ -z "$WF_ID" ]] && continue
       IDX=$((IDX + 1))
       log_file="$LOG_DIR/${WF_ID}.log"
-      pid="$(launch_detached "$log_file" "$RUNNER" --headless restart "$WF_ID" --no-track)" || pid=""
-      if [[ -n "$pid" ]]; then
-        echo "[dispatch $IDX/$TOTAL] $WF_ID pid=$pid log=$log_file"
-        DISPATCHED=$((DISPATCHED + 1))
-      else
-        echo "[dispatch $IDX/$TOTAL] $WF_ID FAILED_TO_START"
-        LAUNCH_FAILED=$((LAUNCH_FAILED + 1))
-      fi
+      (
+        if launch_one_workflow "$WF_ID" "$log_file"; then
+          printf "%s\tSUCCEEDED\n" "$WF_ID" >> "$RESULT_FILE"
+        else
+          printf "%s\tFAILED\n" "$WF_ID" >> "$RESULT_FILE"
+        fi
+      ) &
+      PIDS+=("$!")
+      echo "[dispatch $IDX/$TOTAL] $WF_ID log=$log_file"
+
+      while [[ "$(jobs -pr | wc -l | tr -d ' ')" -ge "$PARALLELISM" ]]; do
+        sleep 0.2
+      done
     done <<<"$WORKFLOWS"
+
+    for pid in "${PIDS[@]}"; do
+      wait "$pid" || true
+    done
+
+    while IFS=$'\t' read -r _wf result; do
+      case "$result" in
+        SUCCEEDED)
+          DISPATCHED=$((DISPATCHED + 1))
+          ;;
+        FAILED)
+          FAILED=$((FAILED + 1))
+          ;;
+      esac
+    done < "$RESULT_FILE"
+    rm -f "$RESULT_FILE"
   fi
 fi
 
@@ -214,9 +230,9 @@ elif $FOLLOW; then
     exit 1
   fi
 else
-  echo "Dispatched $DISPATCHED workflow(s) (fire-and-forget). Logs: $LOG_DIR"
-  if [[ "$LAUNCH_FAILED" -ne 0 ]]; then
-    echo "$LAUNCH_FAILED workflow(s) failed to launch."
+  echo "Submitted $DISPATCHED workflow(s) with bounded concurrency. Logs: $LOG_DIR"
+  if [[ "$FAILED" -ne 0 ]]; then
+    echo "$FAILED workflow(s) failed to submit."
     exit 1
   fi
 fi

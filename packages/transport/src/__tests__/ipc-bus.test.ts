@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { join, dirname } from 'node:path';
-import { mkdtempSync } from 'node:fs';
+import { existsSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -313,6 +313,32 @@ describe('IpcBus', () => {
     busA.subscribe('ch', (msg: string) => received.push(msg));
     busA.publish('ch', 'ok');
     expect(received).toEqual(['ok']);
+  });
+
+  it('surviving client reclaims the socket after the original server disappears', async () => {
+    const sock = tempSocketPath();
+
+    const originalServer = createBus(sock);
+    await originalServer.ready();
+
+    const survivingOwner = createBus(sock);
+    await survivingOwner.ready();
+    await sleep(50);
+
+    survivingOwner.onRequest<string, string>('echo', (value) => `owner:${value}`);
+
+    originalServer.disconnect();
+
+    await waitFor(() => existsSync(sock), 2000);
+    await sleep(100);
+
+    const requester = new IpcBus(sock, { allowServe: false });
+    buses.push(requester);
+    await requester.ready();
+    await sleep(50);
+
+    const result = await requester.request<string, string>('echo', 'ok');
+    expect(result).toBe('owner:ok');
   });
 
   // ---------------------------------------------------------------

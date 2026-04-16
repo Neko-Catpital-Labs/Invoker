@@ -102,6 +102,31 @@ export async function tryPingHeadlessOwner(
   }
 }
 
+export async function tryDelegateQueryUiPerf(
+  messageBus: MessageBus,
+  reset?: boolean,
+  timeoutMs = 5_000,
+): Promise<Record<string, unknown> | null> {
+  const DELEGATION_TIMEOUT = Symbol('delegation-timeout');
+  const timeoutPromise = new Promise<typeof DELEGATION_TIMEOUT>((_, reject) => {
+    setTimeout(() => reject(DELEGATION_TIMEOUT), timeoutMs);
+  });
+
+  try {
+    const response = await Promise.race([
+      messageBus.request('headless.query', { kind: 'ui-perf', reset }),
+      timeoutPromise,
+    ]) as Record<string, unknown>;
+    return response;
+  } catch (err) {
+    if (err === DELEGATION_TIMEOUT) return null;
+    if (err instanceof Error && err.message.includes('No request handler registered for channel')) {
+      return null;
+    }
+    throw err;
+  }
+}
+
 async function tryDelegate(
   channel: string,
   payload: unknown,

@@ -60,6 +60,16 @@ describe('headless delegation enforcement', () => {
       ).resolves.toBeUndefined();
     });
 
+    it('allows query ui-perf in read-only mode', async () => {
+      mockDeps.getUiPerfStats = vi.fn(() => ({
+        maxRendererEventLoopLagMs: 12,
+        maxRendererLongTaskMs: 34,
+      }));
+      await expect(
+        runHeadless(['query', 'ui-perf', '--output', 'json'], mockDeps)
+      ).resolves.toBeUndefined();
+    });
+
     it('allows deprecated list command in read-only mode', async () => {
       await expect(
         runHeadless(['list'], mockDeps)
@@ -284,6 +294,21 @@ describe('headless delegation enforcement', () => {
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
         }));
+        mockDeps.commandService.retryWorkflow = vi.fn(async () => ({
+          ok: true as const,
+          data: [
+            {
+              id: 'wf-1/task-1',
+              status: 'running',
+              config: { workflowId: 'wf-1' },
+              execution: {},
+            } as any,
+          ],
+        }));
+        mockDeps.commandService.cancelWorkflow = vi.fn(async () => ({
+          ok: true as const,
+          data: { cancelled: [], runningCancelled: [] },
+        }));
       });
 
       it('headless resume with deps.noTrack=true returns without polling for completion', async () => {
@@ -379,6 +404,59 @@ describe('headless delegation enforcement', () => {
 
         expect(mockDeps.commandService.editTaskAgent).toHaveBeenCalled();
         expect(elapsed).toBeLessThan(1000);
+      });
+
+      it('headless restart with deps.noTrack=true can defer runnable execution to the caller', async () => {
+        const deferRunnableTasks = vi.fn();
+        const preemptWorkflowExecution = vi.fn(async () => {});
+        mockDeps.orchestrator.getPersistedActiveTaskIds = vi.fn(() => new Set<string>(['wf-1/task-1']));
+        mockDeps.persistence.loadTasks = vi.fn(() => [{
+          id: 'wf-1/task-1',
+          status: 'pending',
+          config: { workflowId: 'wf-1' },
+          execution: {},
+        } as any]);
+        const depsWithNoTrack: HeadlessDeps = {
+          ...mockDeps,
+          noTrack: true,
+          deferRunnableTasks,
+          preemptWorkflowExecution,
+        } as HeadlessDeps;
+
+        await runHeadless(['restart', 'wf-1'], depsWithNoTrack);
+
+        expect(preemptWorkflowExecution).toHaveBeenCalledWith('wf-1');
+        expect(mockDeps.commandService.cancelWorkflow).not.toHaveBeenCalled();
+        expect(mockDeps.commandService.retryWorkflow).toHaveBeenCalled();
+        expect(deferRunnableTasks).toHaveBeenCalledTimes(1);
+        expect(deferRunnableTasks.mock.calls[0]?.[1]).toBe('wf-1');
+        const [runnable] = deferRunnableTasks.mock.calls[0] ?? [];
+        expect(Array.isArray(runnable)).toBe(true);
+        expect(runnable).toHaveLength(1);
+        expect(runnable[0]?.id).toBe('wf-1/task-1');
+      });
+
+      it('headless restart skips preempt when the workflow has no active execution', async () => {
+        const preemptWorkflowExecution = vi.fn(async () => {});
+        mockDeps.orchestrator.getPersistedActiveTaskIds = vi.fn(() => new Set<string>());
+        mockDeps.persistence.loadTasks = vi.fn(() => [{
+          id: 'wf-1/task-1',
+          status: 'failed',
+          config: { workflowId: 'wf-1' },
+          execution: { error: 'Cancelled by user (workflow)' },
+        } as any]);
+
+        const depsWithNoTrack: HeadlessDeps = {
+          ...mockDeps,
+          noTrack: true,
+          deferRunnableTasks: vi.fn(),
+          preemptWorkflowExecution,
+        } as HeadlessDeps;
+
+        await runHeadless(['restart', 'wf-1'], depsWithNoTrack);
+
+        expect(preemptWorkflowExecution).not.toHaveBeenCalled();
+        expect(mockDeps.commandService.retryWorkflow).toHaveBeenCalled();
       });
     });
 

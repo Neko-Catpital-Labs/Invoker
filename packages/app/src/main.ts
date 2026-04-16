@@ -104,6 +104,7 @@ import { openExternalTerminalForTask } from './open-terminal-for-task.js';
 import { createRequire } from 'node:module';
 import { acquireDbWriterLock, type DbWriterLockResult } from './db-writer-lock.js';
 import { applyDelta } from './delta-merge.js';
+import { shouldAutoFixFromDelta } from './auto-fix-gating.js';
 import type { WorkflowMutationPriority } from './workflow-mutation-coordinator.js';
 import { PersistedWorkflowMutationCoordinator } from './persisted-workflow-mutation-coordinator.js';
 
@@ -174,6 +175,22 @@ interface HeadlessExecMutationPayload {
 // Root logger: created early in initServices() once persistence is available.
 // Before initServices(), use the pre-init logger (file-only, no DB).
 let logger: Logger = new FileAndDbLogger({ module: 'main' });
+
+process.on('uncaughtException', (err) => {
+  try {
+    logger.error(`uncaughtException: ${err instanceof Error ? err.stack ?? err.message : String(err)}`, { module: 'process' });
+  } catch {
+    console.error('[process] uncaughtException:', err);
+  }
+});
+
+process.on('unhandledRejection', (reason) => {
+  try {
+    logger.error(`unhandledRejection: ${reason instanceof Error ? reason.stack ?? reason.message : String(reason)}`, { module: 'process' });
+  } catch {
+    console.error('[process] unhandledRejection:', reason);
+  }
+});
 
 // Repo root: 3 levels up from packages/app/dist/
 const repoRoot = path.resolve(__dirname, '..', '..', '..');
@@ -474,6 +491,17 @@ if (isHeadless) {
         orchestrator, persistence, executorRegistry, messageBus,
         repoRoot, invokerConfig, initServices, wireSlackBot,
         commandService,
+        getUiPerfStats: () => ({
+          ts: new Date().toISOString(),
+          mainDeltaToUi: 0,
+          dbPollCreated: 0,
+          dbPollUpdatedAsCreated: 0,
+          dbPollUpdatedAsUpdated: 0,
+          rendererReports: 0,
+          maxRendererEventLoopLagMs: 0,
+          maxRendererLongTaskMs: 0,
+        }),
+        resetUiPerfStats: () => {},
         waitForApproval,
         noTrack,
         executionAgentRegistry: agentRegistry,
@@ -646,6 +674,19 @@ if (isHeadless) {
           ownerId: workflowMutationOwnerId,
           mode: 'standalone',
         }));
+        messageBus.onRequest('headless.query', async (req: unknown) => {
+          const { kind, reset } = req as { kind?: string; reset?: boolean };
+          if (kind !== 'ui-perf') {
+            throw new Error(`Unsupported headless query: ${String(kind)}`);
+          }
+          if (reset) {
+            headlessDeps.resetUiPerfStats?.();
+          }
+          return {
+            ownerMode: 'standalone',
+            ...(headlessDeps.getUiPerfStats?.() ?? {}),
+          };
+        });
         messageBus.onRequest('headless.resume', async (req: unknown) => {
           const { workflowId } = req as { workflowId: string };
           await runHeadless(['resume', workflowId], {
@@ -668,7 +709,9 @@ if (isHeadless) {
           };
           const { workflowId, priority } = classifyStandaloneHeadlessExecMutation(payload);
           if (delegatedNoTrack && workflowId && workflowMutationCoordinator) {
-            const intentId = workflowMutationCoordinator.submit(workflowId, priority, 'headless.exec', [payload]);
+            const intentId = workflowMutationCoordinator.submit(workflowId, priority, 'headless.exec', [payload], {
+              deferDrain: true,
+            });
             return { ok: true, intentId };
           }
           await runStandaloneWorkflowMutation(workflowId, priority, 'headless.exec', [payload], async () => {
@@ -716,7 +759,7 @@ if (isHeadless) {
 // GUI MODE
 // ══════════════════════════════════════════════════════════════
 
-function setupGuiMode(): void {
+  function setupGuiMode(): void {
   const agentRegistry = registerBuiltinAgents();
   let mainWindow: BrowserWindow | null = null;
   let taskExecutor: TaskRunner | null = null;
@@ -729,10 +772,20 @@ function setupGuiMode(): void {
   let uiPerfLogInterval: ReturnType<typeof setInterval> | null = null;
   const lastKnownTaskStates = new Map<string, string>();
   const autoFixInProgress = new Set<string>();
+  const pendingAutoFixTasks: string[] = [];
+  const queuedAutoFixTasks = new Set<string>();
+  const suppressedAutoFixTasks = new Set<string>();
+  const deferredWorkflowLaunches = new Map<string, { timer: ReturnType<typeof setTimeout>; taskIds: string[] }>();
+  const pendingOutputBuffers = new Map<string, string[]>();
+  const outputFlushTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  const maxConcurrentAutoFixes = 1;
   let lastKnownWorkflowCount = 0;
   let lastActivityLogId = 0;
   let uiInteractive = false;
   let deferredStartupTriggered = false;
+  const traceUiDeltaFlow = process.env.INVOKER_TRACE_UI_DELTA === '1';
+  const traceDbPollPerTask = process.env.INVOKER_TRACE_DB_POLL === '1';
+  const traceTaskOutput = process.env.INVOKER_TRACE_TASK_OUTPUT === '1';
   const uiPerfStats = {
     mainDeltaToUi: 0,
     dbPollCreated: 0,
@@ -741,6 +794,114 @@ function setupGuiMode(): void {
     rendererReports: 0,
     maxRendererEventLoopLagMs: 0,
     maxRendererLongTaskMs: 0,
+  };
+
+  const resetUiPerfStats = (): void => {
+    uiPerfStats.mainDeltaToUi = 0;
+    uiPerfStats.dbPollCreated = 0;
+    uiPerfStats.dbPollUpdatedAsCreated = 0;
+    uiPerfStats.dbPollUpdatedAsUpdated = 0;
+    uiPerfStats.rendererReports = 0;
+    uiPerfStats.maxRendererEventLoopLagMs = 0;
+    uiPerfStats.maxRendererLongTaskMs = 0;
+  };
+
+  const getUiPerfStats = (): Record<string, unknown> => ({
+    ...uiPerfStats,
+    ts: new Date().toISOString(),
+  });
+
+  const clearAutoFixSuppressionIfTerminal = (taskId: string, status?: TaskState['status']): void => {
+    if (!status || !suppressedAutoFixTasks.has(taskId)) {
+      return;
+    }
+    switch (status) {
+      case 'completed':
+      case 'failed':
+      case 'awaiting_approval':
+      case 'review_ready':
+      case 'needs_input':
+      case 'stale':
+      case 'blocked':
+        suppressedAutoFixTasks.delete(taskId);
+        break;
+      default:
+        break;
+    }
+  };
+
+  const flushTaskOutput = (taskId: string): void => {
+    const timer = outputFlushTimers.get(taskId);
+    if (timer) {
+      clearTimeout(timer);
+      outputFlushTimers.delete(taskId);
+    }
+    const chunks = pendingOutputBuffers.get(taskId);
+    if (!chunks || chunks.length === 0) {
+      return;
+    }
+    pendingOutputBuffers.delete(taskId);
+    const data = chunks.join('');
+    if (traceTaskOutput) {
+      logger.info(`${taskId}: ${data.trimEnd()}`, { module: 'output' });
+    }
+    const outputData: TaskOutputData = { taskId, data };
+    messageBus.publish(Channels.TASK_OUTPUT, outputData);
+    try {
+      persistence.appendTaskOutput(taskId, data);
+      persistence.appendOutputChunk(taskId, data);
+    } catch (err) {
+      logger.error(`Failed to persist output for ${taskId}: ${err}`, { module: 'output' });
+    }
+  };
+
+  const enqueueTaskOutput = (taskId: string, data: string): void => {
+    const chunks = pendingOutputBuffers.get(taskId) ?? [];
+    chunks.push(data);
+    pendingOutputBuffers.set(taskId, chunks);
+    if (outputFlushTimers.has(taskId)) {
+      return;
+    }
+    const timer = setTimeout(() => flushTaskOutput(taskId), 100);
+    timer.unref?.();
+    outputFlushTimers.set(taskId, timer);
+  };
+
+  const drainAutoFixQueue = (): void => {
+    if (!taskExecutor) {
+      return;
+    }
+    while (autoFixInProgress.size < maxConcurrentAutoFixes && pendingAutoFixTasks.length > 0) {
+      const nextTaskId = pendingAutoFixTasks.shift();
+      if (!nextTaskId) {
+        return;
+      }
+      queuedAutoFixTasks.delete(nextTaskId);
+      if (!orchestrator.shouldAutoFix(nextTaskId) || autoFixInProgress.has(nextTaskId)) {
+        continue;
+      }
+      autoFixInProgress.add(nextTaskId);
+      import('./workflow-actions.js').then(({ autoFixOnFailure }) =>
+        autoFixOnFailure(nextTaskId, { orchestrator, persistence, taskExecutor: requireTaskExecutor() })
+          .catch(err => logger.error(`[auto-fix] "${nextTaskId}": ${err}`, { module: 'auto-fix' }))
+          .finally(() => {
+            autoFixInProgress.delete(nextTaskId);
+            drainAutoFixQueue();
+          }),
+      );
+    }
+  };
+
+  const scheduleAutoFix = (taskId: string): void => {
+    if (!taskExecutor) {
+      return;
+    }
+    if (autoFixInProgress.has(taskId) || queuedAutoFixTasks.has(taskId) || !orchestrator.shouldAutoFix(taskId)) {
+      return;
+    }
+    queuedAutoFixTasks.add(taskId);
+    pendingAutoFixTasks.push(taskId);
+    drainAutoFixQueue();
   };
 
   // Focus existing window when a second instance is launched
@@ -772,17 +933,10 @@ function setupGuiMode(): void {
       })(),
       callbacks: {
         onOutput: (taskId, data) => {
-          logger.info(`${taskId}: ${data.trimEnd()}`, { module: 'output' });
-          const outputData: TaskOutputData = { taskId, data };
-          messageBus.publish(Channels.TASK_OUTPUT, outputData);
-          try {
-            persistence.appendTaskOutput(taskId, data);
-            persistence.appendOutputChunk(taskId, data);
-          } catch (err) {
-            logger.error(`Failed to persist output for ${taskId}: ${err}`, { module: 'output' });
-          }
+          enqueueTaskOutput(taskId, data);
         },
         onSpawned: (taskId, handle, executor) => {
+          flushTaskOutput(taskId);
           logger.info(
             `Task "${taskId}" spawned (handle: ${handle.executionId}, executor: ${executor.type}, workspace: ${handle.workspacePath ?? 'none'}, branch: ${handle.branch ?? 'none'})`,
             { module: 'exec' },
@@ -790,6 +944,7 @@ function setupGuiMode(): void {
           taskHandles.set(taskId, { handle, executor });
         },
         onComplete: (taskId, response) => {
+          flushTaskOutput(taskId);
           logger.info(
             `Task "${taskId}" completion callback received (status: ${response.status}, generation: ${response.executionGeneration}, exitCode: ${response.outputs.exitCode ?? 'none'})`,
             { module: 'exec' },
@@ -851,12 +1006,19 @@ function setupGuiMode(): void {
 
   /** Cancel all active tasks in a workflow and kill any running processes. */
   async function performCancelWorkflow(workflowId: string): Promise<{ cancelled: string[]; runningCancelled: string[] }> {
+    logger.info(`performCancelWorkflow begin workflow="${workflowId}"`, { module: 'kill' });
     const envelope = makeEnvelope('cancel-workflow', 'ui', 'workflow', { workflowId });
     const cmdResult = await commandService.cancelWorkflow(envelope);
     if (!cmdResult.ok) throw new Error(cmdResult.error.message);
+    logger.info(
+      `performCancelWorkflow commandService complete workflow="${workflowId}" cancelled=${cmdResult.data.cancelled.length} runningCancelled=${cmdResult.data.runningCancelled.length}`,
+      { module: 'kill' },
+    );
     for (const id of cmdResult.data.runningCancelled) {
+      logger.info(`performCancelWorkflow killing running task "${id}"`, { module: 'kill' });
       await killRunningTask(id);
     }
+    logger.info(`performCancelWorkflow end workflow="${workflowId}"`, { module: 'kill' });
     return cmdResult.data;
   }
 
@@ -875,7 +1037,9 @@ function setupGuiMode(): void {
 
   async function preemptWorkflowExecution(workflowId: string): Promise<void> {
     try {
+      logger.info(`preemptWorkflowExecution begin for "${workflowId}"`, { module: 'ipc' });
       await performCancelWorkflow(workflowId);
+      logger.info(`preemptWorkflowExecution end for "${workflowId}"`, { module: 'ipc' });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       if (message.includes('No tasks found for workflow')) {
@@ -979,6 +1143,9 @@ function setupGuiMode(): void {
   }
 
   async function executeHeadlessExec(payload: HeadlessExecMutationPayload): Promise<unknown> {
+    logger.info(`executeHeadlessExec begin args="${payload.args.join(' ')}" noTrack=${payload.noTrack ? 'true' : 'false'}`, {
+      module: 'ipc-delegate',
+    });
     await runHeadless(payload.args, {
       logger,
       orchestrator, persistence, executorRegistry, messageBus,
@@ -986,8 +1153,56 @@ function setupGuiMode(): void {
       repoRoot, invokerConfig, initServices, wireSlackBot,
       waitForApproval: payload.waitForApproval,
       noTrack: payload.noTrack,
+      preemptTaskSubgraph: (taskId: string) => preemptTaskSubgraph(taskId),
+      preemptWorkflowExecution: (workflowId: string) => preemptWorkflowExecution(workflowId),
+      deferRunnableTasks: (tasks: TaskState[], workflowId?: string) => {
+        const deferDelayMs = Number.parseInt(process.env.INVOKER_DEFER_RUNNABLE_DELAY_MS ?? '25', 10) || 25;
+        const launchKey = workflowId ?? tasks.map((task) => task.id).sort().join('|');
+        const existingLaunch = deferredWorkflowLaunches.get(launchKey);
+        if (existingLaunch) {
+          clearTimeout(existingLaunch.timer);
+          logger.info(
+            `deferRunnableTasks coalesce workflow="${workflowId ?? 'unknown'}" previousCount=${existingLaunch.taskIds.length} nextCount=${tasks.length}`,
+            { module: 'ipc-delegate' },
+          );
+        }
+        logger.info(
+          `deferRunnableTasks schedule workflow="${workflowId ?? 'unknown'}" count=${tasks.length} delayMs=${deferDelayMs} ids=${tasks.map((task) => task.id).join(',')}`,
+          { module: 'ipc-delegate' },
+        );
+        const launch = setTimeout(() => {
+          deferredWorkflowLaunches.delete(launchKey);
+          logger.info(
+            `deferRunnableTasks start workflow="${workflowId ?? 'unknown'}" count=${tasks.length}`,
+            { module: 'ipc-delegate' },
+          );
+          for (const task of tasks) {
+            suppressedAutoFixTasks.add(task.id);
+          }
+          remoteFetchForPool.enabled = false;
+          void requireTaskExecutor().executeTasks(tasks)
+            .then(() => {
+              logger.info(
+                `deferRunnableTasks complete workflow="${workflowId ?? 'unknown'}" count=${tasks.length}`,
+                { module: 'ipc-delegate' },
+              );
+            })
+            .catch((err) => {
+              logger.error(
+                `background delegated workflow execution failed for ${workflowId ?? tasks.map((t) => t.id).join(', ')}: ${err instanceof Error ? err.stack ?? err.message : String(err)}`,
+                { module: 'ipc-delegate' },
+              );
+            })
+            .finally(() => {
+              remoteFetchForPool.enabled = true;
+            });
+        }, deferDelayMs);
+        launch.unref?.();
+        deferredWorkflowLaunches.set(launchKey, { timer: launch, taskIds: tasks.map((task) => task.id) });
+      },
       executionAgentRegistry: registerBuiltinAgents(),
     });
+    logger.info(`executeHeadlessExec end args="${payload.args.join(' ')}"`, { module: 'ipc-delegate' });
     return { ok: true };
   }
 
@@ -1235,7 +1450,10 @@ function setupGuiMode(): void {
       startDeferredStartupWork();
     }
 
-    mainWindow.on('closed', () => { mainWindow = null; });
+    mainWindow.on('closed', () => {
+      logger.info('main window closed', { module: 'window' });
+      mainWindow = null;
+    });
 
     mainWindow.webContents.setWindowOpenHandler(({ url }) => {
       if (url.startsWith('https://') || url.startsWith('http://')) {
@@ -1287,17 +1505,32 @@ function setupGuiMode(): void {
       });
 
       if (ownerMode && workflowMutationCoordinator) {
-        void (async () => {
-          try {
-            await maybeDelayWorkflowResumeForTest();
-            await workflowMutationCoordinator.resumePending();
-          } catch (err) {
-            logger.error(
-              `resumePending failed: ${err instanceof Error ? err.stack ?? err.message : String(err)}`,
-              { module: 'init' },
-            );
-          }
-        })();
+        try {
+          persistence.requeueExpiredWorkflowMutationLeases();
+          logger.info('requeued expired workflow mutation leases on startup', { module: 'init' });
+        } catch (err) {
+          logger.error(
+            `requeueExpiredWorkflowMutationLeases failed: ${err instanceof Error ? err.stack ?? err.message : String(err)}`,
+            { module: 'init' },
+          );
+        }
+        if (process.env.INVOKER_RESUME_WORKFLOW_MUTATIONS_ON_STARTUP === '1') {
+          void (async () => {
+            try {
+              await maybeDelayWorkflowResumeForTest();
+              await workflowMutationCoordinator.resumePending();
+            } catch (err) {
+              logger.error(
+                `resumePending failed: ${err instanceof Error ? err.stack ?? err.message : String(err)}`,
+                { module: 'init' },
+              );
+            }
+          })();
+        } else {
+          logger.info('startup workflow mutation drain deferred; queued intents remain durable until explicit activity', {
+            module: 'init',
+          });
+        }
       }
 
       startSlackBot(requireTaskExecutor(), taskHandles).catch((err) => {
@@ -1327,16 +1560,20 @@ function setupGuiMode(): void {
               const snapshot = JSON.stringify(task);
               const prev = lastKnownTaskStates.get(task.id);
               if (!prev) {
-                const msg = `New task: ${task.id} (${task.status})`;
-                logger.info(msg, { module: 'db-poll' });
-                try { persistence.writeActivityLog('db-poll', 'info', msg); } catch { /* db locked */ }
+                if (traceDbPollPerTask) {
+                  const msg = `New task: ${task.id} (${task.status})`;
+                  logger.info(msg, { module: 'db-poll' });
+                  try { persistence.writeActivityLog('db-poll', 'info', msg); } catch { /* db locked */ }
+                }
                 lastKnownTaskStates.set(task.id, snapshot);
                 uiPerfStats.dbPollCreated += 1;
                 mainWindow.webContents.send('invoker:task-delta', { type: 'created', task });
               } else if (prev !== snapshot) {
-                const msg = `Task updated: ${task.id} (${task.status})`;
-                logger.info(msg, { module: 'db-poll' });
-                try { persistence.writeActivityLog('db-poll', 'info', msg); } catch { /* db locked */ }
+                if (traceDbPollPerTask) {
+                  const msg = `Task updated: ${task.id} (${task.status})`;
+                  logger.info(msg, { module: 'db-poll' });
+                  try { persistence.writeActivityLog('db-poll', 'info', msg); } catch { /* db locked */ }
+                }
                 lastKnownTaskStates.set(task.id, snapshot);
                 uiPerfStats.dbPollUpdatedAsCreated += 1;
                 mainWindow.webContents.send('invoker:task-delta', { type: 'created', task });
@@ -1408,6 +1645,19 @@ function setupGuiMode(): void {
         ownerId: workflowMutationOwnerId,
         mode: 'gui',
       }));
+      messageBus.onRequest('headless.query', async (req: unknown) => {
+        const { kind, reset } = req as { kind?: string; reset?: boolean };
+        if (kind !== 'ui-perf') {
+          throw new Error(`Unsupported headless query: ${String(kind)}`);
+        }
+        if (reset) {
+          resetUiPerfStats();
+        }
+        return {
+          ownerMode: 'gui',
+          ...getUiPerfStats(),
+        };
+      });
       messageBus.onRequest('headless.run', async (req: unknown) => {
         const { planPath } = req as { planPath: string };
         logger.info(`headless.run: "${planPath}"`, { module: 'ipc-delegate' });
@@ -1434,11 +1684,18 @@ function setupGuiMode(): void {
         };
         const { workflowId, priority } = classifyHeadlessExecMutation(payload);
         if (delegatedNoTrack && workflowId && workflowMutationCoordinator) {
-          const intentId = workflowMutationCoordinator.submit(workflowId, priority, 'headless.exec', [payload]);
+          const intentId = workflowMutationCoordinator.submit(workflowId, priority, 'headless.exec', [payload], {
+            deferDrain: true,
+          });
+          logger.info(
+            `headless.exec accepted workflow="${workflowId}" intent=${intentId} noTrack=true priority=${priority}`,
+            { module: 'ipc-delegate' },
+          );
           return { ok: true, intentId };
         }
         return runWorkflowMutation(workflowId, priority, 'headless.exec', [payload], async () => executeHeadlessExec(payload));
       });
+      logger.info(`owner-ipc-ready ownerId=${workflowMutationOwnerId}`, { module: 'ipc-delegate' });
     }
 
     // Relaunch orphaned running tasks and start any pending-but-ready tasks.
@@ -1463,23 +1720,33 @@ function setupGuiMode(): void {
     // the db-poll doesn't re-emit deltas the messageBus already delivered.
     messageBus.subscribe(Channels.TASK_DELTA, (delta: unknown) => {
       uiPerfStats.mainDeltaToUi += 1;
-      logger.debug(`delta→ui: ${JSON.stringify(delta)}`, { module: 'ui' });
+      if (traceUiDeltaFlow) {
+        logger.debug(`delta→ui: ${JSON.stringify(delta)}`, { module: 'ui' });
+      }
       if (mainWindow && !mainWindow.isDestroyed() && uiInteractive) {
         mainWindow.webContents.send('invoker:task-delta', delta);
       }
-      applyDelta(delta as TaskDelta, lastKnownTaskStates, orchestrator);
 
-      // Auto-fix: when a task fails and has retries remaining, fix and restart automatically
       const d = delta as TaskDelta;
-      if (d.type === 'updated' && d.changes.status === 'failed') {
-        if (taskExecutor && !autoFixInProgress.has(d.taskId) && orchestrator.shouldAutoFix(d.taskId)) {
-          autoFixInProgress.add(d.taskId);
-          import('./workflow-actions.js').then(({ autoFixOnFailure }) =>
-            autoFixOnFailure(d.taskId, { orchestrator, persistence, taskExecutor: requireTaskExecutor() })
-              .catch(err => logger.error(`[auto-fix] "${d.taskId}": ${err}`, { module: 'auto-fix' }))
-              .finally(() => autoFixInProgress.delete(d.taskId)),
-          );
-        }
+      const previousSnapshot = d.type === 'updated' || d.type === 'removed'
+        ? lastKnownTaskStates.get(d.taskId)
+        : undefined;
+      const shouldAutoFix = shouldAutoFixFromDelta(d, previousSnapshot, {
+        suppressedTaskIds: suppressedAutoFixTasks,
+      });
+
+      applyDelta(d, lastKnownTaskStates, orchestrator);
+      if (d.type === 'updated') {
+        clearAutoFixSuppressionIfTerminal(d.taskId, d.changes.status);
+      } else if (d.type === 'removed') {
+        suppressedAutoFixTasks.delete(d.taskId);
+      }
+
+      // Auto-fix: only runtime failures that transitioned out of an active state
+      // should trigger repair. Startup replay of already-failed tasks must remain
+      // visible in the UI without kicking off fix work automatically.
+      if (shouldAutoFix) {
+        scheduleAutoFix(d.taskId);
       }
     });
 
@@ -1890,8 +2157,7 @@ function setupGuiMode(): void {
     });
 
     ipcMain.handle('invoker:get-ui-perf-stats', () => ({
-      ...uiPerfStats,
-      ts: new Date().toISOString(),
+      ...getUiPerfStats(),
     }));
 
     registerWorkflowScopedGuiMutationHandler(
@@ -2252,6 +2518,7 @@ function setupGuiMode(): void {
   });
 
   app.on('window-all-closed', () => {
+    logger.info('window-all-closed', { module: 'window' });
     if (process.platform !== 'darwin') {
       app.quit();
     }
@@ -2261,6 +2528,7 @@ function setupGuiMode(): void {
   app.on('before-quit', async (event) => {
     if (isQuitting) return;
     isQuitting = true;
+    logger.info('before-quit begin', { module: 'process' });
     event.preventDefault();
 
     const safetyTimer = setTimeout(() => {
@@ -2298,6 +2566,7 @@ function setupGuiMode(): void {
       if (messageBus) messageBus.disconnect();
     } finally {
       clearTimeout(safetyTimer);
+      logger.info('before-quit end -> app.exit(0)', { module: 'process' });
       app.exit(0);
     }
   });
