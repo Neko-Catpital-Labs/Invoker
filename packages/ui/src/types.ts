@@ -231,6 +231,8 @@ declare global {
     __INVOKER_BOOTSTRAP__?: {
       tasks?: TaskState[];
       workflows?: WorkflowMeta[];
+      initialWorkflowId?: string | null;
+      appStartedAtEpochMs?: number;
     };
   }
 }

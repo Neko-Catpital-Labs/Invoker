@@ -152,6 +152,7 @@ const workflowMutationDispatcher = new Map<string, (...args: unknown[]) => Promi
 let hourlyBackupInterval: ReturnType<typeof setInterval> | null = null;
 let writerLock: DbWriterLockResult | null = null;
 const workflowMutationOwnerId = `owner-${process.pid}-${Date.now()}`;
+const appProcessStartedAt = Date.now();
 
 interface GuiMutationPayload {
   channel: string;
@@ -215,6 +216,7 @@ function assertDeleteAllEnabled(): void {
 interface InitServicesOptions {
   readOnly?: boolean;
   executionAgentRegistry?: import('@invoker/execution-engine').AgentRegistry;
+  startupSyncMode?: 'all' | 'none';
 }
 
 async function initServices(options?: InitServicesOptions): Promise<void> {
@@ -275,22 +277,29 @@ async function initServices(options?: InitServicesOptions): Promise<void> {
   });
   commandService = new CommandService(orchestrator);
 
-  try {
-    orchestrator.syncAllFromDb();
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    logger.error(`workflow invariant violation during startup sync: ${message}`, {
-      module: 'init',
-      error: message,
-    });
-    throw err;
-  }
+  const startupSyncMode = options?.startupSyncMode ?? 'all';
   const initLog = isHeadless
     ? (...args: unknown[]) => { process.stderr.write(args.join(' ') + '\n'); }
     : (msg: string) => { logger.info(msg, { module: 'init' }); };
   const workflows = persistence.listWorkflows();
+  if (startupSyncMode === 'all') {
+    try {
+      orchestrator.syncAllFromDb();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error(`workflow invariant violation during startup sync: ${message}`, {
+        module: 'init',
+        error: message,
+      });
+      throw err;
+    }
+  }
   initLog(`[init] Loaded ${workflows.length} workflows from DB`);
-  initLog(`[init] Orchestrator graph has ${orchestrator.getAllTasks().length} tasks across ${workflows.length} workflows`);
+  if (startupSyncMode === 'all') {
+    initLog(`[init] Orchestrator graph has ${orchestrator.getAllTasks().length} tasks across ${workflows.length} workflows`);
+  } else {
+    initLog('[init] Orchestrator startup sync deferred to GUI bootstrap');
+  }
 }
 
 // ── Load @invoker/surfaces at runtime ────────────────────────
@@ -783,6 +792,9 @@ if (isHeadless) {
   const maxConcurrentAutoFixes = 1;
   let lastKnownWorkflowCount = 0;
   let lastActivityLogId = 0;
+  let startupWorkflowId: string | null = null;
+  let allWorkflowsHydrated = false;
+  let backgroundHydrationStarted = false;
   let uiInteractive = false;
   let deferredStartupTriggered = false;
   const traceUiDeltaFlow = process.env.INVOKER_TRACE_UI_DELTA === '1';
@@ -797,6 +809,24 @@ if (isHeadless) {
     maxRendererEventLoopLagMs: 0,
     maxRendererLongTaskMs: 0,
   };
+  const startupMarks = new Map<string, number>();
+  const recordStartupMark = (phase: string, extra?: Record<string, unknown>): void => {
+    const elapsedMs = Date.now() - appProcessStartedAt;
+    startupMarks.set(phase, elapsedMs);
+    const payload = {
+      ts: new Date().toISOString(),
+      metric: 'startup_phase',
+      phase,
+      elapsedMs,
+      ...(extra ?? {}),
+    };
+    logger.info(`startup phase ${phase} elapsed=${elapsedMs}ms`, { module: 'startup' });
+    try {
+      persistence.writeActivityLog('startup-phase', 'info', JSON.stringify(payload));
+    } catch {
+      // best effort; db can be locked during startup
+    }
+  };
 
   const resetUiPerfStats = (): void => {
     uiPerfStats.mainDeltaToUi = 0;
@@ -810,6 +840,7 @@ if (isHeadless) {
 
   const getUiPerfStats = (): Record<string, unknown> => ({
     ...uiPerfStats,
+    startupMarks: Object.fromEntries(startupMarks.entries()),
     ts: new Date().toISOString(),
   });
 
@@ -1409,6 +1440,7 @@ if (isHeadless) {
   }
 
   function createWindow(): void {
+    recordStartupMark('createWindow.begin');
     mainWindow = new BrowserWindow({
       width: 1200,
       height: 800,
@@ -1445,6 +1477,7 @@ if (isHeadless) {
 
     mainWindow.webContents.on('did-finish-load', () => {
       logger.info('main window did-finish-load', { module: 'window' });
+      recordStartupMark('window.did-finish-load');
     });
 
     mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
@@ -1468,9 +1501,11 @@ if (isHeadless) {
         if (!mainWindow || mainWindow.isDestroyed() || showTriggered) return;
         showTriggered = true;
         logger.info('main window show()', { module: 'window' });
+        recordStartupMark('window.show');
         mainWindow.show();
         mainWindow.focus();
         uiInteractive = true;
+        recordStartupMark('ui.interactive');
         startDeferredStartupWork();
       };
 
@@ -1478,6 +1513,7 @@ if (isHeadless) {
       setTimeout(showWindow, 1500).unref?.();
     } else {
       uiInteractive = true;
+      recordStartupMark('ui.interactive');
       startDeferredStartupWork();
     }
 
@@ -1516,9 +1552,107 @@ if (isHeadless) {
     }
   }
 
+  function listWorkflowsByStartupRecency() {
+    return [...persistence.listWorkflows()].sort((left, right) => {
+      const rightTs = Date.parse(right.updatedAt ?? '') || 0;
+      const leftTs = Date.parse(left.updatedAt ?? '') || 0;
+      if (rightTs !== leftTs) {
+        return rightTs - leftTs;
+      }
+      return right.createdAt.localeCompare(left.createdAt);
+    });
+  }
+
+  function bootstrapInitialWorkflowState(): void {
+    const workflows = listWorkflowsByStartupRecency();
+    lastKnownWorkflowCount = workflows.length;
+    startupWorkflowId = workflows[0]?.id ?? null;
+    allWorkflowsHydrated = workflows.length <= 1;
+    if (!startupWorkflowId) {
+      logger.info('[init] No workflows available for initial startup bootstrap', { module: 'init' });
+      return;
+    }
+    try {
+      orchestrator.syncFromDb(startupWorkflowId);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error(`workflow invariant violation during initial workflow bootstrap: ${message}`, {
+        module: 'init',
+        error: message,
+        workflowId: startupWorkflowId,
+      });
+      throw err;
+    }
+    logger.info(
+      `[init] Bootstrapped startup workflow "${startupWorkflowId}" with ${orchestrator.getAllTasks().length} tasks (${workflows.length} workflows total)`,
+      { module: 'init' },
+    );
+    recordStartupMark('startup.initial-workflow.ready', {
+      workflowId: startupWorkflowId,
+      taskCount: orchestrator.getAllTasks().length,
+      workflowCount: workflows.length,
+    });
+  }
+
+  function publishOrchestratorSnapshotToRenderer(): void {
+    const workflows = persistence.listWorkflows();
+    const tasks = orchestrator.getAllTasks();
+    const previousTaskIds = new Set(lastKnownTaskStates.keys());
+    lastKnownTaskStates.clear();
+    for (const task of tasks) {
+      const snapshot = JSON.stringify(task);
+      previousTaskIds.delete(task.id);
+      lastKnownTaskStates.set(task.id, snapshot);
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        sendTaskDeltaToRenderer({ type: 'created', task });
+      }
+    }
+    lastKnownWorkflowCount = workflows.length;
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      for (const removedTaskId of previousTaskIds) {
+        sendTaskDeltaToRenderer({ type: 'removed', taskId: removedTaskId });
+      }
+      mainWindow.webContents.send('invoker:workflows-changed', workflows);
+    }
+  }
+
+  function startBackgroundHydration(reason: string): void {
+    if (backgroundHydrationStarted || allWorkflowsHydrated) {
+      return;
+    }
+    backgroundHydrationStarted = true;
+    setTimeout(() => {
+      try {
+        recordStartupMark('background-hydration.start', { reason, startupWorkflowId });
+        orchestrator.syncAllFromDb();
+        allWorkflowsHydrated = true;
+        if (ownerMode && !invokerConfig.disableAutoRunOnStartup) {
+          const newlyStarted = relaunchOrphansAndStartReady('background-hydration');
+          if (newlyStarted.length > 0) {
+            requireTaskExecutor().executeTasks(newlyStarted);
+          }
+          requireTaskExecutor().resumeMergeGatePolling();
+        }
+        publishOrchestratorSnapshotToRenderer();
+        recordStartupMark('background-hydration.end', {
+          reason,
+          workflowCount: lastKnownWorkflowCount,
+          taskCount: orchestrator.getAllTasks().length,
+        });
+      } catch (err) {
+        backgroundHydrationStarted = false;
+        logger.error(
+          `background hydration failed: ${err instanceof Error ? err.stack ?? err.message : String(err)}`,
+          { module: 'init' },
+        );
+      }
+    }, 0).unref?.();
+  }
+
   function startDeferredStartupWork(): void {
     if (deferredStartupTriggered) return;
     deferredStartupTriggered = true;
+    recordStartupMark('deferred-startup.begin');
 
     setTimeout(() => {
       if (!ownerMode) return;
@@ -1534,6 +1668,7 @@ if (isHeadless) {
         cancelTask: performCancelTask,
         cancelWorkflow: performCancelWorkflow,
       });
+      recordStartupMark('api-server.started');
 
       if (ownerMode && workflowMutationCoordinator) {
         try {
@@ -1632,9 +1767,12 @@ if (isHeadless) {
   }
 
   app.whenReady().then(async () => {
+    recordStartupMark('app.whenReady');
     ownerMode = true;
     try {
-      await initServices({ executionAgentRegistry: agentRegistry });
+      recordStartupMark('initServices.start');
+      await initServices({ executionAgentRegistry: agentRegistry, startupSyncMode: 'none' });
+      recordStartupMark('initServices.end', { ownerMode: true });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       if (!message.includes('[db-writer-lock]')) {
@@ -1642,8 +1780,10 @@ if (isHeadless) {
         app.quit();
         return;
       }
-      await initServices({ readOnly: true, executionAgentRegistry: agentRegistry });
+      recordStartupMark('initServices.readOnly.start');
+      await initServices({ readOnly: true, executionAgentRegistry: agentRegistry, startupSyncMode: 'none' });
       ownerMode = false;
+      recordStartupMark('initServices.readOnly.end', { ownerMode: false });
     }
 
     if (ownerMode) {
@@ -1727,7 +1867,10 @@ if (isHeadless) {
         return runWorkflowMutation(workflowId, priority, 'headless.exec', [payload], async () => executeHeadlessExec(payload));
       });
       logger.info(`owner-ipc-ready ownerId=${workflowMutationOwnerId}`, { module: 'ipc-delegate' });
+      recordStartupMark('owner-ipc-ready');
     }
+
+    bootstrapInitialWorkflowState();
 
     // Relaunch orphaned running tasks and start any pending-but-ready tasks.
     if (!ownerMode) {
@@ -1746,6 +1889,7 @@ if (isHeadless) {
     logger.info(`Database: ${dbPath}`, { module: 'init' });
     logger.info(`Repo root: ${repoRoot}`, { module: 'init' });
     logger.info(`Config: disableAutoRunOnStartup=${invokerConfig.disableAutoRunOnStartup ?? false}`, { module: 'init' });
+    recordStartupMark('startup.ready-for-window');
 
     // Forward deltas to renderer and keep snapshot cache in sync so
     // the db-poll doesn't re-emit deltas the messageBus already delivered.
@@ -1802,7 +1946,9 @@ if (isHeadless) {
     ipcMain.on('invoker:get-bootstrap-state-sync', (event) => {
       event.returnValue = {
         tasks: orchestrator.getAllTasks(),
-        workflows: persistence.listWorkflows(),
+        workflows: listWorkflowsByStartupRecency(),
+        initialWorkflowId: startupWorkflowId,
+        appStartedAtEpochMs: appProcessStartedAt,
       };
     });
 
@@ -2185,6 +2331,9 @@ if (isHeadless) {
         uiPerfStats.maxRendererLongTaskMs = Math.max(uiPerfStats.maxRendererLongTaskMs, data.durationMs);
       }
       uiPerfStats.rendererReports += 1;
+      if (metric === 'startup_graph_visible') {
+        startBackgroundHydration('startup_graph_visible');
+      }
       try {
         persistence.writeActivityLog('ui-perf', 'info', JSON.stringify(payload));
       } catch {
@@ -2542,6 +2691,7 @@ if (isHeadless) {
 
     seedUiSnapshotCache();
     createWindow();
+    recordStartupMark('createWindow.end');
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) {

@@ -76,6 +76,7 @@ function resolveExternalDependencyTaskId(
 function TaskDAGInner({ tasks, workflows, onTaskClick, onTaskDoubleClick, onTaskContextMenu, statusFilters }: TaskDAGProps) {
   const { fitView } = useReactFlow();
   const prevNodeCount = useRef(0);
+  const reportedGraphVisibleRef = useRef(false);
 
   const onInitHandler = useCallback(() => {
     requestAnimationFrame(() => fitView({ padding: 0.2 }));
@@ -278,6 +279,25 @@ function TaskDAGInner({ tasks, workflows, onTaskClick, onTaskDoubleClick, onTask
       requestAnimationFrame(() => fitView({ padding: 0.2 }));
     }
   }, [nodes.length, fitView]);
+
+  useEffect(() => {
+    if (reportedGraphVisibleRef.current || nodes.length === 0 || typeof window === 'undefined') {
+      return;
+    }
+    const frame = requestAnimationFrame(() => {
+      const visibleNode = document.querySelector('.react-flow__node');
+      if (!visibleNode) return;
+      reportedGraphVisibleRef.current = true;
+      void window.invoker?.reportUiPerf?.('startup_graph_visible', {
+        nodeCount: nodes.length,
+        elapsedMs: Math.round(performance.now()),
+        processElapsedMs: window.__INVOKER_BOOTSTRAP__?.appStartedAtEpochMs
+          ? Date.now() - window.__INVOKER_BOOTSTRAP__.appStartedAtEpochMs
+          : undefined,
+      });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [nodes.length]);
 
   // Watchdog: detect when nodes are absent from the DOM or stuck with visibility: hidden
   useEffect(() => {

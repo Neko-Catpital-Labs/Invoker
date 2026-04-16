@@ -30,7 +30,7 @@ function channelToEventMethod(channel: string): string {
 
 const api: Record<string, unknown> = {};
 const bootstrapState = ipcRenderer.sendSync('invoker:get-bootstrap-state-sync') as
-  | { tasks?: unknown[]; workflows?: unknown[] }
+  | { tasks?: unknown[]; workflows?: unknown[]; appStartedAtEpochMs?: number }
   | undefined;
 
 // Invoke channels: each becomes (...args) => ipcRenderer.invoke(channel, ...args)

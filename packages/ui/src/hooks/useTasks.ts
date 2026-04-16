@@ -52,6 +52,8 @@ export function useTasks(): UseTasksResult {
   });
   /** Bumps on each refresh so stale getTasks IPC (e.g. mount snapshot before loadPlan) cannot wipe newer state. */
   const getTasksGenerationRef = useRef(0);
+  const reportedStartupBootstrapRef = useRef(false);
+  const reportedStartupSnapshotRef = useRef(false);
 
   const fetchAll = useCallback((forceRefresh = false) => {
     if (typeof window === 'undefined' || !window.invoker) return;
@@ -73,12 +75,40 @@ export function useTasks(): UseTasksResult {
         for (const wf of wfList) wfMap.set(wf.id, wf);
         return wfMap;
       });
+      if (!reportedStartupSnapshotRef.current) {
+        reportedStartupSnapshotRef.current = true;
+        void window.invoker.reportUiPerf?.('startup_snapshot_applied', {
+          taskCount: taskList.length,
+          workflowCount: wfList.length,
+          forceRefresh,
+          elapsedMs: Math.round(performance.now()),
+          processElapsedMs: bootstrapState?.appStartedAtEpochMs
+            ? Date.now() - bootstrapState.appStartedAtEpochMs
+            : undefined,
+        });
+      }
     });
     window.invoker.checkPrStatuses?.();
   }, []);
 
   useEffect(() => {
     if (typeof window === 'undefined' || !window.invoker) return;
+
+    if (
+      !reportedStartupBootstrapRef.current &&
+      bootstrapState &&
+      ((bootstrapState.tasks?.length ?? 0) > 0 || (bootstrapState.workflows?.length ?? 0) > 0)
+    ) {
+      reportedStartupBootstrapRef.current = true;
+      void window.invoker.reportUiPerf?.('startup_bootstrap_state', {
+        taskCount: bootstrapState.tasks?.length ?? 0,
+        workflowCount: bootstrapState.workflows?.length ?? 0,
+        elapsedMs: Math.round(performance.now()),
+        processElapsedMs: bootstrapState.appStartedAtEpochMs
+          ? Date.now() - bootstrapState.appStartedAtEpochMs
+          : undefined,
+      });
+    }
 
     fetchAll();
 
