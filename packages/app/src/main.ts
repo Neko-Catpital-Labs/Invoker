@@ -105,6 +105,7 @@ import { createRequire } from 'node:module';
 import { acquireDbWriterLock, type DbWriterLockResult } from './db-writer-lock.js';
 import { applyDelta } from './delta-merge.js';
 import { shouldAutoFixFromDelta } from './auto-fix-gating.js';
+import { ensureSqliteFlushDebounceForOwner } from './sqlite-flush-policy.js';
 import type { WorkflowMutationPriority } from './workflow-mutation-coordinator.js';
 import { PersistedWorkflowMutationCoordinator } from './persisted-workflow-mutation-coordinator.js';
 
@@ -225,6 +226,7 @@ async function initServices(options?: InitServicesOptions): Promise<void> {
   mkdirSync(invokerHomeRoot, { recursive: true });
   const readOnly = options?.readOnly === true;
   const dbPath = path.join(invokerHomeRoot, 'invoker.db');
+  ensureSqliteFlushDebounceForOwner(process.env, readOnly);
   if (!readOnly) {
     writerLock = acquireDbWriterLock(dbPath);
   }

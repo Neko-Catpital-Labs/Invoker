@@ -66,6 +66,12 @@ export type AttemptFailPatch = Partial<
 // ── Port interface ───────────────────────────────────────────
 
 export interface TaskRepository {
+  /**
+   * Execute a group of writes atomically when the backing store supports it.
+   * Adapters without transactions may simply execute the callback inline.
+   */
+  runInTransaction<T>(work: () => T): T;
+
   // ── Workflow writes ──
 
   /** Persist a new workflow. */
