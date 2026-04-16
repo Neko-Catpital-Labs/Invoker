@@ -287,11 +287,18 @@ describe('Orchestrator', () => {
     });
 
     it('resets auto-fix attempts to zero when a workflow is recreated', () => {
+      orchestrator = new Orchestrator({
+        persistence,
+        messageBus: bus,
+        maxConcurrency: 3,
+        defaultAutoFixRetries: 3,
+      });
+
       orchestrator.loadPlan({
         name: 'Recreate workflow resets auto-fix',
         onFinish: 'none',
         tasks: [
-          { id: 't1', description: 'First', command: 'exit 1', autoFix: true, autoFixRetries: 3 },
+          { id: 't1', description: 'First', command: 'exit 1' },
           { id: 't2', description: 'Second', command: 'echo 2', dependencies: ['t1'] },
         ],
       });
@@ -499,7 +506,7 @@ describe('Orchestrator', () => {
         tasks: [
           { id: 'prepare', description: 'Prepare', command: 'echo prepare' },
           { id: 'mid', description: 'Mid', command: 'echo mid', dependencies: ['prepare'] },
-          { id: 'late', description: 'Late', command: 'sleep 5', dependencies: ['mid'], autoFix: true },
+          { id: 'late', description: 'Late', command: 'sleep 5', dependencies: ['mid'] },
         ],
       });
 
@@ -650,14 +657,15 @@ describe('Orchestrator', () => {
       expect(orchestrator.getTask('t2')!.config.executorType).toBe('worktree');
     });
 
-    it('passes autoFix', () => {
+    it('does not project auto-fix onto task config from plans', () => {
       orchestrator.loadPlan({
         name: 'autofix-plan',
-        tasks: [{ id: 't1', description: 'Auto-fix task', autoFix: true }],
+        tasks: [{ id: 't1', description: 'Task' }],
       });
 
       const task = orchestrator.getTask('t1');
-      expect(task!.config.autoFix).toBe(true);
+      expect(task!.config).not.toHaveProperty('autoFix');
+      expect(task!.config).not.toHaveProperty('autoFixRetries');
     });
 
     it('publishes created deltas for each task', () => {
@@ -2245,10 +2253,16 @@ describe('Orchestrator', () => {
     });
 
     it('failed autoFix task spawns fix experiments instead of failing', () => {
+      orchestrator = new Orchestrator({
+        persistence,
+        messageBus: bus,
+        maxConcurrency: 3,
+        defaultAutoFixRetries: 3,
+      });
       orchestrator.loadPlan({
         name: 'autofix-test',
         tasks: [
-          { id: 't1', description: 'Auto-fix task', autoFix: true },
+          { id: 't1', description: 'Auto-fix task' },
           { id: 't2', description: 'Depends on t1', dependencies: ['t1'] },
         ],
       });
@@ -2276,10 +2290,16 @@ describe('Orchestrator', () => {
     });
 
     it('autoFix experiments go through full reconciliation lifecycle', () => {
+      orchestrator = new Orchestrator({
+        persistence,
+        messageBus: bus,
+        maxConcurrency: 3,
+        defaultAutoFixRetries: 3,
+      });
       orchestrator.loadPlan({
         name: 'autofix-recon-test',
         tasks: [
-          { id: 't1', description: 'Auto-fix task', autoFix: true },
+          { id: 't1', description: 'Auto-fix task' },
           { id: 't2', description: 'After fix', dependencies: ['t1'] },
         ],
       });
@@ -2360,9 +2380,15 @@ describe('Orchestrator', () => {
     });
 
     it('fix experiment prompts include original error message', () => {
+      orchestrator = new Orchestrator({
+        persistence,
+        messageBus: bus,
+        maxConcurrency: 3,
+        defaultAutoFixRetries: 3,
+      });
       orchestrator.loadPlan({
         name: 'autofix-prompt-test',
-        tasks: [{ id: 't1', description: 'Build widgets', autoFix: true, prompt: 'npm run build' }],
+        tasks: [{ id: 't1', description: 'Build widgets', prompt: 'npm run build' }],
       });
       orchestrator.startExecution();
 

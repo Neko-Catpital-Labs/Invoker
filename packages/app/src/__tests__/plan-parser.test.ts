@@ -429,7 +429,7 @@ tasks:
     expect(() => parsePlan(yaml)).toThrow('uses "autoFixRetries", which is no longer supported');
   });
 
-  it('applies auto-fix settings from global config only', async () => {
+  it('does not project global auto-fix config into parsed plan tasks', async () => {
     const configMod = await import('../config.js');
     const loadConfigSpy = vi.spyOn(configMod, 'loadConfig').mockReturnValue({
       autoFixRetries: 3,
@@ -447,14 +447,14 @@ tasks:
     command: "echo two"
 `;
     const plan = parsePlan(yaml);
-    expect(plan.tasks[0].autoFix).toBe(true);
-    expect(plan.tasks[0].autoFixRetries).toBe(3);
-    expect(plan.tasks[1].autoFix).toBe(true);
-    expect(plan.tasks[1].autoFixRetries).toBe(3);
+    expect(plan.tasks[0].autoFix).toBeUndefined();
+    expect(plan.tasks[0].autoFixRetries).toBeUndefined();
+    expect(plan.tasks[1].autoFix).toBeUndefined();
+    expect(plan.tasks[1].autoFixRetries).toBeUndefined();
     loadConfigSpy.mockRestore();
   });
 
-  it('disables auto-fix when global autoFixRetries is 0', async () => {
+  it('keeps parsed tasks free of auto-fix fields when global autoFixRetries is 0', async () => {
     const configMod = await import('../config.js');
     const loadConfigSpy = vi.spyOn(configMod, 'loadConfig').mockReturnValue({
       autoFixRetries: 0,
@@ -469,8 +469,8 @@ tasks:
     command: "echo one"
 `;
     const plan = parsePlan(yaml);
-    expect(plan.tasks[0].autoFix).toBe(false);
-    expect(plan.tasks[0].autoFixRetries).toBe(0);
+    expect(plan.tasks[0].autoFix).toBeUndefined();
+    expect(plan.tasks[0].autoFixRetries).toBeUndefined();
     loadConfigSpy.mockRestore();
   });
 

@@ -270,9 +270,6 @@ export function parsePlan(yamlContent: string): PlanDefinition {
   const defaultExecutorType = raw.executorType;
   const topLevelExternalDependencies = parseExternalDependencies('Plan', raw.externalDependencies);
 
-  const appConfig = loadConfig();
-  const globalAutoFixRetries = Math.min(Math.max(0, Math.floor(appConfig.autoFixRetries ?? 0)), 10);
-
   const tasks = raw.tasks.map((task, index) => {
     if (!task.id || typeof task.id !== 'string') {
       throw new PlanParseError(`Task at index ${index} must have an "id" field`);
@@ -344,8 +341,6 @@ export function parsePlan(yamlContent: string): PlanDefinition {
       executorType: resolvedExecutorType,
       dockerImage: task.dockerImage,
       remoteTargetId: task.remoteTargetId,
-      autoFix: globalAutoFixRetries > 0,
-      autoFixRetries: globalAutoFixRetries,
       executionAgent: task.executionAgent?.trim() || undefined,
     };
   });
