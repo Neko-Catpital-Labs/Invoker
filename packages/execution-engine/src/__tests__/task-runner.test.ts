@@ -1264,6 +1264,100 @@ describe('TaskRunner', () => {
   });
 
   describe('baseBranch in WorkRequest', () => {
+    it('encodes workflow and task execution generations in request salt', async () => {
+      let capturedRequest: any;
+      const capturingExecutor = {
+        type: 'worktree',
+        start: async (req: any) => {
+          capturedRequest = req;
+          return { executionId: 'exec-salt-1', taskId: 'task-salt-1' };
+        },
+        onOutput: () => () => {},
+        onComplete: (_handle: any, cb: any) => {
+          cb({ requestId: 'r', actionId: 'task-salt-1', status: 'completed', outputs: { exitCode: 0 } });
+          return () => {};
+        },
+        onHeartbeat: () => () => {},
+      };
+      const registry = {
+        getDefault: () => capturingExecutor,
+        get: () => capturingExecutor,
+        getAll: () => [capturingExecutor],
+      };
+      const persistence = {
+        updateTask: vi.fn(),
+        loadWorkflow: () => ({ generation: 3 }),
+      };
+      const orchestrator = {
+        getTask: () => undefined,
+        handleWorkerResponse: vi.fn(),
+      };
+      const executor = new TaskRunner({
+        orchestrator: orchestrator as any,
+        persistence: persistence as any,
+        executorRegistry: registry as any,
+        cwd: '/tmp',
+      });
+
+      const task = makeTask({
+        id: 'task-salt-1',
+        status: 'running',
+        config: { command: 'echo hi', workflowId: 'wf-1' },
+        execution: { generation: 5 },
+      });
+      await executor.executeTask(task);
+
+      expect(capturedRequest).toBeDefined();
+      expect(capturedRequest.inputs.salt).toBe('wf:3|task:5');
+    });
+
+    it('keeps salt undefined when both workflow and task generations are zero', async () => {
+      let capturedRequest: any;
+      const capturingExecutor = {
+        type: 'worktree',
+        start: async (req: any) => {
+          capturedRequest = req;
+          return { executionId: 'exec-salt-2', taskId: 'task-salt-2' };
+        },
+        onOutput: () => () => {},
+        onComplete: (_handle: any, cb: any) => {
+          cb({ requestId: 'r', actionId: 'task-salt-2', status: 'completed', outputs: { exitCode: 0 } });
+          return () => {};
+        },
+        onHeartbeat: () => () => {},
+      };
+      const registry = {
+        getDefault: () => capturingExecutor,
+        get: () => capturingExecutor,
+        getAll: () => [capturingExecutor],
+      };
+      const persistence = {
+        updateTask: vi.fn(),
+        loadWorkflow: () => ({ generation: 0 }),
+      };
+      const orchestrator = {
+        getTask: () => undefined,
+        handleWorkerResponse: vi.fn(),
+      };
+      const executor = new TaskRunner({
+        orchestrator: orchestrator as any,
+        persistence: persistence as any,
+        executorRegistry: registry as any,
+        cwd: '/tmp',
+      });
+
+      const task = makeTask({
+        id: 'task-salt-2',
+        status: 'running',
+        config: { command: 'echo hi', workflowId: 'wf-1' },
+        execution: { generation: 0 },
+      });
+      await executor.executeTask(task);
+
+      expect(capturedRequest).toBeDefined();
+      expect(capturedRequest.inputs.salt).toBeUndefined();
+    });
+
     it('includes workflow baseBranch in request inputs', async () => {
       let capturedRequest: any;
       const capturingExecutor = {
@@ -5132,7 +5226,11 @@ describe('TaskRunner', () => {
       expect(orchestrator.handleWorkerResponse).toHaveBeenCalledWith(expect.objectContaining({
         status: 'failed',
         outputs: expect.objectContaining({
-          error: expect.stringContaining('Post-fix PR prep failed'),
+          error: JSON.stringify({
+            type: 'merge_conflict',
+            failedBranch: 'invoker/t1',
+            conflictFiles: ['shared.ts'],
+          }),
         }),
       }));
       expect(orchestrator.setTaskAwaitingApproval).not.toHaveBeenCalled();

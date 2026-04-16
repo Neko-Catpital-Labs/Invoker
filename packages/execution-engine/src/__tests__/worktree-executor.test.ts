@@ -199,6 +199,21 @@ describe('computeBranchHash', () => {
     expect(a).toBe(b);
   });
 
+  it('is stable when workflow/task generation salt is unchanged', () => {
+    const salt = 'wf:2|task:4';
+    const a = computeBranchHash('t1', 'cmd', undefined, ['c1'], 'HEAD1', salt);
+    const b = computeBranchHash('t1', 'cmd', undefined, ['c1'], 'HEAD1', salt);
+    expect(a).toBe(b);
+  });
+
+  it('changes when either workflow or task generation salt changes', () => {
+    const base = computeBranchHash('t1', 'cmd', undefined, ['c1'], 'HEAD1', 'wf:2|task:4');
+    const workflowBumped = computeBranchHash('t1', 'cmd', undefined, ['c1'], 'HEAD1', 'wf:3|task:4');
+    const taskBumped = computeBranchHash('t1', 'cmd', undefined, ['c1'], 'HEAD1', 'wf:2|task:5');
+    expect(base).not.toBe(workflowBumped);
+    expect(base).not.toBe(taskBumped);
+  });
+
   it('is backward compatible when salt is omitted or empty', () => {
     const noSalt = computeBranchHash('t1', 'cmd', undefined, [], 'HEAD1');
     const emptySalt = computeBranchHash('t1', 'cmd', undefined, [], 'HEAD1', '');

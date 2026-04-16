@@ -394,9 +394,13 @@ export class TaskRunner {
       }
     }
 
-    // Read workflow generation for content-addressable branch salt
+    // Read workflow + task generations for content-addressable branch salt.
     const workflow = task.config.workflowId ? this.persistence.loadWorkflow?.(task.config.workflowId) : undefined;
-    const generation = (workflow as any)?.generation ?? 0;
+    const workflowGeneration = (workflow as any)?.generation ?? 0;
+    const taskExecutionGeneration = task.execution.generation ?? 0;
+    const generationSalt = workflowGeneration > 0 || taskExecutionGeneration > 0
+      ? `wf:${workflowGeneration}|task:${taskExecutionGeneration}`
+      : undefined;
     const baseBranch = workflow?.baseBranch ?? this.defaultBranch;
 
     const repoUrl = workflow?.repoUrl;
@@ -417,7 +421,7 @@ export class TaskRunner {
         upstreamContext: upstreamContext.length > 0 ? upstreamContext : undefined,
         alternatives: alternatives.length > 0 ? alternatives : undefined,
         upstreamBranches: upstreamBranches.length > 0 ? upstreamBranches : undefined,
-        salt: generation > 0 ? generation.toString() : undefined,
+        salt: generationSalt,
         baseBranch,
       },
       callbackUrl: '',
