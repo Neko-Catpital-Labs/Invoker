@@ -108,6 +108,11 @@ function setupSpawnMock(): {
       // Auto-succeed git commands after a microtask
       Promise.resolve().then(() => {
         const argsArr = args as string[];
+        if (argsArr?.[0] === 'remote' && argsArr?.[1] === 'get-url' && argsArr?.[2] === 'upstream') {
+          gitProc.stderr!.emit('data', Buffer.from("fatal: No such remote 'upstream'\n"));
+          gitProc.emit('close', 2, null);
+          return;
+        }
         if (argsArr?.includes('rev-parse')) {
           gitProc.stdout!.emit('data', Buffer.from('abc123def456\n'));
         }
@@ -994,6 +999,43 @@ describe('WorktreeExecutor', () => {
       // pool.acquireWorktree should have been called
       const pool = (executor as any).pool;
       expect(pool.acquireWorktree).toHaveBeenCalledTimes(1);
+
+      taskProcess.emit('close', 0, null);
+    });
+
+    it('syncs upstream base when upstream remote is available', async () => {
+      const { taskProcess } = setupSpawnMock();
+      const defaultImpl = mockedSpawn.getMockImplementation()!;
+      mockedSpawn.mockImplementation((cmd: string, args?: readonly string[], options?: any) => {
+        if (cmd === 'git') {
+          const argsArr = args as string[] | undefined;
+          if (argsArr?.[0] === 'remote' && argsArr?.[1] === 'get-url' && argsArr?.[2] === 'upstream') {
+            const gitProc = createMockProcess();
+            Promise.resolve().then(() => {
+              gitProc.stdout!.emit('data', Buffer.from('git@github.com:upstream/repo.git\n'));
+              gitProc.emit('close', 0, null);
+            });
+            return gitProc as any;
+          }
+        }
+        return defaultImpl(cmd, args, options);
+      });
+
+      const request = makeRequest({
+        inputs: { command: 'echo hello', baseBranch: 'master' },
+      });
+      await executor.start(request);
+
+      const gitCalls = mockedSpawn.mock.calls.filter((call) => call[0] === 'git');
+      const upstreamFetch = gitCalls.find((call) => {
+        const args = call[1] as string[];
+        return (
+          args[0] === 'fetch'
+          && args[1] === 'upstream'
+          && args[2] === 'refs/heads/master:refs/remotes/upstream/master'
+        );
+      });
+      expect(upstreamFetch).toBeDefined();
 
       taskProcess.emit('close', 0, null);
     });

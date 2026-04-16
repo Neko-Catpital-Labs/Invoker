@@ -3,7 +3,11 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFileSync, execSync } from 'node:child_process';
-import { syncPlanBaseRemote, resolvePlanBaseRevision } from '../plan-base-remote.js';
+import {
+  syncPlanBaseRemote,
+  resolvePlanBaseRevision,
+  resolvePreferredTrackingRemote,
+} from '../plan-base-remote.js';
 
 function runGitFactory(cwd: string) {
   return async (args: string[]) =>
@@ -78,5 +82,21 @@ describe('plan-base-remote', () => {
 
     const resolved = (await resolvePlanBaseRevision(runGit, 'feature/new-remote')).trim();
     expect(resolved).toBe(upstreamHead);
+  });
+
+  it('resolvePreferredTrackingRemote prefers upstream for short base refs when available', async () => {
+    const runGit = runGitFactory(mirror);
+    execSync(`git remote add upstream "${upstream}"`, { cwd: mirror });
+
+    const preferred = await resolvePreferredTrackingRemote(runGit, 'master');
+    expect(preferred).toBe('upstream');
+  });
+
+  it('resolvePreferredTrackingRemote falls back to origin when upstream branch is missing', async () => {
+    const runGit = runGitFactory(mirror);
+    execSync(`git remote add upstream "${upstream}"`, { cwd: mirror });
+
+    const preferred = await resolvePreferredTrackingRemote(runGit, 'branch-that-does-not-exist');
+    expect(preferred).toBe('origin');
   });
 });

@@ -13,6 +13,7 @@ import { RESTART_TO_BRANCH_TRACE, traceExecution } from './exec-trace.js';
 import {
   syncPlanBaseRemote,
   resolvePlanBaseRevision,
+  resolvePreferredTrackingRemote,
   shouldResolveViaOriginTracking,
 } from './plan-base-remote.js';
 import { remoteFetchForPool } from './remote-fetch-policy.js';
@@ -107,7 +108,8 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
     log(`resolve base ${baseRef} begin`);
     const runGit = (args: string[]) => this.execGitSimple(args, clonePath);
     if (remoteFetchForPool.enabled && shouldResolveViaOriginTracking(baseRef)) {
-      await syncPlanBaseRemote(runGit, baseRef.trim());
+      const preferredRemote = await resolvePreferredTrackingRemote(runGit, baseRef.trim());
+      await syncPlanBaseRemote(runGit, baseRef.trim(), preferredRemote);
     }
     const baseHead = await resolvePlanBaseRevision(runGit, baseRef);
     log(`resolve base ${baseRef} done → ${baseHead}`);
