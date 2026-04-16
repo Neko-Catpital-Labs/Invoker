@@ -18,6 +18,10 @@ import type { SQLiteAdapter } from './sqlite-adapter.js';
 export class SqliteTaskRepository implements TaskRepository {
   constructor(private adapter: SQLiteAdapter) {}
 
+  runInTransaction<T>(work: () => T): T {
+    return this.adapter.runInTransaction(work);
+  }
+
   // ── Workflow writes ──
 
   saveWorkflow(workflow: WorkflowRecord): void {

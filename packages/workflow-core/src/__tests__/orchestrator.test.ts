@@ -13,6 +13,7 @@ class InMemoryPersistence implements OrchestratorPersistence {
   tasks = new Map<string, { workflowId: string; task: TaskState }>();
   private attempts = new Map<string, Attempt[]>();
   events: Array<{ taskId: string; eventType: string; payload?: unknown }> = [];
+  updateWorkflowCalls = new Map<string, number>();
 
   saveWorkflow(workflow: { id: string; name: string; status: string }): void {
     const now = new Date().toISOString();
@@ -21,6 +22,7 @@ class InMemoryPersistence implements OrchestratorPersistence {
 
   updateWorkflow(workflowId: string, changes: { status?: string; updatedAt?: string }): void {
     const wf = this.workflows.get(workflowId);
+    this.updateWorkflowCalls.set(workflowId, (this.updateWorkflowCalls.get(workflowId) ?? 0) + 1);
     if (wf && changes.status) {
       wf.status = changes.status;
     }
@@ -4414,6 +4416,42 @@ describe('Orchestrator', () => {
       expect(o.getTask('b')!.status).toBe('running');
       expect(o.getTask('c')!.status).toBe('pending');
       expect(o.getTask(`__merge__${wfId}`)!.status).toBe('pending');
+    });
+
+    it('recomputes workflow status once per retry reset instead of once per affected task', () => {
+      const p = new InMemoryPersistence();
+      const b = new InMemoryBus();
+      const wfId = 'wf-retry-status-batch';
+
+      p.saveWorkflow({ id: wfId, name: wfId, status: 'failed' });
+      p.saveTask(wfId, {
+        id: 'root',
+        description: 'root',
+        status: 'failed',
+        dependencies: [],
+        createdAt: new Date(),
+        config: { workflowId: wfId },
+        execution: { error: 'boom', exitCode: 1 },
+      });
+      for (let i = 0; i < 6; i += 1) {
+        p.saveTask(wfId, {
+          id: `child-${i}`,
+          description: `child ${i}`,
+          status: 'completed',
+          dependencies: [i === 0 ? 'root' : `child-${i - 1}`],
+          createdAt: new Date(),
+          config: { workflowId: wfId },
+          execution: { exitCode: 0 },
+        });
+      }
+
+      const o = new Orchestrator({ persistence: p, messageBus: b, maxConcurrency: 3 });
+      o.syncFromDb(wfId);
+      p.updateWorkflowCalls.set(wfId, 0);
+
+      o.retryWorkflow(wfId);
+
+      expect(p.updateWorkflowCalls.get(wfId)).toBeLessThanOrEqual(2);
     });
 
     it('invalidates completed descendants when an upstream task is fixing_with_ai', () => {

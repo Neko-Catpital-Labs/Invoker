@@ -201,6 +201,11 @@ export class SQLiteAdapter implements PersistenceAdapter {
     }
   }
 
+  /** Public transactional wrapper for higher-level batched write paths. */
+  runInTransaction<T>(work: () => T): T {
+    return this.runTransaction(work);
+  }
+
   /** Flush DB to disk (no-op for :memory:). */
   private flush(): void {
     if (!this.dbPath || !this.dirty) return;

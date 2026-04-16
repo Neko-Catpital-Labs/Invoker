@@ -330,6 +330,13 @@ export function assertExecutorRoutingConforms(
 export function taskRepositoryFromPersistence(p: OrchestratorPersistence): TaskRepository {
   const partial = p as Partial<OrchestratorPersistence>;
   return {
+    runInTransaction: <T>(work: () => T) => {
+      const maybeTransactional = partial as Partial<{ runInTransaction<T>(cb: () => T): T }>;
+      if (typeof maybeTransactional.runInTransaction === 'function') {
+        return maybeTransactional.runInTransaction(work);
+      }
+      return work();
+    },
     saveWorkflow: (wf) => p.saveWorkflow(wf),
     updateWorkflow: (id, c) => p.updateWorkflow?.(id, c),
     deleteWorkflow: (id) => p.deleteWorkflow?.(id),
@@ -442,7 +449,11 @@ export class Orchestrator {
    * Write field changes to the DB, then update the in-memory cache
    * to match. Returns the updated task state.
    */
-  private writeAndSync(taskId: string, changes: TaskStateChanges): TaskState {
+  private writeAndSync(
+    taskId: string,
+    changes: TaskStateChanges,
+    opts?: { skipWorkflowStatusSync?: boolean },
+  ): TaskState {
     const existing = this.stateGetTask(taskId);
     if (!existing) {
       throw new Error(`writeAndSync: task ${taskId} not found in graph`);
@@ -469,7 +480,7 @@ export class Orchestrator {
       );
     }
     this.stateMachine.restoreTask(updated);
-    if (changes.status !== undefined && existing.config.workflowId) {
+    if (!opts?.skipWorkflowStatusSync && changes.status !== undefined && existing.config.workflowId) {
       this.syncWorkflowStatus(existing.config.workflowId);
     }
     return updated;
@@ -564,30 +575,45 @@ export class Orchestrator {
     const forceResetIds = opts?.forceResetIds ?? new Set<string>();
     const affectedIds = this.collectSubgraphTaskIds(rootTaskIds);
     const affectedSet = new Set(affectedIds);
+    const workflowsToSync = new Set<string>();
+    const pendingTaskDeltas: TaskDelta[] = [];
 
-    for (const id of affectedIds) {
-      const current = this.stateGetTask(id);
-      if (!current) continue;
+    this.taskRepository.runInTransaction(() => {
+      for (const id of affectedIds) {
+        const current = this.stateGetTask(id);
+        if (!current) continue;
+        if (current.config.workflowId) {
+          workflowsToSync.add(current.config.workflowId);
+        }
 
-      const shouldReset = forceResetIds.has(id) || current.status !== 'pending';
-      this.deferredTaskIds.delete(id);
-      if (!shouldReset) {
-        this.clearQueuedSchedulerEntries(id, current.execution.selectedAttemptId);
-        continue;
+        const shouldReset = forceResetIds.has(id) || current.status !== 'pending';
+        this.deferredTaskIds.delete(id);
+        if (!shouldReset) {
+          this.clearQueuedSchedulerEntries(id, current.execution.selectedAttemptId);
+          continue;
+        }
+
+        const changesWithGeneration = this.withBumpedExecutionGeneration(current, resetChanges);
+        this.writeAndSync(id, changesWithGeneration, { skipWorkflowStatusSync: true });
+        const priorAttemptId = current.execution.selectedAttemptId;
+        this.replaceSelectedAttempt(current, {}, { skipWorkflowStatusSync: true });
+        this.persistence.logEvent?.(id, 'task.pending', changesWithGeneration);
+        pendingTaskDeltas.push({
+          type: 'updated',
+          taskId: id,
+          changes: changesWithGeneration,
+        });
+
+        this.clearQueuedSchedulerEntries(id, priorAttemptId);
       }
 
-      const changesWithGeneration = this.withBumpedExecutionGeneration(current, resetChanges);
-      this.writeAndSync(id, changesWithGeneration);
-      const priorAttemptId = current.execution.selectedAttemptId;
-      this.replaceSelectedAttempt(current);
-      this.persistence.logEvent?.(id, 'task.pending', changesWithGeneration);
-      this.messageBus.publish(TASK_DELTA_CHANNEL, {
-        type: 'updated',
-        taskId: id,
-        changes: changesWithGeneration,
-      });
+      for (const workflowId of workflowsToSync) {
+        this.syncWorkflowStatus(workflowId);
+      }
+    });
 
-      this.clearQueuedSchedulerEntries(id, priorAttemptId);
+    for (const delta of pendingTaskDeltas) {
+      this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
     }
 
     const readyIds = this.stateMachine
@@ -712,6 +738,7 @@ export class Orchestrator {
   private replaceSelectedAttempt(
     task: TaskState,
     opts: Partial<Omit<Attempt, 'id' | 'nodeId' | 'createdAt'>> = {},
+    writeOpts?: { skipWorkflowStatusSync?: boolean },
   ): string {
     const selected = this.getSelectedAttempt(task);
     const loadAttempts = (this.persistence as Partial<OrchestratorPersistence>).loadAttempts;
@@ -735,7 +762,7 @@ export class Orchestrator {
       ...opts,
     });
     this.taskRepository.saveAttempt(freshAttempt);
-    this.writeAndSync(task.id, { execution: { selectedAttemptId: freshAttempt.id } });
+    this.writeAndSync(task.id, { execution: { selectedAttemptId: freshAttempt.id } }, writeOpts);
     return freshAttempt.id;
   }
 
