@@ -3,7 +3,7 @@ description: |
   Move long markdown examples into executable/tested fixtures and keep docs
   minimal. This reduces ambiguity and drift between prose and runtime behavior.
 onFinish: pull_request
-mergeMode: github
+mergeMode: external_review
 baseBranch: master
 repoUrl: git@github.com:example-org/acme-repo.git
 executorType: worktree

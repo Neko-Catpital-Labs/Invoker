@@ -3,7 +3,7 @@ description: |
   Convert visual-proof process prose into explicit script subcommands with
   deterministic inputs/outputs and artifact expectations.
 onFinish: pull_request
-mergeMode: github
+mergeMode: external_review
 baseBranch: master
 repoUrl: git@github.com:example-org/acme-repo.git
 executorType: worktree

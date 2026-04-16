@@ -93,6 +93,27 @@ function setMergeGateReviewReady(
   orchestrator.setTaskAwaitingApproval?.(taskId, changes);
 }
 
+function buildMergeConflictJson(errorText: string, failedBranch: string): string | undefined {
+  const hasConflictMarkers =
+    errorText.includes('CONFLICT (') ||
+    errorText.includes('Automatic merge failed');
+  const hasMergeCommandFailure =
+    errorText.includes('git merge --no-ff') &&
+    errorText.includes(` ${failedBranch}`);
+  if (!hasConflictMarkers && !hasMergeCommandFailure) return undefined;
+  const files = new Set<string>();
+  const regex = /Merge conflict in ([^\n]+)/g;
+  for (const match of errorText.matchAll(regex)) {
+    const file = match[1]?.trim();
+    if (file) files.add(file);
+  }
+  return JSON.stringify({
+    type: 'merge_conflict',
+    failedBranch,
+    conflictFiles: [...files],
+  });
+}
+
 // ── Host-cwd safety guard ─────────────────────────────────
 
 /**
@@ -822,7 +843,16 @@ export async function publishAfterFixImpl(
           );
         }
         const mergeMsg = description ? `Merge ${branch} — ${description}` : `Merge ${branch}`;
-        await execGitInMergeSafe(host, ['merge', '--no-ff', '-m', mergeMsg, branch], consolidateDir);
+        try {
+          await execGitInMergeSafe(host, ['merge', '--no-ff', '-m', mergeMsg, branch], consolidateDir);
+        } catch (err) {
+          const errorText = err instanceof Error ? err.message : String(err);
+          const mergeConflictJson = buildMergeConflictJson(errorText, branch);
+          if (mergeConflictJson) {
+            throw new Error(mergeConflictJson);
+          }
+          throw err;
+        }
         mergedCount++;
       }
       console.log(`[merge] Post-fix: consolidated ${mergedCount} task branches into ${featureBranch}` +
@@ -902,6 +932,15 @@ export async function publishAfterFixImpl(
     try { await execGitInMergeSafe(host, ['merge', '--abort'], gateWorkspacePath!); } catch { /* no merge in progress */ }
 
     const errorMsg = err instanceof Error ? err.message : String(err);
+    let outputError = `Post-fix PR prep failed: ${errorMsg}`;
+    try {
+      const parsed = JSON.parse(errorMsg) as { type?: string };
+      if (parsed?.type === 'merge_conflict') {
+        outputError = errorMsg;
+      }
+    } catch {
+      // keep prefixed error for non-JSON errors
+    }
     mergeTrace('PUBLISH_AFTER_FIX_FAILED', { taskId: task.id, error: errorMsg });
     console.error(`[merge] Post-fix PR prep failed for ${task.id}: ${errorMsg}`);
     const failedResponse: WorkResponse = {
@@ -909,7 +948,7 @@ export async function publishAfterFixImpl(
       actionId: task.id,
       executionGeneration: task.execution.generation ?? 0,
       status: 'failed',
-      outputs: { exitCode: 1, error: `Post-fix PR prep failed: ${errorMsg}` },
+      outputs: { exitCode: 1, error: outputError },
     };
     host.orchestrator.handleWorkerResponse(failedResponse);
   }

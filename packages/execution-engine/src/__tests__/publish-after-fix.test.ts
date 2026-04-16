@@ -371,4 +371,59 @@ describe('publishAfterFixImpl integration (real git)', () => {
       }),
     );
   });
+
+  it('emits merge_conflict JSON when post-fix consolidation merge conflicts', async () => {
+    const sandbox = createSandbox();
+    root = sandbox.root;
+
+    // Second branch that conflicts with invoker/t1 on the same line.
+    git('checkout -b invoker/t2 master', sandbox.hostDir);
+    writeFileSync(join(sandbox.hostDir, 't1.txt'), 'task 2 conflicting work');
+    git('add -A', sandbox.hostDir);
+    git('commit -m "task 2 conflict"', sandbox.hostDir);
+    git('push origin invoker/t2', sandbox.hostDir);
+    git('checkout master', sandbox.hostDir);
+
+    // Simulate AI fix already containing invoker/t1 so merging invoker/t2 conflicts.
+    git('fetch origin invoker/t1:invoker/t1', sandbox.gateDir);
+    gitExec(['merge', '--no-ff', '-m', 'Merge invoker/t1 (claude resolution)', 'invoker/t1'], sandbox.gateDir);
+
+    const mergeTask: TaskState = {
+      id: '__merge__wf-int',
+      description: 'Merge gate',
+      status: 'running',
+      dependencies: ['t1', 't2'],
+      createdAt: new Date(),
+      config: { isMergeNode: true, workflowId: 'wf-int' } as any,
+      execution: {} as any,
+    };
+    const taskT1: TaskState = {
+      id: 't1',
+      description: 'Task 1',
+      status: 'completed',
+      dependencies: [],
+      createdAt: new Date(),
+      config: { workflowId: 'wf-int' } as any,
+      execution: { branch: 'invoker/t1' } as any,
+    };
+    const taskT2: TaskState = {
+      id: 't2',
+      description: 'Task 2',
+      status: 'completed',
+      dependencies: [],
+      createdAt: new Date(),
+      config: { workflowId: 'wf-int' } as any,
+      execution: { branch: 'invoker/t2' } as any,
+    };
+
+    const host = makeHost(sandbox.hostDir, sandbox.gateDir, [mergeTask, taskT1, taskT2]);
+    await publishAfterFixImpl(host, mergeTask);
+
+    expect(host.orchestrator.handleWorkerResponse).toHaveBeenCalledTimes(1);
+    const response = (host.orchestrator.handleWorkerResponse as ReturnType<typeof vi.fn>).mock.calls[0]?.[0];
+    const parsedError = JSON.parse(response.outputs.error);
+    expect(parsedError.type).toBe('merge_conflict');
+    expect(parsedError.failedBranch).toBe('invoker/t2');
+    expect(Array.isArray(parsedError.conflictFiles)).toBe(true);
+  });
 });

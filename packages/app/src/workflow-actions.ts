@@ -268,6 +268,17 @@ function isMergeConflictError(error: string): boolean {
   for (const c of [error, error.trim(), error.split('\n\n').at(-1)?.trim() ?? '']) {
     if (!c) continue;
     try { if ((JSON.parse(c) as any)?.type === 'merge_conflict') return true; } catch { /* not JSON */ }
+    const jsonStart = c.indexOf('{');
+    if (jsonStart >= 0) {
+      try {
+        if ((JSON.parse(c.slice(jsonStart)) as any)?.type === 'merge_conflict') return true;
+      } catch {
+        /* not parseable JSON tail */
+      }
+    }
+    if (c.includes('CONFLICT (') || c.includes('Automatic merge failed')) {
+      return true;
+    }
   }
   return false;
 }
@@ -402,6 +413,7 @@ export async function autoFixOnFailure(
     getAutoFixAgent?: () => string | undefined;
     getAutoApproveAIFixes?: () => boolean | undefined;
   },
+  inlineRetryDepth = 0,
 ): Promise<void> {
   const { orchestrator, persistence, taskExecutor } = deps;
   if (!orchestrator.shouldAutoFix(taskId)) return;
@@ -489,6 +501,16 @@ export async function autoFixOnFailure(
         startedCount: finalizeResult.started.length,
         startedStatuses: finalizeResult.started.map((t) => t.status),
       });
+      const latestTask = orchestrator.getTask(taskId);
+      if (latestTask?.status === 'failed' && orchestrator.shouldAutoFix(taskId) && inlineRetryDepth < 1) {
+        persistence.logEvent?.(taskId, 'debug.auto-fix', {
+          phase: 'auto-fix-post-route-inline-retry',
+          reason: 'post-fix-publish-failed',
+          inlineRetryDepth,
+          latestError: latestTask.execution.error ?? null,
+        });
+        await autoFixOnFailure(taskId, deps, inlineRetryDepth + 1);
+      }
       return;
     }
     const started = orchestrator.restartTask(taskId);

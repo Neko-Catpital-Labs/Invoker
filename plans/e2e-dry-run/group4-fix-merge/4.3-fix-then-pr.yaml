@@ -2,7 +2,7 @@
 name: "e2e-dry-run group4 4.3 fix-then-pr"
 repoUrl: git@github.com:example-org/acme-repo.git
 onFinish: none
-mergeMode: github
+mergeMode: external_review
 featureBranch: experiment/e2e-g443-fix-pr
 baseBranch: HEAD
 

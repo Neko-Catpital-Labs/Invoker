@@ -327,6 +327,19 @@ describe('SQLiteAdapter', () => {
       const loaded = adapter.loadTasks('wf-1');
       expect(loaded).toHaveLength(0);
     });
+
+    it('removes output spool rows and tail cache for deleted workflow tasks', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t-spool-1'));
+
+      adapter.appendOutputChunk('t-spool-1', 'stale output\n');
+      expect(adapter.getOutputTail('t-spool-1')).toHaveLength(1);
+
+      adapter.deleteAllTasks('wf-1');
+
+      expect(adapter.replayOutputFrom('t-spool-1', 0)).toEqual([]);
+      expect(adapter.getOutputTail('t-spool-1')).toEqual([]);
+    });
   });
 
   describe('agentSessionId persistence', () => {
@@ -577,6 +590,37 @@ describe('SQLiteAdapter', () => {
       adapter.deleteAllWorkflows();
       expect(adapter.listWorkflows()).toEqual([]);
     });
+
+    it('clears output spool rows and in-memory tails for all tasks', () => {
+      adapter.saveWorkflow({
+        id: 'wf-del-all-1',
+        name: 'First',
+        status: 'running',
+        createdAt: '2024-01-01T00:00:00Z',
+        updatedAt: '2024-01-01T00:00:00Z',
+      });
+      adapter.saveWorkflow({
+        id: 'wf-del-all-2',
+        name: 'Second',
+        status: 'running',
+        createdAt: '2024-01-02T00:00:00Z',
+        updatedAt: '2024-01-02T00:00:00Z',
+      });
+      adapter.saveTask('wf-del-all-1', makeTask('t-del-all-1'));
+      adapter.saveTask('wf-del-all-2', makeTask('t-del-all-2'));
+
+      adapter.appendOutputChunk('t-del-all-1', 'wf1 chunk\n');
+      adapter.appendOutputChunk('t-del-all-2', 'wf2 chunk\n');
+      expect(adapter.getOutputTail('t-del-all-1')).toHaveLength(1);
+      expect(adapter.getOutputTail('t-del-all-2')).toHaveLength(1);
+
+      adapter.deleteAllWorkflows();
+
+      expect(adapter.replayOutputFrom('t-del-all-1', 0)).toEqual([]);
+      expect(adapter.replayOutputFrom('t-del-all-2', 0)).toEqual([]);
+      expect(adapter.getOutputTail('t-del-all-1')).toEqual([]);
+      expect(adapter.getOutputTail('t-del-all-2')).toEqual([]);
+    });
   });
 
   describe('deleteWorkflow', () => {
@@ -678,6 +722,38 @@ describe('SQLiteAdapter', () => {
       expect(adapter.loadWorkflow('wf-exists')).toBeDefined();
       expect(adapter.loadTasks('wf-exists')).toHaveLength(1);
       expect(adapter.listWorkflows()).toHaveLength(1);
+    });
+
+    it('removes output spool rows and tail cache only for deleted workflow tasks', () => {
+      adapter.saveWorkflow({
+        id: 'wf-delete-target',
+        name: 'Delete Target',
+        status: 'running',
+        createdAt: '2024-01-01T00:00:00Z',
+        updatedAt: '2024-01-01T00:00:00Z',
+      });
+      adapter.saveWorkflow({
+        id: 'wf-keep',
+        name: 'Keep',
+        status: 'running',
+        createdAt: '2024-01-02T00:00:00Z',
+        updatedAt: '2024-01-02T00:00:00Z',
+      });
+
+      adapter.saveTask('wf-delete-target', makeTask('t-delete-spool'));
+      adapter.saveTask('wf-keep', makeTask('t-keep-spool'));
+
+      adapter.appendOutputChunk('t-delete-spool', 'delete me\n');
+      adapter.appendOutputChunk('t-keep-spool', 'keep me\n');
+      expect(adapter.getOutputTail('t-delete-spool')).toHaveLength(1);
+      expect(adapter.getOutputTail('t-keep-spool')).toHaveLength(1);
+
+      adapter.deleteWorkflow('wf-delete-target');
+
+      expect(adapter.replayOutputFrom('t-delete-spool', 0)).toEqual([]);
+      expect(adapter.getOutputTail('t-delete-spool')).toEqual([]);
+      expect(adapter.replayOutputFrom('t-keep-spool', 0)).toHaveLength(1);
+      expect(adapter.getOutputTail('t-keep-spool')).toHaveLength(1);
     });
   });
 

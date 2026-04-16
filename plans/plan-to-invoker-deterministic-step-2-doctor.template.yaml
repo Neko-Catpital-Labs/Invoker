@@ -3,7 +3,7 @@ description: |
   Add a single deterministic command that executes all plan-to-invoker checks
   and prints machine-readable summary output suitable for CI and local usage.
 onFinish: pull_request
-mergeMode: github
+mergeMode: external_review
 baseBranch: master
 repoUrl: git@github.com:example-org/acme-repo.git
 executorType: worktree

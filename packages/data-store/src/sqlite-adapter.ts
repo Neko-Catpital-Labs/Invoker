@@ -988,6 +988,20 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return rows.map((r) => r.branch);
   }
 
+  private getTaskIdsForWorkflow(workflowId: string): string[] {
+    const rows = this.queryAll(
+      'SELECT id FROM tasks WHERE workflow_id = ?',
+      [workflowId],
+    ) as Array<{ id: string }>;
+    return rows.map((row) => row.id);
+  }
+
+  private invalidateOutputTailCache(taskIds: string[]): void {
+    for (const taskId of taskIds) {
+      this.outputTailCache.delete(taskId);
+    }
+  }
+
   loadAllCompletedTasks(): Array<TaskState & { workflowName: string }> {
     const rows = this.queryAll(`
       SELECT t.*, w.name AS workflow_name
@@ -1003,7 +1017,31 @@ export class SQLiteAdapter implements PersistenceAdapter {
   }
 
   deleteAllTasks(workflowId: string): void {
-    this.execRun('DELETE FROM tasks WHERE workflow_id = ?', [workflowId]);
+    const taskIds = this.getTaskIdsForWorkflow(workflowId);
+    this.runTransaction(() => {
+      this.db.run(`
+        DELETE FROM events WHERE task_id IN (
+          SELECT id FROM tasks WHERE workflow_id = ?
+        )
+      `, [workflowId]);
+      this.db.run(`
+        DELETE FROM task_output WHERE task_id IN (
+          SELECT id FROM tasks WHERE workflow_id = ?
+        )
+      `, [workflowId]);
+      this.db.run(`
+        DELETE FROM attempts WHERE node_id IN (
+          SELECT id FROM tasks WHERE workflow_id = ?
+        )
+      `, [workflowId]);
+      this.db.run(`
+        DELETE FROM output_spool WHERE task_id IN (
+          SELECT id FROM tasks WHERE workflow_id = ?
+        )
+      `, [workflowId]);
+      this.db.run('DELETE FROM tasks WHERE workflow_id = ?', [workflowId]);
+    });
+    this.invalidateOutputTailCache(taskIds);
   }
 
   deleteAllWorkflows(): void {
@@ -1011,12 +1049,15 @@ export class SQLiteAdapter implements PersistenceAdapter {
       this.db.run('DELETE FROM events');
       this.db.run('DELETE FROM task_output');
       this.db.run('DELETE FROM attempts');
+      this.db.run('DELETE FROM output_spool');
       this.db.run('DELETE FROM tasks');
       this.db.run('DELETE FROM workflows');
     });
+    this.outputTailCache.clear();
   }
 
   deleteWorkflow(workflowId: string): void {
+    const taskIds = this.getTaskIdsForWorkflow(workflowId);
     this.runTransaction(() => {
       // Delete events first (FK constraint: events -> tasks)
       this.db.run(`
@@ -1039,12 +1080,19 @@ export class SQLiteAdapter implements PersistenceAdapter {
         )
       `, [workflowId]);
 
+      this.db.run(`
+        DELETE FROM output_spool WHERE task_id IN (
+          SELECT id FROM tasks WHERE workflow_id = ?
+        )
+      `, [workflowId]);
+
       // Delete tasks (FK constraint: tasks -> workflows)
       this.db.run('DELETE FROM tasks WHERE workflow_id = ?', [workflowId]);
 
       // Finally delete the workflow
       this.db.run('DELETE FROM workflows WHERE id = ?', [workflowId]);
     });
+    this.invalidateOutputTailCache(taskIds);
   }
 
   // ── Events ────────────────────────────────────────────

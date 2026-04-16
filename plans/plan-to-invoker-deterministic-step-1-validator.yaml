@@ -6,7 +6,7 @@ description: |
   This reduces policy drift and removes ambiguous markdown interpretation from
   the critical path.
 onFinish: pull_request
-mergeMode: github
+mergeMode: external_review
 baseBranch: master
 repoUrl: git@github.com:example-org/acme-repo.git
 executorType: worktree

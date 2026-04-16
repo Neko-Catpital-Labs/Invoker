@@ -401,6 +401,45 @@ describe('autoFixOnFailure', () => {
     expect(taskExecutor.executeTasks).toHaveBeenCalledWith(started);
   });
 
+  it('uses resolveConflict for prefixed post-fix merge conflict errors', async () => {
+    const started = [makeRunningTask({ id: 'task-a', status: 'running' })];
+    const mergeError = `Post-fix PR prep failed: ${JSON.stringify({
+      type: 'merge_conflict',
+      failedBranch: 'experiment/foo',
+      conflictFiles: ['src/foo.ts'],
+    })}`;
+    const orchestrator = {
+      shouldAutoFix: vi.fn(() => true),
+      getTask: vi.fn(() => makeTask({
+        status: 'failed',
+        execution: { autoFixAttempts: 0 },
+      })),
+      getAutoFixRetryBudget: vi.fn(() => 3),
+      beginConflictResolution: vi.fn(() => ({ savedError: mergeError })),
+      restartTask: vi.fn(() => started),
+      revertConflictResolution: vi.fn(),
+    };
+    const persistence = {
+      updateTask: vi.fn(),
+      getTaskOutput: vi.fn(() => 'test output'),
+      appendTaskOutput: vi.fn(),
+    };
+    const taskExecutor = {
+      fixWithAgent: vi.fn().mockResolvedValue(undefined),
+      resolveConflict: vi.fn().mockResolvedValue(undefined),
+      executeTasks: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await autoFixOnFailure('task-a', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+    });
+
+    expect(taskExecutor.resolveConflict).toHaveBeenCalledWith('task-a', mergeError, 'claude');
+    expect(taskExecutor.fixWithAgent).not.toHaveBeenCalled();
+  });
+
   it('records fixed integration anchor and routes merge gates to finalize/publish flow', async () => {
     const started = [
       makeRunningTask({ id: 'merge-a', config: { workflowId: 'wf-1', isMergeNode: true } }),
@@ -453,6 +492,89 @@ describe('autoFixOnFailure', () => {
     );
     expect(orchestrator.restartTask).not.toHaveBeenCalled();
     expect(taskExecutor.publishAfterFix).toHaveBeenCalledWith(started[0]);
+  });
+
+  it('retries inline when merge post-fix publish fails during auto-fix dispatch', async () => {
+    const started = [
+      makeRunningTask({ id: 'merge-a', config: { workflowId: 'wf-1', isMergeNode: true } }),
+    ];
+    const getTask = vi
+      .fn()
+      .mockReturnValueOnce(makeTask({
+        id: 'merge-a',
+        status: 'failed',
+        config: { workflowId: 'wf-1', isMergeNode: true },
+        execution: { autoFixAttempts: 0, workspacePath: '/tmp/merge-a' },
+      }))
+      .mockReturnValueOnce(makeTask({
+        id: 'merge-a',
+        status: 'failed',
+        config: { workflowId: 'wf-1', isMergeNode: true },
+        execution: { autoFixAttempts: 1, workspacePath: '/tmp/merge-a', error: 'Post-fix PR prep failed: conflict' },
+      }))
+      .mockReturnValueOnce(makeTask({
+        id: 'merge-a',
+        status: 'failed',
+        config: { workflowId: 'wf-1', isMergeNode: true },
+        execution: { autoFixAttempts: 1, workspacePath: '/tmp/merge-a' },
+      }))
+      .mockReturnValue(makeTask({
+        id: 'merge-a',
+        status: 'awaiting_approval',
+        config: { workflowId: 'wf-1', isMergeNode: true },
+        execution: { autoFixAttempts: 2, workspacePath: '/tmp/merge-a' },
+      }));
+    const shouldAutoFix = vi
+      .fn()
+      .mockReturnValueOnce(true)
+      .mockReturnValueOnce(true)
+      .mockReturnValueOnce(true)
+      .mockReturnValue(false);
+    const orchestrator = {
+      shouldAutoFix,
+      getTask,
+      getAutoFixRetryBudget: vi.fn(() => 3),
+      beginConflictResolution: vi.fn(() => ({ savedError: 'boom' })),
+      restartTask: vi.fn(() => []),
+      setFixAwaitingApproval: vi.fn(),
+      approve: vi.fn().mockResolvedValue(started),
+      revertConflictResolution: vi.fn(),
+    };
+    const persistence = {
+      updateTask: vi.fn(),
+      getTaskOutput: vi.fn(() => 'test output'),
+      appendTaskOutput: vi.fn(),
+      logEvent: vi.fn(),
+    };
+    const taskExecutor = {
+      fixWithAgent: vi.fn().mockResolvedValue(undefined),
+      resolveConflict: vi.fn(),
+      execGitIn: vi.fn().mockResolvedValue('abc123'),
+      publishAfterFix: vi
+        .fn()
+        .mockImplementationOnce(async () => undefined)
+        .mockImplementationOnce(async () => undefined),
+      executeTasks: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await autoFixOnFailure('merge-a', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+      getAutoApproveAIFixes: () => true,
+    });
+
+    expect(taskExecutor.fixWithAgent).toHaveBeenCalledTimes(2);
+    expect(taskExecutor.execGitIn).toHaveBeenCalledTimes(2);
+    expect(taskExecutor.publishAfterFix).toHaveBeenCalledTimes(2);
+    expect(persistence.logEvent).toHaveBeenCalledWith(
+      'merge-a',
+      'debug.auto-fix',
+      expect.objectContaining({
+        phase: 'auto-fix-post-route-inline-retry',
+      }),
+    );
+    expect(orchestrator.restartTask).not.toHaveBeenCalled();
   });
 
   it('prefers config.autoFixAgent over task executionAgent', async () => {
