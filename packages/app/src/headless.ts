@@ -177,6 +177,7 @@ export function wireHeadlessAutoFix(
       orchestrator: deps.orchestrator,
       persistence: deps.persistence,
       taskExecutor: taskExecutor as TaskRunner,
+      getAutoFixAgent: () => loadConfig().autoFixAgent,
     });
   },
   onError: (taskId: string, err: unknown) => void = (taskId, err) => {
@@ -184,13 +185,51 @@ export function wireHeadlessAutoFix(
   },
 ): HeadlessAutoFixController {
   const autoFixInProgress = new Set<string>();
+  const logHeadlessAutoFixDebug = (
+    taskId: string,
+    phase: string,
+    details: Record<string, unknown> = {},
+  ): void => {
+    const getTask = (deps.orchestrator as { getTask?: (id: string) => unknown }).getTask;
+    const task = getTask?.(taskId) as
+      | { status?: string; execution?: { autoFixAttempts?: number | null } }
+      | undefined;
+    const payload = {
+      phase,
+      status: task?.status ?? 'missing',
+      autoFixAttempts: task?.execution?.autoFixAttempts ?? null,
+      inProgressCount: autoFixInProgress.size,
+      inProgressForTask: autoFixInProgress.has(taskId),
+      ...details,
+    };
+    deps.persistence.logEvent?.(taskId, 'debug.auto-fix', payload);
+    process.stderr.write(`[auto-fix-debug][headless] task="${taskId}" phase=${phase} payload=${JSON.stringify(payload)}\n`);
+  };
+
   const unsubscribe = deps.messageBus.subscribe<TaskDelta>(Channels.TASK_DELTA, (delta) => {
     if (delta.type !== 'updated' || delta.changes.status !== 'failed') return;
-    if (autoFixInProgress.has(delta.taskId) || !deps.orchestrator.shouldAutoFix(delta.taskId)) return;
+    const inProgress = autoFixInProgress.has(delta.taskId);
+    const shouldAutoFix = deps.orchestrator.shouldAutoFix(delta.taskId);
+    logHeadlessAutoFixDebug(delta.taskId, 'delta-failed', { shouldAutoFix, inProgress });
+    if (inProgress || !shouldAutoFix) {
+      logHeadlessAutoFixDebug(delta.taskId, 'schedule-skip', {
+        reason: !shouldAutoFix ? 'shouldAutoFix-false' : 'already-in-progress',
+      });
+      return;
+    }
     autoFixInProgress.add(delta.taskId);
+    logHeadlessAutoFixDebug(delta.taskId, 'dispatch');
     void invokeAutoFix(delta.taskId)
-      .catch((err) => onError(delta.taskId, err))
-      .finally(() => autoFixInProgress.delete(delta.taskId));
+      .catch((err) => {
+        logHeadlessAutoFixDebug(delta.taskId, 'dispatch-error', {
+          error: err instanceof Error ? err.stack ?? err.message : String(err),
+        });
+        onError(delta.taskId, err);
+      })
+      .finally(() => {
+        autoFixInProgress.delete(delta.taskId);
+        logHeadlessAutoFixDebug(delta.taskId, 'dispatch-finished');
+      });
   });
   return {
     unsubscribe,

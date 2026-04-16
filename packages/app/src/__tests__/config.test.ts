@@ -104,6 +104,15 @@ describe('loadConfig', () => {
     expect(config.autoApproveAIFixes).toBe(true);
   });
 
+  it('reads autoFixAgent from user config', () => {
+    writeFileSync(
+      join(fakeHome, '.invoker', 'config.json'),
+      JSON.stringify({ autoFixAgent: 'codex' }),
+    );
+    const config = loadConfig();
+    expect(config.autoFixAgent).toBe('codex');
+  });
+
   it('loadConfig picks up browser field', () => {
     writeFileSync(
       join(fakeHome, '.invoker', 'config.json'),

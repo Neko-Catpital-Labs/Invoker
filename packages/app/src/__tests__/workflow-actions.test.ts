@@ -400,6 +400,154 @@ describe('autoFixOnFailure', () => {
     expect(orchestrator.restartTask).toHaveBeenCalledWith('task-a');
     expect(taskExecutor.executeTasks).toHaveBeenCalledWith(started);
   });
+
+  it('prefers config.autoFixAgent over task executionAgent', async () => {
+    const started = [makeRunningTask({ id: 'task-a', status: 'running' })];
+    const logEvent = vi.fn();
+    const appendTaskOutput = vi.fn();
+    const orchestrator = {
+      shouldAutoFix: vi.fn(() => true),
+      getTask: vi.fn(() => makeTask({
+        status: 'failed',
+        config: { workflowId: 'wf-1', executionAgent: 'claude' },
+        execution: { autoFixAttempts: 0 },
+      })),
+      getAutoFixRetryBudget: vi.fn(() => 3),
+      beginConflictResolution: vi.fn(() => ({ savedError: 'boom' })),
+      restartTask: vi.fn(() => started),
+      revertConflictResolution: vi.fn(),
+    };
+    const persistence = {
+      updateTask: vi.fn(),
+      getTaskOutput: vi.fn(() => 'test output'),
+      appendTaskOutput,
+      logEvent,
+    };
+    const taskExecutor = {
+      fixWithAgent: vi.fn().mockResolvedValue(undefined),
+      resolveConflict: vi.fn(),
+      executeTasks: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await autoFixOnFailure('task-a', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+      getAutoFixAgent: () => 'codex',
+    });
+
+    expect(taskExecutor.fixWithAgent).toHaveBeenCalledWith('task-a', 'test output', 'codex', 'boom');
+    expect(logEvent).toHaveBeenCalledWith(
+      'task-a',
+      'debug.auto-fix',
+      expect.objectContaining({
+        phase: 'auto-fix-agent-selected',
+        selectedAgent: 'codex',
+        selectedAgentSource: 'config',
+      }),
+    );
+    expect(appendTaskOutput).toHaveBeenCalledWith(
+      'task-a',
+      expect.stringContaining('[Auto-fix Agent] selected=codex source=config'),
+    );
+  });
+
+  it('uses task executionAgent when config.autoFixAgent is empty', async () => {
+    const started = [makeRunningTask({ id: 'task-a', status: 'running' })];
+    const logEvent = vi.fn();
+    const orchestrator = {
+      shouldAutoFix: vi.fn(() => true),
+      getTask: vi.fn(() => makeTask({
+        status: 'failed',
+        config: { workflowId: 'wf-1', executionAgent: 'codex' },
+        execution: { autoFixAttempts: 0 },
+      })),
+      getAutoFixRetryBudget: vi.fn(() => 3),
+      beginConflictResolution: vi.fn(() => ({ savedError: 'boom' })),
+      restartTask: vi.fn(() => started),
+      revertConflictResolution: vi.fn(),
+    };
+    const persistence = {
+      updateTask: vi.fn(),
+      getTaskOutput: vi.fn(() => 'test output'),
+      appendTaskOutput: vi.fn(),
+      logEvent,
+    };
+    const taskExecutor = {
+      fixWithAgent: vi.fn().mockResolvedValue(undefined),
+      resolveConflict: vi.fn(),
+      executeTasks: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await autoFixOnFailure('task-a', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+      getAutoFixAgent: () => '   ',
+    });
+
+    expect(taskExecutor.fixWithAgent).toHaveBeenCalledWith('task-a', 'test output', 'codex', 'boom');
+    expect(logEvent).toHaveBeenCalledWith(
+      'task-a',
+      'debug.auto-fix',
+      expect.objectContaining({
+        phase: 'auto-fix-agent-selected',
+        selectedAgent: 'codex',
+        selectedAgentSource: 'task',
+      }),
+    );
+  });
+
+  it('falls back to built-in default agent when config and task agent are missing', async () => {
+    const started = [makeRunningTask({ id: 'task-a', status: 'running' })];
+    const mergeError = JSON.stringify({
+      type: 'merge_conflict',
+      failedBranch: 'experiment/foo',
+      conflictFiles: ['src/foo.ts'],
+    });
+    const logEvent = vi.fn();
+    const orchestrator = {
+      shouldAutoFix: vi.fn(() => true),
+      getTask: vi.fn(() => makeTask({
+        status: 'failed',
+        config: { workflowId: 'wf-1' },
+        execution: { autoFixAttempts: 0 },
+      })),
+      getAutoFixRetryBudget: vi.fn(() => 3),
+      beginConflictResolution: vi.fn(() => ({ savedError: mergeError })),
+      restartTask: vi.fn(() => started),
+      revertConflictResolution: vi.fn(),
+    };
+    const persistence = {
+      updateTask: vi.fn(),
+      getTaskOutput: vi.fn(() => 'test output'),
+      appendTaskOutput: vi.fn(),
+      logEvent,
+    };
+    const taskExecutor = {
+      fixWithAgent: vi.fn().mockResolvedValue(undefined),
+      resolveConflict: vi.fn().mockResolvedValue(undefined),
+      executeTasks: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await autoFixOnFailure('task-a', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+      getAutoFixAgent: () => undefined,
+    });
+
+    expect(taskExecutor.resolveConflict).toHaveBeenCalledWith('task-a', mergeError, 'claude');
+    expect(logEvent).toHaveBeenCalledWith(
+      'task-a',
+      'debug.auto-fix',
+      expect.objectContaining({
+        phase: 'auto-fix-agent-selected',
+        selectedAgent: 'claude',
+        selectedAgentSource: 'default',
+      }),
+    );
+  });
 });
 
 describe('editTaskCommand', () => {
