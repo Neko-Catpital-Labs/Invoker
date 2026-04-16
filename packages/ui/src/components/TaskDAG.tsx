@@ -78,7 +78,7 @@ function TaskDAGInner({ tasks, workflows, onTaskClick, onTaskDoubleClick, onTask
   const prevNodeCount = useRef(0);
 
   const onInitHandler = useCallback(() => {
-    setTimeout(() => fitView({ padding: 0.2 }), 50);
+    requestAnimationFrame(() => fitView({ padding: 0.2 }));
   }, [fitView]);
 
   const { nodes, edges } = useMemo(() => {
@@ -275,10 +275,7 @@ function TaskDAGInner({ tasks, workflows, onTaskClick, onTaskDoubleClick, onTask
   useEffect(() => {
     if (nodes.length !== prevNodeCount.current && nodes.length > 0) {
       prevNodeCount.current = nodes.length;
-      const timer = setTimeout(() => {
-        requestAnimationFrame(() => fitView({ padding: 0.2 }));
-      }, 150);
-      return () => clearTimeout(timer);
+      requestAnimationFrame(() => fitView({ padding: 0.2 }));
     }
   }, [nodes.length, fitView]);
 

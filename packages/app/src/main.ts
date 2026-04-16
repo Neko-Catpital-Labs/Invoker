@@ -778,6 +778,8 @@ if (isHeadless) {
   const deferredWorkflowLaunches = new Map<string, { timer: ReturnType<typeof setTimeout>; taskIds: string[] }>();
   const pendingOutputBuffers = new Map<string, string[]>();
   const outputFlushTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  const pendingUiTaskDeltas: TaskDelta[] = [];
+  let uiTaskDeltaFlushTimer: ReturnType<typeof setTimeout> | null = null;
   const maxConcurrentAutoFixes = 1;
   let lastKnownWorkflowCount = 0;
   let lastActivityLogId = 0;
@@ -865,6 +867,35 @@ if (isHeadless) {
     const timer = setTimeout(() => flushTaskOutput(taskId), 100);
     timer.unref?.();
     outputFlushTimers.set(taskId, timer);
+  };
+
+  const flushUiTaskDeltas = (): void => {
+    if (uiTaskDeltaFlushTimer) {
+      clearTimeout(uiTaskDeltaFlushTimer);
+      uiTaskDeltaFlushTimer = null;
+    }
+    if (!mainWindow || mainWindow.isDestroyed() || !uiInteractive || pendingUiTaskDeltas.length === 0) {
+      pendingUiTaskDeltas.length = 0;
+      return;
+    }
+    const batch = pendingUiTaskDeltas.splice(0, pendingUiTaskDeltas.length);
+    if (batch.length === 1) {
+      mainWindow.webContents.send('invoker:task-delta', batch[0]);
+      return;
+    }
+    mainWindow.webContents.send('invoker:task-delta-batch', batch);
+  };
+
+  const sendTaskDeltaToRenderer = (delta: TaskDelta): void => {
+    if (!mainWindow || mainWindow.isDestroyed() || !uiInteractive) {
+      return;
+    }
+    pendingUiTaskDeltas.push(delta);
+    if (uiTaskDeltaFlushTimer) {
+      return;
+    }
+    uiTaskDeltaFlushTimer = setTimeout(() => flushUiTaskDeltas(), 25);
+    uiTaskDeltaFlushTimer.unref?.();
   };
 
   const drainAutoFixQueue = (): void => {
@@ -1567,7 +1598,7 @@ if (isHeadless) {
                 }
                 lastKnownTaskStates.set(task.id, snapshot);
                 uiPerfStats.dbPollCreated += 1;
-                mainWindow.webContents.send('invoker:task-delta', { type: 'created', task });
+                sendTaskDeltaToRenderer({ type: 'created', task });
               } else if (prev !== snapshot) {
                 if (traceDbPollPerTask) {
                   const msg = `Task updated: ${task.id} (${task.status})`;
@@ -1576,7 +1607,7 @@ if (isHeadless) {
                 }
                 lastKnownTaskStates.set(task.id, snapshot);
                 uiPerfStats.dbPollUpdatedAsCreated += 1;
-                mainWindow.webContents.send('invoker:task-delta', { type: 'created', task });
+                sendTaskDeltaToRenderer({ type: 'created', task });
               }
             }
           }
@@ -1723,9 +1754,7 @@ if (isHeadless) {
       if (traceUiDeltaFlow) {
         logger.debug(`delta→ui: ${JSON.stringify(delta)}`, { module: 'ui' });
       }
-      if (mainWindow && !mainWindow.isDestroyed() && uiInteractive) {
-        mainWindow.webContents.send('invoker:task-delta', delta);
-      }
+      sendTaskDeltaToRenderer(delta as TaskDelta);
 
       const d = delta as TaskDelta;
       const previousSnapshot = d.type === 'updated' || d.type === 'removed'
@@ -1770,6 +1799,13 @@ if (isHeadless) {
     });
 
     // Register IPC handlers
+    ipcMain.on('invoker:get-bootstrap-state-sync', (event) => {
+      event.returnValue = {
+        tasks: orchestrator.getAllTasks(),
+        workflows: persistence.listWorkflows(),
+      };
+    });
+
     registerGuiMutationHandler('invoker:load-plan', async (planTextArg: unknown) => {
       const planText = String(planTextArg);
       const { parsePlan } = await import('./plan-parser.js');
@@ -1818,7 +1854,7 @@ if (isHeadless) {
       for (const task of tasks) {
         lastKnownTaskStates.set(task.id, JSON.stringify(task));
         if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send('invoker:task-delta', { type: 'created', task });
+          sendTaskDeltaToRenderer({ type: 'created', task });
         }
       }
       logger.info(`resume-workflow: ${tasks.length} tasks loaded across ${workflows.length} workflows, ${allStarted.length} started`, { module: 'ipc' });
@@ -1934,7 +1970,7 @@ if (isHeadless) {
       for (const task of tasks) {
         lastKnownTaskStates.set(task.id, JSON.stringify(task));
         if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send('invoker:task-delta', { type: 'created', task });
+          sendTaskDeltaToRenderer({ type: 'created', task });
         }
       }
       return { workflow, tasks };
@@ -1953,12 +1989,12 @@ if (isHeadless) {
           lastKnownTaskStates.set(task.id, JSON.stringify(task));
           previousTaskIds.delete(task.id);
           if (mainWindow && !mainWindow.isDestroyed()) {
-            mainWindow.webContents.send('invoker:task-delta', { type: 'created', task });
+            sendTaskDeltaToRenderer({ type: 'created', task });
           }
         }
         if (mainWindow && !mainWindow.isDestroyed()) {
           for (const removedTaskId of previousTaskIds) {
-            mainWindow.webContents.send('invoker:task-delta', { type: 'removed', taskId: removedTaskId });
+            sendTaskDeltaToRenderer({ type: 'removed', taskId: removedTaskId });
           }
           mainWindow.webContents.send('invoker:workflows-changed', workflows);
         }

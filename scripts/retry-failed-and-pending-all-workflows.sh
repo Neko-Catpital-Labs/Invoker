@@ -77,11 +77,13 @@ raw = os.environ.get("WORKFLOWS_JSON_INPUT", "").strip()
 if not raw:
     raise SystemExit(0)
 
+seen = set()
 for workflow in json.loads(raw):
     if status_filter and workflow.get("status") != status_filter:
         continue
     wf_id = workflow.get("id")
-    if wf_id:
+    if wf_id and wf_id not in seen:
+        seen.add(wf_id)
         print(wf_id)
 ' "$STATUS_FILTER"
 )"

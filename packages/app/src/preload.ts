@@ -29,6 +29,9 @@ function channelToEventMethod(channel: string): string {
 // ── Build the API object from the channel registries ────────
 
 const api: Record<string, unknown> = {};
+const bootstrapState = ipcRenderer.sendSync('invoker:get-bootstrap-state-sync') as
+  | { tasks?: unknown[]; workflows?: unknown[] }
+  | undefined;
 
 // Invoke channels: each becomes (...args) => ipcRenderer.invoke(channel, ...args)
 for (const channel of Object.keys(IpcChannels)) {
@@ -47,6 +50,25 @@ if (process.env.NODE_ENV === 'test') {
 // Event channels: each becomes (cb) => { subscribe; return unsubscribe }
 for (const channel of Object.keys(IpcEventChannels)) {
   const method = channelToEventMethod(channel);
+  if (channel === 'invoker:task-delta') {
+    api[method] = (cb: (...args: unknown[]) => void) => {
+      const singleHandler = (_event: Electron.IpcRendererEvent, ...data: unknown[]) => cb(...data);
+      const batchHandler = (_event: Electron.IpcRendererEvent, batch: unknown[]) => {
+        if (!Array.isArray(batch)) return;
+        for (const item of batch) {
+          cb(item);
+        }
+      };
+      ipcRenderer.on(channel, singleHandler);
+      ipcRenderer.on('invoker:task-delta-batch', batchHandler);
+      return () => {
+        ipcRenderer.removeListener(channel, singleHandler);
+        ipcRenderer.removeListener('invoker:task-delta-batch', batchHandler);
+      };
+    };
+    continue;
+  }
+
   api[method] = (cb: (...args: unknown[]) => void) => {
     const handler = (_event: Electron.IpcRendererEvent, ...data: unknown[]) => cb(...data);
     ipcRenderer.on(channel, handler);
@@ -55,3 +77,4 @@ for (const channel of Object.keys(IpcEventChannels)) {
 }
 
 contextBridge.exposeInMainWorld('invoker', api as InvokerAPI);
+contextBridge.exposeInMainWorld('__INVOKER_BOOTSTRAP__', bootstrapState ?? { tasks: [], workflows: [] });

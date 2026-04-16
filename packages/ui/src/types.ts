@@ -228,5 +228,9 @@ import type { InvokerAPI } from '@invoker/contracts';
 declare global {
   interface Window {
     invoker: InvokerAPI;
+    __INVOKER_BOOTSTRAP__?: {
+      tasks?: TaskState[];
+      workflows?: WorkflowMeta[];
+    };
   }
 }

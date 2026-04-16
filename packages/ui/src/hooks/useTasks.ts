@@ -25,8 +25,22 @@ export function useTasks(): UseTasksResult {
   const traceTaskDeltas =
     typeof window !== 'undefined' &&
     window.location.search.includes('traceTaskDeltas=1');
-  const [tasks, setTasks] = useState<Map<string, TaskState>>(new Map());
-  const [workflows, setWorkflows] = useState<Map<string, WorkflowMeta>>(new Map());
+  const bootstrapState =
+    typeof window !== 'undefined' ? window.__INVOKER_BOOTSTRAP__ : undefined;
+  const [tasks, setTasks] = useState<Map<string, TaskState>>(() => {
+    const next = new Map<string, TaskState>();
+    for (const task of bootstrapState?.tasks ?? []) {
+      next.set(task.id, task);
+    }
+    return next;
+  });
+  const [workflows, setWorkflows] = useState<Map<string, WorkflowMeta>>(() => {
+    const next = new Map<string, WorkflowMeta>();
+    for (const workflow of bootstrapState?.workflows ?? []) {
+      next.set(workflow.id, workflow);
+    }
+    return next;
+  });
   const workflowsRef = useRef(workflows);
   workflowsRef.current = workflows;
   const deltaPipelineRef = useRef<TaskDeltaPipeline | null>(null);

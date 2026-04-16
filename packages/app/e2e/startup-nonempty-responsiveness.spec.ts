@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { tmpdir } from 'node:os';
 import { stringify as yamlStringify } from 'yaml';
+import type { Page } from '@playwright/test';
 
 import { E2E_REPO_URL } from './fixtures/electron-app.js';
 
@@ -60,6 +61,32 @@ function buildPlan(index: number) {
   };
 }
 
+async function waitForGraphVisible(page: Page, taskSuffix: string, timeoutMs: number): Promise<number> {
+  const startedAt = Date.now();
+  await page.locator(`.react-flow__node[data-testid$="${taskSuffix}"]`).first().waitFor({
+    state: 'visible',
+    timeout: timeoutMs,
+  });
+  return Date.now() - startedAt;
+}
+
+async function dragGraphAndAssertViewportMoves(page: Page): Promise<void> {
+  const viewport = page.locator('.react-flow__viewport').first();
+  const pane = page.locator('.react-flow__pane').first();
+  const before = await viewport.evaluate((el) => getComputedStyle(el).transform);
+  const box = await pane.boundingBox();
+  if (!box) {
+    throw new Error('React Flow pane is not visible');
+  }
+  await page.mouse.move(box.x + box.width * 0.5, box.y + box.height * 0.5);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width * 0.5 + 140, box.y + box.height * 0.5, { steps: 12 });
+  await page.mouse.up();
+  await page.waitForTimeout(50);
+  const after = await viewport.evaluate((el) => getComputedStyle(el).transform);
+  expect(after).not.toBe(before);
+}
+
 test('non-empty persisted startup stays responsive and avoids initial db-poll replay flood', async () => {
   const testDir = mkdtempSync(path.join(tmpdir(), 'invoker-startup-nonempty-'));
   const workflowCount = 14;
@@ -95,6 +122,10 @@ test('non-empty persisted startup stays responsive and avoids initial db-poll re
       expect(elapsedMs).toBeLessThan(3000);
       await page.waitForLoadState('domcontentloaded');
       await page.waitForFunction(() => typeof window.invoker !== 'undefined', null, { timeout: 5000 });
+
+      const graphVisibleMs = await waitForGraphVisible(page, 'task-0-0', 200);
+      expect(graphVisibleMs).toBeLessThan(200);
+      await dragGraphAndAssertViewportMoves(page);
 
       const result = await page.evaluate(async () => {
         const tasksResult = await window.invoker.getTasks(true);

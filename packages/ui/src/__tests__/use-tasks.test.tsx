@@ -13,6 +13,10 @@ describe('useTasks', () => {
 
   beforeEach(() => {
     workflowsChangedHandler = undefined;
+    (window as unknown as { __INVOKER_BOOTSTRAP__?: unknown }).__INVOKER_BOOTSTRAP__ = {
+      tasks: [],
+      workflows: [],
+    };
     (window as unknown as { invoker: Record<string, unknown> }).invoker = {
       getTasks: vi.fn().mockResolvedValue({ tasks: [], workflows: [] }),
       onTaskDelta: vi.fn(() => () => {}),
@@ -25,6 +29,24 @@ describe('useTasks', () => {
 
   afterEach(() => {
     delete (window as unknown as { invoker?: unknown }).invoker;
+    delete (window as unknown as { __INVOKER_BOOTSTRAP__?: unknown }).__INVOKER_BOOTSTRAP__;
+  });
+
+  it('hydrates initial state from preload bootstrap before async getTasks resolves', async () => {
+    const bootTask = makeUITask({ id: 'boot-1', description: 'Boot Task' });
+    (window as unknown as { __INVOKER_BOOTSTRAP__?: unknown }).__INVOKER_BOOTSTRAP__ = {
+      tasks: [bootTask],
+      workflows: [],
+    };
+    (window as unknown as { invoker: Record<string, unknown> }).invoker = {
+      getTasks: vi.fn().mockResolvedValue({ tasks: [bootTask], workflows: [] }),
+      onTaskDelta: vi.fn(() => () => {}),
+      onWorkflowsChanged: vi.fn(() => () => {}),
+    };
+
+    const { result } = renderHook(() => useTasks());
+
+    expect(result.current.tasks.get('boot-1')?.description).toBe('Boot Task');
   });
 
   it('clears workflows when onWorkflowsChanged receives an empty array', async () => {

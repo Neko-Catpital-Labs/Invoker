@@ -133,10 +133,15 @@ export function createMockInvoker(
 
   function install() {
     (window as unknown as { invoker: InvokerAPI }).invoker = api;
+    (window as unknown as { __INVOKER_BOOTSTRAP__?: { tasks: TaskState[]; workflows: WorkflowMeta[] } }).__INVOKER_BOOTSTRAP__ = {
+      tasks: taskSnapshot,
+      workflows: workflowSnapshot,
+    };
   }
 
   function cleanup() {
     delete (window as unknown as { invoker?: unknown }).invoker;
+    delete (window as unknown as { __INVOKER_BOOTSTRAP__?: unknown }).__INVOKER_BOOTSTRAP__;
   }
 
   return { api, setTasks, fireDelta, fireWorkflowsChanged, install, cleanup };
