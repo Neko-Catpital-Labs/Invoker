@@ -53,6 +53,13 @@ const MAX_INLINE_PROMPT_BYTES = (() => {
   const parsed = Number.parseInt(raw, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_MAX_INLINE_PROMPT_BYTES;
 })();
+const DEBUG_IO_TAIL_CHARS = 2000;
+
+function tailText(value: unknown, maxChars: number = DEBUG_IO_TAIL_CHARS): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  if (value.length <= maxChars) return value;
+  return value.slice(-maxChars);
+}
 
 function promptByteLength(prompt: string): number {
   return Buffer.byteLength(prompt, 'utf8');
@@ -109,6 +116,11 @@ export async function resolveConflictImpl(
   savedError?: string,
   agentName?: string,
 ): Promise<void> {
+  host.persistence.logEvent?.(taskId, 'debug.auto-fix', {
+    phase: 'resolve-conflict-start',
+    agent: agentName ?? 'claude',
+    hasSavedError: savedError !== undefined,
+  });
   const task = host.orchestrator.getTask(taskId);
   if (!task) throw new Error(`Task ${taskId} not found`);
   if (task.status !== 'failed' && task.status !== 'running' && task.status !== 'fixing_with_ai') {
@@ -124,6 +136,10 @@ export async function resolveConflictImpl(
     if (parsed?.type !== 'merge_conflict') throw new Error('not a merge conflict');
     conflictInfo = { failedBranch: parsed.failedBranch, conflictFiles: parsed.conflictFiles };
   } catch {
+    host.persistence.logEvent?.(taskId, 'debug.auto-fix', {
+      phase: 'resolve-conflict-parse-failed',
+      errorPreview: String(errorStr).slice(0, 400),
+    });
     throw new Error(`Task ${taskId} does not have merge conflict information`);
   }
 
@@ -139,6 +155,11 @@ export async function resolveConflictImpl(
 
   // SSH tasks: run conflict resolution on the remote host
   if (task.config.executorType === 'ssh' && task.config.remoteTargetId && !existsSync(rawCwd)) {
+    host.persistence.logEvent?.(taskId, 'debug.auto-fix', {
+      phase: 'resolve-conflict-remote-path',
+      remoteTargetId: task.config.remoteTargetId,
+      workspacePath: rawCwd,
+    });
     const target = host.getRemoteTargetConfig?.(task.config.remoteTargetId);
     if (!target) {
       throw new Error(`No remote target config for "${task.config.remoteTargetId}" — cannot resolve conflict on remote`);
@@ -173,8 +194,17 @@ export async function resolveConflictImpl(
         : `Merge upstream ${conflictInfo.failedBranch}`;
       await host.execGitIn(['merge', '--no-edit', '-m', conflictMergeMsg, conflictInfo.failedBranch], cwd);
       console.log(`[resolveConflict] Merge succeeded without conflict on retry for ${taskId}`);
+      host.persistence.logEvent?.(taskId, 'debug.auto-fix', {
+        phase: 'resolve-conflict-merge-retry-succeeded',
+        failedBranch: conflictInfo.failedBranch,
+      });
     } catch {
       console.log(`[resolveConflict] Conflict reproduced for ${taskId}, spawning agent to resolve...`);
+      host.persistence.logEvent?.(taskId, 'debug.auto-fix', {
+        phase: 'resolve-conflict-spawn-agent',
+        failedBranch: conflictInfo.failedBranch,
+        conflictFiles: conflictInfo.conflictFiles,
+      });
 
       const conflictFilesList = conflictInfo.conflictFiles.join(', ');
       const prompt = [
@@ -193,7 +223,22 @@ export async function resolveConflictImpl(
     }
 
     console.log(`[resolveConflict] Successfully resolved conflict for ${taskId}`);
+    host.persistence.logEvent?.(taskId, 'debug.auto-fix', {
+      phase: 'resolve-conflict-success',
+      failedBranch: conflictInfo.failedBranch,
+    });
   } catch (err) {
+    const errAny = err as any;
+    host.persistence.logEvent?.(taskId, 'debug.auto-fix', {
+      phase: 'resolve-conflict-failed',
+      errorType: err instanceof Error ? err.name : typeof err,
+      errorMessage: err instanceof Error ? err.message : String(err),
+      exitCode: typeof errAny?.exitCode === 'number' ? errAny.exitCode : null,
+      cmd: typeof errAny?.cmd === 'string' ? errAny.cmd : null,
+      args: Array.isArray(errAny?.args) ? errAny.args : null,
+      stdoutTail: tailText(errAny?.stdoutTail ?? errAny?.stdout),
+      stderrTail: tailText(errAny?.stderrTail ?? errAny?.stderr),
+    });
     try { await host.execGitIn(['merge', '--abort'], cwd); } catch { /* no merge in progress */ }
     try { await host.execGitIn(['checkout', originalBranch], cwd); } catch { /* best effort */ }
     throw err;
@@ -342,6 +387,12 @@ export async function fixWithAgentImpl(
   agentName?: string,
   savedError?: string,
 ): Promise<void> {
+  host.persistence.logEvent?.(taskId, 'debug.auto-fix', {
+    phase: 'fix-with-agent-start',
+    agent: agentName ?? 'claude',
+    hasSavedError: savedError !== undefined,
+    outputLength: taskOutput.length,
+  });
   const task = host.orchestrator.getTask(taskId);
   if (!task) throw new Error(`Task ${taskId} not found`);
   if (task.status !== 'failed' && task.status !== 'running' && task.status !== 'fixing_with_ai') {
@@ -356,6 +407,11 @@ export async function fixWithAgentImpl(
 
   // SSH tasks: run agent on the remote host
   if (task.config.executorType === 'ssh' && task.config.remoteTargetId && workspacePath && !existsSync(workspacePath)) {
+    host.persistence.logEvent?.(taskId, 'debug.auto-fix', {
+      phase: 'fix-with-agent-remote-path',
+      remoteTargetId: task.config.remoteTargetId,
+      workspacePath,
+    });
     const target = host.getRemoteTargetConfig?.(task.config.remoteTargetId);
     if (!target) {
       throw new Error(`No remote target config for "${task.config.remoteTargetId}" — cannot fix on remote`);
@@ -374,6 +430,12 @@ export async function fixWithAgentImpl(
       },
     });
     console.log(`[fixWithAgent] Successfully applied remote fix for ${taskId} via ${remoteAgentBin} (session=${sessionId})`);
+    host.persistence.logEvent?.(taskId, 'debug.auto-fix', {
+      phase: 'fix-with-agent-success',
+      mode: 'remote',
+      sessionId,
+      agent: remoteAgentBin,
+    });
     return;
   }
 
@@ -398,6 +460,11 @@ export async function fixWithAgentImpl(
 
   const agentLabel = agentName ?? 'claude';
   try {
+    host.persistence.logEvent?.(taskId, 'debug.auto-fix', {
+      phase: 'fix-with-agent-spawn-local',
+      workspacePath: cwd,
+      agent: agentLabel,
+    });
     const { stdout: output, sessionId } = await host.spawnAgentFix(prompt, cwd, agentName);
     if (output) {
       host.persistence.appendTaskOutput(taskId, `\n[Fix with ${agentLabel}] Output:\n${output}`);
@@ -411,6 +478,12 @@ export async function fixWithAgentImpl(
       },
     });
     console.log(`[fixWithAgent] Successfully applied fix for ${taskId} via ${agentLabel} (session=${sessionId})`);
+    host.persistence.logEvent?.(taskId, 'debug.auto-fix', {
+      phase: 'fix-with-agent-success',
+      mode: 'local',
+      sessionId,
+      agent: agentLabel,
+    });
   } catch (err: any) {
     // Persist session ID even on failure so the session can be audited
     const failedSessionId = err?.sessionId as string | undefined;
@@ -425,6 +498,18 @@ export async function fixWithAgentImpl(
       });
       console.log(`[fixWithAgent] Fix failed for ${taskId} via ${agentLabel}, session persisted (session=${failedSessionId})`);
     }
+    host.persistence.logEvent?.(taskId, 'debug.auto-fix', {
+      phase: 'fix-with-agent-failed',
+      agent: agentLabel,
+      sessionId: failedSessionId ?? null,
+      errorType: err instanceof Error ? err.name : typeof err,
+      errorMessage: err instanceof Error ? err.message : String(err),
+      exitCode: typeof err?.exitCode === 'number' ? err.exitCode : null,
+      cmd: typeof err?.cmd === 'string' ? err.cmd : null,
+      args: Array.isArray(err?.args) ? err.args : null,
+      stdoutTail: tailText(err?.stdoutTail ?? err?.stdout),
+      stderrTail: tailText(err?.stderrTail ?? err?.stderr),
+    });
     throw err;
   }
 }
@@ -546,13 +631,27 @@ export function spawnAgentFixViaRegistry(
         promptTransport.cleanup();
         reject(Object.assign(
           new Error(`${agent.name} fix exited with code ${code}: ${stderr.trim()}`),
-          { sessionId: effectiveSessionId },
+          {
+            sessionId: effectiveSessionId,
+            exitCode: code,
+            cmd: spec.cmd,
+            args: spec.args,
+            stdoutTail: tailText(stdout),
+            stderrTail: tailText(stderr),
+            cwd,
+          },
         ));
       }
     });
-    child.on('error', (err) => {
+    child.on('error', (err: any) => {
       promptTransport.cleanup();
-      reject(err);
+      reject(Object.assign(err, {
+        cmd: spec.cmd,
+        args: spec.args,
+        stdoutTail: tailText(stdout),
+        stderrTail: tailText(stderr),
+        cwd,
+      }));
     });
   });
 }

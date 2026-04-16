@@ -264,8 +264,46 @@ export async function finalizeAppliedFix(
 
 // ── Auto-fix helpers ─────────────────────────────────────────
 
+function isMergeConflictError(error: string): boolean {
+  for (const c of [error, error.trim(), error.split('\n\n').at(-1)?.trim() ?? '']) {
+    if (!c) continue;
+    try { if ((JSON.parse(c) as any)?.type === 'merge_conflict') return true; } catch { /* not JSON */ }
+  }
+  return false;
+}
+
+function tailText(value: unknown, maxChars: number = 2000): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  if (value.length <= maxChars) return value;
+  return value.slice(-maxChars);
+}
+
+function formatAutoFixDiagnostics(err: unknown): string | undefined {
+  const e = err as {
+    exitCode?: unknown;
+    cmd?: unknown;
+    args?: unknown;
+    cwd?: unknown;
+    sessionId?: unknown;
+    stdoutTail?: unknown;
+    stderrTail?: unknown;
+  };
+  const parts: string[] = [];
+  if (typeof e.exitCode === 'number') parts.push(`exitCode: ${e.exitCode}`);
+  if (typeof e.cmd === 'string') parts.push(`cmd: ${e.cmd}`);
+  if (Array.isArray(e.args)) parts.push(`args: ${JSON.stringify(e.args)}`);
+  if (typeof e.cwd === 'string') parts.push(`cwd: ${e.cwd}`);
+  if (typeof e.sessionId === 'string') parts.push(`sessionId: ${e.sessionId}`);
+  const stderrTail = tailText(e.stderrTail);
+  if (stderrTail) parts.push(`stderrTail:\n${stderrTail}`);
+  const stdoutTail = tailText(e.stdoutTail);
+  if (stdoutTail) parts.push(`stdoutTail:\n${stdoutTail}`);
+  if (parts.length === 0) return undefined;
+  return parts.join('\n');
+}
+
 /**
- * Automatically fix a failed task with an AI agent and complete it.
+ * Automatically fix a failed task with an AI agent and restart it.
  * Increments autoFixAttempts; respects the max budget from shouldAutoFix().
  */
 export async function autoFixOnFailure(
@@ -281,21 +319,66 @@ export async function autoFixOnFailure(
   const attempts = (task.execution.autoFixAttempts ?? 0) + 1;
   const max = orchestrator.getAutoFixRetryBudget(taskId);
   console.log(`[auto-fix] "${taskId}" attempt ${attempts}/${max}`);
+  persistence.logEvent?.(taskId, 'debug.auto-fix', {
+    phase: 'auto-fix-start',
+    status: task.status,
+    attemptsBefore: task.execution.autoFixAttempts ?? 0,
+    attemptsAfter: attempts,
+    maxRetries: max,
+    hasExecutionError: Boolean(task.execution.error),
+    hasMergeConflict: Boolean(task.execution.mergeConflict),
+  });
 
   // Increment counter FIRST (before any delta can re-trigger)
   persistence.updateTask(taskId, { execution: { autoFixAttempts: attempts } });
 
   const { savedError } = orchestrator.beginConflictResolution(taskId);
+  persistence.logEvent?.(taskId, 'debug.auto-fix', {
+    phase: 'auto-fix-begin-conflict-resolution',
+    savedErrorLength: savedError.length,
+  });
   try {
     const output = persistence.getTaskOutput(taskId);
-    await taskExecutor.fixWithAgent(taskId, output, 'claude', savedError);
-    orchestrator.setTaskAwaitingApproval(taskId);
-    const started = await orchestrator.approve(taskId);
+    const useResolveConflict = isMergeConflictError(savedError);
+    const route = useResolveConflict ? 'resolveConflict' : 'fixWithAgent';
+    console.log(
+      `[auto-fix-route] task="${taskId}" route=${route} agent=claude`,
+    );
+    persistence.logEvent?.(taskId, 'debug.auto-fix', {
+      phase: 'auto-fix-route-selected',
+      route,
+      agent: 'claude',
+      outputLength: output.length,
+    });
+    if (useResolveConflict) {
+      await taskExecutor.resolveConflict(taskId, savedError, 'claude');
+    } else {
+      await taskExecutor.fixWithAgent(taskId, output, 'claude', savedError);
+    }
+    // Skip approve flow — directly restart to re-run the task
+    const started = orchestrator.restartTask(taskId);
     const runnable = started.filter(t => t.status === 'running');
+    persistence.logEvent?.(taskId, 'debug.auto-fix', {
+      phase: 'auto-fix-post-route-restart',
+      startedCount: started.length,
+      runnableCount: runnable.length,
+      startedStatuses: started.map(t => t.status),
+    });
     if (runnable.length > 0) await taskExecutor.executeTasks(runnable);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
+    const diagnostics = formatAutoFixDiagnostics(err);
+    persistence.logEvent?.(taskId, 'debug.auto-fix', {
+      phase: 'auto-fix-route-failed',
+      errorType: err instanceof Error ? err.name : typeof err,
+      errorMessage: msg,
+      diagnostics: diagnostics ?? null,
+    });
+    if (diagnostics) {
+      persistence.appendTaskOutput(taskId, `\n[Auto-fix Diagnostics]\n${diagnostics}`);
+    }
     persistence.appendTaskOutput(taskId, `\n[Auto-fix] Agent failed (attempt ${attempts}/${max}): ${msg}`);
-    orchestrator.revertConflictResolution(taskId, savedError, msg);
+    const detailedMsg = diagnostics ? `${msg}\n\n${diagnostics}` : msg;
+    orchestrator.revertConflictResolution(taskId, savedError, detailedMsg);
   }
 }
