@@ -13,16 +13,10 @@ set -euo pipefail
 # Subcommands:
 #   capture-before    Capture "before" screenshots to visual-proof/before/
 #   capture-after     Capture "after" screenshots to visual-proof/after/
+#   validate          Run DOM snapshot tests (fast, no Electron needed)
 #   compare           Generate diff images and video (requires ffmpeg)
 #   embed             Generate markdown with embedded base64 images
-#   [legacy mode]     Direct capture (backward-compatible)
-#
-# Legacy mode options:
-#   --validate        Run DOM snapshot tests (fast, no Electron needed)
-#   --label <name>    Subdirectory name under output-dir (default: "capture")
-#   --output-dir <dir> Base directory (default: packages/app/e2e/visual-proof)
-#   --spec <file>     Playwright spec file (default: visual-proof.spec.ts)
-#   --skip-build      Skip the pnpm build step (useful when already built)
+#   --spec <file>     Playwright spec file for capture-before/after (default: visual-proof.spec.ts)
 #
 # Subcommand details:
 #   capture-before:
@@ -53,12 +47,8 @@ set -euo pipefail
 #     ├── task-panel.png
 #     └── walkthrough.webm
 
-LABEL="capture"
-OUTPUT_DIR="packages/app/e2e/visual-proof"
 SPEC="visual-proof.spec.ts"
-SKIP_BUILD=false
 RESULTS_DIR="packages/app/e2e/test-results"
-VALIDATE=false
 SUBCOMMAND=""
 
 usage() {
@@ -259,23 +249,23 @@ fi
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --validate)   VALIDATE=true; shift ;;
-    --label)      LABEL="$2"; shift 2 ;;
-    --output-dir) OUTPUT_DIR="$2"; shift 2 ;;
     --spec)       SPEC="$2"; shift 2 ;;
-    --skip-build) SKIP_BUILD=true; shift ;;
     --help|-h)    usage ;;
     *)            echo "Unknown option: $1" >&2; usage ;;
   esac
 done
 
-# Dispatch to subcommand or legacy mode
+# Dispatch to subcommand
 case "$SUBCOMMAND" in
   capture-before)
     subcommand_capture_before
     ;;
   capture-after)
     subcommand_capture_after
+    ;;
+  validate)
+    echo "[visual-proof] Running DOM snapshot tests..." >&2
+    cd packages/ui && pnpm test -- --run src/__tests__/visual-proof-snapshots.test.tsx
     ;;
   compare)
     subcommand_compare
@@ -284,13 +274,8 @@ case "$SUBCOMMAND" in
     subcommand_embed
     ;;
   "")
-    # Legacy mode: direct capture
-    if [[ "${VALIDATE}" == "true" ]]; then
-      echo "[visual-proof] Running DOM snapshot tests..." >&2
-      cd packages/ui && pnpm test -- --run src/__tests__/visual-proof-snapshots.test.tsx
-      exit $?
-    fi
-    run_capture "${LABEL}" "${OUTPUT_DIR}" "${SPEC}" "${SKIP_BUILD}"
+    echo "[visual-proof] ERROR: Missing subcommand. Use one of: capture-before, capture-after, validate, compare, embed" >&2
+    usage
     ;;
   *)
     echo "[visual-proof] ERROR: Unknown subcommand: $SUBCOMMAND" >&2

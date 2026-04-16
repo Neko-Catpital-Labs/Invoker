@@ -463,12 +463,12 @@ describe('SQLiteAdapter', () => {
       expect(loaded[0].execution.pendingFixError).toBeUndefined();
     });
 
-    it('persists isFixingWithAI via updateTask', () => {
+    it('does not expose transient isFixingWithAI flags through task hydration', () => {
       adapter.saveWorkflow(testWorkflow);
       adapter.saveTask('wf-1', makeTask('t1'));
       adapter.updateTask('t1', { execution: { isFixingWithAI: true } } as any);
       const loaded = adapter.loadTasks('wf-1');
-      expect(loaded[0].execution.isFixingWithAI).toBe(true);
+      expect(loaded[0].execution.isFixingWithAI).toBeUndefined();
     });
 
     it('clears isFixingWithAI via updateTask', () => {
@@ -479,13 +479,13 @@ describe('SQLiteAdapter', () => {
       expect(loaded[0].execution.isFixingWithAI).toBeFalsy();
     });
 
-    it('normalizes legacy running + isFixingWithAI row to fixing_with_ai', () => {
+    it('preserves persisted running status until compatibility migration is run', () => {
       adapter.saveWorkflow(testWorkflow);
       adapter.saveTask('wf-1', makeTask('t1'));
       adapter.updateTask('t1', { status: 'running', execution: { isFixingWithAI: true } } as any);
       const loaded = adapter.loadTasks('wf-1');
-      expect(loaded[0].status).toBe('fixing_with_ai');
-      expect(loaded[0].execution.isFixingWithAI).toBeFalsy();
+      expect(loaded[0].status).toBe('running');
+      expect(loaded[0].execution.isFixingWithAI).toBeUndefined();
     });
   });
 
@@ -536,11 +536,11 @@ describe('SQLiteAdapter', () => {
       expect(adapter.getTaskStatus('t1')).toBe('running');
     });
 
-    it('returns fixing_with_ai for legacy running + isFixingWithAI rows', () => {
+    it('returns raw running for persisted running + isFixingWithAI rows', () => {
       adapter.saveWorkflow(testWorkflow);
       adapter.saveTask('wf-1', makeTask('t1'));
       adapter.updateTask('t1', { status: 'running', execution: { isFixingWithAI: true } } as any);
-      expect(adapter.getTaskStatus('t1')).toBe('fixing_with_ai');
+      expect(adapter.getTaskStatus('t1')).toBe('running');
     });
   });
 
@@ -1202,6 +1202,50 @@ describe('SQLiteAdapter', () => {
       db2.close();
 
       rmSync(tmpDir, { recursive: true, force: true });
+    });
+  });
+
+  describe('runCompatibilityMigration', () => {
+    it('normalizes compatibility persisted shapes and reports migration counts', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('root', { status: 'failed' }));
+      adapter.saveTask('wf-1', makeTask('root-exp-fix-child', {
+        status: 'pending',
+        dependencies: ['root'],
+        config: { parentTask: 'root' },
+      }));
+      adapter.saveTask('wf-1', makeTask('recon-child', {
+        status: 'pending',
+        dependencies: ['root-exp-fix-child'],
+        config: { parentTask: 'root-exp-fix-child', isReconciliation: true },
+      }));
+      adapter.saveTask('wf-1', makeTask('fixing-row', {
+        status: 'running',
+        execution: { isFixingWithAI: true },
+      }));
+      (adapter as any).db.run(`UPDATE workflows SET merge_mode = 'github' WHERE id = 'wf-1'`);
+
+      const report = adapter.runCompatibilityMigration();
+
+      expect(report).toEqual({
+        migratedFixingWithAiStatuses: 1,
+        normalizedMergeModes: 1,
+        staleAutoFixExperimentTasks: 2,
+      });
+      const taskById = new Map(adapter.loadTasks('wf-1').map((task) => [task.id, task]));
+      expect(adapter.loadWorkflow('wf-1')?.mergeMode).toBe('external_review');
+      expect(taskById.get('fixing-row')?.status).toBe('fixing_with_ai');
+      expect(adapter.getTaskStatus('fixing-row')).toBe('fixing_with_ai');
+      expect(taskById.get('root-exp-fix-child')?.status).toBe('stale');
+      expect(taskById.get('recon-child')?.status).toBe('stale');
+      expect(taskById.get('root-exp-fix-child')?.execution.error).toContain('Stale auto-fix experiment branch');
+
+      const secondRun = adapter.runCompatibilityMigration();
+      expect(secondRun).toEqual({
+        migratedFixingWithAiStatuses: 0,
+        normalizedMergeModes: 0,
+        staleAutoFixExperimentTasks: 0,
+      });
     });
   });
 

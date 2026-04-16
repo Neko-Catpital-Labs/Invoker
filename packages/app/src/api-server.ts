@@ -49,6 +49,7 @@ import {
   setWorkflowMergeMode as sharedSetWorkflowMergeMode,
   resolveConflictAction,
 } from './workflow-actions.js';
+import { executeGlobalTopup } from './global-topup.js';
 
 export interface ApiServerDeps {
   logger?: Logger;
@@ -200,6 +201,13 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
           const started = sharedRestartTask(taskId, { orchestrator });
           const runnable = started.filter(t => t.status === 'running');
           await taskExecutor.executeTasks(runnable);
+          await executeGlobalTopup({
+            orchestrator,
+            taskExecutor,
+            logger: apiLogger,
+            context: 'api.tasks.restart',
+            alreadyDispatched: runnable,
+          });
           json(res, 200, { ok: true, taskId, action: 'restarted', tasksStarted: runnable.length });
         } catch (err) {
           json(res, 400, { error: err instanceof Error ? err.message : String(err) });
@@ -295,6 +303,13 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
           const started = sharedRecreateWorkflow(workflowId, { persistence, orchestrator });
           const runnable = started.filter(t => t.status === 'running');
           await taskExecutor.executeTasks(runnable);
+          await executeGlobalTopup({
+            orchestrator,
+            taskExecutor,
+            logger: apiLogger,
+            context: 'api.workflows.restart',
+            alreadyDispatched: runnable,
+          });
           json(res, 200, { ok: true, workflowId, action: 'restarted', tasksStarted: runnable.length });
         } catch (err) {
           json(res, 400, { error: err instanceof Error ? err.message : String(err) });

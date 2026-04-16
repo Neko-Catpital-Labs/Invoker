@@ -57,6 +57,7 @@ import type {
   TaskStateChanges,
 } from '@invoker/workflow-core';
 import { makeEnvelope } from '@invoker/contracts';
+import type { WorkResponse } from '@invoker/contracts';
 import { SQLiteAdapter, ConversationRepository, SqliteTaskRepository } from '@invoker/data-store';
 import { IpcBus, Channels } from '@invoker/transport';
 import type { MessageBus } from '@invoker/transport';
@@ -108,6 +109,7 @@ import { shouldAutoFixFromDelta } from './auto-fix-gating.js';
 import { ensureSqliteFlushDebounceForOwner } from './sqlite-flush-policy.js';
 import type { WorkflowMutationPriority } from './workflow-mutation-coordinator.js';
 import { PersistedWorkflowMutationCoordinator } from './persisted-workflow-mutation-coordinator.js';
+import { executeGlobalTopup } from './global-topup.js';
 
 // ── Detect headless mode ─────────────────────────────────────
 
@@ -803,6 +805,14 @@ if (isHeadless) {
   const traceUiDeltaFlow = process.env.INVOKER_TRACE_UI_DELTA === '1';
   const traceDbPollPerTask = process.env.INVOKER_TRACE_DB_POLL === '1';
   const traceTaskOutput = process.env.INVOKER_TRACE_TASK_OUTPUT === '1';
+  const runningHeartbeatTopupMs = Number.parseInt(
+    process.env.INVOKER_RUNNING_HEARTBEAT_TOPUP_MS ?? '30000',
+    10,
+  ) || 30000;
+  const launchingStallTimeoutMs = Number.parseInt(
+    process.env.INVOKER_LAUNCHING_STALL_TIMEOUT_MS ?? '600000',
+    10,
+  ) || 600000;
   const uiPerfStats = {
     mainDeltaToUi: 0,
     dbPollCreated: 0,
@@ -948,6 +958,14 @@ if (isHeadless) {
     queuedAutoFixTasks.add(taskId);
     pendingAutoFixTasks.push(taskId);
     drainAutoFixQueue();
+  };
+
+  const parseExecutionDate = (value: unknown): Date | undefined => {
+    if (!value) return undefined;
+    if (value instanceof Date) return value;
+    if (typeof value !== 'string') return undefined;
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? undefined : parsed;
   };
 
   // Focus existing window when a second instance is launched
@@ -1202,15 +1220,13 @@ if (isHeadless) {
       preemptTaskSubgraph: (taskId: string) => preemptTaskSubgraph(taskId),
       preemptWorkflowExecution: (workflowId: string) => preemptWorkflowExecution(workflowId),
       deferRunnableTasks: (tasks: TaskState[], workflowId?: string) => {
-        const filteredTasks = workflowId
-          ? tasks.filter((task) => task.config.workflowId === workflowId)
-          : tasks;
+        const filteredTasks = tasks;
         const droppedTasks = workflowId
           ? tasks.filter((task) => task.config.workflowId !== workflowId)
           : [];
         if (droppedTasks.length > 0) {
-          logger.error(
-            `deferRunnableTasks dropped cross-workflow runnable tasks for workflow="${workflowId}": ${droppedTasks.map((task) => `${task.id}(${task.config.workflowId ?? 'unknown'})`).join(', ')}`,
+          logger.info(
+            `deferRunnableTasks preserving cross-workflow runnable tasks for workflow="${workflowId}": ${droppedTasks.map((task) => `${task.id}(${task.config.workflowId ?? 'unknown'})`).join(', ')}`,
             { module: 'ipc-delegate' },
           );
         }
@@ -1774,7 +1790,56 @@ if (isHeadless) {
             for (const wf of workflows) {
               if (wf.status === 'completed' || wf.status === 'failed') continue;
               const tasks = persistence.loadTasks(wf.id);
-              for (const task of tasks) {
+              for (const loadedTask of tasks) {
+                let task = loadedTask;
+                const now = new Date();
+                const previousHeartbeat = parseExecutionDate(task.execution.lastHeartbeatAt);
+
+                if (task.status === 'running') {
+                  if (!previousHeartbeat || now.getTime() - previousHeartbeat.getTime() >= runningHeartbeatTopupMs) {
+                    persistence.updateTask(task.id, { execution: { lastHeartbeatAt: now } });
+                    messageBus.publish(Channels.TASK_DELTA, {
+                      type: 'updated' as const,
+                      taskId: task.id,
+                      changes: { execution: { lastHeartbeatAt: now } },
+                    });
+                    task = {
+                      ...task,
+                      execution: {
+                        ...task.execution,
+                        lastHeartbeatAt: now,
+                      },
+                    };
+                  }
+
+                  const launchStartedAt = parseExecutionDate(task.execution.launchStartedAt)
+                    ?? parseExecutionDate(task.execution.startedAt);
+                  const launchAgeMs = launchStartedAt ? now.getTime() - launchStartedAt.getTime() : 0;
+                  const launchStalled =
+                    task.execution.phase === 'launching'
+                    && launchStartedAt !== undefined
+                    && launchAgeMs >= launchingStallTimeoutMs
+                    && !taskHandles.has(task.id);
+                  if (launchStalled) {
+                    const launchError =
+                      `Launch stalled: task remained in running/launching for ${Math.floor(launchingStallTimeoutMs / 1000)}s without a spawned execution handle`;
+                    const failedResponse: WorkResponse = {
+                      requestId: `launch-stall-${task.id}-${now.getTime()}`,
+                      actionId: task.id,
+                      attemptId: task.execution.selectedAttemptId,
+                      executionGeneration: task.execution.generation ?? 0,
+                      status: 'failed',
+                      outputs: {
+                        exitCode: 1,
+                        error: launchError,
+                      },
+                    };
+                    logger.error(`[launch-stall] forcing failure for "${task.id}": ${launchError}`, { module: 'db-poll' });
+                    orchestrator.handleWorkerResponse(failedResponse);
+                    continue;
+                  }
+                }
+
                 const snapshot = JSON.stringify(task);
                 const prev = lastKnownTaskStates.get(task.id);
                 if (!prev) {
@@ -2339,6 +2404,13 @@ if (isHeadless) {
           { module: 'ipc' },
         );
         await requireTaskExecutor().executeTasks(runnable);
+        await executeGlobalTopup({
+          orchestrator,
+          taskExecutor: requireTaskExecutor(),
+          logger,
+          context: 'ipc.restart-task',
+          alreadyDispatched: runnable,
+        });
       } catch (err) {
         logger.error(`restart-task failed: ${err}`, { module: 'ipc' });
         throw err;
@@ -2423,6 +2495,13 @@ if (isHeadless) {
         remoteFetchForPool.enabled = false;
         try {
           await requireTaskExecutor().executeTasks(runnable);
+          await executeGlobalTopup({
+            orchestrator,
+            taskExecutor: requireTaskExecutor(),
+            logger,
+            context: 'ipc.recreate-workflow',
+            alreadyDispatched: runnable,
+          });
         } finally {
           remoteFetchForPool.enabled = true;
         }
@@ -2447,6 +2526,13 @@ if (isHeadless) {
         remoteFetchForPool.enabled = false;
         try {
           await requireTaskExecutor().executeTasks(runnable);
+          await executeGlobalTopup({
+            orchestrator,
+            taskExecutor: requireTaskExecutor(),
+            logger,
+            context: 'ipc.recreate-task',
+            alreadyDispatched: runnable,
+          });
         } finally {
           remoteFetchForPool.enabled = true;
         }
@@ -2473,6 +2559,13 @@ if (isHeadless) {
         remoteFetchForPool.enabled = false;
         try {
           await requireTaskExecutor().executeTasks(runnable);
+          await executeGlobalTopup({
+            orchestrator,
+            taskExecutor: requireTaskExecutor(),
+            logger,
+            context: 'ipc.retry-workflow',
+            alreadyDispatched: runnable,
+          });
         } finally {
           remoteFetchForPool.enabled = true;
         }
@@ -2501,6 +2594,13 @@ if (isHeadless) {
         });
         const runnable = started.filter(t => t.status === 'running');
         await requireTaskExecutor().executeTasks(runnable);
+        await executeGlobalTopup({
+          orchestrator,
+          taskExecutor: requireTaskExecutor(),
+          logger,
+          context: 'ipc.rebase-and-retry',
+          alreadyDispatched: runnable,
+        });
       } catch (err) {
         logger.error(`rebase-and-retry failed: ${err}`, { module: 'ipc' });
         throw err;

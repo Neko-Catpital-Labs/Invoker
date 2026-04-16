@@ -6,11 +6,12 @@
  * cross-boundary flows that individual component tests miss.
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { createTestHarness, type TestHarness, InMemoryBus, InMemoryPersistence, MockGit } from '@invoker/test-kit';
 import { Orchestrator, type PlanDefinition, type TaskState } from '@invoker/workflow-core';
 import { TaskRunner, ExecutorRegistry, type MergeGateProvider } from '@invoker/execution-engine';
 import { setWorkflowMergeMode } from '../workflow-actions.js';
+import { executeGlobalTopup } from '../global-topup.js';
 
 // ── Shared Plans ────────────────────────────────────────────
 
@@ -52,6 +53,47 @@ const FANOUT_PLAN: PlanDefinition = {
     { id: 'C', description: 'Task C', command: 'echo c', dependencies: ['A'] },
   ],
 };
+
+describe('global top-up dispatch', () => {
+  it('dispatches only newly started tasks and skips duplicates', async () => {
+    const duplicate = {
+      id: 'wf-1/task-a',
+      status: 'running',
+      description: 'duplicate',
+      dependencies: [],
+      createdAt: new Date(),
+      config: { workflowId: 'wf-1' },
+      execution: { selectedAttemptId: 'attempt-a' },
+    } as unknown as TaskState;
+    const newTask = {
+      id: 'wf-2/task-b',
+      status: 'running',
+      description: 'new task',
+      dependencies: [],
+      createdAt: new Date(),
+      config: { workflowId: 'wf-2' },
+      execution: { selectedAttemptId: 'attempt-b' },
+    } as unknown as TaskState;
+    const orchestrator = {
+      startExecution: vi.fn(() => [duplicate, newTask]),
+    } as unknown as Orchestrator;
+    const taskExecutor = {
+      executeTasks: vi.fn(async () => {}),
+    } as unknown as TaskRunner;
+
+    const topup = await executeGlobalTopup({
+      orchestrator,
+      taskExecutor,
+      context: 'test.bridge.global-topup',
+      alreadyDispatched: [duplicate],
+    });
+
+    expect(orchestrator.startExecution).toHaveBeenCalledTimes(1);
+    expect(taskExecutor.executeTasks).toHaveBeenCalledTimes(1);
+    expect(taskExecutor.executeTasks).toHaveBeenCalledWith([newTask]);
+    expect(topup.map((task) => task.id)).toEqual(['wf-2/task-b']);
+  });
+});
 
 // ── Flow 1: Rebase & Retry ──────────────────────────────────
 
@@ -1032,7 +1074,7 @@ describe('Flow 9: manual merge mode', () => {
   });
 });
 
-/** Matches GUI “Manual” + onFinish none — switching merge mode to GitHub must not complete the gate without a PR. */
+/** Matches GUI “Manual” + onFinish none — switching to external review must not complete the gate without a PR. */
 const MANUAL_MERGE_ONFINISH_NONE_PLAN: PlanDefinition = {
   name: 'Manual OnFinish None',
   onFinish: 'none',
@@ -1042,9 +1084,9 @@ const MANUAL_MERGE_ONFINISH_NONE_PLAN: PlanDefinition = {
   tasks: [{ id: 'A', description: 'Task A', command: 'echo a' }],
 };
 
-// ── Flow 9c: UI `github` merge mode alias ───────────────────
+// ── Flow 9c: UI external_review merge mode ───────────────────
 
-describe('Flow 9c: set-merge-mode github alias', () => {
+describe('Flow 9c: set-merge-mode external_review', () => {
   const mockMergeGate: MergeGateProvider = {
     name: 'mock',
     createReview: async () => ({
@@ -1059,7 +1101,7 @@ describe('Flow 9c: set-merge-mode github alias', () => {
     }),
   };
 
-  it('switching manual gate to github creates PR metadata and persists external_review', async () => {
+  it('switching manual gate to external_review creates PR metadata and persists external_review', async () => {
     const h = createTestHarness({ mergeGateProvider: mockMergeGate });
     h.loadAndStart(MANUAL_MERGE_ONFINISH_NONE_PLAN);
     h.completeTask('A');
@@ -1069,7 +1111,7 @@ describe('Flow 9c: set-merge-mode github alias', () => {
     await h.executor.executeTasks([h.getTask(mergeId)!]);
     expect(h.getTask(mergeId)!.status).toBe('review_ready');
 
-    await setWorkflowMergeMode(wfId, 'github', {
+    await setWorkflowMergeMode(wfId, 'external_review', {
       orchestrator: h.orchestrator,
       persistence: h.persistence,
       taskExecutor: h.executor,

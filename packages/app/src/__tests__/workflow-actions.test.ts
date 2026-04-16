@@ -435,8 +435,8 @@ describe('setWorkflowMergeMode', () => {
     };
   });
 
-  it('normalizes mode and updates persistence', async () => {
-    await setWorkflowMergeMode('wf-1', 'github', {
+  it('updates persistence with canonical mode', async () => {
+    await setWorkflowMergeMode('wf-1', 'external_review', {
       orchestrator: orchestrator as unknown as Orchestrator,
       persistence: persistence as unknown as SQLiteAdapter,
       taskExecutor: taskExecutor as unknown as TaskRunner,

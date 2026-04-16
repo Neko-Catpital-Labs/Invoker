@@ -6,7 +6,6 @@ import { bashPreserveOrReset, bashMergeUpstreams, parsePreserveResult, parseMerg
 import { RESTART_TO_BRANCH_TRACE, traceExecution } from './exec-trace.js';
 import type { AgentRegistry } from './agent-registry.js';
 import { checkStaleness } from './git-staleness-detector.js';
-import { rewriteLegacyAbsoluteRepoCd } from './command-normalization.js';
 
 
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
@@ -716,7 +715,7 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
       if (!command) throw new Error('WorkRequest with actionType "command" must have inputs.command');
       return {
         cmd: '/bin/bash',
-        args: ['-c', rewriteLegacyAbsoluteRepoCd(command, request.inputs.repoUrl)],
+        args: ['-c', command],
       };
     }
     if (request.actionType === 'ai_task') {
@@ -727,7 +726,7 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
         const spec = agent.buildCommand(fullPrompt);
         return { cmd: spec.cmd, args: spec.args, agentSessionId: spec.sessionId, fullPrompt: spec.fullPrompt };
       }
-      // Fallback: use legacy prepareClaudeSession
+      // Fallback: use prepareClaudeSession when no agent registry is available
       const claudeCommand = opts?.claudeCommand ?? 'claude';
       const session = this.prepareClaudeSession(request);
       return { cmd: claudeCommand, args: session.cliArgs, agentSessionId: session.sessionId, fullPrompt: session.fullPrompt };

@@ -439,7 +439,7 @@ export function TaskPanel({
                 <div className="flex items-center justify-between">
                   <span className="text-sm text-gray-400">Merge mode</span>
                   <select
-                    value={mergeMode === 'external_review' ? 'github' : (mergeMode ?? 'manual')}
+                    value={mergeMode ?? 'manual'}
                     onChange={(e) => onSetMergeMode(task.config.workflowId!, e.target.value)}
                     disabled={task.status === 'running' || task.status === 'fixing_with_ai'}
                     className="bg-gray-700 text-gray-200 text-xs rounded px-2 py-1 border border-gray-600 focus:outline-none focus:border-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
@@ -447,7 +447,7 @@ export function TaskPanel({
                   >
                     <option value="manual">Manual</option>
                     <option value="automatic">Automatic</option>
-                    <option value="github">GitHub</option>
+                    <option value="external_review">External review (GitHub)</option>
                   </select>
                 </div>
               )}

@@ -81,6 +81,7 @@ function createMocks() {
     orchestrator: {
       getWorkflowStatus: vi.fn(() => ({ total: 1, completed: 0, failed: 0, running: 1, pending: 0 })),
       getAllTasks: vi.fn(() => [makeTask()]),
+      startExecution: vi.fn(() => []),
       getTask: vi.fn((id: string) => (id === 'task-1' ? makeTask() : undefined)),
       approve: vi.fn().mockResolvedValue([]),
       reject: vi.fn(),
@@ -163,6 +164,7 @@ beforeEach(() => {
   // Re-apply default return values after clear
   mocks.orchestrator.getWorkflowStatus.mockReturnValue({ total: 1, completed: 0, failed: 0, running: 1, pending: 0 });
   mocks.orchestrator.getAllTasks.mockReturnValue([makeTask()]);
+  mocks.orchestrator.startExecution.mockReturnValue([]);
   mocks.orchestrator.getTask.mockImplementation((id: string) => (id === 'task-1' ? makeTask() : undefined));
   mocks.orchestrator.approve.mockResolvedValue([]);
   mocks.orchestrator.restartTask.mockReturnValue([makeTask()]);
@@ -376,6 +378,48 @@ describe('POST /api/tasks/:id/restart', () => {
     expect(res.status).toBe(400);
     expect(res.body.error).toBe('task not restartable');
   });
+
+  it('tops up globally ready tasks after scoped restart launch', async () => {
+    const scoped = makeTask({
+      id: 'task-1',
+      status: 'running',
+      execution: { selectedAttemptId: 'attempt-1' },
+    });
+    const topup = makeTask({
+      id: 'wf-2/task-9',
+      config: { workflowId: 'wf-2' },
+      status: 'running',
+      execution: { selectedAttemptId: 'attempt-9' },
+    });
+    mocks.orchestrator.restartTask.mockReturnValue([scoped]);
+    mocks.orchestrator.startExecution.mockReturnValue([topup]);
+
+    const res = await request(port, 'POST', '/api/tasks/task-1/restart');
+    expect(res.status).toBe(200);
+    expect(mocks.taskExecutor.executeTasks).toHaveBeenCalledTimes(2);
+    expect(mocks.taskExecutor.executeTasks).toHaveBeenNthCalledWith(1, [scoped]);
+    expect(mocks.taskExecutor.executeTasks).toHaveBeenNthCalledWith(2, [topup]);
+  });
+
+  it('does not relaunch duplicate attempt from global top-up', async () => {
+    const scoped = makeTask({
+      id: 'task-1',
+      status: 'running',
+      execution: { selectedAttemptId: 'attempt-1' },
+    });
+    const duplicate = makeTask({
+      id: 'task-1',
+      status: 'running',
+      execution: { selectedAttemptId: 'attempt-1' },
+    });
+    mocks.orchestrator.restartTask.mockReturnValue([scoped]);
+    mocks.orchestrator.startExecution.mockReturnValue([duplicate]);
+
+    const res = await request(port, 'POST', '/api/tasks/task-1/restart');
+    expect(res.status).toBe(200);
+    expect(mocks.taskExecutor.executeTasks).toHaveBeenCalledTimes(1);
+    expect(mocks.taskExecutor.executeTasks).toHaveBeenCalledWith([scoped]);
+  });
 });
 
 describe('POST /api/tasks/:id/approve', () => {
@@ -584,6 +628,27 @@ describe('POST /api/workflows/:id/restart', () => {
     const res = await request(port, 'POST', '/api/workflows/missing/restart');
     expect(res.status).toBe(400);
     expect(res.body.error).toContain('not found');
+  });
+
+  it('tops up globally ready tasks after workflow restart launch', async () => {
+    const scoped = makeTask({
+      id: 'wf-1/task-1',
+      config: { workflowId: 'wf-1' },
+      execution: { selectedAttemptId: 'attempt-wf1' },
+    });
+    const topup = makeTask({
+      id: 'wf-2/task-1',
+      config: { workflowId: 'wf-2' },
+      execution: { selectedAttemptId: 'attempt-wf2' },
+    });
+    mocks.orchestrator.recreateWorkflow = vi.fn(() => [scoped]);
+    mocks.orchestrator.startExecution.mockReturnValue([topup]);
+
+    const res = await request(port, 'POST', '/api/workflows/wf-1/restart');
+    expect(res.status).toBe(200);
+    expect(mocks.taskExecutor.executeTasks).toHaveBeenCalledTimes(2);
+    expect(mocks.taskExecutor.executeTasks).toHaveBeenNthCalledWith(1, [scoped]);
+    expect(mocks.taskExecutor.executeTasks).toHaveBeenNthCalledWith(2, [topup]);
   });
 });
 

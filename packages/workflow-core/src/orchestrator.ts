@@ -363,7 +363,7 @@ export interface OrchestratorConfig {
   /** Optional; defaults to an adapter wrapping `persistence`. */
   taskRepository?: TaskRepository;
   maxConcurrency?: number;
-  /** Default auto-fix retry budget for legacy tasks missing persisted per-task config. */
+  /** Default auto-fix retry budget for older tasks missing persisted per-task config. */
   defaultAutoFixRetries?: number;
   /**
    * Rules that validate task execution environment against command patterns.
@@ -375,7 +375,7 @@ export interface OrchestratorConfig {
    * When true, keep tasks persisted as `pending` until the executor confirms
    * startup success, then transition to `running`.
    *
-   * Default false preserves legacy behavior (transition to `running` at
+   * Default false preserves existing behavior (transition to `running` at
    * scheduler dequeue time).
    */
   deferRunningUntilLaunch?: boolean;
@@ -1616,50 +1616,15 @@ export class Orchestrator {
     };
 
     const retryRootIds = allTasks
-      .filter((task) => !this.isLegacyAutoFixExperimentTask(task))
       .filter((task) => retryStatuses.has(task.status))
       .map((task) => task.id);
     const { affectedIds } = this.resetSubgraphToPending(retryRootIds, resetChanges);
-    const legacyAutoFixParentIds = new Set(
-      allTasks
-        .filter((task) => this.isLegacyAutoFixExperimentTask(task))
-        .map((task) => task.config.parentTask)
-        .filter((parentTask): parentTask is string => typeof parentTask === 'string' && parentTask.length > 0),
-    );
-    const suppressedLegacyIds: string[] = [];
-    const legacyStaleChanges: TaskStateChanges = {
-      status: 'stale',
-      execution: {
-        error: 'Skipped legacy auto-fix branch during retry',
-        completedAt: new Date(),
-        pendingFixError: undefined,
-        isFixingWithAI: false,
-      },
-    };
-    for (const id of affectedIds) {
-      const task = this.stateGetTask(id);
-      if (!task) continue;
-      const parentTask = task.config.parentTask;
-      if (!parentTask || !legacyAutoFixParentIds.has(parentTask)) continue;
-      if (!task.id.includes('-exp-fix-') && !task.config.isReconciliation) continue;
-      if (task.status === 'stale') continue;
-      this.writeAndSync(id, legacyStaleChanges);
-      this.persistence.logEvent?.(id, 'task.stale', legacyStaleChanges);
-      this.messageBus.publish(TASK_DELTA_CHANNEL, { type: 'updated', taskId: id, changes: legacyStaleChanges });
-      suppressedLegacyIds.push(id);
-    }
     const afterResetMs = Date.now();
 
     console.log(
       `[orchestrator] retryWorkflow invalidation: workflow=${workflowId} ` +
       `roots=[${retryRootIds.join(', ')}] affected=${affectedIds.length}`,
     );
-    if (suppressedLegacyIds.length > 0) {
-      console.log(
-        `[orchestrator] retryWorkflow: suppressed ${suppressedLegacyIds.length} legacy auto-fix task(s) for ${workflowId}: ${suppressedLegacyIds.join(', ')}`,
-      );
-    }
-
     console.log(
       `[orchestrator] retryWorkflow: reset ${affectedIds.length}/${allTasks.length} tasks for ${workflowId} ` +
         `(roots=${retryRootIds.length}, preserved completed outside invalidated subgraphs)`,
@@ -1671,8 +1636,7 @@ export class Orchestrator {
       .filter((id) => {
         const task = this.stateGetTask(id);
         return !!task
-          && task.config.workflowId === workflowId
-          && !this.isLegacyAutoFixExperimentTask(task);
+          && task.config.workflowId === workflowId;
       });
     const started = this.autoStartReadyTasks(readyIds, Orchestrator.EXPEDITED_PRIORITY);
     const retryEndMs = Date.now();
@@ -2354,10 +2318,6 @@ export class Orchestrator {
     if (task.config.isReconciliation) return false;
     if (task.config.parentTask) return false;
     return true;
-  }
-
-  private isLegacyAutoFixExperimentTask(task: TaskState): boolean {
-    return !!task.config.parentTask && task.id.includes('-exp-fix-');
   }
 
   shouldAutoFix(taskId: string): boolean {

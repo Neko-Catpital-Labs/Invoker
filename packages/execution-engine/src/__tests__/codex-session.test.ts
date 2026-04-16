@@ -163,7 +163,7 @@ describe('parseCodexSessionJsonl', () => {
     });
   });
 
-  it('normalizes mixed newer and legacy formats in encounter order', () => {
+  it('normalizes mixed newer and older formats in encounter order', () => {
     const lines = [
       JSON.stringify({ type: 'thread.started', thread_id: '019d5193-197f-79a2-8e37-3551f55b67e7' }),
       JSON.stringify({

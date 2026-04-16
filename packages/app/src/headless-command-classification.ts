@@ -33,6 +33,7 @@ export function isHeadlessMutatingCommand(args: string[]): boolean {
 
   return [
     'run', 'resume', 'restart', 'recreate', 'recreate-task', 'rebase', 'fix', 'resolve-conflict',
+    'migrate-compat',
     'restart-workflow', 'clean-restart', 'rebase-and-retry',
     'approve', 'reject', 'input', 'select',
     'cancel', 'cancel-workflow',

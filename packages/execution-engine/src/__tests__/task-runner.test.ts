@@ -1172,6 +1172,97 @@ describe('TaskRunner', () => {
     });
   });
 
+  describe('launch timeout repro', () => {
+    it('fails a task when executor.start never resolves and keeps it in launching', async () => {
+      vi.useFakeTimers();
+      const previousTimeout = process.env.INVOKER_EXECUTOR_START_TIMEOUT_MS;
+      process.env.INVOKER_EXECUTOR_START_TIMEOUT_MS = '100';
+      try {
+        const handleWorkerResponse = vi.fn();
+        const onComplete = vi.fn();
+        const persistence = {
+          updateTask: vi.fn(),
+          updateAttempt: vi.fn(),
+        };
+        const task = makeTask({
+          id: 'launch-hang',
+          status: 'running',
+          config: { command: 'echo never-launches' },
+          execution: {
+            generation: 5,
+            phase: 'launching',
+            startedAt: new Date('2026-04-16T05:25:16.531Z'),
+            launchStartedAt: new Date('2026-04-16T05:25:16.531Z'),
+            lastHeartbeatAt: new Date('2026-04-16T05:25:16.531Z'),
+            selectedAttemptId: 'launch-hang-a1',
+          },
+        });
+        const hangingExecutor = {
+          type: 'worktree',
+          start: vi.fn(async () => await new Promise<never>(() => {})),
+          onOutput: vi.fn(),
+          onComplete: vi.fn(),
+          onHeartbeat: vi.fn(),
+          kill: vi.fn(),
+          destroyAll: vi.fn(),
+        };
+        const runner = new TaskRunner({
+          orchestrator: {
+            getTask: () => task,
+            handleWorkerResponse,
+          } as any,
+          persistence: persistence as any,
+          executorRegistry: {
+            getDefault: () => hangingExecutor,
+            get: () => hangingExecutor,
+            getAll: () => [hangingExecutor],
+          } as any,
+          cwd: '/tmp',
+          callbacks: { onComplete },
+        });
+
+        const done = runner.executeTask(task);
+        await vi.advanceTimersByTimeAsync(110);
+        await done;
+
+        expect(onComplete).toHaveBeenCalledWith(
+          'launch-hang',
+          expect.objectContaining({
+            status: 'failed',
+            outputs: expect.objectContaining({
+              error: expect.stringContaining('Executor startup timed out after 100ms'),
+            }),
+          }),
+        );
+        expect(handleWorkerResponse).toHaveBeenCalledWith(
+          expect.objectContaining({
+            actionId: 'launch-hang',
+            status: 'failed',
+            outputs: expect.objectContaining({
+              error: expect.stringContaining('Executor startup timed out after 100ms'),
+            }),
+          }),
+        );
+        expect(persistence.updateTask).toHaveBeenCalledWith(
+          'launch-hang',
+          expect.objectContaining({
+            execution: expect.objectContaining({
+              phase: 'launching',
+              launchCompletedAt: expect.any(Date),
+            }),
+          }),
+        );
+      } finally {
+        if (previousTimeout === undefined) {
+          delete process.env.INVOKER_EXECUTOR_START_TIMEOUT_MS;
+        } else {
+          process.env.INVOKER_EXECUTOR_START_TIMEOUT_MS = previousTimeout;
+        }
+        vi.useRealTimers();
+      }
+    });
+  });
+
   describe('baseBranch in WorkRequest', () => {
     it('includes workflow baseBranch in request inputs', async () => {
       let capturedRequest: any;
@@ -2239,7 +2330,7 @@ describe('TaskRunner', () => {
       );
     });
 
-    it('executeMergeNode treats persisted mergeMode=github like external_review (legacy DB / UI value)', async () => {
+    it('executeMergeNode handles persisted mergeMode=external_review', async () => {
       const allTasks = [
         makeTask({ id: 't1', config: { workflowId: 'wf-1' }, status: 'completed', execution: { branch: 'experiment/t1' } }),
       ];
@@ -2253,7 +2344,7 @@ describe('TaskRunner', () => {
         loadWorkflow: () => ({
           id: 'wf-1',
           onFinish: 'none',
-          mergeMode: 'github',
+          mergeMode: 'external_review',
           baseBranch: 'master',
           featureBranch: 'plan/feature',
           name: 'Test Workflow',
