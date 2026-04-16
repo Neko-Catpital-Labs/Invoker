@@ -39,7 +39,7 @@ export interface WorkRequestInputs {
   }>;
   /** Branch names from completed upstream dependencies to merge into the worktree. */
   upstreamBranches?: string[];
-  /** Workflow generation salt — changes content-addressable branch hashes on restart. */
+  /** Generation salt (workflow + task execution) — changes content-addressable branch hashes on recreate/restart. */
   salt?: string;
   /** Workflow base branch — worktrees are created from this ref instead of HEAD. */
   baseBranch?: string;
