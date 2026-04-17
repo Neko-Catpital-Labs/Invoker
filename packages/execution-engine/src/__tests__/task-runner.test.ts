@@ -4981,6 +4981,48 @@ describe('TaskRunner', () => {
         commit: 'abc1234',
       });
     });
+
+    it('commits approved merge-gate fixes locally and records a fixed integration anchor', async () => {
+      const repoDir = createTempWorkspace();
+      execSync('git init', { cwd: repoDir });
+      execSync('git config user.email "test@example.com"', { cwd: repoDir });
+      execSync('git config user.name "Test Runner"', { cwd: repoDir });
+      writeFileSync(join(repoDir, 'gate.txt'), 'BASE\n');
+      execSync('git add -A', { cwd: repoDir });
+      execSync('git commit -m "seed"', { cwd: repoDir });
+      writeFileSync(join(repoDir, 'gate.txt'), 'FIXED\n');
+
+      const task = makeTask({
+        id: '__merge__wf-1',
+        description: 'Merge gate',
+        config: { isMergeNode: true, workflowId: 'wf-1', executorType: 'worktree' },
+        execution: {
+          workspacePath: repoDir,
+          selectedAttemptId: 'attempt-merge-1',
+        },
+      });
+      const updateTask = vi.fn();
+      const updateAttempt = vi.fn();
+      const runner = new TaskRunner({
+        orchestrator: { getTask: () => task } as any,
+        persistence: { updateTask, updateAttempt } as any,
+        executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        cwd: repoDir,
+      });
+
+      await runner.commitApprovedFix(task);
+
+      const headSha = execSync('git rev-parse HEAD', { cwd: repoDir, encoding: 'utf8' }).trim();
+      const headValue = execSync('git show HEAD:gate.txt', { cwd: repoDir, encoding: 'utf8' }).trim();
+      expect(headValue).toBe('FIXED');
+      expect(updateTask).toHaveBeenCalledWith('__merge__wf-1', {
+        execution: expect.objectContaining({
+          fixedIntegrationSha: headSha,
+          fixedIntegrationSource: 'approved_fix',
+        }),
+      });
+      expect(updateAttempt).not.toHaveBeenCalled();
+    });
   });
 
   describe('merge commit messages include task descriptions', () => {

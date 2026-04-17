@@ -791,6 +791,14 @@ export class TaskRunner {
     return publishAfterFixImpl(this, task);
   }
 
+  async commitApprovedFix(task: TaskState): Promise<void> {
+    if (task.config.isMergeNode) {
+      await this.commitApprovedMergeFix(task);
+      return;
+    }
+    return this.publishApprovedFix(task);
+  }
+
   async publishApprovedFix(task: TaskState): Promise<void> {
     const workspacePath = task.execution.workspacePath?.trim();
     if (!workspacePath) {
@@ -853,6 +861,31 @@ export class TaskRunner {
 
   async buildMergeSummary(workflowId: string): Promise<string> {
     return buildMergeSummaryImpl(this, workflowId);
+  }
+
+  private async commitApprovedMergeFix(task: TaskState): Promise<void> {
+    const workspacePath = task.execution.workspacePath?.trim();
+    if (!workspacePath) {
+      throw new Error(`Task ${task.id} has no workspacePath for approved merge-fix commit`);
+    }
+
+    const status = (await this.execGitIn(['status', '--porcelain'], workspacePath)).trim();
+    if (status) {
+      await this.execGitIn(['add', '-A'], workspacePath);
+      await this.execGitIn(
+        ['commit', '-m', `Apply approved fix for ${task.description || task.id}`],
+        workspacePath,
+      );
+    }
+
+    const fixedIntegrationSha = (await this.execGitIn(['rev-parse', 'HEAD'], workspacePath)).trim();
+    this.persistence.updateTask(task.id, {
+      execution: {
+        fixedIntegrationSha,
+        fixedIntegrationRecordedAt: new Date(),
+        fixedIntegrationSource: 'approved_fix',
+      },
+    });
   }
 
   async runVisualProofCapture(baseBranch: string, featureBranch: string, slug: string, repoUrl?: string, parentRemote = 'upstream'): Promise<string | undefined> {
