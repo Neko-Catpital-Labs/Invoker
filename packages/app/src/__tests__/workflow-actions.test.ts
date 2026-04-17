@@ -185,16 +185,124 @@ describe('restartTask', () => {
 });
 
 describe('approveTask', () => {
-  it('calls orchestrator.approve and returns result', async () => {
+  it('calls orchestrator.approve and returns structured result', async () => {
     const tasks = [makeRunningTask()];
-    const orchestrator = { approve: vi.fn().mockResolvedValue(tasks) };
+    const approvedTask = makeTask({ status: 'awaiting_approval' });
+    const orchestrator = {
+      approve: vi.fn().mockResolvedValue(tasks),
+      getTask: vi.fn().mockReturnValue(approvedTask),
+      resumeTaskAfterFixApproval: vi.fn(),
+    };
 
     const result = await approveTask('task-a', {
       orchestrator: orchestrator as unknown as Orchestrator,
     });
 
     expect(orchestrator.approve).toHaveBeenCalledWith('task-a');
-    expect(result).toBe(tasks);
+    expect(result).toEqual({
+      approvedTask,
+      fixedTask: false,
+      started: tasks,
+    });
+  });
+
+  it('continues post-fix merge approvals through publishAfterFix', async () => {
+    const started = [
+      makeRunningTask({ id: 'merge-a', config: { workflowId: 'wf-1', isMergeNode: true } }),
+    ];
+    const orchestrator = {
+      approve: vi.fn().mockResolvedValue(started),
+      getTask: vi.fn().mockReturnValue(makeTask({
+        id: 'merge-a',
+        status: 'awaiting_approval',
+        config: { workflowId: 'wf-1', isMergeNode: true },
+        execution: { pendingFixError: 'fix pending' },
+      })),
+      resumeTaskAfterFixApproval: vi.fn().mockResolvedValue(started),
+    };
+    const taskExecutor = {
+      commitApprovedFix: vi.fn(),
+      publishAfterFix: vi.fn(),
+      executeTasks: vi.fn(),
+    };
+
+    const result = await approveTask('merge-a', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+    });
+
+    expect(result.fixedTask).toBe(true);
+    expect(taskExecutor.commitApprovedFix).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'merge-a' }),
+    );
+    expect(orchestrator.resumeTaskAfterFixApproval).toHaveBeenCalledWith('merge-a');
+    expect(orchestrator.approve).not.toHaveBeenCalled();
+    expect(taskExecutor.publishAfterFix).toHaveBeenCalledWith(started[0]);
+    expect(taskExecutor.executeTasks).not.toHaveBeenCalled();
+  });
+
+  it('commits approved fixes before completing non-merge approvals', async () => {
+    const started = [makeRunningTask({ id: 'task-a', config: { workflowId: 'wf-1' } })];
+    const approvedTask = makeTask({
+      id: 'task-a',
+      status: 'awaiting_approval',
+      config: { workflowId: 'wf-1' },
+      execution: { pendingFixError: 'plain failure', workspacePath: '/tmp/task-a', branch: 'task-a' },
+    });
+    const orchestrator = {
+      approve: vi.fn().mockResolvedValue(started),
+      getTask: vi.fn().mockReturnValue(approvedTask),
+      resumeTaskAfterFixApproval: vi.fn(),
+    };
+    const taskExecutor = {
+      commitApprovedFix: vi.fn(),
+      publishAfterFix: vi.fn(),
+      executeTasks: vi.fn(),
+    };
+
+    await approveTask('task-a', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+    });
+
+    expect(taskExecutor.commitApprovedFix).toHaveBeenCalledWith(approvedTask);
+    expect(orchestrator.approve).toHaveBeenCalledWith('task-a');
+    expect(taskExecutor.executeTasks).toHaveBeenCalledWith(started);
+    expect(taskExecutor.publishAfterFix).not.toHaveBeenCalled();
+  });
+
+  it('commits then resumes merge-conflict fixed tasks', async () => {
+    const started = [makeRunningTask({ id: 'task-a', config: { workflowId: 'wf-1' } })];
+    const approvedTask = makeTask({
+      id: 'task-a',
+      status: 'awaiting_approval',
+      config: { workflowId: 'wf-1' },
+      execution: {
+        pendingFixError: JSON.stringify({ type: 'merge_conflict', conflictFiles: ['a.ts'] }),
+        workspacePath: '/tmp/task-a',
+        branch: 'task-a',
+      },
+    });
+    const orchestrator = {
+      approve: vi.fn(),
+      getTask: vi.fn().mockReturnValue(approvedTask),
+      resumeTaskAfterFixApproval: vi.fn().mockResolvedValue(started),
+    };
+    const taskExecutor = {
+      commitApprovedFix: vi.fn(),
+      publishAfterFix: vi.fn(),
+      executeTasks: vi.fn(),
+    };
+
+    await approveTask('task-a', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+    });
+
+    expect(taskExecutor.commitApprovedFix).toHaveBeenCalledWith(approvedTask);
+    expect(orchestrator.resumeTaskAfterFixApproval).toHaveBeenCalledWith('task-a');
+    expect(orchestrator.approve).not.toHaveBeenCalled();
+    expect(taskExecutor.executeTasks).toHaveBeenCalledWith(started);
   });
 });
 
@@ -257,6 +365,7 @@ describe('finalizeAppliedFix', () => {
       approve: vi.fn(),
     };
     const taskExecutor = {
+      commitApprovedFix: vi.fn(),
       publishAfterFix: vi.fn(),
       executeTasks: vi.fn(),
     };
@@ -279,8 +388,15 @@ describe('finalizeAppliedFix', () => {
     const orchestrator = {
       setFixAwaitingApproval: vi.fn(),
       approve: vi.fn().mockResolvedValue(started),
+      getTask: vi.fn().mockReturnValue(makeTask({
+        id: 'task-a',
+        status: 'awaiting_approval',
+        config: { workflowId: 'wf-1' },
+        execution: { pendingFixError: 'saved-error', workspacePath: '/tmp/task-a', branch: 'task-a' },
+      })),
     };
     const taskExecutor = {
+      commitApprovedFix: vi.fn(),
       publishAfterFix: vi.fn(),
       executeTasks: vi.fn(),
     };
@@ -293,6 +409,9 @@ describe('finalizeAppliedFix', () => {
 
     expect(result).toEqual({ autoApproved: true, started });
     expect(orchestrator.approve).toHaveBeenCalledWith('task-a');
+    expect(taskExecutor.commitApprovedFix).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'task-a' }),
+    );
     expect(taskExecutor.executeTasks).toHaveBeenCalledWith(started);
     expect(taskExecutor.publishAfterFix).not.toHaveBeenCalled();
   });
@@ -304,8 +423,16 @@ describe('finalizeAppliedFix', () => {
     const orchestrator = {
       setFixAwaitingApproval: vi.fn(),
       approve: vi.fn().mockResolvedValue(started),
+      getTask: vi.fn().mockReturnValue(makeTask({
+        id: 'merge-a',
+        status: 'awaiting_approval',
+        config: { workflowId: 'wf-1', isMergeNode: true },
+        execution: { pendingFixError: 'saved-error', workspacePath: '/tmp/merge-a' },
+      })),
+      resumeTaskAfterFixApproval: vi.fn().mockResolvedValue(started),
     };
     const taskExecutor = {
+      commitApprovedFix: vi.fn(),
       publishAfterFix: vi.fn(),
       executeTasks: vi.fn(),
     };
@@ -316,6 +443,9 @@ describe('finalizeAppliedFix', () => {
       autoApproveAIFixes: true,
     });
 
+    expect(taskExecutor.commitApprovedFix).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'merge-a' }),
+    );
     expect(taskExecutor.publishAfterFix).toHaveBeenCalledWith(started[0]);
     expect(taskExecutor.executeTasks).not.toHaveBeenCalled();
   });
@@ -508,6 +638,12 @@ describe('autoFixOnFailure', () => {
       }))
       .mockReturnValueOnce(makeTask({
         id: 'merge-a',
+        status: 'awaiting_approval',
+        config: { workflowId: 'wf-1', isMergeNode: true },
+        execution: { autoFixAttempts: 1, workspacePath: '/tmp/merge-a', pendingFixError: 'boom' },
+      }))
+      .mockReturnValueOnce(makeTask({
+        id: 'merge-a',
         status: 'failed',
         config: { workflowId: 'wf-1', isMergeNode: true },
         execution: { autoFixAttempts: 1, workspacePath: '/tmp/merge-a', error: 'Post-fix PR prep failed: conflict' },
@@ -518,11 +654,17 @@ describe('autoFixOnFailure', () => {
         config: { workflowId: 'wf-1', isMergeNode: true },
         execution: { autoFixAttempts: 1, workspacePath: '/tmp/merge-a' },
       }))
+      .mockReturnValueOnce(makeTask({
+        id: 'merge-a',
+        status: 'awaiting_approval',
+        config: { workflowId: 'wf-1', isMergeNode: true },
+        execution: { autoFixAttempts: 2, workspacePath: '/tmp/merge-a', pendingFixError: 'boom' },
+      }))
       .mockReturnValue(makeTask({
         id: 'merge-a',
         status: 'awaiting_approval',
         config: { workflowId: 'wf-1', isMergeNode: true },
-        execution: { autoFixAttempts: 2, workspacePath: '/tmp/merge-a' },
+        execution: { autoFixAttempts: 2, workspacePath: '/tmp/merge-a', pendingFixError: 'boom' },
       }));
     const shouldAutoFix = vi
       .fn()
@@ -538,6 +680,7 @@ describe('autoFixOnFailure', () => {
       restartTask: vi.fn(() => []),
       setFixAwaitingApproval: vi.fn(),
       approve: vi.fn().mockResolvedValue(started),
+      resumeTaskAfterFixApproval: vi.fn().mockResolvedValue(started),
       revertConflictResolution: vi.fn(),
     };
     const persistence = {
@@ -549,6 +692,7 @@ describe('autoFixOnFailure', () => {
     const taskExecutor = {
       fixWithAgent: vi.fn().mockResolvedValue(undefined),
       resolveConflict: vi.fn(),
+      commitApprovedFix: vi.fn().mockResolvedValue(undefined),
       execGitIn: vi.fn().mockResolvedValue('abc123'),
       publishAfterFix: vi
         .fn()

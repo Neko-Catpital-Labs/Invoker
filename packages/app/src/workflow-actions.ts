@@ -27,6 +27,12 @@ export interface ActionDeps {
   autoApproveAIFixes?: boolean;
 }
 
+export interface ApproveTaskResult {
+  approvedTask?: TaskState;
+  started: TaskState[];
+  fixedTask: boolean;
+}
+
 // ── Actions ──────────────────────────────────────────────────
 
 export function bumpGenerationAndRecreate(
@@ -45,9 +51,42 @@ export function bumpGenerationAndRecreate(
 
 export async function approveTask(
   taskId: string,
-  deps: Pick<ActionDeps, 'orchestrator'>,
-): Promise<TaskState[]> {
-  return deps.orchestrator.approve(taskId);
+  deps: Pick<ActionDeps, 'orchestrator'> & {
+    taskExecutor?: TaskRunner;
+    approve?: (taskId: string) => Promise<TaskState[]>;
+    resumeAfterFixApproval?: (taskId: string) => Promise<TaskState[]>;
+  },
+): Promise<ApproveTaskResult> {
+  const task = deps.orchestrator.getTask?.(taskId);
+  const fixedTask = task?.execution.pendingFixError !== undefined;
+  if (fixedTask && task && deps.taskExecutor) {
+    await deps.taskExecutor.commitApprovedFix(task);
+  }
+
+  const shouldResume =
+    fixedTask &&
+    task !== undefined &&
+    (task.config.isMergeNode || isMergeConflictError(task.execution.pendingFixError ?? ''));
+  const started = await (
+    shouldResume
+      ? (deps.resumeAfterFixApproval ?? deps.orchestrator.resumeTaskAfterFixApproval.bind(deps.orchestrator))
+      : (deps.approve ?? deps.orchestrator.approve.bind(deps.orchestrator))
+  )(taskId);
+  const postFixMerge = started.filter(
+    (t) => t.status === 'running' && t.config.isMergeNode && t.id === taskId,
+  );
+  if (deps.taskExecutor) {
+    for (const task of postFixMerge) {
+      await deps.taskExecutor.publishAfterFix(task);
+    }
+    const runnable = started.filter(
+      (t) => t.status === 'running' && !(t.config.isMergeNode && t.id === taskId),
+    );
+    if (runnable.length > 0) {
+      await deps.taskExecutor.executeTasks(runnable);
+    }
+  }
+  return { approvedTask: task, started, fixedTask };
 }
 
 /**
@@ -251,19 +290,7 @@ export async function finalizeAppliedFix(
     return { autoApproved: false, started: [] };
   }
 
-  const started = await deps.orchestrator.approve(taskId);
-  const postFixMerge = started.filter(
-    (t) => t.status === 'running' && t.config.isMergeNode && t.id === taskId,
-  );
-  for (const task of postFixMerge) {
-    await deps.taskExecutor.publishAfterFix(task);
-  }
-  const runnable = started.filter(
-    (t) => t.status === 'running' && !(t.config.isMergeNode && t.id === taskId),
-  );
-  if (runnable.length > 0) {
-    await deps.taskExecutor.executeTasks(runnable);
-  }
+  const { started } = await approveTask(taskId, deps);
   return { autoApproved: true, started };
 }
 

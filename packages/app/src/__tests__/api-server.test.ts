@@ -466,6 +466,38 @@ describe('POST /api/tasks/:id/approve', () => {
     expect(res.status).toBe(400);
     expect(res.body.error).toBe('not awaiting approval');
   });
+
+  it('uses approveTaskAction when provided', async () => {
+    const approveTaskAction = vi.fn().mockResolvedValue(undefined);
+    const isolatedApi = startApiServer({
+      orchestrator: mocks.orchestrator as any,
+      persistence: mocks.persistence as any,
+      executorRegistry: mocks.executorRegistry as any,
+      taskExecutor: mocks.taskExecutor as any,
+      approveTaskAction,
+      cancelTask: mocks.cancelTask,
+      cancelWorkflow: mocks.cancelWorkflow,
+      killRunningTask: mocks.killRunningTask,
+    });
+    await new Promise<void>((resolve) => {
+      if (isolatedApi.server.listening) {
+        resolve();
+      } else {
+        isolatedApi.server.on('listening', resolve);
+      }
+    });
+    const addr = isolatedApi.server.address();
+    const isolatedPort = typeof addr === 'object' && addr ? addr.port : isolatedApi.port;
+
+    try {
+      const res = await request(isolatedPort, 'POST', '/api/tasks/task-1/approve');
+      expect(res.status).toBe(200);
+      expect(approveTaskAction).toHaveBeenCalledWith('task-1');
+      expect(mocks.orchestrator.approve).not.toHaveBeenCalled();
+    } finally {
+      await isolatedApi.close();
+    }
+  });
 });
 
 describe('POST /api/tasks/:id/reject', () => {

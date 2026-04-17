@@ -30,6 +30,7 @@ import { loadConfig, resolveSecretsFilePath, type InvokerConfig } from './config
 import { backupPlan } from './plan-backup.js';
 import { startApiServer, type ApiServerDeps } from './api-server.js';
 import {
+  approveTask,
   rebaseAndRetry,
   resolveConflictAction,
   recreateWorkflow as sharedRecreateWorkflow,
@@ -73,6 +74,7 @@ export interface HeadlessDeps {
   wireSlackBot: (deps: {
     executor: TaskRunner;
     logFn: (source: string, level: string, message: string) => void;
+    approveTaskAction?: (taskId: string) => Promise<void>;
     onPlanLoaded?: () => void;
   }) => Promise<any>;
   getUiPerfStats?: () => Record<string, unknown>;
@@ -122,6 +124,30 @@ function buildHeadlessApiCancelHooks(
       }
       return cmdResult.data;
     },
+  };
+}
+
+function buildHeadlessApproveAction(
+  deps: Pick<HeadlessDeps, 'orchestrator' | 'commandService'>,
+  taskExecutor: TaskRunner,
+): (taskId: string) => Promise<void> {
+  return async (taskId: string) => {
+    await approveTask(taskId, {
+      orchestrator: deps.orchestrator,
+      taskExecutor,
+      approve: async (approvedTaskId) => {
+        const envelope = makeEnvelope('approve', 'headless', 'task', { taskId: approvedTaskId });
+        const result = await deps.commandService.approve(envelope);
+        if (!result.ok) throw new Error(result.error.message);
+        return result.data;
+      },
+      resumeAfterFixApproval: async (approvedTaskId) => {
+        const envelope = makeEnvelope('approve', 'headless', 'task', { taskId: approvedTaskId });
+        const result = await deps.commandService.resumeTaskAfterFixApproval(envelope);
+        if (!result.ok) throw new Error(result.error.message);
+        return result.data;
+      },
+    });
   };
 }
 
@@ -236,14 +262,10 @@ export function wireHeadlessAutoFix(
 
 export function wireHeadlessApproveHook(deps: HeadlessDeps, te: TaskRunner): void {
   deps.orchestrator.setBeforeApproveHook(async (task) => {
-    if (task.config.isMergeNode && task.config.workflowId) {
+    if (task.config.isMergeNode && task.config.workflowId && task.execution.pendingFixError === undefined) {
       const workflow = deps.persistence.loadWorkflow(task.config.workflowId);
       if (workflow?.mergeMode === "external_review") return;
       await te.approveMerge(task.config.workflowId);
-      return;
-    }
-    if (!task.config.isMergeNode && task.execution.pendingFixError !== undefined) {
-      await te.publishApprovedFix(task);
     }
   });
 }
@@ -803,6 +825,7 @@ async function headlessRun(
   const taskExecutor = createHeadlessExecutor(deps);
   wireHeadlessApproveHook(deps, taskExecutor);
   const autoFix = wireHeadlessAutoFix(deps, taskExecutor);
+  const approveTaskAction = buildHeadlessApproveAction(deps, taskExecutor);
 
   const api = startApiServer({
     logger: deps.logger,
@@ -811,6 +834,7 @@ async function headlessRun(
     executorRegistry: deps.executorRegistry,
     taskExecutor,
     autoApproveAIFixes: deps.invokerConfig.autoApproveAIFixes,
+    approveTaskAction,
     ...buildHeadlessApiCancelHooks(deps, taskExecutor),
   });
 
@@ -871,6 +895,7 @@ async function headlessResume(
   const taskExecutor = createHeadlessExecutor(deps);
   wireHeadlessApproveHook(deps, taskExecutor);
   const autoFix = wireHeadlessAutoFix(deps, taskExecutor);
+  const approveTaskAction = buildHeadlessApproveAction(deps, taskExecutor);
 
   const api = startApiServer({
     logger: deps.logger,
@@ -879,6 +904,7 @@ async function headlessResume(
     executorRegistry: deps.executorRegistry,
     taskExecutor,
     autoApproveAIFixes: deps.invokerConfig.autoApproveAIFixes,
+    approveTaskAction,
     ...buildHeadlessApiCancelHooks(deps, taskExecutor),
   });
 
@@ -928,20 +954,15 @@ async function headlessApprove(taskId: string, deps: HeadlessDeps): Promise<void
   const te = createHeadlessExecutor(deps);
   wireHeadlessApproveHook(deps, te);
   const autoFix = wireHeadlessAutoFix(deps, te);
-  const envelope = makeEnvelope('approve', 'headless', 'task', { taskId });
-  const result = await deps.commandService.approve(envelope);
-  if (!result.ok) throw new Error(result.error.message);
-  const started = result.data;
-  const runnable = started.filter((task) => task.status === 'running');
-  if (runnable.length > 0) {
-    await te.executeTasks(runnable);
-  }
-  const postFixMerge = started.filter(t => t.status === 'running' && t.config.isMergeNode && t.id === taskId);
-  for (const task of postFixMerge) {
-    await te.publishAfterFix(task);
-  }
+  const approveTaskAction = buildHeadlessApproveAction(deps, te);
+  const beforeStatus = deps.orchestrator.getWorkflowStatus(restored.workflowId);
+  await approveTaskAction(taskId);
   process.stdout.write(`Approved task: ${taskId}\n`);
-  if (runnable.length === 0) {
+  const afterStatus = deps.orchestrator.getWorkflowStatus(restored.workflowId);
+  const resumedWork =
+    afterStatus.running > beforeStatus.running
+    || afterStatus.pending < beforeStatus.pending;
+  if (!resumedWork) {
     autoFix.unsubscribe();
     return;
   }
@@ -1708,6 +1729,7 @@ async function headlessSlack(deps: HeadlessDeps): Promise<void> {
     },
   });
   wireHeadlessApproveHook(deps, taskExecutor);
+  const approveTaskAction = buildHeadlessApproveAction(deps, taskExecutor);
 
   const api = startApiServer({
     logger: deps.logger,
@@ -1715,6 +1737,7 @@ async function headlessSlack(deps: HeadlessDeps): Promise<void> {
     persistence,
     executorRegistry: deps.executorRegistry,
     taskExecutor,
+    approveTaskAction,
     ...buildHeadlessApiCancelHooks(deps, taskExecutor),
   });
 

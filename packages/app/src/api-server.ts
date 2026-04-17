@@ -37,6 +37,7 @@ import type { Orchestrator } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import type { ExecutorRegistry, TaskRunner } from '@invoker/execution-engine';
 import {
+  approveTask as sharedApproveTask,
   recreateWorkflow as sharedRecreateWorkflow,
   cancelWorkflow as sharedCancelWorkflow,
   restartTask as sharedRestartTask,
@@ -58,6 +59,7 @@ export interface ApiServerDeps {
   executorRegistry: ExecutorRegistry;
   taskExecutor: TaskRunner;
   autoApproveAIFixes?: boolean;
+  approveTaskAction?: (taskId: string) => Promise<void>;
   killRunningTask?: (taskId: string) => Promise<void>;
   cancelTask?: (taskId: string) => Promise<{ cancelled: string[]; runningCancelled: string[] }>;
   cancelWorkflow?: (workflowId: string) => Promise<{ cancelled: string[]; runningCancelled: string[] }>;
@@ -128,6 +130,7 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
     executorRegistry,
     taskExecutor,
     autoApproveAIFixes,
+    approveTaskAction,
     killRunningTask,
     cancelTask,
     cancelWorkflow,
@@ -251,15 +254,14 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
       if (method === 'POST' && approveMatch) {
         const taskId = decodeURIComponent(approveMatch[1]);
         try {
-          const started = await orchestrator.approve(taskId);
-          const postFixMerge = started.filter(t => t.status === 'running' && t.config.isMergeNode && t.id === taskId);
-          for (const task of postFixMerge) {
-            taskExecutor.publishAfterFix(task).catch(err => {
-              apiLogger?.error(`approve: publishAfterFix failed for "${task.id}": ${err}`, { module: 'api' });
+          if (approveTaskAction) {
+            await approveTaskAction(taskId);
+          } else {
+            await sharedApproveTask(taskId, {
+              orchestrator,
+              taskExecutor,
             });
           }
-          const runnable = started.filter(t => t.status === 'running' && !(t.config.isMergeNode && t.id === taskId));
-          if (runnable.length > 0) await taskExecutor.executeTasks(runnable);
           json(res, 200, { ok: true, taskId, action: 'approved' });
         } catch (err) {
           json(res, 400, { error: err instanceof Error ? err.message : String(err) });
