@@ -36,6 +36,7 @@ invoker_e2e_run_headless cancel e2e-g2210-taskA
 # stale in-memory orchestrator can race the cancellation on slower CI runners.
 kill "$BG_PID" 2>/dev/null || true
 wait "$BG_PID" 2>/dev/null || true
+invoker_e2e_kill_owned_headless_processes
 
 echo "==> case 2.10: wait for task A to reach failed after cancel"
 if ! invoker_e2e_wait_task_status e2e-g2210-taskA failed 180; then

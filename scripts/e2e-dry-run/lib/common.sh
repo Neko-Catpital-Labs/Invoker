@@ -73,7 +73,7 @@ invoker_e2e_init() {
   export PATH="$stubdir:$PATH"
 }
 
-invoker_e2e_cleanup() {
+invoker_e2e_kill_owned_headless_processes() {
   # Kill only the headless processes that belong to this test run.
   # Scope by this case's INVOKER_DB_DIR/INVOKER_API_PORT so one case's EXIT trap
   # cannot SIGTERM another concurrently-running case.
@@ -100,6 +100,10 @@ invoker_e2e_cleanup() {
       kill "$pid" 2>/dev/null || true
     done < <(pgrep -f '(/electron|packages/app/dist/main.js|headless-client.js|run.sh --headless)' 2>/dev/null || true)
   fi
+}
+
+invoker_e2e_cleanup() {
+  invoker_e2e_kill_owned_headless_processes
   # Clean up worktrees created during the test.
   git -C "$INVOKER_E2E_REPO_ROOT" worktree prune 2>/dev/null || true
   rm -rf "${INVOKER_DB_DIR:-}" "${INVOKER_E2E_MARKER_ROOT:-}" "${INVOKER_E2E_STUB_DIR:-}" 2>/dev/null || true
