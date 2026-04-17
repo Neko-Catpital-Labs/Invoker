@@ -32,13 +32,16 @@ done
 echo "==> case 2.10: cancel task A"
 invoker_e2e_run_headless cancel e2e-g2210-taskA
 
+# Stop the background submit-plan process before polling state; otherwise its
+# stale in-memory orchestrator can race the cancellation on slower CI runners.
+kill "$BG_PID" 2>/dev/null || true
+wait "$BG_PID" 2>/dev/null || true
+
 echo "==> case 2.10: wait for task A to reach failed after cancel"
 if ! invoker_e2e_wait_task_status e2e-g2210-taskA failed 180; then
   STA=$(invoker_e2e_task_status e2e-g2210-taskA 2>/dev/null || true)
   echo "FAIL case 2.10: expected A=failed, got A='$STA'"
   invoker_e2e_run_headless status 2>&1 || true
-  kill "$BG_PID" 2>/dev/null || true
-  wait "$BG_PID" 2>/dev/null || true
   exit 1
 fi
 
@@ -47,13 +50,7 @@ STB=$(invoker_e2e_task_status e2e-g2210-taskB)
 if [ "$STB" != "failed" ] && [ "$STB" != "pending" ]; then
   echo "FAIL case 2.10: expected B=failed|pending, got B='$STB'"
   invoker_e2e_run_headless status 2>&1 || true
-  kill "$BG_PID" 2>/dev/null || true
-  wait "$BG_PID" 2>/dev/null || true
   exit 1
 fi
-
-# Reap background submit-plan process (may already have exited after cancel).
-kill "$BG_PID" 2>/dev/null || true
-wait "$BG_PID" 2>/dev/null || true
 
 echo "PASS case 2.10 (cancel A → A=failed, B=$STB)"

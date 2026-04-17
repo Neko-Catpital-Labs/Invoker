@@ -60,13 +60,13 @@ if ! grep -Fq "Processing workflow: $WF_ID" "$OUT_FILE"; then
   exit 1
 fi
 
-if ! rg -q 'standalone mode detected, forcing --parallel 1' "$OUT_FILE"; then
+if ! grep -Fq 'standalone mode detected, forcing --parallel 1' "$OUT_FILE"; then
   echo "FAIL case 2.14: expected standalone parallelism guard log"
   sed -n '1,160p' "$OUT_FILE" || true
   exit 1
 fi
 
-if ! rg -q 'standalone mode detected, disabling per-command timeout' "$OUT_FILE"; then
+if ! grep -Fq 'standalone mode detected, disabling per-command timeout' "$OUT_FILE"; then
   echo "FAIL case 2.14: expected standalone timeout guard log"
   sed -n '1,160p' "$OUT_FILE" || true
   exit 1
