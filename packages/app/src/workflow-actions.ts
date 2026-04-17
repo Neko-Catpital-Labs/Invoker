@@ -320,9 +320,8 @@ function formatAutoFixDiagnostics(err: unknown): string | undefined {
 
 type AutoFixAgentSelection = {
   selectedAgent: string;
-  selectedAgentSource: 'config' | 'task' | 'default';
+  selectedAgentSource: 'config' | 'default';
   configuredAutoFixAgent?: string;
-  taskExecutionAgent?: string;
   fallbackChain: string;
 };
 
@@ -330,34 +329,21 @@ type AutoFixPostRouteStrategy = 'rerun_task' | 'resume_from_fixed_tip';
 
 function resolveAutoFixAgent(
   configuredAutoFixAgent: string | undefined,
-  taskExecutionAgent: string | undefined,
 ): AutoFixAgentSelection {
   const configAgent = configuredAutoFixAgent?.trim() || undefined;
-  const taskAgent = taskExecutionAgent?.trim() || undefined;
   if (configAgent) {
     return {
       selectedAgent: configAgent,
       selectedAgentSource: 'config',
       configuredAutoFixAgent: configAgent,
-      taskExecutionAgent: taskAgent,
-      fallbackChain: 'config->task->default',
-    };
-  }
-  if (taskAgent) {
-    return {
-      selectedAgent: taskAgent,
-      selectedAgentSource: 'task',
-      configuredAutoFixAgent: undefined,
-      taskExecutionAgent: taskAgent,
-      fallbackChain: 'config(empty)->task->default',
+      fallbackChain: 'config->default',
     };
   }
   return {
     selectedAgent: 'claude',
     selectedAgentSource: 'default',
     configuredAutoFixAgent: undefined,
-    taskExecutionAgent: undefined,
-    fallbackChain: 'config(empty)->task(empty)->default',
+    fallbackChain: 'config(empty)->default',
   };
 }
 
@@ -443,10 +429,7 @@ export async function autoFixOnFailure(
   persistence.updateTask(taskId, { execution: { autoFixAttempts: attempts } });
 
   const { savedError } = orchestrator.beginConflictResolution(taskId);
-  const agentSelection = resolveAutoFixAgent(
-    deps.getAutoFixAgent?.(),
-    task.config.executionAgent,
-  );
+  const agentSelection = resolveAutoFixAgent(deps.getAutoFixAgent?.());
   persistence.logEvent?.(taskId, 'debug.auto-fix', {
     phase: 'auto-fix-begin-conflict-resolution',
     savedErrorLength: savedError.length,
@@ -456,7 +439,6 @@ export async function autoFixOnFailure(
     persistence.logEvent?.(taskId, 'debug.auto-fix', {
       phase: 'auto-fix-agent-selected',
       configuredAutoFixAgent: agentSelection.configuredAutoFixAgent ?? null,
-      taskExecutionAgent: agentSelection.taskExecutionAgent ?? null,
       selectedAgent: agentSelection.selectedAgent,
       selectedAgentSource: agentSelection.selectedAgentSource,
       fallbackChain: agentSelection.fallbackChain,
@@ -476,7 +458,6 @@ export async function autoFixOnFailure(
       agent: agentSelection.selectedAgent,
       selectedAgentSource: agentSelection.selectedAgentSource,
       configuredAutoFixAgent: agentSelection.configuredAutoFixAgent ?? null,
-      taskExecutionAgent: agentSelection.taskExecutionAgent ?? null,
       fallbackChain: agentSelection.fallbackChain,
       outputLength: output.length,
     });
@@ -535,7 +516,6 @@ export async function autoFixOnFailure(
       errorType: err instanceof Error ? err.name : typeof err,
       errorMessage: msg,
       configuredAutoFixAgent: agentSelection.configuredAutoFixAgent ?? null,
-      taskExecutionAgent: agentSelection.taskExecutionAgent ?? null,
       selectedAgent: agentSelection.selectedAgent,
       selectedAgentSource: agentSelection.selectedAgentSource,
       fallbackChain: agentSelection.fallbackChain,

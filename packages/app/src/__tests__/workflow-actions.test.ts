@@ -628,7 +628,7 @@ describe('autoFixOnFailure', () => {
     );
   });
 
-  it('uses task executionAgent when config.autoFixAgent is empty', async () => {
+  it('ignores task executionAgent when config.autoFixAgent is empty and uses default agent', async () => {
     const started = [makeRunningTask({ id: 'task-a', status: 'running' })];
     const logEvent = vi.fn();
     const orchestrator = {
@@ -662,14 +662,14 @@ describe('autoFixOnFailure', () => {
       getAutoFixAgent: () => '   ',
     });
 
-    expect(taskExecutor.fixWithAgent).toHaveBeenCalledWith('task-a', 'test output', 'codex', 'boom');
+    expect(taskExecutor.fixWithAgent).toHaveBeenCalledWith('task-a', 'test output', 'claude', 'boom');
     expect(logEvent).toHaveBeenCalledWith(
       'task-a',
       'debug.auto-fix',
       expect.objectContaining({
         phase: 'auto-fix-agent-selected',
-        selectedAgent: 'codex',
-        selectedAgentSource: 'task',
+        selectedAgent: 'claude',
+        selectedAgentSource: 'default',
       }),
     );
   });

@@ -8,6 +8,13 @@
 import type { ExecutionAgent, PlanningAgent } from './agent.js';
 import type { SessionDriver } from './session-driver.js';
 
+function normalizeExecutionAgentName(name: string | null | undefined): string | undefined {
+  const trimmed = name?.trim();
+  if (!trimmed) return undefined;
+  if (trimmed === 'null' || trimmed === 'undefined') return undefined;
+  return trimmed;
+}
+
 export class AgentRegistry {
   private executionAgents = new Map<string, ExecutionAgent>();
   private planningAgents = new Map<string, PlanningAgent>();
@@ -28,14 +35,18 @@ export class AgentRegistry {
     this.planningAgents.set(agent.name, agent);
   }
 
-  get(name: string): ExecutionAgent | undefined {
-    return this.executionAgents.get(name);
+  get(name: string | null | undefined): ExecutionAgent | undefined {
+    const normalized = normalizeExecutionAgentName(name);
+    if (!normalized) return this.executionAgents.get('claude');
+    return this.executionAgents.get(normalized);
   }
 
-  getOrThrow(name: string): ExecutionAgent {
-    const agent = this.executionAgents.get(name);
+  getOrThrow(name: string | null | undefined): ExecutionAgent {
+    const normalized = normalizeExecutionAgentName(name);
+    const resolvedName = normalized ?? 'claude';
+    const agent = this.executionAgents.get(resolvedName);
     if (!agent) {
-      throw new Error(`No execution agent registered with name "${name}". Available: [${[...this.executionAgents.keys()].join(', ')}]`);
+      throw new Error(`No execution agent registered with name "${resolvedName}". Available: [${[...this.executionAgents.keys()].join(', ')}]`);
     }
     return agent;
   }
