@@ -47,21 +47,9 @@ function canonicalMergeMode(mode: string | undefined): 'manual' | 'automatic' | 
 async function resolveBaseCheckoutRef(
   host: MergeRunnerHost,
   baseBranch: string,
-  preferUpstream: boolean,
-  parentRemote: string,
+  _preferOriginTracking: boolean,
 ): Promise<string> {
-  const parentPrefix = `${parentRemote}/`;
-  const shortBase = baseBranch.startsWith(parentPrefix)
-    ? baseBranch.slice(parentPrefix.length)
-    : normalizeBranchForGithubCli(baseBranch);
-  if (!preferUpstream) return shortBase;
-  try {
-    const parentRemoteUrl = (await host.execGitReadonly(['remote', 'get-url', parentRemote])).trim();
-    if (parentRemoteUrl) return `${parentRemote}/${shortBase}`;
-  } catch {
-    /* configured parent remote missing */
-  }
-  return shortBase;
+  return normalizeBranchForGithubCli(baseBranch);
 }
 
 /**
@@ -160,14 +148,14 @@ export interface MergeRunnerHost {
   createMergeWorktree(ref: string, label: string, repoUrl?: string): Promise<string>;
   removeMergeWorktree(dir: string): Promise<void>;
   execGh(args: string[], cwd?: string): Promise<string>;
-  execPr(baseBranch: string, featureBranch: string, title: string, body?: string, cwd?: string, parentRemote?: string): Promise<string>;
+  execPr(baseBranch: string, featureBranch: string, title: string, body?: string, cwd?: string): Promise<string>;
   detectDefaultBranch(): Promise<string>;
   gitLogMessage(commitHash: string, cwd?: string): Promise<string>;
   gitDiffStat(branch: string, cwd?: string): Promise<string>;
   startPrPolling(taskId: string, reviewId: string, workflowId: string): void;
   executeTasks(tasks: TaskState[]): Promise<void>;
   buildMergeSummary(workflowId: string): Promise<string>;
-  runVisualProofCapture?(baseBranch: string, featureBranch: string, slug: string, repoUrl?: string, parentRemote?: string): Promise<string | undefined>;
+  runVisualProofCapture?(baseBranch: string, featureBranch: string, slug: string, repoUrl?: string): Promise<string | undefined>;
   /** Pool mirror path for `repoUrl`, when worktree executor + repo pool are available. */
   ensureRepoMirrorPath?(repoUrl: string): Promise<string | undefined>;
   consolidateAndMerge(
@@ -181,7 +169,6 @@ export interface MergeRunnerHost {
     visualProof?: boolean,
     baseCheckoutRef?: string,
     mergeNodeTaskId?: string,
-    parentRemote?: string,
   ): Promise<string | undefined>;
 }
 
@@ -302,7 +289,6 @@ export async function executeMergeNodeImpl(
   const onFinish = workflow?.onFinish ?? 'none';
   const mergeMode = canonicalMergeMode(workflow?.mergeMode);
   const baseBranch = workflow?.baseBranch ?? host.defaultBranch ?? await host.detectDefaultBranch();
-  const parentRemote = workflow?.parentRemote ?? 'upstream';
   const featureBranch = workflow?.featureBranch;
   const visualProof = workflow?.visualProof ?? false;
 
@@ -343,7 +329,6 @@ export async function executeMergeNodeImpl(
       host,
       baseBranch,
       mergeMode === 'external_review' || onFinish === 'pull_request',
-      parentRemote,
     );
     gateWorkspacePath = await host.createMergeWorktree(
       baseCheckoutRef,
@@ -364,7 +349,6 @@ export async function executeMergeNodeImpl(
         host,
         baseBranch,
         mergeMode === 'external_review' || onFinish === 'pull_request',
-        parentRemote,
       );
       reviewUrl = await host.consolidateAndMerge(
         effectiveOnFinish,
@@ -377,7 +361,6 @@ export async function executeMergeNodeImpl(
         visualProof,
         baseCheckoutRef,
         task.id,
-        parentRemote,
       );
       if (mergeMode === 'manual') {
         mergeTrace('GATE_WS_PATH_MANUAL_AWAIT', { taskId: task.id, gateWorkspacePath: gateWorkspacePath ?? null });
@@ -408,7 +391,7 @@ export async function executeMergeNodeImpl(
         let fullSummary = summary;
         if (visualProof && host.runVisualProofCapture) {
           const slug = (featureBranch ?? 'workflow').replace(/\//g, '-');
-          const vpMarkdown = await host.runVisualProofCapture(baseBranch, featureBranch!, slug, workflow?.repoUrl, parentRemote);
+          const vpMarkdown = await host.runVisualProofCapture(baseBranch, featureBranch!, slug, workflow?.repoUrl);
           if (vpMarkdown) {
             fullSummary = (summary ?? '') + '\n\n' + vpMarkdown;
           }
@@ -428,7 +411,6 @@ export async function executeMergeNodeImpl(
           featureBranch,
           title: workflow?.name ?? 'Workflow',
           cwd: gateWorkspacePath!,
-          parentRemote,
           body: fullSummary,
         });
         console.log(`[merge] Created GitHub PR: ${result.url}`);
@@ -588,7 +570,7 @@ export async function approveMergeImpl(
   const visualProof = workflow.visualProof ?? false;
   if (visualProof && host.runVisualProofCapture) {
     const slug = (featureBranch ?? 'workflow').replace(/\//g, '-');
-    const vpMarkdown = await host.runVisualProofCapture(baseBranch, featureBranch!, slug, workflow.repoUrl, workflow.parentRemote ?? 'upstream');
+    const vpMarkdown = await host.runVisualProofCapture(baseBranch, featureBranch!, slug, workflow.repoUrl);
     if (vpMarkdown) {
       fullSummary = summary + '\n\n' + vpMarkdown;
     }
@@ -631,7 +613,7 @@ export async function approveMergeImpl(
       mergeTrace('GIT_PUSH', { featureBranch, worktreeDir });
       // Push feature branch directly to origin (GitHub) from the clone
       await execGitInMergeSafe(host, ['push', '--force', '-u', 'origin', featureBranch], worktreeDir);
-      const reviewUrl = await host.execPr(baseBranch, featureBranch, mergeMessage, fullSummary, worktreeDir, workflow.parentRemote ?? 'upstream');
+      const reviewUrl = await host.execPr(baseBranch, featureBranch, mergeMessage, fullSummary, worktreeDir);
       mergeTrace('PR_CREATED', { featureBranch, baseBranch, reviewUrl });
       console.log(`[merge] Approved: created pull request ${reviewUrl}`);
       host.persistence.updateTask(mergeTaskId, {
@@ -649,7 +631,7 @@ export async function approveMergeImpl(
 
 /**
  * Re-run consolidation + push + PR creation after a Claude fix was approved.
- * Called when orchestrator.approve() transitions a merge gate from
+ * Called when fixed-task approval resumes a merge gate from
  * awaiting_approval (with pendingFixError) to running.
  *
  * Key insight: Claude fixed the code in the gate clone (on its HEAD, typically
@@ -672,7 +654,6 @@ export async function publishAfterFixImpl(
   const onFinish = workflow?.onFinish ?? 'none';
   const mergeMode = canonicalMergeMode(workflow?.mergeMode);
   const baseBranch = workflow?.baseBranch ?? host.defaultBranch ?? await host.detectDefaultBranch();
-  const parentRemote = workflow?.parentRemote ?? 'upstream';
   const featureBranch = workflow?.featureBranch;
   const visualProof = workflow?.visualProof ?? false;
 
@@ -876,7 +857,7 @@ export async function publishAfterFixImpl(
     let fullSummary = summary;
     if (visualProof && host.runVisualProofCapture) {
       const slug = featureBranch.replace(/\//g, '-');
-      const vpMarkdown = await host.runVisualProofCapture(baseBranch, featureBranch, slug, workflow?.repoUrl, parentRemote);
+      const vpMarkdown = await host.runVisualProofCapture(baseBranch, featureBranch, slug, workflow?.repoUrl);
       if (vpMarkdown) {
         fullSummary = (summary ?? '') + '\n\n' + vpMarkdown;
       }
@@ -892,7 +873,6 @@ export async function publishAfterFixImpl(
         featureBranch,
         title: workflow?.name ?? 'Workflow',
         cwd: consolidateDir,
-        parentRemote,
         body: fullSummary,
       });
       console.log(`[merge] Post-fix: created/updated GitHub PR: ${result.url}`);
@@ -919,7 +899,7 @@ export async function publishAfterFixImpl(
 
     // manual mode with pull_request onFinish
     if (onFinish === 'pull_request') {
-      const reviewUrl = await host.execPr(baseBranch, featureBranch, workflow?.name ?? 'Workflow', fullSummary, consolidateDir, parentRemote);
+      const reviewUrl = await host.execPr(baseBranch, featureBranch, workflow?.name ?? 'Workflow', fullSummary, consolidateDir);
       console.log(`[merge] Post-fix: created pull request ${reviewUrl}`);
       host.persistence.updateTask(task.id, {
         config: { summary },
@@ -1097,7 +1077,6 @@ export async function consolidateAndMergeImpl(
   visualProof?: boolean,
   baseCheckoutRef?: string,
   mergeNodeTaskId?: string,
-  parentRemote?: string,
 ): Promise<string | undefined> {
   const workflowForMerge =
     workflowId !== undefined && workflowId !== ''
@@ -1209,7 +1188,7 @@ export async function consolidateAndMergeImpl(
 
     if (visualProof && onFinish === 'pull_request' && host.runVisualProofCapture) {
       const slug = (featureBranch ?? 'workflow').replace(/\//g, '-');
-      const vpMarkdown = await host.runVisualProofCapture(baseBranch, featureBranch, slug, repoUrlForMerge, parentRemote ?? 'upstream');
+      const vpMarkdown = await host.runVisualProofCapture(baseBranch, featureBranch, slug, repoUrlForMerge);
       if (vpMarkdown) {
         body = (body ? body + '\n\n' : '') + vpMarkdown;
       }
@@ -1238,7 +1217,7 @@ export async function consolidateAndMergeImpl(
     } else if (onFinish === 'pull_request') {
       // Push feature branch directly to origin (GitHub) from the clone
       await execGitInMergeSafe(host, ['push', '--force', '-u', 'origin', featureBranch], worktreeDir);
-      const reviewUrl = await host.execPr(baseBranch, featureBranch, workflowName ?? 'Workflow', body, worktreeDir, parentRemote ?? 'upstream');
+      const reviewUrl = await host.execPr(baseBranch, featureBranch, workflowName ?? 'Workflow', body, worktreeDir);
       console.log(`[merge] Created pull request: ${reviewUrl}`);
       return reviewUrl;
     }

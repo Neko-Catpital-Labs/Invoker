@@ -86,37 +86,24 @@ describe('plan-base-remote', () => {
     expect(resolved).toBe(upstreamHead);
   });
 
-  it('resolvePreferredTrackingRemote prefers upstream for short base refs when available', async () => {
+  it('resolvePreferredTrackingRemote always returns origin', async () => {
     const runGit = runGitFactory(mirror);
     execSync(`git remote add upstream "${upstream}"`, { cwd: mirror });
 
     const preferred = await resolvePreferredTrackingRemote(runGit, 'master');
-    expect(preferred).toBe('upstream');
-  });
-
-  it('resolvePreferredTrackingRemote falls back to origin when upstream branch is missing', async () => {
-    const runGit = runGitFactory(mirror);
-    execSync(`git remote add upstream "${upstream}"`, { cwd: mirror });
-
-    const preferred = await resolvePreferredTrackingRemote(runGit, 'branch-that-does-not-exist');
     expect(preferred).toBe('origin');
   });
 
-  it('syncPlanBaseRemoteForRef supports custom parent remote names', async () => {
+  it('syncPlanBaseRemoteForRef treats legacy upstream-qualified refs as origin-backed', async () => {
     const runGit = runGitFactory(mirror);
-    execSync(`git remote add canonical "${upstream}"`, { cwd: mirror });
-
-    writeFileSync(join(upstream, 'canonical-sync.txt'), 'canonical-sync');
-    execSync('git add -A && git commit -m "canonical sync target"', { cwd: upstream });
+    await syncPlanBaseRemoteForRef(runGit, 'upstream/master');
+    const resolved = await runGit(['rev-parse', '--verify', 'origin/master^{commit}']);
     const upstreamTip = execSync('git rev-parse master', { cwd: upstream }).toString().trim();
-
-    await syncPlanBaseRemoteForRef(runGit, 'canonical/master', 'canonical');
-    const resolved = await runGit(['rev-parse', '--verify', 'canonical/master^{commit}']);
     expect(resolved).toBe(upstreamTip);
   });
 
-  it('shouldResolveViaOriginTracking treats custom parent remote refs as explicit', () => {
-    expect(shouldResolveViaOriginTracking('master', 'canonical')).toBe(true);
-    expect(shouldResolveViaOriginTracking('canonical/master', 'canonical')).toBe(false);
+  it('shouldResolveViaOriginTracking treats legacy remote-qualified refs as origin-backed', () => {
+    expect(shouldResolveViaOriginTracking('master')).toBe(true);
+    expect(shouldResolveViaOriginTracking('upstream/master')).toBe(true);
   });
 });
