@@ -476,6 +476,13 @@ export class TaskRunner {
       ]);
     } catch (err) {
       const meta = err as StartupFailureMetadata;
+      const startupErrorMessage = `Executor startup failed (${executor.type}): ${err instanceof Error ? err.message : String(err)}\n`;
+      this.callbacks.onOutput?.(task.id, startupErrorMessage);
+      try {
+        this.persistence.appendTaskOutput(task.id, startupErrorMessage);
+      } catch {
+        // Preserve the original startup failure if output persistence also fails.
+      }
       if (meta.workspacePath || meta.branch || meta.agentSessionId || meta.containerId) {
         const execution: Record<string, string> = {};
         if (meta.workspacePath) execution.workspacePath = meta.workspacePath;
@@ -491,7 +498,7 @@ export class TaskRunner {
         });
       }
       throw new Error(
-        `Executor startup failed (${executor.type}): ${err instanceof Error ? err.message : String(err)}`,
+        startupErrorMessage.trimEnd(),
         { cause: err },
       );
     } finally {
