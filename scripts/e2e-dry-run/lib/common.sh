@@ -302,6 +302,24 @@ invoker_e2e_submit_plan_capture() {
   invoker_e2e_submit_plan "$plan_path" "$@" 2>&1 | tee "$log_file"
 }
 
+# Submit a plan via headless --no-track run and capture the emitted workflow ID.
+# This preserves the semantic "workflow starts and continues in the background"
+# behavior without leaving a long-lived tracked submit-plan process around.
+# Usage: invoker_e2e_submit_plan_no_track_capture <plan-yaml-path> <log-file>
+invoker_e2e_submit_plan_no_track_capture() {
+  local plan_path="$1"
+  local log_file="$2"
+  local patched
+  patched="$(mktemp "${TMPDIR:-/tmp}/invoker-e2e-plan.XXXXXX")"
+  invoker_e2e_patch_plan_repo_url "$plan_path" "$patched"
+  (
+    invoker_e2e_run_headless --no-track run "$patched"
+  ) 2>&1 | tee "$log_file"
+  local status="${PIPESTATUS[0]}"
+  rm -f "$patched"
+  return "$status"
+}
+
 # Extract the last workflow ID mentioned in a captured CLI log.
 # Usage: invoker_e2e_extract_workflow_id_from_log <log-file>
 invoker_e2e_extract_workflow_id_from_log() {
@@ -382,7 +400,7 @@ invoker_e2e_wait_workflow_visible() {
   local max_secs="${2:-60}"
   local i=0
   while [ "$i" -lt "$max_secs" ]; do
-    if invoker_e2e_run_headless query workflows --output label 2>/dev/null | rg -qx "$workflow_id"; then
+    if invoker_e2e_run_headless query workflows --output label 2>/dev/null | grep -Fxq "$workflow_id"; then
       return 0
     fi
     i=$((i + 1))
