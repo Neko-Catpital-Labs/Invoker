@@ -153,6 +153,25 @@ export function getEffectiveVisualStatus(
   return status;
 }
 
+/**
+ * Status-bar filters use coarse keys like "running" and "awaiting_approval".
+ * Graph nodes may render with finer-grained visual states such as
+ * "running_launching", "running_executing", or "fix_approval".
+ */
+export function matchesStatusFilter(filterKey: string, visualStatus: string): boolean {
+  if (filterKey === visualStatus) return true;
+  if (filterKey === 'running') {
+    return visualStatus === 'running' || visualStatus === 'running_launching' || visualStatus === 'running_executing';
+  }
+  if (filterKey === 'awaiting_approval') {
+    return visualStatus === 'awaiting_approval' || visualStatus === 'fix_approval';
+  }
+  if (filterKey === 'fixing_with_ai') {
+    return visualStatus === 'fixing_with_ai';
+  }
+  return false;
+}
+
 export function getRunningPhaseLabel(phase?: string): string | null {
   if (phase === 'launching') return 'Launching';
   if (phase === 'executing') return 'Executing';

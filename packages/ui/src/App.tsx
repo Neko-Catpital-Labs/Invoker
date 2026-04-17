@@ -550,7 +550,15 @@ export function App() {
             </div>
           ) : (
             <div className="h-full">
-              <TaskDAG tasks={tasks} workflows={workflows} onTaskClick={handleTaskClick} onTaskDoubleClick={handleTaskDoubleClick} onTaskContextMenu={handleTaskContextMenu} statusFilters={statusFilters} />
+              <TaskDAG
+                tasks={tasks}
+                workflows={workflows}
+                selectedTaskId={selectedTaskId}
+                onTaskClick={handleTaskClick}
+                onTaskDoubleClick={handleTaskDoubleClick}
+                onTaskContextMenu={handleTaskContextMenu}
+                statusFilters={statusFilters}
+              />
             </div>
           )}
         </div>
