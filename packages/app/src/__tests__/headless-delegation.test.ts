@@ -469,6 +469,67 @@ describe('headless delegation enforcement', () => {
         executeTasksSpy.mockRestore();
       });
 
+      it('headless approve waits for downstream runnable tasks to settle', async () => {
+        let taskBStatus: 'running' | 'completed' = 'running';
+        mockDeps.persistence.listWorkflows = vi.fn(() => [{
+          id: 'wf-1',
+          name: 'test-workflow',
+          generation: 0,
+          status: 'running' as const,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }]);
+        mockDeps.persistence.loadTasks = vi.fn(() => [
+          {
+            id: 'wf-1/task-a',
+            status: 'completed',
+            config: { workflowId: 'wf-1' },
+            execution: {},
+          },
+          {
+            id: 'wf-1/task-b',
+            status: taskBStatus,
+            config: { workflowId: 'wf-1' },
+            execution: {},
+          },
+        ] as any);
+        mockDeps.orchestrator.getAllTasks = vi.fn(() => [
+          {
+            id: 'wf-1/task-a',
+            status: 'completed',
+            config: { workflowId: 'wf-1' },
+            execution: {},
+          },
+          {
+            id: 'wf-1/task-b',
+            status: taskBStatus,
+            config: { workflowId: 'wf-1' },
+            execution: {},
+          },
+        ] as any);
+
+        const runnableTask = {
+          id: 'wf-1/task-b',
+          status: 'running',
+          config: { workflowId: 'wf-1' },
+          execution: {},
+        } as any;
+        mockDeps.commandService.approve = vi.fn(async () => ({ ok: true as const, data: [runnableTask] }));
+
+        const executeTasksSpy = vi
+          .spyOn(TaskRunner.prototype, 'executeTasks')
+          .mockImplementation(async () => {
+            taskBStatus = 'completed';
+          });
+
+        await runHeadless(['approve', 'wf-1/task-a'], mockDeps);
+
+        expect(executeTasksSpy).toHaveBeenCalledTimes(1);
+        expect(mockDeps.commandService.approve).toHaveBeenCalled();
+
+        executeTasksSpy.mockRestore();
+      });
+
       it('headless retry with deps.noTrack=true can defer runnable execution to the caller', async () => {
         const deferRunnableTasks = vi.fn();
         const preemptWorkflowExecution = vi.fn(async () => {});

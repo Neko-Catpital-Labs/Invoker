@@ -890,9 +890,11 @@ async function headlessResume(
 
 async function headlessApprove(taskId: string, deps: HeadlessDeps): Promise<void> {
   if (!taskId) throw new Error('Missing taskId.');
-  taskId = restoreWorkflowForTask(taskId, deps).resolvedTaskId;
+  const restored = restoreWorkflowForTask(taskId, deps);
+  taskId = restored.resolvedTaskId;
   const te = createHeadlessExecutor(deps);
   wireHeadlessApproveHook(deps, te);
+  const autoFix = wireHeadlessAutoFix(deps, te);
   const envelope = makeEnvelope('approve', 'headless', 'task', { taskId });
   const result = await deps.commandService.approve(envelope);
   if (!result.ok) throw new Error(result.error.message);
@@ -904,6 +906,8 @@ async function headlessApprove(taskId: string, deps: HeadlessDeps): Promise<void
   const runnable = started.filter(t => t.status === 'running' && !(t.config.isMergeNode && t.id === taskId));
   if (runnable.length > 0) await te.executeTasks(runnable);
   process.stdout.write(`Approved task: ${taskId}\n`);
+  await waitForCompletion(deps.orchestrator, restored.workflowId, undefined, autoFix.isBusy);
+  autoFix.unsubscribe();
 }
 
 async function headlessReject(taskId: string, deps: Pick<HeadlessDeps, 'commandService' | 'orchestrator' | 'persistence'>, reason?: string): Promise<void> {
