@@ -75,6 +75,7 @@ export class SshExecutor extends BaseExecutor<SshEntry> {
   private readonly managedWorkspaces: boolean;
   private readonly remoteInvokerHome: string;
   private readonly provisionCommand: string;
+  private readonly remotePath: string;
 
   constructor(config: SshExecutorConfig) {
     super();
@@ -86,6 +87,7 @@ export class SshExecutor extends BaseExecutor<SshEntry> {
     this.managedWorkspaces = config.managedWorkspaces ?? false;
     this.remoteInvokerHome = config.remoteInvokerHome ?? '~/.invoker';
     this.provisionCommand = config.provisionCommand ?? DEFAULT_WORKTREE_PROVISION_COMMAND;
+    this.remotePath = process.env.PATH ?? '';
   }
 
 
@@ -109,12 +111,17 @@ export class SshExecutor extends BaseExecutor<SshEntry> {
     ];
   }
 
+  private buildRemoteCommand(): string[] {
+    if (!this.remotePath) return ['bash', '-s'];
+    return ['env', `PATH=${this.remotePath}`, 'bash', '-s'];
+  }
+
 
 
 
   private async execRemoteCapture(script: string, phase?: string): Promise<string> {
     return new Promise((resolve, reject) => {
-      const child = spawn('ssh', [...this.buildSshArgs(), 'bash', '-s'], {
+      const child = spawn('ssh', [...this.buildSshArgs(), ...this.buildRemoteCommand()], {
         stdio: ['pipe', 'pipe', 'pipe'],
         env: cleanElectronEnv(),
       });
@@ -475,7 +482,7 @@ echo ${payloadB64} | base64 -d | bash -se
     agentSessionId: string | undefined,
     finalizeRemote: { worktreePath: string; branch: string } | undefined,
   ): ExecutorHandle {
-    const child = spawn('ssh', [...this.buildSshArgs(), 'bash', '-s'], {
+    const child = spawn('ssh', [...this.buildSshArgs(), ...this.buildRemoteCommand()], {
       stdio: ['pipe', 'pipe', 'pipe'],
       detached: true,
       env: cleanElectronEnv(),

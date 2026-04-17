@@ -167,6 +167,66 @@ describe('TaskRunner', () => {
     );
   });
 
+  it('deduplicates concurrent launches for the same attempt', async () => {
+    let completeCallback: ((response: WorkResponse) => void) | undefined;
+    const start = vi.fn().mockImplementation(async (request: any) => ({
+      executionId: `exec-${request.actionId}`,
+      taskId: request.actionId,
+      workspacePath: '/tmp/mock-worktree',
+      branch: `experiment/${request.actionId}-mock`,
+    }));
+    const executorImpl = {
+      type: 'worktree',
+      start,
+      onComplete: vi.fn().mockImplementation((_handle: any, cb: any) => {
+        completeCallback = cb;
+        return () => {};
+      }),
+      onOutput: vi.fn().mockReturnValue(() => {}),
+      onHeartbeat: vi.fn().mockReturnValue(() => {}),
+      kill: vi.fn(),
+      destroyAll: vi.fn(),
+    };
+    const registry = {
+      getDefault: () => executorImpl,
+      get: () => executorImpl,
+      getAll: () => [executorImpl],
+    };
+    const orchestrator = {
+      getTask: () => undefined,
+      handleWorkerResponse: vi.fn(() => []),
+    };
+
+    const runner = new TaskRunner({
+      orchestrator: orchestrator as any,
+      persistence: { updateTask: vi.fn() } as any,
+      executorRegistry: registry as any,
+      cwd: '/tmp',
+    });
+
+    const task = makeTask({
+      id: 'dup-task',
+      status: 'running',
+      config: { command: 'echo hi' },
+      execution: { selectedAttemptId: 'dup-task-a1' },
+    });
+
+    const first = runner.executeTask(task);
+    const second = runner.executeTask(task);
+    await vi.waitFor(() => expect(start).toHaveBeenCalledTimes(1));
+
+    completeCallback?.({
+      requestId: 'req-dup-task',
+      actionId: task.id,
+      attemptId: 'dup-task-a1',
+      status: 'completed',
+      outputs: { exitCode: 0 },
+    });
+
+    await Promise.all([first, second]);
+    expect(start).toHaveBeenCalledTimes(1);
+  });
+
   it('kills the active execution for a task by resolving its current attempt', async () => {
     let completeCallback: ((response: WorkResponse) => void) | undefined;
     const kill = vi.fn();

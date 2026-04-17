@@ -48,6 +48,19 @@ import type { TaskRepository } from './task-repository.js';
 
 const TASK_DELTA_CHANNEL = 'task.delta';
 let workflowCounter = 0;
+
+function nextWorkflowId(): string {
+  workflowCounter += 1;
+  if (process.env.NODE_ENV === 'test') return `wf-test-${workflowCounter}`;
+  return `wf-${Date.now()}-${workflowCounter}`;
+}
+
+function workflowTimestamp(): Date {
+  if (process.env.NODE_ENV === 'test' && process.env.INVOKER_TEST_FIXED_NOW) {
+    return new Date(process.env.INVOKER_TEST_FIXED_NOW);
+  }
+  return new Date();
+}
 const FIX_FAILURE_PREFIX_RE = /^\[Fix with (?:Claude|Agent) failed\] [^\n]*\n\n/;
 const ATTEMPT_LEASE_MS = 5 * 60 * 1000;
 const TRACE_PERSIST_SYNC = process.env.INVOKER_TRACE_PERSIST_SYNC === '1';
@@ -798,7 +811,7 @@ export class Orchestrator {
    * Persists workflow and tasks, publishes deltas via MessageBus.
    */
   loadPlan(plan: PlanDefinition, opts?: { allowGraphMutation?: boolean }): void {
-    const workflowId = `wf-${Date.now()}-${++workflowCounter}`;
+    const workflowId = nextWorkflowId();
     const localToScoped = buildPlanLocalToScopedIdMap(workflowId, plan.tasks);
 
     // ── Conflict check (read-only) ──────────────────────────
@@ -934,6 +947,7 @@ export class Orchestrator {
 
     // ── Pass 2: all validation passed — persist everything ──
     this.activeWorkflowIds.add(workflowId);
+    const createdAt = workflowTimestamp().toISOString();
 
     this.persistence.saveWorkflow({
       id: workflowId,
@@ -947,8 +961,8 @@ export class Orchestrator {
       parentRemote: plan.parentRemote,
       featureBranch: plan.featureBranch,
       mergeMode: plan.mergeMode,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
+      createdAt,
+      updatedAt: createdAt,
     });
 
     const deltas: TaskDelta[] = [];

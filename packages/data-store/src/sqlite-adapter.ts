@@ -361,6 +361,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         started_at TEXT,
         completed_at TEXT,
         execution_generation INTEGER DEFAULT 0,
+        docker_image TEXT,
 
         FOREIGN KEY (workflow_id) REFERENCES workflows(id)
       );
@@ -536,6 +537,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       'ALTER TABLE tasks ADD COLUMN review_provider_id TEXT',
       'ALTER TABLE tasks ADD COLUMN is_fixing_with_ai INTEGER DEFAULT 0',
       'ALTER TABLE tasks ADD COLUMN execution_generation INTEGER DEFAULT 0',
+      'ALTER TABLE tasks ADD COLUMN docker_image TEXT',
       'ALTER TABLE tasks ADD COLUMN selected_attempt_id TEXT',
       'ALTER TABLE tasks ADD COLUMN remote_target_id TEXT',
       'ALTER TABLE workflows ADD COLUMN description TEXT',
@@ -731,6 +733,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         is_fixing_with_ai,
         execution_generation,
         remote_target_id,
+        docker_image,
         execution_agent,
         agent_name
       ) VALUES (
@@ -748,6 +751,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         ?, ?, ?, ?,
         ?, ?,
         ?, ?, ?, ?,
+        ?,
         ?,
         ?,
         ?,
@@ -803,6 +807,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       exec.isFixingWithAI ? 1 : 0,
       exec.generation ?? 0,
       cfg.remoteTargetId ?? null,
+      cfg.dockerImage ?? null,
       cfg.executionAgent ?? null,
       exec.agentName ?? null,
     ]);
@@ -836,6 +841,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         featureBranch: 'feature_branch',
         executorType: 'executor_type',
         remoteTargetId: 'remote_target_id',
+        dockerImage: 'docker_image',
         executionAgent: 'execution_agent',
       };
       const configBoolMap: Record<string, string> = {
@@ -1618,6 +1624,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         featureBranch: row.feature_branch ?? undefined,
         executorType: normalizeExecutorType(row.executor_type ?? undefined),
         remoteTargetId: row.remote_target_id ?? undefined,
+        dockerImage: row.docker_image ?? undefined,
         isMergeNode: row.is_merge_node === 1 ? true : undefined,
         summary: row.summary ?? undefined,
         problem: row.problem ?? undefined,

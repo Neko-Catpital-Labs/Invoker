@@ -6,6 +6,7 @@ import { loadSecretsFile } from './secrets-loader.js';
 import { killProcessGroup, cleanElectronEnv, SIGKILL_TIMEOUT_MS } from './process-utils.js';
 import { computeBranchHash } from './branch-utils.js';
 import type { AgentRegistry } from './agent-registry.js';
+import { traceExecution } from './exec-trace.js';
 
 const CONTAINER_STOP_TIMEOUT_S = 5;
 const TAG = '[DockerExecutor]';
@@ -192,6 +193,38 @@ export class DockerExecutor extends BaseExecutor<ContainerEntry> {
     return this.dockerInstance;
   }
 
+  protected override async syncFromRemote(cwd: string, executionId?: string): Promise<void> {
+    try {
+      await this.execGitSimple(['remote', 'get-url', 'origin'], cwd);
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      if (/No such remote/i.test(errorMsg)) {
+        const msg = '[Git Fetch] Status: skipped | Remote: origin missing | Using image-baked repo state\n';
+        traceExecution(msg);
+        if (executionId) this.emitOutput(executionId, msg);
+        return;
+      }
+      throw err;
+    }
+    await super.syncFromRemote(cwd, executionId);
+  }
+
+  protected override async pushBranchToRemote(cwd: string, branch: string, executionId?: string): Promise<string | undefined> {
+    try {
+      await this.execGitSimple(['remote', 'get-url', 'origin'], cwd);
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      if (/No such remote/i.test(errorMsg)) {
+        const msg = `[docker] pushBranchToRemote skipped for ${branch}: origin missing; using image-baked repo state\n`;
+        traceExecution(msg);
+        if (executionId) this.emitOutput(executionId, msg);
+        return undefined;
+      }
+      return await super.pushBranchToRemote(cwd, branch, executionId);
+    }
+    return await super.pushBranchToRemote(cwd, branch, executionId);
+  }
+
   // ---------------------------------------------------------------------------
   // Executor interface
   // ---------------------------------------------------------------------------
@@ -295,6 +328,7 @@ export class DockerExecutor extends BaseExecutor<ContainerEntry> {
     };
 
     handle.containerId = container.id;
+    handle.workspacePath = CONTAINER_CWD;
     if (agentSessionId) {
       handle.agentSessionId = agentSessionId;
     }

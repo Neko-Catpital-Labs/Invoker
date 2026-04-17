@@ -27,5 +27,32 @@ The orchestrator is **`scripts/run-all-tests.sh`**, invoked as **`pnpm run test:
 | `INVOKER_TEST_ALL_EXTENDED=1` | Run `optional/` suites |
 | `INVOKER_TEST_ALL_DANGEROUS=1` | Also run `dangerous/` (requires extended) |
 | `INVOKER_TEST_ALL_FAIL_FAST=1` | Stop after the first failing suite |
+| `INVOKER_TEST_ALL_RESUME=1` | Resume from saved per-suite state for the current mode |
+| `INVOKER_TEST_ALL_FORCE_RERUN=1` | Ignore saved state and rerun every discovered suite |
+| `INVOKER_TEST_ALL_STATE_FILE=/path/to/state.tsv` | Override the state file location |
+| `INVOKER_TEST_ALL_JOBS=2` | Allow explicitly tagged parallel-safe suites to overlap |
+| `INVOKER_WORKSPACE_TEST_CONCURRENCY=4` | Override local workspace test concurrency |
+| `INVOKER_PLAYWRIGHT_WORKERS=2` | Override `packages/app` Playwright workers |
+| `INVOKER_PLAYWRIGHT_SHARD=1/4` | Run the Playwright suite wrapper as a specific shard |
+| `INVOKER_PLAYWRIGHT_SHARD_INDEX=1` + `INVOKER_PLAYWRIGHT_SHARD_TOTAL=4` | Alternate shard syntax for CI matrices |
+| `INVOKER_PLAYWRIGHT_RUN_LABEL=ci-linux` | Prefix isolated Playwright artifact and bare-repo paths |
+| `INVOKER_PLAYWRIGHT_ARGS='--grep \"visual proof\"'` | Forward simple extra args through the Playwright suite wrapper |
+
+## Resume and availability
+
+- Suite state is tracked per mode: `required`, `extended`, or `dangerous`.
+- `INVOKER_TEST_ALL_RESUME=1` skips only suites previously marked `passed` or `skipped-unavailable`.
+- Failed suites rerun by default so the next pass still proves the fix.
+- Environment-missing suites should be surfaced as `skipped-unavailable` when the runner can detect the missing prerequisite early. The Docker dangerous suite is the initial case.
+
+## Sharding
+
+- Long E2E wrappers should be split into thin suite shards so resume and later parallelism operate on smaller units.
+- Current shards:
+  - `required/20-e2e-dry-run.sh`: `case-1.*`
+  - `required/21-e2e-dry-run-downstream.sh`: `case-2.*`
+  - `required/22-e2e-dry-run-github.sh`: `case-4.*`
+  - `optional/30-e2e-ssh.sh`: `case-3.1` to `case-3.3`
+  - `optional/31-e2e-ssh-merge.sh`: `case-3.4` to `case-3.6`
 
 Do **not** add ad-hoc top-level `scripts/run-*.sh` loops for tests — add a thin wrapper under `test-suites/` and delegate to existing scripts so discovery stays in one place.

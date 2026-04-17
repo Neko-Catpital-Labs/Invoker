@@ -142,12 +142,14 @@ else
   echo "__INVOKER_FETCH_SUCCESS__=1"
 fi
 RESOLVED_BASE="$BASE"
-if git -C "$CLONE" rev-parse --verify "$RESOLVED_BASE^{commit}" >/dev/null 2>&1; then
-  :
+ORIGIN_HEAD=$(git -C "$CLONE" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)
+if [ "$BASE" = "HEAD" ] && [ -n "$ORIGIN_HEAD" ] && git -C "$CLONE" rev-parse --verify "$ORIGIN_HEAD^{commit}" >/dev/null 2>&1; then
+  RESOLVED_BASE="$ORIGIN_HEAD"
 elif git -C "$CLONE" rev-parse --verify "origin/$BASE^{commit}" >/dev/null 2>&1; then
   RESOLVED_BASE="origin/$BASE"
+elif git -C "$CLONE" rev-parse --verify "$RESOLVED_BASE^{commit}" >/dev/null 2>&1; then
+  :
 else
-  ORIGIN_HEAD=$(git -C "$CLONE" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)
   if [ -n "$ORIGIN_HEAD" ] && git -C "$CLONE" rev-parse --verify "$ORIGIN_HEAD^{commit}" >/dev/null 2>&1; then
     RESOLVED_BASE="$ORIGIN_HEAD"
     printf "__INVOKER_BASE_WARNING__=Requested base '%s' not found; falling back to '%s'.\\n" "$BASE" "$RESOLVED_BASE"

@@ -28,18 +28,13 @@ tasks:
 EOF
 
 echo "==> case 2.16: submit seed workflow"
-invoker_e2e_submit_plan "$PLAN_PATH"
+SUBMIT_LOG="$(mktemp "${TMPDIR:-/tmp}/invoker-e2e-2.16-submit.XXXXXX.log")"
+invoker_e2e_submit_plan_capture "$PLAN_PATH" "$SUBMIT_LOG"
 
-WF_ID=""
-for i in $(seq 1 20); do
-  WF_ID="$(invoker_e2e_run_headless query workflows --output label 2>/dev/null | rg '^wf-' | head -1 || true)"
-  if [ -n "$WF_ID" ]; then
-    break
-  fi
-  sleep 1
-done
+WF_ID="$(invoker_e2e_extract_workflow_id_from_log "$SUBMIT_LOG")"
 if [ -z "$WF_ID" ]; then
-  echo "FAIL case 2.16: could not resolve workflow id"
+  echo "FAIL case 2.16: could not resolve workflow id from submit output"
+  cat "$SUBMIT_LOG"
   exit 1
 fi
 
@@ -153,4 +148,5 @@ if [ "$recreate_snapshot_has_pending" -ne 1 ]; then
 fi
 
 rm -f "$PLAN_PATH"
+rm -f "$SUBMIT_LOG"
 echo "PASS case 2.16 (retry preserved completed; recreate reset completed task within 5s)"

@@ -111,4 +111,37 @@ describe('QueueView', () => {
     fireEvent.click(screen.getAllByText('Cancel')[0]);
     expect(onCancel).toHaveBeenCalledWith(runningTask.id);
   });
+
+  it('renders merge gate ids with a stable label', async () => {
+    const mergeGateTask = makeUITask({
+      id: '__merge__wf-123',
+      status: 'blocked',
+      description: 'Workflow gate for queued merge',
+      dependencies: ['wf-1/build'],
+    });
+    const tasks = new Map<string, TaskState>([
+      [mergeGateTask.id, mergeGateTask],
+    ]);
+
+    const getQueueStatus = vi.fn(async () => ({
+      maxConcurrency: 6,
+      runningCount: 0,
+      running: [],
+      queued: [],
+    }));
+    (window as unknown as { invoker: unknown }).invoker = { getQueueStatus };
+
+    render(
+      <QueueView
+        tasks={tasks}
+        onTaskClick={onTaskClick}
+        onCancel={onCancel}
+        selectedTaskId={null}
+      />,
+    );
+
+    await waitFor(() => expect(getQueueStatus).toHaveBeenCalled());
+    expect(screen.getByText('merge gate')).toBeInTheDocument();
+    expect(screen.queryByText('__merge__wf-123')).not.toBeInTheDocument();
+  });
 });

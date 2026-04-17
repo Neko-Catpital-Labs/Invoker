@@ -90,6 +90,7 @@ import {
   resolveAgentSession,
   createHeadlessExecutor,
   wireHeadlessApproveHook,
+  type HeadlessDeps,
 } from './headless.js';
 import {
   rebaseAndRetry,
@@ -543,7 +544,7 @@ if (isHeadless) {
         executionAgentRegistry: agentRegistry,
       });
 
-      const headlessDeps = {
+      const headlessDeps: HeadlessDeps = {
         logger,
         orchestrator, persistence, executorRegistry, messageBus,
         repoRoot, invokerConfig, initServices, wireSlackBot,
@@ -663,6 +664,25 @@ if (isHeadless) {
 
       // In standalone owner mode, serve delegated requests from peer headless processes.
       if (standaloneMode && messageBus) {
+        const standaloneOwnerIdleTimeoutMs = Number.parseInt(
+          process.env.INVOKER_STANDALONE_OWNER_IDLE_TIMEOUT_MS ?? '2000',
+          10,
+        );
+        let standaloneOwnerLastActivityAt = Date.now();
+        const noteStandaloneOwnerActivity = (): void => {
+          standaloneOwnerLastActivityAt = Date.now();
+        };
+        headlessDeps.isStandaloneOwnerIdle = () => {
+          const idleForMs = Date.now() - standaloneOwnerLastActivityAt;
+          if (idleForMs < standaloneOwnerIdleTimeoutMs) return false;
+          const hasQueuedOrRunningMutations =
+            persistence.listWorkflowMutationIntents(undefined, ['queued', 'running']).length > 0;
+          if (hasQueuedOrRunningMutations) return false;
+          return !orchestrator.getAllTasks().some(
+            (task) => task.status === 'running' || task.status === 'fixing_with_ai',
+          );
+        };
+
         const classifyStandaloneHeadlessExecMutation = (
           payload: HeadlessExecMutationPayload,
         ): { workflowId?: string; priority: WorkflowMutationPriority } => {
@@ -716,6 +736,7 @@ if (isHeadless) {
         };
 
         messageBus.onRequest('headless.run', async (req: unknown) => {
+          noteStandaloneOwnerActivity();
           const { planPath } = req as { planPath: string };
           await runHeadless(['run', planPath], {
             ...headlessDeps,
@@ -724,12 +745,16 @@ if (isHeadless) {
           });
           return { ok: true };
         });
-        messageBus.onRequest('headless.owner-ping', async () => ({
-          ok: true,
-          ownerId: workflowMutationOwnerId,
-          mode: 'standalone',
-        }));
+        messageBus.onRequest('headless.owner-ping', async () => {
+          noteStandaloneOwnerActivity();
+          return {
+            ok: true,
+            ownerId: workflowMutationOwnerId,
+            mode: 'standalone',
+          };
+        });
         messageBus.onRequest('headless.query', async (req: unknown) => {
+          noteStandaloneOwnerActivity();
           const { kind, reset } = req as { kind?: string; reset?: boolean };
           if (kind !== 'ui-perf') {
             throw new Error(`Unsupported headless query: ${String(kind)}`);
@@ -743,6 +768,7 @@ if (isHeadless) {
           };
         });
         messageBus.onRequest('headless.resume', async (req: unknown) => {
+          noteStandaloneOwnerActivity();
           const { workflowId } = req as { workflowId: string };
           await runHeadless(['resume', workflowId], {
             ...headlessDeps,
@@ -752,6 +778,7 @@ if (isHeadless) {
           return { ok: true };
         });
         messageBus.onRequest('headless.exec', async (req: unknown) => {
+          noteStandaloneOwnerActivity();
           const { args, waitForApproval: delegatedWait, noTrack: delegatedNoTrack } =
             req as { args: string[]; waitForApproval?: boolean; noTrack?: boolean };
           if (!Array.isArray(args) || args.length === 0) {

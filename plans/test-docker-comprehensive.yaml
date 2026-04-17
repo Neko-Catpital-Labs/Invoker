@@ -22,12 +22,14 @@ tasks:
   - id: docker-cmd-exit-1
     description: "Docker command that exits with code 1"
     executorType: docker
+    dockerImage: "invoker-agent:latest"
     command: "echo 'About to fail' && exit 1"
     dependencies: []
 
   - id: docker-cmd-crash
     description: "Docker command that crashes via SEGV signal"
     executorType: docker
+    dockerImage: "invoker-agent:latest"
     command: "echo 'About to crash' && kill -SEGV $$"
     dependencies: []
 
@@ -35,12 +37,14 @@ tasks:
   - id: docker-cmd-ok
     description: "Docker command that succeeds"
     executorType: docker
+    dockerImage: "invoker-agent:latest"
     command: "echo 'DOCKER_CMD_OK'"
     dependencies: []
 
   - id: docker-cmd-output
     description: "Docker command that writes to stdout and stderr"
     executorType: docker
+    dockerImage: "invoker-agent:latest"
     command: "echo 'STDOUT_LINE' && echo 'STDERR_LINE' >&2"
     dependencies: []
 
@@ -48,17 +52,20 @@ tasks:
   - id: docker-concurrent-a
     description: "Concurrent Docker task A"
     executorType: docker
+    dockerImage: "invoker-agent:latest"
     command: "sleep 2 && echo 'CONCURRENT_A_DONE'"
     dependencies: []
 
   - id: docker-concurrent-b
     description: "Concurrent Docker task B"
     executorType: docker
+    dockerImage: "invoker-agent:latest"
     command: "sleep 2 && echo 'CONCURRENT_B_DONE'"
     dependencies: []
 
   - id: docker-concurrent-c
     description: "Concurrent Docker task C"
     executorType: docker
+    dockerImage: "invoker-agent:latest"
     command: "sleep 2 && echo 'CONCURRENT_C_DONE'"
     dependencies: []

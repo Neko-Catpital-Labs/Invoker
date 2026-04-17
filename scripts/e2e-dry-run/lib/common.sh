@@ -18,6 +18,28 @@ INVOKER_E2E_TIMEOUT="${INVOKER_E2E_TIMEOUT:-300}"
 # Cap Node.js V8 heap to prevent runaway memory (512MB per Electron process).
 export NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--max-old-space-size=512"
 
+invoker_e2e_ensure_branch_aliases() {
+  (
+    cd "$INVOKER_E2E_REPO_ROOT"
+    local head_sha=""
+    head_sha="$(git rev-parse HEAD 2>/dev/null || true)"
+    [ -n "$head_sha" ] || return 0
+
+    if git show-ref --verify --quiet refs/heads/master && ! git show-ref --verify --quiet refs/heads/main; then
+      git update-ref refs/heads/main "$head_sha" >/dev/null 2>&1 || true
+    fi
+    if git show-ref --verify --quiet refs/heads/main && ! git show-ref --verify --quiet refs/heads/master; then
+      git update-ref refs/heads/master "$head_sha" >/dev/null 2>&1 || true
+    fi
+    if git show-ref --verify --quiet refs/remotes/origin/master && ! git show-ref --verify --quiet refs/remotes/origin/main; then
+      git update-ref refs/remotes/origin/main refs/remotes/origin/master >/dev/null 2>&1 || true
+    fi
+    if git show-ref --verify --quiet refs/remotes/origin/main && ! git show-ref --verify --quiet refs/remotes/origin/master; then
+      git update-ref refs/remotes/origin/master refs/remotes/origin/main >/dev/null 2>&1 || true
+    fi
+  )
+}
+
 invoker_e2e_init() {
   # Preserve caller PATH so cleanup can fully restore shell state.
   if [ -z "${INVOKER_E2E_ORIGINAL_PATH:-}" ]; then
@@ -51,12 +73,77 @@ invoker_e2e_init() {
   export PATH="$stubdir:$PATH"
 }
 
-invoker_e2e_cleanup() {
-  # Kill any stale Electron processes spawned by this test's DB dir.
-  # Match on the INVOKER_DB_DIR env to avoid killing unrelated processes.
-  if [ -n "${INVOKER_DB_DIR:-}" ]; then
-    pkill -f "electron.*--headless" 2>/dev/null || true
+invoker_e2e_kill_owned_headless_processes() {
+  # Kill only the headless processes that belong to this test run.
+  # Scope by this case's INVOKER_DB_DIR/INVOKER_API_PORT so one case's EXIT trap
+  # cannot SIGTERM another concurrently-running case.
+  if [ -n "${INVOKER_DB_DIR:-}" ] || [ -n "${INVOKER_API_PORT:-}" ]; then
+    local pid environ_blob cmdline
+    while IFS= read -r pid; do
+      [ -n "$pid" ] || continue
+      [ -r "/proc/$pid/environ" ] || continue
+      [ -r "/proc/$pid/cmdline" ] || continue
+      environ_blob="$(tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null || true)"
+      cmdline="$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)"
+      case "$cmdline" in
+        *"--headless"*)
+          ;;
+        *)
+          continue
+          ;;
+      esac
+      if [ -n "${INVOKER_DB_DIR:-}" ] && ! printf '%s\n' "$environ_blob" | grep -Fqx "INVOKER_DB_DIR=$INVOKER_DB_DIR"; then
+        if [ -n "${INVOKER_API_PORT:-}" ] && ! printf '%s\n' "$environ_blob" | grep -Fqx "INVOKER_API_PORT=$INVOKER_API_PORT"; then
+          continue
+        fi
+      fi
+      kill "$pid" 2>/dev/null || true
+    done < <(pgrep -f '(/electron|packages/app/dist/main.js|headless-client.js|run.sh --headless)' 2>/dev/null || true)
   fi
+}
+
+invoker_e2e_start_submit_plan_background() {
+  local plan_path="$1"
+  shift
+  local patched
+  patched="$(mktemp "${TMPDIR:-/tmp}/invoker-e2e-plan.XXXXXX")"
+  invoker_e2e_patch_plan_repo_url "$plan_path" "$patched"
+
+  if command -v setsid >/dev/null 2>&1; then
+    setsid "$INVOKER_E2E_REPO_ROOT/submit-plan.sh" "$patched" "$@" &
+  else
+    "$INVOKER_E2E_REPO_ROOT/submit-plan.sh" "$patched" "$@" &
+  fi
+
+  export INVOKER_E2E_BG_SUBMIT_PID="$!"
+  export INVOKER_E2E_BG_SUBMIT_PATCHED_PLAN="$patched"
+  export INVOKER_E2E_BG_SUBMIT_PGID="$(ps -o pgid= -p "$INVOKER_E2E_BG_SUBMIT_PID" 2>/dev/null | tr -d '[:space:]')"
+}
+
+invoker_e2e_stop_submit_plan_background() {
+  local bg_pid="${INVOKER_E2E_BG_SUBMIT_PID:-}"
+  local bg_pgid="${INVOKER_E2E_BG_SUBMIT_PGID:-}"
+
+  if [ -n "$bg_pgid" ] && [ "$bg_pgid" != "$$" ]; then
+    kill -TERM -- "-$bg_pgid" 2>/dev/null || true
+    sleep 1
+    kill -KILL -- "-$bg_pgid" 2>/dev/null || true
+  fi
+
+  if [ -n "$bg_pid" ]; then
+    kill "$bg_pid" 2>/dev/null || true
+    wait "$bg_pid" 2>/dev/null || true
+  fi
+
+  rm -f "${INVOKER_E2E_BG_SUBMIT_PATCHED_PLAN:-}" 2>/dev/null || true
+  unset INVOKER_E2E_BG_SUBMIT_PID
+  unset INVOKER_E2E_BG_SUBMIT_PGID
+  unset INVOKER_E2E_BG_SUBMIT_PATCHED_PLAN
+}
+
+invoker_e2e_cleanup() {
+  invoker_e2e_stop_submit_plan_background
+  invoker_e2e_kill_owned_headless_processes
   # Clean up worktrees created during the test.
   git -C "$INVOKER_E2E_REPO_ROOT" worktree prune 2>/dev/null || true
   rm -rf "${INVOKER_DB_DIR:-}" "${INVOKER_E2E_MARKER_ROOT:-}" "${INVOKER_E2E_STUB_DIR:-}" 2>/dev/null || true
@@ -70,8 +157,47 @@ invoker_e2e_cleanup() {
 }
 
 invoker_e2e_ensure_app_built() {
-  echo "==> e2e-dry-run: building @invoker/app"
-  (cd "$INVOKER_E2E_REPO_ROOT" && pnpm --filter @invoker/app build)
+  invoker_e2e_ensure_branch_aliases
+  local app_dist="$INVOKER_E2E_REPO_ROOT/packages/app/dist/main.js"
+  local ui_dist="$INVOKER_E2E_REPO_ROOT/packages/ui/dist/index.html"
+  local build_lock_dir="$INVOKER_E2E_REPO_ROOT/.git/invoker-e2e-build.lock"
+  local wait_secs=0
+  if [ "${INVOKER_E2E_FORCE_BUILD:-0}" != "1" ] && [ -f "$app_dist" ] && [ -f "$ui_dist" ]; then
+    echo "==> e2e: reusing existing app/ui build artifacts"
+    return 0
+  fi
+  if mkdir "$build_lock_dir" 2>/dev/null; then
+    trap 'rmdir "$build_lock_dir" 2>/dev/null || true' RETURN
+  else
+    echo "==> e2e: waiting for shared app/ui build lock"
+    while [ -d "$build_lock_dir" ]; do
+      if [ "${INVOKER_E2E_FORCE_BUILD:-0}" != "1" ] && [ -f "$app_dist" ] && [ -f "$ui_dist" ]; then
+        echo "==> e2e: shared build completed by another shard"
+        return 0
+      fi
+      sleep 1
+      wait_secs=$((wait_secs + 1))
+      if [ "$wait_secs" -ge 300 ]; then
+        echo "ERROR: timed out waiting for shared app/ui build lock" >&2
+        return 1
+      fi
+    done
+    if [ "${INVOKER_E2E_FORCE_BUILD:-0}" != "1" ] && [ -f "$app_dist" ] && [ -f "$ui_dist" ]; then
+      echo "==> e2e: shared build completed by another shard"
+      return 0
+    fi
+    if ! mkdir "$build_lock_dir" 2>/dev/null; then
+      echo "ERROR: unable to acquire shared app/ui build lock" >&2
+      return 1
+    fi
+    trap 'rmdir "$build_lock_dir" 2>/dev/null || true' RETURN
+  fi
+  echo "==> e2e: building @invoker/ui and @invoker/app"
+  (
+    cd "$INVOKER_E2E_REPO_ROOT" && \
+    pnpm --filter @invoker/ui build && \
+    pnpm --filter @invoker/app build
+  )
 }
 
 # Wall-clock cap: GNU timeout (Linux CI) or gtimeout (Homebrew coreutils). macOS has no timeout(1) by default.
@@ -165,6 +291,49 @@ invoker_e2e_submit_plan() {
   done
 }
 
+# Submit a plan and capture stdout/stderr to a log file while preserving the
+# original exit status. Useful for tests that need a durable workflow ID rather
+# than "first workflow in the DB" races.
+# Usage: invoker_e2e_submit_plan_capture <plan-yaml-path> <log-file> [extra args...]
+invoker_e2e_submit_plan_capture() {
+  local plan_path="$1"
+  local log_file="$2"
+  shift 2
+  invoker_e2e_submit_plan "$plan_path" "$@" 2>&1 | tee "$log_file"
+}
+
+# Submit a plan via headless --no-track run and capture the emitted workflow ID.
+# This preserves the semantic "workflow starts and continues in the background"
+# behavior without leaving a long-lived tracked submit-plan process around.
+# Usage: invoker_e2e_submit_plan_no_track_capture <plan-yaml-path> <log-file>
+invoker_e2e_submit_plan_no_track_capture() {
+  local plan_path="$1"
+  local log_file="$2"
+  local patched
+  patched="$(mktemp "${TMPDIR:-/tmp}/invoker-e2e-plan.XXXXXX")"
+  invoker_e2e_patch_plan_repo_url "$plan_path" "$patched"
+  (
+    invoker_e2e_run_headless --no-track run "$patched"
+  ) 2>&1 | tee "$log_file"
+  local status="${PIPESTATUS[0]}"
+  rm -f "$patched"
+  return "$status"
+}
+
+# Extract the last workflow ID mentioned in a captured CLI log.
+# Usage: invoker_e2e_extract_workflow_id_from_log <log-file>
+invoker_e2e_extract_workflow_id_from_log() {
+  local log_file="$1"
+  python3 - <<'PY' "$log_file"
+import re
+import sys
+
+text = open(sys.argv[1], encoding='utf-8', errors='ignore').read()
+matches = re.findall(r'wf-\d+-\d+', text)
+print(matches[-1] if matches else '')
+PY
+}
+
 # Query a single task's status via headless CLI (no sqlite3 dependency).
 # Pipes through tail -1 to strip Electron [init] noise from stdout.
 # Usage: ST=$(invoker_e2e_task_status <taskId>)
@@ -221,5 +390,22 @@ invoker_e2e_wait_settled() {
     sleep 2
   done
   echo "TIMEOUT: task $task_id still not settled after ${max_attempts} attempts" >&2
+  return 1
+}
+
+# Poll until a workflow is visible via the headless query interface.
+# Usage: invoker_e2e_wait_workflow_visible <workflowId> [maxSeconds]
+invoker_e2e_wait_workflow_visible() {
+  local workflow_id="$1"
+  local max_secs="${2:-60}"
+  local i=0
+  while [ "$i" -lt "$max_secs" ]; do
+    if invoker_e2e_run_headless query workflows --output label 2>/dev/null | grep -Fxq "$workflow_id"; then
+      return 0
+    fi
+    i=$((i + 1))
+    sleep 1
+  done
+  echo "TIMEOUT: workflow $workflow_id not visible after ${max_secs}s" >&2
   return 1
 }

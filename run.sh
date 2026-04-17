@@ -105,4 +105,15 @@ fi
 if [ "$(uname)" = "Linux" ]; then
   export LIBGL_ALWAYS_SOFTWARE=1
 fi
+
+if [ "$(uname)" = "Linux" ] && [ -z "${DISPLAY:-}" ]; then
+  if ! command -v xvfb-run >/dev/null 2>&1; then
+    echo "ERROR: GUI launch requires Xvfb when DISPLAY is not set." >&2
+    echo "Install xvfb-run or set DISPLAY to an available X server." >&2
+    exit 1
+  fi
+  ELECTRON_ENABLE_LOGGING=1 exec xvfb-run --auto-servernum \
+    ./packages/app/node_modules/.bin/electron packages/app/dist/main.js $SANDBOX_FLAG "$@"
+fi
+
 ELECTRON_ENABLE_LOGGING=1 exec ./packages/app/node_modules/.bin/electron packages/app/dist/main.js $SANDBOX_FLAG "$@"
