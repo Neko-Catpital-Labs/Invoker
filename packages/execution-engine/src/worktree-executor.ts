@@ -136,7 +136,13 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
       traceExecution(
         `${RESTART_TO_BRANCH_TRACE} WorktreeExecutor.start() actionId=${request.actionId} reconciliation → acquireWorktree (skip upstream merge)`,
       );
-      const acquired = await this.pool.acquireWorktree(repoUrl, branch, baseHead, request.actionId);
+      const acquired = await this.pool.acquireWorktree(
+        repoUrl,
+        branch,
+        baseHead,
+        request.actionId,
+        { forceFresh: request.inputs.freshWorkspace === true },
+      );
       this.cleanStaleLocks(acquired.worktreePath);
 
       const entry: WorktreeEntry = {
@@ -179,7 +185,13 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
     traceExecution(
       `${RESTART_TO_BRANCH_TRACE} WorktreeExecutor.start() actionId=${request.actionId} → RepoPool path`,
     );
-    const acquired = await this.pool.acquireWorktree(repoUrl, branch, baseHead, request.actionId);
+    const acquired = await this.pool.acquireWorktree(
+      repoUrl,
+      branch,
+      baseHead,
+      request.actionId,
+      { forceFresh: request.inputs.freshWorkspace === true },
+    );
 
     this.cleanStaleLocks(acquired.worktreePath);
 

@@ -232,6 +232,189 @@ describe('TaskRunner', () => {
     await execution;
   });
 
+  it('marks recreateTask-style executions as requiring a fresh workspace', async () => {
+    let seenRequest: any;
+    let completeCallback: ((response: WorkResponse) => void) | undefined;
+    const executorImpl = {
+      type: 'worktree',
+      start: vi.fn().mockImplementation(async (request: any) => {
+        seenRequest = request;
+        return {
+          executionId: `exec-${request.actionId}`,
+          taskId: request.actionId,
+          workspacePath: '/tmp/mock-worktree',
+          branch: `experiment/${request.actionId}-mock`,
+        };
+      }),
+      onComplete: vi.fn().mockImplementation((_handle: any, cb: any) => {
+        completeCallback = cb;
+        return () => {};
+      }),
+      onOutput: vi.fn().mockReturnValue(() => {}),
+      onHeartbeat: vi.fn().mockReturnValue(() => {}),
+      kill: vi.fn(),
+      destroyAll: vi.fn(),
+    };
+    const runner = new TaskRunner({
+      orchestrator: {
+        getTask: () => undefined,
+        handleWorkerResponse: vi.fn(),
+      } as any,
+      persistence: { updateTask: vi.fn() } as any,
+      executorRegistry: {
+        getDefault: () => executorImpl,
+        get: () => executorImpl,
+        getAll: () => [executorImpl],
+      } as any,
+      cwd: '/tmp',
+    });
+
+    const task = makeTask({
+      id: 'recreated-task',
+      status: 'running',
+      config: { command: 'echo hi' },
+      execution: {
+        generation: 1,
+        branch: undefined,
+        workspacePath: undefined,
+      },
+    });
+
+    const done = runner.executeTask(task);
+    await vi.waitFor(() => expect(seenRequest).toBeDefined());
+    expect(seenRequest.inputs.freshWorkspace).toBe(true);
+    completeCallback?.({
+      requestId: seenRequest.requestId,
+      actionId: task.id,
+      executionGeneration: task.execution.generation ?? 0,
+      status: 'completed',
+      outputs: { exitCode: 0 },
+    });
+    await done;
+  });
+
+  it('marks recreateWorkflow-style root task executions as requiring a fresh workspace', async () => {
+    let seenRequest: any;
+    let completeCallback: ((response: WorkResponse) => void) | undefined;
+    const executorImpl = {
+      type: 'worktree',
+      start: vi.fn().mockImplementation(async (request: any) => {
+        seenRequest = request;
+        return {
+          executionId: `exec-${request.actionId}`,
+          taskId: request.actionId,
+          workspacePath: '/tmp/mock-worktree',
+          branch: `experiment/${request.actionId}-mock`,
+        };
+      }),
+      onComplete: vi.fn().mockImplementation((_handle: any, cb: any) => {
+        completeCallback = cb;
+        return () => {};
+      }),
+      onOutput: vi.fn().mockReturnValue(() => {}),
+      onHeartbeat: vi.fn().mockReturnValue(() => {}),
+      kill: vi.fn(),
+      destroyAll: vi.fn(),
+    };
+    const runner = new TaskRunner({
+      orchestrator: {
+        getTask: () => undefined,
+        handleWorkerResponse: vi.fn(),
+      } as any,
+      persistence: { updateTask: vi.fn() } as any,
+      executorRegistry: {
+        getDefault: () => executorImpl,
+        get: () => executorImpl,
+        getAll: () => [executorImpl],
+      } as any,
+      cwd: '/tmp',
+    });
+
+    const task = makeTask({
+      id: 'wf-1/root-a',
+      status: 'running',
+      config: { command: 'echo hi', workflowId: 'wf-1' },
+      execution: {
+        generation: 3,
+        branch: undefined,
+        workspacePath: undefined,
+      },
+    });
+
+    const done = runner.executeTask(task);
+    await vi.waitFor(() => expect(seenRequest).toBeDefined());
+    expect(seenRequest.inputs.freshWorkspace).toBe(true);
+    completeCallback?.({
+      requestId: seenRequest.requestId,
+      actionId: task.id,
+      executionGeneration: task.execution.generation ?? 0,
+      status: 'completed',
+      outputs: { exitCode: 0 },
+    });
+    await done;
+  });
+
+  it('keeps restart-style executions reusable when branch or workspace state is still present', async () => {
+    let seenRequest: any;
+    let completeCallback: ((response: WorkResponse) => void) | undefined;
+    const executorImpl = {
+      type: 'worktree',
+      start: vi.fn().mockImplementation(async (request: any) => {
+        seenRequest = request;
+        return {
+          executionId: `exec-${request.actionId}`,
+          taskId: request.actionId,
+          workspacePath: '/tmp/mock-worktree',
+          branch: `experiment/${request.actionId}-mock`,
+        };
+      }),
+      onComplete: vi.fn().mockImplementation((_handle: any, cb: any) => {
+        completeCallback = cb;
+        return () => {};
+      }),
+      onOutput: vi.fn().mockReturnValue(() => {}),
+      onHeartbeat: vi.fn().mockReturnValue(() => {}),
+      kill: vi.fn(),
+      destroyAll: vi.fn(),
+    };
+    const runner = new TaskRunner({
+      orchestrator: {
+        getTask: () => undefined,
+        handleWorkerResponse: vi.fn(),
+      } as any,
+      persistence: { updateTask: vi.fn() } as any,
+      executorRegistry: {
+        getDefault: () => executorImpl,
+        get: () => executorImpl,
+        getAll: () => [executorImpl],
+      } as any,
+      cwd: '/tmp',
+    });
+
+    const task = makeTask({
+      id: 'restart-task',
+      status: 'running',
+      config: { command: 'echo hi' },
+      execution: {
+        generation: 1,
+        branch: 'experiment/restart-task-old',
+        workspacePath: '/tmp/existing-worktree',
+      },
+    });
+
+    const done = runner.executeTask(task);
+    await vi.waitFor(() => expect(seenRequest).toBeDefined());
+    expect(seenRequest.inputs.freshWorkspace).toBe(false);
+    completeCallback?.({
+      requestId: seenRequest.requestId,
+      actionId: task.id,
+      executionGeneration: task.execution.generation ?? 0,
+      status: 'completed',
+      outputs: { exitCode: 0 },
+    });
+    await done;
+  });
+
   describe('collectTransitiveNonMergeTaskIds', () => {
     it('walks backwards from merge deps to include intermediate tasks', () => {
       const tasks = new Map<string, TaskState>();

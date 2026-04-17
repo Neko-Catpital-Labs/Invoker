@@ -29,6 +29,10 @@ export interface AcquiredWorktree {
   softRelease: () => void;
 }
 
+export interface AcquireWorktreeOptions {
+  forceFresh?: boolean;
+}
+
 export class ResourceLimitError extends Error {
   constructor(message: string) {
     super(message);
@@ -189,15 +193,27 @@ export class RepoPool {
     return dir;
   }
 
-  async acquireWorktree(repoUrl: string, branch: string, base?: string, actionId?: string): Promise<AcquiredWorktree> {
+  async acquireWorktree(
+    repoUrl: string,
+    branch: string,
+    base?: string,
+    actionId?: string,
+    opts?: AcquireWorktreeOptions,
+  ): Promise<AcquiredWorktree> {
     // Serialize per-repo to prevent concurrent git worktree operations
     const prev = this.repoChains.get(repoUrl) ?? Promise.resolve();
-    const next = prev.then(() => this.doAcquireWorktree(repoUrl, branch, base, actionId));
+    const next = prev.then(() => this.doAcquireWorktree(repoUrl, branch, base, actionId, opts));
     this.repoChains.set(repoUrl, next.catch(() => {}));
     return next;
   }
 
-  private async doAcquireWorktree(repoUrl: string, branch: string, base?: string, actionId?: string): Promise<AcquiredWorktree> {
+  private async doAcquireWorktree(
+    repoUrl: string,
+    branch: string,
+    base?: string,
+    actionId?: string,
+    opts?: AcquireWorktreeOptions,
+  ): Promise<AcquiredWorktree> {
     traceExecution(
       `${RESTART_TO_BRANCH_TRACE} RepoPool.doAcquireWorktree branch=${branch} (bashPreserveOrReset here; BaseExecutor.setupTaskBranch is not used for this path)`,
     );
@@ -229,7 +245,9 @@ export class RepoPool {
 
     let effectivePath = worktreePath;
     let reusedExisting = false;
-    const reuseCandidate = findManagedWorktreeForBranch(porcelain, branch, managedPrefixes);
+    const allowReuse = opts?.forceFresh !== true;
+
+    const reuseCandidate = allowReuse ? findManagedWorktreeForBranch(porcelain, branch, managedPrefixes) : undefined;
     if (reuseCandidate && existsSync(reuseCandidate)) {
       try {
         const head = (await this.execGit(['rev-parse', '--abbrev-ref', 'HEAD'], reuseCandidate)).trim();
@@ -251,7 +269,7 @@ export class RepoPool {
     // "extra" (e.g. conflict resolution). If `base` has advanced beyond what the worktree contains
     // (e.g. master moved forward and rebaseAndRetry/bumpGeneration wants a fresh branch from the
     // new base), skip reuse and fall through to fresh creation.
-    if (!reusedExisting && actionId) {
+    if (allowReuse && !reusedExisting && actionId) {
       const actionIdHit = findManagedWorktreeByActionId(porcelain, actionId, managedPrefixes);
       if (actionIdHit && existsSync(actionIdHit.path)) {
         let baseIsAncestorOfHead = true;

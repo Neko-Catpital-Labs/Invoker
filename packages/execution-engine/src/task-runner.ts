@@ -427,6 +427,7 @@ export class TaskRunner {
         salt: generationSalt,
         baseBranch,
         parentRemote,
+        freshWorkspace: this.shouldUseFreshWorkspace(task),
       },
       callbackUrl: '',
       timestamps: {
@@ -618,6 +619,17 @@ export class TaskRunner {
         resolvePromise();
       });
     });
+  }
+
+  /**
+   * Recreate flows clear both branch and workspacePath before rerun.
+   * Restarts preserve them, so this is the executor-facing signal to bypass
+   * same-action worktree reuse only for semantically fresh recreates.
+   */
+  private shouldUseFreshWorkspace(task: TaskState): boolean {
+    return (task.execution.generation ?? 0) > 0
+      && task.execution.branch === undefined
+      && task.execution.workspacePath === undefined;
   }
 
   /**

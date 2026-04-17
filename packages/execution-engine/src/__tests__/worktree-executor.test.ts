@@ -604,6 +604,29 @@ describe('WorktreeExecutor', () => {
   // ── Upstream branch merging ────────────────────────────────────
 
   describe('upstream branch merging', () => {
+    it('passes forceFresh to RepoPool for recreate-style requests', async () => {
+      const { taskProcess } = setupSpawnMock();
+      const pool = mockPool(executor);
+
+      const request = makeRequest({
+        inputs: {
+          command: 'echo hello',
+          freshWorkspace: true,
+        },
+      });
+      await executor.start(request);
+
+      expect(pool.acquireWorktree).toHaveBeenCalledWith(
+        'git@github.com:test/repo.git',
+        expect.any(String),
+        expect.any(String),
+        'action-1',
+        { forceFresh: true },
+      );
+
+      taskProcess.emit('close', 0, null);
+    });
+
     it('merges upstream branches into the worktree after creation', async () => {
       const { taskProcess } = setupSpawnMock();
 

@@ -134,6 +134,70 @@ describe('worktree reuse after conflict resolution (real git)', { timeout: 30_00
     acquired2.softRelease();
   });
 
+  it('creates a fresh worktree for recreate-style reacquire, dropping preserved conflict state', async () => {
+    root = mkdtempSync(join(tmpdir(), 'wt-recreate-fresh-'));
+
+    const bare = join(root, 'bare.git');
+    execSync(`git init --bare -b master ${bare}`);
+
+    const host = join(root, 'host');
+    execSync(`git clone ${bare} ${host}`);
+    git(host, 'config user.email "test@test.com"');
+    git(host, 'config user.name "Test"');
+    writeFileSync(join(host, 'shared.txt'), 'base content\n');
+    git(host, 'add -A');
+    git(host, 'commit -m "base commit"');
+    git(host, 'branch -M master');
+    git(host, 'push origin master');
+
+    git(host, 'checkout -b upstream/feature');
+    writeFileSync(join(host, 'shared.txt'), 'upstream change\n');
+    git(host, 'add -A');
+    git(host, 'commit -m "upstream: modify shared.txt"');
+    git(host, 'push origin upstream/feature');
+    git(host, 'checkout master');
+
+    const baseSha = git(host, 'rev-parse master');
+
+    const cacheDir = join(root, 'cache');
+    const worktreeBaseDir = join(root, 'worktrees');
+    pool = new RepoPool({ cacheDir, maxWorktrees: 5, worktreeBaseDir });
+
+    const actionId = 'wf-test/recreate-conflict';
+    const branch1 = `experiment/${actionId}-aabb1122`;
+    const acquired1 = await pool.acquireWorktree(bare, branch1, baseSha, actionId);
+
+    git(acquired1.worktreePath, 'config user.email "test@test.com"');
+    git(acquired1.worktreePath, 'config user.name "Test"');
+
+    writeFileSync(join(acquired1.worktreePath, 'shared.txt'), 'experiment change\n');
+    git(acquired1.worktreePath, 'add shared.txt');
+    git(acquired1.worktreePath, 'commit -m "experiment: modify shared.txt"');
+    git(acquired1.worktreePath, 'fetch origin upstream/feature');
+    try {
+      git(acquired1.worktreePath, 'merge --no-edit origin/upstream/feature');
+      expect.fail('Expected merge conflict');
+    } catch (err: any) {
+      if (err.message?.includes('Expected merge conflict')) throw err;
+      writeFileSync(join(acquired1.worktreePath, 'shared.txt'), 'resolved content\n');
+      git(acquired1.worktreePath, 'add shared.txt');
+      git(acquired1.worktreePath, 'commit --no-edit -m "resolve conflict"');
+    }
+
+    const resolutionSha = git(acquired1.worktreePath, 'rev-parse HEAD');
+    acquired1.softRelease();
+
+    const branch2 = `experiment/${actionId}-ccdd3344`;
+    const acquired2 = await pool.acquireWorktree(bare, branch2, baseSha, actionId, { forceFresh: true });
+
+    expect(acquired2.worktreePath).not.toBe(acquired1.worktreePath);
+    expect(git(acquired2.worktreePath, 'rev-parse HEAD')).not.toBe(resolutionSha);
+    expect(git(acquired2.worktreePath, 'rev-parse --abbrev-ref HEAD')).toBe(branch2);
+    expect(readFileSync(join(acquired2.worktreePath, 'shared.txt'), 'utf-8')).toBe('base content\n');
+
+    acquired2.softRelease();
+  });
+
   it('falls back to fresh worktree when actionId has no existing match', async () => {
     root = mkdtempSync(join(tmpdir(), 'wt-reuse-noop-'));
 

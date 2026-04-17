@@ -47,6 +47,8 @@ export interface WorkRequestInputs {
   parentRemote?: string;
   /** Name of the execution agent to use (e.g. 'claude', 'codex'). Defaults to 'claude'. */
   executionAgent?: string;
+  /** When true, executors must not reuse existing task worktrees for this run. */
+  freshWorkspace?: boolean;
 }
 
 export interface WorkRequest {
