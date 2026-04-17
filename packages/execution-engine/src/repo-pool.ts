@@ -9,7 +9,7 @@ import {
   findManagedWorktreeByActionId,
   findManagedWorktreeForBranch,
 } from './worktree-discovery.js';
-import { syncPlanBaseRemote, isInvokerManagedPoolBranch } from './plan-base-remote.js';
+import { syncPlanBaseRemoteForRef, isInvokerManagedPoolBranch } from './plan-base-remote.js';
 import { remoteFetchForPool } from './remote-fetch-policy.js';
 import { computeRepoUrlHash, sanitizeBranchForPath } from './git-utils.js';
 
@@ -67,14 +67,14 @@ export class RepoPool {
   /**
    * Force-fetch mirror and sync origin/<baseBranch> (rebase-and-retry). Ignores remoteFetchForPool.
    */
-  async refreshMirrorForRebase(repoUrl: string, baseBranch: string): Promise<string> {
+  async refreshMirrorForRebase(repoUrl: string, baseBranch: string, parentRemote = 'upstream'): Promise<string> {
     const prev = this.repoChains.get(repoUrl) ?? Promise.resolve();
-    const next = prev.then(() => this.doRefreshMirrorForRebase(repoUrl, baseBranch));
+    const next = prev.then(() => this.doRefreshMirrorForRebase(repoUrl, baseBranch, parentRemote));
     this.repoChains.set(repoUrl, next.catch(() => {}));
     return next;
   }
 
-  private async doRefreshMirrorForRebase(repoUrl: string, baseBranch: string): Promise<string> {
+  private async doRefreshMirrorForRebase(repoUrl: string, baseBranch: string, parentRemote: string): Promise<string> {
     const dir = this.cloneDir(repoUrl);
     if (existsSync(dir)) {
       try {
@@ -93,7 +93,7 @@ export class RepoPool {
       await this.execGit(['clone', repoUrl, dir], this.cacheDir);
     }
     const runGit = (args: string[]) => this.execGit(args, dir);
-    await syncPlanBaseRemote(runGit, baseBranch);
+    await syncPlanBaseRemoteForRef(runGit, baseBranch, parentRemote);
     return dir;
   }
 

@@ -5,8 +5,10 @@ import { tmpdir } from 'node:os';
 import { execFileSync, execSync } from 'node:child_process';
 import {
   syncPlanBaseRemote,
+  syncPlanBaseRemoteForRef,
   resolvePlanBaseRevision,
   resolvePreferredTrackingRemote,
+  shouldResolveViaOriginTracking,
 } from '../plan-base-remote.js';
 
 function runGitFactory(cwd: string) {
@@ -98,5 +100,23 @@ describe('plan-base-remote', () => {
 
     const preferred = await resolvePreferredTrackingRemote(runGit, 'branch-that-does-not-exist');
     expect(preferred).toBe('origin');
+  });
+
+  it('syncPlanBaseRemoteForRef supports custom parent remote names', async () => {
+    const runGit = runGitFactory(mirror);
+    execSync(`git remote add canonical "${upstream}"`, { cwd: mirror });
+
+    writeFileSync(join(upstream, 'canonical-sync.txt'), 'canonical-sync');
+    execSync('git add -A && git commit -m "canonical sync target"', { cwd: upstream });
+    const upstreamTip = execSync('git rev-parse master', { cwd: upstream }).toString().trim();
+
+    await syncPlanBaseRemoteForRef(runGit, 'canonical/master', 'canonical');
+    const resolved = await runGit(['rev-parse', '--verify', 'canonical/master^{commit}']);
+    expect(resolved).toBe(upstreamTip);
+  });
+
+  it('shouldResolveViaOriginTracking treats custom parent remote refs as explicit', () => {
+    expect(shouldResolveViaOriginTracking('master', 'canonical')).toBe(true);
+    expect(shouldResolveViaOriginTracking('canonical/master', 'canonical')).toBe(false);
   });
 });

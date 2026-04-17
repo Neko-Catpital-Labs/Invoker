@@ -18,6 +18,7 @@ export interface MergeGateProvider {
     featureBranch: string;
     title: string;
     cwd: string;
+    parentRemote?: string;
     body?: string;
   }): Promise<MergeGateProviderResult>;
 

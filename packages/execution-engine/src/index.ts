@@ -2,6 +2,7 @@ export { RESTART_TO_BRANCH_TRACE } from './exec-trace.js';
 export { remoteFetchForPool } from './remote-fetch-policy.js';
 export {
   syncPlanBaseRemote,
+  syncPlanBaseRemoteForRef,
   resolvePlanBaseRevision,
   shouldResolveViaOriginTracking,
   isInvokerManagedPoolBranch,

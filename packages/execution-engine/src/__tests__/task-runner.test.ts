@@ -2731,6 +2731,7 @@ describe('TaskRunner', () => {
         false,
         expect.any(String),
         '__merge__wf-1',
+        'upstream',
       );
 
       consolidateSpy.mockRestore();
@@ -2772,7 +2773,7 @@ describe('TaskRunner', () => {
       await executor.approveMerge('wf-1');
 
       // Should push + create PR (with clone dir as cwd)
-      expect((executor as any).execPr).toHaveBeenCalledWith('master', 'plan/feature', 'Test Workflow', expect.any(String), '/tmp/mock-wt');
+      expect((executor as any).execPr).toHaveBeenCalledWith('master', 'plan/feature', 'Test Workflow', expect.any(String), '/tmp/mock-wt', 'upstream');
 
       // Should persist the PR URL on the merge task
       expect(persistence.updateTask).toHaveBeenCalledWith(
@@ -3018,7 +3019,7 @@ describe('TaskRunner', () => {
       await executor.approveMerge('wf-1');
 
       expect((executor as any).execPr).toHaveBeenCalledWith(
-        'master', 'plan/feature', 'Test Workflow', '## Summary\nApprove summary', '/tmp/mock-wt',
+        'master', 'plan/feature', 'Test Workflow', '## Summary\nApprove summary', '/tmp/mock-wt', 'upstream',
       );
       expect(persistence.updateTask).toHaveBeenCalledWith(
         '__merge__wf-1',
@@ -4190,7 +4191,7 @@ describe('TaskRunner', () => {
       );
 
       expect((executor as any).runVisualProofCapture).toHaveBeenCalledWith(
-        'master', 'plan/test', expect.any(String), undefined,
+        'master', 'plan/test', expect.any(String), undefined, 'upstream',
       );
     });
 
@@ -5169,7 +5170,7 @@ describe('TaskRunner', () => {
 
       await executor.publishAfterFix(mergeTask);
 
-      expect((executor as any).execPr).toHaveBeenCalledWith('master', 'plan/feature', 'Test Workflow', '## Summary', '/tmp/gate-clone');
+      expect((executor as any).execPr).toHaveBeenCalledWith('master', 'plan/feature', 'Test Workflow', '## Summary', '/tmp/gate-clone', 'upstream');
       expect(persistence.updateTask).toHaveBeenCalledWith('__merge__wf-pub', expect.objectContaining({
         execution: expect.objectContaining({ reviewUrl: 'https://github.com/owner/repo/pull/100' }),
       }));

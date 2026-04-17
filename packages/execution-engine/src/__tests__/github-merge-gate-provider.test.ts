@@ -434,6 +434,51 @@ describe('GitHubMergeGateProvider', () => {
       );
     });
 
+    it('uses configured parentRemote when qualifying fork head', async () => {
+      const { spawn } = await import('node:child_process');
+      const spawnMock = vi.mocked(spawn);
+
+      spawnMock.mockImplementation(((cmd: string, args: string[]) => {
+        if (cmd === 'git' && args?.[0] === 'remote' && args?.[1] === 'get-url' && args?.[2] === 'canonical') {
+          return mockSpawnResult('https://github.com/Neko-Catpital-Labs/Invoker.git', 0);
+        }
+        if (cmd === 'git' && args?.[0] === 'remote' && args?.[1] === 'get-url' && args?.[2] === 'origin') {
+          return mockSpawnResult('https://github.com/EdbertChan/Invoker/', 0);
+        }
+        if (cmd === 'git' && args?.[0] === 'fetch') {
+          return mockSpawnResult('', 0);
+        }
+        if (cmd === 'git' && args?.[0] === 'rev-list' && args?.[1] === 'canonical/master..origin/master') {
+          return mockSpawnResult('', 0);
+        }
+        if (cmd === 'git' && args?.[0] === 'push') {
+          return mockSpawnResult('', 0);
+        }
+        if (cmd === 'gh' && args?.[0] === 'pr' && args?.[1] === 'list') {
+          return mockSpawnResult('[]', 0);
+        }
+        if (cmd === 'gh' && args?.[0] === 'api' && args?.[1] === 'repos/{owner}/{repo}/pulls') {
+          return mockSpawnResult('{"html_url":"https://github.com/Neko-Catpital-Labs/Invoker/pull/60","number":60}', 0);
+        }
+        throw new Error(`Unexpected command: ${cmd} ${args.join(' ')}`);
+      }) as any);
+
+      const result = await provider.createReview({
+        baseBranch: 'master',
+        featureBranch: 'plan/my-feature',
+        title: 'Fork PR',
+        cwd: '/tmp/repo',
+        parentRemote: 'canonical',
+      });
+
+      expect(result.url).toBe('https://github.com/Neko-Catpital-Labs/Invoker/pull/60');
+      expect(spawnMock).toHaveBeenCalledWith(
+        'gh',
+        expect.arrayContaining(['--head', 'EdbertChan:plan/my-feature']),
+        expect.anything(),
+      );
+    });
+
     it('skips fork branch repair when origin is a local/file remote', async () => {
       const { spawn } = await import('node:child_process');
       const spawnMock = vi.mocked(spawn);

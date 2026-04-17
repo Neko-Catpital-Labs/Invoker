@@ -12,6 +12,7 @@ import { computeBranchHash, bashMergeUpstreams, parseMergeError } from './branch
 import { RESTART_TO_BRANCH_TRACE, traceExecution } from './exec-trace.js';
 import {
   syncPlanBaseRemote,
+  syncPlanBaseRemoteForRef,
   resolvePlanBaseRevision,
   resolvePreferredTrackingRemote,
   shouldResolveViaOriginTracking,
@@ -105,13 +106,16 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
 
     const clonePath = await this.pool.ensureClone(repoUrl);
     const baseRef = request.inputs.baseBranch ?? 'HEAD';
+    const parentRemote = request.inputs.parentRemote ?? 'upstream';
     log(`resolve base ${baseRef} begin`);
     const runGit = (args: string[]) => this.execGitSimple(args, clonePath);
-    if (remoteFetchForPool.enabled && shouldResolveViaOriginTracking(baseRef)) {
-      const preferredRemote = await resolvePreferredTrackingRemote(runGit, baseRef.trim());
+    if (remoteFetchForPool.enabled && shouldResolveViaOriginTracking(baseRef, parentRemote)) {
+      const preferredRemote = await resolvePreferredTrackingRemote(runGit, baseRef.trim(), parentRemote);
       await syncPlanBaseRemote(runGit, baseRef.trim(), preferredRemote);
+    } else if (remoteFetchForPool.enabled) {
+      await syncPlanBaseRemoteForRef(runGit, baseRef.trim(), parentRemote);
     }
-    const baseHead = await resolvePlanBaseRevision(runGit, baseRef);
+    const baseHead = await resolvePlanBaseRevision(runGit, baseRef, parentRemote);
     log(`resolve base ${baseRef} done → ${baseHead}`);
     const upstreamCommits = (request.inputs.upstreamContext ?? [])
       .map(c => c.commitHash)

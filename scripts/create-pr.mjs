@@ -28,6 +28,8 @@ import { randomBytes } from 'node:crypto';
 import { execSync } from 'node:child_process';
 import aws4 from 'aws4';
 
+const DEFAULT_PARENT_REMOTE = process.env.INVOKER_PARENT_REMOTE || 'upstream';
+
 // ── R2 upload (duplicated from upload-pr-images.mjs for standalone use) ─────
 
 const MIME_TYPES = {
@@ -199,13 +201,13 @@ async function injectImages(body, dryRun) {
 // ── Git + GitHub helpers ────────────────────────────────────────────────────
 
 function getRepoNwo() {
-  // Prefer 'upstream' remote (fork workflow: PRs target upstream, not the fork)
+  // Prefer parent remote (fork workflow: PRs target parent, not the fork)
   try {
-    const url = execSync('git remote get-url upstream', { encoding: 'utf-8' }).trim();
+    const url = execSync(`git remote get-url ${DEFAULT_PARENT_REMOTE}`, { encoding: 'utf-8' }).trim();
     const match = url.match(/github\.com[:/]([^/]+\/[^/.]+)/);
     if (match) return match[1];
   } catch {
-    // No upstream remote; fall back to gh default
+    // No parent remote; fall back to gh default
   }
   return execSync('gh repo view --json nameWithOwner -q .nameWithOwner', { encoding: 'utf-8' }).trim();
 }
@@ -249,25 +251,25 @@ function shortOneLine(sha) {
   }
 }
 
-function assertCleanPrBase() {
-  if (!hasRemote('upstream')) {
+function assertCleanPrBase(baseBranch) {
+  if (!hasRemote(DEFAULT_PARENT_REMOTE)) {
     throw new Error(
       [
-        'Missing git remote "upstream".',
-        'Expected upstream to point to Neko-Catpital-Labs/Invoker.',
-        'Run: git remote add upstream https://github.com/Neko-Catpital-Labs/Invoker.git',
+        `Missing git parent remote "${DEFAULT_PARENT_REMOTE}".`,
+        `Expected ${DEFAULT_PARENT_REMOTE} to point to the parent repository.`,
+        `Run: git remote add ${DEFAULT_PARENT_REMOTE} <parent-repo-url>`,
       ].join('\n'),
     );
   }
 
   // Keep the check deterministic against latest refs.
-  execSync('git fetch --quiet upstream master', { stdio: 'ignore' });
-  execSync('git fetch --quiet origin master', { stdio: 'ignore' });
+  execSync(`git fetch --quiet ${DEFAULT_PARENT_REMOTE} ${baseBranch}`, { stdio: 'ignore' });
+  execSync(`git fetch --quiet origin ${baseBranch}`, { stdio: 'ignore' });
 
-  const originOnly = new Set(revList('upstream/master..origin/master'));
+  const originOnly = new Set(revList(`${DEFAULT_PARENT_REMOTE}/${baseBranch}..origin/${baseBranch}`));
   if (originOnly.size === 0) return;
 
-  const headOnly = revList('upstream/master..HEAD');
+  const headOnly = revList(`${DEFAULT_PARENT_REMOTE}/${baseBranch}..HEAD`);
   const polluted = headOnly.filter((sha) => originOnly.has(sha));
   if (polluted.length === 0) return;
 
@@ -276,15 +278,15 @@ function assertCleanPrBase() {
   const currentBranch = getCurrentBranch();
   throw new Error(
     [
-      'Refusing to create/update PR: current branch contains commits unique to origin/master.',
+      `Refusing to create/update PR: current branch contains commits unique to origin/${baseBranch}.`,
       'This would pollute the PR with fork-only history.',
       '',
       'Detected commits:',
       ...lines,
       more,
       '',
-      'Fix by creating a clean PR branch from upstream/master, then cherry-picking intended commits:',
-      `  git switch -c pr/<name> upstream/master`,
+      `Fix by creating a clean PR branch from ${DEFAULT_PARENT_REMOTE}/${baseBranch}, then cherry-picking intended commits:`,
+      `  git switch -c pr/<name> ${DEFAULT_PARENT_REMOTE}/${baseBranch}`,
       `  git cherry-pick <commit> [<commit> ...]`,
       `  git push -u origin pr/<name>`,
       '',
@@ -332,7 +334,7 @@ async function updatePr(nwo, prNum, title, body, dryRun) {
 async function main() {
   const args = parseArgs();
 
-  assertCleanPrBase();
+  assertCleanPrBase(args.base);
 
   // Read body
   let body = '';

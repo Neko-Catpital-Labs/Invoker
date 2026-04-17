@@ -26,17 +26,20 @@ describe('applyPlanDefinitionDefaults', () => {
     expect(plan.featureBranch).toBe('plan/my-plan');
     expect(plan.baseBranch).toBeDefined();
     expect(typeof plan.baseBranch).toBe('string');
+    expect(plan.parentRemote).toBe('upstream');
   });
 
   it('preserves explicit baseBranch, featureBranch, and onFinish', () => {
     const plan = applyPlanDefinitionDefaults({
       name: 'X',
       baseBranch: 'develop',
+      parentRemote: 'canonical',
       featureBranch: 'feat/x',
       onFinish: 'merge',
       tasks: [{ id: 'a', description: 'd', command: 'echo' }],
     });
     expect(plan.baseBranch).toBe('develop');
+    expect(plan.parentRemote).toBe('canonical');
     expect(plan.featureBranch).toBe('feat/x');
     expect(plan.onFinish).toBe('merge');
   });
@@ -89,6 +92,21 @@ tasks:
     expect(plan.tasks[0].id).toBe('greet');
     expect(plan.tasks[0].description).toBe('Say hello');
     expect(plan.tasks[0].command).toBe('echo "Hello, World!"');
+    expect(plan.parentRemote).toBe('upstream');
+  });
+
+  it('parses explicit parentRemote', () => {
+    const yaml = `
+name: Remote Name Test
+repoUrl: git@github.com:test/repo.git
+parentRemote: canonical
+tasks:
+  - id: greet
+    description: Say hello
+    command: echo "Hello, World!"
+`;
+    const plan = parsePlan(yaml);
+    expect(plan.parentRemote).toBe('canonical');
   });
 
   it('parses plan with dependencies', () => {

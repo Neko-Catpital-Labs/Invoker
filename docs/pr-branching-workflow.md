@@ -1,20 +1,20 @@
-# PR Branching Workflow (Fork + Upstream)
+# PR Branching Workflow (Parent Remote)
 
-Use this workflow to keep pull requests clean when `origin/master` contains fork-only commits.
+Use this workflow when your repo has both `origin` (your writable fork) and a read-only parent remote. The parent remote defaults to `upstream`, but any remote name can be used.
 
 ## Rules
 
-- Never push working branches to `upstream`.
+- Never push working branches to the parent remote.
 - Push branches to `origin` only.
-- Create PR branches from `upstream/master`, not `origin/master`.
-- Open PRs targeting `upstream` repository `master`.
+- Create PR branches from `<parentRemote>/<baseBranch>`, not `origin/<baseBranch>`.
+- Open PRs targeting the parent repository base branch.
 
-## Clean PR flow
+## Clean PR Flow
 
-1. Create branch from upstream:
+1. Create branch from parent remote:
 
 ```bash
-bash scripts/create-clean-pr-branch.sh pr/<name> [commit ...]
+bash scripts/create-clean-pr-branch.sh --parent-remote upstream --base-ref master pr/<name> [commit ...]
 ```
 
 2. Push to fork:
@@ -29,9 +29,4 @@ git push -u origin pr/<name>
 node scripts/create-pr.mjs --title "<title>" --base master --body-file <file>
 ```
 
-## Guardrail behavior
-
-`create-pr.mjs` hard-fails when the current branch contains commits from
-`upstream/master..origin/master`.
-
-When this happens, create a clean branch from `upstream/master` and cherry-pick only intended commits.
+By default, tools in this workflow use `upstream` as the parent remote. Override it when your team uses a different remote name.

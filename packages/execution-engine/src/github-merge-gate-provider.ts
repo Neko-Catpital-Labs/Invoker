@@ -11,17 +11,19 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
     featureBranch: string;
     title: string;
     cwd: string;
+    parentRemote?: string;
     body?: string;
   }): Promise<MergeGateProviderResult> {
-    const { baseBranch, featureBranch, title, cwd, body } = opts;
-    console.log(`${RESTART_TO_BRANCH_TRACE} GitHubMergeGateProvider.createReview baseBranch=${baseBranch} featureBranch=${featureBranch} title=${title} cwd=${cwd} body=${body}`);
-    const preparedBranch = await this.prepareReviewBranch(cwd, featureBranch);
+    const { baseBranch, featureBranch, title, cwd, parentRemote, body } = opts;
+    console.log(`${RESTART_TO_BRANCH_TRACE} GitHubMergeGateProvider.createReview baseBranch=${baseBranch} featureBranch=${featureBranch} title=${title} cwd=${cwd} parentRemote=${parentRemote ?? 'upstream'} body=${body}`);
+    const parentRemoteName = parentRemote ?? 'upstream';
+    const preparedBranch = await this.prepareReviewBranch(cwd, featureBranch, parentRemoteName);
     const ghBase = normalizeBranchForGithubCli(baseBranch);
     const ghHead = normalizeBranchForGithubCli(featureBranch);
 
     // In fork workflows (origin=fork, upstream=parent), the GitHub API needs
     // head qualified as "forkOwner:branch" for cross-repo PRs.
-    const forkOwner = await this.detectForkOwner(cwd);
+    const forkOwner = await this.detectForkOwner(cwd, parentRemoteName);
     const apiHead = forkOwner ? `${forkOwner}:${ghHead}` : ghHead;
     console.log(`[merge-gate] createReview: ghBase=${ghBase} apiHead=${apiHead} forkOwner=${forkOwner ?? 'none'} cwd=${cwd}`);
 
@@ -126,9 +128,9 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
    * Detect fork workflow by checking if both origin and upstream remotes exist.
    * Returns the fork owner (from origin URL) so head can be qualified as "owner:branch".
    */
-  private async detectForkOwner(cwd: string): Promise<string | undefined> {
+  private async detectForkOwner(cwd: string, parentRemote: string): Promise<string | undefined> {
     try {
-      await this.exec('git', ['remote', 'get-url', 'upstream'], cwd);
+      await this.exec('git', ['remote', 'get-url', parentRemote], cwd);
       const originUrl = await this.exec('git', ['remote', 'get-url', 'origin'], cwd);
       const match = originUrl.match(/github\.com[:/]([^/]+)\//);
       return match?.[1];
@@ -137,11 +139,11 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
     }
   }
 
-  private async prepareReviewBranch(cwd: string, featureBranch: string): Promise<{
+  private async prepareReviewBranch(cwd: string, featureBranch: string, parentRemote: string): Promise<{
     pushSource: string;
     cleanup: () => Promise<void>;
   }> {
-    if (!(await this.hasUpstreamRemote(cwd))) {
+    if (!(await this.hasUpstreamRemote(cwd, parentRemote))) {
       return {
         pushSource: featureBranch,
         cleanup: async () => {},
@@ -151,17 +153,17 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
     // The polluted-branch repair path only makes sense for real GitHub fork
     // workflows. Local/file origins used by dry-run and similar harnesses can
     // legitimately diverge from upstream without needing PR branch surgery.
-    if (!(await this.detectForkOwner(cwd))) {
+    if (!(await this.detectForkOwner(cwd, parentRemote))) {
       return {
         pushSource: featureBranch,
         cleanup: async () => {},
       };
     }
 
-    await this.exec('git', ['fetch', '--quiet', 'upstream', 'master'], cwd);
+    await this.exec('git', ['fetch', '--quiet', parentRemote, 'master'], cwd);
     await this.exec('git', ['fetch', '--quiet', 'origin', 'master'], cwd);
 
-    const originOnly = new Set(await this.revList('upstream/master..origin/master', cwd));
+    const originOnly = new Set(await this.revList(`${parentRemote}/master..origin/master`, cwd));
     if (originOnly.size === 0) {
       return {
         pushSource: featureBranch,
@@ -169,7 +171,7 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
       };
     }
 
-    const headOnly = await this.revList(`upstream/master..${featureBranch}`, cwd);
+    const headOnly = await this.revList(`${parentRemote}/master..${featureBranch}`, cwd);
     const polluted = headOnly.filter((sha) => originOnly.has(sha));
     if (polluted.length === 0) {
       return {
@@ -197,7 +199,7 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
     console.warn(`[merge-gate] auto-repairing polluted PR branch ${featureBranch} via ${tempBranch}`);
 
     try {
-      await this.exec('git', ['switch', '-C', tempBranch, 'upstream/master'], cwd);
+      await this.exec('git', ['switch', '-C', tempBranch, `${parentRemote}/master`], cwd);
       await this.cherryPickCommits(cwd, intended);
     } catch (error) {
       await this.clearCherryPickState(cwd);
@@ -214,9 +216,9 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
     };
   }
 
-  private async hasUpstreamRemote(cwd: string): Promise<boolean> {
+  private async hasUpstreamRemote(cwd: string, parentRemote: string): Promise<boolean> {
     try {
-      await this.exec('git', ['remote', 'get-url', 'upstream'], cwd);
+      await this.exec('git', ['remote', 'get-url', parentRemote], cwd);
       return true;
     } catch {
       return false;

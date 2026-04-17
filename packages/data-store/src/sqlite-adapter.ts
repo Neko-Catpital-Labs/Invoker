@@ -298,6 +298,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         plan_file TEXT,
         repo_url TEXT,
         branch TEXT,
+        parent_remote TEXT,
         created_at TEXT DEFAULT (datetime('now')),
         updated_at TEXT DEFAULT (datetime('now'))
       );
@@ -516,6 +517,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       'ALTER TABLE tasks ADD COLUMN is_merge_node INTEGER DEFAULT 0',
       'ALTER TABLE workflows ADD COLUMN on_finish TEXT',
       'ALTER TABLE workflows ADD COLUMN base_branch TEXT',
+      'ALTER TABLE workflows ADD COLUMN parent_remote TEXT',
       'ALTER TABLE workflows ADD COLUMN feature_branch TEXT',
       'ALTER TABLE workflows ADD COLUMN generation INTEGER DEFAULT 0',
       'ALTER TABLE tasks ADD COLUMN last_heartbeat_at TEXT',
@@ -650,15 +652,15 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
   saveWorkflow(workflow: Workflow): void {
     this.execRun(`
-      INSERT OR REPLACE INTO workflows (id, name, description, visual_proof, status, plan_file, repo_url, branch, on_finish, base_branch, feature_branch, merge_mode, review_provider, generation, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT OR REPLACE INTO workflows (id, name, description, visual_proof, status, plan_file, repo_url, branch, on_finish, base_branch, parent_remote, feature_branch, merge_mode, review_provider, generation, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
       workflow.id, workflow.name,
       workflow.description ?? null,
       workflow.visualProof ? 1 : 0,
       workflow.status,
       workflow.planFile ?? null, workflow.repoUrl ?? null, workflow.branch ?? null,
-      workflow.onFinish ?? null, workflow.baseBranch ?? null, workflow.featureBranch ?? null,
+      workflow.onFinish ?? null, workflow.baseBranch ?? null, workflow.parentRemote ?? 'upstream', workflow.featureBranch ?? null,
       workflow.mergeMode ?? null,
       workflow.reviewProvider ?? null,
       workflow.generation ?? 0,
@@ -1584,6 +1586,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       branch: row.branch ?? undefined,
       onFinish: row.on_finish ?? undefined,
       baseBranch: row.base_branch ?? undefined,
+      parentRemote: row.parent_remote ?? 'upstream',
       featureBranch: row.feature_branch ?? undefined,
       mergeMode: row.merge_mode ?? undefined,
       reviewProvider: row.review_provider ?? undefined,

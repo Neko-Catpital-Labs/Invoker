@@ -132,7 +132,12 @@ export async function rebaseAndRetry(
     { module: 'agent-session-trace' },
   );
   if (deps.taskExecutor && workflow?.repoUrl) {
-    await deps.taskExecutor.preparePoolForRebaseRetry(workflowId, workflow.repoUrl, workflow.baseBranch);
+    await deps.taskExecutor.preparePoolForRebaseRetry(
+      workflowId,
+      workflow.repoUrl,
+      workflow.baseBranch,
+      workflow.parentRemote,
+    );
   }
 
   return bumpGenerationAndRecreate(workflowId, deps);

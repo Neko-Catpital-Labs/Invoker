@@ -1018,16 +1018,16 @@ describe('WorktreeExecutor', () => {
       taskProcess.emit('close', 0, null);
     });
 
-    it('syncs upstream base when upstream remote is available', async () => {
+    it('syncs parent remote base when a custom parent remote is configured', async () => {
       const { taskProcess } = setupSpawnMock();
       const defaultImpl = mockedSpawn.getMockImplementation()!;
       mockedSpawn.mockImplementation((cmd: string, args?: readonly string[], options?: any) => {
         if (cmd === 'git') {
           const argsArr = args as string[] | undefined;
-          if (argsArr?.[0] === 'remote' && argsArr?.[1] === 'get-url' && argsArr?.[2] === 'upstream') {
+          if (argsArr?.[0] === 'remote' && argsArr?.[1] === 'get-url' && argsArr?.[2] === 'canonical') {
             const gitProc = createMockProcess();
             Promise.resolve().then(() => {
-              gitProc.stdout!.emit('data', Buffer.from('git@github.com:upstream/repo.git\n'));
+              gitProc.stdout!.emit('data', Buffer.from('git@github.com:canonical/repo.git\n'));
               gitProc.emit('close', 0, null);
             });
             return gitProc as any;
@@ -1037,20 +1037,20 @@ describe('WorktreeExecutor', () => {
       });
 
       const request = makeRequest({
-        inputs: { command: 'echo hello', baseBranch: 'master' },
+        inputs: { command: 'echo hello', baseBranch: 'master', parentRemote: 'canonical' },
       });
       await executor.start(request);
 
       const gitCalls = mockedSpawn.mock.calls.filter((call) => call[0] === 'git');
-      const upstreamFetch = gitCalls.find((call) => {
+      const parentFetch = gitCalls.find((call) => {
         const args = call[1] as string[];
         return (
           args[0] === 'fetch'
-          && args[1] === 'upstream'
-          && args[2] === 'refs/heads/master:refs/remotes/upstream/master'
+          && args[1] === 'canonical'
+          && args[2] === 'refs/heads/master:refs/remotes/canonical/master'
         );
       });
-      expect(upstreamFetch).toBeDefined();
+      expect(parentFetch).toBeDefined();
 
       taskProcess.emit('close', 0, null);
     });

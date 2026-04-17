@@ -1,6 +1,7 @@
 /**
- * Resolve plan base refs against origin/<branch> in the pool mirror clone so worktrees
- * branch from the remote tip, not a stale local refs/heads/<branch>.
+ * Resolve plan base refs in the pool mirror clone so worktrees branch from the remote tip,
+ * not a stale local refs/heads/<branch>. Short names sync from origin only; use
+ * <parentRemote>/<branch> explicitly when parent remote should define the base.
  */
 
 const SHA40 = /^[0-9a-f]{40}$/i;
@@ -31,7 +32,7 @@ async function hasRemote(runGit: GitExec, remoteName: string): Promise<boolean> 
 export async function syncPlanBaseRemote(
   runGit: GitExec,
   baseBranch: string,
-  remoteName: 'origin' | 'upstream' = 'origin',
+  remoteName = 'origin',
 ): Promise<void> {
   const spec = `refs/heads/${baseBranch}:refs/remotes/${remoteName}/${baseBranch}`;
   try {
@@ -50,22 +51,63 @@ export async function syncPlanBaseRemote(
   }
 }
 
+function stripKnownRemotePrefix(ref: string, parentRemote: string): string {
+  if (ref.startsWith('origin/')) return ref.slice('origin/'.length);
+  const parentPrefix = `${parentRemote}/`;
+  if (ref.startsWith(parentPrefix)) return ref.slice(parentPrefix.length);
+  return ref;
+}
+
 /**
- * For short branch names, choose the tracking remote that should define the
- * workflow base in fork workflows.
+ * Fetch the single remote branch that backs `baseRef` before resolving it.
+ * No-op for HEAD, full SHAs, refs/*, or rev expressions with traversal.
+ */
+export async function syncPlanBaseRemoteForRef(
+  runGit: GitExec,
+  baseRef: string,
+  parentRemote = 'upstream',
+): Promise<void> {
+  const r = baseRef.trim();
+  if (!r || r === 'HEAD') return;
+  if (isFullSha(r)) return;
+  if (r.startsWith('refs/')) return;
+  if (r.includes('~') || r.includes('^')) return;
+
+  const parentPrefix = `${parentRemote}/`;
+  if (r.startsWith(parentPrefix)) {
+    const branch = r.slice(parentPrefix.length);
+    if (!branch || !(await hasRemote(runGit, parentRemote))) return;
+    await syncPlanBaseRemote(runGit, branch, parentRemote);
+    return;
+  }
+
+  if (r.startsWith('origin/')) {
+    const branch = r.slice('origin/'.length);
+    if (!branch) return;
+    await syncPlanBaseRemote(runGit, branch, 'origin');
+    return;
+  }
+
+  if (shouldResolveViaOriginTracking(r, parentRemote)) {
+    await syncPlanBaseRemote(runGit, r, 'origin');
+  }
+}
+
+/**
+ * For short branch names, choose tracking remote that should define workflow base.
  */
 export async function resolvePreferredTrackingRemote(
   runGit: GitExec,
   baseBranch: string,
-): Promise<'origin' | 'upstream'> {
+  parentRemote = 'upstream',
+): Promise<string> {
   const branch = baseBranch.trim();
-  if (!branch || !shouldResolveViaOriginTracking(branch)) return 'origin';
-  if (!(await hasRemote(runGit, 'upstream'))) return 'origin';
+  if (!branch || !shouldResolveViaOriginTracking(branch, parentRemote)) return 'origin';
+  if (!(await hasRemote(runGit, parentRemote))) return 'origin';
 
-  // Refresh upstream tracking ref first so the decision is made from current remote state.
-  await syncPlanBaseRemote(runGit, branch, 'upstream');
-  const upstreamResolved = await tryResolveCommit(runGit, `upstream/${branch}^{commit}`);
-  return upstreamResolved ? 'upstream' : 'origin';
+  await syncPlanBaseRemote(runGit, branch, parentRemote);
+  const parentResolved = await tryResolveCommit(runGit, `${parentRemote}/${branch}^{commit}`);
+  return parentResolved ? parentRemote : 'origin';
 }
 
 function isFullSha(ref: string): boolean {
@@ -75,12 +117,13 @@ function isFullSha(ref: string): boolean {
 /**
  * True if we should resolve via origin/<name> after sync (short branch like master, main).
  */
-export function shouldResolveViaOriginTracking(ref: string): boolean {
+export function shouldResolveViaOriginTracking(ref: string, parentRemote = 'upstream'): boolean {
   const r = ref.trim();
   if (!r || r === 'HEAD') return false;
   if (isFullSha(r)) return false;
   if (r.startsWith('refs/')) return false;
   if (r.startsWith('origin/')) return false;
+  if (r.startsWith(`${parentRemote}/`)) return false;
   // tags often contain no slash but rev-parse treats ambiguous; require heads-like
   if (r.includes('~') || r.includes('^')) return false;
   return true;
@@ -90,8 +133,13 @@ export function shouldResolveViaOriginTracking(ref: string): boolean {
  * Resolve base ref to a full commit SHA for computeBranchHash / worktree base.
  * For short branch names, uses origin/<branch> (caller should syncPlanBaseRemote first).
  */
-export async function resolvePlanBaseRevision(runGit: GitExec, baseRef: string): Promise<string> {
+export async function resolvePlanBaseRevision(
+  runGit: GitExec,
+  baseRef: string,
+  parentRemote = 'upstream',
+): Promise<string> {
   const r = baseRef.trim() || 'HEAD';
+  const parentPrefix = `${parentRemote}/`;
   if (r === 'HEAD') {
     return (await runGit(['rev-parse', 'HEAD'])).trim();
   }
@@ -104,22 +152,22 @@ export async function resolvePlanBaseRevision(runGit: GitExec, baseRef: string):
   if (r.startsWith('origin/')) {
     return (await runGit(['rev-parse', '--verify', `${r}^{commit}`])).trim();
   }
-  if (r.startsWith('upstream/')) {
+  if (r.startsWith(parentPrefix)) {
     return (await runGit(['rev-parse', '--verify', `${r}^{commit}`])).trim();
   }
-  if (shouldResolveViaOriginTracking(r)) {
-    const upstreamRemoteConfigured = await hasRemote(runGit, 'upstream');
-    const upstreamExpr = `upstream/${r}^{commit}`;
+  if (shouldResolveViaOriginTracking(r, parentRemote)) {
+    const parentRemoteConfigured = await hasRemote(runGit, parentRemote);
+    const parentExpr = `${parentRemote}/${r}^{commit}`;
     const originExpr = `origin/${r}^{commit}`;
     const localExpr = `refs/heads/${r}^{commit}`;
 
-    if (upstreamRemoteConfigured) {
-      const upstreamResolved = await tryResolveCommit(runGit, upstreamExpr);
-      if (upstreamResolved) return upstreamResolved;
+    if (parentRemoteConfigured) {
+      const parentResolved = await tryResolveCommit(runGit, parentExpr);
+      if (parentResolved) return parentResolved;
 
-      await syncPlanBaseRemote(runGit, r, 'upstream');
-      const upstreamAfterSync = await tryResolveCommit(runGit, upstreamExpr);
-      if (upstreamAfterSync) return upstreamAfterSync;
+      await syncPlanBaseRemote(runGit, r, parentRemote);
+      const parentAfterSync = await tryResolveCommit(runGit, parentExpr);
+      if (parentAfterSync) return parentAfterSync;
     }
 
     const originResolved = await tryResolveCommit(runGit, originExpr);
@@ -131,7 +179,7 @@ export async function resolvePlanBaseRevision(runGit: GitExec, baseRef: string):
     if (localResolved) return localResolved;
 
     // Last chance: fetch the branch into origin/<branch>, then retry both.
-    await syncPlanBaseRemote(runGit, r, 'origin');
+    await syncPlanBaseRemote(runGit, stripKnownRemotePrefix(r, parentRemote), 'origin');
     const originAfterSync = await tryResolveCommit(runGit, originExpr);
     if (originAfterSync) return originAfterSync;
     const localAfterSync = await tryResolveCommit(runGit, localExpr);
