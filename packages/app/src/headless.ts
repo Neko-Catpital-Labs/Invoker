@@ -1102,6 +1102,7 @@ async function headlessRecreateWorkflow(workflowId: string, deps: HeadlessDeps):
     remoteFetchForPool.enabled = false;
     let topup: TaskState[] = [];
     try {
+      await te.executeTasks(runnable);
       topup = await executeGlobalTopup({
         orchestrator: deps.orchestrator,
         taskExecutor: te,

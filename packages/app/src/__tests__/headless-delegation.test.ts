@@ -251,6 +251,13 @@ describe('headless delegation enforcement', () => {
         expect(mockDeps.commandService.restartTask).toHaveBeenCalled();
 
         // approve command (now routed through commandService)
+        mockDeps.orchestrator.getAllTasks = vi.fn(() => [
+          {
+            id: 'wf-1/task-1',
+            status: 'completed',
+            config: { workflowId: 'wf-1' },
+          } as any,
+        ]);
         await runHeadless(['approve', 'wf-1/task-1'], mockDeps);
         expect(mockDeps.commandService.approve).toHaveBeenCalled();
       });
@@ -704,6 +711,53 @@ describe('headless delegation enforcement', () => {
 
         expect(preemptWorkflowExecution).toHaveBeenCalledWith('wf-1');
         expect(mockDeps.orchestrator.recreateWorkflow).toHaveBeenCalledWith('wf-1');
+      });
+
+      it('headless recreate dispatches runnable tasks before waiting for completion', async () => {
+        let taskStatus: 'running' | 'completed' = 'running';
+        mockDeps.orchestrator.recreateWorkflow = vi.fn(() => [
+          {
+            id: 'wf-1/task-1',
+            status: 'running',
+            config: { workflowId: 'wf-1' },
+            execution: {},
+          } as any,
+        ]);
+        mockDeps.orchestrator.startExecution = vi.fn(() => []);
+        mockDeps.persistence.updateWorkflow = vi.fn();
+        mockDeps.persistence.listWorkflows = vi.fn(() => [{
+          id: 'wf-1',
+          name: 'test-workflow',
+          generation: 0,
+          status: 'running' as const,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }]);
+        mockDeps.persistence.loadTasks = vi.fn(() => [{
+          id: 'wf-1/task-1',
+          status: taskStatus,
+          config: { workflowId: 'wf-1' },
+          execution: {},
+        } as any]);
+        mockDeps.orchestrator.getAllTasks = vi.fn(() => [{
+          id: 'wf-1/task-1',
+          status: taskStatus,
+          config: { workflowId: 'wf-1' },
+          execution: {},
+        } as any]);
+
+        const executeTasksSpy = vi
+          .spyOn(TaskRunner.prototype, 'executeTasks')
+          .mockImplementation(async () => {
+            taskStatus = 'completed';
+          });
+
+        await runHeadless(['recreate', 'wf-1'], mockDeps);
+
+        expect(executeTasksSpy).toHaveBeenCalledTimes(1);
+        expect(mockDeps.orchestrator.recreateWorkflow).toHaveBeenCalledWith('wf-1');
+
+        executeTasksSpy.mockRestore();
       });
 
       it('headless rebase preempts resolved workflow before rebase mutation', async () => {
