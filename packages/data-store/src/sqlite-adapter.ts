@@ -1817,6 +1817,11 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return evictedIds;
   }
 
+  loadWorkflowMutationIntent(id: number): WorkflowMutationIntent | undefined {
+    const row = this.queryOne('SELECT * FROM workflow_mutation_intents WHERE id = ?', [id]);
+    return row ? this.rowToWorkflowMutationIntent(row) : undefined;
+  }
+
   listWorkflowMutationIntents(
     workflowId?: string,
     statuses?: WorkflowMutationIntentStatus[],

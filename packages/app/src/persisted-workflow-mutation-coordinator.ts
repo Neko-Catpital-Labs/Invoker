@@ -10,8 +10,21 @@ type Deferred<T> = {
   reject: (error: unknown) => void;
 };
 
+type InvalidationSignal = {
+  promise: Promise<never>;
+  reject: (error: unknown) => void;
+};
+
+class WorkflowMutationInvalidatedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'WorkflowMutationInvalidatedError';
+  }
+}
+
 export class PersistedWorkflowMutationCoordinator {
   private readonly inFlightPromises = new Map<number, Deferred<unknown>>();
+  private readonly runningIntentInvalidations = new Map<number, InvalidationSignal>();
   private readonly enqueueStartedAtMs = new Map<number, number>();
   private readonly drainingWorkflows = new Set<string>();
   private readonly pendingDrainWorkflows = new Set<string>();
@@ -39,6 +52,7 @@ export class PersistedWorkflowMutationCoordinator {
   ): Promise<T> {
     const intentId = this.persistence.enqueueWorkflowMutationIntent(workflowId, channel, args, priority);
     this.enqueueStartedAtMs.set(intentId, Date.now());
+    this.invalidateSupersededRunningIntent(workflowId, intentId, channel, args);
     this.trace(
       `enqueue intent=${intentId} workflow=${workflowId} priority=${priority} channel=${channel} activeDrains=${this.activeWorkflowDrains} pendingWorkflows=${this.pendingDrainWorkflows.size}`,
     );
@@ -58,6 +72,7 @@ export class PersistedWorkflowMutationCoordinator {
   ): number {
     const intentId = this.persistence.enqueueWorkflowMutationIntent(workflowId, channel, args, priority);
     this.enqueueStartedAtMs.set(intentId, Date.now());
+    this.invalidateSupersededRunningIntent(workflowId, intentId, channel, args);
     this.trace(
       `submit intent=${intentId} workflow=${workflowId} priority=${priority} channel=${channel} defer=${Boolean(options?.deferDrain)} activeDrains=${this.activeWorkflowDrains} pendingWorkflows=${this.pendingDrainWorkflows.size}`,
     );
@@ -164,6 +179,7 @@ export class PersistedWorkflowMutationCoordinator {
 
   private async executeIntent(workflowId: string, intent: WorkflowMutationIntent): Promise<void> {
     const deferred = this.inFlightPromises.get(intent.id);
+    const invalidation = this.createRunningIntentInvalidation(intent.id);
     const leaseHeartbeat = setInterval(() => {
       this.persistence.renewWorkflowMutationLease(workflowId, this.ownerId, {
         activeIntentId: intent.id,
@@ -172,15 +188,27 @@ export class PersistedWorkflowMutationCoordinator {
     }, this.leaseHeartbeatMs);
     try {
       this.evictQueuedWorkflowIntentsForFence(workflowId, intent);
-      const result = await this.dispatch(intent.channel, intent.args);
-      this.persistence.completeWorkflowMutationIntent(intent.id);
+      const dispatchPromise = Promise.resolve(this.dispatch(intent.channel, intent.args));
+      void dispatchPromise.catch(() => {});
+      const result = await Promise.race([
+        dispatchPromise,
+        invalidation.promise,
+      ]);
+      const latestIntent = this.persistence.loadWorkflowMutationIntent(intent.id);
+      if (latestIntent?.status === 'running') {
+        this.persistence.completeWorkflowMutationIntent(intent.id);
+      }
       deferred?.resolve(result);
     } catch (error) {
       const message = error instanceof Error ? (error.stack ?? error.message) : String(error);
-      this.persistence.failWorkflowMutationIntent(intent.id, message);
+      const latestIntent = this.persistence.loadWorkflowMutationIntent(intent.id);
+      if (latestIntent?.status === 'running') {
+        this.persistence.failWorkflowMutationIntent(intent.id, message);
+      }
       deferred?.reject(error);
     } finally {
       clearInterval(leaseHeartbeat);
+      this.runningIntentInvalidations.delete(intent.id);
       this.persistence.renewWorkflowMutationLease(workflowId, this.ownerId);
       this.inFlightPromises.delete(intent.id);
       this.enqueueStartedAtMs.delete(intent.id);
@@ -222,6 +250,63 @@ export class PersistedWorkflowMutationCoordinator {
         `[workflow-mutation-coordinator] evicted ${evictedIds.length} queued intent(s) before fence ${intent.channel}#${intent.id} for ${workflowId}\n`,
       );
     }
+  }
+
+  private createRunningIntentInvalidation(intentId: number): InvalidationSignal {
+    const existing = this.runningIntentInvalidations.get(intentId);
+    if (existing) {
+      return existing;
+    }
+    let reject!: (error: unknown) => void;
+    const promise = new Promise<never>((_, r) => {
+      reject = r;
+    });
+    const entry: InvalidationSignal = {
+      reject,
+      promise,
+    };
+    this.runningIntentInvalidations.set(intentId, entry);
+    return entry;
+  }
+
+  private invalidateSupersededRunningIntent(
+    workflowId: string,
+    newIntentId: number,
+    channel: string,
+    args: unknown[],
+  ): void {
+    if (!this.isHardPreemptingRecreateIntent(channel, args)) {
+      return;
+    }
+    const activeLease = this.persistence.listWorkflowMutationLeases()
+      .find((lease) => lease.workflowId === workflowId);
+    const activeIntentId = activeLease?.activeIntentId;
+    if (!activeIntentId || activeIntentId >= newIntentId) {
+      return;
+    }
+    const activeIntent = this.persistence.loadWorkflowMutationIntent(activeIntentId);
+    if (!activeIntent || activeIntent.status !== 'running') {
+      return;
+    }
+    const reason = `Superseded by recreate intent #${newIntentId}`;
+    this.persistence.failWorkflowMutationIntent(activeIntentId, reason);
+    const invalidation = this.runningIntentInvalidations.get(activeIntentId);
+    invalidation?.reject(new WorkflowMutationInvalidatedError(reason));
+    process.stderr.write(
+      `[workflow-mutation-coordinator] invalidated running intent ${activeIntentId} for ${workflowId} via recreate#${newIntentId}\n`,
+    );
+  }
+
+  private isHardPreemptingRecreateIntent(channel: string, args: unknown[]): boolean {
+    if (channel === 'invoker:recreate-workflow') {
+      return true;
+    }
+    if (channel !== 'headless.exec') {
+      return false;
+    }
+    const payload = args[0] as { args?: unknown[] } | undefined;
+    const rawArgs = Array.isArray(payload?.args) ? payload.args : [];
+    return rawArgs[0] === 'recreate';
   }
 
   private isWorkflowQueueFenceIntent(intent: WorkflowMutationIntent): boolean {
