@@ -49,7 +49,11 @@ test.describe('Fix with Claude', () => {
     const scopedTaskId = await resolveTaskId(page, 'task-fail');
 
     await page.locator('.react-flow__node[data-testid$="/task-fail"]').click({ button: 'right' });
-    const fixBtn = page.locator('button').filter({ hasText: 'Fix with Claude' });
+    const moreBtn = page.getByRole('menuitem', { name: 'More' });
+    if (await moreBtn.isVisible().catch(() => false)) {
+      await moreBtn.click();
+    }
+    const fixBtn = page.getByRole('menuitem', { name: 'Fix with Claude' });
     await expect(fixBtn).toBeVisible({ timeout: 2000 });
     await fixBtn.click();
 
@@ -69,7 +73,11 @@ test.describe('Fix with Claude', () => {
     const scopedTaskId = await resolveTaskId(page, 'task-fail');
 
     await page.locator('.react-flow__node[data-testid$="/task-fail"]').click({ button: 'right' });
-    const fixBtn = page.locator('button').filter({ hasText: 'Fix with Claude' });
+    const moreBtn = page.getByRole('menuitem', { name: 'More' });
+    if (await moreBtn.isVisible().catch(() => false)) {
+      await moreBtn.click();
+    }
+    const fixBtn = page.getByRole('menuitem', { name: 'Fix with Claude' });
     await expect(fixBtn).toBeVisible({ timeout: 2000 });
     await fixBtn.click();
 
