@@ -140,6 +140,7 @@ export class TaskRunner {
 
   /** In-flight executions keyed by attemptId (with taskId retained for external kill resolution). */
   private activeExecutions = new Map<string, ActiveExecutionEntry>();
+  private launchingAttemptIds = new Set<string>();
 
   /** Serializes async onComplete handlers so orchestrator mutations never overlap. */
   private completionChain: Promise<void> = Promise.resolve();
@@ -286,6 +287,13 @@ export class TaskRunner {
       `${RESTART_TO_BRANCH_TRACE} TaskRunner.executeTask BEGIN taskId=${task.id} isMergeNode=${Boolean(task.config.isMergeNode)} status=${task.status}`,
     );
     const attemptId = this.resolveAttemptIdForStart(task);
+    if (this.launchingAttemptIds.has(attemptId) || this.activeExecutions.has(attemptId)) {
+      traceExecution(
+        `[TaskRunner] executeTask skipping duplicate launch for task=${task.id} attempt=${attemptId}`,
+      );
+      return;
+    }
+    this.launchingAttemptIds.add(attemptId);
     try {
       await this.executeTaskInner(task, attemptId);
     } catch (err) {
@@ -329,6 +337,8 @@ export class TaskRunner {
       };
       this.callbacks.onComplete?.(task.id, response);
       this.orchestrator.handleWorkerResponse(response);
+    } finally {
+      this.launchingAttemptIds.delete(attemptId);
     }
   }
 
@@ -466,6 +476,13 @@ export class TaskRunner {
       ]);
     } catch (err) {
       const meta = err as StartupFailureMetadata;
+      const startupErrorMessage = `Executor startup failed (${executor.type}): ${err instanceof Error ? err.message : String(err)}\n`;
+      this.callbacks.onOutput?.(task.id, startupErrorMessage);
+      try {
+        this.persistence.appendTaskOutput(task.id, startupErrorMessage);
+      } catch {
+        // Preserve the original startup failure if output persistence also fails.
+      }
       if (meta.workspacePath || meta.branch || meta.agentSessionId || meta.containerId) {
         const execution: Record<string, string> = {};
         if (meta.workspacePath) execution.workspacePath = meta.workspacePath;
@@ -481,7 +498,7 @@ export class TaskRunner {
         });
       }
       throw new Error(
-        `Executor startup failed (${executor.type}): ${err instanceof Error ? err.message : String(err)}`,
+        startupErrorMessage.trimEnd(),
         { cause: err },
       );
     } finally {
@@ -941,8 +958,12 @@ export class TaskRunner {
   }
 
   /** @internal */ async createMergeWorktree(ref: string, label: string, repoUrl?: string, parentRemote = 'upstream'): Promise<string> {
-    const clonePath = resolve(homedir(), '.invoker', 'merge-clones', `${label}-${Date.now()}`);
-    mkdirSync(resolve(homedir(), '.invoker', 'merge-clones'), { recursive: true });
+    const invokerHomeRoot = process.env.INVOKER_DB_DIR
+      ? resolve(process.env.INVOKER_DB_DIR)
+      : resolve(homedir(), '.invoker');
+    const mergeCloneRoot = resolve(invokerHomeRoot, 'merge-clones');
+    const clonePath = resolve(mergeCloneRoot, `${label}-${Date.now()}`);
+    mkdirSync(mergeCloneRoot, { recursive: true });
 
     // Determine clone source: prefer pool mirror (has latest remote refs), fall back to host repo
     let cloneSource: string = this.cwd;

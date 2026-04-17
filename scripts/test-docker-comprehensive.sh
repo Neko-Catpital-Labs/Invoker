@@ -25,15 +25,98 @@ if [[ -z "${INVOKER_DB_DIR:-}" ]]; then
   export INVOKER_DB_DIR="$(mktemp -d "${TMPDIR:-/tmp}/invoker-docker-comprehensive-db.XXXXXX")"
   CREATED_TMP_DB_DIR=1
 fi
+export INVOKER_HEADLESS_STANDALONE=1
+export INVOKER_ALLOW_DELETE_ALL=1
+export INVOKER_UNSAFE_DISABLE_DB_WRITER_LOCK=1
+export INVOKER_API_PORT="${INVOKER_API_PORT:-$((4300 + (RANDOM % 1000)))}"
+export INVOKER_IPC_SOCKET="${INVOKER_IPC_SOCKET:-$INVOKER_DB_DIR/ipc-transport.sock}"
+export INVOKER_REPO_CONFIG_PATH="${INVOKER_REPO_CONFIG_PATH:-$INVOKER_DB_DIR/config.json}"
+if [[ ! -f "$INVOKER_REPO_CONFIG_PATH" ]]; then
+  printf '{\n  "autoFixRetries": 0\n}\n' > "$INVOKER_REPO_CONFIG_PATH"
+fi
 DB_PATH="$INVOKER_DB_DIR/invoker.db"
 PLAN_FILE="$REPO_ROOT/plans/test-docker-comprehensive.yaml"
+PATCHED_PLAN_FILE=""
+FIXTURE_IMAGE_TAG="${FIXTURE_IMAGE_TAG:-invoker-docker-comprehensive:latest}"
 
 cleanup() {
+  if [[ -n "$PATCHED_PLAN_FILE" ]]; then
+    rm -f "$PATCHED_PLAN_FILE" 2>/dev/null || true
+  fi
   if [[ "$CREATED_TMP_DB_DIR" = "1" ]]; then
     rm -rf "$INVOKER_DB_DIR" 2>/dev/null || true
   fi
 }
 trap cleanup EXIT
+
+patch_plan_repo_url() {
+  PATCHED_PLAN_FILE="$(mktemp "${TMPDIR:-/tmp}/invoker-docker-plan.XXXXXX.yaml")"
+  local current_branch
+  current_branch="$(git branch --show-current 2>/dev/null || true)"
+  if [[ -z "$current_branch" || "$current_branch" = "HEAD" ]]; then
+    current_branch="master"
+  fi
+  python3 -c "
+import pathlib, sys
+repo_root = pathlib.Path(sys.argv[1]).resolve()
+src = pathlib.Path(sys.argv[2])
+dest = pathlib.Path(sys.argv[3])
+fixture_image = sys.argv[4]
+base_branch = sys.argv[5]
+text = src.read_text(encoding='utf-8')
+lines = []
+replaced = False
+base_replaced = False
+for line in text.splitlines():
+    if line.lstrip().startswith('repoUrl:'):
+        lines.append('repoUrl: ' + repo_root.as_uri())
+        replaced = True
+    elif line.lstrip().startswith('baseBranch:'):
+        lines.append('baseBranch: ' + base_branch)
+        base_replaced = True
+    else:
+        lines.append(line.replace('invoker-agent:latest', fixture_image))
+if not replaced:
+    insert_at = 1 if lines and lines[0].startswith('name:') else 0
+    lines.insert(insert_at, 'repoUrl: ' + repo_root.as_uri())
+if not base_replaced:
+    insert_at = 2 if len(lines) > 1 and lines[0].startswith('name:') and lines[1].startswith('repoUrl:') else (1 if lines and lines[0].startswith('name:') else 0)
+    lines.insert(insert_at, 'baseBranch: ' + base_branch)
+body = '\\n'.join(lines) + ('\\n' if text.endswith('\\n') else '')
+dest.write_text(body, encoding='utf-8')
+" "$REPO_ROOT" "$PLAN_FILE" "$PATCHED_PLAN_FILE" "$FIXTURE_IMAGE_TAG" "$current_branch"
+}
+
+build_fixture_image() {
+  local fixture_dir dockerfile current_branch
+  fixture_dir="$(mktemp -d "${TMPDIR:-/tmp}/invoker-docker-comprehensive-image.XXXXXX")"
+  dockerfile="$fixture_dir/Dockerfile"
+  current_branch="$(git rev-parse --abbrev-ref HEAD)"
+  if [[ -z "$current_branch" || "$current_branch" = "HEAD" ]]; then
+    current_branch="ci-docker-fixture"
+  fi
+  cat > "$dockerfile" <<'DOCKERFILE'
+FROM invoker-agent:latest
+
+ARG CURRENT_BRANCH
+
+USER root
+RUN cd /app \
+    && git init . \
+    && git config --global --add safe.directory /app \
+    && printf '# docker comprehensive fixture\n' > README.md \
+    && git add . \
+    && git -c user.email="test@invoker.local" -c user.name="Invoker Docker Test" commit -m "seed" \
+    && git branch "${CURRENT_BRANCH}" \
+    && git checkout "${CURRENT_BRANCH}" \
+    && chown -R invoker:invoker /app
+
+USER invoker
+WORKDIR /app
+DOCKERFILE
+  docker build --build-arg "CURRENT_BRANCH=$current_branch" -t "$FIXTURE_IMAGE_TAG" -f "$dockerfile" "$fixture_dir" >/dev/null
+  rm -rf "$fixture_dir"
+}
 
 # ── Colors ───────────────────────────────────────────────────
 RED='\033[0;31m'
@@ -79,6 +162,10 @@ if [ ! -f "$DB_PATH" ] && ! command -v sqlite3 >/dev/null 2>&1; then
 fi
 pass "sqlite3 available"
 
+echo "==> Building Docker fixture image"
+build_fixture_image
+pass "Fixture image $FIXTURE_IMAGE_TAG built with seeded /app git repo"
+
 # ── Step 1: Clear previous state ────────────────────────────
 
 echo ""
@@ -90,7 +177,8 @@ echo "==> Clearing previous Invoker state"
 echo ""
 echo "==> Submitting plan: $PLAN_FILE"
 echo ""
-./submit-plan.sh "$PLAN_FILE" || true
+patch_plan_repo_url
+./submit-plan.sh "$PATCHED_PLAN_FILE" || true
 
 echo ""
 
@@ -104,15 +192,15 @@ fi
 # ── Helper: query task output from DB ────────────────────────
 
 task_output() {
-  sqlite3 "$DB_PATH" "SELECT data FROM task_output WHERE task_id = '$1' ORDER BY id ASC;" 2>/dev/null || echo ""
+  sqlite3 "$DB_PATH" "SELECT data FROM task_output WHERE task_id = '$1' OR task_id LIKE '%/' || '$1' ORDER BY id ASC;" 2>/dev/null || echo ""
 }
 
 task_status() {
-  sqlite3 "$DB_PATH" "SELECT json_extract(data, '$.status') FROM tasks WHERE json_extract(data, '$.id') = '$1';" 2>/dev/null || echo "unknown"
+  sqlite3 "$DB_PATH" "SELECT status FROM tasks WHERE id = '$1' OR id LIKE '%/' || '$1' ORDER BY id DESC LIMIT 1;" 2>/dev/null || echo "unknown"
 }
 
 task_container_id() {
-  sqlite3 "$DB_PATH" "SELECT json_extract(data, '$.execution.containerId') FROM tasks WHERE json_extract(data, '$.id') = '$1';" 2>/dev/null || echo ""
+  sqlite3 "$DB_PATH" "SELECT container_id FROM tasks WHERE id = '$1' OR id LIKE '%/' || '$1' ORDER BY id DESC LIMIT 1;" 2>/dev/null || echo ""
 }
 
 # ── Step 4: Validate each task ──────────────────────────────

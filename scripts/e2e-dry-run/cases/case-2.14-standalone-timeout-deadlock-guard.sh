@@ -20,8 +20,16 @@ echo "==> case 2.14: delete-all"
 invoker_e2e_run_headless delete-all
 
 PLAN="$INVOKER_E2E_REPO_ROOT/plans/e2e-dry-run/group2-multi-task/2.14-standalone-timeout-deadlock.yaml"
+SUBMIT_LOG="$(mktemp "${TMPDIR:-/tmp}/invoker-e2e-2.14-submit.XXXXXX.log")"
 echo "==> case 2.14: submit plan (expect fail after ~3s)"
-invoker_e2e_submit_plan "$PLAN" || true
+invoker_e2e_submit_plan_capture "$PLAN" "$SUBMIT_LOG" || true
+
+WF_ID="$(invoker_e2e_extract_workflow_id_from_log "$SUBMIT_LOG")"
+if [ -z "$WF_ID" ]; then
+  echo "FAIL case 2.14: could not resolve workflow id from submit output"
+  cat "$SUBMIT_LOG"
+  exit 1
+fi
 
 STA="$(invoker_e2e_task_status e2e-g2214-taskA)"
 if [ "$STA" != "failed" ]; then
@@ -46,19 +54,19 @@ if [ "$CODE" -ne 0 ]; then
   exit 1
 fi
 
-if ! rg -q 'Processing workflow:' "$OUT_FILE"; then
-  echo "FAIL case 2.14: expected at least one workflow to be processed"
+if ! grep -Fq "Processing workflow: $WF_ID" "$OUT_FILE"; then
+  echo "FAIL case 2.14: expected workflow $WF_ID to be processed"
   sed -n '1,160p' "$OUT_FILE" || true
   exit 1
 fi
 
-if ! rg -q 'standalone mode detected, forcing --parallel 1' "$OUT_FILE"; then
+if ! grep -Fq 'standalone mode detected, forcing --parallel 1' "$OUT_FILE"; then
   echo "FAIL case 2.14: expected standalone parallelism guard log"
   sed -n '1,160p' "$OUT_FILE" || true
   exit 1
 fi
 
-if ! rg -q 'standalone mode detected, disabling per-command timeout' "$OUT_FILE"; then
+if ! grep -Fq 'standalone mode detected, disabling per-command timeout' "$OUT_FILE"; then
   echo "FAIL case 2.14: expected standalone timeout guard log"
   sed -n '1,160p' "$OUT_FILE" || true
   exit 1

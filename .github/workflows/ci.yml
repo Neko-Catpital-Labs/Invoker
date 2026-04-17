@@ -1,12 +1,8 @@
-# Full matrix: Vitest (all packages) + headless e2e-dry-run + e2e-ssh (skip if no sshd)
-# + Playwright Electron + verify-executor-routing. See scripts/test-suites/README.md.
-# Trigger workflow registration.
 name: CI
 
 on:
   push:
     branches: [master, main]
-  # No `branches:` filter — stacked PRs target other fix/* bases; those must still run CI.
   pull_request:
   workflow_dispatch:
 
@@ -15,14 +11,16 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: write
+  contents: read
+
+env:
+  CI: true
+  NODE_VERSION: '22'
 
 jobs:
-  test-all:
+  build-artifacts:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
-    env:
-      CI: true
+    timeout-minutes: 30
 
     steps:
       - name: Checkout
@@ -33,14 +31,110 @@ jobs:
       - name: Install pnpm
         uses: pnpm/action-setup@v4
 
-      - name: Use Node.js 22
+      - name: Use Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
-          cache: 'pnpm'
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Build UI and app
+        run: |
+          pnpm --filter @invoker/ui build
+          pnpm --filter @invoker/app build
+          tar -czf app-build-dist.tgz packages/ui/dist packages/app/dist
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-build-dist
+          path: app-build-dist.tgz
+          if-no-files-found: error
+
+  quality-checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Dependency Cruise
+            command: pnpm run check:deps
+          - name: TypeScript Types
+            command: pnpm run check:types
+
+    name: quality / ${{ matrix.name }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Use Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run quality check
+        run: ${{ matrix.command }}
+
+  required-fast:
+    needs: build-artifacts
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Guardrails
+            command: |
+              bash scripts/test-suites/required/05-delete-all-prod-db-guard.sh
+              bash scripts/test-suites/required/07-invalid-config-json.sh
+              bash scripts/test-suites/required/15-owner-boundary-policy.sh
+              bash scripts/test-suites/required/50-verify-executor-routing.sh
+          - name: Vitest Workspace
+            command: bash scripts/test-suites/required/10-vitest-workspace.sh
+          - name: Submit Workflow Chain
+            command: bash scripts/test-suites/required/15-submit-workflow-chain.sh
+
+    name: required-fast / ${{ matrix.name }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Use Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: app-build-dist
+          path: /tmp/invoker-build-artifacts
+
+      - name: Extract build artifacts
+        run: tar -xzf /tmp/invoker-build-artifacts/app-build-dist.tgz -C .
 
       - name: Configure git identity and HTTPS auth
         run: |
@@ -48,21 +142,300 @@ jobs:
           git config --global user.email "ci@invoker.dev"
           git config --global url."https://x-access-token:${{ github.token }}@github.com/".insteadOf "git@github.com:"
           git config --global --add url."https://x-access-token:${{ github.token }}@github.com/".insteadOf "https://github.com/"
+          git update-ref refs/heads/main refs/remotes/origin/master || true
+          git update-ref refs/remotes/origin/main refs/remotes/origin/master || true
 
-      - name: Build UI for Electron E2E tests
-        run: pnpm --filter @invoker/ui build
-
-      - name: Install Playwright system dependencies (Electron E2E)
+      - name: Install Playwright system dependencies
         run: pnpm --filter @invoker/app exec playwright install --with-deps
 
-      - name: Check package dependencies (depcruise)
-        run: pnpm run check:deps
+      - name: Run suite group
+        run: ${{ matrix.command }}
 
-      - name: Check TypeScript types (tsc -b)
-        run: pnpm run check:types
+  dry-run:
+    needs: build-artifacts
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: case-1
+            suite: scripts/test-suites/required/20-e2e-dry-run.sh
+          - name: case-2
+            suite: scripts/test-suites/required/21-e2e-dry-run-downstream.sh
+          - name: case-4
+            suite: scripts/test-suites/required/22-e2e-dry-run-github.sh
 
-      - name: Check owner boundaries
-        run: bash scripts/check-owner-boundary.sh
+    name: dry-run / ${{ matrix.name }}
 
-      - name: Run full test matrix (test:all)
-        run: pnpm run test:all
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Use Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: app-build-dist
+          path: /tmp/invoker-build-artifacts
+
+      - name: Extract build artifacts
+        run: tar -xzf /tmp/invoker-build-artifacts/app-build-dist.tgz -C .
+
+      - name: Configure git identity and HTTPS auth
+        run: |
+          git config --global user.name "CI Bot"
+          git config --global user.email "ci@invoker.dev"
+          git config --global url."https://x-access-token:${{ github.token }}@github.com/".insteadOf "git@github.com:"
+          git config --global --add url."https://x-access-token:${{ github.token }}@github.com/".insteadOf "https://github.com/"
+          git update-ref refs/heads/main refs/remotes/origin/master || true
+          git update-ref refs/remotes/origin/main refs/remotes/origin/master || true
+
+      - name: Install Playwright system dependencies
+        run: pnpm --filter @invoker/app exec playwright install --with-deps
+
+      - name: Run dry-run shard
+        run: bash ${{ matrix.suite }}
+
+  playwright:
+    needs: build-artifacts
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: 1-of-3
+            shard: 1/3
+          - name: 2-of-3
+            shard: 2/3
+          - name: 3-of-3
+            shard: 3/3
+
+    name: playwright / ${{ matrix.name }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Use Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: app-build-dist
+          path: /tmp/invoker-build-artifacts
+
+      - name: Extract build artifacts
+        run: tar -xzf /tmp/invoker-build-artifacts/app-build-dist.tgz -C .
+
+      - name: Configure git identity for E2E repos
+        run: |
+          git config --global user.name "CI Bot"
+          git config --global user.email "ci@invoker.dev"
+
+      - name: Install Playwright system dependencies
+        run: pnpm --filter @invoker/app exec playwright install --with-deps
+
+      - name: Run Playwright shard
+        env:
+          INVOKER_PLAYWRIGHT_SHARD: ${{ matrix.shard }}
+          INVOKER_PLAYWRIGHT_RUN_LABEL: ci-playwright
+          INVOKER_PLAYWRIGHT_WORKERS: '1'
+          INVOKER_PLAYWRIGHT_ARGS: --reporter=line
+        run: bash scripts/test-suites/optional/40-playwright-app.sh
+
+      - name: Upload Playwright artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-artifacts-${{ matrix.name }}
+          path: |
+            .git/playwright-artifacts
+            packages/app/test-results
+          if-no-files-found: ignore
+
+  ssh:
+    needs: build-artifacts
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: shard-30
+            suite: scripts/test-suites/optional/30-e2e-ssh.sh
+          - name: shard-31
+            suite: scripts/test-suites/optional/31-e2e-ssh-merge.sh
+
+    name: ssh / ${{ matrix.name }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Use Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: app-build-dist
+          path: /tmp/invoker-build-artifacts
+
+      - name: Extract build artifacts
+        run: tar -xzf /tmp/invoker-build-artifacts/app-build-dist.tgz -C .
+
+      - name: Configure git identity and HTTPS auth
+        run: |
+          git config --global user.name "CI Bot"
+          git config --global user.email "ci@invoker.dev"
+          git config --global url."https://x-access-token:${{ github.token }}@github.com/".insteadOf "git@github.com:"
+          git config --global --add url."https://x-access-token:${{ github.token }}@github.com/".insteadOf "https://github.com/"
+          git update-ref refs/heads/main refs/remotes/origin/master || true
+          git update-ref refs/remotes/origin/main refs/remotes/origin/master || true
+
+      - name: Install Playwright system dependencies
+        run: pnpm --filter @invoker/app exec playwright install --with-deps
+
+      - name: Install and start sshd
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y openssh-server
+          sudo mkdir -p /run/sshd
+          sudo service ssh start
+
+      - name: Run SSH shard
+        run: bash ${{ matrix.suite }}
+
+  optional-other:
+    needs: build-artifacts
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Worktree Provisioning
+            command: bash scripts/test-suites/optional/60-worktree-provisioning.sh
+          - name: Visual Proof Validate
+            command: bash scripts/test-suites/optional/70-ui-visual-proof-validate.sh
+
+    name: optional / ${{ matrix.name }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Use Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: app-build-dist
+          path: /tmp/invoker-build-artifacts
+
+      - name: Extract build artifacts
+        run: tar -xzf /tmp/invoker-build-artifacts/app-build-dist.tgz -C .
+
+      - name: Run optional suite
+        run: ${{ matrix.command }}
+
+  docker:
+    needs: build-artifacts
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    name: docker / comprehensive
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Use Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: app-build-dist
+          path: /tmp/invoker-build-artifacts
+
+      - name: Extract build artifacts
+        run: tar -xzf /tmp/invoker-build-artifacts/app-build-dist.tgz -C .
+
+      - name: Configure git identity and HTTPS auth
+        run: |
+          git config --global user.name "CI Bot"
+          git config --global user.email "ci@invoker.dev"
+          git config --global url."https://x-access-token:${{ github.token }}@github.com/".insteadOf "git@github.com:"
+          git config --global --add url."https://x-access-token:${{ github.token }}@github.com/".insteadOf "https://github.com/"
+          git update-ref refs/heads/main refs/remotes/origin/master || true
+          git update-ref refs/remotes/origin/main refs/remotes/origin/master || true
+
+      - name: Build invoker agent base image
+        run: bash scripts/build-agent-base-image.sh
+
+      - name: Build invoker-agent Docker image
+        run: docker build -t invoker-agent:latest scripts/fixtures/hello-world-agent
+
+      - name: Run Docker comprehensive suite
+        run: bash scripts/test-suites/dangerous/10-docker-comprehensive.sh

@@ -111,6 +111,18 @@ describe('buildMirrorCloneScript', () => {
     expect(script).toContain('exit 128');
   });
 
+  it('prefers origin/HEAD over the mirror local HEAD', () => {
+    const script = buildMirrorCloneScript({
+      repoUrl: 'git@github.com:owner/repo.git',
+      repoHash: 'abc123',
+      baseRef: 'HEAD',
+    });
+
+    expect(script).toContain('ORIGIN_HEAD=$(git -C "$CLONE" symbolic-ref --quiet --short refs/remotes/origin/HEAD');
+    expect(script).toContain('if [ "$BASE" = "HEAD" ] && [ -n "$ORIGIN_HEAD" ]');
+    expect(script).toContain('RESOLVED_BASE="$ORIGIN_HEAD"');
+  });
+
   it('base64-encodes repo URL to avoid shell injection', () => {
     const maliciousUrl = "git@github.com:user/repo.git';rm -rf /;'";
     const script = buildMirrorCloneScript({

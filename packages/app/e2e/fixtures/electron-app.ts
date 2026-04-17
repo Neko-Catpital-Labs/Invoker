@@ -12,6 +12,7 @@ import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { pathToFileURL } from 'node:url';
 import { stringify as yamlStringify } from 'yaml';
 
 export type ElectronFixtures = {
@@ -57,12 +58,14 @@ export const test = base.extend<ElectronFixtures>({
       env: {
         ...process.env,
         NODE_ENV: 'test',
+        TZ: 'UTC',
         INVOKER_DB_DIR: testDir,
         INVOKER_IPC_SOCKET: ipcSocketPath,
         INVOKER_ALLOW_DELETE_ALL: '1',
         INVOKER_E2E_ENABLE_COMPOSITOR: '1',
         INVOKER_REPO_CONFIG_PATH: configPath,
         INVOKER_E2E_MARKER_ROOT: markerRoot,
+        INVOKER_TEST_FIXED_NOW: '2025-01-01T00:00:00.000Z',
         INVOKER_CLAUDE_FIX_COMMAND: claudeMarker,
         PATH: pathEnv,
       },
@@ -97,7 +100,8 @@ export { expect };
  * Local bare repo created by global-setup.ts. All E2E plans use this so
  * WorktreeExecutor can clone without hitting the network.
  */
-export const E2E_REPO_URL = 'file:///tmp/invoker-e2e-repo.git';
+export const E2E_BARE_REPO = process.env.INVOKER_E2E_BARE_REPO ?? '/tmp/invoker-e2e-repo.git';
+export const E2E_REPO_URL = pathToFileURL(E2E_BARE_REPO).href;
 
 export const TEST_PLAN = {
   name: 'E2E Test Plan',

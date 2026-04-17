@@ -9,13 +9,20 @@ cd "$ROOT"
 source "$ROOT/scripts/e2e-dry-run/lib/common.sh"
 invoker_e2e_ensure_app_built
 
-# Kill any stale Electron processes from previous runs (both GUI and headless).
-# This ensures the test environment has a fresh PATH with the correct stub directory.
-pkill -f "electron.*packages/app/dist/main.js" 2>/dev/null || true
-sleep 0.2
-
 shopt -s nullglob
-cases=( "$ROOT/scripts/e2e-dry-run/cases/"*.sh )
+cases=()
+if [ "$#" -gt 0 ]; then
+  for pattern in "$@"; do
+    matches=( "$ROOT/scripts/e2e-dry-run/cases"/$pattern )
+    if [ "${#matches[@]}" -eq 0 ]; then
+      echo "No case scripts matched pattern: $pattern"
+      exit 1
+    fi
+    cases+=( "${matches[@]}" )
+  done
+else
+  cases=( "$ROOT/scripts/e2e-dry-run/cases/"*.sh )
+fi
 if [ "${#cases[@]}" -eq 0 ]; then
   echo "No case scripts in scripts/e2e-dry-run/cases/"
   exit 1
@@ -31,9 +38,6 @@ for c in "${cases[@]}"; do
   else
     echo "FAILED: $c"
     failed=$((failed + 1))
-    # Kill any leaked Electron processes from the failed case (both GUI and headless).
-    pkill -f "electron.*packages/app/dist/main.js" 2>/dev/null || true
-    sleep 0.2
   fi
 done
 

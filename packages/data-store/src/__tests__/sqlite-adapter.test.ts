@@ -239,6 +239,31 @@ describe('SQLiteAdapter', () => {
     });
   });
 
+  describe('docker executor config', () => {
+    it('round-trips task-level dockerImage on save and update', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t1', {
+        config: {
+          executorType: 'docker',
+          dockerImage: 'node:20',
+        },
+      }));
+
+      let [loaded] = adapter.loadTasks('wf-1');
+      expect(loaded.config.executorType).toBe('docker');
+      expect(loaded.config.dockerImage).toBe('node:20');
+
+      adapter.updateTask('t1', {
+        config: {
+          dockerImage: 'invoker-agent:latest',
+        },
+      });
+
+      [loaded] = adapter.loadTasks('wf-1');
+      expect(loaded.config.dockerImage).toBe('invoker-agent:latest');
+    });
+  });
+
   describe('listWorkflows', () => {
     it('returns saved workflows ordered by creation time descending', () => {
       adapter.saveWorkflow({

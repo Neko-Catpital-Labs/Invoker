@@ -26,9 +26,6 @@ _INVOKER_E2E_SSH_TAG="invoker-e2e-ssh-$$"
 # Temp directory for SSH key pair and config.
 _INVOKER_E2E_SSH_TMPDIR=""
 
-# Track whether we injected a PATH line into ~/.bashrc.
-_INVOKER_E2E_BASHRC_PATCHED=""
-
 # --------------------------------------------------------------------------- #
 # Test if sshd is listening on localhost port 22 (3s timeout).
 # Only checks TCP reachability — auth is tested later after key setup.
@@ -61,43 +58,6 @@ invoker_e2e_ssh_setup_keys() {
 }
 
 # --------------------------------------------------------------------------- #
-# Inject PATH export at the top of ~/.bashrc so non-interactive SSH sessions
-# (which bash sources ~/.bashrc for, but Ubuntu's default guard blocks) get
-# the full PATH including pnpm/node. Tagged with our PID for safe cleanup.
-# --------------------------------------------------------------------------- #
-invoker_e2e_ssh_setup_path() {
-  local bashrc="$HOME/.bashrc"
-  local tag="# $_INVOKER_E2E_SSH_TAG"
-  local path_line="export PATH=\"$PATH\" $tag"
-
-  if [ -f "$bashrc" ]; then
-    # Prepend the PATH export before the non-interactive guard.
-    local tmp
-    tmp="$(mktemp)"
-    echo "$path_line" > "$tmp"
-    cat "$bashrc" >> "$tmp"
-    mv "$tmp" "$bashrc"
-  else
-    echo "$path_line" > "$bashrc"
-  fi
-  _INVOKER_E2E_BASHRC_PATCHED=1
-}
-
-# --------------------------------------------------------------------------- #
-# Remove the injected PATH line from ~/.bashrc.
-# --------------------------------------------------------------------------- #
-invoker_e2e_ssh_cleanup_path() {
-  if [ -n "${_INVOKER_E2E_BASHRC_PATCHED:-}" ]; then
-    local bashrc="$HOME/.bashrc"
-    if [ -f "$bashrc" ]; then
-      grep -v "$_INVOKER_E2E_SSH_TAG" "$bashrc" > "$bashrc.tmp" || true
-      mv "$bashrc.tmp" "$bashrc"
-    fi
-    _INVOKER_E2E_BASHRC_PATCHED=""
-  fi
-}
-
-# --------------------------------------------------------------------------- #
 # Remove temp key from authorized_keys, delete temp dir.
 # --------------------------------------------------------------------------- #
 invoker_e2e_ssh_cleanup_keys() {
@@ -116,6 +76,10 @@ invoker_e2e_ssh_write_config() {
   local config_file="$_INVOKER_E2E_SSH_TMPDIR/invoker-config.json"
   local current_user
   current_user="$(whoami)"
+  local remote_home
+  local provision_cmd
+  remote_home="$_INVOKER_E2E_SSH_TMPDIR/remote-invoker-home"
+  provision_cmd="$(command -v pnpm) install --frozen-lockfile"
 
   cat > "$config_file" <<EOJSON
 {
@@ -125,7 +89,9 @@ invoker_e2e_ssh_write_config() {
       "user": "$current_user",
       "sshKeyPath": "$INVOKER_E2E_SSH_KEY",
       "port": 22,
-      "managedWorkspaces": true
+      "managedWorkspaces": true,
+      "remoteInvokerHome": "$remote_home",
+      "provisionCommand": "$provision_cmd"
     }
   }
 }
@@ -140,7 +106,6 @@ EOJSON
 invoker_e2e_ssh_init() {
   invoker_e2e_init
   invoker_e2e_ssh_setup_keys
-  invoker_e2e_ssh_setup_path
   invoker_e2e_ssh_write_config
 
   # Verify SSH works with the generated key.
@@ -150,7 +115,6 @@ invoker_e2e_ssh_init() {
            -i "$INVOKER_E2E_SSH_KEY" \
            "$(whoami)@localhost" true 2>/dev/null; then
     echo "ERROR: SSH to localhost with generated key failed. Aborting." >&2
-    invoker_e2e_ssh_cleanup_path
     invoker_e2e_ssh_cleanup_keys
     return 1
   fi
@@ -160,11 +124,8 @@ invoker_e2e_ssh_init() {
            -o ConnectTimeout=5 \
            -o StrictHostKeyChecking=no \
            -i "$INVOKER_E2E_SSH_KEY" \
-           "$(whoami)@localhost" 'pnpm --version' >/dev/null 2>&1; then
+           "$(whoami)@localhost" "env PATH='$PATH' pnpm --version" >/dev/null 2>&1; then
     echo "ERROR: 'pnpm' not found in non-interactive SSH session PATH." >&2
-    echo "  ~/.bashrc PATH injection did not propagate." >&2
-    echo "  Check that bash sources ~/.bashrc for non-interactive SSH sessions." >&2
-    invoker_e2e_ssh_cleanup_path
     invoker_e2e_ssh_cleanup_keys
     return 1
   fi
@@ -176,8 +137,6 @@ invoker_e2e_ssh_init() {
 invoker_e2e_ssh_full_cleanup() {
   # Prune worktrees (both local and those created by SSH executor on localhost).
   git -C "$INVOKER_E2E_REPO_ROOT" worktree prune 2>/dev/null || true
-  # Clean up bashrc PATH injection.
-  invoker_e2e_ssh_cleanup_path
   # Clean up SSH keys and config.
   invoker_e2e_ssh_cleanup_keys
   # Run base cleanup (kill Electron, clean temp dirs).

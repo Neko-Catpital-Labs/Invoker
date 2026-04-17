@@ -174,6 +174,13 @@ export type TaskDelta =
 
 export type TaskCreateOptions = TaskConfig;
 
+function resolveInitialTaskTimestamp(): Date {
+  if (process.env.NODE_ENV === 'test' && process.env.INVOKER_TEST_FIXED_NOW) {
+    return new Date(process.env.INVOKER_TEST_FIXED_NOW);
+  }
+  return new Date();
+}
+
 // ── Helper to create a new TaskState ────────────────────────
 
 export function createTaskState(
@@ -187,7 +194,7 @@ export function createTaskState(
     description,
     status: 'pending',
     dependencies: [...dependencies],
-    createdAt: new Date(),
+    createdAt: resolveInitialTaskTimestamp(),
     config: { ...options },
     execution: { generation: 0 },
   };

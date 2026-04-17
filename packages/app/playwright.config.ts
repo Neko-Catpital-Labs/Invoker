@@ -1,11 +1,13 @@
 import { defineConfig } from '@playwright/test';
 
+const workers = Number(process.env.INVOKER_PLAYWRIGHT_WORKERS ?? (process.env.CI ? '1' : '2'));
+
 export default defineConfig({
   globalSetup: './e2e/global-setup.ts',
   testDir: './e2e',
   timeout: 120000,
   retries: 0,
-  workers: 1,
+  workers: Number.isFinite(workers) && workers > 0 ? workers : 1,
   snapshotPathTemplate: '{testDir}/__screenshots__/{testFileName}/{arg}{ext}',
   use: {
     trace: 'on-first-retry',

@@ -27,6 +27,7 @@ interface QueueStatus {
 }
 
 function displayTaskId(taskId: string): string {
+  if (taskId.startsWith('__merge__')) return 'merge gate';
   const slash = taskId.lastIndexOf('/');
   return slash >= 0 ? taskId.slice(slash + 1) : taskId;
 }

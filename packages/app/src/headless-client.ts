@@ -17,6 +17,7 @@ import {
   spawnDetachedStandaloneOwner,
   tryAcquireOwnerBootstrapLock,
 } from './headless-owner-bootstrap.js';
+import { loadConfig } from './config.js';
 
 const RED = '\x1b[31m';
 const RESET = '\x1b[0m';
@@ -141,12 +142,20 @@ export async function runHeadlessClientCommand(
   argv: string[],
   deps: HeadlessClientDeps,
 ): Promise<number> {
+  // Validate config before any delegation path so malformed JSON fails fast
+  // even for commands that do not boot the full Electron owner process.
+  loadConfig();
+
   const { args, waitForApproval, noTrack } = parseArgs(argv);
   const standaloneMode = process.env.INVOKER_HEADLESS_STANDALONE === '1';
   const internalOwnerServe = args[0] === 'owner-serve';
+  const resolvedExitCode = (): number => {
+    const exitCode = process.exitCode;
+    return typeof exitCode === 'number' ? exitCode : 0;
+  };
 
   if (!standaloneMode && !internalOwnerServe && await delegateReadOnlyQuery(args, deps.messageBus)) {
-    return process.exitCode ?? 0;
+    return resolvedExitCode();
   }
 
   if (!isHeadlessMutatingCommand(args) || standaloneMode || internalOwnerServe) {
@@ -156,12 +165,12 @@ export async function runHeadlessClientCommand(
   const owner = await tryPingHeadlessOwner(deps.messageBus, 3_000);
   if (owner) {
     if (await delegateMutation(args, deps.messageBus, waitForApproval, noTrack)) {
-      return process.exitCode ?? 0;
+      return resolvedExitCode();
     }
   }
   await deps.ensureStandaloneOwner();
   if (await delegateMutation(args, deps.messageBus, waitForApproval, noTrack)) {
-    return process.exitCode ?? 0;
+    return resolvedExitCode();
   }
   process.stderr.write(
     `${RED}Error:${RESET} Mutation command "${args[0] ?? ''}" could not reach a shared owner after bootstrap.\n`,

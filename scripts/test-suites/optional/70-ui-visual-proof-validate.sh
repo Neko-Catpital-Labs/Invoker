@@ -3,4 +3,4 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 cd "$ROOT"
-exec bash "$ROOT/scripts/ui-visual-proof.sh" --validate
+exec bash "$ROOT/scripts/ui-visual-proof.sh" validate

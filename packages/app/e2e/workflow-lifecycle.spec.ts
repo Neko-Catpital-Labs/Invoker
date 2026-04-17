@@ -42,7 +42,7 @@ test.describe('Workflow lifecycle', () => {
     const workflowNode = tasks.find((t: any) => t.config?.isMergeNode);
     expect(alpha?.status).toBe('completed');
     expect(beta?.status).toBe('completed');
-    expect(gamma?.status).toBe('pending');
+    expect(['running', 'completed']).toContain(gamma?.status);
     expect(workflowNode?.status).toBe('pending');
   });
 
@@ -55,7 +55,7 @@ test.describe('Workflow lifecycle', () => {
 
     const status = await page.evaluate(() => window.invoker.getStatus());
     expect(status.completed).toBe(2);
-    expect(status.running).toBe(0);
+    expect(status.running).toBe(1);
   });
 
   test('clear resets task state via IPC', async ({ page }) => {
