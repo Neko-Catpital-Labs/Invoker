@@ -15,8 +15,7 @@ echo "==> case 1.3: delete-all"
 invoker_e2e_run_headless delete-all
 
 echo "==> case 1.3: submit plan (background — sleep 60 blocks)"
-invoker_e2e_submit_plan "$INVOKER_E2E_REPO_ROOT/plans/e2e-dry-run/group1-single-task/1.3-cancel.yaml" &
-BG_PID=$!
+invoker_e2e_start_submit_plan_background "$INVOKER_E2E_REPO_ROOT/plans/e2e-dry-run/group1-single-task/1.3-cancel.yaml"
 
 # Poll until the task reaches "running" (max 30s).
 echo "==> case 1.3: waiting for task to reach running"
@@ -34,8 +33,7 @@ invoker_e2e_run_headless cancel e2e-g113-task
 
 # Stop the background submit-plan process before polling state; otherwise its
 # stale in-memory orchestrator can race the cancellation on slower CI runners.
-kill "$BG_PID" 2>/dev/null || true
-wait "$BG_PID" 2>/dev/null || true
+invoker_e2e_stop_submit_plan_background
 invoker_e2e_kill_owned_headless_processes
 
 echo "==> case 1.3: wait for task to reach failed after cancel"

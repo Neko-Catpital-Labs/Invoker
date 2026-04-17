@@ -102,7 +102,47 @@ invoker_e2e_kill_owned_headless_processes() {
   fi
 }
 
+invoker_e2e_start_submit_plan_background() {
+  local plan_path="$1"
+  shift
+  local patched
+  patched="$(mktemp "${TMPDIR:-/tmp}/invoker-e2e-plan.XXXXXX")"
+  invoker_e2e_patch_plan_repo_url "$plan_path" "$patched"
+
+  if command -v setsid >/dev/null 2>&1; then
+    setsid "$INVOKER_E2E_REPO_ROOT/submit-plan.sh" "$patched" "$@" &
+  else
+    "$INVOKER_E2E_REPO_ROOT/submit-plan.sh" "$patched" "$@" &
+  fi
+
+  export INVOKER_E2E_BG_SUBMIT_PID="$!"
+  export INVOKER_E2E_BG_SUBMIT_PATCHED_PLAN="$patched"
+  export INVOKER_E2E_BG_SUBMIT_PGID="$(ps -o pgid= -p "$INVOKER_E2E_BG_SUBMIT_PID" 2>/dev/null | tr -d '[:space:]')"
+}
+
+invoker_e2e_stop_submit_plan_background() {
+  local bg_pid="${INVOKER_E2E_BG_SUBMIT_PID:-}"
+  local bg_pgid="${INVOKER_E2E_BG_SUBMIT_PGID:-}"
+
+  if [ -n "$bg_pgid" ] && [ "$bg_pgid" != "$$" ]; then
+    kill -TERM -- "-$bg_pgid" 2>/dev/null || true
+    sleep 1
+    kill -KILL -- "-$bg_pgid" 2>/dev/null || true
+  fi
+
+  if [ -n "$bg_pid" ]; then
+    kill "$bg_pid" 2>/dev/null || true
+    wait "$bg_pid" 2>/dev/null || true
+  fi
+
+  rm -f "${INVOKER_E2E_BG_SUBMIT_PATCHED_PLAN:-}" 2>/dev/null || true
+  unset INVOKER_E2E_BG_SUBMIT_PID
+  unset INVOKER_E2E_BG_SUBMIT_PGID
+  unset INVOKER_E2E_BG_SUBMIT_PATCHED_PLAN
+}
+
 invoker_e2e_cleanup() {
+  invoker_e2e_stop_submit_plan_background
   invoker_e2e_kill_owned_headless_processes
   # Clean up worktrees created during the test.
   git -C "$INVOKER_E2E_REPO_ROOT" worktree prune 2>/dev/null || true
