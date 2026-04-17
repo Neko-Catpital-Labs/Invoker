@@ -23,7 +23,7 @@ import '@xyflow/react/dist/style.css';
 
 import type { TaskState, WorkflowMeta } from '../types.js';
 import { layoutNodes } from '../lib/layout.js';
-import { getEdgeStyle, getEffectiveVisualStatus } from '../lib/colors.js';
+import { getEdgeStyle, getEffectiveVisualStatus, matchesStatusFilter } from '../lib/colors.js';
 import { TaskNode } from './TaskNode.js';
 import { BundledEdge, type BundledEdgeData } from './BundledEdge.js';
 import { MergeGateNode } from './MergeGateNode.js';
@@ -39,6 +39,7 @@ import {
 interface TaskDAGProps {
   tasks: Map<string, TaskState>;
   workflows?: Map<string, WorkflowMeta>;
+  selectedTaskId?: string | null;
   onTaskClick?: (task: TaskState) => void;
   onTaskDoubleClick?: (task: TaskState) => void;
   onTaskContextMenu?: (task: TaskState, event: React.MouseEvent) => void;
@@ -73,7 +74,7 @@ function resolveExternalDependencyTaskId(
   return undefined;
 }
 
-function TaskDAGInner({ tasks, workflows, onTaskClick, onTaskDoubleClick, onTaskContextMenu, statusFilters }: TaskDAGProps) {
+function TaskDAGInner({ tasks, workflows, selectedTaskId, onTaskClick, onTaskDoubleClick, onTaskContextMenu, statusFilters }: TaskDAGProps) {
   const { fitView } = useReactFlow();
   const prevNodeCount = useRef(0);
   const reportedGraphVisibleRef = useRef(false);
@@ -120,7 +121,9 @@ function TaskDAGInner({ tasks, workflows, onTaskClick, onTaskDoubleClick, onTask
           }
           const showMergeModeRow = gateKind !== 'external_review';
           const mergeVisualStatus = getEffectiveVisualStatus(task.status, task.execution);
-          const mergeGateDimmed = statusFilters && statusFilters.size > 0 && !statusFilters.has(mergeVisualStatus);
+          const mergeGateDimmed = statusFilters
+            && statusFilters.size > 0
+            && !Array.from(statusFilters).some((filterKey) => matchesStatusFilter(filterKey, mergeVisualStatus));
           allNodes.push({
             id: task.id,
             type: 'mergeGateNode',
@@ -141,16 +144,24 @@ function TaskDAGInner({ tasks, workflows, onTaskClick, onTaskDoubleClick, onTask
               onFinish: wfMeta?.onFinish,
               pendingFixError: task.execution?.pendingFixError,
               dimmed: mergeGateDimmed,
+              selected: selectedTaskId === task.id,
             },
           });
         } else {
           const taskVisualStatus = getEffectiveVisualStatus(task.status, task.execution);
-          const taskDimmed = statusFilters && statusFilters.size > 0 && !statusFilters.has(taskVisualStatus);
+          const taskDimmed = statusFilters
+            && statusFilters.size > 0
+            && !Array.from(statusFilters).some((filterKey) => matchesStatusFilter(filterKey, taskVisualStatus));
           allNodes.push({
             id: task.id,
             type: 'taskNode',
             position: { x: pos.x, y: pos.y + yOffset },
-            data: { task, label: task.description, dimmed: taskDimmed },
+            data: {
+              task,
+              label: task.description,
+              dimmed: taskDimmed,
+              selected: selectedTaskId === task.id,
+            },
           });
         }
       }
@@ -177,7 +188,7 @@ function TaskDAGInner({ tasks, workflows, onTaskClick, onTaskDoubleClick, onTask
     if (statusFilters && statusFilters.size > 0) {
       for (const task of taskArray) {
         const vs = getEffectiveVisualStatus(task.status, task.execution);
-        if (!statusFilters.has(vs)) {
+        if (!Array.from(statusFilters).some((filterKey) => matchesStatusFilter(filterKey, vs))) {
           dimmedNodeIds.add(task.id);
         }
       }
@@ -254,7 +265,7 @@ function TaskDAGInner({ tasks, workflows, onTaskClick, onTaskDoubleClick, onTask
     });
 
     return { nodes: allNodes, edges: newEdges };
-  }, [tasks, workflows, statusFilters]);
+  }, [tasks, workflows, selectedTaskId, statusFilters]);
 
   // Merge task-derived nodes with React Flow's internal dimension/selection state.
   // Without this, each task-delta re-render creates new node objects that discard

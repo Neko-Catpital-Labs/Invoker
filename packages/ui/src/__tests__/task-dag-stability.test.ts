@@ -17,6 +17,16 @@ const source = readFileSync(
 );
 
 describe('TaskDAG stability', () => {
+  describe('selection wiring', () => {
+    it('accepts selectedTaskId in TaskDAG props', () => {
+      expect(source).toContain('selectedTaskId?: string | null;');
+    });
+
+    it('marks nodes selected based on selectedTaskId', () => {
+      expect(source).toContain('selected: selectedTaskId === task.id');
+    });
+  });
+
   // ── fitView prop removal ──────────────────────────────────
   describe('fitView prop removal', () => {
     it('does not pass fitView as a prop to ReactFlow', () => {
