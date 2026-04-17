@@ -35,6 +35,8 @@ Invoker does not provision machines for you. You are responsible for bringing yo
 
 Start here if you want to get Invoker running locally with the smallest possible setup.
 
+If you need to turn a product or implementation plan into an Invoker workflow, use the `plan-to-invoker` skill that `bash scripts/setup-agent-skills.sh` links into supported agents. The canonical skill lives at [skills/plan-to-invoker/SKILL.md](skills/plan-to-invoker/SKILL.md), and its deterministic validation entrypoint is `bash skills/plan-to-invoker/scripts/skill-doctor.sh <plan-file>`.
+
 1. Install the prerequisites above.
 2. Clone the repo and run the installation commands.
 3. Start Invoker with `./run.sh`. It will bootstrap missing workspace dependencies and build what it needs before launching.
