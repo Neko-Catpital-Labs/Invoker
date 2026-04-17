@@ -130,13 +130,24 @@ export interface InvokerConfig {
 }
 
 function readJsonSafe(path: string): InvokerConfig {
-  try {
-    const raw = readFileSync(path, 'utf-8');
-    const parsed = JSON.parse(raw);
-    return typeof parsed === 'object' && parsed !== null ? parsed : {};
-  } catch {
+  if (!existsSync(path)) {
     return {};
   }
+
+  const raw = readFileSync(path, 'utf-8');
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Invalid Invoker config JSON at ${path}: ${message}`);
+  }
+
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw new Error(`Invalid Invoker config at ${path}: expected a JSON object`);
+  }
+
+  return parsed as InvokerConfig;
 }
 
 export function loadConfig(): InvokerConfig {

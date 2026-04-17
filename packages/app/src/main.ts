@@ -234,7 +234,15 @@ process.on('unhandledRejection', (reason) => {
 
 // Repo root: 3 levels up from packages/app/dist/
 const repoRoot = path.resolve(__dirname, '..', '..', '..');
-const invokerConfig: InvokerConfig = loadConfig();
+const invokerConfig: InvokerConfig = (() => {
+  try {
+    return loadConfig();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    process.stderr.write(`${message}\n`);
+    process.exit(1);
+  }
+})();
 
 async function maybeDelayWorkflowResumeForTest(): Promise<void> {
   if (process.env.NODE_ENV !== 'test') return;

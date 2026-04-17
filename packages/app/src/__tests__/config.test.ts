@@ -38,16 +38,14 @@ describe('loadConfig', () => {
     expect(config.defaultBranch).toBe('main');
   });
 
-  it('handles malformed JSON gracefully', () => {
+  it('throws on malformed JSON', () => {
     writeFileSync(join(fakeHome, '.invoker', 'config.json'), 'not json {{{');
-    const config = loadConfig();
-    expect(config).toEqual({});
+    expect(() => loadConfig()).toThrow(/Invalid Invoker config JSON/);
   });
 
-  it('handles non-object JSON gracefully', () => {
+  it('throws on non-object JSON', () => {
     writeFileSync(join(fakeHome, '.invoker', 'config.json'), '"just a string"');
-    const config = loadConfig();
-    expect(config).toEqual({});
+    expect(() => loadConfig()).toThrow(/expected a JSON object/);
   });
 
   it('reads planningTimeoutSeconds from user config', () => {
