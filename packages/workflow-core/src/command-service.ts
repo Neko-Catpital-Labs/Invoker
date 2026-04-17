@@ -78,6 +78,16 @@ export class CommandService {
     );
   }
 
+  async resumeTaskAfterFixApproval(
+    envelope: CommandEnvelope<{ taskId: string }>,
+  ): Promise<CommandResult<TaskState[]>> {
+    return this.executeCommand<TaskState[]>(
+      'APPROVE_FAILED',
+      () => this.orchestrator.resumeTaskAfterFixApproval(envelope.payload.taskId),
+      this.workflowIdForTask(envelope.payload.taskId),
+    );
+  }
+
   async reject(
     envelope: CommandEnvelope<{ taskId: string; reason?: string }>,
   ): Promise<CommandResult<void>> {
