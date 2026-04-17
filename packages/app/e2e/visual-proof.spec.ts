@@ -18,6 +18,8 @@ import {
   assertPageScreenshot,
   E2E_REPO_URL,
 } from './fixtures/electron-app.js';
+import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
 import { stringify as yamlStringify } from 'yaml';
 
 /** Multi-task DAG for verifying deterministic layout ordering. */
@@ -389,6 +391,56 @@ test.describe('Visual proof capture', () => {
 
     await captureScreenshot(page, 'approve-fix-modal-simplified');
     await assertPageScreenshot(page, 'approve-fix-modal-simplified');
+  });
+
+  test('approve-fix modal — renders current-cycle session log', async ({ page, testDir }) => {
+    const sessionId = 'sess-current-codex-approval';
+    const sessionDir = path.join(testDir, 'agent-sessions');
+    await fs.mkdir(sessionDir, { recursive: true });
+    await fs.writeFile(
+      path.join(sessionDir, `${sessionId}.jsonl`),
+      [
+        JSON.stringify({
+          type: 'item.completed',
+          item: { type: 'user_message', text: 'Fix validator merge conflict and keep visual proof checks.' },
+        }),
+        JSON.stringify({
+          type: 'item.completed',
+          item: { type: 'agent_message', text: 'I resolved the validator conflict and preserved the visual proof checks.' },
+        }),
+      ].join('\n') + '\n',
+      'utf8',
+    );
+
+    await loadPlan(page, TEST_PLAN);
+    await injectTaskStates(page, [
+      {
+        taskId: 'task-beta',
+        changes: {
+          status: 'awaiting_approval',
+          execution: {
+            pendingFixError: 'Visual proof error line',
+            agentSessionId: sessionId,
+            agentName: 'codex',
+          },
+        },
+      },
+    ]);
+
+    await page.locator('.react-flow__node[data-testid$="task-beta"]').click();
+    await expect(page.getByRole('heading', { name: 'Second test task depending on alpha' })).toBeVisible();
+    await page.getByRole('button', { name: 'Approve Fix' }).click();
+
+    await expect(page.getByRole('heading', { name: 'Approve AI Fix' })).toBeVisible();
+    await expect(page.getByText('Codex Session')).toBeVisible();
+    await expect(page.getByText(sessionId)).toBeVisible();
+    await expect(page.getByText('Human:')).toBeVisible();
+    await expect(page.getByText('Fix validator merge conflict and keep visual proof checks.')).toBeVisible();
+    await expect(page.getByText('Codex:')).toBeVisible();
+    await expect(page.getByText('I resolved the validator conflict and preserved the visual proof checks.')).toBeVisible();
+
+    await captureScreenshot(page, 'approve-fix-modal-with-session-log');
+    await assertPageScreenshot(page, 'approve-fix-modal-with-session-log');
   });
 
   test('queue view concurrency display', async ({ page }) => {

@@ -26,22 +26,26 @@ export function ApprovalModal({
   onFinish,
 }: ApprovalModalProps) {
   const extractSessionFromEvents = (
-    events: Array<{ payload?: string }>,
+    events: Array<{ eventType?: string; payload?: string }>,
   ): { sessionId?: string; agentName?: string } => {
     for (let i = events.length - 1; i >= 0; i -= 1) {
-      const raw = events[i]?.payload;
-      if (!raw) continue;
+      const event = events[i];
+      if (event?.eventType !== 'task.awaiting_approval') continue;
+      const raw = event.payload;
+      if (!raw) return {};
       try {
         const parsed = JSON.parse(raw);
         const exec = parsed?.execution;
-        if (exec?.agentSessionId) {
-          return {
-            sessionId: String(exec.agentSessionId),
-            agentName: typeof exec.agentName === 'string' ? exec.agentName : undefined,
-          };
-        }
+        return {
+          sessionId: exec?.agentSessionId ? String(exec.agentSessionId) : undefined,
+          agentName: typeof exec?.agentName === 'string'
+            ? exec.agentName
+            : typeof exec?.lastAgentName === 'string'
+              ? exec.lastAgentName
+              : undefined,
+        };
       } catch {
-        // Ignore malformed event payloads
+        return {};
       }
     }
     return {};
@@ -89,7 +93,7 @@ export function ApprovalModal({
       .getEvents(task.id)
       .then((events) => {
         if (cancelled) return;
-        const recovered = extractSessionFromEvents(events as Array<{ payload?: string }>);
+        const recovered = extractSessionFromEvents(events as Array<{ eventType?: string; payload?: string }>);
         if (recovered.sessionId) {
           setEventSessionId(recovered.sessionId);
         }

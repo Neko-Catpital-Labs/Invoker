@@ -551,6 +551,113 @@ describe('ApprovalModal', () => {
     expect(screen.getByText('Codex Session')).toBeInTheDocument();
   });
 
+  it('does not recover a stale older approval session when the latest approval event has none', async () => {
+    mockGetEvents.mockResolvedValue([
+      {
+        id: 2,
+        taskId: 'task-1',
+        eventType: 'task.awaiting_approval',
+        payload: JSON.stringify({
+          status: 'awaiting_approval',
+          execution: {
+            agentSessionId: '06944495-856b-4c94-b703-a4d3a552674e',
+            lastAgentSessionId: '06944495-856b-4c94-b703-a4d3a552674e',
+            lastAgentName: 'claude',
+          },
+        }),
+        createdAt: '2026-04-16 21:10:37',
+      },
+      {
+        id: 1,
+        taskId: 'task-1',
+        eventType: 'task.awaiting_approval',
+        payload: JSON.stringify({
+          status: 'awaiting_approval',
+          execution: {
+            pendingFixError: '{"type":"merge_conflict"}',
+            isFixingWithAI: false,
+            lastAgentName: 'claude',
+          },
+        }),
+        createdAt: '2026-04-17 05:21:35',
+      },
+    ]);
+
+    render(
+      <ApprovalModal
+        task={makeTask({
+          execution: {
+            pendingFixError: '{"type":"merge_conflict"}',
+          },
+        })}
+        onApprove={vi.fn()}
+        onReject={vi.fn()}
+        onClose={vi.fn()}
+        initialAction="reject"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mockGetEvents).toHaveBeenCalledWith('task-1');
+    });
+
+    expect(mockGetAgentSession).not.toHaveBeenCalled();
+    expect(screen.queryByText('Claude Session')).not.toBeInTheDocument();
+    expect(screen.queryByText('06944495-856b-4c94-b703-a4d3a552674e')).not.toBeInTheDocument();
+    expect(screen.getByRole('textbox')).toHaveValue('Original error: {"type":"merge_conflict"}');
+  });
+
+  it('uses the latest approval event when it contains the current-cycle session', async () => {
+    mockGetEvents.mockResolvedValue([
+      {
+        id: 2,
+        taskId: 'task-1',
+        eventType: 'task.awaiting_approval',
+        payload: JSON.stringify({
+          status: 'awaiting_approval',
+          execution: {
+            agentSessionId: 'stale-claude-999',
+            agentName: 'claude',
+          },
+        }),
+        createdAt: '2026-04-16 21:10:37',
+      },
+      {
+        id: 1,
+        taskId: 'task-1',
+        eventType: 'task.awaiting_approval',
+        payload: JSON.stringify({
+          status: 'awaiting_approval',
+          execution: {
+            agentSessionId: 'sess-current-codex-123',
+            agentName: 'codex',
+          },
+        }),
+        createdAt: '2026-04-17 05:21:35',
+      },
+    ]);
+    mockGetAgentSession.mockResolvedValue([
+      { role: 'assistant', content: 'Recovered current cycle.', timestamp: '' },
+    ]);
+
+    render(
+      <ApprovalModal
+        task={makeTask({ execution: {} })}
+        onApprove={vi.fn()}
+        onReject={vi.fn()}
+        onClose={vi.fn()}
+        initialAction="reject"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mockGetAgentSession).toHaveBeenCalledWith('sess-current-codex-123', 'codex');
+    });
+
+    expect(screen.getByText('Codex Session')).toBeInTheDocument();
+    expect(screen.queryByText('stale-claude-999')).not.toBeInTheDocument();
+  });
+
   // ── Approve callback ──────────────────────────────────────
 
   it('calls onApprove with task ID when Approve is clicked', () => {
