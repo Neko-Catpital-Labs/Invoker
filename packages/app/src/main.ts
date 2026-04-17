@@ -113,6 +113,7 @@ import { executeGlobalTopup } from './global-topup.js';
 import { computeDeferredLaunchTiming } from './deferred-runnable.js';
 import { preemptWorkflowBeforeMutation, type WorkflowCancelResult } from './workflow-preemption.js';
 import { relaunchOrphansAndStartReady } from './orphan-relaunch.js';
+import { listOpenFixIntentsForTask } from './auto-fix-intents.js';
 
 // ── Detect headless mode ─────────────────────────────────────
 
@@ -818,9 +819,6 @@ if (isHeadless) {
   let activityPollInterval: ReturnType<typeof setInterval> | null = null;
   let uiPerfLogInterval: ReturnType<typeof setInterval> | null = null;
   const lastKnownTaskStates = new Map<string, string>();
-  const autoFixInProgress = new Set<string>();
-  const pendingAutoFixTasks: string[] = [];
-  const queuedAutoFixTasks = new Set<string>();
   const deferredWorkflowLaunches = new Map<string, {
     timer: ReturnType<typeof setTimeout>;
     taskIds: string[];
@@ -840,7 +838,6 @@ if (isHeadless) {
   const outputFlushTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const pendingUiTaskDeltas: TaskDelta[] = [];
   let uiTaskDeltaFlushTimer: ReturnType<typeof setTimeout> | null = null;
-  const maxConcurrentAutoFixes = 1;
   let lastKnownWorkflowCount = 0;
   let lastActivityLogId = 0;
   let startupWorkflowId: string | null = null;
@@ -970,16 +967,44 @@ if (isHeadless) {
     uiTaskDeltaFlushTimer.unref?.();
   };
 
-  const buildAutoFixQueueSnapshot = (taskId: string): Record<string, unknown> => ({
-    inProgressCount: autoFixInProgress.size,
-    queuedCount: queuedAutoFixTasks.size,
-    pendingCount: pendingAutoFixTasks.length,
-    inProgressForTask: autoFixInProgress.has(taskId),
-    queuedForTask: queuedAutoFixTasks.has(taskId),
-    pendingForTask: pendingAutoFixTasks.includes(taskId),
-    pendingHead: pendingAutoFixTasks[0] ?? null,
-    pendingPreview: pendingAutoFixTasks.slice(0, 5),
-  });
+  const buildAutoFixQueueSnapshot = (taskId: string): Record<string, unknown> => {
+    const workflowId = workflowIdForTaskArg(taskId);
+    if (!workflowId) {
+      return {
+        workflowId: null,
+        openIntentCountForWorkflow: 0,
+        openFixIntentCountForWorkflow: 0,
+        openFixIntentCountForTask: 0,
+        openFixIntentForTask: false,
+        openFixIntentHead: null,
+        openFixIntentPreview: [],
+      };
+    }
+    const openIntents = persistence.listWorkflowMutationIntents(workflowId, ['queued', 'running']);
+    const openFixIntents = openIntents.filter((intent) => (
+      intent.channel === 'invoker:fix-with-agent' || intent.channel === 'headless.exec'
+    ));
+    const openTaskFixIntents = listOpenFixIntentsForTask(openIntents, taskId);
+    return {
+      workflowId,
+      openIntentCountForWorkflow: openIntents.length,
+      openFixIntentCountForWorkflow: openFixIntents.length,
+      openFixIntentCountForTask: openTaskFixIntents.length,
+      openFixIntentForTask: openTaskFixIntents.length > 0,
+      openFixIntentHead: openTaskFixIntents[0]
+        ? {
+          id: openTaskFixIntents[0].id,
+          status: openTaskFixIntents[0].status,
+          channel: openTaskFixIntents[0].channel,
+        }
+        : null,
+      openFixIntentPreview: openTaskFixIntents.slice(0, 5).map((intent) => ({
+        id: intent.id,
+        status: intent.status,
+        channel: intent.channel,
+      })),
+    };
+  };
 
   const logAutoFixDebug = (
     taskId: string,
@@ -1001,88 +1026,95 @@ if (isHeadless) {
     );
   };
 
-  const drainAutoFixQueue = (): void => {
-    if (!taskExecutor) {
-      logger.info('[auto-fix-debug] drain skipped: taskExecutor missing', { module: 'auto-fix' });
-      return;
-    }
+  const executeFixWithAgentMutation = async (
+    taskId: string,
+    agentName?: string,
+    source: 'ipc' | 'auto-fix' = 'ipc',
+  ): Promise<void> => {
     logger.info(
-      `[auto-fix-debug] drain start inProgress=${autoFixInProgress.size} queued=${queuedAutoFixTasks.size} pending=${pendingAutoFixTasks.length}`,
-      { module: 'auto-fix' },
+      `fix-with-agent: "${taskId}" agent=${agentName ?? 'claude'} source=${source} route=fixWithAgent`,
+      { module: 'ipc' },
     );
-    while (autoFixInProgress.size < maxConcurrentAutoFixes && pendingAutoFixTasks.length > 0) {
-      const nextTaskId = pendingAutoFixTasks.shift();
-      if (!nextTaskId) {
-        return;
-      }
-      logAutoFixDebug(nextTaskId, 'drain-pop');
-      queuedAutoFixTasks.delete(nextTaskId);
-      const shouldAutoFixNow = orchestrator.shouldAutoFix(nextTaskId);
-      const alreadyInProgress = autoFixInProgress.has(nextTaskId);
-      if (!shouldAutoFixNow || alreadyInProgress) {
-        logAutoFixDebug(nextTaskId, 'drain-skip', {
-          reason: !shouldAutoFixNow ? 'shouldAutoFix-false' : 'already-in-progress',
-          shouldAutoFix: shouldAutoFixNow,
-          inProgress: alreadyInProgress,
-        });
-        continue;
-      }
-      autoFixInProgress.add(nextTaskId);
-      logAutoFixDebug(nextTaskId, 'drain-dispatch');
-      import('./workflow-actions.js').then(({ autoFixOnFailure }) =>
-        autoFixOnFailure(nextTaskId, {
-          orchestrator,
-          persistence,
-          taskExecutor: requireTaskExecutor(),
-          getAutoFixAgent: () => loadConfig().autoFixAgent,
-          getAutoApproveAIFixes: () => loadConfig().autoApproveAIFixes,
-        })
-          .catch((err) => {
-            logAutoFixDebug(nextTaskId, 'drain-dispatch-error', {
-              error: err instanceof Error ? err.stack ?? err.message : String(err),
-            });
-            logger.error(`[auto-fix] "${nextTaskId}": ${err}`, { module: 'auto-fix' });
-          })
-          .finally(() => {
-            autoFixInProgress.delete(nextTaskId);
-            logAutoFixDebug(nextTaskId, 'drain-dispatch-finished');
-            drainAutoFixQueue();
-          }),
-      );
+    if (source === 'auto-fix') {
+      const task = orchestrator.getTask(taskId);
+      const attemptsBefore = task?.execution.autoFixAttempts ?? 0;
+      const attemptsAfter = attemptsBefore + 1;
+      persistence.updateTask(taskId, {
+        execution: {
+          autoFixAttempts: attemptsAfter,
+        },
+      });
+      logAutoFixDebug(taskId, 'dispatch-attempt-bumped', { attemptsBefore, attemptsAfter });
     }
-    logger.info(
-      `[auto-fix-debug] drain end inProgress=${autoFixInProgress.size} queued=${queuedAutoFixTasks.size} pending=${pendingAutoFixTasks.length}`,
-      { module: 'auto-fix' },
-    );
+    const { savedError } = orchestrator.beginConflictResolution(taskId);
+    try {
+      const output = persistence.getTaskOutput(taskId);
+      await requireTaskExecutor().fixWithAgent(taskId, output, agentName, savedError);
+      await finalizeAppliedFix(taskId, savedError, {
+        orchestrator,
+        taskExecutor: requireTaskExecutor(),
+        autoApproveAIFixes: invokerConfig.autoApproveAIFixes,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      const errorLabel = source === 'auto-fix' ? 'Auto-fix' : `Fix with ${agentName ?? 'Claude'}`;
+      persistence.appendTaskOutput(taskId, `\n[${errorLabel}] Failed: ${msg}`);
+      orchestrator.revertConflictResolution(taskId, savedError, msg);
+      throw err;
+    }
   };
 
   const scheduleAutoFix = (taskId: string): void => {
     logAutoFixDebug(taskId, 'schedule-enter');
-    if (!taskExecutor) {
-      logAutoFixDebug(taskId, 'schedule-skip', { reason: 'no-taskExecutor' });
+    if (!workflowMutationCoordinator) {
+      logAutoFixDebug(taskId, 'schedule-skip', { reason: 'no-workflow-mutation-coordinator' });
+      return;
+    }
+    if (!workflowMutationDispatcher.has('invoker:fix-with-agent')) {
+      logAutoFixDebug(taskId, 'schedule-skip', { reason: 'fix-handler-not-ready' });
+      return;
+    }
+    const workflowId = workflowIdForTaskArg(taskId);
+    if (!workflowId) {
+      logAutoFixDebug(taskId, 'schedule-skip', { reason: 'workflow-not-found' });
       return;
     }
     const shouldAutoFixNow = orchestrator.shouldAutoFix(taskId);
-    const inProgress = autoFixInProgress.has(taskId);
-    const queued = queuedAutoFixTasks.has(taskId);
-    if (inProgress || queued || !shouldAutoFixNow) {
+    if (!shouldAutoFixNow) {
       logAutoFixDebug(taskId, 'schedule-skip', {
-        reason: !shouldAutoFixNow
-          ? 'shouldAutoFix-false'
-          : inProgress
-            ? 'already-in-progress'
-            : 'already-queued',
-        inProgress,
-        queued,
+        reason: 'shouldAutoFix-false',
         shouldAutoFix: shouldAutoFixNow,
       });
       return;
     }
+    const openIntents = persistence.listWorkflowMutationIntents(workflowId, ['queued', 'running']);
+    const openTaskFixIntents = listOpenFixIntentsForTask(openIntents, taskId);
+    if (openTaskFixIntents.length > 0) {
+      logAutoFixDebug(taskId, 'schedule-skip', {
+        reason: 'already-queued-intent',
+        existingIntentIds: openTaskFixIntents.map((intent) => intent.id),
+      });
+      return;
+    }
+    const configuredAgent = loadConfig().autoFixAgent?.trim();
+    const selectedAgent = configuredAgent && configuredAgent.length > 0 ? configuredAgent : undefined;
     logAutoFixDebug(taskId, 'schedule-enqueue');
-    queuedAutoFixTasks.add(taskId);
-    pendingAutoFixTasks.push(taskId);
     logAutoFixDebug(taskId, 'schedule-enqueued');
-    drainAutoFixQueue();
+    void runWorkflowMutation(
+      workflowId,
+      'normal',
+      'invoker:fix-with-agent',
+      [taskId, selectedAgent],
+      async () => executeFixWithAgentMutation(taskId, selectedAgent, 'auto-fix'),
+    )
+      .then(() => {
+        logAutoFixDebug(taskId, 'schedule-dispatch-finished');
+      })
+      .catch((err) => {
+        logAutoFixDebug(taskId, 'schedule-dispatch-error', {
+          error: err instanceof Error ? err.stack ?? err.message : String(err),
+        });
+      });
   };
 
   const parseExecutionDate = (value: unknown): Date | undefined => {
@@ -2824,24 +2856,10 @@ if (isHeadless) {
       async (taskIdArg: unknown, agentNameArg?: unknown) => {
       const taskId = String(taskIdArg);
       const agentName = agentNameArg === undefined ? undefined : String(agentNameArg);
-      logger.info(
-        `fix-with-agent: "${taskId}" agent=${agentName ?? 'claude'} source=ipc route=fixWithAgent`,
-        { module: 'ipc' },
-      );
-      const { savedError } = orchestrator.beginConflictResolution(taskId);
       try {
-        const output = persistence.getTaskOutput(taskId);
-        await requireTaskExecutor().fixWithAgent(taskId, output, agentName, savedError);
-        await finalizeAppliedFix(taskId, savedError, {
-          orchestrator,
-          taskExecutor: requireTaskExecutor(),
-          autoApproveAIFixes: invokerConfig.autoApproveAIFixes,
-        });
+        await executeFixWithAgentMutation(taskId, agentName, 'ipc');
       } catch (err) {
         logger.error(`fix-with-agent failed: ${err}`, { module: 'ipc' });
-        const msg = err instanceof Error ? err.message : String(err);
-        persistence.appendTaskOutput(taskId, `\n[Fix with ${agentName ?? 'Claude'}] Failed: ${msg}`);
-        orchestrator.revertConflictResolution(taskId, savedError, msg);
         throw err;
       }
       },
