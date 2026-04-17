@@ -71,14 +71,14 @@ export class RepoPool {
   /**
    * Force-fetch mirror and sync origin/<baseBranch> (rebase-and-retry). Ignores remoteFetchForPool.
    */
-  async refreshMirrorForRebase(repoUrl: string, baseBranch: string, parentRemote = 'upstream'): Promise<string> {
+  async refreshMirrorForRebase(repoUrl: string, baseBranch: string): Promise<string> {
     const prev = this.repoChains.get(repoUrl) ?? Promise.resolve();
-    const next = prev.then(() => this.doRefreshMirrorForRebase(repoUrl, baseBranch, parentRemote));
+    const next = prev.then(() => this.doRefreshMirrorForRebase(repoUrl, baseBranch));
     this.repoChains.set(repoUrl, next.catch(() => {}));
     return next;
   }
 
-  private async doRefreshMirrorForRebase(repoUrl: string, baseBranch: string, parentRemote: string): Promise<string> {
+  private async doRefreshMirrorForRebase(repoUrl: string, baseBranch: string): Promise<string> {
     const dir = this.cloneDir(repoUrl);
     if (existsSync(dir)) {
       try {
@@ -97,7 +97,7 @@ export class RepoPool {
       await this.execGit(['clone', repoUrl, dir], this.cacheDir);
     }
     const runGit = (args: string[]) => this.execGit(args, dir);
-    await syncPlanBaseRemoteForRef(runGit, baseBranch, parentRemote);
+    await syncPlanBaseRemoteForRef(runGit, baseBranch);
     return dir;
   }
 

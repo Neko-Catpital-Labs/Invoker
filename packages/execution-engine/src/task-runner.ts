@@ -158,15 +158,13 @@ export class TaskRunner {
     workflowId: string,
     repoUrl: string | undefined,
     baseBranchHint: string | undefined,
-    parentRemoteHint: string | undefined,
   ): Promise<void> {
     if (!repoUrl) return;
     const executor = this.executorRegistry.get('worktree');
     if (!(executor instanceof WorktreeExecutor)) return;
     const pool = executor.getRepoPool();
     const baseBranch = baseBranchHint?.trim() || this.defaultBranch || 'master';
-    const parentRemote = parentRemoteHint?.trim() || 'upstream';
-    await pool.refreshMirrorForRebase(repoUrl, baseBranch, parentRemote);
+    await pool.refreshMirrorForRebase(repoUrl, baseBranch);
     const branches = this.collectManagedWorkflowBranches(workflowId);
     await pool.removeManagedBranchesInMirror(repoUrl, branches);
   }
@@ -415,8 +413,6 @@ export class TaskRunner {
       ? `wf:${workflowGeneration}|task:${taskExecutionGeneration}`
       : undefined;
     const baseBranch = workflow?.baseBranch ?? this.defaultBranch;
-    const parentRemote = workflow?.parentRemote ?? 'upstream';
-
     const repoUrl = workflow?.repoUrl;
 
     const request: WorkRequest = {
@@ -437,7 +433,6 @@ export class TaskRunner {
         upstreamBranches: upstreamBranches.length > 0 ? upstreamBranches : undefined,
         salt: generationSalt,
         baseBranch,
-        parentRemote,
         freshWorkspace: this.shouldUseFreshWorkspace(task),
       },
       callbackUrl: '',
@@ -888,12 +883,12 @@ export class TaskRunner {
     });
   }
 
-  async runVisualProofCapture(baseBranch: string, featureBranch: string, slug: string, repoUrl?: string, parentRemote = 'upstream'): Promise<string | undefined> {
+  async runVisualProofCapture(baseBranch: string, featureBranch: string, slug: string, repoUrl?: string): Promise<string | undefined> {
     try {
       const scriptPath = resolve(this.cwd, 'scripts/ui-visual-proof.sh');
       const outputDir = resolve(this.cwd, 'packages/app/e2e/visual-proof');
 
-      const wtDir = await this.createMergeWorktree(baseBranch, 'vp-' + slug, repoUrl, parentRemote);
+      const wtDir = await this.createMergeWorktree(baseBranch, 'vp-' + slug, repoUrl);
 
       const runCapture = (label: string): Promise<string> => {
         return new Promise((resolveP, reject) => {
@@ -986,7 +981,6 @@ export class TaskRunner {
     visualProof?: boolean,
     baseCheckoutRef?: string,
     mergeNodeTaskId?: string,
-    parentRemote?: string,
   ): Promise<string | undefined> {
     return consolidateAndMergeImpl(
       this,
@@ -1000,7 +994,6 @@ export class TaskRunner {
       visualProof,
       baseCheckoutRef,
       mergeNodeTaskId,
-      parentRemote,
     );
   }
 
@@ -1051,7 +1044,7 @@ export class TaskRunner {
     });
   }
 
-  /** @internal */ async createMergeWorktree(ref: string, label: string, repoUrl?: string, parentRemote = 'upstream'): Promise<string> {
+  /** @internal */ async createMergeWorktree(ref: string, label: string, repoUrl?: string): Promise<string> {
     const invokerHomeRoot = process.env.INVOKER_DB_DIR
       ? resolve(process.env.INVOKER_DB_DIR)
       : resolve(homedir(), '.invoker');
@@ -1088,33 +1081,16 @@ export class TaskRunner {
     }
     await this.execGitIn(['remote', 'set-url', 'origin', originUrl], clonePath);
 
-    // If the host repo has the configured parent remote, add it to the clone so
-    // gh CLI can detect fork relationship and target parent for PR operations.
-    try {
-      const parentRemoteUrl = (await this.execGitReadonly(['remote', 'get-url', parentRemote])).trim();
-      if (parentRemoteUrl) {
-        await this.execGitIn(['remote', 'add', parentRemote, parentRemoteUrl], clonePath);
-      }
-    } catch {
-      // No parent remote on host repo — single-remote workflow
-    }
-
     // Refresh the requested base branch from the real remote. The pool mirror's
     // local refs/heads/* can go stale after force-pushes or history rewrites,
     // causing merge conflicts when experiment branches are based on the new
     // history but the clone got the old branch tip from the pool.
     const normalizedRef = ref.trim();
-    const parentPrefix = `${parentRemote}/`;
-    const remoteName = normalizedRef.startsWith(parentPrefix)
-      ? parentRemote
-      : normalizedRef.startsWith('origin/')
-        ? 'origin'
-        : 'origin';
+    const strippedRemoteRef = normalizeBranchForGithubCli(normalizedRef);
+    const remoteName = 'origin';
     const baseRef = normalizedRef.startsWith('origin/')
       ? normalizedRef.slice('origin/'.length)
-      : normalizedRef.startsWith(parentPrefix)
-        ? normalizedRef.slice(parentPrefix.length)
-        : normalizedRef;
+      : strippedRemoteRef;
     try {
       await this.execGitIn(
         ['fetch', remoteName, `+refs/heads/${baseRef}:refs/remotes/${remoteName}/${baseRef}`],
@@ -1135,30 +1111,13 @@ export class TaskRunner {
       }
     };
 
-    const strippedRemoteRef = normalizedRef.startsWith('origin/')
-      ? normalizedRef.slice('origin/'.length)
-      : normalizedRef.startsWith(parentPrefix)
-        ? normalizedRef.slice(parentPrefix.length)
-        : normalizedRef;
-    const candidates = normalizedRef.startsWith(`${parentRemote}/`)
-      ? [
-          normalizedRef,
-          `refs/remotes/${parentRemote}/${strippedRemoteRef}`,
-          `${parentRemote}/${strippedRemoteRef}`,
-          strippedRemoteRef,
-          `refs/heads/${strippedRemoteRef}`,
-          `refs/remotes/origin/${strippedRemoteRef}`,
-          `origin/${strippedRemoteRef}`,
-        ]
-      : [
-          normalizedRef,
-          strippedRemoteRef,
-          `refs/heads/${strippedRemoteRef}`,
-          `refs/remotes/origin/${strippedRemoteRef}`,
-          `origin/${strippedRemoteRef}`,
-          `refs/remotes/${parentRemote}/${strippedRemoteRef}`,
-          `${parentRemote}/${strippedRemoteRef}`,
-        ];
+    const candidates = [
+      normalizedRef,
+      strippedRemoteRef,
+      `refs/heads/${strippedRemoteRef}`,
+      `refs/remotes/origin/${strippedRemoteRef}`,
+      `origin/${strippedRemoteRef}`,
+    ];
 
     let refSha: string | undefined;
     for (const candidate of candidates) {
@@ -1215,21 +1174,6 @@ export class TaskRunner {
     }
   }
 
-  /**
-   * Detect fork workflow by checking if both origin and upstream remotes exist.
-   * Returns the fork owner (from origin URL) so head can be qualified as "owner:branch".
-   */
-  private async detectForkOwner(cwd: string, parentRemote = 'upstream'): Promise<string | undefined> {
-    try {
-      await this.execGitIn(['remote', 'get-url', parentRemote], cwd);
-      const originUrl = (await this.execGitIn(['remote', 'get-url', 'origin'], cwd)).trim();
-      const match = originUrl.match(/github\.com[:/]([^/]+)\//);
-      return match?.[1];
-    } catch {
-      return undefined;
-    }
-  }
-
   /** @internal */ execGh(args: string[], cwd?: string): Promise<string> {
     const effectiveCwd = cwd ?? this.cwd;
     return new Promise((resolvePromise, reject) => {
@@ -1248,17 +1192,12 @@ export class TaskRunner {
     });
   }
 
-  /** @internal */ async execPr(baseBranch: string, featureBranch: string, title: string, body?: string, cwd?: string, parentRemote = 'upstream'): Promise<string> {
+  /** @internal */ async execPr(baseBranch: string, featureBranch: string, title: string, body?: string, cwd?: string): Promise<string> {
     const ghBase = normalizeBranchForGithubCli(baseBranch);
     const ghHead = normalizeBranchForGithubCli(featureBranch);
 
-    // In fork workflows, qualify head as "forkOwner:branch" for cross-repo PRs.
-    const effectiveCwd = cwd ?? this.cwd;
-    const forkOwner = await this.detectForkOwner(effectiveCwd, parentRemote);
-    const qualifiedHead = forkOwner ? `${forkOwner}:${ghHead}` : ghHead;
-
     const listOutput = await this.execGh([
-      'pr', 'list', '--head', qualifiedHead, '--base', ghBase,
+      'pr', 'list', '--head', ghHead, '--base', ghBase,
       '--state', 'open', '--json', 'url,number', '--limit', '1',
     ], cwd);
 
@@ -1273,7 +1212,7 @@ export class TaskRunner {
 
     return this.execGh([
       'pr', 'create', '--base', ghBase,
-      '--head', qualifiedHead, '--title', title, '--body', body ?? '',
+      '--head', ghHead, '--title', title, '--body', body ?? '',
     ], cwd);
   }
 

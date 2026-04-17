@@ -41,7 +41,6 @@ export interface Workflow {
   branch?: string;
   onFinish?: 'none' | 'merge' | 'pull_request';
   baseBranch?: string;
-  parentRemote?: string;
   featureBranch?: string;
   mergeMode?: 'manual' | 'automatic' | 'external_review';
   reviewProvider?: string;
