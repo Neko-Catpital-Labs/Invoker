@@ -46,6 +46,7 @@ import {
   tryDelegateRun,
 } from './headless-delegation.js';
 import { preemptWorkflowBeforeMutation, type WorkflowCancelResult } from './workflow-preemption.js';
+import { relaunchOrphansAndStartReady } from './orphan-relaunch.js';
 
 export { bumpGenerationAndRecreate } from './workflow-actions.js';
 export {
@@ -68,6 +69,7 @@ export interface HeadlessDeps {
   invokerConfig: InvokerConfig;
   initServices: () => Promise<void>;
   executionAgentRegistry?: AgentRegistry;
+  setTaskDispatcherExecutor?: (executor: Pick<TaskRunner, 'executeTasks'> | null) => void;
   wireSlackBot: (deps: {
     executor: TaskRunner;
     logFn: (source: string, level: string, message: string) => void;
@@ -126,7 +128,7 @@ export function createHeadlessExecutor(
   deps: HeadlessDeps,
   callbackOverrides?: Partial<ConstructorParameters<typeof TaskRunner>[0]['callbacks']>,
 ): TaskRunner {
-  return new TaskRunner({
+  const executor = new TaskRunner({
     orchestrator: deps.orchestrator,
     persistence: deps.persistence,
     executorRegistry: deps.executorRegistry,
@@ -157,6 +159,8 @@ export function createHeadlessExecutor(
       ...callbackOverrides,
     },
   });
+  deps.setTaskDispatcherExecutor?.(executor);
+  return executor;
 }
 
 export function wireHeadlessAutoFix(
@@ -801,7 +805,7 @@ async function headlessRun(
   if (currentWorkflowId) process.stdout.write(`Workflow ID: ${currentWorkflowId}\n`);
 
   const started = orchestrator.startExecution();
-  await taskExecutor.executeTasks(started);
+  void started;
 
   if (noTrack) {
     process.stdout.write('[headless] --no-track enabled: submission accepted; exiting without tracking.\n');
@@ -864,30 +868,8 @@ async function headlessResume(
   });
 
   orchestrator.syncFromDb(workflowId);
-
-  // Relaunch tasks stuck in 'running' from a previous session
-  const orphanRestarted: TaskState[] = [];
-  const activeTaskIds = orchestrator.getPersistedActiveTaskIds?.() ?? new Set<string>();
-  for (const task of orchestrator.getAllTasks()) {
-    if (
-      (
-        task.status === 'running'
-        || task.status === 'fixing_with_ai'
-        || (task.status === 'pending' && activeTaskIds.has(task.id))
-      ) &&
-      task.config.workflowId === workflowId
-    ) {
-      deps.logger.info(
-        `relaunching orphaned in-flight task "${task.id}" (${task.status}${task.status === 'pending' ? '/claimed' : ''})`,
-        { module: 'headless' },
-      );
-      const restarted = orchestrator.restartTask(task.id);
-      orphanRestarted.push(...restarted.filter(t => t.status === 'running'));
-    }
-  }
-
-  const started = orchestrator.startExecution();
-  await taskExecutor.executeTasks([...orphanRestarted, ...started]);
+  const allStarted = relaunchOrphansAndStartReady(orchestrator, deps.logger, 'headless', workflowId);
+  await taskExecutor.executeTasks(allStarted);
 
   if (noTrack) {
     process.stdout.write('[headless] --no-track enabled: resume accepted; exiting without tracking.\n');
@@ -953,7 +935,7 @@ async function headlessSelect(taskId: string, experimentId: string, deps: Headle
   const taskExecutor = createHeadlessExecutor(deps);
   const autoFix = wireHeadlessAutoFix(deps, taskExecutor);
   const started = deps.orchestrator.resumeWorkflow(workflowId);
-  await taskExecutor.executeTasks(started);
+  void started;
   await waitForCompletion(deps.orchestrator, undefined, undefined, autoFix.isBusy);
   autoFix.unsubscribe();
 }
@@ -971,9 +953,7 @@ async function headlessRestart(taskId: string, deps: HeadlessDeps): Promise<void
 
   const taskExecutor = createHeadlessExecutor(deps);
   const autoFix = wireHeadlessAutoFix(deps, taskExecutor);
-  if (runnable.length > 0) {
-    await taskExecutor.executeTasks(runnable);
-  }
+  void runnable;
   const topup = await executeGlobalTopup({
     orchestrator: deps.orchestrator,
     taskExecutor,
@@ -1078,9 +1058,6 @@ async function headlessRebaseAndRetry(taskId: string, deps: HeadlessDeps): Promi
   const autoFix = wireHeadlessAutoFix(deps, te);
   const started = await rebaseAndRetry(taskId, { ...deps, taskExecutor: te });
   const runnable = started.filter(t => t.status === 'running');
-  if (runnable.length > 0) {
-    await te.executeTasks(runnable);
-  }
   const topup = await executeGlobalTopup({
     orchestrator: deps.orchestrator,
     taskExecutor: te,
@@ -1121,7 +1098,6 @@ async function headlessRecreateWorkflow(workflowId: string, deps: HeadlessDeps):
     remoteFetchForPool.enabled = false;
     let topup: TaskState[] = [];
     try {
-      await te.executeTasks(runnable);
       topup = await executeGlobalTopup({
         orchestrator: deps.orchestrator,
         taskExecutor: te,
@@ -1164,9 +1140,6 @@ async function headlessRecreateTask(taskId: string, deps: HeadlessDeps): Promise
   remoteFetchForPool.enabled = false;
   let topup: TaskState[] = [];
   try {
-    if (runnable.length > 0) {
-      await te.executeTasks(runnable);
-    }
     topup = await executeGlobalTopup({
       orchestrator: deps.orchestrator,
       taskExecutor: te,
@@ -1286,7 +1259,6 @@ async function headlessRetryWorkflow(workflowId: string, deps: HeadlessDeps): Pr
   remoteFetchForPool.enabled = false;
   let topup: TaskState[] = [];
   try {
-    await te.executeTasks(runnable);
     topup = await executeGlobalTopup({
       orchestrator: deps.orchestrator,
       taskExecutor: te,
@@ -1349,7 +1321,7 @@ async function headlessEdit(taskId: string, newCommand: string, deps: HeadlessDe
 
   const taskExecutor = createHeadlessExecutor(deps);
   const autoFix = wireHeadlessAutoFix(deps, taskExecutor);
-  await taskExecutor.executeTasks(result.data);
+  void result.data;
   if (deps.noTrack) {
     process.stdout.write('[headless] --no-track enabled: set command accepted; exiting without tracking.\n');
     autoFix.unsubscribe();
@@ -1371,7 +1343,7 @@ async function headlessEditExecutor(taskId: string, executorType: string, deps: 
 
   const taskExecutor = createHeadlessExecutor(deps);
   const autoFix = wireHeadlessAutoFix(deps, taskExecutor);
-  await taskExecutor.executeTasks(result.data);
+  void result.data;
   if (deps.noTrack) {
     process.stdout.write('[headless] --no-track enabled: set executor accepted; exiting without tracking.\n');
     autoFix.unsubscribe();
@@ -1393,7 +1365,7 @@ async function headlessEditAgent(taskId: string, agentName: string, deps: Headle
 
   const taskExecutor = createHeadlessExecutor(deps);
   const autoFix = wireHeadlessAutoFix(deps, taskExecutor);
-  await taskExecutor.executeTasks(result.data);
+  void result.data;
   if (deps.noTrack) {
     process.stdout.write('[headless] --no-track enabled: set agent accepted; exiting without tracking.\n');
     autoFix.unsubscribe();
@@ -1648,10 +1620,7 @@ async function headlessSetGatePolicy(args: string[], deps: HeadlessDeps): Promis
   const result = await deps.commandService.setTaskExternalGatePolicies(envelope);
   if (!result.ok) throw new Error(result.error.message);
   const runnable = result.data.filter((t) => t.status === 'running');
-  if (runnable.length > 0) {
-    const taskExecutor = createHeadlessExecutor(deps);
-    await taskExecutor.executeTasks(runnable);
-  }
+  void runnable;
   process.stdout.write(
     `Updated gate policy for ${taskId}: ${workflowId}/${depTaskId} -> ${gatePolicy} (${runnable.length} task(s) started)\n`,
   );

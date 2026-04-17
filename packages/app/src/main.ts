@@ -112,6 +112,7 @@ import { PersistedWorkflowMutationCoordinator } from './persisted-workflow-mutat
 import { executeGlobalTopup } from './global-topup.js';
 import { computeDeferredLaunchTiming } from './deferred-runnable.js';
 import { preemptWorkflowBeforeMutation, type WorkflowCancelResult } from './workflow-preemption.js';
+import { relaunchOrphansAndStartReady } from './orphan-relaunch.js';
 
 // ── Detect headless mode ─────────────────────────────────────
 
@@ -152,6 +153,20 @@ let persistence: SQLiteAdapter;
 let executorRegistry: ExecutorRegistry;
 let orchestrator: Orchestrator;
 let commandService: CommandService;
+let dispatcherTaskExecutor: Pick<TaskRunner, 'executeTasks'> | null = null;
+
+function setDispatcherTaskExecutor(executor: Pick<TaskRunner, 'executeTasks'> | null): void {
+  dispatcherTaskExecutor = executor;
+}
+
+function dispatchStartedTasks(tasks: TaskState[]): void {
+  if (tasks.length === 0 || !dispatcherTaskExecutor) return;
+  void dispatcherTaskExecutor.executeTasks(tasks).catch((err) => {
+    logger.error(`[dispatcher] executeTasks failed: ${err instanceof Error ? err.stack ?? err.message : String(err)}`, {
+      module: 'dispatch',
+    });
+  });
+}
 let workflowMutationCoordinator: PersistedWorkflowMutationCoordinator | null = null;
 const workflowMutationDispatcher = new Map<string, (...args: unknown[]) => Promise<unknown>>();
 let hourlyBackupInterval: ReturnType<typeof setInterval> | null = null;
@@ -298,6 +313,7 @@ async function initServices(options?: InitServicesOptions): Promise<void> {
     defaultAutoFixRetries: invokerConfig.autoFixRetries,
     executorRoutingRules: invokerConfig.executorRoutingRules ?? [],
     deferRunningUntilLaunch: true,
+    taskDispatcher: dispatchStartedTasks,
   });
   commandService = new CommandService(orchestrator);
 
@@ -433,7 +449,6 @@ async function wireSlackBot(deps: SlackBotDeps): Promise<any> {
         orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
         const started = orchestrator.startExecution();
         deps.logFn('trace', 'info', `slackBot: startExecution returned ${started.length} tasks: [${started.map((t: any) => t.id).join(', ')}]`);
-        await deps.executor.executeTasks(started);
         break;
       }
     }
@@ -524,6 +539,7 @@ if (isHeadless) {
         orchestrator, persistence, executorRegistry, messageBus,
         repoRoot, invokerConfig, initServices, wireSlackBot,
         commandService,
+        setTaskDispatcherExecutor: setDispatcherTaskExecutor,
         getUiPerfStats: () => ({
           ts: new Date().toISOString(),
           mainDeltaToUi: 0,
@@ -542,6 +558,7 @@ if (isHeadless) {
 
       const createStandaloneTaskExecutor = (): TaskRunner => {
         const executor = createHeadlessExecutor(headlessDeps);
+        setDispatcherTaskExecutor(executor);
         wireHeadlessApproveHook(headlessDeps, executor);
         return executor;
       };
@@ -570,11 +587,7 @@ if (isHeadless) {
             const mergeTask = tasks.find((task) => task.config.isMergeNode);
             if (!mergeTask) return undefined;
             const started = orchestrator.restartTask(mergeTask.id);
-            const runnable = started.filter((task) => task.status === 'running');
-            if (runnable.length > 0) {
-              const executor = createStandaloneTaskExecutor();
-              await executor.executeTasks(runnable);
-            }
+            void started;
             return undefined;
           }
           case 'invoker:replace-task': {
@@ -796,6 +809,7 @@ if (isHeadless) {
   const agentRegistry = registerBuiltinAgents();
   let mainWindow: BrowserWindow | null = null;
   let taskExecutor: TaskRunner | null = null;
+  setDispatcherTaskExecutor(null);
   let apiServer: ApiServer | null = null;
   let ownerMode = true;
   const taskHandles = new Map<string, { handle: ExecutorHandle; executor: Executor }>();
@@ -843,9 +857,9 @@ if (isHeadless) {
     10,
   ) || 30000;
   const launchingStallTimeoutMs = Number.parseInt(
-    process.env.INVOKER_LAUNCHING_STALL_TIMEOUT_MS ?? '600000',
+    process.env.INVOKER_LAUNCHING_STALL_TIMEOUT_MS ?? '60000',
     10,
-  ) || 600000;
+  ) || 60000;
   const uiPerfStats = {
     mainDeltaToUi: 0,
     dbPollCreated: 0,
@@ -1147,6 +1161,7 @@ if (isHeadless) {
         },
       },
     });
+    setDispatcherTaskExecutor(taskExecutor);
     wireApproveHook();
   }
 
@@ -1226,39 +1241,6 @@ if (isHeadless) {
     }
   }
 
-  function relaunchOrphansAndStartReady(logPrefix: string): TaskState[] {
-    const orphanRestarted: TaskState[] = [];
-    const activeTaskIds = orchestrator.getPersistedActiveTaskIds?.() ?? new Set<string>();
-    for (const task of orchestrator.getAllTasks()) {
-      const isPersistedOrphan =
-        task.status === 'running'
-        || task.status === 'fixing_with_ai'
-        || (task.status === 'pending' && activeTaskIds.has(task.id));
-      if (isPersistedOrphan) {
-        const lastHeartbeat = task.execution.lastHeartbeatAt instanceof Date
-          ? task.execution.lastHeartbeatAt.toISOString()
-          : task.execution.lastHeartbeatAt ?? 'none';
-        const startedAt = task.execution.startedAt instanceof Date
-          ? task.execution.startedAt.toISOString()
-          : task.execution.startedAt ?? 'none';
-        logger.info(
-          `relaunching orphaned in-flight task "${task.id}" (${task.status}${task.status === 'pending' ? '/claimed' : ''}) ` +
-            `startedAt=${startedAt} lastHeartbeatAt=${lastHeartbeat} generation=${task.execution.generation ?? 0}`,
-          { module: logPrefix },
-        );
-        const started = orchestrator.restartTask(task.id);
-        orphanRestarted.push(...started.filter(t => t.status === 'running'));
-      }
-    }
-
-    const readyStarted = orchestrator.startExecution();
-    const allStarted = [...orphanRestarted, ...readyStarted];
-    if (allStarted.length > 0) {
-      logger.info(`started ${allStarted.length} tasks (${orphanRestarted.length} orphans relaunched, ${readyStarted.length} ready): [${allStarted.map(t => t.id).join(', ')}]`, { module: logPrefix });
-    }
-    return allStarted;
-  }
-
   function requireTaskExecutor(): TaskRunner {
     if (!taskExecutor) {
       throw new Error('Mutation execution is unavailable in read-only follower mode');
@@ -1276,9 +1258,6 @@ if (isHeadless) {
     const workflowId = orchestrator.getWorkflowIds().find(id => !wfIdsBefore.has(id))!;
     const started = orchestrator.startExecution();
     logger.info(`started ${started.length} tasks for workflow "${workflowId}"`, { module: 'ipc-delegate' });
-    requireTaskExecutor().executeTasks(started).catch(err => {
-      logger.error(`headless.run: executeTasks failed for "${workflowId}": ${err}`, { module: 'ipc-delegate' });
-    });
     const tasks = orchestrator.getAllTasks().filter(t => t.config.workflowId === workflowId);
     return { workflowId, tasks };
   }
@@ -1287,32 +1266,12 @@ if (isHeadless) {
     const { workflowId } = payload;
     orchestrator.syncFromDb(workflowId);
 
-    const orphanRestarted: TaskState[] = [];
-    const activeTaskIds = orchestrator.getPersistedActiveTaskIds?.() ?? new Set<string>();
-    for (const task of orchestrator.getAllTasks()) {
-      if (
-        (
-          task.status === 'running'
-          || task.status === 'fixing_with_ai'
-          || (task.status === 'pending' && activeTaskIds.has(task.id))
-        ) &&
-        task.config.workflowId === workflowId
-      ) {
-        logger.info(
-          `relaunching orphaned in-flight task "${task.id}" (${task.status}${task.status === 'pending' ? '/claimed' : ''})`,
-          { module: 'ipc-delegate' },
-        );
-        const started = orchestrator.restartTask(task.id);
-        orphanRestarted.push(...started.filter(t => t.status === 'running'));
-      }
+    const allStarted = relaunchOrphansAndStartReady(orchestrator, logger, 'ipc-delegate', workflowId);
+    if (allStarted.length > 0) {
+      requireTaskExecutor().executeTasks(allStarted).catch(err => {
+        logger.error(`headless.resume: executeTasks failed for "${workflowId}": ${err}`, { module: 'ipc-delegate' });
+      });
     }
-
-    const started = orchestrator.startExecution();
-    const allStarted = [...orphanRestarted, ...started];
-    logger.info(`started ${allStarted.length} tasks (${orphanRestarted.length} orphans relaunched, ${started.length} ready)`, { module: 'ipc-delegate' });
-    requireTaskExecutor().executeTasks(allStarted).catch(err => {
-      logger.error(`headless.resume: executeTasks failed for "${workflowId}": ${err}`, { module: 'ipc-delegate' });
-    });
     requireTaskExecutor().resumeMergeGatePolling();
     const tasks = orchestrator.getAllTasks().filter(t => t.config.workflowId === workflowId);
     return { workflowId, tasks };
@@ -1335,6 +1294,7 @@ if (isHeadless) {
       orchestrator, persistence, executorRegistry, messageBus,
       commandService,
       repoRoot, invokerConfig, initServices, wireSlackBot,
+      setTaskDispatcherExecutor: setDispatcherTaskExecutor,
       waitForApproval: payload.waitForApproval,
       noTrack: payload.noTrack,
       preemptTaskSubgraph: (taskId: string) => preemptTaskSubgraph(taskId),
@@ -1811,7 +1771,7 @@ if (isHeadless) {
           allWorkflowsHydrated = true;
           backgroundHydrationStarted = false;
           if (ownerMode && !invokerConfig.disableAutoRunOnStartup) {
-            const newlyStarted = relaunchOrphansAndStartReady('background-hydration');
+            const newlyStarted = relaunchOrphansAndStartReady(orchestrator, logger, 'background-hydration');
             if (newlyStarted.length > 0) {
               requireTaskExecutor().executeTasks(newlyStarted);
             }
@@ -1960,6 +1920,10 @@ if (isHeadless) {
                   if (launchStalled) {
                     const launchError =
                       `Launch stalled: task remained in running/launching for ${Math.floor(launchingStallTimeoutMs / 1000)}s without a spawned execution handle`;
+                    logger.info(
+                      `[launch-stall] detected task="${task.id}" phase=${task.execution.phase} launchAgeMs=${launchAgeMs} handlePresent=false`,
+                      { module: 'db-poll' },
+                    );
                     const failedResponse: WorkResponse = {
                       requestId: `launch-stall-${task.id}-${now.getTime()}`,
                       actionId: task.id,
@@ -2134,7 +2098,7 @@ if (isHeadless) {
     } else if (invokerConfig.disableAutoRunOnStartup) {
       logger.info('auto-run on startup disabled by config — skipping orphan relaunch', { module: 'init' });
     } else {
-      const allStarted = relaunchOrphansAndStartReady('init');
+      const allStarted = relaunchOrphansAndStartReady(orchestrator, logger, 'init');
       if (allStarted.length > 0) {
         requireTaskExecutor().executeTasks(allStarted);
       }
@@ -2248,7 +2212,7 @@ if (isHeadless) {
       }
       orchestrator.syncAllFromDb();
 
-      const allStarted = relaunchOrphansAndStartReady('resume-workflow');
+      const allStarted = relaunchOrphansAndStartReady(orchestrator, logger, 'resume-workflow');
       const tasks = orchestrator.getAllTasks();
       for (const task of tasks) {
         lastKnownTaskStates.set(task.id, JSON.stringify(task));
@@ -2257,7 +2221,9 @@ if (isHeadless) {
         }
       }
       logger.info(`resume-workflow: ${tasks.length} tasks loaded across ${workflows.length} workflows, ${allStarted.length} started`, { module: 'ipc' });
-      await requireTaskExecutor().executeTasks(allStarted);
+      if (allStarted.length > 0) {
+        void requireTaskExecutor().executeTasks(allStarted);
+      }
       requireTaskExecutor().resumeMergeGatePolling();
       return { workflow: workflows[0], taskCount: tasks.length, startedCount: allStarted.length };
     });
@@ -2301,6 +2267,7 @@ if (isHeadless) {
         defaultAutoFixRetries: invokerConfig.autoFixRetries,
         executorRoutingRules: invokerConfig.executorRoutingRules ?? [],
         deferRunningUntilLaunch: true,
+        taskDispatcher: dispatchStartedTasks,
       });
       commandService = new CommandService(orchestrator);
       rebuildTaskRunner();
@@ -2527,7 +2494,6 @@ if (isHeadless) {
           `${RESTART_TO_BRANCH_TRACE} ipc invoker:restart-task runnable=${runnable.length} [${runnable.map((t) => t.id).join(', ') || '(none)'}] → taskExecutor.executeTasks`,
           { module: 'ipc' },
         );
-        await requireTaskExecutor().executeTasks(runnable);
         await executeGlobalTopup({
           orchestrator,
           taskExecutor: requireTaskExecutor(),
@@ -2627,7 +2593,6 @@ if (isHeadless) {
         const runnable = started.filter(t => t.status === 'running');
         remoteFetchForPool.enabled = false;
         try {
-          await requireTaskExecutor().executeTasks(runnable);
           await executeGlobalTopup({
             orchestrator,
             taskExecutor: requireTaskExecutor(),
@@ -2658,7 +2623,6 @@ if (isHeadless) {
         const runnable = started.filter(t => t.status === 'running');
         remoteFetchForPool.enabled = false;
         try {
-          await requireTaskExecutor().executeTasks(runnable);
           await executeGlobalTopup({
             orchestrator,
             taskExecutor: requireTaskExecutor(),
@@ -2696,7 +2660,6 @@ if (isHeadless) {
         const runnable = result.data.filter(t => t.status === 'running');
         remoteFetchForPool.enabled = false;
         try {
-          await requireTaskExecutor().executeTasks(runnable);
           await executeGlobalTopup({
             orchestrator,
             taskExecutor: requireTaskExecutor(),
@@ -2737,7 +2700,6 @@ if (isHeadless) {
           taskExecutor: requireTaskExecutor(),
         });
         const runnable = started.filter(t => t.status === 'running');
-        await requireTaskExecutor().executeTasks(runnable);
         await executeGlobalTopup({
           orchestrator,
           taskExecutor: requireTaskExecutor(),
@@ -2763,8 +2725,7 @@ if (isHeadless) {
         const mergeTask = tasks.find(t => t.config.isMergeNode);
         if (mergeTask) {
           const started = orchestrator.restartTask(mergeTask.id);
-          const runnable = started.filter(t => t.status === 'running');
-          await requireTaskExecutor().executeTasks(runnable);
+          void started;
         }
       } catch (err) {
         logger.error(`set-merge-branch failed: ${err}`, { module: 'ipc' });
@@ -2896,7 +2857,7 @@ if (isHeadless) {
         const result = await commandService.editTaskCommand(envelope);
         if (!result.ok) throw new Error(result.error.message);
         const runnable = result.data.filter(t => t.status === 'running');
-        await requireTaskExecutor().executeTasks(runnable);
+        void runnable;
       } catch (err) {
         logger.error(`edit-task-command failed: ${err}`, { module: 'ipc' });
         throw err;
@@ -2913,7 +2874,7 @@ if (isHeadless) {
         const result = await commandService.editTaskType(envelope);
         if (!result.ok) throw new Error(result.error.message);
         const runnable = result.data.filter(t => t.status === 'running');
-        await requireTaskExecutor().executeTasks(runnable);
+        void runnable;
       } catch (err) {
         logger.error(`edit-task-type failed: ${err}`, { module: 'ipc' });
         throw err;
@@ -2929,7 +2890,7 @@ if (isHeadless) {
         const result = await commandService.editTaskAgent(envelope);
         if (!result.ok) throw new Error(result.error.message);
         const runnable = result.data.filter(t => t.status === 'running');
-        await requireTaskExecutor().executeTasks(runnable);
+        void runnable;
       } catch (err) {
         logger.error(`edit-task-agent failed: ${err}`, { module: 'ipc' });
         throw err;
@@ -2947,7 +2908,7 @@ if (isHeadless) {
           const result = await commandService.setTaskExternalGatePolicies(envelope);
           if (!result.ok) throw new Error(result.error.message);
           const runnable = result.data.filter((t) => t.status === 'running');
-          if (runnable.length > 0) await requireTaskExecutor().executeTasks(runnable);
+          void runnable;
         } catch (err) {
           logger.error(`set-task-external-gate-policies failed: ${err}`, { module: 'ipc' });
           throw err;
@@ -2975,7 +2936,7 @@ if (isHeadless) {
         const result = await commandService.replaceTask(envelope);
         if (!result.ok) throw new Error(result.error.message);
         const runnable = result.data.filter((t) => t.status === 'running');
-        await requireTaskExecutor().executeTasks(runnable);
+        void runnable;
         return result.data;
       } catch (err) {
         logger.error(`replace-task failed: ${err}`, { module: 'ipc' });
