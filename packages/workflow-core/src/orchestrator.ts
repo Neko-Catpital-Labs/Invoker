@@ -362,6 +362,8 @@ export interface OrchestratorConfig {
   messageBus: OrchestratorMessageBus;
   /** Optional; defaults to an adapter wrapping `persistence`. */
   taskRepository?: TaskRepository;
+  /** Optional callback for fire-and-forget task dispatch when tasks enter running/launching. */
+  taskDispatcher?: (tasks: TaskState[]) => void;
   maxConcurrency?: number;
   /** Default auto-fix retry budget for older tasks missing persisted per-task config. */
   defaultAutoFixRetries?: number;
@@ -392,6 +394,7 @@ export class Orchestrator {
   private readonly persistence: OrchestratorPersistence;
   private readonly messageBus: OrchestratorMessageBus;
   private readonly taskRepository: TaskRepository;
+  private readonly taskDispatcher?: (tasks: TaskState[]) => void;
   private readonly maxConcurrency: number;
   private readonly executorRoutingRules: ExecutorRoutingRule[];
   private readonly defaultAutoFixRetries: number;
@@ -406,6 +409,7 @@ export class Orchestrator {
     this.persistence = config.persistence;
     this.messageBus = config.messageBus;
     this.taskRepository = config.taskRepository ?? taskRepositoryFromPersistence(config.persistence);
+    this.taskDispatcher = config.taskDispatcher;
     this.executorRoutingRules = config.executorRoutingRules ?? [];
     this.defaultAutoFixRetries = Math.min(Math.max(0, Math.floor(config.defaultAutoFixRetries ?? 0)), 10);
     this.deferRunningUntilLaunch = config.deferRunningUntilLaunch ?? false;
@@ -3181,6 +3185,13 @@ export class Orchestrator {
 
       availableSlots -= 1;
       job = availableSlots > 0 ? this.scheduler.takeNext() : null;
+    }
+    if (started.length > 0) {
+      try {
+        this.taskDispatcher?.(started);
+      } catch (err) {
+        console.error('[orchestrator] taskDispatcher threw:', err);
+      }
     }
     return started;
   }
