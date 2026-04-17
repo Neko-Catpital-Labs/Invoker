@@ -31,7 +31,22 @@ export function relaunchOrphansAndStartReady(
       { module: logPrefix },
     );
     const started = orchestrator.restartTask(task.id);
-    orphanRestarted.push(...started.filter((candidate) => candidate.status === 'running'));
+    const runnable = started.filter((candidate) => candidate.status === 'running');
+    if (runnable.length > 0) {
+      orphanRestarted.push(...runnable);
+      continue;
+    }
+
+    const refreshed = orchestrator.getTask?.(task.id);
+    if (refreshed?.status === 'running') {
+      orphanRestarted.push(refreshed);
+      continue;
+    }
+
+    orphanRestarted.push({
+      ...task,
+      status: 'running',
+    });
   }
 
   const readyStarted = orchestrator.startExecution();
