@@ -240,6 +240,10 @@ export function wireHeadlessApproveHook(deps: HeadlessDeps, te: TaskRunner): voi
       const workflow = deps.persistence.loadWorkflow(task.config.workflowId);
       if (workflow?.mergeMode === "external_review") return;
       await te.approveMerge(task.config.workflowId);
+      return;
+    }
+    if (!task.config.isMergeNode && task.execution.pendingFixError !== undefined) {
+      await te.publishApprovedFix(task);
     }
   });
 }

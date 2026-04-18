@@ -16,6 +16,7 @@ import type { Orchestrator, TaskState, ExperimentVariant, ExecutorType } from '@
 import type { SQLiteAdapter } from '@invoker/data-store';
 import type { WorkRequest, WorkResponse, ActionType } from '@invoker/contracts';
 import type { Executor, ExecutorHandle } from './executor.js';
+import { BaseExecutor } from './base-executor.js';
 import { RESTART_TO_BRANCH_TRACE, traceExecution } from './exec-trace.js';
 import { ResourceLimitError } from './repo-pool.js';
 import type { ExecutorRegistry } from './registry.js';
@@ -788,6 +789,66 @@ export class TaskRunner {
 
   async publishAfterFix(task: TaskState): Promise<void> {
     return publishAfterFixImpl(this, task);
+  }
+
+  async publishApprovedFix(task: TaskState): Promise<void> {
+    const workspacePath = task.execution.workspacePath?.trim();
+    if (!workspacePath) {
+      throw new Error(`Task ${task.id} has no workspacePath for approved-fix publish`);
+    }
+    const branch = task.execution.branch?.trim();
+    if (!branch) {
+      throw new Error(`Task ${task.id} has no branch for approved-fix publish`);
+    }
+
+    const request: WorkRequest = {
+      requestId: randomUUID(),
+      actionId: task.id,
+      attemptId: task.execution.selectedAttemptId,
+      executionGeneration: task.execution.generation ?? 0,
+      actionType: this.determineActionType(task),
+      inputs: {
+        description: task.description,
+        command: task.config.command,
+        prompt: task.config.prompt,
+      },
+      callbackUrl: '',
+      timestamps: {
+        createdAt: new Date().toISOString(),
+      },
+    };
+
+    const executor = this.selectExecutor(task);
+    let result: { commitHash?: string; error?: string };
+    if (executor instanceof SshExecutor) {
+      result = await executor.publishApprovedFix(workspacePath, request, branch);
+    } else if (executor instanceof BaseExecutor) {
+      result = await executor.publishApprovedFix(workspacePath, request, branch);
+    } else {
+      throw new Error(
+        `Executor ${executor.type} does not support approved-fix publish for task ${task.id}`,
+      );
+    }
+
+    if (result.error) {
+      throw new Error(result.error);
+    }
+    if (!result.commitHash) {
+      throw new Error(`Approved-fix publish produced no commit hash for task ${task.id}`);
+    }
+
+    this.persistence.updateTask(task.id, {
+      execution: {
+        commit: result.commitHash,
+      },
+    });
+    const attemptId = task.execution.selectedAttemptId;
+    if (attemptId) {
+      this.persistence.updateAttempt(attemptId, {
+        branch,
+        commit: result.commitHash,
+      });
+    }
   }
 
   async buildMergeSummary(workflowId: string): Promise<string> {

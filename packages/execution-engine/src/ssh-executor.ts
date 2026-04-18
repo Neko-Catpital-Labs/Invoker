@@ -473,6 +473,14 @@ echo ${payloadB64} | base64 -d | bash -se
     }
   }
 
+  async publishApprovedFix(
+    worktreePath: string,
+    request: WorkRequest,
+    branch: string,
+  ): Promise<{ commitHash?: string; error?: string }> {
+    return this.remoteGitRecordAndPush('publish-approved-fix', request, worktreePath, branch, 0);
+  }
+
   /** Run a bash script on the remote (fed to `bash -s` on stdin). */
   private spawnSshRemoteStdin(
     executionId: string,

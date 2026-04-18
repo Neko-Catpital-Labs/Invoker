@@ -1238,6 +1238,10 @@ if (isHeadless) {
         const workflow = persistence.loadWorkflow(task.config.workflowId);
         if (workflow?.mergeMode === "external_review") return; // external review is the merge mechanism
         await requireTaskExecutor().approveMerge(task.config.workflowId);
+        return;
+      }
+      if (!task.config.isMergeNode && task.execution.pendingFixError !== undefined) {
+        await requireTaskExecutor().publishApprovedFix(task);
       }
     });
   }
