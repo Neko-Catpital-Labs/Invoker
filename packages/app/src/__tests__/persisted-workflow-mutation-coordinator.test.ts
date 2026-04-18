@@ -180,6 +180,153 @@ describe('PersistedWorkflowMutationCoordinator', () => {
     gate.resolve();
   });
 
+  it('invalidates an older running workflow intent when GUI recreate-task is enqueued', async () => {
+    const adapter = await SQLiteAdapter.create(':memory:');
+    adapters.push(adapter);
+    adapter.saveWorkflow({
+      id: 'wf-1',
+      name: 'wf-1',
+      status: 'running',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+
+    const gate = deferred();
+    const order: string[] = [];
+    const coordinator = new PersistedWorkflowMutationCoordinator(
+      adapter,
+      'owner-1',
+      async (channel, args) => {
+        order.push(`${channel}:${String(args[0])}`);
+        if (channel === 'invoker:fix-with-agent') {
+          await gate.promise;
+        }
+      },
+    );
+
+    const olderRunning = coordinator.enqueue<void>(
+      'wf-1',
+      'normal',
+      'invoker:fix-with-agent',
+      ['wf-1/blocker-task', null],
+    );
+    await waitFor(() => adapter.listWorkflowMutationIntents('wf-1', ['running']).length === 1);
+
+    const recreateTask = coordinator.enqueue<void>(
+      'wf-1',
+      'high',
+      'invoker:recreate-task',
+      ['wf-1/target-task'],
+    );
+    await recreateTask;
+    await expect(olderRunning).rejects.toThrow(/superseded by recreate intent/i);
+
+    const intentsAfterRecreate = adapter.listWorkflowMutationIntents('wf-1');
+    expect(intentsAfterRecreate.find((intent) => intent.id === 1)?.status).toBe('failed');
+    expect(intentsAfterRecreate.find((intent) => intent.id === 1)?.error).toContain('Superseded by recreate intent #2');
+    expect(intentsAfterRecreate.find((intent) => intent.id === 2)?.status).toBe('completed');
+    expect(order).toEqual([
+      'invoker:fix-with-agent:wf-1/blocker-task',
+      'invoker:recreate-task:wf-1/target-task',
+    ]);
+  });
+
+  it('invalidates an older running workflow intent when headless recreate-task is enqueued', async () => {
+    const adapter = await SQLiteAdapter.create(':memory:');
+    adapters.push(adapter);
+    adapter.saveWorkflow({
+      id: 'wf-1',
+      name: 'wf-1',
+      status: 'running',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+
+    const gate = deferred();
+    const order: string[] = [];
+    const coordinator = new PersistedWorkflowMutationCoordinator(
+      adapter,
+      'owner-1',
+      async (_channel, args) => {
+        const payload = args[0] as { args?: string[] } | undefined;
+        const command = payload?.args?.join(' ') ?? 'unknown';
+        order.push(command);
+        if (command.includes('hold-work')) {
+          await gate.promise;
+        }
+      },
+    );
+
+    const olderRunning = coordinator.enqueue<void>(
+      'wf-1',
+      'normal',
+      'headless.exec',
+      [{ args: ['set', 'command', 'wf-1/blocker-task', 'hold-work'] }],
+    );
+    await waitFor(() => adapter.listWorkflowMutationIntents('wf-1', ['running']).length === 1);
+
+    const recreateTask = coordinator.enqueue<void>(
+      'wf-1',
+      'high',
+      'headless.exec',
+      [{ args: ['recreate-task', 'wf-1/target-task'] }],
+    );
+    await recreateTask;
+    await expect(olderRunning).rejects.toThrow(/superseded by recreate intent/i);
+
+    const intentsAfterRecreate = adapter.listWorkflowMutationIntents('wf-1');
+    expect(intentsAfterRecreate.find((intent) => intent.id === 1)?.status).toBe('failed');
+    expect(intentsAfterRecreate.find((intent) => intent.id === 1)?.error).toContain('Superseded by recreate intent #2');
+    expect(intentsAfterRecreate.find((intent) => intent.id === 2)?.status).toBe('completed');
+    expect(order).toEqual([
+      'set command wf-1/blocker-task hold-work',
+      'recreate-task wf-1/target-task',
+    ]);
+  });
+
+  it('evicts older queued workflow intents when GUI recreate-task fence starts', async () => {
+    const adapter = await SQLiteAdapter.create(':memory:');
+    adapters.push(adapter);
+    adapter.saveWorkflow({
+      id: 'wf-1',
+      name: 'wf-1',
+      status: 'running',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+
+    const gate = deferred();
+    const order: string[] = [];
+    const coordinator = new PersistedWorkflowMutationCoordinator(
+      adapter,
+      'owner-1',
+      async (channel, args) => {
+        order.push(`${channel}:${String(args[0])}`);
+        if (channel === 'invoker:fix-with-agent') {
+          await gate.promise;
+        }
+      },
+    );
+
+    const running = coordinator.enqueue<void>('wf-1', 'normal', 'invoker:fix-with-agent', ['wf-1/blocker-task', null]);
+    void running.catch(() => {});
+    const olderQueued = coordinator.enqueue<void>('wf-1', 'normal', 'invoker:edit-task-agent', ['old-queued']);
+    void olderQueued.catch(() => {});
+    const recreateTask = coordinator.enqueue<void>('wf-1', 'high', 'invoker:recreate-task', ['wf-1/target-task']);
+    const newerQueued = coordinator.enqueue<void>('wf-1', 'normal', 'invoker:edit-task-agent', ['new-queued']);
+
+    await recreateTask;
+    await newerQueued;
+    await expect(running).rejects.toThrow(/superseded by recreate intent/i);
+    await expect(olderQueued).rejects.toThrow(/evicted/i);
+
+    expect(order).toEqual([
+      'invoker:fix-with-agent:wf-1/blocker-task',
+      'invoker:recreate-task:wf-1/target-task',
+      'invoker:edit-task-agent:new-queued',
+    ]);
+  });
+
   it('evicts older queued workflow intents when retry-workflow fence starts', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);

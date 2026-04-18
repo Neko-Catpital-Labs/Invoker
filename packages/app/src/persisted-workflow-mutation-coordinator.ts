@@ -298,7 +298,7 @@ export class PersistedWorkflowMutationCoordinator {
   }
 
   private isHardPreemptingRecreateIntent(channel: string, args: unknown[]): boolean {
-    if (channel === 'invoker:recreate-workflow') {
+    if (channel === 'invoker:recreate-workflow' || channel === 'invoker:recreate-task') {
       return true;
     }
     if (channel !== 'headless.exec') {
@@ -306,11 +306,15 @@ export class PersistedWorkflowMutationCoordinator {
     }
     const payload = args[0] as { args?: unknown[] } | undefined;
     const rawArgs = Array.isArray(payload?.args) ? payload.args : [];
-    return rawArgs[0] === 'recreate';
+    return rawArgs[0] === 'recreate' || rawArgs[0] === 'recreate-task';
   }
 
   private isWorkflowQueueFenceIntent(intent: WorkflowMutationIntent): boolean {
-    if (intent.channel === 'invoker:retry-workflow' || intent.channel === 'invoker:recreate-workflow') {
+    if (
+      intent.channel === 'invoker:retry-workflow'
+      || intent.channel === 'invoker:recreate-workflow'
+      || intent.channel === 'invoker:recreate-task'
+    ) {
       return true;
     }
     if (intent.channel !== 'headless.exec') {
@@ -320,6 +324,9 @@ export class PersistedWorkflowMutationCoordinator {
     const rawArgs = Array.isArray(payload?.args) ? payload.args : [];
     const command = typeof rawArgs[0] === 'string' ? rawArgs[0] : '';
     const target = typeof rawArgs[1] === 'string' ? rawArgs[1] : '';
+    if (command === 'recreate-task') {
+      return true;
+    }
     const isWorkflowId = /^wf-[^/]+$/.test(target);
     if (!isWorkflowId) {
       return false;
