@@ -157,6 +157,42 @@ describe('global top-up dispatch', () => {
       expect.objectContaining({ id: taskB.id, status: 'running' }),
     ]);
   });
+
+  it('dispatches each runnable task only once when taskDispatcher is wired', async () => {
+    const persistence = new InMemoryPersistence();
+    const bus = new InMemoryBus();
+    const dispatchedCalls: string[][] = [];
+    const taskExecutor = {
+      executeTasks: vi.fn(async (tasks: TaskState[]) => {
+        dispatchedCalls.push(tasks.map((task) => task.id));
+      }),
+    } as unknown as TaskRunner;
+    const orchestrator = new Orchestrator({
+      persistence,
+      messageBus: bus,
+      maxConcurrency: 1,
+      taskDispatcher: (tasks) => {
+        void taskExecutor.executeTasks(tasks);
+      },
+    });
+
+    orchestrator.loadPlan({
+      name: 'Dispatcher overlap repro',
+      onFinish: 'none',
+      tasks: [{ id: 'A', description: 'Task A', command: 'echo a' }],
+    });
+
+    const topup = await executeGlobalTopup({
+      orchestrator,
+      taskExecutor,
+      context: 'test.bridge.double-dispatch-repro',
+    });
+
+    expect(topup.map((task) => task.id)).toEqual([expect.stringMatching(/\/A$/)]);
+    expect(taskExecutor.executeTasks).toHaveBeenCalledTimes(1);
+    expect(dispatchedCalls).toHaveLength(1);
+    expect(dispatchedCalls[0]?.[0]).toMatch(/\/A$/);
+  });
 });
 
 // ── Flow 1: Rebase & Retry ──────────────────────────────────

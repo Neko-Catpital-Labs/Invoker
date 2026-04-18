@@ -59,12 +59,13 @@ async function resolveBaseCheckoutRef(
 async function startReviewReadyDependents(host: MergeRunnerHost): Promise<void> {
   const orchestrator = host.orchestrator as unknown as {
     startExecution?: () => TaskState[];
+    hasTaskDispatcher?: () => boolean;
   };
   if (typeof orchestrator.startExecution !== 'function') {
     return;
   }
   const newlyStarted = orchestrator.startExecution();
-  if (newlyStarted.length > 0) {
+  if (newlyStarted.length > 0 && !orchestrator.hasTaskDispatcher?.()) {
     await host.executeTasks(newlyStarted);
   }
 }
@@ -541,7 +542,7 @@ export async function executeMergeNodeImpl(
     await startReviewReadyDependents(host);
   } else {
     const newlyStarted = host.orchestrator.handleWorkerResponse(response) ?? [];
-    if (newlyStarted.length > 0) {
+    if (newlyStarted.length > 0 && !host.orchestrator.hasTaskDispatcher?.()) {
       host.executeTasks(newlyStarted);
     }
   }

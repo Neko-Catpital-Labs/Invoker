@@ -531,6 +531,11 @@ export class Orchestrator {
     this.scheduler = new TaskScheduler(this.maxConcurrency);
   }
 
+  /** True when started tasks are auto-dispatched by the orchestrator itself. */
+  hasTaskDispatcher(): boolean {
+    return typeof this.taskDispatcher === 'function';
+  }
+
   // ── DB Sync Helpers ────────────────────────────────────────
 
   /**
