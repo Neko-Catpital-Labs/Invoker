@@ -274,6 +274,97 @@ export interface ExecutorRoutingRule {
   remoteTargetId: string;
 }
 
+export interface CommandRoutingMatcher {
+  pattern?: string;
+  regex?: string;
+}
+
+export interface HeavyweightCommandRoutingPolicy {
+  enabled?: boolean;
+  executorType?: string;
+  remoteTargetId: string;
+  matchers?: CommandRoutingMatcher[];
+}
+
+const DEFAULT_HEAVYWEIGHT_COMMAND_MATCHERS: CommandRoutingMatcher[] = [
+  { regex: '\\bpnpm(?:\\s|$)' },
+];
+
+function findMatchingCommandRoutingMatcher(
+  command: string,
+  matchers: CommandRoutingMatcher[],
+): CommandRoutingMatcher | undefined {
+  for (const matcher of matchers) {
+    const patternMatch = matcher.pattern !== undefined && command.includes(matcher.pattern);
+    const regexMatch = matcher.regex !== undefined && new RegExp(matcher.regex).test(command);
+    if (patternMatch || regexMatch) {
+      return matcher;
+    }
+  }
+  return undefined;
+}
+
+function resolveHeavyweightCommandRouting(
+  taskId: string,
+  command: string | undefined,
+  planExecutorType: string | undefined,
+  planRemoteTargetId: string | undefined,
+  policy: HeavyweightCommandRoutingPolicy | undefined,
+  availableRemoteTargetIds: Set<string>,
+): { executorType?: string; remoteTargetId?: string } | undefined {
+  if (!command || !policy || policy.enabled === false) {
+    return undefined;
+  }
+
+  const matchers = policy.matchers?.length ? policy.matchers : DEFAULT_HEAVYWEIGHT_COMMAND_MATCHERS;
+  const matched = findMatchingCommandRoutingMatcher(command, matchers);
+  if (!matched) {
+    return undefined;
+  }
+
+  const policyExecutorType = normalizeExecutorType(policy.executorType) ?? 'ssh';
+  if (policyExecutorType !== 'ssh') {
+    throw new Error(
+      `Task "${taskId}" with command "${command}" matched heavyweight command routing, ` +
+      `but config executorType="${policyExecutorType}" is unsupported. Expected "ssh".`,
+    );
+  }
+
+  if (availableRemoteTargetIds.size > 0 && !availableRemoteTargetIds.has(policy.remoteTargetId)) {
+    throw new Error(
+      `Task "${taskId}" with command "${command}" matched heavyweight command routing, ` +
+      `but config remoteTargetId="${policy.remoteTargetId}" is not defined in remoteTargets.`,
+    );
+  }
+
+  if (availableRemoteTargetIds.size === 0) {
+    throw new Error(
+      `Task "${taskId}" with command "${command}" matched heavyweight command routing, ` +
+      `but no remoteTargets are configured.`,
+    );
+  }
+
+  const normalizedPlanType = normalizeExecutorType(planExecutorType) ?? 'worktree';
+  if (planExecutorType !== undefined && normalizedPlanType !== policyExecutorType) {
+    throw new Error(
+      `Task "${taskId}" with command "${command}" matched heavyweight command routing and must use ` +
+      `executorType="${policyExecutorType}", but plan declares executorType="${normalizedPlanType}"`,
+    );
+  }
+
+  if (planRemoteTargetId !== undefined && planRemoteTargetId !== policy.remoteTargetId) {
+    throw new Error(
+      `Task "${taskId}" with command "${command}" matched heavyweight command routing and must use ` +
+      `remoteTargetId="${policy.remoteTargetId}", but plan declares remoteTargetId="${planRemoteTargetId}"`,
+    );
+  }
+
+  return {
+    executorType: policyExecutorType,
+    remoteTargetId: policy.remoteTargetId,
+  };
+}
+
 /**
  * Finds the first executor routing rule that matches the given command.
  * A rule matches when `pattern` is a substring of `command`, `regex` compiles and tests
@@ -389,6 +480,10 @@ export interface OrchestratorConfig {
    * a rule have the required executorType and remoteTargetId specified in the plan.
    */
   executorRoutingRules?: ExecutorRoutingRule[];
+  /** Config-owned routing for heavyweight commands (for example `pnpm ...`). */
+  heavyweightCommandRouting?: HeavyweightCommandRoutingPolicy;
+  /** Valid SSH remote target IDs available at plan submission time. */
+  availableRemoteTargetIds?: string[];
   /**
    * When true, keep tasks persisted as `pending` until the executor confirms
    * startup success, then transition to `running`.
@@ -413,6 +508,8 @@ export class Orchestrator {
   private readonly taskDispatcher?: (tasks: TaskState[]) => void;
   private readonly maxConcurrency: number;
   private readonly executorRoutingRules: ExecutorRoutingRule[];
+  private readonly heavyweightCommandRouting?: HeavyweightCommandRoutingPolicy;
+  private readonly availableRemoteTargetIds: Set<string>;
   private readonly defaultAutoFixRetries: number;
   private readonly deferRunningUntilLaunch: boolean;
 
@@ -427,6 +524,8 @@ export class Orchestrator {
     this.taskRepository = config.taskRepository ?? taskRepositoryFromPersistence(config.persistence);
     this.taskDispatcher = config.taskDispatcher;
     this.executorRoutingRules = config.executorRoutingRules ?? [];
+    this.heavyweightCommandRouting = config.heavyweightCommandRouting;
+    this.availableRemoteTargetIds = new Set(config.availableRemoteTargetIds ?? []);
     this.defaultAutoFixRetries = Math.min(Math.max(0, Math.floor(config.defaultAutoFixRetries ?? 0)), 10);
     this.deferRunningUntilLaunch = config.deferRunningUntilLaunch ?? false;
 
@@ -857,12 +956,23 @@ export class Orchestrator {
 
     const validatedTasks: TaskState[] = [];
     for (const taskDef of plan.tasks) {
-      // Validate executor routing conformance for tasks with commands
-      assertExecutorRoutingConforms(
+      const resolvedHeavyweightRouting = resolveHeavyweightCommandRouting(
         taskDef.id,
         taskDef.command,
         taskDef.executorType,
         taskDef.remoteTargetId,
+        this.heavyweightCommandRouting,
+        this.availableRemoteTargetIds,
+      );
+      const effectiveExecutorType = resolvedHeavyweightRouting?.executorType ?? taskDef.executorType;
+      const effectiveRemoteTargetId = resolvedHeavyweightRouting?.remoteTargetId ?? taskDef.remoteTargetId;
+
+      // Validate executor routing conformance for tasks with commands
+      assertExecutorRoutingConforms(
+        taskDef.id,
+        taskDef.command,
+        effectiveExecutorType,
+        effectiveRemoteTargetId,
         this.executorRoutingRules,
       );
 
@@ -892,17 +1002,17 @@ export class Orchestrator {
         executionAgent: taskDef.executionAgent,
         externalDependencies,
       } as const;
-      const executorType = normalizeExecutorType(taskDef.executorType) ?? 'worktree';
+      const executorType = normalizeExecutorType(effectiveExecutorType) ?? 'worktree';
       let taskConfig: TaskConfig;
       switch (executorType) {
         case 'docker':
-          taskConfig = { ...baseConfig, executorType, dockerImage: taskDef.dockerImage, remoteTargetId: taskDef.remoteTargetId };
+          taskConfig = { ...baseConfig, executorType, dockerImage: taskDef.dockerImage, remoteTargetId: effectiveRemoteTargetId };
           break;
         case 'ssh':
-          taskConfig = { ...baseConfig, executorType, remoteTargetId: taskDef.remoteTargetId };
+          taskConfig = { ...baseConfig, executorType, remoteTargetId: effectiveRemoteTargetId };
           break;
         default:
-          taskConfig = { ...baseConfig, executorType: 'worktree' as const, remoteTargetId: taskDef.remoteTargetId };
+          taskConfig = { ...baseConfig, executorType: 'worktree' as const, remoteTargetId: effectiveRemoteTargetId };
           break;
       }
       const task = createTaskState(

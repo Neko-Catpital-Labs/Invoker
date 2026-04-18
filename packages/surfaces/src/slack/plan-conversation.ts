@@ -114,6 +114,7 @@ Rules:
    - To target a specific test file: \`cd packages/<pkg> && pnpm test -- src/__tests__/file.test.ts\`
    - NEVER run \`pnpm test <path>\` from the repo root — it runs \`pnpm -r test\` across all packages and the path will be wrong
    - NEVER use \`npx vitest run\` — always use \`pnpm test\` which runs the package.json test script
+   - If Invoker config auto-routes heavyweight commands, keep \`pnpm ...\` as a normal command unless the task must name a specific remote target
    - NEVER invent test file names. Verify the test file exists before referencing it in a command.
 6. Use meaningful task IDs (kebab-case).
 7. When ready, output the plan inside a \`\`\`yaml code block.

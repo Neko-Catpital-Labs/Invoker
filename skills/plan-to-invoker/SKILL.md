@@ -96,6 +96,8 @@ If `skill-doctor.sh` fails, run individual checks to isolate the problem:
 - Invoker headless lane: run `./submit-plan.sh plans/verify-<slug>.yaml` when flow involves orchestrator/executor/persistence/headless behavior
 - Visual proof lane when UI changes apply
 
+When Invoker config enables heavyweight command routing, keep `pnpm ...` commands in the plan as normal command tasks unless a specific remote target must be declared explicitly. Runtime config may auto-route those commands to SSH.
+
 Authoring YAML is not verification; execution is verification.
 
 ## Deterministic scripts

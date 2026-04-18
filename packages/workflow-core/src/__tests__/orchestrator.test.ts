@@ -1032,6 +1032,107 @@ describe('Orchestrator', () => {
         expect(mergeNode).toBeDefined();
         expect(mergeNode!.config.executorType).toBe('merge');
       });
+
+      it('auto-routes pnpm test to heavyweight SSH target when executor is omitted', () => {
+        const routedOrchestrator = new Orchestrator({
+          persistence: new InMemoryPersistence(),
+          messageBus: new InMemoryBus(),
+          maxConcurrency: 3,
+          heavyweightCommandRouting: {
+            remoteTargetId: 'ci-box',
+          },
+          availableRemoteTargetIds: ['ci-box'],
+        });
+
+        routedOrchestrator.loadPlan({
+          name: 'heavyweight-routing-test',
+          tasks: [{ id: 't1', description: 'Run tests', command: 'cd packages/app && pnpm test' }],
+        });
+
+        const task = routedOrchestrator.getTask('t1');
+        expect(task!.config.executorType).toBe('ssh');
+        expect(task!.config.remoteTargetId).toBe('ci-box');
+      });
+
+      it('auto-routes pnpm install to heavyweight SSH target when executor is omitted', () => {
+        const routedOrchestrator = new Orchestrator({
+          persistence: new InMemoryPersistence(),
+          messageBus: new InMemoryBus(),
+          maxConcurrency: 3,
+          heavyweightCommandRouting: {
+            remoteTargetId: 'ci-box',
+          },
+          availableRemoteTargetIds: ['ci-box'],
+        });
+
+        routedOrchestrator.loadPlan({
+          name: 'heavyweight-install-routing-test',
+          tasks: [{ id: 't1', description: 'Install deps', command: 'pnpm install --frozen-lockfile' }],
+        });
+
+        const task = routedOrchestrator.getTask('t1');
+        expect(task!.config.executorType).toBe('ssh');
+        expect(task!.config.remoteTargetId).toBe('ci-box');
+      });
+
+      it('throws when heavyweight command explicitly declares conflicting local executor', () => {
+        const routedOrchestrator = new Orchestrator({
+          persistence: new InMemoryPersistence(),
+          messageBus: new InMemoryBus(),
+          maxConcurrency: 3,
+          heavyweightCommandRouting: {
+            remoteTargetId: 'ci-box',
+          },
+          availableRemoteTargetIds: ['ci-box'],
+        });
+
+        expect(() => {
+          routedOrchestrator.loadPlan({
+            name: 'heavyweight-conflict-test',
+            tasks: [{ id: 't1', description: 'Run tests', command: 'pnpm test', executorType: 'worktree' }],
+          });
+        }).toThrow('matched heavyweight command routing');
+      });
+
+      it('throws when heavyweight command routing target is not configured', () => {
+        const routedOrchestrator = new Orchestrator({
+          persistence: new InMemoryPersistence(),
+          messageBus: new InMemoryBus(),
+          maxConcurrency: 3,
+          heavyweightCommandRouting: {
+            remoteTargetId: 'ci-box',
+          },
+          availableRemoteTargetIds: [],
+        });
+
+        expect(() => {
+          routedOrchestrator.loadPlan({
+            name: 'heavyweight-missing-target',
+            tasks: [{ id: 't1', description: 'Run tests', command: 'pnpm test' }],
+          });
+        }).toThrow('no remoteTargets are configured');
+      });
+
+      it('leaves non-matching commands unchanged under heavyweight routing', () => {
+        const routedOrchestrator = new Orchestrator({
+          persistence: new InMemoryPersistence(),
+          messageBus: new InMemoryBus(),
+          maxConcurrency: 3,
+          heavyweightCommandRouting: {
+            remoteTargetId: 'ci-box',
+          },
+          availableRemoteTargetIds: ['ci-box'],
+        });
+
+        routedOrchestrator.loadPlan({
+          name: 'non-heavyweight-command',
+          tasks: [{ id: 't1', description: 'Echo hello', command: 'echo hello' }],
+        });
+
+        const task = routedOrchestrator.getTask('t1');
+        expect(task!.config.executorType).toBe('worktree');
+        expect(task!.config.remoteTargetId).toBeUndefined();
+      });
     });
 
     // ── atomicity ───────────────────────────────────────────

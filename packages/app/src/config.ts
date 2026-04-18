@@ -102,6 +102,24 @@ export interface InvokerConfig {
     provisionCommand?: string;
   }>;
   /**
+   * Config-owned routing policy for heavyweight shell commands.
+   * Matching tasks are auto-routed to the configured executor/target at plan submission time.
+   * Default matcher set for v1 is any command invoking `pnpm`.
+   */
+  heavyweightCommandRouting?: {
+    /** Set false to disable heavyweight auto-routing without deleting the config block. */
+    enabled?: boolean;
+    /** Destination executor type. Default: "ssh". */
+    executorType?: string;
+    /** Required destination remote target ID for heavyweight commands. */
+    remoteTargetId: string;
+    /** Optional command matchers; defaults to matching any `pnpm` invocation. */
+    matchers?: Array<{
+      pattern?: string;
+      regex?: string;
+    }>;
+  };
+  /**
    * Pattern-based rules that enforce task execution environment conformance.
    * When a rule matches a task command, the orchestrator validates that the task's
    * executorType and remoteTargetId explicitly declared in the plan YAML match the
