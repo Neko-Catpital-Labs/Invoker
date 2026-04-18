@@ -4852,6 +4852,90 @@ describe('TaskRunner', () => {
     });
   });
 
+  describe('executeMergeNode heartbeat lease', () => {
+    it('does not renew selected attempt heartbeat while merge consolidation is still running', async () => {
+      vi.useFakeTimers();
+      try {
+        const mergeTask = makeTask({
+          id: '__merge__wf-1',
+          status: 'running',
+          dependencies: ['t1'],
+          config: { isMergeNode: true, workflowId: 'wf-1' },
+          execution: {
+            selectedAttemptId: 'merge-attempt-1',
+            generation: 7,
+          },
+        });
+        const allTasks = [
+          makeTask({
+            id: 't1',
+            status: 'completed',
+            config: { workflowId: 'wf-1' },
+            execution: { branch: 'experiment/t1' },
+          }),
+          mergeTask,
+        ];
+        const setTaskReviewReady = vi.fn();
+        const orchestrator = {
+          getTask: (id: string) => allTasks.find(t => t.id === id),
+          getAllTasks: () => allTasks,
+          setTaskReviewReady,
+          startExecution: vi.fn(() => []),
+        };
+        const updateAttempt = vi.fn();
+        const onHeartbeat = vi.fn();
+        const onComplete = vi.fn();
+        const executor = new TaskRunner({
+          orchestrator: orchestrator as any,
+          persistence: {
+            loadWorkflow: () => ({
+              id: 'wf-1',
+              onFinish: 'merge',
+              mergeMode: 'manual',
+              baseBranch: 'master',
+              featureBranch: 'plan/feature',
+              name: 'Workflow',
+            }),
+            updateAttempt,
+            updateTask: vi.fn(),
+          } as any,
+          executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+          cwd: '/tmp',
+          callbacks: { onHeartbeat, onComplete },
+        });
+
+        (executor as any).buildMergeSummary = async () => 'summary';
+        (executor as any).createMergeWorktree = async () => '/tmp/mock-merge-wt';
+        (executor as any).removeMergeWorktree = async () => {};
+        (executor as any).consolidateAndMerge = () => new Promise<string | undefined>((resolve) => {
+          setTimeout(() => resolve(undefined), 60_000);
+        });
+
+        const pending = (executor as any).executeMergeNode(mergeTask);
+        await vi.advanceTimersByTimeAsync(59_000);
+
+        expect(updateAttempt).not.toHaveBeenCalled();
+        expect(onHeartbeat).not.toHaveBeenCalled();
+        expect(onComplete).not.toHaveBeenCalled();
+
+        await vi.advanceTimersByTimeAsync(1_000);
+        await pending;
+
+        expect(setTaskReviewReady).toHaveBeenCalledWith(
+          '__merge__wf-1',
+          expect.objectContaining({
+            execution: expect.objectContaining({
+              branch: 'plan/feature',
+              workspacePath: '/tmp/mock-merge-wt',
+            }),
+          }),
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
   describe('publishApprovedFix', () => {
     it('commits and pushes approved non-merge fixes in a local worktree', async () => {
       const bareDir = createTempWorkspace();
