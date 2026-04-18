@@ -137,4 +137,17 @@ describe('loadConfig', () => {
     expect(config.imageStorage).toEqual(imageStorage);
   });
 
+  it('reads heavyweightCommandRouting from user config', () => {
+    const heavyweightCommandRouting = {
+      remoteTargetId: 'ci-box',
+      matchers: [{ regex: '\\bpnpm(?:\\s|$)' }],
+    };
+    writeFileSync(
+      join(fakeHome, '.invoker', 'config.json'),
+      JSON.stringify({ heavyweightCommandRouting }),
+    );
+    const config = loadConfig();
+    expect(config.heavyweightCommandRouting).toEqual(heavyweightCommandRouting);
+  });
+
 });
