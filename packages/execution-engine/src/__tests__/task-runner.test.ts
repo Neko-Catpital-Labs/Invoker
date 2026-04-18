@@ -1,9 +1,11 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { execSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { TaskRunner } from '../task-runner.js';
 import { collectTransitiveNonMergeTaskIds } from '../merge-runner.js';
+import { SshExecutor } from '../ssh-executor.js';
 import type { TaskState } from '@invoker/workflow-core';
 import type { WorkResponse } from '@invoker/contracts';
 import { EventEmitter } from 'events';
@@ -4851,6 +4853,133 @@ describe('TaskRunner', () => {
       (executor as any).spawnAgentFix = async () => ({ stdout: '', sessionId: 'sess-xyz' });
       await executor.fixWithAgent('fix-task', 'error output');
       expect(gitCalls.find(c => c[0] === 'checkout')).toBeUndefined();
+    });
+  });
+
+  describe('publishApprovedFix', () => {
+    it('commits and pushes approved non-merge fixes in a local worktree', async () => {
+      const bareDir = createTempWorkspace();
+      const repoDir = createTempWorkspace();
+      execSync('git init --bare', { cwd: bareDir });
+      execSync(`git clone ${JSON.stringify(bareDir)} ${JSON.stringify(repoDir)}`);
+      execSync('git config user.email "test@example.com"', { cwd: repoDir });
+      execSync('git config user.name "Test Runner"', { cwd: repoDir });
+      writeFileSync(join(repoDir, 'fix-target.txt'), 'BROKEN\n');
+      writeFileSync(join(repoDir, 'package.json'), '{"name":"publish-approved-fix","private":true}\n');
+      execSync('git add -A', { cwd: repoDir });
+      execSync('git commit -m "seed"', { cwd: repoDir });
+      execSync('git push origin HEAD', { cwd: repoDir });
+      execSync('git checkout -b experiment/fix-gap', { cwd: repoDir });
+      execSync('git push -u origin experiment/fix-gap', { cwd: repoDir });
+      writeFileSync(join(repoDir, 'fix-target.txt'), 'FIXED\n');
+
+      const task = makeTask({
+        id: 'fix-task',
+        description: 'Apply approved fix',
+        config: { executorType: 'worktree', command: 'bash -lc false' },
+        execution: {
+          workspacePath: repoDir,
+          branch: 'experiment/fix-gap',
+          selectedAttemptId: 'attempt-1',
+        },
+      });
+      const tasks = new Map<string, TaskState>([['fix-task', task]]);
+      const updateTask = vi.fn();
+      const updateAttempt = vi.fn();
+      const persistence = { updateTask, updateAttempt };
+      const registryMap = new Map<string, any>();
+      const executorRegistry = {
+        getDefault: () => {
+          throw new Error('unexpected getDefault');
+        },
+        get: (name: string) => registryMap.get(name) ?? null,
+        register: (name: string, executor: any) => {
+          registryMap.set(name, executor);
+        },
+        getAll: () => [...registryMap.values()],
+      };
+      const runner = new TaskRunner({
+        orchestrator: { getTask: (id: string) => tasks.get(id) } as any,
+        persistence: persistence as any,
+        executorRegistry: executorRegistry as any,
+        cwd: repoDir,
+      });
+
+      await runner.publishApprovedFix(task);
+
+      const headSha = execSync('git rev-parse HEAD', { cwd: repoDir, encoding: 'utf8' }).trim();
+      const headValue = execSync('git show HEAD:fix-target.txt', { cwd: repoDir, encoding: 'utf8' }).trim();
+      const remoteValue = execSync('git show origin/experiment/fix-gap:fix-target.txt', { cwd: repoDir, encoding: 'utf8' }).trim();
+      expect(headValue).toBe('FIXED');
+      expect(remoteValue).toBe('FIXED');
+      expect(() => execSync('git diff --quiet', { cwd: repoDir })).not.toThrow();
+      expect(updateTask).toHaveBeenCalledWith('fix-task', {
+        execution: { commit: headSha },
+      });
+      expect(updateAttempt).toHaveBeenCalledWith('attempt-1', {
+        branch: 'experiment/fix-gap',
+        commit: headSha,
+      });
+    });
+
+    it('routes SSH approved-fix publish through SshExecutor and persists the returned hash', async () => {
+      const publishSpy = vi.spyOn(SshExecutor.prototype, 'publishApprovedFix').mockResolvedValue({
+        commitHash: 'abc1234',
+      });
+
+      const task = makeTask({
+        id: 'ssh-fix-task',
+        description: 'Apply approved fix over ssh',
+        config: {
+          executorType: 'ssh',
+          remoteTargetId: 'remote-1',
+          command: 'bash -lc false',
+        },
+        execution: {
+          workspacePath: '/remote/worktree',
+          branch: 'experiment/ssh-fix-gap',
+          selectedAttemptId: 'attempt-ssh-1',
+        },
+      });
+      const tasks = new Map<string, TaskState>([['ssh-fix-task', task]]);
+      const updateTask = vi.fn();
+      const updateAttempt = vi.fn();
+      const executorRegistry = {
+        getDefault: () => ({ type: 'worktree' }),
+        get: () => null,
+        register: () => {},
+        getAll: () => [],
+      };
+      const runner = new TaskRunner({
+        orchestrator: { getTask: (id: string) => tasks.get(id) } as any,
+        persistence: { updateTask, updateAttempt } as any,
+        executorRegistry: executorRegistry as any,
+        cwd: '/tmp',
+        remoteTargetsProvider: () => ({
+          'remote-1': {
+            host: 'example.com',
+            user: 'invoker',
+            sshKeyPath: '/tmp/test-key',
+          },
+        }),
+      });
+
+      await runner.publishApprovedFix(task);
+
+      expect(publishSpy).toHaveBeenCalledWith(
+        '/remote/worktree',
+        expect.objectContaining({
+          actionId: 'ssh-fix-task',
+        }),
+        'experiment/ssh-fix-gap',
+      );
+      expect(updateTask).toHaveBeenCalledWith('ssh-fix-task', {
+        execution: { commit: 'abc1234' },
+      });
+      expect(updateAttempt).toHaveBeenCalledWith('attempt-ssh-1', {
+        branch: 'experiment/ssh-fix-gap',
+        commit: 'abc1234',
+      });
     });
   });
 

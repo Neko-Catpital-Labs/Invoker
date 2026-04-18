@@ -584,6 +584,26 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
   }
 
   /**
+   * Commit and push an already-applied workspace fix without rerunning the task command.
+   * Used when an AI-applied fix is approved for a non-merge task.
+   */
+  async publishApprovedFix(
+    cwd: string,
+    request: WorkRequest,
+    branch: string,
+  ): Promise<{ commitHash?: string; error?: string }> {
+    const commitHash = await this.recordTaskResult(cwd, request, 0);
+    if (!commitHash) {
+      return { error: 'commit approved fix failed' };
+    }
+    const pushError = await this.pushBranchToRemote(cwd, branch);
+    if (pushError) {
+      return { error: pushError };
+    }
+    return { commitHash };
+  }
+
+  /**
    * Restore the original branch after task completion.
    * No-op if originalBranch is undefined (e.g., not in a git repo).
    */
