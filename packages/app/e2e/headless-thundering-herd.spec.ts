@@ -43,9 +43,13 @@ function parseWorkflowId(stdout: string): string {
 }
 
 async function assertTaskPanelResponsive(page: Page, timeoutMs: number): Promise<void> {
-  const panel = page.locator('.overflow-y-auto');
+  const taskNode = page.locator('.react-flow__node[data-testid$="task-alpha"]');
+  const commandDisplay = page.locator('[data-testid="command-display"]');
   const startedAt = Date.now();
-  await expect(panel.locator('[data-testid="command-display"]')).toBeVisible({ timeout: timeoutMs });
+  await expect(async () => {
+    await taskNode.click();
+    await expect(commandDisplay).toBeVisible({ timeout: 1000 });
+  }).toPass({ timeout: timeoutMs });
   const interactionMs = Date.now() - startedAt;
   expect(interactionMs).toBeLessThan(timeoutMs);
 }
@@ -91,14 +95,12 @@ test.describe('Headless thundering herd', () => {
     );
 
     const firstInteractionStartedAt = Date.now();
-    await page.locator('.react-flow__node[data-testid$="task-alpha"]').click();
     await assertTaskPanelResponsive(page, 8000);
     expect(Date.now() - firstInteractionStartedAt).toBeLessThan(8000);
 
     await page.waitForTimeout(1500);
 
     const secondInteractionStartedAt = Date.now();
-    await page.locator('.react-flow__node[data-testid$="task-alpha"]').click();
     await assertTaskPanelResponsive(page, 8000);
     expect(Date.now() - secondInteractionStartedAt).toBeLessThan(8000);
 

@@ -64,11 +64,11 @@ export function base64Encode(s: string): string {
  * NOTE: Do NOT use `case ~/*)` — bash tilde-expands case patterns, so `~/*` becomes
  * `/root/*` and never matches literal `~/.invoker/…`.
  */
-export function bashNormalizeTildePath(): string {
-  return `if [[ "$WT" == '~' ]]; then
-  WT="$HOME"
-elif [[ "\${WT:0:2}" == '~/' ]]; then
-  WT="$HOME/\${WT:2}"
+export function bashNormalizeTildePath(varName = 'WT'): string {
+  return `if [[ "$${varName}" == '~' ]]; then
+  ${varName}="$HOME"
+elif [[ "\${${varName}:0:2}" == '~/' ]]; then
+  ${varName}="$HOME/\${${varName}:2}"
 fi`;
 }
 
@@ -245,6 +245,8 @@ export function buildWorktreeCleanupScript(opts: GitWorktreeCleanupOpts): string
   return `set -euo pipefail
 CLONE="${opts.remoteClone}"
 WT="${opts.canonicalRemoteWt}"
+${bashNormalizeTildePath('CLONE')}
+${bashNormalizeTildePath('WT')}
 mkdir -p "$(dirname "$WT")"
 git -C "$CLONE" worktree prune 2>/dev/null || true
 if [ -e "$WT" ]; then
