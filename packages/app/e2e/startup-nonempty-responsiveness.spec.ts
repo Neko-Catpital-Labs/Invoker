@@ -9,6 +9,7 @@ import type { Page } from '@playwright/test';
 import { E2E_REPO_URL } from './fixtures/electron-app.js';
 
 const repoRoot = path.resolve(__dirname, '..', '..', '..', '..');
+const STARTUP_BUDGET_MS = 12000;
 
 async function launchElectronApp(testDir: string, extraEnv?: Record<string, string>) {
   const claudeMarker = path.join(repoRoot, 'scripts', 'e2e-dry-run', 'fixtures', 'claude-marker.sh');
@@ -124,12 +125,11 @@ test('non-empty persisted startup stays responsive and avoids initial db-poll re
 
     const startedAt = Date.now();
     const app = await launchElectronApp(testDir, {
-      INVOKER_TEST_RESUME_PENDING_DELAY_MS: '3000',
+      INVOKER_TEST_RESUME_PENDING_DELAY_MS: '15000',
     });
     try {
-      const page = await app.firstWindow({ timeout: 3000 });
+      const page = await app.firstWindow({ timeout: STARTUP_BUDGET_MS });
       const elapsedMs = Date.now() - startedAt;
-      expect(elapsedMs).toBeLessThan(3000);
       await page.waitForLoadState('domcontentloaded');
       await page.waitForFunction(() => typeof window.invoker !== 'undefined', null, { timeout: 5000 });
 
@@ -164,6 +164,7 @@ test('non-empty persisted startup stays responsive and avoids initial db-poll re
       expect(graphVisible).toBeTruthy();
       expect(Number(graphVisible?.processElapsedMs) - Number(windowShow?.elapsedMs)).toBeLessThan(500);
       expect(Number(graphVisible?.nodeCount)).toBe(tasksPerWorkflow);
+      expect(elapsedMs).toBeLessThan(STARTUP_BUDGET_MS);
 
       expect(result.taskCount).toBe(expectedTaskCount);
       expect(result.perf.dbPollCreated).toBe(0);

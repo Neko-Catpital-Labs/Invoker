@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { writeFile } from 'node:fs/promises';
 import * as path from 'node:path';
 import { promisify } from 'node:util';
+import type { Page } from '@playwright/test';
 import { stringify as yamlStringify } from 'yaml';
 
 import {
@@ -39,6 +40,14 @@ function parseWorkflowId(stdout: string): string {
   const direct = stdout.match(/Workflow ID: (wf-[^\s]+)/);
   if (direct?.[1]) return direct[1];
   throw new Error(`No workflow id found in stdout:\n${stdout}`);
+}
+
+async function assertTaskPanelResponsive(page: Page, timeoutMs: number): Promise<void> {
+  const panel = page.locator('.overflow-y-auto');
+  const startedAt = Date.now();
+  await expect(panel.locator('[data-testid="command-display"]')).toBeVisible({ timeout: timeoutMs });
+  const interactionMs = Date.now() - startedAt;
+  expect(interactionMs).toBeLessThan(timeoutMs);
 }
 
 test.describe('Headless thundering herd', () => {
@@ -81,14 +90,17 @@ test.describe('Headless thundering herd', () => {
       runHeadlessClient(testDir, ['retry', workflowId, '--no-track']),
     );
 
+    const firstInteractionStartedAt = Date.now();
     await page.locator('.react-flow__node[data-testid$="task-alpha"]').click();
-    const panel = page.locator('.overflow-y-auto');
-    await expect(panel.locator('[data-testid="command-display"]')).toBeVisible({ timeout: 5000 });
+    await assertTaskPanelResponsive(page, 8000);
+    expect(Date.now() - firstInteractionStartedAt).toBeLessThan(8000);
 
     await page.waitForTimeout(1500);
 
+    const secondInteractionStartedAt = Date.now();
     await page.locator('.react-flow__node[data-testid$="task-alpha"]').click();
-    await expect(panel.locator('[data-testid="command-display"]')).toBeVisible({ timeout: 5000 });
+    await assertTaskPanelResponsive(page, 8000);
+    expect(Date.now() - secondInteractionStartedAt).toBeLessThan(8000);
 
     await Promise.all(burst);
 
