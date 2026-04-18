@@ -1046,12 +1046,11 @@ describe('SQLiteAdapter', () => {
   });
 
   describe('workflow merge config', () => {
-    it('saveWorkflow persists onFinish, baseBranch, parentRemote, featureBranch', () => {
+    it('saveWorkflow persists onFinish, baseBranch, and featureBranch', () => {
       const wf: Workflow = {
         ...testWorkflow,
         onFinish: 'merge',
         baseBranch: 'main',
-        parentRemote: 'canonical',
         featureBranch: 'feat/test',
       };
       adapter.saveWorkflow(wf);
@@ -1060,7 +1059,6 @@ describe('SQLiteAdapter', () => {
       expect(loaded).toBeDefined();
       expect(loaded!.onFinish).toBe('merge');
       expect(loaded!.baseBranch).toBe('main');
-      expect(loaded!.parentRemote).toBe('canonical');
       expect(loaded!.featureBranch).toBe('feat/test');
     });
 
@@ -1077,7 +1075,6 @@ describe('SQLiteAdapter', () => {
       expect(workflows[0].onFinish).toBe('pull_request');
       expect(workflows[0].baseBranch).toBe('develop');
       expect(workflows[0].featureBranch).toBe('feat/pr');
-      expect(workflows[0].parentRemote).toBe('upstream');
     });
 
     it('merge config fields are undefined when not set', () => {
@@ -1087,7 +1084,6 @@ describe('SQLiteAdapter', () => {
       expect(loaded!.onFinish).toBeUndefined();
       expect(loaded!.baseBranch).toBeUndefined();
       expect(loaded!.featureBranch).toBeUndefined();
-      expect(loaded!.parentRemote).toBe('upstream');
     });
 
     it('listWorkflows returns full Workflow objects', () => {

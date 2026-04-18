@@ -18,13 +18,6 @@ function resolveDefaultBaseBranch(plan: PlanDefinition): string {
   return loadConfig().defaultBranch ?? (plan.repoUrl ? detectDefaultBranchRemote(plan.repoUrl) : 'main');
 }
 
-/** Empty / whitespace `parentRemote` falls back to the canonical default. */
-function resolveDefaultParentRemote(plan: PlanDefinition): string {
-  const r = plan.parentRemote;
-  if (typeof r === 'string' && r.trim() !== '') return r.trim();
-  return 'upstream';
-}
-
 /**
  * Top-level plan defaults aligned with {@link parsePlan} (merge target, feature branch, onFinish).
  * Use when a {@link PlanDefinition} is built outside the YAML parser — e.g. GUI `yaml.load` + IPC.
@@ -38,7 +31,6 @@ export function applyPlanDefinitionDefaults(plan: PlanDefinition): PlanDefinitio
     ...plan,
     onFinish: plan.onFinish ?? 'pull_request',
     baseBranch: resolveDefaultBaseBranch(plan),
-    parentRemote: resolveDefaultParentRemote(plan),
     featureBranch,
   };
 }
@@ -78,7 +70,6 @@ export interface RawPlan {
   visualProof?: boolean;
   onFinish?: string;
   baseBranch?: string;
-  parentRemote?: string;
   featureBranch?: string;
   mergeMode?: string;
   reviewProvider?: string;
@@ -259,10 +250,6 @@ export function parsePlan(yamlContent: string): PlanDefinition {
     ? normalizeMergeModeForPersistence(rawMergeMode)
     : undefined;
 
-  if (raw.parentRemote !== undefined && typeof raw.parentRemote !== 'string') {
-    throw new PlanParseError('"parentRemote" must be a string when provided');
-  }
-
   // Default reviewProvider to 'github' for external-review workflows.
   const reviewProvider = raw.reviewProvider
     ?? (rawMergeMode === 'external_review' ? 'github' : undefined);
@@ -364,7 +351,6 @@ export function parsePlan(yamlContent: string): PlanDefinition {
     visualProof: raw.visualProof,
     onFinish,
     baseBranch: raw.baseBranch,
-    parentRemote: raw.parentRemote,
     featureBranch: raw.featureBranch,
     mergeMode,
     reviewProvider,

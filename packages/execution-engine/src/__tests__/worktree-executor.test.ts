@@ -1041,39 +1041,23 @@ describe('WorktreeExecutor', () => {
       taskProcess.emit('close', 0, null);
     });
 
-    it('syncs parent remote base when a custom parent remote is configured', async () => {
+    it('syncs base refs from origin', async () => {
       const { taskProcess } = setupSpawnMock();
-      const defaultImpl = mockedSpawn.getMockImplementation()!;
-      mockedSpawn.mockImplementation((cmd: string, args?: readonly string[], options?: any) => {
-        if (cmd === 'git') {
-          const argsArr = args as string[] | undefined;
-          if (argsArr?.[0] === 'remote' && argsArr?.[1] === 'get-url' && argsArr?.[2] === 'canonical') {
-            const gitProc = createMockProcess();
-            Promise.resolve().then(() => {
-              gitProc.stdout!.emit('data', Buffer.from('git@github.com:canonical/repo.git\n'));
-              gitProc.emit('close', 0, null);
-            });
-            return gitProc as any;
-          }
-        }
-        return defaultImpl(cmd, args, options);
-      });
-
       const request = makeRequest({
-        inputs: { command: 'echo hello', baseBranch: 'master', parentRemote: 'canonical' },
+        inputs: { command: 'echo hello', baseBranch: 'master' },
       });
       await executor.start(request);
 
       const gitCalls = mockedSpawn.mock.calls.filter((call) => call[0] === 'git');
-      const parentFetch = gitCalls.find((call) => {
+      const originFetch = gitCalls.find((call) => {
         const args = call[1] as string[];
         return (
           args[0] === 'fetch'
-          && args[1] === 'canonical'
-          && args[2] === 'refs/heads/master:refs/remotes/canonical/master'
+          && args[1] === 'origin'
+          && args[2] === 'refs/heads/master:refs/remotes/origin/master'
         );
       });
-      expect(parentFetch).toBeDefined();
+      expect(originFetch).toBeDefined();
 
       taskProcess.emit('close', 0, null);
     });
