@@ -27,6 +27,16 @@
     }
   },
 
+  "heavyweightCommandRouting": {
+    "comment": "Auto-route heavyweight shell commands like pnpm test to a remote target",
+    "remoteTargetId": "staging-server",
+    "matchers": [
+      {
+        "regex": "\\bpnpm(?:\\s|$)"
+      }
+    ]
+  },
+
   "autoFixRetries": 3,
   "autoApproveAIFixes": true,
 
