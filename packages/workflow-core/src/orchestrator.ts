@@ -1394,69 +1394,6 @@ export class Orchestrator {
       return [];
     }
 
-    // Merge gate fixed by Claude: approve the fix → running while PR/git
-    // prep executes; caller must drive the async publish work via executor.
-    if (
-      task.config.isMergeNode &&
-      task.execution.pendingFixError !== undefined
-    ) {
-      console.log(
-        `[merge-gate-workspace] approve(post-fix) mergeNode=${taskId} ` +
-          `before writeAndSync execution.workspacePath=${task.execution.workspacePath ?? 'none'}`,
-      );
-      mergeTrace('GATE_WS_APPROVE_POST_FIX', {
-        taskId,
-        workspacePathBefore: task.execution.workspacePath ?? null,
-      });
-      const now = new Date();
-      const fixClearChanges: TaskStateChanges = {
-        status: 'running',
-        execution: { pendingFixError: undefined, startedAt: now, lastHeartbeatAt: now },
-      };
-      this.writeAndSync(taskId, fixClearChanges);
-      this.updateSelectedAttempt(taskId, {
-        status: 'running',
-        startedAt: now,
-        lastHeartbeatAt: now,
-      });
-      const fixDelta: TaskDelta = { type: 'updated', taskId, changes: fixClearChanges };
-      this.persistence.logEvent?.(taskId, 'task.running', fixClearChanges);
-      this.messageBus.publish(TASK_DELTA_CHANNEL, fixDelta);
-      const updated = this.stateGetTask(taskId)!;
-      console.log(
-        `[merge-gate-workspace] approve(post-fix) mergeNode=${taskId} ` +
-          `after writeAndSync execution.workspacePath=${updated.execution.workspacePath ?? 'none'} ` +
-          '(pendingFix cleared; path should be unchanged)',
-      );
-      mergeTrace('GATE_WS_APPROVE_POST_FIX_AFTER', {
-        taskId,
-        workspacePathAfter: updated.execution.workspacePath ?? null,
-      });
-      return [updated];
-    }
-
-    if (
-      !task.config.isMergeNode &&
-      task.execution.pendingFixError !== undefined &&
-      parseMergeConflictError(task.execution.pendingFixError) !== undefined
-    ) {
-      const now = new Date();
-      const fixClearChanges: TaskStateChanges = {
-        status: 'running',
-        execution: { pendingFixError: undefined, startedAt: now, lastHeartbeatAt: now },
-      };
-      this.writeAndSync(taskId, fixClearChanges);
-      this.updateSelectedAttempt(taskId, {
-        status: 'running',
-        startedAt: now,
-        lastHeartbeatAt: now,
-      });
-      const fixDelta: TaskDelta = { type: 'updated', taskId, changes: fixClearChanges };
-      this.persistence.logEvent?.(taskId, 'task.running', fixClearChanges);
-      this.messageBus.publish(TASK_DELTA_CHANNEL, fixDelta);
-      return [this.stateGetTask(taskId)!];
-    }
-
     if (this.beforeApproveHook) {
       mergeTrace('APPROVE_HOOK_FIRING', { taskId, workflowId: task.config.workflowId });
       await this.beforeApproveHook(task);
@@ -1503,6 +1440,31 @@ export class Orchestrator {
     mergeTrace('APPROVE_STARTED', { taskId: task.id, startedIds: started.map(t => t.id), startedStatuses: started.map(t => t.status) });
     this.checkWorkflowCompletion();
     return started;
+  }
+
+  async resumeTaskAfterFixApproval(taskId: string): Promise<TaskState[]> {
+    this.refreshFromDb();
+    const task = this.stateGetTask(taskId);
+    const isApprovalState = task?.status === 'awaiting_approval' || task?.status === 'review_ready';
+    if (!task || !isApprovalState || task.execution.pendingFixError === undefined) {
+      return [];
+    }
+
+    const now = new Date();
+    const changes: TaskStateChanges = {
+      status: 'running',
+      execution: { pendingFixError: undefined, startedAt: now, lastHeartbeatAt: now },
+    };
+    this.writeAndSync(taskId, changes);
+    this.updateSelectedAttempt(taskId, {
+      status: 'running',
+      startedAt: now,
+      lastHeartbeatAt: now,
+    });
+    const delta: TaskDelta = { type: 'updated', taskId, changes };
+    this.persistence.logEvent?.(taskId, 'task.running', changes);
+    this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
+    return [this.stateGetTask(taskId)!];
   }
 
   /**

@@ -5891,7 +5891,7 @@ describe('Orchestrator', () => {
       expect(task.execution.error).toBe('test failed: expected 1 to be 2');
     });
 
-    it('non-merge merge_conflict JSON pendingFixError approve transitions failed -> fixing_with_ai -> awaiting_approval -> running and clears pendingFixError', async () => {
+    it('non-merge merge_conflict JSON pendingFixError resume transitions failed -> fixing_with_ai -> awaiting_approval -> running and clears pendingFixError', async () => {
       const mergeConflictError = JSON.stringify({
         type: 'merge_conflict',
         failedBranch: 'experiment/non-merge-branch-abc123',
@@ -5911,7 +5911,7 @@ describe('Orchestrator', () => {
       expect(orchestrator.getTask('f2')!.status).toBe('awaiting_approval');
       expect(orchestrator.getTask('f2')!.execution.pendingFixError).toBe(mergeConflictError);
 
-      await orchestrator.approve('f2');
+      await orchestrator.resumeTaskAfterFixApproval('f2');
       const task = orchestrator.getTask('f2')!;
       expect(task.status).toBe('running');
       expect(task.status).not.toBe('completed');
@@ -5969,12 +5969,12 @@ describe('Orchestrator', () => {
       return mergeNode.id;
     }
 
-    it('first approve transitions to running (for PR prep), clears pendingFixError, does not fire beforeApproveHook', async () => {
+    it('resumeTaskAfterFixApproval transitions to running (for PR prep), clears pendingFixError, does not fire beforeApproveHook', async () => {
       const hookSpy = vi.fn();
       orchestrator.setBeforeApproveHook(hookSpy);
       const mergeId = setupMergeGateAwaitingFixApproval();
 
-      const started = await orchestrator.approve(mergeId);
+      const started = await orchestrator.resumeTaskAfterFixApproval(mergeId);
 
       expect(started).toHaveLength(1);
       expect(started[0].id).toBe(mergeId);
@@ -5985,12 +5985,12 @@ describe('Orchestrator', () => {
       expect(task.execution.pendingFixError).toBeUndefined();
     });
 
-    it('after PR prep sets awaiting_approval, second approve completes and fires hook', async () => {
+    it('after PR prep sets awaiting_approval, approve completes and fires hook', async () => {
       const hookSpy = vi.fn();
       orchestrator.setBeforeApproveHook(hookSpy);
       const mergeId = setupMergeGateAwaitingFixApproval();
 
-      await orchestrator.approve(mergeId);
+      await orchestrator.resumeTaskAfterFixApproval(mergeId);
       orchestrator.setTaskAwaitingApproval(mergeId);
       await orchestrator.approve(mergeId);
 

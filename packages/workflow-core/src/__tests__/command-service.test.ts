@@ -22,6 +22,7 @@ function makeEnvelope<P>(
 function stubOrchestrator(overrides: Partial<Orchestrator> = {}): Orchestrator {
   return {
     approve: vi.fn().mockResolvedValue([] as TaskState[]),
+    resumeTaskAfterFixApproval: vi.fn().mockResolvedValue([] as TaskState[]),
     reject: vi.fn(),
     getTask: vi.fn().mockReturnValue(undefined),
     revertConflictResolution: vi.fn(),
@@ -83,6 +84,16 @@ describe('CommandService', () => {
         ok: false,
         error: { code: 'APPROVE_FAILED', message: 'boom' },
       });
+    });
+  });
+
+  describe('resumeTaskAfterFixApproval', () => {
+    it('delegates to orchestrator.resumeTaskAfterFixApproval', async () => {
+      const envelope = makeEnvelope({ taskId: 't-1' });
+      const result = await service.resumeTaskAfterFixApproval(envelope);
+
+      expect(result).toEqual({ ok: true, data: [] });
+      expect(orchestrator.resumeTaskAfterFixApproval).toHaveBeenCalledWith('t-1');
     });
   });
 
