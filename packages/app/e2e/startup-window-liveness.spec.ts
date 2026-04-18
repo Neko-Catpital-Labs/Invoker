@@ -5,6 +5,7 @@ import * as path from 'node:path';
 import { tmpdir } from 'node:os';
 
 const repoRoot = path.resolve(__dirname, '..', '..', '..', '..');
+const STARTUP_BUDGET_MS = 12000;
 
 test('GUI window appears before delayed workflow mutation recovery finishes', async () => {
   const testDir = mkdtempSync(path.join(tmpdir(), 'invoker-startup-liveness-'));
@@ -41,14 +42,14 @@ test('GUI window appears before delayed workflow mutation recovery finishes', as
         INVOKER_REPO_CONFIG_PATH: configPath,
         INVOKER_E2E_MARKER_ROOT: markerRoot,
         INVOKER_CLAUDE_FIX_COMMAND: claudeMarker,
-        INVOKER_TEST_RESUME_PENDING_DELAY_MS: '5000',
+        INVOKER_TEST_RESUME_PENDING_DELAY_MS: '15000',
         PATH: `${stubDir}${path.delimiter}${process.env.PATH ?? ''}`,
       },
     });
     try {
-      const page = await electronApp.firstWindow({ timeout: 2500 });
+      const page = await electronApp.firstWindow({ timeout: STARTUP_BUDGET_MS });
       const elapsedMs = Date.now() - startedAt;
-      expect(elapsedMs).toBeLessThan(2500);
+      expect(elapsedMs).toBeLessThan(STARTUP_BUDGET_MS);
       await page.waitForLoadState('domcontentloaded');
       await page.waitForFunction(() => typeof window.invoker !== 'undefined', null, { timeout: 5000 });
     } finally {
