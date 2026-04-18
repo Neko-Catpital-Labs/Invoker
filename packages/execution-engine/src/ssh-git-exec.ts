@@ -235,26 +235,50 @@ git -C ${wtQ} rev-parse --abbrev-ref HEAD
 
 export interface GitWorktreeCleanupOpts {
   remoteClone: string;
-  canonicalRemoteWt: string;
+  worktreePaths: string[];
 }
 
 /**
- * Generate script to prune stale worktrees and remove a specific worktree path.
+ * Generate script to prune stale worktrees and remove specific worktree paths.
  */
 export function buildWorktreeCleanupScript(opts: GitWorktreeCleanupOpts): string {
+  const worktreesB64 = base64Encode(`${opts.worktreePaths.join('\n')}\n`);
   return `set -euo pipefail
 CLONE="${opts.remoteClone}"
-WT="${opts.canonicalRemoteWt}"
 ${bashNormalizeTildePath('CLONE')}
-${bashNormalizeTildePath('WT')}
-mkdir -p "$(dirname "$WT")"
+WORKTREES_B64="${worktreesB64}"
 git -C "$CLONE" worktree prune 2>/dev/null || true
-if [ -e "$WT" ]; then
-  echo "[SshGitExec] Removing stale worktree path: $WT"
-  git -C "$CLONE" worktree remove --force "$WT" 2>/dev/null || true
-  rm -rf "$WT"
-  git -C "$CLONE" worktree prune 2>/dev/null || true
-fi
+while IFS= read -r WT; do
+  [ -z "$WT" ] && continue
+  ${bashNormalizeTildePath('WT')}
+  mkdir -p "$(dirname "$WT")"
+  if [ -e "$WT" ]; then
+    echo "[SshGitExec] Removing stale worktree path: $WT"
+    git -C "$CLONE" worktree remove --force "$WT" 2>/dev/null || true
+    rm -rf "$WT"
+    git -C "$CLONE" worktree prune 2>/dev/null || true
+  fi
+done < <(echo "$WORKTREES_B64" | base64 -d)
+`;
+}
+
+export interface GitWorktreeRenameBranchOpts {
+  worktreePath: string;
+  fromBranch: string;
+  toBranch: string;
+}
+
+export function buildWorktreeRenameBranchScript(opts: GitWorktreeRenameBranchOpts): string {
+  const wtB64 = base64Encode(opts.worktreePath);
+  const fromB64 = base64Encode(opts.fromBranch);
+  const toB64 = base64Encode(opts.toBranch);
+  return `set -euo pipefail
+WT=$(echo ${wtB64} | base64 -d)
+FROM=$(echo ${fromB64} | base64 -d)
+TO=$(echo ${toB64} | base64 -d)
+${bashNormalizeTildePath('WT')}
+git -C "$WT" branch -m "$FROM" "$TO"
+git -C "$WT" rev-parse --abbrev-ref HEAD
 `;
 }
 
