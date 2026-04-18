@@ -431,6 +431,9 @@ jobs:
           git update-ref refs/heads/main refs/remotes/origin/master || true
           git update-ref refs/remotes/origin/main refs/remotes/origin/master || true
 
+      - name: Install sqlite3
+        run: sudo apt-get install -y sqlite3
+
       - name: Build invoker agent base image
         run: bash scripts/build-agent-base-image.sh
 
