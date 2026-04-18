@@ -236,7 +236,7 @@ describe('createMergeWorktree isolation (real git)', { timeout: 30_000 }, () => 
     await executor.removeMergeWorktree(clonePath);
   });
 
-  it('resolves upstream/<branch> against the upstream remote in fork mode', async () => {
+  it('treats legacy upstream/<branch> refs as origin-backed base refs', async () => {
     const sandbox = createForkSandbox();
     root = sandbox.root;
 
@@ -248,7 +248,7 @@ describe('createMergeWorktree isolation (real git)', { timeout: 30_000 }, () => 
     const clonePath = await executor.createMergeWorktree('upstream/master', 'test-upstream');
 
     const headSha = git(clonePath, 'rev-parse HEAD');
-    expect(headSha).toBe(upstreamSha);
+    expect(headSha).toBe(originSha);
 
     await executor.removeMergeWorktree(clonePath);
   });

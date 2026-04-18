@@ -175,7 +175,6 @@ export async function rebaseAndRetry(
       workflowId,
       workflow.repoUrl,
       workflow.baseBranch,
-      workflow.parentRemote,
     );
   }
 
