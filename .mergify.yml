@@ -1,27 +1,22 @@
-# Merge queue — keeps master always green via squash + retest.
-# Requires CI green + ready-to-merge label to enter queue.
+# Mergify merge queue for the default branch.
+# GitHub rulesets already require PRs, squash merges, and one approval on master.
+# Keep repo-local conditions minimal and let Mergify respect the protected-branch
+# requirements instead of duplicating the full CI matrix here.
 
 queue_rules:
   - name: default
     merge_method: squash
-    batch_size: 5
-    checks_timeout: 120min
-    # Gate entry: PR must target master, pass CI, and be labeled ready.
     queue_conditions:
       - base=master
-      - check-success=test-all
-      - label=ready-to-merge
       - -draft
-    # Gate merge: CI must pass again on the rebased code.
-    merge_conditions:
-      - check-success=test-all
+      - "#approved-reviews-by >= 1"
 
 pull_request_rules:
-  - name: Auto-queue ready PRs
+  - name: autoqueue approved PRs to master
     conditions:
       - base=master
-      - check-success=test-all
-      - label=ready-to-merge
       - -draft
+      - "#approved-reviews-by >= 1"
     actions:
       queue:
+        name: default
