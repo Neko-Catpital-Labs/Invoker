@@ -265,12 +265,12 @@ export async function resolveConflictAction(
   taskId: string,
   deps: Pick<ActionDeps, 'orchestrator' | 'persistence' | 'autoApproveAIFixes'> & { taskExecutor: TaskRunner },
   agentName?: string,
-): Promise<void> {
+): Promise<{ autoApproved: boolean; started: TaskState[] }> {
   const { orchestrator, persistence, taskExecutor } = deps;
   const { savedError } = orchestrator.beginConflictResolution(taskId);
   try {
     await taskExecutor.resolveConflict(taskId, savedError, agentName);
-    await finalizeAppliedFix(taskId, savedError, deps);
+    return await finalizeAppliedFix(taskId, savedError, deps);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     persistence.appendTaskOutput(taskId, `\n[Resolve Conflict] Failed: ${msg}`);

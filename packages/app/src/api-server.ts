@@ -33,7 +33,7 @@
 
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from 'node:http';
 import type { Logger } from '@invoker/contracts';
-import type { Orchestrator } from '@invoker/workflow-core';
+import type { Orchestrator, TaskState } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import type { ExecutorRegistry, TaskRunner } from '@invoker/execution-engine';
 import {
@@ -50,7 +50,7 @@ import {
   setWorkflowMergeMode as sharedSetWorkflowMergeMode,
   resolveConflictAction,
 } from './workflow-actions.js';
-import { executeGlobalTopup } from './global-topup.js';
+import { executeGlobalTopup, finalizeMutationWithGlobalTopup } from './global-topup.js';
 
 export interface ApiServerDeps {
   logger?: Logger;
@@ -59,7 +59,7 @@ export interface ApiServerDeps {
   executorRegistry: ExecutorRegistry;
   taskExecutor: TaskRunner;
   autoApproveAIFixes?: boolean;
-  approveTaskAction?: (taskId: string) => Promise<void>;
+  approveTaskAction?: (taskId: string) => Promise<{ started: TaskState[] }>;
   killRunningTask?: (taskId: string) => Promise<void>;
   cancelTask?: (taskId: string) => Promise<{ cancelled: string[]; runningCancelled: string[] }>;
   cancelWorkflow?: (workflowId: string) => Promise<{ cancelled: string[]; runningCancelled: string[] }>;
@@ -186,6 +186,12 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
           const result = cancelTask
             ? await cancelTask(taskId)
             : orchestrator.cancelTask(taskId);
+          await finalizeMutationWithGlobalTopup({
+            orchestrator,
+            taskExecutor,
+            logger: apiLogger,
+            context: 'api.tasks.cancel',
+          });
           json(res, 200, { ok: true, ...result });
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
@@ -231,12 +237,29 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
               agent = parsed.agent;
             } catch { /* not JSON, ignore */ }
           }
-          await resolveConflictAction(taskId, {
-            orchestrator,
-            persistence,
-            taskExecutor,
-            autoApproveAIFixes,
-          }, agent);
+          try {
+            const result = await resolveConflictAction(taskId, {
+              orchestrator,
+              persistence,
+              taskExecutor,
+              autoApproveAIFixes,
+            }, agent);
+            await finalizeMutationWithGlobalTopup({
+              orchestrator,
+              taskExecutor,
+              logger: apiLogger,
+              context: 'api.tasks.resolve-conflict',
+              started: result.started,
+            });
+          } catch (err) {
+            await finalizeMutationWithGlobalTopup({
+              orchestrator,
+              taskExecutor,
+              logger: apiLogger,
+              context: 'api.tasks.resolve-conflict.failure',
+            });
+            throw err;
+          }
           json(res, 200, {
             ok: true,
             taskId,
@@ -257,9 +280,16 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
           if (approveTaskAction) {
             await approveTaskAction(taskId);
           } else {
-            await sharedApproveTask(taskId, {
+            const result = await sharedApproveTask(taskId, {
               orchestrator,
               taskExecutor,
+            });
+            await finalizeMutationWithGlobalTopup({
+              orchestrator,
+              taskExecutor,
+              logger: apiLogger,
+              context: 'api.tasks.approve',
+              started: result.started,
             });
           }
           json(res, 200, { ok: true, taskId, action: 'approved' });
@@ -327,6 +357,12 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
           const result = cancelWorkflow
             ? await cancelWorkflow(workflowId)
             : sharedCancelWorkflow(workflowId, { orchestrator });
+          await finalizeMutationWithGlobalTopup({
+            orchestrator,
+            taskExecutor,
+            logger: apiLogger,
+            context: 'api.workflows.cancel',
+          });
           json(res, 200, { ok: true, ...result });
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);

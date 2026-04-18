@@ -10,6 +10,14 @@ type GlobalTopupParams = {
   alreadyDispatched?: TaskState[];
 };
 
+type MutationTopupParams = {
+  orchestrator: Orchestrator;
+  taskExecutor: TaskRunner;
+  logger?: Logger;
+  context: string;
+  started?: TaskState[];
+};
+
 function runningExecutionKey(task: TaskState): string {
   const attemptId = task.execution.selectedAttemptId?.trim();
   return attemptId ? `attempt:${attemptId}` : `task:${task.id}`;
@@ -47,4 +55,27 @@ export async function executeGlobalTopup({
   );
   await taskExecutor.executeTasks(runnable);
   return runnable;
+}
+
+/**
+ * Shared post-mutation scheduler refill.
+ * Mutations that can free global capacity should exit through this helper
+ * so globally ready work is launched before returning to the caller.
+ */
+export async function finalizeMutationWithGlobalTopup({
+  orchestrator,
+  taskExecutor,
+  logger,
+  context,
+  started = [],
+}: MutationTopupParams): Promise<{ started: TaskState[]; topup: TaskState[] }> {
+  const runnable = started.filter((task) => task.status === 'running');
+  const topup = await executeGlobalTopup({
+    orchestrator,
+    taskExecutor,
+    logger,
+    context,
+    alreadyDispatched: runnable,
+  });
+  return { started, topup };
 }
