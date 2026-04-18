@@ -111,7 +111,7 @@ import { shouldSkipAutoFixForError } from './auto-fix-gating.js';
 import { ensureSqliteFlushDebounceForOwner } from './sqlite-flush-policy.js';
 import type { WorkflowMutationPriority } from './workflow-mutation-coordinator.js';
 import { PersistedWorkflowMutationCoordinator } from './persisted-workflow-mutation-coordinator.js';
-import { executeGlobalTopup } from './global-topup.js';
+import { executeGlobalTopup, finalizeMutationWithGlobalTopup } from './global-topup.js';
 import { computeDeferredLaunchTiming } from './deferred-runnable.js';
 import { preemptWorkflowBeforeMutation, type WorkflowCancelResult } from './workflow-preemption.js';
 import { relaunchOrphansAndStartReady } from './orphan-relaunch.js';
@@ -1078,7 +1078,7 @@ if (isHeadless) {
     taskId: string,
     agentName?: string,
     source: 'ipc' | 'auto-fix' = 'ipc',
-  ): Promise<void> => {
+  ): Promise<TaskState[]> => {
     logger.info(
       `fix-with-agent: "${taskId}" agent=${agentName ?? 'claude'} source=${source} route=fixWithAgent`,
       { module: 'ipc' },
@@ -1098,11 +1098,12 @@ if (isHeadless) {
     try {
       const output = persistence.getTaskOutput(taskId);
       await requireTaskExecutor().fixWithAgent(taskId, output, agentName, savedError);
-      await finalizeAppliedFix(taskId, savedError, {
+      const result = await finalizeAppliedFix(taskId, savedError, {
         orchestrator,
         taskExecutor: requireTaskExecutor(),
         autoApproveAIFixes: invokerConfig.autoApproveAIFixes,
       });
+      return result.started;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       const errorLabel = source === 'auto-fix' ? 'Auto-fix' : `Fix with ${agentName ?? 'Claude'}`;
@@ -1930,8 +1931,16 @@ if (isHeadless) {
         autoApproveAIFixes: invokerConfig.autoApproveAIFixes,
         approveTaskAction: async (taskId: string) => {
           const workflowId = orchestrator.getTask(taskId)?.config.workflowId;
-          await runWorkflowMutation(workflowId, 'normal', 'api:approve-task', [taskId], async () => {
-            await performSharedApproveTask(taskId, 'api');
+          return runWorkflowMutation(workflowId, 'normal', 'api:approve-task', [taskId], async () => {
+            const { started } = await performSharedApproveTask(taskId, 'api');
+            await finalizeMutationWithGlobalTopup({
+              orchestrator,
+              taskExecutor: requireTaskExecutor(),
+              logger,
+              context: 'api.tasks.approve',
+              started,
+            });
+            return { started };
           });
         },
         killRunningTask,
@@ -2541,6 +2550,13 @@ if (isHeadless) {
       logger.info(`approve: "${taskId}"`, { module: 'ipc' });
       const { started } = await performSharedApproveTask(taskId, 'ui');
       logger.info(`approve: commandService returned ${started.length} started tasks: [${started.map(t => `${t.id}(${t.status})`).join(', ')}]`, { module: 'ipc' });
+      await finalizeMutationWithGlobalTopup({
+        orchestrator,
+        taskExecutor: requireTaskExecutor(),
+        logger,
+        context: 'ipc.approve',
+        started,
+      });
       },
     );
 
@@ -2620,7 +2636,14 @@ if (isHeadless) {
       const taskId = String(taskIdArg);
       logger.info(`cancel-task: "${taskId}"`, { module: 'ipc' });
       try {
-        return await performCancelTask(taskId);
+        const result = await performCancelTask(taskId);
+        await finalizeMutationWithGlobalTopup({
+          orchestrator,
+          taskExecutor: requireTaskExecutor(),
+          logger,
+          context: 'ipc.cancel-task',
+        });
+        return result;
       } catch (err) {
         logger.error(`cancel-task failed: ${err}`, { module: 'ipc' });
         throw err;
@@ -2636,11 +2659,18 @@ if (isHeadless) {
       const workflowId = String(workflowIdArg);
       logger.info(`cancel-workflow: "${workflowId}"`, { module: 'ipc' });
       try {
-        return await preemptWorkflowBeforeMutation(workflowId, {
+        const result = await preemptWorkflowBeforeMutation(workflowId, {
           preemptWorkflowExecution,
           logger,
           context: 'ipc.cancel-workflow',
         });
+        await finalizeMutationWithGlobalTopup({
+          orchestrator,
+          taskExecutor: requireTaskExecutor(),
+          logger,
+          context: 'ipc.cancel-workflow',
+        });
+        return result;
       } catch (err) {
         logger.error(`cancel-workflow failed: ${err}`, { module: 'ipc' });
         throw err;
@@ -2867,7 +2897,14 @@ if (isHeadless) {
       try {
         const mergeTask = orchestrator.getMergeNode(workflowId);
         if (!mergeTask) throw new Error(`No merge node for workflow ${workflowId}`);
-        await performSharedApproveTask(mergeTask.id, 'ui', 'workflow');
+        const { started } = await performSharedApproveTask(mergeTask.id, 'ui', 'workflow');
+        await finalizeMutationWithGlobalTopup({
+          orchestrator,
+          taskExecutor: requireTaskExecutor(),
+          logger,
+          context: 'ipc.approve-merge',
+          started,
+        });
       } catch (err) {
         logger.error(`approve-merge failed: ${err}`, { module: 'ipc' });
         throw err;
@@ -2902,13 +2939,26 @@ if (isHeadless) {
         { module: 'ipc' },
       );
       try {
-        await resolveConflictAction(taskId, {
+        const result = await resolveConflictAction(taskId, {
           orchestrator,
           persistence,
           taskExecutor: requireTaskExecutor(),
           autoApproveAIFixes: invokerConfig.autoApproveAIFixes,
         }, agentName);
+        await finalizeMutationWithGlobalTopup({
+          orchestrator,
+          taskExecutor: requireTaskExecutor(),
+          logger,
+          context: 'ipc.resolve-conflict',
+          started: result.started,
+        });
       } catch (err) {
+        await finalizeMutationWithGlobalTopup({
+          orchestrator,
+          taskExecutor: requireTaskExecutor(),
+          logger,
+          context: 'ipc.resolve-conflict.failure',
+        });
         logger.error(`resolve-conflict failed: ${err}`, { module: 'ipc' });
         throw err;
       }
@@ -2923,8 +2973,21 @@ if (isHeadless) {
       const taskId = String(taskIdArg);
       const agentName = agentNameArg === undefined ? undefined : String(agentNameArg);
       try {
-        await executeFixWithAgentMutation(taskId, agentName, 'ipc');
+        const started = await executeFixWithAgentMutation(taskId, agentName, 'ipc');
+        await finalizeMutationWithGlobalTopup({
+          orchestrator,
+          taskExecutor: requireTaskExecutor(),
+          logger,
+          context: 'ipc.fix-with-agent',
+          started,
+        });
       } catch (err) {
+        await finalizeMutationWithGlobalTopup({
+          orchestrator,
+          taskExecutor: requireTaskExecutor(),
+          logger,
+          context: 'ipc.fix-with-agent.failure',
+        });
         logger.error(`fix-with-agent failed: ${err}`, { module: 'ipc' });
         throw err;
       }
