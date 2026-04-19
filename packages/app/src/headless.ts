@@ -346,7 +346,7 @@ async function headlessQuery(args: string[], deps: HeadlessDeps): Promise<void> 
 
   const {
     formatWorkflowList, formatTaskStatus, formatWorkflowStatus,
-    formatEventLog, formatQueueStatus,
+    formatEventLog, formatQueueStatus, formatWorkflowSummary,
     serializeWorkflow, serializeTask, serializeEvent,
     formatAsLabel, formatAsJson, formatAsJsonl,
   } = await import('./formatter.js');
@@ -506,8 +506,51 @@ async function headlessQuery(args: string[], deps: HeadlessDeps): Promise<void> 
       }
       break;
     }
+    case 'summary': {
+      const { orchestrator, persistence } = deps;
+      const workflows = persistence.listWorkflows();
+      if (workflows.length === 0) {
+        process.stdout.write('No workflows found.\n');
+        return;
+      }
+      const workflowId = flags.positional[0] ?? flags.workflow ?? workflows[0].id;
+      const wf = workflows.find(w => w.id === workflowId);
+      if (!wf) throw new Error(`Workflow "${workflowId}" not found.`);
+
+      orchestrator.syncFromDb(wf.id);
+      const tasks = orchestrator.getAllTasks().filter(t => t.config.workflowId === wf.id && !t.config.isMergeNode);
+
+      const counts: Record<string, number> = {};
+      for (const t of tasks) counts[t.status] = (counts[t.status] ?? 0) + 1;
+
+      const failedTasks = tasks
+        .filter(t => t.status === 'failed')
+        .map(t => ({ id: t.id, description: t.description, error: t.execution.error ?? undefined }));
+
+      // Elapsed: from earliest startedAt to latest completedAt (or now if still running)
+      let elapsedMs: number | null = null;
+      const starts = tasks.map(t => t.execution.startedAt).filter(Boolean) as Date[];
+      if (starts.length > 0) {
+        const earliest = Math.min(...starts.map(d => d instanceof Date ? d.getTime() : new Date(d).getTime()));
+        const ends = tasks.map(t => t.execution.completedAt).filter(Boolean) as Date[];
+        const latest = ends.length === tasks.length
+          ? Math.max(...ends.map(d => d instanceof Date ? d.getTime() : new Date(d).getTime()))
+          : Date.now();
+        elapsedMs = latest - earliest;
+      }
+
+      const summary = { workflowId: wf.id, name: wf.name, status: wf.status, counts, failedTasks, elapsedMs };
+
+      switch (flags.output) {
+        case 'label': process.stdout.write(wf.status + '\n'); break;
+        case 'json':  process.stdout.write(formatAsJson(summary) + '\n'); break;
+        case 'jsonl': process.stdout.write(formatAsJsonl([summary]) + '\n'); break;
+        default:      process.stdout.write(formatWorkflowSummary(summary) + '\n'); break;
+      }
+      break;
+    }
     default:
-      throw new Error(`Unknown query sub-command: "${subCommand}". Use: workflows, tasks, task, queue, audit, session, ui-perf`);
+      throw new Error(`Unknown query sub-command: "${subCommand}". Use: workflows, tasks, task, queue, audit, session, ui-perf, summary`);
   }
 }
 
@@ -740,6 +783,7 @@ ${BOLD}Query${RESET} (read-only, all support --output text|label|json|jsonl):
   query audit <taskId> [--output F]                   Print event history
   query session <taskId>                              Print agent session messages
   query ui-perf [--output F] [--reset]               Print live UI perf stats
+  query summary [<workflowId>] [--output F]          Task counts, failed tasks, elapsed time
 
 ${BOLD}Execute:${RESET}
   run <plan.yaml>                                     Load and execute plan

@@ -193,6 +193,53 @@ export function formatQueueStatus(status: {
   return lines.join('\n');
 }
 
+/**
+ * Format a workflow summary: task counts by status, failed task names, elapsed time.
+ */
+export function formatWorkflowSummary(summary: {
+  workflowId: string;
+  name: string;
+  status: string;
+  counts: Record<string, number>;
+  failedTasks: Array<{ id: string; description: string; error?: string }>;
+  elapsedMs: number | null;
+}): string {
+  const lines: string[] = [];
+
+  const wfColor = summary.status === 'completed' ? GREEN : summary.status === 'failed' ? RED : YELLOW;
+  lines.push(`${BOLD}${summary.workflowId}${RESET} — ${summary.name} ${wfColor}[${summary.status}]${RESET}`);
+  lines.push('');
+
+  const total = Object.values(summary.counts).reduce((a, b) => a + b, 0);
+  const countParts = [
+    `${BOLD}${total}${RESET} total`,
+    `${GREEN}${summary.counts.completed ?? 0} completed${RESET}`,
+    `${RED}${summary.counts.failed ?? 0} failed${RESET}`,
+    `${YELLOW}${summary.counts.running ?? 0} running${RESET}`,
+    `${DIM}${summary.counts.pending ?? 0} pending${RESET}`,
+  ];
+  if ((summary.counts.blocked ?? 0) > 0) countParts.push(`${DIM}${summary.counts.blocked} blocked${RESET}`);
+  if ((summary.counts.review_ready ?? 0) > 0) countParts.push(`${CYAN}${summary.counts.review_ready} review_ready${RESET}`);
+  lines.push(countParts.join(' | '));
+
+  if (summary.elapsedMs !== null) {
+    const secs = Math.round(summary.elapsedMs / 1000);
+    const elapsed = secs < 60 ? `${secs}s` : `${Math.floor(secs / 60)}m ${secs % 60}s`;
+    lines.push(`${DIM}Elapsed: ${elapsed}${RESET}`);
+  }
+
+  if (summary.failedTasks.length > 0) {
+    lines.push('');
+    lines.push(`${RED}${BOLD}Failed tasks:${RESET}`);
+    for (const t of summary.failedTasks) {
+      lines.push(`  ${RED}✗ ${BOLD}${t.id}${RESET}${RED} — ${t.description}${RESET}`);
+      if (t.error) lines.push(`    ${DIM}${t.error.split('\n')[0]}${RESET}`);
+    }
+  }
+
+  return lines.join('\n');
+}
+
 // ── Output Format Type ──────────────────────────────────────
 
 export type OutputFormat = 'text' | 'label' | 'json' | 'jsonl';
