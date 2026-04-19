@@ -40,7 +40,7 @@ import {
 } from './workflow-actions.js';
 import { openExternalTerminalForTask } from './open-terminal-for-task.js';
 import { dispatchTasksIfNeeded, executeGlobalTopup, finalizeMutationWithGlobalTopup } from './global-topup.js';
-import { getAutoFixDispatchDecision } from './auto-fix-session.js';
+import { buildAutoFixSkipOutput, getAutoFixDispatchDecision } from './auto-fix-session.js';
 import {
   delegationTimeoutMs,
   tryDelegateExec,
@@ -246,6 +246,16 @@ export function wireHeadlessAutoFix(
         reason: !shouldAutoFix ? dispatchDecision.reason : 'already-in-progress',
         dispositionReason: dispatchDecision.shouldDispatch ? undefined : dispatchDecision.dispositionReason,
       });
+      if (!shouldAutoFix) {
+        const skipOutput = buildAutoFixSkipOutput(
+          deps.orchestrator.getTask(delta.taskId),
+          dispatchDecision.reason,
+          dispatchDecision.dispositionReason,
+        );
+        if (skipOutput) {
+          deps.persistence.appendTaskOutput(delta.taskId, skipOutput);
+        }
+      }
       return;
     }
     autoFixInProgress.add(delta.taskId);

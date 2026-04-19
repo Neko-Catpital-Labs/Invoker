@@ -960,6 +960,14 @@ describe('autoFixOnFailure', () => {
         dispositionReason: 'broad-lint-failure',
       }),
     );
+    expect(persistence.appendTaskOutput).toHaveBeenCalledWith(
+      'task-a',
+      expect.stringContaining('[Auto-fix] Skipped: the task failed with a broad lint error set.'),
+    );
+    expect(persistence.appendTaskOutput).toHaveBeenCalledWith(
+      'task-a',
+      expect.stringContaining('[Auto-fix] Primary failure: ✖ 1696 problems'),
+    );
   });
 });
 
