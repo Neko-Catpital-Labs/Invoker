@@ -31,6 +31,7 @@ import { backupPlan } from './plan-backup.js';
 import { startApiServer, type ApiServerDeps } from './api-server.js';
 import {
   approveTask,
+  editTaskCommand as sharedEditTaskCommand,
   rebaseAndRetry,
   resolveConflictAction,
   recreateWorkflow as sharedRecreateWorkflow,
@@ -1449,14 +1450,10 @@ async function headlessEdit(taskId: string, newCommand: string, deps: HeadlessDe
   taskId = restored.resolvedTaskId;
   const taskExecutor = createHeadlessExecutor(deps);
   const autoFix = wireHeadlessAutoFix(deps, taskExecutor);
-
-  const envelope = makeEnvelope('edit-task-command', 'headless', 'task', { taskId, newCommand });
-  const result = await deps.commandService.editTaskCommand(envelope);
-  if (!result.ok) throw new Error(result.error.message);
-  const runnable = result.data.filter((task) => task.status === 'running');
-  if (runnable.length > 0) {
-    await taskExecutor.executeTasks(runnable);
-  }
+  const started = await sharedEditTaskCommand(taskId, newCommand, {
+    orchestrator: deps.orchestrator,
+    taskExecutor,
+  });
   process.stdout.write(`Edited task "${taskId}" command → "${newCommand}"\n`);
 
   if (deps.noTrack) {
@@ -1464,6 +1461,13 @@ async function headlessEdit(taskId: string, newCommand: string, deps: HeadlessDe
     autoFix.unsubscribe();
     return;
   }
+  const runnable = await dispatchTasksIfNeeded({
+    orchestrator: deps.orchestrator,
+    taskExecutor,
+    tasks: started,
+    logger: deps.logger,
+    context: 'headless.edit-command',
+  });
   if (runnable.length === 0) {
     autoFix.unsubscribe();
     return;

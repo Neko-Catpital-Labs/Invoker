@@ -186,11 +186,22 @@ export async function rebaseAndRetry(
   return bumpGenerationAndRecreate(workflowId, deps);
 }
 
-export function editTaskCommand(
+export async function editTaskCommand(
   taskId: string,
   newCommand: string,
-  deps: Pick<ActionDeps, 'orchestrator'>,
-): TaskState[] {
+  deps: Pick<ActionDeps, 'orchestrator'> & { taskExecutor?: Pick<TaskRunner, 'killActiveExecution'> },
+): Promise<TaskState[]> {
+  const task = deps.orchestrator.getTask(taskId);
+  if (task?.status === 'fixing_with_ai') {
+    if (!deps.taskExecutor) {
+      throw new Error(`Cannot edit fixing_with_ai task ${taskId} without a task executor`);
+    }
+    await deps.taskExecutor.killActiveExecution(taskId);
+    deps.orchestrator.revertConflictResolution(
+      taskId,
+      task.execution.pendingFixError ?? task.execution.error ?? '',
+    );
+  }
   return deps.orchestrator.editTaskCommand(taskId, newCommand);
 }
 

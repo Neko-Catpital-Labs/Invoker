@@ -437,7 +437,10 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
             json(res, 400, { error: 'Missing "command" in request body' });
             return;
           }
-          const started = sharedEditTaskCommand(taskId, command, { orchestrator });
+          const started = await sharedEditTaskCommand(taskId, command, {
+            orchestrator,
+            taskExecutor,
+          });
           const runnable = await dispatchTasksIfNeeded({
             orchestrator,
             taskExecutor,
