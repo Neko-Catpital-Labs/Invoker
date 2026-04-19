@@ -107,8 +107,7 @@ RUN cd /app \
     && printf '# docker comprehensive fixture\n' > README.md \
     && git add . \
     && git -c user.email="test@invoker.local" -c user.name="Invoker Docker Test" commit -m "seed" \
-    && git branch "${CURRENT_BRANCH}" \
-    && git checkout "${CURRENT_BRANCH}" \
+    && git checkout -B "${CURRENT_BRANCH}" \
     && chown -R invoker:invoker /app
 
 USER invoker
