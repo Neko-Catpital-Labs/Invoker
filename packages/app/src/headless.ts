@@ -568,6 +568,10 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
       await headlessMigrateCompatibility(deps);
       break;
 
+    case 'watch':
+      await headlessWatch(args[1], deps);
+      break;
+
     // ── Execute (unchanged) ──
     case 'run':
       await headlessRun(args[1], deps, deps.waitForApproval, deps.noTrack);
@@ -742,6 +746,7 @@ ${BOLD}Query${RESET} (read-only, all support --output text|label|json|jsonl):
   query ui-perf [--output F] [--reset]               Print live UI perf stats
 
 ${BOLD}Execute:${RESET}
+  watch [<workflowId>]                                Stream live task changes until settled or Ctrl-C
   run <plan.yaml>                                     Load and execute plan
   resume <id>                                         Resume incomplete workflow
   retry <workflowId>                                  Retry workflow: rerun failed, keep completed
@@ -1815,6 +1820,84 @@ async function waitForCompletion(
     if (noneRunning && hasHumanBlocked && !hasBackgroundWork?.()) return;
     await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
   }
+}
+
+// ── Watch ────────────────────────────────────────────────────
+
+/**
+ * Stream live task state changes to stdout until the workflow settles or SIGINT.
+ *
+ * Each state change prints one line: "<timestamp> <taskId> <status>"
+ * Exits cleanly on SIGINT or when all tasks reach a terminal state.
+ */
+async function headlessWatch(workflowId: string | undefined, deps: HeadlessDeps): Promise<void> {
+  const { orchestrator, persistence, messageBus } = deps;
+
+  const { formatTaskStatus, formatAsJson } = await import('./formatter.js');
+
+  const workflows = persistence.listWorkflows();
+  if (workflows.length === 0) {
+    process.stdout.write('No workflows found.\n');
+    return;
+  }
+
+  const targetId = workflowId ?? workflows[0].id;
+  const wf = workflows.find(w => w.id === targetId);
+  if (!wf) throw new Error(`Workflow "${targetId}" not found.`);
+
+  process.stdout.write(`[watch] ${wf.id} — ${wf.name}\n\n`);
+
+  // Print current state snapshot first
+  orchestrator.syncFromDb(wf.id);
+  const initial = orchestrator.getAllTasks().filter(t => t.config.workflowId === wf.id && !t.config.isMergeNode);
+  for (const task of initial) {
+    process.stdout.write(formatTaskStatus(task) + '\n');
+  }
+  process.stdout.write('\n');
+
+  const settledStatuses = new Set(['completed', 'failed', 'needs_input', 'awaiting_approval', 'review_ready', 'blocked', 'stale']);
+
+  let done = false;
+
+  const unsubscribe = messageBus.subscribe<TaskDelta>(Channels.TASK_DELTA, (delta) => {
+    if (delta.type === 'updated') {
+      const task = orchestrator.getTask(delta.taskId);
+      if (!task || task.config.workflowId !== targetId || task.config.isMergeNode) return;
+      const ts = new Date().toISOString();
+      process.stdout.write(`${ts} ${formatTaskStatus(task)}\n`);
+    } else if (delta.type === 'created') {
+      if (delta.task.config.workflowId !== targetId || delta.task.config.isMergeNode) return;
+      const ts = new Date().toISOString();
+      process.stdout.write(`${ts} ${formatTaskStatus(delta.task)}\n`);
+    }
+  });
+
+  await new Promise<void>((resolve) => {
+    const onSignal = () => {
+      done = true;
+      resolve();
+    };
+    process.once('SIGINT', onSignal);
+    process.once('SIGTERM', onSignal);
+
+    const pollMs = 200;
+    const timer = setInterval(() => {
+      if (done) { clearInterval(timer); resolve(); return; }
+      const tasks = orchestrator.getAllTasks().filter(t => t.config.workflowId === targetId && !t.config.isMergeNode);
+      const allSettled = tasks.length > 0 && tasks.every(t => settledStatuses.has(t.status));
+      const noneRunning = !tasks.some(t => t.status === 'running' || t.status === 'fixing_with_ai');
+      if (allSettled || noneRunning) { clearInterval(timer); resolve(); }
+    }, pollMs);
+    timer.unref?.();
+  });
+
+  unsubscribe();
+
+  // Final summary line
+  const finalTasks = orchestrator.getAllTasks().filter(t => t.config.workflowId === targetId && !t.config.isMergeNode);
+  const failed = finalTasks.filter(t => t.status === 'failed').length;
+  const completed = finalTasks.filter(t => t.status === 'completed').length;
+  process.stdout.write(`\n[watch] done — ${completed} completed, ${failed} failed\n`);
 }
 
 // ── Headless Delegation ──────────────────────────────────────
