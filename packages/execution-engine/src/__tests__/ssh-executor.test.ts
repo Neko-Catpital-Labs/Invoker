@@ -1172,4 +1172,122 @@ describe('SshExecutor entry lifecycle', () => {
     expect(spec.args).toBeTruthy();
     expect(spec.args!.length).toBeGreaterThan(0);
   });
+
+  it('keeps the task running after process exit until remote record/push finishes', async () => {
+    const finalize = createDeferred<{ commitHash?: string; error?: string }>();
+    const remoteFinalizeSpy = vi
+      .spyOn(ssh as any, 'remoteGitRecordAndPush')
+      .mockImplementation(() => finalize.promise);
+
+    const request = makeRequest({
+      inputs: {
+        command: 'echo hello',
+        repoUrl: 'git@github.com:test/repo.git',
+      },
+    });
+
+    const handle = await ssh.start(request);
+    let completedResponse: any;
+    ssh.onComplete(handle, (response) => {
+      completedResponse = response;
+    });
+
+    const sshProcess = spawnedProcesses[spawnedProcesses.length - 1];
+    sshProcess.emit('close', 0, null);
+
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(remoteFinalizeSpy).toHaveBeenCalledTimes(1);
+    expect(completedResponse).toBeUndefined();
+    expect((ssh as any).entries.get(handle.executionId)).toBeDefined();
+
+    finalize.resolve({ commitHash: 'abc123def456' });
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(completedResponse).toMatchObject({
+      status: 'completed',
+      outputs: expect.objectContaining({
+        exitCode: 0,
+        commitHash: 'abc123def456',
+      }),
+    });
+  });
+
+  it('fails the task instead of hanging when remote record/push times out', async () => {
+    vi.useFakeTimers();
+    const finalize = createDeferred<{ commitHash?: string; error?: string }>();
+    vi.spyOn(ssh as any, 'remoteGitRecordAndPush').mockImplementation(() => finalize.promise);
+
+    try {
+      const request = makeRequest({
+        inputs: {
+          command: 'echo hello',
+          repoUrl: 'git@github.com:test/repo.git',
+        },
+      });
+
+      const handle = await ssh.start(request);
+      let completedResponse: any;
+      ssh.onComplete(handle, (response) => {
+        completedResponse = response;
+      });
+
+      const sshProcess = spawnedProcesses[spawnedProcesses.length - 1];
+      sshProcess.emit('close', 0, null);
+
+      await vi.advanceTimersByTimeAsync(20);
+      expect(completedResponse).toBeUndefined();
+
+      finalize.resolve({ error: 'SSH record and push task result timed out after 600000ms' });
+      await vi.advanceTimersByTimeAsync(20);
+
+      expect(completedResponse).toMatchObject({
+        status: 'failed',
+        outputs: expect.objectContaining({
+          exitCode: 1,
+          error: 'SSH record and push task result timed out after 600000ms',
+        }),
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('preserves the primary remote execution failure when record/push also fails later', async () => {
+    const remoteFinalizeSpy = vi
+      .spyOn(ssh as any, 'remoteGitRecordAndPush')
+      .mockResolvedValue({
+        error: 'remote commit or push failed (code 1): bash: line 8: cd: /tmp/missing-worktree: No such file or directory',
+      });
+
+    const request = makeRequest({
+      inputs: {
+        command: 'echo hello',
+        repoUrl: 'git@github.com:test/repo.git',
+      },
+    });
+
+    const handle = await ssh.start(request);
+    let completedResponse: any;
+    ssh.onComplete(handle, (response) => {
+      completedResponse = response;
+    });
+
+    const sshProcess = spawnedProcesses[spawnedProcesses.length - 1];
+    sshProcess.stderr!.emit('data', Buffer.from('Error: ENOENT: no such file or directory, uv_cwd\n'));
+    sshProcess.stderr!.emit('data', Buffer.from('pnpm: ENOENT: no such file or directory, mkdir \'/tmp/missing-worktree/node_modules/.bin\'\n'));
+    sshProcess.emit('close', 1, null);
+
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(remoteFinalizeSpy).toHaveBeenCalledTimes(1);
+    expect(completedResponse).toMatchObject({
+      status: 'failed',
+      outputs: expect.objectContaining({
+        exitCode: 1,
+      }),
+    });
+    expect(String(completedResponse.outputs.error)).toContain('uv_cwd');
+    expect(String(completedResponse.outputs.error)).not.toContain('remote commit or push failed');
+  });
 });
