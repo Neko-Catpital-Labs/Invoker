@@ -410,6 +410,78 @@ branch refs/heads/${targetBranch}
     expect(setupTaskBranchSpy).toHaveBeenCalled();
   });
 
+  it('retries setup after parsing a stale branch-owner path from setupTaskBranch failure', async () => {
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'testuser',
+      sshKeyPath: '/dev/null',
+      managedWorkspaces: true,
+    }) as any;
+
+    const repoHash = computeRepoUrlHash('git@github.com:owner/repo.git');
+    const baseHead = 'abc123def456abc123def456abc123def456abc1';
+    const branchHash = computeBranchHash(
+      'test-task-conflict',
+      'pnpm test',
+      undefined,
+      [],
+      baseHead,
+      '',
+    );
+    const targetBranch = `experiment/test-task-conflict-${branchHash}`;
+    const canonicalPath = `~/.invoker/worktrees/${repoHash}/experiment-test-task-conflict-${branchHash}`;
+    const ownerPath = `/home/testuser/.invoker/worktrees/${repoHash}/experiment-test-task-conflict-stale-owner`;
+    let cleanupScript = '';
+
+    vi.spyOn(ssh, 'execRemoteCapture').mockImplementation(async (script: string, phase?: string) => {
+      if (script.includes('__INVOKER_BASE_REF__=')) {
+        return [
+          '__INVOKER_BASE_REF__=origin/main',
+          `__INVOKER_BASE_HEAD__=${baseHead}`,
+        ].join('\n');
+      }
+      if (script.includes('printf %s "$HOME"')) return '/home/testuser';
+      if (script.includes('worktree list --porcelain')) return '';
+      if (phase === 'cleanup_worktree') {
+        cleanupScript = script;
+        return '';
+      }
+      return '';
+    });
+
+    const setupTaskBranchSpy = vi.spyOn(ssh, 'setupTaskBranch')
+      .mockRejectedValueOnce(
+        createSshRemoteScriptError(
+          128,
+          '',
+          `fatal: '${targetBranch}' is already used by worktree at '${ownerPath}'\n`,
+          'setup_branch',
+        ),
+      )
+      .mockResolvedValueOnce(undefined);
+    vi.spyOn(ssh, 'spawnSshRemoteStdin').mockImplementation(
+      (_executionId: string, _request: any, handle: any) => handle,
+    );
+
+    const req = makeRequest({
+      actionType: 'command',
+      actionId: 'test-task-conflict',
+      inputs: {
+        command: 'pnpm test',
+        description: 'run tests',
+        repoUrl: 'git@github.com:owner/repo.git',
+      },
+    });
+
+    await ssh.start(req);
+
+    const encodedPaths = cleanupScript.match(/WORKTREES_B64="([^"]+)"/)?.[1];
+    const decodedPaths = Buffer.from(encodedPaths ?? '', 'base64').toString('utf8');
+    expect(decodedPaths).toContain(canonicalPath);
+    expect(decodedPaths).toContain(ownerPath);
+    expect(setupTaskBranchSpy).toHaveBeenCalledTimes(2);
+  });
+
   it('throws when managedWorkspaces=true but repoUrl is missing', async () => {
     const ssh = new SshExecutor({
       host: 'localhost',
