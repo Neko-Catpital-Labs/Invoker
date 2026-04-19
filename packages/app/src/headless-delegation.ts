@@ -169,6 +169,7 @@ async function tryDelegate(
   if (!('workflowId' in response) || !Array.isArray(response.tasks)) {
     return true;
   }
+  targetWorkflowId = response.workflowId;
   const taskFeed = createDelegatedTaskFeed(messageBus, response.tasks, targetWorkflowId);
   await trackWorkflow({
     workflowId: targetWorkflowId,
