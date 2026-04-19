@@ -65,7 +65,10 @@ export function formatTaskStatus(task: TaskState): string {
   const phaseSuffix = task.status === 'running' && task.execution.phase
     ? ` (phase=${task.execution.phase})`
     : '';
-  return `${color}  ${icon} ${BOLD}${task.id}${RESET}${color} — ${task.description} [${label}]${phaseSuffix}${RESET}`;
+  const conflictSuffix = task.execution.mergeConflict
+    ? ` ${DIM}[conflict: ${task.execution.mergeConflict.conflictFiles.join(', ')}]${RESET}`
+    : '';
+  return `${color}  ${icon} ${BOLD}${task.id}${RESET}${color} — ${task.description} [${label}]${phaseSuffix}${RESET}${conflictSuffix}`;
 }
 
 /**
@@ -254,6 +257,12 @@ export function serializeTask(task: TaskState): Record<string, unknown> {
   if (task.execution.launchStartedAt != null) execution.launchStartedAt = task.execution.launchStartedAt instanceof Date ? task.execution.launchStartedAt.toISOString() : task.execution.launchStartedAt;
   if (task.execution.launchCompletedAt != null) execution.launchCompletedAt = task.execution.launchCompletedAt instanceof Date ? task.execution.launchCompletedAt.toISOString() : task.execution.launchCompletedAt;
   if (task.execution.lastHeartbeatAt != null) execution.lastHeartbeatAt = task.execution.lastHeartbeatAt instanceof Date ? task.execution.lastHeartbeatAt.toISOString() : task.execution.lastHeartbeatAt;
+  if (task.execution.mergeConflict != null) {
+    execution.mergeConflict = {
+      failedBranch: task.execution.mergeConflict.failedBranch,
+      conflictFiles: [...task.execution.mergeConflict.conflictFiles],
+    };
+  }
 
   return {
     id: task.id,
