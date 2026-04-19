@@ -193,6 +193,45 @@ export function formatQueueStatus(status: {
   return lines.join('\n');
 }
 
+/**
+ * Format aggregate stats across all workflows.
+ */
+export function formatWorkflowStats(stats: {
+  totalWorkflows: number;
+  completed: number;
+  failed: number;
+  running: number;
+  successRate: number;
+  avgDurationMs: number | null;
+  mostFailedTasks: Array<{ description: string; failCount: number }>;
+}): string {
+  const lines: string[] = [];
+
+  lines.push(`${BOLD}Workflow stats${RESET}`);
+  lines.push('');
+  lines.push(`  Total      ${BOLD}${stats.totalWorkflows}${RESET}`);
+  lines.push(`  ${GREEN}Completed  ${stats.completed}${RESET}`);
+  lines.push(`  ${RED}Failed     ${stats.failed}${RESET}`);
+  lines.push(`  ${YELLOW}Running    ${stats.running}${RESET}`);
+  lines.push(`  Success    ${BOLD}${stats.successRate.toFixed(1)}%${RESET}`);
+
+  if (stats.avgDurationMs !== null) {
+    const secs = Math.round(stats.avgDurationMs / 1000);
+    const avg = secs < 60 ? `${secs}s` : `${Math.floor(secs / 60)}m ${secs % 60}s`;
+    lines.push(`  Avg time   ${BOLD}${avg}${RESET}`);
+  }
+
+  if (stats.mostFailedTasks.length > 0) {
+    lines.push('');
+    lines.push(`${BOLD}Most failed tasks:${RESET}`);
+    for (const t of stats.mostFailedTasks) {
+      lines.push(`  ${RED}${t.failCount}x${RESET}  ${t.description}`);
+    }
+  }
+
+  return lines.join('\n');
+}
+
 // ── Output Format Type ──────────────────────────────────────
 
 export type OutputFormat = 'text' | 'label' | 'json' | 'jsonl';

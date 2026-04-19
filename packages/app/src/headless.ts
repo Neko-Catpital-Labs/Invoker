@@ -346,7 +346,7 @@ async function headlessQuery(args: string[], deps: HeadlessDeps): Promise<void> 
 
   const {
     formatWorkflowList, formatTaskStatus, formatWorkflowStatus,
-    formatEventLog, formatQueueStatus,
+    formatEventLog, formatQueueStatus, formatWorkflowStats,
     serializeWorkflow, serializeTask, serializeEvent,
     formatAsLabel, formatAsJson, formatAsJsonl,
   } = await import('./formatter.js');
@@ -506,8 +506,61 @@ async function headlessQuery(args: string[], deps: HeadlessDeps): Promise<void> 
       }
       break;
     }
+    case 'stats': {
+      const { orchestrator, persistence } = deps;
+      const workflows = persistence.listWorkflows();
+
+      const completed = workflows.filter(w => w.status === 'completed').length;
+      const failed = workflows.filter(w => w.status === 'failed').length;
+      const running = workflows.filter(w => w.status === 'running').length;
+      const terminal = completed + failed;
+      const successRate = terminal > 0 ? (completed / terminal) * 100 : 0;
+
+      // Average duration across workflows that have both timestamps.
+      // startedAt/completedAt are added by the workflow-duration feature; guard for older DBs.
+      const durations = (workflows as Array<typeof workflows[0] & { startedAt?: string; completedAt?: string }>)
+        .filter(w => w.startedAt && w.completedAt)
+        .map(w => new Date(w.completedAt!).getTime() - new Date(w.startedAt!).getTime());
+      const avgDurationMs = durations.length > 0
+        ? durations.reduce((a, b) => a + b, 0) / durations.length
+        : null;
+
+      // Most-failed task descriptions across all workflows
+      const failCounts = new Map<string, number>();
+      for (const wf of workflows) {
+        orchestrator.syncFromDb(wf.id);
+        const tasks = orchestrator.getAllTasks().filter(
+          t => t.config.workflowId === wf.id && !t.config.isMergeNode && t.status === 'failed',
+        );
+        for (const t of tasks) {
+          failCounts.set(t.description, (failCounts.get(t.description) ?? 0) + 1);
+        }
+      }
+      const mostFailedTasks = [...failCounts.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 5)
+        .map(([description, failCount]) => ({ description, failCount }));
+
+      const stats = {
+        totalWorkflows: workflows.length,
+        completed,
+        failed,
+        running,
+        successRate,
+        avgDurationMs,
+        mostFailedTasks,
+      };
+
+      switch (flags.output) {
+        case 'label': process.stdout.write(`${successRate.toFixed(1)}%\n`); break;
+        case 'json':  process.stdout.write(formatAsJson(stats) + '\n'); break;
+        case 'jsonl': process.stdout.write(formatAsJsonl([stats]) + '\n'); break;
+        default:      process.stdout.write(formatWorkflowStats(stats) + '\n'); break;
+      }
+      break;
+    }
     default:
-      throw new Error(`Unknown query sub-command: "${subCommand}". Use: workflows, tasks, task, queue, audit, session, ui-perf`);
+      throw new Error(`Unknown query sub-command: "${subCommand}". Use: workflows, tasks, task, queue, audit, session, ui-perf, stats`);
   }
 }
 
@@ -740,6 +793,7 @@ ${BOLD}Query${RESET} (read-only, all support --output text|label|json|jsonl):
   query audit <taskId> [--output F]                   Print event history
   query session <taskId>                              Print agent session messages
   query ui-perf [--output F] [--reset]               Print live UI perf stats
+  query stats [--output F]                           Aggregate stats across all workflows
 
 ${BOLD}Execute:${RESET}
   run <plan.yaml>                                     Load and execute plan
