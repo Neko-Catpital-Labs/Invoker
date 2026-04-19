@@ -564,6 +564,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
       'ALTER TABLE attempts ADD COLUMN queue_priority INTEGER NOT NULL DEFAULT 0',
       'ALTER TABLE attempts ADD COLUMN claimed_at TEXT',
       'ALTER TABLE attempts ADD COLUMN lease_expires_at TEXT',
+      'ALTER TABLE workflows ADD COLUMN started_at TEXT',
+      'ALTER TABLE workflows ADD COLUMN completed_at TEXT',
     ];
     for (const sql of migrations) {
       try {
@@ -654,8 +656,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
   saveWorkflow(workflow: Workflow): void {
     this.execRun(`
-      INSERT OR REPLACE INTO workflows (id, name, description, visual_proof, status, plan_file, repo_url, branch, on_finish, base_branch, parent_remote, feature_branch, merge_mode, review_provider, generation, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT OR REPLACE INTO workflows (id, name, description, visual_proof, status, plan_file, repo_url, branch, on_finish, base_branch, parent_remote, feature_branch, merge_mode, review_provider, generation, created_at, updated_at, started_at, completed_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
       workflow.id, workflow.name,
       workflow.description ?? null,
@@ -667,10 +669,12 @@ export class SQLiteAdapter implements PersistenceAdapter {
       workflow.reviewProvider ?? null,
       workflow.generation ?? 0,
       workflow.createdAt, workflow.updatedAt,
+      workflow.startedAt ?? null,
+      workflow.completedAt ?? null,
     ]);
   }
 
-  updateWorkflow(workflowId: string, changes: Partial<Pick<Workflow, 'status' | 'updatedAt' | 'baseBranch' | 'generation' | 'mergeMode'>>): void {
+  updateWorkflow(workflowId: string, changes: Partial<Pick<Workflow, 'status' | 'updatedAt' | 'baseBranch' | 'generation' | 'mergeMode' | 'startedAt' | 'completedAt'>>): void {
     const setClauses: string[] = [];
     const values: unknown[] = [];
     if (changes.status !== undefined) {
@@ -688,6 +692,14 @@ export class SQLiteAdapter implements PersistenceAdapter {
     if (changes.mergeMode !== undefined) {
       setClauses.push('merge_mode = ?');
       values.push(changes.mergeMode);
+    }
+    if (changes.startedAt !== undefined) {
+      setClauses.push('started_at = ?');
+      values.push(changes.startedAt);
+    }
+    if (changes.completedAt !== undefined) {
+      setClauses.push('completed_at = ?');
+      values.push(changes.completedAt);
     }
     setClauses.push('updated_at = ?');
     values.push(changes.updatedAt ?? new Date().toISOString());
@@ -1598,6 +1610,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
       generation: row.generation ?? 0,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
+      startedAt: row.started_at ?? undefined,
+      completedAt: row.completed_at ?? undefined,
     };
   }
 

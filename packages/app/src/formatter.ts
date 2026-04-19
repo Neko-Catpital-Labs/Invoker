@@ -96,7 +96,7 @@ export function formatWorkflowStatus(status: {
  * Each workflow gets one line: "  id — name [status] (created)"
  */
 export function formatWorkflowList(
-  workflows: Array<{ id: string; name: string; status: string; createdAt: string; updatedAt: string }>,
+  workflows: Array<{ id: string; name: string; status: string; createdAt: string; updatedAt: string; startedAt?: string; completedAt?: string }>,
 ): string {
   if (workflows.length === 0) {
     return `${DIM}No workflows found.${RESET}`;
@@ -110,7 +110,13 @@ export function formatWorkflowList(
 
   const lines = workflows.map((wf) => {
     const color = WORKFLOW_STATUS_COLORS[wf.status] ?? DIM;
-    return `${color}  ${BOLD}${wf.id}${RESET}${color} — ${wf.name} [${wf.status}] ${DIM}(${wf.createdAt})${RESET}`;
+    let durationSuffix = '';
+    if (wf.startedAt && wf.completedAt) {
+      const ms = new Date(wf.completedAt).getTime() - new Date(wf.startedAt).getTime();
+      const secs = Math.round(ms / 1000);
+      durationSuffix = ` ${DIM}(${secs < 60 ? `${secs}s` : `${Math.floor(secs / 60)}m ${secs % 60}s`})${RESET}`;
+    }
+    return `${color}  ${BOLD}${wf.id}${RESET}${color} — ${wf.name} [${wf.status}]${durationSuffix}${color} ${DIM}(${wf.createdAt})${RESET}`;
   });
 
   return lines.join('\n');
@@ -221,6 +227,11 @@ export function serializeWorkflow(wf: Workflow): Record<string, unknown> {
     ...(wf.mergeMode != null && { mergeMode: wf.mergeMode }),
     ...(wf.reviewProvider != null && { reviewProvider: wf.reviewProvider }),
     ...(wf.generation != null && { generation: wf.generation }),
+    ...(wf.startedAt != null && { startedAt: wf.startedAt }),
+    ...(wf.completedAt != null && { completedAt: wf.completedAt }),
+    ...((wf.startedAt != null && wf.completedAt != null) && {
+      durationMs: new Date(wf.completedAt).getTime() - new Date(wf.startedAt).getTime(),
+    }),
   };
 }
 

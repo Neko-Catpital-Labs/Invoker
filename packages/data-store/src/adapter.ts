@@ -47,6 +47,10 @@ export interface Workflow {
   generation?: number;
   createdAt: string;
   updatedAt: string;
+  /** ISO timestamp when the first task started executing. Set once on first task start. */
+  startedAt?: string;
+  /** ISO timestamp when the workflow reached a terminal state (completed or failed). */
+  completedAt?: string;
 }
 
 export interface TaskEvent {

@@ -127,7 +127,7 @@ export interface OrchestratorPersistence {
     featureBranch?: string;
     mergeMode?: 'manual' | 'automatic' | 'external_review';
   }): void;
-  updateWorkflow?(workflowId: string, changes: { status?: string; updatedAt?: string; baseBranch?: string; generation?: number; mergeMode?: 'manual' | 'automatic' | 'external_review' }): void;
+  updateWorkflow?(workflowId: string, changes: { status?: string; updatedAt?: string; baseBranch?: string; generation?: number; mergeMode?: 'manual' | 'automatic' | 'external_review'; startedAt?: string; completedAt?: string }): void;
   saveTask(workflowId: string, task: TaskState): void;
   updateTask(taskId: string, changes: TaskStateChanges): void;
   logEvent?(taskId: string, eventType: string, payload?: unknown): void;
@@ -154,7 +154,7 @@ export interface OrchestratorPersistence {
     attemptPatch: Partial<Pick<Attempt, 'status' | 'exitCode' | 'error' | 'completedAt'>>
   ): void;
   /** Load a workflow by ID (needed for SSH validation in editTaskType). */
-  loadWorkflow?(workflowId: string): { repoUrl?: string; baseBranch?: string } | undefined;
+  loadWorkflow?(workflowId: string): { repoUrl?: string; baseBranch?: string; startedAt?: string; completedAt?: string } | undefined;
   /** Delete a single workflow and its tasks from the DB. */
   deleteWorkflow?(workflowId: string): void;
   /** Delete all workflows and tasks from the DB. */
@@ -628,10 +628,30 @@ export class Orchestrator {
       status = allSucceeded ? 'completed' : 'failed';
     }
 
-    this.persistence.updateWorkflow(workflowId, {
+    const now = new Date().toISOString();
+    const changes: { status: string; updatedAt: string; startedAt?: string; completedAt?: string } = {
       status,
-      updatedAt: new Date().toISOString(),
-    });
+      updatedAt: now,
+    };
+
+    // Set startedAt once when the workflow first has a running task.
+    const hasRunning = tasks.some((task) => task.status === 'running' || task.status === 'fixing_with_ai');
+    if (hasRunning) {
+      const existing = this.persistence.loadWorkflow?.(workflowId);
+      if (existing && !existing.startedAt) {
+        changes.startedAt = now;
+      }
+    }
+
+    // Set completedAt when the workflow reaches a terminal state.
+    if (status === 'completed' || status === 'failed') {
+      const existing = this.persistence.loadWorkflow?.(workflowId);
+      if (existing && !existing.completedAt) {
+        changes.completedAt = now;
+      }
+    }
+
+    this.persistence.updateWorkflow(workflowId, changes);
   }
 
   /**
