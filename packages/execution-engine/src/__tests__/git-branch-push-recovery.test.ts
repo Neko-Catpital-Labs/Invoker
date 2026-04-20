@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { pushBranchWithRecovery } from '../git-branch-push-recovery.js';
 
 describe('pushBranchWithRecovery', () => {
-  it('retries when an overlapping publisher moves the same workflow feature branch first', async () => {
+  it('retries when publish path B loses the workflow feature-branch push to overlapping publish path A', async () => {
     const exec = vi.fn()
       .mockRejectedValueOnce(
         new Error(
@@ -25,7 +25,7 @@ describe('pushBranchWithRecovery', () => {
     ]);
   });
 
-  it('treats the race as success when an overlapping publisher already pushed equivalent content', async () => {
+  it('treats the race as success when overlapping publish path A already pushed equivalent branch content', async () => {
     const exec = vi.fn()
       .mockRejectedValueOnce(
         new Error(

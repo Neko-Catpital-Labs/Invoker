@@ -125,7 +125,7 @@ describe('GitHubMergeGateProvider', () => {
       );
     });
 
-    it('continues when an older overlapping merge-gate publisher already updated the same feature branch', async () => {
+    it('continues when createReview publish path B loses the same workflow feature branch to overlapping publish path A', async () => {
       const { spawn } = await import('node:child_process');
       const spawnMock = vi.mocked(spawn);
 
@@ -133,10 +133,10 @@ describe('GitHubMergeGateProvider', () => {
       spawnMock.mockImplementation(((cmd: string, args: string[]) => {
         callCount += 1;
         if (cmd === 'git' && args[0] === 'push') {
-          // Realistic scenario: merge-gate publish path B is creating/updating the
-          // PR, but publish path A reached the same workflow featureBranch first.
-          // Git then rejects B's push with a cannot-lock-ref race even though the
-          // remote branch already contains equivalent tree content.
+          // Exact scenario: merge-gate publish path A already updated the
+          // workflow's stable feature branch. createReview publish path B then
+          // reaches the same push target and loses the atomic ref update race,
+          // even though the remote branch now contains equivalent tree content.
           return mockSpawnResultWithStderr(
             '',
             "To https://github.com/owner/repo\n ! [remote rejected] feature/test -> feature/test (cannot lock ref 'refs/heads/feature/test': is at aaa111 but expected bbb222)\n",
