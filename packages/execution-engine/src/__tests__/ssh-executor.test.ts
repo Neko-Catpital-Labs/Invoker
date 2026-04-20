@@ -981,6 +981,39 @@ describe('SshExecutor entry lifecycle', () => {
     expect(err.stdout).toBe('COMMIT_HASH=abc123def456\n');
   });
 
+  it('times out execRemoteCapture and terminates the ssh child', async () => {
+    vi.useFakeTimers();
+    const previousTimeout = process.env.INVOKER_SSH_REMOTE_CAPTURE_TIMEOUT_MS;
+    process.env.INVOKER_SSH_REMOTE_CAPTURE_TIMEOUT_MS = '100';
+
+    try {
+      const ssh2 = new SshExecutor({
+        host: 'localhost',
+        user: 'testuser',
+        sshKeyPath: '/dev/null',
+      }) as any;
+
+      const pending = ssh2.runBash('echo waiting', '/tmp').catch((e: any) => e);
+
+      await vi.advanceTimersByTimeAsync(100);
+
+      const proc = spawnedProcesses[spawnedProcesses.length - 1];
+      expect(proc).toBeDefined();
+      expect(proc.kill).toHaveBeenCalledWith('SIGTERM');
+
+      const err = await pending;
+      expect(err).toBeInstanceOf(Error);
+      expect(err.message).toContain('SSH remote script timed out after 100ms');
+    } finally {
+      if (previousTimeout === undefined) {
+        delete process.env.INVOKER_SSH_REMOTE_CAPTURE_TIMEOUT_MS;
+      } else {
+        process.env.INVOKER_SSH_REMOTE_CAPTURE_TIMEOUT_MS = previousTimeout;
+      }
+      vi.useRealTimers();
+    }
+  });
+
   it('managed mode with remoteInvokerHome="~/.invoker" uses base64-decode + tilde-normalize (Bug #1 variant)', async () => {
     const ssh2 = new SshExecutor({
       host: 'localhost',
@@ -1253,7 +1286,7 @@ describe('SshExecutor entry lifecycle', () => {
     }
   });
 
-  it('preserves the primary remote execution failure when record/push also fails later', async () => {
+  it('preserves the primary failure when the remote worktree vanishes during execution and finalize hits the same missing path', async () => {
     const remoteFinalizeSpy = vi
       .spyOn(ssh as any, 'remoteGitRecordAndPush')
       .mockResolvedValue({
@@ -1274,6 +1307,9 @@ describe('SshExecutor entry lifecycle', () => {
     });
 
     const sshProcess = spawnedProcesses[spawnedProcesses.length - 1];
+    // Exact scenario: the managed remote worktree disappears while the task is
+    // still running. Execution fails first with uv_cwd / ENOENT, then finalize
+    // fails later when it tries to cd back into that same missing worktree.
     sshProcess.stderr!.emit('data', Buffer.from('Error: ENOENT: no such file or directory, uv_cwd\n'));
     sshProcess.stderr!.emit('data', Buffer.from('pnpm: ENOENT: no such file or directory, mkdir \'/tmp/missing-worktree/node_modules/.bin\'\n'));
     sshProcess.emit('close', 1, null);
