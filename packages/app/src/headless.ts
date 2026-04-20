@@ -11,7 +11,7 @@
 
 import type { Logger } from '@invoker/contracts';
 import { makeEnvelope } from '@invoker/contracts';
-import type { Orchestrator, CommandService, TaskDelta, TaskState, TaskConfig } from '@invoker/workflow-core';
+import type { Orchestrator, CommandService, TaskDelta, TaskState } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import { createDeleteAllSnapshot } from './delete-all-snapshot.js';
 import { Channels } from '@invoker/transport';
@@ -46,6 +46,7 @@ import {
   tryDelegateResume,
   tryDelegateRun,
 } from './headless-delegation.js';
+import { trackWorkflow } from './headless-watch.js';
 import { preemptWorkflowBeforeMutation, type WorkflowCancelResult } from './workflow-preemption.js';
 import { relaunchOrphansAndStartReady } from './orphan-relaunch.js';
 
@@ -567,6 +568,9 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
     case 'migrate-compat':
       await headlessMigrateCompatibility(deps);
       break;
+    case 'watch':
+      await headlessWatch(args[1], deps);
+      break;
 
     // ── Execute (unchanged) ──
     case 'run':
@@ -742,6 +746,7 @@ ${BOLD}Query${RESET} (read-only, all support --output text|label|json|jsonl):
   query ui-perf [--output F] [--reset]               Print live UI perf stats
 
 ${BOLD}Execute:${RESET}
+  watch [<workflowId>]                                Watch workflow status until settled or Ctrl-C
   run <plan.yaml>                                     Load and execute plan
   resume <id>                                         Resume incomplete workflow
   retry <workflowId>                                  Retry workflow: rerun failed, keep completed
@@ -790,6 +795,67 @@ ${BOLD}Options:${RESET}
 `);
 }
 
+async function trackHeadlessWorkflow(
+  workflowId: string,
+  deps: Pick<HeadlessDeps, 'orchestrator' | 'messageBus'>,
+  options: {
+    waitForApproval?: boolean;
+    hasBackgroundWork?: () => boolean;
+    printSnapshot?: boolean;
+    printSummary?: boolean;
+    printTaskOutput?: boolean;
+    allowSignals?: boolean;
+    syncFromDb?: boolean;
+    setExitCodeOnFailure?: boolean;
+  } = {},
+): Promise<Awaited<ReturnType<typeof trackWorkflow>>> {
+  if (options.waitForApproval) {
+    process.stdout.write('[headless] Waiting for PR approval (--wait-for-approval)...\n');
+  }
+  return await trackWorkflow({
+    workflowId,
+    messageBus: deps.messageBus,
+    waitForApproval: options.waitForApproval,
+    hasBackgroundWork: options.hasBackgroundWork,
+    printSnapshot: options.printSnapshot,
+    printSummary: options.printSummary,
+    printTaskOutput: options.printTaskOutput,
+    allowSignals: options.allowSignals,
+    setExitCodeOnFailure: options.setExitCodeOnFailure,
+    maxWaitMs: options.allowSignals ? undefined : (options.waitForApproval ? 86_400_000 : 1_800_000),
+    loadTasks: () => {
+      if (options.syncFromDb) {
+        deps.orchestrator.syncFromDb(workflowId);
+      }
+      return deps.orchestrator.getAllTasks().filter((task) => task.config.workflowId === workflowId);
+    },
+  });
+}
+
+async function headlessWatch(workflowId: string | undefined, deps: HeadlessDeps): Promise<void> {
+  const workflows = deps.persistence.listWorkflows();
+  if (workflows.length === 0) {
+    process.stdout.write('No workflows found. Run a plan first.\n');
+    return;
+  }
+  const targetWorkflowId = workflowId ?? workflows[0]?.id;
+  const workflow = workflows.find((item) => item.id === targetWorkflowId);
+  if (!workflow || !targetWorkflowId) {
+    throw new Error(`Workflow "${workflowId}" not found.`);
+  }
+
+  process.stdout.write(`${BOLD}Watching workflow: ${workflow.id}${RESET}\n\n`);
+  const result = await trackHeadlessWorkflow(workflow.id, deps, {
+    printSnapshot: true,
+    printSummary: true,
+    printTaskOutput: false,
+    allowSignals: true,
+    syncFromDb: true,
+    setExitCodeOnFailure: true,
+  });
+  process.stdout.write(`\n[watch] done — ${result.status.completed} completed, ${result.status.failed} failed\n`);
+}
+
 // ── Headless Commands ────────────────────────────────────────
 
 async function headlessRun(
@@ -798,12 +864,11 @@ async function headlessRun(
   waitForApproval?: boolean,
   noTrack?: boolean,
 ): Promise<void> {
-  const { orchestrator, messageBus, repoRoot, invokerConfig } = deps;
+  const { orchestrator, repoRoot, invokerConfig } = deps;
   if (!planPath) throw new Error('Missing plan file. Usage: --headless run <plan.yaml>');
 
   const { readFile } = await import('node:fs/promises');
   const { parsePlanFile } = await import('./plan-parser.js');
-  const { formatTaskStatus, formatWorkflowStatus } = await import('./formatter.js');
 
   const yamlSource = await readFile(planPath, 'utf-8');
   const plan = await parsePlanFile(planPath);
@@ -812,15 +877,6 @@ async function headlessRun(
   backupPlan(plan, yamlSource, deps.logger);
   process.stdout.write(`${BOLD}Loading plan: ${plan.name}${RESET}\n`);
   process.stdout.write(`Tasks: ${plan.tasks.length}\n\n`);
-
-  messageBus.subscribe<TaskDelta>(Channels.TASK_DELTA, (delta) => {
-    if (delta.type === 'updated') {
-      const task = orchestrator.getTask(delta.taskId);
-      if (task) process.stdout.write(formatTaskStatus(task) + '\n');
-    } else if (delta.type === 'created') {
-      process.stdout.write(formatTaskStatus(delta.task) + '\n');
-    }
-  });
 
   const taskExecutor = createHeadlessExecutor(deps);
   wireHeadlessApproveHook(deps, taskExecutor);
@@ -852,22 +908,19 @@ async function headlessRun(
     return;
   }
 
-  await waitForCompletion(orchestrator, currentWorkflowId, waitForApproval, autoFix.isBusy);
+  if (currentWorkflowId) {
+    await trackHeadlessWorkflow(currentWorkflowId, deps, {
+      waitForApproval,
+      hasBackgroundWork: autoFix.isBusy,
+      printSnapshot: true,
+      printSummary: true,
+      printTaskOutput: true,
+      setExitCodeOnFailure: true,
+    });
+  }
 
   await api.close().catch(() => {});
   autoFix.unsubscribe();
-
-  const status = orchestrator.getWorkflowStatus(currentWorkflowId);
-  process.stdout.write(`\n${formatWorkflowStatus(status)}\n`);
-
-  const mergeTask = orchestrator.getAllTasks().find(
-    t => t.config.workflowId === currentWorkflowId && t.config.isMergeNode,
-  );
-  if (mergeTask?.execution?.reviewUrl) {
-    process.stdout.write(`\nPull Request: ${mergeTask.execution.reviewUrl}\n`);
-  }
-
-  if (status.failed > 0) process.exitCode = 1;
 }
 
 async function headlessResume(
@@ -876,21 +929,10 @@ async function headlessResume(
   waitForApproval?: boolean,
   noTrack?: boolean,
 ): Promise<void> {
-  const { orchestrator, messageBus } = deps;
+  const { orchestrator } = deps;
   if (!workflowId) throw new Error('Missing workflowId. Usage: --headless resume <id>');
 
-  const { formatTaskStatus, formatWorkflowStatus } = await import('./formatter.js');
-
   process.stdout.write(`${BOLD}Resuming workflow: ${workflowId}${RESET}\n\n`);
-
-  messageBus.subscribe<TaskDelta>(Channels.TASK_DELTA, (delta) => {
-    if (delta.type === 'updated') {
-      const task = orchestrator.getTask(delta.taskId);
-      if (task) process.stdout.write(formatTaskStatus(task) + '\n');
-    } else if (delta.type === 'created') {
-      process.stdout.write(formatTaskStatus(delta.task) + '\n');
-    }
-  });
 
   const taskExecutor = createHeadlessExecutor(deps);
   wireHeadlessApproveHook(deps, taskExecutor);
@@ -936,15 +978,17 @@ async function headlessResume(
 
   await taskExecutor.executeTasks(allStarted);
 
-  await waitForCompletion(orchestrator, workflowId, waitForApproval, autoFix.isBusy);
+  await trackHeadlessWorkflow(workflowId, deps, {
+    waitForApproval,
+    hasBackgroundWork: autoFix.isBusy,
+    printSnapshot: true,
+    printSummary: true,
+    printTaskOutput: true,
+    setExitCodeOnFailure: true,
+  });
 
   await api.close().catch(() => {});
   autoFix.unsubscribe();
-
-  const status = orchestrator.getWorkflowStatus();
-  process.stdout.write(`\n${formatWorkflowStatus(status)}\n`);
-
-  if (status.failed > 0) process.exitCode = 1;
 }
 
 async function headlessApprove(taskId: string, deps: HeadlessDeps): Promise<void> {
@@ -966,7 +1010,12 @@ async function headlessApprove(taskId: string, deps: HeadlessDeps): Promise<void
     autoFix.unsubscribe();
     return;
   }
-  await waitForCompletion(deps.orchestrator, restored.workflowId, undefined, autoFix.isBusy);
+  await trackHeadlessWorkflow(restored.workflowId, deps, {
+    hasBackgroundWork: autoFix.isBusy,
+    printSummary: false,
+    printTaskOutput: true,
+    setExitCodeOnFailure: false,
+  });
   autoFix.unsubscribe();
 }
 
@@ -1000,13 +1049,19 @@ async function headlessSelect(taskId: string, experimentId: string, deps: Headle
   const autoFix = wireHeadlessAutoFix(deps, taskExecutor);
   const started = deps.orchestrator.resumeWorkflow(workflowId);
   void started;
-  await waitForCompletion(deps.orchestrator, undefined, undefined, autoFix.isBusy);
+  await trackHeadlessWorkflow(workflowId, deps, {
+    hasBackgroundWork: autoFix.isBusy,
+    printSummary: false,
+    printTaskOutput: true,
+    setExitCodeOnFailure: false,
+  });
   autoFix.unsubscribe();
 }
 
 async function headlessRestart(taskId: string, deps: HeadlessDeps): Promise<void> {
   if (!taskId) throw new Error('Missing arguments. Usage: --headless retry-task <taskId>');
-  taskId = restoreWorkflowForTask(taskId, deps).resolvedTaskId;
+  const restored = restoreWorkflowForTask(taskId, deps);
+  taskId = restored.resolvedTaskId;
   await preemptTaskSubgraph(taskId, deps);
 
   const envelope = makeEnvelope('restart-task', 'headless', 'task', { taskId });
@@ -1029,7 +1084,12 @@ async function headlessRestart(taskId: string, deps: HeadlessDeps): Promise<void
     autoFix.unsubscribe();
     return;
   }
-  await waitForCompletion(deps.orchestrator, undefined, undefined, autoFix.isBusy);
+  await trackHeadlessWorkflow(restored.workflowId, deps, {
+    hasBackgroundWork: autoFix.isBusy,
+    printSummary: false,
+    printTaskOutput: true,
+    setExitCodeOnFailure: false,
+  });
   autoFix.unsubscribe();
 }
 
@@ -1138,7 +1198,12 @@ async function headlessRebaseAndRetry(taskId: string, deps: HeadlessDeps): Promi
     autoFix.unsubscribe();
     return;
   }
-  await waitForCompletion(deps.orchestrator, workflowId, undefined, autoFix.isBusy);
+  await trackHeadlessWorkflow(workflowId, deps, {
+    hasBackgroundWork: autoFix.isBusy,
+    printSummary: false,
+    printTaskOutput: true,
+    setExitCodeOnFailure: false,
+  });
   autoFix.unsubscribe();
 
   const tasksStarted = runnable.length;
@@ -1182,7 +1247,12 @@ async function headlessRecreateWorkflow(workflowId: string, deps: HeadlessDeps):
       autoFix.unsubscribe();
       return;
     }
-    await waitForCompletion(deps.orchestrator, workflowId, undefined, autoFix.isBusy);
+    await trackHeadlessWorkflow(workflowId, deps, {
+      hasBackgroundWork: autoFix.isBusy,
+      printSummary: false,
+      printTaskOutput: true,
+      setExitCodeOnFailure: false,
+    });
     autoFix.unsubscribe();
   }
   const tasksStarted = runnable.length;
@@ -1224,7 +1294,14 @@ async function headlessRecreateTask(taskId: string, deps: HeadlessDeps): Promise
     autoFix.unsubscribe();
     return;
   }
-  await waitForCompletion(deps.orchestrator, workflowId, undefined, autoFix.isBusy);
+  if (workflowId) {
+    await trackHeadlessWorkflow(workflowId, deps, {
+      hasBackgroundWork: autoFix.isBusy,
+      printSummary: false,
+      printTaskOutput: true,
+      setExitCodeOnFailure: false,
+    });
+  }
   autoFix.unsubscribe();
 }
 
@@ -1338,7 +1415,12 @@ async function headlessRetryWorkflow(workflowId: string, deps: HeadlessDeps): Pr
     autoFix.unsubscribe();
     return;
   }
-  await waitForCompletion(deps.orchestrator, workflowId, undefined, autoFix.isBusy);
+  await trackHeadlessWorkflow(workflowId, deps, {
+    hasBackgroundWork: autoFix.isBusy,
+    printSummary: false,
+    printTaskOutput: true,
+    setExitCodeOnFailure: false,
+  });
   autoFix.unsubscribe();
 }
 
@@ -1399,7 +1481,12 @@ async function headlessEdit(taskId: string, newCommand: string, deps: HeadlessDe
     autoFix.unsubscribe();
     return;
   }
-  await waitForCompletion(deps.orchestrator, restored.workflowId, undefined, autoFix.isBusy);
+  await trackHeadlessWorkflow(restored.workflowId, deps, {
+    hasBackgroundWork: autoFix.isBusy,
+    printSummary: false,
+    printTaskOutput: true,
+    setExitCodeOnFailure: false,
+  });
   autoFix.unsubscribe();
 }
 
@@ -1428,7 +1515,12 @@ async function headlessEditExecutor(taskId: string, executorType: string, deps: 
     autoFix.unsubscribe();
     return;
   }
-  await waitForCompletion(deps.orchestrator, restored.workflowId, undefined, autoFix.isBusy);
+  await trackHeadlessWorkflow(restored.workflowId, deps, {
+    hasBackgroundWork: autoFix.isBusy,
+    printSummary: false,
+    printTaskOutput: true,
+    setExitCodeOnFailure: false,
+  });
   autoFix.unsubscribe();
 }
 
@@ -1457,7 +1549,12 @@ async function headlessEditAgent(taskId: string, agentName: string, deps: Headle
     autoFix.unsubscribe();
     return;
   }
-  await waitForCompletion(deps.orchestrator, restored.workflowId, undefined, autoFix.isBusy);
+  await trackHeadlessWorkflow(restored.workflowId, deps, {
+    hasBackgroundWork: autoFix.isBusy,
+    printSummary: false,
+    printTaskOutput: true,
+    setExitCodeOnFailure: false,
+  });
   autoFix.unsubscribe();
 }
 
@@ -1780,41 +1877,6 @@ function restoreWorkflowForTask(
     }
   }
   throw new Error(`Task "${taskId}" not found in any workflow`);
-}
-
-async function waitForCompletion(
-  orchestrator: Orchestrator,
-  workflowId?: string,
-  waitForApproval?: boolean,
-  hasBackgroundWork?: () => boolean,
-): Promise<void> {
-  const maxWaitMs = waitForApproval ? 86_400_000 : 1_800_000; // 24 hours if waiting for approval, else 30 minutes
-  const pollIntervalMs = 100;
-  const start = Date.now();
-
-  if (waitForApproval) {
-    process.stdout.write('[headless] Waiting for PR approval (--wait-for-approval)...\n');
-  }
-
-  while (Date.now() - start < maxWaitMs) {
-    let tasks = orchestrator.getAllTasks();
-    if (workflowId) {
-      tasks = tasks.filter((t) => t.config.workflowId === workflowId);
-    }
-    const settledStatuses = waitForApproval
-      ? ['completed', 'failed', 'needs_input', 'blocked', 'stale']
-      : ['completed', 'failed', 'needs_input', 'awaiting_approval', 'review_ready', 'blocked', 'stale'];
-    const allSettled = tasks.every((t) => settledStatuses.includes(t.status));
-    if (allSettled && !hasBackgroundWork?.()) return;
-    // Also settle if nothing is running and at least one task awaits human action.
-    // Pending merge gates can't progress until their upstream is approved.
-    const noneRunning = !tasks.some(
-      (t) => t.status === 'running' || t.status === 'fixing_with_ai',
-    );
-    const hasHumanBlocked = tasks.some((t) => settledStatuses.includes(t.status) && t.status !== 'completed');
-    if (noneRunning && hasHumanBlocked && !hasBackgroundWork?.()) return;
-    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
-  }
 }
 
 // ── Headless Delegation ──────────────────────────────────────
