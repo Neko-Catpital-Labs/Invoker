@@ -1,11 +1,9 @@
 import { resolve as resolvePath } from 'node:path';
 
-import { Channels } from '@invoker/transport';
 import type { MessageBus } from '@invoker/transport';
-import type { TaskConfig, TaskDelta, TaskState } from '@invoker/workflow-core';
+import type { TaskState } from '@invoker/workflow-core';
 
-const BOLD = '\x1b[1m';
-const RESET = '\x1b[0m';
+import { createDelegatedTaskFeed, trackWorkflow } from './headless-watch.js';
 
 type DelegateTrackingOptions = {
   waitForApproval?: boolean;
@@ -134,149 +132,54 @@ async function tryDelegate(
   messageBus: MessageBus,
   options: DelegateTrackingOptions,
 ): Promise<boolean> {
-  const { formatTaskStatus } = await import('./formatter.js');
-  const tasks = new Map<string, TaskState>();
   let targetWorkflowId: string | undefined;
-
-  const deltaUnsub = messageBus.subscribe<TaskDelta>(Channels.TASK_DELTA, (delta) => {
-    if (delta.type === 'created') {
-      const task = delta.task;
-      if (!targetWorkflowId || task.config.workflowId === targetWorkflowId) {
-        tasks.set(task.id, task);
-        process.stdout.write(formatTaskStatus(task) + '\n');
-      }
-    } else if (delta.type === 'updated') {
-      const existing = tasks.get(delta.taskId);
-      if (existing) {
-        const { config: cfgChanges, execution: execChanges, ...topLevel } = delta.changes;
-        const updated: TaskState = {
-          ...existing,
-          ...topLevel,
-          config: { ...existing.config, ...cfgChanges } as TaskConfig,
-          execution: { ...existing.execution, ...execChanges },
-        };
-        tasks.set(delta.taskId, updated);
-        process.stdout.write(formatTaskStatus(updated) + '\n');
-      }
-    } else if (delta.type === 'removed') {
-      tasks.delete(delta.taskId);
-    }
+  const DELEGATION_TIMEOUT = Symbol('delegation-timeout');
+  const timeoutPromise = new Promise<typeof DELEGATION_TIMEOUT>((_, reject) => {
+    setTimeout(() => reject(DELEGATION_TIMEOUT), options.timeoutMs ?? 5_000);
   });
 
-  const outputUnsub = messageBus.subscribe<{ taskId: string; data: string }>(
-    Channels.TASK_OUTPUT,
-    ({ taskId, data }) => {
-      if (tasks.has(taskId)) {
-        process.stdout.write(`\x1b[2m[${taskId}]\x1b[0m ${data}`);
-      }
-    },
-  );
-
+  let response: { workflowId: string; tasks: TaskState[] } | { ok: true };
   try {
-    const DELEGATION_TIMEOUT = Symbol('delegation-timeout');
-    const timeoutPromise = new Promise<typeof DELEGATION_TIMEOUT>((_, reject) => {
-      setTimeout(() => reject(DELEGATION_TIMEOUT), options.timeoutMs ?? 5_000);
-    });
-
-    let response: { workflowId: string; tasks: TaskState[] } | { ok: true };
-    try {
-      response = await Promise.race([
-        messageBus.request<typeof payload, typeof response>(channel, payload),
-        timeoutPromise,
-      ]) as { workflowId: string; tasks: TaskState[] } | { ok: true };
-    } catch (err) {
-      if (err === DELEGATION_TIMEOUT) {
-        return false;
-      }
-      if (err instanceof Error && err.message.includes('No request handler registered for channel')) {
-        return false;
-      }
-      throw err;
+    response = await Promise.race([
+      messageBus.request<typeof payload, typeof response>(channel, payload),
+      timeoutPromise,
+    ]) as { workflowId: string; tasks: TaskState[] } | { ok: true };
+  } catch (err) {
+    if (err === DELEGATION_TIMEOUT) {
+      return false;
     }
-
-    if ('workflowId' in response) {
-      targetWorkflowId = response.workflowId;
-      process.stdout.write(`Delegated to owner — workflow: ${targetWorkflowId}\n`);
-    } else {
-      process.stdout.write('Delegated to owner\n');
+    if (err instanceof Error && err.message.includes('No request handler registered for channel')) {
+      return false;
     }
+    throw err;
+  }
 
-    if (options.noTrack) {
-      process.stdout.write('[headless] --no-track enabled: delegated submission accepted; exiting without tracking.\n');
-      return true;
-    }
+  if ('workflowId' in response) {
+    targetWorkflowId = response.workflowId;
+    process.stdout.write(`Delegated to owner — workflow: ${targetWorkflowId}\n`);
+  } else {
+    process.stdout.write('Delegated to owner\n');
+  }
 
-    if (!('workflowId' in response) || !Array.isArray(response.tasks)) {
-      return true;
-    }
-
-    for (const task of response.tasks) {
-      if (!tasks.has(task.id)) {
-        tasks.set(task.id, task);
-      }
-    }
-
-    await waitForDelegatedSettlement(tasks, targetWorkflowId, options.waitForApproval);
-
-    const taskArray = Array.from(tasks.values());
-    const completedCount = taskArray.filter((t) => t.status === 'completed').length;
-    const failedCount = taskArray.filter((t) => t.status === 'failed').length;
-    process.stdout.write(`\n${BOLD}Summary:${RESET} ${completedCount} completed, ${failedCount} failed\n`);
-
-    const mergeTask = taskArray.find((t) => t.config.isMergeNode);
-    if (mergeTask?.execution?.reviewUrl) {
-      process.stdout.write(`\nPull Request: ${mergeTask.execution.reviewUrl}\n`);
-    }
-    if (failedCount > 0) {
-      process.exitCode = 1;
-    }
+  if (options.noTrack) {
+    process.stdout.write('[headless] --no-track enabled: delegated submission accepted; exiting without tracking.\n');
     return true;
-  } finally {
-    deltaUnsub();
-    outputUnsub();
   }
-}
 
-async function waitForDelegatedSettlement(
-  tasks: Map<string, TaskState>,
-  workflowId: string | undefined,
-  waitForApproval?: boolean,
-): Promise<void> {
-  const pollIntervalMs = 100;
-  const settledStatuses = ['failed', 'awaiting_approval', 'review_ready', 'needs_input'];
-
-  // eslint-disable-next-line no-constant-condition
-  while (true) {
-    const taskArray = Array.from(tasks.values()).filter((task) => (
-      !workflowId || task.config.workflowId === workflowId
-    ));
-
-    if (taskArray.length === 0) {
-      await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
-      continue;
-    }
-
-    const running = taskArray.some(
-      (task) => task.status === 'running' || task.status === 'fixing_with_ai',
-    );
-    const pending = taskArray.some((task) => task.status === 'pending');
-    const blockingReview = taskArray.some(
-      (task) => task.config.isMergeNode && (task.status === 'review_ready' || task.status === 'awaiting_approval'),
-    );
-
-    if (!running && !pending) {
-      if (!waitForApproval) return;
-      if (!blockingReview) return;
-    }
-
-    const noneRunning = !taskArray.some(
-      (task) => task.status === 'running' || task.status === 'fixing_with_ai',
-    );
-    const hasHumanBlocked = taskArray.some(
-      (task) => settledStatuses.includes(task.status) && task.status !== 'completed',
-    );
-    if (noneRunning && hasHumanBlocked) return;
-
-    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+  if (!('workflowId' in response) || !Array.isArray(response.tasks)) {
+    return true;
   }
+  targetWorkflowId = response.workflowId;
+  const taskFeed = createDelegatedTaskFeed(messageBus, response.tasks, targetWorkflowId);
+  await trackWorkflow({
+    workflowId: targetWorkflowId,
+    loadTasks: taskFeed.loadTasks,
+    messageBus,
+    waitForApproval: options.waitForApproval,
+    printSnapshot: true,
+    printSummary: true,
+    printTaskOutput: true,
+    subscribeToChanges: taskFeed.subscribeToChanges,
+  });
+  return true;
 }
