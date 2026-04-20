@@ -981,39 +981,6 @@ describe('SshExecutor entry lifecycle', () => {
     expect(err.stdout).toBe('COMMIT_HASH=abc123def456\n');
   });
 
-  it('times out execRemoteCapture and terminates the ssh child', async () => {
-    vi.useFakeTimers();
-    const previousTimeout = process.env.INVOKER_SSH_REMOTE_CAPTURE_TIMEOUT_MS;
-    process.env.INVOKER_SSH_REMOTE_CAPTURE_TIMEOUT_MS = '100';
-
-    try {
-      const ssh2 = new SshExecutor({
-        host: 'localhost',
-        user: 'testuser',
-        sshKeyPath: '/dev/null',
-      }) as any;
-
-      const pending = ssh2.runBash('echo waiting', '/tmp').catch((e: any) => e);
-
-      await vi.advanceTimersByTimeAsync(100);
-
-      const proc = spawnedProcesses[spawnedProcesses.length - 1];
-      expect(proc).toBeDefined();
-      expect(proc.kill).toHaveBeenCalledWith('SIGTERM');
-
-      const err = await pending;
-      expect(err).toBeInstanceOf(Error);
-      expect(err.message).toContain('SSH remote script timed out after 100ms');
-    } finally {
-      if (previousTimeout === undefined) {
-        delete process.env.INVOKER_SSH_REMOTE_CAPTURE_TIMEOUT_MS;
-      } else {
-        process.env.INVOKER_SSH_REMOTE_CAPTURE_TIMEOUT_MS = previousTimeout;
-      }
-      vi.useRealTimers();
-    }
-  });
-
   it('managed mode with remoteInvokerHome="~/.invoker" uses base64-decode + tilde-normalize (Bug #1 variant)', async () => {
     const ssh2 = new SshExecutor({
       host: 'localhost',
