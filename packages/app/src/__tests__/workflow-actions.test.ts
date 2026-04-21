@@ -868,18 +868,143 @@ describe('autoFixOnFailure', () => {
       }),
     );
   });
+
+  it('reverts conflict resolution when remote fix-with-agent times out', async () => {
+    const orchestrator = {
+      shouldAutoFix: vi.fn(() => true),
+      getTask: vi.fn(() => makeTask({
+        status: 'failed',
+        config: { workflowId: 'wf-1', executorType: 'ssh', remoteTargetId: 'remote-1' },
+        execution: { autoFixAttempts: 0, workspacePath: '~/worktrees/remote' },
+      })),
+      getAutoFixRetryBudget: vi.fn(() => 3),
+      beginConflictResolution: vi.fn(() => ({ savedError: 'boom' })),
+      restartTask: vi.fn(() => []),
+      revertConflictResolution: vi.fn(),
+    };
+    const logEvent = vi.fn();
+    const persistence = {
+      updateTask: vi.fn(),
+      getTaskOutput: vi.fn(() => 'test output'),
+      appendTaskOutput: vi.fn(),
+      logEvent,
+    };
+    const taskExecutor = {
+      fixWithAgent: vi.fn().mockRejectedValue(new Error('Remote agent fix timed out after 600000ms (phase=remote_agent_fix)')),
+      resolveConflict: vi.fn(),
+      executeTasks: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await autoFixOnFailure('task-a', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+    });
+
+    expect(orchestrator.restartTask).not.toHaveBeenCalled();
+    expect(orchestrator.revertConflictResolution).toHaveBeenCalledWith(
+      'task-a',
+      'boom',
+      expect.stringContaining('Remote agent fix timed out after 600000ms'),
+    );
+    expect(logEvent).toHaveBeenCalledWith(
+      'task-a',
+      'debug.auto-fix',
+      expect.objectContaining({
+        phase: 'auto-fix-route-failed',
+        errorMessage: 'Remote agent fix timed out after 600000ms (phase=remote_agent_fix)',
+      }),
+    );
+  });
+
+  it('fails fast and skips auto-fix for broad lint failures', async () => {
+    const orchestrator = {
+      shouldAutoFix: vi.fn(() => true),
+      getTask: vi.fn(() => makeTask({
+        status: 'failed',
+        config: { workflowId: 'wf-1', command: 'eslint packages/' },
+        execution: { autoFixAttempts: 0, error: '✖ 1696 problems\nno-explicit-any\nno-undef' },
+      })),
+      getAutoFixRetryBudget: vi.fn(() => 3),
+      beginConflictResolution: vi.fn(() => ({ savedError: 'boom' })),
+      restartTask: vi.fn(() => []),
+      revertConflictResolution: vi.fn(),
+    };
+    const logEvent = vi.fn();
+    const persistence = {
+      updateTask: vi.fn(),
+      getTaskOutput: vi.fn(() => 'test output'),
+      appendTaskOutput: vi.fn(),
+      logEvent,
+    };
+    const taskExecutor = {
+      fixWithAgent: vi.fn(),
+      resolveConflict: vi.fn(),
+      executeTasks: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await autoFixOnFailure('task-a', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+    });
+
+    expect(taskExecutor.fixWithAgent).not.toHaveBeenCalled();
+    expect(orchestrator.beginConflictResolution).not.toHaveBeenCalled();
+    expect(logEvent).toHaveBeenCalledWith(
+      'task-a',
+      'debug.auto-fix',
+      expect.objectContaining({
+        phase: 'auto-fix-skip',
+        reason: 'failure-disposition-fail-fast',
+        dispositionReason: 'broad-lint-failure',
+      }),
+    );
+    expect(persistence.appendTaskOutput).toHaveBeenCalledWith(
+      'task-a',
+      expect.stringContaining('[Auto-fix] Skipped: the task failed with a broad lint error set.'),
+    );
+    expect(persistence.appendTaskOutput).toHaveBeenCalledWith(
+      'task-a',
+      expect.stringContaining('[Auto-fix] Primary failure: ✖ 1696 problems'),
+    );
+  });
 });
 
 describe('editTaskCommand', () => {
-  it('calls orchestrator.editTaskCommand and returns result', () => {
+  it('calls orchestrator.editTaskCommand and returns result', async () => {
     const tasks = [makeRunningTask()];
-    const orchestrator = { editTaskCommand: vi.fn(() => tasks) };
+    const orchestrator = { getTask: vi.fn(() => undefined), editTaskCommand: vi.fn(() => tasks) };
 
-    const result = editTaskCommand('task-a', 'npm test', {
+    const result = await editTaskCommand('task-a', 'npm test', {
       orchestrator: orchestrator as unknown as Orchestrator,
     });
 
     expect(orchestrator.editTaskCommand).toHaveBeenCalledWith('task-a', 'npm test');
+    expect(result).toBe(tasks);
+  });
+
+  it('cancels fixing_with_ai before editing and restarting with the new command', async () => {
+    const tasks = [makeRunningTask({ id: 'task-a', config: { command: 'npm test' } })];
+    const orchestrator = {
+      getTask: vi.fn(() => ({
+        id: 'task-a',
+        status: 'fixing_with_ai',
+        execution: { pendingFixError: 'original failure' },
+      })),
+      revertConflictResolution: vi.fn(),
+      editTaskCommand: vi.fn(() => tasks),
+    };
+    const taskExecutor = { killActiveExecution: vi.fn().mockResolvedValue(undefined) };
+
+    const result = await editTaskCommand('task-a', 'npm run lint', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      taskExecutor: taskExecutor as any,
+    });
+
+    expect(taskExecutor.killActiveExecution).toHaveBeenCalledWith('task-a');
+    expect(orchestrator.revertConflictResolution).toHaveBeenCalledWith('task-a', 'original failure');
+    expect(orchestrator.editTaskCommand).toHaveBeenCalledWith('task-a', 'npm run lint');
     expect(result).toBe(tasks);
   });
 });

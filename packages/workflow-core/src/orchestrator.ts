@@ -1952,9 +1952,7 @@ export class Orchestrator {
     const normalizedSavedError = stripFixFailureWrapper(savedError);
     const mergeConflict = parseMergeConflictError(normalizedSavedError);
 
-    const displayError = fixError
-      ? `[Fix with Agent failed] ${fixError}\n\n${normalizedSavedError}`
-      : savedError;
+    const displayError = normalizedSavedError;
     const completedAt = new Date();
     const changes: TaskStateChanges = {
       status: 'failed',

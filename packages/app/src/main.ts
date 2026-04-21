@@ -94,6 +94,7 @@ import {
 } from './headless.js';
 import {
   approveTask as sharedApproveTask,
+  editTaskCommand as sharedEditTaskCommand,
   rebaseAndRetry,
   recreateWorkflow as sharedRecreateWorkflow,
   recreateTask as sharedRecreateTask,
@@ -108,6 +109,7 @@ import { createRequire } from 'node:module';
 import { acquireDbWriterLock, type DbWriterLockResult } from './db-writer-lock.js';
 import { applyDelta } from './delta-merge.js';
 import { shouldSkipAutoFixForError } from './auto-fix-gating.js';
+import { buildAutoFixSkipOutput, getAutoFixDispatchDecision, getAutoFixEnqueueDecision } from './auto-fix-session.js';
 import { ensureSqliteFlushDebounceForOwner } from './sqlite-flush-policy.js';
 import type { WorkflowMutationPriority } from './workflow-mutation-coordinator.js';
 import { PersistedWorkflowMutationCoordinator } from './persisted-workflow-mutation-coordinator.js';
@@ -1114,7 +1116,25 @@ if (isHeadless) {
       { module: 'ipc' },
     );
     if (source === 'auto-fix') {
-      const task = orchestrator.getTask(taskId);
+      const dispatchDecision = getAutoFixDispatchDecision(orchestrator, taskId);
+      if (!dispatchDecision.shouldDispatch) {
+        logAutoFixDebug(taskId, 'dispatch-stale-skip', {
+          reason: dispatchDecision.reason,
+          status: dispatchDecision.status,
+          autoFixAttempts: dispatchDecision.autoFixAttempts,
+          dispositionReason: dispatchDecision.dispositionReason,
+        });
+        const skipOutput = buildAutoFixSkipOutput(
+          orchestrator.getTask(taskId),
+          dispatchDecision.reason,
+          dispatchDecision.dispositionReason,
+        );
+        if (skipOutput) {
+          persistence.appendTaskOutput(taskId, skipOutput);
+        }
+        return [];
+      }
+      const task = dispatchDecision.task;
       const attemptsBefore = task?.execution.autoFixAttempts ?? 0;
       const attemptsAfter = attemptsBefore + 1;
       persistence.updateTask(taskId, {
@@ -1158,21 +1178,22 @@ if (isHeadless) {
       logAutoFixDebug(taskId, 'schedule-skip', { reason: 'workflow-not-found' });
       return;
     }
-    const shouldAutoFixNow = orchestrator.shouldAutoFix(taskId);
-    if (!shouldAutoFixNow) {
+    const enqueueDecision = getAutoFixEnqueueDecision(orchestrator, persistence, workflowId, taskId);
+    if (!enqueueDecision.shouldEnqueue) {
       logAutoFixDebug(taskId, 'schedule-skip', {
-        reason: 'shouldAutoFix-false',
-        shouldAutoFix: shouldAutoFixNow,
+        reason: enqueueDecision.reason,
+        status: enqueueDecision.status,
+        existingIntentIds: enqueueDecision.existingIntentIds,
+        dispositionReason: enqueueDecision.dispositionReason,
       });
-      return;
-    }
-    const openIntents = persistence.listWorkflowMutationIntents(workflowId, ['queued', 'running']);
-    const openTaskFixIntents = listOpenFixIntentsForTask(openIntents, taskId);
-    if (openTaskFixIntents.length > 0) {
-      logAutoFixDebug(taskId, 'schedule-skip', {
-        reason: 'already-queued-intent',
-        existingIntentIds: openTaskFixIntents.map((intent) => intent.id),
-      });
+      const skipOutput = buildAutoFixSkipOutput(
+        orchestrator.getTask(taskId),
+        enqueueDecision.reason,
+        enqueueDecision.dispositionReason,
+      );
+      if (skipOutput) {
+        persistence.appendTaskOutput(taskId, skipOutput);
+      }
       return;
     }
     const configuredAgent = loadConfig().autoFixAgent?.trim();
@@ -3084,10 +3105,11 @@ if (isHeadless) {
       const newCommand = String(newCommandArg);
       logger.info(`edit-task-command: "${taskId}" → "${newCommand}"`, { module: 'ipc' });
       try {
-        const envelope = makeEnvelope('edit-task-command', 'ui', 'task', { taskId, newCommand });
-        const result = await commandService.editTaskCommand(envelope);
-        if (!result.ok) throw new Error(result.error.message);
-        const runnable = result.data.filter(t => t.status === 'running');
+        const started = await sharedEditTaskCommand(taskId, newCommand, {
+          orchestrator,
+          taskExecutor: requireTaskExecutor(),
+        });
+        const runnable = started.filter(t => t.status === 'running');
         void runnable;
       } catch (err) {
         logger.error(`edit-task-command failed: ${err}`, { module: 'ipc' });
