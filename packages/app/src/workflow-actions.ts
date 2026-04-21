@@ -10,6 +10,7 @@ import type { Logger } from '@invoker/contracts';
 import type { Orchestrator, ExternalGatePolicyUpdate } from '@invoker/workflow-core';
 import type { TaskState } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
+import { buildAutoFixSkipOutput, getAutoFixDispatchDecision } from './auto-fix-session.js';
 import type { TaskRunner } from '@invoker/execution-engine';
 import { dispatchTasksIfNeeded } from './global-topup.js';
 import { normalizeMergeModeForPersistence } from './merge-mode.js';
@@ -185,11 +186,22 @@ export async function rebaseAndRetry(
   return bumpGenerationAndRecreate(workflowId, deps);
 }
 
-export function editTaskCommand(
+export async function editTaskCommand(
   taskId: string,
   newCommand: string,
-  deps: Pick<ActionDeps, 'orchestrator'>,
-): TaskState[] {
+  deps: Pick<ActionDeps, 'orchestrator'> & { taskExecutor?: Pick<TaskRunner, 'killActiveExecution'> },
+): Promise<TaskState[]> {
+  const task = deps.orchestrator.getTask?.(taskId);
+  if (task?.status === 'fixing_with_ai') {
+    if (!deps.taskExecutor) {
+      throw new Error(`Cannot edit fixing_with_ai task ${taskId} without a task executor`);
+    }
+    await deps.taskExecutor.killActiveExecution(taskId);
+    deps.orchestrator.revertConflictResolution(
+      taskId,
+      task.execution.pendingFixError ?? task.execution.error ?? '',
+    );
+  }
   return deps.orchestrator.editTaskCommand(taskId, newCommand);
 }
 
@@ -441,10 +453,28 @@ export async function autoFixOnFailure(
   inlineRetryDepth = 0,
 ): Promise<void> {
   const { orchestrator, persistence, taskExecutor } = deps;
-  if (!orchestrator.shouldAutoFix(taskId)) return;
+  const dispatchDecision = getAutoFixDispatchDecision(orchestrator as any, taskId);
+  if (!dispatchDecision.shouldDispatch) {
+    persistence.logEvent?.(taskId, 'debug.auto-fix', {
+      phase: 'auto-fix-skip',
+      reason: dispatchDecision.reason,
+      status: dispatchDecision.status,
+      autoFixAttempts: dispatchDecision.autoFixAttempts,
+      dispositionReason: dispatchDecision.dispositionReason ?? null,
+    });
+    const task = orchestrator.getTask(taskId);
+    const skipOutput = buildAutoFixSkipOutput(
+      task,
+      dispatchDecision.reason,
+      dispatchDecision.dispositionReason,
+    );
+    if (skipOutput) {
+      persistence.appendTaskOutput(taskId, skipOutput);
+    }
+    return;
+  }
 
-  const task = orchestrator.getTask(taskId);
-  if (!task || task.status !== 'failed') return;
+  const task = dispatchDecision.task;
 
   const attempts = (task.execution.autoFixAttempts ?? 0) + 1;
   const max = orchestrator.getAutoFixRetryBudget(taskId);
