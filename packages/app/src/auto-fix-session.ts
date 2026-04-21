@@ -102,3 +102,32 @@ export function getAutoFixDispatchDecision(
     autoFixAttempts: task?.execution.autoFixAttempts ?? null,
   };
 }
+
+function describeAutoFixSkipReason(dispositionReason?: string): string {
+  switch (dispositionReason) {
+    case 'broad-lint-failure':
+      return 'the task failed with a broad lint error set';
+    case 'dts-build-config-failure':
+      return 'the task failed with a DTS/build configuration error';
+    case 'task-missing':
+      return 'the task is no longer available';
+    default:
+      return 'the failure is not in an auto-fixable class';
+  }
+}
+
+export function buildAutoFixSkipOutput(
+  task: TaskState | undefined,
+  reason: 'shouldAutoFix-false' | 'already-live-intent' | 'failure-disposition-fail-fast',
+  dispositionReason?: string,
+): string | null {
+  if (reason !== 'failure-disposition-fail-fast') {
+    return null;
+  }
+  const primaryError = task?.execution?.error?.trim();
+  const lines = [`[Auto-fix] Skipped: ${describeAutoFixSkipReason(dispositionReason)}.`];
+  if (primaryError) {
+    lines.push(`[Auto-fix] Primary failure: ${primaryError}`);
+  }
+  return `\n${lines.join('\n')}`;
+}
