@@ -10,7 +10,7 @@ import type { Logger } from '@invoker/contracts';
 import type { Orchestrator, ExternalGatePolicyUpdate } from '@invoker/workflow-core';
 import type { TaskState } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
-import { getAutoFixDispatchDecision } from './auto-fix-session.js';
+import { buildAutoFixSkipOutput, getAutoFixDispatchDecision } from './auto-fix-session.js';
 import type { TaskRunner } from '@invoker/execution-engine';
 import { dispatchTasksIfNeeded } from './global-topup.js';
 import { normalizeMergeModeForPersistence } from './merge-mode.js';
@@ -451,6 +451,15 @@ export async function autoFixOnFailure(
       autoFixAttempts: dispatchDecision.autoFixAttempts,
       dispositionReason: dispatchDecision.dispositionReason ?? null,
     });
+    const task = orchestrator.getTask(taskId);
+    const skipOutput = buildAutoFixSkipOutput(
+      task,
+      dispatchDecision.reason,
+      dispatchDecision.dispositionReason,
+    );
+    if (skipOutput) {
+      persistence.appendTaskOutput(taskId, skipOutput);
+    }
     return;
   }
 
