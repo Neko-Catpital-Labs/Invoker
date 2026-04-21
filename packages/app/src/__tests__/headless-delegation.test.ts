@@ -25,7 +25,9 @@ describe('headless delegation enforcement', () => {
     };
     mockDeps = {
       logger: noopLogger as any,
-      orchestrator: {} as Orchestrator,
+      orchestrator: {
+        handleWorkerResponse: vi.fn(() => []),
+      } as unknown as Orchestrator,
       persistence: {
         readOnly: false,
         listWorkflows: vi.fn(() => []),
@@ -328,7 +330,6 @@ describe('headless delegation enforcement', () => {
       });
 
       it('headless resume completes quickly enough that the noTrack short-circuit is observable', async () => {
-        const executeTasksSpy = vi.spyOn(TaskRunner.prototype, 'executeTasks').mockResolvedValue(undefined as any);
         // Sanity check: prove the noTrack path returns in well under 1s. If the
         // function ever falls back to waitForCompletion (100ms polls), this would
         // fail because at minimum one poll iteration would be observed.
@@ -337,12 +338,10 @@ describe('headless delegation enforcement', () => {
         await runHeadless(['resume', 'wf-1'], depsWithNoTrack);
         const elapsed = Date.now() - start;
         expect(elapsed).toBeLessThan(1000);
-        expect(executeTasksSpy).toHaveBeenCalled();
-        executeTasksSpy.mockRestore();
+        expect(mockDeps.orchestrator.syncFromDb).toHaveBeenCalledWith('wf-1');
       });
 
       it('headless resume only relaunches orphaned tasks in the requested workflow', async () => {
-        const executeTasksSpy = vi.spyOn(TaskRunner.prototype, 'executeTasks').mockResolvedValue(undefined as any);
         mockDeps.orchestrator.getAllTasks = vi.fn(() => [
           {
             id: 'wf-1/task-1',
@@ -363,12 +362,9 @@ describe('headless delegation enforcement', () => {
 
         expect(mockDeps.orchestrator.restartTask).toHaveBeenCalledTimes(1);
         expect(mockDeps.orchestrator.restartTask).toHaveBeenCalledWith('wf-1/task-1');
-        expect(executeTasksSpy).toHaveBeenCalled();
-        executeTasksSpy.mockRestore();
       });
 
       it('headless resume relaunches pending tasks with persisted claimed attempts', async () => {
-        const executeTasksSpy = vi.spyOn(TaskRunner.prototype, 'executeTasks').mockResolvedValue(undefined as any);
         mockDeps.orchestrator.getPersistedActiveTaskIds = vi.fn(() => new Set(['wf-1/task-claimed']));
         mockDeps.orchestrator.getAllTasks = vi.fn(() => [
           {
@@ -390,8 +386,6 @@ describe('headless delegation enforcement', () => {
 
         expect(mockDeps.orchestrator.restartTask).toHaveBeenCalledTimes(1);
         expect(mockDeps.orchestrator.restartTask).toHaveBeenCalledWith('wf-1/task-claimed');
-        expect(executeTasksSpy).toHaveBeenCalled();
-        executeTasksSpy.mockRestore();
       });
 
       it('headless set agent with deps.noTrack=true returns without polling all workflows', async () => {

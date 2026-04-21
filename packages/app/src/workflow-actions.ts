@@ -11,6 +11,7 @@ import type { Orchestrator, ExternalGatePolicyUpdate } from '@invoker/workflow-c
 import type { TaskState } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import type { TaskRunner } from '@invoker/execution-engine';
+import { dispatchTasksIfNeeded } from './global-topup.js';
 import { normalizeMergeModeForPersistence } from './merge-mode.js';
 
 // ── Deps interfaces ──────────────────────────────────────────
@@ -82,9 +83,12 @@ export async function approveTask(
     const runnable = started.filter(
       (t) => t.status === 'running' && !(t.config.isMergeNode && t.id === taskId),
     );
-    if (runnable.length > 0) {
-      await deps.taskExecutor.executeTasks(runnable);
-    }
+    await dispatchTasksIfNeeded({
+      orchestrator: deps.orchestrator,
+      taskExecutor: deps.taskExecutor,
+      tasks: runnable,
+      context: 'workflow-actions.shared-approve',
+    });
   }
   return { approvedTask: task, started, fixedTask };
 }
@@ -256,8 +260,12 @@ export async function setWorkflowMergeMode(
     (mergeTask.status === 'completed' || mergeTask.status === 'awaiting_approval' || mergeTask.status === 'review_ready')
   ) {
     const started = deps.orchestrator.restartTask(mergeTask.id);
-    const runnable = started.filter((t) => t.status === 'running');
-    await deps.taskExecutor.executeTasks(runnable);
+    await dispatchTasksIfNeeded({
+      orchestrator: deps.orchestrator,
+      taskExecutor: deps.taskExecutor,
+      tasks: started,
+      context: 'workflow-actions.set-merge-mode',
+    });
   }
 }
 
@@ -533,7 +541,12 @@ export async function autoFixOnFailure(
       runnableCount: runnable.length,
       startedStatuses: started.map(t => t.status),
     });
-    if (runnable.length > 0) await taskExecutor.executeTasks(runnable);
+    await dispatchTasksIfNeeded({
+      orchestrator,
+      taskExecutor,
+      tasks: started,
+      context: 'workflow-actions.auto-fix-post-route-restart',
+    });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     const diagnostics = formatAutoFixDiagnostics(err);
