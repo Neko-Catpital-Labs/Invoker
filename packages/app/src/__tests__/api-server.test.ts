@@ -87,6 +87,8 @@ function createMocks() {
       reject: vi.fn(),
       revertConflictResolution: vi.fn(),
       provideInput: vi.fn(),
+      beginConflictResolution: vi.fn(() => ({ savedError: 'saved-error' })),
+      setFixAwaitingApproval: vi.fn(),
       restartTask: vi.fn(() => [makeTask()]),
       editTaskCommand: vi.fn(() => [makeTask()]),
       editTaskType: vi.fn(() => [makeTask()]),
@@ -113,6 +115,9 @@ function createMocks() {
     taskExecutor: {
       executeTasks: vi.fn().mockResolvedValue(undefined),
       publishAfterFix: vi.fn().mockResolvedValue(undefined),
+      resolveConflict: vi.fn().mockResolvedValue(undefined),
+      fixWithAgent: vi.fn().mockResolvedValue(undefined),
+      commitApprovedFix: vi.fn().mockResolvedValue(undefined),
     },
     cancelTask: vi.fn().mockResolvedValue({ cancelled: ['task-1'], runningCancelled: ['task-1'] }),
     cancelWorkflow: vi.fn().mockResolvedValue({ cancelled: ['task-1'], runningCancelled: ['task-1'] }),
@@ -168,6 +173,7 @@ beforeEach(() => {
   mocks.orchestrator.getTask.mockImplementation((id: string) => (id === 'task-1' ? makeTask() : undefined));
   mocks.orchestrator.approve.mockResolvedValue([]);
   mocks.orchestrator.restartTask.mockReturnValue([makeTask()]);
+  mocks.orchestrator.beginConflictResolution.mockReturnValue({ savedError: 'saved-error' });
   mocks.orchestrator.editTaskCommand.mockReturnValue([makeTask()]);
   mocks.orchestrator.editTaskType.mockReturnValue([makeTask()]);
   mocks.orchestrator.setTaskExternalGatePolicies.mockReturnValue([makeTask()]);
@@ -186,6 +192,9 @@ beforeEach(() => {
   mocks.killRunningTask.mockResolvedValue(undefined);
   mocks.taskExecutor.executeTasks.mockResolvedValue(undefined);
   mocks.taskExecutor.publishAfterFix.mockResolvedValue(undefined);
+  mocks.taskExecutor.resolveConflict.mockResolvedValue(undefined);
+  mocks.taskExecutor.fixWithAgent.mockResolvedValue(undefined);
+  mocks.taskExecutor.commitApprovedFix.mockResolvedValue(undefined);
 });
 
 // ── Read endpoints ───────────────────────────────────────────
@@ -291,6 +300,7 @@ describe('POST /api/tasks/:id/cancel', () => {
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
     expect(mocks.cancelTask).toHaveBeenCalledWith('task-1');
+    expect(mocks.orchestrator.startExecution).toHaveBeenCalled();
   });
 
   it('falls back to orchestrator.cancelTask when callback not provided', async () => {
@@ -315,6 +325,7 @@ describe('POST /api/tasks/:id/cancel', () => {
       expect(res.status).toBe(200);
       expect(res.body.ok).toBe(true);
       expect(noCancelMocks.orchestrator.cancelTask).toHaveBeenCalledWith('task-1');
+      expect(noCancelMocks.orchestrator.startExecution).toHaveBeenCalled();
     } finally {
       await noCancelApi.close();
     }
@@ -327,6 +338,7 @@ describe('POST /api/workflows/:id/cancel', () => {
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
     expect(mocks.cancelWorkflow).toHaveBeenCalledWith('wf-1');
+    expect(mocks.orchestrator.startExecution).toHaveBeenCalled();
   });
 
   it('falls back to shared cancelWorkflow when callback not provided', async () => {
@@ -354,6 +366,7 @@ describe('POST /api/workflows/:id/cancel', () => {
       expect(res.status).toBe(200);
       expect(res.body.ok).toBe(true);
       expect(noCancelMocks.orchestrator.cancelWorkflow).toHaveBeenCalledWith('wf-1');
+      expect(noCancelMocks.orchestrator.startExecution).toHaveBeenCalled();
     } finally {
       await noCancelApi.close();
     }
@@ -429,6 +442,7 @@ describe('POST /api/tasks/:id/approve', () => {
     expect(res.body.ok).toBe(true);
     expect(res.body.action).toBe('approved');
     expect(mocks.orchestrator.approve).toHaveBeenCalledWith('task-1');
+    expect(mocks.orchestrator.startExecution).toHaveBeenCalled();
   });
 
   it('routes downstream merge nodes to executeTasks (not publishAfterFix)', async () => {
@@ -468,7 +482,7 @@ describe('POST /api/tasks/:id/approve', () => {
   });
 
   it('uses approveTaskAction when provided', async () => {
-    const approveTaskAction = vi.fn().mockResolvedValue(undefined);
+    const approveTaskAction = vi.fn().mockResolvedValue({ started: [] });
     const isolatedApi = startApiServer({
       orchestrator: mocks.orchestrator as any,
       persistence: mocks.persistence as any,
@@ -497,6 +511,14 @@ describe('POST /api/tasks/:id/approve', () => {
     } finally {
       await isolatedApi.close();
     }
+  });
+});
+
+describe('POST /api/tasks/:id/resolve-conflict', () => {
+  it('tops up globally ready work after resolve-conflict', async () => {
+    const res = await request(port, 'POST', '/api/tasks/task-1/resolve-conflict', { agent: 'claude' });
+    expect(res.status).toBe(200);
+    expect(mocks.orchestrator.startExecution).toHaveBeenCalled();
   });
 });
 

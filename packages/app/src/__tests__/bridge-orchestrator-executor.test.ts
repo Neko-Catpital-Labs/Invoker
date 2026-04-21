@@ -54,6 +54,18 @@ const FANOUT_PLAN: PlanDefinition = {
   ],
 };
 
+const INDEPENDENT_TWO_TASK_PLAN: PlanDefinition = {
+  name: 'Independent Two Task Plan',
+  onFinish: 'merge',
+  mergeMode: 'automatic',
+  baseBranch: 'master',
+  featureBranch: 'plan/independent-two',
+  tasks: [
+    { id: 'A', description: 'Task A', command: 'echo a' },
+    { id: 'B', description: 'Task B', command: 'echo b' },
+  ],
+};
+
 describe('global top-up dispatch', () => {
   it('dispatches only newly started tasks and skips duplicates', async () => {
     const duplicate = {
@@ -92,6 +104,58 @@ describe('global top-up dispatch', () => {
     expect(taskExecutor.executeTasks).toHaveBeenCalledTimes(1);
     expect(taskExecutor.executeTasks).toHaveBeenCalledWith([newTask]);
     expect(topup.map((task) => task.id)).toEqual(['wf-2/task-b']);
+  });
+
+  it('a failed fix path leaves ready pending work idle until executeGlobalTopup runs', async () => {
+    const h = createTestHarness({ maxConcurrency: 1 });
+    const started = h.loadAndStart(INDEPENDENT_TWO_TASK_PLAN);
+    expect(started.map((task) => task.id)).toEqual([expect.stringMatching(/\/A$/)]);
+
+    const taskA = h.getTask('A')!;
+    const taskB = h.getTask('B')!;
+    const attemptA = taskA.execution.selectedAttemptId!;
+    expect(taskA.status).toBe('running');
+    expect(taskB.status).toBe('pending');
+
+    h.persistence.updateTask(taskA.id, {
+      status: 'failed',
+      execution: {
+        error: 'task failed',
+        exitCode: 1,
+        completedAt: new Date(),
+      },
+    });
+    h.persistence.updateAttempt(attemptA, {
+      status: 'failed',
+      error: 'task failed',
+      exitCode: 1,
+      completedAt: new Date(),
+    });
+    (h.orchestrator as any).refreshFromDb();
+
+    const { savedError } = h.orchestrator.beginConflictResolution(taskA.id);
+    expect(h.getTask('A')!.status).toBe('fixing_with_ai');
+    expect(h.getTask('B')!.status).toBe('pending');
+
+    h.orchestrator.revertConflictResolution(taskA.id, savedError, 'Remote agent fix timed out after 600000ms');
+
+    expect(h.getTask('A')!.status).toBe('failed');
+    expect(h.getTask('B')!.status).toBe('pending');
+
+    const taskExecutor = {
+      executeTasks: vi.fn(async () => {}),
+    } as unknown as TaskRunner;
+
+    const topup = await executeGlobalTopup({
+      orchestrator: h.orchestrator,
+      taskExecutor,
+      context: 'test.bridge.failed-fix-global-topup',
+    });
+
+    expect(topup.map((task) => task.id)).toEqual([taskB.id]);
+    expect(taskExecutor.executeTasks).toHaveBeenCalledWith([
+      expect.objectContaining({ id: taskB.id, status: 'running' }),
+    ]);
   });
 });
 
