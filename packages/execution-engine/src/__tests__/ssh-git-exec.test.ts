@@ -1,3 +1,7 @@
+import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { execFileSync, execSync } from 'node:child_process';
 import { describe, it, expect } from 'vitest';
 import {
   shellPosixSingleQuote,
@@ -248,10 +252,41 @@ describe('buildWorktreeCleanupScript', () => {
     expect(script).toContain('set -euo pipefail');
     expect(script).toContain('CLONE="$HOME/.invoker/repos/abc123"');
     expect(script).toContain('WT="$HOME/.invoker/worktrees/abc123/exp-task-def"');
+    expect(script).toContain('CLONE="$HOME"');
+    expect(script).toContain('WT="$HOME"');
     expect(script).toContain('mkdir -p "$(dirname "$WT")"');
     expect(script).toContain('git -C "$CLONE" worktree prune');
     expect(script).toContain('git -C "$CLONE" worktree remove --force "$WT"');
     expect(script).toContain('[SshGitExec] Removing stale worktree path');
+  });
+
+  it('removes a stale worktree when canonicalRemoteWt starts with quoted tilde', () => {
+    const fakeHome = mkdtempSync(join(tmpdir(), 'ssh-cleanup-home-'));
+    const cloneDir = join(fakeHome, '.invoker', 'repos', 'abc123');
+    const staleWt = join(fakeHome, '.invoker', 'worktrees', 'abc123', 'exp-task-def');
+    const literalTildeRoot = join(process.cwd(), '~');
+
+    execSync(`rm -rf ${JSON.stringify(literalTildeRoot)}`);
+    mkdirSync(cloneDir, { recursive: true });
+    execSync('git init', { cwd: cloneDir, stdio: 'ignore' });
+    mkdirSync(staleWt, { recursive: true });
+    writeFileSync(join(staleWt, 'sentinel.txt'), 'stale');
+
+    const script = buildWorktreeCleanupScript({
+      remoteClone: '~/.invoker/repos/abc123',
+      canonicalRemoteWt: '~/.invoker/worktrees/abc123/exp-task-def',
+    });
+
+    execFileSync('bash', ['-lc', script], {
+      env: {
+        ...process.env,
+        HOME: fakeHome,
+      },
+    });
+
+    expect(() => execSync(`test ! -e ${JSON.stringify(join(staleWt, 'sentinel.txt'))}`)).not.toThrow();
+    expect(() => execSync(`test ! -e ${JSON.stringify(literalTildeRoot)}`)).not.toThrow();
+    execSync(`rm -rf ${JSON.stringify(literalTildeRoot)}`);
   });
 });
 
