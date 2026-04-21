@@ -700,6 +700,15 @@ echo ${payloadB64} | base64 -d | bash -se
           mappedError = `Merge conflict merging upstream branch "${branch}" on remote.\nConflicting files:\n${files}`;
         }
 
+        if (!mappedError && exitCode !== 0 && e) {
+          const allOutput = e.outputBuffer.join('');
+          const lines = allOutput.split('\n');
+          const tail = lines.slice(-50).join('\n').trim();
+          if (tail) {
+            mappedError = tail.length > 3000 ? tail.slice(-3000) : tail;
+          }
+        }
+
         let commitHash: string | undefined;
 
         if (finalizeRemote) {
@@ -715,18 +724,9 @@ echo ${payloadB64} | base64 -d | bash -se
           if (fin.error) {
             this.emitOutput(executionId, `[SshExecutor] ${fin.error}\n`);
             if (exitCode === 0) status = 'failed';
-            mappedError = fin.error;
-          }
-        }
-
-        // When the command fails but no specific error was mapped (exit 30/31),
-        // capture the tail of the output buffer so the UI shows what went wrong.
-        if (!mappedError && exitCode !== 0 && e) {
-          const allOutput = e.outputBuffer.join('');
-          const lines = allOutput.split('\n');
-          const tail = lines.slice(-50).join('\n').trim();
-          if (tail) {
-            mappedError = tail.length > 3000 ? tail.slice(-3000) : tail;
+            if (!mappedError || exitCode === 0) {
+              mappedError = fin.error;
+            }
           }
         }
 

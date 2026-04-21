@@ -31,6 +31,7 @@ import { backupPlan } from './plan-backup.js';
 import { startApiServer, type ApiServerDeps } from './api-server.js';
 import {
   approveTask,
+  editTaskCommand as sharedEditTaskCommand,
   rebaseAndRetry,
   resolveConflictAction,
   recreateWorkflow as sharedRecreateWorkflow,
@@ -40,7 +41,7 @@ import {
 } from './workflow-actions.js';
 import { openExternalTerminalForTask } from './open-terminal-for-task.js';
 import { dispatchTasksIfNeeded, executeGlobalTopup, finalizeMutationWithGlobalTopup } from './global-topup.js';
-import { getAutoFixDispatchDecision } from './auto-fix-session.js';
+import { buildAutoFixSkipOutput, getAutoFixDispatchDecision } from './auto-fix-session.js';
 import {
   delegationTimeoutMs,
   tryDelegateExec,
@@ -247,6 +248,16 @@ export function wireHeadlessAutoFix(
         reason: !shouldAutoFix ? dispatchDecision.reason : 'already-in-progress',
         dispositionReason: dispatchDecision.shouldDispatch ? undefined : dispatchDecision.dispositionReason,
       });
+      if (!shouldAutoFix) {
+        const skipOutput = buildAutoFixSkipOutput(
+          deps.orchestrator.getTask(delta.taskId),
+          dispatchDecision.reason,
+          dispatchDecision.dispositionReason,
+        );
+        if (skipOutput) {
+          deps.persistence.appendTaskOutput(delta.taskId, skipOutput);
+        }
+      }
       return;
     }
     autoFixInProgress.add(delta.taskId);
@@ -1521,15 +1532,19 @@ async function headlessEdit(taskId: string, newCommand: string, deps: HeadlessDe
   taskId = restored.resolvedTaskId;
   const taskExecutor = createHeadlessExecutor(deps);
   const autoFix = wireHeadlessAutoFix(deps, taskExecutor);
-
-  const envelope = makeEnvelope('edit-task-command', 'headless', 'task', { taskId, newCommand });
-  const result = await deps.commandService.editTaskCommand(envelope);
-  if (!result.ok) throw new Error(result.error.message);
-  const runnable = result.data.filter((task) => task.status === 'running');
-  if (runnable.length > 0) {
-    await taskExecutor.executeTasks(runnable);
-  }
+  const started = await sharedEditTaskCommand(taskId, newCommand, {
+    orchestrator: deps.orchestrator,
+    taskExecutor,
+  });
   process.stdout.write(`Edited task "${taskId}" command → "${newCommand}"\n`);
+
+  const runnable = await dispatchTasksIfNeeded({
+    orchestrator: deps.orchestrator,
+    taskExecutor,
+    tasks: started,
+    logger: deps.logger,
+    context: 'headless.edit-command',
+  });
 
   if (deps.noTrack) {
     process.stdout.write('[headless] --no-track enabled: set command accepted; exiting without tracking.\n');
