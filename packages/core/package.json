@@ -13,7 +13,7 @@
     }
   },
   "scripts": {
-    "build": "tsup src/index.ts --format esm --dts",
+    "build": "tsup src/index.ts --format esm --dts --tsconfig tsconfig.build.json",
     "test": "echo 'compat package: tests moved to @invoker/workflow-core'",
     "test:watch": "echo 'compat package: tests moved to @invoker/workflow-core'",
     "clean": "rm -rf dist"

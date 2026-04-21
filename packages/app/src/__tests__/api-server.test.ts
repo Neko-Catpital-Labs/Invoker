@@ -114,6 +114,7 @@ function createMocks() {
     executorRegistry: {},
     taskExecutor: {
       executeTasks: vi.fn().mockResolvedValue(undefined),
+      killActiveExecution: vi.fn().mockResolvedValue(undefined),
       publishAfterFix: vi.fn().mockResolvedValue(undefined),
       resolveConflict: vi.fn().mockResolvedValue(undefined),
       fixWithAgent: vi.fn().mockResolvedValue(undefined),
@@ -191,6 +192,7 @@ beforeEach(() => {
   mocks.cancelWorkflow.mockResolvedValue({ cancelled: ['task-1'], runningCancelled: ['task-1'] });
   mocks.killRunningTask.mockResolvedValue(undefined);
   mocks.taskExecutor.executeTasks.mockResolvedValue(undefined);
+  mocks.taskExecutor.killActiveExecution.mockResolvedValue(undefined);
   mocks.taskExecutor.publishAfterFix.mockResolvedValue(undefined);
   mocks.taskExecutor.resolveConflict.mockResolvedValue(undefined);
   mocks.taskExecutor.fixWithAgent.mockResolvedValue(undefined);
@@ -571,6 +573,22 @@ describe('POST /api/tasks/:id/edit', () => {
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
     expect(res.body.action).toBe('command_edited');
+    expect(mocks.orchestrator.editTaskCommand).toHaveBeenCalledWith('task-1', 'npm test');
+  });
+
+  it('interrupts fixing_with_ai before editing the command', async () => {
+    mocks.orchestrator.getTask.mockReturnValue({
+      id: 'task-1',
+      status: 'fixing_with_ai',
+      execution: { pendingFixError: 'saved failure' },
+      config: {},
+    });
+
+    const res = await request(port, 'POST', '/api/tasks/task-1/edit', { command: 'npm test' });
+
+    expect(res.status).toBe(200);
+    expect(mocks.taskExecutor.killActiveExecution).toHaveBeenCalledWith('task-1');
+    expect(mocks.orchestrator.revertConflictResolution).toHaveBeenCalledWith('task-1', 'saved failure');
     expect(mocks.orchestrator.editTaskCommand).toHaveBeenCalledWith('task-1', 'npm test');
   });
 

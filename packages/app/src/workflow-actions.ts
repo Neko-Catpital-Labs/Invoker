@@ -10,7 +10,7 @@ import type { Logger } from '@invoker/contracts';
 import type { Orchestrator, ExternalGatePolicyUpdate } from '@invoker/workflow-core';
 import type { TaskState } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
-import { getAutoFixDispatchDecision } from './auto-fix-session.js';
+import { buildAutoFixSkipOutput, getAutoFixDispatchDecision } from './auto-fix-session.js';
 import type { TaskRunner } from '@invoker/execution-engine';
 import { dispatchTasksIfNeeded } from './global-topup.js';
 import { normalizeMergeModeForPersistence } from './merge-mode.js';
@@ -186,11 +186,22 @@ export async function rebaseAndRetry(
   return bumpGenerationAndRecreate(workflowId, deps);
 }
 
-export function editTaskCommand(
+export async function editTaskCommand(
   taskId: string,
   newCommand: string,
-  deps: Pick<ActionDeps, 'orchestrator'>,
-): TaskState[] {
+  deps: Pick<ActionDeps, 'orchestrator'> & { taskExecutor?: Pick<TaskRunner, 'killActiveExecution'> },
+): Promise<TaskState[]> {
+  const task = deps.orchestrator.getTask?.(taskId);
+  if (task?.status === 'fixing_with_ai') {
+    if (!deps.taskExecutor) {
+      throw new Error(`Cannot edit fixing_with_ai task ${taskId} without a task executor`);
+    }
+    await deps.taskExecutor.killActiveExecution(taskId);
+    deps.orchestrator.revertConflictResolution(
+      taskId,
+      task.execution.pendingFixError ?? task.execution.error ?? '',
+    );
+  }
   return deps.orchestrator.editTaskCommand(taskId, newCommand);
 }
 
@@ -451,6 +462,15 @@ export async function autoFixOnFailure(
       autoFixAttempts: dispatchDecision.autoFixAttempts,
       dispositionReason: dispatchDecision.dispositionReason ?? null,
     });
+    const task = orchestrator.getTask(taskId);
+    const skipOutput = buildAutoFixSkipOutput(
+      task,
+      dispatchDecision.reason,
+      dispatchDecision.dispositionReason,
+    );
+    if (skipOutput) {
+      persistence.appendTaskOutput(taskId, skipOutput);
+    }
     return;
   }
 

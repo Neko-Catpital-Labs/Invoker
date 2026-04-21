@@ -25,7 +25,7 @@ describe('wireHeadlessAutoFix', () => {
       {
         messageBus,
         orchestrator: { shouldAutoFix, getTask } as any,
-        persistence: {} as any,
+        persistence: { logEvent: vi.fn(), appendTaskOutput: vi.fn() } as any,
       },
       {} as any,
       invokeAutoFix,
@@ -51,5 +51,52 @@ describe('wireHeadlessAutoFix', () => {
     expect(invokeAutoFix).toHaveBeenCalledTimes(1);
     expect(invokeAutoFix).toHaveBeenCalledWith('wf-1/task-1');
     expect(onError).not.toHaveBeenCalled();
+  });
+
+  it('emits a task-output skip message for fail-fast auto-fix decisions', async () => {
+    const messageBus = new LocalBus() as MessageBus;
+    const appendTaskOutput = vi.fn();
+    const getTask = vi.fn(() => ({
+      id: 'wf-1/task-1',
+      status: 'failed',
+      execution: {
+        error: '✖ 1696 problems\nno-explicit-any\nno-undef',
+        autoFixAttempts: 0,
+      },
+      config: {
+        command: 'eslint packages/',
+      },
+    }));
+    const shouldAutoFix = vi.fn(() => true);
+    const invokeAutoFix = vi.fn(async () => {});
+
+    wireHeadlessAutoFix(
+      {
+        messageBus,
+        orchestrator: { shouldAutoFix, getTask } as any,
+        persistence: { appendTaskOutput, logEvent: vi.fn() } as any,
+      },
+      {} as any,
+      invokeAutoFix,
+    );
+
+    messageBus.publish(Channels.TASK_DELTA, {
+      type: 'updated',
+      taskId: 'wf-1/task-1',
+      changes: { status: 'failed' },
+    });
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(invokeAutoFix).not.toHaveBeenCalled();
+    expect(appendTaskOutput).toHaveBeenCalledWith(
+      'wf-1/task-1',
+      expect.stringContaining('[Auto-fix] Skipped: the task failed with a broad lint error set.'),
+    );
+    expect(appendTaskOutput).toHaveBeenCalledWith(
+      'wf-1/task-1',
+      expect.stringContaining('[Auto-fix] Primary failure: ✖ 1696 problems'),
+    );
   });
 });

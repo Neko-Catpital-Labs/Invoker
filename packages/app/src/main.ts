@@ -94,6 +94,7 @@ import {
 } from './headless.js';
 import {
   approveTask as sharedApproveTask,
+  editTaskCommand as sharedEditTaskCommand,
   rebaseAndRetry,
   recreateWorkflow as sharedRecreateWorkflow,
   recreateTask as sharedRecreateTask,
@@ -108,7 +109,7 @@ import { createRequire } from 'node:module';
 import { acquireDbWriterLock, type DbWriterLockResult } from './db-writer-lock.js';
 import { applyDelta } from './delta-merge.js';
 import { shouldSkipAutoFixForError } from './auto-fix-gating.js';
-import { getAutoFixDispatchDecision, getAutoFixEnqueueDecision } from './auto-fix-session.js';
+import { buildAutoFixSkipOutput, getAutoFixDispatchDecision, getAutoFixEnqueueDecision } from './auto-fix-session.js';
 import { ensureSqliteFlushDebounceForOwner } from './sqlite-flush-policy.js';
 import type { WorkflowMutationPriority } from './workflow-mutation-coordinator.js';
 import { PersistedWorkflowMutationCoordinator } from './persisted-workflow-mutation-coordinator.js';
@@ -1123,6 +1124,14 @@ if (isHeadless) {
           autoFixAttempts: dispatchDecision.autoFixAttempts,
           dispositionReason: dispatchDecision.dispositionReason,
         });
+        const skipOutput = buildAutoFixSkipOutput(
+          orchestrator.getTask(taskId),
+          dispatchDecision.reason,
+          dispatchDecision.dispositionReason,
+        );
+        if (skipOutput) {
+          persistence.appendTaskOutput(taskId, skipOutput);
+        }
         return [];
       }
       const task = dispatchDecision.task;
@@ -1177,6 +1186,14 @@ if (isHeadless) {
         existingIntentIds: enqueueDecision.existingIntentIds,
         dispositionReason: enqueueDecision.dispositionReason,
       });
+      const skipOutput = buildAutoFixSkipOutput(
+        orchestrator.getTask(taskId),
+        enqueueDecision.reason,
+        enqueueDecision.dispositionReason,
+      );
+      if (skipOutput) {
+        persistence.appendTaskOutput(taskId, skipOutput);
+      }
       return;
     }
     const configuredAgent = loadConfig().autoFixAgent?.trim();
@@ -3088,10 +3105,11 @@ if (isHeadless) {
       const newCommand = String(newCommandArg);
       logger.info(`edit-task-command: "${taskId}" → "${newCommand}"`, { module: 'ipc' });
       try {
-        const envelope = makeEnvelope('edit-task-command', 'ui', 'task', { taskId, newCommand });
-        const result = await commandService.editTaskCommand(envelope);
-        if (!result.ok) throw new Error(result.error.message);
-        const runnable = result.data.filter(t => t.status === 'running');
+        const started = await sharedEditTaskCommand(taskId, newCommand, {
+          orchestrator,
+          taskExecutor: requireTaskExecutor(),
+        });
+        const runnable = started.filter(t => t.status === 'running');
         void runnable;
       } catch (err) {
         logger.error(`edit-task-command failed: ${err}`, { module: 'ipc' });
