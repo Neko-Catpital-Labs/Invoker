@@ -279,6 +279,14 @@ export class TaskRunner {
     await Promise.all(tasks.map((task) => this.executeTask(task)));
   }
 
+  private dispatchStartedTasksIfNeeded(tasks: TaskState[]): void {
+    if (tasks.length === 0) return;
+    if (this.orchestrator.hasTaskDispatcher?.()) {
+      return;
+    }
+    void this.executeTasks(tasks);
+  }
+
   /**
    * Execute a single task through the executor pipeline.
    *
@@ -373,9 +381,7 @@ export class TaskRunner {
         },
       };
       const newlyStarted = this.orchestrator.handleWorkerResponse(response) ?? [];
-      if (newlyStarted.length > 0) {
-        this.executeTasks(newlyStarted);
-      }
+      this.dispatchStartedTasksIfNeeded(newlyStarted);
       return;
     }
 
@@ -612,10 +618,7 @@ export class TaskRunner {
             this.callbacks.onComplete?.(task.id, normalizedResponse);
 
             const newlyStarted = this.orchestrator.handleWorkerResponse(normalizedResponse) ?? [];
-
-            if (newlyStarted.length > 0) {
-              this.executeTasks(newlyStarted);
-            }
+            this.dispatchStartedTasksIfNeeded(newlyStarted);
           } catch (err) {
             console.error(`[TaskRunner] onComplete handler failed for task=${task.id}:`, err);
             const errResponse: WorkResponse = {

@@ -18,9 +18,36 @@ type MutationTopupParams = {
   started?: TaskState[];
 };
 
+type DispatchIfNeededParams = {
+  orchestrator: Orchestrator & { hasTaskDispatcher?: () => boolean };
+  taskExecutor: TaskRunner;
+  tasks: TaskState[];
+  logger?: Logger;
+  context: string;
+};
+
 function runningExecutionKey(task: TaskState): string {
   const attemptId = task.execution.selectedAttemptId?.trim();
   return attemptId ? `attempt:${attemptId}` : `task:${task.id}`;
+}
+
+export async function dispatchTasksIfNeeded({
+  orchestrator,
+  taskExecutor,
+  tasks,
+  logger,
+  context,
+}: DispatchIfNeededParams): Promise<TaskState[]> {
+  const runnable = tasks.filter((task) => task.status === 'running');
+  if (runnable.length === 0) {
+    return [];
+  }
+  if (orchestrator.hasTaskDispatcher?.()) {
+    logger?.info(`[dispatch] ${context}: relying on orchestrator taskDispatcher for ${runnable.length} task(s)`);
+    return runnable;
+  }
+  await taskExecutor.executeTasks(runnable);
+  return runnable;
 }
 
 /**
@@ -53,7 +80,13 @@ export async function executeGlobalTopup({
   logger?.info(
     `[global-topup] ${context}: dispatching ${runnable.length} additional task(s): [${runnable.map((task) => task.id).join(', ')}]`,
   );
-  await taskExecutor.executeTasks(runnable);
+  await dispatchTasksIfNeeded({
+    orchestrator,
+    taskExecutor,
+    tasks: runnable,
+    logger,
+    context: `${context}.topup`,
+  });
   return runnable;
 }
 
