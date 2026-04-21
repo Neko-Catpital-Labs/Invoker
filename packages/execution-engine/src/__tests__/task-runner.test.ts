@@ -6596,7 +6596,7 @@ describe('TaskRunner', () => {
       for (let i = 0; i < 10; i++) await Promise.resolve();
     }
 
-    it('serializes concurrent onComplete handlers for merge-node tasks', async () => {
+    it('allows concurrent onComplete handlers for merge-node tasks', async () => {
       const log: string[] = [];
       const deferred1 = createDeferred();
       const deferred2 = createDeferred();

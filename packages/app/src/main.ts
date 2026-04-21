@@ -111,7 +111,7 @@ import { shouldSkipAutoFixForError } from './auto-fix-gating.js';
 import { ensureSqliteFlushDebounceForOwner } from './sqlite-flush-policy.js';
 import type { WorkflowMutationPriority } from './workflow-mutation-coordinator.js';
 import { PersistedWorkflowMutationCoordinator } from './persisted-workflow-mutation-coordinator.js';
-import { executeGlobalTopup, finalizeMutationWithGlobalTopup } from './global-topup.js';
+import { dispatchTasksIfNeeded, executeGlobalTopup, finalizeMutationWithGlobalTopup } from './global-topup.js';
 import { computeDeferredLaunchTiming } from './deferred-runnable.js';
 import { preemptWorkflowBeforeMutation, type WorkflowCancelResult } from './workflow-preemption.js';
 import { relaunchOrphansAndStartReady } from './orphan-relaunch.js';
@@ -453,7 +453,13 @@ async function wireSlackBot(deps: SlackBotDeps): Promise<any> {
       }
       case 'select_experiment': {
         const started = orchestrator.selectExperiment(command.taskId, command.experimentId);
-        await deps.executor.executeTasks(started);
+        await dispatchTasksIfNeeded({
+          orchestrator,
+          taskExecutor: deps.executor,
+          tasks: started,
+          logger,
+          context: 'slack.select-experiment',
+        });
         break;
       }
       case 'provide_input':
@@ -599,7 +605,13 @@ if (isHeadless) {
           case 'invoker:start': {
             const executor = createStandaloneTaskExecutor();
             const started = orchestrator.startExecution();
-            await executor.executeTasks(started);
+            await dispatchTasksIfNeeded({
+              orchestrator,
+              taskExecutor: executor,
+              tasks: started,
+              logger,
+              context: 'standalone.invoker:start',
+            });
             return started;
           }
           case 'invoker:set-merge-branch': {
@@ -619,11 +631,14 @@ if (isHeadless) {
             const envelope = makeEnvelope('replace-task', 'ui', 'task', { taskId, replacementTasks });
             const result = await commandService.replaceTask(envelope);
             if (!result.ok) throw new Error(result.error.message);
-            const runnable = result.data.filter((task) => task.status === 'running');
-            if (runnable.length > 0) {
-              const executor = createStandaloneTaskExecutor();
-              await executor.executeTasks(runnable);
-            }
+            const executor = createStandaloneTaskExecutor();
+            await dispatchTasksIfNeeded({
+              orchestrator,
+              taskExecutor: executor,
+              tasks: result.data,
+              logger,
+              context: 'standalone.replace-task',
+            });
             return result.data;
           }
           case 'invoker:check-pr-statuses': {
@@ -649,12 +664,23 @@ if (isHeadless) {
               const envelope = makeEnvelope('select-experiment', 'ui', 'task', { taskId, experimentId: ids[0] });
               const result = await commandService.selectExperiment(envelope);
               if (!result.ok) throw new Error(result.error.message);
-              const runnable = result.data.filter((task) => task.status === 'running');
-              if (runnable.length > 0) await executor.executeTasks(runnable);
+              await dispatchTasksIfNeeded({
+                orchestrator,
+                taskExecutor: executor,
+                tasks: result.data,
+                logger,
+                context: 'standalone.select-experiment.single',
+              });
               return undefined;
             }
             const newlyStarted = await sharedSelectExperiments(taskId, ids, { orchestrator, taskExecutor: executor });
-            await executor.executeTasks(newlyStarted);
+            await dispatchTasksIfNeeded({
+              orchestrator,
+              taskExecutor: executor,
+              tasks: newlyStarted,
+              logger,
+              context: 'standalone.select-experiment.multi',
+            });
             return undefined;
           }
           case 'invoker:set-task-external-gate-policies': {
@@ -663,11 +689,14 @@ if (isHeadless) {
             const envelope = makeEnvelope('set-gate-policies', 'ui', 'task', { taskId, updates });
             const result = await commandService.setTaskExternalGatePolicies(envelope);
             if (!result.ok) throw new Error(result.error.message);
-            const runnable = result.data.filter((task) => task.status === 'running');
-            if (runnable.length > 0) {
-              const executor = createStandaloneTaskExecutor();
-              await executor.executeTasks(runnable);
-            }
+            const executor = createStandaloneTaskExecutor();
+            await dispatchTasksIfNeeded({
+              orchestrator,
+              taskExecutor: executor,
+              tasks: result.data,
+              logger,
+              context: 'standalone.set-task-external-gate-policies',
+            });
             return undefined;
           }
           default:
@@ -1362,7 +1391,13 @@ if (isHeadless) {
 
     const allStarted = relaunchOrphansAndStartReady(orchestrator, logger, 'ipc-delegate', workflowId);
     if (allStarted.length > 0) {
-      requireTaskExecutor().executeTasks(allStarted).catch(err => {
+      dispatchTasksIfNeeded({
+        orchestrator,
+        taskExecutor: requireTaskExecutor() as TaskRunner,
+        tasks: allStarted,
+        logger,
+        context: 'ipc-delegate.headless.resume',
+      }).catch(err => {
         logger.error(`headless.resume: executeTasks failed for "${workflowId}": ${err}`, { module: 'ipc-delegate' });
       });
     }
@@ -1889,7 +1924,13 @@ if (isHeadless) {
           if (ownerMode && !invokerConfig.disableAutoRunOnStartup) {
             const newlyStarted = relaunchOrphansAndStartReady(orchestrator, logger, 'background-hydration');
             if (newlyStarted.length > 0) {
-              requireTaskExecutor().executeTasks(newlyStarted);
+              void dispatchTasksIfNeeded({
+                orchestrator,
+                taskExecutor: requireTaskExecutor(),
+                tasks: newlyStarted,
+                logger,
+                context: 'background-hydration',
+              });
             }
             requireTaskExecutor().resumeMergeGatePolling();
           }
@@ -2237,7 +2278,13 @@ if (isHeadless) {
     } else {
       const allStarted = relaunchOrphansAndStartReady(orchestrator, logger, 'init');
       if (allStarted.length > 0) {
-        requireTaskExecutor().executeTasks(allStarted);
+        void dispatchTasksIfNeeded({
+          orchestrator,
+          taskExecutor: requireTaskExecutor(),
+          tasks: allStarted,
+          logger,
+          context: 'init',
+        });
       }
       requireTaskExecutor().resumeMergeGatePolling();
     }
@@ -2337,7 +2384,13 @@ if (isHeadless) {
       logger.info('start', { module: 'ipc' });
       const started = orchestrator.startExecution();
       logger.info(`startExecution returned ${started.length} tasks: [${started.map(t => t.id).join(', ')}]`, { module: 'ipc' });
-      await requireTaskExecutor().executeTasks(started);
+      await dispatchTasksIfNeeded({
+        orchestrator,
+        taskExecutor: requireTaskExecutor(),
+        tasks: started,
+        logger,
+        context: 'ipc.start',
+      });
       return started;
     });
 
@@ -2359,7 +2412,13 @@ if (isHeadless) {
       }
       logger.info(`resume-workflow: ${tasks.length} tasks loaded across ${workflows.length} workflows, ${allStarted.length} started`, { module: 'ipc' });
       if (allStarted.length > 0) {
-        void requireTaskExecutor().executeTasks(allStarted);
+        void dispatchTasksIfNeeded({
+          orchestrator,
+          taskExecutor: requireTaskExecutor(),
+          tasks: allStarted,
+          logger,
+          context: 'ipc.resume-workflow',
+        });
       }
       requireTaskExecutor().resumeMergeGatePolling();
       return { workflow: workflows[0], taskCount: tasks.length, startedCount: allStarted.length };
@@ -2593,12 +2652,23 @@ if (isHeadless) {
           const envelope = makeEnvelope('select-experiment', 'ui', 'task', { taskId, experimentId: ids[0] });
           const result = await commandService.selectExperiment(envelope);
           if (!result.ok) throw new Error(result.error.message);
-          const runnable = result.data.filter(t => t.status === 'running');
-          await requireTaskExecutor().executeTasks(runnable);
+          await dispatchTasksIfNeeded({
+            orchestrator,
+            taskExecutor: requireTaskExecutor(),
+            tasks: result.data,
+            logger,
+            context: 'ipc.select-experiment.single',
+          });
         } else {
           // Multi-select: needs taskExecutor for branch merge, stays in workflow-actions
           const newlyStarted = await sharedSelectExperiments(taskId, ids, { orchestrator, taskExecutor: requireTaskExecutor() });
-          await requireTaskExecutor().executeTasks(newlyStarted);
+          await dispatchTasksIfNeeded({
+            orchestrator,
+            taskExecutor: requireTaskExecutor(),
+            tasks: newlyStarted,
+            logger,
+            context: 'ipc.select-experiment.multi',
+          });
         }
       } catch (err) {
         logger.error(`select-experiment failed: ${err}`, { module: 'ipc' });
