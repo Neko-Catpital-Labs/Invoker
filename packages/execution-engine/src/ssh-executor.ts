@@ -6,7 +6,8 @@ import type { ExecutorHandle, PersistedTaskMeta, TerminalSpec } from './executor
 import { BaseExecutor, type BaseEntry } from './base-executor.js';
 import { killProcessGroup, cleanElectronEnv, SIGKILL_TIMEOUT_MS } from './process-utils.js';
 import { computeBranchHash } from './branch-utils.js';
-import { findManagedWorktreeForBranch, abbrevRefMatchesBranch } from './worktree-discovery.js';
+import { planManagedWorktree } from './managed-worktree-controller.js';
+import { findManagedWorktreeForBranch, findManagedWorktreeByActionId, abbrevRefMatchesBranch } from './worktree-discovery.js';
 import { DEFAULT_WORKTREE_PROVISION_COMMAND } from './default-worktree-provision-command.js';
 import type { AgentRegistry } from './agent-registry.js';
 import { computeRepoUrlHash, sanitizeBranchForPath } from './git-utils.js';
@@ -19,6 +20,7 @@ import {
   buildWorktreeListScript,
   buildWorktreeHeadScript,
   buildWorktreeCleanupScript,
+  buildWorktreeRenameBranchScript,
   buildRecordAndPushScript,
   parseRecordAndPushOutput,
   createSshRemoteScriptError,
@@ -352,39 +354,102 @@ echo ${payloadB64} | base64 -d | bash -se
       : invokerHome;
     const managedPrefix = normalize(`${expandedInvokerHome}/worktrees/${h}`);
     const reuseAbs = findManagedWorktreeForBranch(porcelain, experimentBranch, [managedPrefix]);
-
-    let remoteWt = canonicalRemoteWt;
-    let skippedRemotePreserve = false;
-
+    let exactBranchCandidate:
+      | { path: string; headMatchesTargetBranch: boolean }
+      | undefined;
     if (reuseAbs) {
       const headScript = buildWorktreeHeadScript(reuseAbs);
       try {
         const head = (await this.execRemoteCapture(headScript)).trim();
-        if (abbrevRefMatchesBranch(head, experimentBranch)) {
-          skippedRemotePreserve = true;
-          remoteWt = reuseAbs;
-          // Update handle.workspacePath to reused path (may differ from canonical if tilde-expanded)
-          handle.workspacePath =
-            reuseAbs.startsWith(`${remoteHome}/`) ? `~${reuseAbs.slice(remoteHome.length)}` : reuseAbs;
-        }
+        exactBranchCandidate = {
+          path: reuseAbs,
+          headMatchesTargetBranch: abbrevRefMatchesBranch(head, experimentBranch),
+        };
       } catch {
-        /* fall through to fresh setup */
+        exactBranchCandidate = undefined;
       }
     }
 
-    if (!skippedRemotePreserve) {
-      const cleanupScript = buildWorktreeCleanupScript({
-        remoteClone,
-        canonicalRemoteWt,
-      });
-      await this.execRemoteCapture(cleanupScript, 'cleanup_worktree');
-      remoteWt = canonicalRemoteWt;
-      // handle.workspacePath already set to canonical path above; no update needed
+    let actionIdCandidate:
+      | { path: string; branch: string; baseIsAncestorOfHead: boolean }
+      | undefined;
+    const actionIdHit = findManagedWorktreeByActionId(porcelain, request.actionId, [managedPrefix]);
+    if (actionIdHit && actionIdHit.path !== reuseAbs) {
+      let baseIsAncestorOfHead = true;
+      try {
+        await this.execRemoteCapture(
+          `set -euo pipefail
+WT=${sshGitShellQuote(actionIdHit.path)}
+BASE=${sshGitShellQuote(resolvedBaseRef)}
+git -C "$WT" merge-base --is-ancestor "$BASE" HEAD
+`,
+          'check_action_reuse_base',
+        );
+      } catch {
+        baseIsAncestorOfHead = false;
+      }
+      actionIdCandidate = {
+        path: actionIdHit.path,
+        branch: actionIdHit.branch,
+        baseIsAncestorOfHead,
+      };
+    }
+
+    const worktreePlan = planManagedWorktree({
+      targetBranch: experimentBranch,
+      targetWorktreePath: canonicalRemoteWt,
+      forceFresh: request.inputs.freshWorkspace === true,
+      exactBranchCandidate,
+      actionIdCandidate,
+    });
+
+    let remoteWt = canonicalRemoteWt;
+    let skippedRemotePreserve = false;
+
+    switch (worktreePlan.kind) {
+      case 'reuse_exact':
+        skippedRemotePreserve = true;
+        remoteWt = worktreePlan.worktreePath;
+        handle.workspacePath =
+          remoteWt.startsWith(`${remoteHome}/`) ? `~${remoteWt.slice(remoteHome.length)}` : remoteWt;
+        break;
+      case 'rename_reuse': {
+        const renameScript = buildWorktreeRenameBranchScript({
+          worktreePath: worktreePlan.worktreePath,
+          fromBranch: worktreePlan.fromBranch,
+          toBranch: worktreePlan.toBranch,
+        });
+        try {
+          const head = (await this.execRemoteCapture(renameScript, 'rename_reuse_branch')).trim();
+          if (abbrevRefMatchesBranch(head, worktreePlan.toBranch)) {
+            skippedRemotePreserve = true;
+            remoteWt = worktreePlan.worktreePath;
+            handle.workspacePath =
+              remoteWt.startsWith(`${remoteHome}/`) ? `~${remoteWt.slice(remoteHome.length)}` : remoteWt;
+          }
+        } catch {
+          const cleanupScript = buildWorktreeCleanupScript({
+            remoteClone,
+            worktreePaths: [canonicalRemoteWt],
+          });
+          await this.execRemoteCapture(cleanupScript, 'cleanup_worktree');
+          remoteWt = canonicalRemoteWt;
+        }
+        break;
+      }
+      case 'recreate': {
+        const cleanupScript = buildWorktreeCleanupScript({
+          remoteClone,
+          worktreePaths: worktreePlan.cleanupPaths,
+        });
+        await this.execRemoteCapture(cleanupScript, 'cleanup_worktree');
+        remoteWt = canonicalRemoteWt;
+        break;
+      }
     }
 
     if (skippedRemotePreserve) {
       await this.mergeRequestUpstreamBranches(request, remoteWt, resolvedBaseRef);
-      // handle.branch already set above; no update needed
     } else {
       try {
         await this.setupTaskBranch(remoteClone, request, handle, {

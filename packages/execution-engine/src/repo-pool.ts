@@ -3,6 +3,7 @@ import { mkdirSync, existsSync, rmSync } from 'node:fs';
 import { normalize } from 'node:path';
 import { bashPreserveOrReset, runBashLocal } from './branch-utils.js';
 import { RESTART_TO_BRANCH_TRACE, traceExecution } from './exec-trace.js';
+import { planManagedWorktree } from './managed-worktree-controller.js';
 import {
   abbrevRefMatchesBranch,
   canonicalPathForComparison,
@@ -243,77 +244,101 @@ export class RepoPool {
       porcelain = '';
     }
 
-    let effectivePath = worktreePath;
-    let reusedExisting = false;
     const allowReuse = opts?.forceFresh !== true;
-
     const reuseCandidate = allowReuse ? findManagedWorktreeForBranch(porcelain, branch, managedPrefixes) : undefined;
+    let exactBranchCandidate: { path: string; headMatchesTargetBranch: boolean } | undefined;
     if (reuseCandidate && existsSync(reuseCandidate)) {
       try {
         const head = (await this.execGit(['rev-parse', '--abbrev-ref', 'HEAD'], reuseCandidate)).trim();
-        if (abbrevRefMatchesBranch(head, branch)) {
-          effectivePath = reuseCandidate;
-          reusedExisting = true;
-          traceExecution(
-            `${RESTART_TO_BRANCH_TRACE} RepoPool.doAcquireWorktree reuse existing worktree path=${effectivePath} branch=${branch}`,
-          );
-        }
+        exactBranchCandidate = {
+          path: reuseCandidate,
+          headMatchesTargetBranch: abbrevRefMatchesBranch(head, branch),
+        };
       } catch {
-        /* fall through to create */
+        exactBranchCandidate = undefined;
       }
     }
 
-    // Fallback: reuse worktree for same actionId but different hash (preserves conflict resolutions).
-    // Only reuse when the new `base` is an ancestor of the existing worktree's HEAD — this means
-    // the worktree already contains the caller's base revision and only the experiment commits are
-    // "extra" (e.g. conflict resolution). If `base` has advanced beyond what the worktree contains
-    // (e.g. master moved forward and rebaseAndRetry/bumpGeneration wants a fresh branch from the
-    // new base), skip reuse and fall through to fresh creation.
-    if (allowReuse && !reusedExisting && actionId) {
+    let actionIdCandidate:
+      | { path: string; branch: string; baseIsAncestorOfHead: boolean }
+      | undefined;
+    if (allowReuse && actionId) {
       const actionIdHit = findManagedWorktreeByActionId(porcelain, actionId, managedPrefixes);
       if (actionIdHit && existsSync(actionIdHit.path)) {
         let baseIsAncestorOfHead = true;
         if (base) {
           try {
             await this.execGit(['merge-base', '--is-ancestor', base, 'HEAD'], actionIdHit.path);
-            // exit 0 → base is ancestor of HEAD → worktree is up-to-date with caller's base
           } catch {
             baseIsAncestorOfHead = false;
           }
         }
-        if (baseIsAncestorOfHead) {
-          try {
-            await this.execGit(['branch', '-m', actionIdHit.branch, branch], actionIdHit.path);
-            const head = (await this.execGit(['rev-parse', '--abbrev-ref', 'HEAD'], actionIdHit.path)).trim();
-            if (abbrevRefMatchesBranch(head, branch)) {
-              effectivePath = actionIdHit.path;
-              reusedExisting = true;
-              traceExecution(
-                `${RESTART_TO_BRANCH_TRACE} RepoPool.doAcquireWorktree reuse by actionId: renamed ${actionIdHit.branch} → ${branch} path=${effectivePath}`,
-              );
-            }
-          } catch { /* fall through to create fresh */ }
-        } else {
-          traceExecution(
-            `${RESTART_TO_BRANCH_TRACE} RepoPool.doAcquireWorktree skip actionId reuse: base=${base?.slice(0, 8) ?? 'unset'} is not ancestor of HEAD at ${actionIdHit.path} (base advanced → fresh branch)`,
-          );
-        }
+        actionIdCandidate = {
+          path: actionIdHit.path,
+          branch: actionIdHit.branch,
+          baseIsAncestorOfHead,
+        };
       }
     }
 
-    if (!reusedExisting) {
-      await this.reconcileStaleWorktreePath(clonePath, worktreePath);
-      mkdirSync(worktreeParent, { recursive: true });
-      const script = bashPreserveOrReset({
-        repoDir: clonePath,
-        worktreeDir: worktreePath,
-        branch,
-        base: base ?? 'HEAD',
-      });
-      await runBashLocal(script, clonePath);
-      effectivePath = worktreePath;
-    } else {
-      mkdirSync(worktreeParent, { recursive: true });
+    const plan = planManagedWorktree({
+      targetBranch: branch,
+      targetWorktreePath: worktreePath,
+      forceFresh: opts?.forceFresh,
+      exactBranchCandidate,
+      actionIdCandidate,
+    });
+
+    let effectivePath = worktreePath;
+    switch (plan.kind) {
+      case 'reuse_exact':
+        effectivePath = plan.worktreePath;
+        traceExecution(
+          `${RESTART_TO_BRANCH_TRACE} RepoPool.doAcquireWorktree reuse existing worktree path=${effectivePath} branch=${branch}`,
+        );
+        mkdirSync(worktreeParent, { recursive: true });
+        break;
+      case 'rename_reuse':
+        try {
+          await this.execGit(['branch', '-m', plan.fromBranch, plan.toBranch], plan.worktreePath);
+          const head = (await this.execGit(['rev-parse', '--abbrev-ref', 'HEAD'], plan.worktreePath)).trim();
+          if (!abbrevRefMatchesBranch(head, plan.toBranch)) {
+            throw new Error(`renamed worktree HEAD mismatch: ${head}`);
+          }
+          effectivePath = plan.worktreePath;
+          traceExecution(
+            `${RESTART_TO_BRANCH_TRACE} RepoPool.doAcquireWorktree reuse by actionId: renamed ${plan.fromBranch} → ${plan.toBranch} path=${effectivePath}`,
+          );
+          mkdirSync(worktreeParent, { recursive: true });
+        } catch {
+          await this.reconcileStaleWorktreePath(clonePath, worktreePath);
+          mkdirSync(worktreeParent, { recursive: true });
+          const script = bashPreserveOrReset({
+            repoDir: clonePath,
+            worktreeDir: worktreePath,
+            branch,
+            base: base ?? 'HEAD',
+          });
+          await runBashLocal(script, clonePath);
+          effectivePath = worktreePath;
+        }
+        break;
+      case 'recreate':
+        for (const cleanupPath of plan.cleanupPaths) {
+          await this.reconcileStaleWorktreePath(clonePath, cleanupPath);
+        }
+        mkdirSync(worktreeParent, { recursive: true });
+        {
+          const script = bashPreserveOrReset({
+            repoDir: clonePath,
+            worktreeDir: worktreePath,
+            branch,
+            base: base ?? 'HEAD',
+          });
+          await runBashLocal(script, clonePath);
+        }
+        effectivePath = worktreePath;
+        break;
     }
 
     effectivePath = canonicalPathForComparison(effectivePath);

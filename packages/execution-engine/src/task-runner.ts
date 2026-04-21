@@ -78,6 +78,8 @@ function getExecutorStartTimeoutMs(): number {
 
 export interface TaskRunnerCallbacks {
   onOutput?: (taskId: string, data: string) => void;
+  onLaunchStart?: (taskId: string, executor: Executor) => void;
+  onLaunchFailed?: (taskId: string, error: Error, executor: Executor) => void;
   onSpawned?: (taskId: string, handle: ExecutorHandle, executor: Executor) => void;
   onComplete?: (taskId: string, response: WorkResponse) => void;
   onHeartbeat?: (taskId: string) => void;
@@ -449,6 +451,7 @@ export class TaskRunner {
       `${RESTART_TO_BRANCH_TRACE} executeTaskInner taskId=${task.id} selectExecutor → type=${executor.type} calling executor.start()`,
     );
     traceExecution(`[trace] TaskRunner: task=${task.id} calling executor.start() type=${executor.type}`);
+    this.callbacks.onLaunchStart?.(task.id, executor);
     const startT0 = Date.now();
     const startTimeoutMs = getExecutorStartTimeoutMs();
     const preStartHeartbeatTimer = setInterval(() => {
@@ -493,10 +496,12 @@ export class TaskRunner {
           execution: execution as any,
         });
       }
-      throw new Error(
-        startupErrorMessage.trimEnd(),
+      const wrapped = new Error(
+        `Executor startup failed (${executor.type}): ${err instanceof Error ? err.message : String(err)}`,
         { cause: err },
       );
+      this.callbacks.onLaunchFailed?.(task.id, wrapped, executor);
+      throw wrapped;
     } finally {
       clearInterval(preStartHeartbeatTimer);
       if (preStartTimeout) clearTimeout(preStartTimeout);
