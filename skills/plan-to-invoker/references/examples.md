@@ -84,7 +84,7 @@ When the source is a policy or architecture document with a decision table, the 
 **Pattern**:
 - Extract `coverageItems` for decision rows, exception rules, lifecycle commands, and invariants.
 - Author one or more workflows that collectively cover every required item.
-- Generate a `coverage-map.json` file that assigns every required `coverageKey` to one or more workflow labels with rationale.
+- Generate a `coverage-map.json` file that preserves `sourceKind`/`sourceFile` and assigns every required `coverageKey` to one or more workflow labels with rationale.
 - Generate a `stack-manifest.json` file, preferably from `generate-stack-manifest-template.sh`, then fill in the actual authored workflow labels and plan files for the final stack.
 - Fail the planning pipeline if the source is classified as `policy_matrix` but coverage extraction is empty, the generated verify scaffold collapses to `verify-noop`, a coverage map is missing, or a coverage-map label does not exist in the stack manifest when validating against the source document.
 

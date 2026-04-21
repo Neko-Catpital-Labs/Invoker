@@ -57,7 +57,7 @@ rg -q '^  - id: verify-coverage-hard-invariant-cancel-first$' "$verify_plan" || 
 
 bash "$CHECK_SCRIPT" "$assumptions" "$verify_plan" >/dev/null || fail "coverage check failed"
 bash "$GENERATE_MAP_SCRIPT" "$assumptions" > "$map_template"
-jq -e '.mappings | length > 0' "$map_template" >/dev/null || fail "expected generated coverage map template"
+jq -e '.sourceKind == "policy_matrix" and .sourceFile == $source and (.mappings | length > 0)' --arg source "$SOURCE_DOC" "$map_template" >/dev/null || fail "expected generated coverage map template"
 bash "$GENERATE_MANIFEST_SCRIPT" "$GOOD_MAP" "$SOURCE_DOC" > "$manifest_template"
 jq -e '.sourceFile == $source and (.workflows | length > 0)' --arg source "$SOURCE_DOC" "$manifest_template" >/dev/null || fail "expected generated stack manifest template"
 jq -e '.workflows[] | select(.label == "Step 17: Explicit lifecycle commands obey the matrix" and .planFile == "")' "$manifest_template" >/dev/null || fail "expected generated stack manifest template to include workflow labels with blank planFile"
@@ -92,6 +92,18 @@ bad_rationale="$tmpdir/bad-rationale.json"
 jq '(.mappings[] | select(.coverageKey == "hard-invariant-cancel-first") | .rationale) = ""' "$GOOD_MAP" > "$bad_rationale"
 if bash "$CHECK_MAP_SCRIPT" "$assumptions" "$bad_rationale" >/dev/null 2>&1; then
   fail "expected empty rationale to fail"
+fi
+
+bad_map_source="$tmpdir/bad-source-map.json"
+jq '.sourceFile = "skills/plan-to-invoker/fixtures/policy/not-the-task-invalidation-chart.md"' "$GOOD_MAP" > "$bad_map_source"
+if bash "$CHECK_MAP_SCRIPT" "$assumptions" "$bad_map_source" >/dev/null 2>&1; then
+  fail "expected wrong coverage-map sourceFile to fail"
+fi
+
+bad_map_kind="$tmpdir/bad-kind-map.json"
+jq '.sourceKind = "generic"' "$GOOD_MAP" > "$bad_map_kind"
+if bash "$CHECK_MAP_SCRIPT" "$assumptions" "$bad_map_kind" >/dev/null 2>&1; then
+  fail "expected wrong coverage-map sourceKind to fail"
 fi
 
 bad_unused_manifest="$tmpdir/bad-unused-step.stack-manifest.json"

@@ -23,6 +23,25 @@ jq -e 'type == "object" and (.mappings | type == "array")' "$coverage_map_file" 
 tmpdir="$(mktemp -d)"
 trap 'rm -rf "$tmpdir"' EXIT
 
+coverage_map_dir="$(cd "$(dirname "$coverage_map_file")" && pwd)"
+repo_root=""
+if git -C "$coverage_map_dir" rev-parse --show-toplevel >/dev/null 2>&1; then
+  repo_root="$(git -C "$coverage_map_dir" rev-parse --show-toplevel)"
+fi
+
+resolve_path() {
+  local candidate="$1"
+  if [[ "$candidate" = /* ]]; then
+    printf '%s\n' "$candidate"
+    return 0
+  fi
+  if [[ -n "$repo_root" ]]; then
+    printf '%s\n' "$repo_root/$candidate"
+    return 0
+  fi
+  printf '%s\n' "$coverage_map_dir/$candidate"
+}
+
 expected="$tmpdir/expected.txt"
 mapped="$tmpdir/mapped.txt"
 missing="$tmpdir/missing.txt"
@@ -30,6 +49,7 @@ unexpected="$tmpdir/unexpected.txt"
 empty_labels="$tmpdir/empty_labels.txt"
 rowtype_mismatches="$tmpdir/rowtype_mismatches.txt"
 missing_rationale="$tmpdir/missing_rationale.txt"
+source_mismatches="$tmpdir/source_mismatches.txt"
 
 jq -r '.coverageItems[] | select(.mustCover != false) | .coverageKey' "$assumptions_file" | sort -u > "$expected"
 jq -r '.mappings[]?.coverageKey // empty' "$coverage_map_file" | sort -u > "$mapped"
@@ -53,6 +73,26 @@ jq -r --slurpfile assumptions "$assumptions_file" '
 jq -r '.mappings[]
   | select(((.rationale // "") | type) != "string" or (((.rationale // "") | gsub("^\\s+|\\s+$"; "")) | length) == 0)
   | .coverageKey' "$coverage_map_file" > "$missing_rationale" || true
+
+expected_source_kind="$(jq -r '.sourceKind // "generic"' "$assumptions_file")"
+actual_source_kind="$(jq -r '.sourceKind // empty' "$coverage_map_file")"
+if [[ "$actual_source_kind" != "$expected_source_kind" ]]; then
+  printf 'sourceKind expected %s, got %s\n' "$expected_source_kind" "${actual_source_kind:-<missing>}" > "$source_mismatches"
+fi
+
+expected_source_file="$(jq -r '.sourceFile // empty' "$assumptions_file")"
+actual_source_file="$(jq -r '.sourceFile // empty' "$coverage_map_file")"
+if [[ -n "$expected_source_file" ]]; then
+  resolved_expected_source_file="$(resolve_path "$expected_source_file")"
+  if [[ -z "$actual_source_file" ]]; then
+    printf 'sourceFile expected %s, got <missing>\n' "$resolved_expected_source_file" >> "$source_mismatches"
+  else
+    resolved_actual_source_file="$(resolve_path "$actual_source_file")"
+    if [[ "$resolved_actual_source_file" != "$resolved_expected_source_file" ]]; then
+      printf 'sourceFile expected %s, got %s\n' "$resolved_expected_source_file" "$resolved_actual_source_file" >> "$source_mismatches"
+    fi
+  fi
+fi
 
 if [[ -s "$missing" ]]; then
   echo "coverage map is missing required coverage keys:" >&2
@@ -81,6 +121,12 @@ fi
 if [[ -s "$missing_rationale" ]]; then
   echo "coverage map entries must include a non-empty rationale:" >&2
   sed 's/^/  - /' "$missing_rationale" >&2
+  exit 1
+fi
+
+if [[ -s "$source_mismatches" ]]; then
+  echo "coverage map must match the validated policy source:" >&2
+  sed 's/^/  - /' "$source_mismatches" >&2
   exit 1
 fi
 
