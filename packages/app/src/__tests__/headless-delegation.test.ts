@@ -102,6 +102,10 @@ describe('headless delegation enforcement', () => {
       mockDeps.orchestrator.getWorkflowStatus = vi.fn(() => 'running');
       mockDeps.orchestrator.syncFromDb = vi.fn();
       mockDeps.orchestrator.restartTask = vi.fn(() => []);
+      mockDeps.orchestrator.getTask = vi.fn(() => undefined);
+      mockDeps.orchestrator.editTaskCommand = vi.fn(() => []);
+      mockDeps.orchestrator.editTaskType = vi.fn(() => []);
+      mockDeps.orchestrator.editTaskAgent = vi.fn(() => []);
       mockDeps.orchestrator.approve = vi.fn(async () => []);
       mockDeps.orchestrator.setBeforeApproveHook = vi.fn();
       mockDeps.orchestrator.provideInput = vi.fn();
@@ -284,6 +288,10 @@ describe('headless delegation enforcement', () => {
         mockDeps.orchestrator.resumeWorkflow = vi.fn(() => []);
         mockDeps.orchestrator.syncFromDb = vi.fn();
         mockDeps.orchestrator.restartTask = vi.fn(() => []);
+        mockDeps.orchestrator.getTask = vi.fn(() => undefined);
+        mockDeps.orchestrator.editTaskCommand = vi.fn(() => []);
+        mockDeps.orchestrator.editTaskType = vi.fn(() => []);
+        mockDeps.orchestrator.editTaskAgent = vi.fn(() => []);
         mockDeps.orchestrator.setBeforeApproveHook = vi.fn();
         mockDeps.orchestrator.provideInput = vi.fn();
         mockDeps.orchestrator.approve = vi.fn(async () => []);
@@ -446,7 +454,7 @@ describe('headless delegation enforcement', () => {
           config: { workflowId: 'wf-1' },
           execution: {},
         } as any;
-        mockDeps.commandService.editTaskCommand = vi.fn(async () => ({ ok: true as const, data: [runnableTask] }));
+        mockDeps.orchestrator.editTaskCommand = vi.fn(() => [runnableTask]);
         mockDeps.commandService.editTaskType = vi.fn(async () => ({ ok: true as const, data: [runnableTask] }));
         mockDeps.commandService.editTaskAgent = vi.fn(async () => ({ ok: true as const, data: [runnableTask] }));
 
@@ -463,7 +471,7 @@ describe('headless delegation enforcement', () => {
         await runHeadless(['set', 'agent', 'wf-1/task-1', 'codex'], mockDeps);
 
         expect(executeTasksSpy).toHaveBeenCalledTimes(3);
-        expect(mockDeps.commandService.editTaskCommand).toHaveBeenCalled();
+        expect(mockDeps.orchestrator.editTaskCommand).toHaveBeenCalledWith('wf-1/task-1', 'echo ok');
         expect(mockDeps.commandService.editTaskType).toHaveBeenCalled();
         expect(mockDeps.commandService.editTaskAgent).toHaveBeenCalled();
 

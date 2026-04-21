@@ -191,7 +191,7 @@ export async function editTaskCommand(
   newCommand: string,
   deps: Pick<ActionDeps, 'orchestrator'> & { taskExecutor?: Pick<TaskRunner, 'killActiveExecution'> },
 ): Promise<TaskState[]> {
-  const task = deps.orchestrator.getTask(taskId);
+  const task = deps.orchestrator.getTask?.(taskId);
   if (task?.status === 'fixing_with_ai') {
     if (!deps.taskExecutor) {
       throw new Error(`Cannot edit fixing_with_ai task ${taskId} without a task executor`);

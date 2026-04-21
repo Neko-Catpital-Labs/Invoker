@@ -1456,11 +1456,6 @@ async function headlessEdit(taskId: string, newCommand: string, deps: HeadlessDe
   });
   process.stdout.write(`Edited task "${taskId}" command → "${newCommand}"\n`);
 
-  if (deps.noTrack) {
-    process.stdout.write('[headless] --no-track enabled: set command accepted; exiting without tracking.\n');
-    autoFix.unsubscribe();
-    return;
-  }
   const runnable = await dispatchTasksIfNeeded({
     orchestrator: deps.orchestrator,
     taskExecutor,
@@ -1468,6 +1463,12 @@ async function headlessEdit(taskId: string, newCommand: string, deps: HeadlessDe
     logger: deps.logger,
     context: 'headless.edit-command',
   });
+
+  if (deps.noTrack) {
+    process.stdout.write('[headless] --no-track enabled: set command accepted; exiting without tracking.\n');
+    autoFix.unsubscribe();
+    return;
+  }
   if (runnable.length === 0) {
     autoFix.unsubscribe();
     return;
