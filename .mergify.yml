@@ -11,12 +11,29 @@ queue_rules:
       - -draft
       - "#approved-reviews-by >= 1"
 
+  - name: admin-bypass
+    merge_method: squash
+    queue_conditions:
+      - base=master
+      - -draft
+      - label=admin-bypass
+
 pull_request_rules:
   - name: autoqueue approved PRs to master
     conditions:
       - base=master
       - -draft
       - "#approved-reviews-by >= 1"
+      - -label=admin-bypass
     actions:
       queue:
         name: default
+
+  - name: autoqueue admin-bypass PRs to master
+    conditions:
+      - base=master
+      - -draft
+      - label=admin-bypass
+    actions:
+      queue:
+        name: admin-bypass
