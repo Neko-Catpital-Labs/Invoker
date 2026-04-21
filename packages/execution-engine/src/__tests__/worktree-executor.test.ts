@@ -601,6 +601,67 @@ describe('WorktreeExecutor', () => {
     expect(release).not.toHaveBeenCalled();
   });
 
+  it('surfaces uv_cwd provisioning failure when the worktree disappears during provisioning', async () => {
+    const gitProcesses: Array<ChildProcess & EventEmitter> = [];
+    mockedSpawn.mockImplementation((cmd: string, args?: readonly string[], options?: any) => {
+      if (cmd === 'git') {
+        const gitProc = createMockProcess();
+        gitProcesses.push(gitProc);
+        Promise.resolve().then(() => {
+          const argsArr = args as string[];
+          if (argsArr?.includes('rev-parse')) {
+            gitProc.stdout!.emit('data', Buffer.from('abc123def456\n'));
+          }
+          gitProc.emit('close', 0, null);
+        });
+        return gitProc as any;
+      }
+
+      const argsArr = args as string[] | undefined;
+      if (cmd === '/bin/bash' && argsArr?.[1]?.includes('pnpm install')) {
+        const installProc = createMockProcess();
+        Promise.resolve().then(() => {
+          installProc.stderr!.emit('data', Buffer.from(
+            "ERROR\u2009 ENOENT: no such file or directory, lstat '/fake/worktrees/experiment-action-1-abc12345'\n" +
+            'Error: ENOENT: no such file or directory, uv_cwd\n',
+          ));
+          installProc.emit('close', 1, null);
+        });
+        return installProc as any;
+      }
+
+      return createMockProcess() as any;
+    });
+
+    const branch = 'experiment/action-1-abc12345';
+    const worktreePath = '/fake/worktrees/experiment-action-1-abc12345';
+    const pool = {
+      ensureClone: vi.fn().mockResolvedValue('/fake/cache/clone'),
+      acquireWorktree: vi.fn().mockResolvedValue({
+        clonePath: '/fake/cache/clone',
+        worktreePath,
+        branch,
+        release: vi.fn().mockResolvedValue(undefined),
+        softRelease: vi.fn(),
+      }),
+      destroyAll: vi.fn().mockResolvedValue(undefined),
+      getClonePath: vi.fn().mockReturnValue('/fake/cache/clone'),
+    };
+    (executor as any).pool = pool;
+
+    const err = await executor.start(makeRequest()).catch((e: unknown) => e as Error & {
+      workspacePath?: string;
+      branch?: string;
+    });
+
+    expect(err).toBeInstanceOf(Error);
+    expect(err.message).toContain('Worktree provisioning failed');
+    expect(err.message).toContain('ENOENT: no such file or directory, uv_cwd');
+    expect(err.message).toContain("lstat '/fake/worktrees/experiment-action-1-abc12345'");
+    expect(err.workspacePath).toBe(worktreePath);
+    expect(err.branch).toBe(branch);
+  });
+
   // ── Upstream branch merging ────────────────────────────────────
 
   describe('upstream branch merging', () => {
