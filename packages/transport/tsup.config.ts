@@ -7,6 +7,7 @@ const root = path.dirname(fileURLToPath(import.meta.url));
 export default defineConfig({
   entry: ['src/index.ts'],
   format: ['esm'],
+  tsconfig: 'tsconfig.build.json',
   dts: {
     compilerOptions: {
       module: 'NodeNext',
