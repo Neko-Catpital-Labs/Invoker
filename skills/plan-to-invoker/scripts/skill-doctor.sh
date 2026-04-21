@@ -289,7 +289,7 @@ if [[ -n "$COVERAGE_MAP_FILE" && -n "$STACK_MANIFEST_FILE" && "$SKIP_ASSUMPTIONS
   run_check \
     "check-stack-manifest" \
     "Validate coverage-map workflow labels against the authored stack manifest" \
-    bash "$SCRIPT_DIR/check-stack-manifest.sh" "$COVERAGE_MAP_FILE" "$STACK_MANIFEST_FILE"
+    bash "$SCRIPT_DIR/check-stack-manifest.sh" "$COVERAGE_MAP_FILE" "$STACK_MANIFEST_FILE" "$ASSUMPTIONS_INPUT"
 fi
 
 # Check 3: YAML plan validation (if not skipped)

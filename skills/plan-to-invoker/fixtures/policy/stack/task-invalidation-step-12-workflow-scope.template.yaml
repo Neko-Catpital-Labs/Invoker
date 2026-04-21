@@ -1,0 +1,28 @@
+# Minimal Verification Plan
+# Source: examples.md Section 1
+# Description: A simple plan that runs shell commands to check something. No code changes.
+# Uses `onFinish: none` because there's nothing to merge.
+#
+# When to use `onFinish: none`: Verification-only plans, checks, or exploratory tasks that don't modify code.
+# Exit codes: Command tasks succeed on exit code 0, fail on non-zero. Dependencies block if any predecessor fails.
+
+name: "Verify test suite passes"
+onFinish: none
+mergeMode: manual
+repoUrl: git@github.com:example-org/acme-repo.git
+
+tasks:
+  - id: check-core-tests
+    description: "Run core package tests"
+    command: "cd packages/core && pnpm test 2>&1"
+    dependencies: []
+
+  - id: check-executor-tests
+    description: "Run executor package tests"
+    command: "cd packages/executors && pnpm test 2>&1"
+    dependencies: []
+
+  - id: check-all-pass
+    description: "Verify all test suites passed"
+    command: "echo 'All tests passed'"
+    dependencies: [check-core-tests, check-executor-tests]

@@ -120,6 +120,7 @@ Runs all validation checks (assumption extraction, verify plan generation, schem
 
 - Extract assumptions: `bash skills/plan-to-invoker/scripts/extract-assumptions.sh <plan-file>`
 - Generate verify scaffold: `bash skills/plan-to-invoker/scripts/generate-verify-plan.sh "<plan-name>" < assumptions.json > plans/verify-<slug>.yaml`
+- Generate stack manifest template: `bash skills/plan-to-invoker/scripts/generate-stack-manifest-template.sh coverage-map.json <source-file> > stack-manifest.json`
 - Validate schema + dependencies: `bash skills/plan-to-invoker/scripts/validate-plan.sh <plan-file>`
 - Lint task atomicity + detail quality: `bash skills/plan-to-invoker/scripts/lint-task-atomicity.sh <plan-file>` (optional: `--warn-delegation`)
 - Measure plan quality over time: `references/efficacy-rubric.md`

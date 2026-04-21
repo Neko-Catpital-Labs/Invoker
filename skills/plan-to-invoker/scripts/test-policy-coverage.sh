@@ -8,12 +8,15 @@ CHECK_SCRIPT="$REPO_ROOT/skills/plan-to-invoker/scripts/check-policy-coverage.sh
 CHECK_MAP_SCRIPT="$REPO_ROOT/skills/plan-to-invoker/scripts/check-coverage-map.sh"
 CHECK_MANIFEST_SCRIPT="$REPO_ROOT/skills/plan-to-invoker/scripts/check-stack-manifest.sh"
 GENERATE_MAP_SCRIPT="$REPO_ROOT/skills/plan-to-invoker/scripts/generate-coverage-map-template.sh"
+GENERATE_MANIFEST_SCRIPT="$REPO_ROOT/skills/plan-to-invoker/scripts/generate-stack-manifest-template.sh"
 DOCTOR_SCRIPT="$REPO_ROOT/skills/plan-to-invoker/scripts/skill-doctor.sh"
 SOURCE_DOC="$REPO_ROOT/skills/plan-to-invoker/fixtures/policy/task-invalidation-chart.md"
 GOOD_MAP="$REPO_ROOT/skills/plan-to-invoker/fixtures/policy/task-invalidation-chart.coverage-map.json"
 BAD_MAP="$REPO_ROOT/skills/plan-to-invoker/fixtures/policy/task-invalidation-chart.missing-coverage-map.json"
 GOOD_MANIFEST="$REPO_ROOT/skills/plan-to-invoker/fixtures/policy/task-invalidation-chart.stack-manifest.json"
 BAD_MANIFEST="$REPO_ROOT/skills/plan-to-invoker/fixtures/policy/task-invalidation-chart.bad-stack-manifest.json"
+BAD_SOURCE_MANIFEST="$REPO_ROOT/skills/plan-to-invoker/fixtures/policy/task-invalidation-chart.bad-source.stack-manifest.json"
+BAD_PATH_MANIFEST="$REPO_ROOT/skills/plan-to-invoker/fixtures/policy/task-invalidation-chart.bad-plan-path.stack-manifest.json"
 POSITIVE_PLAN="$REPO_ROOT/skills/plan-to-invoker/fixtures/positive/01-minimal-verification.yaml"
 
 fail() {
@@ -31,6 +34,7 @@ trap 'rm -rf "$tmpdir"' EXIT
 assumptions="$tmpdir/assumptions.json"
 verify_plan="$tmpdir/verify.yaml"
 map_template="$tmpdir/coverage-map.json"
+manifest_template="$tmpdir/stack-manifest.json"
 
 bash "$EXTRACT_SCRIPT" "$SOURCE_DOC" > "$assumptions"
 
@@ -54,13 +58,22 @@ rg -q '^  - id: verify-coverage-hard-invariant-cancel-first$' "$verify_plan" || 
 bash "$CHECK_SCRIPT" "$assumptions" "$verify_plan" >/dev/null || fail "coverage check failed"
 bash "$GENERATE_MAP_SCRIPT" "$assumptions" > "$map_template"
 jq -e '.mappings | length > 0' "$map_template" >/dev/null || fail "expected generated coverage map template"
+bash "$GENERATE_MANIFEST_SCRIPT" "$GOOD_MAP" "$SOURCE_DOC" > "$manifest_template"
+jq -e '.sourceFile == $source and (.workflows | length > 0)' --arg source "$SOURCE_DOC" "$manifest_template" >/dev/null || fail "expected generated stack manifest template"
+jq -e '.workflows[] | select(.label == "Step 17: Explicit lifecycle commands obey the matrix" and .planFile == "")' "$manifest_template" >/dev/null || fail "expected generated stack manifest template to include workflow labels with blank planFile"
 bash "$CHECK_MAP_SCRIPT" "$assumptions" "$GOOD_MAP" >/dev/null || fail "expected valid coverage map to pass"
-bash "$CHECK_MANIFEST_SCRIPT" "$GOOD_MAP" "$GOOD_MANIFEST" >/dev/null || fail "expected valid stack manifest to pass"
+bash "$CHECK_MANIFEST_SCRIPT" "$GOOD_MAP" "$GOOD_MANIFEST" "$SOURCE_DOC" >/dev/null || fail "expected valid stack manifest to pass"
 if bash "$CHECK_MAP_SCRIPT" "$assumptions" "$BAD_MAP" >/dev/null 2>&1; then
   fail "expected incomplete coverage map to fail"
 fi
-if bash "$CHECK_MANIFEST_SCRIPT" "$GOOD_MAP" "$BAD_MANIFEST" >/dev/null 2>&1; then
+if bash "$CHECK_MANIFEST_SCRIPT" "$GOOD_MAP" "$BAD_MANIFEST" "$SOURCE_DOC" >/dev/null 2>&1; then
   fail "expected incomplete stack manifest to fail"
+fi
+if bash "$CHECK_MANIFEST_SCRIPT" "$GOOD_MAP" "$BAD_SOURCE_MANIFEST" "$SOURCE_DOC" >/dev/null 2>&1; then
+  fail "expected stack manifest source mismatch to fail"
+fi
+if bash "$CHECK_MANIFEST_SCRIPT" "$GOOD_MAP" "$BAD_PATH_MANIFEST" "$SOURCE_DOC" >/dev/null 2>&1; then
+  fail "expected missing planFile path in stack manifest to fail"
 fi
 
 bad_empty_labels="$tmpdir/bad-empty-labels.json"
@@ -79,6 +92,12 @@ bad_rationale="$tmpdir/bad-rationale.json"
 jq '(.mappings[] | select(.coverageKey == "hard-invariant-cancel-first") | .rationale) = ""' "$GOOD_MAP" > "$bad_rationale"
 if bash "$CHECK_MAP_SCRIPT" "$assumptions" "$bad_rationale" >/dev/null 2>&1; then
   fail "expected empty rationale to fail"
+fi
+
+bad_unused_manifest="$tmpdir/bad-unused-step.stack-manifest.json"
+jq '.workflows += [{"label":"Step 19: Unmapped extra workflow","planFile":"skills/plan-to-invoker/fixtures/positive/01-minimal-verification.yaml","order":19}]' "$GOOD_MANIFEST" > "$bad_unused_manifest"
+if bash "$CHECK_MANIFEST_SCRIPT" "$GOOD_MAP" "$bad_unused_manifest" "$SOURCE_DOC" >/dev/null 2>&1; then
+  fail "expected unused stack manifest workflow labels to fail"
 fi
 
 doctor_missing_map="$tmpdir/doctor-missing-map.json"

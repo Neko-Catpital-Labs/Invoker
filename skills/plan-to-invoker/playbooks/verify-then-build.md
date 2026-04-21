@@ -48,21 +48,12 @@ Fill in `workflowLabels` and `rationale` for every required `coverageKey`.
 Then record the real authored stack that those labels refer to:
 
 ```bash
-cat > stack-manifest.json <<'EOF'
-{
-  "sourceFile": "<policy-doc.md>",
-  "workflows": [
-    {
-      "label": "Step 2: Command mutation path",
-      "planFile": "plans/task-invalidation-step-2-command-mutation.template.yaml",
-      "order": 2
-    }
-  ]
-}
-EOF
+bash skills/plan-to-invoker/scripts/generate-stack-manifest-template.sh \
+  coverage-map.json \
+  <policy-doc.md> > stack-manifest.json
 ```
 
-Every `workflowLabels[]` entry in `coverage-map.json` must exist in `stack-manifest.json`.
+Fill in the real `planFile` values for each workflow. Every `workflowLabels[]` entry in `coverage-map.json` must exist in `stack-manifest.json`.
 Before submission, validate the implementation plan against the policy source:
 
 ```bash
