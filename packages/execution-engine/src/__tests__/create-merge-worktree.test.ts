@@ -7,10 +7,10 @@
  *
  * Pattern: bare remote + working clone + TaskRunner with real git.
  */
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { homedir, tmpdir } from 'node:os';
 import { execSync } from 'node:child_process';
 import { TaskRunner, ExecutorRegistry } from '../index.js';
 
@@ -251,5 +251,54 @@ describe('createMergeWorktree isolation (real git)', { timeout: 30_000 }, () => 
     expect(headSha).toBe(originSha);
 
     await executor.removeMergeWorktree(clonePath);
+  });
+
+  it('same-millisecond createMergeWorktree calls with the same label get unique clone paths', async () => {
+    const sandbox = createSandbox();
+    root = sandbox.root;
+
+    const fixedNow = 1_776_568_863_975;
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(fixedNow);
+    const mergeCloneRoot = resolve(homedir(), '.invoker', 'merge-clones');
+    try {
+      const executor = buildExecutor(sandbox.host);
+      const [firstClonePath, secondClonePath] = await Promise.all([
+        executor.createMergeWorktree('master', 'consolidate-wf-collision'),
+        executor.createMergeWorktree('master', 'consolidate-wf-collision'),
+      ]);
+
+      expect(firstClonePath).not.toBe(secondClonePath);
+      expect(firstClonePath).toContain(resolve(mergeCloneRoot, 'consolidate-wf-collision-'));
+      expect(secondClonePath).toContain(resolve(mergeCloneRoot, 'consolidate-wf-collision-'));
+
+      await Promise.all([
+        executor.removeMergeWorktree(firstClonePath),
+        executor.removeMergeWorktree(secondClonePath),
+      ]);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('same-millisecond sequential createMergeWorktree calls with the same label do not collide', async () => {
+    const sandbox = createSandbox();
+    root = sandbox.root;
+
+    const fixedNow = 1_776_568_863_975;
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(fixedNow);
+    try {
+      const executor = buildExecutor(sandbox.host);
+      const firstClonePath = await executor.createMergeWorktree('master', 'consolidate-wf-collision');
+      const secondClonePath = await executor.createMergeWorktree('master', 'consolidate-wf-collision');
+
+      expect(firstClonePath).not.toBe(secondClonePath);
+
+      await Promise.all([
+        executor.removeMergeWorktree(firstClonePath),
+        executor.removeMergeWorktree(secondClonePath),
+      ]);
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 });
