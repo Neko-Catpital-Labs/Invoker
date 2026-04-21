@@ -94,6 +94,7 @@ import {
 } from './headless.js';
 import {
   approveTask as sharedApproveTask,
+  editTaskCommand as sharedEditTaskCommand,
   rebaseAndRetry,
   recreateWorkflow as sharedRecreateWorkflow,
   recreateTask as sharedRecreateTask,
@@ -3104,10 +3105,11 @@ if (isHeadless) {
       const newCommand = String(newCommandArg);
       logger.info(`edit-task-command: "${taskId}" → "${newCommand}"`, { module: 'ipc' });
       try {
-        const envelope = makeEnvelope('edit-task-command', 'ui', 'task', { taskId, newCommand });
-        const result = await commandService.editTaskCommand(envelope);
-        if (!result.ok) throw new Error(result.error.message);
-        const runnable = result.data.filter(t => t.status === 'running');
+        const started = await sharedEditTaskCommand(taskId, newCommand, {
+          orchestrator,
+          taskExecutor: requireTaskExecutor(),
+        });
+        const runnable = started.filter(t => t.status === 'running');
         void runnable;
       } catch (err) {
         logger.error(`edit-task-command failed: ${err}`, { module: 'ipc' });

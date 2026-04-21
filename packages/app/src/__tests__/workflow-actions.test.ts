@@ -972,15 +972,39 @@ describe('autoFixOnFailure', () => {
 });
 
 describe('editTaskCommand', () => {
-  it('calls orchestrator.editTaskCommand and returns result', () => {
+  it('calls orchestrator.editTaskCommand and returns result', async () => {
     const tasks = [makeRunningTask()];
-    const orchestrator = { editTaskCommand: vi.fn(() => tasks) };
+    const orchestrator = { getTask: vi.fn(() => undefined), editTaskCommand: vi.fn(() => tasks) };
 
-    const result = editTaskCommand('task-a', 'npm test', {
+    const result = await editTaskCommand('task-a', 'npm test', {
       orchestrator: orchestrator as unknown as Orchestrator,
     });
 
     expect(orchestrator.editTaskCommand).toHaveBeenCalledWith('task-a', 'npm test');
+    expect(result).toBe(tasks);
+  });
+
+  it('cancels fixing_with_ai before editing and restarting with the new command', async () => {
+    const tasks = [makeRunningTask({ id: 'task-a', config: { command: 'npm test' } })];
+    const orchestrator = {
+      getTask: vi.fn(() => ({
+        id: 'task-a',
+        status: 'fixing_with_ai',
+        execution: { pendingFixError: 'original failure' },
+      })),
+      revertConflictResolution: vi.fn(),
+      editTaskCommand: vi.fn(() => tasks),
+    };
+    const taskExecutor = { killActiveExecution: vi.fn().mockResolvedValue(undefined) };
+
+    const result = await editTaskCommand('task-a', 'npm run lint', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      taskExecutor: taskExecutor as any,
+    });
+
+    expect(taskExecutor.killActiveExecution).toHaveBeenCalledWith('task-a');
+    expect(orchestrator.revertConflictResolution).toHaveBeenCalledWith('task-a', 'original failure');
+    expect(orchestrator.editTaskCommand).toHaveBeenCalledWith('task-a', 'npm run lint');
     expect(result).toBe(tasks);
   });
 });
