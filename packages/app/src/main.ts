@@ -108,6 +108,7 @@ import { createRequire } from 'node:module';
 import { acquireDbWriterLock, type DbWriterLockResult } from './db-writer-lock.js';
 import { applyDelta } from './delta-merge.js';
 import { shouldSkipAutoFixForError } from './auto-fix-gating.js';
+import { getAutoFixDispatchDecision, getAutoFixEnqueueDecision } from './auto-fix-session.js';
 import { ensureSqliteFlushDebounceForOwner } from './sqlite-flush-policy.js';
 import type { WorkflowMutationPriority } from './workflow-mutation-coordinator.js';
 import { PersistedWorkflowMutationCoordinator } from './persisted-workflow-mutation-coordinator.js';
@@ -1114,7 +1115,16 @@ if (isHeadless) {
       { module: 'ipc' },
     );
     if (source === 'auto-fix') {
-      const task = orchestrator.getTask(taskId);
+      const dispatchDecision = getAutoFixDispatchDecision(orchestrator, taskId);
+      if (!dispatchDecision.shouldDispatch) {
+        logAutoFixDebug(taskId, 'dispatch-stale-skip', {
+          reason: dispatchDecision.reason,
+          status: dispatchDecision.status,
+          autoFixAttempts: dispatchDecision.autoFixAttempts,
+        });
+        return [];
+      }
+      const task = dispatchDecision.task;
       const attemptsBefore = task?.execution.autoFixAttempts ?? 0;
       const attemptsAfter = attemptsBefore + 1;
       persistence.updateTask(taskId, {
@@ -1158,20 +1168,12 @@ if (isHeadless) {
       logAutoFixDebug(taskId, 'schedule-skip', { reason: 'workflow-not-found' });
       return;
     }
-    const shouldAutoFixNow = orchestrator.shouldAutoFix(taskId);
-    if (!shouldAutoFixNow) {
+    const enqueueDecision = getAutoFixEnqueueDecision(orchestrator, persistence, workflowId, taskId);
+    if (!enqueueDecision.shouldEnqueue) {
       logAutoFixDebug(taskId, 'schedule-skip', {
-        reason: 'shouldAutoFix-false',
-        shouldAutoFix: shouldAutoFixNow,
-      });
-      return;
-    }
-    const openIntents = persistence.listWorkflowMutationIntents(workflowId, ['queued', 'running']);
-    const openTaskFixIntents = listOpenFixIntentsForTask(openIntents, taskId);
-    if (openTaskFixIntents.length > 0) {
-      logAutoFixDebug(taskId, 'schedule-skip', {
-        reason: 'already-queued-intent',
-        existingIntentIds: openTaskFixIntents.map((intent) => intent.id),
+        reason: enqueueDecision.reason,
+        status: enqueueDecision.status,
+        existingIntentIds: enqueueDecision.existingIntentIds,
       });
       return;
     }

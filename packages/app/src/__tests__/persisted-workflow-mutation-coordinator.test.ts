@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { SQLiteAdapter } from '@invoker/data-store';
+import { Orchestrator } from '@invoker/workflow-core';
+import { LocalBus } from '@invoker/transport';
+import { getAutoFixDispatchDecision, getAutoFixEnqueueDecision } from '../auto-fix-session.js';
 import { PersistedWorkflowMutationCoordinator } from '../persisted-workflow-mutation-coordinator.js';
 
 function deferred(): { promise: Promise<void>; resolve: () => void } {
@@ -228,6 +231,107 @@ describe('PersistedWorkflowMutationCoordinator', () => {
     expect(order).toEqual([
       'invoker:fix-with-agent:wf-1/blocker-task',
       'invoker:recreate-task:wf-1/target-task',
+    ]);
+  });
+
+  it('keeps one live auto-fix session per task and skips stale queued dispatch after review_ready', async () => {
+    const adapter = await SQLiteAdapter.create(':memory:');
+    adapters.push(adapter);
+    const bus = new LocalBus();
+    const orchestrator = new Orchestrator({
+      persistence: adapter,
+      messageBus: bus,
+      maxConcurrency: 1,
+      defaultAutoFixRetries: 3,
+    });
+
+    orchestrator.loadPlan({
+      name: 'stale-queued-fix-review-ready-repro',
+      onFinish: 'merge',
+      mergeMode: 'external_review',
+      tasks: [{ id: 'task-a', description: 'Task A', command: 'echo ok' }],
+    });
+
+    const workflowId = orchestrator.getWorkflowIds()[0]!;
+    const mergeId = `__merge__${workflowId}`;
+    adapter.updateTask(mergeId, {
+      status: 'failed',
+      error: 'Merge failed: synthetic repro failure',
+      reviewId: 'owner/repo#42',
+    });
+    orchestrator.syncFromDb(workflowId);
+    expect(orchestrator.getTask(mergeId)?.status).toBe('failed');
+
+    const gate = deferred();
+    const order: string[] = [];
+    const scheduleOutcomes: string[] = [];
+    let actualFixExecutions = 0;
+    const coordinator = new PersistedWorkflowMutationCoordinator(
+      adapter,
+      'owner-1',
+      async (channel, args) => {
+        order.push(`${channel}:${String(args[0])}`);
+        if (channel === 'hold') {
+          await gate.promise;
+          return;
+        }
+        if (channel === 'invoker:fix-with-agent') {
+          const decision = getAutoFixDispatchDecision(orchestrator, String(args[0]));
+          if (!decision.shouldDispatch) {
+            order.push(`skip:${String(args[0])}:${decision.status}`);
+            return;
+          }
+          actualFixExecutions += 1;
+          orchestrator.beginConflictResolution(String(args[0]));
+        }
+      },
+    );
+
+    const scheduleAutoFix = () => {
+      const decision = getAutoFixEnqueueDecision(orchestrator, adapter, workflowId, mergeId);
+      if (!decision.shouldEnqueue) {
+        scheduleOutcomes.push(`skip:${decision.reason}`);
+        return null;
+      }
+      scheduleOutcomes.push('enqueue');
+      return coordinator.enqueue<void>(
+        workflowId,
+        'normal',
+        'invoker:fix-with-agent',
+        [mergeId, null],
+      );
+    };
+
+    const blocker = coordinator.enqueue<void>(workflowId, 'normal', 'hold', ['running']);
+    void blocker.catch(() => {});
+    await waitFor(() => adapter.listWorkflowMutationIntents(workflowId, ['running']).length === 1);
+
+    const queuedFix = scheduleAutoFix();
+    expect(queuedFix).not.toBeNull();
+
+    await waitFor(() => adapter.listWorkflowMutationIntents(workflowId, ['queued']).length === 1);
+    const duplicateQueuedFix = scheduleAutoFix();
+    expect(duplicateQueuedFix).toBeNull();
+
+    adapter.updateTask(mergeId, {
+      status: 'review_ready',
+      reviewId: 'owner/repo#42',
+      reviewStatus: 'Awaiting review',
+    });
+    orchestrator.syncFromDb(workflowId);
+    expect(orchestrator.getTask(mergeId)?.status).toBe('review_ready');
+
+    gate.resolve();
+    await queuedFix!;
+
+    const intents = adapter.listWorkflowMutationIntents(workflowId);
+    expect(intents.find((intent) => intent.channel === 'invoker:fix-with-agent')?.status).toBe('completed');
+    expect(scheduleOutcomes).toEqual(['enqueue', 'skip:already-live-intent']);
+    expect(actualFixExecutions).toBe(0);
+    expect(order).toEqual([
+      'hold:running',
+      `invoker:fix-with-agent:${mergeId}`,
+      `skip:${mergeId}:review_ready`,
     ]);
   });
 
