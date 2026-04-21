@@ -12,7 +12,7 @@
     }
   },
   "scripts": {
-    "build": "tsup src/index.ts --format esm --dts",
+    "build": "tsup src/index.ts --format esm --dts --tsconfig tsconfig.build.json",
     "docker:build": "bash ../../scripts/build-agent-base-image.sh",
     "test": "vitest run",
     "test:watch": "vitest",
