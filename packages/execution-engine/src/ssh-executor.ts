@@ -26,6 +26,20 @@ import {
   createSshRemoteScriptError,
 } from './ssh-git-exec.js';
 
+const DEFAULT_SSH_REMOTE_CAPTURE_TIMEOUT_MS = 10 * 60 * 1000;
+const SSH_BRANCH_OWNER_CONFLICT_PATTERNS = [
+  /is already used by worktree at '([^']+)'/i,
+  /cannot force update the branch [\s\S]*?used by worktree at '([^']+)'/i,
+];
+
+function getSshRemoteCaptureTimeoutMs(): number {
+  const raw = process.env.INVOKER_SSH_REMOTE_CAPTURE_TIMEOUT_MS?.trim();
+  if (!raw) return DEFAULT_SSH_REMOTE_CAPTURE_TIMEOUT_MS;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_SSH_REMOTE_CAPTURE_TIMEOUT_MS;
+  return parsed;
+}
+
 export interface SshExecutorConfig {
   host: string;
   user: string;
@@ -90,6 +104,56 @@ export class SshExecutor extends BaseExecutor<SshEntry> {
     this.remoteInvokerHome = config.remoteInvokerHome ?? '~/.invoker';
     this.provisionCommand = config.provisionCommand ?? DEFAULT_WORKTREE_PROVISION_COMMAND;
     this.remotePath = process.env.PATH ?? '';
+  }
+
+  private extractManagedOwnerPathFromSetupError(
+    err: unknown,
+    managedPrefix: string,
+  ): string | undefined {
+    const text = err instanceof Error ? err.message : String(err);
+    for (const pattern of SSH_BRANCH_OWNER_CONFLICT_PATTERNS) {
+      const match = text.match(pattern);
+      const ownerPath = match?.[1]?.trim();
+      if (!ownerPath) continue;
+      const normalizedOwnerPath = normalize(ownerPath);
+      if (
+        normalizedOwnerPath === managedPrefix ||
+        normalizedOwnerPath.startsWith(`${managedPrefix}/`)
+      ) {
+        return normalizedOwnerPath;
+      }
+    }
+    return undefined;
+  }
+
+  private async setupTaskBranchWithStaleOwnerFallback(
+    remoteClone: string,
+    request: WorkRequest,
+    handle: ExecutorHandle,
+    opts: {
+      branchName: string;
+      base: string;
+      worktreeDir: string;
+    },
+    managedPrefix: string,
+    canonicalRemoteWt: string,
+  ): Promise<void> {
+    try {
+      await this.setupTaskBranch(remoteClone, request, handle, opts);
+      return;
+    } catch (err) {
+      const ownerPath = this.extractManagedOwnerPathFromSetupError(err, managedPrefix);
+      if (!ownerPath) {
+        throw err;
+      }
+
+      const cleanupScript = buildWorktreeCleanupScript({
+        remoteClone,
+        worktreePaths: [canonicalRemoteWt, ownerPath],
+      });
+      await this.execRemoteCapture(cleanupScript, 'cleanup_worktree');
+      await this.setupTaskBranch(remoteClone, request, handle, opts);
+    }
   }
 
 
@@ -366,9 +430,15 @@ echo ${payloadB64} | base64 -d | bash -se
           headMatchesTargetBranch: abbrevRefMatchesBranch(head, experimentBranch),
         };
       } catch {
-        // Worktree discovery is authoritative for branch ownership. If the
-        // follow-up HEAD probe fails, treat the discovered owner path as stale
-        // so it still gets reconciled before recreate.
+        // Temporary invariant: today we still treat "managed branch appears in
+        // git worktree list" as authoritative ownership for cleanup/recreate.
+        // That only works while Invoker effectively assumes one managed
+        // worktree per branch. This invariant will go away once
+        // multi-worktree-per-branch support lands, so this fallback must be
+        // replaced with worktree identity that does not collapse into branch
+        // ownership.
+        // For now, if the follow-up HEAD probe fails, treat the discovered
+        // owner path as stale so it still gets reconciled before recreate.
         exactBranchCandidate = {
           path: reuseAbs,
           headMatchesTargetBranch: false,
@@ -458,11 +528,11 @@ git -C "$WT" merge-base --is-ancestor "$BASE" HEAD
       await this.mergeRequestUpstreamBranches(request, remoteWt, resolvedBaseRef);
     } else {
       try {
-        await this.setupTaskBranch(remoteClone, request, handle, {
+        await this.setupTaskBranchWithStaleOwnerFallback(remoteClone, request, handle, {
           branchName: experimentBranch,
           base: resolvedBaseRef,
           worktreeDir: remoteWt,
-        });
+        }, managedPrefix, canonicalRemoteWt);
       } catch (err) {
         const wrapped = err instanceof Error ? err : new Error(String(err));
         if (!(wrapped as any).phase) (wrapped as any).phase = 'setup_branch';
@@ -630,6 +700,15 @@ echo ${payloadB64} | base64 -d | bash -se
           mappedError = `Merge conflict merging upstream branch "${branch}" on remote.\nConflicting files:\n${files}`;
         }
 
+        if (!mappedError && exitCode !== 0 && e) {
+          const allOutput = e.outputBuffer.join('');
+          const lines = allOutput.split('\n');
+          const tail = lines.slice(-50).join('\n').trim();
+          if (tail) {
+            mappedError = tail.length > 3000 ? tail.slice(-3000) : tail;
+          }
+        }
+
         let commitHash: string | undefined;
 
         if (finalizeRemote) {
@@ -645,18 +724,9 @@ echo ${payloadB64} | base64 -d | bash -se
           if (fin.error) {
             this.emitOutput(executionId, `[SshExecutor] ${fin.error}\n`);
             if (exitCode === 0) status = 'failed';
-            mappedError = fin.error;
-          }
-        }
-
-        // When the command fails but no specific error was mapped (exit 30/31),
-        // capture the tail of the output buffer so the UI shows what went wrong.
-        if (!mappedError && exitCode !== 0 && e) {
-          const allOutput = e.outputBuffer.join('');
-          const lines = allOutput.split('\n');
-          const tail = lines.slice(-50).join('\n').trim();
-          if (tail) {
-            mappedError = tail.length > 3000 ? tail.slice(-3000) : tail;
+            if (!mappedError || exitCode === 0) {
+              mappedError = fin.error;
+            }
           }
         }
 

@@ -5745,20 +5745,19 @@ describe('Orchestrator', () => {
       expect(failedDeltas).toHaveLength(1);
     });
 
-    it('revertConflictResolution uses agent-agnostic fix failure prefix', () => {
+    it('revertConflictResolution preserves the original task failure as primary when auto-fix fails', () => {
       const { savedError } = orchestrator.beginConflictResolution('t2');
       orchestrator.revertConflictResolution('t2', savedError, 'startup failed');
       const task = orchestrator.getTask('t2')!;
-      expect(task.execution.error).toContain('[Fix with Agent failed] startup failed');
+      expect(task.execution.error).toBe(mergeConflictError);
     });
 
-    it('revertConflictResolution does not duplicate an existing fix failure wrapper', () => {
+    it('revertConflictResolution strips older fix wrappers and restores the original failure', () => {
       const wrappedSavedError =
         '[Fix with Claude failed] first attempt failed\n\n' + mergeConflictError;
       orchestrator.revertConflictResolution('t2', wrappedSavedError, 'second attempt failed');
       const task = orchestrator.getTask('t2')!;
-      expect(task.execution.error).toContain('[Fix with Agent failed] second attempt failed');
-      expect(task.execution.error).not.toContain('first attempt failed');
+      expect(task.execution.error).toBe(mergeConflictError);
       expect(task.execution.mergeConflict).toEqual({
         failedBranch: 'experiment/upstream-branch-abc123',
         conflictFiles: ['src/App.tsx', 'src/utils.ts'],

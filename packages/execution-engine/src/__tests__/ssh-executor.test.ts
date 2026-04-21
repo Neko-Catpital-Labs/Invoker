@@ -410,6 +410,78 @@ branch refs/heads/${targetBranch}
     expect(setupTaskBranchSpy).toHaveBeenCalled();
   });
 
+  it('retries setup after parsing a stale branch-owner path from setupTaskBranch failure', async () => {
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'testuser',
+      sshKeyPath: '/dev/null',
+      managedWorkspaces: true,
+    }) as any;
+
+    const repoHash = computeRepoUrlHash('git@github.com:owner/repo.git');
+    const baseHead = 'abc123def456abc123def456abc123def456abc1';
+    const branchHash = computeBranchHash(
+      'test-task-conflict',
+      'pnpm test',
+      undefined,
+      [],
+      baseHead,
+      '',
+    );
+    const targetBranch = `experiment/test-task-conflict-${branchHash}`;
+    const canonicalPath = `~/.invoker/worktrees/${repoHash}/experiment-test-task-conflict-${branchHash}`;
+    const ownerPath = `/home/testuser/.invoker/worktrees/${repoHash}/experiment-test-task-conflict-stale-owner`;
+    let cleanupScript = '';
+
+    vi.spyOn(ssh, 'execRemoteCapture').mockImplementation(async (script: string, phase?: string) => {
+      if (script.includes('__INVOKER_BASE_REF__=')) {
+        return [
+          '__INVOKER_BASE_REF__=origin/main',
+          `__INVOKER_BASE_HEAD__=${baseHead}`,
+        ].join('\n');
+      }
+      if (script.includes('printf %s "$HOME"')) return '/home/testuser';
+      if (script.includes('worktree list --porcelain')) return '';
+      if (phase === 'cleanup_worktree') {
+        cleanupScript = script;
+        return '';
+      }
+      return '';
+    });
+
+    const setupTaskBranchSpy = vi.spyOn(ssh, 'setupTaskBranch')
+      .mockRejectedValueOnce(
+        createSshRemoteScriptError(
+          128,
+          '',
+          `fatal: '${targetBranch}' is already used by worktree at '${ownerPath}'\n`,
+          'setup_branch',
+        ),
+      )
+      .mockResolvedValueOnce(undefined);
+    vi.spyOn(ssh, 'spawnSshRemoteStdin').mockImplementation(
+      (_executionId: string, _request: any, handle: any) => handle,
+    );
+
+    const req = makeRequest({
+      actionType: 'command',
+      actionId: 'test-task-conflict',
+      inputs: {
+        command: 'pnpm test',
+        description: 'run tests',
+        repoUrl: 'git@github.com:owner/repo.git',
+      },
+    });
+
+    await ssh.start(req);
+
+    const encodedPaths = cleanupScript.match(/WORKTREES_B64="([^"]+)"/)?.[1];
+    const decodedPaths = Buffer.from(encodedPaths ?? '', 'base64').toString('utf8');
+    expect(decodedPaths).toContain(canonicalPath);
+    expect(decodedPaths).toContain(ownerPath);
+    expect(setupTaskBranchSpy).toHaveBeenCalledTimes(2);
+  });
+
   it('throws when managedWorkspaces=true but repoUrl is missing', async () => {
     const ssh = new SshExecutor({
       host: 'localhost',
@@ -1099,5 +1171,126 @@ describe('SshExecutor entry lifecycle', () => {
     expect(spec.command).toBe('ssh');
     expect(spec.args).toBeTruthy();
     expect(spec.args!.length).toBeGreaterThan(0);
+  });
+
+  it('keeps the task running after process exit until remote record/push finishes', async () => {
+    const finalize = createDeferred<{ commitHash?: string; error?: string }>();
+    const remoteFinalizeSpy = vi
+      .spyOn(ssh as any, 'remoteGitRecordAndPush')
+      .mockImplementation(() => finalize.promise);
+
+    const request = makeRequest({
+      inputs: {
+        command: 'echo hello',
+        repoUrl: 'git@github.com:test/repo.git',
+      },
+    });
+
+    const handle = await ssh.start(request);
+    let completedResponse: any;
+    ssh.onComplete(handle, (response) => {
+      completedResponse = response;
+    });
+
+    const sshProcess = spawnedProcesses[spawnedProcesses.length - 1];
+    sshProcess.emit('close', 0, null);
+
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(remoteFinalizeSpy).toHaveBeenCalledTimes(1);
+    expect(completedResponse).toBeUndefined();
+    expect((ssh as any).entries.get(handle.executionId)).toBeDefined();
+
+    finalize.resolve({ commitHash: 'abc123def456' });
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(completedResponse).toMatchObject({
+      status: 'completed',
+      outputs: expect.objectContaining({
+        exitCode: 0,
+        commitHash: 'abc123def456',
+      }),
+    });
+  });
+
+  it('fails the task instead of hanging when remote record/push times out', async () => {
+    vi.useFakeTimers();
+    const finalize = createDeferred<{ commitHash?: string; error?: string }>();
+    vi.spyOn(ssh as any, 'remoteGitRecordAndPush').mockImplementation(() => finalize.promise);
+
+    try {
+      const request = makeRequest({
+        inputs: {
+          command: 'echo hello',
+          repoUrl: 'git@github.com:test/repo.git',
+        },
+      });
+
+      const handle = await ssh.start(request);
+      let completedResponse: any;
+      ssh.onComplete(handle, (response) => {
+        completedResponse = response;
+      });
+
+      const sshProcess = spawnedProcesses[spawnedProcesses.length - 1];
+      sshProcess.emit('close', 0, null);
+
+      await vi.advanceTimersByTimeAsync(20);
+      expect(completedResponse).toBeUndefined();
+
+      finalize.resolve({ error: 'SSH record and push task result timed out after 600000ms' });
+      await vi.advanceTimersByTimeAsync(20);
+
+      expect(completedResponse).toMatchObject({
+        status: 'failed',
+        outputs: expect.objectContaining({
+          exitCode: 1,
+          error: 'SSH record and push task result timed out after 600000ms',
+        }),
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('preserves the primary failure when the remote worktree vanishes during execution and finalize hits the same missing path', async () => {
+    const remoteFinalizeSpy = vi
+      .spyOn(ssh as any, 'remoteGitRecordAndPush')
+      .mockResolvedValue({
+        error: 'remote commit or push failed (code 1): bash: line 8: cd: /tmp/missing-worktree: No such file or directory',
+      });
+
+    const request = makeRequest({
+      inputs: {
+        command: 'echo hello',
+        repoUrl: 'git@github.com:test/repo.git',
+      },
+    });
+
+    const handle = await ssh.start(request);
+    let completedResponse: any;
+    ssh.onComplete(handle, (response) => {
+      completedResponse = response;
+    });
+
+    const sshProcess = spawnedProcesses[spawnedProcesses.length - 1];
+    // Exact scenario: the managed remote worktree disappears while the task is
+    // still running. Execution fails first with uv_cwd / ENOENT, then finalize
+    // fails later when it tries to cd back into that same missing worktree.
+    sshProcess.stderr!.emit('data', Buffer.from('Error: ENOENT: no such file or directory, uv_cwd\n'));
+    sshProcess.stderr!.emit('data', Buffer.from('pnpm: ENOENT: no such file or directory, mkdir \'/tmp/missing-worktree/node_modules/.bin\'\n'));
+    sshProcess.emit('close', 1, null);
+
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(remoteFinalizeSpy).toHaveBeenCalledTimes(1);
+    expect(completedResponse).toMatchObject({
+      status: 'failed',
+      outputs: expect.objectContaining({
+        exitCode: 1,
+      }),
+    });
+    expect(String(completedResponse.outputs.error)).toContain('uv_cwd');
+    expect(String(completedResponse.outputs.error)).not.toContain('remote commit or push failed');
   });
 });
