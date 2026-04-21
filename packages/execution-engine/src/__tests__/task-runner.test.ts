@@ -3331,6 +3331,50 @@ describe('TaskRunner', () => {
 
   // ── checkPrApprovalNow ─────────────────────────────────
 
+  describe('checkMergeGateStatuses', () => {
+    it('approved external_review PR leaves a review_ready merge gate in review_ready during refresh', async () => {
+      const tasks = [
+        makeTask({
+          id: 'task-1',
+          status: 'review_ready',
+          config: { isMergeNode: true, workflowId: 'wf-1' },
+          execution: { reviewId: 'owner/repo#42' },
+        }),
+      ];
+      const orchestrator = {
+        getAllTasks: vi.fn(() => tasks),
+        getTask: vi.fn((id: string) => tasks.find((task) => task.id === id)),
+        approve: vi.fn(),
+      };
+      const persistence = {
+        updateTask: vi.fn(),
+      };
+      const mergeGateProvider = {
+        checkApproval: vi.fn().mockResolvedValue({
+          approved: true,
+          rejected: false,
+          statusText: 'Approved',
+          url: 'https://github.com/owner/repo/pull/42',
+        }),
+      };
+
+      const executor = new TaskRunner({
+        orchestrator: orchestrator as any,
+        persistence: persistence as any,
+        executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+        mergeGateProvider: mergeGateProvider as any,
+      });
+
+      await executor.checkMergeGateStatuses();
+
+      expect(persistence.updateTask).toHaveBeenCalledWith('task-1', {
+        execution: { reviewStatus: 'Approved' },
+      });
+      expect(orchestrator.approve).not.toHaveBeenCalled();
+    });
+  });
+
   describe('checkPrApprovalNow', () => {
     it('updates PR status when poller is active', async () => {
       const orchestrator = {
@@ -3381,7 +3425,7 @@ describe('TaskRunner', () => {
       (executor as any).activePrPollers.delete('task-1');
     });
 
-    it('approved external_review PR auto-completes a review_ready merge gate', async () => {
+    it('approved external_review PR leaves a review_ready merge gate in review_ready', async () => {
       const orchestrator = {
         getTask: vi.fn((id: string) => ({
           id,
@@ -3419,9 +3463,50 @@ describe('TaskRunner', () => {
       expect(persistence.updateTask).toHaveBeenCalledWith('task-1', {
         execution: { reviewStatus: 'Approved' },
       });
-      expect(orchestrator.approve).toHaveBeenCalledWith('task-1');
+      expect(orchestrator.approve).not.toHaveBeenCalled();
 
       // Should stop polling after approval
+      expect((executor as any).activePrPollers.has('task-1')).toBe(false);
+    });
+
+    it('approved awaiting_approval PR completes the merge gate', async () => {
+      const orchestrator = {
+        getTask: vi.fn((id: string) => ({
+          id,
+          status: 'awaiting_approval',
+          execution: { reviewId: 'owner/repo#42' },
+        })),
+        approve: vi.fn(),
+      };
+      const persistence = {
+        updateTask: vi.fn(),
+      };
+      const mergeGateProvider = {
+        checkApproval: vi.fn().mockResolvedValue({
+          approved: true,
+          rejected: false,
+          statusText: 'Approved',
+          url: 'https://github.com/owner/repo/pull/42',
+        }),
+      };
+
+      const executor = new TaskRunner({
+        orchestrator: orchestrator as any,
+        persistence: persistence as any,
+        executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+        mergeGateProvider: mergeGateProvider as any,
+      });
+
+      const interval = setInterval(() => {}, 1000);
+      (executor as any).activePrPollers.set('task-1', interval);
+
+      await executor.checkPrApprovalNow('task-1');
+
+      expect(persistence.updateTask).toHaveBeenCalledWith('task-1', {
+        execution: { reviewStatus: 'Approved' },
+      });
+      expect(orchestrator.approve).toHaveBeenCalledWith('task-1');
       expect((executor as any).activePrPollers.has('task-1')).toBe(false);
     });
 
