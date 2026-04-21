@@ -40,6 +40,23 @@ const FAILING_PLAN = {
 };
 
 test.describe('Fix with Claude', () => {
+  async function openFixWithClaude(page: any) {
+    const moreMenuItem = page.getByRole('menuitem', { name: 'More' });
+    if (await moreMenuItem.isVisible().catch(() => false)) {
+      await moreMenuItem.click();
+    }
+
+    const fixMenuItem = page.getByRole('menuitem', { name: 'Fix with Claude' });
+    if (await fixMenuItem.isVisible().catch(() => false)) {
+      await fixMenuItem.click();
+      return;
+    }
+
+    const fixButton = page.locator('button').filter({ hasText: 'Fix with Claude' });
+    await expect(fixButton).toBeVisible({ timeout: 10000 });
+    await fixButton.click();
+  }
+
   test('Fix with Claude -> Approve -> task completes', async ({ page }) => {
     await loadPlan(page, FAILING_PLAN);
     await startPlan(page);
@@ -49,13 +66,7 @@ test.describe('Fix with Claude', () => {
     const scopedTaskId = await resolveTaskId(page, 'task-fail');
 
     await page.locator('.react-flow__node[data-testid$="/task-fail"]').click({ button: 'right' });
-    const moreBtn = page.getByRole('menuitem', { name: 'More' });
-    if (await moreBtn.isVisible().catch(() => false)) {
-      await moreBtn.click();
-    }
-    const fixBtn = page.getByRole('menuitem', { name: 'Fix with Claude' });
-    await expect(fixBtn).toBeVisible({ timeout: 10000 });
-    await fixBtn.click();
+    await openFixWithClaude(page);
 
     await waitForTaskStatus(page, 'task-fail', 'awaiting_approval', 15000);
 
@@ -73,13 +84,7 @@ test.describe('Fix with Claude', () => {
     const scopedTaskId = await resolveTaskId(page, 'task-fail');
 
     await page.locator('.react-flow__node[data-testid$="/task-fail"]').click({ button: 'right' });
-    const moreBtn = page.getByRole('menuitem', { name: 'More' });
-    if (await moreBtn.isVisible().catch(() => false)) {
-      await moreBtn.click();
-    }
-    const fixBtn = page.getByRole('menuitem', { name: 'Fix with Claude' });
-    await expect(fixBtn).toBeVisible({ timeout: 10000 });
-    await fixBtn.click();
+    await openFixWithClaude(page);
 
     await waitForTaskStatus(page, 'task-fail', 'awaiting_approval', 15000);
 

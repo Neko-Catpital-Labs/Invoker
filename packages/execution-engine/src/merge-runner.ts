@@ -17,6 +17,7 @@ import type { TaskRunnerCallbacks } from './task-runner.js';
 import type { MergeGateProvider } from './merge-gate-provider.js';
 import type { ReviewProviderRegistry } from './review-provider-registry.js';
 import { normalizeBranchForGithubCli } from './github-branch-ref.js';
+import { pushBranchWithRecovery } from './git-branch-push-recovery.js';
 
 // ── Trace logging ────────────────────────────────────────
 
@@ -127,6 +128,20 @@ async function execGitInMergeSafe(
     );
   }
   return host.execGitIn(args, dir);
+}
+
+async function pushFeatureBranchFromMergeClone(
+  host: MergeRunnerHost,
+  cwd: string,
+  featureBranch: string,
+): Promise<void> {
+  await pushBranchWithRecovery(
+    {
+      exec: (args, dir) => execGitInMergeSafe(host, args, dir),
+    },
+    cwd,
+    featureBranch,
+  );
 }
 
 // ── Host interface ───────────────────────────────────────
@@ -613,7 +628,7 @@ export async function approveMergeImpl(
     try {
       mergeTrace('GIT_PUSH', { featureBranch, worktreeDir });
       // Push feature branch directly to origin (GitHub) from the clone
-      await execGitInMergeSafe(host, ['push', '--force', '-u', 'origin', featureBranch], worktreeDir);
+      await pushFeatureBranchFromMergeClone(host, worktreeDir, featureBranch);
       const reviewUrl = await host.execPr(baseBranch, featureBranch, mergeMessage, fullSummary, worktreeDir);
       mergeTrace('PR_CREATED', { featureBranch, baseBranch, reviewUrl });
       console.log(`[merge] Approved: created pull request ${reviewUrl}`);
@@ -853,7 +868,7 @@ export async function publishAfterFixImpl(
     }
 
     // Push feature branch directly to origin (GitHub) from the gate clone
-    await execGitInMergeSafe(host, ['push', '--force', '-u', 'origin', featureBranch], consolidateDir);
+    await pushFeatureBranchFromMergeClone(host, consolidateDir, featureBranch);
 
     let fullSummary = summary;
     if (visualProof && host.runVisualProofCapture) {
@@ -1185,7 +1200,7 @@ export async function consolidateAndMergeImpl(
     // Push feature branch to origin so other clones (e.g., the gate clone used
     // by external review providers can access it. The consolidation clone is removed
     // in the finally block, so without this push the branch would be lost.
-    await execGitInMergeSafe(host, ['push', '--force', '-u', 'origin', featureBranch], worktreeDir);
+    await pushFeatureBranchFromMergeClone(host, worktreeDir, featureBranch);
 
     if (visualProof && onFinish === 'pull_request' && host.runVisualProofCapture) {
       const slug = (featureBranch ?? 'workflow').replace(/\//g, '-');
@@ -1217,7 +1232,7 @@ export async function consolidateAndMergeImpl(
       }
     } else if (onFinish === 'pull_request') {
       // Push feature branch directly to origin (GitHub) from the clone
-      await execGitInMergeSafe(host, ['push', '--force', '-u', 'origin', featureBranch], worktreeDir);
+      await pushFeatureBranchFromMergeClone(host, worktreeDir, featureBranch);
       const reviewUrl = await host.execPr(baseBranch, featureBranch, workflowName ?? 'Workflow', body, worktreeDir);
       console.log(`[merge] Created pull request: ${reviewUrl}`);
       return reviewUrl;
