@@ -45,7 +45,7 @@ import { DEFAULT_EXECUTION_AGENT } from './agent.js';
 
 /** Keeps `lastHeartbeatAt` fresh while `executor.start()` is awaited (SSH remote setup/provision can take minutes). Matches BaseExecutor default heartbeat cadence. */
 const PRE_START_HEARTBEAT_INTERVAL_MS = 30_000;
-const ATTEMPT_LEASE_MS = 5 * 60 * 1000;
+const ATTEMPT_LEASE_MS = 20 * 60 * 1000;
 const DEFAULT_EXECUTOR_START_TIMEOUT_MS = 10 * 60 * 1000;
 
 type StartupFailureMetadata = {
@@ -775,7 +775,7 @@ export class TaskRunner {
 
   private async executeMergeNode(task: TaskState): Promise<void> {
     traceExecution(`${RESTART_TO_BRANCH_TRACE} TaskRunner.executeMergeNode taskId=${task.id} → merge-executor.executeMergeNodeImpl`);
-    return executeMergeNodeImpl(this, task);
+    return this.withAttemptHeartbeat(task.id, () => executeMergeNodeImpl(this, task));
   }
 
   async approveMerge(workflowId: string): Promise<void> {
@@ -1287,7 +1287,7 @@ export class TaskRunner {
    * After resolution, the task is restarted so it can proceed normally.
    */
   async resolveConflict(taskId: string, savedError?: string, agentName?: string): Promise<void> {
-    return resolveConflictImpl(this, taskId, savedError, agentName);
+    return this.withAttemptHeartbeat(taskId, () => resolveConflictImpl(this, taskId, savedError, agentName));
   }
 
   /**
@@ -1295,7 +1295,30 @@ export class TaskRunner {
    * The agent's output is captured and appended to the task's output stream for auditing.
    */
   async fixWithAgent(taskId: string, taskOutput: string, agentName?: string, savedError?: string): Promise<void> {
-    return fixWithAgentImpl(this, taskId, taskOutput, agentName, savedError);
+    return this.withAttemptHeartbeat(taskId, () => fixWithAgentImpl(this, taskId, taskOutput, agentName, savedError));
+  }
+
+  private async withAttemptHeartbeat<T>(taskId: string, work: () => Promise<T>): Promise<T> {
+    const attemptId = this.orchestrator.getTask(taskId)?.execution.selectedAttemptId;
+    if (!attemptId) {
+      return work();
+    }
+
+    const heartbeat = () => {
+      const now = new Date();
+      this.persistence.updateAttempt?.(attemptId, {
+        lastHeartbeatAt: now,
+        leaseExpiresAt: nextLeaseExpiry(now),
+      } as any);
+      this.callbacks.onHeartbeat?.(taskId);
+    };
+
+    const heartbeatTimer = setInterval(heartbeat, PRE_START_HEARTBEAT_INTERVAL_MS);
+    try {
+      return await work();
+    } finally {
+      clearInterval(heartbeatTimer);
+    }
   }
 
   resumeMergeGatePolling(): void {
