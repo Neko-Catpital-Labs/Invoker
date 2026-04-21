@@ -8,13 +8,23 @@ describe('wireHeadlessAutoFix', () => {
   it('subscribes auto-fix for failed deltas in generic headless execution paths', async () => {
     const messageBus = new LocalBus() as MessageBus;
     const shouldAutoFix = vi.fn((taskId: string) => taskId === 'wf-1/task-1');
+    const getTask = vi.fn((taskId: string) =>
+      taskId === 'wf-1/task-1'
+        ? {
+            id: taskId,
+            status: 'failed',
+            execution: { autoFixAttempts: 0, error: 'narrow fixable failure' },
+            config: { command: 'pnpm test' },
+          }
+        : undefined,
+    );
     const invokeAutoFix = vi.fn(async () => {});
     const onError = vi.fn();
 
     wireHeadlessAutoFix(
       {
         messageBus,
-        orchestrator: { shouldAutoFix } as any,
+        orchestrator: { shouldAutoFix, getTask } as any,
         persistence: {} as any,
       },
       {} as any,
@@ -37,7 +47,7 @@ describe('wireHeadlessAutoFix', () => {
     await Promise.resolve();
 
     expect(shouldAutoFix).toHaveBeenCalledWith('wf-1/task-1');
-    expect(shouldAutoFix).toHaveBeenCalledWith('wf-1/task-2');
+    expect(getTask).toHaveBeenCalledWith('wf-1/task-2');
     expect(invokeAutoFix).toHaveBeenCalledTimes(1);
     expect(invokeAutoFix).toHaveBeenCalledWith('wf-1/task-1');
     expect(onError).not.toHaveBeenCalled();

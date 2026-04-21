@@ -10,6 +10,7 @@ import type { Logger } from '@invoker/contracts';
 import type { Orchestrator, ExternalGatePolicyUpdate } from '@invoker/workflow-core';
 import type { TaskState } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
+import { getAutoFixDispatchDecision } from './auto-fix-session.js';
 import type { TaskRunner } from '@invoker/execution-engine';
 import { dispatchTasksIfNeeded } from './global-topup.js';
 import { normalizeMergeModeForPersistence } from './merge-mode.js';
@@ -441,10 +442,19 @@ export async function autoFixOnFailure(
   inlineRetryDepth = 0,
 ): Promise<void> {
   const { orchestrator, persistence, taskExecutor } = deps;
-  if (!orchestrator.shouldAutoFix(taskId)) return;
+  const dispatchDecision = getAutoFixDispatchDecision(orchestrator as any, taskId);
+  if (!dispatchDecision.shouldDispatch) {
+    persistence.logEvent?.(taskId, 'debug.auto-fix', {
+      phase: 'auto-fix-skip',
+      reason: dispatchDecision.reason,
+      status: dispatchDecision.status,
+      autoFixAttempts: dispatchDecision.autoFixAttempts,
+      dispositionReason: dispatchDecision.dispositionReason ?? null,
+    });
+    return;
+  }
 
-  const task = orchestrator.getTask(taskId);
-  if (!task || task.status !== 'failed') return;
+  const task = dispatchDecision.task;
 
   const attempts = (task.execution.autoFixAttempts ?? 0) + 1;
   const max = orchestrator.getAutoFixRetryBudget(taskId);

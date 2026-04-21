@@ -40,6 +40,7 @@ import {
 } from './workflow-actions.js';
 import { openExternalTerminalForTask } from './open-terminal-for-task.js';
 import { dispatchTasksIfNeeded, executeGlobalTopup, finalizeMutationWithGlobalTopup } from './global-topup.js';
+import { getAutoFixDispatchDecision } from './auto-fix-session.js';
 import {
   delegationTimeoutMs,
   tryDelegateExec,
@@ -233,11 +234,17 @@ export function wireHeadlessAutoFix(
   const unsubscribe = deps.messageBus.subscribe<TaskDelta>(Channels.TASK_DELTA, (delta) => {
     if (delta.type !== 'updated' || delta.changes.status !== 'failed') return;
     const inProgress = autoFixInProgress.has(delta.taskId);
-    const shouldAutoFix = deps.orchestrator.shouldAutoFix(delta.taskId);
-    logHeadlessAutoFixDebug(delta.taskId, 'delta-failed', { shouldAutoFix, inProgress });
+    const dispatchDecision = getAutoFixDispatchDecision(deps.orchestrator as any, delta.taskId);
+    const shouldAutoFix = dispatchDecision.shouldDispatch;
+    logHeadlessAutoFixDebug(delta.taskId, 'delta-failed', {
+      shouldAutoFix,
+      inProgress,
+      dispositionReason: dispatchDecision.shouldDispatch ? undefined : dispatchDecision.dispositionReason,
+    });
     if (inProgress || !shouldAutoFix) {
       logHeadlessAutoFixDebug(delta.taskId, 'schedule-skip', {
-        reason: !shouldAutoFix ? 'shouldAutoFix-false' : 'already-in-progress',
+        reason: !shouldAutoFix ? dispatchDecision.reason : 'already-in-progress',
+        dispositionReason: dispatchDecision.shouldDispatch ? undefined : dispatchDecision.dispositionReason,
       });
       return;
     }
