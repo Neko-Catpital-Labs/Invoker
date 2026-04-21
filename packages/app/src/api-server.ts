@@ -50,7 +50,7 @@ import {
   setWorkflowMergeMode as sharedSetWorkflowMergeMode,
   resolveConflictAction,
 } from './workflow-actions.js';
-import { executeGlobalTopup, finalizeMutationWithGlobalTopup } from './global-topup.js';
+import { dispatchTasksIfNeeded, executeGlobalTopup, finalizeMutationWithGlobalTopup } from './global-topup.js';
 
 export interface ApiServerDeps {
   logger?: Logger;
@@ -208,8 +208,13 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
         try {
           await killRunningTask?.(taskId);
           const started = sharedRestartTask(taskId, { orchestrator });
-          const runnable = started.filter(t => t.status === 'running');
-          await taskExecutor.executeTasks(runnable);
+          const runnable = await dispatchTasksIfNeeded({
+            orchestrator,
+            taskExecutor,
+            tasks: started,
+            logger: apiLogger,
+            context: 'api.tasks.restart',
+          });
           await executeGlobalTopup({
             orchestrator,
             taskExecutor,
@@ -333,8 +338,13 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
         const workflowId = decodeURIComponent(wfRestartMatch[1]);
         try {
           const started = sharedRecreateWorkflow(workflowId, { persistence, orchestrator });
-          const runnable = started.filter(t => t.status === 'running');
-          await taskExecutor.executeTasks(runnable);
+          const runnable = await dispatchTasksIfNeeded({
+            orchestrator,
+            taskExecutor,
+            tasks: started,
+            logger: apiLogger,
+            context: 'api.workflows.restart',
+          });
           await executeGlobalTopup({
             orchestrator,
             taskExecutor,
@@ -428,8 +438,13 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
             return;
           }
           const started = sharedEditTaskCommand(taskId, command, { orchestrator });
-          const runnable = started.filter(t => t.status === 'running');
-          await taskExecutor.executeTasks(runnable);
+          const runnable = await dispatchTasksIfNeeded({
+            orchestrator,
+            taskExecutor,
+            tasks: started,
+            logger: apiLogger,
+            context: 'api.tasks.edit-command',
+          });
           json(res, 200, { ok: true, taskId, action: 'command_edited', tasksStarted: runnable.length });
         } catch (err) {
           json(res, 400, { error: err instanceof Error ? err.message : String(err) });
@@ -449,8 +464,13 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
             return;
           }
           const started = sharedEditTaskType(taskId, executorType, { orchestrator }, remoteTargetId);
-          const runnable = started.filter(t => t.status === 'running');
-          await taskExecutor.executeTasks(runnable);
+          const runnable = await dispatchTasksIfNeeded({
+            orchestrator,
+            taskExecutor,
+            tasks: started,
+            logger: apiLogger,
+            context: 'api.tasks.edit-type',
+          });
           json(res, 200, { ok: true, taskId, action: 'type_edited', tasksStarted: runnable.length });
         } catch (err) {
           json(res, 400, { error: err instanceof Error ? err.message : String(err) });
@@ -470,8 +490,13 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
             return;
           }
           const started = sharedEditTaskAgent(taskId, agent, { orchestrator });
-          const runnable = started.filter(t => t.status === 'running');
-          await taskExecutor.executeTasks(runnable);
+          const runnable = await dispatchTasksIfNeeded({
+            orchestrator,
+            taskExecutor,
+            tasks: started,
+            logger: apiLogger,
+            context: 'api.tasks.edit-agent',
+          });
           json(res, 200, { ok: true, taskId, action: 'agent_edited', tasksStarted: runnable.length });
         } catch (err) {
           json(res, 400, { error: err instanceof Error ? err.message : String(err) });
@@ -492,8 +517,13 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
             return;
           }
           const started = sharedSetTaskExternalGatePolicies(taskId, updates, { orchestrator });
-          const runnable = started.filter((t) => t.status === 'running');
-          if (runnable.length > 0) await taskExecutor.executeTasks(runnable);
+          const runnable = await dispatchTasksIfNeeded({
+            orchestrator,
+            taskExecutor,
+            tasks: started,
+            logger: apiLogger,
+            context: 'api.tasks.gate-policy',
+          });
           json(res, 200, { ok: true, taskId, action: 'gate_policy_updated', tasksStarted: runnable.length });
         } catch (err) {
           json(res, 400, { error: err instanceof Error ? err.message : String(err) });

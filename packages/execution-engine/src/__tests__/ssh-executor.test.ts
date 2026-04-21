@@ -5,6 +5,8 @@ import { SshExecutor } from '../ssh-executor.js';
 import type { WorkRequest } from '@invoker/contracts';
 import type { PersistedTaskMeta } from '../executor.js';
 import { createSshRemoteScriptError } from '../ssh-git-exec.js';
+import { computeRepoUrlHash } from '../git-utils.js';
+import { computeBranchHash } from '../branch-utils.js';
 
 function makeRequest(overrides: Partial<WorkRequest> = {}): WorkRequest {
   return {
@@ -207,6 +209,129 @@ describe('SshExecutor managed workspace mode', () => {
     expect(callScript).toMatch(/base64 -d/);
     expect(callAgentId).toBeUndefined();
     expect(callFinalize).toEqual({ branch: handle.branch, worktreePath: handle.workspacePath });
+  });
+
+  it('reuses a managed SSH worktree by actionId when the old base is still compatible', async () => {
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'testuser',
+      sshKeyPath: '/dev/null',
+      managedWorkspaces: true,
+    }) as any;
+
+    const repoHash = computeRepoUrlHash('git@github.com:owner/repo.git');
+    const remotePath = `/home/testuser/.invoker/worktrees/${repoHash}/experiment-test-task-oldhash`;
+    const execRemoteCapture = vi.spyOn(ssh, 'execRemoteCapture').mockImplementation(async (script: string) => {
+      if (script.includes('__INVOKER_BASE_REF__=')) {
+        return [
+          '__INVOKER_BASE_REF__=origin/main',
+          '__INVOKER_BASE_HEAD__=abc123def456abc123def456abc123def456abc1',
+        ].join('\n');
+      }
+      if (script.includes('printf %s "$HOME"')) return '/home/testuser';
+      if (script.includes('worktree list --porcelain')) {
+        return `worktree ${remotePath}
+HEAD deadbeef
+branch refs/heads/experiment/test-task-oldhash
+`;
+      }
+      if (script.includes('merge-base --is-ancestor')) return '';
+      if (script.includes('branch -m')) {
+        const toEncoded = script.match(/TO=\$\(echo ([^ ]+) \| base64 -d\)/)?.[1];
+        const toBranch = Buffer.from(toEncoded ?? '', 'base64').toString('utf8');
+        return `${toBranch}\n`;
+      }
+      return '';
+    });
+
+    const setupTaskBranchSpy = vi.spyOn(ssh, 'setupTaskBranch').mockResolvedValue(undefined);
+    const mergeUpstreamsSpy = vi.spyOn(ssh, 'mergeRequestUpstreamBranches').mockResolvedValue(undefined);
+    vi.spyOn(ssh, 'spawnSshRemoteStdin').mockImplementation(
+      (_executionId: string, _request: any, handle: any) => handle,
+    );
+
+    const req = makeRequest({
+      actionType: 'command',
+      actionId: 'test-task',
+      inputs: {
+        command: 'pnpm test',
+        description: 'run tests',
+        repoUrl: 'git@github.com:owner/repo.git',
+      },
+    });
+
+    const handle = await ssh.start(req);
+
+    expect(handle.workspacePath).toBe(`~/.invoker/worktrees/${repoHash}/experiment-test-task-oldhash`);
+    expect(setupTaskBranchSpy).not.toHaveBeenCalled();
+    expect(mergeUpstreamsSpy).toHaveBeenCalled();
+    expect(execRemoteCapture).toHaveBeenCalledWith(expect.stringContaining('branch -m'), 'rename_reuse_branch');
+  });
+
+  it('cleans up the existing branch-owner worktree before recreating a conflicting target branch', async () => {
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'testuser',
+      sshKeyPath: '/dev/null',
+      managedWorkspaces: true,
+    }) as any;
+
+    const repoHash = computeRepoUrlHash('git@github.com:owner/repo.git');
+    const baseHead = 'abc123def456abc123def456abc123def456abc1';
+    const branchHash = computeBranchHash(
+      'test-task-conflict',
+      'pnpm test',
+      undefined,
+      [],
+      baseHead,
+      '',
+    );
+    const targetBranch = `experiment/test-task-conflict-${branchHash}`;
+    const ownerPath = `/home/testuser/.invoker/worktrees/${repoHash}/stale-owner-${branchHash}`;
+    let cleanupScript = '';
+    vi.spyOn(ssh, 'execRemoteCapture').mockImplementation(async (script: string, phase?: string) => {
+      if (script.includes('__INVOKER_BASE_REF__=')) {
+        return [
+          '__INVOKER_BASE_REF__=origin/main',
+          `__INVOKER_BASE_HEAD__=${baseHead}`,
+        ].join('\n');
+      }
+      if (script.includes('printf %s "$HOME"')) return '/home/testuser';
+      if (script.includes('worktree list --porcelain')) {
+        return `worktree ${ownerPath}
+HEAD deadbeef
+branch refs/heads/${targetBranch}
+`;
+      }
+      if (phase === 'cleanup_worktree') {
+        cleanupScript = script;
+        return '';
+      }
+      if (script.includes('rev-parse --abbrev-ref HEAD')) return 'not-the-target-branch\n';
+      return '';
+    });
+
+    const setupTaskBranchSpy = vi.spyOn(ssh, 'setupTaskBranch').mockResolvedValue(undefined);
+    vi.spyOn(ssh, 'spawnSshRemoteStdin').mockImplementation(
+      (_executionId: string, _request: any, handle: any) => handle,
+    );
+
+    const req = makeRequest({
+      actionType: 'command',
+      actionId: 'test-task-conflict',
+      inputs: {
+        command: 'pnpm test',
+        description: 'run tests',
+        repoUrl: 'git@github.com:owner/repo.git',
+      },
+    });
+
+    await ssh.start(req);
+
+    const encodedPaths = cleanupScript.match(/WORKTREES_B64="([^"]+)"/)?.[1];
+    const decodedPaths = Buffer.from(encodedPaths ?? '', 'base64').toString('utf8');
+    expect(decodedPaths).toContain(ownerPath);
+    expect(setupTaskBranchSpy).toHaveBeenCalled();
   });
 
   it('throws when managedWorkspaces=true but repoUrl is missing', async () => {
