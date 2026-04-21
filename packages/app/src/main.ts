@@ -862,6 +862,7 @@ if (isHeadless) {
   let apiServer: ApiServer | null = null;
   let ownerMode = true;
   const taskHandles = new Map<string, { handle: ExecutorHandle; executor: Executor }>();
+  const launchingTasks = new Set<string>();
   const guiMutationHandlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();
   let dbPollInterval: ReturnType<typeof setInterval> | null = null;
   let activityPollInterval: ReturnType<typeof setInterval> | null = null;
@@ -1205,7 +1206,19 @@ if (isHeadless) {
         onOutput: (taskId, data) => {
           enqueueTaskOutput(taskId, data);
         },
+        onLaunchStart: (taskId, executor) => {
+          launchingTasks.add(taskId);
+          logger.info(`Task "${taskId}" launch started (executor: ${executor.type})`, { module: 'exec' });
+        },
+        onLaunchFailed: (taskId, error, executor) => {
+          launchingTasks.delete(taskId);
+          logger.error(
+            `Task "${taskId}" launch failed before spawn (executor: ${executor.type}): ${error.message}`,
+            { module: 'exec' },
+          );
+        },
         onSpawned: (taskId, handle, executor) => {
+          launchingTasks.delete(taskId);
           flushTaskOutput(taskId);
           logger.info(
             `Task "${taskId}" spawned (handle: ${handle.executionId}, executor: ${executor.type}, workspace: ${handle.workspacePath ?? 'none'}, branch: ${handle.branch ?? 'none'})`,
@@ -2033,7 +2046,8 @@ if (isHeadless) {
                     task.execution.phase === 'launching'
                     && launchStartedAt !== undefined
                     && launchAgeMs >= launchingStallTimeoutMs
-                    && !taskHandles.has(task.id);
+                    && !taskHandles.has(task.id)
+                    && !launchingTasks.has(task.id);
                   if (launchStalled) {
                     const launchError =
                       `Launch stalled: task remained in running/launching for ${Math.floor(launchingStallTimeoutMs / 1000)}s without a spawned execution handle`;

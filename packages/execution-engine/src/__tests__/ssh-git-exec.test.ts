@@ -13,6 +13,7 @@ import {
   buildWorktreeListScript,
   buildWorktreeHeadScript,
   buildWorktreeCleanupScript,
+  buildWorktreeRenameBranchScript,
   buildRecordAndPushScript,
   parseRecordAndPushOutput,
   execRemoteCapture,
@@ -246,14 +247,14 @@ describe('buildWorktreeCleanupScript', () => {
   it('generates cleanup script with prune and remove logic', () => {
     const script = buildWorktreeCleanupScript({
       remoteClone: '$HOME/.invoker/repos/abc123',
-      canonicalRemoteWt: '$HOME/.invoker/worktrees/abc123/exp-task-def',
+      worktreePaths: ['$HOME/.invoker/worktrees/abc123/exp-task-def'],
     });
 
     expect(script).toContain('set -euo pipefail');
     expect(script).toContain('CLONE="$HOME/.invoker/repos/abc123"');
-    expect(script).toContain('WT="$HOME/.invoker/worktrees/abc123/exp-task-def"');
     expect(script).toContain('CLONE="$HOME"');
-    expect(script).toContain('WT="$HOME"');
+    expect(script).toContain('WORKTREES_B64=');
+    expect(script).toContain('while IFS= read -r WT; do');
     expect(script).toContain('mkdir -p "$(dirname "$WT")"');
     expect(script).toContain('git -C "$CLONE" worktree prune');
     expect(script).toContain('git -C "$CLONE" worktree remove --force "$WT"');
@@ -274,7 +275,7 @@ describe('buildWorktreeCleanupScript', () => {
 
     const script = buildWorktreeCleanupScript({
       remoteClone: '~/.invoker/repos/abc123',
-      canonicalRemoteWt: '~/.invoker/worktrees/abc123/exp-task-def',
+      worktreePaths: ['~/.invoker/worktrees/abc123/exp-task-def'],
     });
 
     execFileSync('bash', ['-lc', script], {
@@ -287,6 +288,22 @@ describe('buildWorktreeCleanupScript', () => {
     expect(() => execSync(`test ! -e ${JSON.stringify(join(staleWt, 'sentinel.txt'))}`)).not.toThrow();
     expect(() => execSync(`test ! -e ${JSON.stringify(literalTildeRoot)}`)).not.toThrow();
     execSync(`rm -rf ${JSON.stringify(literalTildeRoot)}`);
+  });
+});
+
+describe('buildWorktreeRenameBranchScript', () => {
+  it('renames a managed branch and prints the new HEAD ref', () => {
+    const script = buildWorktreeRenameBranchScript({
+      worktreePath: '~/.invoker/worktrees/abc123/exp-task-old',
+      fromBranch: 'experiment/task-old',
+      toBranch: 'experiment/task-new',
+    });
+
+    expect(script).toContain('WT=$(echo');
+    expect(script).toContain('FROM=$(echo');
+    expect(script).toContain('TO=$(echo');
+    expect(script).toContain('git -C "$WT" branch -m "$FROM" "$TO"');
+    expect(script).toContain('git -C "$WT" rev-parse --abbrev-ref HEAD');
   });
 });
 
