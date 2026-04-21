@@ -705,6 +705,56 @@ describe('SshExecutor entry lifecycle', () => {
     await new Promise((r) => setTimeout(r, 50));
   });
 
+  it('changes managed branch and worktree when request salt changes, as recreate does', async () => {
+    const ssh2 = new SshExecutor({
+      host: 'localhost',
+      user: 'testuser',
+      sshKeyPath: '/dev/null',
+      managedWorkspaces: true,
+      remoteInvokerHome: '~/.invoker',
+    }) as any;
+
+    vi.spyOn(ssh2, 'execRemoteCapture').mockImplementation(async (script: string) => {
+      if (script.includes('__INVOKER_BASE_REF__=')) {
+        return '__INVOKER_BASE_REF__=origin/main\n__INVOKER_BASE_HEAD__=abc123def456abc123def456abc123def456abc1';
+      }
+      if (script.includes('printf %s "$HOME"')) return '/home/testuser';
+      if (script.includes('worktree list --porcelain')) return '';
+      return '';
+    });
+    const setupTaskBranchSpy = vi.spyOn(ssh2, 'setupTaskBranch').mockResolvedValue(undefined);
+    vi.spyOn(ssh2, 'spawnSshRemoteStdin').mockImplementation(
+      async (_executionId: string, _request: any, handle: any) => handle,
+    );
+
+    const baseInputs = {
+      command: 'echo test',
+      description: 'test',
+      repoUrl: 'git@github.com:owner/repo.git',
+    };
+    const first = await ssh2.start(makeRequest({
+      requestId: 'req-salt-1',
+      actionType: 'command',
+      inputs: { ...baseInputs, salt: 'wf:1|task:4' },
+    }));
+    const second = await ssh2.start(makeRequest({
+      requestId: 'req-salt-2',
+      actionType: 'command',
+      inputs: { ...baseInputs, salt: 'wf:1|task:5' },
+    }));
+
+    const firstOpts = setupTaskBranchSpy.mock.calls[0]?.[3];
+    const secondOpts = setupTaskBranchSpy.mock.calls[1]?.[3];
+    expect(firstOpts?.branchName).toMatch(/^experiment\/test-task-[0-9a-f]{8}$/);
+    expect(secondOpts?.branchName).toMatch(/^experiment\/test-task-[0-9a-f]{8}$/);
+    expect(firstOpts?.branchName).not.toBe(secondOpts?.branchName);
+    expect(firstOpts?.worktreeDir).not.toBe(secondOpts?.worktreeDir);
+    expect(first.branch).toBe(firstOpts?.branchName);
+    expect(second.branch).toBe(secondOpts?.branchName);
+    expect(first.workspacePath).toBe(firstOpts?.worktreeDir);
+    expect(second.workspacePath).toBe(secondOpts?.worktreeDir);
+  });
+
   it('managed mode with absolute remoteInvokerHome still uses base64-decode (normalize is a no-op)', async () => {
     const ssh2 = new SshExecutor({
       host: 'localhost',
