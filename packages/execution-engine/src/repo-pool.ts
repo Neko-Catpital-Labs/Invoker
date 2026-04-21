@@ -12,6 +12,7 @@ import {
 } from './worktree-discovery.js';
 import { syncPlanBaseRemoteForRef, isInvokerManagedPoolBranch } from './plan-base-remote.js';
 import { remoteFetchForPool } from './remote-fetch-policy.js';
+import { isWorkspaceCleanupEnabled } from './workspace-cleanup-policy.js';
 import { computeRepoUrlHash, sanitizeBranchForPath } from './git-utils.js';
 
 export interface RepoPoolConfig {
@@ -113,6 +114,11 @@ export class RepoPool {
   }
 
   private async doRemoveManagedBranchesInMirror(repoUrl: string, branches: string[]): Promise<void> {
+    // Gated: with attemptId in branch hash, leftover refs cannot collide with
+    // future attempts, so deletion is unnecessary. Set
+    // INVOKER_ENABLE_WORKSPACE_CLEANUP=1 to restore the rebase-and-retry
+    // branch sweep.
+    if (!isWorkspaceCleanupEnabled()) return;
     const dir = this.cloneDir(repoUrl);
     if (!existsSync(dir) || !this.worktreeBaseDir) return;
     for (const branch of branches) {
@@ -311,7 +317,9 @@ export class RepoPool {
           );
           mkdirSync(worktreeParent, { recursive: true });
         } catch {
-          await this.reconcileStaleWorktreePath(clonePath, worktreePath);
+          if (isWorkspaceCleanupEnabled()) {
+            await this.reconcileStaleWorktreePath(clonePath, worktreePath);
+          }
           mkdirSync(worktreeParent, { recursive: true });
           const script = bashPreserveOrReset({
             repoDir: clonePath,
@@ -324,8 +332,14 @@ export class RepoPool {
         }
         break;
       case 'recreate':
-        for (const cleanupPath of plan.cleanupPaths) {
-          await this.reconcileStaleWorktreePath(clonePath, cleanupPath);
+        // Gated: branch hash now embeds attemptId, so the canonical worktree
+        // path for this attempt has never existed. Stale orphans from prior
+        // attempts cannot collide. Re-enable INVOKER_ENABLE_WORKSPACE_CLEANUP
+        // for disk hygiene if needed.
+        if (isWorkspaceCleanupEnabled()) {
+          for (const cleanupPath of plan.cleanupPaths) {
+            await this.reconcileStaleWorktreePath(clonePath, cleanupPath);
+          }
         }
         mkdirSync(worktreeParent, { recursive: true });
         {

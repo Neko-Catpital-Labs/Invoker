@@ -408,12 +408,14 @@ export class TaskRunner {
     }
 
     // Read workflow + task generations for content-addressable branch salt.
+    // attemptId is mixed in unconditionally so that every attempt produces a
+    // brand-new branch hash. This makes cleanup of old worktrees/refs
+    // unnecessary for correctness: a fresh attempt can never collide with
+    // leftover state from a prior attempt.
     const workflow = task.config.workflowId ? this.persistence.loadWorkflow?.(task.config.workflowId) : undefined;
     const workflowGeneration = (workflow as any)?.generation ?? 0;
     const taskExecutionGeneration = task.execution.generation ?? 0;
-    const generationSalt = workflowGeneration > 0 || taskExecutionGeneration > 0
-      ? `wf:${workflowGeneration}|task:${taskExecutionGeneration}`
-      : undefined;
+    const generationSalt = `wf:${workflowGeneration}|task:${taskExecutionGeneration}|attempt:${attemptId}`;
     const baseBranch = workflow?.baseBranch ?? this.defaultBranch;
     const repoUrl = workflow?.repoUrl;
 
