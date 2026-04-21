@@ -6659,18 +6659,18 @@ describe('TaskRunner', () => {
       });
 
       await flush();
-      expect(log).toEqual(['enter-1']);
+      expect(log).toEqual(['enter-1', 'enter-2']);
 
       deferred1.resolve(undefined as any);
       await flush();
-      expect(log).toEqual(['enter-1', 'exit-1', 'enter-2']);
+      expect(log).toEqual(['enter-1', 'enter-2', 'exit-1']);
 
       deferred2.resolve(undefined as any);
       await Promise.all([done1, done2]);
-      expect(log).toEqual(['enter-1', 'exit-1', 'enter-2', 'exit-2']);
+      expect(log).toEqual(['enter-1', 'enter-2', 'exit-1', 'exit-2']);
     });
 
-    it('a blocked first merge completion prevents a second merge completion from entering merge execution', async () => {
+    it('a blocked first merge completion does not prevent a second merge completion from entering merge execution', async () => {
       vi.useFakeTimers();
       try {
         const log: string[] = [];
@@ -6775,23 +6775,14 @@ describe('TaskRunner', () => {
         await flush();
         await vi.advanceTimersByTimeAsync(6 * 60 * 1000);
 
-        expect(log).toEqual(['enter-merge-1']);
-        expect(updateAttempt).not.toHaveBeenCalledWith(
-          'attempt-2',
-          expect.objectContaining({
-            lastHeartbeatAt: expect.any(Date),
-            leaseExpiresAt: expect.any(Date),
-          }),
-        );
-        expect(receivedHeartbeats).not.toContain('merge-2');
-        expect(onCompleteCb).not.toHaveBeenCalledWith(
-          'merge-2',
-          expect.anything(),
-        );
+        expect(log).toEqual(['enter-merge-1', 'enter-merge-2', 'exit-merge-2']);
+        expect(updateAttempt).not.toHaveBeenCalled();
+        expect(receivedHeartbeats).toEqual([]);
+        expect(onCompleteCb).not.toHaveBeenCalledWith('merge-2', expect.anything());
 
         deferred1.resolve(undefined as any);
         await Promise.all([done1, done2]);
-        expect(log).toEqual(['enter-merge-1', 'exit-merge-1', 'enter-merge-2', 'exit-merge-2']);
+        expect(log).toEqual(['enter-merge-1', 'enter-merge-2', 'exit-merge-2', 'exit-merge-1']);
       } finally {
         vi.useRealTimers();
       }
