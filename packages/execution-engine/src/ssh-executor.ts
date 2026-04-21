@@ -366,7 +366,17 @@ echo ${payloadB64} | base64 -d | bash -se
           headMatchesTargetBranch: abbrevRefMatchesBranch(head, experimentBranch),
         };
       } catch {
-        exactBranchCandidate = undefined;
+        // Temporary invariant: today we still treat "managed branch appears in
+        // git worktree list" as authoritative ownership for cleanup/recreate.
+        // That is only valid while Invoker assumes one managed worktree per
+        // branch. When multi-worktree-per-branch support lands, revisit this
+        // fallback and stop collapsing discovery into branch ownership.
+        // For now, if the follow-up HEAD probe fails, treat the discovered
+        // owner path as stale so it still gets reconciled before recreate.
+        exactBranchCandidate = {
+          path: reuseAbs,
+          headMatchesTargetBranch: false,
+        };
       }
     }
 

@@ -51,6 +51,48 @@ describe('auto-fix-session', () => {
     });
   });
 
+  it('skips enqueue for broad lint failures', () => {
+    const orchestrator = {
+      shouldAutoFix: vi.fn(() => true),
+      getTask: vi.fn(() => ({
+        id: 'wf-1/task-1',
+        status: 'failed',
+        config: { command: 'eslint packages/' },
+        execution: { autoFixAttempts: 0, error: "✖ 1696 problems\nno-explicit-any\nno-undef" },
+      })),
+    };
+    const persistence = {
+      listWorkflowMutationIntents: vi.fn(() => []),
+    };
+
+    expect(getAutoFixEnqueueDecision(orchestrator as any, persistence as any, 'wf-1', 'wf-1/task-1')).toEqual({
+      shouldEnqueue: false,
+      reason: 'failure-disposition-fail-fast',
+      status: 'failed',
+      dispositionReason: 'broad-lint-failure',
+    });
+  });
+
+  it('skips dispatch for DTS build failures', () => {
+    const orchestrator = {
+      shouldAutoFix: vi.fn(() => true),
+      getTask: vi.fn(() => ({
+        id: 'wf-1/task-1',
+        status: 'failed',
+        config: { command: 'pnpm -r build' },
+        execution: { autoFixAttempts: 0, error: 'TS6307: File is not listed within the file list of project.\nError: error occurred in dts build' },
+      })),
+    };
+
+    expect(getAutoFixDispatchDecision(orchestrator as any, 'wf-1/task-1')).toEqual({
+      shouldDispatch: false,
+      reason: 'failure-disposition-fail-fast',
+      status: 'failed',
+      autoFixAttempts: 0,
+      dispositionReason: 'dts-build-config-failure',
+    });
+  });
+
   it('allows dispatch when the task is still failed and auto-fix eligible', () => {
     const task = { id: 'wf-1/task-1', status: 'failed', execution: { autoFixAttempts: 1 } };
     const orchestrator = {
