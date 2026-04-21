@@ -1,6 +1,7 @@
 import type { SQLiteAdapter, WorkflowMutationIntent } from '@invoker/data-store';
 import type { TaskState } from '@invoker/workflow-core';
 import { listOpenFixIntentsForTask } from './auto-fix-intents.js';
+import { classifyAutoFixFailure } from './auto-fix-disposition.js';
 
 type AutoFixOrchestrator = {
   shouldAutoFix(taskId: string): boolean;
@@ -13,18 +14,20 @@ export type AutoFixEnqueueDecision =
   | { shouldEnqueue: true }
   | {
     shouldEnqueue: false;
-    reason: 'shouldAutoFix-false' | 'already-live-intent';
+    reason: 'shouldAutoFix-false' | 'already-live-intent' | 'failure-disposition-fail-fast';
     status?: string;
     existingIntentIds?: number[];
+    dispositionReason?: string;
   };
 
 export type AutoFixDispatchDecision =
   | { shouldDispatch: true; task: TaskState }
   | {
     shouldDispatch: false;
-    reason: 'shouldAutoFix-false';
+    reason: 'shouldAutoFix-false' | 'failure-disposition-fail-fast';
     status: string;
     autoFixAttempts: number | null;
+    dispositionReason?: string;
   };
 
 export function getOpenAutoFixIntentsForTask(
@@ -43,11 +46,21 @@ export function getAutoFixEnqueueDecision(
   taskId: string,
 ): AutoFixEnqueueDecision {
   const shouldAutoFixNow = orchestrator.shouldAutoFix(taskId);
+  const task = orchestrator.getTask(taskId);
   if (!shouldAutoFixNow) {
     return {
       shouldEnqueue: false,
       reason: 'shouldAutoFix-false',
-      status: orchestrator.getTask(taskId)?.status,
+      status: task?.status,
+    };
+  }
+  const disposition = classifyAutoFixFailure(task);
+  if (disposition.disposition === 'fail_fast') {
+    return {
+      shouldEnqueue: false,
+      reason: 'failure-disposition-fail-fast',
+      status: task?.status,
+      dispositionReason: disposition.reason,
     };
   }
 
@@ -70,6 +83,16 @@ export function getAutoFixDispatchDecision(
 ): AutoFixDispatchDecision {
   const task = orchestrator.getTask(taskId);
   if (task && orchestrator.shouldAutoFix(taskId)) {
+    const disposition = classifyAutoFixFailure(task);
+    if (disposition.disposition === 'fail_fast') {
+      return {
+        shouldDispatch: false,
+        reason: 'failure-disposition-fail-fast',
+        status: task.status,
+        autoFixAttempts: task.execution.autoFixAttempts ?? null,
+        dispositionReason: disposition.reason,
+      };
+    }
     return { shouldDispatch: true, task };
   }
   return {
