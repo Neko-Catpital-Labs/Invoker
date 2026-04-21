@@ -1418,6 +1418,54 @@ describe('TaskRunner', () => {
   });
 
   describe('launch timeout repro', () => {
+    it('reports launch-in-progress callbacks while executor.start is still pending', async () => {
+      const launchStart = vi.fn();
+      const launchFailed = vi.fn();
+      const deferred = new Promise<never>(() => {});
+      const hangingExecutor = {
+        type: 'ssh',
+        start: vi.fn(async () => await deferred),
+        onOutput: vi.fn(),
+        onComplete: vi.fn(),
+        onHeartbeat: vi.fn(),
+        kill: vi.fn(),
+        destroyAll: vi.fn(),
+      };
+      const runner = new TaskRunner({
+        orchestrator: {
+          getTask: () => undefined,
+          handleWorkerResponse: vi.fn(),
+        } as any,
+        persistence: {
+          updateTask: vi.fn(),
+          updateAttempt: vi.fn(),
+        } as any,
+        executorRegistry: {
+          getDefault: () => hangingExecutor,
+          get: () => hangingExecutor,
+          getAll: () => [hangingExecutor],
+        } as any,
+        cwd: '/tmp',
+        callbacks: {
+          onLaunchStart: launchStart,
+          onLaunchFailed: launchFailed,
+        },
+      });
+
+      const task = makeTask({
+        id: 'launch-in-progress',
+        status: 'running',
+        config: { command: 'echo hello' },
+        execution: { selectedAttemptId: 'launch-in-progress-a1' },
+      });
+
+      void runner.executeTask(task);
+      await vi.waitFor(() => expect(hangingExecutor.start).toHaveBeenCalledTimes(1));
+
+      expect(launchStart).toHaveBeenCalledWith('launch-in-progress', hangingExecutor);
+      expect(launchFailed).not.toHaveBeenCalled();
+    });
+
     it('fails a task when executor.start never resolves and keeps it in launching', async () => {
       vi.useFakeTimers();
       const previousTimeout = process.env.INVOKER_EXECUTOR_START_TIMEOUT_MS;
@@ -1425,6 +1473,8 @@ describe('TaskRunner', () => {
       try {
         const handleWorkerResponse = vi.fn();
         const onComplete = vi.fn();
+        const onLaunchStart = vi.fn();
+        const onLaunchFailed = vi.fn();
         const persistence = {
           updateTask: vi.fn(),
           updateAttempt: vi.fn(),
@@ -1463,7 +1513,7 @@ describe('TaskRunner', () => {
             getAll: () => [hangingExecutor],
           } as any,
           cwd: '/tmp',
-          callbacks: { onComplete },
+          callbacks: { onComplete, onLaunchStart, onLaunchFailed },
         });
 
         const done = runner.executeTask(task);
@@ -1478,6 +1528,14 @@ describe('TaskRunner', () => {
               error: expect.stringContaining('Executor startup timed out after 100ms'),
             }),
           }),
+        );
+        expect(onLaunchStart).toHaveBeenCalledWith('launch-hang', hangingExecutor);
+        expect(onLaunchFailed).toHaveBeenCalledWith(
+          'launch-hang',
+          expect.objectContaining({
+            message: expect.stringContaining('Executor startup failed (worktree): Executor startup timed out after 100ms'),
+          }),
+          hangingExecutor,
         );
         expect(handleWorkerResponse).toHaveBeenCalledWith(
           expect.objectContaining({
@@ -3323,11 +3381,11 @@ describe('TaskRunner', () => {
       (executor as any).activePrPollers.delete('task-1');
     });
 
-    it('completes merge gate when PR is approved', async () => {
+    it('approved external_review PR auto-completes a review_ready merge gate', async () => {
       const orchestrator = {
         getTask: vi.fn((id: string) => ({
           id,
-          status: 'awaiting_approval',
+          status: 'review_ready',
           execution: { reviewId: 'owner/repo#42' },
         })),
         approve: vi.fn(),

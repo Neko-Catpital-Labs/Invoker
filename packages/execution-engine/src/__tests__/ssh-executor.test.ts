@@ -33,6 +33,16 @@ function createMockProcess(): ChildProcess & EventEmitter {
   return proc;
 }
 
+function createDeferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 // ---------------------------------------------------------------------------
 // Module-level spawn mock
 //
@@ -295,6 +305,56 @@ describe('SshExecutor managed workspace mode', () => {
     expect(capturedScript).toContain('exit 42');
     // Note: We're testing that the provision command is included in the script.
     // The actual exit code propagation is tested by integration tests with real SSH.
+  });
+
+  it('does not return a handle until managed remote bootstrap/setup has finished', async () => {
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'testuser',
+      sshKeyPath: '/dev/null',
+      managedWorkspaces: true,
+    }) as any;
+
+    const bootstrap = createDeferred<string>();
+    vi.spyOn(ssh, 'execRemoteCapture').mockImplementation(async (script: string) => {
+      if (script.includes('__INVOKER_BASE_REF__=')) {
+        return bootstrap.promise;
+      }
+      if (script.includes('printf %s \"$HOME\"')) return '/home/testuser';
+      if (script.includes('worktree list --porcelain')) return '';
+      return '';
+    });
+
+    const setupTaskBranchSpy = vi.spyOn(ssh, 'setupTaskBranch').mockResolvedValue(undefined);
+    const spawnSpy = vi.spyOn(ssh, 'spawnSshRemoteStdin').mockImplementation(
+      (_executionId: string, _request: any, handle: any) => handle,
+    );
+
+    const req = makeRequest({
+      actionType: 'command',
+      inputs: {
+        command: 'echo hello',
+        description: 'test',
+        repoUrl: 'git@github.com:owner/repo.git',
+      },
+    });
+
+    let settled = false;
+    const pending = ssh.start(req).then(() => {
+      settled = true;
+    });
+
+    await new Promise((r) => setImmediate(r));
+
+    expect(settled).toBe(false);
+    expect(setupTaskBranchSpy).not.toHaveBeenCalled();
+    expect(spawnSpy).not.toHaveBeenCalled();
+
+    bootstrap.resolve('__INVOKER_BASE_REF__=origin/main\n__INVOKER_BASE_HEAD__=abc123');
+    await pending;
+
+    expect(setupTaskBranchSpy).toHaveBeenCalledTimes(1);
+    expect(spawnSpy).toHaveBeenCalledTimes(1);
   });
 
   it('uses configured remoteInvokerHome instead of default ~/.invoker', async () => {
