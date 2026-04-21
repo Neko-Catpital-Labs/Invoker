@@ -366,7 +366,13 @@ echo ${payloadB64} | base64 -d | bash -se
           headMatchesTargetBranch: abbrevRefMatchesBranch(head, experimentBranch),
         };
       } catch {
-        exactBranchCandidate = undefined;
+        // Worktree discovery is authoritative for branch ownership. If the
+        // follow-up HEAD probe fails, treat the discovered owner path as stale
+        // so it still gets reconciled before recreate.
+        exactBranchCandidate = {
+          path: reuseAbs,
+          headMatchesTargetBranch: false,
+        };
       }
     }
 
