@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import { normalizeBranchForGithubCli } from './github-branch-ref.js';
 import type { MergeGateProvider, MergeGateProviderResult, MergeGateApprovalStatus } from './merge-gate-provider.js';
 import { RESTART_TO_BRANCH_TRACE } from './exec-trace.js';
+import { pushBranchWithRecovery } from './git-branch-push-recovery.js';
 
 export class GitHubMergeGateProvider implements MergeGateProvider {
   readonly name = 'github';
@@ -22,7 +23,9 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
     const ghHead = normalizeBranchForGithubCli(featureBranch);
     console.log(`[merge-gate] createReview: ghBase=${ghBase} apiHead=${ghHead} cwd=${cwd}`);
 
-    await this.exec('git', ['push', '--force', '-u', 'origin', featureBranch], cwd);
+    await pushBranchWithRecovery({
+      exec: (args, execCwd) => this.exec('git', args, execCwd),
+    }, cwd, featureBranch);
 
     const listOutput = await this.exec('gh', [
       'pr', 'list',
