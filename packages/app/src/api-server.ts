@@ -459,7 +459,18 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
         return;
       }
 
-      // POST /api/tasks/:id/edit-type
+      // POST /api/tasks/:id/edit-type — Step 5: executor-type mutation
+      // **retry-class** route (substrate-only edit; preserves
+      // branch / workspacePath lineage). Body: { executorType,
+      // remoteTargetId? }. The substantive cancel-first /
+      // lineage-preserving reset / generation-bump routing lives in
+      // `Orchestrator.editTaskType`; this endpoint is a thin sync
+      // delegate via `editTaskType` in `workflow-actions.ts`. See
+      // `docs/architecture/task-invalidation-chart.md` Decision Table
+      // row "Edit `executorType`" and `MUTATION_POLICIES.executorType`
+      // (`retryTask` action / `task` scope, wired today through
+      // `Orchestrator.restartTask` via `buildInvalidationDeps` —
+      // Step 13 will rename the orchestrator primitive).
       const editTypeMatch = path.match(/^\/api\/tasks\/([^/]+)\/edit-type$/);
       if (method === 'POST' && editTypeMatch) {
         const taskId = decodeURIComponent(editTypeMatch[1]);

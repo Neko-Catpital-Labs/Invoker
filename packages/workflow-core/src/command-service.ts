@@ -161,6 +161,16 @@ export class CommandService {
     );
   }
 
+  /**
+   * Edit a task's executor type — **retry-class** invalidation route per
+   * Step 5 of the task-invalidation roadmap (substrate-only mutation;
+   * differs from the recreate-class `editTaskCommand` / `editTaskPrompt`
+   * / `editTaskAgent` seams). The orchestrator method is the synchronous
+   * cancel-first seam; this service-level entrypoint just serializes the
+   * mutation through the workflow mutex and wraps the result in a
+   * `CommandResult`. See `MUTATION_POLICIES.executorType` and
+   * `Orchestrator.editTaskType`.
+   */
   async editTaskType(
     envelope: CommandEnvelope<{ taskId: string; executorType: string; remoteTargetId?: string }>,
   ): Promise<CommandResult<TaskState[]>> {

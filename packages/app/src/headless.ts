@@ -1606,6 +1606,19 @@ async function headlessEditPrompt(taskId: string, newPrompt: string, deps: Headl
   autoFix.unsubscribe();
 }
 
+/**
+ * Headless `set type` (executor type) — **retry-class** invalidation
+ * route per Step 5 of `docs/architecture/task-invalidation-roadmap.md`
+ * (the chart's Decision Table row "Edit `executorType`": substrate-only
+ * mutation; preserves branch / workspacePath lineage). Differs from
+ * Steps 2/3/4 (`set command` / `set prompt` / `set agent`) which are
+ * recreate-class. Routes through `commandService.editTaskType` so the
+ * orchestrator's cancel-first seam (`Orchestrator.editTaskType`) runs
+ * under the workflow mutex; the single `withBumpedExecutionGeneration`
+ * bump and the lineage-preserving reset live in `restartTask` (today's
+ * `retryTask` compatibility wire — see `MUTATION_POLICIES.executorType`
+ * and `buildInvalidationDeps`).
+ */
 async function headlessEditExecutor(taskId: string, executorType: string, deps: HeadlessDeps): Promise<void> {
   if (!taskId || !executorType) throw new Error('Missing arguments. Usage: --headless edit-executor <taskId> <executorType>');
   const restored = restoreWorkflowForTask(taskId, deps);
