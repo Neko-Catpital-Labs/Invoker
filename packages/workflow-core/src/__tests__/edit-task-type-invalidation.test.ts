@@ -167,6 +167,71 @@ describe('Step 5: executor-type-mutation invalidation contract', () => {
   });
 });
 
+// ── Step 6: remote-target-mutation invalidation contract ────────────
+//
+// The chart's Decision Table row "Edit `remoteTargetId`" classifies
+// remote-host changes as **recreate-class** with task scope ("Remote
+// host change invalidates existing workspace lineage"). This is
+// distinct from Step 5's `executorType`-only retry-class fork; today
+// both axes flow through `Orchestrator.editTaskType` (the public
+// surface), which forks internally on whether the host actually
+// changed (see orchestrator.test.ts Step 6 block for the
+// orchestrator-level lineage / cancel-first / generation invariants
+// and `MUTATION_POLICIES.remoteTargetId` for the policy entry).
+//
+// This block pins the policy-table contract and the cancel-first
+// routing of the recreate-class action, mirroring the Step 5 block
+// above so a future refactor can't silently flip the action class.
+describe('Step 6: remote-target-mutation invalidation contract', () => {
+  it('MUTATION_POLICIES.remoteTargetId is RECREATE-class (not retry) and invalidates active attempts', () => {
+    expect(MUTATION_POLICIES.remoteTargetId.action).toBe('recreateTask');
+    expect(MUTATION_POLICIES.remoteTargetId.invalidatesExecutionSpec).toBe(true);
+    expect(MUTATION_POLICIES.remoteTargetId.invalidateIfActive).toBe(true);
+
+    // Defensive: remote-target MUST NOT collapse onto the Step 5
+    // executor-type retry-class bucket. Remote host changes invalidate
+    // workspace lineage, so the action MUST be `recreateTask`, not
+    // `retryTask`.
+    expect(MUTATION_POLICIES.remoteTargetId.action).not.toBe('retryTask');
+    expect(MUTATION_POLICIES.remoteTargetId.action).not.toBe(
+      MUTATION_POLICIES.executorType.action,
+    );
+  });
+
+  it('routes through applyInvalidation with cancelInFlight invoked BEFORE recreateTask dep', async () => {
+    const deps = makeDeps();
+    const policy = MUTATION_POLICIES.remoteTargetId;
+
+    await applyInvalidation('task', policy.action, 'task-a', deps);
+
+    expect(deps.cancelInFlight).toHaveBeenCalledWith('task', 'task-a');
+    expect(deps.recreateTask).toHaveBeenCalledWith('task-a');
+    // Retry-class deps MUST NOT be on the path — that would preserve
+    // workspace lineage the chart says is no longer authoritative
+    // after a remote host change.
+    expect(deps.retryTask).not.toHaveBeenCalled();
+    expect(deps.retryWorkflow).not.toHaveBeenCalled();
+    expect(deps.recreateWorkflow).not.toHaveBeenCalled();
+    expect(deps.cancelInFlight.mock.invocationCallOrder[0]).toBeLessThan(
+      deps.recreateTask.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('aborts the recreate when cancelInFlight rejects (stale work must not survive a failed cancel)', async () => {
+    const cancelError = new Error('cancel failed');
+    const deps = makeDeps({
+      cancelInFlight: vi.fn(async () => {
+        throw cancelError;
+      }),
+    });
+
+    await expect(
+      applyInvalidation('task', MUTATION_POLICIES.remoteTargetId.action, 'task-a', deps),
+    ).rejects.toBe(cancelError);
+    expect(deps.recreateTask).not.toHaveBeenCalled();
+  });
+});
+
 // ── Step 5 headless integration seam: CommandService.editTaskType ──
 //
 // `headlessEditExecutor` (in `packages/app/src/headless.ts`) constructs
