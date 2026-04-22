@@ -313,6 +313,44 @@ describe('State × Topology Matrix', () => {
       expect(allTasks.find((t) => t.id === 'C-v2')).toBeUndefined();
       expect(allTasks.find((t) => t.id === 'D-v2')).toBeUndefined();
     });
+
+    // Step 2 (task-invalidation roadmap):
+    // The chart's Decision Table row "Edit `command`" is recreate-class /
+    // task scope. After the edit, the root task AND every transitive
+    // dependent must have their execution generation bumped by exactly one
+    // (`recreateTask`'s `withBumpedExecutionGeneration` reset shape) — that
+    // is what makes the new branch hash diverge from the stale lineage.
+    it('Step 2 matrix entry: command edit is recreate-class / task scope (root + descendants get gen bump)', () => {
+      orchestrator.loadPlan(diamondPlan());
+      orchestrator.startExecution();
+
+      orchestrator.handleWorkerResponse(complete('A'));
+      orchestrator.handleWorkerResponse(complete('B'));
+      orchestrator.handleWorkerResponse(complete('C'));
+      orchestrator.handleWorkerResponse(complete('D'));
+
+      const genBefore = {
+        A: orchestrator.getTask('A')!.execution.generation ?? 0,
+        B: orchestrator.getTask('B')!.execution.generation ?? 0,
+        C: orchestrator.getTask('C')!.execution.generation ?? 0,
+        D: orchestrator.getTask('D')!.execution.generation ?? 0,
+      };
+
+      orchestrator.editTaskCommand('A', 'echo A-v2');
+
+      const genAfter = {
+        A: orchestrator.getTask('A')!.execution.generation ?? 0,
+        B: orchestrator.getTask('B')!.execution.generation ?? 0,
+        C: orchestrator.getTask('C')!.execution.generation ?? 0,
+        D: orchestrator.getTask('D')!.execution.generation ?? 0,
+      };
+
+      // Task scope: root + transitive dependents within the same workflow.
+      expect(genAfter.A).toBe(genBefore.A + 1);
+      expect(genAfter.B).toBe(genBefore.B + 1);
+      expect(genAfter.C).toBe(genBefore.C + 1);
+      expect(genAfter.D).toBe(genBefore.D + 1);
+    });
   });
 
   // ── Fork: A→{B,C} ──────────────────────────────────────

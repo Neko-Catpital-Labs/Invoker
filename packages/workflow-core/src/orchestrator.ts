@@ -1972,15 +1972,15 @@ export class Orchestrator {
     this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
   }
 
-  /**
-   * Edit a task's command, fork its downstream subtree, and restart it.
-   */
   editTaskCommand(taskId: string, newCommand: string): TaskState[] {
     this.refreshFromDb();
     const task = this.stateGetTask(taskId);
     if (!task) throw new Error(`Task ${taskId} not found`);
     if (task.config.isMergeNode) throw new Error(`Cannot edit merge node ${taskId}`);
-    if (task.status === 'running' || task.status === 'fixing_with_ai') throw new Error(`Cannot edit running task ${taskId}`);
+
+    if (task.status === 'running' || task.status === 'fixing_with_ai') {
+      this.cancelTask(taskId);
+    }
 
     const cmdChanges: TaskStateChanges = { config: { command: newCommand } };
     this.writeAndSync(taskId, cmdChanges);
@@ -1988,7 +1988,7 @@ export class Orchestrator {
     this.persistence.logEvent?.(taskId, 'task.updated', cmdChanges);
     this.messageBus.publish(TASK_DELTA_CHANNEL, cmdDelta);
 
-    return this.restartTask(taskId);
+    return this.recreateTask(taskId);
   }
 
   /**
