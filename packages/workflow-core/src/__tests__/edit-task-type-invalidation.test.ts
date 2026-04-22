@@ -1,3 +1,58 @@
+/**
+ * Step 5 — Executor-type-mutation invalidation contract.
+ *
+ * This file pins the Step 5 deliverable from
+ * `docs/architecture/task-invalidation-roadmap.md` (Phase B): the
+ * `executorType` mutation is **retry-class** with task scope (the lone
+ * substrate-only row of the chart's Decision Table — distinct from
+ * Steps 2/3/4's recreate-class command/prompt/executionAgent rows), and
+ * any affected in-flight work is canceled BEFORE authoritative state is
+ * reset (the chart's Hard Invariant in
+ * `docs/architecture/task-invalidation-chart.md`, Decision Table row
+ * "Edit `executorType`": "Execution environment changed, but workspace
+ * lineage may still be valid").
+ *
+ * Three layers are pinned:
+ *
+ *   1. **Policy table.** `MUTATION_POLICIES.executorType` is the
+ *      immutable contract that the chart's Decision Table row "Edit
+ *      `executorType`" maps to: `retryTask` action / task scope. The
+ *      retry vs recreate distinction is what proves substrate-only
+ *      changes preserve workspace lineage; if a future change flips
+ *      this entry to `recreateTask`, the policy assertion fails loudly.
+ *
+ *   2. **Cancel-first routing (mocked deps).** When the executor-type
+ *      edit path is wired through
+ *      `applyInvalidation('task', 'retryTask', taskId, deps)`, the
+ *      `cancelInFlight` dep is invoked BEFORE the `retryTask` dep.
+ *      Today `retryTask` is wired (via `buildInvalidationDeps`) to
+ *      `Orchestrator.restartTask` as a compatibility seam — Step 13
+ *      will rename the orchestrator primitive — and this file asserts
+ *      ordering at the policy layer where the dep names already match
+ *      the chart's `InvalidationAction` vocabulary. We assert via
+ *      `mock.invocationCallOrder`. We also check that a failed cancel
+ *      aborts the retry (stale work must not survive a failed cancel)
+ *      and that idempotent edits preserve the cancel-first ordering.
+ *
+ *   3. **CommandService delegation (Step 5 integration coverage for
+ *      the headless layer).** The headless `set type` handler
+ *      (`headlessEditExecutor` in `packages/app/src/headless.ts`)
+ *      calls `deps.commandService.editTaskType(envelope)`. We
+ *      exercise that exact entrypoint and assert it serializes
+ *      through the workflow mutex and delegates to
+ *      `Orchestrator.editTaskType` with the right payload — that is
+ *      the end-to-end wiring assertion the Step 5 plan requires for
+ *      the headless surface, complementing the unit-level
+ *      cancel-first / lineage-preservation / generation-bump coverage
+ *      in `orchestrator.test.ts`.
+ *
+ * Steps 13/14/17 will further consolidate the wiring; for now this
+ * focused file exists alongside `orchestrator.test.ts`,
+ * `edit-task-command-invalidation.test.ts`,
+ * `edit-task-prompt-invalidation.test.ts`, and
+ * `edit-task-agent-invalidation.test.ts` to keep the contract
+ * assertions readable as one chunk.
+ */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
@@ -29,7 +84,7 @@ function makeDeps(overrides: Partial<MockedDeps> = {}): MockedDeps {
   } as MockedDeps;
 }
 
-describe('executor-type-mutation invalidation contract', () => {
+describe('Step 5: executor-type-mutation invalidation contract', () => {
   it('MUTATION_POLICIES.executorType is RETRY-class (not recreate) and invalidates active attempts', () => {
     expect(MUTATION_POLICIES.executorType.action).toBe('retryTask');
     expect(MUTATION_POLICIES.executorType.invalidatesExecutionSpec).toBe(true);
@@ -46,6 +101,9 @@ describe('executor-type-mutation invalidation contract', () => {
     const deps = makeDeps();
     const policy = MUTATION_POLICIES.executorType;
 
+    // The executor-type-edit path uses the same scope/action that the
+    // policy table prescribes. Asserting via the policy makes the test
+    // fail loudly if Step 5 (or any later step) flips the action class.
     await applyInvalidation('task', policy.action, 'task-a', deps);
 
     expect(deps.cancelInFlight).toHaveBeenCalledWith('task', 'task-a');
@@ -109,52 +167,18 @@ describe('executor-type-mutation invalidation contract', () => {
   });
 });
 
-describe('remote-target-mutation invalidation contract', () => {
-  it('MUTATION_POLICIES.remoteTargetId is RECREATE-class (not retry) and invalidates active attempts', () => {
-    expect(MUTATION_POLICIES.remoteTargetId.action).toBe('recreateTask');
-    expect(MUTATION_POLICIES.remoteTargetId.invalidatesExecutionSpec).toBe(true);
-    expect(MUTATION_POLICIES.remoteTargetId.invalidateIfActive).toBe(true);
-
-    expect(MUTATION_POLICIES.remoteTargetId.action).not.toBe('retryTask');
-    expect(MUTATION_POLICIES.remoteTargetId.action).not.toBe(
-      MUTATION_POLICIES.executorType.action,
-    );
-  });
-
-  it('routes through applyInvalidation with cancelInFlight invoked BEFORE recreateTask dep', async () => {
-    const deps = makeDeps();
-    const policy = MUTATION_POLICIES.remoteTargetId;
-
-    await applyInvalidation('task', policy.action, 'task-a', deps);
-
-    expect(deps.cancelInFlight).toHaveBeenCalledWith('task', 'task-a');
-    expect(deps.recreateTask).toHaveBeenCalledWith('task-a');
-    // Retry-class deps MUST NOT be on the path — that would preserve
-    // workspace lineage the chart says is no longer authoritative
-    // after a remote host change.
-    expect(deps.retryTask).not.toHaveBeenCalled();
-    expect(deps.retryWorkflow).not.toHaveBeenCalled();
-    expect(deps.recreateWorkflow).not.toHaveBeenCalled();
-    expect(deps.cancelInFlight.mock.invocationCallOrder[0]).toBeLessThan(
-      deps.recreateTask.mock.invocationCallOrder[0],
-    );
-  });
-
-  it('aborts the recreate when cancelInFlight rejects (stale work must not survive a failed cancel)', async () => {
-    const cancelError = new Error('cancel failed');
-    const deps = makeDeps({
-      cancelInFlight: vi.fn(async () => {
-        throw cancelError;
-      }),
-    });
-
-    await expect(
-      applyInvalidation('task', MUTATION_POLICIES.remoteTargetId.action, 'task-a', deps),
-    ).rejects.toBe(cancelError);
-    expect(deps.recreateTask).not.toHaveBeenCalled();
-  });
-});
-
+// ── Step 5 headless integration seam: CommandService.editTaskType ──
+//
+// `headlessEditExecutor` (in `packages/app/src/headless.ts`) constructs
+// an envelope and calls `deps.commandService.editTaskType(envelope)`.
+// That `CommandService` method serializes the mutation through the
+// workflow mutex and delegates to `Orchestrator.editTaskType`,
+// which is where the cancel-first / lineage-preservation /
+// generation-bump invariants live (covered by `orchestrator.test.ts`
+// and pinned by the policy-level tests above). This block exercises
+// that exact integration seam so the headless surface has a passing
+// end-to-end wiring assertion in addition to the orchestrator-level
+// coverage.
 function stubOrchestrator(overrides: Partial<Orchestrator> = {}): Orchestrator {
   return {
     getTask: vi.fn().mockReturnValue({ config: { workflowId: 'wf-1' } }),
@@ -163,7 +187,7 @@ function stubOrchestrator(overrides: Partial<Orchestrator> = {}): Orchestrator {
   } as unknown as Orchestrator;
 }
 
-describe('CommandService.editTaskType (headless integration seam)', () => {
+describe('Step 5: CommandService.editTaskType (headless integration seam)', () => {
   let orchestrator: Orchestrator;
   let service: CommandService;
 

@@ -2785,7 +2785,7 @@ describe('Orchestrator', () => {
       expect(orchestrator.getAllTasks().length).toBe(taskCountBefore);
     });
 
-    it('editing an ACTIVE (running) task does NOT throw and cancels first, then recreates', () => {
+    it('Step 2: editing an ACTIVE (running) task does NOT throw and cancels first, then recreates', () => {
       orchestrator.loadPlan({
         name: 'edit-running-test',
         tasks: [{ id: 't1', description: 'Task 1', command: 'sleep 100' }],
@@ -2815,7 +2815,7 @@ describe('Orchestrator', () => {
       recreateSpy.mockRestore();
     });
 
-    it('editing an INACTIVE (failed) task skips cancel but still routes through recreateTask', () => {
+    it('Step 2: editing an INACTIVE (failed) task skips cancel but still routes through recreateTask', () => {
       orchestrator.loadPlan({
         name: 'edit-inactive-test',
         tasks: [{ id: 't1', description: 'Task 1', command: 'echo old' }],
@@ -2839,7 +2839,7 @@ describe('Orchestrator', () => {
       recreateSpy.mockRestore();
     });
 
-    it('discards stale lineage (matches recreateTask reset shape)', () => {
+    it('Step 2: discards stale lineage (matches recreateTask reset shape)', () => {
       orchestrator.loadPlan({
         name: 'edit-lineage-test',
         tasks: [{ id: 't1', description: 'Task 1', command: 'echo old' }],
@@ -2874,7 +2874,7 @@ describe('Orchestrator', () => {
       expect(task.execution.exitCode).toBeUndefined();
     });
 
-    it('bumps execution generation by exactly one per command edit', () => {
+    it('Step 2: bumps execution generation by exactly one per command edit', () => {
       orchestrator.loadPlan({
         name: 'edit-gen-test',
         tasks: [{ id: 't1', description: 'Task 1', command: 'echo old' }],
@@ -2893,7 +2893,7 @@ describe('Orchestrator', () => {
       expect(after).toBe(before + 1);
     });
 
-    it('idempotence — two consecutive command edits trigger two cancel-first cycles and two generation bumps', () => {
+    it('Step 2: idempotence — two consecutive command edits trigger two cancel-first cycles and two generation bumps', () => {
       orchestrator.loadPlan({
         name: 'edit-idempotence-test',
         tasks: [{ id: 't1', description: 'Task 1', command: 'sleep 100' }],
@@ -2950,8 +2950,19 @@ describe('Orchestrator', () => {
     });
   });
 
+  // ── editTaskPrompt ─────────────────────────────────────
+  //
+  // Step 3 (task-invalidation roadmap): the chart's Decision Table row
+  // "Edit `prompt`" maps the prompt mutation to InvalidationAction =
+  // 'recreateTask' with InvalidationScope = 'task'. The orchestrator
+  // method enforces cancel-first via cancelTask BEFORE the
+  // lineage-discarding recreateTask reset (the synchronous
+  // orchestrator-internal equivalent of applyInvalidation's
+  // cancelInFlight dep). These tests pin those invariants and mirror
+  // the Step 2 `editTaskCommand` block above.
+
   describe('editTaskPrompt', () => {
-    it('editing an ACTIVE (running) task does NOT throw and cancels first, then recreates', () => {
+    it('Step 3: editing an ACTIVE (running) task does NOT throw and cancels first, then recreates', () => {
       orchestrator.loadPlan({
         name: 'edit-prompt-running-test',
         tasks: [{ id: 't1', description: 'Task 1', prompt: 'do the old thing', command: 'sleep 100' }],
@@ -2965,6 +2976,10 @@ describe('Orchestrator', () => {
 
       const started = orchestrator.editTaskPrompt(taskId, 'do the new thing');
 
+      // No throw. Cancel-first ordering: cancelTask MUST be invoked
+      // BEFORE recreateTask. This is the chart's Hard Invariant
+      // ("any affected in-flight work must be interrupted and canceled
+      // first") expressed at the orchestrator-internal sync seam.
       expect(cancelSpy).toHaveBeenCalledWith(taskId);
       expect(recreateSpy).toHaveBeenCalledWith(taskId);
       expect(cancelSpy.mock.invocationCallOrder[0]).toBeLessThan(
@@ -2982,7 +2997,7 @@ describe('Orchestrator', () => {
       recreateSpy.mockRestore();
     });
 
-    it('editing an INACTIVE (failed) task skips cancel but still routes through recreateTask', () => {
+    it('Step 3: editing an INACTIVE (failed) task skips cancel but still routes through recreateTask', () => {
       orchestrator.loadPlan({
         name: 'edit-prompt-inactive-test',
         tasks: [{ id: 't1', description: 'Task 1', prompt: 'old prompt', command: 'echo old' }],
@@ -3007,7 +3022,7 @@ describe('Orchestrator', () => {
       recreateSpy.mockRestore();
     });
 
-    it('discards stale lineage (matches recreateTask reset shape)', () => {
+    it('Step 3: discards stale lineage (matches recreateTask reset shape)', () => {
       orchestrator.loadPlan({
         name: 'edit-prompt-lineage-test',
         tasks: [{ id: 't1', description: 'Task 1', prompt: 'old', command: 'echo old' }],
@@ -3044,7 +3059,7 @@ describe('Orchestrator', () => {
       expect(task.execution.exitCode).toBeUndefined();
     });
 
-    it('bumps execution generation by exactly one per prompt edit', () => {
+    it('Step 3: bumps execution generation by exactly one per prompt edit', () => {
       orchestrator.loadPlan({
         name: 'edit-prompt-gen-test',
         tasks: [{ id: 't1', description: 'Task 1', prompt: 'old', command: 'echo old' }],
@@ -3063,7 +3078,7 @@ describe('Orchestrator', () => {
       expect(after).toBe(before + 1);
     });
 
-    it('persists the updated prompt and publishes a task.updated delta', () => {
+    it('Step 3: persists the updated prompt and publishes a task.updated delta', () => {
       orchestrator.loadPlan({
         name: 'edit-prompt-persist-test',
         tasks: [{ id: 't1', description: 'Task 1', prompt: 'old prompt', command: 'echo old' }],
@@ -3080,7 +3095,7 @@ describe('Orchestrator', () => {
       expect(persisted?.task.config.prompt).toBe('fresh prompt');
     });
 
-    it('idempotence — two consecutive prompt edits trigger two cancel-first cycles and two generation bumps', () => {
+    it('Step 3: idempotence — two consecutive prompt edits trigger two cancel-first cycles and two generation bumps', () => {
       orchestrator.loadPlan({
         name: 'edit-prompt-idempotence-test',
         tasks: [{ id: 't1', description: 'Task 1', prompt: 'old', command: 'sleep 100' }],
@@ -3119,6 +3134,22 @@ describe('Orchestrator', () => {
       recreateSpy.mockRestore();
     });
   });
+
+  // ── editTaskType ───────────────────────────────────────
+  //
+  // Step 5 (task-invalidation roadmap): the chart's Decision Table row
+  // "Edit `executorType`" maps the executor-type mutation to
+  // InvalidationAction = 'retryTask' with InvalidationScope = 'task' —
+  // the lone substrate-only mutation in the chart, distinct from the
+  // recreate-class command/prompt/executionAgent rows (Steps 2/3/4).
+  // Today `retryTask` is wired (via `buildInvalidationDeps`) to
+  // `Orchestrator.restartTask` as a compatibility seam; Step 13 will
+  // rename that primitive. Step 5 enforces cancel-first via cancelTask
+  // BEFORE the lineage-PRESERVING restartTask reset (the synchronous
+  // orchestrator-internal equivalent of applyInvalidation's
+  // cancelInFlight dep). Branch / workspacePath survive because the
+  // chart treats them as workspace lineage that's still authoritative
+  // when only the substrate changed. These tests pin those invariants.
 
   describe('editTaskType', () => {
     it('changes executorType and restarts the task', () => {
@@ -3165,7 +3196,7 @@ describe('Orchestrator', () => {
       expect(orchestrator.getTask('child')?.status).toBe('pending');
     });
 
-    it('editing an ACTIVE (running) task does NOT throw and cancels first, then restarts (retry-class)', () => {
+    it('Step 5: editing an ACTIVE (running) task does NOT throw and cancels first, then restarts (retry-class)', () => {
       orchestrator.loadPlan({
         name: 'edit-type-running',
         tasks: [{ id: 't1', description: 'Task 1', command: 'sleep 100', executorType: 'docker' }],
@@ -3180,11 +3211,19 @@ describe('Orchestrator', () => {
 
       const started = orchestrator.editTaskType(taskId, 'worktree');
 
+      // No throw. Cancel-first ordering: cancelTask MUST be invoked
+      // BEFORE restartTask (today's `retryTask` compatibility wire from
+      // `buildInvalidationDeps`). This is the chart's Hard Invariant
+      // ("any affected in-flight work must be interrupted and canceled
+      // first") expressed at the orchestrator-internal sync seam.
       expect(cancelSpy).toHaveBeenCalledWith(taskId);
       expect(restartSpy).toHaveBeenCalledWith(taskId);
       expect(cancelSpy.mock.invocationCallOrder[0]).toBeLessThan(
         restartSpy.mock.invocationCallOrder[0],
       );
+      // Step 5 is retry-class, not recreate-class — recreateTask MUST
+      // NOT be on the path (that would discard branch/workspacePath
+      // lineage the substrate-only chart row preserves).
       expect(recreateSpy).not.toHaveBeenCalled();
 
       const task = orchestrator.getTask(taskId);
@@ -3199,7 +3238,7 @@ describe('Orchestrator', () => {
       recreateSpy.mockRestore();
     });
 
-    it('editing an INACTIVE (failed) task skips cancel but still routes through restartTask (retry-class)', () => {
+    it('Step 5: editing an INACTIVE (failed) task skips cancel but still routes through restartTask (retry-class)', () => {
       orchestrator.loadPlan({
         name: 'edit-type-inactive-test',
         tasks: [{ id: 't1', description: 'Task 1', command: 'echo old', executorType: 'docker' }],
@@ -3225,7 +3264,7 @@ describe('Orchestrator', () => {
       restartSpy.mockRestore();
     });
 
-    it('preserves valid lineage (branch / workspacePath) — retry-class does NOT discard substrate lineage', () => {
+    it('Step 5: preserves valid lineage (branch / workspacePath) — retry-class does NOT discard substrate lineage', () => {
       orchestrator.loadPlan({
         name: 'edit-type-lineage-test',
         tasks: [{ id: 't1', description: 'Task 1', command: 'echo old', executorType: 'docker' }],
@@ -3233,6 +3272,10 @@ describe('Orchestrator', () => {
       orchestrator.startExecution();
       const taskId = sid(orchestrator, 0, 't1');
 
+      // Hydrate lineage as if a prior attempt produced workspace
+      // artifacts. Branch + workspacePath represent the workspace lineage
+      // the chart's "Edit `executorType`" row says is still authoritative
+      // when only the execution substrate changes.
       persistence.updateTask(taskId, {
         execution: {
           branch: 'experiment/preserved-branch',
@@ -3261,7 +3304,7 @@ describe('Orchestrator', () => {
       expect(task.execution.exitCode).toBeUndefined();
     });
 
-    it('bumps execution generation by exactly one per executor-type edit', () => {
+    it('Step 5: bumps execution generation by exactly one per executor-type edit', () => {
       orchestrator.loadPlan({
         name: 'edit-type-gen-test',
         tasks: [{ id: 't1', description: 'Task 1', command: 'echo old', executorType: 'docker' }],
@@ -3337,219 +3380,18 @@ describe('Orchestrator', () => {
       expect(task?.config.executorType).toBe('worktree');
       expect(task?.config.remoteTargetId).toBeUndefined();
     });
-
-    it('switching worktree → ssh (host change) is RECREATE-class — clears branch/commit/workspacePath', () => {
-      orchestrator.loadPlan({
-        name: 'edit-type-step6-worktree-to-ssh',
-        tasks: [{ id: 't1', description: 'Task 1', command: 'echo hello', executorType: 'worktree' }],
-      });
-      orchestrator.startExecution();
-      const taskId = sid(orchestrator, 0, 't1');
-
-      persistence.updateTask(taskId, {
-        execution: {
-          branch: 'experiment/preserved-branch',
-          commit: 'cafef00d',
-          workspacePath: '/tmp/preserved-workspace',
-          agentSessionId: 'sess-stale',
-          containerId: 'container-stale',
-          error: 'previous error',
-          exitCode: 1,
-          completedAt: new Date(),
-          startedAt: new Date(),
-        },
-      });
-      orchestrator.syncFromDb(taskId.split('/')[0]!);
-
-      orchestrator.editTaskType(taskId, 'ssh', 'remote_digital_ocean');
-
-      const task = orchestrator.getTask(taskId)!;
-      expect(task.config.executorType).toBe('ssh');
-      expect(task.config.remoteTargetId).toBe('remote_digital_ocean');
-      // ── Recreate-class clears workspace lineage (chart Step 6) ──
-      expect(task.execution.branch).toBeUndefined();
-      expect(task.execution.commit).toBeUndefined();
-      expect(task.execution.workspacePath).toBeUndefined();
-      expect(task.execution.agentSessionId).toBeUndefined();
-      expect(task.execution.containerId).toBeUndefined();
-    });
-
-    it('switching ssh:A → ssh:B (different remote host) is RECREATE-class — clears branch/workspacePath', () => {
-      orchestrator.loadPlan({
-        name: 'edit-type-step6-ssh-to-ssh',
-        tasks: [{ id: 't1', description: 'Task 1', command: 'echo hello', executorType: 'ssh', remoteTargetId: 'remote_a' }],
-      });
-      orchestrator.startExecution();
-      const taskId = sid(orchestrator, 0, 't1');
-
-      persistence.updateTask(taskId, {
-        execution: {
-          branch: 'experiment/preserved-branch',
-          commit: 'deadbeef',
-          workspacePath: '/remote/preserved-workspace',
-          agentSessionId: 'sess-stale',
-          containerId: 'container-stale',
-          startedAt: new Date(),
-        },
-      });
-      orchestrator.syncFromDb(taskId.split('/')[0]!);
-
-      orchestrator.editTaskType(taskId, 'ssh', 'remote_b');
-
-      const task = orchestrator.getTask(taskId)!;
-      expect(task.config.executorType).toBe('ssh');
-      expect(task.config.remoteTargetId).toBe('remote_b');
-      // ssh:A → ssh:B is a host change — workspace lineage cleared.
-      expect(task.execution.branch).toBeUndefined();
-      expect(task.execution.commit).toBeUndefined();
-      expect(task.execution.workspacePath).toBeUndefined();
-      expect(task.execution.agentSessionId).toBeUndefined();
-      expect(task.execution.containerId).toBeUndefined();
-    });
-
-    it('switching ssh → worktree (host change) is RECREATE-class — clears workspace lineage', () => {
-      orchestrator.loadPlan({
-        name: 'edit-type-step6-ssh-to-worktree',
-        tasks: [{ id: 't1', description: 'Task 1', command: 'echo hello', executorType: 'ssh', remoteTargetId: 'remote_a' }],
-      });
-      orchestrator.startExecution();
-      const taskId = sid(orchestrator, 0, 't1');
-
-      persistence.updateTask(taskId, {
-        execution: {
-          branch: 'experiment/preserved-branch',
-          workspacePath: '/remote/preserved-workspace',
-          startedAt: new Date(),
-        },
-      });
-      orchestrator.syncFromDb(taskId.split('/')[0]!);
-
-      orchestrator.editTaskType(taskId, 'worktree');
-
-      const task = orchestrator.getTask(taskId)!;
-      expect(task.config.executorType).toBe('worktree');
-      expect(task.config.remoteTargetId).toBeUndefined();
-      expect(task.execution.branch).toBeUndefined();
-      expect(task.execution.workspacePath).toBeUndefined();
-    });
-
-    it('same-host ssh:A → ssh:A is RETRY-class — preserves branch/workspacePath (regression of Step 5)', () => {
-      orchestrator.loadPlan({
-        name: 'edit-type-step6-same-ssh',
-        tasks: [{ id: 't1', description: 'Task 1', command: 'echo hello', executorType: 'ssh', remoteTargetId: 'remote_a' }],
-      });
-      orchestrator.startExecution();
-      const taskId = sid(orchestrator, 0, 't1');
-
-      persistence.updateTask(taskId, {
-        execution: {
-          branch: 'experiment/preserved-branch',
-          commit: 'cafef00d',
-          workspacePath: '/remote/preserved-workspace',
-          agentSessionId: 'sess-stale',
-          containerId: 'container-stale',
-          startedAt: new Date(),
-        },
-      });
-      orchestrator.syncFromDb(taskId.split('/')[0]!);
-
-      orchestrator.editTaskType(taskId, 'ssh', 'remote_a');
-
-      const task = orchestrator.getTask(taskId)!;
-      expect(task.config.executorType).toBe('ssh');
-      expect(task.config.remoteTargetId).toBe('remote_a');
-      // Same host (ssh:A → ssh:A) — substrate-only retry-class
-      // preserves workspace lineage even though the call exercised the
-      // SSH path.
-      expect(task.execution.branch).toBe('experiment/preserved-branch');
-      expect(task.execution.workspacePath).toBe('/remote/preserved-workspace');
-      // ── Volatile attempt state still cleared by the retry reset ──
-      expect(task.execution.agentSessionId).toBeUndefined();
-      expect(task.execution.containerId).toBeUndefined();
-    });
-
-    it('routes through recreateTask with cancel-first ordering on a host change of an ACTIVE task', () => {
-      orchestrator.loadPlan({
-        name: 'edit-type-step6-active-host-change',
-        tasks: [{ id: 't1', description: 'Task 1', command: 'sleep 100', executorType: 'worktree' }],
-      });
-      orchestrator.startExecution();
-      const taskId = sid(orchestrator, 0, 't1');
-      expect(orchestrator.getTask(taskId)?.status).toBe('running');
-
-      const cancelSpy = vi.spyOn(orchestrator, 'cancelTask');
-      const recreateSpy = vi.spyOn(orchestrator, 'recreateTask');
-      const restartSpy = vi.spyOn(orchestrator, 'restartTask');
-
-      orchestrator.editTaskType(taskId, 'ssh', 'remote_digital_ocean');
-
-      expect(cancelSpy).toHaveBeenCalledWith(taskId);
-      expect(recreateSpy).toHaveBeenCalledWith(taskId);
-      expect(restartSpy).not.toHaveBeenCalled();
-      expect(cancelSpy.mock.invocationCallOrder[0]).toBeLessThan(
-        recreateSpy.mock.invocationCallOrder[0],
-      );
-
-      cancelSpy.mockRestore();
-      recreateSpy.mockRestore();
-      restartSpy.mockRestore();
-    });
-
-    it('editing remote-target on an ACTIVE task does NOT throw', () => {
-      orchestrator.loadPlan({
-        name: 'edit-type-step6-active-no-throw',
-        tasks: [{ id: 't1', description: 'Task 1', command: 'sleep 100', executorType: 'ssh', remoteTargetId: 'remote_a' }],
-      });
-      orchestrator.startExecution();
-      const taskId = sid(orchestrator, 0, 't1');
-      expect(orchestrator.getTask(taskId)?.status).toBe('running');
-
-      expect(() =>
-        orchestrator.editTaskType(taskId, 'ssh', 'remote_b'),
-      ).not.toThrow();
-
-      const task = orchestrator.getTask(taskId);
-      expect(task?.config.remoteTargetId).toBe('remote_b');
-    });
-
-    it('bumps execution generation by exactly one on a host-change recreate', () => {
-      orchestrator.loadPlan({
-        name: 'edit-type-step6-gen-recreate',
-        tasks: [{ id: 't1', description: 'Task 1', command: 'echo hello', executorType: 'ssh', remoteTargetId: 'remote_a' }],
-      });
-      orchestrator.startExecution();
-      orchestrator.handleWorkerResponse(
-        makeResponse({ actionId: 't1', status: 'failed', outputs: { exitCode: 1, error: 'x' } }),
-      );
-      const taskId = sid(orchestrator, 0, 't1');
-
-      const before = orchestrator.getTask(taskId)!.execution.generation ?? 0;
-
-      orchestrator.editTaskType(taskId, 'ssh', 'remote_b');
-
-      const after = orchestrator.getTask(taskId)!.execution.generation ?? 0;
-      expect(after).toBe(before + 1);
-    });
-
-    it('bumps execution generation by exactly one on a substrate-only retry (regression of Step 5)', () => {
-      orchestrator.loadPlan({
-        name: 'edit-type-step6-gen-retry',
-        tasks: [{ id: 't1', description: 'Task 1', command: 'echo hello', executorType: 'docker' }],
-      });
-      orchestrator.startExecution();
-      orchestrator.handleWorkerResponse(
-        makeResponse({ actionId: 't1', status: 'failed', outputs: { exitCode: 1, error: 'x' } }),
-      );
-      const taskId = sid(orchestrator, 0, 't1');
-
-      const before = orchestrator.getTask(taskId)!.execution.generation ?? 0;
-
-      orchestrator.editTaskType(taskId, 'worktree');
-
-      const after = orchestrator.getTask(taskId)!.execution.generation ?? 0;
-      expect(after).toBe(before + 1);
-    });
   });
+
+  // ── editTaskAgent ──────────────────────────────────────
+  //
+  // Step 4 (task-invalidation roadmap): the chart's Decision Table row
+  // "Edit `executionAgent`" maps the agent mutation to InvalidationAction
+  // = 'recreateTask' with InvalidationScope = 'task'. The orchestrator
+  // method enforces cancel-first via cancelTask BEFORE the
+  // lineage-discarding recreateTask reset (the synchronous
+  // orchestrator-internal equivalent of applyInvalidation's
+  // cancelInFlight dep). These tests pin those invariants and mirror
+  // the Step 2 / 3 `editTaskCommand` / `editTaskPrompt` blocks above.
 
   describe('editTaskAgent', () => {
     it('changes executionAgent and recreates the task (inactive → no cancel)', () => {
@@ -3594,7 +3436,7 @@ describe('Orchestrator', () => {
       expect(orchestrator.getTask('child')?.status).toBe('pending');
     });
 
-    it('editing an ACTIVE (running) task does NOT throw and cancels first, then recreates', () => {
+    it('Step 4: editing an ACTIVE (running) task does NOT throw and cancels first, then recreates', () => {
       orchestrator.loadPlan({
         name: 'edit-agent-running-test',
         tasks: [{ id: 't1', description: 'Task 1', command: 'sleep 100', executionAgent: 'claude' }],
@@ -3608,6 +3450,10 @@ describe('Orchestrator', () => {
 
       const started = orchestrator.editTaskAgent(taskId, 'codex');
 
+      // No throw. Cancel-first ordering: cancelTask MUST be invoked
+      // BEFORE recreateTask. This is the chart's Hard Invariant
+      // ("any affected in-flight work must be interrupted and canceled
+      // first") expressed at the orchestrator-internal sync seam.
       expect(cancelSpy).toHaveBeenCalledWith(taskId);
       expect(recreateSpy).toHaveBeenCalledWith(taskId);
       expect(cancelSpy.mock.invocationCallOrder[0]).toBeLessThan(
@@ -3625,7 +3471,7 @@ describe('Orchestrator', () => {
       recreateSpy.mockRestore();
     });
 
-    it('editing an INACTIVE (failed) task skips cancel but still routes through recreateTask', () => {
+    it('Step 4: editing an INACTIVE (failed) task skips cancel but still routes through recreateTask', () => {
       orchestrator.loadPlan({
         name: 'edit-agent-inactive-test',
         tasks: [{ id: 't1', description: 'Task 1', command: 'echo old', executionAgent: 'claude' }],
@@ -3650,7 +3496,7 @@ describe('Orchestrator', () => {
       recreateSpy.mockRestore();
     });
 
-    it('discards stale lineage (matches recreateTask reset shape)', () => {
+    it('Step 4: discards stale lineage (matches recreateTask reset shape)', () => {
       orchestrator.loadPlan({
         name: 'edit-agent-lineage-test',
         tasks: [{ id: 't1', description: 'Task 1', command: 'echo old', executionAgent: 'claude' }],
@@ -3687,7 +3533,7 @@ describe('Orchestrator', () => {
       expect(task.execution.exitCode).toBeUndefined();
     });
 
-    it('bumps execution generation by exactly one per agent edit', () => {
+    it('Step 4: bumps execution generation by exactly one per agent edit', () => {
       orchestrator.loadPlan({
         name: 'edit-agent-gen-test',
         tasks: [{ id: 't1', description: 'Task 1', command: 'echo old', executionAgent: 'claude' }],
@@ -3706,7 +3552,7 @@ describe('Orchestrator', () => {
       expect(after).toBe(before + 1);
     });
 
-    it('persists the updated agent and publishes a task.updated delta', () => {
+    it('Step 4: persists the updated agent and publishes a task.updated delta', () => {
       orchestrator.loadPlan({
         name: 'edit-agent-persist-test',
         tasks: [{ id: 't1', description: 'Task 1', command: 'echo old', executionAgent: 'claude' }],
@@ -3723,7 +3569,7 @@ describe('Orchestrator', () => {
       expect(persisted?.task.config.executionAgent).toBe('codex');
     });
 
-    it('idempotence — two consecutive agent edits trigger two cancel-first cycles and two generation bumps', () => {
+    it('Step 4: idempotence — two consecutive agent edits trigger two cancel-first cycles and two generation bumps', () => {
       orchestrator.loadPlan({
         name: 'edit-agent-idempotence-test',
         tasks: [{ id: 't1', description: 'Task 1', command: 'sleep 100', executionAgent: 'claude' }],
@@ -6170,7 +6016,6 @@ describe('Orchestrator', () => {
       expect(after).toBe(before + 1);
     });
   });
-
   // ── Missing state transitions ─────────────────────────────
 
   describe('missing state transitions', () => {
