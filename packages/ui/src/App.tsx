@@ -90,7 +90,8 @@ export function App() {
       const lagMs = Math.max(0, now - expected);
       expected += 1000;
       if (lagMs >= 250 && shouldEmit('event_loop_lag', 5000)) {
-        void window.invoker.reportUiPerf('renderer_event_loop_lag', { lagMs: Math.round(lagMs) });
+        // Defensive: window.invoker is undefined in vitest/jsdom environments.
+        void window.invoker?.reportUiPerf?.('renderer_event_loop_lag', { lagMs: Math.round(lagMs) });
       }
     }, 1000);
 
@@ -101,7 +102,8 @@ export function App() {
         perfObserver = new PerformanceObserver((list) => {
           for (const entry of list.getEntries()) {
             if (entry.duration >= 200 && shouldEmit('long_task', 3000)) {
-              void window.invoker.reportUiPerf('renderer_long_task', {
+              // Defensive: window.invoker is undefined in vitest/jsdom environments.
+              void window.invoker?.reportUiPerf?.('renderer_long_task', {
                 durationMs: Math.round(entry.duration),
                 name: entry.name,
               });
