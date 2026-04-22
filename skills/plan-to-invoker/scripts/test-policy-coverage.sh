@@ -24,6 +24,16 @@ fail() {
   exit 1
 }
 
+assert_verify_task_present() {
+  local task_id="$1"
+  local file="$2"
+  if command -v rg >/dev/null 2>&1; then
+    rg -q "^  - id: ${task_id}\$" "$file"
+  else
+    grep -qF "  - id: ${task_id}" "$file"
+  fi
+}
+
 [[ -f "$SOURCE_DOC" ]] || fail "missing source doc $SOURCE_DOC"
 [[ -f "$POSITIVE_PLAN" ]] || fail "missing positive plan $POSITIVE_PLAN"
 [[ -x "$(command -v jq)" ]] || fail "jq is required"
@@ -48,12 +58,12 @@ jq -e '.coverageItems[] | select(.coverageKey == "inconsistency-naming-inconsist
 
 cat "$assumptions" | bash "$GENERATE_SCRIPT" "task-invalidation-chart" > "$verify_plan"
 
-if rg -q '^  - id: verify-noop$' "$verify_plan"; then
+if assert_verify_task_present "verify-noop" "$verify_plan"; then
   fail "policy matrix verify plan degraded to verify-noop"
 fi
 
-rg -q '^  - id: verify-coverage-decision-change-external-gate-policy$' "$verify_plan" || fail "missing external gate coverage verify task"
-rg -q '^  - id: verify-coverage-hard-invariant-cancel-first$' "$verify_plan" || fail "missing hard invariant coverage verify task"
+assert_verify_task_present "verify-coverage-decision-change-external-gate-policy" "$verify_plan" || fail "missing external gate coverage verify task"
+assert_verify_task_present "verify-coverage-hard-invariant-cancel-first" "$verify_plan" || fail "missing hard invariant coverage verify task"
 
 bash "$CHECK_SCRIPT" "$assumptions" "$verify_plan" >/dev/null || fail "coverage check failed"
 bash "$GENERATE_MAP_SCRIPT" "$assumptions" > "$map_template"
