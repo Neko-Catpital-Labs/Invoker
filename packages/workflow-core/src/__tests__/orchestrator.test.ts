@@ -2950,6 +2950,191 @@ describe('Orchestrator', () => {
     });
   });
 
+  // ── editTaskPrompt ─────────────────────────────────────
+  //
+  // Step 3 (task-invalidation roadmap): the chart's Decision Table row
+  // "Edit `prompt`" maps the prompt mutation to InvalidationAction =
+  // 'recreateTask' with InvalidationScope = 'task'. The orchestrator
+  // method enforces cancel-first via cancelTask BEFORE the
+  // lineage-discarding recreateTask reset (the synchronous
+  // orchestrator-internal equivalent of applyInvalidation's
+  // cancelInFlight dep). These tests pin those invariants and mirror
+  // the Step 2 `editTaskCommand` block above.
+
+  describe('editTaskPrompt', () => {
+    it('Step 3: editing an ACTIVE (running) task does NOT throw and cancels first, then recreates', () => {
+      orchestrator.loadPlan({
+        name: 'edit-prompt-running-test',
+        tasks: [{ id: 't1', description: 'Task 1', prompt: 'do the old thing', command: 'sleep 100' }],
+      });
+      orchestrator.startExecution();
+      const taskId = sid(orchestrator, 0, 't1');
+      expect(orchestrator.getTask(taskId)?.status).toBe('running');
+
+      const cancelSpy = vi.spyOn(orchestrator, 'cancelTask');
+      const recreateSpy = vi.spyOn(orchestrator, 'recreateTask');
+
+      const started = orchestrator.editTaskPrompt(taskId, 'do the new thing');
+
+      // No throw. Cancel-first ordering: cancelTask MUST be invoked
+      // BEFORE recreateTask. This is the chart's Hard Invariant
+      // ("any affected in-flight work must be interrupted and canceled
+      // first") expressed at the orchestrator-internal sync seam.
+      expect(cancelSpy).toHaveBeenCalledWith(taskId);
+      expect(recreateSpy).toHaveBeenCalledWith(taskId);
+      expect(cancelSpy.mock.invocationCallOrder[0]).toBeLessThan(
+        recreateSpy.mock.invocationCallOrder[0],
+      );
+
+      const task = orchestrator.getTask(taskId);
+      expect(task?.config.prompt).toBe('do the new thing');
+      // Single-task plan with no deps → recreate auto-starts the task.
+      expect(task?.status).toBe('running');
+      expect(started).toHaveLength(1);
+      expect(started[0].id).toBe(taskId);
+
+      cancelSpy.mockRestore();
+      recreateSpy.mockRestore();
+    });
+
+    it('Step 3: editing an INACTIVE (failed) task skips cancel but still routes through recreateTask', () => {
+      orchestrator.loadPlan({
+        name: 'edit-prompt-inactive-test',
+        tasks: [{ id: 't1', description: 'Task 1', prompt: 'old prompt', command: 'echo old' }],
+      });
+      orchestrator.startExecution();
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 't1', status: 'failed', outputs: { exitCode: 1, error: 'fail' } }),
+      );
+      const taskId = sid(orchestrator, 0, 't1');
+      expect(orchestrator.getTask(taskId)?.status).toBe('failed');
+
+      const cancelSpy = vi.spyOn(orchestrator, 'cancelTask');
+      const recreateSpy = vi.spyOn(orchestrator, 'recreateTask');
+
+      orchestrator.editTaskPrompt(taskId, 'new prompt');
+
+      // Inactive → no cancel needed; recreateTask still resets lineage.
+      expect(cancelSpy).not.toHaveBeenCalled();
+      expect(recreateSpy).toHaveBeenCalledWith(taskId);
+
+      cancelSpy.mockRestore();
+      recreateSpy.mockRestore();
+    });
+
+    it('Step 3: discards stale lineage (matches recreateTask reset shape)', () => {
+      orchestrator.loadPlan({
+        name: 'edit-prompt-lineage-test',
+        tasks: [{ id: 't1', description: 'Task 1', prompt: 'old', command: 'echo old' }],
+      });
+      orchestrator.startExecution();
+      const taskId = sid(orchestrator, 0, 't1');
+
+      // Hydrate stale lineage as if a prior attempt completed and left
+      // branch/commit/workspace/session/container artifacts behind.
+      persistence.updateTask(taskId, {
+        execution: {
+          branch: 'experiment/old-prompt',
+          commit: 'deadbeef',
+          workspacePath: '/tmp/old-workspace',
+          agentSessionId: 'sess-stale',
+          containerId: 'container-stale',
+          error: 'previous error',
+          exitCode: 1,
+          completedAt: new Date(),
+          startedAt: new Date(),
+        },
+      });
+      orchestrator.syncFromDb(taskId.split('/')[0]!);
+
+      orchestrator.editTaskPrompt(taskId, 'new prompt');
+
+      const task = orchestrator.getTask(taskId)!;
+      expect(task.execution.branch).toBeUndefined();
+      expect(task.execution.commit).toBeUndefined();
+      expect(task.execution.workspacePath).toBeUndefined();
+      expect(task.execution.agentSessionId).toBeUndefined();
+      expect(task.execution.containerId).toBeUndefined();
+      expect(task.execution.error).toBeUndefined();
+      expect(task.execution.exitCode).toBeUndefined();
+    });
+
+    it('Step 3: bumps execution generation by exactly one per prompt edit', () => {
+      orchestrator.loadPlan({
+        name: 'edit-prompt-gen-test',
+        tasks: [{ id: 't1', description: 'Task 1', prompt: 'old', command: 'echo old' }],
+      });
+      orchestrator.startExecution();
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 't1', status: 'failed', outputs: { exitCode: 1, error: 'x' } }),
+      );
+      const taskId = sid(orchestrator, 0, 't1');
+
+      const before = orchestrator.getTask(taskId)!.execution.generation ?? 0;
+
+      orchestrator.editTaskPrompt(taskId, 'new');
+
+      const after = orchestrator.getTask(taskId)!.execution.generation ?? 0;
+      expect(after).toBe(before + 1);
+    });
+
+    it('Step 3: persists the updated prompt and publishes a task.updated delta', () => {
+      orchestrator.loadPlan({
+        name: 'edit-prompt-persist-test',
+        tasks: [{ id: 't1', description: 'Task 1', prompt: 'old prompt', command: 'echo old' }],
+      });
+      orchestrator.startExecution();
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 't1', status: 'failed', outputs: { exitCode: 1, error: 'oops' } }),
+      );
+
+      orchestrator.editTaskPrompt('t1', 'fresh prompt');
+
+      const persisted = persistence.getTaskEntry('t1');
+      expect(persisted).toBeDefined();
+      expect(persisted?.task.config.prompt).toBe('fresh prompt');
+    });
+
+    it('Step 3: idempotence — two consecutive prompt edits trigger two cancel-first cycles and two generation bumps', () => {
+      orchestrator.loadPlan({
+        name: 'edit-prompt-idempotence-test',
+        tasks: [{ id: 't1', description: 'Task 1', prompt: 'old', command: 'sleep 100' }],
+      });
+      orchestrator.startExecution();
+      const taskId = sid(orchestrator, 0, 't1');
+      expect(orchestrator.getTask(taskId)?.status).toBe('running');
+
+      const cancelSpy = vi.spyOn(orchestrator, 'cancelTask');
+      const recreateSpy = vi.spyOn(orchestrator, 'recreateTask');
+
+      const gen0 = orchestrator.getTask(taskId)!.execution.generation ?? 0;
+
+      orchestrator.editTaskPrompt(taskId, 'first');
+      const gen1 = orchestrator.getTask(taskId)!.execution.generation ?? 0;
+      expect(gen1).toBe(gen0 + 1);
+      expect(orchestrator.getTask(taskId)?.status).toBe('running');
+
+      orchestrator.editTaskPrompt(taskId, 'second');
+      const gen2 = orchestrator.getTask(taskId)!.execution.generation ?? 0;
+      expect(gen2).toBe(gen0 + 2);
+
+      // Two cancel-first cycles, each followed by a recreate.
+      expect(cancelSpy).toHaveBeenCalledTimes(2);
+      expect(recreateSpy).toHaveBeenCalledTimes(2);
+      expect(cancelSpy.mock.invocationCallOrder[0]).toBeLessThan(
+        recreateSpy.mock.invocationCallOrder[0],
+      );
+      expect(cancelSpy.mock.invocationCallOrder[1]).toBeLessThan(
+        recreateSpy.mock.invocationCallOrder[1],
+      );
+
+      expect(orchestrator.getTask(taskId)?.config.prompt).toBe('second');
+
+      cancelSpy.mockRestore();
+      recreateSpy.mockRestore();
+    });
+  });
+
   // ── editTaskType ───────────────────────────────────────
 
   describe('editTaskType', () => {

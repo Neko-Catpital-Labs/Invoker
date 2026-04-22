@@ -22,6 +22,7 @@
  *   POST   /api/tasks/:id/reject       body: { reason? }
  *   POST   /api/tasks/:id/input        body: { text }
  *   POST   /api/tasks/:id/edit         body: { command }
+ *   POST   /api/tasks/:id/edit-prompt  body: { prompt }
  *   POST   /api/tasks/:id/edit-type    body: { executorType, remoteTargetId? }
  *   POST   /api/tasks/:id/edit-agent   body: { agent }
  *   POST   /api/tasks/:id/gate-policy  body: { updates: [{ workflowId, taskId?, gatePolicy }] }
@@ -44,6 +45,7 @@ import {
   rejectTask as sharedRejectTask,
   provideInput as sharedProvideInput,
   editTaskCommand as sharedEditTaskCommand,
+  editTaskPrompt as sharedEditTaskPrompt,
   editTaskType as sharedEditTaskType,
   editTaskAgent as sharedEditTaskAgent,
   setTaskExternalGatePolicies as sharedSetTaskExternalGatePolicies,
@@ -431,6 +433,32 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
           const runnable = started.filter(t => t.status === 'running');
           await taskExecutor.executeTasks(runnable);
           json(res, 200, { ok: true, taskId, action: 'command_edited', tasksStarted: runnable.length });
+        } catch (err) {
+          json(res, 400, { error: err instanceof Error ? err.message : String(err) });
+        }
+        return;
+      }
+
+      // POST /api/tasks/:id/edit-prompt — Step 3: prompt-mutation recreate-class
+      // route. Body: { prompt }. The substantive cancel-first / lineage-discard /
+      // generation-bump routing lives in `Orchestrator.editTaskPrompt`; this
+      // endpoint is a thin sync delegate via `editTaskPrompt`
+      // in `workflow-actions.ts`. See `docs/architecture/task-invalidation-chart.md`
+      // Decision Table row "Edit `prompt`".
+      const editPromptMatch = path.match(/^\/api\/tasks\/([^/]+)\/edit-prompt$/);
+      if (method === 'POST' && editPromptMatch) {
+        const taskId = decodeURIComponent(editPromptMatch[1]);
+        try {
+          const body = await readBody(req);
+          const { prompt } = JSON.parse(body);
+          if (!prompt) {
+            json(res, 400, { error: 'Missing "prompt" in request body' });
+            return;
+          }
+          const started = sharedEditTaskPrompt(taskId, prompt, { orchestrator });
+          const runnable = started.filter(t => t.status === 'running');
+          await taskExecutor.executeTasks(runnable);
+          json(res, 200, { ok: true, taskId, action: 'prompt_edited', tasksStarted: runnable.length });
         } catch (err) {
           json(res, 400, { error: err instanceof Error ? err.message : String(err) });
         }

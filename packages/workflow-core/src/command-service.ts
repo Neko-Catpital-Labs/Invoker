@@ -151,6 +151,23 @@ export class CommandService {
     );
   }
 
+  /**
+   * Edit a task's prompt — recreate-class invalidation route per Step 3
+   * of the task-invalidation roadmap (mirrors `editTaskCommand`). The
+   * orchestrator method is the synchronous cancel-first seam; this
+   * service-level entrypoint just serializes the mutation through the
+   * workflow mutex and wraps the result in a `CommandResult`.
+   */
+  async editTaskPrompt(
+    envelope: CommandEnvelope<{ taskId: string; newPrompt: string }>,
+  ): Promise<CommandResult<TaskState[]>> {
+    return this.executeCommand<TaskState[]>(
+      'EDIT_TASK_PROMPT_FAILED',
+      () => this.orchestrator.editTaskPrompt(envelope.payload.taskId, envelope.payload.newPrompt),
+      this.workflowIdForTask(envelope.payload.taskId),
+    );
+  }
+
   async editTaskType(
     envelope: CommandEnvelope<{ taskId: string; executorType: string; remoteTargetId?: string }>,
   ): Promise<CommandResult<TaskState[]>> {

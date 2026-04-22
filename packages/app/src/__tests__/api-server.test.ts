@@ -91,6 +91,7 @@ function createMocks() {
       setFixAwaitingApproval: vi.fn(),
       restartTask: vi.fn(() => [makeTask()]),
       editTaskCommand: vi.fn(() => [makeTask()]),
+      editTaskPrompt: vi.fn(() => [makeTask()]),
       editTaskType: vi.fn(() => [makeTask()]),
       editTaskAgent: vi.fn(() => [makeTask()]),
       setTaskExternalGatePolicies: vi.fn(() => [makeTask()]),
@@ -175,6 +176,7 @@ beforeEach(() => {
   mocks.orchestrator.restartTask.mockReturnValue([makeTask()]);
   mocks.orchestrator.beginConflictResolution.mockReturnValue({ savedError: 'saved-error' });
   mocks.orchestrator.editTaskCommand.mockReturnValue([makeTask()]);
+  mocks.orchestrator.editTaskPrompt.mockReturnValue([makeTask()]);
   mocks.orchestrator.editTaskType.mockReturnValue([makeTask()]);
   mocks.orchestrator.setTaskExternalGatePolicies.mockReturnValue([makeTask()]);
   mocks.orchestrator.cancelTask.mockReturnValue({ cancelled: ['task-1'], runningCancelled: ['task-1'] });
@@ -578,6 +580,38 @@ describe('POST /api/tasks/:id/edit', () => {
     const res = await request(port, 'POST', '/api/tasks/task-1/edit', {});
     expect(res.status).toBe(400);
     expect(res.body.error).toContain('Missing "command"');
+  });
+});
+
+// ── Step 3 (task-invalidation roadmap): prompt-mutation endpoint ──
+//
+// The chart's Decision Table row "Edit `prompt`" is recreate-class /
+// task scope. The api-server endpoint `POST /api/tasks/:id/edit-prompt`
+// MUST delegate to `Orchestrator.editTaskPrompt`, which is the
+// synchronous cancel-first / lineage-discard / generation-bump seam
+// (see `orchestrator.test.ts` `editTaskPrompt` block for unit-level
+// assertions on cancel ordering, lineage clear, and generation bump).
+// Here we assert end-to-end that an HTTP call routes through to the
+// orchestrator method with the correct payload — that is the
+// integration coverage required by the Step 3 plan.
+describe('POST /api/tasks/:id/edit-prompt', () => {
+  it('Step 3: edits task prompt and routes through orchestrator.editTaskPrompt', async () => {
+    const res = await request(port, 'POST', '/api/tasks/task-1/edit-prompt', { prompt: 'do the thing' });
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.action).toBe('prompt_edited');
+    expect(mocks.orchestrator.editTaskPrompt).toHaveBeenCalledWith('task-1', 'do the thing');
+    // The Step 2 command-mutation path was NOT invoked — we are on the
+    // dedicated prompt route, not the generic command edit.
+    expect(mocks.orchestrator.editTaskCommand).not.toHaveBeenCalled();
+    // Endpoint dispatches any newly-runnable tasks via the executor.
+    expect(mocks.taskExecutor.executeTasks).toHaveBeenCalled();
+  });
+
+  it('Step 3: returns 400 when prompt is missing', async () => {
+    const res = await request(port, 'POST', '/api/tasks/task-1/edit-prompt', {});
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('Missing "prompt"');
   });
 });
 
