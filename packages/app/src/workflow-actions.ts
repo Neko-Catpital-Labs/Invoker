@@ -310,6 +310,41 @@ export function setTaskExternalGatePolicies(
   return deps.orchestrator.setTaskExternalGatePolicies(taskId, updates);
 }
 
+/**
+ * Select a winning experiment for a reconciliation task — **retry-class**
+ * invalidation route per Step 7 of
+ * `docs/architecture/task-invalidation-roadmap.md` and the Decision Table
+ * row "Edit selected experiment" in
+ * `docs/architecture/task-invalidation-chart.md`
+ * (`MUTATION_POLICIES.selectedExperiment` → `retryTask` / task scope).
+ *
+ * The substantive routing — cancel-first interruption of any active
+ * downstream consumer of the reconciliation task, recon `selectedExperiment`
+ * persistence, retry-class reset of downstream via `restartTask`,
+ * generation bump on the affected downstream subgraph — lives in
+ * `Orchestrator.selectExperiment`. That method is the synchronous
+ * orchestrator-internal seam of `applyInvalidation`'s Hard Invariant
+ * (cancel BEFORE authoritative reset) and reuses `restartTask`'s reset
+ * shape so downstream tasks get a clean `pending` state and an incremented
+ * execution generation while their workspace lineage (branch /
+ * workspacePath) survives — the chart's retry-class semantics.
+ *
+ * This wrapper deliberately stays a thin sync delegate to keep the public
+ * surface (signature and return shape) backward compatible for headless,
+ * GUI, and Slack callers (e.g. `api-server` POST
+ * `/api/tasks/:id/select-experiment` and `headless select experiment`).
+ * Executor-aware kill of active in-flight runs
+ * (`taskExecutor.killActiveExecution`) flows through the same path
+ * Step 1 scaffolded (`buildCancelInFlight` / `buildInvalidationDeps`)
+ * and Step 17 will promote into a first-class lifecycle command surface;
+ * for now the orchestrator-side cancel inside `selectExperiment` is
+ * sufficient because executor processes observe the cancellation through
+ * the cancelled attempt and the bumped execution generation when they
+ * next report progress.
+ *
+ * Cancel-first is enforced inside the orchestrator method — this wrapper
+ * MUST NOT add a parallel cancel call.
+ */
 export function selectExperiment(
   taskId: string,
   experimentId: string,
