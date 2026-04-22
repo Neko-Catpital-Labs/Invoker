@@ -2113,12 +2113,36 @@ export class Orchestrator {
    * onto the retry path).
    *
    * NOTE: `recreateTask`'s lineage-discarding reset shape is
-   * deliberately NOT used here. Substrate-only changes preserve
-   * branch/workspacePath; that distinction is what makes `executorType`
-   * the lone retry-class row alongside the recreate-class rows in the
-   * chart's Decision Table. Step 6 covers `remoteTargetId` separately
-   * (the chart classifies it as recreate-class because remote host
-   * changes invalidate workspace lineage).
+   * deliberately NOT used here for the substrate-only fork.
+   * Substrate-only changes preserve branch/workspacePath; that
+   * distinction is what makes pure `executorType` mutation the lone
+   * retry-class row alongside the recreate-class rows in the chart's
+   * Decision Table.
+   *
+   * Step 6 (task-invalidation roadmap): remote-host changes are
+   * recreate-class. `editTaskType` is the public surface that today
+   * carries both axes (`executorType` AND `remoteTargetId`) so it MUST
+   * fork internally on whether the *host* changed:
+   *
+   *   - **Host change → recreate-class** (Step 6, chart Decision Table
+   *     row "Edit `remoteTargetId`": "Remote host change invalidates
+   *     existing workspace lineage"). Triggered when:
+   *       1. transitioning between local (`worktree` / `docker`) and
+   *          `ssh`, OR
+   *       2. switching between two different SSH `remoteTargetId`s.
+   *     Routes through `recreateTask`, which discards branch / commit /
+   *     workspacePath / agentSessionId / containerId per
+   *     `MUTATION_POLICIES.remoteTargetId` (`recreateTask` action /
+   *     `task` scope).
+   *
+   *   - **Substrate-only → retry-class** (Step 5 path, unchanged).
+   *     Triggered when only the local executor flavor flips
+   *     (`worktree` ↔ `docker`) or the SSH `remoteTargetId` is
+   *     unchanged. Routes through `restartTask`, preserving branch /
+   *     workspacePath lineage per `MUTATION_POLICIES.executorType`.
+   *
+   * The fork is computed by `hostKey`: `'ssh:<remoteTargetId>'` for
+   * SSH, `'local'` otherwise. Differing keys ⇒ host change ⇒ recreate.
    */
   editTaskType(taskId: string, executorType: string, remoteTargetId?: string): TaskState[] {
     this.refreshFromDb();
@@ -2139,6 +2163,22 @@ export class Orchestrator {
       }
     }
 
+    // Step 6: detect remote-host change. Compare normalized "host keys"
+    // for the existing and requested substrate. SSH bound to a specific
+    // remote target identifies a unique remote host; everything else
+    // (worktree, docker) collapses to `'local'`. Differing keys flip
+    // this mutation from retry-class (Step 5) to recreate-class
+    // (Step 6 — `MUTATION_POLICIES.remoteTargetId.action === 'recreateTask'`).
+    const oldExecutorType = task.config.executorType;
+    const oldRemoteTargetId =
+      oldExecutorType === 'ssh' ? task.config.remoteTargetId : undefined;
+    const newRemoteTargetId = effectiveType === 'ssh' ? remoteTargetId : undefined;
+    const hostKey = (et: string | undefined, rid: string | undefined): string =>
+      et === 'ssh' ? `ssh:${rid ?? ''}` : 'local';
+    const hostChanged =
+      hostKey(oldExecutorType, oldRemoteTargetId) !==
+      hostKey(effectiveType, newRemoteTargetId);
+
     if (task.status === 'running' || task.status === 'fixing_with_ai') {
       this.cancelTask(taskId);
     }
@@ -2155,7 +2195,9 @@ export class Orchestrator {
     this.persistence.logEvent?.(taskId, 'task.updated', typeChanges);
     this.messageBus.publish(TASK_DELTA_CHANNEL, typeDelta);
 
-    return this.restartTask(taskId);
+    // Step 6 fork. Host change ⇒ recreate-class (discard workspace
+    // lineage). Otherwise stay on Step 5's retry-class wire.
+    return hostChanged ? this.recreateTask(taskId) : this.restartTask(taskId);
   }
 
   /**

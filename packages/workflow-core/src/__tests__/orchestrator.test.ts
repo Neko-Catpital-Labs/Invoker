@@ -3380,6 +3380,238 @@ describe('Orchestrator', () => {
       expect(task?.config.executorType).toBe('worktree');
       expect(task?.config.remoteTargetId).toBeUndefined();
     });
+
+    // ── Step 6: remote-target host-change recreate-class fork ───────
+    //
+    // The chart's Decision Table row "Edit `remoteTargetId`" maps the
+    // remote-host mutation to InvalidationAction = 'recreateTask' /
+    // InvalidationScope = 'task' ("Remote host change invalidates
+    // existing workspace lineage"). `editTaskType` is the public seam
+    // that today carries both `executorType` and `remoteTargetId`, so
+    // it MUST fork internally on whether the *host* changed:
+    //   - host change → recreate-class (clears branch / workspacePath)
+    //   - substrate-only → retry-class (Step 5 path; preserves lineage)
+    // Step 5's behavior is regression-pinned by the blocks above; the
+    // following Step 6 cases pin the recreate-class fork.
+
+    it('Step 6: switching worktree → ssh (host change) is RECREATE-class — clears branch/commit/workspacePath', () => {
+      orchestrator.loadPlan({
+        name: 'edit-type-step6-worktree-to-ssh',
+        tasks: [{ id: 't1', description: 'Task 1', command: 'echo hello', executorType: 'worktree' }],
+      });
+      orchestrator.startExecution();
+      const taskId = sid(orchestrator, 0, 't1');
+
+      // Hydrate workspace lineage as if a prior attempt produced
+      // artifacts. Step 6 says these MUST be discarded when the host
+      // changes (worktree → ssh crosses local↔remote).
+      persistence.updateTask(taskId, {
+        execution: {
+          branch: 'experiment/preserved-branch',
+          commit: 'cafef00d',
+          workspacePath: '/tmp/preserved-workspace',
+          agentSessionId: 'sess-stale',
+          containerId: 'container-stale',
+          error: 'previous error',
+          exitCode: 1,
+          completedAt: new Date(),
+          startedAt: new Date(),
+        },
+      });
+      orchestrator.syncFromDb(taskId.split('/')[0]!);
+
+      orchestrator.editTaskType(taskId, 'ssh', 'remote_digital_ocean');
+
+      const task = orchestrator.getTask(taskId)!;
+      expect(task.config.executorType).toBe('ssh');
+      expect(task.config.remoteTargetId).toBe('remote_digital_ocean');
+      // ── Recreate-class clears workspace lineage (chart Step 6) ──
+      expect(task.execution.branch).toBeUndefined();
+      expect(task.execution.commit).toBeUndefined();
+      expect(task.execution.workspacePath).toBeUndefined();
+      expect(task.execution.agentSessionId).toBeUndefined();
+      expect(task.execution.containerId).toBeUndefined();
+    });
+
+    it('Step 6: switching ssh:A → ssh:B (different remote host) is RECREATE-class — clears branch/workspacePath', () => {
+      orchestrator.loadPlan({
+        name: 'edit-type-step6-ssh-to-ssh',
+        tasks: [{ id: 't1', description: 'Task 1', command: 'echo hello', executorType: 'ssh', remoteTargetId: 'remote_a' }],
+      });
+      orchestrator.startExecution();
+      const taskId = sid(orchestrator, 0, 't1');
+
+      persistence.updateTask(taskId, {
+        execution: {
+          branch: 'experiment/preserved-branch',
+          commit: 'deadbeef',
+          workspacePath: '/remote/preserved-workspace',
+          agentSessionId: 'sess-stale',
+          containerId: 'container-stale',
+          startedAt: new Date(),
+        },
+      });
+      orchestrator.syncFromDb(taskId.split('/')[0]!);
+
+      orchestrator.editTaskType(taskId, 'ssh', 'remote_b');
+
+      const task = orchestrator.getTask(taskId)!;
+      expect(task.config.executorType).toBe('ssh');
+      expect(task.config.remoteTargetId).toBe('remote_b');
+      // ssh:A → ssh:B is a host change — workspace lineage cleared.
+      expect(task.execution.branch).toBeUndefined();
+      expect(task.execution.commit).toBeUndefined();
+      expect(task.execution.workspacePath).toBeUndefined();
+      expect(task.execution.agentSessionId).toBeUndefined();
+      expect(task.execution.containerId).toBeUndefined();
+    });
+
+    it('Step 6: switching ssh → worktree (host change) is RECREATE-class — clears workspace lineage', () => {
+      orchestrator.loadPlan({
+        name: 'edit-type-step6-ssh-to-worktree',
+        tasks: [{ id: 't1', description: 'Task 1', command: 'echo hello', executorType: 'ssh', remoteTargetId: 'remote_a' }],
+      });
+      orchestrator.startExecution();
+      const taskId = sid(orchestrator, 0, 't1');
+
+      persistence.updateTask(taskId, {
+        execution: {
+          branch: 'experiment/preserved-branch',
+          workspacePath: '/remote/preserved-workspace',
+          startedAt: new Date(),
+        },
+      });
+      orchestrator.syncFromDb(taskId.split('/')[0]!);
+
+      orchestrator.editTaskType(taskId, 'worktree');
+
+      const task = orchestrator.getTask(taskId)!;
+      expect(task.config.executorType).toBe('worktree');
+      expect(task.config.remoteTargetId).toBeUndefined();
+      expect(task.execution.branch).toBeUndefined();
+      expect(task.execution.workspacePath).toBeUndefined();
+    });
+
+    it('Step 6: same-host ssh:A → ssh:A is RETRY-class — preserves branch/workspacePath (regression of Step 5)', () => {
+      orchestrator.loadPlan({
+        name: 'edit-type-step6-same-ssh',
+        tasks: [{ id: 't1', description: 'Task 1', command: 'echo hello', executorType: 'ssh', remoteTargetId: 'remote_a' }],
+      });
+      orchestrator.startExecution();
+      const taskId = sid(orchestrator, 0, 't1');
+
+      persistence.updateTask(taskId, {
+        execution: {
+          branch: 'experiment/preserved-branch',
+          commit: 'cafef00d',
+          workspacePath: '/remote/preserved-workspace',
+          agentSessionId: 'sess-stale',
+          containerId: 'container-stale',
+          startedAt: new Date(),
+        },
+      });
+      orchestrator.syncFromDb(taskId.split('/')[0]!);
+
+      orchestrator.editTaskType(taskId, 'ssh', 'remote_a');
+
+      const task = orchestrator.getTask(taskId)!;
+      expect(task.config.executorType).toBe('ssh');
+      expect(task.config.remoteTargetId).toBe('remote_a');
+      // Same host (ssh:A → ssh:A) — substrate-only retry-class
+      // preserves workspace lineage even though the call exercised the
+      // SSH path.
+      expect(task.execution.branch).toBe('experiment/preserved-branch');
+      expect(task.execution.workspacePath).toBe('/remote/preserved-workspace');
+      // ── Volatile attempt state still cleared by the retry reset ──
+      expect(task.execution.agentSessionId).toBeUndefined();
+      expect(task.execution.containerId).toBeUndefined();
+    });
+
+    it('Step 6: routes through recreateTask with cancel-first ordering on a host change of an ACTIVE task', () => {
+      orchestrator.loadPlan({
+        name: 'edit-type-step6-active-host-change',
+        tasks: [{ id: 't1', description: 'Task 1', command: 'sleep 100', executorType: 'worktree' }],
+      });
+      orchestrator.startExecution();
+      const taskId = sid(orchestrator, 0, 't1');
+      expect(orchestrator.getTask(taskId)?.status).toBe('running');
+
+      const cancelSpy = vi.spyOn(orchestrator, 'cancelTask');
+      const recreateSpy = vi.spyOn(orchestrator, 'recreateTask');
+      const restartSpy = vi.spyOn(orchestrator, 'restartTask');
+
+      orchestrator.editTaskType(taskId, 'ssh', 'remote_digital_ocean');
+
+      // Active host change: cancel-first MUST precede recreateTask
+      // (chart Hard Invariant — interrupt before authoritative reset),
+      // and the substrate-only retry-class path (restartTask) MUST NOT
+      // be on the route.
+      expect(cancelSpy).toHaveBeenCalledWith(taskId);
+      expect(recreateSpy).toHaveBeenCalledWith(taskId);
+      expect(restartSpy).not.toHaveBeenCalled();
+      expect(cancelSpy.mock.invocationCallOrder[0]).toBeLessThan(
+        recreateSpy.mock.invocationCallOrder[0],
+      );
+
+      cancelSpy.mockRestore();
+      recreateSpy.mockRestore();
+      restartSpy.mockRestore();
+    });
+
+    it('Step 6: editing remote-target on an ACTIVE task does NOT throw', () => {
+      orchestrator.loadPlan({
+        name: 'edit-type-step6-active-no-throw',
+        tasks: [{ id: 't1', description: 'Task 1', command: 'sleep 100', executorType: 'ssh', remoteTargetId: 'remote_a' }],
+      });
+      orchestrator.startExecution();
+      const taskId = sid(orchestrator, 0, 't1');
+      expect(orchestrator.getTask(taskId)?.status).toBe('running');
+
+      expect(() =>
+        orchestrator.editTaskType(taskId, 'ssh', 'remote_b'),
+      ).not.toThrow();
+
+      const task = orchestrator.getTask(taskId);
+      expect(task?.config.remoteTargetId).toBe('remote_b');
+    });
+
+    it('Step 6: bumps execution generation by exactly one on a host-change recreate', () => {
+      orchestrator.loadPlan({
+        name: 'edit-type-step6-gen-recreate',
+        tasks: [{ id: 't1', description: 'Task 1', command: 'echo hello', executorType: 'ssh', remoteTargetId: 'remote_a' }],
+      });
+      orchestrator.startExecution();
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 't1', status: 'failed', outputs: { exitCode: 1, error: 'x' } }),
+      );
+      const taskId = sid(orchestrator, 0, 't1');
+
+      const before = orchestrator.getTask(taskId)!.execution.generation ?? 0;
+
+      orchestrator.editTaskType(taskId, 'ssh', 'remote_b');
+
+      const after = orchestrator.getTask(taskId)!.execution.generation ?? 0;
+      expect(after).toBe(before + 1);
+    });
+
+    it('Step 6: bumps execution generation by exactly one on a substrate-only retry (regression of Step 5)', () => {
+      orchestrator.loadPlan({
+        name: 'edit-type-step6-gen-retry',
+        tasks: [{ id: 't1', description: 'Task 1', command: 'echo hello', executorType: 'docker' }],
+      });
+      orchestrator.startExecution();
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 't1', status: 'failed', outputs: { exitCode: 1, error: 'x' } }),
+      );
+      const taskId = sid(orchestrator, 0, 't1');
+
+      const before = orchestrator.getTask(taskId)!.execution.generation ?? 0;
+
+      orchestrator.editTaskType(taskId, 'worktree');
+
+      const after = orchestrator.getTask(taskId)!.execution.generation ?? 0;
+      expect(after).toBe(before + 1);
+    });
   });
 
   // ── editTaskAgent ──────────────────────────────────────

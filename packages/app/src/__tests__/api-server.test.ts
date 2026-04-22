@@ -625,6 +625,34 @@ describe('POST /api/tasks/:id/edit-type', () => {
     expect(res.status).toBe(400);
     expect(res.body.error).toContain('Missing "executorType"');
   });
+
+  // Step 6 (task-invalidation roadmap): the chart's Decision Table row
+  // "Edit `remoteTargetId`" is recreate-class / task scope ("Remote
+  // host change invalidates existing workspace lineage"). The
+  // api-server endpoint reuses `/edit-type` because today
+  // `editTaskType` is the public surface that carries both
+  // `executorType` and `remoteTargetId`. The recreate-vs-retry fork is
+  // an internal detail of `Orchestrator.editTaskType` (covered in
+  // `packages/workflow-core/src/__tests__/orchestrator.test.ts`'s
+  // Step 6 block). Here we assert the HTTP layer threads the
+  // `remoteTargetId` change through unmodified so the orchestrator
+  // can take the recreate-class branch end-to-end.
+  it('Step 6: forwards a remoteTargetId-only change (host change) so the orchestrator can take the recreate-class branch', async () => {
+    const res = await request(port, 'POST', '/api/tasks/task-1/edit-type', {
+      executorType: 'ssh',
+      remoteTargetId: 'remote-b',
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.action).toBe('type_edited');
+    // Both args are forwarded — `Orchestrator.editTaskType` uses them
+    // to compute the host-key and pick the recreate-class fork
+    // (see `MUTATION_POLICIES.remoteTargetId` and orchestrator unit
+    // coverage). No new public surface; the recreate-vs-retry choice
+    // is internal.
+    expect(mocks.orchestrator.editTaskType).toHaveBeenCalledWith('task-1', 'ssh', 'remote-b');
+    expect(mocks.taskExecutor.executeTasks).toHaveBeenCalled();
+  });
 });
 
 describe('POST /api/tasks/:id/edit-agent', () => {
