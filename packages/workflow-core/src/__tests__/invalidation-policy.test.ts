@@ -1,0 +1,249 @@
+/**
+ * Step 1 — Routing foundation regression coverage.
+ *
+ * Asserts:
+ *   1. `MUTATION_POLICIES` shape matches the chart Decision Table.
+ *   2. `applyInvalidation` enforces the chart's Hard Invariant
+ *      (cancel-first ordering, abort on cancel failure).
+ *   3. Scope/action mismatches fail fast before cancelInFlight runs.
+ *   4. `recreateWorkflowFromFreshBase` is gated behind an explicit
+ *      "not yet wired (Step 12)" error until the dep is supplied.
+ */
+
+import { describe, it, expect, vi } from 'vitest';
+import {
+  applyInvalidation,
+  MUTATION_POLICIES,
+  type InvalidationDeps,
+} from '../invalidation-policy.js';
+
+type MockedDeps = InvalidationDeps & {
+  cancelInFlight: ReturnType<typeof vi.fn>;
+  retryTask: ReturnType<typeof vi.fn>;
+  recreateTask: ReturnType<typeof vi.fn>;
+  retryWorkflow: ReturnType<typeof vi.fn>;
+  recreateWorkflow: ReturnType<typeof vi.fn>;
+  recreateWorkflowFromFreshBase?: ReturnType<typeof vi.fn>;
+};
+
+function makeDeps(overrides: Partial<MockedDeps> = {}): MockedDeps {
+  return {
+    cancelInFlight: vi.fn(async () => undefined),
+    retryTask: vi.fn(async () => []),
+    recreateTask: vi.fn(async () => []),
+    retryWorkflow: vi.fn(async () => []),
+    recreateWorkflow: vi.fn(async () => []),
+    ...overrides,
+  } as MockedDeps;
+}
+
+describe('MUTATION_POLICIES', () => {
+  it('matches the chart Decision Table for execution-spec mutations', () => {
+    expect(MUTATION_POLICIES.command.action).toBe('recreateTask');
+    expect(MUTATION_POLICIES.prompt.action).toBe('recreateTask');
+    expect(MUTATION_POLICIES.executionAgent.action).toBe('recreateTask');
+    expect(MUTATION_POLICIES.executorType.action).toBe('retryTask');
+    expect(MUTATION_POLICIES.remoteTargetId.action).toBe('recreateTask');
+    expect(MUTATION_POLICIES.selectedExperiment.action).toBe('retryTask');
+    expect(MUTATION_POLICIES.selectedExperimentSet.action).toBe('retryTask');
+    expect(MUTATION_POLICIES.mergeMode.action).toBe('retryTask');
+    expect(MUTATION_POLICIES.fixContext.action).toBe('retryTask');
+    expect(MUTATION_POLICIES.rebaseAndRetry.action).toBe('recreateWorkflowFromFreshBase');
+    expect(MUTATION_POLICIES.externalGatePolicy.action).toBe('none');
+  });
+
+  it('marks every spec-changing mutation as invalidating-if-active', () => {
+    for (const [key, policy] of Object.entries(MUTATION_POLICIES)) {
+      if (policy.action === 'none') {
+        expect(policy.invalidatesExecutionSpec, key).toBe(false);
+        expect(policy.invalidateIfActive, key).toBe(false);
+      } else {
+        expect(policy.invalidatesExecutionSpec, key).toBe(true);
+        expect(policy.invalidateIfActive, key).toBe(true);
+      }
+    }
+  });
+
+  it('is frozen — the policy table is a constant, not a mutable map', () => {
+    expect(Object.isFrozen(MUTATION_POLICIES)).toBe(true);
+  });
+});
+
+describe("applyInvalidation: action='none'", () => {
+  it('returns [] and never calls cancelInFlight or any lifecycle dep', async () => {
+    const deps = makeDeps();
+    const out = await applyInvalidation('none', 'none', 'task-a', deps);
+    expect(out).toEqual([]);
+    expect(deps.cancelInFlight).not.toHaveBeenCalled();
+    expect(deps.retryTask).not.toHaveBeenCalled();
+    expect(deps.recreateTask).not.toHaveBeenCalled();
+    expect(deps.retryWorkflow).not.toHaveBeenCalled();
+    expect(deps.recreateWorkflow).not.toHaveBeenCalled();
+  });
+
+  it("rejects when action is 'none' but scope is not 'none'", async () => {
+    const deps = makeDeps();
+    await expect(
+      applyInvalidation('task', 'none', 'task-a', deps),
+    ).rejects.toThrow(/scope must be 'none'/);
+    expect(deps.cancelInFlight).not.toHaveBeenCalled();
+  });
+});
+
+describe('applyInvalidation: cancel-first ordering (Hard Invariant)', () => {
+  it('calls cancelInFlight before retryTask', async () => {
+    const deps = makeDeps();
+    await applyInvalidation('task', 'retryTask', 'task-a', deps);
+    expect(deps.cancelInFlight).toHaveBeenCalledWith('task', 'task-a');
+    expect(deps.retryTask).toHaveBeenCalledWith('task-a');
+    expect(deps.cancelInFlight.mock.invocationCallOrder[0]).toBeLessThan(
+      deps.retryTask.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('calls cancelInFlight before recreateTask', async () => {
+    const deps = makeDeps();
+    await applyInvalidation('task', 'recreateTask', 'task-a', deps);
+    expect(deps.cancelInFlight).toHaveBeenCalledWith('task', 'task-a');
+    expect(deps.cancelInFlight.mock.invocationCallOrder[0]).toBeLessThan(
+      deps.recreateTask.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('calls cancelInFlight before retryWorkflow', async () => {
+    const deps = makeDeps();
+    await applyInvalidation('workflow', 'retryWorkflow', 'wf-1', deps);
+    expect(deps.cancelInFlight).toHaveBeenCalledWith('workflow', 'wf-1');
+    expect(deps.cancelInFlight.mock.invocationCallOrder[0]).toBeLessThan(
+      deps.retryWorkflow.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('calls cancelInFlight before recreateWorkflow', async () => {
+    const deps = makeDeps();
+    await applyInvalidation('workflow', 'recreateWorkflow', 'wf-1', deps);
+    expect(deps.cancelInFlight.mock.invocationCallOrder[0]).toBeLessThan(
+      deps.recreateWorkflow.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('calls cancelInFlight before recreateWorkflowFromFreshBase when dep is wired', async () => {
+    const recreateWorkflowFromFreshBase = vi.fn(async () => []);
+    const deps = makeDeps({ recreateWorkflowFromFreshBase });
+    await applyInvalidation('workflow', 'recreateWorkflowFromFreshBase', 'wf-1', deps);
+    expect(recreateWorkflowFromFreshBase).toHaveBeenCalledWith('wf-1');
+    expect(deps.cancelInFlight.mock.invocationCallOrder[0]).toBeLessThan(
+      recreateWorkflowFromFreshBase.mock.invocationCallOrder[0],
+    );
+  });
+});
+
+describe('applyInvalidation: cancel-first failure aborts the route', () => {
+  it('rejects and never calls the lifecycle dep when cancelInFlight rejects (recreateTask)', async () => {
+    const cancelError = new Error('cancel failed');
+    const deps = makeDeps({
+      cancelInFlight: vi.fn(async () => {
+        throw cancelError;
+      }),
+    });
+    await expect(
+      applyInvalidation('task', 'recreateTask', 'task-a', deps),
+    ).rejects.toBe(cancelError);
+    expect(deps.recreateTask).not.toHaveBeenCalled();
+  });
+
+  it('rejects and never calls the lifecycle dep when cancelInFlight rejects (retryWorkflow)', async () => {
+    const deps = makeDeps({
+      cancelInFlight: vi.fn(async () => {
+        throw new Error('boom');
+      }),
+    });
+    await expect(
+      applyInvalidation('workflow', 'retryWorkflow', 'wf-1', deps),
+    ).rejects.toThrow('boom');
+    expect(deps.retryWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('aborts recreateWorkflowFromFreshBase when cancel rejects', async () => {
+    const recreateWorkflowFromFreshBase = vi.fn(async () => []);
+    const deps = makeDeps({
+      cancelInFlight: vi.fn(async () => {
+        throw new Error('cancel exploded');
+      }),
+      recreateWorkflowFromFreshBase,
+    });
+    await expect(
+      applyInvalidation('workflow', 'recreateWorkflowFromFreshBase', 'wf-1', deps),
+    ).rejects.toThrow('cancel exploded');
+    expect(recreateWorkflowFromFreshBase).not.toHaveBeenCalled();
+  });
+});
+
+describe('applyInvalidation: scope/action mismatch', () => {
+  it('rejects retryTask with workflow scope and never cancels', async () => {
+    const deps = makeDeps();
+    await expect(
+      applyInvalidation('workflow', 'retryTask', 'task-a', deps),
+    ).rejects.toThrow(/requires scope 'task'/);
+    expect(deps.cancelInFlight).not.toHaveBeenCalled();
+  });
+
+  it('rejects recreateTask with workflow scope', async () => {
+    const deps = makeDeps();
+    await expect(
+      applyInvalidation('workflow', 'recreateTask', 'task-a', deps),
+    ).rejects.toThrow(/requires scope 'task'/);
+    expect(deps.cancelInFlight).not.toHaveBeenCalled();
+  });
+
+  it('rejects retryWorkflow with task scope', async () => {
+    const deps = makeDeps();
+    await expect(
+      applyInvalidation('task', 'retryWorkflow', 'wf-1', deps),
+    ).rejects.toThrow(/requires scope 'workflow'/);
+    expect(deps.cancelInFlight).not.toHaveBeenCalled();
+  });
+
+  it('rejects recreateWorkflow with task scope', async () => {
+    const deps = makeDeps();
+    await expect(
+      applyInvalidation('task', 'recreateWorkflow', 'wf-1', deps),
+    ).rejects.toThrow(/requires scope 'workflow'/);
+  });
+
+  it('rejects recreateWorkflowFromFreshBase with task scope', async () => {
+    const deps = makeDeps({
+      recreateWorkflowFromFreshBase: vi.fn(async () => []),
+    });
+    await expect(
+      applyInvalidation('task', 'recreateWorkflowFromFreshBase', 'wf-1', deps),
+    ).rejects.toThrow(/requires scope 'workflow'/);
+  });
+
+  it('rejects task-scoped invocation with workflow-only action and never cancels', async () => {
+    const deps = makeDeps({
+      recreateWorkflowFromFreshBase: vi.fn(async () => []),
+    });
+    await expect(
+      applyInvalidation('task', 'recreateWorkflow', 'wf-1', deps),
+    ).rejects.toThrow();
+    expect(deps.cancelInFlight).not.toHaveBeenCalled();
+    expect(deps.recreateWorkflow).not.toHaveBeenCalled();
+  });
+});
+
+describe('applyInvalidation: recreateWorkflowFromFreshBase optional dep', () => {
+  it('throws an explicit "not yet wired (Step 12)" error when dep is absent', async () => {
+    const deps = makeDeps();
+    await expect(
+      applyInvalidation('workflow', 'recreateWorkflowFromFreshBase', 'wf-1', deps),
+    ).rejects.toThrow(/not yet wired \(Step 12\)/);
+  });
+
+  it('routes to the provided dep when present', async () => {
+    const recreateWorkflowFromFreshBase = vi.fn(async () => []);
+    const deps = makeDeps({ recreateWorkflowFromFreshBase });
+    await applyInvalidation('workflow', 'recreateWorkflowFromFreshBase', 'wf-1', deps);
+    expect(recreateWorkflowFromFreshBase).toHaveBeenCalledWith('wf-1');
+  });
+});

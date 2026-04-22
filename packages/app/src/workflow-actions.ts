@@ -8,7 +8,12 @@
 
 import type { Logger } from '@invoker/contracts';
 import type { Orchestrator, ExternalGatePolicyUpdate } from '@invoker/workflow-core';
-import type { TaskState } from '@invoker/workflow-core';
+import type {
+  CancelInFlightFn,
+  InvalidationDeps,
+  InvalidationScope,
+  TaskState,
+} from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import type { TaskRunner } from '@invoker/execution-engine';
 import { normalizeMergeModeForPersistence } from './merge-mode.js';
@@ -179,6 +184,87 @@ export async function rebaseAndRetry(
   }
 
   return bumpGenerationAndRecreate(workflowId, deps);
+}
+
+// ── Invalidation routing scaffolding (Phase A, Step 1) ───────
+//
+// These helpers wire the new InvalidationAction surface from
+// `@invoker/workflow-core/invalidation-policy` to today's orchestrator
+// primitives. They are exported but UNUSED in Step 1 by design — Steps
+// 2–18 migrate individual mutation paths onto `applyInvalidation()`.
+// See `docs/architecture/task-invalidation-roadmap.md` for the order.
+
+export interface BuildCancelInFlightDeps {
+  orchestrator: Orchestrator;
+  taskExecutor?: TaskRunner;
+}
+
+/**
+ * Build the cancel-first runtime hook for the new invalidation surface.
+ *
+ * Sequence (per chart "Hard Invariant" in
+ * `docs/architecture/task-invalidation-chart.md`):
+ *   1. orchestrator.cancelTask / cancelWorkflow → `runningCancelled[]`
+ *   2. for each id in `runningCancelled`, await taskExecutor.killActiveExecution(id)
+ *
+ * This mirrors the order already used by headless's `cancelTask` /
+ * `cancelWorkflow` adapters; consolidating it here gives every
+ * invalidation route a single cancel-first entrypoint.
+ *
+ * Step 1 scaffolding: exported but unused; later steps wire callers.
+ */
+export function buildCancelInFlight(deps: BuildCancelInFlightDeps): CancelInFlightFn {
+  return async (scope: InvalidationScope, id: string): Promise<void> => {
+    if (scope === 'none') return;
+    const result =
+      scope === 'task'
+        ? deps.orchestrator.cancelTask(id)
+        : deps.orchestrator.cancelWorkflow(id);
+    const taskExecutor = deps.taskExecutor;
+    if (!taskExecutor) return;
+    for (const runningId of result.runningCancelled) {
+      await taskExecutor.killActiveExecution(runningId);
+    }
+  };
+}
+
+/**
+ * Build the `InvalidationDeps` the engine uses to route an
+ * `InvalidationAction` to today's orchestrator primitives.
+ *
+ * Compatibility wires:
+ *   - `retryTask` → `orchestrator.restartTask` (rename happens in Step 13).
+ *   - `recreateWorkflow` → `bumpGenerationAndRecreate` (matches today's
+ *     `recreateWorkflow()` action wrapper that bumps generation first).
+ *
+ * `recreateWorkflowFromFreshBase` is intentionally left UNWIRED here.
+ * Step 12 promotes today's composite `rebaseAndRetry` flow
+ * (`preparePoolForRebaseRetry → recreateWorkflow`) to a first-class
+ * primitive, which `applyInvalidation` will then route to. Until then,
+ * `applyInvalidation` throws an explicit "not yet wired (Step 12)"
+ * error if anyone selects that action.
+ *
+ * Step 1 scaffolding: exported but unused; later steps wire callers.
+ */
+export function buildInvalidationDeps(
+  deps: Pick<ActionDeps, 'logger' | 'orchestrator' | 'persistence' | 'taskExecutor'>,
+): InvalidationDeps {
+  const cancelInFlight = buildCancelInFlight({
+    orchestrator: deps.orchestrator,
+    taskExecutor: deps.taskExecutor,
+  });
+  return {
+    cancelInFlight,
+    retryTask: (taskId: string) => deps.orchestrator.restartTask(taskId),
+    recreateTask: (taskId: string) => deps.orchestrator.recreateTask(taskId),
+    retryWorkflow: (workflowId: string) => deps.orchestrator.retryWorkflow(workflowId),
+    recreateWorkflow: (workflowId: string) =>
+      bumpGenerationAndRecreate(workflowId, {
+        logger: deps.logger,
+        orchestrator: deps.orchestrator,
+        persistence: deps.persistence,
+      }),
+  };
 }
 
 export function editTaskCommand(
