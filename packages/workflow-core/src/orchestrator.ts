@@ -1991,7 +1991,51 @@ export class Orchestrator {
     return this.recreateTask(taskId);
   }
 
-    editTaskPrompt(taskId: string, newPrompt: string): TaskState[] {
+  /**
+   * Edit a task's prompt — recreate-class invalidation route per Step 3 of
+   * `docs/architecture/task-invalidation-roadmap.md` and the Decision Table
+   * row "Edit `prompt`" in `docs/architecture/task-invalidation-chart.md`.
+   *
+   * A `prompt` edit changes the task's execution-defining spec (the chart
+   * lists `prompt` as part of the execution ABI alongside `command`,
+   * `executionAgent`, `executorType`, `remoteTargetId`), so the existing
+   * attempt's lineage (branch, commit, workspacePath, agent session,
+   * container) is no longer authoritative. The chart maps this to
+   * `InvalidationAction = 'recreateTask'` with `InvalidationScope = 'task'`.
+   *
+   * Sequence (mirrors `applyInvalidation`'s contract for the synchronous
+   * orchestrator-internal seam — see `invalidation-policy.ts` and the
+   * Step 2 `editTaskCommand` precedent):
+   *   1. **Cancel-first (Hard Invariant).** If the task is actively
+   *      executing (`running` or `fixing_with_ai`) we interrupt it via
+   *      `cancelTask` BEFORE any authoritative state is reset. The
+   *      executor-aware kill (`taskExecutor.killActiveExecution`) is wired
+   *      by the app-layer wrapper through `applyInvalidation`'s
+   *      `cancelInFlight` dep; this method only handles the orchestrator
+   *      side of cancel and does NOT add a parallel cancel call.
+   *   2. **Persist new prompt.** `writeAndSync` updates `config.prompt`
+   *      and emits a `task.updated` delta so the recreated attempt picks
+   *      up the new spec.
+   *   3. **Recreate-class reset.** Delegate to `recreateTask`, which
+   *      discards stale lineage (branch, commit, workspacePath,
+   *      agentSessionId, containerId, error, exitCode, ...) and bumps the
+   *      execution generation exactly once via
+   *      `withBumpedExecutionGeneration`. This is the single source of
+   *      truth for the recreate reset shape — Step 3 deliberately reuses
+   *      it instead of duplicating the field list here (mirrors Step 2).
+   *
+   * Public surface: `(taskId, newPrompt)` returning `TaskState[]` of
+   * newly-started tasks — backward-compatible signature shape with the
+   * other `editTask*` mutators. Prior to Step 3 there was no dedicated
+   * general policy for prompt edits (per the chart's "Behavior Today"
+   * column); this method introduces one. Active tasks are NOT rejected —
+   * cancel-first per the chart's Hard Invariant.
+   *
+   * NOTE: `restartTask` is intentionally NOT used here; the
+   * recreate-class reset shape is the only authoritative reset path for
+   * this mutation and `restartTask` will be removed entirely in Step 13.
+   */
+  editTaskPrompt(taskId: string, newPrompt: string): TaskState[] {
     this.refreshFromDb();
     const task = this.stateGetTask(taskId);
     if (!task) throw new Error(`Task ${taskId} not found`);
@@ -2010,7 +2054,73 @@ export class Orchestrator {
     return this.recreateTask(taskId);
   }
 
-    editTaskType(taskId: string, executorType: string, remoteTargetId?: string): TaskState[] {
+  /**
+   * Edit a task's executor type (e.g. `worktree` ↔ `docker` ↔ `ssh`) —
+   * **retry-class** invalidation route per Step 5 of
+   * `docs/architecture/task-invalidation-roadmap.md` and the Decision
+   * Table row "Edit `executorType`" in
+   * `docs/architecture/task-invalidation-chart.md`.
+   *
+   * Why retry-class (not recreate-class). The chart explicitly classifies
+   * `executorType` as a substrate-only mutation: only the execution
+   * environment changed, but the workspace lineage may still be valid.
+   * `MUTATION_POLICIES.executorType` therefore maps to
+   * `InvalidationAction = 'retryTask'` with `InvalidationScope = 'task'`,
+   * unlike the `command` / `prompt` / `executionAgent` mutations
+   * (Steps 2–4) which are recreate-class because they materially change
+   * the task definition itself. The "Why" column in the chart spells
+   * this out: "Execution environment changed, but workspace lineage may
+   * still be valid". Today's `applyInvalidation` wires `retryTask` to
+   * `Orchestrator.restartTask` as a compatibility seam (see
+   * `buildInvalidationDeps` in `packages/app/src/workflow-actions.ts`);
+   * Step 13 will rename `restartTask` → `retryTask` and Step 5
+   * deliberately routes through that same seam so no behavior diverges
+   * between the policy-driven path and this orchestrator-internal path.
+   *
+   * Sequence (mirrors `applyInvalidation`'s contract for the synchronous
+   * orchestrator-internal seam — see `invalidation-policy.ts` and the
+   * Step 2/3/4 `editTaskCommand` / `editTaskPrompt` / `editTaskAgent`
+   * precedents):
+   *   1. **Cancel-first (Hard Invariant).** If the task is actively
+   *      executing (`running` or `fixing_with_ai`) we interrupt it via
+   *      `cancelTask` BEFORE any authoritative state is reset. The
+   *      executor-aware kill (`taskExecutor.killActiveExecution`) is
+   *      wired by the app-layer wrapper through `applyInvalidation`'s
+   *      `cancelInFlight` dep; this method only handles the orchestrator
+   *      side of cancel and does NOT add a parallel cancel call.
+   *   2. **Persist new substrate.** `writeAndSync` updates
+   *      `config.executorType` (and `config.remoteTargetId` for SSH —
+   *      cleared otherwise) and emits a `task.updated` delta so the
+   *      retried attempt picks up the new substrate.
+   *   3. **Retry-class reset.** Delegate to `restartTask`, which is the
+   *      current `retryTask` compatibility wire (Step 13 will rename it).
+   *      `restartTask` resets the root + transitive downstream subgraph
+   *      to `pending`, clears volatile attempt state
+   *      (`agentSessionId` / `containerId` / `error` / `exitCode` /
+   *      `startedAt` / `completedAt`), and bumps execution generation
+   *      exactly once via `withBumpedExecutionGeneration`. Crucially
+   *      it does NOT clear `branch`, `commit`, or `workspacePath` —
+   *      that lineage is the workspace artifact the chart says is still
+   *      authoritative for a substrate-only change.
+   *
+   * Public surface: `(taskId, executorType, remoteTargetId?)` returning
+   * `TaskState[]` of newly-started tasks — backward-compatible signature
+   * shape with the other `editTask*` mutators. The previous
+   * `Cannot edit running task` throw on active tasks is REMOVED — that
+   * is the whole point of cancel-first per the chart's Hard Invariant
+   * ("Behavior Today" column had executor-type edits as `restartTask`
+   * when inactive / blocked when active; Step 5 collapses both branches
+   * onto the retry path).
+   *
+   * NOTE: `recreateTask`'s lineage-discarding reset shape is
+   * deliberately NOT used here. Substrate-only changes preserve
+   * branch/workspacePath; that distinction is what makes `executorType`
+   * the lone retry-class row alongside the recreate-class rows in the
+   * chart's Decision Table. Step 6 covers `remoteTargetId` separately
+   * (the chart classifies it as recreate-class because remote host
+   * changes invalidate workspace lineage).
+   */
+  editTaskType(taskId: string, executorType: string, remoteTargetId?: string): TaskState[] {
     this.refreshFromDb();
     const task = this.stateGetTask(taskId);
     if (!task) throw new Error(`Task ${taskId} not found`);
@@ -2029,16 +2139,6 @@ export class Orchestrator {
       }
     }
 
-    const oldExecutorType = task.config.executorType;
-    const oldRemoteTargetId =
-      oldExecutorType === 'ssh' ? task.config.remoteTargetId : undefined;
-    const newRemoteTargetId = effectiveType === 'ssh' ? remoteTargetId : undefined;
-    const hostKey = (et: string | undefined, rid: string | undefined): string =>
-      et === 'ssh' ? `ssh:${rid ?? ''}` : 'local';
-    const hostChanged =
-      hostKey(oldExecutorType, oldRemoteTargetId) !==
-      hostKey(effectiveType, newRemoteTargetId);
-
     if (task.status === 'running' || task.status === 'fixing_with_ai') {
       this.cancelTask(taskId);
     }
@@ -2055,10 +2155,58 @@ export class Orchestrator {
     this.persistence.logEvent?.(taskId, 'task.updated', typeChanges);
     this.messageBus.publish(TASK_DELTA_CHANNEL, typeDelta);
 
-    return hostChanged ? this.recreateTask(taskId) : this.restartTask(taskId);
+    return this.restartTask(taskId);
   }
 
-    editTaskAgent(taskId: string, agentName: string): TaskState[] {
+  /**
+   * Edit a task's execution agent (e.g. 'claude' → 'codex') — recreate-class
+   * invalidation route per Step 4 of
+   * `docs/architecture/task-invalidation-roadmap.md` and the Decision Table
+   * row "Edit `executionAgent`" in
+   * `docs/architecture/task-invalidation-chart.md`.
+   *
+   * Agent choice is part of the execution-defining ABI (the chart lists
+   * `executionAgent` alongside `command`, `prompt`, `executorType`,
+   * `remoteTargetId`), so the existing attempt's lineage (branch, commit,
+   * workspacePath, agent session, container) is no longer authoritative
+   * once the agent flips. The chart maps this to
+   * `InvalidationAction = 'recreateTask'` with `InvalidationScope = 'task'`
+   * (see `MUTATION_POLICIES.executionAgent`).
+   *
+   * Sequence (mirrors `applyInvalidation`'s contract for the synchronous
+   * orchestrator-internal seam — see `invalidation-policy.ts` and the
+   * Step 2/3 `editTaskCommand` / `editTaskPrompt` precedents):
+   *   1. **Cancel-first (Hard Invariant).** If the task is actively
+   *      executing (`running` or `fixing_with_ai`) we interrupt it via
+   *      `cancelTask` BEFORE any authoritative state is reset. The
+   *      executor-aware kill (`taskExecutor.killActiveExecution`) is wired
+   *      by the app-layer wrapper through `applyInvalidation`'s
+   *      `cancelInFlight` dep; this method only handles the orchestrator
+   *      side of cancel and does NOT add a parallel cancel call.
+   *   2. **Persist new agent.** `writeAndSync` updates
+   *      `config.executionAgent` and emits a `task.updated` delta so the
+   *      recreated attempt picks up the new spec.
+   *   3. **Recreate-class reset.** Delegate to `recreateTask`, which
+   *      discards stale lineage (branch, commit, workspacePath,
+   *      agentSessionId, containerId, error, exitCode, ...) and bumps the
+   *      execution generation exactly once via
+   *      `withBumpedExecutionGeneration`. This is the single source of
+   *      truth for the recreate reset shape — Step 4 deliberately reuses
+   *      it instead of duplicating the field list here (mirrors Steps 2/3).
+   *
+   * Public surface: `(taskId, agentName)` returning `TaskState[]` of
+   * newly-started tasks — backward-compatible signature shape with the
+   * other `editTask*` mutators. The previous `Cannot edit running task`
+   * throw on active tasks is REMOVED — that's the whole point of
+   * cancel-first per the chart's Hard Invariant ("Behavior Today" had
+   * agent edits as `restartTask` when inactive / blocked when active;
+   * Step 4 collapses both branches onto the recreate path).
+   *
+   * NOTE: `restartTask` is intentionally NOT used here; the
+   * recreate-class reset shape is the only authoritative reset path for
+   * this mutation and `restartTask` will be removed entirely in Step 13.
+   */
+  editTaskAgent(taskId: string, agentName: string): TaskState[] {
     this.refreshFromDb();
     const task = this.stateGetTask(taskId);
     if (!task) throw new Error(`Task ${taskId} not found`);
