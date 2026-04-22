@@ -151,7 +151,14 @@ export class CommandService {
     );
   }
 
-    async editTaskPrompt(
+  /**
+   * Edit a task's prompt — recreate-class invalidation route per Step 3
+   * of the task-invalidation roadmap (mirrors `editTaskCommand`). The
+   * orchestrator method is the synchronous cancel-first seam; this
+   * service-level entrypoint just serializes the mutation through the
+   * workflow mutex and wraps the result in a `CommandResult`.
+   */
+  async editTaskPrompt(
     envelope: CommandEnvelope<{ taskId: string; newPrompt: string }>,
   ): Promise<CommandResult<TaskState[]>> {
     return this.executeCommand<TaskState[]>(
@@ -161,7 +168,17 @@ export class CommandService {
     );
   }
 
-    async editTaskType(
+  /**
+   * Edit a task's executor type — **retry-class** invalidation route per
+   * Step 5 of the task-invalidation roadmap (substrate-only mutation;
+   * differs from the recreate-class `editTaskCommand` / `editTaskPrompt`
+   * / `editTaskAgent` seams). The orchestrator method is the synchronous
+   * cancel-first seam; this service-level entrypoint just serializes the
+   * mutation through the workflow mutex and wraps the result in a
+   * `CommandResult`. See `MUTATION_POLICIES.executorType` and
+   * `Orchestrator.editTaskType`.
+   */
+  async editTaskType(
     envelope: CommandEnvelope<{ taskId: string; executorType: string; remoteTargetId?: string }>,
   ): Promise<CommandResult<TaskState[]>> {
     return this.executeCommand<TaskState[]>(
@@ -175,7 +192,16 @@ export class CommandService {
     );
   }
 
-    async editTaskAgent(
+  /**
+   * Edit a task's execution agent — recreate-class invalidation route per
+   * Step 4 of the task-invalidation roadmap (mirrors `editTaskCommand` /
+   * `editTaskPrompt`). The orchestrator method is the synchronous
+   * cancel-first seam; this service-level entrypoint just serializes the
+   * mutation through the workflow mutex and wraps the result in a
+   * `CommandResult`. See `MUTATION_POLICIES.executionAgent` and
+   * `Orchestrator.editTaskAgent`.
+   */
+  async editTaskAgent(
     envelope: CommandEnvelope<{ taskId: string; agentName: string }>,
   ): Promise<CommandResult<TaskState[]>> {
     return this.executeCommand<TaskState[]>(
