@@ -1535,9 +1535,86 @@ export class Orchestrator {
   }
 
   /**
-   * Select multiple winning experiments for a reconciliation task.
-   * For a single experiment, delegates to selectExperiment.
-   * For multiple, uses the provided combined branch/commit from the merged result.
+   * Select multiple winning experiments for a reconciliation task —
+   * **retry-class** invalidation route per Step 8 of
+   * `docs/architecture/task-invalidation-roadmap.md` and the Decision
+   * Table row "Edit selected experiment set" in
+   * `docs/architecture/task-invalidation-chart.md`
+   * (`MUTATION_POLICIES.selectedExperimentSet` → `retryTask` /
+   * task scope).
+   *
+   * Same chart classification as the single-winner path (Step 7,
+   * `selectExperiment`): the reconciliation task's *result* (here a
+   * merged branch/commit) is the execution input that downstream
+   * consumers use, so changing the merged set invalidates downstream
+   * attempts but does NOT change the reconciliation task's own spec.
+   * The chart's "Why" column for this row is "Same as above, but for
+   * merged lineage", i.e. retry-class with task scope, wired through
+   * the same `applyInvalidation('task','retryTask',reconId,deps)`
+   * compatibility seam (`buildInvalidationDeps` → today's
+   * `restartTask`; Step 13 will rename `restartTask` → `retryTask` to
+   * close the matrix).
+   *
+   * Sequence (mirrors Step 7's `selectExperiment` to keep the
+   * synchronous orchestrator-internal seam identical for both
+   * single-winner and merged-set paths):
+   *   1. **Single-element shortcut.** If exactly one id is supplied
+   *      delegate to `selectExperiment` — that path already enforces
+   *      cancel-first per Step 7 and there is no merged lineage to
+   *      record.
+   *   2. **Cancel-first (Hard Invariant).** On a real re-selection
+   *      (the recon was previously completed with a *different* set)
+   *      compute the recon's transitive downstream subgraph and cancel
+   *      any active member (`running` or `fixing_with_ai`) BEFORE we
+   *      mutate the recon's `selectedExperiments`. Stale downstream
+   *      attempts cannot survive a set change because they would
+   *      consume the OLD merged lineage. For initial selection (no
+   *      prior set) and same-set re-selection this loop is a no-op —
+   *      no execution input changed, so nothing to cancel.
+   *   3. **Persist new merged lineage.** `writeAndSync` updates
+   *      `execution.selectedExperiments` (the array), mirrors
+   *      `selectedExperiment` to `experimentIds[0]` for single-winner
+   *      compat, and stamps the recon's `branch`/`commit` from the
+   *      provided combined merged-result lineage. The reconciliation
+   *      task transitions to `completed`.
+   *   4. **Retry-class reset of downstream (re-selection only).** Each
+   *      direct downstream consumer is reset via `restartTask`, the
+   *      current `retryTask` compatibility wire. `restartTask`
+   *      cascades to its own descendants and bumps each affected
+   *      task's execution generation exactly once via
+   *      `withBumpedExecutionGeneration` (single source of truth for
+   *      the retry reset shape — Step 8 reuses it instead of
+   *      duplicating the field list, mirroring Steps 5/6/7). Initial
+   *      selection skips this because nothing has executed yet
+   *      against the recon's merged result.
+   *   5. **Auto-start newly ready tasks.** Existing behavior:
+   *      `findNewlyReadyTasks(reconId)` plus `autoStartReadyTasks`
+   *      unblocks downstream that just became ready due to recon
+   *      completing.
+   *
+   * Same-set detection canonicalizes both the prior and new sets to a
+   * sorted list of unique ids and compares element-wise. The prior set
+   * is taken from `execution.selectedExperiments` when present, else
+   * falls back to the singleton `[execution.selectedExperiment]` so
+   * that switching a previously single-winner recon to a merged set
+   * (or vice versa) is correctly classified as a real re-selection.
+   *
+   * Public surface is unchanged: same
+   * `(taskId, experimentIds, combinedBranch?, combinedCommit?)`
+   * signature returning `TaskState[]` of newly-started tasks. Active
+   * downstream is NO LONGER silently overwritten with a new merged
+   * lineage — that's the whole point of cancel-first per the chart's
+   * Hard Invariant. Prior to Step 8 there was no general active
+   * invalidation model for merged-set selection (per the chart's
+   * "Behavior Today" column); this method introduces one in parity
+   * with Step 7.
+   *
+   * NOTE: `recreateTask`'s lineage-discarding reset shape is
+   * deliberately NOT used here. Downstream tasks may still hold valid
+   * workspace lineage (their own branch, their own workspacePath) that
+   * the executor can reuse when the new merged branch is rebased onto
+   * theirs; that is what makes merged-set selection retry-class rather
+   * than recreate-class in the chart's Decision Table.
    */
   selectExperiments(
     taskId: string,
@@ -1553,6 +1630,52 @@ export class Orchestrator {
     const task = this.stateGetTask(taskId);
     if (!task || !task.config.isReconciliation) return [];
     const reconId = task.id;
+
+    // Step 8 re-selection detection: canonicalize prior and new
+    // selected sets to sorted unique-id arrays and compare. The prior
+    // set falls back to the singleton `[selectedExperiment]` when
+    // `selectedExperiments` is undefined so that switching a recon
+    // from a single-winner result to a merged-set result (or vice
+    // versa) is classified as a real change rather than an initial
+    // selection. Initial selection (no prior winner at all) and exact
+    // same-set re-selection both skip the cancel-first / retry-class
+    // reset loops below because no execution input changed —
+    // identical contract to Step 7's `isReSelection` guard.
+    const previousSet = task.execution.selectedExperiments
+      ?? (task.execution.selectedExperiment !== undefined
+          ? [task.execution.selectedExperiment]
+          : undefined);
+    const canonicalize = (ids: readonly string[]) =>
+      Array.from(new Set(ids)).slice().sort();
+    const newCanon = canonicalize(experimentIds);
+    const prevCanon = previousSet ? canonicalize(previousSet) : undefined;
+    const sameAsPrev =
+      prevCanon !== undefined &&
+      prevCanon.length === newCanon.length &&
+      prevCanon.every((id, i) => id === newCanon[i]);
+    const isReSelection = previousSet !== undefined && !sameAsPrev;
+
+    const allTasksBefore = this.stateMachine.getAllTasks();
+
+    // Step 8 cancel-first (chart Hard Invariant): on a real
+    // re-selection, identify the recon's transitive downstream
+    // subgraph and interrupt any active member BEFORE we mutate the
+    // recon's selectedExperiments so stale work cannot survive the
+    // change. cancelTask cascades through descendants so a single call
+    // covers further-downstream active tasks. Skipped on initial /
+    // same-set selection because there is no invalidating input
+    // change to enforce against.
+    if (isReSelection) {
+      const taskMapBefore = new Map(allTasksBefore.map((t) => [t.id, t]));
+      const downstreamIds = getTransitiveDependents(reconId, taskMapBefore, () => false);
+      for (const dsId of downstreamIds) {
+        const dt = this.stateGetTask(dsId);
+        if (!dt) continue;
+        if (dt.status === 'running' || dt.status === 'fixing_with_ai') {
+          this.cancelTask(dsId);
+        }
+      }
+    }
 
     const changes: TaskStateChanges = {
       status: 'completed',
@@ -1574,6 +1697,29 @@ export class Orchestrator {
     const delta: TaskDelta = { type: 'updated', taskId: reconId, changes };
     this.persistence.logEvent?.(reconId, 'task.completed', changes);
     this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
+
+    // Step 8 retry-class reset (re-selection only): downstream
+    // consumers need fresh attempts because their execution input —
+    // the recon's merged branch/commit — changed. Mirrors the
+    // contract of `applyInvalidation('task','retryTask', reconId, deps)`:
+    // `retryTask` is wired to `restartTask` in `buildInvalidationDeps`.
+    // `restartTask` per direct downstream root cascades through its
+    // own descendants and bumps each affected task's execution
+    // generation exactly once. We resolve direct downstream from the
+    // post-mutation graph because `writeAndSync` for a multi-set
+    // selection may consolidate sharded downstream (e.g.
+    // `downstream-v1`/`-v2`) back into a single direct consumer.
+    if (isReSelection) {
+      const directDownstreamAfter = this.stateMachine
+        .getAllTasks()
+        .filter((t) => t.dependencies.includes(reconId))
+        .map((t) => t.id);
+      for (const dsId of directDownstreamAfter) {
+        if (this.stateGetTask(dsId)) {
+          this.recreateTask(dsId);
+        }
+      }
+    }
 
     const readyTaskIds = this.stateMachine.findNewlyReadyTasks(reconId);
     console.log(`[orchestrator] selectExperiments "${reconId}": ${readyTaskIds.length} newly ready: [${readyTaskIds.join(', ')}]`);
