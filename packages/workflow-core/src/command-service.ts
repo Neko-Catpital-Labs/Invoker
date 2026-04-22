@@ -175,6 +175,15 @@ export class CommandService {
     );
   }
 
+  /**
+   * Edit a task's execution agent — recreate-class invalidation route per
+   * Step 4 of the task-invalidation roadmap (mirrors `editTaskCommand` /
+   * `editTaskPrompt`). The orchestrator method is the synchronous
+   * cancel-first seam; this service-level entrypoint just serializes the
+   * mutation through the workflow mutex and wraps the result in a
+   * `CommandResult`. See `MUTATION_POLICIES.executionAgent` and
+   * `Orchestrator.editTaskAgent`.
+   */
   async editTaskAgent(
     envelope: CommandEnvelope<{ taskId: string; agentName: string }>,
   ): Promise<CommandResult<TaskState[]>> {

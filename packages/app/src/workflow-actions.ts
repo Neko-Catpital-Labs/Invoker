@@ -252,6 +252,39 @@ export function editTaskType(
   return deps.orchestrator.editTaskType(taskId, executorType, remoteTargetId);
 }
 
+/**
+ * Edit a task's execution agent — recreate-class invalidation route per
+ * Step 4 of `docs/architecture/task-invalidation-roadmap.md` and the
+ * Decision Table row "Edit `executionAgent`" in
+ * `docs/architecture/task-invalidation-chart.md` (`executionAgent`
+ * mutation → `recreateTask` / task scope, mirroring Steps 2/3 for
+ * `command` and `prompt`). See `MUTATION_POLICIES.executionAgent` in
+ * `packages/workflow-core/src/invalidation-policy.ts`.
+ *
+ * The substantive routing — cancel-first interruption of any active
+ * attempt, agent persistence, lineage discard via `recreateTask`,
+ * generation bump — lives in `Orchestrator.editTaskAgent`. That method
+ * is the synchronous orchestrator-internal seam of `applyInvalidation`'s
+ * Hard Invariant (cancel BEFORE authoritative reset) and reuses
+ * `recreateTask`'s reset shape so stale lineage (branch, commit,
+ * workspacePath, agentSessionId, containerId, error, exitCode, ...) is
+ * always cleared.
+ *
+ * This wrapper deliberately stays a thin sync delegate to keep the public
+ * surface (signature and return shape) backward compatible for headless,
+ * GUI, and Slack callers (e.g. `api-server` POST `/api/tasks/:id/edit-agent`
+ * and `headless set agent <taskId> <agent>`). Executor-aware kill of
+ * active in-flight runs (`taskExecutor.killActiveExecution`) flows
+ * through the same path Step 1 scaffolded (`buildCancelInFlight` /
+ * `buildInvalidationDeps`) and Step 17 will promote into a first-class
+ * lifecycle command surface; for now the orchestrator-side cancel inside
+ * `editTaskAgent` is sufficient because executor processes observe the
+ * cancellation through the cancelled attempt and the bumped execution
+ * generation when they next report progress.
+ *
+ * Cancel-first is enforced inside the orchestrator method — this wrapper
+ * MUST NOT add a parallel cancel call.
+ */
 export function editTaskAgent(
   taskId: string,
   agentName: string,
