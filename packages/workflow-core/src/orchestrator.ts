@@ -1540,7 +1540,7 @@ export class Orchestrator {
         .filter((t) => t.dependencies.includes(reconId))
         .map((t) => t.id);
       for (const dsId of directDownstream) {
-        this.restartTask(dsId);
+        this.recreateTask(dsId);
       }
     }
 
