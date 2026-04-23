@@ -24,7 +24,7 @@ function makeDeps(overrides: Partial<MockedDeps> = {}): MockedDeps {
   } as MockedDeps;
 }
 
-describe('Step 2: command-mutation invalidation contract', () => {
+describe('command-mutation invalidation contract', () => {
   it('MUTATION_POLICIES.command is recreate-class and invalidates active attempts', () => {
     expect(MUTATION_POLICIES.command.action).toBe('recreateTask');
     expect(MUTATION_POLICIES.command.invalidatesExecutionSpec).toBe(true);

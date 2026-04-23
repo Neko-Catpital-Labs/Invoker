@@ -2785,7 +2785,7 @@ describe('Orchestrator', () => {
       expect(orchestrator.getAllTasks().length).toBe(taskCountBefore);
     });
 
-    it('Step 2: editing an ACTIVE (running) task does NOT throw and cancels first, then recreates', () => {
+    it('editing an ACTIVE (running) task does NOT throw and cancels first, then recreates', () => {
       orchestrator.loadPlan({
         name: 'edit-running-test',
         tasks: [{ id: 't1', description: 'Task 1', command: 'sleep 100' }],
@@ -2815,7 +2815,7 @@ describe('Orchestrator', () => {
       recreateSpy.mockRestore();
     });
 
-    it('Step 2: editing an INACTIVE (failed) task skips cancel but still routes through recreateTask', () => {
+    it('editing an INACTIVE (failed) task skips cancel but still routes through recreateTask', () => {
       orchestrator.loadPlan({
         name: 'edit-inactive-test',
         tasks: [{ id: 't1', description: 'Task 1', command: 'echo old' }],
@@ -2839,7 +2839,7 @@ describe('Orchestrator', () => {
       recreateSpy.mockRestore();
     });
 
-    it('Step 2: discards stale lineage (matches recreateTask reset shape)', () => {
+    it('discards stale lineage (matches recreateTask reset shape)', () => {
       orchestrator.loadPlan({
         name: 'edit-lineage-test',
         tasks: [{ id: 't1', description: 'Task 1', command: 'echo old' }],
@@ -2874,7 +2874,7 @@ describe('Orchestrator', () => {
       expect(task.execution.exitCode).toBeUndefined();
     });
 
-    it('Step 2: bumps execution generation by exactly one per command edit', () => {
+    it('bumps execution generation by exactly one per command edit', () => {
       orchestrator.loadPlan({
         name: 'edit-gen-test',
         tasks: [{ id: 't1', description: 'Task 1', command: 'echo old' }],
@@ -2893,7 +2893,7 @@ describe('Orchestrator', () => {
       expect(after).toBe(before + 1);
     });
 
-    it('Step 2: idempotence — two consecutive command edits trigger two cancel-first cycles and two generation bumps', () => {
+    it('idempotence — two consecutive command edits trigger two cancel-first cycles and two generation bumps', () => {
       orchestrator.loadPlan({
         name: 'edit-idempotence-test',
         tasks: [{ id: 't1', description: 'Task 1', command: 'sleep 100' }],

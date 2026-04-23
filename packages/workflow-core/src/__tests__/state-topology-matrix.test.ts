@@ -314,13 +314,7 @@ describe('State × Topology Matrix', () => {
       expect(allTasks.find((t) => t.id === 'D-v2')).toBeUndefined();
     });
 
-    // Step 2 (task-invalidation roadmap):
-    // The chart's Decision Table row "Edit `command`" is recreate-class /
-    // task scope. After the edit, the root task AND every transitive
-    // dependent must have their execution generation bumped by exactly one
-    // (`recreateTask`'s `withBumpedExecutionGeneration` reset shape) — that
-    // is what makes the new branch hash diverge from the stale lineage.
-    it('Step 2 matrix entry: command edit is recreate-class / task scope (root + descendants get gen bump)', () => {
+    it('matrix entry: command edit is recreate-class / task scope (root + descendants get gen bump)', () => {
       orchestrator.loadPlan(diamondPlan());
       orchestrator.startExecution();
 
