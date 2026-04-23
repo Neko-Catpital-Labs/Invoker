@@ -1054,26 +1054,7 @@ describe('Experiment Lifecycle (integration)', () => {
     });
   });
 
-  // ── Step 8 (task-invalidation roadmap): merged-set experiment selection ──
-  //
-  // The chart's Decision Table row "Edit selected experiment set" maps
-  // the multi-winner selection mutation to InvalidationAction =
-  // 'retryTask' with InvalidationScope = 'task' — same class as Step 7
-  // ("Edit selected experiment") but for merged lineage. The
-  // orchestrator method enforces cancel-first via cancelTask BEFORE
-  // the retry-class downstream reset (the synchronous
-  // orchestrator-internal equivalent of applyInvalidation's
-  // cancelInFlight dep). These tests pin those invariants for
-  // initial multi-select, same-set re-select, changed-set re-select,
-  // and active vs inactive downstream paths.
-
   describe('selectExperiments invalidation routing', () => {
-    /**
-     * 3-variant pivot plan so we can exercise set CHANGES (e.g.
-     * [v1,v2] → [v1,v3]) in addition to initial / same-set / single
-     * re-select transitions. Mirrors Step 7's `runToReconNeedsInput`
-     * helper but with three experiments instead of two.
-     */
     function runToReconNeedsInput3(): {
       reconId: string;
       expV1Id: string;
@@ -1131,12 +1112,6 @@ describe('Experiment Lifecycle (integration)', () => {
     }
 
     it('MUTATION_POLICIES.selectedExperimentSet is recreate-class and active-invalidating', () => {
-      // Pins the policy table row to chart Decision Table "Edit
-      // selected experiment set" (`retryTask` action,
-      // `invalidateIfActive=true`). Asserted explicitly here so that
-      // breakage of the per-mutation policy is caught by the
-      // experiment-lifecycle suite, not just the policy-table
-      // regression test.
       expect(MUTATION_POLICIES.selectedExperimentSet.action).toBe('recreateTask');
       expect(MUTATION_POLICIES.selectedExperimentSet.invalidateIfActive).toBe(true);
       expect(MUTATION_POLICIES.selectedExperimentSet.invalidatesExecutionSpec).toBe(true);
@@ -1227,11 +1202,6 @@ describe('Experiment Lifecycle (integration)', () => {
     it('initial multi-select does NOT cancel and does NOT recreate downstream', () => {
       const { reconId, expV1Id, expV2Id } = runToReconNeedsInput3();
 
-      // Initial multi-select: downstream is still pending (blocked by
-      // recon needs_input). The chart's "Behavior Today" path
-      // ("completes reconciliation task and unblocks downstream")
-      // applies — there is no in-flight work to cancel and no
-      // re-selection that would require a retry-class reset.
       const cancelSpy = vi.spyOn(orchestrator, 'cancelTask');
       const recreateSpy = vi.spyOn(orchestrator, 'recreateTask');
 
@@ -1266,9 +1236,7 @@ describe('Experiment Lifecycle (integration)', () => {
       );
       const dsIds = directDownstream(reconId);
       // Fail every direct downstream so we observe the recreate-class
-      // reset purely through the generation counter (no live
-      // execution noise) — same pattern as Step 7's generation
-      // assertion.
+      // reset purely through the generation counter.
       for (const id of dsIds) {
         orchestrator.handleWorkerResponse(failedResponse(id, 'boom'));
       }
@@ -1306,10 +1274,6 @@ describe('Experiment Lifecycle (integration)', () => {
       const cancelSpy = vi.spyOn(orchestrator, 'cancelTask');
       const recreateSpy = vi.spyOn(orchestrator, 'recreateTask');
 
-      // Re-selecting the exact same merged set should not invalidate
-      // downstream: the recon's `selectedExperiments` is unchanged so
-      // no execution input changed (chart's "Why" column for this
-      // row).
       orchestrator.selectExperiments(
         reconId,
         [expV1Id, expV2Id],
@@ -1337,10 +1301,6 @@ describe('Experiment Lifecycle (integration)', () => {
       const cancelSpy = vi.spyOn(orchestrator, 'cancelTask');
       const recreateSpy = vi.spyOn(orchestrator, 'recreateTask');
 
-      // Reverse order should still be the SAME set per the chart's
-      // "merged experiment lineage" semantics — `selectedExperiments`
-      // is a set, not an ordered tuple. No cancel-first, no
-      // recreate-class reset.
       orchestrator.selectExperiments(
         reconId,
         [expV2Id, expV1Id],

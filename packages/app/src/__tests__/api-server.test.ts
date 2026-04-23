@@ -583,32 +583,19 @@ describe('POST /api/tasks/:id/edit', () => {
   });
 });
 
-// ── Step 3 (task-invalidation roadmap): prompt-mutation endpoint ──
-//
-// The chart's Decision Table row "Edit `prompt`" is recreate-class /
-// task scope. The api-server endpoint `POST /api/tasks/:id/edit-prompt`
-// MUST delegate to `Orchestrator.editTaskPrompt`, which is the
-// synchronous cancel-first / lineage-discard / generation-bump seam
-// (see `orchestrator.test.ts` `editTaskPrompt` block for unit-level
-// assertions on cancel ordering, lineage clear, and generation bump).
-// Here we assert end-to-end that an HTTP call routes through to the
-// orchestrator method with the correct payload — that is the
-// integration coverage required by the Step 3 plan.
 describe('POST /api/tasks/:id/edit-prompt', () => {
-  it('Step 3: edits task prompt and routes through orchestrator.editTaskPrompt', async () => {
+  it('edits task prompt and routes through orchestrator.editTaskPrompt', async () => {
     const res = await request(port, 'POST', '/api/tasks/task-1/edit-prompt', { prompt: 'do the thing' });
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
     expect(res.body.action).toBe('prompt_edited');
     expect(mocks.orchestrator.editTaskPrompt).toHaveBeenCalledWith('task-1', 'do the thing');
-    // The Step 2 command-mutation path was NOT invoked — we are on the
-    // dedicated prompt route, not the generic command edit.
     expect(mocks.orchestrator.editTaskCommand).not.toHaveBeenCalled();
     // Endpoint dispatches any newly-runnable tasks via the executor.
     expect(mocks.taskExecutor.executeTasks).toHaveBeenCalled();
   });
 
-  it('Step 3: returns 400 when prompt is missing', async () => {
+  it('returns 400 when prompt is missing', async () => {
     const res = await request(port, 'POST', '/api/tasks/task-1/edit-prompt', {});
     expect(res.status).toBe(400);
     expect(res.body.error).toContain('Missing "prompt"');
@@ -639,18 +626,7 @@ describe('POST /api/tasks/:id/edit-type', () => {
     expect(res.body.error).toContain('Missing "executorType"');
   });
 
-  // Step 6 (task-invalidation roadmap): the chart's Decision Table row
-  // "Edit `remoteTargetId`" is recreate-class / task scope ("Remote
-  // host change invalidates existing workspace lineage"). The
-  // api-server endpoint reuses `/edit-type` because today
-  // `editTaskType` is the public surface that carries both
-  // `executorType` and `remoteTargetId`. The recreate-vs-retry fork is
-  // an internal detail of `Orchestrator.editTaskType` (covered in
-  // `packages/workflow-core/src/__tests__/orchestrator.test.ts`'s
-  // Step 6 block). Here we assert the HTTP layer threads the
-  // `remoteTargetId` change through unmodified so the orchestrator
-  // can take the recreate-class branch end-to-end.
-  it('Step 6: forwards a remoteTargetId-only change (host change) so the orchestrator can take the recreate-class branch', async () => {
+  it('forwards a remoteTargetId-only change (host change) so the orchestrator can take the recreate-class branch', async () => {
     const res = await request(port, 'POST', '/api/tasks/task-1/edit-type', {
       executorType: 'ssh',
       remoteTargetId: 'remote-b',
@@ -668,34 +644,20 @@ describe('POST /api/tasks/:id/edit-type', () => {
   });
 });
 
-// ── Step 4 (task-invalidation roadmap): agent-mutation endpoint ──
-//
-// The chart's Decision Table row "Edit `executionAgent`" is recreate-class /
-// task scope. The api-server endpoint `POST /api/tasks/:id/edit-agent`
-// MUST delegate to `Orchestrator.editTaskAgent`, which is the
-// synchronous cancel-first / lineage-discard / generation-bump seam
-// (see `orchestrator.test.ts` `editTaskAgent` block for unit-level
-// assertions on cancel ordering, lineage clear, and generation bump).
-// Here we assert end-to-end that an HTTP call routes through to the
-// orchestrator method with the correct payload — that is the
-// integration coverage required by the Step 4 plan.
 describe('POST /api/tasks/:id/edit-agent', () => {
-  it('Step 4: edits task agent and routes through orchestrator.editTaskAgent', async () => {
+  it('edits task agent and routes through orchestrator.editTaskAgent', async () => {
     const res = await request(port, 'POST', '/api/tasks/task-1/edit-agent', { agent: 'codex' });
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
     expect(res.body.action).toBe('agent_edited');
     expect(mocks.orchestrator.editTaskAgent).toHaveBeenCalledWith('task-1', 'codex');
-    // The Step 2/3 command/prompt-mutation paths were NOT invoked — we
-    // are on the dedicated agent route, not the generic command/prompt
-    // edits.
     expect(mocks.orchestrator.editTaskCommand).not.toHaveBeenCalled();
     expect(mocks.orchestrator.editTaskPrompt).not.toHaveBeenCalled();
     // Endpoint dispatches any newly-runnable tasks via the executor.
     expect(mocks.taskExecutor.executeTasks).toHaveBeenCalled();
   });
 
-  it('Step 4: returns 400 when agent is missing', async () => {
+  it('returns 400 when agent is missing', async () => {
     const res = await request(port, 'POST', '/api/tasks/task-1/edit-agent', {});
     expect(res.status).toBe(400);
     expect(res.body.error).toContain('Missing "agent"');
