@@ -1,5 +1,5 @@
 
-import type { TaskState } from './state-machine.js';
+import type { TaskState } from '@invoker/workflow-graph';
 
 export type InvalidationAction =
   | 'none'
