@@ -3022,7 +3022,6 @@ if (isHeadless) {
       },
     );
 
-
     registerGuiMutationHandler('invoker:edit-task-command', async (taskIdArg: unknown, newCommandArg: unknown) => {
       const taskId = String(taskIdArg);
       const newCommand = String(newCommandArg);
