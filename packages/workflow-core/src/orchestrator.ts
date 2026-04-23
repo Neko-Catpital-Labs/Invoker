@@ -19,7 +19,7 @@ import { TaskStateMachine } from './state-machine.js';
 import { ResponseHandler } from './response-handler.js';
 import type { ParsedResponse } from './response-handler.js';
 import { TaskScheduler } from './scheduler.js';
-import type { TaskState, TaskDelta, TaskStateChanges, TaskConfig, Attempt, ExternalDependency } from '@invoker/workflow-graph';
+import type { TaskState, TaskDelta, TaskStateChanges, TaskConfig, Attempt, ExternalDependency, TaskStatus } from '@invoker/workflow-graph';
 import type { ExecutorType } from '@invoker/workflow-graph';
 import { createTaskState, createAttempt } from '@invoker/workflow-graph';
 import type { WorkResponse } from '@invoker/contracts';
@@ -31,6 +31,15 @@ function mergeTrace(tag: string, data: Record<string, unknown>): void {
     mkdirSync(resolve(homedir(), '.invoker'), { recursive: true });
     appendFileSync(MERGE_TRACE_LOG, `${new Date().toISOString()} [merge-trace:orchestrator] ${tag} ${JSON.stringify(data)}\n`);
   } catch { /* best effort */ }
+}
+
+function isActiveForInvalidation(status: TaskStatus): boolean {
+  return (
+    status === 'running' ||
+    status === 'fixing_with_ai' ||
+    status === 'awaiting_approval' ||
+    status === 'review_ready'
+  );
 }
 import { getTransitiveDependents } from '@invoker/workflow-graph';
 import { ActionGraph } from '@invoker/workflow-graph';
