@@ -1,14 +1,3 @@
-/**
- * Step 1 — Routing foundation regression coverage.
- *
- * Asserts:
- *   1. `MUTATION_POLICIES` shape matches the chart Decision Table.
- *   2. `applyInvalidation` enforces the chart's Hard Invariant
- *      (cancel-first ordering, abort on cancel failure).
- *   3. Scope/action mismatches fail fast before cancelInFlight runs.
- *   4. `recreateWorkflowFromFreshBase` is gated behind an explicit
- *      "not yet wired (Step 12)" error until the dep is supplied.
- */
 
 import { describe, it, expect, vi } from 'vitest';
 import {

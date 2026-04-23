@@ -186,33 +186,11 @@ export async function rebaseAndRetry(
   return bumpGenerationAndRecreate(workflowId, deps);
 }
 
-// ── Invalidation routing scaffolding (Phase A, Step 1) ───────
-//
-// These helpers wire the new InvalidationAction surface from
-// `@invoker/workflow-core/invalidation-policy` to today's orchestrator
-// primitives. They are exported but UNUSED in Step 1 by design — Steps
-// 2–18 migrate individual mutation paths onto `applyInvalidation()`.
-// See `docs/architecture/task-invalidation-roadmap.md` for the order.
-
 export interface BuildCancelInFlightDeps {
   orchestrator: Orchestrator;
   taskExecutor?: TaskRunner;
 }
 
-/**
- * Build the cancel-first runtime hook for the new invalidation surface.
- *
- * Sequence (per chart "Hard Invariant" in
- * `docs/architecture/task-invalidation-chart.md`):
- *   1. orchestrator.cancelTask / cancelWorkflow → `runningCancelled[]`
- *   2. for each id in `runningCancelled`, await taskExecutor.killActiveExecution(id)
- *
- * This mirrors the order already used by headless's `cancelTask` /
- * `cancelWorkflow` adapters; consolidating it here gives every
- * invalidation route a single cancel-first entrypoint.
- *
- * Step 1 scaffolding: exported but unused; later steps wire callers.
- */
 export function buildCancelInFlight(deps: BuildCancelInFlightDeps): CancelInFlightFn {
   return async (scope: InvalidationScope, id: string): Promise<void> => {
     if (scope === 'none') return;
@@ -228,24 +206,6 @@ export function buildCancelInFlight(deps: BuildCancelInFlightDeps): CancelInFlig
   };
 }
 
-/**
- * Build the `InvalidationDeps` the engine uses to route an
- * `InvalidationAction` to today's orchestrator primitives.
- *
- * Compatibility wires:
- *   - `retryTask` → `orchestrator.restartTask` (rename happens in Step 13).
- *   - `recreateWorkflow` → `bumpGenerationAndRecreate` (matches today's
- *     `recreateWorkflow()` action wrapper that bumps generation first).
- *
- * `recreateWorkflowFromFreshBase` is intentionally left UNWIRED here.
- * Step 12 promotes today's composite `rebaseAndRetry` flow
- * (`preparePoolForRebaseRetry → recreateWorkflow`) to a first-class
- * primitive, which `applyInvalidation` will then route to. Until then,
- * `applyInvalidation` throws an explicit "not yet wired (Step 12)"
- * error if anyone selects that action.
- *
- * Step 1 scaffolding: exported but unused; later steps wire callers.
- */
 export function buildInvalidationDeps(
   deps: Pick<ActionDeps, 'logger' | 'orchestrator' | 'persistence' | 'taskExecutor'>,
 ): InvalidationDeps {

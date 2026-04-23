@@ -1,31 +1,6 @@
-/**
- * Task invalidation policy — routing scaffolding (Step 1, Phase A).
- *
- * Implements the invalidation-class layer described in
- * `docs/architecture/task-invalidation-chart.md`:
- *
- *   - `InvalidationAction` names every retry/recreate route
- *     (`retryTask | recreateTask | retryWorkflow | recreateWorkflow |
- *     recreateWorkflowFromFreshBase | none`).
- *   - `InvalidationScope` separates `task` vs `workflow` ownership.
- *   - `MUTATION_POLICIES` mirrors the chart's example mapping per
- *     execution-defining mutation (command, prompt, executionAgent, ...).
- *   - `applyInvalidation()` enforces the chart's Hard Invariant:
- *     affected in-flight work is interrupted BEFORE the lifecycle dep
- *     is invoked.
- *
- * Step 1 deliberately introduces this surface as scaffolding only.
- * No existing mutation path is migrated onto it yet — Steps 2–18 do
- * that one row at a time per `docs/architecture/task-invalidation-roadmap.md`.
- */
 
 import type { TaskState } from './state-machine.js';
 
-/**
- * Named invalidation classes from the chart's "Proposed API Direction".
- * `none` is the explicit no-op for non-invalidating mutations
- * (e.g. external gate policy edits, approve/reject of a finished fix).
- */
 export type InvalidationAction =
   | 'none'
   | 'retryTask'
@@ -42,21 +17,12 @@ export type InvalidationAction =
  */
 export type InvalidationScope = 'none' | 'task' | 'workflow';
 
-/**
- * Per-mutation policy entry mirroring the chart Decision Table.
- */
 export interface TaskMutationPolicy {
   invalidatesExecutionSpec: boolean;
   invalidateIfActive: boolean;
   action: InvalidationAction;
 }
 
-/**
- * Mutation keys that the policy table classifies in Step 1.
- *
- * The set mirrors the chart's example mapping plus the entries that
- * Steps 2–10 migrate. Adding more keys later is additive.
- */
 export type MutationKey =
   | 'command'
   | 'prompt'
@@ -70,14 +36,6 @@ export type MutationKey =
   | 'rebaseAndRetry'
   | 'externalGatePolicy';
 
-/**
- * Mirrors the example mapping in
- * `docs/architecture/task-invalidation-chart.md → "Proposed API Direction"`
- * and the chart's Decision Table.
- *
- * Frozen to lock the policy as a constant. Migrations in Steps 2–10
- * route through these entries rather than redefining them.
- */
 export const MUTATION_POLICIES: Readonly<Record<MutationKey, TaskMutationPolicy>> = Object.freeze({
   command:               { invalidatesExecutionSpec: true,  invalidateIfActive: true,  action: 'recreateTask' as const },
   prompt:                { invalidatesExecutionSpec: true,  invalidateIfActive: true,  action: 'recreateTask' as const },
@@ -92,28 +50,11 @@ export const MUTATION_POLICIES: Readonly<Record<MutationKey, TaskMutationPolicy>
   externalGatePolicy:    { invalidatesExecutionSpec: false, invalidateIfActive: false, action: 'none' as const },
 });
 
-/**
- * Cancel-first runtime hook.
- *
- * Implementations must:
- *   1. interrupt orchestrator-side state for the affected scope, then
- *   2. await any in-flight executor work being killed.
- *
- * Per the chart's Hard Invariant, every retry/recreate route MUST call
- * this BEFORE invoking a lifecycle dep that resets authoritative state.
- */
 export type CancelInFlightFn = (
   scope: InvalidationScope,
   id: string,
 ) => Promise<void>;
 
-/**
- * Lifecycle deps the engine wires to back each `InvalidationAction`.
- *
- * `recreateWorkflowFromFreshBase` is intentionally optional in Step 1.
- * Today that semantic is the composite `rebaseAndRetry()` flow; Step 12
- * promotes it to a first-class primitive and supplies it here.
- */
 export interface InvalidationDeps {
   cancelInFlight: CancelInFlightFn;
   retryTask: (taskId: string) => TaskState[] | Promise<TaskState[]>;
@@ -130,20 +71,6 @@ const WORKFLOW_ACTIONS = new Set<InvalidationAction>([
   'recreateWorkflowFromFreshBase',
 ]);
 
-/**
- * Centralized cancel-first router.
- *
- * Sequence (per chart "Hard Invariant"):
- *   1. await deps.cancelInFlight(scope, id)
- *   2. await deps.<action>(id)
- *
- * If `cancelInFlight` rejects, the lifecycle dep is NEVER called and
- * `applyInvalidation` rejects with that error. Stale in-flight work
- * must not survive a failed cancel — that is a hard policy.
- *
- * For `action === 'none'` this is a true no-op: `cancelInFlight` is
- * not called and `[]` is returned. Scope must also be `'none'`.
- */
 export async function applyInvalidation(
   scope: InvalidationScope,
   action: InvalidationAction,
