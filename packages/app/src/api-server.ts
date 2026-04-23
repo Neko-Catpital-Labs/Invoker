@@ -480,13 +480,6 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
         return;
       }
 
-      // POST /api/tasks/:id/edit-agent — Step 4: agent-mutation recreate-class
-      // route. Body: { agent }. The substantive cancel-first / lineage-discard /
-      // generation-bump routing lives in `Orchestrator.editTaskAgent`; this
-      // endpoint is a thin sync delegate via `editTaskAgent`
-      // in `workflow-actions.ts`. See `docs/architecture/task-invalidation-chart.md`
-      // Decision Table row "Edit `executionAgent`" and
-      // `MUTATION_POLICIES.executionAgent`.
       const editAgentMatch = path.match(/^\/api\/tasks\/([^/]+)\/edit-agent$/);
       if (method === 'POST' && editAgentMatch) {
         const taskId = decodeURIComponent(editAgentMatch[1]);

@@ -1,46 +1,3 @@
-/**
- * Step 4 — Agent-mutation invalidation contract.
- *
- * This file pins the Step 4 deliverable from
- * `docs/architecture/task-invalidation-roadmap.md` (Phase B): the
- * `executionAgent` mutation is recreate-class with task scope, and any
- * affected in-flight work is canceled BEFORE authoritative state is
- * reset (the chart's Hard Invariant in
- * `docs/architecture/task-invalidation-chart.md`, Decision Table row
- * "Edit `executionAgent`").
- *
- * Three layers are pinned:
- *
- *   1. **Policy table.** `MUTATION_POLICIES.executionAgent` is the
- *      immutable contract that the chart's Decision Table row "Edit
- *      `executionAgent`" maps to: `recreateTask` action / task scope.
- *
- *   2. **Cancel-first routing (mocked deps).** When the agent-edit
- *      path is wired through
- *      `applyInvalidation('task', 'recreateTask', taskId, deps)`,
- *      the `cancelInFlight` dep is invoked BEFORE the `recreateTask`
- *      dep. We assert this via `mock.invocationCallOrder`. We also
- *      check that a failed cancel aborts the recreate (stale work
- *      must not survive a failed cancel) and that idempotent edits
- *      preserve the cancel-first ordering.
- *
- *   3. **CommandService delegation (Step 4 integration coverage for
- *      the headless layer).** The headless `set agent` handler
- *      (`headlessEditAgent` in `packages/app/src/headless.ts`) calls
- *      `deps.commandService.editTaskAgent(envelope)`. We exercise
- *      that exact entrypoint and assert it serializes through the
- *      workflow mutex and delegates to `Orchestrator.editTaskAgent`
- *      with the right payload — that is the end-to-end wiring
- *      assertion the Step 4 plan requires for the headless surface,
- *      complementing the unit-level cancel-first / lineage /
- *      generation-bump coverage in `orchestrator.test.ts`.
- *
- * Steps 13/14/17 will further consolidate the wiring; for now this
- * focused file exists alongside `orchestrator.test.ts`,
- * `edit-task-command-invalidation.test.ts`, and
- * `edit-task-prompt-invalidation.test.ts` to keep the contract
- * assertions readable as one chunk.
- */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
@@ -72,7 +29,7 @@ function makeDeps(overrides: Partial<MockedDeps> = {}): MockedDeps {
   } as MockedDeps;
 }
 
-describe('Step 4: agent-mutation invalidation contract', () => {
+describe('agent-mutation invalidation contract', () => {
   it('MUTATION_POLICIES.executionAgent is recreate-class and invalidates active attempts', () => {
     expect(MUTATION_POLICIES.executionAgent.action).toBe('recreateTask');
     expect(MUTATION_POLICIES.executionAgent.invalidatesExecutionSpec).toBe(true);
@@ -83,9 +40,6 @@ describe('Step 4: agent-mutation invalidation contract', () => {
     const deps = makeDeps();
     const policy = MUTATION_POLICIES.executionAgent;
 
-    // The agent-edit path uses the same scope/action that the policy
-    // table prescribes. Asserting via the policy makes the test fail
-    // loudly if Step 4 (or any later step) flips the action class.
     await applyInvalidation('task', policy.action, 'task-a', deps);
 
     expect(deps.cancelInFlight).toHaveBeenCalledWith('task', 'task-a');
@@ -147,17 +101,6 @@ describe('Step 4: agent-mutation invalidation contract', () => {
   });
 });
 
-// ── Step 4 headless integration seam: CommandService.editTaskAgent ──
-//
-// `headlessEditAgent` (in `packages/app/src/headless.ts`) constructs
-// an envelope and calls `deps.commandService.editTaskAgent(envelope)`.
-// That `CommandService` method serializes the mutation through the
-// workflow mutex and delegates to `Orchestrator.editTaskAgent`,
-// which is where the cancel-first / lineage-discard / generation-bump
-// invariants live (covered by `orchestrator.test.ts` and pinned by
-// the policy-level tests above). This block exercises that exact
-// integration seam so the headless surface has a passing end-to-end
-// wiring assertion in addition to the orchestrator-level coverage.
 function stubOrchestrator(overrides: Partial<Orchestrator> = {}): Orchestrator {
   return {
     getTask: vi.fn().mockReturnValue({ config: { workflowId: 'wf-1' } }),
@@ -166,7 +109,7 @@ function stubOrchestrator(overrides: Partial<Orchestrator> = {}): Orchestrator {
   } as unknown as Orchestrator;
 }
 
-describe('Step 4: CommandService.editTaskAgent (headless integration seam)', () => {
+describe('CommandService.editTaskAgent (headless integration seam)', () => {
   let orchestrator: Orchestrator;
   let service: CommandService;
 

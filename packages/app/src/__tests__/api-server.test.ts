@@ -627,34 +627,20 @@ describe('POST /api/tasks/:id/edit-type', () => {
   });
 });
 
-// ── Step 4 (task-invalidation roadmap): agent-mutation endpoint ──
-//
-// The chart's Decision Table row "Edit `executionAgent`" is recreate-class /
-// task scope. The api-server endpoint `POST /api/tasks/:id/edit-agent`
-// MUST delegate to `Orchestrator.editTaskAgent`, which is the
-// synchronous cancel-first / lineage-discard / generation-bump seam
-// (see `orchestrator.test.ts` `editTaskAgent` block for unit-level
-// assertions on cancel ordering, lineage clear, and generation bump).
-// Here we assert end-to-end that an HTTP call routes through to the
-// orchestrator method with the correct payload — that is the
-// integration coverage required by the Step 4 plan.
 describe('POST /api/tasks/:id/edit-agent', () => {
-  it('Step 4: edits task agent and routes through orchestrator.editTaskAgent', async () => {
+  it('edits task agent and routes through orchestrator.editTaskAgent', async () => {
     const res = await request(port, 'POST', '/api/tasks/task-1/edit-agent', { agent: 'codex' });
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
     expect(res.body.action).toBe('agent_edited');
     expect(mocks.orchestrator.editTaskAgent).toHaveBeenCalledWith('task-1', 'codex');
-    // The Step 2/3 command/prompt-mutation paths were NOT invoked — we
-    // are on the dedicated agent route, not the generic command/prompt
-    // edits.
     expect(mocks.orchestrator.editTaskCommand).not.toHaveBeenCalled();
     expect(mocks.orchestrator.editTaskPrompt).not.toHaveBeenCalled();
     // Endpoint dispatches any newly-runnable tasks via the executor.
     expect(mocks.taskExecutor.executeTasks).toHaveBeenCalled();
   });
 
-  it('Step 4: returns 400 when agent is missing', async () => {
+  it('returns 400 when agent is missing', async () => {
     const res = await request(port, 'POST', '/api/tasks/task-1/edit-agent', {});
     expect(res.status).toBe(400);
     expect(res.body.error).toContain('Missing "agent"');

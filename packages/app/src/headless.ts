@@ -1640,15 +1640,6 @@ async function headlessEditExecutor(taskId: string, executorType: string, deps: 
   autoFix.unsubscribe();
 }
 
-/**
- * Headless `set agent` — recreate-class invalidation route per Step 4
- * of `docs/architecture/task-invalidation-roadmap.md` (mirrors the
- * Step 2/3 `set command` / `set prompt` paths). Routes through
- * `commandService.editTaskAgent` so the orchestrator's cancel-first
- * seam (`Orchestrator.editTaskAgent`) runs under the workflow mutex;
- * lineage discard and the single `withBumpedExecutionGeneration` bump
- * live in `recreateTask`.
- */
 async function headlessEditAgent(taskId: string, agentName: string, deps: HeadlessDeps): Promise<void> {
   if (!taskId || !agentName) throw new Error('Missing arguments. Usage: --headless edit-agent <taskId> <claude|codex>');
   const restored = restoreWorkflowForTask(taskId, deps);

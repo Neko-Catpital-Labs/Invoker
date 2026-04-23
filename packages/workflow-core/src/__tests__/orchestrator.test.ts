@@ -3236,17 +3236,6 @@ describe('Orchestrator', () => {
     });
   });
 
-  // ── editTaskAgent ──────────────────────────────────────
-  //
-  // Step 4 (task-invalidation roadmap): the chart's Decision Table row
-  // "Edit `executionAgent`" maps the agent mutation to InvalidationAction
-  // = 'recreateTask' with InvalidationScope = 'task'. The orchestrator
-  // method enforces cancel-first via cancelTask BEFORE the
-  // lineage-discarding recreateTask reset (the synchronous
-  // orchestrator-internal equivalent of applyInvalidation's
-  // cancelInFlight dep). These tests pin those invariants and mirror
-  // the Step 2 / 3 `editTaskCommand` / `editTaskPrompt` blocks above.
-
   describe('editTaskAgent', () => {
     it('changes executionAgent and recreates the task (inactive → no cancel)', () => {
       orchestrator.loadPlan({
@@ -3290,7 +3279,7 @@ describe('Orchestrator', () => {
       expect(orchestrator.getTask('child')?.status).toBe('pending');
     });
 
-    it('Step 4: editing an ACTIVE (running) task does NOT throw and cancels first, then recreates', () => {
+    it('editing an ACTIVE (running) task does NOT throw and cancels first, then recreates', () => {
       orchestrator.loadPlan({
         name: 'edit-agent-running-test',
         tasks: [{ id: 't1', description: 'Task 1', command: 'sleep 100', executionAgent: 'claude' }],
@@ -3304,10 +3293,6 @@ describe('Orchestrator', () => {
 
       const started = orchestrator.editTaskAgent(taskId, 'codex');
 
-      // No throw. Cancel-first ordering: cancelTask MUST be invoked
-      // BEFORE recreateTask. This is the chart's Hard Invariant
-      // ("any affected in-flight work must be interrupted and canceled
-      // first") expressed at the orchestrator-internal sync seam.
       expect(cancelSpy).toHaveBeenCalledWith(taskId);
       expect(recreateSpy).toHaveBeenCalledWith(taskId);
       expect(cancelSpy.mock.invocationCallOrder[0]).toBeLessThan(
@@ -3325,7 +3310,7 @@ describe('Orchestrator', () => {
       recreateSpy.mockRestore();
     });
 
-    it('Step 4: editing an INACTIVE (failed) task skips cancel but still routes through recreateTask', () => {
+    it('editing an INACTIVE (failed) task skips cancel but still routes through recreateTask', () => {
       orchestrator.loadPlan({
         name: 'edit-agent-inactive-test',
         tasks: [{ id: 't1', description: 'Task 1', command: 'echo old', executionAgent: 'claude' }],
@@ -3350,7 +3335,7 @@ describe('Orchestrator', () => {
       recreateSpy.mockRestore();
     });
 
-    it('Step 4: discards stale lineage (matches recreateTask reset shape)', () => {
+    it('discards stale lineage (matches recreateTask reset shape)', () => {
       orchestrator.loadPlan({
         name: 'edit-agent-lineage-test',
         tasks: [{ id: 't1', description: 'Task 1', command: 'echo old', executionAgent: 'claude' }],
@@ -3387,7 +3372,7 @@ describe('Orchestrator', () => {
       expect(task.execution.exitCode).toBeUndefined();
     });
 
-    it('Step 4: bumps execution generation by exactly one per agent edit', () => {
+    it('bumps execution generation by exactly one per agent edit', () => {
       orchestrator.loadPlan({
         name: 'edit-agent-gen-test',
         tasks: [{ id: 't1', description: 'Task 1', command: 'echo old', executionAgent: 'claude' }],
@@ -3406,7 +3391,7 @@ describe('Orchestrator', () => {
       expect(after).toBe(before + 1);
     });
 
-    it('Step 4: persists the updated agent and publishes a task.updated delta', () => {
+    it('persists the updated agent and publishes a task.updated delta', () => {
       orchestrator.loadPlan({
         name: 'edit-agent-persist-test',
         tasks: [{ id: 't1', description: 'Task 1', command: 'echo old', executionAgent: 'claude' }],
@@ -3423,7 +3408,7 @@ describe('Orchestrator', () => {
       expect(persisted?.task.config.executionAgent).toBe('codex');
     });
 
-    it('Step 4: idempotence — two consecutive agent edits trigger two cancel-first cycles and two generation bumps', () => {
+    it('idempotence — two consecutive agent edits trigger two cancel-first cycles and two generation bumps', () => {
       orchestrator.loadPlan({
         name: 'edit-agent-idempotence-test',
         tasks: [{ id: 't1', description: 'Task 1', command: 'sleep 100', executionAgent: 'claude' }],
