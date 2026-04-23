@@ -1499,6 +1499,34 @@ export class Orchestrator {
 
     const winner = this.stateGetTask(experimentId);
     const winnerId = winner?.id ?? experimentId;
+    const previousSet = task.execution.selectedExperiments
+      ?? (task.execution.selectedExperiment !== undefined
+        ? [task.execution.selectedExperiment]
+        : undefined);
+    const canonicalize = (ids: readonly string[]) =>
+      Array.from(new Set(ids)).slice().sort();
+    const newCanon = canonicalize([winnerId]);
+    const prevCanon = previousSet ? canonicalize(previousSet) : undefined;
+    const sameAsPrev =
+      prevCanon !== undefined &&
+      prevCanon.length === newCanon.length &&
+      prevCanon.every((id, i) => id === newCanon[i]);
+    const isReSelection = previousSet !== undefined && !sameAsPrev;
+
+    const allTasksBefore = this.stateMachine.getAllTasks();
+
+    if (isReSelection) {
+      const taskMapBefore = new Map(allTasksBefore.map((t) => [t.id, t]));
+      const downstreamIds = getTransitiveDependents(reconId, taskMapBefore, () => false);
+      for (const dsId of downstreamIds) {
+        const dt = this.stateGetTask(dsId);
+        if (!dt) continue;
+        if (isActiveForInvalidation(dt.status)) {
+          this.cancelTask(dsId);
+        }
+      }
+    }
+
     const changes: TaskStateChanges = {
       status: 'completed',
       execution: {
