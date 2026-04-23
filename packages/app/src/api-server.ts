@@ -439,12 +439,6 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
         return;
       }
 
-      // POST /api/tasks/:id/edit-prompt — Step 3: prompt-mutation recreate-class
-      // route. Body: { prompt }. The substantive cancel-first / lineage-discard /
-      // generation-bump routing lives in `Orchestrator.editTaskPrompt`; this
-      // endpoint is a thin sync delegate via `editTaskPrompt`
-      // in `workflow-actions.ts`. See `docs/architecture/task-invalidation-chart.md`
-      // Decision Table row "Edit `prompt`".
       const editPromptMatch = path.match(/^\/api\/tasks\/([^/]+)\/edit-prompt$/);
       if (method === 'POST' && editPromptMatch) {
         const taskId = decodeURIComponent(editPromptMatch[1]);
@@ -465,18 +459,6 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
         return;
       }
 
-      // POST /api/tasks/:id/edit-type — Step 5: executor-type mutation
-      // **retry-class** route (substrate-only edit; preserves
-      // branch / workspacePath lineage). Body: { executorType,
-      // remoteTargetId? }. The substantive cancel-first /
-      // lineage-preserving reset / generation-bump routing lives in
-      // `Orchestrator.editTaskType`; this endpoint is a thin sync
-      // delegate via `editTaskType` in `workflow-actions.ts`. See
-      // `docs/architecture/task-invalidation-chart.md` Decision Table
-      // row "Edit `executorType`" and `MUTATION_POLICIES.executorType`
-      // (`retryTask` action / `task` scope, wired today through
-      // `Orchestrator.restartTask` via `buildInvalidationDeps` —
-      // Step 13 will rename the orchestrator primitive).
       const editTypeMatch = path.match(/^\/api\/tasks\/([^/]+)\/edit-type$/);
       if (method === 'POST' && editTypeMatch) {
         const taskId = decodeURIComponent(editTypeMatch[1]);
@@ -497,13 +479,6 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
         return;
       }
 
-      // POST /api/tasks/:id/edit-agent — Step 4: agent-mutation recreate-class
-      // route. Body: { agent }. The substantive cancel-first / lineage-discard /
-      // generation-bump routing lives in `Orchestrator.editTaskAgent`; this
-      // endpoint is a thin sync delegate via `editTaskAgent`
-      // in `workflow-actions.ts`. See `docs/architecture/task-invalidation-chart.md`
-      // Decision Table row "Edit `executionAgent`" and
-      // `MUTATION_POLICIES.executionAgent`.
       const editAgentMatch = path.match(/^\/api\/tasks\/([^/]+)\/edit-agent$/);
       if (method === 'POST' && editAgentMatch) {
         const taskId = decodeURIComponent(editAgentMatch[1]);

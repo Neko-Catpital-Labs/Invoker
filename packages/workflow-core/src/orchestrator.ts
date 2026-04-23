@@ -1488,78 +1488,7 @@ export class Orchestrator {
     this.checkWorkflowCompletion();
   }
 
-  /**
-   * Select a winning experiment for a reconciliation task — **retry-class**
-   * invalidation route per Step 7 of
-   * `docs/architecture/task-invalidation-roadmap.md` and the Decision Table
-   * row "Edit selected experiment" in
-   * `docs/architecture/task-invalidation-chart.md`
-   * (`MUTATION_POLICIES.selectedExperiment` → `retryTask` / task scope).
-   *
-   * Why retry-class (not recreate-class). The chart classifies single
-   * experiment selection as a downstream-input mutation: the
-   * reconciliation task's *result* (its selected branch/commit) is the
-   * execution input that downstream consumers use, so changing the
-   * winner invalidates downstream attempts but does NOT change the
-   * reconciliation task's own spec. The chart's "Why" column reads
-   * "Downstream execution inputs changed". `applyInvalidation('task',
-   * 'retryTask', reconId, deps)` is wired to today's
-   * `Orchestrator.restartTask` via `buildInvalidationDeps` (the
-   * compatibility seam Step 1 introduced; Step 13 will rename
-   * `restartTask` → `retryTask` to close the matrix).
-   *
-   * Sequence (mirrors `applyInvalidation`'s contract for the
-   * synchronous orchestrator-internal seam — see `invalidation-policy.ts`
-   * and the Step 5/6 `editTaskType` precedent):
-   *   1. **Cancel-first (Hard Invariant).** Compute the transitive
-   *      downstream subgraph of the reconciliation task and cancel any
-   *      member that is actively executing (`running` or
-   *      `fixing_with_ai`) BEFORE we mutate the recon's
-   *      `selectedExperiment`. This is the "any AFFECTED in-flight
-   *      work" guarantee from the chart: stale downstream attempts
-   *      cannot survive a re-selection because they would consume the
-   *      OLD winner's lineage. For the common initial-selection path
-   *      (recon `needs_input` → `completed` with downstream blocked at
-   *      `pending`) this loop is a no-op — there is nothing active.
-   *   2. **Persist new winner.** `writeAndSync` updates
-   *      `execution.selectedExperiment` (and the recon's
-   *      `branch`/`commit` to mirror the winner's lineage) and emits a
-   *      `task.completed` delta. The reconciliation task's status
-   *      transitions to `completed`; this matches the existing
-   *      "Behavior Today" column in the chart ("completes
-   *      reconciliation task and unblocks downstream").
-   *   3. **Retry-class reset of downstream (re-selection only).** When
-   *      the recon was previously completed with a *different* winner,
-   *      every direct downstream consumer is reset via `restartTask`,
-   *      which is the current `retryTask` compatibility wire.
-   *      `restartTask` cascades to its own descendants and bumps each
-   *      affected task's execution generation exactly once via
-   *      `withBumpedExecutionGeneration` (single source of truth for the
-   *      retry reset shape — Step 7 deliberately reuses it instead of
-   *      duplicating the field list here, mirroring Steps 5/6). For
-   *      the initial-selection path no downstream reset is needed
-   *      because nothing has executed yet against the recon's result.
-   *   4. **Auto-start newly ready tasks.** Existing behavior:
-   *      `findNewlyReadyTasks(reconId)` plus `autoStartReadyTasks`
-   *      unblocks downstream that just became ready due to recon
-   *      completing.
-   *
-   * Public surface is unchanged: same `(taskId, experimentId)` signature
-   * returning `TaskState[]` of newly-started tasks. Active downstream is
-   * NO LONGER silently overwritten with a new winner — that's the whole
-   * point of cancel-first per the chart's Hard Invariant. Prior to
-   * Step 7 there was no general active invalidation model for selection
-   * (per the chart's "Behavior Today" column); this method introduces
-   * one.
-   *
-   * NOTE: `recreateTask`'s lineage-discarding reset shape is
-   * deliberately NOT used here. Downstream tasks may still hold valid
-   * workspace lineage (their own branch, their own workspacePath) that
-   * the executor can reuse when the new winner's branch is rebased onto
-   * theirs; that is what makes selection retry-class rather than
-   * recreate-class in the chart's Decision Table.
-   */
-  selectExperiment(taskId: string, experimentId: string): TaskState[] {
+    selectExperiment(taskId: string, experimentId: string): TaskState[] {
     this.refreshFromDb();
     const task = this.stateGetTask(taskId);
     if (!task || !task.config.isReconciliation) return [];
@@ -1568,27 +1497,12 @@ export class Orchestrator {
     const winner = this.stateGetTask(experimentId);
     const winnerId = winner?.id ?? experimentId;
 
-    // Re-selection means the recon was already completed and we're
-    // changing the winner. This is the only case that triggers the
-    // chart's cancel-first + retry-class reset of downstream consumers
-    // per `MUTATION_POLICIES.selectedExperiment`
-    // (`action='retryTask'` / `scope='task'`). Initial selection
-    // (previousWinner === undefined) and same-winner re-select
-    // (previousWinner === winnerId) take the existing unblock path
-    // because no execution input has actually changed.
     const previousWinner = task.execution.selectedExperiment;
     const isReSelection =
       previousWinner !== undefined && previousWinner !== winnerId;
 
     const allTasksBefore = this.stateMachine.getAllTasks();
 
-    // Step 7 cancel-first (chart Hard Invariant): on a real re-selection,
-    // identify the recon's transitive downstream subgraph and interrupt
-    // any active member BEFORE we mutate the recon's selectedExperiment
-    // so stale work cannot survive the change. cancelTask cascades
-    // through descendants so a single call covers further-downstream
-    // active tasks. Skipped on initial / same-winner selection because
-    // there is no invalidating input change to enforce against.
     if (isReSelection) {
       const taskMapBefore = new Map(allTasksBefore.map((t) => [t.id, t]));
       const downstreamIds = getTransitiveDependents(reconId, taskMapBefore, () => false);
@@ -1621,14 +1535,6 @@ export class Orchestrator {
     this.persistence.logEvent?.(reconId, 'task.completed', changes);
     this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
 
-    // Step 7 retry-class reset (re-selection only): downstream consumers
-    // need fresh attempts because their execution input — the recon's
-    // selected branch/commit — changed. Mirrors the contract of
-    // `applyInvalidation('task','retryTask', reconId, deps)`:
-    // `retryTask` is wired to `restartTask` in `buildInvalidationDeps`.
-    // `restartTask` per direct downstream root cascades through its
-    // own descendants and bumps each affected task's execution
-    // generation exactly once.
     if (isReSelection) {
       const directDownstream = allTasksBefore
         .filter((t) => t.dependencies.includes(reconId))
@@ -2110,51 +2016,7 @@ export class Orchestrator {
     return this.recreateTask(taskId);
   }
 
-  /**
-   * Edit a task's prompt — recreate-class invalidation route per Step 3 of
-   * `docs/architecture/task-invalidation-roadmap.md` and the Decision Table
-   * row "Edit `prompt`" in `docs/architecture/task-invalidation-chart.md`.
-   *
-   * A `prompt` edit changes the task's execution-defining spec (the chart
-   * lists `prompt` as part of the execution ABI alongside `command`,
-   * `executionAgent`, `executorType`, `remoteTargetId`), so the existing
-   * attempt's lineage (branch, commit, workspacePath, agent session,
-   * container) is no longer authoritative. The chart maps this to
-   * `InvalidationAction = 'recreateTask'` with `InvalidationScope = 'task'`.
-   *
-   * Sequence (mirrors `applyInvalidation`'s contract for the synchronous
-   * orchestrator-internal seam — see `invalidation-policy.ts` and the
-   * Step 2 `editTaskCommand` precedent):
-   *   1. **Cancel-first (Hard Invariant).** If the task is actively
-   *      executing (`running` or `fixing_with_ai`) we interrupt it via
-   *      `cancelTask` BEFORE any authoritative state is reset. The
-   *      executor-aware kill (`taskExecutor.killActiveExecution`) is wired
-   *      by the app-layer wrapper through `applyInvalidation`'s
-   *      `cancelInFlight` dep; this method only handles the orchestrator
-   *      side of cancel and does NOT add a parallel cancel call.
-   *   2. **Persist new prompt.** `writeAndSync` updates `config.prompt`
-   *      and emits a `task.updated` delta so the recreated attempt picks
-   *      up the new spec.
-   *   3. **Recreate-class reset.** Delegate to `recreateTask`, which
-   *      discards stale lineage (branch, commit, workspacePath,
-   *      agentSessionId, containerId, error, exitCode, ...) and bumps the
-   *      execution generation exactly once via
-   *      `withBumpedExecutionGeneration`. This is the single source of
-   *      truth for the recreate reset shape — Step 3 deliberately reuses
-   *      it instead of duplicating the field list here (mirrors Step 2).
-   *
-   * Public surface: `(taskId, newPrompt)` returning `TaskState[]` of
-   * newly-started tasks — backward-compatible signature shape with the
-   * other `editTask*` mutators. Prior to Step 3 there was no dedicated
-   * general policy for prompt edits (per the chart's "Behavior Today"
-   * column); this method introduces one. Active tasks are NOT rejected —
-   * cancel-first per the chart's Hard Invariant.
-   *
-   * NOTE: `restartTask` is intentionally NOT used here; the
-   * recreate-class reset shape is the only authoritative reset path for
-   * this mutation and `restartTask` will be removed entirely in Step 13.
-   */
-  editTaskPrompt(taskId: string, newPrompt: string): TaskState[] {
+    editTaskPrompt(taskId: string, newPrompt: string): TaskState[] {
     this.refreshFromDb();
     const task = this.stateGetTask(taskId);
     if (!task) throw new Error(`Task ${taskId} not found`);
@@ -2173,97 +2035,7 @@ export class Orchestrator {
     return this.recreateTask(taskId);
   }
 
-  /**
-   * Edit a task's executor type (e.g. `worktree` ↔ `docker` ↔ `ssh`) —
-   * **retry-class** invalidation route per Step 5 of
-   * `docs/architecture/task-invalidation-roadmap.md` and the Decision
-   * Table row "Edit `executorType`" in
-   * `docs/architecture/task-invalidation-chart.md`.
-   *
-   * Why retry-class (not recreate-class). The chart explicitly classifies
-   * `executorType` as a substrate-only mutation: only the execution
-   * environment changed, but the workspace lineage may still be valid.
-   * `MUTATION_POLICIES.executorType` therefore maps to
-   * `InvalidationAction = 'retryTask'` with `InvalidationScope = 'task'`,
-   * unlike the `command` / `prompt` / `executionAgent` mutations
-   * (Steps 2–4) which are recreate-class because they materially change
-   * the task definition itself. The "Why" column in the chart spells
-   * this out: "Execution environment changed, but workspace lineage may
-   * still be valid". Today's `applyInvalidation` wires `retryTask` to
-   * `Orchestrator.restartTask` as a compatibility seam (see
-   * `buildInvalidationDeps` in `packages/app/src/workflow-actions.ts`);
-   * Step 13 will rename `restartTask` → `retryTask` and Step 5
-   * deliberately routes through that same seam so no behavior diverges
-   * between the policy-driven path and this orchestrator-internal path.
-   *
-   * Sequence (mirrors `applyInvalidation`'s contract for the synchronous
-   * orchestrator-internal seam — see `invalidation-policy.ts` and the
-   * Step 2/3/4 `editTaskCommand` / `editTaskPrompt` / `editTaskAgent`
-   * precedents):
-   *   1. **Cancel-first (Hard Invariant).** If the task is actively
-   *      executing (`running` or `fixing_with_ai`) we interrupt it via
-   *      `cancelTask` BEFORE any authoritative state is reset. The
-   *      executor-aware kill (`taskExecutor.killActiveExecution`) is
-   *      wired by the app-layer wrapper through `applyInvalidation`'s
-   *      `cancelInFlight` dep; this method only handles the orchestrator
-   *      side of cancel and does NOT add a parallel cancel call.
-   *   2. **Persist new substrate.** `writeAndSync` updates
-   *      `config.executorType` (and `config.remoteTargetId` for SSH —
-   *      cleared otherwise) and emits a `task.updated` delta so the
-   *      retried attempt picks up the new substrate.
-   *   3. **Retry-class reset.** Delegate to `restartTask`, which is the
-   *      current `retryTask` compatibility wire (Step 13 will rename it).
-   *      `restartTask` resets the root + transitive downstream subgraph
-   *      to `pending`, clears volatile attempt state
-   *      (`agentSessionId` / `containerId` / `error` / `exitCode` /
-   *      `startedAt` / `completedAt`), and bumps execution generation
-   *      exactly once via `withBumpedExecutionGeneration`. Crucially
-   *      it does NOT clear `branch`, `commit`, or `workspacePath` —
-   *      that lineage is the workspace artifact the chart says is still
-   *      authoritative for a substrate-only change.
-   *
-   * Public surface: `(taskId, executorType, remoteTargetId?)` returning
-   * `TaskState[]` of newly-started tasks — backward-compatible signature
-   * shape with the other `editTask*` mutators. The previous
-   * `Cannot edit running task` throw on active tasks is REMOVED — that
-   * is the whole point of cancel-first per the chart's Hard Invariant
-   * ("Behavior Today" column had executor-type edits as `restartTask`
-   * when inactive / blocked when active; Step 5 collapses both branches
-   * onto the retry path).
-   *
-   * NOTE: `recreateTask`'s lineage-discarding reset shape is
-   * deliberately NOT used here for the substrate-only fork.
-   * Substrate-only changes preserve branch/workspacePath; that
-   * distinction is what makes pure `executorType` mutation the lone
-   * retry-class row alongside the recreate-class rows in the chart's
-   * Decision Table.
-   *
-   * Step 6 (task-invalidation roadmap): remote-host changes are
-   * recreate-class. `editTaskType` is the public surface that today
-   * carries both axes (`executorType` AND `remoteTargetId`) so it MUST
-   * fork internally on whether the *host* changed:
-   *
-   *   - **Host change → recreate-class** (Step 6, chart Decision Table
-   *     row "Edit `remoteTargetId`": "Remote host change invalidates
-   *     existing workspace lineage"). Triggered when:
-   *       1. transitioning between local (`worktree` / `docker`) and
-   *          `ssh`, OR
-   *       2. switching between two different SSH `remoteTargetId`s.
-   *     Routes through `recreateTask`, which discards branch / commit /
-   *     workspacePath / agentSessionId / containerId per
-   *     `MUTATION_POLICIES.remoteTargetId` (`recreateTask` action /
-   *     `task` scope).
-   *
-   *   - **Substrate-only → retry-class** (Step 5 path, unchanged).
-   *     Triggered when only the local executor flavor flips
-   *     (`worktree` ↔ `docker`) or the SSH `remoteTargetId` is
-   *     unchanged. Routes through `restartTask`, preserving branch /
-   *     workspacePath lineage per `MUTATION_POLICIES.executorType`.
-   *
-   * The fork is computed by `hostKey`: `'ssh:<remoteTargetId>'` for
-   * SSH, `'local'` otherwise. Differing keys ⇒ host change ⇒ recreate.
-   */
-  editTaskType(taskId: string, executorType: string, remoteTargetId?: string): TaskState[] {
+    editTaskType(taskId: string, executorType: string, remoteTargetId?: string): TaskState[] {
     this.refreshFromDb();
     const task = this.stateGetTask(taskId);
     if (!task) throw new Error(`Task ${taskId} not found`);
@@ -2282,12 +2054,6 @@ export class Orchestrator {
       }
     }
 
-    // Step 6: detect remote-host change. Compare normalized "host keys"
-    // for the existing and requested substrate. SSH bound to a specific
-    // remote target identifies a unique remote host; everything else
-    // (worktree, docker) collapses to `'local'`. Differing keys flip
-    // this mutation from retry-class (Step 5) to recreate-class
-    // (Step 6 — `MUTATION_POLICIES.remoteTargetId.action === 'recreateTask'`).
     const oldExecutorType = task.config.executorType;
     const oldRemoteTargetId =
       oldExecutorType === 'ssh' ? task.config.remoteTargetId : undefined;
@@ -2314,60 +2080,10 @@ export class Orchestrator {
     this.persistence.logEvent?.(taskId, 'task.updated', typeChanges);
     this.messageBus.publish(TASK_DELTA_CHANNEL, typeDelta);
 
-    // Step 6 fork. Host change ⇒ recreate-class (discard workspace
-    // lineage). Otherwise stay on Step 5's retry-class wire.
     return hostChanged ? this.recreateTask(taskId) : this.restartTask(taskId);
   }
 
-  /**
-   * Edit a task's execution agent (e.g. 'claude' → 'codex') — recreate-class
-   * invalidation route per Step 4 of
-   * `docs/architecture/task-invalidation-roadmap.md` and the Decision Table
-   * row "Edit `executionAgent`" in
-   * `docs/architecture/task-invalidation-chart.md`.
-   *
-   * Agent choice is part of the execution-defining ABI (the chart lists
-   * `executionAgent` alongside `command`, `prompt`, `executorType`,
-   * `remoteTargetId`), so the existing attempt's lineage (branch, commit,
-   * workspacePath, agent session, container) is no longer authoritative
-   * once the agent flips. The chart maps this to
-   * `InvalidationAction = 'recreateTask'` with `InvalidationScope = 'task'`
-   * (see `MUTATION_POLICIES.executionAgent`).
-   *
-   * Sequence (mirrors `applyInvalidation`'s contract for the synchronous
-   * orchestrator-internal seam — see `invalidation-policy.ts` and the
-   * Step 2/3 `editTaskCommand` / `editTaskPrompt` precedents):
-   *   1. **Cancel-first (Hard Invariant).** If the task is actively
-   *      executing (`running` or `fixing_with_ai`) we interrupt it via
-   *      `cancelTask` BEFORE any authoritative state is reset. The
-   *      executor-aware kill (`taskExecutor.killActiveExecution`) is wired
-   *      by the app-layer wrapper through `applyInvalidation`'s
-   *      `cancelInFlight` dep; this method only handles the orchestrator
-   *      side of cancel and does NOT add a parallel cancel call.
-   *   2. **Persist new agent.** `writeAndSync` updates
-   *      `config.executionAgent` and emits a `task.updated` delta so the
-   *      recreated attempt picks up the new spec.
-   *   3. **Recreate-class reset.** Delegate to `recreateTask`, which
-   *      discards stale lineage (branch, commit, workspacePath,
-   *      agentSessionId, containerId, error, exitCode, ...) and bumps the
-   *      execution generation exactly once via
-   *      `withBumpedExecutionGeneration`. This is the single source of
-   *      truth for the recreate reset shape — Step 4 deliberately reuses
-   *      it instead of duplicating the field list here (mirrors Steps 2/3).
-   *
-   * Public surface: `(taskId, agentName)` returning `TaskState[]` of
-   * newly-started tasks — backward-compatible signature shape with the
-   * other `editTask*` mutators. The previous `Cannot edit running task`
-   * throw on active tasks is REMOVED — that's the whole point of
-   * cancel-first per the chart's Hard Invariant ("Behavior Today" had
-   * agent edits as `restartTask` when inactive / blocked when active;
-   * Step 4 collapses both branches onto the recreate path).
-   *
-   * NOTE: `restartTask` is intentionally NOT used here; the
-   * recreate-class reset shape is the only authoritative reset path for
-   * this mutation and `restartTask` will be removed entirely in Step 13.
-   */
-  editTaskAgent(taskId: string, agentName: string): TaskState[] {
+    editTaskAgent(taskId: string, agentName: string): TaskState[] {
     this.refreshFromDb();
     const task = this.stateGetTask(taskId);
     if (!task) throw new Error(`Task ${taskId} not found`);
