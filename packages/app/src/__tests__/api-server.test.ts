@@ -626,18 +626,7 @@ describe('POST /api/tasks/:id/edit-type', () => {
     expect(res.body.error).toContain('Missing "executorType"');
   });
 
-  // Step 6 (task-invalidation roadmap): the chart's Decision Table row
-  // "Edit `remoteTargetId`" is recreate-class / task scope ("Remote
-  // host change invalidates existing workspace lineage"). The
-  // api-server endpoint reuses `/edit-type` because today
-  // `editTaskType` is the public surface that carries both
-  // `executorType` and `remoteTargetId`. The recreate-vs-retry fork is
-  // an internal detail of `Orchestrator.editTaskType` (covered in
-  // `packages/workflow-core/src/__tests__/orchestrator.test.ts`'s
-  // Step 6 block). Here we assert the HTTP layer threads the
-  // `remoteTargetId` change through unmodified so the orchestrator
-  // can take the recreate-class branch end-to-end.
-  it('Step 6: forwards a remoteTargetId-only change (host change) so the orchestrator can take the recreate-class branch', async () => {
+  it('forwards a remoteTargetId-only change (host change) so the orchestrator can take the recreate-class branch', async () => {
     const res = await request(port, 'POST', '/api/tasks/task-1/edit-type', {
       executorType: 'ssh',
       remoteTargetId: 'remote-b',
