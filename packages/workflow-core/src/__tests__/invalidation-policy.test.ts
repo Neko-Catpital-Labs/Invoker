@@ -33,8 +33,8 @@ describe('MUTATION_POLICIES', () => {
     expect(MUTATION_POLICIES.executionAgent.action).toBe('recreateTask');
     expect(MUTATION_POLICIES.executorType.action).toBe('retryTask');
     expect(MUTATION_POLICIES.remoteTargetId.action).toBe('recreateTask');
-    expect(MUTATION_POLICIES.selectedExperiment.action).toBe('retryTask');
-    expect(MUTATION_POLICIES.selectedExperimentSet.action).toBe('retryTask');
+    expect(MUTATION_POLICIES.selectedExperiment.action).toBe('recreateTask');
+    expect(MUTATION_POLICIES.selectedExperimentSet.action).toBe('recreateTask');
     expect(MUTATION_POLICIES.mergeMode.action).toBe('retryTask');
     expect(MUTATION_POLICIES.fixContext.action).toBe('retryTask');
     expect(MUTATION_POLICIES.rebaseAndRetry.action).toBe('recreateWorkflowFromFreshBase');
