@@ -347,7 +347,6 @@ export function App() {
     }
   }, [invoker]);
 
-
   const handleStop = useCallback(async () => {
     if (!invoker) return;
     try {
@@ -392,7 +391,6 @@ export function App() {
       console.error('Failed to delete workflows:', err);
     }
   }, [invoker, clearTasks]);
-
 
   // True when all tasks have reached a terminal state.
   const allSettled = useMemo(() => {
