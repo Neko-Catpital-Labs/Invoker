@@ -1991,51 +1991,7 @@ export class Orchestrator {
     return this.recreateTask(taskId);
   }
 
-  /**
-   * Edit a task's prompt — recreate-class invalidation route per Step 3 of
-   * `docs/architecture/task-invalidation-roadmap.md` and the Decision Table
-   * row "Edit `prompt`" in `docs/architecture/task-invalidation-chart.md`.
-   *
-   * A `prompt` edit changes the task's execution-defining spec (the chart
-   * lists `prompt` as part of the execution ABI alongside `command`,
-   * `executionAgent`, `executorType`, `remoteTargetId`), so the existing
-   * attempt's lineage (branch, commit, workspacePath, agent session,
-   * container) is no longer authoritative. The chart maps this to
-   * `InvalidationAction = 'recreateTask'` with `InvalidationScope = 'task'`.
-   *
-   * Sequence (mirrors `applyInvalidation`'s contract for the synchronous
-   * orchestrator-internal seam — see `invalidation-policy.ts` and the
-   * Step 2 `editTaskCommand` precedent):
-   *   1. **Cancel-first (Hard Invariant).** If the task is actively
-   *      executing (`running` or `fixing_with_ai`) we interrupt it via
-   *      `cancelTask` BEFORE any authoritative state is reset. The
-   *      executor-aware kill (`taskExecutor.killActiveExecution`) is wired
-   *      by the app-layer wrapper through `applyInvalidation`'s
-   *      `cancelInFlight` dep; this method only handles the orchestrator
-   *      side of cancel and does NOT add a parallel cancel call.
-   *   2. **Persist new prompt.** `writeAndSync` updates `config.prompt`
-   *      and emits a `task.updated` delta so the recreated attempt picks
-   *      up the new spec.
-   *   3. **Recreate-class reset.** Delegate to `recreateTask`, which
-   *      discards stale lineage (branch, commit, workspacePath,
-   *      agentSessionId, containerId, error, exitCode, ...) and bumps the
-   *      execution generation exactly once via
-   *      `withBumpedExecutionGeneration`. This is the single source of
-   *      truth for the recreate reset shape — Step 3 deliberately reuses
-   *      it instead of duplicating the field list here (mirrors Step 2).
-   *
-   * Public surface: `(taskId, newPrompt)` returning `TaskState[]` of
-   * newly-started tasks — backward-compatible signature shape with the
-   * other `editTask*` mutators. Prior to Step 3 there was no dedicated
-   * general policy for prompt edits (per the chart's "Behavior Today"
-   * column); this method introduces one. Active tasks are NOT rejected —
-   * cancel-first per the chart's Hard Invariant.
-   *
-   * NOTE: `restartTask` is intentionally NOT used here; the
-   * recreate-class reset shape is the only authoritative reset path for
-   * this mutation and `restartTask` will be removed entirely in Step 13.
-   */
-  editTaskPrompt(taskId: string, newPrompt: string): TaskState[] {
+    editTaskPrompt(taskId: string, newPrompt: string): TaskState[] {
     this.refreshFromDb();
     const task = this.stateGetTask(taskId);
     if (!task) throw new Error(`Task ${taskId} not found`);

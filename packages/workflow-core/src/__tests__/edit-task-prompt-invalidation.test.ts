@@ -1,44 +1,3 @@
-/**
- * Step 3 — Prompt-mutation invalidation contract.
- *
- * This file pins the Step 3 deliverable from
- * `docs/architecture/task-invalidation-roadmap.md` (Phase B): the
- * `prompt` mutation is recreate-class with task scope, and any
- * affected in-flight work is canceled BEFORE authoritative state is
- * reset (the chart's Hard Invariant in
- * `docs/architecture/task-invalidation-chart.md`).
- *
- * Three layers are pinned:
- *
- *   1. **Policy table.** `MUTATION_POLICIES.prompt` is the immutable
- *      contract that the chart's Decision Table row "Edit `prompt`"
- *      maps to: `recreateTask` action / task scope.
- *
- *   2. **Cancel-first routing (mocked deps).** When the prompt-edit
- *      path is wired through
- *      `applyInvalidation('task', 'recreateTask', taskId, deps)`,
- *      the `cancelInFlight` dep is invoked BEFORE the `recreateTask`
- *      dep. We assert this via `mock.invocationCallOrder`. We also
- *      check that a failed cancel aborts the recreate (stale work
- *      must not survive a failed cancel) and that idempotent edits
- *      preserve the cancel-first ordering.
- *
- *   3. **CommandService delegation (Step 3 integration coverage for
- *      the headless layer).** The headless `set prompt` handler
- *      (`headlessEditPrompt` in `packages/app/src/headless.ts`) calls
- *      `deps.commandService.editTaskPrompt(envelope)`. We exercise
- *      that exact entrypoint and assert it serializes through the
- *      workflow mutex and delegates to `Orchestrator.editTaskPrompt`
- *      with the right payload — that is the end-to-end wiring
- *      assertion the Step 3 plan requires for the headless surface,
- *      complementing the unit-level cancel-first / lineage /
- *      generation-bump coverage in `orchestrator.test.ts`.
- *
- * Steps 13/14/17 will further consolidate the wiring; for now this
- * focused file exists alongside `orchestrator.test.ts` and
- * `edit-task-command-invalidation.test.ts` to keep the contract
- * assertions readable as one chunk.
- */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
@@ -70,7 +29,7 @@ function makeDeps(overrides: Partial<MockedDeps> = {}): MockedDeps {
   } as MockedDeps;
 }
 
-describe('Step 3: prompt-mutation invalidation contract', () => {
+describe('prompt-mutation invalidation contract', () => {
   it('MUTATION_POLICIES.prompt is recreate-class and invalidates active attempts', () => {
     expect(MUTATION_POLICIES.prompt.action).toBe('recreateTask');
     expect(MUTATION_POLICIES.prompt.invalidatesExecutionSpec).toBe(true);
@@ -81,9 +40,6 @@ describe('Step 3: prompt-mutation invalidation contract', () => {
     const deps = makeDeps();
     const policy = MUTATION_POLICIES.prompt;
 
-    // The prompt-edit path uses the same scope/action that the policy
-    // table prescribes. Asserting via the policy makes the test fail
-    // loudly if Step 3 (or any later step) flips the action class.
     await applyInvalidation('task', policy.action, 'task-a', deps);
 
     expect(deps.cancelInFlight).toHaveBeenCalledWith('task', 'task-a');
@@ -145,17 +101,6 @@ describe('Step 3: prompt-mutation invalidation contract', () => {
   });
 });
 
-// ── Step 3 headless integration seam: CommandService.editTaskPrompt ──
-//
-// `headlessEditPrompt` (in `packages/app/src/headless.ts`) constructs
-// an envelope and calls `deps.commandService.editTaskPrompt(envelope)`.
-// That `CommandService` method serializes the mutation through the
-// workflow mutex and delegates to `Orchestrator.editTaskPrompt`,
-// which is where the cancel-first / lineage-discard / generation-bump
-// invariants live (covered by `orchestrator.test.ts` and pinned by
-// the policy-level tests above). This block exercises that exact
-// integration seam so the headless surface has a passing end-to-end
-// wiring assertion in addition to the orchestrator-level coverage.
 function stubOrchestrator(overrides: Partial<Orchestrator> = {}): Orchestrator {
   return {
     getTask: vi.fn().mockReturnValue({ config: { workflowId: 'wf-1' } }),
@@ -164,7 +109,7 @@ function stubOrchestrator(overrides: Partial<Orchestrator> = {}): Orchestrator {
   } as unknown as Orchestrator;
 }
 
-describe('Step 3: CommandService.editTaskPrompt (headless integration seam)', () => {
+describe('CommandService.editTaskPrompt (headless integration seam)', () => {
   let orchestrator: Orchestrator;
   let service: CommandService;
 

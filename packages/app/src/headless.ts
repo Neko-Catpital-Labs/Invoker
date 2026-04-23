@@ -1572,14 +1572,6 @@ async function headlessEdit(taskId: string, newCommand: string, deps: HeadlessDe
   autoFix.unsubscribe();
 }
 
-/**
- * Headless `set prompt` — recreate-class invalidation route per Step 3
- * of `docs/architecture/task-invalidation-roadmap.md` (mirrors the
- * Step 2 `set command` path). Routes through `commandService.editTaskPrompt`
- * so the orchestrator's cancel-first seam (`Orchestrator.editTaskPrompt`)
- * runs under the workflow mutex; lineage discard and the single
- * `withBumpedExecutionGeneration` bump live in `recreateTask`.
- */
 async function headlessEditPrompt(taskId: string, newPrompt: string, deps: HeadlessDeps): Promise<void> {
   if (!taskId || !newPrompt) throw new Error('Missing arguments. Usage: --headless set prompt <taskId> <newPrompt>');
   const restored = restoreWorkflowForTask(taskId, deps);

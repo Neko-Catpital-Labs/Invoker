@@ -439,12 +439,6 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
         return;
       }
 
-      // POST /api/tasks/:id/edit-prompt — Step 3: prompt-mutation recreate-class
-      // route. Body: { prompt }. The substantive cancel-first / lineage-discard /
-      // generation-bump routing lives in `Orchestrator.editTaskPrompt`; this
-      // endpoint is a thin sync delegate via `editTaskPrompt`
-      // in `workflow-actions.ts`. See `docs/architecture/task-invalidation-chart.md`
-      // Decision Table row "Edit `prompt`".
       const editPromptMatch = path.match(/^\/api\/tasks\/([^/]+)\/edit-prompt$/);
       if (method === 'POST' && editPromptMatch) {
         const taskId = decodeURIComponent(editPromptMatch[1]);
