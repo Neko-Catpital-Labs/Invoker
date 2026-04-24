@@ -20,12 +20,19 @@ jobs:
       matrix:
         include:
           - runner: ubuntu-latest
-            target: linux
+            build_command: pnpm run dist:desktop:linux
+            artifact_name: release-linux
             artifact_glob: |
               release/*.AppImage
               release/*.deb
           - runner: macos-latest
-            target: mac
+            build_command: pnpm run dist:desktop:mac:arm64
+            artifact_name: release-mac-arm64
+            artifact_glob: |
+              release/*.dmg
+          - runner: macos-13
+            build_command: pnpm run dist:desktop:mac:x64
+            artifact_name: release-mac-x64
             artifact_glob: |
               release/*.dmg
 
@@ -48,18 +55,14 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Build desktop artifacts
-        run: pnpm run dist:desktop:${{ matrix.target }}
-
-      - name: Generate checksums
-        run: bash scripts/release-sha256.sh
+        run: ${{ matrix.build_command }}
 
       - name: Upload packaged artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: release-${{ matrix.target }}
+          name: ${{ matrix.artifact_name }}
           path: |
             ${{ matrix.artifact_glob }}
-            release/SHA256SUMS
           if-no-files-found: error
 
   publish-release:
@@ -73,6 +76,9 @@ jobs:
           pattern: release-*
           merge-multiple: true
           path: release
+
+      - name: Generate combined checksums
+        run: bash scripts/release-sha256.sh
 
       - name: Publish GitHub release assets
         uses: softprops/action-gh-release@v2

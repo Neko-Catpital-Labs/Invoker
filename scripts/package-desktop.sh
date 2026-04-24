@@ -5,15 +5,34 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 TARGET="all"
-case "${1:-}" in
-  --linux) TARGET="linux" ;;
-  --mac) TARGET="mac" ;;
-  "" ) ;;
-  *)
-    echo "Usage: bash scripts/package-desktop.sh [--linux|--mac]" >&2
-    exit 64
-    ;;
-esac
+MAC_ARCH=""
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --linux)
+      TARGET="linux"
+      ;;
+    --mac)
+      TARGET="mac"
+      ;;
+    --x64)
+      MAC_ARCH="x64"
+      ;;
+    --arm64)
+      MAC_ARCH="arm64"
+      ;;
+    *)
+      echo "Usage: bash scripts/package-desktop.sh [--linux|--mac] [--x64|--arm64]" >&2
+      exit 64
+      ;;
+  esac
+  shift
+done
+
+if [ -n "$MAC_ARCH" ] && [ "$TARGET" != "mac" ]; then
+  echo "--x64/--arm64 requires --mac" >&2
+  exit 64
+fi
 
 pnpm --filter @invoker/ui build
 pnpm --filter @invoker/app build
@@ -30,7 +49,11 @@ case "$TARGET" in
     pnpm --filter @invoker/app exec electron-builder --linux AppImage deb --publish never
     ;;
   mac)
-    pnpm --filter @invoker/app exec electron-builder --mac dmg --publish never
+    if [ -n "$MAC_ARCH" ]; then
+      pnpm --filter @invoker/app exec electron-builder --mac dmg "--$MAC_ARCH" --publish never
+    else
+      pnpm --filter @invoker/app exec electron-builder --mac dmg --publish never
+    fi
     ;;
   all)
     pnpm --filter @invoker/app exec electron-builder --publish never
