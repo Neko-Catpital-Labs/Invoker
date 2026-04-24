@@ -55,6 +55,7 @@ owner-restart-loop-during-delete-all|headless-standalone|destructive|owner_resta
 tracked-approve-zero-running-hang|headless-standalone|hang|false_idle_tracked_mutation|approve_under_starvation|8|6|run_tracked_approve_zero_running_hang
 owner-restart-loop-during-tracked-approve|headless-standalone|hang|owner_restart_loop_tracked_approve_starvation|restart_loop_approve_under_starvation|8|10|run_owner_restart_loop_during_tracked_approve
 owner-restart-loop-during-tracked-rebase|headless-standalone|hang|owner_restart_loop_tracked_rebase_starvation|restart_loop_rebase_under_neighbor_churn|8|10|run_owner_restart_loop_during_tracked_rebase
+owner-restart-loop-during-tracked-recreate-task|headless-standalone|hang|owner_restart_loop_tracked_recreate_task_starvation|restart_loop_recreate_task_under_neighbor_churn|8|10|run_owner_restart_loop_during_tracked_recreate_task
 tracked-fix-churn-under-load|headless-standalone|hang|tracked_fix_starvation|fix_under_neighbor_churn|8|10|run_tracked_fix_churn_under_load
 owner-restart-loop-during-tracked-fix-churn|headless-standalone|hang|owner_restart_loop_tracked_fix_starvation|restart_loop_fix_under_neighbor_churn|8|12|run_owner_restart_loop_during_tracked_fix_churn
 owner-restart-loop-during-fixing-visibility|headless-standalone|hang|owner_restart_loop_fixing_visibility|restart_loop_fix_visibility|6|8|run_owner_restart_loop_during_fixing_visibility
@@ -1585,6 +1586,100 @@ run_fixing_with_ai_visibility() {
   tracked_fix_status="$(cat "${OVERLOAD_TMP_DIR}/tracked-fix.code" 2>/dev/null || echo 0)"
   if [ "${tracked_fix_status:-0}" -eq 124 ] && [ "$status" = "fixing_with_ai" ]; then
     echo "FAIL: tracked command hung for $task_id while still fixing_with_ai" >&2
+    return 1
+  fi
+
+  ov_cancel_all_workflows
+  sleep 2
+  ov_stop_owner
+  ov_wait_queries_healthy 45
+  invoker_e2e_assert_no_stuck_mutation_intents 45
+  invoker_e2e_assert_no_owned_headless_processes 1
+}
+
+run_owner_restart_loop_during_tracked_recreate_task() {
+  local workflow_count="$1"
+  local operation_burst="$2"
+  invoker_e2e_init
+  trap 'ov_stop_owner; rm -rf "${OVERLOAD_TMP_DIR:-}" >/dev/null 2>&1 || true; invoker_e2e_cleanup' RETURN
+  cd "$INVOKER_E2E_REPO_ROOT"
+  unset ELECTRON_RUN_AS_NODE
+  unset INVOKER_HEADLESS_STANDALONE
+  ov_set_overload_config "$((workflow_count + 2))"
+
+  OVERLOAD_TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/invoker-overload.XXXXXX")"
+  OVERLOAD_OP_PIDS=()
+  OVERLOAD_ALLOWED_BACKGROUND_FAILURE_PATTERN=""
+  OVERLOAD_ALLOWED_BACKGROUND_FAILURE_LABELS="tracked-recreate-task"
+  ov_start_owner
+
+  local target_info target_workflow target_task
+  target_info="$(ov_submit_workflow fail "restart-loop-tracked-recreate-task-target" "" no-track)"
+  target_workflow="${target_info%%|*}"
+  target_task="$target_workflow/root"
+  echo "seed tracked recreate-task target: $target_workflow"
+  ov_wait_task_status "$target_task" failed 30
+
+  local -a fail_workflows=()
+  local -a approval_workflows=()
+  local idx info workflow_id
+  for idx in $(seq 1 3); do
+    info="$(ov_submit_workflow fail "restart-loop-tracked-recreate-task-neighbor-fail-$idx" "" no-track)"
+    workflow_id="${info%%|*}"
+    fail_workflows+=("$workflow_id")
+    ov_wait_task_status "$workflow_id/root" failed 30
+  done
+  for idx in $(seq 1 2); do
+    info="$(ov_submit_workflow approval "restart-loop-tracked-recreate-task-neighbor-approval-$idx" "" no-track)"
+    workflow_id="${info%%|*}"
+    approval_workflows+=("$workflow_id")
+    ov_wait_task_status "$workflow_id/approve-me" awaiting_approval 30
+  done
+
+  echo "==> overload: starting tracked recreate-task before owner restart loop"
+  ov_spawn_command_timed "tracked-recreate-task" 120 invoker_e2e_run_headless recreate-task "$target_task"
+  sleep 2
+
+  local restart_cycles=3
+  local cycle fail_workflow approval_workflow
+  for cycle in $(seq 1 "$restart_cycles"); do
+    fail_workflow="${fail_workflows[$(((cycle - 1) % ${#fail_workflows[@]}))]}"
+    approval_workflow="${approval_workflows[$(((cycle - 1) % ${#approval_workflows[@]}))]}"
+    echo "==> overload: owner restart cycle $cycle/$restart_cycles"
+    ov_spawn_command "retry-fail-cycle-$cycle" invoker_e2e_run_headless --no-track retry "$fail_workflow"
+    ov_spawn_command "recreate-fail-cycle-$cycle" invoker_e2e_run_headless --no-track recreate "$fail_workflow"
+    ov_spawn_command "approve-cycle-$cycle" invoker_e2e_run_headless --no-track approve "$approval_workflow/approve-me"
+    ov_spawn_command "query-queue-cycle-$cycle" invoker_e2e_run_headless query queue --output json
+    ov_stop_owner
+    sleep 1
+    ov_start_owner
+    sleep 1
+  done
+
+  for idx in $(seq 0 $((operation_burst - 1))); do
+    case $((idx % 6)) in
+      0) workflow_id="${fail_workflows[$((idx % ${#fail_workflows[@]}))]}"; ov_spawn_command "retry-fail-$idx" invoker_e2e_run_headless --no-track retry "$workflow_id" ;;
+      1) workflow_id="${fail_workflows[$((idx % ${#fail_workflows[@]}))]}"; ov_spawn_command "recreate-fail-$idx" invoker_e2e_run_headless --no-track recreate "$workflow_id" ;;
+      2) workflow_id="${approval_workflows[$((idx % ${#approval_workflows[@]}))]}"; ov_spawn_command "approve-$idx" invoker_e2e_run_headless --no-track approve "$workflow_id/approve-me" ;;
+      3) workflow_id="${approval_workflows[$((idx % ${#approval_workflows[@]}))]}"; ov_spawn_command "reject-$idx" invoker_e2e_run_headless --no-track reject "$workflow_id/approve-me" "tracked recreate-task restart churn reject" ;;
+      4) ov_spawn_command "query-queue-$idx" invoker_e2e_run_headless query queue --output json ;;
+      5) ov_spawn_command "query-workflows-$idx" invoker_e2e_run_headless query workflows --output jsonl ;;
+    esac
+  done
+
+  ov_wait_background_commands
+
+  local tracked_status target_status
+  tracked_status="$(cat "${OVERLOAD_TMP_DIR}/tracked-recreate-task.code" 2>/dev/null || echo 1)"
+  target_status="$(invoker_e2e_task_status "$target_task" 2>/dev/null || true)"
+  if [ "${tracked_status:-1}" -eq 124 ] || [ "${tracked_status:-1}" -eq 137 ] || [ "${tracked_status:-1}" -eq 143 ]; then
+    if [ "$target_status" != "completed" ] && [ "$target_status" != "failed" ] && [ "$target_status" != "pending" ]; then
+      echo "FAIL: tracked command hung for $target_task (status=$target_status exit=$tracked_status)" >&2
+      return 1
+    fi
+  elif [ "${tracked_status:-1}" -ne 0 ]; then
+    echo "FAIL: tracked recreate-task command exited with $tracked_status for $target_task" >&2
+    cat "${OVERLOAD_TMP_DIR}/tracked-recreate-task.out" >&2 || true
     return 1
   fi
 
