@@ -488,6 +488,32 @@ describe('POST /api/tasks/:id/approve', () => {
     expect(res.body.error).toBe('not awaiting approval');
   });
 
+  // Step 16 (`docs/architecture/task-invalidation-roadmap.md`,
+  // chart row "Approve or reject fix"): the api-server's
+  // approve POST is the chart's **second** non-invalidating
+  // surface (alongside `gate-policy` from Step 15). It MUST
+  // route to `Orchestrator.approve` (or `resumeTaskAfterFixApproval`
+  // / `commitApprovedFix` for the fix branch) and MUST NOT
+  // trigger any retry/recreate spy on the orchestrator. By the
+  // time approve runs the task is already terminal — cancel
+  // here would also be a generation-bumping mistake.
+  it('Step 16: approve POST does not trigger retry/recreate/cancel routes', async () => {
+    mocks.orchestrator.recreateTask = vi.fn();
+    mocks.orchestrator.recreateWorkflow = vi.fn();
+    mocks.orchestrator.cancelWorkflow = vi.fn();
+
+    const res = await request(port, 'POST', '/api/tasks/task-1/approve');
+
+    expect(res.status).toBe(200);
+    expect(res.body.action).toBe('approved');
+    expect(mocks.orchestrator.approve).toHaveBeenCalledTimes(1);
+    expect(mocks.orchestrator.retryTask).not.toHaveBeenCalled();
+    expect(mocks.orchestrator.recreateTask).not.toHaveBeenCalled();
+    expect(mocks.orchestrator.recreateWorkflow).not.toHaveBeenCalled();
+    expect(mocks.orchestrator.cancelTask).not.toHaveBeenCalled();
+    expect(mocks.orchestrator.cancelWorkflow).not.toHaveBeenCalled();
+  });
+
   it('uses approveTaskAction when provided', async () => {
     const approveTaskAction = vi.fn().mockResolvedValue({ started: [] });
     const isolatedApi = startApiServer({
@@ -553,6 +579,57 @@ describe('POST /api/tasks/:id/reject', () => {
     expect(res.status).toBe(200);
     expect(mocks.orchestrator.revertConflictResolution).toHaveBeenCalledWith('task-1', 'merge conflict');
     expect(mocks.orchestrator.reject).not.toHaveBeenCalled();
+  });
+
+  // Step 16 (`docs/architecture/task-invalidation-roadmap.md`,
+  // chart row "Approve or reject fix"): the api-server's
+  // reject POST is the revert-class half of the second
+  // non-invalidating surface (alongside Step 15's gate-policy
+  // POST). It MUST route to `Orchestrator.reject` (or
+  // `revertConflictResolution` for the fix-flow branch) and
+  // MUST NOT trigger any retry/recreate/cancel spy on the
+  // orchestrator. By the time reject runs the task is already
+  // terminal — invalidating would be a generation-bumping
+  // mistake.
+  it('Step 16: reject POST does not trigger retry/recreate/cancel routes (non-fix path)', async () => {
+    mocks.orchestrator.recreateTask = vi.fn();
+    mocks.orchestrator.recreateWorkflow = vi.fn();
+    mocks.orchestrator.cancelWorkflow = vi.fn();
+
+    const res = await request(port, 'POST', '/api/tasks/task-1/reject');
+
+    expect(res.status).toBe(200);
+    expect(res.body.action).toBe('rejected');
+    expect(mocks.orchestrator.reject).toHaveBeenCalledTimes(1);
+    expect(mocks.orchestrator.retryTask).not.toHaveBeenCalled();
+    expect(mocks.orchestrator.recreateTask).not.toHaveBeenCalled();
+    expect(mocks.orchestrator.recreateWorkflow).not.toHaveBeenCalled();
+    expect(mocks.orchestrator.cancelTask).not.toHaveBeenCalled();
+    expect(mocks.orchestrator.cancelWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('Step 16: reject POST does not trigger retry/recreate/cancel routes (fix-flow path)', async () => {
+    mocks.orchestrator.recreateTask = vi.fn();
+    mocks.orchestrator.recreateWorkflow = vi.fn();
+    mocks.orchestrator.cancelWorkflow = vi.fn();
+    mocks.orchestrator.getTask.mockReturnValue(
+      makeTask({ execution: { pendingFixError: 'merge conflict' } }),
+    );
+
+    const res = await request(port, 'POST', '/api/tasks/task-1/reject');
+
+    expect(res.status).toBe(200);
+    expect(res.body.action).toBe('rejected');
+    expect(mocks.orchestrator.revertConflictResolution).toHaveBeenCalledWith(
+      'task-1',
+      'merge conflict',
+    );
+    expect(mocks.orchestrator.reject).not.toHaveBeenCalled();
+    expect(mocks.orchestrator.retryTask).not.toHaveBeenCalled();
+    expect(mocks.orchestrator.recreateTask).not.toHaveBeenCalled();
+    expect(mocks.orchestrator.recreateWorkflow).not.toHaveBeenCalled();
+    expect(mocks.orchestrator.cancelTask).not.toHaveBeenCalled();
+    expect(mocks.orchestrator.cancelWorkflow).not.toHaveBeenCalled();
   });
 });
 
