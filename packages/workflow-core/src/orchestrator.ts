@@ -835,6 +835,90 @@ export class Orchestrator {
     return { affectedIds, readyIds };
   }
 
+  /**
+   * Cancel-first invariant defense-in-depth (Step 18 of
+   * `docs/architecture/task-invalidation-roadmap.md`, Hard Invariant
+   * from `docs/architecture/task-invalidation-chart.md`).
+   *
+   * Marks any actively-running task in the targeted scope as `failed`
+   * with an explicit cancel marker BEFORE the caller resets state.
+   * This guarantees the chart's "interrupt and cancel all in-flight
+   * work in the affected scope" rule for direct callers of the
+   * orchestrator primitives — notably the `commandService.retryTask`
+   * / `recreateTask` / `retryWorkflow` / `recreateWorkflow` /
+   * `recreateWorkflowFromFreshBase` lifecycle commands wired in
+   * Step 17, which bypass the upstream `applyInvalidation` cancel.
+   *
+   * Calls via `applyInvalidation` already cancel via `cancelInFlight`
+   * (executor kill + orchestrator-side `cancelTask`/`cancelWorkflow`),
+   * so this helper is a defense-in-depth no-op there: by the time the
+   * primitive runs the targeted scope has no active tasks and the
+   * `isActive` filter below skips them all.
+   *
+   * Implementation notes:
+   *   - Only `running` / `fixing_with_ai` tasks are touched. Pending /
+   *     blocked / failed / completed / etc. tasks are left alone so
+   *     the subsequent reset path (`resetSubgraphToPending` /
+   *     `recreateWorkflow` / `replaceSelectedAttempt`) sees the
+   *     expected lineage.
+   *   - The selected attempt's status is intentionally NOT mutated
+   *     here — the subsequent reset's `replaceSelectedAttempt` sees
+   *     it as still `running` and marks it `superseded`, preserving
+   *     the existing attempt-supersession contract that retry/recreate
+   *     primitives (and their tests) rely on.
+   *   - Deferred-set / queued scheduler entries are cleared per
+   *     cancelled task so the slot frees up for the upcoming reset.
+   */
+  private cancelActiveBeforeInvalidation(
+    scope: 'task' | 'workflow',
+    id: string,
+  ): string[] {
+    let candidates: TaskState[];
+    if (scope === 'task') {
+      const root = this.stateGetTask(id);
+      if (!root) return [];
+      const allTasks = this.stateMachine.getAllTasks();
+      const taskMap = new Map(allTasks.map((t) => [t.id, t]));
+      const descendantIds = getTransitiveDependents(
+        id,
+        taskMap,
+        (t) => t.status === 'completed' || t.status === 'stale',
+      );
+      candidates = [
+        root,
+        ...descendantIds
+          .map((d) => taskMap.get(d))
+          .filter((t): t is TaskState => !!t),
+      ];
+    } else {
+      candidates = this.stateMachine
+        .getAllTasks()
+        .filter((t) => t.config.workflowId === id);
+    }
+
+    const cancelled: string[] = [];
+    for (const t of candidates) {
+      if (!isActiveForInvalidation(t.status)) continue;
+      const error = `Cancelled before ${scope}-scope invalidation`;
+      const completedAt = new Date();
+      const changes: TaskStateChanges = {
+        status: 'failed',
+        execution: { error, completedAt },
+      };
+      this.writeAndSync(t.id, changes);
+      this.persistence.logEvent?.(t.id, 'task.cancelled', changes);
+      this.messageBus.publish(TASK_DELTA_CHANNEL, {
+        type: 'updated',
+        taskId: t.id,
+        changes,
+      });
+      this.deferredTaskIds.delete(t.id);
+      this.clearQueuedSchedulerEntries(t.id, t.execution.selectedAttemptId);
+      cancelled.push(t.id);
+    }
+    return cancelled;
+  }
+
   private getExecutionGeneration(task: TaskState | undefined): number {
     return task?.execution.generation ?? 0;
   }
@@ -1825,6 +1909,14 @@ export class Orchestrator {
     if (!task) throw new Error(`Task ${taskId} not found`);
     const id = task.id;
 
+    // Step 18 (`docs/architecture/task-invalidation-roadmap.md`,
+    // Hard Invariant): cancel any active attempt on this task or its
+    // downstream subgraph BEFORE the reset writes pending state.
+    // Defense-in-depth for direct callers (CommandService.retryTask
+    // wired in Step 17) that bypass `applyInvalidation`'s upstream
+    // cancel; a no-op when invoked through `applyInvalidation`.
+    this.cancelActiveBeforeInvalidation('task', id);
+
     const prevStatus = task.status;
     console.log(`[orchestrator] retryTask "${id}" (was ${prevStatus})`);
     if (task.config.isMergeNode) {
@@ -1920,10 +2012,22 @@ export class Orchestrator {
     this.refreshWorkflowFromDb(workflowId);
     const afterRefreshMs = Date.now();
 
-    const allTasks = this.stateMachine.getAllTasks().filter(
+    let allTasks = this.stateMachine.getAllTasks().filter(
       (t) => t.config.workflowId === workflowId,
     );
     if (allTasks.length === 0) throw new Error(`No tasks found for workflow ${workflowId}`);
+
+    // Step 18 cancel-first invariant: interrupt any active task in
+    // the workflow scope BEFORE the retry reset. Defense-in-depth
+    // for direct callers (CommandService.retryWorkflow wired in
+    // Step 17); a no-op when invoked through `applyInvalidation`.
+    // Re-snapshot tasks afterwards so the retry filter (which
+    // includes 'failed' in `retryStatuses`) re-picks any newly
+    // cancelled tasks for reset to pending.
+    this.cancelActiveBeforeInvalidation('workflow', workflowId);
+    allTasks = this.stateMachine.getAllTasks().filter(
+      (t) => t.config.workflowId === workflowId,
+    );
 
     const retryStatuses = new Set([
       'failed',
@@ -1995,6 +2099,12 @@ export class Orchestrator {
     if (!task) throw new Error(`Task ${taskId} not found`);
 
     const rootId = task.id;
+
+    // Step 18 cancel-first invariant: interrupt active attempts on
+    // this task / downstream subgraph BEFORE the recreate reset.
+    // Defense-in-depth for direct callers (CommandService.recreateTask
+    // wired in Step 17); a no-op when invoked through `applyInvalidation`.
+    this.cancelActiveBeforeInvalidation('task', rootId);
     const allTasks = this.stateMachine.getAllTasks();
     const taskMap = new Map(allTasks.map((t) => [t.id, t]));
     const descendantIds = getTransitiveDependents(rootId, taskMap, () => false);
@@ -2059,6 +2169,13 @@ export class Orchestrator {
       (t) => t.config.workflowId === workflowId,
     );
     if (allTasks.length === 0) throw new Error(`No tasks found for workflow ${workflowId}`);
+
+    // Step 18 cancel-first invariant: interrupt any active task in
+    // the workflow scope BEFORE the recreate reset. Defense-in-depth
+    // for direct callers (CommandService.recreateWorkflow and
+    // recreateWorkflowFromFreshBase wired in Step 17); a no-op when
+    // invoked through `applyInvalidation`.
+    this.cancelActiveBeforeInvalidation('workflow', workflowId);
 
     const resetChanges: TaskStateChanges = {
       status: 'pending',
@@ -2168,15 +2285,21 @@ export class Orchestrator {
    * Cancel-first invariant (`docs/architecture/task-invalidation-chart.md`
    * → "Hard Invariant"): the chart requires every retry/recreate
    * route to interrupt and cancel any in-flight work in the affected
-   * scope BEFORE authoritative reset. That cancel is supplied by
-   * `applyInvalidation`'s `cancelInFlight` dep (built by
-   * `buildCancelInFlight` in `packages/app/src/workflow-actions.ts`,
-   * which calls `Orchestrator.cancelWorkflow` for workflow scope and
-   * then awaits `taskExecutor.killActiveExecution` for every running
-   * attempt). This method MUST NOT add a parallel cancel call —
-   * doing so would double-cancel and would also defeat the existing
-   * "skips running tasks" semantics that direct callers of
-   * `recreateWorkflow` rely on.
+   * scope BEFORE authoritative reset. Two layers cooperate:
+   *
+   *   1. `applyInvalidation`'s `cancelInFlight` dep (built by
+   *      `buildCancelInFlight` in
+   *      `packages/app/src/workflow-actions.ts`) calls
+   *      `Orchestrator.cancelWorkflow` and awaits
+   *      `taskExecutor.killActiveExecution` for each running attempt.
+   *   2. `recreateWorkflow` (delegated to below) additionally invokes
+   *      `cancelActiveBeforeInvalidation('workflow', …)` so direct
+   *      callers (`CommandService.recreateWorkflowFromFreshBase`
+   *      wired in Step 17) that bypass `applyInvalidation` still
+   *      observe the invariant. The helper is idempotent — already
+   *      cancelled tasks are skipped, so layer (2) is a no-op when
+   *      layer (1) ran first. See Step 18 of
+   *      `docs/architecture/task-invalidation-roadmap.md`.
    */
   async recreateWorkflowFromFreshBase(
     workflowId: string,

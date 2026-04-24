@@ -5271,7 +5271,7 @@ describe('Orchestrator', () => {
       expect(merge.status).toBe('running');
     });
 
-    it('skips running tasks', () => {
+    it('cancels running tasks before resetting them', () => {
       const p = new InMemoryPersistence();
       const b = new InMemoryBus();
       const wfId = 'wf-retry-running';
@@ -5292,9 +5292,34 @@ describe('Orchestrator', () => {
 
       o.retryWorkflow(wfId);
 
-      // Running task should not be touched
+      // Cancel-first marked the task as failed before the reset; the
+      // reset re-picked it up because 'failed' is in retryStatuses
+      // and autoStartReadyTasks then drains it back into 'running'.
+      // The exact terminal value isn't important — what matters is
+      // that the task is no longer the original 'running' attempt
+      // (the cancel event is the proof of interruption) and that the
+      // `task.cancelled` event was emitted BEFORE the reset cycle so
+      // any executor-side cleanup observed it.
       const a = o.getTask('a')!;
-      expect(a.status).toBe('running');
+      expect(['pending', 'running']).toContain(a.status);
+      const cancelEvents = p.events.filter(
+        (e) => e.taskId === 'a' && e.eventType === 'task.cancelled',
+      );
+      expect(cancelEvents.length).toBeGreaterThanOrEqual(1);
+      const pendingEvents = p.events.filter(
+        (e) => e.taskId === 'a' && e.eventType === 'task.pending',
+      );
+      // Cancel must precede the pending reset.
+      const firstCancelIdx = p.events.findIndex(
+        (e) => e.taskId === 'a' && e.eventType === 'task.cancelled',
+      );
+      const firstPendingIdx = p.events.findIndex(
+        (e) => e.taskId === 'a' && e.eventType === 'task.pending',
+      );
+      if (pendingEvents.length > 0) {
+        expect(firstCancelIdx).toBeGreaterThanOrEqual(0);
+        expect(firstCancelIdx).toBeLessThan(firstPendingIdx);
+      }
     });
 
     it('handles all-completed workflow (no resets needed)', () => {
