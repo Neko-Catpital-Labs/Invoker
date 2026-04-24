@@ -63,6 +63,8 @@ delete-all-during-tracked-fix|headless-standalone|hang|global_destructive_during
 delete-all-during-tracked-approve|headless-standalone|hang|global_destructive_during_tracked_approve|delete_all_during_approve|8|8|run_delete_all_during_tracked_approve
 owner-restart-loop-during-delete-all-tracked-fix|headless-standalone|hang|owner_restart_loop_global_destructive_tracked_fix|restart_loop_delete_all_during_fix|8|10|run_owner_restart_loop_during_delete_all_tracked_fix
 owner-restart-loop-during-delete-all-tracked-approve|headless-standalone|hang|owner_restart_loop_global_destructive_tracked_approve|restart_loop_delete_all_during_approve|8|10|run_owner_restart_loop_during_delete_all_tracked_approve
+repeated-delete-all-during-tracked-fix|headless-standalone|hang|repeated_global_destructive_during_tracked_fix|repeated_delete_all_during_fix|8|10|run_repeated_delete_all_during_tracked_fix
+repeated-delete-all-during-tracked-approve|headless-standalone|hang|repeated_global_destructive_during_tracked_approve|repeated_delete_all_during_approve|8|10|run_repeated_delete_all_during_tracked_approve
 fixing-with-ai-visibility|headless-standalone|hang|fixing_state_visibility|fix_under_timeout|6|1|run_fixing_with_ai_visibility
 EOF
 }
@@ -1284,6 +1286,154 @@ run_owner_restart_loop_during_delete_all_tracked_approve() {
   target_status="$(invoker_e2e_task_status "$target_task" 2>/dev/null || true)"
   if [ "${tracked_status:-0}" -eq 124 ] && [ "$target_status" = "awaiting_approval" ]; then
     echo "FAIL: tracked command hung for $target_task while delete-all restart loop drained" >&2
+    return 1
+  fi
+
+  ov_stop_owner
+  ov_wait_queries_healthy 45
+  invoker_e2e_assert_no_stuck_mutation_intents 45
+  invoker_e2e_assert_no_owned_headless_processes 1
+}
+
+run_repeated_delete_all_during_tracked_fix() {
+  local workflow_count="$1"
+  local operation_burst="$2"
+  invoker_e2e_init
+  trap 'ov_stop_owner; rm -rf "${OVERLOAD_TMP_DIR:-}" >/dev/null 2>&1 || true; invoker_e2e_cleanup' RETURN
+  cd "$INVOKER_E2E_REPO_ROOT"
+  unset ELECTRON_RUN_AS_NODE
+  unset INVOKER_HEADLESS_STANDALONE
+  ov_set_overload_config "$((workflow_count + 2))"
+
+  OVERLOAD_TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/invoker-overload.XXXXXX")"
+  OVERLOAD_OP_PIDS=()
+  OVERLOAD_ALLOWED_BACKGROUND_FAILURE_PATTERN='Task ".*" not found( in any workflow)?'
+  OVERLOAD_ALLOWED_BACKGROUND_FAILURE_LABELS="tracked-fix,delete-all-1,delete-all-2"
+  ov_start_owner
+
+  local target_info target_workflow target_task
+  target_info="$(ov_submit_workflow fail "repeated-delete-all-tracked-fix-target" "" no-track)"
+  target_workflow="${target_info%%|*}"
+  target_task="$target_workflow/root"
+  echo "seed tracked fix target: $target_workflow"
+  ov_wait_task_status "$target_task" failed 30
+
+  local -a filler_workflows=()
+  local idx info workflow_id
+  for idx in $(seq 1 3); do
+    info="$(ov_submit_workflow slow "repeated-delete-all-tracked-fix-filler-$idx" "" no-track)"
+    workflow_id="${info%%|*}"
+    filler_workflows+=("$workflow_id")
+    ov_wait_task_status "$workflow_id/root" running 120
+  done
+
+  echo "==> overload: starting tracked fix before repeated delete-all"
+  ov_spawn_command_timed "tracked-fix" 120 invoker_e2e_run_headless fix "$target_task" codex
+  ov_wait_task_status_any "$target_task" "fixing_with_ai,awaiting_approval,completed,failed" 30
+
+  echo "==> overload: issuing repeated delete-all bursts"
+  ov_spawn_command "delete-all-1" invoker_e2e_run_headless delete-all
+  sleep 1
+  ov_spawn_command "delete-all-2" invoker_e2e_run_headless delete-all
+
+  for idx in $(seq 0 $((operation_burst - 1))); do
+    case $((idx % 5)) in
+      0) ov_spawn_command "query-queue-$idx" invoker_e2e_run_headless query queue --output json ;;
+      1) ov_spawn_command "query-workflows-$idx" invoker_e2e_run_headless query workflows --output label ;;
+      2) workflow_id="${filler_workflows[$((idx % ${#filler_workflows[@]}))]}"; ov_spawn_command "cancel-filler-$idx" invoker_e2e_run_headless cancel "$workflow_id/root" ;;
+      3) workflow_id="${filler_workflows[$((idx % ${#filler_workflows[@]}))]}"; ov_spawn_command "cancel-workflow-$idx" invoker_e2e_run_headless cancel-workflow "$workflow_id" ;;
+      4) ov_spawn_command "query-tasks-$idx" invoker_e2e_run_headless query tasks --output jsonl ;;
+    esac
+  done
+
+  ov_wait_background_commands
+
+  local remaining tracked_status target_status
+  remaining="$(ov_count_workflows)"
+  if [ "${remaining:-0}" -ne 0 ]; then
+    echo "FAIL: delete-all left workflows behind ($remaining remaining)" >&2
+    invoker_e2e_run_headless query workflows --output label >&2 || true
+    return 1
+  fi
+
+  tracked_status="$(cat "${OVERLOAD_TMP_DIR}/tracked-fix.code" 2>/dev/null || echo 0)"
+  target_status="$(invoker_e2e_task_status "$target_task" 2>/dev/null || true)"
+  if [ "${tracked_status:-0}" -eq 124 ] && [ "$target_status" = "fixing_with_ai" ]; then
+    echo "FAIL: tracked command hung for $target_task while repeated delete-all drained" >&2
+    return 1
+  fi
+
+  ov_stop_owner
+  ov_wait_queries_healthy 45
+  invoker_e2e_assert_no_stuck_mutation_intents 45
+  invoker_e2e_assert_no_owned_headless_processes 1
+}
+
+run_repeated_delete_all_during_tracked_approve() {
+  local workflow_count="$1"
+  local operation_burst="$2"
+  invoker_e2e_init
+  trap 'ov_stop_owner; rm -rf "${OVERLOAD_TMP_DIR:-}" >/dev/null 2>&1 || true; invoker_e2e_cleanup' RETURN
+  cd "$INVOKER_E2E_REPO_ROOT"
+  unset ELECTRON_RUN_AS_NODE
+  unset INVOKER_HEADLESS_STANDALONE
+  ov_set_overload_config "$((workflow_count + 2))"
+
+  OVERLOAD_TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/invoker-overload.XXXXXX")"
+  OVERLOAD_OP_PIDS=()
+  OVERLOAD_ALLOWED_BACKGROUND_FAILURE_PATTERN='Task ".*" not found( in any workflow)?'
+  OVERLOAD_ALLOWED_BACKGROUND_FAILURE_LABELS="tracked-approve,delete-all-1,delete-all-2"
+  ov_start_owner
+
+  local target_info target_workflow target_task
+  target_info="$(ov_submit_workflow approval "repeated-delete-all-tracked-approve-target" "" no-track)"
+  target_workflow="${target_info%%|*}"
+  target_task="$target_workflow/approve-me"
+  echo "seed tracked approve target: $target_workflow"
+  ov_wait_task_status "$target_task" awaiting_approval 30
+
+  local -a filler_workflows=()
+  local idx info workflow_id
+  for idx in $(seq 1 3); do
+    info="$(ov_submit_workflow slow "repeated-delete-all-tracked-approve-filler-$idx" "" no-track)"
+    workflow_id="${info%%|*}"
+    filler_workflows+=("$workflow_id")
+    ov_wait_task_status "$workflow_id/root" running 120
+  done
+
+  echo "==> overload: starting tracked approve before repeated delete-all"
+  ov_spawn_command_timed "tracked-approve" 120 invoker_e2e_run_headless approve "$target_task"
+  sleep 2
+
+  echo "==> overload: issuing repeated delete-all bursts"
+  ov_spawn_command "delete-all-1" invoker_e2e_run_headless delete-all
+  sleep 1
+  ov_spawn_command "delete-all-2" invoker_e2e_run_headless delete-all
+
+  for idx in $(seq 0 $((operation_burst - 1))); do
+    case $((idx % 5)) in
+      0) ov_spawn_command "query-queue-$idx" invoker_e2e_run_headless query queue --output json ;;
+      1) ov_spawn_command "query-workflows-$idx" invoker_e2e_run_headless query workflows --output label ;;
+      2) workflow_id="${filler_workflows[$((idx % ${#filler_workflows[@]}))]}"; ov_spawn_command "cancel-filler-$idx" invoker_e2e_run_headless cancel "$workflow_id/root" ;;
+      3) workflow_id="${filler_workflows[$((idx % ${#filler_workflows[@]}))]}"; ov_spawn_command "cancel-workflow-$idx" invoker_e2e_run_headless cancel-workflow "$workflow_id" ;;
+      4) ov_spawn_command "query-tasks-$idx" invoker_e2e_run_headless query tasks --output jsonl ;;
+    esac
+  done
+
+  ov_wait_background_commands
+
+  local remaining tracked_status target_status
+  remaining="$(ov_count_workflows)"
+  if [ "${remaining:-0}" -ne 0 ]; then
+    echo "FAIL: delete-all left workflows behind ($remaining remaining)" >&2
+    invoker_e2e_run_headless query workflows --output label >&2 || true
+    return 1
+  fi
+
+  tracked_status="$(cat "${OVERLOAD_TMP_DIR}/tracked-approve.code" 2>/dev/null || echo 0)"
+  target_status="$(invoker_e2e_task_status "$target_task" 2>/dev/null || true)"
+  if [ "${tracked_status:-0}" -eq 124 ] && [ "$target_status" = "awaiting_approval" ]; then
+    echo "FAIL: tracked command hung for $target_task while repeated delete-all drained" >&2
     return 1
   fi
 
