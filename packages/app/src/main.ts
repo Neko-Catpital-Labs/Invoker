@@ -1778,6 +1778,8 @@ if (isHeadless) {
 
   function createWindow(): void {
     recordStartupMark('createWindow.begin');
+    const iconPath = path.join(__dirname, 'assets', 'icons', 'png', '256x256.png');
+    const icon = nativeImage.createFromPath(iconPath);
     mainWindow = new BrowserWindow({
       width: 1200,
       height: 800,
@@ -1791,12 +1793,12 @@ if (isHeadless) {
         nodeIntegration: false,
         sandbox: false,
       },
+      icon: !icon.isEmpty() && process.platform !== 'darwin' ? icon : undefined,
       title: 'Invoker',
     });
 
-    if (process.platform !== 'linux') {
-      const iconPath = path.join(__dirname, 'assets', 'icons', 'png', '256x256.png');
-      const icon = nativeImage.createFromPath(iconPath);
+    // BrowserWindow icons matter on Windows/Linux. macOS uses the bundle icon.
+    if (process.platform !== 'darwin') {
       if (!icon.isEmpty()) mainWindow.setIcon(icon);
     }
 
