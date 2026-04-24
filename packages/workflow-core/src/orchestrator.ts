@@ -19,7 +19,7 @@ import { TaskStateMachine } from './state-machine.js';
 import { ResponseHandler } from './response-handler.js';
 import type { ParsedResponse } from './response-handler.js';
 import { TaskScheduler } from './scheduler.js';
-import type { TaskState, TaskDelta, TaskStateChanges, TaskConfig, Attempt, ExternalDependency } from '@invoker/workflow-graph';
+import type { TaskState, TaskDelta, TaskStateChanges, TaskConfig, Attempt, ExternalDependency, TaskStatus } from '@invoker/workflow-graph';
 import type { ExecutorType } from '@invoker/workflow-graph';
 import { createTaskState, createAttempt } from '@invoker/workflow-graph';
 import type { WorkResponse } from '@invoker/contracts';
@@ -31,6 +31,15 @@ function mergeTrace(tag: string, data: Record<string, unknown>): void {
     mkdirSync(resolve(homedir(), '.invoker'), { recursive: true });
     appendFileSync(MERGE_TRACE_LOG, `${new Date().toISOString()} [merge-trace:orchestrator] ${tag} ${JSON.stringify(data)}\n`);
   } catch { /* best effort */ }
+}
+
+function isActiveForInvalidation(status: TaskStatus): boolean {
+  return (
+    status === 'running' ||
+    status === 'fixing_with_ai' ||
+    status === 'awaiting_approval' ||
+    status === 'review_ready'
+  );
 }
 import { getTransitiveDependents } from '@invoker/workflow-graph';
 import { ActionGraph } from '@invoker/workflow-graph';
@@ -1488,7 +1497,10 @@ export class Orchestrator {
     this.checkWorkflowCompletion();
   }
 
-    selectExperiment(taskId: string, experimentId: string): TaskState[] {
+  /**
+   * Select a winning experiment for a reconciliation task.
+   */
+  selectExperiment(taskId: string, experimentId: string): TaskState[] {
     this.refreshFromDb();
     const task = this.stateGetTask(taskId);
     if (!task || !task.config.isReconciliation) return [];
@@ -1496,10 +1508,19 @@ export class Orchestrator {
 
     const winner = this.stateGetTask(experimentId);
     const winnerId = winner?.id ?? experimentId;
-
-    const previousWinner = task.execution.selectedExperiment;
-    const isReSelection =
-      previousWinner !== undefined && previousWinner !== winnerId;
+    const previousSet = task.execution.selectedExperiments
+      ?? (task.execution.selectedExperiment !== undefined
+        ? [task.execution.selectedExperiment]
+        : undefined);
+    const canonicalize = (ids: readonly string[]) =>
+      Array.from(new Set(ids)).slice().sort();
+    const newCanon = canonicalize([winnerId]);
+    const prevCanon = previousSet ? canonicalize(previousSet) : undefined;
+    const sameAsPrev =
+      prevCanon !== undefined &&
+      prevCanon.length === newCanon.length &&
+      prevCanon.every((id, i) => id === newCanon[i]);
+    const isReSelection = previousSet !== undefined && !sameAsPrev;
 
     const allTasksBefore = this.stateMachine.getAllTasks();
 
@@ -1509,7 +1530,7 @@ export class Orchestrator {
       for (const dsId of downstreamIds) {
         const dt = this.stateGetTask(dsId);
         if (!dt) continue;
-        if (dt.status === 'running' || dt.status === 'fixing_with_ai') {
+        if (isActiveForInvalidation(dt.status)) {
           this.cancelTask(dsId);
         }
       }
@@ -1543,7 +1564,6 @@ export class Orchestrator {
         this.recreateTask(dsId);
       }
     }
-
     const readyTaskIds = this.stateMachine.findNewlyReadyTasks(reconId);
     console.log(`[orchestrator] selectExperiment "${reconId}": ${readyTaskIds.length} newly ready: [${readyTaskIds.join(', ')}]`);
     const started = this.autoStartReadyTasks(readyTaskIds);
@@ -1551,12 +1571,7 @@ export class Orchestrator {
     return started;
   }
 
-  /**
-   * Select multiple winning experiments for a reconciliation task.
-   * For a single experiment, delegates to selectExperiment.
-   * For multiple, uses the provided combined branch/commit from the merged result.
-   */
-  selectExperiments(
+    selectExperiments(
     taskId: string,
     experimentIds: string[],
     combinedBranch?: string,
@@ -1570,6 +1585,34 @@ export class Orchestrator {
     const task = this.stateGetTask(taskId);
     if (!task || !task.config.isReconciliation) return [];
     const reconId = task.id;
+
+    const previousSet = task.execution.selectedExperiments
+      ?? (task.execution.selectedExperiment !== undefined
+          ? [task.execution.selectedExperiment]
+          : undefined);
+    const canonicalize = (ids: readonly string[]) =>
+      Array.from(new Set(ids)).slice().sort();
+    const newCanon = canonicalize(experimentIds);
+    const prevCanon = previousSet ? canonicalize(previousSet) : undefined;
+    const sameAsPrev =
+      prevCanon !== undefined &&
+      prevCanon.length === newCanon.length &&
+      prevCanon.every((id, i) => id === newCanon[i]);
+    const isReSelection = previousSet !== undefined && !sameAsPrev;
+
+    const allTasksBefore = this.stateMachine.getAllTasks();
+
+    if (isReSelection) {
+      const taskMapBefore = new Map(allTasksBefore.map((t) => [t.id, t]));
+      const downstreamIds = getTransitiveDependents(reconId, taskMapBefore, () => false);
+      for (const dsId of downstreamIds) {
+        const dt = this.stateGetTask(dsId);
+        if (!dt) continue;
+        if (dt.status === 'running' || dt.status === 'fixing_with_ai') {
+          this.cancelTask(dsId);
+        }
+      }
+    }
 
     const changes: TaskStateChanges = {
       status: 'completed',
@@ -1591,6 +1634,18 @@ export class Orchestrator {
     const delta: TaskDelta = { type: 'updated', taskId: reconId, changes };
     this.persistence.logEvent?.(reconId, 'task.completed', changes);
     this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
+
+    if (isReSelection) {
+      const directDownstreamAfter = this.stateMachine
+        .getAllTasks()
+        .filter((t) => t.dependencies.includes(reconId))
+        .map((t) => t.id);
+      for (const dsId of directDownstreamAfter) {
+        if (this.stateGetTask(dsId)) {
+          this.recreateTask(dsId);
+        }
+      }
+    }
 
     const readyTaskIds = this.stateMachine.findNewlyReadyTasks(reconId);
     console.log(`[orchestrator] selectExperiments "${reconId}": ${readyTaskIds.length} newly ready: [${readyTaskIds.join(', ')}]`);

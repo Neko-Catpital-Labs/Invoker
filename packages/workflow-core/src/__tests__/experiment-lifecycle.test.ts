@@ -1053,4 +1053,266 @@ describe('Experiment Lifecycle (integration)', () => {
       recreateSpy.mockRestore();
     });
   });
+
+  describe('selectExperiments invalidation routing', () => {
+    function runToReconNeedsInput3(): {
+      reconId: string;
+      expV1Id: string;
+      expV2Id: string;
+      expV3Id: string;
+      downstreamId: string;
+    } {
+      const plan: PlanDefinition = {
+        name: 'experiment-lifecycle-step8',
+        baseBranch: 'main',
+        tasks: [
+          { id: 'setup', description: 'Setup task' },
+          { id: 'pivot', description: 'Pivot task', dependencies: ['setup'], pivot: true },
+          { id: 'downstream', description: 'Downstream task', dependencies: ['pivot'] },
+        ],
+      };
+      orchestrator.loadPlan(plan);
+      orchestrator.startExecution();
+      orchestrator.handleWorkerResponse(completedResponse('setup'));
+      orchestrator.handleWorkerResponse(
+        spawnResponse('pivot', [
+          { id: 'v1', prompt: 'A' },
+          { id: 'v2', prompt: 'B' },
+          { id: 'v3', prompt: 'C' },
+        ]),
+      );
+      const expV1Id = sid(orchestrator, 0, 'pivot-exp-v1');
+      const expV2Id = sid(orchestrator, 0, 'pivot-exp-v2');
+      const expV3Id = sid(orchestrator, 0, 'pivot-exp-v3');
+      orchestrator.handleWorkerResponse(completedResponse(expV1Id));
+      orchestrator.handleWorkerResponse(completedResponse(expV2Id));
+      orchestrator.handleWorkerResponse(completedResponse(expV3Id));
+      orchestrator.handleWorkerResponse(reconciliationNeedsInputWorkResponse(rid(orchestrator, 0, 'pivot')));
+      return {
+        reconId: rid(orchestrator, 0, 'pivot'),
+        expV1Id,
+        expV2Id,
+        expV3Id,
+        downstreamId: sid(orchestrator, 0, 'downstream'),
+      };
+    }
+
+    /**
+     * Resolve the *current* direct downstream consumer of `reconId`
+     * after multi-select, since `selectExperiments` may consolidate
+     * sharded downstream (e.g. `downstream-v1`/`-v2`) into a single
+     * task post-mutation. Tests then assert against the surviving
+     * direct downstream rather than guessing its scoped id.
+     */
+    function directDownstream(reconId: string): string[] {
+      return orchestrator
+        .getAllTasks()
+        .filter((t) => t.dependencies.includes(reconId))
+        .map((t) => t.id);
+    }
+
+    it('MUTATION_POLICIES.selectedExperimentSet is recreate-class and active-invalidating', () => {
+      expect(MUTATION_POLICIES.selectedExperimentSet.action).toBe('recreateTask');
+      expect(MUTATION_POLICIES.selectedExperimentSet.invalidateIfActive).toBe(true);
+      expect(MUTATION_POLICIES.selectedExperimentSet.invalidatesExecutionSpec).toBe(true);
+    });
+
+    it('re-selecting CHANGED set with ACTIVE downstream cancels first, then routes through recreateTask', () => {
+      const { reconId, expV1Id, expV2Id, expV3Id } = runToReconNeedsInput3();
+
+      // Initial multi-select completes recon and unblocks downstream;
+      // downstream auto-starts.
+      orchestrator.selectExperiments(
+        reconId,
+        [expV1Id, expV2Id],
+        'reconciliation/pivot-merged-12',
+        'merged12',
+      );
+      const downAfterInitial = directDownstream(reconId);
+      expect(downAfterInitial.length).toBeGreaterThan(0);
+      const dsId = downAfterInitial[0];
+      expect(orchestrator.getTask(dsId)!.status).toBe('running');
+      expect(orchestrator.getTask(reconId)!.execution.selectedExperiments).toEqual([
+        expV1Id,
+        expV2Id,
+      ]);
+
+      const cancelSpy = vi.spyOn(orchestrator, 'cancelTask');
+      const recreateSpy = vi.spyOn(orchestrator, 'recreateTask');
+
+      // Re-select to a different merged set while downstream is
+      // active.
+      orchestrator.selectExperiments(
+        reconId,
+        [expV1Id, expV3Id],
+        'reconciliation/pivot-merged-13',
+        'merged13',
+      );
+
+      expect(cancelSpy).toHaveBeenCalledWith(dsId);
+      expect(recreateSpy).toHaveBeenCalled();
+      const cancelOrder = cancelSpy.mock.invocationCallOrder[0];
+      const restartOrder = recreateSpy.mock.invocationCallOrder[0];
+      expect(cancelOrder).toBeLessThan(restartOrder);
+
+      // Recon now reflects the new merged lineage.
+      const recon = orchestrator.getTask(reconId)!;
+      expect(recon.status).toBe('completed');
+      expect(recon.execution.selectedExperiments).toEqual([expV1Id, expV3Id]);
+      expect(recon.execution.branch).toBe('reconciliation/pivot-merged-13');
+      expect(recon.execution.commit).toBe('merged13');
+
+      cancelSpy.mockRestore();
+      recreateSpy.mockRestore();
+    });
+
+    it('re-selecting CHANGED set with INACTIVE downstream skips cancel but still resets via recreateTask', () => {
+      const { reconId, expV1Id, expV2Id, expV3Id } = runToReconNeedsInput3();
+
+      orchestrator.selectExperiments(
+        reconId,
+        [expV1Id, expV2Id],
+        'reconciliation/pivot-merged-12',
+        'merged12',
+      );
+      const dsId = directDownstream(reconId)[0];
+      // Fail downstream so it's no longer active. Re-selection MUST
+      // NOT cancel a non-active downstream, but the recreate-class state
+      // reset still applies so the new merged lineage is consumed.
+      orchestrator.handleWorkerResponse(failedResponse(dsId, 'oops'));
+      expect(orchestrator.getTask(dsId)!.status).toBe('failed');
+
+      const cancelSpy = vi.spyOn(orchestrator, 'cancelTask');
+      const recreateSpy = vi.spyOn(orchestrator, 'recreateTask');
+
+      orchestrator.selectExperiments(
+        reconId,
+        [expV1Id, expV3Id],
+        'reconciliation/pivot-merged-13',
+        'merged13',
+      );
+
+      expect(cancelSpy).not.toHaveBeenCalled();
+      expect(recreateSpy).toHaveBeenCalled();
+
+      cancelSpy.mockRestore();
+      recreateSpy.mockRestore();
+    });
+
+    it('initial multi-select does NOT cancel and does NOT recreate downstream', () => {
+      const { reconId, expV1Id, expV2Id } = runToReconNeedsInput3();
+
+      const cancelSpy = vi.spyOn(orchestrator, 'cancelTask');
+      const recreateSpy = vi.spyOn(orchestrator, 'recreateTask');
+
+      orchestrator.selectExperiments(
+        reconId,
+        [expV1Id, expV2Id],
+        'reconciliation/pivot-merged-12',
+        'merged12',
+      );
+
+      expect(cancelSpy).not.toHaveBeenCalled();
+      expect(recreateSpy).not.toHaveBeenCalled();
+      // Downstream auto-started by the existing unblock path.
+      const dsIds = directDownstream(reconId);
+      expect(dsIds.length).toBeGreaterThan(0);
+      for (const id of dsIds) {
+        expect(orchestrator.getTask(id)!.status).toBe('running');
+      }
+
+      cancelSpy.mockRestore();
+      recreateSpy.mockRestore();
+    });
+
+    it('re-selection bumps each affected downstream execution generation by exactly one', () => {
+      const { reconId, expV1Id, expV2Id, expV3Id } = runToReconNeedsInput3();
+
+      orchestrator.selectExperiments(
+        reconId,
+        [expV1Id, expV2Id],
+        'reconciliation/pivot-merged-12',
+        'merged12',
+      );
+      const dsIds = directDownstream(reconId);
+      // Fail every direct downstream so we observe the recreate-class
+      // reset purely through the generation counter.
+      for (const id of dsIds) {
+        orchestrator.handleWorkerResponse(failedResponse(id, 'boom'));
+      }
+      const before = new Map(
+        dsIds.map((id) => [id, orchestrator.getTask(id)!.execution.generation ?? 0]),
+      );
+
+      orchestrator.selectExperiments(
+        reconId,
+        [expV1Id, expV3Id],
+        'reconciliation/pivot-merged-13',
+        'merged13',
+      );
+
+      for (const id of dsIds) {
+        const dt = orchestrator.getTask(id);
+        if (!dt) continue; // tolerate downstream consolidation
+        const after = dt.execution.generation ?? 0;
+        expect(after).toBe((before.get(id) ?? 0) + 1);
+      }
+    });
+
+    it('re-selection to the SAME merged set is a no-op', () => {
+      const { reconId, expV1Id, expV2Id } = runToReconNeedsInput3();
+
+      orchestrator.selectExperiments(
+        reconId,
+        [expV1Id, expV2Id],
+        'reconciliation/pivot-merged-12',
+        'merged12',
+      );
+      const dsId = directDownstream(reconId)[0];
+      orchestrator.handleWorkerResponse(completedResponse(dsId));
+
+      const cancelSpy = vi.spyOn(orchestrator, 'cancelTask');
+      const recreateSpy = vi.spyOn(orchestrator, 'recreateTask');
+
+      orchestrator.selectExperiments(
+        reconId,
+        [expV1Id, expV2Id],
+        'reconciliation/pivot-merged-12',
+        'merged12',
+      );
+
+      expect(cancelSpy).not.toHaveBeenCalled();
+      expect(recreateSpy).not.toHaveBeenCalled();
+
+      cancelSpy.mockRestore();
+      recreateSpy.mockRestore();
+    });
+
+    it('same-set re-selection is order-insensitive (set semantics, not list semantics)', () => {
+      const { reconId, expV1Id, expV2Id } = runToReconNeedsInput3();
+
+      orchestrator.selectExperiments(
+        reconId,
+        [expV1Id, expV2Id],
+        'reconciliation/pivot-merged-12',
+        'merged12',
+      );
+
+      const cancelSpy = vi.spyOn(orchestrator, 'cancelTask');
+      const recreateSpy = vi.spyOn(orchestrator, 'recreateTask');
+
+      orchestrator.selectExperiments(
+        reconId,
+        [expV2Id, expV1Id],
+        'reconciliation/pivot-merged-12',
+        'merged12',
+      );
+
+      expect(cancelSpy).not.toHaveBeenCalled();
+      expect(recreateSpy).not.toHaveBeenCalled();
+
+      cancelSpy.mockRestore();
+      recreateSpy.mockRestore();
+    });
+  });
 });
