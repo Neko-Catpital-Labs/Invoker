@@ -588,6 +588,26 @@ export class Orchestrator {
   private deferredTaskIds = new Set<string>();
   private beforeApproveHook?: (task: TaskState) => Promise<void>;
 
+  /**
+   * Per-workflow record of the most recently observed upstream base
+   * commit, written by `recreateWorkflowFromFreshBase` whenever its
+   * `refreshBase` callback returns a fresh SHA.
+   *
+   * Step 12 introduces this map as the orchestrator-side observable
+   * for the chart's `recreateWorkflowFromFreshBase` semantic
+   * (`docs/architecture/task-invalidation-chart.md` rows
+   * "Rebase and retry" + "Repo/base invalidation inconsistency"):
+   * the only thing that distinguishes `recreateWorkflowFromFreshBase`
+   * from plain `recreateWorkflow` at the orchestrator layer is that
+   * the workflow's known upstream base advanced. The map gives tests
+   * (and future API consumers) a stable signal that the fresh-base
+   * step actually ran without coupling the orchestrator to the
+   * executor's pool-mirror state. Production today still drives the
+   * actual git-side refresh through `taskExecutor.preparePoolForRebaseRetry`
+   * (wired by `packages/app/src/workflow-actions.ts → recreateWorkflowFromFreshBase`).
+   */
+  private knownFreshBaseCommits = new Map<string, string>();
+
   constructor(config: OrchestratorConfig) {
     this.maxConcurrency = config.maxConcurrency ?? 3;
     this.persistence = config.persistence;
@@ -2091,6 +2111,107 @@ export class Orchestrator {
       .map((t) => t.id)
       .filter((id) => this.stateGetTask(id)?.config.workflowId === workflowId);
     return this.autoStartReadyTasks(readyIds, Orchestrator.EXPEDITED_PRIORITY);
+  }
+
+  /**
+   * Workflow-scope **fresh-base** recreate (Step 12 of
+   * `docs/architecture/task-invalidation-roadmap.md`, Decision Table
+   * row "Rebase and retry" + "Repo/base invalidation inconsistency"
+   * in `docs/architecture/task-invalidation-chart.md`).
+   *
+   * This is strictly stronger than `recreateWorkflow`:
+   *
+   *   recreateWorkflow                 — full reset; preserves the
+   *                                      workflow's currently-known
+   *                                      upstream base.
+   *   recreateWorkflowFromFreshBase    — full reset PLUS refreshes
+   *                                      the upstream base (HEAD of
+   *                                      `baseBranch`) before reset.
+   *
+   * The chart's "Repo/base invalidation inconsistency" section called
+   * this distinction out as previously hidden: today the only
+   * primitive carrying the fresh-base semantic is the composite
+   * `rebaseAndRetry()` flow in `packages/app/src/workflow-actions.ts`
+   * (`preparePoolForRebaseRetry → bumpGenerationAndRecreate →
+   * recreateWorkflow`). Step 12 promotes the fresh-base step to a
+   * first-class orchestrator method so the three workflow-scope
+   * paths (`retryWorkflow`, `recreateWorkflow`,
+   * `recreateWorkflowFromFreshBase`) are individually testable and
+   * routed through `applyInvalidation` from
+   * `packages/workflow-core/src/invalidation-policy.ts`.
+   *
+   * The orchestrator deliberately does NOT touch git itself: the
+   * `refreshBase` callback (wired by the app layer to
+   * `taskExecutor.preparePoolForRebaseRetry`) is what actually
+   * refreshes the pool mirror and removes managed branches. The
+   * orchestrator only:
+   *
+   *   1. awaits the optional `refreshBase` callback, and
+   *   2. records any returned `commit` in `knownFreshBaseCommits` and
+   *      any returned `branch` in persistence (`baseBranch`) so the
+   *      effect of the refresh is observable from orchestrator state.
+   *   3. delegates the actual reset to `recreateWorkflow` so all
+   *      lineage-discard behavior (workspace path, branch, commit,
+   *      agent session, container, merge gate workspace, etc.) stays
+   *      single-sourced.
+   *
+   * Cancel-first invariant (`docs/architecture/task-invalidation-chart.md`
+   * → "Hard Invariant"): the chart requires every retry/recreate
+   * route to interrupt and cancel any in-flight work in the affected
+   * scope BEFORE authoritative reset. That cancel is supplied by
+   * `applyInvalidation`'s `cancelInFlight` dep (built by
+   * `buildCancelInFlight` in `packages/app/src/workflow-actions.ts`,
+   * which calls `Orchestrator.cancelWorkflow` for workflow scope and
+   * then awaits `taskExecutor.killActiveExecution` for every running
+   * attempt). This method MUST NOT add a parallel cancel call —
+   * doing so would double-cancel and would also defeat the existing
+   * "skips running tasks" semantics that direct callers of
+   * `recreateWorkflow` rely on.
+   */
+  async recreateWorkflowFromFreshBase(
+    workflowId: string,
+    options?: {
+      refreshBase?: (
+        workflowId: string,
+      ) => Promise<{ commit?: string; branch?: string } | undefined | void>;
+    },
+  ): Promise<TaskState[]> {
+    if (options?.refreshBase) {
+      const fresh = await options.refreshBase(workflowId);
+      if (fresh && typeof fresh === 'object') {
+        if (typeof fresh.commit === 'string' && fresh.commit.length > 0) {
+          this.knownFreshBaseCommits.set(workflowId, fresh.commit);
+          console.log(
+            `[orchestrator] recreateWorkflowFromFreshBase: workflow=${workflowId} ` +
+              `freshBaseCommit=${fresh.commit.slice(0, 12)}`,
+          );
+        }
+        if (typeof fresh.branch === 'string' && fresh.branch.length > 0 && this.persistence.updateWorkflow) {
+          this.persistence.updateWorkflow(workflowId, { baseBranch: fresh.branch });
+          console.log(
+            `[orchestrator] recreateWorkflowFromFreshBase: workflow=${workflowId} ` +
+              `freshBaseBranch=${fresh.branch}`,
+          );
+        }
+      }
+    }
+    return this.recreateWorkflow(workflowId);
+  }
+
+  /**
+   * Most recently observed upstream base commit for `workflowId`,
+   * recorded by `recreateWorkflowFromFreshBase` when its `refreshBase`
+   * callback returns a SHA. Returns `undefined` when no fresh-base
+   * recreate has run for the workflow yet.
+   *
+   * This is the orchestrator-side observable for the chart's
+   * `recreateWorkflowFromFreshBase` semantic — see the comment on
+   * `knownFreshBaseCommits` for why this lives on the orchestrator
+   * rather than the executor pool. Tests assert on this getter to
+   * prove the fresh-base step actually advanced.
+   */
+  getKnownFreshBaseCommit(workflowId: string): string | undefined {
+    return this.knownFreshBaseCommits.get(workflowId);
   }
 
   /**
