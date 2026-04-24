@@ -164,6 +164,22 @@ describe('RepoPool', () => {
     await limitedPool.destroyAll();
   });
 
+  it('reconcileActiveWorktrees clears stale slot reservations', async () => {
+    const limitedPool = new RepoPool({ cacheDir: tmpDir, maxWorktrees: 1 });
+    const wt1 = await limitedPool.acquireWorktree(localRepoUrl, 'branch-stale');
+
+    await expect(limitedPool.acquireWorktree(localRepoUrl, 'branch-next')).rejects.toThrow('Worktree limit reached');
+
+    limitedPool.reconcileActiveWorktrees(localRepoUrl, []);
+
+    const wt2 = await limitedPool.acquireWorktree(localRepoUrl, 'branch-next');
+    expect(wt2.worktreePath).toBeDefined();
+
+    await wt1.release();
+    await wt2.release();
+    await limitedPool.destroyAll();
+  });
+
   it('resets branch on re-acquire when no extra commits exist', async () => {
     // First acquire (no extra commits)
     const wt1 = await pool.acquireWorktree(localRepoUrl, 'experiment/clean-test');

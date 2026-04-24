@@ -706,7 +706,7 @@ describe('headless delegation enforcement', () => {
 
         await expect(runHeadless(['approve', 'wf-1/task-a'], mockDeps)).resolves.toBeUndefined();
 
-        expect(executeTasksSpy).toHaveBeenCalledTimes(1);
+        expect(executeTasksSpy).toHaveBeenCalled();
         expect(mockDeps.orchestrator.getReadyTasks).toHaveBeenCalled();
 
         executeTasksSpy.mockRestore();

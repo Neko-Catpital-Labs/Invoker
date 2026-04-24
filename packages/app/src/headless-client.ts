@@ -56,7 +56,16 @@ async function runElectronHeadless(args: string[]): Promise<number> {
   });
 }
 
-async function delegateMutation(args: string[], bus: MessageBus, waitForApproval?: boolean, noTrack?: boolean): Promise<boolean> {
+const DEFAULT_NO_TRACK_DELEGATION_TIMEOUT_MS = 8_000;
+const POST_BOOTSTRAP_NO_TRACK_DELEGATION_TIMEOUT_MS = 30_000;
+
+async function delegateMutation(
+  args: string[],
+  bus: MessageBus,
+  waitForApproval?: boolean,
+  noTrack?: boolean,
+  noTrackTimeoutMs: number = DEFAULT_NO_TRACK_DELEGATION_TIMEOUT_MS,
+): Promise<boolean> {
   const command = args[0];
   if (command === 'run') {
     const planPath = args[1];
@@ -68,7 +77,7 @@ async function delegateMutation(args: string[], bus: MessageBus, waitForApproval
     if (!workflowId) throw new Error('Missing workflowId. Usage: --headless resume <id>');
     return tryDelegateResume(workflowId, bus, waitForApproval, noTrack);
   }
-  const timeoutMs = noTrack ? 8_000 : delegationTimeoutMs(args);
+  const timeoutMs = noTrack ? noTrackTimeoutMs : delegationTimeoutMs(args);
   return tryDelegateExec(args, bus, waitForApproval, noTrack, timeoutMs);
 }
 
@@ -221,7 +230,13 @@ export async function runHeadlessClientCommand(
   if (deps.refreshMessageBus) {
     messageBus = await deps.refreshMessageBus();
   }
-  if (await delegateMutation(args, messageBus, waitForApproval, noTrack)) {
+  if (await delegateMutation(
+    args,
+    messageBus,
+    waitForApproval,
+    noTrack,
+    noTrack ? POST_BOOTSTRAP_NO_TRACK_DELEGATION_TIMEOUT_MS : DEFAULT_NO_TRACK_DELEGATION_TIMEOUT_MS,
+  )) {
     return resolvedExitCode();
   }
   process.stderr.write(

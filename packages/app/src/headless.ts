@@ -1042,15 +1042,20 @@ async function headlessApprove(taskId: string, deps: HeadlessDeps): Promise<void
     return;
   }
   const afterStatus = deps.orchestrator.getWorkflowStatus(restored.workflowId);
-  const readyTasks = deps
+  const workflowTasks = deps
     .orchestrator
-    .getReadyTasks()
+    .getAllTasks()
+    .filter((task) => task.config.workflowId === restored.workflowId);
+  const readyTasks = (deps.orchestrator.getReadyTasks?.() ?? [])
     .filter((task) => task.config.workflowId === restored.workflowId && task.status === 'pending');
+  const hasRunningWork = workflowTasks.some(
+    (task) => task.status === 'running' || task.status === 'fixing_with_ai',
+  );
   const resumedWork =
-    afterStatus.running > beforeStatus.running
+    hasRunningWork
+    || afterStatus.running > beforeStatus.running
     || afterStatus.pending < beforeStatus.pending
-    || readyTasks.length > 0
-    || started.some((task) => task.config.workflowId === restored.workflowId && task.status === 'running');
+    || readyTasks.length > 0;
   if (!resumedWork) {
     autoFix.unsubscribe();
     return;
