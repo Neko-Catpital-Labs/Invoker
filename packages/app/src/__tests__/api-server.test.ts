@@ -691,6 +691,33 @@ describe('POST /api/tasks/:id/gate-policy', () => {
     expect(res.status).toBe(400);
     expect(res.body.error).toContain('Missing non-empty "updates" array');
   });
+
+  // Step 15 (`docs/architecture/task-invalidation-roadmap.md`,
+  // chart row "Change external gate policy"): the api-server's
+  // gate-policy POST is the chart's intentional non-invalidating
+  // surface. It MUST route to `setTaskExternalGatePolicies` and
+  // MUST NOT trigger any retry/recreate spy on the orchestrator.
+  // This pins the cross-cutting contract at the http boundary.
+  it('Step 15: gate-policy POST does not trigger retry/recreate routes', async () => {
+    mocks.orchestrator.recreateTask = vi.fn();
+    mocks.orchestrator.recreateWorkflow = vi.fn();
+    mocks.orchestrator.cancelWorkflow = vi.fn();
+
+    const res = await request(port, 'POST', '/api/tasks/task-1/gate-policy', {
+      updates: [
+        { workflowId: 'wf-upstream', taskId: '__merge__', gatePolicy: 'review_ready' },
+      ],
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body.action).toBe('gate_policy_updated');
+    expect(mocks.orchestrator.setTaskExternalGatePolicies).toHaveBeenCalledTimes(1);
+    expect(mocks.orchestrator.retryTask).not.toHaveBeenCalled();
+    expect(mocks.orchestrator.recreateTask).not.toHaveBeenCalled();
+    expect(mocks.orchestrator.recreateWorkflow).not.toHaveBeenCalled();
+    expect(mocks.orchestrator.cancelTask).not.toHaveBeenCalled();
+    expect(mocks.orchestrator.cancelWorkflow).not.toHaveBeenCalled();
+  });
 });
 
 describe('POST /api/workflows/:id/restart', () => {

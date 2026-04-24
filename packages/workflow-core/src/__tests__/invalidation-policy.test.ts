@@ -14,6 +14,7 @@ type MockedDeps = InvalidationDeps & {
   recreateWorkflow: ReturnType<typeof vi.fn>;
   recreateWorkflowFromFreshBase?: ReturnType<typeof vi.fn>;
   workflowFork?: ReturnType<typeof vi.fn>;
+  scheduleOnly?: ReturnType<typeof vi.fn>;
 };
 
 function makeDeps(overrides: Partial<MockedDeps> = {}): MockedDeps {
@@ -39,7 +40,15 @@ describe('MUTATION_POLICIES', () => {
     expect(MUTATION_POLICIES.mergeMode.action).toBe('retryTask');
     expect(MUTATION_POLICIES.fixContext.action).toBe('retryTask');
     expect(MUTATION_POLICIES.rebaseAndRetry.action).toBe('recreateWorkflowFromFreshBase');
-    expect(MUTATION_POLICIES.externalGatePolicy.action).toBe('none');
+    // Step 15: external gate policy is the chart's intentional
+    // non-invalidating outlier. Action upgraded from `'none'`
+    // (Step 1 placeholder) to `'scheduleOnly'` so the policy table
+    // expresses what really happens (an unblock-pass) and so
+    // `applyInvalidation` can route the action through the
+    // `scheduleOnly` dep WITHOUT calling `cancelInFlight`.
+    expect(MUTATION_POLICIES.externalGatePolicy.action).toBe('scheduleOnly');
+    expect(MUTATION_POLICIES.externalGatePolicy.invalidatesExecutionSpec).toBe(false);
+    expect(MUTATION_POLICIES.externalGatePolicy.invalidateIfActive).toBe(false);
     // Step 11: graph topology is the lone fork-class / workflow-scope row.
     expect(MUTATION_POLICIES.topology.action).toBe('workflowFork');
     expect(MUTATION_POLICIES.topology.invalidatesExecutionSpec).toBe(true);
@@ -48,7 +57,10 @@ describe('MUTATION_POLICIES', () => {
 
   it('marks every spec-changing mutation as invalidating-if-active', () => {
     for (const [key, policy] of Object.entries(MUTATION_POLICIES)) {
-      if (policy.action === 'none') {
+      // Step 15: `'scheduleOnly'` joins `'none'` as a
+      // non-invalidating action class — gate-policy edits change
+      // scheduling, not the execution ABI, so neither flag flips.
+      if (policy.action === 'none' || policy.action === 'scheduleOnly') {
         expect(policy.invalidatesExecutionSpec, key).toBe(false);
         expect(policy.invalidateIfActive, key).toBe(false);
       } else {
@@ -56,6 +68,18 @@ describe('MUTATION_POLICIES', () => {
         expect(policy.invalidateIfActive, key).toBe(true);
       }
     }
+  });
+
+  // Step 15 lock-in: `externalGatePolicy` is the lone `'scheduleOnly'`
+  // entry in the policy table, mirroring how `topology` is the lone
+  // `'workflowFork'` entry. This pins the chart's "Change external
+  // gate policy" row as the engine's only intentional non-invalidating
+  // execution-spec-adjacent mutation.
+  it('externalGatePolicy is the only scheduleOnly entry in the policy table', () => {
+    const scheduleOnlyEntries = Object.entries(MUTATION_POLICIES).filter(
+      ([, p]) => p.action === 'scheduleOnly',
+    );
+    expect(scheduleOnlyEntries.map(([k]) => k)).toEqual(['externalGatePolicy']);
   });
 
   it('is frozen — the policy table is a constant, not a mutable map', () => {
@@ -273,5 +297,75 @@ describe('applyInvalidation: workflowFork optional dep', () => {
     expect(deps.cancelInFlight.mock.invocationCallOrder[0]).toBeLessThan(
       workflowFork.mock.invocationCallOrder[0],
     );
+  });
+});
+
+// Step 15 (`docs/architecture/task-invalidation-roadmap.md`): the
+// `'scheduleOnly'` action represents the chart's intentional
+// non-invalidating outlier — "Change external gate policy" is a
+// scheduling-policy edit, not an execution-spec edit. The router
+// MUST skip `cancelInFlight` for this action and instead invoke
+// `deps.scheduleOnly(taskId)` to trigger an unblock-pass that
+// re-evaluates tasks newly unblocked by the gate-policy change.
+// Active execution lineage and any in-flight attempts are preserved.
+describe("applyInvalidation: action='scheduleOnly' (Step 15)", () => {
+  it('does NOT call cancelInFlight and routes to deps.scheduleOnly', async () => {
+    const scheduleOnly = vi.fn(async () => []);
+    const deps = makeDeps({ scheduleOnly });
+    const out = await applyInvalidation('task', 'scheduleOnly', 'task-a', deps);
+    expect(out).toEqual([]);
+    expect(deps.cancelInFlight).not.toHaveBeenCalled();
+    expect(scheduleOnly).toHaveBeenCalledWith('task-a');
+  });
+
+  it('returns the started tasks from deps.scheduleOnly verbatim', async () => {
+    const fakeTasks = [{ id: 'task-a' } as never, { id: 'task-b' } as never];
+    const scheduleOnly = vi.fn(async () => fakeTasks);
+    const deps = makeDeps({ scheduleOnly });
+    const out = await applyInvalidation('task', 'scheduleOnly', 'task-a', deps);
+    expect(out).toBe(fakeTasks);
+    expect(deps.cancelInFlight).not.toHaveBeenCalled();
+  });
+
+  it('rejects workflow-scoped invocation with scheduleOnly action', async () => {
+    const scheduleOnly = vi.fn(async () => []);
+    const deps = makeDeps({ scheduleOnly });
+    await expect(
+      applyInvalidation('workflow', 'scheduleOnly', 'wf-1', deps),
+    ).rejects.toThrow(/requires scope 'task'/);
+    expect(deps.cancelInFlight).not.toHaveBeenCalled();
+    expect(scheduleOnly).not.toHaveBeenCalled();
+  });
+
+  it('rejects scope=none with scheduleOnly action', async () => {
+    const scheduleOnly = vi.fn(async () => []);
+    const deps = makeDeps({ scheduleOnly });
+    await expect(
+      applyInvalidation('none', 'scheduleOnly', 'task-a', deps),
+    ).rejects.toThrow(/requires scope 'task'/);
+    expect(deps.cancelInFlight).not.toHaveBeenCalled();
+    expect(scheduleOnly).not.toHaveBeenCalled();
+  });
+
+  it('throws an explicit missing-dep error when scheduleOnly dep is absent', async () => {
+    const deps = makeDeps();
+    await expect(
+      applyInvalidation('task', 'scheduleOnly', 'task-a', deps),
+    ).rejects.toThrow(/'scheduleOnly' dep is missing/);
+    expect(deps.cancelInFlight).not.toHaveBeenCalled();
+  });
+
+  it('does not call any retry/recreate/fork lifecycle dep', async () => {
+    const scheduleOnly = vi.fn(async () => []);
+    const recreateWorkflowFromFreshBase = vi.fn(async () => []);
+    const workflowFork = vi.fn(async () => []);
+    const deps = makeDeps({ scheduleOnly, recreateWorkflowFromFreshBase, workflowFork });
+    await applyInvalidation('task', 'scheduleOnly', 'task-a', deps);
+    expect(deps.retryTask).not.toHaveBeenCalled();
+    expect(deps.recreateTask).not.toHaveBeenCalled();
+    expect(deps.retryWorkflow).not.toHaveBeenCalled();
+    expect(deps.recreateWorkflow).not.toHaveBeenCalled();
+    expect(recreateWorkflowFromFreshBase).not.toHaveBeenCalled();
+    expect(workflowFork).not.toHaveBeenCalled();
   });
 });
