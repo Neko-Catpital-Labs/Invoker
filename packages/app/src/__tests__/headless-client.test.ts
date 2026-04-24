@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { LocalBus } from '@invoker/transport';
 
-import { runHeadlessClientCommand } from '../headless-client.js';
+import { SharedMutationOwnerTimeoutError, runHeadlessClientCommand } from '../headless-client.js';
 
 describe('headless-client', () => {
   it('delegates mutating commands to an existing owner without electron fallback', async () => {
@@ -93,6 +93,101 @@ describe('headless-client', () => {
 
     expect(exitCode).toBe(0);
     expect(ensureStandaloneOwner).toHaveBeenCalledTimes(1);
+  }, 15_000);
+
+  it('retries bootstrap once after a stale-bus timeout', async () => {
+    const firstBus = new LocalBus();
+    const secondBus = new LocalBus();
+    const ownerHandler = vi.fn(async () => ({ ok: true }));
+    let bootstrapCalls = 0;
+
+    secondBus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-4', mode: 'standalone' }));
+    secondBus.onRequest('headless.exec', ownerHandler);
+
+    const ensureStandaloneOwner = vi.fn(async () => {
+      bootstrapCalls += 1;
+      if (bootstrapCalls === 1) {
+        throw new SharedMutationOwnerTimeoutError();
+      }
+    });
+    const refreshMessageBus = vi.fn()
+      .mockResolvedValueOnce(firstBus)
+      .mockResolvedValueOnce(secondBus)
+      .mockResolvedValue(secondBus);
+
+    const exitCode = await runHeadlessClientCommand(['recreate', 'wf-22', '--no-track'], {
+      messageBus: firstBus,
+      ensureStandaloneOwner,
+      refreshMessageBus,
+      runElectronHeadless: vi.fn(async () => 0),
+    });
+
+    expect(exitCode).toBe(0);
+    expect(ensureStandaloneOwner).toHaveBeenCalledTimes(2);
+    expect(ownerHandler).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries post-bootstrap delegation until a restarted owner is reachable', async () => {
+    const firstBus = new LocalBus();
+    const secondBus = new LocalBus();
+    let pingCalls = 0;
+    let execCalls = 0;
+
+    const ensureStandaloneOwner = vi.fn(async () => {});
+    const refreshMessageBus = vi.fn()
+      .mockResolvedValueOnce(secondBus)
+      .mockResolvedValue(secondBus);
+
+    secondBus.onRequest('headless.owner-ping', async () => {
+      pingCalls += 1;
+      return pingCalls >= 2 ? { ok: true, ownerId: 'owner-5', mode: 'standalone' } : null;
+    });
+    secondBus.onRequest('headless.exec', async () => {
+      execCalls += 1;
+      return { ok: true };
+    });
+
+    const exitCode = await runHeadlessClientCommand(['recreate', 'wf-23', '--no-track'], {
+      messageBus: firstBus,
+      ensureStandaloneOwner,
+      refreshMessageBus,
+      runElectronHeadless: vi.fn(async () => 0),
+    });
+
+    expect(exitCode).toBe(0);
+    expect(ensureStandaloneOwner).toHaveBeenCalledTimes(1);
+    expect(execCalls).toBe(1);
+    expect(pingCalls).toBeGreaterThanOrEqual(2);
+  });
+
+  it('refreshes and retries queue queries when owner ping succeeds before query service is ready', async () => {
+    const firstBus = new LocalBus();
+    const secondBus = new LocalBus();
+    let queueCalls = 0;
+
+    secondBus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-6', mode: 'standalone' }));
+    secondBus.onRequest('headless.query', async () => {
+      queueCalls += 1;
+      if (queueCalls === 1) {
+        return await new Promise(() => {});
+      }
+      return { running: [], queued: [], runningCount: 0, maxConcurrency: 5 };
+    });
+
+    const refreshMessageBus = vi.fn()
+      .mockResolvedValueOnce(secondBus)
+      .mockResolvedValue(secondBus);
+
+    const exitCode = await runHeadlessClientCommand(['query', 'queue', '--output', 'json'], {
+      messageBus: firstBus,
+      ensureStandaloneOwner: vi.fn(async () => {}),
+      refreshMessageBus,
+      runElectronHeadless: vi.fn(async () => 0),
+    });
+
+    expect(exitCode).toBe(0);
+    expect(queueCalls).toBe(2);
+    expect(refreshMessageBus).toHaveBeenCalled();
   }, 15_000);
 
   it('retries no-track delegated mutations after the first owner request times out', async () => {
@@ -198,7 +293,7 @@ describe('headless-client', () => {
         runElectronHeadless: vi.fn(async () => 0),
       }),
     ).rejects.toThrow(/requires a running shared owner process/);
-  });
+  }, 30_000);
 
   it('delegates query queue to an existing owner without electron fallback', async () => {
     const bus = new LocalBus();
