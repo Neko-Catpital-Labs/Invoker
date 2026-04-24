@@ -43,6 +43,7 @@ function makeRequest(overrides: Partial<WorkRequest> = {}): WorkRequest {
 function mockPool(fam: WorktreeExecutor) {
   const pool = {
     ensureClone: vi.fn().mockResolvedValue('/fake/cache/clone'),
+    reconcileActiveWorktrees: vi.fn(),
     acquireWorktree: vi.fn().mockImplementation((_repoUrl: string, branch: string) => {
       const sanitized = branch.replace(/\//g, '-');
       return Promise.resolve({
@@ -721,6 +722,7 @@ describe('WorktreeExecutor', () => {
     const worktreePath = '/fake/worktrees/experiment-action-1-abc12345';
     const pool = {
       ensureClone: vi.fn().mockResolvedValue('/fake/cache/clone'),
+      reconcileActiveWorktrees: vi.fn(),
       acquireWorktree: vi.fn().mockResolvedValue({
         clonePath: '/fake/cache/clone',
         worktreePath,
@@ -745,6 +747,27 @@ describe('WorktreeExecutor', () => {
     expect(err.branch).toBe(branch);
     expect(softRelease).toHaveBeenCalledTimes(1);
     expect(release).not.toHaveBeenCalled();
+  });
+
+  it('reconciles pool slots from live executor entries before acquiring a new worktree', async () => {
+    const { taskProcess } = setupSpawnMock();
+    const pool = mockPool(executor);
+
+    const handle = await executor.start(makeRequest({ actionId: 'action-live-1' }));
+    const completePromise = new Promise<WorkResponse>((resolve) => {
+      executor.onComplete(handle, resolve);
+    });
+    taskProcess.emit('close', 0, null);
+    await completePromise;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    (executor as any).reconcilePoolSlots('git@github.com:test/repo.git');
+
+    expect(pool.reconcileActiveWorktrees).toHaveBeenCalledWith(
+      'git@github.com:test/repo.git',
+      expect.any(Set),
+    );
+    const livePaths = pool.reconcileActiveWorktrees.mock.calls.at(-1)?.[1] as Set<string>;
+    expect(Array.from(livePaths)).toHaveLength(0);
   });
 
   // ── Upstream branch merging ────────────────────────────────────

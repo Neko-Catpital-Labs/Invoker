@@ -75,6 +75,26 @@ describe('headless-client', () => {
     expect(ownerHandler).toHaveBeenCalledTimes(1);
   });
 
+  it('uses a longer no-track delegation timeout after bootstrap under load', async () => {
+    const bus = new LocalBus();
+    const ensureStandaloneOwner = vi.fn(async () => {
+      bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-3', mode: 'standalone' }));
+      bus.onRequest('headless.exec', async () => {
+        await new Promise((resolve) => setTimeout(resolve, 9_000));
+        return { ok: true };
+      });
+    });
+
+    const exitCode = await runHeadlessClientCommand(['rebase', 'wf-9/root', '--no-track'], {
+      messageBus: bus,
+      ensureStandaloneOwner,
+      runElectronHeadless: vi.fn(async () => 0),
+    });
+
+    expect(exitCode).toBe(0);
+    expect(ensureStandaloneOwner).toHaveBeenCalledTimes(1);
+  }, 15_000);
+
   it('retries no-track delegated mutations after the first owner request times out', async () => {
     const bus = new LocalBus();
     let execCalls = 0;
