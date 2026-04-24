@@ -44,6 +44,7 @@ interface WorktreeEntry extends BaseEntry {
   process: ChildProcess | null;
   worktreeDir: string;
   branch: string;
+  phase: 'preparing' | 'provisioning' | 'running' | 'completed';
   /** Full pool release: git worktree remove (used on provision failure, not on destroyAll). */
   poolRelease?: () => Promise<void>;
   /** Soft-release: frees the pool slot without removing the worktree from disk. */
@@ -149,6 +150,7 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
         request,
         worktreeDir: acquired.worktreePath,
         branch: acquired.branch,
+        phase: 'preparing',
         outputListeners: new Set(),
         outputBuffer: [],
         outputBufferBytes: 0,
@@ -211,6 +213,7 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
           const parsed = parseMergeError(exitCode, stderr);
           const entry: WorktreeEntry = {
             process: null, request, worktreeDir: acquired.worktreePath, branch,
+            phase: 'completed',
             outputListeners: new Set(), outputBuffer: [],
             outputBufferBytes: 0, evictedChunkCount: 0,
             completeListeners: new Set(), heartbeatListeners: new Set(),
@@ -247,6 +250,7 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
     if (!request.inputs.command && !request.inputs.prompt) {
       const entry: WorktreeEntry = {
         process: null, request, worktreeDir: acquired.worktreePath, branch,
+        phase: 'preparing',
         outputListeners: new Set(), outputBuffer: [],
         outputBufferBytes: 0, evictedChunkCount: 0,
         completeListeners: new Set(), heartbeatListeners: new Set(),
@@ -258,16 +262,45 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
       handle.workspacePath = acquired.worktreePath;
       handle.branch = acquired.branch;
       await this.handleProcessExit(executionId, request, acquired.worktreePath, 0, { branch });
+      entry.phase = 'completed';
       entry.poolSoftRelease?.();
       return handle;
     }
 
+    const entry: WorktreeEntry = {
+      process: null,
+      request,
+      worktreeDir: acquired.worktreePath,
+      branch: acquired.branch,
+      phase: 'provisioning',
+      outputListeners: new Set(),
+      outputBuffer: [],
+      outputBufferBytes: 0,
+      evictedChunkCount: 0,
+      completeListeners: new Set(),
+      heartbeatListeners: new Set(),
+      completed: false,
+      poolRelease: acquired.release,
+      poolSoftRelease: acquired.softRelease,
+    };
+    this.registerEntry(handle, entry);
+    handle.workspacePath = acquired.worktreePath;
+    handle.branch = acquired.branch;
+
+    const provisioning = this.provisionWorktree(acquired.worktreePath, executionId);
+    entry.process = provisioning.child;
     try {
-      await this.provisionWorktree(acquired.worktreePath);
+      await provisioning.completion;
+      entry.process = null;
+      entry.phase = 'running';
     } catch (err) {
       // Keep the failed workspace on disk for post-failure debugging/fix flows.
       // Only free the in-memory pool slot so retries are not blocked.
+      entry.process = null;
+      entry.phase = 'completed';
+      entry.completed = true;
       acquired.softRelease();
+      this.entries.delete(executionId);
       const startupErr = err instanceof Error ? err : new Error(String(err));
       (startupErr as Error & { workspacePath?: string; branch?: string }).workspacePath = acquired.worktreePath;
       (startupErr as Error & { workspacePath?: string; branch?: string }).branch = acquired.branch;
@@ -307,27 +340,10 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
       acquired.softRelease();
     });
 
-    const entry: WorktreeEntry = {
-      process: child,
-      request,
-      worktreeDir: acquired.worktreePath,
-      branch: acquired.branch,
-      outputListeners: new Set(),
-      outputBuffer: [],
-      outputBufferBytes: 0,
-      evictedChunkCount: 0,
-      completeListeners: new Set(),
-      heartbeatListeners: new Set(),
-      completed: false,
-      poolRelease: acquired.release,
-      poolSoftRelease: acquired.softRelease,
-      agentSessionId,
-    };
-
-    this.registerEntry(handle, entry);
-    handle.workspacePath = acquired.worktreePath;
-    handle.branch = acquired.branch;
+    entry.process = child;
+    entry.phase = 'running';
     if (agentSessionId) {
+      entry.agentSessionId = agentSessionId;
       handle.agentSessionId = agentSessionId;
     }
 
@@ -361,6 +377,8 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
         branch,
         agentSessionId: entry.agentSessionId,
       });
+      entry.process = null;
+      entry.phase = 'completed';
       entry.poolSoftRelease?.();
     });
 
@@ -539,17 +557,17 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
     }
   }
 
-  private provisionWorktree(dir: string, executionId?: string): Promise<void> {
+  private provisionWorktree(dir: string, executionId?: string): { child: ChildProcess; completion: Promise<void> } {
     traceExecution(`[WorktreeExecutor] provisionWorktree begin dir=${dir}`);
     const t0 = Date.now();
-    return new Promise((resolve, reject) => {
-      const cmd = `set -euo pipefail; ${DEFAULT_WORKTREE_PROVISION_COMMAND}`;
-      const child = spawn('/bin/bash', ['-c', cmd], {
-        cwd: dir,
-        env: cleanElectronEnv(),
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
-      traceExecution(`[WorktreeExecutor] provisionWorktree spawned pid=${child.pid}`);
+    const cmd = `set -euo pipefail; ${DEFAULT_WORKTREE_PROVISION_COMMAND}`;
+    const child = spawn('/bin/bash', ['-c', cmd], {
+      cwd: dir,
+      env: cleanElectronEnv(),
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    traceExecution(`[WorktreeExecutor] provisionWorktree spawned pid=${child.pid}`);
+    const completion = new Promise<void>((resolve, reject) => {
       let stdout = '';
       let stderr = '';
       child.stdout?.on('data', (d: Buffer) => {
@@ -568,15 +586,17 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
         traceExecution(`[WorktreeExecutor] provisionWorktree error: ${err.message}`);
         reject(new Error(`Failed to spawn provisioning process: ${err.message}`));
       });
-      child.on('close', (code) => {
-        traceExecution(`[WorktreeExecutor] provisionWorktree finished dir=${dir} code=${code} elapsed=${Date.now() - t0}ms`);
+      child.on('close', (code, signal) => {
+        traceExecution(`[WorktreeExecutor] provisionWorktree finished dir=${dir} code=${code} signal=${signal ?? 'none'} elapsed=${Date.now() - t0}ms`);
         if (code === 0) resolve();
         else {
+          const exitCode = code ?? (signal ? 1 : 0);
           const combined = [stderr.trim(), stdout.trim()].filter(Boolean).join('\n');
-          reject(new Error(`Worktree provisioning failed in ${dir} (exit ${code}): ${combined}`));
+          reject(new Error(`Worktree provisioning failed in ${dir} (exit ${exitCode}): ${combined}`));
         }
       });
     });
+    return { child, completion };
   }
 
 }
