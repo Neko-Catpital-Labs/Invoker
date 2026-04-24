@@ -1,6 +1,6 @@
 {
   "comment": "Example Invoker configuration file",
-  "description": "This file can be placed at ~/.invoker/config.json (user-level) or <repo>/.invoker.json (repo-level)",
+  "description": "Default location: ~/.invoker/config.json. For repo-specific configs, set INVOKER_REPO_CONFIG_PATH when launching Invoker.",
 
   "executors": {
     "worktree": {
@@ -13,17 +13,30 @@
       "comment": "DockerExecutor configuration"
     },
     "ssh": {
-      "comment": "SshExecutor configuration (global settings)"
+      "comment": "SshExecutor uses per-target settings from remoteTargets"
     }
   },
 
   "remoteTargets": {
     "staging-server": {
-      "comment": "SSH target configuration for remote execution",
+      "comment": "Managed SSH target configuration for remote execution",
       "host": "192.168.1.100",
       "user": "deploy",
       "sshKeyPath": "/home/user/.ssh/id_staging",
-      "port": 22
+      "port": 22,
+      "managedWorkspaces": true,
+      "remoteInvokerHome": "~/.invoker",
+      "provisionCommand": "pnpm install --frozen-lockfile"
+    },
+    "build-server-b": {
+      "comment": "Second SSH target for running different tasks on a different host",
+      "host": "192.168.1.101",
+      "user": "deploy",
+      "sshKeyPath": "/home/user/.ssh/id_build_b",
+      "port": 22,
+      "managedWorkspaces": true,
+      "remoteInvokerHome": "~/.invoker",
+      "provisionCommand": "pnpm install --frozen-lockfile"
     }
   },
 
@@ -43,8 +56,8 @@
   "notes": {
     "fetch_behavior": "Git fetch failures always abort the task. Fix the underlying network/auth issue and rerun.",
     "config_locations": [
-      "~/.invoker/config.json - User-level settings (all repos)",
-      "<repo>/.invoker.json - Repo-level settings (override user config)"
+      "~/.invoker/config.json - Default user-level settings",
+      "INVOKER_REPO_CONFIG_PATH=/path/to/config.json - Explicit override for repo/test-specific config"
     ],
     "executor_types": [
       "worktree - Git worktree isolation (default)",

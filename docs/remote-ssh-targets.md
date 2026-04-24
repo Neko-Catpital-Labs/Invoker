@@ -10,7 +10,9 @@ Each remote target is defined in the Invoker config with a host, user, and path 
 
 ## Configuration
 
-Add remote targets to `~/.invoker/config.json` (user-level) or `<repo>/.invoker.json` (repo-level):
+Add remote targets to `~/.invoker/config.json`.
+
+If you want to use a repo-specific config file, launch Invoker with `INVOKER_REPO_CONFIG_PATH=/path/to/config.json`.
 
 ```json
 {
@@ -18,13 +20,19 @@ Add remote targets to `~/.invoker/config.json` (user-level) or `<repo>/.invoker.
     "staging-server": {
       "host": "192.168.1.100",
       "user": "deploy",
-      "sshKeyPath": "/home/user/.ssh/id_staging"
+      "sshKeyPath": "/home/user/.ssh/id_staging",
+      "managedWorkspaces": true,
+      "remoteInvokerHome": "~/.invoker",
+      "provisionCommand": "pnpm install --frozen-lockfile"
     },
-    "remote_digital_ocean": {
-      "host": "178.128.181.133",
-      "user": "root",
-      "sshKeyPath": "/home/user/.ssh/id_do",
-      "port": 22
+    "staging-server-b": {
+      "host": "192.168.1.101",
+      "user": "deploy",
+      "sshKeyPath": "/home/user/.ssh/id_staging_b",
+      "port": 22,
+      "managedWorkspaces": true,
+      "remoteInvokerHome": "~/.invoker",
+      "provisionCommand": "pnpm install --frozen-lockfile"
     }
   }
 }
@@ -38,6 +46,33 @@ Add remote targets to `~/.invoker/config.json` (user-level) or `<repo>/.invoker.
 | `user` | string | yes | SSH username |
 | `sshKeyPath` | string | yes | Absolute path to SSH private key file |
 | `port` | number | no | SSH port (default: 22) |
+| `managedWorkspaces` | boolean | no | When true, Invoker clones/fetches the repo and manages per-task worktrees on the remote host |
+| `remoteInvokerHome` | string | no | Base directory used by managed remote workspaces (default: `~/.invoker`) |
+| `provisionCommand` | string | no | Command run after worktree creation in managed mode |
+
+## Multiple SSH Targets
+
+You can configure as many remote targets as you want under `remoteTargets`. Each task picks one by `remoteTargetId`.
+
+```yaml
+name: "Run tasks on multiple remotes"
+repoUrl: git@github.com:your-org/your-repo.git
+baseBranch: master
+tasks:
+  - id: check-a
+    description: "Run tests on remote A"
+    command: "pnpm test"
+    executorType: ssh
+    remoteTargetId: staging-server
+
+  - id: check-b
+    description: "Run tests on remote B"
+    command: "pnpm test"
+    executorType: ssh
+    remoteTargetId: staging-server-b
+```
+
+This is the supported way to run multiple SSH executors in one workflow: define multiple targets, then attach different tasks to different target IDs.
 
 ## Usage in Plans
 
