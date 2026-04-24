@@ -74,6 +74,10 @@ import { FileAndDbLogger } from './logger.js';
 import type { TaskOutputData } from './types.js';
 import { loadConfig, resolveSecretsFilePath, type InvokerConfig } from './config.js';
 import {
+  DEFAULT_WORKTREE_MAX_CONCURRENCY,
+  resolveEffectiveMaxConcurrency,
+} from './execution-capacity.js';
+import {
   createDeleteAllSnapshot,
   createHourlySnapshot,
   resolveInvokerHomeRoot,
@@ -247,6 +251,11 @@ const invokerConfig: InvokerConfig = (() => {
   }
 })();
 
+const effectiveMaxConcurrency = resolveEffectiveMaxConcurrency(
+  invokerConfig.maxConcurrency,
+  DEFAULT_WORKTREE_MAX_CONCURRENCY,
+);
+
 async function maybeDelayWorkflowResumeForTest(): Promise<void> {
   if (process.env.NODE_ENV !== 'test') return;
   const raw = process.env.INVOKER_TEST_RESUME_PENDING_DELAY_MS;
@@ -313,7 +322,7 @@ async function initServices(options?: InitServicesOptions): Promise<void> {
     new WorktreeExecutor({
       worktreeBaseDir: path.resolve(invokerHomeRoot, 'worktrees'),
       cacheDir: path.resolve(invokerHomeRoot, 'repos'),
-      maxWorktrees: 5,
+      maxWorktrees: DEFAULT_WORKTREE_MAX_CONCURRENCY,
       agentRegistry: options?.executionAgentRegistry,
     }),
   );
@@ -321,7 +330,7 @@ async function initServices(options?: InitServicesOptions): Promise<void> {
   orchestrator = new Orchestrator({
     persistence, messageBus,
     taskRepository,
-    maxConcurrency: invokerConfig.maxConcurrency,
+    maxConcurrency: effectiveMaxConcurrency,
     defaultAutoFixRetries: invokerConfig.autoFixRetries,
     executorRoutingRules: invokerConfig.executorRoutingRules ?? [],
     deferRunningUntilLaunch: true,
@@ -2486,7 +2495,7 @@ if (isHeadless) {
         persistence,
         messageBus,
         taskRepository: new SqliteTaskRepository(persistence),
-        maxConcurrency: invokerConfig.maxConcurrency,
+        maxConcurrency: effectiveMaxConcurrency,
         defaultAutoFixRetries: invokerConfig.autoFixRetries,
         executorRoutingRules: invokerConfig.executorRoutingRules ?? [],
         deferRunningUntilLaunch: true,
