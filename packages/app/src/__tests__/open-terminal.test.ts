@@ -206,7 +206,6 @@ describe('open-terminal integration', () => {
           branch: 'test-branch',
           release: vi.fn(),
         }),
-        reconcileActiveWorktrees: vi.fn(),
       },
       writable: true,
       configurable: true,
