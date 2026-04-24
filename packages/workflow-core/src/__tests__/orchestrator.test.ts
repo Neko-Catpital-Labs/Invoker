@@ -6038,6 +6038,139 @@ describe('Orchestrator', () => {
     });
   });
 
+  describe('selectExperiment invalidation', () => {
+    function setupReconciliationWithDownstream(): {
+      reconId: string;
+      exp1Id: string;
+      exp2Id: string;
+      downstreamId: string;
+    } {
+      orchestrator.loadPlan({
+        name: 'select-experiment-step7',
+        tasks: [
+          { id: 'pivot', description: 'Pivot task', pivot: true },
+          { id: 'downstream', description: 'After recon', command: 'sleep 100', dependencies: ['pivot'] },
+        ],
+      });
+      orchestrator.startExecution();
+      orchestrator.handleWorkerResponse({
+        requestId: 'spawn-pivot',
+        actionId: 'pivot',
+        executionGeneration: 0,
+        status: 'spawn_experiments',
+        outputs: { exitCode: 0 },
+        dagMutation: {
+          spawnExperiments: {
+            description: 'Try approaches',
+            variants: [
+              { id: 'v1', description: 'V1', prompt: 'A' },
+              { id: 'v2', description: 'V2', prompt: 'B' },
+            ],
+          },
+        },
+      });
+      const exp1Id = sid(orchestrator, 0, 'pivot-exp-v1');
+      const exp2Id = sid(orchestrator, 0, 'pivot-exp-v2');
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: exp1Id, status: 'completed', outputs: { exitCode: 0 } }),
+      );
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: exp2Id, status: 'completed', outputs: { exitCode: 0 } }),
+      );
+      orchestrator.handleWorkerResponse(reconciliationNeedsInputWorkResponse(rid(orchestrator, 0, 'pivot')));
+      return {
+        reconId: rid(orchestrator, 0, 'pivot'),
+        exp1Id,
+        exp2Id,
+        downstreamId: sid(orchestrator, 0, 'downstream'),
+      };
+    }
+
+    it('re-selecting with an ACTIVE downstream cancels first, then recreate-class resets via recreateTask', () => {
+      const { reconId, exp1Id, exp2Id, downstreamId } = setupReconciliationWithDownstream();
+
+      // Initial selection unblocks downstream → downstream auto-starts.
+      orchestrator.selectExperiment(reconId, exp1Id);
+      expect(orchestrator.getTask(downstreamId)?.status).toBe('running');
+
+      const cancelSpy = vi.spyOn(orchestrator, 'cancelTask');
+      const recreateSpy = vi.spyOn(orchestrator, 'recreateTask');
+
+      orchestrator.selectExperiment(reconId, exp2Id);
+
+      expect(cancelSpy).toHaveBeenCalledWith(downstreamId);
+      expect(recreateSpy).toHaveBeenCalledWith(downstreamId);
+      expect(cancelSpy.mock.invocationCallOrder[0]).toBeLessThan(
+        recreateSpy.mock.invocationCallOrder[0],
+      );
+
+      // New winner persisted on the recon.
+      expect(orchestrator.getTask(reconId)?.execution.selectedExperiment).toBe(exp2Id);
+
+      cancelSpy.mockRestore();
+      recreateSpy.mockRestore();
+    });
+
+    it('re-selecting an INACTIVE (failed) downstream skips cancel but still routes through recreateTask', () => {
+      const { reconId, exp1Id, exp2Id, downstreamId } = setupReconciliationWithDownstream();
+
+      orchestrator.selectExperiment(reconId, exp1Id);
+      // Fail downstream so it's no longer active. Re-selection MUST
+      // NOT cancel a non-active downstream, but the recreate-class state
+      // reset still applies so the new winner's input is consumed.
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: downstreamId, status: 'failed', outputs: { exitCode: 1, error: 'oops' } }),
+      );
+      expect(orchestrator.getTask(downstreamId)?.status).toBe('failed');
+
+      const cancelSpy = vi.spyOn(orchestrator, 'cancelTask');
+      const recreateSpy = vi.spyOn(orchestrator, 'recreateTask');
+
+      orchestrator.selectExperiment(reconId, exp2Id);
+
+      expect(cancelSpy).not.toHaveBeenCalled();
+      expect(recreateSpy).toHaveBeenCalledWith(downstreamId);
+
+      cancelSpy.mockRestore();
+      recreateSpy.mockRestore();
+    });
+
+    it('INITIAL selection (recon needs_input -> completed) does NOT cancel and does NOT recreate downstream', () => {
+      const { reconId, exp1Id, downstreamId } = setupReconciliationWithDownstream();
+
+      const cancelSpy = vi.spyOn(orchestrator, 'cancelTask');
+      const recreateSpy = vi.spyOn(orchestrator, 'recreateTask');
+
+      orchestrator.selectExperiment(reconId, exp1Id);
+
+      // Initial selection has no prior winner — there is nothing
+      // active to cancel and no stale downstream attempt to retry.
+      // The existing "completes reconciliation task and unblocks
+      // downstream" path applies.
+      expect(cancelSpy).not.toHaveBeenCalled();
+      expect(recreateSpy).not.toHaveBeenCalled();
+      expect(orchestrator.getTask(downstreamId)?.status).toBe('running');
+
+      cancelSpy.mockRestore();
+      recreateSpy.mockRestore();
+    });
+
+    it('re-selection bumps downstream execution generation by exactly one', () => {
+      const { reconId, exp1Id, exp2Id, downstreamId } = setupReconciliationWithDownstream();
+
+      orchestrator.selectExperiment(reconId, exp1Id);
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: downstreamId, status: 'failed', outputs: { exitCode: 1, error: 'x' } }),
+      );
+      const before = orchestrator.getTask(downstreamId)!.execution.generation ?? 0;
+
+      orchestrator.selectExperiment(reconId, exp2Id);
+
+      const after = orchestrator.getTask(downstreamId)!.execution.generation ?? 0;
+      expect(after).toBe(before + 1);
+    });
+  });
+
   // ── Missing state transitions ─────────────────────────────
 
   describe('missing state transitions', () => {
