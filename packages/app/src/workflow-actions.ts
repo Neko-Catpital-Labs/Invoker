@@ -308,7 +308,27 @@ export function buildInvalidationDeps(
         persistence: deps.persistence,
         taskExecutor: deps.taskExecutor,
       }),
-    workflowFork: (workflowId: string) => deps.orchestrator.forkWorkflow(workflowId).started,
+    workflowFork: (workflowId: string) => {
+      const result = deps.orchestrator.forkWorkflow(workflowId);
+      deps.logger?.info(
+        `workflowFork: source=${workflowId} fork=${result.forkedWorkflowId} started=${result.started.length}`,
+        { module: 'workflow' },
+      );
+      return result.started;
+    },
+    // Step 15 wiring (`docs/architecture/task-invalidation-roadmap.md`,
+    // chart row "Change external gate policy"). The dep is invoked
+    // by `applyInvalidation` for action `'scheduleOnly'` WITHOUT a
+    // preceding `cancelInFlight` call — gate-policy edits are
+    // non-invalidating per the chart. The orchestrator's existing
+    // `autoStartExternallyUnblockedReadyTasks` primitive is the
+    // right scheduler entrypoint: it re-evaluates every task with
+    // external dependencies whose blocker has cleared. Today's
+    // primitive is workflow-agnostic; the `taskId` argument is
+    // accepted for future scoping but ignored by the underlying
+    // method.
+    scheduleOnly: (_taskId: string) =>
+      deps.orchestrator.autoStartExternallyUnblockedReadyTasks(),
   };
 }
 

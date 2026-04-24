@@ -724,4 +724,98 @@ describe('State × Topology Matrix', () => {
       expect(orchestrator.getTask('B-fix')).toBeDefined();
     });
   });
+
+  // Step 15 (`docs/architecture/task-invalidation-roadmap.md`,
+  // chart row "Change external gate policy"): the matrix entry
+  // for `external gate policy` mutations is the chart's
+  // intentional non-invalidating outlier — `none-class` /
+  // task scope. Concretely:
+  //
+  //   1. `MUTATION_POLICIES.externalGatePolicy.action` is the
+  //      lone `'scheduleOnly'` entry in the policy table (mirrors
+  //      how `topology` is the lone `'workflowFork'` entry).
+  //   2. The mutation does NOT bump execution generation on the
+  //      edited task or any other task in the workflow — unlike
+  //      every Step 2–10 row above which bumps `generation` on
+  //      the root + transitive dependents.
+  //   3. The mutation only re-evaluates ready tasks newly
+  //      unblocked by the gate-policy change; in-flight work on
+  //      unrelated tasks survives untouched.
+  describe('Step 15 matrix entry: external gate policy is none-class / task scope', () => {
+    it('MUTATION_POLICIES.externalGatePolicy classifies the row as scheduleOnly / non-invalidating', () => {
+      const policy = MUTATION_POLICIES.externalGatePolicy;
+      expect(policy).toBeDefined();
+      expect(policy.action).toBe('scheduleOnly');
+      expect(policy.invalidatesExecutionSpec).toBe(false);
+      expect(policy.invalidateIfActive).toBe(false);
+    });
+
+    it('externalGatePolicy is the only scheduleOnly entry in the policy table', () => {
+      const scheduleOnlyEntries = Object.entries(MUTATION_POLICIES).filter(
+        ([, p]) => p.action === 'scheduleOnly',
+      );
+      expect(scheduleOnlyEntries.map(([k]) => k)).toEqual(['externalGatePolicy']);
+    });
+
+    // Mirrors the Step 2/5 matrix shape (gen-bump assertion) but
+    // INVERTED — the chart's "no invalidation" rule for gate
+    // policy means generation MUST be unchanged on the edited
+    // task and every task in its workflow. The orchestrator
+    // requires the task to have at least one external dependency
+    // before `setTaskExternalGatePolicies` accepts the update, so
+    // we use a bespoke 2-task plan with an external dependency on
+    // a never-resolved upstream workflow. The matrix entry's
+    // claim is simply: edits to gate policy don't bump
+    // generation, whether or not the task is actually unblocked.
+    it('does not bump task.execution.generation on the edited task or its dependents', () => {
+      // Pre-create the upstream workflow so the gate dependency is
+      // resolvable. The upstream is intentionally left in a state
+      // that does not satisfy the gate so the downstream task
+      // stays blocked — but the policy edit's generation contract
+      // is independent of whether unblocking occurs.
+      orchestrator.loadPlan({
+        name: 'gate-matrix-upstream',
+        tasks: [{ id: 'upstream', description: 'Prereq', command: 'echo upstream' }],
+      });
+      const upstreamWfId = orchestrator.getAllTasks()[0]!.config.workflowId!;
+
+      orchestrator.loadPlan({
+        name: 'gate-matrix-row',
+        tasks: [
+          {
+            id: 'A',
+            description: 'Gated root',
+            command: 'echo A',
+            externalDependencies: [{ workflowId: upstreamWfId, gatePolicy: 'completed' }],
+          },
+          { id: 'B', description: 'Dependent', command: 'echo B', dependencies: ['A'] },
+        ],
+      });
+
+      const aTask = orchestrator
+        .getAllTasks()
+        .find((t) => t.id.endsWith('/A') && t.config.workflowId !== upstreamWfId)!;
+      const bTask = orchestrator
+        .getAllTasks()
+        .find((t) => t.id.endsWith('/B') && t.config.workflowId !== upstreamWfId)!;
+
+      const genBefore = {
+        A: aTask.execution.generation ?? 0,
+        B: bTask.execution.generation ?? 0,
+      };
+
+      orchestrator.setTaskExternalGatePolicies(aTask.id, [
+        { workflowId: upstreamWfId, gatePolicy: 'review_ready' },
+      ]);
+
+      const aTaskAfter = orchestrator.getTask(aTask.id)!;
+      const bTaskAfter = orchestrator.getTask(bTask.id)!;
+      expect(aTaskAfter.execution.generation ?? 0).toBe(genBefore.A);
+      expect(bTaskAfter.execution.generation ?? 0).toBe(genBefore.B);
+
+      // Persistence reflects the new gate policy.
+      const deps = aTaskAfter.config.externalDependencies!;
+      expect(deps[0]!.gatePolicy).toBe('review_ready');
+    });
+  });
 });

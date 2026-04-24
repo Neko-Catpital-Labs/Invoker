@@ -2710,6 +2710,42 @@ export class Orchestrator {
   /**
    * Update gate policy on one or more external dependencies for a task, then
    * immediately re-evaluate ready tasks that were blocked by external deps.
+   *
+   * Step 15 lock-in (`docs/architecture/task-invalidation-roadmap.md`,
+   * chart row "Change external gate policy"): this is the engine's
+   * ONLY intentionally non-invalidating execution-spec-adjacent
+   * mutation. Per `MUTATION_POLICIES.externalGatePolicy`
+   * (`invalidatesExecutionSpec: false`, `invalidateIfActive: false`,
+   * `action: 'scheduleOnly'`):
+   *
+   *   - We do NOT bump `task.execution.generation`. Active and
+   *     pending lineage survives the edit untouched.
+   *   - We do NOT call `cancelTask` / `retryTask` / `recreateTask` /
+   *     `applyInvalidation` with any retry/recreate route. Tasks
+   *     that are running keep running on their existing execution
+   *     lineage; the chart's "Change external gate policy" row is
+   *     explicit that this "changes scheduling policy, not the task
+   *     execution ABI".
+   *   - We DO persist the updated gate-policy field on the task's
+   *     external dependency entry.
+   *   - We DO trigger a scheduling pass via
+   *     `autoStartExternallyUnblockedReadyTasks` so any task
+   *     previously blocked on the gate gets a fresh look.
+   *
+   * The orchestrator method is deliberately NOT routed through
+   * `applyInvalidation('task', 'scheduleOnly', taskId, deps)` here
+   * because the public method must remain synchronous for backward
+   * compatibility (callers in app-layer-handoff-repro tests, the
+   * api-server, and the headless `set gate-policy` verb invoke it
+   * sync and immediately consume the returned `TaskState[]`).
+   * `applyInvalidation` is `async`; routing through it would force
+   * the public surface async. The chart's lock-in is instead
+   * encoded in the policy table itself
+   * (`MUTATION_POLICIES.externalGatePolicy.action === 'scheduleOnly'`)
+   * and in `applyInvalidation`'s skip-cancel branch for that
+   * action — so any future caller that DOES route through the
+   * policy router (e.g. a hypothetical fork-class equivalent) gets
+   * the same non-invalidating semantics as this method.
    */
   setTaskExternalGatePolicies(taskId: string, updates: ExternalGatePolicyUpdate[]): TaskState[] {
     this.refreshFromDb();
@@ -3896,7 +3932,25 @@ export class Orchestrator {
     this.scheduler.enqueue({ taskId, attemptId, priority });
   }
 
-  private autoStartExternallyUnblockedReadyTasks(): TaskState[] {
+  /**
+   * Step 15 (`docs/architecture/task-invalidation-roadmap.md`,
+   * chart row "Change external gate policy"): public scheduler
+   * entrypoint that re-evaluates every task whose external
+   * dependency blocker has cleared and enqueues any newly-runnable
+   * tasks. Called internally by `setTaskExternalGatePolicies`
+   * AFTER the gate-policy field is persisted; also wired to the
+   * `'scheduleOnly'` action's `scheduleOnly` dep on
+   * `InvalidationDeps` (`buildInvalidationDeps` in
+   * `packages/app/src/workflow-actions.ts`) so future callers that
+   * route a gate-policy edit through `applyInvalidation` get the
+   * same chart-mandated unblock-pass without cancelling any
+   * in-flight work.
+   *
+   * Was `private` before Step 15; exposed publicly so
+   * `applyInvalidation`'s `'scheduleOnly'` dep can invoke it
+   * type-safely. No other behavior changes.
+   */
+  autoStartExternallyUnblockedReadyTasks(): TaskState[] {
     const readyTasks = this.stateMachine
       .getReadyTasks()
       .filter((task) => (task.config.externalDependencies?.length ?? 0) > 0)
