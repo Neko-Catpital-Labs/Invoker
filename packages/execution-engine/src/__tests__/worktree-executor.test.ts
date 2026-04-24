@@ -149,6 +149,16 @@ function setupSpawnMock(): {
   return { gitProcesses, taskProcess };
 }
 
+async function waitForCondition(predicate: () => boolean, timeoutMs = 500): Promise<void> {
+  const start = Date.now();
+  while (!predicate()) {
+    if (Date.now() - start > timeoutMs) {
+      throw new Error('timed out waiting for condition');
+    }
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+}
+
 describe('computeBranchHash', () => {
   it('is deterministic: same inputs produce same hash', () => {
     const a = computeBranchHash('t1', 'echo hi', undefined, ['c1'], 'HEAD1');
@@ -463,6 +473,139 @@ describe('WorktreeExecutor', () => {
     vi.mocked(process.kill).mockRestore();
   });
 
+  it('kill terminates provisioning without removing the worktree', async () => {
+    const handle = { executionId: 'exec-provision-1', taskId: 'action-1' };
+    vi.spyOn(executor as any, 'createHandle').mockReturnValue(handle);
+
+    const installProc = createMockProcess();
+    mockedSpawn.mockImplementation((cmd: string, args?: readonly string[]) => {
+      if (cmd === 'git') {
+        const gitProc = createMockProcess();
+        Promise.resolve().then(() => {
+          const argsArr = args as string[];
+          if (argsArr?.includes('rev-parse')) {
+            gitProc.stdout!.emit('data', Buffer.from('abc123\n'));
+          }
+          gitProc.emit('close', 0, null);
+        });
+        return gitProc as any;
+      }
+
+      const argsArr = args as string[] | undefined;
+      if (cmd === '/bin/bash' && argsArr?.[1]?.includes('pnpm install')) {
+        return installProc as any;
+      }
+
+      throw new Error(`unexpected spawn: ${cmd}`);
+    });
+
+    const startPromise = executor.start(makeRequest({ inputs: { command: 'sleep 60' } }));
+    const startResult = startPromise.then(
+      () => ({ ok: true as const }),
+      (error) => ({ ok: false as const, error }),
+    );
+    await waitForCondition(() => (executor as any).entries.has(handle.executionId));
+
+    vi.spyOn(process, 'kill').mockImplementation((_pid, _signal?) => {
+      setTimeout(() => installProc.emit('close', null, 'SIGTERM'), 0);
+      return true;
+    });
+
+    await executor.kill(handle);
+    const startOutcome = await startResult;
+    expect(startOutcome.ok).toBe(false);
+    expect(String((startOutcome as { error: Error }).error)).toMatch(/Worktree provisioning failed/);
+
+    const removeCalls = mockedSpawn.mock.calls.filter(
+      (call) =>
+        call[0] === 'git' &&
+        (call[1] as string[])?.includes('worktree') &&
+        (call[1] as string[])?.includes('remove'),
+    );
+    expect(removeCalls.length).toBe(0);
+    expect((executor as any).entries.has(handle.executionId)).toBe(false);
+
+    vi.mocked(process.kill).mockRestore();
+  });
+
+  it('destroyAll terminates provisioning processes without removing worktrees', async () => {
+    const handles = [
+      { executionId: 'exec-provision-1', taskId: 'action-1' },
+      { executionId: 'exec-provision-2', taskId: 'action-2' },
+    ];
+    vi.spyOn(executor as any, 'createHandle')
+      .mockReturnValueOnce(handles[0])
+      .mockReturnValueOnce(handles[1]);
+
+    const installProcs = [createMockProcess(), createMockProcess()];
+    let installIndex = 0;
+    mockedSpawn.mockImplementation((cmd: string, args?: readonly string[]) => {
+      if (cmd === 'git') {
+        const gitProc = createMockProcess();
+        Promise.resolve().then(() => {
+          const argsArr = args as string[];
+          if (argsArr?.includes('rev-parse')) {
+            gitProc.stdout!.emit('data', Buffer.from('abc123\n'));
+          }
+          gitProc.emit('close', 0, null);
+        });
+        return gitProc as any;
+      }
+
+      const argsArr = args as string[] | undefined;
+      if (cmd === '/bin/bash' && argsArr?.[1]?.includes('pnpm install')) {
+        return installProcs[installIndex++] as any;
+      }
+
+      throw new Error(`unexpected spawn: ${cmd}`);
+    });
+
+    const startPromise1 = executor.start(
+      makeRequest({ requestId: 'req-1', actionId: 'action-1', inputs: { command: 'sleep 60' } }),
+    );
+    const startResult1 = startPromise1.then(
+      () => ({ ok: true as const }),
+      (error) => ({ ok: false as const, error }),
+    );
+    const startPromise2 = executor.start(
+      makeRequest({ requestId: 'req-2', actionId: 'action-2', inputs: { command: 'sleep 60' } }),
+    );
+    const startResult2 = startPromise2.then(
+      () => ({ ok: true as const }),
+      (error) => ({ ok: false as const, error }),
+    );
+    await waitForCondition(() => (executor as any).entries.size === 2);
+
+    vi.spyOn(process, 'kill').mockImplementation((_pid, _signal?) => {
+      for (const proc of installProcs) {
+        if (!(proc as any)._closed) {
+          (proc as any)._closed = true;
+          setTimeout(() => proc.emit('close', null, 'SIGTERM'), 0);
+        }
+      }
+      return true;
+    });
+
+    await executor.destroyAll();
+    const outcome1 = await startResult1;
+    const outcome2 = await startResult2;
+    expect(outcome1.ok).toBe(false);
+    expect(String((outcome1 as { error: Error }).error)).toMatch(/Worktree provisioning failed/);
+    expect(outcome2.ok).toBe(false);
+    expect(String((outcome2 as { error: Error }).error)).toMatch(/Worktree provisioning failed/);
+
+    const removeCalls = mockedSpawn.mock.calls.filter(
+      (call) =>
+        call[0] === 'git' &&
+        (call[1] as string[])?.includes('worktree') &&
+        (call[1] as string[])?.includes('remove'),
+    );
+    expect(removeCalls.length).toBe(0);
+    expect((executor as any).entries.size).toBe(0);
+
+    vi.mocked(process.kill).mockRestore();
+  });
+
   it('handles git worktree creation failure gracefully', async () => {
     setupSpawnMock();
 
@@ -589,7 +732,10 @@ describe('WorktreeExecutor', () => {
       getClonePath: vi.fn().mockReturnValue('/fake/cache/clone'),
     };
     (executor as any).pool = pool;
-    vi.spyOn(executor as any, 'provisionWorktree').mockRejectedValue(new Error('lockfile mismatch'));
+    vi.spyOn(executor as any, 'provisionWorktree').mockReturnValue({
+      child: createMockProcess(),
+      completion: Promise.reject(new Error('lockfile mismatch')),
+    });
 
     const err = await executor.start(makeRequest()).catch((e: unknown) => e as Error & { workspacePath?: string; branch?: string });
 
