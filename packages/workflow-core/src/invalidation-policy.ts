@@ -72,11 +72,13 @@ export interface InvalidationDeps {
   recreateWorkflow: (workflowId: string) => TaskState[] | Promise<TaskState[]>;
   recreateWorkflowFromFreshBase?: (workflowId: string) => TaskState[] | Promise<TaskState[]>;
   /**
-   * Step 11 surfaces `'workflowFork'` as the topology-class action.
-   * Step 12 supplies the implementation that creates a new workflow
-   * rooted from the relevant node/result. Until then, invocation
-   * fails fast through `applyInvalidation` with an explicit
-   * "not yet wired (Step 12)" error.
+   * Step 11 surfaced `'workflowFork'` as the topology-class action;
+   * Step 14 (`docs/architecture/task-invalidation-roadmap.md`) wires
+   * the implementation. Production callers (`buildInvalidationDeps`
+   * in `packages/app/src/workflow-actions.ts`) supply
+   * `Orchestrator.forkWorkflow` here, so the "not yet wired" error
+   * path below is now dead code in production — it only fires for
+   * focused unit tests that build a partial `InvalidationDeps`.
    */
   workflowFork?: (workflowId: string) => TaskState[] | Promise<TaskState[]>;
 }
@@ -137,9 +139,15 @@ export async function applyInvalidation(
     }
     case 'workflowFork': {
       if (!deps.workflowFork) {
+        // Step 14 wires this dep in production via
+        // `buildInvalidationDeps` (`packages/app/src/workflow-actions.ts`).
+        // This branch is reachable only from focused unit tests that
+        // build a partial `InvalidationDeps` without the topology dep.
         throw new Error(
-          "applyInvalidation: 'workflowFork' is not yet wired (Step 12). " +
-            'Provide deps.workflowFork to use this action.',
+          "applyInvalidation: 'workflowFork' dep is missing. " +
+            'Production callers wire this via buildInvalidationDeps in ' +
+            '@invoker/app/workflow-actions; tests must supply ' +
+            'deps.workflowFork to use this action.',
         );
       }
       return await deps.workflowFork(id);

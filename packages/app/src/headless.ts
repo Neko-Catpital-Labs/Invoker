@@ -35,6 +35,7 @@ import {
   resolveConflictAction,
   recreateWorkflow as sharedRecreateWorkflow,
   recreateTask as sharedRecreateTask,
+  forkWorkflow as sharedForkWorkflow,
   setWorkflowMergeMode,
   finalizeAppliedFix,
 } from './workflow-actions.js';
@@ -605,6 +606,9 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
     case 'replace-task':
       await headlessReplaceTask(args[1], args[2], deps);
       break;
+    case 'fork-workflow':
+      await headlessForkWorkflow(args[1], deps);
+      break;
     case 'rebase':
       await headlessRebaseAndRetry(args[1], deps);
       break;
@@ -768,6 +772,7 @@ ${BOLD}Execute:${RESET}
   recreate <workflowId>                                Recreate workflow: wipe all state, new generation
   recreate-task <taskId>                               Recreate task + downstream (task-scoped reset)
   replace-task <taskId> <replacementTasksJson>        Replace a task with new task definitions
+  fork-workflow <workflowId>                          Fork a live workflow into a new branched workflow (Step 14)
   rebase <taskId>                                     Refresh pool base + nuclear restart
   fix <taskId> [claude|codex]                         Fix a failed task (default: claude)
   resolve-conflict <taskId> [claude|codex]            Resolve merge conflict + restart
@@ -1378,6 +1383,15 @@ async function headlessReplaceTask(
     throw new Error(`Invalid replacementTasks JSON: ${reason}`);
   }
 
+  // Step 14 (`docs/architecture/task-invalidation-roadmap.md`,
+  // chart "Topology inconsistency"): for *live* workflows
+  // `Orchestrator.replaceTask` now routes the topology mutation
+  // through `forkWorkflow` and lands the replacement on a brand-new
+  // workflow id. We snapshot the source workflow id BEFORE issuing
+  // the command so we can detect the redirect and report the new id
+  // to the caller. Terminal workflows still mutate in place, so the
+  // pre-/post- ids match and we report the in-place result.
+  const sourceWorkflowId = deps.orchestrator.getTask?.(taskId)?.config.workflowId;
   const envelope = makeEnvelope('replace-task', 'headless', 'task', { taskId, replacementTasks });
   const result = await deps.commandService.replaceTask(envelope);
   if (!result.ok) throw new Error(result.error.message);
@@ -1391,8 +1405,42 @@ async function headlessReplaceTask(
     started: result.data,
   });
 
+  const landedWorkflowId = result.data[0]?.config.workflowId;
+  if (sourceWorkflowId && landedWorkflowId && landedWorkflowId !== sourceWorkflowId) {
+    process.stdout.write(
+      `Live-workflow topology mutation: forked ${sourceWorkflowId} → ${landedWorkflowId}; ` +
+        `replaced task ${taskId} with ${replacementTasks.length} task(s) in the fork; ` +
+        `launched ${runnable.length} task(s)\n`,
+    );
+  } else {
+    process.stdout.write(
+      `Replaced task ${taskId} with ${replacementTasks.length} task(s); launched ${runnable.length} task(s)\n`,
+    );
+  }
+}
+
+async function headlessForkWorkflow(
+  workflowId: string,
+  deps: HeadlessDeps,
+): Promise<void> {
+  if (!workflowId) {
+    throw new Error('Missing arguments. Usage: --headless fork-workflow <workflowId>');
+  }
+  const result = sharedForkWorkflow(workflowId, {
+    orchestrator: deps.orchestrator,
+    logger: deps.logger,
+  });
+  const taskExecutor = createHeadlessExecutor(deps);
+  const { runnable } = await dispatchStartedTasksWithGlobalTopup({
+    orchestrator: deps.orchestrator,
+    taskExecutor,
+    logger: deps.logger,
+    context: 'headless.fork-workflow',
+    started: result.started,
+  });
   process.stdout.write(
-    `Replaced task ${taskId} with ${replacementTasks.length} task(s); launched ${runnable.length} task(s)\n`,
+    `Forked workflow ${result.sourceWorkflowId} → ${result.forkedWorkflowId}; ` +
+      `launched ${runnable.length} task(s)\n`,
   );
 }
 

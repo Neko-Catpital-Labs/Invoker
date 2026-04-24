@@ -6,7 +6,7 @@
  * state machine — no executor, no git.
  */
 import { describe, it, expect, beforeEach } from 'vitest';
-import { Orchestrator, TopologyForkRequired } from '../orchestrator.js';
+import { Orchestrator } from '../orchestrator.js';
 import type { PlanDefinition, OrchestratorPersistence, OrchestratorMessageBus } from '../orchestrator.js';
 import type { TaskState, TaskStateChanges, Attempt } from '../task-types.js';
 import type { WorkResponse } from '@invoker/contracts';
@@ -656,11 +656,8 @@ describe('State × Topology Matrix', () => {
   //      first-class fork-class entry rather than a special-cased
   //      restart.
   //
-  //   2. **Live-workflow gating.** `Orchestrator.replaceTask` now
-  //      throws `TopologyForkRequired` whenever any non-merge task in
-  //      the same workflow is in a live status, surfacing both the
-  //      workflow id and the offending task id so the caller can
-  //      route the request to the (Step 12) fork API. In-place
+  //   2. **Live-workflow gating.** `Orchestrator.replaceTask` forks a
+  //      live workflow instead of mutating it in place. In-place
   //      remains permitted on a fully terminal workflow because there
   //      is no in-flight work to race with.
   describe('graph topology is fork-class / workflow scope', () => {
@@ -679,7 +676,7 @@ describe('State × Topology Matrix', () => {
       expect(forkEntries.map(([k]) => k)).toEqual(['topology']);
     });
 
-    it('replaceTask throws TopologyForkRequired on a live diamond workflow', () => {
+    it('replaceTask forks a live diamond workflow instead of mutating it in place', () => {
       orchestrator.loadPlan(diamondPlan());
       orchestrator.startExecution();
 
@@ -691,24 +688,21 @@ describe('State × Topology Matrix', () => {
       const bTask = orchestrator.getTask('B')!;
       const wfId = bTask.config.workflowId!;
       const scopedBId = bTask.id;
+      const started = orchestrator.replaceTask('B', [
+        { id: 'B-fix', description: 'Fix B', command: 'echo fix' },
+      ]);
+      const forkedWorkflowId = orchestrator
+        .getWorkflowIds()
+        .find((id) => id !== wfId);
 
-      let caught: unknown;
-      try {
-        orchestrator.replaceTask('B', [
-          { id: 'B-fix', description: 'Fix B', command: 'echo fix' },
-        ]);
-      } catch (err) {
-        caught = err;
-      }
-      expect(caught).toBeInstanceOf(TopologyForkRequired);
-      const err = caught as TopologyForkRequired;
-      expect(err.workflowId).toBe(wfId);
-      expect(err.taskId).toBe(scopedBId);
-
-      // No in-place mutation: B stays failed, no replacement node was
-      // created, and the merge gate's deps are unchanged.
-      expect(orchestrator.getTask('B')!.status).toBe('failed');
-      expect(orchestrator.getTask('B-fix')).toBeUndefined();
+      // No in-place mutation on the original workflow.
+      expect(orchestrator.getTask(scopedBId)?.status).toBe('failed');
+      expect(forkedWorkflowId).toBeDefined();
+      const forkedFix = orchestrator
+        .getAllTasks()
+        .find((t) => t.config.workflowId === forkedWorkflowId && t.id.endsWith('/B-fix'));
+      expect(forkedFix).toBeDefined();
+      expect(started.some((t) => t.id === forkedFix?.id)).toBe(true);
     });
 
     it('replaceTask succeeds in place on a terminal diamond workflow', () => {

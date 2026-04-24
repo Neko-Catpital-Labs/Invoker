@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { reconciliationNeedsInputWorkResponse } from './reconciliation-needs-input-shim.js';
 import { rid, sid } from './scoped-test-helpers.js';
-import { Orchestrator, PlanConflictError, TopologyForkRequired, descriptionForMergeNode } from '../orchestrator.js';
+import { Orchestrator, PlanConflictError, descriptionForMergeNode } from '../orchestrator.js';
 import type { PlanDefinition, OrchestratorPersistence, OrchestratorMessageBus } from '../orchestrator.js';
 import type { TaskState, TaskDelta, TaskStateChanges, Attempt } from '../task-types.js';
 import type { WorkResponse } from '@invoker/contracts';
@@ -8646,13 +8646,8 @@ describe('Orchestrator', () => {
     });
   });
 
-  // Step 11 (`docs/architecture/task-invalidation-roadmap.md`): topology
-  // mutations on a live workflow throw `TopologyForkRequired`. The
-  // orchestrator unit-test layer asserts the gate's interaction with
-  // adjacent invariants here; replace-task.test.ts and
-  // state-topology-matrix.test.ts cover the full matrix.
   describe('replaceTask topology-fork gate', () => {
-    it('throws TopologyForkRequired with workflowId + taskId on a live workflow', () => {
+    it('forks the workflow instead of mutating a live workflow in place', () => {
       orchestrator.loadPlan({
         name: 'topology-gate-live',
         tasks: [
@@ -8673,24 +8668,21 @@ describe('Orchestrator', () => {
       const wfId = xTask.config.workflowId!;
       const scopedXId = xTask.id;
 
-      let caught: unknown;
-      try {
-        orchestrator.replaceTask('X', [
-          { id: 'fix', description: 'Fix', command: 'echo fix' },
-        ]);
-      } catch (err) {
-        caught = err;
-      }
-      expect(caught).toBeInstanceOf(TopologyForkRequired);
-      const err = caught as TopologyForkRequired;
-      expect(err.workflowId).toBe(wfId);
-      expect(err.taskId).toBe(scopedXId);
-      expect(err.message).toContain(wfId);
-      expect(err.message).toContain(scopedXId);
+      const started = orchestrator.replaceTask('X', [
+        { id: 'fix', description: 'Fix', command: 'echo fix' },
+      ]);
 
-      // Source unchanged, no replacement created.
-      expect(orchestrator.getTask('X')!.status).toBe('failed');
-      expect(orchestrator.getTask('fix')).toBeUndefined();
+      const forkedWorkflowId = orchestrator
+        .getWorkflowIds()
+        .find((id) => id !== wfId);
+
+      expect(forkedWorkflowId).toBeDefined();
+      expect(orchestrator.getTask(scopedXId)?.status).toBe('failed');
+      const forkedFix = orchestrator
+        .getAllTasks()
+        .find((t) => t.config.workflowId === forkedWorkflowId && t.id.endsWith('/fix'));
+      expect(forkedFix).toBeDefined();
+      expect(started.some((t) => t.id === forkedFix?.id)).toBe(true);
     });
 
     it('allows in-place replacement on a fully terminal workflow', () => {

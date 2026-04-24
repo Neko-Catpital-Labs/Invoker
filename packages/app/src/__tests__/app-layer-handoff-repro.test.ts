@@ -134,13 +134,14 @@ describe('app-layer handoff repros', () => {
     h.loadAndStart(LINEAR_PLAN);
     h.failTask('A', 'broken');
 
-    // Step 11 (`docs/architecture/task-invalidation-roadmap.md`):
-    // `replaceTask` is a topology mutation and now throws
-    // `TopologyForkRequired` whenever any non-merge task is still in a
-    // live status. LINEAR_PLAN is A → B; after failTask('A'), B is
-    // `pending` so we cancel it before exercising the in-place
-    // replacement path. The handoff/workspacePath assertions below
-    // are unchanged.
+    // Steps 11 → 14 (`docs/architecture/task-invalidation-roadmap.md`):
+    // `replaceTask` on a *live* workflow now routes through
+    // `forkWorkflow` (Step 14) instead of throwing
+    // `TopologyForkRequired` (Step 11). This test exercises the
+    // **in-place** handoff path on purpose, so it cancels the live
+    // downstream task to make the workflow terminal first; then
+    // `replaceTask` lands in-place on the same workflow and the
+    // workspacePath handoff assertions below are unchanged.
     h.orchestrator.cancelTask('B');
 
     const started = h.orchestrator.replaceTask('A', [

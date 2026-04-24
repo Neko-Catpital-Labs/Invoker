@@ -1238,6 +1238,38 @@ describe('buildInvalidationDeps', () => {
     );
   });
 
+  // Step 14 (`docs/architecture/task-invalidation-roadmap.md`,
+  // chart "Topology inconsistency"): `workflowFork` is wired to
+  // `Orchestrator.forkWorkflow`. The policy router only consumes
+  // the `started` task list, so the wire adapts the orchestrator's
+  // richer `ForkWorkflowResult` to `TaskState[]`. The forked
+  // workflow id remains discoverable via `started[0].config.workflowId`
+  // for callers that need it.
+  it('routes workflowFork to orchestrator.forkWorkflow and returns started tasks', async () => {
+    const orchestrator = {
+      ...makeBaseOrchestrator(),
+      forkWorkflow: vi.fn((workflowId: string) => ({
+        sourceWorkflowId: workflowId,
+        forkedWorkflowId: `${workflowId}-fork`,
+        started: [makeRunningTask({ id: `${workflowId}-fork/task-a`, config: { workflowId: `${workflowId}-fork` } as any })],
+      })),
+    };
+    const persistence = makePersistence();
+
+    const deps = buildInvalidationDeps({
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+    });
+
+    expect(deps.workflowFork).toBeDefined();
+    const result = await deps.workflowFork!('wf-1');
+
+    expect(orchestrator.forkWorkflow).toHaveBeenCalledWith('wf-1');
+    expect(result).toHaveLength(1);
+    // The forked workflow id is discoverable from the returned tasks.
+    expect((result as any[])[0].config.workflowId).toBe('wf-1-fork');
+  });
+
   it('builds a cancel-first hook that cancels orchestrator state and kills runners', async () => {
     const orchestrator = makeBaseOrchestrator();
     orchestrator.cancelTask = vi.fn(() => ({
