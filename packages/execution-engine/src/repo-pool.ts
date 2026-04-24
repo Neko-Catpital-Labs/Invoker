@@ -11,6 +11,7 @@ import {
   findManagedWorktreeByActionId,
   findManagedWorktreeByContent,
   findManagedWorktreeForBranch,
+  parseGitWorktreePorcelain,
   parseExperimentBranch,
 } from './worktree-discovery.js';
 import { syncPlanBaseRemoteForRef, isInvokerManagedPoolBranch } from './plan-base-remote.js';
@@ -179,6 +180,33 @@ export class RepoPool {
     }
   }
 
+  private isPathRegisteredInPorcelain(porcelain: string, worktreePath: string): boolean {
+    const target = canonicalPathForComparison(worktreePath);
+    return parseGitWorktreePorcelain(porcelain).some((entry) => canonicalPathForComparison(entry.path) === target);
+  }
+
+  private async reconcileLeakedTargetPath(
+    clonePath: string,
+    worktreePath: string,
+    porcelain: string,
+    branch: string,
+  ): Promise<void> {
+    if (!existsSync(worktreePath)) return;
+    const registered = this.isPathRegisteredInPorcelain(porcelain, worktreePath);
+    traceExecution(
+      `[RepoPool] reconcileLeakedTargetPath branch=${branch} path=${worktreePath} exists=true registered=${registered}`,
+    );
+    if (registered) {
+      await this.reconcileStaleWorktreePath(clonePath, worktreePath);
+      return;
+    }
+    try {
+      rmSync(worktreePath, { recursive: true, force: true });
+    } catch {
+      /* best-effort; bashPreserveOrReset will surface failure */
+    }
+  }
+
   private async doEnsureClone(repoUrl: string): Promise<string> {
     const dir = this.cloneDir(repoUrl);
     if (existsSync(dir)) {
@@ -319,9 +347,8 @@ export class RepoPool {
     }
 
     // Cache-equivalent reuse: same actionId + content hash, different lifecycle
-    // tag. Honoured even when forceFresh=true because reusing a workspace whose
-    // spec is provably identical is strictly an optimisation (see
-    // planManagedWorktree).
+    // tag. This remains available for non-fresh flows only; recreate-style
+    // flows must allocate a fresh workspace path as well as a fresh branch.
     let contentCandidate: { path: string; branch: string } | undefined;
     const parsedTargetBranch = parseExperimentBranch(branch);
     if (parsedTargetBranch) {
@@ -405,9 +432,7 @@ export class RepoPool {
           );
           mkdirSync(worktreeParent, { recursive: true });
         } catch {
-          if (isWorkspaceCleanupEnabled()) {
-            await this.reconcileStaleWorktreePath(clonePath, worktreePath);
-          }
+          await this.reconcileLeakedTargetPath(clonePath, worktreePath, porcelain, branch);
           mkdirSync(worktreeParent, { recursive: true });
           const script = bashPreserveOrReset({
             repoDir: clonePath,
@@ -420,12 +445,7 @@ export class RepoPool {
         }
         break;
       case 'recreate':
-        // Branch names are unique-by-construction (actionId + lifecycle tag +
-        // content hash), so collisions on `git worktree add` are no longer
-        // possible from prior dispatches of the same task. Cleanup of stale
-        // paths is therefore disk hygiene only, gated on
-        // INVOKER_ENABLE_WORKSPACE_CLEANUP. Do NOT rely on cleanup for
-        // correctness of the acquire flow.
+        await this.reconcileLeakedTargetPath(clonePath, worktreePath, porcelain, branch);
         if (isWorkspaceCleanupEnabled()) {
           for (const cleanupPath of plan.cleanupPaths) {
             await this.reconcileStaleWorktreePath(clonePath, cleanupPath);

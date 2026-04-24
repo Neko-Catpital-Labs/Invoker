@@ -86,13 +86,15 @@ export function buildExperimentBranchName(
 }
 
 /**
- * Restrict the attempt-short component to filesystem- and git-safe characters
- * and bound its length. Keeps a-z, 0-9, dash, underscore. Truncates to 12
- * characters which is more than enough entropy at the per-task scale.
+ * Restrict the attempt-short component to filesystem- and git-safe characters.
+ * Keeps a-z, 0-9, dash, underscore.
+ *
+ * Do not truncate here: attempt ids are workflow/task prefixed, so prefix
+ * truncation destroys the unique tail and causes different attempts for the
+ * same task to collide onto the same branch/worktree identity.
  */
 function sanitizeAttemptShort(raw: string): string {
-  const lower = raw.toLowerCase().replace(/[^a-z0-9_-]+/g, '');
-  return lower.slice(0, 12);
+  return raw.toLowerCase().replace(/[^a-z0-9_-]+/g, '');
 }
 
 export interface PreserveOrResetOpts {

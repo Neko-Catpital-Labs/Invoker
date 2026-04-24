@@ -23,9 +23,9 @@ export interface PlanManagedWorktreeInput {
   /**
    * Worktree found via `findManagedWorktreeByContent`: same actionId, same
    * content hash, *different* lifecycle tag. Cache-equivalent → safe to reuse
-   * by renaming the existing branch to the new target branch name. Reused even
-   * when `forceFresh=true` because the spec is identical and the rename is a
-   * cheap, non-destructive operation that avoids leaking another worktree.
+   * by renaming the existing branch to the new target branch name, but only
+   * when `forceFresh` is false. Recreate-style flows must allocate both a fresh
+   * branch identity and a fresh workspace path.
    */
   contentCandidate?: ManagedWorktreeContentCandidate;
 }
@@ -65,11 +65,9 @@ export function planManagedWorktree(input: PlanManagedWorktreeInput): ManagedWor
   }
 
   // Cache-equivalent reuse: identical actionId + contentHash but different
-  // lifecycle tag (e.g. recreate of same spec). Honoured even when
-  // `forceFresh=true` because reusing the workspace is strictly an
-  // optimisation — the new lifecycle tag still uniquely identifies the
-  // dispatch, and renaming the branch is non-destructive.
-  if (input.contentCandidate && input.contentCandidate.branch !== input.targetBranch) {
+  // lifecycle tag. This is only allowed for non-fresh flows. Recreate-style
+  // acquisitions must not inherit the old workspace path.
+  if (allowReuse && input.contentCandidate && input.contentCandidate.branch !== input.targetBranch) {
     return {
       kind: 'rename_to_lifecycle',
       worktreePath: input.contentCandidate.path,

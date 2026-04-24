@@ -123,9 +123,25 @@ describe('formatLifecycleTag', () => {
     expect(new Set([a, b, c, d]).size).toBe(4);
   });
 
-  it('sanitizes attempt-short to safe characters and bounds length', () => {
+  it('sanitizes attempt-short to safe characters without truncating unique suffixes', () => {
     expect(formatLifecycleTag({ wfGen: 1, taskGen: 2, attemptShort: 'AB$%C12/34D-56-EXTRA' }))
-      .toBe('g1.t2.aabc1234d-56-');
+      .toBe('g1.t2.aabc1234d-56-extra');
+  });
+
+  it('preserves distinct attempt tails even when workflow/task prefixes match', () => {
+    const tagA = formatLifecycleTag({
+      wfGen: 20,
+      taskGen: 17,
+      attemptShort: 'wf-1775874004544-6add-visual-proof-test-a05cb19b8',
+    });
+    const tagB = formatLifecycleTag({
+      wfGen: 20,
+      taskGen: 17,
+      attemptShort: 'wf-1775874004544-6add-visual-proof-test-a8a6ba2f5',
+    });
+    expect(tagA).not.toBe(tagB);
+    expect(tagA).toContain('a05cb19b8');
+    expect(tagB).toContain('a8a6ba2f5');
   });
 
   it('clamps negative or non-finite generations to 0', () => {
