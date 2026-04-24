@@ -8,9 +8,12 @@ OUT_FILE="${1:-release/SHA256SUMS}"
 shift || true
 
 if [ "$#" -gt 0 ]; then
-  mapfile -t FILES < <(printf '%s\n' "$@")
+  FILES=("$@")
 else
-  mapfile -t FILES < <(find release -maxdepth 1 -type f \( -name '*.dmg' -o -name '*.deb' -o -name '*.AppImage' \) | sort)
+  FILES=()
+  while IFS= read -r file; do
+    FILES+=("$file")
+  done < <(find release -maxdepth 1 -type f \( -name '*.dmg' -o -name '*.deb' -o -name '*.AppImage' \) | sort)
 fi
 
 if [ "${#FILES[@]}" -eq 0 ]; then
