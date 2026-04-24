@@ -60,7 +60,12 @@ describe('MUTATION_POLICIES', () => {
       // Step 15: `'scheduleOnly'` joins `'none'` as a
       // non-invalidating action class — gate-policy edits change
       // scheduling, not the execution ABI, so neither flag flips.
-      if (policy.action === 'none' || policy.action === 'scheduleOnly') {
+      if (
+        policy.action === 'none' ||
+        policy.action === 'scheduleOnly' ||
+        policy.action === 'fixApprove' ||
+        policy.action === 'fixReject'
+      ) {
         expect(policy.invalidatesExecutionSpec, key).toBe(false);
         expect(policy.invalidateIfActive, key).toBe(false);
       } else {

@@ -1270,6 +1270,151 @@ describe('buildInvalidationDeps', () => {
     expect((result as any[])[0].config.workflowId).toBe('wf-1-fork');
   });
 
+  // Step 16 (`docs/architecture/task-invalidation-roadmap.md`,
+  // chart row "Approve or reject fix"): `fixApprove` and
+  // `fixReject` are wired to the existing `approveTask` /
+  // `rejectTask` action wrappers in this file. Per the chart
+  // these are non-invalidating control flow over an existing
+  // fix attempt's output, so the wires must:
+  //
+  //   - reach the orchestrator's approve/reject primitives
+  //     (NOT retry/recreate);
+  //   - never call `orchestrator.cancelTask` /
+  //     `orchestrator.cancelWorkflow` (the policy router skips
+  //     `cancelInFlight` for these actions);
+  //   - return `TaskState[]` (approve returns the started
+  //     follow-on tasks; reject returns `[]` because the
+  //     wrapper is `void` today).
+  //
+  // The Step 1 scaffolding test pattern above wires the deps
+  // through `buildInvalidationDeps` and invokes them directly
+  // with a partial orchestrator mock; we follow that pattern.
+  it('routes fixApprove through approveTask (non-fix path → orchestrator.approve, returns started, never retry/recreate/cancel)', async () => {
+    const started = [makeRunningTask({ id: 'task-a' })];
+    const approvedTask = makeTask({ id: 'task-a', status: 'awaiting_approval', execution: {} });
+    const orchestrator = {
+      ...makeBaseOrchestrator(),
+      getTask: vi.fn().mockReturnValue(approvedTask),
+      approve: vi.fn().mockResolvedValue(started),
+      resumeTaskAfterFixApproval: vi.fn(),
+    };
+    const persistence = makePersistence();
+
+    const deps = buildInvalidationDeps({
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+    });
+
+    expect(deps.fixApprove).toBeDefined();
+    const result = await deps.fixApprove!('task-a');
+
+    expect(orchestrator.approve).toHaveBeenCalledWith('task-a');
+    expect(orchestrator.resumeTaskAfterFixApproval).not.toHaveBeenCalled();
+    expect(result).toEqual(started);
+    expect(orchestrator.retryTask).not.toHaveBeenCalled();
+    expect(orchestrator.recreateTask).not.toHaveBeenCalled();
+    expect(orchestrator.retryWorkflow).not.toHaveBeenCalled();
+    expect(orchestrator.recreateWorkflow).not.toHaveBeenCalled();
+    expect(orchestrator.cancelTask).not.toHaveBeenCalled();
+    expect(orchestrator.cancelWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('routes fixApprove through approveTask (fix path → commitApprovedFix + orchestrator.approve)', async () => {
+    const started = [makeRunningTask({ id: 'task-a' })];
+    const approvedTask = makeTask({
+      id: 'task-a',
+      status: 'awaiting_approval',
+      config: { workflowId: 'wf-1' },
+      execution: { pendingFixError: 'plain failure', branch: 'task-a', workspacePath: '/tmp/task-a' },
+    });
+    const orchestrator = {
+      ...makeBaseOrchestrator(),
+      getTask: vi.fn().mockReturnValue(approvedTask),
+      approve: vi.fn().mockResolvedValue(started),
+      resumeTaskAfterFixApproval: vi.fn(),
+    };
+    const persistence = makePersistence();
+    const taskExecutor = {
+      commitApprovedFix: vi.fn(),
+      publishAfterFix: vi.fn(),
+      executeTasks: vi.fn(),
+    };
+
+    const deps = buildInvalidationDeps({
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+    });
+
+    const result = await deps.fixApprove!('task-a');
+
+    expect(taskExecutor.commitApprovedFix).toHaveBeenCalledWith(approvedTask);
+    expect(orchestrator.approve).toHaveBeenCalledWith('task-a');
+    expect(orchestrator.resumeTaskAfterFixApproval).not.toHaveBeenCalled();
+    expect(result).toEqual(started);
+    expect(orchestrator.cancelTask).not.toHaveBeenCalled();
+    expect(orchestrator.cancelWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('routes fixReject through rejectTask (fix-flow path → orchestrator.revertConflictResolution, returns [], never retry/recreate/cancel)', async () => {
+    const orchestrator = {
+      ...makeBaseOrchestrator(),
+      getTask: vi.fn().mockReturnValue(
+        makeTask({ id: 'task-a', execution: { pendingFixError: 'merge conflict' } }),
+      ),
+      reject: vi.fn(),
+      revertConflictResolution: vi.fn(),
+    };
+    const persistence = makePersistence();
+
+    const deps = buildInvalidationDeps({
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+    });
+
+    expect(deps.fixReject).toBeDefined();
+    const result = await deps.fixReject!('task-a');
+
+    expect(orchestrator.revertConflictResolution).toHaveBeenCalledWith('task-a', 'merge conflict');
+    expect(orchestrator.reject).not.toHaveBeenCalled();
+    // `rejectTask` is `void` today; the wire returns `[]` so the
+    // policy router's `TaskState[]` contract is satisfied.
+    expect(result).toEqual([]);
+    expect(orchestrator.retryTask).not.toHaveBeenCalled();
+    expect(orchestrator.recreateTask).not.toHaveBeenCalled();
+    expect(orchestrator.retryWorkflow).not.toHaveBeenCalled();
+    expect(orchestrator.recreateWorkflow).not.toHaveBeenCalled();
+    expect(orchestrator.cancelTask).not.toHaveBeenCalled();
+    expect(orchestrator.cancelWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('routes fixReject through rejectTask (non-fix path → orchestrator.reject)', async () => {
+    const orchestrator = {
+      ...makeBaseOrchestrator(),
+      getTask: vi.fn().mockReturnValue(
+        makeTask({ id: 'task-a', execution: {} }),
+      ),
+      reject: vi.fn(),
+      revertConflictResolution: vi.fn(),
+    };
+    const persistence = makePersistence();
+
+    const deps = buildInvalidationDeps({
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+    });
+
+    const result = await deps.fixReject!('task-a');
+
+    // `rejectTask` is invoked without a reason from the wire, so
+    // `orchestrator.reject` is called as `(taskId, undefined)`.
+    expect(orchestrator.reject).toHaveBeenCalledWith('task-a', undefined);
+    expect(orchestrator.revertConflictResolution).not.toHaveBeenCalled();
+    expect(result).toEqual([]);
+    expect(orchestrator.cancelTask).not.toHaveBeenCalled();
+    expect(orchestrator.cancelWorkflow).not.toHaveBeenCalled();
+  });
+
   it('builds a cancel-first hook that cancels orchestrator state and kills runners', async () => {
     const orchestrator = makeBaseOrchestrator();
     orchestrator.cancelTask = vi.fn(() => ({

@@ -8088,6 +8088,192 @@ describe('Orchestrator', () => {
     });
   });
 
+  // Step 16 (`docs/architecture/task-invalidation-roadmap.md`,
+  // chart row "Approve or reject fix"): pin the orchestrator-level
+  // contract that production callers depend on through the
+  // `MUTATION_POLICIES.fixApprove` / `MUTATION_POLICIES.fixReject`
+  // wires (`packages/app/src/workflow-actions.ts → buildInvalidationDeps`
+  // routes both via the existing `approveTask` / `rejectTask` action
+  // wrappers).
+  //
+  // The chart's hard contract is that fix decisions are
+  // **non-invalidating control flow over an existing fix attempt's
+  // output**:
+  //
+  //   - Approve continues with the fix attempt's branch / commit /
+  //     workspacePath as the task's authoritative result. Status
+  //     transitions to `completed` (or `running` for merge / merge-
+  //     conflict cases that need a publish step).
+  //   - Reject reverts the task to its pre-fix `failed` state, with
+  //     the original `pendingFixError` restored. The fix attempt's
+  //     branch pointer is discarded but the task's lineage is not.
+  //
+  // Neither path may bump `task.execution.generation`, neither may
+  // invoke retry/recreate, and neither may cancel the task itself
+  // (by the time the decision runs the task is already terminal).
+  // These tests pin all three invariants directly on the orchestrator
+  // primitives the policy wires call.
+  describe('Step 16: fix-decision is non-invalidating (no gen bump, no cancel, no retry/recreate)', () => {
+    beforeEach(() => {
+      orchestrator.loadPlan({
+        name: 'fix-decision-test',
+        tasks: [
+          { id: 'fd1', description: 'Root task' },
+          { id: 'fd2', description: 'Failing task', dependencies: ['fd1'] },
+        ],
+      });
+      orchestrator.startExecution();
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 'fd1', status: 'completed', outputs: { exitCode: 0 } }),
+      );
+      orchestrator.handleWorkerResponse(
+        makeResponse({
+          actionId: 'fd2',
+          status: 'failed',
+          outputs: { exitCode: 1, error: 'original failure' },
+        }),
+      );
+      expect(orchestrator.getTask('fd2')!.status).toBe('failed');
+    });
+
+    it('approve: status -> completed, generation unchanged on edited task and dependents, lineage preserved, no retry/recreate spy fires', async () => {
+      // Move fd2 through the fix attempt into awaiting_approval
+      // with a pendingFixError. This is exactly the state an
+      // `approveTask` invocation lands on in the fix flow.
+      const { savedError } = orchestrator.beginConflictResolution('fd2');
+      // Hydrate workspace lineage on the task so the preservation
+      // half of the assertion is meaningful (the in-memory mock
+      // does not synthesize branch/workspacePath itself).
+      const persistedKey = Array.from(persistence.tasks.keys()).find(
+        (k) => k === 'fd2' || k.endsWith('/fd2'),
+      );
+      if (!persistedKey) throw new Error('test setup: persisted fd2 key not found');
+      persistence.updateTask(persistedKey, {
+        execution: {
+          branch: 'experiment/fix-attempt-branch',
+          commit: 'fa11ed01',
+          workspacePath: '/tmp/fix-attempt-workspace',
+        },
+      });
+      orchestrator.setFixAwaitingApproval('fd2', savedError);
+
+      const genBeforeApprove = {
+        fd1: orchestrator.getTask('fd1')!.execution.generation ?? 0,
+        fd2: orchestrator.getTask('fd2')!.execution.generation ?? 0,
+      };
+      const lineageBefore = orchestrator.getTask('fd2')!.execution;
+
+      // Spy on the retry/recreate/cancel orchestrator primitives —
+      // none must fire as a side effect of `approve`.
+      const retryTaskSpy = vi.spyOn(orchestrator, 'retryTask');
+      const recreateTaskSpy = vi.spyOn(orchestrator, 'recreateTask');
+      const retryWorkflowSpy = vi.spyOn(orchestrator, 'retryWorkflow');
+      const recreateWorkflowSpy = vi.spyOn(orchestrator, 'recreateWorkflow');
+      const cancelTaskSpy = vi.spyOn(orchestrator, 'cancelTask');
+      const cancelWorkflowSpy = vi.spyOn(orchestrator, 'cancelWorkflow');
+
+      await orchestrator.approve('fd2');
+
+      const fd2After = orchestrator.getTask('fd2')!;
+      expect(fd2After.status).toBe('completed');
+
+      // Generation invariants — the heart of the chart's
+      // "approve or reject fix is non-invalidating" rule.
+      expect(fd2After.execution.generation ?? 0).toBe(genBeforeApprove.fd2);
+      expect(orchestrator.getTask('fd1')!.execution.generation ?? 0).toBe(
+        genBeforeApprove.fd1,
+      );
+
+      // Lineage preserved — fix attempt's branch/commit/workspacePath
+      // is now the task's authoritative lineage (continue-class).
+      expect(fd2After.execution.branch).toBe(lineageBefore.branch);
+      expect(fd2After.execution.commit).toBe(lineageBefore.commit);
+      expect(fd2After.execution.workspacePath).toBe(lineageBefore.workspacePath);
+
+      // No retry/recreate/cancel orchestrator primitives fire.
+      expect(retryTaskSpy).not.toHaveBeenCalled();
+      expect(recreateTaskSpy).not.toHaveBeenCalled();
+      expect(retryWorkflowSpy).not.toHaveBeenCalled();
+      expect(recreateWorkflowSpy).not.toHaveBeenCalled();
+      expect(cancelTaskSpy).not.toHaveBeenCalled();
+      expect(cancelWorkflowSpy).not.toHaveBeenCalled();
+    });
+
+    it('reject (revertConflictResolution): status -> failed (original error), generation unchanged on edited task and dependents, no retry/recreate/cancel spy fires', () => {
+      const { savedError } = orchestrator.beginConflictResolution('fd2');
+      orchestrator.setFixAwaitingApproval('fd2', savedError);
+      expect(orchestrator.getTask('fd2')!.status).toBe('awaiting_approval');
+      expect(orchestrator.getTask('fd2')!.execution.pendingFixError).toBe(savedError);
+
+      const genBeforeReject = {
+        fd1: orchestrator.getTask('fd1')!.execution.generation ?? 0,
+        fd2: orchestrator.getTask('fd2')!.execution.generation ?? 0,
+      };
+
+      const retryTaskSpy = vi.spyOn(orchestrator, 'retryTask');
+      const recreateTaskSpy = vi.spyOn(orchestrator, 'recreateTask');
+      const retryWorkflowSpy = vi.spyOn(orchestrator, 'retryWorkflow');
+      const recreateWorkflowSpy = vi.spyOn(orchestrator, 'recreateWorkflow');
+      const cancelTaskSpy = vi.spyOn(orchestrator, 'cancelTask');
+      const cancelWorkflowSpy = vi.spyOn(orchestrator, 'cancelWorkflow');
+
+      orchestrator.revertConflictResolution('fd2', savedError);
+
+      const fd2After = orchestrator.getTask('fd2')!;
+      expect(fd2After.status).toBe('failed');
+      expect(fd2After.execution.error).toBe(savedError);
+
+      // Generation invariants — revert is also non-invalidating.
+      expect(fd2After.execution.generation ?? 0).toBe(genBeforeReject.fd2);
+      expect(orchestrator.getTask('fd1')!.execution.generation ?? 0).toBe(
+        genBeforeReject.fd1,
+      );
+
+      expect(retryTaskSpy).not.toHaveBeenCalled();
+      expect(recreateTaskSpy).not.toHaveBeenCalled();
+      expect(retryWorkflowSpy).not.toHaveBeenCalled();
+      expect(recreateWorkflowSpy).not.toHaveBeenCalled();
+      expect(cancelTaskSpy).not.toHaveBeenCalled();
+      expect(cancelWorkflowSpy).not.toHaveBeenCalled();
+    });
+
+    it('reject (plain Orchestrator.reject — non-fix awaiting_approval): same invariants as the fix-flow reject', () => {
+      // Non-fix path: a task parked in `awaiting_approval` without
+      // a `pendingFixError`. This is the branch `rejectTask` takes
+      // when the task is NOT in a fix flow (it routes to
+      // `Orchestrator.reject` instead of `revertConflictResolution`).
+      orchestrator.retryTask('fd2');
+      expect(orchestrator.getTask('fd2')!.status).toBe('running');
+      orchestrator.setTaskAwaitingApproval('fd2');
+      expect(orchestrator.getTask('fd2')!.status).toBe('awaiting_approval');
+      expect(orchestrator.getTask('fd2')!.execution.pendingFixError).toBeUndefined();
+
+      const genBeforeReject = {
+        fd1: orchestrator.getTask('fd1')!.execution.generation ?? 0,
+        fd2: orchestrator.getTask('fd2')!.execution.generation ?? 0,
+      };
+
+      const retryTaskSpy = vi.spyOn(orchestrator, 'retryTask');
+      const recreateTaskSpy = vi.spyOn(orchestrator, 'recreateTask');
+      const cancelTaskSpy = vi.spyOn(orchestrator, 'cancelTask');
+
+      orchestrator.reject('fd2', 'rejected by reviewer');
+
+      const fd2After = orchestrator.getTask('fd2')!;
+      expect(fd2After.status).toBe('failed');
+      expect(fd2After.execution.error).toBe('rejected by reviewer');
+
+      expect(fd2After.execution.generation ?? 0).toBe(genBeforeReject.fd2);
+      expect(orchestrator.getTask('fd1')!.execution.generation ?? 0).toBe(
+        genBeforeReject.fd1,
+      );
+
+      expect(retryTaskSpy).not.toHaveBeenCalled();
+      expect(recreateTaskSpy).not.toHaveBeenCalled();
+      expect(cancelTaskSpy).not.toHaveBeenCalled();
+    });
+  });
+
   describe('merge gate two-step approve (pendingFixError)', () => {
     function setupMergeGateAwaitingFixApproval(): string {
       orchestrator.loadPlan({
