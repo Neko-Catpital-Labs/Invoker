@@ -67,6 +67,7 @@ owner-restart-loop-during-delete-all-tracked-fix|headless-standalone|hang|owner_
 owner-restart-loop-during-delete-all-tracked-approve|headless-standalone|hang|owner_restart_loop_global_destructive_tracked_approve|restart_loop_delete_all_during_approve|8|10|run_owner_restart_loop_during_delete_all_tracked_approve
 repeated-delete-all-during-tracked-fix|headless-standalone|hang|repeated_global_destructive_during_tracked_fix|repeated_delete_all_during_fix|8|10|run_repeated_delete_all_during_tracked_fix
 repeated-delete-all-during-tracked-approve|headless-standalone|hang|repeated_global_destructive_during_tracked_approve|repeated_delete_all_during_approve|8|10|run_repeated_delete_all_during_tracked_approve
+query-storm-during-tracked-fix|headless-standalone|hang|query_storm_tracked_fix_visibility|query_storm_during_fix|8|18|run_query_storm_during_tracked_fix
 fixing-with-ai-visibility|headless-standalone|hang|fixing_state_visibility|fix_under_timeout|6|1|run_fixing_with_ai_visibility
 EOF
 }
@@ -1533,6 +1534,78 @@ run_repeated_delete_all_during_tracked_approve() {
     return 1
   fi
 
+  ov_stop_owner
+  ov_wait_queries_healthy 45
+  invoker_e2e_assert_no_stuck_mutation_intents 45
+  invoker_e2e_assert_no_owned_headless_processes 1
+}
+
+run_query_storm_during_tracked_fix() {
+  local workflow_count="$1"
+  local operation_burst="$2"
+  invoker_e2e_init
+  trap 'ov_stop_owner; rm -rf "${OVERLOAD_TMP_DIR:-}" >/dev/null 2>&1 || true; invoker_e2e_cleanup' RETURN
+  cd "$INVOKER_E2E_REPO_ROOT"
+  unset ELECTRON_RUN_AS_NODE
+  unset INVOKER_HEADLESS_STANDALONE
+  ov_set_overload_config "$((workflow_count + 2))"
+
+  OVERLOAD_TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/invoker-overload.XXXXXX")"
+  OVERLOAD_OP_PIDS=()
+  OVERLOAD_ALLOWED_BACKGROUND_FAILURE_PATTERN=""
+  OVERLOAD_ALLOWED_BACKGROUND_FAILURE_LABELS="tracked-fix"
+  ov_start_owner
+
+  local target_info target_workflow target_task
+  target_info="$(ov_submit_workflow fail "query-storm-tracked-fix-target" "" no-track)"
+  target_workflow="${target_info%%|*}"
+  target_task="$target_workflow/root"
+  echo "seed tracked fix target: $target_workflow"
+  ov_wait_task_status "$target_task" failed 30
+
+  local -a fail_workflows=()
+  local idx info workflow_id
+  for idx in $(seq 1 3); do
+    info="$(ov_submit_workflow fail "query-storm-tracked-fix-neighbor-$idx" "" no-track)"
+    workflow_id="${info%%|*}"
+    fail_workflows+=("$workflow_id")
+    ov_wait_task_status "$workflow_id/root" failed 30
+  done
+
+  echo "==> overload: starting tracked fix under heavy query storm"
+  ov_spawn_command_timed "tracked-fix" 120 invoker_e2e_run_headless fix "$target_task" codex
+  ov_wait_task_status_any "$target_task" "fixing_with_ai,awaiting_approval,completed,failed" 30
+
+  for idx in $(seq 0 $((operation_burst - 1))); do
+    case $((idx % 6)) in
+      0) ov_spawn_command "query-queue-$idx" invoker_e2e_run_headless query queue --output json ;;
+      1) ov_spawn_command "query-workflows-$idx" invoker_e2e_run_headless query workflows --output jsonl ;;
+      2) ov_spawn_command "query-tasks-$idx" invoker_e2e_run_headless query tasks --workflow "$target_workflow" --output jsonl ;;
+      3) ov_spawn_command "query-ui-perf-$idx" invoker_e2e_run_headless query ui-perf --output json ;;
+      4) workflow_id="${fail_workflows[$((idx % ${#fail_workflows[@]}))]}"; ov_spawn_command "retry-neighbor-$idx" invoker_e2e_run_headless --no-track retry "$workflow_id" ;;
+      5) workflow_id="${fail_workflows[$((idx % ${#fail_workflows[@]}))]}"; ov_spawn_command "recreate-neighbor-$idx" invoker_e2e_run_headless --no-track recreate "$workflow_id" ;;
+    esac
+  done
+
+  ov_detect_false_idle "$target_workflow" "tracked-fix" 45
+  ov_wait_background_commands
+
+  local tracked_status target_status
+  tracked_status="$(cat "${OVERLOAD_TMP_DIR}/tracked-fix.code" 2>/dev/null || echo 1)"
+  target_status="$(invoker_e2e_task_status "$target_task" 2>/dev/null || true)"
+  if [ "${tracked_status:-1}" -eq 124 ] || [ "${tracked_status:-1}" -eq 137 ] || [ "${tracked_status:-1}" -eq 143 ]; then
+    if [ "$target_status" = "fixing_with_ai" ] || [ "$target_status" = "review_ready" ] || [ "$target_status" = "awaiting_approval" ]; then
+      echo "FAIL: tracked command hung for $target_task (status=$target_status exit=$tracked_status)" >&2
+      return 1
+    fi
+  elif [ "${tracked_status:-1}" -ne 0 ]; then
+    echo "FAIL: tracked fix command exited with $tracked_status for $target_task" >&2
+    cat "${OVERLOAD_TMP_DIR}/tracked-fix.out" >&2 || true
+    return 1
+  fi
+
+  ov_cancel_all_workflows
+  sleep 2
   ov_stop_owner
   ov_wait_queries_healthy 45
   invoker_e2e_assert_no_stuck_mutation_intents 45
