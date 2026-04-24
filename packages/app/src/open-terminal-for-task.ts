@@ -8,6 +8,7 @@ import { execSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import {
   DockerExecutor,
+  getEffectivePath,
   WorktreeExecutor,
   SshExecutor,
   type ExecutorRegistry,
@@ -267,7 +268,7 @@ export async function openExternalTerminalForTask(
     for (const k of keep) {
       if (process.env[k]) cleanEnv[k] = process.env[k]!;
     }
-    cleanEnv.PATH = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin';
+    cleanEnv.PATH = getEffectivePath();
     if (!cleanEnv.TERM) cleanEnv.TERM = 'xterm-256color';
 
     const bashScript = buildLinuxXTerminalBashScript(spec, cwd);
