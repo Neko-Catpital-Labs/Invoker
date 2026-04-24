@@ -8,6 +8,7 @@ import { resolveInvokerHomeRoot } from './delete-all-snapshot.js';
 import { isHeadlessMutatingCommand } from './headless-command-classification.js';
 import {
   tryDelegateExec,
+  tryDelegateQuery,
   tryDelegateQueryUiPerf,
   tryDelegateResume,
   tryDelegateRun,
@@ -70,7 +71,9 @@ async function delegateMutation(args: string[], bus: MessageBus, waitForApproval
 }
 
 async function delegateReadOnlyQuery(args: string[], bus: MessageBus): Promise<boolean> {
-  if (args[0] !== 'query' || args[1] !== 'ui-perf') {
+  const isUiPerf = args[0] === 'query' && args[1] === 'ui-perf';
+  const isQueue = (args[0] === 'query' && args[1] === 'queue') || args[0] === 'queue';
+  if (!isUiPerf && !isQueue) {
     return false;
   }
   const deadline = Date.now() + 8_000;
@@ -81,19 +84,51 @@ async function delegateReadOnlyQuery(args: string[], bus: MessageBus): Promise<b
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
   if (!owner) {
-    throw new Error('query ui-perf requires a running shared owner process');
+    throw new Error(isUiPerf
+      ? 'query ui-perf requires a running shared owner process'
+      : 'query queue requires a running shared owner process');
   }
-  const reset = args.includes('--reset');
   let response: Record<string, unknown> | null = null;
   while (Date.now() < deadline) {
-    response = await tryDelegateQueryUiPerf(bus, reset, 5_000);
+    if (isUiPerf) {
+      const reset = args.includes('--reset');
+      response = await tryDelegateQueryUiPerf(bus, reset, 5_000);
+    } else {
+      response = await tryDelegateQuery(bus, { kind: 'queue' }, 5_000);
+    }
     if (response) break;
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
   if (!response) {
-    throw new Error('Live owner is present but did not serve ui-perf query');
+    throw new Error(isUiPerf
+      ? 'Live owner is present but did not serve ui-perf query'
+      : 'Live owner is present but did not serve queue query');
   }
-  process.stdout.write(`${JSON.stringify(response)}\n`);
+  if (isUiPerf) {
+    process.stdout.write(`${JSON.stringify(response)}\n`);
+    return true;
+  }
+  const outputIndex = args.indexOf('--output');
+  const output = outputIndex >= 0 ? args[outputIndex + 1] : undefined;
+  const running = Array.isArray(response.running) ? response.running as Array<Record<string, unknown>> : [];
+  const queued = Array.isArray(response.queued) ? response.queued as Array<Record<string, unknown>> : [];
+  if (output === 'json') {
+    process.stdout.write(`${JSON.stringify(response)}\n`);
+  } else if (output === 'jsonl') {
+    for (const task of running) {
+      process.stdout.write(`${JSON.stringify({ ...task, state: 'running' })}\n`);
+    }
+    for (const task of queued) {
+      process.stdout.write(`${JSON.stringify({ ...task, state: 'queued' })}\n`);
+    }
+  } else if (output === 'label') {
+    const ids = [...running, ...queued].map((task) => String(task.taskId ?? '')).filter(Boolean);
+    process.stdout.write(`${ids.join('\n')}\n`);
+  } else {
+    const runningCount = Number(response.runningCount ?? running.length);
+    const maxConcurrency = Number(response.maxConcurrency ?? 0);
+    process.stdout.write(`running=${runningCount}/${maxConcurrency} queued=${queued.length}\n`);
+  }
   return true;
 }
 

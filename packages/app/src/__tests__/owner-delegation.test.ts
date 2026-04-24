@@ -34,8 +34,8 @@ describe('headless→owner delegation', () => {
       expect(delegationTimeoutMs(['retry-task', 'wf-123/task-1'])).toBe(900_000);
     });
 
-    it('uses the default short timeout for non-maintenance commands', () => {
-      expect(delegationTimeoutMs(['approve', 'wf-123/task-1'])).toBe(15_000);
+    it('uses the extended timeout for tracked mutation commands', () => {
+      expect(delegationTimeoutMs(['approve', 'wf-123/task-1'])).toBe(900_000);
     });
   });
 
@@ -177,10 +177,10 @@ describe('headless→owner delegation', () => {
       });
 
       // Should timeout and return false.
-      const delegated = await tryDelegateExec(['approve', 'wf-1/task-1'], messageBus);
+      const delegated = await tryDelegateExec(['approve', 'wf-1/task-1'], messageBus, undefined, undefined, 25);
 
       expect(delegated).toBe(false);
-    }, 20_000);
+    }, 5_000);
   });
 
   describe('error propagation from owner', () => {
