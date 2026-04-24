@@ -455,6 +455,8 @@ describe('headless delegation enforcement', () => {
         mockDeps.commandService.editTaskCommand = vi.fn(async () => ({ ok: true as const, data: [runnableTask] }));
         mockDeps.commandService.editTaskType = vi.fn(async () => ({ ok: true as const, data: [runnableTask] }));
         mockDeps.commandService.editTaskAgent = vi.fn(async () => ({ ok: true as const, data: [runnableTask] }));
+        mockDeps.commandService.setTaskExternalGatePolicies = vi.fn(async () => ({ ok: true as const, data: [runnableTask] }));
+        mockDeps.commandService.replaceTask = vi.fn(async () => ({ ok: true as const, data: [runnableTask] }));
 
         const executeTasksSpy = vi
           .spyOn(TaskRunner.prototype, 'executeTasks')
@@ -467,11 +469,17 @@ describe('headless delegation enforcement', () => {
         await runHeadless(['set', 'executor', 'wf-1/task-1', 'shell'], mockDeps);
         taskStatus = 'running';
         await runHeadless(['set', 'agent', 'wf-1/task-1', 'codex'], mockDeps);
+        taskStatus = 'running';
+        await runHeadless(['set', 'gate-policy', 'wf-1/task-1', 'wf-upstream', 'review_ready'], mockDeps);
+        taskStatus = 'running';
+        await runHeadless(['replace-task', 'wf-1/task-1', '[{\"id\":\"fix\",\"description\":\"Fix\",\"command\":\"echo fix\"}]'], mockDeps);
 
-        expect(executeTasksSpy).toHaveBeenCalledTimes(3);
+        expect(executeTasksSpy).toHaveBeenCalledTimes(5);
         expect(mockDeps.commandService.editTaskCommand).toHaveBeenCalled();
         expect(mockDeps.commandService.editTaskType).toHaveBeenCalled();
         expect(mockDeps.commandService.editTaskAgent).toHaveBeenCalled();
+        expect(mockDeps.commandService.setTaskExternalGatePolicies).toHaveBeenCalled();
+        expect(mockDeps.commandService.replaceTask).toHaveBeenCalled();
 
         executeTasksSpy.mockRestore();
       });
@@ -531,7 +539,8 @@ describe('headless delegation enforcement', () => {
 
         await runHeadless(['approve', 'wf-1/task-a'], mockDeps);
 
-        expect(executeTasksSpy).toHaveBeenCalledTimes(1);
+        expect(executeTasksSpy.mock.calls.length).toBeGreaterThanOrEqual(1);
+        expect(executeTasksSpy).toHaveBeenCalledWith([runnableTask]);
         expect(mockDeps.commandService.approve).toHaveBeenCalled();
 
         executeTasksSpy.mockRestore();

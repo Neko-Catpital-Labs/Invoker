@@ -11,7 +11,7 @@
 
 import type { Logger } from '@invoker/contracts';
 import { makeEnvelope } from '@invoker/contracts';
-import type { Orchestrator, CommandService, TaskDelta, TaskState } from '@invoker/workflow-core';
+import type { Orchestrator, CommandService, TaskDelta, TaskReplacementDef, TaskState } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import { createDeleteAllSnapshot } from './delete-all-snapshot.js';
 import { Channels } from '@invoker/transport';
@@ -39,7 +39,7 @@ import {
   finalizeAppliedFix,
 } from './workflow-actions.js';
 import { openExternalTerminalForTask } from './open-terminal-for-task.js';
-import { executeGlobalTopup, finalizeMutationWithGlobalTopup } from './global-topup.js';
+import { dispatchStartedTasksWithGlobalTopup, executeGlobalTopup, finalizeMutationWithGlobalTopup } from './global-topup.js';
 import {
   delegationTimeoutMs,
   tryDelegateExec,
@@ -592,6 +592,9 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
     case 'recreate-task':
       await headlessRecreateTask(args[1], deps);
       break;
+    case 'replace-task':
+      await headlessReplaceTask(args[1], args[2], deps);
+      break;
     case 'rebase':
       await headlessRebaseAndRetry(args[1], deps);
       break;
@@ -754,6 +757,7 @@ ${BOLD}Execute:${RESET}
   retry-task <taskId>                                 Retry a single failed/stuck task
   recreate <workflowId>                                Recreate workflow: wipe all state, new generation
   recreate-task <taskId>                               Recreate task + downstream (task-scoped reset)
+  replace-task <taskId> <replacementTasksJson>        Replace a task with new task definitions
   rebase <taskId>                                     Refresh pool base + nuclear restart
   fix <taskId> [claude|codex]                         Fix a failed task (default: claude)
   resolve-conflict <taskId> [claude|codex]            Resolve merge conflict + restart
@@ -1080,13 +1084,12 @@ async function headlessRestart(taskId: string, deps: HeadlessDeps): Promise<void
 
   const taskExecutor = createHeadlessExecutor(deps);
   const autoFix = wireHeadlessAutoFix(deps, taskExecutor);
-  void runnable;
-  const topup = await executeGlobalTopup({
+  const { topup } = await dispatchStartedTasksWithGlobalTopup({
     orchestrator: deps.orchestrator,
     taskExecutor,
     logger: deps.logger,
     context: 'headless.restart-task',
-    alreadyDispatched: runnable,
+    started: result.data,
   });
   if (runnable.length + topup.length === 0) {
     autoFix.unsubscribe();
@@ -1221,12 +1224,12 @@ async function headlessRebaseAndRetry(taskId: string, deps: HeadlessDeps): Promi
   const autoFix = wireHeadlessAutoFix(deps, te);
   const started = await rebaseAndRetry(taskId, { ...deps, taskExecutor: te });
   const runnable = started.filter(t => t.status === 'running');
-  const topup = await executeGlobalTopup({
+  const { topup } = await dispatchStartedTasksWithGlobalTopup({
     orchestrator: deps.orchestrator,
     taskExecutor: te,
     logger: deps.logger,
     context: 'headless.rebase-and-retry',
-    alreadyDispatched: runnable,
+    started,
   });
   if (runnable.length + topup.length === 0) {
     autoFix.unsubscribe();
@@ -1314,13 +1317,13 @@ async function headlessRecreateTask(taskId: string, deps: HeadlessDeps): Promise
   remoteFetchForPool.enabled = false;
   let topup: TaskState[] = [];
   try {
-    topup = await executeGlobalTopup({
+    ({ topup } = await dispatchStartedTasksWithGlobalTopup({
       orchestrator: deps.orchestrator,
       taskExecutor: te,
       logger: deps.logger,
       context: 'headless.recreate-task',
-      alreadyDispatched: runnable,
-    });
+      started,
+    }));
   } finally {
     remoteFetchForPool.enabled = true;
   }
@@ -1342,6 +1345,42 @@ async function headlessRecreateTask(taskId: string, deps: HeadlessDeps): Promise
     });
   }
   autoFix.unsubscribe();
+}
+
+async function headlessReplaceTask(
+  taskId: string,
+  replacementTasksJson: string | undefined,
+  deps: HeadlessDeps,
+): Promise<void> {
+  if (!taskId || !replacementTasksJson) {
+    throw new Error('Missing arguments. Usage: --headless replace-task <taskId> <replacementTasksJson>');
+  }
+  let replacementTasks: TaskReplacementDef[];
+  try {
+    const parsed = JSON.parse(replacementTasksJson) as unknown;
+    if (!Array.isArray(parsed)) throw new Error('Replacement tasks must be a JSON array');
+    replacementTasks = parsed as TaskReplacementDef[];
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(`Invalid replacementTasks JSON: ${reason}`);
+  }
+
+  const envelope = makeEnvelope('replace-task', 'headless', 'task', { taskId, replacementTasks });
+  const result = await deps.commandService.replaceTask(envelope);
+  if (!result.ok) throw new Error(result.error.message);
+
+  const taskExecutor = createHeadlessExecutor(deps);
+  const { runnable } = await dispatchStartedTasksWithGlobalTopup({
+    orchestrator: deps.orchestrator,
+    taskExecutor,
+    logger: deps.logger,
+    context: 'headless.replace-task',
+    started: result.data,
+  });
+
+  process.stdout.write(
+    `Replaced task ${taskId} with ${replacementTasks.length} task(s); launched ${runnable.length} task(s)\n`,
+  );
 }
 
 async function headlessRetryWorkflow(workflowId: string, deps: HeadlessDeps): Promise<void> {
@@ -1440,13 +1479,13 @@ async function headlessRetryWorkflow(workflowId: string, deps: HeadlessDeps): Pr
   remoteFetchForPool.enabled = false;
   let topup: TaskState[] = [];
   try {
-    topup = await executeGlobalTopup({
+    ({ topup } = await dispatchStartedTasksWithGlobalTopup({
       orchestrator: deps.orchestrator,
       taskExecutor: te,
       logger: deps.logger,
       context: 'headless.retry-workflow',
-      alreadyDispatched: runnable,
-    });
+      started: dispatchable,
+    }));
   } finally {
     remoteFetchForPool.enabled = true;
   }
@@ -1856,7 +1895,10 @@ async function headlessSetGatePolicy(args: string[], deps: HeadlessDeps): Promis
   const result = await deps.commandService.setTaskExternalGatePolicies(envelope);
   if (!result.ok) throw new Error(result.error.message);
   const runnable = result.data.filter((t) => t.status === 'running');
-  void runnable;
+  if (runnable.length > 0) {
+    const taskExecutor = createHeadlessExecutor(deps);
+    await taskExecutor.executeTasks(runnable);
+  }
   process.stdout.write(
     `Updated gate policy for ${taskId}: ${workflowId}/${depTaskId} -> ${gatePolicy} (${runnable.length} task(s) started)\n`,
   );
