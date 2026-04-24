@@ -98,3 +98,39 @@ export function abbrevRefMatchesBranch(abbrevRef: string, branch: string): boole
   if (t === 'HEAD') return false;
   return t === branch;
 }
+
+export interface ParsedExperimentBranch {
+  /** Workflow-scoped action id (e.g. `wf-1234/task-name`). */
+  actionId: string;
+  /** Lifecycle tag (e.g. `g0.t1.a3f9c0d2`). */
+  lifecycleTag: string;
+  /** 8-char content hash (fingerprint of spec inputs). */
+  contentHash: string;
+}
+
+/**
+ * Parse an experiment branch name produced by `buildExperimentBranchName`.
+ *
+ * Returns the structured pieces, or `undefined` if the input does not match
+ * the new `experiment/<actionId>/<lifecycleTag>-<contentHash>` shape.
+ *
+ * Note: the legacy `experiment/<actionId>-<sha8>` shape is intentionally not
+ * recognized here — old-format branches are ignored by the new code paths
+ * and are expected to be wiped manually by the operator.
+ */
+export function parseExperimentBranch(branch: string): ParsedExperimentBranch | undefined {
+  if (typeof branch !== 'string' || !branch.startsWith('experiment/')) return undefined;
+  const rest = branch.slice('experiment/'.length);
+  const lastSlash = rest.lastIndexOf('/');
+  if (lastSlash <= 0) return undefined;
+  const actionId = rest.slice(0, lastSlash);
+  const tail = rest.slice(lastSlash + 1);
+  const dash = tail.lastIndexOf('-');
+  if (dash <= 0 || dash === tail.length - 1) return undefined;
+  const lifecycleTag = tail.slice(0, dash);
+  const contentHash = tail.slice(dash + 1);
+  if (!/^[0-9a-f]{8}$/.test(contentHash)) return undefined;
+  if (!/^g\d+\.t\d+\.a[a-z0-9_-]*$/.test(lifecycleTag)) return undefined;
+  if (!actionId.length) return undefined;
+  return { actionId, lifecycleTag, contentHash };
+}
