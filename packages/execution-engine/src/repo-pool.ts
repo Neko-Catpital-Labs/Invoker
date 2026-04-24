@@ -7,8 +7,11 @@ import { planManagedWorktree } from './managed-worktree-controller.js';
 import {
   abbrevRefMatchesBranch,
   canonicalPathForComparison,
+  findContentHashCollisions,
   findManagedWorktreeByActionId,
+  findManagedWorktreeByContent,
   findManagedWorktreeForBranch,
+  parseExperimentBranch,
 } from './worktree-discovery.js';
 import { syncPlanBaseRemoteForRef, isInvokerManagedPoolBranch } from './plan-base-remote.js';
 import { remoteFetchForPool } from './remote-fetch-policy.js';
@@ -231,6 +234,17 @@ export class RepoPool {
     this.activeWorktrees.set(repoUrl, live);
   }
 
+  private async isReusableManagedWorktree(worktreePath: string, expectedBranch: string): Promise<boolean> {
+    try {
+      const head = (await this.execGit(['rev-parse', '--abbrev-ref', 'HEAD'], worktreePath)).trim();
+      if (!abbrevRefMatchesBranch(head, expectedBranch)) return false;
+      await this.execGit(['status', '--porcelain'], worktreePath);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   private async doAcquireWorktree(
     repoUrl: string,
     branch: string,
@@ -304,13 +318,69 @@ export class RepoPool {
       }
     }
 
-    const plan = planManagedWorktree({
+    // Cache-equivalent reuse: same actionId + content hash, different lifecycle
+    // tag. Honoured even when forceFresh=true because reusing a workspace whose
+    // spec is provably identical is strictly an optimisation (see
+    // planManagedWorktree).
+    let contentCandidate: { path: string; branch: string } | undefined;
+    const parsedTargetBranch = parseExperimentBranch(branch);
+    if (parsedTargetBranch) {
+      const contentHit = findManagedWorktreeByContent(
+        porcelain,
+        parsedTargetBranch.actionId,
+        parsedTargetBranch.contentHash,
+        managedPrefixes,
+      );
+      if (contentHit && existsSync(contentHit.path) && contentHit.branch !== branch) {
+        contentCandidate = { path: contentHit.path, branch: contentHit.branch };
+      }
+
+      // Cross-actionId hash collisions are observable but not actionable here
+      // because the actionId/lifecycle parts of the branch still disambiguate.
+      const collisions = findContentHashCollisions(
+        porcelain,
+        parsedTargetBranch.contentHash,
+        parsedTargetBranch.actionId,
+        managedPrefixes,
+      );
+      if (collisions.length > 0) {
+        const summary = collisions
+          .map((c) => `${c.branch} @ ${c.path}`)
+          .join('; ');
+        traceExecution(
+          `[branch-hash-collision] contentHash=${parsedTargetBranch.contentHash} target=${branch} collides with: ${summary}`,
+        );
+      }
+    }
+
+    let plan = planManagedWorktree({
       targetBranch: branch,
       targetWorktreePath: worktreePath,
       forceFresh: opts?.forceFresh,
       exactBranchCandidate,
       actionIdCandidate,
+      contentCandidate,
     });
+
+    if (plan.kind === 'reuse_exact') {
+      const reusable = await this.isReusableManagedWorktree(plan.worktreePath, branch);
+      if (!reusable) {
+        plan = {
+          kind: 'recreate',
+          worktreePath,
+          cleanupPaths: [worktreePath, plan.worktreePath],
+        };
+      }
+    } else if (plan.kind === 'rename_reuse' || plan.kind === 'rename_to_lifecycle') {
+      const reusable = await this.isReusableManagedWorktree(plan.worktreePath, plan.fromBranch);
+      if (!reusable) {
+        plan = {
+          kind: 'recreate',
+          worktreePath,
+          cleanupPaths: [worktreePath, plan.worktreePath],
+        };
+      }
+    }
 
     let effectivePath = worktreePath;
     switch (plan.kind) {
@@ -322,6 +392,7 @@ export class RepoPool {
         mkdirSync(worktreeParent, { recursive: true });
         break;
       case 'rename_reuse':
+      case 'rename_to_lifecycle':
         try {
           await this.execGit(['branch', '-m', plan.fromBranch, plan.toBranch], plan.worktreePath);
           const head = (await this.execGit(['rev-parse', '--abbrev-ref', 'HEAD'], plan.worktreePath)).trim();
@@ -330,7 +401,7 @@ export class RepoPool {
           }
           effectivePath = plan.worktreePath;
           traceExecution(
-            `${RESTART_TO_BRANCH_TRACE} RepoPool.doAcquireWorktree reuse by actionId: renamed ${plan.fromBranch} → ${plan.toBranch} path=${effectivePath}`,
+            `${RESTART_TO_BRANCH_TRACE} RepoPool.doAcquireWorktree ${plan.kind}: renamed ${plan.fromBranch} → ${plan.toBranch} path=${effectivePath}`,
           );
           mkdirSync(worktreeParent, { recursive: true });
         } catch {
@@ -349,10 +420,12 @@ export class RepoPool {
         }
         break;
       case 'recreate':
-        // Gated: branch hash now embeds attemptId, so the canonical worktree
-        // path for this attempt has never existed. Stale orphans from prior
-        // attempts cannot collide. Re-enable INVOKER_ENABLE_WORKSPACE_CLEANUP
-        // for disk hygiene if needed.
+        // Branch names are unique-by-construction (actionId + lifecycle tag +
+        // content hash), so collisions on `git worktree add` are no longer
+        // possible from prior dispatches of the same task. Cleanup of stale
+        // paths is therefore disk hygiene only, gated on
+        // INVOKER_ENABLE_WORKSPACE_CLEANUP. Do NOT rely on cleanup for
+        // correctness of the acquire flow.
         if (isWorkspaceCleanupEnabled()) {
           for (const cleanupPath of plan.cleanupPaths) {
             await this.reconcileStaleWorktreePath(clonePath, cleanupPath);

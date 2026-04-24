@@ -108,6 +108,82 @@ export interface ParsedExperimentBranch {
   contentHash: string;
 }
 
+export interface ContentMatchedWorktree {
+  /** Worktree directory path. */
+  path: string;
+  /** Full branch name attached to the worktree. */
+  branch: string;
+  /** Lifecycle tag parsed out of the branch name. */
+  lifecycleTag: string;
+  /** Content hash parsed out of the branch name. */
+  contentHash: string;
+}
+
+/**
+ * First Invoker-managed worktree whose branch matches the new
+ * `experiment/<actionId>/<lifecycleTag>-<contentHash>` shape *and* whose
+ * actionId+contentHash equal the supplied values. Used by the acquire layer
+ * to find a leftover worktree with cache-equivalent content (same spec) so
+ * it can be re-used (and renamed to the current lifecycle tag) instead of
+ * recreated from scratch.
+ */
+export function findManagedWorktreeByContent(
+  porcelain: string,
+  actionId: string,
+  contentHash: string,
+  managedPathPrefixes: string[],
+): ContentMatchedWorktree | undefined {
+  const entries = parseGitWorktreePorcelain(porcelain);
+  for (const e of entries) {
+    if (!e.branch) continue;
+    if (!pathIsUnderManagedPrefixes(e.path, managedPathPrefixes)) continue;
+    const parsed = parseExperimentBranch(e.branch);
+    if (!parsed) continue;
+    if (parsed.actionId !== actionId) continue;
+    if (parsed.contentHash !== contentHash) continue;
+    return {
+      path: e.path,
+      branch: e.branch,
+      lifecycleTag: parsed.lifecycleTag,
+      contentHash: parsed.contentHash,
+    };
+  }
+  return undefined;
+}
+
+/**
+ * Detect Invoker-managed worktrees whose branch shares a `contentHash` with the
+ * supplied target but belongs to a *different* actionId. Such collisions are
+ * statistically rare (8 hex chars / 32-bit space) but no longer fatal under the
+ * new branch shape — the acquire layer can still create the new branch because
+ * the lifecycle tag plus actionId path component differ. Caller is expected to
+ * emit a structured warning so collisions can be observed in production.
+ */
+export function findContentHashCollisions(
+  porcelain: string,
+  contentHash: string,
+  excludeActionId: string,
+  managedPathPrefixes: string[],
+): ContentMatchedWorktree[] {
+  const out: ContentMatchedWorktree[] = [];
+  const entries = parseGitWorktreePorcelain(porcelain);
+  for (const e of entries) {
+    if (!e.branch) continue;
+    if (!pathIsUnderManagedPrefixes(e.path, managedPathPrefixes)) continue;
+    const parsed = parseExperimentBranch(e.branch);
+    if (!parsed) continue;
+    if (parsed.contentHash !== contentHash) continue;
+    if (parsed.actionId === excludeActionId) continue;
+    out.push({
+      path: e.path,
+      branch: e.branch,
+      lifecycleTag: parsed.lifecycleTag,
+      contentHash: parsed.contentHash,
+    });
+  }
+  return out;
+}
+
 /**
  * Parse an experiment branch name produced by `buildExperimentBranchName`.
  *

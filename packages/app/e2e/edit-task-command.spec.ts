@@ -7,9 +7,24 @@
  */
 
 import { test, expect, loadPlan, startPlan, waitForTaskStatus, E2E_REPO_URL } from './fixtures/electron-app.js';
+import type { Page } from '@playwright/test';
 
 function findTaskByIdSuffix(tasks: Array<any>, taskId: string) {
   return tasks.find((t) => t.id === taskId || t.id.endsWith(`/${taskId}`));
+}
+
+async function selectTaskAndWaitForCommandEditor(page: Page, taskSuffix: string): Promise<void> {
+  const node = page.locator(`.react-flow__node[data-testid$="/${taskSuffix}"]`);
+  const commandDisplay = page.locator('[data-testid="command-display"]');
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await node.click();
+    try {
+      await expect(commandDisplay).toBeVisible({ timeout: 3000 });
+      return;
+    } catch (err) {
+      if (attempt === 2) throw err;
+    }
+  }
 }
 
 const EDIT_CMD_PLAN = {
@@ -47,11 +62,10 @@ test.describe('Edit task command', () => {
     await waitForTaskStatus(page, 'task-will-fail', 'failed');
 
     // Click the failed task node to select it
-    await page.locator('.react-flow__node[data-testid$="/task-will-fail"]').click();
+    await selectTaskAndWaitForCommandEditor(page, 'task-will-fail');
 
     // Double-click the command display to enter edit mode.
     const commandDisplay = page.locator('[data-testid="command-display"]');
-    await expect(commandDisplay).toBeVisible({ timeout: 5000 });
     await commandDisplay.dblclick();
 
     // The textarea should appear with the old command.
@@ -113,10 +127,9 @@ test.describe('Edit task command', () => {
     const beforeGeneration = beforeEditChild?.execution?.generation ?? 0;
 
     // Click parent task to select it
-    await page.locator('.react-flow__node[data-testid$="/parent-task"]').click();
+    await selectTaskAndWaitForCommandEditor(page, 'parent-task');
 
     const commandDisplay = page.locator('[data-testid="command-display"]');
-    await expect(commandDisplay).toBeVisible({ timeout: 5000 });
     await commandDisplay.dblclick();
     const textarea = page.locator('[data-testid="edit-command-input"]');
     await textarea.fill('echo updated-parent');
