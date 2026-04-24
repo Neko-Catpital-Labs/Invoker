@@ -21,6 +21,8 @@
     "dist:desktop": "bash scripts/package-desktop.sh",
     "dist:desktop:linux": "bash scripts/package-desktop.sh --linux",
     "dist:desktop:mac": "bash scripts/package-desktop.sh --mac",
+    "dist:desktop:mac:arm64": "bash scripts/package-desktop.sh --mac --arm64",
+    "dist:desktop:mac:x64": "bash scripts/package-desktop.sh --mac --x64",
     "build:tsc": "tsc -b tsconfig.build.json",
     "build:tsc:clean": "tsc -b tsconfig.build.json --clean",
     "clean": "pnpm -r clean",
