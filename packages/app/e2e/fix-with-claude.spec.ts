@@ -40,6 +40,24 @@ const FAILING_PLAN = {
 };
 
 test.describe('Fix with Claude', () => {
+  async function openFixWithClaude(page: any) {
+    await page.locator('.react-flow__node[data-testid$="/task-fail"]').click({ button: 'right' });
+
+    const menu = page.getByRole('menu').last();
+    await expect(menu).toBeVisible({ timeout: 10000 });
+
+    let fixBtn = menu.getByRole('menuitem', { name: 'Fix with Claude' });
+    if (!(await fixBtn.isVisible().catch(() => false))) {
+      const moreBtn = menu.getByRole('menuitem', { name: 'More' });
+      await expect(moreBtn).toBeVisible({ timeout: 5000 });
+      await moreBtn.click();
+      fixBtn = page.getByRole('menuitem', { name: 'Fix with Claude' });
+    }
+
+    await expect(fixBtn).toBeVisible({ timeout: 10000 });
+    await fixBtn.click();
+  }
+
   test('Fix with Claude -> Approve -> task completes', async ({ page }) => {
     await loadPlan(page, FAILING_PLAN);
     await startPlan(page);
@@ -48,14 +66,7 @@ test.describe('Fix with Claude', () => {
     await waitForTaskStatus(page, 'task-fail', 'failed');
     const scopedTaskId = await resolveTaskId(page, 'task-fail');
 
-    await page.locator('.react-flow__node[data-testid$="/task-fail"]').click({ button: 'right' });
-    const moreBtn = page.getByRole('menuitem', { name: 'More' });
-    if (await moreBtn.isVisible().catch(() => false)) {
-      await moreBtn.click();
-    }
-    const fixBtn = page.getByRole('menuitem', { name: 'Fix with Claude' });
-    await expect(fixBtn).toBeVisible({ timeout: 10000 });
-    await fixBtn.click();
+    await openFixWithClaude(page);
 
     await waitForTaskStatus(page, 'task-fail', 'awaiting_approval', 15000);
 
@@ -72,14 +83,7 @@ test.describe('Fix with Claude', () => {
     await waitForTaskStatus(page, 'task-fail', 'failed');
     const scopedTaskId = await resolveTaskId(page, 'task-fail');
 
-    await page.locator('.react-flow__node[data-testid$="/task-fail"]').click({ button: 'right' });
-    const moreBtn = page.getByRole('menuitem', { name: 'More' });
-    if (await moreBtn.isVisible().catch(() => false)) {
-      await moreBtn.click();
-    }
-    const fixBtn = page.getByRole('menuitem', { name: 'Fix with Claude' });
-    await expect(fixBtn).toBeVisible({ timeout: 10000 });
-    await fixBtn.click();
+    await openFixWithClaude(page);
 
     await waitForTaskStatus(page, 'task-fail', 'awaiting_approval', 15000);
 
