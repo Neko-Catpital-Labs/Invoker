@@ -104,7 +104,7 @@ export function shouldResolveViaOriginTracking(ref: string): boolean {
 }
 
 /**
- * Resolve base ref to a full commit SHA for computeBranchHash / worktree base.
+ * Resolve base ref to a full commit SHA for computeContentHash / worktree base.
  * For short branch names and legacy remote-qualified refs, uses origin/<branch>.
  */
 export async function resolvePlanBaseRevision(

@@ -39,8 +39,13 @@ export interface WorkRequestInputs {
   }>;
   /** Branch names from completed upstream dependencies to merge into the worktree. */
   upstreamBranches?: string[];
-  /** Generation salt (workflow + task execution) — changes content-addressable branch hashes on recreate/restart. */
-  salt?: string;
+  /**
+   * Visible lifecycle tag (e.g. `g0.t1.aabc12345`) embedded in the branch name
+   * to make every dispatch unique-by-construction across recreates and retries.
+   * Replaces the legacy `salt` field that mixed lifecycle context into the
+   * content-hash itself.
+   */
+  lifecycleTag?: string;
   /** Workflow base branch — worktrees are created from this ref instead of HEAD. */
   baseBranch?: string;
   /** Name of the execution agent to use (e.g. 'claude', 'codex'). Defaults to 'claude'. */

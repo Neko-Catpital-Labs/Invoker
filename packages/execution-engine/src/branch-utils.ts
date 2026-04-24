@@ -2,41 +2,16 @@ import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 
 /**
- * Merkle-style hash for content-addressable branch naming.
- * Inputs: task identity + command/prompt + upstream dependency commits + base branch HEAD.
- * When any input changes (e.g. master moves forward), the hash changes and a fresh branch is created.
- *
- * The optional `salt` parameter is retained for backward compatibility with call
- * sites that still mix lifecycle context into the hash. New call sites should
- * use {@link computeContentHash} (which omits salt entirely) and put lifecycle
- * uniqueness into the visible branch suffix via {@link buildExperimentBranchName}.
- */
-export function computeBranchHash(
-  actionId: string,
-  command: string | undefined,
-  prompt: string | undefined,
-  upstreamCommits: string[],
-  baseHead: string,
-  salt: string = '',
-): string {
-  const h = createHash('sha256');
-  h.update(actionId);
-  h.update(command ?? '');
-  h.update(prompt ?? '');
-  for (const c of [...upstreamCommits].sort()) h.update(c);
-  h.update(baseHead);
-  if (salt) h.update(salt);
-  return h.digest('hex').slice(0, 8);
-}
-
-/**
  * Pure content fingerprint of a task's execution spec.
  *
- * Identical inputs (actionId, command, prompt, upstream commits, baseHead)
- * always produce the same 8-char hash. Lifecycle state (workflow generation,
- * task generation, attempt id) is *not* mixed in — that uniqueness is supplied
- * by {@link formatLifecycleTag} in the visible branch name instead, so two
- * recreates of the same spec can be detected as cache-equivalent and reused.
+ * Inputs: task identity + command/prompt + upstream dependency commits + base
+ * branch HEAD. Identical inputs always produce the same 8-char hash. Lifecycle
+ * state (workflow generation, task generation, attempt id) is intentionally
+ * *not* mixed in — that uniqueness is supplied by {@link formatLifecycleTag}
+ * in the visible branch name via {@link buildExperimentBranchName}. Two
+ * recreates of the same spec therefore produce the same `contentHash` but
+ * different branch names, allowing the acquire layer to recognise them as
+ * cache-equivalent.
  */
 export function computeContentHash(
   actionId: string,
@@ -45,7 +20,13 @@ export function computeContentHash(
   upstreamCommits: string[],
   baseHead: string,
 ): string {
-  return computeBranchHash(actionId, command, prompt, upstreamCommits, baseHead, '');
+  const h = createHash('sha256');
+  h.update(actionId);
+  h.update(command ?? '');
+  h.update(prompt ?? '');
+  for (const c of [...upstreamCommits].sort()) h.update(c);
+  h.update(baseHead);
+  return h.digest('hex').slice(0, 8);
 }
 
 export interface LifecycleTagInputs {
