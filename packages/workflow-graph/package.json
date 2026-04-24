@@ -1,6 +1,6 @@
 {
   "name": "@invoker/workflow-graph",
-  "version": "0.1.0",
+  "version": "0.0.1",
   "description": "Pure action graph data structure — nodes, edges, DAG ops, mutations",
   "type": "module",
   "main": "src/index.ts",

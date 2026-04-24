@@ -83,7 +83,7 @@ export function createMockInvoker(
     getSystemDiagnostics: vi.fn(async () => ({
       platform: 'linux',
       arch: 'x64',
-      appVersion: '0.1.0',
+      appVersion: '0.0.1',
       isPackaged: false,
       tools: [],
       bundledSkills: {

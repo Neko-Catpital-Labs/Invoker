@@ -1,7 +1,7 @@
 {
   "name": "invoker",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.0.1",
   "description": "Auditable multi-agent orchestration with a mutating action graph",
   "scripts": {
     "test": "bash scripts/test-plan-to-invoker-skill.sh && bash scripts/workspace-test.sh",

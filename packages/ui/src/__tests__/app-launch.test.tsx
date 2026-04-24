@@ -81,7 +81,7 @@ describe('App launch (component)', () => {
     mock.api.getSystemDiagnostics = vi.fn(async () => ({
       platform: 'linux',
       arch: 'x64',
-      appVersion: '0.1.0',
+      appVersion: '0.0.1',
       isPackaged: true,
       tools: [],
       bundledSkills: {
