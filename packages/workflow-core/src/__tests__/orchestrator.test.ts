@@ -5704,6 +5704,300 @@ describe('Orchestrator', () => {
     });
   });
 
+  // ── Step 12: workflow-scope paths (retryWorkflow / recreateWorkflow / recreateWorkflowFromFreshBase) ────
+  //
+  // Pins the chart's three-way distinction
+  // (`docs/architecture/task-invalidation-chart.md` rows
+  // "Retry workflow", "Recreate workflow", "Rebase and retry") +
+  // closes the Step 11 "not yet wired (Step 12)" hole on
+  // `applyInvalidation('workflow', 'recreateWorkflowFromFreshBase', ...)`.
+  describe('workflow-scope paths', () => {
+    function seedSimpleWorkflow(p: InMemoryPersistence, wfId: string): void {
+      p.saveTask(wfId, {
+        id: 'a',
+        description: 'Task A',
+        status: 'completed',
+        dependencies: [],
+        createdAt: new Date(),
+        config: { workflowId: wfId },
+        execution: { exitCode: 0, branch: 'br-a', commit: 'aaa', workspacePath: '/wt/a' },
+      });
+      p.saveTask(wfId, {
+        id: 'b',
+        description: 'Task B',
+        status: 'failed',
+        dependencies: [],
+        createdAt: new Date(),
+        config: { workflowId: wfId },
+        execution: { exitCode: 1, error: 'boom', branch: 'br-b', commit: 'bbb', workspacePath: '/wt/b' },
+      });
+    }
+
+    describe('retryWorkflow preserves lineage and bumps per-task execution generation', () => {
+      it('keeps branch/workspacePath on the reset task', () => {
+        const p = new InMemoryPersistence();
+        const b = new InMemoryBus();
+        const wfId = 'wf-step12-retry-lineage';
+        seedSimpleWorkflow(p, wfId);
+        const o = new Orchestrator({ persistence: p, messageBus: b, maxConcurrency: 2 });
+        o.syncFromDb(wfId);
+
+        o.retryWorkflow(wfId);
+
+        const bTask = o.getTask('b')!;
+        expect(bTask.execution.branch).toBe('br-b');
+        expect(bTask.execution.workspacePath).toBe('/wt/b');
+        expect(bTask.execution.commit).toBe('bbb');
+        expect(bTask.execution.error).toBeUndefined();
+      });
+
+      it('bumps per-task execution.generation on the retried task (workflow-scope generation surrogate)', () => {
+        const p = new InMemoryPersistence();
+        const b = new InMemoryBus();
+        const wfId = 'wf-step12-retry-gen';
+        seedSimpleWorkflow(p, wfId);
+        const o = new Orchestrator({ persistence: p, messageBus: b, maxConcurrency: 2 });
+        o.syncFromDb(wfId);
+
+        const beforeGen = o.getTask('b')!.execution.generation ?? 0;
+        o.retryWorkflow(wfId);
+        const afterGen = o.getTask('b')!.execution.generation ?? 0;
+        expect(afterGen).toBeGreaterThan(beforeGen);
+      });
+    });
+
+    describe('recreateWorkflow clears lineage and preserves the workflow base', () => {
+      it('clears branch/workspacePath/commit on every task', () => {
+        const p = new InMemoryPersistence();
+        const b = new InMemoryBus();
+        const wfId = 'wf-step12-recreate-lineage';
+        seedSimpleWorkflow(p, wfId);
+        const o = new Orchestrator({ persistence: p, messageBus: b, maxConcurrency: 2 });
+        o.syncFromDb(wfId);
+
+        o.recreateWorkflow(wfId);
+
+        for (const id of ['a', 'b']) {
+          const t = o.getTask(id)!;
+          expect(t.execution.branch).toBeUndefined();
+          expect(t.execution.commit).toBeUndefined();
+          expect(t.execution.workspacePath).toBeUndefined();
+        }
+      });
+
+      it('does NOT record a fresh upstream base commit (that is recreateWorkflowFromFreshBase territory)', () => {
+        const p = new InMemoryPersistence();
+        const b = new InMemoryBus();
+        const wfId = 'wf-step12-recreate-no-fresh-base';
+        seedSimpleWorkflow(p, wfId);
+        const o = new Orchestrator({ persistence: p, messageBus: b, maxConcurrency: 2 });
+        o.syncFromDb(wfId);
+
+        expect(o.getKnownFreshBaseCommit(wfId)).toBeUndefined();
+        o.recreateWorkflow(wfId);
+        expect(o.getKnownFreshBaseCommit(wfId)).toBeUndefined();
+      });
+    });
+
+    describe('recreateWorkflowFromFreshBase: stronger than recreateWorkflow', () => {
+      it('does everything recreateWorkflow does (clears branch/workspacePath/commit) AND advances the known fresh base', async () => {
+        const p = new InMemoryPersistence();
+        const b = new InMemoryBus();
+        const wfId = 'wf-step12-fresh-base';
+        seedSimpleWorkflow(p, wfId);
+        const o = new Orchestrator({ persistence: p, messageBus: b, maxConcurrency: 2 });
+        o.syncFromDb(wfId);
+
+        expect(o.getKnownFreshBaseCommit(wfId)).toBeUndefined();
+        await o.recreateWorkflowFromFreshBase(wfId, {
+          refreshBase: async () => ({ commit: 'fresh-upstream-sha' }),
+        });
+
+        // Recreate-class reset:
+        for (const id of ['a', 'b']) {
+          const t = o.getTask(id)!;
+          expect(t.execution.branch).toBeUndefined();
+          expect(t.execution.commit).toBeUndefined();
+          expect(t.execution.workspacePath).toBeUndefined();
+        }
+
+        // Fresh-base distinction:
+        expect(o.getKnownFreshBaseCommit(wfId)).toBe('fresh-upstream-sha');
+      });
+
+      it('runs refreshBase BEFORE the reset (chart: "refresh repo/base state first, then recreate the workflow")', async () => {
+        const p = new InMemoryPersistence();
+        const b = new InMemoryBus();
+        const wfId = 'wf-step12-fresh-base-ordering';
+        seedSimpleWorkflow(p, wfId);
+        const o = new Orchestrator({ persistence: p, messageBus: b, maxConcurrency: 2 });
+        o.syncFromDb(wfId);
+
+        let refreshBaseCalledAt: number | undefined;
+        let resetObservedAt: number | undefined;
+        let counter = 0;
+
+        // Re-spy persistence.updateTask to detect when the recreate
+        // reset begins (the recreateWorkflow loop calls updateTask
+        // on every reset task; the first such call is our marker).
+        const originalUpdateTask = p.updateTask.bind(p);
+        p.updateTask = (taskId: string, changes: any) => {
+          if (resetObservedAt === undefined && changes?.status === 'pending') {
+            resetObservedAt = ++counter;
+          }
+          originalUpdateTask(taskId, changes);
+        };
+
+        await o.recreateWorkflowFromFreshBase(wfId, {
+          refreshBase: async () => {
+            refreshBaseCalledAt = ++counter;
+            return { commit: 'sha-fresh' };
+          },
+        });
+
+        expect(refreshBaseCalledAt).toBeDefined();
+        expect(resetObservedAt).toBeDefined();
+        expect(refreshBaseCalledAt!).toBeLessThan(resetObservedAt!);
+      });
+
+      it('updates persisted baseBranch when refreshBase returns one', async () => {
+        const p = new InMemoryPersistence();
+        const b = new InMemoryBus();
+        const wfId = 'wf-step12-fresh-base-branch';
+        // Save workflow first so updateWorkflow has something to update
+        p.saveWorkflow({
+          id: wfId,
+          name: 'wf',
+          status: 'running',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        } as any);
+        seedSimpleWorkflow(p, wfId);
+        const o = new Orchestrator({ persistence: p, messageBus: b, maxConcurrency: 2 });
+        o.syncFromDb(wfId);
+
+        const updateWorkflowSpy = vi.spyOn(p, 'updateWorkflow');
+
+        await o.recreateWorkflowFromFreshBase(wfId, {
+          refreshBase: async () => ({ branch: 'main', commit: 'sha-x' }),
+        });
+
+        expect(updateWorkflowSpy).toHaveBeenCalledWith(wfId, { baseBranch: 'main' });
+      });
+
+      it('skips refreshBase invocation when no callback is supplied (degenerate caller path) and still resets', async () => {
+        const p = new InMemoryPersistence();
+        const b = new InMemoryBus();
+        const wfId = 'wf-step12-no-refresh-cb';
+        seedSimpleWorkflow(p, wfId);
+        const o = new Orchestrator({ persistence: p, messageBus: b, maxConcurrency: 2 });
+        o.syncFromDb(wfId);
+
+        await o.recreateWorkflowFromFreshBase(wfId);
+
+        for (const id of ['a', 'b']) {
+          const t = o.getTask(id)!;
+          expect(t.execution.branch).toBeUndefined();
+          expect(t.execution.commit).toBeUndefined();
+        }
+        // No fresh base recorded — the caller did not provide one.
+        expect(o.getKnownFreshBaseCommit(wfId)).toBeUndefined();
+      });
+    });
+
+    describe('applyInvalidation routing (Step 11 "not yet wired" path is closed)', () => {
+      it("applyInvalidation('workflow', 'recreateWorkflowFromFreshBase', ...) succeeds when the dep is wired", async () => {
+        const { applyInvalidation } = await import('../invalidation-policy.js');
+
+        const p = new InMemoryPersistence();
+        const b = new InMemoryBus();
+        const wfId = 'wf-step12-apply-invalidation';
+        seedSimpleWorkflow(p, wfId);
+        const o = new Orchestrator({ persistence: p, messageBus: b, maxConcurrency: 2 });
+        o.syncFromDb(wfId);
+
+        const cancelInFlight = vi.fn(async () => undefined);
+        await applyInvalidation('workflow', 'recreateWorkflowFromFreshBase', wfId, {
+          cancelInFlight,
+          retryTask: async () => [],
+          recreateTask: async () => [],
+          retryWorkflow: async () => [],
+          recreateWorkflow: async () => [],
+          recreateWorkflowFromFreshBase: (workflowId: string) =>
+            o.recreateWorkflowFromFreshBase(workflowId, {
+              refreshBase: async () => ({ commit: 'sha-from-applyInvalidation' }),
+            }),
+        });
+
+        // Cancel-first invariant.
+        expect(cancelInFlight).toHaveBeenCalledWith('workflow', wfId);
+        // Fresh-base step actually advanced.
+        expect(o.getKnownFreshBaseCommit(wfId)).toBe('sha-from-applyInvalidation');
+        // Recreate reset ran.
+        expect(o.getTask('b')!.execution.branch).toBeUndefined();
+      });
+
+      it('cancel-first runs strictly before the recreateWorkflowFromFreshBase reset', async () => {
+        const { applyInvalidation } = await import('../invalidation-policy.js');
+
+        const p = new InMemoryPersistence();
+        const b = new InMemoryBus();
+        const wfId = 'wf-step12-cancel-first-ordering';
+        seedSimpleWorkflow(p, wfId);
+        const o = new Orchestrator({ persistence: p, messageBus: b, maxConcurrency: 2 });
+        o.syncFromDb(wfId);
+
+        const order: string[] = [];
+        await applyInvalidation('workflow', 'recreateWorkflowFromFreshBase', wfId, {
+          cancelInFlight: async () => {
+            order.push('cancelInFlight');
+          },
+          retryTask: async () => [],
+          recreateTask: async () => [],
+          retryWorkflow: async () => [],
+          recreateWorkflow: async () => [],
+          recreateWorkflowFromFreshBase: async (workflowId: string) => {
+            order.push('recreateWorkflowFromFreshBase');
+            return o.recreateWorkflowFromFreshBase(workflowId, {
+              refreshBase: async () => ({ commit: 'sha-x' }),
+            });
+          },
+        });
+
+        expect(order).toEqual(['cancelInFlight', 'recreateWorkflowFromFreshBase']);
+      });
+
+      it("applyInvalidation('workflow', 'retryWorkflow', ...) routes through cancelInFlight first", async () => {
+        const { applyInvalidation } = await import('../invalidation-policy.js');
+
+        const p = new InMemoryPersistence();
+        const b = new InMemoryBus();
+        const wfId = 'wf-step12-retry-cancel-first';
+        seedSimpleWorkflow(p, wfId);
+        const o = new Orchestrator({ persistence: p, messageBus: b, maxConcurrency: 2 });
+        o.syncFromDb(wfId);
+
+        const order: string[] = [];
+        await applyInvalidation('workflow', 'retryWorkflow', wfId, {
+          cancelInFlight: async () => {
+            order.push('cancelInFlight');
+          },
+          retryTask: async () => [],
+          recreateTask: async () => [],
+          retryWorkflow: async (workflowId: string) => {
+            order.push('retryWorkflow');
+            return o.retryWorkflow(workflowId);
+          },
+          recreateWorkflow: async () => [],
+        });
+
+        expect(order).toEqual(['cancelInFlight', 'retryWorkflow']);
+        // Retry-class lineage preserved.
+        expect(o.getTask('b')!.execution.branch).toBe('br-b');
+      });
+    });
+  });
+
   // ── Long session resilience ────────────────────────────
 
   describe('long session resilience', () => {

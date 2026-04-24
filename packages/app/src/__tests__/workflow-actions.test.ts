@@ -1168,15 +1168,74 @@ describe('buildInvalidationDeps', () => {
     expect(orchestrator.recreateWorkflow).toHaveBeenCalledWith('wf-1');
   });
 
-  it('does NOT wire recreateWorkflowFromFreshBase in Step 1 (Step 12 promotes it)', () => {
-    const orchestrator = makeBaseOrchestrator();
+  it('wires recreateWorkflowFromFreshBase to the orchestrator method', async () => {
+    const orchestrator = {
+      ...makeBaseOrchestrator(),
+      // The real orchestrator drives the `refreshBase` callback; mirror
+      // that here so the test exercises the app-layer's pool-prep wiring.
+      recreateWorkflowFromFreshBase: vi.fn(async (_id: string, options?: any) => {
+        await options?.refreshBase?.(_id);
+        return [makeRunningTask({ id: 'task-a' })];
+      }),
+    };
     const persistence = makePersistence();
+    const taskExecutor = {
+      preparePoolForRebaseRetry: vi.fn(async () => undefined),
+    };
 
     const deps = buildInvalidationDeps({
       orchestrator: orchestrator as unknown as Orchestrator,
       persistence: persistence as unknown as SQLiteAdapter,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
     });
-    expect(deps.recreateWorkflowFromFreshBase).toBeUndefined();
+
+    // Step 12 promotes this dep — the policy router's
+    // "not yet wired (Step 12)" error path is dead code in production.
+    expect(deps.recreateWorkflowFromFreshBase).toBeDefined();
+
+    persistence.loadWorkflow = vi.fn(() => ({
+      id: 'wf-1',
+      generation: 4,
+      repoUrl: 'https://example/repo.git',
+      baseBranch: 'main',
+    } as any));
+
+    const result = await deps.recreateWorkflowFromFreshBase!('wf-1');
+
+    // Workflow generation bumped (matches recreateWorkflow's wrapper semantics).
+    expect(persistence.updateWorkflow).toHaveBeenCalledWith('wf-1', { generation: 5 });
+    // Pool prep ran before delegating to the orchestrator's first-class method.
+    expect(taskExecutor.preparePoolForRebaseRetry).toHaveBeenCalledWith(
+      'wf-1',
+      'https://example/repo.git',
+      'main',
+    );
+    expect(orchestrator.recreateWorkflowFromFreshBase).toHaveBeenCalledTimes(1);
+    expect(orchestrator.recreateWorkflowFromFreshBase.mock.calls[0]?.[0]).toBe('wf-1');
+    expect(result).toHaveLength(1);
+  });
+
+  it('recreateWorkflowFromFreshBase wire still calls orchestrator method when no taskExecutor is supplied', async () => {
+    const orchestrator = {
+      ...makeBaseOrchestrator(),
+      recreateWorkflowFromFreshBase: vi.fn(async () => []),
+    };
+    const persistence = makePersistence();
+    persistence.loadWorkflow = vi.fn(() => ({ id: 'wf-1', generation: 0, repoUrl: 'https://example/repo.git', baseBranch: 'main' } as any));
+
+    const deps = buildInvalidationDeps({
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+      // taskExecutor intentionally omitted — the orchestrator method
+      // still runs (refreshBase callback is a no-op without an executor).
+    });
+
+    await deps.recreateWorkflowFromFreshBase!('wf-1');
+
+    expect(orchestrator.recreateWorkflowFromFreshBase).toHaveBeenCalledWith(
+      'wf-1',
+      expect.objectContaining({ refreshBase: expect.any(Function) }),
+    );
   });
 
   it('builds a cancel-first hook that cancels orchestrator state and kills runners', async () => {
