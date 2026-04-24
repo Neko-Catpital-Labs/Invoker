@@ -162,8 +162,18 @@ export interface OrchestratorPersistence {
     taskChanges: TaskStateChanges,
     attemptPatch: Partial<Pick<Attempt, 'status' | 'exitCode' | 'error' | 'completedAt'>>
   ): void;
-  /** Load a workflow by ID (needed for SSH validation in editTaskType). */
-  loadWorkflow?(workflowId: string): { repoUrl?: string; baseBranch?: string } | undefined;
+  /**
+   * Load a workflow by ID. Used by:
+   *   - SSH validation in `editTaskType` (`repoUrl`),
+   *   - same-mode no-op detection in `editTaskMergeMode` (`mergeMode`).
+   * The interface lists only the fields the orchestrator actually reads;
+   * concrete adapters (e.g. `SQLiteAdapter.loadWorkflow`) return more.
+   */
+  loadWorkflow?(workflowId: string): {
+    repoUrl?: string;
+    baseBranch?: string;
+    mergeMode?: 'manual' | 'automatic' | 'external_review';
+  } | undefined;
   /** Delete a single workflow and its tasks from the DB. */
   deleteWorkflow?(workflowId: string): void;
   /** Delete all workflows and tasks from the DB. */
@@ -1521,7 +1531,6 @@ export class Orchestrator {
       prevCanon.length === newCanon.length &&
       prevCanon.every((id, i) => id === newCanon[i]);
     const isReSelection = previousSet !== undefined && !sameAsPrev;
-
     const allTasksBefore = this.stateMachine.getAllTasks();
 
     if (isReSelection) {
@@ -1608,7 +1617,7 @@ export class Orchestrator {
       for (const dsId of downstreamIds) {
         const dt = this.stateGetTask(dsId);
         if (!dt) continue;
-        if (dt.status === 'running' || dt.status === 'fixing_with_ai') {
+        if (isActiveForInvalidation(dt.status)) {
           this.cancelTask(dsId);
         }
       }
@@ -2155,6 +2164,145 @@ export class Orchestrator {
     this.messageBus.publish(TASK_DELTA_CHANNEL, agentDelta);
 
     return this.recreateTask(taskId);
+  }
+
+  /**
+   * Edit the merge mode of a workflow's merge node — **retry-class**
+   * invalidation route per Step 9 of
+   * `docs/architecture/task-invalidation-roadmap.md` and the Decision
+   * Table row "Change merge mode" in
+   * `docs/architecture/task-invalidation-chart.md`
+   * (`MUTATION_POLICIES.mergeMode` → `retryTask` / task scope, scoped
+   * to the merge node).
+   *
+   * Why retry-class (not recreate-class). The chart classifies a
+   * merge-mode change as a merge-node-only execution-policy change:
+   * the merge node's merge strategy (`manual` / `automatic` /
+   * `external_review`) flips, but downstream branch/workspace lineage
+   * and the upstream leaf results that feed the merge node are still
+   * authoritative. The "Why" column reads "Merge execution policy
+   * changed". `applyInvalidation('task','retryTask', mergeNodeId, deps)`
+   * is wired to today's `Orchestrator.restartTask` via
+   * `buildInvalidationDeps` (the compatibility seam Step 1 introduced;
+   * Step 13 will rename `restartTask` → `retryTask` to close the matrix).
+   *
+   * Why this lives on the orchestrator (Step 9 migration). Prior to
+   * Step 9 the merge-mode mutation surface was an app-layer-only
+   * special case in `setWorkflowMergeMode` that restarted the merge
+   * node *only* when it was already terminal or waiting
+   * (`completed` / `awaiting_approval` / `review_ready`). Per the
+   * chart's "Merge-mode inconsistency" section that left no general
+   * active invalidation rule for an in-flight merge node — a `running`
+   * merge node would silently keep using the old mode. Step 9 lifts
+   * the routing into a proper orchestrator policy seam (this method)
+   * so the Hard Invariant (cancel-first) and the retry-class reset
+   * are enforced uniformly across all merge-node states; the app
+   * wrapper becomes a thin delegate (mirrors Steps 2–6).
+   *
+   * Sequence (mirrors `applyInvalidation`'s contract for the
+   * synchronous orchestrator-internal seam — see
+   * `invalidation-policy.ts` and the Step 5/7/8 retry-class precedents):
+   *   1. **Same-mode no-op.** If the workflow's persisted `mergeMode`
+   *      already matches the requested value the method returns `[]`
+   *      without canceling, persisting, or bumping the merge node's
+   *      execution generation. This prevents a no-op rewrite from
+   *      invalidating valid in-flight merge work.
+   *   2. **Cancel-first (Hard Invariant).** If the merge node is
+   *      actively executing or waiting on external review
+   *      (`running` / `fixing_with_ai` / `awaiting_approval` /
+   *      `review_ready`) we interrupt it via `cancelTask` BEFORE any
+   *      authoritative state is reset. The chart's "Merge-mode
+   *      inconsistency" section explicitly flags external-review
+   *      waits and in-flight merge runs as scope that the new model
+   *      must invalidate consistently. Inactive states
+   *      (`pending` / `completed` / `failed` / `needs_input` /
+   *      `blocked`) skip the cancel — there is no in-flight work to
+   *      interrupt and `cancelTask` would otherwise mark a `pending`
+   *      merge node as `failed`.
+   *   3. **Persist new mode.** `persistence.updateWorkflow` writes the
+   *      new `mergeMode` so the retried merge attempt picks up the
+   *      new policy when it next runs.
+   *   4. **Retry-class reset.** Delegate to `restartTask`, which is
+   *      the current `retryTask` compatibility wire (Step 13 will
+   *      rename it). `restartTask` resets the merge node to `pending`,
+   *      clears volatile attempt state (`agentSessionId` /
+   *      `containerId` / `error` / `exitCode` / `startedAt` /
+   *      `completedAt`), and bumps execution generation exactly once
+   *      via `withBumpedExecutionGeneration`. Crucially it does NOT
+   *      clear `branch` / `workspacePath` — that lineage (the merge
+   *      node's accumulated workspace) is the artifact the chart
+   *      preserves for retry-class merge-mode mutations.
+   *
+   * Public surface: `(taskId, mergeMode)` returning `TaskState[]` of
+   * newly-started tasks. `taskId` MUST be the merge node id
+   * (`__merge__<workflowId>`); the workflow id is read from
+   * `task.config.workflowId`. Throws if the task does not exist or is
+   * not a merge node — keeping merge-mode mutation scoped to the
+   * single execution policy slot the chart classifies. Backward-
+   * compatible callers continue to use the workflow-scoped
+   * `setWorkflowMergeMode` wrapper which translates `workflowId →
+   * mergeNodeId` and delegates here.
+   *
+   * NOTE: `recreateTask`'s lineage-discarding reset shape is
+   * deliberately NOT used here. A merge-mode flip does not invalidate
+   * the merge node's accumulated workspace (the merged branch lineage
+   * built from upstream leaf results); only the merge execution
+   * policy changed. That distinction is what makes merge-mode the
+   * single retry-class route alongside the other retry-class rows
+   * (`executorType`, `selectedExperiment`, `selectedExperimentSet`)
+   * in the chart's Decision Table.
+   */
+  editTaskMergeMode(
+    taskId: string,
+    mergeMode: 'manual' | 'automatic' | 'external_review',
+  ): TaskState[] {
+    this.refreshFromDb();
+    const task = this.stateGetTask(taskId);
+    if (!task) throw new Error(`Task ${taskId} not found`);
+    if (!task.config.isMergeNode) {
+      throw new Error(`Task ${taskId} is not a merge node`);
+    }
+    const workflowId = task.config.workflowId;
+    if (!workflowId) {
+      throw new Error(`Merge node ${taskId} has no workflowId`);
+    }
+
+    // Step 9 same-mode no-op: skip cancel + persist + retry when the
+    // requested mode already matches what's persisted on the workflow.
+    // Without this guard a UI/CLI re-affirm would needlessly cancel
+    // active merge work and bump the merge node's execution generation.
+    const wf = this.persistence.loadWorkflow?.(workflowId);
+    if (wf && wf.mergeMode === mergeMode) {
+      return [];
+    }
+
+    // Step 9 cancel-first (chart Hard Invariant): when the merge node
+    // is actively executing or waiting on external review, interrupt
+    // it BEFORE we mutate the workflow's mergeMode and reset merge
+    // state. Stale merge work (an in-flight merge run, a merge fix
+    // session, or an external review wait) cannot survive a policy
+    // change because the merge attempt's execution input — the merge
+    // mode — just changed. Inactive statuses
+    // (`pending`/`completed`/`failed`/`needs_input`/`blocked`) skip
+    // cancel: there is no in-flight work to interrupt and
+    // `cancelTask` would otherwise mark a `pending` merge node as
+    // `failed`.
+    if (isActiveForInvalidation(task.status)) {
+      this.cancelTask(taskId);
+    }
+
+    // Persist new mode on the workflow record so the retried merge
+    // attempt picks up the new policy when restartTask reschedules it.
+    this.persistence.updateWorkflow?.(workflowId, { mergeMode });
+
+    // Step 9 retry-class reset: restartTask is today's `retryTask`
+    // compatibility wire (`buildInvalidationDeps` →
+    // `orchestrator.restartTask`). It resets the merge node to
+    // `pending`, clears volatile attempt state, and bumps execution
+    // generation exactly once via `withBumpedExecutionGeneration`
+    // while preserving branch/workspacePath lineage — the chart's
+    // retry-class semantics for merge-mode mutations.
+    return this.restartTask(taskId);
   }
 
   /**
