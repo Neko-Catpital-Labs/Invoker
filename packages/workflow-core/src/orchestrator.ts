@@ -1991,6 +1991,25 @@ export class Orchestrator {
     return this.recreateTask(taskId);
   }
 
+    editTaskPrompt(taskId: string, newPrompt: string): TaskState[] {
+    this.refreshFromDb();
+    const task = this.stateGetTask(taskId);
+    if (!task) throw new Error(`Task ${taskId} not found`);
+    if (task.config.isMergeNode) throw new Error(`Cannot edit merge node ${taskId}`);
+
+    if (task.status === 'running' || task.status === 'fixing_with_ai') {
+      this.cancelTask(taskId);
+    }
+
+    const promptChanges: TaskStateChanges = { config: { prompt: newPrompt } };
+    this.writeAndSync(taskId, promptChanges);
+    const promptDelta: TaskDelta = { type: 'updated', taskId, changes: promptChanges };
+    this.persistence.logEvent?.(taskId, 'task.updated', promptChanges);
+    this.messageBus.publish(TASK_DELTA_CHANNEL, promptDelta);
+
+    return this.recreateTask(taskId);
+  }
+
   /**
    * Change a task's executor type (executorType) and restart it.
    * Does NOT fork the dirty subtree.
