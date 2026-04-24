@@ -42,6 +42,12 @@ Tagged releases are configured to publish:
 - macOS: `.dmg`
 - Linux: `.deb` and `.AppImage`
 
+Packaged installs bundle the first-party Invoker skills inside the app. On first GUI launch, Invoker prompts you to install those skills into the supported global skill directories for Codex, Claude, and Cursor using `invoker-`-prefixed names so they do not overwrite existing skills. For headless/package-only usage, install the same bundled skills explicitly with:
+
+```bash
+invoker --install-skills
+```
+
 ## Configuration
 
 Invoker reads user config from `~/.invoker/config.json`.
@@ -112,7 +118,7 @@ Use this when you want Invoker to spread work across machines you already manage
 
 Start here if you want to get Invoker running locally with the smallest possible setup.
 
-If you need to turn a product or implementation plan into an Invoker workflow, use the `plan-to-invoker` skill that `bash scripts/setup-agent-skills.sh` links into supported agents. The canonical skill lives at [skills/plan-to-invoker/SKILL.md](skills/plan-to-invoker/SKILL.md), and its deterministic validation entrypoint is `bash skills/plan-to-invoker/scripts/skill-doctor.sh <plan-file>`.
+If you need to turn a product or implementation plan into an Invoker workflow, use the `plan-to-invoker` skill. Repo installs can link it with `bash scripts/setup-agent-skills.sh`. Packaged installs can install the bundled `invoker-plan-to-invoker` copy from the first-run System Setup prompt or with `invoker --install-skills`. The canonical skill source lives at [skills/plan-to-invoker/SKILL.md](skills/plan-to-invoker/SKILL.md), and its deterministic validation entrypoint is `bash skills/plan-to-invoker/scripts/skill-doctor.sh <plan-file>`.
 
 1. Install the prerequisites above.
 2. Clone the repo and run the installation commands.
