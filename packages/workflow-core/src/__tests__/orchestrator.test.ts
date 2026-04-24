@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { reconciliationNeedsInputWorkResponse } from './reconciliation-needs-input-shim.js';
 import { rid, sid } from './scoped-test-helpers.js';
-import { Orchestrator, PlanConflictError, descriptionForMergeNode } from '../orchestrator.js';
+import { Orchestrator, PlanConflictError, TopologyForkRequired, descriptionForMergeNode } from '../orchestrator.js';
 import type { PlanDefinition, OrchestratorPersistence, OrchestratorMessageBus } from '../orchestrator.js';
 import type { TaskState, TaskDelta, TaskStateChanges, Attempt } from '../task-types.js';
 import type { WorkResponse } from '@invoker/contracts';
@@ -8375,6 +8375,105 @@ describe('Orchestrator', () => {
         makeResponse({ actionId: 'task-b', status: 'completed', outputs: { exitCode: 0 } }),
       );
       expect(orchestrator.getTask('task-a')!.status).toBe('failed');
+    });
+  });
+
+  // Step 11 (`docs/architecture/task-invalidation-roadmap.md`): topology
+  // mutations on a live workflow throw `TopologyForkRequired`. The
+  // orchestrator unit-test layer asserts the gate's interaction with
+  // adjacent invariants here; replace-task.test.ts and
+  // state-topology-matrix.test.ts cover the full matrix.
+  describe('replaceTask topology-fork gate', () => {
+    it('throws TopologyForkRequired with workflowId + taskId on a live workflow', () => {
+      orchestrator.loadPlan({
+        name: 'topology-gate-live',
+        tasks: [
+          { id: 'A', description: 'A', command: 'echo A' },
+          { id: 'X', description: 'X', command: 'echo X', dependencies: ['A'] },
+          { id: 'C', description: 'C', command: 'echo C', dependencies: ['X'] },
+        ],
+      });
+      orchestrator.startExecution();
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 'A', status: 'completed', outputs: { exitCode: 0 } }),
+      );
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 'X', status: 'failed', outputs: { exitCode: 1, error: 'fail' } }),
+      );
+
+      const xTask = orchestrator.getTask('X')!;
+      const wfId = xTask.config.workflowId!;
+      const scopedXId = xTask.id;
+
+      let caught: unknown;
+      try {
+        orchestrator.replaceTask('X', [
+          { id: 'fix', description: 'Fix', command: 'echo fix' },
+        ]);
+      } catch (err) {
+        caught = err;
+      }
+      expect(caught).toBeInstanceOf(TopologyForkRequired);
+      const err = caught as TopologyForkRequired;
+      expect(err.workflowId).toBe(wfId);
+      expect(err.taskId).toBe(scopedXId);
+      expect(err.message).toContain(wfId);
+      expect(err.message).toContain(scopedXId);
+
+      // Source unchanged, no replacement created.
+      expect(orchestrator.getTask('X')!.status).toBe('failed');
+      expect(orchestrator.getTask('fix')).toBeUndefined();
+    });
+
+    it('allows in-place replacement on a fully terminal workflow', () => {
+      orchestrator.loadPlan({
+        name: 'topology-gate-terminal',
+        tasks: [
+          { id: 'A', description: 'A', command: 'echo A' },
+          { id: 'X', description: 'X', command: 'echo X', dependencies: ['A'] },
+          { id: 'C', description: 'C', command: 'echo C', dependencies: ['X'] },
+        ],
+      });
+      orchestrator.startExecution();
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 'A', status: 'completed', outputs: { exitCode: 0 } }),
+      );
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 'X', status: 'failed', outputs: { exitCode: 1, error: 'fail' } }),
+      );
+      // Cancel C → workflow now has no live non-merge tasks.
+      orchestrator.cancelTask('C');
+
+      orchestrator.replaceTask('X', [
+        { id: 'fix', description: 'Fix', command: 'echo fix' },
+      ]);
+
+      expect(orchestrator.getTask('X')!.status).toBe('stale');
+      expect(orchestrator.getTask('fix')).toBeDefined();
+    });
+
+    it('does not gate pure-attribute mutations even when the workflow is live', () => {
+      orchestrator.loadPlan({
+        name: 'topology-gate-attr',
+        tasks: [
+          { id: 'A', description: 'A', command: 'echo A' },
+          { id: 'X', description: 'X', command: 'echo X', dependencies: ['A'] },
+          { id: 'C', description: 'C', command: 'echo C', dependencies: ['X'] },
+        ],
+      });
+      orchestrator.startExecution();
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 'A', status: 'completed', outputs: { exitCode: 0 } }),
+      );
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 'X', status: 'failed', outputs: { exitCode: 1, error: 'fail' } }),
+      );
+      // C is `pending` → workflow is live by the Step 11 definition.
+      expect(orchestrator.getTask('C')!.status).toBe('pending');
+
+      // Pure-attribute edit must succeed without raising the topology gate.
+      expect(() => orchestrator.editTaskCommand('A', 'echo A-v2')).not.toThrow();
+      expect(orchestrator.getTask('A')!.config.command).toBe('echo A-v2');
     });
   });
 });
