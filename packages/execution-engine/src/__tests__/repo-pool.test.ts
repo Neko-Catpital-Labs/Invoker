@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execSync } from 'node:child_process';
@@ -131,6 +131,26 @@ describe('RepoPool', () => {
     await pool2.destroyAll();
   });
 
+  it('acquireWorktree: repairs leaked target directory even when it is not a registered worktree', async () => {
+    const branch = 'experiment/leaked-dir';
+    const poolWithExternalBase = new RepoPool({
+      cacheDir: tmpDir,
+      worktreeBaseDir: join(tmpDir, 'managed-worktrees'),
+    });
+
+    const leakedPath = poolWithExternalBase.externalWorktreePath(localRepoUrl, branch);
+    mkdirSync(leakedPath, { recursive: true });
+    writeFileSync(join(leakedPath, 'leaked.txt'), 'partial workspace');
+
+    const wt = await poolWithExternalBase.acquireWorktree(localRepoUrl, branch);
+    expect(wt.worktreePath).toBe(leakedPath);
+    expect(existsSync(join(wt.worktreePath, '.git'))).toBe(true);
+    const currentBranch = execSync('git branch --show-current', { cwd: wt.worktreePath }).toString().trim();
+    expect(currentBranch).toBe(branch);
+
+    await poolWithExternalBase.destroyAll();
+  });
+
   it('softRelease: frees slot without removing worktree from disk', async () => {
     const limitedPool = new RepoPool({ cacheDir: tmpDir, maxWorktrees: 1 });
     const wt1 = await limitedPool.acquireWorktree(localRepoUrl, 'branch-soft');
@@ -181,9 +201,9 @@ describe('RepoPool', () => {
   });
 
   describe('content-addressable reuse (collision-free branch names)', () => {
-    // Collision-free naming guarantees: same actionId + content → same workspace
-    // can be reused under a new lifecycle tag (rename_to_lifecycle), and a hash
-    // collision across actionIds is logged but not fatal.
+    // Collision-free naming guarantees: same actionId + content can be reused
+    // under a new lifecycle tag for non-fresh flows, and a hash collision
+    // across actionIds is logged but not fatal.
 
     it('reuses a content-equivalent leftover worktree by renaming the branch (rename_to_lifecycle)', async () => {
       const actionId = 'wf-rl-1/task';
@@ -205,7 +225,7 @@ describe('RepoPool', () => {
       await pool2.destroyAll();
     });
 
-    it('rename_to_lifecycle wins even when forceFresh=true (cache-equivalent reuse)', async () => {
+    it('forceFresh=true provisions a new workspace path even for a content-equivalent branch', async () => {
       const actionId = 'wf-rl-2/task';
       const branchA = `experiment/${actionId}/g0.t0.aaaa-cafebabe`;
       const branchB = `experiment/${actionId}/g1.t0.abbb-cafebabe`;
@@ -222,7 +242,9 @@ describe('RepoPool', () => {
         actionId,
         { forceFresh: true },
       );
-      expect(wt2.worktreePath).toBe(path1);
+      expect(wt2.worktreePath).not.toBe(path1);
+      const head = execSync('git branch --show-current', { cwd: wt2.worktreePath }).toString().trim();
+      expect(head).toBe(branchB);
       await pool2.destroyAll();
     });
 

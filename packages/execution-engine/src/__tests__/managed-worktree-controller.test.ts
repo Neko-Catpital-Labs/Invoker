@@ -95,7 +95,7 @@ describe('planManagedWorktree', () => {
     });
   });
 
-  it('honours rename_to_lifecycle even when forceFresh=true (cache-equivalent reuse)', () => {
+  it('forces recreate instead of rename_to_lifecycle when forceFresh=true', () => {
     const plan = planManagedWorktree({
       targetBranch: 'experiment/wf-1/task/g0.t1.aabc12345-deadbeef',
       targetWorktreePath: '/wt/target',
@@ -106,7 +106,11 @@ describe('planManagedWorktree', () => {
       },
     });
 
-    expect(plan.kind).toBe('rename_to_lifecycle');
+    expect(plan).toEqual({
+      kind: 'recreate',
+      worktreePath: '/wt/target',
+      cleanupPaths: ['/wt/target'],
+    });
   });
 
   it('does nothing special when contentCandidate matches the target branch exactly', () => {
