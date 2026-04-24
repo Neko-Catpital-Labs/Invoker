@@ -68,6 +68,15 @@ export interface WorkRequest {
     startedAt?: string;
     completedAt?: string;
   };
+  /**
+   * In-process callback invoked by the executor as soon as the experiment
+   * branch name is determined (i.e. before any `git worktree add` that could
+   * leak a worktree). Lets the orchestrator persist `attempt.branch` early so
+   * a leftover worktree from a crashed dispatch can still be reconciled.
+   *
+   * Non-serializable. Producers and consumers live in the same process.
+   */
+  onBranchResolved?: (branch: string) => void;
 }
 
 // ── Work Response ───────────────────────────────────────────
