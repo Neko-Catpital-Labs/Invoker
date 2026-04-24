@@ -923,7 +923,10 @@ describe('selectExperiment', () => {
 });
 
 describe('setWorkflowMergeMode', () => {
-  let orchestrator: { restartTask: ReturnType<typeof vi.fn> };
+  // These tests pin the wrapper's two branches:
+  //   - merge node present  -> `orchestrator.editTaskMergeMode`
+  //   - merge node absent   -> direct `persistence.updateWorkflow`
+  let orchestrator: { editTaskMergeMode: ReturnType<typeof vi.fn> };
   let persistence: {
     updateWorkflow: ReturnType<typeof vi.fn>;
     loadTasks: ReturnType<typeof vi.fn>;
@@ -932,7 +935,7 @@ describe('setWorkflowMergeMode', () => {
 
   beforeEach(() => {
     orchestrator = {
-      restartTask: vi.fn(() => [makeRunningTask({ id: 'merge-task', config: { isMergeNode: true } })]),
+      editTaskMergeMode: vi.fn(() => [makeRunningTask({ id: 'merge-task', config: { isMergeNode: true } })]),
     };
     persistence = {
       updateWorkflow: vi.fn(),
@@ -946,31 +949,32 @@ describe('setWorkflowMergeMode', () => {
     };
   });
 
-  it('updates persistence with canonical mode', async () => {
+  it('routes through orchestrator.editTaskMergeMode with the canonical mode when a merge node exists', async () => {
     await setWorkflowMergeMode('wf-1', 'external_review', {
       orchestrator: orchestrator as unknown as Orchestrator,
       persistence: persistence as unknown as SQLiteAdapter,
       taskExecutor: taskExecutor as unknown as TaskRunner,
     });
 
-    expect(persistence.updateWorkflow).toHaveBeenCalledWith('wf-1', { mergeMode: 'external_review' });
+    expect(orchestrator.editTaskMergeMode).toHaveBeenCalledWith('merge-task', 'external_review');
+    // Workflow-record write happens INSIDE the orchestrator seam
+    // when a merge node exists — the wrapper MUST NOT double-write.
+    expect(persistence.updateWorkflow).not.toHaveBeenCalled();
   });
 
-  it('restarts merge node when it is completed', async () => {
+  it('executes runnable tasks returned by the orchestrator', async () => {
     await setWorkflowMergeMode('wf-1', 'automatic', {
       orchestrator: orchestrator as unknown as Orchestrator,
       persistence: persistence as unknown as SQLiteAdapter,
       taskExecutor: taskExecutor as unknown as TaskRunner,
     });
 
-    expect(orchestrator.restartTask).toHaveBeenCalledWith('merge-task');
+    expect(orchestrator.editTaskMergeMode).toHaveBeenCalledWith('merge-task', 'automatic');
     expect(taskExecutor.executeTasks).toHaveBeenCalled();
   });
 
-  it('restarts merge node when it is awaiting_approval', async () => {
-    persistence.loadTasks.mockReturnValue([
-      makeTask({ id: 'merge-task', status: 'awaiting_approval', config: { isMergeNode: true } }),
-    ]);
+  it('does not execute when the orchestrator returns no runnable tasks (e.g. same-mode no-op)', async () => {
+    orchestrator.editTaskMergeMode.mockReturnValueOnce([]);
 
     await setWorkflowMergeMode('wf-1', 'manual', {
       orchestrator: orchestrator as unknown as Orchestrator,
@@ -978,25 +982,11 @@ describe('setWorkflowMergeMode', () => {
       taskExecutor: taskExecutor as unknown as TaskRunner,
     });
 
-    expect(orchestrator.restartTask).toHaveBeenCalledWith('merge-task');
-  });
-
-  it('does not restart merge node when it is pending', async () => {
-    persistence.loadTasks.mockReturnValue([
-      makeTask({ id: 'merge-task', status: 'pending', config: { isMergeNode: true } }),
-    ]);
-
-    await setWorkflowMergeMode('wf-1', 'manual', {
-      orchestrator: orchestrator as unknown as Orchestrator,
-      persistence: persistence as unknown as SQLiteAdapter,
-      taskExecutor: taskExecutor as unknown as TaskRunner,
-    });
-
-    expect(orchestrator.restartTask).not.toHaveBeenCalled();
+    expect(orchestrator.editTaskMergeMode).toHaveBeenCalledWith('merge-task', 'manual');
     expect(taskExecutor.executeTasks).not.toHaveBeenCalled();
   });
 
-  it('does not restart when no merge node exists', async () => {
+  it('falls back to a direct persistence write when no merge node exists (no-merge-gate workflow)', async () => {
     persistence.loadTasks.mockReturnValue([makeTask({ id: 'task-a', status: 'completed' })]);
 
     await setWorkflowMergeMode('wf-1', 'manual', {
@@ -1005,7 +995,9 @@ describe('setWorkflowMergeMode', () => {
       taskExecutor: taskExecutor as unknown as TaskRunner,
     });
 
-    expect(orchestrator.restartTask).not.toHaveBeenCalled();
+    expect(orchestrator.editTaskMergeMode).not.toHaveBeenCalled();
+    expect(persistence.updateWorkflow).toHaveBeenCalledWith('wf-1', { mergeMode: 'manual' });
+    expect(taskExecutor.executeTasks).not.toHaveBeenCalled();
   });
 
   it('throws on invalid merge mode', async () => {
