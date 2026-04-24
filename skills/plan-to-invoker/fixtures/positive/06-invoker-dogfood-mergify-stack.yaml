@@ -1,0 +1,38 @@
+# Invoker-on-Invoker dogfood example with explicit Mergify Stacks publication.
+# Source: examples.md Section 7
+
+name: "Dogfood Invoker CI docs update"
+description: |
+  Updates Invoker's own contributor guidance for merge automation.
+
+  This plan still uses the normal Invoker PR gate shape: `onFinish: pull_request`
+  with `mergeMode: github`. Because the target repo is Invoker itself, the
+  branch publication workflow after the commits are ready should use
+  `mergify stack push` so stacked PRs stay synchronized.
+onFinish: pull_request
+mergeMode: github
+repoUrl: git@github.com:EdbertChan/Invoker.git
+baseBranch: master
+featureBranch: docs/dogfood-mergify-stack
+
+tasks:
+  - id: update-dogfood-guidance
+    description: "Clarify when Invoker-on-Invoker changes should use Mergify Stacks"
+    prompt: |
+      Update the Invoker skills and examples so they are explicit about the
+      repo-specific dogfood rule:
+
+      1. When the target repo is Invoker itself, keep `mergeMode: github`
+         and publish/update the resulting commit stack with `mergify stack push`.
+      2. When the target repo is an external repo, keep normal PR flow unless
+         that repo independently uses Mergify Stacks.
+
+      Acceptance criteria:
+      - Relevant skills mention the Invoker-only scope.
+      - Examples include an Invoker positive case and an external-repo counterexample.
+    dependencies: []
+
+  - id: verify-skill-fixtures
+    description: "Run the plan-to-invoker fixture tests"
+    command: "bash skills/plan-to-invoker/scripts/test-fixtures.sh"
+    dependencies: [update-dogfood-guidance]

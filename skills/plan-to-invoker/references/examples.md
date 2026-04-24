@@ -77,6 +77,26 @@ Omit or use `TBD` under `Files:` when scope is unknown; revise tasks as the plan
 
 ---
 
+## 7. Invoker-on-Invoker publication workflow
+
+When the target repo is Invoker itself, keep the plan shape normal:
+
+- `onFinish: pull_request`
+- `mergeMode: github`
+
+Then make the repo-specific publication step explicit: once the branch's commit stack is ready, publish/update it with `mergify stack push`.
+
+**See**: `fixtures/positive/06-invoker-dogfood-mergify-stack.yaml`
+
+This is a **repo-specific dogfood rule**, not a general plan schema rule.
+
+Counterexample:
+
+- If the target repo is an external repo such as `EdbertChan/test-playground`, do **not** inject Mergify Stacks guidance by default.
+- Keep normal PR flow unless that repo independently uses Mergify Stacks.
+
+---
+
 ## Summary
 
 **Positive patterns**:
@@ -84,6 +104,7 @@ Omit or use `TBD` under `Files:` when scope is unknown; revise tasks as the plan
 - Feature implementation → implement → test → verify, `onFinish: merge`
 - Multi-step refactors → `executorType: worktree`, chained dependencies
 - Large refactors → `onFinish: pull_request`, diamond DAGs
+- Invoker-on-Invoker PR publication → keep `mergeMode: github`, then use `mergify stack push` as the repo-specific publication step
 
 **Validation enforces**:
 - Every prompt task must have verification command task

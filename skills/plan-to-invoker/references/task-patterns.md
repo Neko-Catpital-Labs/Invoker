@@ -20,6 +20,7 @@ Source of truth: `packages/surfaces/src/slack/plan-conversation.ts:100-116`
 | "Modify UI component" / "Fix layout" | `prompt` + `visualProof: true` | Set `visualProof: true` at plan level; include `description` |
 | **Add visual proof E2E test case** | `prompt` | Add a test to `packages/app/e2e/visual-proof.spec.ts` that sets up the exact UI state being changed and calls `captureScreenshot(page, '<plan-slug>-<state>')`. See `skills/visual-proof/SKILL.md`. |
 | **Capture visual proof (after)** | `command` | `pnpm --filter @invoker/ui build && pnpm --filter @invoker/app build && bash scripts/ui-visual-proof.sh --label after` — depends on **all** implementation tasks |
+| **Invoker-on-Invoker PR publication** | repo-level workflow note | Keep `onFinish: pull_request` + `mergeMode: github`, then publish/update the commit stack with `mergify stack push` once the branch is ready |
 
 ## Dependency Rules
 
@@ -160,6 +161,7 @@ tasks:
 - **Circular dependencies**: task A depends on B, B depends on A — validator catches this but don't generate it.
 - **Phantom files**: referencing files that don't exist without a task to create them first.
 - **UI plan without visual proof tasks**: `visualProof: true` without the E2E test case task and capture task means no plan-specific screenshots are captured.
+- **Over-generalized Mergify guidance**: telling external target repos to use `mergify stack push` just because Invoker itself does. This is only the dogfood workflow for Invoker-on-Invoker changes.
 
 ## Deterministic Quality Gate
 
