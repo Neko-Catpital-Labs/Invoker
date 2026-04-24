@@ -120,11 +120,18 @@ export function provideInput(
   deps.orchestrator.provideInput(taskId, text);
 }
 
+export function retryTask(
+  taskId: string,
+  deps: Pick<ActionDeps, 'orchestrator'>,
+): TaskState[] {
+  return deps.orchestrator.retryTask(taskId);
+}
+
 export function restartTask(
   taskId: string,
   deps: Pick<ActionDeps, 'orchestrator'>,
 ): TaskState[] {
-  return deps.orchestrator.restartTask(taskId);
+  return deps.orchestrator.recreateTask(taskId);
 }
 
 export function retryWorkflow(
@@ -285,7 +292,7 @@ export function buildInvalidationDeps(
   });
   return {
     cancelInFlight,
-    retryTask: (taskId: string) => deps.orchestrator.restartTask(taskId),
+    retryTask: (taskId: string) => deps.orchestrator.retryTask(taskId),
     recreateTask: (taskId: string) => deps.orchestrator.recreateTask(taskId),
     retryWorkflow: (workflowId: string) => deps.orchestrator.retryWorkflow(workflowId),
     recreateWorkflow: (workflowId: string) =>
@@ -747,7 +754,7 @@ export async function autoFixOnFailure(
       }
       return;
     }
-    const started = orchestrator.restartTask(taskId);
+    const started = orchestrator.retryTask(taskId);
     const runnable = started.filter(t => t.status === 'running');
     persistence.logEvent?.(taskId, 'debug.auto-fix', {
       phase: 'auto-fix-post-route-restart',

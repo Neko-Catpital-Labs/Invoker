@@ -27,7 +27,7 @@ function stubOrchestrator(overrides: Partial<Orchestrator> = {}): Orchestrator {
     getTask: vi.fn().mockReturnValue(undefined),
     revertConflictResolution: vi.fn(),
     provideInput: vi.fn(),
-    restartTask: vi.fn().mockReturnValue([]),
+    retryTask: vi.fn().mockReturnValue([]),
     selectExperiment: vi.fn().mockReturnValue([]),
     editTaskCommand: vi.fn().mockReturnValue([]),
     editTaskType: vi.fn().mockReturnValue([]),
@@ -145,21 +145,21 @@ describe('CommandService', () => {
     });
   });
 
-  // ── restartTask ──────────────────────────────────────────
+  // ── retryTask ──────────────────────────────────────────
 
-  describe('restartTask', () => {
-    it('delegates to orchestrator.restartTask', async () => {
-      const result = await service.restartTask(makeEnvelope({ taskId: 't-1' }));
+  describe('retryTask', () => {
+    it('delegates to orchestrator.retryTask', async () => {
+      const result = await service.retryTask(makeEnvelope({ taskId: 't-1' }));
       expect(result).toEqual({ ok: true, data: [] });
-      expect(orchestrator.restartTask).toHaveBeenCalledWith('t-1');
+      expect(orchestrator.retryTask).toHaveBeenCalledWith('t-1');
     });
 
     it('returns error on exception', async () => {
-      (orchestrator.restartTask as ReturnType<typeof vi.fn>).mockImplementation(() => {
+      (orchestrator.retryTask as ReturnType<typeof vi.fn>).mockImplementation(() => {
         throw new Error('not failed');
       });
-      const result = await service.restartTask(makeEnvelope({ taskId: 't-1' }));
-      expect(result).toEqual({ ok: false, error: { code: 'RESTART_TASK_FAILED', message: 'not failed' } });
+      const result = await service.retryTask(makeEnvelope({ taskId: 't-1' }));
+      expect(result).toEqual({ ok: false, error: { code: 'RETRY_TASK_FAILED', message: 'not failed' } });
     });
   });
 
@@ -364,7 +364,7 @@ describe('CommandService', () => {
         config: { workflowId: taskId === 't-1' ? 'wf-1' : 'wf-1' },
       }));
 
-      (orchestrator.restartTask as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      (orchestrator.retryTask as ReturnType<typeof vi.fn>).mockImplementation(async () => {
         order.push('restart-start');
         await firstPromise;
         order.push('restart-end');
@@ -376,7 +376,7 @@ describe('CommandService', () => {
         return [];
       });
 
-      const p1 = service.restartTask(makeEnvelope({ taskId: 't-1' }, 'k1'));
+      const p1 = service.retryTask(makeEnvelope({ taskId: 't-1' }, 'k1'));
       const p2 = service.editTaskCommand(makeEnvelope({ taskId: 't-2', newCommand: 'x' }, 'k2'));
 
       // Let the first call complete
@@ -399,7 +399,7 @@ describe('CommandService', () => {
         config: { workflowId: taskId === 't-1' ? 'wf-1' : 'wf-2' },
       }));
 
-      (orchestrator.restartTask as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      (orchestrator.retryTask as ReturnType<typeof vi.fn>).mockImplementation(async () => {
         order.push('restart-start');
         await restartGate;
         order.push('restart-end');
@@ -412,7 +412,7 @@ describe('CommandService', () => {
         return [];
       });
 
-      const p1 = service.restartTask(makeEnvelope({ taskId: 't-1' }, 'k1'));
+      const p1 = service.retryTask(makeEnvelope({ taskId: 't-1' }, 'k1'));
       const p2 = service.editTaskCommand(makeEnvelope({ taskId: 't-2', newCommand: 'x' }, 'k2'));
 
       await Promise.resolve();

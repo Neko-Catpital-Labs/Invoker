@@ -240,7 +240,7 @@ describe('State × Topology Matrix', () => {
       orchestrator.handleWorkerResponse(fail('B'));
       expect(orchestrator.getTask('D')!.status).toBe('pending');
 
-      orchestrator.restartTask('B');
+      orchestrator.retryTask('B');
       expect(orchestrator.getTask('D')!.status).toBe('pending');
 
       orchestrator.handleWorkerResponse(complete('B'));
@@ -267,7 +267,7 @@ describe('State × Topology Matrix', () => {
       orchestrator.handleWorkerResponse(fail('B'));
       orchestrator.handleWorkerResponse(fail('C'));
 
-      orchestrator.restartTask('B');
+      orchestrator.retryTask('B');
       orchestrator.handleWorkerResponse(complete('B'));
 
       expect(orchestrator.getTask('D')!.status).toBe('pending');
@@ -282,7 +282,7 @@ describe('State × Topology Matrix', () => {
       orchestrator.handleWorkerResponse(complete('C'));
       orchestrator.handleWorkerResponse(complete('D'));
 
-      orchestrator.restartTask('B');
+      orchestrator.retryTask('B');
 
       expect(orchestrator.getTask('B')!.status).toBe('running');
       expect(orchestrator.getTask('D')!.status).toBe('pending');
@@ -427,7 +427,7 @@ describe('State × Topology Matrix', () => {
       orchestrator.handleWorkerResponse(fail('A'));
       expect(orchestrator.getTask('B')!.status).toBe('pending');
 
-      orchestrator.restartTask('A');
+      orchestrator.retryTask('A');
       orchestrator.handleWorkerResponse(complete('A'));
 
       expect(orchestrator.getTask('B')!.status).toBe('running');
@@ -446,7 +446,7 @@ describe('State × Topology Matrix', () => {
       orchestrator.handleWorkerResponse(fail('B'));
       expect(orchestrator.getTask('C')!.status).toBe('pending');
 
-      orchestrator.restartTask('B');
+      orchestrator.retryTask('B');
       orchestrator.handleWorkerResponse(complete('B'));
 
       expect(orchestrator.getTask('C')!.status).toBe('running');
@@ -460,8 +460,8 @@ describe('State × Topology Matrix', () => {
       orchestrator.handleWorkerResponse(fail('B'));
       expect(orchestrator.getTask('C')!.status).toBe('pending');
 
-      orchestrator.restartTask('A');
-      orchestrator.restartTask('B');
+      orchestrator.retryTask('A');
+      orchestrator.retryTask('B');
 
       orchestrator.handleWorkerResponse(complete('A'));
       orchestrator.handleWorkerResponse(complete('B'));
@@ -516,7 +516,7 @@ describe('State × Topology Matrix', () => {
       expect(orchestrator.getTask('F')!.status).toBe('pending');
       expect(orchestrator.getTask('G')!.status).toBe('pending');
 
-      orchestrator.restartTask('B');
+      orchestrator.retryTask('B');
       orchestrator.handleWorkerResponse(complete('B'));
       expect(orchestrator.getTask('D')!.status).toBe('running');
 
@@ -564,7 +564,7 @@ describe('State × Topology Matrix', () => {
       orchestrator.handleWorkerResponse(fail('A'));
       orchestrator.handleWorkerResponse(fail('B'));
 
-      orchestrator.restartTask('A');
+      orchestrator.retryTask('A');
       orchestrator.handleWorkerResponse(complete('A'));
 
       expect(orchestrator.getTask('C')!.status).toBe('pending');

@@ -8,7 +8,7 @@ const FILES = [
 ];
 
 const AUTO_START_CALLS = [
-  'restartTask',
+  'retryTask',
   'retryWorkflow',
   'recreateTask',
   'recreateWorkflow',

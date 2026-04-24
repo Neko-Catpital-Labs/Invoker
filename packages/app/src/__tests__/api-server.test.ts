@@ -89,7 +89,7 @@ function createMocks() {
       provideInput: vi.fn(),
       beginConflictResolution: vi.fn(() => ({ savedError: 'saved-error' })),
       setFixAwaitingApproval: vi.fn(),
-      restartTask: vi.fn(() => [makeTask()]),
+      retryTask: vi.fn(() => [makeTask()]),
       editTaskCommand: vi.fn(() => [makeTask()]),
       editTaskPrompt: vi.fn(() => [makeTask()]),
       editTaskType: vi.fn(() => [makeTask()]),
@@ -173,7 +173,7 @@ beforeEach(() => {
   mocks.orchestrator.startExecution.mockReturnValue([]);
   mocks.orchestrator.getTask.mockImplementation((id: string) => (id === 'task-1' ? makeTask() : undefined));
   mocks.orchestrator.approve.mockResolvedValue([]);
-  mocks.orchestrator.restartTask.mockReturnValue([makeTask()]);
+  mocks.orchestrator.retryTask.mockReturnValue([makeTask()]);
   mocks.orchestrator.beginConflictResolution.mockReturnValue({ savedError: 'saved-error' });
   mocks.orchestrator.editTaskCommand.mockReturnValue([makeTask()]);
   mocks.orchestrator.editTaskPrompt.mockReturnValue([makeTask()]);
@@ -376,17 +376,17 @@ describe('POST /api/workflows/:id/cancel', () => {
 });
 
 describe('POST /api/tasks/:id/restart', () => {
-  it('restarts task via shared restartTask', async () => {
+  it('restarts task via shared retryTask', async () => {
     const res = await request(port, 'POST', '/api/tasks/task-1/restart');
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
     expect(res.body.action).toBe('restarted');
-    expect(mocks.orchestrator.restartTask).toHaveBeenCalledWith('task-1');
+    expect(mocks.orchestrator.retryTask).toHaveBeenCalledWith('task-1');
     expect(mocks.killRunningTask).toHaveBeenCalledWith('task-1');
   });
 
   it('returns 400 on error', async () => {
-    mocks.orchestrator.restartTask.mockImplementation(() => {
+    mocks.orchestrator.retryTask.mockImplementation(() => {
       throw new Error('task not restartable');
     });
     const res = await request(port, 'POST', '/api/tasks/task-1/restart');
@@ -406,7 +406,7 @@ describe('POST /api/tasks/:id/restart', () => {
       status: 'running',
       execution: { selectedAttemptId: 'attempt-9' },
     });
-    mocks.orchestrator.restartTask.mockReturnValue([scoped]);
+    mocks.orchestrator.retryTask.mockReturnValue([scoped]);
     mocks.orchestrator.startExecution.mockReturnValue([topup]);
 
     const res = await request(port, 'POST', '/api/tasks/task-1/restart');
@@ -427,7 +427,7 @@ describe('POST /api/tasks/:id/restart', () => {
       status: 'running',
       execution: { selectedAttemptId: 'attempt-1' },
     });
-    mocks.orchestrator.restartTask.mockReturnValue([scoped]);
+    mocks.orchestrator.retryTask.mockReturnValue([scoped]);
     mocks.orchestrator.startExecution.mockReturnValue([duplicate]);
 
     const res = await request(port, 'POST', '/api/tasks/task-1/restart');

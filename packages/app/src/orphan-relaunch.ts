@@ -30,7 +30,7 @@ export function relaunchOrphansAndStartReady(
         `startedAt=${startedAt} lastHeartbeatAt=${lastHeartbeat} generation=${task.execution.generation ?? 0}`,
       { module: logPrefix },
     );
-    const started = orchestrator.restartTask(task.id);
+    const started = orchestrator.retryTask(task.id);
     const runnable = started.filter((candidate) => candidate.status === 'running');
     if (runnable.length > 0) {
       orphanRestarted.push(...runnable);

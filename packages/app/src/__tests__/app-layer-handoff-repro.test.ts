@@ -168,7 +168,7 @@ describe('app-layer handoff repros', () => {
     expect(h.getTask(mergeTaskId)!.status).toBe('completed');
 
     h.persistence.updateWorkflow(workflowId, { baseBranch: 'develop' });
-    const started = h.orchestrator.restartTask(mergeTaskId);
+    const started = h.orchestrator.retryTask(mergeTaskId);
     expect(started.some((task) => task.id === mergeTaskId && task.status === 'running')).toBe(true);
     expect(h.getTask(mergeTaskId)!.execution.workspacePath).toBe('/tmp/mock-merge-worktree');
 
@@ -190,7 +190,7 @@ describe('app-layer handoff repros', () => {
     await h.executor.executeTasks([h.getTask(mergeTaskId)!]);
 
     h.persistence.updateWorkflow(workflowId, { baseBranch: 'release' });
-    const started = h.orchestrator.restartTask(mergeTaskId);
+    const started = h.orchestrator.retryTask(mergeTaskId);
     await dispatchStarted(h, started, 'test.standalone.set-merge-branch');
 
     expect(h.getTask(mergeTaskId)!.execution.workspacePath).toBe('/tmp/mock-merge-worktree');

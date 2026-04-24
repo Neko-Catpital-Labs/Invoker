@@ -78,7 +78,7 @@ describe('orphan reconciliation on resume', () => {
     // t1 is still 'running' in the DB — orphaned
     expect(orchestrator2.getTask('t1')?.status).toBe('running');
 
-    // Reconcile: restartTask resets to pending, then auto-starts (deps met)
+    // Reconcile: retryTask resets to pending, then auto-starts (deps met)
     const restarted = relaunchOrphansAndStartReady(orchestrator2, testLogger, 'test');
 
     expect(restarted.length).toBe(1);

@@ -594,7 +594,7 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
       await headlessRetryWorkflow(args[1], deps);
       break;
     case 'retry-task':
-      await headlessRestart(args[1], deps);
+      await headlessRetryTask(args[1], deps);
       break;
     case 'recreate':
       await headlessRecreateWorkflow(args[1], deps);
@@ -1083,14 +1083,14 @@ async function headlessSelect(taskId: string, experimentId: string, deps: Headle
   autoFix.unsubscribe();
 }
 
-async function headlessRestart(taskId: string, deps: HeadlessDeps): Promise<void> {
+async function headlessRetryTask(taskId: string, deps: HeadlessDeps): Promise<void> {
   if (!taskId) throw new Error('Missing arguments. Usage: --headless retry-task <taskId>');
   const restored = restoreWorkflowForTask(taskId, deps);
   taskId = restored.resolvedTaskId;
   await preemptTaskSubgraph(taskId, deps);
 
   const envelope = makeEnvelope('restart-task', 'headless', 'task', { taskId });
-  const result = await deps.commandService.restartTask(envelope);
+  const result = await deps.commandService.retryTask(envelope);
   if (!result.ok) throw new Error(result.error.message);
   const runnable = result.data.filter(t => t.status === 'running');
   process.stdout.write(`Restarted task "${taskId}" — ${runnable.length} task(s) to execute\n`);
