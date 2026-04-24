@@ -235,17 +235,10 @@ HEAD deadbeef
 branch refs/heads/experiment/test-task-oldhash
 `;
       }
-      if (script.includes('merge-base --is-ancestor')) return '';
-      if (script.includes('branch -m')) {
-        const toEncoded = script.match(/TO=\$\(echo ([^ ]+) \| base64 -d\)/)?.[1];
-        const toBranch = Buffer.from(toEncoded ?? '', 'base64').toString('utf8');
-        return `${toBranch}\n`;
-      }
       return '';
     });
 
     const setupTaskBranchSpy = vi.spyOn(ssh, 'setupTaskBranch').mockResolvedValue(undefined);
-    const mergeUpstreamsSpy = vi.spyOn(ssh, 'mergeRequestUpstreamBranches').mockResolvedValue(undefined);
     vi.spyOn(ssh, 'spawnSshRemoteStdin').mockImplementation(
       (_executionId: string, _request: any, handle: any) => handle,
     );
@@ -262,10 +255,56 @@ branch refs/heads/experiment/test-task-oldhash
 
     const handle = await ssh.start(req);
 
-    expect(handle.workspacePath).toBe(`~/.invoker/worktrees/${repoHash}/experiment-test-task-oldhash`);
-    expect(setupTaskBranchSpy).not.toHaveBeenCalled();
-    expect(mergeUpstreamsSpy).toHaveBeenCalled();
-    expect(execRemoteCapture).toHaveBeenCalledWith(expect.stringContaining('branch -m'), 'rename_reuse_branch');
+    expect(handle.workspacePath).toMatch(new RegExp(`^~/.invoker/worktrees/${repoHash}/experiment-test-task-[0-9a-f]{8}$`));
+    expect(handle.workspacePath).not.toBe(`~/.invoker/worktrees/${repoHash}/experiment-test-task-oldhash`);
+    expect(setupTaskBranchSpy).toHaveBeenCalledTimes(1);
+    expect(execRemoteCapture).not.toHaveBeenCalledWith(expect.stringContaining('branch -m'), 'rename_reuse_branch');
+  });
+
+  it('persists the owning worktree path on startup failure when Git reports a branch owner', async () => {
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'testuser',
+      sshKeyPath: '/dev/null',
+      managedWorkspaces: true,
+      remoteInvokerHome: '/home/invoker/.invoker',
+    }) as any;
+
+    vi.spyOn(ssh, 'execRemoteCapture').mockImplementation(async (script: string) => {
+      if (script.includes('__INVOKER_BASE_REF__=')) {
+        return '__INVOKER_BASE_REF__=origin/main\n__INVOKER_BASE_HEAD__=abc123def456abc123def456abc123def456abc1';
+      }
+      if (script.includes('printf %s "$HOME"')) return '/home/invoker';
+      if (script.includes('worktree list --porcelain')) return '';
+      return '';
+    });
+
+    const ownerPath = '/home/invoker/.invoker/worktrees/049de5b865cc/experiment-test-task-oldhash';
+    vi.spyOn(ssh, 'setupTaskBranch').mockRejectedValue(
+      createSshRemoteScriptError(
+        128,
+        '',
+        `Preparing worktree (checking out 'experiment/test-task-deadbeef')\n` +
+          `fatal: 'experiment/test-task-deadbeef' is already used by worktree at '${ownerPath}'\n`,
+        'setup_branch',
+      ),
+    );
+
+    const req = makeRequest({
+      actionType: 'command',
+      actionId: 'test-task',
+      inputs: {
+        command: 'pnpm test',
+        description: 'run tests',
+        repoUrl: 'git@github.com:owner/repo.git',
+      },
+    });
+
+    const err = await ssh.start(req).catch((e: unknown) => e as Error & { workspacePath?: string; branch?: string });
+
+    expect(err.message).toContain('already used by worktree');
+    expect(err.workspacePath).toBe(ownerPath);
+    expect(err.branch).toMatch(/^experiment\/test-task-[0-9a-f]{8}$/);
   });
 
   it('cleans up the existing branch-owner worktree before recreating a conflicting target branch', async () => {
