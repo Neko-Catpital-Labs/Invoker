@@ -95,6 +95,19 @@ Counterexample:
 - If the target repo is an external repo such as `EdbertChan/test-playground`, do **not** inject Mergify Stacks guidance by default.
 - Keep normal PR flow unless that repo independently uses Mergify Stacks.
 
+## 8. Policy matrix / architecture document
+
+When the source is a policy or architecture document with a decision table, the planning flow must preserve row-level coverage instead of only extracting file paths and symbol names.
+
+**Pattern**:
+- Extract `coverageItems` for decision rows, exception rules, lifecycle commands, and invariants.
+- Author one or more workflows that collectively cover every required item.
+- Generate a `coverage-map.json` file that preserves `sourceKind`/`sourceFile` and assigns every required `coverageKey` to one or more workflow labels with rationale.
+- Generate a `stack-manifest.json` file, preferably from `generate-stack-manifest-template.sh`, then fill in the actual authored workflow labels and plan files for the final stack.
+- Fail the planning pipeline if the source is classified as `policy_matrix` but coverage extraction is empty, the generated verify scaffold collapses to `verify-noop`, a coverage map is missing, or a coverage-map label does not exist in the stack manifest when validating against the source document.
+
+**Reference fixture**: `fixtures/policy/task-invalidation-chart.md`
+
 ---
 
 ## Summary
@@ -105,6 +118,7 @@ Counterexample:
 - Multi-step refactors → `executorType: worktree`, chained dependencies
 - Large refactors → `onFinish: pull_request`, diamond DAGs
 - Invoker-on-Invoker PR publication → keep `mergeMode: github`, then use `mergify stack push` as the repo-specific publication step
+- Policy matrix / architecture docs → preserve row-level coverage with `coverage-map.json` and `stack-manifest.json`
 
 **Validation enforces**:
 - Every prompt task must have verification command task
