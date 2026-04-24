@@ -111,7 +111,7 @@ import { shouldSkipAutoFixForError } from './auto-fix-gating.js';
 import { ensureSqliteFlushDebounceForOwner } from './sqlite-flush-policy.js';
 import type { WorkflowMutationPriority } from './workflow-mutation-coordinator.js';
 import { PersistedWorkflowMutationCoordinator } from './persisted-workflow-mutation-coordinator.js';
-import { executeGlobalTopup, finalizeMutationWithGlobalTopup } from './global-topup.js';
+import { dispatchStartedTasksWithGlobalTopup, executeGlobalTopup, finalizeMutationWithGlobalTopup } from './global-topup.js';
 import { computeDeferredLaunchTiming } from './deferred-runnable.js';
 import { preemptWorkflowBeforeMutation, type WorkflowCancelResult } from './workflow-preemption.js';
 import { relaunchOrphansAndStartReady } from './orphan-relaunch.js';
@@ -609,8 +609,15 @@ if (isHeadless) {
             const tasks = persistence.loadTasks(workflowId);
             const mergeTask = tasks.find((task) => task.config.isMergeNode);
             if (!mergeTask) return undefined;
+            const executor = createStandaloneTaskExecutor();
             const started = orchestrator.restartTask(mergeTask.id);
-            void started;
+            await dispatchStartedTasksWithGlobalTopup({
+              orchestrator,
+              taskExecutor: executor,
+              logger,
+              context: 'standalone.set-merge-branch',
+              started,
+            });
             return undefined;
           }
           case 'invoker:replace-task': {
@@ -1603,6 +1610,11 @@ if (isHeadless) {
         args.push(update.gatePolicy);
         return { channel: 'headless.exec', request: { args } };
       }
+      case 'invoker:replace-task':
+        return {
+          channel: 'headless.exec',
+          request: { args: ['replace-task', String(arg0), JSON.stringify(Array.isArray(arg1) ? arg1 : [])] },
+        };
       default:
         return null;
     }
@@ -2628,12 +2640,12 @@ if (isHeadless) {
           `${RESTART_TO_BRANCH_TRACE} ipc invoker:restart-task runnable=${runnable.length} [${runnable.map((t) => t.id).join(', ') || '(none)'}] → taskExecutor.executeTasks`,
           { module: 'ipc' },
         );
-        await executeGlobalTopup({
+        await dispatchStartedTasksWithGlobalTopup({
           orchestrator,
           taskExecutor: requireTaskExecutor(),
           logger,
           context: 'ipc.restart-task',
-          alreadyDispatched: runnable,
+          started,
         });
       } catch (err) {
         logger.error(`restart-task failed: ${err}`, { module: 'ipc' });
@@ -2738,15 +2750,14 @@ if (isHeadless) {
           context: 'ipc.recreate-workflow',
         });
         const started = sharedRecreateWorkflow(workflowId, { persistence, orchestrator });
-        const runnable = started.filter(t => t.status === 'running');
         remoteFetchForPool.enabled = false;
         try {
-          await executeGlobalTopup({
+          await dispatchStartedTasksWithGlobalTopup({
             orchestrator,
             taskExecutor: requireTaskExecutor(),
             logger,
             context: 'ipc.recreate-workflow',
-            alreadyDispatched: runnable,
+            started,
           });
         } finally {
           remoteFetchForPool.enabled = true;
@@ -2768,15 +2779,14 @@ if (isHeadless) {
       try {
         await preemptTaskSubgraph(taskId);
         const started = sharedRecreateTask(taskId, { persistence, orchestrator });
-        const runnable = started.filter(t => t.status === 'running');
         remoteFetchForPool.enabled = false;
         try {
-          await executeGlobalTopup({
+          await dispatchStartedTasksWithGlobalTopup({
             orchestrator,
             taskExecutor: requireTaskExecutor(),
             logger,
             context: 'ipc.recreate-task',
-            alreadyDispatched: runnable,
+            started,
           });
         } finally {
           remoteFetchForPool.enabled = true;
@@ -2805,15 +2815,14 @@ if (isHeadless) {
         const envelope = makeEnvelope('retry-workflow', 'ui', 'workflow', { workflowId });
         const result = await commandService.retryWorkflow(envelope);
         if (!result.ok) throw new Error(result.error.message);
-        const runnable = result.data.filter(t => t.status === 'running');
         remoteFetchForPool.enabled = false;
         try {
-          await executeGlobalTopup({
+          await dispatchStartedTasksWithGlobalTopup({
             orchestrator,
             taskExecutor: requireTaskExecutor(),
             logger,
             context: 'ipc.retry-workflow',
-            alreadyDispatched: runnable,
+            started: result.data,
           });
         } finally {
           remoteFetchForPool.enabled = true;
@@ -2847,13 +2856,12 @@ if (isHeadless) {
           repoRoot,
           taskExecutor: requireTaskExecutor(),
         });
-        const runnable = started.filter(t => t.status === 'running');
-        await executeGlobalTopup({
+        await dispatchStartedTasksWithGlobalTopup({
           orchestrator,
           taskExecutor: requireTaskExecutor(),
           logger,
           context: 'ipc.rebase-and-retry',
-          alreadyDispatched: runnable,
+          started,
         });
       } catch (err) {
         logger.error(`rebase-and-retry failed: ${err}`, { module: 'ipc' });
@@ -2873,7 +2881,13 @@ if (isHeadless) {
         const mergeTask = tasks.find(t => t.config.isMergeNode);
         if (mergeTask) {
           const started = orchestrator.restartTask(mergeTask.id);
-          void started;
+          await dispatchStartedTasksWithGlobalTopup({
+            orchestrator,
+            taskExecutor: requireTaskExecutor(),
+            logger,
+            context: 'ipc.set-merge-branch',
+            started,
+          });
         }
       } catch (err) {
         logger.error(`set-merge-branch failed: ${err}`, { module: 'ipc' });
@@ -3008,7 +3022,6 @@ if (isHeadless) {
       },
     );
 
-
     registerGuiMutationHandler('invoker:edit-task-command', async (taskIdArg: unknown, newCommandArg: unknown) => {
       const taskId = String(taskIdArg);
       const newCommand = String(newCommandArg);
@@ -3017,8 +3030,13 @@ if (isHeadless) {
         const envelope = makeEnvelope('edit-task-command', 'ui', 'task', { taskId, newCommand });
         const result = await commandService.editTaskCommand(envelope);
         if (!result.ok) throw new Error(result.error.message);
-        const runnable = result.data.filter(t => t.status === 'running');
-        void runnable;
+        await dispatchStartedTasksWithGlobalTopup({
+          orchestrator,
+          taskExecutor: requireTaskExecutor(),
+          logger,
+          context: 'ipc.edit-task-command',
+          started: result.data,
+        });
       } catch (err) {
         logger.error(`edit-task-command failed: ${err}`, { module: 'ipc' });
         throw err;
@@ -3034,8 +3052,13 @@ if (isHeadless) {
         const envelope = makeEnvelope('edit-task-type', 'ui', 'task', { taskId, executorType, remoteTargetId });
         const result = await commandService.editTaskType(envelope);
         if (!result.ok) throw new Error(result.error.message);
-        const runnable = result.data.filter(t => t.status === 'running');
-        void runnable;
+        await dispatchStartedTasksWithGlobalTopup({
+          orchestrator,
+          taskExecutor: requireTaskExecutor(),
+          logger,
+          context: 'ipc.edit-task-type',
+          started: result.data,
+        });
       } catch (err) {
         logger.error(`edit-task-type failed: ${err}`, { module: 'ipc' });
         throw err;
@@ -3050,8 +3073,13 @@ if (isHeadless) {
         const envelope = makeEnvelope('edit-task-agent', 'ui', 'task', { taskId, agentName });
         const result = await commandService.editTaskAgent(envelope);
         if (!result.ok) throw new Error(result.error.message);
-        const runnable = result.data.filter(t => t.status === 'running');
-        void runnable;
+        await dispatchStartedTasksWithGlobalTopup({
+          orchestrator,
+          taskExecutor: requireTaskExecutor(),
+          logger,
+          context: 'ipc.edit-task-agent',
+          started: result.data,
+        });
       } catch (err) {
         logger.error(`edit-task-agent failed: ${err}`, { module: 'ipc' });
         throw err;
@@ -3068,8 +3096,13 @@ if (isHeadless) {
           const envelope = makeEnvelope('set-gate-policies', 'ui', 'task', { taskId, updates });
           const result = await commandService.setTaskExternalGatePolicies(envelope);
           if (!result.ok) throw new Error(result.error.message);
-          const runnable = result.data.filter((t) => t.status === 'running');
-          void runnable;
+          await dispatchStartedTasksWithGlobalTopup({
+            orchestrator,
+            taskExecutor: requireTaskExecutor(),
+            logger,
+            context: 'ipc.set-task-external-gate-policies',
+            started: result.data,
+          });
         } catch (err) {
           logger.error(`set-task-external-gate-policies failed: ${err}`, { module: 'ipc' });
           throw err;
@@ -3096,8 +3129,13 @@ if (isHeadless) {
         });
         const result = await commandService.replaceTask(envelope);
         if (!result.ok) throw new Error(result.error.message);
-        const runnable = result.data.filter((t) => t.status === 'running');
-        void runnable;
+        await dispatchStartedTasksWithGlobalTopup({
+          orchestrator,
+          taskExecutor: requireTaskExecutor(),
+          logger,
+          context: 'ipc.replace-task',
+          started: result.data,
+        });
         return result.data;
       } catch (err) {
         logger.error(`replace-task failed: ${err}`, { module: 'ipc' });

@@ -58,6 +58,34 @@ export async function executeGlobalTopup({
 }
 
 /**
+ * Dispatch mutation-scoped runnable work first, then top up any additional
+ * globally ready tasks without double-launching the scoped set.
+ */
+export async function dispatchStartedTasksWithGlobalTopup({
+  orchestrator,
+  taskExecutor,
+  logger,
+  context,
+  started = [],
+}: MutationTopupParams): Promise<{ runnable: TaskState[]; topup: TaskState[] }> {
+  const runnable = started.filter((task) => task.status === 'running');
+  if (runnable.length > 0) {
+    logger?.info(
+      `[global-topup] ${context}: dispatching ${runnable.length} scoped task(s): [${runnable.map((task) => task.id).join(', ')}]`,
+    );
+    await taskExecutor.executeTasks(runnable);
+  }
+  const topup = await executeGlobalTopup({
+    orchestrator,
+    taskExecutor,
+    logger,
+    context,
+    alreadyDispatched: runnable,
+  });
+  return { runnable, topup };
+}
+
+/**
  * Shared post-mutation scheduler refill.
  * Mutations that can free global capacity should exit through this helper
  * so globally ready work is launched before returning to the caller.
@@ -69,13 +97,12 @@ export async function finalizeMutationWithGlobalTopup({
   context,
   started = [],
 }: MutationTopupParams): Promise<{ started: TaskState[]; topup: TaskState[] }> {
-  const runnable = started.filter((task) => task.status === 'running');
-  const topup = await executeGlobalTopup({
+  const { topup } = await dispatchStartedTasksWithGlobalTopup({
     orchestrator,
     taskExecutor,
     logger,
     context,
-    alreadyDispatched: runnable,
+    started,
   });
   return { started, topup };
 }
