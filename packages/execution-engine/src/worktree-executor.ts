@@ -159,6 +159,15 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
       contentHash,
     );
     traceExecution(`[WorktreeExecutor] branch=${branch} contentHash=${contentHash}`);
+    // Notify the orchestrator before any `git worktree add` so a leaked
+    // worktree (process killed mid-acquire) can still be reconciled.
+    try {
+      request.onBranchResolved?.(branch);
+    } catch (err) {
+      traceExecution(
+        `[WorktreeExecutor] onBranchResolved threw — continuing: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
 
     // -- Reconciliation: real pool worktree at plan base (no upstream merges), then needs_input --
     if (request.actionType === 'reconciliation') {

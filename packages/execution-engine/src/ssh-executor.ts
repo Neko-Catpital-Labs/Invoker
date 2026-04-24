@@ -334,6 +334,13 @@ echo ${payloadB64} | base64 -d | bash -se
       lifecycleTag,
       contentHash,
     );
+    // Persist the branch on the attempt row before we run any remote git
+    // command that could leak a worktree without a recorded branch.
+    try {
+      request.onBranchResolved?.(experimentBranch);
+    } catch {
+      // Best-effort; the post-start path persists this again.
+    }
     const san = sanitizeBranchForPath(experimentBranch);
     const remoteClone = `${invokerHome}/repos/${h}`;
     const canonicalRemoteWt = `${invokerHome}/worktrees/${h}/${san}`;

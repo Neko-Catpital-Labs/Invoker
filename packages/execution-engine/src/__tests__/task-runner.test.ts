@@ -6288,6 +6288,71 @@ describe('TaskRunner', () => {
       );
     });
 
+    it('persists attempt.branch via onBranchResolved when executor crashes mid-acquire', async () => {
+      // Executor that resolves the branch (calls onBranchResolved) and then
+      // crashes before attaching `branch` metadata to the thrown error —
+      // simulating a `git worktree add` failure between branch computation
+      // and worktree creation.
+      let observedBranch: string | undefined;
+      const failingExecutor = {
+        type: 'worktree',
+        start: vi.fn().mockImplementation(async (req: any) => {
+          const branch = 'experiment/task-mid-acquire/g0.t0.aabc12345-deadbeef';
+          observedBranch = branch;
+          req.onBranchResolved?.(branch);
+          // Simulate `git worktree add` failure — note: error has NO branch attached.
+          throw new Error("fatal: 'experiment/...' is already used by worktree");
+        }),
+        onComplete: vi.fn(),
+        onOutput: vi.fn(),
+        onHeartbeat: vi.fn(),
+        kill: vi.fn(),
+        destroyAll: vi.fn(),
+      };
+
+      const task = makeTask({
+        id: 'task-mid-acquire',
+        status: 'pending',
+        config: { command: 'echo test', executorType: 'worktree' },
+      });
+
+      const updateAttemptSpy = vi.fn();
+      const updateTaskSpy = vi.fn();
+
+      const runner = new TaskRunner({
+        orchestrator: {
+          getTask: () => task,
+          getAllTasks: () => [task],
+          handleWorkerResponse: vi.fn(),
+        } as any,
+        persistence: {
+          updateTask: updateTaskSpy,
+          updateAttempt: updateAttemptSpy,
+        } as any,
+        executorRegistry: {
+          getDefault: () => failingExecutor,
+          get: () => failingExecutor,
+          getAll: () => [failingExecutor],
+        } as any,
+        cwd: '/tmp',
+      });
+
+      await runner.executeTask(task);
+
+      expect(observedBranch).toBeDefined();
+      // The early callback must have persisted branch on the attempt row,
+      // even though the error did not carry branch metadata.
+      expect(updateAttemptSpy).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ branch: observedBranch }),
+      );
+      // And on the task execution mirror as well.
+      expect(updateTaskSpy).toHaveBeenCalledWith(
+        'task-mid-acquire',
+        expect.objectContaining({ execution: expect.objectContaining({ branch: observedBranch }) }),
+      );
+    });
+
     it('allows BYO mode executor with workspacePath but no branch', async () => {
       const byoExecutor = {
         type: 'ssh',
