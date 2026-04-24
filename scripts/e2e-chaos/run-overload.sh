@@ -47,6 +47,7 @@ owner-restart-loop-during-mixed-storm|headless-standalone|core|owner_restart_loo
 late-return-rejection-under-storm|headless-standalone|core|stale_worker_response|recreate_and_reject_stale|12|8|run_late_return_rejection_under_storm
 cancel-late-return-under-storm|headless-standalone|core|canceled_late_worker_response|cancel_and_reject_late_return|12|8|run_cancel_late_return_under_storm
 owner-restart-loop-during-cancel-late-return|headless-standalone|core|owner_restart_loop_canceled_late_worker_response|restart_loop_cancel_and_reject_late_return|12|10|run_owner_restart_loop_during_cancel_late_return
+cancel-workflow-late-return-under-storm|headless-standalone|core|canceled_workflow_late_worker_response|cancel_workflow_and_reject_late_return|12|8|run_cancel_workflow_late_return_under_storm
 owner-restart-during-active-load|headless-standalone|core|owner_restart_churn|restart_and_recover|10|10|run_owner_restart_during_active_load
 owner-restart-loop-during-active-load|headless-standalone|core|owner_restart_loop_churn|restart_loop_and_recover|10|12|run_owner_restart_loop_during_active_load
 owner-restart-during-late-return-storm|headless-standalone|core|owner_restart_stale_return|restart_during_recreate|12|10|run_owner_restart_during_late_return_storm
@@ -2698,6 +2699,84 @@ run_owner_restart_loop_during_cancel_late_return() {
   done
   ov_wait_queries_healthy 60
 
+  ov_cancel_all_workflows
+  sleep 2
+  ov_stop_owner
+  invoker_e2e_assert_no_stuck_mutation_intents 45
+  invoker_e2e_assert_no_owned_headless_processes 1
+}
+
+run_cancel_workflow_late_return_under_storm() {
+  local workflow_count="$1"
+  local operation_burst="$2"
+  invoker_e2e_init
+  trap 'ov_stop_owner; rm -rf "${OVERLOAD_TMP_DIR:-}" "${MARKER_DIR:-}" >/dev/null 2>&1 || true; invoker_e2e_cleanup' RETURN
+  cd "$INVOKER_E2E_REPO_ROOT"
+  unset ELECTRON_RUN_AS_NODE
+  unset INVOKER_HEADLESS_STANDALONE
+  ov_set_overload_config "$((workflow_count + 2))"
+
+  OVERLOAD_TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/invoker-overload.XXXXXX")"
+  MARKER_DIR="$(mktemp -d "${TMPDIR:-/tmp}/invoker-overload-markers.XXXXXX")"
+  OVERLOAD_OP_PIDS=()
+  OVERLOAD_ALLOWED_BACKGROUND_FAILURE_PATTERN=""
+  ov_start_owner
+
+  local -a late_workflows=()
+  local -a filler_workflows=()
+  local idx workflow_id info marker_path
+
+  echo "==> overload: seeding filler workflows before workflow-cancel late targets"
+  local late_seed_count=3
+  for idx in $(seq 1 "$((workflow_count - late_seed_count))"); do
+    info="$(ov_submit_workflow fail "cancel-workflow-late-filler-$idx" "" no-track)"
+    workflow_id="${info%%|*}"
+    filler_workflows+=("$workflow_id")
+    ov_wait_task_status "$workflow_id/root" failed 30
+  done
+
+  echo "==> overload: seeding workflow-cancel late targets"
+  for idx in $(seq 1 "$late_seed_count"); do
+    marker_path="$MARKER_DIR/cancel-workflow-late-$idx.marker"
+    info="$(ov_submit_workflow late "cancel-workflow-late-$idx" "$marker_path" no-track)"
+    workflow_id="${info%%|*}"
+    late_workflows+=("$workflow_id")
+    echo "$marker_path" > "$OVERLOAD_TMP_DIR/${workflow_id}.marker"
+    echo "seed late workflow: $workflow_id"
+    ov_wait_task_status "$workflow_id/late" running 120
+  done
+
+  local cancel_started_at
+  cancel_started_at="$(date -u '+%Y-%m-%d %H:%M:%S')"
+
+  echo "==> overload: canceling workflows while background retries and queries fire"
+  for idx in "${!late_workflows[@]}"; do
+    workflow_id="${late_workflows[$idx]}"
+    ov_spawn_command "cancel-workflow-late-$idx" invoker_e2e_run_headless cancel-workflow "$workflow_id"
+  done
+
+  for workflow_id in "${late_workflows[@]}"; do
+    touch "$(cat "$OVERLOAD_TMP_DIR/${workflow_id}.marker")"
+  done
+
+  local max_fillers="$((operation_burst - ${#late_workflows[@]}))"
+  if [ "$max_fillers" -lt 0 ]; then
+    max_fillers=0
+  fi
+  for idx in $(seq 0 $((max_fillers - 1))); do
+    workflow_id="${filler_workflows[$((idx % ${#filler_workflows[@]}))]}"
+    case $((idx % 3)) in
+      0) ov_spawn_command "retry-filler-$idx" invoker_e2e_run_headless --no-track retry "$workflow_id" ;;
+      1) ov_spawn_command "query-queue-$idx" invoker_e2e_run_headless query queue --output json ;;
+      2) ov_spawn_command "query-workflows-$idx" invoker_e2e_run_headless query workflows --output jsonl ;;
+    esac
+  done
+  ov_wait_background_commands
+
+  for workflow_id in "${late_workflows[@]}"; do
+    ov_assert_canceled_task_did_not_complete "$workflow_id/late" "$cancel_started_at"
+  done
+  ov_wait_queries_healthy 60
   ov_cancel_all_workflows
   sleep 2
   ov_stop_owner
