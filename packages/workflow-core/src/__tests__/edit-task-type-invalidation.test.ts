@@ -109,6 +109,52 @@ describe('executor-type-mutation invalidation contract', () => {
   });
 });
 
+describe('remote-target-mutation invalidation contract', () => {
+  it('MUTATION_POLICIES.remoteTargetId is RECREATE-class (not retry) and invalidates active attempts', () => {
+    expect(MUTATION_POLICIES.remoteTargetId.action).toBe('recreateTask');
+    expect(MUTATION_POLICIES.remoteTargetId.invalidatesExecutionSpec).toBe(true);
+    expect(MUTATION_POLICIES.remoteTargetId.invalidateIfActive).toBe(true);
+
+    expect(MUTATION_POLICIES.remoteTargetId.action).not.toBe('retryTask');
+    expect(MUTATION_POLICIES.remoteTargetId.action).not.toBe(
+      MUTATION_POLICIES.executorType.action,
+    );
+  });
+
+  it('routes through applyInvalidation with cancelInFlight invoked BEFORE recreateTask dep', async () => {
+    const deps = makeDeps();
+    const policy = MUTATION_POLICIES.remoteTargetId;
+
+    await applyInvalidation('task', policy.action, 'task-a', deps);
+
+    expect(deps.cancelInFlight).toHaveBeenCalledWith('task', 'task-a');
+    expect(deps.recreateTask).toHaveBeenCalledWith('task-a');
+    // Retry-class deps MUST NOT be on the path — that would preserve
+    // workspace lineage the chart says is no longer authoritative
+    // after a remote host change.
+    expect(deps.retryTask).not.toHaveBeenCalled();
+    expect(deps.retryWorkflow).not.toHaveBeenCalled();
+    expect(deps.recreateWorkflow).not.toHaveBeenCalled();
+    expect(deps.cancelInFlight.mock.invocationCallOrder[0]).toBeLessThan(
+      deps.recreateTask.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('aborts the recreate when cancelInFlight rejects (stale work must not survive a failed cancel)', async () => {
+    const cancelError = new Error('cancel failed');
+    const deps = makeDeps({
+      cancelInFlight: vi.fn(async () => {
+        throw cancelError;
+      }),
+    });
+
+    await expect(
+      applyInvalidation('task', MUTATION_POLICIES.remoteTargetId.action, 'task-a', deps),
+    ).rejects.toBe(cancelError);
+    expect(deps.recreateTask).not.toHaveBeenCalled();
+  });
+});
+
 function stubOrchestrator(overrides: Partial<Orchestrator> = {}): Orchestrator {
   return {
     getTask: vi.fn().mockReturnValue({ config: { workflowId: 'wf-1' } }),
