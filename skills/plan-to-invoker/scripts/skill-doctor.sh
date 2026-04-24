@@ -7,6 +7,9 @@
 #   --skip-assumptions  Skip assumption extraction (also skips verify plan generation)
 #   --skip-atomicity    Skip atomicity linting
 #   --skip-validation   Skip YAML plan validation
+#   --source-file FILE  Use a separate source document for assumption/coverage checks
+#   --coverage-map FILE Validate row-to-workflow traceability for policy-matrix inputs
+#   --stack-manifest FILE Validate coverage-map workflow labels against a real authored stack manifest
 #   --verbose           Show detailed output from each sub-check
 #   --warn-delegation  Pass through to atomicity lint (advisory delegation-hint warnings only; no extra failures)
 #
@@ -26,6 +29,9 @@ SKIP_ATOMICITY=false
 SKIP_VALIDATION=false
 VERBOSE=false
 WARN_DELEGATION=false
+COVERAGE_MAP_FILE=""
+STACK_MANIFEST_FILE=""
+SOURCE_FILE=""
 PLAN_FILE=""
 
 # Parse arguments
@@ -50,6 +56,30 @@ while [[ $# -gt 0 ]]; do
     --verbose)
       VERBOSE=true
       shift
+      ;;
+    --coverage-map)
+      COVERAGE_MAP_FILE="${2:-}"
+      if [[ -z "$COVERAGE_MAP_FILE" ]]; then
+        echo "ERROR: --coverage-map requires a file path" >&2
+        exit 2
+      fi
+      shift 2
+      ;;
+    --stack-manifest)
+      STACK_MANIFEST_FILE="${2:-}"
+      if [[ -z "$STACK_MANIFEST_FILE" ]]; then
+        echo "ERROR: --stack-manifest requires a file path" >&2
+        exit 2
+      fi
+      shift 2
+      ;;
+    --source-file)
+      SOURCE_FILE="${2:-}"
+      if [[ -z "$SOURCE_FILE" ]]; then
+        echo "ERROR: --source-file requires a file path" >&2
+        exit 2
+      fi
+      shift 2
       ;;
     --warn-delegation)
       WARN_DELEGATION=true
@@ -81,6 +111,21 @@ fi
 
 if [[ ! -f "$PLAN_FILE" ]]; then
   echo "ERROR: Plan file not found: $PLAN_FILE" >&2
+  exit 2
+fi
+
+if [[ -n "$SOURCE_FILE" && ! -f "$SOURCE_FILE" ]]; then
+  echo "ERROR: Source file not found: $SOURCE_FILE" >&2
+  exit 2
+fi
+
+if [[ -n "$COVERAGE_MAP_FILE" && ! -f "$COVERAGE_MAP_FILE" ]]; then
+  echo "ERROR: Coverage map file not found: $COVERAGE_MAP_FILE" >&2
+  exit 2
+fi
+
+if [[ -n "$STACK_MANIFEST_FILE" && ! -f "$STACK_MANIFEST_FILE" ]]; then
+  echo "ERROR: Stack manifest file not found: $STACK_MANIFEST_FILE" >&2
   exit 2
 fi
 
@@ -181,10 +226,14 @@ run_check() {
 # Check 1: Extract assumptions (if not skipped)
 ASSUMPTIONS_FILE="$TEMP_DIR/assumptions.json"
 if [[ "$SKIP_ASSUMPTIONS" == "false" ]]; then
+  ASSUMPTIONS_INPUT="$PLAN_FILE"
+  if [[ -n "$SOURCE_FILE" ]]; then
+    ASSUMPTIONS_INPUT="$SOURCE_FILE"
+  fi
   run_check \
     "extract-assumptions" \
     "Extract assumptions from plan" \
-    bash "$SCRIPT_DIR/extract-assumptions.sh" "$PLAN_FILE"
+    bash "$SCRIPT_DIR/extract-assumptions.sh" "$ASSUMPTIONS_INPUT"
 
   # Save assumptions output for generate-verify-plan step
   if [[ -f "$TEMP_DIR/extract-assumptions.out" ]]; then
@@ -201,6 +250,46 @@ if [[ "$SKIP_ASSUMPTIONS" == "false" && -f "$ASSUMPTIONS_FILE" ]]; then
     "generate-verify-plan" \
     "Generate verification plan from assumptions" \
     bash -c "cat '$ASSUMPTIONS_FILE' | bash '$SCRIPT_DIR/generate-verify-plan.sh' '$PLAN_NAME' > '$VERIFY_PLAN_FILE' && cat '$VERIFY_PLAN_FILE'"
+fi
+
+# Check 2a: policy coverage must not degrade to empty coverage or verify-noop
+if [[ "$SKIP_ASSUMPTIONS" == "false" && -f "$ASSUMPTIONS_FILE" ]]; then
+  run_check \
+    "check-policy-coverage" \
+    "Validate policy-matrix coverage extraction and verify-plan projection" \
+    bash "$SCRIPT_DIR/check-policy-coverage.sh" "$ASSUMPTIONS_FILE" "$VERIFY_PLAN_FILE"
+fi
+
+if [[ "$SKIP_ASSUMPTIONS" == "false" && -f "$ASSUMPTIONS_FILE" ]]; then
+  ASSUMPTIONS_SOURCE_KIND="$(jq -r '.sourceKind // "generic"' "$ASSUMPTIONS_FILE" 2>/dev/null || echo generic)"
+  if [[ "$ASSUMPTIONS_SOURCE_KIND" == "policy_matrix" && -z "$COVERAGE_MAP_FILE" ]]; then
+    OVERALL_FAILED=true
+    add_check_result \
+      "check-coverage-map" \
+      "failed" \
+      "Policy-matrix inputs require --coverage-map so every required source row is traced to a workflow label."
+  fi
+  if [[ "$ASSUMPTIONS_SOURCE_KIND" == "policy_matrix" && -z "$STACK_MANIFEST_FILE" ]]; then
+    OVERALL_FAILED=true
+    add_check_result \
+      "check-stack-manifest" \
+      "failed" \
+      "Policy-matrix inputs require --stack-manifest so coverage-map workflow labels are validated against a real authored stack."
+  fi
+fi
+
+if [[ -n "$COVERAGE_MAP_FILE" && "$SKIP_ASSUMPTIONS" == "false" && -f "$ASSUMPTIONS_FILE" ]]; then
+  run_check \
+    "check-coverage-map" \
+    "Validate row-to-workflow traceability coverage map" \
+    bash "$SCRIPT_DIR/check-coverage-map.sh" "$ASSUMPTIONS_FILE" "$COVERAGE_MAP_FILE"
+fi
+
+if [[ -n "$COVERAGE_MAP_FILE" && -n "$STACK_MANIFEST_FILE" && "$SKIP_ASSUMPTIONS" == "false" && -f "$ASSUMPTIONS_FILE" ]]; then
+  run_check \
+    "check-stack-manifest" \
+    "Validate coverage-map workflow labels against the authored stack manifest" \
+    bash "$SCRIPT_DIR/check-stack-manifest.sh" "$COVERAGE_MAP_FILE" "$STACK_MANIFEST_FILE" "$ASSUMPTIONS_INPUT"
 fi
 
 # Check 3: YAML plan validation (if not skipped)

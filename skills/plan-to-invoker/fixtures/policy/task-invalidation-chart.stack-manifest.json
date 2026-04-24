@@ -1,0 +1,22 @@
+{
+  "sourceFile": "skills/plan-to-invoker/fixtures/policy/task-invalidation-chart.md",
+  "workflows": [
+    { "label": "Step 2: Command mutation path", "planFile": "skills/plan-to-invoker/fixtures/policy/stack/task-invalidation-step-2-command-mutation.template.yaml", "order": 2 },
+    { "label": "Step 3: Prompt mutation path", "planFile": "skills/plan-to-invoker/fixtures/policy/stack/task-invalidation-step-3-prompt-mutation.template.yaml", "order": 3 },
+    { "label": "Step 4: Agent mutation path", "planFile": "skills/plan-to-invoker/fixtures/policy/stack/task-invalidation-step-4-agent-mutation.template.yaml", "order": 4 },
+    { "label": "Step 5: Executor-type mutation path", "planFile": "skills/plan-to-invoker/fixtures/policy/stack/task-invalidation-step-5-executor-type-mutation.template.yaml", "order": 5 },
+    { "label": "Step 6: Remote-target mutation path", "planFile": "skills/plan-to-invoker/fixtures/policy/stack/task-invalidation-step-6-remote-target-mutation.template.yaml", "order": 6 },
+    { "label": "Step 7: Selected-experiment path", "planFile": "skills/plan-to-invoker/fixtures/policy/stack/task-invalidation-step-7-selected-experiment.template.yaml", "order": 7 },
+    { "label": "Step 8: Selected-experiment-set path", "planFile": "skills/plan-to-invoker/fixtures/policy/stack/task-invalidation-step-8-selected-experiment-set.template.yaml", "order": 8 },
+    { "label": "Step 9: Merge-mode mutation path", "planFile": "skills/plan-to-invoker/fixtures/policy/stack/task-invalidation-step-9-merge-mode.template.yaml", "order": 9 },
+    { "label": "Step 10: Fix-context mutation path", "planFile": "skills/plan-to-invoker/fixtures/policy/stack/task-invalidation-step-10-fix-context.template.yaml", "order": 10 },
+    { "label": "Step 11: Topology mutation path", "planFile": "skills/plan-to-invoker/fixtures/policy/stack/task-invalidation-step-11-topology.template.yaml", "order": 11 },
+    { "label": "Step 12: Workflow-scope paths", "planFile": "skills/plan-to-invoker/fixtures/policy/stack/task-invalidation-step-12-workflow-scope.template.yaml", "order": 12 },
+    { "label": "Step 13: Remove restart semantics", "planFile": "skills/plan-to-invoker/fixtures/policy/stack/task-invalidation-step-13-remove-restart.template.yaml", "order": 13 },
+    { "label": "Step 14: Remove in-place remake behavior", "planFile": "skills/plan-to-invoker/fixtures/policy/stack/task-invalidation-step-14-remove-in-place-remake.template.yaml", "order": 14 },
+    { "label": "Step 15: External gate policy is non-invalidating", "planFile": "skills/plan-to-invoker/fixtures/policy/stack/task-invalidation-step-15-external-gate-policy.template.yaml", "order": 15 },
+    { "label": "Step 16: Fix approve and reject are non-invalidating", "planFile": "skills/plan-to-invoker/fixtures/policy/stack/task-invalidation-step-16-fix-approve-reject.template.yaml", "order": 16 },
+    { "label": "Step 17: Explicit lifecycle commands obey the matrix", "planFile": "skills/plan-to-invoker/fixtures/policy/stack/task-invalidation-step-17-explicit-lifecycle-commands.template.yaml", "order": 17 },
+    { "label": "Step 18: Cancel-first invariant audit", "planFile": "skills/plan-to-invoker/fixtures/policy/stack/task-invalidation-step-18-cancel-first-audit.template.yaml", "order": 18 }
+  ]
+}

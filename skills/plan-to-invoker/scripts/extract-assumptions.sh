@@ -4,9 +4,13 @@
 #    or: cat plan.md | bash extract-assumptions.sh
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 if [[ $# -ge 1 && -f "$1" ]]; then
+  input_path="$1"
   input=$(cat "$1")
 else
+  input_path=""
   input=$(cat)
 fi
 
@@ -44,13 +48,19 @@ fi
 
 # Assemble JSON output
 if command -v jq &>/dev/null; then
+  if [[ -n "$input_path" ]]; then
+    policy_json=$(node "$SCRIPT_DIR/extract-policy-coverage.mjs" "$input_path")
+  else
+    policy_json=$(printf '%s' "$input" | node "$SCRIPT_DIR/extract-policy-coverage.mjs")
+  fi
   jq -n \
     --argjson files "$(echo "$files" | jq -R -s 'split("\n") | map(select(length > 0))')" \
     --argjson tests "$(echo "$tests" | jq -R -s 'split("\n") | map(select(length > 0))')" \
     --argjson functions "$(echo "$functions" | jq -R -s 'split("\n") | map(select(length > 0))')" \
     --argjson packages "$(echo "$packages" | jq -R -s 'split("\n") | map(select(length > 0))')" \
     --argjson patterns "$patterns" \
-    '{files: $files, tests: $tests, functions: $functions, packages: $packages, patterns: $patterns}'
+    --argjson policy "$policy_json" \
+    '{files: $files, tests: $tests, functions: $functions, packages: $packages, patterns: $patterns} + $policy'
 else
   # Fallback: raw JSON without jq
   to_json_array() {
@@ -72,6 +82,6 @@ else
   echo "$functions" | to_json_array
   echo -n ',"packages":'
   echo "$packages" | to_json_array
-  echo -n ',"patterns":[]}'
+  echo -n ',"patterns":[],"sourceKind":"generic","sourceFile":null,"coverageItems":[]}'
   echo
 fi

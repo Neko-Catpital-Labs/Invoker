@@ -59,6 +59,8 @@ must_contain "$SKILL_MD" "pnpm test" "SKILL must mention pnpm test for behaviora
 must_contain "$SKILL_MD" "Grep-only checks" "SKILL must separate grep from behavioral verification"
 must_contain "$SKILL_MD" "see playbook" "SKILL Execution must reference the playbook"
 must_contain "$SKILL_MD" "Phase 1b" "SKILL must reference Phase 1b"
+must_contain "$SKILL_MD" "Policy-matrix documents" "SKILL must document policy-matrix coverage mode"
+must_contain "$SKILL_MD" "verify-noop" "SKILL must explain policy-matrix degradation checks"
 
 # Playbook — Phase 1a / 1b (three lanes) and anti-patterns
 must_contain "$PLAYBOOK" "### Phase 1a — Static analysis" "Playbook must define Phase 1a"
@@ -66,6 +68,7 @@ must_contain "$PLAYBOOK" "### Phase 1b — Runtime verification" "Playbook must 
 must_contain "$PLAYBOOK" "Phase 1b-invoker" "Playbook must define Invoker headless verification lane"
 must_contain "$PLAYBOOK" "pnpm test" "Playbook must document pnpm test for behavioral verification"
 must_contain "$PLAYBOOK" "Invoker is mandatory" "Playbook must warn when Invoker verification is mandatory"
+must_contain "$PLAYBOOK" "coverageItems" "Playbook must document row-level coverage for policy-matrix sources"
 
 echo "OK: plan-to-invoker skill contract checks passed"
 
@@ -91,4 +94,15 @@ if [[ -f "$FIXTURES_TEST_SCRIPT" ]]; then
   fi
 else
   fail "Fixtures test script not found: $FIXTURES_TEST_SCRIPT"
+fi
+
+echo ""
+echo "Running policy coverage regression tests..."
+POLICY_TEST_SCRIPT="$REPO_ROOT/skills/plan-to-invoker/scripts/test-policy-coverage.sh"
+if [[ -f "$POLICY_TEST_SCRIPT" ]]; then
+  if ! bash "$POLICY_TEST_SCRIPT"; then
+    fail "Policy coverage regression tests failed"
+  fi
+else
+  fail "Policy coverage test script not found: $POLICY_TEST_SCRIPT"
 fi

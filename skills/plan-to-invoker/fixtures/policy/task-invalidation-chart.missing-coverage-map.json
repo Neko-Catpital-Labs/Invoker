@@ -1,0 +1,13 @@
+{
+  "sourceKind": "policy_matrix",
+  "sourceFile": "skills/plan-to-invoker/fixtures/policy/task-invalidation-chart.md",
+  "mappings": [
+    {
+      "coverageKey": "decision-edit-command",
+      "rowType": "mutation_path",
+      "mustCover": true,
+      "workflowLabels": [],
+      "rationale": ""
+    }
+  ]
+}
