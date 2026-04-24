@@ -7,6 +7,7 @@ import type { MessageBus } from '@invoker/transport';
 import { resolveInvokerHomeRoot } from './delete-all-snapshot.js';
 import { isHeadlessMutatingCommand } from './headless-command-classification.js';
 import {
+  delegationTimeoutMs,
   tryDelegateExec,
   tryDelegateQuery,
   tryDelegateQueryUiPerf,
@@ -67,7 +68,8 @@ async function delegateMutation(args: string[], bus: MessageBus, waitForApproval
     if (!workflowId) throw new Error('Missing workflowId. Usage: --headless resume <id>');
     return tryDelegateResume(workflowId, bus, waitForApproval, noTrack);
   }
-  return tryDelegateExec(args, bus, waitForApproval, noTrack);
+  const timeoutMs = noTrack ? 8_000 : delegationTimeoutMs(args);
+  return tryDelegateExec(args, bus, waitForApproval, noTrack, timeoutMs);
 }
 
 async function delegateReadOnlyQuery(args: string[], bus: MessageBus): Promise<boolean> {
@@ -134,7 +136,8 @@ async function delegateReadOnlyQuery(args: string[], bus: MessageBus): Promise<b
 
 export interface HeadlessClientDeps {
   messageBus: MessageBus;
-  ensureStandaloneOwner: () => Promise<void>;
+  ensureStandaloneOwner: (bus?: MessageBus) => Promise<void>;
+  refreshMessageBus?: () => Promise<MessageBus>;
   runElectronHeadless: (args: string[]) => Promise<number>;
 }
 
@@ -181,6 +184,7 @@ export async function runHeadlessClientCommand(
   // even for commands that do not boot the full Electron owner process.
   loadConfig();
 
+  let messageBus = deps.messageBus;
   const { args, waitForApproval, noTrack } = parseArgs(argv);
   const standaloneMode = process.env.INVOKER_HEADLESS_STANDALONE === '1';
   const internalOwnerServe = args[0] === 'owner-serve';
@@ -189,7 +193,7 @@ export async function runHeadlessClientCommand(
     return typeof exitCode === 'number' ? exitCode : 0;
   };
 
-  if (!standaloneMode && !internalOwnerServe && await delegateReadOnlyQuery(args, deps.messageBus)) {
+  if (!standaloneMode && !internalOwnerServe && await delegateReadOnlyQuery(args, messageBus)) {
     return resolvedExitCode();
   }
 
@@ -197,14 +201,27 @@ export async function runHeadlessClientCommand(
     return deps.runElectronHeadless(argv);
   }
 
-  const owner = await tryPingHeadlessOwner(deps.messageBus, 3_000);
+  const owner = await tryPingHeadlessOwner(messageBus, 3_000);
   if (owner) {
-    if (await delegateMutation(args, deps.messageBus, waitForApproval, noTrack)) {
+    if (await delegateMutation(args, messageBus, waitForApproval, noTrack)) {
       return resolvedExitCode();
     }
   }
-  await deps.ensureStandaloneOwner();
-  if (await delegateMutation(args, deps.messageBus, waitForApproval, noTrack)) {
+  if (owner && deps.refreshMessageBus) {
+    messageBus = await deps.refreshMessageBus();
+    const refreshedOwner = await tryPingHeadlessOwner(messageBus, 1_000);
+    if (refreshedOwner && await delegateMutation(args, messageBus, waitForApproval, noTrack)) {
+      return resolvedExitCode();
+    }
+  }
+  if (deps.refreshMessageBus) {
+    messageBus = await deps.refreshMessageBus();
+  }
+  await deps.ensureStandaloneOwner(messageBus);
+  if (deps.refreshMessageBus) {
+    messageBus = await deps.refreshMessageBus();
+  }
+  if (await delegateMutation(args, messageBus, waitForApproval, noTrack)) {
     return resolvedExitCode();
   }
   process.stderr.write(
@@ -214,12 +231,19 @@ export async function runHeadlessClientCommand(
 }
 
 export async function runHeadlessClient(argv: string[]): Promise<number> {
-  const bus = new IpcBus(undefined, { allowServe: false });
+  let bus = new IpcBus(undefined, { allowServe: false });
+  const refreshMessageBus = async (): Promise<MessageBus> => {
+    bus.disconnect();
+    bus = new IpcBus(undefined, { allowServe: false });
+    await bus.ready();
+    return bus;
+  };
   try {
     await bus.ready();
     return await runHeadlessClientCommand(argv, {
       messageBus: bus,
       ensureStandaloneOwner: () => ensureStandaloneOwnerViaBootstrap(bus),
+      refreshMessageBus,
       runElectronHeadless,
     });
   } finally {
