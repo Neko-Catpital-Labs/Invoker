@@ -5,6 +5,11 @@ import { spawn } from 'node:child_process';
  * Merkle-style hash for content-addressable branch naming.
  * Inputs: task identity + command/prompt + upstream dependency commits + base branch HEAD.
  * When any input changes (e.g. master moves forward), the hash changes and a fresh branch is created.
+ *
+ * The optional `salt` parameter is retained for backward compatibility with call
+ * sites that still mix lifecycle context into the hash. New call sites should
+ * use {@link computeContentHash} (which omits salt entirely) and put lifecycle
+ * uniqueness into the visible branch suffix via {@link buildExperimentBranchName}.
  */
 export function computeBranchHash(
   actionId: string,
@@ -22,6 +27,91 @@ export function computeBranchHash(
   h.update(baseHead);
   if (salt) h.update(salt);
   return h.digest('hex').slice(0, 8);
+}
+
+/**
+ * Pure content fingerprint of a task's execution spec.
+ *
+ * Identical inputs (actionId, command, prompt, upstream commits, baseHead)
+ * always produce the same 8-char hash. Lifecycle state (workflow generation,
+ * task generation, attempt id) is *not* mixed in — that uniqueness is supplied
+ * by {@link formatLifecycleTag} in the visible branch name instead, so two
+ * recreates of the same spec can be detected as cache-equivalent and reused.
+ */
+export function computeContentHash(
+  actionId: string,
+  command: string | undefined,
+  prompt: string | undefined,
+  upstreamCommits: string[],
+  baseHead: string,
+): string {
+  return computeBranchHash(actionId, command, prompt, upstreamCommits, baseHead, '');
+}
+
+export interface LifecycleTagInputs {
+  /** Workflow generation counter (bumped by recreateWorkflow / fork). */
+  wfGen: number;
+  /** Task execution generation counter (bumped by every retry/recreate-class action). */
+  taskGen: number;
+  /**
+   * Short attempt id derived from the attempt UUID. Pass an empty string to
+   * indicate "attempt id not yet known" — the resulting tag will use a single
+   * `-` placeholder. Callers should normally supply a non-empty value.
+   */
+  attemptShort: string;
+}
+
+/**
+ * Format a visible lifecycle tag for embedding in branch names.
+ *
+ * Shape: `g<wfGen>.t<taskGen>.a<attemptShort>`. The tag is stable per
+ * (workflow generation, task generation, attempt) triple — bumping any
+ * component yields a different tag and therefore a different branch name.
+ * That uniqueness-by-construction is what makes `git worktree add` collision-
+ * free even when stale worktrees from prior dispatches remain on disk.
+ */
+export function formatLifecycleTag(inputs: LifecycleTagInputs): string {
+  const wfGen = Number.isFinite(inputs.wfGen) ? Math.max(0, Math.floor(inputs.wfGen)) : 0;
+  const taskGen = Number.isFinite(inputs.taskGen) ? Math.max(0, Math.floor(inputs.taskGen)) : 0;
+  const rawAttempt = (inputs.attemptShort ?? '').toString();
+  const attemptShort = sanitizeAttemptShort(rawAttempt);
+  return `g${wfGen}.t${taskGen}.a${attemptShort}`;
+}
+
+/**
+ * Build the canonical experiment branch name for a dispatch.
+ *
+ * Shape: `experiment/<actionId>/<lifecycleTag>-<contentHash>`.
+ *
+ * `actionId` is workflow-scoped (e.g. `wf-1234/task-name`), so the literal
+ * `experiment/<actionId>/` prefix already makes the branch unique to the
+ * (workflow, task) pair. The `<lifecycleTag>` segment makes it unique per
+ * dispatch. The `<contentHash>` segment is the spec fingerprint and is the
+ * cache key for "same spec → may reuse workspace".
+ */
+export function buildExperimentBranchName(
+  actionId: string,
+  lifecycleTag: string,
+  contentHash: string,
+): string {
+  if (!actionId) {
+    throw new Error('buildExperimentBranchName: actionId is required');
+  }
+  if (!contentHash) {
+    throw new Error('buildExperimentBranchName: contentHash is required');
+  }
+  const tag = lifecycleTag && lifecycleTag.length > 0 ? lifecycleTag : 'g0.t0.a';
+  return `experiment/${actionId}/${tag}-${contentHash}`;
+}
+
+/**
+ * Restrict the attempt-short component to filesystem- and git-safe characters
+ * and bound its length. Keeps a-z, 0-9, dash, underscore. Truncates to 12
+ * characters which is more than enough entropy at the per-task scale.
+ */
+function sanitizeAttemptShort(raw: string): string {
+  const lower = raw.toLowerCase().replace(/[^a-z0-9_-]+/g, '');
+  return lower.slice(0, 12);
 }
 
 export interface PreserveOrResetOpts {
