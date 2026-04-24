@@ -48,6 +48,93 @@ describe('headless-client', () => {
     expect(ownerHandler).toHaveBeenCalledTimes(1);
   });
 
+  it('refreshes the message bus around bootstrap when no owner is initially reachable', async () => {
+    const firstBus = new LocalBus();
+    const secondBus = new LocalBus();
+    const ownerHandler = vi.fn(async () => ({ ok: true }));
+
+    secondBus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-2', mode: 'standalone' }));
+    secondBus.onRequest('headless.exec', ownerHandler);
+
+    const ensureStandaloneOwner = vi.fn(async () => {});
+    const refreshMessageBus = vi.fn()
+      .mockResolvedValueOnce(firstBus)
+      .mockResolvedValueOnce(secondBus);
+
+    const exitCode = await runHeadlessClientCommand(['rebase', 'wf-2/root', '--no-track'], {
+      messageBus: firstBus,
+      ensureStandaloneOwner,
+      refreshMessageBus,
+      runElectronHeadless: vi.fn(async () => 0),
+    });
+
+    expect(exitCode).toBe(0);
+    expect(ensureStandaloneOwner).toHaveBeenCalledTimes(1);
+    expect(ensureStandaloneOwner).toHaveBeenCalledWith(firstBus);
+    expect(refreshMessageBus).toHaveBeenCalledTimes(2);
+    expect(ownerHandler).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries no-track delegated mutations after the first owner request times out', async () => {
+    const bus = new LocalBus();
+    let execCalls = 0;
+    bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-1', mode: 'gui' }));
+    bus.onRequest('headless.exec', async () => {
+      execCalls += 1;
+      if (execCalls === 1) {
+        return await new Promise(() => {});
+      }
+      return { ok: true };
+    });
+
+    const ensureStandaloneOwner = vi.fn(async () => {});
+
+    const exitCode = await runHeadlessClientCommand(['recreate', 'wf-2', '--no-track'], {
+      messageBus: bus,
+      ensureStandaloneOwner,
+      runElectronHeadless: vi.fn(async () => 0),
+    });
+
+    expect(exitCode).toBe(0);
+    expect(ensureStandaloneOwner).toHaveBeenCalledTimes(1);
+    expect(execCalls).toBe(2);
+  }, 15_000);
+
+  it('refreshes the message bus before retrying after an owner restart', async () => {
+    const firstBus = new LocalBus();
+    const secondBus = new LocalBus();
+    let firstExecCalls = 0;
+    let secondExecCalls = 0;
+
+    firstBus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-1', mode: 'gui' }));
+    firstBus.onRequest('headless.exec', async () => {
+      firstExecCalls += 1;
+      return await new Promise(() => {});
+    });
+
+    secondBus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-2', mode: 'standalone' }));
+    secondBus.onRequest('headless.exec', async () => {
+      secondExecCalls += 1;
+      return { ok: true };
+    });
+
+    const ensureStandaloneOwner = vi.fn(async () => {});
+    const refreshMessageBus = vi.fn(async () => secondBus);
+
+    const exitCode = await runHeadlessClientCommand(['recreate', 'wf-3', '--no-track'], {
+      messageBus: firstBus,
+      ensureStandaloneOwner,
+      refreshMessageBus,
+      runElectronHeadless: vi.fn(async () => 0),
+    });
+
+    expect(exitCode).toBe(0);
+    expect(ensureStandaloneOwner).not.toHaveBeenCalled();
+    expect(refreshMessageBus).toHaveBeenCalledTimes(1);
+    expect(firstExecCalls).toBe(1);
+    expect(secondExecCalls).toBe(1);
+  }, 15_000);
+
   it('falls back to the electron runtime for non-mutating commands', async () => {
     const runElectronHeadless = vi.fn(async () => 0);
     const exitCode = await runHeadlessClientCommand(['query', 'workflows'], {

@@ -44,8 +44,11 @@ catalog() {
   cat <<EOF
 mixed-control-plane-storm|headless-standalone|core|mixed_mutation_storm|mixed_resets_cancels_retries|12|14|run_mixed_control_plane_storm
 late-return-rejection-under-storm|headless-standalone|core|stale_worker_response|recreate_and_reject_stale|12|8|run_late_return_rejection_under_storm
+owner-restart-during-active-load|headless-standalone|core|owner_restart_churn|restart_and_recover|10|10|run_owner_restart_during_active_load
 delete-all-under-load|headless-standalone|destructive|global_destructive|delete_all|10|6|run_delete_all_under_load
+repeated-delete-all-under-load|headless-standalone|destructive|repeated_global_destructive|delete_all_repeated|10|10|run_repeated_delete_all_under_load
 tracked-approve-zero-running-hang|headless-standalone|hang|false_idle_tracked_mutation|approve_under_starvation|8|6|run_tracked_approve_zero_running_hang
+tracked-fix-churn-under-load|headless-standalone|hang|tracked_fix_starvation|fix_under_neighbor_churn|8|10|run_tracked_fix_churn_under_load
 owner-bootstrap-under-saturated-mutations|headless-standalone|hang|delegation_starvation|delegate_under_saturation|8|8|run_owner_bootstrap_under_saturated_mutations
 fixing-with-ai-visibility|headless-standalone|hang|fixing_state_visibility|fix_under_timeout|6|1|run_fixing_with_ai_visibility
 EOF
@@ -834,6 +837,85 @@ run_fixing_with_ai_visibility() {
   invoker_e2e_assert_no_owned_headless_processes 1
 }
 
+run_tracked_fix_churn_under_load() {
+  local workflow_count="$1"
+  local operation_burst="$2"
+  invoker_e2e_init
+  trap 'ov_stop_owner; rm -rf "${OVERLOAD_TMP_DIR:-}" >/dev/null 2>&1 || true; invoker_e2e_cleanup' RETURN
+  cd "$INVOKER_E2E_REPO_ROOT"
+  unset ELECTRON_RUN_AS_NODE
+  unset INVOKER_HEADLESS_STANDALONE
+  ov_set_overload_config "$((workflow_count + 2))"
+
+  OVERLOAD_TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/invoker-overload.XXXXXX")"
+  OVERLOAD_OP_PIDS=()
+  OVERLOAD_ALLOWED_BACKGROUND_FAILURE_PATTERN=""
+  OVERLOAD_ALLOWED_BACKGROUND_FAILURE_LABELS="tracked-fix"
+  ov_start_owner
+
+  local target_info target_workflow target_task
+  target_info="$(ov_submit_workflow fail "tracked-fix-target" "" no-track)"
+  target_workflow="${target_info%%|*}"
+  target_task="$target_workflow/root"
+  echo "seed tracked fix target: $target_workflow"
+  ov_wait_task_status "$target_task" failed 30
+
+  local -a fail_workflows=()
+  local -a approval_workflows=()
+  local idx info workflow_id
+  for idx in $(seq 1 3); do
+    info="$(ov_submit_workflow fail "tracked-fix-neighbor-fail-$idx" "" no-track)"
+    workflow_id="${info%%|*}"
+    fail_workflows+=("$workflow_id")
+    ov_wait_task_status "$workflow_id/root" failed 30
+  done
+  for idx in $(seq 1 2); do
+    info="$(ov_submit_workflow approval "tracked-fix-neighbor-approval-$idx" "" no-track)"
+    workflow_id="${info%%|*}"
+    approval_workflows+=("$workflow_id")
+    ov_wait_task_status "$workflow_id/approve-me" awaiting_approval 30
+  done
+
+  echo "==> overload: starting tracked fix with overlapping neighbor churn"
+  ov_spawn_command_timed "tracked-fix" 90 invoker_e2e_run_headless fix "$target_task" codex
+  ov_wait_task_status_any "$target_task" "fixing_with_ai,awaiting_approval,completed,failed" 30
+
+  for idx in $(seq 0 $((operation_burst - 1))); do
+    case $((idx % 6)) in
+      0) workflow_id="${fail_workflows[$((idx % ${#fail_workflows[@]}))]}"; ov_spawn_command "recreate-fail-$idx" invoker_e2e_run_headless --no-track recreate "$workflow_id" ;;
+      1) workflow_id="${fail_workflows[$((idx % ${#fail_workflows[@]}))]}"; ov_spawn_command "retry-fail-$idx" invoker_e2e_run_headless --no-track retry "$workflow_id" ;;
+      2) workflow_id="${approval_workflows[$((idx % ${#approval_workflows[@]}))]}"; ov_spawn_command "approve-$idx" invoker_e2e_run_headless --no-track approve "$workflow_id/approve-me" ;;
+      3) workflow_id="${approval_workflows[$((idx % ${#approval_workflows[@]}))]}"; ov_spawn_command "reject-$idx" invoker_e2e_run_headless --no-track reject "$workflow_id/approve-me" "tracked fix churn reject" ;;
+      4) ov_spawn_command "query-queue-$idx" invoker_e2e_run_headless query queue --output json ;;
+      5) ov_spawn_command "query-workflows-$idx" invoker_e2e_run_headless query workflows --output jsonl ;;
+    esac
+  done
+
+  ov_detect_false_idle "$target_workflow" "tracked-fix" 45
+  ov_wait_background_commands
+
+  local tracked_status target_status
+  tracked_status="$(cat "${OVERLOAD_TMP_DIR}/tracked-fix.code" 2>/dev/null || echo 1)"
+  target_status="$(invoker_e2e_task_status "$target_task" 2>/dev/null || true)"
+  if [ "${tracked_status:-1}" -eq 124 ] || [ "${tracked_status:-1}" -eq 137 ] || [ "${tracked_status:-1}" -eq 143 ]; then
+    if [ "$target_status" = "fixing_with_ai" ] || [ "$target_status" = "review_ready" ] || [ "$target_status" = "awaiting_approval" ]; then
+      echo "FAIL: tracked command hung for $target_task (status=$target_status exit=$tracked_status)" >&2
+      return 1
+    fi
+  elif [ "${tracked_status:-1}" -ne 0 ]; then
+    echo "FAIL: tracked fix command exited with $tracked_status for $target_task" >&2
+    cat "${OVERLOAD_TMP_DIR}/tracked-fix.out" >&2 || true
+    return 1
+  fi
+
+  ov_cancel_all_workflows
+  sleep 2
+  ov_stop_owner
+  ov_wait_queries_healthy 45
+  invoker_e2e_assert_no_stuck_mutation_intents 45
+  invoker_e2e_assert_no_owned_headless_processes 1
+}
+
 run_mixed_control_plane_storm() {
   local workflow_count="$1"
   local operation_burst="$2"
@@ -1090,6 +1172,128 @@ run_delete_all_under_load() {
   ov_stop_owner
   ov_wait_queries_healthy 30
   invoker_e2e_assert_no_stuck_mutation_intents 30
+  invoker_e2e_assert_no_owned_headless_processes 1
+}
+
+run_repeated_delete_all_under_load() {
+  local workflow_count="$1"
+  local operation_burst="$2"
+  invoker_e2e_init
+  trap 'ov_stop_owner; rm -rf "${OVERLOAD_TMP_DIR:-}" >/dev/null 2>&1 || true; invoker_e2e_cleanup' RETURN
+  cd "$INVOKER_E2E_REPO_ROOT"
+  unset ELECTRON_RUN_AS_NODE
+  unset INVOKER_HEADLESS_STANDALONE
+  ov_set_overload_config "$((workflow_count + 2))"
+
+  OVERLOAD_TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/invoker-overload.XXXXXX")"
+  OVERLOAD_OP_PIDS=()
+  OVERLOAD_ALLOWED_BACKGROUND_FAILURE_PATTERN='No tasks found for workflow|Task ".*" not found|Workflow .* not found'
+  ov_start_owner
+
+  local -a workflows=()
+  local idx workflow_id info kind
+  echo "==> overload: seeding workflows before repeated delete-all"
+  for idx in $(seq 1 "$workflow_count"); do
+    case $((idx % 4)) in
+      0) kind="approval" ;;
+      1) kind="slow" ;;
+      2) kind="fail" ;;
+      3) kind="late" ;;
+    esac
+    info="$(ov_submit_workflow "$kind" "repeat-delete-$idx" "${OVERLOAD_TMP_DIR}/repeat-delete-$idx.marker" no-track)"
+    workflow_id="${info%%|*}"
+    workflows+=("$workflow_id")
+  done
+
+  sleep 3
+  echo "==> overload: issuing repeated delete-all bursts"
+  ov_spawn_command "delete-all-1" invoker_e2e_run_headless delete-all
+  sleep 1
+  ov_spawn_command "delete-all-2" invoker_e2e_run_headless delete-all
+  for idx in $(seq 1 "$operation_burst"); do
+    workflow_id="${workflows[$(( (idx - 1) % ${#workflows[@]} ))]}"
+    case $((idx % 5)) in
+      0) ov_spawn_command "query-queue-$idx" invoker_e2e_run_headless query queue --output json ;;
+      1) ov_spawn_command "query-wf-$idx" invoker_e2e_run_headless query workflows --output label ;;
+      2) ov_spawn_command "query-tasks-$idx" invoker_e2e_run_headless query tasks --workflow "$workflow_id" --output jsonl ;;
+      3) ov_spawn_command "retry-$idx" invoker_e2e_run_headless --no-track retry "$workflow_id" ;;
+      4) ov_spawn_command "recreate-$idx" invoker_e2e_run_headless --no-track recreate "$workflow_id" ;;
+    esac
+  done
+  ov_wait_background_commands
+
+  local remaining max_secs
+  max_secs=60
+  while [ "$max_secs" -gt 0 ]; do
+    remaining="$(ov_count_workflows)"
+    if [ "$remaining" -eq 0 ]; then
+      break
+    fi
+    sleep 1
+    max_secs=$((max_secs - 1))
+  done
+  remaining="$(ov_count_workflows)"
+  if [ "$remaining" -ne 0 ]; then
+    echo "FAIL: delete-all left workflows behind ($remaining remaining)" >&2
+    invoker_e2e_run_headless query workflows --output label >&2 || true
+    return 1
+  fi
+
+  ov_stop_owner
+  ov_wait_queries_healthy 30
+  invoker_e2e_assert_no_stuck_mutation_intents 30
+  invoker_e2e_assert_no_owned_headless_processes 1
+}
+
+run_owner_restart_during_active_load() {
+  local workflow_count="$1"
+  local operation_burst="$2"
+  invoker_e2e_init
+  trap 'ov_stop_owner; rm -rf "${OVERLOAD_TMP_DIR:-}" >/dev/null 2>&1 || true; invoker_e2e_cleanup' RETURN
+  cd "$INVOKER_E2E_REPO_ROOT"
+  unset ELECTRON_RUN_AS_NODE
+  unset INVOKER_HEADLESS_STANDALONE
+  ov_set_overload_config "$((workflow_count + 2))"
+
+  OVERLOAD_TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/invoker-overload.XXXXXX")"
+  OVERLOAD_OP_PIDS=()
+  OVERLOAD_ALLOWED_BACKGROUND_FAILURE_PATTERN='timed out waiting for owner response|could not reach a shared owner after bootstrap'
+  OVERLOAD_ALLOWED_BACKGROUND_FAILURE_LABELS="approve-before-restart,recreate-before-restart,queue-before-restart"
+  ov_start_owner
+
+  local slow_info approval_info slow_workflow approval_workflow
+  slow_info="$(ov_submit_workflow slow "owner-restart-slow" "" no-track)"
+  slow_workflow="${slow_info%%|*}"
+  ov_wait_task_status "$slow_workflow/root" running 120
+  approval_info="$(ov_submit_workflow approval "owner-restart-approval" "" no-track)"
+  approval_workflow="${approval_info%%|*}"
+  ov_wait_task_status "$approval_workflow/approve-me" awaiting_approval 30
+
+  echo "==> overload: mutating before owner restart"
+  ov_spawn_command "approve-before-restart" invoker_e2e_run_headless --no-track approve "$approval_workflow/approve-me"
+  ov_spawn_command "recreate-before-restart" invoker_e2e_run_headless --no-track recreate "$slow_workflow"
+  ov_spawn_command "queue-before-restart" invoker_e2e_run_headless query queue --output json
+  sleep 2
+  ov_stop_owner
+  sleep 1
+  ov_start_owner
+
+  echo "==> overload: verifying post-restart recovery"
+  local idx
+  for idx in $(seq 0 $((operation_burst - 1))); do
+    case $((idx % 4)) in
+      0) ov_spawn_command "approve-after-$idx" invoker_e2e_run_headless --no-track approve "$approval_workflow/approve-me" ;;
+      1) ov_spawn_command "cancel-after-$idx" invoker_e2e_run_headless cancel "$slow_workflow/root" ;;
+      2) ov_spawn_command "queue-after-$idx" invoker_e2e_run_headless query queue --output json ;;
+      3) ov_spawn_command "tasks-after-$idx" invoker_e2e_run_headless query tasks --workflow "$slow_workflow" --output jsonl ;;
+    esac
+  done
+  ov_wait_background_commands
+  ov_wait_queries_healthy 45
+  ov_cancel_all_workflows
+  sleep 2
+  ov_stop_owner
+  invoker_e2e_assert_no_stuck_mutation_intents 45
   invoker_e2e_assert_no_owned_headless_processes 1
 }
 
