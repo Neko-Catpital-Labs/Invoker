@@ -495,8 +495,6 @@ describe('headless delegation enforcement', () => {
         mockDeps.commandService.editTaskType = vi.fn(async () => ({ ok: true as const, data: [runnableTask] }));
         mockDeps.commandService.editTaskAgent = vi.fn(async () => ({ ok: true as const, data: [runnableTask] }));
         mockDeps.commandService.setTaskExternalGatePolicies = vi.fn(async () => ({ ok: true as const, data: [runnableTask] }));
-        mockDeps.commandService.replaceTask = vi.fn(async () => ({ ok: true as const, data: [runnableTask] }));
-
         const executeTasksSpy = vi
           .spyOn(TaskRunner.prototype, 'executeTasks')
           .mockImplementation(async () => {
@@ -510,17 +508,27 @@ describe('headless delegation enforcement', () => {
         await runHeadless(['set', 'agent', 'wf-1/task-1', 'codex'], mockDeps);
         taskStatus = 'running';
         await runHeadless(['set', 'gate-policy', 'wf-1/task-1', 'wf-upstream', 'review_ready'], mockDeps);
-        taskStatus = 'running';
-        await runHeadless(['replace-task', 'wf-1/task-1', '[{\"id\":\"fix\",\"description\":\"Fix\",\"command\":\"echo fix\"}]'], mockDeps);
 
-        expect(executeTasksSpy).toHaveBeenCalledTimes(5);
+        expect(executeTasksSpy).toHaveBeenCalledTimes(4);
         expect(mockDeps.commandService.editTaskCommand).toHaveBeenCalled();
         expect(mockDeps.commandService.editTaskType).toHaveBeenCalled();
         expect(mockDeps.commandService.editTaskAgent).toHaveBeenCalled();
         expect(mockDeps.commandService.setTaskExternalGatePolicies).toHaveBeenCalled();
-        expect(mockDeps.commandService.replaceTask).toHaveBeenCalled();
 
         executeTasksSpy.mockRestore();
+      });
+
+      it('headless replace-task is explicitly disabled', async () => {
+        mockDeps.commandService.replaceTask = vi.fn();
+
+        await expect(
+          runHeadless(
+            ['replace-task', 'wf-1/task-1', '[{\"id\":\"fix\",\"description\":\"Fix\",\"command\":\"echo fix\"}]'],
+            mockDeps,
+          ),
+        ).rejects.toThrow('Headless replace-task is disabled because it is not a safe supported CLI flow.');
+
+        expect(mockDeps.commandService.replaceTask).not.toHaveBeenCalled();
       });
 
       it('headless approve waits for downstream runnable tasks to settle', async () => {
