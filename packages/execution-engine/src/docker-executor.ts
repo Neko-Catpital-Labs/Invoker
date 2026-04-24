@@ -365,6 +365,16 @@ export class DockerExecutor extends BaseExecutor<ContainerEntry> {
       request.inputs.lifecycleTag ?? '',
       contentHash,
     );
+    // Persist the branch on the attempt row before any branch-creating git
+    // operation runs. If the container or git step crashes mid-startup, the
+    // attempt still records which branch it was about to use so leftover
+    // state can be reconciled.
+    try {
+      request.onBranchResolved?.(branchName);
+    } catch {
+      // Best-effort early persistence; the post-start path persists the
+      // same value again.
+    }
     const baseBranch = request.inputs.upstreamBranches?.[0]
       ?? request.inputs.baseBranch
       ?? 'HEAD';

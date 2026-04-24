@@ -424,6 +424,31 @@ export class TaskRunner {
     const baseBranch = workflow?.baseBranch ?? this.defaultBranch;
     const repoUrl = workflow?.repoUrl;
 
+    // Persist the experiment branch as soon as the executor knows it — well
+    // before `git worktree add` could leak a worktree without a recorded branch
+    // on the attempt row. Reconciliation paths can then observe the branch
+    // even if the executor crashes mid-startup.
+    let branchPersistedEarly = false;
+    const onBranchResolved = (branch: string): void => {
+      if (!branch || branchPersistedEarly) return;
+      branchPersistedEarly = true;
+      try {
+        this.persistence.updateAttempt?.(attemptId, { branch } as any);
+        this.persistence.updateTask(task.id, {
+          execution: { branch } as any,
+        });
+        traceExecution(
+          `${RESTART_TO_BRANCH_TRACE} task=${task.id} attempt=${attemptId} branch persisted early branch=${branch}`,
+        );
+      } catch (err) {
+        // Early persistence is best-effort: the post-start path persists the
+        // same field again, so a transient failure here is not fatal.
+        traceExecution(
+          `${RESTART_TO_BRANCH_TRACE} task=${task.id} attempt=${attemptId} early branch persist failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    };
+
     const request: WorkRequest = {
       requestId: randomUUID(),
       actionId: task.id,
@@ -448,6 +473,7 @@ export class TaskRunner {
       timestamps: {
         createdAt: new Date().toISOString(),
       },
+      onBranchResolved,
     };
 
     traceExecution(
@@ -551,6 +577,20 @@ export class TaskRunner {
         },
       };
       this.persistence.updateTask(task.id, changes);
+      // Mirror branch + workspacePath onto the attempt row so reconciliation
+      // and post-mortem flows can recover provenance from the attempt without
+      // joining back to the task. Pairs with the early `onBranchResolved`
+      // persistence; this is the authoritative success-path write.
+      try {
+        this.persistence.updateAttempt?.(attemptId, {
+          branch: handle.branch ?? undefined,
+          workspacePath: handle.workspacePath,
+        } as any);
+      } catch (err) {
+        traceExecution(
+          `${RESTART_TO_BRANCH_TRACE} task=${task.id} attempt=${attemptId} post-start attempt persist failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
       traceExecution(
         `[agent-session-trace] TaskRunner.persistStartMetadata task=${task.id} agentSessionId=${handle.agentSessionId ?? 'null'}`,
       );
