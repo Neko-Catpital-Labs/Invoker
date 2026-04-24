@@ -3,10 +3,54 @@
   "productName": "Invoker",
   "desktopName": "invoker.desktop",
   "version": "0.1.0",
+  "description": "Invoker desktop app",
+  "homepage": "https://github.com/Neko-Catpital-Labs/Invoker",
+  "author": {
+    "name": "Invoker Maintainers",
+    "email": "dev@invoker.dev"
+  },
   "private": true,
   "main": "dist/main.js",
+  "build": {
+    "appId": "com.invoker.app",
+    "productName": "Invoker",
+    "artifactName": "Invoker-${version}-${arch}.${ext}",
+    "directories": {
+      "output": "../../release"
+    },
+    "files": [
+      "dist/**/*",
+      "package.json"
+    ],
+    "extraMetadata": {
+      "main": "dist/main.js"
+    },
+    "asar": true,
+    "npmRebuild": false,
+    "publish": null,
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "category": "public.app-category.developer-tools",
+      "icon": "assets/icons/mac/icon.icns"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Development",
+      "icon": "assets/icons/png",
+      "maintainer": "Invoker Maintainers <dev@invoker.dev>",
+      "executableName": "invoker"
+    }
+  },
   "scripts": {
     "build": "tsup",
+    "dist": "electron-builder --publish never",
+    "dist:linux": "electron-builder --linux AppImage deb --publish never",
+    "dist:mac": "electron-builder --mac dmg --publish never",
     "test": "vitest run",
     "start": "unset ELECTRON_RUN_AS_NODE && electron dist/main.js",
     "dev": "tsup src/main.ts src/preload.ts --format cjs --outDir dist --external electron && unset ELECTRON_RUN_AS_NODE && electron dist/main.js",
