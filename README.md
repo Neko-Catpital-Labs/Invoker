@@ -119,6 +119,7 @@ Types: [packages/workflow-graph/src/types.ts](packages/workflow-graph/src/types.
 | `pnpm run dev:hot` | Vite dev server + app |
 | `pnpm run build` | Build all packages |
 | `pnpm test` | Skill check + package tests (sequential) |
+| `pnpm run test:e2e-chaos` | Run the seedable chaos battle-test matrix |
 | `pnpm run test:high-resource` | Package tests in parallel |
 | `pnpm run test:all` | Full aggregated test script |
 | `pnpm run check:all` | Deps graph + types + owner boundary |

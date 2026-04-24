@@ -409,3 +409,124 @@ invoker_e2e_wait_workflow_visible() {
   echo "TIMEOUT: workflow $workflow_id not visible after ${max_secs}s" >&2
   return 1
 }
+
+invoker_e2e_count_owned_headless_processes() {
+  local count=0
+  local pid environ_blob cmdline
+  if [ -z "${INVOKER_DB_DIR:-}" ] && [ -z "${INVOKER_API_PORT:-}" ]; then
+    printf '0'
+    return 0
+  fi
+  while IFS= read -r pid; do
+    [ -n "$pid" ] || continue
+    [ -r "/proc/$pid/environ" ] || continue
+    [ -r "/proc/$pid/cmdline" ] || continue
+    environ_blob="$(tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null || true)"
+    cmdline="$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)"
+    case "$cmdline" in
+      *"--headless"*)
+        ;;
+      *)
+        continue
+        ;;
+    esac
+    if [ -n "${INVOKER_DB_DIR:-}" ] && ! printf '%s\n' "$environ_blob" | grep -Fqx "INVOKER_DB_DIR=$INVOKER_DB_DIR"; then
+      if [ -n "${INVOKER_API_PORT:-}" ] && ! printf '%s\n' "$environ_blob" | grep -Fqx "INVOKER_API_PORT=$INVOKER_API_PORT"; then
+        continue
+      fi
+    fi
+    count=$((count + 1))
+  done < <(pgrep -f '(/electron|packages/app/dist/main.js|headless-client.js|run.sh --headless)' 2>/dev/null || true)
+  printf '%s' "$count"
+}
+
+invoker_e2e_assert_no_owned_headless_processes() {
+  local allowed="${1:-0}"
+  local count
+  count="$(invoker_e2e_count_owned_headless_processes)"
+  if [ "$count" -gt "$allowed" ]; then
+    echo "FAIL: expected at most $allowed owned headless process(es), found $count" >&2
+    pgrep -af '(/electron|packages/app/dist/main.js|headless-client.js|run.sh --headless)' 2>/dev/null || true
+    return 1
+  fi
+}
+
+invoker_e2e_assert_no_stale_running_tasks() {
+  local threshold_secs="${1:-15}"
+  local stale
+  stale="$(
+    invoker_e2e_run_headless query tasks --output jsonl 2>/dev/null \
+      | grep '^{' \
+      | jq -r --argjson threshold "$threshold_secs" '
+        select(.status=="running")
+        | ((.execution.lastHeartbeatAt // .execution.startedAt // "1970-01-01T00:00:00Z")
+            | sub("\\.[0-9]+Z$"; "Z")
+            | fromdateiso8601) as $hb
+        | select((now - $hb) > $threshold)
+        | .id
+      ' 2>/dev/null || true
+  )"
+  if [ -n "$stale" ]; then
+    echo "FAIL: found stale running task(s) older than ${threshold_secs}s" >&2
+    echo "$stale" >&2
+    invoker_e2e_run_headless status 2>&1 || true
+    return 1
+  fi
+}
+
+invoker_e2e_assert_no_stuck_mutation_intents() {
+  local threshold_secs="${1:-30}"
+  local db_path="${INVOKER_DB_DIR:-}/invoker.db"
+  if [ -z "${INVOKER_DB_DIR:-}" ] || [ ! -f "$db_path" ]; then
+    return 0
+  fi
+  if ! python3 - <<'PY' "$db_path" "$threshold_secs"
+import sqlite3
+import sys
+from datetime import datetime, timedelta, timezone
+
+db_path = sys.argv[1]
+threshold_secs = int(sys.argv[2])
+cutoff = datetime.now(timezone.utc) - timedelta(seconds=threshold_secs)
+
+conn = sqlite3.connect(db_path)
+conn.row_factory = sqlite3.Row
+rows = conn.execute(
+    """
+    SELECT id, workflow_id, channel, status, created_at, started_at
+    FROM workflow_mutation_intents
+    WHERE status = 'running'
+    ORDER BY id ASC
+    """
+).fetchall()
+
+def parse_ts(value: str | None):
+    if not value:
+        return None
+    return datetime.strptime(value, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+
+stuck = []
+for row in rows:
+    ts = parse_ts(row["started_at"]) or parse_ts(row["created_at"])
+    if ts and ts < cutoff:
+      stuck.append(row)
+
+if stuck:
+    for row in stuck:
+        print(f'{row["id"]}\t{row["workflow_id"]}\t{row["channel"]}\t{row["started_at"] or row["created_at"]}')
+    raise SystemExit(1)
+PY
+  then
+    echo "FAIL: found stuck workflow mutation intent(s) older than ${threshold_secs}s" >&2
+    return 1
+  fi
+}
+
+invoker_e2e_assert_liveness_clean() {
+  local stale_running_threshold="${1:-15}"
+  local stuck_intent_threshold="${2:-30}"
+  local allowed_headless="${3:-0}"
+  invoker_e2e_assert_no_stale_running_tasks "$stale_running_threshold"
+  invoker_e2e_assert_no_stuck_mutation_intents "$stuck_intent_threshold"
+  invoker_e2e_assert_no_owned_headless_processes "$allowed_headless"
+}

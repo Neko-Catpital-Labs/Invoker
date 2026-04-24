@@ -37,6 +37,10 @@ The orchestrator is **`scripts/run-all-tests.sh`**, invoked as **`pnpm run test:
 | `INVOKER_PLAYWRIGHT_SHARD_INDEX=1` + `INVOKER_PLAYWRIGHT_SHARD_TOTAL=4` | Alternate shard syntax for CI matrices |
 | `INVOKER_PLAYWRIGHT_RUN_LABEL=ci-linux` | Prefix isolated Playwright artifact and bare-repo paths |
 | `INVOKER_PLAYWRIGHT_ARGS='--grep \"visual proof\"'` | Forward simple extra args through the Playwright suite wrapper |
+| `INVOKER_CHAOS_MODE=nightly` | Expand the chaos suite with repeated high-risk scenarios |
+| `INVOKER_CHAOS_SEED=1234` | Deterministically shuffle chaos scenario order |
+| `INVOKER_CHAOS_SCENARIO=owner-approve` | Run only matching chaos scenarios |
+| `INVOKER_CHAOS_CASE_TIMEOUT_SECONDS=900` | Outer timeout applied to each chaos scenario |
 
 ## Resume and availability
 
@@ -52,6 +56,7 @@ The orchestrator is **`scripts/run-all-tests.sh`**, invoked as **`pnpm run test:
   - `required/20-e2e-dry-run.sh`: `case-1.*`
   - `required/21-e2e-dry-run-downstream.sh`: `case-2.*`
   - `required/22-e2e-dry-run-github.sh`: `case-4.*`
+  - `optional/32-e2e-chaos.sh`: generated local + GUI-owner chaos matrix
   - `optional/30-e2e-ssh.sh`: `case-3.1` to `case-3.3`
   - `optional/31-e2e-ssh-merge.sh`: `case-3.4` to `case-3.6`
 
