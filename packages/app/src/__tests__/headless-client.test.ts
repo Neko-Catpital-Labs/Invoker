@@ -4,11 +4,11 @@ import { LocalBus } from '@invoker/transport';
 import { SharedMutationOwnerTimeoutError, runHeadlessClientCommand } from '../headless-client.js';
 
 describe('headless-client', () => {
-  it('delegates mutating commands to an existing owner without electron fallback', async () => {
+  it('delegates mutating commands to an existing standalone owner without electron fallback', async () => {
     const bus = new LocalBus();
     const ownerHandler = vi.fn(async () => ({ ok: true }));
     bus.onRequest('headless.exec', ownerHandler);
-    bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-1', mode: 'gui' }));
+    bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-1', mode: 'standalone' }));
 
     const runElectronHeadless = vi.fn(async () => 0);
     const ensureStandaloneOwner = vi.fn(async () => {});
@@ -27,6 +27,34 @@ describe('headless-client', () => {
     });
     expect(ensureStandaloneOwner).not.toHaveBeenCalled();
     expect(runElectronHeadless).not.toHaveBeenCalled();
+  });
+
+  it('does not delegate mutating commands to a GUI owner and bootstraps standalone instead', async () => {
+    const bus = new LocalBus();
+    const guiOwnerHandler = vi.fn(async () => ({ ok: true }));
+    const standaloneOwnerHandler = vi.fn(async () => ({ ok: true }));
+    let ownerMode: 'gui' | 'standalone' = 'gui';
+
+    bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-1', mode: ownerMode }));
+    bus.onRequest('headless.exec', async (payload) => {
+      if (ownerMode === 'gui') return guiOwnerHandler(payload);
+      return standaloneOwnerHandler(payload);
+    });
+
+    const ensureStandaloneOwner = vi.fn(async () => {
+      ownerMode = 'standalone';
+    });
+
+    const exitCode = await runHeadlessClientCommand(['retry', 'wf-1', '--no-track'], {
+      messageBus: bus,
+      ensureStandaloneOwner,
+      runElectronHeadless: vi.fn(async () => 0),
+    });
+
+    expect(exitCode).toBe(0);
+    expect(guiOwnerHandler).not.toHaveBeenCalled();
+    expect(standaloneOwnerHandler).toHaveBeenCalledTimes(1);
+    expect(ensureStandaloneOwner).toHaveBeenCalledTimes(1);
   });
 
   it('bootstraps a standalone owner once when no owner is present, then delegates', async () => {
@@ -225,32 +253,7 @@ describe('headless-client', () => {
     expect(refreshMessageBus).toHaveBeenCalled();
   }, 15_000);
 
-  it('retries no-track delegated mutations after the first owner request times out', async () => {
-    const bus = new LocalBus();
-    let execCalls = 0;
-    bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-1', mode: 'gui' }));
-    bus.onRequest('headless.exec', async () => {
-      execCalls += 1;
-      if (execCalls === 1) {
-        return await new Promise(() => {});
-      }
-      return { ok: true };
-    });
-
-    const ensureStandaloneOwner = vi.fn(async () => {});
-
-    const exitCode = await runHeadlessClientCommand(['recreate', 'wf-2', '--no-track'], {
-      messageBus: bus,
-      ensureStandaloneOwner,
-      runElectronHeadless: vi.fn(async () => 0),
-    });
-
-    expect(exitCode).toBe(0);
-    expect(ensureStandaloneOwner).toHaveBeenCalledTimes(1);
-    expect(execCalls).toBe(2);
-  }, 15_000);
-
-  it('refreshes the message bus before retrying after an owner restart', async () => {
+  it('refreshes the message bus before retrying after switching away from a GUI owner', async () => {
     const firstBus = new LocalBus();
     const secondBus = new LocalBus();
     let firstExecCalls = 0;
@@ -281,7 +284,7 @@ describe('headless-client', () => {
     expect(exitCode).toBe(0);
     expect(ensureStandaloneOwner).not.toHaveBeenCalled();
     expect(refreshMessageBus).toHaveBeenCalledTimes(1);
-    expect(firstExecCalls).toBe(1);
+    expect(firstExecCalls).toBe(0);
     expect(secondExecCalls).toBe(1);
   }, 15_000);
 
