@@ -43,8 +43,10 @@ run_with_timeout() {
 catalog() {
   cat <<EOF
 mixed-control-plane-storm|headless-standalone|core|mixed_mutation_storm|mixed_resets_cancels_retries|12|14|run_mixed_control_plane_storm
+owner-restart-loop-during-mixed-storm|headless-standalone|core|owner_restart_loop_mixed_mutation_storm|restart_loop_mixed_resets_cancels_retries|12|16|run_owner_restart_loop_during_mixed_storm
 late-return-rejection-under-storm|headless-standalone|core|stale_worker_response|recreate_and_reject_stale|12|8|run_late_return_rejection_under_storm
 owner-restart-during-active-load|headless-standalone|core|owner_restart_churn|restart_and_recover|10|10|run_owner_restart_during_active_load
+owner-restart-loop-during-active-load|headless-standalone|core|owner_restart_loop_churn|restart_loop_and_recover|10|12|run_owner_restart_loop_during_active_load
 owner-restart-during-late-return-storm|headless-standalone|core|owner_restart_stale_return|restart_during_recreate|12|10|run_owner_restart_during_late_return_storm
 owner-restart-loop-during-late-return-storm|headless-standalone|core|owner_restart_loop_stale_return|restart_loop_during_recreate|12|12|run_owner_restart_loop_during_late_return_storm
 delete-all-under-load|headless-standalone|destructive|global_destructive|delete_all|10|6|run_delete_all_under_load
@@ -1052,6 +1054,142 @@ run_mixed_control_plane_storm() {
   invoker_e2e_assert_no_owned_headless_processes 1
 }
 
+run_owner_restart_loop_during_mixed_storm() {
+  local workflow_count="$1"
+  local operation_burst="$2"
+  local late_count=2
+  local fail_count=4
+  local approval_count=4
+  local slow_count=2
+  local total_requested=$((late_count + fail_count + approval_count + slow_count))
+  if [ "$workflow_count" -lt "$total_requested" ]; then
+    local delta=$((total_requested - workflow_count))
+    slow_count=$((slow_count - delta))
+    if [ "$slow_count" -lt 2 ]; then
+      slow_count=2
+    fi
+  fi
+
+  invoker_e2e_init
+  trap 'ov_stop_owner; rm -rf "${OVERLOAD_TMP_DIR:-}" "${MARKER_DIR:-}" >/dev/null 2>&1 || true; invoker_e2e_cleanup' RETURN
+  cd "$INVOKER_E2E_REPO_ROOT"
+  unset ELECTRON_RUN_AS_NODE
+  unset INVOKER_HEADLESS_STANDALONE
+  ov_set_overload_config "$((workflow_count + 2))"
+
+  OVERLOAD_TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/invoker-overload.XXXXXX")"
+  MARKER_DIR="$(mktemp -d "${TMPDIR:-/tmp}/invoker-overload-markers.XXXXXX")"
+  OVERLOAD_OP_PIDS=()
+  OVERLOAD_ALLOWED_BACKGROUND_FAILURE_PATTERN='timed out waiting for owner response|could not reach a shared owner after bootstrap'
+  OVERLOAD_ALLOWED_BACKGROUND_FAILURE_LABELS=""
+  ov_start_owner
+
+  local -a fail_workflows=()
+  local -a approval_workflows=()
+  local -a slow_workflows=()
+  local -a late_workflows=()
+  local idx info workflow_id marker_path
+
+  echo "==> overload: seeding mixed workflows for restart loop count=$workflow_count"
+  for idx in $(seq 1 "$fail_count"); do
+    info="$(ov_submit_workflow fail "restart-mixed-fail-$idx" "" no-track)"
+    workflow_id="${info%%|*}"
+    fail_workflows+=("$workflow_id")
+    echo "seed fail workflow: $workflow_id"
+    ov_wait_task_status "$workflow_id/root" failed 30
+  done
+  for idx in $(seq 1 "$approval_count"); do
+    info="$(ov_submit_workflow approval "restart-mixed-approval-$idx" "" no-track)"
+    workflow_id="${info%%|*}"
+    approval_workflows+=("$workflow_id")
+    echo "seed approval workflow: $workflow_id"
+    ov_wait_task_status "$workflow_id/approve-me" awaiting_approval 30
+  done
+  for idx in $(seq 1 "$slow_count"); do
+    info="$(ov_submit_workflow slow "restart-mixed-slow-$idx" "" no-track)"
+    workflow_id="${info%%|*}"
+    slow_workflows+=("$workflow_id")
+    echo "seed slow workflow: $workflow_id"
+    ov_wait_task_status "$workflow_id/root" running 120
+  done
+  for idx in $(seq 1 "$late_count"); do
+    marker_path="$MARKER_DIR/restart-mixed-late-$idx.marker"
+    info="$(ov_submit_workflow late "restart-mixed-late-$idx" "$marker_path" no-track)"
+    workflow_id="${info%%|*}"
+    late_workflows+=("$workflow_id")
+    echo "$marker_path" > "$OVERLOAD_TMP_DIR/${workflow_id}.marker"
+    echo "seed late workflow: $workflow_id"
+    ov_wait_task_status "$workflow_id/late" running 120
+  done
+
+  local reset_started_at cancel_started_at
+  reset_started_at="$(date -u '+%Y-%m-%d %H:%M:%S')"
+  for workflow_id in "${late_workflows[@]:0:2}"; do
+    touch "$(cat "$OVERLOAD_TMP_DIR/${workflow_id}.marker")"
+  done
+  cancel_started_at="$(date -u '+%Y-%m-%d %H:%M:%S')"
+
+  echo "==> overload: firing mixed storm before restart loop burst=$operation_burst"
+  ov_spawn_command "recreate-fail-1" invoker_e2e_run_headless --no-track recreate "${fail_workflows[0]}"
+  ov_spawn_command "recreate-fail-2" invoker_e2e_run_headless --no-track recreate "${fail_workflows[1]}"
+  ov_spawn_command "rebase-fail-3" invoker_e2e_run_headless --no-track rebase "${fail_workflows[2]}/root"
+  ov_spawn_command "retry-fail-3" invoker_e2e_run_headless --no-track retry "${fail_workflows[2]}"
+  ov_spawn_command "approve-1" invoker_e2e_run_headless --no-track approve "${approval_workflows[0]}/approve-me"
+  ov_spawn_command "approve-2" invoker_e2e_run_headless --no-track approve "${approval_workflows[1]}/approve-me"
+  ov_spawn_command "reject-3" invoker_e2e_run_headless --no-track reject "${approval_workflows[2]}/approve-me" "chaos overload reject"
+  ov_spawn_command "recreate-approval-3" invoker_e2e_run_headless --no-track recreate "${approval_workflows[2]}"
+  ov_spawn_command "cancel-slow-1" invoker_e2e_run_headless cancel "${slow_workflows[0]}/root"
+  ov_spawn_command "cancel-slow-2" invoker_e2e_run_headless cancel "${slow_workflows[1]}/root"
+  ov_spawn_command "recreate-late-1" invoker_e2e_run_headless --no-track recreate "${late_workflows[0]}"
+  ov_spawn_command "recreate-late-2" invoker_e2e_run_headless --no-track recreate "${late_workflows[1]}"
+  ov_spawn_command "retry-fail-4" invoker_e2e_run_headless --no-track retry "${fail_workflows[3]}"
+
+  local restart_cycles=3
+  local cycle
+  for cycle in $(seq 1 "$restart_cycles"); do
+    echo "==> overload: owner restart cycle $cycle/$restart_cycles"
+    ov_spawn_command "query-workflows-cycle-$cycle" invoker_e2e_run_headless query workflows --output jsonl
+    ov_spawn_command "query-queue-cycle-$cycle" invoker_e2e_run_headless query queue --output json
+    ov_spawn_command "query-ui-perf-cycle-$cycle" invoker_e2e_run_headless query ui-perf --output json
+    sleep 1
+    ov_stop_owner
+    sleep 1
+    ov_start_owner
+    ov_spawn_command "retry-cycle-$cycle" invoker_e2e_run_headless --no-track retry "${fail_workflows[$(( (cycle - 1) % ${#fail_workflows[@]} ))]}"
+    ov_spawn_command "approve-cycle-$cycle" invoker_e2e_run_headless --no-track approve "${approval_workflows[$(( (cycle - 1) % ${#approval_workflows[@]} ))]}/approve-me"
+    sleep 1
+  done
+
+  local extra_ops=$((operation_burst - 13 - (restart_cycles * 5)))
+  if [ "$extra_ops" -lt 0 ]; then
+    extra_ops=0
+  fi
+  for idx in $(seq 0 $((extra_ops - 1))); do
+    case $((idx % 6)) in
+      0) ov_spawn_command "query-workflows-$idx" invoker_e2e_run_headless query workflows --output jsonl ;;
+      1) ov_spawn_command "query-tasks-$idx" invoker_e2e_run_headless query tasks --output jsonl ;;
+      2) ov_spawn_command "query-queue-$idx" invoker_e2e_run_headless query queue --output json ;;
+      3) ov_spawn_command "query-ui-perf-$idx" invoker_e2e_run_headless query ui-perf --output json ;;
+      4) ov_spawn_command "retry-extra-$idx" invoker_e2e_run_headless --no-track retry "${fail_workflows[$((idx % ${#fail_workflows[@]}))]}" ;;
+      5) ov_spawn_command "approve-extra-$idx" invoker_e2e_run_headless --no-track approve "${approval_workflows[$((idx % ${#approval_workflows[@]}))]}/approve-me" ;;
+    esac
+  done
+  ov_wait_background_commands
+
+  echo "==> overload: verifying restart-loop mixed invariants"
+  ov_assert_stale_completion_rejected "${late_workflows[0]}" "$reset_started_at"
+  ov_assert_stale_completion_rejected "${late_workflows[1]}" "$reset_started_at"
+  ov_assert_canceled_task_did_not_complete "${slow_workflows[0]}/root" "$cancel_started_at"
+  ov_assert_canceled_task_did_not_complete "${slow_workflows[1]}/root" "$cancel_started_at"
+  ov_wait_queries_healthy 60
+
+  ov_cancel_all_workflows
+  sleep 3
+  ov_stop_owner
+  invoker_e2e_assert_no_stuck_mutation_intents 45
+  invoker_e2e_assert_no_owned_headless_processes 1
+}
+
 run_late_return_rejection_under_storm() {
   local workflow_count="$1"
   local operation_burst="$2"
@@ -1311,6 +1449,71 @@ run_owner_restart_during_active_load() {
   done
   ov_wait_background_commands
   ov_wait_queries_healthy 45
+  ov_cancel_all_workflows
+  sleep 2
+  ov_stop_owner
+  invoker_e2e_assert_no_stuck_mutation_intents 45
+  invoker_e2e_assert_no_owned_headless_processes 1
+}
+
+run_owner_restart_loop_during_active_load() {
+  local workflow_count="$1"
+  local operation_burst="$2"
+  invoker_e2e_init
+  trap 'ov_stop_owner; rm -rf "${OVERLOAD_TMP_DIR:-}" >/dev/null 2>&1 || true; invoker_e2e_cleanup' RETURN
+  cd "$INVOKER_E2E_REPO_ROOT"
+  unset ELECTRON_RUN_AS_NODE
+  unset INVOKER_HEADLESS_STANDALONE
+  ov_set_overload_config "$((workflow_count + 2))"
+
+  OVERLOAD_TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/invoker-overload.XXXXXX")"
+  OVERLOAD_OP_PIDS=()
+  OVERLOAD_ALLOWED_BACKGROUND_FAILURE_PATTERN='timed out waiting for owner response|could not reach a shared owner after bootstrap'
+  OVERLOAD_ALLOWED_BACKGROUND_FAILURE_LABELS="approve-before-restart,recreate-before-restart,queue-before-restart,ui-perf-before-restart"
+  ov_start_owner
+
+  local slow_info approval_info slow_workflow approval_workflow
+  slow_info="$(ov_submit_workflow slow "owner-restart-loop-slow" "" no-track)"
+  slow_workflow="${slow_info%%|*}"
+  ov_wait_task_status "$slow_workflow/root" running 120
+  approval_info="$(ov_submit_workflow approval "owner-restart-loop-approval" "" no-track)"
+  approval_workflow="${approval_info%%|*}"
+  ov_wait_task_status "$approval_workflow/approve-me" awaiting_approval 30
+
+  echo "==> overload: mutating before owner restart loop"
+  ov_spawn_command "approve-before-restart" invoker_e2e_run_headless --no-track approve "$approval_workflow/approve-me"
+  ov_spawn_command "recreate-before-restart" invoker_e2e_run_headless --no-track recreate "$slow_workflow"
+  ov_spawn_command "queue-before-restart" invoker_e2e_run_headless query queue --output json
+  ov_spawn_command "ui-perf-before-restart" invoker_e2e_run_headless query ui-perf --output json
+  sleep 2
+
+  local restart_cycles=3
+  local cycle
+  for cycle in $(seq 1 "$restart_cycles"); do
+    echo "==> overload: owner restart cycle $cycle/$restart_cycles"
+    ov_stop_owner
+    sleep 1
+    ov_start_owner
+    ov_spawn_command "queue-after-$cycle" invoker_e2e_run_headless query queue --output json
+    ov_spawn_command "ui-perf-after-$cycle" invoker_e2e_run_headless query ui-perf --output json
+    ov_spawn_command "approve-after-$cycle" invoker_e2e_run_headless --no-track approve "$approval_workflow/approve-me"
+    ov_spawn_command "recreate-after-$cycle" invoker_e2e_run_headless --no-track recreate "$slow_workflow"
+    sleep 1
+  done
+
+  local idx
+  for idx in $(seq 0 $((operation_burst - 1))); do
+    case $((idx % 5)) in
+      0) ov_spawn_command "queue-tail-$idx" invoker_e2e_run_headless query queue --output json ;;
+      1) ov_spawn_command "tasks-tail-$idx" invoker_e2e_run_headless query tasks --workflow "$slow_workflow" --output jsonl ;;
+      2) ov_spawn_command "approve-tail-$idx" invoker_e2e_run_headless --no-track approve "$approval_workflow/approve-me" ;;
+      3) ov_spawn_command "recreate-tail-$idx" invoker_e2e_run_headless --no-track recreate "$slow_workflow" ;;
+      4) ov_spawn_command "ui-perf-tail-$idx" invoker_e2e_run_headless query ui-perf --output json ;;
+    esac
+  done
+
+  ov_wait_background_commands
+  ov_wait_queries_healthy 60
   ov_cancel_all_workflows
   sleep 2
   ov_stop_owner
