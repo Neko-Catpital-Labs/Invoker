@@ -47,3 +47,4 @@ The script prints:
 - `--gate-policy approved|review_ready` controls cross-workflow merge-gate readiness:
   - `review_ready` (default): downstream can start once upstream merge gate is `review_ready`, `awaiting_approval`, or `completed`.
   - `approved`: downstream waits for upstream merge gate `completed`.
+- This skill manages Invoker workflow stacking, not GitHub PR publication policy. If the target repo is Invoker itself, publish/update the resulting GitHub PR stack with `mergify stack push` once the branch commits are ready. If the target repo is something else (for example `EdbertChan/test-playground`), keep normal PR flow unless that repo independently uses Mergify Stacks.
