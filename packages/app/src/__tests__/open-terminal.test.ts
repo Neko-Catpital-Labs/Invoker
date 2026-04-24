@@ -25,6 +25,7 @@ import type { TaskStateChanges } from '@invoker/workflow-graph';
 import {
   DockerExecutor, WorktreeExecutor, ExecutorRegistry, SshExecutor,
   BaseExecutor,
+  getEffectivePath,
   type ExecutorHandle, type TerminalSpec, type PersistedTaskMeta,
 } from '@invoker/execution-engine';
 import type { WorkResponse, WorkRequest } from '@invoker/contracts';
@@ -107,7 +108,7 @@ function buildCleanEnv(): Record<string, string> {
   for (const k of keep) {
     if (process.env[k]) cleanEnv[k] = process.env[k]!;
   }
-  cleanEnv.PATH = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin';
+  cleanEnv.PATH = getEffectivePath();
   if (!cleanEnv.TERM) cleanEnv.TERM = 'xterm-256color';
   return cleanEnv;
 }
@@ -353,7 +354,7 @@ describe('open-terminal integration', () => {
       const spawnCall = mockSpawn.mock.calls[0] as unknown[];
       const env = (spawnCall[2] as Record<string, unknown>).env as Record<string, string>;
       expect(env).toHaveProperty('HOME');
-      expect(env).toHaveProperty('PATH', '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin');
+      expect(env).toHaveProperty('PATH', getEffectivePath());
       expect(env).not.toHaveProperty('GTK_PATH');
       expect(env).not.toHaveProperty('GDK_PIXBUF_MODULE_FILE');
       expect(env).not.toHaveProperty('LD_LIBRARY_PATH');
