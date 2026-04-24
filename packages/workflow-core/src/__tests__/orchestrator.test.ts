@@ -2785,14 +2785,150 @@ describe('Orchestrator', () => {
       expect(orchestrator.getAllTasks().length).toBe(taskCountBefore);
     });
 
-    it('throws when trying to edit a running task', () => {
+    it('editing an ACTIVE (running) task does NOT throw and cancels first, then recreates', () => {
       orchestrator.loadPlan({
         name: 'edit-running-test',
         tasks: [{ id: 't1', description: 'Task 1', command: 'sleep 100' }],
       });
       orchestrator.startExecution();
+      const taskId = sid(orchestrator, 0, 't1');
+      expect(orchestrator.getTask(taskId)?.status).toBe('running');
 
-      expect(() => orchestrator.editTaskCommand('t1', 'echo new')).toThrow();
+      const cancelSpy = vi.spyOn(orchestrator, 'cancelTask');
+      const recreateSpy = vi.spyOn(orchestrator, 'recreateTask');
+
+      const started = orchestrator.editTaskCommand(taskId, 'echo new');
+
+      expect(cancelSpy).toHaveBeenCalledWith(taskId);
+      expect(recreateSpy).toHaveBeenCalledWith(taskId);
+      expect(cancelSpy.mock.invocationCallOrder[0]).toBeLessThan(
+        recreateSpy.mock.invocationCallOrder[0],
+      );
+
+      const task = orchestrator.getTask(taskId);
+      expect(task?.config.command).toBe('echo new');
+      expect(task?.status).toBe('running');
+      expect(started).toHaveLength(1);
+      expect(started[0].id).toBe(taskId);
+
+      cancelSpy.mockRestore();
+      recreateSpy.mockRestore();
+    });
+
+    it('editing an INACTIVE (failed) task skips cancel but still routes through recreateTask', () => {
+      orchestrator.loadPlan({
+        name: 'edit-inactive-test',
+        tasks: [{ id: 't1', description: 'Task 1', command: 'echo old' }],
+      });
+      orchestrator.startExecution();
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 't1', status: 'failed', outputs: { exitCode: 1, error: 'fail' } }),
+      );
+      const taskId = sid(orchestrator, 0, 't1');
+      expect(orchestrator.getTask(taskId)?.status).toBe('failed');
+
+      const cancelSpy = vi.spyOn(orchestrator, 'cancelTask');
+      const recreateSpy = vi.spyOn(orchestrator, 'recreateTask');
+
+      orchestrator.editTaskCommand(taskId, 'echo new');
+
+      expect(cancelSpy).not.toHaveBeenCalled();
+      expect(recreateSpy).toHaveBeenCalledWith(taskId);
+
+      cancelSpy.mockRestore();
+      recreateSpy.mockRestore();
+    });
+
+    it('discards stale lineage (matches recreateTask reset shape)', () => {
+      orchestrator.loadPlan({
+        name: 'edit-lineage-test',
+        tasks: [{ id: 't1', description: 'Task 1', command: 'echo old' }],
+      });
+      orchestrator.startExecution();
+      const taskId = sid(orchestrator, 0, 't1');
+
+      persistence.updateTask(taskId, {
+        execution: {
+          branch: 'experiment/old-cmd',
+          commit: 'deadbeef',
+          workspacePath: '/tmp/old-workspace',
+          agentSessionId: 'sess-stale',
+          containerId: 'container-stale',
+          error: 'previous error',
+          exitCode: 1,
+          completedAt: new Date(),
+          startedAt: new Date(),
+        },
+      });
+      orchestrator.syncFromDb(taskId.split('/')[0]!);
+
+      orchestrator.editTaskCommand(taskId, 'echo new');
+
+      const task = orchestrator.getTask(taskId)!;
+      expect(task.execution.branch).toBeUndefined();
+      expect(task.execution.commit).toBeUndefined();
+      expect(task.execution.workspacePath).toBeUndefined();
+      expect(task.execution.agentSessionId).toBeUndefined();
+      expect(task.execution.containerId).toBeUndefined();
+      expect(task.execution.error).toBeUndefined();
+      expect(task.execution.exitCode).toBeUndefined();
+    });
+
+    it('bumps execution generation by exactly one per command edit', () => {
+      orchestrator.loadPlan({
+        name: 'edit-gen-test',
+        tasks: [{ id: 't1', description: 'Task 1', command: 'echo old' }],
+      });
+      orchestrator.startExecution();
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 't1', status: 'failed', outputs: { exitCode: 1, error: 'x' } }),
+      );
+      const taskId = sid(orchestrator, 0, 't1');
+
+      const before = orchestrator.getTask(taskId)!.execution.generation ?? 0;
+
+      orchestrator.editTaskCommand(taskId, 'echo new');
+
+      const after = orchestrator.getTask(taskId)!.execution.generation ?? 0;
+      expect(after).toBe(before + 1);
+    });
+
+    it('idempotence — two consecutive command edits trigger two cancel-first cycles and two generation bumps', () => {
+      orchestrator.loadPlan({
+        name: 'edit-idempotence-test',
+        tasks: [{ id: 't1', description: 'Task 1', command: 'sleep 100' }],
+      });
+      orchestrator.startExecution();
+      const taskId = sid(orchestrator, 0, 't1');
+      expect(orchestrator.getTask(taskId)?.status).toBe('running');
+
+      const cancelSpy = vi.spyOn(orchestrator, 'cancelTask');
+      const recreateSpy = vi.spyOn(orchestrator, 'recreateTask');
+
+      const gen0 = orchestrator.getTask(taskId)!.execution.generation ?? 0;
+
+      orchestrator.editTaskCommand(taskId, 'echo first');
+      const gen1 = orchestrator.getTask(taskId)!.execution.generation ?? 0;
+      expect(gen1).toBe(gen0 + 1);
+      expect(orchestrator.getTask(taskId)?.status).toBe('running');
+
+      orchestrator.editTaskCommand(taskId, 'echo second');
+      const gen2 = orchestrator.getTask(taskId)!.execution.generation ?? 0;
+      expect(gen2).toBe(gen0 + 2);
+
+      expect(cancelSpy).toHaveBeenCalledTimes(2);
+      expect(recreateSpy).toHaveBeenCalledTimes(2);
+      expect(cancelSpy.mock.invocationCallOrder[0]).toBeLessThan(
+        recreateSpy.mock.invocationCallOrder[0],
+      );
+      expect(cancelSpy.mock.invocationCallOrder[1]).toBeLessThan(
+        recreateSpy.mock.invocationCallOrder[1],
+      );
+
+      expect(orchestrator.getTask(taskId)?.config.command).toBe('echo second');
+
+      cancelSpy.mockRestore();
+      recreateSpy.mockRestore();
     });
 
     it('persists the updated command', () => {
