@@ -541,16 +541,17 @@ describe('Flow 4: edit/fork mutations', () => {
     expect(h.getTask('A')!.status).toBe('failed');
     expect(h.getTask('B')!.status).toBe('pending');
 
-    // Step 11 (`docs/architecture/task-invalidation-roadmap.md`):
-    // `replaceTask` now throws `TopologyForkRequired` when the workflow
-    // is live (any non-merge task still pending/running/...). LINEAR_PLAN
-    // here is A → B → C, and after failTask('A') both B and C remain
-    // `pending`, so we cancel the live downstream subgraph (B drags C
-    // with it) before exercising the in-place replacement path. The
-    // assertions about the replacement subgraph are unchanged.
+    // Steps 11 → 14 (`docs/architecture/task-invalidation-roadmap.md`):
+    // `replaceTask` on a *live* workflow now routes through
+    // `forkWorkflow` (Step 14) instead of throwing
+    // `TopologyForkRequired` (Step 11). This test exercises the
+    // **in-place** replacement path on purpose, so it cancels the
+    // live downstream subgraph (B drags C with it) to make the
+    // workflow terminal first. The assertions about the in-place
+    // replacement subgraph below are unchanged.
     h.orchestrator.cancelTask('B');
 
-    // Replace A with two sub-tasks
+    // Replace A with two sub-tasks (in-place — workflow is terminal)
     const replacements = h.orchestrator.replaceTask('A', [
       { id: 'A-fix-1', description: 'Fix part 1', command: 'echo fix1' },
       { id: 'A-fix-2', description: 'Fix part 2', command: 'echo fix2', dependencies: ['A-fix-1'] },

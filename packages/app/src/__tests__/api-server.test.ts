@@ -96,6 +96,11 @@ function createMocks() {
       editTaskAgent: vi.fn(() => [makeTask()]),
       setTaskExternalGatePolicies: vi.fn(() => [makeTask()]),
       cancelTask: vi.fn(() => ({ cancelled: ['task-1'], runningCancelled: ['task-1'] })),
+      forkWorkflow: vi.fn((workflowId: string) => ({
+        sourceWorkflowId: workflowId,
+        forkedWorkflowId: `${workflowId}-fork`,
+        started: [makeTask({ id: `${workflowId}-fork/task-1`, config: { workflowId: `${workflowId}-fork` } })],
+      })),
       deleteWorkflow: vi.fn(),
       getQueueStatus: vi.fn(() => ({
         maxConcurrency: 4,
@@ -745,6 +750,33 @@ describe('POST /api/workflows/:id/restart', () => {
     expect(mocks.taskExecutor.executeTasks).toHaveBeenCalledTimes(2);
     expect(mocks.taskExecutor.executeTasks).toHaveBeenNthCalledWith(1, [scoped]);
     expect(mocks.taskExecutor.executeTasks).toHaveBeenNthCalledWith(2, [topup]);
+  });
+});
+
+// Step 14 (`docs/architecture/task-invalidation-roadmap.md`,
+// chart "Topology inconsistency"): live-workflow topology
+// mutations now route through `Orchestrator.forkWorkflow` and
+// surfaces expose an explicit `fork` verb. The api-server
+// returns both the source and forked workflow ids so callers
+// can follow the new workflow.
+describe('POST /api/workflows/:id/fork', () => {
+  it('forks the workflow via shared forkWorkflow and returns both ids', async () => {
+    const res = await request(port, 'POST', '/api/workflows/wf-1/fork');
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.sourceWorkflowId).toBe('wf-1');
+    expect(res.body.forkedWorkflowId).toBe('wf-1-fork');
+    expect(mocks.orchestrator.forkWorkflow).toHaveBeenCalledWith('wf-1');
+    expect(mocks.taskExecutor.executeTasks).toHaveBeenCalled();
+  });
+
+  it('returns an error status when forkWorkflow throws', async () => {
+    mocks.orchestrator.forkWorkflow.mockImplementationOnce(() => {
+      throw new Error('Workflow missing not found');
+    });
+    const res = await request(port, 'POST', '/api/workflows/missing/fork');
+    expect(res.status).toBe(404);
+    expect(res.body.error).toContain('not found');
   });
 });
 

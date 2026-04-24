@@ -290,6 +290,12 @@ export class TopologyForkRequired extends Error {
   }
 }
 
+export interface ForkWorkflowResult {
+  readonly forkedWorkflowId: string;
+  readonly sourceWorkflowId: string;
+  readonly started: TaskState[];
+}
+
 export interface GraphMutationNodeDef {
   id: string;
   description: string;
@@ -2761,6 +2767,127 @@ export class Orchestrator {
     return started;
   }
 
+  forkWorkflow(workflowId: string, opts?: { autoStart?: boolean }): ForkWorkflowResult {
+    this.refreshWorkflowFromDb(workflowId);
+
+    const sourceTasks = this.stateMachine
+      .getAllTasks()
+      .filter((t) => t.config.workflowId === workflowId);
+    if (sourceTasks.length === 0) {
+      throw new Error(`forkWorkflow: workflow ${workflowId} not found (no tasks)`);
+    }
+
+    this.cancelWorkflow(workflowId);
+
+    this.refreshWorkflowFromDb(workflowId);
+    const settledSourceTasks = this.stateMachine
+      .getAllTasks()
+      .filter((t) => t.config.workflowId === workflowId);
+
+    const newWfId = nextWorkflowId();
+    const sourceMeta = this.persistence.loadWorkflow?.(workflowId);
+    const createdAt = workflowTimestamp().toISOString();
+    const baseSaveWf: Parameters<OrchestratorPersistence['saveWorkflow']>[0] = {
+      id: newWfId,
+      name: sourceMeta && (sourceMeta as { name?: string }).name
+        ? `${(sourceMeta as { name: string }).name} (fork of ${workflowId})`
+        : `Fork of ${workflowId}`,
+      status: 'running',
+      createdAt,
+      updatedAt: createdAt,
+    };
+    if (sourceMeta) {
+      const m = sourceMeta as Record<string, unknown>;
+      if (typeof m.description === 'string') baseSaveWf.description = m.description;
+      if (typeof m.visualProof === 'boolean') baseSaveWf.visualProof = m.visualProof as boolean;
+      if (typeof m.repoUrl === 'string') baseSaveWf.repoUrl = m.repoUrl;
+      if (typeof m.onFinish === 'string') baseSaveWf.onFinish = m.onFinish;
+      if (typeof m.baseBranch === 'string') baseSaveWf.baseBranch = m.baseBranch;
+      if (typeof m.featureBranch === 'string') baseSaveWf.featureBranch = m.featureBranch;
+      if (m.mergeMode === 'manual' || m.mergeMode === 'automatic' || m.mergeMode === 'external_review') {
+        baseSaveWf.mergeMode = m.mergeMode;
+      }
+    }
+    this.persistence.saveWorkflow(baseSaveWf);
+    this.persistence.updateWorkflow?.(newWfId, { generation: 1, updatedAt: createdAt });
+
+    const sourceMergeNode = settledSourceTasks.find((t) => t.config.isMergeNode);
+    const sourceNonMerge = settledSourceTasks.filter((t) => !t.config.isMergeNode);
+
+    const idRemap = new Map<string, string>();
+    for (const t of sourceNonMerge) {
+      const planLocalId = this.extractPlanLocalId(t.id, workflowId);
+      idRemap.set(t.id, scopePlanTaskId(newWfId, planLocalId));
+    }
+    const newMergeId = `__merge__${newWfId}`;
+
+    this.activeWorkflowIds.add(newWfId);
+
+    const dependedOn = new Set<string>();
+    for (const t of sourceNonMerge) {
+      for (const dep of t.dependencies) {
+        if (idRemap.has(dep)) dependedOn.add(dep);
+      }
+    }
+
+    const createdNew: TaskState[] = [];
+    for (const src of sourceNonMerge) {
+      const newId = idRemap.get(src.id)!;
+      const newDeps = src.dependencies.map((d) => idRemap.get(d) ?? d);
+      const baseConfig = src.config;
+      const remappedParent = baseConfig.parentTask && idRemap.has(baseConfig.parentTask)
+        ? idRemap.get(baseConfig.parentTask)!
+        : baseConfig.parentTask;
+      const newConfig: TaskConfig = {
+        ...baseConfig,
+        workflowId: newWfId,
+        parentTask: remappedParent,
+        summary: undefined,
+      };
+      const newTask = createTaskState(newId, src.description, newDeps, newConfig);
+      this.createAndSync(newTask);
+      this.messageBus.publish(TASK_DELTA_CHANNEL, { type: 'created', task: newTask });
+      this.persistence.logEvent?.(newId, 'task.forked_from', { sourceTaskId: src.id });
+      createdNew.push(newTask);
+    }
+
+    const leafIds = sourceNonMerge
+      .filter((t) => !dependedOn.has(t.id))
+      .map((t) => idRemap.get(t.id)!);
+    const mergeDescription = sourceMergeNode?.description
+      ?? `Workflow gate (fork of ${workflowId})`;
+    const newMerge = createTaskState(
+      newMergeId,
+      mergeDescription,
+      leafIds,
+      { workflowId: newWfId, isMergeNode: true, executorType: 'merge' },
+    );
+    this.createAndSync(newMerge);
+    this.messageBus.publish(TASK_DELTA_CHANNEL, { type: 'created', task: newMerge });
+
+    this.reconcileMergeLeaves(newWfId);
+
+    const autoStart = opts?.autoStart !== false;
+    let started: TaskState[] = [];
+    if (autoStart) {
+      const readyIds = this.stateMachine
+        .getReadyTasks()
+        .map((t) => t.id)
+        .filter((id) => this.stateGetTask(id)?.config.workflowId === newWfId);
+      started = this.autoStartReadyTasks(readyIds);
+    }
+
+    return { forkedWorkflowId: newWfId, sourceWorkflowId: workflowId, started };
+  }
+
+  private extractPlanLocalId(scopedId: string, workflowId: string): string {
+    const prefix = `${workflowId}/`;
+    if (scopedId.startsWith(prefix)) {
+      return scopedId.slice(prefix.length);
+    }
+    return scopedId;
+  }
+
   /**
    * Replace a broken/failed task with a new subgraph.
    *
@@ -2778,17 +2905,41 @@ export class Orchestrator {
     const wfId = task.config.workflowId;
     if (!wfId) throw new Error(`replaceTask: task ${taskId} has no workflowId`);
 
-    // Step 11: topology mutations must not mutate a live workflow in place.
-    // `replaceTask` is unconditionally a topology change (it stales the
-    // source, can stale downstream, and creates new nodes), so the gate
-    // sits at the entry. In-place is still permitted on a fully terminal
-    // workflow (all non-merge tasks in completed/failed/stale) since
-    // there is no in-flight work to race with.
-    //
-    // Use `task.id` (the resolved/scoped id) for the error so callers
-    // can route the request to the (Step 12) forkWorkflow API without
-    // re-resolving the bare plan-local id themselves.
-    this.assertTopologyMutationAllowed(wfId, task.id);
+    if (this.isWorkflowLive(wfId)) {
+      const fork = this.forkWorkflow(wfId, { autoStart: false });
+      const planLocalId = this.extractPlanLocalId(task.id, wfId);
+      const forkedTaskId = scopePlanTaskId(fork.forkedWorkflowId, planLocalId);
+      const forkedTask = this.stateGetTask(forkedTaskId);
+      if (!forkedTask) {
+        throw new Error(
+          `replaceTask: forked workflow ${fork.forkedWorkflowId} missing copy of ` +
+            `task ${task.id} (expected ${forkedTaskId})`,
+        );
+      }
+      const startedFromReplacement = this.replaceTaskInPlace(
+        forkedTask,
+        fork.forkedWorkflowId,
+        replacementTasks,
+      );
+      const forkReadyIds = this.stateMachine
+        .getReadyTasks()
+        .map((t) => t.id)
+        .filter(
+          (id) =>
+            this.stateGetTask(id)?.config.workflowId === fork.forkedWorkflowId &&
+            !startedFromReplacement.some((s) => s.id === id),
+        );
+      return [...startedFromReplacement, ...this.autoStartReadyTasks(forkReadyIds)];
+    }
+
+    return this.replaceTaskInPlace(task, wfId, replacementTasks);
+  }
+
+  private replaceTaskInPlace(
+    task: TaskState,
+    wfId: string,
+    replacementTasks: TaskReplacementDef[],
+  ): TaskState[] {
 
     const replacementRawIds = new Set(replacementTasks.map((t) => t.id));
     const scopeLocal = (local: string) => scopePlanTaskId(wfId, local);
@@ -2901,22 +3052,6 @@ export class Orchestrator {
       .getAllTasks()
       .filter((t) => t.config.workflowId === workflowId && !t.config.isMergeNode);
     return tasks.some((t) => LIVE_TASK_STATUSES.has(t.status));
-  }
-
-  /**
-   * Throws `TopologyForkRequired` when the workflow is live.
-   *
-   * Per `docs/architecture/task-invalidation-chart.md` ("Topology
-   * inconsistency"), graph-shape changes must fork from the relevant
-   * node/result instead of mutating a live workflow in place. Until
-   * Step 12 ships the `forkWorkflow*` API, callers handling this
-   * error must wait for the workflow to terminate (or cancel its
-   * remaining live work) before retrying.
-   */
-  private assertTopologyMutationAllowed(workflowId: string, sourceTaskId: string): void {
-    if (this.isWorkflowLive(workflowId)) {
-      throw new TopologyForkRequired(workflowId, sourceTaskId);
-    }
   }
 
   private assertMergeLeavesInvariant(workflowId: string): void {
