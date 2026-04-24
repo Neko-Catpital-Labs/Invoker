@@ -3236,10 +3236,8 @@ describe('Orchestrator', () => {
     });
   });
 
-  // ── editTaskAgent ──────────────────────────────────────
-
   describe('editTaskAgent', () => {
-    it('changes executionAgent and restarts the task', () => {
+    it('changes executionAgent and recreates the task (inactive → no cancel)', () => {
       orchestrator.loadPlan({
         name: 'edit-agent-test',
         tasks: [{ id: 't1', description: 'Task 1', command: 'echo hello', executionAgent: 'claude' }],
@@ -3279,6 +3277,174 @@ describe('Orchestrator', () => {
 
       expect(orchestrator.getTask('parent')?.status).toBe('running');
       expect(orchestrator.getTask('child')?.status).toBe('pending');
+    });
+
+    it('editing an ACTIVE (running) task does NOT throw and cancels first, then recreates', () => {
+      orchestrator.loadPlan({
+        name: 'edit-agent-running-test',
+        tasks: [{ id: 't1', description: 'Task 1', command: 'sleep 100', executionAgent: 'claude' }],
+      });
+      orchestrator.startExecution();
+      const taskId = sid(orchestrator, 0, 't1');
+      expect(orchestrator.getTask(taskId)?.status).toBe('running');
+
+      const cancelSpy = vi.spyOn(orchestrator, 'cancelTask');
+      const recreateSpy = vi.spyOn(orchestrator, 'recreateTask');
+
+      const started = orchestrator.editTaskAgent(taskId, 'codex');
+
+      expect(cancelSpy).toHaveBeenCalledWith(taskId);
+      expect(recreateSpy).toHaveBeenCalledWith(taskId);
+      expect(cancelSpy.mock.invocationCallOrder[0]).toBeLessThan(
+        recreateSpy.mock.invocationCallOrder[0],
+      );
+
+      const task = orchestrator.getTask(taskId);
+      expect(task?.config.executionAgent).toBe('codex');
+      // Single-task plan with no deps → recreate auto-starts the task.
+      expect(task?.status).toBe('running');
+      expect(started).toHaveLength(1);
+      expect(started[0].id).toBe(taskId);
+
+      cancelSpy.mockRestore();
+      recreateSpy.mockRestore();
+    });
+
+    it('editing an INACTIVE (failed) task skips cancel but still routes through recreateTask', () => {
+      orchestrator.loadPlan({
+        name: 'edit-agent-inactive-test',
+        tasks: [{ id: 't1', description: 'Task 1', command: 'echo old', executionAgent: 'claude' }],
+      });
+      orchestrator.startExecution();
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 't1', status: 'failed', outputs: { exitCode: 1, error: 'fail' } }),
+      );
+      const taskId = sid(orchestrator, 0, 't1');
+      expect(orchestrator.getTask(taskId)?.status).toBe('failed');
+
+      const cancelSpy = vi.spyOn(orchestrator, 'cancelTask');
+      const recreateSpy = vi.spyOn(orchestrator, 'recreateTask');
+
+      orchestrator.editTaskAgent(taskId, 'codex');
+
+      // Inactive → no cancel needed; recreateTask still resets lineage.
+      expect(cancelSpy).not.toHaveBeenCalled();
+      expect(recreateSpy).toHaveBeenCalledWith(taskId);
+
+      cancelSpy.mockRestore();
+      recreateSpy.mockRestore();
+    });
+
+    it('discards stale lineage (matches recreateTask reset shape)', () => {
+      orchestrator.loadPlan({
+        name: 'edit-agent-lineage-test',
+        tasks: [{ id: 't1', description: 'Task 1', command: 'echo old', executionAgent: 'claude' }],
+      });
+      orchestrator.startExecution();
+      const taskId = sid(orchestrator, 0, 't1');
+
+      // Hydrate stale lineage as if a prior attempt completed and left
+      // branch/commit/workspace/session/container artifacts behind.
+      persistence.updateTask(taskId, {
+        execution: {
+          branch: 'experiment/old-agent',
+          commit: 'deadbeef',
+          workspacePath: '/tmp/old-workspace',
+          agentSessionId: 'sess-stale',
+          containerId: 'container-stale',
+          error: 'previous error',
+          exitCode: 1,
+          completedAt: new Date(),
+          startedAt: new Date(),
+        },
+      });
+      orchestrator.syncFromDb(taskId.split('/')[0]!);
+
+      orchestrator.editTaskAgent(taskId, 'codex');
+
+      const task = orchestrator.getTask(taskId)!;
+      expect(task.execution.branch).toBeUndefined();
+      expect(task.execution.commit).toBeUndefined();
+      expect(task.execution.workspacePath).toBeUndefined();
+      expect(task.execution.agentSessionId).toBeUndefined();
+      expect(task.execution.containerId).toBeUndefined();
+      expect(task.execution.error).toBeUndefined();
+      expect(task.execution.exitCode).toBeUndefined();
+    });
+
+    it('bumps execution generation by exactly one per agent edit', () => {
+      orchestrator.loadPlan({
+        name: 'edit-agent-gen-test',
+        tasks: [{ id: 't1', description: 'Task 1', command: 'echo old', executionAgent: 'claude' }],
+      });
+      orchestrator.startExecution();
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 't1', status: 'failed', outputs: { exitCode: 1, error: 'x' } }),
+      );
+      const taskId = sid(orchestrator, 0, 't1');
+
+      const before = orchestrator.getTask(taskId)!.execution.generation ?? 0;
+
+      orchestrator.editTaskAgent(taskId, 'codex');
+
+      const after = orchestrator.getTask(taskId)!.execution.generation ?? 0;
+      expect(after).toBe(before + 1);
+    });
+
+    it('persists the updated agent and publishes a task.updated delta', () => {
+      orchestrator.loadPlan({
+        name: 'edit-agent-persist-test',
+        tasks: [{ id: 't1', description: 'Task 1', command: 'echo old', executionAgent: 'claude' }],
+      });
+      orchestrator.startExecution();
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 't1', status: 'failed', outputs: { exitCode: 1, error: 'oops' } }),
+      );
+
+      orchestrator.editTaskAgent('t1', 'codex');
+
+      const persisted = persistence.getTaskEntry('t1');
+      expect(persisted).toBeDefined();
+      expect(persisted?.task.config.executionAgent).toBe('codex');
+    });
+
+    it('idempotence — two consecutive agent edits trigger two cancel-first cycles and two generation bumps', () => {
+      orchestrator.loadPlan({
+        name: 'edit-agent-idempotence-test',
+        tasks: [{ id: 't1', description: 'Task 1', command: 'sleep 100', executionAgent: 'claude' }],
+      });
+      orchestrator.startExecution();
+      const taskId = sid(orchestrator, 0, 't1');
+      expect(orchestrator.getTask(taskId)?.status).toBe('running');
+
+      const cancelSpy = vi.spyOn(orchestrator, 'cancelTask');
+      const recreateSpy = vi.spyOn(orchestrator, 'recreateTask');
+
+      const gen0 = orchestrator.getTask(taskId)!.execution.generation ?? 0;
+
+      orchestrator.editTaskAgent(taskId, 'codex');
+      const gen1 = orchestrator.getTask(taskId)!.execution.generation ?? 0;
+      expect(gen1).toBe(gen0 + 1);
+      expect(orchestrator.getTask(taskId)?.status).toBe('running');
+
+      orchestrator.editTaskAgent(taskId, 'claude');
+      const gen2 = orchestrator.getTask(taskId)!.execution.generation ?? 0;
+      expect(gen2).toBe(gen0 + 2);
+
+      // Two cancel-first cycles, each followed by a recreate.
+      expect(cancelSpy).toHaveBeenCalledTimes(2);
+      expect(recreateSpy).toHaveBeenCalledTimes(2);
+      expect(cancelSpy.mock.invocationCallOrder[0]).toBeLessThan(
+        recreateSpy.mock.invocationCallOrder[0],
+      );
+      expect(cancelSpy.mock.invocationCallOrder[1]).toBeLessThan(
+        recreateSpy.mock.invocationCallOrder[1],
+      );
+
+      expect(orchestrator.getTask(taskId)?.config.executionAgent).toBe('claude');
+
+      cancelSpy.mockRestore();
+      recreateSpy.mockRestore();
     });
   });
 

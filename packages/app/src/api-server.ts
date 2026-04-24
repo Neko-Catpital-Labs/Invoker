@@ -480,7 +480,6 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
         return;
       }
 
-      // POST /api/tasks/:id/edit-agent
       const editAgentMatch = path.match(/^\/api\/tasks\/([^/]+)\/edit-agent$/);
       if (method === 'POST' && editAgentMatch) {
         const taskId = decodeURIComponent(editAgentMatch[1]);
