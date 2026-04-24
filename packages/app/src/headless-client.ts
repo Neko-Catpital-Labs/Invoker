@@ -62,9 +62,14 @@ const POST_BOOTSTRAP_OWNER_READY_TIMEOUT_MS = 20_000;
 const READ_ONLY_QUERY_OWNER_READY_TIMEOUT_MS = 20_000;
 const READ_ONLY_QUERY_REQUEST_TIMEOUT_MS = 8_000;
 const POST_BOOTSTRAP_OWNER_RESTART_ATTEMPTS = 3;
+type HeadlessOwnerInfo = { ownerId?: string; mode?: string };
+
+function isStandaloneOwner(owner: HeadlessOwnerInfo | null | undefined): owner is HeadlessOwnerInfo & { mode: 'standalone' } {
+  return owner?.mode === 'standalone';
+}
 
 export class SharedMutationOwnerTimeoutError extends Error {
-  constructor(message: string = 'Timed out waiting for a shared mutation owner to become available') {
+  constructor(message: string = 'Timed out waiting for a standalone shared mutation owner to become available') {
     super(message);
     this.name = 'SharedMutationOwnerTimeoutError';
   }
@@ -108,7 +113,7 @@ async function delegateReadOnlyQuery(
   }
   const deadline = Date.now() + READ_ONLY_QUERY_OWNER_READY_TIMEOUT_MS;
   let messageBus = bus;
-  let owner: { ownerId?: string; mode?: string } | null = null;
+  let owner: HeadlessOwnerInfo | null = null;
   while (Date.now() < deadline) {
     owner = await tryPingHeadlessOwner(messageBus, 2_000);
     if (owner) break;
@@ -180,7 +185,7 @@ async function delegateAfterBootstrap(
   let messageBus = bus;
   while (Date.now() < deadline) {
     const owner = await tryPingHeadlessOwner(messageBus, 1_000);
-    if (owner && await delegateMutation(
+    if (isStandaloneOwner(owner) && await delegateMutation(
       args,
       messageBus,
       waitForApproval,
@@ -214,7 +219,7 @@ async function ensureStandaloneOwnerViaBootstrap(bus: MessageBus): Promise<void>
     const deadline = Date.now() + 20_000;
     while (Date.now() < deadline) {
       const owner = await tryPingHeadlessOwner(bus, 500);
-      if (owner) return;
+      if (isStandaloneOwner(owner)) return;
       await new Promise((resolveDelay) => setTimeout(resolveDelay, 200));
     }
     throw new SharedMutationOwnerTimeoutError();
@@ -265,7 +270,7 @@ export async function runHeadlessClientCommand(
   }
 
   const owner = await tryPingHeadlessOwner(messageBus, 3_000);
-  if (owner) {
+  if (isStandaloneOwner(owner)) {
     if (await delegateMutation(args, messageBus, waitForApproval, noTrack)) {
       return resolvedExitCode();
     }
@@ -273,7 +278,7 @@ export async function runHeadlessClientCommand(
   if (owner && deps.refreshMessageBus) {
     messageBus = await deps.refreshMessageBus();
     const refreshedOwner = await tryPingHeadlessOwner(messageBus, 1_000);
-    if (refreshedOwner && await delegateMutation(args, messageBus, waitForApproval, noTrack)) {
+    if (isStandaloneOwner(refreshedOwner) && await delegateMutation(args, messageBus, waitForApproval, noTrack)) {
       return resolvedExitCode();
     }
   }
@@ -311,7 +316,7 @@ export async function runHeadlessClientCommand(
     messageBus = await deps.refreshMessageBus();
   }
   process.stderr.write(
-    `${RED}Error:${RESET} Mutation command "${args[0] ?? ''}" could not reach a shared owner after bootstrap.\n`,
+    `${RED}Error:${RESET} Mutation command "${args[0] ?? ''}" could not reach a standalone shared owner after bootstrap.\n`,
   );
   return 1;
 }

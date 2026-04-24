@@ -143,6 +143,10 @@ If you need to turn a product or implementation plan into an Invoker workflow, u
 ./run.sh --headless run /path/to/plan.yaml
 ```
 
+Mutating headless CLI commands use a standalone headless owner process. They do not delegate execution into the desktop GUI process, even if the GUI app is already running. Read-only shared queries such as `query queue` and `query ui-perf` may still talk to an existing owner.
+
+GUI-launched workflows still inherit the GUI app environment. On macOS, apps launched from Finder often have a narrower `PATH` than your terminal. If you start workflows from the desktop app, make sure tools like `pnpm`, `git`, and any configured agent CLIs are available to the GUI launch context.
+
 **Hot-reload app development**:
 
 ```bash
@@ -220,7 +224,8 @@ Layer rules: [ARCHITECTURE.md](ARCHITECTURE.md). Agent/repo conventions: [CLAUDE
 
 ## Troubleshooting
 
-- **DB conflicts** — Do not run two writers on the same DB; use the owning process for mutating headless commands.
+- **DB conflicts** — Do not run two writers on the same DB; headless CLI mutations use a standalone owner, while GUI-started workflows stay owned by the desktop app process.
+- **`pnpm` or `git` not found from the desktop app** — On macOS this is often a Finder/GUI `PATH` issue. Launch Invoker from a terminal with `./run.sh`, or make the required binaries available to GUI-launched apps.
 - **Missing Cursor skills** — `bash scripts/setup-agent-skills.sh`
 - **Install failures** — Use Node 22 as per `engines`
 - **Obsidian (README / Mermaid)** — In **Source** mode the diagram stays plain text. Open **Reading view** (book icon in the header, or the *Toggle reading view* command). **Live Preview** usually renders Mermaid as well; if you see an empty box or a parse error, update Obsidian, try the default theme, and disable CSS snippets (some themes hide Mermaid).
