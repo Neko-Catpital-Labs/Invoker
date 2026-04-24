@@ -546,6 +546,70 @@ describe('headless delegation enforcement', () => {
         executeTasksSpy.mockRestore();
       });
 
+      // Step 16: pin headless approve/reject routing.
+      // Per docs/architecture/task-invalidation-roadmap.md row
+      // "Approve or reject fix", these verbs MUST flow through
+      // commandService.approve / commandService.reject (which
+      // route to MUTATION_POLICIES.fixApprove / fixReject —
+      // non-invalidating). They MUST NOT touch retry/recreate/
+      // cancel surfaces; the task is already terminal at this
+      // point and invalidating would be a generation-bumping
+      // mistake.
+      it('Step 16 headless approve routes through commandService.approve and never touches retry/recreate/cancel', async () => {
+        const wfRow = { id: 'wf-1', name: 'test-workflow', generation: 0, status: 'running' as const, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+        const taskRow = { id: 'wf-1/task-a', status: 'completed', config: { workflowId: 'wf-1' }, execution: {} } as any;
+        mockDeps.persistence.listWorkflows = vi.fn(() => [wfRow]);
+        mockDeps.persistence.loadTasks = vi.fn(() => [taskRow]);
+        mockDeps.orchestrator.getAllTasks = vi.fn(() => [taskRow]);
+        mockDeps.commandService.approve = vi.fn(async () => ({ ok: true as const, data: [] }));
+        mockDeps.commandService.retryTask = vi.fn(async () => ({ ok: true as const, data: [] }));
+        mockDeps.commandService.retryWorkflow = vi.fn(async () => ({ ok: true as const, data: [] }));
+        mockDeps.commandService.cancelTask = vi.fn(async () => ({ ok: true as const, data: { cancelled: [], runningCancelled: [] } }));
+        mockDeps.commandService.cancelWorkflow = vi.fn(async () => ({ ok: true as const, data: { cancelled: [], runningCancelled: [] } }));
+        mockDeps.orchestrator.recreateTask = vi.fn(() => []);
+        mockDeps.orchestrator.recreateWorkflow = vi.fn(() => []);
+
+        await runHeadless(['approve', 'wf-1/task-a'], mockDeps);
+
+        expect(mockDeps.commandService.approve).toHaveBeenCalled();
+        expect(mockDeps.commandService.retryTask).not.toHaveBeenCalled();
+        expect(mockDeps.commandService.retryWorkflow).not.toHaveBeenCalled();
+        expect(mockDeps.commandService.cancelTask).not.toHaveBeenCalled();
+        expect(mockDeps.commandService.cancelWorkflow).not.toHaveBeenCalled();
+        expect(mockDeps.orchestrator.retryTask).not.toHaveBeenCalled();
+        expect(mockDeps.orchestrator.recreateTask).not.toHaveBeenCalled();
+        expect(mockDeps.orchestrator.recreateWorkflow).not.toHaveBeenCalled();
+      });
+
+      it('Step 16 headless reject routes through commandService.reject and never touches retry/recreate/cancel', async () => {
+        const wfRow = { id: 'wf-1', name: 'test-workflow', generation: 0, status: 'running' as const, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+        const taskRow = { id: 'wf-1/task-a', status: 'failed', config: { workflowId: 'wf-1' }, execution: {} } as any;
+        mockDeps.persistence.listWorkflows = vi.fn(() => [wfRow]);
+        mockDeps.persistence.loadTasks = vi.fn(() => [taskRow]);
+        mockDeps.orchestrator.getAllTasks = vi.fn(() => [taskRow]);
+        mockDeps.commandService.reject = vi.fn(async () => ({ ok: true as const, data: undefined }));
+        mockDeps.commandService.retryTask = vi.fn(async () => ({ ok: true as const, data: [] }));
+        mockDeps.commandService.retryWorkflow = vi.fn(async () => ({ ok: true as const, data: [] }));
+        mockDeps.commandService.cancelTask = vi.fn(async () => ({ ok: true as const, data: { cancelled: [], runningCancelled: [] } }));
+        mockDeps.commandService.cancelWorkflow = vi.fn(async () => ({ ok: true as const, data: { cancelled: [], runningCancelled: [] } }));
+        mockDeps.orchestrator.recreateTask = vi.fn(() => []);
+        mockDeps.orchestrator.recreateWorkflow = vi.fn(() => []);
+
+        await runHeadless(['reject', 'wf-1/task-a', 'because reasons'], mockDeps);
+
+        expect(mockDeps.commandService.reject).toHaveBeenCalled();
+        const rejectCall = (mockDeps.commandService.reject as any).mock.calls[0]?.[0];
+        expect(rejectCall?.payload?.taskId).toBe('wf-1/task-a');
+        expect(rejectCall?.payload?.reason).toBe('because reasons');
+        expect(mockDeps.commandService.retryTask).not.toHaveBeenCalled();
+        expect(mockDeps.commandService.retryWorkflow).not.toHaveBeenCalled();
+        expect(mockDeps.commandService.cancelTask).not.toHaveBeenCalled();
+        expect(mockDeps.commandService.cancelWorkflow).not.toHaveBeenCalled();
+        expect(mockDeps.orchestrator.retryTask).not.toHaveBeenCalled();
+        expect(mockDeps.orchestrator.recreateTask).not.toHaveBeenCalled();
+        expect(mockDeps.orchestrator.recreateWorkflow).not.toHaveBeenCalled();
+      });
+
       it('headless retry with deps.noTrack=true can defer runnable execution to the caller', async () => {
         const deferRunnableTasks = vi.fn();
         const preemptWorkflowExecution = vi.fn(async () => {});
