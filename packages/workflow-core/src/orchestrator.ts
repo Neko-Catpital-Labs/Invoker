@@ -1488,10 +1488,7 @@ export class Orchestrator {
     this.checkWorkflowCompletion();
   }
 
-  /**
-   * Select a winning experiment for a reconciliation task.
-   */
-  selectExperiment(taskId: string, experimentId: string): TaskState[] {
+    selectExperiment(taskId: string, experimentId: string): TaskState[] {
     this.refreshFromDb();
     const task = this.stateGetTask(taskId);
     if (!task || !task.config.isReconciliation) return [];
@@ -1499,6 +1496,25 @@ export class Orchestrator {
 
     const winner = this.stateGetTask(experimentId);
     const winnerId = winner?.id ?? experimentId;
+
+    const previousWinner = task.execution.selectedExperiment;
+    const isReSelection =
+      previousWinner !== undefined && previousWinner !== winnerId;
+
+    const allTasksBefore = this.stateMachine.getAllTasks();
+
+    if (isReSelection) {
+      const taskMapBefore = new Map(allTasksBefore.map((t) => [t.id, t]));
+      const downstreamIds = getTransitiveDependents(reconId, taskMapBefore, () => false);
+      for (const dsId of downstreamIds) {
+        const dt = this.stateGetTask(dsId);
+        if (!dt) continue;
+        if (dt.status === 'running' || dt.status === 'fixing_with_ai') {
+          this.cancelTask(dsId);
+        }
+      }
+    }
+
     const changes: TaskStateChanges = {
       status: 'completed',
       execution: {
@@ -1518,6 +1534,15 @@ export class Orchestrator {
     const delta: TaskDelta = { type: 'updated', taskId: reconId, changes };
     this.persistence.logEvent?.(reconId, 'task.completed', changes);
     this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
+
+    if (isReSelection) {
+      const directDownstream = allTasksBefore
+        .filter((t) => t.dependencies.includes(reconId))
+        .map((t) => t.id);
+      for (const dsId of directDownstream) {
+        this.recreateTask(dsId);
+      }
+    }
 
     const readyTaskIds = this.stateMachine.findNewlyReadyTasks(reconId);
     console.log(`[orchestrator] selectExperiment "${reconId}": ${readyTaskIds.length} newly ready: [${readyTaskIds.join(', ')}]`);

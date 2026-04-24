@@ -5,13 +5,14 @@
  * Uses the same InMemoryPersistence and InMemoryBus helpers from orchestrator.test.ts.
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { reconciliationNeedsInputWorkResponse } from './reconciliation-needs-input-shim.js';
 import { rid, sid } from './scoped-test-helpers.js';
 import { Orchestrator } from '../orchestrator.js';
 import type { PlanDefinition, OrchestratorPersistence, OrchestratorMessageBus } from '../orchestrator.js';
 import type { TaskState, TaskDelta, TaskStateChanges, Attempt } from '../task-types.js';
 import type { WorkResponse } from '@invoker/contracts';
+import { MUTATION_POLICIES } from '../invalidation-policy.js';
 
 // ── In-Memory Persistence Mock ──────────────────────────────
 
@@ -861,5 +862,195 @@ describe('Experiment Lifecycle (integration)', () => {
     expect(status.failed).toBe(0);
     expect(status.running).toBe(0);
     expect(status.pending).toBe(0);
+  });
+
+  describe('selectExperiment invalidation routing', () => {
+    /** Helper: drive standard plan to recon `needs_input`. */
+    function runToReconNeedsInput(): { reconId: string; expV1Id: string; expV2Id: string; downstreamId: string } {
+      orchestrator.loadPlan(standardPlan);
+      orchestrator.startExecution();
+      orchestrator.handleWorkerResponse(completedResponse('setup'));
+      orchestrator.handleWorkerResponse(
+        spawnResponse('pivot', [
+          { id: 'v1', prompt: 'A' },
+          { id: 'v2', prompt: 'B' },
+        ]),
+      );
+      const expV1Id = sid(orchestrator, 0, 'pivot-exp-v1');
+      const expV2Id = sid(orchestrator, 0, 'pivot-exp-v2');
+      orchestrator.handleWorkerResponse(completedResponse(expV1Id));
+      orchestrator.handleWorkerResponse(completedResponse(expV2Id));
+      orchestrator.handleWorkerResponse(reconciliationNeedsInputWorkResponse(rid(orchestrator, 0, 'pivot')));
+      return {
+        reconId: rid(orchestrator, 0, 'pivot'),
+        expV1Id,
+        expV2Id,
+        downstreamId: sid(orchestrator, 0, 'downstream'),
+      };
+    }
+
+    it('MUTATION_POLICIES.selectedExperiment is recreate-class and active-invalidating', () => {
+      expect(MUTATION_POLICIES.selectedExperiment.action).toBe('recreateTask');
+      expect(MUTATION_POLICIES.selectedExperiment.invalidateIfActive).toBe(true);
+      expect(MUTATION_POLICIES.selectedExperiment.invalidatesExecutionSpec).toBe(true);
+    });
+
+    it('re-selecting with ACTIVE downstream cancels first, then routes through recreateTask', () => {
+      const { reconId, expV1Id, expV2Id, downstreamId } = runToReconNeedsInput();
+
+      // Initial selection completes recon; downstream auto-starts.
+      orchestrator.selectExperiment(reconId, expV1Id);
+      expect(orchestrator.getTask(reconId)!.status).toBe('completed');
+      expect(orchestrator.getTask(reconId)!.execution.selectedExperiment).toBe(expV1Id);
+      expect(orchestrator.getTask(downstreamId)!.status).toBe('running');
+
+      const cancelSpy = vi.spyOn(orchestrator, 'cancelTask');
+      const recreateSpy = vi.spyOn(orchestrator, 'recreateTask');
+
+      // Re-select to a different winner while downstream is active.
+      orchestrator.selectExperiment(reconId, expV2Id);
+
+      expect(cancelSpy).toHaveBeenCalledWith(downstreamId);
+      expect(recreateSpy).toHaveBeenCalledWith(downstreamId);
+      expect(cancelSpy.mock.invocationCallOrder[0]).toBeLessThan(
+        recreateSpy.mock.invocationCallOrder[0],
+      );
+
+      // Recon now reflects the new winner.
+      const recon = orchestrator.getTask(reconId)!;
+      expect(recon.status).toBe('completed');
+      expect(recon.execution.selectedExperiment).toBe(expV2Id);
+
+      cancelSpy.mockRestore();
+      recreateSpy.mockRestore();
+    });
+
+    it('re-selecting with INACTIVE downstream skips cancel but still resets via recreateTask', () => {
+      const { reconId, expV1Id, expV2Id, downstreamId } = runToReconNeedsInput();
+
+      // Initial selection unblocks downstream; fail it so it's no
+      // longer active AND the merge gate cannot auto-start (avoiding a
+      // spurious active downstream). Re-selection should NOT cancel
+      // anything; only the recreate-class state reset applies.
+      orchestrator.selectExperiment(reconId, expV1Id);
+      orchestrator.handleWorkerResponse(failedResponse(downstreamId, 'oops'));
+      expect(orchestrator.getTask(downstreamId)!.status).toBe('failed');
+
+      const cancelSpy = vi.spyOn(orchestrator, 'cancelTask');
+      const recreateSpy = vi.spyOn(orchestrator, 'recreateTask');
+
+      orchestrator.selectExperiment(reconId, expV2Id);
+
+      // Inactive downstream -> no cancel needed; recreateTask still resets
+      // the downstream subgraph so it reruns against the new winner.
+      expect(cancelSpy).not.toHaveBeenCalled();
+      expect(recreateSpy).toHaveBeenCalledWith(downstreamId);
+
+      cancelSpy.mockRestore();
+      recreateSpy.mockRestore();
+    });
+
+    it('INITIAL selection (recon needs_input -> completed) does NOT cancel and does NOT recreate downstream', () => {
+      const { reconId, expV1Id, downstreamId } = runToReconNeedsInput();
+
+      const cancelSpy = vi.spyOn(orchestrator, 'cancelTask');
+      const recreateSpy = vi.spyOn(orchestrator, 'recreateTask');
+
+      orchestrator.selectExperiment(reconId, expV1Id);
+
+      expect(cancelSpy).not.toHaveBeenCalled();
+      expect(recreateSpy).not.toHaveBeenCalled();
+      // Downstream auto-started by the existing unblock path.
+      expect(orchestrator.getTask(downstreamId)!.status).toBe('running');
+
+      cancelSpy.mockRestore();
+      recreateSpy.mockRestore();
+    });
+
+    it('re-selection bumps downstream execution generation by exactly one', () => {
+      const { reconId, expV1Id, expV2Id, downstreamId } = runToReconNeedsInput();
+
+      orchestrator.selectExperiment(reconId, expV1Id);
+      // Fail downstream so it's inactive (running spies stay clean) but
+      // a real recreate-class reset can be observed via the generation
+      // counter.
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: downstreamId, status: 'failed', outputs: { exitCode: 1, error: 'boom' } }),
+      );
+      const before = orchestrator.getTask(downstreamId)!.execution.generation ?? 0;
+
+      orchestrator.selectExperiment(reconId, expV2Id);
+
+      const after = orchestrator.getTask(downstreamId)!.execution.generation ?? 0;
+      expect(after).toBe(before + 1);
+    });
+
+    it('re-selection preserves reconciliation lineage but clears downstream lineage', () => {
+      const { reconId, expV1Id, expV2Id, downstreamId } = runToReconNeedsInput();
+
+      // Hydrate winner branches/commits so the recon picks up real
+      // lineage on each selection.
+      persistence.updateTask(expV1Id, {
+        execution: { branch: 'experiment/winner-v1', commit: 'aaaa1111' },
+      });
+      persistence.updateTask(expV2Id, {
+        execution: { branch: 'experiment/winner-v2', commit: 'bbbb2222' },
+      });
+
+      orchestrator.selectExperiment(reconId, expV1Id);
+      persistence.updateTask(downstreamId, {
+        execution: {
+          branch: 'work/downstream-prior',
+          workspacePath: '/tmp/downstream-prior',
+          agentSessionId: 'sess-stale',
+          containerId: 'container-stale',
+          error: 'previous error',
+          exitCode: 1,
+        },
+      });
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: downstreamId, status: 'failed', outputs: { exitCode: 1, error: 'boom' } }),
+      );
+
+      orchestrator.selectExperiment(reconId, expV2Id);
+
+      // Recon kept its `completed` status and now mirrors the new
+      // winner's branch/commit. Recon's identity (id, dependencies,
+      // isReconciliation flag) is intact.
+      const recon = orchestrator.getTask(reconId)!;
+      expect(recon.status).toBe('completed');
+      expect(recon.config.isReconciliation).toBe(true);
+      expect(recon.execution.selectedExperiment).toBe(expV2Id);
+      expect(recon.execution.branch).toBe('experiment/winner-v2');
+      expect(recon.execution.commit).toBe('bbbb2222');
+
+      // Downstream was recreate-reset: branch / workspacePath and
+      // volatile attempt state are cleared.
+      const downstream = orchestrator.getTask(downstreamId)!;
+      expect(downstream.execution.branch).toBeUndefined();
+      expect(downstream.execution.workspacePath).toBeUndefined();
+      expect(downstream.execution.agentSessionId).toBeUndefined();
+      expect(downstream.execution.containerId).toBeUndefined();
+      expect(downstream.execution.error).toBeUndefined();
+      expect(downstream.execution.exitCode).toBeUndefined();
+    });
+
+    it('re-selection to the SAME winner is a no-op (no cancel, no recreate)', () => {
+      const { reconId, expV1Id, downstreamId } = runToReconNeedsInput();
+
+      orchestrator.selectExperiment(reconId, expV1Id);
+      orchestrator.handleWorkerResponse(completedResponse(downstreamId));
+
+      const cancelSpy = vi.spyOn(orchestrator, 'cancelTask');
+      const recreateSpy = vi.spyOn(orchestrator, 'recreateTask');
+
+      orchestrator.selectExperiment(reconId, expV1Id);
+
+      expect(cancelSpy).not.toHaveBeenCalled();
+      expect(recreateSpy).not.toHaveBeenCalled();
+
+      cancelSpy.mockRestore();
+      recreateSpy.mockRestore();
+    });
   });
 });
