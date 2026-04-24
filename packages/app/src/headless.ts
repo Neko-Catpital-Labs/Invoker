@@ -9,7 +9,7 @@
  * This file handles CLI parsing, TaskRunner lifecycle, and output formatting.
  */
 
-import type { Logger } from '@invoker/contracts';
+import type { BundledSkillsInstallMode, BundledSkillsStatus, Logger } from '@invoker/contracts';
 import { makeEnvelope } from '@invoker/contracts';
 import type { Orchestrator, CommandService, TaskDelta, TaskState } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
@@ -92,6 +92,8 @@ export interface HeadlessDeps {
   waitForApproval?: boolean;
   noTrack?: boolean;
   isStandaloneOwnerIdle?: () => boolean;
+  getBundledSkillsStatus?: () => BundledSkillsStatus;
+  installBundledSkills?: (mode?: BundledSkillsInstallMode) => BundledSkillsStatus;
 }
 
 // ── ANSI Helpers ─────────────────────────────────────────────
@@ -565,6 +567,23 @@ async function headlessMigrateCompatibility(deps: HeadlessDeps): Promise<void> {
   process.stdout.write(`  staleAutoFixExperimentTasks: ${report.staleAutoFixExperimentTasks}\n`);
 }
 
+async function headlessInstallSkills(
+  mode: BundledSkillsInstallMode | undefined,
+  deps: Pick<HeadlessDeps, 'installBundledSkills'>,
+): Promise<void> {
+  if (!deps.installBundledSkills) {
+    throw new Error('Bundled skill installation is not available in this runtime.');
+  }
+  const status = deps.installBundledSkills(mode ?? 'install');
+  process.stdout.write(`Installed ${status.bundledSkillNames.length} bundled skills with prefix "${status.managedPrefix}".\n`);
+  for (const target of status.targets) {
+    process.stdout.write(`Target (${target.name}): ${target.path}\n`);
+  }
+  for (const skillName of status.bundledSkillNames) {
+    process.stdout.write(`- ${status.managedPrefix}${skillName}\n`);
+  }
+}
+
 // ── Headless Command Router ──────────────────────────────────
 
 export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<void> {
@@ -583,6 +602,12 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
       break;
     case 'migrate-compat':
       await headlessMigrateCompatibility(deps);
+      break;
+    case 'install-skills':
+      await headlessInstallSkills(
+        args[1] === 'reinstall' || args[1] === 'update' ? args[1] : 'install',
+        deps,
+      );
       break;
     case 'watch':
       await headlessWatch(args[1], deps);
@@ -789,6 +814,7 @@ ${BOLD}Respond:${RESET}
   select <taskId> <experimentId>                      Select winning experiment
 
 ${BOLD}Configure:${RESET}
+  install-skills [install|update|reinstall]          Install bundled Invoker skills into Codex
   set command <taskId> <cmd>                          Edit task command and re-run
   set prompt <taskId> <text>                          Edit task prompt and re-run
   set executor <taskId> <type>                        Change executor type (worktree|docker|ssh)

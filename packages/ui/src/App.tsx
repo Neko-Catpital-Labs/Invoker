@@ -70,20 +70,30 @@ export function App() {
   const [systemDiagnostics, setSystemDiagnostics] = useState<SystemDiagnostics | null>(null);
   const [showSystemSetup, setShowSystemSetup] = useState(false);
   const [showSystemBanner, setShowSystemBanner] = useState(false);
+  const [installSkillsPending, setInstallSkillsPending] = useState(false);
+  const [installSkillsError, setInstallSkillsError] = useState<string | null>(null);
   const uiPerfThrottleRef = useRef<Record<string, number>>({});
 
-  useEffect(() => {
-    window.invoker?.getRemoteTargets?.().then(setRemoteTargets).catch(() => {});
-    window.invoker?.getExecutionAgents?.().then(setExecutionAgents).catch(() => {});
+  const refreshSystemDiagnostics = useCallback(() => {
     window.invoker?.getSystemDiagnostics?.().then((diagnostics) => {
       setSystemDiagnostics(diagnostics);
       const missingRequired = diagnostics.tools.some((tool) => tool.required && !tool.installed);
       const hasAgent = diagnostics.tools.some((tool) => (tool.id === 'claude' || tool.id === 'codex') && tool.installed);
-      if (missingRequired || !hasAgent) {
+      const needsBundledPrompt = Boolean(diagnostics.isPackaged && diagnostics.bundledSkills?.promptRecommended);
+      if (missingRequired || !hasAgent || needsBundledPrompt) {
         setShowSystemBanner(true);
+      }
+      if (needsBundledPrompt) {
+        setShowSystemSetup(true);
       }
     }).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    window.invoker?.getRemoteTargets?.().then(setRemoteTargets).catch(() => {});
+    window.invoker?.getExecutionAgents?.().then(setExecutionAgents).catch(() => {});
+    refreshSystemDiagnostics();
+  }, [refreshSystemDiagnostics]);
 
   useEffect(() => {
     if (typeof window === 'undefined' || !window.invoker) return;
@@ -159,6 +169,7 @@ export function App() {
   const selectedTask = selectedTaskId ? tasks.get(selectedTaskId) ?? null : null;
   const missingRequiredTool = systemDiagnostics?.tools.find((tool) => tool.required && !tool.installed) ?? null;
   const installedAgentCount = systemDiagnostics?.tools.filter((tool) => (tool.id === 'claude' || tool.id === 'codex') && tool.installed).length ?? 0;
+  const needsBundledSkillsPrompt = Boolean(systemDiagnostics?.isPackaged && systemDiagnostics?.bundledSkills?.promptRecommended);
 
   // ── DAG interaction ───────────────────────────────────────
   const handleTaskClick = useCallback((task: TaskState) => {
@@ -520,6 +531,22 @@ export function App() {
     setModal({ type: 'none' });
   }, []);
 
+  const handleInstallBundledSkills = useCallback(async (mode: 'install' | 'update' | 'reinstall' = 'install') => {
+    try {
+      setInstallSkillsPending(true);
+      setInstallSkillsError(null);
+      const diagnostics = await window.invoker?.installBundledSkills?.(mode);
+      if (diagnostics) {
+        setSystemDiagnostics((prev) => prev ? { ...prev, bundledSkills: diagnostics } : prev);
+      }
+      refreshSystemDiagnostics();
+    } catch (err) {
+      setInstallSkillsError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setInstallSkillsPending(false);
+    }
+  }, [refreshSystemDiagnostics]);
+
   return (
     <div className="h-screen flex flex-col bg-gray-900 text-gray-100">
       {/* Top bar */}
@@ -544,6 +571,8 @@ export function App() {
           <div className="text-sm text-amber-100">
             {missingRequiredTool
               ? `${missingRequiredTool.name} is missing. Invoker needs it for local workflows.`
+              : needsBundledSkillsPrompt
+                ? 'Bundled Invoker skills are ready to install into Codex. Install them before using packaged skill-driven flows.'
               : installedAgentCount === 0
                 ? 'No Claude or Codex CLI detected yet. Install one before running agent-backed tasks.'
                 : 'Review local prerequisites before running packaged workflows.'}
@@ -674,6 +703,9 @@ export function App() {
       {showSystemSetup && (
         <SystemSetupModal
           diagnostics={systemDiagnostics}
+          installPending={installSkillsPending}
+          installError={installSkillsError}
+          onInstallBundledSkills={handleInstallBundledSkills}
           onClose={() => setShowSystemSetup(false)}
         />
       )}

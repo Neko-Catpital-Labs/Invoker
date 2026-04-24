@@ -18,6 +18,12 @@
     "directories": {
       "output": "../../release"
     },
+    "extraResources": [
+      {
+        "from": "../../skills",
+        "to": "skills"
+      }
+    ],
     "files": [
       "dist/**/*",
       "package.json"
