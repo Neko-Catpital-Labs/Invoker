@@ -384,12 +384,67 @@ export class CommandService {
     );
   }
 
+  /**
+   * Retry an entire workflow — **retry-class** invalidation per the
+   * canonical `{retry, recreate} × {task, workflow}` matrix
+   * (`docs/architecture/task-invalidation-chart.md` "Proposed API
+   * Direction"). Preserves per-task branch/workspacePath lineage; only
+   * volatile attempt state is cleared. Thin delegate to
+   * `Orchestrator.retryWorkflow`; serialized through the workflow mutex.
+   */
   async retryWorkflow(
     envelope: CommandEnvelope<{ workflowId: string }>,
   ): Promise<CommandResult<TaskState[]>> {
     return this.executeCommand<TaskState[]>(
       'RETRY_WORKFLOW_FAILED',
       () => this.orchestrator.retryWorkflow(envelope.payload.workflowId),
+      envelope.payload.workflowId,
+    );
+  }
+
+  /**
+   * Recreate an entire workflow — **recreate-class** invalidation per
+   * the canonical `{retry, recreate} × {task, workflow}` matrix
+   * (`docs/architecture/task-invalidation-chart.md` "Proposed API
+   * Direction"). Discards per-task branch/commit/workspacePath
+   * lineage along with volatile attempt state, then auto-starts the
+   * workflow root tasks. Thin delegate to `Orchestrator.recreateWorkflow`;
+   * serialized through the workflow mutex. Step 17
+   * (`docs/architecture/task-invalidation-roadmap.md`) closes the
+   * 5-method matrix on `CommandService`. Production callers that
+   * need an additional generation bump should use the app-layer
+   * wrapper (`packages/app/src/workflow-actions.ts → recreateWorkflow`)
+   * which composes the bump on top of this primitive.
+   */
+  async recreateWorkflow(
+    envelope: CommandEnvelope<{ workflowId: string }>,
+  ): Promise<CommandResult<TaskState[]>> {
+    return this.executeCommand<TaskState[]>(
+      'RECREATE_WORKFLOW_FAILED',
+      () => this.orchestrator.recreateWorkflow(envelope.payload.workflowId),
+      envelope.payload.workflowId,
+    );
+  }
+
+  /**
+   * Rebase-and-retry a workflow (`recreateWorkflowFromFreshBase`) —
+   * the strictly-stronger workflow recreate that first refreshes the
+   * upstream base (via the app-layer `taskExecutor.preparePoolForRebaseRetry`
+   * callback wired in `packages/app/src/workflow-actions.ts`) and
+   * then performs a workflow-scope recreate. Thin delegate to
+   * `Orchestrator.recreateWorkflowFromFreshBase`; serialized through
+   * the workflow mutex. Step 17 closes the canonical matrix on
+   * `CommandService`. Without `refreshBase` this collapses into
+   * `recreateWorkflow`; production callers that need the upstream
+   * refresh should go through the app-layer
+   * (`packages/app/src/workflow-actions.ts → recreateWorkflowFromFreshBase`).
+   */
+  async recreateWorkflowFromFreshBase(
+    envelope: CommandEnvelope<{ workflowId: string }>,
+  ): Promise<CommandResult<TaskState[]>> {
+    return this.executeCommand<TaskState[]>(
+      'RECREATE_WORKFLOW_FROM_FRESH_BASE_FAILED',
+      () => this.orchestrator.recreateWorkflowFromFreshBase(envelope.payload.workflowId),
       envelope.payload.workflowId,
     );
   }
