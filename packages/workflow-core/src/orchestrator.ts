@@ -2010,16 +2010,11 @@ export class Orchestrator {
     return this.recreateTask(taskId);
   }
 
-  /**
-   * Change a task's executor type (executorType) and restart it.
-   * Does NOT fork the dirty subtree.
-   */
-  editTaskType(taskId: string, executorType: string, remoteTargetId?: string): TaskState[] {
+    editTaskType(taskId: string, executorType: string, remoteTargetId?: string): TaskState[] {
     this.refreshFromDb();
     const task = this.stateGetTask(taskId);
     if (!task) throw new Error(`Task ${taskId} not found`);
     if (task.config.isMergeNode) throw new Error(`Cannot change executor type of merge node ${taskId}`);
-    if (task.status === 'running' || task.status === 'fixing_with_ai') throw new Error(`Cannot edit running task ${taskId}`);
 
     const effectiveType = normalizeExecutorType(executorType) ?? executorType;
 
@@ -2032,6 +2027,10 @@ export class Orchestrator {
           `Add repoUrl to the plan YAML.`,
         );
       }
+    }
+
+    if (task.status === 'running' || task.status === 'fixing_with_ai') {
+      this.cancelTask(taskId);
     }
 
     const configPatch: Record<string, unknown> = { executorType: effectiveType };

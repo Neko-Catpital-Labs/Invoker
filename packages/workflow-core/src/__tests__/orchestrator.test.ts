@@ -3120,8 +3120,6 @@ describe('Orchestrator', () => {
     });
   });
 
-  // ── editTaskType ───────────────────────────────────────
-
   describe('editTaskType', () => {
     it('changes executorType and restarts the task', () => {
       orchestrator.loadPlan({
@@ -3167,14 +3165,119 @@ describe('Orchestrator', () => {
       expect(orchestrator.getTask('child')?.status).toBe('pending');
     });
 
-    it('throws when trying to edit a running task', () => {
+    it('editing an ACTIVE (running) task does NOT throw and cancels first, then restarts (retry-class)', () => {
       orchestrator.loadPlan({
         name: 'edit-type-running',
         tasks: [{ id: 't1', description: 'Task 1', command: 'sleep 100', executorType: 'docker' }],
       });
       orchestrator.startExecution();
+      const taskId = sid(orchestrator, 0, 't1');
+      expect(orchestrator.getTask(taskId)?.status).toBe('running');
 
-      expect(() => orchestrator.editTaskType('t1', 'worktree')).toThrow();
+      const cancelSpy = vi.spyOn(orchestrator, 'cancelTask');
+      const restartSpy = vi.spyOn(orchestrator, 'restartTask');
+      const recreateSpy = vi.spyOn(orchestrator, 'recreateTask');
+
+      const started = orchestrator.editTaskType(taskId, 'worktree');
+
+      expect(cancelSpy).toHaveBeenCalledWith(taskId);
+      expect(restartSpy).toHaveBeenCalledWith(taskId);
+      expect(cancelSpy.mock.invocationCallOrder[0]).toBeLessThan(
+        restartSpy.mock.invocationCallOrder[0],
+      );
+      expect(recreateSpy).not.toHaveBeenCalled();
+
+      const task = orchestrator.getTask(taskId);
+      expect(task?.config.executorType).toBe('worktree');
+      // Single-task plan with no deps → restart auto-starts the task.
+      expect(task?.status).toBe('running');
+      expect(started).toHaveLength(1);
+      expect(started[0].id).toBe(taskId);
+
+      cancelSpy.mockRestore();
+      restartSpy.mockRestore();
+      recreateSpy.mockRestore();
+    });
+
+    it('editing an INACTIVE (failed) task skips cancel but still routes through restartTask (retry-class)', () => {
+      orchestrator.loadPlan({
+        name: 'edit-type-inactive-test',
+        tasks: [{ id: 't1', description: 'Task 1', command: 'echo old', executorType: 'docker' }],
+      });
+      orchestrator.startExecution();
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 't1', status: 'failed', outputs: { exitCode: 1, error: 'fail' } }),
+      );
+      const taskId = sid(orchestrator, 0, 't1');
+      expect(orchestrator.getTask(taskId)?.status).toBe('failed');
+
+      const cancelSpy = vi.spyOn(orchestrator, 'cancelTask');
+      const restartSpy = vi.spyOn(orchestrator, 'restartTask');
+
+      orchestrator.editTaskType(taskId, 'worktree');
+
+      // Inactive → no cancel needed; restartTask still resets volatile
+      // attempt state and bumps generation.
+      expect(cancelSpy).not.toHaveBeenCalled();
+      expect(restartSpy).toHaveBeenCalledWith(taskId);
+
+      cancelSpy.mockRestore();
+      restartSpy.mockRestore();
+    });
+
+    it('preserves valid lineage (branch / workspacePath) — retry-class does NOT discard substrate lineage', () => {
+      orchestrator.loadPlan({
+        name: 'edit-type-lineage-test',
+        tasks: [{ id: 't1', description: 'Task 1', command: 'echo old', executorType: 'docker' }],
+      });
+      orchestrator.startExecution();
+      const taskId = sid(orchestrator, 0, 't1');
+
+      persistence.updateTask(taskId, {
+        execution: {
+          branch: 'experiment/preserved-branch',
+          commit: 'cafef00d',
+          workspacePath: '/tmp/preserved-workspace',
+          agentSessionId: 'sess-stale',
+          containerId: 'container-stale',
+          error: 'previous error',
+          exitCode: 1,
+          completedAt: new Date(),
+          startedAt: new Date(),
+        },
+      });
+      orchestrator.syncFromDb(taskId.split('/')[0]!);
+
+      orchestrator.editTaskType(taskId, 'worktree');
+
+      const task = orchestrator.getTask(taskId)!;
+      // ── Preserved (chart says substrate-only change keeps these) ──
+      expect(task.execution.branch).toBe('experiment/preserved-branch');
+      expect(task.execution.workspacePath).toBe('/tmp/preserved-workspace');
+      // ── Cleared (volatile attempt state per restartTask reset shape) ──
+      expect(task.execution.agentSessionId).toBeUndefined();
+      expect(task.execution.containerId).toBeUndefined();
+      expect(task.execution.error).toBeUndefined();
+      expect(task.execution.exitCode).toBeUndefined();
+    });
+
+    it('bumps execution generation by exactly one per executor-type edit', () => {
+      orchestrator.loadPlan({
+        name: 'edit-type-gen-test',
+        tasks: [{ id: 't1', description: 'Task 1', command: 'echo old', executorType: 'docker' }],
+      });
+      orchestrator.startExecution();
+      orchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 't1', status: 'failed', outputs: { exitCode: 1, error: 'x' } }),
+      );
+      const taskId = sid(orchestrator, 0, 't1');
+
+      const before = orchestrator.getTask(taskId)!.execution.generation ?? 0;
+
+      orchestrator.editTaskType(taskId, 'worktree');
+
+      const after = orchestrator.getTask(taskId)!.execution.generation ?? 0;
+      expect(after).toBe(before + 1);
     });
 
     it('persists the updated executorType', () => {

@@ -161,7 +161,7 @@ export class CommandService {
     );
   }
 
-  async editTaskType(
+    async editTaskType(
     envelope: CommandEnvelope<{ taskId: string; executorType: string; remoteTargetId?: string }>,
   ): Promise<CommandResult<TaskState[]>> {
     return this.executeCommand<TaskState[]>(
