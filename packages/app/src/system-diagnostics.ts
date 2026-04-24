@@ -40,12 +40,14 @@ export function collectSystemDiagnostics(args: {
   isPackaged: boolean;
   platform: NodeJS.Platform;
   arch: string;
+  bundledSkills?: SystemDiagnostics['bundledSkills'];
 }): SystemDiagnostics {
   return {
     platform: args.platform,
     arch: args.arch,
     appVersion: args.appVersion,
     isPackaged: args.isPackaged,
+    bundledSkills: args.bundledSkills,
     tools: [
       detectTool('git', 'Git', 'git', ['--version'], 'Install Git before running workflows.', true),
       detectTool('node', 'Node.js', 'node', ['--version'], 'Install Node.js 22 or newer for repo-based workflows.'),

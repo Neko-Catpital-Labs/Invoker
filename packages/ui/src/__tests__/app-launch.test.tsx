@@ -76,4 +76,36 @@ describe('App launch (component)', () => {
     render(<App />);
     expect(screen.getByText('Select a task from the graph to view details')).toBeInTheDocument();
   });
+
+  it('opens System Setup automatically when packaged bundled skills need installation', async () => {
+    mock.api.getSystemDiagnostics = vi.fn(async () => ({
+      platform: 'linux',
+      arch: 'x64',
+      appVersion: '0.1.0',
+      isPackaged: true,
+      tools: [],
+      bundledSkills: {
+        available: true,
+        promptRecommended: true,
+        managedPrefix: 'invoker-',
+        bundledSkillNames: ['plan-to-invoker'],
+        targets: [
+          {
+            id: 'codex',
+            name: 'Codex',
+            path: '/tmp/.codex/skills',
+            available: true,
+            installed: false,
+            upToDate: false,
+            installedSkillNames: [],
+          },
+        ],
+      },
+    }));
+
+    render(<App />);
+    expect(await screen.findByText('System Setup')).toBeInTheDocument();
+    expect(screen.getByText('Bundled Invoker Skills')).toBeInTheDocument();
+    expect(screen.getByText('Install Skills')).toBeInTheDocument();
+  });
 });

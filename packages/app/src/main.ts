@@ -25,6 +25,8 @@
  *   electron dist/main.js --headless set-merge-mode <workflowId> <mode>
  *   electron dist/main.js --headless queue
  *   electron dist/main.js --headless audit <taskId>
+ *   electron dist/main.js --headless install-skills
+ *   electron dist/main.js --install-skills
  *
  * Using the same Electron binary for both modes provides a consistent runtime.
  */
@@ -110,6 +112,7 @@ import {
 import { spawn, execSync } from 'node:child_process';
 import { openExternalTerminalForTask } from './open-terminal-for-task.js';
 import { collectSystemDiagnostics } from './system-diagnostics.js';
+import { installBundledSkills, resolveBundledSkillsStatus } from './bundled-skills.js';
 import { createRequire } from 'node:module';
 import { acquireDbWriterLock, type DbWriterLockResult } from './db-writer-lock.js';
 import { applyDelta } from './delta-merge.js';
@@ -128,10 +131,15 @@ import { listOpenFixIntentsForTask } from './auto-fix-intents.js';
 // Electron passes extra args after `--` or interleaves them.
 // We look for `--headless` anywhere in process.argv.
 const headlessIndex = process.argv.indexOf('--headless');
-const isHeadless = headlessIndex !== -1;
+const directInstallSkills = process.argv.includes('--install-skills') || process.argv.slice(2).includes('install-skills');
+const isHeadless = headlessIndex !== -1 || directInstallSkills;
 
 // In headless mode, extract the CLI args after --headless
-let cliArgs = isHeadless ? process.argv.slice(headlessIndex + 1) : [];
+let cliArgs = headlessIndex !== -1
+  ? process.argv.slice(headlessIndex + 1)
+  : directInstallSkills
+    ? ['install-skills']
+    : [];
 
 // Parse --wait-for-approval flag
 const waitForApprovalIndex = cliArgs.indexOf('--wait-for-approval');
@@ -277,6 +285,22 @@ interface InitServicesOptions {
   readOnly?: boolean;
   executionAgentRegistry?: import('@invoker/execution-engine').AgentRegistry;
   startupSyncMode?: 'all' | 'none';
+}
+
+function getBundledSkillsStatus() {
+  return resolveBundledSkillsStatus({
+    isPackaged: app.isPackaged,
+    repoRoot,
+    resourcesPath: process.resourcesPath,
+  });
+}
+
+function installPackagedSkills(mode: import('@invoker/contracts').BundledSkillsInstallMode = 'install') {
+  return installBundledSkills({
+    isPackaged: app.isPackaged,
+    repoRoot,
+    resourcesPath: process.resourcesPath,
+  }, mode);
 }
 
 async function initServices(options?: InitServicesOptions): Promise<void> {
@@ -645,6 +669,8 @@ if (isHeadless) {
         waitForApproval,
         noTrack,
         executionAgentRegistry: agentRegistry,
+        getBundledSkillsStatus,
+        installBundledSkills: installPackagedSkills,
       };
 
       const createStandaloneTaskExecutor = (): TaskRunner => {
@@ -3237,7 +3263,16 @@ if (isHeadless) {
         isPackaged: app.isPackaged,
         platform: process.platform,
         arch: process.arch,
+        bundledSkills: getBundledSkillsStatus(),
       });
+    });
+
+    ipcMain.handle('invoker:get-bundled-skills-status', () => {
+      return getBundledSkillsStatus();
+    });
+
+    ipcMain.handle('invoker:install-bundled-skills', (_event, mode = 'install') => {
+      return installPackagedSkills(mode);
     });
 
     registerGuiMutationHandler('invoker:replace-task', async (taskIdArg: unknown, replacementTasksArg: unknown) => {
