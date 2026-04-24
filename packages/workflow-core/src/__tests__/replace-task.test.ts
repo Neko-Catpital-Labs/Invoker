@@ -461,11 +461,10 @@ describe('replaceTask', () => {
   // The chart's Decision Table row "Change graph topology" makes
   // graph-shape changes fork-class / workflow scope: they must NOT
   // mutate a live workflow in place. Instead, callers see a
-  // `TopologyForkRequired` error pointing them at the (Step 12)
-  // forkWorkflow API. In-place is preserved on a fully terminal
+  // workflow fork path. In-place is preserved on a fully terminal
   // workflow because there is no in-flight work to race with.
   describe('topology-fork policy', () => {
-    it('throws TopologyForkRequired when downstream is still pending', () => {
+    it('forks the workflow when downstream is still pending', () => {
       orchestrator.loadPlan({
         name: 'topology-live',
         tasks: [
@@ -482,33 +481,24 @@ describe('replaceTask', () => {
       const s = (l: string) => sid(orchestrator, 0, l);
       const wfId = orchestrator.getTask(s('X'))!.config.workflowId!;
 
-      let caught: unknown;
-      try {
-        orchestrator.replaceTask('X', [
-          { id: 'fix', description: 'Fix', command: 'echo fix' },
-        ]);
-      } catch (err) {
-        caught = err;
-      }
+      const started = orchestrator.replaceTask('X', [
+        { id: 'fix', description: 'Fix', command: 'echo fix' },
+      ]);
 
-      expect(caught).toBeInstanceOf(TopologyForkRequired);
-      const err = caught as TopologyForkRequired;
-      expect(err.workflowId).toBe(wfId);
-      expect(err.taskId).toBe(s('X'));
-      // Message must surface both ids for the caller and the fix-up
-      // hint pointing at Step 12's forkWorkflow API.
-      expect(err.message).toContain(wfId);
-      expect(err.message).toContain(s('X'));
-      expect(err.message).toMatch(/fork/i);
-      expect(err.message).toMatch(/Step 12/);
+      const forkedWorkflowId = orchestrator
+        .getWorkflowIds()
+        .find((id) => id !== wfId);
 
-      // Source must NOT have been mutated in place.
+      expect(forkedWorkflowId).toBeDefined();
       expect(orchestrator.getTask(s('X'))!.status).toBe('failed');
-      expect(orchestrator.getTask(s('C'))!.status).toBe('pending');
-      expect(orchestrator.getTask('fix')).toBeUndefined();
+      const forkedFix = orchestrator
+        .getAllTasks()
+        .find((t) => t.config.workflowId === forkedWorkflowId && t.id.endsWith('/fix'));
+      expect(forkedFix).toBeDefined();
+      expect(started.some((t) => t.id === forkedFix?.id)).toBe(true);
     });
 
-    it('throws TopologyForkRequired when a sibling is still running', () => {
+    it('forks the workflow when a sibling is still running', () => {
       orchestrator.loadPlan({
         name: 'topology-live-sibling',
         tasks: [
@@ -525,15 +515,22 @@ describe('replaceTask', () => {
       expect(orchestrator.getTask('Y')!.status).toBe('running');
 
       const s = (l: string) => sid(orchestrator, 0, l);
-      expect(() =>
-        orchestrator.replaceTask('X', [
-          { id: 'fix', description: 'Fix', command: 'echo fix' },
-        ]),
-      ).toThrow(TopologyForkRequired);
+      const wfId = orchestrator.getTask(s('X'))!.config.workflowId!;
+      const started = orchestrator.replaceTask('X', [
+        { id: 'fix', description: 'Fix', command: 'echo fix' },
+      ]);
 
-      // Y is still running, X is still failed — no in-place mutation.
-      expect(orchestrator.getTask('Y')!.status).toBe('running');
+      const forkedWorkflowId = orchestrator
+        .getWorkflowIds()
+        .find((id) => id !== wfId);
+
       expect(orchestrator.getTask(s('X'))!.status).toBe('failed');
+      expect(forkedWorkflowId).toBeDefined();
+      const forkedFix = orchestrator
+        .getAllTasks()
+        .find((t) => t.config.workflowId === forkedWorkflowId && t.id.endsWith('/fix'));
+      expect(forkedFix).toBeDefined();
+      expect(started.some((t) => t.id === forkedFix?.id)).toBe(true);
     });
 
     it('allows in-place replacement on a terminal workflow', () => {

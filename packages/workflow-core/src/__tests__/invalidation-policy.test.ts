@@ -242,18 +242,12 @@ describe('applyInvalidation: recreateWorkflowFromFreshBase optional dep', () => 
   });
 });
 
-// Step 11 (`docs/architecture/task-invalidation-roadmap.md`): the
-// `'workflowFork'` action represents fork-class / workflow scope. Like
-// `'recreateWorkflowFromFreshBase'` it is gated behind an optional dep
-// that Step 12 supplies. Until then any caller that selects this
-// action sees an explicit "not yet wired (Step 12)" error so misuse
-// fails fast instead of silently no-op'ing.
 describe('applyInvalidation: workflowFork optional dep', () => {
-  it('throws an explicit "not yet wired (Step 12)" error when dep is absent', async () => {
+  it('throws an explicit missing-dep error when dep is absent', async () => {
     const deps = makeDeps();
     await expect(
       applyInvalidation('workflow', 'workflowFork', 'wf-1', deps),
-    ).rejects.toThrow(/not yet wired \(Step 12\)/);
+    ).rejects.toThrow(/'workflowFork' dep is missing/);
   });
 
   it('routes to the provided dep when present', async () => {

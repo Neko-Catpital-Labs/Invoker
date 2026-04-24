@@ -308,7 +308,20 @@ export function buildInvalidationDeps(
         persistence: deps.persistence,
         taskExecutor: deps.taskExecutor,
       }),
+    workflowFork: (workflowId: string) => deps.orchestrator.forkWorkflow(workflowId).started,
   };
+}
+
+export function forkWorkflow(
+  workflowId: string,
+  deps: Pick<ActionDeps, 'orchestrator' | 'logger'>,
+): { forkedWorkflowId: string; sourceWorkflowId: string; started: TaskState[] } {
+  const result = deps.orchestrator.forkWorkflow(workflowId);
+  deps.logger?.info(
+    `forkWorkflow: source=${workflowId} fork=${result.forkedWorkflowId} started=${result.started.length}`,
+    { module: 'workflow' },
+  );
+  return result;
 }
 
 export function editTaskCommand(
