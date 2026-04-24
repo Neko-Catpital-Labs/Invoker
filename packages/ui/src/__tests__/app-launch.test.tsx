@@ -36,7 +36,7 @@ describe('App launch (component)', () => {
     expect(screen.getByText('Load a plan to get started')).toBeInTheDocument();
   });
 
-  it('renders Open File and utility dropdown with Refresh, Clear Session, and Delete DB', () => {
+  it('renders Open File and utility dropdown with Refresh, Clear Session, Delete DB, and System Setup', () => {
     render(<App />);
 
     // Open File is always visible
@@ -58,7 +58,7 @@ describe('App launch (component)', () => {
 
     // Also check for disabled placeholder items
     expect(screen.getByText('Export Logs...')).toBeInTheDocument();
-    expect(screen.getByText('Settings...')).toBeInTheDocument();
+    expect(screen.getByText('System Setup...')).toBeInTheDocument();
   });
 
   it('does not show Start or Stop before a plan is loaded', () => {
