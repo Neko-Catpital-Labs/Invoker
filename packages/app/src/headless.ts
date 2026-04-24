@@ -525,6 +525,9 @@ async function headlessSet(args: string[], deps: HeadlessDeps): Promise<void> {
     case 'command':
       await headlessEdit(args[1], args.slice(2).join(' '), deps);
       break;
+    case 'prompt':
+      await headlessEditPrompt(args[1], args.slice(2).join(' '), deps);
+      break;
     case 'executor':
       await headlessEditExecutor(args[1], args[2], deps);
       break;
@@ -538,7 +541,7 @@ async function headlessSet(args: string[], deps: HeadlessDeps): Promise<void> {
       await headlessSetGatePolicy(args.slice(1), deps);
       break;
     default:
-      throw new Error(`Unknown set sub-command: "${subCommand}". Use: command, executor, agent, merge-mode, gate-policy`);
+      throw new Error(`Unknown set sub-command: "${subCommand}". Use: command, prompt, executor, agent, merge-mode, gate-policy`);
   }
 }
 
@@ -770,6 +773,7 @@ ${BOLD}Respond:${RESET}
 
 ${BOLD}Configure:${RESET}
   set command <taskId> <cmd>                          Edit task command and re-run
+  set prompt <taskId> <text>                          Edit task prompt and re-run
   set executor <taskId> <type>                        Change executor type (worktree|docker|ssh)
   set agent <taskId> <agent>                          Change execution agent (claude|codex)
   set merge-mode <workflowId> <mode>                  manual | automatic | external_review
@@ -1552,6 +1556,40 @@ async function headlessEdit(taskId: string, newCommand: string, deps: HeadlessDe
 
   if (deps.noTrack) {
     process.stdout.write('[headless] --no-track enabled: set command accepted; exiting without tracking.\n');
+    autoFix.unsubscribe();
+    return;
+  }
+  if (runnable.length === 0) {
+    autoFix.unsubscribe();
+    return;
+  }
+  await trackHeadlessWorkflow(restored.workflowId, deps, {
+    hasBackgroundWork: autoFix.isBusy,
+    printSummary: false,
+    printTaskOutput: true,
+    setExitCodeOnFailure: false,
+  });
+  autoFix.unsubscribe();
+}
+
+async function headlessEditPrompt(taskId: string, newPrompt: string, deps: HeadlessDeps): Promise<void> {
+  if (!taskId || !newPrompt) throw new Error('Missing arguments. Usage: --headless set prompt <taskId> <newPrompt>');
+  const restored = restoreWorkflowForTask(taskId, deps);
+  taskId = restored.resolvedTaskId;
+  const taskExecutor = createHeadlessExecutor(deps);
+  const autoFix = wireHeadlessAutoFix(deps, taskExecutor);
+
+  const envelope = makeEnvelope('edit-task-prompt', 'headless', 'task', { taskId, newPrompt });
+  const result = await deps.commandService.editTaskPrompt(envelope);
+  if (!result.ok) throw new Error(result.error.message);
+  const runnable = result.data.filter((task) => task.status === 'running');
+  if (runnable.length > 0) {
+    await taskExecutor.executeTasks(runnable);
+  }
+  process.stdout.write(`Edited task "${taskId}" prompt → "${newPrompt}"\n`);
+
+  if (deps.noTrack) {
+    process.stdout.write('[headless] --no-track enabled: set prompt accepted; exiting without tracking.\n');
     autoFix.unsubscribe();
     return;
   }

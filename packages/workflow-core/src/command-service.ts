@@ -151,6 +151,16 @@ export class CommandService {
     );
   }
 
+    async editTaskPrompt(
+    envelope: CommandEnvelope<{ taskId: string; newPrompt: string }>,
+  ): Promise<CommandResult<TaskState[]>> {
+    return this.executeCommand<TaskState[]>(
+      'EDIT_TASK_PROMPT_FAILED',
+      () => this.orchestrator.editTaskPrompt(envelope.payload.taskId, envelope.payload.newPrompt),
+      this.workflowIdForTask(envelope.payload.taskId),
+    );
+  }
+
   async editTaskType(
     envelope: CommandEnvelope<{ taskId: string; executorType: string; remoteTargetId?: string }>,
   ): Promise<CommandResult<TaskState[]>> {

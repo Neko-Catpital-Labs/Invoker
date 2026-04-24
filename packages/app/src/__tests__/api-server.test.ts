@@ -91,6 +91,7 @@ function createMocks() {
       setFixAwaitingApproval: vi.fn(),
       restartTask: vi.fn(() => [makeTask()]),
       editTaskCommand: vi.fn(() => [makeTask()]),
+      editTaskPrompt: vi.fn(() => [makeTask()]),
       editTaskType: vi.fn(() => [makeTask()]),
       editTaskAgent: vi.fn(() => [makeTask()]),
       setTaskExternalGatePolicies: vi.fn(() => [makeTask()]),
@@ -175,6 +176,7 @@ beforeEach(() => {
   mocks.orchestrator.restartTask.mockReturnValue([makeTask()]);
   mocks.orchestrator.beginConflictResolution.mockReturnValue({ savedError: 'saved-error' });
   mocks.orchestrator.editTaskCommand.mockReturnValue([makeTask()]);
+  mocks.orchestrator.editTaskPrompt.mockReturnValue([makeTask()]);
   mocks.orchestrator.editTaskType.mockReturnValue([makeTask()]);
   mocks.orchestrator.setTaskExternalGatePolicies.mockReturnValue([makeTask()]);
   mocks.orchestrator.cancelTask.mockReturnValue({ cancelled: ['task-1'], runningCancelled: ['task-1'] });
@@ -578,6 +580,25 @@ describe('POST /api/tasks/:id/edit', () => {
     const res = await request(port, 'POST', '/api/tasks/task-1/edit', {});
     expect(res.status).toBe(400);
     expect(res.body.error).toContain('Missing "command"');
+  });
+});
+
+describe('POST /api/tasks/:id/edit-prompt', () => {
+  it('edits task prompt and routes through orchestrator.editTaskPrompt', async () => {
+    const res = await request(port, 'POST', '/api/tasks/task-1/edit-prompt', { prompt: 'do the thing' });
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.action).toBe('prompt_edited');
+    expect(mocks.orchestrator.editTaskPrompt).toHaveBeenCalledWith('task-1', 'do the thing');
+    expect(mocks.orchestrator.editTaskCommand).not.toHaveBeenCalled();
+    // Endpoint dispatches any newly-runnable tasks via the executor.
+    expect(mocks.taskExecutor.executeTasks).toHaveBeenCalled();
+  });
+
+  it('returns 400 when prompt is missing', async () => {
+    const res = await request(port, 'POST', '/api/tasks/task-1/edit-prompt', {});
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('Missing "prompt"');
   });
 });
 
