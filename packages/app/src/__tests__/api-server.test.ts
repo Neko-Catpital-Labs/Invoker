@@ -628,12 +628,16 @@ describe('POST /api/tasks/:id/edit-type', () => {
 });
 
 describe('POST /api/tasks/:id/edit-agent', () => {
-  it('edits task agent', async () => {
+  it('edits task agent and routes through orchestrator.editTaskAgent', async () => {
     const res = await request(port, 'POST', '/api/tasks/task-1/edit-agent', { agent: 'codex' });
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
     expect(res.body.action).toBe('agent_edited');
     expect(mocks.orchestrator.editTaskAgent).toHaveBeenCalledWith('task-1', 'codex');
+    expect(mocks.orchestrator.editTaskCommand).not.toHaveBeenCalled();
+    expect(mocks.orchestrator.editTaskPrompt).not.toHaveBeenCalled();
+    // Endpoint dispatches any newly-runnable tasks via the executor.
+    expect(mocks.taskExecutor.executeTasks).toHaveBeenCalled();
   });
 
   it('returns 400 when agent is missing', async () => {

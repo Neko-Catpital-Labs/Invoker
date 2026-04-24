@@ -2049,15 +2049,15 @@ export class Orchestrator {
     return this.restartTask(taskId);
   }
 
-  /**
-   * Change a task's execution agent (e.g. 'claude' → 'codex') and restart it.
-   */
-  editTaskAgent(taskId: string, agentName: string): TaskState[] {
+    editTaskAgent(taskId: string, agentName: string): TaskState[] {
     this.refreshFromDb();
     const task = this.stateGetTask(taskId);
     if (!task) throw new Error(`Task ${taskId} not found`);
     if (task.config.isMergeNode) throw new Error(`Cannot change execution agent of merge node ${taskId}`);
-    if (task.status === 'running' || task.status === 'fixing_with_ai') throw new Error(`Cannot edit running task ${taskId}`);
+
+    if (task.status === 'running' || task.status === 'fixing_with_ai') {
+      this.cancelTask(taskId);
+    }
 
     const agentChanges: TaskStateChanges = { config: { executionAgent: agentName } };
     this.writeAndSync(taskId, agentChanges);
@@ -2065,7 +2065,7 @@ export class Orchestrator {
     this.persistence.logEvent?.(taskId, 'task.updated', agentChanges);
     this.messageBus.publish(TASK_DELTA_CHANNEL, agentDelta);
 
-    return this.restartTask(taskId);
+    return this.recreateTask(taskId);
   }
 
   /**

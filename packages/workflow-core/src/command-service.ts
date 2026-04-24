@@ -175,7 +175,7 @@ export class CommandService {
     );
   }
 
-  async editTaskAgent(
+    async editTaskAgent(
     envelope: CommandEnvelope<{ taskId: string; agentName: string }>,
   ): Promise<CommandResult<TaskState[]>> {
     return this.executeCommand<TaskState[]>(
