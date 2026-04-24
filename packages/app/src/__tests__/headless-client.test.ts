@@ -160,6 +160,41 @@ describe('headless-client', () => {
     expect(pingCalls).toBeGreaterThanOrEqual(2);
   });
 
+  it('re-bootstraps after repeated owner loss during post-bootstrap no-track delegation', async () => {
+    const firstBus = new LocalBus();
+    const secondBus = new LocalBus();
+    const thirdBus = new LocalBus();
+    let bootstrapCalls = 0;
+    let refreshCalls = 0;
+    let thirdBusExecCalls = 0;
+
+    const ensureStandaloneOwner = vi.fn(async () => {
+      bootstrapCalls += 1;
+    });
+    const refreshMessageBus = vi.fn(async () => {
+      refreshCalls += 1;
+      return refreshCalls <= 90 ? secondBus : thirdBus;
+    });
+
+    secondBus.onRequest('headless.owner-ping', async () => null);
+    thirdBus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-8', mode: 'standalone' }));
+    thirdBus.onRequest('headless.exec', async () => {
+      thirdBusExecCalls += 1;
+      return { ok: true };
+    });
+
+    const exitCode = await runHeadlessClientCommand(['recreate', 'wf-24', '--no-track'], {
+      messageBus: firstBus,
+      ensureStandaloneOwner,
+      refreshMessageBus,
+      runElectronHeadless: vi.fn(async () => 0),
+    });
+
+    expect(exitCode).toBe(0);
+    expect(bootstrapCalls).toBeGreaterThanOrEqual(2);
+    expect(thirdBusExecCalls).toBe(1);
+  }, 30_000);
+
   it('refreshes and retries queue queries when owner ping succeeds before query service is ready', async () => {
     const firstBus = new LocalBus();
     const secondBus = new LocalBus();
