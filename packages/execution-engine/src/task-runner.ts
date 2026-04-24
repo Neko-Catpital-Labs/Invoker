@@ -1464,7 +1464,14 @@ export class TaskRunner {
     return this.executionAgentRegistry;
   }
 
-  getRemoteTargetConfig(targetId: string): { host: string; user: string; sshKeyPath: string; port?: number } | undefined {
+  getRemoteTargetConfig(targetId: string): {
+    host: string;
+    user: string;
+    sshKeyPath: string;
+    port?: number;
+    managedWorkspaces?: boolean;
+    remoteInvokerHome?: string;
+  } | undefined {
     return this.getRemoteTargets()[targetId];
   }
 

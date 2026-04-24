@@ -14,6 +14,11 @@ export interface SshRemoteErrorMetadata {
   phase?: string;
 }
 
+export function parseOwnedWorktreePath(text: string): string | undefined {
+  const match = text.match(/already used by worktree at ['"]([^'"]+)['"]/);
+  return match?.[1];
+}
+
 function formatRawRemoteOutput(stdout: string, stderr: string): string {
   const sections: string[] = [];
   if (stderr.length > 0) sections.push(`STDERR:\n${stderr}`);

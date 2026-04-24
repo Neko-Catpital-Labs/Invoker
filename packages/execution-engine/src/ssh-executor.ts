@@ -7,7 +7,7 @@ import { BaseExecutor, type BaseEntry } from './base-executor.js';
 import { killProcessGroup, cleanElectronEnv, SIGKILL_TIMEOUT_MS } from './process-utils.js';
 import { computeBranchHash } from './branch-utils.js';
 import { planManagedWorktree } from './managed-worktree-controller.js';
-import { findManagedWorktreeForBranch, findManagedWorktreeByActionId, abbrevRefMatchesBranch } from './worktree-discovery.js';
+import { findManagedWorktreeForBranch, abbrevRefMatchesBranch } from './worktree-discovery.js';
 import { DEFAULT_WORKTREE_PROVISION_COMMAND } from './default-worktree-provision-command.js';
 import type { AgentRegistry } from './agent-registry.js';
 import { computeRepoUrlHash, sanitizeBranchForPath } from './git-utils.js';
@@ -20,10 +20,10 @@ import {
   buildWorktreeListScript,
   buildWorktreeHeadScript,
   buildWorktreeCleanupScript,
-  buildWorktreeRenameBranchScript,
   buildRecordAndPushScript,
   parseRecordAndPushOutput,
   createSshRemoteScriptError,
+  parseOwnedWorktreePath,
 } from './ssh-git-exec.js';
 
 export interface SshExecutorConfig {
@@ -92,7 +92,6 @@ export class SshExecutor extends BaseExecutor<SshEntry> {
     this.remotePath = process.env.PATH ?? '';
   }
 
-
   private buildSshArgs(): string[] {
     return [
       '-i', this.sshKeyPath,
@@ -117,9 +116,6 @@ export class SshExecutor extends BaseExecutor<SshEntry> {
     if (!this.remotePath) return ['bash', '-s'];
     return ['env', `PATH=${this.remotePath}`, 'bash', '-s'];
   }
-
-
-
 
   private async execRemoteCapture(script: string, phase?: string): Promise<string> {
     return new Promise((resolve, reject) => {
@@ -338,9 +334,9 @@ echo ${payloadB64} | base64 -d | bash -se
     const remoteClone = `${invokerHome}/repos/${h}`;
     const canonicalRemoteWt = `${invokerHome}/worktrees/${h}/${san}`;
 
-    // Set metadata on handle IMMEDIATELY so withStartupMetadata can persist on error
+    // Set branch metadata immediately, but do not treat the canonical worktree
+    // path as real until Git has actually created or confirmed it.
     handle.branch = experimentBranch;
-    handle.workspacePath = `${invokerHome}/worktrees/${h}/${san}`;
 
     const remoteHome = (await this.execRemoteCapture('printf %s "$HOME"', 'detect_home')).trim();
     const porcelainScript = buildWorktreeListScript({ repoHash: h, invokerHome });
@@ -370,37 +366,11 @@ echo ${payloadB64} | base64 -d | bash -se
       }
     }
 
-    let actionIdCandidate:
-      | { path: string; branch: string; baseIsAncestorOfHead: boolean }
-      | undefined;
-    const actionIdHit = findManagedWorktreeByActionId(porcelain, request.actionId, [managedPrefix]);
-    if (actionIdHit && actionIdHit.path !== reuseAbs) {
-      let baseIsAncestorOfHead = true;
-      try {
-        await this.execRemoteCapture(
-          `set -euo pipefail
-WT=${sshGitShellQuote(actionIdHit.path)}
-BASE=${sshGitShellQuote(resolvedBaseRef)}
-git -C "$WT" merge-base --is-ancestor "$BASE" HEAD
-`,
-          'check_action_reuse_base',
-        );
-      } catch {
-        baseIsAncestorOfHead = false;
-      }
-      actionIdCandidate = {
-        path: actionIdHit.path,
-        branch: actionIdHit.branch,
-        baseIsAncestorOfHead,
-      };
-    }
-
     const worktreePlan = planManagedWorktree({
       targetBranch: experimentBranch,
       targetWorktreePath: canonicalRemoteWt,
       forceFresh: request.inputs.freshWorkspace === true,
       exactBranchCandidate,
-      actionIdCandidate,
     });
 
     let remoteWt = canonicalRemoteWt;
@@ -413,30 +383,8 @@ git -C "$WT" merge-base --is-ancestor "$BASE" HEAD
         handle.workspacePath =
           remoteWt.startsWith(`${remoteHome}/`) ? `~${remoteWt.slice(remoteHome.length)}` : remoteWt;
         break;
-      case 'rename_reuse': {
-        const renameScript = buildWorktreeRenameBranchScript({
-          worktreePath: worktreePlan.worktreePath,
-          fromBranch: worktreePlan.fromBranch,
-          toBranch: worktreePlan.toBranch,
-        });
-        try {
-          const head = (await this.execRemoteCapture(renameScript, 'rename_reuse_branch')).trim();
-          if (abbrevRefMatchesBranch(head, worktreePlan.toBranch)) {
-            skippedRemotePreserve = true;
-            remoteWt = worktreePlan.worktreePath;
-            handle.workspacePath =
-              remoteWt.startsWith(`${remoteHome}/`) ? `~${remoteWt.slice(remoteHome.length)}` : remoteWt;
-          }
-        } catch {
-          const cleanupScript = buildWorktreeCleanupScript({
-            remoteClone,
-            worktreePaths: [canonicalRemoteWt],
-          });
-          await this.execRemoteCapture(cleanupScript, 'cleanup_worktree');
-          remoteWt = canonicalRemoteWt;
-        }
-        break;
-      }
+      case 'rename_reuse':
+        throw new Error('SSH managed workspaces do not support same-task different-branch rename reuse');
       case 'recreate': {
         const cleanupScript = buildWorktreeCleanupScript({
           remoteClone,
@@ -462,6 +410,8 @@ git -C "$WT" merge-base --is-ancestor "$BASE" HEAD
         if (!(wrapped as any).phase) (wrapped as any).phase = 'setup_branch';
         throw wrapped;
       }
+      handle.workspacePath =
+        remoteWt.startsWith(`${remoteHome}/`) ? `~${remoteWt.slice(remoteHome.length)}` : remoteWt;
     }
 
     // Step 4: No-command tasks complete immediately
@@ -498,13 +448,17 @@ echo ${payloadB64} | base64 -d | bash -se
 
   private withStartupMetadata(err: unknown, handle: ExecutorHandle): Error {
     const wrapped = err instanceof Error ? err : new Error(String(err));
-    if (handle.workspacePath) (wrapped as any).workspacePath = handle.workspacePath;
+    const ownerPath = parseOwnedWorktreePath(`${(wrapped as any).stderr ?? ''}\n${wrapped.message}`);
+    if (ownerPath) {
+      (wrapped as any).workspacePath = ownerPath;
+    } else if (handle.workspacePath) {
+      (wrapped as any).workspacePath = handle.workspacePath;
+    }
     if (handle.branch) (wrapped as any).branch = handle.branch;
     if (handle.agentSessionId) (wrapped as any).agentSessionId = handle.agentSessionId;
     if (handle.containerId) (wrapped as any).containerId = handle.containerId;
     return wrapped;
   }
-
 
   /**
    * On the remote host: commit task result (same semantics as local recordTaskResult) then push branch.

@@ -17,7 +17,8 @@ import { cleanElectronEnv } from './process-utils.js';
 import type { ExecutionAgent } from './agent.js';
 import type { SessionDriver } from './session-driver.js';
 import type { AgentRegistry } from './agent-registry.js';
-import { createSshRemoteScriptError } from './ssh-git-exec.js';
+import { buildWorktreeListScript, createSshRemoteScriptError } from './ssh-git-exec.js';
+import { findManagedWorktreeForBranch } from './worktree-discovery.js';
 
 // ── Host interface ───────────────────────────────────────
 
@@ -26,6 +27,8 @@ export interface RemoteTargetConfig {
   user: string;
   sshKeyPath: string;
   port?: number;
+  managedWorkspaces?: boolean;
+  remoteInvokerHome?: string;
 }
 
 /**
@@ -102,6 +105,53 @@ function materializeRemotePrompt(prompt: string): { effectivePrompt: string; rem
     remotePromptFilePath,
     promptB64: Buffer.from(prompt, 'utf8').toString('base64'),
   };
+}
+
+function deriveRemoteManagedWorkspaceInfo(
+  workspacePath: string,
+  target: RemoteTargetConfig,
+): { repoHash: string; invokerHome: string; managedPrefix: string } | undefined {
+  const normalized = workspacePath === '~'
+    ? `~`
+    : workspacePath.endsWith('/')
+    ? workspacePath.slice(0, -1)
+    : workspacePath;
+  const match = normalized.match(/^(.*)\/worktrees\/([a-f0-9]{12})\/[^/]+$/);
+  if (match) {
+    return {
+      invokerHome: match[1] || target.remoteInvokerHome || `~/.invoker`,
+      repoHash: match[2],
+      managedPrefix: `${match[1]}/worktrees/${match[2]}`,
+    };
+  }
+
+  if (!target.remoteInvokerHome) return undefined;
+  const hashMatch = normalized.match(/\/worktrees\/([a-f0-9]{12})\/[^/]+$/);
+  if (!hashMatch) return undefined;
+  return {
+    invokerHome: target.remoteInvokerHome,
+    repoHash: hashMatch[1],
+    managedPrefix: `${target.remoteInvokerHome}/worktrees/${hashMatch[1]}`,
+  };
+}
+
+async function resolveRemoteBranchOwnerPath(
+  branch: string | undefined,
+  workspacePath: string,
+  target: RemoteTargetConfig,
+): Promise<string | undefined> {
+  if (!branch) return undefined;
+  const info = deriveRemoteManagedWorkspaceInfo(workspacePath, target);
+  if (!info) return undefined;
+  const porcelain = await execRemoteSsh(
+    target,
+    buildWorktreeListScript({
+      repoHash: info.repoHash,
+      invokerHome: info.invokerHome,
+    }),
+    'list_worktrees',
+  );
+  return findManagedWorktreeForBranch(porcelain, branch, [info.managedPrefix]);
 }
 
 // ── Extracted functions ──────────────────────────────────
@@ -416,8 +466,28 @@ export async function fixWithAgentImpl(
     if (!target) {
       throw new Error(`No remote target config for "${task.config.remoteTargetId}" — cannot fix on remote`);
     }
+    const resolvedWorkspacePath =
+      (await resolveRemoteBranchOwnerPath(task.execution.branch, workspacePath, target)) ?? workspacePath;
+    if (resolvedWorkspacePath !== workspacePath) {
+      host.persistence.updateTask(taskId, {
+        execution: {
+          workspacePath: resolvedWorkspacePath,
+        },
+      });
+      host.persistence.logEvent?.(taskId, 'debug.auto-fix', {
+        phase: 'fix-with-agent-remote-path-repaired',
+        previousWorkspacePath: workspacePath,
+        repairedWorkspacePath: resolvedWorkspacePath,
+      });
+    }
     const remoteAgentBin = agentName ?? 'claude';
-    const { stdout: output, sessionId } = await spawnRemoteAgentFixImpl(prompt, workspacePath, target, agentName, host.agentRegistry);
+    const { stdout: output, sessionId } = await spawnRemoteAgentFixImpl(
+      prompt,
+      resolvedWorkspacePath,
+      target,
+      agentName,
+      host.agentRegistry,
+    );
     if (output) {
       host.persistence.appendTaskOutput(taskId, `\n[Fix with ${remoteAgentBin} (remote)] Output:\n${output}`);
     }
@@ -513,7 +583,6 @@ export async function fixWithAgentImpl(
     throw err;
   }
 }
-
 
 /**
  * Spawn an agent on a remote SSH host for fixing SSH-executed tasks.
