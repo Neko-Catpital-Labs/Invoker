@@ -293,8 +293,53 @@ export async function selectExperiments(
  * Same sequence as GUI `invoker:resolve-conflict` and headless `resolve-conflict`.
  */
 /**
- * Persist merge mode and re-run the merge
- * gate when it was already finished or waiting, matching GUI `invoker:set-merge-mode`.
+ * Persist merge mode and re-run the merge node — **retry-class**
+ * invalidation route per Step 9 of
+ * `docs/architecture/task-invalidation-roadmap.md` and the Decision
+ * Table row "Change merge mode" in
+ * `docs/architecture/task-invalidation-chart.md`
+ * (`MUTATION_POLICIES.mergeMode` → `retryTask` / task scope, scoped
+ * to the merge node).
+ *
+ * Step 9 migrates this surface from an app-layer-only special case
+ * to a proper orchestrator policy seam. Prior to Step 9 this wrapper
+ * persisted the new mergeMode unconditionally and only restarted the
+ * merge node when its status was `completed` / `awaiting_approval` /
+ * `review_ready` — the chart's "Merge-mode inconsistency" section
+ * explicitly flagged that as the bug ("only at the app layer, and
+ * only when the merge node is already terminal or waiting … no
+ * general active invalidation rule for an in-flight merge node").
+ *
+ * The substantive routing — same-mode no-op detection, cancel-first
+ * interruption when the merge node is actively executing or waiting
+ * on external review (`running` / `fixing_with_ai` /
+ * `awaiting_approval` / `review_ready`), `mergeMode` persistence on
+ * the workflow, and the retry-class reset via `restartTask` (today's
+ * `retryTask` compatibility wire — see `MUTATION_POLICIES.mergeMode`
+ * and `buildInvalidationDeps`) — now lives in
+ * `Orchestrator.editTaskMergeMode`. That method is the synchronous
+ * orchestrator-internal seam of `applyInvalidation`'s Hard Invariant
+ * (cancel BEFORE authoritative reset) and reuses `restartTask`'s
+ * reset shape so the merge node's `agentSessionId` / `containerId` /
+ * `error` / `exitCode` / timing fields are cleared while
+ * branch / workspacePath lineage survives — the chart's retry-class
+ * semantics for merge-mode mutations.
+ *
+ * This wrapper deliberately stays a thin async delegate to keep the
+ * public surface (`(workflowId, mergeMode, deps)` returning `void`)
+ * backward compatible for IPC handlers (`invoker:set-merge-mode`),
+ * the api-server (`POST /api/workflows/:id/merge-mode`), and Slack
+ * surfaces. The merge-task-id translation (`workflowId → mergeNodeId`)
+ * happens here because callers speak workflow ids; the orchestrator
+ * speaks merge-node task ids. When the workflow has no merge node
+ * (degenerate workflows that opted out of a merge gate) the wrapper
+ * persists the new mode directly and returns — there is nothing to
+ * retry. Input normalization (`'manual' | 'automatic' |
+ * 'external_review'`) lives in the app layer because it concerns
+ * UI/CLI input parsing, not the chart's invalidation routing.
+ *
+ * Cancel-first is enforced inside the orchestrator method — this
+ * wrapper MUST NOT add a parallel cancel call.
  */
 export async function setWorkflowMergeMode(
   workflowId: string,
@@ -302,15 +347,15 @@ export async function setWorkflowMergeMode(
   deps: Pick<ActionDeps, 'orchestrator' | 'persistence'> & { taskExecutor: TaskRunner },
 ): Promise<void> {
   const normalized = normalizeMergeModeForPersistence(mergeMode);
-  deps.persistence.updateWorkflow(workflowId, { mergeMode: normalized });
   const tasks = deps.persistence.loadTasks(workflowId);
   const mergeTask = tasks.find((t) => t.config.isMergeNode);
-  if (
-    mergeTask &&
-    (mergeTask.status === 'completed' || mergeTask.status === 'awaiting_approval' || mergeTask.status === 'review_ready')
-  ) {
-    const started = deps.orchestrator.restartTask(mergeTask.id);
-    const runnable = started.filter((t) => t.status === 'running');
+  if (!mergeTask) {
+    deps.persistence.updateWorkflow(workflowId, { mergeMode: normalized });
+    return;
+  }
+  const started = deps.orchestrator.editTaskMergeMode(mergeTask.id, normalized);
+  const runnable = started.filter((t) => t.status === 'running');
+  if (runnable.length > 0) {
     await deps.taskExecutor.executeTasks(runnable);
   }
 }

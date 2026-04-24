@@ -185,6 +185,48 @@ export class CommandService {
     );
   }
 
+  /**
+   * Edit the merge mode of a workflow's merge node — **retry-class**
+   * invalidation route per Step 9 of the task-invalidation roadmap
+   * (chart Decision Table row "Change merge mode";
+   * `MUTATION_POLICIES.mergeMode` → `retryTask` / task scope, scoped
+   * to the merge node). Mirrors the Step 5/7/8 retry-class seams
+   * (`editTaskType` / `selectExperiment` / `selectExperiments`) rather
+   * than the recreate-class `editTaskCommand` / `editTaskPrompt` /
+   * `editTaskAgent` seams: a merge-mode flip changes the merge
+   * execution policy but preserves the merge node's branch /
+   * workspacePath lineage.
+   *
+   * The orchestrator method (`Orchestrator.editTaskMergeMode`) is the
+   * synchronous cancel-first seam — it owns same-mode no-op detection,
+   * cancel-first interruption when the merge node is active
+   * (`running` / `fixing_with_ai` / `awaiting_approval` /
+   * `review_ready`), the `persistence.updateWorkflow({ mergeMode })`
+   * write, and the `restartTask` retry-class reset that bumps the
+   * merge node's execution generation exactly once. This service-level
+   * entrypoint just serializes the mutation through the workflow mutex
+   * so concurrent merge-mode flips never interleave with each other or
+   * with other in-workflow mutations, then wraps the result in a
+   * `CommandResult`. `taskId` MUST be the merge node id
+   * (`__merge__<workflowId>`); the workflow id is read from the merge
+   * node's config.
+   */
+  async editTaskMergeMode(
+    envelope: CommandEnvelope<{
+      taskId: string;
+      mergeMode: 'manual' | 'automatic' | 'external_review';
+    }>,
+  ): Promise<CommandResult<TaskState[]>> {
+    return this.executeCommand<TaskState[]>(
+      'EDIT_TASK_MERGE_MODE_FAILED',
+      () => this.orchestrator.editTaskMergeMode(
+        envelope.payload.taskId,
+        envelope.payload.mergeMode,
+      ),
+      this.workflowIdForTask(envelope.payload.taskId),
+    );
+  }
+
   async setTaskExternalGatePolicies(
     envelope: CommandEnvelope<{ taskId: string; updates: ExternalGatePolicyUpdate[] }>,
   ): Promise<CommandResult<TaskState[]>> {
