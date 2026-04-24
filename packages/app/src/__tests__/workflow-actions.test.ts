@@ -23,6 +23,8 @@ import {
   setWorkflowMergeMode,
   finalizeAppliedFix,
   autoFixOnFailure,
+  buildCancelInFlight,
+  buildInvalidationDeps,
 } from '../workflow-actions.js';
 
 // ── Helpers ──────────────────────────────────────────────────
@@ -1014,5 +1016,199 @@ describe('setWorkflowMergeMode', () => {
         taskExecutor: taskExecutor as unknown as TaskRunner,
       }),
     ).rejects.toThrow('Invalid mergeMode');
+  });
+});
+
+// ── Invalidation routing scaffolding (Phase A, Step 1) ───────
+
+describe('buildCancelInFlight', () => {
+  it('cancels task before awaiting killActiveExecution for each runningCancelled id', async () => {
+    const orchestrator = {
+      cancelTask: vi.fn(() => ({ cancelled: ['task-a'], runningCancelled: ['task-a'] })),
+      cancelWorkflow: vi.fn(),
+    };
+    const taskExecutor = {
+      killActiveExecution: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const cancel = buildCancelInFlight({
+      orchestrator: orchestrator as unknown as Orchestrator,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+    });
+    await cancel('task', 'task-a');
+
+    expect(orchestrator.cancelTask).toHaveBeenCalledWith('task-a');
+    expect(taskExecutor.killActiveExecution).toHaveBeenCalledWith('task-a');
+    expect(orchestrator.cancelTask.mock.invocationCallOrder[0]).toBeLessThan(
+      taskExecutor.killActiveExecution.mock.invocationCallOrder[0],
+    );
+    expect(orchestrator.cancelWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('cancels workflow before awaiting killActiveExecution per runningCancelled id', async () => {
+    const orchestrator = {
+      cancelTask: vi.fn(),
+      cancelWorkflow: vi.fn(() => ({
+        cancelled: ['task-a', 'task-b'],
+        runningCancelled: ['task-a', 'task-b'],
+      })),
+    };
+    const taskExecutor = {
+      killActiveExecution: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const cancel = buildCancelInFlight({
+      orchestrator: orchestrator as unknown as Orchestrator,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+    });
+    await cancel('workflow', 'wf-1');
+
+    expect(orchestrator.cancelWorkflow).toHaveBeenCalledWith('wf-1');
+    expect(taskExecutor.killActiveExecution).toHaveBeenCalledTimes(2);
+    expect(taskExecutor.killActiveExecution).toHaveBeenNthCalledWith(1, 'task-a');
+    expect(taskExecutor.killActiveExecution).toHaveBeenNthCalledWith(2, 'task-b');
+    expect(orchestrator.cancelWorkflow.mock.invocationCallOrder[0]).toBeLessThan(
+      taskExecutor.killActiveExecution.mock.invocationCallOrder[0],
+    );
+    expect(orchestrator.cancelTask).not.toHaveBeenCalled();
+  });
+
+  it('is a no-op when scope is "none"', async () => {
+    const orchestrator = { cancelTask: vi.fn(), cancelWorkflow: vi.fn() };
+    const taskExecutor = { killActiveExecution: vi.fn() };
+
+    const cancel = buildCancelInFlight({
+      orchestrator: orchestrator as unknown as Orchestrator,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+    });
+    await cancel('none', 'whatever');
+
+    expect(orchestrator.cancelTask).not.toHaveBeenCalled();
+    expect(orchestrator.cancelWorkflow).not.toHaveBeenCalled();
+    expect(taskExecutor.killActiveExecution).not.toHaveBeenCalled();
+  });
+
+  it('still cancels orchestrator state when no taskExecutor is provided', async () => {
+    const orchestrator = {
+      cancelTask: vi.fn(() => ({ cancelled: ['task-a'], runningCancelled: ['task-a'] })),
+      cancelWorkflow: vi.fn(),
+    };
+    const cancel = buildCancelInFlight({
+      orchestrator: orchestrator as unknown as Orchestrator,
+    });
+    await cancel('task', 'task-a');
+
+    expect(orchestrator.cancelTask).toHaveBeenCalledWith('task-a');
+  });
+});
+
+describe('buildInvalidationDeps', () => {
+  function makeBaseOrchestrator() {
+    return {
+      restartTask: vi.fn(() => [makeRunningTask({ id: 'task-a' })]),
+      recreateTask: vi.fn(() => [makeRunningTask({ id: 'task-a' })]),
+      retryWorkflow: vi.fn(() => [makeRunningTask({ id: 'task-a' })]),
+      recreateWorkflow: vi.fn(() => [makeRunningTask({ id: 'task-a' })]),
+      cancelTask: vi.fn(() => ({ cancelled: [], runningCancelled: [] })),
+      cancelWorkflow: vi.fn(() => ({ cancelled: [], runningCancelled: [] })),
+    };
+  }
+  function makePersistence() {
+    return {
+      loadWorkflow: vi.fn(() => ({ id: 'wf-1', generation: 0 })),
+      updateWorkflow: vi.fn(),
+    };
+  }
+
+  it('routes retryTask to orchestrator.restartTask (compat wire for Step 13)', async () => {
+    const orchestrator = makeBaseOrchestrator();
+    const persistence = makePersistence();
+
+    const deps = buildInvalidationDeps({
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+    });
+    const result = await deps.retryTask('task-a');
+
+    expect(orchestrator.restartTask).toHaveBeenCalledWith('task-a');
+    expect(orchestrator.recreateTask).not.toHaveBeenCalled();
+    expect(result).toHaveLength(1);
+  });
+
+  it('routes recreateTask to orchestrator.recreateTask', async () => {
+    const orchestrator = makeBaseOrchestrator();
+    const persistence = makePersistence();
+
+    const deps = buildInvalidationDeps({
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+    });
+    await deps.recreateTask('task-a');
+
+    expect(orchestrator.recreateTask).toHaveBeenCalledWith('task-a');
+  });
+
+  it('routes retryWorkflow to orchestrator.retryWorkflow', async () => {
+    const orchestrator = makeBaseOrchestrator();
+    const persistence = makePersistence();
+
+    const deps = buildInvalidationDeps({
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+    });
+    await deps.retryWorkflow('wf-1');
+
+    expect(orchestrator.retryWorkflow).toHaveBeenCalledWith('wf-1');
+  });
+
+  it('routes recreateWorkflow through bumpGenerationAndRecreate', async () => {
+    const orchestrator = makeBaseOrchestrator();
+    const persistence = makePersistence();
+
+    const deps = buildInvalidationDeps({
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+    });
+    await deps.recreateWorkflow('wf-1');
+
+    expect(persistence.loadWorkflow).toHaveBeenCalledWith('wf-1');
+    expect(persistence.updateWorkflow).toHaveBeenCalledWith('wf-1', { generation: 1 });
+    expect(orchestrator.recreateWorkflow).toHaveBeenCalledWith('wf-1');
+  });
+
+  it('does NOT wire recreateWorkflowFromFreshBase in Step 1 (Step 12 promotes it)', () => {
+    const orchestrator = makeBaseOrchestrator();
+    const persistence = makePersistence();
+
+    const deps = buildInvalidationDeps({
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+    });
+    expect(deps.recreateWorkflowFromFreshBase).toBeUndefined();
+  });
+
+  it('builds a cancel-first hook that cancels orchestrator state and kills runners', async () => {
+    const orchestrator = makeBaseOrchestrator();
+    orchestrator.cancelTask = vi.fn(() => ({
+      cancelled: ['task-a'],
+      runningCancelled: ['task-a'],
+    }));
+    const persistence = makePersistence();
+    const taskExecutor = {
+      killActiveExecution: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const deps = buildInvalidationDeps({
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+    });
+    await deps.cancelInFlight('task', 'task-a');
+
+    expect(orchestrator.cancelTask).toHaveBeenCalledWith('task-a');
+    expect(taskExecutor.killActiveExecution).toHaveBeenCalledWith('task-a');
+    expect(orchestrator.cancelTask.mock.invocationCallOrder[0]).toBeLessThan(
+      taskExecutor.killActiveExecution.mock.invocationCallOrder[0],
+    );
   });
 });

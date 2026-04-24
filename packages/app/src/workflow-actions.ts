@@ -8,7 +8,12 @@
 
 import type { Logger } from '@invoker/contracts';
 import type { Orchestrator, ExternalGatePolicyUpdate } from '@invoker/workflow-core';
-import type { TaskState } from '@invoker/workflow-core';
+import type {
+  CancelInFlightFn,
+  InvalidationDeps,
+  InvalidationScope,
+  TaskState,
+} from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import type { TaskRunner } from '@invoker/execution-engine';
 import { normalizeMergeModeForPersistence } from './merge-mode.js';
@@ -179,6 +184,47 @@ export async function rebaseAndRetry(
   }
 
   return bumpGenerationAndRecreate(workflowId, deps);
+}
+
+export interface BuildCancelInFlightDeps {
+  orchestrator: Orchestrator;
+  taskExecutor?: TaskRunner;
+}
+
+export function buildCancelInFlight(deps: BuildCancelInFlightDeps): CancelInFlightFn {
+  return async (scope: InvalidationScope, id: string): Promise<void> => {
+    if (scope === 'none') return;
+    const result =
+      scope === 'task'
+        ? deps.orchestrator.cancelTask(id)
+        : deps.orchestrator.cancelWorkflow(id);
+    const taskExecutor = deps.taskExecutor;
+    if (!taskExecutor) return;
+    for (const runningId of result.runningCancelled) {
+      await taskExecutor.killActiveExecution(runningId);
+    }
+  };
+}
+
+export function buildInvalidationDeps(
+  deps: Pick<ActionDeps, 'logger' | 'orchestrator' | 'persistence' | 'taskExecutor'>,
+): InvalidationDeps {
+  const cancelInFlight = buildCancelInFlight({
+    orchestrator: deps.orchestrator,
+    taskExecutor: deps.taskExecutor,
+  });
+  return {
+    cancelInFlight,
+    retryTask: (taskId: string) => deps.orchestrator.restartTask(taskId),
+    recreateTask: (taskId: string) => deps.orchestrator.recreateTask(taskId),
+    retryWorkflow: (workflowId: string) => deps.orchestrator.retryWorkflow(workflowId),
+    recreateWorkflow: (workflowId: string) =>
+      bumpGenerationAndRecreate(workflowId, {
+        logger: deps.logger,
+        orchestrator: deps.orchestrator,
+        persistence: deps.persistence,
+      }),
+  };
 }
 
 export function editTaskCommand(
