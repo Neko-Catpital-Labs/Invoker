@@ -100,7 +100,6 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
   }
 
   private reconcilePoolSlots(repoUrl: string): void {
-    // Repair stale slot bookkeeping by replacing the pool's local ledger with the executor's live worktree set.
     this.pool.reconcileActiveWorktrees(repoUrl, this.getLiveWorktreePaths(repoUrl));
   }
 

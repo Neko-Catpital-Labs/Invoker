@@ -57,7 +57,7 @@ async function runElectronHeadless(args: string[]): Promise<number> {
 }
 
 const DEFAULT_NO_TRACK_DELEGATION_TIMEOUT_MS = 8_000;
-const POST_BOOTSTRAP_NO_TRACK_DELEGATION_TIMEOUT_MS = 30_000;
+const POST_BOOTSTRAP_NO_TRACK_DELEGATION_TIMEOUT_MS = 90_000;
 
 async function delegateMutation(
   args: string[],
