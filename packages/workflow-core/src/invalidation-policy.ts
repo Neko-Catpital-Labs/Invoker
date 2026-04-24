@@ -7,7 +7,8 @@ export type InvalidationAction =
   | 'retryWorkflow'
   | 'recreateTask'
   | 'recreateWorkflow'
-  | 'recreateWorkflowFromFreshBase';
+  | 'recreateWorkflowFromFreshBase'
+  | 'workflowFork';
 
 /**
  * Scope at which an `InvalidationAction` applies.
@@ -34,7 +35,8 @@ export type MutationKey =
   | 'mergeMode'
   | 'fixContext'
   | 'rebaseAndRetry'
-  | 'externalGatePolicy';
+  | 'externalGatePolicy'
+  | 'topology';
 
 export const MUTATION_POLICIES: Readonly<Record<MutationKey, TaskMutationPolicy>> = Object.freeze({
   command:               { invalidatesExecutionSpec: true,  invalidateIfActive: true,  action: 'recreateTask' as const },
@@ -48,6 +50,13 @@ export const MUTATION_POLICIES: Readonly<Record<MutationKey, TaskMutationPolicy>
   fixContext:            { invalidatesExecutionSpec: true,  invalidateIfActive: true,  action: 'retryTask' as const },
   rebaseAndRetry:        { invalidatesExecutionSpec: true,  invalidateIfActive: true,  action: 'recreateWorkflowFromFreshBase' as const },
   externalGatePolicy:    { invalidatesExecutionSpec: false, invalidateIfActive: false, action: 'none' as const },
+  // Step 11 (`docs/architecture/task-invalidation-roadmap.md`): graph
+  // topology mutations (e.g. `replaceTask`, `addTask` that changes
+  // parent edges) are fork-class / workflow scope. They must NOT
+  // mutate a live workflow in place; they fork a new workflow rooted
+  // from the relevant node/result. Step 12 wires the matching
+  // `forkWorkflow*` lifecycle dep on `applyInvalidation`.
+  topology:              { invalidatesExecutionSpec: true,  invalidateIfActive: true,  action: 'workflowFork' as const },
 });
 
 export type CancelInFlightFn = (
@@ -62,6 +71,14 @@ export interface InvalidationDeps {
   retryWorkflow: (workflowId: string) => TaskState[] | Promise<TaskState[]>;
   recreateWorkflow: (workflowId: string) => TaskState[] | Promise<TaskState[]>;
   recreateWorkflowFromFreshBase?: (workflowId: string) => TaskState[] | Promise<TaskState[]>;
+  /**
+   * Step 11 surfaces `'workflowFork'` as the topology-class action.
+   * Step 12 supplies the implementation that creates a new workflow
+   * rooted from the relevant node/result. Until then, invocation
+   * fails fast through `applyInvalidation` with an explicit
+   * "not yet wired (Step 12)" error.
+   */
+  workflowFork?: (workflowId: string) => TaskState[] | Promise<TaskState[]>;
 }
 
 const TASK_ACTIONS = new Set<InvalidationAction>(['retryTask', 'recreateTask']);
@@ -69,6 +86,7 @@ const WORKFLOW_ACTIONS = new Set<InvalidationAction>([
   'retryWorkflow',
   'recreateWorkflow',
   'recreateWorkflowFromFreshBase',
+  'workflowFork',
 ]);
 
 export async function applyInvalidation(
@@ -116,6 +134,15 @@ export async function applyInvalidation(
         );
       }
       return await deps.recreateWorkflowFromFreshBase(id);
+    }
+    case 'workflowFork': {
+      if (!deps.workflowFork) {
+        throw new Error(
+          "applyInvalidation: 'workflowFork' is not yet wired (Step 12). " +
+            'Provide deps.workflowFork to use this action.',
+        );
+      }
+      return await deps.workflowFork(id);
     }
   }
 }

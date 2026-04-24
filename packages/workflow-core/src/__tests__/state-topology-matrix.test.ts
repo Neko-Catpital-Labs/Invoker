@@ -6,10 +6,11 @@
  * state machine — no executor, no git.
  */
 import { describe, it, expect, beforeEach } from 'vitest';
-import { Orchestrator } from '../orchestrator.js';
+import { Orchestrator, TopologyForkRequired } from '../orchestrator.js';
 import type { PlanDefinition, OrchestratorPersistence, OrchestratorMessageBus } from '../orchestrator.js';
 import type { TaskState, TaskStateChanges, Attempt } from '../task-types.js';
 import type { WorkResponse } from '@invoker/contracts';
+import { MUTATION_POLICIES } from '../invalidation-policy.js';
 
 // ── In-Memory Persistence Mock ──────────────────────────────
 
@@ -632,6 +633,101 @@ describe('State × Topology Matrix', () => {
       const allTasks = orchestrator.getAllTasks();
       expect(allTasks.find((t) => t.id === 'B-v2')).toBeUndefined();
       expect(allTasks.find((t) => t.id === 'C-v2')).toBeUndefined();
+    });
+  });
+
+  // Step 11 (`docs/architecture/task-invalidation-roadmap.md`):
+  // The chart's Decision Table row "Change graph topology" is the lone
+  // **fork-class** / workflow-scope row. Unlike Steps 2–10 (per-mutation
+  // routes that resolve to retry/recreate × task scope), topology
+  // mutations CANNOT be applied in place on a live workflow — they must
+  // create a new workflow fork rooted from the offending node/result.
+  // Step 12 wires the matching `forkWorkflow*` lifecycle dep; Step 11
+  // surfaces the gate via `Orchestrator.replaceTask` and the
+  // `MUTATION_POLICIES.topology` policy entry.
+  //
+  // The matrix asserts two distinct invariants compared to every
+  // earlier (per-attribute) entry:
+  //
+  //   1. **Policy classification.** `MUTATION_POLICIES.topology` is
+  //      the only entry whose `action` is `'workflowFork'`. All other
+  //      spec-changing entries route to retry/recreate × task or
+  //      workflow scope. This is what makes "graph topology" a
+  //      first-class fork-class entry rather than a special-cased
+  //      restart.
+  //
+  //   2. **Live-workflow gating.** `Orchestrator.replaceTask` now
+  //      throws `TopologyForkRequired` whenever any non-merge task in
+  //      the same workflow is in a live status, surfacing both the
+  //      workflow id and the offending task id so the caller can
+  //      route the request to the (Step 12) fork API. In-place
+  //      remains permitted on a fully terminal workflow because there
+  //      is no in-flight work to race with.
+  describe('graph topology is fork-class / workflow scope', () => {
+    it('MUTATION_POLICIES.topology classifies the row as fork-class / workflow scope', () => {
+      const policy = MUTATION_POLICIES.topology;
+      expect(policy).toBeDefined();
+      expect(policy.action).toBe('workflowFork');
+      expect(policy.invalidatesExecutionSpec).toBe(true);
+      expect(policy.invalidateIfActive).toBe(true);
+    });
+
+    it('topology is the only fork-class entry in the policy table', () => {
+      const forkEntries = Object.entries(MUTATION_POLICIES).filter(
+        ([, p]) => p.action === 'workflowFork',
+      );
+      expect(forkEntries.map(([k]) => k)).toEqual(['topology']);
+    });
+
+    it('replaceTask throws TopologyForkRequired on a live diamond workflow', () => {
+      orchestrator.loadPlan(diamondPlan());
+      orchestrator.startExecution();
+
+      orchestrator.handleWorkerResponse(complete('A'));
+      orchestrator.handleWorkerResponse(complete('C'));
+      orchestrator.handleWorkerResponse(fail('B'));
+      // D is `pending` (blocked by failed B) — workflow is live.
+
+      const bTask = orchestrator.getTask('B')!;
+      const wfId = bTask.config.workflowId!;
+      const scopedBId = bTask.id;
+
+      let caught: unknown;
+      try {
+        orchestrator.replaceTask('B', [
+          { id: 'B-fix', description: 'Fix B', command: 'echo fix' },
+        ]);
+      } catch (err) {
+        caught = err;
+      }
+      expect(caught).toBeInstanceOf(TopologyForkRequired);
+      const err = caught as TopologyForkRequired;
+      expect(err.workflowId).toBe(wfId);
+      expect(err.taskId).toBe(scopedBId);
+
+      // No in-place mutation: B stays failed, no replacement node was
+      // created, and the merge gate's deps are unchanged.
+      expect(orchestrator.getTask('B')!.status).toBe('failed');
+      expect(orchestrator.getTask('B-fix')).toBeUndefined();
+    });
+
+    it('replaceTask succeeds in place on a terminal diamond workflow', () => {
+      orchestrator.loadPlan(diamondPlan());
+      orchestrator.startExecution();
+
+      orchestrator.handleWorkerResponse(complete('A'));
+      orchestrator.handleWorkerResponse(complete('C'));
+      orchestrator.handleWorkerResponse(fail('B'));
+      // Cancel D so the workflow has no live non-merge tasks.
+      orchestrator.cancelTask('D');
+
+      orchestrator.replaceTask('B', [
+        { id: 'B-fix', description: 'Fix B', command: 'echo fix' },
+      ]);
+
+      // B is staled and the replacement node now exists.
+      expect(orchestrator.getTask('B')!.status).toBe('stale');
+      expect(orchestrator.getTask('B-fix')).toBeDefined();
     });
   });
 });

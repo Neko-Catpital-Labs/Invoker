@@ -134,6 +134,15 @@ describe('app-layer handoff repros', () => {
     h.loadAndStart(LINEAR_PLAN);
     h.failTask('A', 'broken');
 
+    // Step 11 (`docs/architecture/task-invalidation-roadmap.md`):
+    // `replaceTask` is a topology mutation and now throws
+    // `TopologyForkRequired` whenever any non-merge task is still in a
+    // live status. LINEAR_PLAN is A → B; after failTask('A'), B is
+    // `pending` so we cancel it before exercising the in-place
+    // replacement path. The handoff/workspacePath assertions below
+    // are unchanged.
+    h.orchestrator.cancelTask('B');
+
     const started = h.orchestrator.replaceTask('A', [
       { id: 'A-fix-1', description: 'Fix part 1', command: 'echo fix1' },
       { id: 'A-fix-2', description: 'Fix part 2', command: 'echo fix2', dependencies: ['A-fix-1'] },
