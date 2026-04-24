@@ -28,6 +28,7 @@ function stubOrchestrator(overrides: Partial<Orchestrator> = {}): Orchestrator {
     revertConflictResolution: vi.fn(),
     provideInput: vi.fn(),
     retryTask: vi.fn().mockReturnValue([]),
+    recreateTask: vi.fn().mockReturnValue([]),
     selectExperiment: vi.fn().mockReturnValue([]),
     editTaskCommand: vi.fn().mockReturnValue([]),
     editTaskType: vi.fn().mockReturnValue([]),
@@ -38,6 +39,8 @@ function stubOrchestrator(overrides: Partial<Orchestrator> = {}): Orchestrator {
     cancelWorkflow: vi.fn().mockReturnValue({ cancelled: [], runningCancelled: [] }),
     deleteWorkflow: vi.fn(),
     retryWorkflow: vi.fn().mockReturnValue([]),
+    recreateWorkflow: vi.fn().mockReturnValue([]),
+    recreateWorkflowFromFreshBase: vi.fn().mockResolvedValue([] as TaskState[]),
     ...overrides,
   } as unknown as Orchestrator;
 }
@@ -349,6 +352,105 @@ describe('CommandService', () => {
       });
       const result = await service.retryWorkflow(makeEnvelope({ workflowId: 'bad' }));
       expect(result).toEqual({ ok: false, error: { code: 'RETRY_WORKFLOW_FAILED', message: 'wf not found' } });
+    });
+  });
+
+  // ── recreateTask ─────────────────────────────────────────
+
+  describe('recreateTask', () => {
+    it('delegates to orchestrator.recreateTask', async () => {
+      const result = await service.recreateTask(makeEnvelope({ taskId: 't-1' }));
+      expect(result).toEqual({ ok: true, data: [] });
+      expect(orchestrator.recreateTask).toHaveBeenCalledWith('t-1');
+    });
+
+    it('returns error on exception', async () => {
+      (orchestrator.recreateTask as ReturnType<typeof vi.fn>).mockImplementation(() => {
+        throw new Error('task not found');
+      });
+      const result = await service.recreateTask(makeEnvelope({ taskId: 'bad' }));
+      expect(result).toEqual({ ok: false, error: { code: 'RECREATE_TASK_FAILED', message: 'task not found' } });
+    });
+  });
+
+  // ── recreateWorkflow ─────────────────────────────────────
+
+  describe('recreateWorkflow', () => {
+    it('delegates to orchestrator.recreateWorkflow', async () => {
+      const result = await service.recreateWorkflow(makeEnvelope({ workflowId: 'wf-1' }));
+      expect(result).toEqual({ ok: true, data: [] });
+      expect(orchestrator.recreateWorkflow).toHaveBeenCalledWith('wf-1');
+    });
+
+    it('returns error on exception', async () => {
+      (orchestrator.recreateWorkflow as ReturnType<typeof vi.fn>).mockImplementation(() => {
+        throw new Error('wf not found');
+      });
+      const result = await service.recreateWorkflow(makeEnvelope({ workflowId: 'bad' }));
+      expect(result).toEqual({ ok: false, error: { code: 'RECREATE_WORKFLOW_FAILED', message: 'wf not found' } });
+    });
+  });
+
+  // ── recreateWorkflowFromFreshBase ────────────────────────
+
+  describe('recreateWorkflowFromFreshBase', () => {
+    it('delegates to orchestrator.recreateWorkflowFromFreshBase', async () => {
+      const result = await service.recreateWorkflowFromFreshBase(makeEnvelope({ workflowId: 'wf-1' }));
+      expect(result).toEqual({ ok: true, data: [] });
+      expect(orchestrator.recreateWorkflowFromFreshBase).toHaveBeenCalledWith('wf-1');
+    });
+
+    it('returns error on exception', async () => {
+      (orchestrator.recreateWorkflowFromFreshBase as ReturnType<typeof vi.fn>).mockRejectedValue(
+        new Error('wf not found'),
+      );
+      const result = await service.recreateWorkflowFromFreshBase(makeEnvelope({ workflowId: 'bad' }));
+      expect(result).toEqual({
+        ok: false,
+        error: { code: 'RECREATE_WORKFLOW_FROM_FRESH_BASE_FAILED', message: 'wf not found' },
+      });
+    });
+  });
+
+  // ── Step 17: 5-method canonical lifecycle matrix ─────────
+  //
+  // Pin the surface contract that Step 17
+  // (`docs/architecture/task-invalidation-roadmap.md`,
+  // `docs/architecture/task-invalidation-chart.md` "Proposed API
+  // Direction") locks in: `CommandService` exposes the full
+  // `{retry, recreate} × {task, workflow}` matrix plus the
+  // strictly-stronger `recreateWorkflowFromFreshBase` (rebase
+  // and retry). All five route as **thin orchestrator delegates**
+  // — no command-service-side gen bumping, no pool prep, no
+  // legacy `restartTask` invocation. Production callers that
+  // need composite behavior compose them at the app layer
+  // (`packages/app/src/workflow-actions.ts`).
+
+  describe('Step 17: 5-method canonical lifecycle matrix', () => {
+    it('exposes all five canonical lifecycle methods on the service surface', () => {
+      expect(typeof service.retryTask).toBe('function');
+      expect(typeof service.recreateTask).toBe('function');
+      expect(typeof service.retryWorkflow).toBe('function');
+      expect(typeof service.recreateWorkflow).toBe('function');
+      expect(typeof service.recreateWorkflowFromFreshBase).toBe('function');
+    });
+
+    it('each lifecycle method delegates to its matching orchestrator primitive (no restartTask)', async () => {
+      const restartTaskSpy = vi.fn();
+      (orchestrator as unknown as { restartTask: typeof restartTaskSpy }).restartTask = restartTaskSpy;
+
+      await service.retryTask(makeEnvelope({ taskId: 't-1' }, 'k1'));
+      await service.recreateTask(makeEnvelope({ taskId: 't-2' }, 'k2'));
+      await service.retryWorkflow(makeEnvelope({ workflowId: 'wf-1' }, 'k3'));
+      await service.recreateWorkflow(makeEnvelope({ workflowId: 'wf-2' }, 'k4'));
+      await service.recreateWorkflowFromFreshBase(makeEnvelope({ workflowId: 'wf-3' }, 'k5'));
+
+      expect(orchestrator.retryTask).toHaveBeenCalledWith('t-1');
+      expect(orchestrator.recreateTask).toHaveBeenCalledWith('t-2');
+      expect(orchestrator.retryWorkflow).toHaveBeenCalledWith('wf-1');
+      expect(orchestrator.recreateWorkflow).toHaveBeenCalledWith('wf-2');
+      expect(orchestrator.recreateWorkflowFromFreshBase).toHaveBeenCalledWith('wf-3');
+      expect(restartTaskSpy).not.toHaveBeenCalled();
     });
   });
 

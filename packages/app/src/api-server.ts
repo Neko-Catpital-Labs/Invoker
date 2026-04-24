@@ -41,9 +41,11 @@ import {
   approveTask as sharedApproveTask,
   recreateWorkflow as sharedRecreateWorkflow,
   recreateTask as sharedRecreateTask,
+  recreateWorkflowFromFreshBase as sharedRecreateWorkflowFromFreshBase,
   forkWorkflow as sharedForkWorkflow,
   cancelWorkflow as sharedCancelWorkflow,
   retryTask as sharedRetryTask,
+  retryWorkflow as sharedRetryWorkflow,
   rejectTask as sharedRejectTask,
   provideInput as sharedProvideInput,
   editTaskCommand as sharedEditTaskCommand,
@@ -398,6 +400,60 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
           });
         } catch (err) {
           json(res, 400, { error: err instanceof Error ? err.message : String(err) });
+        }
+        return;
+      }
+
+      const wfRetryMatch = path.match(/^\/api\/workflows\/([^/]+)\/retry$/);
+      if (method === 'POST' && wfRetryMatch) {
+        const workflowId = decodeURIComponent(wfRetryMatch[1]);
+        try {
+          const started = sharedRetryWorkflow(workflowId, { orchestrator });
+          const runnable = started.filter(t => t.status === 'running');
+          await taskExecutor.executeTasks(runnable);
+          await executeGlobalTopup({
+            orchestrator,
+            taskExecutor,
+            logger: apiLogger,
+            context: 'api.workflows.retry',
+            alreadyDispatched: runnable,
+          });
+          json(res, 200, { ok: true, workflowId, action: 'retried', tasksStarted: runnable.length });
+        } catch (err) {
+          json(res, 400, { error: err instanceof Error ? err.message : String(err) });
+        }
+        return;
+      }
+
+      const wfRebaseAndRetryMatch = path.match(/^\/api\/workflows\/([^/]+)\/rebase-and-retry$/);
+      if (method === 'POST' && wfRebaseAndRetryMatch) {
+        const workflowId = decodeURIComponent(wfRebaseAndRetryMatch[1]);
+        try {
+          const started = await sharedRecreateWorkflowFromFreshBase(workflowId, {
+            orchestrator,
+            persistence,
+            taskExecutor,
+            logger: apiLogger,
+          });
+          const runnable = started.filter(t => t.status === 'running');
+          await taskExecutor.executeTasks(runnable);
+          await executeGlobalTopup({
+            orchestrator,
+            taskExecutor,
+            logger: apiLogger,
+            context: 'api.workflows.rebase-and-retry',
+            alreadyDispatched: runnable,
+          });
+          json(res, 200, {
+            ok: true,
+            workflowId,
+            action: 'rebase_and_retried',
+            tasksStarted: runnable.length,
+          });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          const statusCode = message.includes('not found') ? 404 : 400;
+          json(res, statusCode, { error: message });
         }
         return;
       }
