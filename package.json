@@ -18,6 +18,9 @@
     "test:all:destructive": "env INVOKER_TEST_ALL_EXTENDED=1 INVOKER_TEST_ALL_DANGEROUS=1 bash scripts/run-all-tests.sh",
     "setup": "bash scripts/setup-agent-skills.sh",
     "build": "pnpm -r build",
+    "dist:desktop": "bash scripts/package-desktop.sh",
+    "dist:desktop:linux": "bash scripts/package-desktop.sh --linux",
+    "dist:desktop:mac": "bash scripts/package-desktop.sh --mac",
     "build:tsc": "tsc -b tsconfig.build.json",
     "build:tsc:clean": "tsc -b tsconfig.build.json --clean",
     "clean": "pnpm -r clean",
@@ -38,32 +41,10 @@
       "electron"
     ]
   },
-  "build": {
-    "appId": "com.invoker.app",
-    "productName": "Invoker",
-    "directories": {
-      "output": "release"
-    },
-    "files": [
-      "packages/app/dist/**/*"
-    ],
-    "mac": {
-      "target": [
-        "dmg"
-      ],
-      "category": "public.app-category.developer-tools"
-    },
-    "linux": {
-      "target": [
-        "AppImage",
-        "deb"
-      ],
-      "category": "Development"
-    }
-  },
   "devDependencies": {
     "aws4": "^1.13.2",
     "dependency-cruiser": "^17.3.10",
+    "electron-builder": "^26.0.12",
     "tsup": "^8.5.1",
     "typescript": "~5.9.3",
     "yaml": "^2.8.2"
