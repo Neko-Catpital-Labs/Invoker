@@ -104,6 +104,9 @@ fi
 
 if [ "$(uname)" = "Linux" ]; then
   export LIBGL_ALWAYS_SOFTWARE=1
+  DESKTOP_FILE_PATH="$(./scripts/install-linux-desktop-entry.sh)"
+  export BAMF_DESKTOP_FILE_HINT="$DESKTOP_FILE_PATH"
+  export CHROME_DESKTOP="$(basename "$DESKTOP_FILE_PATH")"
 fi
 
 if [ "$(uname)" = "Linux" ] && [ -z "${DISPLAY:-}" ]; then
