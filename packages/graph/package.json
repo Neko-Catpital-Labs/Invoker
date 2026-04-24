@@ -1,6 +1,6 @@
 {
   "name": "@invoker/graph",
-  "version": "0.1.0",
+  "version": "0.0.1",
   "deprecated": "Use @invoker/workflow-graph instead",
   "description": "Pure action graph data structure — nodes, edges, DAG ops, mutations (compatibility layer)",
   "type": "module",
