@@ -3,6 +3,8 @@ import type { TaskState } from '@invoker/workflow-graph';
 export type InvalidationAction =
   | 'none'
   | 'scheduleOnly'
+  | 'fixApprove'
+  | 'fixReject'
   | 'retryTask'
   | 'retryWorkflow'
   | 'recreateTask'
@@ -36,6 +38,8 @@ export type MutationKey =
   | 'fixContext'
   | 'rebaseAndRetry'
   | 'externalGatePolicy'
+  | 'fixApprove'
+  | 'fixReject'
   | 'topology';
 
 export const MUTATION_POLICIES: Readonly<Record<MutationKey, TaskMutationPolicy>> = Object.freeze({
@@ -61,6 +65,8 @@ export const MUTATION_POLICIES: Readonly<Record<MutationKey, TaskMutationPolicy>
   //   - `invalidatesExecutionSpec: false` (no ABI change)
   //   - `invalidateIfActive: false`       (in-flight work survives)
   externalGatePolicy:    { invalidatesExecutionSpec: false, invalidateIfActive: false, action: 'scheduleOnly' as const },
+  fixApprove:            { invalidatesExecutionSpec: false, invalidateIfActive: false, action: 'fixApprove' as const },
+  fixReject:             { invalidatesExecutionSpec: false, invalidateIfActive: false, action: 'fixReject' as const },
   // Step 11 (`docs/architecture/task-invalidation-roadmap.md`): graph
   // topology mutations (e.g. `replaceTask`, `addTask` that changes
   // parent edges) are fork-class / workflow scope. They must NOT
@@ -107,6 +113,8 @@ export interface InvalidationDeps {
    * tasks across the orchestrator.
    */
   scheduleOnly?: (taskId: string) => TaskState[] | Promise<TaskState[]>;
+  fixApprove?: (taskId: string) => TaskState[] | Promise<TaskState[]>;
+  fixReject?: (taskId: string) => TaskState[] | Promise<TaskState[]>;
 }
 
 const TASK_ACTIONS = new Set<InvalidationAction>(['retryTask', 'recreateTask']);
@@ -155,6 +163,23 @@ export async function applyInvalidation(
     // edits do NOT cancel active work and do NOT bump generation.
     // We deliberately skip `deps.cancelInFlight` here.
     return await deps.scheduleOnly(id);
+  }
+
+  if (action === 'fixApprove' || action === 'fixReject') {
+    if (scope !== 'task') {
+      throw new Error(
+        `applyInvalidation: action '${action}' requires scope 'task' (got '${scope}')`,
+      );
+    }
+    const dep = action === 'fixApprove' ? deps.fixApprove : deps.fixReject;
+    if (!dep) {
+      throw new Error(
+        `applyInvalidation: '${action}' dep is missing. ` +
+          'Production callers wire this via buildInvalidationDeps in ' +
+          '@invoker/app/workflow-actions; tests must supply the dep to use this action.',
+      );
+    }
+    return await dep(id);
   }
 
   if (TASK_ACTIONS.has(action) && scope !== 'task') {

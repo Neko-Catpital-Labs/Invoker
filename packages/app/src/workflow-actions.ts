@@ -329,6 +329,17 @@ export function buildInvalidationDeps(
     // method.
     scheduleOnly: (_taskId: string) =>
       deps.orchestrator.autoStartExternallyUnblockedReadyTasks(),
+    fixApprove: async (taskId: string) => {
+      const result = await approveTask(taskId, {
+        orchestrator: deps.orchestrator,
+        taskExecutor: deps.taskExecutor,
+      });
+      return result.started;
+    },
+    fixReject: (taskId: string) => {
+      rejectTask(taskId, { orchestrator: deps.orchestrator });
+      return [];
+    },
   };
 }
 
