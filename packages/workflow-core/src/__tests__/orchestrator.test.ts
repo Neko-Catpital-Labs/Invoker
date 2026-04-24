@@ -8736,4 +8736,204 @@ describe('Orchestrator', () => {
       expect(orchestrator.getTask('A')!.config.command).toBe('echo A-v2');
     });
   });
+
+  // Step 15 (`docs/architecture/task-invalidation-roadmap.md`,
+  // chart row "Change external gate policy"): the orchestrator's
+  // `setTaskExternalGatePolicies` is the engine's intentional
+  // non-invalidating mutation. These tests pin the chart's
+  // contract end-to-end inside the orchestrator: cancel/retry/
+  // recreate are NEVER called, `task.execution.generation` is
+  // unchanged, the persisted gate-policy field changes, and a
+  // task previously blocked on the gate transitions to runnable
+  // via the post-update scheduling pass.
+  describe('setTaskExternalGatePolicies (Step 15 non-invalidating lock-in)', () => {
+    it('does not invoke cancelTask, retryTask, or recreateTask', () => {
+      orchestrator.loadPlan({
+        name: 'gate-prereq',
+        tasks: [{ id: 'verify', description: 'Prereq task' }],
+      });
+      const prereqTaskId = sid(orchestrator, 0, 'verify');
+      const prereqWfId = prereqTaskId.split('/')[0]!;
+      const prereqMergeId = `__merge__${prereqWfId}`;
+
+      orchestrator.loadPlan({
+        name: 'gate-downstream',
+        tasks: [
+          {
+            id: 'leaf',
+            description: 'leaf waits on upstream completion gate',
+            externalDependencies: [{ workflowId: prereqWfId, gatePolicy: 'completed' }],
+          },
+        ],
+      });
+      const leafId = sid(orchestrator, 1, 'leaf');
+
+      orchestrator.startExecution();
+      orchestrator.handleWorkerResponse(makeResponse({ actionId: prereqTaskId, status: 'completed' }));
+      orchestrator.setTaskAwaitingApproval(prereqMergeId);
+      expect(orchestrator.getTask(leafId)!.status).toBe('pending');
+
+      const cancelTaskSpy = vi.spyOn(orchestrator, 'cancelTask');
+      const retryTaskSpy = vi.spyOn(orchestrator, 'retryTask');
+      const recreateTaskSpy = vi.spyOn(orchestrator, 'recreateTask');
+      const cancelWorkflowSpy = vi.spyOn(orchestrator, 'cancelWorkflow');
+
+      orchestrator.setTaskExternalGatePolicies(leafId, [
+        { workflowId: prereqWfId, gatePolicy: 'review_ready' },
+      ]);
+
+      expect(cancelTaskSpy).not.toHaveBeenCalled();
+      expect(retryTaskSpy).not.toHaveBeenCalled();
+      expect(recreateTaskSpy).not.toHaveBeenCalled();
+      expect(cancelWorkflowSpy).not.toHaveBeenCalled();
+
+      cancelTaskSpy.mockRestore();
+      retryTaskSpy.mockRestore();
+      recreateTaskSpy.mockRestore();
+      cancelWorkflowSpy.mockRestore();
+    });
+
+    it("does not bump task.execution.generation on the edited task or upstream", () => {
+      orchestrator.loadPlan({
+        name: 'gate-prereq-gen',
+        tasks: [{ id: 'verify', description: 'Prereq task' }],
+      });
+      const prereqTaskId = sid(orchestrator, 0, 'verify');
+      const prereqWfId = prereqTaskId.split('/')[0]!;
+      const prereqMergeId = `__merge__${prereqWfId}`;
+
+      orchestrator.loadPlan({
+        name: 'gate-downstream-gen',
+        tasks: [
+          {
+            id: 'leaf',
+            description: 'leaf waits on upstream completion gate',
+            externalDependencies: [{ workflowId: prereqWfId, gatePolicy: 'completed' }],
+          },
+        ],
+      });
+      const leafId = sid(orchestrator, 1, 'leaf');
+
+      orchestrator.startExecution();
+      orchestrator.handleWorkerResponse(makeResponse({ actionId: prereqTaskId, status: 'completed' }));
+      orchestrator.setTaskAwaitingApproval(prereqMergeId);
+
+      const genBefore = orchestrator.getTask(leafId)!.execution.generation ?? 0;
+      const upstreamGenBefore = orchestrator.getTask(prereqTaskId)!.execution.generation ?? 0;
+
+      orchestrator.setTaskExternalGatePolicies(leafId, [
+        { workflowId: prereqWfId, gatePolicy: 'review_ready' },
+      ]);
+
+      const genAfter = orchestrator.getTask(leafId)!.execution.generation ?? 0;
+      const upstreamGenAfter = orchestrator.getTask(prereqTaskId)!.execution.generation ?? 0;
+      expect(genAfter).toBe(genBefore);
+      expect(upstreamGenAfter).toBe(upstreamGenBefore);
+    });
+
+    it('persists the updated gate-policy field on the task config', () => {
+      orchestrator.loadPlan({
+        name: 'gate-prereq-persist',
+        tasks: [{ id: 'verify', description: 'Prereq task' }],
+      });
+      const prereqTaskId = sid(orchestrator, 0, 'verify');
+      const prereqWfId = prereqTaskId.split('/')[0]!;
+
+      orchestrator.loadPlan({
+        name: 'gate-downstream-persist',
+        tasks: [
+          {
+            id: 'leaf',
+            description: 'leaf waits on upstream completion gate',
+            externalDependencies: [{ workflowId: prereqWfId, gatePolicy: 'completed' }],
+          },
+        ],
+      });
+      const leafId = sid(orchestrator, 1, 'leaf');
+
+      orchestrator.setTaskExternalGatePolicies(leafId, [
+        { workflowId: prereqWfId, gatePolicy: 'review_ready' },
+      ]);
+
+      const inMemoryDeps = orchestrator.getTask(leafId)!.config.externalDependencies!;
+      expect(inMemoryDeps[0]!.gatePolicy).toBe('review_ready');
+      const persisted = persistence.getTaskEntry(leafId)!.task.config.externalDependencies!;
+      expect(persisted[0]!.gatePolicy).toBe('review_ready');
+    });
+
+    it('transitions a previously gate-blocked task to runnable via the scheduling pass', () => {
+      orchestrator.loadPlan({
+        name: 'gate-prereq-unblock',
+        tasks: [{ id: 'verify', description: 'Prereq task' }],
+      });
+      const prereqTaskId = sid(orchestrator, 0, 'verify');
+      const prereqWfId = prereqTaskId.split('/')[0]!;
+      const prereqMergeId = `__merge__${prereqWfId}`;
+
+      orchestrator.loadPlan({
+        name: 'gate-downstream-unblock',
+        tasks: [
+          {
+            id: 'leaf',
+            description: 'leaf waits on upstream completion gate',
+            externalDependencies: [{ workflowId: prereqWfId, gatePolicy: 'completed' }],
+          },
+        ],
+      });
+      const leafId = sid(orchestrator, 1, 'leaf');
+
+      orchestrator.startExecution();
+      orchestrator.handleWorkerResponse(makeResponse({ actionId: prereqTaskId, status: 'completed' }));
+      orchestrator.setTaskAwaitingApproval(prereqMergeId);
+      expect(orchestrator.getTask(leafId)!.status).toBe('pending');
+
+      const started = orchestrator.setTaskExternalGatePolicies(leafId, [
+        { workflowId: prereqWfId, gatePolicy: 'review_ready' },
+      ]);
+
+      expect(started.map((t) => t.id)).toContain(leafId);
+      expect(orchestrator.getTask(leafId)!.status).toBe('running');
+    });
+
+    it('does NOT cancel an already-running task on the same workflow', () => {
+      orchestrator.loadPlan({
+        name: 'gate-prereq-running',
+        tasks: [{ id: 'verify', description: 'Prereq task' }],
+      });
+      const prereqTaskId = sid(orchestrator, 0, 'verify');
+      const prereqWfId = prereqTaskId.split('/')[0]!;
+      const prereqMergeId = `__merge__${prereqWfId}`;
+
+      orchestrator.loadPlan({
+        name: 'gate-mixed-downstream',
+        tasks: [
+          { id: 'busy', description: 'already running task' },
+          {
+            id: 'leaf',
+            description: 'leaf waits on upstream completion gate',
+            externalDependencies: [{ workflowId: prereqWfId, gatePolicy: 'completed' }],
+          },
+        ],
+      });
+      const busyId = sid(orchestrator, 1, 'busy');
+      const leafId = sid(orchestrator, 1, 'leaf');
+
+      orchestrator.startExecution();
+      orchestrator.handleWorkerResponse(makeResponse({ actionId: prereqTaskId, status: 'completed' }));
+      orchestrator.setTaskAwaitingApproval(prereqMergeId);
+      expect(orchestrator.getTask(busyId)!.status).toBe('running');
+      const busyGenBefore = orchestrator.getTask(busyId)!.execution.generation ?? 0;
+
+      orchestrator.setTaskExternalGatePolicies(leafId, [
+        { workflowId: prereqWfId, gatePolicy: 'review_ready' },
+      ]);
+
+      // The unrelated already-running task keeps its execution
+      // lineage and stays running on the same generation — the
+      // chart's "in-flight work survives" guarantee.
+      expect(orchestrator.getTask(busyId)!.status).toBe('running');
+      const busyGenAfter = orchestrator.getTask(busyId)!.execution.generation ?? 0;
+      expect(busyGenAfter).toBe(busyGenBefore);
+    });
+  });
 });
