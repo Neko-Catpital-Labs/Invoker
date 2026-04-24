@@ -84,13 +84,24 @@ function makeTaskState(overrides: {
 
 describe('rebase-and-retry: pool mirror cleanup before restart', { timeout: 120_000 }, () => {
   let tmpDir: string;
+  let prevCleanupEnv: string | undefined;
 
   beforeEach(() => {
+    // This suite specifically validates managed-branch cleanup behavior, which
+    // is gated behind INVOKER_ENABLE_WORKSPACE_CLEANUP. Force-enable for the
+    // duration of the suite; production default (off) is covered elsewhere.
+    prevCleanupEnv = process.env.INVOKER_ENABLE_WORKSPACE_CLEANUP;
+    process.env.INVOKER_ENABLE_WORKSPACE_CLEANUP = '1';
     tmpDir = createTempRepo();
   });
 
   afterEach(() => {
     rmSync(tmpDir, { recursive: true, force: true });
+    if (prevCleanupEnv === undefined) {
+      delete process.env.INVOKER_ENABLE_WORKSPACE_CLEANUP;
+    } else {
+      process.env.INVOKER_ENABLE_WORKSPACE_CLEANUP = prevCleanupEnv;
+    }
   });
 
   function buildHarness() {

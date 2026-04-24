@@ -11,6 +11,7 @@ import { findManagedWorktreeForBranch, abbrevRefMatchesBranch } from './worktree
 import { DEFAULT_WORKTREE_PROVISION_COMMAND } from './default-worktree-provision-command.js';
 import type { AgentRegistry } from './agent-registry.js';
 import { computeRepoUrlHash, sanitizeBranchForPath } from './git-utils.js';
+import { isWorkspaceCleanupEnabled } from './workspace-cleanup-policy.js';
 import {
   shellPosixSingleQuote as sshGitShellQuote,
   base64Encode as sshGitB64,
@@ -386,11 +387,17 @@ echo ${payloadB64} | base64 -d | bash -se
       case 'rename_reuse':
         throw new Error('SSH managed workspaces do not support same-task different-branch rename reuse');
       case 'recreate': {
-        const cleanupScript = buildWorktreeCleanupScript({
-          remoteClone,
-          worktreePaths: worktreePlan.cleanupPaths,
-        });
-        await this.execRemoteCapture(cleanupScript, 'cleanup_worktree');
+        // Workspace cleanup is gated by INVOKER_ENABLE_WORKSPACE_CLEANUP. With
+        // attemptId mixed into the branch hash, the canonical worktree path
+        // for the new attempt has never existed, so cleanup is unnecessary
+        // for correctness. Re-enable the env flag if you need disk hygiene.
+        if (isWorkspaceCleanupEnabled()) {
+          const cleanupScript = buildWorktreeCleanupScript({
+            remoteClone,
+            worktreePaths: worktreePlan.cleanupPaths,
+          });
+          await this.execRemoteCapture(cleanupScript, 'cleanup_worktree');
+        }
         remoteWt = canonicalRemoteWt;
         break;
       }
