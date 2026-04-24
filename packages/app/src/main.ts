@@ -31,7 +31,7 @@
 
 import { app, BrowserWindow, ipcMain, nativeImage, shell } from 'electron';
 import * as path from 'node:path';
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 
 const enableTestCompositor = process.env.INVOKER_E2E_ENABLE_COMPOSITOR === '1' || Boolean(process.env.CAPTURE_MODE);
 
@@ -109,6 +109,7 @@ import {
 } from './workflow-actions.js';
 import { spawn, execSync } from 'node:child_process';
 import { openExternalTerminalForTask } from './open-terminal-for-task.js';
+import { collectSystemDiagnostics } from './system-diagnostics.js';
 import { createRequire } from 'node:module';
 import { acquireDbWriterLock, type DbWriterLockResult } from './db-writer-lock.js';
 import { applyDelta } from './delta-merge.js';
@@ -1806,7 +1807,9 @@ if (isHeadless) {
     if (devUrl) {
       mainWindow.loadURL(devUrl);
     } else {
-      const uiDistPath = path.join(__dirname, '..', '..', 'ui', 'dist', 'index.html');
+      const packagedUiPath = path.join(__dirname, 'ui', 'index.html');
+      const repoUiPath = path.join(__dirname, '..', '..', 'ui', 'dist', 'index.html');
+      const uiDistPath = existsSync(packagedUiPath) ? packagedUiPath : repoUiPath;
       mainWindow.loadFile(uiDistPath).catch(() => {
         mainWindow?.loadURL(
           `data:text/html,<html><body style="background:#1a1a2e;color:#eee;font-family:system-ui;padding:2rem"><h1>Invoker</h1><p>UI not built yet. Run: <code>pnpm --filter @invoker/ui build</code></p></body></html>`,
@@ -3226,6 +3229,15 @@ if (isHeadless) {
 
     ipcMain.handle('invoker:get-execution-agents', () => {
       return agentRegistry.listExecution().map(a => a.name);
+    });
+
+    ipcMain.handle('invoker:get-system-diagnostics', () => {
+      return collectSystemDiagnostics({
+        appVersion: app.getVersion(),
+        isPackaged: app.isPackaged,
+        platform: process.platform,
+        arch: process.arch,
+      });
     });
 
     registerGuiMutationHandler('invoker:replace-task', async (taskIdArg: unknown, replacementTasksArg: unknown) => {

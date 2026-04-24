@@ -33,6 +33,16 @@ pnpm run build
 
 Invoker does not provision machines for you. You are responsible for bringing your own local workstation, VM, container host, or remote machines and making sure the required tools are installed there before running workflows.
 
+For packaged installs, prefer GitHub Releases or the installer script:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Neko-Catpital-Labs/Invoker/master/scripts/install.sh | bash
+```
+
+Release artifacts are intended to ship as:
+- macOS: `.dmg`
+- Linux: `.deb` and `.AppImage`
+
 ## Quick start
 
 Start here if you want to get Invoker running locally with the smallest possible setup.
