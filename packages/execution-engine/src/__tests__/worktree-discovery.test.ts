@@ -3,6 +3,8 @@ import {
   parseGitWorktreePorcelain,
   findManagedWorktreeForBranch,
   findManagedWorktreeByActionId,
+  findManagedWorktreeByContent,
+  findContentHashCollisions,
   abbrevRefMatchesBranch,
   parseExperimentBranch,
 } from '../worktree-discovery.js';
@@ -161,6 +163,124 @@ describe('parseExperimentBranch (round-trip with buildExperimentBranchName)', ()
     expect(parseExperimentBranch('experiment/wf-1/task/g0.t0.a-NOTHEX1')).toBeUndefined();
     expect(parseExperimentBranch('experiment/wf-1/task/g0.t0-deadbeef')).toBeUndefined();
     expect(parseExperimentBranch('experiment/wf-1/task/garbage-deadbeef')).toBeUndefined();
+  });
+});
+
+describe('findManagedWorktreeByContent', () => {
+  const porcelain = `worktree /home/u/.invoker/wt/h/experiment-wf-1-task-g0.t0.aaaa11111-deadbeef
+HEAD a
+branch refs/heads/experiment/wf-1/task/g0.t0.aaaa11111-deadbeef
+
+worktree /home/u/.invoker/wt/h/experiment-wf-1-other-g0.t0.abbb22222-deadbeef
+HEAD b
+branch refs/heads/experiment/wf-1/other/g0.t0.abbb22222-deadbeef
+`;
+
+  it('finds an Invoker-managed worktree by actionId + contentHash', () => {
+    const hit = findManagedWorktreeByContent(
+      porcelain,
+      'wf-1/task',
+      'deadbeef',
+      ['/home/u/.invoker/wt/h'],
+    );
+    expect(hit).toEqual({
+      path: '/home/u/.invoker/wt/h/experiment-wf-1-task-g0.t0.aaaa11111-deadbeef',
+      branch: 'experiment/wf-1/task/g0.t0.aaaa11111-deadbeef',
+      lifecycleTag: 'g0.t0.aaaa11111',
+      contentHash: 'deadbeef',
+    });
+  });
+
+  it('returns undefined when actionId differs', () => {
+    const hit = findManagedWorktreeByContent(
+      porcelain,
+      'wf-1/missing',
+      'deadbeef',
+      ['/home/u/.invoker/wt/h'],
+    );
+    expect(hit).toBeUndefined();
+  });
+
+  it('returns undefined when contentHash differs', () => {
+    const hit = findManagedWorktreeByContent(
+      porcelain,
+      'wf-1/task',
+      'cafebabe',
+      ['/home/u/.invoker/wt/h'],
+    );
+    expect(hit).toBeUndefined();
+  });
+
+  it('ignores worktrees outside managed prefixes', () => {
+    const hit = findManagedWorktreeByContent(
+      porcelain,
+      'wf-1/task',
+      'deadbeef',
+      ['/other/prefix'],
+    );
+    expect(hit).toBeUndefined();
+  });
+
+  it('ignores legacy-format branches', () => {
+    const legacy = `worktree /home/u/.invoker/wt/h/experiment-wf-1-task-deadbeef
+HEAD a
+branch refs/heads/experiment/wf-1/task-deadbeef
+`;
+    const hit = findManagedWorktreeByContent(
+      legacy,
+      'wf-1/task',
+      'deadbeef',
+      ['/home/u/.invoker/wt/h'],
+    );
+    expect(hit).toBeUndefined();
+  });
+});
+
+describe('findContentHashCollisions', () => {
+  const porcelain = `worktree /home/u/.invoker/wt/h/experiment-wf-1-task-g0.t0.aaaa-deadbeef
+HEAD a
+branch refs/heads/experiment/wf-1/task/g0.t0.aaaa-deadbeef
+
+worktree /home/u/.invoker/wt/h/experiment-wf-2-other-g0.t0.abbb-deadbeef
+HEAD b
+branch refs/heads/experiment/wf-2/other/g0.t0.abbb-deadbeef
+
+worktree /home/u/.invoker/wt/h/experiment-wf-3-x-g0.t0.accc-cafebabe
+HEAD c
+branch refs/heads/experiment/wf-3/x/g0.t0.accc-cafebabe
+`;
+
+  it('returns cross-actionId worktrees that share the contentHash', () => {
+    const hits = findContentHashCollisions(
+      porcelain,
+      'deadbeef',
+      'wf-1/task',
+      ['/home/u/.invoker/wt/h'],
+    );
+    expect(hits).toHaveLength(1);
+    expect(hits[0].branch).toBe('experiment/wf-2/other/g0.t0.abbb-deadbeef');
+  });
+
+  it('returns [] when no other actionId shares the hash', () => {
+    const hits = findContentHashCollisions(
+      porcelain,
+      'cafebabe',
+      'wf-3/x',
+      ['/home/u/.invoker/wt/h'],
+    );
+    expect(hits).toHaveLength(0);
+  });
+
+  it('does not flag the requesting actionId itself even if its branch is on disk', () => {
+    const hits = findContentHashCollisions(
+      porcelain,
+      'deadbeef',
+      'wf-2/other',
+      ['/home/u/.invoker/wt/h'],
+    );
+    expect(hits.map((h) => h.branch)).toEqual([
+      'experiment/wf-1/task/g0.t0.aaaa-deadbeef',
+    ]);
   });
 });
 
