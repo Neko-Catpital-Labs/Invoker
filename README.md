@@ -2,7 +2,7 @@
 
 **Persisted workflow orchestration: a DAG of tasks in isolated workspaces, composed through git branches, merge gates, and review.**
 
-Current version: `0.1.0`. Version history lives in [CHANGELOG.md](CHANGELOG.md).
+Current version: `0.0.1`. Version history lives in [CHANGELOG.md](CHANGELOG.md).
 
 ## Overview
 
