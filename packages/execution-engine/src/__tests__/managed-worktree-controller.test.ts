@@ -77,6 +77,54 @@ describe('planManagedWorktree', () => {
     });
   });
 
+  it('renames a content-equivalent worktree to the new lifecycle tag (reuse_by_content)', () => {
+    const plan = planManagedWorktree({
+      targetBranch: 'experiment/wf-1/task/g0.t1.aabc12345-deadbeef',
+      targetWorktreePath: '/wt/target',
+      contentCandidate: {
+        path: '/wt/leftover',
+        branch: 'experiment/wf-1/task/g0.t0.axyz98765-deadbeef',
+      },
+    });
+
+    expect(plan).toEqual({
+      kind: 'rename_to_lifecycle',
+      worktreePath: '/wt/leftover',
+      fromBranch: 'experiment/wf-1/task/g0.t0.axyz98765-deadbeef',
+      toBranch: 'experiment/wf-1/task/g0.t1.aabc12345-deadbeef',
+    });
+  });
+
+  it('honours rename_to_lifecycle even when forceFresh=true (cache-equivalent reuse)', () => {
+    const plan = planManagedWorktree({
+      targetBranch: 'experiment/wf-1/task/g0.t1.aabc12345-deadbeef',
+      targetWorktreePath: '/wt/target',
+      forceFresh: true,
+      contentCandidate: {
+        path: '/wt/leftover',
+        branch: 'experiment/wf-1/task/g0.t0.axyz98765-deadbeef',
+      },
+    });
+
+    expect(plan.kind).toBe('rename_to_lifecycle');
+  });
+
+  it('does nothing special when contentCandidate matches the target branch exactly', () => {
+    // Caller is expected to filter this case (an exact-branch reuse should
+    // already have been chosen), but the planner should not pick the
+    // rename_to_lifecycle plan if from === to.
+    const plan = planManagedWorktree({
+      targetBranch: 'experiment/wf-1/task/g0.t1.aabc12345-deadbeef',
+      targetWorktreePath: '/wt/target',
+      contentCandidate: {
+        path: '/wt/leftover',
+        branch: 'experiment/wf-1/task/g0.t1.aabc12345-deadbeef',
+      },
+    });
+
+    expect(plan.kind).toBe('recreate');
+  });
+
   it('creates fresh when an actionId worktree exists but its base is stale', () => {
     const plan = planManagedWorktree({
       targetBranch: 'experiment/wf/task-5678',

@@ -180,6 +180,80 @@ describe('RepoPool', () => {
     await limitedPool.destroyAll();
   });
 
+  describe('content-addressable reuse (collision-free branch names)', () => {
+    // Collision-free naming guarantees: same actionId + content → same workspace
+    // can be reused under a new lifecycle tag (rename_to_lifecycle), and a hash
+    // collision across actionIds is logged but not fatal.
+
+    it('reuses a content-equivalent leftover worktree by renaming the branch (rename_to_lifecycle)', async () => {
+      const actionId = 'wf-rl-1/task';
+      const branchA = `experiment/${actionId}/g0.t0.aaaa-deadbe11`;
+      const branchB = `experiment/${actionId}/g0.t1.abbb-deadbe11`;
+
+      const wt1 = await pool.acquireWorktree(localRepoUrl, branchA, undefined, actionId);
+      const path1 = wt1.worktreePath;
+      expect(existsSync(path1)).toBe(true);
+      // Simulate a crash/abandon: do not release; new pool sees the leftover.
+      wt1.softRelease();
+
+      const pool2 = new RepoPool({ cacheDir: tmpDir });
+      const wt2 = await pool2.acquireWorktree(localRepoUrl, branchB, undefined, actionId);
+      // The acquire should *reuse* the leftover worktree by renaming the branch.
+      expect(wt2.worktreePath).toBe(path1);
+      const head = execSync('git branch --show-current', { cwd: wt2.worktreePath }).toString().trim();
+      expect(head).toBe(branchB);
+      await pool2.destroyAll();
+    });
+
+    it('rename_to_lifecycle wins even when forceFresh=true (cache-equivalent reuse)', async () => {
+      const actionId = 'wf-rl-2/task';
+      const branchA = `experiment/${actionId}/g0.t0.aaaa-cafebabe`;
+      const branchB = `experiment/${actionId}/g1.t0.abbb-cafebabe`;
+
+      const wt1 = await pool.acquireWorktree(localRepoUrl, branchA, undefined, actionId);
+      const path1 = wt1.worktreePath;
+      wt1.softRelease();
+
+      const pool2 = new RepoPool({ cacheDir: tmpDir });
+      const wt2 = await pool2.acquireWorktree(
+        localRepoUrl,
+        branchB,
+        undefined,
+        actionId,
+        { forceFresh: true },
+      );
+      expect(wt2.worktreePath).toBe(path1);
+      await pool2.destroyAll();
+    });
+
+    it('still provisions a second worktree when two actionIds share a contentHash', async () => {
+      const sharedHash = '12345678';
+      const branchA = `experiment/wf-collide/taskA/g0.t0.aaaa-${sharedHash}`;
+      const branchB = `experiment/wf-collide/taskB/g0.t0.abbb-${sharedHash}`;
+
+      // Seed pool with one worktree at the colliding hash.
+      await pool.acquireWorktree(localRepoUrl, branchA, undefined, 'wf-collide/taskA');
+
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        // Acquiring a second branch with the same contentHash but different
+        // actionId must NOT throw. This branch only keeps trace-level
+        // telemetry for that collision path, so warn-level output is not
+        // part of the contract here.
+        const wt2 = await pool.acquireWorktree(
+          localRepoUrl,
+          branchB,
+          undefined,
+          'wf-collide/taskB',
+        );
+        expect(existsSync(wt2.worktreePath)).toBe(true);
+        expect(warnSpy).not.toHaveBeenCalled();
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+  });
+
   it('resets branch on re-acquire when no extra commits exist', async () => {
     // First acquire (no extra commits)
     const wt1 = await pool.acquireWorktree(localRepoUrl, 'experiment/clean-test');
