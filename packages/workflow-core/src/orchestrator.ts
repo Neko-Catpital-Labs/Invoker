@@ -2029,6 +2029,16 @@ export class Orchestrator {
       }
     }
 
+    const oldExecutorType = task.config.executorType;
+    const oldRemoteTargetId =
+      oldExecutorType === 'ssh' ? task.config.remoteTargetId : undefined;
+    const newRemoteTargetId = effectiveType === 'ssh' ? remoteTargetId : undefined;
+    const hostKey = (et: string | undefined, rid: string | undefined): string =>
+      et === 'ssh' ? `ssh:${rid ?? ''}` : 'local';
+    const hostChanged =
+      hostKey(oldExecutorType, oldRemoteTargetId) !==
+      hostKey(effectiveType, newRemoteTargetId);
+
     if (task.status === 'running' || task.status === 'fixing_with_ai') {
       this.cancelTask(taskId);
     }
@@ -2045,7 +2055,7 @@ export class Orchestrator {
     this.persistence.logEvent?.(taskId, 'task.updated', typeChanges);
     this.messageBus.publish(TASK_DELTA_CHANNEL, typeDelta);
 
-    return this.restartTask(taskId);
+    return hostChanged ? this.recreateTask(taskId) : this.restartTask(taskId);
   }
 
     editTaskAgent(taskId: string, agentName: string): TaskState[] {

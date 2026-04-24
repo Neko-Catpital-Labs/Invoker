@@ -625,6 +625,23 @@ describe('POST /api/tasks/:id/edit-type', () => {
     expect(res.status).toBe(400);
     expect(res.body.error).toContain('Missing "executorType"');
   });
+
+  it('forwards a remoteTargetId-only change (host change) so the orchestrator can take the recreate-class branch', async () => {
+    const res = await request(port, 'POST', '/api/tasks/task-1/edit-type', {
+      executorType: 'ssh',
+      remoteTargetId: 'remote-b',
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.action).toBe('type_edited');
+    // Both args are forwarded — `Orchestrator.editTaskType` uses them
+    // to compute the host-key and pick the recreate-class fork
+    // (see `MUTATION_POLICIES.remoteTargetId` and orchestrator unit
+    // coverage). No new public surface; the recreate-vs-retry choice
+    // is internal.
+    expect(mocks.orchestrator.editTaskType).toHaveBeenCalledWith('task-1', 'ssh', 'remote-b');
+    expect(mocks.taskExecutor.executeTasks).toHaveBeenCalled();
+  });
 });
 
 describe('POST /api/tasks/:id/edit-agent', () => {
