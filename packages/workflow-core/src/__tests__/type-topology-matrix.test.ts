@@ -405,7 +405,7 @@ describe('Type × Topology Matrix', () => {
       );
       expect(orchestrator.getTask('A')!.execution.agentSessionId).toBe('sess-1');
 
-      orchestrator.restartTask('A');
+      orchestrator.retryTask('A');
       const restarted = orchestrator.getTask('A')!;
       expect(restarted.status).toBe('running');
       expect(restarted.execution.commit).toBeUndefined();

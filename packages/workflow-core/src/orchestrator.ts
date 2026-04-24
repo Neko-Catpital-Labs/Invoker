@@ -1805,25 +1805,29 @@ export class Orchestrator {
     return started;
   }
 
-  /**
-   * Restart a non-running task: reset it to pending, unblock dependents,
-   * and auto-start if its own dependencies are satisfied.
-   */
   restartTask(taskId: string): TaskState[] {
+    console.warn(
+      `[orchestrator] restartTask("${taskId}") is deprecated. Routing to recreateTask. ` +
+        'Use retryTask() for lineage-preserving reset or recreateTask() for fresh-lineage reset explicitly.',
+    );
+    return this.recreateTask(taskId);
+  }
+
+  retryTask(taskId: string): TaskState[] {
     this.refreshFromDb();
     const task = this.stateGetTask(taskId);
     if (!task) throw new Error(`Task ${taskId} not found`);
     const id = task.id;
 
     const prevStatus = task.status;
-    console.log(`[orchestrator] restartTask "${id}" (was ${prevStatus})`);
+    console.log(`[orchestrator] retryTask "${id}" (was ${prevStatus})`);
     if (task.config.isMergeNode) {
       console.log(
-        `[merge-gate-workspace] restartTask mergeNode=${id} ` +
+        `[merge-gate-workspace] retryTask mergeNode=${id} ` +
           `before reset workspacePath=${task.execution.workspacePath ?? 'none'} ` +
-          '(restartTask does not clear workspacePath)',
+          '(retryTask does not clear workspacePath)',
       );
-      mergeTrace('GATE_WS_RESTART_TASK_MERGE', {
+      mergeTrace('GATE_WS_RETRY_TASK_MERGE', {
         taskId: id,
         workspacePathBefore: task.execution.workspacePath ?? null,
       });
@@ -1847,7 +1851,7 @@ export class Orchestrator {
     };
     const t0 = this.stateGetTask(id)!;
     console.log(
-      `[agent-session-trace] restartTask: before writeAndSync task="${id}" agentSessionId=${t0.execution.agentSessionId ?? 'null'} ` +
+      `[agent-session-trace] retryTask: before writeAndSync task="${id}" agentSessionId=${t0.execution.agentSessionId ?? 'null'} ` +
         '(reset clears agentSessionId/containerId; branch/workspacePath unchanged)',
     );
     const { affectedIds } = this.resetSubgraphToPending([id], resetChanges, {
@@ -1855,27 +1859,27 @@ export class Orchestrator {
     });
     const afterRt = this.stateGetTask(id)!;
     console.log(
-      `[agent-session-trace] restartTask: after writeAndSync task="${id}" agentSessionId=${afterRt.execution.agentSessionId ?? 'null'}`,
+      `[agent-session-trace] retryTask: after writeAndSync task="${id}" agentSessionId=${afterRt.execution.agentSessionId ?? 'null'}`,
     );
     if (afterRt.config.isMergeNode) {
       console.log(
-        `[merge-gate-workspace] restartTask mergeNode=${id} ` +
+        `[merge-gate-workspace] retryTask mergeNode=${id} ` +
           `after reset workspacePath=${afterRt.execution.workspacePath ?? 'none'}`,
       );
-      mergeTrace('GATE_WS_RESTART_TASK_MERGE_AFTER', {
+      mergeTrace('GATE_WS_RETRY_TASK_MERGE_AFTER', {
         taskId: id,
         workspacePathAfter: afterRt.execution.workspacePath ?? null,
       });
     }
     if (affectedIds.length > 1) {
       console.log(
-        `[orchestrator] restartTask "${id}": invalidated ${affectedIds.length - 1} downstream task(s)`,
+        `[orchestrator] retryTask "${id}": invalidated ${affectedIds.length - 1} downstream task(s)`,
       );
     }
 
     const readyTasks = this.stateMachine.getReadyTasks();
     const isReady = readyTasks.some((t) => t.id === id);
-    console.log(`[orchestrator] restartTask "${id}": ready=${isReady}`);
+    console.log(`[orchestrator] retryTask "${id}": ready=${isReady}`);
     if (isReady) {
       const started = this.autoStartReadyTasks([id], Orchestrator.EXPEDITED_PRIORITY);
       if (started.some((t) => t.id === id)) return started;
@@ -2387,7 +2391,7 @@ export class Orchestrator {
     this.persistence.logEvent?.(taskId, 'task.updated', typeChanges);
     this.messageBus.publish(TASK_DELTA_CHANNEL, typeDelta);
 
-    return hostChanged ? this.recreateTask(taskId) : this.restartTask(taskId);
+    return hostChanged ? this.recreateTask(taskId) : this.retryTask(taskId);
   }
 
     editTaskAgent(taskId: string, agentName: string): TaskState[] {
@@ -2545,7 +2549,7 @@ export class Orchestrator {
     // generation exactly once via `withBumpedExecutionGeneration`
     // while preserving branch/workspacePath lineage — the chart's
     // retry-class semantics for merge-mode mutations.
-    return this.restartTask(taskId);
+    return this.retryTask(taskId);
   }
 
   /**
@@ -2694,7 +2698,7 @@ export class Orchestrator {
     // `withBumpedExecutionGeneration` while preserving branch /
     // workspacePath lineage — the chart's "retry from reverted
     // failed state" baseline for fix-context mutations.
-    return this.restartTask(taskId);
+    return this.retryTask(taskId);
   }
 
   /**

@@ -13,7 +13,7 @@ import {
   recreateWorkflow,
   recreateTask,
   cancelWorkflow,
-  restartTask,
+  retryTask,
   approveTask,
   rejectTask,
   provideInput,
@@ -172,16 +172,16 @@ describe('cancelWorkflow', () => {
   });
 });
 
-describe('restartTask', () => {
-  it('calls orchestrator.restartTask and returns result', () => {
+describe('retryTask', () => {
+  it('calls orchestrator.retryTask and returns result', () => {
     const tasks = [makeRunningTask()];
-    const orchestrator = { restartTask: vi.fn(() => tasks) };
+    const orchestrator = { retryTask: vi.fn(() => tasks) };
 
-    const result = restartTask('task-a', {
+    const result = retryTask('task-a', {
       orchestrator: orchestrator as unknown as Orchestrator,
     });
 
-    expect(orchestrator.restartTask).toHaveBeenCalledWith('task-a');
+    expect(orchestrator.retryTask).toHaveBeenCalledWith('task-a');
     expect(result).toBe(tasks);
   });
 });
@@ -464,7 +464,7 @@ describe('autoFixOnFailure', () => {
       })),
       getAutoFixRetryBudget: vi.fn(() => 3),
       beginConflictResolution: vi.fn(() => ({ savedError: 'boom' })),
-      restartTask: vi.fn(() => started),
+      retryTask: vi.fn(() => started),
       revertConflictResolution: vi.fn(),
     };
     const persistence = {
@@ -487,7 +487,7 @@ describe('autoFixOnFailure', () => {
     expect(orchestrator.beginConflictResolution).toHaveBeenCalledWith('task-a');
     expect(taskExecutor.fixWithAgent).toHaveBeenCalledWith('task-a', 'test output', 'claude', 'boom');
     expect(taskExecutor.resolveConflict).not.toHaveBeenCalled();
-    expect(orchestrator.restartTask).toHaveBeenCalledWith('task-a');
+    expect(orchestrator.retryTask).toHaveBeenCalledWith('task-a');
     expect(taskExecutor.executeTasks).toHaveBeenCalledWith(started);
   });
 
@@ -506,7 +506,7 @@ describe('autoFixOnFailure', () => {
       })),
       getAutoFixRetryBudget: vi.fn(() => 3),
       beginConflictResolution: vi.fn(() => ({ savedError: mergeError })),
-      restartTask: vi.fn(() => started),
+      retryTask: vi.fn(() => started),
       revertConflictResolution: vi.fn(),
     };
     const persistence = {
@@ -529,7 +529,7 @@ describe('autoFixOnFailure', () => {
     expect(orchestrator.beginConflictResolution).toHaveBeenCalledWith('task-a');
     expect(taskExecutor.resolveConflict).toHaveBeenCalledWith('task-a', mergeError, 'claude');
     expect(taskExecutor.fixWithAgent).not.toHaveBeenCalled();
-    expect(orchestrator.restartTask).toHaveBeenCalledWith('task-a');
+    expect(orchestrator.retryTask).toHaveBeenCalledWith('task-a');
     expect(taskExecutor.executeTasks).toHaveBeenCalledWith(started);
   });
 
@@ -548,7 +548,7 @@ describe('autoFixOnFailure', () => {
       })),
       getAutoFixRetryBudget: vi.fn(() => 3),
       beginConflictResolution: vi.fn(() => ({ savedError: mergeError })),
-      restartTask: vi.fn(() => started),
+      retryTask: vi.fn(() => started),
       revertConflictResolution: vi.fn(),
     };
     const persistence = {
@@ -586,7 +586,7 @@ describe('autoFixOnFailure', () => {
       })),
       getAutoFixRetryBudget: vi.fn(() => 3),
       beginConflictResolution: vi.fn(() => ({ savedError: 'boom' })),
-      restartTask: vi.fn(() => []),
+      retryTask: vi.fn(() => []),
       setFixAwaitingApproval: vi.fn(),
       approve: vi.fn().mockResolvedValue(started),
       revertConflictResolution: vi.fn(),
@@ -622,7 +622,7 @@ describe('autoFixOnFailure', () => {
         }),
       }),
     );
-    expect(orchestrator.restartTask).not.toHaveBeenCalled();
+    expect(orchestrator.retryTask).not.toHaveBeenCalled();
     expect(taskExecutor.publishAfterFix).toHaveBeenCalledWith(started[0]);
   });
 
@@ -679,7 +679,7 @@ describe('autoFixOnFailure', () => {
       getTask,
       getAutoFixRetryBudget: vi.fn(() => 3),
       beginConflictResolution: vi.fn(() => ({ savedError: 'boom' })),
-      restartTask: vi.fn(() => []),
+      retryTask: vi.fn(() => []),
       setFixAwaitingApproval: vi.fn(),
       approve: vi.fn().mockResolvedValue(started),
       resumeTaskAfterFixApproval: vi.fn().mockResolvedValue(started),
@@ -720,7 +720,7 @@ describe('autoFixOnFailure', () => {
         phase: 'auto-fix-post-route-inline-retry',
       }),
     );
-    expect(orchestrator.restartTask).not.toHaveBeenCalled();
+    expect(orchestrator.retryTask).not.toHaveBeenCalled();
   });
 
   it('prefers config.autoFixAgent over task executionAgent', async () => {
@@ -736,7 +736,7 @@ describe('autoFixOnFailure', () => {
       })),
       getAutoFixRetryBudget: vi.fn(() => 3),
       beginConflictResolution: vi.fn(() => ({ savedError: 'boom' })),
-      restartTask: vi.fn(() => started),
+      retryTask: vi.fn(() => started),
       revertConflictResolution: vi.fn(),
     };
     const persistence = {
@@ -786,7 +786,7 @@ describe('autoFixOnFailure', () => {
       })),
       getAutoFixRetryBudget: vi.fn(() => 3),
       beginConflictResolution: vi.fn(() => ({ savedError: 'boom' })),
-      restartTask: vi.fn(() => started),
+      retryTask: vi.fn(() => started),
       revertConflictResolution: vi.fn(),
     };
     const persistence = {
@@ -837,7 +837,7 @@ describe('autoFixOnFailure', () => {
       })),
       getAutoFixRetryBudget: vi.fn(() => 3),
       beginConflictResolution: vi.fn(() => ({ savedError: mergeError })),
-      restartTask: vi.fn(() => started),
+      retryTask: vi.fn(() => started),
       revertConflictResolution: vi.fn(),
     };
     const persistence = {
@@ -1097,7 +1097,7 @@ describe('buildCancelInFlight', () => {
 describe('buildInvalidationDeps', () => {
   function makeBaseOrchestrator() {
     return {
-      restartTask: vi.fn(() => [makeRunningTask({ id: 'task-a' })]),
+      retryTask: vi.fn(() => [makeRunningTask({ id: 'task-a' })]),
       recreateTask: vi.fn(() => [makeRunningTask({ id: 'task-a' })]),
       retryWorkflow: vi.fn(() => [makeRunningTask({ id: 'task-a' })]),
       recreateWorkflow: vi.fn(() => [makeRunningTask({ id: 'task-a' })]),
@@ -1112,7 +1112,7 @@ describe('buildInvalidationDeps', () => {
     };
   }
 
-  it('routes retryTask to orchestrator.restartTask (compat wire for Step 13)', async () => {
+  it('routes retryTask to orchestrator.retryTask', async () => {
     const orchestrator = makeBaseOrchestrator();
     const persistence = makePersistence();
 
@@ -1122,7 +1122,7 @@ describe('buildInvalidationDeps', () => {
     });
     const result = await deps.retryTask('task-a');
 
-    expect(orchestrator.restartTask).toHaveBeenCalledWith('task-a');
+    expect(orchestrator.retryTask).toHaveBeenCalledWith('task-a');
     expect(orchestrator.recreateTask).not.toHaveBeenCalled();
     expect(result).toHaveLength(1);
   });

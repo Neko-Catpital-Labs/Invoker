@@ -45,7 +45,7 @@ describe('TaskStateMachine', () => {
       expect((sm as any).failTask).toBeUndefined();
       expect((sm as any).createTask).toBeUndefined();
       expect((sm as any).updateTaskFields).toBeUndefined();
-      expect((sm as any).restartTask).toBeUndefined();
+      expect((sm as any).retryTask).toBeUndefined();
       expect((sm as any).markStale).toBeUndefined();
       expect((sm as any).approveTask).toBeUndefined();
       expect((sm as any).rejectTask).toBeUndefined();

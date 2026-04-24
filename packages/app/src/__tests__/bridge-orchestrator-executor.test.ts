@@ -197,7 +197,7 @@ describe('Flow 1: rebase-and-retry', () => {
 
     // Restart merge gate only
     h.git.reset();
-    const restarted = h.orchestrator.restartTask(mergeId);
+    const restarted = h.orchestrator.retryTask(mergeId);
     expect(restarted.some(t => t.id === mergeId && t.status === 'running')).toBe(true);
 
     // Leaf tasks should still be completed
@@ -333,7 +333,7 @@ describe('Flow 1b: rebase-and-retry from any node', () => {
 
     // Clean rebase: restart merge gate only
     h.git.reset();
-    const restarted = h.orchestrator.restartTask(foundMerge!.id);
+    const restarted = h.orchestrator.retryTask(foundMerge!.id);
     expect(restarted.some(t => t.id === mergeId && t.status === 'running')).toBe(true);
 
     // Leaf tasks stay completed
@@ -404,8 +404,8 @@ describe('Flow 2: restart task', () => {
     expect(h.getTask('A')!.status).toBe('completed');
     expect(h.getTask('B')!.status).toBe('running');
 
-    // Restart A — B is running (not blocked), so restartTask only resets A
-    h.orchestrator.restartTask('A');
+    // Restart A — B is running (not blocked), so retryTask only resets A
+    h.orchestrator.retryTask('A');
 
     // A should be running (no deps, auto-started)
     expect(h.getTask('A')!.status).toBe('running');
@@ -419,7 +419,7 @@ describe('Flow 2: restart task', () => {
     expect(h.getTask('B')!.status).toBe('pending');
 
     // Restart A
-    h.orchestrator.restartTask('A');
+    h.orchestrator.retryTask('A');
     expect(h.getTask('A')!.status).toBe('running');
 
     // Complete A -> B should unblock
@@ -713,7 +713,7 @@ describe('Flow 6b: set-merge-branch', () => {
     h.persistence.updateWorkflow(wfId, { baseBranch: 'develop' });
 
     // Restart merge gate
-    const restarted = h.orchestrator.restartTask(mergeId);
+    const restarted = h.orchestrator.retryTask(mergeId);
     expect(restarted.some(t => t.id === mergeId && t.status === 'running')).toBe(true);
 
     // Re-execute merge gate (it will re-run with new baseBranch)
@@ -864,11 +864,11 @@ describe('Flow 7: orphan relaunch on restart', () => {
     // t1 is still 'running' in the DB — orphaned
     expect(orchestrator2.getTask('A')?.status).toBe('running');
 
-    // Reconcile: restartTask resets to pending, auto-starts (deps met)
+    // Reconcile: retryTask resets to pending, auto-starts (deps met)
     const restarted: TaskState[] = [];
     for (const task of orchestrator2.getAllTasks()) {
       if (task.status === 'running') {
-        const started = orchestrator2.restartTask(task.id);
+        const started = orchestrator2.retryTask(task.id);
         restarted.push(...started.filter(t => t.status === 'running'));
       }
     }
@@ -920,7 +920,7 @@ describe('Flow 7: orphan relaunch on restart', () => {
     const restarted: TaskState[] = [];
     for (const task of orchestrator2.getAllTasks()) {
       if (task.status === 'running') {
-        const started = orchestrator2.restartTask(task.id);
+        const started = orchestrator2.retryTask(task.id);
         restarted.push(...started.filter(t => t.status === 'running'));
       }
     }
@@ -1552,8 +1552,8 @@ describe('Flow: scheduler health across experiment lifecycle', () => {
     const wfId = h.orchestrator.getWorkflowIds()[0];
     h.orchestrator.syncFromDb(wfId);
 
-    // The scheduler still has a slot for A (leaked). restartTask triggers drainScheduler.
-    const restarted = h.orchestrator.restartTask('A');
+    // The scheduler still has a slot for A (leaked). retryTask triggers drainScheduler.
+    const restarted = h.orchestrator.retryTask('A');
     expect(h.getTask('A')!.status).toBe('running');
 
     // Scheduler should be healthy
