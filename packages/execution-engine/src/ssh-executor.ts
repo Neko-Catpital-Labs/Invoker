@@ -5,7 +5,7 @@ import type { WorkRequest, WorkResponse } from '@invoker/contracts';
 import type { ExecutorHandle, PersistedTaskMeta, TerminalSpec } from './executor.js';
 import { BaseExecutor, type BaseEntry } from './base-executor.js';
 import { killProcessGroup, cleanElectronEnv, SIGKILL_TIMEOUT_MS } from './process-utils.js';
-import { computeBranchHash } from './branch-utils.js';
+import { computeContentHash, buildExperimentBranchName } from './branch-utils.js';
 import { planManagedWorktree } from './managed-worktree-controller.js';
 import { findManagedWorktreeForBranch, abbrevRefMatchesBranch } from './worktree-discovery.js';
 import { DEFAULT_WORKTREE_PROVISION_COMMAND } from './default-worktree-provision-command.js';
@@ -299,7 +299,7 @@ echo ${payloadB64} | base64 -d | bash -se
     const upstreamCommits = (request.inputs.upstreamContext ?? [])
       .map(c => c.commitHash)
       .filter((x): x is string => !!x);
-    const salt = request.inputs.salt ?? '';
+    const lifecycleTag = request.inputs.lifecycleTag ?? '';
     handle.agentSessionId = agentSessionId;
 
     // Use configured remoteInvokerHome (default ~/.invoker)
@@ -322,15 +322,18 @@ echo ${payloadB64} | base64 -d | bash -se
         `[WARNING] Continuing with existing refs. Tasks may use stale commits.\n`;
       this.emitOutput(executionId, msg);
     }
-    const hash8 = computeBranchHash(
+    const contentHash = computeContentHash(
       request.actionId,
       request.inputs.command,
       request.inputs.prompt,
       upstreamCommits,
       baseHead,
-      salt,
     );
-    const experimentBranch = `experiment/${request.actionId}-${hash8}`;
+    const experimentBranch = buildExperimentBranchName(
+      request.actionId,
+      lifecycleTag,
+      contentHash,
+    );
     const san = sanitizeBranchForPath(experimentBranch);
     const remoteClone = `${invokerHome}/repos/${h}`;
     const canonicalRemoteWt = `${invokerHome}/worktrees/${h}/${san}`;

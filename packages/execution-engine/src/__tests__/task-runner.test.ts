@@ -1567,7 +1567,7 @@ describe('TaskRunner', () => {
   });
 
   describe('baseBranch in WorkRequest', () => {
-    it('encodes workflow generation, task generation, and attemptId in request salt', async () => {
+    it('encodes workflow generation, task generation, and attemptId in request lifecycleTag', async () => {
       let capturedRequest: any;
       const capturingExecutor = {
         type: 'worktree',
@@ -1611,10 +1611,12 @@ describe('TaskRunner', () => {
       await executor.executeTask(task);
 
       expect(capturedRequest).toBeDefined();
-      expect(capturedRequest.inputs.salt).toBe('wf:3|task:5|attempt:attempt-abc');
+      // Lifecycle tag embeds wfGen=3, taskGen=5, attemptShort sanitized from
+      // 'attempt-abc' (truncated to 12 chars, lowercased, kept dash chars).
+      expect(capturedRequest.inputs.lifecycleTag).toBe('g3.t5.aattempt-abc');
     });
 
-    it('still includes attemptId in salt when both generations are zero', async () => {
+    it('still includes attemptId in lifecycleTag when both generations are zero', async () => {
       let capturedRequest: any;
       const capturingExecutor = {
         type: 'worktree',
@@ -1658,7 +1660,7 @@ describe('TaskRunner', () => {
       await executor.executeTask(task);
 
       expect(capturedRequest).toBeDefined();
-      expect(capturedRequest.inputs.salt).toBe('wf:0|task:0|attempt:attempt-xyz');
+      expect(capturedRequest.inputs.lifecycleTag).toBe('g0.t0.aattempt-xyz');
     });
 
     it('includes workflow baseBranch in request inputs', async () => {

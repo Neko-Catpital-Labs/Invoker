@@ -8,7 +8,12 @@ import { BaseExecutor, type BaseEntry } from './base-executor.js';
 import { RepoPool } from './repo-pool.js';
 import { killProcessGroup, cleanElectronEnv, SIGKILL_TIMEOUT_MS } from './process-utils.js';
 import { DEFAULT_WORKTREE_PROVISION_COMMAND } from './default-worktree-provision-command.js';
-import { computeBranchHash, bashMergeUpstreams, parseMergeError } from './branch-utils.js';
+import {
+  computeContentHash,
+  buildExperimentBranchName,
+  bashMergeUpstreams,
+  parseMergeError,
+} from './branch-utils.js';
 import { RESTART_TO_BRANCH_TRACE, traceExecution } from './exec-trace.js';
 import {
   syncPlanBaseRemote,
@@ -21,7 +26,7 @@ import { remoteFetchForPool } from './remote-fetch-policy.js';
 import { sanitizeBranchForPath } from './git-utils.js';
 
 // Re-export for backward compatibility
-export { computeBranchHash } from './branch-utils.js';
+export { computeContentHash, buildExperimentBranchName } from './branch-utils.js';
 
 export interface WorktreeExecutorConfig {
   /** Directory where worktrees are created. */
@@ -141,16 +146,19 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
     const upstreamCommits = (request.inputs.upstreamContext ?? [])
       .map(c => c.commitHash)
       .filter((h): h is string => !!h);
-    const hash = computeBranchHash(
+    const contentHash = computeContentHash(
       request.actionId,
       request.inputs.command,
       request.inputs.prompt,
       upstreamCommits,
       baseHead,
-      request.inputs.salt,
     );
-    const branch = `experiment/${request.actionId}-${hash}`;
-    traceExecution(`[WorktreeExecutor] branch=${branch} hash=${hash}`);
+    const branch = buildExperimentBranchName(
+      request.actionId,
+      request.inputs.lifecycleTag ?? '',
+      contentHash,
+    );
+    traceExecution(`[WorktreeExecutor] branch=${branch} contentHash=${contentHash}`);
 
     // -- Reconciliation: real pool worktree at plan base (no upstream merges), then needs_input --
     if (request.actionType === 'reconciliation') {
