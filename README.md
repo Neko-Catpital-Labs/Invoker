@@ -228,3 +228,11 @@ Roadmap and issue tracker: [invoker.productlane.com/roadmap](https://invoker.pro
 ## License
 
 [Functional Source License, Version 1.1, ALv2 Future License](LICENSE) (SPDX: **FSL-1.1-ALv2**). Permitted use, competing use, and the future Apache License 2.0 grant are defined in the license file.
+
+Invoker also includes the **Neko Catpital Ventures, LLC Addendum** in [LICENSE](LICENSE). In plain terms, that addendum says:
+
+- if you modify or redistribute the Software for commercial use, those modifications or redistributions must remain open source under the FSL and the NCV Addendum, and cannot be relicensed more restrictively
+- you may build and exploit software or developments using Invoker, so long as Invoker itself is not incorporated into that software or those developments
+- except for evaluation or testing, you may not use the Software to replace employees or reduce headcount for substantially similar roles for six months after first production use
+
+The `LICENSE` file is the controlling text, including the full NCV Addendum.
