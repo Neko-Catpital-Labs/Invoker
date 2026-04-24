@@ -61,6 +61,42 @@ describe('headless delegation enforcement', () => {
       ).resolves.toBeUndefined();
     });
 
+    it('hydrates every workflow before reporting queue status', async () => {
+      mockDeps.persistence.listWorkflows = vi.fn(() => [
+        {
+          id: 'wf-1',
+          name: 'wf-1',
+          generation: 0,
+          status: 'running' as const,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+        {
+          id: 'wf-2',
+          name: 'wf-2',
+          generation: 0,
+          status: 'running' as const,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+      ]);
+      mockDeps.orchestrator.syncFromDb = vi.fn();
+      mockDeps.orchestrator.getQueueStatus = vi.fn(() => ({
+        maxConcurrency: 4,
+        runningCount: 1,
+        running: [{ taskId: 'wf-2/task-1', description: 'slow task' }],
+        queued: [],
+      }));
+
+      await expect(
+        runHeadless(['query', 'queue', '--output', 'json'], mockDeps),
+      ).resolves.toBeUndefined();
+
+      expect(mockDeps.orchestrator.syncFromDb).toHaveBeenCalledTimes(2);
+      expect(mockDeps.orchestrator.syncFromDb).toHaveBeenNthCalledWith(1, 'wf-1');
+      expect(mockDeps.orchestrator.syncFromDb).toHaveBeenNthCalledWith(2, 'wf-2');
+    });
+
     it('allows query ui-perf in read-only mode', async () => {
       mockDeps.getUiPerfStats = vi.fn(() => ({
         maxRendererEventLoopLagMs: 12,
@@ -96,6 +132,7 @@ describe('headless delegation enforcement', () => {
       mockDeps.orchestrator.startExecution = vi.fn(() => []);
       mockDeps.orchestrator.resumeWorkflow = vi.fn(() => []);
       mockDeps.orchestrator.getAllTasks = vi.fn(() => []);
+      mockDeps.orchestrator.getReadyTasks = vi.fn(() => []);
       mockDeps.orchestrator.getPersistedActiveTaskIds = vi.fn(() => new Set<string>());
       mockDeps.orchestrator.getWorkflowStatus = vi.fn(() => 'running');
       mockDeps.orchestrator.syncFromDb = vi.fn();
@@ -187,6 +224,7 @@ describe('headless delegation enforcement', () => {
         mockDeps.orchestrator.startExecution = vi.fn(() => []);
         mockDeps.orchestrator.resumeWorkflow = vi.fn(() => []);
         mockDeps.orchestrator.getAllTasks = vi.fn(() => []);
+        mockDeps.orchestrator.getReadyTasks = vi.fn(() => []);
         mockDeps.orchestrator.getWorkflowStatus = vi.fn(() => 'running');
         mockDeps.orchestrator.syncFromDb = vi.fn();
         mockDeps.orchestrator.retryTask = vi.fn(() => []);
@@ -445,6 +483,7 @@ describe('headless delegation enforcement', () => {
           config: { workflowId: 'wf-1' },
           execution: {},
         } as any]);
+        mockDeps.orchestrator.getReadyTasks = vi.fn(() => []);
 
         const runnableTask = {
           id: 'wf-1/task-1',
@@ -522,6 +561,7 @@ describe('headless delegation enforcement', () => {
             execution: {},
           },
         ] as any);
+        mockDeps.orchestrator.getReadyTasks = vi.fn(() => []);
 
         const runnableTask = {
           id: 'wf-1/task-b',
@@ -608,6 +648,68 @@ describe('headless delegation enforcement', () => {
         expect(mockDeps.orchestrator.retryTask).not.toHaveBeenCalled();
         expect(mockDeps.orchestrator.recreateTask).not.toHaveBeenCalled();
         expect(mockDeps.orchestrator.recreateWorkflow).not.toHaveBeenCalled();
+      });
+
+      it('headless approve returns once a workflow has no running or ready work', async () => {
+        let taskBStatus: 'running' | 'pending' = 'running';
+        mockDeps.persistence.listWorkflows = vi.fn(() => [{
+          id: 'wf-1',
+          name: 'test-workflow',
+          generation: 0,
+          status: 'running' as const,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }]);
+        mockDeps.persistence.loadTasks = vi.fn(() => [
+          {
+            id: 'wf-1/task-a',
+            status: 'completed',
+            config: { workflowId: 'wf-1' },
+            execution: {},
+          },
+          {
+            id: 'wf-1/task-b',
+            status: taskBStatus,
+            config: { workflowId: 'wf-1' },
+            execution: {},
+          },
+        ] as any);
+        mockDeps.orchestrator.getAllTasks = vi.fn(() => [
+          {
+            id: 'wf-1/task-a',
+            status: 'completed',
+            config: { workflowId: 'wf-1' },
+            execution: {},
+          },
+          {
+            id: 'wf-1/task-b',
+            status: taskBStatus,
+            config: { workflowId: 'wf-1' },
+            execution: {},
+          },
+        ] as any);
+        mockDeps.orchestrator.getReadyTasks = vi.fn(() => []);
+
+        const runnableTask = {
+          id: 'wf-1/task-b',
+          status: 'running',
+          config: { workflowId: 'wf-1' },
+          execution: {},
+        } as any;
+        mockDeps.commandService.approve = vi.fn(async () => ({ ok: true as const, data: [runnableTask] }));
+
+        const executeTasksSpy = vi
+          .spyOn(TaskRunner.prototype, 'executeTasks')
+          .mockImplementation(async () => {
+            taskBStatus = 'pending';
+          });
+
+        await expect(runHeadless(['approve', 'wf-1/task-a'], mockDeps)).resolves.toBeUndefined();
+
+        expect(executeTasksSpy).toHaveBeenCalledTimes(1);
+        expect(mockDeps.orchestrator.getReadyTasks).toHaveBeenCalled();
+
+        executeTasksSpy.mockRestore();
       });
 
       it('headless retry with deps.noTrack=true can defer runnable execution to the caller', async () => {
@@ -818,6 +920,7 @@ describe('headless delegation enforcement', () => {
           config: { workflowId: 'wf-1' },
           execution: {},
         } as any]);
+        mockDeps.orchestrator.getReadyTasks = vi.fn(() => []);
 
         const executeTasksSpy = vi
           .spyOn(TaskRunner.prototype, 'executeTasks')
