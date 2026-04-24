@@ -937,7 +937,7 @@ describe('Flow 7: orphan relaunch on restart', () => {
 
 // ── Flow 8: Restart Workflow with Generation Salt ───────────
 
-describe('Flow 8: restart workflow with generation salt', () => {
+describe('Flow 8: restart workflow with generation lifecycle tag', () => {
   let h: TestHarness;
 
   beforeEach(() => {

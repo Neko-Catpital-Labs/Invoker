@@ -4,7 +4,6 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execSync } from 'node:child_process';
 import {
-  computeBranchHash,
   computeContentHash,
   formatLifecycleTag,
   buildExperimentBranchName,
@@ -32,78 +31,76 @@ function gitExec(cmd: string, cwd: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// computeBranchHash (pure TypeScript, no git)
+// computeContentHash (pure TypeScript, no git)
 // ---------------------------------------------------------------------------
 
-describe('computeBranchHash', () => {
+describe('computeContentHash', () => {
   it('is deterministic: same inputs produce same hash', () => {
-    const a = computeBranchHash('task-1', 'echo hi', undefined, [], 'abc123');
-    const b = computeBranchHash('task-1', 'echo hi', undefined, [], 'abc123');
+    const a = computeContentHash('task-1', 'echo hi', undefined, [], 'abc123');
+    const b = computeContentHash('task-1', 'echo hi', undefined, [], 'abc123');
     expect(a).toBe(b);
   });
 
   it('is sensitive to command changes', () => {
-    const a = computeBranchHash('task-1', 'echo a', undefined, [], 'abc');
-    const b = computeBranchHash('task-1', 'echo b', undefined, [], 'abc');
+    const a = computeContentHash('task-1', 'echo a', undefined, [], 'abc');
+    const b = computeContentHash('task-1', 'echo b', undefined, [], 'abc');
     expect(a).not.toBe(b);
   });
 
   it('is sensitive to prompt changes', () => {
-    const a = computeBranchHash('task-1', undefined, 'prompt a', [], 'abc');
-    const b = computeBranchHash('task-1', undefined, 'prompt b', [], 'abc');
+    const a = computeContentHash('task-1', undefined, 'prompt a', [], 'abc');
+    const b = computeContentHash('task-1', undefined, 'prompt b', [], 'abc');
     expect(a).not.toBe(b);
   });
 
   it('is sensitive to baseHead changes', () => {
-    const a = computeBranchHash('task-1', 'cmd', undefined, [], 'head-a');
-    const b = computeBranchHash('task-1', 'cmd', undefined, [], 'head-b');
+    const a = computeContentHash('task-1', 'cmd', undefined, [], 'head-a');
+    const b = computeContentHash('task-1', 'cmd', undefined, [], 'head-b');
     expect(a).not.toBe(b);
   });
 
   it('is sensitive to upstream commit changes', () => {
-    const a = computeBranchHash('task-1', 'cmd', undefined, ['c1'], 'abc');
-    const b = computeBranchHash('task-1', 'cmd', undefined, ['c2'], 'abc');
+    const a = computeContentHash('task-1', 'cmd', undefined, ['c1'], 'abc');
+    const b = computeContentHash('task-1', 'cmd', undefined, ['c2'], 'abc');
     expect(a).not.toBe(b);
   });
 
   it('is order-independent for upstream commits', () => {
-    const a = computeBranchHash('task-1', 'cmd', undefined, ['c1', 'c2'], 'abc');
-    const b = computeBranchHash('task-1', 'cmd', undefined, ['c2', 'c1'], 'abc');
-    expect(a).toBe(b);
-  });
-
-  it('is sensitive to salt changes', () => {
-    const a = computeBranchHash('task-1', 'cmd', undefined, [], 'abc', 'salt-a');
-    const b = computeBranchHash('task-1', 'cmd', undefined, [], 'abc', 'salt-b');
-    expect(a).not.toBe(b);
-  });
-
-  it('produces 8-character hex string', () => {
-    const h = computeBranchHash('task-1', 'cmd', undefined, [], 'abc');
-    expect(h).toMatch(/^[0-9a-f]{8}$/);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// computeContentHash
-// ---------------------------------------------------------------------------
-
-describe('computeContentHash', () => {
-  it('matches computeBranchHash without salt', () => {
-    const a = computeContentHash('task-1', 'cmd', undefined, ['c1'], 'head');
-    const b = computeBranchHash('task-1', 'cmd', undefined, ['c1'], 'head');
-    expect(a).toBe(b);
-  });
-
-  it('is insensitive to lifecycle (no salt parameter exists)', () => {
-    const a = computeContentHash('task-1', 'cmd', undefined, [], 'head');
-    const b = computeContentHash('task-1', 'cmd', undefined, [], 'head');
+    const a = computeContentHash('task-1', 'cmd', undefined, ['c1', 'c2'], 'abc');
+    const b = computeContentHash('task-1', 'cmd', undefined, ['c2', 'c1'], 'abc');
     expect(a).toBe(b);
   });
 
   it('produces 8-character hex string', () => {
-    const h = computeContentHash('task-1', 'cmd', undefined, [], 'head');
+    const h = computeContentHash('task-1', 'cmd', undefined, [], 'abc');
     expect(h).toMatch(/^[0-9a-f]{8}$/);
+  });
+
+  it('is insensitive to lifecycle context (no salt parameter)', () => {
+    // Two consecutive recreates of the identical spec must yield the same content
+    // hash. Lifecycle uniqueness lives in the branch name (lifecycle tag), not
+    // the hash. Regression test for the salt-collision bug.
+    const a = computeContentHash('task-1', 'cmd', 'prompt', ['c1'], 'head');
+    const b = computeContentHash('task-1', 'cmd', 'prompt', ['c1'], 'head');
+    expect(a).toBe(b);
+  });
+
+  it('combined with formatLifecycleTag yields distinct branch names per attempt', () => {
+    const contentHash = computeContentHash('wf-1/t', 'cmd', undefined, [], 'head');
+    const branchA = buildExperimentBranchName(
+      'wf-1/t',
+      formatLifecycleTag({ wfGen: 0, taskGen: 0, attemptShort: 'aaa11111' }),
+      contentHash,
+    );
+    const branchB = buildExperimentBranchName(
+      'wf-1/t',
+      formatLifecycleTag({ wfGen: 0, taskGen: 1, attemptShort: 'bbb22222' }),
+      contentHash,
+    );
+    expect(branchA).not.toBe(branchB);
+    // Same spec → same content hash, even though branch names differ.
+    expect(branchA.endsWith(`-${contentHash}`)).toBe(true);
+    expect(branchB.endsWith(`-${contentHash}`)).toBe(true);
   });
 });
 

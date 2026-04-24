@@ -26,6 +26,7 @@ import type { ReviewProviderRegistry } from './review-provider-registry.js';
 import { DockerExecutor } from './docker-executor.js';
 import { WorktreeExecutor } from './worktree-executor.js';
 import { isInvokerManagedPoolBranch } from './plan-base-remote.js';
+import { formatLifecycleTag } from './branch-utils.js';
 import { SshExecutor } from './ssh-executor.js';
 import {
   executeMergeNodeImpl,
@@ -407,15 +408,19 @@ export class TaskRunner {
       }
     }
 
-    // Read workflow + task generations for content-addressable branch salt.
-    // attemptId is mixed in unconditionally so that every attempt produces a
-    // brand-new branch hash. This makes cleanup of old worktrees/refs
-    // unnecessary for correctness: a fresh attempt can never collide with
-    // leftover state from a prior attempt.
+    // Read workflow + task generations to build the visible lifecycle tag that
+    // is appended to every experiment branch name. Lifecycle uniqueness lives
+    // in the branch *name* (via `formatLifecycleTag`), not in the content hash
+    // — so two recreates of the same spec produce the same content fingerprint
+    // (cache-equivalent) but distinct branch names (collision-free).
     const workflow = task.config.workflowId ? this.persistence.loadWorkflow?.(task.config.workflowId) : undefined;
     const workflowGeneration = (workflow as any)?.generation ?? 0;
     const taskExecutionGeneration = task.execution.generation ?? 0;
-    const generationSalt = `wf:${workflowGeneration}|task:${taskExecutionGeneration}|attempt:${attemptId}`;
+    const lifecycleTag = formatLifecycleTag({
+      wfGen: workflowGeneration,
+      taskGen: taskExecutionGeneration,
+      attemptShort: attemptId,
+    });
     const baseBranch = workflow?.baseBranch ?? this.defaultBranch;
     const repoUrl = workflow?.repoUrl;
 
@@ -435,7 +440,7 @@ export class TaskRunner {
         upstreamContext: upstreamContext.length > 0 ? upstreamContext : undefined,
         alternatives: alternatives.length > 0 ? alternatives : undefined,
         upstreamBranches: upstreamBranches.length > 0 ? upstreamBranches : undefined,
-        salt: generationSalt,
+        lifecycleTag,
         baseBranch,
         freshWorkspace: this.shouldUseFreshWorkspace(task),
       },
