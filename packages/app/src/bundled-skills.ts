@@ -78,6 +78,34 @@ function resolveCodexTarget(): BundledSkillTargetStatus {
   };
 }
 
+function resolveClaudeTarget(): BundledSkillTargetStatus {
+  return {
+    id: 'claude',
+    name: 'Claude',
+    path: path.join(homedir(), '.claude', 'skills'),
+    available: true,
+    installed: false,
+    upToDate: false,
+    installedSkillNames: [],
+  };
+}
+
+function resolveCursorTarget(): BundledSkillTargetStatus {
+  return {
+    id: 'cursor',
+    name: 'Cursor',
+    path: path.join(homedir(), '.cursor', 'skills-cursor'),
+    available: true,
+    installed: false,
+    upToDate: false,
+    installedSkillNames: [],
+  };
+}
+
+function resolveManagedTargets(): BundledSkillTargetStatus[] {
+  return [resolveCodexTarget(), resolveClaudeTarget(), resolveCursorTarget()];
+}
+
 function resolveManifestPath(invokerHomeRoot: string): string {
   return path.join(invokerHomeRoot, MANIFEST_FILE);
 }
@@ -133,7 +161,7 @@ export function resolveBundledSkillsStatus(context: BundledSkillsContext): Bundl
       promptRecommended: false,
       managedPrefix: MANAGED_PREFIX,
       bundledSkillNames: [],
-      targets: [resolveCodexTarget()],
+      targets: resolveManagedTargets(),
     };
   }
 
@@ -141,7 +169,9 @@ export function resolveBundledSkillsStatus(context: BundledSkillsContext): Bundl
   const installedNames = prefixedSkillNames(bundledSkillNames);
   const bundledHash = hashDirectory(sourceRoot);
   const manifest = readManifest(invokerHomeRoot);
-  const targets = [buildTargetStatus(resolveCodexTarget(), installedNames, bundledHash, manifest)];
+  const targets = resolveManagedTargets().map((target) =>
+    buildTargetStatus(target, installedNames, bundledHash, manifest),
+  );
 
   return {
     available: true,
@@ -167,27 +197,29 @@ export function installBundledSkills(
 
   const bundledSkillNames = listBundledSkillNames(sourceRoot);
   const bundledHash = hashDirectory(sourceRoot);
-  const target = resolveCodexTarget();
-  mkdirSync(target.path, { recursive: true });
-
   const installedNames = prefixedSkillNames(bundledSkillNames);
-  for (const skillName of bundledSkillNames) {
-    const sourceDir = path.join(sourceRoot, skillName);
-    const targetDir = path.join(target.path, `${MANAGED_PREFIX}${skillName}`);
-    rmSync(targetDir, { recursive: true, force: true });
-    cpSync(sourceDir, targetDir, { recursive: true, force: true });
+  const targets = resolveManagedTargets();
+  const manifestTargets: BundledSkillsManifest['targets'] = {};
+
+  for (const target of targets) {
+    mkdirSync(target.path, { recursive: true });
+    for (const skillName of bundledSkillNames) {
+      const sourceDir = path.join(sourceRoot, skillName);
+      const targetDir = path.join(target.path, `${MANAGED_PREFIX}${skillName}`);
+      rmSync(targetDir, { recursive: true, force: true });
+      cpSync(sourceDir, targetDir, { recursive: true, force: true });
+    }
+    manifestTargets[target.id] = {
+      path: target.path,
+      installedSkillNames: installedNames,
+    };
   }
 
   const manifest: BundledSkillsManifest = {
     bundledHash,
     bundledSkillNames,
     installedAt: new Date().toISOString(),
-    targets: {
-      [target.id]: {
-        path: target.path,
-        installedSkillNames: installedNames,
-      },
-    },
+    targets: manifestTargets,
   };
 
   writeManifest(invokerHomeRoot, manifest);

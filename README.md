@@ -42,7 +42,7 @@ Tagged releases are configured to publish:
 - macOS: `.dmg`
 - Linux: `.deb` and `.AppImage`
 
-Packaged installs bundle the first-party Invoker skills inside the app. On first GUI launch, Invoker prompts you to install those skills into `~/.codex/skills` using `invoker-`-prefixed names so they do not overwrite existing skills. For headless/package-only usage, install the same bundled skills explicitly with:
+Packaged installs bundle the first-party Invoker skills inside the app. On first GUI launch, Invoker prompts you to install those skills into the supported global skill directories for Codex, Claude, and Cursor using `invoker-`-prefixed names so they do not overwrite existing skills. For headless/package-only usage, install the same bundled skills explicitly with:
 
 ```bash
 invoker --install-skills

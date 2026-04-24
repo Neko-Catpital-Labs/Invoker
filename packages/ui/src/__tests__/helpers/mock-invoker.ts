@@ -91,7 +91,11 @@ export function createMockInvoker(
         promptRecommended: false,
         managedPrefix: 'invoker-',
         bundledSkillNames: [],
-        targets: [],
+        targets: [
+          { id: 'codex', name: 'Codex', path: '/tmp/.codex/skills', available: true, installed: false, upToDate: false, installedSkillNames: [] },
+          { id: 'claude', name: 'Claude', path: '/tmp/.claude/skills', available: true, installed: false, upToDate: false, installedSkillNames: [] },
+          { id: 'cursor', name: 'Cursor', path: '/tmp/.cursor/skills-cursor', available: true, installed: false, upToDate: false, installedSkillNames: [] },
+        ],
       },
     })),
     getBundledSkillsStatus: vi.fn(async () => ({
@@ -99,14 +103,22 @@ export function createMockInvoker(
       promptRecommended: false,
       managedPrefix: 'invoker-',
       bundledSkillNames: [],
-      targets: [],
+      targets: [
+        { id: 'codex', name: 'Codex', path: '/tmp/.codex/skills', available: true, installed: false, upToDate: false, installedSkillNames: [] },
+        { id: 'claude', name: 'Claude', path: '/tmp/.claude/skills', available: true, installed: false, upToDate: false, installedSkillNames: [] },
+        { id: 'cursor', name: 'Cursor', path: '/tmp/.cursor/skills-cursor', available: true, installed: false, upToDate: false, installedSkillNames: [] },
+      ],
     })),
     installBundledSkills: vi.fn(async () => ({
       available: false,
       promptRecommended: false,
       managedPrefix: 'invoker-',
       bundledSkillNames: [],
-      targets: [],
+      targets: [
+        { id: 'codex', name: 'Codex', path: '/tmp/.codex/skills', available: true, installed: false, upToDate: false, installedSkillNames: [] },
+        { id: 'claude', name: 'Claude', path: '/tmp/.claude/skills', available: true, installed: false, upToDate: false, installedSkillNames: [] },
+        { id: 'cursor', name: 'Cursor', path: '/tmp/.cursor/skills-cursor', available: true, installed: false, upToDate: false, installedSkillNames: [] },
+      ],
     })),
     replaceTask: vi.fn(async () => []),
     getActivityLogs: vi.fn(async () => []),

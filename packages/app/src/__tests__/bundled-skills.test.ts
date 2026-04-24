@@ -67,13 +67,21 @@ describe('bundled-skills', () => {
         invokerHomeRoot,
       });
 
-      const codexSkillsRoot = join(codexHome, '.codex', 'skills');
-      expect(existsSync(join(codexSkillsRoot, 'invoker-plan-to-invoker', 'SKILL.md'))).toBe(true);
-      expect(existsSync(join(codexSkillsRoot, 'invoker-make-pr', 'scripts', 'check.sh'))).toBe(true);
-      expect(readFileSync(join(codexSkillsRoot, 'invoker-plan-to-invoker', 'SKILL.md'), 'utf-8')).toContain('plan-to-invoker');
+      const expectedTargets = [
+        join(codexHome, '.codex', 'skills'),
+        join(codexHome, '.claude', 'skills'),
+        join(codexHome, '.cursor', 'skills-cursor'),
+      ];
 
-      expect(installed.targets[0]?.installed).toBe(true);
-      expect(installed.targets[0]?.upToDate).toBe(true);
+      for (const targetRoot of expectedTargets) {
+        expect(existsSync(join(targetRoot, 'invoker-plan-to-invoker', 'SKILL.md'))).toBe(true);
+        expect(existsSync(join(targetRoot, 'invoker-make-pr', 'scripts', 'check.sh'))).toBe(true);
+        expect(readFileSync(join(targetRoot, 'invoker-plan-to-invoker', 'SKILL.md'), 'utf-8')).toContain('plan-to-invoker');
+      }
+
+      expect(installed.targets).toHaveLength(3);
+      expect(installed.targets.every((target) => target.installed)).toBe(true);
+      expect(installed.targets.every((target) => target.upToDate)).toBe(true);
       expect(installed.promptRecommended).toBe(false);
 
       const status = resolveBundledSkillsStatus({
@@ -82,7 +90,7 @@ describe('bundled-skills', () => {
         resourcesPath: resourcesRoot,
         invokerHomeRoot,
       });
-      expect(status.targets[0]?.upToDate).toBe(true);
+      expect(status.targets.every((target) => target.upToDate)).toBe(true);
       expect(status.promptRecommended).toBe(false);
     } finally {
       if (originalHome === undefined) {

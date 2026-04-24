@@ -99,6 +99,24 @@ describe('App launch (component)', () => {
             upToDate: false,
             installedSkillNames: [],
           },
+          {
+            id: 'claude',
+            name: 'Claude',
+            path: '/tmp/.claude/skills',
+            available: true,
+            installed: false,
+            upToDate: false,
+            installedSkillNames: [],
+          },
+          {
+            id: 'cursor',
+            name: 'Cursor',
+            path: '/tmp/.cursor/skills-cursor',
+            available: true,
+            installed: false,
+            upToDate: false,
+            installedSkillNames: [],
+          },
         ],
       },
     }));
@@ -107,5 +125,7 @@ describe('App launch (component)', () => {
     expect(await screen.findByText('System Setup')).toBeInTheDocument();
     expect(screen.getByText('Bundled Invoker Skills')).toBeInTheDocument();
     expect(screen.getByText('Install Skills')).toBeInTheDocument();
+    expect(screen.getByText('Claude')).toBeInTheDocument();
+    expect(screen.getByText('Cursor')).toBeInTheDocument();
   });
 });

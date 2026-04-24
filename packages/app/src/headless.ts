@@ -575,10 +575,9 @@ async function headlessInstallSkills(
     throw new Error('Bundled skill installation is not available in this runtime.');
   }
   const status = deps.installBundledSkills(mode ?? 'install');
-  const codexTarget = status.targets.find((target) => target.id === 'codex');
   process.stdout.write(`Installed ${status.bundledSkillNames.length} bundled skills with prefix "${status.managedPrefix}".\n`);
-  if (codexTarget) {
-    process.stdout.write(`Target: ${codexTarget.path}\n`);
+  for (const target of status.targets) {
+    process.stdout.write(`Target (${target.name}): ${target.path}\n`);
   }
   for (const skillName of status.bundledSkillNames) {
     process.stdout.write(`- ${status.managedPrefix}${skillName}\n`);

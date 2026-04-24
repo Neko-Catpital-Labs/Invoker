@@ -17,7 +17,6 @@ export function SystemSetupModal({
 }: SystemSetupModalProps) {
   const installedAgents = diagnostics?.tools.filter((tool) => (tool.id === 'claude' || tool.id === 'codex') && tool.installed) ?? [];
   const bundledSkills = diagnostics?.bundledSkills;
-  const codexTarget = bundledSkills?.targets.find((target) => target.id === 'codex');
   const canInstallBundledSkills = Boolean(bundledSkills?.available && onInstallBundledSkills);
   const installActionLabel = bundledSkills?.targets.some((target) => target.installed && !target.upToDate)
     ? 'Update Skills'
@@ -60,7 +59,7 @@ export function SystemSetupModal({
                   : 'none'}
               </div>
 
-              {codexTarget && (
+              {bundledSkills.targets.length > 0 && (
                 <div className="rounded border border-gray-700 overflow-hidden">
                   <table className="w-full text-sm">
                     <thead className="bg-gray-900 text-gray-300">
@@ -71,15 +70,17 @@ export function SystemSetupModal({
                       </tr>
                     </thead>
                     <tbody>
-                      <tr className="border-t border-gray-700">
-                        <td className="px-4 py-3 text-gray-100">{codexTarget.name}</td>
-                        <td className="px-4 py-3 text-gray-400 font-mono text-xs break-all">{codexTarget.path}</td>
-                        <td className="px-4 py-3">
-                          <span className={codexTarget.upToDate ? 'text-green-400' : codexTarget.installed ? 'text-yellow-300' : 'text-amber-300'}>
-                            {codexTarget.upToDate ? 'Installed and up to date' : codexTarget.installed ? 'Installed, update available' : 'Not installed'}
-                          </span>
-                        </td>
-                      </tr>
+                      {bundledSkills.targets.map((target) => (
+                        <tr key={target.id} className="border-t border-gray-700">
+                          <td className="px-4 py-3 text-gray-100">{target.name}</td>
+                          <td className="px-4 py-3 text-gray-400 font-mono text-xs break-all">{target.path}</td>
+                          <td className="px-4 py-3">
+                            <span className={target.upToDate ? 'text-green-400' : target.installed ? 'text-yellow-300' : 'text-amber-300'}>
+                              {target.upToDate ? 'Installed and up to date' : target.installed ? 'Installed, update available' : 'Not installed'}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
                     </tbody>
                   </table>
                 </div>
