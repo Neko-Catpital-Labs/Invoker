@@ -4,7 +4,9 @@ import {
   findManagedWorktreeForBranch,
   findManagedWorktreeByActionId,
   abbrevRefMatchesBranch,
+  parseExperimentBranch,
 } from '../worktree-discovery.js';
+import { buildExperimentBranchName, formatLifecycleTag } from '../branch-utils.js';
 
 describe('parseGitWorktreePorcelain', () => {
   it('parses main + linked worktree with branch', () => {
@@ -120,6 +122,45 @@ branch refs/heads/task1-aabb1122
       ['/home/u/.invoker/wt/h'],
     );
     expect(result).toBeUndefined();
+  });
+});
+
+describe('parseExperimentBranch (round-trip with buildExperimentBranchName)', () => {
+  it('round-trips canonical names', () => {
+    const lifecycleTag = formatLifecycleTag({ wfGen: 3, taskGen: 5, attemptShort: 'abc12345' });
+    const branch = buildExperimentBranchName('wf-1/build-app', lifecycleTag, 'deadbeef');
+    expect(branch).toBe('experiment/wf-1/build-app/g3.t5.aabc12345-deadbeef');
+    expect(parseExperimentBranch(branch)).toEqual({
+      actionId: 'wf-1/build-app',
+      lifecycleTag: 'g3.t5.aabc12345',
+      contentHash: 'deadbeef',
+    });
+  });
+
+  it('handles nested action ids with multiple slashes', () => {
+    const branch = buildExperimentBranchName('wf-9/group/sub', 'g0.t0.az', 'cafebabe');
+    expect(parseExperimentBranch(branch)).toEqual({
+      actionId: 'wf-9/group/sub',
+      lifecycleTag: 'g0.t0.az',
+      contentHash: 'cafebabe',
+    });
+  });
+
+  it('rejects legacy experiment/<actionId>-<sha8> format', () => {
+    expect(parseExperimentBranch('experiment/wf-1/task-deadbeef')).toBeUndefined();
+    expect(parseExperimentBranch('experiment/wf-1-deadbeef')).toBeUndefined();
+  });
+
+  it('rejects non-experiment branches', () => {
+    expect(parseExperimentBranch('master')).toBeUndefined();
+    expect(parseExperimentBranch('feature/foo')).toBeUndefined();
+    expect(parseExperimentBranch('')).toBeUndefined();
+  });
+
+  it('rejects malformed lifecycle tag or hash', () => {
+    expect(parseExperimentBranch('experiment/wf-1/task/g0.t0.a-NOTHEX1')).toBeUndefined();
+    expect(parseExperimentBranch('experiment/wf-1/task/g0.t0-deadbeef')).toBeUndefined();
+    expect(parseExperimentBranch('experiment/wf-1/task/garbage-deadbeef')).toBeUndefined();
   });
 });
 

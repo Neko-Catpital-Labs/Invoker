@@ -5,6 +5,9 @@ import { tmpdir } from 'node:os';
 import { execSync } from 'node:child_process';
 import {
   computeBranchHash,
+  computeContentHash,
+  formatLifecycleTag,
+  buildExperimentBranchName,
   bashPreserveOrReset,
   bashMergeUpstreams,
   bashEnsureRef,
@@ -12,6 +15,7 @@ import {
   parseMergeError,
   runBashLocal,
 } from '../branch-utils.js';
+import { parseExperimentBranch } from '../worktree-discovery.js';
 
 function createTempRepo(): string {
   const dir = mkdtempSync(join(tmpdir(), 'branch-utils-test-'));
@@ -77,6 +81,100 @@ describe('computeBranchHash', () => {
   it('produces 8-character hex string', () => {
     const h = computeBranchHash('task-1', 'cmd', undefined, [], 'abc');
     expect(h).toMatch(/^[0-9a-f]{8}$/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// computeContentHash
+// ---------------------------------------------------------------------------
+
+describe('computeContentHash', () => {
+  it('matches computeBranchHash without salt', () => {
+    const a = computeContentHash('task-1', 'cmd', undefined, ['c1'], 'head');
+    const b = computeBranchHash('task-1', 'cmd', undefined, ['c1'], 'head');
+    expect(a).toBe(b);
+  });
+
+  it('is insensitive to lifecycle (no salt parameter exists)', () => {
+    const a = computeContentHash('task-1', 'cmd', undefined, [], 'head');
+    const b = computeContentHash('task-1', 'cmd', undefined, [], 'head');
+    expect(a).toBe(b);
+  });
+
+  it('produces 8-character hex string', () => {
+    const h = computeContentHash('task-1', 'cmd', undefined, [], 'head');
+    expect(h).toMatch(/^[0-9a-f]{8}$/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// formatLifecycleTag
+// ---------------------------------------------------------------------------
+
+describe('formatLifecycleTag', () => {
+  it('formats with all components', () => {
+    expect(formatLifecycleTag({ wfGen: 0, taskGen: 0, attemptShort: 'abc12345' })).toBe(
+      'g0.t0.aabc12345',
+    );
+  });
+
+  it('bumps yield distinct tags', () => {
+    const a = formatLifecycleTag({ wfGen: 1, taskGen: 0, attemptShort: 'aaa' });
+    const b = formatLifecycleTag({ wfGen: 2, taskGen: 0, attemptShort: 'aaa' });
+    const c = formatLifecycleTag({ wfGen: 1, taskGen: 1, attemptShort: 'aaa' });
+    const d = formatLifecycleTag({ wfGen: 1, taskGen: 0, attemptShort: 'bbb' });
+    expect(new Set([a, b, c, d]).size).toBe(4);
+  });
+
+  it('sanitizes attempt-short to safe characters and bounds length', () => {
+    expect(formatLifecycleTag({ wfGen: 1, taskGen: 2, attemptShort: 'AB$%C12/34D-56-EXTRA' }))
+      .toBe('g1.t2.aabc1234d-56-');
+  });
+
+  it('clamps negative or non-finite generations to 0', () => {
+    expect(formatLifecycleTag({ wfGen: -3, taskGen: NaN as unknown as number, attemptShort: 'x' }))
+      .toBe('g0.t0.ax');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildExperimentBranchName + parseExperimentBranch (round trip)
+// ---------------------------------------------------------------------------
+
+describe('buildExperimentBranchName / parseExperimentBranch', () => {
+  it('builds the canonical shape', () => {
+    const branch = buildExperimentBranchName('wf-1/task', 'g0.t1.aabc12345', 'deadbeef');
+    expect(branch).toBe('experiment/wf-1/task/g0.t1.aabc12345-deadbeef');
+  });
+
+  it('round-trips through parseExperimentBranch', () => {
+    const lifecycleTag = formatLifecycleTag({ wfGen: 4, taskGen: 7, attemptShort: '3f9c0d2' });
+    const contentHash = computeContentHash('wf-9/build', 'pnpm build', undefined, ['c1'], 'head');
+    const branch = buildExperimentBranchName('wf-9/build', lifecycleTag, contentHash);
+    const parsed = parseExperimentBranch(branch);
+    expect(parsed).toEqual({
+      actionId: 'wf-9/build',
+      lifecycleTag,
+      contentHash,
+    });
+  });
+
+  it('rejects invalid shapes', () => {
+    expect(parseExperimentBranch('master')).toBeUndefined();
+    expect(parseExperimentBranch('experiment/foo-deadbeef')).toBeUndefined();
+    expect(parseExperimentBranch('experiment/wf-1/task/no-suffix')).toBeUndefined();
+    expect(parseExperimentBranch('experiment/wf-1/task/g0.t0.a-NOTHEX1')).toBeUndefined();
+    expect(parseExperimentBranch('experiment/wf-1/task/badtag-deadbeef')).toBeUndefined();
+  });
+
+  it('throws on missing actionId or contentHash', () => {
+    expect(() => buildExperimentBranchName('', 'g0.t0.a', 'deadbeef')).toThrow(/actionId/);
+    expect(() => buildExperimentBranchName('wf/x', 'g0.t0.a', '')).toThrow(/contentHash/);
+  });
+
+  it('falls back to a default lifecycle tag when none provided', () => {
+    const branch = buildExperimentBranchName('wf-1/task', '', 'deadbeef');
+    expect(branch).toBe('experiment/wf-1/task/g0.t0.a-deadbeef');
   });
 });
 
