@@ -23,10 +23,18 @@ bash scripts/create-clean-pr-branch.sh --parent-remote upstream --base-ref maste
 git push -u origin pr/<name>
 ```
 
-3. Create/update PR:
+3. Start from the canonical body template and validate it:
 
 ```bash
-node scripts/create-pr.mjs --title "<title>" --base master --body-file <file>
+cp scripts/pr-body-template.md /tmp/my-pr.md
+$EDITOR /tmp/my-pr.md
+node scripts/validate-pr-body.mjs --body-file /tmp/my-pr.md
+```
+
+4. Create/update PR:
+
+```bash
+node scripts/create-pr.mjs --title "<title>" --base master --body-file /tmp/my-pr.md
 ```
 
 By default, tools in this workflow use `upstream` as the parent remote. Override it when your team uses a different remote name.
