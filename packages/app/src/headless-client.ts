@@ -58,6 +58,20 @@ async function runElectronHeadless(args: string[]): Promise<number> {
 
 const DEFAULT_NO_TRACK_DELEGATION_TIMEOUT_MS = 8_000;
 const POST_BOOTSTRAP_NO_TRACK_DELEGATION_TIMEOUT_MS = 90_000;
+const POST_BOOTSTRAP_OWNER_READY_TIMEOUT_MS = 20_000;
+const READ_ONLY_QUERY_OWNER_READY_TIMEOUT_MS = 20_000;
+const READ_ONLY_QUERY_REQUEST_TIMEOUT_MS = 8_000;
+
+export class SharedMutationOwnerTimeoutError extends Error {
+  constructor(message: string = 'Timed out waiting for a shared mutation owner to become available') {
+    super(message);
+    this.name = 'SharedMutationOwnerTimeoutError';
+  }
+}
+
+export function isSharedMutationOwnerTimeoutError(error: unknown): error is SharedMutationOwnerTimeoutError {
+  return error instanceof SharedMutationOwnerTimeoutError;
+}
 
 async function delegateMutation(
   args: string[],
@@ -81,17 +95,25 @@ async function delegateMutation(
   return tryDelegateExec(args, bus, waitForApproval, noTrack, timeoutMs);
 }
 
-async function delegateReadOnlyQuery(args: string[], bus: MessageBus): Promise<boolean> {
+async function delegateReadOnlyQuery(
+  args: string[],
+  bus: MessageBus,
+  refreshMessageBus?: () => Promise<MessageBus>,
+): Promise<boolean> {
   const isUiPerf = args[0] === 'query' && args[1] === 'ui-perf';
   const isQueue = (args[0] === 'query' && args[1] === 'queue') || args[0] === 'queue';
   if (!isUiPerf && !isQueue) {
     return false;
   }
-  const deadline = Date.now() + 8_000;
+  const deadline = Date.now() + READ_ONLY_QUERY_OWNER_READY_TIMEOUT_MS;
+  let messageBus = bus;
   let owner: { ownerId?: string; mode?: string } | null = null;
   while (Date.now() < deadline) {
-    owner = await tryPingHeadlessOwner(bus, 2_000);
+    owner = await tryPingHeadlessOwner(messageBus, 2_000);
     if (owner) break;
+    if (refreshMessageBus) {
+      messageBus = await refreshMessageBus();
+    }
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
   if (!owner) {
@@ -103,11 +125,14 @@ async function delegateReadOnlyQuery(args: string[], bus: MessageBus): Promise<b
   while (Date.now() < deadline) {
     if (isUiPerf) {
       const reset = args.includes('--reset');
-      response = await tryDelegateQueryUiPerf(bus, reset, 5_000);
+      response = await tryDelegateQueryUiPerf(messageBus, reset, READ_ONLY_QUERY_REQUEST_TIMEOUT_MS);
     } else {
-      response = await tryDelegateQuery(bus, { kind: 'queue' }, 5_000);
+      response = await tryDelegateQuery(messageBus, { kind: 'queue' }, READ_ONLY_QUERY_REQUEST_TIMEOUT_MS);
     }
     if (response) break;
+    if (refreshMessageBus) {
+      messageBus = await refreshMessageBus();
+    }
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
   if (!response) {
@@ -143,6 +168,34 @@ async function delegateReadOnlyQuery(args: string[], bus: MessageBus): Promise<b
   return true;
 }
 
+async function delegateAfterBootstrap(
+  args: string[],
+  deps: Pick<HeadlessClientDeps, 'refreshMessageBus'>,
+  bus: MessageBus,
+  waitForApproval?: boolean,
+  noTrack?: boolean,
+): Promise<boolean> {
+  const deadline = Date.now() + POST_BOOTSTRAP_OWNER_READY_TIMEOUT_MS;
+  let messageBus = bus;
+  while (Date.now() < deadline) {
+    const owner = await tryPingHeadlessOwner(messageBus, 1_000);
+    if (owner && await delegateMutation(
+      args,
+      messageBus,
+      waitForApproval,
+      noTrack,
+      noTrack ? POST_BOOTSTRAP_NO_TRACK_DELEGATION_TIMEOUT_MS : DEFAULT_NO_TRACK_DELEGATION_TIMEOUT_MS,
+    )) {
+      return true;
+    }
+    if (deps.refreshMessageBus) {
+      messageBus = await deps.refreshMessageBus();
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  return false;
+}
+
 export interface HeadlessClientDeps {
   messageBus: MessageBus;
   ensureStandaloneOwner: (bus?: MessageBus) => Promise<void>;
@@ -163,7 +216,7 @@ async function ensureStandaloneOwnerViaBootstrap(bus: MessageBus): Promise<void>
       if (owner) return;
       await new Promise((resolveDelay) => setTimeout(resolveDelay, 200));
     }
-    throw new Error('Timed out waiting for a shared mutation owner to become available');
+    throw new SharedMutationOwnerTimeoutError();
   } finally {
     bootstrapLock?.release();
   }
@@ -202,7 +255,7 @@ export async function runHeadlessClientCommand(
     return typeof exitCode === 'number' ? exitCode : 0;
   };
 
-  if (!standaloneMode && !internalOwnerServe && await delegateReadOnlyQuery(args, messageBus)) {
+  if (!standaloneMode && !internalOwnerServe && await delegateReadOnlyQuery(args, messageBus, deps.refreshMessageBus)) {
     return resolvedExitCode();
   }
 
@@ -226,16 +279,27 @@ export async function runHeadlessClientCommand(
   if (deps.refreshMessageBus) {
     messageBus = await deps.refreshMessageBus();
   }
-  await deps.ensureStandaloneOwner(messageBus);
+  try {
+    await deps.ensureStandaloneOwner(messageBus);
+  } catch (err) {
+    if (!isSharedMutationOwnerTimeoutError(err)) {
+      throw err;
+    }
+    if (!deps.refreshMessageBus) {
+      throw err;
+    }
+    messageBus = await deps.refreshMessageBus();
+    await deps.ensureStandaloneOwner(messageBus);
+  }
   if (deps.refreshMessageBus) {
     messageBus = await deps.refreshMessageBus();
   }
-  if (await delegateMutation(
+  if (await delegateAfterBootstrap(
     args,
+    deps,
     messageBus,
     waitForApproval,
     noTrack,
-    noTrack ? POST_BOOTSTRAP_NO_TRACK_DELEGATION_TIMEOUT_MS : DEFAULT_NO_TRACK_DELEGATION_TIMEOUT_MS,
   )) {
     return resolvedExitCode();
   }
