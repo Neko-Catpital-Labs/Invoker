@@ -28,3 +28,4 @@ packages/app/test-results/
 # Local Claude / scratch (never ship)
 .claude.json.backup*
 tmp/plans/
+release/

@@ -26,10 +26,12 @@ import { ExperimentModal } from './components/ExperimentModal.js';
 import { ContextMenu } from './components/ContextMenu.js';
 import { QueueView } from './components/QueueView.js';
 import { ReplaceTaskModal } from './components/ReplaceTaskModal.js';
+import { SystemSetupModal } from './components/SystemSetupModal.js';
 import {
   isExperimentSpawnPivotTask,
   EXPERIMENT_SPAWN_PIVOT_OPEN_TERMINAL_MESSAGE,
 } from './isExperimentSpawnPivot.js';
+import type { SystemDiagnostics } from '@invoker/contracts';
 
 type ModalState =
   | { type: 'none' }
@@ -65,11 +67,22 @@ export function App() {
   const [remoteTargets, setRemoteTargets] = useState<string[]>([]);
   const [executionAgents, setExecutionAgents] = useState<string[]>([]);
   const [statusFilters, setStatusFilters] = useState<Set<string>>(new Set());
+  const [systemDiagnostics, setSystemDiagnostics] = useState<SystemDiagnostics | null>(null);
+  const [showSystemSetup, setShowSystemSetup] = useState(false);
+  const [showSystemBanner, setShowSystemBanner] = useState(false);
   const uiPerfThrottleRef = useRef<Record<string, number>>({});
 
   useEffect(() => {
     window.invoker?.getRemoteTargets?.().then(setRemoteTargets).catch(() => {});
     window.invoker?.getExecutionAgents?.().then(setExecutionAgents).catch(() => {});
+    window.invoker?.getSystemDiagnostics?.().then((diagnostics) => {
+      setSystemDiagnostics(diagnostics);
+      const missingRequired = diagnostics.tools.some((tool) => tool.required && !tool.installed);
+      const hasAgent = diagnostics.tools.some((tool) => (tool.id === 'claude' || tool.id === 'codex') && tool.installed);
+      if (missingRequired || !hasAgent) {
+        setShowSystemBanner(true);
+      }
+    }).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -144,6 +157,8 @@ export function App() {
   }, []);
 
   const selectedTask = selectedTaskId ? tasks.get(selectedTaskId) ?? null : null;
+  const missingRequiredTool = systemDiagnostics?.tools.find((tool) => tool.required && !tool.installed) ?? null;
+  const installedAgentCount = systemDiagnostics?.tools.filter((tool) => (tool.id === 'claude' || tool.id === 'codex') && tool.installed).length ?? 0;
 
   // ── DAG interaction ───────────────────────────────────────
   const handleTaskClick = useCallback((task: TaskState) => {
@@ -519,9 +534,36 @@ export function App() {
         onClear={handleClear}
         onDeleteDB={handleDeleteDB}
         onRefresh={handleRefresh}
+        onOpenSystemSetup={() => setShowSystemSetup(true)}
         viewMode={viewMode}
         onToggleView={setViewMode}
       />
+
+      {showSystemBanner && (
+        <div className="px-4 py-3 border-b border-amber-700 bg-amber-950/50 flex items-center justify-between gap-4">
+          <div className="text-sm text-amber-100">
+            {missingRequiredTool
+              ? `${missingRequiredTool.name} is missing. Invoker needs it for local workflows.`
+              : installedAgentCount === 0
+                ? 'No Claude or Codex CLI detected yet. Install one before running agent-backed tasks.'
+                : 'Review local prerequisites before running packaged workflows.'}
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              onClick={() => setShowSystemSetup(true)}
+              className="px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white rounded text-xs font-medium transition-colors"
+            >
+              Open Setup
+            </button>
+            <button
+              onClick={() => setShowSystemBanner(false)}
+              className="px-2 py-1 text-amber-200 hover:text-white text-xs"
+            >
+              Dismiss
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Main content */}
       <div className="flex-1 flex overflow-hidden">
@@ -626,6 +668,13 @@ export function App() {
           task={modal.task}
           onSubmit={handleReplaceSubmit}
           onClose={closeModal}
+        />
+      )}
+
+      {showSystemSetup && (
+        <SystemSetupModal
+          diagnostics={systemDiagnostics}
+          onClose={() => setShowSystemSetup(false)}
         />
       )}
 

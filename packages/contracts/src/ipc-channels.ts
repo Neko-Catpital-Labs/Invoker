@@ -113,6 +113,23 @@ export interface CleanupWorktreesResult {
   errors: string[];
 }
 
+export interface SystemToolStatus {
+  id: string;
+  name: string;
+  required: boolean;
+  installed: boolean;
+  version?: string;
+  installHint: string;
+}
+
+export interface SystemDiagnostics {
+  platform: string;
+  arch: string;
+  appVersion: string;
+  isPackaged: boolean;
+  tools: SystemToolStatus[];
+}
+
 // ── Invoke Channel Registry ─────────────────────────────────
 // Each key is the channel name string; value is { request, response }.
 // `request` is a tuple of the arguments passed after the channel name.
@@ -339,6 +356,10 @@ export const IpcChannels = {
   'invoker:cleanup-worktrees': {} as {
     request: [];
     response: CleanupWorktreesResult;
+  },
+  'invoker:get-system-diagnostics': {} as {
+    request: [];
+    response: SystemDiagnostics;
   },
 
 } as const;
