@@ -60,6 +60,8 @@ Only include this section when the change modifies component interactions, contr
 
 If the change is small and has no architectural impact, omit `## Architecture` rather than forcing filler.
 
+Do not default to a lightweight `## Summary / ## Testing / ## Notes` PR body. That shape is ad hoc drift, not the repo standard. Use `## Summary / ## Test Plan / ## Revert Plan` as the floor, and add `## Architecture` when the change affects component interactions or data/control flow.
+
 ## Command surface
 
 Preferred repo-local flow:
