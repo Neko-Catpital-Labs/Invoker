@@ -69,16 +69,24 @@ Preferred repo-local flow:
 1. Make sure the branch is based from the parent remote, not the fork.
    Reference: `docs/pr-branching-workflow.md`
 2. Push the working branch to `origin`.
-3. Create or update the PR with:
+3. Start from the canonical template and validate it:
 
 ```bash
-node scripts/create-pr.mjs --title "<title>" --base master --body-file <file>
+cp scripts/pr-body-template.md /tmp/my-pr.md
+$EDITOR /tmp/my-pr.md
+node scripts/validate-pr-body.mjs --body-file /tmp/my-pr.md
+```
+
+4. Create or update the PR with:
+
+```bash
+node scripts/create-pr.mjs --title "<title>" --base master --body-file /tmp/my-pr.md
 ```
 
 Update an existing PR with:
 
 ```bash
-node scripts/create-pr.mjs --title "<title>" --base master --body-file <file> --update <pr-number>
+node scripts/create-pr.mjs --title "<title>" --base master --body-file /tmp/my-pr.md --update <pr-number>
 ```
 
 This script handles local image path upload/injection when configured.
@@ -117,6 +125,7 @@ Before creating a PR:
 - ensure the body sections are present and concrete
 - ensure test commands are real commands that were actually run when possible
 - ensure revert guidance is honest
+- validate the body with `node scripts/validate-pr-body.mjs --body-file <file>`
 
 If you include `## Architecture`, keep the diagrams renderable by GitHub Mermaid.
 Reference:
@@ -127,4 +136,6 @@ Reference:
 
 - `docs/pr-branching-workflow.md`
 - `scripts/create-pr.mjs`
+- `scripts/pr-body-template.md`
+- `scripts/validate-pr-body.mjs`
 - `scripts/test-pr-diagrams.sh`

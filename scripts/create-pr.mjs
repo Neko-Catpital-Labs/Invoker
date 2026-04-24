@@ -19,6 +19,10 @@
  *   Scans the body for markdown image/link patterns where the URL is a local
  *   file path. Uploads those files to Cloudflare R2 and replaces the paths
  *   with public URLs.
+ *
+ * PR body validation:
+ *   Enforces the canonical PR schema:
+ *   ## Summary, ## Test Plan, ## Revert Plan, plus optional ## Architecture.
  */
 
 import { readFileSync, existsSync } from 'node:fs';
@@ -27,6 +31,7 @@ import { homedir } from 'node:os';
 import { randomBytes } from 'node:crypto';
 import { execSync } from 'node:child_process';
 import aws4 from 'aws4';
+import { validatePrBody } from './validate-pr-body.mjs';
 
 const DEFAULT_PARENT_REMOTE = process.env.INVOKER_PARENT_REMOTE || 'upstream';
 
@@ -109,7 +114,12 @@ Options:
   --body <text>      Inline PR body
   --update <num>     Update existing PR number instead of creating new
   --dry-run          Print actions without executing
-  --help             Show this help`);
+  --help             Show this help
+
+PR body schema:
+  Required: ## Summary, ## Test Plan, ## Revert Plan
+  Optional: ## Architecture (must include ### Before and ### After when present)
+  Template: scripts/pr-body-template.md`);
   process.exit(1);
 }
 
@@ -138,6 +148,21 @@ function parseArgs() {
   }
 
   return parsed;
+}
+
+function assertValidPrBody(body) {
+  const errors = validatePrBody(body);
+  if (errors.length === 0) return;
+
+  throw new Error(
+    [
+      'PR body does not match the canonical schema.',
+      ...errors.map((error) => `- ${error}`),
+      '',
+      'Start from scripts/pr-body-template.md and validate with:',
+      '  node scripts/validate-pr-body.mjs --body-file <file>',
+    ].join('\n'),
+  );
 }
 
 // ── Image injection ─────────────────────────────────────────────────────────
@@ -343,6 +368,8 @@ async function main() {
   } else if (args.body) {
     body = args.body;
   }
+
+  assertValidPrBody(body);
 
   // Inject images
   body = await injectImages(body, args.dryRun);
