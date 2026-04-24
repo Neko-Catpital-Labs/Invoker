@@ -203,15 +203,15 @@ describe('A→B→C branch chain', { timeout: 120_000 }, () => {
       const { tasks, executor } = buildChain({ a: worktreeCmd, b: worktreeCmd, c: worktreeCmd });
 
       await executeTask(executor, tasks, 'task-a');
-      expect(tasks[0].execution.branch).toMatch(/^experiment\/task-a-[a-f0-9]{8}$/);
+      expect(tasks[0].execution.branch).toMatch(/^experiment\/task-a\/g\d+\.t\d+\.a[a-z0-9_-]*-[a-f0-9]{8}$/);
       expect(branchExists(tmpDir, tasks[0].execution.branch!)).toBe(true);
 
       await executeTask(executor, tasks, 'task-b');
-      expect(tasks[1].execution.branch).toMatch(/^experiment\/task-b-[a-f0-9]{8}$/);
+      expect(tasks[1].execution.branch).toMatch(/^experiment\/task-b\/g\d+\.t\d+\.a[a-z0-9_-]*-[a-f0-9]{8}$/);
       expect(branchExists(tmpDir, tasks[1].execution.branch!)).toBe(true);
 
       await executeTask(executor, tasks, 'task-c');
-      expect(tasks[2].execution.branch).toMatch(/^experiment\/task-c-[a-f0-9]{8}$/);
+      expect(tasks[2].execution.branch).toMatch(/^experiment\/task-c\/g\d+\.t\d+\.a[a-z0-9_-]*-[a-f0-9]{8}$/);
       expect(branchExists(tmpDir, tasks[2].execution.branch!)).toBe(true);
     });
 

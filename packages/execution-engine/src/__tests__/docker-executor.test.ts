@@ -150,7 +150,7 @@ describe('DockerExecutor', () => {
       const request = args[1] as WorkRequest;
       const handle = args[2] as ExecutorHandle;
       const opts = args[3] as { branchName?: string } | undefined;
-      handle.branch = opts?.branchName ?? `experiment/${request.actionId}-00000000`;
+      handle.branch = opts?.branchName ?? `experiment/${request.actionId}/g0.t0.a-00000000`;
       return undefined;
     }) as any);
 
@@ -230,14 +230,14 @@ describe('DockerExecutor', () => {
       expect.objectContaining({ actionId: 'action-1' }),
       expect.any(Object),
       expect.objectContaining({
-        branchName: expect.stringMatching(/^experiment\/action-1-[0-9a-f]{8}$/),
+        branchName: expect.stringMatching(/^experiment\/action-1\/g\d+\.t\d+\.a[a-z0-9_-]*-[0-9a-f]{8}$/),
       }),
     );
   });
 
   it('sets handle.branch from setupTaskBranch', async () => {
     const handle = await executor.start(makeRequest());
-    expect(handle.branch).toMatch(/^experiment\/action-1-[0-9a-f]{8}$/);
+    expect(handle.branch).toMatch(/^experiment\/action-1\/g\d+\.t\d+\.a[a-z0-9_-]*-[0-9a-f]{8}$/);
   });
 
   // -------------------------------------------------------------------------
@@ -286,7 +286,7 @@ describe('DockerExecutor', () => {
       expect.objectContaining({ actionId: 'act-exit' }),
       '/app',
       0,
-      expect.objectContaining({ branch: expect.stringMatching(/^experiment\/act-exit-[0-9a-f]{8}$/) }),
+      expect.objectContaining({ branch: expect.stringMatching(/^experiment\/act-exit\/g\d+\.t\d+\.a[a-z0-9_-]*-[0-9a-f]{8}$/) }),
     );
   });
 

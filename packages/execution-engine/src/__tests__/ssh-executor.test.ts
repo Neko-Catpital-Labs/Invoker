@@ -6,7 +6,7 @@ import type { WorkRequest } from '@invoker/contracts';
 import type { PersistedTaskMeta } from '../executor.js';
 import { createSshRemoteScriptError } from '../ssh-git-exec.js';
 import { computeRepoUrlHash } from '../git-utils.js';
-import { computeBranchHash } from '../branch-utils.js';
+import { computeContentHash, buildExperimentBranchName, formatLifecycleTag } from '../branch-utils.js';
 
 function makeRequest(overrides: Partial<WorkRequest> = {}): WorkRequest {
   return {
@@ -196,7 +196,7 @@ describe('SshExecutor managed workspace mode', () => {
     const handle = await ssh.start(req);
 
     expect(handle.workspacePath).toMatch(/^\~\/\.invoker\/worktrees\/[a-f0-9]{12}\//);
-    expect(handle.branch).toMatch(/^experiment\/test-task-[a-f0-9]{8}$/);
+    expect(handle.branch).toMatch(/^experiment\/test-task\/g\d+\.t\d+\.a[a-z0-9_-]*-[a-f0-9]{8}$/);
 
     // Verify spawnSshRemoteStdin was called with correct arguments
     expect(spawnStub).toHaveBeenCalledTimes(1);
@@ -255,7 +255,7 @@ branch refs/heads/experiment/test-task-oldhash
 
     const handle = await ssh.start(req);
 
-    expect(handle.workspacePath).toMatch(new RegExp(`^~/.invoker/worktrees/${repoHash}/experiment-test-task-[0-9a-f]{8}$`));
+    expect(handle.workspacePath).toMatch(new RegExp(`^~/.invoker/worktrees/${repoHash}/experiment-test-task-g\\d+\\.t\\d+\\.a[a-z0-9_-]*-[0-9a-f]{8}$`));
     expect(handle.workspacePath).not.toBe(`~/.invoker/worktrees/${repoHash}/experiment-test-task-oldhash`);
     expect(setupTaskBranchSpy).toHaveBeenCalledTimes(1);
     expect(execRemoteCapture).not.toHaveBeenCalledWith(expect.stringContaining('branch -m'), 'rename_reuse_branch');
@@ -304,7 +304,7 @@ branch refs/heads/experiment/test-task-oldhash
 
     expect(err.message).toContain('already used by worktree');
     expect(err.workspacePath).toBe(ownerPath);
-    expect(err.branch).toMatch(/^experiment\/test-task-[0-9a-f]{8}$/);
+    expect(err.branch).toMatch(/^experiment\/test-task\/g\d+\.t\d+\.a[a-z0-9_-]*-[0-9a-f]{8}$/);
   });
 
   it('cleans up the existing branch-owner worktree before recreating a conflicting target branch (when cleanup enabled)', async () => {
@@ -320,15 +320,14 @@ branch refs/heads/experiment/test-task-oldhash
 
     const repoHash = computeRepoUrlHash('git@github.com:owner/repo.git');
     const baseHead = 'abc123def456abc123def456abc123def456abc1';
-    const branchHash = computeBranchHash(
+    const branchHash = computeContentHash(
       'test-task-conflict',
       'pnpm test',
       undefined,
       [],
       baseHead,
-      '',
     );
-    const targetBranch = `experiment/test-task-conflict-${branchHash}`;
+    const targetBranch = buildExperimentBranchName('test-task-conflict', '', branchHash);
     const ownerPath = `/home/testuser/.invoker/worktrees/${repoHash}/stale-owner-${branchHash}`;
     let cleanupScript = '';
     vi.spyOn(ssh, 'execRemoteCapture').mockImplementation(async (script: string, phase?: string) => {
@@ -940,7 +939,7 @@ describe('SshExecutor entry lifecycle', () => {
     await new Promise((r) => setTimeout(r, 50));
   });
 
-  it('changes managed branch and worktree when request salt changes, as recreate does', async () => {
+  it('changes managed branch and worktree when request lifecycleTag changes, as recreate does', async () => {
     const ssh2 = new SshExecutor({
       host: 'localhost',
       user: 'testuser',
@@ -970,18 +969,27 @@ describe('SshExecutor entry lifecycle', () => {
     const first = await ssh2.start(makeRequest({
       requestId: 'req-salt-1',
       actionType: 'command',
-      inputs: { ...baseInputs, salt: 'wf:1|task:4' },
+      inputs: {
+        ...baseInputs,
+        lifecycleTag: formatLifecycleTag({ wfGen: 1, taskGen: 4, attemptShort: 'a1' }),
+      },
     }));
     const second = await ssh2.start(makeRequest({
       requestId: 'req-salt-2',
       actionType: 'command',
-      inputs: { ...baseInputs, salt: 'wf:1|task:5' },
+      inputs: {
+        ...baseInputs,
+        lifecycleTag: formatLifecycleTag({ wfGen: 1, taskGen: 5, attemptShort: 'a2' }),
+      },
     }));
 
     const firstOpts = setupTaskBranchSpy.mock.calls[0]?.[3];
     const secondOpts = setupTaskBranchSpy.mock.calls[1]?.[3];
-    expect(firstOpts?.branchName).toMatch(/^experiment\/test-task-[0-9a-f]{8}$/);
-    expect(secondOpts?.branchName).toMatch(/^experiment\/test-task-[0-9a-f]{8}$/);
+    const branchPattern = /^experiment\/test-task\/g\d+\.t\d+\.a[a-z0-9_-]*-[0-9a-f]{8}$/;
+    expect(firstOpts?.branchName).toMatch(branchPattern);
+    expect(secondOpts?.branchName).toMatch(branchPattern);
+    // Same content (cmd/prompt/base) → same content hash; lifecycle tag must
+    // still differentiate the two branches.
     expect(firstOpts?.branchName).not.toBe(secondOpts?.branchName);
     expect(firstOpts?.worktreeDir).not.toBe(secondOpts?.worktreeDir);
     expect(first.branch).toBe(firstOpts?.branchName);

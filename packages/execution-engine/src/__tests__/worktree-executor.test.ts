@@ -18,7 +18,7 @@ vi.mock('node:fs', async (importOriginal) => {
 // Must import after mock setup
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync } from 'node:fs';
-import { WorktreeExecutor, computeBranchHash } from '../worktree-executor.js';
+import { WorktreeExecutor, computeContentHash } from '../worktree-executor.js';
 import { BaseExecutor } from '../base-executor.js';
 
 const mockedSpawn = vi.mocked(spawn);
@@ -160,75 +160,21 @@ async function waitForCondition(predicate: () => boolean, timeoutMs = 500): Prom
   }
 }
 
-describe('computeBranchHash', () => {
+describe('computeContentHash (re-exported by worktree-executor)', () => {
   it('is deterministic: same inputs produce same hash', () => {
-    const a = computeBranchHash('t1', 'echo hi', undefined, ['c1'], 'HEAD1');
-    const b = computeBranchHash('t1', 'echo hi', undefined, ['c1'], 'HEAD1');
+    const a = computeContentHash('t1', 'echo hi', undefined, ['c1'], 'HEAD1');
+    const b = computeContentHash('t1', 'echo hi', undefined, ['c1'], 'HEAD1');
     expect(a).toBe(b);
     expect(a).toMatch(/^[0-9a-f]{8}$/);
   });
 
-  it('is sensitive to command changes', () => {
-    const a = computeBranchHash('t1', 'echo hi', undefined, [], 'HEAD1');
-    const b = computeBranchHash('t1', 'echo bye', undefined, [], 'HEAD1');
-    expect(a).not.toBe(b);
-  });
-
-  it('is sensitive to prompt changes', () => {
-    const a = computeBranchHash('t1', undefined, 'prompt A', [], 'HEAD1');
-    const b = computeBranchHash('t1', undefined, 'prompt B', [], 'HEAD1');
-    expect(a).not.toBe(b);
-  });
-
-  it('is sensitive to baseHead changes', () => {
-    const a = computeBranchHash('t1', 'cmd', undefined, [], 'abc123');
-    const b = computeBranchHash('t1', 'cmd', undefined, [], 'def456');
-    expect(a).not.toBe(b);
-  });
-
-  it('is sensitive to upstream commit changes', () => {
-    const a = computeBranchHash('t1', 'cmd', undefined, ['c1'], 'HEAD1');
-    const b = computeBranchHash('t1', 'cmd', undefined, ['c2'], 'HEAD1');
-    expect(a).not.toBe(b);
-  });
-
-  it('is order-independent for upstream commits', () => {
-    const a = computeBranchHash('t1', 'cmd', undefined, ['c1', 'c2'], 'HEAD1');
-    const b = computeBranchHash('t1', 'cmd', undefined, ['c2', 'c1'], 'HEAD1');
+  it('is insensitive to lifecycle context (no salt parameter)', () => {
+    // Two recreates of identical spec produce identical content hash. The
+    // collision-free guarantee comes from the lifecycle tag in the branch
+    // name, not from mixing lifecycle into the hash.
+    const a = computeContentHash('t1', 'cmd', undefined, [], 'HEAD1');
+    const b = computeContentHash('t1', 'cmd', undefined, [], 'HEAD1');
     expect(a).toBe(b);
-  });
-
-  it('is sensitive to salt changes', () => {
-    const a = computeBranchHash('t1', 'cmd', undefined, [], 'HEAD1', '0');
-    const b = computeBranchHash('t1', 'cmd', undefined, [], 'HEAD1', '1');
-    expect(a).not.toBe(b);
-  });
-
-  it('produces same hash when salt is identical', () => {
-    const a = computeBranchHash('t1', 'cmd', undefined, [], 'HEAD1', '42');
-    const b = computeBranchHash('t1', 'cmd', undefined, [], 'HEAD1', '42');
-    expect(a).toBe(b);
-  });
-
-  it('is stable when workflow/task generation salt is unchanged', () => {
-    const salt = 'wf:2|task:4';
-    const a = computeBranchHash('t1', 'cmd', undefined, ['c1'], 'HEAD1', salt);
-    const b = computeBranchHash('t1', 'cmd', undefined, ['c1'], 'HEAD1', salt);
-    expect(a).toBe(b);
-  });
-
-  it('changes when either workflow or task generation salt changes', () => {
-    const base = computeBranchHash('t1', 'cmd', undefined, ['c1'], 'HEAD1', 'wf:2|task:4');
-    const workflowBumped = computeBranchHash('t1', 'cmd', undefined, ['c1'], 'HEAD1', 'wf:3|task:4');
-    const taskBumped = computeBranchHash('t1', 'cmd', undefined, ['c1'], 'HEAD1', 'wf:2|task:5');
-    expect(base).not.toBe(workflowBumped);
-    expect(base).not.toBe(taskBumped);
-  });
-
-  it('is backward compatible when salt is omitted or empty', () => {
-    const noSalt = computeBranchHash('t1', 'cmd', undefined, [], 'HEAD1');
-    const emptySalt = computeBranchHash('t1', 'cmd', undefined, [], 'HEAD1', '');
-    expect(noSalt).toBe(emptySalt);
   });
 });
 
@@ -299,10 +245,10 @@ describe('WorktreeExecutor', () => {
     expect(pool.acquireWorktree).toHaveBeenCalledTimes(1);
     const [calledUrl, calledBranch] = pool.acquireWorktree.mock.calls[0];
     expect(calledUrl).toBe('git@github.com:test/repo.git');
-    expect(calledBranch).toMatch(/^experiment\/action-1-[0-9a-f]{8}$/);
+    expect(calledBranch).toMatch(/^experiment\/action-1\/g\d+\.t\d+\.a[a-z0-9_-]*-[0-9a-f]{8}$/);
 
     // Branch should be content-addressable
-    expect(handle.branch).toMatch(/^experiment\/action-1-[0-9a-f]{8}$/);
+    expect(handle.branch).toMatch(/^experiment\/action-1\/g\d+\.t\d+\.a[a-z0-9_-]*-[0-9a-f]{8}$/);
 
     // Cleanup: emit close on task process to prevent hanging
     taskProcess.emit('close', 0, null);
@@ -373,7 +319,7 @@ describe('WorktreeExecutor', () => {
     expect(response.requestId).toBe('req-1');
     expect(response.actionId).toBe('action-1');
     expect(response.outputs.exitCode).toBe(0);
-    expect(response.outputs.summary).toMatch(/experiment\/action-1-[0-9a-f]{8}/);
+    expect(response.outputs.summary).toMatch(/experiment\/action-1\/g\d+\.t\d+\.a[a-z0-9_-]*-[0-9a-f]{8}/);
     expect(response.outputs.summary).toContain('abc123def456');
   });
 
@@ -658,7 +604,7 @@ describe('WorktreeExecutor', () => {
     const pool = (executor as any).pool;
     expect(pool.acquireWorktree).toHaveBeenCalledTimes(1);
     expect(handle.workspacePath).toMatch(/^\/fake\/worktrees\//);
-    expect(handle.branch).toMatch(/^experiment\/action-1-[0-9a-f]{8}$/);
+    expect(handle.branch).toMatch(/^experiment\/action-1\/g\d+\.t\d+\.a[a-z0-9_-]*-[0-9a-f]{8}$/);
 
     // No non-git spawn should have occurred
     const taskCalls = mockedSpawn.mock.calls.filter(
@@ -1232,8 +1178,8 @@ describe('WorktreeExecutor', () => {
     });
 
     it('baseBranch changes content-addressable branch hash', () => {
-      const hashWithMaster = computeBranchHash('t1', 'cmd', undefined, [], 'master-sha');
-      const hashWithDev = computeBranchHash('t1', 'cmd', undefined, [], 'dev-sha');
+      const hashWithMaster = computeContentHash('t1', 'cmd', undefined, [], 'master-sha');
+      const hashWithDev = computeContentHash('t1', 'cmd', undefined, [], 'dev-sha');
       expect(hashWithMaster).not.toBe(hashWithDev);
     });
   });
@@ -1249,7 +1195,7 @@ describe('WorktreeExecutor', () => {
       const pool = (executor as any).pool;
       expect(pool.acquireWorktree).toHaveBeenCalledTimes(1);
       const [, calledBranch] = pool.acquireWorktree.mock.calls[0];
-      expect(calledBranch).toMatch(/^experiment\/action-1-[0-9a-f]{8}$/);
+      expect(calledBranch).toMatch(/^experiment\/action-1\/g\d+\.t\d+\.a[a-z0-9_-]*-[0-9a-f]{8}$/);
 
       taskProcess.emit('close', 0, null);
     });

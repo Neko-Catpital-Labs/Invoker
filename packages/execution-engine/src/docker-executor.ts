@@ -4,7 +4,7 @@ import type { ExecutorHandle, PersistedTaskMeta, TerminalSpec } from './executor
 import { BaseExecutor, type BaseEntry } from './base-executor.js';
 import { loadSecretsFile } from './secrets-loader.js';
 import { killProcessGroup, cleanElectronEnv, SIGKILL_TIMEOUT_MS } from './process-utils.js';
-import { computeBranchHash } from './branch-utils.js';
+import { computeContentHash, buildExperimentBranchName } from './branch-utils.js';
 import type { AgentRegistry } from './agent-registry.js';
 import { traceExecution } from './exec-trace.js';
 
@@ -353,15 +353,18 @@ export class DockerExecutor extends BaseExecutor<ContainerEntry> {
     const upstreamCommits = (request.inputs.upstreamContext ?? [])
       .map(c => c.commitHash)
       .filter((h): h is string => !!h);
-    const hash = computeBranchHash(
+    const contentHash = computeContentHash(
       request.actionId,
       request.inputs.command,
       request.inputs.prompt,
       upstreamCommits,
       baseHead,
-      request.inputs.salt,
     );
-    const branchName = `experiment/${request.actionId}-${hash}`;
+    const branchName = buildExperimentBranchName(
+      request.actionId,
+      request.inputs.lifecycleTag ?? '',
+      contentHash,
+    );
     const baseBranch = request.inputs.upstreamBranches?.[0]
       ?? request.inputs.baseBranch
       ?? 'HEAD';
