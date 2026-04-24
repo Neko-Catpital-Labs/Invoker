@@ -19,6 +19,10 @@ EOF
 
 task_count=0
 
+json_escape_for_double_quotes() {
+  printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
 # Generate file-existence checks
 if command -v jq &>/dev/null; then
   files=$(echo "$assumptions" | jq -r '.files[]' 2>/dev/null || true)
@@ -77,6 +81,29 @@ while IFS= read -r pkg; do
 EOF
   task_count=$((task_count + 1))
 done <<< "$pkgs"
+
+# Generate policy coverage checks when coverageItems exist
+if command -v jq &>/dev/null; then
+  source_kind=$(echo "$assumptions" | jq -r '.sourceKind // "generic"' 2>/dev/null || echo "generic")
+  source_file=$(echo "$assumptions" | jq -r '.sourceFile // empty' 2>/dev/null || true)
+  if [[ "$source_kind" == "policy_matrix" && -n "$source_file" ]]; then
+    coverage_count=$(echo "$assumptions" | jq '.coverageItems | length' 2>/dev/null || echo 0)
+    for ((i = 0; i < coverage_count; i++)); do
+      coverage_key=$(echo "$assumptions" | jq -r ".coverageItems[$i].coverageKey")
+      verify_text=$(echo "$assumptions" | jq -r ".coverageItems[$i].verifyText")
+      safe_text=$(json_escape_for_double_quotes "$verify_text")
+      task_id="verify-coverage-$(echo "$coverage_key" | sed 's|[/.]|-|g; s/--*/-/g')"
+      cat <<EOF
+  - id: ${task_id}
+    description: "Verify policy coverage source exists: ${coverage_key}"
+    command: "grep -qF -- \"${safe_text}\" \"${source_file}\""
+    dependencies: []
+
+EOF
+      task_count=$((task_count + 1))
+    done
+  fi
+fi
 
 # If no tasks were generated, add a no-op so the plan is valid
 if [[ $task_count -eq 0 ]]; then

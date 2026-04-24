@@ -21,6 +21,8 @@ Minimal controller skill. Keep policy short here; use deterministic scripts and 
 
 Grep-only checks are Phase 1a only; behavioral claims require executed Phase 1b evidence.
 
+**Policy-matrix documents:** When the source is an architecture or policy document with a decision table, exception rules, or cross-cutting invariants, you must preserve row-level coverage before authoring workflows. Do not stop at files/functions/packages; every required policy row must map to a workflow step or an explicit waiver.
+
 **Delegated task hints (best effort):** When authoring tasks, consider adding `Files:`, `Change types:`, and `Acceptance criteria:` blocks in each task `description` to help handoff to another agent—lists reflect what you know **at planning time** and can be updated (`TBD`, follow-on tasks) as scope grows. **Not** required for `skill-doctor` to pass. See `references/task-patterns.md` § *Delegated execution hints*.
 
 **Bugfix repro:** For bug/regression plans, a shared `bash scripts/repro-<slug>.sh` (or the same `command:` before and after) is **strongly recommended**; **`skill-doctor` does not require it.** If the fix invalidates the original repro, use another explicit verification task. See `references/task-patterns.md` § *Bugfix repro*.
@@ -46,11 +48,15 @@ bash skills/plan-to-invoker/scripts/skill-doctor.sh <plan-file>
 - `--skip-assumptions` — skip assumption extraction and verify plan generation
 - `--skip-atomicity` — skip task atomicity linting
 - `--skip-validation` — skip YAML schema validation
+- `--source-file FILE` — run assumption and coverage checks against a separate source document
+- `--coverage-map FILE` — require row-to-workflow traceability for policy-matrix sources
+- `--stack-manifest FILE` — require coverage-map workflow labels to match a real authored workflow stack
 - `--warn-delegation` — pass advisory delegation-hint warnings from atomicity lint (no additional failures)
 - `--verbose` — show detailed output from each sub-check
 - `--help` — show usage information
 
 This single command runs: assumption extraction, verify plan generation, YAML validation, atomicity linting, and parse-results validation. Use this for deterministic pass/fail before submitting any plan.
+For policy-matrix inputs, it also checks that row-level coverage was extracted and that verify-plan generation did not degrade to `verify-noop`. When validating a plan against a separate policy source, pass `--source-file`, `--coverage-map`, and `--stack-manifest`; policy-matrix inputs now fail without a coverage map and a real authored stack manifest.
 
 ### Fallback commands (for debugging individual checks)
 
@@ -118,6 +124,7 @@ Runs all validation checks (assumption extraction, verify plan generation, schem
 
 - Extract assumptions: `bash skills/plan-to-invoker/scripts/extract-assumptions.sh <plan-file>`
 - Generate verify scaffold: `bash skills/plan-to-invoker/scripts/generate-verify-plan.sh "<plan-name>" < assumptions.json > plans/verify-<slug>.yaml`
+- Generate stack manifest template: `bash skills/plan-to-invoker/scripts/generate-stack-manifest-template.sh coverage-map.json <source-file> > stack-manifest.json`
 - Validate schema + dependencies: `bash skills/plan-to-invoker/scripts/validate-plan.sh <plan-file>`
 - Lint task atomicity + detail quality: `bash skills/plan-to-invoker/scripts/lint-task-atomicity.sh <plan-file>` (optional: `--warn-delegation`)
 - Measure plan quality over time: `references/efficacy-rubric.md`

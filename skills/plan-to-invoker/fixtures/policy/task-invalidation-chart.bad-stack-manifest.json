@@ -1,0 +1,8 @@
+{
+  "sourceFile": "skills/plan-to-invoker/fixtures/policy/task-invalidation-chart.md",
+  "workflows": [
+    { "label": "Step 2: Command mutation path", "planFile": "plans/task-invalidation-step-2-command-mutation.template.yaml", "order": 2 },
+    { "label": "Step 3: Prompt mutation path", "planFile": "plans/task-invalidation-step-3-prompt-mutation.template.yaml", "order": 3 },
+    { "label": "Step 4: Agent mutation path", "planFile": "plans/task-invalidation-step-4-agent-mutation.template.yaml", "order": 4 }
+  ]
+}

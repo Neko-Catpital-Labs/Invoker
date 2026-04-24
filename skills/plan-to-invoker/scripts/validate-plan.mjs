@@ -7,15 +7,42 @@
  * Output: JSON array of errors (stable keys: errorType, field, taskId, message, value)
  */
 
-import { readFileSync } from 'node:fs';
+import { execSync } from 'node:child_process';
+import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 
-// Resolve yaml from packages/app/node_modules using absolute path
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-const repoRoot = resolve(__dirname, '../../..');
-const yamlPath = resolve(repoRoot, 'packages/app/node_modules/yaml/dist/index.js');
+
+function resolveYamlModulePath(scriptDir) {
+  const localRepoRoot = resolve(scriptDir, '../../..');
+  const localYamlPath = resolve(localRepoRoot, 'packages/app/node_modules/yaml/dist/index.js');
+  if (existsSync(localYamlPath)) {
+    return localYamlPath;
+  }
+
+  try {
+    const gitCommonDir = execSync('git rev-parse --git-common-dir', {
+      cwd: scriptDir,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    const sharedRepoRoot = resolve(scriptDir, gitCommonDir, '..');
+    const sharedYamlPath = resolve(sharedRepoRoot, 'packages/app/node_modules/yaml/dist/index.js');
+    if (existsSync(sharedYamlPath)) {
+      return sharedYamlPath;
+    }
+  } catch {
+    // Ignore git lookup failure and fall through to the explicit error below.
+  }
+
+  throw new Error(
+    'Unable to resolve yaml runtime. Checked packages/app/node_modules/yaml/dist/index.js in the current worktree and the shared git checkout.',
+  );
+}
+
+const yamlPath = resolveYamlModulePath(__dirname);
 
 const { parse: parseYaml } = await import(yamlPath);
 
