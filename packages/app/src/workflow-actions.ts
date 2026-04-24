@@ -360,6 +360,52 @@ export async function setWorkflowMergeMode(
   }
 }
 
+/**
+ * Persist new fix-session prompt / fix-session context and re-run
+ * the failed task — **retry-class** invalidation route per Step 10
+ * of `docs/architecture/task-invalidation-roadmap.md` and the
+ * Decision Table row "Change fix prompt or fix context while
+ * `fixing_with_ai`" in
+ * `docs/architecture/task-invalidation-chart.md`
+ * (`MUTATION_POLICIES.fixContext` → `retryTask` / task scope).
+ *
+ * Step 10 introduces this wrapper as a thin async delegate around
+ * `Orchestrator.editTaskFixContext` (mirrors the Step 2–9 wrapper
+ * pattern). Prior to Step 10 the fix-session mutation surface had
+ * **no general policy** at all — the chart's "Fix-session
+ * inconsistency" section flagged the bespoke
+ * `beginConflictResolution` / `revertConflictResolution` rollback
+ * as "one special active invalidation mechanism, not a general
+ * one". The substantive routing — same-content no-op detection,
+ * cancel-first interruption when the task is in an active fix
+ * session (`fixing_with_ai`), `fixPrompt` / `fixContext`
+ * persistence on the task config, and the retry-class reset via
+ * `restartTask` (today's `retryTask` compatibility wire — see
+ * `MUTATION_POLICIES.fixContext` and `buildInvalidationDeps`) —
+ * lives in `Orchestrator.editTaskFixContext`. That method is the
+ * synchronous orchestrator-internal seam of `applyInvalidation`'s
+ * Hard Invariant (cancel BEFORE authoritative reset) and reuses
+ * `restartTask`'s reset shape so the task's `agentSessionId` /
+ * `containerId` / `error` / `exitCode` / timing fields are cleared
+ * while branch / workspacePath lineage survives — the chart's
+ * retry-class semantics for fix-context mutations.
+ *
+ * Cancel-first is enforced inside the orchestrator method — this
+ * wrapper MUST NOT add a parallel cancel call.
+ */
+export async function setTaskFixContext(
+  taskId: string,
+  patch: { fixPrompt?: string; fixContext?: string },
+  deps: Pick<ActionDeps, 'orchestrator'> & { taskExecutor: TaskRunner },
+): Promise<TaskState[]> {
+  const started = deps.orchestrator.editTaskFixContext(taskId, patch);
+  const runnable = started.filter((t) => t.status === 'running');
+  if (runnable.length > 0) {
+    await deps.taskExecutor.executeTasks(runnable);
+  }
+  return started;
+}
+
 export async function resolveConflictAction(
   taskId: string,
   deps: Pick<ActionDeps, 'orchestrator' | 'persistence' | 'autoApproveAIFixes'> & { taskExecutor: TaskRunner },
