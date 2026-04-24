@@ -1486,4 +1486,23 @@ describe('headless delegation enforcement', () => {
       });
     });
   });
+
+  describe('delete-all winner task races', () => {
+    beforeEach(() => {
+      (mockDeps.persistence as any).readOnly = false;
+      mockDeps.persistence.listWorkflows = vi.fn(() => []);
+      mockDeps.commandService.approve = vi.fn();
+      mockDeps.commandService.cancelTask = vi.fn();
+    });
+
+    it('treats approve on a deleted task as a no-op when delete-all already removed every workflow', async () => {
+      await expect(runHeadless(['approve', 'wf-1/task-a'], mockDeps)).resolves.toBeUndefined();
+      expect(mockDeps.commandService.approve).not.toHaveBeenCalled();
+    });
+
+    it('treats cancel on a deleted task as a no-op when delete-all already removed every workflow', async () => {
+      await expect(runHeadless(['cancel', 'wf-1/task-a'], mockDeps)).resolves.toBeUndefined();
+      expect(mockDeps.commandService.cancelTask).not.toHaveBeenCalled();
+    });
+  });
 });

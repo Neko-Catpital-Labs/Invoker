@@ -1020,126 +1020,140 @@ async function headlessResume(
 
 async function headlessApprove(taskId: string, deps: HeadlessDeps): Promise<void> {
   if (!taskId) throw new Error('Missing taskId.');
-  const restored = restoreWorkflowForTask(taskId, deps);
-  taskId = restored.resolvedTaskId;
-  const te = createHeadlessExecutor(deps);
-  wireHeadlessApproveHook(deps, te);
-  const autoFix = wireHeadlessAutoFix(deps, te);
-  const approveTaskAction = buildHeadlessApproveAction(deps, te);
-  const beforeStatus = deps.orchestrator.getWorkflowStatus(restored.workflowId);
-  const { started } = await approveTaskAction(taskId);
-  await finalizeMutationWithGlobalTopup({
-    orchestrator: deps.orchestrator,
-    taskExecutor: te,
-    logger: deps.logger,
-    context: 'headless.approve',
-    started,
-  });
-  process.stdout.write(`Approved task: ${taskId}\n`);
-  if (deps.noTrack) {
-    process.stdout.write('[headless] --no-track enabled: approve accepted; exiting without tracking.\n');
+  await withRestoredTaskUnlessDeleteAllWon(taskId, deps, 'approve', async (restored) => {
+    taskId = restored.resolvedTaskId;
+    const te = createHeadlessExecutor(deps);
+    wireHeadlessApproveHook(deps, te);
+    const autoFix = wireHeadlessAutoFix(deps, te);
+    const approveTaskAction = buildHeadlessApproveAction(deps, te);
+    const beforeStatus = deps.orchestrator.getWorkflowStatus(restored.workflowId);
+    const { started } = await approveTaskAction(taskId);
+    await finalizeMutationWithGlobalTopup({
+      orchestrator: deps.orchestrator,
+      taskExecutor: te,
+      logger: deps.logger,
+      context: 'headless.approve',
+      started,
+    });
+    process.stdout.write(`Approved task: ${taskId}\n`);
+    if (deps.noTrack) {
+      process.stdout.write('[headless] --no-track enabled: approve accepted; exiting without tracking.\n');
+      autoFix.unsubscribe();
+      return;
+    }
+    const afterStatus = deps.orchestrator.getWorkflowStatus(restored.workflowId);
+    const workflowTasks = deps
+      .orchestrator
+      .getAllTasks()
+      .filter((task) => task.config.workflowId === restored.workflowId);
+    const readyTasks = (deps.orchestrator.getReadyTasks?.() ?? [])
+      .filter((task) => task.config.workflowId === restored.workflowId && task.status === 'pending');
+    const hasRunningWork = workflowTasks.some(
+      (task) => task.status === 'running' || task.status === 'fixing_with_ai',
+    );
+    const resumedWork =
+      hasRunningWork
+      || afterStatus.running > beforeStatus.running
+      || afterStatus.pending < beforeStatus.pending
+      || readyTasks.length > 0;
+    if (!resumedWork) {
+      autoFix.unsubscribe();
+      return;
+    }
+    await trackHeadlessWorkflow(restored.workflowId, deps, {
+      hasBackgroundWork: autoFix.isBusy,
+      printSummary: false,
+      printTaskOutput: true,
+      setExitCodeOnFailure: false,
+    });
     autoFix.unsubscribe();
-    return;
-  }
-  const afterStatus = deps.orchestrator.getWorkflowStatus(restored.workflowId);
-  const readyTasks = deps
-    .orchestrator
-    .getReadyTasks()
-    .filter((task) => task.config.workflowId === restored.workflowId && task.status === 'pending');
-  const resumedWork =
-    afterStatus.running > beforeStatus.running
-    || afterStatus.pending < beforeStatus.pending
-    || readyTasks.length > 0
-    || started.some((task) => task.config.workflowId === restored.workflowId && task.status === 'running');
-  if (!resumedWork) {
-    autoFix.unsubscribe();
-    return;
-  }
-  await trackHeadlessWorkflow(restored.workflowId, deps, {
-    hasBackgroundWork: autoFix.isBusy,
-    printSummary: false,
-    printTaskOutput: true,
-    setExitCodeOnFailure: false,
   });
-  autoFix.unsubscribe();
 }
 
 async function headlessReject(taskId: string, deps: Pick<HeadlessDeps, 'commandService' | 'orchestrator' | 'persistence'>, reason?: string): Promise<void> {
   if (!taskId) throw new Error('Missing taskId.');
-  taskId = restoreWorkflowForTask(taskId, deps).resolvedTaskId;
-  const envelope = makeEnvelope('reject', 'headless', 'task', { taskId, reason });
-  const result = await deps.commandService.reject(envelope);
-  if (!result.ok) throw new Error(result.error.message);
-  process.stdout.write(`Rejected task: ${taskId}${reason ? ` (reason: ${reason})` : ''}\n`);
+  await withRestoredTaskUnlessDeleteAllWon(taskId, deps, 'reject', async (restored) => {
+    taskId = restored.resolvedTaskId;
+    const envelope = makeEnvelope('reject', 'headless', 'task', { taskId, reason });
+    const result = await deps.commandService.reject(envelope);
+    if (!result.ok) throw new Error(result.error.message);
+    process.stdout.write(`Rejected task: ${taskId}${reason ? ` (reason: ${reason})` : ''}\n`);
+  });
 }
 
 async function headlessInput(taskId: string, text: string, deps: Pick<HeadlessDeps, 'commandService' | 'orchestrator' | 'persistence'>): Promise<void> {
   if (!taskId || !text) throw new Error('Missing arguments. Usage: --headless input <taskId> <text>');
-  taskId = restoreWorkflowForTask(taskId, deps).resolvedTaskId;
-  const envelope = makeEnvelope('provide-input', 'headless', 'task', { taskId, input: text });
-  const result = await deps.commandService.provideInput(envelope);
-  if (!result.ok) throw new Error(result.error.message);
-  process.stdout.write(`Input provided to task: ${taskId}\n`);
+  await withRestoredTaskUnlessDeleteAllWon(taskId, deps, 'input', async (restored) => {
+    taskId = restored.resolvedTaskId;
+    const envelope = makeEnvelope('provide-input', 'headless', 'task', { taskId, input: text });
+    const result = await deps.commandService.provideInput(envelope);
+    if (!result.ok) throw new Error(result.error.message);
+    process.stdout.write(`Input provided to task: ${taskId}\n`);
+  });
 }
 
 async function headlessSelect(taskId: string, experimentId: string, deps: HeadlessDeps): Promise<void> {
   if (!taskId || !experimentId) throw new Error('Missing arguments. Usage: --headless select <taskId> <expId>');
-  const { workflowId, resolvedTaskId } = restoreWorkflowForTask(taskId, deps);
-  const envelope = makeEnvelope('select-experiment', 'headless', 'task', { taskId: resolvedTaskId, experimentId });
-  const result = await deps.commandService.selectExperiment(envelope);
-  if (!result.ok) throw new Error(result.error.message);
-  process.stdout.write(`Selected experiment ${experimentId} for task: ${resolvedTaskId}\n`);
+  await withRestoredTaskUnlessDeleteAllWon(taskId, deps, 'select', async ({ workflowId, resolvedTaskId }) => {
+    const envelope = makeEnvelope('select-experiment', 'headless', 'task', { taskId: resolvedTaskId, experimentId });
+    const result = await deps.commandService.selectExperiment(envelope);
+    if (!result.ok) throw new Error(result.error.message);
+    process.stdout.write(`Selected experiment ${experimentId} for task: ${resolvedTaskId}\n`);
 
-  const taskExecutor = createHeadlessExecutor(deps);
-  const autoFix = wireHeadlessAutoFix(deps, taskExecutor);
-  const started = deps.orchestrator.resumeWorkflow(workflowId);
-  void started;
-  await trackHeadlessWorkflow(workflowId, deps, {
-    hasBackgroundWork: autoFix.isBusy,
-    printSummary: false,
-    printTaskOutput: true,
-    setExitCodeOnFailure: false,
+    const taskExecutor = createHeadlessExecutor(deps);
+    const autoFix = wireHeadlessAutoFix(deps, taskExecutor);
+    const started = deps.orchestrator.resumeWorkflow(workflowId);
+    void started;
+    await trackHeadlessWorkflow(workflowId, deps, {
+      hasBackgroundWork: autoFix.isBusy,
+      printSummary: false,
+      printTaskOutput: true,
+      setExitCodeOnFailure: false,
+    });
+    autoFix.unsubscribe();
   });
-  autoFix.unsubscribe();
 }
 
 async function headlessRetryTask(taskId: string, deps: HeadlessDeps): Promise<void> {
   if (!taskId) throw new Error('Missing arguments. Usage: --headless retry-task <taskId>');
-  const restored = restoreWorkflowForTask(taskId, deps);
-  taskId = restored.resolvedTaskId;
-  await preemptTaskSubgraph(taskId, deps);
+  await withRestoredTaskUnlessDeleteAllWon(taskId, deps, 'retry-task', async (restored) => {
+    taskId = restored.resolvedTaskId;
+    await preemptTaskSubgraph(taskId, deps);
 
-  const envelope = makeEnvelope('restart-task', 'headless', 'task', { taskId });
-  const result = await deps.commandService.retryTask(envelope);
-  if (!result.ok) throw new Error(result.error.message);
-  const runnable = result.data.filter(t => t.status === 'running');
-  process.stdout.write(`Restarted task "${taskId}" — ${runnable.length} task(s) to execute\n`);
+    const envelope = makeEnvelope('restart-task', 'headless', 'task', { taskId });
+    const result = await deps.commandService.retryTask(envelope);
+    if (!result.ok) throw new Error(result.error.message);
+    const runnable = result.data.filter(t => t.status === 'running');
+    process.stdout.write(`Restarted task "${taskId}" — ${runnable.length} task(s) to execute\n`);
 
-  const taskExecutor = createHeadlessExecutor(deps);
-  const autoFix = wireHeadlessAutoFix(deps, taskExecutor);
-  const { topup } = await dispatchStartedTasksWithGlobalTopup({
-    orchestrator: deps.orchestrator,
-    taskExecutor,
-    logger: deps.logger,
-    context: 'headless.restart-task',
-    started: result.data,
-  });
-  if (runnable.length + topup.length === 0) {
+    const taskExecutor = createHeadlessExecutor(deps);
+    const autoFix = wireHeadlessAutoFix(deps, taskExecutor);
+    const { topup } = await dispatchStartedTasksWithGlobalTopup({
+      orchestrator: deps.orchestrator,
+      taskExecutor,
+      logger: deps.logger,
+      context: 'headless.restart-task',
+      started: result.data,
+    });
+    if (runnable.length + topup.length === 0) {
+      autoFix.unsubscribe();
+      return;
+    }
+    await trackHeadlessWorkflow(restored.workflowId, deps, {
+      hasBackgroundWork: autoFix.isBusy,
+      printSummary: false,
+      printTaskOutput: true,
+      setExitCodeOnFailure: false,
+    });
     autoFix.unsubscribe();
-    return;
-  }
-  await trackHeadlessWorkflow(restored.workflowId, deps, {
-    hasBackgroundWork: autoFix.isBusy,
-    printSummary: false,
-    printTaskOutput: true,
-    setExitCodeOnFailure: false,
   });
-  autoFix.unsubscribe();
 }
 
 async function headlessFix(taskId: string, deps: HeadlessDeps, agentArg?: string): Promise<void> {
   if (!taskId) throw new Error('Missing taskId. Usage: --headless fix <taskId> [claude|codex]');
-  taskId = restoreWorkflowForTask(taskId, deps).resolvedTaskId;
+  const restored = restoreWorkflowForTaskUnlessDeleteAllWon(taskId, deps, 'fix');
+  if (!restored) return;
+  taskId = restored.resolvedTaskId;
 
   const te = createHeadlessExecutor(deps);
   const autoFix = wireHeadlessAutoFix(deps, te);
@@ -1206,7 +1220,9 @@ async function headlessFix(taskId: string, deps: HeadlessDeps, agentArg?: string
 
 async function headlessResolveConflict(taskId: string, deps: HeadlessDeps, agentArg?: string): Promise<void> {
   if (!taskId) throw new Error('Missing taskId. Usage: --headless resolve-conflict <taskId> [claude|codex]');
-  taskId = restoreWorkflowForTask(taskId, deps).resolvedTaskId;
+  const restored = restoreWorkflowForTaskUnlessDeleteAllWon(taskId, deps, 'resolve-conflict');
+  if (!restored) return;
+  taskId = restored.resolvedTaskId;
 
   const te = createHeadlessExecutor(deps);
   const autoFix = wireHeadlessAutoFix(deps, te);
@@ -1244,7 +1260,9 @@ async function headlessResolveConflict(taskId: string, deps: HeadlessDeps, agent
 
 async function headlessRebaseAndRetry(taskId: string, deps: HeadlessDeps): Promise<void> {
   if (!taskId) throw new Error('Missing arguments. Usage: --headless rebase-and-retry <taskId>');
-  taskId = restoreWorkflowForTask(taskId, deps).resolvedTaskId;
+  const restored = restoreWorkflowForTaskUnlessDeleteAllWon(taskId, deps, 'rebase');
+  if (!restored) return;
+  taskId = restored.resolvedTaskId;
   const workflowId = deps.orchestrator.getTask(taskId)?.config.workflowId;
   if (!workflowId) throw new Error(`Task "${taskId}" has no workflow`);
   await preemptWorkflowBeforeMutation(workflowId, {
@@ -1338,7 +1356,9 @@ async function headlessRecreateTask(taskId: string, deps: HeadlessDeps): Promise
   if (!taskId) {
     throw new Error('Missing arguments. Usage: --headless recreate-task <taskId>');
   }
-  taskId = restoreWorkflowForTask(taskId, deps).resolvedTaskId;
+  const restored = restoreWorkflowForTaskUnlessDeleteAllWon(taskId, deps, 'recreate-task');
+  if (!restored) return;
+  taskId = restored.resolvedTaskId;
   await preemptTaskSubgraph(taskId, deps);
 
   const started = sharedRecreateTask(taskId, { persistence: deps.persistence, orchestrator: deps.orchestrator });
@@ -1612,7 +1632,8 @@ async function preemptWorkflowExecution(workflowId: string, deps: HeadlessDeps):
 
 async function headlessEdit(taskId: string, newCommand: string, deps: HeadlessDeps): Promise<void> {
   if (!taskId || !newCommand) throw new Error('Missing arguments. Usage: --headless edit <taskId> <newCommand>');
-  const restored = restoreWorkflowForTask(taskId, deps);
+  const restored = restoreWorkflowForTaskUnlessDeleteAllWon(taskId, deps, 'set command');
+  if (!restored) return;
   taskId = restored.resolvedTaskId;
   const taskExecutor = createHeadlessExecutor(deps);
   const autoFix = wireHeadlessAutoFix(deps, taskExecutor);
@@ -1680,7 +1701,8 @@ async function headlessEditPrompt(taskId: string, newPrompt: string, deps: Headl
 
 async function headlessEditExecutor(taskId: string, executorType: string, deps: HeadlessDeps): Promise<void> {
   if (!taskId || !executorType) throw new Error('Missing arguments. Usage: --headless edit-executor <taskId> <executorType>');
-  const restored = restoreWorkflowForTask(taskId, deps);
+  const restored = restoreWorkflowForTaskUnlessDeleteAllWon(taskId, deps, 'set executor');
+  if (!restored) return;
   taskId = restored.resolvedTaskId;
   const taskExecutor = createHeadlessExecutor(deps);
   const autoFix = wireHeadlessAutoFix(deps, taskExecutor);
@@ -1714,7 +1736,8 @@ async function headlessEditExecutor(taskId: string, executorType: string, deps: 
 
 async function headlessEditAgent(taskId: string, agentName: string, deps: HeadlessDeps): Promise<void> {
   if (!taskId || !agentName) throw new Error('Missing arguments. Usage: --headless edit-agent <taskId> <claude|codex>');
-  const restored = restoreWorkflowForTask(taskId, deps);
+  const restored = restoreWorkflowForTaskUnlessDeleteAllWon(taskId, deps, 'set agent');
+  if (!restored) return;
   taskId = restored.resolvedTaskId;
   const taskExecutor = createHeadlessExecutor(deps);
   const autoFix = wireHeadlessAutoFix(deps, taskExecutor);
@@ -1850,56 +1873,56 @@ async function headlessSession(taskId: string | undefined, deps: Pick<HeadlessDe
 
 async function headlessCancel(taskId: string, deps: HeadlessDeps): Promise<void> {
   if (!taskId) throw new Error('Missing taskId. Usage: --headless cancel <taskId>');
-  taskId = restoreWorkflowForTask(taskId, deps).resolvedTaskId;
+  await withRestoredTaskUnlessDeleteAllWon(taskId, deps, 'cancel', async (restored) => {
+    taskId = restored.resolvedTaskId;
 
-  if (deps.cancelTask) {
-    const result = await deps.cancelTask(taskId);
-    process.stdout.write(`Cancelled ${result.cancelled.length} task(s): [${result.cancelled.join(', ')}]\n`);
-    if (result.runningCancelled.length > 0) {
-      process.stdout.write(`Killed running: [${result.runningCancelled.join(', ')}]\n`);
-    }
-    return;
-  }
-
-  // Peer submit-plan / headless run holds the TaskRunner in another process; hit its local API so
-  // cancel also kills the executor child (DB-only cancel would let the command keep running).
-  const port = process.env.INVOKER_API_PORT;
-  if (port) {
-    const url = `http://127.0.0.1:${port}/api/tasks/${encodeURIComponent(taskId)}/cancel`;
-    try {
-      const ac = new AbortController();
-      const timer = setTimeout(() => ac.abort(), 10_000);
-      const res = await fetch(url, { method: 'POST', signal: ac.signal });
-      clearTimeout(timer);
-      if (res.ok) {
-        const data = (await res.json()) as { cancelled?: string[]; runningCancelled?: string[] };
-        const cancelled = data.cancelled ?? [];
-        const runningCancelled = data.runningCancelled ?? [];
-        process.stdout.write(`Cancelled ${cancelled.length} task(s): [${cancelled.join(', ')}]\n`);
-        if (runningCancelled.length > 0) {
-          process.stdout.write(`Killed running: [${runningCancelled.join(', ')}]\n`);
-        }
-        return;
+    if (deps.cancelTask) {
+      const result = await deps.cancelTask(taskId);
+      process.stdout.write(`Cancelled ${result.cancelled.length} task(s): [${result.cancelled.join(', ')}]\n`);
+      if (result.runningCancelled.length > 0) {
+        process.stdout.write(`Killed running: [${result.runningCancelled.join(', ')}]\n`);
       }
-    } catch {
-      /* API unreachable — fall back to DB-only cancel */
+      return;
     }
-  }
 
-  const envelope = makeEnvelope('cancel-task', 'headless', 'task', { taskId });
-  const cmdResult = await deps.commandService.cancelTask(envelope);
-  if (!cmdResult.ok) throw new Error(cmdResult.error.message);
-  const te = createHeadlessExecutor(deps);
-  await finalizeMutationWithGlobalTopup({
-    orchestrator: deps.orchestrator,
-    taskExecutor: te,
-    logger: deps.logger,
-    context: 'headless.cancel-task',
+    const port = process.env.INVOKER_API_PORT;
+    if (port) {
+      const url = `http://127.0.0.1:${port}/api/tasks/${encodeURIComponent(taskId)}/cancel`;
+      try {
+        const ac = new AbortController();
+        const timer = setTimeout(() => ac.abort(), 10_000);
+        const res = await fetch(url, { method: 'POST', signal: ac.signal });
+        clearTimeout(timer);
+        if (res.ok) {
+          const data = (await res.json()) as { cancelled?: string[]; runningCancelled?: string[] };
+          const cancelled = data.cancelled ?? [];
+          const runningCancelled = data.runningCancelled ?? [];
+          process.stdout.write(`Cancelled ${cancelled.length} task(s): [${cancelled.join(', ')}]\n`);
+          if (runningCancelled.length > 0) {
+            process.stdout.write(`Killed running: [${runningCancelled.join(', ')}]\n`);
+          }
+          return;
+        }
+      } catch {
+        /* API unreachable — fall back to DB-only cancel */
+      }
+    }
+
+    const envelope = makeEnvelope('cancel-task', 'headless', 'task', { taskId });
+    const cmdResult = await deps.commandService.cancelTask(envelope);
+    if (!cmdResult.ok) throw new Error(cmdResult.error.message);
+    const te = createHeadlessExecutor(deps);
+    await finalizeMutationWithGlobalTopup({
+      orchestrator: deps.orchestrator,
+      taskExecutor: te,
+      logger: deps.logger,
+      context: 'headless.cancel-task',
+    });
+    process.stdout.write(`Cancelled ${cmdResult.data.cancelled.length} task(s): [${cmdResult.data.cancelled.join(', ')}]\n`);
+    if (cmdResult.data.runningCancelled.length > 0) {
+      process.stdout.write(`Killed running: [${cmdResult.data.runningCancelled.join(', ')}]\n`);
+    }
   });
-  process.stdout.write(`Cancelled ${cmdResult.data.cancelled.length} task(s): [${cmdResult.data.cancelled.join(', ')}]\n`);
-  if (cmdResult.data.runningCancelled.length > 0) {
-    process.stdout.write(`Killed running: [${cmdResult.data.runningCancelled.join(', ')}]\n`);
-  }
 }
 
 async function headlessCancelWorkflow(workflowId: string, deps: HeadlessDeps): Promise<void> {
@@ -2136,28 +2159,30 @@ async function headlessSetGatePolicy(args: string[], deps: HeadlessDeps): Promis
       'Missing arguments. Usage: --headless set gate-policy <taskId> <workflowId> [depTaskId] <completed|review_ready>',
     );
   }
-  const taskId = restoreWorkflowForTask(taskIdRaw, deps).resolvedTaskId;
-  const hasDepTaskId = arg4 !== undefined;
-  const depTaskId = hasDepTaskId ? arg3 : '__merge__';
-  const gatePolicy = (hasDepTaskId ? arg4 : arg3) as 'completed' | 'review_ready';
-  if (gatePolicy !== 'completed' && gatePolicy !== 'review_ready') {
-    throw new Error(`Invalid gate policy "${String(gatePolicy)}". Expected completed|review_ready`);
-  }
+  await withRestoredTaskUnlessDeleteAllWon(taskIdRaw, deps, 'set gate-policy', async (restored) => {
+    const taskId = restored.resolvedTaskId;
+    const hasDepTaskId = arg4 !== undefined;
+    const depTaskId = hasDepTaskId ? arg3 : '__merge__';
+    const gatePolicy = (hasDepTaskId ? arg4 : arg3) as 'completed' | 'review_ready';
+    if (gatePolicy !== 'completed' && gatePolicy !== 'review_ready') {
+      throw new Error(`Invalid gate policy "${String(gatePolicy)}". Expected completed|review_ready`);
+    }
 
-  const envelope = makeEnvelope('set-gate-policies', 'headless', 'task', {
-    taskId,
-    updates: [{ workflowId, taskId: depTaskId, gatePolicy }],
+    const envelope = makeEnvelope('set-gate-policies', 'headless', 'task', {
+      taskId,
+      updates: [{ workflowId, taskId: depTaskId, gatePolicy }],
+    });
+    const result = await deps.commandService.setTaskExternalGatePolicies(envelope);
+    if (!result.ok) throw new Error(result.error.message);
+    const runnable = result.data.filter((t) => t.status === 'running');
+    if (runnable.length > 0) {
+      const taskExecutor = createHeadlessExecutor(deps);
+      await taskExecutor.executeTasks(runnable);
+    }
+    process.stdout.write(
+      `Updated gate policy for ${taskId}: ${workflowId}/${depTaskId} -> ${gatePolicy} (${runnable.length} task(s) started)\n`,
+    );
   });
-  const result = await deps.commandService.setTaskExternalGatePolicies(envelope);
-  if (!result.ok) throw new Error(result.error.message);
-  const runnable = result.data.filter((t) => t.status === 'running');
-  if (runnable.length > 0) {
-    const taskExecutor = createHeadlessExecutor(deps);
-    await taskExecutor.executeTasks(runnable);
-  }
-  process.stdout.write(
-    `Updated gate policy for ${taskId}: ${workflowId}/${depTaskId} -> ${gatePolicy} (${runnable.length} task(s) started)\n`,
-  );
 }
 
 async function headlessSlack(deps: HeadlessDeps): Promise<void> {
@@ -2216,6 +2241,17 @@ function restoreWorkflowForTask(
   taskId: string,
   deps: Pick<HeadlessDeps, 'orchestrator' | 'persistence'>,
 ): { workflowId: string; resolvedTaskId: string } {
+  const restored = tryRestoreWorkflowForTask(taskId, deps);
+  if (restored) {
+    return restored;
+  }
+  throw new Error(`Task "${taskId}" not found in any workflow`);
+}
+
+function tryRestoreWorkflowForTask(
+  taskId: string,
+  deps: Pick<HeadlessDeps, 'orchestrator' | 'persistence'>,
+): { workflowId: string; resolvedTaskId: string } | null {
   const { orchestrator, persistence } = deps;
   const workflows = persistence.listWorkflows();
   for (const wf of workflows) {
@@ -2227,7 +2263,34 @@ function restoreWorkflowForTask(
       return { workflowId: wf.id, resolvedTaskId: match.id };
     }
   }
+  return null;
+}
+
+function restoreWorkflowForTaskUnlessDeleteAllWon(
+  taskId: string,
+  deps: Pick<HeadlessDeps, 'orchestrator' | 'persistence'>,
+  commandLabel: string,
+): { workflowId: string; resolvedTaskId: string } | null {
+  const restored = tryRestoreWorkflowForTask(taskId, deps);
+  if (restored) {
+    return restored;
+  }
+  if (deps.persistence.listWorkflows().length === 0) {
+    process.stdout.write(`[headless] ${commandLabel} skipped: task "${taskId}" was removed by delete-all.\n`);
+    return null;
+  }
   throw new Error(`Task "${taskId}" not found in any workflow`);
+}
+
+async function withRestoredTaskUnlessDeleteAllWon<T>(
+  taskId: string,
+  deps: Pick<HeadlessDeps, 'orchestrator' | 'persistence'>,
+  commandLabel: string,
+  run: (restored: { workflowId: string; resolvedTaskId: string }) => Promise<T>,
+): Promise<T | undefined> {
+  const restored = restoreWorkflowForTaskUnlessDeleteAllWon(taskId, deps, commandLabel);
+  if (!restored) return undefined;
+  return await run(restored);
 }
 
 async function waitForCompletion(

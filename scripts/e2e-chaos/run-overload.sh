@@ -2637,13 +2637,24 @@ main() {
   local total=0
   local passed=0
   local failed=0
+  local exact_filter_match=0
   local scenario_id surface_mode tier failure_mode recovery_action workflow_count operation_burst handler
   local log_file start_ms exit_code end_ms duration_ms
 
+  if [ -n "$SCENARIO_FILTER" ] && expand_catalog | awk -F'\t' -v q="$SCENARIO_FILTER" '$1 == q { found = 1 } END { exit found ? 0 : 1 }'; then
+    exact_filter_match=1
+  fi
+
   while IFS=$'\t' read -r scenario_id surface_mode tier failure_mode recovery_action workflow_count operation_burst handler; do
     [ -n "$scenario_id" ] || continue
-    if [ -n "$SCENARIO_FILTER" ] && [[ "$scenario_id" != *"$SCENARIO_FILTER"* ]]; then
-      continue
+    if [ -n "$SCENARIO_FILTER" ]; then
+      if [ "$exact_filter_match" -eq 1 ]; then
+        if [ "$scenario_id" != "$SCENARIO_FILTER" ]; then
+          continue
+        fi
+      elif [[ "$scenario_id" != *"$SCENARIO_FILTER"* ]]; then
+        continue
+      fi
     fi
     if [ "$TIER_FILTER" != "all" ] && [ "$tier" != "$TIER_FILTER" ]; then
       continue
