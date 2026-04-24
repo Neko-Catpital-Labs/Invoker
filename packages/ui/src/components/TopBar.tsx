@@ -21,6 +21,7 @@ interface TopBarProps {
   onClear: () => void;
   onDeleteDB: () => void;
   onRefresh: () => void;
+  onOpenSystemSetup: () => void;
   viewMode: 'dag' | 'history' | 'timeline' | 'queue';
   onToggleView: (mode: 'dag' | 'history' | 'timeline' | 'queue') => void;
 }
@@ -36,6 +37,7 @@ export function TopBar({
   onClear,
   onDeleteDB,
   onRefresh,
+  onOpenSystemSetup,
   viewMode,
   onToggleView,
 }: TopBarProps) {
@@ -102,6 +104,11 @@ export function TopBar({
 
   const handleClear = () => {
     onClear();
+    setIsDropdownOpen(false);
+  };
+
+  const handleOpenSystemSetup = () => {
+    onOpenSystemSetup();
     setIsDropdownOpen(false);
   };
 
@@ -206,10 +213,10 @@ export function TopBar({
             </button>
             <button
               role="menuitem"
-              disabled
-              className="w-full text-left px-3 py-1.5 text-sm text-gray-500 cursor-not-allowed"
+              onClick={handleOpenSystemSetup}
+              className="w-full text-left px-3 py-1.5 text-sm text-gray-100 hover:bg-gray-700"
             >
-              Settings...
+              System Setup...
             </button>
 
             <div className="border-t border-gray-600 my-1">
