@@ -507,6 +507,7 @@ if (isHeadless) {
     const readOnlyMode = isHeadlessReadOnlyCommand(cliArgs);
     const mutatingMode = isHeadlessMutatingCommand(cliArgs);
     const standaloneMode = process.env.INVOKER_HEADLESS_STANDALONE === '1';
+    const ownsHeadlessShutdown = standaloneMode && !readOnlyMode && command === 'owner-serve';
     const queueQueryMode = command === 'queue' || (command === 'query' && cliArgs[1] === 'queue');
 
     const delegatedQueueOutputFormat = (): 'json' | 'jsonl' | 'label' | 'text' => {
@@ -900,6 +901,22 @@ if (isHeadless) {
       process.stderr.write(`${RED}Error:${RESET} ${err instanceof Error ? err.message : String(err)}\n`);
       exitCode = 1;
     } finally {
+      if (ownsHeadlessShutdown && executorRegistry) {
+        await Promise.all(executorRegistry.getAll().map(f => f.destroyAll().catch(() => undefined)));
+      }
+      if (ownsHeadlessShutdown && orchestrator) {
+        for (const task of orchestrator.getAllTasks()) {
+          if (task.status === 'running' || task.status === 'fixing_with_ai') {
+            orchestrator.handleWorkerResponse({
+              requestId: `quit-${task.id}`,
+              actionId: task.id,
+              executionGeneration: task.execution.generation ?? 0,
+              status: 'failed',
+              outputs: { exitCode: 1, error: 'Application quit' },
+            });
+          }
+        }
+      }
       if (persistence) persistence.close();
       if (writerLock) writerLock.release();
       if (messageBus) messageBus.disconnect();
