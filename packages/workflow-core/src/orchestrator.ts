@@ -1508,7 +1508,75 @@ export class Orchestrator {
   }
 
   /**
-   * Select a winning experiment for a reconciliation task.
+   * Select a winning experiment for a reconciliation task — **retry-class**
+   * invalidation route per Step 7 of
+   * `docs/architecture/task-invalidation-roadmap.md` and the Decision Table
+   * row "Edit selected experiment" in
+   * `docs/architecture/task-invalidation-chart.md`
+   * (`MUTATION_POLICIES.selectedExperiment` → `retryTask` / task scope).
+   *
+   * Why retry-class (not recreate-class). The chart classifies single
+   * experiment selection as a downstream-input mutation: the
+   * reconciliation task's *result* (its selected branch/commit) is the
+   * execution input that downstream consumers use, so changing the
+   * winner invalidates downstream attempts but does NOT change the
+   * reconciliation task's own spec. The chart's "Why" column reads
+   * "Downstream execution inputs changed". `applyInvalidation('task',
+   * 'retryTask', reconId, deps)` is wired to today's
+   * `Orchestrator.restartTask` via `buildInvalidationDeps` (the
+   * compatibility seam Step 1 introduced; Step 13 will rename
+   * `restartTask` → `retryTask` to close the matrix).
+   *
+   * Sequence (mirrors `applyInvalidation`'s contract for the
+   * synchronous orchestrator-internal seam — see `invalidation-policy.ts`
+   * and the Step 5/6 `editTaskType` precedent):
+   *   1. **Cancel-first (Hard Invariant).** Compute the transitive
+   *      downstream subgraph of the reconciliation task and cancel any
+   *      member that is actively executing (`running` or
+   *      `fixing_with_ai`) BEFORE we mutate the recon's
+   *      `selectedExperiment`. This is the "any AFFECTED in-flight
+   *      work" guarantee from the chart: stale downstream attempts
+   *      cannot survive a re-selection because they would consume the
+   *      OLD winner's lineage. For the common initial-selection path
+   *      (recon `needs_input` → `completed` with downstream blocked at
+   *      `pending`) this loop is a no-op — there is nothing active.
+   *   2. **Persist new winner.** `writeAndSync` updates
+   *      `execution.selectedExperiment` (and the recon's
+   *      `branch`/`commit` to mirror the winner's lineage) and emits a
+   *      `task.completed` delta. The reconciliation task's status
+   *      transitions to `completed`; this matches the existing
+   *      "Behavior Today" column in the chart ("completes
+   *      reconciliation task and unblocks downstream").
+   *   3. **Retry-class reset of downstream (re-selection only).** When
+   *      the recon was previously completed with a *different* winner,
+   *      every direct downstream consumer is reset via `restartTask`,
+   *      which is the current `retryTask` compatibility wire.
+   *      `restartTask` cascades to its own descendants and bumps each
+   *      affected task's execution generation exactly once via
+   *      `withBumpedExecutionGeneration` (single source of truth for the
+   *      retry reset shape — Step 7 deliberately reuses it instead of
+   *      duplicating the field list here, mirroring Steps 5/6). For
+   *      the initial-selection path no downstream reset is needed
+   *      because nothing has executed yet against the recon's result.
+   *   4. **Auto-start newly ready tasks.** Existing behavior:
+   *      `findNewlyReadyTasks(reconId)` plus `autoStartReadyTasks`
+   *      unblocks downstream that just became ready due to recon
+   *      completing.
+   *
+   * Public surface is unchanged: same `(taskId, experimentId)` signature
+   * returning `TaskState[]` of newly-started tasks. Active downstream is
+   * NO LONGER silently overwritten with a new winner — that's the whole
+   * point of cancel-first per the chart's Hard Invariant. Prior to
+   * Step 7 there was no general active invalidation model for selection
+   * (per the chart's "Behavior Today" column); this method introduces
+   * one.
+   *
+   * NOTE: `recreateTask`'s lineage-discarding reset shape is
+   * deliberately NOT used here. Downstream tasks may still hold valid
+   * workspace lineage (their own branch, their own workspacePath) that
+   * the executor can reuse when the new winner's branch is rebased onto
+   * theirs; that is what makes selection retry-class rather than
+   * recreate-class in the chart's Decision Table.
    */
   selectExperiment(taskId: string, experimentId: string): TaskState[] {
     this.refreshFromDb();
@@ -1532,7 +1600,6 @@ export class Orchestrator {
       prevCanon.every((id, i) => id === newCanon[i]);
     const isReSelection = previousSet !== undefined && !sameAsPrev;
     const allTasksBefore = this.stateMachine.getAllTasks();
-
     if (isReSelection) {
       const taskMapBefore = new Map(allTasksBefore.map((t) => [t.id, t]));
       const downstreamIds = getTransitiveDependents(reconId, taskMapBefore, () => false);
@@ -2302,6 +2369,155 @@ export class Orchestrator {
     // generation exactly once via `withBumpedExecutionGeneration`
     // while preserving branch/workspacePath lineage — the chart's
     // retry-class semantics for merge-mode mutations.
+    return this.restartTask(taskId);
+  }
+
+  /**
+   * Edit a task's fix-session prompt and/or context — **retry-class**
+   * invalidation route per Step 10 of
+   * `docs/architecture/task-invalidation-roadmap.md` and the Decision
+   * Table row "Change fix prompt or fix context while `fixing_with_ai`"
+   * in `docs/architecture/task-invalidation-chart.md`
+   * (`MUTATION_POLICIES.fixContext` → `retryTask` / task scope).
+   *
+   * Why this is a migration, not a new policy. Prior to Step 10 the
+   * fix-session mutation surface had **no general policy** at all —
+   * the chart's "Behavior Today" column flags this row as
+   * "only command edit has explicit handling today; no general
+   * fix-context mutation policy" and the chart's "Fix-session
+   * inconsistency" subsection calls out the bespoke
+   * `beginConflictResolution` / `revertConflictResolution` rollback
+   * as "one special active invalidation mechanism, not a general
+   * one". Step 10 lifts that bespoke fix-session handling into a
+   * proper orchestrator policy seam (`Orchestrator.editTaskFixContext`)
+   * so cancel-first + retry-class reset are enforced uniformly across
+   * `failed` and `fixing_with_ai` task states; the app wrapper
+   * (`setTaskFixContext`) becomes a thin async delegate (mirrors
+   * Steps 2–9).
+   *
+   * "Retry from reverted failed state" semantics. The chart's
+   * `Target Action` column for this row reads
+   * `retryTask` from reverted failed state — i.e. when the user
+   * changes `fixPrompt`/`fixContext` mid-fix-session the in-flight
+   * AI fix attempt is dropped, the task lineage falls back to its
+   * `failed` baseline (volatile fix-attempt state — `agentSessionId`,
+   * `containerId`, transient `error`/`exitCode`/timing fields —
+   * cleared by `restartTask`), and a fresh fix attempt is scheduled
+   * with the new prompt/context. Branch / workspacePath lineage
+   * survives because this is the same failed task being retried
+   * through the fix loop, not a new task topology.
+   *
+   * Sequence (mirrors `applyInvalidation`'s contract for the
+   * synchronous orchestrator-internal seam — see
+   * `invalidation-policy.ts` and the Step 9 `editTaskMergeMode`
+   * precedent):
+   *   1. **Same-content no-op.** If neither `fixPrompt` nor
+   *      `fixContext` is changing (omitted keys count as "no
+   *      change"), return `[]` without canceling, persisting, or
+   *      bumping execution generation. Without this guard a UI/CLI
+   *      re-affirm of identical fix context would needlessly cancel
+   *      an active fix session and bump the task's execution
+   *      generation.
+   *   2. **Cancel-first (Hard Invariant).** When the task is
+   *      actively running an AI fix (`fixing_with_ai`) interrupt it
+   *      via `cancelTask` BEFORE the new fix prompt/context is
+   *      persisted or `restartTask` resets the task. A failed task
+   *      (the inactive fix-loop state) skips cancel — there is no
+   *      in-flight fix attempt to interrupt and `cancelTask` would
+   *      otherwise treat the failed task as already settled.
+   *   3. **Persist new fix prompt/context.** `writeAndSync` updates
+   *      `config.fixPrompt` / `config.fixContext` (only the keys
+   *      present in the patch) and emits a `task.updated` delta so
+   *      the retried fix attempt picks up the new prompt/context.
+   *   4. **Retry-class reset.** Delegate to `restartTask` (today's
+   *      `retryTask` compatibility wire — see
+   *      `MUTATION_POLICIES.fixContext` and `buildInvalidationDeps`).
+   *      It resets the task to `pending`, clears volatile attempt
+   *      state (`agentSessionId`, `containerId`, transient
+   *      `error`/`exitCode`/timing fields), and bumps execution
+   *      generation exactly once via
+   *      `withBumpedExecutionGeneration`, preserving branch /
+   *      workspacePath lineage. This is the chart's "retry from
+   *      reverted failed state" baseline.
+   *
+   * Patch shape: `{ fixPrompt?, fixContext? }`. Either or both keys
+   * may be present. Omitted keys leave the existing config field
+   * untouched — same-content detection treats missing keys as "no
+   * change" so a `fix-prompt`-only edit does not clobber an
+   * existing `fixContext`.
+   *
+   * Active states accepted: `failed`, `fixing_with_ai`. Other states
+   * throw — the chart scopes this mutation to the fix loop.
+   *
+   * NOTE: `restartTask` is intentionally used here (not
+   * `recreateTask`) because Step 10 is retry-class — fix
+   * prompt/context changes do NOT change the task's execution-defining
+   * spec (`command` / `prompt` / `executionAgent` / `executorType` /
+   * `remoteTargetId`); they only redirect the AI fix attempt that
+   * runs against an already-failed task lineage.
+   */
+  editTaskFixContext(
+    taskId: string,
+    patch: { fixPrompt?: string; fixContext?: string },
+  ): TaskState[] {
+    this.refreshFromDb();
+    const task = this.stateGetTask(taskId);
+    if (!task) throw new Error(`Task ${taskId} not found`);
+    if (task.config.isMergeNode) {
+      throw new Error(`Cannot edit fix context of merge node ${taskId}`);
+    }
+    if (task.status !== 'failed' && task.status !== 'fixing_with_ai') {
+      throw new Error(
+        `Cannot edit fix context for task "${taskId}" in status "${task.status}" ` +
+          `(expected: failed | fixing_with_ai)`,
+      );
+    }
+
+    // Step 10 same-content no-op: skip cancel + persist + retry when
+    // neither key in the patch differs from the persisted config.
+    // Omitted keys count as "no change" so a prompt-only edit does
+    // not require the caller to also re-supply the existing context.
+    const hasPromptKey = Object.prototype.hasOwnProperty.call(patch, 'fixPrompt');
+    const hasContextKey = Object.prototype.hasOwnProperty.call(patch, 'fixContext');
+    const promptMatches = !hasPromptKey || patch.fixPrompt === task.config.fixPrompt;
+    const contextMatches = !hasContextKey || patch.fixContext === task.config.fixContext;
+    if (promptMatches && contextMatches) {
+      return [];
+    }
+
+    // Step 10 cancel-first (chart Hard Invariant): when the task is
+    // actively running an AI fix attempt (`fixing_with_ai`) interrupt
+    // it BEFORE we persist the new fix prompt/context and reset the
+    // task via `restartTask`. The in-flight fix attempt's execution
+    // input — the prompt/context — just changed, so it cannot
+    // survive. A failed task (the inactive fix-loop state) skips
+    // cancel: there is no in-flight fix attempt to interrupt.
+    if (task.status === 'fixing_with_ai') {
+      this.cancelTask(taskId);
+    }
+
+    const configPatch: Record<string, unknown> = {};
+    if (hasPromptKey) configPatch.fixPrompt = patch.fixPrompt;
+    if (hasContextKey) configPatch.fixContext = patch.fixContext;
+    const fixContextChanges: TaskStateChanges = { config: configPatch };
+    this.writeAndSync(taskId, fixContextChanges);
+    const fixContextDelta: TaskDelta = {
+      type: 'updated',
+      taskId,
+      changes: fixContextChanges,
+    };
+    this.persistence.logEvent?.(taskId, 'task.updated', fixContextChanges);
+    this.messageBus.publish(TASK_DELTA_CHANNEL, fixContextDelta);
+
+    // Step 10 retry-class reset: restartTask is today's `retryTask`
+    // compatibility wire (`buildInvalidationDeps` →
+    // `orchestrator.restartTask`). It resets the task to `pending`,
+    // clears volatile attempt state (`agentSessionId`, `containerId`,
+    // transient `error`/`exitCode`/timing fields), and bumps
+    // execution generation exactly once via
+    // `withBumpedExecutionGeneration` while preserving branch /
+    // workspacePath lineage — the chart's "retry from reverted
+    // failed state" baseline for fix-context mutations.
     return this.restartTask(taskId);
   }
 

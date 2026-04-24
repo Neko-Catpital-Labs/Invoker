@@ -227,6 +227,62 @@ export class CommandService {
     );
   }
 
+  /**
+   * Edit a task's fix-session prompt and/or context — **retry-class**
+   * invalidation route per Step 10 of the task-invalidation roadmap
+   * (chart Decision Table row "Change fix prompt or fix context while
+   * `fixing_with_ai`"; `MUTATION_POLICIES.fixContext` → `retryTask` /
+   * task scope, scoped to the failed/fixing task). Mirrors the Step
+   * 5/7/8/9 retry-class seams (`editTaskType` / `selectExperiment` /
+   * `selectExperiments` / `editTaskMergeMode`) rather than the
+   * recreate-class `editTaskCommand` / `editTaskPrompt` /
+   * `editTaskAgent` seams: a fix prompt/context edit redirects the
+   * AI fix attempt without changing the task's execution-defining
+   * spec, so the failed task's branch / workspacePath lineage is
+   * preserved.
+   *
+   * The orchestrator method (`Orchestrator.editTaskFixContext`) is
+   * the synchronous cancel-first seam — it owns same-content no-op
+   * detection, cancel-first interruption when the task is actively
+   * running an AI fix (`fixing_with_ai`), the
+   * `config.fixPrompt` / `config.fixContext` write, and the
+   * `restartTask` retry-class reset that bumps the task's execution
+   * generation exactly once and clears volatile fix-attempt state
+   * (`agentSessionId`, `containerId`, transient
+   * `error`/`exitCode`/timing fields). This service-level entrypoint
+   * just serializes the mutation through the workflow mutex so
+   * concurrent fix-context edits never interleave with each other or
+   * with other in-workflow mutations, then wraps the result in a
+   * `CommandResult`.
+   *
+   * Patch shape: `{ fixPrompt?, fixContext? }`. Either or both keys
+   * may be present in `envelope.payload`. The orchestrator method
+   * treats omitted keys as "no change" so callers can tweak only one
+   * of the two fields without re-supplying the other.
+   */
+  async editTaskFixContext(
+    envelope: CommandEnvelope<{
+      taskId: string;
+      fixPrompt?: string;
+      fixContext?: string;
+    }>,
+  ): Promise<CommandResult<TaskState[]>> {
+    return this.executeCommand<TaskState[]>(
+      'EDIT_TASK_FIX_CONTEXT_FAILED',
+      () => this.orchestrator.editTaskFixContext(
+        envelope.payload.taskId,
+        {
+          ...('fixPrompt' in envelope.payload
+            ? { fixPrompt: envelope.payload.fixPrompt }
+            : {}),
+          ...('fixContext' in envelope.payload
+            ? { fixContext: envelope.payload.fixContext }
+            : {}),
+        },
+      ),
+      this.workflowIdForTask(envelope.payload.taskId),
+    );
+  }
   async setTaskExternalGatePolicies(
     envelope: CommandEnvelope<{ taskId: string; updates: ExternalGatePolicyUpdate[] }>,
   ): Promise<CommandResult<TaskState[]>> {

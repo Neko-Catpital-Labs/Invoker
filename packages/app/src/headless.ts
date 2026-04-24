@@ -538,11 +538,17 @@ async function headlessSet(args: string[], deps: HeadlessDeps): Promise<void> {
     case 'merge-mode':
       await headlessSetMergeMode(args[1], args[2], deps);
       break;
+    case 'fix-prompt':
+      await headlessSetFixContext(args[1], { fixPrompt: args.slice(2).join(' ') }, deps);
+      break;
+    case 'fix-context':
+      await headlessSetFixContext(args[1], { fixContext: args.slice(2).join(' ') }, deps);
+      break;
     case 'gate-policy':
       await headlessSetGatePolicy(args.slice(1), deps);
       break;
     default:
-      throw new Error(`Unknown set sub-command: "${subCommand}". Use: command, prompt, executor, agent, merge-mode, gate-policy`);
+      throw new Error(`Unknown set sub-command: "${subCommand}". Use: command, prompt, executor, agent, merge-mode, fix-prompt, fix-context, gate-policy`);
   }
 }
 
@@ -778,6 +784,8 @@ ${BOLD}Configure:${RESET}
   set executor <taskId> <type>                        Change executor type (worktree|docker|ssh)
   set agent <taskId> <agent>                          Change execution agent (claude|codex)
   set merge-mode <workflowId> <mode>                  manual | automatic | external_review
+  set fix-prompt <taskId> <text>                      Update fix-session prompt and retry
+  set fix-context <taskId> <text>                     Update fix-session context and retry
   set gate-policy <taskId> <wfId> [depTaskId] <policy>
                                                       policy: completed | review_ready
   migrate-compat                                     Normalize persisted compatibility workflow/task state
@@ -1963,6 +1971,79 @@ async function headlessSetMergeMode(
   }
   const wf = deps.persistence.loadWorkflow(workflowId);
   process.stdout.write(`Merge mode updated for ${workflowId}: ${wf?.mergeMode ?? '?'}\n`);
+}
+
+/**
+ * Headless `set fix-prompt` / `set fix-context` — **retry-class**
+ * invalidation route per Step 10 of
+ * `docs/architecture/task-invalidation-roadmap.md` (chart Decision
+ * Table row "Change fix prompt or fix context while
+ * `fixing_with_ai`"; `MUTATION_POLICIES.fixContext` → `retryTask` /
+ * task scope, scoped to the failed/fixing task).
+ *
+ * Step 10 routes the headless surface through
+ * `commandService.editTaskFixContext` so the orchestrator's
+ * cancel-first seam (`Orchestrator.editTaskFixContext`) runs under
+ * the workflow mutex; same-content no-op detection,
+ * `config.fixPrompt` / `config.fixContext` persistence, and the
+ * single `withBumpedExecutionGeneration` bump live in `restartTask`
+ * (today's `retryTask` compatibility wire — see
+ * `MUTATION_POLICIES.fixContext` and `buildInvalidationDeps`).
+ *
+ * The CLI argument is a task id (matches the Step 2/3 `set command` /
+ * `set prompt` headless surface). The `patch` discriminates between
+ * `fixPrompt` and `fixContext` at the dispatcher: `set fix-prompt`
+ * forwards `{ fixPrompt }`, `set fix-context` forwards
+ * `{ fixContext }`. Omitted keys leave the existing config field
+ * untouched per `Orchestrator.editTaskFixContext`'s same-content
+ * detection contract.
+ */
+async function headlessSetFixContext(
+  taskId: string,
+  patch: { fixPrompt?: string; fixContext?: string },
+  deps: HeadlessDeps,
+): Promise<void> {
+  const which = 'fixPrompt' in patch ? 'fix-prompt' : 'fix-context';
+  if (!taskId) {
+    throw new Error(`Missing arguments. Usage: --headless set ${which} <taskId> <text>`);
+  }
+  const restored = restoreWorkflowForTask(taskId, deps);
+  taskId = restored.resolvedTaskId;
+  const taskExecutor = createHeadlessExecutor(deps);
+  const autoFix = wireHeadlessAutoFix(deps, taskExecutor);
+
+  const envelope = makeEnvelope('edit-task-fix-context', 'headless', 'task', {
+    taskId,
+    ...patch,
+  });
+  const result = await deps.commandService.editTaskFixContext(envelope);
+  if (!result.ok) {
+    autoFix.unsubscribe();
+    throw new Error(result.error.message);
+  }
+  const runnable = result.data.filter((t) => t.status === 'running');
+  if (runnable.length > 0) {
+    await taskExecutor.executeTasks(runnable);
+  }
+  const value = 'fixPrompt' in patch ? patch.fixPrompt : patch.fixContext;
+  process.stdout.write(`Updated ${which} for "${taskId}" → "${value ?? ''}"\n`);
+
+  if (deps.noTrack) {
+    process.stdout.write(`[headless] --no-track enabled: set ${which} accepted; exiting without tracking.\n`);
+    autoFix.unsubscribe();
+    return;
+  }
+  if (runnable.length === 0) {
+    autoFix.unsubscribe();
+    return;
+  }
+  await trackHeadlessWorkflow(restored.workflowId, deps, {
+    hasBackgroundWork: autoFix.isBusy,
+    printSummary: false,
+    printTaskOutput: true,
+    setExitCodeOnFailure: false,
+  });
+  autoFix.unsubscribe();
 }
 
 async function headlessSetGatePolicy(args: string[], deps: HeadlessDeps): Promise<void> {
