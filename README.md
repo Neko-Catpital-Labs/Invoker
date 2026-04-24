@@ -20,7 +20,6 @@ Current version: `0.1.0`. Version history lives in [CHANGELOG.md](CHANGELOG.md).
 - **Node.js** 22.x (`>=22 <23`, see [package.json](package.json))
 - **pnpm** (version pinned in `package.json`)
 - **Git**
-- **Electron** (app + headless share `packages/app` main process)
 
 ## Installation
 
@@ -33,15 +32,81 @@ pnpm run build
 
 Invoker does not provision machines for you. You are responsible for bringing your own local workstation, VM, container host, or remote machines and making sure the required tools are installed there before running workflows.
 
-For packaged installs, prefer GitHub Releases or the installer script:
+For packaged installs, the repo includes an installer script and a tag-driven release workflow:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Neko-Catpital-Labs/Invoker/master/scripts/install.sh | bash
 ```
 
-Release artifacts are intended to ship as:
+Tagged releases are configured to publish:
 - macOS: `.dmg`
 - Linux: `.deb` and `.AppImage`
+
+## Configuration
+
+Invoker reads user config from `~/.invoker/config.json`.
+
+If you want a repo-specific config file, point the app at it explicitly:
+
+```bash
+INVOKER_REPO_CONFIG_PATH=$PWD/.invoker.local.json ./run.sh
+```
+
+The config loader does not automatically read `<repo>/.invoker.json`.
+
+Minimal example:
+
+```json
+{
+  "maxConcurrency": 3,
+  "autoFixRetries": 3,
+  "autoFixAgent": "claude",
+  "remoteTargets": {
+    "staging-a": {
+      "host": "203.0.113.10",
+      "user": "invoker",
+      "sshKeyPath": "/home/you/.ssh/invoker_staging_a",
+      "managedWorkspaces": true,
+      "remoteInvokerHome": "~/.invoker",
+      "provisionCommand": "pnpm install --frozen-lockfile"
+    },
+    "staging-b": {
+      "host": "203.0.113.11",
+      "user": "invoker",
+      "sshKeyPath": "/home/you/.ssh/invoker_staging_b",
+      "managedWorkspaces": true,
+      "remoteInvokerHome": "~/.invoker",
+      "provisionCommand": "pnpm install --frozen-lockfile"
+    }
+  }
+}
+```
+
+More examples: [docs/invoker-config-example.json](docs/invoker-config-example.json), [docs/remote-ssh-targets.md](docs/remote-ssh-targets.md), [docs/docker-executor.md](docs/docker-executor.md).
+
+### Multiple SSH Executors
+
+Define multiple entries under `remoteTargets`, then select them per task with `executorType: ssh` and `remoteTargetId`.
+
+```yaml
+name: multi-remote-example
+repoUrl: git@github.com:your-org/your-repo.git
+baseBranch: master
+tasks:
+  - id: test-a
+    description: Run checks on remote target A
+    command: pnpm test
+    executorType: ssh
+    remoteTargetId: staging-a
+
+  - id: test-b
+    description: Run checks on remote target B
+    command: pnpm test
+    executorType: ssh
+    remoteTargetId: staging-b
+```
+
+Use this when you want Invoker to spread work across machines you already manage. The SSH executor does not provision the hosts for you; it connects to the target you name and runs there.
 
 ## Quick start
 
@@ -125,7 +190,7 @@ Types: [packages/workflow-graph/src/types.ts](packages/workflow-graph/src/types.
 
 | Command | What it does |
 | --- | --- |
-| `pnpm dev` | Build UI + app, start Electron |
+| `pnpm run dev` | Build UI + app, start Electron |
 | `pnpm run dev:hot` | Vite dev server + app |
 | `pnpm run build` | Build all packages |
 | `pnpm test` | Skill check + package tests (sequential) |
@@ -142,8 +207,10 @@ Layer rules: [ARCHITECTURE.md](ARCHITECTURE.md). Agent/repo conventions: [CLAUDE
 | --- | --- |
 | [docs/architecture-overview.md](docs/architecture-overview.md) | Runtime layers, scheduler, comparisons |
 | [docs/invoker-medium-article.md](docs/invoker-medium-article.md) | Product story, glossary, mapping tables |
-| [docs/architecture-overview.html](docs/architecture-overview.html) | Browser-friendly overview |
 | [docs/persistence-architecture-single-writer.md](docs/persistence-architecture-single-writer.md) | SQLite / sql.js single writer |
+| [docs/invoker-config-example.json](docs/invoker-config-example.json) | Example `config.json` with local and remote executor settings |
+| [docs/remote-ssh-targets.md](docs/remote-ssh-targets.md) | SSH executor setup, target fields, and plan examples |
+| [docs/docker-executor.md](docs/docker-executor.md) | Docker executor configuration and runtime notes |
 
 ## Troubleshooting
 
@@ -160,4 +227,12 @@ Roadmap and issue tracker: [invoker.productlane.com/roadmap](https://invoker.pro
 
 ## License
 
-[Functional Source License, Version 1.1, MIT Future License](LICENSE) (SPDX: **FSL-1.1-MIT**). Permitted use, competing use, and future MIT grant are defined in the license file.
+[Functional Source License, Version 1.1, ALv2 Future License](LICENSE) (SPDX: **FSL-1.1-ALv2**). Permitted use, competing use, and the future Apache License 2.0 grant are defined in the license file.
+
+Invoker also includes the **Neko Catpital Ventures, LLC Addendum** in [LICENSE](LICENSE). In plain terms, that addendum says:
+
+- if you modify or redistribute the Software for commercial use, those modifications or redistributions must remain open source under the FSL and the NCV Addendum, and cannot be relicensed more restrictively
+- you may build and exploit software or developments using Invoker, so long as Invoker itself is not incorporated into that software or those developments
+- except for evaluation or testing, you may not use the Software to replace employees or reduce headcount for substantially similar roles for six months after first production use
+
+The `LICENSE` file is the controlling text, including the full NCV Addendum.
