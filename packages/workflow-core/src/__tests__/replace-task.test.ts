@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { sid } from './scoped-test-helpers.js';
-import { Orchestrator } from '../orchestrator.js';
+import { Orchestrator, TopologyForkRequired } from '../orchestrator.js';
 import type { OrchestratorPersistence, OrchestratorMessageBus } from '../orchestrator.js';
 import type { TaskState, TaskStateChanges, Attempt } from '../task-types.js';
 import { validateDAG } from '../dag.js';
@@ -111,6 +111,27 @@ function getNonStaleTasks(orchestrator: Orchestrator): TaskState[] {
   return orchestrator.getAllTasks().filter((t) => t.status !== 'stale');
 }
 
+/**
+ * Step 11 (`docs/architecture/task-invalidation-roadmap.md`) makes
+ * `replaceTask` throw `TopologyForkRequired` whenever the workflow has
+ * any non-merge task in a live status (pending, running, ...). The
+ * existing in-place replacement scenarios in this file model a
+ * "downstream is still pending" case, which is precisely what the new
+ * gate forbids. To preserve the underlying assertions about the
+ * post-mutation graph shape (source → stale, replacement created,
+ * merge node reconciled), each scenario first terminates the live
+ * downstream subgraph by cancelling the topmost live descendant. The
+ * cancel marks the descendant + its transitive dependents as `failed`,
+ * making the workflow terminal so `replaceTask` can mutate in place.
+ *
+ * The post-mutation `expect(... .status).toBe('stale')` assertions
+ * still hold because `replaceTask` unconditionally re-marks all
+ * non-merge transitive descendants of the source as `stale`.
+ */
+function terminateLiveDescendant(orchestrator: Orchestrator, descendantId: string): void {
+  orchestrator.cancelTask(descendantId);
+}
+
 // ── Tests ────────────────────────────────────────────────────
 
 describe('replaceTask', () => {
@@ -142,6 +163,7 @@ describe('replaceTask', () => {
     failTask(orchestrator, 'X');
 
     const s = (l: string) => sid(orchestrator, 0, l);
+    terminateLiveDescendant(orchestrator, 'C');
     const started = orchestrator.replaceTask('X', [
       { id: 'fix', description: 'Fix X', command: 'echo fix' },
     ]);
@@ -176,6 +198,7 @@ describe('replaceTask', () => {
     failTask(orchestrator, 'X');
 
     const s = (l: string) => sid(orchestrator, 0, l);
+    terminateLiveDescendant(orchestrator, 'C');
     orchestrator.replaceTask('X', [
       { id: 's1', description: 'Step 1', command: 'echo s1' },
       { id: 's2', description: 'Step 2', command: 'echo s2', dependencies: ['s1'] },
@@ -203,6 +226,7 @@ describe('replaceTask', () => {
     completeTask(orchestrator, 'A');
     failTask(orchestrator, 'X');
 
+    terminateLiveDescendant(orchestrator, 'C');
     orchestrator.replaceTask('X', [
       { id: 's1', description: 'Step 1', command: 'echo s1' },
       { id: 's2a', description: 'Branch A', command: 'echo s2a', dependencies: ['s1'] },
@@ -258,6 +282,7 @@ describe('replaceTask', () => {
     failTask(orchestrator, 'X');
 
     const s = (l: string) => sid(orchestrator, 0, l);
+    terminateLiveDescendant(orchestrator, 'C');
     orchestrator.replaceTask('X', [
       { id: 'fix', description: 'Fix', command: 'echo fix' },
     ]);
@@ -283,6 +308,7 @@ describe('replaceTask', () => {
     expect(orchestrator.getTask('D')!.status).toBe('pending');
 
     const s = (l: string) => sid(orchestrator, 0, l);
+    terminateLiveDescendant(orchestrator, 'C');
     orchestrator.replaceTask('X', [
       { id: 'fix', description: 'Fix', command: 'echo fix' },
     ]);
@@ -343,6 +369,7 @@ describe('replaceTask', () => {
     failTask(orchestrator, 'X');
 
     const s = (l: string) => sid(orchestrator, 0, l);
+    terminateLiveDescendant(orchestrator, 'C');
     orchestrator.replaceTask('X', [
       { id: 'fix', description: 'Fix', command: 'echo fix' },
     ]);
@@ -378,6 +405,8 @@ describe('replaceTask', () => {
     completeTask(orchestrator, 'A');
     failTask(orchestrator, 'X');
 
+    terminateLiveDescendant(orchestrator, 'C');
+    terminateLiveDescendant(orchestrator, 'D');
     orchestrator.replaceTask('X', [
       { id: 's1', description: 'S1', command: 'echo s1' },
       { id: 's2', description: 'S2', command: 'echo s2', dependencies: ['s1'] },
@@ -425,5 +454,169 @@ describe('replaceTask', () => {
     ]);
 
     expect(orchestrator.getTask('fix')!.config.executorType).toBe('docker');
+  });
+
+  // ── Step 11 (task-invalidation roadmap): topology-fork policy ──
+  //
+  // The chart's Decision Table row "Change graph topology" makes
+  // graph-shape changes fork-class / workflow scope: they must NOT
+  // mutate a live workflow in place. Instead, callers see a
+  // `TopologyForkRequired` error pointing them at the (Step 12)
+  // forkWorkflow API. In-place is preserved on a fully terminal
+  // workflow because there is no in-flight work to race with.
+  describe('topology-fork policy', () => {
+    it('throws TopologyForkRequired when downstream is still pending', () => {
+      orchestrator.loadPlan({
+        name: 'topology-live',
+        tasks: [
+          { id: 'A', description: 'A', command: 'echo A' },
+          { id: 'X', description: 'X', command: 'echo X', dependencies: ['A'] },
+          { id: 'C', description: 'C', command: 'echo C', dependencies: ['X'] },
+        ],
+      });
+      orchestrator.startExecution();
+      completeTask(orchestrator, 'A');
+      failTask(orchestrator, 'X');
+
+      // C is still pending → workflow is live → must fork, not mutate.
+      const s = (l: string) => sid(orchestrator, 0, l);
+      const wfId = orchestrator.getTask(s('X'))!.config.workflowId!;
+
+      let caught: unknown;
+      try {
+        orchestrator.replaceTask('X', [
+          { id: 'fix', description: 'Fix', command: 'echo fix' },
+        ]);
+      } catch (err) {
+        caught = err;
+      }
+
+      expect(caught).toBeInstanceOf(TopologyForkRequired);
+      const err = caught as TopologyForkRequired;
+      expect(err.workflowId).toBe(wfId);
+      expect(err.taskId).toBe(s('X'));
+      // Message must surface both ids for the caller and the fix-up
+      // hint pointing at Step 12's forkWorkflow API.
+      expect(err.message).toContain(wfId);
+      expect(err.message).toContain(s('X'));
+      expect(err.message).toMatch(/fork/i);
+      expect(err.message).toMatch(/Step 12/);
+
+      // Source must NOT have been mutated in place.
+      expect(orchestrator.getTask(s('X'))!.status).toBe('failed');
+      expect(orchestrator.getTask(s('C'))!.status).toBe('pending');
+      expect(orchestrator.getTask('fix')).toBeUndefined();
+    });
+
+    it('throws TopologyForkRequired when a sibling is still running', () => {
+      orchestrator.loadPlan({
+        name: 'topology-live-sibling',
+        tasks: [
+          { id: 'A', description: 'A', command: 'echo A' },
+          { id: 'X', description: 'X', command: 'echo X', dependencies: ['A'] },
+          { id: 'Y', description: 'Y', command: 'echo Y', dependencies: ['A'] },
+        ],
+      });
+      orchestrator.startExecution();
+      completeTask(orchestrator, 'A');
+      failTask(orchestrator, 'X');
+      // Y is now `running` after A completed.
+
+      expect(orchestrator.getTask('Y')!.status).toBe('running');
+
+      const s = (l: string) => sid(orchestrator, 0, l);
+      expect(() =>
+        orchestrator.replaceTask('X', [
+          { id: 'fix', description: 'Fix', command: 'echo fix' },
+        ]),
+      ).toThrow(TopologyForkRequired);
+
+      // Y is still running, X is still failed — no in-place mutation.
+      expect(orchestrator.getTask('Y')!.status).toBe('running');
+      expect(orchestrator.getTask(s('X'))!.status).toBe('failed');
+    });
+
+    it('allows in-place replacement on a terminal workflow', () => {
+      orchestrator.loadPlan({
+        name: 'topology-terminal',
+        tasks: [
+          { id: 'A', description: 'A', command: 'echo A' },
+          { id: 'X', description: 'X', command: 'echo X', dependencies: ['A'] },
+          { id: 'C', description: 'C', command: 'echo C', dependencies: ['X'] },
+        ],
+      });
+      orchestrator.startExecution();
+      completeTask(orchestrator, 'A');
+      failTask(orchestrator, 'X');
+      // Cancel C to make the workflow terminal (no live non-merge tasks).
+      terminateLiveDescendant(orchestrator, 'C');
+
+      const s = (l: string) => sid(orchestrator, 0, l);
+      const started = orchestrator.replaceTask('X', [
+        { id: 'fix', description: 'Fix', command: 'echo fix' },
+      ]);
+
+      expect(orchestrator.getTask(s('X'))!.status).toBe('stale');
+      expect(orchestrator.getTask(s('fix'))).toBeDefined();
+      expect(started.find((t) => t.id === s('fix'))).toBeDefined();
+    });
+
+    it('error class round-trips workflowId / taskId properties', () => {
+      const err = new TopologyForkRequired('wf-42', 'wf-42/X');
+      expect(err).toBeInstanceOf(Error);
+      expect(err.name).toBe('TopologyForkRequired');
+      expect(err.workflowId).toBe('wf-42');
+      expect(err.taskId).toBe('wf-42/X');
+      expect(err.message).toContain('wf-42');
+      expect(err.message).toContain('wf-42/X');
+    });
+
+    // The Step 11 gate sits BEFORE the topology mutation but AFTER the
+    // earliest validation errors (not-found, running, empty). Those
+    // errors continue to take precedence so that callers see the same
+    // diagnostics they did before this step.
+    it('not-found error still wins over topology check', () => {
+      orchestrator.loadPlan({
+        name: 'topology-precedence',
+        tasks: [
+          { id: 'A', description: 'A', command: 'echo A' },
+          { id: 'X', description: 'X', command: 'echo X', dependencies: ['A'] },
+          { id: 'C', description: 'C', command: 'echo C', dependencies: ['X'] },
+        ],
+      });
+      orchestrator.startExecution();
+      // Workflow is live (everything pending), but the task id is bogus.
+      expect(() =>
+        orchestrator.replaceTask('does-not-exist', [
+          { id: 'fix', description: 'Fix', command: 'echo fix' },
+        ]),
+      ).toThrow(/not found/);
+    });
+
+    // Step 11 must not affect pure-attribute mutations (Steps 2-10).
+    // `editTaskCommand` is recreate-class / task scope and routes through
+    // the per-attribute mutation path; topology gating must not block it
+    // even though the workflow is unmistakably live (C is `pending`).
+    it('does NOT throw for pure-attribute mutations on a live workflow', () => {
+      orchestrator.loadPlan({
+        name: 'pure-attribute-on-live',
+        tasks: [
+          { id: 'A', description: 'A', command: 'echo A' },
+          { id: 'X', description: 'X', command: 'echo X', dependencies: ['A'] },
+          { id: 'C', description: 'C', command: 'echo C', dependencies: ['X'] },
+        ],
+      });
+      orchestrator.startExecution();
+      completeTask(orchestrator, 'A');
+      failTask(orchestrator, 'X');
+      // C is `pending` (blocked by failed X) → workflow is live by the
+      // Step 11 definition. Editing A's command must still succeed —
+      // no graph edge changes, only a per-attribute mutation routed
+      // through the existing `editTaskCommand` path (Step 2).
+      expect(orchestrator.getTask('C')!.status).toBe('pending');
+
+      expect(() => orchestrator.editTaskCommand('A', 'echo A-v2')).not.toThrow();
+      expect(orchestrator.getTask('A')!.config.command).toBe('echo A-v2');
+    });
   });
 });

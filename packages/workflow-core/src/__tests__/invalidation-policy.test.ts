@@ -13,6 +13,7 @@ type MockedDeps = InvalidationDeps & {
   retryWorkflow: ReturnType<typeof vi.fn>;
   recreateWorkflow: ReturnType<typeof vi.fn>;
   recreateWorkflowFromFreshBase?: ReturnType<typeof vi.fn>;
+  workflowFork?: ReturnType<typeof vi.fn>;
 };
 
 function makeDeps(overrides: Partial<MockedDeps> = {}): MockedDeps {
@@ -39,6 +40,10 @@ describe('MUTATION_POLICIES', () => {
     expect(MUTATION_POLICIES.fixContext.action).toBe('retryTask');
     expect(MUTATION_POLICIES.rebaseAndRetry.action).toBe('recreateWorkflowFromFreshBase');
     expect(MUTATION_POLICIES.externalGatePolicy.action).toBe('none');
+    // Step 11: graph topology is the lone fork-class / workflow-scope row.
+    expect(MUTATION_POLICIES.topology.action).toBe('workflowFork');
+    expect(MUTATION_POLICIES.topology.invalidatesExecutionSpec).toBe(true);
+    expect(MUTATION_POLICIES.topology.invalidateIfActive).toBe(true);
   });
 
   it('marks every spec-changing mutation as invalidating-if-active', () => {
@@ -234,5 +239,45 @@ describe('applyInvalidation: recreateWorkflowFromFreshBase optional dep', () => 
     const deps = makeDeps({ recreateWorkflowFromFreshBase });
     await applyInvalidation('workflow', 'recreateWorkflowFromFreshBase', 'wf-1', deps);
     expect(recreateWorkflowFromFreshBase).toHaveBeenCalledWith('wf-1');
+  });
+});
+
+// Step 11 (`docs/architecture/task-invalidation-roadmap.md`): the
+// `'workflowFork'` action represents fork-class / workflow scope. Like
+// `'recreateWorkflowFromFreshBase'` it is gated behind an optional dep
+// that Step 12 supplies. Until then any caller that selects this
+// action sees an explicit "not yet wired (Step 12)" error so misuse
+// fails fast instead of silently no-op'ing.
+describe('applyInvalidation: workflowFork optional dep', () => {
+  it('throws an explicit "not yet wired (Step 12)" error when dep is absent', async () => {
+    const deps = makeDeps();
+    await expect(
+      applyInvalidation('workflow', 'workflowFork', 'wf-1', deps),
+    ).rejects.toThrow(/not yet wired \(Step 12\)/);
+  });
+
+  it('routes to the provided dep when present', async () => {
+    const workflowFork = vi.fn(async () => []);
+    const deps = makeDeps({ workflowFork });
+    await applyInvalidation('workflow', 'workflowFork', 'wf-1', deps);
+    expect(workflowFork).toHaveBeenCalledWith('wf-1');
+  });
+
+  it('rejects task-scoped invocation with workflowFork action', async () => {
+    const deps = makeDeps({ workflowFork: vi.fn(async () => []) });
+    await expect(
+      applyInvalidation('task', 'workflowFork', 'task-a', deps),
+    ).rejects.toThrow(/requires scope 'workflow'/);
+    expect(deps.cancelInFlight).not.toHaveBeenCalled();
+  });
+
+  it('cancel-first ordering applies to workflowFork', async () => {
+    const workflowFork = vi.fn(async () => []);
+    const deps = makeDeps({ workflowFork });
+    await applyInvalidation('workflow', 'workflowFork', 'wf-1', deps);
+    expect(deps.cancelInFlight).toHaveBeenCalledWith('workflow', 'wf-1');
+    expect(deps.cancelInFlight.mock.invocationCallOrder[0]).toBeLessThan(
+      workflowFork.mock.invocationCallOrder[0],
+    );
   });
 });

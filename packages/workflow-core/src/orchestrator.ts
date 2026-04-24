@@ -235,6 +235,61 @@ export function descriptionForMergeNode(plan: Pick<PlanDefinition, 'name' | 'onF
   return `Workflow gate for ${plan.name}`;
 }
 
+/**
+ * Statuses that count a workflow as "live" for topology-mutation policy.
+ *
+ * Per `docs/architecture/task-invalidation-chart.md` ("Topology
+ * inconsistency"), topology-changing requests must NOT mutate a live
+ * workflow in place — they must instead fork a new workflow rooted from
+ * the relevant node/result. A workflow is live if any non-merge task in
+ * it is in any of these statuses.
+ *
+ * The merge node is intentionally excluded: it is `pending` for the
+ * entire workflow lifetime, so including it would make every workflow
+ * "live" forever and defeat the policy.
+ */
+const LIVE_TASK_STATUSES = new Set<string>([
+  'pending',
+  'running',
+  'fixing_with_ai',
+  'needs_input',
+  'awaiting_approval',
+  'review_ready',
+  'blocked',
+]);
+
+/**
+ * Thrown when a topology-changing graph mutation is requested against
+ * a workflow that still has any live (non-terminal) task.
+ *
+ * Step 11 (`docs/architecture/task-invalidation-roadmap.md`) introduces
+ * this surface; Step 12 builds the `forkWorkflow*` API the message
+ * points callers at. Until then, callers handling this error must
+ * either wait for the workflow to terminate or mark the affected
+ * subgraph as terminal (e.g. via `cancelWorkflow`) before retrying.
+ *
+ * The message embeds both the workflow id and the offending task id so
+ * the caller (and tests) can route the request to the correct fork
+ * source without re-querying the orchestrator.
+ */
+export class TopologyForkRequired extends Error {
+  readonly workflowId: string;
+  readonly taskId: string;
+  constructor(workflowId: string, taskId: string, detail?: string) {
+    super(
+      `TopologyForkRequired: cannot mutate graph topology in place on live ` +
+        `workflow ${workflowId} (offending task ${taskId})` +
+        (detail ? ` — ${detail}` : '') +
+        `. Topology changes must fork a new workflow from the relevant ` +
+        `node/result (see docs/architecture/task-invalidation-chart.md ` +
+        `"Topology inconsistency"; forkWorkflow API lands in Step 12).`,
+    );
+    this.name = 'TopologyForkRequired';
+    this.workflowId = workflowId;
+    this.taskId = taskId;
+  }
+}
+
 export interface GraphMutationNodeDef {
   id: string;
   description: string;
@@ -2598,6 +2653,18 @@ export class Orchestrator {
     const wfId = task.config.workflowId;
     if (!wfId) throw new Error(`replaceTask: task ${taskId} has no workflowId`);
 
+    // Step 11: topology mutations must not mutate a live workflow in place.
+    // `replaceTask` is unconditionally a topology change (it stales the
+    // source, can stale downstream, and creates new nodes), so the gate
+    // sits at the entry. In-place is still permitted on a fully terminal
+    // workflow (all non-merge tasks in completed/failed/stale) since
+    // there is no in-flight work to race with.
+    //
+    // Use `task.id` (the resolved/scoped id) for the error so callers
+    // can route the request to the (Step 12) forkWorkflow API without
+    // re-resolving the bare plan-local id themselves.
+    this.assertTopologyMutationAllowed(wfId, task.id);
+
     const replacementRawIds = new Set(replacementTasks.map((t) => t.id));
     const scopeLocal = (local: string) => scopePlanTaskId(wfId, local);
 
@@ -2692,6 +2759,39 @@ export class Orchestrator {
   private reconcileMergeLeaves(workflowId: string): void {
     reconcileMergeLeavesImpl(this as unknown as GraphMutationHost, workflowId);
     assertMergeLeavesInvariantImpl(this as unknown as GraphMutationHost, workflowId);
+  }
+
+  /**
+   * Returns true if the workflow has any non-merge task in a live status
+   * (`pending`, `running`, `fixing_with_ai`, `needs_input`,
+   * `awaiting_approval`, `review_ready`, `blocked`).
+   *
+   * The merge node is excluded because it stays `pending` for the whole
+   * workflow lifetime — including it would make every workflow live
+   * forever. Step 11 uses this check to gate topology-changing graph
+   * mutations (`replaceTask`).
+   */
+  private isWorkflowLive(workflowId: string): boolean {
+    const tasks = this.stateMachine
+      .getAllTasks()
+      .filter((t) => t.config.workflowId === workflowId && !t.config.isMergeNode);
+    return tasks.some((t) => LIVE_TASK_STATUSES.has(t.status));
+  }
+
+  /**
+   * Throws `TopologyForkRequired` when the workflow is live.
+   *
+   * Per `docs/architecture/task-invalidation-chart.md` ("Topology
+   * inconsistency"), graph-shape changes must fork from the relevant
+   * node/result instead of mutating a live workflow in place. Until
+   * Step 12 ships the `forkWorkflow*` API, callers handling this
+   * error must wait for the workflow to terminate (or cancel its
+   * remaining live work) before retrying.
+   */
+  private assertTopologyMutationAllowed(workflowId: string, sourceTaskId: string): void {
+    if (this.isWorkflowLive(workflowId)) {
+      throw new TopologyForkRequired(workflowId, sourceTaskId);
+    }
   }
 
   private assertMergeLeavesInvariant(workflowId: string): void {
