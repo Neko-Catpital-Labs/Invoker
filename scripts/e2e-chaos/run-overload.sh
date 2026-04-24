@@ -51,6 +51,7 @@ owner-restart-during-late-return-storm|headless-standalone|core|owner_restart_st
 owner-restart-loop-during-late-return-storm|headless-standalone|core|owner_restart_loop_stale_return|restart_loop_during_recreate|12|12|run_owner_restart_loop_during_late_return_storm
 delete-all-under-load|headless-standalone|destructive|global_destructive|delete_all|10|6|run_delete_all_under_load
 repeated-delete-all-under-load|headless-standalone|destructive|repeated_global_destructive|delete_all_repeated|10|10|run_repeated_delete_all_under_load
+owner-restart-loop-during-delete-all|headless-standalone|destructive|owner_restart_loop_global_destructive|restart_loop_delete_all|10|12|run_owner_restart_loop_during_delete_all
 tracked-approve-zero-running-hang|headless-standalone|hang|false_idle_tracked_mutation|approve_under_starvation|8|6|run_tracked_approve_zero_running_hang
 tracked-fix-churn-under-load|headless-standalone|hang|tracked_fix_starvation|fix_under_neighbor_churn|8|10|run_tracked_fix_churn_under_load
 owner-bootstrap-under-saturated-mutations|headless-standalone|hang|delegation_starvation|delegate_under_saturation|8|8|run_owner_bootstrap_under_saturated_mutations
@@ -1377,6 +1378,97 @@ run_repeated_delete_all_under_load() {
       2) ov_spawn_command "query-tasks-$idx" invoker_e2e_run_headless query tasks --workflow "$workflow_id" --output jsonl ;;
       3) ov_spawn_command "retry-$idx" invoker_e2e_run_headless --no-track retry "$workflow_id" ;;
       4) ov_spawn_command "recreate-$idx" invoker_e2e_run_headless --no-track recreate "$workflow_id" ;;
+    esac
+  done
+  ov_wait_background_commands
+
+  local remaining max_secs
+  max_secs=60
+  while [ "$max_secs" -gt 0 ]; do
+    remaining="$(ov_count_workflows)"
+    if [ "$remaining" -eq 0 ]; then
+      break
+    fi
+    sleep 1
+    max_secs=$((max_secs - 1))
+  done
+  remaining="$(ov_count_workflows)"
+  if [ "$remaining" -ne 0 ]; then
+    echo "FAIL: delete-all left workflows behind ($remaining remaining)" >&2
+    invoker_e2e_run_headless query workflows --output label >&2 || true
+    return 1
+  fi
+
+  ov_stop_owner
+  ov_wait_queries_healthy 30
+  invoker_e2e_assert_no_stuck_mutation_intents 30
+  invoker_e2e_assert_no_owned_headless_processes 1
+}
+
+run_owner_restart_loop_during_delete_all() {
+  local workflow_count="$1"
+  local operation_burst="$2"
+  invoker_e2e_init
+  trap 'ov_stop_owner; rm -rf "${OVERLOAD_TMP_DIR:-}" >/dev/null 2>&1 || true; invoker_e2e_cleanup' RETURN
+  cd "$INVOKER_E2E_REPO_ROOT"
+  unset ELECTRON_RUN_AS_NODE
+  unset INVOKER_HEADLESS_STANDALONE
+  ov_set_overload_config "$((workflow_count + 2))"
+
+  OVERLOAD_TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/invoker-overload.XXXXXX")"
+  OVERLOAD_OP_PIDS=()
+  OVERLOAD_ALLOWED_BACKGROUND_FAILURE_PATTERN='No tasks found for workflow|Task ".*" not found|Workflow .* not found|timed out waiting for owner response|could not reach a shared owner after bootstrap'
+  OVERLOAD_ALLOWED_BACKGROUND_FAILURE_LABELS="delete-all-cycle-1,delete-all-cycle-2,delete-all-cycle-3"
+  ov_start_owner
+
+  local -a workflows=()
+  local idx workflow_id info kind
+  echo "==> overload: seeding workflows before delete-all restart loop"
+  for idx in $(seq 1 "$workflow_count"); do
+    case $((idx % 4)) in
+      0) kind="approval" ;;
+      1) kind="slow" ;;
+      2) kind="fail" ;;
+      3) kind="late" ;;
+    esac
+    info="$(ov_submit_workflow "$kind" "restart-delete-$idx" "${OVERLOAD_TMP_DIR}/restart-delete-$idx.marker" no-track)"
+    workflow_id="${info%%|*}"
+    workflows+=("$workflow_id")
+    if [ "$kind" = "slow" ]; then
+      ov_wait_task_status "$workflow_id/root" running 120
+    fi
+  done
+
+  sleep 3
+  local restart_cycles=3
+  local cycle
+  for cycle in $(seq 1 "$restart_cycles"); do
+    echo "==> overload: delete-all restart cycle $cycle/$restart_cycles"
+    ov_spawn_command "delete-all-cycle-$cycle" invoker_e2e_run_headless delete-all
+    ov_spawn_command "query-queue-cycle-$cycle" invoker_e2e_run_headless query queue --output json
+    ov_spawn_command "query-ui-perf-cycle-$cycle" invoker_e2e_run_headless query ui-perf --output json
+    ov_spawn_command "query-workflows-cycle-$cycle" invoker_e2e_run_headless query workflows --output label
+    sleep 1
+    ov_stop_owner
+    sleep 1
+    ov_start_owner
+    ov_spawn_command "query-tasks-cycle-$cycle" invoker_e2e_run_headless query tasks --output jsonl
+    sleep 1
+  done
+
+  local extra_ops=$((operation_burst - (restart_cycles * 5)))
+  if [ "$extra_ops" -lt 0 ]; then
+    extra_ops=0
+  fi
+  for idx in $(seq 0 $((extra_ops - 1))); do
+    workflow_id="${workflows[$((idx % ${#workflows[@]}))]}"
+    case $((idx % 6)) in
+      0) ov_spawn_command "query-queue-$idx" invoker_e2e_run_headless query queue --output json ;;
+      1) ov_spawn_command "query-workflows-$idx" invoker_e2e_run_headless query workflows --output label ;;
+      2) ov_spawn_command "query-tasks-$idx" invoker_e2e_run_headless query tasks --workflow "$workflow_id" --output jsonl ;;
+      3) ov_spawn_command "retry-$idx" invoker_e2e_run_headless --no-track retry "$workflow_id" ;;
+      4) ov_spawn_command "recreate-$idx" invoker_e2e_run_headless --no-track recreate "$workflow_id" ;;
+      5) ov_spawn_command "query-ui-perf-$idx" invoker_e2e_run_headless query ui-perf --output json ;;
     esac
   done
   ov_wait_background_commands
