@@ -45,6 +45,20 @@ export interface BaseTaskConfig {
   readonly externalDependencies?: readonly ExternalDependency[];
   /** Remote target identifier for executor routing. Primarily used by SSH executors but can be set on any task via routing rules. */
   readonly remoteTargetId?: string;
+  /**
+   * Fix-session prompt override carried on the failed task across the
+   * `failed` → `fixing_with_ai` → `failed` cycle (Step 10 of the
+   * task-invalidation roadmap). Mutating either `fixPrompt` or
+   * `fixContext` routes through `Orchestrator.editTaskFixContext`
+   * (`MUTATION_POLICIES.fixContext` → `retryTask` / task scope) and
+   * retries from the reverted failed-state baseline.
+   */
+  readonly fixPrompt?: string;
+  /**
+   * Fix-session context override (e.g. extra notes/files surfaced to the
+   * fix agent) carried alongside `fixPrompt`. See `fixPrompt`.
+   */
+  readonly fixContext?: string;
 }
 
 export interface WorktreeTaskConfig extends BaseTaskConfig {
