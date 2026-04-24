@@ -14,6 +14,9 @@ import {
   recreateTask,
   cancelWorkflow,
   retryTask,
+  retryWorkflow,
+  recreateWorkflowFromFreshBase,
+  rebaseAndRetry,
   approveTask,
   rejectTask,
   provideInput,
@@ -183,6 +186,179 @@ describe('retryTask', () => {
 
     expect(orchestrator.retryTask).toHaveBeenCalledWith('task-a');
     expect(result).toBe(tasks);
+  });
+});
+
+describe('retryWorkflow', () => {
+  it('calls orchestrator.retryWorkflow and returns result', () => {
+    const tasks = [makeRunningTask()];
+    const orchestrator = { retryWorkflow: vi.fn(() => tasks) };
+
+    const result = retryWorkflow('wf-1', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+    });
+
+    expect(orchestrator.retryWorkflow).toHaveBeenCalledWith('wf-1');
+    expect(result).toBe(tasks);
+  });
+});
+
+describe('recreateWorkflowFromFreshBase', () => {
+  it('bumps generation and delegates to orchestrator.recreateWorkflowFromFreshBase with refreshBase callback', async () => {
+    const tasks = [makeRunningTask()];
+    const orchestrator = {
+      recreateWorkflowFromFreshBase: vi.fn(async (_id: string, opts?: { refreshBase?: () => Promise<unknown> }) => {
+        // Drive the refresh callback so we exercise pool prep wiring.
+        await opts?.refreshBase?.();
+        return tasks;
+      }),
+    };
+    const persistence = {
+      loadWorkflow: vi.fn(() => ({
+        id: 'wf-1',
+        generation: 4,
+        repoUrl: 'https://example/repo.git',
+        baseBranch: 'main',
+      })),
+      updateWorkflow: vi.fn(),
+    };
+    const taskExecutor = {
+      preparePoolForRebaseRetry: vi.fn(async () => undefined),
+    } as unknown as TaskRunner;
+
+    const result = await recreateWorkflowFromFreshBase('wf-1', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+      taskExecutor,
+    });
+
+    expect(persistence.updateWorkflow).toHaveBeenCalledWith('wf-1', { generation: 5 });
+    expect(orchestrator.recreateWorkflowFromFreshBase).toHaveBeenCalledTimes(1);
+    expect(orchestrator.recreateWorkflowFromFreshBase).toHaveBeenCalledWith(
+      'wf-1',
+      expect.objectContaining({ refreshBase: expect.any(Function) }),
+    );
+    // The whole reason this wrapper exists vs plain recreateWorkflow:
+    // the refreshBase callback runs preparePoolForRebaseRetry.
+    expect(taskExecutor.preparePoolForRebaseRetry).toHaveBeenCalledWith(
+      'wf-1',
+      'https://example/repo.git',
+      'main',
+    );
+    expect(result).toBe(tasks);
+  });
+
+  it('throws when workflow not found', async () => {
+    const orchestrator = { recreateWorkflowFromFreshBase: vi.fn(async () => []) };
+    const persistence = { loadWorkflow: vi.fn(() => undefined), updateWorkflow: vi.fn() };
+
+    await expect(
+      recreateWorkflowFromFreshBase('missing', {
+        orchestrator: orchestrator as unknown as Orchestrator,
+        persistence: persistence as unknown as SQLiteAdapter,
+      }),
+    ).rejects.toThrow('Workflow missing not found');
+  });
+});
+
+describe('rebaseAndRetry', () => {
+  it('translates taskId → workflowId and delegates to recreateWorkflowFromFreshBase', async () => {
+    const tasks = [makeRunningTask()];
+    const orchestrator = {
+      getTask: vi.fn(() => makeTask({ config: { workflowId: 'wf-1' } })),
+      recreateWorkflowFromFreshBase: vi.fn(async () => tasks),
+    };
+    const persistence = {
+      loadWorkflow: vi.fn(() => ({ id: 'wf-1', generation: 1 })),
+      updateWorkflow: vi.fn(),
+    };
+
+    const result = await rebaseAndRetry('wf-1/task-a', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+    });
+
+    expect(orchestrator.getTask).toHaveBeenCalledWith('wf-1/task-a');
+    expect(persistence.updateWorkflow).toHaveBeenCalledWith('wf-1', { generation: 2 });
+    expect(orchestrator.recreateWorkflowFromFreshBase).toHaveBeenCalledWith(
+      'wf-1',
+      expect.objectContaining({ refreshBase: expect.any(Function) }),
+    );
+    expect(result).toBe(tasks);
+  });
+
+  it('throws when task not found', async () => {
+    const orchestrator = {
+      getTask: vi.fn(() => undefined),
+      recreateWorkflowFromFreshBase: vi.fn(),
+    };
+    const persistence = { loadWorkflow: vi.fn(), updateWorkflow: vi.fn() };
+
+    await expect(
+      rebaseAndRetry('missing-task', {
+        orchestrator: orchestrator as unknown as Orchestrator,
+        persistence: persistence as unknown as SQLiteAdapter,
+      }),
+    ).rejects.toThrow('Task missing-task not found or has no workflow');
+  });
+});
+
+// Step 17 (`docs/architecture/task-invalidation-roadmap.md` and the
+// chart's "Proposed API Direction"): pin the canonical
+// `{retry, recreate} × {task, workflow}` matrix at the
+// app-layer wrapper surface. This is the lock-in that prevents
+// future refactors from accidentally dropping any of the five
+// canonical lifecycle wrappers (or routing a new one through a
+// legacy compat layer like `restartTask`).
+describe('Step 17: app-layer wrappers expose the 5-cell lifecycle matrix', () => {
+  it('exports retryTask, recreateTask, retryWorkflow, recreateWorkflow, recreateWorkflowFromFreshBase', () => {
+    expect(typeof retryTask).toBe('function');
+    expect(typeof recreateTask).toBe('function');
+    expect(typeof retryWorkflow).toBe('function');
+    expect(typeof recreateWorkflow).toBe('function');
+    expect(typeof recreateWorkflowFromFreshBase).toBe('function');
+  });
+
+  it('each wrapper routes to the matching orchestrator primitive (no restartTask path)', async () => {
+    const orchestrator = {
+      retryTask: vi.fn(() => []),
+      recreateTask: vi.fn(() => []),
+      retryWorkflow: vi.fn(() => []),
+      recreateWorkflow: vi.fn(() => []),
+      recreateWorkflowFromFreshBase: vi.fn(async () => []),
+      restartTask: vi.fn(() => []),
+    };
+    const persistence = {
+      loadWorkflow: vi.fn(() => ({ id: 'wf-1', generation: 0 })),
+      updateWorkflow: vi.fn(),
+    };
+
+    retryTask('task-a', { orchestrator: orchestrator as unknown as Orchestrator });
+    recreateTask('task-a', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+    });
+    retryWorkflow('wf-1', { orchestrator: orchestrator as unknown as Orchestrator });
+    recreateWorkflow('wf-1', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+    });
+    await recreateWorkflowFromFreshBase('wf-1', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+    });
+
+    expect(orchestrator.retryTask).toHaveBeenCalledWith('task-a');
+    expect(orchestrator.recreateTask).toHaveBeenCalledWith('task-a');
+    expect(orchestrator.retryWorkflow).toHaveBeenCalledWith('wf-1');
+    expect(orchestrator.recreateWorkflow).toHaveBeenCalledWith('wf-1');
+    expect(orchestrator.recreateWorkflowFromFreshBase).toHaveBeenCalledWith(
+      'wf-1',
+      expect.objectContaining({ refreshBase: expect.any(Function) }),
+    );
+    // No production wrapper in the canonical matrix may route
+    // through the deprecated `restartTask` shim.
+    expect(orchestrator.restartTask).not.toHaveBeenCalled();
   });
 });
 

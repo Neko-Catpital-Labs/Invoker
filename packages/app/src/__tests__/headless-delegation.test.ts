@@ -1051,6 +1051,190 @@ describe('headless delegation enforcement', () => {
         });
       });
 
+      // Step 17 (`docs/architecture/task-invalidation-roadmap.md`,
+      // `docs/architecture/task-invalidation-chart.md` "Proposed
+      // API Direction"): pin the canonical 2x2 + 1 lifecycle
+      // matrix at the headless surface in a single block. Each
+      // cell asserts that the explicit verb routes to its
+      // matching commandService method or orchestrator
+      // primitive, and ONLY that method (no legacy `restartTask`
+      // path, no cross-collapse, and no in-place re-routing
+      // through the deprecated `restart` shim — Step 13
+      // removed it from the headless verb table).
+      describe('Step 17: 5-cell canonical lifecycle matrix', () => {
+        function seedHappyPath(): {
+          preemptWorkflowExecution: ReturnType<typeof vi.fn>;
+          preparePoolSpy: ReturnType<typeof vi.spyOn>;
+        } {
+          const preemptWorkflowExecution = vi.fn(async () => ({ cancelled: [], runningCancelled: [] }));
+          const wf = {
+            id: 'wf-1',
+            name: 'wf-1',
+            status: 'running' as const,
+            generation: 0,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            repoUrl: 'https://example/repo.git',
+            baseBranch: 'main',
+          };
+          mockDeps.persistence.listWorkflows = vi.fn(() => [wf]);
+          mockDeps.persistence.loadTasks = vi.fn(() => [{
+            id: 'wf-1/task-1',
+            status: 'failed',
+            config: { workflowId: 'wf-1' },
+            execution: {},
+          } as any]);
+          mockDeps.persistence.loadWorkflow = vi.fn(() => wf as any);
+          mockDeps.persistence.updateWorkflow = vi.fn();
+          mockDeps.orchestrator.syncFromDb = vi.fn();
+          mockDeps.orchestrator.getTask = vi.fn((id: string) => {
+            if (id === 'wf-1/task-1' || id === 'task-1') {
+              return {
+                id: 'wf-1/task-1',
+                status: 'failed',
+                config: { workflowId: 'wf-1' },
+                execution: {},
+              } as any;
+            }
+            return undefined;
+          });
+          mockDeps.orchestrator.getAllTasks = vi.fn(() => [{
+            id: 'wf-1/task-1',
+            status: 'failed',
+            config: { workflowId: 'wf-1' },
+            execution: {},
+          } as any]);
+          mockDeps.orchestrator.startExecution = vi.fn(() => []);
+          mockDeps.orchestrator.getPersistedActiveTaskIds = vi.fn(() => new Set<string>());
+          mockDeps.orchestrator.recreateTask = vi.fn(() => []);
+          mockDeps.orchestrator.recreateWorkflow = vi.fn(() => []);
+          mockDeps.orchestrator.recreateWorkflowFromFreshBase = vi.fn(
+            async (_id: string, options?: any) => {
+              await options?.refreshBase?.(_id);
+              return [];
+            },
+          ) as any;
+          (mockDeps.orchestrator as any).restartTask = vi.fn(() => []);
+          mockDeps.commandService.retryTask = vi.fn(async () => ({ ok: true as const, data: [] }));
+          mockDeps.commandService.retryWorkflow = vi.fn(async () => ({ ok: true as const, data: [] }));
+          (mockDeps.commandService as any).recreateTask = vi.fn(async () => ({ ok: true as const, data: [] }));
+          (mockDeps.commandService as any).recreateWorkflow = vi.fn(async () => ({ ok: true as const, data: [] }));
+          (mockDeps.commandService as any).recreateWorkflowFromFreshBase = vi.fn(async () => ({
+            ok: true as const,
+            data: [],
+          }));
+          const preparePoolSpy = vi
+            .spyOn(TaskRunner.prototype, 'preparePoolForRebaseRetry')
+            .mockImplementation(async () => undefined);
+          return { preemptWorkflowExecution, preparePoolSpy };
+        }
+
+        it('headless `retry-task <id>` routes to commandService.retryTask (only)', async () => {
+          const { preemptWorkflowExecution, preparePoolSpy } = seedHappyPath();
+          const depsWithNoTrack: HeadlessDeps = {
+            ...mockDeps,
+            noTrack: true,
+            preemptWorkflowExecution,
+          } as HeadlessDeps;
+
+          await runHeadless(['retry-task', 'wf-1/task-1'], depsWithNoTrack);
+
+          expect(mockDeps.commandService.retryTask).toHaveBeenCalled();
+          expect(mockDeps.commandService.retryWorkflow).not.toHaveBeenCalled();
+          expect(mockDeps.orchestrator.recreateTask).not.toHaveBeenCalled();
+          expect(mockDeps.orchestrator.recreateWorkflow).not.toHaveBeenCalled();
+          expect(mockDeps.orchestrator.recreateWorkflowFromFreshBase).not.toHaveBeenCalled();
+          expect((mockDeps.orchestrator as any).restartTask).not.toHaveBeenCalled();
+          preparePoolSpy.mockRestore();
+        });
+
+        it('headless `recreate-task <id>` routes to orchestrator.recreateTask (only)', async () => {
+          const { preemptWorkflowExecution, preparePoolSpy } = seedHappyPath();
+          const depsWithNoTrack: HeadlessDeps = {
+            ...mockDeps,
+            noTrack: true,
+            preemptWorkflowExecution,
+          } as HeadlessDeps;
+
+          await runHeadless(['recreate-task', 'wf-1/task-1'], depsWithNoTrack);
+
+          expect(mockDeps.orchestrator.recreateTask).toHaveBeenCalledWith('wf-1/task-1');
+          expect(mockDeps.commandService.retryTask).not.toHaveBeenCalled();
+          expect(mockDeps.commandService.retryWorkflow).not.toHaveBeenCalled();
+          expect(mockDeps.orchestrator.recreateWorkflow).not.toHaveBeenCalled();
+          expect(mockDeps.orchestrator.recreateWorkflowFromFreshBase).not.toHaveBeenCalled();
+          expect((mockDeps.orchestrator as any).restartTask).not.toHaveBeenCalled();
+          preparePoolSpy.mockRestore();
+        });
+
+        it('headless `retry <wfId>` routes to commandService.retryWorkflow (only)', async () => {
+          const { preemptWorkflowExecution, preparePoolSpy } = seedHappyPath();
+          const depsWithNoTrack: HeadlessDeps = {
+            ...mockDeps,
+            noTrack: true,
+            preemptWorkflowExecution,
+          } as HeadlessDeps;
+
+          await runHeadless(['retry', 'wf-1'], depsWithNoTrack);
+
+          expect(mockDeps.commandService.retryWorkflow).toHaveBeenCalled();
+          expect(mockDeps.commandService.retryTask).not.toHaveBeenCalled();
+          expect(mockDeps.orchestrator.recreateTask).not.toHaveBeenCalled();
+          expect(mockDeps.orchestrator.recreateWorkflow).not.toHaveBeenCalled();
+          expect(mockDeps.orchestrator.recreateWorkflowFromFreshBase).not.toHaveBeenCalled();
+          expect((mockDeps.orchestrator as any).restartTask).not.toHaveBeenCalled();
+          preparePoolSpy.mockRestore();
+        });
+
+        it('headless `recreate <wfId>` routes to orchestrator.recreateWorkflow (only)', async () => {
+          const { preemptWorkflowExecution, preparePoolSpy } = seedHappyPath();
+          const depsWithNoTrack: HeadlessDeps = {
+            ...mockDeps,
+            noTrack: true,
+            preemptWorkflowExecution,
+          } as HeadlessDeps;
+
+          await runHeadless(['recreate', 'wf-1'], depsWithNoTrack);
+
+          expect(mockDeps.orchestrator.recreateWorkflow).toHaveBeenCalledWith('wf-1');
+          expect(mockDeps.commandService.retryTask).not.toHaveBeenCalled();
+          expect(mockDeps.commandService.retryWorkflow).not.toHaveBeenCalled();
+          expect(mockDeps.orchestrator.recreateTask).not.toHaveBeenCalled();
+          expect(mockDeps.orchestrator.recreateWorkflowFromFreshBase).not.toHaveBeenCalled();
+          expect((mockDeps.orchestrator as any).restartTask).not.toHaveBeenCalled();
+          preparePoolSpy.mockRestore();
+        });
+
+        it('headless `rebase <taskId>` routes to orchestrator.recreateWorkflowFromFreshBase (only) — NOT plain recreateWorkflow', async () => {
+          const { preemptWorkflowExecution, preparePoolSpy } = seedHappyPath();
+          const depsWithNoTrack: HeadlessDeps = {
+            ...mockDeps,
+            noTrack: true,
+            preemptWorkflowExecution,
+          } as HeadlessDeps;
+
+          await runHeadless(['rebase', 'task-1'], depsWithNoTrack);
+
+          expect(mockDeps.orchestrator.recreateWorkflowFromFreshBase).toHaveBeenCalledWith(
+            'wf-1',
+            expect.objectContaining({ refreshBase: expect.any(Function) }),
+          );
+          // The whole reason rebase is a separate cell from
+          // recreate-workflow: it refreshes the upstream pool/base.
+          expect(preparePoolSpy).toHaveBeenCalledWith(
+            'wf-1',
+            'https://example/repo.git',
+            'main',
+          );
+          expect(mockDeps.orchestrator.recreateWorkflow).not.toHaveBeenCalled();
+          expect(mockDeps.commandService.retryTask).not.toHaveBeenCalled();
+          expect(mockDeps.commandService.retryWorkflow).not.toHaveBeenCalled();
+          expect(mockDeps.orchestrator.recreateTask).not.toHaveBeenCalled();
+          expect((mockDeps.orchestrator as any).restartTask).not.toHaveBeenCalled();
+          preparePoolSpy.mockRestore();
+        });
+      });
+
       it('headless cancel-workflow prefers preemptWorkflowExecution when available', async () => {
         const preemptWorkflowExecution = vi.fn(async () => ({ cancelled: ['wf-1/task-1'], runningCancelled: ['wf-1/task-1'] }));
         mockDeps.commandService.cancelWorkflow = vi.fn(async () => ({
