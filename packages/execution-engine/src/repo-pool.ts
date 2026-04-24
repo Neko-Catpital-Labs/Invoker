@@ -214,6 +214,23 @@ export class RepoPool {
     return next;
   }
 
+  /**
+   * Reconcile the in-memory active worktree set with externally known live paths.
+   *
+   * The pool's active set is only an in-memory throttle; the executor is the
+   * authority on which worktree paths are actually still live in this process.
+   * Under heavy churn, early terminal paths can otherwise leave stale slot
+   * reservations behind and artificially pin the pool at max capacity.
+   */
+  reconcileActiveWorktrees(repoUrl: string, livePaths: Iterable<string>): void {
+    const live = new Set(Array.from(livePaths, (path) => canonicalPathForComparison(path)));
+    if (live.size === 0) {
+      this.activeWorktrees.delete(repoUrl);
+      return;
+    }
+    this.activeWorktrees.set(repoUrl, live);
+  }
+
   private async doAcquireWorktree(
     repoUrl: string,
     branch: string,

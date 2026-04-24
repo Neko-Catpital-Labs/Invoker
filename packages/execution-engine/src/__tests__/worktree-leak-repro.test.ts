@@ -51,6 +51,7 @@ function mockPool(fam: WorktreeExecutor) {
     }),
     destroyAll: vi.fn().mockResolvedValue(undefined),
     getClonePath: vi.fn().mockReturnValue('/fake/cache/clone'),
+    reconcileActiveWorktrees: vi.fn(),
   };
   (fam as any).pool = pool;
   return pool;

@@ -54,6 +54,7 @@ interface WorktreeEntry extends BaseEntry {
   /** Name of the ExecutionAgent that produced this session. */
   agentName?: string;
   rawStdout?: string;
+  poolSlotReleased?: boolean;
 }
 
 /**
@@ -86,6 +87,27 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
   /** Pool mirror used for this executor (rebase-and-retry / tests). */
   getRepoPool(): RepoPool {
     return this.pool;
+  }
+
+  private getLiveWorktreePaths(repoUrl: string): Set<string> {
+    const livePaths = new Set<string>();
+    for (const entry of this.entries.values()) {
+      if (entry.request.inputs.repoUrl !== repoUrl) continue;
+      if (entry.completed) continue;
+      livePaths.add(entry.worktreeDir);
+    }
+    return livePaths;
+  }
+
+  private reconcilePoolSlots(repoUrl: string): void {
+    // Repair stale slot bookkeeping by replacing the pool's local ledger with the executor's live worktree set.
+    this.pool.reconcileActiveWorktrees(repoUrl, this.getLiveWorktreePaths(repoUrl));
+  }
+
+  private softReleasePoolSlot(entry: WorktreeEntry | undefined): void {
+    if (!entry || entry.poolSlotReleased) return;
+    entry.poolSlotReleased = true;
+    entry.poolSoftRelease?.();
   }
 
   async start(request: WorkRequest): Promise<ExecutorHandle> {
@@ -176,7 +198,7 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
           outputs: { summary: 'Select winning experiment' },
         };
         this.emitComplete(executionId, response);
-        e.poolSoftRelease?.();
+        this.softReleasePoolSlot(e);
       }, 0);
 
       return handle;
@@ -186,6 +208,7 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
     traceExecution(
       `${RESTART_TO_BRANCH_TRACE} WorktreeExecutor.start() actionId=${request.actionId} → RepoPool path`,
     );
+    this.reconcilePoolSlots(repoUrl);
     const acquired = await this.pool.acquireWorktree(
       repoUrl,
       branch,
@@ -239,7 +262,7 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
             },
           };
           this.emitComplete(handle.executionId, response);
-          entry.poolSoftRelease?.();
+          this.softReleasePoolSlot(entry);
           return handle;
         }
         throw err;
@@ -263,7 +286,7 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
       handle.branch = acquired.branch;
       await this.handleProcessExit(executionId, request, acquired.worktreePath, 0, { branch });
       entry.phase = 'completed';
-      entry.poolSoftRelease?.();
+      this.softReleasePoolSlot(entry);
       return handle;
     }
 
@@ -299,7 +322,7 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
       entry.process = null;
       entry.phase = 'completed';
       entry.completed = true;
-      acquired.softRelease();
+      this.softReleasePoolSlot(entry);
       this.entries.delete(executionId);
       const startupErr = err instanceof Error ? err : new Error(String(err));
       (startupErr as Error & { workspacePath?: string; branch?: string }).workspacePath = acquired.worktreePath;
@@ -337,7 +360,7 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
         },
       };
       this.emitComplete(executionId, response);
-      acquired.softRelease();
+      this.softReleasePoolSlot(entry);
     });
 
     entry.process = child;
@@ -379,7 +402,7 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
       });
       entry.process = null;
       entry.phase = 'completed';
-      entry.poolSoftRelease?.();
+      this.softReleasePoolSlot(entry);
     });
 
     this.startHeartbeat(executionId, child);
@@ -409,6 +432,7 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
 
       if (entry.completed) {
         clearTimeout(killTimer);
+        this.softReleasePoolSlot(entry);
         resolve();
         return;
       }
@@ -416,7 +440,7 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
       killProcessGroup(child, 'SIGTERM');
     });
 
-    entry.poolSoftRelease?.();
+    this.softReleasePoolSlot(entry);
   }
 
   sendInput(handle: ExecutorHandle, input: string): void {
@@ -535,7 +559,7 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
     // Soft-release only: free pool slots without git worktree remove (same as task end / kill).
     // Hard removal stays in RepoPool.release and explicit cleanup flows.
     for (const [_executionId, entry] of allEntries) {
-      entry.poolSoftRelease?.();
+      this.softReleasePoolSlot(entry);
     }
 
     this.entries.clear();
