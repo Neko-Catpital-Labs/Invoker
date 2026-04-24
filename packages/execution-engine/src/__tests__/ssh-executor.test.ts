@@ -307,7 +307,10 @@ branch refs/heads/experiment/test-task-oldhash
     expect(err.branch).toMatch(/^experiment\/test-task-[0-9a-f]{8}$/);
   });
 
-  it('cleans up the existing branch-owner worktree before recreating a conflicting target branch', async () => {
+  it('cleans up the existing branch-owner worktree before recreating a conflicting target branch (when cleanup enabled)', async () => {
+    const prevCleanup = process.env.INVOKER_ENABLE_WORKSPACE_CLEANUP;
+    process.env.INVOKER_ENABLE_WORKSPACE_CLEANUP = '1';
+
     const ssh = new SshExecutor({
       host: 'localhost',
       user: 'testuser',
@@ -365,12 +368,20 @@ branch refs/heads/${targetBranch}
       },
     });
 
-    await ssh.start(req);
+    try {
+      await ssh.start(req);
 
-    const encodedPaths = cleanupScript.match(/WORKTREES_B64="([^"]+)"/)?.[1];
-    const decodedPaths = Buffer.from(encodedPaths ?? '', 'base64').toString('utf8');
-    expect(decodedPaths).toContain(ownerPath);
-    expect(setupTaskBranchSpy).toHaveBeenCalled();
+      const encodedPaths = cleanupScript.match(/WORKTREES_B64="([^"]+)"/)?.[1];
+      const decodedPaths = Buffer.from(encodedPaths ?? '', 'base64').toString('utf8');
+      expect(decodedPaths).toContain(ownerPath);
+      expect(setupTaskBranchSpy).toHaveBeenCalled();
+    } finally {
+      if (prevCleanup === undefined) {
+        delete process.env.INVOKER_ENABLE_WORKSPACE_CLEANUP;
+      } else {
+        process.env.INVOKER_ENABLE_WORKSPACE_CLEANUP = prevCleanup;
+      }
+    }
   });
 
   it('throws when managedWorkspaces=true but repoUrl is missing', async () => {

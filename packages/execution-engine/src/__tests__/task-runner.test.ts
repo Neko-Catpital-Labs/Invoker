@@ -1567,7 +1567,7 @@ describe('TaskRunner', () => {
   });
 
   describe('baseBranch in WorkRequest', () => {
-    it('encodes workflow and task execution generations in request salt', async () => {
+    it('encodes workflow generation, task generation, and attemptId in request salt', async () => {
       let capturedRequest: any;
       const capturingExecutor = {
         type: 'worktree',
@@ -1606,15 +1606,15 @@ describe('TaskRunner', () => {
         id: 'task-salt-1',
         status: 'running',
         config: { command: 'echo hi', workflowId: 'wf-1' },
-        execution: { generation: 5 },
+        execution: { generation: 5, selectedAttemptId: 'attempt-abc' },
       });
       await executor.executeTask(task);
 
       expect(capturedRequest).toBeDefined();
-      expect(capturedRequest.inputs.salt).toBe('wf:3|task:5');
+      expect(capturedRequest.inputs.salt).toBe('wf:3|task:5|attempt:attempt-abc');
     });
 
-    it('keeps salt undefined when both workflow and task generations are zero', async () => {
+    it('still includes attemptId in salt when both generations are zero', async () => {
       let capturedRequest: any;
       const capturingExecutor = {
         type: 'worktree',
@@ -1653,12 +1653,12 @@ describe('TaskRunner', () => {
         id: 'task-salt-2',
         status: 'running',
         config: { command: 'echo hi', workflowId: 'wf-1' },
-        execution: { generation: 0 },
+        execution: { generation: 0, selectedAttemptId: 'attempt-xyz' },
       });
       await executor.executeTask(task);
 
       expect(capturedRequest).toBeDefined();
-      expect(capturedRequest.inputs.salt).toBeUndefined();
+      expect(capturedRequest.inputs.salt).toBe('wf:0|task:0|attempt:attempt-xyz');
     });
 
     it('includes workflow baseBranch in request inputs', async () => {
