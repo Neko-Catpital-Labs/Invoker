@@ -121,14 +121,59 @@ export class CommandService {
     );
   }
 
-  async restartTask(
+  /**
+   * Retry a task — **retry-class** invalidation per Step 13's
+   * canonical `{retry, recreate} × {task, workflow}` matrix
+   * (`docs/architecture/task-invalidation-chart.md`). Preserves
+   * branch/workspacePath lineage; only volatile attempt state
+   * (`agentSessionId`, `containerId`, `error`, `exitCode`, timing
+   * fields) is cleared. Use this when callers want the task rerun
+   * with the same workspace.
+   */
+  async retryTask(
     envelope: CommandEnvelope<{ taskId: string }>,
   ): Promise<CommandResult<TaskState[]>> {
     return this.executeCommand<TaskState[]>(
-      'RESTART_TASK_FAILED',
-      () => this.orchestrator.restartTask(envelope.payload.taskId),
+      'RETRY_TASK_FAILED',
+      () => this.orchestrator.retryTask(envelope.payload.taskId),
       this.workflowIdForTask(envelope.payload.taskId),
     );
+  }
+
+  /**
+   * Recreate a task — **recreate-class** invalidation per Step 13's
+   * canonical matrix. Discards branch/commit/workspacePath lineage
+   * along with volatile attempt state, then auto-starts the task
+   * subgraph. Use this when callers want fresh workspace lineage.
+   */
+  async recreateTask(
+    envelope: CommandEnvelope<{ taskId: string }>,
+  ): Promise<CommandResult<TaskState[]>> {
+    return this.executeCommand<TaskState[]>(
+      'RECREATE_TASK_FAILED',
+      () => this.orchestrator.recreateTask(envelope.payload.taskId),
+      this.workflowIdForTask(envelope.payload.taskId),
+    );
+  }
+
+  /**
+   * @deprecated Step 13 (`docs/architecture/task-invalidation-roadmap.md`):
+   * `restartTask` was the overloaded "retry-or-recreate" verb the
+   * chart's "Naming inconsistency" section flagged. Use the explicit
+   * verb instead — `retryTask` to preserve branch/workspacePath
+   * lineage or `recreateTask` to discard it. This shim delegates to
+   * `recreateTask` (the conservative choice) so any unmigrated
+   * external caller gets the safer, more aggressive reset rather
+   * than the historical retry-class behavior.
+   */
+  async restartTask(
+    envelope: CommandEnvelope<{ taskId: string }>,
+  ): Promise<CommandResult<TaskState[]>> {
+    console.warn(
+      `[command-service] restartTask("${envelope.payload.taskId}") is deprecated (Step 13). ` +
+        'Routing to recreateTask. Use retryTask/recreateTask explicitly.',
+    );
+    return this.recreateTask(envelope);
   }
 
   async selectExperiment(
@@ -202,7 +247,7 @@ export class CommandService {
    * cancel-first interruption when the merge node is active
    * (`running` / `fixing_with_ai` / `awaiting_approval` /
    * `review_ready`), the `persistence.updateWorkflow({ mergeMode })`
-   * write, and the `restartTask` retry-class reset that bumps the
+   * write, and the `retryTask` retry-class reset (Step 13 vocabulary) that bumps the
    * merge node's execution generation exactly once. This service-level
    * entrypoint just serializes the mutation through the workflow mutex
    * so concurrent merge-mode flips never interleave with each other or
@@ -246,7 +291,7 @@ export class CommandService {
    * detection, cancel-first interruption when the task is actively
    * running an AI fix (`fixing_with_ai`), the
    * `config.fixPrompt` / `config.fixContext` write, and the
-   * `restartTask` retry-class reset that bumps the task's execution
+   * `retryTask` retry-class reset (Step 13 vocabulary) that bumps the task's execution
    * generation exactly once and clears volatile fix-attempt state
    * (`agentSessionId`, `containerId`, transient
    * `error`/`exitCode`/timing fields). This service-level entrypoint

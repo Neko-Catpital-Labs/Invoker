@@ -610,7 +610,7 @@ if (isHeadless) {
             const mergeTask = tasks.find((task) => task.config.isMergeNode);
             if (!mergeTask) return undefined;
             const executor = createStandaloneTaskExecutor();
-            const started = orchestrator.restartTask(mergeTask.id);
+            const started = orchestrator.retryTask(mergeTask.id);
             await dispatchStartedTasksWithGlobalTopup({
               orchestrator,
               taskExecutor: executor,
@@ -2618,21 +2618,29 @@ if (isHeadless) {
       }
     });
 
+    // `invoker:restart-task` IPC channel — the channel name is kept
+    // for UI compatibility (renaming would require coordinated UI
+    // changes, deferred to a follow-up). The handler now routes
+    // through `commandService.retryTask` per Step 13's vocabulary
+    // cleanup so the UI's "Restart" context-menu action keeps its
+    // historical retry-class semantics (preserves
+    // branch/workspacePath lineage). The channel itself carries an
+    // `@deprecated` marker in `packages/contracts/src/ipc-channels.ts`.
     registerWorkflowScopedGuiMutationHandler(
       'invoker:restart-task',
       (taskIdArg: unknown) => workflowIdForTaskArg(taskIdArg),
       'high',
       async (taskIdArg: unknown) => {
       const taskId = String(taskIdArg);
-      logger.info(`restart-task: "${taskId}"`, { module: 'ipc' });
+      logger.info(`restart-task → retry-task (Step 13 vocabulary): "${taskId}"`, { module: 'ipc' });
       try {
         await preemptTaskSubgraph(taskId);
-        const envelope = makeEnvelope('restart-task', 'ui', 'task', { taskId });
-        const result = await commandService.restartTask(envelope);
+        const envelope = makeEnvelope('retry-task', 'ui', 'task', { taskId });
+        const result = await commandService.retryTask(envelope);
         if (!result.ok) throw new Error(result.error.message);
         const started = result.data;
         logger.info(
-          `${RESTART_TO_BRANCH_TRACE} ipc invoker:restart-task after commandService.restartTask: count=${started.length} [${started.map((t) => `${t.id}(${t.status})`).join(', ')}]`,
+          `${RESTART_TO_BRANCH_TRACE} ipc invoker:restart-task after commandService.retryTask: count=${started.length} [${started.map((t) => `${t.id}(${t.status})`).join(', ')}]`,
           { module: 'ipc' },
         );
         const runnable = started.filter(t => t.status === 'running');
@@ -2880,7 +2888,7 @@ if (isHeadless) {
         const tasks = persistence.loadTasks(workflowId);
         const mergeTask = tasks.find(t => t.config.isMergeNode);
         if (mergeTask) {
-          const started = orchestrator.restartTask(mergeTask.id);
+          const started = orchestrator.retryTask(mergeTask.id);
           await dispatchStartedTasksWithGlobalTopup({
             orchestrator,
             taskExecutor: requireTaskExecutor(),

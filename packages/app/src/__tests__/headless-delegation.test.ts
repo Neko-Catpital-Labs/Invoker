@@ -99,7 +99,7 @@ describe('headless delegation enforcement', () => {
       mockDeps.orchestrator.getPersistedActiveTaskIds = vi.fn(() => new Set<string>());
       mockDeps.orchestrator.getWorkflowStatus = vi.fn(() => 'running');
       mockDeps.orchestrator.syncFromDb = vi.fn();
-      mockDeps.orchestrator.restartTask = vi.fn(() => []);
+      mockDeps.orchestrator.retryTask = vi.fn(() => []);
       mockDeps.orchestrator.approve = vi.fn(async () => []);
       mockDeps.orchestrator.setBeforeApproveHook = vi.fn();
       mockDeps.orchestrator.provideInput = vi.fn();
@@ -189,12 +189,12 @@ describe('headless delegation enforcement', () => {
         mockDeps.orchestrator.getAllTasks = vi.fn(() => []);
         mockDeps.orchestrator.getWorkflowStatus = vi.fn(() => 'running');
         mockDeps.orchestrator.syncFromDb = vi.fn();
-        mockDeps.orchestrator.restartTask = vi.fn(() => []);
+        mockDeps.orchestrator.retryTask = vi.fn(() => []);
         mockDeps.orchestrator.approve = vi.fn(async () => []);
         mockDeps.orchestrator.setBeforeApproveHook = vi.fn();
         mockDeps.orchestrator.provideInput = vi.fn();
         // CommandService mocks (headless now routes through commandService)
-        mockDeps.commandService.restartTask = vi.fn(async () => ({ ok: true as const, data: [] }));
+        mockDeps.commandService.retryTask = vi.fn(async () => ({ ok: true as const, data: [] }));
         mockDeps.commandService.approve = vi.fn(async () => ({ ok: true as const, data: [] }));
         mockDeps.persistence.loadWorkflow = vi.fn(() => ({
           id: 'wf-1',
@@ -248,7 +248,7 @@ describe('headless delegation enforcement', () => {
 
         // retry-task command (now routed through commandService)
         await runHeadless(['retry-task', 'wf-1/task-1'], mockDeps);
-        expect(mockDeps.commandService.restartTask).toHaveBeenCalled();
+        expect(mockDeps.commandService.retryTask).toHaveBeenCalled();
 
         // approve command (now routed through commandService)
         mockDeps.orchestrator.getAllTasks = vi.fn(() => [
@@ -281,7 +281,7 @@ describe('headless delegation enforcement', () => {
         mockDeps.orchestrator.startExecution = vi.fn(() => []);
         mockDeps.orchestrator.resumeWorkflow = vi.fn(() => []);
         mockDeps.orchestrator.syncFromDb = vi.fn();
-        mockDeps.orchestrator.restartTask = vi.fn(() => []);
+        mockDeps.orchestrator.retryTask = vi.fn(() => []);
         mockDeps.orchestrator.setBeforeApproveHook = vi.fn();
         mockDeps.orchestrator.provideInput = vi.fn();
         mockDeps.orchestrator.approve = vi.fn(async () => []);
@@ -361,8 +361,8 @@ describe('headless delegation enforcement', () => {
         const depsWithNoTrack: HeadlessDeps = { ...mockDeps, noTrack: true } as HeadlessDeps;
         await runHeadless(['resume', 'wf-1'], depsWithNoTrack);
 
-        expect(mockDeps.orchestrator.restartTask).toHaveBeenCalledTimes(1);
-        expect(mockDeps.orchestrator.restartTask).toHaveBeenCalledWith('wf-1/task-1');
+        expect(mockDeps.orchestrator.retryTask).toHaveBeenCalledTimes(1);
+        expect(mockDeps.orchestrator.retryTask).toHaveBeenCalledWith('wf-1/task-1');
         expect(executeTasksSpy).toHaveBeenCalled();
         executeTasksSpy.mockRestore();
       });
@@ -388,8 +388,8 @@ describe('headless delegation enforcement', () => {
         const depsWithNoTrack: HeadlessDeps = { ...mockDeps, noTrack: true } as HeadlessDeps;
         await runHeadless(['resume', 'wf-1'], depsWithNoTrack);
 
-        expect(mockDeps.orchestrator.restartTask).toHaveBeenCalledTimes(1);
-        expect(mockDeps.orchestrator.restartTask).toHaveBeenCalledWith('wf-1/task-claimed');
+        expect(mockDeps.orchestrator.retryTask).toHaveBeenCalledTimes(1);
+        expect(mockDeps.orchestrator.retryTask).toHaveBeenCalledWith('wf-1/task-claimed');
         expect(executeTasksSpy).toHaveBeenCalled();
         executeTasksSpy.mockRestore();
       });

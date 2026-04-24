@@ -180,7 +180,7 @@ describe('Orchestrator taskDispatcher', () => {
     respondForTask(orchestrator, taskId, 'failed', 1);
 
     dispatched.length = 0;
-    orchestrator.restartTask(taskId);
+    orchestrator.retryTask(taskId);
     expect(dispatched).toEqual([taskId]);
 
     respondForTask(orchestrator, taskId, 'failed', 1);
