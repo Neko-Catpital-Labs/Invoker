@@ -57,6 +57,7 @@ The orchestrator is **`scripts/run-all-tests.sh`**, invoked as **`pnpm run test:
   - `required/21-e2e-dry-run-downstream.sh`: `case-2.*`
   - `required/22-e2e-dry-run-github.sh`: `case-4.*`
   - `optional/32-e2e-chaos.sh`: generated local + GUI-owner chaos matrix
+  - `optional/33-e2e-chaos-overload.sh`: generated overload chaos suite for saturation and mixed-operation storms
   - `optional/30-e2e-ssh.sh`: `case-3.1` to `case-3.3`
   - `optional/31-e2e-ssh-merge.sh`: `case-3.4` to `case-3.6`
 

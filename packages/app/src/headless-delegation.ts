@@ -41,22 +41,7 @@ export async function tryDelegateResume(
 
 export function delegationTimeoutMs(args: string[]): number {
   const command = args[0] ?? '';
-  const target = args[1] ?? '';
-  const isWorkflowId = /^wf-[^/]+$/.test(target);
-
-  if (
-    command === 'rebase' ||
-    command === 'rebase-and-retry' ||
-    command === 'recreate' ||
-    command === 'retry' ||
-    command === 'retry-task' ||
-    command === 'set' ||
-    command === 'fix' ||
-    command === 'resolve-conflict'
-  ) {
-    return 900_000;
-  }
-  if (isWorkflowId) {
+  if (command) {
     return 900_000;
   }
   return 15_000;
@@ -106,6 +91,14 @@ export async function tryDelegateQueryUiPerf(
   reset?: boolean,
   timeoutMs = 5_000,
 ): Promise<Record<string, unknown> | null> {
+  return tryDelegateQuery(messageBus, { kind: 'ui-perf', reset }, timeoutMs);
+}
+
+export async function tryDelegateQuery(
+  messageBus: MessageBus,
+  payload: Record<string, unknown>,
+  timeoutMs = 5_000,
+): Promise<Record<string, unknown> | null> {
   const DELEGATION_TIMEOUT = Symbol('delegation-timeout');
   const timeoutPromise = new Promise<typeof DELEGATION_TIMEOUT>((_, reject) => {
     setTimeout(() => reject(DELEGATION_TIMEOUT), timeoutMs);
@@ -113,7 +106,7 @@ export async function tryDelegateQueryUiPerf(
 
   try {
     const response = await Promise.race([
-      messageBus.request('headless.query', { kind: 'ui-perf', reset }),
+      messageBus.request('headless.query', payload),
       timeoutPromise,
     ]) as Record<string, unknown>;
     return response;

@@ -92,4 +92,29 @@ describe('headless-client', () => {
       }),
     ).rejects.toThrow(/requires a running shared owner process/);
   });
+
+  it('delegates query queue to an existing owner without electron fallback', async () => {
+    const bus = new LocalBus();
+    bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-1', mode: 'gui' }));
+    bus.onRequest('headless.query', async () => ({
+      maxConcurrency: 4,
+      runningCount: 1,
+      running: [{ taskId: 'wf-1/root', description: 'root task' }],
+      queued: [],
+    }));
+
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    const runElectronHeadless = vi.fn(async () => 0);
+
+    const exitCode = await runHeadlessClientCommand(['query', 'queue', '--output', 'json'], {
+      messageBus: bus,
+      ensureStandaloneOwner: vi.fn(async () => {}),
+      runElectronHeadless,
+    });
+
+    expect(exitCode).toBe(0);
+    expect(runElectronHeadless).not.toHaveBeenCalled();
+    expect(stdout).toHaveBeenCalledWith('{"maxConcurrency":4,"runningCount":1,"running":[{"taskId":"wf-1/root","description":"root task"}],"queued":[]}\n');
+    stdout.mockRestore();
+  });
 });

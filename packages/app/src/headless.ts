@@ -45,6 +45,7 @@ import { dispatchStartedTasksWithGlobalTopup, executeGlobalTopup, finalizeMutati
 import {
   delegationTimeoutMs,
   tryDelegateExec,
+  tryDelegateQuery,
   tryDelegateResume,
   tryDelegateRun,
 } from './headless-delegation.js';
@@ -56,6 +57,7 @@ export { bumpGenerationAndRecreate } from './workflow-actions.js';
 export {
   delegationTimeoutMs,
   tryDelegateExec,
+  tryDelegateQuery,
   tryDelegateResume,
   tryDelegateRun,
 } from './headless-delegation.js';
@@ -85,6 +87,8 @@ export interface HeadlessDeps {
   deferRunnableTasks?: (tasks: TaskState[], workflowId?: string) => void;
   preemptTaskSubgraph?: (taskId: string) => Promise<void>;
   preemptWorkflowExecution?: (workflowId: string) => Promise<WorkflowCancelResult>;
+  cancelTask?: (taskId: string) => Promise<{ cancelled: string[]; runningCancelled: string[] }>;
+  cancelWorkflow?: (workflowId: string) => Promise<{ cancelled: string[]; runningCancelled: string[] }>;
   waitForApproval?: boolean;
   noTrack?: boolean;
   isStandaloneOwnerIdle?: () => boolean;
@@ -437,8 +441,8 @@ async function headlessQuery(args: string[], deps: HeadlessDeps): Promise<void> 
     }
     case 'queue': {
       const workflows = deps.persistence.listWorkflows();
-      if (workflows.length > 0) {
-        deps.orchestrator.resumeWorkflow(workflows[0].id);
+      for (const workflow of workflows) {
+        deps.orchestrator.syncFromDb(workflow.id);
       }
       const status = deps.orchestrator.getQueueStatus();
 
@@ -1032,10 +1036,21 @@ async function headlessApprove(taskId: string, deps: HeadlessDeps): Promise<void
     started,
   });
   process.stdout.write(`Approved task: ${taskId}\n`);
+  if (deps.noTrack) {
+    process.stdout.write('[headless] --no-track enabled: approve accepted; exiting without tracking.\n');
+    autoFix.unsubscribe();
+    return;
+  }
   const afterStatus = deps.orchestrator.getWorkflowStatus(restored.workflowId);
+  const readyTasks = deps
+    .orchestrator
+    .getReadyTasks()
+    .filter((task) => task.config.workflowId === restored.workflowId && task.status === 'pending');
   const resumedWork =
     afterStatus.running > beforeStatus.running
-    || afterStatus.pending < beforeStatus.pending;
+    || afterStatus.pending < beforeStatus.pending
+    || readyTasks.length > 0
+    || started.some((task) => task.config.workflowId === restored.workflowId && task.status === 'running');
   if (!resumedWork) {
     autoFix.unsubscribe();
     return;
@@ -1837,6 +1852,15 @@ async function headlessCancel(taskId: string, deps: HeadlessDeps): Promise<void>
   if (!taskId) throw new Error('Missing taskId. Usage: --headless cancel <taskId>');
   taskId = restoreWorkflowForTask(taskId, deps).resolvedTaskId;
 
+  if (deps.cancelTask) {
+    const result = await deps.cancelTask(taskId);
+    process.stdout.write(`Cancelled ${result.cancelled.length} task(s): [${result.cancelled.join(', ')}]\n`);
+    if (result.runningCancelled.length > 0) {
+      process.stdout.write(`Killed running: [${result.runningCancelled.join(', ')}]\n`);
+    }
+    return;
+  }
+
   // Peer submit-plan / headless run holds the TaskRunner in another process; hit its local API so
   // cancel also kills the executor child (DB-only cancel would let the command keep running).
   const port = process.env.INVOKER_API_PORT;
@@ -1880,6 +1904,17 @@ async function headlessCancel(taskId: string, deps: HeadlessDeps): Promise<void>
 
 async function headlessCancelWorkflow(workflowId: string, deps: HeadlessDeps): Promise<void> {
   if (!workflowId) throw new Error('Missing workflowId. Usage: --headless cancel-workflow <workflowId>');
+
+  if (deps.cancelWorkflow) {
+    const result = await deps.cancelWorkflow(workflowId);
+    process.stdout.write(
+      `Cancelled ${result.cancelled.length} task(s) in workflow "${workflowId}": [${result.cancelled.join(', ')}]\n`,
+    );
+    if (result.runningCancelled.length > 0) {
+      process.stdout.write(`Killed running: [${result.runningCancelled.join(', ')}]\n`);
+    }
+    return;
+  }
 
   const port = process.env.INVOKER_API_PORT;
   if (port) {
@@ -2195,4 +2230,44 @@ function restoreWorkflowForTask(
   throw new Error(`Task "${taskId}" not found in any workflow`);
 }
 
+async function waitForCompletion(
+  orchestrator: Orchestrator,
+  workflowId?: string,
+  waitForApproval?: boolean,
+  hasBackgroundWork?: () => boolean,
+): Promise<void> {
+  const maxWaitMs = waitForApproval ? 86_400_000 : 1_800_000; // 24 hours if waiting for approval, else 30 minutes
+  const pollIntervalMs = 100;
+  const start = Date.now();
+
+  if (waitForApproval) {
+    process.stdout.write('[headless] Waiting for PR approval (--wait-for-approval)...\n');
+  }
+
+  while (Date.now() - start < maxWaitMs) {
+    let tasks = orchestrator.getAllTasks();
+    if (workflowId) {
+      tasks = tasks.filter((t) => t.config.workflowId === workflowId);
+    }
+    let readyTasks = orchestrator.getReadyTasks();
+    if (workflowId) {
+      readyTasks = readyTasks.filter((t) => t.config.workflowId === workflowId);
+    }
+    const settledStatuses = waitForApproval
+      ? ['completed', 'failed', 'needs_input', 'blocked', 'stale']
+      : ['completed', 'failed', 'needs_input', 'awaiting_approval', 'review_ready', 'blocked', 'stale'];
+    const allSettled = tasks.every((t) => settledStatuses.includes(t.status));
+    if (allSettled && !hasBackgroundWork?.()) return;
+    // Also settle if nothing is running and at least one task awaits human action.
+    // Pending merge gates can't progress until their upstream is approved.
+    const noneRunning = !tasks.some(
+      (t) => t.status === 'running' || t.status === 'fixing_with_ai',
+    );
+    const hasReadyPending = readyTasks.some((t) => t.status === 'pending');
+    const hasHumanBlocked = tasks.some((t) => settledStatuses.includes(t.status) && t.status !== 'completed');
+    if (noneRunning && hasHumanBlocked && !hasBackgroundWork?.()) return;
+    if (noneRunning && !hasReadyPending && !hasBackgroundWork?.()) return;
+    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+  }
+}
 // ── Headless Delegation ──────────────────────────────────────
