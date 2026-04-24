@@ -156,11 +156,91 @@ export function cancelWorkflow(
 }
 
 /**
+ * Recreate a workflow from a refreshed upstream base — the chart's
+ * `recreateWorkflowFromFreshBase` action
+ * (`docs/architecture/task-invalidation-chart.md` rows
+ * "Rebase and retry" + "Repo/base invalidation inconsistency",
+ * `docs/architecture/task-invalidation-roadmap.md` Step 12).
+ *
+ * This is strictly stronger than `recreateWorkflow`: in addition to
+ * the full reset (workspace path, branch, commit, agent session,
+ * container, merge gate workspace, etc.) it first refreshes the pool
+ * mirror and origin base via `taskExecutor.preparePoolForRebaseRetry`
+ * and removes managed experiment/invoker branches in that mirror.
+ * Plain `recreateWorkflow` preserves the workflow's currently-known
+ * upstream base; this one advances it.
+ *
+ * Wiring (composite, kept here per
+ * `docs/architecture/task-invalidation-roadmap.md` "Out of scope":
+ * the composite implementation is preserved semantically — replacing
+ * it with a single primitive is a follow-up):
+ *
+ *   1. Bump the workflow's generation counter (matches
+ *      `bumpGenerationAndRecreate` so any downstream observers that
+ *      key off `workflow.generation` notice the new round).
+ *   2. Delegate to `Orchestrator.recreateWorkflowFromFreshBase` with
+ *      a `refreshBase` callback that runs
+ *      `taskExecutor.preparePoolForRebaseRetry` when both
+ *      `taskExecutor` and `workflow.repoUrl` are available. The
+ *      orchestrator method is the seam that records the fresh-base
+ *      effect (`knownFreshBaseCommits`) and then runs the same reset
+ *      as `recreateWorkflow`. Cancel-first is supplied by
+ *      `applyInvalidation`'s `cancelInFlight` dep
+ *      (`buildCancelInFlight` → `Orchestrator.cancelWorkflow` +
+ *      `taskExecutor.killActiveExecution`) when invoked through that
+ *      route — this wrapper does not add a parallel cancel call.
+ *
+ * The `refreshBase` callback returns `undefined` today because
+ * `preparePoolForRebaseRetry` does not yet expose the resulting
+ * upstream HEAD SHA; recording the SHA is a follow-up. Tests inject
+ * their own `refreshBase` callback (via the orchestrator method
+ * directly) to assert the fresh-base observable.
+ */
+export async function recreateWorkflowFromFreshBase(
+  workflowId: string,
+  deps: ActionDeps,
+): Promise<TaskState[]> {
+  const workflow = deps.persistence.loadWorkflow(workflowId);
+  if (!workflow) throw new Error(`Workflow ${workflowId} not found`);
+  const nextGen = (workflow.generation ?? 0) + 1;
+  deps.persistence.updateWorkflow(workflowId, { generation: nextGen });
+  deps.logger?.info(
+    `recreateWorkflowFromFreshBase: workflowId=${workflowId} bumped generation to ${nextGen}`,
+    { module: 'workflow' },
+  );
+  deps.logger?.info(
+    `recreateWorkflowFromFreshBase: workflowId=${workflowId} → orchestrator.recreateWorkflowFromFreshBase (pool prep if taskExecutor+repoUrl)`,
+    { module: 'agent-session-trace' },
+  );
+
+  return deps.orchestrator.recreateWorkflowFromFreshBase(workflowId, {
+    refreshBase: async () => {
+      if (deps.taskExecutor && workflow.repoUrl) {
+        await deps.taskExecutor.preparePoolForRebaseRetry(
+          workflowId,
+          workflow.repoUrl,
+          workflow.baseBranch,
+        );
+      }
+      // `preparePoolForRebaseRetry` does not yet expose the resulting
+      // upstream HEAD SHA; surfacing it (so the orchestrator can
+      // record `knownFreshBaseCommits` in production too) is the
+      // follow-up the roadmap calls out in "Out of scope".
+      return undefined;
+    },
+  });
+}
+
+/**
  * Rebase-and-retry: refresh the pool mirror / origin base, remove managed
  * experiment/invoker branches in that mirror, bump generation, and restart the DAG.
  *
- * When `taskExecutor` is provided, `preparePoolForRebaseRetry` runs first; the
- * caller then executes runnable tasks (normal pool fetch + origin base resolution apply).
+ * Step 12: this wrapper is now a thin delegate to
+ * `recreateWorkflowFromFreshBase` — the chart's first-class action
+ * for this behavior. It is preserved as a separate export because
+ * existing callers (notably `headlessRebaseAndRetry`) speak in task
+ * ids while the workflow-scope action speaks in workflow ids; this
+ * function continues to do the `taskId → workflowId` translation.
  */
 export async function rebaseAndRetry(
   taskId: string,
@@ -169,21 +249,11 @@ export async function rebaseAndRetry(
   const task = deps.orchestrator.getTask(taskId);
   if (!task?.config.workflowId) throw new Error(`Task ${taskId} not found or has no workflow`);
   const workflowId = task.config.workflowId;
-
-  const workflow = deps.persistence.loadWorkflow(workflowId);
   deps.logger?.info(
-    `rebaseAndRetry: taskId=${taskId} workflowId=${workflowId} → pool prep (if taskExecutor+repoUrl) → bumpGenerationAndRecreate → recreateWorkflow`,
+    `rebaseAndRetry: taskId=${taskId} workflowId=${workflowId} → recreateWorkflowFromFreshBase (Step 12 delegate)`,
     { module: 'agent-session-trace' },
   );
-  if (deps.taskExecutor && workflow?.repoUrl) {
-    await deps.taskExecutor.preparePoolForRebaseRetry(
-      workflowId,
-      workflow.repoUrl,
-      workflow.baseBranch,
-    );
-  }
-
-  return bumpGenerationAndRecreate(workflowId, deps);
+  return recreateWorkflowFromFreshBase(workflowId, deps);
 }
 
 export interface BuildCancelInFlightDeps {
@@ -223,6 +293,13 @@ export function buildInvalidationDeps(
         logger: deps.logger,
         orchestrator: deps.orchestrator,
         persistence: deps.persistence,
+      }),
+    recreateWorkflowFromFreshBase: (workflowId: string) =>
+      recreateWorkflowFromFreshBase(workflowId, {
+        logger: deps.logger,
+        orchestrator: deps.orchestrator,
+        persistence: deps.persistence,
+        taskExecutor: deps.taskExecutor,
       }),
   };
 }

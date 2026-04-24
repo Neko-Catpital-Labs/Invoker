@@ -156,6 +156,17 @@ describe('rebase-and-retry: pool mirror cleanup before restart', { timeout: 120_
         }
         return tasks;
       },
+      // Step 12: rebaseAndRetry now delegates through
+      // recreateWorkflowFromFreshBase. Mirror the real orchestrator: drive
+      // the refreshBase callback (so pool prep runs) before reusing the
+      // recreateWorkflow reset path.
+      recreateWorkflowFromFreshBase: async (
+        workflowId: string,
+        options?: { refreshBase?: (workflowId: string) => Promise<unknown> },
+      ): Promise<TaskState[]> => {
+        await options?.refreshBase?.(workflowId);
+        return orchestrator.recreateWorkflow(workflowId);
+      },
     };
 
     const repoUrl = `file://${tmpDir}`;
