@@ -168,7 +168,7 @@ describe('cancelTask', () => {
 
     const task = orchestrator.getTask('a');
     expect(task!.status).toBe('failed');
-    expect(task!.execution.error).toContain('Cancelled by user');
+    expect(task!.execution.error).toContain('Terminated by user');
   });
 
   it('cascades cancel to pending dependents', () => {
