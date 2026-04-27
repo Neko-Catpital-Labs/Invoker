@@ -111,7 +111,7 @@ describe('QueueView', () => {
     fireEvent.click(screen.getByText('run-all-fixture-tests'));
     expect(onTaskClick).toHaveBeenCalledWith(expect.objectContaining({ id: runningTask.id }));
 
-    fireEvent.click(screen.getAllByText('Cancel')[0]);
+    fireEvent.click(screen.getAllByText('Terminate')[0]);
     expect(onCancel).toHaveBeenCalledWith(runningTask.id);
   });
 
