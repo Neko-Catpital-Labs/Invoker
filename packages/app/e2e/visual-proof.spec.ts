@@ -80,6 +80,20 @@ const MERGE_GATE_TEXT_VISUAL_PLAN = {
   ],
 };
 
+/** Plan for queue-action-surface hardening: combines canonical states, dependency relationships, and destructive actions. */
+const QUEUE_HARDENING_PLAN = {
+  name: 'Queue Hardening Visual Proof',
+  repoUrl: E2E_REPO_URL,
+  onFinish: 'none' as const,
+  tasks: [
+    { id: 'qh-running', description: 'Running task with downstream', command: 'echo run', dependencies: [] },
+    { id: 'qh-fixing', description: 'AI fix in progress', command: 'echo fix', dependencies: [] },
+    { id: 'qh-approval', description: 'Awaiting approval task', command: 'echo approve', dependencies: [] },
+    { id: 'qh-queued', description: 'Queued pending task', command: 'echo queued', dependencies: [] },
+    { id: 'qh-downstream', description: 'Blocked by running task', command: 'echo downstream', dependencies: ['qh-running'] },
+  ],
+};
+
 function taskNodeCard(page: import('@playwright/test').Page, taskIdSuffix: string) {
   return page.locator(`.react-flow__node[data-testid$="${taskIdSuffix}"] > div`).first();
 }
@@ -763,5 +777,42 @@ test.describe('Visual proof capture', () => {
 
     await captureScreenshot(page, 'terminate-wording-task-vs-workflow');
     await assertPageScreenshot(page, 'terminate-wording-task-vs-workflow');
+  });
+
+  test('queue-action-surface-hardening — composed queue UX with labels, relationships, and terminate', async ({ page }) => {
+    await loadPlan(page, QUEUE_HARDENING_PLAN);
+    const now = new Date();
+    await injectTaskStates(page, [
+      { taskId: 'qh-running', changes: { status: 'running', execution: { startedAt: now } } },
+      { taskId: 'qh-fixing', changes: { status: 'running', execution: { isFixingWithAI: true, startedAt: now } } },
+      { taskId: 'qh-approval', changes: { status: 'awaiting_approval', execution: { startedAt: now } } },
+      // qh-queued stays pending with no deps → Action Queue queued section
+      // qh-downstream stays pending with unmet dep on qh-running → Backlog
+    ]);
+
+    // Navigate to queue view
+    await page.getByRole('button', { name: 'Queue' }).click();
+
+    // Assert canonical Action Queue and Backlog headings
+    await expect(page.getByRole('heading', { name: /Action Queue/ })).toBeVisible();
+    await expect(page.getByRole('heading', { name: /Backlog/ })).toBeVisible();
+
+    // Assert canonical action queue labels are present
+    await expect(page.locator('text=running').first()).toBeVisible();
+
+    // Assert task-level Terminate wording on running task row
+    const terminateButton = page.getByRole('button', { name: 'Terminate' }).first();
+    await expect(terminateButton).toBeVisible();
+
+    // Assert downstream dependent shows its dependency in Backlog
+    await expect(page.getByText('deps: qh-running')).toBeVisible();
+
+    // Expand relationship section: click the running task row to open task panel
+    await page.getByText('qh-running').click();
+    await expect(page.getByRole('heading', { name: 'Running task with downstream' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Dependencies' })).toBeVisible();
+
+    await captureScreenshot(page, 'queue-action-surface-hardening');
+    await assertPageScreenshot(page, 'queue-action-surface-hardening');
   });
 });
