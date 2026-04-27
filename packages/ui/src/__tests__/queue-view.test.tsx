@@ -249,4 +249,190 @@ describe('QueueView', () => {
     expect(screen.getByText('Pending')).toBeInTheDocument();
     expect(screen.getByText('priority: 5')).toBeInTheDocument();
   });
+
+  describe('relationship expander', () => {
+    function setupRelationshipScenario() {
+      // A -> B -> C chain: A has no deps, B depends on A, C depends on B.
+      // This gives A downstream=[B], B upstream=[A] downstream=[C], C upstream=[B].
+      const taskA = makeUITask({
+        id: 'wf-1/task-a',
+        status: 'running',
+        description: 'first task',
+        dependencies: [],
+      });
+      const taskB = makeUITask({
+        id: 'wf-1/task-b',
+        status: 'blocked',
+        description: 'second task',
+        dependencies: ['wf-1/task-a'],
+      });
+      const taskC = makeUITask({
+        id: 'wf-1/task-c',
+        status: 'blocked',
+        description: 'third task',
+        dependencies: ['wf-1/task-b'],
+      });
+      const tasks = new Map<string, TaskState>([
+        [taskA.id, taskA],
+        [taskB.id, taskB],
+        [taskC.id, taskC],
+      ]);
+
+      const getQueueStatus = vi.fn(async () => ({
+        maxConcurrency: 6,
+        runningCount: 1,
+        running: [{ taskId: taskA.id, description: taskA.description }],
+        queued: [],
+      }));
+      (window as unknown as { invoker: unknown }).invoker = { getQueueStatus };
+
+      return { tasks, taskA, taskB, taskC, getQueueStatus };
+    }
+
+    it('relationships are collapsed by default', async () => {
+      const { tasks, getQueueStatus } = setupRelationshipScenario();
+
+      render(
+        <QueueView
+          tasks={tasks}
+          onTaskClick={onTaskClick}
+          onCancel={onCancel}
+          selectedTaskId={null}
+        />,
+      );
+
+      await waitFor(() => expect(getQueueStatus).toHaveBeenCalled());
+
+      // The rels toggle buttons should be present (tasks have relationships)
+      const relButtons = screen.getAllByText(/rels/);
+      expect(relButtons.length).toBeGreaterThan(0);
+
+      // But no upstream/downstream labels should be visible (collapsed)
+      expect(screen.queryByText('upstream:')).not.toBeInTheDocument();
+      expect(screen.queryByText('downstream:')).not.toBeInTheDocument();
+    });
+
+    it('clicking expander toggles relationship section per row', async () => {
+      const { tasks, getQueueStatus } = setupRelationshipScenario();
+
+      render(
+        <QueueView
+          tasks={tasks}
+          onTaskClick={onTaskClick}
+          onCancel={onCancel}
+          selectedTaskId={null}
+        />,
+      );
+
+      await waitFor(() => expect(getQueueStatus).toHaveBeenCalled());
+
+      // task-a is in Action Queue; it has downstream only (task-b depends on it).
+      // Expand task-a's relationships.
+      const expandButtons = screen.getAllByLabelText('Expand relationships');
+      // Click the first one (task-a in Action Queue)
+      fireEvent.click(expandButtons[0]);
+
+      // Now the relationship section for task-a should appear
+      const relsSection = screen.getByTestId('rels-wf-1/task-a');
+      expect(relsSection).toBeInTheDocument();
+      expect(relsSection.textContent).toContain('downstream:');
+      expect(relsSection.textContent).toContain('task-b');
+
+      // Click again to collapse
+      const collapseButton = screen.getByLabelText('Collapse relationships');
+      fireEvent.click(collapseButton);
+      expect(screen.queryByTestId('rels-wf-1/task-a')).not.toBeInTheDocument();
+    });
+
+    it('shows both upstream and downstream in expanded row', async () => {
+      const { tasks, getQueueStatus } = setupRelationshipScenario();
+
+      render(
+        <QueueView
+          tasks={tasks}
+          onTaskClick={onTaskClick}
+          onCancel={onCancel}
+          selectedTaskId={null}
+        />,
+      );
+
+      await waitFor(() => expect(getQueueStatus).toHaveBeenCalled());
+
+      // task-b is in Backlog (blocked), has upstream=[task-a] and downstream=[task-c].
+      // Find the rels button for task-b in backlog.
+      // The backlog has task-b and task-c. task-b has both directions.
+      const expandButtons = screen.getAllByLabelText('Expand relationships');
+      // There should be buttons for task-a (action queue), task-b (backlog), task-c (backlog).
+      // task-a has only downstream, task-b has both, task-c has only upstream.
+      // Expand task-b (second expand button, index 1)
+      fireEvent.click(expandButtons[1]);
+
+      expect(screen.getByText('upstream:')).toBeInTheDocument();
+      expect(screen.getByText('downstream:')).toBeInTheDocument();
+      // upstream chip shows task-a
+      expect(screen.getByTestId('rels-wf-1/task-b')).toBeInTheDocument();
+    });
+
+    it('clicking a related task chip selects and navigates to that task', async () => {
+      const { tasks, getQueueStatus } = setupRelationshipScenario();
+
+      render(
+        <QueueView
+          tasks={tasks}
+          onTaskClick={onTaskClick}
+          onCancel={onCancel}
+          selectedTaskId={null}
+        />,
+      );
+
+      await waitFor(() => expect(getQueueStatus).toHaveBeenCalled());
+
+      // Expand task-a to see downstream task-b chip
+      const expandButtons = screen.getAllByLabelText('Expand relationships');
+      fireEvent.click(expandButtons[0]);
+
+      // The downstream chip for task-b is inside the rels section
+      const relsSection = screen.getByTestId('rels-wf-1/task-a');
+      const taskBChip = relsSection.querySelector('button');
+      expect(taskBChip).not.toBeNull();
+      fireEvent.click(taskBChip!);
+
+      // onTaskClick should have been called with task-b's state
+      expect(onTaskClick).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'wf-1/task-b' }),
+      );
+    });
+
+    it('does not show rels button for tasks with no relationships', async () => {
+      const loneTask = makeUITask({
+        id: 'wf-1/lone-task',
+        status: 'pending',
+        description: 'no deps',
+        dependencies: [],
+      });
+      const tasks = new Map<string, TaskState>([
+        [loneTask.id, loneTask],
+      ]);
+
+      const getQueueStatus = vi.fn(async () => ({
+        maxConcurrency: 6,
+        runningCount: 0,
+        running: [],
+        queued: [{ taskId: loneTask.id, priority: 0, description: loneTask.description }],
+      }));
+      (window as unknown as { invoker: unknown }).invoker = { getQueueStatus };
+
+      render(
+        <QueueView
+          tasks={tasks}
+          onTaskClick={onTaskClick}
+          onCancel={onCancel}
+          selectedTaskId={null}
+        />,
+      );
+
+      await waitFor(() => expect(getQueueStatus).toHaveBeenCalled());
+      expect(screen.queryByText(/rels/)).not.toBeInTheDocument();
+    });
+  });
 });
