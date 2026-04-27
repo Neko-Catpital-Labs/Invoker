@@ -15,7 +15,7 @@ describe('restartTask deprecation shim', () => {
   // ── Orchestrator-level shim ──────────────────────────────────
 
   describe('Orchestrator.restartTask', () => {
-    let warnSpy: ReturnType<typeof vi.spyOn>;
+    let warnSpy: ReturnType<typeof vi.fn>;
     let recreateSpy: ReturnType<typeof vi.spyOn>;
     let retrySpy: ReturnType<typeof vi.spyOn>;
     let orch: Orchestrator;
@@ -25,11 +25,14 @@ describe('restartTask deprecation shim', () => {
       // only asserting delegation we don't need plan loading;
       // we stub the target methods directly.
       orch = Object.create(Orchestrator.prototype) as Orchestrator;
+      warnSpy = vi.fn();
+      (orch as unknown as { logger: { warn: typeof warnSpy } }).logger = {
+        warn: warnSpy,
+      } as never;
       // The shim only calls `this.recreateTask`, so stubbing
       // that out and asserting the call is sufficient.
       recreateSpy = vi.spyOn(orch, 'recreateTask').mockImplementation(() => []);
       retrySpy = vi.spyOn(orch, 'retryTask').mockImplementation(() => []);
-      warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     });
 
     it('delegates restartTask to recreateTask (NOT retryTask)', () => {
