@@ -88,7 +88,7 @@ export function QueueView({ tasks, onTaskClick, onCancel, selectedTaskId }: Queu
       if (task) onTaskClick(task);
       // Scroll to the row if it exists in the current view
       const el = rowRefs.current.get(taskId);
-      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      if (el?.scrollIntoView) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     },
     [tasks, onTaskClick],
   );
