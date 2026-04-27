@@ -250,6 +250,7 @@ fi
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --spec)       SPEC="$2"; shift 2 ;;
+    --label)      SUBCOMMAND="capture-$2"; shift 2 ;;
     --help|-h)    usage ;;
     *)            echo "Unknown option: $1" >&2; usage ;;
   esac
