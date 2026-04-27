@@ -115,7 +115,7 @@ export function QueueView({ tasks, onTaskClick, onCancel, selectedTaskId }: Queu
 
   const handleCancel = useCallback(
     (taskId: string) => {
-      const confirmed = window.confirm(`Terminate task "${taskId}" and all downstream dependents?`);
+      const confirmed = window.confirm(`Terminate task "${displayTaskId(taskId)}" and all downstream dependents?`);
       if (confirmed) onCancel(taskId);
     },
     [onCancel],
@@ -238,7 +238,7 @@ export function QueueView({ tasks, onTaskClick, onCancel, selectedTaskId }: Queu
                 </button>
               </div>
               {isExpanded && (
-                <div className="px-2 pb-2 text-xs" data-testid={`rels-${job.taskId}`}>
+                <div className="mx-2 mb-2 pt-1 pb-1 border-t border-gray-700 text-xs" data-testid={`rels-${job.taskId}`}>
                   {upstream.length > 0 && (
                     <div className="mb-1">
                       <span className="text-gray-500">upstream: </span>
@@ -286,6 +286,9 @@ export function QueueView({ tasks, onTaskClick, onCancel, selectedTaskId }: Queu
           const upstream = task.dependencies;
           const downstream = dependentsMap.get(task.id) ?? [];
           const hasRelationships = upstream.length > 0 || downstream.length > 0;
+          const backlogVisualStatus = getEffectiveVisualStatus(task.status, task.execution);
+          const backlogStatusLabel = formatStatusLabel(task.status);
+          const backlogColors = getStatusColor(backlogVisualStatus);
           return (
             <div
               key={task.id}
@@ -302,6 +305,9 @@ export function QueueView({ tasks, onTaskClick, onCancel, selectedTaskId }: Queu
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
                     <span className="text-sm text-gray-100 truncate">{displayTaskId(task.id)}</span>
+                    <span className={`text-xs px-2 py-0.5 rounded shrink-0 ${backlogColors.bg} ${backlogColors.text}`}>
+                      {backlogStatusLabel}
+                    </span>
                     {hasRelationships && (
                       <button
                         onClick={(e) => toggleExpanded(task.id, e)}
@@ -331,7 +337,7 @@ export function QueueView({ tasks, onTaskClick, onCancel, selectedTaskId }: Queu
                 </button>
               </div>
               {isExpanded && (
-                <div className="px-2 pb-2 text-xs" data-testid={`rels-${task.id}`}>
+                <div className="mx-2 mb-2 pt-1 pb-1 border-t border-gray-700 text-xs" data-testid={`rels-${task.id}`}>
                   {upstream.length > 0 && (
                     <div className="mb-1">
                       <span className="text-gray-500">upstream: </span>
