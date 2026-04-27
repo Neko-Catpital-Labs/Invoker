@@ -133,7 +133,7 @@ export function getMenuItems(
   if (canCancel) {
     items.push({
       id: 'cancel-task',
-      label: 'Cancel Task',
+      label: 'Terminate Task',
       enabled: true,
       action: 'onCancel',
       variant: 'danger',

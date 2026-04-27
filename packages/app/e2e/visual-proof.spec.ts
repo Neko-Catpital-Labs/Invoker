@@ -729,4 +729,37 @@ test.describe('Visual proof capture', () => {
     // Capture second screenshot in edit mode
     await captureScreenshot(page, 'redesign-gate-policy-ui-edit-mode');
   });
+
+  test('terminate-wording — task-level uses Terminate, workflow-level keeps Cancel', async ({ page }) => {
+    await loadPlan(page, TEST_PLAN);
+    const now = new Date();
+    await injectTaskStates(page, [
+      { taskId: 'task-alpha', changes: { status: 'running', execution: { startedAt: now } } },
+    ]);
+
+    // Switch to queue view to verify "Terminate" button text on task rows
+    await page.getByRole('button', { name: 'Queue' }).click();
+    await expect(page.getByRole('heading', { name: /Action Queue/ })).toBeVisible();
+    const terminateButton = page.getByRole('button', { name: 'Terminate' }).first();
+    await expect(terminateButton).toBeVisible();
+
+    // Switch back to DAG view and right-click the running task for context menu
+    await page.getByRole('button', { name: 'DAG' }).click();
+    await page.locator('.react-flow__node[data-testid$="task-alpha"]').click({ button: 'right' });
+    const menu = page.getByRole('menu');
+    await expect(menu).toBeVisible();
+
+    // Expand the More section to reveal Danger items
+    await page.getByRole('menuitem', { name: 'More' }).click();
+    await expect(menu.getByText('Danger', { exact: true })).toBeVisible();
+
+    // Assert task-level action uses "Terminate Task"
+    await expect(page.getByRole('menuitem', { name: 'Terminate Task' })).toBeVisible();
+
+    // Assert workflow-level action keeps "Cancel Workflow" (not converted)
+    await expect(page.getByRole('menuitem', { name: 'Cancel Workflow' })).toBeVisible();
+
+    await captureScreenshot(page, 'terminate-wording-task-vs-workflow');
+    await assertPageScreenshot(page, 'terminate-wording-task-vs-workflow');
+  });
 });
