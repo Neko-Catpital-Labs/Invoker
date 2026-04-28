@@ -43,6 +43,12 @@ import {
   spawnAgentFixViaRegistry,
 } from './conflict-resolver.js';
 import { DEFAULT_EXECUTION_AGENT } from './agent.js';
+import {
+  buildMakePrPrompt,
+  resolveInstalledSkillPathForAgent,
+  spawnAgentPrAuthorViaRegistry,
+  validateCanonicalPrBody,
+} from './pr-authoring.js';
 
 /** Keeps `lastHeartbeatAt` fresh while `executor.start()` is awaited (SSH remote setup/provision can take minutes). Matches BaseExecutor default heartbeat cadence. */
 const PRE_START_HEARTBEAT_INTERVAL_MS = 30_000;
@@ -1505,6 +1511,82 @@ export class TaskRunner {
     }
     const driver = this.executionAgentRegistry.getSessionDriver(agentName);
     return spawnAgentFixViaRegistry(prompt, cwd, agent, driver);
+  }
+
+  async authorPrBodyWithSkill(args: {
+    workflowId?: string;
+    mergeNodeTaskId?: string;
+    title: string;
+    baseBranch: string;
+    featureBranch: string;
+    workflowSummary: string;
+    cwd: string;
+  }): Promise<{ body: string; sessionId: string; agentName: string }> {
+    if (!this.executionAgentRegistry) {
+      throw new Error('executionAgentRegistry is required for authorPrBodyWithSkill');
+    }
+
+    const agentName = this.resolvePrAuthoringAgentName(args.workflowId, args.mergeNodeTaskId);
+    const skillPath = resolveInstalledSkillPathForAgent(agentName, 'make-pr');
+    if (!skillPath) {
+      throw new Error(
+        `Required bundled skill "invoker-make-pr" is not installed for agent "${agentName}".`,
+      );
+    }
+
+    const agent = this.executionAgentRegistry.getOrThrow(agentName);
+    const driver = this.executionAgentRegistry.getSessionDriver(agentName);
+    const prompt = buildMakePrPrompt({
+      skillPath,
+      title: args.title,
+      baseBranch: args.baseBranch,
+      featureBranch: args.featureBranch,
+      workflowSummary: args.workflowSummary,
+    });
+    const result = await spawnAgentPrAuthorViaRegistry(prompt, args.cwd, agent, driver);
+    const validationErrors = validateCanonicalPrBody(result.body);
+    if (validationErrors.length > 0) {
+      throw new Error(
+        [
+          `PR body authored via invoker-make-pr is invalid for agent "${agentName}".`,
+          ...validationErrors.map((error) => `- ${error}`),
+        ].join('\n'),
+      );
+    }
+    return { body: result.body, sessionId: result.sessionId, agentName };
+  }
+
+  private resolvePrAuthoringAgentName(workflowId?: string, mergeNodeTaskId?: string): string {
+    const allTasks = this.orchestrator.getAllTasks();
+    let candidateTasks = allTasks.filter((task) => !task.config.isMergeNode);
+    if (workflowId) {
+      candidateTasks = candidateTasks.filter((task) => task.config.workflowId === workflowId);
+    }
+    if (mergeNodeTaskId && workflowId) {
+      const mergeTask = allTasks.find((task) => task.id === mergeNodeTaskId && task.config.isMergeNode);
+      if (mergeTask) {
+        const allowedTaskIds = collectTransitiveNonMergeTaskIds(
+          mergeTask,
+          (id) => this.orchestrator.getTask(id),
+        );
+        candidateTasks = candidateTasks.filter((task) => allowedTaskIds.has(task.id));
+      }
+    }
+
+    const distinctAgents = [...new Set(
+      candidateTasks
+        .map((task) => task.config.executionAgent?.trim())
+        .filter((agent): agent is string => Boolean(agent)),
+    )];
+    if (distinctAgents.length === 0) {
+      return DEFAULT_EXECUTION_AGENT;
+    }
+    if (distinctAgents.length > 1) {
+      console.warn(
+        `[merge] Multiple execution agents found for PR authoring (${distinctAgents.join(', ')}); using ${distinctAgents[0]}`,
+      );
+    }
+    return distinctAgents[0];
   }
 
   get agentRegistry(): AgentRegistry | undefined {

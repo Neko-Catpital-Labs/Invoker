@@ -44,6 +44,7 @@ import { openExternalTerminalForTask } from './open-terminal-for-task.js';
 import { dispatchStartedTasksWithGlobalTopup, executeGlobalTopup, finalizeMutationWithGlobalTopup } from './global-topup.js';
 import {
   delegationTimeoutMs,
+  resolveDelegationTimeoutMs,
   tryDelegateExec,
   tryDelegateQuery,
   tryDelegateResume,
@@ -56,6 +57,7 @@ import { relaunchOrphansAndStartReady } from './orphan-relaunch.js';
 export { bumpGenerationAndRecreate } from './workflow-actions.js';
 export {
   delegationTimeoutMs,
+  resolveDelegationTimeoutMs,
   tryDelegateExec,
   tryDelegateQuery,
   tryDelegateResume,

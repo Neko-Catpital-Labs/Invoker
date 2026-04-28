@@ -7,7 +7,7 @@ import type { MessageBus } from '@invoker/transport';
 import { resolveInvokerHomeRoot } from './delete-all-snapshot.js';
 import { isHeadlessMutatingCommand } from './headless-command-classification.js';
 import {
-  delegationTimeoutMs,
+  resolveDelegationTimeoutMs,
   tryDelegateExec,
   tryDelegateQuery,
   tryDelegateQueryUiPerf,
@@ -97,7 +97,7 @@ async function delegateMutation(
     if (!workflowId) throw new Error('Missing workflowId. Usage: --headless resume <id>');
     return tryDelegateResume(workflowId, bus, waitForApproval, noTrack);
   }
-  const timeoutMs = noTrack ? noTrackTimeoutMs : delegationTimeoutMs(args);
+  const timeoutMs = noTrack ? noTrackTimeoutMs : await resolveDelegationTimeoutMs(args);
   return tryDelegateExec(args, bus, waitForApproval, noTrack, timeoutMs);
 }
 

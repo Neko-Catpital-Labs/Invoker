@@ -1,5 +1,5 @@
 import { execSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -3067,6 +3067,11 @@ describe('TaskRunner', () => {
       };
       (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
       (executor as any).removeMergeWorktree = async () => {};
+      (executor as any).authorPrBodyWithSkill = vi.fn().mockResolvedValue({
+        body: '## Summary\n\nAuthored body',
+        sessionId: 'sess-pr-1',
+        agentName: 'codex',
+      });
       (executor as any).execPr = vi.fn().mockResolvedValue('https://github.com/owner/repo/pull/55');
 
       const logSpy = vi.spyOn(console, 'log');
@@ -3074,7 +3079,13 @@ describe('TaskRunner', () => {
       await executor.approveMerge('wf-1');
 
       // Should push + create PR (with clone dir as cwd)
-      expect((executor as any).execPr).toHaveBeenCalledWith('master', 'plan/feature', 'Test Workflow', expect.any(String), '/tmp/mock-wt');
+      expect((executor as any).authorPrBodyWithSkill).toHaveBeenCalledWith(expect.objectContaining({
+        title: 'Test Workflow',
+        baseBranch: 'master',
+        featureBranch: 'plan/feature',
+        cwd: '/tmp/mock-wt',
+      }));
+      expect((executor as any).execPr).toHaveBeenCalledWith('master', 'plan/feature', 'Test Workflow', '## Summary\n\nAuthored body', '/tmp/mock-wt');
 
       // Should persist the PR URL on the merge task
       expect(persistence.updateTask).toHaveBeenCalledWith(
@@ -3132,6 +3143,11 @@ describe('TaskRunner', () => {
       };
       (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
       (executor as any).removeMergeWorktree = async () => {};
+      (executor as any).authorPrBodyWithSkill = vi.fn().mockResolvedValue({
+        body: '## Summary\n\nAuto authored body',
+        sessionId: 'sess-pr-2',
+        agentName: 'codex',
+      });
       (executor as any).execPr = vi.fn().mockResolvedValue('https://github.com/owner/repo/pull/77');
 
       const mergeTask = makeTask({
@@ -3315,12 +3331,21 @@ describe('TaskRunner', () => {
       (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
       (executor as any).removeMergeWorktree = async () => {};
       (executor as any).buildMergeSummary = vi.fn().mockResolvedValue('## Summary\nApprove summary');
+      (executor as any).authorPrBodyWithSkill = vi.fn().mockResolvedValue({
+        body: '## Summary\n\nApprove authored body',
+        sessionId: 'sess-pr-3',
+        agentName: 'codex',
+      });
       (executor as any).execPr = vi.fn().mockResolvedValue('https://github.com/owner/repo/pull/88');
 
       await executor.approveMerge('wf-1');
 
+      expect((executor as any).authorPrBodyWithSkill).toHaveBeenCalledWith(expect.objectContaining({
+        title: 'Test Workflow',
+        workflowSummary: '## Summary\nApprove summary',
+      }));
       expect((executor as any).execPr).toHaveBeenCalledWith(
-        'master', 'plan/feature', 'Test Workflow', '## Summary\nApprove summary', '/tmp/mock-wt',
+        'master', 'plan/feature', 'Test Workflow', '## Summary\n\nApprove authored body', '/tmp/mock-wt',
       );
       expect(persistence.updateTask).toHaveBeenCalledWith(
         '__merge__wf-1',
@@ -3734,8 +3759,6 @@ describe('TaskRunner', () => {
       const result = await executor.buildMergeSummary('wf-1');
 
       expect(result).toContain('## Summary');
-      // Check that horizontal rule separator is NOT present
-      // (table header separator contains dashes but is different format)
       const lines = result.split('\n');
       const summaryIdx = lines.indexOf('## Summary');
       expect(lines[summaryIdx + 1]).toContain('Feature Workflow — 1 tasks completed');
@@ -4484,6 +4507,11 @@ describe('TaskRunner', () => {
       (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
       (executor as any).removeMergeWorktree = async () => {};
       (executor as any).runVisualProofCapture = vi.fn().mockResolvedValue('## Visual Proof\n| Before | After |');
+      (executor as any).authorPrBodyWithSkill = vi.fn().mockResolvedValue({
+        body: '## Summary\n\nAuthored consolidate body',
+        sessionId: 'sess-pr-5',
+        agentName: 'codex',
+      });
       (executor as any).execPr = vi.fn().mockResolvedValue('https://example.com/pr');
 
       await executor.consolidateAndMerge(
@@ -4532,6 +4560,11 @@ describe('TaskRunner', () => {
       (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
       (executor as any).removeMergeWorktree = async () => {};
       (executor as any).runVisualProofCapture = vi.fn().mockResolvedValue(undefined);
+      (executor as any).authorPrBodyWithSkill = vi.fn().mockResolvedValue({
+        body: '## Summary\n\nAuthored consolidate body',
+        sessionId: 'sess-pr-6',
+        agentName: 'codex',
+      });
       (executor as any).execPr = vi.fn().mockResolvedValue('https://example.com/pr');
 
       // Should not throw
@@ -5496,6 +5529,103 @@ describe('TaskRunner', () => {
       expect(createCall?.[createCall.indexOf('--head') + 1]).toBe('plan/experiment');
     });
 
+    it('authorPrBodyWithSkill uses the configured workflow agent when available', async () => {
+      const tempHome = createTempWorkspace();
+      const originalHome = process.env.HOME;
+      process.env.HOME = tempHome;
+      mkdirSync(join(tempHome, '.codex', 'skills', 'invoker-make-pr'), { recursive: true });
+      writeFileSync(join(tempHome, '.codex', 'skills', 'invoker-make-pr', 'SKILL.md'), '# make-pr\n');
+
+      try {
+        const executor = new TaskRunner({
+          orchestrator: {
+            getTask: () => null,
+            getAllTasks: () => [makeTask({ id: 't1', config: { workflowId: 'wf-1', executionAgent: 'codex' } })],
+          } as any,
+          persistence: {} as any,
+          executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+          executionAgentRegistry: {
+            getOrThrow: vi.fn().mockReturnValue({
+              name: 'codex',
+              stdinMode: 'ignore',
+              linuxTerminalTail: 'exec_bash',
+              buildCommand: () => ({
+                cmd: 'node',
+                args: ['-e', 'process.stdout.write("## Summary\\n\\nAuthored\\n\\n## Test Plan\\n\\n- [x] `pnpm test`\\n\\n## Revert Plan\\n\\n- Safe to revert? Yes\\n- Revert command: `git revert <sha>`\\n- Post-revert steps: None\\n- Data migration? No\\n")'],
+                sessionId: 'sess-pr-body',
+              }),
+              buildResumeArgs: () => ({ cmd: 'node', args: ['-e', ''] }),
+            }),
+            getSessionDriver: vi.fn().mockReturnValue(undefined),
+          } as any,
+          cwd: '/tmp',
+        });
+
+        const result = await (executor as any).authorPrBodyWithSkill({
+          workflowId: 'wf-1',
+          title: 'Test Workflow',
+          baseBranch: 'master',
+          featureBranch: 'plan/feature',
+          workflowSummary: '## Summary\nSource summary',
+          cwd: '/tmp',
+        });
+
+        expect(result.agentName).toBe('codex');
+        expect(result.body).toContain('## Summary');
+        expect(result.body).toContain('## Test Plan');
+        expect(result.body).toContain('## Revert Plan');
+      } finally {
+        if (originalHome === undefined) delete process.env.HOME;
+        else process.env.HOME = originalHome;
+      }
+    });
+
+    it('authorPrBodyWithSkill fails closed when the authored body is invalid', async () => {
+      const tempHome = createTempWorkspace();
+      const originalHome = process.env.HOME;
+      process.env.HOME = tempHome;
+      mkdirSync(join(tempHome, '.codex', 'skills', 'invoker-make-pr'), { recursive: true });
+      writeFileSync(join(tempHome, '.codex', 'skills', 'invoker-make-pr', 'SKILL.md'), '# make-pr\n');
+
+      try {
+        const executor = new TaskRunner({
+          orchestrator: {
+            getTask: () => null,
+            getAllTasks: () => [makeTask({ id: 't1', config: { workflowId: 'wf-1', executionAgent: 'codex' } })],
+          } as any,
+          persistence: {} as any,
+          executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+          executionAgentRegistry: {
+            getOrThrow: vi.fn().mockReturnValue({
+              name: 'codex',
+              stdinMode: 'ignore',
+              linuxTerminalTail: 'exec_bash',
+              buildCommand: () => ({
+                cmd: 'node',
+                args: ['-e', 'process.stdout.write("## Summary\\n\\nOnly summary")'],
+                sessionId: 'sess-invalid-pr',
+              }),
+              buildResumeArgs: () => ({ cmd: 'node', args: ['-e', ''] }),
+            }),
+            getSessionDriver: vi.fn().mockReturnValue(undefined),
+          } as any,
+          cwd: '/tmp',
+        });
+
+        await expect((executor as any).authorPrBodyWithSkill({
+          workflowId: 'wf-1',
+          title: 'Test Workflow',
+          baseBranch: 'master',
+          featureBranch: 'plan/feature',
+          workflowSummary: '## Summary\nSource summary',
+          cwd: '/tmp',
+        })).rejects.toThrow('PR body authored via invoker-make-pr is invalid');
+      } finally {
+        if (originalHome === undefined) delete process.env.HOME;
+        else process.env.HOME = originalHome;
+      }
+    });
+
     it('resolveConflict includes dep description in merge -m', async () => {
       const workspacePath = createTempWorkspace();
       const tasks = new Map<string, TaskState>();
@@ -5728,6 +5858,11 @@ describe('TaskRunner', () => {
       (executor as any).removeMergeWorktree = async () => {};
       (executor as any).startPrPolling = vi.fn();
       (executor as any).buildMergeSummary = vi.fn().mockResolvedValue('## Summary');
+      (executor as any).authorPrBodyWithSkill = vi.fn().mockResolvedValue({
+        body: '## Summary\n\nPublished body',
+        sessionId: 'sess-pr-4',
+        agentName: 'codex',
+      });
       (executor as any).execPr = vi.fn().mockResolvedValue('https://github.com/owner/repo/pull/100');
 
       return { executor, mergeTask, orchestrator, persistence, mergeGateProvider, gitCalls };
@@ -5816,7 +5951,12 @@ describe('TaskRunner', () => {
 
       await executor.publishAfterFix(mergeTask);
 
-      expect((executor as any).execPr).toHaveBeenCalledWith('master', 'plan/feature', 'Test Workflow', '## Summary', '/tmp/gate-clone');
+      expect((executor as any).authorPrBodyWithSkill).toHaveBeenCalledWith(expect.objectContaining({
+        title: 'Test Workflow',
+        workflowSummary: '## Summary',
+        cwd: '/tmp/gate-clone',
+      }));
+      expect((executor as any).execPr).toHaveBeenCalledWith('master', 'plan/feature', 'Test Workflow', '## Summary\n\nPublished body', '/tmp/gate-clone');
       expect(persistence.updateTask).toHaveBeenCalledWith('__merge__wf-pub', expect.objectContaining({
         execution: expect.objectContaining({ reviewUrl: 'https://github.com/owner/repo/pull/100' }),
       }));
