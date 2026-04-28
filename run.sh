@@ -73,9 +73,19 @@ ensure_workspace_bootstrapped
 # Unset ELECTRON_RUN_AS_NODE so Electron loads its full API.
 unset ELECTRON_RUN_AS_NODE
 
-# In headless mode (child of running app), skip cleanup and rebuild.
+# In headless mode, skip cleanup.  Build if the artifact is missing (e.g.
+# standalone invocation outside a running app).
 if [ "$1" = "--headless" ]; then
   shift
+  if [ ! -f ./packages/app/dist/headless-client.js ]; then
+    echo "Building headless client (first run)..." >&2
+    pnpm --filter @invoker/core build >&2
+    pnpm --filter @invoker/persistence build >&2
+    pnpm --filter @invoker/executors build >&2
+    pnpm --filter @invoker/surfaces build >&2
+    pnpm --filter @invoker/ui build >&2
+    pnpm --filter @invoker/app build >&2
+  fi
   exec node ./packages/app/dist/headless-client.js "$@"
 fi
 
