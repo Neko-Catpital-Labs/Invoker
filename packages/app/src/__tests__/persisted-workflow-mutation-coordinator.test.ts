@@ -417,6 +417,49 @@ describe('PersistedWorkflowMutationCoordinator', () => {
     expect(adapter.listWorkflowMutationIntents('wf-1', ['completed'])).toHaveLength(2);
   });
 
+  it('requeues interrupted fix-with-agent workflow mutations on restart', async () => {
+    const adapter = await SQLiteAdapter.create(':memory:');
+    adapters.push(adapter);
+    adapter.saveWorkflow({
+      id: 'wf-1',
+      name: 'wf-1',
+      status: 'running',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+
+    const firstGate = deferred();
+    const owner1Order: string[] = [];
+    const owner1 = new PersistedWorkflowMutationCoordinator(
+      adapter,
+      'owner-1',
+      async (channel, args) => {
+        owner1Order.push(`${channel}:${String(args[0])}`);
+        await firstGate.promise;
+      },
+    );
+
+    void owner1.enqueue<void>('wf-1', 'normal', 'invoker:fix-with-agent', ['wf-1/task-fail', 'claude']);
+    await waitFor(() => adapter.listWorkflowMutationIntents('wf-1', ['running']).length === 1);
+
+    const owner2Order: string[] = [];
+    const owner2 = new PersistedWorkflowMutationCoordinator(
+      adapter,
+      'owner-2',
+      async (channel, args) => {
+        owner2Order.push(`${channel}:${String(args[0])}`);
+      },
+    );
+
+    adapter.requeueExpiredWorkflowMutationLeases(new Date(Date.now() + 60_000));
+    await owner2.resumePending();
+
+    expect(owner1Order).toEqual(['invoker:fix-with-agent:wf-1/task-fail']);
+    expect(owner2Order).toEqual(['invoker:fix-with-agent:wf-1/task-fail']);
+    expect(adapter.listWorkflowMutationIntents('wf-1', ['queued', 'running'])).toEqual([]);
+    expect(adapter.listWorkflowMutationIntents('wf-1', ['completed'])).toHaveLength(1);
+  });
+
   it('does not let another owner steal a live workflow lease', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
