@@ -1,16 +1,22 @@
 /**
- * QueueView — Displays live action queue with cancel capability.
+ * QueueView — Displays the Action Queue and Backlog.
  *
- * Action Queue mirrors `headless query queue`:
- * - running actions (currently executing)
- * - queued actions (next in scheduler order)
+ * Action Queue shows all actionable tasks:
+ * - scheduler-running and scheduler-queued tasks
+ * - tasks in manual-action states (fixing_with_ai, needs_input,
+ *   review_ready, awaiting_approval)
  *
- * Pending/blocked tasks are shown separately as backlog.
+ * Backlog shows blocked or otherwise non-actionable tasks.
  */
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import type { TaskState } from '../types.js';
-import { getRunningPhaseLabel } from '../lib/colors.js';
+import {
+  getRunningPhaseLabel,
+  getStatusColor,
+  getEffectiveVisualStatus,
+  formatStatusLabel,
+} from '../lib/colors.js';
 
 interface QueueViewProps {
   tasks: Map<string, TaskState>;
@@ -35,6 +41,14 @@ function displayTaskId(taskId: string): string {
 function displayDependencies(taskIds: readonly string[]): string {
   return taskIds.map(displayTaskId).join(', ');
 }
+
+/** Statuses that represent manual-action states — always actionable. */
+const MANUAL_ACTION_STATUSES = new Set([
+  'fixing_with_ai',
+  'needs_input',
+  'review_ready',
+  'awaiting_approval',
+]);
 
 export function QueueView({ tasks, onTaskClick, onCancel, selectedTaskId }: QueueViewProps) {
   const [queueStatus, setQueueStatus] = useState<QueueStatus | null>(null);
@@ -68,25 +82,36 @@ export function QueueView({ tasks, onTaskClick, onCancel, selectedTaskId }: Queu
   );
 
   const actionRows = useMemo(() => {
-    const running = (queueStatus?.running ?? []).map((job, idx) => ({
-      ...job,
-      state: 'running' as const,
-      order: idx + 1,
-    }));
-    const queued = (queueStatus?.queued ?? []).map((job, idx) => ({
-      ...job,
-      state: 'queued' as const,
-      order: running.length + idx + 1,
-    }));
-    return [...running, ...queued];
-  }, [queueStatus]);
+    const schedulerTaskIds = new Set<string>();
+
+    const running = (queueStatus?.running ?? []).map((job, idx) => {
+      schedulerTaskIds.add(job.taskId);
+      return { ...job, order: idx + 1 };
+    });
+
+    const queued = (queueStatus?.queued ?? []).map((job, idx) => {
+      schedulerTaskIds.add(job.taskId);
+      return { taskId: job.taskId, description: job.description, priority: job.priority, order: running.length + idx + 1 };
+    });
+
+    // Manual-action tasks not already in the scheduler queue
+    const manualAction = Array.from(tasks.values())
+      .filter((t) => MANUAL_ACTION_STATUSES.has(t.status) && !schedulerTaskIds.has(t.id))
+      .map((t, idx) => ({
+        taskId: t.id,
+        description: t.description,
+        order: running.length + queued.length + idx + 1,
+      }));
+
+    return [...running, ...queued, ...manualAction];
+  }, [queueStatus, tasks]);
 
   const actionTaskIds = useMemo(
     () => new Set(actionRows.map((a) => a.taskId)),
     [actionRows],
   );
 
-  const pendingTasks = useMemo(
+  const backlogTasks = useMemo(
     () =>
       Array.from(tasks.values()).filter(
         (t) =>
@@ -103,7 +128,7 @@ export function QueueView({ tasks, onTaskClick, onCancel, selectedTaskId }: Queu
           Action Queue ({actionRows.length})
         </h3>
         <div className="text-xs text-gray-400 mb-2">
-          Mirrors headless query queue: running actions first, then queued actions.
+          Running and scheduled actions, plus tasks awaiting manual action.
         </div>
         {queueStatus && (
           <div className="text-xs text-gray-400 mb-2">
@@ -113,13 +138,15 @@ export function QueueView({ tasks, onTaskClick, onCancel, selectedTaskId }: Queu
 
         {actionRows.map((job) => {
           const task = tasks.get(job.taskId);
+          const visualStatus = task
+            ? getEffectiveVisualStatus(task.status, task.execution)
+            : 'pending';
+          const statusLabel = task ? formatStatusLabel(task.status) : 'Pending';
+          const colors = getStatusColor(visualStatus);
           const phaseLabel = task?.status === 'running' ? getRunningPhaseLabel(task.execution.phase) : null;
-          const stateStyle = job.state === 'running'
-            ? 'bg-amber-900 text-amber-300'
-            : 'bg-cyan-900 text-cyan-300';
           return (
             <div
-              key={`${job.state}-${job.taskId}`}
+              key={`action-${job.taskId}`}
               onClick={() => task && onTaskClick(task)}
               className={`flex items-center justify-between p-2 rounded mb-1 cursor-pointer ${
                 selectedTaskId === job.taskId ? 'bg-gray-600' : 'bg-gray-800 hover:bg-gray-700'
@@ -129,16 +156,16 @@ export function QueueView({ tasks, onTaskClick, onCancel, selectedTaskId }: Queu
                 <div className="flex items-center gap-2">
                   <span className="text-xs text-gray-500">#{job.order}</span>
                   <span className="text-sm text-gray-100 truncate">{displayTaskId(job.taskId)}</span>
-                  <span className={`text-xs px-2 py-0.5 rounded shrink-0 ${stateStyle}`}>
-                    {job.state}
+                  <span className={`text-xs px-2 py-0.5 rounded shrink-0 ${colors.bg} ${colors.text}`}>
+                    {statusLabel}
                   </span>
                 </div>
                 <span className="text-xs text-gray-400 truncate block">{job.description}</span>
                 {phaseLabel && (
                   <span className="text-xs text-amber-300 truncate block">phase: {phaseLabel}</span>
                 )}
-                {job.state === 'queued' && 'priority' in job && (
-                  <span className="text-xs text-cyan-300 truncate block">priority: {job.priority}</span>
+                {'priority' in job && typeof (job as Record<string, unknown>).priority === 'number' && (
+                  <span className="text-xs text-cyan-300 truncate block">priority: {(job as Record<string, unknown>).priority as number}</span>
                 )}
               </div>
               <button
@@ -160,9 +187,9 @@ export function QueueView({ tasks, onTaskClick, onCancel, selectedTaskId }: Queu
 
       <div>
         <h3 className="text-sm font-semibold text-gray-300 mb-2">
-          Backlog (Pending/Blocked, not in queue) ({pendingTasks.length})
+          Backlog ({backlogTasks.length})
         </h3>
-        {pendingTasks.map((task) => (
+        {backlogTasks.map((task) => (
           <div
             key={task.id}
             onClick={() => onTaskClick(task)}
@@ -190,7 +217,7 @@ export function QueueView({ tasks, onTaskClick, onCancel, selectedTaskId }: Queu
             </button>
           </div>
         ))}
-        {pendingTasks.length === 0 && (
+        {backlogTasks.length === 0 && (
           <div className="text-xs text-gray-500 italic">No pending or blocked tasks outside the queue</div>
         )}
       </div>
