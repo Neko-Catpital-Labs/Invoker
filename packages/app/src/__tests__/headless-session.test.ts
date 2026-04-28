@@ -32,9 +32,15 @@ function makeSshTask(overrides: Partial<TaskState['config']> = {}): TaskState {
 }
 
 describe('resolveAgentSession', () => {
-  it('returns null when no driver is registered', async () => {
+  it('returns error state when no driver is registered', async () => {
     const result = await resolveAgentSession('sess-abc', 'unknown', undefined);
-    expect(result).toBeNull();
+    expect(result).toEqual({
+      agentName: 'unknown',
+      sessionId: 'sess-abc',
+      state: 'error',
+      messages: [],
+      reason: 'No session driver registered for agent "unknown"',
+    });
   });
 
   it('returns local session when loadSession succeeds', async () => {
@@ -42,13 +48,21 @@ describe('resolveAgentSession', () => {
       processOutput: vi.fn(),
       loadSession: vi.fn(() => '{"messages":[]}'),
       parseSession: vi.fn(() => [{ role: 'assistant', content: 'hello' }]),
+      inspectSession: vi.fn(() => ({ state: 'finished' })),
     };
     const registry = {
       getSessionDriver: () => mockDriver,
     } as unknown as AgentRegistry;
 
     const result = await resolveAgentSession('sess-abc', 'codex', registry);
-    expect(result).toEqual([{ role: 'assistant', content: 'hello' }]);
+    expect(result).toEqual({
+      agentName: 'codex',
+      sessionId: 'sess-abc',
+      state: 'finished',
+      reason: undefined,
+      messages: [{ role: 'assistant', content: 'hello' }],
+      source: 'local',
+    });
     expect(mockDriver.loadSession).toHaveBeenCalledWith('sess-abc');
   });
 
@@ -57,6 +71,7 @@ describe('resolveAgentSession', () => {
       processOutput: vi.fn(),
       loadSession: vi.fn(() => null), // not found locally
       parseSession: vi.fn(() => [{ role: 'assistant', content: 'remote session' }]),
+      inspectSession: vi.fn(() => ({ state: 'running' })),
       fetchRemoteSession: vi.fn(async () => '{"messages":[]}'),
     };
     const registry = {
@@ -71,7 +86,14 @@ describe('resolveAgentSession', () => {
       'sess-abc',
       { host: '1.2.3.4', user: 'invoker', sshKeyPath: '/tmp/key' },
     );
-    expect(result).toEqual([{ role: 'assistant', content: 'remote session' }]);
+    expect(result).toEqual({
+      agentName: 'codex',
+      sessionId: 'sess-abc',
+      state: 'running',
+      reason: undefined,
+      messages: [{ role: 'assistant', content: 'remote session' }],
+      source: 'remote',
+    });
   });
 
   it('uses explicit remoteTargetId when present', async () => {
@@ -79,6 +101,7 @@ describe('resolveAgentSession', () => {
       processOutput: vi.fn(),
       loadSession: vi.fn(() => null),
       parseSession: vi.fn(() => [{ role: 'assistant', content: 'targeted' }]),
+      inspectSession: vi.fn(() => ({ state: 'finished' })),
       fetchRemoteSession: vi.fn(async () => '{"messages":[]}'),
     };
     const registry = {
@@ -92,7 +115,14 @@ describe('resolveAgentSession', () => {
       'sess-abc',
       { host: '1.2.3.4', user: 'invoker', sshKeyPath: '/tmp/key' },
     );
-    expect(result).toEqual([{ role: 'assistant', content: 'targeted' }]);
+    expect(result).toEqual({
+      agentName: 'codex',
+      sessionId: 'sess-abc',
+      state: 'finished',
+      reason: undefined,
+      messages: [{ role: 'assistant', content: 'targeted' }],
+      source: 'remote',
+    });
   });
 
   it('returns null when SSH task has no remoteTargetId and no targets configured', async () => {
@@ -106,6 +136,7 @@ describe('resolveAgentSession', () => {
       processOutput: vi.fn(),
       loadSession: vi.fn(() => null),
       parseSession: vi.fn(),
+      inspectSession: vi.fn(),
       fetchRemoteSession: vi.fn(),
     };
     const registry = {
@@ -117,7 +148,13 @@ describe('resolveAgentSession', () => {
 
     // fetchRemoteSession should NOT be called because there's no target
     expect(mockDriver.fetchRemoteSession).not.toHaveBeenCalled();
-    expect(result).toBeNull();
+    expect(result).toEqual({
+      agentName: 'codex',
+      sessionId: 'sess-abc',
+      state: 'error',
+      messages: [],
+      reason: 'Session file not found',
+    });
 
     loadConfigSpy.mockRestore();
   });

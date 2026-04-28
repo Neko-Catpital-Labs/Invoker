@@ -90,6 +90,35 @@ describe('ClaudeSessionDriver', () => {
     expect(typeof driver.processOutput).toBe('function');
     expect(typeof driver.loadSession).toBe('function');
     expect(typeof driver.parseSession).toBe('function');
+    expect(typeof driver.inspectSession).toBe('function');
     expect(typeof driver.fetchRemoteSession).toBe('function');
+  });
+
+  it('inspectSession returns finished when Claude transcript ends with assistant text', () => {
+    expect(driver.inspectSession(sampleClaudeJsonl)).toEqual({ state: 'finished' });
+  });
+
+  it('inspectSession returns running when Claude transcript ends with a user/tool-result event', () => {
+    const jsonl = [
+      JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Bash' }] }, timestamp: 'ts0' }),
+      JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', content: 'ok' }] }, timestamp: 'ts1' }),
+    ].join('\n');
+    expect(driver.inspectSession(jsonl)).toEqual({ state: 'running' });
+  });
+
+  it('inspectSession returns running when Claude transcript ends with assistant tool_use', () => {
+    const jsonl = JSON.stringify({
+      type: 'assistant',
+      message: { content: [{ type: 'tool_use', name: 'Bash' }] },
+      timestamp: 'ts1',
+    });
+    expect(driver.inspectSession(jsonl)).toEqual({ state: 'running' });
+  });
+
+  it('inspectSession returns error for malformed content', () => {
+    expect(driver.inspectSession('not json')).toEqual({
+      state: 'error',
+      reason: 'Malformed Claude session JSONL',
+    });
   });
 });

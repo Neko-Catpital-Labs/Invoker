@@ -6,7 +6,7 @@
  */
 
 import { useState, useEffect } from 'react';
-import type { TaskState, ClaudeMessage } from '../types.js';
+import type { TaskState, ClaudeMessage, AgentSessionData } from '../types.js';
 
 interface ApprovalModalProps {
   task: TaskState;
@@ -83,6 +83,9 @@ export function ApprovalModal({
   const [reasonTouched, setReasonTouched] = useState(false);
   const [showRejectInput, setShowRejectInput] = useState(initialAction === 'reject');
   const [sessionMessages, setSessionMessages] = useState<ClaudeMessage[] | null>(null);
+  const [sessionState, setSessionState] = useState<AgentSessionData['state'] | null>(null);
+  const [sessionSource, setSessionSource] = useState<AgentSessionData['source'] | undefined>(undefined);
+  const [sessionReason, setSessionReason] = useState<string | undefined>(undefined);
   const [sessionLoading, setSessionLoading] = useState(false);
   const [sessionError, setSessionError] = useState(false);
 
@@ -118,11 +121,24 @@ export function ApprovalModal({
   useEffect(() => {
     if (!sessionId) return;
     setSessionLoading(true);
+    setSessionState(null);
+    setSessionSource(undefined);
+    setSessionReason(undefined);
     setSessionError(false);
     window.invoker
       .getAgentSession(sessionId, effectiveAgentName)
-      .then((msgs) => {
+      .then((result) => {
+        const msgs = Array.isArray(result)
+          ? result
+          : ((result as AgentSessionData | null)?.messages ?? null);
+        const isError = !Array.isArray(result) && !!result && result.state === 'error';
+        if (!Array.isArray(result) && result) {
+          setSessionState(result.state);
+          setSessionSource(result.source);
+          setSessionReason(result.reason);
+        }
         setSessionMessages(msgs);
+        setSessionError(isError);
         setSessionLoading(false);
       })
       .catch(() => {
@@ -187,6 +203,12 @@ export function ApprovalModal({
             <div className="bg-gray-700/50 rounded p-3" data-testid="claude-session-context">
               <h3 className="text-sm font-medium text-gray-300 mb-2">{agentLabel} Session</h3>
               <p className="text-xs text-gray-500 mb-2 font-mono">{sessionId}</p>
+              {sessionState && (
+                <p className="text-xs text-gray-400 mb-2" data-testid="session-state">
+                  State: <span className="font-mono">{sessionState}</span>
+                  {sessionSource ? <> {' '}({sessionSource})</> : null}
+                </p>
+              )}
               {sessionLoading && <p className="text-xs text-gray-500" data-testid="session-loading">Loading conversation...</p>}
               {sessionMessages && (
                 <div className="space-y-2" data-testid="session-messages">
@@ -199,6 +221,9 @@ export function ApprovalModal({
                     </div>
                   ))}
                 </div>
+              )}
+              {sessionReason && !sessionError && (
+                <p className="text-xs text-gray-500 mt-2" data-testid="session-reason">{sessionReason}</p>
               )}
               {sessionError && <p className="text-xs text-red-400" data-testid="session-error">Could not load session</p>}
             </div>
