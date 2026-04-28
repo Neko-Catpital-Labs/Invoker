@@ -44,6 +44,8 @@ export function useTasks(): UseTasksResult {
   const workflowsRef = useRef(workflows);
   workflowsRef.current = workflows;
   const deltaPipelineRef = useRef<TaskDeltaPipeline | null>(null);
+  /** Task IDs quarantined due to revision gaps, awaiting authoritative recovery. */
+  const quarantinedIdsRef = useRef(new Set<string>());
   const deltaPerfRef = useRef({
     received: 0,
     applyCount: 0,
@@ -64,7 +66,8 @@ export function useTasks(): UseTasksResult {
       }
       const taskList = result.tasks ?? [];
       const wfList = result.workflows ?? [];
-      // Always replace from server snapshot — empty lists mean "no tasks/workflows" (e.g. after delete).
+      // Full snapshot replaces local state; all quarantine state is now stale.
+      quarantinedIdsRef.current.clear();
       setTasks(() => {
         const next = new Map<string, TaskState>();
         for (const t of taskList) next.set(t.id, t);
@@ -120,16 +123,18 @@ export function useTasks(): UseTasksResult {
         setTasks((prev) => {
           const t0 = performance.now();
           let next = prev;
+          const qIds = quarantinedIdsRef.current;
 
           for (const delta of batch) {
-            if (delta.type === 'updated' && !next.has(delta.taskId)) {
-              if (traceTaskDeltas) {
-                console.warn(
-                  `[useTasks:task-delta] updated for taskId=${delta.taskId} not in local map before merge (stale snapshot?)`,
-                );
-              }
+            const applied = applyDelta(next, delta, qIds);
+            next = applied.tasks;
+
+            if (traceTaskDeltas && applied.quarantined.length > 0) {
+              console.warn(
+                `[useTasks:task-delta] quarantined tasks: ${applied.quarantined.join(', ')}`,
+              );
             }
-            next = applyDelta(next, delta);
+
             if (
               delta.type === 'created' &&
               delta.task?.config.workflowId &&
@@ -209,6 +214,7 @@ export function useTasks(): UseTasksResult {
   }, []);
 
   const clearTasks = useCallback(() => {
+    quarantinedIdsRef.current.clear();
     setTasks(new Map());
     setWorkflows(new Map());
   }, []);

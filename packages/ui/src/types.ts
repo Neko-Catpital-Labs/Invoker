@@ -133,7 +133,6 @@ export interface TaskState {
 
 export interface TaskStateChanges {
   readonly status?: TaskStatus;
-  readonly description?: string;
   readonly dependencies?: readonly string[];
   readonly config?: Partial<TaskConfig>;
   readonly execution?: Partial<TaskExecution>;
