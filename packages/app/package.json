@@ -60,7 +60,7 @@
     "test": "vitest run",
     "start": "unset ELECTRON_RUN_AS_NODE && electron dist/main.js",
     "dev": "tsup src/main.ts src/preload.ts --format cjs --outDir dist --external electron && unset ELECTRON_RUN_AS_NODE && electron dist/main.js",
-    "test:e2e": "xvfb-run --auto-servernum playwright test"
+    "test:e2e": "pnpm --filter @invoker/ui build && tsup && cp -R ../ui/dist ui-dist-tmp && rm -rf dist/ui && mv ui-dist-tmp dist/ui && xvfb-run --auto-servernum playwright test"
   },
   "dependencies": {
     "@invoker/workflow-core": "workspace:*",

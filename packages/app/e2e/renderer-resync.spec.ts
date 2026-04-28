@@ -86,7 +86,8 @@ test.describe('Renderer re-sync regression', () => {
 
     // Force a DB re-read to simulate DB poll + delta overlap
     const before = await getTasks(page);
-    expect(before.length).toBe(2);
+    // 2 plan tasks + 1 auto-generated merge gate
+    expect(before.length).toBe(3);
 
     // Force another refresh
     await page.evaluate(() => window.invoker.getTasks(true));
@@ -94,7 +95,7 @@ test.describe('Renderer re-sync regression', () => {
 
     // Task count should remain the same — no duplicates
     const after = await getTasks(page);
-    expect(after.length).toBe(2);
+    expect(after.length).toBe(3);
 
     // Verify the exact same tasks exist
     const taskA = findTaskByIdSuffix(after, 'task-a');
@@ -167,10 +168,10 @@ test.describe('Renderer re-sync regression', () => {
     await waitForTaskStatus(page, 'task-a', 'completed');
     await waitForTaskStatus(page, 'task-b', 'completed');
 
-    // Count tasks
+    // Count tasks (2 plan tasks + 1 merge gate)
     const firstTasks = await getTasks(page);
     const firstCount = firstTasks.length;
-    expect(firstCount).toBe(2);
+    expect(firstCount).toBe(3);
 
     // Load a second plan (different workflow)
     const secondPlan = {
