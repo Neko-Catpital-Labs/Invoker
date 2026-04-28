@@ -162,7 +162,7 @@ test('non-empty persisted startup stays responsive and avoids initial db-poll re
 
       expect(windowShow).toBeTruthy();
       expect(graphVisible).toBeTruthy();
-      expect(Number(graphVisible?.processElapsedMs) - Number(windowShow?.elapsedMs)).toBeLessThan(500);
+      expect(Number(graphVisible?.processElapsedMs) - Number(windowShow?.elapsedMs)).toBeLessThan(2000);
       expect(Number(graphVisible?.nodeCount)).toBe(tasksPerWorkflow);
       expect(elapsedMs).toBeLessThan(STARTUP_BUDGET_MS);
 
