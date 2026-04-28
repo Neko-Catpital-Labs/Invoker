@@ -864,12 +864,7 @@ if (isHeadless) {
         messageBus.onRequest('headless.run', async (req: unknown) => {
           noteStandaloneOwnerActivity();
           const { planPath } = req as { planPath: string };
-          await runHeadless(['run', planPath], {
-            ...headlessDeps,
-            waitForApproval: false,
-            noTrack: true,
-          });
-          return { ok: true };
+          return executeHeadlessRun({ planPath });
         });
         messageBus.onRequest('headless.owner-ping', async () => {
           noteStandaloneOwnerActivity();
@@ -899,12 +894,7 @@ if (isHeadless) {
         messageBus.onRequest('headless.resume', async (req: unknown) => {
           noteStandaloneOwnerActivity();
           const { workflowId } = req as { workflowId: string };
-          await runHeadless(['resume', workflowId], {
-            ...headlessDeps,
-            waitForApproval: false,
-            noTrack: true,
-          });
-          return { ok: true };
+          return executeHeadlessResume({ workflowId });
         });
         messageBus.onRequest('headless.exec', async (req: unknown) => {
           noteStandaloneOwnerActivity();

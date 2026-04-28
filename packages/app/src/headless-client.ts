@@ -56,16 +56,30 @@ async function runElectronHeadless(args: string[]): Promise<number> {
   });
 }
 
-const DEFAULT_NO_TRACK_DELEGATION_TIMEOUT_MS = 8_000;
+async function flushOutputStream(stream: NodeJS.WriteStream): Promise<void> {
+  await new Promise<void>((resolve) => {
+    stream.write('', () => resolve());
+  });
+}
+
+const DEFAULT_NO_TRACK_DELEGATION_TIMEOUT_MS = 30_000;
 const POST_BOOTSTRAP_NO_TRACK_DELEGATION_TIMEOUT_MS = 90_000;
 const POST_BOOTSTRAP_OWNER_READY_TIMEOUT_MS = 20_000;
 const READ_ONLY_QUERY_OWNER_READY_TIMEOUT_MS = 20_000;
 const READ_ONLY_QUERY_REQUEST_TIMEOUT_MS = 8_000;
 const POST_BOOTSTRAP_OWNER_RESTART_ATTEMPTS = 3;
+const DEFAULT_STANDALONE_OWNER_BOOTSTRAP_TIMEOUT_MS = 60_000;
 type HeadlessOwnerInfo = { ownerId?: string; mode?: string };
 
 function isStandaloneOwner(owner: HeadlessOwnerInfo | null | undefined): owner is HeadlessOwnerInfo & { mode: 'standalone' } {
   return owner?.mode === 'standalone';
+}
+
+function standaloneOwnerBootstrapTimeoutMs(): number {
+  const raw = process.env.INVOKER_HEADLESS_OWNER_BOOTSTRAP_TIMEOUT_MS;
+  const parsed = raw ? Number.parseInt(raw, 10) : NaN;
+  if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  return DEFAULT_STANDALONE_OWNER_BOOTSTRAP_TIMEOUT_MS;
 }
 
 export class SharedMutationOwnerTimeoutError extends Error {
@@ -216,7 +230,7 @@ async function ensureStandaloneOwnerViaBootstrap(bus: MessageBus): Promise<void>
     if (bootstrapLock) {
       spawnDetachedStandaloneOwner(resolve(__dirname, '..', '..', '..'));
     }
-    const deadline = Date.now() + 20_000;
+    const deadline = Date.now() + standaloneOwnerBootstrapTimeoutMs();
     while (Date.now() < deadline) {
       const owner = await tryPingHeadlessOwner(bus, 500);
       if (isStandaloneOwner(owner)) return;
@@ -344,11 +358,19 @@ export async function runHeadlessClient(argv: string[]): Promise<number> {
 
 if (require.main === module) {
   runHeadlessClient(process.argv.slice(2))
-    .then((code) => {
-      process.exit(code);
+    .then(async (code) => {
+      await Promise.all([
+        flushOutputStream(process.stdout),
+        flushOutputStream(process.stderr),
+      ]);
+      process.exitCode = code;
     })
-    .catch((err) => {
+    .catch(async (err) => {
       process.stderr.write(`${RED}Error:${RESET} ${err instanceof Error ? err.message : String(err)}\n`);
-      process.exit(1);
+      await Promise.all([
+        flushOutputStream(process.stdout),
+        flushOutputStream(process.stderr),
+      ]);
+      process.exitCode = 1;
     });
 }
