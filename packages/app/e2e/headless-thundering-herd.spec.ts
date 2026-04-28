@@ -110,6 +110,9 @@ test.describe('Headless thundering herd', () => {
       const result = await runHeadlessClient(testDir, ['run', planPath, '--no-track']);
       let workflowId: string;
       try {
+        // Prefer the workflow id echoed by this exact submission. Falling back
+        // to DB polling is less precise under a burst because persisted state
+        // is shared across concurrent headless runs.
         workflowId = parseWorkflowId(result.stdout);
       } catch {
         workflowId = await resolveWorkflowIdFromDb(testDir, workflowIds, 2_000);
