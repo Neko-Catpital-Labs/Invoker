@@ -1,5 +1,8 @@
+import { execSync } from 'child_process';
 import { defineConfig } from 'tsup';
 import { cpSync } from 'node:fs';
+
+const gitSha = execSync('git rev-parse --short HEAD').toString().trim();
 
 export default defineConfig({
   entry: ['src/main.ts', 'src/preload.ts', 'src/headless-client.ts'],
@@ -16,6 +19,10 @@ export default defineConfig({
     'yaml',
   ],
   clean: true,
+  define: {
+    __BUILD_SHA__: JSON.stringify(gitSha),
+    __BUILD_VERSION__: JSON.stringify(require('./package.json').version),
+  },
   onSuccess: async () => {
     cpSync('assets', 'dist/assets', { recursive: true });
   },

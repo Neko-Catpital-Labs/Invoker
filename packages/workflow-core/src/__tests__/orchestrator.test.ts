@@ -4,7 +4,7 @@ import { rid, sid } from './scoped-test-helpers.js';
 import { Orchestrator, PlanConflictError, descriptionForMergeNode } from '../orchestrator.js';
 import type { PlanDefinition, OrchestratorPersistence, OrchestratorMessageBus } from '../orchestrator.js';
 import type { TaskState, TaskDelta, TaskStateChanges, Attempt } from '../task-types.js';
-import type { WorkResponse } from '@invoker/contracts';
+import type { Logger, WorkResponse } from '@invoker/contracts';
 
 // ── In-Memory Persistence Mock ──────────────────────────────
 
@@ -205,6 +205,14 @@ class InMemoryBus implements OrchestratorMessageBus {
   }
 }
 
+const consoleLogger: Logger = {
+  debug: (msg, fields) => console.debug(msg, fields),
+  info: (msg, fields) => console.log(msg, fields),
+  warn: (msg, fields) => console.warn(msg, fields),
+  error: (msg, fields) => console.error(msg, fields),
+  child: () => consoleLogger,
+};
+
 // ── Helpers ─────────────────────────────────────────────────
 
 function makeResponse(overrides: Partial<WorkResponse>): WorkResponse {
@@ -239,6 +247,7 @@ describe('Orchestrator', () => {
       persistence,
       messageBus: bus,
       maxConcurrency: 3,
+      logger: consoleLogger,
     });
   });
 
@@ -502,7 +511,13 @@ describe('Orchestrator', () => {
         expect(orchestrator.getTask(taskId)?.status).toBe('running');
         expect(orchestrator.getTask(taskId)?.execution.selectedAttemptId).toBe(currentAttemptId);
         expect(warnSpy).toHaveBeenCalledWith(
-          expect.stringContaining(`STALE_ATTEMPT_REJECTED taskId=${taskId}`),
+          '[worker-response] STALE_ATTEMPT_REJECTED',
+          expect.objectContaining({
+            taskId,
+            responseAttemptId: oldAttemptId,
+            activeAttemptId: currentAttemptId,
+            workerResponseStatus: 'completed',
+          }),
         );
       } finally {
         warnSpy.mockRestore();
@@ -4261,8 +4276,8 @@ describe('Orchestrator', () => {
           (c) =>
             typeof c[0] === 'string' &&
             c[0].includes('handleCompleted') &&
-            c[0].includes('newly ready: [') &&
-            c[0].includes('/B]'),
+            Array.isArray(c[1]?.readyTaskIds) &&
+            c[1].readyTaskIds.some((id: string) => id.endsWith('/B')),
         ),
       ).toBe(true);
     });
@@ -4321,8 +4336,8 @@ describe('Orchestrator', () => {
           (c) =>
             typeof c[0] === 'string' &&
             c[0].includes('handleCompleted') &&
-            c[0].includes('newly ready: [') &&
-            c[0].includes('/D]'),
+            Array.isArray(c[1]?.readyTaskIds) &&
+            c[1].readyTaskIds.some((id: string) => id.endsWith('/D')),
         ),
       ).toBe(true);
       expect(orchestrator.getTask('D')!.status).toBe('running');
@@ -4430,7 +4445,12 @@ describe('Orchestrator', () => {
 
       expect(orchestrator.getTask('A')!.status).toBe('failed');
       expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('ignoring "completed" for non-executable task "A" (status=failed)'),
+        '[orchestrator] handleWorkerResponse: ignoring response for non-executable task',
+        expect.objectContaining({
+          taskId: 'A',
+          status: 'failed',
+          workerResponseStatus: 'completed',
+        }),
       );
     });
 
@@ -4638,7 +4658,7 @@ describe('Orchestrator', () => {
           (c) =>
             typeof c[0] === 'string' &&
             c[0].includes('selectExperiments') &&
-            c[0].includes('pivot-reconciliation'),
+            c[1]?.taskId?.includes('pivot-reconciliation'),
         ),
       ).toBe(true);
     });

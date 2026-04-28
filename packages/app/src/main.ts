@@ -133,6 +133,9 @@ import { preemptWorkflowBeforeMutation, type WorkflowCancelResult } from './work
 import { relaunchOrphansAndStartReady } from './orphan-relaunch.js';
 import { listOpenFixIntentsForTask } from './auto-fix-intents.js';
 
+declare const __BUILD_SHA__: string | undefined;
+declare const __BUILD_VERSION__: string | undefined;
+
 // ── Detect headless mode ─────────────────────────────────────
 
 // Electron passes extra args after `--` or interleaves them.
@@ -238,6 +241,9 @@ interface HeadlessExecMutationPayload {
 // Root logger: created early in initServices() once persistence is available.
 // Before initServices(), use the pre-init logger (file-only, no DB).
 let logger: Logger = new FileAndDbLogger({ module: 'main' });
+const buildSha = typeof __BUILD_SHA__ !== 'undefined' ? __BUILD_SHA__ : 'dev';
+const buildVersion = typeof __BUILD_VERSION__ !== 'undefined' ? __BUILD_VERSION__ : 'dev';
+logger.info(`Invoker ${buildVersion} (${buildSha})`, { module: 'startup' });
 
 process.on('uncaughtException', (err) => {
   try {
@@ -266,6 +272,26 @@ const invokerConfig: InvokerConfig = (() => {
     process.exit(1);
   }
 })();
+
+function getSafeInvokerConfigForLogging(config: InvokerConfig): Record<string, unknown> {
+  const safeConfig = { ...config } as Record<string, unknown> & {
+    docker?: InvokerConfig['docker'];
+    imageStorage?: InvokerConfig['imageStorage'];
+    r2?: unknown;
+  };
+  delete safeConfig.r2;
+  if (safeConfig.imageStorage) {
+    safeConfig.imageStorage = {
+      ...safeConfig.imageStorage,
+      accessKeyId: '<redacted>',
+      secretAccessKey: '<redacted>',
+    };
+  }
+  if (safeConfig.docker?.secretsFile) {
+    safeConfig.docker = { ...safeConfig.docker, secretsFile: '<redacted>' };
+  }
+  return safeConfig;
+}
 
 const effectiveMaxConcurrency = resolveEffectiveMaxConcurrency(
   invokerConfig.maxConcurrency,
@@ -380,8 +406,11 @@ async function initServices(options?: InitServicesOptions): Promise<void> {
 
   const startupSyncMode = options?.startupSyncMode ?? 'all';
   const initLog = isHeadless
-    ? (...args: unknown[]) => { process.stderr.write(args.join(' ') + '\n'); }
-    : (msg: string) => { logger.info(msg, { module: 'init' }); };
+    ? (msg: string, meta?: Record<string, unknown>) => {
+      process.stderr.write(meta ? `${msg} ${JSON.stringify(meta)}\n` : `${msg}\n`);
+    }
+    : (msg: string, meta?: Record<string, unknown>) => { logger.info(msg, { ...meta, module: 'init' }); };
+  initLog('Effective configuration', { config: getSafeInvokerConfigForLogging(invokerConfig) });
   const workflows = persistence.listWorkflows();
   if (startupSyncMode === 'all') {
     try {
@@ -2401,6 +2430,7 @@ if (isHeadless) {
     logger.info(`Database: ${dbPath}`, { module: 'init' });
     logger.info(`Repo root: ${repoRoot}`, { module: 'init' });
     logger.info(`Config: disableAutoRunOnStartup=${invokerConfig.disableAutoRunOnStartup ?? false}`, { module: 'init' });
+    logger.info('Effective configuration', { config: getSafeInvokerConfigForLogging(invokerConfig), module: 'startup' });
     recordStartupMark('startup.ready-for-window');
 
     // Forward deltas to renderer and keep snapshot cache in sync so
