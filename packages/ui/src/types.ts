@@ -126,6 +126,7 @@ export interface TaskState {
   readonly createdAt: Date;
   readonly config: TaskConfig;
   readonly execution: TaskExecution;
+  readonly revision: number;
 }
 
 // ── Task State Changes ──────────────────────────────────────
@@ -142,8 +143,8 @@ export interface TaskStateChanges {
 
 export type TaskDelta =
   | { readonly type: 'created'; readonly task: TaskState }
-  | { readonly type: 'updated'; readonly taskId: string; readonly changes: TaskStateChanges }
-  | { readonly type: 'removed'; readonly taskId: string };
+  | { readonly type: 'updated'; readonly taskId: string; readonly changes: TaskStateChanges; readonly revision: number; readonly previousRevision: number }
+  | { readonly type: 'removed'; readonly taskId: string; readonly previousRevision: number };
 
 // ── Workflow Metadata ────────────────────────────────────────
 
