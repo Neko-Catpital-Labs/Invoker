@@ -207,16 +207,18 @@ describe('Step 17: canonical lifecycle matrix lock-in', () => {
       expect(typeof Orchestrator.prototype.restartTask).toBe('function');
 
       const orch = Object.create(Orchestrator.prototype) as Orchestrator;
+      const warnSpy = vi.fn();
+      (orch as unknown as { logger: { warn: typeof warnSpy } }).logger = {
+        warn: warnSpy,
+      } as never;
       const recreateSpy = vi.spyOn(orch, 'recreateTask').mockReturnValue([]);
       const retrySpy = vi.spyOn(orch, 'retryTask').mockReturnValue([]);
-      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
       try {
         orch.restartTask('t-x');
         expect(recreateSpy).toHaveBeenCalledTimes(1);
         expect(recreateSpy).toHaveBeenCalledWith('t-x');
         expect(retrySpy).not.toHaveBeenCalled();
       } finally {
-        warnSpy.mockRestore();
         recreateSpy.mockRestore();
         retrySpy.mockRestore();
       }
