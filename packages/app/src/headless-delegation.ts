@@ -20,12 +20,13 @@ export async function tryDelegateRun(
   messageBus: MessageBus,
   waitForApproval?: boolean,
   noTrack?: boolean,
+  timeoutMs?: number,
 ): Promise<boolean> {
   return tryDelegate(
     'headless.run',
     { planPath: resolvePath(planPath) },
     messageBus,
-    { waitForApproval, noTrack, timeoutMs: 5_000 },
+    { waitForApproval, noTrack, timeoutMs: timeoutMs ?? 5_000 },
   );
 }
 
@@ -34,12 +35,13 @@ export async function tryDelegateResume(
   messageBus: MessageBus,
   waitForApproval?: boolean,
   noTrack?: boolean,
+  timeoutMs?: number,
 ): Promise<boolean> {
   return tryDelegate(
     'headless.resume',
     { workflowId },
     messageBus,
-    { waitForApproval, noTrack, timeoutMs: 5_000 },
+    { waitForApproval, noTrack, timeoutMs: timeoutMs ?? 5_000 },
   );
 }
 
