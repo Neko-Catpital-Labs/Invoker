@@ -1022,9 +1022,6 @@ if (isHeadless) {
       process.stderr.write(`${RED}Error:${RESET} ${err instanceof Error ? err.message : String(err)}\n`);
       exitCode = 1;
     } finally {
-      if (ownsHeadlessShutdown && taskExecutor) {
-        await taskExecutor.clearSshExecutorCache().catch(() => undefined);
-      }
       if (ownsHeadlessShutdown && executorRegistry) {
         await Promise.all(executorRegistry.getAll().map(f => f.destroyAll().catch(() => undefined)));
       }
