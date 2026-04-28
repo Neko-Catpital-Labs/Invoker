@@ -15,8 +15,13 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 if [[ ! -f packages/app/dist/main.js ]]; then
-  echo "ERROR: packages/app/dist/main.js missing — run: pnpm --filter @invoker/app build" >&2
-  exit 1
+  echo "Building app (dist missing)..." >&2
+  pnpm --filter @invoker/core build >&2
+  pnpm --filter @invoker/persistence build >&2
+  pnpm --filter @invoker/executors build >&2
+  pnpm --filter @invoker/surfaces build >&2
+  pnpm --filter @invoker/ui build >&2
+  pnpm --filter @invoker/app build >&2
 fi
 
 TMPDB="$(mktemp -d)"
