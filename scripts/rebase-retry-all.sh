@@ -3,6 +3,7 @@ set -euo pipefail
 
 # Detect repo root
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+IPC_HELPER="$REPO_ROOT/scripts/headless-ipc.js"
 
 # Set Electron paths
 ELECTRON="$REPO_ROOT/packages/app/node_modules/.bin/electron"
@@ -128,8 +129,7 @@ headless_query() {
 }
 
 headless_mutation() {
-  # shellcheck disable=SC2086
-  "$ELECTRON" "$MAIN" $SANDBOX_FLAG --headless "$@"
+  node "$IPC_HELPER" exec -- "$@"
 }
 
 headless_workflow_ids() {
@@ -285,14 +285,14 @@ if [ "$FOLLOW" = true ]; then
     if [ "$COMMAND_TIMEOUT_SECONDS" -gt 0 ]; then
       set +e
       cmd_out="$(
-        run_with_optional_timeout "$COMMAND_TIMEOUT_SECONDS" "$ELECTRON" "$MAIN" $SANDBOX_FLAG --headless --no-track rebase "$task_id" 2>&1
+        run_with_optional_timeout "$COMMAND_TIMEOUT_SECONDS" node "$IPC_HELPER" exec --no-track -- rebase "$task_id" 2>&1
       )"
       cmd_status=$?
       set -e
     else
       set +e
       cmd_out="$(
-        headless_mutation --no-track rebase "$task_id" 2>&1
+        node "$IPC_HELPER" exec --no-track -- rebase "$task_id" 2>&1
       )"
       cmd_status=$?
       set -e
@@ -352,27 +352,9 @@ if [ "$FOLLOW" = true ]; then
   fi
 else
   LOG_DIR="$(mktemp -d -t rebase-retry-all-logs.XXXXXX)"
-  TIMEOUT_TOOL=""
-  if [ "$COMMAND_TIMEOUT_SECONDS" -gt 0 ]; then
-    if command -v timeout >/dev/null 2>&1; then
-      TIMEOUT_TOOL="timeout"
-    elif command -v gtimeout >/dev/null 2>&1; then
-      TIMEOUT_TOOL="gtimeout"
-    else
-      echo "WARNING: timeout/gtimeout unavailable; fire-and-forget mode will run without per-command timeout." >&2
-    fi
-  fi
-
-  launch_detached() {
-    local log_file="$1"
-    shift
-    if command -v setsid >/dev/null 2>&1; then
-      setsid "$@" >"$log_file" 2>&1 < /dev/null &
-    else
-      nohup "$@" >"$log_file" 2>&1 < /dev/null &
-    fi
-    echo "$!"
-  }
+  RESULT_FILE="$(mktemp -t rebase-retry-all-results.XXXXXX)"
+  COMMANDS_FILE="$(mktemp -t rebase-retry-all-commands.XXXXXX)"
+  OUTPUT_JSONL="$(mktemp -t rebase-retry-all-output.XXXXXX)"
 
   IDX=0
   while IFS= read -r WF_ID; do
@@ -394,22 +376,44 @@ else
     fi
 
     log_file="$LOG_DIR/${WF_ID}.log"
-    if [ "$COMMAND_TIMEOUT_SECONDS" -gt 0 ] && [ -n "$TIMEOUT_TOOL" ]; then
-      # shellcheck disable=SC2086
-      pid="$(launch_detached "$log_file" "$TIMEOUT_TOOL" "$COMMAND_TIMEOUT_SECONDS" "$ELECTRON" "$MAIN" $SANDBOX_FLAG --headless --no-track rebase "$task_id")" || pid=""
-    else
-      # shellcheck disable=SC2086
-      pid="$(launch_detached "$log_file" "$ELECTRON" "$MAIN" $SANDBOX_FLAG --headless --no-track rebase "$task_id")" || pid=""
-    fi
-
-    if [ -n "$pid" ]; then
-      echo "  dispatched pid=$pid log=$log_file" >&2
-      DISPATCHED=$((DISPATCHED + 1))
-    else
-      echo "  failed to dispatch" >&2
-      LAUNCH_FAILED=$((LAUNCH_FAILED + 1))
-    fi
+    printf '{"label":"%s","workflowId":"%s","taskId":"%s","args":["rebase","%s"]}\n' "$WF_ID" "$WF_ID" "$task_id" "$task_id" >> "$COMMANDS_FILE"
+    echo "  queued log=$log_file" >&2
   done <<< "$WORKFLOW_IDS"
+
+  BATCH_ARGS=(batch-exec --no-track --parallel "$PARALLELISM")
+  if [ "$COMMAND_TIMEOUT_SECONDS" -gt 0 ]; then
+    BATCH_ARGS+=(--timeout-ms "$((COMMAND_TIMEOUT_SECONDS * 1000))")
+  fi
+  node "$IPC_HELPER" "${BATCH_ARGS[@]}" < "$COMMANDS_FILE" > "$OUTPUT_JSONL"
+  python3 - "$RESULT_FILE" "$LOG_DIR" "$OUTPUT_JSONL" <<'PY'
+import json
+import pathlib
+import sys
+
+result_file = pathlib.Path(sys.argv[1])
+log_dir = pathlib.Path(sys.argv[2])
+output_jsonl = pathlib.Path(sys.argv[3])
+
+for raw in output_jsonl.read_text(encoding="utf-8").splitlines():
+    raw = raw.strip()
+    if not raw:
+        continue
+    item = json.loads(raw)
+    workflow_id = item.get("workflowId") or item.get("label") or "unknown"
+    (log_dir / f"{workflow_id}.log").write_text(raw + "\n", encoding="utf-8")
+    with result_file.open("a", encoding="utf-8") as handle:
+        handle.write(f"{workflow_id}\t{'SUCCEEDED' if item.get('ok') else 'FAILED'}\n")
+PY
+  rm -f "$COMMANDS_FILE"
+  rm -f "$OUTPUT_JSONL"
+
+  while IFS=$'\t' read -r _wf result; do
+    case "$result" in
+      SUCCEEDED) DISPATCHED=$((DISPATCHED + 1)) ;;
+      FAILED) LAUNCH_FAILED=$((LAUNCH_FAILED + 1)) ;;
+    esac
+  done < "$RESULT_FILE"
+  rm -f "$RESULT_FILE"
 
   echo "" >&2
   echo "Summary (fire-and-forget):" >&2

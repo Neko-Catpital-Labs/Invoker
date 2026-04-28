@@ -5,6 +5,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 RUNNER="$REPO_ROOT/run.sh"
+IPC_HELPER="$REPO_ROOT/scripts/headless-ipc.js"
 LOCK_FILE="${TMPDIR:-/tmp}/invoker-auto-select-reconciliation-refactor.lock"
 
 if [[ ! -x "$RUNNER" ]]; then
@@ -71,7 +72,7 @@ while IFS=$'\t' read -r recon_id experiment_id; do
   [[ -z "$recon_id" || -z "$experiment_id" ]] && continue
   attempts=$((attempts + 1))
   echo "Selecting experiment '$experiment_id' for reconciliation node '$recon_id'..."
-  if "$RUNNER" --headless select "$recon_id" "$experiment_id" --no-track; then
+  if node "$IPC_HELPER" exec --no-track -- select "$recon_id" "$experiment_id"; then
     success=$((success + 1))
   else
     failed=$((failed + 1))
