@@ -1,6 +1,5 @@
-import { resolve as resolvePath, join as joinPath } from 'node:path';
+import { resolve as resolvePath } from 'node:path';
 
-import { SQLiteAdapter } from '@invoker/data-store';
 import type { MessageBus } from '@invoker/transport';
 import type { TaskState } from '@invoker/workflow-core';
 
@@ -8,7 +7,6 @@ import {
   resolveHeadlessTarget,
   type HeadlessTargetLookup,
 } from './headless-command-classification.js';
-import { resolveInvokerHomeRoot } from './delete-all-snapshot.js';
 import { createDelegatedTaskFeed, trackWorkflow } from './headless-watch.js';
 
 type DelegateTrackingOptions = {
@@ -22,12 +20,13 @@ export async function tryDelegateRun(
   messageBus: MessageBus,
   waitForApproval?: boolean,
   noTrack?: boolean,
+  timeoutMs?: number,
 ): Promise<boolean> {
   return tryDelegate(
     'headless.run',
     { planPath: resolvePath(planPath) },
     messageBus,
-    { waitForApproval, noTrack, timeoutMs: 5_000 },
+    { waitForApproval, noTrack, timeoutMs: timeoutMs ?? 5_000 },
   );
 }
 
@@ -36,17 +35,22 @@ export async function tryDelegateResume(
   messageBus: MessageBus,
   waitForApproval?: boolean,
   noTrack?: boolean,
+  timeoutMs?: number,
 ): Promise<boolean> {
   return tryDelegate(
     'headless.resume',
     { workflowId },
     messageBus,
-    { waitForApproval, noTrack, timeoutMs: 5_000 },
+    { waitForApproval, noTrack, timeoutMs: timeoutMs ?? 5_000 },
   );
 }
 
 function usesExtendedDelegationTimeout(command: string): boolean {
   return command === 'rebase' || command === 'rebase-and-retry' || command === 'restart';
+}
+
+function looksLikeWorkflowId(target: unknown): boolean {
+  return /^wf-[^/]+$/.test(String(target ?? ''));
 }
 
 export function delegationTimeoutMs(
@@ -66,13 +70,11 @@ export function delegationTimeoutMs(
 }
 
 export async function resolveDelegationTimeoutMs(args: string[]): Promise<number> {
-  const dbPath = joinPath(resolveInvokerHomeRoot(), 'invoker.db');
-  const targetLookup = await SQLiteAdapter.create(dbPath, { readOnly: true });
-  try {
-    return delegationTimeoutMs(args, targetLookup);
-  } finally {
-    targetLookup.close();
+  const command = args[0] ?? '';
+  if (!usesExtendedDelegationTimeout(command)) {
+    return 5_000;
   }
+  return looksLikeWorkflowId(args[1]) ? 60_000 : 5_000;
 }
 
 export async function tryDelegateExec(
@@ -96,8 +98,10 @@ export async function tryPingHeadlessOwner(
   timeoutMs = 1_000,
 ): Promise<{ ownerId?: string; mode?: string } | null> {
   const DELEGATION_TIMEOUT = Symbol('delegation-timeout');
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
   const timeoutPromise = new Promise<typeof DELEGATION_TIMEOUT>((_, reject) => {
-    setTimeout(() => reject(DELEGATION_TIMEOUT), timeoutMs);
+    timeoutHandle = setTimeout(() => reject(DELEGATION_TIMEOUT), timeoutMs);
+    timeoutHandle.unref?.();
   });
 
   try {
@@ -112,6 +116,8 @@ export async function tryPingHeadlessOwner(
       return null;
     }
     throw err;
+  } finally {
+    if (timeoutHandle) clearTimeout(timeoutHandle);
   }
 }
 
@@ -129,8 +135,10 @@ export async function tryDelegateQuery(
   timeoutMs = 5_000,
 ): Promise<Record<string, unknown> | null> {
   const DELEGATION_TIMEOUT = Symbol('delegation-timeout');
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
   const timeoutPromise = new Promise<typeof DELEGATION_TIMEOUT>((_, reject) => {
-    setTimeout(() => reject(DELEGATION_TIMEOUT), timeoutMs);
+    timeoutHandle = setTimeout(() => reject(DELEGATION_TIMEOUT), timeoutMs);
+    timeoutHandle.unref?.();
   });
 
   try {
@@ -145,6 +153,8 @@ export async function tryDelegateQuery(
       return null;
     }
     throw err;
+  } finally {
+    if (timeoutHandle) clearTimeout(timeoutHandle);
   }
 }
 
@@ -156,8 +166,10 @@ async function tryDelegate(
 ): Promise<boolean> {
   let targetWorkflowId: string | undefined;
   const DELEGATION_TIMEOUT = Symbol('delegation-timeout');
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
   const timeoutPromise = new Promise<typeof DELEGATION_TIMEOUT>((_, reject) => {
-    setTimeout(() => reject(DELEGATION_TIMEOUT), options.timeoutMs ?? 5_000);
+    timeoutHandle = setTimeout(() => reject(DELEGATION_TIMEOUT), options.timeoutMs ?? 5_000);
+    timeoutHandle.unref?.();
   });
 
   let response: { workflowId: string; tasks: TaskState[] } | { ok: true };
@@ -174,6 +186,8 @@ async function tryDelegate(
       return false;
     }
     throw err;
+  } finally {
+    if (timeoutHandle) clearTimeout(timeoutHandle);
   }
 
   if ('workflowId' in response) {

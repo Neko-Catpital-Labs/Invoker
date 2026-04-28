@@ -85,7 +85,11 @@ test.describe('Headless thundering herd', () => {
     if (currentWorkflowId) workflowIds.add(currentWorkflowId);
     for (let i = 0; i < 8; i += 1) {
       const result = await runHeadlessClient(testDir, ['run', planPath, '--no-track']);
-      workflowIds.add(parseWorkflowId(result.stdout));
+      // Use the workflow id echoed by this exact submission. Querying shared
+      // persisted state from the app layer both violates the owner boundary
+      // and is ambiguous when many workflows are created concurrently.
+      const workflowId = parseWorkflowId(result.stdout);
+      workflowIds.add(workflowId);
     }
 
     await page.waitForTimeout(500);
