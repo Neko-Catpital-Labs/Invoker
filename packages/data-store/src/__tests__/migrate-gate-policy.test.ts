@@ -36,7 +36,7 @@ describe('migrateGatePolicyApprovedToCompleted', () => {
       createdAt: new Date(),
       config: {},
       execution: {},
-      revision: 1,
+      taskStateVersion: 1,
       ...overrides,
     };
   }

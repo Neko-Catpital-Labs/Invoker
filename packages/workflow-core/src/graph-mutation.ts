@@ -122,8 +122,8 @@ export function reconcileMergeLeavesImpl(host: GraphMutationHost, workflowId: st
     type: 'updated',
     taskId: mergeNode.id,
     changes,
-    revision: updated.revision,
-    previousRevision: mergeNode.revision,
+    taskStateVersion: updated.taskStateVersion,
+    previousTaskStateVersion: mergeNode.taskStateVersion,
   });
 }
 
@@ -150,7 +150,7 @@ export function applyGraphMutationImpl(host: GraphMutationHost, mutation: GraphM
     );
     const remapChanges: TaskStateChanges = { dependencies: newDeps };
     const remapped = host.writeAndSync(task.id, remapChanges);
-    const delta: TaskDelta = { type: 'updated', taskId: task.id, changes: remapChanges, revision: remapped.revision, previousRevision: task.revision };
+    const delta: TaskDelta = { type: 'updated', taskId: task.id, changes: remapChanges, taskStateVersion: remapped.taskStateVersion, previousTaskStateVersion: task.taskStateVersion };
     host.messageBus.publish(TASK_DELTA_CHANNEL, delta);
     allDeltas.push(delta);
   }
@@ -173,8 +173,8 @@ export function applyGraphMutationImpl(host: GraphMutationHost, mutation: GraphM
     type: 'updated',
     taskId: mutation.sourceNodeId,
     changes: sourceChanges,
-    revision: updatedSource.revision,
-    previousRevision: sourceTaskBefore?.revision ?? 0,
+    taskStateVersion: updatedSource.taskStateVersion,
+    previousTaskStateVersion: sourceTaskBefore?.taskStateVersion ?? 0,
   };
   host.persistence.logEvent?.(
     mutation.sourceNodeId,

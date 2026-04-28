@@ -35,7 +35,7 @@ describe('SQLiteAdapter', () => {
       createdAt: new Date(),
       config: {},
       execution: {},
-      revision: 1,
+      taskStateVersion: 1,
       ...overrides,
     };
   }
@@ -81,53 +81,54 @@ describe('SQLiteAdapter', () => {
     });
   });
 
-  describe('task revision persistence', () => {
-    it('saves revision 1 for new tasks and round-trips it', () => {
+  describe('task-state version persistence', () => {
+    it('saves task-state version 1 for new tasks and round-trips it', () => {
       adapter.saveWorkflow(testWorkflow);
       adapter.saveTask('wf-1', makeTask('t1'));
 
       const loaded = adapter.loadTasks('wf-1');
-      expect(loaded[0].revision).toBe(1);
+      expect(loaded[0].taskStateVersion).toBe(1);
     });
 
-    it('preserves a custom revision value on save', () => {
+    it('preserves a custom task-state version value on save', () => {
       adapter.saveWorkflow(testWorkflow);
-      adapter.saveTask('wf-1', makeTask('t1', { revision: 5 }));
+      adapter.saveTask('wf-1', makeTask('t1', { taskStateVersion: 5 }));
 
       const loaded = adapter.loadTasks('wf-1');
-      expect(loaded[0].revision).toBe(5);
+      expect(loaded[0].taskStateVersion).toBe(5);
     });
 
-    it('increments revision atomically on every updateTask call', () => {
+    it('increments task-state version atomically on every updateTask call', () => {
       adapter.saveWorkflow(testWorkflow);
       adapter.saveTask('wf-1', makeTask('t1'));
 
       adapter.updateTask('t1', { status: 'running' });
       let loaded = adapter.loadTasks('wf-1');
-      expect(loaded[0].revision).toBe(2);
+      expect(loaded[0].taskStateVersion).toBe(2);
 
       adapter.updateTask('t1', { status: 'completed' });
       loaded = adapter.loadTasks('wf-1');
-      expect(loaded[0].revision).toBe(3);
+      expect(loaded[0].taskStateVersion).toBe(3);
     });
 
-    it('increments revision even for execution-only updates', () => {
+    it('increments task-state version even for execution-only updates', () => {
       adapter.saveWorkflow(testWorkflow);
       adapter.saveTask('wf-1', makeTask('t1'));
 
       adapter.updateTask('t1', { execution: { startedAt: new Date() } });
       const loaded = adapter.loadTasks('wf-1');
-      expect(loaded[0].revision).toBe(2);
+      expect(loaded[0].taskStateVersion).toBe(2);
     });
 
-    it('defaults to revision 1 for existing rows without the column', async () => {
-      // The migration adds revision with DEFAULT 1, so any pre-existing rows
-      // that lack the column will get revision = 1 on load.
+    it('defaults to task-state version 1 for existing rows without the column', async () => {
+      // The migration adds task_state_version with DEFAULT 1, so any
+      // pre-existing rows that lack the column will get taskStateVersion = 1 on
+      // load.
       adapter.saveWorkflow(testWorkflow);
       adapter.saveTask('wf-1', makeTask('t1'));
 
       const loaded = adapter.loadTasks('wf-1');
-      expect(loaded[0].revision).toBeGreaterThanOrEqual(1);
+      expect(loaded[0].taskStateVersion).toBeGreaterThanOrEqual(1);
     });
 
     it('loadTask returns authoritative single task by id', () => {
@@ -138,14 +139,14 @@ describe('SQLiteAdapter', () => {
       const task = adapter.loadTask('t1');
       expect(task).toBeDefined();
       expect(task!.id).toBe('t1');
-      expect(task!.revision).toBe(1);
+      expect(task!.taskStateVersion).toBe(1);
     });
 
     it('loadTask returns undefined for missing task', () => {
       expect(adapter.loadTask('nonexistent')).toBeUndefined();
     });
 
-    it('loadTask reflects revision after updates', () => {
+    it('loadTask reflects task-state version after updates', () => {
       adapter.saveWorkflow(testWorkflow);
       adapter.saveTask('wf-1', makeTask('t1'));
 
@@ -153,7 +154,7 @@ describe('SQLiteAdapter', () => {
       adapter.updateTask('t1', { status: 'completed' });
 
       const task = adapter.loadTask('t1');
-      expect(task!.revision).toBe(3);
+      expect(task!.taskStateVersion).toBe(3);
     });
   });
 
