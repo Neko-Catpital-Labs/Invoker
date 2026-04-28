@@ -1,10 +1,12 @@
 /**
- * Revision-aware delta-merge logic for the main-process task snapshot cache.
+ * Task-state-version-aware delta-merge logic for the main-process task
+ * snapshot cache.
  *
- * The cache tracks the last emitted snapshot, its revision, and whether a
+ * The cache tracks the last emitted snapshot, its taskStateVersion, and whether a
  * task is quarantined for recovery.  `updated` deltas only merge when
- * `previousRevision` matches the cached revision; unknown tasks or revision
- * gaps quarantine the task and trigger authoritative reload by id.
+ * `previousTaskStateVersion` matches the cached taskStateVersion; unknown
+ * tasks or task-state-version gaps quarantine the task and trigger
+ * authoritative reload by id.
  * Deltas for quarantined tasks are ignored until recovery finishes.
  */
 import type { TaskDelta, TaskState } from '@invoker/workflow-core';
@@ -13,7 +15,7 @@ import type { TaskDelta, TaskState } from '@invoker/workflow-core';
 
 export interface CacheEntry {
   snapshot: string;
-  revision: number;
+  taskStateVersion: number;
   quarantined: boolean;
 }
 
@@ -26,7 +28,7 @@ export interface AuthoritativeTaskLoader {
 // ── Snapshot cache ───────────────────────────────────────────
 
 /**
- * Revision-aware wrapper around the task snapshot map.
+ * Task-state-version-aware wrapper around the task snapshot map.
  *
  * Direct setters (`set`, `clear`, `delete`, `keys`) are exposed so
  * existing call sites in main.ts that bulk-seed the cache continue to
@@ -41,7 +43,7 @@ export class TaskSnapshotCache {
     const task: TaskState = JSON.parse(snapshot);
     this.entries.set(taskId, {
       snapshot,
-      revision: task.revision ?? 1,
+      taskStateVersion: task.taskStateVersion ?? 1,
       quarantined: false,
     });
   }
@@ -87,11 +89,11 @@ export interface ApplyDeltaResult {
 /**
  * Apply a single TaskDelta to the snapshot cache.
  *
- * Revision-aware semantics:
- * - `created`: unconditionally stores the task snapshot and revision.
- * - `updated` with matching `previousRevision`: merges changes, bumps
- *   the cached revision to `delta.revision`.
- * - `updated` with a revision gap or unknown task: quarantines the task
+ * Task-state-version-aware semantics:
+ * - `created`: unconditionally stores the task snapshot and taskStateVersion.
+ * - `updated` with matching `previousTaskStateVersion`: merges changes, bumps
+ *   the cached taskStateVersion to `delta.taskStateVersion`.
+ * - `updated` with a taskStateVersion gap or unknown task: quarantines the task
  *   and returns its id in `result.quarantined`.
  * - `removed`: deletes the cache entry.
  * - Deltas targeting a quarantined task are silently ignored.
@@ -122,8 +124,8 @@ export function applyDelta(
     return result;
   }
 
-  // Unknown task or revision gap → quarantine.
-  if (!entry || entry.revision !== delta.previousRevision) {
+  // Unknown task or taskStateVersion gap → quarantine.
+  if (!entry || entry.taskStateVersion !== delta.previousTaskStateVersion) {
     // Mark as quarantined.  If the entry exists, keep its snapshot but
     // flag it; if it doesn't, create a placeholder entry.
     if (entry) {
@@ -133,20 +135,20 @@ export function applyDelta(
     return result;
   }
 
-  // Revision matches — apply the merge.
+  // Task-state version matches — apply the merge.
   const prev: TaskState = JSON.parse(entry.snapshot);
   const { config: cfgChanges, execution: execChanges, ...topLevel } = delta.changes;
   const merged = {
     ...prev,
     ...topLevel,
-    revision: delta.revision,
+    taskStateVersion: delta.taskStateVersion,
     config: { ...prev.config, ...cfgChanges },
     execution: { ...prev.execution, ...execChanges },
   };
   const snapshot = JSON.stringify(merged);
   // Update the entry in-place to avoid extra map operations.
   entry.snapshot = snapshot;
-  entry.revision = delta.revision;
+  entry.taskStateVersion = delta.taskStateVersion;
 
   return result;
 }
