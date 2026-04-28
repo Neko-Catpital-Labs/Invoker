@@ -149,6 +149,15 @@ export interface MergeRunnerHost {
   removeMergeWorktree(dir: string): Promise<void>;
   execGh(args: string[], cwd?: string): Promise<string>;
   execPr(baseBranch: string, featureBranch: string, title: string, body?: string, cwd?: string): Promise<string>;
+  authorPrBodyWithSkill?(args: {
+    workflowId?: string;
+    mergeNodeTaskId?: string;
+    title: string;
+    baseBranch: string;
+    featureBranch: string;
+    workflowSummary: string;
+    cwd: string;
+  }): Promise<{ body: string; sessionId: string; agentName: string }>;
   detectDefaultBranch(): Promise<string>;
   gitLogMessage(commitHash: string, cwd?: string): Promise<string>;
   gitDiffStat(branch: string, cwd?: string): Promise<string>;
@@ -170,6 +179,28 @@ export interface MergeRunnerHost {
     baseCheckoutRef?: string,
     mergeNodeTaskId?: string,
   ): Promise<string | undefined>;
+}
+
+async function authorPrBodyForMerge(
+  host: MergeRunnerHost,
+  args: {
+    workflowId?: string;
+    mergeNodeTaskId?: string;
+    title: string;
+    baseBranch: string;
+    featureBranch: string;
+    workflowSummary: string;
+    cwd: string;
+  },
+): Promise<string> {
+  if (!host.authorPrBodyWithSkill) {
+    throw new Error('authorPrBodyWithSkill is required for merge PR authoring');
+  }
+  const authored = await host.authorPrBodyWithSkill(args);
+  console.log(
+    `[merge] Authored PR body via ${authored.agentName} skill session=${authored.sessionId}`,
+  );
+  return authored.body;
 }
 
 /**
@@ -613,7 +644,16 @@ export async function approveMergeImpl(
       mergeTrace('GIT_PUSH', { featureBranch, worktreeDir });
       // Push feature branch directly to origin (GitHub) from the clone
       await execGitInMergeSafe(host, ['push', '--force', '-u', 'origin', featureBranch], worktreeDir);
-      const reviewUrl = await host.execPr(baseBranch, featureBranch, mergeMessage, fullSummary, worktreeDir);
+      const prBody = await authorPrBodyForMerge(host, {
+        workflowId,
+        mergeNodeTaskId: mergeTaskId,
+        title: mergeMessage,
+        baseBranch,
+        featureBranch,
+        workflowSummary: fullSummary ?? '',
+        cwd: worktreeDir,
+      });
+      const reviewUrl = await host.execPr(baseBranch, featureBranch, mergeMessage, prBody, worktreeDir);
       mergeTrace('PR_CREATED', { featureBranch, baseBranch, reviewUrl });
       console.log(`[merge] Approved: created pull request ${reviewUrl}`);
       host.persistence.updateTask(mergeTaskId, {
@@ -899,7 +939,16 @@ export async function publishAfterFixImpl(
 
     // manual mode with pull_request onFinish
     if (onFinish === 'pull_request') {
-      const reviewUrl = await host.execPr(baseBranch, featureBranch, workflow?.name ?? 'Workflow', fullSummary, consolidateDir);
+      const prBody = await authorPrBodyForMerge(host, {
+        workflowId,
+        mergeNodeTaskId: task.id,
+        title: workflow?.name ?? 'Workflow',
+        baseBranch,
+        featureBranch,
+        workflowSummary: fullSummary ?? '',
+        cwd: consolidateDir,
+      });
+      const reviewUrl = await host.execPr(baseBranch, featureBranch, workflow?.name ?? 'Workflow', prBody, consolidateDir);
       console.log(`[merge] Post-fix: created pull request ${reviewUrl}`);
       host.persistence.updateTask(task.id, {
         config: { summary },
@@ -1217,7 +1266,16 @@ export async function consolidateAndMergeImpl(
     } else if (onFinish === 'pull_request') {
       // Push feature branch directly to origin (GitHub) from the clone
       await execGitInMergeSafe(host, ['push', '--force', '-u', 'origin', featureBranch], worktreeDir);
-      const reviewUrl = await host.execPr(baseBranch, featureBranch, workflowName ?? 'Workflow', body, worktreeDir);
+      const prBody = await authorPrBodyForMerge(host, {
+        workflowId,
+        mergeNodeTaskId,
+        title: workflowName ?? 'Workflow',
+        baseBranch,
+        featureBranch,
+        workflowSummary: body ?? '',
+        cwd: worktreeDir,
+      });
+      const reviewUrl = await host.execPr(baseBranch, featureBranch, workflowName ?? 'Workflow', prBody, worktreeDir);
       console.log(`[merge] Created pull request: ${reviewUrl}`);
       return reviewUrl;
     }

@@ -1,7 +1,8 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { delegationTimeoutMs, tryDelegateExec, tryDelegateRun, tryDelegateResume } from '../headless.js';
 import { LocalBus } from '@invoker/transport';
 import type { MessageBus } from '@invoker/transport';
+import type { HeadlessTargetLookup } from '../headless-command-classification.js';
 
 /**
  * Regression tests for headless→owner RPC delegation.
@@ -12,30 +13,74 @@ import type { MessageBus } from '@invoker/transport';
  */
 describe('headless→owner delegation', () => {
   let messageBus: MessageBus;
+  let targetLookup: HeadlessTargetLookup;
 
   beforeEach(() => {
     messageBus = new LocalBus();
+    targetLookup = {
+      loadWorkflow: (workflowId) => (
+        workflowId === 'wf-1' || workflowId === 'wf-123'
+          ? { id: workflowId } as any
+          : undefined
+      ),
+      listWorkflows: () => [{ id: 'wf-1' } as any, { id: 'wf-123' } as any],
+      loadTasks: (workflowId) => {
+        if (workflowId === 'wf-123') {
+          return [{ id: 'wf-123/task-1' }] as any;
+        }
+        return [];
+      },
+    };
   });
 
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function trackPromise<T>(promise: Promise<T>) {
+    const state: {
+      settled: boolean;
+      value?: T;
+      error?: unknown;
+    } = { settled: false };
+
+    promise.then(
+      (value) => {
+        state.settled = true;
+        state.value = value;
+      },
+      (error) => {
+        state.settled = true;
+        state.error = error;
+      },
+    );
+
+    return state;
+  }
+
   describe('delegation timeout policy', () => {
-    it('uses extended timeout for rebase', () => {
-      expect(delegationTimeoutMs(['rebase', 'wf-1/task-1'])).toBe(900_000);
+    it('uses 60s timeout for workflow-scoped rebase', () => {
+      expect(delegationTimeoutMs(['rebase', 'wf-1'], targetLookup)).toBe(60_000);
     });
 
-    it('uses extended timeout for rebase-and-retry', () => {
-      expect(delegationTimeoutMs(['rebase-and-retry', 'wf-1/task-1'])).toBe(900_000);
+    it('uses 60s timeout for workflow-scoped rebase-and-retry', () => {
+      expect(delegationTimeoutMs(['rebase-and-retry', 'wf-1'], targetLookup)).toBe(60_000);
     });
 
-    it('uses extended timeout for retry at workflow scope', () => {
-      expect(delegationTimeoutMs(['retry', 'wf-123'])).toBe(900_000);
+    it('uses 60s timeout for workflow-scoped restart', () => {
+      expect(delegationTimeoutMs(['restart', 'wf-123'], targetLookup)).toBe(60_000);
     });
 
-    it('treats task-scoped retry as long-running maintenance too', () => {
-      expect(delegationTimeoutMs(['retry-task', 'wf-123/task-1'])).toBe(900_000);
+    it('keeps task-scoped rebase at the default timeout', () => {
+      expect(delegationTimeoutMs(['rebase', 'wf-123/task-1'], targetLookup)).toBe(5_000);
     });
 
-    it('uses the extended timeout for tracked mutation commands', () => {
-      expect(delegationTimeoutMs(['approve', 'wf-123/task-1'])).toBe(900_000);
+    it('keeps non-matching workflow ids at the default timeout', () => {
+      expect(delegationTimeoutMs(['restart', 'not-a-workflow-id'], targetLookup)).toBe(5_000);
+    });
+
+    it('keeps unrelated commands at the default timeout', () => {
+      expect(delegationTimeoutMs(['approve', 'wf-123/task-1'], targetLookup)).toBe(5_000);
     });
   });
 
@@ -171,16 +216,69 @@ describe('headless→owner delegation', () => {
     });
 
     it('returns false when delegation times out (owner unresponsive)', async () => {
-      // Register handler that hangs (never resolves)
-      messageBus.onRequest('headless.exec', async () => {
-        return new Promise(() => {}); // Never resolves
-      });
+      vi.useFakeTimers();
+      messageBus.onRequest('headless.exec', async () => new Promise(() => {}));
 
-      // Should timeout and return false.
-      const delegated = await tryDelegateExec(['approve', 'wf-1/task-1'], messageBus, undefined, undefined, 25);
+      const delegatedPromise = tryDelegateExec(['approve', 'wf-1/task-1'], messageBus);
+      const tracked = trackPromise(delegatedPromise);
 
-      expect(delegated).toBe(false);
-    }, 5_000);
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(tracked.settled).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(delegatedPromise).resolves.toBe(false);
+    });
+  });
+
+  describe('tryDelegateExec applies command-aware timeout selection deterministically', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+      messageBus.onRequest('headless.exec', async () => new Promise(() => {}));
+    });
+
+    it.each([
+      ['rebase', ['rebase', 'wf-1']],
+      ['rebase-and-retry', ['rebase-and-retry', 'wf-1']],
+      ['restart workflow', ['restart', 'wf-123']],
+    ])('keeps %s pending at 5s and only times out at 60s', async (_label, args) => {
+      const delegatedPromise = tryDelegateExec(
+        args,
+        messageBus,
+        undefined,
+        undefined,
+        delegationTimeoutMs(args, targetLookup),
+      );
+      const tracked = trackPromise(delegatedPromise);
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(tracked.settled).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(54_999);
+      expect(tracked.settled).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(delegatedPromise).resolves.toBe(false);
+    });
+
+    it.each([
+      ['restart task', ['restart', 'wf-123/task-1']],
+      ['approve', ['approve', 'wf-123/task-1']],
+    ])('times out at the default 5s for %s', async (_label, args) => {
+      const delegatedPromise = tryDelegateExec(
+        args,
+        messageBus,
+        undefined,
+        undefined,
+        delegationTimeoutMs(args, targetLookup),
+      );
+      const tracked = trackPromise(delegatedPromise);
+
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(tracked.settled).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(delegatedPromise).resolves.toBe(false);
+    });
   });
 
   describe('error propagation from owner', () => {

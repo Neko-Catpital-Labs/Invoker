@@ -85,7 +85,12 @@ import {
   createHourlySnapshot,
   resolveInvokerHomeRoot,
 } from './delete-all-snapshot.js';
-import { isHeadlessMutatingCommand, isHeadlessReadOnlyCommand } from './headless-command-classification.js';
+import {
+  isHeadlessMutatingCommand,
+  isHeadlessReadOnlyCommand,
+  resolveHeadlessTarget,
+  resolveHeadlessTargetWorkflowId,
+} from './headless-command-classification.js';
 import { backupPlan } from './plan-backup.js';
 // applyPlanDefinitionDefaults removed — parsePlan() applies defaults internally
 import { startApiServer, type ApiServer } from './api-server.js';
@@ -93,6 +98,7 @@ import {
   runHeadless,
   tryDelegateRun,
   tryDelegateResume,
+  resolveDelegationTimeoutMs,
   tryDelegateExec,
   tryDelegateQuery,
   resolveAgentSession,
@@ -600,7 +606,8 @@ if (isHeadless) {
           if (!workflowId) throw new Error('Missing workflowId. Usage: --headless resume <id>');
           delegated = await tryDelegateResume(workflowId, delegationBus, waitForApproval, noTrack);
         } else {
-          delegated = await tryDelegateExec(cliArgs, delegationBus, waitForApproval, noTrack);
+          const timeoutMs = noTrack ? undefined : await resolveDelegationTimeoutMs(cliArgs);
+          delegated = await tryDelegateExec(cliArgs, delegationBus, waitForApproval, noTrack, timeoutMs);
         }
 
         if (delegated) {
@@ -812,17 +819,14 @@ if (isHeadless) {
           const [command, arg0] = payload.args;
           if (!command) return { priority: 'normal' };
 
-          const standaloneWorkflowIdForTaskArg = (taskIdArg: unknown): string | undefined => {
-            const taskId = String(taskIdArg ?? '');
-            const scopedMatch = taskId.match(/^(wf-[^/]+)\//);
-            if (scopedMatch) return scopedMatch[1];
-            return orchestrator.getTask(taskId)?.config.workflowId;
+          const standaloneWorkflowIdForTaskArg = (taskIdArg: unknown): string => {
+            return resolveHeadlessTargetWorkflowId(taskIdArg, persistence);
           };
 
           switch (command) {
             case 'retry':
               return {
-                workflowId: standaloneWorkflowIdForTaskArg(arg0) ?? (arg0 === undefined ? undefined : String(arg0)),
+                workflowId: arg0 === undefined ? undefined : standaloneWorkflowIdForTaskArg(arg0),
                 priority: 'high',
               };
             case 'recreate':
@@ -1505,11 +1509,12 @@ if (isHeadless) {
     });
     const headlessCommand = String(payload.args[0] ?? '');
     const headlessTarget = String(payload.args[1] ?? '');
+    const resolvedHeadlessTarget = resolveHeadlessTarget(headlessTarget, persistence);
     if (
       (headlessCommand === 'recreate' || headlessCommand === 'retry')
-      && /^wf-[^/]+$/.test(headlessTarget)
+      && resolvedHeadlessTarget.kind === 'workflow'
     ) {
-      cancelDeferredWorkflowLaunch(headlessTarget, `headless.${headlessCommand}`);
+      cancelDeferredWorkflowLaunch(resolvedHeadlessTarget.workflowId, `headless.${headlessCommand}`);
     }
     await runHeadless(payload.args, {
       logger,
@@ -1613,10 +1618,8 @@ if (isHeadless) {
   }
 
   function workflowIdForTaskArg(taskIdArg: unknown): string | undefined {
-    const taskId = String(taskIdArg ?? '');
-    const scopedMatch = taskId.match(/^(wf-[^/]+)\//);
-    if (scopedMatch) return scopedMatch[1];
-    return orchestrator.getTask(taskId)?.config.workflowId;
+    if (taskIdArg === undefined) return undefined;
+    return resolveHeadlessTargetWorkflowId(taskIdArg, persistence);
   }
 
   function classifyHeadlessExecMutation(payload: HeadlessExecMutationPayload): {
@@ -1628,7 +1631,7 @@ if (isHeadless) {
 
     switch (command) {
       case 'retry':
-        return { workflowId: workflowIdForTaskArg(arg0) ?? (arg0 === undefined ? undefined : String(arg0)), priority: 'high' };
+        return { workflowId: workflowIdForTaskArg(arg0), priority: 'high' };
       case 'recreate':
       case 'cancel-workflow':
         return { workflowId: arg0, priority: 'high' };
