@@ -101,7 +101,7 @@ async function delegateMutation(
   noTrackTimeoutMs: number = DEFAULT_NO_TRACK_DELEGATION_TIMEOUT_MS,
 ): Promise<boolean> {
   const command = args[0];
-  const timeoutMs = noTrack
+  const resolvedTimeoutMs = noTrack
     ? noTrackTimeoutMs
     : command === 'run' || command === 'resume'
       ? 5_000
@@ -109,14 +109,14 @@ async function delegateMutation(
   if (command === 'run') {
     const planPath = args[1];
     if (!planPath) throw new Error('Missing plan file. Usage: --headless run <plan.yaml>');
-    return tryDelegateRun(planPath, bus, waitForApproval, noTrack, timeoutMs);
+    return tryDelegateRun(planPath, bus, waitForApproval, noTrack, resolvedTimeoutMs);
   }
   if (command === 'resume') {
     const workflowId = args[1];
     if (!workflowId) throw new Error('Missing workflowId. Usage: --headless resume <id>');
-    return tryDelegateResume(workflowId, bus, waitForApproval, noTrack, timeoutMs);
+    return tryDelegateResume(workflowId, bus, waitForApproval, noTrack, resolvedTimeoutMs);
   }
-  return tryDelegateExec(args, bus, waitForApproval, noTrack, timeoutMs);
+  return tryDelegateExec(args, bus, waitForApproval, noTrack, resolvedTimeoutMs);
 }
 
 async function delegateReadOnlyQuery(
@@ -288,17 +288,24 @@ export async function runHeadlessClientCommand(
   }
 
   const owner = await tryPingHeadlessOwner(messageBus, 3_000);
-  if (isStandaloneOwner(owner)) {
-    if (await delegateMutation(args, messageBus, waitForApproval, noTrack)) {
-      return resolvedExitCode();
-    }
+  // A live GUI owner already owns the shared IPC socket, so bootstrapping a
+  // standalone owner cannot replace it in-process. Delegate to the current
+  // owner first and only bootstrap when no owner is reachable at all.
+  if (owner && await delegateMutation(args, messageBus, waitForApproval, noTrack)) {
+    return resolvedExitCode();
   }
   if (owner && deps.refreshMessageBus) {
     messageBus = await deps.refreshMessageBus();
     const refreshedOwner = await tryPingHeadlessOwner(messageBus, 1_000);
-    if (isStandaloneOwner(refreshedOwner) && await delegateMutation(args, messageBus, waitForApproval, noTrack)) {
+    if (refreshedOwner && await delegateMutation(args, messageBus, waitForApproval, noTrack)) {
       return resolvedExitCode();
     }
+  }
+  if (owner) {
+    process.stderr.write(
+      `${RED}Error:${RESET} Mutation command "${args[0] ?? ''}" could not be delegated to the current shared owner.\n`,
+    );
+    return 1;
   }
   if (deps.refreshMessageBus) {
     messageBus = await deps.refreshMessageBus();

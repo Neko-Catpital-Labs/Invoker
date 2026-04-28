@@ -1,10 +1,13 @@
 #!/usr/bin/env node
+const { spawn } = require('node:child_process');
 const { createConnection } = require('node:net');
 const { homedir } = require('node:os');
 const path = require('node:path');
 
 const DEFAULT_SOCKET_PATH =
   process.env.INVOKER_IPC_SOCKET || path.join(homedir(), '.invoker', 'ipc-transport.sock');
+const REPO_ROOT = path.resolve(__dirname, '..');
+const RUNNER = path.join(REPO_ROOT, 'run.sh');
 
 for (const stream of [process.stdout, process.stderr]) {
   stream.on('error', (error) => {
@@ -82,6 +85,17 @@ function parseCli(argv) {
   }
 
   return { mode, noTrack, waitForApproval, parallel, timeoutMs, args };
+}
+
+function execArgs(item, options) {
+  const args = ['--headless'];
+  if (options.noTrack) {
+    args.push('--no-track');
+  }
+  if (options.waitForApproval) {
+    args.push('--wait-for-approval');
+  }
+  return [...args, ...item.args];
 }
 
 function encodeEnvelope(envelope) {
@@ -208,6 +222,46 @@ async function readStdinLines() {
   return Buffer.concat(chunks).toString('utf8').split('\n').map((line) => line.trim()).filter(Boolean);
 }
 
+function runStandalone(item, options) {
+  return new Promise((resolve) => {
+    const child = spawn(RUNNER, execArgs(item, options), {
+      cwd: REPO_ROOT,
+      env: process.env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk.toString('utf8');
+    });
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk.toString('utf8');
+    });
+
+    child.once('error', (error) => {
+      resolve({
+        ...item,
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+        stdout,
+        stderr,
+      });
+    });
+    child.once('close', (code, signal) => {
+      resolve({
+        ...item,
+        ok: !signal && (code ?? 0) === 0,
+        exitCode: code ?? 0,
+        signal: signal ?? null,
+        stdout,
+        stderr,
+        ...(signal ? { error: `Process exited with signal ${signal}` } : {}),
+      });
+    });
+  });
+}
+
 async function requestExec(client, item, options) {
   const payload = {
     args: item.args,
@@ -224,6 +278,55 @@ async function requestExec(client, item, options) {
 
 async function main() {
   const options = parseCli(process.argv.slice(2));
+  if (process.env.INVOKER_HEADLESS_STANDALONE === '1') {
+    if (options.mode === 'exec') {
+      if (options.args.length === 0) {
+        throw new Error('Missing headless args for exec');
+      }
+      const result = await withTimeout(runStandalone({ args: options.args }, options), options.timeoutMs);
+      process.stdout.write(`${JSON.stringify(result)}\n`);
+      if (!result.ok) {
+        process.exitCode = 1;
+      }
+      return;
+    }
+
+    const lines = await readStdinLines();
+    const items = lines.map((line) => {
+      const parsed = JSON.parse(line);
+      if (Array.isArray(parsed)) {
+        return { args: parsed };
+      }
+      if (!parsed || !Array.isArray(parsed.args)) {
+        throw new Error(`Invalid batch item: ${line}`);
+      }
+      return parsed;
+    });
+
+    let nextIndex = 0;
+    const parallel = Math.max(1, Number.isFinite(options.parallel) ? options.parallel : 1);
+
+    async function worker() {
+      while (true) {
+        const index = nextIndex;
+        nextIndex += 1;
+        if (index >= items.length) {
+          return;
+        }
+        const result = await withTimeout(runStandalone(items[index], options), options.timeoutMs)
+          .catch((error) => ({
+            ...items[index],
+            ok: false,
+            error: error instanceof Error ? error.message : String(error),
+          }));
+        process.stdout.write(`${JSON.stringify(result)}\n`);
+      }
+    }
+
+    await Promise.all(Array.from({ length: Math.min(parallel, items.length) }, () => worker()));
+    return;
+  }
+
   const client = new HeadlessIpcClient();
 
   try {
