@@ -279,6 +279,52 @@ test.describe('Visual proof capture', () => {
     await assertPageScreenshot(page, 'context-menu-danger-separator-fallback');
   });
 
+  test('context menu dismisses on outside left-click even when bubbling is stopped', async ({ page }) => {
+    await loadPlan(page, TEST_PLAN);
+    await injectTaskStates(page, [
+      {
+        taskId: 'task-alpha',
+        changes: {
+          status: 'failed',
+          execution: { exitCode: 1, stderr: 'failed for visual proof' },
+        },
+      },
+    ]);
+
+    await page.evaluate(() => {
+      document.getElementById('outside-dismiss-target')?.remove();
+      const target = document.createElement('button');
+      target.id = 'outside-dismiss-target';
+      target.setAttribute('aria-label', 'Outside dismiss target');
+      Object.assign(target.style, {
+        position: 'fixed',
+        top: '16px',
+        right: '16px',
+        width: '28px',
+        height: '28px',
+        opacity: '0',
+        zIndex: '2147483647',
+      });
+      target.addEventListener('mousedown', (event) => {
+        event.stopPropagation();
+      });
+      document.body.appendChild(target);
+    });
+
+    await page.locator('.react-flow__node[data-testid$="task-alpha"]').click({ button: 'right' });
+    const menu = page.getByRole('menu');
+    await expect(menu).toBeVisible();
+
+    await captureScreenshot(page, 'context-menu-outside-dismiss-open');
+
+    await page.getByRole('button', { name: 'Outside dismiss target' }).click();
+    await page.waitForTimeout(200);
+
+    await captureScreenshot(page, 'context-menu-outside-dismiss-after-click');
+
+    await expect(menu).not.toBeVisible();
+  });
+
   test('status filter dims non-matching nodes', async ({ page }) => {
     await loadPlan(page, TEST_PLAN);
     const now = new Date();
