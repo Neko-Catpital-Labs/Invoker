@@ -2735,6 +2735,7 @@ if (isHeadless) {
     });
     ipcMain.handle('invoker:get-events', (_event, taskId: string) => persistence.getEvents(taskId));
     ipcMain.handle('invoker:get-status', () => orchestrator.getWorkflowStatus());
+    ipcMain.handle('invoker:get-task-by-id', (_event, taskId: string) => persistence.loadTask(taskId) ?? null);
     ipcMain.handle('invoker:get-task-output', (_event, taskId: string) => persistence.getTaskOutput(taskId));
 
     ipcMain.handle('invoker:get-output-chunks', (_event, taskId: string) => persistence.getOutputChunks(taskId));
