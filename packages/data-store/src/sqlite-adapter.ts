@@ -564,6 +564,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       'ALTER TABLE attempts ADD COLUMN queue_priority INTEGER NOT NULL DEFAULT 0',
       'ALTER TABLE attempts ADD COLUMN claimed_at TEXT',
       'ALTER TABLE attempts ADD COLUMN lease_expires_at TEXT',
+      'ALTER TABLE tasks ADD COLUMN revision INTEGER NOT NULL DEFAULT 1',
     ];
     for (const sql of migrations) {
       try {
@@ -735,7 +736,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
         remote_target_id,
         docker_image,
         execution_agent,
-        agent_name
+        agent_name,
+        revision
       ) VALUES (
         ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?, ?, ?, ?, ?,
@@ -751,6 +753,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         ?, ?, ?, ?,
         ?, ?,
         ?, ?, ?, ?,
+        ?,
         ?,
         ?,
         ?,
@@ -810,6 +813,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       cfg.dockerImage ?? null,
       cfg.executionAgent ?? null,
       exec.agentName ?? null,
+      task.revision ?? 1,
     ]);
   }
 
@@ -950,6 +954,9 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
     if (setClauses.length === 0) return;
 
+    // Atomically bump revision with every mutation
+    setClauses.push('revision = revision + 1');
+
     if (changes.execution && 'workspacePath' in changes.execution) {
       try {
         const row = this.queryOne(
@@ -982,6 +989,12 @@ export class SQLiteAdapter implements PersistenceAdapter {
   loadTasks(workflowId: string): TaskState[] {
     const rows = this.queryAll('SELECT * FROM tasks WHERE workflow_id = ?', [workflowId]);
     return rows.map((row) => this.reconcileTaskFromSelectedAttempt(this.rowToTask(row)));
+  }
+
+  loadTask(taskId: string): TaskState | undefined {
+    const row = this.queryOne('SELECT * FROM tasks WHERE id = ?', [taskId]);
+    if (!row) return undefined;
+    return this.reconcileTaskFromSelectedAttempt(this.rowToTask(row));
   }
 
   getAllTaskIds(): string[] {
@@ -1670,6 +1683,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         selectedAttemptId: row.selected_attempt_id ?? undefined,
         autoFixAttempts: row.auto_fix_attempts ?? undefined,
       },
+      revision: row.revision ?? 1,
     };
   }
 
