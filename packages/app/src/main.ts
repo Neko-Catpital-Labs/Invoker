@@ -127,6 +127,9 @@ import { preemptWorkflowBeforeMutation, type WorkflowCancelResult } from './work
 import { relaunchOrphansAndStartReady } from './orphan-relaunch.js';
 import { listOpenFixIntentsForTask } from './auto-fix-intents.js';
 
+declare const __BUILD_SHA__: string | undefined;
+declare const __BUILD_VERSION__: string | undefined;
+
 // ── Detect headless mode ─────────────────────────────────────
 
 // Electron passes extra args after `--` or interleaves them.
@@ -232,6 +235,9 @@ interface HeadlessExecMutationPayload {
 // Root logger: created early in initServices() once persistence is available.
 // Before initServices(), use the pre-init logger (file-only, no DB).
 let logger: Logger = new FileAndDbLogger({ module: 'main' });
+const buildSha = typeof __BUILD_SHA__ !== 'undefined' ? __BUILD_SHA__ : 'dev';
+const buildVersion = typeof __BUILD_VERSION__ !== 'undefined' ? __BUILD_VERSION__ : 'dev';
+logger.info(`Invoker ${buildVersion} (${buildSha})`, { module: 'startup' });
 
 process.on('uncaughtException', (err) => {
   try {
