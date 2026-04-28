@@ -60,10 +60,11 @@ test.describe('Headless thundering herd', () => {
     await startPlan(page);
     await page.locator('.react-flow__node[data-testid$="task-alpha"]').waitFor({ state: 'visible', timeout: 10000 });
 
-    const pageTasks = await page.evaluate(() => window.invoker.getTasks());
-    const currentTasks = Array.isArray(pageTasks) ? pageTasks : pageTasks.tasks;
-    const currentWorkflowId = currentTasks[0]?.config?.workflowId as string | undefined;
-    expect(currentWorkflowId).toBeTruthy();
+    // Discover the active workflow through the owner's IPC bridge (listWorkflows),
+    // not by reaching into task internals or opening the DB directly.
+    const workflows = await page.evaluate(() => window.invoker.listWorkflows());
+    expect(workflows.length).toBeGreaterThan(0);
+    const currentWorkflowId = workflows[0].id as string;
 
     const herdPlan = {
       name: 'Headless Herd Seed',
