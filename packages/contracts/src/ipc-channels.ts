@@ -62,6 +62,17 @@ export interface ClaudeMessage {
   timestamp: string;
 }
 
+export type AgentSessionState = 'running' | 'finished' | 'error';
+
+export interface AgentSessionData {
+  agentName: string;
+  sessionId: string;
+  state: AgentSessionState;
+  messages: ClaudeMessage[];
+  reason?: string;
+  source?: 'local' | 'remote';
+}
+
 export interface ExternalGatePolicyUpdate {
   workflowId: string;
   taskId?: string;
@@ -287,11 +298,11 @@ export const IpcChannels = {
   // Session & Agent Access
   'invoker:get-claude-session': {} as {
     request: [sessionId: string];
-    response: ClaudeMessage[] | null;
+    response: AgentSessionData | null;
   },
   'invoker:get-agent-session': {} as {
     request: [sessionId: string, agentName?: string];
-    response: ClaudeMessage[] | null;
+    response: AgentSessionData | null;
   },
 
   // Workflow Mutation & Merge

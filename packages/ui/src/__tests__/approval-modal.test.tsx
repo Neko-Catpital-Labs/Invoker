@@ -207,9 +207,13 @@ describe('ApprovalModal', () => {
   // ── Context info blocks ──────────────────────────────
 
   it('renders only session block for fix approval with session ID and loads messages', async () => {
-    mockGetAgentSession.mockResolvedValue([
-      { role: 'user', content: 'Fix the test', timestamp: '' },
-    ]);
+    mockGetAgentSession.mockResolvedValue({
+      agentName: 'claude',
+      sessionId: 'sess-abc-123',
+      state: 'running',
+      source: 'remote',
+      messages: [{ role: 'user', content: 'Fix the test', timestamp: '' }],
+    });
 
     render(
       <ApprovalModal
@@ -233,6 +237,7 @@ describe('ApprovalModal', () => {
     await waitFor(() => {
       expect(screen.getByTestId('session-messages')).toBeInTheDocument();
     });
+    expect(screen.getByTestId('session-state')).toHaveTextContent('State: running (remote)');
     expect(screen.getByText('Fix the test')).toBeInTheDocument();
 
     // Fix context block should not exist
@@ -408,6 +413,33 @@ describe('ApprovalModal', () => {
     });
 
     expect(screen.getByTestId('session-error')).toHaveTextContent('Could not load session');
+  });
+
+  it('renders error state when session inspection reports an error result', async () => {
+    mockGetAgentSession.mockResolvedValue({
+      agentName: 'claude',
+      sessionId: 'sess-error-test',
+      state: 'error',
+      reason: 'Session file not found',
+      messages: [],
+    });
+
+    render(
+      <ApprovalModal
+        task={makeTask({
+          execution: { agentSessionId: 'sess-error-test' },
+        })}
+        onApprove={vi.fn()}
+        onReject={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('session-error')).toBeInTheDocument();
+    });
+
+    expect(screen.getByTestId('session-state')).toHaveTextContent('State: error');
   });
 
   it('uses agent name in heading, label, reason pre-fill, and session fetch', async () => {

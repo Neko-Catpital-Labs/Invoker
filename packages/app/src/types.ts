@@ -13,6 +13,7 @@ export type {
   TaskOutputData,
   ActivityLogEntry,
   ClaudeMessage,
+  AgentSessionData,
   ExternalGatePolicyUpdate,
 } from '@invoker/contracts';
 
