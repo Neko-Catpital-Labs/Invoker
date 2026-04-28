@@ -15,6 +15,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ELECTRON="$REPO_ROOT/packages/app/node_modules/.bin/electron"
 MAIN="$REPO_ROOT/packages/app/dist/main.js"
+IPC_HELPER="$REPO_ROOT/scripts/headless-ipc.js"
 
 # Parse args
 DRY_RUN=false
@@ -49,8 +50,7 @@ headless_query() {
 
 # Helper: mutating command (stderr preserved for debugging real failures)
 headless_mutation() {
-  # shellcheck disable=SC2086
-  "$ELECTRON" "$MAIN" $SANDBOX_FLAG --headless "$@"
+  node "$IPC_HELPER" exec -- "$@"
 }
 
 # Helper: extract workflow IDs (filter Electron init noise)
