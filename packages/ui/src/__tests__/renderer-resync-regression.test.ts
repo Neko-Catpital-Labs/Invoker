@@ -24,7 +24,7 @@ function makeTask(overrides: Partial<TaskState> & { id: string }): TaskState {
     createdAt: new Date('2025-01-01'),
     config: {},
     execution: {},
-    revision: 1,
+    taskStateVersion: 1,
     ...overrides,
   };
 }
@@ -67,7 +67,7 @@ function snapshotReplace(
 describe('1. Renderer application of ordered revisioned deltas', () => {
   afterEach(() => vi.useRealTimers());
 
-  it('pipeline preserves revision order across batched create → update → update', () => {
+  it('pipeline preserves taskStateVersion order across batched create → update → update', () => {
     vi.useFakeTimers();
     const batches: TaskDelta[][] = [];
     const pipeline = createTaskDeltaPipeline({
@@ -77,15 +77,15 @@ describe('1. Renderer application of ordered revisioned deltas', () => {
 
     const create: TaskDelta = {
       type: 'created',
-      task: makeTask({ id: 't1', status: 'pending', revision: 1 }),
+      task: makeTask({ id: 't1', status: 'pending', taskStateVersion: 1 }),
     };
     const u1: TaskDelta = {
       type: 'updated', taskId: 't1',
-      changes: { status: 'running' }, previousRevision: 1, revision: 2,
+      changes: { status: 'running' }, previousTaskStateVersion: 1, taskStateVersion: 2,
     };
     const u2: TaskDelta = {
       type: 'updated', taskId: 't1',
-      changes: { status: 'completed' }, previousRevision: 2, revision: 3,
+      changes: { status: 'completed' }, previousTaskStateVersion: 2, taskStateVersion: 3,
     };
 
     pipeline.push(create);
@@ -100,7 +100,7 @@ describe('1. Renderer application of ordered revisioned deltas', () => {
     const qIds = new Set<string>();
     const result = applyBatch(new Map(), batches[0], qIds);
     expect(result.tasks.get('t1')!.status).toBe('completed');
-    expect(result.tasks.get('t1')!.revision).toBe(3);
+    expect(result.tasks.get('t1')!.taskStateVersion).toBe(3);
     expect(result.allQuarantined).toEqual([]);
 
     pipeline.dispose();
@@ -109,82 +109,82 @@ describe('1. Renderer application of ordered revisioned deltas', () => {
   it('multi-task interleaved deltas apply independently', () => {
     const qIds = new Set<string>();
     const batch: TaskDelta[] = [
-      { type: 'created', task: makeTask({ id: 'a', revision: 1 }) },
-      { type: 'created', task: makeTask({ id: 'b', revision: 1 }) },
+      { type: 'created', task: makeTask({ id: 'a', taskStateVersion: 1 }) },
+      { type: 'created', task: makeTask({ id: 'b', taskStateVersion: 1 }) },
       {
         type: 'updated', taskId: 'a',
-        changes: { status: 'running' }, previousRevision: 1, revision: 2,
+        changes: { status: 'running' }, previousTaskStateVersion: 1, taskStateVersion: 2,
       },
       {
         type: 'updated', taskId: 'b',
-        changes: { status: 'running' }, previousRevision: 1, revision: 2,
+        changes: { status: 'running' }, previousTaskStateVersion: 1, taskStateVersion: 2,
       },
       {
         type: 'updated', taskId: 'a',
-        changes: { status: 'completed' }, previousRevision: 2, revision: 3,
+        changes: { status: 'completed' }, previousTaskStateVersion: 2, taskStateVersion: 3,
       },
     ];
 
     const result = applyBatch(new Map(), batch, qIds);
     expect(result.tasks.get('a')!.status).toBe('completed');
-    expect(result.tasks.get('a')!.revision).toBe(3);
+    expect(result.tasks.get('a')!.taskStateVersion).toBe(3);
     expect(result.tasks.get('b')!.status).toBe('running');
-    expect(result.tasks.get('b')!.revision).toBe(2);
+    expect(result.tasks.get('b')!.taskStateVersion).toBe(2);
     expect(result.allQuarantined).toEqual([]);
   });
 
   it('out-of-order delta within batch quarantines only the affected task', () => {
     const qIds = new Set<string>();
     const batch: TaskDelta[] = [
-      { type: 'created', task: makeTask({ id: 'a', revision: 1 }) },
-      { type: 'created', task: makeTask({ id: 'b', revision: 1 }) },
-      // Delta for 'a' skips revision 2 → gap
+      { type: 'created', task: makeTask({ id: 'a', taskStateVersion: 1 }) },
+      { type: 'created', task: makeTask({ id: 'b', taskStateVersion: 1 }) },
+      // Delta for 'a' skips taskStateVersion 2 → gap
       {
         type: 'updated', taskId: 'a',
-        changes: { status: 'completed' }, previousRevision: 5, revision: 6,
+        changes: { status: 'completed' }, previousTaskStateVersion: 5, taskStateVersion: 6,
       },
       // Delta for 'b' is normal
       {
         type: 'updated', taskId: 'b',
-        changes: { status: 'running' }, previousRevision: 1, revision: 2,
+        changes: { status: 'running' }, previousTaskStateVersion: 1, taskStateVersion: 2,
       },
     ];
 
     const result = applyBatch(new Map(), batch, qIds);
-    // 'a' quarantined — unchanged at revision 1
-    expect(result.tasks.get('a')!.revision).toBe(1);
+    // 'a' quarantined — unchanged at taskStateVersion 1
+    expect(result.tasks.get('a')!.taskStateVersion).toBe(1);
     expect(result.tasks.get('a')!.status).toBe('pending');
     expect(result.allQuarantined).toEqual(['a']);
     // 'b' unaffected
     expect(result.tasks.get('b')!.status).toBe('running');
-    expect(result.tasks.get('b')!.revision).toBe(2);
+    expect(result.tasks.get('b')!.taskStateVersion).toBe(2);
   });
 
   it('rapid sequential updates chain correctly (pending → running → completed → failed)', () => {
     const qIds = new Set<string>();
     const batch: TaskDelta[] = [
-      { type: 'created', task: makeTask({ id: 't1', revision: 1 }) },
+      { type: 'created', task: makeTask({ id: 't1', taskStateVersion: 1 }) },
       {
         type: 'updated', taskId: 't1',
         changes: { status: 'running', execution: { startedAt: new Date('2025-01-02') } },
-        previousRevision: 1, revision: 2,
+        previousTaskStateVersion: 1, taskStateVersion: 2,
       },
       {
         type: 'updated', taskId: 't1',
         changes: { status: 'completed', execution: { completedAt: new Date('2025-01-03') } },
-        previousRevision: 2, revision: 3,
+        previousTaskStateVersion: 2, taskStateVersion: 3,
       },
       {
         type: 'updated', taskId: 't1',
         changes: { status: 'failed', execution: { error: 'post-completion failure' } },
-        previousRevision: 3, revision: 4,
+        previousTaskStateVersion: 3, taskStateVersion: 4,
       },
     ];
 
     const result = applyBatch(new Map(), batch, qIds);
     const t = result.tasks.get('t1')!;
     expect(t.status).toBe('failed');
-    expect(t.revision).toBe(4);
+    expect(t.taskStateVersion).toBe(4);
     expect(t.execution.error).toBe('post-completion failure');
     expect(t.execution.startedAt).toEqual(new Date('2025-01-02'));
     expect(t.execution.completedAt).toEqual(new Date('2025-01-03'));
@@ -198,48 +198,48 @@ describe('2. Authoritative replacement after gap recovery', () => {
   it('authoritative created delta converges quarantined task to correct state', () => {
     const qIds = new Set<string>();
 
-    // Initial state: task at revision 3
+    // Initial state: task at taskStateVersion 3
     let tasks = new Map<string, TaskState>([
-      ['t1', makeTask({ id: 't1', status: 'running', revision: 3 })],
+      ['t1', makeTask({ id: 't1', status: 'running', taskStateVersion: 3 })],
     ]);
 
-    // Gap: delta expects revision 10
+    // Gap: delta expects taskStateVersion 10
     const gapResult = applyDelta(tasks, {
       type: 'updated', taskId: 't1',
-      changes: { status: 'completed' }, previousRevision: 10, revision: 11,
+      changes: { status: 'completed' }, previousTaskStateVersion: 10, taskStateVersion: 11,
     }, qIds);
     tasks = gapResult.tasks;
     expect(gapResult.quarantined).toEqual(['t1']);
-    expect(tasks.get('t1')!.revision).toBe(3); // unchanged
+    expect(tasks.get('t1')!.taskStateVersion).toBe(3); // unchanged
 
     // Several stale deltas arrive while quarantined — all dropped
     for (let rev = 4; rev <= 8; rev++) {
       const r = applyDelta(tasks, {
         type: 'updated', taskId: 't1',
-        changes: { status: 'running' }, previousRevision: rev - 1, revision: rev,
+        changes: { status: 'running' }, previousTaskStateVersion: rev - 1, taskStateVersion: rev,
       }, qIds);
       tasks = r.tasks;
-      expect(tasks.get('t1')!.revision).toBe(3); // still unchanged
+      expect(tasks.get('t1')!.taskStateVersion).toBe(3); // still unchanged
     }
 
-    // Authoritative recovery: main process sends 'created' snapshot at revision 15
+    // Authoritative recovery: main process sends 'created' snapshot at taskStateVersion 15
     const recovery = applyDelta(tasks, {
       type: 'created',
-      task: makeTask({ id: 't1', status: 'completed', revision: 15, execution: { exitCode: 0 } }),
+      task: makeTask({ id: 't1', status: 'completed', taskStateVersion: 15, execution: { exitCode: 0 } }),
     }, qIds);
     tasks = recovery.tasks;
 
     expect(tasks.get('t1')!.status).toBe('completed');
-    expect(tasks.get('t1')!.revision).toBe(15);
+    expect(tasks.get('t1')!.taskStateVersion).toBe(15);
     expect(tasks.get('t1')!.execution.exitCode).toBe(0);
     expect(qIds.has('t1')).toBe(false);
 
     // Normal updates resume
     const resume = applyDelta(tasks, {
       type: 'updated', taskId: 't1',
-      changes: { execution: { error: 'retry' } }, previousRevision: 15, revision: 16,
+      changes: { execution: { error: 'retry' } }, previousTaskStateVersion: 15, taskStateVersion: 16,
     }, qIds);
-    expect(resume.tasks.get('t1')!.revision).toBe(16);
+    expect(resume.tasks.get('t1')!.taskStateVersion).toBe(16);
     expect(resume.tasks.get('t1')!.execution.error).toBe('retry');
     expect(resume.quarantined).toEqual([]);
   });
@@ -251,7 +251,7 @@ describe('2. Authoritative replacement after gap recovery', () => {
     // Update for a task the renderer doesn't know about
     const r1 = applyDelta(tasks, {
       type: 'updated', taskId: 'new-task',
-      changes: { status: 'running' }, previousRevision: 1, revision: 2,
+      changes: { status: 'running' }, previousTaskStateVersion: 1, taskStateVersion: 2,
     }, qIds);
     expect(r1.quarantined).toEqual(['new-task']);
     expect(r1.tasks.has('new-task')).toBe(false);
@@ -259,67 +259,67 @@ describe('2. Authoritative replacement after gap recovery', () => {
     // Authoritative created delta arrives
     const r2 = applyDelta(r1.tasks, {
       type: 'created',
-      task: makeTask({ id: 'new-task', status: 'running', revision: 5 }),
+      task: makeTask({ id: 'new-task', status: 'running', taskStateVersion: 5 }),
     }, qIds);
     expect(r2.tasks.get('new-task')!.status).toBe('running');
-    expect(r2.tasks.get('new-task')!.revision).toBe(5);
+    expect(r2.tasks.get('new-task')!.taskStateVersion).toBe(5);
     expect(qIds.has('new-task')).toBe(false);
   });
 
   it('authoritative replacement during batched deltas recovers mid-batch', () => {
     const qIds = new Set<string>();
     const batch: TaskDelta[] = [
-      { type: 'created', task: makeTask({ id: 't1', revision: 1 }) },
+      { type: 'created', task: makeTask({ id: 't1', taskStateVersion: 1 }) },
       // Normal update
       {
         type: 'updated', taskId: 't1',
-        changes: { status: 'running' }, previousRevision: 1, revision: 2,
+        changes: { status: 'running' }, previousTaskStateVersion: 1, taskStateVersion: 2,
       },
       // Gap — quarantines
       {
         type: 'updated', taskId: 't1',
-        changes: { status: 'completed' }, previousRevision: 10, revision: 11,
+        changes: { status: 'completed' }, previousTaskStateVersion: 10, taskStateVersion: 11,
       },
       // Stale update while quarantined — dropped
       {
         type: 'updated', taskId: 't1',
-        changes: { status: 'failed' }, previousRevision: 2, revision: 3,
+        changes: { status: 'failed' }, previousTaskStateVersion: 2, taskStateVersion: 3,
       },
       // Authoritative recovery mid-batch
       {
         type: 'created',
-        task: makeTask({ id: 't1', status: 'completed', revision: 20 }),
+        task: makeTask({ id: 't1', status: 'completed', taskStateVersion: 20 }),
       },
       // Normal update after recovery
       {
         type: 'updated', taskId: 't1',
-        changes: { execution: { exitCode: 0 } }, previousRevision: 20, revision: 21,
+        changes: { execution: { exitCode: 0 } }, previousTaskStateVersion: 20, taskStateVersion: 21,
       },
     ];
 
     const result = applyBatch(new Map(), batch, qIds);
     expect(result.tasks.get('t1')!.status).toBe('completed');
-    expect(result.tasks.get('t1')!.revision).toBe(21);
+    expect(result.tasks.get('t1')!.taskStateVersion).toBe(21);
     expect(result.tasks.get('t1')!.execution.exitCode).toBe(0);
     expect(qIds.has('t1')).toBe(false);
   });
 
   it('removed delta clears quarantine even if task was quarantined', () => {
     const qIds = new Set<string>();
-    const t = makeTask({ id: 't1', revision: 1 });
+    const t = makeTask({ id: 't1', taskStateVersion: 1 });
     let tasks = new Map<string, TaskState>([['t1', t]]);
 
     // Quarantine
     const r1 = applyDelta(tasks, {
       type: 'updated', taskId: 't1',
-      changes: { status: 'running' }, previousRevision: 99, revision: 100,
+      changes: { status: 'running' }, previousTaskStateVersion: 99, taskStateVersion: 100,
     }, qIds);
     tasks = r1.tasks;
     expect(qIds.has('t1')).toBe(true);
 
     // Remove
     const r2 = applyDelta(tasks, {
-      type: 'removed', taskId: 't1', previousRevision: 1,
+      type: 'removed', taskId: 't1', previousTaskStateVersion: 1,
     }, qIds);
     expect(r2.tasks.has('t1')).toBe(false);
     expect(qIds.has('t1')).toBe(false);
@@ -336,31 +336,31 @@ describe('3. DB poll + message-bus interplay: no duplicate or stale state', () =
     const batch: TaskDelta[] = [
       {
         type: 'created',
-        task: makeTask({ id: 't1', status: 'pending', revision: 1, config: { workflowId: 'wf-1' } }),
+        task: makeTask({ id: 't1', status: 'pending', taskStateVersion: 1, config: { workflowId: 'wf-1' } }),
       },
       {
         type: 'updated', taskId: 't1',
-        changes: { status: 'running' }, previousRevision: 1, revision: 2,
+        changes: { status: 'running' }, previousTaskStateVersion: 1, taskStateVersion: 2,
       },
       {
         type: 'updated', taskId: 't1',
         changes: { status: 'completed', execution: { exitCode: 0 } },
-        previousRevision: 2, revision: 3,
+        previousTaskStateVersion: 2, taskStateVersion: 3,
       },
     ];
     const deltaResult = applyBatch(new Map(), batch, qIds);
 
     // Simulate DB poll snapshot that observes the same final state
     const snapshotTasks = snapshotReplace(
-      [makeTask({ id: 't1', status: 'completed', revision: 3, execution: { exitCode: 0 }, config: { workflowId: 'wf-1' } })],
+      [makeTask({ id: 't1', status: 'completed', taskStateVersion: 3, execution: { exitCode: 0 }, config: { workflowId: 'wf-1' } })],
       qIds,
     );
 
     // Both paths yield the same task state
     expect(deltaResult.tasks.get('t1')!.status).toBe('completed');
     expect(snapshotTasks.get('t1')!.status).toBe('completed');
-    expect(deltaResult.tasks.get('t1')!.revision).toBe(3);
-    expect(snapshotTasks.get('t1')!.revision).toBe(3);
+    expect(deltaResult.tasks.get('t1')!.taskStateVersion).toBe(3);
+    expect(snapshotTasks.get('t1')!.taskStateVersion).toBe(3);
   });
 
   it('DB poll snapshot does not create duplicates when applied after deltas', () => {
@@ -368,11 +368,11 @@ describe('3. DB poll + message-bus interplay: no duplicate or stale state', () =
 
     // Delta stream creates two tasks
     const batch: TaskDelta[] = [
-      { type: 'created', task: makeTask({ id: 't1', revision: 1 }) },
-      { type: 'created', task: makeTask({ id: 't2', revision: 1 }) },
+      { type: 'created', task: makeTask({ id: 't1', taskStateVersion: 1 }) },
+      { type: 'created', task: makeTask({ id: 't2', taskStateVersion: 1 }) },
       {
         type: 'updated', taskId: 't1',
-        changes: { status: 'running' }, previousRevision: 1, revision: 2,
+        changes: { status: 'running' }, previousTaskStateVersion: 1, taskStateVersion: 2,
       },
     ];
     const afterDeltas = applyBatch(new Map(), batch, qIds);
@@ -381,8 +381,8 @@ describe('3. DB poll + message-bus interplay: no duplicate or stale state', () =
     // DB poll returns the same two tasks (same data, simulating the overlap)
     const afterSnapshot = snapshotReplace(
       [
-        makeTask({ id: 't1', status: 'running', revision: 2 }),
-        makeTask({ id: 't2', status: 'pending', revision: 1 }),
+        makeTask({ id: 't1', status: 'running', taskStateVersion: 2 }),
+        makeTask({ id: 't2', status: 'pending', taskStateVersion: 1 }),
       ],
       qIds,
     );
@@ -396,42 +396,42 @@ describe('3. DB poll + message-bus interplay: no duplicate or stale state', () =
   it('stale DB poll snapshot is overwritten by newer delta arriving after snapshot', () => {
     const qIds = new Set<string>();
 
-    // Start with a DB poll snapshot at revision 2
+    // Start with a DB poll snapshot at taskStateVersion 2
     let tasks = snapshotReplace(
-      [makeTask({ id: 't1', status: 'running', revision: 2 })],
+      [makeTask({ id: 't1', status: 'running', taskStateVersion: 2 })],
       qIds,
     );
 
-    // Delta arrives with newer revision (as if task completed after DB poll)
+    // Delta arrives with newer taskStateVersion (as if task completed after DB poll)
     const r = applyDelta(tasks, {
       type: 'updated', taskId: 't1',
       changes: { status: 'completed', execution: { exitCode: 0 } },
-      previousRevision: 2, revision: 3,
+      previousTaskStateVersion: 2, taskStateVersion: 3,
     }, qIds);
     tasks = r.tasks;
 
     expect(tasks.get('t1')!.status).toBe('completed');
-    expect(tasks.get('t1')!.revision).toBe(3);
+    expect(tasks.get('t1')!.taskStateVersion).toBe(3);
     expect(r.quarantined).toEqual([]);
   });
 
   it('older DB poll does not regress task state set by newer delta', () => {
     const qIds = new Set<string>();
 
-    // Delta stream has advanced to revision 5
+    // Delta stream has advanced to taskStateVersion 5
     const batch: TaskDelta[] = [
-      { type: 'created', task: makeTask({ id: 't1', revision: 1 }) },
+      { type: 'created', task: makeTask({ id: 't1', taskStateVersion: 1 }) },
       {
         type: 'updated', taskId: 't1',
-        changes: { status: 'running' }, previousRevision: 1, revision: 2,
+        changes: { status: 'running' }, previousTaskStateVersion: 1, taskStateVersion: 2,
       },
       {
         type: 'updated', taskId: 't1',
-        changes: { status: 'completed' }, previousRevision: 2, revision: 3,
+        changes: { status: 'completed' }, previousTaskStateVersion: 2, taskStateVersion: 3,
       },
     ];
     const afterDeltas = applyBatch(new Map(), batch, qIds);
-    expect(afterDeltas.tasks.get('t1')!.revision).toBe(3);
+    expect(afterDeltas.tasks.get('t1')!.taskStateVersion).toBe(3);
     expect(afterDeltas.tasks.get('t1')!.status).toBe('completed');
 
     // snapshotReplace unconditionally replaces — this models what useTasks does.
@@ -439,47 +439,47 @@ describe('3. DB poll + message-bus interplay: no duplicate or stale state', () =
     // delta level, the snapshot always wins because it's authoritative.
     // This test documents that a snapshot replace IS authoritative (not a regression).
     const staleSnapshot = snapshotReplace(
-      [makeTask({ id: 't1', status: 'running', revision: 2 })],
+      [makeTask({ id: 't1', status: 'running', taskStateVersion: 2 })],
       qIds,
     );
     // After snapshot replace, the task map reflects the snapshot (authoritative).
     expect(staleSnapshot.get('t1')!.status).toBe('running');
-    expect(staleSnapshot.get('t1')!.revision).toBe(2);
+    expect(staleSnapshot.get('t1')!.taskStateVersion).toBe(2);
     // useTasks generation counter would prevent this in practice — tested in use-tasks.test.tsx.
   });
 
-  it('delta arriving for already-completed task does not regress if revision matches', () => {
+  it('delta arriving for already-completed task does not regress if taskStateVersion matches', () => {
     const qIds = new Set<string>();
 
-    // Task completed at revision 3
+    // Task completed at taskStateVersion 3
     const tasks = new Map<string, TaskState>([
-      ['t1', makeTask({ id: 't1', status: 'completed', revision: 3, execution: { exitCode: 0 } })],
+      ['t1', makeTask({ id: 't1', status: 'completed', taskStateVersion: 3, execution: { exitCode: 0 } })],
     ]);
 
-    // Duplicate completion delta with matching revision — this should still merge
+    // Duplicate completion delta with matching taskStateVersion — this should still merge
     // (in real code, the main process avoids sending duplicate deltas, but the
     // renderer must be resilient).
     const r = applyDelta(tasks, {
       type: 'updated', taskId: 't1',
       changes: { status: 'completed', execution: { exitCode: 0 } },
-      previousRevision: 3, revision: 4,
+      previousTaskStateVersion: 3, taskStateVersion: 4,
     }, qIds);
 
     expect(r.tasks.get('t1')!.status).toBe('completed');
-    expect(r.tasks.get('t1')!.revision).toBe(4);
+    expect(r.tasks.get('t1')!.taskStateVersion).toBe(4);
     expect(r.quarantined).toEqual([]);
   });
 
   it('simultaneous create deltas for same task: last one wins', () => {
     const qIds = new Set<string>();
     const batch: TaskDelta[] = [
-      { type: 'created', task: makeTask({ id: 't1', status: 'pending', revision: 1 }) },
-      { type: 'created', task: makeTask({ id: 't1', status: 'running', revision: 5 }) },
+      { type: 'created', task: makeTask({ id: 't1', status: 'pending', taskStateVersion: 1 }) },
+      { type: 'created', task: makeTask({ id: 't1', status: 'running', taskStateVersion: 5 }) },
     ];
 
     const result = applyBatch(new Map(), batch, qIds);
     expect(result.tasks.get('t1')!.status).toBe('running');
-    expect(result.tasks.get('t1')!.revision).toBe(5);
+    expect(result.tasks.get('t1')!.taskStateVersion).toBe(5);
     expect(result.tasks.size).toBe(1); // no duplicate
   });
 });
@@ -494,18 +494,18 @@ describe('4. Recovery after restart: persisted state ahead of UI cache', () => {
     const emptyCache = new Map<string, TaskState>();
     expect(emptyCache.size).toBe(0);
 
-    // DB returns persisted state at revision 10
+    // DB returns persisted state at taskStateVersion 10
     const persisted = snapshotReplace(
       [
-        makeTask({ id: 't1', status: 'completed', revision: 10, execution: { exitCode: 0 } }),
-        makeTask({ id: 't2', status: 'running', revision: 5 }),
+        makeTask({ id: 't1', status: 'completed', taskStateVersion: 10, execution: { exitCode: 0 } }),
+        makeTask({ id: 't2', status: 'running', taskStateVersion: 5 }),
       ],
       qIds,
     );
 
     expect(persisted.size).toBe(2);
     expect(persisted.get('t1')!.status).toBe('completed');
-    expect(persisted.get('t1')!.revision).toBe(10);
+    expect(persisted.get('t1')!.taskStateVersion).toBe(10);
     expect(persisted.get('t2')!.status).toBe('running');
     expect(qIds.size).toBe(0); // quarantine cleared
   });
@@ -513,9 +513,9 @@ describe('4. Recovery after restart: persisted state ahead of UI cache', () => {
   it('deltas arriving after restart snapshot apply correctly', () => {
     const qIds = new Set<string>();
 
-    // Restart: DB snapshot at revision 5
+    // Restart: DB snapshot at taskStateVersion 5
     let tasks = snapshotReplace(
-      [makeTask({ id: 't1', status: 'running', revision: 5 })],
+      [makeTask({ id: 't1', status: 'running', taskStateVersion: 5 })],
       qIds,
     );
 
@@ -523,68 +523,68 @@ describe('4. Recovery after restart: persisted state ahead of UI cache', () => {
     const r1 = applyDelta(tasks, {
       type: 'updated', taskId: 't1',
       changes: { status: 'completed', execution: { exitCode: 0 } },
-      previousRevision: 5, revision: 6,
+      previousTaskStateVersion: 5, taskStateVersion: 6,
     }, qIds);
     tasks = r1.tasks;
     expect(tasks.get('t1')!.status).toBe('completed');
-    expect(tasks.get('t1')!.revision).toBe(6);
+    expect(tasks.get('t1')!.taskStateVersion).toBe(6);
     expect(r1.quarantined).toEqual([]);
   });
 
   it('stale delta (from before restart) is quarantined after DB snapshot', () => {
     const qIds = new Set<string>();
 
-    // Restart: DB snapshot at revision 10
+    // Restart: DB snapshot at taskStateVersion 10
     let tasks = snapshotReplace(
-      [makeTask({ id: 't1', status: 'completed', revision: 10 })],
+      [makeTask({ id: 't1', status: 'completed', taskStateVersion: 10 })],
       qIds,
     );
 
-    // A stale delta arrives (from before the restart, referring to old revision)
+    // A stale delta arrives (from before the restart, referring to old taskStateVersion)
     const r1 = applyDelta(tasks, {
       type: 'updated', taskId: 't1',
-      changes: { status: 'running' }, previousRevision: 3, revision: 4,
+      changes: { status: 'running' }, previousTaskStateVersion: 3, taskStateVersion: 4,
     }, qIds);
     tasks = r1.tasks;
 
-    // Quarantined — task remains at revision 10
+    // Quarantined — task remains at taskStateVersion 10
     expect(r1.quarantined).toEqual(['t1']);
     expect(tasks.get('t1')!.status).toBe('completed');
-    expect(tasks.get('t1')!.revision).toBe(10);
+    expect(tasks.get('t1')!.taskStateVersion).toBe(10);
   });
 
   it('quarantine from stale post-restart delta clears on next authoritative snapshot', () => {
     const qIds = new Set<string>();
 
-    // Restart: DB snapshot at revision 10
+    // Restart: DB snapshot at taskStateVersion 10
     let tasks = snapshotReplace(
-      [makeTask({ id: 't1', status: 'completed', revision: 10 })],
+      [makeTask({ id: 't1', status: 'completed', taskStateVersion: 10 })],
       qIds,
     );
 
     // Stale delta quarantines
     const r1 = applyDelta(tasks, {
       type: 'updated', taskId: 't1',
-      changes: { status: 'running' }, previousRevision: 3, revision: 4,
+      changes: { status: 'running' }, previousTaskStateVersion: 3, taskStateVersion: 4,
     }, qIds);
     tasks = r1.tasks;
     expect(qIds.has('t1')).toBe(true);
 
     // New authoritative snapshot (refreshTasks) clears quarantine
     tasks = snapshotReplace(
-      [makeTask({ id: 't1', status: 'failed', revision: 12 })],
+      [makeTask({ id: 't1', status: 'failed', taskStateVersion: 12 })],
       qIds,
     );
     expect(qIds.size).toBe(0);
     expect(tasks.get('t1')!.status).toBe('failed');
-    expect(tasks.get('t1')!.revision).toBe(12);
+    expect(tasks.get('t1')!.taskStateVersion).toBe(12);
 
     // Normal deltas resume
     const r2 = applyDelta(tasks, {
       type: 'updated', taskId: 't1',
-      changes: { execution: { error: 'retry-1' } }, previousRevision: 12, revision: 13,
+      changes: { execution: { error: 'retry-1' } }, previousTaskStateVersion: 12, taskStateVersion: 13,
     }, qIds);
-    expect(r2.tasks.get('t1')!.revision).toBe(13);
+    expect(r2.tasks.get('t1')!.taskStateVersion).toBe(13);
     expect(r2.quarantined).toEqual([]);
   });
 
@@ -594,8 +594,8 @@ describe('4. Recovery after restart: persisted state ahead of UI cache', () => {
     // Restart: t1 completed (ahead), t2 pending (just created by recovery)
     let tasks = snapshotReplace(
       [
-        makeTask({ id: 't1', status: 'completed', revision: 8, execution: { exitCode: 0 } }),
-        makeTask({ id: 't2', status: 'pending', revision: 1 }),
+        makeTask({ id: 't1', status: 'completed', taskStateVersion: 8, execution: { exitCode: 0 } }),
+        makeTask({ id: 't2', status: 'pending', taskStateVersion: 1 }),
       ],
       qIds,
     );
@@ -603,7 +603,7 @@ describe('4. Recovery after restart: persisted state ahead of UI cache', () => {
     // Delta for t2 (normal flow after restart)
     const r1 = applyDelta(tasks, {
       type: 'updated', taskId: 't2',
-      changes: { status: 'running' }, previousRevision: 1, revision: 2,
+      changes: { status: 'running' }, previousTaskStateVersion: 1, taskStateVersion: 2,
     }, qIds);
     tasks = r1.tasks;
     expect(tasks.get('t2')!.status).toBe('running');
@@ -612,7 +612,7 @@ describe('4. Recovery after restart: persisted state ahead of UI cache', () => {
     // Stale delta for t1 (from before restart) — quarantined
     const r2 = applyDelta(tasks, {
       type: 'updated', taskId: 't1',
-      changes: { status: 'running' }, previousRevision: 2, revision: 3,
+      changes: { status: 'running' }, previousTaskStateVersion: 2, taskStateVersion: 3,
     }, qIds);
     tasks = r2.tasks;
     expect(r2.quarantined).toEqual(['t1']);
@@ -621,7 +621,7 @@ describe('4. Recovery after restart: persisted state ahead of UI cache', () => {
     // t2 continues normally
     const r3 = applyDelta(tasks, {
       type: 'updated', taskId: 't2',
-      changes: { status: 'completed' }, previousRevision: 2, revision: 3,
+      changes: { status: 'completed' }, previousTaskStateVersion: 2, taskStateVersion: 3,
     }, qIds);
     tasks = r3.tasks;
     expect(tasks.get('t2')!.status).toBe('completed');
@@ -630,11 +630,11 @@ describe('4. Recovery after restart: persisted state ahead of UI cache', () => {
     // Authoritative created for t1 clears quarantine
     const r4 = applyDelta(tasks, {
       type: 'created',
-      task: makeTask({ id: 't1', status: 'completed', revision: 8, execution: { exitCode: 0 } }),
+      task: makeTask({ id: 't1', status: 'completed', taskStateVersion: 8, execution: { exitCode: 0 } }),
     }, qIds);
     tasks = r4.tasks;
     expect(qIds.has('t1')).toBe(false);
-    expect(tasks.get('t1')!.revision).toBe(8);
+    expect(tasks.get('t1')!.taskStateVersion).toBe(8);
   });
 
   it('bootstrap preload + snapshot + deltas all converge without duplicates', () => {
@@ -642,27 +642,27 @@ describe('4. Recovery after restart: persisted state ahead of UI cache', () => {
 
     // Step 1: Bootstrap preload (window.__INVOKER_BOOTSTRAP__)
     const bootstrap = new Map<string, TaskState>();
-    const bootTask = makeTask({ id: 't1', status: 'pending', revision: 1 });
+    const bootTask = makeTask({ id: 't1', status: 'pending', taskStateVersion: 1 });
     bootstrap.set('t1', bootTask);
 
     // Step 2: Async getTasks returns newer state (simulating race)
     const snapshot = snapshotReplace(
-      [makeTask({ id: 't1', status: 'running', revision: 3 })],
+      [makeTask({ id: 't1', status: 'running', taskStateVersion: 3 })],
       qIds,
     );
     expect(snapshot.get('t1')!.status).toBe('running');
-    expect(snapshot.get('t1')!.revision).toBe(3);
+    expect(snapshot.get('t1')!.taskStateVersion).toBe(3);
     expect(snapshot.size).toBe(1); // no duplicate from bootstrap
 
-    // Step 3: Delta arrives continuing from snapshot revision
+    // Step 3: Delta arrives continuing from snapshot taskStateVersion
     let tasks = snapshot;
     const r = applyDelta(tasks, {
       type: 'updated', taskId: 't1',
-      changes: { status: 'completed' }, previousRevision: 3, revision: 4,
+      changes: { status: 'completed' }, previousTaskStateVersion: 3, taskStateVersion: 4,
     }, qIds);
     tasks = r.tasks;
     expect(tasks.get('t1')!.status).toBe('completed');
-    expect(tasks.get('t1')!.revision).toBe(4);
+    expect(tasks.get('t1')!.taskStateVersion).toBe(4);
     expect(tasks.size).toBe(1);
   });
 });

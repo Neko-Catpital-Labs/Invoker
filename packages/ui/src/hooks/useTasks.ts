@@ -44,7 +44,7 @@ export function useTasks(): UseTasksResult {
   const workflowsRef = useRef(workflows);
   workflowsRef.current = workflows;
   const deltaPipelineRef = useRef<TaskDeltaPipeline | null>(null);
-  /** Task IDs quarantined due to revision gaps, awaiting authoritative recovery. */
+  /** Task IDs quarantined due to task-state-version gaps, awaiting authoritative recovery. */
   const quarantinedIdsRef = useRef(new Set<string>());
   const deltaPerfRef = useRef({
     received: 0,

@@ -1,13 +1,13 @@
 /**
- * Revision-aware delta application for the renderer task map.
+ * Task-state-version-aware delta application for the renderer task map.
  *
  * Delta types:
  * - created: unconditionally sets the task (authoritative replacement).
  *   After main-process gap recovery, the main process sends a `created`
  *   delta with the authoritative snapshot — the renderer must overwrite
  *   any stale local state.
- * - updated: merges changes only when `previousRevision` matches the
- *   local task revision.  On mismatch or unknown task, the task is
+ * - updated: merges changes only when `previousTaskStateVersion` matches the
+ *   local task state version. On mismatch or unknown task, the task is
  *   quarantined (deltas are dropped until an authoritative `created`
  *   delta arrives from the main process).
  * - removed: deletes the task and clears quarantine state.
@@ -17,16 +17,16 @@ import type { TaskState, TaskDelta } from '../types.js';
 
 export interface ApplyDeltaResult {
   tasks: Map<string, TaskState>;
-  /** Task IDs that were quarantined due to revision gaps. */
+  /** Task IDs that were quarantined due to taskStateVersion gaps. */
   quarantined: string[];
 }
 
 /**
- * Apply a single delta to the task map with revision validation.
+ * Apply a single delta to the task map with taskStateVersion validation.
  *
  * The `quarantinedIds` set tracks tasks awaiting authoritative recovery.
  * Callers must maintain this set across calls; `created` deltas clear
- * quarantine, `updated` deltas with revision gaps add to it.
+ * quarantine, `updated` deltas with taskStateVersion gaps add to it.
  */
 export function applyDelta(
   tasks: Map<string, TaskState>,
@@ -53,19 +53,19 @@ export function applyDelta(
 
       const existing = next.get(taskId);
 
-      if (!existing || existing.revision !== delta.previousRevision) {
-        // Revision gap or unknown task — quarantine.
+      if (!existing || existing.taskStateVersion !== delta.previousTaskStateVersion) {
+        // Task-state-version gap or unknown task — quarantine.
         quarantinedIds.add(taskId);
         result.quarantined.push(taskId);
         break;
       }
 
-      // Revision matches — apply incremental merge.
+      // Task-state version matches — apply incremental merge.
       const { config: cfgChanges, execution: execChanges, ...topLevel } = delta.changes;
       next.set(taskId, {
         ...existing,
         ...topLevel,
-        revision: delta.revision,
+        taskStateVersion: delta.taskStateVersion,
         config: { ...existing.config, ...cfgChanges },
         execution: { ...existing.execution, ...execChanges },
       });

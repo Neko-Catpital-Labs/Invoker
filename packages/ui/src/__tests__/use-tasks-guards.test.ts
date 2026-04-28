@@ -16,7 +16,7 @@ function makeTask(overrides: Partial<TaskState> & { id: string }): TaskState {
     createdAt: new Date('2025-01-01'),
     config: {},
     execution: {},
-    revision: 1,
+    taskStateVersion: 1,
     ...overrides,
   };
 }
@@ -47,7 +47,7 @@ describe('useTasks guard logic', () => {
         ['t1', makeTask({ id: 't1' })],
       ]);
       const qIds = new Set<string>();
-      const delta: TaskDelta = { type: 'removed', taskId: 't1', previousRevision: 1 };
+      const delta: TaskDelta = { type: 'removed', taskId: 't1', previousTaskStateVersion: 1 };
 
       const result = applyDelta(prev, delta, qIds);
 
@@ -73,7 +73,7 @@ describe('useTasks guard logic', () => {
         ['t2', makeTask({ id: 't2' })],
       ]);
       const qIds = new Set<string>();
-      const delta: TaskDelta = { type: 'removed', taskId: 't1', previousRevision: 1 };
+      const delta: TaskDelta = { type: 'removed', taskId: 't1', previousTaskStateVersion: 1 };
 
       const result = applyDelta(prev, delta, qIds);
 
