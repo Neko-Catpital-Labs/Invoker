@@ -267,6 +267,26 @@ const invokerConfig: InvokerConfig = (() => {
   }
 })();
 
+function getSafeInvokerConfigForLogging(config: InvokerConfig): Record<string, unknown> {
+  const safeConfig = { ...config } as Record<string, unknown> & {
+    docker?: InvokerConfig['docker'];
+    imageStorage?: InvokerConfig['imageStorage'];
+    r2?: unknown;
+  };
+  delete safeConfig.r2;
+  if (safeConfig.imageStorage) {
+    safeConfig.imageStorage = {
+      ...safeConfig.imageStorage,
+      accessKeyId: '<redacted>',
+      secretAccessKey: '<redacted>',
+    };
+  }
+  if (safeConfig.docker?.secretsFile) {
+    safeConfig.docker = { ...safeConfig.docker, secretsFile: '<redacted>' };
+  }
+  return safeConfig;
+}
+
 const effectiveMaxConcurrency = resolveEffectiveMaxConcurrency(
   invokerConfig.maxConcurrency,
   DEFAULT_WORKTREE_MAX_CONCURRENCY,
@@ -380,8 +400,11 @@ async function initServices(options?: InitServicesOptions): Promise<void> {
 
   const startupSyncMode = options?.startupSyncMode ?? 'all';
   const initLog = isHeadless
-    ? (...args: unknown[]) => { process.stderr.write(args.join(' ') + '\n'); }
-    : (msg: string) => { logger.info(msg, { module: 'init' }); };
+    ? (msg: string, meta?: Record<string, unknown>) => {
+      process.stderr.write(meta ? `${msg} ${JSON.stringify(meta)}\n` : `${msg}\n`);
+    }
+    : (msg: string, meta?: Record<string, unknown>) => { logger.info(msg, { ...meta, module: 'init' }); };
+  initLog('Effective configuration', { config: getSafeInvokerConfigForLogging(invokerConfig) });
   const workflows = persistence.listWorkflows();
   if (startupSyncMode === 'all') {
     try {
@@ -2404,6 +2427,7 @@ if (isHeadless) {
     logger.info(`Database: ${dbPath}`, { module: 'init' });
     logger.info(`Repo root: ${repoRoot}`, { module: 'init' });
     logger.info(`Config: disableAutoRunOnStartup=${invokerConfig.disableAutoRunOnStartup ?? false}`, { module: 'init' });
+    logger.info('Effective configuration', { config: getSafeInvokerConfigForLogging(invokerConfig), module: 'startup' });
     recordStartupMark('startup.ready-for-window');
 
     // Forward deltas to renderer and keep snapshot cache in sync so
