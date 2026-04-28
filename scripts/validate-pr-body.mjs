@@ -1,44 +1,9 @@
 #!/usr/bin/env node
 
 import { readFileSync } from 'node:fs';
+import { validateCanonicalPrBody as validatePrBody } from '../packages/execution-engine/src/canonical-pr-body.js';
 
-const REQUIRED_SECTIONS = ['## Summary', '## Test Plan', '## Revert Plan'];
-const DISCOURAGED_HEADINGS = ['## Testing', '## Notes'];
-
-export function validatePrBody(body) {
-  const errors = [];
-  const trimmed = body.trim();
-
-  if (!trimmed) {
-    return [
-      'PR body is empty. Use the canonical schema: ## Summary, ## Test Plan, ## Revert Plan, plus optional ## Architecture.',
-    ];
-  }
-
-  for (const heading of REQUIRED_SECTIONS) {
-    if (!trimmed.includes(heading)) {
-      errors.push(`Missing required section: ${heading}`);
-    }
-  }
-
-  for (const heading of DISCOURAGED_HEADINGS) {
-    if (trimmed.includes(heading)) {
-      errors.push(
-        `Unsupported section: ${heading}. Do not use the lightweight PR format; use ## Test Plan and ## Revert Plan instead.`,
-      );
-    }
-  }
-
-  if (trimmed.includes('## Architecture')) {
-    for (const subsection of ['### Before', '### After']) {
-      if (!trimmed.includes(subsection)) {
-        errors.push(`Architecture section is missing required subsection: ${subsection}`);
-      }
-    }
-  }
-
-  return errors;
-}
+export { validatePrBody };
 
 function usage() {
   console.error(`Usage: node scripts/validate-pr-body.mjs (--body-file <file> | --body <markdown>)

@@ -17,6 +17,7 @@ import type { TaskRunnerCallbacks } from './task-runner.js';
 import type { MergeGateProvider } from './merge-gate-provider.js';
 import type { ReviewProviderRegistry } from './review-provider-registry.js';
 import { normalizeBranchForGithubCli } from './github-branch-ref.js';
+import { renderCanonicalPrBody } from './canonical-pr-body.js';
 
 // ── Trace logging ────────────────────────────────────────
 
@@ -435,6 +436,16 @@ export async function executeMergeNodeImpl(
           gateWorkspacePath!,
         );
 
+        const prBody = await authorPrBodyForMerge(host, {
+          workflowId,
+          mergeNodeTaskId: task.id,
+          title: workflow?.name ?? 'Workflow',
+          baseBranch,
+          featureBranch,
+          workflowSummary: fullSummary ?? '',
+          cwd: gateWorkspacePath!,
+        });
+
         // Create PR via provider (consolidation already done above).
         // Use the gate clone dir so gh CLI resolves the correct GitHub remote.
         const result = await host.mergeGateProvider.createReview({
@@ -442,7 +453,7 @@ export async function executeMergeNodeImpl(
           featureBranch,
           title: workflow?.name ?? 'Workflow',
           cwd: gateWorkspacePath!,
-          body: fullSummary,
+          body: prBody,
         });
         console.log(`[merge] Created GitHub PR: ${result.url}`);
 
@@ -908,12 +919,22 @@ export async function publishAfterFixImpl(
         throw new Error('mergeMode is "external_review" but no review provider configured');
       }
 
+      const prBody = await authorPrBodyForMerge(host, {
+        workflowId,
+        mergeNodeTaskId: task.id,
+        title: workflow?.name ?? 'Workflow',
+        baseBranch,
+        featureBranch,
+        workflowSummary: fullSummary ?? '',
+        cwd: consolidateDir,
+      });
+
       const result = await host.mergeGateProvider.createReview({
         baseBranch,
         featureBranch,
         title: workflow?.name ?? 'Workflow',
         cwd: consolidateDir,
-        body: fullSummary,
+        body: prBody,
       });
       console.log(`[merge] Post-fix: created/updated GitHub PR: ${result.url}`);
 
@@ -995,6 +1016,128 @@ export async function publishAfterFixImpl(
   }
 }
 
+function buildTaskBreakdownSection(workflowTasks: TaskState[]): string {
+  const lines = [
+    '<details>',
+    '<summary>Task breakdown</summary>',
+    '',
+    '| Task | Description | Status |',
+    '|------|-------------|--------|',
+  ];
+  for (const t of workflowTasks) {
+    let statusDisplay: string = t.status;
+    if (t.status === 'completed' && t.config.command) {
+      statusDisplay = 'completed (passed)';
+    } else if (t.status === 'failed' && t.config.command) {
+      statusDisplay = 'failed (failed)';
+    }
+    lines.push(`| ${t.id} | ${t.description} | ${statusDisplay} |`);
+  }
+  lines.push('', '</details>');
+  return lines.join('\n');
+}
+
+async function buildFileChangesSection(
+  completed: TaskState[],
+  workflow: ReturnType<MergeRunnerHost['persistence']['loadWorkflow']> | undefined,
+  host: MergeRunnerHost,
+): Promise<string> {
+  if (completed.length === 0) {
+    return '';
+  }
+
+  const mirrorCwd = workflow?.repoUrl && host.ensureRepoMirrorPath
+    ? await host.ensureRepoMirrorPath(workflow.repoUrl)
+    : undefined;
+
+  const lines = [
+    '<details>',
+    '<summary>File changes per task</summary>',
+    '',
+  ];
+  for (const t of completed) {
+    if (!t.execution.branch) {
+      continue;
+    }
+    lines.push(`### ${t.id} — ${t.description}`);
+    try {
+      const stat = await host.gitDiffStat(t.execution.branch, mirrorCwd ?? undefined);
+      if (stat) {
+        lines.push(stat);
+      }
+    } catch {
+      // Silently skip if git diff fails
+    }
+    lines.push('');
+  }
+  lines.push('</details>');
+  return lines.join('\n');
+}
+
+function buildConflictSection(claudeResolved: TaskState[]): string {
+  if (claudeResolved.length === 0) {
+    return '';
+  }
+
+  const lines = ['## Conflict Resolutions'];
+  for (const t of claudeResolved) {
+    lines.push(`- **${t.id}**: Resolved with Claude — ${t.description}`);
+  }
+  return lines.join('\n');
+}
+
+function buildFailedSection(failed: TaskState[]): string {
+  if (failed.length === 0) {
+    return '';
+  }
+
+  const lines = ['## Failed Tasks'];
+  for (const t of failed) {
+    lines.push(`- **${t.id}**: ${t.description} — ${t.execution.error ?? 'unknown error'}`);
+  }
+  return lines.join('\n');
+}
+
+function buildSkippedSection(skipped: TaskState[]): string {
+  if (skipped.length === 0) {
+    return '';
+  }
+
+  const lines = ['## Skipped Tasks'];
+  for (const t of skipped) {
+    lines.push(`- **${t.id}**: ${t.description}`);
+  }
+  return lines.join('\n');
+}
+
+function buildTestPlanSection(workflowTasks: TaskState[]): string {
+  const commandTasks = workflowTasks.filter((t) => t.config.command);
+  if (commandTasks.length === 0) {
+    return '- No command tasks were run in this workflow.';
+  }
+
+  const lines: string[] = [];
+  for (const t of commandTasks) {
+    if (t.status === 'completed') {
+      lines.push(`- [x] \`${t.config.command}\` — passed`);
+      continue;
+    }
+    if (t.status === 'failed') {
+      lines.push(`- [ ] \`${t.config.command}\` — failed (exit ${t.execution.exitCode ?? 'unknown'})`);
+    }
+  }
+  return lines.join('\n');
+}
+
+function buildCanonicalRevertPlan(): string {
+  return [
+    '- Safe to revert? Yes',
+    '- Revert command: `git revert <merge-sha>`',
+    '- Post-revert steps: None',
+    '- Data migration? No',
+  ].join('\n');
+}
+
 export async function buildMergeSummaryImpl(
   host: MergeRunnerHost,
   workflowId: string,
@@ -1016,100 +1159,27 @@ export async function buildMergeSummaryImpl(
   const workflow = host.persistence.loadWorkflow(workflowId);
   const workflowName = workflow?.name ?? 'Workflow';
   const description = workflow?.description;
-
-  const lines: string[] = [];
-
-  lines.push('## Summary');
-
-  // Add description if present
-  if (description && description.trim()) {
-    lines.push(description);
-    lines.push('');
-    lines.push('---');
-  }
-
-  lines.push(
+  const summaryBody = [
+    description?.trim() ?? '',
+    description?.trim() ? '---' : '',
     `${workflowName} — ${completed.length} tasks completed, ${failed.length} failed, ${skipped.length} skipped`,
-  );
-  lines.push('');
-
-  // Task breakdown table
-  lines.push('<details>');
-  lines.push('<summary>Task breakdown</summary>');
-  lines.push('');
-  lines.push('| Task | Description | Status |');
-  lines.push('|------|-------------|--------|');
-  for (const t of workflowTasks) {
-    let statusDisplay: string = t.status;
-    if (t.status === 'completed' && t.config.command) {
-      statusDisplay = 'completed (passed)';
-    } else if (t.status === 'failed' && t.config.command) {
-      statusDisplay = 'failed (failed)';
-    }
-    lines.push(`| ${t.id} | ${t.description} | ${statusDisplay} |`);
-  }
-  lines.push('');
-  lines.push('</details>');
-  lines.push('');
-
-  // File changes per task
-  if (completed.length > 0) {
-    // Resolve pool mirror path so gitDiffStat runs against the correct repo
-    const mirrorCwd = workflow?.repoUrl && host.ensureRepoMirrorPath
-      ? await host.ensureRepoMirrorPath(workflow.repoUrl)
-      : undefined;
-
-    lines.push('<details>');
-    lines.push('<summary>File changes per task</summary>');
-    lines.push('');
-    for (const t of completed) {
-      if (t.execution.branch) {
-        lines.push(`### ${t.id} — ${t.description}`);
-        try {
-          const stat = await host.gitDiffStat(t.execution.branch, mirrorCwd ?? undefined);
-          if (stat) {
-            lines.push(stat);
-          }
-        } catch {
-          // Silently skip if git diff fails
-        }
-        lines.push('');
-      }
-    }
-    lines.push('</details>');
-    lines.push('');
-  }
-
-  if (claudeResolved.length > 0) {
-    lines.push('## Conflict Resolutions');
-    for (const t of claudeResolved) {
-      lines.push(`- **${t.id}**: Resolved with Claude — ${t.description}`);
-    }
-    lines.push('');
-  }
-
-  if (failed.length > 0) {
-    lines.push('## Failed Tasks');
-    for (const t of failed) {
-      lines.push(
-        `- **${t.id}**: ${t.description} — ${t.execution.error ?? 'unknown error'}`,
-      );
-    }
-    lines.push('');
-  }
-
-  if (skipped.length > 0) {
-    lines.push('## Skipped Tasks');
-    for (const t of skipped) {
-      lines.push(`- **${t.id}**: ${t.description}`);
-    }
-    lines.push('');
-  }
+  ].filter(Boolean).join('\n\n');
 
   const MAX_BODY_LENGTH = 60_000;
-  let result = lines.join('\n');
+  const result = renderCanonicalPrBody({
+    summary: summaryBody,
+    testPlan: buildTestPlanSection(workflowTasks),
+    revertPlan: buildCanonicalRevertPlan(),
+    additionalSections: [
+      buildTaskBreakdownSection(workflowTasks),
+      await buildFileChangesSection(completed, workflow, host),
+      buildConflictSection(claudeResolved),
+      buildFailedSection(failed),
+      buildSkippedSection(skipped),
+    ],
+  });
   if (result.length > MAX_BODY_LENGTH) {
-    result = result.slice(0, MAX_BODY_LENGTH) + '\n\n---\n*(Summary truncated — exceeded GitHub PR body limit)*';
+    return result.slice(0, MAX_BODY_LENGTH) + '\n\n---\n*(Summary truncated — exceeded GitHub PR body limit)*';
   }
   return result;
 }

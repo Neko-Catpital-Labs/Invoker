@@ -6,6 +6,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { TaskRunner } from '../task-runner.js';
 import { collectTransitiveNonMergeTaskIds } from '../merge-runner.js';
 import { SshExecutor } from '../ssh-executor.js';
+import { validateCanonicalPrBody } from '../canonical-pr-body.js';
 import type { TaskState } from '@invoker/workflow-core';
 import type { WorkResponse, Logger } from '@invoker/contracts';
 import { EventEmitter } from 'events';
@@ -2121,6 +2122,11 @@ describe('TaskRunner', () => {
       };
       (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
       (executor as any).removeMergeWorktree = async () => {};
+      (executor as any).authorPrBodyWithSkill = vi.fn().mockResolvedValue({
+        body: '## Summary\n\nExternal review body',
+        sessionId: 'sess-pr-ext-1',
+        agentName: 'codex',
+      });
 
       const result = await executor.rebaseTaskBranches('wf-1', 'master');
 
@@ -2301,6 +2307,11 @@ describe('TaskRunner', () => {
       };
       (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
       (executor as any).removeMergeWorktree = async () => {};
+      (executor as any).authorPrBodyWithSkill = vi.fn().mockResolvedValue({
+        body: '## Summary\n\nExternal review body',
+        sessionId: 'sess-pr-ext-0',
+        agentName: 'codex',
+      });
 
       const mergeTask = makeTask({
         id: '__merge__wf-1',
@@ -2460,6 +2471,11 @@ describe('TaskRunner', () => {
       };
       (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
       (executor as any).removeMergeWorktree = async () => {};
+      (executor as any).authorPrBodyWithSkill = vi.fn().mockResolvedValue({
+        body: '## Summary\n\nExternal review body',
+        sessionId: 'sess-pr-ext-2',
+        agentName: 'codex',
+      });
 
       const mergeTask = makeTask({
         id: '__merge__wf-1',
@@ -2490,8 +2506,15 @@ describe('TaskRunner', () => {
           featureBranch: 'plan/feature',
           title: 'Test Workflow',
           cwd: '/tmp/mock-wt',
+          body: '## Summary\n\nExternal review body',
         }),
       );
+      expect((executor as any).authorPrBodyWithSkill).toHaveBeenCalledWith(expect.objectContaining({
+        title: 'Test Workflow',
+        baseBranch: 'master',
+        featureBranch: 'plan/feature',
+        cwd: '/tmp/mock-wt',
+      }));
 
       // Should set task awaiting approval with PR metadata (not handleWorkerResponse)
       expect(orchestrator.setTaskAwaitingApproval).toHaveBeenCalledWith('__merge__wf-1', expect.objectContaining({
@@ -2642,6 +2665,11 @@ describe('TaskRunner', () => {
       (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
       (executor as any).removeMergeWorktree = async () => {};
       (executor as any).startPrPolling = vi.fn();
+      (executor as any).authorPrBodyWithSkill = vi.fn().mockResolvedValue({
+        body: '## Summary\n\nExternal review body',
+        sessionId: 'sess-pr-ext-3',
+        agentName: 'codex',
+      });
 
       const mergeTask = makeTask({
         id: '__merge__wf-1',
@@ -2721,6 +2749,11 @@ describe('TaskRunner', () => {
       (executor as any).createMergeWorktree = createMergeWorktreeSpy;
       (executor as any).removeMergeWorktree = async () => {};
       (executor as any).startPrPolling = vi.fn();
+      (executor as any).authorPrBodyWithSkill = vi.fn().mockResolvedValue({
+        body: '## Summary\n\nExternal review body',
+        sessionId: 'sess-pr-ext-4',
+        agentName: 'codex',
+      });
 
       const mergeTask = makeTask({
         id: '__merge__wf-1',
@@ -2786,6 +2819,11 @@ describe('TaskRunner', () => {
       (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
       (executor as any).removeMergeWorktree = async () => {};
       (executor as any).startPrPolling = vi.fn();
+      (executor as any).authorPrBodyWithSkill = vi.fn().mockResolvedValue({
+        body: '## Summary\n\nExternal review body',
+        sessionId: 'sess-pr-ext-5',
+        agentName: 'codex',
+      });
 
       const mergeTask = makeTask({
         id: '__merge__wf-1',
@@ -2956,6 +2994,11 @@ describe('TaskRunner', () => {
       (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
       (executor as any).removeMergeWorktree = async () => {};
       (executor as any).startPrPolling = vi.fn();
+      (executor as any).authorPrBodyWithSkill = vi.fn().mockResolvedValue({
+        body: '## Summary\n\nExternal review body',
+        sessionId: 'sess-pr-ext-6',
+        agentName: 'codex',
+      });
 
       const mergeTask = makeTask({
         id: '__merge__wf-1',
@@ -3187,7 +3230,7 @@ describe('TaskRunner', () => {
       );
     });
 
-    it('executeMergeNode passes summary body to createReview in external_review mode', async () => {
+    it('executeMergeNode passes skill-authored body to createReview in external_review mode', async () => {
       const allTasks = [
         makeTask({ id: 't1', config: { workflowId: 'wf-1' }, status: 'completed', execution: { branch: 'experiment/t1' } }),
       ];
@@ -3234,6 +3277,11 @@ describe('TaskRunner', () => {
       (executor as any).removeMergeWorktree = async () => {};
       (executor as any).startPrPolling = vi.fn();
       (executor as any).buildMergeSummary = vi.fn().mockResolvedValue('## Summary\nTest summary');
+      (executor as any).authorPrBodyWithSkill = vi.fn().mockResolvedValue({
+        body: '## Summary\n\nAuthored external review body',
+        sessionId: 'sess-pr-ext-2',
+        agentName: 'codex',
+      });
 
       const mergeTask = makeTask({
         id: '__merge__wf-1',
@@ -3244,8 +3292,13 @@ describe('TaskRunner', () => {
 
       await (executor as any).executeMergeNode(mergeTask);
 
+      expect((executor as any).authorPrBodyWithSkill).toHaveBeenCalledWith(expect.objectContaining({
+        title: 'Test Workflow',
+        baseBranch: 'master',
+        featureBranch: 'plan/feature',
+      }));
       expect(mergeGateProvider.createReview).toHaveBeenCalledWith(
-        expect.objectContaining({ body: '## Summary\nTest summary' }),
+        expect.objectContaining({ body: '## Summary\n\nAuthored external review body' }),
       );
       expect(orchestrator.setTaskAwaitingApproval).toHaveBeenCalledWith(
         '__merge__wf-1',
@@ -3771,10 +3824,7 @@ describe('TaskRunner', () => {
       const result = await executor.buildMergeSummary('wf-1');
 
       expect(result).toContain('## Summary');
-      const lines = result.split('\n');
-      const summaryIdx = lines.indexOf('## Summary');
-      expect(lines[summaryIdx + 1]).toContain('Feature Workflow — 1 tasks completed');
-      expect(lines[summaryIdx + 1]).not.toContain('---');
+      expect(result).toContain('Feature Workflow — 1 tasks completed');
       expect(result).not.toMatch(/\n---\n/);
     });
 
@@ -3914,6 +3964,199 @@ describe('TaskRunner', () => {
       expect(result).toContain('<details>');
       expect(result).not.toContain('## Conflict Resolutions');
       expect(result).toContain('## Failed Tasks');
+    });
+
+    it('includes Test Plan with command task results', async () => {
+      const tasks = [
+        makeTask({
+          id: 'pass-test',
+          description: 'Run passing tests',
+          status: 'completed',
+          config: { workflowId: 'wf-1', command: 'pnpm test' },
+          execution: { branch: 'experiment/pass-test', exitCode: 0 },
+        }),
+        makeTask({
+          id: 'fail-test',
+          description: 'Run failing tests',
+          status: 'failed',
+          config: { workflowId: 'wf-1', command: 'pnpm lint' },
+          execution: { exitCode: 1 },
+        }),
+      ];
+      const { executor } = createExecutorForSummary(tasks, { name: 'Workflow' });
+      (executor as any).gitDiffStat = vi.fn();
+
+      const result = await executor.buildMergeSummary('wf-1');
+
+      expect(result).toContain('## Test Plan');
+      expect(result).toContain('- [x]');
+      expect(result).toContain('- [ ]');
+      expect(result).toContain('failed (exit 1)');
+    });
+
+    it('renders a placeholder Test Plan when no command tasks ran', async () => {
+      const tasks = [
+        makeTask({
+          id: 'prompt-1',
+          description: 'First prompt task',
+          status: 'completed',
+          config: { workflowId: 'wf-1' },
+          execution: { branch: 'experiment/prompt-1' },
+        }),
+        makeTask({
+          id: 'prompt-2',
+          description: 'Second prompt task',
+          status: 'pending',
+          config: { workflowId: 'wf-1' },
+        }),
+      ];
+      const { executor } = createExecutorForSummary(tasks, { name: 'Workflow' });
+      (executor as any).gitDiffStat = vi.fn();
+
+      const result = await executor.buildMergeSummary('wf-1');
+
+      expect(result).toContain('## Test Plan');
+      expect(result).toContain('- No command tasks were run in this workflow.');
+    });
+
+    it('includes Revert Plan for all workflows', async () => {
+      const tasks = [
+        makeTask({
+          id: 'task-1',
+          description: 'Completed task',
+          status: 'completed',
+          config: { workflowId: 'wf-1' },
+          execution: { branch: 'experiment/task-1' },
+        }),
+      ];
+      const { executor } = createExecutorForSummary(tasks, { name: 'Workflow' });
+      (executor as any).gitDiffStat = vi.fn();
+
+      const result = await executor.buildMergeSummary('wf-1');
+
+      expect(result).toContain('## Revert Plan');
+      expect(result).toContain('Safe to revert?');
+      expect(result).toContain('Data migration?');
+    });
+
+    it('omits Architecture when merge metadata does not include before/after flow context', async () => {
+      const tasks = [
+        makeTask({
+          id: 'taskA',
+          description: 'Task A',
+          status: 'completed',
+          config: { workflowId: 'wf-1' },
+          execution: { branch: 'experiment/taskA' },
+        }),
+        makeTask({
+          id: 'taskB',
+          description: 'Task B',
+          status: 'completed',
+          config: { workflowId: 'wf-1' },
+          execution: { branch: 'experiment/taskB' },
+        }),
+        makeTask({
+          id: 'taskC',
+          description: 'Task C',
+          status: 'completed',
+          dependencies: ['taskA', 'taskB'],
+          config: { workflowId: 'wf-1' },
+          execution: { branch: 'experiment/taskC' },
+        }),
+      ];
+      const { executor } = createExecutorForSummary(tasks, { name: 'Workflow' });
+      (executor as any).gitDiffStat = vi.fn();
+
+      const result = await executor.buildMergeSummary('wf-1');
+
+      expect(result).not.toContain('## Architecture');
+    });
+
+    it('omits Architecture for fewer than 3 tasks', async () => {
+      const tasks = [
+        makeTask({
+          id: 'task-1',
+          description: 'Task one',
+          status: 'completed',
+          config: { workflowId: 'wf-1' },
+          execution: { branch: 'experiment/task-1' },
+        }),
+        makeTask({
+          id: 'task-2',
+          description: 'Task two',
+          status: 'completed',
+          config: { workflowId: 'wf-1' },
+          execution: { branch: 'experiment/task-2' },
+        }),
+      ];
+      const { executor } = createExecutorForSummary(tasks, { name: 'Workflow' });
+      (executor as any).gitDiffStat = vi.fn();
+
+      const result = await executor.buildMergeSummary('wf-1');
+
+      expect(result).not.toContain('## Architecture');
+    });
+
+    it('keeps mermaid in Summary without synthesizing an Architecture section', async () => {
+      const tasks = [
+        makeTask({
+          id: 'task-1',
+          description: 'Task one',
+          status: 'completed',
+          config: { workflowId: 'wf-1' },
+          execution: { branch: 'experiment/task-1' },
+        }),
+      ];
+      const { executor } = createExecutorForSummary(tasks, {
+        name: 'Workflow',
+        description: [
+          'System overview:',
+          '',
+          '```mermaid',
+          'graph TD',
+          '  A --> B',
+          '```',
+        ].join('\n'),
+      });
+      (executor as any).gitDiffStat = vi.fn();
+
+      const result = await executor.buildMergeSummary('wf-1');
+
+      expect(result).toContain('## Summary');
+      expect(result).toContain('```mermaid');
+      expect(result).not.toContain('## Architecture');
+    });
+
+    it('produces a canonical PR body shape for merge summaries', async () => {
+      const tasks = [
+        makeTask({
+          id: 'wf-123/my-task',
+          description: 'Special task',
+          status: 'completed',
+          config: { workflowId: 'wf-1' },
+          execution: { branch: 'experiment/special-task' },
+        }),
+        makeTask({
+          id: 'dep-task',
+          description: 'Dependency task',
+          status: 'completed',
+          config: { workflowId: 'wf-1' },
+          execution: { branch: 'experiment/dep-task' },
+        }),
+        makeTask({
+          id: 'final-task',
+          description: 'Final task',
+          status: 'completed',
+          dependencies: ['wf-123/my-task', 'dep-task'],
+          config: { workflowId: 'wf-1' },
+          execution: { branch: 'experiment/final-task' },
+        }),
+      ];
+      const { executor } = createExecutorForSummary(tasks, { name: 'Workflow' });
+      (executor as any).gitDiffStat = vi.fn();
+
+      const result = await executor.buildMergeSummary('wf-1');
+      expect(validateCanonicalPrBody(result)).toEqual([]);
     });
   });
 
@@ -5547,6 +5790,7 @@ describe('TaskRunner', () => {
       process.env.HOME = tempHome;
       mkdirSync(join(tempHome, '.codex', 'skills', 'invoker-make-pr'), { recursive: true });
       writeFileSync(join(tempHome, '.codex', 'skills', 'invoker-make-pr', 'SKILL.md'), '# make-pr\n');
+      let capturedPrompt = '';
 
       try {
         const executor = new TaskRunner({
@@ -5561,11 +5805,14 @@ describe('TaskRunner', () => {
               name: 'codex',
               stdinMode: 'ignore',
               linuxTerminalTail: 'exec_bash',
-              buildCommand: () => ({
+              buildCommand: (fullPrompt: string) => {
+                capturedPrompt = fullPrompt;
+                return {
                 cmd: 'node',
                 args: ['-e', 'process.stdout.write("## Summary\\n\\nAuthored\\n\\n## Test Plan\\n\\n- [x] `pnpm test`\\n\\n## Revert Plan\\n\\n- Safe to revert? Yes\\n- Revert command: `git revert <sha>`\\n- Post-revert steps: None\\n- Data migration? No\\n")'],
                 sessionId: 'sess-pr-body',
-              }),
+                };
+              },
               buildResumeArgs: () => ({ cmd: 'node', args: ['-e', ''] }),
             }),
             getSessionDriver: vi.fn().mockReturnValue(undefined),
@@ -5586,6 +5833,11 @@ describe('TaskRunner', () => {
         expect(result.body).toContain('## Summary');
         expect(result.body).toContain('## Test Plan');
         expect(result.body).toContain('## Revert Plan');
+        expect(capturedPrompt).toContain('branch "plan/feature" targeting "master"');
+        expect(capturedPrompt).toContain('The PR title is already decided: "Test Workflow"');
+        expect(capturedPrompt).toContain('## Summary\nSource summary');
+        expect(capturedPrompt).not.toContain('Only include `## Architecture`');
+        expect(capturedPrompt).not.toContain('If the change is small and has no architectural impact');
       } finally {
         if (originalHome === undefined) delete process.env.HOME;
         else process.env.HOME = originalHome;
@@ -5923,12 +6175,18 @@ describe('TaskRunner', () => {
       expect(hostCalls).toHaveLength(0);
 
       // PR created via mergeGateProvider (using gate clone dir, not host.cwd)
+      expect((executor as any).authorPrBodyWithSkill).toHaveBeenCalledWith(expect.objectContaining({
+        title: 'Test Workflow',
+        workflowSummary: '## Summary',
+        cwd: '/tmp/gate-clone',
+      }));
       expect(mergeGateProvider.createReview).toHaveBeenCalledWith(
         expect.objectContaining({
           baseBranch: 'master',
           featureBranch: 'plan/feature',
           title: 'Test Workflow',
           cwd: '/tmp/gate-clone',
+          body: '## Summary\n\nPublished body',
         }),
       );
 
