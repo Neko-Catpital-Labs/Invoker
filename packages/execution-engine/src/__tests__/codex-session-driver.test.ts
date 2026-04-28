@@ -76,6 +76,32 @@ describe('CodexSessionDriver', () => {
     expect(messages[1]).toEqual({ role: 'assistant', content: 'I fixed the bug.', timestamp: 'ts2' });
   });
 
+  it('inspectSession returns finished when turn.completed is present', () => {
+    const driver = new CodexSessionDriver();
+    const jsonl = [
+      JSON.stringify({ type: 'thread.started', thread_id: 'thread-1' }),
+      JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1 } }),
+    ].join('\n');
+    expect(driver.inspectSession(jsonl)).toEqual({ state: 'finished' });
+  });
+
+  it('inspectSession returns running when session has started but not completed', () => {
+    const driver = new CodexSessionDriver();
+    const jsonl = [
+      JSON.stringify({ type: 'thread.started', thread_id: 'thread-1' }),
+      JSON.stringify({ type: 'item.started', item: { id: 'item-1', status: 'in_progress' } }),
+    ].join('\n');
+    expect(driver.inspectSession(jsonl)).toEqual({ state: 'running' });
+  });
+
+  it('inspectSession returns error for malformed content', () => {
+    const driver = new CodexSessionDriver();
+    expect(driver.inspectSession('not json')).toEqual({
+      state: 'error',
+      reason: 'Malformed Codex session JSONL',
+    });
+  });
+
   it('loadSession finds file when processOutput uses extracted real ID (fixed flow)', () => {
     const driver = new CodexSessionDriver();
     const jsonl = [
