@@ -13,7 +13,7 @@ import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { spawn } from 'node:child_process';
-import type { SessionDriver, RemoteTarget } from './session-driver.js';
+import type { AgentSessionInspection, SessionDriver, RemoteTarget } from './session-driver.js';
 import type { AgentMessage } from './codex-session.js';
 
 export class ClaudeSessionDriver implements SessionDriver {
@@ -77,6 +77,41 @@ export class ClaudeSessionDriver implements SessionDriver {
       }
     }
     return messages;
+  }
+
+  inspectSession(raw: string): AgentSessionInspection {
+    let lastEntry: any | undefined;
+    let parsedAny = false;
+
+    for (const line of raw.split('\n')) {
+      if (!line.trim()) continue;
+      try {
+        lastEntry = JSON.parse(line);
+        parsedAny = true;
+      } catch {
+        // Ignore malformed lines; only fail if nothing parses.
+      }
+    }
+
+    if (!parsedAny || !lastEntry) {
+      return { state: 'error', reason: 'Malformed Claude session JSONL' };
+    }
+
+    if (lastEntry.type === 'user' || lastEntry.type === 'queue-operation') {
+      return { state: 'running' };
+    }
+
+    if (lastEntry.type === 'assistant') {
+      const content = lastEntry.message?.content;
+      const blocks = Array.isArray(content) ? content : [content];
+      const hasToolUse = blocks.some((block: any) => block?.type === 'tool_use');
+      const hasText = blocks.some((block: any) =>
+        typeof block === 'string' || block?.type === 'text' || typeof block?.text === 'string');
+      if (hasToolUse) return { state: 'running' };
+      if (hasText) return { state: 'finished' };
+    }
+
+    return { state: 'error', reason: 'Claude session ended in an unrecognized state' };
   }
 
   /**

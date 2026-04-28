@@ -11,6 +11,7 @@
 
 import type { BundledSkillsInstallMode, BundledSkillsStatus, Logger } from '@invoker/contracts';
 import { makeEnvelope } from '@invoker/contracts';
+import type { AgentSessionData } from '@invoker/contracts';
 import type { Orchestrator, CommandService, TaskDelta, TaskState } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import { createDeleteAllSnapshot } from './delete-all-snapshot.js';
@@ -1764,13 +1765,31 @@ export async function resolveAgentSession(
   agentName: string,
   registry?: AgentRegistry,
   allTasks?: import('@invoker/workflow-core').TaskState[],
-): Promise<import('@invoker/execution-engine').AgentMessage[] | null> {
+): Promise<AgentSessionData | null> {
   const driver = registry?.getSessionDriver(agentName);
-  if (!driver) return null;
+  if (!driver) {
+    return {
+      agentName,
+      sessionId,
+      state: 'error',
+      messages: [],
+      reason: `No session driver registered for agent "${agentName}"`,
+    };
+  }
 
   // 1. Try local
   const raw = driver.loadSession(sessionId);
-  if (raw) return driver.parseSession(raw);
+  if (raw) {
+    const inspection = driver.inspectSession(raw);
+    return {
+      agentName,
+      sessionId,
+      state: inspection.state,
+      reason: inspection.reason,
+      messages: driver.parseSession(raw),
+      source: 'local',
+    };
+  }
 
   // 2. Try remote (SSH tasks)
   if (driver.fetchRemoteSession && allTasks) {
@@ -1787,12 +1806,28 @@ export async function resolveAgentSession(
         : Object.values(targets)[0];
       if (target) {
         const remoteRaw = await driver.fetchRemoteSession(sessionId, target);
-        if (remoteRaw) return driver.parseSession(remoteRaw);
+        if (remoteRaw) {
+          const inspection = driver.inspectSession(remoteRaw);
+          return {
+            agentName,
+            sessionId,
+            state: inspection.state,
+            reason: inspection.reason,
+            messages: driver.parseSession(remoteRaw),
+            source: 'remote',
+          };
+        }
       }
     }
   }
 
-  return null;
+  return {
+    agentName,
+    sessionId,
+    state: 'error',
+    messages: [],
+    reason: 'Session file not found',
+  };
 }
 
 async function headlessSession(taskId: string | undefined, deps: Pick<HeadlessDeps, 'orchestrator' | 'persistence' | 'executionAgentRegistry'>): Promise<void> {
@@ -1836,12 +1871,16 @@ async function headlessSession(taskId: string | undefined, deps: Pick<HeadlessDe
   process.stdout.write(`agent=${agentName} sessionId=${sessionId}\n`);
 
   const allTasks = deps.orchestrator.getAllTasks();
-  const messages = await resolveAgentSession(sessionId, agentName, deps.executionAgentRegistry, allTasks);
-  if (!messages) {
-    process.stdout.write('Session file not found\n');
+  const result = await resolveAgentSession(sessionId, agentName, deps.executionAgentRegistry, allTasks);
+  if (!result) {
+    process.stdout.write('Session lookup failed\n');
     return;
   }
-  for (const msg of messages) {
+  process.stdout.write(`state=${result.state}${result.source ? ` source=${result.source}` : ''}\n`);
+  if (result.reason) {
+    process.stdout.write(`${result.reason}\n`);
+  }
+  for (const msg of result.messages) {
     process.stdout.write(`[${msg.role}] ${msg.content}\n`);
   }
 }

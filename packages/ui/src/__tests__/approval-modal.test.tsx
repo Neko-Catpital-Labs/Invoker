@@ -207,9 +207,13 @@ describe('ApprovalModal', () => {
   // ── Context info blocks ──────────────────────────────
 
   it('renders only session block for fix approval with session ID and loads messages', async () => {
-    mockGetAgentSession.mockResolvedValue([
-      { role: 'user', content: 'Fix the test', timestamp: '' },
-    ]);
+    mockGetAgentSession.mockResolvedValue({
+      agentName: 'claude',
+      sessionId: 'sess-abc-123',
+      state: 'running',
+      source: 'remote',
+      messages: [{ role: 'user', content: 'Fix the test', timestamp: '' }],
+    });
 
     render(
       <ApprovalModal
@@ -233,10 +237,44 @@ describe('ApprovalModal', () => {
     await waitFor(() => {
       expect(screen.getByTestId('session-messages')).toBeInTheDocument();
     });
+    expect(screen.getByTestId('session-state')).toHaveTextContent('State: running (remote)');
     expect(screen.getByText('Fix the test')).toBeInTheDocument();
 
     // Fix context block should not exist
     expect(screen.queryByTestId('fix-context')).not.toBeInTheDocument();
+  });
+
+  it('renders codex session state metadata when session inspection data is available', async () => {
+    mockGetAgentSession.mockResolvedValue({
+      agentName: 'codex',
+      sessionId: 'sess-snapshot-123',
+      state: 'finished',
+      source: 'remote',
+      messages: [{ role: 'assistant', content: 'Applied the requested fix.', timestamp: '' }],
+    });
+
+    render(
+      <ApprovalModal
+        task={makeTask({
+          execution: {
+            pendingFixError: 'Expected test output to match snapshot',
+            agentSessionId: 'sess-snapshot-123',
+            agentName: 'codex',
+          },
+        })}
+        onApprove={vi.fn()}
+        onReject={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('session-state')).toHaveTextContent('State: finished (remote)');
+    });
+
+    expect(screen.getByRole('heading', { name: 'Approve AI Fix' })).toBeInTheDocument();
+    expect(screen.getByTestId('claude-session-context')).toHaveTextContent('Codex Session');
+    expect(screen.getByText('Applied the requested fix.')).toBeInTheDocument();
   });
 
   it('shows no context blocks for fix approval with only error when no session ID', () => {
@@ -408,6 +446,33 @@ describe('ApprovalModal', () => {
     });
 
     expect(screen.getByTestId('session-error')).toHaveTextContent('Could not load session');
+  });
+
+  it('renders error state when session inspection reports an error result', async () => {
+    mockGetAgentSession.mockResolvedValue({
+      agentName: 'claude',
+      sessionId: 'sess-error-test',
+      state: 'error',
+      reason: 'Session file not found',
+      messages: [],
+    });
+
+    render(
+      <ApprovalModal
+        task={makeTask({
+          execution: { agentSessionId: 'sess-error-test' },
+        })}
+        onApprove={vi.fn()}
+        onReject={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('session-error')).toBeInTheDocument();
+    });
+
+    expect(screen.getByTestId('session-state')).toHaveTextContent('State: error');
   });
 
   it('uses agent name in heading, label, reason pre-fill, and session fetch', async () => {
