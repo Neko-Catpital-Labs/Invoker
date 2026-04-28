@@ -7,7 +7,7 @@ import { TaskRunner } from '../task-runner.js';
 import { collectTransitiveNonMergeTaskIds } from '../merge-runner.js';
 import { SshExecutor } from '../ssh-executor.js';
 import type { TaskState } from '@invoker/workflow-core';
-import type { WorkResponse } from '@invoker/contracts';
+import type { WorkResponse, Logger } from '@invoker/contracts';
 import { EventEmitter } from 'events';
 
 /**
@@ -81,6 +81,18 @@ function createExecutorWithTasks(tasks: Map<string, TaskState>): TaskRunner {
     executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
     cwd: '/tmp',
   });
+}
+
+function createMockLogger(): Logger {
+  const logger: Logger = {
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    child: vi.fn(),
+  };
+  (logger.child as any).mockReturnValue(logger);
+  return logger;
 }
 
 const tempWorkspaces: string[] = [];
@@ -2945,14 +2957,14 @@ describe('TaskRunner', () => {
       (executor as any).removeMergeWorktree = async () => {};
       (executor as any).startPrPolling = vi.fn();
 
-      const logSpy = vi.spyOn(console, 'log');
-
       const mergeTask = makeTask({
         id: '__merge__wf-1',
         status: 'running',
         dependencies: ['t1'],
         config: { isMergeNode: true, workflowId: 'wf-1' },
       });
+
+      const logSpy = vi.spyOn(console, 'log');
 
       await (executor as any).executeMergeNode(mergeTask);
 
