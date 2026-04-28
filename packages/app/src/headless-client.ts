@@ -101,17 +101,21 @@ async function delegateMutation(
   noTrackTimeoutMs: number = DEFAULT_NO_TRACK_DELEGATION_TIMEOUT_MS,
 ): Promise<boolean> {
   const command = args[0];
+  const timeoutMs = noTrack
+    ? noTrackTimeoutMs
+    : command === 'run' || command === 'resume'
+      ? 5_000
+      : await resolveDelegationTimeoutMs(args);
   if (command === 'run') {
     const planPath = args[1];
     if (!planPath) throw new Error('Missing plan file. Usage: --headless run <plan.yaml>');
-    return tryDelegateRun(planPath, bus, waitForApproval, noTrack);
+    return tryDelegateRun(planPath, bus, waitForApproval, noTrack, timeoutMs);
   }
   if (command === 'resume') {
     const workflowId = args[1];
     if (!workflowId) throw new Error('Missing workflowId. Usage: --headless resume <id>');
-    return tryDelegateResume(workflowId, bus, waitForApproval, noTrack);
+    return tryDelegateResume(workflowId, bus, waitForApproval, noTrack, timeoutMs);
   }
-  const timeoutMs = noTrack ? noTrackTimeoutMs : await resolveDelegationTimeoutMs(args);
   return tryDelegateExec(args, bus, waitForApproval, noTrack, timeoutMs);
 }
 
@@ -347,7 +351,7 @@ export async function runHeadlessClient(argv: string[]): Promise<number> {
     await bus.ready();
     return await runHeadlessClientCommand(argv, {
       messageBus: bus,
-      ensureStandaloneOwner: () => ensureStandaloneOwnerViaBootstrap(bus),
+      ensureStandaloneOwner: (currentBus) => ensureStandaloneOwnerViaBootstrap(currentBus ?? bus),
       refreshMessageBus,
       runElectronHeadless,
     });
