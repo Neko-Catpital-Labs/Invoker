@@ -2169,7 +2169,7 @@ if (isHeadless) {
       void recoverWorkflowMutationsOnStartup({
         ownerMode,
         persistence,
-        workflowMutationCoordinator,
+        workflowMutationCoordinator: workflowMutationCoordinator ?? undefined,
         logger,
         maybeDelayResume: maybeDelayWorkflowResumeForTest,
       });

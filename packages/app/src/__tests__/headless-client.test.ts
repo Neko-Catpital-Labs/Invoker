@@ -103,6 +103,37 @@ describe('headless-client', () => {
     expect(ownerHandler).toHaveBeenCalledTimes(1);
   });
 
+  it('passes the refreshed bus into bootstrap after an owner-timeout retry', async () => {
+    const firstBus = new LocalBus();
+    const secondBus = new LocalBus();
+    let bootstrapCalls = 0;
+
+    secondBus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-2', mode: 'standalone' }));
+    secondBus.onRequest('headless.run', async () => ({ workflowId: 'wf-bootstrap', tasks: [] }));
+
+    const ensureStandaloneOwner = vi.fn(async (_bus?: unknown) => {
+      bootstrapCalls += 1;
+      if (bootstrapCalls === 1) {
+        throw new SharedMutationOwnerTimeoutError();
+      }
+    });
+    const refreshMessageBus = vi.fn()
+      .mockResolvedValueOnce(secondBus)
+      .mockResolvedValueOnce(secondBus)
+      .mockResolvedValue(secondBus);
+
+    const exitCode = await runHeadlessClientCommand(['run', '/tmp/plan.yaml', '--no-track'], {
+      messageBus: firstBus,
+      ensureStandaloneOwner,
+      refreshMessageBus,
+      runElectronHeadless: vi.fn(async () => 0),
+    });
+
+    expect(exitCode).toBe(0);
+    expect(ensureStandaloneOwner).toHaveBeenNthCalledWith(1, secondBus);
+    expect(ensureStandaloneOwner).toHaveBeenNthCalledWith(2, secondBus);
+  });
+
   it('uses a longer no-track delegation timeout after bootstrap under load', async () => {
     const bus = new LocalBus();
     const ensureStandaloneOwner = vi.fn(async () => {
