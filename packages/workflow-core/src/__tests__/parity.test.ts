@@ -564,7 +564,7 @@ describe('Parity — Architectural Superiority', () => {
 
   // ── Test 16: 10,000 task topological sort performance ─────
 
-  it('10,000 tasks topological sort completes in <500ms', () => {
+  it('10,000 tasks topological sort completes in <1000ms', () => {
     const tasks: TaskState[] = [];
     const chainLength = 100;
     const chainCount = 100;
@@ -597,6 +597,6 @@ describe('Parity — Architectural Superiority', () => {
       }
     }
 
-    expect(elapsed).toBeLessThan(2000);
+    expect(elapsed).toBeLessThan(1000);
   });
 });
