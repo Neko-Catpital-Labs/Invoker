@@ -866,7 +866,6 @@ if (isHeadless) {
         ): Promise<{ workflowId: string; tasks: TaskState[] }> => {
           const { parsePlanFile } = await import('./plan-parser.js');
           const plan = await parsePlanFile(payload.planPath);
-          taskHandles.clear();
           backupPlan(plan, undefined, logger);
           const wfIdsBefore = new Set(orchestrator.getWorkflowIds());
           orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
