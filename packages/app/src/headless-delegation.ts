@@ -96,8 +96,10 @@ export async function tryPingHeadlessOwner(
   timeoutMs = 1_000,
 ): Promise<{ ownerId?: string; mode?: string } | null> {
   const DELEGATION_TIMEOUT = Symbol('delegation-timeout');
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
   const timeoutPromise = new Promise<typeof DELEGATION_TIMEOUT>((_, reject) => {
-    setTimeout(() => reject(DELEGATION_TIMEOUT), timeoutMs);
+    timeoutHandle = setTimeout(() => reject(DELEGATION_TIMEOUT), timeoutMs);
+    timeoutHandle.unref?.();
   });
 
   try {
@@ -112,6 +114,8 @@ export async function tryPingHeadlessOwner(
       return null;
     }
     throw err;
+  } finally {
+    if (timeoutHandle) clearTimeout(timeoutHandle);
   }
 }
 
@@ -129,8 +133,10 @@ export async function tryDelegateQuery(
   timeoutMs = 5_000,
 ): Promise<Record<string, unknown> | null> {
   const DELEGATION_TIMEOUT = Symbol('delegation-timeout');
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
   const timeoutPromise = new Promise<typeof DELEGATION_TIMEOUT>((_, reject) => {
-    setTimeout(() => reject(DELEGATION_TIMEOUT), timeoutMs);
+    timeoutHandle = setTimeout(() => reject(DELEGATION_TIMEOUT), timeoutMs);
+    timeoutHandle.unref?.();
   });
 
   try {
@@ -145,6 +151,8 @@ export async function tryDelegateQuery(
       return null;
     }
     throw err;
+  } finally {
+    if (timeoutHandle) clearTimeout(timeoutHandle);
   }
 }
 
@@ -156,8 +164,10 @@ async function tryDelegate(
 ): Promise<boolean> {
   let targetWorkflowId: string | undefined;
   const DELEGATION_TIMEOUT = Symbol('delegation-timeout');
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
   const timeoutPromise = new Promise<typeof DELEGATION_TIMEOUT>((_, reject) => {
-    setTimeout(() => reject(DELEGATION_TIMEOUT), options.timeoutMs ?? 5_000);
+    timeoutHandle = setTimeout(() => reject(DELEGATION_TIMEOUT), options.timeoutMs ?? 5_000);
+    timeoutHandle.unref?.();
   });
 
   let response: { workflowId: string; tasks: TaskState[] } | { ok: true };
@@ -174,6 +184,8 @@ async function tryDelegate(
       return false;
     }
     throw err;
+  } finally {
+    if (timeoutHandle) clearTimeout(timeoutHandle);
   }
 
   if ('workflowId' in response) {
