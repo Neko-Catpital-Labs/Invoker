@@ -3,7 +3,6 @@ import { writeFile } from 'node:fs/promises';
 import * as path from 'node:path';
 import { promisify } from 'node:util';
 import type { Page } from '@playwright/test';
-import { SQLiteAdapter } from '@invoker/data-store';
 import { stringify as yamlStringify } from 'yaml';
 
 import {
@@ -41,28 +40,6 @@ function parseWorkflowId(stdout: string): string {
   const direct = stdout.match(/Workflow ID: (wf-[^\s]+)/);
   if (direct?.[1]) return direct[1];
   throw new Error(`No workflow id found in stdout:\n${stdout}`);
-}
-
-async function resolveWorkflowIdFromDb(
-  testDir: string,
-  knownWorkflowIds: ReadonlySet<string>,
-  timeoutMs: number,
-): Promise<string> {
-  const deadline = Date.now() + timeoutMs;
-  const dbPath = path.join(testDir, 'invoker.db');
-  while (Date.now() < deadline) {
-    const db = await SQLiteAdapter.create(dbPath, { readOnly: true });
-    try {
-      const workflowId = db.listWorkflows()
-        .map((workflow) => workflow.id)
-        .find((id): id is string => !!id && !knownWorkflowIds.has(id));
-      if (workflowId) return workflowId;
-    } finally {
-      db.close();
-    }
-    await new Promise((resolve) => setTimeout(resolve, 250));
-  }
-  throw new Error('Timed out waiting for a new workflow id to appear in persisted state');
 }
 
 async function assertTaskPanelResponsive(page: Page, timeoutMs: number): Promise<void> {
@@ -108,15 +85,10 @@ test.describe('Headless thundering herd', () => {
     if (currentWorkflowId) workflowIds.add(currentWorkflowId);
     for (let i = 0; i < 8; i += 1) {
       const result = await runHeadlessClient(testDir, ['run', planPath, '--no-track']);
-      let workflowId: string;
-      try {
-        // Prefer the workflow id echoed by this exact submission. Falling back
-        // to DB polling is less precise under a burst because persisted state
-        // is shared across concurrent headless runs.
-        workflowId = parseWorkflowId(result.stdout);
-      } catch {
-        workflowId = await resolveWorkflowIdFromDb(testDir, workflowIds, 2_000);
-      }
+      // Use the workflow id echoed by this exact submission. Querying shared
+      // persisted state from the app layer both violates the owner boundary
+      // and is ambiguous when many workflows are created concurrently.
+      const workflowId = parseWorkflowId(result.stdout);
       workflowIds.add(workflowId);
     }
 

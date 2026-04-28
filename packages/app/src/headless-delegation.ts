@@ -1,6 +1,5 @@
-import { resolve as resolvePath, join as joinPath } from 'node:path';
+import { resolve as resolvePath } from 'node:path';
 
-import { SQLiteAdapter } from '@invoker/data-store';
 import type { MessageBus } from '@invoker/transport';
 import type { TaskState } from '@invoker/workflow-core';
 
@@ -8,7 +7,6 @@ import {
   resolveHeadlessTarget,
   type HeadlessTargetLookup,
 } from './headless-command-classification.js';
-import { resolveInvokerHomeRoot } from './delete-all-snapshot.js';
 import { createDelegatedTaskFeed, trackWorkflow } from './headless-watch.js';
 
 type DelegateTrackingOptions = {
@@ -49,6 +47,10 @@ function usesExtendedDelegationTimeout(command: string): boolean {
   return command === 'rebase' || command === 'rebase-and-retry' || command === 'restart';
 }
 
+function looksLikeWorkflowId(target: unknown): boolean {
+  return /^wf-[^/]+$/.test(String(target ?? ''));
+}
+
 export function delegationTimeoutMs(
   args: string[],
   targetLookup: HeadlessTargetLookup,
@@ -66,13 +68,11 @@ export function delegationTimeoutMs(
 }
 
 export async function resolveDelegationTimeoutMs(args: string[]): Promise<number> {
-  const dbPath = joinPath(resolveInvokerHomeRoot(), 'invoker.db');
-  const targetLookup = await SQLiteAdapter.create(dbPath, { readOnly: true });
-  try {
-    return delegationTimeoutMs(args, targetLookup);
-  } finally {
-    targetLookup.close();
+  const command = args[0] ?? '';
+  if (!usesExtendedDelegationTimeout(command)) {
+    return 5_000;
   }
+  return looksLikeWorkflowId(args[1]) ? 60_000 : 5_000;
 }
 
 export async function tryDelegateExec(

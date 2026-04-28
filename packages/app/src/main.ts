@@ -861,10 +861,44 @@ if (isHeadless) {
           return workflowMutationCoordinator.enqueue<T>(workflowId, priority, channel, args);
         };
 
+        const executeStandaloneHeadlessRun = async (
+          payload: HeadlessRunMutationPayload,
+        ): Promise<{ workflowId: string; tasks: TaskState[] }> => {
+          const { parsePlanFile } = await import('./plan-parser.js');
+          const plan = await parsePlanFile(payload.planPath);
+          taskHandles.clear();
+          backupPlan(plan, undefined, logger);
+          const wfIdsBefore = new Set(orchestrator.getWorkflowIds());
+          orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
+          const workflowId = orchestrator.getWorkflowIds().find(id => !wfIdsBefore.has(id))!;
+          const started = orchestrator.startExecution();
+          logger.info(`started ${started.length} tasks for workflow "${workflowId}"`, { module: 'ipc-delegate' });
+          const tasks = orchestrator.getAllTasks().filter(t => t.config.workflowId === workflowId);
+          return { workflowId, tasks };
+        };
+
+        const executeStandaloneHeadlessResume = async (
+          payload: HeadlessResumeMutationPayload,
+        ): Promise<{ workflowId: string; tasks: TaskState[] }> => {
+          const { workflowId } = payload;
+          orchestrator.syncFromDb(workflowId);
+          const executor = createStandaloneTaskExecutor();
+
+          const allStarted = relaunchOrphansAndStartReady(orchestrator, logger, 'ipc-delegate', workflowId);
+          if (allStarted.length > 0) {
+            executor.executeTasks(allStarted).catch(err => {
+              logger.error(`headless.resume: executeTasks failed for "${workflowId}": ${err}`, { module: 'ipc-delegate' });
+            });
+          }
+          executor.resumeMergeGatePolling();
+          const tasks = orchestrator.getAllTasks().filter(t => t.config.workflowId === workflowId);
+          return { workflowId, tasks };
+        };
+
         messageBus.onRequest('headless.run', async (req: unknown) => {
           noteStandaloneOwnerActivity();
           const { planPath } = req as { planPath: string };
-          return executeHeadlessRun({ planPath });
+          return executeStandaloneHeadlessRun({ planPath });
         });
         messageBus.onRequest('headless.owner-ping', async () => {
           noteStandaloneOwnerActivity();
@@ -894,7 +928,7 @@ if (isHeadless) {
         messageBus.onRequest('headless.resume', async (req: unknown) => {
           noteStandaloneOwnerActivity();
           const { workflowId } = req as { workflowId: string };
-          return executeHeadlessResume({ workflowId });
+          return executeStandaloneHeadlessResume({ workflowId });
         });
         messageBus.onRequest('headless.exec', async (req: unknown) => {
           noteStandaloneOwnerActivity();
