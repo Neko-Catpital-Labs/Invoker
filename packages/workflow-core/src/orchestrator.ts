@@ -690,7 +690,7 @@ export class Orchestrator {
       // value preserves the correct executorType discriminant from existing.config.
       config: { ...existing.config, ...changes.config } as TaskConfig,
       execution: { ...existing.execution, ...changes.execution },
-      revision: existing.revision + 1,
+      taskStateVersion: existing.taskStateVersion + 1,
     };
     if (process.env.NODE_ENV !== 'test' && TRACE_PERSIST_SYNC) {
       const ex = updated.execution;
@@ -715,7 +715,7 @@ export class Orchestrator {
   }
 
   /**
-   * Build an 'updated' TaskDelta with revision continuity metadata.
+   * Build an 'updated' TaskDelta with task-state continuity metadata.
    * `before` is the task state before the mutation, `after` is the state
    * returned by writeAndSync.
    */
@@ -724,19 +724,19 @@ export class Orchestrator {
       type: 'updated',
       taskId: after.id,
       changes,
-      revision: after.revision,
-      previousRevision: before.revision,
+      taskStateVersion: after.taskStateVersion,
+      previousTaskStateVersion: before.taskStateVersion,
     };
   }
 
   /**
-   * Build a 'removed' TaskDelta with the task's last known revision.
+   * Build a 'removed' TaskDelta with the task's last known task-state version.
    */
   private buildRemoveDelta(task: TaskState): TaskDelta {
     return {
       type: 'removed',
       taskId: task.id,
-      previousRevision: task.revision,
+      previousTaskStateVersion: task.taskStateVersion,
     };
   }
 
@@ -3892,7 +3892,7 @@ export class Orchestrator {
       ...existing,
       status: 'failed',
       execution: { ...existing.execution, ...changes.execution },
-      revision: existing.revision + 1,
+      taskStateVersion: existing.taskStateVersion + 1,
     };
     this.stateMachine.restoreTask(updated);
 

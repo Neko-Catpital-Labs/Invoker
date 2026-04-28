@@ -2077,7 +2077,7 @@ if (isHeadless) {
     lastKnownWorkflowCount = workflows.length;
     if (mainWindow && !mainWindow.isDestroyed()) {
       for (const removedTaskId of previousTaskIds) {
-        sendTaskDeltaToRenderer({ type: 'removed', taskId: removedTaskId, previousRevision: 0 });
+        sendTaskDeltaToRenderer({ type: 'removed', taskId: removedTaskId, previousTaskStateVersion: 0 });
       }
       mainWindow.webContents.send('invoker:workflows-changed', workflows);
     }
@@ -2545,13 +2545,13 @@ if (isHeadless) {
           for (const { taskId, changes } of updates) {
             const before = orchestrator.getTask(taskId);
             persistence.updateTask(taskId, changes);
-            const beforeRevision = before?.revision ?? 0;
+            const beforeTaskStateVersion = before?.taskStateVersion ?? 0;
             messageBus.publish(Channels.TASK_DELTA, {
               type: 'updated',
               taskId,
               changes,
-              revision: beforeRevision + 1,
-              previousRevision: beforeRevision,
+              taskStateVersion: beforeTaskStateVersion + 1,
+              previousTaskStateVersion: beforeTaskStateVersion,
             } satisfies TaskDelta);
           }
           orchestrator.syncAllFromDb();
@@ -2724,7 +2724,7 @@ if (isHeadless) {
         }
         if (mainWindow && !mainWindow.isDestroyed()) {
           for (const removedTaskId of previousTaskIds) {
-            sendTaskDeltaToRenderer({ type: 'removed', taskId: removedTaskId, previousRevision: 0 });
+            sendTaskDeltaToRenderer({ type: 'removed', taskId: removedTaskId, previousTaskStateVersion: 0 });
           }
           mainWindow.webContents.send('invoker:workflows-changed', workflows);
         }

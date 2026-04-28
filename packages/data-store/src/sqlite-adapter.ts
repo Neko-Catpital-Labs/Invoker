@@ -564,7 +564,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       'ALTER TABLE attempts ADD COLUMN queue_priority INTEGER NOT NULL DEFAULT 0',
       'ALTER TABLE attempts ADD COLUMN claimed_at TEXT',
       'ALTER TABLE attempts ADD COLUMN lease_expires_at TEXT',
-      'ALTER TABLE tasks ADD COLUMN revision INTEGER NOT NULL DEFAULT 1',
+      'ALTER TABLE tasks ADD COLUMN task_state_version INTEGER NOT NULL DEFAULT 1',
     ];
     for (const sql of migrations) {
       try {
@@ -737,7 +737,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         docker_image,
         execution_agent,
         agent_name,
-        revision
+        task_state_version
       ) VALUES (
         ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?, ?, ?, ?, ?,
@@ -813,7 +813,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       cfg.dockerImage ?? null,
       cfg.executionAgent ?? null,
       exec.agentName ?? null,
-      task.revision ?? 1,
+      task.taskStateVersion ?? 1,
     ]);
   }
 
@@ -954,8 +954,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
     if (setClauses.length === 0) return;
 
-    // Atomically bump revision with every mutation
-    setClauses.push('revision = revision + 1');
+    // Atomically bump task-state version with every mutation
+    setClauses.push('task_state_version = task_state_version + 1');
 
     if (changes.execution && 'workspacePath' in changes.execution) {
       try {
@@ -1683,7 +1683,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         selectedAttemptId: row.selected_attempt_id ?? undefined,
         autoFixAttempts: row.auto_fix_attempts ?? undefined,
       },
-      revision: row.revision ?? 1,
+      taskStateVersion: row.task_state_version ?? 1,
     };
   }
 
