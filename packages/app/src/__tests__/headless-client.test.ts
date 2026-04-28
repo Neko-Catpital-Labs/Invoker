@@ -57,6 +57,23 @@ describe('headless-client', () => {
     expect(ensureStandaloneOwner).toHaveBeenCalledTimes(1);
   });
 
+  it('uses a longer no-track delegation timeout for an already-running standalone owner under load', async () => {
+    const bus = new LocalBus();
+    bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-1', mode: 'standalone' }));
+    bus.onRequest('headless.exec', async () => {
+      await new Promise((resolve) => setTimeout(resolve, 9_000));
+      return { ok: true };
+    });
+
+    const exitCode = await runHeadlessClientCommand(['retry', 'wf-1', '--no-track'], {
+      messageBus: bus,
+      ensureStandaloneOwner: vi.fn(async () => {}),
+      runElectronHeadless: vi.fn(async () => 0),
+    });
+
+    expect(exitCode).toBe(0);
+  }, 15_000);
+
   it('bootstraps a standalone owner once when no owner is present, then delegates', async () => {
     const bus = new LocalBus();
     const ownerHandler = vi.fn(async () => ({ ok: true }));
@@ -101,6 +118,37 @@ describe('headless-client', () => {
     expect(ensureStandaloneOwner).toHaveBeenCalledWith(firstBus);
     expect(refreshMessageBus).toHaveBeenCalledTimes(2);
     expect(ownerHandler).toHaveBeenCalledTimes(1);
+  });
+
+  it('passes the refreshed bus into bootstrap after an owner-timeout retry', async () => {
+    const firstBus = new LocalBus();
+    const secondBus = new LocalBus();
+    let bootstrapCalls = 0;
+
+    secondBus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-2', mode: 'standalone' }));
+    secondBus.onRequest('headless.run', async () => ({ workflowId: 'wf-bootstrap', tasks: [] }));
+
+    const ensureStandaloneOwner = vi.fn(async (_bus?: unknown) => {
+      bootstrapCalls += 1;
+      if (bootstrapCalls === 1) {
+        throw new SharedMutationOwnerTimeoutError();
+      }
+    });
+    const refreshMessageBus = vi.fn()
+      .mockResolvedValueOnce(secondBus)
+      .mockResolvedValueOnce(secondBus)
+      .mockResolvedValue(secondBus);
+
+    const exitCode = await runHeadlessClientCommand(['run', '/tmp/plan.yaml', '--no-track'], {
+      messageBus: firstBus,
+      ensureStandaloneOwner,
+      refreshMessageBus,
+      runElectronHeadless: vi.fn(async () => 0),
+    });
+
+    expect(exitCode).toBe(0);
+    expect(ensureStandaloneOwner).toHaveBeenNthCalledWith(1, secondBus);
+    expect(ensureStandaloneOwner).toHaveBeenNthCalledWith(2, secondBus);
   });
 
   it('uses a longer no-track delegation timeout after bootstrap under load', async () => {

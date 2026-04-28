@@ -35,6 +35,7 @@ import {
   buildMergeSummaryImpl,
   consolidateAndMergeImpl,
   ensureLocalBranchForMerge,
+  collectTransitiveNonMergeTaskIds,
 } from './merge-runner.js';
 import { normalizeBranchForGithubCli } from './github-branch-ref.js';
 import {
