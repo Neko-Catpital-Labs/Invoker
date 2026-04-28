@@ -62,6 +62,8 @@ If the change is small and has no architectural impact, omit `## Architecture` r
 
 Do not default to a lightweight `## Summary / ## Testing / ## Notes` PR body. That shape is ad hoc drift, not the repo standard. Use `## Summary / ## Test Plan / ## Revert Plan` as the floor, and add `## Architecture` when the change affects component interactions or data/control flow.
 
+The canonical schema is enforced by `scripts/validate-pr-body.mjs`, which delegates to `packages/execution-engine/src/canonical-pr-body.js`. Treat that module and the validator as the source of truth when this skill prose and an older example appear to disagree.
+
 ## Command surface
 
 Preferred repo-local flow:
@@ -138,4 +140,5 @@ Reference:
 - `scripts/create-pr.mjs`
 - `scripts/pr-body-template.md`
 - `scripts/validate-pr-body.mjs`
+- `packages/execution-engine/src/canonical-pr-body.js`
 - `scripts/test-pr-diagrams.sh`
