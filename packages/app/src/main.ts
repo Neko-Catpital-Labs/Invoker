@@ -127,6 +127,7 @@ import { shouldSkipAutoFixForError } from './auto-fix-gating.js';
 import { ensureSqliteFlushDebounceForOwner } from './sqlite-flush-policy.js';
 import type { WorkflowMutationPriority } from './workflow-mutation-coordinator.js';
 import { PersistedWorkflowMutationCoordinator } from './persisted-workflow-mutation-coordinator.js';
+import { recoverWorkflowMutationsOnStartup } from './workflow-mutation-startup.js';
 import { dispatchStartedTasksWithGlobalTopup, executeGlobalTopup, finalizeMutationWithGlobalTopup } from './global-topup.js';
 import { computeDeferredLaunchTiming } from './deferred-runnable.js';
 import { preemptWorkflowBeforeMutation, type WorkflowCancelResult } from './workflow-preemption.js';
@@ -696,6 +697,34 @@ if (isHeadless) {
         return executor;
       };
 
+      const executeStandaloneHeadlessRun = async (payload: HeadlessRunMutationPayload): Promise<unknown> => {
+        const { parsePlanFile } = await import('./plan-parser.js');
+        const plan = await parsePlanFile(payload.planPath);
+        const executor = createStandaloneTaskExecutor();
+        void executor;
+        backupPlan(plan, undefined, logger);
+        const wfIdsBefore = new Set(orchestrator.getWorkflowIds());
+        orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
+        const workflowId = orchestrator.getWorkflowIds().find((id) => !wfIdsBefore.has(id));
+        if (!workflowId) {
+          throw new Error(`Failed to resolve workflow id for delegated plan: ${payload.planPath}`);
+        }
+        const started = orchestrator.startExecution();
+        logger.info(`standalone started ${started.length} tasks for workflow "${workflowId}"`, { module: 'ipc-delegate' });
+        const tasks = orchestrator.getAllTasks().filter((task) => task.config.workflowId === workflowId);
+        return { workflowId, tasks };
+      };
+
+      const executeStandaloneHeadlessResume = async (payload: HeadlessResumeMutationPayload): Promise<unknown> => {
+        const { workflowId } = payload;
+        createStandaloneTaskExecutor();
+        orchestrator.syncFromDb(workflowId);
+        const started = relaunchOrphansAndStartReady(orchestrator, logger, 'standalone-ipc-delegate', workflowId);
+        logger.info(`standalone resumed ${started.length} tasks for workflow "${workflowId}"`, { module: 'ipc-delegate' });
+        const tasks = orchestrator.getAllTasks().filter((task) => task.config.workflowId === workflowId);
+        return { workflowId, tasks };
+      };
+
       const executeStandaloneGuiMutation = async (payload: GuiMutationPayload): Promise<unknown> => {
         switch (payload.channel) {
           case 'invoker:load-plan': {
@@ -864,12 +893,7 @@ if (isHeadless) {
         messageBus.onRequest('headless.run', async (req: unknown) => {
           noteStandaloneOwnerActivity();
           const { planPath } = req as { planPath: string };
-          await runHeadless(['run', planPath], {
-            ...headlessDeps,
-            waitForApproval: false,
-            noTrack: true,
-          });
-          return { ok: true };
+          return executeStandaloneHeadlessRun({ planPath });
         });
         messageBus.onRequest('headless.owner-ping', async () => {
           noteStandaloneOwnerActivity();
@@ -899,12 +923,7 @@ if (isHeadless) {
         messageBus.onRequest('headless.resume', async (req: unknown) => {
           noteStandaloneOwnerActivity();
           const { workflowId } = req as { workflowId: string };
-          await runHeadless(['resume', workflowId], {
-            ...headlessDeps,
-            waitForApproval: false,
-            noTrack: true,
-          });
-          return { ok: true };
+          return executeStandaloneHeadlessResume({ workflowId });
         });
         messageBus.onRequest('headless.exec', async (req: unknown) => {
           noteStandaloneOwnerActivity();
@@ -2114,34 +2133,13 @@ if (isHeadless) {
       });
       recordStartupMark('api-server.started');
 
-      if (ownerMode && workflowMutationCoordinator) {
-        try {
-          persistence.requeueExpiredWorkflowMutationLeases();
-          logger.info('requeued expired workflow mutation leases on startup', { module: 'init' });
-        } catch (err) {
-          logger.error(
-            `requeueExpiredWorkflowMutationLeases failed: ${err instanceof Error ? err.stack ?? err.message : String(err)}`,
-            { module: 'init' },
-          );
-        }
-        if (process.env.INVOKER_RESUME_WORKFLOW_MUTATIONS_ON_STARTUP === '1') {
-          void (async () => {
-            try {
-              await maybeDelayWorkflowResumeForTest();
-              await workflowMutationCoordinator.resumePending();
-            } catch (err) {
-              logger.error(
-                `resumePending failed: ${err instanceof Error ? err.stack ?? err.message : String(err)}`,
-                { module: 'init' },
-              );
-            }
-          })();
-        } else {
-          logger.info('startup workflow mutation drain deferred; queued intents remain durable until explicit activity', {
-            module: 'init',
-          });
-        }
-      }
+      void recoverWorkflowMutationsOnStartup({
+        ownerMode,
+        persistence,
+        workflowMutationCoordinator,
+        logger,
+        maybeDelayResume: maybeDelayWorkflowResumeForTest,
+      });
 
       startSlackBot(requireTaskExecutor(), taskHandles).catch((err) => {
         logger.info(`Not started: ${err instanceof Error ? err.message : String(err)}`, { module: 'slack' });

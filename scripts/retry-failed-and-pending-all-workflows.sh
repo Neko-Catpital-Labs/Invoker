@@ -15,6 +15,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 RUNNER="$REPO_ROOT/run.sh"
+IPC_HELPER="$REPO_ROOT/scripts/headless-ipc.js"
 
 DRY_RUN=false
 STATUS_FILTER=""
@@ -118,6 +119,7 @@ if $DRY_RUN; then
 else
   FAILED=0
   SUCCEEDED=0
+  DISPATCHED=0
   IDX=0
 
   launch_one_workflow() {
@@ -127,7 +129,7 @@ else
     local code=0
 
     set +e
-    cmd_out="$("$RUNNER" --headless retry "$wf_id" --no-track 2>&1)"
+    cmd_out="$(node "$IPC_HELPER" exec --no-track -- retry "$wf_id" 2>&1)"
     code=$?
     set -e
 
@@ -182,32 +184,40 @@ else
     rm -f "$RESULTS_FILE"
   else
     LOG_DIR="$(mktemp -d -t retry-failed-logs.XXXXXX)"
-    DISPATCHED=0
-    PIDS=()
     RESULT_FILE="$(mktemp -t retry-failed-results.XXXXXX)"
-
+    COMMANDS_FILE="$(mktemp -t retry-failed-commands.XXXXXX)"
+    OUTPUT_JSONL="$(mktemp -t retry-failed-output.XXXXXX)"
     while IFS= read -r WF_ID; do
       [[ -z "$WF_ID" ]] && continue
       IDX=$((IDX + 1))
-      log_file="$LOG_DIR/${WF_ID}.log"
-      (
-        if launch_one_workflow "$WF_ID" "$log_file"; then
-          printf "%s\tSUCCEEDED\n" "$WF_ID" >> "$RESULT_FILE"
-        else
-          printf "%s\tFAILED\n" "$WF_ID" >> "$RESULT_FILE"
-        fi
-      ) &
-      PIDS+=("$!")
-      echo "[dispatch $IDX/$TOTAL] $WF_ID log=$log_file"
-
-      while [[ "$(jobs -pr | wc -l | tr -d ' ')" -ge "$PARALLELISM" ]]; do
-        sleep 0.2
-      done
+      printf '{"label":"%s","workflowId":"%s","args":["retry","%s"]}\n' "$WF_ID" "$WF_ID" "$WF_ID" >> "$COMMANDS_FILE"
+      echo "[dispatch $IDX/$TOTAL] $WF_ID log=$LOG_DIR/${WF_ID}.log"
     done <<<"$WORKFLOWS"
 
-    for pid in "${PIDS[@]}"; do
-      wait "$pid" || true
-    done
+    node "$IPC_HELPER" batch-exec --no-track --parallel "$PARALLELISM" < "$COMMANDS_FILE" > "$OUTPUT_JSONL"
+    python3 - "$RESULT_FILE" "$LOG_DIR" "$OUTPUT_JSONL" <<'PY'
+import json
+import pathlib
+import sys
+
+result_file = pathlib.Path(sys.argv[1])
+log_dir = pathlib.Path(sys.argv[2])
+output_jsonl = pathlib.Path(sys.argv[3])
+
+for raw in output_jsonl.read_text(encoding="utf-8").splitlines():
+    raw = raw.strip()
+    if not raw:
+        continue
+    item = json.loads(raw)
+    workflow_id = item.get("workflowId") or item.get("label") or "unknown"
+    log_path = log_dir / f"{workflow_id}.log"
+    with log_path.open("w", encoding="utf-8") as handle:
+        handle.write(raw + "\n")
+    with result_file.open("a", encoding="utf-8") as handle:
+        handle.write(f"{workflow_id}\t{'SUCCEEDED' if item.get('ok') else 'FAILED'}\n")
+PY
+    rm -f "$COMMANDS_FILE"
+    rm -f "$OUTPUT_JSONL"
 
     while IFS=$'\t' read -r _wf result; do
       case "$result" in
