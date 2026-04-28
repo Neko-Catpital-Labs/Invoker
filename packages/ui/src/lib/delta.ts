@@ -2,7 +2,9 @@
  * Task-state-version-aware delta application for the renderer task map.
  *
  * Delta types:
- * - created: unconditionally sets the task (authoritative replacement).
+ * - created: unconditionally sets the task. This is used both for true
+ *   first-seen tasks and for authoritative replacement snapshots after
+ *   main-process recovery.
  *   After main-process gap recovery, the main process sends a `created`
  *   delta with the authoritative snapshot — the renderer must overwrite
  *   any stale local state.
@@ -38,7 +40,9 @@ export function applyDelta(
 
   switch (delta.type) {
     case 'created':
-      // Authoritative replacement: always overwrite, clear quarantine.
+      // `created` is also the authoritative replacement path after
+      // quarantine recovery, so always overwrite local state and clear the
+      // quarantine marker for this task.
       next.set(delta.task.id, delta.task);
       quarantinedIds.delete(delta.task.id);
       break;
