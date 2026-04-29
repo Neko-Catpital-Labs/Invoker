@@ -1163,7 +1163,7 @@ describe('TaskPanel double-click editing', () => {
       expect(screen.getByText('Gate Policy')).toBeInTheDocument();
       const summary = screen.getByTestId('gate-policy-summary');
       expect(summary).toHaveTextContent('All 1 gate satisfied');
-      expect(screen.queryByTestId(/gate-policy-offender/)).not.toBeInTheDocument();
+      expect(screen.queryByTestId('gate-policy-offender-wf-1::__merge__')).not.toBeInTheDocument();
       const satisfiedToggle = screen.getByTestId('gate-policy-satisfied-toggle');
       expect(satisfiedToggle).toHaveTextContent('1 satisfied gate');
     });
@@ -1194,7 +1194,7 @@ describe('TaskPanel double-click editing', () => {
 
       const summary = screen.getByTestId('gate-policy-summary');
       expect(summary).toHaveTextContent('1 gate blocking');
-      const offenderRow = screen.getByTestId(/gate-policy-offender/);
+      const offenderRow = screen.getByTestId('gate-policy-offender-wf-1::__merge__');
       expect(offenderRow).toBeInTheDocument();
       const workflowName = offenderRow.querySelector('.text-red-300');
       expect(workflowName).toBeInTheDocument();
@@ -1310,12 +1310,14 @@ describe('TaskPanel double-click editing', () => {
         />,
       );
 
-      const offenderRows = screen.getAllByTestId(/gate-policy-offender/);
-      expect(offenderRows.length).toBeGreaterThan(0);
+      const offenderA = screen.getByTestId('gate-policy-offender-wf-1::task-a');
+      const offenderB = screen.getByTestId('gate-policy-offender-wf-1::task-b');
+      expect(offenderA).toBeInTheDocument();
+      expect(offenderB).toBeInTheDocument();
       const mixedThresholdEls = screen.getAllByTestId(/gate-policy-mixed-thresholds-/);
       expect(mixedThresholdEls.length).toBeGreaterThan(0);
       expect(mixedThresholdEls[0]).toHaveTextContent('Mixed thresholds');
-      const workflowName = offenderRows[0].querySelector('.text-red-300');
+      const workflowName = offenderA.querySelector('.text-red-300');
       expect(workflowName).toBeInTheDocument();
     });
 

@@ -715,7 +715,7 @@ export function TaskPanel({
                   const dotColor = status !== 'missing' ? getStatusColor(status as TaskStatus).dot : 'bg-slate-500';
 
                   return (
-                    <div key={`${key}-${index}`} className="rounded border border-gray-700 bg-gray-800/40 p-2 space-y-1" data-testid={`gate-policy-offender-${index}`}>
+                    <div key={key} className="rounded border border-gray-700 bg-gray-800/40 p-2 space-y-1" data-testid={`gate-policy-offender-${key}`}>
                       <div className="flex items-start gap-1">
                         <span className="text-amber-400 flex-shrink-0">⚠</span>
                         <div className="flex-1 min-w-0">
