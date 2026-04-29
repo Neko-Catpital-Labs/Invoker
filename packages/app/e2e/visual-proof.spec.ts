@@ -808,9 +808,9 @@ test.describe('Visual proof capture', () => {
     await expect(page.getByText('deps: qh-running')).toBeVisible();
 
     // Expand relationship section: click the running task row to open task panel
-    await page.getByText('qh-running').click();
+    await page.locator('[data-row-id$="/qh-running"]').click();
     await expect(page.getByRole('heading', { name: 'Running task with downstream' })).toBeVisible();
-    await expect(page.getByRole('heading', { name: 'Dependencies' })).toBeVisible();
+    await expect(page.getByText('echo run')).toBeVisible();
 
     await captureScreenshot(page, 'queue-action-surface-hardening');
     await assertPageScreenshot(page, 'queue-action-surface-hardening');
