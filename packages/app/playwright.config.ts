@@ -1,6 +1,9 @@
 import { defineConfig } from '@playwright/test';
 
 const workers = Number(process.env.INVOKER_PLAYWRIGHT_WORKERS ?? (process.env.CI ? '1' : '2'));
+const flakyTagPattern = /@flaky/;
+const includeFlakyOnly = process.env.INVOKER_PLAYWRIGHT_FLAKY_ONLY === '1';
+const excludeFlaky = process.env.INVOKER_PLAYWRIGHT_EXCLUDE_FLAKY === '1';
 
 export default defineConfig({
   globalSetup: './e2e/global-setup.ts',
@@ -8,6 +11,8 @@ export default defineConfig({
   timeout: 120000,
   retries: 0,
   workers: Number.isFinite(workers) && workers > 0 ? workers : 1,
+  grep: includeFlakyOnly ? flakyTagPattern : undefined,
+  grepInvert: !includeFlakyOnly && excludeFlaky ? flakyTagPattern : undefined,
   snapshotPathTemplate: '{testDir}/__screenshots__/{testFileName}/{arg}{ext}',
   use: {
     trace: 'on-first-retry',

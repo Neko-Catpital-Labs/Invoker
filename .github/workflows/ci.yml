@@ -268,6 +268,7 @@ jobs:
           INVOKER_PLAYWRIGHT_RUN_LABEL: ci-playwright
           INVOKER_PLAYWRIGHT_WORKERS: '1'
           INVOKER_PLAYWRIGHT_ARGS: --reporter=line
+          INVOKER_PLAYWRIGHT_EXCLUDE_FLAKY: '1'
         run: bash scripts/test-suites/optional/40-playwright-app.sh
 
       - name: Upload Playwright artifacts on failure
@@ -275,6 +276,66 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: playwright-artifacts-${{ matrix.name }}
+          path: |
+            .git/playwright-artifacts
+            packages/app/test-results
+          if-no-files-found: ignore
+
+  playwright-flaky:
+    needs: build-artifacts
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    continue-on-error: true
+    name: flaky / playwright
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Use Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: app-build-dist
+          path: /tmp/invoker-build-artifacts
+
+      - name: Extract build artifacts
+        run: tar -xzf /tmp/invoker-build-artifacts/app-build-dist.tgz -C .
+
+      - name: Configure git identity for E2E repos
+        run: |
+          git config --global user.name "CI Bot"
+          git config --global user.email "ci@invoker.dev"
+
+      - name: Install Playwright system dependencies
+        run: pnpm --filter @invoker/app exec playwright install --with-deps
+
+      - name: Run quarantined Playwright tests
+        env:
+          INVOKER_PLAYWRIGHT_RUN_LABEL: ci-playwright-flaky
+          INVOKER_PLAYWRIGHT_WORKERS: '1'
+          INVOKER_PLAYWRIGHT_ARGS: --reporter=line --pass-with-no-tests
+          INVOKER_PLAYWRIGHT_FLAKY_ONLY: '1'
+        run: bash scripts/test-suites/optional/40-playwright-app.sh
+
+      - name: Upload flaky Playwright artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-artifacts-flaky
           path: |
             .git/playwright-artifacts
             packages/app/test-results

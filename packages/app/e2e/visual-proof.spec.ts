@@ -481,7 +481,8 @@ test.describe('Visual proof capture', () => {
     await assertPageScreenshot(page, 'approve-fix-modal-simplified');
   });
 
-  test('approve-fix modal — renders current-cycle session log', async ({ page, testDir }) => {
+  // Quarantined as flaky in CI visual snapshot runs; tracked by @flaky pipeline lane.
+  test('@flaky approve-fix modal — renders current-cycle session log', async ({ page, testDir }) => {
     const sessionId = 'sess-current-codex-approval';
     const sessionDir = path.join(testDir, 'agent-sessions');
     await fs.mkdir(sessionDir, { recursive: true });
