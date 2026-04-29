@@ -31,21 +31,32 @@ describe('bundled-skills', () => {
     const resourcesRoot = makeTempRoot('invoker-bundled-resources-');
     const invokerHomeRoot = makeTempRoot('invoker-bundled-home-');
     const repoRoot = makeTempRoot('invoker-bundled-repo-');
+    const isolatedHome = makeTempRoot('invoker-bundled-home-env-');
+    const originalHome = process.env.HOME;
+    process.env.HOME = isolatedHome;
 
-    writeSkill(resourcesRoot, 'plan-to-invoker');
-    writeSkill(resourcesRoot, 'make-pr');
+    try {
+      writeSkill(resourcesRoot, 'plan-to-invoker');
+      writeSkill(resourcesRoot, 'make-pr');
 
-    const status = resolveBundledSkillsStatus({
-      isPackaged: true,
-      repoRoot,
-      resourcesPath: resourcesRoot,
-      invokerHomeRoot,
-    });
+      const status = resolveBundledSkillsStatus({
+        isPackaged: true,
+        repoRoot,
+        resourcesPath: resourcesRoot,
+        invokerHomeRoot,
+      });
 
-    expect(status.available).toBe(true);
-    expect(status.promptRecommended).toBe(true);
-    expect(status.bundledSkillNames).toEqual(['make-pr', 'plan-to-invoker']);
-    expect(status.targets[0]?.installed).toBe(false);
+      expect(status.available).toBe(true);
+      expect(status.promptRecommended).toBe(true);
+      expect(status.bundledSkillNames).toEqual(['make-pr', 'plan-to-invoker']);
+      expect(status.targets[0]?.installed).toBe(false);
+    } finally {
+      if (originalHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = originalHome;
+      }
+    }
   });
 
   it('installs prefixed skill copies into the Codex skill directory and marks them up to date', () => {

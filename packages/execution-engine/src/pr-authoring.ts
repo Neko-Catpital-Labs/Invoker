@@ -75,10 +75,39 @@ export function resolveInstalledSkillPathForAgent(agentName: string, skillName: 
   return existsSync(join(skillDir, 'SKILL.md')) ? skillDir : null;
 }
 
-const MAKE_PR_PROMPT_TEMPLATE = readFileSync(
-  new URL('./make-pr-prompt.md', import.meta.url),
-  'utf8',
-);
+const DEFAULT_MAKE_PR_PROMPT_TEMPLATE = [
+  'You are authoring the GitHub PR body for the branch "%FEATURE_BRANCH%" targeting "%BASE_BRANCH%".',
+  '',
+  'Use the installed skill "invoker-make-pr" at: %SKILL_PATH%',
+  'Read that SKILL.md first and follow it exactly.',
+  '',
+  'The PR title is already decided: "%TITLE%"',
+  'Output only the final PR body markdown. Do not include commentary, explanations, or code fences.',
+  '',
+  'Merge workflow context:',
+  '```md',
+  '%WORKFLOW_SUMMARY%',
+  '```',
+].join('\n');
+
+let cachedMakePrPromptTemplate: string | undefined;
+
+function loadMakePrPromptTemplate(): string {
+  if (cachedMakePrPromptTemplate !== undefined) {
+    return cachedMakePrPromptTemplate;
+  }
+  const candidates = [
+    join(__dirname, 'make-pr-prompt.md'),
+    join(process.cwd(), 'packages', 'execution-engine', 'src', 'make-pr-prompt.md'),
+  ];
+  for (const candidate of candidates) {
+    if (!existsSync(candidate)) continue;
+    cachedMakePrPromptTemplate = readFileSync(candidate, 'utf8');
+    return cachedMakePrPromptTemplate;
+  }
+  cachedMakePrPromptTemplate = DEFAULT_MAKE_PR_PROMPT_TEMPLATE;
+  return cachedMakePrPromptTemplate;
+}
 
 function renderPromptTemplate(template: string, substitutions: Record<string, string>): string {
   let content = template;
@@ -95,7 +124,7 @@ export function buildMakePrPrompt(args: {
   featureBranch: string;
   workflowSummary: string;
 }): string {
-  return renderPromptTemplate(MAKE_PR_PROMPT_TEMPLATE, {
+  return renderPromptTemplate(loadMakePrPromptTemplate(), {
     SKILL_PATH: args.skillPath,
     TITLE: args.title,
     BASE_BRANCH: args.baseBranch,

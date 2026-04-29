@@ -194,14 +194,26 @@ async function authorPrBodyForMerge(
     cwd: string;
   },
 ): Promise<string> {
+  const fallbackBody = args.workflowSummary;
   if (!host.authorPrBodyWithSkill) {
-    throw new Error('authorPrBodyWithSkill is required for merge PR authoring');
+    console.warn(
+      '[merge] PR body skill authoring unavailable; falling back to workflow summary body',
+    );
+    return fallbackBody;
   }
-  const authored = await host.authorPrBodyWithSkill(args);
-  console.log(
-    `[merge] Authored PR body via ${authored.agentName} skill session=${authored.sessionId}`,
-  );
-  return authored.body;
+  try {
+    const authored = await host.authorPrBodyWithSkill(args);
+    console.log(
+      `[merge] Authored PR body via ${authored.agentName} skill session=${authored.sessionId}`,
+    );
+    return authored.body;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn(
+      `[merge] PR body skill authoring failed; falling back to workflow summary body. Error: ${msg}`,
+    );
+    return fallbackBody;
+  }
 }
 
 /**

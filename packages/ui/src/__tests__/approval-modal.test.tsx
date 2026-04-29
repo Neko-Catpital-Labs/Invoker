@@ -475,6 +475,39 @@ describe('ApprovalModal', () => {
     expect(screen.getByTestId('session-state')).toHaveTextContent('State: error');
   });
 
+  it('does not render session error when error state still includes messages', async () => {
+    mockGetAgentSession.mockResolvedValue({
+      agentName: 'codex',
+      sessionId: 'sess-error-with-messages',
+      state: 'error',
+      source: 'local',
+      reason: 'Recovered from cache',
+      messages: [
+        { role: 'user', content: 'Please patch the regression.', timestamp: '' },
+        { role: 'assistant', content: 'Patched and verified locally.', timestamp: '' },
+      ],
+    });
+
+    render(
+      <ApprovalModal
+        task={makeTask({
+          execution: { agentSessionId: 'sess-error-with-messages', agentName: 'codex' },
+        })}
+        onApprove={vi.fn()}
+        onReject={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('session-messages')).toBeInTheDocument();
+    });
+
+    expect(screen.queryByTestId('session-error')).not.toBeInTheDocument();
+    expect(screen.getByText('Codex:')).toBeInTheDocument();
+    expect(screen.getByText('Patched and verified locally.')).toBeInTheDocument();
+  });
+
   it('uses agent name in heading, label, reason pre-fill, and session fetch', async () => {
     mockGetAgentSession.mockResolvedValue([
       { role: 'user', content: 'Fix the bug', timestamp: '' },

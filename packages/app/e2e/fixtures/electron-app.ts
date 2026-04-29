@@ -22,6 +22,10 @@ export type ElectronFixtures = {
 };
 
 const repoRoot = path.resolve(__dirname, '..', '..', '..', '..');
+const FIRST_WINDOW_TIMEOUT_MS = Number.parseInt(
+  process.env.INVOKER_E2E_FIRST_WINDOW_TIMEOUT_MS ?? '15000',
+  10,
+);
 
 export const test = base.extend<ElectronFixtures>({
   testDir: async ({}, use) => {
@@ -75,7 +79,21 @@ export const test = base.extend<ElectronFixtures>({
   },
 
   page: async ({ electronApp }, use) => {
-    const page = await electronApp.firstWindow();
+    const waitForWindowDeadline = Number.isFinite(FIRST_WINDOW_TIMEOUT_MS) && FIRST_WINDOW_TIMEOUT_MS > 0
+      ? FIRST_WINDOW_TIMEOUT_MS
+      : 15000;
+    let page: Page;
+    try {
+      page = await electronApp.firstWindow({ timeout: waitForWindowDeadline });
+    } catch (err) {
+      const appProcess = electronApp.process();
+      const processExitCode = appProcess?.exitCode ?? null;
+      throw new Error(
+        `Timed out waiting for Electron first window (${waitForWindowDeadline}ms). ` +
+        `This usually means main-process startup failed before BrowserWindow creation. ` +
+        `electron.exitCode=${String(processExitCode)}; error=${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
     await page.waitForLoadState('domcontentloaded');
     await page.waitForFunction(() => typeof window.invoker !== 'undefined', null, { timeout: 10000 });
 

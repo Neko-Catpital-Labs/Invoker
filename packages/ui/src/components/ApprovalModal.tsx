@@ -131,7 +131,8 @@ export function ApprovalModal({
         const msgs = Array.isArray(result)
           ? result
           : ((result as AgentSessionData | null)?.messages ?? null);
-        const isError = !Array.isArray(result) && !!result && result.state === 'error';
+        const hasMessages = Array.isArray(msgs) && msgs.length > 0;
+        const isError = !Array.isArray(result) && !!result && result.state === 'error' && !hasMessages;
         if (!Array.isArray(result) && result) {
           setSessionState(result.state);
           setSessionSource(result.source);
