@@ -1,3 +1,10 @@
+---
+name: workflow-chain-submit
+description: >
+  Submit a workflow chain headlessly, where each workflow is gated on the
+  previous workflow's merge gate.
+---
+
 # workflow-chain-submit
 
 Submit a workflow chain headlessly, where each workflow is gated on the previous workflow's merge gate.
