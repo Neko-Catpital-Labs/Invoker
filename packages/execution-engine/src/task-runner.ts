@@ -1422,9 +1422,10 @@ export class TaskRunner {
         task.execution.reviewId
       ) {
         try {
+          const gateCwd = task.execution.workspacePath ?? this.cwd;
           const status = await this.mergeGateProvider.checkApproval({
             identifier: task.execution.reviewId,
-            cwd: this.cwd,
+            cwd: gateCwd,
           });
           this.persistence.updateTask(task.id, {
             execution: { reviewStatus: status.statusText },
@@ -1449,9 +1450,11 @@ export class TaskRunner {
     const interval = setInterval(async () => {
       try {
         if (!this.mergeGateProvider) return;
+        const pollTask = this.orchestrator.getTask(taskId);
+        const pollCwd = pollTask?.execution.workspacePath ?? this.cwd;
         const status = await this.mergeGateProvider.checkApproval({
           identifier: reviewId,
-          cwd: this.cwd,
+          cwd: pollCwd,
         });
 
         // Update PR status on task
@@ -1494,9 +1497,10 @@ export class TaskRunner {
     if (!reviewId) return;
 
     try {
+      const manualCwd = task.execution.workspacePath ?? this.cwd;
       const status = await this.mergeGateProvider.checkApproval({
         identifier: reviewId,
-        cwd: this.cwd,
+        cwd: manualCwd,
       });
 
       this.persistence.updateTask(taskId, {
