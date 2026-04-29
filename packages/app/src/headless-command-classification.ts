@@ -16,6 +16,17 @@ export type HeadlessTargetResolution =
   | { kind: 'task'; workflowId: string; taskId: string; resolvedTaskId: string }
   | { kind: 'unknown'; target: string };
 
+function looksLikeWorkflowId(target: string): boolean {
+  return /^wf-[^/]+$/.test(target);
+}
+
+function parseWorkflowIdFromTaskTarget(target: string): string | null {
+  const slashIndex = target.indexOf('/');
+  if (slashIndex <= 0) return null;
+  const workflowId = target.slice(0, slashIndex);
+  return looksLikeWorkflowId(workflowId) ? workflowId : null;
+}
+
 function findStoredTaskByTarget(
   lookup: HeadlessTargetLookup,
   target: string,
@@ -38,6 +49,20 @@ export function resolveHeadlessTarget(
   const target = String(targetArg ?? '');
   if (!target) {
     return { kind: 'unknown', target: '' };
+  }
+
+  if (looksLikeWorkflowId(target)) {
+    return { kind: 'workflow', workflowId: target };
+  }
+
+  const workflowIdFromTaskTarget = parseWorkflowIdFromTaskTarget(target);
+  if (workflowIdFromTaskTarget) {
+    return {
+      kind: 'task',
+      workflowId: workflowIdFromTaskTarget,
+      taskId: target,
+      resolvedTaskId: target,
+    };
   }
 
   const workflow = lookup.loadWorkflow(target);
