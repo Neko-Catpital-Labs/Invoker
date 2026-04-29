@@ -115,22 +115,35 @@ export function ContextMenu({
   }, [x, y]);
 
   // Capture-phase outside dismissal stays reliable even if graph layers stop
-  // bubbling on mousedown before it reaches document listeners.
+  // bubbling on mouse/pointer events before they reach document listeners.
   useEffect(() => {
-    const handleMouseDownCapture = (e: MouseEvent) => {
-      if (e.button !== 0) return;
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+    const dismissFromOutsideTarget = (target: EventTarget | null, button?: number) => {
+      if (button !== undefined && button !== 0) return;
+      if (menuRef.current && !menuRef.current.contains(target as Node)) {
         onClose();
       }
+    };
+    const handlePointerDownCapture = (e: PointerEvent) => {
+      dismissFromOutsideTarget(e.target, e.button);
+    };
+    const handleMouseDownCapture = (e: MouseEvent) => {
+      dismissFromOutsideTarget(e.target, e.button);
+    };
+    const handleClickCapture = (e: MouseEvent) => {
+      dismissFromOutsideTarget(e.target, e.button);
     };
     const handleKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
     };
 
+    document.addEventListener('pointerdown', handlePointerDownCapture, true);
     document.addEventListener('mousedown', handleMouseDownCapture, true);
+    document.addEventListener('click', handleClickCapture, true);
     document.addEventListener('keydown', handleKey);
     return () => {
+      document.removeEventListener('pointerdown', handlePointerDownCapture, true);
       document.removeEventListener('mousedown', handleMouseDownCapture, true);
+      document.removeEventListener('click', handleClickCapture, true);
       document.removeEventListener('keydown', handleKey);
     };
   }, [onClose]);

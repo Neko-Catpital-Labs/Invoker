@@ -52,6 +52,18 @@ const DAG_DETERMINISM_PLAN = {
   ],
 };
 
+/** Plan for queue-relationships visual proof: one actionable task with upstream deps and downstream dependents. */
+const QUEUE_RELATIONSHIPS_PLAN = {
+  name: 'Queue Relationships Visual Proof',
+  repoUrl: E2E_REPO_URL,
+  onFinish: 'none' as const,
+  tasks: [
+    { id: 'qr-upstream', description: 'Upstream dependency (completed)', command: 'echo upstream', dependencies: [] },
+    { id: 'qr-middle', description: 'Actionable task with relationships', command: 'echo middle', dependencies: ['qr-upstream'] },
+    { id: 'qr-downstream', description: 'Downstream dependent (blocked)', command: 'echo downstream', dependencies: ['qr-middle'] },
+  ],
+};
+
 /** Minimal plan that produces a merge gate in the DAG. */
 const MERGE_GATE_TEXT_VISUAL_PLAN = {
   name: 'Merge gate text visual proof',
@@ -545,6 +557,51 @@ test.describe('Visual proof capture', () => {
 
     await captureScreenshot(page, 'queue-semantics-action-states');
     await assertPageScreenshot(page, 'queue-semantics-action-states');
+  });
+
+  test('queue-relationships — expanded row context with upstream and downstream', async ({ page }) => {
+    await loadPlan(page, QUEUE_RELATIONSHIPS_PLAN);
+    const now = new Date();
+    const earlier = new Date(Date.now() - 5000);
+    await injectTaskStates(page, [
+      // Upstream task completed — satisfies qr-middle's dependency
+      {
+        taskId: 'qr-upstream',
+        changes: {
+          status: 'completed',
+          execution: { startedAt: earlier, completedAt: now },
+        },
+      },
+      // Middle task running — actionable, appears in Action Queue
+      {
+        taskId: 'qr-middle',
+        changes: {
+          status: 'running',
+          execution: { startedAt: now },
+        },
+      },
+      // qr-downstream stays pending with unmet dep on qr-middle → lands in Backlog
+    ]);
+
+    // Navigate to queue view
+    await page.getByRole('button', { name: 'Queue' }).click();
+
+    // Assert queue sections are visible
+    await expect(page.getByRole('heading', { name: /Action Queue/ })).toBeVisible();
+    await expect(page.getByRole('heading', { name: /Backlog/ })).toBeVisible();
+
+    // Assert downstream dependent is rendered in Backlog with its dep reference
+    await expect(page.getByText('deps: qr-middle')).toBeVisible();
+
+    // Click the middle task row to expand its relationship context in the task panel
+    await page.locator('[data-row-id$="/qr-middle"]').click();
+
+    // Assert the expanded relationship headings are visible in the task panel
+    await expect(page.getByRole('heading', { name: 'Actionable task with relationships' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Dependencies' })).toBeVisible();
+
+    await captureScreenshot(page, 'queue-relationships-expanded-context');
+    await assertPageScreenshot(page, 'queue-relationships-expanded-context');
   });
 
   test('gate-policy-side-panel — blocked task with satisfied and offender gates', async ({ page }) => {
