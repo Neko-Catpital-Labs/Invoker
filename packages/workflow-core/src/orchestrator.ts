@@ -3575,8 +3575,8 @@ export class Orchestrator {
       // Mark as failed
       const errorMsg =
         id === rootId
-          ? 'Cancelled by user'
-          : `Cancelled: upstream task "${upstreamLabel}" was cancelled`;
+          ? 'Terminated by user'
+          : `Terminated: upstream task "${upstreamLabel}" was terminated`;
       const changes: TaskStateChanges = {
         status: 'failed',
         execution: { error: errorMsg, completedAt: new Date() },

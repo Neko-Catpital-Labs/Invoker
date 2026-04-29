@@ -312,7 +312,7 @@ export function App() {
   const handleCancelTask = useCallback(async (taskId: string) => {
     setContextMenu(null);
     const confirmed = window.confirm(
-      `Cancel task "${taskId}" and all downstream dependents?`
+      `Terminate task "${taskId}" and all downstream dependents?`
     );
     if (!confirmed) return;
     try {
