@@ -293,10 +293,13 @@ export async function runHeadlessClientCommand(
       return resolvedExitCode();
     }
   }
+  if (owner && await delegateMutation(args, messageBus, waitForApproval, noTrack)) {
+    return resolvedExitCode();
+  }
   if (owner && deps.refreshMessageBus) {
     messageBus = await deps.refreshMessageBus();
     const refreshedOwner = await tryPingHeadlessOwner(messageBus, 1_000);
-    if (isStandaloneOwner(refreshedOwner) && await delegateMutation(args, messageBus, waitForApproval, noTrack)) {
+    if (refreshedOwner && await delegateMutation(args, messageBus, waitForApproval, noTrack)) {
       return resolvedExitCode();
     }
   }
