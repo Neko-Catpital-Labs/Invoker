@@ -35,7 +35,7 @@ describe('StatusBar click behavior', () => {
         />,
       );
 
-      const completedLabel = screen.getByText(/Completed:/);
+      const completedLabel = screen.getByTestId('status-bar-pill-completed');
       fireEvent.click(completedLabel);
 
       // Should fire immediately (no delay)
@@ -58,7 +58,7 @@ describe('StatusBar click behavior', () => {
         />,
       );
 
-      const runningLabel = screen.getByText(/Running:/);
+      const runningLabel = screen.getByTestId('status-bar-pill-running');
       fireEvent.click(runningLabel, { ctrlKey: true });
 
       expect(mockOnStatusClick).toHaveBeenCalledTimes(1);
@@ -79,7 +79,7 @@ describe('StatusBar click behavior', () => {
         />,
       );
 
-      const failedLabel = screen.getByText(/Failed:/);
+      const failedLabel = screen.getByTestId('status-bar-pill-failed');
       fireEvent.click(failedLabel, { metaKey: true });
 
       expect(mockOnStatusClick).toHaveBeenCalledTimes(1);
@@ -103,16 +103,16 @@ describe('StatusBar click behavior', () => {
         />,
       );
 
-      fireEvent.click(screen.getByText(/Completed:/));
+      fireEvent.click(screen.getByTestId('status-bar-pill-completed'));
       expect(mockOnStatusClick).toHaveBeenCalledWith('completed', expect.any(Object));
 
-      fireEvent.click(screen.getByText(/Running:/));
+      fireEvent.click(screen.getByTestId('status-bar-pill-running'));
       expect(mockOnStatusClick).toHaveBeenCalledWith('running', expect.any(Object));
 
-      fireEvent.click(screen.getByText(/Failed:/));
+      fireEvent.click(screen.getByTestId('status-bar-pill-failed'));
       expect(mockOnStatusClick).toHaveBeenCalledWith('failed', expect.any(Object));
 
-      fireEvent.click(screen.getByText(/Pending:/));
+      fireEvent.click(screen.getByTestId('status-bar-pill-pending'));
       expect(mockOnStatusClick).toHaveBeenCalledWith('pending', expect.any(Object));
 
       expect(mockOnStatusClick).toHaveBeenCalledTimes(4);
@@ -132,7 +132,7 @@ describe('StatusBar click behavior', () => {
         />,
       );
 
-      const inputLabel = screen.getByText(/Input:/);
+      const inputLabel = screen.getByTestId('status-bar-pill-needs_input');
       fireEvent.click(inputLabel);
 
       expect(mockOnStatusClick).toHaveBeenCalledWith('needs_input', expect.any(Object));
@@ -150,7 +150,7 @@ describe('StatusBar click behavior', () => {
         />,
       );
 
-      const approvalLabel = screen.getByText(/Approval:/);
+      const approvalLabel = screen.getByTestId('status-bar-pill-awaiting_approval');
       fireEvent.click(approvalLabel);
 
       expect(mockOnStatusClick).toHaveBeenCalledWith('awaiting_approval', expect.any(Object));
@@ -168,7 +168,7 @@ describe('StatusBar click behavior', () => {
         />,
       );
 
-      const blockedLabel = screen.getByText(/Blocked:/);
+      const blockedLabel = screen.getByTestId('status-bar-pill-blocked');
       fireEvent.click(blockedLabel);
 
       expect(mockOnStatusClick).toHaveBeenCalledWith('blocked', expect.any(Object));
@@ -183,7 +183,7 @@ describe('StatusBar click behavior', () => {
 
       render(<StatusBar tasks={tasks} />);
 
-      const completedLabel = screen.getByText(/Completed:/);
+      const completedLabel = screen.getByTestId('status-bar-pill-completed');
       fireEvent.click(completedLabel);
 
       // Should not crash
@@ -202,7 +202,7 @@ describe('StatusBar click behavior', () => {
         />,
       );
 
-      const completedLabel = screen.getByText(/Completed:/);
+      const completedLabel = screen.getByTestId('status-bar-pill-completed');
 
       // Click multiple times rapidly
       fireEvent.click(completedLabel);
@@ -225,7 +225,7 @@ describe('StatusBar click behavior', () => {
         />,
       );
 
-      const completedLabel = screen.getByText(/Completed:/);
+      const completedLabel = screen.getByTestId('status-bar-pill-completed');
 
       // Double-click should just fire two separate single clicks
       fireEvent.doubleClick(completedLabel);
@@ -246,7 +246,7 @@ describe('StatusBar click behavior', () => {
 
       const activeFilters = new Set(['completed']);
 
-      const { container } = render(
+      render(
         <StatusBar
           tasks={tasks}
           activeFilters={activeFilters}
@@ -254,17 +254,15 @@ describe('StatusBar click behavior', () => {
         />,
       );
 
-      // Query the clickable spans directly by their stable color classes
-      // (getByText can return the container div instead of the span)
-      const completedSpan = container.querySelector('.text-green-300\\/70');
-      const runningSpan = container.querySelector('.text-blue-300\\/70');
+      const completedSpan = screen.getByTestId('status-bar-pill-completed');
+      const runningSpan = screen.getByTestId('status-bar-pill-running');
 
       // Active filter should have ring styling
-      expect(completedSpan?.className).toContain('ring-1');
-      expect(completedSpan?.className).toContain('ring-current');
+      expect(completedSpan.className).toContain('ring-1');
+      expect(completedSpan.className).toContain('ring-current');
 
       // Inactive filter should be dimmed
-      expect(runningSpan?.className).toContain('opacity-60');
+      expect(runningSpan.className).toContain('opacity-60');
     });
   });
 });
