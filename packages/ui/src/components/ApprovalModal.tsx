@@ -88,6 +88,7 @@ export function ApprovalModal({
   const [sessionReason, setSessionReason] = useState<string | undefined>(undefined);
   const [sessionLoading, setSessionLoading] = useState(false);
   const [sessionError, setSessionError] = useState(false);
+  const hasSessionMessages = Array.isArray(sessionMessages) && sessionMessages.length > 0;
 
   useEffect(() => {
     if (task.execution.agentSessionId || task.execution.lastAgentSessionId || fallbackSessionId) return;
@@ -223,7 +224,7 @@ export function ApprovalModal({
                   ))}
                 </div>
               )}
-              {sessionReason && !sessionError && (
+              {sessionReason && !sessionError && !hasSessionMessages && (
                 <p className="text-xs text-gray-500 mt-2" data-testid="session-reason">{sessionReason}</p>
               )}
               {sessionError && <p className="text-xs text-red-400" data-testid="session-error">Could not load session</p>}

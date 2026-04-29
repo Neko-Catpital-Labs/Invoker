@@ -277,6 +277,39 @@ describe('ApprovalModal', () => {
     expect(screen.getByText('Applied the requested fix.')).toBeInTheDocument();
   });
 
+  it('hides session reason when messages are present', async () => {
+    mockGetAgentSession.mockResolvedValue({
+      agentName: 'codex',
+      sessionId: 'sess-with-messages',
+      state: 'error',
+      source: 'local',
+      reason: 'Could not load session',
+      messages: [{ role: 'assistant', content: 'Session messages are still available.', timestamp: '' }],
+    });
+
+    render(
+      <ApprovalModal
+        task={makeTask({
+          execution: {
+            pendingFixError: 'Expected test output to match snapshot',
+            agentSessionId: 'sess-with-messages',
+            agentName: 'codex',
+          },
+        })}
+        onApprove={vi.fn()}
+        onReject={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('session-messages')).toBeInTheDocument();
+    });
+    expect(screen.getByText('Session messages are still available.')).toBeInTheDocument();
+    expect(screen.queryByTestId('session-reason')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('session-error')).not.toBeInTheDocument();
+  });
+
   it('shows no context blocks for fix approval with only error when no session ID', () => {
     render(
       <ApprovalModal
