@@ -197,45 +197,51 @@ export function QueueView({ tasks, onTaskClick, onCancel, selectedTaskId }: Queu
                 selectedTaskId === job.taskId ? 'bg-gray-600' : 'bg-gray-800 hover:bg-gray-700'
               }`}
             >
-              <div
-                onClick={() => task && onTaskClick(task)}
-                className="flex items-center justify-between p-2 cursor-pointer"
-              >
+              <div className="flex items-stretch">
+                {hasRelationships ? (
+                  <button
+                    onClick={(e) => toggleExpanded(job.taskId, e)}
+                    className="flex w-8 shrink-0 items-center justify-center rounded-l text-sm text-gray-400 hover:bg-gray-700 hover:text-gray-100"
+                    aria-label={isExpanded ? 'Collapse relationships' : 'Expand relationships'}
+                    aria-expanded={isExpanded}
+                  >
+                    {isExpanded ? '▾' : '▸'}
+                  </button>
+                ) : (
+                  <div className="w-8 shrink-0" aria-hidden="true" />
+                )}
                 <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-gray-500">#{job.order}</span>
-                    <span className="text-sm text-gray-100 truncate">{displayTaskId(job.taskId)}</span>
-                    <span className={`text-xs px-2 py-0.5 rounded shrink-0 ${colors.bg} ${colors.text}`}>
-                      {statusLabel}
-                    </span>
-                    {hasRelationships && (
-                      <button
-                        onClick={(e) => toggleExpanded(job.taskId, e)}
-                        className="text-xs text-gray-400 hover:text-gray-200 shrink-0"
-                        aria-label={isExpanded ? 'Collapse relationships' : 'Expand relationships'}
-                        aria-expanded={isExpanded}
-                      >
-                        {isExpanded ? '▾' : '▸'} rels
-                      </button>
-                    )}
+                  <div
+                    onClick={() => task && onTaskClick(task)}
+                    className="flex cursor-pointer items-center justify-between p-2"
+                  >
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-gray-500">#{job.order}</span>
+                        <span className="text-sm text-gray-100 truncate">{displayTaskId(job.taskId)}</span>
+                        <span className={`inline-flex shrink-0 items-center gap-1 rounded border px-2 py-0.5 text-xs ${colors.bg} ${colors.border} ${colors.text}`}>
+                          <span className={`h-1.5 w-1.5 rounded-full ${colors.dot}`} aria-hidden="true" />
+                          {statusLabel}
+                        </span>
+                      </div>
+                      <span className="text-xs text-gray-400 truncate block">{job.description}</span>
+                      {phaseLabel && (
+                        <span className="text-xs text-amber-300 truncate block">phase: {phaseLabel}</span>
+                      )}
+                    </div>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleCancel(job.taskId);
+                      }}
+                      title={`Cancel ${displayTaskId(job.taskId)}`}
+                      aria-label={`Cancel ${displayTaskId(job.taskId)}`}
+                      className="ml-2 px-1 py-0.5 text-xs text-gray-400 hover:text-gray-200 rounded shrink-0"
+                    >
+                      ×
+                    </button>
                   </div>
-                  <span className="text-xs text-gray-400 truncate block">{job.description}</span>
-                  {phaseLabel && (
-                    <span className="text-xs text-amber-300 truncate block">phase: {phaseLabel}</span>
-                  )}
-                  {'priority' in job && typeof (job as Record<string, unknown>).priority === 'number' && (
-                    <span className="text-xs text-cyan-300 truncate block">priority: {(job as Record<string, unknown>).priority as number}</span>
-                  )}
                 </div>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleCancel(job.taskId);
-                  }}
-                  className="ml-2 px-2 py-0.5 text-xs bg-red-700 hover:bg-red-600 text-white rounded shrink-0"
-                >
-                  Terminate
-                </button>
               </div>
               {isExpanded && (
                 <div className="mx-2 mb-2 pt-1 pb-1 border-t border-gray-700 text-xs" data-testid={`rels-${job.taskId}`}>
@@ -298,43 +304,52 @@ export function QueueView({ tasks, onTaskClick, onCancel, selectedTaskId }: Queu
                 selectedTaskId === task.id ? 'bg-gray-600' : 'bg-gray-800 hover:bg-gray-700'
               }`}
             >
-              <div
-                onClick={() => onTaskClick(task)}
-                className="flex items-center justify-between p-2 cursor-pointer"
-              >
+              <div className="flex items-stretch">
+                {hasRelationships ? (
+                  <button
+                    onClick={(e) => toggleExpanded(task.id, e)}
+                    className="flex w-8 shrink-0 items-center justify-center rounded-l text-sm text-gray-400 hover:bg-gray-700 hover:text-gray-100"
+                    aria-label={isExpanded ? 'Collapse relationships' : 'Expand relationships'}
+                    aria-expanded={isExpanded}
+                  >
+                    {isExpanded ? '▾' : '▸'}
+                  </button>
+                ) : (
+                  <div className="w-8 shrink-0" aria-hidden="true" />
+                )}
                 <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm text-gray-100 truncate">{displayTaskId(task.id)}</span>
-                    <span className={`text-xs px-2 py-0.5 rounded shrink-0 ${backlogColors.bg} ${backlogColors.text}`}>
-                      {backlogStatusLabel}
-                    </span>
-                    {hasRelationships && (
-                      <button
-                        onClick={(e) => toggleExpanded(task.id, e)}
-                        className="text-xs text-gray-400 hover:text-gray-200 shrink-0"
-                        aria-label={isExpanded ? 'Collapse relationships' : 'Expand relationships'}
-                        aria-expanded={isExpanded}
-                      >
-                        {isExpanded ? '▾' : '▸'} rels
-                      </button>
-                    )}
+                  <div
+                    onClick={() => onTaskClick(task)}
+                    className="flex cursor-pointer items-center justify-between p-2"
+                  >
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm text-gray-100 truncate">{displayTaskId(task.id)}</span>
+                        <span className={`inline-flex shrink-0 items-center gap-1 rounded border px-2 py-0.5 text-xs ${backlogColors.bg} ${backlogColors.border} ${backlogColors.text}`}>
+                          <span className={`h-1.5 w-1.5 rounded-full ${backlogColors.dot}`} aria-hidden="true" />
+                          {backlogStatusLabel}
+                        </span>
+                      </div>
+                      <span className="text-xs text-gray-400 truncate block">{task.description}</span>
+                      {task.dependencies.length > 0 && (
+                        <span className="text-xs text-gray-500 truncate block">
+                          deps: {displayDependencies(task.dependencies)}
+                        </span>
+                      )}
+                    </div>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleCancel(task.id);
+                      }}
+                      title={`Cancel ${displayTaskId(task.id)}`}
+                      aria-label={`Cancel ${displayTaskId(task.id)}`}
+                      className="ml-2 px-1 py-0.5 text-xs text-gray-400 hover:text-gray-200 rounded shrink-0"
+                    >
+                      ×
+                    </button>
                   </div>
-                  <span className="text-xs text-gray-400 truncate block">{task.description}</span>
-                  {task.dependencies.length > 0 && (
-                    <span className="text-xs text-gray-500 truncate block">
-                      deps: {displayDependencies(task.dependencies)}
-                    </span>
-                  )}
                 </div>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleCancel(task.id);
-                  }}
-                  className="ml-2 px-2 py-0.5 text-xs bg-red-700 hover:bg-red-600 text-white rounded shrink-0"
-                >
-                  Terminate
-                </button>
               </div>
               {isExpanded && (
                 <div className="mx-2 mb-2 pt-1 pb-1 border-t border-gray-700 text-xs" data-testid={`rels-${task.id}`}>

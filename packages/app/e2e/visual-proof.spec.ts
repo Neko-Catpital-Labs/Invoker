@@ -751,13 +751,13 @@ test.describe('Visual proof capture', () => {
       { taskId: 'task-alpha', changes: { status: 'running', execution: { startedAt: now } } },
     ]);
 
-    // Switch to queue view to verify "Terminate" button text on task rows
+    // Switch to queue view to verify the compact cancel affordance on task rows
     await page.getByRole('button', { name: 'Queue' }).click();
     await expect(page.getByRole('heading', { name: /Action Queue/ })).toBeVisible();
-    const terminateButton = page
+    const cancelButton = page
       .locator('[data-row-id$="/task-alpha"]')
-      .getByRole('button', { name: 'Terminate' });
-    await expect(terminateButton).toBeVisible();
+      .getByRole('button', { name: 'Cancel task-alpha' });
+    await expect(cancelButton).toBeVisible();
 
     // Switch back to DAG view and right-click the running task for context menu
     await page.getByRole('button', { name: 'DAG' }).click();
@@ -777,6 +777,30 @@ test.describe('Visual proof capture', () => {
 
     await captureScreenshot(page, 'terminate-wording-task-vs-workflow');
     await assertPageScreenshot(page, 'terminate-wording-task-vs-workflow');
+  });
+
+  test('queue-cancel-control — compact cancel affordance without priority metadata', async ({ page }) => {
+    await loadPlan(page, TEST_PLAN);
+    const now = new Date();
+    await injectTaskStates(page, [
+      { taskId: 'task-alpha', changes: { status: 'running', execution: { startedAt: now } } },
+    ]);
+
+    // Navigate to queue view
+    await page.getByRole('button', { name: 'Queue' }).click();
+    await expect(page.getByRole('heading', { name: /Action Queue/ })).toBeVisible();
+
+    // Assert the action queue row renders the compact cancel affordance
+    const actionRow = page.locator('[data-row-id$="task-alpha"]');
+    await expect(actionRow).toBeVisible();
+    const cancelButton = actionRow.getByRole('button', { name: 'Cancel task-alpha' });
+    await expect(cancelButton).toBeVisible();
+
+    // Assert no visible priority metadata line on the row
+    await expect(actionRow.locator('text=priority:')).not.toBeVisible();
+
+    await captureScreenshot(page, 'queue-cancel-control');
+    await assertPageScreenshot(page, 'queue-cancel-control');
   });
 
   test('queue-action-surface-hardening — composed queue UX with labels, relationships, and terminate', async ({ page }) => {
@@ -800,14 +824,25 @@ test.describe('Visual proof capture', () => {
     // Assert canonical action queue labels are present
     await expect(page.locator('text=running').first()).toBeVisible();
 
-    // Assert task-level Terminate wording on running task row
-    const terminateButton = page.getByRole('button', { name: 'Terminate' }).first();
-    await expect(terminateButton).toBeVisible();
+    // Assert the running task row exposes the compact cancel affordance
+    const cancelButton = page
+      .locator('[data-row-id$="/qh-running"]')
+      .getByRole('button', { name: 'Cancel qh-running' });
+    await expect(cancelButton).toBeVisible();
 
     // Assert downstream dependent shows its dependency in Backlog
     await expect(page.getByText('deps: qh-running')).toBeVisible();
 
-    // Expand relationship section: click the running task row to open task panel
+    // Expand relationship section inline and verify downstream context
+    await page
+      .locator('[data-row-id$="/qh-running"]')
+      .getByRole('button', { name: 'Expand relationships' })
+      .click();
+    const relationshipPanel = page.getByTestId('rels-wf-test-1/qh-running');
+    await expect(relationshipPanel.getByText('downstream:')).toBeVisible();
+    await expect(relationshipPanel.getByRole('button', { name: 'qh-downstream' })).toBeVisible();
+
+    // Click the running task row to open the task panel
     await page.locator('[data-row-id$="/qh-running"]').click();
     await expect(page.getByRole('heading', { name: 'Running task with downstream' })).toBeVisible();
     await expect(page.getByText('echo run')).toBeVisible();
