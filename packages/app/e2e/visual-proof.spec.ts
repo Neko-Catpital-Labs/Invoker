@@ -594,7 +594,7 @@ test.describe('Visual proof capture', () => {
     await expect(page.getByText('deps: qr-middle')).toBeVisible();
 
     // Click the middle task row to expand its relationship context in the task panel
-    await page.getByText('qr-middle').click();
+    await page.locator('[data-row-id$="/qr-middle"]').click();
 
     // Assert the expanded relationship headings are visible in the task panel
     await expect(page.getByRole('heading', { name: 'Actionable task with relationships' })).toBeVisible();
