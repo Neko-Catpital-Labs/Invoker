@@ -13,9 +13,11 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+RUNNER="$REPO_ROOT/run.sh"
 ELECTRON="$REPO_ROOT/packages/app/node_modules/.bin/electron"
 MAIN="$REPO_ROOT/packages/app/dist/main.js"
 IPC_HELPER="$REPO_ROOT/scripts/headless-ipc.js"
+STANDALONE_MODE="${INVOKER_HEADLESS_STANDALONE:-0}"
 
 # Parse args
 DRY_RUN=false
@@ -57,6 +59,10 @@ headless_query() {
 
 # Helper: mutating command delegated to the current owner (GUI or standalone headless)
 headless_mutation() {
+  if [[ "$STANDALONE_MODE" = "1" ]]; then
+    "$RUNNER" --headless "$@"
+    return $?
+  fi
   node "$IPC_HELPER" exec -- "$@"
 }
 
@@ -170,8 +176,18 @@ else
     echo "[dispatch $IDX/$TOTAL] $WF_ID log=$LOG_DIR/${WF_ID}.log"
   done <<< "$WORKFLOWS"
 
-  node "$IPC_HELPER" batch-exec --no-track --parallel "$PARALLELISM" < "$COMMANDS_FILE" > "$OUTPUT_JSONL"
-  python3 - "$RESULT_FILE" "$LOG_DIR" "$OUTPUT_JSONL" <<'PY'
+  if [[ "$STANDALONE_MODE" = "1" ]]; then
+    while IFS= read -r WF_ID; do
+      [[ -z "$WF_ID" ]] && continue
+      if headless_mutation --no-track recreate "$WF_ID" > "$LOG_DIR/${WF_ID}.log" 2>&1; then
+        printf "%s\tSUCCEEDED\n" "$WF_ID" >> "$RESULT_FILE"
+      else
+        printf "%s\tFAILED\n" "$WF_ID" >> "$RESULT_FILE"
+      fi
+    done <<< "$WORKFLOWS"
+  else
+    node "$IPC_HELPER" batch-exec --no-track --parallel "$PARALLELISM" < "$COMMANDS_FILE" > "$OUTPUT_JSONL"
+    python3 - "$RESULT_FILE" "$LOG_DIR" "$OUTPUT_JSONL" <<'PY'
 import json
 import pathlib
 import sys
@@ -190,6 +206,7 @@ for raw in output_jsonl.read_text(encoding="utf-8").splitlines():
     with result_file.open("a", encoding="utf-8") as handle:
         handle.write(f"{workflow_id}\t{'SUCCEEDED' if item.get('ok') else 'FAILED'}\n")
 PY
+  fi
   rm -f "$COMMANDS_FILE"
   rm -f "$OUTPUT_JSONL"
 

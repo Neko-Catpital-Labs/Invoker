@@ -129,6 +129,10 @@ headless_query() {
 }
 
 headless_mutation() {
+  if [ "$STANDALONE_MODE" = "1" ]; then
+    "$REPO_ROOT/run.sh" --headless "$@"
+    return $?
+  fi
   node "$IPC_HELPER" exec -- "$@"
 }
 
@@ -285,14 +289,14 @@ if [ "$FOLLOW" = true ]; then
     if [ "$COMMAND_TIMEOUT_SECONDS" -gt 0 ]; then
       set +e
       cmd_out="$(
-        run_with_optional_timeout "$COMMAND_TIMEOUT_SECONDS" node "$IPC_HELPER" exec --no-track -- rebase "$task_id" 2>&1
+        run_with_optional_timeout "$COMMAND_TIMEOUT_SECONDS" headless_mutation --no-track rebase "$task_id" 2>&1
       )"
       cmd_status=$?
       set -e
     else
       set +e
       cmd_out="$(
-        node "$IPC_HELPER" exec --no-track -- rebase "$task_id" 2>&1
+        headless_mutation --no-track rebase "$task_id" 2>&1
       )"
       cmd_status=$?
       set -e
@@ -384,8 +388,20 @@ else
   if [ "$COMMAND_TIMEOUT_SECONDS" -gt 0 ]; then
     BATCH_ARGS+=(--timeout-ms "$((COMMAND_TIMEOUT_SECONDS * 1000))")
   fi
-  node "$IPC_HELPER" "${BATCH_ARGS[@]}" < "$COMMANDS_FILE" > "$OUTPUT_JSONL"
-  python3 - "$RESULT_FILE" "$LOG_DIR" "$OUTPUT_JSONL" <<'PY'
+  if [ "$STANDALONE_MODE" = "1" ]; then
+    while IFS= read -r WF_ID; do
+      [ -z "$WF_ID" ] && continue
+      task_id="$(headless_task_ids query tasks --workflow "$WF_ID" --no-merge --output label | head -1)"
+      [ -z "$task_id" ] && continue
+      if headless_mutation --no-track rebase "$task_id" > "$LOG_DIR/${WF_ID}.log" 2>&1; then
+        printf "%s\tSUCCEEDED\n" "$WF_ID" >> "$RESULT_FILE"
+      else
+        printf "%s\tFAILED\n" "$WF_ID" >> "$RESULT_FILE"
+      fi
+    done <<< "$WORKFLOW_IDS"
+  else
+    node "$IPC_HELPER" "${BATCH_ARGS[@]}" < "$COMMANDS_FILE" > "$OUTPUT_JSONL"
+    python3 - "$RESULT_FILE" "$LOG_DIR" "$OUTPUT_JSONL" <<'PY'
 import json
 import pathlib
 import sys
@@ -404,6 +420,7 @@ for raw in output_jsonl.read_text(encoding="utf-8").splitlines():
     with result_file.open("a", encoding="utf-8") as handle:
         handle.write(f"{workflow_id}\t{'SUCCEEDED' if item.get('ok') else 'FAILED'}\n")
 PY
+  fi
   rm -f "$COMMANDS_FILE"
   rm -f "$OUTPUT_JSONL"
 
