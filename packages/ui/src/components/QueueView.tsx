@@ -214,6 +214,7 @@ export function QueueView({ tasks, onTaskClick, onCancel, selectedTaskId }: Queu
                         className="text-xs text-gray-400 hover:text-gray-200 shrink-0"
                         aria-label={isExpanded ? 'Collapse relationships' : 'Expand relationships'}
                         aria-expanded={isExpanded}
+                        data-testid={`queue-rels-toggle-action-${job.taskId}`}
                       >
                         {isExpanded ? '▾' : '▸'} rels
                       </button>
@@ -314,6 +315,7 @@ export function QueueView({ tasks, onTaskClick, onCancel, selectedTaskId }: Queu
                         className="text-xs text-gray-400 hover:text-gray-200 shrink-0"
                         aria-label={isExpanded ? 'Collapse relationships' : 'Expand relationships'}
                         aria-expanded={isExpanded}
+                        data-testid={`queue-rels-toggle-backlog-${task.id}`}
                       >
                         {isExpanded ? '▾' : '▸'} rels
                       </button>
