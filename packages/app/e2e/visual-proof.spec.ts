@@ -521,12 +521,13 @@ test.describe('Visual proof capture', () => {
     await page.getByRole('button', { name: 'Approve Fix' }).click();
 
     await expect(page.getByRole('heading', { name: 'Approve AI Fix' })).toBeVisible();
-    await expect(page.getByText('Codex Session')).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Codex Session' })).toBeVisible();
     await expect(page.getByText(sessionId)).toBeVisible();
     await expect(page.getByText('Human:')).toBeVisible();
     await expect(page.getByText('Fix validator merge conflict and keep visual proof checks.')).toBeVisible();
     await expect(page.getByText('Codex:')).toBeVisible();
     await expect(page.getByText('I resolved the validator conflict and preserved the visual proof checks.')).toBeVisible();
+    await expect(page.getByText('Could not load session')).toHaveCount(0);
 
     await captureScreenshot(page, 'approve-fix-modal-with-session-log');
     await assertPageScreenshot(page, 'approve-fix-modal-with-session-log');
