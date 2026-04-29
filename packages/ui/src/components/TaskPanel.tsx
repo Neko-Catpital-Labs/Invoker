@@ -657,7 +657,10 @@ export function TaskPanel({
             </div>
 
             {/* Summary line */}
-            <div className={`text-xs font-medium ${offenderCount > 0 ? 'text-amber-300' : 'text-emerald-300'}`}>
+            <div
+              className={`text-xs font-medium ${offenderCount > 0 ? 'text-amber-300' : 'text-emerald-300'}`}
+              data-testid="gate-policy-summary"
+            >
               {offenderCount > 0 ? (
                 <>⚠ {offenderCount} gate{offenderCount === 1 ? '' : 's'} {offenderCount === 1 ? 'blocking' : 'need attention'}</>
               ) : (
@@ -733,7 +736,7 @@ export function TaskPanel({
                       </div>
 
                       {hasMixedPolicy ? (
-                        <div className="text-xs text-gray-400 ml-4">
+                        <div className="text-xs text-gray-400 ml-4" data-testid={`gate-policy-mixed-thresholds-${index}`}>
                           <div>Mixed thresholds across {group.length} dep{group.length === 1 ? '' : 's'}</div>
                           {!isEditingGatePolicies && <div className="mt-0.5">Unblock at <span className="text-amber-400">⚠ mixed</span></div>}
                         </div>
@@ -766,7 +769,14 @@ export function TaskPanel({
                                 <span className="text-gray-300">{formatStatusLabel(draftPolicy as TaskStatus)}</span>
                               </>
                             )}
-                            {impactText && <span className="text-gray-400 ml-1">{impactText}</span>}
+                            {impactText && (
+                              <span
+                                className="text-gray-400 ml-1"
+                                data-testid={`gate-policy-impact-${index}`}
+                              >
+                                {impactText}
+                              </span>
+                            )}
                           </div>
                         </div>
                       )}
@@ -782,6 +792,7 @@ export function TaskPanel({
                 <button
                   onClick={() => setIsSatisfiedListExpanded(!isSatisfiedListExpanded)}
                   className="text-xs text-gray-400 hover:text-gray-300 w-full text-left"
+                  data-testid="gate-policy-satisfied-toggle"
                 >
                   {effectiveExpanded ? '▾' : '▸'} {satisfied.length} satisfied gate{satisfied.length === 1 ? '' : 's'}
                 </button>
