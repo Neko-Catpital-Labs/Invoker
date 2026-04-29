@@ -115,7 +115,7 @@ export function QueueView({ tasks, onTaskClick, onCancel, selectedTaskId }: Queu
 
   const handleCancel = useCallback(
     (taskId: string) => {
-      const confirmed = window.confirm(`Cancel task "${taskId}" and all downstream dependents?`);
+      const confirmed = window.confirm(`Terminate task "${taskId}" and all downstream dependents?`);
       if (confirmed) onCancel(taskId);
     },
     [onCancel],
@@ -234,7 +234,7 @@ export function QueueView({ tasks, onTaskClick, onCancel, selectedTaskId }: Queu
                   }}
                   className="ml-2 px-2 py-0.5 text-xs bg-red-700 hover:bg-red-600 text-white rounded shrink-0"
                 >
-                  Cancel
+                  Terminate
                 </button>
               </div>
               {isExpanded && (
@@ -327,7 +327,7 @@ export function QueueView({ tasks, onTaskClick, onCancel, selectedTaskId }: Queu
                   }}
                   className="ml-2 px-2 py-0.5 text-xs bg-red-700 hover:bg-red-600 text-white rounded shrink-0"
                 >
-                  Cancel
+                  Terminate
                 </button>
               </div>
               {isExpanded && (

@@ -17,6 +17,14 @@ describe('auto-fix-gating', () => {
     expect(shouldSkipAutoFixForError('Cancelled: upstream task "build" was cancelled')).toBe(true);
   });
 
+  it('skips auto-fix for task-level termination errors', () => {
+    expect(shouldSkipAutoFixForError('Terminated by user')).toBe(true);
+  });
+
+  it('skips auto-fix for downstream termination errors', () => {
+    expect(shouldSkipAutoFixForError('Terminated: upstream task "build" was terminated')).toBe(true);
+  });
+
   it('does not skip auto-fix for normal failures', () => {
     expect(shouldSkipAutoFixForError('non-zero exit')).toBe(false);
     expect(shouldSkipAutoFixForError('Merge failed: CONFLICT')).toBe(false);
