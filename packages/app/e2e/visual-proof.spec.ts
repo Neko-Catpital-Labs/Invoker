@@ -22,6 +22,22 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { stringify as yamlStringify } from 'yaml';
 
+/** Plan for queue-semantics visual proof: enough tasks to fill Action Queue and Backlog. */
+const QUEUE_SEMANTICS_PLAN = {
+  name: 'Queue Semantics Visual Proof',
+  repoUrl: E2E_REPO_URL,
+  onFinish: 'none' as const,
+  tasks: [
+    { id: 'qs-running', description: 'Running task (executing)', command: 'echo run', dependencies: [] },
+    { id: 'qs-fixing', description: 'Fixing with AI task', command: 'echo fix', dependencies: [] },
+    { id: 'qs-needs-input', description: 'Needs human input', command: 'echo input', dependencies: [] },
+    { id: 'qs-review', description: 'Review ready task', command: 'echo review', dependencies: [] },
+    { id: 'qs-approval', description: 'Awaiting approval task', command: 'echo approve', dependencies: [] },
+    { id: 'qs-queued', description: 'Queued pending task', command: 'echo queued', dependencies: [] },
+    { id: 'qs-blocked', description: 'Blocked by running task', command: 'echo blocked', dependencies: ['qs-running'] },
+  ],
+};
+
 /** Multi-task DAG for verifying deterministic layout ordering. */
 const DAG_DETERMINISM_PLAN = {
   name: 'DAG determinism test',
@@ -499,9 +515,36 @@ test.describe('Visual proof capture', () => {
     await page.getByRole('button', { name: 'Queue' }).click();
     await expect(page.getByText('Running 1 / 3')).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Action Queue (1)' })).toBeVisible();
-    await expect(page.getByRole('heading', { name: 'Backlog (Pending/Blocked, not in queue) (3)' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Backlog (3)' })).toBeVisible();
     await captureScreenshot(page, 'queue-view-concurrency');
     await assertPageScreenshot(page, 'queue-view-concurrency');
+  });
+
+  test('queue-semantics — action queue with canonical task states', async ({ page }) => {
+    await loadPlan(page, QUEUE_SEMANTICS_PLAN);
+    const now = new Date();
+    await injectTaskStates(page, [
+      { taskId: 'qs-running', changes: { status: 'running', execution: { startedAt: now } } },
+      { taskId: 'qs-fixing', changes: { status: 'running', execution: { isFixingWithAI: true, startedAt: now } } },
+      { taskId: 'qs-needs-input', changes: { status: 'needs_input', execution: { startedAt: now } } },
+      { taskId: 'qs-review', changes: { status: 'review_ready', execution: { startedAt: now } } },
+      { taskId: 'qs-approval', changes: { status: 'awaiting_approval', execution: { startedAt: now } } },
+      // qs-queued stays pending with no deps → lands in Action Queue queued section
+      // qs-blocked stays pending with unmet dep on qs-running → lands in Backlog
+    ]);
+
+    // Navigate to queue view
+    await page.getByRole('button', { name: 'Queue' }).click();
+
+    // Assert queue section headings are visible
+    await expect(page.getByRole('heading', { name: /Action Queue/ })).toBeVisible();
+    await expect(page.getByRole('heading', { name: /Backlog/ })).toBeVisible();
+
+    // Assert at least one canonical task-state label rendered in the action queue rows
+    await expect(page.locator('text=running').first()).toBeVisible();
+
+    await captureScreenshot(page, 'queue-semantics-action-states');
+    await assertPageScreenshot(page, 'queue-semantics-action-states');
   });
 
   test('gate-policy-side-panel — blocked task with satisfied and offender gates', async ({ page }) => {

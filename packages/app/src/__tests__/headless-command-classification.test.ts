@@ -54,6 +54,25 @@ describe('headless-command-classification', () => {
     });
   });
 
+  it('resolves explicit workflow and task ids without requiring persistence lookup', () => {
+    const emptyLookup: HeadlessTargetLookup = {
+      loadWorkflow: () => undefined,
+      listWorkflows: () => [],
+      loadTasks: () => [],
+    };
+
+    expect(resolveHeadlessTarget('wf-99', emptyLookup)).toEqual({
+      kind: 'workflow',
+      workflowId: 'wf-99',
+    });
+    expect(resolveHeadlessTarget('wf-99/task-a', emptyLookup)).toEqual({
+      kind: 'task',
+      workflowId: 'wf-99',
+      taskId: 'wf-99/task-a',
+      resolvedTaskId: 'wf-99/task-a',
+    });
+  });
+
   it('throws when target workflow cannot be resolved', () => {
     expect(() => resolveHeadlessTargetWorkflowId('missing-target', targetLookup)).toThrow(
       'Could not resolve headless target workflow for "missing-target"',

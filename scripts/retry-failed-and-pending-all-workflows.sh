@@ -129,7 +129,11 @@ else
     local code=0
 
     set +e
-    cmd_out="$(node "$IPC_HELPER" exec --no-track -- retry "$wf_id" 2>&1)"
+    if [[ "${INVOKER_HEADLESS_STANDALONE:-0}" = "1" ]]; then
+      cmd_out="$("$RUNNER" --headless --no-track retry "$wf_id" 2>&1)"
+    else
+      cmd_out="$(node "$IPC_HELPER" exec --no-track -- retry "$wf_id" 2>&1)"
+    fi
     code=$?
     set -e
 
@@ -194,7 +198,20 @@ else
       echo "[dispatch $IDX/$TOTAL] $WF_ID log=$LOG_DIR/${WF_ID}.log"
     done <<<"$WORKFLOWS"
 
-    node "$IPC_HELPER" batch-exec --no-track --parallel "$PARALLELISM" < "$COMMANDS_FILE" > "$OUTPUT_JSONL"
+    if [[ "${INVOKER_HEADLESS_STANDALONE:-0}" = "1" ]]; then
+      while IFS= read -r WF_ID; do
+        [[ -z "$WF_ID" ]] && continue
+        if "$RUNNER" --headless --no-track retry "$WF_ID" > "$LOG_DIR/${WF_ID}.log" 2>&1; then
+          printf "%s\tSUCCEEDED\n" "$WF_ID" >> "$RESULT_FILE"
+          DISPATCHED=$((DISPATCHED + 1))
+        else
+          printf "%s\tFAILED\n" "$WF_ID" >> "$RESULT_FILE"
+        fi
+      done <<<"$WORKFLOWS"
+    else
+      node "$IPC_HELPER" batch-exec --no-track --parallel "$PARALLELISM" < "$COMMANDS_FILE" > "$OUTPUT_JSONL"
+    fi
+    if [[ "${INVOKER_HEADLESS_STANDALONE:-0}" != "1" ]]; then
     python3 - "$RESULT_FILE" "$LOG_DIR" "$OUTPUT_JSONL" <<'PY'
 import json
 import pathlib
@@ -216,13 +233,16 @@ for raw in output_jsonl.read_text(encoding="utf-8").splitlines():
     with result_file.open("a", encoding="utf-8") as handle:
         handle.write(f"{workflow_id}\t{'SUCCEEDED' if item.get('ok') else 'FAILED'}\n")
 PY
+    fi
     rm -f "$COMMANDS_FILE"
     rm -f "$OUTPUT_JSONL"
 
     while IFS=$'\t' read -r _wf result; do
       case "$result" in
         SUCCEEDED)
-          DISPATCHED=$((DISPATCHED + 1))
+          if [[ "${INVOKER_HEADLESS_STANDALONE:-0}" != "1" ]]; then
+            DISPATCHED=$((DISPATCHED + 1))
+          fi
           ;;
         FAILED)
           FAILED=$((FAILED + 1))
