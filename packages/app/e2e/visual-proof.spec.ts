@@ -740,7 +740,9 @@ test.describe('Visual proof capture', () => {
     // Switch to queue view to verify "Terminate" button text on task rows
     await page.getByRole('button', { name: 'Queue' }).click();
     await expect(page.getByRole('heading', { name: /Action Queue/ })).toBeVisible();
-    const terminateButton = page.getByRole('button', { name: 'Terminate' }).first();
+    const terminateButton = page
+      .locator('[data-row-id$="/task-alpha"]')
+      .getByRole('button', { name: 'Terminate' });
     await expect(terminateButton).toBeVisible();
 
     // Switch back to DAG view and right-click the running task for context menu
