@@ -1161,9 +1161,11 @@ describe('TaskPanel double-click editing', () => {
       );
 
       expect(screen.getByText('Gate Policy')).toBeInTheDocument();
-      expect(screen.getByText(/All 1 gate satisfied/)).toBeInTheDocument();
-      expect(screen.queryByTestId(/gate-policy-offender/)).not.toBeInTheDocument();
-      expect(screen.getByText(/1 satisfied gate/)).toBeInTheDocument();
+      const summary = screen.getByTestId('gate-policy-summary');
+      expect(summary).toHaveTextContent('All 1 gate satisfied');
+      expect(screen.queryByTestId('gate-policy-offender-wf-1::__merge__')).not.toBeInTheDocument();
+      const satisfiedToggle = screen.getByTestId('gate-policy-satisfied-toggle');
+      expect(satisfiedToggle).toHaveTextContent('1 satisfied gate');
     });
 
     it('shows amber summary and one offender card when one gate is blocking', () => {
@@ -1190,8 +1192,9 @@ describe('TaskPanel double-click editing', () => {
         />,
       );
 
-      expect(screen.getByText(/1 gate blocking/)).toBeInTheDocument();
-      const offenderRow = screen.getByTestId(/gate-policy-offender/);
+      const summary = screen.getByTestId('gate-policy-summary');
+      expect(summary).toHaveTextContent('1 gate blocking');
+      const offenderRow = screen.getByTestId('gate-policy-offender-wf-1::__merge__');
       expect(offenderRow).toBeInTheDocument();
       const workflowName = offenderRow.querySelector('.text-red-300');
       expect(workflowName).toBeInTheDocument();
@@ -1234,7 +1237,9 @@ describe('TaskPanel double-click editing', () => {
       expect(screen.queryByText('__merge__wf-3')).not.toBeInTheDocument();
 
       // Click disclosure to expand
-      fireEvent.click(screen.getByText(/2 satisfied gates/));
+      const satisfiedToggle = screen.getByTestId('gate-policy-satisfied-toggle');
+      expect(satisfiedToggle).toHaveTextContent('2 satisfied gates');
+      fireEvent.click(satisfiedToggle);
 
       // Now satisfied rows should be visible
       expect(screen.getByText('__merge__wf-2')).toBeInTheDocument();
@@ -1305,10 +1310,14 @@ describe('TaskPanel double-click editing', () => {
         />,
       );
 
-      const offenderRows = screen.getAllByTestId(/gate-policy-offender/);
-      expect(offenderRows.length).toBeGreaterThan(0);
-      expect(screen.getAllByText(/Mixed thresholds/).length).toBeGreaterThan(0);
-      const workflowName = offenderRows[0].querySelector('.text-red-300');
+      const offenderA = screen.getByTestId('gate-policy-offender-wf-1::task-a');
+      const offenderB = screen.getByTestId('gate-policy-offender-wf-1::task-b');
+      expect(offenderA).toBeInTheDocument();
+      expect(offenderB).toBeInTheDocument();
+      const mixedThresholdEls = screen.getAllByTestId(/^gate-policy-offender-.+-mixed-threshold$/);
+      expect(mixedThresholdEls.length).toBeGreaterThan(0);
+      expect(mixedThresholdEls[0]).toHaveTextContent('Mixed thresholds');
+      const workflowName = offenderA.querySelector('.text-red-300');
       expect(workflowName).toBeInTheDocument();
     });
 
@@ -1346,7 +1355,8 @@ describe('TaskPanel double-click editing', () => {
 
       // Check for impact text
       await waitFor(() => {
-        expect(screen.getByText(/would unblock now/)).toBeInTheDocument();
+        const impact = screen.getByTestId('gate-policy-offender-wf-1::__merge__-impact');
+        expect(impact).toHaveTextContent('would unblock now');
       });
     });
   });
