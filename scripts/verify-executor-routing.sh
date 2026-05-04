@@ -15,7 +15,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 if [[ ! -f packages/app/dist/main.js ]]; then
-  echo "Building app (dist missing)..." >&2
+  echo "==> packages/app/dist/main.js missing — building..." >&2
   pnpm --filter @invoker/core build >&2
   pnpm --filter @invoker/persistence build >&2
   pnpm --filter @invoker/executors build >&2
