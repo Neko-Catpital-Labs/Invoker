@@ -60,10 +60,13 @@ test.describe('Headless thundering herd', () => {
     await startPlan(page);
     await page.locator('.react-flow__node[data-testid$="task-alpha"]').waitFor({ state: 'visible', timeout: 10000 });
 
-    const pageTasks = await page.evaluate(() => window.invoker.getTasks());
-    const currentTasks = Array.isArray(pageTasks) ? pageTasks : pageTasks.tasks;
-    const currentWorkflowId = currentTasks[0]?.config?.workflowId as string | undefined;
-    expect(currentWorkflowId).toBeTruthy();
+    // Discover the active workflow through the renderer bridge API
+    // (listWorkflows) rather than reaching into task config internals.
+    // This is the owner-boundary-compliant discovery path — the renderer
+    // exposes it via IPC without crossing into persistence directly.
+    const workflows = await page.evaluate(() => window.invoker.listWorkflows());
+    expect(workflows.length).toBeGreaterThan(0);
+    const currentWorkflowId = workflows[0].id as string;
 
     const herdPlan = {
       name: 'Headless Herd Seed',
@@ -82,7 +85,7 @@ test.describe('Headless thundering herd', () => {
     await writeFile(planPath, yamlStringify(herdPlan), 'utf8');
 
     const workflowIds = new Set<string>();
-    if (currentWorkflowId) workflowIds.add(currentWorkflowId);
+    workflowIds.add(currentWorkflowId);
     for (let i = 0; i < 8; i += 1) {
       const result = await runHeadlessClient(testDir, ['run', planPath, '--no-track']);
       // Use the workflow id echoed by this exact submission. Querying shared
