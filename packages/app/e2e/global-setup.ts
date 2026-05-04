@@ -19,19 +19,18 @@ const gitEnv = {
   GIT_COMMITTER_EMAIL: process.env.GIT_COMMITTER_EMAIL ?? 'ci@invoker.dev',
 };
 
-export default function globalSetup(): void {
-  // Ensure the Electron app is built (dist/main.js must exist for electron.launch)
-  const appDir = path.resolve(__dirname, '..');
-  const mainJs = path.join(appDir, 'dist', 'main.js');
-  if (!existsSync(mainJs)) {
-    execSync('pnpm build', { cwd: appDir, stdio: 'inherit' });
-  }
+const repoRoot = path.resolve(__dirname, '..', '..', '..');
 
-  // Ensure the renderer UI is built (the main process loads dist/ui/index.html or packages/ui/dist/index.html)
-  const repoRoot = path.resolve(appDir, '..', '..');
-  const uiDistIndex = path.join(repoRoot, 'packages', 'ui', 'dist', 'index.html');
-  if (!existsSync(uiDistIndex)) {
+export default function globalSetup(): void {
+  // Build dependent packages and the app itself if artifacts are missing.
+  if (!existsSync(path.join(repoRoot, 'packages', 'ui', 'dist', 'index.html'))) {
     execSync('pnpm --filter @invoker/ui build', { cwd: repoRoot, stdio: 'inherit' });
+  }
+  if (!existsSync(path.join(repoRoot, 'packages', 'surfaces', 'dist', 'index.js'))) {
+    execSync('pnpm --filter @invoker/surfaces build', { cwd: repoRoot, stdio: 'inherit' });
+  }
+  if (!existsSync(path.join(repoRoot, 'packages', 'app', 'dist', 'main.js'))) {
+    execSync('pnpm run build', { cwd: path.join(repoRoot, 'packages', 'app'), stdio: 'inherit' });
   }
 
   if (existsSync(E2E_BARE_REPO)) rmSync(E2E_BARE_REPO, { recursive: true });
