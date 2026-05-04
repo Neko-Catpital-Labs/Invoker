@@ -63,7 +63,6 @@ async function flushOutputStream(stream: NodeJS.WriteStream): Promise<void> {
 }
 
 const DEFAULT_NO_TRACK_DELEGATION_TIMEOUT_MS = 30_000;
-const GUI_OWNER_INITIAL_DELEGATION_TIMEOUT_MS = 8_000;
 const POST_BOOTSTRAP_NO_TRACK_DELEGATION_TIMEOUT_MS = 90_000;
 const POST_BOOTSTRAP_OWNER_READY_TIMEOUT_MS = 20_000;
 const READ_ONLY_QUERY_OWNER_READY_TIMEOUT_MS = 20_000;
@@ -74,10 +73,6 @@ type HeadlessOwnerInfo = { ownerId?: string; mode?: string };
 
 function isStandaloneOwner(owner: HeadlessOwnerInfo | null | undefined): owner is HeadlessOwnerInfo & { mode: 'standalone' } {
   return owner?.mode === 'standalone';
-}
-
-function isGuiOwner(owner: HeadlessOwnerInfo | null | undefined): owner is HeadlessOwnerInfo & { mode: 'gui' } {
-  return owner?.mode === 'gui';
 }
 
 function standaloneOwnerBootstrapTimeoutMs(): number {
@@ -298,11 +293,8 @@ export async function runHeadlessClientCommand(
       return resolvedExitCode();
     }
   }
-  if (isGuiOwner(owner)) {
-    const guiTimeoutMs = noTrack ? GUI_OWNER_INITIAL_DELEGATION_TIMEOUT_MS : undefined;
-    if (await delegateMutation(args, messageBus, waitForApproval, noTrack, guiTimeoutMs)) {
-      return resolvedExitCode();
-    }
+  if (owner && await delegateMutation(args, messageBus, waitForApproval, noTrack)) {
+    return resolvedExitCode();
   }
   if (owner && deps.refreshMessageBus) {
     messageBus = await deps.refreshMessageBus();

@@ -1,5 +1,5 @@
 /**
- * Playwright global setup: build the Electron app and create a local bare repo for E2E tests.
+ * Playwright global setup: create a local bare repo for E2E tests.
  *
  * By default, all E2E plans use file:///tmp/invoker-e2e-repo.git as their repoUrl
  * so WorktreeExecutor can clone without a network. Sharded CI can override the
