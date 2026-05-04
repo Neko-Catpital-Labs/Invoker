@@ -278,6 +278,10 @@ export const IpcChannels = {
     request: [taskId: string, newCommand: string];
     response: void;
   },
+  'invoker:edit-task-prompt': {} as {
+    request: [taskId: string, newPrompt: string];
+    response: void;
+  },
   'invoker:edit-task-type': {} as {
     request: [taskId: string, executorType: string, remoteTargetId?: string];
     response: void;

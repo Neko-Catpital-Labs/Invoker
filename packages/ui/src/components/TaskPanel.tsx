@@ -70,6 +70,7 @@ interface TaskPanelProps {
   onReject: (task: TaskState) => void;
   onSelectExperiment: (task: TaskState) => void;
   onEditCommand?: (taskId: string, newCommand: string) => void;
+  onEditPrompt?: (taskId: string, newPrompt: string) => void;
   onEditType?: (taskId: string, executorType: string, remoteTargetId?: string) => void;
   onEditAgent?: (taskId: string, agentName: string) => void;
   onSetExternalGatePolicies?: (taskId: string, updates: ExternalGatePolicyUpdate[]) => Promise<void>;
@@ -170,6 +171,7 @@ export function TaskPanel({
   onReject,
   onSelectExperiment,
   onEditCommand,
+  onEditPrompt,
   onEditType,
   onEditAgent,
   onSetExternalGatePolicies,
@@ -179,6 +181,8 @@ export function TaskPanel({
 }: TaskPanelProps) {
   const [isEditingCommand, setIsEditingCommand] = useState(false);
   const [editCommandValue, setEditCommandValue] = useState('');
+  const [isEditingPrompt, setIsEditingPrompt] = useState(false);
+  const [editPromptValue, setEditPromptValue] = useState('');
   const [branchValue, setBranchValue] = useState(baseBranch ?? '');
   const [showAdvanced, setShowAdvanced] = useState(true);
   const [isEditingGatePolicies, setIsEditingGatePolicies] = useState(false);
@@ -189,6 +193,8 @@ export function TaskPanel({
   useEffect(() => {
     setIsEditingCommand(false);
     setEditCommandValue(task?.config.command ?? '');
+    setIsEditingPrompt(false);
+    setEditPromptValue(task?.config.prompt ?? '');
     setBranchValue(baseBranch ?? '');
     setIsEditingGatePolicies(false);
     setIsSavingGatePolicies(false);
@@ -209,6 +215,7 @@ export function TaskPanel({
   }
 
   const canEditCommand = task.config.command !== undefined && task.status !== 'running' && onEditCommand;
+  const canEditPrompt = task.config.prompt !== undefined && task.status !== 'running' && onEditPrompt;
 
   const handleSaveCommand = () => {
     if (onEditCommand && editCommandValue !== task.config.command) {
@@ -220,6 +227,18 @@ export function TaskPanel({
   const handleCancelEdit = () => {
     setEditCommandValue(task.config.command ?? '');
     setIsEditingCommand(false);
+  };
+
+  const handleSavePrompt = () => {
+    if (onEditPrompt && editPromptValue !== task.config.prompt) {
+      onEditPrompt(task.id, editPromptValue);
+    }
+    setIsEditingPrompt(false);
+  };
+
+  const handleCancelPromptEdit = () => {
+    setEditPromptValue(task.config.prompt ?? '');
+    setIsEditingPrompt(false);
   };
 
   const visualStatus = getEffectiveVisualStatus(task.status, task.execution);
@@ -497,17 +516,48 @@ export function TaskPanel({
                 </button>
               </div>
             </div>
+          ) : isEditingPrompt && task.config.prompt !== undefined ? (
+            <div className="mt-2 space-y-2">
+              <textarea
+                value={editPromptValue}
+                onChange={(e) => setEditPromptValue(e.target.value)}
+                className="w-full rounded p-3 text-xs text-gray-300 bg-blue-900/20 border border-blue-500 focus:outline-none focus:border-blue-400 resize-y"
+                rows={5}
+                data-testid="edit-prompt-input"
+              />
+              <div className="flex gap-2">
+                <button
+                  onClick={handleSavePrompt}
+                  className="flex-1 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded text-xs font-medium transition-colors"
+                  data-testid="save-prompt-btn"
+                >
+                  Save & Re-run
+                </button>
+                <button
+                  onClick={handleCancelPromptEdit}
+                  className="flex-1 px-3 py-1.5 bg-gray-600 hover:bg-gray-500 text-white rounded text-xs font-medium transition-colors"
+                  data-testid="cancel-prompt-edit-btn"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
           ) : (
             <div
               className={`mt-2 rounded p-3 text-xs select-text ${
                 task.config.prompt
-                  ? 'bg-blue-900/20 border border-blue-800 cursor-text'
+                  ? canEditPrompt
+                    ? 'bg-blue-900/20 border border-blue-800 cursor-pointer hover:border-blue-600 transition-colors'
+                    : 'bg-blue-900/20 border border-blue-800 cursor-text'
                   : canEditCommand
                     ? 'bg-gray-800 border border-gray-700 cursor-pointer hover:border-gray-600 transition-colors'
                     : 'bg-gray-800 border border-gray-700 cursor-text'
               }`}
               onDoubleClick={() => {
-                if (canEditCommand) {
+                if (canEditPrompt) {
+                  setEditPromptValue(task.config.prompt ?? '');
+                  setIsEditingPrompt(true);
+                } else if (canEditCommand) {
                   setEditCommandValue(task.config.command ?? '');
                   setIsEditingCommand(true);
                 }
