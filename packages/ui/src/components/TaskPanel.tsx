@@ -715,7 +715,7 @@ export function TaskPanel({
                   const dotColor = status !== 'missing' ? getStatusColor(status as TaskStatus).dot : 'bg-slate-500';
 
                   return (
-                    <div key={`${key}-${index}`} className="rounded border border-gray-700 bg-gray-800/40 p-2 space-y-1" data-testid={`gate-policy-offender-${index}`}>
+                    <div key={key} className="rounded border border-gray-700 bg-gray-800/40 p-2 space-y-1" data-testid={`gate-policy-offender-${key}`}>
                       <div className="flex items-start gap-1">
                         <span className="text-amber-400 flex-shrink-0">⚠</span>
                         <div className="flex-1 min-w-0">
@@ -736,7 +736,7 @@ export function TaskPanel({
                       </div>
 
                       {hasMixedPolicy ? (
-                        <div className="text-xs text-gray-400 ml-4" data-testid={`gate-policy-offender-${index}-mixed-threshold`}>
+                        <div className="text-xs text-gray-400 ml-4" data-testid={`gate-policy-offender-${key}-mixed-threshold`}>
                           <div>Mixed thresholds across {group.length} dep{group.length === 1 ? '' : 's'}</div>
                           {!isEditingGatePolicies && <div className="mt-0.5">Unblock at <span className="text-amber-400">⚠ mixed</span></div>}
                         </div>
@@ -770,7 +770,7 @@ export function TaskPanel({
                               </>
                             )}
                             {impactText && (
-                              <span className="text-gray-400 ml-1" data-testid={`gate-policy-offender-${index}-impact`}>
+                              <span className="text-gray-400 ml-1" data-testid={`gate-policy-offender-${key}-impact`}>
                                 {impactText}
                               </span>
                             )}
