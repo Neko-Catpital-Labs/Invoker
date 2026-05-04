@@ -2553,11 +2553,17 @@ if (isHeadless) {
         'invoker:inject-task-states',
         async (_event, updates: Array<{ taskId: string; changes: TaskStateChanges }>) => {
           for (const { taskId, changes } of updates) {
+            const previousSnapshot = lastKnownTaskStates.get(taskId);
+            const previousTaskStateVersion = previousSnapshot
+              ? ((JSON.parse(previousSnapshot) as { taskStateVersion?: number }).taskStateVersion ?? 1)
+              : 1;
             persistence.updateTask(taskId, changes);
             messageBus.publish(Channels.TASK_DELTA, {
               type: 'updated',
               taskId,
               changes,
+              previousTaskStateVersion,
+              taskStateVersion: previousTaskStateVersion + 1,
             } satisfies TaskDelta);
           }
           orchestrator.syncAllFromDb();
