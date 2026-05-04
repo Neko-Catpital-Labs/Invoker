@@ -221,6 +221,10 @@ export const IpcChannels = {
     request: [];
     response: WorkflowStatus;
   },
+  'invoker:get-task-by-id': {} as {
+    request: [taskId: string];
+    response: TaskState | null;
+  },
   'invoker:get-task-output': {} as {
     request: [taskId: string];
     response: string;
