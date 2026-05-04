@@ -24,10 +24,9 @@ if [ "$EXTENDED" = "1" ] && [ "$DANGEROUS" = "1" ]; then
   MODE_KEY="dangerous"
 fi
 
-GIT_DIR="$(git rev-parse --git-dir)"
-STATE_FILE="${INVOKER_TEST_ALL_STATE_FILE:-$GIT_DIR/invoker-test-all-state.tsv}"
+STATE_FILE="${INVOKER_TEST_ALL_STATE_FILE:-$ROOT/.git/invoker-test-all-state.tsv}"
 RUN_ID="$(date +%Y%m%d-%H%M%S)-$$"
-LOG_ROOT="${GIT_DIR}/invoker-test-all-logs/${RUN_ID}"
+LOG_ROOT="${ROOT}/.git/invoker-test-all-logs/${RUN_ID}"
 mkdir -p "$(dirname "$STATE_FILE")" "$LOG_ROOT"
 touch "$STATE_FILE"
 
