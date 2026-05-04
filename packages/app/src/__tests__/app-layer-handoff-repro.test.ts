@@ -58,6 +58,33 @@ describe('app-layer handoff repros', () => {
     expect(h.getTask('A')!.status).toBe('completed');
   });
 
+  it('edit-task-prompt launches restarted task and persists workspacePath', async () => {
+    const PROMPT_PLAN: PlanDefinition = {
+      name: 'Prompt Handoff Repro',
+      onFinish: 'none',
+      tasks: [
+        { id: 'A', description: 'Prompt task', prompt: 'do the old thing' },
+        { id: 'B', description: 'Downstream', command: 'echo b', dependencies: ['A'] },
+      ],
+    };
+    h.loadAndStart(PROMPT_PLAN);
+    h.completeTask('A');
+    h.completeTask('B');
+
+    // Edit A's prompt — recreate semantics should invalidate B
+    const started = h.orchestrator.editTaskPrompt('A', 'do the new thing');
+    expect(started.some((task) => task.id.endsWith('/A') && task.status === 'running')).toBe(true);
+    expect(h.getTask('A')!.config.prompt).toBe('do the new thing');
+    expect(h.getTask('A')!.execution.workspacePath).toBeUndefined();
+    // B should have been invalidated (reset to pending) by the recreate
+    expect(h.getTask('B')!.status).toBe('pending');
+
+    await dispatchStarted(h, started, 'test.edit-task-prompt');
+
+    expect(h.getTask('A')!.execution.workspacePath).toBe('/tmp/mock-worktree');
+    expect(h.getTask('A')!.status).toBe('completed');
+  });
+
   it('edit-task-type launches restarted task and persists workspacePath', async () => {
     h.loadAndStart(LINEAR_PLAN);
     h.failTask('A', 'broken');

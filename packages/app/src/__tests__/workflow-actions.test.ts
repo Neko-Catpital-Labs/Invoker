@@ -21,6 +21,7 @@ import {
   rejectTask,
   provideInput,
   editTaskCommand,
+  editTaskPrompt,
   editTaskType,
   selectExperiment,
   setWorkflowMergeMode,
@@ -1058,6 +1059,20 @@ describe('editTaskCommand', () => {
     });
 
     expect(orchestrator.editTaskCommand).toHaveBeenCalledWith('task-a', 'npm test');
+    expect(result).toBe(tasks);
+  });
+});
+
+describe('editTaskPrompt', () => {
+  it('calls orchestrator.editTaskPrompt and returns result', () => {
+    const tasks = [makeRunningTask()];
+    const orchestrator = { editTaskPrompt: vi.fn(() => tasks) };
+
+    const result = editTaskPrompt('task-a', 'do the thing', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+    });
+
+    expect(orchestrator.editTaskPrompt).toHaveBeenCalledWith('task-a', 'do the thing');
     expect(result).toBe(tasks);
   });
 });

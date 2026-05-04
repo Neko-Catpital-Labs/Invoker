@@ -515,6 +515,41 @@ describe('Flow 4: edit/fork mutations', () => {
     expect(h.getAllTasks().find((t) => t.id.endsWith('/C-v2'))).toBeUndefined();
   });
 
+  it('editTaskPrompt restarts prompt task in-place and invalidates downstream (recreate semantics)', () => {
+    const PROMPT_PLAN: PlanDefinition = {
+      name: 'Prompt Edit Plan',
+      onFinish: 'none',
+      tasks: [
+        { id: 'A', description: 'Prompt task', prompt: 'do the old thing' },
+        { id: 'B', description: 'Downstream', command: 'echo b', dependencies: ['A'] },
+        { id: 'C', description: 'Leaf task', command: 'echo c', dependencies: ['B'] },
+      ],
+    };
+
+    h.loadAndStart(PROMPT_PLAN);
+    h.completeTask('A');
+    h.completeTask('B');
+    h.completeTask('C');
+
+    const beforeGen = h.getTask('A')!.execution.generation;
+
+    // Edit A's prompt — should restart A in-place and invalidate downstream
+    h.orchestrator.editTaskPrompt('A', 'do the new thing');
+
+    const a = h.getTask('A')!;
+    expect(a.status === 'pending' || a.status === 'running').toBe(true);
+    expect(a.config.prompt).toBe('do the new thing');
+    expect(a.execution.generation).toBeGreaterThan(beforeGen ?? 0);
+
+    // Downstream tasks are invalidated (recreate, not retry)
+    expect(h.getTask('B')!.status).toBe('pending');
+    expect(h.getTask('C')!.status).toBe('pending');
+
+    // No forked copies
+    expect(h.getAllTasks().find((t) => t.id.endsWith('/A-v2'))).toBeUndefined();
+    expect(h.getAllTasks().find((t) => t.id.endsWith('/B-v2'))).toBeUndefined();
+  });
+
   it('editTaskType does NOT fork subtree', () => {
     h.loadAndStart(LINEAR_PLAN);
     h.completeTask('A');
