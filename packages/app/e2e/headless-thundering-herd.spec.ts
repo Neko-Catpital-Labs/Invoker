@@ -37,6 +37,10 @@ import {
 const execFileAsync = promisify(execFile);
 const repoRoot = path.resolve(__dirname, '..', '..', '..');
 
+/** Per-subprocess timeout — long enough for IPC delegation, short enough to
+ *  surface hangs before the 120s Playwright timeout consumes all budget. */
+const HEADLESS_SUBPROCESS_TIMEOUT_MS = 30_000;
+
 /** Run the headless CLI in a subprocess sharing the test's DB dir. */
 async function runHeadlessClient(
   testDir: string,
@@ -47,6 +51,7 @@ async function runHeadlessClient(
   const clientPath = path.join(repoRoot, 'packages', 'app', 'dist', 'headless-client.js');
   return await execFileAsync('node', [clientPath, ...args], {
     cwd: repoRoot,
+    timeout: HEADLESS_SUBPROCESS_TIMEOUT_MS,
     env: {
       ...process.env,
       NODE_ENV: 'test',
@@ -103,9 +108,13 @@ test.describe('Headless thundering herd', () => {
     // Discover the active workflow through the owner's IPC bridge.
     // Using listWorkflows() (a read-only query) avoids opening the DB
     // directly, which would violate the single-writer owner boundary.
-    const workflows = await page.evaluate(() => window.invoker.listWorkflows());
-    expect(workflows.length).toBeGreaterThan(0);
-    const currentWorkflowId = workflows[0].id as string;
+    // Retry because workflow persistence can lag behind UI rendering.
+    let currentWorkflowId!: string;
+    await expect(async () => {
+      const workflows = await page.evaluate(() => window.invoker.listWorkflows());
+      expect(workflows.length).toBeGreaterThan(0);
+      currentWorkflowId = workflows[0].id as string;
+    }).toPass({ timeout: 10_000 });
 
     // -----------------------------------------------------------------------
     // Phase 2 – Burst-submit 8 headless workflows
@@ -139,7 +148,11 @@ test.describe('Headless thundering herd', () => {
     workflowIds.add(currentWorkflowId);
     for (let i = 0; i < 8; i += 1) {
       const result = await runHeadlessClient(testDir, ['run', planPath, '--no-track']);
-      workflowIds.add(parseWorkflowId(result.stdout));
+      const id = parseWorkflowId(result.stdout);
+      workflowIds.add(id);
+      // Each submission must delegate to the GUI owner, not bootstrap a
+      // standalone. The "Delegated to owner" prefix in stdout is the signal.
+      expect(result.stdout).toContain('Delegated to owner');
     }
 
     // -----------------------------------------------------------------------
@@ -155,6 +168,8 @@ test.describe('Headless thundering herd', () => {
     // -----------------------------------------------------------------------
 
     // Allow IPC messages from Phase 2 submissions to reach the owner.
+    // 500ms is a conservative floor: the 8 sequential subprocess calls above
+    // already took several seconds, so most IPC messages have already arrived.
     await page.waitForTimeout(500);
 
     const retryIds = Array.from(workflowIds);
