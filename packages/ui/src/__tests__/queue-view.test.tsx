@@ -312,9 +312,11 @@ describe('QueueView', () => {
 
       await waitFor(() => expect(getQueueStatus).toHaveBeenCalled());
 
-      // The rels toggle buttons should be present (tasks have relationships)
-      const relButtons = screen.getAllByText(/rels/);
-      expect(relButtons.length).toBeGreaterThan(0);
+      // The rels toggle buttons should be present (tasks have relationships).
+      // task-a is in Action Queue; task-b and task-c are in Backlog.
+      expect(screen.getByTestId('queue-rels-toggle-action-wf-1/task-a')).toBeInTheDocument();
+      expect(screen.getByTestId('queue-rels-toggle-backlog-wf-1/task-b')).toBeInTheDocument();
+      expect(screen.getByTestId('queue-rels-toggle-backlog-wf-1/task-c')).toBeInTheDocument();
 
       // But no upstream/downstream labels should be visible (collapsed)
       expect(screen.queryByText('upstream:')).not.toBeInTheDocument();
@@ -441,7 +443,8 @@ describe('QueueView', () => {
       );
 
       await waitFor(() => expect(getQueueStatus).toHaveBeenCalled());
-      expect(screen.queryByText(/rels/)).not.toBeInTheDocument();
+      expect(screen.queryByTestId('queue-rels-toggle-action-wf-1/lone-task')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('queue-rels-toggle-backlog-wf-1/lone-task')).not.toBeInTheDocument();
     });
   });
 
