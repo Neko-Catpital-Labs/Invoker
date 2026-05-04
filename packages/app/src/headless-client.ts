@@ -13,13 +13,18 @@ import {
   tryDelegateQueryUiPerf,
   tryDelegateResume,
   tryDelegateRun,
-  tryPingHeadlessOwner,
 } from './headless-delegation.js';
 import {
   spawnDetachedStandaloneOwner,
   tryAcquireOwnerBootstrapLock,
 } from './headless-owner-bootstrap.js';
 import { loadConfig } from './config.js';
+import {
+  discoverOwner,
+  isOwnerReachable,
+  isStandaloneCapable,
+  type OwnerDiscoveryResult,
+} from './owner-endpoint.js';
 
 const RED = '\x1b[31m';
 const RESET = '\x1b[0m';
@@ -69,11 +74,6 @@ const READ_ONLY_QUERY_OWNER_READY_TIMEOUT_MS = 20_000;
 const READ_ONLY_QUERY_REQUEST_TIMEOUT_MS = 8_000;
 const POST_BOOTSTRAP_OWNER_RESTART_ATTEMPTS = 3;
 const DEFAULT_STANDALONE_OWNER_BOOTSTRAP_TIMEOUT_MS = 60_000;
-type HeadlessOwnerInfo = { ownerId?: string; mode?: string };
-
-function isStandaloneOwner(owner: HeadlessOwnerInfo | null | undefined): owner is HeadlessOwnerInfo & { mode: 'standalone' } {
-  return owner?.mode === 'standalone';
-}
 
 function standaloneOwnerBootstrapTimeoutMs(): number {
   const raw = process.env.INVOKER_HEADLESS_OWNER_BOOTSTRAP_TIMEOUT_MS;
@@ -131,16 +131,16 @@ async function delegateReadOnlyQuery(
   }
   const deadline = Date.now() + READ_ONLY_QUERY_OWNER_READY_TIMEOUT_MS;
   let messageBus = bus;
-  let owner: HeadlessOwnerInfo | null = null;
+  let owner: OwnerDiscoveryResult = null;
   while (Date.now() < deadline) {
-    owner = await tryPingHeadlessOwner(messageBus, 2_000);
-    if (owner) break;
+    owner = await discoverOwner(messageBus, 2_000);
+    if (isOwnerReachable(owner)) break;
     if (refreshMessageBus) {
       messageBus = await refreshMessageBus();
     }
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
-  if (!owner) {
+  if (!isOwnerReachable(owner)) {
     throw new Error(isUiPerf
       ? 'query ui-perf requires a running shared owner process'
       : 'query queue requires a running shared owner process');
@@ -202,8 +202,8 @@ async function delegateAfterBootstrap(
   const deadline = Date.now() + POST_BOOTSTRAP_OWNER_READY_TIMEOUT_MS;
   let messageBus = bus;
   while (Date.now() < deadline) {
-    const owner = await tryPingHeadlessOwner(messageBus, 1_000);
-    if (isStandaloneOwner(owner) && await delegateMutation(
+    const owner = await discoverOwner(messageBus, 1_000);
+    if (isStandaloneCapable(owner) && await delegateMutation(
       args,
       messageBus,
       waitForApproval,
@@ -236,8 +236,8 @@ async function ensureStandaloneOwnerViaBootstrap(bus: MessageBus): Promise<void>
     }
     const deadline = Date.now() + standaloneOwnerBootstrapTimeoutMs();
     while (Date.now() < deadline) {
-      const owner = await tryPingHeadlessOwner(bus, 500);
-      if (isStandaloneOwner(owner)) return;
+      const owner = await discoverOwner(bus, 500);
+      if (isStandaloneCapable(owner)) return;
       await new Promise((resolveDelay) => setTimeout(resolveDelay, 200));
     }
     throw new SharedMutationOwnerTimeoutError();
@@ -287,19 +287,19 @@ export async function runHeadlessClientCommand(
     return deps.runElectronHeadless(argv);
   }
 
-  const owner = await tryPingHeadlessOwner(messageBus, 3_000);
-  if (isStandaloneOwner(owner)) {
+  const owner = await discoverOwner(messageBus, 3_000);
+  if (isStandaloneCapable(owner)) {
     if (await delegateMutation(args, messageBus, waitForApproval, noTrack)) {
       return resolvedExitCode();
     }
   }
-  if (owner && await delegateMutation(args, messageBus, waitForApproval, noTrack)) {
+  if (isOwnerReachable(owner) && await delegateMutation(args, messageBus, waitForApproval, noTrack)) {
     return resolvedExitCode();
   }
-  if (owner && deps.refreshMessageBus) {
+  if (isOwnerReachable(owner) && deps.refreshMessageBus) {
     messageBus = await deps.refreshMessageBus();
-    const refreshedOwner = await tryPingHeadlessOwner(messageBus, 1_000);
-    if (refreshedOwner && await delegateMutation(args, messageBus, waitForApproval, noTrack)) {
+    const refreshedOwner = await discoverOwner(messageBus, 1_000);
+    if (isOwnerReachable(refreshedOwner) && await delegateMutation(args, messageBus, waitForApproval, noTrack)) {
       return resolvedExitCode();
     }
   }
