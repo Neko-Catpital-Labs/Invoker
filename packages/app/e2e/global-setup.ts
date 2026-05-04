@@ -7,6 +7,7 @@
  */
 import { execSync } from 'child_process';
 import { existsSync, rmSync } from 'fs';
+import * as path from 'path';
 
 export const E2E_BARE_REPO = process.env.INVOKER_E2E_BARE_REPO ?? '/tmp/invoker-e2e-repo.git';
 
@@ -18,7 +19,20 @@ const gitEnv = {
   GIT_COMMITTER_EMAIL: process.env.GIT_COMMITTER_EMAIL ?? 'ci@invoker.dev',
 };
 
+const repoRoot = path.resolve(__dirname, '..', '..', '..');
+
 export default function globalSetup(): void {
+  // Build dependent packages and the app itself if artifacts are missing.
+  if (!existsSync(path.join(repoRoot, 'packages', 'ui', 'dist', 'index.html'))) {
+    execSync('pnpm --filter @invoker/ui build', { cwd: repoRoot, stdio: 'inherit' });
+  }
+  if (!existsSync(path.join(repoRoot, 'packages', 'surfaces', 'dist', 'index.js'))) {
+    execSync('pnpm --filter @invoker/surfaces build', { cwd: repoRoot, stdio: 'inherit' });
+  }
+  if (!existsSync(path.join(repoRoot, 'packages', 'app', 'dist', 'main.js'))) {
+    execSync('pnpm run build', { cwd: path.join(repoRoot, 'packages', 'app'), stdio: 'inherit' });
+  }
+
   if (existsSync(E2E_BARE_REPO)) rmSync(E2E_BARE_REPO, { recursive: true });
 
   const tmpClone = `${E2E_BARE_REPO}.setup`;
