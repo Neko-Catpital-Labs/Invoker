@@ -5,6 +5,16 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 cd "$ROOT"
 
+# Ensure headless client is built (standalone worktrees start without dist/).
+if [ ! -f packages/app/dist/headless-client.js ]; then
+  pnpm --filter @invoker/core build >&2
+  pnpm --filter @invoker/persistence build >&2
+  pnpm --filter @invoker/executors build >&2
+  pnpm --filter @invoker/surfaces build >&2
+  pnpm --filter @invoker/ui build >&2
+  pnpm --filter @invoker/app build >&2
+fi
+
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/invoker-invalid-config.XXXXXX")"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
