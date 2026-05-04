@@ -11,6 +11,15 @@
  */
 import type { TaskDelta, TaskState } from '@invoker/workflow-core';
 
+interface VersionedTaskState extends TaskState {
+  taskStateVersion?: number;
+}
+
+interface VersionedUpdatedTaskDelta extends Extract<TaskDelta, { type: 'updated' }> {
+  taskStateVersion?: number;
+  previousTaskStateVersion?: number;
+}
+
 // ── Cache entry ──────────────────────────────────────────────
 
 export interface CacheEntry {
@@ -40,7 +49,7 @@ export class TaskSnapshotCache {
   // ── Bulk operations (used by seedUiSnapshotCache, db-poll, etc.) ──
 
   set(taskId: string, snapshot: string): void {
-    const task: TaskState = JSON.parse(snapshot);
+    const task = JSON.parse(snapshot) as VersionedTaskState;
     this.entries.set(taskId, {
       snapshot,
       taskStateVersion: task.taskStateVersion ?? 1,
@@ -117,6 +126,7 @@ export function applyDelta(
   }
 
   // delta.type === 'updated'
+  const versionedDelta = delta as VersionedUpdatedTaskDelta;
   const entry = cache.getEntry(delta.taskId);
 
   // Quarantined tasks: ignore until recovery completes.
@@ -125,7 +135,7 @@ export function applyDelta(
   }
 
   // Unknown task or taskStateVersion gap → quarantine.
-  if (!entry || entry.taskStateVersion !== delta.previousTaskStateVersion) {
+  if (!entry || entry.taskStateVersion !== versionedDelta.previousTaskStateVersion) {
     // Mark as quarantined.  If the entry exists, keep its snapshot but
     // flag it; if it doesn't, create a placeholder entry.
     if (entry) {
@@ -136,19 +146,19 @@ export function applyDelta(
   }
 
   // Task-state version matches — apply the merge.
-  const prev: TaskState = JSON.parse(entry.snapshot);
+  const prev = JSON.parse(entry.snapshot) as VersionedTaskState;
   const { config: cfgChanges, execution: execChanges, ...topLevel } = delta.changes;
   const merged = {
     ...prev,
     ...topLevel,
-    taskStateVersion: delta.taskStateVersion,
+    taskStateVersion: versionedDelta.taskStateVersion,
     config: { ...prev.config, ...cfgChanges },
     execution: { ...prev.execution, ...execChanges },
   };
   const snapshot = JSON.stringify(merged);
   // Update the entry in-place to avoid extra map operations.
   entry.snapshot = snapshot;
-  entry.taskStateVersion = delta.taskStateVersion;
+  entry.taskStateVersion = versionedDelta.taskStateVersion ?? entry.taskStateVersion;
 
   return result;
 }

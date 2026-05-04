@@ -2013,6 +2013,14 @@ if (isHeadless) {
     }
   }
 
+  function loadTaskByIdFromPersistence(taskId: string): TaskState | undefined {
+    for (const workflow of persistence.listWorkflows()) {
+      const task = persistence.loadTasks(workflow.id).find((candidate) => candidate.id === taskId);
+      if (task) return task;
+    }
+    return undefined;
+  }
+
   function listWorkflowsByStartupRecency() {
     return [...persistence.listWorkflows()].sort((left, right) => {
       const rightTs = Date.parse(right.updatedAt ?? '') || 0;
@@ -2493,7 +2501,7 @@ if (isHeadless) {
       const { quarantined } = applyDelta(d, lastKnownTaskStates);
       for (const taskId of quarantined) {
         logger.info(`[gap-detect] quarantined task="${taskId}" — triggering authoritative reload`, { module: 'delta-merge' });
-        const authoritative = persistence.loadTask(taskId);
+        const authoritative = loadTaskByIdFromPersistence(taskId);
         resolveQuarantine(lastKnownTaskStates, taskId, authoritative);
         if (authoritative) {
           sendTaskDeltaToRenderer({ type: 'created', task: authoritative });
@@ -2735,7 +2743,7 @@ if (isHeadless) {
     });
     ipcMain.handle('invoker:get-events', (_event, taskId: string) => persistence.getEvents(taskId));
     ipcMain.handle('invoker:get-status', () => orchestrator.getWorkflowStatus());
-    ipcMain.handle('invoker:get-task-by-id', (_event, taskId: string) => persistence.loadTask(taskId) ?? null);
+    ipcMain.handle('invoker:get-task-by-id', (_event, taskId: string) => loadTaskByIdFromPersistence(taskId) ?? null);
     ipcMain.handle('invoker:get-task-output', (_event, taskId: string) => persistence.getTaskOutput(taskId));
 
     ipcMain.handle('invoker:get-output-chunks', (_event, taskId: string) => persistence.getOutputChunks(taskId));
