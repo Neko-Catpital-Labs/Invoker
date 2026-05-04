@@ -16,7 +16,7 @@ beforeEach(() => {
 });
 
 describe('applyPlanDefinitionDefaults', () => {
-  it('fills baseBranch, featureBranch, onFinish when omitted (GUI yaml.load shape)', () => {
+  it('fills baseBranch, featureBranch, onFinish when omitted (minimal yaml.load shape)', () => {
     const plan = applyPlanDefinitionDefaults({
       name: 'My Plan',
       repoUrl: 'git@github.com:test/repo.git',

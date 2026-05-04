@@ -1,5 +1,5 @@
 /**
- * Shared workflow action functions used by headless, GUI, and Slack surfaces.
+ * Shared workflow action functions used by all owner endpoints and clients.
  *
  * Each function performs an orchestrator mutation and returns TaskState[]
  * of affected tasks. The caller decides whether to executeTasks() and/or
