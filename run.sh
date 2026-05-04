@@ -73,12 +73,20 @@ ensure_workspace_bootstrapped
 # Unset ELECTRON_RUN_AS_NODE so Electron loads its full API.
 unset ELECTRON_RUN_AS_NODE
 
-# In headless mode, skip cleanup.  Build if the artifact is missing (e.g.
-# standalone invocation outside a running app).
+# In headless mode, validate config fast (before any build) and then ensure dist exists.
 if [ "$1" = "--headless" ]; then
-  shift
-  if [ ! -f ./packages/app/dist/headless-client.js ]; then
-    echo "Building headless client (first run)..." >&2
+  # Fast-path config validation in bash so malformed JSON fails immediately
+  # without waiting for a dist build.
+  _cfg_path="${INVOKER_REPO_CONFIG_PATH:-$HOME/.invoker/config.json}"
+  if [ -f "$_cfg_path" ]; then
+    if ! node -e "JSON.parse(require('fs').readFileSync(process.argv[1],'utf8'))" "$_cfg_path" 2>/dev/null; then
+      echo "Invalid Invoker config JSON at $_cfg_path: malformed JSON" >&2
+      exit 1
+    fi
+  fi
+
+  # Build app and dependencies if headless entry point is missing (e.g. fresh worktree).
+  if [ ! -f "$REPO_ROOT/packages/app/dist/headless-client.js" ]; then
     pnpm --filter @invoker/core build >&2
     pnpm --filter @invoker/persistence build >&2
     pnpm --filter @invoker/executors build >&2
@@ -86,6 +94,8 @@ if [ "$1" = "--headless" ]; then
     pnpm --filter @invoker/ui build >&2
     pnpm --filter @invoker/app build >&2
   fi
+
+  shift
   exec node ./packages/app/dist/headless-client.js "$@"
 fi
 
