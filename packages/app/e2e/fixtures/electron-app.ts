@@ -133,8 +133,23 @@ export const TEST_PLAN = {
   ],
 };
 
+/** Minimal plan shape accepted by loadPlan (command OR prompt per task). */
+export type LoadablePlan = {
+  name: string;
+  repoUrl?: string;
+  onFinish: 'none' | 'merge' | 'pull_request';
+  tasks: Array<{
+    id: string;
+    description: string;
+    command?: string;
+    prompt?: string;
+    dependencies?: string[];
+    experimentVariants?: Array<{ id: string; description: string; command: string }>;
+  }>;
+};
+
 /** Load a plan into the running app via the IPC bridge and wait for DAG to render. */
-export async function loadPlan(page: Page, plan: typeof TEST_PLAN): Promise<void> {
+export async function loadPlan(page: Page, plan: LoadablePlan): Promise<void> {
   const planYaml = yamlStringify(plan);
   await page.evaluate((p) => window.invoker.loadPlan(p), planYaml);
   await page.locator(`.react-flow__node[data-testid$="${plan.tasks[0].id}"]`).first().waitFor({ state: 'visible', timeout: 10000 });
