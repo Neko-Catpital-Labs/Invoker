@@ -40,6 +40,15 @@ if ! command -v jq >/dev/null 2>&1; then
   exit 1
 fi
 
+now_ms() {
+  date +%s%3N
+}
+
+log_chain() {
+  local msg="$1"
+  echo "[submit-workflow-chain] ${msg}"
+}
+
 resolve_abs() {
   local p="$1"
   cd "$(dirname "$p")" && pwd
@@ -87,25 +96,35 @@ matches_pattern() {
 resolve_persisted_workflow_id() {
   local workflow_name="$1"
   local wf_id=""
+  local start_ms
+  start_ms="$(now_ms)"
+  local attempt=0
   for _ in $(seq 1 30); do
+    attempt=$((attempt + 1))
     wf_id="$(
       ./run.sh --headless query workflows --output json 2>/dev/null \
         | extract_json_stream \
         | jq -r --arg n "$workflow_name" '[.[] | select(.name == $n)] | sort_by(.createdAt) | last | .id // empty'
     )"
     if [[ -n "$wf_id" ]]; then
+      log_chain "resolve_persisted_workflow_id name=\"$workflow_name\" found=\"$wf_id\" attempt=${attempt} elapsedMs=$(( $(now_ms) - start_ms ))"
       printf '%s' "$wf_id"
       return 0
     fi
     sleep 0.2
   done
+  log_chain "resolve_persisted_workflow_id name=\"$workflow_name\" failed attempts=${attempt} elapsedMs=$(( $(now_ms) - start_ms ))"
   return 1
 }
 
 resolve_workflow_feature_branch() {
   local workflow_id="$1"
   local feature_branch=""
+  local start_ms
+  start_ms="$(now_ms)"
+  local attempt=0
   for _ in $(seq 1 30); do
+    attempt=$((attempt + 1))
     feature_branch="$(
       ./run.sh --headless query workflows --output json 2>/dev/null \
         | extract_json_stream \
@@ -113,23 +132,31 @@ resolve_workflow_feature_branch() {
         | head -1
     )"
     if [[ -n "$feature_branch" ]]; then
+      log_chain "resolve_workflow_feature_branch workflowId=\"$workflow_id\" feature=\"$feature_branch\" attempt=${attempt} elapsedMs=$(( $(now_ms) - start_ms ))"
       printf '%s' "$feature_branch"
       return 0
     fi
     sleep 0.2
   done
+  log_chain "resolve_workflow_feature_branch workflowId=\"$workflow_id\" failed attempts=${attempt} elapsedMs=$(( $(now_ms) - start_ms ))"
   return 1
 }
 
 wait_for_external_merge_gate() {
   local workflow_id="$1"
   local merge_id="__merge__${workflow_id}"
+  local start_ms
+  start_ms="$(now_ms)"
+  local attempt=0
   for _ in $(seq 1 60); do
+    attempt=$((attempt + 1))
     if ./run.sh --headless query tasks --output json 2>/dev/null | extract_json_stream | jq -e --arg id "$merge_id" '.[] | select(.id == $id)' >/dev/null; then
+      log_chain "wait_for_external_merge_gate mergeTaskId=\"$merge_id\" found attempt=${attempt} elapsedMs=$(( $(now_ms) - start_ms ))"
       return 0
     fi
     sleep 0.2
   done
+  log_chain "wait_for_external_merge_gate mergeTaskId=\"$merge_id\" timeout attempts=${attempt} elapsedMs=$(( $(now_ms) - start_ms ))"
   return 1
 }
 
@@ -151,7 +178,10 @@ declare -a RENDERED_PLANS=()
 
 # Sync fork with upstream if any plan in the chain targets EdbertChan/Invoker.
 for p in "${INPUT_PLANS[@]}"; do
+  log_chain "sync-fork-upstream begin plan=\"$p\""
+  sync_start_ms="$(now_ms)"
   bash "$REPO_ROOT/scripts/sync-fork-upstream.sh" "$p" || true
+  log_chain "sync-fork-upstream end elapsedMs=$(( $(now_ms) - sync_start_ms ))"
   break  # only need to sync once; first plan determines the repo
 done
 
@@ -287,10 +317,13 @@ for i in "${!INPUT_PLANS[@]}"; do
   fi
 
   echo "Submitting workflow $((i+1)) (no track): $submit_plan"
+  run_start_ms="$(now_ms)"
+  log_chain "headless-run begin step=$((i+1)) plan=\"$submit_plan\" noTrack=true"
   _chain_out="$(mktemp "${TMPDIR:-/tmp}/invoker-chain-out$((i+1)).XXXXXX")"
   out_file="${_chain_out}.log"
   rm -f "$_chain_out"
   ./run.sh --headless run "$submit_plan" --no-track >"$out_file" 2>&1 || true
+  log_chain "headless-run end step=$((i+1)) elapsedMs=$(( $(now_ms) - run_start_ms )) out=\"$out_file\""
 
   printed_id="$(awk '/Workflow ID:/{print $3}' "$out_file" | tail -1)"
   delegated_id="$(sed -n 's/.*workflow: \(wf-[0-9]\+-[0-9]\+\).*/\1/p' "$out_file" | tail -1)"

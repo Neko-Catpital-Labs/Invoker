@@ -26,12 +26,13 @@ export interface DbWriterLockResult {
  * @returns lock handle with a `release()` method.
  * @throws if another process already holds the lock.
  */
-export function acquireDbWriterLock(dbPath: string): DbWriterLockResult {
+export function acquireDbWriterLock(dbPath: string, callerContext?: string): DbWriterLockResult {
   const bypassed = process.env[ENV_BYPASS] === '1';
   const lockDir = `${dbPath}.lock`;
+  const callerTag = callerContext ? ` caller=${callerContext}` : '';
 
   if (bypassed) {
-    console.log(`[db-writer-lock] BYPASSED (${ENV_BYPASS}=1) — no exclusive lock acquired`);
+    console.log(`[db-writer-lock] BYPASSED (${ENV_BYPASS}=1) — no exclusive lock acquired${callerTag}`);
     return { acquired: true, bypassed: true, release: () => {} };
   }
 
@@ -51,9 +52,9 @@ export function acquireDbWriterLock(dbPath: string): DbWriterLockResult {
               process.kill(holderPid, 0); // signal 0 = check if alive
             } catch {
               // Holding process is dead — stale lock from a crash.
-              console.log(`[db-writer-lock] Stale lock from dead PID ${holderPid}, reclaiming`);
+              console.log(`[db-writer-lock] Stale lock from dead PID ${holderPid}, reclaiming${callerTag}`);
               rmSync(lockDir, { recursive: true, force: true });
-              return acquireDbWriterLock(dbPath);
+              return acquireDbWriterLock(dbPath, callerContext);
             }
           }
         } catch { /* best effort */ }
@@ -61,6 +62,7 @@ export function acquireDbWriterLock(dbPath: string): DbWriterLockResult {
       throw new Error(
         `[db-writer-lock] Cannot acquire writer lock for ${dbPath} — ` +
         `already held by PID ${holder}. ` +
+        `requested by${callerTag || ' <unknown>'}. ` +
         `If the previous process crashed, remove ${lockDir} manually.`,
       );
     }
@@ -72,7 +74,7 @@ export function acquireDbWriterLock(dbPath: string): DbWriterLockResult {
     writeFileSync(`${lockDir}/pid`, String(process.pid));
   } catch { /* non-fatal — lock is already held via mkdir */ }
 
-  console.log(`[db-writer-lock] Acquired exclusive writer lock (PID ${process.pid})`);
+  console.log(`[db-writer-lock] Acquired exclusive writer lock (PID ${process.pid})${callerTag}`);
 
   let released = false;
   const release = (): void => {
