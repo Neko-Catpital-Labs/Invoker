@@ -179,6 +179,7 @@ export interface OrchestratorPersistence {
   loadWorkflow?(workflowId: string): {
     repoUrl?: string;
     baseBranch?: string;
+    featureBranch?: string;
     mergeMode?: 'manual' | 'automatic' | 'external_review';
   } | undefined;
   /** Delete a single workflow and its tasks from the DB. */
@@ -622,6 +623,32 @@ export class Orchestrator {
    * (wired by `packages/app/src/workflow-actions.ts → recreateWorkflowFromFreshBase`).
    */
   private knownFreshBaseCommits = new Map<string, string>();
+
+  private static readonly DETACH_RESET_CHANGES: TaskStateChanges = {
+    status: 'pending',
+    config: { summary: undefined },
+    execution: {
+      autoFixAttempts: 0,
+      blockedBy: undefined,
+      startedAt: undefined,
+      completedAt: undefined,
+      error: undefined,
+      exitCode: undefined,
+      pendingFixError: undefined,
+      inputPrompt: undefined,
+      lastHeartbeatAt: undefined,
+      isFixingWithAI: false,
+      reviewUrl: undefined,
+      reviewId: undefined,
+      reviewStatus: undefined,
+      reviewProviderId: undefined,
+      fixedIntegrationSha: undefined,
+      fixedIntegrationRecordedAt: undefined,
+      fixedIntegrationSource: undefined,
+      agentSessionId: undefined,
+      containerId: undefined,
+    },
+  };
 
   constructor(config: OrchestratorConfig) {
     this.maxConcurrency = config.maxConcurrency ?? 3;
@@ -3373,38 +3400,49 @@ export class Orchestrator {
    * Follows the same DB→memory→publish pattern as writeAndSync().
    */
   deleteWorkflow(workflowId: string): void {
-    // 1. Collect affected tasks before DB delete (needed for deltas and scheduler cleanup)
+    this.syncAllFromDb();
+
+    const deletedWorkflow = this.persistence.loadWorkflow?.(workflowId);
+
+    // 1. Detach direct dependents before the delete so they inherit the
+    // deleted workflow's parent branch instead of becoming permanently blocked
+    // on a missing prerequisite.
+    const directDependents = this.collectDirectDependentWorkflowIds(workflowId);
+    for (const dependentWorkflowId of directDependents) {
+      this.detachWorkflowInternal(dependentWorkflowId, workflowId, {
+        upstreamWorkflow: deletedWorkflow,
+      });
+    }
+
+    // 2. Collect affected tasks before DB delete (needed for deltas and scheduler cleanup)
     const affectedTasks = this.stateMachine.getAllTasks().filter(
       (t) => t.config.workflowId === workflowId,
     );
 
-    // 2. DB first — single source of truth
+    // 3. DB first — single source of truth
     this.persistence.deleteWorkflow?.(workflowId);
 
-    // 3. Clean scheduler: free slots for all tasks in this workflow
+    // 4. Clean scheduler: free slots for all tasks in this workflow
     for (const task of affectedTasks) {
       this.clearQueuedSchedulerEntries(task.id, task.execution.selectedAttemptId);
     }
 
-    // 4. Clear memory and reload remaining workflows
-    this.activeWorkflowIds.delete(workflowId);
-    this.stateMachine.clear();
-    for (const wfId of this.activeWorkflowIds) {
-      const tasks = this.persistence.loadTasks(wfId);
-      for (const task of tasks) {
-        this.stateMachine.restoreTask(task);
-      }
-    }
-
-    // 5. Any surviving tasks that depended on this workflow externally can no
-    // longer make progress; mark them blocked with an explicit reason.
-    this.blockTasksMissingDeletedExternalWorkflow(workflowId);
+    // 5. Reload all surviving workflows from the DB so the cache reflects the
+    // detach edits plus the workflow removal.
+    this.syncAllFromDb();
 
     // 6. Publish removal deltas — drives UI cache cleanup via messageBus subscriber
     for (const task of affectedTasks) {
       const delta: TaskDelta = { type: 'removed', taskId: task.id };
       this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
     }
+  }
+
+  detachWorkflow(workflowId: string, upstreamWorkflowId: string): void {
+    this.syncAllFromDb();
+    this.detachWorkflowInternal(workflowId, upstreamWorkflowId, {
+      upstreamWorkflow: this.persistence.loadWorkflow?.(upstreamWorkflowId),
+    });
   }
 
   /**
@@ -4234,25 +4272,130 @@ export class Orchestrator {
     return undefined;
   }
 
-  private blockTasksMissingDeletedExternalWorkflow(deletedWorkflowId: string): void {
-    const tasks = this.stateMachine.getAllTasks();
-    for (const task of tasks) {
-      if (task.status !== 'pending' && task.status !== 'blocked') continue;
+  private collectWorkflowDependencyEdges(): Map<string, Set<string>> {
+    const edges = new Map<string, Set<string>>();
+    for (const task of this.stateMachine.getAllTasks()) {
+      const workflowId = task.config.workflowId;
+      if (!workflowId) continue;
+      for (const dep of task.config.externalDependencies ?? []) {
+        let dependents = edges.get(dep.workflowId);
+        if (!dependents) {
+          dependents = new Set<string>();
+          edges.set(dep.workflowId, dependents);
+        }
+        dependents.add(workflowId);
+      }
+    }
+    return edges;
+  }
+
+  private collectDirectDependentWorkflowIds(workflowId: string): string[] {
+    return Array.from(this.collectWorkflowDependencyEdges().get(workflowId) ?? []);
+  }
+
+  private collectDownstreamWorkflowIds(rootWorkflowId: string): string[] {
+    const edges = this.collectWorkflowDependencyEdges();
+    const seen = new Set<string>();
+    const queue = [rootWorkflowId];
+    const descendants: string[] = [];
+    while (queue.length > 0) {
+      const current = queue.shift()!;
+      for (const dependentWorkflowId of edges.get(current) ?? []) {
+        if (dependentWorkflowId === rootWorkflowId || seen.has(dependentWorkflowId)) continue;
+        seen.add(dependentWorkflowId);
+        descendants.push(dependentWorkflowId);
+        queue.push(dependentWorkflowId);
+      }
+    }
+    return descendants;
+  }
+
+  private detachWorkflowInternal(
+    workflowId: string,
+    upstreamWorkflowId: string,
+    opts?: {
+      upstreamWorkflow?: {
+        baseBranch?: string;
+        featureBranch?: string;
+      };
+    },
+  ): void {
+    if (workflowId === upstreamWorkflowId) {
+      throw new Error(`Cannot detach workflow ${workflowId} from itself`);
+    }
+
+    const targetTasks = this.stateMachine.getAllTasks().filter(
+      (task) => task.config.workflowId === workflowId,
+    );
+    if (targetTasks.length === 0) {
+      throw new Error(`Workflow ${workflowId} not found`);
+    }
+
+    let removedDependency = false;
+    for (const task of targetTasks) {
       const deps = task.config.externalDependencies ?? [];
-      if (!deps.some((dep) => dep.workflowId === deletedWorkflowId)) continue;
+      const nextDeps = deps.filter((dep) => dep.workflowId !== upstreamWorkflowId);
+      if (nextDeps.length === deps.length) continue;
 
-      const blocker = this.getExternalDependencyBlocker(task);
-      if (blocker === undefined) continue;
-
+      removedDependency = true;
       const changes: TaskStateChanges = {
-        status: 'blocked',
-        execution: { blockedBy: blocker },
+        config: { externalDependencies: nextDeps.length > 0 ? nextDeps : undefined },
       };
       this.writeAndSync(task.id, changes);
-      this.scheduler.removeJob(task.id);
-      const delta: TaskDelta = { type: 'updated', taskId: task.id, changes };
-      this.persistence.logEvent?.(task.id, 'task.blocked', changes);
-      this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
+      this.persistence.logEvent?.(task.id, 'task.external_dependency_detached', {
+        workflowId,
+        upstreamWorkflowId,
+      });
+      this.messageBus.publish(TASK_DELTA_CHANNEL, {
+        type: 'updated',
+        taskId: task.id,
+        changes,
+      });
+    }
+
+    if (!removedDependency) {
+      throw new Error(
+        `Workflow ${workflowId} does not depend on upstream workflow ${upstreamWorkflowId}`,
+      );
+    }
+
+    const upstreamFeatureBranch = opts?.upstreamWorkflow?.featureBranch?.trim();
+    const upstreamBaseBranch = opts?.upstreamWorkflow?.baseBranch?.trim();
+    const targetWorkflow = this.persistence.loadWorkflow?.(workflowId);
+    const targetBaseBranch = targetWorkflow?.baseBranch?.trim();
+    if (
+      upstreamFeatureBranch
+      && upstreamBaseBranch
+      && targetBaseBranch
+      && targetBaseBranch === upstreamFeatureBranch
+    ) {
+      this.taskRepository.updateWorkflow(workflowId, { baseBranch: upstreamBaseBranch });
+    }
+
+    const affectedWorkflowIds = [workflowId, ...this.collectDownstreamWorkflowIds(workflowId)];
+    for (const affectedWorkflowId of affectedWorkflowIds) {
+      this.cancelActiveBeforeInvalidation('workflow', affectedWorkflowId);
+    }
+
+    const affectedTaskIds = affectedWorkflowIds.flatMap((affectedWorkflowId) =>
+      this.stateMachine
+        .getAllTasks()
+        .filter((task) => task.config.workflowId === affectedWorkflowId)
+        .map((task) => task.id),
+    );
+    const forceResetIds = new Set(affectedTaskIds);
+    const { affectedIds } = this.resetSubgraphToPending(
+      affectedTaskIds,
+      Orchestrator.DETACH_RESET_CHANGES,
+      { forceResetIds },
+    );
+
+    for (const taskId of affectedIds) {
+      this.persistence.logEvent?.(taskId, 'task.workflow_detached', {
+        workflowId,
+        upstreamWorkflowId,
+        affectedWorkflowIds,
+      });
     }
   }
 

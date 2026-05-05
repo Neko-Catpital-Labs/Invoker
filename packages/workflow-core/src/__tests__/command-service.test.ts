@@ -38,6 +38,7 @@ function stubOrchestrator(overrides: Partial<Orchestrator> = {}): Orchestrator {
     cancelTask: vi.fn().mockReturnValue({ cancelled: [], runningCancelled: [] }),
     cancelWorkflow: vi.fn().mockReturnValue({ cancelled: [], runningCancelled: [] }),
     deleteWorkflow: vi.fn(),
+    detachWorkflow: vi.fn(),
     retryWorkflow: vi.fn().mockReturnValue([]),
     recreateWorkflow: vi.fn().mockReturnValue([]),
     recreateWorkflowFromFreshBase: vi.fn().mockResolvedValue([] as TaskState[]),
@@ -334,6 +335,29 @@ describe('CommandService', () => {
       });
       const result = await service.deleteWorkflow(makeEnvelope({ workflowId: 'bad' }));
       expect(result).toEqual({ ok: false, error: { code: 'DELETE_WORKFLOW_FAILED', message: 'wf not found' } });
+    });
+  });
+
+  describe('detachWorkflow', () => {
+    it('delegates to orchestrator.detachWorkflow', async () => {
+      const result = await service.detachWorkflow(
+        makeEnvelope({ workflowId: 'wf-1', upstreamWorkflowId: 'wf-0' }),
+      );
+      expect(result).toEqual({ ok: true, data: undefined });
+      expect(orchestrator.detachWorkflow).toHaveBeenCalledWith('wf-1', 'wf-0');
+    });
+
+    it('returns error on exception', async () => {
+      (orchestrator.detachWorkflow as ReturnType<typeof vi.fn>).mockImplementation(() => {
+        throw new Error('detach failed');
+      });
+      const result = await service.detachWorkflow(
+        makeEnvelope({ workflowId: 'wf-1', upstreamWorkflowId: 'wf-0' }),
+      );
+      expect(result).toEqual({
+        ok: false,
+        error: { code: 'DETACH_WORKFLOW_FAILED', message: 'detach failed' },
+      });
     });
   });
 

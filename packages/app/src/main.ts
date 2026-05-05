@@ -1806,6 +1806,8 @@ if (isHeadless) {
         return { channel: 'headless.exec', request: { args: ['delete-all'] } };
       case 'invoker:delete-workflow':
         return { channel: 'headless.exec', request: { args: ['delete', String(arg0)] } };
+      case 'invoker:detach-workflow':
+        return { channel: 'headless.exec', request: { args: ['detach-workflow', String(arg0), String(arg1)] } };
       case 'invoker:provide-input':
         return { channel: 'headless.exec', request: { args: ['input', String(arg0), String(arg1)] } };
       case 'invoker:approve':
@@ -2761,6 +2763,31 @@ if (isHeadless) {
         throw err;
       }
     });
+
+    registerWorkflowScopedGuiMutationHandler(
+      'invoker:detach-workflow',
+      (workflowIdArg: unknown) => String(workflowIdArg),
+      'high',
+      async (workflowIdArg: unknown, upstreamWorkflowIdArg: unknown) => {
+        const workflowId = String(workflowIdArg);
+        const upstreamWorkflowId = String(upstreamWorkflowIdArg);
+        logger.info(
+          `detach-workflow: workflow="${workflowId}" upstream="${upstreamWorkflowId}"`,
+          { module: 'ipc' },
+        );
+        try {
+          const envelope = makeEnvelope('detach-workflow', 'ui', 'workflow', {
+            workflowId,
+            upstreamWorkflowId,
+          });
+          const result = await commandService.detachWorkflow(envelope);
+          if (!result.ok) throw new Error(result.error.message);
+        } catch (err) {
+          logger.error(`detach-workflow failed: ${err}`, { module: 'ipc' });
+          throw err;
+        }
+      },
+    );
 
     ipcMain.handle('invoker:load-workflow', (_event, workflowId: string) => {
       logger.info(`load-workflow: "${workflowId}"`, { module: 'ipc' });

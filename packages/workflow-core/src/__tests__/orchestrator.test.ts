@@ -16,6 +16,8 @@ class InMemoryPersistence implements OrchestratorPersistence {
     createdAt: string;
     updatedAt: string;
     repoUrl?: string;
+    baseBranch?: string;
+    featureBranch?: string;
     mergeMode?: 'manual' | 'automatic' | 'external_review';
   }>();
   tasks = new Map<string, { workflowId: string; task: TaskState }>();
@@ -28,6 +30,8 @@ class InMemoryPersistence implements OrchestratorPersistence {
     name: string;
     status: string;
     repoUrl?: string;
+    baseBranch?: string;
+    featureBranch?: string;
     mergeMode?: 'manual' | 'automatic' | 'external_review';
   }): void {
     const now = new Date().toISOString();
@@ -37,6 +41,8 @@ class InMemoryPersistence implements OrchestratorPersistence {
       // (Step 5 `editTaskType` → ssh) keep passing without each
       // plan having to spell out a remote URL.
       repoUrl: workflow.repoUrl ?? 'memory://test-repo',
+      baseBranch: workflow.baseBranch,
+      featureBranch: workflow.featureBranch,
       createdAt: (workflow as any).createdAt ?? now,
       updatedAt: (workflow as any).updatedAt ?? now,
     });
@@ -47,6 +53,7 @@ class InMemoryPersistence implements OrchestratorPersistence {
     changes: {
       status?: string;
       updatedAt?: string;
+      baseBranch?: string;
       mergeMode?: 'manual' | 'automatic' | 'external_review';
     },
   ): void {
@@ -58,16 +65,25 @@ class InMemoryPersistence implements OrchestratorPersistence {
     if (wf && changes.mergeMode !== undefined) {
       wf.mergeMode = changes.mergeMode;
     }
+    if (wf && changes.baseBranch !== undefined) {
+      wf.baseBranch = changes.baseBranch;
+    }
   }
 
   loadWorkflow(workflowId: string): {
     repoUrl?: string;
     baseBranch?: string;
+    featureBranch?: string;
     mergeMode?: 'manual' | 'automatic' | 'external_review';
   } | undefined {
     const wf = this.workflows.get(workflowId);
     if (!wf) return undefined;
-    return { repoUrl: wf.repoUrl, mergeMode: wf.mergeMode };
+    return {
+      repoUrl: wf.repoUrl,
+      baseBranch: wf.baseBranch,
+      featureBranch: wf.featureBranch,
+      mergeMode: wf.mergeMode,
+    };
   }
 
   saveTask(workflowId: string, task: TaskState): void {
@@ -1597,9 +1613,11 @@ describe('Orchestrator', () => {
       expect(deps.find((d) => d.workflowId === wfB)!.gatePolicy).toBe('review_ready');
     });
 
-    it('repro: deleting upstream workflow blocks downstream external dependency on restart', () => {
+    it('repro: deleting upstream workflow detaches downstream external dependency on restart', () => {
       orchestrator.loadPlan({
         name: 'upstream-workflow',
+        baseBranch: 'master',
+        featureBranch: 'feature/upstream',
         tasks: [{ id: 'verify', description: 'upstream prerequisite' }],
       });
       const upstreamTaskId = sid(orchestrator, 0, 'verify');
@@ -1607,6 +1625,8 @@ describe('Orchestrator', () => {
 
       orchestrator.loadPlan({
         name: 'downstream-workflow',
+        baseBranch: 'feature/upstream',
+        featureBranch: 'feature/downstream',
         tasks: [
           {
             id: 'wait-for-upstream',
@@ -1616,6 +1636,7 @@ describe('Orchestrator', () => {
         ],
       });
       const downstreamTaskId = sid(orchestrator, 1, 'wait-for-upstream');
+      const downstreamWfId = downstreamTaskId.split('/')[0]!;
 
       orchestrator.startExecution();
       expect(orchestrator.getTask(downstreamTaskId)!.status).toBe('pending');
@@ -1627,9 +1648,10 @@ describe('Orchestrator', () => {
 
       const restarted = orchestrator.retryTask(downstreamTaskId);
       expect(restarted.map((t) => t.id)).toContain(downstreamTaskId);
-      expect(orchestrator.getTask(downstreamTaskId)!.status).toBe('blocked');
-      expect(orchestrator.getTask(downstreamTaskId)!.execution.blockedBy).toContain('missing prerequisite');
-      expect(orchestrator.getTask(downstreamTaskId)!.config.externalDependencies).toHaveLength(1);
+      expect(orchestrator.getTask(downstreamTaskId)!.status).toBe('running');
+      expect(orchestrator.getTask(downstreamTaskId)!.config.externalDependencies).toBeUndefined();
+      expect(persistence.getTaskEntry(downstreamTaskId)!.task.config.externalDependencies).toBeUndefined();
+      expect(persistence.loadWorkflow(downstreamWfId)!.baseBranch).toBe('master');
     });
 
     it('persists status changes to DB', () => {
@@ -8473,9 +8495,11 @@ describe('Orchestrator', () => {
       expect(orchestrator.getAllTasks()).toHaveLength(0);
     });
 
-    it('blocks downstream tasks whose external dependency points at deleted workflow', () => {
+    it('detaches direct dependents when deleting a workflow', () => {
       orchestrator.loadPlan({
         name: 'upstream-delete-target',
+        baseBranch: 'master',
+        featureBranch: 'feature/upstream-delete-target',
         tasks: [{ id: 'verify', description: 'upstream prerequisite' }],
       });
       const upstreamTaskId = sid(orchestrator, 0, 'verify');
@@ -8483,6 +8507,8 @@ describe('Orchestrator', () => {
 
       orchestrator.loadPlan({
         name: 'downstream-external-dependent',
+        baseBranch: 'feature/upstream-delete-target',
+        featureBranch: 'feature/downstream-external-dependent',
         tasks: [
           {
             id: 'wait-for-upstream',
@@ -8498,8 +8524,130 @@ describe('Orchestrator', () => {
       orchestrator.deleteWorkflow(upstreamWfId);
 
       const downstream = orchestrator.getTask(downstreamTaskId)!;
-      expect(downstream.status).toBe('blocked');
-      expect(downstream.execution.blockedBy).toContain(`missing prerequisite __merge__${upstreamWfId}`);
+      expect(downstream.status).toBe('pending');
+      expect(downstream.execution.blockedBy).toBeUndefined();
+      expect(downstream.config.externalDependencies).toBeUndefined();
+      expect(persistence.loadWorkflow(downstreamTaskId.split('/')[0]!)!.baseBranch).toBe('master');
+    });
+  });
+
+  describe('detachWorkflow', () => {
+    it('removes only the selected upstream edge, rewrites baseBranch, and voids descendants to pending', () => {
+      orchestrator.loadPlan({
+        name: 'upstream-a',
+        baseBranch: 'master',
+        featureBranch: 'feature/upstream-a',
+        tasks: [{ id: 'verify-a', description: 'upstream A prerequisite' }],
+      });
+      const upstreamAWfId = sid(orchestrator, 0, 'verify-a').split('/')[0]!;
+
+      orchestrator.loadPlan({
+        name: 'upstream-b',
+        baseBranch: 'master',
+        featureBranch: 'feature/upstream-b',
+        tasks: [{ id: 'verify-b', description: 'upstream B prerequisite' }],
+      });
+      const upstreamBWfId = sid(orchestrator, 1, 'verify-b').split('/')[0]!;
+
+      orchestrator.loadPlan({
+        name: 'target-workflow',
+        baseBranch: 'feature/upstream-a',
+        featureBranch: 'feature/target-workflow',
+        tasks: [
+          {
+            id: 'wait-for-upstreams',
+            description: 'target waits for two upstream workflows',
+            externalDependencies: [
+              { workflowId: upstreamAWfId, gatePolicy: 'review_ready' },
+              { workflowId: upstreamBWfId, gatePolicy: 'review_ready' },
+            ],
+          },
+        ],
+      });
+      const targetTaskId = sid(orchestrator, 2, 'wait-for-upstreams');
+      const targetWfId = targetTaskId.split('/')[0]!;
+
+      orchestrator.loadPlan({
+        name: 'child-workflow',
+        baseBranch: 'feature/target-workflow',
+        featureBranch: 'feature/child-workflow',
+        tasks: [
+          {
+            id: 'child-leaf',
+            description: 'child waits on target workflow',
+            externalDependencies: [{ workflowId: targetWfId, gatePolicy: 'review_ready' }],
+          },
+        ],
+      });
+      const childTaskId = sid(orchestrator, 3, 'child-leaf');
+
+      orchestrator.detachWorkflow(targetWfId, upstreamAWfId);
+
+      const targetTask = orchestrator.getTask(targetTaskId)!;
+      expect(targetTask.status).toBe('pending');
+      expect(targetTask.config.externalDependencies).toEqual([
+        { workflowId: upstreamBWfId, requiredStatus: 'completed', gatePolicy: 'review_ready' },
+      ]);
+      expect(persistence.loadWorkflow(targetWfId)!.baseBranch).toBe('master');
+
+      const childTask = orchestrator.getTask(childTaskId)!;
+      expect(childTask.status).toBe('pending');
+      expect(childTask.config.externalDependencies).toEqual([
+        { workflowId: targetWfId, requiredStatus: 'completed', gatePolicy: 'review_ready' },
+      ]);
+    });
+
+    it('voids a running target workflow and its descendants back to pending without auto-starting them', () => {
+      orchestrator.loadPlan({
+        name: 'upstream-runtime',
+        baseBranch: 'master',
+        featureBranch: 'feature/upstream-runtime',
+        tasks: [{ id: 'verify-runtime', description: 'upstream runtime prerequisite' }],
+      });
+      const upstreamTaskId = sid(orchestrator, 0, 'verify-runtime');
+      const upstreamWfId = upstreamTaskId.split('/')[0]!;
+      const upstreamMergeId = `__merge__${upstreamWfId}`;
+
+      orchestrator.loadPlan({
+        name: 'target-runtime',
+        baseBranch: 'feature/upstream-runtime',
+        featureBranch: 'feature/target-runtime',
+        tasks: [
+          {
+            id: 'wait-for-runtime-upstream',
+            description: 'target waits on one upstream workflow',
+            externalDependencies: [{ workflowId: upstreamWfId, gatePolicy: 'review_ready' }],
+          },
+        ],
+      });
+      const targetTaskId = sid(orchestrator, 1, 'wait-for-runtime-upstream');
+      const targetWfId = targetTaskId.split('/')[0]!;
+
+      orchestrator.loadPlan({
+        name: 'target-runtime-child',
+        baseBranch: 'feature/target-runtime',
+        featureBranch: 'feature/target-runtime-child',
+        tasks: [
+          {
+            id: 'child-runtime',
+            description: 'child waits on target runtime workflow',
+            externalDependencies: [{ workflowId: targetWfId, gatePolicy: 'review_ready' }],
+          },
+        ],
+      });
+      const childTaskId = sid(orchestrator, 2, 'child-runtime');
+
+      orchestrator.startExecution();
+      orchestrator.handleWorkerResponse(makeResponse({ actionId: upstreamTaskId, status: 'completed' }));
+      orchestrator.setTaskAwaitingApproval(upstreamMergeId);
+      orchestrator.approve(upstreamMergeId);
+      expect(orchestrator.getTask(targetTaskId)!.status).toBe('running');
+
+      orchestrator.detachWorkflow(targetWfId, upstreamWfId);
+
+      expect(orchestrator.getTask(targetTaskId)!.status).toBe('pending');
+      expect(orchestrator.getTask(targetTaskId)!.config.externalDependencies).toBeUndefined();
+      expect(orchestrator.getTask(childTaskId)!.status).toBe('pending');
     });
   });
 

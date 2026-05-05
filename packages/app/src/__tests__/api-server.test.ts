@@ -102,6 +102,7 @@ function createMocks() {
         started: [makeTask({ id: `${workflowId}-fork/task-1`, config: { workflowId: `${workflowId}-fork` } })],
       })),
       deleteWorkflow: vi.fn(),
+      detachWorkflow: vi.fn(),
       getQueueStatus: vi.fn(() => ({
         maxConcurrency: 4,
         runningCount: 1,
@@ -926,6 +927,24 @@ describe('DELETE /api/workflows/:id', () => {
     const res = await request(port, 'DELETE', '/api/workflows/missing');
     expect(res.status).toBe(400);
     expect(res.body.error).toBe('workflow not found');
+  });
+});
+
+describe('POST /api/workflows/:id/detach', () => {
+  it('detaches workflow from one upstream workflow', async () => {
+    const res = await request(port, 'POST', '/api/workflows/wf-1/detach', {
+      upstreamWorkflowId: 'wf-0',
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.action).toBe('detached');
+    expect(mocks.orchestrator.detachWorkflow).toHaveBeenCalledWith('wf-1', 'wf-0');
+  });
+
+  it('returns 400 when upstreamWorkflowId is missing', async () => {
+    const res = await request(port, 'POST', '/api/workflows/wf-1/detach', {});
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('Missing "upstreamWorkflowId"');
   });
 });
 
