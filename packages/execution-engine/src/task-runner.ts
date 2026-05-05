@@ -1184,13 +1184,13 @@ export class TaskRunner {
       }
     };
 
-    const candidates = [
+    const candidates = Array.from(new Set([
+      `refs/remotes/${remoteName}/${baseRef}`,
+      `${remoteName}/${baseRef}`,
       normalizedRef,
       strippedRemoteRef,
       `refs/heads/${strippedRemoteRef}`,
-      `refs/remotes/origin/${strippedRemoteRef}`,
-      `origin/${strippedRemoteRef}`,
-    ];
+    ]));
 
     let refSha: string | undefined;
     for (const candidate of candidates) {
