@@ -568,6 +568,11 @@ export async function finalizeAppliedFix(
 
 // ── Auto-fix helpers ─────────────────────────────────────────
 
+export type FailureRecoveryRoute =
+  | { kind: 'fixWithAgent' }
+  | { kind: 'resolveConflict' }
+  | { kind: 'recreateWorkflowFromFreshBase'; workflowId: string };
+
 function isMergeConflictError(error: string): boolean {
   for (const c of [error, error.trim(), error.split('\n\n').at(-1)?.trim() ?? '']) {
     if (!c) continue;
@@ -580,11 +585,36 @@ function isMergeConflictError(error: string): boolean {
         /* not parseable JSON tail */
       }
     }
-    if (c.includes('CONFLICT (') || c.includes('Automatic merge failed')) {
+    if (
+      c.includes('CONFLICT (') ||
+      c.includes('Automatic merge failed') ||
+      c.includes('Merge conflict merging ')
+    ) {
       return true;
     }
   }
   return false;
+}
+
+export function selectFailureRecoveryRoute(
+  task: TaskState,
+  savedError: string,
+): FailureRecoveryRoute {
+  if (!isMergeConflictError(savedError)) {
+    return { kind: 'fixWithAgent' };
+  }
+
+  const workspacePath = task.execution.workspacePath?.trim();
+  if (workspacePath) {
+    return { kind: 'resolveConflict' };
+  }
+
+  const workflowId = task.config.workflowId?.trim();
+  if (!workflowId) {
+    return { kind: 'resolveConflict' };
+  }
+
+  return { kind: 'recreateWorkflowFromFreshBase', workflowId };
 }
 
 function tailText(value: unknown, maxChars: number = 2000): string | undefined {
@@ -713,6 +743,8 @@ export async function autoFixOnFailure(
 
   const attempts = (task.execution.autoFixAttempts ?? 0) + 1;
   const max = orchestrator.getAutoFixRetryBudget(taskId);
+  const savedError = task.execution.error ?? '';
+  const recoveryRoute = selectFailureRecoveryRoute(task, savedError);
   console.log(`[auto-fix] "${taskId}" attempt ${attempts}/${max}`);
   persistence.logEvent?.(taskId, 'debug.auto-fix', {
     phase: 'auto-fix-start',
@@ -727,14 +759,9 @@ export async function autoFixOnFailure(
   // Increment counter FIRST (before any delta can re-trigger)
   persistence.updateTask(taskId, { execution: { autoFixAttempts: attempts } });
 
-  const { savedError } = orchestrator.beginConflictResolution(taskId);
   const agentSelection = resolveAutoFixAgent(deps.getAutoFixAgent?.());
-  persistence.logEvent?.(taskId, 'debug.auto-fix', {
-    phase: 'auto-fix-begin-conflict-resolution',
-    savedErrorLength: savedError.length,
-  });
+  let persistedSavedError: string | undefined;
   try {
-    const output = persistence.getTaskOutput(taskId);
     persistence.logEvent?.(taskId, 'debug.auto-fix', {
       phase: 'auto-fix-agent-selected',
       configuredAutoFixAgent: agentSelection.configuredAutoFixAgent ?? null,
@@ -746,8 +773,7 @@ export async function autoFixOnFailure(
       taskId,
       `\n[Auto-fix Agent] selected=${agentSelection.selectedAgent} source=${agentSelection.selectedAgentSource} fallback=${agentSelection.fallbackChain}`,
     );
-    const useResolveConflict = isMergeConflictError(savedError);
-    const route = useResolveConflict ? 'resolveConflict' : 'fixWithAgent';
+    const route = recoveryRoute.kind;
     console.log(
       `[auto-fix-route] task="${taskId}" route=${route} agent=${agentSelection.selectedAgent} source=${agentSelection.selectedAgentSource}`,
     );
@@ -758,12 +784,42 @@ export async function autoFixOnFailure(
       selectedAgentSource: agentSelection.selectedAgentSource,
       configuredAutoFixAgent: agentSelection.configuredAutoFixAgent ?? null,
       fallbackChain: agentSelection.fallbackChain,
-      outputLength: output.length,
+      outputLength: recoveryRoute.kind === 'recreateWorkflowFromFreshBase'
+        ? null
+        : persistence.getTaskOutput(taskId).length,
     });
-    if (useResolveConflict) {
-      await taskExecutor.resolveConflict(taskId, savedError, agentSelection.selectedAgent);
+    if (recoveryRoute.kind === 'recreateWorkflowFromFreshBase') {
+      persistence.appendTaskOutput(
+        taskId,
+        `\n[Auto-fix] Startup merge conflict detected; recreating workflow ${recoveryRoute.workflowId} from a fresh base.`,
+      );
+      const started = await recreateWorkflowFromFreshBase(recoveryRoute.workflowId, {
+        orchestrator,
+        persistence,
+        taskExecutor,
+      });
+      const runnable = started.filter((candidate) => candidate.status === 'running');
+      persistence.logEvent?.(taskId, 'debug.auto-fix', {
+        phase: 'auto-fix-post-route-recreate-workflow',
+        workflowId: recoveryRoute.workflowId,
+        startedCount: started.length,
+        runnableCount: runnable.length,
+        startedStatuses: started.map((candidate) => candidate.status),
+      });
+      if (runnable.length > 0) await taskExecutor.executeTasks(runnable);
+      return;
+    }
+
+    ({ savedError: persistedSavedError } = orchestrator.beginConflictResolution(taskId));
+    persistence.logEvent?.(taskId, 'debug.auto-fix', {
+      phase: 'auto-fix-begin-conflict-resolution',
+      savedErrorLength: persistedSavedError.length,
+    });
+    if (recoveryRoute.kind === 'resolveConflict') {
+      await taskExecutor.resolveConflict(taskId, persistedSavedError, agentSelection.selectedAgent);
     } else {
-      await taskExecutor.fixWithAgent(taskId, output, agentSelection.selectedAgent, savedError);
+      const output = persistence.getTaskOutput(taskId);
+      await taskExecutor.fixWithAgent(taskId, output, agentSelection.selectedAgent, persistedSavedError);
     }
     const postRouteStrategy = selectAutoFixPostRouteStrategy(task);
     persistence.logEvent?.(taskId, 'debug.auto-fix', {
@@ -775,7 +831,7 @@ export async function autoFixOnFailure(
         persistence,
         taskExecutor,
       });
-      const finalizeResult = await finalizeAppliedFix(taskId, savedError, {
+      const finalizeResult = await finalizeAppliedFix(taskId, persistedSavedError, {
         orchestrator,
         taskExecutor,
         autoApproveAIFixes: deps.getAutoApproveAIFixes?.() ?? true,
@@ -825,6 +881,8 @@ export async function autoFixOnFailure(
     }
     persistence.appendTaskOutput(taskId, `\n[Auto-fix] Agent failed (attempt ${attempts}/${max}): ${msg}`);
     const detailedMsg = diagnostics ? `${msg}\n\n${diagnostics}` : msg;
-    orchestrator.revertConflictResolution(taskId, savedError, detailedMsg);
+    if (persistedSavedError !== undefined) {
+      orchestrator.revertConflictResolution(taskId, persistedSavedError, detailedMsg);
+    }
   }
 }
