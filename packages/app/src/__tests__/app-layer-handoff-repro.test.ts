@@ -58,6 +58,31 @@ describe('app-layer handoff repros', () => {
     expect(h.getTask('A')!.status).toBe('completed');
   });
 
+  it('edit-task-prompt launches restarted task and persists workspacePath', async () => {
+    const PROMPT_PLAN: PlanDefinition = {
+      name: 'Prompt Handoff Repro',
+      onFinish: 'merge',
+      mergeMode: 'automatic',
+      baseBranch: 'master',
+      featureBranch: 'plan/prompt-handoff',
+      tasks: [
+        { id: 'A', description: 'Prompt Task A', prompt: 'Implement feature X' },
+        { id: 'B', description: 'Task B', command: 'echo b', dependencies: ['A'] },
+      ],
+    };
+    h.loadAndStart(PROMPT_PLAN);
+    h.failTask('A', 'broken');
+
+    const started = h.orchestrator.editTaskPrompt('A', 'Implement feature Y instead');
+    expect(started.some((task) => task.id.endsWith('/A') && task.status === 'running')).toBe(true);
+    expect(h.getTask('A')!.config.prompt).toBe('Implement feature Y instead');
+
+    await dispatchStarted(h, started, 'test.edit-task-prompt');
+
+    expect(h.getTask('A')!.execution.workspacePath).toBe('/tmp/mock-worktree');
+    expect(h.getTask('A')!.status).toBe('completed');
+  });
+
   it('edit-task-type launches restarted task and persists workspacePath', async () => {
     h.loadAndStart(LINEAR_PLAN);
     h.failTask('A', 'broken');
