@@ -34,6 +34,7 @@ import {
   approveTask,
   fixWithAgentAction,
   rebaseAndRetry,
+  recreateWithRebase,
   resolveConflictAction,
   recreateWorkflow as sharedRecreateWorkflow,
   recreateTask as sharedRecreateTask,
@@ -708,6 +709,9 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
       warnDeprecated('rebase-and-retry', 'rebase');
       await headlessRebaseAndRetry(args[1], deps);
       break;
+    case 'recreate-with-rebase':
+      await headlessRecreateWithRebase(args[1], deps);
+      break;
     case 'fix':
       await headlessFix(args[1], deps, args[2]);
       break;
@@ -1371,6 +1375,46 @@ async function headlessRebaseAndRetry(taskId: string, deps: HeadlessDeps): Promi
 
   const tasksStarted = runnable.length;
   process.stdout.write(`Rebase-and-retry: resetting workflow from current HEAD (${tasksStarted} task(s))\n`);
+}
+
+async function headlessRecreateWithRebase(workflowId: string, deps: HeadlessDeps): Promise<void> {
+  if (!workflowId) throw new Error('Missing arguments. Usage: --headless recreate-with-rebase <workflowId>');
+  await preemptWorkflowBeforeMutation(workflowId, {
+    preemptWorkflowExecution: (id) => preemptWorkflowExecution(id, deps),
+    logger: deps.logger,
+    context: 'headless.recreate-with-rebase',
+  });
+
+  const te = createHeadlessExecutor(deps);
+  const autoFix = wireHeadlessAutoFix(deps, te);
+  const started = await recreateWithRebase(workflowId, { ...deps, taskExecutor: te });
+  const runnable = started.filter(t => t.status === 'running');
+  const { topup } = await dispatchStartedTasksWithGlobalTopup({
+    orchestrator: deps.orchestrator,
+    taskExecutor: te,
+    logger: deps.logger,
+    context: 'headless.recreate-with-rebase',
+    started,
+  });
+  if (runnable.length + topup.length === 0) {
+    autoFix.unsubscribe();
+    return;
+  }
+  if (deps.noTrack) {
+    process.stdout.write('[headless] --no-track enabled: recreate-with-rebase accepted; exiting without tracking.\n');
+    autoFix.unsubscribe();
+    return;
+  }
+  await trackHeadlessWorkflow(workflowId, deps, {
+    hasBackgroundWork: autoFix.isBusy,
+    printSummary: false,
+    printTaskOutput: true,
+    setExitCodeOnFailure: false,
+  });
+  autoFix.unsubscribe();
+
+  const tasksStarted2 = runnable.length;
+  process.stdout.write(`Recreate-with-rebase: resetting workflow from fresh base (${tasksStarted2} task(s))\n`);
 }
 
 async function headlessRecreateWorkflow(workflowId: string, deps: HeadlessDeps): Promise<void> {
