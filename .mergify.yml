@@ -10,6 +10,24 @@ queue_rules:
       - base=master
       - -draft
       - "#approved-reviews-by >= 1"
+    merge_conditions:
+      - check-success = build-artifacts
+      - check-success = quality / Dependency Cruise
+      - check-success = quality / TypeScript Types
+      - check-success = required-fast / Guardrails
+      - check-success = required-fast / Vitest Workspace
+      - check-success = required-fast / Submit Workflow Chain
+      - check-success = dry-run / case-1
+      - check-success = dry-run / case-2
+      - check-success = dry-run / case-4
+      - check-success = playwright / 1-of-3
+      - check-success = playwright / 2-of-3
+      - check-success = playwright / 3-of-3
+      - check-success = ssh / shard-30
+      - check-success = ssh / shard-31
+      - check-success = optional / Worktree Provisioning
+      - check-success = optional / Visual Proof Validate
+      - check-success = docker / comprehensive
 
   - name: admin-bypass
     merge_method: squash
@@ -17,6 +35,24 @@ queue_rules:
       - base=master
       - -draft
       - label=admin-bypass
+    merge_conditions:
+      - check-success = build-artifacts
+      - check-success = quality / Dependency Cruise
+      - check-success = quality / TypeScript Types
+      - check-success = required-fast / Guardrails
+      - check-success = required-fast / Vitest Workspace
+      - check-success = required-fast / Submit Workflow Chain
+      - check-success = dry-run / case-1
+      - check-success = dry-run / case-2
+      - check-success = dry-run / case-4
+      - check-success = playwright / 1-of-3
+      - check-success = playwright / 2-of-3
+      - check-success = playwright / 3-of-3
+      - check-success = ssh / shard-30
+      - check-success = ssh / shard-31
+      - check-success = optional / Worktree Provisioning
+      - check-success = optional / Visual Proof Validate
+      - check-success = docker / comprehensive
 
 pull_request_rules:
   - name: autoqueue approved PRs to master
