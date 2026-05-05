@@ -28,6 +28,7 @@
  *   POST   /api/tasks/:id/gate-policy  body: { updates: [{ workflowId, taskId?, gatePolicy }] }
  *   POST   /api/workflows/:id/detach  body: { upstreamWorkflowId }
  *   POST   /api/workflows/:id/restart
+ *   POST   /api/workflows/:id/recreate-with-rebase
  *   POST   /api/workflows/:id/cancel
  *   POST   /api/workflows/:id/merge-mode  body: { mode }
  *   DELETE /api/workflows/:id
@@ -426,9 +427,11 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
         return;
       }
 
+      const wfRecreateWithRebaseMatch = path.match(/^\/api\/workflows\/([^/]+)\/recreate-with-rebase$/);
       const wfRebaseAndRetryMatch = path.match(/^\/api\/workflows\/([^/]+)\/rebase-and-retry$/);
-      if (method === 'POST' && wfRebaseAndRetryMatch) {
-        const workflowId = decodeURIComponent(wfRebaseAndRetryMatch[1]);
+      if (method === 'POST' && (wfRecreateWithRebaseMatch || wfRebaseAndRetryMatch)) {
+        const isLegacy = !!wfRebaseAndRetryMatch;
+        const workflowId = decodeURIComponent((wfRecreateWithRebaseMatch ?? wfRebaseAndRetryMatch)![1]);
         try {
           const started = await sharedRecreateWorkflowFromFreshBase(workflowId, {
             orchestrator,
@@ -442,14 +445,21 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
             orchestrator,
             taskExecutor,
             logger: apiLogger,
-            context: 'api.workflows.rebase-and-retry',
+            context: isLegacy ? 'api.workflows.rebase-and-retry' : 'api.workflows.recreate-with-rebase',
             alreadyDispatched: runnable,
           });
+          if (isLegacy) {
+            res.setHeader(
+              'Deprecation',
+              'true; reason="Use /api/workflows/:id/recreate-with-rebase"',
+            );
+          }
           json(res, 200, {
             ok: true,
             workflowId,
-            action: 'rebase_and_retried',
+            action: isLegacy ? 'rebase_and_retried' : 'recreated_with_rebase',
             tasksStarted: runnable.length,
+            ...(isLegacy ? { deprecated: true, replacement: '/api/workflows/:id/recreate-with-rebase' } : {}),
           });
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
