@@ -9,6 +9,7 @@
  * Options:
  *   --title <t>        PR title (required)
  *   --base <b>         Base branch (required)
+ *   --head <h>         Head ref or fork-qualified head (defaults automatically)
  *   --body-file <f>    Read PR body from file
  *   --body <text>      Inline PR body
  *   --update <num>     Update existing PR instead of creating new
@@ -110,6 +111,7 @@ function usage() {
 Options:
   --title <t>        PR title (required)
   --base <b>         Base branch (required)
+  --head <h>         Head ref or fork-qualified head (defaults automatically)
   --body-file <f>    Read PR body from file
   --body <text>      Inline PR body
   --update <num>     Update existing PR number instead of creating new
@@ -125,7 +127,7 @@ PR body schema:
 
 function parseArgs() {
   const args = process.argv.slice(2);
-  const parsed = { title: '', base: '', body: '', bodyFile: '', update: '', dryRun: false };
+  const parsed = { title: '', base: '', head: '', body: '', bodyFile: '', update: '', dryRun: false };
 
   for (let i = 0; i < args.length; i++) {
     switch (args[i]) {
@@ -133,6 +135,7 @@ function parseArgs() {
       case '--dry-run': parsed.dryRun = true; break;
       case '--title': parsed.title = args[++i] || ''; break;
       case '--base': parsed.base = args[++i] || ''; break;
+      case '--head': parsed.head = args[++i] || ''; break;
       case '--body': parsed.body = args[++i] || ''; break;
       case '--body-file': parsed.bodyFile = args[++i] || ''; break;
       case '--update': parsed.update = args[++i] || ''; break;
@@ -225,15 +228,24 @@ async function injectImages(body, dryRun) {
 
 // ── Git + GitHub helpers ────────────────────────────────────────────────────
 
+function parseGithubNwo(url) {
+  const match = url.trim().match(/github\.com[:/]([^/]+\/[^/.]+)(?:\.git)?\/?$/i);
+  return match?.[1] ?? null;
+}
+
+function getRemoteNwo(remote) {
+  try {
+    const url = execSync(`git remote get-url ${remote}`, { encoding: 'utf-8' }).trim();
+    return parseGithubNwo(url);
+  } catch {
+    return null;
+  }
+}
+
 function getRepoNwo() {
   // Prefer parent remote (fork workflow: PRs target parent, not the fork)
-  try {
-    const url = execSync(`git remote get-url ${DEFAULT_PARENT_REMOTE}`, { encoding: 'utf-8' }).trim();
-    const match = url.match(/github\.com[:/]([^/]+\/[^/.]+)/);
-    if (match) return match[1];
-  } catch {
-    // No parent remote; fall back to gh default
-  }
+  const parentNwo = getRemoteNwo(DEFAULT_PARENT_REMOTE);
+  if (parentNwo) return parentNwo;
   return execSync('gh repo view --json nameWithOwner -q .nameWithOwner', { encoding: 'utf-8' }).trim();
 }
 
@@ -248,6 +260,18 @@ function gitPush(dryRun) {
 
 function getCurrentBranch() {
   return execSync('git branch --show-current', { encoding: 'utf-8' }).trim();
+}
+
+function resolveHeadRef(explicitHead, targetNwo) {
+  const trimmed = explicitHead.trim();
+  if (trimmed) return trimmed;
+
+  const branch = getCurrentBranch();
+  const originNwo = getRemoteNwo('origin');
+  if (!originNwo || originNwo === targetNwo) return branch;
+
+  const [originOwner] = originNwo.split('/');
+  return `${originOwner}:${branch}`;
 }
 
 function hasRemote(name) {
@@ -320,11 +344,11 @@ function assertCleanPrBase(baseBranch) {
   );
 }
 
-async function createPr(nwo, title, base, body, dryRun) {
-  const head = getCurrentBranch();
+async function createPr(nwo, title, head, base, body, dryRun) {
+  const printableHead = head;
 
   if (dryRun) {
-    console.error(`[dry-run] Would create PR: "${title}" (${head} → ${base})`);
+    console.error(`[dry-run] Would create PR: "${title}" (${printableHead} → ${base})`);
     console.error(`[dry-run] Body length: ${body.length} chars`);
     return 'https://DRY-RUN/pull/0';
   }
@@ -379,12 +403,13 @@ async function main() {
 
   // Create or update PR
   const nwo = args.dryRun ? 'OWNER/REPO' : getRepoNwo();
+  const head = resolveHeadRef(args.head, nwo);
   let prUrl;
 
   if (args.update) {
     prUrl = await updatePr(nwo, args.update, args.title, body, args.dryRun);
   } else {
-    prUrl = await createPr(nwo, args.title, args.base, body, args.dryRun);
+    prUrl = await createPr(nwo, args.title, head, args.base, body, args.dryRun);
   }
 
   // Print PR URL to stdout (only useful output to stdout)
