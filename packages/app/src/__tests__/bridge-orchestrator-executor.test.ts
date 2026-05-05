@@ -1148,7 +1148,7 @@ describe('Flow 9: manual merge mode', () => {
   });
 });
 
-/** Matches GUI “Manual” + onFinish none — switching to external review must not complete the gate without a PR. */
+/** Matches "Manual" merge mode + onFinish none — switching to external review must not complete the gate without a PR. */
 const MANUAL_MERGE_ONFINISH_NONE_PLAN: PlanDefinition = {
   name: 'Manual OnFinish None',
   onFinish: 'none',
