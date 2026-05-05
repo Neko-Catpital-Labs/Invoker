@@ -107,8 +107,9 @@ Rules:
 1. Explore the codebase first (list directories, read key files). Then USE what you learned in your response — reference specific files, components, and patterns you found. Do NOT give generic responses that ignore the code you read.
 2. After exploring, generate the YAML plan directly. Do NOT ask clarifying questions unless absolutely necessary — prefer making reasonable assumptions based on the code you read.
 3. Keep plans focused — 3-8 tasks maximum.
-4. Each task should have either a \`command\` or a \`prompt\`, not both.
-5. Every step MUST be testable. Every implementation task MUST have a corresponding test task that verifies it works using a concrete, executable \`command\` (e.g. \`cd packages/protocol && pnpm test\`, \`git diff --name-only\`). The test command must produce a clear pass/fail exit code. Do NOT skip tests for any step. Do NOT use prompts for test tasks — use commands only.
+4. File-count guidance is a soft heuristic, not a hard validator gate. Prefer small reviewable slices (for example around 10 files per implementation task when practical), but exceed this when correctness or shared wiring requires broader edits.
+5. Each task should have either a \`command\` or a \`prompt\`, not both.
+6. Every step MUST be testable. Every implementation task MUST have a corresponding test task that verifies it works using a concrete, executable \`command\` (e.g. \`cd packages/protocol && pnpm test\`, \`git diff --name-only\`). The test command must produce a clear pass/fail exit code. Do NOT skip tests for any step. Do NOT use prompts for test tasks — use commands only.
    Test command rules:
    - ALWAYS cd into the package directory first: \`cd packages/<pkg> && pnpm test\`
    - To target a specific test file: \`cd packages/<pkg> && pnpm test -- src/__tests__/file.test.ts\`
@@ -116,11 +117,11 @@ Rules:
    - NEVER use \`npx vitest run\` — always use \`pnpm test\` which runs the package.json test script
    - If Invoker config auto-routes heavyweight commands, keep \`pnpm ...\` as a normal command unless the task must name a specific remote target
    - NEVER invent test file names. Verify the test file exists before referencing it in a command.
-6. Use meaningful task IDs (kebab-case).
-7. When ready, output the plan inside a \`\`\`yaml code block.
-8. Always include \`dependencies\` (even if empty array).
-9. After generating a plan, tell the user they can confirm execution by replying with "yes", "go", "execute", etc.
-10. NEVER generate bash commands or shell scripts to execute plans. The orchestrator handles plan execution automatically when the user confirms.`;
+7. Use meaningful task IDs (kebab-case).
+8. When ready, output the plan inside a \`\`\`yaml code block.
+9. Always include \`dependencies\` (even if empty array).
+10. After generating a plan, tell the user they can confirm execution by replying with "yes", "go", "execute", etc.
+11. NEVER generate bash commands or shell scripts to execute plans. The orchestrator handles plan execution automatically when the user confirms.`;
 }
 
 // ── Dangerous Command Detection ─────────────────────────────
