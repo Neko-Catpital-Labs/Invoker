@@ -186,6 +186,22 @@ describe('headless→owner delegation', () => {
       }));
     });
 
+    it('delegates set prompt to owner (prompt-edit bridge)', async () => {
+      const ownerHandler = vi.fn(async () => ({ success: true }));
+      messageBus.onRequest('headless.exec', ownerHandler);
+
+      const delegated = await tryDelegateExec(
+        ['set', 'prompt', 'wf-1/task-1', 'updated prompt text'],
+        messageBus,
+      );
+
+      expect(delegated).toBe(true);
+      expect(ownerHandler).toHaveBeenCalledWith({
+        args: ['set', 'prompt', 'wf-1/task-1', 'updated prompt text'],
+        waitForApproval: undefined,
+      });
+    });
+
     it('delegates rebase with noTrack so owner can return before workflow settlement', async () => {
       const ownerHandler = vi.fn(async () => ({ success: true }));
       messageBus.onRequest('headless.exec', ownerHandler);
