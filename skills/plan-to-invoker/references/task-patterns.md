@@ -39,6 +39,52 @@ These are constraints, not guidelines. Violating them produces broken plans.
 - **Independent files** → tasks creating/modifying unrelated files.
 - **All verification tasks** → file-existence and grep checks are read-only, run them all in parallel — **except** the final regression task, which must depend on implementation tasks (see above).
 
+## Layered decomposition contract (hard requirement for implementation plans)
+
+For plans with `onFinish` set to `pull_request` or `merge`, each task `description` must include:
+
+1. **`Layer:`** one of:
+   - `persistence`
+   - `domain`
+   - `transport`
+   - `api`
+   - `contact_surface`
+   - `app_bridge`
+   - `owner_delegation`
+   - `ui_activation`
+   - `app_regression`
+   - `e2e_regression`
+   - `ui`
+   - `docs`
+2. **`Feature state:`** one of:
+   - `active`
+   - `dormant`
+
+`onFinish: none` verify-only plans are exempt.
+
+### Cross-layer direction
+
+- Dependencies should flow from lower/foundational layers to higher/integration layers.
+- A lower-layer task depending on a higher-layer task is rejected unless the task includes:
+  - `Layer exception: allowed`
+  - a short rationale in the same description block.
+
+### Dormant tasks
+
+- `Feature state: dormant` tasks are valid and expected for staged rollouts.
+- Dormant tasks must still include **`Acceptance criteria:`** so review and verification remain objective.
+
+### Review decomposition benchmark
+
+Large prompt-edit style changes should split into dependency-ordered layer workflows:
+
+1. `contact surface`
+2. `app bridge` and `owner delegation`
+3. `ui activation`
+4. `app` + `e2e` regressions
+
+This split maps directly to review slices and should not be collapsed into one monolithic workflow.
+
 ## Sizing
 
 - **Target**: 3-8 tasks per plan.

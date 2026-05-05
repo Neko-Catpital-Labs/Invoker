@@ -16,6 +16,20 @@ fail() {
 
 test_count=0
 pass_count=0
+DOCTOR_NEGATIVE_FIXTURES=(
+  "anti-pattern-g-monolithic-prompt-edit-bridge.yaml"
+  "anti-pattern-h-layer-order-violation.yaml"
+)
+
+is_doctor_negative_fixture() {
+  local fixture_name="$1"
+  for candidate in "${DOCTOR_NEGATIVE_FIXTURES[@]}"; do
+    if [[ "$fixture_name" == "$candidate" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
 
 run_test() {
   local test_name="$1"
@@ -91,6 +105,38 @@ test_negative_fixture() {
     return 1
   fi
 
+  return 0
+}
+
+test_doctor_negative_fixture() {
+  local fixture_path="$1"
+  local fixture_name="$(basename "$fixture_path")"
+  local output
+  local stderr_file
+  stderr_file="$(mktemp)"
+
+  set +e
+  output=$(bash "$REPO_ROOT/skills/plan-to-invoker/scripts/skill-doctor.sh" "$fixture_path" 2>"$stderr_file")
+  local exit_code=$?
+  set -e
+
+  if [[ $exit_code -eq 0 ]]; then
+    echo "Expected non-zero exit code from skill-doctor for $fixture_name, got 0" >&2
+    echo "Output: $output" >&2
+    echo "Errors: $(cat "$stderr_file")" >&2
+    rm -f "$stderr_file"
+    return 1
+  fi
+
+  if ! echo "$output" | jq -e '.allPassed == false and .firstFailedStep == "lint-task-atomicity"' &>/dev/null; then
+    echo "Expected firstFailedStep=lint-task-atomicity for $fixture_name" >&2
+    echo "Output: $output" >&2
+    echo "Errors: $(cat "$stderr_file")" >&2
+    rm -f "$stderr_file"
+    return 1
+  fi
+
+  rm -f "$stderr_file"
   return 0
 }
 
@@ -256,7 +302,12 @@ echo "========================================="
 # Test all negative fixtures (generic validation)
 for fixture in "$NEGATIVE_DIR"/*.yaml; do
   if [[ -f "$fixture" ]]; then
-    run_test "Negative: $(basename "$fixture")" test_negative_fixture "$fixture"
+    fixture_name="$(basename "$fixture")"
+    if is_doctor_negative_fixture "$fixture_name"; then
+      run_test "Negative (skill-doctor): $fixture_name" test_doctor_negative_fixture "$fixture"
+    else
+      run_test "Negative: $fixture_name" test_negative_fixture "$fixture"
+    fi
   fi
 done
 
