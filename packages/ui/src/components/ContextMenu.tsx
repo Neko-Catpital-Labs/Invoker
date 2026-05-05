@@ -23,6 +23,7 @@ interface ContextMenuProps {
   onReplace: (taskId: string) => void;
   onOpenTerminal: (taskId: string) => void;
   onRebaseAndRetry?: (taskId: string) => void;
+  onRecreateWithRebase?: (taskId: string) => void;
   onRetryWorkflow?: (workflowId: string) => void;
   onRecreateTask?: (taskId: string) => void;
   onRecreateWorkflow?: (workflowId: string) => void;
@@ -41,6 +42,7 @@ export function ContextMenu({
   onReplace,
   onOpenTerminal,
   onRebaseAndRetry,
+  onRecreateWithRebase,
   onRetryWorkflow,
   onRecreateTask,
   onRecreateWorkflow,
@@ -61,6 +63,7 @@ export function ContextMenu({
   // Filter items based on available handlers
   const availableItems = items.filter((item) => {
     if (item.action === 'onRebaseAndRetry' && !onRebaseAndRetry) return false;
+    if (item.action === 'onRecreateWithRebase' && !onRecreateWithRebase) return false;
     if (item.action === 'onRetryWorkflow' && !onRetryWorkflow) return false;
     if (item.action === 'onRecreateTask' && !onRecreateTask) return false;
     if (item.action === 'onRecreateWorkflow' && !onRecreateWorkflow) return false;
@@ -189,6 +192,9 @@ export function ContextMenu({
         break;
       case 'onRebaseAndRetry':
         onRebaseAndRetry?.(task.id);
+        break;
+      case 'onRecreateWithRebase':
+        onRecreateWithRebase?.(task.id);
         break;
       case 'onRetryWorkflow':
         onRetryWorkflow?.(task.config.workflowId!);
