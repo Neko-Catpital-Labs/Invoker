@@ -35,8 +35,10 @@ import {
   rebaseAndRetry,
   resolveConflictAction,
   recreateWorkflow as sharedRecreateWorkflow,
+  recreateWorkflowFromFreshBase,
   recreateTask as sharedRecreateTask,
   forkWorkflow as sharedForkWorkflow,
+  selectFailureRecoveryRoute,
   setWorkflowMergeMode,
   finalizeAppliedFix,
 } from './workflow-actions.js';
@@ -1241,35 +1243,38 @@ async function headlessFix(taskId: string, deps: HeadlessDeps, agentArg?: string
 
   const te = createHeadlessExecutor(deps);
   const autoFix = wireHeadlessAutoFix(deps, te);
-  const { savedError } = deps.orchestrator.beginConflictResolution(taskId);
   const agent = (agentArg ?? 'claude').toLowerCase();
-  const isMergeConflictError = (() => {
-    const candidates = [
-      savedError,
-      savedError.trim(),
-      savedError.split('\n\n').at(-1)?.trim() ?? '',
-    ];
-    for (const candidate of candidates) {
-      if (!candidate) continue;
-      try {
-        const parsed = JSON.parse(candidate) as { type?: unknown };
-        if (parsed?.type === 'merge_conflict') return true;
-      } catch {
-        // ignore parse errors; this helper is best-effort
-      }
-    }
-    return false;
-  })();
+  const task = deps.orchestrator.getTask(taskId);
+  if (!task) throw new Error(`Task ${taskId} not found`);
+  const savedError = task.execution.error ?? '';
+  const recoveryRoute = selectFailureRecoveryRoute(task, savedError);
   try {
-    const output = deps.persistence.getTaskOutput(taskId);
-    if (isMergeConflictError) {
-      // For merge_conflict failures, run the deterministic conflict resolver first,
-      // then gate rerun behind explicit approve/reject like normal fix flow.
-      await te.resolveConflict(taskId, savedError, agent);
-    } else {
-      await te.fixWithAgent(taskId, output, agent, savedError);
+    if (recoveryRoute.kind === 'recreateWorkflowFromFreshBase') {
+      const started = await recreateWorkflowFromFreshBase(recoveryRoute.workflowId, {
+        ...deps,
+        taskExecutor: te,
+      });
+      await finalizeMutationWithGlobalTopup({
+        orchestrator: deps.orchestrator,
+        taskExecutor: te,
+        logger: deps.logger,
+        context: 'headless.fix-with-agent',
+        started,
+      });
+      process.stdout.write(
+        `Startup merge conflict detected; recreated workflow ${recoveryRoute.workflowId} from a fresh base.\n`,
+      );
+      return;
     }
-    const result = await finalizeAppliedFix(taskId, savedError, {
+
+    const { savedError: persistedSavedError } = deps.orchestrator.beginConflictResolution(taskId);
+    const output = deps.persistence.getTaskOutput(taskId);
+    if (recoveryRoute.kind === 'resolveConflict') {
+      await te.resolveConflict(taskId, persistedSavedError, agent);
+    } else {
+      await te.fixWithAgent(taskId, output, agent, persistedSavedError);
+    }
+    const result = await finalizeAppliedFix(taskId, persistedSavedError, {
       orchestrator: deps.orchestrator,
       taskExecutor: te,
       autoApproveAIFixes: deps.invokerConfig.autoApproveAIFixes,
@@ -1289,7 +1294,9 @@ async function headlessFix(taskId: string, deps: HeadlessDeps, agentArg?: string
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     deps.persistence.appendTaskOutput(taskId, `\n[Fix with AI] Failed: ${msg}`);
-    deps.orchestrator.revertConflictResolution(taskId, savedError, msg);
+    if (recoveryRoute.kind !== 'recreateWorkflowFromFreshBase') {
+      deps.orchestrator.revertConflictResolution(taskId, savedError, msg);
+    }
     await finalizeMutationWithGlobalTopup({
       orchestrator: deps.orchestrator,
       taskExecutor: te,

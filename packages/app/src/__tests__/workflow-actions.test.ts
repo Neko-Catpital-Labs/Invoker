@@ -28,6 +28,7 @@ import {
   autoFixOnFailure,
   buildCancelInFlight,
   buildInvalidationDeps,
+  selectFailureRecoveryRoute,
 } from '../workflow-actions.js';
 
 // ── Helpers ──────────────────────────────────────────────────
@@ -269,7 +270,7 @@ describe('rebaseAndRetry', () => {
       recreateWorkflowFromFreshBase: vi.fn(async () => tasks),
     };
     const persistence = {
-      loadWorkflow: vi.fn(() => ({ id: 'wf-1', generation: 1 })),
+      loadWorkflow: vi.fn(() => ({ id: 'wf-1', generation: 1, repoUrl: 'https://example/repo.git', baseBranch: 'master' })),
       updateWorkflow: vi.fn(),
     };
 
@@ -630,13 +631,79 @@ describe('finalizeAppliedFix', () => {
 });
 
 describe('autoFixOnFailure', () => {
+  it('routes startup merge conflicts without a workspace to workflow fresh-base recreate', async () => {
+    const started = [
+      makeRunningTask({ id: 'task-a', status: 'running', config: { workflowId: 'wf-1' } }),
+    ];
+    const mergeError = JSON.stringify({
+      type: 'merge_conflict',
+      failedBranch: 'experiment/foo',
+      conflictFiles: ['src/foo.ts'],
+    });
+    const orchestrator = {
+      shouldAutoFix: vi.fn(() => true),
+      getTask: vi.fn(() => makeTask({
+        status: 'failed',
+        config: { workflowId: 'wf-1' },
+        execution: { autoFixAttempts: 0, error: mergeError },
+      })),
+      getAutoFixRetryBudget: vi.fn(() => 3),
+      beginConflictResolution: vi.fn(() => ({ savedError: mergeError })),
+      recreateWorkflowFromFreshBase: vi.fn(async (_workflowId: string, options?: { refreshBase?: () => Promise<unknown> }) => {
+        await options?.refreshBase?.();
+        return started;
+      }),
+      retryTask: vi.fn(() => []),
+      revertConflictResolution: vi.fn(),
+    };
+    const persistence = {
+      updateTask: vi.fn(),
+      getTaskOutput: vi.fn(() => 'test output'),
+      appendTaskOutput: vi.fn(),
+      loadWorkflow: vi.fn(() => ({
+        id: 'wf-1',
+        generation: 1,
+        repoUrl: 'https://example/repo.git',
+        baseBranch: 'master',
+      })),
+      updateWorkflow: vi.fn(),
+      logEvent: vi.fn(),
+    };
+    const taskExecutor = {
+      preparePoolForRebaseRetry: vi.fn().mockResolvedValue(undefined),
+      fixWithAgent: vi.fn().mockResolvedValue(undefined),
+      resolveConflict: vi.fn().mockResolvedValue(undefined),
+      executeTasks: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await autoFixOnFailure('task-a', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+    });
+
+    expect(orchestrator.beginConflictResolution).not.toHaveBeenCalled();
+    expect(orchestrator.recreateWorkflowFromFreshBase).toHaveBeenCalledWith(
+      'wf-1',
+      expect.objectContaining({ refreshBase: expect.any(Function) }),
+    );
+    expect(taskExecutor.preparePoolForRebaseRetry).toHaveBeenCalledWith(
+      'wf-1',
+      'https://example/repo.git',
+      'master',
+    );
+    expect(taskExecutor.resolveConflict).not.toHaveBeenCalled();
+    expect(taskExecutor.fixWithAgent).not.toHaveBeenCalled();
+    expect(taskExecutor.executeTasks).toHaveBeenCalledWith(started);
+  });
+
   it('uses fixWithAgent for non-merge failures and restarts the task directly', async () => {
     const started = [makeRunningTask({ id: 'task-a', status: 'running' })];
     const orchestrator = {
       shouldAutoFix: vi.fn(() => true),
       getTask: vi.fn(() => makeTask({
         status: 'failed',
-        execution: { autoFixAttempts: 0 },
+        execution: { autoFixAttempts: 0, error: 'boom' },
       })),
       getAutoFixRetryBudget: vi.fn(() => 3),
       beginConflictResolution: vi.fn(() => ({ savedError: 'boom' })),
@@ -678,7 +745,7 @@ describe('autoFixOnFailure', () => {
       shouldAutoFix: vi.fn(() => true),
       getTask: vi.fn(() => makeTask({
         status: 'failed',
-        execution: { autoFixAttempts: 0 },
+        execution: { autoFixAttempts: 0, error: mergeError, workspacePath: '/tmp/task-a' },
       })),
       getAutoFixRetryBudget: vi.fn(() => 3),
       beginConflictResolution: vi.fn(() => ({ savedError: mergeError })),
@@ -720,7 +787,7 @@ describe('autoFixOnFailure', () => {
       shouldAutoFix: vi.fn(() => true),
       getTask: vi.fn(() => makeTask({
         status: 'failed',
-        execution: { autoFixAttempts: 0 },
+        execution: { autoFixAttempts: 0, error: mergeError, workspacePath: '/tmp/task-a' },
       })),
       getAutoFixRetryBudget: vi.fn(() => 3),
       beginConflictResolution: vi.fn(() => ({ savedError: mergeError })),
@@ -1009,7 +1076,7 @@ describe('autoFixOnFailure', () => {
       getTask: vi.fn(() => makeTask({
         status: 'failed',
         config: { workflowId: 'wf-1' },
-        execution: { autoFixAttempts: 0 },
+        execution: { autoFixAttempts: 0, error: mergeError, workspacePath: '/tmp/task-a' },
       })),
       getAutoFixRetryBudget: vi.fn(() => 3),
       beginConflictResolution: vi.fn(() => ({ savedError: mergeError })),
@@ -1045,6 +1112,64 @@ describe('autoFixOnFailure', () => {
         selectedAgentSource: 'default',
       }),
     );
+  });
+});
+
+describe('selectFailureRecoveryRoute', () => {
+  it('treats executor startup merge-conflict text as a merge conflict', () => {
+    const route = selectFailureRecoveryRoute(
+      makeTask({
+        config: { workflowId: 'wf-1' },
+        execution: {},
+      }) as any,
+      'Executor startup failed (ssh): Merge conflict merging experiment/foo: packages/workflow-core/src/orchestrator.ts',
+    );
+
+    expect(route).toEqual({ kind: 'recreateWorkflowFromFreshBase', workflowId: 'wf-1' });
+  });
+
+  it('uses workflow fresh-base recreate for startup merge conflicts without a workspace', () => {
+    const route = selectFailureRecoveryRoute(
+      makeTask({
+        config: { workflowId: 'wf-1' },
+        execution: {},
+      }) as any,
+      JSON.stringify({
+        type: 'merge_conflict',
+        failedBranch: 'experiment/foo',
+        conflictFiles: ['src/foo.ts'],
+      }),
+    );
+
+    expect(route).toEqual({ kind: 'recreateWorkflowFromFreshBase', workflowId: 'wf-1' });
+  });
+
+  it('uses resolveConflict for merge conflicts when a workspace exists', () => {
+    const route = selectFailureRecoveryRoute(
+      makeTask({
+        config: { workflowId: 'wf-1' },
+        execution: { workspacePath: '/tmp/task-a' },
+      }) as any,
+      JSON.stringify({
+        type: 'merge_conflict',
+        failedBranch: 'experiment/foo',
+        conflictFiles: ['src/foo.ts'],
+      }),
+    );
+
+    expect(route).toEqual({ kind: 'resolveConflict' });
+  });
+
+  it('uses fixWithAgent for non-merge failures', () => {
+    const route = selectFailureRecoveryRoute(
+      makeTask({
+        config: { workflowId: 'wf-1' },
+        execution: {},
+      }) as any,
+      'boom',
+    );
+
+    expect(route).toEqual({ kind: 'fixWithAgent' });
   });
 });
 

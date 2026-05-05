@@ -190,11 +190,13 @@ WT_DIR=${q(worktreeDir)}
 git -C "$WT_DIR" reset --hard HEAD >/dev/null 2>&1 || true
 git -C "$WT_DIR" clean -fd >/dev/null 2>&1 || true
 for upBranch in ${branches}; do
-  # Resolve: try bare name first, then origin/ prefix
-  if git -C "$WT_DIR" rev-parse --verify "$upBranch" >/dev/null 2>&1; then
-    upRef="$upBranch"
-  elif git -C "$WT_DIR" rev-parse --verify "origin/$upBranch" >/dev/null 2>&1; then
+  # Resolve: prefer fetched origin/<branch> over same-named local branches.
+  # Managed mirrors accumulate local experiment refs from prior runs; after a
+  # fetch, a stale local branch must not shadow a newer remote-tracking ref.
+  if git -C "$WT_DIR" rev-parse --verify "origin/$upBranch" >/dev/null 2>&1; then
     upRef="origin/$upBranch"
+  elif git -C "$WT_DIR" rev-parse --verify "$upBranch" >/dev/null 2>&1; then
+    upRef="$upBranch"
   else
     # Branch doesn't exist locally or on origin - skip gracefully
     echo "SKIPPED_MISSING_REF=$upBranch"

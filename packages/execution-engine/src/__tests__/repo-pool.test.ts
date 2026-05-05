@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { execSync } from 'node:child_process';
 import { RepoPool, ResourceLimitError } from '../repo-pool.js';
 import { remoteFetchForPool } from '../remote-fetch-policy.js';
+import * as branchUtils from '../branch-utils.js';
 
 /**
  * Creates a temp git repo with an initial commit.
@@ -149,6 +150,49 @@ describe('RepoPool', () => {
     expect(currentBranch).toBe(branch);
 
     await poolWithExternalBase.destroyAll();
+  });
+
+  it('acquireWorktree: retries once when git reports target worktree path already exists', async () => {
+    const branch = 'experiment/race-already-exists';
+    const actionId = 'wf-race/task';
+    const poolWithExternalBase = new RepoPool({
+      cacheDir: tmpDir,
+      worktreeBaseDir: join(tmpDir, 'managed-worktrees'),
+    });
+    const targetPath = poolWithExternalBase.externalWorktreePath(localRepoUrl, branch);
+
+    const originalRunBashLocal = branchUtils.runBashLocal;
+    let shouldFailFirstAttempt = true;
+    const runBashSpy = vi
+      .spyOn(branchUtils, 'runBashLocal')
+      .mockImplementation(async (script, cwd) => {
+        if (shouldFailFirstAttempt) {
+          shouldFailFirstAttempt = false;
+          const error = new Error(
+            `bash exited with code 128: Preparing worktree (resetting branch '${branch}')\n` +
+              `fatal: '${targetPath}' already exists`,
+          );
+          (error as Error & { exitCode?: number }).exitCode = 128;
+          throw error;
+        }
+        return originalRunBashLocal(script, cwd);
+      });
+
+    try {
+      const acquired = await poolWithExternalBase.acquireWorktree(
+        localRepoUrl,
+        branch,
+        undefined,
+        actionId,
+        { forceFresh: true },
+      );
+      expect(acquired.worktreePath).toBe(targetPath);
+      expect(existsSync(join(acquired.worktreePath, '.git'))).toBe(true);
+      expect(runBashSpy).toHaveBeenCalledTimes(2);
+    } finally {
+      runBashSpy.mockRestore();
+      await poolWithExternalBase.destroyAll();
+    }
   });
 
   it('softRelease: frees slot without removing worktree from disk', async () => {
