@@ -552,6 +552,65 @@ export async function resolveConflictAction(
   }
 }
 
+export type FixWithAgentActionResult =
+  | { kind: 'fixWithAgent' | 'resolveConflict'; autoApproved: boolean; started: TaskState[] }
+  | { kind: 'recreateWorkflowFromFreshBase'; workflowId: string; started: TaskState[] };
+
+export async function fixWithAgentAction(
+  taskId: string,
+  deps: Pick<ActionDeps, 'orchestrator' | 'persistence' | 'autoApproveAIFixes'> & { taskExecutor: TaskRunner },
+  options: {
+    agentName?: string;
+    recoveryRoute?: FailureRecoveryRoute;
+    recreateOutputLabel?: string;
+    failureOutputLabel?: string;
+  } = {},
+): Promise<FixWithAgentActionResult> {
+  const { orchestrator, persistence, taskExecutor } = deps;
+  const task = orchestrator.getTask(taskId);
+  if (!task) throw new Error(`Task ${taskId} not found`);
+
+  const savedError = task.execution.error ?? '';
+  const recoveryRoute = options.recoveryRoute ?? selectFailureRecoveryRoute(task, savedError);
+  if (recoveryRoute.kind === 'recreateWorkflowFromFreshBase') {
+    if (options.recreateOutputLabel) {
+      persistence.appendTaskOutput(
+        taskId,
+        `\n[${options.recreateOutputLabel}] Startup merge conflict detected; recreating workflow ${recoveryRoute.workflowId} from a fresh base.`,
+      );
+    }
+    const started = await recreateWorkflowFromFreshBase(recoveryRoute.workflowId, deps);
+    return {
+      kind: recoveryRoute.kind,
+      workflowId: recoveryRoute.workflowId,
+      started,
+    };
+  }
+
+  const { savedError: persistedSavedError } = orchestrator.beginConflictResolution(taskId);
+  try {
+    if (recoveryRoute.kind === 'resolveConflict') {
+      await taskExecutor.resolveConflict(taskId, persistedSavedError, options.agentName);
+    } else {
+      const output = persistence.getTaskOutput(taskId);
+      await taskExecutor.fixWithAgent(taskId, output, options.agentName, persistedSavedError);
+    }
+    const result = await finalizeAppliedFix(taskId, persistedSavedError, deps);
+    return {
+      kind: recoveryRoute.kind,
+      autoApproved: result.autoApproved,
+      started: result.started,
+    };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    const errorLabel = options.failureOutputLabel
+      ?? (recoveryRoute.kind === 'resolveConflict' ? 'Resolve Conflict' : `Fix with ${options.agentName ?? 'Claude'}`);
+    persistence.appendTaskOutput(taskId, `\n[${errorLabel}] Failed: ${msg}`);
+    orchestrator.revertConflictResolution(taskId, persistedSavedError, msg);
+    throw err;
+  }
+}
+
 export async function finalizeAppliedFix(
   taskId: string,
   savedError: string,

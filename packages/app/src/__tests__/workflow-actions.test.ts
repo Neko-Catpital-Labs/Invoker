@@ -24,6 +24,7 @@ import {
   editTaskType,
   selectExperiment,
   setWorkflowMergeMode,
+  fixWithAgentAction,
   finalizeAppliedFix,
   autoFixOnFailure,
   buildCancelInFlight,
@@ -1170,6 +1171,124 @@ describe('selectFailureRecoveryRoute', () => {
     );
 
     expect(route).toEqual({ kind: 'fixWithAgent' });
+  });
+});
+
+describe('fixWithAgentAction', () => {
+  it('dispatches plain failures to taskExecutor.fixWithAgent', async () => {
+    const orchestrator = {
+      getTask: vi.fn(() => makeTask({
+        status: 'failed',
+        config: { workflowId: 'wf-1' },
+        execution: { error: 'boom' },
+      })),
+      beginConflictResolution: vi.fn(() => ({ savedError: 'boom' })),
+      setFixAwaitingApproval: vi.fn(),
+      revertConflictResolution: vi.fn(),
+    };
+    const persistence = {
+      getTaskOutput: vi.fn(() => 'test output'),
+      appendTaskOutput: vi.fn(),
+    };
+    const taskExecutor = {
+      fixWithAgent: vi.fn().mockResolvedValue(undefined),
+      resolveConflict: vi.fn(),
+    };
+
+    const result = await fixWithAgentAction('task-a', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+    }, {
+      agentName: 'codex',
+    });
+
+    expect(taskExecutor.fixWithAgent).toHaveBeenCalledWith('task-a', 'test output', 'codex', 'boom');
+    expect(taskExecutor.resolveConflict).not.toHaveBeenCalled();
+    expect(orchestrator.setFixAwaitingApproval).toHaveBeenCalledWith('task-a', 'boom');
+    expect(result).toEqual({ kind: 'fixWithAgent', autoApproved: false, started: [] });
+  });
+
+  it('dispatches merge conflicts with a workspace to taskExecutor.resolveConflict', async () => {
+    const mergeError = JSON.stringify({
+      type: 'merge_conflict',
+      failedBranch: 'experiment/foo',
+      conflictFiles: ['src/foo.ts'],
+    });
+    const orchestrator = {
+      getTask: vi.fn(() => makeTask({
+        status: 'failed',
+        config: { workflowId: 'wf-1' },
+        execution: { error: mergeError, workspacePath: '/tmp/task-a' },
+      })),
+      beginConflictResolution: vi.fn(() => ({ savedError: mergeError })),
+      setFixAwaitingApproval: vi.fn(),
+      revertConflictResolution: vi.fn(),
+    };
+    const persistence = {
+      getTaskOutput: vi.fn(),
+      appendTaskOutput: vi.fn(),
+    };
+    const taskExecutor = {
+      fixWithAgent: vi.fn(),
+      resolveConflict: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const result = await fixWithAgentAction('task-a', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+    }, {
+      agentName: 'claude',
+    });
+
+    expect(taskExecutor.resolveConflict).toHaveBeenCalledWith('task-a', mergeError, 'claude');
+    expect(taskExecutor.fixWithAgent).not.toHaveBeenCalled();
+    expect(orchestrator.setFixAwaitingApproval).toHaveBeenCalledWith('task-a', mergeError);
+    expect(result).toEqual({ kind: 'resolveConflict', autoApproved: false, started: [] });
+  });
+
+  it('dispatches startup merge conflicts without a workspace to workflow recreate', async () => {
+    const orchestrator = {
+      getTask: vi.fn(() => makeTask({
+        status: 'failed',
+        config: { workflowId: 'wf-1' },
+        execution: {
+          error: 'Executor startup failed (ssh): Merge conflict merging experiment/foo: packages/workflow-core/src/orchestrator.ts',
+        },
+      })),
+      loadWorkflow: vi.fn(() => ({ id: 'wf-1', generation: 2 })),
+      updateWorkflow: vi.fn(),
+      recreateWorkflowFromFreshBase: vi.fn(() => [makeRunningTask({ id: 'task-a', status: 'running' })]),
+    };
+    const persistence = {
+      appendTaskOutput: vi.fn(),
+      loadWorkflow: vi.fn(() => ({ id: 'wf-1', generation: 2 })),
+      updateWorkflow: vi.fn(),
+    };
+    const taskExecutor = {
+      preparePoolForRebaseRetry: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const result = await fixWithAgentAction('task-a', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+    }, {
+      recreateOutputLabel: 'Fix with AI',
+    });
+
+    expect(persistence.appendTaskOutput).toHaveBeenCalledWith(
+      'task-a',
+      expect.stringContaining('Startup merge conflict detected; recreating workflow wf-1 from a fresh base.'),
+    );
+    expect(persistence.updateWorkflow).toHaveBeenCalledWith('wf-1', { generation: 3 });
+    expect(orchestrator.recreateWorkflowFromFreshBase).toHaveBeenCalledWith('wf-1', expect.any(Object));
+    expect(result).toEqual({
+      kind: 'recreateWorkflowFromFreshBase',
+      workflowId: 'wf-1',
+      started: [expect.objectContaining({ id: 'task-a', status: 'running' })],
+    });
   });
 });
 
