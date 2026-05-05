@@ -335,8 +335,8 @@ describe('headless→owner delegation', () => {
   });
 
   describe('tryDelegateRun / tryDelegateResume', () => {
-    it('succeeds when GUI handler returns immediately (fire-and-forget execution)', async () => {
-      // Simulate GUI handler that returns response immediately without awaiting
+    it('succeeds when owner handler returns immediately (fire-and-forget execution)', async () => {
+      // Simulate owner handler that returns response immediately without awaiting
       // task execution — the fix for the 5s delegation timeout bug.
       messageBus.onRequest('headless.run', async (req: { planPath: string }) => {
         expect(req.planPath).toContain('plan.yaml');
@@ -355,7 +355,7 @@ describe('headless→owner delegation', () => {
       expect(delegated).toBe(true);
     });
 
-    it('times out when GUI handler blocks on task execution (pre-fix behavior)', async () => {
+    it('times out when owner handler blocks on task execution (pre-fix behavior)', async () => {
       // Simulate the old bug: handler awaits executeTasks which never resolves
       messageBus.onRequest('headless.run', async () => {
         return new Promise(() => {}); // Never resolves — simulates await executeTasks()
