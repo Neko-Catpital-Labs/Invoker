@@ -1,5 +1,5 @@
 /**
- * Shared logic for opening an external OS terminal for a persisted task (GUI IPC + headless CLI).
+ * Shared logic for opening an external OS terminal for a persisted task.
  */
 
 import type { Logger } from '@invoker/contracts';
@@ -45,7 +45,7 @@ export interface OpenExternalTerminalForTaskOptions {
   executorRegistry: ExecutorRegistry;
   executionAgentRegistry?: AgentRegistry;
   repoRoot: string;
-  /** Shown when task status is `running` (GUI vs headless wording). */
+  /** Shown when task status is `running`. */
   runningTaskReason?: string;
   logger?: Logger;
 }

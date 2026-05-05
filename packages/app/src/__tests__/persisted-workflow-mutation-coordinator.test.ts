@@ -62,7 +62,7 @@ describe('PersistedWorkflowMutationCoordinator', () => {
     expect(order).toEqual(['mut:running-normal', 'mut:queued-high', 'mut:queued-normal']);
   });
 
-  it('evicts older queued workflow intents when a headless recreate fence starts', async () => {
+  it('evicts older queued workflow intents when a delegated recreate fence starts', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
     adapter.saveWorkflow({
@@ -180,7 +180,7 @@ describe('PersistedWorkflowMutationCoordinator', () => {
     gate.resolve();
   });
 
-  it('invalidates an older running workflow intent when GUI recreate-task is enqueued', async () => {
+  it('invalidates an older running workflow intent when internal recreate-task is enqueued', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
     adapter.saveWorkflow({
@@ -284,7 +284,7 @@ describe('PersistedWorkflowMutationCoordinator', () => {
     ]);
   });
 
-  it('evicts older queued workflow intents when GUI recreate-task fence starts', async () => {
+  it('evicts older queued workflow intents when internal recreate-task fence starts', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
     adapter.saveWorkflow({

@@ -621,7 +621,7 @@ if (isHeadless) {
     if (mutatingMode && !standaloneMode) {
       // Delegating headless commands must never become the IPC server.
       // Otherwise a transient submitter can steal the transport socket away
-      // from the actual GUI/standalone mutation owner.
+      // from the actual shared mutation owner.
       const delegationBus = new IpcBus(undefined, { allowServe: false });
       try {
         await delegationBus.ready();
@@ -641,7 +641,7 @@ if (isHeadless) {
         }
 
         if (delegated) {
-          // Successfully delegated to GUI
+          // Successfully delegated to owner
           delegationBus.disconnect();
           process.exit(process.exitCode ?? 0);
           return; // Guard: process.exit() may not halt in Electron async context
@@ -651,9 +651,9 @@ if (isHeadless) {
         delegationBus.disconnect();
         if (!standaloneMode) {
           process.stderr.write(
-            `${RED}Error:${RESET} Mutation command "${command}" requires an owner process (GUI or standalone headless).\n` +
+            `${RED}Error:${RESET} Mutation command "${command}" requires a running owner process.\n` +
             `\n${BOLD}Options:${RESET}\n` +
-            `  1. Start the GUI process first: ${BOLD}electron dist/main.js${RESET}\n` +
+            `  1. Start the interactive process: ${BOLD}electron dist/main.js${RESET}\n` +
             `  2. Run in standalone mode: ${BOLD}INVOKER_HEADLESS_STANDALONE=1 electron dist/main.js --headless ${cliArgs.join(' ')}${RESET}\n` +
             `\nStandalone mode opens a writable database. Only use it when no other process is accessing the database.\n`
           );
@@ -846,7 +846,7 @@ if (isHeadless) {
             return undefined;
           }
           default:
-            throw new Error(`Unsupported GUI mutation for standalone owner: ${payload.channel}`);
+            throw new Error(`Unsupported internal mutation for standalone owner: ${payload.channel}`);
         }
       };
 
@@ -2371,13 +2371,13 @@ if (isHeadless) {
         { maxConcurrentWorkflowDrains },
       );
     } else {
-      logger.info('GUI launched in follower mode; mutation execution is delegated to the current owner', {
+      logger.info('Launched in follower mode; mutation execution is delegated to the current owner', {
         module: 'init',
       });
     }
 
-    // ── IPC Delegation Handlers — headless → GUI ────────────────
-    // Headless processes delegate write-heavy commands to the GUI process via IpcBus.
+    // ── IPC Delegation Handlers — peer → owner ────────────────
+    // Peer processes delegate write-heavy commands to the owner process via IpcBus.
     if (ownerMode) {
       workflowMutationDispatcher.set('headless.exec', async (payloadArg: unknown) => {
         return executeHeadlessExec(payloadArg as HeadlessExecMutationPayload);

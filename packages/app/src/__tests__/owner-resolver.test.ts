@@ -37,7 +37,7 @@ describe('owner-resolver', () => {
       expect(result.resolved).toBe(false);
     });
 
-    it('returns not-resolved for a GUI owner (not standalone-capable)', async () => {
+    it('returns not-resolved for a non-standalone owner', async () => {
       const bus = new LocalBus();
       bus.onRequest('headless.owner-ping', async () => ({
         ok: true,
@@ -56,7 +56,7 @@ describe('owner-resolver', () => {
   });
 
   describe('discoverAny', () => {
-    it('returns a GUI owner as resolved', async () => {
+    it('returns a non-standalone owner as resolved', async () => {
       const bus = new LocalBus();
       bus.onRequest('headless.owner-ping', async () => ({
         ok: true,
@@ -188,7 +188,7 @@ describe('owner-resolver', () => {
   });
 
   describe('waitForStandalone', () => {
-    it('skips GUI owners and waits for standalone', async () => {
+    it('skips non-standalone owners and waits for a standalone-capable one', async () => {
       const bus = new LocalBus();
       let pingCount = 0;
       bus.onRequest('headless.owner-ping', async () => {
@@ -211,7 +211,7 @@ describe('owner-resolver', () => {
       }
     });
 
-    it('returns not-resolved after timeout when only GUI owners available', async () => {
+    it('returns not-resolved after timeout when only non-standalone owners available', async () => {
       const bus = new LocalBus();
       bus.onRequest('headless.owner-ping', async () => ({
         ok: true,
@@ -398,7 +398,7 @@ describe('owner-resolver', () => {
       }
     });
 
-    it('result contains bus handle but no GUI/headless flags', async () => {
+    it('result contains bus handle but no surface-specific mode flags', async () => {
       const bus = new LocalBus();
       bus.onRequest('headless.owner-ping', async () => ({
         ok: true,
