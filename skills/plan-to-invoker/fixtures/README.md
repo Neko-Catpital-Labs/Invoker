@@ -34,6 +34,7 @@ Positive fixtures demonstrate valid plan patterns:
 - **02-feature-implementation.yaml** - Standard implement → test → verify pattern
 - **03-multi-step-refactor-worktrees.yaml** - Multi-step refactor using worktrees
 - **04-large-refactor-pull-request.yaml** - Complex plan with diamond dependencies and `onFinish: pull_request`
+- **07-prompt-edit-layered-split-with-dormant.yaml** - Dependency-first layer split for prompt-edit bridge work, including a dormant activation slice
 
 All positive fixtures are extracted from `references/examples.md` sections 1-4.
 
@@ -49,6 +50,8 @@ Negative fixtures demonstrate anti-patterns and validation errors:
 - **anti-pattern-d-missing-dependencies.yaml** - Task missing dependencies field (missing_required_field)
 - **anti-pattern-e-no-verification.yaml** - Implementation without verification (policy violation)
 - **anti-pattern-f-dangerous-commands.yaml** - Dangerous commands (rm -rf, force push, etc.)
+- **anti-pattern-g-monolithic-prompt-edit-bridge.yaml** - Monolithic `wf-1777929074509-8`-shaped workflow missing required layer/state decomposition metadata (**fails `skill-doctor` lint, not YAML schema**)
+- **anti-pattern-h-layer-order-violation.yaml** - Lower architectural layer depends on a higher layer without `Layer exception: allowed` (**fails `skill-doctor` lint, not YAML schema**)
 
 ### Edge Cases (specific validation errors)
 

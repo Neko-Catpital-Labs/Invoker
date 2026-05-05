@@ -1,0 +1,40 @@
+# Anti-Pattern G: Monolithic prompt-edit bridge workflow (wf-1777929074509-8 shape)
+# Source: dependency-first layered decomposition benchmark
+# Expected outcome: validate-plan passes schema, but skill-doctor fails lint-task-atomicity
+# due to missing Layer:/Feature state: metadata and poor review decomposition.
+
+name: "Anti-pattern: monolithic GUI prompt edit bridge"
+description: |
+  Mirrors the oversized shape of wf-1777929074509-8 as one implementation workflow.
+  This should now fail decomposition lint because implementation tasks must include
+  Layer and Feature state metadata and be split into reviewable dependency slices.
+onFinish: pull_request
+mergeMode: github
+repoUrl: https://github.com/EdbertChan/Invoker
+baseBranch: master
+featureBranch: plan/anti-pattern-monolithic-prompt-edit-bridge
+
+tasks:
+  - id: implement-entire-prompt-edit-stack
+    description: |
+      Add renderer callback wiring, IPC bridge registration, owner delegation behavior,
+      TaskPanel activation behavior, and all regressions in one large task.
+      Files:
+      - packages/app/src/main.ts
+      - packages/app/src/preload.ts
+      - packages/ui/src/components/TaskPanel.tsx
+      - packages/app/e2e/prompt-edit.spec.ts
+      Change types:
+      - modify
+      Acceptance criteria:
+      - cd packages/app && pnpm test exits 0.
+    prompt: |
+      Modify packages/app/src/main.ts, packages/app/src/preload.ts,
+      packages/ui/src/components/TaskPanel.tsx, and packages/app/e2e/prompt-edit.spec.ts.
+      Implement the entire GUI prompt-edit flow end to end in one task. Modify
+      the renderer callback surface, bridge it to IPC handlers, route through owner
+      delegation in the app layer, activate TaskPanel prompt editing UX, and add
+      both app-level and end-to-end regressions. Keep behavior aligned with the
+      existing editTaskCommand path and ensure recreate semantics remain correct.
+      Verify all changed tests pass and that command editing behavior is unchanged.
+    dependencies: []

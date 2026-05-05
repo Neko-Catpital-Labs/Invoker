@@ -53,6 +53,8 @@ Complex plan with diamond dependencies. Uses `onFinish: pull_request` for manual
 - `fixtures/negative/anti-pattern-d-missing-dependencies.yaml` — Dependencies field is required
 - `fixtures/negative/anti-pattern-e-no-verification.yaml` — Implementation tasks need verification
 - `fixtures/negative/anti-pattern-f-dangerous-commands.yaml` — Avoid destructive commands (`rm -rf`, force push)
+- `fixtures/negative/anti-pattern-g-monolithic-prompt-edit-bridge.yaml` — Monolithic `wf-1777929074509-8`-style workflow missing dependency-first layered decomposition metadata
+- `fixtures/negative/anti-pattern-h-layer-order-violation.yaml` — Lower layer depends on higher layer without `Layer exception: allowed`
 
 All anti-patterns are validated by `scripts/test-fixtures.sh` with deterministic error detection.
 
@@ -110,6 +112,24 @@ When the source is a policy or architecture document with a decision table, the 
 
 ---
 
+## 9. Dependency-first layered decomposition with dormant support
+
+Use this pattern when a change is too large for a single reviewable workflow. For implementation plans (`onFinish != none`), include task-level `Layer:` and `Feature state:` metadata, wire dependencies in layer order, and keep dormant work explicit.
+
+**See positive fixture**: `fixtures/positive/07-prompt-edit-layered-split-with-dormant.yaml`
+**See negative fixture**: `fixtures/negative/anti-pattern-g-monolithic-prompt-edit-bridge.yaml`
+
+**Pattern**:
+- Break monolithic prompt-edit changes into review slices:
+  1. contact surface
+  2. app bridge / owner delegation
+  3. ui activation
+  4. app + e2e regressions
+- Use `Feature state: dormant` for planned-but-not-activated tasks, but still include `Acceptance criteria:`.
+- Use dependencies to enforce order; if a lower layer must depend on a higher layer, include `Layer exception: allowed` and rationale.
+
+---
+
 ## Summary
 
 **Positive patterns**:
@@ -119,12 +139,14 @@ When the source is a policy or architecture document with a decision table, the 
 - Large refactors → `onFinish: pull_request`, diamond DAGs
 - Invoker-on-Invoker PR publication → keep `mergeMode: github`, then use `mergify stack push` as the repo-specific publication step
 - Policy matrix / architecture docs → preserve row-level coverage with `coverage-map.json` and `stack-manifest.json`
+- Dependency-first layered decomposition → enforce `Layer:` + `Feature state:` metadata, preserve dependency direction, allow explicit dormant tasks
 
 **Validation enforces**:
 - Every prompt task must have verification command task
 - Use `pnpm test`, never `npx vitest run`
 - Dependencies field required (even if empty)
 - No dangerous commands without manual approval
+- For implementation plans: `Layer:` + `Feature state:` headings, allowed values, and layer-consistent dependency direction
 
 **References**:
 - Fixture tests: `scripts/test-fixtures.sh`
