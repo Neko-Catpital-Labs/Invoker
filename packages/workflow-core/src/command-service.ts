@@ -380,7 +380,20 @@ export class CommandService {
     return this.executeCommand<void>(
       'DELETE_WORKFLOW_FAILED',
       () => this.orchestrator.deleteWorkflow(envelope.payload.workflowId),
-      envelope.payload.workflowId,
+      undefined,
+    );
+  }
+
+  async detachWorkflow(
+    envelope: CommandEnvelope<{ workflowId: string; upstreamWorkflowId: string }>,
+  ): Promise<CommandResult<void>> {
+    return this.executeCommand<void>(
+      'DETACH_WORKFLOW_FAILED',
+      () => this.orchestrator.detachWorkflow(
+        envelope.payload.workflowId,
+        envelope.payload.upstreamWorkflowId,
+      ),
+      undefined,
     );
   }
 

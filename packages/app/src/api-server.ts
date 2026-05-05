@@ -26,6 +26,7 @@
  *   POST   /api/tasks/:id/edit-type    body: { executorType, remoteTargetId? }
  *   POST   /api/tasks/:id/edit-agent   body: { agent }
  *   POST   /api/tasks/:id/gate-policy  body: { updates: [{ workflowId, taskId?, gatePolicy }] }
+ *   POST   /api/workflows/:id/detach  body: { upstreamWorkflowId }
  *   POST   /api/workflows/:id/restart
  *   POST   /api/workflows/:id/cancel
  *   POST   /api/workflows/:id/merge-mode  body: { mode }
@@ -663,6 +664,30 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
         try {
           orchestrator.deleteWorkflow(workflowId);
           json(res, 200, { ok: true, workflowId, action: 'deleted' });
+        } catch (err) {
+          json(res, 400, { error: err instanceof Error ? err.message : String(err) });
+        }
+        return;
+      }
+
+      // POST /api/workflows/:id/detach
+      const wfDetachMatch = path.match(/^\/api\/workflows\/([^/]+)\/detach$/);
+      if (method === 'POST' && wfDetachMatch) {
+        const workflowId = decodeURIComponent(wfDetachMatch[1]);
+        try {
+          const body = await readBody(req);
+          const { upstreamWorkflowId } = JSON.parse(body);
+          if (!upstreamWorkflowId) {
+            json(res, 400, { error: 'Missing "upstreamWorkflowId" in request body' });
+            return;
+          }
+          orchestrator.detachWorkflow(workflowId, String(upstreamWorkflowId));
+          json(res, 200, {
+            ok: true,
+            workflowId,
+            upstreamWorkflowId,
+            action: 'detached',
+          });
         } catch (err) {
           json(res, 400, { error: err instanceof Error ? err.message : String(err) });
         }

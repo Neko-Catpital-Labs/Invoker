@@ -696,6 +696,9 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
     case 'fork-workflow':
       await headlessForkWorkflow(args[1], deps);
       break;
+    case 'detach-workflow':
+      await headlessDetachWorkflow(args[1], args[2], deps);
+      break;
     case 'rebase':
       await headlessRebaseAndRetry(args[1], deps);
       break;
@@ -860,6 +863,7 @@ ${BOLD}Execute:${RESET}
   recreate <workflowId>                                Recreate workflow: wipe all state, new generation
   recreate-task <taskId>                               Recreate task + downstream (task-scoped reset)
   fork-workflow <workflowId>                          Fork a live workflow into a new branched workflow (Step 14)
+  detach-workflow <workflowId> <upstreamWorkflowId>  Detach one upstream workflow and void downstream to pending
   rebase <taskId>                                     Refresh pool base + nuclear restart
   fix <taskId> [claude|codex]                         Fix a failed task (default: claude)
   resolve-conflict <taskId> [claude|codex]            Resolve merge conflict + restart
@@ -2053,6 +2057,27 @@ async function headlessDeleteWorkflow(workflowId: string, deps: Pick<HeadlessDep
   const result = await deps.commandService.deleteWorkflow(envelope);
   if (!result.ok) throw new Error(result.error.message);
   process.stdout.write(`Deleted workflow: ${workflowId}\n`);
+}
+
+async function headlessDetachWorkflow(
+  workflowId: string,
+  upstreamWorkflowId: string,
+  deps: Pick<HeadlessDeps, 'commandService'>,
+): Promise<void> {
+  if (!workflowId || !upstreamWorkflowId) {
+    throw new Error(
+      'Missing arguments. Usage: --headless detach-workflow <workflowId> <upstreamWorkflowId>',
+    );
+  }
+  const envelope = makeEnvelope('detach-workflow', 'headless', 'workflow', {
+    workflowId,
+    upstreamWorkflowId,
+  });
+  const result = await deps.commandService.detachWorkflow(envelope);
+  if (!result.ok) throw new Error(result.error.message);
+  process.stdout.write(
+    `Detached workflow ${workflowId} from upstream workflow ${upstreamWorkflowId}\n`,
+  );
 }
 
 /**
