@@ -108,15 +108,14 @@ import {
 } from './headless.js';
 import {
   approveTask as sharedApproveTask,
+  fixWithAgentAction,
   rebaseAndRetry,
   recreateWorkflow as sharedRecreateWorkflow,
   recreateTask as sharedRecreateTask,
-  recreateWorkflowFromFreshBase,
   resolveConflictAction,
   selectFailureRecoveryRoute,
   selectExperiments as sharedSelectExperiments,
   setWorkflowMergeMode,
-  finalizeAppliedFix,
 } from './workflow-actions.js';
 import { spawn, execSync } from 'node:child_process';
 import { openExternalTerminalForTask } from './open-terminal-for-task.js';
@@ -1325,16 +1324,16 @@ if (isHeadless) {
     agentName?: string,
     source: 'ipc' | 'auto-fix' = 'ipc',
   ): Promise<TaskState[]> => {
-    logger.info(
-      `fix-with-agent: "${taskId}" agent=${agentName ?? 'claude'} source=${source} route=fixWithAgent`,
-      { module: 'ipc' },
-    );
     const task = orchestrator.getTask(taskId);
     if (!task) {
       throw new Error(`Task ${taskId} not found`);
     }
     const savedError = task.execution.error ?? '';
     const recoveryRoute = selectFailureRecoveryRoute(task, savedError);
+    logger.info(
+      `fix-with-agent: "${taskId}" agent=${agentName ?? 'claude'} source=${source} route=${recoveryRoute.kind}`,
+      { module: 'ipc' },
+    );
 
     if (source === 'auto-fix') {
       const attemptsBefore = task?.execution.autoFixAttempts ?? 0;
@@ -1346,39 +1345,22 @@ if (isHeadless) {
       });
       logAutoFixDebug(taskId, 'dispatch-attempt-bumped', { attemptsBefore, attemptsAfter });
     }
-    if (recoveryRoute.kind === 'recreateWorkflowFromFreshBase') {
-      persistence.appendTaskOutput(
-        taskId,
-        `\n[${source === 'auto-fix' ? 'Auto-fix' : 'Fix with AI'}] Startup merge conflict detected; recreating workflow ${recoveryRoute.workflowId} from a fresh base.`,
-      );
-      return await recreateWorkflowFromFreshBase(recoveryRoute.workflowId, {
+    const result = await fixWithAgentAction(
+      taskId,
+      {
         orchestrator,
         persistence,
         taskExecutor: requireTaskExecutor(),
-      });
-    }
-
-    const { savedError: persistedSavedError } = orchestrator.beginConflictResolution(taskId);
-    try {
-      const output = persistence.getTaskOutput(taskId);
-      if (recoveryRoute.kind === 'resolveConflict') {
-        await requireTaskExecutor().resolveConflict(taskId, persistedSavedError, agentName);
-      } else {
-        await requireTaskExecutor().fixWithAgent(taskId, output, agentName, persistedSavedError);
-      }
-      const result = await finalizeAppliedFix(taskId, persistedSavedError, {
-        orchestrator,
-        taskExecutor: requireTaskExecutor(),
         autoApproveAIFixes: invokerConfig.autoApproveAIFixes,
-      });
-      return result.started;
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      const errorLabel = source === 'auto-fix' ? 'Auto-fix' : `Fix with ${agentName ?? 'Claude'}`;
-      persistence.appendTaskOutput(taskId, `\n[${errorLabel}] Failed: ${msg}`);
-      orchestrator.revertConflictResolution(taskId, persistedSavedError, msg);
-      throw err;
-    }
+      },
+      {
+        agentName,
+        recoveryRoute,
+        recreateOutputLabel: source === 'auto-fix' ? 'Auto-fix' : 'Fix with AI',
+        failureOutputLabel: source === 'auto-fix' ? 'Auto-fix' : `Fix with ${agentName ?? 'Claude'}`,
+      },
+    );
+    return result.started;
   };
 
   const scheduleAutoFix = (taskId: string): void => {
