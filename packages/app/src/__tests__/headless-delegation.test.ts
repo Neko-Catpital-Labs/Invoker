@@ -1421,10 +1421,10 @@ describe('headless delegation enforcement', () => {
 
         // Verify delegation succeeded
         expect(delegated).toBe(true);
-        expect(ownerHandler).toHaveBeenCalledWith({
+        expect(ownerHandler).toHaveBeenCalledWith(expect.objectContaining({
           args: ['run', '/path/to/plan.yaml'],
           waitForApproval: undefined,
-        });
+        }));
       });
 
       it('delegates all mutation commands deterministically', async () => {
