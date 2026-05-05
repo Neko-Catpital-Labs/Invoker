@@ -16,6 +16,7 @@ permissions:
 env:
   CI: true
   NODE_VERSION: '22'
+  PLAYWRIGHT_CONTAINER_IMAGE: mcr.microsoft.com/playwright:v1.58.2-noble
 
 jobs:
   build-artifacts:
@@ -154,6 +155,8 @@ jobs:
   dry-run:
     needs: build-artifacts
     runs-on: ubuntu-latest
+    container:
+      image: ${{ env.PLAYWRIGHT_CONTAINER_IMAGE }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -204,15 +207,14 @@ jobs:
           git update-ref refs/heads/main refs/remotes/origin/master || true
           git update-ref refs/remotes/origin/main refs/remotes/origin/master || true
 
-      - name: Install Playwright system dependencies
-        run: pnpm --filter @invoker/app exec playwright install --with-deps
-
       - name: Run dry-run shard
         run: bash ${{ matrix.suite }}
 
   playwright:
     needs: build-artifacts
     runs-on: ubuntu-latest
+    container:
+      image: ${{ env.PLAYWRIGHT_CONTAINER_IMAGE }}
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -259,9 +261,6 @@ jobs:
           git config --global user.name "CI Bot"
           git config --global user.email "ci@invoker.dev"
 
-      - name: Install Playwright system dependencies
-        run: pnpm --filter @invoker/app exec playwright install --with-deps
-
       - name: Run Playwright shard
         env:
           INVOKER_PLAYWRIGHT_SHARD: ${{ matrix.shard }}
@@ -283,6 +282,8 @@ jobs:
   ssh:
     needs: build-artifacts
     runs-on: ubuntu-latest
+    container:
+      image: ${{ env.PLAYWRIGHT_CONTAINER_IMAGE }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -331,15 +332,20 @@ jobs:
           git update-ref refs/heads/main refs/remotes/origin/master || true
           git update-ref refs/remotes/origin/main refs/remotes/origin/master || true
 
-      - name: Install Playwright system dependencies
-        run: pnpm --filter @invoker/app exec playwright install --with-deps
-
       - name: Install and start sshd
         run: |
-          sudo apt-get update
-          sudo apt-get install -y openssh-server
-          sudo mkdir -p /run/sshd
-          sudo service ssh start
+          SUDO=""
+          if command -v sudo >/dev/null 2>&1; then
+            SUDO="sudo"
+          fi
+          $SUDO apt-get update
+          $SUDO apt-get install -y openssh-server
+          $SUDO mkdir -p /run/sshd
+          if command -v service >/dev/null 2>&1; then
+            $SUDO service ssh start
+          else
+            $SUDO /usr/sbin/sshd
+          fi
 
       - name: Run SSH shard
         run: bash ${{ matrix.suite }}
