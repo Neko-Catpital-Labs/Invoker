@@ -289,7 +289,7 @@ async function resolveOwnerAndDelegate(
     }
   }
 
-  // Phase 2: Try any reachable owner (may be GUI)
+  // Phase 2: Try any reachable owner (may be non-standalone)
   if (isOwnerReachable(owner) && await delegateMutation(args, messageBus, waitForApproval, noTrack)) {
     return resolvedExitCode();
   }
