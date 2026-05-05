@@ -122,7 +122,7 @@ describe('ContextMenu getMenuItems', () => {
       const task = makeTask({ status: 'failed', workflowId: 'wf-1' });
       const items = getMenuItems(task);
 
-      const workflowItemIds = ['rebase-retry', 'retry-workflow', 'recreate-task', 'recreate-workflow', 'cancel-workflow', 'delete-workflow'];
+      const workflowItemIds = ['rebase-retry', 'recreate-rebase', 'retry-workflow', 'recreate-task', 'recreate-workflow', 'cancel-workflow', 'delete-workflow'];
       workflowItemIds.forEach((id) => {
         const item = items.find((i) => i.id === id);
         expect(item).toBeDefined();
@@ -165,6 +165,58 @@ describe('ContextMenu getMenuItems', () => {
 
       const rebaseItem = items.find((item) => item.id === 'rebase-retry');
       expect(rebaseItem).toBeUndefined();
+    });
+  });
+
+  describe('Recreate with Rebase visibility', () => {
+    it('is visible for any task with a workflowId', () => {
+      const task = makeTask({ id: 'regular-task', status: 'failed', workflowId: 'wf-1' });
+      const items = getMenuItems(task);
+
+      const item = items.find((i) => i.id === 'recreate-rebase');
+      expect(item).toBeDefined();
+      expect(item?.enabled).toBe(true);
+      expect(item?.action).toBe('onRecreateWithRebase');
+    });
+
+    it('is visible for merge nodes with a workflowId', () => {
+      const task = makeTask({ id: '__merge__wf-1', status: 'failed', isMergeNode: true, workflowId: 'wf-1' });
+      const items = getMenuItems(task);
+
+      const item = items.find((i) => i.id === 'recreate-rebase');
+      expect(item).toBeDefined();
+      expect(item?.enabled).toBe(true);
+    });
+
+    it('is visible regardless of task status', () => {
+      for (const status of ['pending', 'running', 'completed', 'failed'] as const) {
+        const task = makeTask({ id: 'task-1', status, workflowId: 'wf-1' });
+        const items = getMenuItems(task);
+
+        const item = items.find((i) => i.id === 'recreate-rebase');
+        expect(item).toBeDefined();
+      }
+    });
+
+    it('is hidden for tasks without a workflowId', () => {
+      const task = makeTask({ id: 'orphan-task', status: 'failed' });
+      const items = getMenuItems(task);
+
+      const item = items.find((i) => i.id === 'recreate-rebase');
+      expect(item).toBeUndefined();
+    });
+
+    it('is distinct from rebase-retry', () => {
+      const task = makeTask({ status: 'failed', workflowId: 'wf-1' });
+      const items = getMenuItems(task);
+
+      const rebaseRetry = items.find((i) => i.id === 'rebase-retry');
+      const recreateRebase = items.find((i) => i.id === 'recreate-rebase');
+
+      expect(rebaseRetry).toBeDefined();
+      expect(recreateRebase).toBeDefined();
+      expect(rebaseRetry?.action).toBe('onRebaseAndRetry');
+      expect(recreateRebase?.action).toBe('onRecreateWithRebase');
     });
   });
 
