@@ -239,6 +239,26 @@ export async function recreateWorkflowFromFreshBase(
 }
 
 /**
+ * Recreate a workflow from a fresh upstream base — workflow-scoped
+ * entry point for the `invoker:recreate-with-rebase` IPC channel.
+ *
+ * This is the direct workflow-id counterpart of `rebaseAndRetry`
+ * (which performs a `taskId → workflowId` translation first). Both
+ * delegate to `recreateWorkflowFromFreshBase` for the actual
+ * pool-refresh + generation-bump + DAG reset.
+ */
+export async function recreateWithRebase(
+  workflowId: string,
+  deps: ActionDeps,
+): Promise<TaskState[]> {
+  deps.logger?.info(
+    `recreateWithRebase: workflowId=${workflowId} → recreateWorkflowFromFreshBase`,
+    { module: 'agent-session-trace' },
+  );
+  return recreateWorkflowFromFreshBase(workflowId, deps);
+}
+
+/**
  * Rebase-and-retry: refresh the pool mirror / origin base, remove managed
  * experiment/invoker branches in that mirror, bump generation, and restart the DAG.
  *
