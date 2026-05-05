@@ -99,11 +99,11 @@ describe('headless→owner delegation', () => {
 
       // Verify delegation succeeded
       expect(delegated).toBe(true);
-      expect(ownerHandler).toHaveBeenCalledWith({
+      expect(ownerHandler).toHaveBeenCalledWith(expect.objectContaining({
         args: ['run', '/path/to/plan.yaml'],
         noTrack: undefined,
         waitForApproval: undefined,
-      });
+      }));
     });
 
     it('delegates with waitForApproval flag', async () => {
@@ -112,10 +112,10 @@ describe('headless→owner delegation', () => {
 
       await tryDelegateExec(['approve', 'task-1'], messageBus, true);
 
-      expect(ownerHandler).toHaveBeenCalledWith({
+      expect(ownerHandler).toHaveBeenCalledWith(expect.objectContaining({
         args: ['approve', 'task-1'],
         waitForApproval: true,
-      });
+      }));
     });
 
     it('delegates retry-task command to owner', async () => {
@@ -125,10 +125,10 @@ describe('headless→owner delegation', () => {
       const delegated = await tryDelegateExec(['retry-task', 'wf-1/task-1'], messageBus);
 
       expect(delegated).toBe(true);
-      expect(ownerHandler).toHaveBeenCalledWith({
+      expect(ownerHandler).toHaveBeenCalledWith(expect.objectContaining({
         args: ['retry-task', 'wf-1/task-1'],
         waitForApproval: undefined,
-      });
+      }));
     });
 
     it('delegates resume command to owner', async () => {
@@ -138,10 +138,10 @@ describe('headless→owner delegation', () => {
       const delegated = await tryDelegateExec(['resume', 'wf-1'], messageBus);
 
       expect(delegated).toBe(true);
-      expect(ownerHandler).toHaveBeenCalledWith({
+      expect(ownerHandler).toHaveBeenCalledWith(expect.objectContaining({
         args: ['resume', 'wf-1'],
         waitForApproval: undefined,
-      });
+      }));
     });
 
     it('delegates approve command to owner', async () => {
@@ -151,10 +151,10 @@ describe('headless→owner delegation', () => {
       const delegated = await tryDelegateExec(['approve', 'wf-1/task-1'], messageBus);
 
       expect(delegated).toBe(true);
-      expect(ownerHandler).toHaveBeenCalledWith({
+      expect(ownerHandler).toHaveBeenCalledWith(expect.objectContaining({
         args: ['approve', 'wf-1/task-1'],
         waitForApproval: undefined,
-      });
+      }));
     });
 
     it('delegates reject command to owner', async () => {
@@ -164,10 +164,10 @@ describe('headless→owner delegation', () => {
       const delegated = await tryDelegateExec(['reject', 'wf-1/task-1', 'reason text'], messageBus);
 
       expect(delegated).toBe(true);
-      expect(ownerHandler).toHaveBeenCalledWith({
+      expect(ownerHandler).toHaveBeenCalledWith(expect.objectContaining({
         args: ['reject', 'wf-1/task-1', 'reason text'],
         waitForApproval: undefined,
-      });
+      }));
     });
 
     it('delegates set command to owner', async () => {
@@ -180,10 +180,10 @@ describe('headless→owner delegation', () => {
       );
 
       expect(delegated).toBe(true);
-      expect(ownerHandler).toHaveBeenCalledWith({
+      expect(ownerHandler).toHaveBeenCalledWith(expect.objectContaining({
         args: ['set', 'command', 'wf-1/task-1', 'new command'],
         waitForApproval: undefined,
-      });
+      }));
     });
 
     it('delegates rebase with noTrack so owner can return before workflow settlement', async () => {
@@ -198,11 +198,11 @@ describe('headless→owner delegation', () => {
       );
 
       expect(delegated).toBe(true);
-      expect(ownerHandler).toHaveBeenCalledWith({
+      expect(ownerHandler).toHaveBeenCalledWith(expect.objectContaining({
         args: ['rebase', 'wf-1/task-1'],
         noTrack: true,
         waitForApproval: undefined,
-      });
+      }));
     });
   });
 

@@ -29,6 +29,10 @@ import { createOwnerResolver } from './owner-resolver.js';
 const RED = '\x1b[31m';
 const RESET = '\x1b[0m';
 
+function delegationClientLog(message: string): void {
+  process.stderr.write(`[headless-client] ${message}\n`);
+}
+
 function electronCommandArgs(args: string[]): string[] {
   const mainJs = resolve(__dirname, 'main.js');
   return [
@@ -106,6 +110,9 @@ async function delegateMutation(
     : command === 'run' || command === 'resume'
       ? 5_000
       : await resolveDelegationTimeoutMs(args);
+  delegationClientLog(
+    `delegateMutation command=${command ?? '<missing>'} timeoutMs=${timeoutMs} noTrack=${noTrack ? 'true' : 'false'} waitForApproval=${waitForApproval ? 'true' : 'false'}`,
+  );
   if (command === 'run') {
     const planPath = args[1];
     if (!planPath) throw new Error('Missing plan file. Usage: --headless run <plan.yaml>');
@@ -198,10 +205,17 @@ async function delegateAfterBootstrap(
   waitForApproval?: boolean,
   noTrack?: boolean,
 ): Promise<boolean> {
+  const startedAt = Date.now();
+  delegationClientLog(`post-bootstrap delegation loop begin timeoutMs=${POST_BOOTSTRAP_OWNER_READY_TIMEOUT_MS}`);
   const deadline = Date.now() + POST_BOOTSTRAP_OWNER_READY_TIMEOUT_MS;
   let messageBus = bus;
+  let attempts = 0;
   while (Date.now() < deadline) {
+    attempts += 1;
     const owner = await discoverOwner(messageBus, 1_000);
+    delegationClientLog(
+      `post-bootstrap attempt=${attempts} ownerReachable=${isOwnerReachable(owner) ? 'true' : 'false'} standaloneCapable=${isStandaloneCapable(owner) ? 'true' : 'false'} ownerId=${owner?.ownerId ?? '<none>'}`,
+    );
     if (isStandaloneCapable(owner) && await delegateMutation(
       args,
       messageBus,
@@ -209,6 +223,7 @@ async function delegateAfterBootstrap(
       noTrack,
       noTrack ? POST_BOOTSTRAP_NO_TRACK_DELEGATION_TIMEOUT_MS : DEFAULT_NO_TRACK_DELEGATION_TIMEOUT_MS,
     )) {
+      delegationClientLog(`post-bootstrap delegation succeeded attempts=${attempts} elapsedMs=${Date.now() - startedAt}`);
       return true;
     }
     if (deps.refreshMessageBus) {
@@ -216,6 +231,7 @@ async function delegateAfterBootstrap(
     }
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
+  delegationClientLog(`post-bootstrap delegation exhausted attempts=${attempts} elapsedMs=${Date.now() - startedAt}`);
   return false;
 }
 
@@ -229,19 +245,31 @@ export interface HeadlessClientDeps {
 async function ensureStandaloneOwnerViaBootstrap(bus: MessageBus): Promise<void> {
   const invokerHomeRoot = resolveInvokerHomeRoot();
   const bootstrapLock = tryAcquireOwnerBootstrapLock(invokerHomeRoot);
+  const startedAt = Date.now();
+  delegationClientLog(`bootstrap begin lockAcquired=${bootstrapLock ? 'true' : 'false'} home=${invokerHomeRoot}`);
   try {
     if (bootstrapLock) {
+      delegationClientLog('bootstrap spawning detached standalone owner');
       spawnDetachedStandaloneOwner(resolve(__dirname, '..', '..', '..'));
     }
     const deadline = Date.now() + standaloneOwnerBootstrapTimeoutMs();
+    let attempts = 0;
     while (Date.now() < deadline) {
+      attempts += 1;
       const owner = await discoverOwner(bus, 500);
-      if (isStandaloneCapable(owner)) return;
+      if (isStandaloneCapable(owner)) {
+        delegationClientLog(
+          `bootstrap owner ready attempts=${attempts} elapsedMs=${Date.now() - startedAt} ownerId=${owner.ownerId}`,
+        );
+        return;
+      }
       await new Promise((resolveDelay) => setTimeout(resolveDelay, 200));
     }
+    delegationClientLog(`bootstrap timeout elapsedMs=${Date.now() - startedAt}`);
     throw new SharedMutationOwnerTimeoutError();
   } finally {
     bootstrapLock?.release();
+    delegationClientLog(`bootstrap end elapsedMs=${Date.now() - startedAt}`);
   }
 }
 
@@ -275,6 +303,8 @@ async function resolveOwnerAndDelegate(
   waitForApproval?: boolean,
   noTrack?: boolean,
 ): Promise<number | null> {
+  const startedAt = Date.now();
+  delegationClientLog(`resolveOwnerAndDelegate begin command=${args[0] ?? '<missing>'} noTrack=${noTrack ? 'true' : 'false'}`);
   let messageBus = deps.messageBus;
   const resolvedExitCode = (): number => {
     const exitCode = process.exitCode;
@@ -283,24 +313,41 @@ async function resolveOwnerAndDelegate(
 
   // Phase 1: Discover a standalone-capable owner
   const owner = await discoverOwner(messageBus, 3_000);
+  delegationClientLog(
+    `phase1 discover standaloneCapable=${isStandaloneCapable(owner) ? 'true' : 'false'} ownerReachable=${isOwnerReachable(owner) ? 'true' : 'false'} ownerId=${owner?.ownerId ?? '<none>'}`,
+  );
   if (isStandaloneCapable(owner)) {
     if (await delegateMutation(args, messageBus, waitForApproval, noTrack)) {
+      delegationClientLog(`phase1 delegated successfully elapsedMs=${Date.now() - startedAt}`);
       return resolvedExitCode();
     }
+    delegationClientLog('phase1 owner found but delegation returned false');
   }
 
   // Phase 2: Try any reachable owner (may be non-standalone)
   if (isOwnerReachable(owner) && await delegateMutation(args, messageBus, waitForApproval, noTrack)) {
+    delegationClientLog(`phase2 delegated to reachable owner ownerId=${owner.ownerId} elapsedMs=${Date.now() - startedAt}`);
     return resolvedExitCode();
+  }
+  if (isOwnerReachable(owner)) {
+    delegationClientLog(`phase2 reachable owner did not accept delegation ownerId=${owner.ownerId}`);
+  } else {
+    delegationClientLog('phase2 skipped: no reachable owner');
   }
 
   // Phase 3: Refresh and retry against any reachable owner
   if (isOwnerReachable(owner) && deps.refreshMessageBus) {
+    delegationClientLog('phase3 refreshing message bus');
     messageBus = await deps.refreshMessageBus();
     const refreshedOwner = await discoverOwner(messageBus, 1_000);
+    delegationClientLog(
+      `phase3 discover ownerReachable=${isOwnerReachable(refreshedOwner) ? 'true' : 'false'} standaloneCapable=${isStandaloneCapable(refreshedOwner) ? 'true' : 'false'} ownerId=${refreshedOwner?.ownerId ?? '<none>'}`,
+    );
     if (isOwnerReachable(refreshedOwner) && await delegateMutation(args, messageBus, waitForApproval, noTrack)) {
+      delegationClientLog(`phase3 delegated successfully elapsedMs=${Date.now() - startedAt}`);
       return resolvedExitCode();
     }
+    delegationClientLog('phase3 delegation did not succeed');
   }
 
   // Phase 4: Bootstrap with retry loop (delegated to resolver pattern)
@@ -308,6 +355,7 @@ async function resolveOwnerAndDelegate(
     messageBus = await deps.refreshMessageBus();
   }
   for (let attempt = 0; attempt < POST_BOOTSTRAP_OWNER_RESTART_ATTEMPTS; attempt += 1) {
+    delegationClientLog(`phase4 bootstrap attempt=${attempt + 1}/${POST_BOOTSTRAP_OWNER_RESTART_ATTEMPTS}`);
     try {
       await deps.ensureStandaloneOwner(messageBus);
     } catch (err) {
@@ -317,6 +365,7 @@ async function resolveOwnerAndDelegate(
       if (!deps.refreshMessageBus) {
         throw err;
       }
+      delegationClientLog(`phase4 bootstrap timeout; refreshing bus and retrying attempt=${attempt + 1}`);
       messageBus = await deps.refreshMessageBus();
       await deps.ensureStandaloneOwner(messageBus);
     }
@@ -324,6 +373,7 @@ async function resolveOwnerAndDelegate(
       messageBus = await deps.refreshMessageBus();
     }
     if (await delegateAfterBootstrap(args, deps, messageBus, waitForApproval, noTrack)) {
+      delegationClientLog(`phase4 delegated successfully attempt=${attempt + 1} elapsedMs=${Date.now() - startedAt}`);
       return resolvedExitCode();
     }
     if (!deps.refreshMessageBus) {
@@ -332,6 +382,7 @@ async function resolveOwnerAndDelegate(
     messageBus = await deps.refreshMessageBus();
   }
 
+  delegationClientLog(`resolveOwnerAndDelegate failed after elapsedMs=${Date.now() - startedAt}`);
   return null; // Could not resolve
 }
 
