@@ -117,6 +117,8 @@ When writing `prompt` fields for LLM tasks:
 
 Planning often **misses files** or **adds scope** later. These headings in a task `description` are **recommended**, **revisable**, and **not** required for `skill-doctor` or `lint-task-atomicity.sh` to pass. Optional advisory output: `bash skills/plan-to-invoker/scripts/lint-task-atomicity.sh --warn-delegation <plan.yaml>`.
 
+File-count guidance (for example, aiming around 10 touched files in a task) is a **soft heuristic** for reviewability, not a hard limit. If correctness or shared wiring requires broader edits, allow the task to exceed that target and capture the rationale in `description`.
+
 **Suggested blocks** (in `description`, when helpful):
 
 1. **`Files:`** — Repo-relative paths known when the task was written; use `TBD` or "may grow" if unsure. **Not** an exhaustive contract—implementation may touch additional files; amend the plan or add tasks if so.
