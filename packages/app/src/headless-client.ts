@@ -13,18 +13,13 @@ import {
   tryDelegateQueryUiPerf,
   tryDelegateResume,
   tryDelegateRun,
+  tryPingHeadlessOwner,
 } from './headless-delegation.js';
 import {
   spawnDetachedStandaloneOwner,
   tryAcquireOwnerBootstrapLock,
 } from './headless-owner-bootstrap.js';
 import { loadConfig } from './config.js';
-import {
-  discoverOwner,
-  isOwnerReachable,
-  isStandaloneCapable,
-} from './owner-endpoint.js';
-import { createOwnerResolver } from './owner-resolver.js';
 
 const RED = '\x1b[31m';
 const RESET = '\x1b[0m';
@@ -74,6 +69,15 @@ const READ_ONLY_QUERY_OWNER_READY_TIMEOUT_MS = 20_000;
 const READ_ONLY_QUERY_REQUEST_TIMEOUT_MS = 8_000;
 const POST_BOOTSTRAP_OWNER_RESTART_ATTEMPTS = 3;
 const DEFAULT_STANDALONE_OWNER_BOOTSTRAP_TIMEOUT_MS = 60_000;
+type HeadlessOwnerInfo = { ownerId?: string; mode?: string };
+
+function isStandaloneOwner(owner: HeadlessOwnerInfo | null | undefined): owner is HeadlessOwnerInfo & { mode: 'standalone' } {
+  return owner?.mode === 'standalone';
+}
+
+function isGuiOwner(owner: HeadlessOwnerInfo | null | undefined): owner is HeadlessOwnerInfo & { mode: 'gui' } {
+  return owner?.mode === 'gui';
+}
 
 function standaloneOwnerBootstrapTimeoutMs(): number {
   const raw = process.env.INVOKER_HEADLESS_OWNER_BOOTSTRAP_TIMEOUT_MS;
@@ -82,6 +86,7 @@ function standaloneOwnerBootstrapTimeoutMs(): number {
   return DEFAULT_STANDALONE_OWNER_BOOTSTRAP_TIMEOUT_MS;
 }
 
+const GUI_DELEGATION_TIMEOUT_MS = 5_000;
 export class SharedMutationOwnerTimeoutError extends Error {
   constructor(message: string = 'Timed out waiting for a standalone shared mutation owner to become available') {
     super(message);
@@ -129,21 +134,22 @@ async function delegateReadOnlyQuery(
   if (!isUiPerf && !isQueue) {
     return false;
   }
-
-  // Use the resolver to wait for any reachable owner
-  const resolver = createOwnerResolver(
-    { messageBus: bus, refreshMessageBus, ensureStandaloneOwner: async () => {} },
-    { discoveryTimeoutMs: 2_000 },
-  );
-  const ownerResult = await resolver.waitForAny(READ_ONLY_QUERY_OWNER_READY_TIMEOUT_MS);
-  if (!ownerResult.resolved) {
+  const deadline = Date.now() + READ_ONLY_QUERY_OWNER_READY_TIMEOUT_MS;
+  let messageBus = bus;
+  let owner: HeadlessOwnerInfo | null = null;
+  while (Date.now() < deadline) {
+    owner = await tryPingHeadlessOwner(messageBus, 2_000);
+    if (owner) break;
+    if (refreshMessageBus) {
+      messageBus = await refreshMessageBus();
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  if (!owner) {
     throw new Error(isUiPerf
       ? 'query ui-perf requires a running shared owner process'
       : 'query queue requires a running shared owner process');
   }
-
-  let messageBus = ownerResult.bus;
-  const deadline = Date.now() + READ_ONLY_QUERY_OWNER_READY_TIMEOUT_MS;
   let response: Record<string, unknown> | null = null;
   while (Date.now() < deadline) {
     if (isUiPerf) {
@@ -201,8 +207,8 @@ async function delegateAfterBootstrap(
   const deadline = Date.now() + POST_BOOTSTRAP_OWNER_READY_TIMEOUT_MS;
   let messageBus = bus;
   while (Date.now() < deadline) {
-    const owner = await discoverOwner(messageBus, 1_000);
-    if (isStandaloneCapable(owner) && await delegateMutation(
+    const owner = await tryPingHeadlessOwner(messageBus, 1_000);
+    if (isStandaloneOwner(owner) && await delegateMutation(
       args,
       messageBus,
       waitForApproval,
@@ -235,8 +241,8 @@ async function ensureStandaloneOwnerViaBootstrap(bus: MessageBus): Promise<void>
     }
     const deadline = Date.now() + standaloneOwnerBootstrapTimeoutMs();
     while (Date.now() < deadline) {
-      const owner = await discoverOwner(bus, 500);
-      if (isStandaloneCapable(owner)) return;
+      const owner = await tryPingHeadlessOwner(bus, 500);
+      if (isStandaloneOwner(owner)) return;
       await new Promise((resolveDelay) => setTimeout(resolveDelay, 200));
     }
     throw new SharedMutationOwnerTimeoutError();
@@ -261,49 +267,52 @@ function parseArgs(argv: string[]): { args: string[]; waitForApproval?: boolean;
   return { args, waitForApproval, noTrack };
 }
 
-/**
- * Resolve a writable owner endpoint using the resolver, then delegate.
- *
- * This function encapsulates the discover → fallback → bootstrap → delegate
- * policy that was previously inline. It uses the OwnerResolver for the
- * discovery/refresh/bootstrap phases and delegates command execution once
- * an owner is acquired.
- */
-async function resolveOwnerAndDelegate(
-  args: string[],
+export async function runHeadlessClientCommand(
+  argv: string[],
   deps: HeadlessClientDeps,
-  waitForApproval?: boolean,
-  noTrack?: boolean,
-): Promise<number | null> {
+): Promise<number> {
+  // Validate config before any delegation path so malformed JSON fails fast
+  // even for commands that do not boot the full Electron owner process.
+  loadConfig();
+
   let messageBus = deps.messageBus;
+  const { args, waitForApproval, noTrack } = parseArgs(argv);
+  const standaloneMode = process.env.INVOKER_HEADLESS_STANDALONE === '1';
+  const internalOwnerServe = args[0] === 'owner-serve';
   const resolvedExitCode = (): number => {
     const exitCode = process.exitCode;
     return typeof exitCode === 'number' ? exitCode : 0;
   };
 
-  // Phase 1: Discover a standalone-capable owner
-  const owner = await discoverOwner(messageBus, 3_000);
-  if (isStandaloneCapable(owner)) {
-    if (await delegateMutation(args, messageBus, waitForApproval, noTrack)) {
-      return resolvedExitCode();
-    }
-  }
-
-  // Phase 2: Try any reachable owner (may be GUI)
-  if (isOwnerReachable(owner) && await delegateMutation(args, messageBus, waitForApproval, noTrack)) {
+  if (!standaloneMode && !internalOwnerServe && await delegateReadOnlyQuery(args, messageBus, deps.refreshMessageBus)) {
     return resolvedExitCode();
   }
 
-  // Phase 3: Refresh and retry against any reachable owner
-  if (isOwnerReachable(owner) && deps.refreshMessageBus) {
-    messageBus = await deps.refreshMessageBus();
-    const refreshedOwner = await discoverOwner(messageBus, 1_000);
-    if (isOwnerReachable(refreshedOwner) && await delegateMutation(args, messageBus, waitForApproval, noTrack)) {
+  if (!isHeadlessMutatingCommand(args) || standaloneMode || internalOwnerServe) {
+    return deps.runElectronHeadless(argv);
+  }
+
+  const owner = await tryPingHeadlessOwner(messageBus, 3_000);
+  if (isStandaloneOwner(owner)) {
+    if (await delegateMutation(args, messageBus, waitForApproval, noTrack)) {
+      return resolvedExitCode();
+    }
+  } else if (isGuiOwner(owner)) {
+    // GUI owners handle the same mutation IPC as standalone owners, but we use
+    // a shorter timeout here so headless CLI callers do not wait too long on a
+    // busy or interactive GUI process before falling back to standalone-owner
+    // bootstrap.
+    if (await delegateMutation(args, messageBus, waitForApproval, noTrack, GUI_DELEGATION_TIMEOUT_MS)) {
       return resolvedExitCode();
     }
   }
-
-  // Phase 4: Bootstrap with retry loop (delegated to resolver pattern)
+  if (owner && deps.refreshMessageBus) {
+    messageBus = await deps.refreshMessageBus();
+    const refreshedOwner = await tryPingHeadlessOwner(messageBus, 1_000);
+    if (refreshedOwner && await delegateMutation(args, messageBus, waitForApproval, noTrack)) {
+      return resolvedExitCode();
+    }
+  }
   if (deps.refreshMessageBus) {
     messageBus = await deps.refreshMessageBus();
   }
@@ -323,7 +332,13 @@ async function resolveOwnerAndDelegate(
     if (deps.refreshMessageBus) {
       messageBus = await deps.refreshMessageBus();
     }
-    if (await delegateAfterBootstrap(args, deps, messageBus, waitForApproval, noTrack)) {
+    if (await delegateAfterBootstrap(
+      args,
+      deps,
+      messageBus,
+      waitForApproval,
+      noTrack,
+    )) {
       return resolvedExitCode();
     }
     if (!deps.refreshMessageBus) {
@@ -331,36 +346,6 @@ async function resolveOwnerAndDelegate(
     }
     messageBus = await deps.refreshMessageBus();
   }
-
-  return null; // Could not resolve
-}
-
-export async function runHeadlessClientCommand(
-  argv: string[],
-  deps: HeadlessClientDeps,
-): Promise<number> {
-  // Validate config before any delegation path so malformed JSON fails fast
-  // even for commands that do not boot the full Electron owner process.
-  loadConfig();
-
-  const { args, waitForApproval, noTrack } = parseArgs(argv);
-  const standaloneMode = process.env.INVOKER_HEADLESS_STANDALONE === '1';
-  const internalOwnerServe = args[0] === 'owner-serve';
-
-  if (!standaloneMode && !internalOwnerServe && await delegateReadOnlyQuery(args, deps.messageBus, deps.refreshMessageBus)) {
-    const exitCode = process.exitCode;
-    return typeof exitCode === 'number' ? exitCode : 0;
-  }
-
-  if (!isHeadlessMutatingCommand(args) || standaloneMode || internalOwnerServe) {
-    return deps.runElectronHeadless(argv);
-  }
-
-  const result = await resolveOwnerAndDelegate(args, deps, waitForApproval, noTrack);
-  if (result !== null) {
-    return result;
-  }
-
   process.stderr.write(
     `${RED}Error:${RESET} Mutation command "${args[0] ?? ''}" could not reach a standalone shared owner after bootstrap.\n`,
   );

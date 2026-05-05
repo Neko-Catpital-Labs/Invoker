@@ -42,7 +42,13 @@ export class InMemoryPersistence implements OrchestratorPersistence {
   }
 
   saveTask(workflowId: string, task: TaskState): void {
-    this.tasks.set(task.id, { workflowId, task });
+    this.tasks.set(task.id, {
+      workflowId,
+      task: {
+        ...task,
+        taskStateVersion: task.taskStateVersion ?? 1,
+      },
+    });
   }
 
   updateTask(taskId: string, changes: TaskStateChanges): void {
@@ -85,6 +91,7 @@ export class InMemoryPersistence implements OrchestratorPersistence {
         ...(changes.dependencies !== undefined ? { dependencies: changes.dependencies } : {}),
         config: { ...entry.task.config, ...changes.config },
         execution: { ...entry.task.execution, ...changes.execution },
+        taskStateVersion: (entry.task.taskStateVersion ?? 1) + 1,
       } as TaskState;
     }
   }

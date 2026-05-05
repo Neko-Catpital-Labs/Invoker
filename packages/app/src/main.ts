@@ -1396,7 +1396,10 @@ if (isHeadless) {
     }
   });
 
-  function rebuildTaskRunner(): void {
+  async function rebuildTaskRunner(): Promise<void> {
+    if (taskExecutor) {
+      await taskExecutor.clearSshExecutorCache();
+    }
     taskExecutor = new TaskRunner({
       orchestrator,
       persistence,
@@ -2013,14 +2016,6 @@ if (isHeadless) {
     }
   }
 
-  function loadTaskByIdFromPersistence(taskId: string): TaskState | undefined {
-    for (const workflow of persistence.listWorkflows()) {
-      const task = persistence.loadTasks(workflow.id).find((candidate) => candidate.id === taskId);
-      if (task) return task;
-    }
-    return undefined;
-  }
-
   function listWorkflowsByStartupRecency() {
     return [...persistence.listWorkflows()].sort((left, right) => {
       const rightTs = Date.parse(right.updatedAt ?? '') || 0;
@@ -2079,7 +2074,7 @@ if (isHeadless) {
     lastKnownWorkflowCount = workflows.length;
     if (mainWindow && !mainWindow.isDestroyed()) {
       for (const removedTaskId of previousTaskIds) {
-        sendTaskDeltaToRenderer({ type: 'removed', taskId: removedTaskId });
+        sendTaskDeltaToRenderer({ type: 'removed', taskId: removedTaskId, previousTaskStateVersion: 0 });
       }
       mainWindow.webContents.send('invoker:workflows-changed', workflows);
     }
@@ -2357,7 +2352,7 @@ if (isHeadless) {
     }
 
     if (ownerMode) {
-      rebuildTaskRunner();
+      await rebuildTaskRunner();
       workflowMutationCoordinator = new PersistedWorkflowMutationCoordinator(
         persistence,
         workflowMutationOwnerId,
@@ -2501,7 +2496,7 @@ if (isHeadless) {
       const { quarantined } = applyDelta(d, lastKnownTaskStates);
       for (const taskId of quarantined) {
         logger.info(`[gap-detect] quarantined task="${taskId}" — triggering authoritative reload`, { module: 'delta-merge' });
-        const authoritative = loadTaskByIdFromPersistence(taskId);
+        const authoritative = persistence.loadTask(taskId);
         resolveQuarantine(lastKnownTaskStates, taskId, authoritative);
         if (authoritative) {
           sendTaskDeltaToRenderer({ type: 'created', task: authoritative });
@@ -2553,17 +2548,15 @@ if (isHeadless) {
         'invoker:inject-task-states',
         async (_event, updates: Array<{ taskId: string; changes: TaskStateChanges }>) => {
           for (const { taskId, changes } of updates) {
-            const previousSnapshot = lastKnownTaskStates.get(taskId);
-            const previousTaskStateVersion = previousSnapshot
-              ? ((JSON.parse(previousSnapshot) as { taskStateVersion?: number }).taskStateVersion ?? 1)
-              : 1;
+            const before = orchestrator.getTask(taskId);
             persistence.updateTask(taskId, changes);
+            const beforeTaskStateVersion = before?.taskStateVersion ?? 0;
             messageBus.publish(Channels.TASK_DELTA, {
               type: 'updated',
               taskId,
               changes,
-              previousTaskStateVersion,
-              taskStateVersion: previousTaskStateVersion + 1,
+              taskStateVersion: beforeTaskStateVersion + 1,
+              previousTaskStateVersion: beforeTaskStateVersion,
             } satisfies TaskDelta);
           }
           orchestrator.syncAllFromDb();
@@ -2605,6 +2598,7 @@ if (isHeadless) {
 
     registerGuiMutationHandler('invoker:stop', async () => {
       logger.info('stop — destroying all executors', { module: 'ipc' });
+      await requireTaskExecutor().clearSshExecutorCache();
       await Promise.all(executorRegistry.getAll().map(f => f.destroyAll()));
       const allTasks = orchestrator.getAllTasks();
       for (const task of allTasks) {
@@ -2645,7 +2639,7 @@ if (isHeadless) {
         taskDispatcher: dispatchStartedTasks,
       });
       commandService = new CommandService(orchestrator);
-      rebuildTaskRunner();
+      await rebuildTaskRunner();
       taskHandles.clear();
     });
 
@@ -2735,7 +2729,7 @@ if (isHeadless) {
         }
         if (mainWindow && !mainWindow.isDestroyed()) {
           for (const removedTaskId of previousTaskIds) {
-            sendTaskDeltaToRenderer({ type: 'removed', taskId: removedTaskId });
+            sendTaskDeltaToRenderer({ type: 'removed', taskId: removedTaskId, previousTaskStateVersion: 0 });
           }
           mainWindow.webContents.send('invoker:workflows-changed', workflows);
         }
@@ -2749,7 +2743,7 @@ if (isHeadless) {
     });
     ipcMain.handle('invoker:get-events', (_event, taskId: string) => persistence.getEvents(taskId));
     ipcMain.handle('invoker:get-status', () => orchestrator.getWorkflowStatus());
-    ipcMain.handle('invoker:get-task-by-id', (_event, taskId: string) => loadTaskByIdFromPersistence(taskId) ?? null);
+    ipcMain.handle('invoker:get-task-by-id', (_event, taskId: string) => persistence.loadTask(taskId) ?? null);
     ipcMain.handle('invoker:get-task-output', (_event, taskId: string) => persistence.getTaskOutput(taskId));
 
     ipcMain.handle('invoker:get-output-chunks', (_event, taskId: string) => persistence.getOutputChunks(taskId));
@@ -3457,6 +3451,9 @@ if (isHeadless) {
       if (hourlyBackupInterval) {
         clearInterval(hourlyBackupInterval);
         hourlyBackupInterval = null;
+      }
+      if (taskExecutor) {
+        await taskExecutor.clearSshExecutorCache().catch(() => undefined);
       }
       if (executorRegistry) {
         await Promise.all(executorRegistry.getAll().map(f => f.destroyAll()));

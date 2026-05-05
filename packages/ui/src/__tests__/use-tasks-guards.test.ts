@@ -16,6 +16,7 @@ function makeTask(overrides: Partial<TaskState> & { id: string }): TaskState {
     createdAt: new Date('2025-01-01'),
     config: {},
     execution: {},
+    taskStateVersion: 1,
     ...overrides,
   };
 }
@@ -45,16 +46,17 @@ describe('useTasks guard logic', () => {
       const prev = new Map<string, TaskState>([
         ['t1', makeTask({ id: 't1' })],
       ]);
-      const delta: TaskDelta = { type: 'removed', taskId: 't1' };
+      const qIds = new Set<string>();
+      const delta: TaskDelta = { type: 'removed', taskId: 't1', previousTaskStateVersion: 1 };
 
-      const next = applyDelta(prev, delta);
+      const result = applyDelta(prev, delta, qIds);
 
       // Replicate the warning logic from useTasks
-      if (next.size === 0 && prev.size > 0) {
+      if (result.tasks.size === 0 && prev.size > 0) {
         console.warn('[useTasks] Tasks map went from', prev.size, 'to 0 after delta:', delta);
       }
 
-      expect(next.size).toBe(0);
+      expect(result.tasks.size).toBe(0);
       expect(warnSpy).toHaveBeenCalledOnce();
       expect(warnSpy).toHaveBeenCalledWith(
         '[useTasks] Tasks map went from', 1, 'to 0 after delta:', delta,
@@ -70,15 +72,16 @@ describe('useTasks guard logic', () => {
         ['t1', makeTask({ id: 't1' })],
         ['t2', makeTask({ id: 't2' })],
       ]);
-      const delta: TaskDelta = { type: 'removed', taskId: 't1' };
+      const qIds = new Set<string>();
+      const delta: TaskDelta = { type: 'removed', taskId: 't1', previousTaskStateVersion: 1 };
 
-      const next = applyDelta(prev, delta);
+      const result = applyDelta(prev, delta, qIds);
 
-      if (next.size === 0 && prev.size > 0) {
+      if (result.tasks.size === 0 && prev.size > 0) {
         console.warn('[useTasks] Tasks map went from', prev.size, 'to 0 after delta:', delta);
       }
 
-      expect(next.size).toBe(1);
+      expect(result.tasks.size).toBe(1);
       expect(warnSpy).not.toHaveBeenCalled();
 
       warnSpy.mockRestore();
