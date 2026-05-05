@@ -1,12 +1,12 @@
 /**
  * Owner Endpoint Contract — surface-neutral owner discovery and capability.
  *
- * This module models owner discovery without exposing whether the owner is
- * a GUI window, a standalone headless daemon, or any other host surface.
+ * This module models owner discovery without exposing the host surface
+ * that launched the owner (interactive window, standalone daemon, etc.).
  * Client code asks "is an owner available?" and "can it accept mutations?"
  * without knowing how the owner was launched.
  *
- * Host implementations (main.ts standalone path, main.ts GUI path) register
+ * Host implementations (main.ts standalone path, main.ts interactive path) register
  * handlers on the MessageBus that satisfy this contract. They may retain
  * internal details about their launch mode, but those details do not appear
  * in the types below.

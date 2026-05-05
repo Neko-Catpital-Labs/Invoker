@@ -7,7 +7,7 @@
  *   3. If no owner is available at all, bootstrap one.
  *
  * The interface is surface-neutral: callers receive an OwnerEndpointInfo and a
- * MessageBus handle, but never branch on GUI/headless mode flags.
+ * MessageBus handle, but never branch on host-specific mode flags.
  */
 
 import type { MessageBus } from '@invoker/transport';

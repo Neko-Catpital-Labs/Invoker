@@ -30,7 +30,7 @@ describe('owner-endpoint contract', () => {
       expect(result!.canAcceptStandaloneMutations).toBe(true);
     });
 
-    it('returns OwnerEndpointInfo with canAcceptStandaloneMutations=false for GUI owners', async () => {
+    it('returns OwnerEndpointInfo with canAcceptStandaloneMutations=false for non-standalone owners', async () => {
       const bus = new LocalBus();
       bus.onRequest('headless.owner-ping', async () => ({
         ok: true,
@@ -100,12 +100,12 @@ describe('owner-endpoint contract', () => {
         ownerId: 'owner-1',
         canAcceptStandaloneMutations: true,
       };
-      const guiOwner: OwnerEndpointInfo = {
+      const transientOwner: OwnerEndpointInfo = {
         ownerId: 'owner-2',
         canAcceptStandaloneMutations: false,
       };
       expect(isOwnerReachable(standaloneOwner)).toBe(true);
-      expect(isOwnerReachable(guiOwner)).toBe(true);
+      expect(isOwnerReachable(transientOwner)).toBe(true);
     });
 
     it('returns false for null', () => {
@@ -130,7 +130,7 @@ describe('owner-endpoint contract', () => {
       expect(isStandaloneCapable(result)).toBe(false);
     });
 
-    it('client code never needs to reference GUI or standalone modes directly', () => {
+    it('client code uses capability predicates instead of raw mode strings', () => {
       // This test documents the contract guarantee: the OwnerEndpointInfo
       // type has no `mode` field. Client code uses capability predicates.
       const info: OwnerEndpointInfo = {

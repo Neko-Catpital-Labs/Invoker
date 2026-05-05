@@ -198,7 +198,7 @@ async function tryDelegate(
   }
 
   if (options.noTrack) {
-    process.stdout.write('[headless] --no-track enabled: delegated submission accepted; exiting without tracking.\n');
+    process.stdout.write('--no-track enabled: delegated submission accepted; exiting without tracking.\n');
     return true;
   }
 
