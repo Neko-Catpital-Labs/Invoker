@@ -201,7 +201,7 @@ describe('createMergeWorktree isolation (real git)', { timeout: 30_000 }, () => 
     await executor.removeMergeWorktree(clonePath);
   });
 
-  it('clone resolves baseBranch from origin when host local master is behind', async () => {
+  it('prefers freshly fetched origin base over stale local base branch', async () => {
     const sandbox = createSandbox();
     root = sandbox.root;
 
@@ -231,7 +231,15 @@ describe('createMergeWorktree isolation (real git)', { timeout: 30_000 }, () => 
     const clonePath = await executor.createMergeWorktree('master', 'test-stale', sandbox.bare);
 
     const cloneOrigin = git(clonePath, 'remote get-url origin');
+    const cloneHeadSha = git(clonePath, 'rev-parse HEAD');
+    const cloneLocalMasterSha = git(clonePath, 'rev-parse master');
+    const cloneOriginMasterSha = git(clonePath, 'rev-parse origin/master');
+
     expect(cloneOrigin).toBe(sandbox.bare);
+    expect(cloneLocalMasterSha).toBe(hostMasterSha);
+    expect(cloneOriginMasterSha).toBe(remoteMasterSha);
+    expect(cloneHeadSha).toBe(remoteMasterSha);
+    expect(cloneHeadSha).not.toBe(hostMasterSha);
 
     await executor.removeMergeWorktree(clonePath);
   });
