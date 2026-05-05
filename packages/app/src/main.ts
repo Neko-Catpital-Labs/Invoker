@@ -122,7 +122,7 @@ import { collectSystemDiagnostics } from './system-diagnostics.js';
 import { installBundledSkills, resolveBundledSkillsStatus } from './bundled-skills.js';
 import { createRequire } from 'node:module';
 import { acquireDbWriterLock, type DbWriterLockResult } from './db-writer-lock.js';
-import { applyDelta } from './delta-merge.js';
+import { applyDelta, resolveQuarantine, TaskSnapshotCache } from './delta-merge.js';
 import { shouldSkipAutoFixForError } from './auto-fix-gating.js';
 import { ensureSqliteFlushDebounceForOwner } from './sqlite-flush-policy.js';
 import type { WorkflowMutationPriority } from './workflow-mutation-coordinator.js';
@@ -1080,7 +1080,7 @@ if (isHeadless) {
   let dbPollInterval: ReturnType<typeof setInterval> | null = null;
   let activityPollInterval: ReturnType<typeof setInterval> | null = null;
   let uiPerfLogInterval: ReturnType<typeof setInterval> | null = null;
-  const lastKnownTaskStates = new Map<string, string>();
+  const lastKnownTaskStates = new TaskSnapshotCache();
   const deferredWorkflowLaunches = new Map<string, {
     timer: ReturnType<typeof setTimeout>;
     taskIds: string[];
@@ -2013,6 +2013,14 @@ if (isHeadless) {
     }
   }
 
+  function loadTaskByIdFromPersistence(taskId: string): TaskState | undefined {
+    for (const workflow of persistence.listWorkflows()) {
+      const task = persistence.loadTasks(workflow.id).find((candidate) => candidate.id === taskId);
+      if (task) return task;
+    }
+    return undefined;
+  }
+
   function listWorkflowsByStartupRecency() {
     return [...persistence.listWorkflows()].sort((left, right) => {
       const rightTs = Date.parse(right.updatedAt ?? '') || 0;
@@ -2490,7 +2498,15 @@ if (isHeadless) {
         }
       }
 
-      applyDelta(d, lastKnownTaskStates, orchestrator);
+      const { quarantined } = applyDelta(d, lastKnownTaskStates);
+      for (const taskId of quarantined) {
+        logger.info(`[gap-detect] quarantined task="${taskId}" — triggering authoritative reload`, { module: 'delta-merge' });
+        const authoritative = loadTaskByIdFromPersistence(taskId);
+        resolveQuarantine(lastKnownTaskStates, taskId, authoritative);
+        if (authoritative) {
+          sendTaskDeltaToRenderer({ type: 'created', task: authoritative });
+        }
+      }
     });
 
     uiPerfLogInterval = setInterval(() => {
@@ -2537,11 +2553,17 @@ if (isHeadless) {
         'invoker:inject-task-states',
         async (_event, updates: Array<{ taskId: string; changes: TaskStateChanges }>) => {
           for (const { taskId, changes } of updates) {
+            const previousSnapshot = lastKnownTaskStates.get(taskId);
+            const previousTaskStateVersion = previousSnapshot
+              ? ((JSON.parse(previousSnapshot) as { taskStateVersion?: number }).taskStateVersion ?? 1)
+              : 1;
             persistence.updateTask(taskId, changes);
             messageBus.publish(Channels.TASK_DELTA, {
               type: 'updated',
               taskId,
               changes,
+              previousTaskStateVersion,
+              taskStateVersion: previousTaskStateVersion + 1,
             } satisfies TaskDelta);
           }
           orchestrator.syncAllFromDb();
@@ -2727,6 +2749,7 @@ if (isHeadless) {
     });
     ipcMain.handle('invoker:get-events', (_event, taskId: string) => persistence.getEvents(taskId));
     ipcMain.handle('invoker:get-status', () => orchestrator.getWorkflowStatus());
+    ipcMain.handle('invoker:get-task-by-id', (_event, taskId: string) => loadTaskByIdFromPersistence(taskId) ?? null);
     ipcMain.handle('invoker:get-task-output', (_event, taskId: string) => persistence.getTaskOutput(taskId));
 
     ipcMain.handle('invoker:get-output-chunks', (_event, taskId: string) => persistence.getOutputChunks(taskId));
