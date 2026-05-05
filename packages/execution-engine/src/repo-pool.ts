@@ -207,6 +207,41 @@ export class RepoPool {
     }
   }
 
+  private isAlreadyExistsWorktreeError(err: unknown, worktreePath: string): boolean {
+    const message = err instanceof Error ? err.message : String(err);
+    if (!message.includes('already exists')) return false;
+    if (message.includes(worktreePath)) return true;
+    const normalizedPath = canonicalPathForComparison(worktreePath);
+    return message.includes(normalizedPath);
+  }
+
+  private async runPreserveOrResetWithRecovery(
+    clonePath: string,
+    worktreePath: string,
+    branch: string,
+    base: string,
+  ): Promise<void> {
+    const script = bashPreserveOrReset({
+      repoDir: clonePath,
+      worktreeDir: worktreePath,
+      branch,
+      base,
+    });
+    try {
+      await runBashLocal(script, clonePath);
+      return;
+    } catch (err) {
+      if (!this.isAlreadyExistsWorktreeError(err, worktreePath)) {
+        throw err;
+      }
+      traceExecution(
+        `[RepoPool] runPreserveOrResetWithRecovery: retrying after pre-existing path branch=${branch} path=${worktreePath}`,
+      );
+      await this.reconcileStaleWorktreePath(clonePath, worktreePath);
+    }
+    await runBashLocal(script, clonePath);
+  }
+
   private async doEnsureClone(repoUrl: string): Promise<string> {
     const dir = this.cloneDir(repoUrl);
     if (existsSync(dir)) {
@@ -434,13 +469,12 @@ export class RepoPool {
         } catch {
           await this.reconcileLeakedTargetPath(clonePath, worktreePath, porcelain, branch);
           mkdirSync(worktreeParent, { recursive: true });
-          const script = bashPreserveOrReset({
-            repoDir: clonePath,
-            worktreeDir: worktreePath,
+          await this.runPreserveOrResetWithRecovery(
+            clonePath,
+            worktreePath,
             branch,
-            base: base ?? 'HEAD',
-          });
-          await runBashLocal(script, clonePath);
+            base ?? 'HEAD',
+          );
           effectivePath = worktreePath;
         }
         break;
@@ -452,15 +486,12 @@ export class RepoPool {
           }
         }
         mkdirSync(worktreeParent, { recursive: true });
-        {
-          const script = bashPreserveOrReset({
-            repoDir: clonePath,
-            worktreeDir: worktreePath,
-            branch,
-            base: base ?? 'HEAD',
-          });
-          await runBashLocal(script, clonePath);
-        }
+        await this.runPreserveOrResetWithRecovery(
+          clonePath,
+          worktreePath,
+          branch,
+          base ?? 'HEAD',
+        );
         effectivePath = worktreePath;
         break;
     }
