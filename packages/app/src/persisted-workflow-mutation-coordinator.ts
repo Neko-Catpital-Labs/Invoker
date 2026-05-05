@@ -298,7 +298,7 @@ export class PersistedWorkflowMutationCoordinator {
   }
 
   private isHardPreemptingRecreateIntent(channel: string, args: unknown[]): boolean {
-    if (channel === 'invoker:recreate-workflow' || channel === 'invoker:recreate-task') {
+    if (channel === 'invoker:recreate-workflow' || channel === 'invoker:recreate-task' || channel === 'invoker:recreate-with-rebase') {
       return true;
     }
     if (channel !== 'headless.exec') {
@@ -314,6 +314,7 @@ export class PersistedWorkflowMutationCoordinator {
       intent.channel === 'invoker:retry-workflow'
       || intent.channel === 'invoker:recreate-workflow'
       || intent.channel === 'invoker:recreate-task'
+      || intent.channel === 'invoker:recreate-with-rebase'
     ) {
       return true;
     }
