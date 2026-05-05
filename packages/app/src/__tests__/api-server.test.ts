@@ -682,6 +682,32 @@ describe('POST /api/tasks/:id/edit-prompt', () => {
     expect(res.status).toBe(400);
     expect(res.body.error).toContain('Missing "prompt"');
   });
+
+  it('only dispatches running tasks returned by editTaskPrompt', async () => {
+    const running = makeTask({
+      id: 'task-1',
+      status: 'running',
+      execution: { selectedAttemptId: 'attempt-1' },
+    });
+    const pending = makeTask({
+      id: 'task-2',
+      status: 'pending',
+      execution: {},
+    });
+    mocks.orchestrator.editTaskPrompt.mockReturnValue([running, pending]);
+
+    const res = await request(port, 'POST', '/api/tasks/task-1/edit-prompt', { prompt: 'new prompt' });
+    expect(res.status).toBe(200);
+    expect(res.body.tasksStarted).toBe(1);
+    expect(mocks.taskExecutor.executeTasks).toHaveBeenCalledTimes(1);
+    expect(mocks.taskExecutor.executeTasks).toHaveBeenCalledWith([running]);
+  });
+
+  it('does not call editTaskCommand when editing prompt', async () => {
+    await request(port, 'POST', '/api/tasks/task-1/edit-prompt', { prompt: 'new prompt' });
+    expect(mocks.orchestrator.editTaskPrompt).toHaveBeenCalledWith('task-1', 'new prompt');
+    expect(mocks.orchestrator.editTaskCommand).not.toHaveBeenCalled();
+  });
 });
 
 describe('POST /api/tasks/:id/edit-type', () => {
