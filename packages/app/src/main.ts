@@ -110,6 +110,7 @@ import {
   approveTask as sharedApproveTask,
   fixWithAgentAction,
   rebaseAndRetry,
+  recreateWithRebase,
   recreateWorkflow as sharedRecreateWorkflow,
   recreateTask as sharedRecreateTask,
   resolveConflictAction,
@@ -1830,6 +1831,8 @@ if (isHeadless) {
         return { channel: 'headless.exec', request: { args: ['retry', String(arg0)] } };
       case 'invoker:rebase-and-retry':
         return { channel: 'headless.exec', request: { args: ['rebase', String(arg0)] } };
+      case 'invoker:recreate-with-rebase':
+        return { channel: 'headless.exec', request: { args: ['rebase', String(arg0)] } };
       case 'invoker:set-merge-mode':
         return { channel: 'headless.exec', request: { args: ['set', 'merge-mode', String(arg0), String(arg1)] } };
       case 'invoker:approve-merge': {
@@ -3158,6 +3161,40 @@ if (isHeadless) {
         });
       } catch (err) {
         logger.error(`rebase-and-retry failed: ${err}`, { module: 'ipc' });
+        throw err;
+      }
+      },
+    );
+
+    registerWorkflowScopedGuiMutationHandler(
+      'invoker:recreate-with-rebase',
+      (workflowIdArg: unknown) => String(workflowIdArg),
+      'high',
+      async (workflowIdArg: unknown) => {
+      const workflowId = String(workflowIdArg);
+      cancelDeferredWorkflowLaunch(workflowId, 'ipc.recreate-with-rebase');
+      logger.info(`recreate-with-rebase: "${workflowId}"`, { module: 'ipc' });
+      try {
+        await preemptWorkflowBeforeMutation(workflowId, {
+          preemptWorkflowExecution,
+          logger,
+          context: 'ipc.recreate-with-rebase',
+        });
+        const started = await recreateWithRebase(workflowId, {
+          orchestrator,
+          persistence,
+          repoRoot,
+          taskExecutor: requireTaskExecutor(),
+        });
+        await dispatchStartedTasksWithGlobalTopup({
+          orchestrator,
+          taskExecutor: requireTaskExecutor(),
+          logger,
+          context: 'ipc.recreate-with-rebase',
+          started,
+        });
+      } catch (err) {
+        logger.error(`recreate-with-rebase failed: ${err}`, { module: 'ipc' });
         throw err;
       }
       },
