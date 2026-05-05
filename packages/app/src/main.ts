@@ -111,7 +111,9 @@ import {
   rebaseAndRetry,
   recreateWorkflow as sharedRecreateWorkflow,
   recreateTask as sharedRecreateTask,
+  recreateWorkflowFromFreshBase,
   resolveConflictAction,
+  selectFailureRecoveryRoute,
   selectExperiments as sharedSelectExperiments,
   setWorkflowMergeMode,
   finalizeAppliedFix,
@@ -1297,8 +1299,14 @@ if (isHeadless) {
       `fix-with-agent: "${taskId}" agent=${agentName ?? 'claude'} source=${source} route=fixWithAgent`,
       { module: 'ipc' },
     );
+    const task = orchestrator.getTask(taskId);
+    if (!task) {
+      throw new Error(`Task ${taskId} not found`);
+    }
+    const savedError = task.execution.error ?? '';
+    const recoveryRoute = selectFailureRecoveryRoute(task, savedError);
+
     if (source === 'auto-fix') {
-      const task = orchestrator.getTask(taskId);
       const attemptsBefore = task?.execution.autoFixAttempts ?? 0;
       const attemptsAfter = attemptsBefore + 1;
       persistence.updateTask(taskId, {
@@ -1308,11 +1316,27 @@ if (isHeadless) {
       });
       logAutoFixDebug(taskId, 'dispatch-attempt-bumped', { attemptsBefore, attemptsAfter });
     }
-    const { savedError } = orchestrator.beginConflictResolution(taskId);
+    if (recoveryRoute.kind === 'recreateWorkflowFromFreshBase') {
+      persistence.appendTaskOutput(
+        taskId,
+        `\n[${source === 'auto-fix' ? 'Auto-fix' : 'Fix with AI'}] Startup merge conflict detected; recreating workflow ${recoveryRoute.workflowId} from a fresh base.`,
+      );
+      return await recreateWorkflowFromFreshBase(recoveryRoute.workflowId, {
+        orchestrator,
+        persistence,
+        taskExecutor: requireTaskExecutor(),
+      });
+    }
+
+    const { savedError: persistedSavedError } = orchestrator.beginConflictResolution(taskId);
     try {
       const output = persistence.getTaskOutput(taskId);
-      await requireTaskExecutor().fixWithAgent(taskId, output, agentName, savedError);
-      const result = await finalizeAppliedFix(taskId, savedError, {
+      if (recoveryRoute.kind === 'resolveConflict') {
+        await requireTaskExecutor().resolveConflict(taskId, persistedSavedError, agentName);
+      } else {
+        await requireTaskExecutor().fixWithAgent(taskId, output, agentName, persistedSavedError);
+      }
+      const result = await finalizeAppliedFix(taskId, persistedSavedError, {
         orchestrator,
         taskExecutor: requireTaskExecutor(),
         autoApproveAIFixes: invokerConfig.autoApproveAIFixes,
@@ -1322,7 +1346,7 @@ if (isHeadless) {
       const msg = err instanceof Error ? err.message : String(err);
       const errorLabel = source === 'auto-fix' ? 'Auto-fix' : `Fix with ${agentName ?? 'Claude'}`;
       persistence.appendTaskOutput(taskId, `\n[${errorLabel}] Failed: ${msg}`);
-      orchestrator.revertConflictResolution(taskId, savedError, msg);
+      orchestrator.revertConflictResolution(taskId, persistedSavedError, msg);
       throw err;
     }
   };

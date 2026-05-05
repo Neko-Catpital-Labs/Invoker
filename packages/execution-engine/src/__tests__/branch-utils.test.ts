@@ -602,6 +602,60 @@ describe('bashMergeUpstreams', () => {
     // Dirty tracked+untracked state should be removed by pre-merge cleanup.
     expect(gitExec('git status --porcelain', wtDir)).toBe('');
   });
+
+  it('prefers origin refs over stale same-named local branches', async () => {
+    const originDir = join(repoDir, '..', `origin-${Date.now()}.git`);
+    const seedDir = join(repoDir, '..', `seed-${Date.now()}`);
+    const originalRepoDir = repoDir;
+
+    try {
+      execSync(`git init --bare "${originDir}"`);
+      execSync(`git clone "${originDir}" "${seedDir}"`, { stdio: 'ignore' });
+      gitExec('git config user.email "test@example.com"', seedDir);
+      gitExec('git config user.name "Test User"', seedDir);
+
+      writeFileSync(join(seedDir, 'shared.txt'), 'base\n');
+      gitExec('git add shared.txt && git commit -m "base"', seedDir);
+      gitExec('git branch -M master', seedDir);
+      gitExec('git push -u origin master', seedDir);
+
+      gitExec('git checkout -b dep', seedDir);
+      writeFileSync(join(seedDir, 'shared.txt'), 'dep-v1\n');
+      gitExec('git commit -am "dep v1"', seedDir);
+      gitExec('git push -u origin dep', seedDir);
+
+      execSync(`git worktree remove --force "${wtDir}"`, { cwd: repoDir });
+      rmSync(originalRepoDir, { recursive: true, force: true });
+
+      execSync(`git clone "${originDir}" "${originalRepoDir}"`, { stdio: 'ignore' });
+      repoDir = originalRepoDir;
+      gitExec('git config user.email "test@example.com"', repoDir);
+      gitExec('git config user.name "Test User"', repoDir);
+      gitExec('git checkout -b dep origin/dep', repoDir);
+      gitExec('git checkout master', repoDir);
+
+      wtDir = join(repoDir, '..', 'merge-wt-' + Date.now());
+      execSync(`git worktree add -b invoker/merge-test "${wtDir}" origin/master`, { cwd: repoDir });
+
+      gitExec('git checkout dep', seedDir);
+      writeFileSync(join(seedDir, 'shared.txt'), 'dep-v2\n');
+      gitExec('git commit -am "dep v2"', seedDir);
+      gitExec('git push --force origin dep', seedDir);
+
+      gitExec('git fetch origin', repoDir);
+
+      const script = bashMergeUpstreams({
+        worktreeDir: wtDir,
+        upstreamBranches: ['dep'],
+      });
+      await runBashLocal(script);
+
+      expect(readFileSync(join(wtDir, 'shared.txt'), 'utf-8')).toBe('dep-v2\n');
+    } finally {
+      rmSync(seedDir, { recursive: true, force: true });
+      rmSync(originDir, { recursive: true, force: true });
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
