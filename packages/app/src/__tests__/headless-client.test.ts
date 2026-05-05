@@ -20,11 +20,11 @@ describe('headless-client', () => {
     });
 
     expect(exitCode).toBe(0);
-    expect(ownerHandler).toHaveBeenCalledWith({
+    expect(ownerHandler).toHaveBeenCalledWith(expect.objectContaining({
       args: ['retry', 'wf-1'],
       noTrack: true,
       waitForApproval: false,
-    });
+    }));
     expect(ensureStandaloneOwner).not.toHaveBeenCalled();
     expect(runElectronHeadless).not.toHaveBeenCalled();
   });

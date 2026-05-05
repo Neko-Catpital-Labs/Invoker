@@ -15,6 +15,14 @@ type DelegateTrackingOptions = {
   timeoutMs?: number;
 };
 
+function delegationLog(message: string): void {
+  process.stderr.write(`[delegation] ${message}\n`);
+}
+
+function createTraceId(channel: string): string {
+  return `${channel}:${process.pid}:${Date.now()}:${Math.random().toString(16).slice(2, 8)}`;
+}
+
 export async function tryDelegateRun(
   planPath: string,
   messageBus: MessageBus,
@@ -22,9 +30,10 @@ export async function tryDelegateRun(
   noTrack?: boolean,
   timeoutMs?: number,
 ): Promise<boolean> {
+  const traceId = createTraceId('headless.run');
   return tryDelegate(
     'headless.run',
-    { planPath: resolvePath(planPath) },
+    { planPath: resolvePath(planPath), traceId },
     messageBus,
     { waitForApproval, noTrack, timeoutMs: timeoutMs ?? 5_000 },
   );
@@ -37,9 +46,10 @@ export async function tryDelegateResume(
   noTrack?: boolean,
   timeoutMs?: number,
 ): Promise<boolean> {
+  const traceId = createTraceId('headless.resume');
   return tryDelegate(
     'headless.resume',
-    { workflowId },
+    { workflowId, traceId },
     messageBus,
     { waitForApproval, noTrack, timeoutMs: timeoutMs ?? 5_000 },
   );
@@ -85,9 +95,10 @@ export async function tryDelegateExec(
   timeoutMs?: number,
 ): Promise<boolean> {
   const resolvedTimeoutMs = timeoutMs ?? await resolveDelegationTimeoutMs(args);
+  const traceId = createTraceId('headless.exec');
   return tryDelegate(
     'headless.exec',
-    { args, waitForApproval, noTrack },
+    { args, waitForApproval, noTrack, traceId },
     messageBus,
     { waitForApproval, noTrack, timeoutMs: resolvedTimeoutMs },
   );
@@ -97,6 +108,7 @@ export async function tryPingHeadlessOwner(
   messageBus: MessageBus,
   timeoutMs = 1_000,
 ): Promise<{ ownerId?: string; mode?: string } | null> {
+  const traceId = createTraceId('headless.owner-ping');
   const DELEGATION_TIMEOUT = Symbol('delegation-timeout');
   let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
   const timeoutPromise = new Promise<typeof DELEGATION_TIMEOUT>((_, reject) => {
@@ -105,16 +117,30 @@ export async function tryPingHeadlessOwner(
   });
 
   try {
+    const startedAt = Date.now();
+    delegationLog(`${traceId} send timeoutMs=${timeoutMs}`);
     const response = await Promise.race([
       messageBus.request('headless.owner-ping', {}),
       timeoutPromise,
-    ]) as { ownerId?: string; mode?: string };
-    return response;
-  } catch (err) {
-    if (err === DELEGATION_TIMEOUT) return null;
-    if (err instanceof Error && err.message.includes('No request handler registered for channel')) {
+    ]) as { ownerId?: string; mode?: string } | null;
+    if (!response || typeof response !== 'object') {
+      delegationLog(`${traceId} response elapsedMs=${Date.now() - startedAt} ownerId=<missing> mode=<missing>`);
       return null;
     }
+    delegationLog(
+      `${traceId} response elapsedMs=${Date.now() - startedAt} ownerId=${response.ownerId ?? '<missing>'} mode=${response.mode ?? '<missing>'}`,
+    );
+    return response;
+  } catch (err) {
+    if (err === DELEGATION_TIMEOUT) {
+      delegationLog(`${traceId} timeout timeoutMs=${timeoutMs}`);
+      return null;
+    }
+    if (err instanceof Error && err.message.includes('No request handler registered for channel')) {
+      delegationLog(`${traceId} no-handler`);
+      return null;
+    }
+    delegationLog(`${traceId} error ${(err instanceof Error ? err.message : String(err))}`);
     throw err;
   } finally {
     if (timeoutHandle) clearTimeout(timeoutHandle);
@@ -134,6 +160,7 @@ export async function tryDelegateQuery(
   payload: Record<string, unknown>,
   timeoutMs = 5_000,
 ): Promise<Record<string, unknown> | null> {
+  const traceId = createTraceId('headless.query');
   const DELEGATION_TIMEOUT = Symbol('delegation-timeout');
   let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
   const timeoutPromise = new Promise<typeof DELEGATION_TIMEOUT>((_, reject) => {
@@ -142,16 +169,24 @@ export async function tryDelegateQuery(
   });
 
   try {
+    const startedAt = Date.now();
+    delegationLog(`${traceId} send payload=${JSON.stringify(payload)} timeoutMs=${timeoutMs}`);
     const response = await Promise.race([
       messageBus.request('headless.query', payload),
       timeoutPromise,
     ]) as Record<string, unknown>;
+    delegationLog(`${traceId} response elapsedMs=${Date.now() - startedAt}`);
     return response;
   } catch (err) {
-    if (err === DELEGATION_TIMEOUT) return null;
-    if (err instanceof Error && err.message.includes('No request handler registered for channel')) {
+    if (err === DELEGATION_TIMEOUT) {
+      delegationLog(`${traceId} timeout timeoutMs=${timeoutMs}`);
       return null;
     }
+    if (err instanceof Error && err.message.includes('No request handler registered for channel')) {
+      delegationLog(`${traceId} no-handler`);
+      return null;
+    }
+    delegationLog(`${traceId} error ${(err instanceof Error ? err.message : String(err))}`);
     throw err;
   } finally {
     if (timeoutHandle) clearTimeout(timeoutHandle);
@@ -164,6 +199,7 @@ async function tryDelegate(
   messageBus: MessageBus,
   options: DelegateTrackingOptions,
 ): Promise<boolean> {
+  const traceId = (payload as { traceId?: string })?.traceId ?? createTraceId(channel);
   let targetWorkflowId: string | undefined;
   const DELEGATION_TIMEOUT = Symbol('delegation-timeout');
   let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
@@ -174,17 +210,23 @@ async function tryDelegate(
 
   let response: { workflowId: string; tasks: TaskState[] } | { ok: true };
   try {
+    const startedAt = Date.now();
+    delegationLog(`${traceId} send channel=${channel} timeoutMs=${options.timeoutMs ?? 5_000}`);
     response = await Promise.race([
       messageBus.request<typeof payload, typeof response>(channel, payload),
       timeoutPromise,
     ]) as { workflowId: string; tasks: TaskState[] } | { ok: true };
+    delegationLog(`${traceId} response channel=${channel} elapsedMs=${Date.now() - startedAt}`);
   } catch (err) {
     if (err === DELEGATION_TIMEOUT) {
+      delegationLog(`${traceId} timeout channel=${channel} timeoutMs=${options.timeoutMs ?? 5_000}`);
       return false;
     }
     if (err instanceof Error && err.message.includes('No request handler registered for channel')) {
+      delegationLog(`${traceId} no-handler channel=${channel}`);
       return false;
     }
+    delegationLog(`${traceId} error channel=${channel} ${(err instanceof Error ? err.message : String(err))}`);
     throw err;
   } finally {
     if (timeoutHandle) clearTimeout(timeoutHandle);

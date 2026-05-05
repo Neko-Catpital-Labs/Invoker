@@ -7,7 +7,9 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 
 mkdir -p "$TMP_DIR/scripts" "$TMP_DIR/plans"
 cp "$ROOT/scripts/submit-workflow-chain.sh" "$TMP_DIR/scripts/submit-workflow-chain.sh"
+cp "$ROOT/scripts/sync-fork-upstream.sh" "$TMP_DIR/scripts/sync-fork-upstream.sh"
 chmod +x "$TMP_DIR/scripts/submit-workflow-chain.sh"
+chmod +x "$TMP_DIR/scripts/sync-fork-upstream.sh"
 
 cat > "$TMP_DIR/run.sh" <<'EOF'
 #!/usr/bin/env bash
