@@ -1,5 +1,6 @@
 /**
- * Playwright global setup: create a local bare repo for E2E tests.
+ * Playwright global setup: build app artifacts (if missing) and create a
+ * local bare repo for E2E tests.
  *
  * By default, all E2E plans use file:///tmp/invoker-e2e-repo.git as their repoUrl
  * so WorktreeExecutor can clone without a network. Sharded CI can override the
@@ -10,6 +11,8 @@ import { existsSync, rmSync } from 'fs';
 import * as path from 'path';
 
 export const E2E_BARE_REPO = process.env.INVOKER_E2E_BARE_REPO ?? '/tmp/invoker-e2e-repo.git';
+
+const repoRoot = path.resolve(__dirname, '..', '..', '..');
 
 const gitEnv = {
   ...process.env,
@@ -23,6 +26,7 @@ const repoRoot = path.resolve(__dirname, '..', '..', '..');
 
 export default function globalSetup(): void {
   // Build dependent packages and the app itself if artifacts are missing.
+  // CI often pre-builds these, but local Playwright runs may not.
   if (!existsSync(path.join(repoRoot, 'packages', 'ui', 'dist', 'index.html'))) {
     execSync('pnpm --filter @invoker/ui build', { cwd: repoRoot, stdio: 'inherit' });
   }
@@ -32,7 +36,6 @@ export default function globalSetup(): void {
   if (!existsSync(path.join(repoRoot, 'packages', 'app', 'dist', 'main.js'))) {
     execSync('pnpm run build', { cwd: path.join(repoRoot, 'packages', 'app'), stdio: 'inherit' });
   }
-
   if (existsSync(E2E_BARE_REPO)) rmSync(E2E_BARE_REPO, { recursive: true });
 
   const tmpClone = `${E2E_BARE_REPO}.setup`;
