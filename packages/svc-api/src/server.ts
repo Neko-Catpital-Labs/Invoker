@@ -10,9 +10,31 @@ export type RequestHandler = (
   res: ServerResponse,
 ) => void;
 
-const defaultHandler: RequestHandler = (_req, res) => {
-  res.writeHead(200, { 'Content-Type': 'application/json' });
-  res.end(JSON.stringify({ status: 'ok' }));
+function sendJson(res: ServerResponse, statusCode: number, body: unknown): void {
+  res.writeHead(statusCode, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify(body));
+}
+
+export const defaultHandler: RequestHandler = (req, res) => {
+  const method = req.method ?? '';
+  const url = req.url ?? '/';
+
+  if (method !== 'GET') {
+    sendJson(res, 405, { error: 'Method Not Allowed' });
+    return;
+  }
+
+  if (url === '/health') {
+    sendJson(res, 200, { status: 'ok' });
+    return;
+  }
+
+  if (url === '/hello') {
+    sendJson(res, 200, { message: 'hello' });
+    return;
+  }
+
+  sendJson(res, 404, { error: 'Not Found' });
 };
 
 export function createApiServer(
