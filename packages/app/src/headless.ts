@@ -56,6 +56,7 @@ import { resolveHeadlessTargetWorkflowId } from './headless-command-classificati
 import { trackWorkflow } from './headless-watch.js';
 import { preemptWorkflowBeforeMutation, type WorkflowCancelResult } from './workflow-preemption.js';
 import { relaunchOrphansAndStartReady } from './orphan-relaunch.js';
+import type { RuntimeServices } from '@invoker/runtime-service';
 
 export { bumpGenerationAndRecreate } from './workflow-actions.js';
 export {
@@ -100,6 +101,7 @@ export interface HeadlessDeps {
   isStandaloneOwnerIdle?: () => boolean;
   getBundledSkillsStatus?: () => BundledSkillsStatus;
   installBundledSkills?: (mode?: BundledSkillsInstallMode) => BundledSkillsStatus;
+  runtimeServices?: RuntimeServices;
 }
 
 // ── ANSI Helpers ─────────────────────────────────────────────
