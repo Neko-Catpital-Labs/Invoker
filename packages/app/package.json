@@ -67,6 +67,8 @@
     "@invoker/execution-engine": "workspace:*",
     "@invoker/data-store": "workspace:*",
     "@invoker/contracts": "workspace:*",
+    "@invoker/runtime-adapters": "workspace:*",
+    "@invoker/runtime-service": "workspace:*",
     "@invoker/surfaces": "workspace:*",
     "@invoker/transport": "workspace:*",
     "@slack/bolt": "^4.6.0",
