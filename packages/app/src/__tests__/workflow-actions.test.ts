@@ -32,7 +32,12 @@ import {
   buildCancelInFlight,
   buildInvalidationDeps,
   selectFailureRecoveryRoute,
+  deleteAllWorkflows,
 } from '../workflow-actions.js';
+
+vi.mock('../delete-all-snapshot.js', () => ({
+  createDeleteAllSnapshot: () => '/tmp/fake-snapshot',
+}));
 
 // ── Helpers ──────────────────────────────────────────────────
 
@@ -1942,5 +1947,64 @@ describe('buildInvalidationDeps', () => {
     expect(orchestrator.cancelTask.mock.invocationCallOrder[0]).toBeLessThan(
       taskExecutor.killActiveExecution.mock.invocationCallOrder[0],
     );
+  });
+});
+
+describe('deleteAllWorkflows', () => {
+  it('kills running and fixing_with_ai tasks before purging', async () => {
+    const orchestrator = {
+      getAllTasks: vi.fn(() => [
+        makeTask({ id: 'r1', status: 'running' }),
+        makeTask({ id: 'f1', status: 'fixing_with_ai' }),
+        makeTask({ id: 'p1', status: 'pending' }),
+        makeTask({ id: 'c1', status: 'completed' }),
+      ]),
+      deleteAllWorkflows: vi.fn(),
+    };
+    const taskExecutor = {
+      killActiveExecution: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await deleteAllWorkflows({
+      orchestrator: orchestrator as unknown as Orchestrator,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+    });
+
+    // Only running and fixing_with_ai tasks should be killed
+    expect(taskExecutor.killActiveExecution).toHaveBeenCalledTimes(2);
+    expect(taskExecutor.killActiveExecution).toHaveBeenCalledWith('r1');
+    expect(taskExecutor.killActiveExecution).toHaveBeenCalledWith('f1');
+    // Kills happen before deleteAllWorkflows
+    expect(taskExecutor.killActiveExecution.mock.invocationCallOrder[0]).toBeLessThan(
+      orchestrator.deleteAllWorkflows.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('proceeds without killing when taskExecutor is not provided', async () => {
+    const orchestrator = {
+      getAllTasks: vi.fn(() => [makeTask({ id: 'r1', status: 'running' })]),
+      deleteAllWorkflows: vi.fn(),
+    };
+
+    await deleteAllWorkflows({
+      orchestrator: orchestrator as unknown as Orchestrator,
+    });
+
+    expect(orchestrator.deleteAllWorkflows).toHaveBeenCalledTimes(1);
+    // getAllTasks should not be called when there's no taskExecutor
+    expect(orchestrator.getAllTasks).not.toHaveBeenCalled();
+  });
+
+  it('returns snapshot path from createDeleteAllSnapshot', async () => {
+    const orchestrator = {
+      getAllTasks: vi.fn(() => []),
+      deleteAllWorkflows: vi.fn(),
+    };
+
+    const result = await deleteAllWorkflows({
+      orchestrator: orchestrator as unknown as Orchestrator,
+    });
+
+    expect(result.snapshotPath).toBe('/tmp/fake-snapshot');
   });
 });
