@@ -72,6 +72,7 @@ export interface ApiServerDeps {
   approveTaskAction?: (taskId: string) => Promise<{ started: TaskState[] }>;
   rejectTaskAction?: (taskId: string, reason?: string) => Promise<void>;
   retryTaskAction?: (taskId: string) => Promise<{ started: TaskState[] }>;
+  retryWorkflowAction?: (workflowId: string) => Promise<{ started: TaskState[] }>;
   killRunningTask?: (taskId: string) => Promise<void>;
   cancelTask?: (taskId: string) => Promise<{ cancelled: string[]; runningCancelled: string[] }>;
   cancelWorkflow?: (workflowId: string) => Promise<{ cancelled: string[]; runningCancelled: string[] }>;
@@ -160,6 +161,7 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
     approveTaskAction,
     rejectTaskAction,
     retryTaskAction,
+    retryWorkflowAction,
     killRunningTask,
     cancelTask,
     cancelWorkflow,
@@ -441,17 +443,22 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
       if (method === 'POST' && wfRetryMatch) {
         const workflowId = decodeURIComponent(wfRetryMatch[1]);
         try {
-          const started = sharedRetryWorkflow(workflowId, { orchestrator });
-          const runnable = started.filter(t => t.status === 'running');
-          await taskExecutor.executeTasks(runnable);
-          await executeGlobalTopup({
-            orchestrator,
-            taskExecutor,
-            logger: apiLogger,
-            context: 'api.workflows.retry',
-            alreadyDispatched: runnable,
-          });
-          json(res, 200, { ok: true, workflowId, action: 'retried', tasksStarted: runnable.length });
+          let started: TaskState[];
+          if (retryWorkflowAction) {
+            ({ started } = await retryWorkflowAction(workflowId));
+          } else {
+            const result = sharedRetryWorkflow(workflowId, { orchestrator });
+            started = result;
+            await finalizeMutationWithGlobalTopup({
+              orchestrator,
+              taskExecutor,
+              logger: apiLogger,
+              context: 'api.workflows.retry',
+              started: result.filter(t => t.status === 'running'),
+            });
+          }
+          const tasksStarted = started.filter(t => t.status === 'running').length;
+          json(res, 200, { ok: true, workflowId, action: 'retried', tasksStarted });
         } catch (err) {
           json(res, 400, { error: err instanceof Error ? err.message : String(err) });
         }
