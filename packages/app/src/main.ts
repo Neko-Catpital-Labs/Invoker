@@ -62,6 +62,14 @@ import { makeEnvelope } from '@invoker/contracts';
 import type { WorkResponse } from '@invoker/contracts';
 import { SQLiteAdapter, ConversationRepository, SqliteTaskRepository } from '@invoker/data-store';
 import { IpcBus, Channels } from '@invoker/transport';
+import {
+  WorkspaceProbeAdapter,
+  ContainerProbeAdapter,
+  SessionProbeAdapter,
+  TerminalLauncherAdapter,
+} from '@invoker/runtime-adapters';
+import { composeRuntimeServices } from '@invoker/runtime-service';
+import type { RuntimeServices } from '@invoker/runtime-service';
 import type { MessageBus } from '@invoker/transport';
 import {
   ExecutorRegistry, TaskRunner,
@@ -183,6 +191,7 @@ let persistence: SQLiteAdapter;
 let executorRegistry: ExecutorRegistry;
 let orchestrator: Orchestrator;
 let commandService: CommandService;
+let runtimeServices: RuntimeServices;
 let dispatcherTaskExecutor: Pick<TaskRunner, 'executeTasks'> | null = null;
 
 function setDispatcherTaskExecutor(executor: Pick<TaskRunner, 'executeTasks'> | null): void {
@@ -388,6 +397,14 @@ async function initServices(options?: InitServicesOptions): Promise<void> {
       logger.info(`hourly snapshots enabled (interval=${hourlyMs}ms)`, { module: 'backup' });
     }
   }
+  // Compose runtime services from persistence-backed adapters.
+  runtimeServices = composeRuntimeServices({
+    workspaceProbe: new WorkspaceProbeAdapter(persistence),
+    containerProbe: new ContainerProbeAdapter(persistence),
+    sessionProbe: new SessionProbeAdapter(persistence),
+    terminalLauncher: new TerminalLauncherAdapter(),
+  });
+
   executorRegistry = new ExecutorRegistry();
   executorRegistry.register(
     'worktree',
