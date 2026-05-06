@@ -895,6 +895,8 @@ if (isHeadless) {
             case 'recreate':
             case 'cancel-workflow':
               return { workflowId: arg0 === undefined ? undefined : String(arg0), priority: 'high' };
+            case 'recreate-with-rebase':
+              return { workflowId: standaloneWorkflowIdForTaskArg(arg0), priority: 'high' };
             case 'rebase':
             case 'cancel':
             case 'recreate-task':
@@ -1755,9 +1757,13 @@ if (isHeadless) {
     return { workflowId, tasks };
   }
 
+  function workflowIdForTargetArg(targetArg: unknown): string | undefined {
+    if (targetArg === undefined) return undefined;
+    return resolveHeadlessTargetWorkflowId(targetArg, persistence);
+  }
+
   function workflowIdForTaskArg(taskIdArg: unknown): string | undefined {
-    if (taskIdArg === undefined) return undefined;
-    return resolveHeadlessTargetWorkflowId(taskIdArg, persistence);
+    return workflowIdForTargetArg(taskIdArg);
   }
 
   function classifyHeadlessExecMutation(payload: HeadlessExecMutationPayload): {
@@ -1775,6 +1781,8 @@ if (isHeadless) {
       case 'delete':
       case 'delete-workflow':
         return { workflowId: arg0, priority: 'high' };
+      case 'recreate-with-rebase':
+        return { workflowId: workflowIdForTargetArg(arg0), priority: 'high' };
       case 'rebase':
       case 'cancel':
       case 'recreate-task':
@@ -3209,10 +3217,13 @@ if (isHeadless) {
 
     registerWorkflowScopedGuiMutationHandler(
       'invoker:recreate-with-rebase',
-      (workflowIdArg: unknown) => String(workflowIdArg),
+      (workflowIdArg: unknown) => workflowIdForTargetArg(workflowIdArg),
       'high',
       async (workflowIdArg: unknown) => {
-      const workflowId = String(workflowIdArg);
+      const workflowId = workflowIdForTargetArg(workflowIdArg);
+      if (!workflowId) {
+        throw new Error(`Could not resolve workflow for recreate-with-rebase target "${String(workflowIdArg)}"`);
+      }
       cancelDeferredWorkflowLaunch(workflowId, 'ipc.recreate-with-rebase');
       logger.info(`recreate-with-rebase: "${workflowId}"`, { module: 'ipc' });
       try {

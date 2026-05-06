@@ -59,6 +59,7 @@ import {
   resolveConflictAction,
 } from './workflow-actions.js';
 import { executeGlobalTopup, finalizeMutationWithGlobalTopup } from './global-topup.js';
+import { resolveHeadlessTargetWorkflowId } from './headless-command-classification.js';
 
 export interface ApiServerDeps {
   logger?: Logger;
@@ -433,8 +434,9 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
       const wfRebaseAndRetryMatch = path.match(/^\/api\/workflows\/([^/]+)\/rebase-and-retry$/);
       if (method === 'POST' && (wfRecreateWithRebaseMatch || wfRebaseAndRetryMatch)) {
         const isLegacy = !!wfRebaseAndRetryMatch;
-        const workflowId = decodeURIComponent((wfRecreateWithRebaseMatch ?? wfRebaseAndRetryMatch)![1]);
+        const workflowTarget = decodeURIComponent((wfRecreateWithRebaseMatch ?? wfRebaseAndRetryMatch)![1]);
         try {
+          const workflowId = resolveHeadlessTargetWorkflowId(workflowTarget, persistence);
           const started = await sharedRecreateWorkflowFromFreshBase(workflowId, {
             orchestrator,
             persistence,

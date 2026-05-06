@@ -889,6 +889,32 @@ describe('POST /api/workflows/:id/restart', () => {
   });
 });
 
+describe('POST /api/workflows/:id/rebase-and-retry', () => {
+  it('normalizes merge-node targets to the owning workflow before fresh-base recreate', async () => {
+    mocks.persistence.loadWorkflow = vi.fn((workflowId: string) => (
+      workflowId === 'wf-1' ? { id: 'wf-1', generation: 1 } : undefined
+    ));
+    mocks.persistence.loadTasks = vi.fn((workflowId: string) => (
+      workflowId === 'wf-1'
+        ? [makeTask({ id: '__merge__wf-1', config: { workflowId: 'wf-1', isMergeNode: true } })]
+        : []
+    ));
+    mocks.orchestrator.recreateWorkflowFromFreshBase = vi.fn(async () => [makeTask()]);
+
+    const res = await request(port, 'POST', '/api/workflows/__merge__wf-1/rebase-and-retry');
+
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.workflowId).toBe('wf-1');
+    expect(res.body.action).toBe('rebase_and_retried');
+    expect(mocks.persistence.updateWorkflow).toHaveBeenCalledWith('wf-1', expect.any(Object));
+    expect(mocks.orchestrator.recreateWorkflowFromFreshBase).toHaveBeenCalledWith(
+      'wf-1',
+      expect.objectContaining({ refreshBase: expect.any(Function) }),
+    );
+  });
+});
+
 // Step 14 (`docs/architecture/task-invalidation-roadmap.md`,
 // chart "Topology inconsistency"): live-workflow topology
 // mutations now route through `Orchestrator.forkWorkflow` and
@@ -943,7 +969,7 @@ describe('POST /api/workflows/:id/recreate-with-rebase', () => {
 
   it('returns 404 when workflow not found', async () => {
     mocks.persistence.loadWorkflow.mockReturnValue(undefined);
-    const res = await request(port, 'POST', '/api/workflows/missing/recreate-with-rebase');
+    const res = await request(port, 'POST', '/api/workflows/wf-missing/recreate-with-rebase');
     expect(res.status).toBe(404);
     expect(res.body.error).toContain('not found');
   });
