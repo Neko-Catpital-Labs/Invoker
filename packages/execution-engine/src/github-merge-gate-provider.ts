@@ -7,6 +7,7 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
   readonly name = 'github';
 
   private static readonly TARGET_REMOTE_ORDER = ['upstream', 'origin'] as const;
+  private static readonly TARGET_REPO_ENV = 'INVOKER_GITHUB_TARGET_REPO';
 
   async createReview(opts: {
     baseBranch: string;
@@ -110,6 +111,15 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
   }
 
   private async resolveTargetRepo(cwd: string): Promise<string> {
+    const explicitTarget = process.env[GitHubMergeGateProvider.TARGET_REPO_ENV]?.trim();
+    if (explicitTarget) {
+      if (/^[^/\s]+\/[^/\s]+$/.test(explicitTarget)) return explicitTarget;
+      throw new Error(
+        `Invalid ${GitHubMergeGateProvider.TARGET_REPO_ENV}="${explicitTarget}". ` +
+        'Expected format "owner/repo".',
+      );
+    }
+
     for (const remote of GitHubMergeGateProvider.TARGET_REMOTE_ORDER) {
       try {
         const url = await this.exec('git', ['remote', 'get-url', remote], cwd);
@@ -119,7 +129,10 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
         // try next remote
       }
     }
-    throw new Error('Unable to resolve GitHub target repo from remotes: expected upstream or origin');
+    throw new Error(
+      'Unable to resolve GitHub target repo. ' +
+      `Set ${GitHubMergeGateProvider.TARGET_REPO_ENV}=owner/repo or configure a parseable upstream/origin GitHub remote.`,
+    );
   }
 
   private parseGitHubRepoNwo(url: string): string | undefined {

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { GitHubMergeGateProvider } from '../github-merge-gate-provider.js';
 
 vi.mock('node:child_process');
@@ -21,10 +21,16 @@ function mockSpawnResult(stdoutData: string, exitCode: number) {
 
 describe('GitHubMergeGateProvider', () => {
   let provider: GitHubMergeGateProvider;
+  const originalEnv = process.env;
 
   beforeEach(() => {
+    process.env = { ...originalEnv };
     provider = new GitHubMergeGateProvider();
     vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    process.env = originalEnv;
   });
 
   describe('createReview', () => {
@@ -160,6 +166,54 @@ describe('GitHubMergeGateProvider', () => {
         ['api', 'repos/owner/repo/pulls/10', '--method', 'PATCH', '-f', 'title=Updated PR', '-f', 'body=## Summary'],
         expect.objectContaining({ cwd: '/tmp/repo' }),
       );
+    });
+
+    it('uses explicit target repo from environment when provided', async () => {
+      process.env.INVOKER_GITHUB_TARGET_REPO = 'Neko-Catpital-Labs/Invoker';
+      const { spawn } = await import('node:child_process');
+      const spawnMock = vi.mocked(spawn);
+
+      spawnMock.mockImplementation(((cmd: string, args: string[]) => {
+        if (cmd === 'git' && args[0] === 'remote' && args[1] === 'get-url') {
+          throw new Error('remote lookup should not run when env target is set');
+        }
+        if (cmd === 'git') return mockSpawnResult('', 0);
+        if (cmd === 'gh' && args[0] === 'pr' && args[1] === 'list') return mockSpawnResult('[]', 0);
+        return mockSpawnResult('{"html_url":"https://github.com/Neko-Catpital-Labs/Invoker/pull/99","number":99}', 0);
+      }) as any);
+
+      const result = await provider.createReview({
+        baseBranch: 'master',
+        featureBranch: 'feature/test',
+        title: 'Env target PR',
+        cwd: '/tmp/repo',
+      });
+
+      expect(result.url).toBe('https://github.com/Neko-Catpital-Labs/Invoker/pull/99');
+      expect(spawnMock).toHaveBeenCalledWith(
+        'gh',
+        expect.arrayContaining(['api', 'repos/Neko-Catpital-Labs/Invoker/pulls']),
+        expect.anything(),
+      );
+    });
+
+    it('fails clearly when target repo cannot be resolved from env or remotes', async () => {
+      const { spawn } = await import('node:child_process');
+      const spawnMock = vi.mocked(spawn);
+
+      spawnMock.mockImplementation(((cmd: string, args: string[]) => {
+        if (cmd === 'git' && args[0] === 'remote' && args[1] === 'get-url') {
+          return mockSpawnResult('/tmp/local/path/repo.git', 0);
+        }
+        return mockSpawnResult('', 0);
+      }) as any);
+
+      await expect(provider.createReview({
+        baseBranch: 'master',
+        featureBranch: 'feature/test',
+        title: 'Missing target',
+        cwd: '/tmp/repo',
+      })).rejects.toThrow('Unable to resolve GitHub target repo.');
     });
   });
 });
