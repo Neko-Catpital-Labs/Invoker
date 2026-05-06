@@ -8,6 +8,7 @@ VALIDATE_SCRIPT="$REPO_ROOT/skills/plan-to-invoker/scripts/validate-plan.sh"
 FIXTURES_DIR="$REPO_ROOT/skills/plan-to-invoker/fixtures"
 POSITIVE_DIR="$FIXTURES_DIR/positive"
 NEGATIVE_DIR="$FIXTURES_DIR/negative"
+LINT_SCRIPT="$REPO_ROOT/skills/plan-to-invoker/scripts/lint-task-atomicity.sh"
 
 fail() {
   echo "FAIL: $*" >&2
@@ -19,6 +20,7 @@ pass_count=0
 DOCTOR_NEGATIVE_FIXTURES=(
   "anti-pattern-g-monolithic-prompt-edit-bridge.yaml"
   "anti-pattern-h-layer-order-violation.yaml"
+  "anti-pattern-i-final-regression-not-test-all.yaml"
 )
 
 is_doctor_negative_fixture() {
@@ -266,6 +268,151 @@ test_stacked_basebranch_master() {
   return 0
 }
 
+test_lint_valid_final_test_all() {
+  local temp_plan
+  temp_plan=$(mktemp)
+  trap "rm -f $temp_plan" RETURN
+
+  cat > "$temp_plan" <<'EOF'
+name: "Valid final test-all gate"
+description: "Implementation plan with terminal full-suite regression"
+onFinish: pull_request
+mergeMode: github
+repoUrl: git@github.com:example-org/acme-repo.git
+tasks:
+  - id: implement-surface
+    description: |
+      Implement the contact surface wiring.
+      Layer: contact_surface
+      Feature state: active
+    prompt: |
+      Modify packages/foo/src/surface.ts and ensure the contract remains typed.
+      Acceptance criteria: ensure the new surface compiles and keeps existing imports intact.
+    dependencies: []
+  - id: add-regression-tests
+    description: |
+      Add regression coverage for the new surface.
+      Layer: app_regression
+      Feature state: active
+    prompt: |
+      Modify packages/foo/src/__tests__/surface.test.ts and ensure the regression covers the new path.
+      Acceptance criteria: verify the regression reproduces the new behavior deterministically.
+    dependencies: [implement-surface]
+  - id: final-regression
+    description: |
+      Run the repository test suite as the terminal regression gate.
+      Layer: e2e_regression
+      Feature state: active
+    command: "pnpm run test:all"
+    dependencies: [implement-surface, add-regression-tests]
+EOF
+
+  bash "$LINT_SCRIPT" "$temp_plan" >/dev/null
+}
+
+test_lint_rejects_non_test_all_final_gate() {
+  local temp_plan
+  temp_plan=$(mktemp)
+  trap "rm -f $temp_plan" RETURN
+
+  cat > "$temp_plan" <<'EOF'
+name: "Invalid final gate command"
+description: "Implementation plan with old package-scoped final regression"
+onFinish: pull_request
+mergeMode: github
+repoUrl: git@github.com:example-org/acme-repo.git
+tasks:
+  - id: implement-surface
+    description: |
+      Implement the contact surface wiring.
+      Layer: contact_surface
+      Feature state: active
+    prompt: |
+      Modify packages/foo/src/surface.ts and ensure the contract remains typed.
+      Acceptance criteria: ensure the new surface compiles and keeps existing imports intact.
+    dependencies: []
+  - id: final-regression
+    description: |
+      Re-run package tests only.
+      Layer: e2e_regression
+      Feature state: active
+    command: "cd packages/foo && pnpm test"
+    dependencies: [implement-surface]
+EOF
+
+  local output
+  set +e
+  output=$(bash "$LINT_SCRIPT" "$temp_plan" 2>&1)
+  local exit_code=$?
+  set -e
+
+  if [[ $exit_code -eq 0 ]]; then
+    echo "Expected lint to reject non-test:all final gate" >&2
+    return 1
+  fi
+
+  if ! grep -q 'must be the final regression gate and run exactly "pnpm run test:all"' <<<"$output"; then
+    echo "Expected final gate command error, got: $output" >&2
+    return 1
+  fi
+}
+
+test_lint_rejects_final_gate_missing_dependencies() {
+  local temp_plan
+  temp_plan=$(mktemp)
+  trap "rm -f $temp_plan" RETURN
+
+  cat > "$temp_plan" <<'EOF'
+name: "Invalid final gate dependencies"
+description: "Implementation plan whose final regression does not depend on every earlier task"
+onFinish: pull_request
+mergeMode: github
+repoUrl: git@github.com:example-org/acme-repo.git
+tasks:
+  - id: implement-surface
+    description: |
+      Implement the contact surface wiring.
+      Layer: contact_surface
+      Feature state: active
+    prompt: |
+      Modify packages/foo/src/surface.ts and ensure the contract remains typed.
+      Acceptance criteria: ensure the new surface compiles and keeps existing imports intact.
+    dependencies: []
+  - id: add-regression-tests
+    description: |
+      Add regression coverage for the new surface.
+      Layer: app_regression
+      Feature state: active
+    prompt: |
+      Modify packages/foo/src/__tests__/surface.test.ts and ensure the regression covers the new path.
+      Acceptance criteria: verify the regression reproduces the new behavior deterministically.
+    dependencies: [implement-surface]
+  - id: final-regression
+    description: |
+      Run the repository test suite as the terminal regression gate.
+      Layer: e2e_regression
+      Feature state: active
+    command: "pnpm run test:all"
+    dependencies: [add-regression-tests]
+EOF
+
+  local output
+  set +e
+  output=$(bash "$LINT_SCRIPT" "$temp_plan" 2>&1)
+  local exit_code=$?
+  set -e
+
+  if [[ $exit_code -eq 0 ]]; then
+    echo "Expected lint to reject missing final regression dependencies" >&2
+    return 1
+  fi
+
+  if ! grep -q 'must depend on every earlier task; missing dependency on "implement-surface"' <<<"$output"; then
+    echo "Expected missing dependency error, got: $output" >&2
+    return 1
+  fi
+}
+
 # Check dependencies
 if ! command -v jq &>/dev/null; then
   fail "jq is required for JSON parsing tests"
@@ -273,6 +420,10 @@ fi
 
 if [[ ! -f "$VALIDATE_SCRIPT" ]]; then
   fail "Validator script not found: $VALIDATE_SCRIPT"
+fi
+
+if [[ ! -f "$LINT_SCRIPT" ]]; then
+  fail "Lint script not found: $LINT_SCRIPT"
 fi
 
 if [[ ! -d "$POSITIVE_DIR" ]]; then
@@ -324,6 +475,9 @@ run_test "Edge: empty_required_field for tasks" test_edge_empty_tasks
 run_test "Edge: invalid_dependency_reference" test_edge_invalid_dependency
 run_test "Edge: unrendered_template_placeholder" test_unrendered_template_placeholder
 run_test "Edge: stacked_basebranch_default" test_stacked_basebranch_master
+run_test "Lint: valid final pnpm run test:all gate" test_lint_valid_final_test_all
+run_test "Lint: reject non-test:all final gate" test_lint_rejects_non_test_all_final_gate
+run_test "Lint: reject final gate missing dependencies" test_lint_rejects_final_gate_missing_dependencies
 
 echo ""
 echo "========================================="

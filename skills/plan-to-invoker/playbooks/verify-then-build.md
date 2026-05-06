@@ -155,17 +155,17 @@ For each failed verification:
 
 ### Final verification task (required)
 
-The implementation plan **must** end with one or more **`command`** tasks that **re-run the same reproduction** used in Phase 1b:
+The implementation plan **must** end with a final **`command`** task that runs:
 
-- Same `cd packages/<pkg> && pnpm test -- <repro>` as in Phase 1b-unit, **or**
-- Same `./submit-plan.sh plans/verify-<slug>.yaml` or `bash scripts/verify-<slug>-invoker.sh` as in Phase 1b-invoker, **or**
-- A single script that runs both if the fix required both.
+- `pnpm run test:all`
 
-**Dependencies:** The final verification task **must depend on** every implementation task (`prompt` or `command`) that changes code or behavior for the fix — so it runs **after** the work, not in parallel.
+Use earlier tasks to re-run the focused repro from Phase 1b (`cd packages/<pkg> && pnpm test -- <repro>`, `./submit-plan.sh plans/verify-<slug>.yaml`, or both). The terminal gate for submitted implementation plans is always the full repo suite.
 
-**Naming:** `verify-fix-repro`, `regression-pnpm-test`, `regression-headless-verify`, etc.
+**Dependencies:** The final `pnpm run test:all` task **must depend on every earlier task** so it runs last as the terminal regression gate.
 
-**Anti-pattern:** Implementation plan with **no** final repro task — you cannot show the fix worked end-to-end.
+**Naming:** `final-regression`, `regression-test-all`, `final-test-suite`, etc.
+
+**Anti-pattern:** Implementation plan with **no** final `pnpm run test:all` task — you cannot show the submitted workflow passed the full suite end-to-end.
 
 ### Visual proof capture task (when `visualProof: true`)
 
@@ -193,4 +193,4 @@ Generate the implementation plan, validate with `scripts/validate-plan.sh`, pres
 - **Not cleaning up verification workflow** — Invoker may still have the verify plan running. Use `delete-all` before submitting implementation when needed.
 - **Trusting file paths from a plan without checking** — plans can reference moved, renamed, or deleted files. Verify first.
 - **Proceeding after verification failures without adjusting** — the whole point of Phase 1 is to inform Phase 2.
-- **Implementation plan without a final repro task** — cannot confirm the fix against the original failure mode.
+- **Implementation plan without a final `pnpm run test:all` task** — cannot confirm the submitted workflow passed the full suite.

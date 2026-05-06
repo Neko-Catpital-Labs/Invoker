@@ -8,6 +8,7 @@ Source of truth: `packages/surfaces/src/slack/plan-conversation.ts:100-116`
 |--------------------------|-----------|----------|
 | "Run tests" / "verify" / "check" | `command` | `cd packages/<pkg> && pnpm test` |
 | "Run specific test file" | `command` | `cd packages/<pkg> && pnpm test -- src/__tests__/file.test.ts` |
+| "Run final regression suite" | `command` | `pnpm run test:all` |
 | "Refactor X" / "Add feature Y" | `prompt` | Detailed instructions with file paths, line numbers, acceptance criteria |
 | "Build/compile" | `command` | `pnpm --filter @invoker/<pkg> build` |
 | "Build all" / "verify compilation" | `command` | `pnpm build` |
@@ -16,7 +17,7 @@ Source of truth: `packages/surfaces/src/slack/plan-conversation.ts:100-116`
 | "Lint / type-check" | `command` | `pnpm --filter @invoker/<pkg> lint` or `pnpm --filter @invoker/<pkg> typecheck` |
 | "Check file exists" | `command` | `test -f <path>` |
 | "Check pattern in file" | `command` | `grep -q '<pattern>' <path>` |
-| **Post-fix / regression** (re-run repro after implementation) | `command` | Same as Phase 1b: `cd packages/<pkg> && pnpm test -- <repro>` and/or `./submit-plan.sh plans/verify-<slug>.yaml` and/or `bash scripts/verify-<slug>-invoker.sh` — **must** match what proved the bug and the fix |
+| **Post-fix / regression** (final submitted-plan gate) | `command` | `pnpm run test:all` — keep focused repro commands earlier in the plan, but the final task for implementation plans must be the full-suite gate |
 | "Modify UI component" / "Fix layout" | `prompt` + `visualProof: true` | Set `visualProof: true` at plan level; include `description` |
 | **Add visual proof E2E test case** | `prompt` | Add a test to `packages/app/e2e/visual-proof.spec.ts` that sets up the exact UI state being changed and calls `captureScreenshot(page, '<plan-slug>-<state>')`. See `skills/visual-proof/SKILL.md`. |
 | **Capture visual proof (after)** | `command` | `pnpm --filter @invoker/ui build && pnpm --filter @invoker/app build && bash scripts/ui-visual-proof.sh --label after` — depends on **all** implementation tasks |
@@ -31,13 +32,13 @@ These are constraints, not guidelines. Violating them produces broken plans.
 - **Test task** → depends on the implementation task it verifies.
 - **Build/compile check** → depends on all implementation tasks that change source.
 - **Integration test** → depends on all unit-level tasks it integrates.
-- **Final post-fix verification task** → depends on **every** `prompt` / `command` implementation task that is part of the fix. It runs **last** (after the code changes), not in parallel with them.
+- **Final regression task** → depends on **every earlier task** and runs **last** as `pnpm run test:all`.
 - **Visual proof capture task** → depends on **all** implementation tasks and the E2E test case task (it must run after code changes AND the new Playwright test exist).
 
 ### Can be parallel (no dependency needed)
 - **Independent packages** → tasks touching different packages with no cross-package imports.
 - **Independent files** → tasks creating/modifying unrelated files.
-- **All verification tasks** → file-existence and grep checks are read-only, run them all in parallel — **except** the final regression task, which must depend on implementation tasks (see above).
+- **All verification tasks** → file-existence and grep checks are read-only, run them all in parallel — **except** the final regression task, which must depend on every earlier task (see above).
 
 ## Layered decomposition contract (hard requirement for implementation plans)
 
@@ -146,7 +147,7 @@ See `SKILL.md` (bugfix repro blurb) and this repo’s `scripts/repro-*.sh` examp
 
 When writing `command` fields:
 
-1. **Always `cd` first**: `cd packages/<pkg> && pnpm test`, never `pnpm test` from root
+1. **Package tests must `cd` first**: `cd packages/<pkg> && pnpm test`; reserve root-level `pnpm run test:all` for the final implementation-plan regression gate
 2. **Use `&&` for sequential steps**: ensures early failure stops execution
 3. **Exit codes matter**: the command succeeds (exit 0) or fails (non-zero). Design accordingly.
 4. **No interactive commands**: everything must run non-interactively
@@ -196,16 +197,16 @@ tasks:
     command: "pnpm --filter @invoker/ui build && pnpm --filter @invoker/app build && bash scripts/ui-visual-proof.sh --label after"
     dependencies: [fix-layout, add-visual-proof-test]
   - id: regression
-    description: "Final regression — re-run unit tests"
-    command: "cd packages/ui && pnpm test"
-    dependencies: [run-unit-tests, capture-visual-proof]
+    description: "Final regression — run the full repository test suite"
+    command: "pnpm run test:all"
+    dependencies: [add-visual-proof-test, fix-layout, run-unit-tests, capture-visual-proof]
 ```
 
 ## Anti-Patterns
 
 - **God task**: one `prompt` task that says "implement the whole feature" — split it up.
 - **Test-free plan**: every implementation task needs a corresponding verification. No exceptions.
-- **No final repro task**: implementation plans must end with a **command** task that re-runs the same reproduction as Phase 1b (`playbooks/verify-then-build.md` Phase 2).
+- **No final full-suite task**: implementation plans must end with a **command** task that runs `pnpm run test:all`.
 - **Circular dependencies**: task A depends on B, B depends on A — validator catches this but don't generate it.
 - **Phantom files**: referencing files that don't exist without a task to create them first.
 - **UI plan without visual proof tasks**: `visualProof: true` without the E2E test case task and capture task means no plan-specific screenshots are captured.
