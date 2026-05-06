@@ -2,6 +2,7 @@
 
 export {
   composeRuntimeServices,
+  composeHeadlessStartup,
   type RuntimeServiceDeps,
   type RuntimeServices,
 } from './composition.js';
