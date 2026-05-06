@@ -1565,4 +1565,32 @@ describe('headless delegation enforcement', () => {
       expect(mockDeps.commandService.cancelTask).not.toHaveBeenCalled();
     });
   });
+
+  describe('delete-workflow shared bridge', () => {
+    it('headless delete-workflow uses deleteWorkflow dep when available', async () => {
+      const deleteWorkflow = vi.fn().mockResolvedValue(undefined);
+      mockDeps.commandService.deleteWorkflow = vi.fn(async () => ({ ok: true as const, data: undefined })) as any;
+      const depsWithDelete: HeadlessDeps = {
+        ...mockDeps,
+        deleteWorkflow,
+      } as HeadlessDeps;
+
+      await runHeadless(['delete-workflow', 'wf-1'], depsWithDelete);
+
+      expect(deleteWorkflow).toHaveBeenCalledWith('wf-1');
+      expect(mockDeps.commandService.deleteWorkflow).not.toHaveBeenCalled();
+    });
+
+    it('headless delete falls back to commandService when deleteWorkflow dep is not provided', async () => {
+      mockDeps.commandService.deleteWorkflow = vi.fn(async () => ({ ok: true as const, data: undefined })) as any;
+      const depsWithoutDelete: HeadlessDeps = {
+        ...mockDeps,
+        deleteWorkflow: undefined,
+      } as HeadlessDeps;
+
+      await runHeadless(['delete', 'wf-1'], depsWithoutDelete);
+
+      expect(mockDeps.commandService.deleteWorkflow).toHaveBeenCalled();
+    });
+  });
 });

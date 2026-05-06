@@ -336,6 +336,64 @@ describe('CommandService', () => {
       const result = await service.deleteWorkflow(makeEnvelope({ workflowId: 'bad' }));
       expect(result).toEqual({ ok: false, error: { code: 'DELETE_WORKFLOW_FAILED', message: 'wf not found' } });
     });
+
+    it('serializes on workflowId (workflow-scoped, not global)', async () => {
+      const order: string[] = [];
+      let resolveDelete!: () => void;
+      const deleteGate = new Promise<void>(r => { resolveDelete = r; });
+
+      (orchestrator.deleteWorkflow as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+        order.push('delete-start');
+        await deleteGate;
+        order.push('delete-end');
+      });
+      (orchestrator.cancelWorkflow as ReturnType<typeof vi.fn>).mockImplementation(() => {
+        order.push('cancel');
+        return { cancelled: [], runningCancelled: [] };
+      });
+
+      // Same workflow: deleteWorkflow and cancelWorkflow must serialize
+      const pDelete = service.deleteWorkflow(makeEnvelope({ workflowId: 'wf-1' }, 'k1'));
+      const pCancel = service.cancelWorkflow(makeEnvelope({ workflowId: 'wf-1' }, 'k2'));
+
+      // Let delete complete
+      resolveDelete();
+      await Promise.all([pDelete, pCancel]);
+
+      // cancel must wait for delete to finish (same workflow mutex)
+      expect(order).toEqual(['delete-start', 'delete-end', 'cancel']);
+    });
+
+    it('does not block operations on a different workflow', async () => {
+      const order: string[] = [];
+      let resolveDelete!: () => void;
+      const deleteGate = new Promise<void>(r => { resolveDelete = r; });
+
+      (orchestrator.deleteWorkflow as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+        order.push('delete-start');
+        await deleteGate;
+        order.push('delete-end');
+      });
+      (orchestrator.cancelWorkflow as ReturnType<typeof vi.fn>).mockImplementation(() => {
+        order.push('cancel');
+        return { cancelled: [], runningCancelled: [] };
+      });
+
+      // Different workflows: should run concurrently
+      const pDelete = service.deleteWorkflow(makeEnvelope({ workflowId: 'wf-1' }, 'k1'));
+      const pCancel = service.cancelWorkflow(makeEnvelope({ workflowId: 'wf-2' }, 'k2'));
+
+      // cancel on wf-2 should proceed without waiting for delete on wf-1
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(order).toContain('cancel');
+      expect(order).toContain('delete-start');
+      expect(order).not.toContain('delete-end');
+
+      resolveDelete();
+      await Promise.all([pDelete, pCancel]);
+      expect(order).toEqual(['delete-start', 'cancel', 'delete-end']);
+    });
   });
 
   describe('detachWorkflow', () => {
