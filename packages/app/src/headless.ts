@@ -93,6 +93,7 @@ export interface HeadlessDeps {
   preemptWorkflowExecution?: (workflowId: string) => Promise<WorkflowCancelResult>;
   cancelTask?: (taskId: string) => Promise<{ cancelled: string[]; runningCancelled: string[] }>;
   cancelWorkflow?: (workflowId: string) => Promise<{ cancelled: string[]; runningCancelled: string[] }>;
+  deleteWorkflow?: (workflowId: string) => Promise<void>;
   waitForApproval?: boolean;
   noTrack?: boolean;
   isStandaloneOwnerIdle?: () => boolean;
@@ -2096,8 +2097,13 @@ async function headlessOpenTerminal(taskId: string, deps: HeadlessDeps): Promise
   }
 }
 
-async function headlessDeleteWorkflow(workflowId: string, deps: Pick<HeadlessDeps, 'commandService'>): Promise<void> {
+async function headlessDeleteWorkflow(workflowId: string, deps: Pick<HeadlessDeps, 'commandService' | 'deleteWorkflow'>): Promise<void> {
   if (!workflowId) throw new Error('Missing workflowId. Usage: --headless delete-workflow <workflowId>');
+  if (deps.deleteWorkflow) {
+    await deps.deleteWorkflow(workflowId);
+    process.stdout.write(`Deleted workflow: ${workflowId}\n`);
+    return;
+  }
   const envelope = makeEnvelope('delete-workflow', 'headless', 'workflow', { workflowId });
   const result = await deps.commandService.deleteWorkflow(envelope);
   if (!result.ok) throw new Error(result.error.message);

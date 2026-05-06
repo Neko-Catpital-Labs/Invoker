@@ -74,6 +74,7 @@ let mocks: {
   cancelTask: ReturnType<typeof vi.fn>;
   cancelWorkflow: ReturnType<typeof vi.fn>;
   killRunningTask: ReturnType<typeof vi.fn>;
+  deleteWorkflow: ReturnType<typeof vi.fn>;
 };
 
 function createMocks() {
@@ -129,6 +130,7 @@ function createMocks() {
     cancelTask: vi.fn().mockResolvedValue({ cancelled: ['task-1'], runningCancelled: ['task-1'] }),
     cancelWorkflow: vi.fn().mockResolvedValue({ cancelled: ['task-1'], runningCancelled: ['task-1'] }),
     killRunningTask: vi.fn().mockResolvedValue(undefined),
+    deleteWorkflow: vi.fn().mockResolvedValue(undefined),
   };
 }
 
@@ -144,6 +146,7 @@ beforeAll(async () => {
     cancelTask: mocks.cancelTask,
     cancelWorkflow: mocks.cancelWorkflow,
     killRunningTask: mocks.killRunningTask,
+    deleteWorkflow: mocks.deleteWorkflow,
   });
   // Wait for the server to start listening
   await new Promise<void>((resolve) => {
@@ -172,6 +175,7 @@ beforeEach(() => {
   mocks.cancelTask.mockClear();
   mocks.cancelWorkflow.mockClear();
   mocks.killRunningTask.mockClear();
+  mocks.deleteWorkflow.mockClear();
 
   // Re-apply default return values after clear
   mocks.orchestrator.getWorkflowStatus.mockReturnValue({ total: 1, completed: 0, failed: 0, running: 1, pending: 0 });
@@ -198,6 +202,7 @@ beforeEach(() => {
   mocks.cancelTask.mockResolvedValue({ cancelled: ['task-1'], runningCancelled: ['task-1'] });
   mocks.cancelWorkflow.mockResolvedValue({ cancelled: ['task-1'], runningCancelled: ['task-1'] });
   mocks.killRunningTask.mockResolvedValue(undefined);
+  mocks.deleteWorkflow.mockResolvedValue(undefined);
   mocks.taskExecutor.executeTasks.mockResolvedValue(undefined);
   mocks.taskExecutor.publishAfterFix.mockResolvedValue(undefined);
   mocks.taskExecutor.resolveConflict.mockResolvedValue(undefined);
@@ -945,18 +950,17 @@ describe('POST /api/workflows/:id/recreate-with-rebase', () => {
 });
 
 describe('DELETE /api/workflows/:id', () => {
-  it('deletes workflow', async () => {
+  it('deletes workflow via shared deleteWorkflow bridge', async () => {
     const res = await request(port, 'DELETE', '/api/workflows/wf-1');
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
     expect(res.body.action).toBe('deleted');
-    expect(mocks.orchestrator.deleteWorkflow).toHaveBeenCalledWith('wf-1');
+    expect(mocks.deleteWorkflow).toHaveBeenCalledWith('wf-1');
+    expect(mocks.orchestrator.deleteWorkflow).not.toHaveBeenCalled();
   });
 
   it('returns 400 on error', async () => {
-    mocks.orchestrator.deleteWorkflow.mockImplementation(() => {
-      throw new Error('workflow not found');
-    });
+    mocks.deleteWorkflow.mockRejectedValue(new Error('workflow not found'));
     const res = await request(port, 'DELETE', '/api/workflows/missing');
     expect(res.status).toBe(400);
     expect(res.body.error).toBe('workflow not found');
