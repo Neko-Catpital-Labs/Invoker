@@ -130,8 +130,14 @@ class FrameDecoder {
 export const DEFAULT_SOCKET_PATH =
   process.env.INVOKER_IPC_SOCKET || join(homedir(), '.invoker', 'ipc-transport.sock');
 
+/** Default request deadline in milliseconds (30 s). */
+export const DEFAULT_REQUEST_DEADLINE_MS = 30_000;
+
 export interface IpcBusOptions {
   allowServe?: boolean;
+  /** Maximum time in ms a request may wait for a response before being
+   *  rejected with `REQUEST_TIMEOUT`.  Defaults to {@link DEFAULT_REQUEST_DEADLINE_MS}. */
+  requestDeadlineMs?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -141,6 +147,7 @@ export interface IpcBusOptions {
 export class IpcBus implements MessageBus {
   private readonly socketPath: string;
   private readonly allowServe: boolean;
+  private readonly requestDeadlineMs: number;
 
   // Local handler registries (same structure as LocalBus).
   private subscribers = new Map<string, Set<MessageHandler>>();
@@ -160,7 +167,7 @@ export class IpcBus implements MessageBus {
   private nextReqId = 0;
   private pendingRequests = new Map<
     string,
-    { resolve: (v: unknown) => void; reject: (e: Error) => void }
+    { resolve: (v: unknown) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }
   >();
   private relayedRequests = new Map<
     string,
@@ -170,6 +177,7 @@ export class IpcBus implements MessageBus {
   constructor(socketPath: string = DEFAULT_SOCKET_PATH, options: IpcBusOptions = {}) {
     this.socketPath = socketPath;
     this.allowServe = options.allowServe ?? true;
+    this.requestDeadlineMs = options.requestDeadlineMs ?? DEFAULT_REQUEST_DEADLINE_MS;
     this.readyPromise = new Promise<void>((r) => {
       this.resolveReady = r;
     });
@@ -381,6 +389,7 @@ export class IpcBus implements MessageBus {
   private handleResponse(env: ResEnvelope | ErrEnvelope, source: Socket): void {
     const pending = this.pendingRequests.get(env.reqId);
     if (pending) {
+      clearTimeout(pending.timer);
       this.pendingRequests.delete(env.reqId);
       if (env.kind === 'res') {
         pending.resolve(env.body);
@@ -488,9 +497,20 @@ export class IpcBus implements MessageBus {
     const env: ReqEnvelope = { kind: 'req', channel, body: message, reqId };
 
     return new Promise<Res>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        if (this.pendingRequests.delete(reqId)) {
+          reject(new TransportError(
+            TransportErrorCode.REQUEST_TIMEOUT,
+            `Request on channel "${channel}" timed out after ${this.requestDeadlineMs}ms`,
+          ));
+        }
+      }, this.requestDeadlineMs);
+      timer.unref?.();
+
       this.pendingRequests.set(reqId, {
         resolve: resolve as (v: unknown) => void,
         reject,
+        timer,
       });
       // Send to all peers — only the one with a handler will reply.
       this.sendToAll(env);
@@ -507,8 +527,9 @@ export class IpcBus implements MessageBus {
     this.subscribers.clear();
     this.requestHandlers.clear();
 
-    // Reject all pending requests.
+    // Reject all pending requests and clear their deadline timers.
     for (const [, pending] of this.pendingRequests) {
+      clearTimeout(pending.timer);
       pending.reject(new TransportError(TransportErrorCode.DISCONNECTED, 'IpcBus disconnected'));
     }
     this.pendingRequests.clear();

@@ -12,6 +12,8 @@ export const TransportErrorCode = {
   DISCONNECTED: 'DISCONNECTED',
   /** The request handler threw an unclassified error. */
   HANDLER_ERROR: 'HANDLER_ERROR',
+  /** The request exceeded its deadline without receiving a response. */
+  REQUEST_TIMEOUT: 'REQUEST_TIMEOUT',
 } as const;
 
 export type TransportErrorCode = (typeof TransportErrorCode)[keyof typeof TransportErrorCode];
