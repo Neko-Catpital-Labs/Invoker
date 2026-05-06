@@ -32,6 +32,8 @@ pnpm run build
 
 Invoker does not provision machines for you. You are responsible for bringing your own local workstation, VM, container host, or remote machines and making sure the required tools are installed there before running workflows.
 
+If pnpm skips Electron's dependency install hook and you hit `Electron failed to install correctly`, rerun `pnpm install` or any normal launch command after allowing Electron's build script. Recent pnpm versions may require `pnpm approve-builds`.
+
 For packaged installs, the repo includes an installer script and a tag-driven release workflow:
 
 ```bash

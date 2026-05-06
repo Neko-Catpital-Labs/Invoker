@@ -465,7 +465,7 @@ EOF
 }
 
 ov_start_owner() {
-  local electron_bin="$INVOKER_E2E_REPO_ROOT/packages/app/node_modules/.bin/electron"
+  local electron_bin="$INVOKER_E2E_REPO_ROOT/scripts/electron.cjs"
   local main_js="$INVOKER_E2E_REPO_ROOT/packages/app/dist/main.js"
   local sandbox_flag=""
   export INVOKER_IPC_SOCKET="${INVOKER_DB_DIR}/overload-ipc.sock"

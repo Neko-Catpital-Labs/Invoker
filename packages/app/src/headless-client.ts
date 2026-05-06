@@ -46,8 +46,8 @@ function electronCommandArgs(args: string[]): string[] {
 }
 
 async function runElectronHeadless(args: string[]): Promise<number> {
-  const electronBin = resolve(__dirname, '..', 'node_modules', '.bin', process.platform === 'win32' ? 'electron.cmd' : 'electron');
-  const child = spawn(electronBin, electronCommandArgs(args), {
+  const electronLauncher = resolve(repoRoot, 'scripts', 'electron.cjs');
+  const child = spawn(process.execPath, [electronLauncher, ...electronCommandArgs(args)], {
     cwd: repoRoot,
     stdio: 'inherit',
     env: {

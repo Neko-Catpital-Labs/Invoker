@@ -50,15 +50,16 @@ export function spawnDetachedStandaloneOwner(
   repoRoot: string,
   extraEnv: NodeJS.ProcessEnv = {},
 ): void {
-  const electronBin = resolve(repoRoot, 'packages', 'app', 'node_modules', '.bin', process.platform === 'win32' ? 'electron.cmd' : 'electron');
+  const electronLauncher = resolve(repoRoot, 'scripts', 'electron.cjs');
   const mainJs = resolve(repoRoot, 'packages', 'app', 'dist', 'main.js');
   const args = [
+    electronLauncher,
     ...(process.platform === 'linux' ? ['--no-sandbox'] : []),
     mainJs,
     '--headless',
     'owner-serve',
   ];
-  const child = spawn(electronBin, args, {
+  const child = spawn(process.execPath, args, {
     cwd: repoRoot,
     detached: true,
     stdio: 'ignore',

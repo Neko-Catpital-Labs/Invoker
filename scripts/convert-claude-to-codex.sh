@@ -13,7 +13,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-ELECTRON="$REPO_ROOT/packages/app/node_modules/.bin/electron"
+ELECTRON="$REPO_ROOT/scripts/electron.cjs"
 MAIN="$REPO_ROOT/packages/app/dist/main.js"
 IPC_HELPER="$REPO_ROOT/scripts/headless-ipc.js"
 

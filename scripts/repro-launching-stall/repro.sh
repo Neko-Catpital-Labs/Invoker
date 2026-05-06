@@ -44,7 +44,7 @@ set -Eeuo pipefail
 MAIN_CHECKOUT="/home/edbert-chan/Invoker"
 WORKTREE_ROOT="/tmp/invoker-repros/launching-stall"
 APP_MAIN_JS="$MAIN_CHECKOUT/packages/app/dist/main.js"
-ELECTRON_BIN="$MAIN_CHECKOUT/packages/app/node_modules/.bin/electron"
+ELECTRON_BIN="$MAIN_CHECKOUT/scripts/electron.cjs"
 PROD_DB="$HOME/.invoker/invoker.db"
 
 die() { echo "[repro] FATAL: $*" >&2; exit 2; }
