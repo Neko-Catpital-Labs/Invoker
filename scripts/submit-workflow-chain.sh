@@ -14,11 +14,11 @@
 #   externalDependencies:
 #     - workflowId: "__UPSTREAM_WORKFLOW_ID__"
 #       requiredStatus: completed
-#       gatePolicy: review_ready
+#       gatePolicy: completed
 #
 set -euo pipefail
 
-GATE_POLICY="review_ready"
+GATE_POLICY="completed"
 if [[ "${1:-}" == "--gate-policy" ]]; then
   GATE_POLICY="${2:-}"
   shift 2
