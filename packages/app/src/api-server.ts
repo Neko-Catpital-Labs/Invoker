@@ -71,6 +71,7 @@ export interface ApiServerDeps {
   killRunningTask?: (taskId: string) => Promise<void>;
   cancelTask?: (taskId: string) => Promise<{ cancelled: string[]; runningCancelled: string[] }>;
   cancelWorkflow?: (workflowId: string) => Promise<{ cancelled: string[]; runningCancelled: string[] }>;
+  deleteWorkflow?: (workflowId: string) => Promise<void>;
 }
 
 export interface ApiServer {
@@ -142,6 +143,7 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
     killRunningTask,
     cancelTask,
     cancelWorkflow,
+    deleteWorkflow,
   } = deps;
   const port = parseInt(process.env.INVOKER_API_PORT ?? '4100', 10);
 
@@ -672,7 +674,11 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
       if (method === 'DELETE' && wfDeleteMatch) {
         const workflowId = decodeURIComponent(wfDeleteMatch[1]);
         try {
-          orchestrator.deleteWorkflow(workflowId);
+          if (deleteWorkflow) {
+            await deleteWorkflow(workflowId);
+          } else {
+            orchestrator.deleteWorkflow(workflowId);
+          }
           json(res, 200, { ok: true, workflowId, action: 'deleted' });
         } catch (err) {
           json(res, 400, { error: err instanceof Error ? err.message : String(err) });
