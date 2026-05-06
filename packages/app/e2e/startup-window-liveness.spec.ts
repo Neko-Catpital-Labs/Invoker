@@ -1,10 +1,11 @@
 import { _electron as electron, expect, test } from '@playwright/test';
+import { resolveRepoRoot } from '@invoker/contracts';
 import * as fs from 'node:fs/promises';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { tmpdir } from 'node:os';
 
-const repoRoot = path.resolve(__dirname, '..', '..', '..', '..');
+const repoRoot = resolveRepoRoot(__dirname);
 const STARTUP_BUDGET_MS = 12000;
 
 test('GUI window appears before delayed workflow mutation recovery finishes', async () => {

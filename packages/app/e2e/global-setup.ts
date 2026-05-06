@@ -8,6 +8,7 @@
 import { execSync } from 'child_process';
 import { existsSync, rmSync } from 'fs';
 import * as path from 'path';
+import { resolveRepoRoot } from '@invoker/contracts';
 
 export const E2E_BARE_REPO = process.env.INVOKER_E2E_BARE_REPO ?? '/tmp/invoker-e2e-repo.git';
 
@@ -19,7 +20,7 @@ const gitEnv = {
   GIT_COMMITTER_EMAIL: process.env.GIT_COMMITTER_EMAIL ?? 'ci@invoker.dev',
 };
 
-const repoRoot = path.resolve(__dirname, '..', '..', '..');
+const repoRoot = resolveRepoRoot(__dirname);
 
 export default function globalSetup(): void {
   // Build dependent packages and the app itself if artifacts are missing.

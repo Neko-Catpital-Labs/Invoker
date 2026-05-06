@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { resolve } from 'node:path';
 
+import { resolveRepoRoot } from '@invoker/contracts';
 import { IpcBus } from '@invoker/transport';
 import type { MessageBus } from '@invoker/transport';
 
@@ -28,6 +29,7 @@ import { createOwnerResolver } from './owner-resolver.js';
 
 const RED = '\x1b[31m';
 const RESET = '\x1b[0m';
+const repoRoot = resolveRepoRoot(__dirname);
 
 function delegationClientLog(message: string): void {
   process.stderr.write(`[headless-client] ${message}\n`);
@@ -46,7 +48,7 @@ function electronCommandArgs(args: string[]): string[] {
 async function runElectronHeadless(args: string[]): Promise<number> {
   const electronBin = resolve(__dirname, '..', 'node_modules', '.bin', process.platform === 'win32' ? 'electron.cmd' : 'electron');
   const child = spawn(electronBin, electronCommandArgs(args), {
-    cwd: resolve(__dirname, '..', '..', '..'),
+    cwd: repoRoot,
     stdio: 'inherit',
     env: {
       ...process.env,
@@ -250,7 +252,7 @@ async function ensureStandaloneOwnerViaBootstrap(bus: MessageBus): Promise<void>
   try {
     if (bootstrapLock) {
       delegationClientLog('bootstrap spawning detached standalone owner');
-      spawnDetachedStandaloneOwner(resolve(__dirname, '..', '..', '..'));
+      spawnDetachedStandaloneOwner(repoRoot);
     }
     const deadline = Date.now() + standaloneOwnerBootstrapTimeoutMs();
     let attempts = 0;

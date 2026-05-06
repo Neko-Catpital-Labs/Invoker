@@ -38,6 +38,12 @@ importers:
       '@invoker/execution-engine':
         specifier: workspace:*
         version: link:../execution-engine
+      '@invoker/runtime-adapters':
+        specifier: workspace:*
+        version: link:../runtime-adapters
+      '@invoker/runtime-service':
+        specifier: workspace:*
+        version: link:../runtime-service
       '@invoker/surfaces':
         specifier: workspace:*
         version: link:../surfaces
