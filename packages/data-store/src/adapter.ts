@@ -76,6 +76,8 @@ export interface PersistenceAdapter {
   saveTask(workflowId: string, task: TaskState): void;
   updateTask(taskId: string, changes: TaskStateChanges): void;
   loadTasks(workflowId: string): TaskState[];
+  /** Authoritative single-task read by ID, suitable for recovery workflows. */
+  loadTask(taskId: string): TaskState | undefined;
   getAllTaskIds(): string[];
   getAllTaskBranches(): string[];
   deleteAllTasks(workflowId: string): void;
