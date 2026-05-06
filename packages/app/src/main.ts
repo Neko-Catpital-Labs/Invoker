@@ -61,7 +61,7 @@ import type {
 import { makeEnvelope } from '@invoker/contracts';
 import type { WorkResponse } from '@invoker/contracts';
 import { SQLiteAdapter, ConversationRepository, SqliteTaskRepository } from '@invoker/data-store';
-import { IpcBus, Channels } from '@invoker/transport';
+import { IpcBus, Channels, TransportError, TransportErrorCode } from '@invoker/transport';
 import type { MessageBus } from '@invoker/transport';
 import {
   ExecutorRegistry, TaskRunner,
@@ -1948,7 +1948,7 @@ if (isHeadless) {
       try {
         return await messageBus.request<typeof translated.request, TResult>(translated.channel, translated.request);
       } catch (err) {
-        if (err instanceof Error && err.message.includes('No request handler registered for channel')) {
+        if (err instanceof TransportError && err.code === TransportErrorCode.NO_HANDLER) {
           throw new Error('No mutation owner is available');
         }
         throw err;
