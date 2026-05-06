@@ -465,6 +465,9 @@ importers:
 
   packages/web-app:
     devDependencies:
+      jsdom:
+        specifier: ^25.0.0
+        version: 25.0.1
       typescript:
         specifier: ^5.7.0
         version: 5.9.3
