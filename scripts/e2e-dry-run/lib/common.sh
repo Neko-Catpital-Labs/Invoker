@@ -71,6 +71,9 @@ invoker_e2e_init() {
   # submit-plan in background + cancel command). The writer lock would block
   # the second process. In production, IPC delegation handles this.
   export INVOKER_UNSAFE_DISABLE_DB_WRITER_LOCK=1
+  # Merge-gate review provider requires a strict explicit GitHub target in CI
+  # because e2e repos are often local file:// remotes.
+  export INVOKER_GITHUB_TARGET_REPO="${INVOKER_GITHUB_TARGET_REPO:-Neko-Catpital-Labs/Invoker}"
   # Isolate each e2e run from other local Invoker instances/tests to avoid API port collisions.
   export INVOKER_API_PORT="${INVOKER_API_PORT:-$((4300 + (RANDOM % 1000)))}"
   export INVOKER_DB_DIR="$(mktemp -d "${TMPDIR:-/tmp}/invoker-e2e-db.XXXXXX")"
