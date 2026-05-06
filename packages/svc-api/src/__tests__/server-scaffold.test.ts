@@ -4,7 +4,7 @@ import { request } from 'node:http';
 import { createApiServer, startServer } from '../server.js';
 
 /** Send a GET request to a running server and return { statusCode, body }. */
-function httpGet(server: Server): Promise<{ statusCode: number; body: string }> {
+function httpGet(server: Server, path = '/health'): Promise<{ statusCode: number; body: string }> {
   const addr = server.address();
   if (!addr || typeof addr === 'string') {
     throw new Error('server not listening on a TCP address');
@@ -12,7 +12,7 @@ function httpGet(server: Server): Promise<{ statusCode: number; body: string }> 
 
   return new Promise((resolve, reject) => {
     const req = request(
-      { hostname: '127.0.0.1', port: addr.port, method: 'GET', path: '/' },
+      { hostname: '127.0.0.1', port: addr.port, method: 'GET', path },
       (res) => {
         const chunks: Buffer[] = [];
         res.on('data', (chunk) => chunks.push(chunk));
