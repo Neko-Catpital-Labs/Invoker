@@ -200,6 +200,23 @@ function isValidEnvelope(v: unknown): v is Envelope {
 }
 
 // ---------------------------------------------------------------------------
+// Subscriber-error observability
+// ---------------------------------------------------------------------------
+
+/** Structured event emitted when a subscriber handler throws. */
+export interface SubscriberErrorEvent {
+  /** ISO-8601 timestamp of the error. */
+  timestamp: string;
+  /** Channel the handler was subscribed to. */
+  channel: string;
+  /** Error message (no payload data to avoid leakage). */
+  error: string;
+}
+
+/** Callback signature for subscriber-error observers. */
+export type SubscriberErrorObserver = (event: SubscriberErrorEvent) => void;
+
+// ---------------------------------------------------------------------------
 // Default socket path
 // ---------------------------------------------------------------------------
 
@@ -217,6 +234,8 @@ export interface IpcBusOptions {
   /** Optional callback invoked when a malformed frame is received.
    *  Rate-limited to at most one call per {@link MALFORMED_FRAME_RATE_LIMIT_MS}. */
   onMalformedFrame?: MalformedFrameObserver;
+  /** Optional callback invoked when a subscriber handler throws. */
+  onSubscriberError?: SubscriberErrorObserver;
 }
 
 // ---------------------------------------------------------------------------
@@ -228,6 +247,7 @@ export class IpcBus implements MessageBus {
   private readonly allowServe: boolean;
   private readonly requestDeadlineMs: number;
   private readonly onMalformedFrame: MalformedFrameObserver | undefined;
+  private readonly onSubscriberError: SubscriberErrorObserver | undefined;
 
   // Local handler registries (same structure as LocalBus).
   private subscribers = new Map<string, Set<MessageHandler>>();
@@ -259,6 +279,7 @@ export class IpcBus implements MessageBus {
     this.allowServe = options.allowServe ?? true;
     this.requestDeadlineMs = options.requestDeadlineMs ?? DEFAULT_REQUEST_DEADLINE_MS;
     this.onMalformedFrame = options.onMalformedFrame;
+    this.onSubscriberError = options.onSubscriberError;
     this.readyPromise = new Promise<void>((r) => {
       this.resolveReady = r;
     });
@@ -416,10 +437,25 @@ export class IpcBus implements MessageBus {
     for (const handler of handlers) {
       try {
         handler(body);
-      } catch {
+      } catch (e) {
         // Swallow handler errors — same behaviour as LocalBus.
+        this.reportSubscriberError(
+          channel,
+          e instanceof Error ? e.message : String(e),
+        );
       }
     }
+  }
+
+  /** Emit a structured subscriber-error event for each thrown handler. */
+  private reportSubscriberError(channel: string, error: string): void {
+    if (!this.onSubscriberError) return;
+    const now = Date.now();
+    this.onSubscriberError({
+      timestamp: new Date(now).toISOString(),
+      channel,
+      error,
+    });
   }
 
   private async handleRequest(env: ReqEnvelope, source: Socket): Promise<void> {
