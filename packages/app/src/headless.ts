@@ -12,6 +12,7 @@
 import type { BundledSkillsInstallMode, BundledSkillsStatus, Logger } from '@invoker/contracts';
 import { makeEnvelope } from '@invoker/contracts';
 import type { AgentSessionData } from '@invoker/contracts';
+import { OrchestratorErrorCode } from '@invoker/workflow-core';
 import type { Orchestrator, CommandService, TaskDelta, TaskState } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import { createDeleteAllSnapshot } from './delete-all-snapshot.js';
@@ -1656,6 +1657,13 @@ async function headlessRetryWorkflow(workflowId: string, deps: HeadlessDeps): Pr
   autoFix.unsubscribe();
 }
 
+/** Orchestrator error codes that preemption treats as benign (cancel is best-effort). */
+const preemptSkipCodes: ReadonlySet<string> = new Set([
+  OrchestratorErrorCode.TASK_NOT_FOUND,
+  OrchestratorErrorCode.TASK_ALREADY_TERMINAL,
+  OrchestratorErrorCode.WORKFLOW_NOT_FOUND,
+]);
+
 async function preemptTaskSubgraph(taskId: string, deps: HeadlessDeps): Promise<void> {
   if (deps.preemptTaskSubgraph) {
     await deps.preemptTaskSubgraph(taskId);
@@ -1665,7 +1673,7 @@ async function preemptTaskSubgraph(taskId: string, deps: HeadlessDeps): Promise<
   const envelope = makeEnvelope('cancel-task', 'headless', 'task', { taskId });
   const result = await deps.commandService.cancelTask(envelope);
   if (!result.ok) {
-    if (result.error.code === 'CANCEL_TASK_FAILED') return;
+    if (preemptSkipCodes.has(result.error.code)) return;
     throw new Error(result.error.message);
   }
 }
@@ -1680,7 +1688,7 @@ async function preemptWorkflowExecution(workflowId: string, deps: HeadlessDeps):
   const envelope = makeEnvelope('cancel-workflow', 'headless', 'workflow', { workflowId });
   const result = await deps.commandService.cancelWorkflow(envelope);
   if (!result.ok) {
-    if (result.error.code === 'CANCEL_WORKFLOW_FAILED') return { cancelled: [], runningCancelled: [] };
+    if (preemptSkipCodes.has(result.error.code)) return { cancelled: [], runningCancelled: [] };
     throw new Error(result.error.message);
   }
   return result.data;
