@@ -106,6 +106,7 @@ export interface TaskState {
   readonly createdAt: Date;
   readonly config: TaskConfig;
   readonly execution: TaskExecution;
+  readonly taskStateVersion: number;
 }
 
 export interface ExperimentVariant {
@@ -135,8 +136,8 @@ export interface TaskStateChanges {
 
 export type TaskDelta =
   | { readonly type: 'created'; readonly task: TaskState }
-  | { readonly type: 'updated'; readonly taskId: string; readonly changes: TaskStateChanges }
-  | { readonly type: 'removed'; readonly taskId: string };
+  | { readonly type: 'updated'; readonly taskId: string; readonly changes: TaskStateChanges; readonly taskStateVersion: number; readonly previousTaskStateVersion: number }
+  | { readonly type: 'removed'; readonly taskId: string; readonly previousTaskStateVersion: number };
 
 // ── Task Create Options (alias for TaskConfig) ──────────────
 
@@ -158,6 +159,7 @@ export function createTaskState(
     createdAt: new Date(),
     config: { ...options },
     execution: { generation: 0 },
+    taskStateVersion: 1,
   };
 }
 
