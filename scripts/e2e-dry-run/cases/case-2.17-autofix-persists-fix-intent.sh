@@ -13,6 +13,7 @@ unset INVOKER_DB_DIR
 TMP_HOME="$(mktemp -d "${TMPDIR:-/tmp}/invoker-e2e-home.XXXXXX")"
 export HOME="$TMP_HOME"
 mkdir -p "$HOME/.invoker"
+git config --global --add safe.directory "$REPO_ROOT"
 export INVOKER_REPO_CONFIG_PATH="$(mktemp "${TMPDIR:-/tmp}/invoker-e2e-config.XXXXXX.json")"
 printf '{\n  "autoFixRetries": 1\n}\n' > "$INVOKER_REPO_CONFIG_PATH"
 

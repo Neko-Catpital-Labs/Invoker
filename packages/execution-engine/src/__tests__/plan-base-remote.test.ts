@@ -86,6 +86,14 @@ describe('plan-base-remote', () => {
     expect(resolved).toBe(upstreamHead);
   });
 
+  it('resolvePlanBaseRevision falls back to origin/HEAD when the requested branch is missing', async () => {
+    const runGit = runGitFactory(mirror);
+    const headCommit = (await runGit(['rev-parse', '--verify', 'origin/master^{commit}'])).trim();
+
+    const resolved = (await resolvePlanBaseRevision(runGit, 'main')).trim();
+    expect(resolved).toBe(headCommit);
+  });
+
   it('resolvePreferredTrackingRemote always returns origin', async () => {
     const runGit = runGitFactory(mirror);
     execSync(`git remote add upstream "${upstream}"`, { cwd: mirror });

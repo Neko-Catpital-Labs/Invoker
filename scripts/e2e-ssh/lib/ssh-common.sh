@@ -26,6 +26,10 @@ _INVOKER_E2E_SSH_TAG="invoker-e2e-ssh-$$"
 # Temp directory for SSH key pair and config.
 _INVOKER_E2E_SSH_TMPDIR=""
 
+# SSH login user and passwd-backed home directory used by sshd.
+_INVOKER_E2E_SSH_USER=""
+_INVOKER_E2E_SSH_HOME=""
+
 # --------------------------------------------------------------------------- #
 # Test if sshd is listening on localhost port 22 (3s timeout).
 # Only checks TCP reachability — auth is tested later after key setup.
@@ -35,24 +39,44 @@ invoker_e2e_ssh_available() {
   timeout 3 bash -c 'echo > /dev/tcp/localhost/22' 2>/dev/null
 }
 
+invoker_e2e_ssh_resolve_home() {
+  local user="$1"
+  local resolved_home=""
+  if command -v getent >/dev/null 2>&1; then
+    resolved_home="$(getent passwd "$user" | cut -d: -f6)"
+  fi
+  if [ -z "$resolved_home" ]; then
+    resolved_home="$(eval "printf '%s' ~$user")"
+  fi
+  printf '%s\n' "$resolved_home"
+}
+
 # --------------------------------------------------------------------------- #
 # Generate temp ed25519 key pair, add public key to authorized_keys.
 # --------------------------------------------------------------------------- #
 invoker_e2e_ssh_setup_keys() {
   _INVOKER_E2E_SSH_TMPDIR="$(mktemp -d "${TMPDIR:-/tmp}/invoker-e2e-ssh.XXXXXX")"
   local keyfile="$_INVOKER_E2E_SSH_TMPDIR/id_ed25519"
+  _INVOKER_E2E_SSH_USER="$(whoami)"
+  _INVOKER_E2E_SSH_HOME="$(invoker_e2e_ssh_resolve_home "$_INVOKER_E2E_SSH_USER")"
+
+  if [ -z "$_INVOKER_E2E_SSH_HOME" ]; then
+    echo "ERROR: unable to resolve passwd home for SSH user '$_INVOKER_E2E_SSH_USER'." >&2
+    return 1
+  fi
 
   # -C sets the comment field to our PID-tagged identifier for cleanup.
   ssh-keygen -t ed25519 -f "$keyfile" -N "" -C "$_INVOKER_E2E_SSH_TAG" -q
 
-  # Ensure ~/.ssh/authorized_keys exists with correct permissions.
-  mkdir -p ~/.ssh
-  chmod 700 ~/.ssh
-  touch ~/.ssh/authorized_keys
-  chmod 600 ~/.ssh/authorized_keys
+  # sshd reads authorized_keys from the account's passwd home, which may differ
+  # from $HOME inside CI containers.
+  mkdir -p "$_INVOKER_E2E_SSH_HOME/.ssh"
+  chmod 700 "$_INVOKER_E2E_SSH_HOME/.ssh"
+  touch "$_INVOKER_E2E_SSH_HOME/.ssh/authorized_keys"
+  chmod 600 "$_INVOKER_E2E_SSH_HOME/.ssh/authorized_keys"
 
   # Append public key (comment already contains tag).
-  cat "${keyfile}.pub" >> ~/.ssh/authorized_keys
+  cat "${keyfile}.pub" >> "$_INVOKER_E2E_SSH_HOME/.ssh/authorized_keys"
 
   export INVOKER_E2E_SSH_KEY="$keyfile"
 }
@@ -61,10 +85,11 @@ invoker_e2e_ssh_setup_keys() {
 # Remove temp key from authorized_keys, delete temp dir.
 # --------------------------------------------------------------------------- #
 invoker_e2e_ssh_cleanup_keys() {
-  if [ -n "${_INVOKER_E2E_SSH_TAG:-}" ] && [ -f ~/.ssh/authorized_keys ]; then
-    grep -v "$_INVOKER_E2E_SSH_TAG" ~/.ssh/authorized_keys > ~/.ssh/authorized_keys.tmp || true
-    mv ~/.ssh/authorized_keys.tmp ~/.ssh/authorized_keys
-    chmod 600 ~/.ssh/authorized_keys
+  local authorized_keys="${_INVOKER_E2E_SSH_HOME:-}/.ssh/authorized_keys"
+  if [ -n "${_INVOKER_E2E_SSH_TAG:-}" ] && [ -f "$authorized_keys" ]; then
+    grep -v "$_INVOKER_E2E_SSH_TAG" "$authorized_keys" > "${authorized_keys}.tmp" || true
+    mv "${authorized_keys}.tmp" "$authorized_keys"
+    chmod 600 "$authorized_keys"
   fi
   rm -rf "${_INVOKER_E2E_SSH_TMPDIR:-}" 2>/dev/null || true
 }
@@ -74,8 +99,6 @@ invoker_e2e_ssh_cleanup_keys() {
 # --------------------------------------------------------------------------- #
 invoker_e2e_ssh_write_config() {
   local config_file="$_INVOKER_E2E_SSH_TMPDIR/invoker-config.json"
-  local current_user
-  current_user="$(whoami)"
   local remote_home
   local provision_cmd
   remote_home="$_INVOKER_E2E_SSH_TMPDIR/remote-invoker-home"
@@ -86,7 +109,7 @@ invoker_e2e_ssh_write_config() {
   "remoteTargets": {
     "localhost-e2e": {
       "host": "localhost",
-      "user": "$current_user",
+      "user": "$_INVOKER_E2E_SSH_USER",
       "sshKeyPath": "$INVOKER_E2E_SSH_KEY",
       "port": 22,
       "managedWorkspaces": true,
@@ -113,7 +136,7 @@ invoker_e2e_ssh_init() {
            -o ConnectTimeout=5 \
            -o StrictHostKeyChecking=no \
            -i "$INVOKER_E2E_SSH_KEY" \
-           "$(whoami)@localhost" true 2>/dev/null; then
+           "$_INVOKER_E2E_SSH_USER@localhost" true 2>/dev/null; then
     echo "ERROR: SSH to localhost with generated key failed. Aborting." >&2
     invoker_e2e_ssh_cleanup_keys
     return 1
@@ -124,7 +147,7 @@ invoker_e2e_ssh_init() {
            -o ConnectTimeout=5 \
            -o StrictHostKeyChecking=no \
            -i "$INVOKER_E2E_SSH_KEY" \
-           "$(whoami)@localhost" "env PATH='$PATH' pnpm --version" >/dev/null 2>&1; then
+           "$_INVOKER_E2E_SSH_USER@localhost" "env PATH='$PATH' pnpm --version" >/dev/null 2>&1; then
     echo "ERROR: 'pnpm' not found in non-interactive SSH session PATH." >&2
     invoker_e2e_ssh_cleanup_keys
     return 1
