@@ -16,7 +16,6 @@ permissions:
 env:
   CI: true
   NODE_VERSION: '22'
-  PLAYWRIGHT_CONTAINER_IMAGE: mcr.microsoft.com/playwright:v1.58.2-noble
 
 jobs:
   build-artifacts:
@@ -156,7 +155,7 @@ jobs:
     needs: build-artifacts
     runs-on: ubuntu-latest
     container:
-      image: ${{ env.PLAYWRIGHT_CONTAINER_IMAGE }}
+      image: mcr.microsoft.com/playwright:v1.58.2-noble
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -214,7 +213,7 @@ jobs:
     needs: build-artifacts
     runs-on: ubuntu-latest
     container:
-      image: ${{ env.PLAYWRIGHT_CONTAINER_IMAGE }}
+      image: mcr.microsoft.com/playwright:v1.58.2-noble
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -283,7 +282,7 @@ jobs:
     needs: build-artifacts
     runs-on: ubuntu-latest
     container:
-      image: ${{ env.PLAYWRIGHT_CONTAINER_IMAGE }}
+      image: mcr.microsoft.com/playwright:v1.58.2-noble
     timeout-minutes: 60
     strategy:
       fail-fast: false

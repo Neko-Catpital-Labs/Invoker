@@ -490,12 +490,16 @@ echo ${payloadB64} | base64 -d | bash -se
   ): Promise<{ commitHash?: string; error?: string }> {
     const msgChanges = this.buildCommitMessage(request);
     const msgEmpty = this.buildResultCommitMessage(request, commandExitCode);
+    const gitUserName = process.env.GIT_AUTHOR_NAME ?? process.env.GIT_COMMITTER_NAME ?? 'Invoker Bot';
+    const gitUserEmail = process.env.GIT_AUTHOR_EMAIL ?? process.env.GIT_COMMITTER_EMAIL ?? 'invoker@local';
 
     const recordScript = buildRecordAndPushScript({
       worktreePath,
       branch,
       commitMessageChanges: msgChanges,
       commitMessageEmpty: msgEmpty,
+      gitUserName,
+      gitUserEmail,
     });
 
     try {

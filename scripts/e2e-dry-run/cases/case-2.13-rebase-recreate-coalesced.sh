@@ -41,7 +41,21 @@ generation_for_workflow() {
   local wf_id="$1"
   invoker_e2e_run_headless query workflows --output jsonl \
     | grep '^{' \
-    | jq -sr --arg wf "$wf_id" '.[] | select(.id==$wf) | .generation'
+    | python3 -c '
+import json
+import sys
+
+wf_id = sys.argv[1]
+generation = ""
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    row = json.loads(line)
+    if row.get("id") == wf_id:
+        generation = str(row.get("generation", ""))
+print(generation)
+' "$wf_id"
 }
 
 GEN_BEFORE="$(generation_for_workflow "$WF_ID")"
