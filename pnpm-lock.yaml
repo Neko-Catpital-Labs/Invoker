@@ -463,6 +463,18 @@ importers:
         specifier: ^3.0.0
         version: 3.2.4(@types/debug@4.1.13)(@types/node@25.3.3)(jiti@1.21.7)(jsdom@25.0.1)(yaml@2.8.2)
 
+  packages/web-app:
+    devDependencies:
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+      vite:
+        specifier: ^6.0.0
+        version: 6.4.1(@types/node@25.3.3)(jiti@2.6.1)(yaml@2.8.2)
+      vitest:
+        specifier: ^3.0.0
+        version: 3.2.4(@types/debug@4.1.13)(@types/node@25.3.3)(jiti@2.6.1)(jsdom@25.0.1)(yaml@2.8.2)
+
   packages/workflow-core:
     dependencies:
       '@invoker/contracts':
