@@ -25,6 +25,9 @@ describe('headless→owner delegation', () => {
       ),
       listWorkflows: () => [{ id: 'wf-1' } as any, { id: 'wf-123' } as any],
       loadTasks: (workflowId) => {
+        if (workflowId === 'wf-1') {
+          return [{ id: '__merge__wf-1' }] as any;
+        }
         if (workflowId === 'wf-123') {
           return [{ id: 'wf-123/task-1' }] as any;
         }
