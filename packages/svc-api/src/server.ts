@@ -3,6 +3,20 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 export interface ServerOptions {
   port: number;
   host?: string;
+
+  /**
+   * When `true`, the dormant bridge hook fires after the server starts
+   * listening. Defaults to `false` — active behavior is unchanged.
+   */
+  enableDormantBridge?: boolean;
+
+  /**
+   * Optional callback invoked only when `enableDormantBridge` is `true`.
+   * Receives the running server instance for external wiring (e.g.
+   * attaching a runtime service bridge or cross-process relay).
+   * Ignored when `enableDormantBridge` is not `true`.
+   */
+  dormantBridgeHook?: (server: ReturnType<typeof createServer>) => void;
 }
 
 export type RequestHandler = (
@@ -53,6 +67,9 @@ export function startServer(
   return new Promise((resolve, reject) => {
     server.once('error', reject);
     server.listen(port, host, () => {
+      if (options.enableDormantBridge === true && options.dormantBridgeHook) {
+        options.dormantBridgeHook(server);
+      }
       resolve(server);
     });
   });
