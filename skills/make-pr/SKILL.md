@@ -2,7 +2,7 @@
 name: make-pr
 description: >
   Create or update a pull request in this repo using the preferred PR schema,
-  parent-remote branch workflow, and repo-specific publication rules. Trigger
+  upstream-first branch workflow, and repo-specific publication rules. Trigger
   when asked to make a PR, update a PR body, prepare PR text, or publish a
   stacked PR branch.
 ---
@@ -15,7 +15,7 @@ Use this skill when the work is already done and the user wants a PR created, up
 
 - PR title/body authoring for Invoker
 - The preferred PR section schema
-- Parent-remote branch/PR workflow (`origin` fork + `upstream` parent)
+- Upstream-first branch/PR workflow (explicit base and publish remotes)
 - Repo-specific publication rules:
   - Invoker-on-Invoker stacks may use `mergify stack push`
   - unrelated target repos should keep their own normal PR workflow unless they independently use Mergify Stacks
@@ -66,9 +66,9 @@ Do not default to a lightweight `## Summary / ## Testing / ## Notes` PR body. Th
 
 Preferred repo-local flow:
 
-1. Make sure the branch is based from the parent remote, not the fork.
+1. Make sure the branch is based from the canonical base remote.
    Reference: `docs/pr-branching-workflow.md`
-2. Push the working branch to `origin`.
+2. Push the working branch to the configured publish remote (typically `origin`).
 3. Start from the canonical template and validate it:
 
 ```bash
@@ -91,13 +91,14 @@ node scripts/create-pr.mjs --title "<title>" --base master --body-file /tmp/my-p
 
 This script handles local image path upload/injection when configured.
 
-## Parent-remote workflow
+## Upstream-first workflow
 
-Use the parent repository as the PR target and `origin` as the push remote.
+Use the canonical repository as the PR target and an explicit publish remote (typically `origin`) for branch publication.
 
-- Never push working branches to the parent remote.
-- Create branches from `upstream/<base>` (or the configured parent remote), not `origin/<base>`.
-- Open PRs against the parent repository base branch.
+- Do not depend on fork-sync scripts before PR creation.
+- Create branches from `<baseRemote>/<base>` (for example `origin/master` when `origin` is the canonical clone remote).
+- Push branches to the chosen publish remote.
+- Open PRs against the canonical repository base branch.
 
 Reference:
 
