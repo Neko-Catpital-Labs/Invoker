@@ -7,6 +7,7 @@
  */
 
 import type { TaskStateChanges } from '@invoker/workflow-core';
+import { resolveRepoRoot } from '@invoker/contracts';
 import { test as base, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test';
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
@@ -21,7 +22,7 @@ export type ElectronFixtures = {
   testDir: string;
 };
 
-const repoRoot = path.resolve(__dirname, '..', '..', '..', '..');
+const repoRoot = resolveRepoRoot(__dirname);
 
 export const test = base.extend<ElectronFixtures>({
   testDir: async ({}, use) => {

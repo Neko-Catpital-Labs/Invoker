@@ -10,14 +10,15 @@
  * Requires `cursor` CLI to be available on PATH (or set CURSOR_COMMAND).
  */
 
-import { resolve, dirname } from 'node:path';
+import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline';
 import { execSync } from 'node:child_process';
+import { resolveRepoRoot } from '@invoker/contracts';
 import { PlanConversation } from './slack/plan-conversation.js';
 
 const __dir = typeof __dirname !== 'undefined' ? __dirname : dirname(fileURLToPath(import.meta.url));
-const repoRoot = resolve(__dir, '../../..');
+const repoRoot = resolveRepoRoot(__dir);
 
 const log = (src: string, lvl: string, msg: string) => {
   const color = lvl === 'error' ? '\x1b[31m' : lvl === 'warn' ? '\x1b[33m' : '\x1b[2m';
