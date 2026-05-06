@@ -1,6 +1,13 @@
 import { createApiClient } from './api-client';
+import { featureFlags } from './feature-flags';
 
 export function init(app: HTMLElement = document.getElementById('app')!) {
+  if (featureFlags.AUTH_ENABLED) {
+    app.textContent = 'Auth: not implemented';
+    app.dataset.state = 'auth-placeholder';
+    return;
+  }
+
   app.textContent = 'Loading…';
   app.dataset.state = 'loading';
 
