@@ -51,7 +51,7 @@ cat > "$CONFIG_PATH" <<'EOF'
 }
 EOF
 
-ELECTRON_BIN="$ROOT_DIR/packages/app/node_modules/.bin/electron"
+ELECTRON_BIN="$ROOT_DIR/scripts/electron.cjs"
 MAIN_JS="$ROOT_DIR/packages/app/dist/main.js"
 
 env \

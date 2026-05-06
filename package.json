@@ -4,6 +4,7 @@
   "version": "0.0.1",
   "description": "Auditable multi-agent orchestration with a mutating action graph",
   "scripts": {
+    "postinstall": "node scripts/electron.cjs --ensure-only",
     "test": "bash scripts/test-plan-to-invoker-skill.sh && bash scripts/workspace-test.sh",
     "test:high-resource": "bash scripts/test-plan-to-invoker-skill.sh && INVOKER_VITEST_HIGH_RESOURCE=1 bash scripts/workspace-test.sh",
     "test:low-resource": "pnpm run test",
@@ -31,9 +32,10 @@
     "setup:agent-skills": "bash scripts/setup-agent-skills.sh",
     "dev": "pnpm --filter @invoker/ui build && pnpm --filter @invoker/app build && pnpm --filter @invoker/app start",
     "dev:hot": "concurrently \"pnpm --filter @invoker/ui dev\" \"sleep 3 && VITE_DEV_SERVER_URL=http://localhost:5173 pnpm --filter @invoker/app build && VITE_DEV_SERVER_URL=http://localhost:5173 pnpm --filter @invoker/app start\"",
+    "check:required-builds": "bash scripts/required-builds.sh",
     "check:deps": "depcruise packages --config .dependency-cruiser.js",
     "check:types": "tsc -p tsconfig.typecheck.json",
-    "check:all": "pnpm run check:deps && pnpm run check:types && bash scripts/check-owner-boundary.sh"
+    "check:all": "pnpm run check:deps && pnpm run check:types && pnpm run check:required-builds && bash scripts/check-owner-boundary.sh"
   },
   "engines": {
     "node": ">=22 <23"
