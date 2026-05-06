@@ -2,6 +2,7 @@
 
 export {
   createApiServer,
+  defaultHandler,
   startServer,
   type RequestHandler,
   type ServerOptions,
