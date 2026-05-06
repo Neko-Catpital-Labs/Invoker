@@ -64,6 +64,6 @@ tasks:
     dependencies: [fix-sidebar-transition, add-visual-proof-test]
 
   - id: verify-regression-suite
-    description: "Re-run UI unit tests as final regression gate"
-    command: "cd packages/ui && pnpm test 2>&1"
-    dependencies: [run-sidebar-unit-tests, capture-visual-proof]
+    description: "Run the full repository test suite as the final regression gate"
+    command: "pnpm run test:all"
+    dependencies: [add-visual-proof-test, fix-sidebar-transition, run-sidebar-unit-tests, capture-visual-proof]

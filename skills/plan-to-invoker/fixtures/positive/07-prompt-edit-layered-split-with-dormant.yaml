@@ -99,3 +99,17 @@ tasks:
       confirm no command-edit regressions. Ensure test naming and setup are
       deterministic so this workflow can be reviewed as the final proof layer.
     dependencies: [ui-prompt-editing-activation]
+
+  - id: final-regression
+    description: |
+      Run the full repository test suite as the terminal regression gate.
+      Layer: e2e_regression
+      Feature state: active
+      Files:
+      - none
+      Change types:
+      - none
+      Acceptance criteria:
+      - Ensure the full repository test suite passes after all prompt-edit slices land.
+    command: "pnpm run test:all"
+    dependencies: [prompt-edit-contact-surface, app-bridge-and-owner-delegation, ui-prompt-editing-activation, app-and-e2e-regressions]
