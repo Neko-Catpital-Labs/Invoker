@@ -281,16 +281,15 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
         try {
           await killRunningTask?.(taskId);
           const started = sharedRecreateTask(taskId, { orchestrator, persistence });
-          const runnable = started.filter(t => t.status === 'running');
-          await taskExecutor.executeTasks(runnable);
-          await executeGlobalTopup({
+          await finalizeMutationWithGlobalTopup({
             orchestrator,
             taskExecutor,
             logger: apiLogger,
             context: 'api.tasks.recreate',
-            alreadyDispatched: runnable,
+            started: started.filter(t => t.status === 'running'),
           });
-          json(res, 200, { ok: true, taskId, action: 'recreated', tasksStarted: runnable.length });
+          const tasksStarted = started.filter(t => t.status === 'running').length;
+          json(res, 200, { ok: true, taskId, action: 'recreated', tasksStarted });
         } catch (err) {
           json(res, 400, { error: err instanceof Error ? err.message : String(err) });
         }
@@ -411,14 +410,12 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
         const workflowId = decodeURIComponent((wfRecreateMatch ?? wfRestartMatch)![1]);
         try {
           const started = sharedRecreateWorkflow(workflowId, { persistence, orchestrator });
-          const runnable = started.filter(t => t.status === 'running');
-          await taskExecutor.executeTasks(runnable);
-          await executeGlobalTopup({
+          await finalizeMutationWithGlobalTopup({
             orchestrator,
             taskExecutor,
             logger: apiLogger,
             context: isLegacy ? 'api.workflows.restart' : 'api.workflows.recreate',
-            alreadyDispatched: runnable,
+            started: started.filter(t => t.status === 'running'),
           });
           if (isLegacy) {
             res.setHeader(
@@ -426,11 +423,12 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
               'true; reason="Use /api/workflows/:id/recreate"',
             );
           }
+          const tasksStarted = started.filter(t => t.status === 'running').length;
           json(res, 200, {
             ok: true,
             workflowId,
             action: isLegacy ? 'restarted' : 'recreated',
-            tasksStarted: runnable.length,
+            tasksStarted,
             ...(isLegacy ? { deprecated: true, replacement: '/api/workflows/:id/recreate' } : {}),
           });
         } catch (err) {
@@ -478,14 +476,12 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
             taskExecutor,
             logger: apiLogger,
           });
-          const runnable = started.filter(t => t.status === 'running');
-          await taskExecutor.executeTasks(runnable);
-          await executeGlobalTopup({
+          await finalizeMutationWithGlobalTopup({
             orchestrator,
             taskExecutor,
             logger: apiLogger,
             context: isLegacy ? 'api.workflows.rebase-and-retry' : 'api.workflows.recreate-with-rebase',
-            alreadyDispatched: runnable,
+            started: started.filter(t => t.status === 'running'),
           });
           if (isLegacy) {
             res.setHeader(
@@ -493,11 +489,12 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
               'true; reason="Use /api/workflows/:id/recreate-with-rebase"',
             );
           }
+          const tasksStarted = started.filter(t => t.status === 'running').length;
           json(res, 200, {
             ok: true,
             workflowId,
             action: isLegacy ? 'rebase_and_retried' : 'recreated_with_rebase',
-            tasksStarted: runnable.length,
+            tasksStarted,
             ...(isLegacy ? { deprecated: true, replacement: '/api/workflows/:id/recreate-with-rebase' } : {}),
           });
         } catch (err) {
