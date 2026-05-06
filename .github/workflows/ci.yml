@@ -16,7 +16,6 @@ permissions:
 env:
   CI: true
   NODE_VERSION: '22'
-  PLAYWRIGHT_CONTAINER_IMAGE: mcr.microsoft.com/playwright:v1.58.2-noble
 
 jobs:
   build-artifacts:
