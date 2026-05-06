@@ -68,7 +68,7 @@ import {
   SessionProbeAdapter,
   TerminalLauncherAdapter,
 } from '@invoker/runtime-adapters';
-import { composeRuntimeServices } from '@invoker/runtime-service';
+import { composeRuntimeServices, composeHeadlessStartup } from '@invoker/runtime-service';
 import type { RuntimeServices } from '@invoker/runtime-service';
 import type { MessageBus } from '@invoker/transport';
 import {
@@ -398,12 +398,17 @@ async function initServices(options?: InitServicesOptions): Promise<void> {
     }
   }
   // Compose runtime services from persistence-backed adapters.
-  runtimeServices = composeRuntimeServices({
+  // Headless startup routes through composeHeadlessStartup so the
+  // headless path has an explicit composition entry point.
+  const runtimeServiceDeps = {
     workspaceProbe: new WorkspaceProbeAdapter(persistence),
     containerProbe: new ContainerProbeAdapter(persistence),
     sessionProbe: new SessionProbeAdapter(persistence),
     terminalLauncher: new TerminalLauncherAdapter(),
-  });
+  };
+  runtimeServices = isHeadless
+    ? composeHeadlessStartup(runtimeServiceDeps)
+    : composeRuntimeServices(runtimeServiceDeps);
 
   executorRegistry = new ExecutorRegistry();
   executorRegistry.register(
@@ -739,6 +744,7 @@ if (isHeadless) {
         executionAgentRegistry: agentRegistry,
         getBundledSkillsStatus,
         installBundledSkills: installPackagedSkills,
+        runtimeServices,
       };
 
       const createStandaloneTaskExecutor = (): TaskRunner => {
