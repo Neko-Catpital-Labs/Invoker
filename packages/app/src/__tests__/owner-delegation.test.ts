@@ -94,9 +94,9 @@ describe('headless→owner delegation', () => {
   describe('successful delegation when owner is present', () => {
     it('delegates mutation command to owner via RPC', async () => {
       // Simulate owner process registering a handler
-      const ownerHandler = vi.fn(async (req: { args: string[] }) => {
+      const ownerHandler = vi.fn(async (_req: { args: string[] }) => {
         // Owner successfully executed the command
-        return { success: true, workflowId: 'wf-test' };
+        return { ok: true };
       });
 
       messageBus.onRequest('headless.exec', ownerHandler);
@@ -114,7 +114,7 @@ describe('headless→owner delegation', () => {
     });
 
     it('delegates with waitForApproval flag', async () => {
-      const ownerHandler = vi.fn(async () => ({ success: true }));
+      const ownerHandler = vi.fn(async () => ({ ok: true }));
       messageBus.onRequest('headless.exec', ownerHandler);
 
       await tryDelegateExec(['approve', 'task-1'], messageBus, true);
@@ -126,7 +126,7 @@ describe('headless→owner delegation', () => {
     });
 
     it('delegates retry-task command to owner', async () => {
-      const ownerHandler = vi.fn(async () => ({ success: true }));
+      const ownerHandler = vi.fn(async () => ({ ok: true }));
       messageBus.onRequest('headless.exec', ownerHandler);
 
       const outcome = await tryDelegateExec(['retry-task', 'wf-1/task-1'], messageBus);
@@ -139,7 +139,7 @@ describe('headless→owner delegation', () => {
     });
 
     it('delegates resume command to owner', async () => {
-      const ownerHandler = vi.fn(async () => ({ success: true }));
+      const ownerHandler = vi.fn(async () => ({ ok: true }));
       messageBus.onRequest('headless.exec', ownerHandler);
 
       const outcome = await tryDelegateExec(['resume', 'wf-1'], messageBus);
@@ -152,7 +152,7 @@ describe('headless→owner delegation', () => {
     });
 
     it('delegates approve command to owner', async () => {
-      const ownerHandler = vi.fn(async () => ({ success: true }));
+      const ownerHandler = vi.fn(async () => ({ ok: true }));
       messageBus.onRequest('headless.exec', ownerHandler);
 
       const outcome = await tryDelegateExec(['approve', 'wf-1/task-1'], messageBus);
@@ -165,7 +165,7 @@ describe('headless→owner delegation', () => {
     });
 
     it('delegates reject command to owner', async () => {
-      const ownerHandler = vi.fn(async () => ({ success: true }));
+      const ownerHandler = vi.fn(async () => ({ ok: true }));
       messageBus.onRequest('headless.exec', ownerHandler);
 
       const outcome = await tryDelegateExec(['reject', 'wf-1/task-1', 'reason text'], messageBus);
@@ -178,7 +178,7 @@ describe('headless→owner delegation', () => {
     });
 
     it('delegates set command to owner', async () => {
-      const ownerHandler = vi.fn(async () => ({ success: true }));
+      const ownerHandler = vi.fn(async () => ({ ok: true }));
       messageBus.onRequest('headless.exec', ownerHandler);
 
       const outcome = await tryDelegateExec(
@@ -194,7 +194,7 @@ describe('headless→owner delegation', () => {
     });
 
     it('delegates set prompt to owner (prompt-edit bridge)', async () => {
-      const ownerHandler = vi.fn(async () => ({ success: true }));
+      const ownerHandler = vi.fn(async () => ({ ok: true }));
       messageBus.onRequest('headless.exec', ownerHandler);
 
       const outcome = await tryDelegateExec(
@@ -210,7 +210,7 @@ describe('headless→owner delegation', () => {
     });
 
     it('delegates rebase with noTrack so owner can return before workflow settlement', async () => {
-      const ownerHandler = vi.fn(async () => ({ success: true }));
+      const ownerHandler = vi.fn(async () => ({ ok: true }));
       messageBus.onRequest('headless.exec', ownerHandler);
 
       const outcome = await tryDelegateExec(
@@ -229,7 +229,7 @@ describe('headless→owner delegation', () => {
     });
 
     it('delegates recreate-with-rebase command to owner', async () => {
-      const ownerHandler = vi.fn(async () => ({ success: true }));
+      const ownerHandler = vi.fn(async () => ({ ok: true }));
       messageBus.onRequest('headless.exec', ownerHandler);
 
       const outcome = await tryDelegateExec(
@@ -359,7 +359,7 @@ describe('headless→owner delegation', () => {
 
   describe('deterministic delegation behavior', () => {
     it('always delegates when owner is available (no race conditions)', async () => {
-      const ownerHandler = vi.fn(async () => ({ success: true }));
+      const ownerHandler = vi.fn(async () => ({ ok: true }));
       messageBus.onRequest('headless.exec', ownerHandler);
 
       // Run multiple delegations in sequence
@@ -431,6 +431,111 @@ describe('headless→owner delegation', () => {
       expect(outcome.kind).toBe('delegated');
       if (outcome.kind === 'delegated') {
         expect(outcome.workflowId).toBe('wf-existing');
+        expect(outcome.tasks).toHaveLength(1);
+      }
+    });
+  });
+
+  describe('protocol-error on malformed owner responses', () => {
+    it('returns protocol-error when owner returns null', async () => {
+      messageBus.onRequest('headless.exec', async () => null);
+
+      const outcome = await tryDelegateExec(['approve', 'wf-1/task-1'], messageBus);
+      expect(outcome.kind).toBe('protocol-error');
+      if (outcome.kind === 'protocol-error') {
+        expect(outcome.message).toContain('null');
+      }
+    });
+
+    it('returns protocol-error when owner returns a string', async () => {
+      messageBus.onRequest('headless.exec', async () => 'unexpected-string');
+
+      const outcome = await tryDelegateExec(['approve', 'wf-1/task-1'], messageBus);
+      expect(outcome.kind).toBe('protocol-error');
+      if (outcome.kind === 'protocol-error') {
+        expect(outcome.message).toContain('string');
+      }
+    });
+
+    it('returns protocol-error when owner returns a number', async () => {
+      messageBus.onRequest('headless.exec', async () => 42);
+
+      const outcome = await tryDelegateExec(['approve', 'wf-1/task-1'], messageBus);
+      expect(outcome.kind).toBe('protocol-error');
+      if (outcome.kind === 'protocol-error') {
+        expect(outcome.message).toContain('number');
+      }
+    });
+
+    it('returns protocol-error when response has workflowId but tasks is not an array', async () => {
+      messageBus.onRequest('headless.run', async () => ({
+        workflowId: 'wf-test',
+        tasks: 'not-an-array',
+      }));
+
+      const outcome = await tryDelegateRun('/plan.yaml', messageBus, false, true);
+      expect(outcome.kind).toBe('protocol-error');
+      if (outcome.kind === 'protocol-error') {
+        expect(outcome.message).toContain('tasks');
+        expect(outcome.message).toContain('expected array');
+      }
+    });
+
+    it('returns protocol-error when response has workflowId but tasks is missing', async () => {
+      messageBus.onRequest('headless.run', async () => ({
+        workflowId: 'wf-test',
+      }));
+
+      const outcome = await tryDelegateRun('/plan.yaml', messageBus, false, true);
+      expect(outcome.kind).toBe('protocol-error');
+      if (outcome.kind === 'protocol-error') {
+        expect(outcome.message).toContain('tasks');
+      }
+    });
+
+    it('returns protocol-error when response has neither workflowId nor ok', async () => {
+      messageBus.onRequest('headless.exec', async () => ({
+        success: true,
+        someOtherField: 123,
+      }));
+
+      const outcome = await tryDelegateExec(['approve', 'wf-1/task-1'], messageBus);
+      expect(outcome.kind).toBe('protocol-error');
+      if (outcome.kind === 'protocol-error') {
+        expect(outcome.message).toContain('neither workflowId');
+        expect(outcome.message).toContain('ok');
+      }
+    });
+
+    it('returns protocol-error when workflowId is a number instead of string', async () => {
+      messageBus.onRequest('headless.run', async () => ({
+        workflowId: 12345,
+        tasks: [],
+      }));
+
+      const outcome = await tryDelegateRun('/plan.yaml', messageBus, false, true);
+      // workflowId is not a string, so it doesn't match the workflow shape.
+      // And ok is not true, so it fails the fallback check too.
+      expect(outcome.kind).toBe('protocol-error');
+    });
+
+    it('accepts valid { ok: true } response as delegated', async () => {
+      messageBus.onRequest('headless.exec', async () => ({ ok: true }));
+
+      const outcome = await tryDelegateExec(['approve', 'wf-1/task-1'], messageBus);
+      expect(outcome.kind).toBe('delegated');
+    });
+
+    it('accepts valid workflow response as delegated', async () => {
+      messageBus.onRequest('headless.run', async () => ({
+        workflowId: 'wf-valid',
+        tasks: [{ id: 'wf-valid/t1', status: 'running' }],
+      }));
+
+      const outcome = await tryDelegateRun('/plan.yaml', messageBus, false, true);
+      expect(outcome.kind).toBe('delegated');
+      if (outcome.kind === 'delegated') {
+        expect(outcome.workflowId).toBe('wf-valid');
         expect(outcome.tasks).toHaveLength(1);
       }
     });
