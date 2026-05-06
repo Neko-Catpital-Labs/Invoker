@@ -1,18 +1,29 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Create a PR branch rooted at parent remote + base branch and optionally cherry-pick commits.
+# Create a PR branch rooted at base remote + base branch and optionally cherry-pick commits.
 # Usage:
-#   bash scripts/create-clean-pr-branch.sh [--parent-remote <name>] [--base-ref <branch>] <branch-name> [commit ...]
+#   bash scripts/create-clean-pr-branch.sh [--base-remote <name>] [--publish-remote <name>] [--base-ref <branch>] <branch-name> [commit ...]
 
-PARENT_REMOTE="upstream"
+BASE_REMOTE="origin"
+PUBLISH_REMOTE="origin"
 BASE_REF="master"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --base-remote)
+      [[ $# -ge 2 ]] || { echo "--base-remote requires a value" >&2; exit 2; }
+      BASE_REMOTE="$2"
+      shift 2
+      ;;
+    --publish-remote)
+      [[ $# -ge 2 ]] || { echo "--publish-remote requires a value" >&2; exit 2; }
+      PUBLISH_REMOTE="$2"
+      shift 2
+      ;;
     --parent-remote)
       [[ $# -ge 2 ]] || { echo "--parent-remote requires a value" >&2; exit 2; }
-      PARENT_REMOTE="$2"
+      BASE_REMOTE="$2"
       shift 2
       ;;
     --base-ref)
@@ -21,7 +32,8 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     --help|-h)
-      echo "Usage: $0 [--parent-remote <name>] [--base-ref <branch>] <branch-name> [commit ...]" >&2
+      echo "Usage: $0 [--base-remote <name>] [--publish-remote <name>] [--base-ref <branch>] <branch-name> [commit ...]" >&2
+      echo "Compatibility alias: --parent-remote <name> (maps to --base-remote)." >&2
       exit 0
       ;;
     --*)
@@ -35,7 +47,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ $# -lt 1 ]]; then
-  echo "Usage: $0 [--parent-remote <name>] [--base-ref <branch>] <branch-name> [commit ...]" >&2
+  echo "Usage: $0 [--base-remote <name>] [--publish-remote <name>] [--base-ref <branch>] <branch-name> [commit ...]" >&2
   exit 2
 fi
 
@@ -47,24 +59,24 @@ if git show-ref --verify --quiet "refs/heads/${BRANCH_NAME}"; then
   exit 1
 fi
 
-if ! git remote get-url "${PARENT_REMOTE}" >/dev/null 2>&1; then
-  echo "Missing parent remote '${PARENT_REMOTE}'." >&2
+if ! git remote get-url "${BASE_REMOTE}" >/dev/null 2>&1; then
+  echo "Missing base remote '${BASE_REMOTE}'." >&2
   echo "Add it first (example):" >&2
-  echo "  git remote add ${PARENT_REMOTE} <parent-repo-url>" >&2
+  echo "  git remote add ${BASE_REMOTE} <repo-url>" >&2
   exit 1
 fi
 
-if ! git remote get-url origin >/dev/null 2>&1; then
-  echo "Missing remote 'origin'." >&2
+if ! git remote get-url "${PUBLISH_REMOTE}" >/dev/null 2>&1; then
+  echo "Missing publish remote '${PUBLISH_REMOTE}'." >&2
   exit 1
 fi
 
 echo "==> Fetching remotes"
-git fetch "${PARENT_REMOTE}" "${BASE_REF}" --prune
-git fetch origin --prune
+git fetch "${BASE_REMOTE}" "${BASE_REF}" --prune
+git fetch "${PUBLISH_REMOTE}" --prune
 
-echo "==> Creating branch ${BRANCH_NAME} from ${PARENT_REMOTE}/${BASE_REF}"
-git switch -c "${BRANCH_NAME}" "${PARENT_REMOTE}/${BASE_REF}"
+echo "==> Creating branch ${BRANCH_NAME} from ${BASE_REMOTE}/${BASE_REF}"
+git switch -c "${BRANCH_NAME}" "${BASE_REMOTE}/${BASE_REF}"
 
 if [[ $# -gt 0 ]]; then
   echo "==> Cherry-picking commits"
@@ -74,7 +86,7 @@ fi
 echo ""
 echo "Branch ready: ${BRANCH_NAME}"
 echo "Next:"
-echo "  git push -u origin ${BRANCH_NAME}"
+echo "  git push -u ${PUBLISH_REMOTE} ${BRANCH_NAME}"
 echo "  cp scripts/pr-body-template.md /tmp/my-pr.md"
 echo "  \$EDITOR /tmp/my-pr.md"
 echo "  node scripts/validate-pr-body.mjs --body-file /tmp/my-pr.md"
