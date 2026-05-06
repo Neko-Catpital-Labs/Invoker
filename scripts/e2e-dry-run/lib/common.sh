@@ -25,11 +25,21 @@ invoker_e2e_ensure_branch_aliases() {
     head_sha="$(git rev-parse HEAD 2>/dev/null || true)"
     [ -n "$head_sha" ] || return 0
 
+    # GitHub Actions PR checkouts can be detached and omit both main/master refs.
+    # The dry-run plans clone this checkout via file:// and expect a resolvable base.
+    if ! git show-ref --verify --quiet refs/heads/main && ! git show-ref --verify --quiet refs/heads/master; then
+      git update-ref refs/heads/main "$head_sha" >/dev/null 2>&1 || true
+      git update-ref refs/heads/master "$head_sha" >/dev/null 2>&1 || true
+    fi
     if git show-ref --verify --quiet refs/heads/master && ! git show-ref --verify --quiet refs/heads/main; then
       git update-ref refs/heads/main "$head_sha" >/dev/null 2>&1 || true
     fi
     if git show-ref --verify --quiet refs/heads/main && ! git show-ref --verify --quiet refs/heads/master; then
       git update-ref refs/heads/master "$head_sha" >/dev/null 2>&1 || true
+    fi
+    if ! git show-ref --verify --quiet refs/remotes/origin/main && ! git show-ref --verify --quiet refs/remotes/origin/master; then
+      git update-ref refs/remotes/origin/main "$head_sha" >/dev/null 2>&1 || true
+      git update-ref refs/remotes/origin/master "$head_sha" >/dev/null 2>&1 || true
     fi
     if git show-ref --verify --quiet refs/remotes/origin/master && ! git show-ref --verify --quiet refs/remotes/origin/main; then
       git update-ref refs/remotes/origin/main refs/remotes/origin/master >/dev/null 2>&1 || true
