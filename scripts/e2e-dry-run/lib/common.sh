@@ -50,6 +50,13 @@ invoker_e2e_ensure_branch_aliases() {
   )
 }
 
+invoker_e2e_allow_repo_git_ops() {
+  (
+    cd "$INVOKER_E2E_REPO_ROOT"
+    git config --global --add safe.directory "$INVOKER_E2E_REPO_ROOT" >/dev/null 2>&1 || true
+  )
+}
+
 invoker_e2e_init() {
   # Preserve caller PATH so cleanup can fully restore shell state.
   if [ -z "${INVOKER_E2E_ORIGINAL_PATH:-}" ]; then
@@ -82,6 +89,8 @@ invoker_e2e_init() {
   ln -sf "$INVOKER_E2E_ROOT/fixtures/codex-marker.sh" "$stubdir/codex"
   chmod +x "$INVOKER_E2E_ROOT/fixtures/codex-marker.sh" 2>/dev/null || true
   export PATH="$stubdir:$PATH"
+  invoker_e2e_allow_repo_git_ops
+  invoker_e2e_ensure_branch_aliases
 }
 
 invoker_e2e_kill_owned_headless_processes() {
@@ -168,7 +177,6 @@ invoker_e2e_cleanup() {
 }
 
 invoker_e2e_ensure_app_built() {
-  invoker_e2e_ensure_branch_aliases
   local app_dist="$INVOKER_E2E_REPO_ROOT/packages/app/dist/main.js"
   local ui_dist="$INVOKER_E2E_REPO_ROOT/packages/ui/dist/index.html"
   local build_lock_dir="$INVOKER_E2E_REPO_ROOT/.git/invoker-e2e-build.lock"
