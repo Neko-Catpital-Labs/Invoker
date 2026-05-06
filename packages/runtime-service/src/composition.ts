@@ -14,6 +14,16 @@ import type {
   TerminalLauncher,
 } from '@invoker/runtime-domain';
 
+// ── Dormant bridge hook ──────────────────────────────────────
+
+/**
+ * Callback invoked when the dormant runtime bridge is enabled.
+ * Receives the composed services for external wiring (e.g. IPC,
+ * message bus, or cross-process relay). The hook is a no-op slot:
+ * the bridge is dormant unless the caller explicitly opts in.
+ */
+export type DormantBridgeHook = (services: RuntimeServices) => void;
+
 // ── Dependency slot ────────────────────────────────────────
 
 /** Ports that callers must supply to compose the runtime services. */
@@ -22,6 +32,18 @@ export interface RuntimeServiceDeps {
   containerProbe: ContainerProbe;
   sessionProbe: SessionProbe;
   terminalLauncher: TerminalLauncher;
+
+  /**
+   * When `true`, the dormant bridge hook fires after composition.
+   * Defaults to `false` — active behavior is unchanged.
+   */
+  enableDormantBridge?: boolean;
+
+  /**
+   * Optional callback invoked only when `enableDormantBridge` is `true`.
+   * Ignored otherwise.
+   */
+  dormantBridgeHook?: DormantBridgeHook;
 }
 
 // ── Public facade ──────────────────────────────────────────
@@ -45,12 +67,18 @@ export interface RuntimeServices {
 export function composeRuntimeServices(
   deps: RuntimeServiceDeps,
 ): RuntimeServices {
-  return Object.freeze({
+  const services = Object.freeze({
     workspaceProbe: deps.workspaceProbe,
     containerProbe: deps.containerProbe,
     sessionProbe: deps.sessionProbe,
     terminalLauncher: deps.terminalLauncher,
   });
+
+  if (deps.enableDormantBridge === true && deps.dormantBridgeHook) {
+    deps.dormantBridgeHook(services);
+  }
+
+  return services;
 }
 
 // ── Headless startup composition ──────────────────────────
