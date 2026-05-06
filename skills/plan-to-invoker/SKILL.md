@@ -14,7 +14,7 @@ Minimal controller skill. Keep policy short here; use deterministic scripts and 
 
 1. Discuss scope/risk with the user.
 2. Phase 1a static analysis.
-3. Runtime verification (Phase 1b): run `pnpm test`, plus Invoker headless when applicable.
+3. Runtime verification (Phase 1b): run targeted `pnpm test`, plus Invoker headless when applicable.
 4. Generate implementation YAML from verified facts.
 5. Validate with deterministic scripts.
 6. Present plan and submit on confirmation.
@@ -111,6 +111,7 @@ If `skill-doctor.sh` fails, run individual checks to isolate the problem:
 - Unit/package lane: `cd packages/<pkg> && pnpm test`
 - Invoker headless lane: run `./submit-plan.sh plans/verify-<slug>.yaml` when flow involves orchestrator/executor/persistence/headless behavior
 - Visual proof lane when UI changes apply
+- Implementation-plan final gate: the last task in any plan with `onFinish != none` must run `pnpm run test:all` from the repo root and depend on every earlier task
 
 When Invoker config enables heavyweight command routing, keep `pnpm ...` commands in the plan as normal command tasks unless a specific remote target must be declared explicitly. Runtime config may auto-route those commands to SSH.
 
