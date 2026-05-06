@@ -17,6 +17,7 @@ import type {
 import type { SQLiteAdapter } from '@invoker/data-store';
 import type { TaskRunner } from '@invoker/execution-engine';
 import { normalizeMergeModeForPersistence } from './merge-mode.js';
+import { createDeleteAllSnapshot } from './delete-all-snapshot.js';
 
 // ── Deps interfaces ──────────────────────────────────────────
 
@@ -160,6 +161,35 @@ export function cancelWorkflow(
   deps: Pick<ActionDeps, 'orchestrator'>,
 ): { cancelled: string[]; runningCancelled: string[] } {
   return deps.orchestrator.cancelWorkflow(workflowId);
+}
+
+/**
+ * Shared delete-all lifecycle bridge.
+ *
+ * Centralizes mutation ordering for the destructive delete-all
+ * operation so both main (GUI IPC) and headless (CLI) entrypoints
+ * share a single code path:
+ *
+ *   1. Create a DB snapshot (safety net — callers can abort on failure).
+ *   2. Delegate to `orchestrator.deleteAllWorkflows()` which handles
+ *      DB purge → scheduler kill → memory clear → removal deltas.
+ *
+ * Returns the snapshot path (or null when the DB file does not yet
+ * exist) so callers can log it through their own channel (stderr,
+ * structured logger, etc.).
+ */
+export function deleteAllWorkflows(
+  deps: Pick<ActionDeps, 'logger' | 'orchestrator'>,
+): { snapshotPath: string | null } {
+  const snapshotPath = createDeleteAllSnapshot();
+  deps.logger?.info(
+    snapshotPath
+      ? `delete-all-workflows snapshot: ${snapshotPath}`
+      : 'delete-all-workflows snapshot skipped: DB file does not exist yet',
+    { module: 'workflow' },
+  );
+  deps.orchestrator.deleteAllWorkflows();
+  return { snapshotPath };
 }
 
 /**
