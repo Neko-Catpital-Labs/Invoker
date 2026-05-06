@@ -12,18 +12,18 @@
 #   bash scripts/recreate-all.sh --follow              # wait for completion (default is fire-and-forget)
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-RUNNER="$REPO_ROOT/run.sh"
-ELECTRON="$REPO_ROOT/packages/app/node_modules/.bin/electron"
-MAIN="$REPO_ROOT/packages/app/dist/main.js"
-IPC_HELPER="$REPO_ROOT/scripts/headless-ipc.js"
-STANDALONE_MODE="${INVOKER_HEADLESS_STANDALONE:-0}"
+# shellcheck source=scripts/headless-lib.sh
+source "$(dirname "$0")/headless-lib.sh"
 
+# ---------------------------------------------------------------------------
 # Parse args
+# ---------------------------------------------------------------------------
+
 DRY_RUN=false
 STATUS_FILTER=""
 PARALLELISM=""
 FOLLOW=false
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dry-run) DRY_RUN=true; shift ;;
@@ -39,39 +39,10 @@ if [[ -n "$PARALLELISM" ]] && ! [[ "$PARALLELISM" =~ ^[1-9][0-9]*$ ]]; then
   exit 1
 fi
 
-# Electron sandbox detection
-unset ELECTRON_RUN_AS_NODE
-SANDBOX_FLAG=""
-if [ "$(uname)" = "Linux" ]; then
-  SANDBOX_BIN="$REPO_ROOT/node_modules/.pnpm/electron@*/node_modules/electron/dist/chrome-sandbox"
-  # shellcheck disable=SC2086
-  if ! stat -c '%U:%a' $SANDBOX_BIN 2>/dev/null | grep -q '^root:4755$'; then
-    SANDBOX_FLAG="--no-sandbox"
-  fi
-  export LIBGL_ALWAYS_SOFTWARE=1
-fi
+# ---------------------------------------------------------------------------
+# Query workflows
+# ---------------------------------------------------------------------------
 
-# Helper: read-only query command (stderr hidden to keep parsing clean)
-headless_query() {
-  # shellcheck disable=SC2086
-  "$ELECTRON" "$MAIN" $SANDBOX_FLAG --headless "$@" 2>/dev/null
-}
-
-# Helper: mutating command delegated to the current owner (GUI or standalone headless)
-headless_mutation() {
-  if [[ "$STANDALONE_MODE" = "1" ]]; then
-    "$RUNNER" --headless "$@"
-    return $?
-  fi
-  node "$IPC_HELPER" exec -- "$@"
-}
-
-# Helper: extract workflow IDs from label output.
-headless_workflow_ids() {
-  headless_query "$@" | grep -E '^wf-[0-9]+-[0-9]+$' || true
-}
-
-# Query workflow IDs via CLI
 QUERY_ARGS=(query workflows --output label)
 if [[ -n "$STATUS_FILTER" ]]; then
   QUERY_ARGS+=(--status "$STATUS_FILTER")
@@ -84,7 +55,6 @@ if [[ -z "$WORKFLOWS" ]]; then
   exit 0
 fi
 
-# Count workflows
 TOTAL=$(echo "$WORKFLOWS" | wc -l | tr -d ' ')
 if [[ -z "$PARALLELISM" ]]; then
   PARALLELISM="$TOTAL"
@@ -96,6 +66,10 @@ if ! $FOLLOW; then
   echo "Note: fire-and-forget dispatches all workflows immediately; --parallel is enforced with --follow."
 fi
 echo ""
+
+# ---------------------------------------------------------------------------
+# Dry-run
+# ---------------------------------------------------------------------------
 
 IDX=0
 FAILED=0
@@ -109,6 +83,11 @@ if $DRY_RUN; then
     echo "         (dry-run) would run: recreate $WF_ID"
     echo ""
   done <<< "$WORKFLOWS"
+
+# ---------------------------------------------------------------------------
+# Follow mode — background jobs with bounded parallelism
+# ---------------------------------------------------------------------------
+
 elif $FOLLOW; then
   RESULTS_FILE="$(mktemp -t recreate-all-results.XXXXXX)"
   PIDS=()
@@ -153,21 +132,17 @@ elif $FOLLOW; then
     wait "$pid" || true
   done
 
-  while IFS=$'\t' read -r _wf result; do
-    case "$result" in
-      SUCCEEDED) SUCCEEDED=$((SUCCEEDED + 1)) ;;
-      FAILED) FAILED=$((FAILED + 1)) ;;
-    esac
-  done < "$RESULTS_FILE"
-
+  read -r SUCCEEDED FAILED _ < <(count_results "$RESULTS_FILE")
   rm -f "$RESULTS_FILE"
+
+# ---------------------------------------------------------------------------
+# Fire-and-forget mode — batch dispatch
+# ---------------------------------------------------------------------------
+
 else
   LOG_DIR="$(mktemp -d -t recreate-all-logs.XXXXXX)"
-  DISPATCHED=0
-  LAUNCH_FAILED=0
   RESULT_FILE="$(mktemp -t recreate-all-results.XXXXXX)"
   COMMANDS_FILE="$(mktemp -t recreate-all-commands.XXXXXX)"
-  OUTPUT_JSONL="$(mktemp -t recreate-all-output.XXXXXX)"
 
   while IFS= read -r WF_ID; do
     [[ -z "$WF_ID" ]] && continue
@@ -176,48 +151,16 @@ else
     echo "[dispatch $IDX/$TOTAL] $WF_ID log=$LOG_DIR/${WF_ID}.log"
   done <<< "$WORKFLOWS"
 
-  if [[ "$STANDALONE_MODE" = "1" ]]; then
-    while IFS= read -r WF_ID; do
-      [[ -z "$WF_ID" ]] && continue
-      if headless_mutation --no-track recreate "$WF_ID" > "$LOG_DIR/${WF_ID}.log" 2>&1; then
-        printf "%s\tSUCCEEDED\n" "$WF_ID" >> "$RESULT_FILE"
-      else
-        printf "%s\tFAILED\n" "$WF_ID" >> "$RESULT_FILE"
-      fi
-    done <<< "$WORKFLOWS"
-  else
-    node "$IPC_HELPER" batch-exec --no-track --parallel "$PARALLELISM" < "$COMMANDS_FILE" > "$OUTPUT_JSONL"
-    python3 - "$RESULT_FILE" "$LOG_DIR" "$OUTPUT_JSONL" <<'PY'
-import json
-import pathlib
-import sys
-
-result_file = pathlib.Path(sys.argv[1])
-log_dir = pathlib.Path(sys.argv[2])
-output_jsonl = pathlib.Path(sys.argv[3])
-
-for raw in output_jsonl.read_text(encoding="utf-8").splitlines():
-    raw = raw.strip()
-    if not raw:
-        continue
-    item = json.loads(raw)
-    workflow_id = item.get("workflowId") or item.get("label") or "unknown"
-    (log_dir / f"{workflow_id}.log").write_text(raw + "\n", encoding="utf-8")
-    with result_file.open("a", encoding="utf-8") as handle:
-        handle.write(f"{workflow_id}\t{'SUCCEEDED' if item.get('ok') else 'FAILED'}\n")
-PY
-  fi
+  batch_dispatch "$COMMANDS_FILE" "$RESULT_FILE" "$LOG_DIR" "$PARALLELISM"
   rm -f "$COMMANDS_FILE"
-  rm -f "$OUTPUT_JSONL"
 
-  while IFS=$'\t' read -r _wf result; do
-    case "$result" in
-      SUCCEEDED) DISPATCHED=$((DISPATCHED + 1)) ;;
-      FAILED) LAUNCH_FAILED=$((LAUNCH_FAILED + 1)) ;;
-    esac
-  done < "$RESULT_FILE"
+  read -r DISPATCHED LAUNCH_FAILED _ < <(count_results "$RESULT_FILE")
   rm -f "$RESULT_FILE"
 fi
+
+# ---------------------------------------------------------------------------
+# Summary
+# ---------------------------------------------------------------------------
 
 echo "---"
 if $DRY_RUN; then
