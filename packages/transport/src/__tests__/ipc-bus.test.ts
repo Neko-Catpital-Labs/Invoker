@@ -4,7 +4,8 @@ import { existsSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { IpcBus } from '../ipc-bus.js';
+import { IpcBus, DEFAULT_REQUEST_DEADLINE_MS } from '../ipc-bus.js';
+import { TransportError, TransportErrorCode } from '../transport-error.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -293,6 +294,85 @@ describe('IpcBus', () => {
 
     const result = await requester.request<number, number>('delayed-double', 5);
     expect(result).toBe(10);
+  });
+
+  // ---------------------------------------------------------------
+  // Request deadline
+  // ---------------------------------------------------------------
+
+  it('rejects with REQUEST_TIMEOUT when no response arrives within the deadline', async () => {
+    const sock = tempSocketPath();
+
+    const server = new IpcBus(sock, { requestDeadlineMs: 100 });
+    buses.push(server);
+    await server.ready();
+
+    // Register a handler that never resolves.
+    server.onRequest('black-hole', () => new Promise(() => {}));
+
+    const client = new IpcBus(sock, { requestDeadlineMs: 100 });
+    buses.push(client);
+    await client.ready();
+    await sleep(50);
+
+    try {
+      await client.request('black-hole', {});
+      expect.fail('should have thrown');
+    } catch (err) {
+      expect(err).toBeInstanceOf(TransportError);
+      expect((err as TransportError).code).toBe(TransportErrorCode.REQUEST_TIMEOUT);
+      expect((err as TransportError).message).toContain('black-hole');
+      expect((err as TransportError).message).toContain('100ms');
+    }
+  });
+
+  it('does not timeout when response arrives before the deadline', async () => {
+    const sock = tempSocketPath();
+
+    const server = new IpcBus(sock, { requestDeadlineMs: 500 });
+    buses.push(server);
+    await server.ready();
+
+    server.onRequest<number, number>('fast', (n) => n + 1);
+
+    const client = new IpcBus(sock, { requestDeadlineMs: 500 });
+    buses.push(client);
+    await client.ready();
+    await sleep(50);
+
+    const result = await client.request<number, number>('fast', 41);
+    expect(result).toBe(42);
+  });
+
+  it('disconnect rejects with DISCONNECTED, not REQUEST_TIMEOUT', async () => {
+    const sock = tempSocketPath();
+
+    const server = new IpcBus(sock, { requestDeadlineMs: 2000 });
+    buses.push(server);
+    await server.ready();
+
+    server.onRequest('never-reply', () => new Promise(() => {}));
+
+    const client = new IpcBus(sock, { requestDeadlineMs: 2000 });
+    buses.push(client);
+    await client.ready();
+    await sleep(50);
+
+    const requestPromise = client.request('never-reply', {});
+    await sleep(20);
+    client.disconnect();
+
+    try {
+      await requestPromise;
+      expect.fail('should have thrown');
+    } catch (err) {
+      expect(err).toBeInstanceOf(TransportError);
+      expect((err as TransportError).code).toBe(TransportErrorCode.DISCONNECTED);
+    }
+  });
+
+  it('exports DEFAULT_REQUEST_DEADLINE_MS as 30000', () => {
+    expect(DEFAULT_REQUEST_DEADLINE_MS).toBe(30_000);
   });
 
   // ---------------------------------------------------------------
