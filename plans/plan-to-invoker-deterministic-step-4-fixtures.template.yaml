@@ -40,9 +40,11 @@ tasks:
       - trim-reference-markdown
 
   - id: post-fix-regression
-    description: "Run app package tests as post-fix regression"
-    command: "cd packages/app && pnpm test"
+    description: "Run the full repository test suite as post-fix regression"
+    command: "pnpm run test:all"
     executorType: ssh
     remoteTargetId: remote_digital_ocean_1
     dependencies:
+      - convert-markdown-examples-to-fixtures
+      - trim-reference-markdown
       - run-plan-to-invoker-tests

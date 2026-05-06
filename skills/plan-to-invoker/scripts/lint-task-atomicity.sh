@@ -23,6 +23,11 @@ fi
 awk -v warnDelegation="$warn_delegation" '
 function trim(s) { gsub(/^[ \t]+|[ \t]+$/, "", s); return s }
 function strip_quotes(s) { gsub(/["'\''"]/, "", s); return s }
+function normalize_command(s) {
+  s = trim(strip_quotes(s))
+  gsub(/[ \t]+/, " ", s)
+  return s
+}
 function parse_metadata(desc_lower,    tmp, parts) {
   layer = ""
   feature_state = ""
@@ -152,6 +157,8 @@ function flush_task(    wc, and_count, valid_id, d, desc_lower, idx) {
   task_feature_states[idx] = feature_state
   task_layer_exceptions[idx] = layer_exception_allowed
   task_dependencies[idx] = dependencies_csv
+  task_has_command[idx] = has_command
+  task_command_line[idx] = normalize_command(command_line)
   task_id_to_index[id] = idx
 }
 
@@ -305,6 +312,34 @@ END {
             errors[++errn] = "Task \"" task_ids[idx] "\" layer ordering violation: lower layer \"" cur_layer "\" depends on higher layer \"" dep_layer "\" via dependency \"" dep_id "\" (add \"Layer exception: allowed\" with rationale to override)"
           }
         }
+      }
+    }
+  }
+
+  if (enforce_layering == 1 && taskn > 0) {
+    final_idx = taskn
+    final_id = task_ids[final_idx]
+    final_command = task_command_line[final_idx]
+
+    if (task_has_command[final_idx] != 1) {
+      errors[++errn] = "Task \"" final_id "\" must be a command task because implementation plans require a final pnpm run test:all regression gate"
+    } else if (final_command != "pnpm run test:all") {
+      errors[++errn] = "Task \"" final_id "\" must be the final regression gate and run exactly \"pnpm run test:all\""
+    }
+
+    split(task_dependencies[final_idx], final_dep_ids, /,/)
+    delete final_dep_map
+    for (fdidx in final_dep_ids) {
+      dep_id = trim(final_dep_ids[fdidx])
+      if (dep_id != "") {
+        final_dep_map[dep_id] = 1
+      }
+    }
+
+    for (idx = 1; idx < final_idx; idx++) {
+      dep_id = task_ids[idx]
+      if (final_dep_map[dep_id] != 1) {
+        errors[++errn] = "Task \"" final_id "\" must depend on every earlier task; missing dependency on \"" dep_id "\""
       }
     }
   }

@@ -111,10 +111,12 @@ Rules:
 5. Each task should have either a \`command\` or a \`prompt\`, not both.
 6. Every step MUST be testable. Every implementation task MUST have a corresponding test task that verifies it works using a concrete, executable \`command\` (e.g. \`cd packages/protocol && pnpm test\`, \`git diff --name-only\`). The test command must produce a clear pass/fail exit code. Do NOT skip tests for any step. Do NOT use prompts for test tasks — use commands only.
    Test command rules:
-   - ALWAYS cd into the package directory first: \`cd packages/<pkg> && pnpm test\`
+   - For focused package tests, ALWAYS cd into the package directory first: \`cd packages/<pkg> && pnpm test\`
    - To target a specific test file: \`cd packages/<pkg> && pnpm test -- src/__tests__/file.test.ts\`
    - NEVER run \`pnpm test <path>\` from the repo root — it runs \`pnpm -r test\` across all packages and the path will be wrong
    - NEVER use \`npx vitest run\` — always use \`pnpm test\` which runs the package.json test script
+   - For implementation plans (\`onFinish\` is not \`none\`), the FINAL task MUST be a \`command\` task that runs \`pnpm run test:all\` from the repo root
+   - That final \`pnpm run test:all\` task MUST depend on every earlier task so it is the terminal regression gate
    - If Invoker config auto-routes heavyweight commands, keep \`pnpm ...\` as a normal command unless the task must name a specific remote target
    - NEVER invent test file names. Verify the test file exists before referencing it in a command.
 7. Use meaningful task IDs (kebab-case).

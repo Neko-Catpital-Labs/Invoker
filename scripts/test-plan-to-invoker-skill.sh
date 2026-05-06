@@ -56,6 +56,7 @@ must_contain "$SKILL_MD" "## Intended flow (do not skip steps)" "SKILL must docu
 must_contain "$SKILL_MD" "Runtime verification (Phase 1b)" "SKILL must require runtime behavioral verification"
 must_contain "$SKILL_MD" "Invoker headless" "SKILL must mention Invoker headless as a verification lane"
 must_contain "$SKILL_MD" "pnpm test" "SKILL must mention pnpm test for behavioral proof"
+must_contain "$SKILL_MD" "pnpm run test:all" "SKILL must require the final full-suite regression gate for implementation plans"
 must_contain "$SKILL_MD" "Grep-only checks" "SKILL must separate grep from behavioral verification"
 must_contain "$SKILL_MD" "see playbook" "SKILL Execution must reference the playbook"
 must_contain "$SKILL_MD" "Phase 1b" "SKILL must reference Phase 1b"
@@ -67,6 +68,7 @@ must_contain "$PLAYBOOK" "### Phase 1a — Static analysis" "Playbook must defin
 must_contain "$PLAYBOOK" "### Phase 1b — Runtime verification" "Playbook must define runtime behavioral verification"
 must_contain "$PLAYBOOK" "Phase 1b-invoker" "Playbook must define Invoker headless verification lane"
 must_contain "$PLAYBOOK" "pnpm test" "Playbook must document pnpm test for behavioral verification"
+must_contain "$PLAYBOOK" "pnpm run test:all" "Playbook must document the final full-suite regression gate"
 must_contain "$PLAYBOOK" "Invoker is mandatory" "Playbook must warn when Invoker verification is mandatory"
 must_contain "$PLAYBOOK" "coverageItems" "Playbook must document row-level coverage for policy-matrix sources"
 
