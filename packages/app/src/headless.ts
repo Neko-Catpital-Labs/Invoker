@@ -29,7 +29,8 @@ import {
 } from '@invoker/execution-engine';
 import { loadConfig, resolveSecretsFilePath, type InvokerConfig } from './config.js';
 import { backupPlan } from './plan-backup.js';
-import { startApiServer, type ApiServerDeps } from './api-server.js';
+import { startApiServer } from './api-server.js';
+import { WorkflowMutationFacade } from './workflow-mutation-facade.js';
 import {
   approveTask,
   deleteAllWorkflows as sharedDeleteAllWorkflows,
@@ -109,30 +110,19 @@ function headlessHeartbeat(taskId: string, deps: Pick<HeadlessDeps, 'persistence
   try { deps.persistence.updateTask(taskId, { execution: { lastHeartbeatAt: now } }); } catch { /* db locked */ }
 }
 
-function buildHeadlessApiCancelHooks(
+function buildHeadlessApiServerDeps(
   deps: HeadlessDeps,
   taskExecutor: TaskRunner,
-): Pick<ApiServerDeps, 'cancelTask' | 'cancelWorkflow' | 'killRunningTask' | 'deleteWorkflow'> {
+): { mutations: WorkflowMutationFacade; deleteWorkflow: (id: string) => Promise<void>; detachWorkflow: (id: string, upstreamId: string) => Promise<void> } {
   return {
-    killRunningTask: (taskId: string) => taskExecutor.killActiveExecution(taskId),
-    cancelTask: async (taskId: string) => {
-      const envelope = makeEnvelope('cancel-task', 'headless', 'task', { taskId });
-      const cmdResult = await deps.commandService.cancelTask(envelope);
-      if (!cmdResult.ok) throw new Error(cmdResult.error.message);
-      for (const id of cmdResult.data.runningCancelled) {
-        await taskExecutor.killActiveExecution(id);
-      }
-      return cmdResult.data;
-    },
-    cancelWorkflow: async (workflowId: string) => {
-      const envelope = makeEnvelope('cancel-workflow', 'headless', 'workflow', { workflowId });
-      const cmdResult = await deps.commandService.cancelWorkflow(envelope);
-      if (!cmdResult.ok) throw new Error(cmdResult.error.message);
-      for (const id of cmdResult.data.runningCancelled) {
-        await taskExecutor.killActiveExecution(id);
-      }
-      return cmdResult.data;
-    },
+    mutations: new WorkflowMutationFacade({
+      logger: deps.logger,
+      orchestrator: deps.orchestrator,
+      persistence: deps.persistence,
+      taskExecutor,
+      autoApproveAIFixes: deps.invokerConfig?.autoApproveAIFixes,
+      killRunningTask: (taskId: string) => taskExecutor.killActiveExecution(taskId),
+    }),
     deleteWorkflow: async (workflowId: string) => {
       const allTasks = deps.orchestrator.getAllTasks();
       const workflowTasks = allTasks.filter(
@@ -145,6 +135,11 @@ function buildHeadlessApiCancelHooks(
       }
       const envelope = makeEnvelope('delete-workflow', 'headless', 'workflow', { workflowId });
       const cmdResult = await deps.commandService.deleteWorkflow(envelope);
+      if (!cmdResult.ok) throw new Error(cmdResult.error.message);
+    },
+    detachWorkflow: async (workflowId: string, upstreamWorkflowId: string) => {
+      const envelope = makeEnvelope('detach-workflow', 'headless', 'workflow', { workflowId, upstreamWorkflowId });
+      const cmdResult = await deps.commandService.detachWorkflow(envelope);
       if (!cmdResult.ok) throw new Error(cmdResult.error.message);
     },
   };
@@ -1013,17 +1008,13 @@ async function headlessRun(
   const taskExecutor = createHeadlessExecutor(deps);
   wireHeadlessApproveHook(deps, taskExecutor);
   const autoFix = wireHeadlessAutoFix(deps, taskExecutor);
-  const approveTaskAction = buildHeadlessApproveAction(deps, taskExecutor);
 
   const api = startApiServer({
     logger: deps.logger,
     orchestrator,
     persistence: deps.persistence,
     executorRegistry: deps.executorRegistry,
-    taskExecutor,
-    autoApproveAIFixes: deps.invokerConfig.autoApproveAIFixes,
-    approveTaskAction,
-    ...buildHeadlessApiCancelHooks(deps, taskExecutor),
+    ...buildHeadlessApiServerDeps(deps, taskExecutor),
   });
 
   const wfIdsBefore = new Set(orchestrator.getWorkflowIds());
@@ -1069,17 +1060,13 @@ async function headlessResume(
   const taskExecutor = createHeadlessExecutor(deps);
   wireHeadlessApproveHook(deps, taskExecutor);
   const autoFix = wireHeadlessAutoFix(deps, taskExecutor);
-  const approveTaskAction = buildHeadlessApproveAction(deps, taskExecutor);
 
   const api = startApiServer({
     logger: deps.logger,
     orchestrator,
     persistence: deps.persistence,
     executorRegistry: deps.executorRegistry,
-    taskExecutor,
-    autoApproveAIFixes: deps.invokerConfig.autoApproveAIFixes,
-    approveTaskAction,
-    ...buildHeadlessApiCancelHooks(deps, taskExecutor),
+    ...buildHeadlessApiServerDeps(deps, taskExecutor),
   });
 
   orchestrator.syncFromDb(workflowId);
@@ -2343,16 +2330,13 @@ async function headlessSlack(deps: HeadlessDeps): Promise<void> {
     },
   });
   wireHeadlessApproveHook(deps, taskExecutor);
-  const approveTaskAction = buildHeadlessApproveAction(deps, taskExecutor);
 
   const api = startApiServer({
     logger: deps.logger,
     orchestrator,
     persistence,
     executorRegistry: deps.executorRegistry,
-    taskExecutor,
-    approveTaskAction,
-    ...buildHeadlessApiCancelHooks(deps, taskExecutor),
+    ...buildHeadlessApiServerDeps(deps, taskExecutor),
   });
 
   const slack = await wireSlackBot({
