@@ -6,6 +6,8 @@ import { RESTART_TO_BRANCH_TRACE } from './exec-trace.js';
 export class GitHubMergeGateProvider implements MergeGateProvider {
   readonly name = 'github';
 
+  private static readonly TARGET_REMOTE_ORDER = ['upstream', 'origin'] as const;
+
   async createReview(opts: {
     baseBranch: string;
     featureBranch: string;
@@ -20,12 +22,14 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
     );
     const ghBase = normalizeBranchForGithubCli(baseBranch);
     const ghHead = normalizeBranchForGithubCli(featureBranch);
+    const targetRepo = await this.resolveTargetRepo(cwd);
     console.log(`[merge-gate] createReview: ghBase=${ghBase} apiHead=${ghHead} cwd=${cwd}`);
 
     await this.exec('git', ['push', '--force', '-u', 'origin', featureBranch], cwd);
 
     const listOutput = await this.exec('gh', [
       'pr', 'list',
+      '--repo', targetRepo,
       '--head', ghHead,
       '--base', ghBase,
       '--state', 'open',
@@ -39,7 +43,7 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
 
     if (existing.length > 0) {
       const apiArgs = [
-        'api', `repos/{owner}/{repo}/pulls/${existing[0].number}`,
+        'api', `repos/${targetRepo}/pulls/${existing[0].number}`,
         '--method', 'PATCH', '-f', `title=${title}`,
       ];
       if (body) apiArgs.push('-f', `body=${body}`);
@@ -50,7 +54,7 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
     }
 
     const createArgs = [
-      'api', 'repos/{owner}/{repo}/pulls',
+      'api', `repos/${targetRepo}/pulls`,
       '--method', 'POST', '-f', `base=${ghBase}`,
       '-f', `head=${ghHead}`, '-f', `title=${title}`,
       '-f', `body=${body ?? ''}`,
@@ -67,9 +71,11 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
     cwd: string;
   }): Promise<MergeGateApprovalStatus> {
     const { identifier, cwd } = opts;
+    const targetRepo = await this.resolveTargetRepo(cwd);
 
     const stdout = await this.exec('gh', [
       'pr', 'view', identifier,
+      '--repo', targetRepo,
       '--json', 'state,reviewDecision,url',
     ], cwd);
 
@@ -101,6 +107,24 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
       statusText,
       url: data.url,
     };
+  }
+
+  private async resolveTargetRepo(cwd: string): Promise<string> {
+    for (const remote of GitHubMergeGateProvider.TARGET_REMOTE_ORDER) {
+      try {
+        const url = await this.exec('git', ['remote', 'get-url', remote], cwd);
+        const parsed = this.parseGitHubRepoNwo(url);
+        if (parsed) return parsed;
+      } catch {
+        // try next remote
+      }
+    }
+    throw new Error('Unable to resolve GitHub target repo from remotes: expected upstream or origin');
+  }
+
+  private parseGitHubRepoNwo(url: string): string | undefined {
+    const m = url.trim().match(/github\.com[:/]([^/]+\/[^/.]+?)(?:\.git)?\/?$/i);
+    return m?.[1];
   }
 
   private async exec(cmd: string, args: string[], cwd: string): Promise<string> {
