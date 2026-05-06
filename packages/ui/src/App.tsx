@@ -63,7 +63,7 @@ export function App() {
   const [planName, setPlanName] = useState<string | null>(null);
   const [onFinish, setOnFinish] = useState<'none' | 'merge' | 'pull_request'>('merge');
   const [viewMode, setViewMode] = useState<'dag' | 'history' | 'timeline' | 'queue'>('dag');
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; task: TaskState } | null>(null);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; taskId: string } | null>(null);
   const [remoteTargets, setRemoteTargets] = useState<string[]>([]);
   const [executionAgents, setExecutionAgents] = useState<string[]>([]);
   const [statusFilters, setStatusFilters] = useState<Set<string>>(new Set());
@@ -167,6 +167,7 @@ export function App() {
   }, []);
 
   const selectedTask = selectedTaskId ? tasks.get(selectedTaskId) ?? null : null;
+  const contextMenuTask = contextMenu ? tasks.get(contextMenu.taskId) ?? null : null;
   const missingRequiredTool = systemDiagnostics?.tools.find((tool) => tool.required && !tool.installed) ?? null;
   const installedAgentCount = systemDiagnostics?.tools.filter((tool) => (tool.id === 'claude' || tool.id === 'codex') && tool.installed).length ?? 0;
   const needsBundledSkillsPrompt = Boolean(systemDiagnostics?.isPackaged && systemDiagnostics?.bundledSkills?.promptRecommended);
@@ -190,7 +191,7 @@ export function App() {
 
   const handleTaskContextMenu = useCallback((task: TaskState, event: React.MouseEvent) => {
     setSelectedTaskId(task.id);
-    setContextMenu({ x: event.clientX, y: event.clientY, task });
+    setContextMenu({ x: event.clientX, y: event.clientY, taskId: task.id });
   }, []);
 
   const handleRestartTask = useCallback(async (taskId: string) => {
@@ -736,11 +737,11 @@ export function App() {
         />
       )}
 
-      {contextMenu && (
+      {contextMenu && contextMenuTask && (
         <ContextMenu
           x={contextMenu.x}
           y={contextMenu.y}
-          task={contextMenu.task}
+          task={contextMenuTask}
           onRestart={handleRestartTask}
           onReplace={handleReplaceTask}
           onOpenTerminal={handleOpenTerminal}

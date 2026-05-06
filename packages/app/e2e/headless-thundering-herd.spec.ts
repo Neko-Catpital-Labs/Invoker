@@ -3,6 +3,7 @@ import { writeFile } from 'node:fs/promises';
 import * as path from 'node:path';
 import { promisify } from 'node:util';
 import type { Page } from '@playwright/test';
+import { resolveRepoRoot } from '@invoker/contracts';
 import { stringify as yamlStringify } from 'yaml';
 
 import {
@@ -15,7 +16,7 @@ import {
 } from './fixtures/electron-app.js';
 
 const execFileAsync = promisify(execFile);
-const repoRoot = path.resolve(__dirname, '..', '..', '..');
+const repoRoot = resolveRepoRoot(__dirname);
 
 async function runHeadlessClient(testDir: string, args: string[]): Promise<{ stdout: string; stderr: string }> {
   const configPath = path.join(testDir, 'e2e-config.json');

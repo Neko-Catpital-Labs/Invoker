@@ -5,3 +5,4 @@ export * from './validation.js';
 export * from './logger.js';
 export * from './command-envelope.js';
 export * from './ipc-channels.js';
+export * from './repo-root.js';
