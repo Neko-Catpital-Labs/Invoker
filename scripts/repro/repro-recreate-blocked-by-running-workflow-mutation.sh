@@ -118,7 +118,7 @@ if [[ ! -f packages/app/dist/main.js ]]; then
   pnpm --filter @invoker/app build >/dev/null
 fi
 
-ELECTRON_BIN="$ROOT_DIR/packages/app/node_modules/.bin/electron"
+ELECTRON_BIN="$ROOT_DIR/scripts/electron.cjs"
 MAIN_JS="$ROOT_DIR/packages/app/dist/main.js"
 
 git -C "$REPO_FIXTURE_DIR" init -b main >/dev/null 2>&1

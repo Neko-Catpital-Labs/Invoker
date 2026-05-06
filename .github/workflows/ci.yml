@@ -62,6 +62,8 @@ jobs:
         include:
           - name: Dependency Cruise
             command: pnpm run check:deps
+          - name: Required Package Builds
+            command: pnpm run check:required-builds
           - name: TypeScript Types
             command: pnpm run check:types
 

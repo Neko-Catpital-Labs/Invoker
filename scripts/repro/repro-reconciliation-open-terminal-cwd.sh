@@ -96,7 +96,7 @@ EOF
 
 run_headless() {
   # shellcheck disable=SC2086
-  "$INVOKER_MONO/packages/app/node_modules/.bin/electron" "$MAIN_JS" ${SANDBOX_FLAG[@]:-} --headless "$@"
+  "$INVOKER_MONO/scripts/electron.cjs" "$MAIN_JS" ${SANDBOX_FLAG[@]:-} --headless "$@"
 }
 
 echo "==> Isolated INVOKER_DB_DIR=$INVOKER_DB_DIR"

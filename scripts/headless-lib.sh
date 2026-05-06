@@ -19,7 +19,7 @@
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RUNNER="$REPO_ROOT/run.sh"
-ELECTRON="$REPO_ROOT/packages/app/node_modules/.bin/electron"
+ELECTRON="$REPO_ROOT/scripts/electron.cjs"
 MAIN="$REPO_ROOT/packages/app/dist/main.js"
 IPC_HELPER="$REPO_ROOT/scripts/headless-ipc.js"
 STANDALONE_MODE="${INVOKER_HEADLESS_STANDALONE:-0}"
