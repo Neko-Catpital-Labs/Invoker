@@ -22,8 +22,6 @@ const gitEnv = {
   GIT_COMMITTER_EMAIL: process.env.GIT_COMMITTER_EMAIL ?? 'ci@invoker.dev',
 };
 
-const repoRoot = path.resolve(__dirname, '..', '..', '..');
-
 export default function globalSetup(): void {
   // Build dependent packages and the app itself if artifacts are missing.
   // CI often pre-builds these, but local Playwright runs may not.
