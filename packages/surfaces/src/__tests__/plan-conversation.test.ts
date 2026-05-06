@@ -456,6 +456,7 @@ describe('PlanConversation', () => {
     const prompt = mockSpawn.mock.calls[0][1][1] as string;
     expect(prompt).toContain('YAML task plan');
     expect(prompt).toContain('Hello');
+    expect(prompt).toContain('pnpm run test:all');
   });
 
   it('submittedPlanText is null before confirmation', async () => {
