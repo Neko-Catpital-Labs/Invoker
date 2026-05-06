@@ -17,6 +17,9 @@
     "test:watch": "vitest",
     "clean": "rm -rf dist"
   },
+  "dependencies": {
+    "@invoker/runtime-domain": "workspace:*"
+  },
   "devDependencies": {
     "@types/node": "^25.3.3",
     "tsup": "^8.0.0",
