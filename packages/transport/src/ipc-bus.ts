@@ -200,6 +200,33 @@ function isValidEnvelope(v: unknown): v is Envelope {
 }
 
 // ---------------------------------------------------------------------------
+// Subscriber-error observability
+// ---------------------------------------------------------------------------
+
+/** Structured event emitted when a subscriber handler throws. */
+export interface SubscriberErrorEvent {
+  /** ISO-8601 timestamp of the error. */
+  timestamp: string;
+  /** Channel the handler was subscribed to. */
+  channel: string;
+  /** Error message (no payload data to avoid leakage). */
+  error: string;
+  /** Number of handler errors suppressed since the last emitted event
+   *  (0 when every error is reported; >0 when rate-limited). */
+  droppedSinceLastReport: number;
+}
+
+/** Callback signature for subscriber-error observers. */
+export type SubscriberErrorObserver = (event: SubscriberErrorEvent) => void;
+
+/**
+ * Default minimum interval (ms) between emitted subscriber-error events.
+ * Errors that occur faster are counted but not reported until the window
+ * elapses (token-bucket with capacity 1).
+ */
+export const SUBSCRIBER_ERROR_RATE_LIMIT_MS = 1_000;
+
+// ---------------------------------------------------------------------------
 // Default socket path
 // ---------------------------------------------------------------------------
 
@@ -217,6 +244,9 @@ export interface IpcBusOptions {
   /** Optional callback invoked when a malformed frame is received.
    *  Rate-limited to at most one call per {@link MALFORMED_FRAME_RATE_LIMIT_MS}. */
   onMalformedFrame?: MalformedFrameObserver;
+  /** Optional callback invoked when a subscriber handler throws.
+   *  Rate-limited to at most one call per {@link SUBSCRIBER_ERROR_RATE_LIMIT_MS}. */
+  onSubscriberError?: SubscriberErrorObserver;
 }
 
 // ---------------------------------------------------------------------------
@@ -228,6 +258,12 @@ export class IpcBus implements MessageBus {
   private readonly allowServe: boolean;
   private readonly requestDeadlineMs: number;
   private readonly onMalformedFrame: MalformedFrameObserver | undefined;
+  private readonly onSubscriberError: SubscriberErrorObserver | undefined;
+
+  /** Timestamp (ms) of the last emitted subscriber-error event. */
+  private subscriberErrorLastEmitMs = 0;
+  /** Count of subscriber errors suppressed by rate-limiting since last emit. */
+  private subscriberErrorSuppressedCount = 0;
 
   // Local handler registries (same structure as LocalBus).
   private subscribers = new Map<string, Set<MessageHandler>>();
@@ -259,6 +295,7 @@ export class IpcBus implements MessageBus {
     this.allowServe = options.allowServe ?? true;
     this.requestDeadlineMs = options.requestDeadlineMs ?? DEFAULT_REQUEST_DEADLINE_MS;
     this.onMalformedFrame = options.onMalformedFrame;
+    this.onSubscriberError = options.onSubscriberError;
     this.readyPromise = new Promise<void>((r) => {
       this.resolveReady = r;
     });
@@ -416,10 +453,33 @@ export class IpcBus implements MessageBus {
     for (const handler of handlers) {
       try {
         handler(body);
-      } catch {
+      } catch (e) {
         // Swallow handler errors — same behaviour as LocalBus.
+        this.reportSubscriberError(
+          channel,
+          e instanceof Error ? e.message : String(e),
+        );
       }
     }
+  }
+
+  /** Emit a subscriber-error event, respecting the rate limit. */
+  private reportSubscriberError(channel: string, error: string): void {
+    if (!this.onSubscriberError) return;
+    const now = Date.now();
+    if (now - this.subscriberErrorLastEmitMs < SUBSCRIBER_ERROR_RATE_LIMIT_MS) {
+      this.subscriberErrorSuppressedCount++;
+      return;
+    }
+    this.subscriberErrorLastEmitMs = now;
+    const droppedSinceLastReport = this.subscriberErrorSuppressedCount;
+    this.subscriberErrorSuppressedCount = 0;
+    this.onSubscriberError({
+      timestamp: new Date(now).toISOString(),
+      channel,
+      error,
+      droppedSinceLastReport,
+    });
   }
 
   private async handleRequest(env: ReqEnvelope, source: Socket): Promise<void> {
