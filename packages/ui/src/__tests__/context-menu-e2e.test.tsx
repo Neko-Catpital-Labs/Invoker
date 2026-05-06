@@ -35,6 +35,14 @@ const beta = makeUITask({
   workflowId: 'wf-1',
 });
 
+const merge = makeUITask({
+  id: '__merge__wf-1',
+  description: 'Review gate',
+  status: 'review_ready',
+  workflowId: 'wf-1',
+  isMergeNode: true,
+});
+
 const workflows: WorkflowMeta[] = [
   { id: 'wf-1', name: 'Test Workflow', status: 'running', baseBranch: 'master' },
 ];
@@ -51,9 +59,12 @@ describe('Context menu (component)', () => {
     mock.cleanup();
   });
 
-  async function setupAndRightClick(taskTestId = 'rf__node-task-alpha') {
+  async function setupAndRightClick(
+    taskTestId = 'rf__node-task-alpha',
+    tasks = [alpha, beta, merge],
+  ) {
     render(<App />);
-    act(() => mock.setTasks([alpha, beta], workflows));
+    act(() => mock.setTasks(tasks, workflows));
 
     await waitFor(() => {
       expect(screen.getByTestId(taskTestId)).toBeInTheDocument();
@@ -142,7 +153,7 @@ describe('Context menu (component)', () => {
   });
 
   it('Recreate with Rebase is visible and triggers distinct handler', async () => {
-    await setupAndRightClick();
+    await setupAndRightClick('rf__node-__merge__wf-1');
 
     await waitFor(() => {
       expect(screen.getByText('Recreate with Rebase')).toBeInTheDocument();
@@ -151,7 +162,7 @@ describe('Context menu (component)', () => {
     fireEvent.click(screen.getByText('Recreate with Rebase'));
 
     await waitFor(() => {
-      expect(mock.api.recreateWithRebase).toHaveBeenCalledWith('task-alpha');
+      expect(mock.api.recreateWithRebase).toHaveBeenCalledWith('wf-1');
       expect(screen.queryByText('Restart Task')).not.toBeInTheDocument();
     });
   });

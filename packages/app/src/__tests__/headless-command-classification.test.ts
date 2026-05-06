@@ -12,6 +12,9 @@ describe('headless-command-classification', () => {
     loadWorkflow: (workflowId) => workflowId === 'wf-1' ? { id: workflowId } as any : undefined,
     listWorkflows: () => [{ id: 'wf-1' } as any, { id: 'wf-2' } as any],
     loadTasks: (workflowId) => {
+      if (workflowId === 'wf-1') {
+        return [{ id: '__merge__wf-1', config: { workflowId: 'wf-1', isMergeNode: true } }] as any;
+      }
       if (workflowId === 'wf-2') {
         return [{ id: 'wf-2/task-1' }] as any;
       }
@@ -46,6 +49,12 @@ describe('headless-command-classification', () => {
       kind: 'workflow',
       workflowId: 'wf-1',
     });
+    expect(resolveHeadlessTarget('__merge__wf-1', targetLookup)).toEqual({
+      kind: 'task',
+      workflowId: 'wf-1',
+      taskId: '__merge__wf-1',
+      resolvedTaskId: '__merge__wf-1',
+    });
     expect(resolveHeadlessTarget('wf-2/task-1', targetLookup)).toEqual({
       kind: 'task',
       workflowId: 'wf-2',
@@ -74,6 +83,7 @@ describe('headless-command-classification', () => {
   });
 
   it('throws when target workflow cannot be resolved', () => {
+    expect(resolveHeadlessTargetWorkflowId('__merge__wf-1', targetLookup)).toBe('wf-1');
     expect(() => resolveHeadlessTargetWorkflowId('missing-target', targetLookup)).toThrow(
       'Could not resolve headless target workflow for "missing-target"',
     );

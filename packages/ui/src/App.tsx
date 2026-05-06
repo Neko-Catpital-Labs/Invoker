@@ -242,10 +242,10 @@ export function App() {
     }
   }, []);
 
-  const handleRecreateWithRebase = useCallback(async (taskId: string) => {
+  const handleRecreateWithRebase = useCallback(async (workflowId: string) => {
     setContextMenu(null);
     try {
-      const result = await window.invoker?.recreateWithRebase(taskId);
+      const result = await window.invoker?.recreateWithRebase(workflowId);
       if (result && !result.success) {
         console.error('Recreate with Rebase failed for some branches:', result.errors);
       }
