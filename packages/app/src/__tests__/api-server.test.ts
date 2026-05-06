@@ -75,6 +75,7 @@ let mocks: {
   cancelWorkflow: ReturnType<typeof vi.fn>;
   killRunningTask: ReturnType<typeof vi.fn>;
   deleteWorkflow: ReturnType<typeof vi.fn>;
+  detachWorkflow: ReturnType<typeof vi.fn>;
 };
 
 function createMocks() {
@@ -131,6 +132,7 @@ function createMocks() {
     cancelWorkflow: vi.fn().mockResolvedValue({ cancelled: ['task-1'], runningCancelled: ['task-1'] }),
     killRunningTask: vi.fn().mockResolvedValue(undefined),
     deleteWorkflow: vi.fn().mockResolvedValue(undefined),
+    detachWorkflow: vi.fn().mockResolvedValue(undefined),
   };
 }
 
@@ -147,6 +149,7 @@ beforeAll(async () => {
     cancelWorkflow: mocks.cancelWorkflow,
     killRunningTask: mocks.killRunningTask,
     deleteWorkflow: mocks.deleteWorkflow,
+    detachWorkflow: mocks.detachWorkflow,
   });
   // Wait for the server to start listening
   await new Promise<void>((resolve) => {
@@ -176,6 +179,7 @@ beforeEach(() => {
   mocks.cancelWorkflow.mockClear();
   mocks.killRunningTask.mockClear();
   mocks.deleteWorkflow.mockClear();
+  mocks.detachWorkflow.mockClear();
 
   // Re-apply default return values after clear
   mocks.orchestrator.getWorkflowStatus.mockReturnValue({ total: 1, completed: 0, failed: 0, running: 1, pending: 0 });
@@ -1001,7 +1005,7 @@ describe('POST /api/workflows/:id/detach', () => {
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
     expect(res.body.action).toBe('detached');
-    expect(mocks.orchestrator.detachWorkflow).toHaveBeenCalledWith('wf-1', 'wf-0');
+    expect(mocks.detachWorkflow).toHaveBeenCalledWith('wf-1', 'wf-0');
   });
 
   it('returns 400 when upstreamWorkflowId is missing', async () => {
