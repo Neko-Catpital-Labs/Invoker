@@ -1,10 +1,26 @@
 #!/usr/bin/env node
-const { createConnection } = require('node:net');
-const { homedir } = require('node:os');
+/**
+ * Thin CLI wrapper around the shared IPC transport.
+ *
+ * Keeps CLI parsing and JSON / JSONL output.
+ * Transport policy lives in @invoker/transport (IpcBus) — this script
+ * only creates a client-only bus and delegates exec requests through it.
+ *
+ * Standalone mode: when no IPC server is reachable the script falls back
+ * to spawning the headless-client process directly, so a shared socket is
+ * not required.
+ */
+const { execFileSync } = require('node:child_process');
+const { existsSync } = require('node:fs');
 const path = require('node:path');
 
-const DEFAULT_SOCKET_PATH =
-  process.env.INVOKER_IPC_SOCKET || path.join(homedir(), '.invoker', 'ipc-transport.sock');
+const REPO_ROOT = path.resolve(__dirname, '..');
+const TRANSPORT_DIST = path.join(REPO_ROOT, 'packages', 'transport', 'dist', 'index.js');
+const HEADLESS_CLIENT_DIST = path.join(REPO_ROOT, 'packages', 'app', 'dist', 'headless-client.js');
+
+// ---------------------------------------------------------------------------
+// EPIPE handling — keep output clean when piped to head / grep / etc.
+// ---------------------------------------------------------------------------
 
 for (const stream of [process.stdout, process.stderr]) {
   stream.on('error', (error) => {
@@ -15,25 +31,16 @@ for (const stream of [process.stdout, process.stderr]) {
   });
 }
 
+// ---------------------------------------------------------------------------
+// CLI parsing (unchanged contract)
+// ---------------------------------------------------------------------------
+
 function usage() {
   console.error(
     'Usage:\n' +
     '  node scripts/headless-ipc.js exec [--no-track] [--wait-for-approval] [--timeout-ms N] -- <headless args...>\n' +
     '  node scripts/headless-ipc.js batch-exec [--no-track] [--wait-for-approval] [--timeout-ms N] [--parallel N] < commands.jsonl',
   );
-}
-
-function withTimeout(promise, timeoutMs) {
-  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
-    return promise;
-  }
-  return Promise.race([
-    promise,
-    new Promise((_, reject) => {
-      const timer = setTimeout(() => reject(new Error(`Timed out after ${timeoutMs}ms`)), timeoutMs);
-      timer.unref?.();
-    }),
-  ]);
 }
 
 function parseCli(argv) {
@@ -84,121 +91,24 @@ function parseCli(argv) {
   return { mode, noTrack, waitForApproval, parallel, timeoutMs, args };
 }
 
-function encodeEnvelope(envelope) {
-  const json = Buffer.from(JSON.stringify(envelope), 'utf8');
-  const frame = Buffer.allocUnsafe(4 + json.length);
-  frame.writeUInt32BE(json.length, 0);
-  json.copy(frame, 4);
-  return frame;
+// ---------------------------------------------------------------------------
+// Timeout helper
+// ---------------------------------------------------------------------------
+
+function withTimeout(promise, timeoutMs) {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    return promise;
+  }
+  let timer;
+  const timeoutPromise = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`Timed out after ${timeoutMs}ms`)), timeoutMs);
+  });
+  return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timer));
 }
 
-class FrameDecoder {
-  constructor(onEnvelope) {
-    this.buf = Buffer.alloc(0);
-    this.onEnvelope = onEnvelope;
-  }
-
-  push(chunk) {
-    this.buf = Buffer.concat([this.buf, chunk]);
-    while (this.buf.length >= 4) {
-      const len = this.buf.readUInt32BE(0);
-      if (this.buf.length < 4 + len) {
-        break;
-      }
-      const json = this.buf.subarray(4, 4 + len).toString('utf8');
-      this.buf = this.buf.subarray(4 + len);
-      this.onEnvelope(JSON.parse(json));
-    }
-  }
-}
-
-class HeadlessIpcClient {
-  constructor(socketPath = DEFAULT_SOCKET_PATH) {
-    this.socketPath = socketPath;
-    this.nextReqId = 0;
-    this.pending = new Map();
-    this.socket = null;
-    this.decoder = new FrameDecoder((envelope) => this.handleEnvelope(envelope));
-  }
-
-  async connect() {
-    if (this.socket) {
-      return;
-    }
-    this.socket = await new Promise((resolve, reject) => {
-      const socket = createConnection({ path: this.socketPath });
-      const cleanup = () => {
-        socket.off('connect', handleConnect);
-        socket.off('error', handleError);
-      };
-      const handleConnect = () => {
-        cleanup();
-        resolve(socket);
-      };
-      const handleError = (error) => {
-        cleanup();
-        reject(error);
-      };
-      socket.once('connect', handleConnect);
-      socket.once('error', handleError);
-    });
-
-    this.socket.on('data', (chunk) => this.decoder.push(chunk));
-    this.socket.on('error', (error) => {
-      this.rejectAll(error);
-    });
-    this.socket.on('close', () => {
-      this.rejectAll(new Error('IPC socket closed'));
-      this.socket = null;
-    });
-  }
-
-  handleEnvelope(envelope) {
-    if (envelope.kind !== 'res' && envelope.kind !== 'err') {
-      return;
-    }
-    const pending = this.pending.get(envelope.reqId);
-    if (!pending) {
-      return;
-    }
-    this.pending.delete(envelope.reqId);
-    if (envelope.kind === 'err') {
-      pending.reject(new Error(envelope.message));
-      return;
-    }
-    pending.resolve(envelope.body);
-  }
-
-  rejectAll(error) {
-    for (const { reject } of this.pending.values()) {
-      reject(error);
-    }
-    this.pending.clear();
-  }
-
-  async request(channel, body) {
-    await this.connect();
-    const reqId = `req-${this.nextReqId += 1}`;
-    const response = new Promise((resolve, reject) => {
-      this.pending.set(reqId, { resolve, reject });
-    });
-    this.socket.write(encodeEnvelope({
-      kind: 'req',
-      channel,
-      body,
-      reqId,
-    }));
-    return response;
-  }
-
-  disconnect() {
-    if (!this.socket) {
-      return;
-    }
-    this.socket.destroy();
-    this.socket = null;
-  }
-}
+// ---------------------------------------------------------------------------
+// Stdin reader (for batch-exec)
+// ---------------------------------------------------------------------------
 
 async function readStdinLines() {
   const chunks = [];
@@ -208,13 +118,56 @@ async function readStdinLines() {
   return Buffer.concat(chunks).toString('utf8').split('\n').map((line) => line.trim()).filter(Boolean);
 }
 
-async function requestExec(client, item, options) {
+// ---------------------------------------------------------------------------
+// Transport — load IpcBus from the shared transport dist
+// ---------------------------------------------------------------------------
+
+async function loadTransport() {
+  if (!existsSync(TRANSPORT_DIST)) {
+    return null;
+  }
+  const mod = await import(TRANSPORT_DIST);
+  return mod;
+}
+
+async function createBus(transport) {
+  const bus = new transport.IpcBus(undefined, { allowServe: false });
+  await bus.ready();
+  return bus;
+}
+
+// ---------------------------------------------------------------------------
+// Standalone fallback — spawn headless-client directly (no socket needed)
+// ---------------------------------------------------------------------------
+
+function execStandalone(args) {
+  if (!existsSync(HEADLESS_CLIENT_DIST)) {
+    throw new Error(
+      `Standalone mode requires a built headless-client at ${HEADLESS_CLIENT_DIST}.\n` +
+      'Run: pnpm --filter @invoker/app build',
+    );
+  }
+  try {
+    execFileSync(process.execPath, [HEADLESS_CLIENT_DIST, ...args], {
+      stdio: ['inherit', 'inherit', 'inherit'],
+    });
+    return 0;
+  } catch (err) {
+    return err.status ?? 1;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Request execution via the shared bus
+// ---------------------------------------------------------------------------
+
+async function requestExec(bus, item, options) {
   const payload = {
     args: item.args,
     noTrack: options.noTrack,
     waitForApproval: options.waitForApproval,
   };
-  const response = await withTimeout(client.request('headless.exec', payload), options.timeoutMs);
+  const response = await withTimeout(bus.request('headless.exec', payload), options.timeoutMs);
   return {
     ...item,
     ok: true,
@@ -222,20 +175,45 @@ async function requestExec(client, item, options) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Main
+// ---------------------------------------------------------------------------
+
 async function main() {
   const options = parseCli(process.argv.slice(2));
-  const client = new HeadlessIpcClient();
+
+  // Try to load the shared transport module.
+  const transport = await loadTransport();
+  if (!transport) {
+    // No built transport — fall back to standalone mode for exec.
+    if (options.mode === 'exec') {
+      const cliArgs = [];
+      if (options.noTrack) cliArgs.push('--no-track');
+      if (options.waitForApproval) cliArgs.push('--wait-for-approval');
+      cliArgs.push(...options.args);
+      process.exitCode = execStandalone(cliArgs);
+      return;
+    }
+    throw new Error(
+      'batch-exec requires the shared transport module.\n' +
+      'Build the transport package: cd packages/transport && pnpm build',
+    );
+  }
+
+  // Create a client-only IPC bus (no server election).
+  const bus = await createBus(transport);
 
   try {
     if (options.mode === 'exec') {
       if (options.args.length === 0) {
         throw new Error('Missing headless args for exec');
       }
-      const result = await requestExec(client, { args: options.args }, options);
+      const result = await requestExec(bus, { args: options.args }, options);
       process.stdout.write(`${JSON.stringify(result)}\n`);
       return;
     }
 
+    // batch-exec
     const lines = await readStdinLines();
     const items = lines.map((line) => {
       const parsed = JSON.parse(line);
@@ -260,7 +238,7 @@ async function main() {
         }
         const item = items[index];
         try {
-          const result = await requestExec(client, item, options);
+          const result = await requestExec(bus, item, options);
           process.stdout.write(`${JSON.stringify(result)}\n`);
         } catch (error) {
           process.stdout.write(`${JSON.stringify({
@@ -274,7 +252,7 @@ async function main() {
 
     await Promise.all(Array.from({ length: Math.min(parallel, items.length) }, () => worker()));
   } finally {
-    client.disconnect();
+    bus.disconnect();
   }
 }
 
