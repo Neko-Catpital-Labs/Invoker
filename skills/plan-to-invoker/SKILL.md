@@ -103,7 +103,7 @@ If `skill-doctor.sh` fails, run individual checks to isolate the problem:
      5. If the target repo is Invoker itself, publish/update the resulting PR stack with `mergify stack push` after submission-side commits are ready.
 10b. `step-submit-chain` (batch stacking, multiple template plans)
      Use when submitting an entire dependency chain at once.
-     `./scripts/submit-workflow-chain.sh [--gate-policy approved|review_ready] <plan1.yaml> <plan2.template.yaml> ...`
+     `./scripts/submit-workflow-chain.sh [--gate-policy completed|review_ready] <plan1.yaml> <plan2.template.yaml> ...`
      The chain script handles: template rendering, baseBranch rewrite, merge-gate injection, sequential submission. For Invoker-on-Invoker work only, publish the resulting GitHub PR stack with `mergify stack push` once the chain's commits are prepared.
 
 ## Runtime verification (Phase 1b)
