@@ -81,14 +81,32 @@ fi
 STALE_RUNNING="$(
   invoker_e2e_run_headless query tasks --output jsonl \
     | grep '^{' \
-    | jq -r '
-      select(.status=="running")
-      | ((.execution.lastHeartbeatAt // .execution.startedAt // "1970-01-01T00:00:00Z")
-          | sub("\\.[0-9]+Z$"; "Z")
-          | fromdateiso8601) as $hb
-      | select((now - $hb) > 15)
-      | .id
-    '
+    | python3 -c '
+import datetime as dt
+import json
+import sys
+
+now = dt.datetime.now(dt.timezone.utc)
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    row = json.loads(line)
+    if row.get("status") != "running":
+        continue
+    execution = row.get("execution") or {}
+    stamp = execution.get("lastHeartbeatAt") or execution.get("startedAt") or "1970-01-01T00:00:00Z"
+    stamp = stamp.replace(" ", "T")
+    if "." in stamp and stamp.endswith("Z"):
+        stamp = stamp.split(".", 1)[0] + "Z"
+    if stamp.endswith("Z"):
+        stamp = stamp[:-1] + "+00:00"
+    hb = dt.datetime.fromisoformat(stamp)
+    if hb.tzinfo is None:
+        hb = hb.replace(tzinfo=dt.timezone.utc)
+    if (now - hb).total_seconds() > 15:
+        print(row.get("id", ""))
+'
 )"
 if [ -n "$STALE_RUNNING" ]; then
   echo "FAIL case 2.14: found stale running task(s) after guarded rebase-retry-all"

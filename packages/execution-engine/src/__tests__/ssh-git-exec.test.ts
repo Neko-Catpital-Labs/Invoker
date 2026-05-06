@@ -314,11 +314,15 @@ describe('buildRecordAndPushScript', () => {
       branch: 'experiment/task-123-abc',
       commitMessageChanges: 'invoker: task-123 — make changes',
       commitMessageEmpty: 'invoker: task-123\n\nExit code: 0',
+      gitUserName: 'Invoker Bot',
+      gitUserEmail: 'invoker@local',
     });
 
     expect(script).toContain('set -euo pipefail');
     expect(script).toContain('WT=$(echo');
     expect(script).toContain('base64 -d)');
+    expect(script).toContain('git config user.name');
+    expect(script).toContain('git config user.email');
     expect(script).toContain('git add -A');
     expect(script).toContain('if git diff --cached --quiet');
     expect(script).toContain('git commit --allow-empty -F');
@@ -334,9 +338,59 @@ describe('buildRecordAndPushScript', () => {
       branch: 'branch',
       commitMessageChanges: 'msg',
       commitMessageEmpty: 'empty',
+      gitUserName: 'Invoker Bot',
+      gitUserEmail: 'invoker@local',
     });
 
     expect(script).toContain(bashNormalizeTildePath());
+  });
+
+  it('commits and pushes successfully without preconfigured git identity', () => {
+    const root = mkdtempSync(join(tmpdir(), 'ssh-record-push-'));
+    const source = join(root, 'source');
+    const bare = join(root, 'remote.git');
+    const clone = join(root, 'clone');
+
+    mkdirSync(source, { recursive: true });
+    execSync('git init -b master', { cwd: source, stdio: 'ignore' });
+    writeFileSync(join(source, 'README.md'), 'seed\n');
+    execSync('git add README.md', { cwd: source, stdio: 'ignore' });
+    execSync('git -c user.name="Seed User" -c user.email="seed@example.com" commit -m "seed"', {
+      cwd: source,
+      stdio: 'ignore',
+    });
+    execSync(`git clone --bare ${JSON.stringify(source)} ${JSON.stringify(bare)}`, { stdio: 'ignore' });
+    execSync(`git clone ${JSON.stringify(bare)} ${JSON.stringify(clone)}`, { stdio: 'ignore' });
+    execSync('git checkout -b experiment/test-branch', { cwd: clone, stdio: 'ignore' });
+    writeFileSync(join(clone, 'result.txt'), 'ok\n');
+
+    const script = buildRecordAndPushScript({
+      worktreePath: clone,
+      branch: 'experiment/test-branch',
+      commitMessageChanges: 'invoker: record remote result',
+      commitMessageEmpty: 'invoker: record remote empty result',
+      gitUserName: 'Remote CI Bot',
+      gitUserEmail: 'remote-ci@example.com',
+    });
+
+    execFileSync('bash', ['-lc', script], {
+      env: {
+        ...process.env,
+        HOME: mkdtempSync(join(tmpdir(), 'ssh-record-push-home-')),
+      },
+      stdio: 'ignore',
+    });
+
+    const authorName = execSync('git log -1 --format=%an', { cwd: clone }).toString().trim();
+    const authorEmail = execSync('git log -1 --format=%ae', { cwd: clone }).toString().trim();
+    const pushedHead = execSync(`git --git-dir=${JSON.stringify(bare)} rev-parse refs/heads/experiment/test-branch`)
+      .toString()
+      .trim();
+    const localHead = execSync('git rev-parse HEAD', { cwd: clone }).toString().trim();
+
+    expect(authorName).toBe('Remote CI Bot');
+    expect(authorEmail).toBe('remote-ci@example.com');
+    expect(pushedHead).toBe(localHead);
   });
 });
 

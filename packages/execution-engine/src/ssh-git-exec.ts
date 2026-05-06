@@ -292,6 +292,8 @@ export interface GitRecordAndPushOpts {
   branch: string;
   commitMessageChanges: string;
   commitMessageEmpty: string;
+  gitUserName: string;
+  gitUserEmail: string;
 }
 
 /**
@@ -306,11 +308,15 @@ export function buildRecordAndPushScript(opts: GitRecordAndPushOpts): string {
   const brB = base64Encode(opts.branch);
   const chB = base64Encode(opts.commitMessageChanges);
   const emB = base64Encode(opts.commitMessageEmpty);
+  const userNameB = base64Encode(opts.gitUserName);
+  const userEmailB = base64Encode(opts.gitUserEmail);
 
   return `set -euo pipefail
 WT=$(echo ${wtB} | base64 -d)
 ${bashNormalizeTildePath()}
 cd "$WT"
+git config user.name "$(echo ${userNameB} | base64 -d)"
+git config user.email "$(echo ${userEmailB} | base64 -d)"
 git add -A
 M=$(mktemp)
 trap 'rm -f "$M"' EXIT

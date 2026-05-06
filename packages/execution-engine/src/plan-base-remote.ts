@@ -17,6 +17,16 @@ async function tryResolveCommit(runGit: GitExec, refExpr: string): Promise<strin
   }
 }
 
+async function tryResolveOriginHeadCommit(runGit: GitExec): Promise<string | undefined> {
+  try {
+    const originHeadRef = (await runGit(['symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD'])).trim();
+    if (!originHeadRef) return undefined;
+    return await tryResolveCommit(runGit, `${originHeadRef}^{commit}`);
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Fetch a single branch from origin into refs/remotes/origin/<baseBranch>.
  */
@@ -106,6 +116,7 @@ export function shouldResolveViaOriginTracking(ref: string): boolean {
 /**
  * Resolve base ref to a full commit SHA for computeContentHash / worktree base.
  * For short branch names and legacy remote-qualified refs, uses origin/<branch>.
+ * When the requested branch is absent after sync, fall back to origin/HEAD when available.
  */
 export async function resolvePlanBaseRevision(
   runGit: GitExec,
@@ -144,6 +155,8 @@ export async function resolvePlanBaseRevision(
     if (originAfterSync) return originAfterSync;
     const localAfterSync = await tryResolveCommit(runGit, localExpr);
     if (localAfterSync) return localAfterSync;
+    const originHeadFallback = await tryResolveOriginHeadCommit(runGit);
+    if (originHeadFallback) return originHeadFallback;
 
     throw new Error(
       `Unable to resolve base ref "${r}" as ${originExpr} or ${localExpr}. ` +
