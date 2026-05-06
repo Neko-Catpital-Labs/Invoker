@@ -275,7 +275,8 @@ export class PersistedWorkflowMutationCoordinator {
     channel: string,
     args: unknown[],
   ): void {
-    if (!this.isHardPreemptingRecreateIntent(channel, args)) {
+    const fenceKind = this.hardPreemptFenceKind(channel, args);
+    if (!fenceKind) {
       return;
     }
     const activeLease = this.persistence.listWorkflowMutationLeases()
@@ -288,25 +289,38 @@ export class PersistedWorkflowMutationCoordinator {
     if (!activeIntent || activeIntent.status !== 'running') {
       return;
     }
-    const reason = `Superseded by recreate intent #${newIntentId}`;
+    const reason = `Superseded by ${fenceKind} intent #${newIntentId}`;
     this.persistence.failWorkflowMutationIntent(activeIntentId, reason);
     const invalidation = this.runningIntentInvalidations.get(activeIntentId);
     invalidation?.reject(new WorkflowMutationInvalidatedError(reason));
     process.stderr.write(
-      `[workflow-mutation-coordinator] invalidated running intent ${activeIntentId} for ${workflowId} via recreate#${newIntentId}\n`,
+      `[workflow-mutation-coordinator] invalidated running intent ${activeIntentId} for ${workflowId} via ${fenceKind}#${newIntentId}\n`,
     );
   }
 
-  private isHardPreemptingRecreateIntent(channel: string, args: unknown[]): boolean {
-    if (channel === 'invoker:recreate-workflow' || channel === 'invoker:recreate-task' || channel === 'invoker:recreate-with-rebase') {
-      return true;
+  private hardPreemptFenceKind(channel: string, args: unknown[]): string | null {
+    if (
+      channel === 'invoker:recreate-workflow'
+      || channel === 'invoker:recreate-task'
+      || channel === 'invoker:recreate-with-rebase'
+    ) {
+      return 'recreate';
+    }
+    if (channel === 'invoker:delete-workflow') {
+      return 'delete';
     }
     if (channel !== 'headless.exec') {
-      return false;
+      return null;
     }
     const payload = args[0] as { args?: unknown[] } | undefined;
     const rawArgs = Array.isArray(payload?.args) ? payload.args : [];
-    return rawArgs[0] === 'recreate' || rawArgs[0] === 'recreate-task';
+    if (rawArgs[0] === 'recreate' || rawArgs[0] === 'recreate-task') {
+      return 'recreate';
+    }
+    if (rawArgs[0] === 'delete' || rawArgs[0] === 'delete-workflow') {
+      return 'delete';
+    }
+    return null;
   }
 
   private isWorkflowQueueFenceIntent(intent: WorkflowMutationIntent): boolean {
@@ -315,6 +329,7 @@ export class PersistedWorkflowMutationCoordinator {
       || intent.channel === 'invoker:recreate-workflow'
       || intent.channel === 'invoker:recreate-task'
       || intent.channel === 'invoker:recreate-with-rebase'
+      || intent.channel === 'invoker:delete-workflow'
     ) {
       return true;
     }
@@ -326,6 +341,9 @@ export class PersistedWorkflowMutationCoordinator {
     const command = typeof rawArgs[0] === 'string' ? rawArgs[0] : '';
     const target = typeof rawArgs[1] === 'string' ? rawArgs[1] : '';
     if (command === 'recreate-task') {
+      return true;
+    }
+    if (command === 'delete' || command === 'delete-workflow') {
       return true;
     }
     const isWorkflowId = /^wf-[^/]+$/.test(target);

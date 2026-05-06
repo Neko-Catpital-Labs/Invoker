@@ -380,7 +380,7 @@ export class CommandService {
     return this.executeCommand<void>(
       'DELETE_WORKFLOW_FAILED',
       () => this.orchestrator.deleteWorkflow(envelope.payload.workflowId),
-      undefined,
+      envelope.payload.workflowId,
     );
   }
 
