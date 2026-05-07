@@ -58,7 +58,7 @@ import type {
   TaskState,
   TaskStateChanges,
 } from '@invoker/workflow-core';
-import { makeEnvelope } from '@invoker/contracts';
+import { makeEnvelope, CommandError } from '@invoker/contracts';
 import type { WorkResponse } from '@invoker/contracts';
 import { resolveRepoRoot } from '@invoker/contracts';
 import { SQLiteAdapter, ConversationRepository, SqliteTaskRepository } from '@invoker/data-store';
@@ -1557,7 +1557,7 @@ if (isHeadless) {
   async function performCancelTask(taskId: string): Promise<{ cancelled: string[]; runningCancelled: string[] }> {
     const envelope = makeEnvelope('cancel-task', 'ui', 'task', { taskId });
     const cmdResult = await commandService.cancelTask(envelope);
-    if (!cmdResult.ok) throw new Error(cmdResult.error.message);
+    if (!cmdResult.ok) throw CommandError.fromResult(cmdResult.error);
     for (const id of cmdResult.data.runningCancelled) {
       await killRunningTask(id);
     }
@@ -1569,7 +1569,7 @@ if (isHeadless) {
     logger.info(`performCancelWorkflow begin workflow="${workflowId}"`, { module: 'kill' });
     const envelope = makeEnvelope('cancel-workflow', 'ui', 'workflow', { workflowId });
     const cmdResult = await commandService.cancelWorkflow(envelope);
-    if (!cmdResult.ok) throw new Error(cmdResult.error.message);
+    if (!cmdResult.ok) throw CommandError.fromResult(cmdResult.error);
     logger.info(
       `performCancelWorkflow commandService complete workflow="${workflowId}" cancelled=${cmdResult.data.cancelled.length} runningCancelled=${cmdResult.data.runningCancelled.length}`,
       { module: 'kill' },
@@ -1605,9 +1605,8 @@ if (isHeadless) {
     try {
       await performCancelTask(taskId);
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      if (message.includes('already completed') || message.includes('already stale')) {
-        logger.info(`preemptTaskSubgraph skipped for "${taskId}": ${message}`, { module: 'ipc' });
+      if (err instanceof CommandError && err.code === 'CANCEL_TASK_FAILED') {
+        logger.info(`preemptTaskSubgraph skipped for "${taskId}": ${err.message}`, { module: 'ipc' });
         return;
       }
       throw err;
@@ -1621,9 +1620,8 @@ if (isHeadless) {
       logger.info(`preemptWorkflowExecution end for "${workflowId}"`, { module: 'ipc' });
       return result;
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      if (message.includes('No tasks found for workflow')) {
-        logger.info(`preemptWorkflowExecution skipped for "${workflowId}": ${message}`, { module: 'ipc' });
+      if (err instanceof CommandError && err.code === 'CANCEL_WORKFLOW_FAILED') {
+        logger.info(`preemptWorkflowExecution skipped for "${workflowId}": ${err.message}`, { module: 'ipc' });
         return { cancelled: [], runningCancelled: [] };
       }
       throw err;
