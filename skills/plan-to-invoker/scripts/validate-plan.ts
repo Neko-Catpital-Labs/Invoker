@@ -22,7 +22,7 @@ interface ValidationError {
 const VALID_ON_FINISH = ['none', 'merge', 'pull_request'] as const;
 const VALID_MERGE_MODE = ['manual', 'automatic', 'github', 'external_review'] as const;
 const VALID_EXECUTOR_TYPE = ['worktree', 'docker', 'ssh'] as const;
-const VALID_REQUIRED_STATUS = ['completed'] as const;
+const VALID_REQUIRED_STATUS = ['completed', 'review_ready'] as const;
 const VALID_GATE_POLICY = ['completed', 'review_ready'] as const;
 
 type ExternalDep = { workflowId?: string; taskId?: string; requiredStatus?: string; gatePolicy?: string };
@@ -75,7 +75,7 @@ function validateExternalDeps(
         errorType: 'invalid_enum_value',
         field: `${fieldPrefix}[${depIndex}].requiredStatus`,
         ...(taskId ? { taskId } : {}),
-        message: `${taskId ? `Task "${taskId}" ` : ''}externalDependencies[${depIndex}] "requiredStatus" must be "completed"`,
+        message: `${taskId ? `Task "${taskId}" ` : ''}externalDependencies[${depIndex}] "requiredStatus" must be "completed" or "review_ready"`,
         value: dep.requiredStatus,
       });
     }

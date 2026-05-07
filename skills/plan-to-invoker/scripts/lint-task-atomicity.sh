@@ -28,6 +28,28 @@ function normalize_command(s) {
   gsub(/[ \t]+/, " ", s)
   return s
 }
+function first_experiment_artifact(s,    pattern) {
+  if (match(s, /docs\/context\/[^ ,`"'\''\t]+\/experiment-brief\.md/)) {
+    return substr(s, RSTART, RLENGTH)
+  }
+  return ""
+}
+function task_suffix(task_id, prefix,    n) {
+  n = length(prefix)
+  if (substr(task_id, 1, n) == prefix) {
+    return substr(task_id, n + 1)
+  }
+  return ""
+}
+function csv_has(csv, needle,    parts, i, item) {
+  if (csv == "" || needle == "") return 0
+  split(csv, parts, /,/)
+  for (i in parts) {
+    item = trim(parts[i])
+    if (item == needle) return 1
+  }
+  return 0
+}
 function parse_metadata(desc_lower,    tmp, parts) {
   layer = ""
   feature_state = ""
@@ -141,19 +163,17 @@ function flush_task(    wc, and_count, valid_id, d, desc_lower, idx) {
       errors[++errn] = "Task \"" id "\" uses Feature state dormant but omits \"Acceptance criteria:\" in description"
     }
 
-    if (has_prompt) {
-      if (has_goal_heading == 0) {
-        errors[++errn] = "Task \"" id "\" missing required \"Goal:\" section in description for prompt-based implementation tasks"
-      }
-      if (has_motivation_heading == 0) {
-        errors[++errn] = "Task \"" id "\" missing required \"Motivation:\" section in description for prompt-based implementation tasks"
-      }
-      if (has_alternatives_heading == 0) {
-        errors[++errn] = "Task \"" id "\" missing required \"Alternative considerations:\" (or \"Alternatives:\") section in description for prompt-based implementation tasks"
-      }
-      if (has_implementation_heading == 0) {
-        errors[++errn] = "Task \"" id "\" missing required \"Implementation details:\" (or \"Implementation:\") section in description for prompt-based implementation tasks"
-      }
+    if (has_goal_heading == 0) {
+      errors[++errn] = "Task \"" id "\" missing required \"Goal:\" section in description for implementation plans"
+    }
+    if (has_motivation_heading == 0) {
+      errors[++errn] = "Task \"" id "\" missing required \"Motivation:\" section in description for implementation plans"
+    }
+    if (has_alternatives_heading == 0) {
+      errors[++errn] = "Task \"" id "\" missing required \"Alternative considerations:\" (or \"Alternatives:\") section in description for implementation plans"
+    }
+    if (has_implementation_heading == 0) {
+      errors[++errn] = "Task \"" id "\" missing required \"Implementation details:\" (or \"Implementation:\") section in description for implementation plans"
     }
   }
 
@@ -179,6 +199,40 @@ function flush_task(    wc, and_count, valid_id, d, desc_lower, idx) {
   task_has_command[idx] = has_command
   task_command_line[idx] = normalize_command(command_line)
   task_id_to_index[id] = idx
+
+  artifact_path = first_experiment_artifact(desc " " prompt_text)
+  task_artifact[idx] = artifact_path
+
+  if (id ~ /^experiment-/ && has_prompt) {
+    has_experiment_tasks = 1
+    suffix = task_suffix(id, "experiment-")
+    experiment_id_by_suffix[suffix] = id
+    experiment_artifact_by_suffix[suffix] = artifact_path
+    if (artifact_path == "") {
+      errors[++errn] = "Task \"" id "\" must reference deterministic experiment artifact path (docs/context/<issue>/experiment-brief.md) in description/prompt"
+    }
+    if (tolower(prompt_text) !~ /commit/) {
+      errors[++errn] = "Task \"" id "\" must require committing the experiment artifact in prompt text"
+    }
+  }
+
+  if (id ~ /^implement-/) {
+    suffix = task_suffix(id, "implement-")
+    implement_id_by_suffix[suffix] = id
+    implement_artifact_by_suffix[suffix] = artifact_path
+  }
+
+  if (id ~ /^cleanup-experiment-artifacts-/) {
+    suffix = task_suffix(id, "cleanup-experiment-artifacts-")
+    cleanup_id_by_suffix[suffix] = id
+    cleanup_artifact_by_suffix[suffix] = artifact_path
+    if (artifact_path == "") {
+      errors[++errn] = "Task \"" id "\" must reference experiment artifact path (docs/context/<issue>/experiment-brief.md)"
+    }
+    if (tolower(command_line) !~ /git commit/) {
+      errors[++errn] = "Task \"" id "\" cleanup command must create a cleanup commit"
+    }
+  }
 }
 
 BEGIN {
@@ -189,6 +243,7 @@ BEGIN {
   errn = 0
   warnn = 0
   taskn = 0
+  has_experiment_tasks = 0
   on_finish = "pull_request"
   enforce_layering = 1
 }
@@ -313,6 +368,43 @@ BEGIN {
 
 END {
   flush_task()
+
+  if (enforce_layering == 1 && has_experiment_tasks == 1) {
+    for (suffix in experiment_id_by_suffix) {
+      experiment_id = experiment_id_by_suffix[suffix]
+      experiment_artifact = experiment_artifact_by_suffix[suffix]
+      implement_id = implement_id_by_suffix[suffix]
+      implement_artifact = implement_artifact_by_suffix[suffix]
+      cleanup_id = cleanup_id_by_suffix[suffix]
+      cleanup_artifact = cleanup_artifact_by_suffix[suffix]
+
+      if (implement_id == "") {
+        errors[++errn] = "Task \"" experiment_id "\" requires matching implement task \"implement-" suffix "\" for experiment artifact handoff"
+      } else if (implement_artifact == "") {
+        errors[++errn] = "Task \"" implement_id "\" must reference experiment artifact path (docs/context/<issue>/experiment-brief.md) in description/prompt"
+      } else if (experiment_artifact != "" && implement_artifact != "" && experiment_artifact != implement_artifact) {
+        errors[++errn] = "Tasks \"" experiment_id "\" and \"" implement_id "\" must reference the same experiment artifact path"
+      }
+
+      if (cleanup_id == "") {
+        errors[++errn] = "Task \"" experiment_id "\" requires cleanup task \"cleanup-experiment-artifacts-" suffix "\" before final regression gate"
+      } else {
+        cleanup_idx = task_id_to_index[cleanup_id]
+        if (cleanup_idx > 0) {
+          cleanup_deps = task_dependencies[cleanup_idx]
+          if (!csv_has(cleanup_deps, experiment_id)) {
+            errors[++errn] = "Task \"" cleanup_id "\" must depend on \"" experiment_id "\""
+          }
+          if (implement_id != "" && !csv_has(cleanup_deps, implement_id)) {
+            errors[++errn] = "Task \"" cleanup_id "\" must depend on \"" implement_id "\""
+          }
+          if (experiment_artifact != "" && cleanup_artifact != "" && cleanup_artifact != experiment_artifact) {
+            errors[++errn] = "Tasks \"" experiment_id "\" and \"" cleanup_id "\" must reference the same experiment artifact path"
+          }
+        }
+      }
+    }
+  }
 
   if (enforce_layering == 1) {
     for (idx = 1; idx <= taskn; idx++) {

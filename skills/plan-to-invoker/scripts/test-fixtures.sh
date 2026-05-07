@@ -318,6 +318,15 @@ tasks:
     dependencies: [implement-surface]
   - id: final-regression
     description: |
+      Goal:
+      - Run final full-suite regression gate.
+      Motivation:
+      - Ensure all slices are validated together.
+      Alternative considerations:
+      - Option A (chosen): full repository regression.
+      - Option B: package-only checks.
+      Implementation details:
+      - Execute root-level test gate after all earlier tasks complete.
       Run the repository test suite as the terminal regression gate.
       Layer: e2e_regression
       Feature state: active
@@ -360,6 +369,15 @@ tasks:
     dependencies: []
   - id: final-regression
     description: |
+      Goal:
+      - Run final regression for the implementation plan.
+      Motivation:
+      - Keep terminal verification explicit.
+      Alternative considerations:
+      - Option A (chosen): full repository regression.
+      - Option B: package-only checks.
+      Implementation details:
+      - Execute final gate as command task.
       Re-run package tests only.
       Layer: e2e_regression
       Feature state: active
@@ -434,6 +452,15 @@ tasks:
     dependencies: [implement-surface]
   - id: final-regression
     description: |
+      Goal:
+      - Run final full-suite regression gate.
+      Motivation:
+      - Ensure all slices are validated together.
+      Alternative considerations:
+      - Option A (chosen): full repository regression.
+      - Option B: package-only checks.
+      Implementation details:
+      - Execute root-level test gate after all earlier tasks complete.
       Run the repository test suite as the terminal regression gate.
       Layer: e2e_regression
       Feature state: active
@@ -483,6 +510,15 @@ tasks:
     dependencies: []
   - id: final-regression
     description: |
+      Goal:
+      - Run final full-suite regression gate.
+      Motivation:
+      - Ensure bridge changes remain stable.
+      Alternative considerations:
+      - Option A (chosen): full repository regression.
+      - Option B: package-only checks.
+      Implementation details:
+      - Execute root-level test gate after implementation task.
       Run full regression gate.
       Layer: app_regression
       Feature state: active
@@ -541,6 +577,15 @@ tasks:
     dependencies: []
   - id: final-regression
     description: |
+      Goal:
+      - Run final full-suite regression gate.
+      Motivation:
+      - Ensure bridge changes remain stable.
+      Alternative considerations:
+      - Option A (chosen): full repository regression.
+      - Option B: package-only checks.
+      Implementation details:
+      - Execute root-level test gate after implementation task.
       Run full regression gate.
       Layer: app_regression
       Feature state: active
@@ -549,6 +594,62 @@ tasks:
 EOF
 
   bash "$LINT_SCRIPT" "$temp_plan" >/dev/null
+}
+
+test_lint_requires_design_sections_for_command_tasks() {
+  local temp_plan
+  temp_plan=$(mktemp)
+  trap "rm -f $temp_plan" RETURN
+
+  cat > "$temp_plan" <<'EOF'
+name: "Invalid command task missing design sections"
+description: "Implementation plan with command step missing rationale headings"
+onFinish: pull_request
+mergeMode: external_review
+repoUrl: git@github.com:example-org/acme-repo.git
+tasks:
+  - id: run-focused-verification
+    description: |
+      Run focused verification.
+      Layer: app_regression
+      Feature state: active
+      Acceptance criteria:
+      - Ensure focused tests pass.
+    command: "cd packages/app && pnpm test"
+    dependencies: []
+  - id: final-regression
+    description: |
+      Goal:
+      - Run final full-suite regression gate.
+      Motivation:
+      - Ensure bridge changes remain stable.
+      Alternative considerations:
+      - Option A (chosen): full repository regression.
+      - Option B: package-only checks.
+      Implementation details:
+      - Execute root-level test gate after implementation task.
+      Run full regression gate.
+      Layer: app_regression
+      Feature state: active
+    command: "pnpm run test:all"
+    dependencies: [run-focused-verification]
+EOF
+
+  local output
+  set +e
+  output=$(bash "$LINT_SCRIPT" "$temp_plan" 2>&1)
+  local exit_code=$?
+  set -e
+
+  if [[ $exit_code -eq 0 ]]; then
+    echo "Expected lint to reject command task missing rationale sections" >&2
+    return 1
+  fi
+
+  if ! grep -q 'Task "run-focused-verification" missing required "Goal:" section' <<<"$output"; then
+    echo "Expected command-task Goal section lint error, got: $output" >&2
+    return 1
+  fi
 }
 
 # Check dependencies
@@ -618,6 +719,7 @@ run_test "Lint: reject non-test:all final gate" test_lint_rejects_non_test_all_f
 run_test "Lint: reject final gate missing dependencies" test_lint_rejects_final_gate_missing_dependencies
 run_test "Lint: reject missing design sections for prompt tasks" test_lint_requires_design_sections_for_prompt_tasks
 run_test "Lint: accept prompt tasks with design sections" test_lint_accepts_design_sections_for_prompt_tasks
+run_test "Lint: reject missing design sections for command tasks" test_lint_requires_design_sections_for_command_tasks
 
 echo ""
 echo "========================================="
