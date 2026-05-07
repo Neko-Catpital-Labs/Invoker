@@ -2306,6 +2306,14 @@ if (isHeadless) {
             return { started };
           });
         },
+        rejectTaskAction: async (taskId: string, reason?: string) => {
+          const workflowId = orchestrator.getTask(taskId)?.config.workflowId;
+          await runWorkflowMutation(workflowId, 'normal', 'api:reject-task', [taskId, reason], async () => {
+            const envelope = makeEnvelope('reject', 'surface', 'task', { taskId, reason });
+            const result = await commandService.reject(envelope);
+            if (!result.ok) throw new Error(result.error.message);
+          });
+        },
         killRunningTask,
         cancelTask: performCancelTask,
         cancelWorkflow: performCancelWorkflow,
@@ -2495,6 +2503,13 @@ if (isHeadless) {
       });
       workflowMutationDispatcher.set('api:approve-task', async (taskIdArg: unknown) => {
         await performSharedApproveTask(String(taskIdArg), 'api');
+      });
+      workflowMutationDispatcher.set('api:reject-task', async (taskIdArg: unknown, reasonArg?: unknown) => {
+        const taskId = String(taskIdArg);
+        const reason = reasonArg === undefined ? undefined : String(reasonArg);
+        const envelope = makeEnvelope('reject', 'surface', 'task', { taskId, reason });
+        const result = await commandService.reject(envelope);
+        if (!result.ok) throw new Error(result.error.message);
       });
       workflowMutationDispatcher.set('surface:approve-task', async (taskIdArg: unknown) => {
         await performSharedApproveTask(String(taskIdArg), 'surface');

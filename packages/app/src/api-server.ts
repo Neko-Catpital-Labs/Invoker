@@ -70,6 +70,7 @@ export interface ApiServerDeps {
   taskExecutor: TaskRunner;
   autoApproveAIFixes?: boolean;
   approveTaskAction?: (taskId: string) => Promise<{ started: TaskState[] }>;
+  rejectTaskAction?: (taskId: string, reason?: string) => Promise<void>;
   killRunningTask?: (taskId: string) => Promise<void>;
   cancelTask?: (taskId: string) => Promise<{ cancelled: string[]; runningCancelled: string[] }>;
   cancelWorkflow?: (workflowId: string) => Promise<{ cancelled: string[]; runningCancelled: string[] }>;
@@ -156,6 +157,7 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
     taskExecutor,
     autoApproveAIFixes,
     approveTaskAction,
+    rejectTaskAction,
     killRunningTask,
     cancelTask,
     cancelWorkflow,
@@ -374,7 +376,11 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
               reason = parsed.reason;
             } catch { /* not JSON, ignore */ }
           }
-          sharedRejectTask(taskId, { orchestrator }, reason);
+          if (rejectTaskAction) {
+            await rejectTaskAction(taskId, reason);
+          } else {
+            sharedRejectTask(taskId, { orchestrator }, reason);
+          }
           json(res, 200, { ok: true, taskId, action: 'rejected', reason });
         } catch (err) {
           json(res, 400, { error: err instanceof Error ? err.message : String(err) });
