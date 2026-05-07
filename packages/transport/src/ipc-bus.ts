@@ -92,6 +92,33 @@ function encode(env: Envelope): Buffer {
   return frame;
 }
 
+// ---------------------------------------------------------------------------
+// Malformed-frame observability
+// ---------------------------------------------------------------------------
+
+/** Structured event emitted when a frame fails to decode. */
+export interface MalformedFrameEvent {
+  /** ISO-8601 timestamp of the drop. */
+  timestamp: string;
+  /** Why the frame was rejected. */
+  reason: 'invalid_json' | 'invalid_envelope';
+  /** Byte length of the raw JSON payload that failed. */
+  rawByteLength: number;
+  /** Number of malformed frames dropped since the last emitted event
+   *  (0 when every drop is reported; >0 when rate-limited). */
+  droppedSinceLastReport: number;
+}
+
+/** Callback signature for malformed-frame observers. */
+export type MalformedFrameObserver = (event: MalformedFrameEvent) => void;
+
+/**
+ * Default minimum interval (ms) between emitted malformed-frame events.
+ * Events that arrive faster are counted but not reported until the window
+ * elapses (token-bucket with capacity 1).
+ */
+export const MALFORMED_FRAME_RATE_LIMIT_MS = 1_000;
+
 /**
  * Streaming decoder for length-prefixed JSON frames.
  *
@@ -100,10 +127,23 @@ function encode(env: Envelope): Buffer {
  */
 class FrameDecoder {
   private buf = Buffer.alloc(0);
-  private onEnvelope: (env: Envelope) => void;
+  private readonly onEnvelope: (env: Envelope) => void;
+  private readonly onMalformed: MalformedFrameObserver | undefined;
+  private readonly rateLimitMs: number;
 
-  constructor(onEnvelope: (env: Envelope) => void) {
+  /** Timestamp (ms) of the last emitted malformed-frame event. */
+  private lastEmitMs = 0;
+  /** Count of drops suppressed by rate-limiting since last emit. */
+  private suppressedCount = 0;
+
+  constructor(
+    onEnvelope: (env: Envelope) => void,
+    onMalformed?: MalformedFrameObserver,
+    rateLimitMs: number = MALFORMED_FRAME_RATE_LIMIT_MS,
+  ) {
     this.onEnvelope = onEnvelope;
+    this.onMalformed = onMalformed;
+    this.rateLimitMs = rateLimitMs;
   }
 
   push(chunk: Buffer): void {
@@ -115,12 +155,48 @@ class FrameDecoder {
       const json = this.buf.subarray(4, 4 + len).toString('utf8');
       this.buf = this.buf.subarray(4 + len);
       try {
-        this.onEnvelope(JSON.parse(json) as Envelope);
+        const parsed: unknown = JSON.parse(json);
+        if (!isValidEnvelope(parsed)) {
+          this.reportMalformed('invalid_envelope', Buffer.byteLength(json, 'utf8'));
+          continue;
+        }
+        this.onEnvelope(parsed);
       } catch {
-        // Malformed frame — skip silently (no payload logging).
+        this.reportMalformed('invalid_json', Buffer.byteLength(json, 'utf8'));
       }
     }
   }
+
+  /** Emit a malformed-frame event, respecting the rate limit. */
+  private reportMalformed(reason: MalformedFrameEvent['reason'], rawByteLength: number): void {
+    if (!this.onMalformed) return;
+    const now = Date.now();
+    if (now - this.lastEmitMs < this.rateLimitMs) {
+      this.suppressedCount++;
+      return;
+    }
+    this.lastEmitMs = now;
+    const droppedSinceLastReport = this.suppressedCount;
+    this.suppressedCount = 0;
+    this.onMalformed({
+      timestamp: new Date(now).toISOString(),
+      reason,
+      rawByteLength,
+      droppedSinceLastReport,
+    });
+  }
+}
+
+/** Type guard: returns true when the value has a valid envelope shape. */
+function isValidEnvelope(v: unknown): v is Envelope {
+  if (typeof v !== 'object' || v === null) return false;
+  const obj = v as Record<string, unknown>;
+  const kind = obj.kind;
+  if (kind === 'pub') return typeof obj.channel === 'string';
+  if (kind === 'req') return typeof obj.channel === 'string' && typeof obj.reqId === 'string';
+  if (kind === 'res') return typeof obj.channel === 'string' && typeof obj.reqId === 'string';
+  if (kind === 'err') return typeof obj.channel === 'string' && typeof obj.reqId === 'string' && typeof obj.code === 'string';
+  return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -138,6 +214,9 @@ export interface IpcBusOptions {
   /** Maximum time in ms a request may wait for a response before being
    *  rejected with `REQUEST_TIMEOUT`.  Defaults to {@link DEFAULT_REQUEST_DEADLINE_MS}. */
   requestDeadlineMs?: number;
+  /** Optional callback invoked when a malformed frame is received.
+   *  Rate-limited to at most one call per {@link MALFORMED_FRAME_RATE_LIMIT_MS}. */
+  onMalformedFrame?: MalformedFrameObserver;
 }
 
 // ---------------------------------------------------------------------------
@@ -148,6 +227,7 @@ export class IpcBus implements MessageBus {
   private readonly socketPath: string;
   private readonly allowServe: boolean;
   private readonly requestDeadlineMs: number;
+  private readonly onMalformedFrame: MalformedFrameObserver | undefined;
 
   // Local handler registries (same structure as LocalBus).
   private subscribers = new Map<string, Set<MessageHandler>>();
@@ -178,6 +258,7 @@ export class IpcBus implements MessageBus {
     this.socketPath = socketPath;
     this.allowServe = options.allowServe ?? true;
     this.requestDeadlineMs = options.requestDeadlineMs ?? DEFAULT_REQUEST_DEADLINE_MS;
+    this.onMalformedFrame = options.onMalformedFrame;
     this.readyPromise = new Promise<void>((r) => {
       this.resolveReady = r;
     });
@@ -287,7 +368,10 @@ export class IpcBus implements MessageBus {
       return;
     }
     this.peers.add(sock);
-    const decoder = new FrameDecoder((env) => this.handleEnvelope(env, sock));
+    const decoder = new FrameDecoder(
+      (env) => this.handleEnvelope(env, sock),
+      this.onMalformedFrame,
+    );
     sock.on('data', (chunk: Buffer) => decoder.push(chunk));
     sock.on('close', () => {
       this.peers.delete(sock);
