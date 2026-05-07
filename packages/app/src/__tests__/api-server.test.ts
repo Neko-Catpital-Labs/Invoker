@@ -7,6 +7,7 @@
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest';
 import http from 'node:http';
 import { startApiServer, type ApiServer } from '../api-server.js';
+import { OrchestratorError, OrchestratorErrorCode } from '@invoker/workflow-core';
 
 // ── Helpers ──────────────────────────────────────────────────
 
@@ -972,7 +973,7 @@ describe('POST /api/workflows/:id/fork', () => {
 
   it('returns an error status when forkWorkflow throws', async () => {
     mocks.orchestrator.forkWorkflow.mockImplementationOnce(() => {
-      throw new Error('Workflow missing not found');
+      throw new OrchestratorError(OrchestratorErrorCode.WORKFLOW_NOT_FOUND, 'Workflow missing not found');
     });
     const res = await request(port, 'POST', '/api/workflows/missing/fork');
     expect(res.status).toBe(404);
@@ -1024,7 +1025,7 @@ describe('DELETE /api/workflows/:id', () => {
   });
 
   it('returns 404 when workflow not found', async () => {
-    mocks.deleteWorkflow.mockRejectedValue(new Error('workflow not found'));
+    mocks.deleteWorkflow.mockRejectedValue(new OrchestratorError(OrchestratorErrorCode.WORKFLOW_NOT_FOUND, 'workflow not found'));
     const res = await request(port, 'DELETE', '/api/workflows/missing');
     expect(res.status).toBe(404);
     expect(res.body.error).toBe('workflow not found');
