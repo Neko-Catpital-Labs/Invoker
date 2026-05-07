@@ -71,6 +71,7 @@ export interface ApiServerDeps {
   autoApproveAIFixes?: boolean;
   approveTaskAction?: (taskId: string) => Promise<{ started: TaskState[] }>;
   rejectTaskAction?: (taskId: string, reason?: string) => Promise<void>;
+  retryTaskAction?: (taskId: string) => Promise<{ started: TaskState[] }>;
   killRunningTask?: (taskId: string) => Promise<void>;
   cancelTask?: (taskId: string) => Promise<{ cancelled: string[]; runningCancelled: string[] }>;
   cancelWorkflow?: (workflowId: string) => Promise<{ cancelled: string[]; runningCancelled: string[] }>;
@@ -158,6 +159,7 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
     autoApproveAIFixes,
     approveTaskAction,
     rejectTaskAction,
+    retryTaskAction,
     killRunningTask,
     cancelTask,
     cancelWorkflow,
@@ -237,27 +239,32 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
         const taskId = decodeURIComponent((retryMatch ?? restartMatch)![1]);
         try {
           await killRunningTask?.(taskId);
-          const started = sharedRetryTask(taskId, { orchestrator });
-          const runnable = started.filter(t => t.status === 'running');
-          await taskExecutor.executeTasks(runnable);
-          await executeGlobalTopup({
-            orchestrator,
-            taskExecutor,
-            logger: apiLogger,
-            context: isLegacy ? 'api.tasks.restart' : 'api.tasks.retry',
-            alreadyDispatched: runnable,
-          });
+          let started: TaskState[];
+          if (retryTaskAction) {
+            ({ started } = await retryTaskAction(taskId));
+          } else {
+            const result = sharedRetryTask(taskId, { orchestrator });
+            started = result;
+            await finalizeMutationWithGlobalTopup({
+              orchestrator,
+              taskExecutor,
+              logger: apiLogger,
+              context: isLegacy ? 'api.tasks.restart' : 'api.tasks.retry',
+              started: result.filter(t => t.status === 'running'),
+            });
+          }
           if (isLegacy) {
             res.setHeader(
               'Deprecation',
               'true; reason="Use /api/tasks/:id/retry or /api/tasks/:id/recreate"',
             );
           }
+          const tasksStarted = started.filter(t => t.status === 'running').length;
           json(res, 200, {
             ok: true,
             taskId,
             action: isLegacy ? 'restarted' : 'retried',
-            tasksStarted: runnable.length,
+            tasksStarted,
             ...(isLegacy ? { deprecated: true, replacement: '/api/tasks/:id/retry' } : {}),
           });
         } catch (err) {
