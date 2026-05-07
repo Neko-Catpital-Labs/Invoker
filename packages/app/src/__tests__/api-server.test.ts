@@ -641,6 +641,40 @@ describe('POST /api/tasks/:id/reject', () => {
     expect(mocks.orchestrator.cancelTask).not.toHaveBeenCalled();
     expect(mocks.orchestrator.cancelWorkflow).not.toHaveBeenCalled();
   });
+
+  it('uses rejectTaskAction when provided', async () => {
+    const rejectTaskAction = vi.fn().mockResolvedValue(undefined);
+    const isolatedApi = startApiServer({
+      orchestrator: mocks.orchestrator as any,
+      persistence: mocks.persistence as any,
+      executorRegistry: mocks.executorRegistry as any,
+      taskExecutor: mocks.taskExecutor as any,
+      rejectTaskAction,
+      cancelTask: mocks.cancelTask,
+      cancelWorkflow: mocks.cancelWorkflow,
+      killRunningTask: mocks.killRunningTask,
+      deleteWorkflow: mocks.deleteWorkflow,
+      detachWorkflow: mocks.detachWorkflow,
+    });
+    await new Promise<void>((resolve) => {
+      if (isolatedApi.server.listening) {
+        resolve();
+      } else {
+        isolatedApi.server.on('listening', resolve);
+      }
+    });
+    const addr = isolatedApi.server.address();
+    const isolatedPort = typeof addr === 'object' && addr ? addr.port : isolatedApi.port;
+
+    try {
+      const res = await request(isolatedPort, 'POST', '/api/tasks/task-1/reject', { reason: 'bad' });
+      expect(res.status).toBe(200);
+      expect(rejectTaskAction).toHaveBeenCalledWith('task-1', 'bad');
+      expect(mocks.orchestrator.reject).not.toHaveBeenCalled();
+    } finally {
+      await isolatedApi.close();
+    }
+  });
 });
 
 describe('POST /api/tasks/:id/input', () => {
