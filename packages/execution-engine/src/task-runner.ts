@@ -142,6 +142,7 @@ export interface TaskRunnerConfig {
 // ── TaskRunner ──────────────────────────────────────────
 
 export class TaskRunner {
+  private static readonly INTERMEDIATE_REMOTE_NAME = 'intermediate';
   /** @internal */ orchestrator: Orchestrator;
   /** @internal */ persistence: SQLiteAdapter;
   private executorRegistry: ExecutorRegistry;
@@ -441,6 +442,7 @@ export class TaskRunner {
     });
     const baseBranch = workflow?.baseBranch ?? this.defaultBranch;
     const repoUrl = workflow?.repoUrl;
+    const intermediateRepoUrl = workflow?.intermediateRepoUrl;
 
     // Persist the experiment branch as soon as the executor knows it — well
     // before `git worktree add` could leak a worktree without a recorded branch
@@ -479,6 +481,7 @@ export class TaskRunner {
         prompt: task.config.prompt,
         executionAgent: task.config.executionAgent?.trim() || DEFAULT_EXECUTION_AGENT,
         repoUrl,
+        intermediateRepoUrl,
         featureBranch: task.config.featureBranch,
         upstreamContext: upstreamContext.length > 0 ? upstreamContext : undefined,
         alternatives: alternatives.length > 0 ? alternatives : undefined,
@@ -874,6 +877,7 @@ export class TaskRunner {
       throw new Error(`Task ${task.id} has no branch for approved-fix publish`);
     }
 
+    const workflow = task.config.workflowId ? this.persistence.loadWorkflow?.(task.config.workflowId) : undefined;
     const request: WorkRequest = {
       requestId: randomUUID(),
       actionId: task.id,
@@ -884,6 +888,7 @@ export class TaskRunner {
         description: task.description,
         command: task.config.command,
         prompt: task.config.prompt,
+        intermediateRepoUrl: workflow?.intermediateRepoUrl,
       },
       callbackUrl: '',
       timestamps: {
@@ -1349,10 +1354,12 @@ export class TaskRunner {
       ?? await this.detectDefaultBranch();
 
     const reconWorkflowId = reconTask?.config.workflowId;
-    const reconRepoUrl =
+    const reconWorkflow =
       reconWorkflowId !== undefined && reconWorkflowId !== ''
-        ? this.persistence.loadWorkflow(reconWorkflowId)?.repoUrl
+        ? this.persistence.loadWorkflow(reconWorkflowId)
         : undefined;
+    const reconRepoUrl = reconWorkflow?.repoUrl;
+    const reconIntermediateRepoUrl = reconWorkflow?.intermediateRepoUrl;
 
     const worktreeDir = await this.createMergeWorktree(baseBranch, 'recon-' + reconTaskId, reconRepoUrl);
 
@@ -1370,13 +1377,12 @@ export class TaskRunner {
           throw new Error(`Experiment ${expId} has no branch`);
         }
         const b = expTask.execution.branch;
-        await ensureLocalBranchForMerge(this, worktreeDir, b, reconRepoUrl);
+        await ensureLocalBranchForMerge(this, worktreeDir, b, reconRepoUrl, reconIntermediateRepoUrl);
         const expMergeMsg = `Merge ${b} — ${expTask.description}`;
         await this.execGitIn(['merge', '--no-ff', '-m', expMergeMsg, b], worktreeDir);
       }
 
-      // Push reconciliation branch from clone to origin (GitHub)
-      await this.execGitIn(['push', '--force', 'origin', `${branchName}:refs/heads/${branchName}`], worktreeDir);
+      await this.pushBranchFromMergeWorktree(worktreeDir, branchName, reconIntermediateRepoUrl);
 
       const commit = await this.execGitIn(['rev-parse', 'HEAD'], worktreeDir);
       return { branch: branchName, commit };
@@ -1851,7 +1857,9 @@ export class TaskRunner {
       .filter((t) => t.config.workflowId === workflowId && t.status === 'completed' && t.execution.branch && !t.config.isMergeNode)
       .map((t) => t.execution.branch!);
 
-    const rebaseRepoUrl = this.persistence.loadWorkflow?.(workflowId)?.repoUrl;
+    const rebaseWorkflow = this.persistence.loadWorkflow?.(workflowId);
+    const rebaseRepoUrl = rebaseWorkflow?.repoUrl;
+    const rebaseIntermediateRepoUrl = rebaseWorkflow?.intermediateRepoUrl;
     const worktreeDir = await this.createMergeWorktree(baseBranch, 'rebase-' + workflowId, rebaseRepoUrl);
 
     const rebasedBranches: string[] = [];
@@ -1862,8 +1870,7 @@ export class TaskRunner {
         try {
           await this.execGitIn(['checkout', branch], worktreeDir);
           await this.execGitIn(['rebase', baseBranch], worktreeDir);
-          // Push rebased branch from clone to origin (GitHub)
-          await this.execGitIn(['push', '--force', 'origin', `${branch}:refs/heads/${branch}`], worktreeDir);
+          await this.pushBranchFromMergeWorktree(worktreeDir, branch, rebaseIntermediateRepoUrl);
           rebasedBranches.push(branch);
           this.logger.info(`[rebase] Successfully rebased ${branch} onto ${baseBranch}`);
         } catch (err) {
@@ -1882,6 +1889,34 @@ export class TaskRunner {
     } finally {
       await this.removeMergeWorktree(worktreeDir);
     }
+  }
+
+  private async pushBranchFromMergeWorktree(
+    worktreeDir: string,
+    branch: string,
+    intermediateRepoUrl?: string,
+  ): Promise<void> {
+    const trimmedIntermediateUrl = intermediateRepoUrl?.trim();
+    if (trimmedIntermediateUrl) {
+      try {
+        await this.execGitIn(
+          ['remote', 'set-url', TaskRunner.INTERMEDIATE_REMOTE_NAME, trimmedIntermediateUrl],
+          worktreeDir,
+        );
+      } catch {
+        await this.execGitIn(
+          ['remote', 'add', TaskRunner.INTERMEDIATE_REMOTE_NAME, trimmedIntermediateUrl],
+          worktreeDir,
+        );
+      }
+      await this.execGitIn(
+        ['push', '--force', TaskRunner.INTERMEDIATE_REMOTE_NAME, `${branch}:refs/heads/${branch}`],
+        worktreeDir,
+      );
+      return;
+    }
+
+    await this.execGitIn(['push', '--force', 'origin', `${branch}:refs/heads/${branch}`], worktreeDir);
   }
 
   /** @internal */ gitLogMessage(commitHash: string, cwd?: string): Promise<string> {

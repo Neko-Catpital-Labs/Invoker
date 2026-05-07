@@ -7,6 +7,19 @@ Default workflow:
 - Publish branches to `origin` (or another explicit publish remote).
 - Open PRs against `Neko-Catpital-Labs/Invoker`.
 
+## Invoker Plan Override
+
+Invoker plans may optionally set `intermediateRepoUrl`:
+
+```yaml
+repoUrl: https://github.com/Neko-Catpital-Labs/Invoker
+intermediateRepoUrl: https://github.com/your-org/invoker-intermediate
+```
+
+- Non-merge task branches (including reconciliation/rebase helper branches) are pushed to `intermediateRepoUrl`.
+- Merge-gate/final publish and PR creation continue to use `origin` from `repoUrl`.
+- If `intermediateRepoUrl` is omitted, all branch pushes remain `origin`-only.
+
 ## Rules
 
 - Do not rely on automatic fork-sync scripts before submission.

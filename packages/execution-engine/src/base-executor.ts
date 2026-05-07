@@ -67,6 +67,7 @@ export class MergeConflictError extends Error {
 }
 
 export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor {
+  protected static readonly INTERMEDIATE_REMOTE_NAME = 'intermediate';
   abstract readonly type: string;
   protected entries = new Map<string, TEntry>();
   protected heartbeatIntervalMs: number;
@@ -596,7 +597,7 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
     if (!commitHash) {
       return { error: 'commit approved fix failed' };
     }
-    const pushError = await this.pushBranchToRemote(cwd, branch);
+    const pushError = await this.pushBranchToRemote(cwd, branch, undefined, request.inputs.intermediateRepoUrl);
     if (pushError) {
       return { error: pushError };
     }
@@ -707,9 +708,36 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
    * Push task branch to remote after completion.
    * Returns `undefined` on success, or a short error message on failure (logged and echoed to the task stream).
    */
-  protected async pushBranchToRemote(cwd: string, branch: string, executionId?: string): Promise<string | undefined> {
+  protected async pushBranchToRemote(
+    cwd: string,
+    branch: string,
+    executionId?: string,
+    intermediateRepoUrlOverride?: string,
+  ): Promise<string | undefined> {
     try {
-      await this.execGitSimple(['push', '--force-with-lease', '-u', 'origin', branch], cwd);
+      const requestIntermediateRepoUrl = intermediateRepoUrlOverride ?? (executionId
+        ? this.entries.get(executionId)?.request.inputs.intermediateRepoUrl
+        : undefined);
+      const intermediateRepoUrl = requestIntermediateRepoUrl?.trim();
+      if (intermediateRepoUrl) {
+        try {
+          await this.execGitSimple(
+            ['remote', 'set-url', BaseExecutor.INTERMEDIATE_REMOTE_NAME, intermediateRepoUrl],
+            cwd,
+          );
+        } catch {
+          await this.execGitSimple(
+            ['remote', 'add', BaseExecutor.INTERMEDIATE_REMOTE_NAME, intermediateRepoUrl],
+            cwd,
+          );
+        }
+        await this.execGitSimple(
+          ['push', '--force-with-lease', '-u', BaseExecutor.INTERMEDIATE_REMOTE_NAME, branch],
+          cwd,
+        );
+      } else {
+        await this.execGitSimple(['push', '--force-with-lease', '-u', 'origin', branch], cwd);
+      }
       return undefined;
     } catch (err) {
       const msg = `[${this.type}] pushBranchToRemote failed for ${branch}: ${err}\n`;

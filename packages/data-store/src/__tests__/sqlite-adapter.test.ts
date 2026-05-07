@@ -1124,12 +1124,13 @@ describe('SQLiteAdapter', () => {
   });
 
   describe('workflow merge config', () => {
-    it('saveWorkflow persists onFinish, baseBranch, and featureBranch', () => {
+    it('saveWorkflow persists onFinish, baseBranch, featureBranch, and intermediateRepoUrl', () => {
       const wf: Workflow = {
         ...testWorkflow,
         onFinish: 'merge',
         baseBranch: 'main',
         featureBranch: 'feat/test',
+        intermediateRepoUrl: 'https://github.com/fork/repo.git',
       };
       adapter.saveWorkflow(wf);
 
@@ -1138,6 +1139,7 @@ describe('SQLiteAdapter', () => {
       expect(loaded!.onFinish).toBe('merge');
       expect(loaded!.baseBranch).toBe('main');
       expect(loaded!.featureBranch).toBe('feat/test');
+      expect(loaded!.intermediateRepoUrl).toBe('https://github.com/fork/repo.git');
     });
 
     it('listWorkflows returns merge config fields', () => {
