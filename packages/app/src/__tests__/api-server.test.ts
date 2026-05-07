@@ -898,10 +898,10 @@ describe('POST /api/workflows/:id/restart', () => {
     expect(mocks.taskExecutor.executeTasks).toHaveBeenCalledTimes(2);
   });
 
-  it('returns 400 on error', async () => {
+  it('returns 404 when workflow not found', async () => {
     mocks.persistence.loadWorkflow.mockReturnValue(undefined);
     const res = await request(port, 'POST', '/api/workflows/missing/restart');
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(404);
     expect(res.body.error).toContain('not found');
   });
 
@@ -1023,10 +1023,10 @@ describe('DELETE /api/workflows/:id', () => {
     expect(mocks.orchestrator.deleteWorkflow).not.toHaveBeenCalled();
   });
 
-  it('returns 400 on error', async () => {
+  it('returns 404 when workflow not found', async () => {
     mocks.deleteWorkflow.mockRejectedValue(new Error('workflow not found'));
     const res = await request(port, 'DELETE', '/api/workflows/missing');
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(404);
     expect(res.body.error).toBe('workflow not found');
   });
 });
