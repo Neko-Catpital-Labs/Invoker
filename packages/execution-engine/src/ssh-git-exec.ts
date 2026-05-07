@@ -294,6 +294,7 @@ export interface GitRecordAndPushOpts {
   commitMessageEmpty: string;
   gitUserName: string;
   gitUserEmail: string;
+  pushRemoteUrl?: string;
 }
 
 /**
@@ -310,6 +311,7 @@ export function buildRecordAndPushScript(opts: GitRecordAndPushOpts): string {
   const emB = base64Encode(opts.commitMessageEmpty);
   const userNameB = base64Encode(opts.gitUserName);
   const userEmailB = base64Encode(opts.gitUserEmail);
+  const pushRemoteUrlB = base64Encode(opts.pushRemoteUrl ?? '');
 
   return `set -euo pipefail
 WT=$(echo ${wtB} | base64 -d)
@@ -329,7 +331,17 @@ else
 fi
 HASH=$(git rev-parse HEAD)
 BR=$(echo ${brB} | base64 -d)
-git push -u origin "$BR"
+PUSH_URL=$(echo ${pushRemoteUrlB} | base64 -d)
+if [ -n "$PUSH_URL" ]; then
+  if git remote get-url intermediate >/dev/null 2>&1; then
+    git remote set-url intermediate "$PUSH_URL"
+  else
+    git remote add intermediate "$PUSH_URL"
+  fi
+  git push -u intermediate "$BR"
+else
+  git push -u origin "$BR"
+fi
 printf "%s" "$HASH"
 `;
 }

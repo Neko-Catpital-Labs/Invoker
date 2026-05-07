@@ -297,6 +297,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         status TEXT DEFAULT 'running',
         plan_file TEXT,
         repo_url TEXT,
+        intermediate_repo_url TEXT,
         branch TEXT,
         parent_remote TEXT,
         created_at TEXT DEFAULT (datetime('now')),
@@ -542,6 +543,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       'ALTER TABLE tasks ADD COLUMN remote_target_id TEXT',
       'ALTER TABLE workflows ADD COLUMN description TEXT',
       'ALTER TABLE workflows ADD COLUMN visual_proof INTEGER',
+      'ALTER TABLE workflows ADD COLUMN intermediate_repo_url TEXT',
       // agent_session_id: new column for pluggable agent architecture
       'ALTER TABLE tasks ADD COLUMN agent_session_id TEXT',
       'ALTER TABLE attempts ADD COLUMN agent_session_id TEXT',
@@ -655,14 +657,14 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
   saveWorkflow(workflow: Workflow): void {
     this.execRun(`
-      INSERT OR REPLACE INTO workflows (id, name, description, visual_proof, status, plan_file, repo_url, branch, on_finish, base_branch, parent_remote, feature_branch, merge_mode, review_provider, generation, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT OR REPLACE INTO workflows (id, name, description, visual_proof, status, plan_file, repo_url, intermediate_repo_url, branch, on_finish, base_branch, parent_remote, feature_branch, merge_mode, review_provider, generation, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
       workflow.id, workflow.name,
       workflow.description ?? null,
       workflow.visualProof ? 1 : 0,
       workflow.status,
-      workflow.planFile ?? null, workflow.repoUrl ?? null, workflow.branch ?? null,
+      workflow.planFile ?? null, workflow.repoUrl ?? null, workflow.intermediateRepoUrl ?? null, workflow.branch ?? null,
       workflow.onFinish ?? null, workflow.baseBranch ?? null, null, workflow.featureBranch ?? null,
       workflow.mergeMode ?? null,
       workflow.reviewProvider ?? null,
@@ -1602,6 +1604,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       status: row.status,
       planFile: row.plan_file ?? undefined,
       repoUrl: row.repo_url ?? undefined,
+      intermediateRepoUrl: row.intermediate_repo_url ?? undefined,
       branch: row.branch ?? undefined,
       onFinish: row.on_finish ?? undefined,
       baseBranch: row.base_branch ?? undefined,

@@ -217,6 +217,7 @@ export async function ensureLocalBranchForMerge(
   worktreeDir: string,
   branch: string,
   repoUrl?: string,
+  intermediateRepoUrl?: string,
 ): Promise<boolean> {
   let hadLocal = false;
   try {
@@ -238,6 +239,20 @@ export async function ensureLocalBranchForMerge(
     return true;
   } catch (err) {
     originErr = err;
+  }
+
+  const trimmedIntermediateRepoUrl = intermediateRepoUrl?.trim();
+  if (trimmedIntermediateRepoUrl) {
+    try {
+      await execGitInMergeSafe(
+        host,
+        ['fetch', trimmedIntermediateRepoUrl, `+refs/heads/${branch}:refs/heads/${branch}`],
+        worktreeDir,
+      );
+      return true;
+    } catch {
+      // Fall through to mirror fetch and final diagnostics.
+    }
   }
 
   const trimmedUrl = repoUrl?.trim();
@@ -617,7 +632,13 @@ export async function approveMergeImpl(
     const worktreeDir = await host.createMergeWorktree(baseBranch, 'approve-' + workflowId, workflow.repoUrl);
     try {
       mergeTrace('GIT_MERGE_SQUASH', { featureBranch, worktreeDir });
-      await ensureLocalBranchForMerge(host, worktreeDir, featureBranch, workflow.repoUrl);
+      await ensureLocalBranchForMerge(
+        host,
+        worktreeDir,
+        featureBranch,
+        workflow.repoUrl,
+        workflow.intermediateRepoUrl,
+      );
       await execGitInMergeSafe(host, ['merge', '--squash', featureBranch], worktreeDir);
       mergeTrace('GIT_COMMIT', { mergeMessage });
       const commitBody = fullSummary ? `${mergeMessage}\n\n${fullSummary}` : mergeMessage;
@@ -862,7 +883,13 @@ export async function publishAfterFixImpl(
         } catch { /* not an ancestor — needs merging */ }
 
         console.log(`[merge] Post-fix: merging task branch ${branch} → ${featureBranch}`);
-        const branchAvailable = await ensureLocalBranchForMerge(host, consolidateDir, branch, workflow?.repoUrl);
+        const branchAvailable = await ensureLocalBranchForMerge(
+          host,
+          consolidateDir,
+          branch,
+          workflow?.repoUrl,
+          workflow?.intermediateRepoUrl,
+        );
         if (!branchAvailable) {
           // Branch missing - skip gracefully if experiment branch
           if (branch.startsWith('experiment/')) {
@@ -1201,7 +1228,13 @@ export async function consolidateAndMergeImpl(
     let skippedCount = 0;
     for (const branch of taskBranches) {
       console.log(`[merge] Merging task branch: ${branch} → ${featureBranch}`);
-      const branchAvailable = await ensureLocalBranchForMerge(host, worktreeDir, branch, repoUrlForMerge);
+      const branchAvailable = await ensureLocalBranchForMerge(
+        host,
+        worktreeDir,
+        branch,
+        repoUrlForMerge,
+        workflowForMerge?.intermediateRepoUrl,
+      );
       if (!branchAvailable) {
         // Branch missing everywhere - check if already incorporated via ancestry
         console.log(`[merge] Branch ${branch} not found, checking if already incorporated...`);

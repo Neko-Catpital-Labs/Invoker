@@ -345,6 +345,22 @@ describe('buildRecordAndPushScript', () => {
     expect(script).toContain(bashNormalizeTildePath());
   });
 
+  it('targets intermediate remote when pushRemoteUrl is provided', () => {
+    const script = buildRecordAndPushScript({
+      worktreePath: '~/worktree',
+      branch: 'branch',
+      commitMessageChanges: 'msg',
+      commitMessageEmpty: 'empty',
+      gitUserName: 'Invoker Bot',
+      gitUserEmail: 'invoker@local',
+      pushRemoteUrl: 'https://github.com/fork/repo.git',
+    });
+
+    expect(script).toContain('git remote set-url intermediate "$PUSH_URL"');
+    expect(script).toContain('git remote add intermediate "$PUSH_URL"');
+    expect(script).toContain('git push -u intermediate "$BR"');
+  });
+
   it('commits and pushes successfully without preconfigured git identity', () => {
     const root = mkdtempSync(join(tmpdir(), 'ssh-record-push-'));
     const source = join(root, 'source');

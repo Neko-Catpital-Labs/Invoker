@@ -74,6 +74,19 @@ tasks:
     expect(() => parsePlan(yaml)).toThrow('must have a "repoUrl" field');
   });
 
+  it('rejects blank intermediateRepoUrl', () => {
+    const yaml = `
+name: Blank Intermediate URL
+repoUrl: git@github.com:test/repo.git
+intermediateRepoUrl: "  "
+tasks:
+  - id: greet
+    description: Say hello
+    command: echo "Hello"
+`;
+    expect(() => parsePlan(yaml)).toThrow('Plan "intermediateRepoUrl" must be a non-empty string');
+  });
+
   it('parses valid YAML plan', () => {
     const yaml = `
 name: Hello World Test
@@ -89,6 +102,20 @@ tasks:
     expect(plan.tasks[0].id).toBe('greet');
     expect(plan.tasks[0].description).toBe('Say hello');
     expect(plan.tasks[0].command).toBe('echo "Hello, World!"');
+  });
+
+  it('parses optional intermediateRepoUrl', () => {
+    const yaml = `
+name: Intermediate Remote Plan
+repoUrl: git@github.com:test/repo.git
+intermediateRepoUrl: https://github.com/fork/repo.git
+tasks:
+  - id: greet
+    description: Say hello
+    command: echo "Hello, World!"
+`;
+    const plan = parsePlan(yaml);
+    expect(plan.intermediateRepoUrl).toBe('https://github.com/fork/repo.git');
   });
 
   it('parses plan with dependencies', () => {

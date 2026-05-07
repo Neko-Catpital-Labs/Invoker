@@ -500,6 +500,7 @@ echo ${payloadB64} | base64 -d | bash -se
       commitMessageEmpty: msgEmpty,
       gitUserName,
       gitUserEmail,
+      pushRemoteUrl: request.inputs.intermediateRepoUrl?.trim() || undefined,
     });
 
     try {

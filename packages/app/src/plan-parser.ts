@@ -74,6 +74,7 @@ export interface RawPlan {
   mergeMode?: string;
   reviewProvider?: string;
   repoUrl?: string;
+  intermediateRepoUrl?: string;
   executorType?: string;
   externalDependencies?: Array<{
     workflowId?: string;
@@ -266,6 +267,14 @@ export function parsePlan(yamlContent: string): PlanDefinition {
       'Plan must have a "repoUrl" field (e.g. repoUrl: git@github.com:user/repo.git).',
     );
   }
+  if (raw.intermediateRepoUrl !== undefined) {
+    if (typeof raw.intermediateRepoUrl !== 'string' || raw.intermediateRepoUrl.trim() === '') {
+      throw new PlanParseError(
+        'Plan "intermediateRepoUrl" must be a non-empty string when provided.',
+      );
+    }
+    raw.intermediateRepoUrl = raw.intermediateRepoUrl.trim();
+  }
 
   const defaultExecutorType = raw.executorType;
   const topLevelExternalDependencies = parseExternalDependencies('Plan', raw.externalDependencies);
@@ -355,6 +364,7 @@ export function parsePlan(yamlContent: string): PlanDefinition {
     mergeMode,
     reviewProvider,
     repoUrl: raw.repoUrl,
+    intermediateRepoUrl: raw.intermediateRepoUrl,
     tasks,
   });
 }
