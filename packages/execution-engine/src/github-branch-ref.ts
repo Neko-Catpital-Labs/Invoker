@@ -18,8 +18,5 @@ export function normalizeBranchForGithubCli(ref: string): string {
   if (s.startsWith('origin/')) {
     return s.slice('origin/'.length);
   }
-  if (s.startsWith('upstream/')) {
-    return s.slice('upstream/'.length);
-  }
   return s;
 }

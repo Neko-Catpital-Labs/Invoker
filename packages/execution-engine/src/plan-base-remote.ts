@@ -52,9 +52,7 @@ export async function syncPlanBaseRemote(
 
 function stripKnownRemotePrefix(ref: string): string {
   if (ref.startsWith('origin/')) return ref.slice('origin/'.length);
-  if (ref.startsWith('upstream/')) return ref.slice('upstream/'.length);
   if (ref.startsWith('refs/remotes/origin/')) return ref.slice('refs/remotes/origin/'.length);
-  if (ref.startsWith('refs/remotes/upstream/')) return ref.slice('refs/remotes/upstream/'.length);
   return ref;
 }
 
@@ -69,6 +67,11 @@ export async function syncPlanBaseRemoteForRef(
   const r = baseRef.trim();
   if (!r || r === 'HEAD') return;
   if (isFullSha(r)) return;
+  if (r.startsWith('upstream/') || r.startsWith('refs/remotes/upstream/')) {
+    throw new Error(
+      `Unsupported base ref "${r}": origin-only mode does not support upstream remotes.`,
+    );
+  }
   if (r.startsWith('refs/')) {
     if (!r.startsWith('refs/remotes/origin/')) return;
     await syncPlanBaseRemote(runGit, r.slice('refs/remotes/origin/'.length), 'origin');
@@ -109,6 +112,7 @@ export function shouldResolveViaOriginTracking(ref: string): boolean {
   if (isFullSha(r)) return false;
   if (r.startsWith('refs/')) return false;
   if (r.startsWith('origin/')) return false;
+  if (r.startsWith('upstream/')) return false;
   if (r.includes('~') || r.includes('^')) return false;
   return true;
 }
@@ -123,6 +127,11 @@ export async function resolvePlanBaseRevision(
   baseRef: string,
 ): Promise<string> {
   const r = baseRef.trim() || 'HEAD';
+  if (r.startsWith('upstream/') || r.startsWith('refs/remotes/upstream/')) {
+    throw new Error(
+      `Unsupported base ref "${r}": origin-only mode does not support upstream remotes.`,
+    );
+  }
   if (r === 'HEAD') {
     return (await runGit(['rev-parse', 'HEAD'])).trim();
   }

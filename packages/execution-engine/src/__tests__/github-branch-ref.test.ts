@@ -7,8 +7,8 @@ describe('normalizeBranchForGithubCli', () => {
     expect(normalizeBranchForGithubCli('origin/fix/foo-bar')).toBe('fix/foo-bar');
   });
 
-  it('strips upstream/ prefix', () => {
-    expect(normalizeBranchForGithubCli('upstream/develop')).toBe('develop');
+  it('keeps upstream/ prefix unchanged in origin-only mode', () => {
+    expect(normalizeBranchForGithubCli('upstream/develop')).toBe('upstream/develop');
   });
 
   it('strips refs/heads/', () => {

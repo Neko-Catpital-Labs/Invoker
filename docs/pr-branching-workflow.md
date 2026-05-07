@@ -1,18 +1,18 @@
-# PR Branching Workflow (Upstream First)
+# PR Branching Workflow (Origin Only)
 
 Default workflow:
 
-- Clone the canonical repository directly (for Invoker: `https://github.com/Neko-Catpital-Labs/Invoker`).
-- Create branches from your canonical base remote.
-- Publish branches to `origin` (or another explicit publish remote).
-- Open PRs against `Neko-Catpital-Labs/Invoker`.
+- Use `origin` as the only supported git remote for branch/base/PR operations.
+- Create branches from `origin/<baseBranch>`.
+- Publish branches to `origin`.
+- Open PRs for the same `origin` repository (unless explicit env override is set).
 
 ## Rules
 
-- Do not rely on automatic fork-sync scripts before submission.
-- Keep base and publish remotes explicit when they differ.
-- Create PR branches from `<baseRemote>/<baseBranch>`.
-- Push branches to `<publishRemote>` and target the canonical repository base branch in PRs.
+- Do not rely on upstream/fork remote combinations.
+- Keep branch base and publish target on `origin`.
+- Create PR branches from `origin/<baseBranch>`.
+- Push branches to `origin`.
 
 ## Clean PR Flow
 
@@ -42,8 +42,7 @@ node scripts/validate-pr-body.mjs --body-file /tmp/my-pr.md
 node scripts/create-pr.mjs --title "<title>" --base master --body-file /tmp/my-pr.md
 ```
 
-## Migrating Existing Fork-First Clones
+## Temporary policy
 
-- Stop using `scripts/sync-fork-upstream.sh` for branch freshness.
-- Set your base remote explicitly when creating branches.
-- If your repo keeps a separate publish remote, pass it via `--publish-remote`.
+- Upstream-specific routing is intentionally removed until remote selection is reintroduced via explicit plan config.
+- Existing workflows should use `origin` for base resolution and branch publication.
