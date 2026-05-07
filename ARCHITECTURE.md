@@ -104,6 +104,133 @@ When adding a new package:
 3. Add the package to the appropriate layer in this document
 4. Run `pnpm run check:all` to verify compliance
 
+## Mutation Boundary Policy
+
+All state-changing operations enter the system through one of three surfaces: UI (Electron IPC), API server (HTTP on 127.0.0.1:4100), and headless CLI. Every surface routes mutations through the same shared boundary — `WorkflowMutationFacade` (`packages/app/src/workflow-mutation-facade.ts`).
+
+### The mutation funnel
+
+```
+┌─────────────────────────────────────────────────┐
+│  Entry Surfaces                                 │
+│  UI (IPC)  │  API (HTTP)  │  Headless (CLI)     │
+└──────┬──────────┬──────────────┬────────────────┘
+       └──────────┼──────────────┘
+                  ▼
+       WorkflowMutationFacade
+       (mutate → filter runnable → execute → topup)
+                  │
+                  ▼
+       Shared Actions  (workflow-actions.ts)
+                  │
+                  ▼
+       CommandService  (workflow-local mutex)
+                  │
+                  ▼
+       Orchestrator  (domain state machine → persistence)
+```
+
+### Invariants
+
+1. **Single entry point.** No surface calls `Orchestrator` directly for mutations. All mutations go through `WorkflowMutationFacade`, which encapsulates the post-mutation lifecycle: call shared action → filter runnable tasks → dispatch via `TaskRunner` → run global topup.
+2. **Serialized mutations.** `CommandService` enforces a per-workflow promise-chain mutex. Concurrent mutations on the same workflow are queued, never interleaved. Different workflows may execute in parallel.
+3. **Command envelope.** Every mutation is wrapped in a `CommandEnvelope<P>` (`packages/contracts/src/command-envelope.ts`) carrying `commandId`, `source` (`'ui' | 'headless' | 'surface'`), `scope` (`'workflow' | 'task'`), `idempotencyKey`, and a typed `payload`.
+4. **No side doors.** New mutation paths must route through the facade. Direct `SQLiteAdapter` writes from new code paths are forbidden (enforced by `bash scripts/check-owner-boundary.sh`).
+
+### Adding a new mutation
+
+1. Add the orchestrator primitive in `packages/workflow-core/src/orchestrator.ts`.
+2. Add the shared action in `packages/app/src/workflow-actions.ts`.
+3. Add the facade method in `packages/app/src/workflow-mutation-facade.ts`, using `finalizeWithTopup` or `dispatchWithTopup`.
+4. Wire the facade method in each surface: `api-server.ts`, `headless.ts`, `main.ts`.
+5. Add a `CommandService` method if the mutation needs envelope-based routing.
+6. Add parity tests (see "Surface Parity Requirements" below).
+
+## Typed Error Contracts
+
+Errors crossing package or process boundaries carry a stable `code` field. Callers branch on the code, never on the message string.
+
+### Error types by layer
+
+| Layer | Type | Package | Codes |
+|-------|------|---------|-------|
+| 0 | `TransportError` | `@invoker/transport` | `NO_HANDLER`, `DISCONNECTED`, `HANDLER_ERROR`, `REQUEST_TIMEOUT` |
+| 0 | `CommandError` | `@invoker/contracts` | Stable string from `CommandResult.error.code` |
+| 1 | `OrchestratorError` | `@invoker/workflow-core` | `TASK_NOT_FOUND`, `TASK_ALREADY_TERMINAL`, `WORKFLOW_NOT_FOUND` |
+| 1 | `PlanConflictError` | `@invoker/workflow-core` | (conflict detection with `conflictingTaskIds`) |
+| 1 | `TopologyForkRequired` | `@invoker/workflow-core` | (signals immutable topology constraint) |
+| 3 | `MergeConflictError` | `@invoker/execution-engine` | (carries `failedBranch`, `conflictFiles`) |
+
+### CommandResult contract
+
+`CommandService` methods return `CommandResult<T>`, a discriminated union:
+
+```typescript
+type CommandResult<T> =
+  | { ok: true; data: T }
+  | { ok: false; error: { code: string; message: string } };
+```
+
+Callers pattern-match on `result.ok`. No try-catch required at the call site.
+
+### HTTP status mapping
+
+The API server maps domain errors to HTTP status codes in `httpStatusForError()`:
+
+| Domain error | HTTP status |
+|---|---|
+| `OrchestratorError` with `TASK_NOT_FOUND` or `WORKFLOW_NOT_FOUND` | 404 |
+| `OrchestratorError` with `TASK_ALREADY_TERMINAL` | 409 |
+| `PlanConflictError` | 409 |
+| `TopologyForkRequired` | 409 |
+| All other errors | 400 |
+| Unhandled exceptions | 500 |
+
+Error responses use the shape `{ error: "<message>" }`.
+
+### Rules for new error types
+
+1. Define a typed error class with a `code` field (string literal or enum).
+2. Place it in the lowest-layer package where it originates.
+3. Never throw raw `Error` across package boundaries — wrap in a typed error.
+4. Add HTTP status mapping in `api-server.ts` `httpStatusForError()` if the error can reach the API surface.
+5. Add a test that the error code propagates through `CommandService` as `{ ok: false, error: { code } }`.
+
+## Surface Parity Requirements
+
+Every mutation must produce equivalent behavior across all three entry surfaces (UI, API, headless). This is enforced by the parity regression test suite (`packages/app/src/__tests__/parity-regression.test.ts`).
+
+### What "parity" means
+
+1. **Facade dispatch+topup lifecycle.** Every mutation method filters runnable tasks, dispatches via `TaskRunner`, and calls `startExecution` for global topup. The result shape is `{ started, runnable, topup }`.
+2. **API server → facade wiring.** Each HTTP write endpoint calls the correct facade method and returns a structured result.
+3. **Headless → CommandService routing.** Each CLI verb delegates to the corresponding `CommandService` method (not directly to `Orchestrator`).
+4. **CommandService → Orchestrator mutex.** Each command service method calls the correct orchestrator primitive under the workflow-scoped mutex.
+5. **Cross-surface isolation.** A mutation verb on one surface never accidentally triggers an unrelated mutation path.
+
+### Parity test groups
+
+The parity tests cover 5 dimensions:
+
+| Group | What it verifies |
+|-------|------------------|
+| Facade lifecycle | `started` → filter `runnable` → `executeTasks` → `startExecution` → topup dedup |
+| API wiring | HTTP endpoint → facade method → orchestrator call → 200 `{ ok: true }` |
+| CommandService routing | Envelope → correct orchestrator primitive → `{ ok: true }` |
+| Mutex serialization | Same-workflow mutations serialize; different-workflow mutations interleave |
+| Cross-surface isolation | `retryTask` does not trigger `recreateTask`; `approve` does not trigger `reject`; etc. |
+
+### Adding a new endpoint: parity checklist
+
+When adding a new mutation endpoint:
+
+- [ ] Wire the endpoint in all three surfaces (`api-server.ts`, `headless.ts`, `main.ts`) through `WorkflowMutationFacade`.
+- [ ] Add a facade lifecycle test: verify `started`, `runnable`, `topup` shape.
+- [ ] Add an API wiring test: verify HTTP verb + path → facade method → 200.
+- [ ] Add a CommandService routing test: verify envelope → orchestrator primitive → `{ ok: true }`.
+- [ ] Add cross-surface isolation assertions: verify the new mutation does not trigger unrelated mutations.
+- [ ] Run `pnpm test` in `packages/app` and `packages/workflow-core` to confirm all parity tests pass.
+
 ## Migration Notes
 
 This architecture was established during the package reorganization effort (workflow wf-1775366106244-5). The layered architecture prevents cycles and makes the system easier to understand and maintain.
