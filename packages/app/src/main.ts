@@ -2329,6 +2329,24 @@ if (isHeadless) {
             return { started: result.data };
           });
         },
+        recreateWithRebaseAction: async (workflowId: string) => {
+          return runWorkflowMutation(workflowId, 'high', 'api:recreate-with-rebase', [workflowId], async () => {
+            const started = await recreateWithRebase(workflowId, {
+              orchestrator,
+              persistence,
+              taskExecutor: requireTaskExecutor(),
+              logger,
+            });
+            await finalizeMutationWithGlobalTopup({
+              orchestrator,
+              taskExecutor: requireTaskExecutor(),
+              logger,
+              context: 'api.workflows.recreate-with-rebase',
+              started: started.filter(t => t.status === 'running'),
+            });
+            return { started };
+          });
+        },
         killRunningTask,
         cancelTask: performCancelTask,
         cancelWorkflow: performCancelWorkflow,
