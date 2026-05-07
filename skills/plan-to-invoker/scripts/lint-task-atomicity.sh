@@ -175,6 +175,22 @@ function flush_task(    wc, and_count, valid_id, d, desc_lower, idx) {
     if (has_implementation_heading == 0) {
       errors[++errn] = "Task \"" id "\" missing required \"Implementation details:\" (or \"Implementation:\") section in description for implementation plans"
     }
+
+    if (has_prompt) {
+      prompt_lower = tolower(prompt_text)
+      if (prompt_lower !~ /(^|[ \t])goal:/) {
+        errors[++errn] = "Task \"" id "\" prompt missing required \"Goal:\" section for AI implementation tasks"
+      }
+      if (prompt_lower !~ /(^|[ \t])motivation:/) {
+        errors[++errn] = "Task \"" id "\" prompt missing required \"Motivation:\" section for AI implementation tasks"
+      }
+      if (prompt_lower !~ /(^|[ \t])(alternative considerations|alternatives):/) {
+        errors[++errn] = "Task \"" id "\" prompt missing required \"Alternative considerations:\" (or \"Alternatives:\") section for AI implementation tasks"
+      }
+      if (prompt_lower !~ /(^|[ \t])(implementation details|implementation):/) {
+        errors[++errn] = "Task \"" id "\" prompt missing required \"Implementation details:\" (or \"Implementation:\") section for AI implementation tasks"
+      }
+    }
   }
 
   if (warnDelegation == 1 && desc != "") {

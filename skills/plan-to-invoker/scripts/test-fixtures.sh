@@ -295,8 +295,17 @@ tasks:
       Layer: contact_surface
       Feature state: active
     prompt: |
-      Modify packages/foo/src/surface.ts and ensure the contract remains typed.
-      Acceptance criteria: ensure the new surface compiles and keeps existing imports intact.
+      Goal:
+      - Implement contact-surface wiring updates in a typed and deterministic way.
+      Motivation:
+      - Keep task execution intent explicit for delegated AI execution.
+      Alternative considerations:
+      - Option A (chosen): direct contact-surface wiring.
+      - Option B: defer via adapter layer.
+      Implementation details:
+      - Modify packages/foo/src/surface.ts and preserve existing contract imports.
+      Acceptance criteria:
+      - Ensure the new surface compiles and keeps existing imports intact.
     dependencies: []
   - id: add-regression-tests
     description: |
@@ -313,8 +322,17 @@ tasks:
       Layer: app_regression
       Feature state: active
     prompt: |
-      Modify packages/foo/src/__tests__/surface.test.ts and ensure the regression covers the new path.
-      Acceptance criteria: verify the regression reproduces the new behavior deterministically.
+      Goal:
+      - Add deterministic regression coverage for the new contact-surface path.
+      Motivation:
+      - Prevent silent behavior regressions after wiring changes.
+      Alternative considerations:
+      - Option A (chosen): focused package regression tests.
+      - Option B: rely on full-suite tests only.
+      Implementation details:
+      - Modify packages/foo/src/__tests__/surface.test.ts to cover the new path.
+      Acceptance criteria:
+      - Verify the regression reproduces the new behavior deterministically.
     dependencies: [implement-surface]
   - id: final-regression
     description: |
@@ -364,8 +382,17 @@ tasks:
       Layer: contact_surface
       Feature state: active
     prompt: |
-      Modify packages/foo/src/surface.ts and ensure the contract remains typed.
-      Acceptance criteria: ensure the new surface compiles and keeps existing imports intact.
+      Goal:
+      - Implement contact-surface wiring updates in a typed and deterministic way.
+      Motivation:
+      - Keep task execution intent explicit for delegated AI execution.
+      Alternative considerations:
+      - Option A (chosen): direct contact-surface wiring.
+      - Option B: defer via adapter layer.
+      Implementation details:
+      - Modify packages/foo/src/surface.ts and preserve existing contract imports.
+      Acceptance criteria:
+      - Ensure the new surface compiles and keeps existing imports intact.
     dependencies: []
   - id: final-regression
     description: |
@@ -429,8 +456,17 @@ tasks:
       Layer: contact_surface
       Feature state: active
     prompt: |
-      Modify packages/foo/src/surface.ts and ensure the contract remains typed.
-      Acceptance criteria: ensure the new surface compiles and keeps existing imports intact.
+      Goal:
+      - Implement contact-surface wiring updates in a typed and deterministic way.
+      Motivation:
+      - Keep task execution intent explicit for delegated AI execution.
+      Alternative considerations:
+      - Option A (chosen): direct contact-surface wiring.
+      - Option B: defer via adapter layer.
+      Implementation details:
+      - Modify packages/foo/src/surface.ts and preserve existing contract imports.
+      Acceptance criteria:
+      - Ensure the new surface compiles and keeps existing imports intact.
     dependencies: []
   - id: add-regression-tests
     description: |
@@ -447,8 +483,17 @@ tasks:
       Layer: app_regression
       Feature state: active
     prompt: |
-      Modify packages/foo/src/__tests__/surface.test.ts and ensure the regression covers the new path.
-      Acceptance criteria: verify the regression reproduces the new behavior deterministically.
+      Goal:
+      - Add deterministic regression coverage for the new contact-surface path.
+      Motivation:
+      - Prevent silent behavior regressions after wiring changes.
+      Alternative considerations:
+      - Option A (chosen): focused package regression tests.
+      - Option B: rely on full-suite tests only.
+      Implementation details:
+      - Modify packages/foo/src/__tests__/surface.test.ts to cover the new path.
+      Acceptance criteria:
+      - Verify the regression reproduces the new behavior deterministically.
     dependencies: [implement-surface]
   - id: final-regression
     description: |
@@ -499,7 +544,15 @@ repoUrl: git@github.com:example-org/acme-repo.git
 tasks:
   - id: implement-bridge
     description: |
-      Build the bridge and tests.
+      Goal:
+      - Add bridge path for cost query wiring.
+      Motivation:
+      - Ensure query surface remains deterministic and testable.
+      Alternative considerations:
+      - Option A (chosen): bridge in app layer.
+      - Option B: distributed adapters.
+      Implementation details:
+      - Keep bridge in app layer and add deterministic tests.
       Layer: app_bridge
       Feature state: active
       Acceptance criteria:
@@ -533,12 +586,12 @@ EOF
   set -e
 
   if [[ $exit_code -eq 0 ]]; then
-    echo "Expected lint to reject missing Goal/Motivation/Alternatives/Implementation sections" >&2
+    echo "Expected lint to reject prompt missing Goal/Motivation/Alternatives/Implementation sections" >&2
     return 1
   fi
 
-  if ! grep -q 'missing required "Goal:" section' <<<"$output"; then
-    echo "Expected Goal section lint error, got: $output" >&2
+  if ! grep -q 'prompt missing required "Goal:" section' <<<"$output"; then
+    echo "Expected prompt Goal section lint error, got: $output" >&2
     return 1
   fi
 }
@@ -571,9 +624,18 @@ tasks:
       Acceptance criteria:
       - Ensure bridge compiles and tests pass.
     prompt: |
-      Modify packages/app/src/main.ts and packages/app/src/headless.ts.
-      Ensure bridge path is wired and deterministic.
-      Acceptance criteria: verify app tests pass and output is stable.
+      Goal:
+      - Implement deterministic app-bridge wiring for the cost query path.
+      Motivation:
+      - Keep execution instructions explicit for delegated AI execution.
+      Alternative considerations:
+      - Option A (chosen): bridge in app layer.
+      - Option B: distributed adapters.
+      Implementation details:
+      - Update packages/app/src/main.ts and packages/app/src/headless.ts.
+      - Preserve current call contracts and deterministic output expectations.
+      Acceptance criteria:
+      - Verify app tests pass and output remains stable.
     dependencies: []
   - id: final-regression
     description: |
