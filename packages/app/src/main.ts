@@ -2838,7 +2838,7 @@ if (isHeadless) {
     registerGuiMutationHandler('invoker:delete-all-workflows', async () => {
       logger.info('delete-all-workflows', { module: 'ipc' });
       assertDeleteAllEnabled();
-      sharedDeleteAllWorkflows({ logger, orchestrator });
+      await sharedDeleteAllWorkflows({ logger, orchestrator, taskExecutor: taskExecutor ?? undefined });
       taskHandles.clear();
       lastKnownTaskStates.clear();
       lastKnownWorkflowCount = 0;

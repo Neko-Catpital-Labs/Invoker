@@ -171,16 +171,18 @@ export function cancelWorkflow(
  * share a single code path:
  *
  *   1. Create a DB snapshot (safety net — callers can abort on failure).
- *   2. Delegate to `orchestrator.deleteAllWorkflows()` which handles
+ *   2. Kill all running/fixing_with_ai executor processes so no
+ *      orphaned child processes survive the purge.
+ *   3. Delegate to `orchestrator.deleteAllWorkflows()` which handles
  *      DB purge → scheduler kill → memory clear → removal deltas.
  *
  * Returns the snapshot path (or null when the DB file does not yet
  * exist) so callers can log it through their own channel (stderr,
  * structured logger, etc.).
  */
-export function deleteAllWorkflows(
-  deps: Pick<ActionDeps, 'logger' | 'orchestrator'>,
-): { snapshotPath: string | null } {
+export async function deleteAllWorkflows(
+  deps: Pick<ActionDeps, 'logger' | 'orchestrator' | 'taskExecutor'>,
+): Promise<{ snapshotPath: string | null }> {
   const snapshotPath = createDeleteAllSnapshot();
   deps.logger?.info(
     snapshotPath
@@ -188,6 +190,23 @@ export function deleteAllWorkflows(
       : 'delete-all-workflows snapshot skipped: DB file does not exist yet',
     { module: 'workflow' },
   );
+
+  // Kill executor processes for all running/fixing_with_ai tasks before
+  // the destructive purge.  Process management is outside orchestrator
+  // scope (same convention as performDeleteWorkflow in main.ts), so we
+  // handle it here in the shared bridge.
+  const taskExecutor = deps.taskExecutor;
+  if (taskExecutor) {
+    const allTasks = deps.orchestrator.getAllTasks();
+    const active = allTasks.filter(
+      (t) => t.status === 'running' || t.status === 'fixing_with_ai',
+    );
+    for (const task of active) {
+      deps.logger?.info(`delete-all: killing active task "${task.id}"`, { module: 'kill' });
+      await taskExecutor.killActiveExecution(task.id);
+    }
+  }
+
   deps.orchestrator.deleteAllWorkflows();
   return { snapshotPath };
 }
