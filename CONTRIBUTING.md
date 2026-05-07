@@ -42,6 +42,18 @@ For anything that touches the workflow database, use the headless commands (`pnp
 
 "I tested it mentally" is not a verification. PRs should describe what was actually run — `pnpm test`, `pnpm run check:all`, a specific headless command, a reproduced workflow — not what was reasoned about. If a behavior can't be exercised by a command, that's usually a sign the boundary it lives behind is too informal.
 
+### 7. Route mutations through the facade
+
+Every state-changing operation must go through `WorkflowMutationFacade`. The facade owns the post-mutation lifecycle: dispatch runnable tasks, run global topup, return a structured result. Adding a mutation that calls `Orchestrator` directly from a surface handler bypasses serialization, topup, and parity guarantees. See [ARCHITECTURE.md § Mutation Boundary Policy](ARCHITECTURE.md#mutation-boundary-policy) for the full invariant list.
+
+### 8. Use typed error codes, not message strings
+
+Errors that cross package boundaries must carry a stable `code` field. Callers branch on `error.code`, never parse `error.message`. New error types must be a class with a `code` property, placed in the lowest-layer package where the error originates. If the error can reach the API surface, add an HTTP status mapping in `httpStatusForError()`. See [ARCHITECTURE.md § Typed Error Contracts](ARCHITECTURE.md#typed-error-contracts).
+
+### 9. Maintain surface parity for new endpoints
+
+New mutation endpoints must be wired through all three surfaces (UI IPC, API HTTP, headless CLI) and covered by parity regression tests. The parity suite verifies that facade lifecycle, API wiring, CommandService routing, mutex serialization, and cross-surface isolation all hold. See [ARCHITECTURE.md § Surface Parity Requirements](ARCHITECTURE.md#surface-parity-requirements) for the checklist.
+
 ## What "code change" means here
 
 Because Invoker treats code changes as the output of a workflow, contributions to Invoker are themselves a small example of what Invoker orchestrates. A few practical implications:
@@ -57,7 +69,9 @@ Before requesting review, please confirm:
 
 - [ ] The change respects the layer rules in [ARCHITECTURE.md](ARCHITECTURE.md) (`pnpm run check:all` passes).
 - [ ] Tests pass (`pnpm test`, or `pnpm run test:all` for broader coverage).
-- [ ] Any new mutation goes through the existing command path; no direct DB writes from new code paths.
+- [ ] Any new mutation goes through `WorkflowMutationFacade`; no direct DB writes from new code paths.
+- [ ] Any new mutation endpoint is wired in all three surfaces (UI, API, headless) with parity tests.
+- [ ] Any new error type crossing a package boundary carries a typed `code` field, not just a message string.
 - [ ] Any new persisted field is reflected in types under `packages/workflow-graph/src/types.ts` and `packages/contracts/`.
 - [ ] The PR description names the verification commands you actually ran.
 - [ ] User-visible behavior changes are documented (in the README, in `docs/`, or in the relevant package README — wherever the existing description lives).
