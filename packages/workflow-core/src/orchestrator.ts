@@ -156,6 +156,7 @@ export interface OrchestratorPersistence {
     createdAt: string;
     updatedAt: string;
     repoUrl?: string;
+    intermediateRepoUrl?: string;
     onFinish?: string;
     baseBranch?: string;
     featureBranch?: string;
@@ -196,6 +197,7 @@ export interface OrchestratorPersistence {
    */
   loadWorkflow?(workflowId: string): {
     repoUrl?: string;
+    intermediateRepoUrl?: string;
     baseBranch?: string;
     featureBranch?: string;
     mergeMode?: 'manual' | 'automatic' | 'external_review';
@@ -222,6 +224,7 @@ export interface PlanDefinition {
   mergeMode?: 'manual' | 'automatic' | 'external_review';
   reviewProvider?: string;
   repoUrl?: string;
+  intermediateRepoUrl?: string;
   tasks: Array<{
     id: string;
     description: string;
@@ -1326,6 +1329,7 @@ export class Orchestrator {
       visualProof: plan.visualProof,
       status: 'running',
       repoUrl: plan.repoUrl,
+      intermediateRepoUrl: plan.intermediateRepoUrl,
       onFinish: plan.onFinish,
       baseBranch: plan.baseBranch,
       featureBranch: plan.featureBranch,
@@ -3092,6 +3096,7 @@ export class Orchestrator {
       if (typeof m.description === 'string') baseSaveWf.description = m.description;
       if (typeof m.visualProof === 'boolean') baseSaveWf.visualProof = m.visualProof as boolean;
       if (typeof m.repoUrl === 'string') baseSaveWf.repoUrl = m.repoUrl;
+      if (typeof m.intermediateRepoUrl === 'string') baseSaveWf.intermediateRepoUrl = m.intermediateRepoUrl;
       if (typeof m.onFinish === 'string') baseSaveWf.onFinish = m.onFinish;
       if (typeof m.baseBranch === 'string') baseSaveWf.baseBranch = m.baseBranch;
       if (typeof m.featureBranch === 'string') baseSaveWf.featureBranch = m.featureBranch;

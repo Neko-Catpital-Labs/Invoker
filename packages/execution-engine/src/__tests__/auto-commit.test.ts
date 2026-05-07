@@ -1990,12 +1990,15 @@ describe('BaseExecutor.syncFromRemote', () => {
 describe('BaseExecutor.pushBranchToRemote', () => {
   let executor: TestExecutor;
   let originDir: string;
+  let intermediateDir: string;
   let cloneDir: string;
 
   beforeEach(() => {
     executor = new TestExecutor();
     originDir = mkdtempSync(join(tmpdir(), 'push-origin-'));
     execSync('git init --bare -b master', { cwd: originDir });
+    intermediateDir = mkdtempSync(join(tmpdir(), 'push-intermediate-'));
+    execSync('git init --bare -b master', { cwd: intermediateDir });
     cloneDir = mkdtempSync(join(tmpdir(), 'push-clone-'));
     execSync(`git clone ${originDir} .`, { cwd: cloneDir });
     execSync('git config user.email "test@test.com"', { cwd: cloneDir });
@@ -2007,6 +2010,7 @@ describe('BaseExecutor.pushBranchToRemote', () => {
 
   afterEach(() => {
     rmSync(originDir, { recursive: true, force: true });
+    rmSync(intermediateDir, { recursive: true, force: true });
     rmSync(cloneDir, { recursive: true, force: true });
   });
 
@@ -2035,6 +2039,20 @@ describe('BaseExecutor.pushBranchToRemote', () => {
     const err = await executor.testPushBranchToRemote(cloneDir, 'invoker/task-nopush');
     expect(err).toBeDefined();
     expect(typeof err).toBe('string');
+  });
+
+  it('pushes to intermediate remote when configured on request inputs', async () => {
+    execSync('git checkout -b invoker/task-intermediate', { cwd: cloneDir });
+    writeFileSync(join(cloneDir, 'intermediate.txt'), 'task result');
+    execSync('git add -A && git commit -m "task commit intermediate"', { cwd: cloneDir });
+
+    const req = makeRequest('task-intermediate', { intermediateRepoUrl: intermediateDir });
+    executor.registerTestEntry('exec-intermediate', req);
+    const pushErr = await executor.testPushBranchToRemote(cloneDir, 'invoker/task-intermediate', 'exec-intermediate');
+    expect(pushErr).toBeUndefined();
+
+    const remoteBranches = execSync('git branch', { cwd: intermediateDir }).toString();
+    expect(remoteBranches).toContain('invoker/task-intermediate');
   });
 });
 

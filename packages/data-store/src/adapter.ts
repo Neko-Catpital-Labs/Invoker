@@ -38,6 +38,7 @@ export interface Workflow {
   status: 'running' | 'completed' | 'failed';
   planFile?: string;
   repoUrl?: string;
+  intermediateRepoUrl?: string;
   branch?: string;
   onFinish?: 'none' | 'merge' | 'pull_request';
   baseBranch?: string;

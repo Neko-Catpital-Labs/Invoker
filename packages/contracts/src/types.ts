@@ -22,6 +22,8 @@ export interface WorkRequestInputs {
   experimentResults?: ExperimentResult[];
   /** URL of the git repository to clone and work in via RepoPool. */
   repoUrl?: string;
+  /** Optional URL where non-merge intermediate branches are published. */
+  intermediateRepoUrl?: string;
   /** Feature branch name to create/checkout in the pooled worktree. */
   featureBranch?: string;
   /** Summaries from completed upstream dependencies, providing context for this task. */
