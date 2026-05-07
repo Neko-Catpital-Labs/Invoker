@@ -73,7 +73,7 @@ export interface ApiServerDeps {
   killRunningTask?: (taskId: string) => Promise<void>;
   cancelTask?: (taskId: string) => Promise<{ cancelled: string[]; runningCancelled: string[] }>;
   cancelWorkflow?: (workflowId: string) => Promise<{ cancelled: string[]; runningCancelled: string[] }>;
-  deleteWorkflow?: (workflowId: string) => Promise<void>;
+  deleteWorkflow: (workflowId: string) => Promise<void>;
 }
 
 export interface ApiServer {
@@ -686,11 +686,7 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
       if (method === 'DELETE' && wfDeleteMatch) {
         const workflowId = decodeURIComponent(wfDeleteMatch[1]);
         try {
-          if (deleteWorkflow) {
-            await deleteWorkflow(workflowId);
-          } else {
-            orchestrator.deleteWorkflow(workflowId);
-          }
+          await deleteWorkflow(workflowId);
           json(res, 200, { ok: true, workflowId, action: 'deleted' });
         } catch (err) {
           json(res, 400, { error: err instanceof Error ? err.message : String(err) });
