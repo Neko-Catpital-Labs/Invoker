@@ -90,7 +90,6 @@ import {
   resolveEffectiveMaxConcurrency,
 } from './execution-capacity.js';
 import {
-  createDeleteAllSnapshot,
   createHourlySnapshot,
   resolveInvokerHomeRoot,
 } from './delete-all-snapshot.js';
@@ -118,6 +117,7 @@ import {
 } from './headless.js';
 import {
   approveTask as sharedApproveTask,
+  deleteAllWorkflows as sharedDeleteAllWorkflows,
   fixWithAgentAction,
   rebaseAndRetry,
   recreateWithRebase,
@@ -2838,13 +2838,7 @@ if (isHeadless) {
     registerGuiMutationHandler('invoker:delete-all-workflows', async () => {
       logger.info('delete-all-workflows', { module: 'ipc' });
       assertDeleteAllEnabled();
-      const snapshot = createDeleteAllSnapshot(resolveInvokerHomeRoot());
-      if (snapshot) {
-        logger.info(`delete-all-workflows snapshot: ${snapshot}`, { module: 'ipc' });
-      } else {
-        logger.info('delete-all-workflows snapshot skipped: DB file does not exist yet', { module: 'ipc' });
-      }
-      orchestrator.deleteAllWorkflows();
+      sharedDeleteAllWorkflows({ logger, orchestrator });
       taskHandles.clear();
       lastKnownTaskStates.clear();
       lastKnownWorkflowCount = 0;
