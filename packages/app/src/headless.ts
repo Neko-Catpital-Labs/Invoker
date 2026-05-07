@@ -1667,9 +1667,8 @@ async function preemptTaskSubgraph(taskId: string, deps: HeadlessDeps): Promise<
   const envelope = makeEnvelope('cancel-task', 'headless', 'task', { taskId });
   const result = await deps.commandService.cancelTask(envelope);
   if (!result.ok) {
-    const message = result.error.message;
-    if (message.includes('already completed') || message.includes('already stale')) return;
-    throw new Error(message);
+    if (result.error.code === 'CANCEL_TASK_FAILED') return;
+    throw new Error(result.error.message);
   }
 }
 
@@ -1683,9 +1682,8 @@ async function preemptWorkflowExecution(workflowId: string, deps: HeadlessDeps):
   const envelope = makeEnvelope('cancel-workflow', 'headless', 'workflow', { workflowId });
   const result = await deps.commandService.cancelWorkflow(envelope);
   if (!result.ok) {
-    const message = result.error.message;
-    if (message.includes('No tasks found for workflow')) return { cancelled: [], runningCancelled: [] };
-    throw new Error(message);
+    if (result.error.code === 'CANCEL_WORKFLOW_FAILED') return { cancelled: [], runningCancelled: [] };
+    throw new Error(result.error.message);
   }
   return result.data;
 }
