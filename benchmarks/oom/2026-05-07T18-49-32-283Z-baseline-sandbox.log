@@ -1,0 +1,38 @@
+[runner] mode=sandbox docker_memory=768m node_heap_mb=256
+[repro] temp db=/tmp/invoker-oom-repro-kPdz61/invoker-repro.db
+[repro] mode=sandbox rowsPerCycle=900 payloadBytes=16384 renewsPerCycle=4000 maxCycles=80 hardHeapLimitMb=0 maxDbMb=0 timeoutSec=20
+[repro] sqlite hard_heap_limit disabled
+[state-machine] findNewlyReadyTasks(wf-1778141536943-7/post-fix-regression: merge node "__merge__wf-1778141646167-29" status=pending deps=[wf-1778141646167-29/regression-chain-c=pending] hasDep=false)
+[state-machine] findNewlyReadyTasks(wf-1778141536943-7/post-fix-regression: merge node "__merge__wf-1778141644469-28" status=pending deps=[wf-1778141644469-28/regression-inv-77=pending] hasDep=false)
+[state-machine] findNewlyReadyTasks(wf-1778141536943-7/post-fix-regression: merge node "__merge__wf-1778141642990-27" status=pending deps=[wf-1778141642990-27/regression-inv-55=pending] hasDep=false)
+[state-machine] findNewlyReadyTasks(wf-1778141536943-7/post-fix-regression: merge node "__merge__wf-1778141538305-8" status=pending deps=[wf-1778141538305-8/post-fix-regression=running] hasDep=false)
+[state-machine] findNewlyReadyTasks(wf-1778141536943-7/post-fix-regression: merge node "__merge__wf-1778141629042-19" status=pending deps=[wf-1778141629042-19/regression-inv-91=fixing_with_ai] hasDep=false)
+[state-machine] findNewlyReadyTasks(wf-1778141536943-7/post-fix-regression: merge node "__merge__wf-1778141536943-7" status=pending deps=[wf-1778141536943-7/post-fix-regression=fixing_with_ai] hasDep=true)
+[repro] cycle=1 seeded rows; starting renew loop
+[repro] cycle=1 renew=250 rss=256.3MB heapUsed=4.1MB external=169.5MB
+[repro] cycle=1 renew=500 rss=272.9MB heapUsed=4.2MB external=186.4MB
+[repro] cycle=1 renew=750 rss=330.9MB heapUsed=4.2MB external=247.3MB
+[repro] cycle=1 renew=1000 rss=304.4MB heapUsed=4.3MB external=215.9MB
+[repro] cycle=1 renew=1250 rss=318.6MB heapUsed=4.2MB external=234.1MB
+[repro] cycle=1 renew=1500 rss=334.5MB heapUsed=4.3MB external=253.1MB
+[repro] cycle=1 renew=1750 rss=351.0MB heapUsed=4.3MB external=265.1MB
+[repro] cycle=1 renew=2000 rss=302.5MB heapUsed=4.3MB external=221.3MB
+[repro] cycle=1 renew=2250 rss=314.4MB heapUsed=4.2MB external=229.4MB
+[repro] cycle=1 renew=2500 rss=326.6MB heapUsed=4.2MB external=246.1MB
+[repro] cycle=1 renew=2750 rss=338.4MB heapUsed=4.2MB external=254.1MB
+[repro] cycle=1 renew=3000 rss=350.7MB heapUsed=4.2MB external=272.0MB
+[repro] cycle=1 renew=3250 rss=362.8MB heapUsed=4.2MB external=280.0MB
+[repro] cycle=1 renew=3500 rss=374.7MB heapUsed=4.2MB external=299.1MB
+[repro] cycle=1 renew=3750 rss=386.7MB heapUsed=4.2MB external=307.1MB
+[repro] cycle=1 renew=4000 rss=399.0MB heapUsed=4.2MB external=315.2MB
+[repro] cycle=1 completed rss=399.0MB heapUsed=4.2MB external=315.2MB
+[repro] db-on-disk=96.7MB
+[repro] cycle=2 seeded rows; starting renew loop
+[repro] cycle=2 renew=250 rss=506.5MB heapUsed=4.2MB external=429.5MB
+[repro] cycle=2 renew=500 rss=518.2MB heapUsed=4.2MB external=437.6MB
+[repro] cycle=2 renew=750 rss=530.5MB heapUsed=4.2MB external=463.2MB
+[repro] cycle=2 renew=1000 rss=542.3MB heapUsed=4.2MB external=471.3MB
+[repro] cycle=2 renew=1250 rss=554.4MB heapUsed=4.2MB external=479.3MB
+[workflow-mutation-coordinator] drain failed for wf-1778141641513-26: Error: timeout guard reached (20s) before OOM
+[workflow-mutation-coordinator] drain failed for wf-1778141629042-19: Error: timeout guard reached (20s) before OOM
+[repro-summary] {"mode":"sandbox","elapsedMs":20061,"flushCount":109,"meanFlushIntervalMs":177.98,"leaseRenewWrites":5450,"leaseRenewWritesPerSec":271.67,"seededIntentRows":1800,"mutationThroughputPerSec":89.73,"failureReason":"timeout guard reached (20s) before OOM","status":"failed"}
