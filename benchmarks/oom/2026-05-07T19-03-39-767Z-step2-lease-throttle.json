@@ -1,0 +1,38 @@
+{
+  "runLabel": "step2-lease-throttle",
+  "commit": "f666d98b6e56cd9ecbf8f7a1d679d2a17f546378",
+  "results": [
+    {
+      "mode": "safe",
+      "exitCode": 1,
+      "elapsedMs": 20102,
+      "elapsedSec": 20.1,
+      "status": "failed",
+      "failureReason": "timeout guard reached (20s) before OOM",
+      "peakRssMb": 564.3,
+      "peakExternalMb": 490.3,
+      "flushCount": 103,
+      "meanFlushIntervalMs": 190.68,
+      "dbGrowthRateMbPerMin": 385.63,
+      "leaseRenewWritesPerSec": 376.83,
+      "leaseRenewUpdateWritesPerSec": 0.5,
+      "mutationThroughputPerSec": 119.39
+    },
+    {
+      "mode": "sandbox",
+      "exitCode": 1,
+      "elapsedMs": 20077,
+      "elapsedSec": 20.08,
+      "status": "failed",
+      "failureReason": "timeout guard reached (20s) before OOM",
+      "peakRssMb": 545.1,
+      "peakExternalMb": 471.3,
+      "flushCount": 103,
+      "meanFlushIntervalMs": 188.26,
+      "dbGrowthRateMbPerMin": 288.99,
+      "leaseRenewWritesPerSec": 256.51,
+      "leaseRenewUpdateWritesPerSec": 0.5,
+      "mutationThroughputPerSec": 89.65
+    }
+  ]
+}

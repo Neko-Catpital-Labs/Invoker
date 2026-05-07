@@ -1961,7 +1961,12 @@ export class SQLiteAdapter implements PersistenceAdapter {
   renewWorkflowMutationLease(
     workflowId: string,
     ownerId: string,
-    options?: { activeIntentId?: number; activeMutationKind?: string },
+    options?: {
+      activeIntentId?: number;
+      activeMutationKind?: string;
+      minHeartbeatIntervalMs?: number;
+      minExpiryLeadMs?: number;
+    },
   ): boolean {
     const lease = this.queryOne(
       'SELECT * FROM workflow_mutation_leases WHERE workflow_id = ?',
@@ -1971,8 +1976,31 @@ export class SQLiteAdapter implements PersistenceAdapter {
       return false;
     }
 
+    const nowMs = Date.now();
+    const nextIntentId = options?.activeIntentId ?? null;
+    const nextMutationKind = options?.activeMutationKind ?? null;
+    const sameIntent = String(lease.active_intent_id ?? '') === String(nextIntentId ?? '');
+    const sameKind = String(lease.active_mutation_kind ?? '') === String(nextMutationKind ?? '');
+    const lastHeartbeatMs = lease.last_heartbeat_at ? Date.parse(String(lease.last_heartbeat_at)) : 0;
+    const leaseExpiryMs = lease.lease_expires_at ? Date.parse(String(lease.lease_expires_at)) : 0;
+    const minHeartbeatIntervalMs = options?.minHeartbeatIntervalMs ?? 0;
+    const minExpiryLeadMs = options?.minExpiryLeadMs ?? 0;
+
+    if (
+      sameIntent &&
+      sameKind &&
+      minHeartbeatIntervalMs > 0 &&
+      Number.isFinite(lastHeartbeatMs) &&
+      lastHeartbeatMs > 0 &&
+      nowMs - lastHeartbeatMs < minHeartbeatIntervalMs &&
+      Number.isFinite(leaseExpiryMs) &&
+      leaseExpiryMs - nowMs > minExpiryLeadMs
+    ) {
+      return true;
+    }
+
     const now = new Date().toISOString();
-    const leaseExpiresAt = new Date(Date.now() + WORKFLOW_MUTATION_LEASE_MS).toISOString();
+    const leaseExpiresAt = new Date(nowMs + WORKFLOW_MUTATION_LEASE_MS).toISOString();
     this.execRun(
       `UPDATE workflow_mutation_leases
          SET active_intent_id = ?,
