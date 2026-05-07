@@ -601,7 +601,7 @@ async function headlessSet(args: string[], deps: HeadlessDeps): Promise<void> {
       await headlessEditPrompt(args[1], args.slice(2).join(' '), deps);
       break;
     case 'executor':
-      await headlessEditExecutor(args[1], args[2], deps);
+      await headlessEditExecutor(args[1], args[2], args[3], deps);
       break;
     case 'agent':
       await headlessEditAgent(args[1], args[2], deps);
@@ -892,7 +892,7 @@ ${BOLD}Configure:${RESET}
   install-skills [install|update|reinstall]          Install bundled Invoker skills into Codex
   set command <taskId> <cmd>                          Edit task command and re-run
   set prompt <taskId> <text>                          Edit task prompt and re-run
-  set executor <taskId> <type>                        Change executor type (worktree|docker|ssh)
+  set executor <taskId> <type> [remoteTargetId]       Change executor type (worktree|docker|ssh)
   set agent <taskId> <agent>                          Change execution agent (claude|codex)
   set merge-mode <workflowId> <mode>                  manual | automatic | external_review
   set fix-prompt <taskId> <text>                      Update fix-session prompt and retry
@@ -1767,22 +1767,34 @@ async function headlessEditPrompt(taskId: string, newPrompt: string, deps: Headl
   autoFix.unsubscribe();
 }
 
-async function headlessEditExecutor(taskId: string, executorType: string, deps: HeadlessDeps): Promise<void> {
-  if (!taskId || !executorType) throw new Error('Missing arguments. Usage: --headless edit-executor <taskId> <executorType>');
+async function headlessEditExecutor(
+  taskId: string,
+  executorType: string,
+  remoteTargetId: string | undefined,
+  deps: HeadlessDeps,
+): Promise<void> {
+  if (!taskId || !executorType) {
+    throw new Error(
+      'Missing arguments. Usage: --headless edit-executor <taskId> <executorType> [remoteTargetId]',
+    );
+  }
   const restored = restoreWorkflowForTaskUnlessDeleteAllWon(taskId, deps, 'set executor');
   if (!restored) return;
   taskId = restored.resolvedTaskId;
   const taskExecutor = createHeadlessExecutor(deps);
   const autoFix = wireHeadlessAutoFix(deps, taskExecutor);
 
-  const envelope = makeEnvelope('edit-task-type', 'headless', 'task', { taskId, executorType });
+  const envelope = makeEnvelope('edit-task-type', 'headless', 'task', { taskId, executorType, remoteTargetId });
   const result = await deps.commandService.editTaskType(envelope);
   if (!result.ok) throw new Error(result.error.message);
   const runnable = result.data.filter((task) => task.status === 'running');
   if (runnable.length > 0) {
     await taskExecutor.executeTasks(runnable);
   }
-  process.stdout.write(`Edited task "${taskId}" executor → "${executorType}"\n`);
+  process.stdout.write(
+    `Edited task "${taskId}" executor → "${executorType}"` +
+    `${remoteTargetId ? ` (remoteTargetId=${remoteTargetId})` : ''}\n`,
+  );
 
   if (deps.noTrack) {
     process.stdout.write('[headless] --no-track enabled: set executor accepted; exiting without tracking.\n');
