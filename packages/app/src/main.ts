@@ -1601,6 +1601,14 @@ if (isHeadless) {
     logger.info(`performDeleteWorkflow end workflow="${workflowId}"`, { module: 'kill' });
   }
 
+  async function performDetachWorkflow(workflowId: string, upstreamWorkflowId: string): Promise<void> {
+    logger.info(`performDetachWorkflow begin workflow="${workflowId}" upstream="${upstreamWorkflowId}"`, { module: 'kill' });
+    const envelope = makeEnvelope('detach-workflow', 'ui', 'workflow', { workflowId, upstreamWorkflowId });
+    const result = await commandService.detachWorkflow(envelope);
+    if (!result.ok) throw new Error(result.error.message);
+    logger.info(`performDetachWorkflow end workflow="${workflowId}" upstream="${upstreamWorkflowId}"`, { module: 'kill' });
+  }
+
   /** Orchestrator error codes that preemption treats as benign (cancel is best-effort). */
   const preemptSkipCodes: ReadonlySet<string> = new Set([
     OrchestratorErrorCode.TASK_NOT_FOUND,
@@ -2303,6 +2311,7 @@ if (isHeadless) {
         cancelTask: performCancelTask,
         cancelWorkflow: performCancelWorkflow,
         deleteWorkflow: performDeleteWorkflow,
+        detachWorkflow: performDetachWorkflow,
       });
       recordStartupMark('api-server.started');
 
