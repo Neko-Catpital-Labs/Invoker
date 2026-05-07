@@ -44,14 +44,6 @@ import {
 import { normalizeMergeModeForPersistence } from './merge-mode.js';
 import { openExternalTerminalForTask } from './open-terminal-for-task.js';
 import { dispatchStartedTasksWithGlobalTopup, executeGlobalTopup, finalizeMutationWithGlobalTopup } from './global-topup.js';
-import {
-  delegationTimeoutMs,
-  resolveDelegationTimeoutMs,
-  tryDelegateExec,
-  tryDelegateQuery,
-  tryDelegateResume,
-  tryDelegateRun,
-} from './headless-delegation.js';
 import { resolveHeadlessTargetWorkflowId } from './headless-command-classification.js';
 import { trackWorkflow } from './headless-watch.js';
 import { preemptWorkflowBeforeMutation, type WorkflowCancelResult } from './workflow-preemption.js';
@@ -61,12 +53,14 @@ import type { RuntimeServices } from '@invoker/runtime-service';
 export { bumpGenerationAndRecreate } from './workflow-actions.js';
 export {
   delegationTimeoutMs,
+  isDelegated,
   resolveDelegationTimeoutMs,
   tryDelegateExec,
   tryDelegateQuery,
   tryDelegateResume,
   tryDelegateRun,
 } from './headless-delegation.js';
+export type { DelegationOutcome } from './headless-delegation.js';
 
 // ── HeadlessDeps interface ───────────────────────────────────
 

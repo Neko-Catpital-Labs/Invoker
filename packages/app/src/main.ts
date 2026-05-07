@@ -105,6 +105,7 @@ import { backupPlan } from './plan-backup.js';
 import { startApiServer, type ApiServer } from './api-server.js';
 import {
   runHeadless,
+  isDelegated,
   tryDelegateRun,
   tryDelegateResume,
   resolveDelegationTimeoutMs,
@@ -657,14 +658,14 @@ if (isHeadless) {
         if (command === 'run') {
           const planPath = cliArgs[1];
           if (!planPath) throw new Error('Missing plan file. Usage: --headless run <plan.yaml>');
-          delegated = await tryDelegateRun(planPath, delegationBus, waitForApproval, noTrack);
+          delegated = isDelegated(await tryDelegateRun(planPath, delegationBus, waitForApproval, noTrack));
         } else if (command === 'resume') {
           const workflowId = cliArgs[1];
           if (!workflowId) throw new Error('Missing workflowId. Usage: --headless resume <id>');
-          delegated = await tryDelegateResume(workflowId, delegationBus, waitForApproval, noTrack);
+          delegated = isDelegated(await tryDelegateResume(workflowId, delegationBus, waitForApproval, noTrack));
         } else {
           const timeoutMs = noTrack ? undefined : await resolveDelegationTimeoutMs(cliArgs);
-          delegated = await tryDelegateExec(cliArgs, delegationBus, waitForApproval, noTrack, timeoutMs);
+          delegated = isDelegated(await tryDelegateExec(cliArgs, delegationBus, waitForApproval, noTrack, timeoutMs));
         }
 
         if (delegated) {
