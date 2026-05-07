@@ -2314,6 +2314,21 @@ if (isHeadless) {
             if (!result.ok) throw new Error(result.error.message);
           });
         },
+        retryWorkflowAction: async (workflowId: string) => {
+          return runWorkflowMutation(workflowId, 'normal', 'api:retry-workflow', [workflowId], async () => {
+            const envelope = makeEnvelope('retry-workflow', 'surface', 'workflow', { workflowId });
+            const result = await commandService.retryWorkflow(envelope);
+            if (!result.ok) throw new Error(result.error.message);
+            await finalizeMutationWithGlobalTopup({
+              orchestrator,
+              taskExecutor: requireTaskExecutor(),
+              logger,
+              context: 'api.workflows.retry',
+              started: result.data.filter(t => t.status === 'running'),
+            });
+            return { started: result.data };
+          });
+        },
         killRunningTask,
         cancelTask: performCancelTask,
         cancelWorkflow: performCancelWorkflow,
