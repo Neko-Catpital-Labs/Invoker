@@ -74,6 +74,7 @@ function runOne(mode, extraEnv = {}) {
     meanFlushIntervalMs: summary?.meanFlushIntervalMs ?? null,
     dbGrowthRateMbPerMin,
     leaseRenewWritesPerSec: summary?.leaseRenewWritesPerSec ?? 0,
+    leaseRenewUpdateWritesPerSec: summary?.leaseRenewUpdateWritesPerSec ?? summary?.leaseRenewWritesPerSec ?? 0,
     mutationThroughputPerSec: summary?.mutationThroughputPerSec ?? 0,
   };
   return { metrics, log };
@@ -86,10 +87,10 @@ function writeMarkdown(outPath, runLabel, commit, results) {
   lines.push(`- Commit: \`${commit}\``);
   lines.push(`- Generated: ${new Date().toISOString()}`);
   lines.push('');
-  lines.push('| mode | status | time-to-failure/completion (s) | peak RSS (MB) | peak external (MB) | flush count | mean flush interval (ms) | db growth (MB/min) | lease renew writes/sec | mutation throughput (intents/sec) |');
+  lines.push('| mode | status | time-to-failure/completion (s) | peak RSS (MB) | peak external (MB) | flush count | mean flush interval (ms) | db growth (MB/min) | lease renew update writes/sec | mutation throughput (intents/sec) |');
   lines.push('|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|');
   for (const r of results) {
-    lines.push(`| ${r.mode} | ${r.status} | ${r.elapsedSec} | ${r.peakRssMb} | ${r.peakExternalMb} | ${r.flushCount} | ${r.meanFlushIntervalMs ?? 'n/a'} | ${r.dbGrowthRateMbPerMin} | ${r.leaseRenewWritesPerSec} | ${r.mutationThroughputPerSec} |`);
+    lines.push(`| ${r.mode} | ${r.status} | ${r.elapsedSec} | ${r.peakRssMb} | ${r.peakExternalMb} | ${r.flushCount} | ${r.meanFlushIntervalMs ?? 'n/a'} | ${r.dbGrowthRateMbPerMin} | ${r.leaseRenewUpdateWritesPerSec} | ${r.mutationThroughputPerSec} |`);
   }
   lines.push('');
   lines.push('## Failure Reasons');
