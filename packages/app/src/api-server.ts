@@ -74,6 +74,7 @@ export interface ApiServerDeps {
   cancelTask?: (taskId: string) => Promise<{ cancelled: string[]; runningCancelled: string[] }>;
   cancelWorkflow?: (workflowId: string) => Promise<{ cancelled: string[]; runningCancelled: string[] }>;
   deleteWorkflow: (workflowId: string) => Promise<void>;
+  detachWorkflow: (workflowId: string, upstreamWorkflowId: string) => Promise<void>;
 }
 
 export interface ApiServer {
@@ -159,6 +160,7 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
     cancelTask,
     cancelWorkflow,
     deleteWorkflow,
+    detachWorkflow,
   } = deps;
   const port = parseInt(process.env.INVOKER_API_PORT ?? '4100', 10);
 
@@ -705,7 +707,7 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
             json(res, 400, { error: 'Missing "upstreamWorkflowId" in request body' });
             return;
           }
-          orchestrator.detachWorkflow(workflowId, String(upstreamWorkflowId));
+          await detachWorkflow(workflowId, String(upstreamWorkflowId));
           json(res, 200, {
             ok: true,
             workflowId,
