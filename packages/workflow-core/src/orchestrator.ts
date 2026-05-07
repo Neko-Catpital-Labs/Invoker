@@ -723,7 +723,7 @@ export class Orchestrator {
   ): TaskState {
     const existing = this.stateGetTask(taskId);
     if (!existing) {
-      throw new Error(`writeAndSync: task ${taskId} not found in graph`);
+      throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `writeAndSync: task ${taskId} not found in graph`);
     }
     const id = existing.id;
     this.taskRepository.updateTask(id, changes);
@@ -1598,7 +1598,7 @@ export class Orchestrator {
   setFixAwaitingApproval(taskId: string, originalError: string): void {
     this.refreshFromDb();
     const task = this.stateGetTask(taskId);
-    if (!task) throw new Error(`Task ${taskId} not found`);
+    if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
     const tid = task.id;
     if (task.status !== 'running' && task.status !== 'fixing_with_ai') {
       throw new Error(`Task ${tid} is not running or fixing with AI (status: ${task.status})`);
@@ -2013,7 +2013,7 @@ export class Orchestrator {
   retryTask(taskId: string): TaskState[] {
     this.refreshFromDb();
     const task = this.stateGetTask(taskId);
-    if (!task) throw new Error(`Task ${taskId} not found`);
+    if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
     const id = task.id;
 
     // Step 18 (`docs/architecture/task-invalidation-roadmap.md`,
@@ -2213,7 +2213,7 @@ export class Orchestrator {
   recreateTask(taskId: string): TaskState[] {
     this.refreshFromDb();
     const task = this.stateGetTask(taskId);
-    if (!task) throw new Error(`Task ${taskId} not found`);
+    if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
 
     const rootId = task.id;
 
@@ -2486,7 +2486,7 @@ export class Orchestrator {
   beginConflictResolution(taskId: string): { savedError: string } {
     this.refreshFromDb();
     const task = this.stateGetTask(taskId);
-    if (!task) throw new Error(`Task ${taskId} not found`);
+    if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
     if (task.status !== 'failed') throw new Error(`Task ${taskId} is not failed (status: ${task.status})`);
 
     const savedError = task.execution.error ?? '';
@@ -2536,7 +2536,7 @@ export class Orchestrator {
     this.refreshFromDb();
     const task = this.stateGetTask(taskId);
     if (!task) {
-      throw new Error(`Task ${taskId} not found`);
+      throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
     }
     const id = task.id;
 
@@ -2571,7 +2571,7 @@ export class Orchestrator {
   editTaskCommand(taskId: string, newCommand: string): TaskState[] {
     this.refreshFromDb();
     const task = this.stateGetTask(taskId);
-    if (!task) throw new Error(`Task ${taskId} not found`);
+    if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
     if (task.config.isMergeNode) throw new Error(`Cannot edit merge node ${taskId}`);
 
     if (task.status === 'running' || task.status === 'fixing_with_ai') {
@@ -2591,7 +2591,7 @@ export class Orchestrator {
     editTaskPrompt(taskId: string, newPrompt: string): TaskState[] {
     this.refreshFromDb();
     const task = this.stateGetTask(taskId);
-    if (!task) throw new Error(`Task ${taskId} not found`);
+    if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
     if (task.config.isMergeNode) throw new Error(`Cannot edit merge node ${taskId}`);
 
     if (task.status === 'running' || task.status === 'fixing_with_ai') {
@@ -2611,7 +2611,7 @@ export class Orchestrator {
     editTaskType(taskId: string, executorType: string, remoteTargetId?: string): TaskState[] {
     this.refreshFromDb();
     const task = this.stateGetTask(taskId);
-    if (!task) throw new Error(`Task ${taskId} not found`);
+    if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
     if (task.config.isMergeNode) throw new Error(`Cannot change executor type of merge node ${taskId}`);
 
     const effectiveType = normalizeExecutorType(executorType) ?? executorType;
@@ -2660,7 +2660,7 @@ export class Orchestrator {
     editTaskAgent(taskId: string, agentName: string): TaskState[] {
     this.refreshFromDb();
     const task = this.stateGetTask(taskId);
-    if (!task) throw new Error(`Task ${taskId} not found`);
+    if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
     if (task.config.isMergeNode) throw new Error(`Cannot change execution agent of merge node ${taskId}`);
 
     if (task.status === 'running' || task.status === 'fixing_with_ai') {
@@ -2769,7 +2769,7 @@ export class Orchestrator {
   ): TaskState[] {
     this.refreshFromDb();
     const task = this.stateGetTask(taskId);
-    if (!task) throw new Error(`Task ${taskId} not found`);
+    if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
     if (!task.config.isMergeNode) {
       throw new Error(`Task ${taskId} is not a merge node`);
     }
@@ -2906,7 +2906,7 @@ export class Orchestrator {
   ): TaskState[] {
     this.refreshFromDb();
     const task = this.stateGetTask(taskId);
-    if (!task) throw new Error(`Task ${taskId} not found`);
+    if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
     if (task.config.isMergeNode) {
       throw new Error(`Cannot edit fix context of merge node ${taskId}`);
     }
@@ -3005,7 +3005,7 @@ export class Orchestrator {
   setTaskExternalGatePolicies(taskId: string, updates: ExternalGatePolicyUpdate[]): TaskState[] {
     this.refreshFromDb();
     const task = this.stateGetTask(taskId);
-    if (!task) throw new Error(`Task ${taskId} not found`);
+    if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
     if (task.status === 'running' || task.status === 'fixing_with_ai') {
       throw new Error(`Cannot edit running task ${taskId}`);
     }
@@ -3065,7 +3065,7 @@ export class Orchestrator {
       .getAllTasks()
       .filter((t) => t.config.workflowId === workflowId);
     if (sourceTasks.length === 0) {
-      throw new Error(`forkWorkflow: workflow ${workflowId} not found (no tasks)`);
+      throw new OrchestratorError(OrchestratorErrorCode.WORKFLOW_NOT_FOUND, `forkWorkflow: workflow ${workflowId} not found (no tasks)`);
     }
 
     this.cancelWorkflow(workflowId);
@@ -3189,7 +3189,7 @@ export class Orchestrator {
   replaceTask(taskId: string, replacementTasks: TaskReplacementDef[]): TaskState[] {
     this.refreshFromDb();
     const task = this.stateGetTask(taskId);
-    if (!task) throw new Error(`Task ${taskId} not found`);
+    if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
     if (task.status === 'running' || task.status === 'fixing_with_ai') throw new Error(`Cannot replace running task ${taskId}`);
     if (replacementTasks.length === 0) throw new Error('Must provide at least one replacement task');
 
@@ -3924,7 +3924,7 @@ export class Orchestrator {
   ): TaskState[] {
     const existing = this.stateGetTask(taskId);
     if (!existing) {
-      throw new Error(`finalizeFailedTask: task ${taskId} not found in graph`);
+      throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `finalizeFailedTask: task ${taskId} not found in graph`);
     }
 
     const changes: TaskStateChanges = {
@@ -4364,7 +4364,7 @@ export class Orchestrator {
       (task) => task.config.workflowId === workflowId,
     );
     if (targetTasks.length === 0) {
-      throw new Error(`Workflow ${workflowId} not found`);
+      throw new OrchestratorError(OrchestratorErrorCode.WORKFLOW_NOT_FOUND, `Workflow ${workflowId} not found`);
     }
 
     let removedDependency = false;

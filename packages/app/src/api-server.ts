@@ -160,8 +160,6 @@ function httpStatusForError(err: unknown): number {
   }
   if (err instanceof PlanConflictError) return 409;
   if (err instanceof TopologyForkRequired) return 409;
-  // Fallback for errors not yet migrated to OrchestratorError.
-  if (err instanceof Error && err.message.includes('not found')) return 404;
   return 400;
 }
 

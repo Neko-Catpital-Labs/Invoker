@@ -12,6 +12,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import type { Orchestrator } from '@invoker/workflow-core';
+import { OrchestratorError, OrchestratorErrorCode } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import { cleanElectronEnv } from './process-utils.js';
 import type { ExecutionAgent } from './agent.js';
@@ -172,7 +173,7 @@ export async function resolveConflictImpl(
     hasSavedError: savedError !== undefined,
   });
   const task = host.orchestrator.getTask(taskId);
-  if (!task) throw new Error(`Task ${taskId} not found`);
+  if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
   if (task.status !== 'failed' && task.status !== 'running' && task.status !== 'fixing_with_ai') {
     throw new Error(`Task ${taskId} is not in a resolvable state (status: ${task.status})`);
   }
@@ -444,7 +445,7 @@ export async function fixWithAgentImpl(
     outputLength: taskOutput.length,
   });
   const task = host.orchestrator.getTask(taskId);
-  if (!task) throw new Error(`Task ${taskId} not found`);
+  if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
   if (task.status !== 'failed' && task.status !== 'running' && task.status !== 'fixing_with_ai') {
     throw new Error(`Task ${taskId} is not in a fixable state (status: ${task.status})`);
   }

@@ -11,6 +11,7 @@ import { homedir } from 'node:os';
 import { pathToFileURL } from 'node:url';
 
 import type { Orchestrator, TaskState, TaskStateChanges } from '@invoker/workflow-core';
+import { OrchestratorError, OrchestratorErrorCode } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import type { WorkResponse } from '@invoker/contracts';
 import type { TaskRunnerCallbacks } from './task-runner.js';
@@ -584,7 +585,7 @@ export async function approveMergeImpl(
 ): Promise<void> {
   mergeTrace('APPROVE_MERGE_ENTER', { workflowId });
   const workflow = host.persistence.loadWorkflow(workflowId);
-  if (!workflow) throw new Error(`Workflow ${workflowId} not found`);
+  if (!workflow) throw new OrchestratorError(OrchestratorErrorCode.WORKFLOW_NOT_FOUND, `Workflow ${workflowId} not found`);
 
   const onFinish = workflow.onFinish ?? 'none';
   const baseBranch = workflow.baseBranch ?? host.defaultBranch ?? await host.detectDefaultBranch();
