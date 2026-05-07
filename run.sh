@@ -142,7 +142,7 @@ if [ "$(uname)" = "Linux" ] && [ -z "${DISPLAY:-}" ]; then
     exit 1
   fi
   ELECTRON_ENABLE_LOGGING=1 exec xvfb-run --auto-servernum \
-    ./packages/app/node_modules/.bin/electron packages/app/dist/main.js $SANDBOX_FLAG "$@"
+    ./scripts/electron.cjs packages/app/dist/main.js $SANDBOX_FLAG "$@"
 fi
 
-ELECTRON_ENABLE_LOGGING=1 exec ./packages/app/node_modules/.bin/electron packages/app/dist/main.js $SANDBOX_FLAG "$@"
+ELECTRON_ENABLE_LOGGING=1 exec ./scripts/electron.cjs packages/app/dist/main.js $SANDBOX_FLAG "$@"

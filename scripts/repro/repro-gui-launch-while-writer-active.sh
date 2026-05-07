@@ -42,7 +42,7 @@ set +e
 run_with_timeout 8 env \
   NODE_ENV=test \
   INVOKER_DB_DIR="$DB_DIR" \
-  pnpm --filter @invoker/app exec electron dist/main.js \
+  "$ROOT_DIR/scripts/electron.cjs" packages/app/dist/main.js \
   >"$STDOUT_LOG" 2>"$STDERR_LOG"
 STATUS=$?
 set -e

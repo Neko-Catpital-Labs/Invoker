@@ -12,4 +12,5 @@ else
   CONCURRENCY=4
 fi
 
-exec pnpm -r --workspace-concurrency="$CONCURRENCY" test
+pnpm -r --workspace-concurrency="$CONCURRENCY" test
+bash "$ROOT/scripts/required-builds.sh"

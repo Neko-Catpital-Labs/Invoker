@@ -50,7 +50,7 @@ Source of truth: `packages/app/src/plan-parser.ts` (interfaces + validation, lin
 
 ## Implementation plans (convention)
 
-`plan-parser.ts` does not require a special field for this, but **implementation** YAML (not one-off verify-only plans) should reserve the **last** task for **post-fix regression**: a `command` task that re-runs the same reproduction used in Phase 1b (`pnpm test` target, `submit-plan.sh` verify plan, or `scripts/verify-*.sh`). That task depends on every implementation task that changes behavior. See `references/task-patterns.md` and `playbooks/verify-then-build.md` Phase 2.
+`plan-parser.ts` does not require a special field for this, but **implementation** YAML (not one-off verify-only plans) must reserve the **last** task for the terminal regression gate: a `command` task that runs `pnpm run test:all`. Keep focused package/headless repro commands earlier in the plan. The final `pnpm run test:all` task must depend on every earlier task so it runs last. See `references/task-patterns.md` and `playbooks/verify-then-build.md` Phase 2.
 
 ## Banned Patterns
 

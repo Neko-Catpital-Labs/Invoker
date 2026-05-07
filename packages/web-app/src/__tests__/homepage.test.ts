@@ -33,7 +33,6 @@ describe('homepage', () => {
   beforeEach(() => {
     document.body.innerHTML = '<div id="app"></div>';
     vi.restoreAllMocks();
-    // Default mock so the top-level init() call from import doesn't throw.
     if (!globalThis.fetch || !(globalThis.fetch as ReturnType<typeof vi.fn>).mock) {
       globalThis.fetch = vi.fn().mockReturnValue(new Promise(() => {}));
     }
