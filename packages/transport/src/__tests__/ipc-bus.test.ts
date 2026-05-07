@@ -10,6 +10,7 @@ import {
   DEFAULT_REQUEST_DEADLINE_MS,
   MALFORMED_FRAME_RATE_LIMIT_MS,
   type MalformedFrameEvent,
+  type SubscriberErrorEvent,
 } from '../ipc-bus.js';
 import { TransportError, TransportErrorCode } from '../transport-error.js';
 
@@ -300,6 +301,57 @@ describe('IpcBus', () => {
 
     const result = await requester.request<number, number>('delayed-double', 5);
     expect(result).toBe(10);
+  });
+
+  // ---------------------------------------------------------------
+  // Subscriber error observability
+  // ---------------------------------------------------------------
+
+  it('emits subscriber error events without interrupting delivery to other subscribers', async () => {
+    const sock = tempSocketPath();
+    const events: SubscriberErrorEvent[] = [];
+    const bus = new IpcBus(sock, { onSubscriberError: (event) => events.push(event) });
+    buses.push(bus);
+    await bus.ready();
+
+    const received: string[] = [];
+    bus.subscribe('test', () => {
+      throw new Error('subscriber exploded');
+    });
+    bus.subscribe('test', (msg: string) => received.push(msg));
+
+    bus.publish('test', 'hello');
+
+    expect(received).toEqual(['hello']);
+    expect(events).toHaveLength(1);
+    expect(events[0].channel).toBe('test');
+    expect(events[0].error).toBe('subscriber exploded');
+    expect(events[0].timestamp).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+  });
+
+  it('emits every subscriber error event even when failures happen back-to-back', async () => {
+    const sock = tempSocketPath();
+    const events: SubscriberErrorEvent[] = [];
+    const bus = new IpcBus(sock, { onSubscriberError: (event) => events.push(event) });
+    buses.push(bus);
+    await bus.ready();
+
+    bus.subscribe('test', () => {
+      throw new Error('first failure');
+    });
+    bus.subscribe('test', () => {
+      throw new Error('second failure');
+    });
+
+    bus.publish('test', 'hello');
+    bus.publish('test', 'again');
+
+    expect(events.map((event) => event.error)).toEqual([
+      'first failure',
+      'second failure',
+      'first failure',
+      'second failure',
+    ]);
   });
 
   // ---------------------------------------------------------------
