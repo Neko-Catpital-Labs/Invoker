@@ -66,7 +66,7 @@ Minimal example:
 
 ```json
 {
-  "maxConcurrency": 3,
+  "maxConcurrency": 6,
   "autoFixRetries": 3,
   "autoFixAgent": "claude",
   "remoteTargets": {

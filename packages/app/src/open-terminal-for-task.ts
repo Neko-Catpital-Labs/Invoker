@@ -22,6 +22,7 @@ import {
   spawnDetachedTerminal,
   type OpenTerminalResult,
 } from './terminal-external-launch.js';
+import { resolveEffectiveMaxConcurrency } from './execution-capacity.js';
 
 /** Persistence methods required to resolve terminal cwd / command for a task. */
 export interface OpenTerminalPersistence {
@@ -180,10 +181,11 @@ export async function openExternalTerminalForTask(
       executor = docker;
     } else if (repairedMeta.executorType === 'worktree') {
       const invokerHome = path.resolve(homedir(), '.invoker');
+      const maxWorktrees = resolveEffectiveMaxConcurrency(loadConfig().maxConcurrency);
       const worktree = new WorktreeExecutor({
         worktreeBaseDir: path.resolve(invokerHome, 'worktrees'),
         cacheDir: path.resolve(invokerHome, 'repos'),
-        maxWorktrees: 5,
+        maxWorktrees,
         agentRegistry: opts.executionAgentRegistry,
       });
       executorRegistry.register('worktree', worktree);

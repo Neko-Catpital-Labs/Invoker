@@ -1,13 +1,14 @@
 {
   "comment": "Example Invoker configuration file",
   "description": "Default location: ~/.invoker/config.json. For repo-specific configs, set INVOKER_REPO_CONFIG_PATH when launching Invoker.",
+  "maxConcurrency": 6,
 
   "executors": {
     "worktree": {
       "comment": "WorktreeExecutor configuration",
       "cacheDir": "/home/user/.invoker/cache",
       "worktreeBaseDir": "/home/user/.invoker/worktrees",
-      "maxWorktrees": 5
+      "maxWorktrees": 6
     },
     "docker": {
       "comment": "DockerExecutor configuration"

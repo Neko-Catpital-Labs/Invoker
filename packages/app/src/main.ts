@@ -310,10 +310,7 @@ function getSafeInvokerConfigForLogging(config: InvokerConfig): Record<string, u
   return safeConfig;
 }
 
-const effectiveMaxConcurrency = resolveEffectiveMaxConcurrency(
-  invokerConfig.maxConcurrency,
-  DEFAULT_WORKTREE_MAX_CONCURRENCY,
-);
+const effectiveMaxConcurrency = resolveEffectiveMaxConcurrency(invokerConfig.maxConcurrency);
 
 async function maybeDelayWorkflowResumeForTest(): Promise<void> {
   if (process.env.NODE_ENV !== 'test') return;
@@ -418,7 +415,7 @@ async function initServices(options?: InitServicesOptions): Promise<void> {
     new WorktreeExecutor({
       worktreeBaseDir: path.resolve(invokerHomeRoot, 'worktrees'),
       cacheDir: path.resolve(invokerHomeRoot, 'repos'),
-      maxWorktrees: DEFAULT_WORKTREE_MAX_CONCURRENCY,
+      maxWorktrees: effectiveMaxConcurrency,
       agentRegistry: options?.executionAgentRegistry,
     }),
   );
