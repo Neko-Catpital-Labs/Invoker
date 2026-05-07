@@ -29,7 +29,11 @@ Grep-only checks are Phase 1a only; behavioral claims require executed Phase 1b 
 
 **Dependency-first layered decomposition (required for implementation plans):** For plans whose `onFinish` is not `none`, every implementation task must include `Layer:` and `Feature state:` headings in `description`. Use normalized layer names (`persistence`, `domain`, `transport`, `api`, `contact_surface`, `app_bridge`, `owner_delegation`, `ui_activation`, `app_regression`, `e2e_regression`, `ui`, `docs`) and feature state values (`active` or `dormant`). `dormant` tasks must still include `Acceptance criteria:` in `description`. Verify-only plans (`onFinish: none`) are exempt from this hard requirement.
 
+**Implementation-rationale headings (required for all implementation tasks):** For plans whose `onFinish` is not `none`, every task (prompt or command) must include `Goal:`, `Motivation:`, `Alternative considerations:` (or `Alternatives:`), and `Implementation details:` (or `Implementation:`) in the task `description`. In addition, prompt tasks must include the same rationale headings directly in `prompt` so execution instructions contain explicit intent (not only metadata). This is a hard requirement enforced by `lint-task-atomicity.sh` so implementation intent is explicit and reviewable in authored workflow YAML.
+
 **Cross-layer dependency direction (required):** Dependency DAGs must flow from lower/foundational layers toward higher/integration layers. If a lower-layer task depends on a higher-layer task, mark an explicit exception in the task description with `Layer exception: allowed` and a rationale.
+
+**Experiment artifact persistence rule (required when prompt tasks design experiments):** Any `experiment-*` prompt task must write a deterministic artifact path (for example `docs/context/<issue>/experiment-brief.md`) and commit it during that task. Any `implement-*` task that depends on that experiment must reference and consume the exact artifact path in both `description` and `prompt` with explicit acceptance language. The workflow must include a dedicated cleanup task (typically `cleanup-experiment-artifacts-*`) that removes the artifact and commits cleanup before the final regression gate (`pnpm run test:all`).
 
 **Bugfix repro:** For bug/regression plans, a shared `bash scripts/repro-<slug>.sh` (or the same `command:` before and after) is **strongly recommended**; **`skill-doctor` does not require it.** If the fix invalidates the original repro, use another explicit verification task. See `references/task-patterns.md` § *Bugfix repro*.
 
@@ -76,7 +80,7 @@ If `skill-doctor.sh` fails, run individual checks to isolate the problem:
    `bash skills/plan-to-invoker/scripts/validate-plan.sh <plan-file>`
 4. `step-lint-atomicity`
    `bash skills/plan-to-invoker/scripts/lint-task-atomicity.sh <plan-file>`  
-   Optional (warnings only, exit 0): append `--warn-delegation` for **best-effort** hints if `Files:` / `Change types:` / `Acceptance criteria:` are missing in descriptions. For implementation plans (`onFinish != none`), this step now hard-fails missing/invalid `Layer:` and `Feature state:` metadata and rejects invalid cross-layer dependency direction without `Layer exception: allowed`.
+  Optional (warnings only, exit 0): append `--warn-delegation` for **best-effort** hints if `Files:` / `Change types:` / `Acceptance criteria:` are missing in descriptions. For implementation plans (`onFinish != none`), this step hard-fails missing/invalid `Layer:` and `Feature state:` metadata, missing required rationale headings in `description` on any task (`Goal`, `Motivation`, `Alternative considerations`/`Alternatives`, `Implementation details`/`Implementation`), missing required rationale headings in `prompt` for prompt tasks, invalid cross-layer dependency direction without `Layer exception: allowed`, and missing experiment-artifact handoff/cleanup contract when experiment tasks are present.
 5. `step-parse-verify-results`
    `bash skills/plan-to-invoker/scripts/parse-results.sh < /tmp/invoker-verify.txt`
 
