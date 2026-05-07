@@ -88,21 +88,51 @@ function queryOne(db, sql, params = []) {
   return row;
 }
 
-function renewWorkflowMutationLease(db, workflowId, ownerId) {
+function renewWorkflowMutationLease(db, workflowId, ownerId, options = {}) {
   const lease = queryOne(
     db,
     'SELECT * FROM workflow_mutation_leases WHERE workflow_id = ?',
     [workflowId]
   );
-  if (!lease || String(lease.owner_id) !== ownerId) return false;
+  if (!lease || String(lease.owner_id) !== ownerId) return 'lost';
+  const nowMs = Date.now();
+  const nextIntentId = options.activeIntentId ?? null;
+  const nextMutationKind = options.activeMutationKind ?? null;
+  const sameIntent = String(lease.active_intent_id ?? '') === String(nextIntentId ?? '');
+  const sameKind = String(lease.active_mutation_kind ?? '') === String(nextMutationKind ?? '');
+  const lastHeartbeatMs = lease.last_heartbeat_at ? Date.parse(String(lease.last_heartbeat_at)) : 0;
+  const leaseExpiryMs = lease.lease_expires_at ? Date.parse(String(lease.lease_expires_at)) : 0;
+  const minHeartbeatIntervalMs = options.minHeartbeatIntervalMs ?? 0;
+  const minExpiryLeadMs = options.minExpiryLeadMs ?? 0;
+
+  if (
+    sameIntent &&
+    sameKind &&
+    minHeartbeatIntervalMs > 0 &&
+    Number.isFinite(lastHeartbeatMs) &&
+    lastHeartbeatMs > 0 &&
+    nowMs - lastHeartbeatMs < minHeartbeatIntervalMs &&
+    Number.isFinite(leaseExpiryMs) &&
+    leaseExpiryMs - nowMs > minExpiryLeadMs
+  ) {
+    return 'skipped';
+  }
+
   const now = new Date().toISOString();
   db.run(
     `UPDATE workflow_mutation_leases
        SET active_intent_id = ?, active_mutation_kind = ?, last_heartbeat_at = ?, lease_expires_at = ?
      WHERE workflow_id = ? AND owner_id = ?`,
-    [1, 'dispatch', now, now, workflowId, ownerId]
+    [
+      nextIntentId,
+      nextMutationKind,
+      now,
+      new Date(nowMs + 30000).toISOString(),
+      workflowId,
+      ownerId,
+    ]
   );
-  return true;
+  return 'updated';
 }
 
 function fillLargeTables(db, rows, payloadBytes) {
@@ -166,6 +196,8 @@ async function main() {
   const maxDbMb = envInt('REPRO_MAX_DB_MB', defaults.maxDbMb);
   const hardHeapLimitMb = envInt('REPRO_SQLITE_HARD_HEAP_LIMIT_MB', defaults.hardHeapLimitMb);
   const timeoutSec = envInt('REPRO_TIMEOUT_SEC', defaults.timeoutSec);
+  const leaseRenewMinIntervalMs = envInt('INVOKER_MUTATION_LEASE_RENEW_MIN_INTERVAL_MS', 2_000);
+  const leaseRenewMinExpiryLeadMs = envInt('INVOKER_MUTATION_LEASE_RENEW_MIN_EXPIRY_LEAD_MS', 12_000);
   const rootWorkflow = 'wf-1778141536943-7/post-fix-regression';
   const workflowId = 'wf-oom';
   const ownerId = 'owner-oom';
@@ -181,6 +213,7 @@ async function main() {
   let lastFlushAt = 0;
   let flushIntervalTotalMs = 0;
   let leaseRenewWrites = 0;
+  let leaseRenewUpdateWrites = 0;
   let seededIntentRows = 0;
   let failureReason = null;
 
@@ -188,7 +221,9 @@ async function main() {
   console.error(
     `[repro] mode=${mode} rowsPerCycle=${rowsPerCycle} payloadBytes=${payloadBytes} renewsPerCycle=${renewsPerCycle} maxCycles=${maxCycles} hardHeapLimitMb=${hardHeapLimitMb} maxDbMb=${maxDbMb} timeoutSec=${timeoutSec}`
   );
-  console.error(`[repro] flushDebounceMs=${flushDebounceMs} exportEvery=${exportEvery}`);
+  console.error(
+    `[repro] flushDebounceMs=${flushDebounceMs} exportEvery=${exportEvery} leaseRenewMinIntervalMs=${leaseRenewMinIntervalMs} leaseRenewMinExpiryLeadMs=${leaseRenewMinExpiryLeadMs}`
+  );
 
   db.run(`
     CREATE TABLE workflow_mutation_intents (
@@ -256,8 +291,14 @@ async function main() {
       seededIntentRows += rowsPerCycle;
       console.error(`[repro] cycle=${cycle} seeded rows; starting renew loop`);
       for (let i = 1; i <= renewsPerCycle; i += 1) {
-        renewWorkflowMutationLease(db, workflowId, ownerId);
+        const renewResult = renewWorkflowMutationLease(db, workflowId, ownerId, {
+          activeIntentId: 1,
+          activeMutationKind: 'dispatch',
+          minHeartbeatIntervalMs: leaseRenewMinIntervalMs,
+          minExpiryLeadMs: leaseRenewMinExpiryLeadMs,
+        });
         leaseRenewWrites += 1;
+        if (renewResult === 'updated') leaseRenewUpdateWrites += 1;
         db.run('INSERT INTO output_spool (task_id, offset, data) VALUES (?, ?, ?)', [
           'wf-oom/task',
           (cycle * renewsPerCycle) + i,
@@ -298,6 +339,9 @@ async function main() {
     const leaseRenewWritesPerSec = elapsedMs > 0
       ? Number(((leaseRenewWrites * 1000) / elapsedMs).toFixed(2))
       : 0;
+    const leaseRenewUpdateWritesPerSec = elapsedMs > 0
+      ? Number(((leaseRenewUpdateWrites * 1000) / elapsedMs).toFixed(2))
+      : 0;
     const mutationThroughputPerSec = elapsedMs > 0
       ? Number(((seededIntentRows * 1000) / elapsedMs).toFixed(2))
       : 0;
@@ -309,6 +353,8 @@ async function main() {
         meanFlushIntervalMs,
         leaseRenewWrites,
         leaseRenewWritesPerSec,
+        leaseRenewUpdateWrites,
+        leaseRenewUpdateWritesPerSec,
         seededIntentRows,
         mutationThroughputPerSec,
         failureReason,

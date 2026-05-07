@@ -15,6 +15,14 @@ type InvalidationSignal = {
   reject: (error: unknown) => void;
 };
 
+function envMs(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return parsed;
+}
+
 class WorkflowMutationInvalidatedError extends Error {
   constructor(message: string) {
     super(message);
@@ -29,6 +37,14 @@ export class PersistedWorkflowMutationCoordinator {
   private readonly drainingWorkflows = new Set<string>();
   private readonly pendingDrainWorkflows = new Set<string>();
   private readonly leaseHeartbeatMs = Math.max(1_000, Math.floor(WORKFLOW_MUTATION_LEASE_MS / 3));
+  private readonly leaseRenewMinIntervalMs = Math.max(
+    500,
+    envMs('INVOKER_MUTATION_LEASE_RENEW_MIN_INTERVAL_MS', 2_000),
+  );
+  private readonly leaseRenewMinExpiryLeadMs = Math.max(
+    this.leaseHeartbeatMs,
+    envMs('INVOKER_MUTATION_LEASE_RENEW_MIN_EXPIRY_LEAD_MS', 12_000),
+  );
   private readonly maxConcurrentWorkflowDrains: number;
   private readonly enableTraceLogs: boolean;
   private activeWorkflowDrains = 0;
@@ -166,6 +182,8 @@ export class PersistedWorkflowMutationCoordinator {
         this.persistence.renewWorkflowMutationLease(workflowId, this.ownerId, {
           activeIntentId: intent.id,
           activeMutationKind: intent.channel,
+          minHeartbeatIntervalMs: this.leaseRenewMinIntervalMs,
+          minExpiryLeadMs: this.leaseRenewMinExpiryLeadMs,
         });
         await this.executeIntent(workflowId, intent);
         this.trace(`drain-finished workflow=${workflowId} intent=${intent.id} channel=${intent.channel}`);
@@ -184,6 +202,8 @@ export class PersistedWorkflowMutationCoordinator {
       this.persistence.renewWorkflowMutationLease(workflowId, this.ownerId, {
         activeIntentId: intent.id,
         activeMutationKind: intent.channel,
+        minHeartbeatIntervalMs: this.leaseRenewMinIntervalMs,
+        minExpiryLeadMs: this.leaseRenewMinExpiryLeadMs,
       });
     }, this.leaseHeartbeatMs);
     try {
@@ -209,7 +229,10 @@ export class PersistedWorkflowMutationCoordinator {
     } finally {
       clearInterval(leaseHeartbeat);
       this.runningIntentInvalidations.delete(intent.id);
-      this.persistence.renewWorkflowMutationLease(workflowId, this.ownerId);
+      this.persistence.renewWorkflowMutationLease(workflowId, this.ownerId, {
+        minHeartbeatIntervalMs: this.leaseRenewMinIntervalMs,
+        minExpiryLeadMs: this.leaseRenewMinExpiryLeadMs,
+      });
       this.inFlightPromises.delete(intent.id);
       this.enqueueStartedAtMs.delete(intent.id);
     }
