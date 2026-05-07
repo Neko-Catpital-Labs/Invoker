@@ -6,6 +6,7 @@
 
 import type { TaskState, TaskStatus } from '@invoker/workflow-core';
 import type { TaskEvent, Workflow } from '@invoker/data-store';
+import type { NormalizedCostEvent, CostRollup } from '@invoker/contracts';
 
 // ── ANSI Color Codes ─────────────────────────────────────────
 
@@ -348,4 +349,68 @@ export function formatAsJson(data: unknown): string {
  */
 export function formatAsJsonl(items: unknown[]): string {
   return items.map(item => JSON.stringify(item)).join('\n');
+}
+
+// ── Cost Formatters ─────────────────────────────────────────
+
+/**
+ * Format a single cost event as a one-line summary.
+ *
+ * Example: "  claude (anthropic) — task-a — 1,200 tokens — $0.0036 [exact]"
+ */
+export function formatCostEvent(event: NormalizedCostEvent): string {
+  const tokens = event.usage.totalTokens.toLocaleString();
+  const cost = `$${event.pricing.estimatedCostUsd.toFixed(4)}`;
+  const conf = event.pricing.confidence;
+  const confColor = conf === 'exact' ? GREEN : conf === 'estimated' ? YELLOW : RED;
+  return `${DIM}  ${event.identity.agentName}${RESET} (${event.identity.source}) — ${BOLD}${event.attribution.taskId}${RESET} — ${tokens} tokens — ${confColor}${cost} [${conf}]${RESET}`;
+}
+
+/**
+ * Format a cost rollup as a summary block.
+ */
+export function formatCostRollup(rollup: CostRollup): string {
+  const lines: string[] = [];
+  lines.push(`${BOLD}Cost summary${RESET}`);
+  lines.push('');
+  lines.push(`  Events       ${BOLD}${rollup.eventCount}${RESET}`);
+  lines.push(`  Input        ${rollup.inputTokens.toLocaleString()} tokens`);
+  lines.push(`  Output       ${rollup.outputTokens.toLocaleString()} tokens`);
+  lines.push(`  Cached       ${rollup.cachedTokens.toLocaleString()} tokens`);
+  lines.push(`  Total        ${BOLD}${rollup.totalTokens.toLocaleString()}${RESET} tokens`);
+  lines.push(`  Cost         ${BOLD}$${rollup.totalCostUsd.toFixed(4)}${RESET}`);
+
+  if (rollup.unknownConfidenceCount > 0) {
+    lines.push(`  ${YELLOW}Unknown confidence  ${rollup.unknownConfidenceCount}${RESET}`);
+  }
+  if (rollup.missingUsageCount > 0) {
+    lines.push(`  ${RED}Missing usage       ${rollup.missingUsageCount}${RESET}`);
+  }
+
+  return lines.join('\n');
+}
+
+/**
+ * Serialize a NormalizedCostEvent to a plain JSON-safe object.
+ */
+export function serializeCostEvent(event: NormalizedCostEvent): Record<string, unknown> {
+  return {
+    eventId: event.identity.eventId,
+    agentSessionId: event.identity.agentSessionId,
+    agentName: event.identity.agentName,
+    source: event.identity.source,
+    workflowId: event.attribution.workflowId,
+    taskId: event.attribution.taskId,
+    attemptId: event.attribution.attemptId,
+    executorType: event.attribution.executorType,
+    inputTokens: event.usage.inputTokens,
+    outputTokens: event.usage.outputTokens,
+    cachedTokens: event.usage.cachedTokens,
+    totalTokens: event.usage.totalTokens,
+    model: event.pricing.model,
+    pricingVersion: event.pricing.pricingVersion,
+    estimatedCostUsd: event.pricing.estimatedCostUsd,
+    confidence: event.pricing.confidence,
+    timestamp: event.timestamp,
+  };
 }
