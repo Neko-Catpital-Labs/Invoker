@@ -4,7 +4,13 @@ import { existsSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { IpcBus, DEFAULT_REQUEST_DEADLINE_MS } from '../ipc-bus.js';
+import { createConnection } from 'node:net';
+import {
+  IpcBus,
+  DEFAULT_REQUEST_DEADLINE_MS,
+  MALFORMED_FRAME_RATE_LIMIT_MS,
+  type MalformedFrameEvent,
+} from '../ipc-bus.js';
 import { TransportError, TransportErrorCode } from '../transport-error.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -918,6 +924,172 @@ ${minimalIpcBusJS}
     expect(messages.b.some((m: any) => m.received)).toBe(true);
     expect(messages.a.some((m: any) => m.error)).toBe(false);
   }, 10000);
+});
+
+// ---------------------------------------------------------------------------
+// Malformed-frame observability
+// ---------------------------------------------------------------------------
+
+describe('Malformed-frame observability', () => {
+  const buses: IpcBus[] = [];
+
+  afterEach(() => {
+    for (const bus of buses) {
+      bus.disconnect();
+    }
+    buses.length = 0;
+  });
+
+  /** Encode a raw length-prefixed frame from an arbitrary string payload. */
+  function encodeRaw(payload: string): Buffer {
+    const json = Buffer.from(payload, 'utf8');
+    const frame = Buffer.allocUnsafe(4 + json.length);
+    frame.writeUInt32BE(json.length, 0);
+    json.copy(frame, 4);
+    return frame;
+  }
+
+  /** Connect a raw socket to the given path and wait for it to be ready. */
+  function rawConnect(socketPath: string): Promise<import('node:net').Socket> {
+    return new Promise((resolve, reject) => {
+      const sock = createConnection({ path: socketPath }, () => resolve(sock));
+      sock.on('error', reject);
+    });
+  }
+
+  it('fires onMalformedFrame for invalid JSON', async () => {
+    const sock = tempSocketPath();
+    const events: MalformedFrameEvent[] = [];
+    const bus = new IpcBus(sock, { onMalformedFrame: (e) => events.push(e) });
+    buses.push(bus);
+    await bus.ready();
+
+    // Send a frame whose payload is not valid JSON.
+    const raw = rawConnect(sock);
+    const peer = await raw;
+    peer.write(encodeRaw('not-json{{{'));
+
+    await waitFor(() => events.length >= 1, 2000);
+    peer.destroy();
+
+    expect(events).toHaveLength(1);
+    expect(events[0].reason).toBe('invalid_json');
+    expect(events[0].rawByteLength).toBe(Buffer.byteLength('not-json{{{', 'utf8'));
+    expect(events[0].droppedSinceLastReport).toBe(0);
+    expect(events[0].timestamp).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+  });
+
+  it('fires onMalformedFrame for valid JSON with invalid envelope shape', async () => {
+    const sock = tempSocketPath();
+    const events: MalformedFrameEvent[] = [];
+    const bus = new IpcBus(sock, { onMalformedFrame: (e) => events.push(e) });
+    buses.push(bus);
+    await bus.ready();
+
+    // Valid JSON but missing required envelope fields.
+    const raw = rawConnect(sock);
+    const peer = await raw;
+    peer.write(encodeRaw('{"kind":"pub"}'));
+
+    await waitFor(() => events.length >= 1, 2000);
+    peer.destroy();
+
+    expect(events).toHaveLength(1);
+    expect(events[0].reason).toBe('invalid_envelope');
+  });
+
+  it('rate-limits malformed frame events', async () => {
+    const sock = tempSocketPath();
+    const events: MalformedFrameEvent[] = [];
+    // Use rateLimitMs=0 would disable limiting; we rely on default.
+    const bus = new IpcBus(sock, { onMalformedFrame: (e) => events.push(e) });
+    buses.push(bus);
+    await bus.ready();
+
+    const peer = await rawConnect(sock);
+
+    // Send many malformed frames rapidly — default rate limit is 1 s,
+    // so only the first should be emitted immediately.
+    for (let i = 0; i < 10; i++) {
+      peer.write(encodeRaw(`bad-json-${i}`));
+    }
+
+    // Wait for socket data to be processed.
+    await sleep(200);
+    peer.destroy();
+
+    // Exactly 1 event emitted due to rate limiting (the other 9 suppressed).
+    expect(events).toHaveLength(1);
+    expect(events[0].droppedSinceLastReport).toBe(0);
+  });
+
+  it('reports suppressed count after rate-limit window elapses', async () => {
+    const sock = tempSocketPath();
+    const events: MalformedFrameEvent[] = [];
+    const bus = new IpcBus(sock, { onMalformedFrame: (e) => events.push(e) });
+    buses.push(bus);
+    await bus.ready();
+
+    const peer = await rawConnect(sock);
+
+    // First burst — first frame emitted, rest suppressed.
+    for (let i = 0; i < 5; i++) {
+      peer.write(encodeRaw(`bad-${i}`));
+    }
+    await sleep(200);
+    expect(events).toHaveLength(1);
+
+    // Wait for rate-limit window to pass.
+    await sleep(MALFORMED_FRAME_RATE_LIMIT_MS + 100);
+
+    // Second malformed frame triggers a new event with suppressed count.
+    peer.write(encodeRaw('another-bad'));
+    await waitFor(() => events.length >= 2, 2000);
+    peer.destroy();
+
+    expect(events).toHaveLength(2);
+    // 4 frames were suppressed between the first and second emitted events.
+    expect(events[1].droppedSinceLastReport).toBe(4);
+  });
+
+  it('does not fire callback when no observer is provided', async () => {
+    const sock = tempSocketPath();
+    // No onMalformedFrame — should not throw.
+    const bus = new IpcBus(sock);
+    buses.push(bus);
+    await bus.ready();
+
+    const peer = await rawConnect(sock);
+    peer.write(encodeRaw('not-json'));
+    await sleep(200);
+    peer.destroy();
+
+    // If we get here without an unhandled exception, the test passes.
+    expect(true).toBe(true);
+  });
+
+  it('still delivers valid frames alongside malformed ones', async () => {
+    const sock = tempSocketPath();
+    const events: MalformedFrameEvent[] = [];
+    const bus = new IpcBus(sock, { onMalformedFrame: (e) => events.push(e) });
+    buses.push(bus);
+    await bus.ready();
+
+    const received: string[] = [];
+    bus.subscribe('test', (msg: string) => received.push(msg));
+
+    const peer = await rawConnect(sock);
+    // Send a malformed frame followed by a valid pub envelope.
+    const malformed = encodeRaw('garbage');
+    const valid = encodeRaw(JSON.stringify({ kind: 'pub', channel: 'test', body: 'hello' }));
+    peer.write(Buffer.concat([malformed, valid]));
+
+    await waitFor(() => received.length >= 1, 2000);
+    peer.destroy();
+
+    expect(events.length).toBeGreaterThanOrEqual(1);
+    expect(received).toEqual(['hello']);
+  });
 });
 
 // ---------------------------------------------------------------------------
