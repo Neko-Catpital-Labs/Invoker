@@ -4,6 +4,9 @@
  * Binds to 127.0.0.1 only (no external access). Default port 4100,
  * configurable via INVOKER_API_PORT env var.
  *
+ * All write endpoints delegate to a WorkflowMutationFacade instance
+ * which encapsulates the mutation → dispatch → topup lifecycle.
+ *
  * Read endpoints:
  *   GET  /api/health
  *   GET  /api/status
@@ -42,30 +45,10 @@ import {
   PlanConflictError,
   TopologyForkRequired,
 } from '@invoker/workflow-core';
-import type { Orchestrator, TaskState } from '@invoker/workflow-core';
+import type { Orchestrator } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
-import type { ExecutorRegistry, TaskRunner } from '@invoker/execution-engine';
+import type { ExecutorRegistry } from '@invoker/execution-engine';
 import type { WorkflowMutationFacade } from './workflow-mutation-facade.js';
-import {
-  approveTask as sharedApproveTask,
-  recreateWorkflow as sharedRecreateWorkflow,
-  recreateTask as sharedRecreateTask,
-  recreateWorkflowFromFreshBase as sharedRecreateWorkflowFromFreshBase,
-  forkWorkflow as sharedForkWorkflow,
-  cancelWorkflow as sharedCancelWorkflow,
-  retryTask as sharedRetryTask,
-  retryWorkflow as sharedRetryWorkflow,
-  rejectTask as sharedRejectTask,
-  provideInput as sharedProvideInput,
-  editTaskCommand as sharedEditTaskCommand,
-  editTaskPrompt as sharedEditTaskPrompt,
-  editTaskType as sharedEditTaskType,
-  editTaskAgent as sharedEditTaskAgent,
-  setTaskExternalGatePolicies as sharedSetTaskExternalGatePolicies,
-  setWorkflowMergeMode as sharedSetWorkflowMergeMode,
-  resolveConflictAction,
-} from './workflow-actions.js';
-import { executeGlobalTopup, finalizeMutationWithGlobalTopup } from './global-topup.js';
 import { resolveHeadlessTargetWorkflowId } from './headless-command-classification.js';
 
 export interface ApiServerDeps {
@@ -73,18 +56,8 @@ export interface ApiServerDeps {
   orchestrator: Orchestrator;
   persistence: SQLiteAdapter;
   executorRegistry: ExecutorRegistry;
-  taskExecutor: TaskRunner;
-  autoApproveAIFixes?: boolean;
-  /** When provided, write endpoints delegate to the facade for mutation + dispatch + topup. */
-  mutations?: WorkflowMutationFacade;
-  approveTaskAction?: (taskId: string) => Promise<{ started: TaskState[] }>;
-  rejectTaskAction?: (taskId: string, reason?: string) => Promise<void>;
-  retryTaskAction?: (taskId: string) => Promise<{ started: TaskState[] }>;
-  retryWorkflowAction?: (workflowId: string) => Promise<{ started: TaskState[] }>;
-  recreateWithRebaseAction?: (workflowId: string) => Promise<{ started: TaskState[] }>;
-  killRunningTask?: (taskId: string) => Promise<void>;
-  cancelTask?: (taskId: string) => Promise<{ cancelled: string[]; runningCancelled: string[] }>;
-  cancelWorkflow?: (workflowId: string) => Promise<{ cancelled: string[]; runningCancelled: string[] }>;
+  /** All write endpoints delegate to the facade for mutation + dispatch + topup. */
+  mutations: WorkflowMutationFacade;
   deleteWorkflow: (workflowId: string) => Promise<void>;
   detachWorkflow: (workflowId: string, upstreamWorkflowId: string) => Promise<void>;
 }
@@ -175,18 +148,7 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
     logger: apiLogger,
     orchestrator,
     persistence,
-    executorRegistry,
-    taskExecutor,
-    autoApproveAIFixes,
     mutations,
-    approveTaskAction,
-    rejectTaskAction,
-    retryTaskAction,
-    retryWorkflowAction,
-    recreateWithRebaseAction,
-    killRunningTask,
-    cancelTask,
-    cancelWorkflow,
     deleteWorkflow,
     detachWorkflow,
   } = deps;
@@ -238,65 +200,33 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
       if (method === 'POST' && cancelMatch) {
         const taskId = decodeURIComponent(cancelMatch[1]);
         try {
-          if (mutations) {
-            const result = await mutations.cancelTask(taskId);
-            json(res, 200, { ok: true, cancelled: result.cancelled, runningCancelled: result.runningCancelled });
-          } else {
-            const result = cancelTask
-              ? await cancelTask(taskId)
-              : orchestrator.cancelTask(taskId);
-            await finalizeMutationWithGlobalTopup({
-              orchestrator,
-              taskExecutor,
-              logger: apiLogger,
-              context: 'api.tasks.cancel',
-            });
-            json(res, 200, { ok: true, ...result });
-          }
+          const result = await mutations.cancelTask(taskId);
+          json(res, 200, { ok: true, cancelled: result.cancelled, runningCancelled: result.runningCancelled });
         } catch (err) {
           json(res, httpStatusForError(err), { error: errorMessage(err) });
         }
         return;
       }
 
-      // POST /api/tasks/:id/retry
+      // POST /api/tasks/:id/retry  (legacy: /api/tasks/:id/restart)
       const retryMatch = path.match(/^\/api\/tasks\/([^/]+)\/retry$/);
       const restartMatch = path.match(/^\/api\/tasks\/([^/]+)\/restart$/);
       if (method === 'POST' && (retryMatch || restartMatch)) {
         const isLegacy = !!restartMatch;
         const taskId = decodeURIComponent((retryMatch ?? restartMatch)![1]);
         try {
-          let started: TaskState[];
-          if (retryTaskAction) {
-            ({ started } = await retryTaskAction(taskId));
-          } else if (mutations) {
-            await killRunningTask?.(taskId);
-            const result = await mutations.retryTask(taskId);
-            started = result.started;
-          } else {
-            await killRunningTask?.(taskId);
-            const result = sharedRetryTask(taskId, { orchestrator });
-            started = result;
-            await finalizeMutationWithGlobalTopup({
-              orchestrator,
-              taskExecutor,
-              logger: apiLogger,
-              context: isLegacy ? 'api.tasks.restart' : 'api.tasks.retry',
-              started: result.filter(t => t.status === 'running'),
-            });
-          }
+          const result = await mutations.retryTask(taskId);
           if (isLegacy) {
             res.setHeader(
               'Deprecation',
               'true; reason="Use /api/tasks/:id/retry or /api/tasks/:id/recreate"',
             );
           }
-          const tasksStarted = started.filter(t => t.status === 'running').length;
           json(res, 200, {
             ok: true,
             taskId,
             action: isLegacy ? 'restarted' : 'retried',
-            tasksStarted,
+            tasksStarted: result.runnable.length,
             ...(isLegacy ? { deprecated: true, replacement: '/api/tasks/:id/retry' } : {}),
           });
         } catch (err) {
@@ -305,27 +235,13 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
         return;
       }
 
+      // POST /api/tasks/:id/recreate
       const recreateTaskMatch = path.match(/^\/api\/tasks\/([^/]+)\/recreate$/);
       if (method === 'POST' && recreateTaskMatch) {
         const taskId = decodeURIComponent(recreateTaskMatch[1]);
         try {
-          await killRunningTask?.(taskId);
-          if (mutations) {
-            const result = await mutations.recreateTask(taskId);
-            const tasksStarted = result.runnable.length;
-            json(res, 200, { ok: true, taskId, action: 'recreated', tasksStarted });
-          } else {
-            const started = sharedRecreateTask(taskId, { orchestrator, persistence });
-            await finalizeMutationWithGlobalTopup({
-              orchestrator,
-              taskExecutor,
-              logger: apiLogger,
-              context: 'api.tasks.recreate',
-              started: started.filter(t => t.status === 'running'),
-            });
-            const tasksStarted = started.filter(t => t.status === 'running').length;
-            json(res, 200, { ok: true, taskId, action: 'recreated', tasksStarted });
-          }
+          const result = await mutations.recreateTask(taskId);
+          json(res, 200, { ok: true, taskId, action: 'recreated', tasksStarted: result.runnable.length });
         } catch (err) {
           json(res, httpStatusForError(err), { error: errorMessage(err) });
         }
@@ -345,38 +261,12 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
               agent = parsed.agent;
             } catch { /* not JSON, ignore */ }
           }
-          if (mutations) {
-            await mutations.resolveConflict(taskId, agent);
-          } else {
-            try {
-              const result = await resolveConflictAction(taskId, {
-                orchestrator,
-                persistence,
-                taskExecutor,
-                autoApproveAIFixes,
-              }, agent);
-              await finalizeMutationWithGlobalTopup({
-                orchestrator,
-                taskExecutor,
-                logger: apiLogger,
-                context: 'api.tasks.resolve-conflict',
-                started: result.started,
-              });
-            } catch (err) {
-              await finalizeMutationWithGlobalTopup({
-                orchestrator,
-                taskExecutor,
-                logger: apiLogger,
-                context: 'api.tasks.resolve-conflict.failure',
-              });
-              throw err;
-            }
-          }
+          const result = await mutations.resolveConflict(taskId, agent);
           json(res, 200, {
             ok: true,
             taskId,
             action: 'resolve_conflict',
-            status: autoApproveAIFixes ? 'auto_approved' : 'awaiting_approval',
+            status: result.autoApproved ? 'auto_approved' : 'awaiting_approval',
           });
         } catch (err) {
           json(res, httpStatusForError(err), { error: errorMessage(err) });
@@ -389,23 +279,7 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
       if (method === 'POST' && approveMatch) {
         const taskId = decodeURIComponent(approveMatch[1]);
         try {
-          if (approveTaskAction) {
-            await approveTaskAction(taskId);
-          } else if (mutations) {
-            await mutations.approveTask(taskId);
-          } else {
-            const result = await sharedApproveTask(taskId, {
-              orchestrator,
-              taskExecutor,
-            });
-            await finalizeMutationWithGlobalTopup({
-              orchestrator,
-              taskExecutor,
-              logger: apiLogger,
-              context: 'api.tasks.approve',
-              started: result.started,
-            });
-          }
+          await mutations.approveTask(taskId);
           json(res, 200, { ok: true, taskId, action: 'approved' });
         } catch (err) {
           json(res, httpStatusForError(err), { error: errorMessage(err) });
@@ -426,13 +300,7 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
               reason = parsed.reason;
             } catch { /* not JSON, ignore */ }
           }
-          if (rejectTaskAction) {
-            await rejectTaskAction(taskId, reason);
-          } else if (mutations) {
-            mutations.rejectTask(taskId, reason);
-          } else {
-            sharedRejectTask(taskId, { orchestrator }, reason);
-          }
+          mutations.rejectTask(taskId, reason);
           json(res, 200, { ok: true, taskId, action: 'rejected', reason });
         } catch (err) {
           json(res, httpStatusForError(err), { error: errorMessage(err) });
@@ -447,33 +315,21 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
         return;
       }
 
+      // POST /api/workflows/:id/recreate  (legacy: /api/workflows/:id/restart)
       const wfRecreateMatch = path.match(/^\/api\/workflows\/([^/]+)\/recreate$/);
       const wfRestartMatch = path.match(/^\/api\/workflows\/([^/]+)\/restart$/);
       if (method === 'POST' && (wfRecreateMatch || wfRestartMatch)) {
         const isLegacy = !!wfRestartMatch;
         const workflowId = decodeURIComponent((wfRecreateMatch ?? wfRestartMatch)![1]);
         try {
-          let started: TaskState[];
-          if (mutations) {
-            const result = await mutations.recreateWorkflow(workflowId);
-            started = result.started;
-          } else {
-            started = sharedRecreateWorkflow(workflowId, { persistence, orchestrator });
-            await finalizeMutationWithGlobalTopup({
-              orchestrator,
-              taskExecutor,
-              logger: apiLogger,
-              context: isLegacy ? 'api.workflows.restart' : 'api.workflows.recreate',
-              started: started.filter(t => t.status === 'running'),
-            });
-          }
+          const result = await mutations.recreateWorkflow(workflowId);
           if (isLegacy) {
             res.setHeader(
               'Deprecation',
               'true; reason="Use /api/workflows/:id/recreate"',
             );
           }
-          const tasksStarted = started.filter(t => t.status === 'running').length;
+          const tasksStarted = result.started.filter(t => t.status === 'running').length;
           json(res, 200, {
             ok: true,
             workflowId,
@@ -487,28 +343,13 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
         return;
       }
 
+      // POST /api/workflows/:id/retry
       const wfRetryMatch = path.match(/^\/api\/workflows\/([^/]+)\/retry$/);
       if (method === 'POST' && wfRetryMatch) {
         const workflowId = decodeURIComponent(wfRetryMatch[1]);
         try {
-          let started: TaskState[];
-          if (retryWorkflowAction) {
-            ({ started } = await retryWorkflowAction(workflowId));
-          } else if (mutations) {
-            const result = await mutations.retryWorkflow(workflowId);
-            started = result.started;
-          } else {
-            const result = sharedRetryWorkflow(workflowId, { orchestrator });
-            started = result;
-            await finalizeMutationWithGlobalTopup({
-              orchestrator,
-              taskExecutor,
-              logger: apiLogger,
-              context: 'api.workflows.retry',
-              started: result.filter(t => t.status === 'running'),
-            });
-          }
-          const tasksStarted = started.filter(t => t.status === 'running').length;
+          const result = await mutations.retryWorkflow(workflowId);
+          const tasksStarted = result.started.filter(t => t.status === 'running').length;
           json(res, 200, { ok: true, workflowId, action: 'retried', tasksStarted });
         } catch (err) {
           json(res, httpStatusForError(err), { error: errorMessage(err) });
@@ -516,6 +357,7 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
         return;
       }
 
+      // POST /api/workflows/:id/recreate-with-rebase  (legacy: /api/workflows/:id/rebase-and-retry)
       const wfRecreateWithRebaseMatch = path.match(/^\/api\/workflows\/([^/]+)\/recreate-with-rebase$/);
       const wfRebaseAndRetryMatch = path.match(/^\/api\/workflows\/([^/]+)\/rebase-and-retry$/);
       if (method === 'POST' && (wfRecreateWithRebaseMatch || wfRebaseAndRetryMatch)) {
@@ -523,35 +365,14 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
         const workflowTarget = decodeURIComponent((wfRecreateWithRebaseMatch ?? wfRebaseAndRetryMatch)![1]);
         try {
           const workflowId = resolveHeadlessTargetWorkflowId(workflowTarget, persistence);
-          let started: TaskState[];
-          if (recreateWithRebaseAction) {
-            ({ started } = await recreateWithRebaseAction(workflowId));
-          } else if (mutations) {
-            const result = await mutations.recreateWorkflowFromFreshBase(workflowId);
-            started = result.started;
-          } else {
-            const result = await sharedRecreateWorkflowFromFreshBase(workflowId, {
-              orchestrator,
-              persistence,
-              taskExecutor,
-              logger: apiLogger,
-            });
-            started = result;
-            await finalizeMutationWithGlobalTopup({
-              orchestrator,
-              taskExecutor,
-              logger: apiLogger,
-              context: isLegacy ? 'api.workflows.rebase-and-retry' : 'api.workflows.recreate-with-rebase',
-              started: result.filter(t => t.status === 'running'),
-            });
-          }
+          const result = await mutations.recreateWorkflowFromFreshBase(workflowId);
           if (isLegacy) {
             res.setHeader(
               'Deprecation',
               'true; reason="Use /api/workflows/:id/recreate-with-rebase"',
             );
           }
-          const tasksStarted = started.filter(t => t.status === 'running').length;
+          const tasksStarted = result.started.filter(t => t.status === 'running').length;
           json(res, 200, {
             ok: true,
             workflowId,
@@ -565,36 +386,18 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
         return;
       }
 
+      // POST /api/workflows/:id/fork
       const wfForkMatch = path.match(/^\/api\/workflows\/([^/]+)\/fork$/);
       if (method === 'POST' && wfForkMatch) {
         const workflowId = decodeURIComponent(wfForkMatch[1]);
         try {
-          if (mutations) {
-            const result = await mutations.forkWorkflow(workflowId);
-            json(res, 200, {
-              ok: true,
-              sourceWorkflowId: result.sourceWorkflowId,
-              forkedWorkflowId: result.forkedWorkflowId,
-              tasksStarted: result.runnable.length,
-            });
-          } else {
-            const result = sharedForkWorkflow(workflowId, { orchestrator, logger: apiLogger });
-            const runnable = result.started.filter((t) => t.status === 'running');
-            await taskExecutor.executeTasks(runnable);
-            await executeGlobalTopup({
-              orchestrator,
-              taskExecutor,
-              logger: apiLogger,
-              context: 'api.workflows.fork',
-              alreadyDispatched: runnable,
-            });
-            json(res, 200, {
-              ok: true,
-              sourceWorkflowId: result.sourceWorkflowId,
-              forkedWorkflowId: result.forkedWorkflowId,
-              tasksStarted: runnable.length,
-            });
-          }
+          const result = await mutations.forkWorkflow(workflowId);
+          json(res, 200, {
+            ok: true,
+            sourceWorkflowId: result.sourceWorkflowId,
+            forkedWorkflowId: result.forkedWorkflowId,
+            tasksStarted: result.runnable.length,
+          });
         } catch (err) {
           json(res, httpStatusForError(err), { error: errorMessage(err) });
         }
@@ -606,21 +409,8 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
       if (method === 'POST' && wfCancelMatch) {
         const workflowId = decodeURIComponent(wfCancelMatch[1]);
         try {
-          if (mutations) {
-            const result = await mutations.cancelWorkflow(workflowId);
-            json(res, 200, { ok: true, cancelled: result.cancelled, runningCancelled: result.runningCancelled });
-          } else {
-            const result = cancelWorkflow
-              ? await cancelWorkflow(workflowId)
-              : sharedCancelWorkflow(workflowId, { orchestrator });
-            await finalizeMutationWithGlobalTopup({
-              orchestrator,
-              taskExecutor,
-              logger: apiLogger,
-              context: 'api.workflows.cancel',
-            });
-            json(res, 200, { ok: true, ...result });
-          }
+          const result = await mutations.cancelWorkflow(workflowId);
+          json(res, 200, { ok: true, cancelled: result.cancelled, runningCancelled: result.runningCancelled });
         } catch (err) {
           json(res, httpStatusForError(err), { error: errorMessage(err) });
         }
@@ -663,11 +453,7 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
             json(res, 400, { error: 'Missing "text" in request body' });
             return;
           }
-          if (mutations) {
-            mutations.provideInput(taskId, text);
-          } else {
-            sharedProvideInput(taskId, text, { orchestrator });
-          }
+          mutations.provideInput(taskId, text);
           json(res, 200, { ok: true, taskId, action: 'input_provided' });
         } catch (err) {
           json(res, httpStatusForError(err), { error: errorMessage(err) });
@@ -686,21 +472,15 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
             json(res, 400, { error: 'Missing "command" in request body' });
             return;
           }
-          if (mutations) {
-            const result = await mutations.editTaskCommand(taskId, command);
-            json(res, 200, { ok: true, taskId, action: 'command_edited', tasksStarted: result.runnable.length });
-          } else {
-            const started = sharedEditTaskCommand(taskId, command, { orchestrator });
-            const runnable = started.filter(t => t.status === 'running');
-            await taskExecutor.executeTasks(runnable);
-            json(res, 200, { ok: true, taskId, action: 'command_edited', tasksStarted: runnable.length });
-          }
+          const result = await mutations.editTaskCommand(taskId, command);
+          json(res, 200, { ok: true, taskId, action: 'command_edited', tasksStarted: result.runnable.length });
         } catch (err) {
           json(res, httpStatusForError(err), { error: errorMessage(err) });
         }
         return;
       }
 
+      // POST /api/tasks/:id/edit-prompt
       const editPromptMatch = path.match(/^\/api\/tasks\/([^/]+)\/edit-prompt$/);
       if (method === 'POST' && editPromptMatch) {
         const taskId = decodeURIComponent(editPromptMatch[1]);
@@ -711,21 +491,15 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
             json(res, 400, { error: 'Missing "prompt" in request body' });
             return;
           }
-          if (mutations) {
-            const result = await mutations.editTaskPrompt(taskId, prompt);
-            json(res, 200, { ok: true, taskId, action: 'prompt_edited', tasksStarted: result.runnable.length });
-          } else {
-            const started = sharedEditTaskPrompt(taskId, prompt, { orchestrator });
-            const runnable = started.filter(t => t.status === 'running');
-            await taskExecutor.executeTasks(runnable);
-            json(res, 200, { ok: true, taskId, action: 'prompt_edited', tasksStarted: runnable.length });
-          }
+          const result = await mutations.editTaskPrompt(taskId, prompt);
+          json(res, 200, { ok: true, taskId, action: 'prompt_edited', tasksStarted: result.runnable.length });
         } catch (err) {
           json(res, httpStatusForError(err), { error: errorMessage(err) });
         }
         return;
       }
 
+      // POST /api/tasks/:id/edit-type
       const editTypeMatch = path.match(/^\/api\/tasks\/([^/]+)\/edit-type$/);
       if (method === 'POST' && editTypeMatch) {
         const taskId = decodeURIComponent(editTypeMatch[1]);
@@ -736,21 +510,15 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
             json(res, 400, { error: 'Missing "executorType" in request body' });
             return;
           }
-          if (mutations) {
-            const result = await mutations.editTaskType(taskId, executorType, remoteTargetId);
-            json(res, 200, { ok: true, taskId, action: 'type_edited', tasksStarted: result.runnable.length });
-          } else {
-            const started = sharedEditTaskType(taskId, executorType, { orchestrator }, remoteTargetId);
-            const runnable = started.filter(t => t.status === 'running');
-            await taskExecutor.executeTasks(runnable);
-            json(res, 200, { ok: true, taskId, action: 'type_edited', tasksStarted: runnable.length });
-          }
+          const result = await mutations.editTaskType(taskId, executorType, remoteTargetId);
+          json(res, 200, { ok: true, taskId, action: 'type_edited', tasksStarted: result.runnable.length });
         } catch (err) {
           json(res, httpStatusForError(err), { error: errorMessage(err) });
         }
         return;
       }
 
+      // POST /api/tasks/:id/edit-agent
       const editAgentMatch = path.match(/^\/api\/tasks\/([^/]+)\/edit-agent$/);
       if (method === 'POST' && editAgentMatch) {
         const taskId = decodeURIComponent(editAgentMatch[1]);
@@ -761,15 +529,8 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
             json(res, 400, { error: 'Missing "agent" in request body' });
             return;
           }
-          if (mutations) {
-            const result = await mutations.editTaskAgent(taskId, agent);
-            json(res, 200, { ok: true, taskId, action: 'agent_edited', tasksStarted: result.runnable.length });
-          } else {
-            const started = sharedEditTaskAgent(taskId, agent, { orchestrator });
-            const runnable = started.filter(t => t.status === 'running');
-            await taskExecutor.executeTasks(runnable);
-            json(res, 200, { ok: true, taskId, action: 'agent_edited', tasksStarted: runnable.length });
-          }
+          const result = await mutations.editTaskAgent(taskId, agent);
+          json(res, 200, { ok: true, taskId, action: 'agent_edited', tasksStarted: result.runnable.length });
         } catch (err) {
           json(res, httpStatusForError(err), { error: errorMessage(err) });
         }
@@ -788,15 +549,8 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
             json(res, 400, { error: 'Missing non-empty "updates" array in request body' });
             return;
           }
-          if (mutations) {
-            const result = await mutations.setTaskExternalGatePolicies(taskId, updates);
-            json(res, 200, { ok: true, taskId, action: 'gate_policy_updated', tasksStarted: result.runnable.length });
-          } else {
-            const started = sharedSetTaskExternalGatePolicies(taskId, updates, { orchestrator });
-            const runnable = started.filter((t) => t.status === 'running');
-            if (runnable.length > 0) await taskExecutor.executeTasks(runnable);
-            json(res, 200, { ok: true, taskId, action: 'gate_policy_updated', tasksStarted: runnable.length });
-          }
+          const result = await mutations.setTaskExternalGatePolicies(taskId, updates);
+          json(res, 200, { ok: true, taskId, action: 'gate_policy_updated', tasksStarted: result.runnable.length });
         } catch (err) {
           json(res, httpStatusForError(err), { error: errorMessage(err) });
         }
@@ -851,11 +605,7 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
             json(res, 400, { error: 'Missing "mode" in request body' });
             return;
           }
-          if (mutations) {
-            await mutations.setWorkflowMergeMode(workflowId, mode);
-          } else {
-            await sharedSetWorkflowMergeMode(workflowId, mode, { orchestrator, persistence, taskExecutor });
-          }
+          await mutations.setWorkflowMergeMode(workflowId, mode);
           json(res, 200, { ok: true, workflowId, action: 'merge_mode_set', mode });
         } catch (err) {
           json(res, httpStatusForError(err), { error: errorMessage(err) });
