@@ -1,0 +1,36 @@
+{
+  "runLabel": "step1-debounce-250ms",
+  "commit": "55d3bad79d66ef630c0771109ccc945788c9bca4",
+  "results": [
+    {
+      "mode": "safe",
+      "exitCode": 1,
+      "elapsedMs": 15087,
+      "elapsedSec": 15.09,
+      "status": "failed",
+      "failureReason": "timeout guard reached (15s) before OOM",
+      "peakRssMb": 477.6,
+      "peakExternalMb": 395.5,
+      "flushCount": 56,
+      "meanFlushIntervalMs": 258.98,
+      "dbGrowthRateMbPerMin": 342.41,
+      "leaseRenewWritesPerSec": 422.42,
+      "mutationThroughputPerSec": 119.31
+    },
+    {
+      "mode": "sandbox",
+      "exitCode": 1,
+      "elapsedMs": 15287,
+      "elapsedSec": 15.29,
+      "status": "failed",
+      "failureReason": "timeout guard reached (15s) before OOM",
+      "peakRssMb": 507.4,
+      "peakExternalMb": 429.5,
+      "flushCount": 88,
+      "meanFlushIntervalMs": 163.68,
+      "dbGrowthRateMbPerMin": 379.54,
+      "leaseRenewWritesPerSec": 287.83,
+      "mutationThroughputPerSec": 117.75
+    }
+  ]
+}

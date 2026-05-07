@@ -1,0 +1,80 @@
+[runner] mode=safe node_heap_mb=192
+[repro] temp db=/tmp/invoker-oom-repro-UeYoZX/invoker-repro.db
+[repro] mode=safe rowsPerCycle=600 payloadBytes=12288 renewsPerCycle=2200 maxCycles=25 hardHeapLimitMb=96 maxDbMb=220 timeoutSec=15
+[repro] flushDebounceMs=1000 exportEvery=75
+[repro] sqlite hard_heap_limit=100663296 bytes
+[state-machine] findNewlyReadyTasks(wf-1778141536943-7/post-fix-regression: merge node "__merge__wf-1778141646167-29" status=pending deps=[wf-1778141646167-29/regression-chain-c=pending] hasDep=false)
+[state-machine] findNewlyReadyTasks(wf-1778141536943-7/post-fix-regression: merge node "__merge__wf-1778141644469-28" status=pending deps=[wf-1778141644469-28/regression-inv-77=pending] hasDep=false)
+[state-machine] findNewlyReadyTasks(wf-1778141536943-7/post-fix-regression: merge node "__merge__wf-1778141642990-27" status=pending deps=[wf-1778141642990-27/regression-inv-55=pending] hasDep=false)
+[state-machine] findNewlyReadyTasks(wf-1778141536943-7/post-fix-regression: merge node "__merge__wf-1778141538305-8" status=pending deps=[wf-1778141538305-8/post-fix-regression=running] hasDep=false)
+[state-machine] findNewlyReadyTasks(wf-1778141536943-7/post-fix-regression: merge node "__merge__wf-1778141629042-19" status=pending deps=[wf-1778141629042-19/regression-inv-91=fixing_with_ai] hasDep=false)
+[state-machine] findNewlyReadyTasks(wf-1778141536943-7/post-fix-regression: merge node "__merge__wf-1778141536943-7" status=pending deps=[wf-1778141536943-7/post-fix-regression=fixing_with_ai] hasDep=true)
+[repro] cycle=1 seeded rows; starting renew loop
+[repro] cycle=1 renew=250 rss=122.6MB heapUsed=6.0MB external=45.2MB
+[repro] cycle=1 renew=500 rss=146.8MB heapUsed=6.0MB external=69.2MB
+[repro] cycle=1 renew=750 rss=153.4MB heapUsed=6.8MB external=75.4MB
+[repro] cycle=1 renew=1000 rss=183.4MB heapUsed=6.6MB external=105.7MB
+[repro] cycle=1 renew=1250 rss=135.5MB heapUsed=7.0MB external=58.7MB
+[repro] cycle=1 renew=1500 rss=172.5MB heapUsed=6.1MB external=96.5MB
+[repro] cycle=1 renew=1750 rss=175.5MB heapUsed=5.8MB external=96.3MB
+[repro] cycle=1 renew=2000 rss=144.4MB heapUsed=6.2MB external=67.9MB
+[repro] cycle=1 completed rss=233.6MB heapUsed=4.3MB external=152.5MB
+[repro] db-on-disk=43.1MB
+[repro] cycle=2 seeded rows; starting renew loop
+[repro] cycle=2 renew=250 rss=225.7MB heapUsed=4.7MB external=154.5MB
+[repro] cycle=2 renew=500 rss=228.6MB heapUsed=4.9MB external=154.6MB
+[repro] cycle=2 renew=750 rss=231.7MB heapUsed=4.7MB external=154.5MB
+[repro] cycle=2 renew=1000 rss=173.7MB heapUsed=5.1MB external=101.7MB
+[repro] cycle=2 renew=1250 rss=176.7MB heapUsed=4.8MB external=101.5MB
+[repro] cycle=2 renew=1500 rss=179.8MB heapUsed=4.5MB external=101.2MB
+[repro] cycle=2 renew=1750 rss=182.8MB heapUsed=4.9MB external=111.4MB
+[repro] cycle=2 renew=2000 rss=185.8MB heapUsed=4.6MB external=111.1MB
+[repro] cycle=2 completed rss=359.4MB heapUsed=4.3MB external=283.1MB
+[repro] db-on-disk=86.1MB
+[repro] cycle=3 seeded rows; starting renew loop
+[repro] cycle=3 renew=250 rss=306.1MB heapUsed=5.2MB external=233.7MB
+[repro] cycle=3 renew=500 rss=309.0MB heapUsed=4.9MB external=233.5MB
+[repro] cycle=3 renew=750 rss=323.3MB heapUsed=4.4MB external=259.4MB
+[repro] cycle=3 renew=1000 rss=327.3MB heapUsed=5.3MB external=260.1MB
+[repro] cycle=3 renew=1250 rss=330.4MB heapUsed=5.0MB external=259.8MB
+[repro] cycle=3 renew=1500 rss=333.4MB heapUsed=4.6MB external=259.5MB
+[repro] cycle=3 renew=1750 rss=336.5MB heapUsed=5.2MB external=259.9MB
+[repro] cycle=3 renew=2000 rss=478.7MB heapUsed=5.1MB external=414.5MB
+[repro] cycle=3 completed rss=487.3MB heapUsed=4.2MB external=422.0MB
+[repro] db-on-disk=129.2MB
+[repro] cycle=4 seeded rows; starting renew loop
+[repro] cycle=4 renew=250 rss=391.0MB heapUsed=5.1MB external=322.6MB
+[repro] cycle=4 renew=500 rss=394.1MB heapUsed=4.9MB external=322.5MB
+[repro] cycle=4 renew=750 rss=397.3MB heapUsed=4.6MB external=322.2MB
+[repro] cycle=4 renew=1000 rss=400.4MB heapUsed=5.4MB external=322.9MB
+[repro] cycle=4 renew=1250 rss=582.4MB heapUsed=4.9MB external=522.1MB
+[repro] cycle=4 renew=1500 rss=585.9MB heapUsed=5.2MB external=522.2MB
+[repro] cycle=4 renew=1750 rss=588.5MB heapUsed=5.0MB external=522.1MB
+[repro] cycle=4 renew=2000 rss=591.6MB heapUsed=4.9MB external=521.9MB
+[repro] cycle=4 completed rss=616.1MB heapUsed=4.3MB external=545.5MB
+[repro] db-on-disk=172.2MB
+[repro] cycle=5 seeded rows; starting renew loop
+[repro] cycle=5 renew=250 rss=471.0MB heapUsed=5.1MB external=402.1MB
+[repro] cycle=5 renew=500 rss=474.3MB heapUsed=4.9MB external=401.9MB
+[repro] cycle=5 renew=750 rss=477.4MB heapUsed=4.7MB external=401.8MB
+[repro] cycle=5 renew=1000 rss=701.8MB heapUsed=5.2MB external=649.9MB
+[repro] cycle=5 renew=1250 rss=706.1MB heapUsed=4.5MB external=649.3MB
+[repro] cycle=5 renew=1500 rss=709.3MB heapUsed=4.4MB external=649.3MB
+[repro] cycle=5 renew=1750 rss=712.3MB heapUsed=5.2MB external=649.8MB
+[repro] cycle=5 renew=2000 rss=716.4MB heapUsed=5.0MB external=649.7MB
+[repro] cycle=5 completed rss=745.4MB heapUsed=4.3MB external=678.9MB
+[repro] db-on-disk=215.2MB
+[repro] cycle=6 seeded rows; starting renew loop
+[repro] cycle=6 renew=250 rss=561.6MB heapUsed=5.3MB external=502.8MB
+[repro] cycle=6 renew=500 rss=564.8MB heapUsed=5.0MB external=502.5MB
+[repro] cycle=6 renew=750 rss=568.9MB heapUsed=4.8MB external=502.4MB
+[repro] cycle=6 renew=1000 rss=827.1MB heapUsed=5.1MB external=759.1MB
+[repro] cycle=6 renew=1250 rss=830.1MB heapUsed=4.8MB external=758.8MB
+[repro] cycle=6 renew=1500 rss=833.1MB heapUsed=4.5MB external=758.6MB
+[repro] cycle=6 renew=1750 rss=836.4MB heapUsed=5.1MB external=759.1MB
+[repro] cycle=6 renew=2000 rss=611.2MB heapUsed=5.2MB external=562.6MB
+[repro] cycle=6 completed rss=874.6MB heapUsed=4.3MB external=824.9MB
+[repro] db-on-disk=258.3MB
+[workflow-mutation-coordinator] drain failed for wf-1778141641513-26: Error: db size guard reached (258.3MB > 220MB) before OOM
+[workflow-mutation-coordinator] drain failed for wf-1778141629042-19: Error: db size guard reached (258.3MB > 220MB) before OOM
+[repro-summary] {"mode":"safe","elapsedMs":9344,"flushCount":10,"meanFlushIntervalMs":872.67,"leaseRenewWrites":13200,"leaseRenewWritesPerSec":1412.67,"seededIntentRows":3600,"mutationThroughputPerSec":385.27,"failureReason":"db size guard reached (258.3MB > 220MB) before OOM","status":"failed"}
