@@ -212,6 +212,7 @@ function dispatchStartedTasks(tasks: TaskState[]): void {
 let workflowMutationCoordinator: PersistedWorkflowMutationCoordinator | null = null;
 const workflowMutationDispatcher = new Map<string, (...args: unknown[]) => Promise<unknown>>();
 let hourlyBackupInterval: ReturnType<typeof setInterval> | null = null;
+let retentionPruneInterval: ReturnType<typeof setInterval> | null = null;
 let writerLock: DbWriterLockResult | null = null;
 const workflowMutationOwnerId = `owner-${process.pid}-${Date.now()}`;
 const appProcessStartedAt = Date.now();
@@ -233,6 +234,17 @@ function resolveMaxConcurrentWorkflowDrains(): number {
 }
 
 const maxConcurrentWorkflowDrains = resolveMaxConcurrentWorkflowDrains();
+
+function readPositiveIntEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const parsed = Number(raw);
+  if (Number.isInteger(parsed) && parsed > 0) {
+    return parsed;
+  }
+  process.stderr.write(`[retention] ignoring invalid ${name}=\"${raw}\", using ${fallback}\n`);
+  return fallback;
+}
 
 interface GuiMutationPayload {
   channel: string;
@@ -395,6 +407,37 @@ async function initServices(options?: InitServicesOptions): Promise<void> {
       hourlyBackupInterval.unref?.();
       logger.info(`hourly snapshots enabled (interval=${hourlyMs}ms)`, { module: 'backup' });
     }
+  }
+  if (!readOnly && !retentionPruneInterval) {
+    const pruneIntervalMs = readPositiveIntEnv('INVOKER_RETENTION_PRUNE_INTERVAL_MS', 5 * 60 * 1000);
+    const maxCompletedIntents = readPositiveIntEnv('INVOKER_RETENTION_MAX_COMPLETED_INTENTS', 20_000);
+    const maxOutputRows = readPositiveIntEnv('INVOKER_RETENTION_MAX_OUTPUT_ROWS', 300_000);
+    const runRetentionPrune = () => {
+      try {
+        const pruned = persistence.pruneWorkflowMutationHistory({
+          maxCompletedIntents,
+          maxOutputRows,
+        });
+        if (pruned.deletedIntents > 0 || pruned.deletedOutputRows > 0) {
+          logger.info(
+            `retention prune removed intents=${pruned.deletedIntents} outputRows=${pruned.deletedOutputRows}`,
+            { module: 'retention' },
+          );
+        }
+      } catch (err) {
+        logger.error(
+          `retention prune failed: ${err instanceof Error ? err.message : String(err)}`,
+          { module: 'retention' },
+        );
+      }
+    };
+    runRetentionPrune();
+    retentionPruneInterval = setInterval(runRetentionPrune, pruneIntervalMs);
+    retentionPruneInterval.unref?.();
+    logger.info(
+      `retention prune enabled (interval=${pruneIntervalMs}ms completedIntents=${maxCompletedIntents} outputRows=${maxOutputRows})`,
+      { module: 'retention' },
+    );
   }
   // Compose runtime services from persistence-backed adapters.
   // Headless startup routes through composeHeadlessStartup so the
@@ -3655,6 +3698,10 @@ if (isHeadless) {
       if (hourlyBackupInterval) {
         clearInterval(hourlyBackupInterval);
         hourlyBackupInterval = null;
+      }
+      if (retentionPruneInterval) {
+        clearInterval(retentionPruneInterval);
+        retentionPruneInterval = null;
       }
       if (executorRegistry) {
         await Promise.all(executorRegistry.getAll().map(f => f.destroyAll()));

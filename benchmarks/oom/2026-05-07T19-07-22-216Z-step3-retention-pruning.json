@@ -1,0 +1,38 @@
+{
+  "runLabel": "step3-retention-pruning",
+  "commit": "8b62311aa6b5f971f6f04a5918595408120637c2",
+  "results": [
+    {
+      "mode": "safe",
+      "exitCode": 1,
+      "elapsedMs": 20260,
+      "elapsedSec": 20.26,
+      "status": "failed",
+      "failureReason": "timeout guard reached (20s) before OOM",
+      "peakRssMb": 564,
+      "peakExternalMb": 490.3,
+      "flushCount": 102,
+      "meanFlushIntervalMs": 194.07,
+      "dbGrowthRateMbPerMin": 382.63,
+      "leaseRenewWritesPerSec": 370.19,
+      "leaseRenewUpdateWritesPerSec": 0.49,
+      "mutationThroughputPerSec": 118.46
+    },
+    {
+      "mode": "sandbox",
+      "exitCode": 1,
+      "elapsedMs": 20214,
+      "elapsedSec": 20.21,
+      "status": "failed",
+      "failureReason": "timeout guard reached (20s) before OOM",
+      "peakRssMb": 549.2,
+      "peakExternalMb": 479.3,
+      "flushCount": 107,
+      "meanFlushIntervalMs": 182.77,
+      "dbGrowthRateMbPerMin": 287.03,
+      "leaseRenewWritesPerSec": 264.67,
+      "leaseRenewUpdateWritesPerSec": 0.49,
+      "mutationThroughputPerSec": 89.05
+    }
+  ]
+}

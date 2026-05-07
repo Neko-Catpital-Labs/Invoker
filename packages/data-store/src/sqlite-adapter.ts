@@ -2045,6 +2045,47 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return workflowIds.length;
   }
 
+  pruneWorkflowMutationHistory(options?: { maxCompletedIntents?: number; maxOutputRows?: number }): {
+    deletedIntents: number;
+    deletedOutputRows: number;
+  } {
+    const maxCompletedIntents = Math.max(0, Math.floor(options?.maxCompletedIntents ?? 0));
+    const maxOutputRows = Math.max(0, Math.floor(options?.maxOutputRows ?? 0));
+    let deletedIntents = 0;
+    let deletedOutputRows = 0;
+
+    if (maxCompletedIntents > 0) {
+      this.execRun(
+        `DELETE FROM workflow_mutation_intents
+         WHERE id IN (
+           SELECT id
+           FROM workflow_mutation_intents
+           WHERE status IN ('completed', 'failed')
+           ORDER BY id DESC
+           LIMIT -1 OFFSET ?
+         )`,
+        [maxCompletedIntents],
+      );
+      deletedIntents = this.db.getRowsModified();
+    }
+
+    if (maxOutputRows > 0) {
+      this.execRun(
+        `DELETE FROM output_spool
+         WHERE id IN (
+           SELECT id
+           FROM output_spool
+           ORDER BY id DESC
+           LIMIT -1 OFFSET ?
+         )`,
+        [maxOutputRows],
+      );
+      deletedOutputRows = this.db.getRowsModified();
+    }
+
+    return { deletedIntents, deletedOutputRows };
+  }
+
   completeWorkflowMutationIntent(id: number): void {
     this.execRun(
       `UPDATE workflow_mutation_intents
