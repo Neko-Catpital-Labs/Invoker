@@ -119,6 +119,7 @@ import {
 import {
   approveTask as sharedApproveTask,
   deleteAllWorkflows as sharedDeleteAllWorkflows,
+  deleteAllWorkflowsBulk as sharedDeleteAllWorkflowsBulk,
   fixWithAgentAction,
   rebaseAndRetry,
   recreateWithRebase,
@@ -1868,6 +1869,8 @@ if (isHeadless) {
       }
       case 'invoker:delete-all-workflows':
         return { channel: 'headless.exec', request: { args: ['delete-all'] } };
+      case 'invoker:delete-all-workflows-bulk':
+        return { channel: 'headless.exec', request: { args: ['delete-all'] } };
       case 'invoker:delete-workflow':
         return { channel: 'headless.exec', request: { args: ['delete', String(arg0)] } };
       case 'invoker:detach-workflow':
@@ -2785,6 +2788,18 @@ if (isHeadless) {
       logger.info('delete-all-workflows', { module: 'ipc' });
       assertDeleteAllEnabled();
       await sharedDeleteAllWorkflows({ logger, orchestrator, taskExecutor: taskExecutor ?? undefined });
+      taskHandles.clear();
+      lastKnownTaskStates.clear();
+      lastKnownWorkflowCount = 0;
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('invoker:workflows-changed', []);
+      }
+    });
+
+    registerGuiMutationHandler('invoker:delete-all-workflows-bulk', async () => {
+      logger.info('delete-all-workflows-bulk', { module: 'ipc' });
+      assertDeleteAllEnabled();
+      await sharedDeleteAllWorkflowsBulk({ logger, orchestrator, taskExecutor: taskExecutor ?? undefined });
       taskHandles.clear();
       lastKnownTaskStates.clear();
       lastKnownWorkflowCount = 0;
