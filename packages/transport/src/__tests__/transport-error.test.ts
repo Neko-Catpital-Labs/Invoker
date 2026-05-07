@@ -34,6 +34,7 @@ describe('TransportError', () => {
     expect(TransportErrorCode.NO_HANDLER).toBe('NO_HANDLER');
     expect(TransportErrorCode.DISCONNECTED).toBe('DISCONNECTED');
     expect(TransportErrorCode.HANDLER_ERROR).toBe('HANDLER_ERROR');
+    expect(TransportErrorCode.REQUEST_TIMEOUT).toBe('REQUEST_TIMEOUT');
   });
 });
 
