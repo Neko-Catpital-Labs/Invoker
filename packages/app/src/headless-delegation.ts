@@ -22,7 +22,8 @@ type DelegateTrackingOptions = {
 export type DelegationOutcome =
   | { kind: 'delegated'; workflowId?: string; tasks?: TaskState[] }
   | { kind: 'timeout' }
-  | { kind: 'no-handler' };
+  | { kind: 'no-handler' }
+  | { kind: 'protocol-error'; message: string };
 
 /** Type guard: returns true when the delegation was accepted by the owner. */
 export function isDelegated(outcome: DelegationOutcome): outcome is DelegationOutcome & { kind: 'delegated' } {
@@ -222,14 +223,14 @@ async function tryDelegate(
     timeoutHandle.unref?.();
   });
 
-  let response: { workflowId: string; tasks: TaskState[] } | { ok: true };
+  let raw: unknown;
   try {
     const startedAt = Date.now();
     delegationLog(`${traceId} send channel=${channel} timeoutMs=${options.timeoutMs ?? 5_000}`);
-    response = await Promise.race([
-      messageBus.request<typeof payload, typeof response>(channel, payload),
+    raw = await Promise.race([
+      messageBus.request(channel, payload),
       timeoutPromise,
-    ]) as { workflowId: string; tasks: TaskState[] } | { ok: true };
+    ]);
     delegationLog(`${traceId} response channel=${channel} elapsedMs=${Date.now() - startedAt}`);
   } catch (err) {
     if (err === DELEGATION_TIMEOUT) {
@@ -246,15 +247,44 @@ async function tryDelegate(
     if (timeoutHandle) clearTimeout(timeoutHandle);
   }
 
-  if ('workflowId' in response) {
-    targetWorkflowId = response.workflowId;
+  // ── Response-shape validation ──────────────────────────────────────────
+  // Owner handlers return one of two shapes:
+  //   1. { workflowId: string; tasks: TaskState[] }  — workflow-creating commands
+  //   2. { ok: true, ... }                           — mutation commands
+  // Anything else is a protocol violation.
+  if (raw == null || typeof raw !== 'object') {
+    const msg = `expected object response, got ${raw === null ? 'null' : typeof raw}`;
+    delegationLog(`${traceId} protocol-error channel=${channel} ${msg}`);
+    return { kind: 'protocol-error', message: msg };
+  }
+
+  const response = raw as Record<string, unknown>;
+
+  const hasWorkflowId = 'workflowId' in response && typeof response.workflowId === 'string';
+  const hasOk = 'ok' in response && response.ok === true;
+
+  if (hasWorkflowId) {
+    if (!Array.isArray(response.tasks)) {
+      const msg = `response has workflowId but tasks is ${typeof response.tasks}, expected array`;
+      delegationLog(`${traceId} protocol-error channel=${channel} ${msg}`);
+      return { kind: 'protocol-error', message: msg };
+    }
+  } else if (!hasOk) {
+    const keys = Object.keys(response).join(', ');
+    const msg = `response has neither workflowId (string) nor ok (true); keys: [${keys}]`;
+    delegationLog(`${traceId} protocol-error channel=${channel} ${msg}`);
+    return { kind: 'protocol-error', message: msg };
+  }
+
+  if (hasWorkflowId) {
+    targetWorkflowId = response.workflowId as string;
     process.stdout.write(`Delegated to owner — workflow: ${targetWorkflowId}\n`);
   } else {
     process.stdout.write('Delegated to owner\n');
   }
 
-  const outcome: DelegationOutcome = 'workflowId' in response
-    ? { kind: 'delegated', workflowId: response.workflowId, tasks: response.tasks }
+  const outcome: DelegationOutcome = hasWorkflowId
+    ? { kind: 'delegated', workflowId: response.workflowId as string, tasks: response.tasks as TaskState[] }
     : { kind: 'delegated' };
 
   if (options.noTrack) {
@@ -262,11 +292,11 @@ async function tryDelegate(
     return outcome;
   }
 
-  if (!('workflowId' in response) || !Array.isArray(response.tasks)) {
+  if (!hasWorkflowId || !Array.isArray(response.tasks)) {
     return outcome;
   }
-  targetWorkflowId = response.workflowId;
-  const taskFeed = createDelegatedTaskFeed(messageBus, response.tasks, targetWorkflowId);
+  targetWorkflowId = response.workflowId as string;
+  const taskFeed = createDelegatedTaskFeed(messageBus, response.tasks as TaskState[], targetWorkflowId);
   await trackWorkflow({
     workflowId: targetWorkflowId,
     loadTasks: taskFeed.loadTasks,

@@ -1506,7 +1506,7 @@ describe('headless delegation enforcement', () => {
         // Owner registers handler that accepts mutations
         const ownerHandler = vi.fn(async () => {
           // Owner has writable persistence and can execute
-          return { success: true, workflowId: 'wf-test' };
+          return { ok: true };
         });
         mockDeps.messageBus.onRequest('headless.exec', ownerHandler);
 
@@ -1529,7 +1529,7 @@ describe('headless delegation enforcement', () => {
 
       it('delegates all mutation commands deterministically', async () => {
         (mockDeps.persistence as any).readOnly = true;
-        const ownerHandler = vi.fn(async () => ({ success: true }));
+        const ownerHandler = vi.fn(async () => ({ ok: true }));
         mockDeps.messageBus.onRequest('headless.exec', ownerHandler);
 
         const { tryDelegateExec } = await import('../headless.js');
