@@ -759,7 +759,7 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
     case 'delete-all':
       assertDeleteAllEnabled();
       {
-        const { snapshotPath } = sharedDeleteAllWorkflows({
+        const { snapshotPath } = await sharedDeleteAllWorkflows({
           logger: deps.logger,
           orchestrator: deps.orchestrator,
         });
