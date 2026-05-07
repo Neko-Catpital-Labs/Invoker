@@ -371,6 +371,22 @@ describe('IpcBus', () => {
     }
   });
 
+  it('rejects immediately with NO_HANDLER when no local handler and no peers', async () => {
+    const sock = tempSocketPath();
+
+    const bus = createBus(sock);
+    await bus.ready();
+
+    try {
+      await bus.request('unhandled-channel', { data: 1 });
+      expect.fail('should have thrown');
+    } catch (err) {
+      expect(err).toBeInstanceOf(TransportError);
+      expect((err as TransportError).code).toBe(TransportErrorCode.NO_HANDLER);
+      expect((err as TransportError).message).toContain('unhandled-channel');
+    }
+  });
+
   it('exports DEFAULT_REQUEST_DEADLINE_MS as 30000', () => {
     expect(DEFAULT_REQUEST_DEADLINE_MS).toBe(30_000);
   });

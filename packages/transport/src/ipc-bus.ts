@@ -493,6 +493,15 @@ export class IpcBus implements MessageBus {
     // Forward to a peer (first available).
     await this.readyPromise;
 
+    // If no peers are connected, reject immediately — no one can handle this.
+    const livePeers = [...this.peers].filter((p) => !p.destroyed);
+    if (livePeers.length === 0) {
+      throw new TransportError(
+        TransportErrorCode.NO_HANDLER,
+        `No request handler registered for channel: ${channel}`,
+      );
+    }
+
     const reqId = String(this.nextReqId++);
     const env: ReqEnvelope = { kind: 'req', channel, body: message, reqId };
 
