@@ -36,6 +36,7 @@
 
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from 'node:http';
 import type { Logger } from '@invoker/contracts';
+import { OrchestratorError, OrchestratorErrorCode } from '@invoker/workflow-core';
 import type { Orchestrator, TaskState } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import type { ExecutorRegistry, TaskRunner } from '@invoker/execution-engine';
@@ -132,6 +133,19 @@ function serializeTask(task: any): any {
   return obj;
 }
 
+/** Map OrchestratorError codes to HTTP status codes. Falls back to 400. */
+const notFoundCodes: ReadonlySet<string> = new Set([
+  OrchestratorErrorCode.TASK_NOT_FOUND,
+  OrchestratorErrorCode.WORKFLOW_NOT_FOUND,
+]);
+
+function httpStatusForError(err: unknown): number {
+  if (err instanceof OrchestratorError && notFoundCodes.has(err.code)) return 404;
+  // Fallback for errors not yet migrated to OrchestratorError.
+  if (err instanceof Error && err.message.includes('not found')) return 404;
+  return 400;
+}
+
 export function startApiServer(deps: ApiServerDeps): ApiServer {
   const {
     logger: apiLogger,
@@ -206,8 +220,7 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
           json(res, 200, { ok: true, ...result });
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
-          const statusCode = message.includes('not found') ? 404 : 400;
-          json(res, statusCode, { error: message });
+          json(res, httpStatusForError(err), { error: message });
         }
         return;
       }
@@ -467,8 +480,7 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
           });
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
-          const statusCode = message.includes('not found') ? 404 : 400;
-          json(res, statusCode, { error: message });
+          json(res, httpStatusForError(err), { error: message });
         }
         return;
       }
@@ -495,8 +507,7 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
           });
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
-          const statusCode = message.includes('not found') ? 404 : 400;
-          json(res, statusCode, { error: message });
+          json(res, httpStatusForError(err), { error: message });
         }
         return;
       }
@@ -518,8 +529,7 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
           json(res, 200, { ok: true, ...result });
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
-          const statusCode = message.includes('not found') ? 404 : 400;
-          json(res, statusCode, { error: message });
+          json(res, httpStatusForError(err), { error: message });
         }
         return;
       }

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { CommandService } from '../command-service.js';
+import { OrchestratorError } from '../orchestrator.js';
 import type { CommandEnvelope } from '@invoker/contracts';
 import type { Orchestrator } from '../orchestrator.js';
 import type { TaskState } from '@invoker/workflow-graph';
@@ -292,12 +293,20 @@ describe('CommandService', () => {
       expect(orchestrator.cancelTask).toHaveBeenCalledWith('t-1');
     });
 
-    it('returns error on exception', async () => {
+    it('returns typed error code from OrchestratorError', async () => {
       (orchestrator.cancelTask as ReturnType<typeof vi.fn>).mockImplementation(() => {
-        throw new Error('not found');
+        throw new OrchestratorError('TASK_NOT_FOUND', 'Task "bad" not found');
       });
       const result = await service.cancelTask(makeEnvelope({ taskId: 'bad' }));
-      expect(result).toEqual({ ok: false, error: { code: 'CANCEL_TASK_FAILED', message: 'not found' } });
+      expect(result).toEqual({ ok: false, error: { code: 'TASK_NOT_FOUND', message: 'Task "bad" not found' } });
+    });
+
+    it('returns generic error code for plain Error', async () => {
+      (orchestrator.cancelTask as ReturnType<typeof vi.fn>).mockImplementation(() => {
+        throw new Error('unexpected');
+      });
+      const result = await service.cancelTask(makeEnvelope({ taskId: 'bad' }));
+      expect(result).toEqual({ ok: false, error: { code: 'CANCEL_TASK_FAILED', message: 'unexpected' } });
     });
   });
 
@@ -311,7 +320,15 @@ describe('CommandService', () => {
       expect(orchestrator.cancelWorkflow).toHaveBeenCalledWith('wf-1');
     });
 
-    it('returns error on exception', async () => {
+    it('returns typed error code from OrchestratorError', async () => {
+      (orchestrator.cancelWorkflow as ReturnType<typeof vi.fn>).mockImplementation(() => {
+        throw new OrchestratorError('WORKFLOW_NOT_FOUND', 'No tasks found for workflow bad');
+      });
+      const result = await service.cancelWorkflow(makeEnvelope({ workflowId: 'bad' }));
+      expect(result).toEqual({ ok: false, error: { code: 'WORKFLOW_NOT_FOUND', message: 'No tasks found for workflow bad' } });
+    });
+
+    it('returns generic error code for plain Error', async () => {
       (orchestrator.cancelWorkflow as ReturnType<typeof vi.fn>).mockImplementation(() => {
         throw new Error('wf not found');
       });
