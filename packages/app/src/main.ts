@@ -50,7 +50,7 @@ if (process.platform === 'linux' && !enableTestCompositor) {
   app.commandLine.appendSwitch('disable-software-rasterizer');
 }
 
-import { Orchestrator, CommandService } from '@invoker/workflow-core';
+import { Orchestrator, CommandService, OrchestratorErrorCode } from '@invoker/workflow-core';
 import type {
   PlanDefinition,
   TaskDelta,
@@ -1601,11 +1601,18 @@ if (isHeadless) {
     logger.info(`performDeleteWorkflow end workflow="${workflowId}"`, { module: 'kill' });
   }
 
+  /** Orchestrator error codes that preemption treats as benign (cancel is best-effort). */
+  const preemptSkipCodes: ReadonlySet<string> = new Set([
+    OrchestratorErrorCode.TASK_NOT_FOUND,
+    OrchestratorErrorCode.TASK_ALREADY_TERMINAL,
+    OrchestratorErrorCode.WORKFLOW_NOT_FOUND,
+  ]);
+
   async function preemptTaskSubgraph(taskId: string): Promise<void> {
     try {
       await performCancelTask(taskId);
     } catch (err) {
-      if (err instanceof CommandError && err.code === 'CANCEL_TASK_FAILED') {
+      if (err instanceof CommandError && preemptSkipCodes.has(err.code)) {
         logger.info(`preemptTaskSubgraph skipped for "${taskId}": ${err.message}`, { module: 'ipc' });
         return;
       }
@@ -1620,7 +1627,7 @@ if (isHeadless) {
       logger.info(`preemptWorkflowExecution end for "${workflowId}"`, { module: 'ipc' });
       return result;
     } catch (err) {
-      if (err instanceof CommandError && err.code === 'CANCEL_WORKFLOW_FAILED') {
+      if (err instanceof CommandError && preemptSkipCodes.has(err.code)) {
         logger.info(`preemptWorkflowExecution skipped for "${workflowId}": ${err.message}`, { module: 'ipc' });
         return { cancelled: [], runningCancelled: [] };
       }
