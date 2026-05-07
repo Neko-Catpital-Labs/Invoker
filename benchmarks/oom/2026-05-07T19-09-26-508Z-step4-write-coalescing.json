@@ -1,0 +1,38 @@
+{
+  "runLabel": "step4-write-coalescing",
+  "commit": "b5b9cbf481665dbc41da083ef6191a5ba352a5ce",
+  "results": [
+    {
+      "mode": "safe",
+      "exitCode": 1,
+      "elapsedMs": 20080,
+      "elapsedSec": 20.08,
+      "status": "failed",
+      "failureReason": "timeout guard reached (20s) before OOM",
+      "peakRssMb": 584,
+      "peakExternalMb": 495.9,
+      "flushCount": 105,
+      "meanFlushIntervalMs": 187.12,
+      "dbGrowthRateMbPerMin": 386.06,
+      "leaseRenewWritesPerSec": 384.71,
+      "leaseRenewUpdateWritesPerSec": 0.5,
+      "mutationThroughputPerSec": 119.52
+    },
+    {
+      "mode": "sandbox",
+      "exitCode": 1,
+      "elapsedMs": 20228,
+      "elapsedSec": 20.23,
+      "status": "failed",
+      "failureReason": "timeout guard reached (20s) before OOM",
+      "peakRssMb": 557.4,
+      "peakExternalMb": 487.4,
+      "flushCount": 110,
+      "meanFlushIntervalMs": 177.8,
+      "dbGrowthRateMbPerMin": 286.83,
+      "leaseRenewWritesPerSec": 271.9,
+      "leaseRenewUpdateWritesPerSec": 0.49,
+      "mutationThroughputPerSec": 88.99
+    }
+  ]
+}
