@@ -13,8 +13,25 @@ executorType: worktree
 
 tasks:
   - id: implement-typed-plan-validator
-    description: "Implement a Node/TypeScript validator to replace regex-based structural checks"
+    description: |
+      Implement a Node/TypeScript validator to replace regex-based structural checks.
+      Goal:
+      Replace heuristic validation with deterministic typed checks.
+      Motivation:
+      Reduce policy drift and make diagnostics machine-consumable.
+      Alternative considerations:
+      - keep regex-only validation and patch edge cases incrementally.
+      - split checks into multiple ad-hoc scripts.
+      Implementation details:
+      - add typed validation logic and stable JSON diagnostics.
+      - keep schema and dependency checks aligned with existing parser contracts.
+      Layer: domain
+      Feature state: active
     prompt: |
+      Goal: Deliver this prompt task outcome deterministically.
+      Motivation: Preserve explicit implementation rationale for review and lint compliance.
+      Alternative considerations: Keep this as a focused task instead of implicit context-only execution.
+      Implementation details: Apply file-scoped changes and verify stated acceptance criteria.
       Implement a typed validator at `skills/plan-to-invoker/scripts/validate-plan.ts` and
       wire `skills/plan-to-invoker/scripts/validate-plan.sh` to call it. The implementation
       must parse YAML structurally (not grep heuristics), must validate required fields,
@@ -27,8 +44,25 @@ tasks:
     dependencies: []
 
   - id: add-validator-tests
-    description: "Add regression tests for valid/invalid plans and deterministic error output"
+    description: |
+      Add regression tests for valid/invalid plans and deterministic error output.
+      Goal:
+      Prove validator behavior for positive and negative fixtures.
+      Motivation:
+      Prevent regressions in error-key stability and exit-code semantics.
+      Alternative considerations:
+      - rely only on manual spot checks.
+      - test only positive fixtures.
+      Implementation details:
+      - add deterministic assertions for missing fields, enums, and dependency failures.
+      - verify exact error-key payloads for at least one negative case.
+      Layer: app_regression
+      Feature state: active
     prompt: |
+      Goal: Deliver this prompt task outcome deterministically.
+      Motivation: Preserve explicit implementation rationale for review and lint compliance.
+      Alternative considerations: Keep this as a focused task instead of implicit context-only execution.
+      Implementation details: Apply file-scoped changes and verify stated acceptance criteria.
       Add tests under `skills/plan-to-invoker/scripts/` or repo test locations referenced by
       `scripts/test-plan-to-invoker-skill.sh`. Include positive and negative fixtures in
       `plans/` or a fixture directory. Tests must verify missing required fields, invalid enums,
@@ -41,7 +75,20 @@ tasks:
       - implement-typed-plan-validator
 
   - id: run-plan-to-invoker-script-tests
-    description: "Run existing plan-to-invoker script test suite"
+    description: |
+      Run existing plan-to-invoker script test suite.
+      Goal:
+      Confirm script-level regressions are not introduced.
+      Motivation:
+      Preserve end-to-end confidence after validator and test changes.
+      Alternative considerations:
+      - run only a subset of script tests.
+      - defer script-suite verification to later workflows.
+      Implementation details:
+      - execute the script test suite and require zero failures.
+      - keep this gate before final full-suite regression.
+      Layer: app_regression
+      Feature state: active
     command: "bash scripts/test-plan-to-invoker-skill.sh"
     executorType: ssh
     remoteTargetId: remote_digital_ocean_1
@@ -49,7 +96,20 @@ tasks:
       - add-validator-tests
 
   - id: post-fix-regression
-    description: "Run the full repository test suite as post-fix regression"
+    description: |
+      Run the full repository test suite as post-fix regression.
+      Goal:
+      Validate repository-wide stability after validator hardening.
+      Motivation:
+      Catch integration regressions outside the plan-to-invoker script surface.
+      Alternative considerations:
+      - rely only on targeted script tests.
+      - run package-level tests without full-suite coverage.
+      Implementation details:
+      - execute `pnpm run test:all` as the final gate.
+      - require dependencies on all prior implementation/verification tasks.
+      Layer: app_regression
+      Feature state: active
     command: "pnpm run test:all"
     executorType: ssh
     remoteTargetId: remote_digital_ocean_1
