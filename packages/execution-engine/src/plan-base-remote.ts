@@ -52,9 +52,7 @@ export async function syncPlanBaseRemote(
 
 function stripKnownRemotePrefix(ref: string): string {
   if (ref.startsWith('origin/')) return ref.slice('origin/'.length);
-  if (ref.startsWith('upstream/')) return ref.slice('upstream/'.length);
   if (ref.startsWith('refs/remotes/origin/')) return ref.slice('refs/remotes/origin/'.length);
-  if (ref.startsWith('refs/remotes/upstream/')) return ref.slice('refs/remotes/upstream/'.length);
   return ref;
 }
 
