@@ -1514,13 +1514,13 @@ describe('headless delegation enforcement', () => {
         const { tryDelegateExec } = await import('../headless.js');
 
         // Headless delegates mutation to owner
-        const delegated = await tryDelegateExec(
+        const outcome = await tryDelegateExec(
           ['run', '/path/to/plan.yaml'],
           mockDeps.messageBus
         );
 
-        // Verify delegation succeeded
-        expect(delegated).toBe(true);
+        // Verify delegation succeeded — outcome is a DelegationOutcome union
+        expect(outcome.kind).toBe('delegated');
         expect(ownerHandler).toHaveBeenCalledWith(expect.objectContaining({
           args: ['run', '/path/to/plan.yaml'],
           waitForApproval: undefined,
@@ -1543,8 +1543,8 @@ describe('headless delegation enforcement', () => {
         ];
 
         for (const cmd of mutationCommands) {
-          const delegated = await tryDelegateExec(cmd, mockDeps.messageBus);
-          expect(delegated).toBe(true);
+          const outcome = await tryDelegateExec(cmd, mockDeps.messageBus);
+          expect(outcome.kind).toBe('delegated');
         }
 
         expect(ownerHandler).toHaveBeenCalledTimes(mutationCommands.length);

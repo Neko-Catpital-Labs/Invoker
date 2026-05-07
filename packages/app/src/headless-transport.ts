@@ -17,6 +17,7 @@ import type { MessageBus } from '@invoker/transport';
 
 import { isHeadlessMutatingCommand } from './headless-command-classification.js';
 import {
+  isDelegated,
   tryDelegateExec,
   tryDelegateRun,
   tryDelegateResume,
@@ -281,21 +282,21 @@ export class HeadlessTransport {
     if (command === 'run') {
       const planPath = args[1];
       if (!planPath) return false;
-      return tryDelegateRun(planPath, bus, waitForApproval, noTrack, timeoutMs);
+      return isDelegated(await tryDelegateRun(planPath, bus, waitForApproval, noTrack, timeoutMs));
     }
 
     if (command === 'resume') {
       const workflowId = args[1];
       if (!workflowId) return false;
-      return tryDelegateResume(
+      return isDelegated(await tryDelegateResume(
         workflowId,
         bus,
         waitForApproval,
         noTrack,
         timeoutMs,
-      );
+      ));
     }
 
-    return tryDelegateExec(args, bus, waitForApproval, noTrack, timeoutMs);
+    return isDelegated(await tryDelegateExec(args, bus, waitForApproval, noTrack, timeoutMs));
   }
 }
