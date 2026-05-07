@@ -1614,31 +1614,40 @@ describe('headless delegation enforcement', () => {
     });
   });
 
-  describe('delete-workflow shared bridge', () => {
-    it('headless delete-workflow uses deleteWorkflow dep when available', async () => {
-      const deleteWorkflow = vi.fn().mockResolvedValue(undefined);
+  describe('delete-workflow lifecycle bridge', () => {
+    it('headless delete-workflow always routes through commandService.deleteWorkflow', async () => {
       mockDeps.commandService.deleteWorkflow = vi.fn(async () => ({ ok: true as const, data: undefined })) as any;
-      const depsWithDelete: HeadlessDeps = {
-        ...mockDeps,
-        deleteWorkflow,
-      } as HeadlessDeps;
+      mockDeps.commandService.cancelWorkflow = vi.fn(async () => ({
+        ok: true as const,
+        data: { cancelled: [], runningCancelled: [] },
+      }));
 
-      await runHeadless(['delete-workflow', 'wf-1'], depsWithDelete);
-
-      expect(deleteWorkflow).toHaveBeenCalledWith('wf-1');
-      expect(mockDeps.commandService.deleteWorkflow).not.toHaveBeenCalled();
-    });
-
-    it('headless delete falls back to commandService when deleteWorkflow dep is not provided', async () => {
-      mockDeps.commandService.deleteWorkflow = vi.fn(async () => ({ ok: true as const, data: undefined })) as any;
-      const depsWithoutDelete: HeadlessDeps = {
-        ...mockDeps,
-        deleteWorkflow: undefined,
-      } as HeadlessDeps;
-
-      await runHeadless(['delete', 'wf-1'], depsWithoutDelete);
+      await runHeadless(['delete-workflow', 'wf-1'], mockDeps);
 
       expect(mockDeps.commandService.deleteWorkflow).toHaveBeenCalled();
+    });
+
+    it('headless delete preempts running tasks before commandService.deleteWorkflow', async () => {
+      const callOrder: string[] = [];
+      const preemptWorkflowExecution = vi.fn(async () => {
+        callOrder.push('preempt');
+        return { cancelled: ['wf-1/task-1'], runningCancelled: ['wf-1/task-1'] };
+      });
+      mockDeps.commandService.deleteWorkflow = vi.fn(async () => {
+        callOrder.push('delete');
+        return { ok: true as const, data: undefined };
+      }) as any;
+
+      const depsWithPreempt: HeadlessDeps = {
+        ...mockDeps,
+        preemptWorkflowExecution,
+      } as HeadlessDeps;
+
+      await runHeadless(['delete', 'wf-1'], depsWithPreempt);
+
+      expect(preemptWorkflowExecution).toHaveBeenCalledWith('wf-1');
+      expect(mockDeps.commandService.deleteWorkflow).toHaveBeenCalled();
+      expect(callOrder).toEqual(['preempt', 'delete']);
     });
   });
 });
