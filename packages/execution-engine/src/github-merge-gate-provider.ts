@@ -6,7 +6,6 @@ import { RESTART_TO_BRANCH_TRACE } from './exec-trace.js';
 export class GitHubMergeGateProvider implements MergeGateProvider {
   readonly name = 'github';
 
-  private static readonly TARGET_REMOTE_ORDER = ['upstream', 'origin'] as const;
   private static readonly TARGET_REPO_ENV = 'INVOKER_GITHUB_TARGET_REPO';
 
   async createReview(opts: {
@@ -120,18 +119,16 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
       );
     }
 
-    for (const remote of GitHubMergeGateProvider.TARGET_REMOTE_ORDER) {
-      try {
-        const url = await this.exec('git', ['remote', 'get-url', remote], cwd);
-        const parsed = this.parseGitHubRepoNwo(url);
-        if (parsed) return parsed;
-      } catch {
-        // try next remote
-      }
+    try {
+      const url = await this.exec('git', ['remote', 'get-url', 'origin'], cwd);
+      const parsed = this.parseGitHubRepoNwo(url);
+      if (parsed) return parsed;
+    } catch {
+      // fall through to error
     }
     throw new Error(
       'Unable to resolve GitHub target repo. ' +
-      `Set ${GitHubMergeGateProvider.TARGET_REPO_ENV}=owner/repo or configure a parseable upstream/origin GitHub remote.`,
+      `Set ${GitHubMergeGateProvider.TARGET_REPO_ENV}=owner/repo or configure a parseable origin GitHub remote.`,
     );
   }
 

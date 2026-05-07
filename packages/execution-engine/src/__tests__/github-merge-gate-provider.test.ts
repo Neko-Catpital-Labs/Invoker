@@ -34,12 +34,12 @@ describe('GitHubMergeGateProvider', () => {
   });
 
   describe('createReview', () => {
-    it('targets upstream repository when creating merge-gate PRs', async () => {
+    it('targets origin repository when creating merge-gate PRs', async () => {
       const { spawn } = await import('node:child_process');
       const spawnMock = vi.mocked(spawn);
 
       spawnMock.mockImplementation(((cmd: string, args: string[]) => {
-        if (cmd === 'git' && args[0] === 'remote' && args[1] === 'get-url' && args[2] === 'upstream') {
+        if (cmd === 'git' && args[0] === 'remote' && args[1] === 'get-url' && args[2] === 'origin') {
           return mockSpawnResult('https://github.com/Neko-Catpital-Labs/Invoker.git', 0);
         }
         if (cmd === 'git') return mockSpawnResult('', 0);
@@ -82,13 +82,13 @@ describe('GitHubMergeGateProvider', () => {
       );
     });
 
-    it('pushes branch to origin and creates a PR against the normalized base branch', async () => {
+    it('pushes branch to origin and creates a PR against normalized base branch', async () => {
       const { spawn } = await import('node:child_process');
       const spawnMock = vi.mocked(spawn);
 
       spawnMock.mockImplementation(((cmd: string, _args: string[]) => {
         const args = _args;
-        if (cmd === 'git' && args[0] === 'remote' && args[1] === 'get-url' && args[2] === 'upstream') {
+        if (cmd === 'git' && args[0] === 'remote' && args[1] === 'get-url' && args[2] === 'origin') {
           return mockSpawnResult('https://github.com/owner/repo.git', 0);
         }
         if (cmd === 'git') return mockSpawnResult('', 0);
@@ -142,7 +142,7 @@ describe('GitHubMergeGateProvider', () => {
       const spawnMock = vi.mocked(spawn);
 
       spawnMock.mockImplementation(((cmd: string, args: string[]) => {
-        if (cmd === 'git' && args[0] === 'remote' && args[1] === 'get-url' && args[2] === 'upstream') {
+        if (cmd === 'git' && args[0] === 'remote' && args[1] === 'get-url' && args[2] === 'origin') {
           return mockSpawnResult('https://github.com/owner/repo.git', 0);
         }
         if (cmd === 'git') return mockSpawnResult('', 0);
@@ -214,6 +214,28 @@ describe('GitHubMergeGateProvider', () => {
         title: 'Missing target',
         cwd: '/tmp/repo',
       })).rejects.toThrow('Unable to resolve GitHub target repo.');
+    });
+
+    it('does not fall back to upstream when origin is missing', async () => {
+      const { spawn } = await import('node:child_process');
+      const spawnMock = vi.mocked(spawn);
+
+      spawnMock.mockImplementation(((cmd: string, args: string[]) => {
+        if (cmd === 'git' && args[0] === 'remote' && args[1] === 'get-url' && args[2] === 'origin') {
+          return mockSpawnResult('', 1);
+        }
+        if (cmd === 'git' && args[0] === 'remote' && args[1] === 'get-url' && args[2] === 'upstream') {
+          return mockSpawnResult('https://github.com/owner/repo.git', 0);
+        }
+        return mockSpawnResult('', 0);
+      }) as any);
+
+      await expect(provider.createReview({
+        baseBranch: 'master',
+        featureBranch: 'feature/test',
+        title: 'Missing origin',
+        cwd: '/tmp/repo',
+      })).rejects.toThrow('parseable origin GitHub remote');
     });
   });
 });

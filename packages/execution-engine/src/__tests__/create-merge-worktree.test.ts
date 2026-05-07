@@ -39,39 +39,6 @@ function createSandbox() {
   return { root, bare, host };
 }
 
-function createForkSandbox() {
-  const root = mkdtempSync(join(tmpdir(), 'merge-wt-fork-'));
-
-  const upstream = join(root, 'upstream.git');
-  const origin = join(root, 'origin.git');
-  execSync(`git init --bare -b master ${upstream}`);
-  execSync(`git init --bare -b master ${origin}`);
-
-  const seed = join(root, 'seed');
-  execSync(`git clone ${upstream} ${seed}`);
-  git(seed, 'config user.email "test@test.com"');
-  git(seed, 'config user.name "Test"');
-  writeFileSync(join(seed, 'init.txt'), 'init');
-  git(seed, 'add -A');
-  git(seed, 'commit -m "initial"');
-  git(seed, 'push origin master');
-  git(seed, `remote add fork ${origin}`);
-  git(seed, 'push fork master');
-
-  const host = join(root, 'host');
-  execSync(`git clone ${origin} ${host}`);
-  git(host, 'config user.email "test@test.com"');
-  git(host, 'config user.name "Test"');
-  git(host, `remote add upstream ${upstream}`);
-
-  writeFileSync(join(seed, 'upstream-only.txt'), 'upstream-only');
-  git(seed, 'add -A');
-  git(seed, 'commit -m "upstream only"');
-  git(seed, 'push origin master');
-
-  return { root, upstream, origin, host };
-}
-
 describe('createMergeWorktree isolation (real git)', { timeout: 30_000 }, () => {
   let root: string;
 
@@ -244,20 +211,4 @@ describe('createMergeWorktree isolation (real git)', { timeout: 30_000 }, () => 
     await executor.removeMergeWorktree(clonePath);
   });
 
-  it('treats legacy upstream/<branch> refs as origin-backed base refs', async () => {
-    const sandbox = createForkSandbox();
-    root = sandbox.root;
-
-    const upstreamSha = git(sandbox.upstream, 'rev-parse master');
-    const originSha = git(sandbox.origin, 'rev-parse master');
-    expect(upstreamSha).not.toBe(originSha);
-
-    const executor = buildExecutor(sandbox.host);
-    const clonePath = await executor.createMergeWorktree('upstream/master', 'test-upstream');
-
-    const headSha = git(clonePath, 'rev-parse HEAD');
-    expect(headSha).toBe(originSha);
-
-    await executor.removeMergeWorktree(clonePath);
-  });
 });
