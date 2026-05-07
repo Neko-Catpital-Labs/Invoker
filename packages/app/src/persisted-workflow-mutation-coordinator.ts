@@ -306,7 +306,7 @@ export class PersistedWorkflowMutationCoordinator {
     ) {
       return 'recreate';
     }
-    if (channel === 'invoker:delete-workflow') {
+    if (channel === 'invoker:delete-workflow' || channel === 'invoker:delete-all-workflows') {
       return 'delete';
     }
     if (channel !== 'headless.exec') {
@@ -317,7 +317,7 @@ export class PersistedWorkflowMutationCoordinator {
     if (rawArgs[0] === 'recreate' || rawArgs[0] === 'recreate-task') {
       return 'recreate';
     }
-    if (rawArgs[0] === 'delete' || rawArgs[0] === 'delete-workflow') {
+    if (rawArgs[0] === 'delete' || rawArgs[0] === 'delete-workflow' || rawArgs[0] === 'delete-all') {
       return 'delete';
     }
     return null;
@@ -330,6 +330,7 @@ export class PersistedWorkflowMutationCoordinator {
       || intent.channel === 'invoker:recreate-task'
       || intent.channel === 'invoker:recreate-with-rebase'
       || intent.channel === 'invoker:delete-workflow'
+      || intent.channel === 'invoker:delete-all-workflows'
     ) {
       return true;
     }
@@ -343,7 +344,7 @@ export class PersistedWorkflowMutationCoordinator {
     if (command === 'recreate-task') {
       return true;
     }
-    if (command === 'delete' || command === 'delete-workflow') {
+    if (command === 'delete' || command === 'delete-workflow' || command === 'delete-all') {
       return true;
     }
     const isWorkflowId = /^wf-[^/]+$/.test(target);
