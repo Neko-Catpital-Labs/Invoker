@@ -214,6 +214,17 @@ export interface OrchestratorMessageBus {
 
 // ── Public Types ────────────────────────────────────────────
 
+/** Options for {@link Orchestrator.deleteAllWorkflows}. */
+export interface DeleteAllWorkflowsOptions {
+  /**
+   * When `true` (the default), a `removed` TaskDelta is published for every
+   * task before the method returns.  Set to `false` to skip per-task delta
+   * publication — useful for bulk callers that notify the UI through a
+   * separate channel.
+   */
+  publishRemovalDeltas?: boolean;
+}
+
 export interface PlanDefinition {
   name: string;
   description?: string;
@@ -3489,9 +3500,11 @@ export class Orchestrator {
    * Delete all workflows: DB first, then scheduler, memory, and publish removal deltas.
    * Follows the same DB→memory→publish pattern as writeAndSync().
    */
-  deleteAllWorkflows(): void {
+  deleteAllWorkflows(options?: DeleteAllWorkflowsOptions): void {
+    const { publishRemovalDeltas = true } = options ?? {};
+
     // 1. Collect all tasks before clearing (needed for deltas)
-    const allTasks = this.stateMachine.getAllTasks();
+    const allTasks = publishRemovalDeltas ? this.stateMachine.getAllTasks() : [];
 
     // 2. DB first
     this.persistence.deleteAllWorkflows?.();
@@ -3503,7 +3516,7 @@ export class Orchestrator {
     this.activeWorkflowIds.clear();
     this.stateMachine.clear();
 
-    // 5. Publish removal deltas
+    // 5. Publish removal deltas (skipped when publishRemovalDeltas is false)
     for (const task of allTasks) {
       this.messageBus.publish(TASK_DELTA_CHANNEL, this.buildRemoveDelta(task));
     }
