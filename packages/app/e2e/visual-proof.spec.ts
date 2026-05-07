@@ -539,7 +539,7 @@ test.describe('Visual proof capture', () => {
     ]);
     // Navigate to queue tab if there is one, or verify queue section is visible
     await page.getByRole('button', { name: 'Queue' }).click();
-    await expect(page.getByText('Running 1 / 3')).toBeVisible();
+    await expect(page.getByText('Running 1 / 6')).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Action Queue (1)' })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Backlog (3)' })).toBeVisible();
     await captureScreenshot(page, 'queue-view-concurrency');
