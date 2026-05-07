@@ -36,7 +36,12 @@
 
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from 'node:http';
 import type { Logger } from '@invoker/contracts';
-import { OrchestratorError, OrchestratorErrorCode } from '@invoker/workflow-core';
+import {
+  OrchestratorError,
+  OrchestratorErrorCode,
+  PlanConflictError,
+  TopologyForkRequired,
+} from '@invoker/workflow-core';
 import type { Orchestrator, TaskState } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import type { ExecutorRegistry, TaskRunner } from '@invoker/execution-engine';
@@ -138,17 +143,30 @@ function serializeTask(task: any): any {
   return obj;
 }
 
-/** Map OrchestratorError codes to HTTP status codes. Falls back to 400. */
+/** Map domain errors to HTTP status codes. Falls back to 400. */
 const notFoundCodes: ReadonlySet<string> = new Set([
   OrchestratorErrorCode.TASK_NOT_FOUND,
   OrchestratorErrorCode.WORKFLOW_NOT_FOUND,
 ]);
 
+const conflictCodes: ReadonlySet<string> = new Set([
+  OrchestratorErrorCode.TASK_ALREADY_TERMINAL,
+]);
+
 function httpStatusForError(err: unknown): number {
-  if (err instanceof OrchestratorError && notFoundCodes.has(err.code)) return 404;
+  if (err instanceof OrchestratorError) {
+    if (notFoundCodes.has(err.code)) return 404;
+    if (conflictCodes.has(err.code)) return 409;
+  }
+  if (err instanceof PlanConflictError) return 409;
+  if (err instanceof TopologyForkRequired) return 409;
   // Fallback for errors not yet migrated to OrchestratorError.
   if (err instanceof Error && err.message.includes('not found')) return 404;
   return 400;
+}
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }
 
 export function startApiServer(deps: ApiServerDeps): ApiServer {
@@ -229,8 +247,7 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
           });
           json(res, 200, { ok: true, ...result });
         } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          json(res, httpStatusForError(err), { error: message });
+          json(res, httpStatusForError(err), { error: errorMessage(err) });
         }
         return;
       }
@@ -272,7 +289,7 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
             ...(isLegacy ? { deprecated: true, replacement: '/api/tasks/:id/retry' } : {}),
           });
         } catch (err) {
-          json(res, 400, { error: err instanceof Error ? err.message : String(err) });
+          json(res, httpStatusForError(err), { error: errorMessage(err) });
         }
         return;
       }
@@ -293,7 +310,7 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
           const tasksStarted = started.filter(t => t.status === 'running').length;
           json(res, 200, { ok: true, taskId, action: 'recreated', tasksStarted });
         } catch (err) {
-          json(res, 400, { error: err instanceof Error ? err.message : String(err) });
+          json(res, httpStatusForError(err), { error: errorMessage(err) });
         }
         return;
       }
@@ -341,7 +358,7 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
             status: autoApproveAIFixes ? 'auto_approved' : 'awaiting_approval',
           });
         } catch (err) {
-          json(res, 400, { error: err instanceof Error ? err.message : String(err) });
+          json(res, httpStatusForError(err), { error: errorMessage(err) });
         }
         return;
       }
@@ -368,7 +385,7 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
           }
           json(res, 200, { ok: true, taskId, action: 'approved' });
         } catch (err) {
-          json(res, 400, { error: err instanceof Error ? err.message : String(err) });
+          json(res, httpStatusForError(err), { error: errorMessage(err) });
         }
         return;
       }
@@ -393,7 +410,7 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
           }
           json(res, 200, { ok: true, taskId, action: 'rejected', reason });
         } catch (err) {
-          json(res, 400, { error: err instanceof Error ? err.message : String(err) });
+          json(res, httpStatusForError(err), { error: errorMessage(err) });
         }
         return;
       }
@@ -434,7 +451,7 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
             ...(isLegacy ? { deprecated: true, replacement: '/api/workflows/:id/recreate' } : {}),
           });
         } catch (err) {
-          json(res, 400, { error: err instanceof Error ? err.message : String(err) });
+          json(res, httpStatusForError(err), { error: errorMessage(err) });
         }
         return;
       }
@@ -460,7 +477,7 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
           const tasksStarted = started.filter(t => t.status === 'running').length;
           json(res, 200, { ok: true, workflowId, action: 'retried', tasksStarted });
         } catch (err) {
-          json(res, 400, { error: err instanceof Error ? err.message : String(err) });
+          json(res, httpStatusForError(err), { error: errorMessage(err) });
         }
         return;
       }
@@ -506,8 +523,7 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
             ...(isLegacy ? { deprecated: true, replacement: '/api/workflows/:id/recreate-with-rebase' } : {}),
           });
         } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          json(res, httpStatusForError(err), { error: message });
+          json(res, httpStatusForError(err), { error: errorMessage(err) });
         }
         return;
       }
@@ -533,8 +549,7 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
             tasksStarted: runnable.length,
           });
         } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          json(res, httpStatusForError(err), { error: message });
+          json(res, httpStatusForError(err), { error: errorMessage(err) });
         }
         return;
       }
@@ -555,8 +570,7 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
           });
           json(res, 200, { ok: true, ...result });
         } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          json(res, httpStatusForError(err), { error: message });
+          json(res, httpStatusForError(err), { error: errorMessage(err) });
         }
         return;
       }
@@ -600,7 +614,7 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
           sharedProvideInput(taskId, text, { orchestrator });
           json(res, 200, { ok: true, taskId, action: 'input_provided' });
         } catch (err) {
-          json(res, 400, { error: err instanceof Error ? err.message : String(err) });
+          json(res, httpStatusForError(err), { error: errorMessage(err) });
         }
         return;
       }
@@ -621,7 +635,7 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
           await taskExecutor.executeTasks(runnable);
           json(res, 200, { ok: true, taskId, action: 'command_edited', tasksStarted: runnable.length });
         } catch (err) {
-          json(res, 400, { error: err instanceof Error ? err.message : String(err) });
+          json(res, httpStatusForError(err), { error: errorMessage(err) });
         }
         return;
       }
@@ -641,7 +655,7 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
           await taskExecutor.executeTasks(runnable);
           json(res, 200, { ok: true, taskId, action: 'prompt_edited', tasksStarted: runnable.length });
         } catch (err) {
-          json(res, 400, { error: err instanceof Error ? err.message : String(err) });
+          json(res, httpStatusForError(err), { error: errorMessage(err) });
         }
         return;
       }
@@ -661,7 +675,7 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
           await taskExecutor.executeTasks(runnable);
           json(res, 200, { ok: true, taskId, action: 'type_edited', tasksStarted: runnable.length });
         } catch (err) {
-          json(res, 400, { error: err instanceof Error ? err.message : String(err) });
+          json(res, httpStatusForError(err), { error: errorMessage(err) });
         }
         return;
       }
@@ -681,7 +695,7 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
           await taskExecutor.executeTasks(runnable);
           json(res, 200, { ok: true, taskId, action: 'agent_edited', tasksStarted: runnable.length });
         } catch (err) {
-          json(res, 400, { error: err instanceof Error ? err.message : String(err) });
+          json(res, httpStatusForError(err), { error: errorMessage(err) });
         }
         return;
       }
@@ -703,7 +717,7 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
           if (runnable.length > 0) await taskExecutor.executeTasks(runnable);
           json(res, 200, { ok: true, taskId, action: 'gate_policy_updated', tasksStarted: runnable.length });
         } catch (err) {
-          json(res, 400, { error: err instanceof Error ? err.message : String(err) });
+          json(res, httpStatusForError(err), { error: errorMessage(err) });
         }
         return;
       }
@@ -716,7 +730,7 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
           await deleteWorkflow(workflowId);
           json(res, 200, { ok: true, workflowId, action: 'deleted' });
         } catch (err) {
-          json(res, 400, { error: err instanceof Error ? err.message : String(err) });
+          json(res, httpStatusForError(err), { error: errorMessage(err) });
         }
         return;
       }
@@ -740,7 +754,7 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
             action: 'detached',
           });
         } catch (err) {
-          json(res, 400, { error: err instanceof Error ? err.message : String(err) });
+          json(res, httpStatusForError(err), { error: errorMessage(err) });
         }
         return;
       }
@@ -759,7 +773,7 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
           await sharedSetWorkflowMergeMode(workflowId, mode, { orchestrator, persistence, taskExecutor });
           json(res, 200, { ok: true, workflowId, action: 'merge_mode_set', mode });
         } catch (err) {
-          json(res, 400, { error: err instanceof Error ? err.message : String(err) });
+          json(res, httpStatusForError(err), { error: errorMessage(err) });
         }
         return;
       }
