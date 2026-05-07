@@ -14,6 +14,7 @@ import type {
   InvalidationScope,
   TaskState,
 } from '@invoker/workflow-core';
+import { OrchestratorError, OrchestratorErrorCode } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import type { TaskRunner } from '@invoker/execution-engine';
 import { normalizeMergeModeForPersistence } from './merge-mode.js';
@@ -47,7 +48,7 @@ export function bumpGenerationAndRecreate(
 ): TaskState[] {
   const { persistence, orchestrator } = deps;
   const workflow = persistence.loadWorkflow(workflowId);
-  if (!workflow) throw new Error(`Workflow ${workflowId} not found`);
+  if (!workflow) throw new OrchestratorError(OrchestratorErrorCode.WORKFLOW_NOT_FOUND, `Workflow ${workflowId} not found`);
   const nextGen = (workflow.generation ?? 0) + 1;
   persistence.updateWorkflow(workflowId, { generation: nextGen });
   deps.logger?.info(`bumped generation to ${nextGen} for ${workflowId}`, { module: 'workflow' });
@@ -257,7 +258,7 @@ export async function recreateWorkflowFromFreshBase(
   deps: ActionDeps,
 ): Promise<TaskState[]> {
   const workflow = deps.persistence.loadWorkflow(workflowId);
-  if (!workflow) throw new Error(`Workflow ${workflowId} not found`);
+  if (!workflow) throw new OrchestratorError(OrchestratorErrorCode.WORKFLOW_NOT_FOUND, `Workflow ${workflowId} not found`);
   const nextGen = (workflow.generation ?? 0) + 1;
   deps.persistence.updateWorkflow(workflowId, { generation: nextGen });
   deps.logger?.info(
@@ -323,7 +324,7 @@ export async function rebaseAndRetry(
   deps: ActionDeps,
 ): Promise<TaskState[]> {
   const task = deps.orchestrator.getTask(taskId);
-  if (!task?.config.workflowId) throw new Error(`Task ${taskId} not found or has no workflow`);
+  if (!task?.config.workflowId) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found or has no workflow`);
   const workflowId = task.config.workflowId;
   deps.logger?.info(
     `rebaseAndRetry: taskId=${taskId} workflowId=${workflowId} → recreateWorkflowFromFreshBase (Step 12 delegate)`,
@@ -637,7 +638,7 @@ export async function fixWithAgentAction(
 ): Promise<FixWithAgentActionResult> {
   const { orchestrator, persistence, taskExecutor } = deps;
   const task = orchestrator.getTask(taskId);
-  if (!task) throw new Error(`Task ${taskId} not found`);
+  if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
 
   const savedError = task.execution.error ?? '';
   const recoveryRoute = options.recoveryRoute ?? selectFailureRecoveryRoute(task, savedError);
