@@ -96,8 +96,6 @@ describe('plan-base-remote', () => {
 
   it('resolvePreferredTrackingRemote always returns origin', async () => {
     const runGit = runGitFactory(mirror);
-    execSync(`git remote add upstream "${upstream}"`, { cwd: mirror });
-
     const preferred = await resolvePreferredTrackingRemote(runGit, 'master');
     expect(preferred).toBe('origin');
   });
