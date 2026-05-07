@@ -6,16 +6,16 @@ import {
 } from '../execution-capacity.js';
 
 describe('execution-capacity', () => {
-  it('caps configured concurrency at worktree capacity', () => {
-    expect(resolveEffectiveMaxConcurrency(26, 5)).toBe(5);
+  it('preserves configured concurrency without applying an artificial cap', () => {
+    expect(resolveEffectiveMaxConcurrency(26)).toBe(26);
   });
 
   it('preserves a lower configured concurrency', () => {
-    expect(resolveEffectiveMaxConcurrency(4, 5)).toBe(4);
+    expect(resolveEffectiveMaxConcurrency(4)).toBe(4);
   });
 
   it('falls back to safe defaults for invalid values', () => {
-    expect(resolveEffectiveMaxConcurrency(undefined, DEFAULT_WORKTREE_MAX_CONCURRENCY)).toBe(3);
-    expect(resolveEffectiveMaxConcurrency(0, 0)).toBe(3);
+    expect(resolveEffectiveMaxConcurrency(undefined)).toBe(DEFAULT_WORKTREE_MAX_CONCURRENCY);
+    expect(resolveEffectiveMaxConcurrency(0)).toBe(DEFAULT_WORKTREE_MAX_CONCURRENCY);
   });
 });
