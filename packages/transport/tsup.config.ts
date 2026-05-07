@@ -9,6 +9,7 @@ export default defineConfig({
   format: ['esm'],
   dts: {
     compilerOptions: {
+      composite: false,
       module: 'NodeNext',
       moduleResolution: 'NodeNext',
       types: ['node'],
