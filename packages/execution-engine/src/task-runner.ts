@@ -1215,6 +1215,35 @@ export class TaskRunner {
       }
     }
 
+    // Fallback: if the requested ref is one of the common default branch names
+    // and it doesn't exist, try the alternate (main↔master). Plan YAML files
+    // sometimes specify "main" for repos whose default branch is "master" or
+    // vice versa.
+    if (!refSha) {
+      const alternates: Record<string, string> = { main: 'master', master: 'main' };
+      const alt = alternates[strippedRemoteRef];
+      if (alt) {
+        try {
+          await this.execGitIn(
+            ['fetch', remoteName, `+refs/heads/${alt}:refs/remotes/${remoteName}/${alt}`],
+            clonePath,
+          );
+        } catch {
+          // Best-effort
+        }
+        const altCandidates = [
+          `refs/remotes/${remoteName}/${alt}`,
+          `${remoteName}/${alt}`,
+          alt,
+          `refs/heads/${alt}`,
+        ];
+        for (const candidate of altCandidates) {
+          refSha = await tryResolve(candidate);
+          if (refSha) break;
+        }
+      }
+    }
+
     if (!refSha) {
       throw new Error(
         `Unable to resolve merge worktree ref "${ref}" in clone ${clonePath}. ` +
