@@ -283,23 +283,68 @@ tasks:
   - id: implement-surface
     description: |
       Implement the contact surface wiring.
+      Goal:
+      - Add contact-surface wiring for new behavior.
+      Motivation:
+      - Keep contact contract explicit and reviewable.
+      Alternative considerations:
+      - Option A (chosen): direct contact-surface wiring.
+      - Option B: defer via adapter layer.
+      Implementation details:
+      - Update contact surface and preserve existing contracts.
       Layer: contact_surface
       Feature state: active
     prompt: |
-      Modify packages/foo/src/surface.ts and ensure the contract remains typed.
-      Acceptance criteria: ensure the new surface compiles and keeps existing imports intact.
+      Goal:
+      - Implement contact-surface wiring updates in a typed and deterministic way.
+      Motivation:
+      - Keep task execution intent explicit for delegated AI execution.
+      Alternative considerations:
+      - Option A (chosen): direct contact-surface wiring.
+      - Option B: defer via adapter layer.
+      Implementation details:
+      - Modify packages/foo/src/surface.ts and preserve existing contract imports.
+      Acceptance criteria:
+      - Ensure the new surface compiles and keeps existing imports intact.
     dependencies: []
   - id: add-regression-tests
     description: |
       Add regression coverage for the new surface.
+      Goal:
+      - Add regression proof for the surface change.
+      Motivation:
+      - Ensure behavior is preserved after wiring changes.
+      Alternative considerations:
+      - Option A (chosen): focused package regression tests.
+      - Option B: only full-suite verification.
+      Implementation details:
+      - Add focused deterministic regression coverage.
       Layer: app_regression
       Feature state: active
     prompt: |
-      Modify packages/foo/src/__tests__/surface.test.ts and ensure the regression covers the new path.
-      Acceptance criteria: verify the regression reproduces the new behavior deterministically.
+      Goal:
+      - Add deterministic regression coverage for the new contact-surface path.
+      Motivation:
+      - Prevent silent behavior regressions after wiring changes.
+      Alternative considerations:
+      - Option A (chosen): focused package regression tests.
+      - Option B: rely on full-suite tests only.
+      Implementation details:
+      - Modify packages/foo/src/__tests__/surface.test.ts to cover the new path.
+      Acceptance criteria:
+      - Verify the regression reproduces the new behavior deterministically.
     dependencies: [implement-surface]
   - id: final-regression
     description: |
+      Goal:
+      - Run final full-suite regression gate.
+      Motivation:
+      - Ensure all slices are validated together.
+      Alternative considerations:
+      - Option A (chosen): full repository regression.
+      - Option B: package-only checks.
+      Implementation details:
+      - Execute root-level test gate after all earlier tasks complete.
       Run the repository test suite as the terminal regression gate.
       Layer: e2e_regression
       Feature state: active
@@ -325,14 +370,41 @@ tasks:
   - id: implement-surface
     description: |
       Implement the contact surface wiring.
+      Goal:
+      - Add contact-surface wiring for new behavior.
+      Motivation:
+      - Keep contact contract explicit and reviewable.
+      Alternative considerations:
+      - Option A (chosen): direct contact-surface wiring.
+      - Option B: defer via adapter layer.
+      Implementation details:
+      - Update contact surface and preserve existing contracts.
       Layer: contact_surface
       Feature state: active
     prompt: |
-      Modify packages/foo/src/surface.ts and ensure the contract remains typed.
-      Acceptance criteria: ensure the new surface compiles and keeps existing imports intact.
+      Goal:
+      - Implement contact-surface wiring updates in a typed and deterministic way.
+      Motivation:
+      - Keep task execution intent explicit for delegated AI execution.
+      Alternative considerations:
+      - Option A (chosen): direct contact-surface wiring.
+      - Option B: defer via adapter layer.
+      Implementation details:
+      - Modify packages/foo/src/surface.ts and preserve existing contract imports.
+      Acceptance criteria:
+      - Ensure the new surface compiles and keeps existing imports intact.
     dependencies: []
   - id: final-regression
     description: |
+      Goal:
+      - Run final regression for the implementation plan.
+      Motivation:
+      - Keep terminal verification explicit.
+      Alternative considerations:
+      - Option A (chosen): full repository regression.
+      - Option B: package-only checks.
+      Implementation details:
+      - Execute final gate as command task.
       Re-run package tests only.
       Layer: e2e_regression
       Feature state: active
@@ -372,23 +444,68 @@ tasks:
   - id: implement-surface
     description: |
       Implement the contact surface wiring.
+      Goal:
+      - Add contact-surface wiring for new behavior.
+      Motivation:
+      - Keep contact contract explicit and reviewable.
+      Alternative considerations:
+      - Option A (chosen): direct contact-surface wiring.
+      - Option B: defer via adapter layer.
+      Implementation details:
+      - Update contact surface and preserve existing contracts.
       Layer: contact_surface
       Feature state: active
     prompt: |
-      Modify packages/foo/src/surface.ts and ensure the contract remains typed.
-      Acceptance criteria: ensure the new surface compiles and keeps existing imports intact.
+      Goal:
+      - Implement contact-surface wiring updates in a typed and deterministic way.
+      Motivation:
+      - Keep task execution intent explicit for delegated AI execution.
+      Alternative considerations:
+      - Option A (chosen): direct contact-surface wiring.
+      - Option B: defer via adapter layer.
+      Implementation details:
+      - Modify packages/foo/src/surface.ts and preserve existing contract imports.
+      Acceptance criteria:
+      - Ensure the new surface compiles and keeps existing imports intact.
     dependencies: []
   - id: add-regression-tests
     description: |
       Add regression coverage for the new surface.
+      Goal:
+      - Add regression proof for the surface change.
+      Motivation:
+      - Ensure behavior is preserved after wiring changes.
+      Alternative considerations:
+      - Option A (chosen): focused package regression tests.
+      - Option B: only full-suite verification.
+      Implementation details:
+      - Add focused deterministic regression coverage.
       Layer: app_regression
       Feature state: active
     prompt: |
-      Modify packages/foo/src/__tests__/surface.test.ts and ensure the regression covers the new path.
-      Acceptance criteria: verify the regression reproduces the new behavior deterministically.
+      Goal:
+      - Add deterministic regression coverage for the new contact-surface path.
+      Motivation:
+      - Prevent silent behavior regressions after wiring changes.
+      Alternative considerations:
+      - Option A (chosen): focused package regression tests.
+      - Option B: rely on full-suite tests only.
+      Implementation details:
+      - Modify packages/foo/src/__tests__/surface.test.ts to cover the new path.
+      Acceptance criteria:
+      - Verify the regression reproduces the new behavior deterministically.
     dependencies: [implement-surface]
   - id: final-regression
     description: |
+      Goal:
+      - Run final full-suite regression gate.
+      Motivation:
+      - Ensure all slices are validated together.
+      Alternative considerations:
+      - Option A (chosen): full repository regression.
+      - Option B: package-only checks.
+      Implementation details:
+      - Execute root-level test gate after all earlier tasks complete.
       Run the repository test suite as the terminal regression gate.
       Layer: e2e_regression
       Feature state: active
@@ -409,6 +526,190 @@ EOF
 
   if ! grep -q 'must depend on every earlier task; missing dependency on "implement-surface"' <<<"$output"; then
     echo "Expected missing dependency error, got: $output" >&2
+    return 1
+  fi
+}
+
+test_lint_requires_design_sections_for_prompt_tasks() {
+  local temp_plan
+  temp_plan=$(mktemp)
+  trap "rm -f $temp_plan" RETURN
+
+  cat > "$temp_plan" <<'EOF'
+name: "Invalid prompt task missing design sections"
+description: "Implementation plan missing structured rationale headings"
+onFinish: pull_request
+mergeMode: external_review
+repoUrl: git@github.com:example-org/acme-repo.git
+tasks:
+  - id: implement-bridge
+    description: |
+      Goal:
+      - Add bridge path for cost query wiring.
+      Motivation:
+      - Ensure query surface remains deterministic and testable.
+      Alternative considerations:
+      - Option A (chosen): bridge in app layer.
+      - Option B: distributed adapters.
+      Implementation details:
+      - Keep bridge in app layer and add deterministic tests.
+      Layer: app_bridge
+      Feature state: active
+      Acceptance criteria:
+      - Ensure bridge compiles.
+    prompt: |
+      Modify packages/app/src/main.ts and packages/app/src/headless.ts.
+      Ensure the bridge path is wired and tests remain stable.
+    dependencies: []
+  - id: final-regression
+    description: |
+      Goal:
+      - Run final full-suite regression gate.
+      Motivation:
+      - Ensure bridge changes remain stable.
+      Alternative considerations:
+      - Option A (chosen): full repository regression.
+      - Option B: package-only checks.
+      Implementation details:
+      - Execute root-level test gate after implementation task.
+      Run full regression gate.
+      Layer: app_regression
+      Feature state: active
+    command: "pnpm run test:all"
+    dependencies: [implement-bridge]
+EOF
+
+  local output
+  set +e
+  output=$(bash "$LINT_SCRIPT" "$temp_plan" 2>&1)
+  local exit_code=$?
+  set -e
+
+  if [[ $exit_code -eq 0 ]]; then
+    echo "Expected lint to reject prompt missing Goal/Motivation/Alternatives/Implementation sections" >&2
+    return 1
+  fi
+
+  if ! grep -q 'prompt missing required "Goal:" section' <<<"$output"; then
+    echo "Expected prompt Goal section lint error, got: $output" >&2
+    return 1
+  fi
+}
+
+test_lint_accepts_design_sections_for_prompt_tasks() {
+  local temp_plan
+  temp_plan=$(mktemp)
+  trap "rm -f $temp_plan" RETURN
+
+  cat > "$temp_plan" <<'EOF'
+name: "Valid prompt task with design sections"
+description: "Implementation plan with required design headings"
+onFinish: pull_request
+mergeMode: external_review
+repoUrl: git@github.com:example-org/acme-repo.git
+tasks:
+  - id: implement-bridge
+    description: |
+      Goal:
+      - Add bridge path for cost query wiring.
+      Motivation:
+      - Ensure query surface remains deterministic and testable.
+      Alternative considerations:
+      - Option A (chosen): bridge in app layer.
+      - Option B: distributed adapters.
+      Implementation details:
+      - Keep bridge in app layer and add deterministic tests.
+      Layer: app_bridge
+      Feature state: active
+      Acceptance criteria:
+      - Ensure bridge compiles and tests pass.
+    prompt: |
+      Goal:
+      - Implement deterministic app-bridge wiring for the cost query path.
+      Motivation:
+      - Keep execution instructions explicit for delegated AI execution.
+      Alternative considerations:
+      - Option A (chosen): bridge in app layer.
+      - Option B: distributed adapters.
+      Implementation details:
+      - Update packages/app/src/main.ts and packages/app/src/headless.ts.
+      - Preserve current call contracts and deterministic output expectations.
+      Acceptance criteria:
+      - Verify app tests pass and output remains stable.
+    dependencies: []
+  - id: final-regression
+    description: |
+      Goal:
+      - Run final full-suite regression gate.
+      Motivation:
+      - Ensure bridge changes remain stable.
+      Alternative considerations:
+      - Option A (chosen): full repository regression.
+      - Option B: package-only checks.
+      Implementation details:
+      - Execute root-level test gate after implementation task.
+      Run full regression gate.
+      Layer: app_regression
+      Feature state: active
+    command: "pnpm run test:all"
+    dependencies: [implement-bridge]
+EOF
+
+  bash "$LINT_SCRIPT" "$temp_plan" >/dev/null
+}
+
+test_lint_requires_design_sections_for_command_tasks() {
+  local temp_plan
+  temp_plan=$(mktemp)
+  trap "rm -f $temp_plan" RETURN
+
+  cat > "$temp_plan" <<'EOF'
+name: "Invalid command task missing design sections"
+description: "Implementation plan with command step missing rationale headings"
+onFinish: pull_request
+mergeMode: external_review
+repoUrl: git@github.com:example-org/acme-repo.git
+tasks:
+  - id: run-focused-verification
+    description: |
+      Run focused verification.
+      Layer: app_regression
+      Feature state: active
+      Acceptance criteria:
+      - Ensure focused tests pass.
+    command: "cd packages/app && pnpm test"
+    dependencies: []
+  - id: final-regression
+    description: |
+      Goal:
+      - Run final full-suite regression gate.
+      Motivation:
+      - Ensure bridge changes remain stable.
+      Alternative considerations:
+      - Option A (chosen): full repository regression.
+      - Option B: package-only checks.
+      Implementation details:
+      - Execute root-level test gate after implementation task.
+      Run full regression gate.
+      Layer: app_regression
+      Feature state: active
+    command: "pnpm run test:all"
+    dependencies: [run-focused-verification]
+EOF
+
+  local output
+  set +e
+  output=$(bash "$LINT_SCRIPT" "$temp_plan" 2>&1)
+  local exit_code=$?
+  set -e
+
+  if [[ $exit_code -eq 0 ]]; then
+    echo "Expected lint to reject command task missing rationale sections" >&2
+    return 1
+  fi
+
+  if ! grep -q 'Task "run-focused-verification" missing required "Goal:" section' <<<"$output"; then
+    echo "Expected command-task Goal section lint error, got: $output" >&2
     return 1
   fi
 }
@@ -478,6 +779,9 @@ run_test "Edge: stacked_basebranch_default" test_stacked_basebranch_master
 run_test "Lint: valid final pnpm run test:all gate" test_lint_valid_final_test_all
 run_test "Lint: reject non-test:all final gate" test_lint_rejects_non_test_all_final_gate
 run_test "Lint: reject final gate missing dependencies" test_lint_rejects_final_gate_missing_dependencies
+run_test "Lint: reject missing design sections for prompt tasks" test_lint_requires_design_sections_for_prompt_tasks
+run_test "Lint: accept prompt tasks with design sections" test_lint_accepts_design_sections_for_prompt_tasks
+run_test "Lint: reject missing design sections for command tasks" test_lint_requires_design_sections_for_command_tasks
 
 echo ""
 echo "========================================="

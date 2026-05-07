@@ -114,6 +114,44 @@ When writing `prompt` fields for LLM tasks:
 4. **Mention related files**: `"See packages/core/src/orchestrator.ts:102-124 for the PlanDefinition interface"`
 5. **Keep scope narrow**: one logical change per task, not "implement the entire feature"
 
+## Experiment artifact handoff templates (required when experiments are planned)
+
+When a workflow includes experiment design/proof work, use a three-task handoff sequence:
+
+1. **`experiment-write-*` prompt task**
+   - Include deterministic artifact path in `description` and `prompt` (for example `docs/context/inv-123/experiment-brief.md`)
+   - Require commit of the artifact in this task
+   - Include explicit verdict framing (`Supported`, `Rejected`, `Deferred`) and measurable thresholds
+
+2. **`implement-consume-*` prompt task**
+   - Depend on the corresponding experiment task
+   - Reference the exact artifact path in `description` and `prompt`
+   - Require explicit acceptance language that the implementation consumed artifact conclusions
+
+3. **`cleanup-experiment-artifacts-*` command task**
+   - Depend on experiment + implement (+ targeted verify task when present)
+   - Remove artifact and commit cleanup before final regression
+   - Keep command atomic (<=2 `&&`) and non-interactive
+
+Example cleanup command:
+
+```yaml
+- id: cleanup-experiment-artifacts-inv-123
+  description: |
+    Remove persisted experiment artifact after implementation handoff.
+    Layer: docs
+    Feature state: active
+    Files:
+    - docs/context/inv-123/experiment-brief.md
+    Change types:
+    - delete
+    Acceptance criteria:
+    - Artifact file is deleted.
+    - Cleanup commit exists before final regression.
+  command: 'rm -f docs/context/inv-123/experiment-brief.md && git add docs/context/inv-123/experiment-brief.md && git commit -m "cleanup(inv-123/experiment-brief): remove artifact after handoff"'
+  dependencies: [experiment-inv-123, implement-inv-123, verify-inv-123]
+```
+
 ## Delegated execution hints (best effort; not validated by default)
 
 Planning often **misses files** or **adds scope** later. These headings in a task `description` are **recommended**, **revisable**, and **not** required for `skill-doctor` or `lint-task-atomicity.sh` to pass. Optional advisory output: `bash skills/plan-to-invoker/scripts/lint-task-atomicity.sh --warn-delegation <plan.yaml>`.
