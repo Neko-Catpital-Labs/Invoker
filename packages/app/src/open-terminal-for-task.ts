@@ -22,6 +22,7 @@ import {
   spawnDetachedTerminal,
   type OpenTerminalResult,
 } from './terminal-external-launch.js';
+import { DEFAULT_WORKTREE_MAX_CONCURRENCY } from './execution-capacity.js';
 
 /** Persistence methods required to resolve terminal cwd / command for a task. */
 export interface OpenTerminalPersistence {
@@ -183,7 +184,7 @@ export async function openExternalTerminalForTask(
       const worktree = new WorktreeExecutor({
         worktreeBaseDir: path.resolve(invokerHome, 'worktrees'),
         cacheDir: path.resolve(invokerHome, 'repos'),
-        maxWorktrees: 5,
+        maxWorktrees: DEFAULT_WORKTREE_MAX_CONCURRENCY,
         agentRegistry: opts.executionAgentRegistry,
       });
       executorRegistry.register('worktree', worktree);

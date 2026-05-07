@@ -1,5 +1,5 @@
-const DEFAULT_ORCHESTRATOR_MAX_CONCURRENCY = 3;
-export const DEFAULT_WORKTREE_MAX_CONCURRENCY = 5;
+const DEFAULT_ORCHESTRATOR_MAX_CONCURRENCY = 6;
+export const DEFAULT_WORKTREE_MAX_CONCURRENCY = 6;
 
 export function resolveEffectiveMaxConcurrency(
   configuredMaxConcurrency: number | undefined,

@@ -15,7 +15,7 @@ describe('execution-capacity', () => {
   });
 
   it('falls back to safe defaults for invalid values', () => {
-    expect(resolveEffectiveMaxConcurrency(undefined, DEFAULT_WORKTREE_MAX_CONCURRENCY)).toBe(3);
-    expect(resolveEffectiveMaxConcurrency(0, 0)).toBe(3);
+    expect(resolveEffectiveMaxConcurrency(undefined, DEFAULT_WORKTREE_MAX_CONCURRENCY)).toBe(6);
+    expect(resolveEffectiveMaxConcurrency(0, 0)).toBe(6);
   });
 });
