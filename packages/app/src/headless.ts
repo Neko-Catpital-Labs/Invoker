@@ -115,7 +115,7 @@ function headlessHeartbeat(taskId: string, deps: Pick<HeadlessDeps, 'persistence
 function buildHeadlessApiCancelHooks(
   deps: HeadlessDeps,
   taskExecutor: TaskRunner,
-): Pick<ApiServerDeps, 'cancelTask' | 'cancelWorkflow' | 'killRunningTask'> {
+): Pick<ApiServerDeps, 'cancelTask' | 'cancelWorkflow' | 'killRunningTask' | 'deleteWorkflow'> {
   return {
     killRunningTask: (taskId: string) => taskExecutor.killActiveExecution(taskId),
     cancelTask: async (taskId: string) => {
@@ -135,6 +135,20 @@ function buildHeadlessApiCancelHooks(
         await taskExecutor.killActiveExecution(id);
       }
       return cmdResult.data;
+    },
+    deleteWorkflow: async (workflowId: string) => {
+      const allTasks = deps.orchestrator.getAllTasks();
+      const workflowTasks = allTasks.filter(
+        (t) =>
+          t.config.workflowId === workflowId &&
+          (t.status === 'running' || t.status === 'fixing_with_ai'),
+      );
+      for (const task of workflowTasks) {
+        await taskExecutor.killActiveExecution(task.id);
+      }
+      const envelope = makeEnvelope('delete-workflow', 'headless', 'workflow', { workflowId });
+      const cmdResult = await deps.commandService.deleteWorkflow(envelope);
+      if (!cmdResult.ok) throw new Error(cmdResult.error.message);
     },
   };
 }
