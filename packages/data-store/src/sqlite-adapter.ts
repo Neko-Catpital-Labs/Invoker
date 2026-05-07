@@ -282,7 +282,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
       this.flush();
       return;
     }
-    if (this.flushTimer) clearTimeout(this.flushTimer);
+    // Coalesce bursts onto the earliest pending flush to avoid timer churn.
+    if (this.flushTimer) return;
     this.flushTimer = setTimeout(() => {
       this.flush();
       this.flushTimer = null;
