@@ -73,6 +73,7 @@ export interface ApiServerDeps {
   rejectTaskAction?: (taskId: string, reason?: string) => Promise<void>;
   retryTaskAction?: (taskId: string) => Promise<{ started: TaskState[] }>;
   retryWorkflowAction?: (workflowId: string) => Promise<{ started: TaskState[] }>;
+  recreateWithRebaseAction?: (workflowId: string) => Promise<{ started: TaskState[] }>;
   killRunningTask?: (taskId: string) => Promise<void>;
   cancelTask?: (taskId: string) => Promise<{ cancelled: string[]; runningCancelled: string[] }>;
   cancelWorkflow?: (workflowId: string) => Promise<{ cancelled: string[]; runningCancelled: string[] }>;
@@ -162,6 +163,7 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
     rejectTaskAction,
     retryTaskAction,
     retryWorkflowAction,
+    recreateWithRebaseAction,
     killRunningTask,
     cancelTask,
     cancelWorkflow,
@@ -470,19 +472,25 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
         const workflowTarget = decodeURIComponent((wfRecreateWithRebaseMatch ?? wfRebaseAndRetryMatch)![1]);
         try {
           const workflowId = resolveHeadlessTargetWorkflowId(workflowTarget, persistence);
-          const started = await sharedRecreateWorkflowFromFreshBase(workflowId, {
-            orchestrator,
-            persistence,
-            taskExecutor,
-            logger: apiLogger,
-          });
-          await finalizeMutationWithGlobalTopup({
-            orchestrator,
-            taskExecutor,
-            logger: apiLogger,
-            context: isLegacy ? 'api.workflows.rebase-and-retry' : 'api.workflows.recreate-with-rebase',
-            started: started.filter(t => t.status === 'running'),
-          });
+          let started: TaskState[];
+          if (recreateWithRebaseAction) {
+            ({ started } = await recreateWithRebaseAction(workflowId));
+          } else {
+            const result = await sharedRecreateWorkflowFromFreshBase(workflowId, {
+              orchestrator,
+              persistence,
+              taskExecutor,
+              logger: apiLogger,
+            });
+            started = result;
+            await finalizeMutationWithGlobalTopup({
+              orchestrator,
+              taskExecutor,
+              logger: apiLogger,
+              context: isLegacy ? 'api.workflows.rebase-and-retry' : 'api.workflows.recreate-with-rebase',
+              started: result.filter(t => t.status === 'running'),
+            });
+          }
           if (isLegacy) {
             res.setHeader(
               'Deprecation',
