@@ -159,6 +159,10 @@ async function main() {
   const renewsPerCycle = envInt('REPRO_RENEWS_PER_CYCLE', defaults.renewsPerCycle);
   const maxCycles = envInt('REPRO_MAX_CYCLES', defaults.maxCycles);
   const exportEvery = envInt('REPRO_EXPORT_EVERY', defaults.exportEvery);
+  const flushDebounceMs = envInt(
+    'REPRO_FLUSH_DEBOUNCE_MS',
+    envInt('INVOKER_SQLITE_FLUSH_DEBOUNCE_MS', 0),
+  );
   const maxDbMb = envInt('REPRO_MAX_DB_MB', defaults.maxDbMb);
   const hardHeapLimitMb = envInt('REPRO_SQLITE_HARD_HEAP_LIMIT_MB', defaults.hardHeapLimitMb);
   const timeoutSec = envInt('REPRO_TIMEOUT_SEC', defaults.timeoutSec);
@@ -184,6 +188,7 @@ async function main() {
   console.error(
     `[repro] mode=${mode} rowsPerCycle=${rowsPerCycle} payloadBytes=${payloadBytes} renewsPerCycle=${renewsPerCycle} maxCycles=${maxCycles} hardHeapLimitMb=${hardHeapLimitMb} maxDbMb=${maxDbMb} timeoutSec=${timeoutSec}`
   );
+  console.error(`[repro] flushDebounceMs=${flushDebounceMs} exportEvery=${exportEvery}`);
 
   db.run(`
     CREATE TABLE workflow_mutation_intents (
@@ -229,6 +234,23 @@ async function main() {
     }
 
     emitMergeDiagnostics(rootWorkflow);
+    let dirty = false;
+    let nextFlushAt = 0;
+    const maybeFlush = (force = false) => {
+      if (!dirty && !force) return;
+      const flushAt = nowMs();
+      if (lastFlushAt > 0) {
+        flushIntervalTotalMs += flushAt - lastFlushAt;
+      }
+      lastFlushAt = flushAt;
+      flushCount += 1;
+      const dump = db.export();
+      fs.writeFileSync(dbPath, Buffer.from(dump));
+      dirty = false;
+      if (flushDebounceMs > 0) {
+        nextFlushAt = flushAt + flushDebounceMs;
+      }
+    };
     for (let cycle = 1; cycle <= maxCycles; cycle += 1) {
       fillLargeTables(db, rowsPerCycle, payloadBytes);
       seededIntentRows += rowsPerCycle;
@@ -241,21 +263,19 @@ async function main() {
           (cycle * renewsPerCycle) + i,
           'y'.repeat(payloadBytes),
         ]);
-        if (i % exportEvery === 0) {
-          const flushAt = nowMs();
-          if (lastFlushAt > 0) {
-            flushIntervalTotalMs += flushAt - lastFlushAt;
-          }
-          lastFlushAt = flushAt;
-          flushCount += 1;
-          const dump = db.export();
-          fs.writeFileSync(dbPath, Buffer.from(dump));
+        dirty = true;
+        if (flushDebounceMs <= 0) {
+          if (i % exportEvery === 0) maybeFlush();
+        } else {
+          if (nextFlushAt === 0) nextFlushAt = nowMs() + flushDebounceMs;
+          if (nowMs() >= nextFlushAt) maybeFlush();
         }
         if (i % 250 === 0) printMem(`cycle=${cycle} renew=${i}`);
         if (timeoutSec > 0 && (Date.now() - startedAt) / 1000 > timeoutSec) {
           throw new Error(`timeout guard reached (${timeoutSec}s) before OOM`);
         }
       }
+      if (dirty) maybeFlush(true);
       printMem(`cycle=${cycle} completed`);
       const dbSizeMb = fs.statSync(dbPath).size / MB;
       console.error(`[repro] db-on-disk=${dbSizeMb.toFixed(1)}MB`);
