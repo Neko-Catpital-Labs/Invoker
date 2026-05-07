@@ -102,10 +102,10 @@ describe('headless→owner delegation', () => {
       messageBus.onRequest('headless.exec', ownerHandler);
 
       // Headless process attempts to delegate
-      const delegated = await tryDelegateExec(['run', '/path/to/plan.yaml'], messageBus);
+      const outcome = await tryDelegateExec(['run', '/path/to/plan.yaml'], messageBus);
 
       // Verify delegation succeeded
-      expect(delegated).toBe(true);
+      expect(outcome.kind).toBe('delegated');
       expect(ownerHandler).toHaveBeenCalledWith(expect.objectContaining({
         args: ['run', '/path/to/plan.yaml'],
         noTrack: undefined,
@@ -129,9 +129,9 @@ describe('headless→owner delegation', () => {
       const ownerHandler = vi.fn(async () => ({ success: true }));
       messageBus.onRequest('headless.exec', ownerHandler);
 
-      const delegated = await tryDelegateExec(['retry-task', 'wf-1/task-1'], messageBus);
+      const outcome = await tryDelegateExec(['retry-task', 'wf-1/task-1'], messageBus);
 
-      expect(delegated).toBe(true);
+      expect(outcome.kind).toBe('delegated');
       expect(ownerHandler).toHaveBeenCalledWith(expect.objectContaining({
         args: ['retry-task', 'wf-1/task-1'],
         waitForApproval: undefined,
@@ -142,9 +142,9 @@ describe('headless→owner delegation', () => {
       const ownerHandler = vi.fn(async () => ({ success: true }));
       messageBus.onRequest('headless.exec', ownerHandler);
 
-      const delegated = await tryDelegateExec(['resume', 'wf-1'], messageBus);
+      const outcome = await tryDelegateExec(['resume', 'wf-1'], messageBus);
 
-      expect(delegated).toBe(true);
+      expect(outcome.kind).toBe('delegated');
       expect(ownerHandler).toHaveBeenCalledWith(expect.objectContaining({
         args: ['resume', 'wf-1'],
         waitForApproval: undefined,
@@ -155,9 +155,9 @@ describe('headless→owner delegation', () => {
       const ownerHandler = vi.fn(async () => ({ success: true }));
       messageBus.onRequest('headless.exec', ownerHandler);
 
-      const delegated = await tryDelegateExec(['approve', 'wf-1/task-1'], messageBus);
+      const outcome = await tryDelegateExec(['approve', 'wf-1/task-1'], messageBus);
 
-      expect(delegated).toBe(true);
+      expect(outcome.kind).toBe('delegated');
       expect(ownerHandler).toHaveBeenCalledWith(expect.objectContaining({
         args: ['approve', 'wf-1/task-1'],
         waitForApproval: undefined,
@@ -168,9 +168,9 @@ describe('headless→owner delegation', () => {
       const ownerHandler = vi.fn(async () => ({ success: true }));
       messageBus.onRequest('headless.exec', ownerHandler);
 
-      const delegated = await tryDelegateExec(['reject', 'wf-1/task-1', 'reason text'], messageBus);
+      const outcome = await tryDelegateExec(['reject', 'wf-1/task-1', 'reason text'], messageBus);
 
-      expect(delegated).toBe(true);
+      expect(outcome.kind).toBe('delegated');
       expect(ownerHandler).toHaveBeenCalledWith(expect.objectContaining({
         args: ['reject', 'wf-1/task-1', 'reason text'],
         waitForApproval: undefined,
@@ -181,12 +181,12 @@ describe('headless→owner delegation', () => {
       const ownerHandler = vi.fn(async () => ({ success: true }));
       messageBus.onRequest('headless.exec', ownerHandler);
 
-      const delegated = await tryDelegateExec(
+      const outcome = await tryDelegateExec(
         ['set', 'command', 'wf-1/task-1', 'new command'],
         messageBus,
       );
 
-      expect(delegated).toBe(true);
+      expect(outcome.kind).toBe('delegated');
       expect(ownerHandler).toHaveBeenCalledWith(expect.objectContaining({
         args: ['set', 'command', 'wf-1/task-1', 'new command'],
         waitForApproval: undefined,
@@ -197,12 +197,12 @@ describe('headless→owner delegation', () => {
       const ownerHandler = vi.fn(async () => ({ success: true }));
       messageBus.onRequest('headless.exec', ownerHandler);
 
-      const delegated = await tryDelegateExec(
+      const outcome = await tryDelegateExec(
         ['set', 'prompt', 'wf-1/task-1', 'updated prompt text'],
         messageBus,
       );
 
-      expect(delegated).toBe(true);
+      expect(outcome.kind).toBe('delegated');
       expect(ownerHandler).toHaveBeenCalledWith(expect.objectContaining({
         args: ['set', 'prompt', 'wf-1/task-1', 'updated prompt text'],
         waitForApproval: undefined,
@@ -213,14 +213,14 @@ describe('headless→owner delegation', () => {
       const ownerHandler = vi.fn(async () => ({ success: true }));
       messageBus.onRequest('headless.exec', ownerHandler);
 
-      const delegated = await tryDelegateExec(
+      const outcome = await tryDelegateExec(
         ['rebase', 'wf-1/task-1'],
         messageBus,
         undefined,
         true,
       );
 
-      expect(delegated).toBe(true);
+      expect(outcome.kind).toBe('delegated');
       expect(ownerHandler).toHaveBeenCalledWith(expect.objectContaining({
         args: ['rebase', 'wf-1/task-1'],
         noTrack: true,
@@ -232,14 +232,14 @@ describe('headless→owner delegation', () => {
       const ownerHandler = vi.fn(async () => ({ success: true }));
       messageBus.onRequest('headless.exec', ownerHandler);
 
-      const delegated = await tryDelegateExec(
+      const outcome = await tryDelegateExec(
         ['recreate-with-rebase', 'wf-1'],
         messageBus,
         undefined,
         true,
       );
 
-      expect(delegated).toBe(true);
+      expect(outcome.kind).toBe('delegated');
       expect(ownerHandler).toHaveBeenCalledWith(expect.objectContaining({
         args: ['recreate-with-rebase', 'wf-1'],
         noTrack: true,
@@ -249,15 +249,15 @@ describe('headless→owner delegation', () => {
   });
 
   describe('fallback to standalone when owner is unavailable', () => {
-    it('returns false when no owner handler is registered', async () => {
+    it('returns no-handler outcome when no owner handler is registered', async () => {
       // No handler registered — no owner present
-      const delegated = await tryDelegateExec(['run', '/path/to/plan.yaml'], messageBus);
+      const outcome = await tryDelegateExec(['run', '/path/to/plan.yaml'], messageBus);
 
       // Should fall back to standalone mode
-      expect(delegated).toBe(false);
+      expect(outcome.kind).toBe('no-handler');
     });
 
-    it('returns false when delegation times out (owner unresponsive)', async () => {
+    it('returns timeout outcome when delegation times out (owner unresponsive)', async () => {
       vi.useFakeTimers();
       messageBus.onRequest('headless.exec', async () => new Promise(() => {}));
 
@@ -268,7 +268,8 @@ describe('headless→owner delegation', () => {
       expect(tracked.settled).toBe(false);
 
       await vi.advanceTimersByTimeAsync(1);
-      await expect(delegatedPromise).resolves.toBe(false);
+      const outcome = await delegatedPromise;
+      expect(outcome.kind).toBe('timeout');
     });
   });
 
@@ -300,7 +301,8 @@ describe('headless→owner delegation', () => {
       expect(tracked.settled).toBe(false);
 
       await vi.advanceTimersByTimeAsync(1);
-      await expect(delegatedPromise).resolves.toBe(false);
+      const outcome = await delegatedPromise;
+      expect(outcome.kind).toBe('timeout');
     });
 
     it.each([
@@ -320,7 +322,8 @@ describe('headless→owner delegation', () => {
       expect(tracked.settled).toBe(false);
 
       await vi.advanceTimersByTimeAsync(1);
-      await expect(delegatedPromise).resolves.toBe(false);
+      const outcome = await delegatedPromise;
+      expect(outcome.kind).toBe('timeout');
     });
   });
 
@@ -338,16 +341,16 @@ describe('headless→owner delegation', () => {
     });
 
     it('distinguishes between "no owner" and "owner error"', async () => {
-      // No handler = no owner (should return false)
+      // No handler = no owner (should return no-handler outcome)
       const noOwner = await tryDelegateExec(['run', '/path/to/plan.yaml'], messageBus);
-      expect(noOwner).toBe(false);
+      expect(noOwner.kind).toBe('no-handler');
 
       // Handler registered = owner present
       messageBus.onRequest('headless.exec', async () => {
         throw new Error('Owner error');
       });
 
-      // Owner error should throw, not return false
+      // Owner error should throw, not return a non-delegated outcome
       await expect(tryDelegateExec(['run', '/path/to/plan.yaml'], messageBus)).rejects.toThrow(
         'Owner error',
       );
@@ -361,8 +364,8 @@ describe('headless→owner delegation', () => {
 
       // Run multiple delegations in sequence
       for (let i = 0; i < 5; i++) {
-        const delegated = await tryDelegateExec(['approve', `task-${i}`], messageBus);
-        expect(delegated).toBe(true);
+        const outcome = await tryDelegateExec(['approve', `task-${i}`], messageBus);
+        expect(outcome.kind).toBe('delegated');
       }
 
       expect(ownerHandler).toHaveBeenCalledTimes(5);
@@ -371,8 +374,8 @@ describe('headless→owner delegation', () => {
     it('always falls back when owner is unavailable (no race conditions)', async () => {
       // Run multiple attempts with no owner
       for (let i = 0; i < 5; i++) {
-        const delegated = await tryDelegateExec(['approve', `task-${i}`], messageBus);
-        expect(delegated).toBe(false);
+        const outcome = await tryDelegateExec(['approve', `task-${i}`], messageBus);
+        expect(outcome.kind).toBe('no-handler');
       }
     });
   });
@@ -394,8 +397,12 @@ describe('headless→owner delegation', () => {
 
       // With noTrack=true, delegation returns after receiving the response
       // without waiting for task settlement.
-      const delegated = await tryDelegateRun('/path/to/plan.yaml', messageBus, false, true);
-      expect(delegated).toBe(true);
+      const outcome = await tryDelegateRun('/path/to/plan.yaml', messageBus, false, true);
+      expect(outcome.kind).toBe('delegated');
+      if (outcome.kind === 'delegated') {
+        expect(outcome.workflowId).toBe('wf-test-123');
+        expect(outcome.tasks).toHaveLength(1);
+      }
     });
 
     it('times out when owner handler blocks on task execution (pre-fix behavior)', async () => {
@@ -404,9 +411,9 @@ describe('headless→owner delegation', () => {
         return new Promise(() => {}); // Never resolves — simulates await executeTasks()
       });
 
-      const delegated = await tryDelegateRun('/path/to/plan.yaml', messageBus, false, true);
+      const outcome = await tryDelegateRun('/path/to/plan.yaml', messageBus, false, true);
       // Delegation fails because the 5s timeout fires before the handler responds
-      expect(delegated).toBe(false);
+      expect(outcome.kind).toBe('timeout');
     }, 10_000);
 
     it('resume handler returns immediately with fire-and-forget execution', async () => {
@@ -420,8 +427,12 @@ describe('headless→owner delegation', () => {
         };
       });
 
-      const delegated = await tryDelegateResume('wf-existing', messageBus, false, true);
-      expect(delegated).toBe(true);
+      const outcome = await tryDelegateResume('wf-existing', messageBus, false, true);
+      expect(outcome.kind).toBe('delegated');
+      if (outcome.kind === 'delegated') {
+        expect(outcome.workflowId).toBe('wf-existing');
+        expect(outcome.tasks).toHaveLength(1);
+      }
     });
   });
 });

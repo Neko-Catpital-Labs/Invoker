@@ -8,6 +8,7 @@ import type { MessageBus } from '@invoker/transport';
 import { resolveInvokerHomeRoot } from './delete-all-snapshot.js';
 import { isHeadlessMutatingCommand } from './headless-command-classification.js';
 import {
+  isDelegated,
   resolveDelegationTimeoutMs,
   tryDelegateExec,
   tryDelegateQuery,
@@ -118,14 +119,14 @@ async function delegateMutation(
   if (command === 'run') {
     const planPath = args[1];
     if (!planPath) throw new Error('Missing plan file. Usage: --headless run <plan.yaml>');
-    return tryDelegateRun(planPath, bus, waitForApproval, noTrack, timeoutMs);
+    return isDelegated(await tryDelegateRun(planPath, bus, waitForApproval, noTrack, timeoutMs));
   }
   if (command === 'resume') {
     const workflowId = args[1];
     if (!workflowId) throw new Error('Missing workflowId. Usage: --headless resume <id>');
-    return tryDelegateResume(workflowId, bus, waitForApproval, noTrack, timeoutMs);
+    return isDelegated(await tryDelegateResume(workflowId, bus, waitForApproval, noTrack, timeoutMs));
   }
-  return tryDelegateExec(args, bus, waitForApproval, noTrack, timeoutMs);
+  return isDelegated(await tryDelegateExec(args, bus, waitForApproval, noTrack, timeoutMs));
 }
 
 async function delegateReadOnlyQuery(
