@@ -3,10 +3,14 @@
  *
  * Starts a real HTTP server on an ephemeral port with fully mocked deps.
  * Uses Node's built-in http module to send requests and assert responses.
+ *
+ * All write endpoints route through a WorkflowMutationFacade instance
+ * which wraps the mocked orchestrator, persistence, and taskExecutor.
  */
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest';
 import http from 'node:http';
 import { startApiServer, type ApiServer } from '../api-server.js';
+import { WorkflowMutationFacade } from '../workflow-mutation-facade.js';
 import { OrchestratorError, OrchestratorErrorCode } from '@invoker/workflow-core';
 
 // ── Helpers ──────────────────────────────────────────────────
@@ -72,8 +76,6 @@ let mocks: {
   persistence: Record<string, ReturnType<typeof vi.fn>>;
   executorRegistry: Record<string, ReturnType<typeof vi.fn>>;
   taskExecutor: Record<string, ReturnType<typeof vi.fn>>;
-  cancelTask: ReturnType<typeof vi.fn>;
-  cancelWorkflow: ReturnType<typeof vi.fn>;
   killRunningTask: ReturnType<typeof vi.fn>;
   deleteWorkflow: ReturnType<typeof vi.fn>;
   detachWorkflow: ReturnType<typeof vi.fn>;
@@ -112,6 +114,10 @@ function createMocks() {
         running: [{ taskId: 'task-1', description: 'test' }],
         queued: [],
       })),
+      cancelWorkflow: vi.fn(() => ({
+        cancelled: ['task-1'],
+        runningCancelled: ['task-1'],
+      })),
     },
     persistence: {
       listWorkflows: vi.fn(() => [{ id: 'wf-1', name: 'test', generation: 1 }]),
@@ -129,12 +135,19 @@ function createMocks() {
       fixWithAgent: vi.fn().mockResolvedValue(undefined),
       commitApprovedFix: vi.fn().mockResolvedValue(undefined),
     },
-    cancelTask: vi.fn().mockResolvedValue({ cancelled: ['task-1'], runningCancelled: ['task-1'] }),
-    cancelWorkflow: vi.fn().mockResolvedValue({ cancelled: ['task-1'], runningCancelled: ['task-1'] }),
     killRunningTask: vi.fn().mockResolvedValue(undefined),
     deleteWorkflow: vi.fn().mockResolvedValue(undefined),
     detachWorkflow: vi.fn().mockResolvedValue(undefined),
   };
+}
+
+function buildFacade(m: typeof mocks) {
+  return new WorkflowMutationFacade({
+    orchestrator: m.orchestrator as any,
+    persistence: m.persistence as any,
+    taskExecutor: m.taskExecutor as any,
+    killRunningTask: m.killRunningTask,
+  });
 }
 
 beforeAll(async () => {
@@ -145,10 +158,7 @@ beforeAll(async () => {
     orchestrator: mocks.orchestrator as any,
     persistence: mocks.persistence as any,
     executorRegistry: mocks.executorRegistry as any,
-    taskExecutor: mocks.taskExecutor as any,
-    cancelTask: mocks.cancelTask,
-    cancelWorkflow: mocks.cancelWorkflow,
-    killRunningTask: mocks.killRunningTask,
+    mutations: buildFacade(mocks),
     deleteWorkflow: mocks.deleteWorkflow,
     detachWorkflow: mocks.detachWorkflow,
   });
@@ -176,8 +186,6 @@ beforeEach(() => {
       if (typeof fn === 'function' && 'mockClear' in fn) fn.mockClear();
     }
   }
-  mocks.cancelTask.mockClear();
-  mocks.cancelWorkflow.mockClear();
   mocks.killRunningTask.mockClear();
   mocks.deleteWorkflow.mockClear();
   mocks.detachWorkflow.mockClear();
@@ -195,6 +203,7 @@ beforeEach(() => {
   mocks.orchestrator.editTaskType.mockReturnValue([makeTask()]);
   mocks.orchestrator.setTaskExternalGatePolicies.mockReturnValue([makeTask()]);
   mocks.orchestrator.cancelTask.mockReturnValue({ cancelled: ['task-1'], runningCancelled: ['task-1'] });
+  mocks.orchestrator.cancelWorkflow.mockReturnValue({ cancelled: ['task-1'], runningCancelled: ['task-1'] });
   mocks.orchestrator.getQueueStatus.mockReturnValue({
     maxConcurrency: 4, runningCount: 1,
     running: [{ taskId: 'task-1', description: 'test' }], queued: [],
@@ -204,8 +213,6 @@ beforeEach(() => {
   mocks.persistence.loadTasks.mockReturnValue([]);
   mocks.persistence.getEvents.mockReturnValue([{ taskId: 'task-1', eventType: 'started', timestamp: '2024-01-01' }]);
   mocks.persistence.getTaskOutput.mockReturnValue('hello world output');
-  mocks.cancelTask.mockResolvedValue({ cancelled: ['task-1'], runningCancelled: ['task-1'] });
-  mocks.cancelWorkflow.mockResolvedValue({ cancelled: ['task-1'], runningCancelled: ['task-1'] });
   mocks.killRunningTask.mockResolvedValue(undefined);
   mocks.deleteWorkflow.mockResolvedValue(undefined);
   mocks.taskExecutor.executeTasks.mockResolvedValue(undefined);
@@ -313,92 +320,32 @@ describe('GET /api/tasks/:id/output', () => {
 // ── Write endpoints ──────────────────────────────────────────
 
 describe('POST /api/tasks/:id/cancel', () => {
-  it('cancels task via cancelTask callback', async () => {
+  it('cancels task via facade', async () => {
     const res = await request(port, 'POST', '/api/tasks/task-1/cancel');
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
-    expect(mocks.cancelTask).toHaveBeenCalledWith('task-1');
+    expect(mocks.orchestrator.cancelTask).toHaveBeenCalledWith('task-1');
     expect(mocks.orchestrator.startExecution).toHaveBeenCalled();
-  });
-
-  it('falls back to orchestrator.cancelTask when callback not provided', async () => {
-    // Create a server without cancelTask callback
-    const noCancelMocks = createMocks();
-    const noCancelApi = startApiServer({
-      orchestrator: noCancelMocks.orchestrator as any,
-      persistence: noCancelMocks.persistence as any,
-      executorRegistry: noCancelMocks.executorRegistry as any,
-      taskExecutor: noCancelMocks.taskExecutor as any,
-      killRunningTask: noCancelMocks.killRunningTask,
-      // no cancelTask
-    });
-    await new Promise<void>((resolve) => {
-      if (noCancelApi.server.listening) resolve();
-      else noCancelApi.server.on('listening', resolve);
-    });
-    const noCancelPort = (noCancelApi.server.address() as any).port;
-
-    try {
-      const res = await request(noCancelPort, 'POST', '/api/tasks/task-1/cancel');
-      expect(res.status).toBe(200);
-      expect(res.body.ok).toBe(true);
-      expect(noCancelMocks.orchestrator.cancelTask).toHaveBeenCalledWith('task-1');
-      expect(noCancelMocks.orchestrator.startExecution).toHaveBeenCalled();
-    } finally {
-      await noCancelApi.close();
-    }
   });
 });
 
 describe('POST /api/workflows/:id/cancel', () => {
-  it('cancels workflow via cancelWorkflow callback', async () => {
+  it('cancels workflow via facade', async () => {
     const res = await request(port, 'POST', '/api/workflows/wf-1/cancel');
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
-    expect(mocks.cancelWorkflow).toHaveBeenCalledWith('wf-1');
+    expect(mocks.orchestrator.cancelWorkflow).toHaveBeenCalledWith('wf-1');
     expect(mocks.orchestrator.startExecution).toHaveBeenCalled();
-  });
-
-  it('falls back to shared cancelWorkflow when callback not provided', async () => {
-    const noCancelMocks = createMocks();
-    noCancelMocks.orchestrator.cancelWorkflow = vi.fn(() => ({
-      cancelled: ['task-1'],
-      runningCancelled: ['task-1'],
-    }));
-    const noCancelApi = startApiServer({
-      orchestrator: noCancelMocks.orchestrator as any,
-      persistence: noCancelMocks.persistence as any,
-      executorRegistry: noCancelMocks.executorRegistry as any,
-      taskExecutor: noCancelMocks.taskExecutor as any,
-      killRunningTask: noCancelMocks.killRunningTask,
-      // no cancelWorkflow
-    });
-    await new Promise<void>((resolve) => {
-      if (noCancelApi.server.listening) resolve();
-      else noCancelApi.server.on('listening', resolve);
-    });
-    const noCancelPort = (noCancelApi.server.address() as any).port;
-
-    try {
-      const res = await request(noCancelPort, 'POST', '/api/workflows/wf-1/cancel');
-      expect(res.status).toBe(200);
-      expect(res.body.ok).toBe(true);
-      expect(noCancelMocks.orchestrator.cancelWorkflow).toHaveBeenCalledWith('wf-1');
-      expect(noCancelMocks.orchestrator.startExecution).toHaveBeenCalled();
-    } finally {
-      await noCancelApi.close();
-    }
   });
 });
 
 describe('POST /api/tasks/:id/restart', () => {
-  it('restarts task via shared retryTask', async () => {
+  it('restarts task via facade retryTask', async () => {
     const res = await request(port, 'POST', '/api/tasks/task-1/restart');
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
     expect(res.body.action).toBe('restarted');
     expect(mocks.orchestrator.retryTask).toHaveBeenCalledWith('task-1');
-    expect(mocks.killRunningTask).toHaveBeenCalledWith('task-1');
   });
 
   it('returns 400 on error', async () => {
@@ -454,7 +401,7 @@ describe('POST /api/tasks/:id/restart', () => {
 });
 
 describe('POST /api/tasks/:id/approve', () => {
-  it('approves task', async () => {
+  it('approves task via facade', async () => {
     const res = await request(port, 'POST', '/api/tasks/task-1/approve');
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
@@ -499,15 +446,7 @@ describe('POST /api/tasks/:id/approve', () => {
     expect(res.body.error).toBe('not awaiting approval');
   });
 
-  // Step 16 (`docs/architecture/task-invalidation-roadmap.md`,
-  // chart row "Approve or reject fix"): the api-server's
-  // approve POST is the chart's **second** non-invalidating
-  // surface (alongside `gate-policy` from Step 15). It MUST
-  // route to `Orchestrator.approve` (or `resumeTaskAfterFixApproval`
-  // / `commitApprovedFix` for the fix branch) and MUST NOT
-  // trigger any retry/recreate spy on the orchestrator. By the
-  // time approve runs the task is already terminal — cancel
-  // here would also be a generation-bumping mistake.
+  // Step 16: approve POST does not trigger retry/recreate/cancel routes
   it('Step 16: approve POST does not trigger retry/recreate/cancel routes', async () => {
     mocks.orchestrator.recreateTask = vi.fn();
     mocks.orchestrator.recreateWorkflow = vi.fn();
@@ -523,38 +462,6 @@ describe('POST /api/tasks/:id/approve', () => {
     expect(mocks.orchestrator.recreateWorkflow).not.toHaveBeenCalled();
     expect(mocks.orchestrator.cancelTask).not.toHaveBeenCalled();
     expect(mocks.orchestrator.cancelWorkflow).not.toHaveBeenCalled();
-  });
-
-  it('uses approveTaskAction when provided', async () => {
-    const approveTaskAction = vi.fn().mockResolvedValue({ started: [] });
-    const isolatedApi = startApiServer({
-      orchestrator: mocks.orchestrator as any,
-      persistence: mocks.persistence as any,
-      executorRegistry: mocks.executorRegistry as any,
-      taskExecutor: mocks.taskExecutor as any,
-      approveTaskAction,
-      cancelTask: mocks.cancelTask,
-      cancelWorkflow: mocks.cancelWorkflow,
-      killRunningTask: mocks.killRunningTask,
-    });
-    await new Promise<void>((resolve) => {
-      if (isolatedApi.server.listening) {
-        resolve();
-      } else {
-        isolatedApi.server.on('listening', resolve);
-      }
-    });
-    const addr = isolatedApi.server.address();
-    const isolatedPort = typeof addr === 'object' && addr ? addr.port : isolatedApi.port;
-
-    try {
-      const res = await request(isolatedPort, 'POST', '/api/tasks/task-1/approve');
-      expect(res.status).toBe(200);
-      expect(approveTaskAction).toHaveBeenCalledWith('task-1');
-      expect(mocks.orchestrator.approve).not.toHaveBeenCalled();
-    } finally {
-      await isolatedApi.close();
-    }
   });
 });
 
@@ -592,16 +499,7 @@ describe('POST /api/tasks/:id/reject', () => {
     expect(mocks.orchestrator.reject).not.toHaveBeenCalled();
   });
 
-  // Step 16 (`docs/architecture/task-invalidation-roadmap.md`,
-  // chart row "Approve or reject fix"): the api-server's
-  // reject POST is the revert-class half of the second
-  // non-invalidating surface (alongside Step 15's gate-policy
-  // POST). It MUST route to `Orchestrator.reject` (or
-  // `revertConflictResolution` for the fix-flow branch) and
-  // MUST NOT trigger any retry/recreate/cancel spy on the
-  // orchestrator. By the time reject runs the task is already
-  // terminal — invalidating would be a generation-bumping
-  // mistake.
+  // Step 16: reject POST does not trigger retry/recreate/cancel routes (non-fix path)
   it('Step 16: reject POST does not trigger retry/recreate/cancel routes (non-fix path)', async () => {
     mocks.orchestrator.recreateTask = vi.fn();
     mocks.orchestrator.recreateWorkflow = vi.fn();
@@ -641,40 +539,6 @@ describe('POST /api/tasks/:id/reject', () => {
     expect(mocks.orchestrator.recreateWorkflow).not.toHaveBeenCalled();
     expect(mocks.orchestrator.cancelTask).not.toHaveBeenCalled();
     expect(mocks.orchestrator.cancelWorkflow).not.toHaveBeenCalled();
-  });
-
-  it('uses rejectTaskAction when provided', async () => {
-    const rejectTaskAction = vi.fn().mockResolvedValue(undefined);
-    const isolatedApi = startApiServer({
-      orchestrator: mocks.orchestrator as any,
-      persistence: mocks.persistence as any,
-      executorRegistry: mocks.executorRegistry as any,
-      taskExecutor: mocks.taskExecutor as any,
-      rejectTaskAction,
-      cancelTask: mocks.cancelTask,
-      cancelWorkflow: mocks.cancelWorkflow,
-      killRunningTask: mocks.killRunningTask,
-      deleteWorkflow: mocks.deleteWorkflow,
-      detachWorkflow: mocks.detachWorkflow,
-    });
-    await new Promise<void>((resolve) => {
-      if (isolatedApi.server.listening) {
-        resolve();
-      } else {
-        isolatedApi.server.on('listening', resolve);
-      }
-    });
-    const addr = isolatedApi.server.address();
-    const isolatedPort = typeof addr === 'object' && addr ? addr.port : isolatedApi.port;
-
-    try {
-      const res = await request(isolatedPort, 'POST', '/api/tasks/task-1/reject', { reason: 'bad' });
-      expect(res.status).toBe(200);
-      expect(rejectTaskAction).toHaveBeenCalledWith('task-1', 'bad');
-      expect(mocks.orchestrator.reject).not.toHaveBeenCalled();
-    } finally {
-      await isolatedApi.close();
-    }
   });
 });
 
@@ -718,7 +582,7 @@ describe('POST /api/tasks/:id/edit-prompt', () => {
     expect(res.body.action).toBe('prompt_edited');
     expect(mocks.orchestrator.editTaskPrompt).toHaveBeenCalledWith('task-1', 'do the thing');
     expect(mocks.orchestrator.editTaskCommand).not.toHaveBeenCalled();
-    // Endpoint dispatches any newly-runnable tasks via the executor.
+    // Facade dispatches any newly-runnable tasks via the executor.
     expect(mocks.taskExecutor.executeTasks).toHaveBeenCalled();
   });
 
@@ -779,7 +643,7 @@ describe('POST /api/tasks/:id/edit-type', () => {
     expect(res.body.error).toContain('Missing "executorType"');
   });
 
-  it('forwards a remoteTargetId-only change (host change) so the orchestrator can take the recreate-class branch', async () => {
+  it('forwards a remoteTargetId-only change (host change)', async () => {
     const res = await request(port, 'POST', '/api/tasks/task-1/edit-type', {
       executorType: 'ssh',
       remoteTargetId: 'remote-b',
@@ -787,11 +651,6 @@ describe('POST /api/tasks/:id/edit-type', () => {
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
     expect(res.body.action).toBe('type_edited');
-    // Both args are forwarded — `Orchestrator.editTaskType` uses them
-    // to compute the host-key and pick the recreate-class fork
-    // (see `MUTATION_POLICIES.remoteTargetId` and orchestrator unit
-    // coverage). No new public surface; the recreate-vs-retry choice
-    // is internal.
     expect(mocks.orchestrator.editTaskType).toHaveBeenCalledWith('task-1', 'ssh', 'remote-b');
     expect(mocks.taskExecutor.executeTasks).toHaveBeenCalled();
   });
@@ -806,7 +665,7 @@ describe('POST /api/tasks/:id/edit-agent', () => {
     expect(mocks.orchestrator.editTaskAgent).toHaveBeenCalledWith('task-1', 'codex');
     expect(mocks.orchestrator.editTaskCommand).not.toHaveBeenCalled();
     expect(mocks.orchestrator.editTaskPrompt).not.toHaveBeenCalled();
-    // Endpoint dispatches any newly-runnable tasks via the executor.
+    // Facade dispatches any newly-runnable tasks via the executor.
     expect(mocks.taskExecutor.executeTasks).toHaveBeenCalled();
   });
 
@@ -840,12 +699,7 @@ describe('POST /api/tasks/:id/gate-policy', () => {
     expect(res.body.error).toContain('Missing non-empty "updates" array');
   });
 
-  // Step 15 (`docs/architecture/task-invalidation-roadmap.md`,
-  // chart row "Change external gate policy"): the api-server's
-  // gate-policy POST is the chart's intentional non-invalidating
-  // surface. It MUST route to `setTaskExternalGatePolicies` and
-  // MUST NOT trigger any retry/recreate spy on the orchestrator.
-  // This pins the cross-cutting contract at the http boundary.
+  // Step 15: gate-policy POST does not trigger retry/recreate routes
   it('Step 15: gate-policy POST does not trigger retry/recreate routes', async () => {
     mocks.orchestrator.recreateTask = vi.fn();
     mocks.orchestrator.recreateWorkflow = vi.fn();
@@ -869,7 +723,7 @@ describe('POST /api/tasks/:id/gate-policy', () => {
 });
 
 describe('POST /api/workflows/:id/restart', () => {
-  it('restarts workflow via shared function', async () => {
+  it('restarts workflow via facade recreateWorkflow', async () => {
     mocks.orchestrator.recreateWorkflow = vi.fn(() => [makeTask()]);
     const res = await request(port, 'POST', '/api/workflows/wf-1/restart');
     expect(res.status).toBe(200);
@@ -954,14 +808,9 @@ describe('POST /api/workflows/:id/rebase-and-retry', () => {
   });
 });
 
-// Step 14 (`docs/architecture/task-invalidation-roadmap.md`,
-// chart "Topology inconsistency"): live-workflow topology
-// mutations now route through `Orchestrator.forkWorkflow` and
-// surfaces expose an explicit `fork` verb. The api-server
-// returns both the source and forked workflow ids so callers
-// can follow the new workflow.
+// Step 14: live-workflow topology mutations route through Orchestrator.forkWorkflow
 describe('POST /api/workflows/:id/fork', () => {
-  it('forks the workflow via shared forkWorkflow and returns both ids', async () => {
+  it('forks the workflow via facade and returns both ids', async () => {
     const res = await request(port, 'POST', '/api/workflows/wf-1/fork');
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
@@ -1015,7 +864,7 @@ describe('POST /api/workflows/:id/recreate-with-rebase', () => {
 });
 
 describe('DELETE /api/workflows/:id', () => {
-  it('deletes workflow via shared deleteWorkflow bridge', async () => {
+  it('deletes workflow via deleteWorkflow callback', async () => {
     const res = await request(port, 'DELETE', '/api/workflows/wf-1');
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);

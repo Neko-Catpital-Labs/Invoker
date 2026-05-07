@@ -102,6 +102,7 @@ import {
 import { backupPlan } from './plan-backup.js';
 // applyPlanDefinitionDefaults removed — parsePlan() applies defaults internally
 import { startApiServer, type ApiServer } from './api-server.js';
+import { WorkflowMutationFacade } from './workflow-mutation-facade.js';
 import {
   runHeadless,
   isDelegated,
@@ -2290,66 +2291,14 @@ if (isHeadless) {
         orchestrator,
         persistence,
         executorRegistry,
-        taskExecutor: requireTaskExecutor(),
-        autoApproveAIFixes: invokerConfig.autoApproveAIFixes,
-        approveTaskAction: async (taskId: string) => {
-          const workflowId = orchestrator.getTask(taskId)?.config.workflowId;
-          return runWorkflowMutation(workflowId, 'normal', 'api:approve-task', [taskId], async () => {
-            const { started } = await performSharedApproveTask(taskId, 'api');
-            await finalizeMutationWithGlobalTopup({
-              orchestrator,
-              taskExecutor: requireTaskExecutor(),
-              logger,
-              context: 'api.tasks.approve',
-              started,
-            });
-            return { started };
-          });
-        },
-        rejectTaskAction: async (taskId: string, reason?: string) => {
-          const workflowId = orchestrator.getTask(taskId)?.config.workflowId;
-          await runWorkflowMutation(workflowId, 'normal', 'api:reject-task', [taskId, reason], async () => {
-            const envelope = makeEnvelope('reject', 'surface', 'task', { taskId, reason });
-            const result = await commandService.reject(envelope);
-            if (!result.ok) throw new Error(result.error.message);
-          });
-        },
-        retryWorkflowAction: async (workflowId: string) => {
-          return runWorkflowMutation(workflowId, 'normal', 'api:retry-workflow', [workflowId], async () => {
-            const envelope = makeEnvelope('retry-workflow', 'surface', 'workflow', { workflowId });
-            const result = await commandService.retryWorkflow(envelope);
-            if (!result.ok) throw new Error(result.error.message);
-            await finalizeMutationWithGlobalTopup({
-              orchestrator,
-              taskExecutor: requireTaskExecutor(),
-              logger,
-              context: 'api.workflows.retry',
-              started: result.data.filter(t => t.status === 'running'),
-            });
-            return { started: result.data };
-          });
-        },
-        recreateWithRebaseAction: async (workflowId: string) => {
-          return runWorkflowMutation(workflowId, 'high', 'api:recreate-with-rebase', [workflowId], async () => {
-            const started = await recreateWithRebase(workflowId, {
-              orchestrator,
-              persistence,
-              taskExecutor: requireTaskExecutor(),
-              logger,
-            });
-            await finalizeMutationWithGlobalTopup({
-              orchestrator,
-              taskExecutor: requireTaskExecutor(),
-              logger,
-              context: 'api.workflows.recreate-with-rebase',
-              started: started.filter(t => t.status === 'running'),
-            });
-            return { started };
-          });
-        },
-        killRunningTask,
-        cancelTask: performCancelTask,
-        cancelWorkflow: performCancelWorkflow,
+        mutations: new WorkflowMutationFacade({
+          logger,
+          orchestrator,
+          persistence,
+          taskExecutor: requireTaskExecutor(),
+          autoApproveAIFixes: invokerConfig.autoApproveAIFixes,
+          killRunningTask,
+        }),
         deleteWorkflow: performDeleteWorkflow,
         detachWorkflow: performDetachWorkflow,
       });
