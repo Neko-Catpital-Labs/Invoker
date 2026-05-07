@@ -6,6 +6,7 @@
  */
 
 import type { CommandEnvelope, CommandResult } from '@invoker/contracts';
+import { OrchestratorError } from './orchestrator.js';
 import type { Orchestrator, ExternalGatePolicyUpdate, TaskReplacementDef } from './orchestrator.js';
 import type { TaskState } from '@invoker/workflow-graph';
 
@@ -473,10 +474,11 @@ export class CommandService {
       const data = await this.serializeForWorkflow(workflowId, fn);
       return { ok: true, data };
     } catch (err) {
+      const code = err instanceof OrchestratorError ? err.code : errorCode;
       return {
         ok: false,
         error: {
-          code: errorCode,
+          code,
           message: err instanceof Error ? err.message : String(err),
         },
       };
