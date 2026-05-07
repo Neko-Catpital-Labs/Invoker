@@ -24,7 +24,7 @@
  * { kind: "pub",     channel: string, body: unknown }                  — publish
  * { kind: "req",     channel: string, body: unknown, reqId: string }   — request
  * { kind: "res",     channel: string, body: unknown, reqId: string }   — response
- * { kind: "err",     channel: string, message: string, reqId: string } — error response
+ * { kind: "err",     channel: string, code: string, message: string, reqId: string } — error response
  * ```
  *
  * The `kind` field maps 1:1 to a future gRPC `oneof` message type.
@@ -43,6 +43,7 @@ import type {
   RequestHandler,
   Unsubscribe,
 } from './message-bus.js';
+import { TransportError, TransportErrorCode } from './transport-error.js';
 
 // ---------------------------------------------------------------------------
 // Wire envelope types
@@ -71,6 +72,7 @@ interface ResEnvelope {
 interface ErrEnvelope {
   kind: 'err';
   channel: string;
+  code: TransportErrorCode;
   message: string;
   reqId: string;
 }
@@ -348,6 +350,7 @@ export class IpcBus implements MessageBus {
       const errEnv: ErrEnvelope = {
         kind: 'err',
         channel: env.channel,
+        code: TransportErrorCode.NO_HANDLER,
         message: `No request handler registered for channel: ${env.channel}`,
         reqId: env.reqId,
       };
@@ -367,6 +370,7 @@ export class IpcBus implements MessageBus {
       const errEnv: ErrEnvelope = {
         kind: 'err',
         channel: env.channel,
+        code: e instanceof TransportError ? e.code : TransportErrorCode.HANDLER_ERROR,
         message: e instanceof Error ? e.message : String(e),
         reqId: env.reqId,
       };
@@ -381,7 +385,7 @@ export class IpcBus implements MessageBus {
       if (env.kind === 'res') {
         pending.resolve(env.body);
       } else {
-        pending.reject(new Error(env.message));
+        pending.reject(new TransportError(env.code ?? TransportErrorCode.HANDLER_ERROR, env.message));
       }
       return;
     }
@@ -399,7 +403,7 @@ export class IpcBus implements MessageBus {
     }
 
     relay.awaiting.delete(source);
-    const noHandlerError = env.message === `No request handler registered for channel: ${relay.channel}`;
+    const noHandlerError = env.code === TransportErrorCode.NO_HANDLER;
     if (!noHandlerError || relay.awaiting.size === 0) {
       this.relayedRequests.delete(env.reqId);
       this.sendToSocket(relay.source, env);
@@ -505,7 +509,7 @@ export class IpcBus implements MessageBus {
 
     // Reject all pending requests.
     for (const [, pending] of this.pendingRequests) {
-      pending.reject(new Error('IpcBus disconnected'));
+      pending.reject(new TransportError(TransportErrorCode.DISCONNECTED, 'IpcBus disconnected'));
     }
     this.pendingRequests.clear();
 
