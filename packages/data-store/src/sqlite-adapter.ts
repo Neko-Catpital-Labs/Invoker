@@ -73,6 +73,10 @@ export class SQLiteAdapter implements PersistenceAdapter {
   private readOnly: boolean;
   private dirty = false;
   private flushDelayMs: number;
+  private flushWarnThresholdMs: number;
+  private flushWarnDbSizeBytes: number;
+  private flushWarnCooldownMs: number;
+  private lastFlushWarnAtMs = 0;
   private outputTailLimit: number;
   private outputTailCache = new Map<string, OutputChunk[]>();
   private writeTransactionDepth = 0;
@@ -85,6 +89,9 @@ export class SQLiteAdapter implements PersistenceAdapter {
     this.flushDelayMs = this.dbPath
       ? Number(process.env.INVOKER_SQLITE_FLUSH_DEBOUNCE_MS ?? 0)
       : 0;
+    this.flushWarnThresholdMs = Number(process.env.INVOKER_SQLITE_FLUSH_WARN_THRESHOLD_MS ?? 250);
+    this.flushWarnDbSizeBytes = Number(process.env.INVOKER_SQLITE_FLUSH_WARN_DB_MB ?? 256) * 1024 * 1024;
+    this.flushWarnCooldownMs = Number(process.env.INVOKER_SQLITE_FLUSH_WARN_COOLDOWN_MS ?? 60_000);
     this.outputTailLimit = options?.outputTailLimit ?? 100;
     this.db.run('PRAGMA foreign_keys = ON');
     this.initSchema();
@@ -263,12 +270,23 @@ export class SQLiteAdapter implements PersistenceAdapter {
   /** Flush DB to disk (no-op for :memory:). */
   private flush(): void {
     if (!this.dbPath || !this.dirty) return;
+    const startedAt = Date.now();
     const dir = dirname(this.dbPath);
     mkdirSync(dir, { recursive: true });
     const tmpPath = `${this.dbPath}.tmp`;
-    writeFileSync(tmpPath, Buffer.from(this.db.export()));
+    const exported = Buffer.from(this.db.export());
+    writeFileSync(tmpPath, exported);
     renameSync(tmpPath, this.dbPath);
     this.dirty = false;
+    const elapsedMs = Date.now() - startedAt;
+    const shouldWarnElapsed = Number.isFinite(this.flushWarnThresholdMs) && elapsedMs >= this.flushWarnThresholdMs;
+    const shouldWarnSize = Number.isFinite(this.flushWarnDbSizeBytes) && exported.length >= this.flushWarnDbSizeBytes;
+    if ((shouldWarnElapsed || shouldWarnSize) && Date.now() - this.lastFlushWarnAtMs >= this.flushWarnCooldownMs) {
+      this.lastFlushWarnAtMs = Date.now();
+      process.stderr.write(
+        `[sqlite-flush] slow-or-large flush elapsedMs=${elapsedMs} sizeBytes=${exported.length} debounceMs=${this.flushDelayMs}\n`,
+      );
+    }
   }
 
   /** Debounced flush — coalesces rapid writes into a single I/O. */
