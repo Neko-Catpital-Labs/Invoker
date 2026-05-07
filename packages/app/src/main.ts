@@ -1700,7 +1700,6 @@ if (isHeadless) {
       setTaskDispatcherExecutor: setDispatcherTaskExecutor,
       cancelTask: (taskId: string) => performCancelTask(taskId),
       cancelWorkflow: (workflowId: string) => performCancelWorkflow(workflowId),
-      deleteWorkflow: (workflowId: string) => performDeleteWorkflow(workflowId),
       waitForApproval: payload.waitForApproval,
       noTrack: payload.noTrack,
       preemptTaskSubgraph: (taskId: string) => preemptTaskSubgraph(taskId),

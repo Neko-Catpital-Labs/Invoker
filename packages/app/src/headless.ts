@@ -90,7 +90,6 @@ export interface HeadlessDeps {
   preemptWorkflowExecution?: (workflowId: string) => Promise<WorkflowCancelResult>;
   cancelTask?: (taskId: string) => Promise<{ cancelled: string[]; runningCancelled: string[] }>;
   cancelWorkflow?: (workflowId: string) => Promise<{ cancelled: string[]; runningCancelled: string[] }>;
-  deleteWorkflow?: (workflowId: string) => Promise<void>;
   waitForApproval?: boolean;
   noTrack?: boolean;
   isStandaloneOwnerIdle?: () => boolean;
@@ -2115,13 +2114,11 @@ async function headlessOpenTerminal(taskId: string, deps: HeadlessDeps): Promise
   }
 }
 
-async function headlessDeleteWorkflow(workflowId: string, deps: Pick<HeadlessDeps, 'commandService' | 'deleteWorkflow'>): Promise<void> {
+async function headlessDeleteWorkflow(workflowId: string, deps: HeadlessDeps): Promise<void> {
   if (!workflowId) throw new Error('Missing workflowId. Usage: --headless delete-workflow <workflowId>');
-  if (deps.deleteWorkflow) {
-    await deps.deleteWorkflow(workflowId);
-    process.stdout.write(`Deleted workflow: ${workflowId}\n`);
-    return;
-  }
+  // Preempt running tasks (kill processes + cancel) — matches owner-mode bridge contract
+  await preemptWorkflowExecution(workflowId, deps);
+  // Serialized via CommandService: DB delete + memory clear + scheduler cleanup + removal deltas
   const envelope = makeEnvelope('delete-workflow', 'headless', 'workflow', { workflowId });
   const result = await deps.commandService.deleteWorkflow(envelope);
   if (!result.ok) throw new Error(result.error.message);
