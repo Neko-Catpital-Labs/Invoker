@@ -419,7 +419,7 @@ export function App() {
     );
     if (!confirmed) return;
     try {
-      await invoker.deleteAllWorkflows();
+      await invoker.deleteAllWorkflowsBulk();
       clearTasks();
       setHasLoadedPlan(false);
       setHasStarted(false);
