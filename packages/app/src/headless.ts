@@ -15,7 +15,6 @@ import type { AgentSessionData } from '@invoker/contracts';
 import { OrchestratorErrorCode } from '@invoker/workflow-core';
 import type { Orchestrator, CommandService, TaskDelta, TaskState } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
-import { createDeleteAllSnapshot } from './delete-all-snapshot.js';
 import { Channels } from '@invoker/transport';
 import type { MessageBus } from '@invoker/transport';
 import {
@@ -33,6 +32,7 @@ import { backupPlan } from './plan-backup.js';
 import { startApiServer, type ApiServerDeps } from './api-server.js';
 import {
   approveTask,
+  deleteAllWorkflows as sharedDeleteAllWorkflows,
   fixWithAgentAction,
   rebaseAndRetry,
   recreateWithRebase,
@@ -759,14 +759,16 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
     case 'delete-all':
       assertDeleteAllEnabled();
       {
-        const snapshot = createDeleteAllSnapshot();
-        if (snapshot) {
-          process.stderr.write(`[headless] delete-all snapshot: ${snapshot}\n`);
+        const { snapshotPath } = sharedDeleteAllWorkflows({
+          logger: deps.logger,
+          orchestrator: deps.orchestrator,
+        });
+        if (snapshotPath) {
+          process.stderr.write(`[headless] delete-all snapshot: ${snapshotPath}\n`);
         } else {
           process.stderr.write('[headless] delete-all snapshot skipped: DB file does not exist yet\n');
         }
       }
-      deps.orchestrator.deleteAllWorkflows();
       process.stdout.write('All workflows deleted.\n');
       break;
     case 'open-terminal':
