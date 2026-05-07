@@ -10,6 +10,7 @@ import type {
   RequestHandler,
   Unsubscribe,
 } from './message-bus.js';
+import { TransportError, TransportErrorCode } from './transport-error.js';
 
 export class LocalBus implements MessageBus {
   private subscribers = new Map<string, Set<MessageHandler>>();
@@ -49,7 +50,10 @@ export class LocalBus implements MessageBus {
   async request<Req, Res>(channel: string, message: Req): Promise<Res> {
     const handler = this.requestHandlers.get(channel);
     if (!handler) {
-      throw new Error(`No request handler registered for channel: ${channel}`);
+      throw new TransportError(
+        TransportErrorCode.NO_HANDLER,
+        `No request handler registered for channel: ${channel}`,
+      );
     }
     return handler(message) as Promise<Res>;
   }

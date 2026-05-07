@@ -1,6 +1,6 @@
 import { resolve as resolvePath } from 'node:path';
 
-import type { MessageBus } from '@invoker/transport';
+import { TransportError, TransportErrorCode, type MessageBus } from '@invoker/transport';
 import type { TaskState } from '@invoker/workflow-core';
 
 import {
@@ -136,7 +136,7 @@ export async function tryPingHeadlessOwner(
       delegationLog(`${traceId} timeout timeoutMs=${timeoutMs}`);
       return null;
     }
-    if (err instanceof Error && err.message.includes('No request handler registered for channel')) {
+    if (err instanceof TransportError && err.code === TransportErrorCode.NO_HANDLER) {
       delegationLog(`${traceId} no-handler`);
       return null;
     }
@@ -182,7 +182,7 @@ export async function tryDelegateQuery(
       delegationLog(`${traceId} timeout timeoutMs=${timeoutMs}`);
       return null;
     }
-    if (err instanceof Error && err.message.includes('No request handler registered for channel')) {
+    if (err instanceof TransportError && err.code === TransportErrorCode.NO_HANDLER) {
       delegationLog(`${traceId} no-handler`);
       return null;
     }
@@ -222,7 +222,7 @@ async function tryDelegate(
       delegationLog(`${traceId} timeout channel=${channel} timeoutMs=${options.timeoutMs ?? 5_000}`);
       return false;
     }
-    if (err instanceof Error && err.message.includes('No request handler registered for channel')) {
+    if (err instanceof TransportError && err.code === TransportErrorCode.NO_HANDLER) {
       delegationLog(`${traceId} no-handler channel=${channel}`);
       return false;
     }
