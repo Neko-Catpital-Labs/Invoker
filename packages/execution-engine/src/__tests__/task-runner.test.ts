@@ -2460,6 +2460,11 @@ describe('TaskRunner', () => {
       };
       (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
       (executor as any).removeMergeWorktree = async () => {};
+      (executor as any).authorPrBodyWithSkill = vi.fn().mockResolvedValue({
+        body: '## Summary\n\nAuthored body',
+        sessionId: 'sess-pr-ext',
+        agentName: 'codex',
+      });
 
       const mergeTask = makeTask({
         id: '__merge__wf-1',
@@ -2483,13 +2488,22 @@ describe('TaskRunner', () => {
       const commitCall = gitCalls.find(c => c[0] === 'commit');
       expect(commitCall).toBeUndefined();
 
-      // Should create a PR via mergeGateProvider (using the gate clone dir, not host.cwd)
+      // Should route through shared PR-authoring helper
+      expect((executor as any).authorPrBodyWithSkill).toHaveBeenCalledWith(expect.objectContaining({
+        title: 'Test Workflow',
+        baseBranch: 'master',
+        featureBranch: 'plan/feature',
+        cwd: '/tmp/mock-wt',
+      }));
+
+      // Should create a PR via mergeGateProvider with authored body
       expect(mergeGateProvider.createReview).toHaveBeenCalledWith(
         expect.objectContaining({
           baseBranch: 'master',
           featureBranch: 'plan/feature',
           title: 'Test Workflow',
           cwd: '/tmp/mock-wt',
+          body: '## Summary\n\nAuthored body',
         }),
       );
 
@@ -2642,6 +2656,11 @@ describe('TaskRunner', () => {
       (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
       (executor as any).removeMergeWorktree = async () => {};
       (executor as any).startPrPolling = vi.fn();
+      (executor as any).authorPrBodyWithSkill = vi.fn().mockResolvedValue({
+        body: '## Summary\n\nAuthored body',
+        sessionId: 'sess-pr-ext2',
+        agentName: 'codex',
+      });
 
       const mergeTask = makeTask({
         id: '__merge__wf-1',
@@ -2651,6 +2670,9 @@ describe('TaskRunner', () => {
       });
 
       await (executor as any).executeMergeNode(mergeTask);
+
+      // Should route through shared PR-authoring helper
+      expect((executor as any).authorPrBodyWithSkill).toHaveBeenCalled();
 
       // Should create a PR via mergeGateProvider
       expect(mergeGateProvider.createReview).toHaveBeenCalledWith(
@@ -2721,6 +2743,11 @@ describe('TaskRunner', () => {
       (executor as any).createMergeWorktree = createMergeWorktreeSpy;
       (executor as any).removeMergeWorktree = async () => {};
       (executor as any).startPrPolling = vi.fn();
+      (executor as any).authorPrBodyWithSkill = vi.fn().mockResolvedValue({
+        body: '## Summary\n\nAuthored body',
+        sessionId: 'sess-pr-ext3',
+        agentName: 'codex',
+      });
 
       const mergeTask = makeTask({
         id: '__merge__wf-1',
@@ -2786,6 +2813,11 @@ describe('TaskRunner', () => {
       (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
       (executor as any).removeMergeWorktree = async () => {};
       (executor as any).startPrPolling = vi.fn();
+      (executor as any).authorPrBodyWithSkill = vi.fn().mockResolvedValue({
+        body: '## Summary\n\nAuthored body',
+        sessionId: 'sess-pr-ext4',
+        agentName: 'codex',
+      });
 
       const mergeTask = makeTask({
         id: '__merge__wf-1',
@@ -2956,6 +2988,11 @@ describe('TaskRunner', () => {
       (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
       (executor as any).removeMergeWorktree = async () => {};
       (executor as any).startPrPolling = vi.fn();
+      (executor as any).authorPrBodyWithSkill = vi.fn().mockResolvedValue({
+        body: '## Summary\n\nAuthored body',
+        sessionId: 'sess-pr-ext5',
+        agentName: 'codex',
+      });
 
       const mergeTask = makeTask({
         id: '__merge__wf-1',
@@ -3021,6 +3058,11 @@ describe('TaskRunner', () => {
       (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
       (executor as any).removeMergeWorktree = async () => {};
       (executor as any).startPrPolling = vi.fn();
+      (executor as any).authorPrBodyWithSkill = vi.fn().mockResolvedValue({
+        body: '## Summary\n\nAuthored body',
+        sessionId: 'sess-pr-ext6',
+        agentName: 'codex',
+      });
 
       const consolidateSpy = vi.spyOn(executor as any, 'consolidateAndMerge');
 
@@ -3187,7 +3229,7 @@ describe('TaskRunner', () => {
       );
     });
 
-    it('executeMergeNode passes summary body to createReview in external_review mode', async () => {
+    it('executeMergeNode passes authored body to createReview in external_review mode', async () => {
       const allTasks = [
         makeTask({ id: 't1', config: { workflowId: 'wf-1' }, status: 'completed', execution: { branch: 'experiment/t1' } }),
       ];
@@ -3234,6 +3276,11 @@ describe('TaskRunner', () => {
       (executor as any).removeMergeWorktree = async () => {};
       (executor as any).startPrPolling = vi.fn();
       (executor as any).buildMergeSummary = vi.fn().mockResolvedValue('## Summary\nTest summary');
+      (executor as any).authorPrBodyWithSkill = vi.fn().mockResolvedValue({
+        body: '## Summary\n\nAuthored PR body from summary',
+        sessionId: 'sess-pr-ext7',
+        agentName: 'codex',
+      });
 
       const mergeTask = makeTask({
         id: '__merge__wf-1',
@@ -3244,8 +3291,17 @@ describe('TaskRunner', () => {
 
       await (executor as any).executeMergeNode(mergeTask);
 
+      // Should route through shared PR-authoring helper with the summary as input
+      expect((executor as any).authorPrBodyWithSkill).toHaveBeenCalledWith(
+        expect.objectContaining({
+          workflowSummary: '## Summary\nTest summary',
+          cwd: '/tmp/mock-wt',
+        }),
+      );
+
+      // createReview receives the authored body, not the raw summary
       expect(mergeGateProvider.createReview).toHaveBeenCalledWith(
-        expect.objectContaining({ body: '## Summary\nTest summary' }),
+        expect.objectContaining({ body: '## Summary\n\nAuthored PR body from summary' }),
       );
       expect(orchestrator.setTaskAwaitingApproval).toHaveBeenCalledWith(
         '__merge__wf-1',
@@ -6539,13 +6595,22 @@ describe('TaskRunner', () => {
       const hostCalls = gitCalls.filter((c) => c.dir === '/tmp/host');
       expect(hostCalls).toHaveLength(0);
 
-      // PR created via mergeGateProvider (using gate clone dir, not host.cwd)
+      // Should route through shared PR-authoring helper
+      expect((executor as any).authorPrBodyWithSkill).toHaveBeenCalledWith(expect.objectContaining({
+        title: 'Test Workflow',
+        baseBranch: 'master',
+        featureBranch: 'plan/feature',
+        cwd: '/tmp/gate-clone',
+      }));
+
+      // PR created via mergeGateProvider with authored body (not raw summary)
       expect(mergeGateProvider.createReview).toHaveBeenCalledWith(
         expect.objectContaining({
           baseBranch: 'master',
           featureBranch: 'plan/feature',
           title: 'Test Workflow',
           cwd: '/tmp/gate-clone',
+          body: '## Summary\n\nPublished body',
         }),
       );
 
