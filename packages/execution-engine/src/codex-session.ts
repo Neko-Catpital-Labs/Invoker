@@ -5,6 +5,8 @@
  * Storage and retrieval are handled by CodexSessionDriver.
  */
 
+import type { SessionUsageEvent } from './session-driver.js';
+
 export interface AgentMessage {
   role: 'user' | 'assistant';
   content: string;
@@ -122,4 +124,88 @@ export function extractCodexSessionId(raw: string): string | undefined {
 export function toReadableText(raw: string): string {
   const messages = parseCodexSessionJsonl(raw);
   return messages.map(m => `[${m.role}] ${m.content}`).join('\n');
+}
+
+/**
+ * Extract usage events from Codex session JSONL.
+ *
+ * Codex emits usage data in several forms:
+ *   - turn.completed with usage: { input_tokens, output_tokens, ... }
+ *   - event_msg with payload.type === 'token_count'
+ *
+ * When explicit usage is absent, returns an empty array (callers may
+ * emit an unknown-confidence placeholder upstream if needed).
+ */
+export function extractCodexUsage(raw: string): SessionUsageEvent[] {
+  const events: SessionUsageEvent[] = [];
+  let lineIndex = 0;
+
+  for (const line of raw.split('\n')) {
+    if (!line.trim()) continue;
+    lineIndex++;
+    try {
+      const entry = JSON.parse(line);
+      const ts: string = entry.timestamp ?? '';
+
+      // turn.completed carries aggregate usage for the turn
+      if (entry.type === 'turn.completed' && entry.usage) {
+        const u = entry.usage;
+        const input = typeof u.input_tokens === 'number' ? u.input_tokens : 0;
+        const output = typeof u.output_tokens === 'number' ? u.output_tokens : 0;
+        const cached = typeof u.cached_tokens === 'number' ? u.cached_tokens : 0;
+        events.push({
+          eventId: `codex-turn-${lineIndex}`,
+          timestamp: ts,
+          model: typeof entry.model === 'string' ? entry.model : '',
+          inputTokens: input,
+          outputTokens: output,
+          cachedTokens: cached,
+          totalTokens: input + output,
+          confidence: 'exact',
+        });
+        continue;
+      }
+
+      // thread.completed may also carry usage
+      if (entry.type === 'thread.completed' && entry.usage) {
+        const u = entry.usage;
+        const input = typeof u.input_tokens === 'number' ? u.input_tokens : 0;
+        const output = typeof u.output_tokens === 'number' ? u.output_tokens : 0;
+        const cached = typeof u.cached_tokens === 'number' ? u.cached_tokens : 0;
+        events.push({
+          eventId: `codex-thread-${lineIndex}`,
+          timestamp: ts,
+          model: typeof entry.model === 'string' ? entry.model : '',
+          inputTokens: input,
+          outputTokens: output,
+          cachedTokens: cached,
+          totalTokens: input + output,
+          confidence: 'exact',
+        });
+        continue;
+      }
+
+      // event_msg token_count — partial/incremental count
+      const payload = entry.payload;
+      if (
+        entry.type === 'event_msg'
+        && payload?.type === 'token_count'
+        && typeof payload.count === 'number'
+      ) {
+        events.push({
+          eventId: `codex-token-count-${lineIndex}`,
+          timestamp: ts,
+          model: '',
+          inputTokens: 0,
+          outputTokens: 0,
+          cachedTokens: 0,
+          totalTokens: payload.count,
+          confidence: 'estimated',
+        });
+      }
+    } catch {
+      // Skip malformed lines
+    }
+  }
+  return events;
 }

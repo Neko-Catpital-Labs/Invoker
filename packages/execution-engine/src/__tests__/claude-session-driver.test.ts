@@ -121,4 +121,127 @@ describe('ClaudeSessionDriver', () => {
       reason: 'Malformed Claude session JSONL',
     });
   });
+
+  // ── extractUsage ──────────────────────────────────────────
+
+  it('extractUsage returns usage from assistant entries with usage metadata', () => {
+    const jsonl = [
+      JSON.stringify({
+        type: 'user',
+        message: { content: 'Hello' },
+        timestamp: '2026-01-01T00:00:00Z',
+      }),
+      JSON.stringify({
+        type: 'assistant',
+        message: { content: [{ type: 'text', text: 'Hi there.' }] },
+        timestamp: '2026-01-01T00:00:01Z',
+        model: 'claude-sonnet-4-20250514',
+        usage: { input_tokens: 800, output_tokens: 200, cache_read_input_tokens: 50 },
+      }),
+    ].join('\n');
+
+    const events = driver.extractUsage(jsonl);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toEqual({
+      eventId: 'claude-assistant-2',
+      timestamp: '2026-01-01T00:00:01Z',
+      model: 'claude-sonnet-4-20250514',
+      inputTokens: 800,
+      outputTokens: 200,
+      cachedTokens: 50,
+      totalTokens: 1000,
+      confidence: 'exact',
+    });
+  });
+
+  it('extractUsage returns empty array when no usage metadata', () => {
+    // The standard sample fixture has no usage fields
+    expect(driver.extractUsage(sampleClaudeJsonl)).toEqual([]);
+  });
+
+  it('extractUsage handles multiple assistant turns with usage', () => {
+    const lines = [
+      JSON.stringify({
+        type: 'user',
+        message: { content: 'Step 1' },
+        timestamp: 'ts1',
+      }),
+      JSON.stringify({
+        type: 'assistant',
+        message: { content: [{ type: 'text', text: 'Done step 1.' }] },
+        timestamp: 'ts2',
+        usage: { input_tokens: 100, output_tokens: 50 },
+      }),
+      JSON.stringify({
+        type: 'user',
+        message: { content: 'Step 2' },
+        timestamp: 'ts3',
+      }),
+      JSON.stringify({
+        type: 'assistant',
+        message: { content: [{ type: 'text', text: 'Done step 2.' }] },
+        timestamp: 'ts4',
+        model: 'claude-opus-4-20250514',
+        usage: { input_tokens: 300, output_tokens: 120, cache_read_input_tokens: 80 },
+      }),
+    ];
+
+    const events = driver.extractUsage(lines.join('\n'));
+    expect(events).toHaveLength(2);
+    expect(events[0].inputTokens).toBe(100);
+    expect(events[0].cachedTokens).toBe(0);
+    expect(events[1].inputTokens).toBe(300);
+    expect(events[1].cachedTokens).toBe(80);
+    expect(events[1].model).toBe('claude-opus-4-20250514');
+  });
+
+  it('extractUsage skips malformed lines gracefully', () => {
+    const lines = [
+      'not json',
+      JSON.stringify({
+        type: 'assistant',
+        message: { content: [{ type: 'text', text: 'OK' }] },
+        timestamp: 'ts1',
+        usage: { input_tokens: 10, output_tokens: 5 },
+      }),
+      '{"incomplete',
+    ];
+
+    const events = driver.extractUsage(lines.join('\n'));
+    expect(events).toHaveLength(1);
+    expect(events[0].totalTokens).toBe(15);
+  });
+
+  it('extractUsage returns empty array for empty input', () => {
+    expect(driver.extractUsage('')).toEqual([]);
+    expect(driver.extractUsage('\n\n')).toEqual([]);
+  });
+
+  it('extractUsage does not affect parseSession output (backward compat)', () => {
+    const lines = [
+      JSON.stringify({
+        type: 'user',
+        message: { content: 'Fix the build' },
+        timestamp: 'ts1',
+      }),
+      JSON.stringify({
+        type: 'assistant',
+        message: { content: [{ type: 'text', text: 'Fixed.' }] },
+        timestamp: 'ts2',
+        usage: { input_tokens: 500, output_tokens: 100 },
+      }),
+    ];
+    const raw = lines.join('\n');
+
+    // parseSession output is identical regardless of usage presence
+    const msgs = driver.parseSession(raw);
+    expect(msgs).toHaveLength(2);
+    expect(msgs[0]).toEqual({ role: 'user', content: 'Fix the build', timestamp: 'ts1' });
+    expect(msgs[1]).toEqual({ role: 'assistant', content: 'Fixed.', timestamp: 'ts2' });
+
+    // Usage is extracted separately
+    const usage = driver.extractUsage(raw);
+    expect(usage).toHaveLength(1);
+    expect(usage[0].inputTokens).toBe(500);
+  });
 });
