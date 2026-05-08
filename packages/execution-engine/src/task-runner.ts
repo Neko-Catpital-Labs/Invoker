@@ -49,6 +49,7 @@ import {
   resolveInstalledSkillPathForAgent,
   spawnAgentPrAuthorViaRegistry,
   validateCanonicalPrBody,
+  type PrAuthoringContext,
 } from './pr-authoring.js';
 
 /** Keeps `lastHeartbeatAt` fresh while `executor.start()` is awaited (SSH remote setup/provision can take minutes). Matches BaseExecutor default heartbeat cadence. */
@@ -1578,6 +1579,7 @@ export class TaskRunner {
     baseBranch: string;
     featureBranch: string;
     workflowSummary: string;
+    structuredContext?: PrAuthoringContext;
     cwd: string;
   }): Promise<{ body: string; sessionId: string; agentName: string }> {
     if (!this.executionAgentRegistry) {
@@ -1600,6 +1602,7 @@ export class TaskRunner {
       baseBranch: args.baseBranch,
       featureBranch: args.featureBranch,
       workflowSummary: args.workflowSummary,
+      structuredContext: args.structuredContext,
     });
     const result = await spawnAgentPrAuthorViaRegistry(prompt, args.cwd, agent, driver);
     const validationErrors = validateCanonicalPrBody(result.body);
