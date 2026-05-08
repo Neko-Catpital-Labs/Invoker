@@ -667,6 +667,7 @@ export function App() {
               task={selectedTask}
               allTasks={tasks}
               baseBranch={selectedTask?.config.workflowId ? workflows.get(selectedTask.config.workflowId)?.baseBranch : undefined}
+              workflowRepoUrl={selectedTask?.config.workflowId ? workflows.get(selectedTask.config.workflowId)?.repoUrl : undefined}
               mergeMode={selectedTask?.config.workflowId ? workflows.get(selectedTask.config.workflowId)?.mergeMode : undefined}
               remoteTargets={remoteTargets}
               executionAgents={executionAgents}
