@@ -23,6 +23,7 @@ import type { ExecutorRegistry } from './registry.js';
 import type { AgentRegistry } from './agent-registry.js';
 import type { MergeGateProvider } from './merge-gate-provider.js';
 import type { ReviewProviderRegistry } from './review-provider-registry.js';
+import { resolvePublicationProvider } from './publication-strategy-router.js';
 import { DockerExecutor } from './docker-executor.js';
 import { WorktreeExecutor } from './worktree-executor.js';
 import { isInvokerManagedPoolBranch } from './plan-base-remote.js';
@@ -1433,8 +1434,23 @@ export class TaskRunner {
     }
   }
 
+  /**
+   * Resolve the review provider for a workflow using the publication strategy router.
+   * Falls back to the legacy `mergeGateProvider` singleton for backward compatibility.
+   * Returns `undefined` when no provider can be resolved (no registry and no fallback).
+   */
+  private resolveReviewProviderForWorkflow(workflowId: string | undefined): MergeGateProvider | undefined {
+    const workflow = workflowId ? this.persistence.loadWorkflow(workflowId) : undefined;
+    const strategy = workflow?.publicationStrategy;
+    try {
+      return resolvePublicationProvider(strategy, this.reviewProviderRegistry, this.mergeGateProvider);
+    } catch {
+      // No provider available for this strategy — return undefined so callers can skip gracefully.
+      return undefined;
+    }
+  }
+
   resumeMergeGatePolling(): void {
-    if (!this.mergeGateProvider) return;
     for (const task of this.orchestrator.getAllTasks()) {
       if (
         task.config.isMergeNode &&
@@ -1442,6 +1458,8 @@ export class TaskRunner {
         task.execution.reviewId &&
         !this.activePrPollers.has(task.id)
       ) {
+        const provider = this.resolveReviewProviderForWorkflow(task.config.workflowId);
+        if (!provider) continue;
         this.logger.info(`[merge-gate] Resuming PR polling for ${task.id} (PR ${task.execution.reviewId})`);
         this.startPrPolling(task.id, task.execution.reviewId, task.config.workflowId!);
       }
@@ -1449,7 +1467,6 @@ export class TaskRunner {
   }
 
   async checkMergeGateStatuses(): Promise<void> {
-    if (!this.mergeGateProvider) return;
     for (const task of this.orchestrator.getAllTasks()) {
       if (
         task.config.isMergeNode &&
@@ -1457,8 +1474,10 @@ export class TaskRunner {
         task.execution.reviewId
       ) {
         try {
+          const provider = this.resolveReviewProviderForWorkflow(task.config.workflowId);
+          if (!provider) continue;
           const gateCwd = task.execution.workspacePath ?? this.cwd;
-          const status = await this.mergeGateProvider.checkApproval({
+          const status = await provider.checkApproval({
             identifier: task.execution.reviewId,
             cwd: gateCwd,
           });
@@ -1484,10 +1503,11 @@ export class TaskRunner {
     const pollIntervalMs = 30_000;
     const interval = setInterval(async () => {
       try {
-        if (!this.mergeGateProvider) return;
+        const provider = this.resolveReviewProviderForWorkflow(workflowId);
+        if (!provider) return;
         const pollTask = this.orchestrator.getTask(taskId);
         const pollCwd = pollTask?.execution.workspacePath ?? this.cwd;
-        const status = await this.mergeGateProvider.checkApproval({
+        const status = await provider.checkApproval({
           identifier: reviewId,
           cwd: pollCwd,
         });
@@ -1523,7 +1543,6 @@ export class TaskRunner {
   }
 
   async checkPrApprovalNow(taskId: string): Promise<void> {
-    if (!this.mergeGateProvider) return;
     if (!this.activePrPollers.has(taskId)) return;
 
     // Read reviewId from persistence
@@ -1531,9 +1550,12 @@ export class TaskRunner {
     const reviewId = task?.execution.reviewId;
     if (!reviewId) return;
 
+    const provider = this.resolveReviewProviderForWorkflow(task.config?.workflowId);
+    if (!provider) return;
+
     try {
       const manualCwd = task.execution.workspacePath ?? this.cwd;
-      const status = await this.mergeGateProvider.checkApproval({
+      const status = await provider.checkApproval({
         identifier: reviewId,
         cwd: manualCwd,
       });

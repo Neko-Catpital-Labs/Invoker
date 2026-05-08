@@ -127,4 +127,80 @@ describe('resolvePublicationProvider', () => {
       );
     });
   });
+
+  describe('github_pr strategy end-to-end contract', () => {
+    it('resolved provider returns stable {url, identifier} from createReview', async () => {
+      const registry = new ReviewProviderRegistry();
+      const github: MergeGateProvider = {
+        name: 'github',
+        createReview: async (opts) => ({
+          url: `https://github.com/owner/repo/pull/99`,
+          identifier: '99',
+        }),
+        checkApproval: async () => ({ approved: false, rejected: false, statusText: 'Awaiting review', url: '' }),
+      };
+      registry.register(github);
+
+      const provider = resolvePublicationProvider('github_pr', registry);
+      const result = await provider.createReview({
+        baseBranch: 'main',
+        featureBranch: 'feature/x',
+        title: 'Test',
+        cwd: '/tmp',
+        body: '## Summary',
+      });
+
+      expect(result).toEqual({ url: 'https://github.com/owner/repo/pull/99', identifier: '99' });
+      expect(typeof result.url).toBe('string');
+      expect(typeof result.identifier).toBe('string');
+    });
+
+    it('resolved provider returns stable approval status from checkApproval', async () => {
+      const registry = new ReviewProviderRegistry();
+      const github: MergeGateProvider = {
+        name: 'github',
+        createReview: async () => ({ url: '', identifier: '99' }),
+        checkApproval: async () => ({
+          approved: true,
+          rejected: false,
+          statusText: 'Approved',
+          url: 'https://github.com/owner/repo/pull/99',
+        }),
+      };
+      registry.register(github);
+
+      const provider = resolvePublicationProvider('github_pr', registry);
+      const status = await provider.checkApproval({ identifier: '99', cwd: '/tmp' });
+
+      expect(status.approved).toBe(true);
+      expect(status.rejected).toBe(false);
+      expect(status.statusText).toBe('Approved');
+      expect(status.url).toBe('https://github.com/owner/repo/pull/99');
+    });
+
+    it('wiring pattern matches production: GitHubMergeGateProvider registered as github', () => {
+      // This mirrors what main.ts and headless.ts do at startup
+      const registry = new ReviewProviderRegistry();
+      const github = makeFakeProvider('github');
+      registry.register(github);
+
+      // Also provide a fallback (legacy pattern)
+      const fallback = makeFakeProvider('github');
+
+      // Strategy resolution should prefer registry over fallback
+      const provider = resolvePublicationProvider('github_pr', registry, fallback);
+      expect(provider).toBe(github);
+      expect(provider).not.toBe(fallback);
+    });
+
+    it('undefined strategy defaults to github_pr and resolves registered github provider', () => {
+      const registry = new ReviewProviderRegistry();
+      const github = makeFakeProvider('github');
+      registry.register(github);
+
+      // When workflow has no publicationStrategy set, should still resolve to github
+      const provider = resolvePublicationProvider(undefined, registry);
+      expect(provider).toBe(github);
+    });
+  });
 });

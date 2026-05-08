@@ -3425,14 +3425,17 @@ describe('TaskRunner', () => {
         getTask: vi.fn((id: string) => ({
           id,
           status: 'review_ready',
+          config: { isMergeNode: true, workflowId: 'wf-1' },
           execution: { reviewId: 'owner/repo#42' },
         })),
         approve: vi.fn(),
       };
       const persistence = {
         updateTask: vi.fn(),
+        loadWorkflow: vi.fn(() => ({ id: 'wf-1' })),
       };
       const mergeGateProvider = {
+        name: 'github',
         checkApproval: vi.fn().mockResolvedValue({
           approved: true,
           rejected: false,
@@ -3490,13 +3493,19 @@ describe('TaskRunner', () => {
       expect(persistence.updateTask).not.toHaveBeenCalled();
     });
 
-    it('is no-op when no mergeGateProvider', async () => {
+    it('is no-op when no mergeGateProvider and no registry', async () => {
       const orchestrator = {
-        getTask: vi.fn(),
+        getTask: vi.fn((id: string) => ({
+          id,
+          status: 'review_ready',
+          config: { isMergeNode: true, workflowId: 'wf-1' },
+          execution: { reviewId: 'owner/repo#42' },
+        })),
         approve: vi.fn(),
       };
       const persistence = {
         updateTask: vi.fn(),
+        loadWorkflow: vi.fn(() => undefined),
       };
 
       const executor = new TaskRunner({
@@ -3511,8 +3520,9 @@ describe('TaskRunner', () => {
 
       await executor.checkPrApprovalNow('task-1');
 
-      expect(orchestrator.getTask).not.toHaveBeenCalled();
+      // Provider resolution fails (no registry, no fallback) — no approval check performed
       expect(persistence.updateTask).not.toHaveBeenCalled();
+      expect(orchestrator.approve).not.toHaveBeenCalled();
 
       // Clean up
       clearInterval((executor as any).activePrPollers.get('task-1'));
@@ -3798,7 +3808,7 @@ describe('TaskRunner', () => {
             })),
             approve: vi.fn(),
           };
-          const persistence = { updateTask: vi.fn() };
+          const persistence = { updateTask: vi.fn(), loadWorkflow: vi.fn(() => ({ id: 'wf-1' })) };
           const mergeGateProvider = {
             checkApproval: vi.fn().mockResolvedValue({
               approved: false,
@@ -3842,7 +3852,7 @@ describe('TaskRunner', () => {
             })),
             approve: vi.fn(),
           };
-          const persistence = { updateTask: vi.fn() };
+          const persistence = { updateTask: vi.fn(), loadWorkflow: vi.fn(() => ({ id: 'wf-1' })) };
           const mergeGateProvider = {
             checkApproval: vi.fn().mockResolvedValue({
               approved: false,
@@ -3889,7 +3899,7 @@ describe('TaskRunner', () => {
             })),
             approve: vi.fn(),
           };
-          const persistence = { updateTask: vi.fn() };
+          const persistence = { updateTask: vi.fn(), loadWorkflow: vi.fn(() => ({ id: 'wf-1' })) };
           const mergeGateProvider = {
             checkApproval: vi.fn().mockResolvedValue({
               approved: true,
