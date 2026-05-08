@@ -24,11 +24,11 @@ if [ "$EXTENDED" = "1" ] && [ "$DANGEROUS" = "1" ]; then
   MODE_KEY="dangerous"
 fi
 
-GIT_DIR="$(cd "$ROOT" && git rev-parse --git-dir)"
+GIT_DIR="$(git -C "$ROOT" rev-parse --git-dir)"
 # Resolve to absolute path if relative
 case "$GIT_DIR" in
   /*) ;;
-  *)  GIT_DIR="$ROOT/$GIT_DIR" ;;
+  *) GIT_DIR="$ROOT/$GIT_DIR" ;;
 esac
 STATE_FILE="${INVOKER_TEST_ALL_STATE_FILE:-$GIT_DIR/invoker-test-all-state.tsv}"
 RUN_ID="$(date +%Y%m%d-%H%M%S)-$$"
