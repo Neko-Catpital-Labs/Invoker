@@ -140,6 +140,71 @@ export function resolveInstalledSkillPathForAgent(agentName: string, skillName: 
   return existsSync(join(skillDir, 'SKILL.md')) ? skillDir : null;
 }
 
+/**
+ * Resolve skill path using the agent's own `bundledSkillRoot` metadata.
+ * Falls back to `resolveInstalledSkillPathForAgent` for agents without metadata.
+ */
+export function resolveSkillPathViaAgent(agent: ExecutionAgent, skillName: string): string | null {
+  if (agent.bundledSkillRoot) {
+    const skillDir = join(agent.bundledSkillRoot, `invoker-${skillName}`);
+    if (existsSync(join(skillDir, 'SKILL.md'))) return skillDir;
+  }
+  return resolveInstalledSkillPathForAgent(agent.name, skillName);
+}
+
+/**
+ * Build a deterministic canonical PR body from structured context.
+ * Used as the no-AI escape hatch when all agent-authored attempts fail.
+ */
+export function buildCanonicalPrBody(args: {
+  title: string;
+  workflowSummary: string;
+  structuredContext?: PrAuthoringContext;
+}): string {
+  const lines: string[] = [];
+
+  // ## Summary
+  lines.push('## Summary');
+  lines.push('');
+  if (args.structuredContext?.workflowDescription) {
+    lines.push(args.structuredContext.workflowDescription);
+  } else {
+    lines.push(args.workflowSummary.trim());
+  }
+  lines.push('');
+
+  // ## Test Plan
+  lines.push('## Test Plan');
+  lines.push('');
+  const ctx = args.structuredContext;
+  const commandTasks = ctx?.tasks.filter((t) => t.command && t.status === 'completed') ?? [];
+  if (commandTasks.length > 0) {
+    for (const t of commandTasks) {
+      lines.push(`- [x] \`${t.command}\` — ${t.description}`);
+    }
+  } else {
+    lines.push('- [ ] Manual verification required');
+  }
+  lines.push('');
+
+  // ## Revert Plan
+  lines.push('## Revert Plan');
+  lines.push('');
+  lines.push('- Safe to revert? Yes');
+  lines.push('- Revert command: `git revert <sha>`');
+  lines.push('- Post-revert steps: None');
+  lines.push('- Data migration? No');
+  lines.push('');
+
+  // Visual proof (preserve verbatim if present)
+  if (ctx?.visualProofMarkdown) {
+    lines.push(ctx.visualProofMarkdown);
+    lines.push('');
+  }
+
+  return lines.join('\n').trimEnd();
+}
+
 export function buildMakePrPrompt(args: {
   skillPath: string;
   title: string;
