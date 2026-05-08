@@ -223,6 +223,7 @@ export interface PlanDefinition {
   featureBranch?: string;
   mergeMode?: 'manual' | 'automatic' | 'external_review';
   reviewProvider?: string;
+  publicationStrategy?: 'github_pr' | 'mergify_stack';
   repoUrl?: string;
   intermediateRepoUrl?: string;
   tasks: Array<{

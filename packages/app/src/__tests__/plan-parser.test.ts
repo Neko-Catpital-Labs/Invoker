@@ -841,6 +841,65 @@ tasks:
     const result = parsePlan(yaml);
     expect(result.visualProof).toBeUndefined();
   });
+
+  describe('publicationStrategy parsing', () => {
+    it('defaults publicationStrategy to github_pr when omitted', () => {
+      const yaml = `
+name: Default Strategy Plan
+repoUrl: git@github.com:test/repo.git
+tasks:
+  - id: build
+    description: Build the project
+    command: echo build
+`;
+      const plan = parsePlan(yaml);
+      expect(plan.publicationStrategy).toBe('github_pr');
+    });
+
+    it('parses explicit publicationStrategy github_pr', () => {
+      const yaml = `
+name: GitHub PR Plan
+repoUrl: git@github.com:test/repo.git
+publicationStrategy: github_pr
+tasks:
+  - id: build
+    description: Build the project
+    command: echo build
+`;
+      const plan = parsePlan(yaml);
+      expect(plan.publicationStrategy).toBe('github_pr');
+    });
+
+    it('parses explicit publicationStrategy mergify_stack', () => {
+      const yaml = `
+name: Mergify Stack Plan
+repoUrl: git@github.com:test/repo.git
+publicationStrategy: mergify_stack
+tasks:
+  - id: build
+    description: Build the project
+    command: echo build
+`;
+      const plan = parsePlan(yaml);
+      expect(plan.publicationStrategy).toBe('mergify_stack');
+    });
+
+    it('rejects invalid publicationStrategy value', () => {
+      const yaml = `
+name: Bad Strategy Plan
+repoUrl: git@github.com:test/repo.git
+publicationStrategy: magic_deploy
+tasks:
+  - id: build
+    description: Build the project
+    command: echo build
+`;
+      expect(() => parsePlan(yaml)).toThrow(PlanParseError);
+      expect(() => parsePlan(yaml)).toThrow(
+        '"publicationStrategy" must be one of: github_pr, mergify_stack. Got: "magic_deploy"',
+      );
+    });
+  });
 });
 
 describe('detectDefaultBranch', () => {

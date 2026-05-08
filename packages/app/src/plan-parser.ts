@@ -73,6 +73,7 @@ export interface RawPlan {
   featureBranch?: string;
   mergeMode?: string;
   reviewProvider?: string;
+  publicationStrategy?: string;
   repoUrl?: string;
   intermediateRepoUrl?: string;
   executorType?: string;
@@ -255,6 +256,15 @@ export function parsePlan(yamlContent: string): PlanDefinition {
   const reviewProvider = raw.reviewProvider
     ?? (rawMergeMode === 'external_review' ? 'github' : undefined);
 
+  // Validate publicationStrategy against allowed values.
+  const validPublicationStrategies = ['github_pr', 'mergify_stack'] as const;
+  if (raw.publicationStrategy !== undefined && !validPublicationStrategies.includes(raw.publicationStrategy as any)) {
+    throw new PlanParseError(
+      `"publicationStrategy" must be one of: ${validPublicationStrategies.join(', ')}. Got: "${raw.publicationStrategy}"`,
+    );
+  }
+  const publicationStrategy = (raw.publicationStrategy as (typeof validPublicationStrategies)[number]) ?? 'github_pr';
+
   // Auto-generate featureBranch from plan name when not explicitly specified
   if (!raw.featureBranch) {
     const slug = (raw.name as string).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
@@ -363,6 +373,7 @@ export function parsePlan(yamlContent: string): PlanDefinition {
     featureBranch: raw.featureBranch,
     mergeMode,
     reviewProvider,
+    publicationStrategy,
     repoUrl: raw.repoUrl,
     intermediateRepoUrl: raw.intermediateRepoUrl,
     tasks,
