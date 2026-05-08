@@ -37,21 +37,5 @@ if [ "$(uname)" = "Linux" ]; then
   export LIBGL_ALWAYS_SOFTWARE=1
 fi
 
-# Auto-build if dist/main.js is missing
-if [ ! -f packages/app/dist/main.js ]; then
-  echo "==> packages/app/dist/main.js missing — building..." >&2
-  pnpm --filter @invoker/app run build >&2
-fi
-
-# Rewrite repoUrl to file:// local checkout so plans work without network access
-PLAN_EFFECTIVE="$PLAN_FILE"
-if grep -q 'repoUrl:' "$PLAN_FILE" 2>/dev/null; then
-  PLAN_TMP="$(mktemp "${TMPDIR:-/tmp}/submit-plan.XXXXXX")"
-  trap 'rm -f "$PLAN_TMP"' EXIT
-  sed "s|repoUrl:.*|repoUrl: file://$REPO_ROOT|" "$PLAN_FILE" > "$PLAN_TMP"
-  PLAN_EFFECTIVE="$PLAN_TMP"
-fi
-
 echo "==> Submitting plan: $PLAN_FILE"
-export INVOKER_HEADLESS_STANDALONE=1
-./packages/app/node_modules/.bin/electron packages/app/dist/main.js $SANDBOX_FLAG --headless run "$PLAN_EFFECTIVE"
+./packages/app/node_modules/.bin/electron packages/app/dist/main.js $SANDBOX_FLAG --headless run "$PLAN_FILE"
