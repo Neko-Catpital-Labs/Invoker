@@ -1,0 +1,26 @@
+# Run: bash scripts/verify-pr-authoring-fallback-headless.sh
+#
+# Exercises the PR-authoring external-review path end-to-end:
+#   1. Two command tasks complete successfully.
+#   2. Merge gate creates a PR via the gh stub (external_review mode).
+#   3. The script asserts PR creation calls in the gh stub log and verifies
+#      the canonical fallback PR body contains required sections (Summary,
+#      Test Plan, Revert Plan).
+#
+# repoUrl below is overwritten by the script with file://<this checkout>.
+name: "Verify PR-authoring fallback (headless Invoker)"
+repoUrl: git@github.com:example-org/acme-repo.git
+onFinish: none
+mergeMode: external_review
+featureBranch: experiment/verify-pr-authoring-fallback
+baseBranch: HEAD
+
+tasks:
+  - id: verify-pr-taskA
+    description: "PR-authoring verify — first task"
+    command: echo pr-verify-a
+    dependencies: []
+  - id: verify-pr-taskB
+    description: "PR-authoring verify — second task"
+    command: echo pr-verify-b
+    dependencies: []
