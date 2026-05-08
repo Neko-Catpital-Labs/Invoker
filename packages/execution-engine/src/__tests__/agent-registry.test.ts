@@ -125,5 +125,65 @@ describe('AgentRegistry', () => {
       reversed.registerExecution(prClaude);
       expect(reversed.getWithCapability('make-pr')).toBe(prCodex);
     });
+
+    it('listWithCapability returns agents in deterministic registration order for fallback chains', () => {
+      // Build a registry with 4 agents registered in a specific order
+      const reg = new AgentRegistry();
+      const agentA = makeExecutionAgent('alpha', { bundledSkillRoot: '/a', bundledSkills: ['make-pr'] });
+      const agentB = makeExecutionAgent('bravo', { bundledSkillRoot: '/b', bundledSkills: ['make-pr'] });
+      const agentC = makeExecutionAgent('charlie', { bundledSkillRoot: '/c', bundledSkills: ['make-pr'] });
+      const agentNoPr = makeExecutionAgent('delta'); // no make-pr capability
+
+      reg.registerExecution(agentA);
+      reg.registerExecution(agentB);
+      reg.registerExecution(agentNoPr);
+      reg.registerExecution(agentC);
+
+      const prAgents = reg.listWithCapability('make-pr');
+      // Must be exactly [alpha, bravo, charlie] — delta excluded, order matches registration
+      expect(prAgents).toHaveLength(3);
+      expect(prAgents[0].name).toBe('alpha');
+      expect(prAgents[1].name).toBe('bravo');
+      expect(prAgents[2].name).toBe('charlie');
+
+      // Repeated calls must be stable
+      const second = reg.listWithCapability('make-pr');
+      expect(second.map(a => a.name)).toEqual(prAgents.map(a => a.name));
+    });
+
+    it('listWithCapability excludes agents with different skills', () => {
+      const reg = new AgentRegistry();
+      const prAgent = makeExecutionAgent('pr-only', { bundledSkillRoot: '/pr', bundledSkills: ['make-pr'] });
+      const deployAgent = makeExecutionAgent('deploy-only', { bundledSkillRoot: '/deploy', bundledSkills: ['deploy'] });
+      const bothAgent = makeExecutionAgent('both', { bundledSkillRoot: '/both', bundledSkills: ['make-pr', 'deploy'] });
+
+      reg.registerExecution(prAgent);
+      reg.registerExecution(deployAgent);
+      reg.registerExecution(bothAgent);
+
+      const prCapable = reg.listWithCapability('make-pr');
+      expect(prCapable.map(a => a.name)).toEqual(['pr-only', 'both']);
+
+      const deployCapable = reg.listWithCapability('deploy');
+      expect(deployCapable.map(a => a.name)).toEqual(['deploy-only', 'both']);
+    });
+
+    it('getWithCapability and listWithCapability stay consistent after additional registrations', () => {
+      const reg = new AgentRegistry();
+      const agentA = makeExecutionAgent('a', { bundledSkillRoot: '/a', bundledSkills: ['make-pr'] });
+      reg.registerExecution(agentA);
+
+      expect(reg.getWithCapability('make-pr')).toBe(agentA);
+      expect(reg.listWithCapability('make-pr')).toEqual([agentA]);
+
+      // Add a second PR-capable agent
+      const agentB = makeExecutionAgent('b', { bundledSkillRoot: '/b', bundledSkills: ['make-pr'] });
+      reg.registerExecution(agentB);
+
+      // First agent still wins getWithCapability (insertion order preserved)
+      expect(reg.getWithCapability('make-pr')).toBe(agentA);
+      // listWithCapability now includes both
+      expect(reg.listWithCapability('make-pr')).toEqual([agentA, agentB]);
+    });
   });
 });

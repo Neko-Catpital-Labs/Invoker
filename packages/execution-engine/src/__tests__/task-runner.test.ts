@@ -7765,4 +7765,413 @@ describe('TaskRunner', () => {
       expect(handleWorkerResponse).toHaveBeenCalledTimes(3);
     });
   });
+
+  describe('PR authoring fallback order and content regressions', () => {
+    it('authorPrBodyWithSkill tries preferred agent first, then deterministic fallback agents in registration order', async () => {
+      const tempHome = createTempWorkspace();
+      const originalHome = process.env.HOME;
+      process.env.HOME = tempHome;
+
+      // Only set up gemini skill — claude and codex will fail skill resolution
+      mkdirSync(join(tempHome, '.gemini', 'skills', 'invoker-make-pr'), { recursive: true });
+      writeFileSync(join(tempHome, '.gemini', 'skills', 'invoker-make-pr', 'SKILL.md'), '# make-pr\n');
+
+      try {
+        const attemptOrder: string[] = [];
+
+        const claudeAgent = {
+          name: 'claude',
+          stdinMode: 'ignore',
+          bundledSkillRoot: join(tempHome, '.claude', 'skills'), // no SKILL.md
+          bundledSkills: ['make-pr'],
+          buildCommand: () => {
+            attemptOrder.push('claude');
+            return { cmd: 'node', args: ['-e', 'process.exit(1)'], sessionId: 'sess-claude' };
+          },
+          buildResumeArgs: () => ({ cmd: 'node', args: ['-e', ''] }),
+        };
+        const codexAgent = {
+          name: 'codex',
+          stdinMode: 'ignore',
+          bundledSkillRoot: join(tempHome, '.codex', 'skills'), // no SKILL.md
+          bundledSkills: ['make-pr'],
+          buildCommand: () => {
+            attemptOrder.push('codex');
+            return { cmd: 'node', args: ['-e', 'process.exit(1)'], sessionId: 'sess-codex' };
+          },
+          buildResumeArgs: () => ({ cmd: 'node', args: ['-e', ''] }),
+        };
+        const geminiAgent = {
+          name: 'gemini',
+          stdinMode: 'ignore',
+          bundledSkillRoot: join(tempHome, '.gemini', 'skills'),
+          bundledSkills: ['make-pr'],
+          buildCommand: () => {
+            attemptOrder.push('gemini');
+            return {
+              cmd: 'node',
+              args: ['-e', 'process.stdout.write("## Summary\\n\\nGemini authored\\n\\n## Test Plan\\n\\n- [x] `pnpm test`\\n\\n## Revert Plan\\n\\n- Safe to revert? Yes\\n- Revert command: `git revert <sha>`\\n- Post-revert steps: None\\n- Data migration? No\\n")'],
+              sessionId: 'sess-gemini-ok',
+            };
+          },
+          buildResumeArgs: () => ({ cmd: 'node', args: ['-e', ''] }),
+        };
+
+        const agentMap: Record<string, any> = { claude: claudeAgent, codex: codexAgent, gemini: geminiAgent };
+        const executor = new TaskRunner({
+          orchestrator: {
+            getTask: () => null,
+            getAllTasks: () => [makeTask({ id: 't1', config: { workflowId: 'wf-1', executionAgent: 'claude' } })],
+          } as any,
+          persistence: {} as any,
+          executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+          executionAgentRegistry: {
+            get: (name: string) => agentMap[name],
+            getOrThrow: (name: string) => {
+              if (agentMap[name]) return agentMap[name];
+              throw new Error(`Unknown: ${name}`);
+            },
+            getSessionDriver: vi.fn().mockReturnValue(undefined),
+            // Registration order: claude, codex, gemini
+            listWithCapability: vi.fn().mockReturnValue([claudeAgent, codexAgent, geminiAgent]),
+          } as any,
+          cwd: '/tmp',
+          logger: createMockLogger(),
+        });
+
+        const result = await (executor as any).authorPrBodyWithSkill({
+          workflowId: 'wf-1',
+          title: 'Fallback Order Test',
+          baseBranch: 'master',
+          featureBranch: 'plan/fallback-order',
+          workflowSummary: '## Summary\nFallback order test',
+          cwd: '/tmp',
+        });
+
+        // Gemini is the third in chain (preferred claude → codex → gemini) and succeeds
+        expect(result.agentName).toBe('gemini');
+        expect(result.body).toContain('## Summary');
+        expect(result.body).toContain('## Test Plan');
+        expect(result.body).toContain('## Revert Plan');
+        // Claude and codex failed skill resolution (no SKILL.md), so buildCommand was never called for them
+        // Only gemini's buildCommand was called
+        expect(attemptOrder).toEqual(['gemini']);
+      } finally {
+        if (originalHome === undefined) delete process.env.HOME;
+        else process.env.HOME = originalHome;
+      }
+    });
+
+    it('canonical fallback preserves UI verification commands in Test Plan', async () => {
+      const tempHome = createTempWorkspace();
+      const originalHome = process.env.HOME;
+      process.env.HOME = tempHome;
+
+      try {
+        const claudeAgent = {
+          name: 'claude',
+          stdinMode: 'ignore',
+          bundledSkills: ['make-pr'],
+          buildCommand: () => ({ cmd: 'node', args: ['-e', 'process.exit(1)'], sessionId: 'x' }),
+          buildResumeArgs: () => ({ cmd: 'node', args: ['-e', ''] }),
+        };
+
+        const executor = new TaskRunner({
+          orchestrator: {
+            getTask: () => null,
+            getAllTasks: () => [makeTask({ id: 't1', config: { workflowId: 'wf-1', executionAgent: 'claude' } })],
+          } as any,
+          persistence: {} as any,
+          executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+          executionAgentRegistry: {
+            get: (name: string) => name === 'claude' ? claudeAgent : undefined,
+            getOrThrow: vi.fn().mockReturnValue(claudeAgent),
+            getSessionDriver: vi.fn().mockReturnValue(undefined),
+            listWithCapability: vi.fn().mockReturnValue([claudeAgent]),
+          } as any,
+          cwd: '/tmp',
+          logger: createMockLogger(),
+        });
+
+        const result = await (executor as any).authorPrBodyWithSkill({
+          workflowId: 'wf-1',
+          title: 'UI Verification Test',
+          baseBranch: 'master',
+          featureBranch: 'plan/ui-verify',
+          workflowSummary: 'UI workflow with executed verification commands.',
+          structuredContext: {
+            tasks: [
+              { taskId: 't1', description: 'Run Playwright visual tests', status: 'completed', command: 'pnpm exec playwright test --project=visual' },
+              { taskId: 't2', description: 'Run component snapshot tests', status: 'completed', command: 'pnpm test -- --testPathPattern=snapshot' },
+              { taskId: 't3', description: 'Verify accessibility', status: 'completed', command: 'pnpm exec axe-check src/components' },
+              { taskId: 't4', description: 'Skipped integration test', status: 'skipped', command: 'pnpm run e2e' },
+            ],
+          },
+          cwd: '/tmp',
+        });
+
+        expect(result.agentName).toBe('canonical');
+        // All completed UI verification commands must appear in the Test Plan
+        expect(result.body).toContain('`pnpm exec playwright test --project=visual`');
+        expect(result.body).toContain('Run Playwright visual tests');
+        expect(result.body).toContain('`pnpm test -- --testPathPattern=snapshot`');
+        expect(result.body).toContain('Run component snapshot tests');
+        expect(result.body).toContain('`pnpm exec axe-check src/components`');
+        expect(result.body).toContain('Verify accessibility');
+        // Skipped tasks must NOT appear
+        expect(result.body).not.toContain('pnpm run e2e');
+        expect(result.body).not.toContain('Skipped integration test');
+      } finally {
+        if (originalHome === undefined) delete process.env.HOME;
+        else process.env.HOME = originalHome;
+      }
+    });
+
+    it('canonical fallback preserves visual proof markdown verbatim when all agents fail', async () => {
+      const tempHome = createTempWorkspace();
+      const originalHome = process.env.HOME;
+      process.env.HOME = tempHome;
+
+      try {
+        const claudeAgent = {
+          name: 'claude',
+          stdinMode: 'ignore',
+          bundledSkills: ['make-pr'],
+          buildCommand: () => ({ cmd: 'node', args: ['-e', 'process.exit(1)'], sessionId: 'x' }),
+          buildResumeArgs: () => ({ cmd: 'node', args: ['-e', ''] }),
+        };
+
+        const executor = new TaskRunner({
+          orchestrator: {
+            getTask: () => null,
+            getAllTasks: () => [makeTask({ id: 't1', config: { workflowId: 'wf-1', executionAgent: 'claude' } })],
+          } as any,
+          persistence: {} as any,
+          executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+          executionAgentRegistry: {
+            get: (name: string) => name === 'claude' ? claudeAgent : undefined,
+            getOrThrow: vi.fn().mockReturnValue(claudeAgent),
+            getSessionDriver: vi.fn().mockReturnValue(undefined),
+            listWithCapability: vi.fn().mockReturnValue([claudeAgent]),
+          } as any,
+          cwd: '/tmp',
+          logger: createMockLogger(),
+        });
+
+        const visualProofBlock = [
+          '## Visual Proof',
+          '',
+          '<details><summary>empty-state</summary>',
+          '',
+          '| Before | After |',
+          '|--------|-------|',
+          '| ![before](https://img.example.com/before-empty.png) | ![after](https://img.example.com/after-empty.png) |',
+          '',
+          '</details>',
+          '',
+          '<details><summary>dag-loaded</summary>',
+          '',
+          '| Before | After |',
+          '|--------|-------|',
+          '| ![before](https://img.example.com/before-dag.png) | ![after](https://img.example.com/after-dag.png) |',
+          '',
+          '</details>',
+          '',
+          '**Video walkthrough**: [recording.mp4](https://video.example.com/walkthrough.mp4)',
+        ].join('\n');
+
+        const result = await (executor as any).authorPrBodyWithSkill({
+          workflowId: 'wf-1',
+          title: 'Visual Proof Preservation Test',
+          baseBranch: 'master',
+          featureBranch: 'plan/visual-proof',
+          workflowSummary: 'UI workflow with visual proof.',
+          structuredContext: {
+            tasks: [
+              { taskId: 't1', description: 'Run tests', status: 'completed', command: 'pnpm test' },
+            ],
+            visualProofMarkdown: visualProofBlock,
+          },
+          cwd: '/tmp',
+        });
+
+        expect(result.agentName).toBe('canonical');
+        // Visual proof markdown must be preserved verbatim
+        expect(result.body).toContain(visualProofBlock);
+        // Individual elements must be present
+        expect(result.body).toContain('## Visual Proof');
+        expect(result.body).toContain('empty-state');
+        expect(result.body).toContain('dag-loaded');
+        expect(result.body).toContain('before-empty.png');
+        expect(result.body).toContain('after-dag.png');
+        expect(result.body).toContain('recording.mp4');
+      } finally {
+        if (originalHome === undefined) delete process.env.HOME;
+        else process.env.HOME = originalHome;
+      }
+    });
+
+    it('external_review propagates authored PR body to createReview, not raw summary text', async () => {
+      const allTasks = [
+        makeTask({ id: 't1', config: { workflowId: 'wf-1' }, status: 'completed', execution: { branch: 'experiment/t1' } }),
+      ];
+      const orchestrator = {
+        getTask: (id: string) => allTasks.find(t => t.id === id),
+        getAllTasks: () => allTasks,
+        handleWorkerResponse: vi.fn(() => []),
+        setTaskAwaitingApproval: vi.fn(),
+      };
+      const persistence = {
+        loadWorkflow: () => ({
+          id: 'wf-1',
+          onFinish: 'merge',
+          mergeMode: 'external_review',
+          baseBranch: 'master',
+          featureBranch: 'plan/feature',
+          name: 'Test Workflow',
+        }),
+        updateTask: vi.fn(),
+      };
+
+      const rawSummary = '## Summary\nRaw unstructured summary from buildMergeSummary';
+      const authoredBody = '## Summary\n\nRich authored body with Architecture section\n\n## Architecture\n\n### Before\nOld design\n\n### After\nNew design\n\n## Test Plan\n\n- [x] `pnpm test`\n\n## Revert Plan\n\n- Safe to revert? Yes';
+
+      const mergeGateProvider = {
+        createReview: vi.fn().mockResolvedValue({
+          url: 'https://github.com/owner/repo/pull/42',
+          identifier: 'owner/repo#42',
+        }),
+      };
+      const executor = new TaskRunner({
+        orchestrator: orchestrator as any,
+        persistence: persistence as any,
+        executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+        mergeGateProvider: mergeGateProvider as any,
+      });
+
+      (executor as any).execGitReadonly = async (args: string[]) => {
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        return '';
+      };
+      (executor as any).execGitIn = async (args: string[], _dir: string) => {
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        return '';
+      };
+      (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
+      (executor as any).removeMergeWorktree = async () => {};
+      (executor as any).startPrPolling = vi.fn();
+      (executor as any).buildMergeSummary = vi.fn().mockResolvedValue(rawSummary);
+      (executor as any).authorPrBodyWithSkill = vi.fn().mockResolvedValue({
+        body: authoredBody,
+        sessionId: 'sess-pr-authored',
+        agentName: 'codex',
+      });
+
+      const mergeTask = makeTask({
+        id: '__merge__wf-1',
+        status: 'running',
+        dependencies: ['t1'],
+        config: { isMergeNode: true, workflowId: 'wf-1' },
+      });
+
+      await (executor as any).executeMergeNode(mergeTask);
+
+      // authorPrBodyWithSkill receives the raw summary as input
+      expect((executor as any).authorPrBodyWithSkill).toHaveBeenCalledWith(
+        expect.objectContaining({ workflowSummary: rawSummary }),
+      );
+
+      // createReview receives the AUTHORED body, not the raw summary
+      expect(mergeGateProvider.createReview).toHaveBeenCalledWith(
+        expect.objectContaining({ body: authoredBody }),
+      );
+
+      // The raw summary must NOT be passed as the body to createReview
+      const createReviewCall = mergeGateProvider.createReview.mock.calls[0][0];
+      expect(createReviewCall.body).not.toBe(rawSummary);
+      expect(createReviewCall.body).toContain('## Architecture');
+      expect(createReviewCall.body).toContain('### Before');
+      expect(createReviewCall.body).toContain('### After');
+    });
+
+    it('external_review passes structuredContext with visual proof to authorPrBodyWithSkill', async () => {
+      const allTasks = [
+        makeTask({
+          id: 't1',
+          config: { workflowId: 'wf-1' },
+          status: 'completed',
+          execution: { branch: 'experiment/t1' },
+        }),
+      ];
+      const orchestrator = {
+        getTask: (id: string) => allTasks.find(t => t.id === id),
+        getAllTasks: () => allTasks,
+        handleWorkerResponse: vi.fn(() => []),
+        setTaskAwaitingApproval: vi.fn(),
+      };
+      const persistence = {
+        loadWorkflow: () => ({
+          id: 'wf-1',
+          onFinish: 'merge',
+          mergeMode: 'external_review',
+          baseBranch: 'master',
+          featureBranch: 'plan/feature',
+          name: 'Test Workflow',
+          visualProof: true,
+        }),
+        updateTask: vi.fn(),
+      };
+      const mergeGateProvider = {
+        createReview: vi.fn().mockResolvedValue({
+          url: 'https://github.com/owner/repo/pull/42',
+          identifier: 'owner/repo#42',
+        }),
+      };
+      const vpMarkdown = '## Visual Proof\n| Before | After |\n|--------|-------|\n| ![b](b.png) | ![a](a.png) |';
+
+      const executor = new TaskRunner({
+        orchestrator: orchestrator as any,
+        persistence: persistence as any,
+        executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+        mergeGateProvider: mergeGateProvider as any,
+      });
+
+      (executor as any).execGitReadonly = async (args: string[]) => {
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        return '';
+      };
+      (executor as any).execGitIn = async (args: string[], _dir: string) => {
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        return '';
+      };
+      (executor as any).createMergeWorktree = async () => '/tmp/mock-wt';
+      (executor as any).removeMergeWorktree = async () => {};
+      (executor as any).startPrPolling = vi.fn();
+      (executor as any).runVisualProofCapture = vi.fn().mockResolvedValue(vpMarkdown);
+      (executor as any).authorPrBodyWithSkill = vi.fn().mockResolvedValue({
+        body: '## Summary\n\nAuthored with visual proof',
+        sessionId: 'sess-pr-vp',
+        agentName: 'codex',
+      });
+
+      const mergeTask = makeTask({
+        id: '__merge__wf-1',
+        status: 'running',
+        dependencies: ['t1'],
+        config: { isMergeNode: true, workflowId: 'wf-1' },
+      });
+
+      await (executor as any).executeMergeNode(mergeTask);
+
+      // Visual proof must be captured
+      expect((executor as any).runVisualProofCapture).toHaveBeenCalled();
+
+      // authorPrBodyWithSkill must receive structuredContext containing visual proof
+      const authorCall = (executor as any).authorPrBodyWithSkill.mock.calls[0][0];
+      expect(authorCall.structuredContext).toBeDefined();
+      expect(authorCall.structuredContext.visualProofMarkdown).toBe(vpMarkdown);
+    });
+  });
 });
