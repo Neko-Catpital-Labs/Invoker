@@ -23,6 +23,7 @@ export * from './github-merge-gate-provider.js';
 export * from './agent.js';
 export * from './agent-registry.js';
 export * from './review-provider-registry.js';
+export * from './publication-strategy-router.js';
 export * from './agents/index.js';
 export * from './plan-execution-agents.js';
 export * from './codex-session.js';

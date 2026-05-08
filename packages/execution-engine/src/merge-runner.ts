@@ -18,6 +18,7 @@ import type { TaskRunnerCallbacks } from './task-runner.js';
 import type { MergeGateProvider } from './merge-gate-provider.js';
 import type { ReviewProviderRegistry } from './review-provider-registry.js';
 import { normalizeBranchForGithubCli } from './github-branch-ref.js';
+import { resolvePublicationProvider } from './publication-strategy-router.js';
 
 // ── Trace logging ────────────────────────────────────────
 
@@ -431,9 +432,12 @@ export async function executeMergeNodeImpl(
         return;
       }
       if (mergeMode === 'external_review') {
-        if (!host.mergeGateProvider) {
-          throw new Error('mergeMode is "external_review" but no review provider configured');
-        }
+        const publicationStrategy = workflow?.publicationStrategy;
+        const reviewProvider = resolvePublicationProvider(
+          publicationStrategy,
+          host.reviewProviderRegistry,
+          host.mergeGateProvider,
+        );
 
         let fullSummary = summary;
         if (visualProof && host.runVisualProofCapture) {
@@ -451,16 +455,16 @@ export async function executeMergeNodeImpl(
           gateWorkspacePath!,
         );
 
-        // Create PR via provider (consolidation already done above).
+        // Create PR via strategy-resolved provider (consolidation already done above).
         // Use the gate clone dir so gh CLI resolves the correct GitHub remote.
-        const result = await host.mergeGateProvider.createReview({
+        const result = await reviewProvider.createReview({
           baseBranch,
           featureBranch,
           title: workflow?.name ?? 'Workflow',
           cwd: gateWorkspacePath!,
           body: fullSummary,
         });
-        console.log(`[merge] Created GitHub PR: ${result.url}`);
+        console.log(`[merge] Created review via ${reviewProvider.name}: ${result.url}`);
 
         const prResponse: WorkResponse = {
           requestId: `merge-${task.id}`,
@@ -932,18 +936,21 @@ export async function publishAfterFixImpl(
     }
 
     if (mergeMode === 'external_review') {
-      if (!host.mergeGateProvider) {
-        throw new Error('mergeMode is "external_review" but no review provider configured');
-      }
+      const publicationStrategy = workflow?.publicationStrategy;
+      const reviewProvider = resolvePublicationProvider(
+        publicationStrategy,
+        host.reviewProviderRegistry,
+        host.mergeGateProvider,
+      );
 
-      const result = await host.mergeGateProvider.createReview({
+      const result = await reviewProvider.createReview({
         baseBranch,
         featureBranch,
         title: workflow?.name ?? 'Workflow',
         cwd: consolidateDir,
         body: fullSummary,
       });
-      console.log(`[merge] Post-fix: created/updated GitHub PR: ${result.url}`);
+      console.log(`[merge] Post-fix: created/updated review via ${reviewProvider.name}: ${result.url}`);
 
 
 
