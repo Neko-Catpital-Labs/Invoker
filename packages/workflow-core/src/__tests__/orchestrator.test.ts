@@ -8718,6 +8718,73 @@ describe('Orchestrator', () => {
     });
   });
 
+  describe('deleteAllWorkflows bulk (publishRemovalDeltas: false)', () => {
+    it('removes all tasks from memory without publishing removal deltas', () => {
+      orchestrator.loadPlan({
+        name: 'wf-bulk-1',
+        tasks: [{ id: 'b1', description: 'Task B1' }],
+      });
+      orchestrator.loadPlan({
+        name: 'wf-bulk-2',
+        tasks: [{ id: 'b2', description: 'Task B2' }],
+      });
+      expect(orchestrator.getAllTasks().length).toBeGreaterThan(0);
+      publishedDeltas = [];
+
+      orchestrator.deleteAllWorkflows({ publishRemovalDeltas: false });
+
+      expect(orchestrator.getAllTasks()).toHaveLength(0);
+      expect(orchestrator.getWorkflowIds()).toHaveLength(0);
+      const removedDeltas = publishedDeltas.filter((d) => d.type === 'removed');
+      expect(removedDeltas).toHaveLength(0);
+    });
+
+    it('clears persistence identically to legacy deleteAll', () => {
+      orchestrator.loadPlan({
+        name: 'wf-bulk-persist',
+        tasks: [{ id: 'bp1', description: 'Task' }],
+      });
+      expect(persistence.workflows.size).toBeGreaterThan(0);
+
+      orchestrator.deleteAllWorkflows({ publishRemovalDeltas: false });
+
+      expect(persistence.workflows.size).toBe(0);
+      expect(persistence.tasks.size).toBe(0);
+    });
+
+    it('orchestrator remains usable after bulk deleteAll', () => {
+      orchestrator.loadPlan({
+        name: 'wf-bulk-before',
+        tasks: [{ id: 'bold1', description: 'Old task' }],
+      });
+      orchestrator.deleteAllWorkflows({ publishRemovalDeltas: false });
+
+      orchestrator.loadPlan({
+        name: 'wf-bulk-after',
+        tasks: [{ id: 'bnew1', description: 'New task' }],
+      });
+      expect(orchestrator.getTask('bnew1')).toBeDefined();
+      expect(orchestrator.getWorkflowIds()).toHaveLength(1);
+    });
+
+    it('legacy deleteAll still publishes removal deltas (parity check)', () => {
+      orchestrator.loadPlan({
+        name: 'wf-legacy-parity',
+        tasks: [
+          { id: 'lp1', description: 'Task 1' },
+          { id: 'lp2', description: 'Task 2' },
+        ],
+      });
+      publishedDeltas = [];
+
+      orchestrator.deleteAllWorkflows();
+
+      const removedDeltas = publishedDeltas.filter((d) => d.type === 'removed');
+      // 2 tasks + 1 merge node = 3 removed deltas
+      expect(removedDeltas).toHaveLength(3);
+    });
+  });
+
   describe('blocked task unblocking', () => {
     it('throws when a persisted merge node has detached dependencies', () => {
       orchestrator.loadPlan({
