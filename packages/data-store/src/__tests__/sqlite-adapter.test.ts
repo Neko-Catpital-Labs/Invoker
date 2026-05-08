@@ -1260,6 +1260,37 @@ describe('SQLiteAdapter', () => {
     });
   });
 
+  describe('publicationStrategy persistence', () => {
+    it('round-trips github_pr through save/load', () => {
+      adapter.saveWorkflow({ ...testWorkflow, publicationStrategy: 'github_pr' });
+
+      const loaded = adapter.loadWorkflow('wf-1');
+      expect(loaded).toBeDefined();
+      expect(loaded!.publicationStrategy).toBe('github_pr');
+    });
+
+    it('round-trips mergify_stack through save/load', () => {
+      adapter.saveWorkflow({ ...testWorkflow, publicationStrategy: 'mergify_stack' });
+
+      const loaded = adapter.loadWorkflow('wf-1');
+      expect(loaded!.publicationStrategy).toBe('mergify_stack');
+    });
+
+    it('is undefined when not set (backward compatibility)', () => {
+      adapter.saveWorkflow(testWorkflow);
+
+      const loaded = adapter.loadWorkflow('wf-1');
+      expect(loaded!.publicationStrategy).toBeUndefined();
+    });
+
+    it('includes publicationStrategy in listWorkflows', () => {
+      adapter.saveWorkflow({ ...testWorkflow, publicationStrategy: 'mergify_stack' });
+
+      const workflows = adapter.listWorkflows();
+      expect(workflows[0].publicationStrategy).toBe('mergify_stack');
+    });
+  });
+
   describe('getAllTaskIds', () => {
     it('returns empty array when no tasks', () => {
       expect(adapter.getAllTaskIds()).toEqual([]);

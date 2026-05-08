@@ -45,6 +45,7 @@ export interface Workflow {
   featureBranch?: string;
   mergeMode?: 'manual' | 'automatic' | 'external_review';
   reviewProvider?: string;
+  publicationStrategy?: 'github_pr' | 'mergify_stack';
   generation?: number;
   createdAt: string;
   updatedAt: string;
