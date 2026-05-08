@@ -213,6 +213,42 @@ export async function deleteAllWorkflows(
 }
 
 /**
+ * Bulk delete-all variant that suppresses per-task removal deltas.
+ *
+ * Identical lifecycle to {@link deleteAllWorkflows} (snapshot → kill →
+ * orchestrator purge) but passes `publishRemovalDeltas: false` so the
+ * orchestrator skips individual `removed` TaskDelta messages.  The
+ * caller is expected to notify the UI through a separate channel
+ * (e.g. `invoker:workflows-changed`).
+ */
+export async function deleteAllWorkflowsBulk(
+  deps: Pick<ActionDeps, 'logger' | 'orchestrator' | 'taskExecutor'>,
+): Promise<{ snapshotPath: string | null }> {
+  const snapshotPath = createDeleteAllSnapshot();
+  deps.logger?.info(
+    snapshotPath
+      ? `delete-all-workflows-bulk snapshot: ${snapshotPath}`
+      : 'delete-all-workflows-bulk snapshot skipped: DB file does not exist yet',
+    { module: 'workflow' },
+  );
+
+  const taskExecutor = deps.taskExecutor;
+  if (taskExecutor) {
+    const allTasks = deps.orchestrator.getAllTasks();
+    const active = allTasks.filter(
+      (t) => t.status === 'running' || t.status === 'fixing_with_ai',
+    );
+    for (const task of active) {
+      deps.logger?.info(`delete-all-bulk: killing active task "${task.id}"`, { module: 'kill' });
+      await taskExecutor.killActiveExecution(task.id);
+    }
+  }
+
+  deps.orchestrator.deleteAllWorkflows({ publishRemovalDeltas: false });
+  return { snapshotPath };
+}
+
+/**
  * Recreate a workflow from a refreshed upstream base — the chart's
  * `recreateWorkflowFromFreshBase` action
  * (`docs/architecture/task-invalidation-chart.md` rows
