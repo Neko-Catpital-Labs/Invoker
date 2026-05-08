@@ -495,10 +495,12 @@ export async function executeMergeNodeImpl(
         }
 
         let fullSummary = summary;
+        let vpMarkdownCapture: string | undefined;
         if (visualProof && host.runVisualProofCapture) {
           const slug = (featureBranch ?? 'workflow').replace(/\//g, '-');
           const vpMarkdown = await host.runVisualProofCapture(baseBranch, featureBranch!, slug, workflow?.repoUrl);
           if (vpMarkdown) {
+            vpMarkdownCapture = vpMarkdown;
             fullSummary = (summary ?? '') + '\n\n' + vpMarkdown;
           }
         }
@@ -510,6 +512,21 @@ export async function executeMergeNodeImpl(
           gateWorkspacePath!,
         );
 
+        // Route through shared PR-authoring helper for consistent PR bodies.
+        const structuredCtx = workflowId
+          ? await buildPrAuthoringContext(host, workflowId, vpMarkdownCapture)
+          : undefined;
+        const prBody = await authorPrBodyForMerge(host, {
+          workflowId,
+          mergeNodeTaskId: task.id,
+          title: workflow?.name ?? 'Workflow',
+          baseBranch,
+          featureBranch: featureBranch!,
+          workflowSummary: fullSummary ?? '',
+          structuredContext: structuredCtx,
+          cwd: gateWorkspacePath!,
+        });
+
         // Create PR via provider (consolidation already done above).
         // Use the gate clone dir so gh CLI resolves the correct GitHub remote.
         const result = await host.mergeGateProvider.createReview({
@@ -517,7 +534,7 @@ export async function executeMergeNodeImpl(
           featureBranch,
           title: workflow?.name ?? 'Workflow',
           cwd: gateWorkspacePath!,
-          body: fullSummary,
+          body: prBody,
         });
         console.log(`[merge] Created GitHub PR: ${result.url}`);
 
@@ -1001,12 +1018,27 @@ export async function publishAfterFixImpl(
         throw new Error('mergeMode is "external_review" but no review provider configured');
       }
 
+      // Route through shared PR-authoring helper for consistent PR bodies.
+      const structuredCtxReview = workflowId
+        ? await buildPrAuthoringContext(host, workflowId, vpMarkdownCapture2)
+        : undefined;
+      const prBodyReview = await authorPrBodyForMerge(host, {
+        workflowId,
+        mergeNodeTaskId: task.id,
+        title: workflow?.name ?? 'Workflow',
+        baseBranch,
+        featureBranch,
+        workflowSummary: fullSummary ?? '',
+        structuredContext: structuredCtxReview,
+        cwd: consolidateDir,
+      });
+
       const result = await host.mergeGateProvider.createReview({
         baseBranch,
         featureBranch,
         title: workflow?.name ?? 'Workflow',
         cwd: consolidateDir,
-        body: fullSummary,
+        body: prBodyReview,
       });
       console.log(`[merge] Post-fix: created/updated GitHub PR: ${result.url}`);
 
