@@ -10,6 +10,8 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { join } from 'node:path';
+import { homedir } from 'node:os';
 import type { ExecutionAgent, AgentCommandSpec } from '../agent.js';
 
 export interface CodexExecutionAgentConfig {
@@ -31,6 +33,8 @@ export class CodexExecutionAgent implements ExecutionAgent {
   readonly name = 'codex';
   readonly stdinMode = 'ignore' as const;
   readonly linuxTerminalTail = 'exec_bash' as const;
+  readonly bundledSkillRoot: string;
+  readonly bundledSkills = ['make-pr'] as const;
 
   private readonly command: string;
   private readonly fullAuto: boolean;
@@ -40,6 +44,7 @@ export class CodexExecutionAgent implements ExecutionAgent {
     this.command = config.command ?? 'codex';
     this.bypassApprovalsAndSandbox = config.bypassApprovalsAndSandbox ?? true;
     this.fullAuto = config.fullAuto ?? true;
+    this.bundledSkillRoot = join(homedir(), '.codex', 'skills');
   }
 
   buildCommand(fullPrompt: string): AgentCommandSpec {

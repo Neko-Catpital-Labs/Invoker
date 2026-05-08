@@ -81,4 +81,27 @@ export class AgentRegistry {
   listPlanning(): PlanningAgent[] {
     return [...this.planningAgents.values()];
   }
+
+  /**
+   * Return the first registered execution agent that bundles the given skill.
+   * Iteration order matches registration order (Map insertion order).
+   */
+  getWithCapability(skillName: string): ExecutionAgent | undefined {
+    for (const agent of this.executionAgents.values()) {
+      if (agent.bundledSkills?.includes(skillName)) return agent;
+    }
+    return undefined;
+  }
+
+  /**
+   * Return all registered execution agents that bundle the given skill.
+   * Order matches registration order.
+   */
+  listWithCapability(skillName: string): ExecutionAgent[] {
+    const result: ExecutionAgent[] = [];
+    for (const agent of this.executionAgents.values()) {
+      if (agent.bundledSkills?.includes(skillName)) result.push(agent);
+    }
+    return result;
+  }
 }

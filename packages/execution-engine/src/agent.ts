@@ -22,6 +22,21 @@ export interface ExecutionAgent {
   readonly stdinMode: 'ignore' | 'pipe';
   /** Tail command for Linux terminal launch (e.g. 'exec_bash' or 'pause'). */
   readonly linuxTerminalTail?: 'exec_bash' | 'pause';
+
+  /**
+   * Root directory where this agent's bundled skills are installed.
+   * Example: ~/.claude/skills for the Claude agent.
+   * Undefined when the agent has no bundled skill support.
+   */
+  readonly bundledSkillRoot?: string;
+
+  /**
+   * Skill names this agent bundles (e.g. ['make-pr']).
+   * The registry uses this list for capability-based lookup.
+   * Each name corresponds to a subdirectory `invoker-{name}` under bundledSkillRoot.
+   */
+  readonly bundledSkills?: readonly string[];
+
   buildCommand(fullPrompt: string): AgentCommandSpec;
   buildResumeArgs(sessionId: string): { cmd: string; args: string[] };
   /** Build a command spec for a fix/conflict-resolution prompt. */
