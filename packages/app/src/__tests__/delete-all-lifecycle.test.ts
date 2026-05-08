@@ -12,7 +12,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { Orchestrator } from '@invoker/workflow-core';
 import type { TaskRunner } from '@invoker/execution-engine';
-import { deleteAllWorkflows } from '../workflow-actions.js';
+import { deleteAllWorkflows, deleteAllWorkflowsBulk } from '../workflow-actions.js';
 
 vi.mock('../delete-all-snapshot.js', () => ({
   createDeleteAllSnapshot: () => '/tmp/fake-snapshot',
@@ -319,6 +319,144 @@ describe('delete-all lifecycle invariants', () => {
 
       expect(result.snapshotPath).toBe('/tmp/fake-snapshot');
       expect(orchestrator.deleteAllWorkflows).toHaveBeenCalledTimes(1);
+    });
+  });
+});
+
+describe('bulk delete-all lifecycle invariants', () => {
+  describe('process cleanup ordering', () => {
+    it('kills every running and fixing_with_ai task before calling orchestrator.deleteAllWorkflows', async () => {
+      const callOrder: string[] = [];
+      const orchestrator = {
+        getAllTasks: vi.fn(() => [
+          makeTask({ id: 'wf-1/r1', status: 'running' }),
+          makeTask({ id: 'wf-1/f1', status: 'fixing_with_ai' }),
+          makeTask({ id: 'wf-1/r2', status: 'running' }),
+          makeTask({ id: 'wf-2/p1', status: 'pending' }),
+        ]),
+        deleteAllWorkflows: vi.fn(() => callOrder.push('deleteAll')),
+      };
+      const taskExecutor = {
+        killActiveExecution: vi.fn(async (id: string) => {
+          callOrder.push(`kill:${id}`);
+        }),
+      };
+
+      await deleteAllWorkflowsBulk({
+        orchestrator: orchestrator as unknown as Orchestrator,
+        taskExecutor: taskExecutor as unknown as TaskRunner,
+      });
+
+      expect(taskExecutor.killActiveExecution).toHaveBeenCalledTimes(3);
+      expect(taskExecutor.killActiveExecution).toHaveBeenCalledWith('wf-1/r1');
+      expect(taskExecutor.killActiveExecution).toHaveBeenCalledWith('wf-1/f1');
+      expect(taskExecutor.killActiveExecution).toHaveBeenCalledWith('wf-1/r2');
+
+      const deleteAllIdx = callOrder.indexOf('deleteAll');
+      const killIndices = callOrder
+        .map((entry, i) => (entry.startsWith('kill:') ? i : -1))
+        .filter((i) => i >= 0);
+      for (const killIdx of killIndices) {
+        expect(killIdx).toBeLessThan(deleteAllIdx);
+      }
+    });
+  });
+
+  describe('publishRemovalDeltas suppression', () => {
+    it('passes publishRemovalDeltas: false to orchestrator.deleteAllWorkflows', async () => {
+      const orchestrator = {
+        getAllTasks: vi.fn(() => []),
+        deleteAllWorkflows: vi.fn(),
+      };
+
+      await deleteAllWorkflowsBulk({
+        orchestrator: orchestrator as unknown as Orchestrator,
+      });
+
+      expect(orchestrator.deleteAllWorkflows).toHaveBeenCalledTimes(1);
+      expect(orchestrator.deleteAllWorkflows).toHaveBeenCalledWith({ publishRemovalDeltas: false });
+    });
+  });
+
+  describe('headless path (no taskExecutor)', () => {
+    it('skips process cleanup entirely when taskExecutor is absent', async () => {
+      const orchestrator = {
+        getAllTasks: vi.fn(() => [makeTask({ id: 'r1', status: 'running' })]),
+        deleteAllWorkflows: vi.fn(),
+      };
+
+      await deleteAllWorkflowsBulk({
+        orchestrator: orchestrator as unknown as Orchestrator,
+      });
+
+      expect(orchestrator.getAllTasks).not.toHaveBeenCalled();
+      expect(orchestrator.deleteAllWorkflows).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('snapshot lifecycle', () => {
+    it('returns snapshot path for bulk variant', async () => {
+      const orchestrator = {
+        getAllTasks: vi.fn(() => []),
+        deleteAllWorkflows: vi.fn(),
+      };
+
+      const result = await deleteAllWorkflowsBulk({
+        orchestrator: orchestrator as unknown as Orchestrator,
+      });
+
+      expect(result.snapshotPath).toBe('/tmp/fake-snapshot');
+    });
+  });
+
+  describe('logger integration', () => {
+    it('logs bulk-specific messages when logger is provided', async () => {
+      const logger = {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      };
+      const orchestrator = {
+        getAllTasks: vi.fn(() => [
+          makeTask({ id: 'wf-1/t1', status: 'running' }),
+        ]),
+        deleteAllWorkflows: vi.fn(),
+      };
+      const taskExecutor = {
+        killActiveExecution: vi.fn().mockResolvedValue(undefined),
+      };
+
+      await deleteAllWorkflowsBulk({
+        orchestrator: orchestrator as unknown as Orchestrator,
+        taskExecutor: taskExecutor as unknown as TaskRunner,
+        logger: logger as any,
+      });
+
+      expect(logger.info).toHaveBeenCalledWith(
+        expect.stringContaining('bulk'),
+        expect.objectContaining({ module: 'workflow' }),
+      );
+      expect(logger.info).toHaveBeenCalledWith(
+        expect.stringContaining('wf-1/t1'),
+        expect.objectContaining({ module: 'kill' }),
+      );
+    });
+  });
+
+  describe('parity with legacy delete-all', () => {
+    it('legacy variant does NOT pass publishRemovalDeltas: false', async () => {
+      const orchestrator = {
+        getAllTasks: vi.fn(() => []),
+        deleteAllWorkflows: vi.fn(),
+      };
+
+      await deleteAllWorkflows({
+        orchestrator: orchestrator as unknown as Orchestrator,
+      });
+
+      expect(orchestrator.deleteAllWorkflows).toHaveBeenCalledTimes(1);
+      // Legacy calls without options — defaults to publishRemovalDeltas: true
+      expect(orchestrator.deleteAllWorkflows).toHaveBeenCalledWith();
     });
   });
 });
