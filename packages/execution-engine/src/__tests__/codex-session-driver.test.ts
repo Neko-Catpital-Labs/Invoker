@@ -132,4 +132,46 @@ describe('CodexSessionDriver', () => {
     // But loading with local UUID works
     expect(driver.loadSession('local-uuid')).toBe(jsonl);
   });
+
+  it('extractUsage returns usage events from JSONL with turn.completed', () => {
+    const driver = new CodexSessionDriver();
+    const jsonl = [
+      JSON.stringify({ type: 'thread.started', thread_id: 'tid' }),
+      JSON.stringify({ timestamp: 'ts1', type: 'event_msg', payload: { type: 'user_message', message: 'Hello' } }),
+      JSON.stringify({ timestamp: 'ts2', type: 'turn.completed', model: 'o3-mini', usage: { input_tokens: 300, output_tokens: 100 } }),
+    ].join('\n');
+
+    const events = driver.extractUsage(jsonl);
+    expect(events).toHaveLength(1);
+    expect(events[0].inputTokens).toBe(300);
+    expect(events[0].outputTokens).toBe(100);
+    expect(events[0].totalTokens).toBe(400);
+    expect(events[0].confidence).toBe('exact');
+    expect(events[0].model).toBe('o3-mini');
+  });
+
+  it('extractUsage returns empty array when no usage data present', () => {
+    const driver = new CodexSessionDriver();
+    expect(driver.extractUsage(sampleJsonl)).toEqual([]);
+  });
+
+  it('extractUsage does not change parseSession output', () => {
+    const driver = new CodexSessionDriver();
+    const jsonl = [
+      JSON.stringify({ timestamp: 'ts1', type: 'event_msg', payload: { type: 'user_message', message: 'Fix it' } }),
+      JSON.stringify({ timestamp: 'ts2', type: 'event_msg', payload: { type: 'token_count', count: 50 } }),
+      JSON.stringify({ timestamp: 'ts3', type: 'response_item', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Done.' }] } }),
+      JSON.stringify({ timestamp: 'ts4', type: 'turn.completed', usage: { input_tokens: 100, output_tokens: 40 } }),
+    ].join('\n');
+
+    // parseSession is unchanged
+    const msgs = driver.parseSession(jsonl);
+    expect(msgs).toHaveLength(2);
+    expect(msgs[0].content).toBe('Fix it');
+    expect(msgs[1].content).toBe('Done.');
+
+    // extractUsage is additive
+    const usage = driver.extractUsage(jsonl);
+    expect(usage).toHaveLength(2);
+  });
 });
