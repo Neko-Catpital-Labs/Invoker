@@ -361,7 +361,7 @@ export function parseQueryFlags(args: string[]): QueryFlags {
 async function headlessQuery(args: string[], deps: HeadlessDeps): Promise<void> {
   const subCommand = args[0];
   if (!subCommand) {
-    throw new Error('Missing query sub-command. Usage: --headless query <workflows|tasks|task|queue|audit|session|ui-perf>');
+    throw new Error('Missing query sub-command. Usage: --headless query <workflows|tasks|task|queue|audit|session|costs|ui-perf>');
   }
   const flags = parseQueryFlags(args.slice(1));
 
@@ -580,8 +580,113 @@ async function headlessQuery(args: string[], deps: HeadlessDeps): Promise<void> 
       }
       break;
     }
+    case 'costs': {
+      await headlessCosts(flags, deps);
+      break;
+    }
     default:
-      throw new Error(`Unknown query sub-command: "${subCommand}". Use: workflows, tasks, task, queue, audit, session, ui-perf, stats`);
+      throw new Error(`Unknown query sub-command: "${subCommand}". Use: workflows, tasks, task, queue, audit, session, costs, ui-perf, stats`);
+  }
+}
+
+// ── Cost Query ──────────────────────────────────────────────
+
+async function headlessCosts(
+  flags: QueryFlags,
+  deps: Pick<HeadlessDeps, 'orchestrator' | 'persistence' | 'executionAgentRegistry'>,
+): Promise<void> {
+  const {
+    formatGroupedCostRollups, formatCostRollup,
+    serializeCostEvent,
+    formatAsJson,
+  } = await import('./formatter.js');
+  const {
+    attributeSessionUsage, groupCostEvents, buildAttributionContext,
+    serializeGroupedRollup,
+  } = await import('./cost-rollup.js');
+  const { rollUpCostEvents } = await import('@invoker/contracts');
+
+  // Determine target workflow
+  const workflowFilter = flags.workflow ?? flags.positional[0];
+  const workflows = deps.persistence.listWorkflows();
+  if (workflows.length === 0) {
+    process.stdout.write('No workflows found.\n');
+    return;
+  }
+
+  const targetWorkflows = workflowFilter
+    ? workflows.filter(wf => wf.id === workflowFilter)
+    : workflows;
+
+  if (workflowFilter && targetWorkflows.length === 0) {
+    throw new Error(`Workflow "${workflowFilter}" not found.`);
+  }
+
+  // Collect all NormalizedCostEvents across tasks
+  const allEvents: import('@invoker/contracts').NormalizedCostEvent[] = [];
+
+  for (const wf of targetWorkflows) {
+    deps.orchestrator.syncFromDb(wf.id);
+    const tasks = deps.orchestrator.getAllTasks().filter(
+      t => t.config.workflowId === wf.id && !t.config.isMergeNode,
+    );
+
+    for (const task of tasks) {
+      const ctx = buildAttributionContext({
+        id: task.id,
+        workflowId: wf.id,
+        executorType: task.config.executorType ?? 'worktree',
+        agentSessionId: task.execution.agentSessionId,
+        lastAgentSessionId: task.execution.lastAgentSessionId,
+        agentName: task.execution.agentName,
+        lastAgentName: task.execution.lastAgentName,
+      });
+      if (!ctx) continue;
+
+      // Extract usage from session driver
+      const agentName = ctx.agentName;
+      const driver = deps.executionAgentRegistry?.getSessionDriver(agentName);
+      if (!driver?.extractUsage) continue;
+
+      const raw = driver.loadSession(ctx.agentSessionId);
+      if (!raw) continue;
+
+      const usageEvents = driver.extractUsage(raw);
+      const attributed = attributeSessionUsage(usageEvents, ctx);
+      allEvents.push(...attributed);
+    }
+  }
+
+  if (allEvents.length === 0) {
+    process.stdout.write('No cost data available.\n');
+    return;
+  }
+
+  // Group by all dimensions and output
+  const grouped = groupCostEvents(allEvents);
+  const totalRollup = rollUpCostEvents(allEvents);
+
+  switch (flags.output) {
+    case 'label':
+      process.stdout.write(`${totalRollup.totalTokens} tokens $${totalRollup.totalCostUsd.toFixed(4)}\n`);
+      break;
+    case 'json':
+      process.stdout.write(formatAsJson({
+        groups: grouped.map(serializeGroupedRollup),
+        total: totalRollup,
+        events: allEvents.map(serializeCostEvent),
+      }) + '\n');
+      break;
+    case 'jsonl':
+      for (const event of allEvents) {
+        process.stdout.write(JSON.stringify(serializeCostEvent(event)) + '\n');
+      }
+      break;
+    default:
+      process.stdout.write(formatGroupedCostRollups(grouped) + '\n');
+      process.stdout.write('\n');
+      process.stdout.write(formatCostRollup(totalRollup) + '\n');
+      break;
   }
 }
 

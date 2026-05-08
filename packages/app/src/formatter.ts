@@ -7,6 +7,7 @@
 import type { TaskState, TaskStatus } from '@invoker/workflow-core';
 import type { TaskEvent, Workflow } from '@invoker/data-store';
 import type { NormalizedCostEvent, CostRollup } from '@invoker/contracts';
+import type { GroupedCostRollup } from './cost-rollup.js';
 
 // ── ANSI Color Codes ─────────────────────────────────────────
 
@@ -385,6 +386,39 @@ export function formatCostRollup(rollup: CostRollup): string {
   }
   if (rollup.missingUsageCount > 0) {
     lines.push(`  ${RED}Missing usage       ${rollup.missingUsageCount}${RESET}`);
+  }
+
+  return lines.join('\n');
+}
+
+/**
+ * Format grouped cost rollups as a table-like block.
+ *
+ * Each group gets a header line with dimension values, followed by
+ * a compact rollup summary.
+ */
+export function formatGroupedCostRollups(groups: GroupedCostRollup[]): string {
+  if (groups.length === 0) {
+    return `${DIM}No cost data available.${RESET}`;
+  }
+
+  const lines: string[] = [];
+  lines.push(`${BOLD}Cost rollup (${groups.length} group${groups.length === 1 ? '' : 's'})${RESET}`);
+  lines.push('');
+
+  for (const group of groups) {
+    const dimParts = Object.entries(group.dimensions)
+      .map(([k, v]) => `${k}=${v}`)
+      .join(' ');
+    const r = group.rollup;
+    const cost = `$${r.totalCostUsd.toFixed(4)}`;
+    const warnings: string[] = [];
+    if (r.unknownConfidenceCount > 0) warnings.push(`${YELLOW}${r.unknownConfidenceCount} unknown${RESET}`);
+    if (r.missingUsageCount > 0) warnings.push(`${RED}${r.missingUsageCount} missing${RESET}`);
+    const warnSuffix = warnings.length > 0 ? ` (${warnings.join(', ')})` : '';
+
+    lines.push(`  ${BOLD}${dimParts}${RESET}`);
+    lines.push(`    ${r.eventCount} events — ${r.totalTokens.toLocaleString()} tokens — ${BOLD}${cost}${RESET}${warnSuffix}`);
   }
 
   return lines.join('\n');
