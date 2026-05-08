@@ -13,7 +13,7 @@ import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { spawn } from 'node:child_process';
-import type { AgentSessionInspection, SessionDriver, RemoteTarget } from './session-driver.js';
+import type { AgentSessionInspection, SessionDriver, SessionUsageEvent, RemoteTarget } from './session-driver.js';
 import type { AgentMessage } from './codex-session.js';
 
 export class ClaudeSessionDriver implements SessionDriver {
@@ -112,6 +112,50 @@ export class ClaudeSessionDriver implements SessionDriver {
     }
 
     return { state: 'error', reason: 'Claude session ended in an unrecognized state' };
+  }
+
+  /**
+   * Extract usage events from Claude session JSONL.
+   *
+   * Claude CLI assistant entries may carry a top-level `usage` object with
+   * input_tokens / output_tokens / cache_read_input_tokens. When usage
+   * metadata is absent the entry is skipped (callers may synthesize an
+   * unknown-confidence placeholder upstream).
+   */
+  extractUsage(raw: string): SessionUsageEvent[] {
+    const events: SessionUsageEvent[] = [];
+    let lineIndex = 0;
+
+    for (const line of raw.split('\n')) {
+      if (!line.trim()) continue;
+      lineIndex++;
+      try {
+        const entry = JSON.parse(line);
+
+        // Claude JSONL assistant entries may include usage metadata
+        if (entry.type === 'assistant' && entry.usage) {
+          const u = entry.usage;
+          const input = typeof u.input_tokens === 'number' ? u.input_tokens : 0;
+          const output = typeof u.output_tokens === 'number' ? u.output_tokens : 0;
+          const cached = typeof u.cache_read_input_tokens === 'number'
+            ? u.cache_read_input_tokens
+            : 0;
+          events.push({
+            eventId: `claude-assistant-${lineIndex}`,
+            timestamp: entry.timestamp ?? '',
+            model: typeof entry.model === 'string' ? entry.model : '',
+            inputTokens: input,
+            outputTokens: output,
+            cachedTokens: cached,
+            totalTokens: input + output,
+            confidence: 'exact',
+          });
+        }
+      } catch {
+        // Skip malformed lines
+      }
+    }
+    return events;
   }
 
   /**

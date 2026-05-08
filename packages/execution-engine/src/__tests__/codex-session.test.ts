@@ -5,7 +5,7 @@ import { describe, it, expect } from 'vitest';
 // override the sessions directory. We'll test parseCodexSessionJsonl
 // directly since it's a pure function.
 
-import { parseCodexSessionJsonl, toReadableText, extractCodexSessionId } from '../codex-session.js';
+import { parseCodexSessionJsonl, toReadableText, extractCodexSessionId, extractCodexUsage } from '../codex-session.js';
 
 // ── parseCodexSessionJsonl ───────────────────────────────────
 
@@ -288,5 +288,145 @@ describe('toReadableText', () => {
 
   it('returns empty string for empty input', () => {
     expect(toReadableText('')).toBe('');
+  });
+});
+
+// ── extractCodexUsage ───────────────────────────────────────
+
+describe('extractCodexUsage', () => {
+  it('extracts usage from turn.completed events', () => {
+    const jsonl = [
+      JSON.stringify({ type: 'thread.started', thread_id: 'abc' }),
+      JSON.stringify({ type: 'turn.completed', timestamp: '2026-01-01T00:00:00Z', model: 'o3-mini', usage: { input_tokens: 500, output_tokens: 200 } }),
+    ].join('\n');
+
+    const events = extractCodexUsage(jsonl);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toEqual({
+      eventId: 'codex-turn-2',
+      timestamp: '2026-01-01T00:00:00Z',
+      model: 'o3-mini',
+      inputTokens: 500,
+      outputTokens: 200,
+      cachedTokens: 0,
+      totalTokens: 700,
+      confidence: 'exact',
+    });
+  });
+
+  it('extracts usage from thread.completed events', () => {
+    const jsonl = JSON.stringify({
+      type: 'thread.completed',
+      timestamp: '2026-01-01T00:01:00Z',
+      usage: { input_tokens: 1000, output_tokens: 400, cached_tokens: 100 },
+    });
+
+    const events = extractCodexUsage(jsonl);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toEqual({
+      eventId: 'codex-thread-1',
+      timestamp: '2026-01-01T00:01:00Z',
+      model: '',
+      inputTokens: 1000,
+      outputTokens: 400,
+      cachedTokens: 100,
+      totalTokens: 1400,
+      confidence: 'exact',
+    });
+  });
+
+  it('extracts token_count events with estimated confidence', () => {
+    const jsonl = JSON.stringify({
+      timestamp: 'ts1',
+      type: 'event_msg',
+      payload: { type: 'token_count', count: 150 },
+    });
+
+    const events = extractCodexUsage(jsonl);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toEqual({
+      eventId: 'codex-token-count-1',
+      timestamp: 'ts1',
+      model: '',
+      inputTokens: 0,
+      outputTokens: 0,
+      cachedTokens: 0,
+      totalTokens: 150,
+      confidence: 'estimated',
+    });
+  });
+
+  it('extracts multiple usage events from a mixed stream', () => {
+    const lines = [
+      JSON.stringify({ type: 'thread.started', thread_id: 'abc' }),
+      JSON.stringify({ timestamp: 'ts1', type: 'event_msg', payload: { type: 'user_message', message: 'Hello' } }),
+      JSON.stringify({ timestamp: 'ts2', type: 'event_msg', payload: { type: 'token_count', count: 50 } }),
+      JSON.stringify({ timestamp: 'ts3', type: 'response_item', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Hi there.' }] } }),
+      JSON.stringify({ timestamp: 'ts4', type: 'turn.completed', usage: { input_tokens: 200, output_tokens: 80 } }),
+    ];
+
+    const events = extractCodexUsage(lines.join('\n'));
+    expect(events).toHaveLength(2);
+    expect(events[0].confidence).toBe('estimated');
+    expect(events[0].totalTokens).toBe(50);
+    expect(events[1].confidence).toBe('exact');
+    expect(events[1].inputTokens).toBe(200);
+    expect(events[1].outputTokens).toBe(80);
+  });
+
+  it('returns empty array when no usage events are present', () => {
+    const jsonl = [
+      JSON.stringify({ timestamp: 'ts1', type: 'event_msg', payload: { type: 'user_message', message: 'Hello' } }),
+      JSON.stringify({ timestamp: 'ts2', type: 'response_item', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Hi' }] } }),
+    ].join('\n');
+
+    expect(extractCodexUsage(jsonl)).toEqual([]);
+  });
+
+  it('skips malformed lines gracefully', () => {
+    const lines = [
+      'not json',
+      '',
+      JSON.stringify({ type: 'turn.completed', timestamp: 'ts1', usage: { input_tokens: 10, output_tokens: 5 } }),
+      '{"incomplete',
+    ];
+
+    const events = extractCodexUsage(lines.join('\n'));
+    expect(events).toHaveLength(1);
+    expect(events[0].inputTokens).toBe(10);
+  });
+
+  it('returns empty array for empty input', () => {
+    expect(extractCodexUsage('')).toEqual([]);
+    expect(extractCodexUsage('\n\n')).toEqual([]);
+  });
+
+  it('handles turn.completed without usage object', () => {
+    const jsonl = JSON.stringify({ type: 'turn.completed', timestamp: 'ts1' });
+    expect(extractCodexUsage(jsonl)).toEqual([]);
+  });
+
+  it('does not affect parseCodexSessionJsonl output (backward compat)', () => {
+    // This test proves usage extraction is additive — the existing message
+    // parsing remains identical with or without usage events in the stream.
+    const lines = [
+      JSON.stringify({ timestamp: 'ts1', type: 'event_msg', payload: { type: 'user_message', message: 'Fix the bug' } }),
+      JSON.stringify({ timestamp: 'ts2', type: 'event_msg', payload: { type: 'token_count', count: 100 } }),
+      JSON.stringify({ timestamp: 'ts3', type: 'response_item', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Fixed.' }] } }),
+      JSON.stringify({ timestamp: 'ts4', type: 'turn.completed', usage: { input_tokens: 500, output_tokens: 200 } }),
+    ];
+    const raw = lines.join('\n');
+
+    // Messages remain the same — token_count and turn.completed are still skipped by parseCodexSessionJsonl
+    const msgs = parseCodexSessionJsonl(raw);
+    expect(msgs).toHaveLength(2);
+    expect(msgs[0]).toEqual({ role: 'user', content: 'Fix the bug', timestamp: 'ts1' });
+    expect(msgs[1]).toEqual({ role: 'assistant', content: 'Fixed.', timestamp: 'ts3' });
+
+    // Usage is extracted separately
+    const usage = extractCodexUsage(raw);
+    expect(usage).toHaveLength(2);
+    expect(usage[0].confidence).toBe('estimated');
+    expect(usage[1].confidence).toBe('exact');
   });
 });
