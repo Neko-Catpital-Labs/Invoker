@@ -77,6 +77,27 @@ describe('App launch (component)', () => {
     expect(screen.getByText('Select a task from the graph to view details')).toBeInTheDocument();
   });
 
+  it('Delete Workflow History (DB) button calls deleteAllWorkflowsBulk (not legacy deleteAllWorkflows)', async () => {
+    // Stub window.confirm to auto-accept
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+    render(<App />);
+
+    // Open utility dropdown
+    const utilityButton = screen.getByLabelText('Utility menu');
+    fireEvent.click(utilityButton);
+
+    // Click Delete Workflow History (DB)
+    const deleteButton = screen.getByText('Delete Workflow History (DB)');
+    fireEvent.click(deleteButton);
+
+    // Bulk variant must be called, legacy must NOT be called
+    expect(mock.api.deleteAllWorkflowsBulk).toHaveBeenCalledTimes(1);
+    expect(mock.api.deleteAllWorkflows).not.toHaveBeenCalled();
+
+    confirmSpy.mockRestore();
+  });
+
   it('opens System Setup automatically when packaged bundled skills need installation', async () => {
     mock.api.getSystemDiagnostics = vi.fn(async () => ({
       platform: 'linux',
