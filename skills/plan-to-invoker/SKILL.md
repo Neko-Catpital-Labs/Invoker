@@ -37,7 +37,14 @@ Grep-only checks are Phase 1a only; behavioral claims require executed Phase 1b 
 
 **Bugfix repro:** For bug/regression plans, a shared `bash scripts/repro-<slug>.sh` (or the same `command:` before and after) is **strongly recommended**; **`skill-doctor` does not require it.** If the fix invalidates the original repro, use another explicit verification task. See `references/task-patterns.md` § *Bugfix repro*.
 
-**Invoker dogfooding rule:** When the target repo is Invoker itself (`EdbertChan/Invoker` or the upstream `Neko-Catpital-Labs/Invoker`), be explicit that GitHub PR publishing should use **Mergify Stacks** after the work is ready: keep `onFinish: pull_request` + `mergeMode: github`, then publish/update the resulting commit stack with `mergify stack push`. Do **not** generalize this to unrelated target repos; for example, `EdbertChan/test-playground` should keep normal PR flow unless that repo independently adopts Mergify Stacks. For the actual PR authoring/publication step after implementation work is ready, use the `make-pr` skill.
+**Publication strategy rule:** The execution engine routes review publication through a **strategy router** (`packages/execution-engine/src/publication-strategy-router.ts`). Two strategies are supported:
+
+- `github_pr` (default): `GitHubMergeGateProvider` creates a standard GitHub PR and polls review approval. Use for all repos unless they opt into Mergify Stacks.
+- `mergify_stack` (explicit opt-in): `MergifyStackProvider` runs `mergify stack push`, resolves the stacked PR, and polls approval. Use for Invoker-on-Invoker dogfooding (`EdbertChan/Invoker` or `Neko-Catpital-Labs/Invoker`) or repos that independently adopt Mergify Stacks.
+
+When the target repo uses `mergify_stack`: keep `onFinish: pull_request` + `mergeMode: github`, then publish/update the resulting commit stack with `mergify stack push`. Do **not** set `mergify_stack` on workflows targeting repos that do not use Mergify Stacks; for example, `EdbertChan/test-playground` should keep the `github_pr` default. For the actual PR authoring/publication step after implementation work is ready, use the `make-pr` skill.
+
+**Known `mergify_stack` limitations** (lifecycle PoC: `docs/mergify-stack-lifecycle-poc.md`): mid-stack rewrites recreate PRs (losing review comments), and re-push after mid-stack cancel fails with HTTP 422 (adapter must close downstream PRs first).
 
 ## Deterministic step map (plan-to-invoker)
 
@@ -97,18 +104,18 @@ If `skill-doctor.sh` fails, run individual checks to isolate the problem:
 10. `step-submit` (no stacking)
     Use when the plan has NO `externalDependencies`.
     `./submit-plan.sh <plan-file>`
-    If the target repo is Invoker itself, finish the PR publication step with `mergify stack push` from the working branch after the stack of commits is ready.
+    If the workflow's `publicationStrategy` is `mergify_stack` (e.g. Invoker-on-Invoker), publish the PR stack with `mergify stack push` after commits are ready. Otherwise the engine uses `github_pr` (default) automatically.
 10a. `step-submit-stacked` (single plan with upstream dependency)
      Use when the plan HAS `externalDependencies` with a concrete workflow ID (not `__UPSTREAM_WORKFLOW_ID__`).
      1. Query upstream workflow: `./run.sh --headless query workflows --output json | jq '.[] | select(.id == "<workflowId>")'`
      2. Extract the upstream workflow's `featureBranch`
      3. Rewrite baseBranch: `sed -E -i "s|^baseBranch:.*$|baseBranch: <featureBranch>|" <plan-file>`
      4. Submit: `./submit-plan.sh <plan-file>`
-     5. If the target repo is Invoker itself, publish/update the resulting PR stack with `mergify stack push` after submission-side commits are ready.
+     5. If `publicationStrategy: mergify_stack`, publish/update the resulting PR stack with `mergify stack push` after submission-side commits are ready.
 10b. `step-submit-chain` (batch stacking, multiple template plans)
      Use when submitting an entire dependency chain at once.
      `./scripts/submit-workflow-chain.sh [--gate-policy completed|review_ready] <plan1.yaml> <plan2.template.yaml> ...`
-     The chain script handles: template rendering, baseBranch rewrite, merge-gate injection, sequential submission. For Invoker-on-Invoker work only, publish the resulting GitHub PR stack with `mergify stack push` once the chain's commits are prepared.
+     The chain script handles: template rendering, baseBranch rewrite, merge-gate injection, sequential submission. When `publicationStrategy: mergify_stack`, publish the resulting PR stack with `mergify stack push` once the chain's commits are prepared. For `github_pr` (default), the engine handles PR creation automatically.
 
 ## Runtime verification (Phase 1b)
 
@@ -152,7 +159,7 @@ For clean PR history, run plan-to-invoker hardening as a dependent workflow chai
 
 Use `scripts/submit-workflow-chain.sh` to preserve dependency order and readable stacked PRs.
 
-When those hardening workflows target Invoker itself, the branch/PR publication layer should use Mergify Stacks (`mergify stack push`) after the commits are ready. Keep external target repos on their own normal PR workflow unless they independently opt into Mergify.
+When those hardening workflows target Invoker itself (`publicationStrategy: mergify_stack`), publish the resulting PR stack with `mergify stack push` after the commits are ready. Workflows targeting external repos use `github_pr` (default) unless the repo independently opts into `mergify_stack`.
 
 ## Routing (see playbook/references)
 

@@ -80,23 +80,41 @@ Omit or use `TBD` under `Files:` when scope is unknown; revise tasks as the plan
 
 ---
 
-## 7. Invoker-on-Invoker publication workflow
+## 7. Publication strategy selection (`github_pr` vs `mergify_stack`)
+
+The execution engine resolves the publication provider through a **strategy router** (`packages/execution-engine/src/publication-strategy-router.ts`). The workflow's `publicationStrategy` field selects which `MergeGateProvider` handles review creation and approval polling.
+
+| `publicationStrategy` | Provider | Behavior |
+|---|---|---|
+| `github_pr` (default) | `GitHubMergeGateProvider` | Creates a standard GitHub PR, polls review approval |
+| `mergify_stack` (opt-in) | `MergifyStackProvider` | Runs `mergify stack push`, resolves stacked PR, polls approval |
 
 When the target repo is Invoker itself, keep the plan shape normal:
 
 - `onFinish: pull_request`
 - `mergeMode: github`
 
-Then make the repo-specific publication step explicit: once the branch's commit stack is ready, publish/update it with `mergify stack push`.
+The workflow's `publicationStrategy` is set to `mergify_stack` at the persistence level. Once the branch's commit stack is ready, the engine publishes via `mergify stack push`.
 
 **See**: `fixtures/positive/06-invoker-dogfood-mergify-stack.yaml`
 
-This is a **repo-specific dogfood rule**, not a general plan schema rule.
+**Selection criteria:**
+
+| Target repo | Strategy | Rationale |
+|---|---|---|
+| Invoker itself (`EdbertChan/Invoker`, `Neko-Catpital-Labs/Invoker`) | `mergify_stack` | Invoker dogfoods stacked PR publication |
+| External repo without Mergify Stacks | omit → `github_pr` | Standard GitHub PR workflow |
+| External repo that independently uses Mergify Stacks | `mergify_stack` | Explicit opt-in per repo |
+
+**Known `mergify_stack` limitations** (lifecycle PoC: `docs/mergify-stack-lifecycle-poc.md`):
+- Mid-stack rewrites recreate affected PRs (new numbers); review comments are lost (Scenario C).
+- Re-push after mid-stack cancel fails with HTTP 422; adapter must close downstream PRs before re-pushing (Scenario E).
+- PR number instability requires refreshing PR mappings after every force-push.
 
 Counterexample:
 
-- If the target repo is an external repo such as `EdbertChan/test-playground`, do **not** inject Mergify Stacks guidance by default.
-- Keep normal PR flow unless that repo independently uses Mergify Stacks.
+- If the target repo is an external repo such as `EdbertChan/test-playground`, do **not** set `publicationStrategy: mergify_stack`.
+- Keep `github_pr` (default) unless that repo independently uses Mergify Stacks.
 
 ## 8. Policy matrix / architecture document
 
@@ -138,7 +156,7 @@ Use this pattern when a change is too large for a single reviewable workflow. Fo
 - Feature implementation → implement → test → verify, `onFinish: merge`
 - Multi-step refactors → `executorType: worktree`, chained dependencies
 - Large refactors → `onFinish: pull_request`, diamond DAGs
-- Invoker-on-Invoker PR publication → keep `mergeMode: github`, then use `mergify stack push` as the repo-specific publication step
+- Publication strategy → `github_pr` (default) for standard PRs; `mergify_stack` (explicit opt-in) for stacked publication via `MergifyStackProvider`
 - Policy matrix / architecture docs → preserve row-level coverage with `coverage-map.json` and `stack-manifest.json`
 - Dependency-first layered decomposition → enforce `Layer:` + `Feature state:` metadata, preserve dependency direction, allow explicit dormant tasks
 

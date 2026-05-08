@@ -1,14 +1,20 @@
 # Invoker-on-Invoker dogfood example with explicit Mergify Stacks publication.
 # Source: examples.md Section 7
+#
+# Publication strategy: The workflow's `publicationStrategy` is set to
+# `mergify_stack` at the persistence level, routing review creation through
+# `MergifyStackProvider` (see publication-strategy-router.ts).
+# Known limitations documented in docs/mergify-stack-lifecycle-poc.md.
 
 name: "Dogfood Invoker CI docs update"
 description: |
   Updates Invoker's own contributor guidance for merge automation.
 
-  This plan still uses the normal Invoker PR gate shape: `onFinish: pull_request`
+  This plan uses the normal Invoker PR gate shape: `onFinish: pull_request`
   with `mergeMode: github`. Because the target repo is Invoker itself, the
-  branch publication workflow after the commits are ready should use
-  `mergify stack push` so stacked PRs stay synchronized.
+  workflow's `publicationStrategy` is `mergify_stack`, and the engine publishes
+  via `MergifyStackProvider` (runs `mergify stack push`). External repos should
+  omit `publicationStrategy` to use the `github_pr` default.
 onFinish: pull_request
 mergeMode: github
 repoUrl: git@github.com:EdbertChan/Invoker.git

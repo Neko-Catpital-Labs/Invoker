@@ -16,9 +16,9 @@ Use this skill when the work is already done and the user wants a PR created, up
 - PR title/body authoring for Invoker
 - The preferred PR section schema
 - Upstream-first branch/PR workflow (explicit base and publish remotes)
-- Repo-specific publication rules:
-  - Invoker-on-Invoker stacks may use `mergify stack push`
-  - unrelated target repos should keep their own normal PR workflow unless they independently use Mergify Stacks
+- Publication strategy awareness:
+  - `github_pr` (default): standard GitHub PR via `GitHubMergeGateProvider` — used for all repos unless they opt into Mergify Stacks
+  - `mergify_stack` (explicit opt-in): stacked PR publication via `MergifyStackProvider` — use `mergify stack push` for Invoker-on-Invoker or repos that independently adopt Mergify Stacks
 
 ## Preferred PR schema
 
@@ -104,9 +104,16 @@ Reference:
 
 - `docs/pr-branching-workflow.md`
 
-## Invoker-specific publication rule
+## Publication strategy
 
-If the target repo is Invoker itself (`EdbertChan/Invoker` or `Neko-Catpital-Labs/Invoker`):
+The execution engine resolves the publication provider via `publicationStrategy` on the workflow. This skill handles the PR authoring step; the engine handles provider dispatch.
+
+| `publicationStrategy` | PR creation | When to use |
+|---|---|---|
+| `github_pr` (default) | `GitHubMergeGateProvider` creates a standard GitHub PR | All repos unless they opt into Mergify Stacks |
+| `mergify_stack` (opt-in) | `MergifyStackProvider` runs `mergify stack push` | Invoker-on-Invoker (`EdbertChan/Invoker`, `Neko-Catpital-Labs/Invoker`) or repos that independently use Mergify Stacks |
+
+For `mergify_stack` workflows:
 
 - use the preferred PR schema above
 - keep stack publication explicit
@@ -116,7 +123,9 @@ If the target repo is Invoker itself (`EdbertChan/Invoker` or `Neko-Catpital-Lab
 mergify stack push
 ```
 
-Do not generalize this to unrelated repos.
+Do not set `mergify_stack` on workflows targeting repos that do not use Mergify Stacks.
+
+**Known limitations** (lifecycle PoC: `docs/mergify-stack-lifecycle-poc.md`): mid-stack rewrites recreate PRs (losing comments); re-push after cancel requires closing downstream PRs first.
 
 ## Validation
 

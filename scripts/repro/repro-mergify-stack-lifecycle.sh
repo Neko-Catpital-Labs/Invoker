@@ -133,7 +133,12 @@ assert_num_eq() {
   local tag="$1"
   local expected="$2"
   local actual="$3"
-  if [ "$expected" -ne "$actual" ] 2>/dev/null; then
+  # Guard against empty or non-numeric values — treat as mismatch
+  if [ -z "$actual" ] || ! printf '%s' "$actual" | grep -qE '^-?[0-9]+$'; then
+    echo "  FAIL $tag: expected=$expected actual='$actual' (non-numeric)" >&2
+    return 1
+  fi
+  if [ "$expected" -ne "$actual" ]; then
     echo "  FAIL $tag: expected=$expected actual=$actual" >&2
     return 1
   fi
@@ -143,18 +148,35 @@ assert_num_eq() {
 
 # Push the Mergify stack with retry.  The Mergify CLI can encounter HTTP 422
 # errors ("pull request already exists") when re-pushing a stack that already
-# has PRs.  In that case, retry once — the partial state update from the first
-# attempt often allows the second push to succeed.
+# has PRs.  In that case, retry up to 2 more times — the partial state update
+# from each attempt progressively resolves conflicts until the full stack
+# reconciles.
+#
+# All attempt outputs are accumulated in push_log so that PR URLs from every
+# attempt are available to fetch_all_stack_prs.
 #
 # Usage: mergify_stack_push_with_retry <push_log>
 mergify_stack_push_with_retry() {
   local push_log="$1"
+  local max_attempts=3
+  local attempt_log="${push_log}.attempt"
+
+  # First attempt — write (not append) to start fresh
   mergify stack push 2>&1 | tee "$push_log" || true
-  if grep -q 'HTTPError 422' "$push_log"; then
-    log "(retrying push after 422 — Mergify CLI may need a second pass)"
-    sleep 2
-    mergify stack push 2>&1 | tee "$push_log" || true
-  fi
+
+  local attempt=1
+  while [ "$attempt" -lt "$max_attempts" ] && grep -q 'HTTPError 422' "$push_log"; do
+    ((attempt++))
+    log "(retrying push after 422 — attempt $attempt/$max_attempts)"
+    sleep 3
+    mergify stack push 2>&1 | tee "$attempt_log" || true
+    # Append retry output so all PR URLs are captured
+    cat "$attempt_log" >> "$push_log"
+    if ! grep -q 'HTTPError 422' "$attempt_log"; then
+      break
+    fi
+  done
+  rm -f "$attempt_log"
 }
 
 # Fetch stack PRs by searching for head branches matching the prefix.
@@ -596,6 +618,9 @@ run_scenario_E() {
   log "[E] re-pushing stack to recreate after cancel"
   cd "$CLONE_DIR"
   git checkout "${SCENARIO_D_BRANCH}" >/dev/null 2>&1
+
+  # Brief pause so Mergify and GitHub fully process the closed PR from Scenario D
+  sleep 3
 
   local push_log="$TMPDIR_ROOT/scenario-e-push.log"
   mergify_stack_push_with_retry "$push_log"

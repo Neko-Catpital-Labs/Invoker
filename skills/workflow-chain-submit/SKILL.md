@@ -54,4 +54,7 @@ The script prints:
 - `--gate-policy completed|review_ready` controls cross-workflow merge-gate readiness:
   - `completed` (default): downstream waits for upstream merge gate `completed`.
   - `review_ready`: downstream can start once upstream merge gate is `review_ready`, `awaiting_approval`, or `completed`.
-- This skill manages Invoker workflow stacking, not GitHub PR publication policy. If the target repo is Invoker itself, publish/update the resulting GitHub PR stack with `mergify stack push` once the branch commits are ready. If the target repo is something else (for example `EdbertChan/test-playground`), keep normal PR flow unless that repo independently uses Mergify Stacks.
+- This skill manages Invoker workflow stacking, not PR publication strategy. Publication strategy is resolved per-workflow by the execution engine's strategy router (`packages/execution-engine/src/publication-strategy-router.ts`):
+  - `github_pr` (default): `GitHubMergeGateProvider` creates a standard GitHub PR automatically.
+  - `mergify_stack` (explicit opt-in): `MergifyStackProvider` runs `mergify stack push` and resolves the stacked PR. Use for Invoker-on-Invoker workflows or repos that independently adopt Mergify Stacks.
+  - Do not set `mergify_stack` on workflows targeting repos that do not use Mergify Stacks (e.g. `EdbertChan/test-playground`).
