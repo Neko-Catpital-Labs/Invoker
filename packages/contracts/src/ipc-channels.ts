@@ -199,6 +199,10 @@ export const IpcChannels = {
     request: [];
     response: void;
   },
+  'invoker:delete-all-workflows-bulk': {} as {
+    request: [];
+    response: void;
+  },
   'invoker:delete-workflow': {} as {
     request: [workflowId: string];
     response: void;
