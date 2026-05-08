@@ -1097,4 +1097,101 @@ describe('PersistedWorkflowMutationCoordinator', () => {
     expect(evictedIntent?.error).toContain('queue fence');
     gate.resolve();
   });
+
+  // ── Bulk delete-all-workflows coordinator regression ────────────────
+
+  it('invalidates an older running workflow intent when internal bulk delete-all-workflows is enqueued', async () => {
+    const adapter = await SQLiteAdapter.create(':memory:');
+    adapters.push(adapter);
+    adapter.saveWorkflow({
+      id: 'wf-1',
+      name: 'wf-1',
+      status: 'running',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+
+    const gate = deferred();
+    const order: string[] = [];
+    const coordinator = new PersistedWorkflowMutationCoordinator(
+      adapter,
+      'owner-1',
+      async (channel, args) => {
+        order.push(`${channel}:${String(args[0])}`);
+        if (channel === 'invoker:fix-with-agent') {
+          await gate.promise;
+        }
+      },
+    );
+
+    const olderRunning = coordinator.enqueue<void>(
+      'wf-1',
+      'normal',
+      'invoker:fix-with-agent',
+      ['wf-1/blocker-task', null],
+    );
+    void olderRunning.catch(() => {});
+    await waitFor(() => adapter.listWorkflowMutationIntents('wf-1', ['running']).length === 1);
+
+    const deleteAllBulk = coordinator.enqueue<void>(
+      'wf-1',
+      'high',
+      'invoker:delete-all-workflows-bulk',
+      [],
+    );
+    await deleteAllBulk;
+    await expect(olderRunning).rejects.toThrow(/superseded by delete intent/i);
+
+    const intents = adapter.listWorkflowMutationIntents('wf-1');
+    expect(intents.find((intent) => intent.id === 1)?.status).toBe('failed');
+    expect(intents.find((intent) => intent.id === 1)?.error).toContain('Superseded by delete intent #2');
+    expect(intents.find((intent) => intent.id === 2)?.status).toBe('completed');
+    expect(order).toEqual([
+      'invoker:fix-with-agent:wf-1/blocker-task',
+      'invoker:delete-all-workflows-bulk:undefined',
+    ]);
+  });
+
+  it('evicts older queued workflow intents when internal bulk delete-all-workflows fence starts', async () => {
+    const adapter = await SQLiteAdapter.create(':memory:');
+    adapters.push(adapter);
+    adapter.saveWorkflow({
+      id: 'wf-1',
+      name: 'wf-1',
+      status: 'running',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+
+    const gate = deferred();
+    const order: string[] = [];
+    const coordinator = new PersistedWorkflowMutationCoordinator(
+      adapter,
+      'owner-1',
+      async (channel, args) => {
+        order.push(`${channel}:${String(args[0])}`);
+        if (channel === 'invoker:fix-with-agent') {
+          await gate.promise;
+        }
+      },
+    );
+
+    const running = coordinator.enqueue<void>('wf-1', 'normal', 'invoker:fix-with-agent', ['wf-1/blocker-task', null]);
+    void running.catch(() => {});
+    const olderQueued = coordinator.enqueue<void>('wf-1', 'normal', 'invoker:edit-task-agent', ['old-queued']);
+    void olderQueued.catch(() => {});
+    const deleteAllBulk = coordinator.enqueue<void>('wf-1', 'high', 'invoker:delete-all-workflows-bulk', []);
+    const newerQueued = coordinator.enqueue<void>('wf-1', 'normal', 'invoker:edit-task-agent', ['new-queued']);
+
+    await deleteAllBulk;
+    await newerQueued;
+    await expect(running).rejects.toThrow(/superseded by delete intent/i);
+    await expect(olderQueued).rejects.toThrow(/evicted/i);
+
+    expect(order).toEqual([
+      'invoker:fix-with-agent:wf-1/blocker-task',
+      'invoker:delete-all-workflows-bulk:undefined',
+      'invoker:edit-task-agent:new-queued',
+    ]);
+  });
 });
