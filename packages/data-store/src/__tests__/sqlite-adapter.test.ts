@@ -2353,4 +2353,65 @@ describe('SQLiteAdapter', () => {
       expect(adapter.evictQueuedWorkflowMutationIntentsBefore('wf-1', fence)).toEqual([]);
     });
   });
+
+  describe('review metadata persistence', () => {
+    it('round-trips review metadata (reviewUrl, reviewId, reviewStatus) through save and load', () => {
+      adapter.saveWorkflow(testWorkflow);
+      const task = makeTask('t1', {
+        execution: {
+          reviewUrl: 'https://github.com/org/repo/pull/42',
+          reviewId: 'org/repo#42',
+          reviewStatus: 'Awaiting review',
+        },
+      });
+      adapter.saveTask('wf-1', task);
+
+      const loaded = adapter.loadTasks('wf-1');
+      expect(loaded).toHaveLength(1);
+      expect(loaded[0].execution.reviewUrl).toBe('https://github.com/org/repo/pull/42');
+      expect(loaded[0].execution.reviewId).toBe('org/repo#42');
+      expect(loaded[0].execution.reviewStatus).toBe('Awaiting review');
+    });
+
+    it('round-trips review metadata through updateTask', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t1'));
+
+      adapter.updateTask('t1', {
+        execution: {
+          reviewUrl: 'https://github.com/org/repo/pull/99',
+          reviewId: 'org/repo#99',
+          reviewStatus: 'Changes requested',
+        },
+      });
+
+      const loaded = adapter.loadTasks('wf-1');
+      expect(loaded[0].execution.reviewUrl).toBe('https://github.com/org/repo/pull/99');
+      expect(loaded[0].execution.reviewId).toBe('org/repo#99');
+      expect(loaded[0].execution.reviewStatus).toBe('Changes requested');
+    });
+
+    it('ignores legacy review_provider_id column data on load', () => {
+      adapter.saveWorkflow(testWorkflow);
+      adapter.saveTask('wf-1', makeTask('t1'));
+
+      // Simulate a legacy row that has review_provider_id populated
+      // (the column still exists in SQLite, but the adapter no longer reads it)
+      adapter.runInTransaction(() => {
+        (adapter as any).db.run(
+          `UPDATE tasks SET review_provider_id = ?, review_url = ?, review_id = ?, review_status = ? WHERE id = ?`,
+          ['github', 'https://github.com/org/repo/pull/1', 'org/repo#1', 'Approved', 't1'],
+        );
+      });
+
+      const loaded = adapter.loadTask('t1');
+      expect(loaded).toBeDefined();
+      // The three active review fields are still read
+      expect(loaded!.execution.reviewUrl).toBe('https://github.com/org/repo/pull/1');
+      expect(loaded!.execution.reviewId).toBe('org/repo#1');
+      expect(loaded!.execution.reviewStatus).toBe('Approved');
+      // reviewProviderId is no longer part of the TaskExecution interface
+      expect('reviewProviderId' in loaded!.execution).toBe(false);
+    });
+  });
 });

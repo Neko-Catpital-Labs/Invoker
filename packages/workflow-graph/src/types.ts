@@ -130,7 +130,6 @@ export interface TaskExecution {
   readonly reviewUrl?: string;
   readonly reviewId?: string;
   readonly reviewStatus?: string;
-  readonly reviewProviderId?: string;
   readonly phase?: TaskRunPhase;
   readonly launchStartedAt?: Date;
   readonly launchCompletedAt?: Date;

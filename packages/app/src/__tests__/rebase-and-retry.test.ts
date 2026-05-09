@@ -149,7 +149,6 @@ describe('rebase-and-retry: pool mirror cleanup before restart', { timeout: 120_
             reviewUrl: undefined,
             reviewId: undefined,
             reviewStatus: undefined,
-            reviewProviderId: undefined,
             agentSessionId: undefined,
             containerId: undefined,
           };
