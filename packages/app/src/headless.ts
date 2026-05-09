@@ -44,6 +44,7 @@ import {
   setWorkflowMergeMode,
 } from './workflow-actions.js';
 import { normalizeMergeModeForPersistence } from './merge-mode.js';
+import type { CostGroupDimension } from './cost-rollup.js';
 import { openExternalTerminalForTask } from './open-terminal-for-task.js';
 import { dispatchStartedTasksWithGlobalTopup, executeGlobalTopup, finalizeMutationWithGlobalTopup } from './global-topup.js';
 import { resolveHeadlessTargetWorkflowId } from './headless-command-classification.js';
@@ -314,6 +315,7 @@ export interface QueryFlags {
   workflow?: string;
   noMerge?: boolean;
   reset?: boolean;
+  groupBy?: string;
   positional: string[];
 }
 
@@ -346,6 +348,9 @@ export function parseQueryFlags(args: string[]): QueryFlags {
     } else if (arg === '--reset') {
       flags.reset = true;
       i += 1;
+    } else if (arg === '--group-by' && i + 1 < args.length) {
+      flags.groupBy = args[i + 1];
+      i += 2;
     } else if (arg.startsWith('--')) {
       throw new Error(`Unknown query flag: "${arg}"`);
     } else {
@@ -361,7 +366,7 @@ export function parseQueryFlags(args: string[]): QueryFlags {
 async function headlessQuery(args: string[], deps: HeadlessDeps): Promise<void> {
   const subCommand = args[0];
   if (!subCommand) {
-    throw new Error('Missing query sub-command. Usage: --headless query <workflows|tasks|task|queue|audit|session|costs|ui-perf>');
+    throw new Error('Missing query sub-command. Usage: --headless query <workflows|tasks|task|queue|audit|session|cost|cost-events|costs|ui-perf|stats>');
   }
   const flags = parseQueryFlags(args.slice(1));
 
@@ -580,12 +585,20 @@ async function headlessQuery(args: string[], deps: HeadlessDeps): Promise<void> 
       }
       break;
     }
+    case 'cost': {
+      await headlessCost(flags, deps);
+      break;
+    }
+    case 'cost-events': {
+      await headlessCostEvents(flags, deps);
+      break;
+    }
     case 'costs': {
       await headlessCosts(flags, deps);
       break;
     }
     default:
-      throw new Error(`Unknown query sub-command: "${subCommand}". Use: workflows, tasks, task, queue, audit, session, costs, ui-perf, stats`);
+      throw new Error(`Unknown query sub-command: "${subCommand}". Use: workflows, tasks, task, queue, audit, session, cost, cost-events, costs, ui-perf, stats`);
   }
 }
 
@@ -686,6 +699,169 @@ async function headlessCosts(
       process.stdout.write(formatGroupedCostRollups(grouped) + '\n');
       process.stdout.write('\n');
       process.stdout.write(formatCostRollup(totalRollup) + '\n');
+      break;
+  }
+}
+
+// ── Shared Cost Event Collection ────────────────────────────
+
+type CostQueryDeps = Pick<HeadlessDeps, 'orchestrator' | 'persistence' | 'executionAgentRegistry'>;
+
+async function collectCostEvents(
+  flags: QueryFlags,
+  deps: CostQueryDeps,
+): Promise<import('@invoker/contracts').NormalizedCostEvent[]> {
+  const { attributeSessionUsage, buildAttributionContext } = await import('./cost-rollup.js');
+
+  const workflowFilter = flags.workflow ?? flags.positional[0];
+  const workflows = deps.persistence.listWorkflows();
+  if (workflows.length === 0) return [];
+
+  const targetWorkflows = workflowFilter
+    ? workflows.filter(wf => wf.id === workflowFilter)
+    : workflows;
+
+  if (workflowFilter && targetWorkflows.length === 0) {
+    throw new Error(`Workflow "${workflowFilter}" not found.`);
+  }
+
+  const allEvents: import('@invoker/contracts').NormalizedCostEvent[] = [];
+
+  for (const wf of targetWorkflows) {
+    deps.orchestrator.syncFromDb(wf.id);
+    const tasks = deps.orchestrator.getAllTasks().filter(
+      t => t.config.workflowId === wf.id && !t.config.isMergeNode,
+    );
+
+    for (const task of tasks) {
+      const ctx = buildAttributionContext({
+        id: task.id,
+        workflowId: wf.id,
+        executorType: task.config.executorType ?? 'worktree',
+        agentSessionId: task.execution.agentSessionId,
+        lastAgentSessionId: task.execution.lastAgentSessionId,
+        agentName: task.execution.agentName,
+        lastAgentName: task.execution.lastAgentName,
+      });
+      if (!ctx) continue;
+
+      const agentName = ctx.agentName;
+      const driver = deps.executionAgentRegistry?.getSessionDriver(agentName);
+      if (!driver?.extractUsage) continue;
+
+      const raw = driver.loadSession(ctx.agentSessionId);
+      if (!raw) continue;
+
+      const usageEvents = driver.extractUsage(raw);
+      const attributed = attributeSessionUsage(usageEvents, ctx);
+      allEvents.push(...attributed);
+    }
+  }
+
+  return allEvents;
+}
+
+// ── query cost ──────────────────────────────────────────────
+
+const VALID_GROUP_DIMENSIONS = ['workflow', 'task', 'agent', 'model', 'day'] as const;
+
+async function headlessCost(
+  flags: QueryFlags,
+  deps: CostQueryDeps,
+): Promise<void> {
+  const {
+    formatGroupedCostRollups, formatCostRollup,
+    formatAsJson,
+  } = await import('./formatter.js');
+  const { groupCostEvents, serializeGroupedRollup } = await import('./cost-rollup.js');
+  const { rollUpCostEvents } = await import('@invoker/contracts');
+
+  // Parse --group-by flag (comma-separated dimensions)
+  let dimensions: CostGroupDimension[] | undefined;
+  if (flags.groupBy) {
+    const parts = flags.groupBy.split(',').map(s => s.trim());
+    for (const part of parts) {
+      if (!(VALID_GROUP_DIMENSIONS as readonly string[]).includes(part)) {
+        throw new Error(
+          `Invalid --group-by dimension: "${part}". Must be one or more of: ${VALID_GROUP_DIMENSIONS.join(', ')}`,
+        );
+      }
+    }
+    dimensions = parts as CostGroupDimension[];
+  }
+
+  const allEvents = await collectCostEvents(flags, deps);
+
+  if (allEvents.length === 0) {
+    process.stdout.write('No cost data available.\n');
+    return;
+  }
+
+  const grouped = groupCostEvents(allEvents, dimensions);
+  const totals = rollUpCostEvents(allEvents);
+  const scope = flags.workflow ?? flags.positional[0] ?? 'all';
+  const groupBy = dimensions ?? [...VALID_GROUP_DIMENSIONS];
+
+  switch (flags.output) {
+    case 'label':
+      process.stdout.write(`${totals.totalTokens} tokens $${totals.totalCostUsd.toFixed(4)}\n`);
+      break;
+    case 'json':
+      process.stdout.write(formatAsJson({
+        scope,
+        groupBy,
+        totals,
+        groups: grouped.map(serializeGroupedRollup),
+        metadata: { eventCount: allEvents.length },
+      }) + '\n');
+      break;
+    case 'jsonl':
+      for (const group of grouped) {
+        process.stdout.write(JSON.stringify(serializeGroupedRollup(group)) + '\n');
+      }
+      break;
+    default:
+      process.stdout.write(formatGroupedCostRollups(grouped) + '\n');
+      process.stdout.write('\n');
+      process.stdout.write(formatCostRollup(totals) + '\n');
+      break;
+  }
+}
+
+// ── query cost-events ───────────────────────────────────────
+
+async function headlessCostEvents(
+  flags: QueryFlags,
+  deps: CostQueryDeps,
+): Promise<void> {
+  const {
+    formatCostEvent, serializeCostEvent,
+    formatAsJson, formatAsJsonl,
+  } = await import('./formatter.js');
+
+  const allEvents = await collectCostEvents(flags, deps);
+
+  if (allEvents.length === 0) {
+    process.stdout.write('No cost events found.\n');
+    return;
+  }
+
+  switch (flags.output) {
+    case 'label':
+      for (const event of allEvents) {
+        process.stdout.write(`${event.attribution.taskId}:${event.identity.eventId}\n`);
+      }
+      break;
+    case 'json':
+      process.stdout.write(formatAsJson(allEvents.map(serializeCostEvent)) + '\n');
+      break;
+    case 'jsonl':
+      process.stdout.write(formatAsJsonl(allEvents.map(serializeCostEvent)) + '\n');
+      break;
+    default:
+      for (const event of allEvents) {
+        process.stdout.write(formatCostEvent(event) + '\n');
+      }
       break;
   }
 }

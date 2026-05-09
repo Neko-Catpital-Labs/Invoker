@@ -157,6 +157,21 @@ pnpm run dev:hot
 
 Use `--output text|label|json|jsonl` on `query` commands. Only **one** process should **write** the workflow database at a time; see [docs/persistence-architecture-single-writer.md](docs/persistence-architecture-single-writer.md).
 
+**Cost queries:**
+
+```bash
+# Grouped cost rollup (JSON shape: { scope, groupBy, totals, groups, metadata })
+./run.sh --headless query cost --output json
+./run.sh --headless query cost --workflow wf-1 --group-by task,agent --output json
+
+# Raw normalized cost events
+./run.sh --headless query cost-events --output json
+./run.sh --headless query cost-events --output jsonl
+
+# Pipe JSONL events through jq for scripted analysis
+./run.sh --headless query cost-events --output jsonl | jq 'select(.confidence == "exact")'
+```
+
 **Example plan:**
 
 ```yaml
