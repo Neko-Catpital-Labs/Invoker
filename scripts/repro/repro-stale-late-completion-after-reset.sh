@@ -101,6 +101,7 @@ submit_workflow_with_retry() {
     WORKFLOW_ID="$(
       {
         sed -n 's/^Workflow ID: //p' "$SUBMIT_STDOUT"
+        sed -n 's/^Delegated to owner .*workflow: //p' "$SUBMIT_STDOUT"
         sed -n 's/^Delegated to GUI .*workflow: //p' "$SUBMIT_STDOUT"
       } | head -n1
     )"
